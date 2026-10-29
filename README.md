@@ -31,9 +31,9 @@ Icecrown the way you once followed a good raid lead. Not built yet.
 
 - **Raid Browser listings**: idle randombots list themselves in the Raid
   Browser, so it is not empty.
-- **`.playerbots bot add10|add25|add40`**: fills your group to a 10/25/40-man
-  raid with a sensible tank/healer/damage mix at your level, with raid specs
-  and gear.
+- **`.playerbots bot add5|add10|add25|add40`**: fills your group to a 5-man
+  party or a 10/25/40-man raid with a sensible tank/healer/damage mix at your
+  level, with proper specs and gear.
 - **Raid habits**: those bots follow in arrow formation, and damage dealers
   hold a few seconds into a pull so the tank gets threat.
 

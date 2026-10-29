@@ -226,7 +226,7 @@ Setting `SOAP.Enabled = 1` would let the script do a real graceful shutdown.
 | `mod-ollama-chat` | DustinHendrickson/mod-ollama-chat | LLM bot chat. git clone, updatable. |
 | `mod-transmog` | zip (no git) | |
 | `mod-individual-progression` | zip (no git) | Rewrites a lot of world/character data. Gates raids per character by tier (ICC needs 16, from killing Anub'arak in ToC; tier = highest rewarded quest `66000+N`). `.ip set <name> <tier>` **ignores the name** and applies to your target or yourself, and from the console it would dereference an empty player: use it in game with no target. |
-| `mod-dungeon-clear` | jrad7/mod-dungeon-clear | git clone since 2026-10-29 (was a zip of `60f3d98`). Ships its own `.cmake`; folder name must stay exact. Reads `PlayerbotAIConfig` members directly, so it breaks when playerbots renames them. |
+| `mod-dungeon-clear` | jrad7/mod-dungeon-clear | git clone since 2026-10-29 (was a zip of `60f3d98`). **The autonomous tank lead**: `.dc on` (or `dc on` in party chat) inside an instance makes the group's tank bot route boss to boss over the navmesh, pull (Dynamic/Leeroy/Advanced), run scripted events (all 16 WotLK 5-mans), loot, rest and rez. Raids too: trash flow with a readiness quorum, pre-boss muster, wipe recovery; boss fights are left to the playerbots raid strategies. Companion addon: jrad7/mod-dungeon-clear-addon. It hooks playerbots without patching it (appends to the shared context registries). Ships its own `.cmake`; folder name must stay exact. Reads `PlayerbotAIConfig` members directly, so it breaks when playerbots renames them. AGPL-3.0. |
 | `mod-bg-slaveryvalley` | zip (no git) | Custom battleground, map 801 / BG id 31. Server side complete; **client patch still undistributed** — see below. |
 
 `mod-playerbots`, `mod-ollama-chat` and `mod-dungeon-clear` are git repos; the
@@ -255,10 +255,11 @@ invited. Listings log `lists in the raid browser` to `Playerbots.log`. It
 needs the raid browser bit in `DungeonFinder.OptionsMask` (now 7; it was 5,
 which disabled the raid browser entirely; `lfg options 7` sets it live).
 
-### Local patch: `.playerbots bot add10|add25|add40`
+### Local patch: `.playerbots bot add5|add10|add25|add40`
 
-Local commits `ed5a442f` and `e72145d4` on `mod-playerbots` `master`. Tops the player's group
-up to a 10/25/40-man raid with addclass bots: 2/3/5, 3/6/16 and 4/10/26
+Local commits `ed5a442f`, `e72145d4` and `1f1cb5cd` (add5) on `mod-playerbots`
+`master`. Tops the player's group up to a 5-man party or a 10/25/40-man raid
+with addclass bots: 1/1/3, 2/3/5, 3/6/16 and 4/10/26
 tank/healer/damage, counting roles already in the group (so re-running it only
 fills gaps). Classes come from fixed rotations in `PlayerbotMgr.cpp`
 (`RAID_TANKS`, `RAID_HEALERS`, `RAID_DAMAGE`) matched to
@@ -268,6 +269,8 @@ and fresh gear in `OnBotLogin`, plus `formation arrow`, and damage bots get
 Limited by `Playerbots.MaxAddedBots` (40).
 Do not run `.playerbots bot init=auto` on such a raid: `Randomize()` re-rolls
 the spec. Use the bots' `autogear` chat command instead.
+Do not pass party/raid leadership to a bot: every bot then runs `reset botAI`
+(`ResetStrategies`), which drops `wait for attack` (formation survives).
 
 Commits here never carry a `Co-Authored-By` or other attribution trailer.
 

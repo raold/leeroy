@@ -1,0 +1,86 @@
+From 1f1cb5cdfb125658e1405ad415b8bc76692b578a Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 15:17:27 -0400
+Subject: [PATCH 4/4] Add add5 to fill a dungeon party with addclass bots
+
+---
+ src/Bot/PlayerbotMgr.cpp | 16 ++++++++--------
+ src/Bot/PlayerbotMgr.h   |  2 +-
+ 2 files changed, 9 insertions(+), 9 deletions(-)
+
+diff --git a/src/Bot/PlayerbotMgr.cpp b/src/Bot/PlayerbotMgr.cpp
+index 4606d426..7eb7e201 100644
+--- a/src/Bot/PlayerbotMgr.cpp
++++ b/src/Bot/PlayerbotMgr.cpp
+@@ -660,7 +660,7 @@ void PlayerbotHolder::OnBotLogin(Player* const bot)
+         uint8 const specNo = raidSpec->second;
+         pendingRaidSpecs.erase(raidSpec);
+ 
+-        // The stored spec (or the one Randomize just rolled) is not the role add10/add25/add40 picked it for.
++        // The stored spec (or the one Randomize just rolled) is not the role add5/add10/add25/add40 picked it for.
+         if (addClassBot && master)
+         {
+             PlayerbotFactory::InitTalentsBySpecNo(bot, specNo, true);
+@@ -1000,10 +1000,10 @@ struct RaidComposition
+     uint32 healers;
+ };
+ 
+-constexpr std::array<RaidComposition, 3> RAID_COMPOSITIONS = {{{10, 2, 3}, {25, 3, 6}, {40, 4, 10}}};
++constexpr std::array<RaidComposition, 4> RAID_COMPOSITIONS = {{{5, 1, 1}, {10, 2, 3}, {25, 3, 6}, {40, 4, 10}}};
+ 
+-// Each list is walked in order and wraps, so its first entries are what a 10-man gets; the order spreads
+-// raid buffs (Fortitude, Mark, Kings, totems, Bloodlust) across the smallest raids.
++// Each list is walked in order and wraps, so its first entries are what a 5- or 10-man gets; the order spreads
++// raid buffs (Fortitude, Mark, Kings, totems, Bloodlust) across the smallest groups.
+ constexpr std::array<RaidSlot, 4> RAID_TANKS = {{
+     {CLASS_WARRIOR, "prot pve"},
+     {CLASS_PALADIN, "prot pve"},
+@@ -1182,7 +1182,7 @@ void PlayerbotHolder::AddRaidBots(Player* master, uint32 raidSize, std::vector<s
+         }
+     }
+ 
+-    messages.push_back(Acore::StringFormat("Adding {} tanks, {} healers and {} damage for a {}-man raid",
++    messages.push_back(Acore::StringFormat("Adding {} tanks, {} healers and {} damage for a {}-man group",
+                                            added[RAID_ROLE_TANK], added[RAID_ROLE_HEALER], added[RAID_ROLE_DAMAGE],
+                                            raidSize));
+     if (toAdd && !refused)
+@@ -1197,7 +1197,7 @@ std::vector<std::string> PlayerbotHolder::HandlePlayerbotCommand(char const* arg
+     {
+         messages.push_back("usage: list/reload/tweak/self or add/addaccount/init/remove PLAYERNAME\n");
+         messages.push_back("usage: addclass CLASSNAME [male|female|0|1]");
+-        messages.push_back("usage: add10/add25/add40 (fill your group to a raid with tanks, healers and damage)");
++        messages.push_back("usage: add5/add10/add25/add40 (fill your group to that size with tanks, healers, damage)");
+         return messages;
+     }
+ 
+@@ -1209,7 +1209,7 @@ std::vector<std::string> PlayerbotHolder::HandlePlayerbotCommand(char const* arg
+     {
+         messages.push_back(
+             "usage: list/reload/tweak/self or add/init/remove PLAYERNAME or addclass CLASSNAME [male|female] or "
+-            "add10/add25/add40");
++            "add5/add10/add25/add40");
+         return messages;
+     }
+ 
+@@ -1377,7 +1377,7 @@ std::vector<std::string> PlayerbotHolder::HandlePlayerbotCommand(char const* arg
+         return messages;
+     }
+ 
+-    if (!strcmp(cmd, "add10") || !strcmp(cmd, "add25") || !strcmp(cmd, "add40"))
++    if (!strcmp(cmd, "add5") || !strcmp(cmd, "add10") || !strcmp(cmd, "add25") || !strcmp(cmd, "add40"))
+     {
+         if (!master)
+             return messages;
+diff --git a/src/Bot/PlayerbotMgr.h b/src/Bot/PlayerbotMgr.h
+index 88302583..039f68fc 100644
+--- a/src/Bot/PlayerbotMgr.h
++++ b/src/Bot/PlayerbotMgr.h
+@@ -70,7 +70,7 @@ protected:
+     PlayerBotMap playerBots;
+     static void AbandonPendingLogin(ObjectGuid guid);
+     static std::unordered_map<ObjectGuid, PendingBotLogin> botLoading;
+-    // Premade spec an add10/add25/add40 bot gets once it logs in; world thread only.
++    // Premade spec an add5/add10/add25/add40 bot gets once it logs in; world thread only.
+     static std::unordered_map<ObjectGuid, uint8> pendingRaidSpecs;
+ 
+ private:
