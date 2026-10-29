@@ -1,0 +1,63 @@
+name: patches
+
+# Applies patches/mod-playerbots to the newest upstream master. Nightly, so an
+# upstream change that breaks a local patch shows up as an issue here before
+# ac-update.sh runs into the same conflict.
+
+on:
+  push:
+    branches: [main]
+    paths: ['patches/**', '.github/workflows/patches.yml']
+  pull_request:
+    paths: ['patches/**', '.github/workflows/patches.yml']
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  mod-playerbots:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: leeroy
+
+      - name: Clone upstream mod-playerbots
+        run: git clone --filter=blob:none --branch master https://github.com/mod-playerbots/mod-playerbots.git playerbots
+
+      - name: Apply the local patches
+        working-directory: playerbots
+        run: |
+          git -c user.name=leeroy-ci -c user.email=ci@invalid am --3way ../leeroy/patches/mod-playerbots/*.patch
+          git log --oneline -n "$(find ../leeroy/patches/mod-playerbots -name '*.patch' | wc -l)"
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.10'
+
+      - name: Playerbots codestyle
+        working-directory: playerbots
+        run: python ./apps/codestyle/codestyle-cpp.py
+
+      - name: Open or update the drift issue
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create patch-drift --color D93F0B --description "Local patches no longer apply to upstream" --force
+          issue=$(gh issue list --label patch-drift --state open --json number --jq '.[0].number')
+          if [ -n "$issue" ]; then
+            gh issue comment "$issue" --body "Still failing: $RUN_URL"
+          else
+            gh issue create --label patch-drift \
+              --title "mod-playerbots patches no longer apply to upstream master" \
+              --body "The nightly check could not apply \`patches/mod-playerbots\` to upstream \`master\`, or the result failed codestyle: $RUN_URL
+
+          Rebase the local commits in \`modules/mod-playerbots\` (\`ac-update.sh\` stops on the same conflict), then run \`scripts/ac-snapshot.sh\` and commit."
+          fi

@@ -1,5 +1,9 @@
 # leeroy
 
+[![ci](https://github.com/raold/leeroy/actions/workflows/ci.yml/badge.svg)](https://github.com/raold/leeroy/actions/workflows/ci.yml)
+[![patches](https://github.com/raold/leeroy/actions/workflows/patches.yml/badge.svg)](https://github.com/raold/leeroy/actions/workflows/patches.yml)
+[![build](https://github.com/raold/leeroy/actions/workflows/build.yml/badge.svg)](https://github.com/raold/leeroy/actions/workflows/build.yml)
+
 A single-player World of Warcraft 3.3.5a (Wrath of the Lich King) server: one
 human, a world full of [playerbots](https://github.com/mod-playerbots/mod-playerbots),
 and raids filled with bots on demand. Bots talk through a local LLM
@@ -48,6 +52,19 @@ Apply them to a mod-playerbots checkout with
 
 They assume this repo is the install root, with the core checked out in
 `azerothcore-wotlk/` and the build in `build/`. See `CLAUDE.md`.
+
+## CI
+
+| Workflow | When | What |
+|---|---|---|
+| `ci` | every push | shellcheck on `scripts/`, gitleaks over the full history |
+| `patches` | patch changes, nightly | applies the patches to the newest upstream mod-playerbots and runs its codestyle check; a nightly failure opens a `patch-drift` issue |
+| `build` | patch changes, weekly | compiles the fork core with the patched module (clang, `-Werror`, ccache) |
+| `release` | `v*` tag | GitHub release with the patches, configs and scripts |
+
+There is no deploy job: the server runs on one PC and is updated with the
+scripts above. A self-hosted runner on a public repo would let any pull request
+run code on that PC.
 
 ## License
 

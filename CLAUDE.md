@@ -49,6 +49,11 @@ build tree, the client, boost, DB dumps and the zips stay out.
   repo's local git config). Never add attribution trailers.
 - Rewriting playerbots commits changes their hashes; update the hashes cited
   below and re-run `ac-snapshot.sh`.
+- CI (`.github/workflows`, see README): `ci` (shellcheck + gitleaks), `patches`
+  (applies the patches to upstream playerbots nightly; failure opens a
+  `patch-drift` issue, which means rebase before the next `ac-update.sh`),
+  `build` (weekly Linux compile, `-Werror`), `release` (on `v*` tags). No
+  deploy job and never a self-hosted runner: the repo is public.
 
 ## Build traps that have each cost real time
 

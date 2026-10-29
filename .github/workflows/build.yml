@@ -1,0 +1,73 @@
+name: build
+
+# Compiles the mod-playerbots fork of AzerothCore with the patched playerbots
+# module, using the warning flags upstream playerbots CI uses. PCH is off so
+# ccache can carry most of the work between runs.
+
+on:
+  push:
+    branches: [main]
+    paths: ['patches/**', '.github/workflows/build.yml']
+  schedule:
+    - cron: '41 7 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  worldserver:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/ccache
+      CCACHE_MAXSIZE: 3G
+      CXXFLAGS: "-Wall -Wextra -Winit-self -Woverloaded-virtual -Werror -Wno-error=deprecated-declarations -Wno-error=array-bounds"
+    steps:
+      - name: Checkout the mod-playerbots fork of AzerothCore
+        uses: actions/checkout@v7
+        with:
+          repository: mod-playerbots/azerothcore-wotlk
+          ref: Playerbot
+          path: core
+
+      - uses: actions/checkout@v7
+        with:
+          path: leeroy
+
+      - name: Clone mod-playerbots and apply the local patches
+        run: |
+          git clone --filter=blob:none --branch master https://github.com/mod-playerbots/mod-playerbots.git core/modules/mod-playerbots
+          git -C core/modules/mod-playerbots -c user.name=leeroy-ci -c user.email=ci@invalid \
+            am --3way "$GITHUB_WORKSPACE"/leeroy/patches/mod-playerbots/*.patch
+
+      - uses: actions/cache@v4
+        with:
+          path: ccache
+          key: ccache-${{ github.sha }}
+          restore-keys: ccache-
+
+      - name: Install requirements
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ccache cmake make clang libmysqlclient-dev libssl-dev libbz2-dev \
+            libreadline-dev libncurses-dev mysql-server libboost-all-dev
+
+      - name: Configure
+        run: >
+          cmake -S core -B build
+          -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          -DUSE_COREPCH=0 -DUSE_SCRIPTPCH=0
+
+      - name: Build
+        run: cmake --build build -j "$(nproc)" -- -k
+
+      - name: ccache stats
+        if: always()
+        run: ccache --show-stats
