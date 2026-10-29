@@ -12,7 +12,8 @@
 !/scripts/
 !/config/
 !/patches/
-!/docs/
+# docs/ (design, research) and private/ are local dev docs for the owner and
+# Claude only: deliberately not whitelisted, never pushed.
 
 # ac-update.sh rollback state, local to this machine.
 /scripts/.last-update

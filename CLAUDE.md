@@ -35,8 +35,9 @@ Do not build, read configs, or read logs from D: or Q:.
 
 `F:\azerothcore` is **github.com/raold/leeroy** (public, GPL-2.0, branch
 `main`). A whitelist `.gitignore` tracks only what is ours: this file, the
-README, `scripts/`, `config/`, `patches/` and `docs/`. The core repo, the
-build tree, the client, boost, DB dumps and the zips stay out.
+README, `scripts/`, `config/`, `patches/` and `.github/`. The core repo, the
+build tree, the client, boost, DB dumps and the zips stay out, and so do the
+local dev docs (`docs/`, `private/`).
 
 - `config/` and `patches/mod-playerbots/` are snapshots made by
   `scripts/ac-snapshot.sh`. Never edit them by hand; edit the live configs or
@@ -47,6 +48,11 @@ build tree, the client, boost, DB dumps and the zips stay out.
 - Commits in this repo and the local playerbots commits use the GitHub no-reply
   identity (`raold <868138+raold@users.noreply.github.com>`, set in each
   repo's local git config). Never add attribution trailers.
+- **Local dev docs, never pushed:** design and research Markdown in
+  `docs/superpowers/` and `docs/research/`, plus `private/` (personas,
+  brainstorms, the blind model test). They are for the owner and Claude only,
+  git-ignored on purpose, and exist only on F:. Never commit them, and never
+  delete any of them; update in place or add a new dated file.
 - Rewriting playerbots commits changes their hashes; update the hashes cited
   below and re-run `ac-snapshot.sh`.
 - CI (`.github/workflows`, see README): `ci` (shellcheck + gitleaks), `patches`
