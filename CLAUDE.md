@@ -31,6 +31,25 @@ others stopped at 2026-09-06.
 
 Do not build, read configs, or read logs from D: or Q:.
 
+## This directory is a public git repo: `leeroy`
+
+`F:\azerothcore` is **github.com/raold/leeroy** (public, GPL-2.0, branch
+`main`). A whitelist `.gitignore` tracks only what is ours: this file, the
+README, `scripts/`, `config/`, `patches/` and `docs/`. The core repo, the
+build tree, the client, boost, DB dumps and the zips stay out.
+
+- `config/` and `patches/mod-playerbots/` are snapshots made by
+  `scripts/ac-snapshot.sh`. Never edit them by hand; edit the live configs or
+  the playerbots commits, then re-run it. It masks secret values (anything
+  ending `DatabaseInfo`, `Secret`, `Token`, `ApiKey` or `Password`) and fails
+  if a real secret survives. Nothing secret may ever be committed, since git
+  history is permanent and public.
+- Commits in this repo and the local playerbots commits use the GitHub no-reply
+  identity (`raold <868138+raold@users.noreply.github.com>`, set in each
+  repo's local git config). Never add attribution trailers.
+- Rewriting playerbots commits changes their hashes; update the hashes cited
+  below and re-run `ac-snapshot.sh`.
+
 ## Build traps that have each cost real time
 
 ### 1. Module folder names must be exact
@@ -146,6 +165,7 @@ Run from `F:\azerothcore\scripts` in Git Bash.
 ./ac-backup.sh [label]       # mysqldump all 4 DBs, keeps newest 5
 ./ac-build.sh                # preflight + cmake configure + build
 ./ac-server.sh start|stop|status
+./ac-snapshot.sh             # live configs (masked) + playerbots patches -> config/, patches/
 ```
 
 `db_backup/` holds two kinds of thing: sets `ac-backup.sh` made
