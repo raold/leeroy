@@ -269,6 +269,10 @@ and fresh gear in `OnBotLogin`, plus `formation arrow`, and damage bots get
 Limited by `Playerbots.MaxAddedBots` (40).
 Do not run `.playerbots bot init=auto` on such a raid: `Randomize()` re-rolls
 the spec. Use the bots' `autogear` chat command instead.
+Bots take the master's level, and the main character is 83 (GM-levelled past
+`MaxPlayerLevel = 80`). Playerbots' talent code only knew spec links up to 80
+and gave such bots **no talents at all**: no tank strategy, so dungeon-clear
+said "No tank bot found". Local commit `8040a53e` clamps to 80.
 Do not pass party/raid leadership to a bot: every bot then runs `reset botAI`
 (`ResetStrategies`), which drops `wait for attack` (formation survives).
 

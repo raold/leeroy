@@ -1,0 +1,33 @@
+From 8040a53ec50258cf12daf0de02529500474eaa77 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 16:05:31 -0400
+Subject: [PATCH 5/5] Give bots levelled past 80 their premade talents
+
+---
+ src/Bot/Factory/PlayerbotFactory.cpp | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/src/Bot/Factory/PlayerbotFactory.cpp b/src/Bot/Factory/PlayerbotFactory.cpp
+index d6fd00d4..45fb78ef 100644
+--- a/src/Bot/Factory/PlayerbotFactory.cpp
++++ b/src/Bot/Factory/PlayerbotFactory.cpp
+@@ -1806,7 +1806,8 @@ void PlayerbotFactory::InitTalentsBySpecNo(Player* bot, int specNo, bool reset)
+         bot->resetTalents(true);
+     }
+     uint32 cls = bot->getClass();
+-    int startLevel = bot->GetLevel();
++    // Spec links stop at 80; a bot levelled past the cap (GM command) would otherwise get no talents at all.
++    int startLevel = std::min<int>(bot->GetLevel(), 80);
+     uint32 classMask = bot->getClassMask();
+     std::unordered_map<uint32, std::vector<TalentEntry const*>> spells_row;
+     for (uint32 i = 0; i < sTalentStore.GetNumRows(); ++i)
+@@ -3772,7 +3773,8 @@ void PlayerbotFactory::InitTalentsByTemplate(uint32 specTab)
+     //     return;
+     // }
+     uint32 cls = bot->getClass();
+-    int startLevel = bot->GetLevel();
++    // Spec links stop at 80; a bot levelled past the cap (GM command) would otherwise get no talents at all.
++    int startLevel = std::min<int>(bot->GetLevel(), 80);
+     uint32 specIndex = sPlayerbotAIConfig.RandomClassSpecIndex[cls][specTab];
+     uint32 classMask = bot->getClassMask();
+     std::unordered_map<uint32, std::vector<TalentEntry const*>> spells_row;
