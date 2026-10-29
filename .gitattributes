@@ -1,0 +1,2 @@
+# Shell scripts and patches break with CRLF; keep everything LF on every checkout.
+* text=auto eol=lf

@@ -1,0 +1,17 @@
+# This repo lives in the install root, next to things it must never contain:
+# the core source (its own git repo), the build tree, the WoW client, boost,
+# DB dumps and Blizzard data archives. Ignore everything, then allow only what
+# this repo owns.
+/*
+!/.gitignore
+!/.gitattributes
+!/CLAUDE.md
+!/README.md
+!/LICENSE
+!/scripts/
+!/config/
+!/patches/
+!/docs/
+
+# ac-update.sh rollback state, local to this machine.
+/scripts/.last-update

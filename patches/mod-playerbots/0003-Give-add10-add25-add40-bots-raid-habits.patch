@@ -1,0 +1,33 @@
+From e72145d466988244f6492cc1be543ff4b5beea38 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 14:34:42 -0400
+Subject: [PATCH 3/3] Give add10/add25/add40 bots raid habits
+
+Bots added by add10/add25/add40 start in arrow formation, and the damage
+dealers get the "wait for attack" strategy with a 4 second hold so the
+tank opens the pull and builds threat first.
+---
+ src/Bot/PlayerbotMgr.cpp | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/src/Bot/PlayerbotMgr.cpp b/src/Bot/PlayerbotMgr.cpp
+index 441b5129..4606d426 100644
+--- a/src/Bot/PlayerbotMgr.cpp
++++ b/src/Bot/PlayerbotMgr.cpp
+@@ -671,6 +671,16 @@ void PlayerbotHolder::OnBotLogin(Player* const bot)
+             factory.InitGlyphs(false);
+             factory.InitEquipment(false);
+             botAI->ResetStrategies(false);
++
++            // Raid habits: tanks lead the formation, and damage holds 4 seconds into a pull so the tank has threat.
++            if (UntypedValue* formation = botAI->GetAiObjectContext()->GetUntypedValue("formation"))
++                formation->Load("arrow");
++
++            if (!PlayerbotAI::IsTank(bot, true) && !PlayerbotAI::IsHeal(bot, true))
++            {
++                botAI->ChangeStrategy("+wait for attack", BOT_STATE_COMBAT);
++                botAI->GetAiObjectContext()->GetValue<uint8>("wait for attack time")->Set(4);
++            }
+         }
+     }
+ 

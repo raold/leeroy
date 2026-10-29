@@ -1,0 +1,391 @@
+From ed5a442f1f9f657e9dc1d01ef3c72ceaf70bed97 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 11:41:58 -0400
+Subject: [PATCH 2/3] Add add10/add25/add40 to fill a raid with addclass bots
+
+Tops the master's group up to a 10, 25 or 40-man raid with a tank/healer/damage
+mix (2/3/5, 3/6/16, 4/10/26), counting the roles already in the group. Classes
+come from fixed rotations that spread raid buffs, and each bot gets its role's
+premade spec and matching gear once it logs in. The addclass character picker
+moves into PickAddclassCharacter() so both commands share it.
+---
+ src/Bot/PlayerbotMgr.cpp | 291 ++++++++++++++++++++++++++++++++++-----
+ src/Bot/PlayerbotMgr.h   |   6 +
+ 2 files changed, 262 insertions(+), 35 deletions(-)
+
+diff --git a/src/Bot/PlayerbotMgr.cpp b/src/Bot/PlayerbotMgr.cpp
+index 0d599cc9..441b5129 100644
+--- a/src/Bot/PlayerbotMgr.cpp
++++ b/src/Bot/PlayerbotMgr.cpp
+@@ -30,14 +30,17 @@
+ #include "Playerbots.h"
+ #include "RandomPlayerbotMgr.h"
+ #include "SharedDefines.h"
++#include "StringFormat.h"
+ #include "WorldSession.h"
+ #include "WorldSessionMgr.h"
+ #include <algorithm>
++#include <array>
+ #include <cstdio>
+ #include <cstring>
+ #include <iomanip>
+ #include <memory>
+ #include <openssl/sha.h>
++#include <span>
+ #include <string>
+ #include <vector>
+ #include <unordered_set>
+@@ -70,6 +73,7 @@ private:
+ 
+ std::unordered_set<ObjectGuid> BotInitGuard::botsBeingInitialized;
+ std::unordered_map<ObjectGuid, PendingBotLogin> PlayerbotHolder::botLoading;
++std::unordered_map<ObjectGuid, uint8> PlayerbotHolder::pendingRaidSpecs;
+ 
+ PlayerbotHolder::PlayerbotHolder() : PlayerbotAIBase(false) {}
+ class PlayerbotLoginQueryHolder : public LoginQueryHolder
+@@ -650,6 +654,26 @@ void PlayerbotHolder::OnBotLogin(Player* const bot)
+         factory.Randomize(false);
+     }
+ 
++    auto const raidSpec = pendingRaidSpecs.find(bot->GetGUID());
++    if (raidSpec != pendingRaidSpecs.end())
++    {
++        uint8 const specNo = raidSpec->second;
++        pendingRaidSpecs.erase(raidSpec);
++
++        // The stored spec (or the one Randomize just rolled) is not the role add10/add25/add40 picked it for.
++        if (addClassBot && master)
++        {
++            PlayerbotFactory::InitTalentsBySpecNo(bot, specNo, true);
++
++            uint32 gearScore = PlayerbotAI::GetMixedGearScore(master, true, false, 12) *
++                               sPlayerbotAIConfig.AutoInitEquipLevelLimitRatio;
++            PlayerbotFactory factory(bot, master->GetLevel(), ITEM_QUALITY_LEGENDARY, gearScore ? gearScore : 1);
++            factory.InitGlyphs(false);
++            factory.InitEquipment(false);
++            botAI->ResetStrategies(false);
++        }
++    }
++
+     // bots join World chat if not solo oriented
+     if (bot->GetLevel() >= 10 && sRandomPlayerbotMgr.IsRandomBot(bot) && GET_PLAYERBOT_AI(bot) &&
+         GET_PLAYERBOT_AI(bot)->GetGrouperType() != GrouperType::SOLO)
+@@ -943,6 +967,218 @@ bool PlayerbotMgr::HandlePlayerbotMgrCommand(ChatHandler* handler, char const* a
+     return true;
+ }
+ 
++namespace
++{
++enum RaidRole : uint8
++{
++    RAID_ROLE_TANK,
++    RAID_ROLE_HEALER,
++    RAID_ROLE_DAMAGE,
++    MAX_RAID_ROLES
++};
++
++struct RaidSlot
++{
++    uint8 cls;
++    char const* spec;  // a Playerbots.PremadeSpecName value
++};
++
++struct RaidComposition
++{
++    uint32 size;
++    uint32 tanks;
++    uint32 healers;
++};
++
++constexpr std::array<RaidComposition, 3> RAID_COMPOSITIONS = {{{10, 2, 3}, {25, 3, 6}, {40, 4, 10}}};
++
++// Each list is walked in order and wraps, so its first entries are what a 10-man gets; the order spreads
++// raid buffs (Fortitude, Mark, Kings, totems, Bloodlust) across the smallest raids.
++constexpr std::array<RaidSlot, 4> RAID_TANKS = {{
++    {CLASS_WARRIOR, "prot pve"},
++    {CLASS_PALADIN, "prot pve"},
++    {CLASS_DEATH_KNIGHT, "blood pve"},
++    {CLASS_DRUID, "bear pve"},
++}};
++
++constexpr std::array<RaidSlot, 5> RAID_HEALERS = {{
++    {CLASS_PRIEST, "holy pve"},
++    {CLASS_SHAMAN, "resto pve"},
++    {CLASS_DRUID, "resto pve"},
++    {CLASS_PALADIN, "holy pve"},
++    {CLASS_PRIEST, "disc pve"},
++}};
++
++constexpr std::array<RaidSlot, 17> RAID_DAMAGE = {{
++    {CLASS_MAGE, "fire pve"},
++    {CLASS_HUNTER, "mm pve"},
++    {CLASS_WARLOCK, "affli pve"},
++    {CLASS_ROGUE, "combat pve"},
++    {CLASS_PRIEST, "shadow pve"},
++    {CLASS_SHAMAN, "ele pve"},
++    {CLASS_PALADIN, "ret pve"},
++    {CLASS_WARRIOR, "fury pve"},
++    {CLASS_DEATH_KNIGHT, "unholy pve"},
++    {CLASS_DRUID, "balance pve"},
++    {CLASS_SHAMAN, "enh pve"},
++    {CLASS_HUNTER, "surv pve"},
++    {CLASS_MAGE, "frost pve"},
++    {CLASS_WARLOCK, "destro pve"},
++    {CLASS_ROGUE, "as pve"},
++    {CLASS_DEATH_KNIGHT, "frost pve"},
++    {CLASS_DRUID, "cat pve"},
++}};
++
++int8 FindPremadeSpec(uint8 cls, char const* name)
++{
++    for (int8 specNo = 0; specNo < MAX_SPECNO; ++specNo)
++    {
++        std::string const& specName = sPlayerbotAIConfig.PremadeSpecName[cls][specNo];
++        if (specName.empty())
++            break;
++
++        if (specName == name)
++            return specNo;
++    }
++
++    return -1;
++}
++
++RaidRole GetRaidRole(Player* player)
++{
++    if (PlayerbotAI::IsTank(player, true))
++        return RAID_ROLE_TANK;
++
++    if (PlayerbotAI::IsHeal(player, true))
++        return RAID_ROLE_HEALER;
++
++    return RAID_ROLE_DAMAGE;
++}
++}  // namespace
++
++ObjectGuid PlayerbotHolder::PickAddclassCharacter(Player* master, uint8 cls, int8 gender)
++{
++    uint8 teamId = master->GetTeamId(true);
++    std::unordered_set<ObjectGuid> const& guidCache =
++        sRandomPlayerbotMgr.addclassCache[RandomPlayerbotMgr::GetTeamClassIdx(teamId == TEAM_ALLIANCE, cls)];
++    auto const pickFirstEligible = [&](auto const& pool) -> ObjectGuid
++    {
++        for (ObjectGuid const& guid : pool)
++        {
++            // If the user requested a specific gender, skip any character that doesn't match.
++            if (gender != -1 && GetOfflinePlayerGender(guid) != gender)
++                continue;
++            if (botLoading.find(guid) != botLoading.end())
++                continue;
++            if (ObjectAccessor::FindConnectedPlayer(guid))
++                continue;
++            uint32 guildId = sCharacterCache->GetCharacterGuildIdByGuid(guid);
++            if (guildId && PlayerbotGuildMgr::instance().IsRealGuild(guildId))
++                continue;
++            return guid;
++        }
++        return ObjectGuid::Empty;
++    };
++
++    // The cache is an unordered_set: its iteration order does not change between calls, so the first
++    // eligible character is always the same one. Walk a shuffled copy when a random one is wanted,
++    // and the cache itself otherwise, so the default path copies nothing.
++    if (sPlayerbotAIConfig.AddClassRandomCharacter)
++    {
++        std::vector<ObjectGuid> candidates(guidCache.begin(), guidCache.end());
++        Acore::Containers::RandomShuffle(candidates);
++        return pickFirstEligible(candidates);
++    }
++
++    return pickFirstEligible(guidCache);
++}
++
++// Tops the master's group up to raidSize with addclass bots. Members already in the group count toward
++// their own role, so running it on a half-built raid only adds what is missing.
++void PlayerbotHolder::AddRaidBots(Player* master, uint32 raidSize, std::vector<std::string>& messages)
++{
++    auto const composition = std::find_if(RAID_COMPOSITIONS.begin(), RAID_COMPOSITIONS.end(),
++                                          [raidSize](RaidComposition const& c) { return c.size == raidSize; });
++    if (composition == RAID_COMPOSITIONS.end())
++        return;
++
++    std::array<uint32, MAX_RAID_ROLES> needed = {composition->tanks, composition->healers,
++                                                 raidSize - composition->tanks - composition->healers};
++    auto const fillRole = [&needed](Player* member)
++    {
++        RaidRole const role = GetRaidRole(member);
++        if (needed[role])
++            --needed[role];
++    };
++
++    uint32 members = 1;
++    if (Group* group = master->GetGroup())
++    {
++        members = group->GetMembersCount();
++        for (Group::MemberSlot const& slot : group->GetMemberSlots())
++            if (Player* member = ObjectAccessor::FindConnectedPlayer(slot.guid))
++                fillRole(member);
++    }
++    else
++        fillRole(master);
++
++    if (members >= raidSize)
++    {
++        messages.push_back(Acore::StringFormat("Your group already has {} members", members));
++        return;
++    }
++
++    uint32 toAdd = raidSize - members;
++    uint32 const heroicLevel = sWorld->getIntConfig(CONFIG_START_HEROIC_PLAYER_LEVEL);
++    std::array<std::span<RaidSlot const>, MAX_RAID_ROLES> const rotations = {RAID_TANKS, RAID_HEALERS, RAID_DAMAGE};
++    std::array<uint32, MAX_RAID_ROLES> added = {};
++    bool refused = false;
++
++    for (uint8 role = 0; role < MAX_RAID_ROLES && toAdd && !refused; ++role)
++    {
++        std::span<RaidSlot const> const rotation = rotations[role];
++        size_t next = 0;
++        for (uint32 i = 0; i < needed[role] && toAdd && !refused; ++i)
++        {
++            ObjectGuid picked;
++            int8 specNo = -1;
++            // Fall through the rotation when a class is unavailable: too low for a death knight, a premade
++            // spec renamed in the config, or no free character of that class left in the addclass pool.
++            for (size_t tries = 0; tries < rotation.size() && picked.IsEmpty(); ++tries)
++            {
++                RaidSlot const& slot = rotation[next++ % rotation.size()];
++                if (slot.cls == CLASS_DEATH_KNIGHT && master->GetLevel() < heroicLevel)
++                    continue;
++
++                specNo = FindPremadeSpec(slot.cls, slot.spec);
++                if (specNo >= 0)
++                    picked = PickAddclassCharacter(master, slot.cls, -1);
++            }
++
++            if (picked.IsEmpty())
++                break;
++
++            AddPlayerBot(picked, master->GetSession()->GetAccountId());
++            // AddPlayerBot has already told the master why it refused (usually Playerbots.MaxAddedBots).
++            if (!botLoading.contains(picked))
++            {
++                refused = true;
++                break;
++            }
++
++            pendingRaidSpecs[picked] = specNo;
++            ++added[role];
++            --toAdd;
++        }
++    }
++
++    messages.push_back(Acore::StringFormat("Adding {} tanks, {} healers and {} damage for a {}-man raid",
++                                           added[RAID_ROLE_TANK], added[RAID_ROLE_HEALER], added[RAID_ROLE_DAMAGE],
++                                           raidSize));
++    if (toAdd && !refused)
++        messages.push_back(Acore::StringFormat("{} slots left empty: no free addclass characters", toAdd));
++}
++
+ std::vector<std::string> PlayerbotHolder::HandlePlayerbotCommand(char const* args, Player* master)
+ {
+     std::vector<std::string> messages;
+@@ -951,6 +1187,7 @@ std::vector<std::string> PlayerbotHolder::HandlePlayerbotCommand(char const* arg
+     {
+         messages.push_back("usage: list/reload/tweak/self or add/addaccount/init/remove PLAYERNAME\n");
+         messages.push_back("usage: addclass CLASSNAME [male|female|0|1]");
++        messages.push_back("usage: add10/add25/add40 (fill your group to a raid with tanks, healers and damage)");
+         return messages;
+     }
+ 
+@@ -960,7 +1197,9 @@ std::vector<std::string> PlayerbotHolder::HandlePlayerbotCommand(char const* arg
+ 
+     if (!cmd)
+     {
+-        messages.push_back("usage: list/reload/tweak/self or add/init/remove PLAYERNAME or addclass CLASSNAME [male|female]");
++        messages.push_back(
++            "usage: list/reload/tweak/self or add/init/remove PLAYERNAME or addclass CLASSNAME [male|female] or "
++            "add10/add25/add40");
+         return messages;
+     }
+ 
+@@ -1128,6 +1367,21 @@ std::vector<std::string> PlayerbotHolder::HandlePlayerbotCommand(char const* arg
+         return messages;
+     }
+ 
++    if (!strcmp(cmd, "add10") || !strcmp(cmd, "add25") || !strcmp(cmd, "add40"))
++    {
++        if (!master)
++            return messages;
++
++        if (sPlayerbotAIConfig.AddClassCommand == 0 && !master->CanBeGameMaster())
++        {
++            messages.push_back("You do not have permission to create bot by addclass command");
++            return messages;
++        }
++
++        AddRaidBots(master, std::stoul(cmd + 3), messages);
++        return messages;
++    }
++
+     if (!strcmp(cmd, "addclass"))
+     {
+         if (sPlayerbotAIConfig.AddClassCommand == 0 && !master->CanBeGameMaster())
+@@ -1210,40 +1464,7 @@ std::vector<std::string> PlayerbotHolder::HandlePlayerbotCommand(char const* arg
+             messages.push_back("Your level is too low to summon Deathknight");
+             return messages;
+         }
+-        uint8 teamId = master->GetTeamId(true);
+-        std::unordered_set<ObjectGuid> const& guidCache = sRandomPlayerbotMgr.addclassCache[RandomPlayerbotMgr::GetTeamClassIdx(teamId == TEAM_ALLIANCE, claz)];
+-        auto const pickFirstEligible = [&](auto const& pool) -> ObjectGuid
+-        {
+-            for (ObjectGuid const& guid : pool)
+-            {
+-                // If the user requested a specific gender, skip any character that doesn't match.
+-                if (gender != -1 && GetOfflinePlayerGender(guid) != gender)
+-                    continue;
+-                if (botLoading.find(guid) != botLoading.end())
+-                    continue;
+-                if (ObjectAccessor::FindConnectedPlayer(guid))
+-                    continue;
+-                uint32 guildId = sCharacterCache->GetCharacterGuildIdByGuid(guid);
+-                if (guildId && PlayerbotGuildMgr::instance().IsRealGuild(guildId))
+-                    continue;
+-                return guid;
+-            }
+-            return ObjectGuid::Empty;
+-        };
+-
+-        // The cache is an unordered_set: its iteration order does not change between calls, so the first
+-        // eligible character is always the same one. Walk a shuffled copy when a random one is wanted,
+-        // and the cache itself otherwise, so the default path copies nothing.
+-        ObjectGuid picked = ObjectGuid::Empty;
+-        if (sPlayerbotAIConfig.AddClassRandomCharacter)
+-        {
+-            std::vector<ObjectGuid> candidates(guidCache.begin(), guidCache.end());
+-            Acore::Containers::RandomShuffle(candidates);
+-            picked = pickFirstEligible(candidates);
+-        }
+-        else
+-            picked = pickFirstEligible(guidCache);
+-
++        ObjectGuid picked = PickAddclassCharacter(master, claz, gender);
+         if (picked.IsEmpty())
+         {
+             messages.push_back("Add class failed, no available characters!");
+diff --git a/src/Bot/PlayerbotMgr.h b/src/Bot/PlayerbotMgr.h
+index a7d39054..88302583 100644
+--- a/src/Bot/PlayerbotMgr.h
++++ b/src/Bot/PlayerbotMgr.h
+@@ -70,6 +70,12 @@ protected:
+     PlayerBotMap playerBots;
+     static void AbandonPendingLogin(ObjectGuid guid);
+     static std::unordered_map<ObjectGuid, PendingBotLogin> botLoading;
++    // Premade spec an add10/add25/add40 bot gets once it logs in; world thread only.
++    static std::unordered_map<ObjectGuid, uint8> pendingRaidSpecs;
++
++private:
++    ObjectGuid PickAddclassCharacter(Player* master, uint8 cls, int8 gender);
++    void AddRaidBots(Player* master, uint32 raidSize, std::vector<std::string>& messages);
+ };
+ 
+ class PlayerbotMgr : public PlayerbotHolder

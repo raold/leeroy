@@ -1,0 +1,283 @@
+From 1257c8431f192fe2c5650f17b0ac304077cc0d91 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 11:05:08 -0400
+Subject: [PATCH 1/3] List idle randombots in the Raid Browser
+
+Randombots only copy Dungeon Finder queues that real players are in, and the
+raid browser is not a queue, so it stayed empty. A world-thread check now keeps
+a rotating set of idle randombots per faction listed for raids of their level
+and expansion, dropping each listing when it expires or the bot is invited.
+
+Opt-in via Playerbots.RandomBotJoinRaidBrowser (default off), with
+RandomBotRaidBrowserListings and RandomBotRaidBrowserListTime.
+---
+ conf/playerbots.conf.dist      |  14 ++++
+ src/Bot/RandomPlayerbotMgr.cpp | 147 +++++++++++++++++++++++++++++++++
+ src/Bot/RandomPlayerbotMgr.h   |   4 +
+ src/PlayerbotAIConfig.cpp      |   3 +
+ src/PlayerbotAIConfig.h        |   3 +
+ 5 files changed, 171 insertions(+)
+
+diff --git a/conf/playerbots.conf.dist b/conf/playerbots.conf.dist
+index 5fa02b70..03ec2a9d 100644
+--- a/conf/playerbots.conf.dist
++++ b/conf/playerbots.conf.dist
+@@ -762,6 +762,20 @@ Playerbots.RandomBotJoinLfg = 1
+ # Default: 1 (enabled)
+ Playerbots.RandomBotJoinLfgOutleveledExpansion = 1
+ 
++# List idle randombots in the Raid Browser for raids of their level and expansion, so players can browse
++# and invite them. Requires the raid browser bit (2) in the core's DungeonFinder.OptionsMask.
++# A listed bot cannot join the Dungeon Finder or a battleground queue until its listing ends.
++# Default: 0 (disabled)
++Playerbots.RandomBotJoinRaidBrowser = 0
++
++# How many randombots per faction to keep listed in the Raid Browser
++# Default: 20
++Playerbots.RandomBotRaidBrowserListings = 20
++
++# How long one randombot stays listed in the Raid Browser, in seconds; each listing lasts 50-150% of this
++# Default: 1800 (30 minutes)
++Playerbots.RandomBotRaidBrowserListTime = 1800
++
+ # Enable/Disable periodic online - offline of randombots to mimic the real-world scenario where not all players are online simultaneously
+ # When enabled, randombots are randomly selected to go online or offline periodically from a larger set
+ # Default: 0 (disabled, the set of online bots remains fixed)
+diff --git a/src/Bot/RandomPlayerbotMgr.cpp b/src/Bot/RandomPlayerbotMgr.cpp
+index 51f37c0d..c8d27201 100644
+--- a/src/Bot/RandomPlayerbotMgr.cpp
++++ b/src/Bot/RandomPlayerbotMgr.cpp
+@@ -12,6 +12,7 @@
+ #include "Cell.h"
+ #include "CellImpl.h"
+ #include "ChannelMgr.h"
++#include "Containers.h"
+ #include "DBCStores.h"
+ #include "DBCStructure.h"
+ #include "DatabaseEnv.h"
+@@ -40,8 +41,10 @@
+ #include "TravelMgr.h"
+ #include "Unit.h"
+ #include "World.h"
++#include "WorldPacket.h"
+ #include "WorldSessionMgr.h"
+ #include <algorithm>
++#include <array>
+ #include <boost/thread/thread.hpp>
+ #include <cstdlib>
+ #include <ctime>
+@@ -394,6 +397,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 /*elapsed*/, bool /*minimal*/)
+             sRandomPlayerbotMgr.CheckLfgQueue();
+     }
+ 
++    if (sPlayerbotAIConfig.RandomBotJoinRaidBrowser && time(nullptr) > (RaidBrowserCheckTimer + 60))
++        CheckRaidBrowser();
++
+     if (sPlayerbotAIConfig.RandomBotAutologin && sPlayerbotAIConfig.RandomBotPrintStatsInterval &&
+         time(nullptr) > (printStatsTimer + sPlayerbotAIConfig.RandomBotPrintStatsInterval))
+     {
+@@ -1337,6 +1343,147 @@ void RandomPlayerbotMgr::CheckLfgQueue()
+     LOG_DEBUG("playerbots", "LFG Queue check finished");
+ }
+ 
++namespace
++{
++constexpr uint8 RAID_BROWSER_CLASSIC_MAX_LEVEL = 60;
++constexpr uint8 RAID_BROWSER_TBC_MAX_LEVEL = 70;
++constexpr size_t RAID_BROWSER_MAX_RAIDS_PER_BOT = 3;
++
++uint32 ExpansionForLevel(uint8 level)
++{
++    if (level <= RAID_BROWSER_CLASSIC_MAX_LEVEL)
++        return EXPANSION_CLASSIC;
++
++    if (level <= RAID_BROWSER_TBC_MAX_LEVEL)
++        return EXPANSION_THE_BURNING_CRUSADE;
++
++    return EXPANSION_WRATH_OF_THE_LICH_KING;
++}
++}  // namespace
++
++// Keeps a rotating set of idle randombots listed in the Raid Browser. Bots only ever copy queues real
++// players are in, and the raid browser is not a queue, so without this it stays empty.
++void RandomPlayerbotMgr::CheckRaidBrowser()
++{
++    time_t const now = time(nullptr);
++    RaidBrowserCheckTimer = now;
++
++    if (!sLFGMgr->isOptionEnabled(lfg::LFG_OPTION_ENABLE_RAID_BROWSER))
++        return;
++
++    std::array<uint32, PVP_TEAMS_COUNT> listed = {};
++    for (auto itr = RaidBrowserListings.begin(); itr != RaidBrowserListings.end();)
++    {
++        auto const botItr = playerBots.find(itr->first);
++        Player* bot = botItr != playerBots.end() ? botItr->second : nullptr;
++        if (!bot || !bot->IsInWorld() || sLFGMgr->GetState(itr->first) != lfg::LFG_STATE_RAIDBROWSER)
++        {
++            itr = RaidBrowserListings.erase(itr);
++            continue;
++        }
++
++        // A bot that got invited has been recruited; drop the listing along with expired ones.
++        if (now >= itr->second || bot->GetGroup())
++        {
++            bot->GetSession()->QueuePacket(new WorldPacket(CMSG_LFG_LEAVE));
++            itr = RaidBrowserListings.erase(itr);
++            continue;
++        }
++
++        ++listed[bot->GetTeamId()];
++        ++itr;
++    }
++
++    uint32 const target = sPlayerbotAIConfig.RandomBotRaidBrowserListings;
++    if (listed[TEAM_ALLIANCE] >= target && listed[TEAM_HORDE] >= target)
++        return;
++
++    std::unordered_map<uint8, std::vector<uint32>> raidsByLevel;
++    auto const raidsForLevel = [&raidsByLevel](uint8 level) -> std::vector<uint32> const&
++    {
++        auto [itr, inserted] = raidsByLevel.try_emplace(level);
++        if (!inserted)
++            return itr->second;
++
++        uint32 const expansion = ExpansionForLevel(level);
++        for (LFGDungeonEntry const* dungeon : sLFGDungeonStore)
++        {
++            if (dungeon->TypeID != lfg::LFG_TYPE_RAID || dungeon->ExpansionLevel != expansion)
++                continue;
++
++            if (dungeon->MinLevel && (level < dungeon->MinLevel || level > dungeon->MaxLevel))
++                continue;
++
++            itr->second.push_back(dungeon->ID);
++        }
++
++        return itr->second;
++    };
++
++    std::vector<Player*> candidates;
++    for (auto const& [guid, bot] : playerBots)
++    {
++        if (!bot || !bot->IsInWorld() || listed[bot->GetTeamId()] >= target)
++            continue;
++
++        if (!bot->IsAlive() || bot->IsInCombat() || bot->GetGroup() || bot->IsBeingTeleported() ||
++            bot->InBattleground() || bot->InBattlegroundQueue())
++            continue;
++
++        Map* map = bot->GetMap();
++        if (!map || map->Instanceable())
++            continue;
++
++        if (sLFGMgr->GetState(guid) != lfg::LFG_STATE_NONE || raidsForLevel(bot->GetLevel()).empty())
++            continue;
++
++        candidates.push_back(bot);
++    }
++
++    Acore::Containers::RandomShuffle(candidates);
++
++    uint32 const listTime = sPlayerbotAIConfig.RandomBotRaidBrowserListTime;
++    for (Player* bot : candidates)
++    {
++        TeamId const team = bot->GetTeamId();
++        if (listed[team] >= target)
++            continue;
++
++        PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
++        if (!botAI || !IsRandomBot(bot))
++            continue;
++
++        std::vector<uint32> raids = raidsForLevel(bot->GetLevel());
++        Acore::Containers::RandomShuffle(raids);
++        if (raids.size() > RAID_BROWSER_MAX_RAIDS_PER_BOT)
++            raids.resize(RAID_BROWSER_MAX_RAIDS_PER_BOT);
++
++        uint8 roles = lfg::PLAYER_ROLE_DAMAGE;
++        if (PlayerbotAI::IsTank(bot))
++            roles = lfg::PLAYER_ROLE_TANK;
++        else if (PlayerbotAI::IsHeal(bot))
++            roles = lfg::PLAYER_ROLE_HEALER;
++
++        // Same packet the client sends; the core keeps only the raids this bot is not locked out of.
++        WorldPacket* data = new WorldPacket(CMSG_LFG_JOIN);
++        *data << uint32(roles);
++        *data << bool(false) << bool(false);
++        *data << uint8(raids.size());
++        for (uint32 raid : raids)
++            *data << uint32(raid);
++        *data << uint8(3) << uint8(0) << uint8(0) << uint8(0);
++        *data << std::to_string(botAI->GetEquipGearScore(bot));
++        bot->GetSession()->QueuePacket(data);
++
++        RaidBrowserListings[bot->GetGUID()] = now + urand(listTime / 2, listTime * 3 / 2);
++        ++listed[team];
++
++        LOG_INFO("playerbots", "Bot {} {}:{} <{}>: lists in the raid browser for {} raid(s)",
++                 bot->GetGUID().ToString().c_str(), team == TEAM_ALLIANCE ? "A" : "H", bot->GetLevel(),
++                 bot->GetName().c_str(), raids.size());
++    }
++}
++
+ void RandomPlayerbotMgr::CheckPlayers()
+ {
+     if (!PlayersCheckTimer || time(nullptr) > (PlayersCheckTimer + 60))
+diff --git a/src/Bot/RandomPlayerbotMgr.h b/src/Bot/RandomPlayerbotMgr.h
+index fba8f8a0..8dedbbf3 100644
+--- a/src/Bot/RandomPlayerbotMgr.h
++++ b/src/Bot/RandomPlayerbotMgr.h
+@@ -14,6 +14,7 @@
+ #include "PlayerbotMgr.h"
+ #include <mutex>
+ #include <set>
++#include <unordered_map>
+ #include <unordered_set>
+ 
+ struct BattlegroundInfo
+@@ -156,6 +157,7 @@ public:
+     std::map<TeamId, std::vector<uint32>> LfgDungeons;
+     void CheckBgQueue();
+     void CheckLfgQueue();
++    void CheckRaidBrowser();
+     void CheckPlayers();
+     void LogBattlegroundInfo();
+ 
+@@ -234,6 +236,8 @@ private:
+     std::vector<uint32> GetBgBots(uint32 bracket);
+     time_t BgCheckTimer;
+     time_t LfgCheckTimer;
++    time_t RaidBrowserCheckTimer = 0;
++    std::unordered_map<ObjectGuid, time_t> RaidBrowserListings;  // bot -> listing expiry, world thread only
+     time_t PlayersCheckTimer;
+     time_t RealPlayerLastTimeSeen = 0;
+     time_t DelayLoginBotsTimer;
+diff --git a/src/PlayerbotAIConfig.cpp b/src/PlayerbotAIConfig.cpp
+index 4653b646..6da684c9 100644
+--- a/src/PlayerbotAIConfig.cpp
++++ b/src/PlayerbotAIConfig.cpp
+@@ -273,6 +273,9 @@ bool PlayerbotAIConfig::Initialize()
+     RandomBotJoinLfg = sConfigMgr->GetOption<bool>("Playerbots.RandomBotJoinLfg", true);
+     RandomBotJoinLfgOutleveledExpansion =
+         sConfigMgr->GetOption<bool>("Playerbots.RandomBotJoinLfgOutleveledExpansion", true);
++    RandomBotJoinRaidBrowser = sConfigMgr->GetOption<bool>("Playerbots.RandomBotJoinRaidBrowser", false);
++    RandomBotRaidBrowserListings = sConfigMgr->GetOption<uint32>("Playerbots.RandomBotRaidBrowserListings", 20);
++    RandomBotRaidBrowserListTime = sConfigMgr->GetOption<uint32>("Playerbots.RandomBotRaidBrowserListTime", 1800);
+ 
+     RestrictHealerDPS = sConfigMgr->GetOption<bool>("Playerbots.HealerDPSMapRestriction", false);
+     LoadList<std::vector<uint32>>(
+diff --git a/src/PlayerbotAIConfig.h b/src/PlayerbotAIConfig.h
+index 5e89efab..2606c1f0 100644
+--- a/src/PlayerbotAIConfig.h
++++ b/src/PlayerbotAIConfig.h
+@@ -177,6 +177,9 @@ public:
+     uint32 DisabledWithoutRealPlayerLoginDelay, DisabledWithoutRealPlayerLogoutDelay;
+     bool RandomBotJoinLfg;
+     bool RandomBotJoinLfgOutleveledExpansion;
++    bool RandomBotJoinRaidBrowser;
++    uint32 RandomBotRaidBrowserListings;
++    uint32 RandomBotRaidBrowserListTime;
+ 
+     // Professions
+     bool EnableFishingWithMaster;
