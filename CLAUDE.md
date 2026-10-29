@@ -291,12 +291,17 @@ the need.
 
 ### mod-ollama-chat
 
-Talks to Ollama at `http://localhost:11434/api/generate`, model `qwen3:14b`
-(since 2026-10-29; `qwen3:8b` is still pulled for rollback), with
-`OllamaChat.NumCtx = 8192`. Ollama runs `OLLAMA_NUM_PARALLEL=4` (user env var).
-That fits fully on the RTX 4090: 14 GB loaded, ~53 tok/s, about 0.5 s per line.
-Prompts are only ~200-330 tokens; leaving `NumCtx = 0` makes Ollama reserve
-40960 tokens per slot, which with 4 slots does not fit.
+Talks to Ollama at `http://localhost:11434/api/generate`, model
+`hf.co/bartowski/TheDrummer_Orion-26B-A4B-v1.1-GGUF:IQ4_XS` (since 2026-10-29,
+the owner's blind-test winner; fallback `...Cydonia-24B-v4.3-GGUF:IQ4_XS`;
+`qwen3:14b`/`qwen3:8b` still pulled for rollback, backup
+`mod_ollama_chat.conf.bak-preorion-20261029`), with `OllamaChat.NumCtx = 4096`.
+Ollama runs `OLLAMA_NUM_PARALLEL=4` (user env var). Orion loads at 16 GB, 100%
+GPU, ~0.3 s per line. **Orion's Gemma-4 template thinks by default without
+advertising it**: a request without `think:false` returns empty content.
+mod-ollama-chat always sends `think` explicitly, so it is safe; any new client
+must do the same. Prompts are only ~200-330 tokens; leaving `NumCtx = 0` makes
+Ollama reserve 40960 tokens per slot, which with 4 slots does not fit.
 `OllamaChat.MaxConcurrentQueries = 6` — do not set this to 0 (unlimited) with
 large bot counts; concurrent queries will saturate the GPU and stall the chat
 path. In-game: `.ollama status`, `.ollama test <prompt>`. After changing the
