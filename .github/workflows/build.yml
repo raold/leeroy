@@ -15,9 +15,10 @@ on:
 permissions:
   contents: read
 
+# Queue rather than cancel: a cancelled run shows as a failure on the badge.
 concurrency:
   group: build-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   worldserver:
