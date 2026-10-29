@@ -32,6 +32,7 @@ done
 # and a raw datadir copy; those are not ours to delete. Our sets are always
 # "<label>_<YYYYmmdd>_<HHMMSS>" -- anything else is left alone.
 log "pruning to the newest $KEEP sets created by this script"
+# shellcheck disable=SC2010  # the names grep matches are ones this script generated
 ls -1dt "$AC_BACKUP"/*/ 2>/dev/null \
   | grep -E '_[0-9]{8}_[0-9]{6}/$' \
   | tail -n +$((KEEP + 1)) \

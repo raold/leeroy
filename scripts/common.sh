@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2034  # these variables are used by the scripts that source this file
 # Shared paths and helpers for the AzerothCore maintenance scripts.
 # Sourced by the ac-*.sh scripts; not meant to be run directly.
 
