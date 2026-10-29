@@ -361,4 +361,10 @@ It compiles clean and the BG registers, but in-game behaviour is unverified.
 - `ac-update.sh` only checks `<repo>/conf/*.conf.dist` for new keys, which
   misses the core's `worldserver.conf.dist` / `authserver.conf.dist` (under
   `src/server/apps/`).
-- `D:\azerothcore` still occupies ~30 GB.
+- `D:\azerothcore` still occupies ~30 GB. **Do not delete it yet: the live build
+  still reads Boost headers from it.** `build/CMakeCache.txt` has
+  `Boost_INCLUDE_DIR`, `_Boost_INCLUDE_DIR_LAST` and
+  `FIND_PACKAGE_MESSAGE_DETAILS_Boost` pointing at `D:\azerothcore\boost_1_92_0`
+  (the libraries already come from F:; both copies are Boost 1.92). Fix by setting
+  them to `F:/azerothcore/boost_1_92_0` and reconfiguring; that forces one full
+  rebuild, so it is planned alongside the first mod-leeroy build.
