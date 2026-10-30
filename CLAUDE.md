@@ -104,6 +104,10 @@ project still runs `/MP` with one compiler per core (33 were seen at `-m:16` on
 `UseMultiToolTask` + `EnforceProcessCountAcrossBuilds` + `CL_MPCount=$AC_JOBS`,
 which makes it a true global cap (verified: peak 16).
 
+If commit charge is high but no process owns it, check PrimoCache first: its
+L1 cache reserved about 20 GB of RAM outside any process, which forced builds
+down to `AC_JOBS=8` until the owner disabled it on 2026-10-30.
+
 ### 4. Never kill a build mid-compile
 
 MSBuild's tracking logs record a file as built before `cl.exe` finishes. Kill
@@ -234,10 +238,11 @@ Setting `SOAP.Enabled = 1` would let the script do a real graceful shutdown.
 | `mod-individual-progression` | zip (no git) | Rewrites a lot of world/character data. Gates raids per character by tier (ICC needs 16, from killing Anub'arak in ToC; tier = highest rewarded quest `66000+N`). `.ip set <name> <tier>` **ignores the name** and applies to your target or yourself, and from the console it would dereference an empty player: use it in game with no target. |
 | `mod-dungeon-clear` | jrad7/mod-dungeon-clear | git clone since 2026-10-29 (was a zip of `60f3d98`). **The autonomous tank lead**: `.dc on` (or `dc on` in party chat) inside an instance makes the group's tank bot route boss to boss over the navmesh, pull (Dynamic/Leeroy/Advanced), run scripted events (all 16 WotLK 5-mans), loot, rest and rez. Raids too: trash flow with a readiness quorum, pre-boss muster, wipe recovery; boss fights are left to the playerbots raid strategies. Companion addon: jrad7/mod-dungeon-clear-addon. It hooks playerbots without patching it (appends to the shared context registries). Ships its own `.cmake`; folder name must stay exact. Reads `PlayerbotAIConfig` members directly, so it breaks when playerbots renames them. AGPL-3.0. |
 | `mod-bg-slaveryvalley` | zip (no git) | Custom battleground, map 801 / BG id 31. Server side complete; **client patch still undistributed** — see below. |
+| `mod-ah-bot-plus` | NathanHandley/mod-ah-bot-plus | Auction house bot (git clone since 2026-10-30). Sells under, and buys player auctions as, the ordinary account `ahbot` (auth id 352): characters Fatiggeritch (3502) and Bonqueefa (3503), set in `AuctionHouseBot.GUIDs` (comma list, no spaces). Never use a playerbot character for it, and never enter the world on those characters. Seller and buyer both on; everything else is the `.dist` default (about 150 listings a minute per house, up to 15000 each). GM commands: `.ahbot reload` (re-reads the conf, GUIDs included, no restart), `.ahbot update`, `.ahbot empty`. Loader `Addmod_ah_bot_plusScripts`, so the folder name must stay exact. No SQL. |
 | `mod-leeroy` | this repo, `modules/mod-leeroy` | The guild bridge. `azerothcore-wotlk/modules/mod-leeroy` is a **junction** to `F:\azerothcore\modules\mod-leeroy`: remove it with `rmdir`, never `rm -rf` (that deletes the source through the link). Pins the cast (guild members at 80+, minus `Leeroy.HumanGuid`) via the playerbots pin API, mutes them in mod-ollama-chat, and serves NDJSON on `Leeroy.Bridge.Host`:`Leeroy.Bridge.Port` (`127.0.0.1:7878`, one mind at a time). Keys: `Leeroy.Enable`, `GuildId`, `HumanGuid`, `KeepCast`, `BringCastOnline`, `ExcludeFromOllamaChat`, `Bridge.*`. Start line in `Server.log`: `mod-leeroy: cast N members, pinned N ...`. Smoke test: `python modules/mod-leeroy/tools/bridge_smoke.py --expect-cast N` (0 pass, 1 fail, 2 no server or another mind connected); `--listen S` prints events, `--send` sends raw commands. |
 
-`mod-playerbots`, `mod-ollama-chat` and `mod-dungeon-clear` are git repos and
-`mod-leeroy` lives in this one; the rest are zip extractions and
+`mod-playerbots`, `mod-ollama-chat`, `mod-dungeon-clear` and `mod-ah-bot-plus` are
+git repos and `mod-leeroy` lives in this one; the rest are zip extractions and
 `ac-update.sh` skips them. Updating those means re-downloading.
 
 ### Playerbots config prefix is `Playerbots.*`
