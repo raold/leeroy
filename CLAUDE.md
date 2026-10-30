@@ -320,6 +320,17 @@ M rejected: not on a random-bot account`, and per bot `Pinned bot #<guid>
 <name>: kept, skipped randomize`, `…: kept, skipped refresh and teleport` and
 `…: revived in place`.
 
+`Revive()` is guarded too (commit `ac039eba`): `FindCorpseAction` calls it
+for a masterless ghost at death count >= 5, and for a pin it now only revives
+in place instead of `Refresh` (group leave) + grind teleport. Unpinning logs
+nobody out: the bots keep their armed `add` and carry on as ordinary random
+bots. Not covered by the pin: auto-release in a group with no real-player master
+puts the ghost at the graveyard outside the instance, so the pin revives it
+there; `LeaveFarAwayAction` still makes non-leader members leave at
+`death count > 4` with no client master (also on a level gap > 4 or distance
+from the leader); random-bot BG, LFG and Raid Browser selection still apply to
+pins.
+
 Commits here never carry a `Co-Authored-By` or other attribution trailer.
 
 Both local patches: `ac-update.sh` now rebases repos that are ahead of
