@@ -1,0 +1,202 @@
+From e847415be4b67aafd6f37ec3ae348622073477eb Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 23:14:14 -0400
+Subject: [PATCH 6/6] Let other modules pin random bots
+
+SetPinnedBots keeps chosen random bots online regardless of bot_count and skips randomize, refresh, teleport and revive-teleport for them. Inert until called.
+---
+ src/Bot/RandomPlayerbotMgr.cpp | 128 +++++++++++++++++++++++++++++++++
+ src/Bot/RandomPlayerbotMgr.h   |  13 ++++
+ 2 files changed, 141 insertions(+)
+
+diff --git a/src/Bot/RandomPlayerbotMgr.cpp b/src/Bot/RandomPlayerbotMgr.cpp
+index c8d27201..0f42d600 100644
+--- a/src/Bot/RandomPlayerbotMgr.cpp
++++ b/src/Bot/RandomPlayerbotMgr.cpp
+@@ -315,6 +315,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 /*elapsed*/, bool /*minimal*/)
+     }
+ 
+     GetBots();
++    if (_pinOnline)
++        LoginPinnedBots();
++
+     // Copied deliberately: ProcessBot() erases from currentBots while this is
+     // being iterated below, so the loops must run over a snapshot.
+     std::unordered_set<uint32> availableBots = currentBots;
+@@ -1539,6 +1542,12 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
+     uint32 isValid = GetEventValue(bot, "add");
+     if (!isValid)
+     {
++        if (_pinOnline && IsPinned(bot))
++        {
++            SetEventValue(bot, "add", 1, sPlayerbotAIConfig.PermanentlyInWorldTime);
++            return false;
++        }
++
+         if (!player || !player->GetGroup())
+         {
+             if (player)
+@@ -1653,6 +1662,10 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
+ 
+      uint32 botId = bot->GetGUID().GetCounter();
+ 
++    // Must precede the death and group-leave blocks: a pinned bot may lead a raid of bots.
++    if (_pinKeep && IsPinned(botId))
++        return ProcessPinnedBot(bot);
++
+     // if death revive
+     if (bot->isDead())
+     {
+@@ -1758,6 +1771,121 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
+     return false;
+ }
+ 
++namespace
++{
++constexpr time_t PINNED_BOT_LOGIN_CHECK_INTERVAL = 30;
++}  // namespace
++
++uint32 RandomPlayerbotMgr::SetPinnedBots(std::unordered_set<ObjectGuid::LowType> const& bots, bool keep, bool online)
++{
++    std::unordered_set<uint32> const rndBotAccounts(rndBotTypeAccounts.begin(), rndBotTypeAccounts.end());
++    std::unordered_set<uint32> accepted;
++    for (ObjectGuid::LowType bot : bots)
++    {
++        uint32 accountId = sCharacterCache->GetCharacterAccountIdByGuid(ObjectGuid::Create<HighGuid::Player>(bot));
++        if (rndBotAccounts.contains(accountId))
++            accepted.insert(bot);
++    }
++
++    uint32 const acceptedCount = accepted.size();
++    {
++        std::lock_guard<std::mutex> lock(_pinnedBotsLock);
++        _pinnedBots = std::move(accepted);
++        _pinKeep = keep;
++        _pinOnline = online;
++    }
++    _pinLoginCheckTimer = 0;
++
++    LOG_INFO("playerbots", "Pinned {} random bots (keep={}, online={}); {} rejected: not on a random-bot account",
++             acceptedCount, keep, online, bots.size() - acceptedCount);
++    return acceptedCount;
++}
++
++bool RandomPlayerbotMgr::IsPinned(ObjectGuid::LowType bot) const
++{
++    std::lock_guard<std::mutex> lock(_pinnedBotsLock);
++    return _pinnedBots.contains(bot);
++}
++
++void RandomPlayerbotMgr::LoginPinnedBots()
++{
++    time_t const now = time(nullptr);
++    if (now < _pinLoginCheckTimer + PINNED_BOT_LOGIN_CHECK_INTERVAL)
++        return;
++
++    _pinLoginCheckTimer = now;
++
++    std::unordered_set<uint32> pinned;
++    {
++        std::lock_guard<std::mutex> lock(_pinnedBotsLock);
++        pinned = _pinnedBots;
++    }
++
++    uint32 logins = 0;
++    for (uint32 bot : pinned)
++    {
++        if (logins >= sPlayerbotAIConfig.RandomBotsPerInterval)
++            break;
++
++        if (GetPlayerBot(bot))
++            continue;
++
++        if (!GetEventValue(bot, "add"))
++            SetEventValue(bot, "add", 1, sPlayerbotAIConfig.PermanentlyInWorldTime);
++
++        SetEventValue(bot, "logout", 0, 0);
++        currentBots.insert(bot);
++        ProcessBot(bot);
++        ++logins;
++    }
++}
++
++bool RandomPlayerbotMgr::ProcessPinnedBot(Player* bot)
++{
++    uint32 const botId = bot->GetGUID().GetCounter();
++
++    if (bot->isDead())
++    {
++        // Revival inside an instance is left to the group, so a bot-led raid never sees a member stand up mid-pull.
++        if (bot->GetMap()->IsDungeon())
++            return false;
++
++        if (!GetEventValue(botId, "dead"))
++        {
++            SetEventValue(botId, "dead", 1, sPlayerbotAIConfig.MaxRandomBotInWorldTime);
++            SetEventValue(botId, "revive", 1,
++                          urand(sPlayerbotAIConfig.MinRandomBotReviveTime, sPlayerbotAIConfig.MaxRandomBotReviveTime));
++            return false;
++        }
++
++        if (GetEventValue(botId, "revive"))
++            return false;
++
++        SetEventValue(botId, "dead", 0, 0);
++        SetEventValue(botId, "revive", 0, 0);
++        bot->ResurrectPlayer(1.0f);
++        bot->SpawnCorpseBones();
++        LOG_INFO("playerbots", "Pinned bot #{} <{}>: revived in place", botId, bot->GetName());
++        return true;
++    }
++
++    if (!GetEventValue(botId, "randomize"))
++    {
++        ScheduleRandomize(
++            botId, urand(sPlayerbotAIConfig.MinRandomBotRandomizeTime, sPlayerbotAIConfig.MaxRandomBotRandomizeTime));
++        LOG_INFO("playerbots", "Pinned bot #{} <{}>: kept, skipped randomize", botId, bot->GetName());
++    }
++
++    if (!GetEventValue(botId, "teleport"))
++    {
++        ScheduleTeleport(botId, urand(sPlayerbotAIConfig.MinRandomBotTeleportInterval,
++                                      sPlayerbotAIConfig.MaxRandomBotTeleportInterval));
++        LOG_INFO("playerbots", "Pinned bot #{} <{}>: kept, skipped refresh and teleport", botId, bot->GetName());
++    }
++
++    return false;
++}
++
+ void RandomPlayerbotMgr::Revive(Player* player)
+ {
+     uint32 bot = player->GetGUID().GetCounter();
+diff --git a/src/Bot/RandomPlayerbotMgr.h b/src/Bot/RandomPlayerbotMgr.h
+index 8dedbbf3..62ef1f6e 100644
+--- a/src/Bot/RandomPlayerbotMgr.h
++++ b/src/Bot/RandomPlayerbotMgr.h
+@@ -110,6 +110,11 @@ public:
+     bool IsRandomBot(ObjectGuid::LowType bot);
+     bool IsAddclassBot(Player* bot);
+     bool IsAddclassBot(ObjectGuid::LowType bot);
++    // Replaces the pinned set; world thread. keep: ProcessBot skips randomize, refresh+teleport, revive-teleport and
++    // the rndbot-leader group leave for them. online: always in currentBots and logged in, regardless of bot_count,
++    // and never logged out on "add" expiry. Only characters on RNDbot (type 1) accounts are accepted; returns how many.
++    uint32 SetPinnedBots(std::unordered_set<ObjectGuid::LowType> const& bots, bool keep, bool online);
++    bool IsPinned(ObjectGuid::LowType bot) const;  // any thread
+     void Randomize(Player* bot);
+     void Clear(Player* bot);
+     void RandomizeFirst(Player* bot);
+@@ -263,6 +268,14 @@ private:
+     // Written on the world thread, read from map threads.
+     std::set<std::pair<uint32, uint32>> _playerZones;
+     std::mutex _playerZonesLock;
++    // Written on the world thread, read from map threads.
++    std::unordered_set<uint32> _pinnedBots;
++    bool _pinKeep = false;
++    bool _pinOnline = false;
++    time_t _pinLoginCheckTimer = 0;
++    mutable std::mutex _pinnedBotsLock;
++    void LoginPinnedBots();
++    bool ProcessPinnedBot(Player* bot);
+ 
+     // Account lists
+     std::vector<uint32> rndBotTypeAccounts;             // Accounts marked as RNDbot (type 1)

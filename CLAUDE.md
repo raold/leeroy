@@ -282,6 +282,44 @@ said "No tank bot found". Local commit `8040a53e` clamps to 80.
 Do not pass party/raid leadership to a bot: every bot then runs `reset botAI`
 (`ResetStrategies`), which drops `wait for attack` (formation survives).
 
+### Local patch: pinned random bots
+
+Local commit `e847415b` on `mod-playerbots` `master` ("Let other modules pin
+random bots"). An API on `RandomPlayerbotMgr` that mod-leeroy uses to keep the
+owner's guild of ~106 level-80 random bots permanent and always online. No
+config key: nothing changes until a caller pins something.
+
+- `uint32 SetPinnedBots(std::unordered_set<ObjectGuid::LowType> const& bots, bool keep, bool online)`,
+  world thread. Replaces the pinned set; accepts only characters on RNDbot
+  (type 1) accounts and returns how many it accepted. The account list is
+  filled at playerbots init (`AssignAccountTypes`), so call it after that.
+- `bool IsPinned(ObjectGuid::LowType bot) const`, any thread (mutex).
+- `online`: every 30 s `UpdateAIInternal` logs in offline pins (at most
+  `RandomBotsPerInterval` per pass) and adds them to `currentBots` regardless of
+  `bot_count`; an expired `add` is re-armed instead of logging the bot out.
+- `keep`: a guard in `ProcessBot(Player*)` hands pins to `ProcessPinnedBot`,
+  which reschedules `randomize` and `teleport` without running them, never
+  leaves the group, leaves revival inside a dungeon or raid to the group, and
+  elsewhere revives in place after the usual revive timer (no refresh, no
+  teleport).
+
+The guard must come before both the death block and "leave group if leader is
+rndbot", or a raid led by a pinned bot dissolves on its next random-bot update.
+Re-check after every `ac-update.sh` rebase (prints `pin guard OK`):
+
+```bash
+awk '/^bool RandomPlayerbotMgr::ProcessBot\(Player\* bot\)/{p=1}
+     p && !g && /IsPinned\(botId\)/{g=NR}  p && !d && /bot->isDead\(\)/{d=NR}
+     p && /leave group if leader is rndbot/{l=NR; exit}
+     END{print (g && d && l && g < d && d < l) ? "pin guard OK" : "pin guard MISPLACED"}' \
+    /f/azerothcore/azerothcore-wotlk/modules/mod-playerbots/src/Bot/RandomPlayerbotMgr.cpp
+```
+
+`Playerbots.log` lines (`LOG_INFO`): `Pinned N random bots (keep=…, online=…);
+M rejected: not on a random-bot account`, and per bot `Pinned bot #<guid>
+<name>: kept, skipped randomize`, `…: kept, skipped refresh and teleport` and
+`…: revived in place`.
+
 Commits here never carry a `Co-Authored-By` or other attribution trailer.
 
 Both local patches: `ac-update.sh` now rebases repos that are ahead of
