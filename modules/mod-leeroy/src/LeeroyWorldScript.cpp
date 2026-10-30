@@ -3,6 +3,7 @@
 #include "LeeroyCast.h"
 #include "LeeroyCastModel.h"
 #include "LeeroyCommands.h"
+#include "LeeroyEvents.h"
 #include "LeeroyIntegrations.h"
 #include "LeeroyModule.h"
 #include "LeeroyProtocol.h"
@@ -21,6 +22,7 @@ namespace
 {
 constexpr uint32 kRefreshIntervalMs = 60000;
 constexpr uint32 kBridgeRetryMs = 30000;
+constexpr uint32 kAfkPollMs = 1000;
 constexpr std::size_t kMaxCommandsPerUpdate = 64;
 
 char const* OnOff(bool on)
@@ -83,10 +85,13 @@ public:
         LeeroyCastRegistry& cast = module.Cast();
         if (!module.Enabled())
         {
-            if (std::exchange(_repin, false))   // a reload turned the module off: let the cast go
+            // A reload turned the module off: let the cast go, and drop the mind rather than queue its commands
+            // for a late replay. The retry below restarts the bridge once a reload turns the module back on.
+            if (std::exchange(_repin, false))
             {
                 LeeroyApplyPins();
-                LOG_INFO("module.leeroy", "mod-leeroy: disabled by a config reload, pins cleared");
+                module.Bridge().Stop();
+                LOG_INFO("module.leeroy", "mod-leeroy: disabled by a config reload, pins cleared, bridge stopped");
             }
             return;
         }
@@ -138,6 +143,7 @@ public:
             bridge.Greet(serial, Leeroy::EncodeHello(now, module.GuildId(), humanOnline ? human : 0),
                 Leeroy::EncodeCast(now, cast.BuildMembers(module.GuildId())));
             _greetedSerial = serial;
+            LeeroyResetAfk();   // the new mind hears about everyone already AFK on the next poll
         }
 
         _commands.clear();
@@ -145,6 +151,12 @@ public:
         for (Leeroy::Command const& cmd : _commands)
             bridge.Reply(LeeroyExecuteCommand(cmd));
         _commands.clear();
+
+        if ((_afkPollTimer += diff) >= kAfkPollMs)
+        {
+            _afkPollTimer = 0;
+            LeeroyPollAfk();
+        }
 
         // Pushed on a GUID-set change or a successful set_rank. With no greeted mind the push is dropped: the next
         // greeting carries a fresh cast.
@@ -184,6 +196,7 @@ private:
     bool _repin = false;
     uint32 _refreshTimer = 0;
     uint32 _bridgeRetryTimer = 0;
+    uint32 _afkPollTimer = 0;
     std::uint64_t _greetedSerial = 0;
     std::vector<Leeroy::Command> _commands;
 };
