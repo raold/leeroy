@@ -4,6 +4,8 @@
 #define MOD_LEEROY_LEEROY_MODULE_H
 
 #include "Define.h"
+#include "LeeroyBridge.h"
+#include "LeeroyCast.h"
 
 #include <atomic>
 #include <string>
@@ -33,12 +35,29 @@ public:
     uint32 HumanGuid() const { return _humanGuid.load(); }
     bool ExcludeFromOllama() const { return _excludeFromOllama.load(); }
 
+    LeeroyCastRegistry& Cast() { return _cast; }
+    Leeroy::Bridge& Bridge() { return _bridge; }
+    bool IsTracked(uint32 lowGuid) const;               // human or cast, any thread
+    void Publish(std::string line, bool droppable);     // any thread; no-op when disabled
+
+    // OnShutdown, after Bridge().Stop(): from here on the bridge logs nothing, so a late Stop (~Bridge during
+    // static destruction) cannot reach a core logger that may already be gone.
+    void CloseLog() { _logClosed.store(true); }
+
 private:
+    LeeroyModule();
+    ~LeeroyModule();
+
+    void BridgeLog(Leeroy::Bridge::LogLevel level, std::string const& message) const;
+
+    std::atomic<bool> _logClosed{false};   // declared before _bridge, so it outlives it
     LeeroyConfig _config;
     std::atomic<bool> _enabled{true};
     std::atomic<uint32> _guildId{21};
     std::atomic<uint32> _humanGuid{1};
     std::atomic<bool> _excludeFromOllama{true};
+    LeeroyCastRegistry _cast;
+    Leeroy::Bridge _bridge;
 };
 
 #endif

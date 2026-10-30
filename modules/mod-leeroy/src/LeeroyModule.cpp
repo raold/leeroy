@@ -5,10 +5,22 @@
 #include "Config.h"
 #include "Log.h"
 
+#include <utility>
+
 LeeroyModule& LeeroyModule::Instance()
 {
     static LeeroyModule instance;
     return instance;
+}
+
+LeeroyModule::LeeroyModule()
+    : _bridge([this](Leeroy::Bridge::LogLevel level, std::string const& message) { BridgeLog(level, message); })
+{
+}
+
+LeeroyModule::~LeeroyModule()
+{
+    CloseLog();   // before _bridge's destructor runs Stop()
 }
 
 void LeeroyModule::LoadConfig(bool /*reload*/)
@@ -36,4 +48,35 @@ void LeeroyModule::LoadConfig(bool /*reload*/)
     _guildId = cfg.guildId;
     _humanGuid = cfg.humanGuid;
     _excludeFromOllama = cfg.excludeFromOllamaChat;
+}
+
+bool LeeroyModule::IsTracked(uint32 lowGuid) const
+{
+    return lowGuid == HumanGuid() || _cast.IsCast(lowGuid);
+}
+
+void LeeroyModule::Publish(std::string line, bool droppable)
+{
+    if (!Enabled())
+        return;
+    _bridge.PublishEvent(std::move(line), droppable);
+}
+
+// The bridge calls this from its io thread as well as from the world thread; the core logger is thread-safe.
+void LeeroyModule::BridgeLog(Leeroy::Bridge::LogLevel level, std::string const& message) const
+{
+    if (_logClosed.load())
+        return;
+    switch (level)
+    {
+        case Leeroy::Bridge::LogLevel::Info:
+            LOG_INFO("module.leeroy", "mod-leeroy: {}", message);
+            break;
+        case Leeroy::Bridge::LogLevel::Warn:
+            LOG_WARN("module.leeroy", "mod-leeroy: {}", message);
+            break;
+        case Leeroy::Bridge::LogLevel::Error:
+            LOG_ERROR("module.leeroy", "mod-leeroy: {}", message);
+            break;
+    }
 }
