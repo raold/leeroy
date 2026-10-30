@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Copy the live configs and the local mod-playerbots commits into this repo so
-# they are versioned. The live files stay the source of truth: this only
-# snapshots them. Secrets are masked on the way in, and the copies are then
+# Copy the live configs and the local commits of mod-playerbots and
+# mod-ollama-chat into this repo so they are versioned. The live files stay the
+# source of truth: this only snapshots them. Secrets are masked on the way in, and the copies are then
 # checked against the real values before anything can be committed.
 #
 # Usage: ac-snapshot.sh
@@ -9,8 +9,6 @@
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 OUT_CONF="$AC_ROOT/config"
-OUT_PATCH="$AC_ROOT/patches/mod-playerbots"
-PLAYERBOTS="$AC_MODULES/mod-playerbots"
 
 # Credentials, tokens and keys. Empty and numeric values are flags or unset, so
 # they are kept; anything else becomes "<redacted>".
@@ -33,12 +31,19 @@ for f in "$AC_CONF"/*.conf "$AC_MODCONF"/*.conf; do
 done
 log "configs: $(find "$OUT_CONF" -name '*.conf' | wc -l) files -> config/"
 
-# --- playerbots patches --------------------------------------------------
-upstream="$(git -C "$PLAYERBOTS" rev-parse --abbrev-ref --symbolic-full-name '@{u}')"
-rm -rf "$OUT_PATCH"
-mkdir -p "$OUT_PATCH"
-git -C "$PLAYERBOTS" format-patch --quiet --no-signature -o "$OUT_PATCH" "$upstream..HEAD"
-log "patches: $(find "$OUT_PATCH" -name '*.patch' | wc -l) commits on top of $upstream -> patches/mod-playerbots/"
+# --- module patches ------------------------------------------------------
+# Local commits of a module repo (everything ahead of its upstream branch),
+# written to patches/<module>/. Only that directory is ever cleared.
+export_patches() {
+    local module="$1" repo="$AC_MODULES/$1" out="$AC_ROOT/patches/$1" upstream
+    upstream="$(git -C "$repo" rev-parse --abbrev-ref --symbolic-full-name '@{u}')"
+    rm -rf "$out"
+    mkdir -p "$out"
+    git -C "$repo" format-patch --quiet --no-signature -o "$out" "$upstream..HEAD"
+    log "patches: $(find "$out" -name '*.patch' | wc -l) commits on top of $upstream -> patches/$module/"
+}
+export_patches mod-playerbots
+export_patches mod-ollama-chat
 
 # --- leak check ----------------------------------------------------------
 # Every secret value in the live configs must be absent from the copies: the
@@ -55,7 +60,7 @@ while IFS= read -r line; do
     while IFS= read -r hit; do
         warn "a secret from the live configs appears in ${hit#"$AC_ROOT"/}"
         leaks=1
-    done < <(grep -rlF -- "$value" "$OUT_CONF" "$OUT_PATCH" || true)
+    done < <(grep -rlF -- "$value" "$OUT_CONF" "$AC_ROOT/patches" || true)
 done < <(grep -hE "^[[:space:]]*${SECRET_KEYS}[[:space:]]*=" "$AC_CONF"/*.conf "$AC_MODCONF"/*.conf)
 [ "$leaks" -eq 0 ] || die "secrets leaked into the snapshot; it was not cleaned up, fix the mask before committing"
 log "leak check passed"

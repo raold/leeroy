@@ -39,7 +39,7 @@ README, `scripts/`, `config/`, `patches/` and `.github/`. The core repo, the
 build tree, the client, boost, DB dumps and the zips stay out, and so do the
 local dev docs (`docs/`, `private/`).
 
-- `config/` and `patches/mod-playerbots/` are snapshots made by
+- `config/`, `patches/mod-playerbots/` and `patches/mod-ollama-chat/` are snapshots made by
   `scripts/ac-snapshot.sh`. Never edit them by hand; edit the live configs or
   the playerbots commits, then re-run it. It masks secret values (anything
   ending `DatabaseInfo`, `Secret`, `Token`, `ApiKey` or `Password`) and fails
@@ -176,7 +176,7 @@ Run from `F:\azerothcore\scripts` in Git Bash.
 ./ac-backup.sh [label]       # mysqldump all 4 DBs, keeps newest 5
 ./ac-build.sh                # preflight + cmake configure + build
 ./ac-server.sh start|stop|status
-./ac-snapshot.sh             # live configs (masked) + playerbots patches -> config/, patches/
+./ac-snapshot.sh             # live configs (masked) + playerbots and ollama-chat patches -> config/, patches/
 ```
 
 `db_backup/` holds two kinds of thing: sets `ac-backup.sh` made
@@ -337,6 +337,17 @@ Both local patches: `ac-update.sh` now rebases repos that are ahead of
 upstream instead of refusing, so they are carried across updates; a conflict aborts the
 rebase and stops the script. Upstreaming it (PR to `test-staging`) would drop
 the need.
+
+### Local patch: mod-ollama-chat speaker filter
+
+Local commit `072d13d` on `mod-ollama-chat` `main` ("Let other modules keep
+chosen bots silent"). Adds `OllamaDispatch_SetSpeakerFilter(std::function<bool(uint64_t botGuid)>)`
+to `mod-ollama-chat_dispatch.h`; `OllamaDispatch_Submit` copies the filter under
+a mutex, calls it outside the lock and drops the request (returns `false`) when
+it says `false`. Inert until set. mod-leeroy uses it to keep guild cast members
+silent so only their own mind service voices them. `ac-snapshot.sh` now exports
+the local commits of both `mod-playerbots` and `mod-ollama-chat`, and the
+`patches` workflow checks each against its upstream nightly.
 
 ### mod-ollama-chat
 

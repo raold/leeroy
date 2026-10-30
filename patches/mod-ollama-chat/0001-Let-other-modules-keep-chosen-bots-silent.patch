@@ -1,0 +1,80 @@
+From 072d13d2cc0201e73203784da66d932e5ed98e9d Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 23:33:50 -0400
+Subject: [PATCH] Let other modules keep chosen bots silent
+
+---
+ src/mod-ollama-chat_dispatch.cpp | 23 +++++++++++++++++++++++
+ src/mod-ollama-chat_dispatch.h   |  6 ++++++
+ 2 files changed, 29 insertions(+)
+
+diff --git a/src/mod-ollama-chat_dispatch.cpp b/src/mod-ollama-chat_dispatch.cpp
+index a940141..dc5d5db 100644
+--- a/src/mod-ollama-chat_dispatch.cpp
++++ b/src/mod-ollama-chat_dispatch.cpp
+@@ -88,6 +88,9 @@ namespace
+     std::mutex  g_errorMutex;
+     std::string g_lastError;
+ 
++    std::mutex          g_speakerFilterMutex;
++    OllamaSpeakerFilter g_speakerFilter;
++
+     void RecordError(const std::string& what)
+     {
+         ++g_totalFailed;
+@@ -483,11 +486,31 @@ void OllamaDispatch_Stop()
+     LOG_INFO("module.ollamachat", "[Ollama Chat] Dispatcher stopped.");
+ }
+ 
++void OllamaDispatch_SetSpeakerFilter(OllamaSpeakerFilter filter)
++{
++    std::lock_guard<std::mutex> lock(g_speakerFilterMutex);
++    g_speakerFilter = std::move(filter);
++}
++
+ bool OllamaDispatch_Submit(OllamaChatRequest request)
+ {
+     if (request.prompt.empty() || request.botGuid == 0)
+         return false;
+ 
++    OllamaSpeakerFilter speakerFilter;
++    {
++        std::lock_guard<std::mutex> lock(g_speakerFilterMutex);
++        speakerFilter = g_speakerFilter;
++    }
++    if (speakerFilter && !speakerFilter(request.botGuid))
++    {
++        if (g_DebugEnabled)
++            LOG_INFO("module.ollamachat",
++                     "[Ollama Chat] {} is excluded by the speaker filter.",
++                     request.botName);
++        return false;
++    }
++
+     Task task;
+     task.type    = TaskType::ChatReply;
+     task.request = std::move(request);
+diff --git a/src/mod-ollama-chat_dispatch.h b/src/mod-ollama-chat_dispatch.h
+index c340a2b..2c7a23c 100644
+--- a/src/mod-ollama-chat_dispatch.h
++++ b/src/mod-ollama-chat_dispatch.h
+@@ -7,6 +7,7 @@
+ #include "ObjectGuid.h"
+ #include <string>
+ #include <cstdint>
++#include <functional>
+ 
+ class Player;
+ class Channel;
+@@ -91,6 +92,11 @@ struct OllamaChatRequest
+ // case the caller should simply skip this bot rather than pile up backlog.
+ bool OllamaDispatch_Submit(OllamaChatRequest request);
+ 
++// Return false to keep that bot silent: Submit() then drops the request and returns false.
++// Set once at startup; called on the submitting thread, so it must be thread-safe.
++using OllamaSpeakerFilter = std::function<bool(uint64_t botGuid)>;   // raw 64-bit GUID, as request.botGuid
++void OllamaDispatch_SetSpeakerFilter(OllamaSpeakerFilter filter);
++
+ // Drain finished generations and deliver them. World thread only.
+ void OllamaDispatch_Update(uint32_t diff);
+ 

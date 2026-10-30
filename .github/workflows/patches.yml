@@ -1,6 +1,6 @@
 name: patches
 
-# Applies patches/mod-playerbots to the newest upstream master. Nightly, so an
+# Applies patches/mod-playerbots and patches/mod-ollama-chat to the newest upstream. Nightly, so an
 # upstream change that breaks a local patch shows up as an issue here before
 # ac-update.sh runs into the same conflict.
 
@@ -51,7 +51,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           gh label create patch-drift --color D93F0B --description "Local patches no longer apply to upstream" --force
-          issue=$(gh issue list --label patch-drift --state open --json number --jq '.[0].number')
+          issue=$(gh issue list --label patch-drift --state open --search "mod-playerbots in:title" --json number --jq '.[0].number')
           if [ -n "$issue" ]; then
             gh issue comment "$issue" --body "Still failing: $RUN_URL"
           else
@@ -60,4 +60,39 @@ jobs:
               --body "The nightly check could not apply \`patches/mod-playerbots\` to upstream \`master\`, or the result failed codestyle: $RUN_URL
 
           Rebase the local commits in \`modules/mod-playerbots\` (\`ac-update.sh\` stops on the same conflict), then run \`scripts/ac-snapshot.sh\` and commit."
+          fi
+
+  mod-ollama-chat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: leeroy
+
+      - name: Clone upstream mod-ollama-chat
+        run: git clone --filter=blob:none --branch main https://github.com/DustinHendrickson/mod-ollama-chat.git ollama
+
+      - name: Apply the local patches
+        working-directory: ollama
+        run: |
+          git -c user.name=leeroy-ci -c user.email=ci@invalid am --3way ../leeroy/patches/mod-ollama-chat/*.patch
+          git log --oneline -n "$(find ../leeroy/patches/mod-ollama-chat -name '*.patch' | wc -l)"
+
+      - name: Open or update the drift issue
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create patch-drift --color D93F0B --description "Local patches no longer apply to upstream" --force
+          issue=$(gh issue list --label patch-drift --state open --search "mod-ollama-chat in:title" --json number --jq '.[0].number')
+          if [ -n "$issue" ]; then
+            gh issue comment "$issue" --body "Still failing: $RUN_URL"
+          else
+            gh issue create --label patch-drift \
+              --title "mod-ollama-chat patches no longer apply to upstream main" \
+              --body "The nightly check could not apply \`patches/mod-ollama-chat\` to upstream \`main\`: $RUN_URL
+
+          Rebase the local commits in \`modules/mod-ollama-chat\` (\`ac-update.sh\` stops on the same conflict), then run \`scripts/ac-snapshot.sh\` and commit."
           fi
