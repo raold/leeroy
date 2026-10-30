@@ -168,10 +168,24 @@ void PublishLogin(Player* player, bool login)
         module.Publish(Leeroy::EncodeLogin(Leeroy::NowUnixMs(), login, guid, guid == module.HumanGuid()), false);
 }
 
-// Once per source: epic-or-better items in a dungeon, each with its master-loot slot (its position in loot.items).
-void PublishLootDrop(Map const* map, ObjectGuid source, uint32 sourceEntry, Loot const& loot)
+// The map's own thread (or the world thread, when no map updates).
+bool AnyTrackedOnMap(Map const* map)
 {
-    if (!map || !map->IsDungeon() || !LeeroyModule::Instance().Enabled())
+    LeeroyModule& module = LeeroyModule::Instance();
+    for (MapReference const& ref : map->GetPlayers())
+        if (Player* player = ref.GetSource())
+            if (module.IsTracked(LowGuid(player)))
+                return true;
+    return false;
+}
+
+// Once per source: epic-or-better items in a dungeon, each with its master-loot slot (its position in loot.items).
+// Heard when the looter or anyone else on the map is tracked: in the human's raids the kill credit often goes to an
+// addclass bot outside the cast.
+void PublishLootDrop(Map const* map, ObjectGuid source, uint32 sourceEntry, Loot const& loot, uint32 looterGuid)
+{
+    LeeroyModule& module = LeeroyModule::Instance();
+    if (!map || !map->IsDungeon() || !module.Enabled())
         return;
 
     std::vector<Leeroy::LootItem> items;
@@ -187,7 +201,9 @@ void PublishLootDrop(Map const* map, ObjectGuid source, uint32 sourceEntry, Loot
         item.index = static_cast<uint32>(i);
         items.push_back(std::move(item));
     }
-    if (items.empty() || !LootSources().Remember(map->GetInstanceId(), source))
+    if (items.empty() || (!module.IsTracked(looterGuid) && !AnyTrackedOnMap(map)))
+        return;
+    if (!LootSources().Remember(map->GetInstanceId(), source))
         return;
 
     Leeroy::LootDropEvent e;
@@ -195,7 +211,7 @@ void PublishLootDrop(Map const* map, ObjectGuid source, uint32 sourceEntry, Loot
     e.instanceId = map->GetInstanceId();
     e.sourceEntry = sourceEntry;
     e.items = std::move(items);
-    LeeroyModule::Instance().Publish(Leeroy::EncodeLootDrop(Leeroy::NowUnixMs(), e), false);
+    module.Publish(Leeroy::EncodeLootDrop(Leeroy::NowUnixMs(), e), false);
 }
 
 // `group` is the human's group, or nullptr when the human is out of it.
@@ -224,18 +240,6 @@ ObjectGuid HumanObjectGuid()
 bool IsBattleGroup(Group const* group)
 {
     return group->isBGGroup() || group->isBFGroup();
-}
-
-std::string BossName(Map const* instance, uint32 bossId)
-{
-    DungeonEncounterList const* encounters =
-        sObjectMgr->GetDungeonEncounterList(instance->GetId(), instance->GetDifficulty());
-    if (!encounters)
-        return {};
-    for (DungeonEncounter const* encounter : *encounters)
-        if (encounter && encounter->dbcEntry && encounter->dbcEntry->encounterIndex == bossId)
-            return std::string(DbcText(encounter->dbcEntry->encounterName[DbcLocale()]));
-    return {};
 }
 
 Leeroy::BgWinner Winner(TeamId team)
@@ -431,16 +435,16 @@ public:
     // Unit::Kill (Unit.cpp:13858): after the loot fill (:13687), before anyone can open the corpse.
     void OnPlayerCreatureKillCredit(Player* player, Creature* killed) override
     {
-        if (killed && LeeroyModule::Instance().IsTracked(LowGuid(player)))
-            PublishLootDrop(killed->GetMap(), killed->GetGUID(), killed->GetEntry(), killed->loot);
+        if (killed)
+            PublishLootDrop(killed->GetMap(), killed->GetGUID(), killed->GetEntry(), killed->loot, LowGuid(player));
     }
 
     // Player::SendLoot (Player.cpp:8383), after the loot is filled. Creatures are published at kill time, so only
     // game objects (chests) count here; the source memory keeps it to the first open.
     void OnPlayerBeforeSendLoot(Player* player, ObjectGuid lootGuid, Loot* loot) override
     {
-        if (loot && lootGuid.IsGameObject() && LeeroyModule::Instance().IsTracked(LowGuid(player)))
-            PublishLootDrop(player->GetMap(), lootGuid, lootGuid.GetEntry(), *loot);
+        if (loot && lootGuid.IsGameObject())
+            PublishLootDrop(player->GetMap(), lootGuid, lootGuid.GetEntry(), *loot, LowGuid(player));
     }
 };
 
@@ -498,7 +502,7 @@ public:
         e.map = instance->GetId();
         e.instanceId = instance->GetInstanceId();
         e.bossId = id;
-        e.bossName = BossName(instance, id);
+        // boss_name stays "": script boss ids do not follow DungeonEncounter.dbc order, so no core lookup is sound.
         e.state = *state;
         module.Publish(Leeroy::EncodeBoss(Leeroy::NowUnixMs(), e), false);
     }
