@@ -169,7 +169,9 @@ were present in `modules/` when CMake last ran.
 
 Live configs are `.conf`; the `.conf.dist` files are templates that a pull
 updates. New `.dist` keys do not appear in your live `.conf` — missing keys fall
-back to compiled-in defaults. `ac-update.sh` reports them.
+back to compiled-in defaults. `ac-update.sh` reports them, for the modules'
+`conf/*.conf.dist` and for the core's `worldserver.conf.dist` / `authserver.conf.dist`
+(under `src/server/apps/`).
 
 ## Scripts
 
@@ -427,6 +429,3 @@ It compiles clean and the BG registers, but in-game behaviour is unverified.
 - `mod-bg-slaveryvalley` server data + client patch (above).
 - Zip-sourced modules (transmog, individual-progression, slaveryvalley) have no
   update path; converting them to git clones would let `ac-update.sh` cover them.
-- `ac-update.sh` only checks `<repo>/conf/*.conf.dist` for new keys, which
-  misses the core's `worldserver.conf.dist` / `authserver.conf.dist` (under
-  `src/server/apps/`).
