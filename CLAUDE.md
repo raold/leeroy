@@ -418,7 +418,7 @@ records (BattlemasterList 31, Map 801, AreaTable 5000-5004, WorldSafeLocs, Spell
 was deliberately not used. Instead:
 - `Wow355a\Data\enUS\patch-enUS-4.MPQ`: the release's patch without
   `Interface\FrameXML` and with the repaired DBCs. Built with StormLib v9.40
-  (`F:zerothcore	ools\`, untracked; scripts in `tools\slaveryvalley-scripts\`).
+  (`F:\azerothcore\tools\`, untracked; scripts in `tools\slaveryvalley-scripts\`).
   The untouched release patch is `client-patches\patch-S.MPQ`; a build with its
   damaged DBCs is `client-patches\patch-enUS-4.shipped-dbc.MPQ`. Number future
   custom patches 5 or higher.
