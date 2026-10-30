@@ -89,6 +89,47 @@ LEEROY_TEST(Bridge_OverlongLineCloses)
     CHECK(c.WaitClosed(1s)); CHECK(WaitFor([&] { return !b.Connected(); }, 1s));
 }
 
+LEEROY_TEST(Bridge_FirstLineNotJsonClosesConnection)
+{
+    Bridge b(NoLog);
+    b.Start("127.0.0.1", 0);
+    TestClient c;
+    c.Connect(b.BoundPort());
+    WaitFor([&] { return b.ConnectionSerial() == 1; }, 1s);
+    c.Send("POST / HTTP/1.1\r");
+    c.Send(R"({"v":1,"type":"ping","id":"p"})");
+    auto j = nlohmann::json::parse(NextLine(c));
+    CHECK_EQ(j["type"], "error"); CHECK_EQ(j["message"], "bad json"); CHECK(!j.contains("id"));
+    CHECK(c.WaitClosed(1s)); CHECK(WaitFor([&] { return !b.Connected(); }, 1s));
+    b.Greet(1, "H", "C");
+    std::vector<Command> cmds;
+    CHECK_EQ(b.PopCommands(cmds, 10), 0u);
+    TestClient c2;
+    CHECK(c2.Connect(b.BoundPort()));
+    CHECK(WaitFor([&] { return b.ConnectionSerial() == 2; }, 1s));
+    b.Greet(2, "H2", "C2");
+    CHECK_EQ(NextLine(c2), "H2"); CHECK_EQ(NextLine(c2), "C2");
+}
+
+LEEROY_TEST(Bridge_LaterBadLineKeepsConnection)
+{
+    Bridge b(NoLog);
+    b.Start("127.0.0.1", 0);
+    TestClient c;
+    c.Connect(b.BoundPort());
+    WaitFor([&] { return b.ConnectionSerial() == 1; }, 1s);
+    b.Greet(1, "H", "C");
+    NextLine(c);
+    NextLine(c);
+    c.Send(R"({"v":1,"type":"ping","id":"a"})");
+    c.Send("garbage");
+    CHECK_EQ(nlohmann::json::parse(NextLine(c))["message"], "bad json");
+    c.Send(R"({"v":1,"type":"ping","id":"b"})");
+    std::vector<Command> cmds;
+    CHECK(WaitFor([&] { b.PopCommands(cmds, 10); return cmds.size() == 2; }, 1s));
+    CHECK_EQ(cmds[0].id, "a"); CHECK_EQ(cmds[1].id, "b"); CHECK(b.Connected());
+}
+
 LEEROY_TEST(Bridge_ReconnectNeedsFreshGreeting)
 {
     Bridge b(NoLog);

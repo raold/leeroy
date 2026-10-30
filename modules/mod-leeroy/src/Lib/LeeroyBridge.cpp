@@ -68,6 +68,7 @@ struct Bridge::Impl
         Phase phase = Phase::Open;
         bool writing = false;
         bool readPaused = false;
+        bool firstLineSeen = false;       // the first non-empty line must be a JSON object
     };
 
     // Created by Start, destroyed by Stop after the io thread is joined. The io_context comes first so that it is
@@ -230,9 +231,16 @@ struct Bridge::Impl
         std::string_view line(static_cast<char const*>(data.data()), length > 0 ? length - 1 : 0);
         if (!line.empty() && line.back() == '\r')
             line.remove_suffix(1);
+        bool refused = false;
         if (!line.empty())
-            HandleLine(line);
+            refused = !HandleLine(*conn, line);
         conn->readBuffer.consume(length);
+        if (refused)
+        {
+            Log(LogLevel::Warn, "first line from the mind is not JSON, disconnecting");
+            Finish(conn, EncodeError(NowUnixMs(), Err::BadJson));
+            return;
+        }
 
         if (ControlBacklog() >= kControlBacklogLimit)
             conn->readPaused = true;
@@ -240,9 +248,14 @@ struct Bridge::Impl
             StartRead(conn);
     }
 
-    void HandleLine(std::string_view line)
+    // False when the connection must close: its first line is not a JSON object, so it is not a bridge client (a
+    // browser posting to the port, say), and nothing it sent may reach the command queue.
+    bool HandleLine(Connection& conn, std::string_view line)
     {
         DecodeResult result = DecodeCommand(line);
+        bool const first = !std::exchange(conn.firstLineSeen, true);
+        if (first && !result.command && !result.ackable && result.error == Err::BadJson)
+            return false;
         std::string reply;
         if (result.command)
         {
@@ -251,7 +264,7 @@ struct Bridge::Impl
                 if (_inbox.size() < _inboxCapacity)
                 {
                     _inbox.push_back(std::move(*result.command));
-                    return;
+                    return true;
                 }
             }
             reply = EncodeAck(NowUnixMs(), result.id, false, Err::Busy);
@@ -263,6 +276,7 @@ struct Bridge::Impl
 
         std::lock_guard<std::mutex> lock(_stateMutex);
         PushControlLocked(std::move(reply));
+        return true;
     }
 
     void ArmTick()
