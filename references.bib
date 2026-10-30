@@ -1,0 +1,2938 @@
+% Bibliography of the research, software and models behind a local game server whose guild members are
+% LLM-driven personas with memory, relationships, voice and nightly reflection.
+% Each annote field says what the work shaped; entries are verified against publisher or archive metadata.
+
+% ---- Agents and memory ----
+
+@misc{alteraal2024project,
+  author = {{Altera.AL} and Ahn, Andrew and Becker, Nic and Carroll, Stephanie and Christie, Nico and Cortes, Manuel and Demirci, Arda and Du, Melissa and Li, Frankie and Luo, Shuying and Wang, Peter Y. and Willows, Mathew and Yang, Feitong and Yang, Guangyu Robert},
+  title = {Project {Sid}: Many-agent simulations toward {AI} civilization},
+  year = {2024},
+  eprint = {2411.00114},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.AI},
+  url = {https://arxiv.org/abs/2411.00114},
+  keywords = {agents-memory},
+  annote = {Shaped: keeping what members say consistent with what they do, and counting shared conventions}
+}
+
+@article{anderson1991reflections,
+  author = {Anderson, John R. and Schooler, Lael J.},
+  title = {Reflections of the Environment in Memory},
+  journal = {Psychological Science},
+  volume = {2},
+  number = {6},
+  pages = {396--408},
+  year = {1991},
+  doi = {10.1111/j.1467-9280.1991.tb00174.x},
+  keywords = {agents-memory},
+  annote = {Shaped: activation-based recall with power-law decay of use}
+}
+
+@article{ashton2021futurerelevant,
+  author = {Ashton, Jennifer E. and Cairney, Scott A.},
+  title = {Future-relevant memories are not selectively strengthened during sleep},
+  journal = {PLOS ONE},
+  volume = {16},
+  number = {11},
+  pages = {e0258110},
+  year = {2021},
+  doi = {10.1371/journal.pone.0258110},
+  keywords = {agents-memory},
+  annote = {Shaped: a caveat that the future-relevance effect did not replicate online}
+}
+
+@misc{barnes2026observational,
+  author = {Barnes, Tyler},
+  title = {Observational Memory: 95\% on {LongMemEval}},
+  year = {2026},
+  howpublished = {Mastra Research},
+  url = {https://mastra.ai/research/observational-memory},
+  note = {Technical write-up, published 2026-02-09; accessed 2026-10-30},
+  keywords = {agents-memory},
+  annote = {Shaped: splitting background memory work into an observer and a reflector}
+}
+
+@inproceedings{chhikara2025mem0,
+  author = {Chhikara, Prateek and Khant, Dev and Aryan, Saket and Singh, Taranjeet and Yadav, Deshraj},
+  title = {{Mem0}: Building Production-Ready {AI} Agents with Scalable Long-Term Memory},
+  booktitle = {ECAI 2025},
+  series = {Frontiers in Artificial Intelligence and Applications},
+  year = {2025},
+  publisher = {IOS Press},
+  eprint = {2504.19413},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  doi = {10.3233/faia251160},
+  keywords = {agents-memory},
+  annote = {Shaped: model-decided memory update and delete, confined to the overnight pass}
+}
+
+@article{coman2016mnemonic,
+  author = {Coman, Alin and Momennejad, Ida and Drach, Rae D. and Geana, Andra},
+  title = {Mnemonic convergence in social networks: The emergent properties of cognition at a collective level},
+  journal = {Proceedings of the National Academy of Sciences},
+  volume = {113},
+  number = {29},
+  pages = {8171--8176},
+  year = {2016},
+  doi = {10.1073/pnas.1525569113},
+  keywords = {agents-memory},
+  annote = {Shaped: shared memories converging through conversation, with unrepeated details fading}
+}
+
+@article{echterhoff2005audiencetuning,
+  author = {Echterhoff, Gerald and Higgins, E. Tory and Groll, Stephan},
+  title = {Audience-tuning effects on memory: The role of shared reality},
+  journal = {Journal of Personality and Social Psychology},
+  volume = {89},
+  number = {3},
+  pages = {257--276},
+  year = {2005},
+  doi = {10.1037/0022-3514.89.3.257},
+  keywords = {agents-memory},
+  annote = {Shaped: audience tuning driven by wanting a shared reality}
+}
+
+@misc{expertium2026technical,
+  author = {Expertium},
+  title = {A Technical Explanation of {FSRS}},
+  year = {2026},
+  howpublished = {Expertium's Blog},
+  url = {https://expertium.github.io/Algorithm.html},
+  note = {Living document, last modified 2026-09-18; accessed 2026-10-30},
+  keywords = {agents-memory},
+  annote = {Shaped: a stability-based forgetting curve for recall}
+}
+
+@inproceedings{fountas2025humaninspired,
+  author = {Fountas, Zafeirios and Benfeghoul, Martin and Oomerjee, Adnan and Christopoulou, Fenia and Lampouras, Gerasimos and Bou Ammar, Haitham and Wang, Jun},
+  title = {Human-inspired Episodic Memory for Infinite Context {LLM}s},
+  booktitle = {The Thirteenth International Conference on Learning Representations},
+  year = {2025},
+  eprint = {2407.09450},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.AI},
+  url = {https://openreview.net/forum?id=BI2int5SAC},
+  keywords = {agents-memory},
+  annote = {Shaped: event boundaries at context shifts when closing conversation threads; the in-model version was ruled out}
+}
+
+@article{goldstein2026case,
+  author = {Goldstein, Simon and Kirk-Giannini, Cameron Domenico},
+  title = {A Case for {AI} Consciousness: Language Agents and Global Workspace Theory},
+  journal = {Journal of Consciousness Studies},
+  volume = {33},
+  number = {7},
+  pages = {61--96},
+  year = {2026},
+  eprint = {2410.11407},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.AI},
+  doi = {10.53765/20512201.33.7.061},
+  keywords = {agents-memory},
+  annote = {Shaped: ruled out consciousness-style architectures; kept one salience ranking for the on-my-mind slot}
+}
+
+@inproceedings{gutierrez2024hipporag,
+  author = {Guti{\'e}rrez, Bernal Jim{\'e}nez and Shu, Yiheng and Gu, Yu and Yasunaga, Michihiro and Su, Yu},
+  title = {{HippoRAG}: Neurobiologically Inspired Long-Term Memory for Large Language Models},
+  booktitle = {Advances in Neural Information Processing Systems},
+  volume = {37},
+  pages = {59532--59569},
+  year = {2024},
+  eprint = {2405.14831},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  doi = {10.52202/079017-1902},
+  keywords = {agents-memory},
+  annote = {Shaped: optional associative multi-hop recall over an entity graph}
+}
+
+@inproceedings{gutierrez2025rag,
+  author = {Guti{\'e}rrez, Bernal Jim{\'e}nez and Shu, Yiheng and Qi, Weijian and Zhou, Sizhe and Su, Yu},
+  title = {From {RAG} to Memory: Non-Parametric Continual Learning for Large Language Models},
+  booktitle = {Proceedings of the 42nd International Conference on Machine Learning},
+  series = {Proceedings of Machine Learning Research},
+  volume = {267},
+  pages = {21497--21515},
+  year = {2025},
+  publisher = {PMLR},
+  eprint = {2502.14802},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  url = {https://proceedings.mlr.press/v267/gutierrez25a.html},
+  keywords = {agents-memory},
+  annote = {Shaped: graph-based associative recall as a later upgrade to retrieval}
+}
+
+@article{higgins1978saying,
+  author = {Higgins, E. Tory and Rholes, William S.},
+  title = {``Saying is believing'': Effects of message modification on memory and liking for the person described},
+  journal = {Journal of Experimental Social Psychology},
+  volume = {14},
+  number = {4},
+  pages = {363--378},
+  year = {1978},
+  doi = {10.1016/0022-1031(78)90032-X},
+  keywords = {agents-memory},
+  annote = {Shaped: retelling to an audience shifts the teller's own later memory}
+}
+
+@article{hoel2021overfitted,
+  author = {Hoel, Erik},
+  title = {The overfitted brain: Dreams evolved to assist generalization},
+  journal = {Patterns},
+  volume = {2},
+  number = {5},
+  pages = {100244},
+  year = {2021},
+  eprint = {2007.09560},
+  archivePrefix = {arXiv},
+  primaryClass = {q-bio.NC},
+  doi = {10.1016/j.patter.2021.100244},
+  keywords = {agents-memory},
+  annote = {Shaped: noise in replay treated as a hypothesis only, not a mechanism}
+}
+
+@article{itti2009bayesian,
+  author = {Itti, Laurent and Baldi, Pierre},
+  title = {{Bayesian} surprise attracts human attention},
+  journal = {Vision Research},
+  volume = {49},
+  number = {10},
+  pages = {1295--1306},
+  year = {2009},
+  doi = {10.1016/j.visres.2008.09.007},
+  keywords = {agents-memory},
+  annote = {Shaped: weighting memories by surprise}
+}
+
+@misc{kaiya2023lyfe,
+  author = {Kaiya, Zhao and Naim, Michelangelo and Kondic, Jovana and Cortes, Manuel and Ge, Jiaxin and Luo, Shuying and Yang, Guangyu Robert and Ahn, Andrew},
+  title = {{Lyfe Agents}: Generative agents for low-cost real-time social interactions},
+  year = {2023},
+  eprint = {2310.02172},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.HC},
+  url = {https://arxiv.org/abs/2310.02172},
+  keywords = {agents-memory},
+  annote = {Shaped: the weekly summarize-and-forget pass over low-value memories}
+}
+
+@article{kumaran2016learning,
+  author = {Kumaran, Dharshan and Hassabis, Demis and McClelland, James L.},
+  title = {What Learning Systems do Intelligent Agents Need? Complementary Learning Systems Theory Updated},
+  journal = {Trends in Cognitive Sciences},
+  volume = {20},
+  number = {7},
+  pages = {512--534},
+  year = {2016},
+  doi = {10.1016/j.tics.2016.05.004},
+  keywords = {agents-memory},
+  annote = {Shaped: the same two-speed memory design, updated}
+}
+
+@misc{latimer2025hindsight,
+  author = {Latimer, Chris and Boschi, Nicol{\'o} and Neeser, Andrew and Bartholomew, Chris and Srivastava, Gaurav and Wang, Xuan and Ramakrishnan, Naren},
+  title = {{Hindsight} is 20/20: Building Agent Memory that Retains, Recalls, and Reflects},
+  year = {2025},
+  eprint = {2512.12818},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  url = {https://arxiv.org/abs/2512.12818},
+  keywords = {agents-memory},
+  annote = {Shaped: keeping facts and opinions in separate records}
+}
+
+@misc{lin2025sleeptime,
+  author = {Lin, Kevin and Snell, Charlie and Wang, Yu and Packer, Charles and Wooders, Sarah and Stoica, Ion and Gonzalez, Joseph E.},
+  title = {Sleep-time Compute: Beyond Inference Scaling at Test-time},
+  year = {2025},
+  eprint = {2504.13171},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.AI},
+  url = {https://arxiv.org/abs/2504.13171},
+  keywords = {agents-memory},
+  annote = {Shaped: consolidation done in the background while the human is away}
+}
+
+@article{mattar2018prioritized,
+  author = {Mattar, Marcelo G. and Daw, Nathaniel D.},
+  title = {Prioritized memory access explains planning and hippocampal replay},
+  journal = {Nature Neuroscience},
+  volume = {21},
+  number = {11},
+  pages = {1609--1617},
+  year = {2018},
+  doi = {10.1038/s41593-018-0232-z},
+  keywords = {agents-memory},
+  annote = {Shaped: ordering overnight replay by expected gain and need}
+}
+
+@article{mcadams2001psychology,
+  author = {McAdams, Dan P.},
+  title = {The Psychology of Life Stories},
+  journal = {Review of General Psychology},
+  volume = {5},
+  number = {2},
+  pages = {100--122},
+  year = {2001},
+  doi = {10.1037/1089-2680.5.2.100},
+  keywords = {agents-memory},
+  annote = {Shaped: a weekly life-story record as an identity anchor}
+}
+
+@article{mcadams2013narrative,
+  author = {McAdams, Dan P. and McLean, Kate C.},
+  title = {Narrative Identity},
+  journal = {Current Directions in Psychological Science},
+  volume = {22},
+  number = {3},
+  pages = {233--238},
+  year = {2013},
+  doi = {10.1177/0963721413475622},
+  keywords = {agents-memory},
+  annote = {Shaped: redemptive versus contaminating narrative styles as a persona trait}
+}
+
+@article{mcclelland1995there,
+  author = {McClelland, James L. and McNaughton, Bruce L. and O'Reilly, Randall C.},
+  title = {Why there are complementary learning systems in the hippocampus and neocortex: Insights from the successes and failures of connectionist models of learning and memory},
+  journal = {Psychological Review},
+  volume = {102},
+  number = {3},
+  pages = {419--457},
+  year = {1995},
+  doi = {10.1037/0033-295X.102.3.419},
+  keywords = {agents-memory},
+  annote = {Shaped: fast capture by day and slow integration overnight}
+}
+
+@article{nader2000fear,
+  author = {Nader, Karim and Schafe, Glenn E. and Le Doux, Joseph E.},
+  title = {Fear memories require protein synthesis in the amygdala for reconsolidation after retrieval},
+  journal = {Nature},
+  volume = {406},
+  number = {6797},
+  pages = {722--726},
+  year = {2000},
+  doi = {10.1038/35021052},
+  keywords = {agents-memory},
+  annote = {Shaped: recalled memories can change, so only interpretation fields may move}
+}
+
+@misc{packer2023memgpt,
+  author = {Packer, Charles and Wooders, Sarah and Lin, Kevin and Fang, Vivian and Patil, Shishir G. and Stoica, Ion and Gonzalez, Joseph E.},
+  title = {{MemGPT}: Towards {LLM}s as Operating Systems},
+  year = {2023},
+  eprint = {2310.08560},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.AI},
+  url = {https://arxiv.org/abs/2310.08560},
+  keywords = {agents-memory},
+  annote = {Shaped: ruled out self-editing memory on the live path because of latency; the background half was kept}
+}
+
+@inproceedings{park2023generative,
+  author = {Park, Joon Sung and O'Brien, Joseph and Cai, Carrie Jun and Morris, Meredith Ringel and Liang, Percy and Bernstein, Michael S.},
+  title = {Generative Agents: Interactive Simulacra of Human Behavior},
+  booktitle = {Proceedings of the 36th Annual ACM Symposium on User Interface Software and Technology},
+  pages = {1--22},
+  year = {2023},
+  publisher = {ACM},
+  address = {New York, NY, USA},
+  eprint = {2304.03442},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.HC},
+  doi = {10.1145/3586183.3606763},
+  keywords = {agents-memory},
+  annote = {Shaped: the memory stream, the recall score (recency, importance, relevance), reflection and per-pair relationships}
+}
+
+@misc{park2024llm,
+  author = {Park, Joon Sung and Zou, Carolyn Q. and Kamphorst, Jonne and Egan, Niles and Shaw, Aaron and Hill, Benjamin Mako and Cai, Carrie and Morris, Meredith Ringel and Liang, Percy and Willer, Robb and Bernstein, Michael S.},
+  title = {{LLM} Agents Grounded in Self-Reports Enable General-Purpose Simulation of Individuals},
+  year = {2024},
+  eprint = {2411.10109},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.AI},
+  url = {https://arxiv.org/abs/2411.10109},
+  note = {Earlier arXiv title: Generative Agent Simulations of 1,000 People},
+  keywords = {agents-memory},
+  annote = {Shaped: building members from specific detail rather than adjectives}
+}
+
+@article{pezzulo2024generating,
+  author = {Pezzulo, Giovanni and Parr, Thomas and Cisek, Paul and Clark, Andy and Friston, Karl},
+  title = {Generating meaning: active inference and the scope and limits of passive {AI}},
+  journal = {Trends in Cognitive Sciences},
+  volume = {28},
+  number = {2},
+  pages = {97--112},
+  year = {2024},
+  doi = {10.1016/j.tics.2023.10.002},
+  keywords = {agents-memory},
+  annote = {Shaped: ruled out full active inference; kept a surprise term}
+}
+
+@article{piao2026agentsociety,
+  author = {Piao, Jinghua and Yan, Yuwei and Zhang, Jun and Li, Nian and Yan, Junbo and Lan, Xiaochong and Lu, Zhihong and Zheng, Zhiheng and Wang, Jing Yi and Zhou, Di and Gao, Chen and Xu, Fengli and Zhang, Fang and Rong, Ke and Su, Jun and Li, Yong},
+  title = {{AgentSociety}: Large-scale simulation of {LLM-driven} generative agents advances understanding of human behaviors and society},
+  journal = {iFuture},
+  year = {2026},
+  eprint = {2502.08691},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.SI},
+  doi = {10.26599/if.2026.9710004},
+  keywords = {agents-memory},
+  annote = {Shaped: borrowed mechanisms only, not the scale of thin agents}
+}
+
+@misc{rasmussen2025zep,
+  author = {Rasmussen, Preston and Paliychuk, Pavlo and Beauvais, Travis and Ryan, Jack and Chalef, Daniel},
+  title = {{Zep}: A Temporal Knowledge Graph Architecture for Agent Memory},
+  year = {2025},
+  eprint = {2501.13956},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  url = {https://arxiv.org/abs/2501.13956},
+  keywords = {agents-memory},
+  annote = {Shaped: validity intervals and supersession of facts instead of deletion}
+}
+
+@article{reyna1995fuzzytrace,
+  author = {Reyna, V. F. and Brainerd, C. J.},
+  title = {Fuzzy-trace theory: An interim synthesis},
+  journal = {Learning and Individual Differences},
+  volume = {7},
+  number = {1},
+  pages = {1--75},
+  year = {1995},
+  doi = {10.1016/1041-6080(95)90031-4},
+  keywords = {agents-memory},
+  annote = {Shaped: rendering older memories as gist rather than exact numbers}
+}
+
+@misc{song2026retrievaldriven,
+  author = {Song, Yuanyi and Wang, Yukai and Ma, Xinbei and Fu, Zhihui and Lin, Jianghao and Liu, Weiwen and Wang, Jun and Deng, Huarong and Yu, Yong and Zhang, Weinan},
+  title = {Retrieval-Driven Memory Reconsolidation for Long-Term {LLM} Agents},
+  year = {2026},
+  eprint = {2609.16053},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  url = {https://arxiv.org/abs/2609.16053},
+  keywords = {agents-memory},
+  annote = {Shaped: bounded reconsolidation of how a memory is interpreted, never of what happened}
+}
+
+@article{stickgold2013sleepdependent,
+  author = {Stickgold, Robert and Walker, Matthew P.},
+  title = {Sleep-dependent memory triage: evolving generalization through selective processing},
+  journal = {Nature Neuroscience},
+  volume = {16},
+  number = {2},
+  pages = {139--145},
+  year = {2013},
+  doi = {10.1038/nn.3303},
+  keywords = {agents-memory},
+  annote = {Shaped: favouring memories likely to matter tomorrow when consolidating}
+}
+
+@article{sumers2024cognitive,
+  author = {Sumers, Theodore and Yao, Shunyu and Narasimhan, Karthik R. and Griffiths, Thomas L.},
+  title = {Cognitive Architectures for Language Agents},
+  journal = {Transactions on Machine Learning Research},
+  year = {2024},
+  eprint = {2309.02427},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.AI},
+  url = {https://openreview.net/forum?id=1i6ZCvflQJ},
+  keywords = {agents-memory},
+  annote = {Shaped: shared vocabulary for working, episodic, semantic and procedural memory}
+}
+
+@misc{vezhnevets2023generative,
+  author = {Vezhnevets, Alexander Sasha and Agapiou, John P. and Aharon, Avia and Ziv, Ron and Matyas, Jayd and Du{\'e}{\~n}ez-Guzm{\'a}n, Edgar A. and Cunningham, William A. and Osindero, Simon and Karmon, Danny and Leibo, Joel Z.},
+  title = {Generative agent-based modeling with actions grounded in physical, social, or digital space using {Concordia}},
+  year = {2023},
+  eprint = {2312.03664},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.AI},
+  url = {https://arxiv.org/abs/2312.03664},
+  keywords = {agents-memory},
+  annote = {Shaped: an encounter writer that also decides who else was around and what they noticed}
+}
+
+@misc{wan2026sodamem,
+  author = {Wan, Fengrong and Wu, Chengcan and Lyu, Ningtao},
+  title = {{SodaMem}: Evidence-Grounded Temporal Graph Memory for {LLM} Agents},
+  year = {2026},
+  eprint = {2608.08055},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.AI},
+  url = {https://arxiv.org/abs/2608.08055},
+  keywords = {agents-memory},
+  annote = {Shaped: evidence-linked, time-aware facts}
+}
+
+@inproceedings{wang2023humanoid,
+  author = {Wang, Zhilin and Chiu, Yu Ying and Chiu, Yu Cheung},
+  title = {Humanoid Agents: Platform for Simulating Human-like Generative Agents},
+  booktitle = {Proceedings of the 2023 Conference on Empirical Methods in Natural Language Processing: System Demonstrations},
+  pages = {167--176},
+  year = {2023},
+  publisher = {Association for Computational Linguistics},
+  address = {Singapore},
+  eprint = {2310.05418},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  doi = {10.18653/v1/2023.emnlp-demo.15},
+  url = {https://aclanthology.org/2023.emnlp-demo.15/},
+  keywords = {agents-memory},
+  annote = {Shaped: closeness between pairs and slowly changing need counters}
+}
+
+@article{wilhelm2011sleep,
+  author = {Wilhelm, Ines and Diekelmann, Susanne and Molzow, Ina and Ayoub, Amr and M{\"o}lle, Matthias and Born, Jan},
+  title = {Sleep Selectively Enhances Memory Expected to Be of Future Relevance},
+  journal = {The Journal of Neuroscience},
+  volume = {31},
+  number = {5},
+  pages = {1563--1569},
+  year = {2011},
+  doi = {10.1523/jneurosci.3575-10.2011},
+  keywords = {agents-memory},
+  annote = {Shaped: weighting future-relevant memories in the nightly digest}
+}
+
+@inproceedings{xu2025amem,
+  author = {Xu, Wujiang and Liang, Zujie and Mei, Kai and Gao, Hang and Tan, Juntao and Zhang, Yongfeng},
+  title = {{A-Mem}: Agentic Memory for {LLM} Agents},
+  booktitle = {Advances in Neural Information Processing Systems},
+  volume = {38},
+  pages = {20004--20031},
+  year = {2025},
+  eprint = {2502.12110},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  doi = {10.52202/085713-0593},
+  keywords = {agents-memory},
+  annote = {Shaped: ruled out rewriting old memories, because that is where hallucinations get in}
+}
+
+@article{yu2024affordable,
+  author = {Yu, Yangbin and Zhang, Qin and Li, Junyou and Fu, Qiang and Ye, Deheng},
+  title = {Affordable Generative Agents},
+  journal = {Transactions on Machine Learning Research},
+  year = {2024},
+  eprint = {2402.02053},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.AI},
+  url = {https://openreview.net/forum?id=7tlYbcq5DY},
+  keywords = {agents-memory},
+  annote = {Shaped: summarising off-screen encounters instead of simulating full dialogue}
+}
+
+@article{zacks2007event,
+  author = {Zacks, Jeffrey M. and Speer, Nicole K. and Swallow, Khena M. and Braver, Todd S. and Reynolds, Jeremy R.},
+  title = {Event perception: A mind-brain perspective},
+  journal = {Psychological Bulletin},
+  volume = {133},
+  number = {2},
+  pages = {273--293},
+  year = {2007},
+  doi = {10.1037/0033-2909.133.2.273},
+  keywords = {agents-memory},
+  annote = {Shaped: event boundaries where expectations fail}
+}
+
+@book{zadra2021brains,
+  author = {Zadra, Antonio and Stickgold, Robert},
+  title = {When Brains Dream: Exploring the Science and Mystery of Sleep},
+  year = {2021},
+  publisher = {W. W. Norton \& Company},
+  keywords = {agents-memory},
+  annote = {Shaped: occasional grounded recombination of recent and older memories}
+}
+
+@inproceedings{zhong2024memorybank,
+  author = {Zhong, Wanjun and Guo, Lianghong and Gao, Qiqi and Ye, He and Wang, Yanlin},
+  title = {{MemoryBank}: Enhancing Large Language Models with Long-Term Memory},
+  booktitle = {Proceedings of the AAAI Conference on Artificial Intelligence},
+  volume = {38},
+  pages = {19724--19731},
+  year = {2024},
+  publisher = {Association for the Advancement of Artificial Intelligence (AAAI)},
+  eprint = {2305.10250},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  doi = {10.1609/aaai.v38i17.29946},
+  keywords = {agents-memory},
+  annote = {Shaped: decay-based forgetting for agent memory}
+}
+
+% ---- Theory of mind ----
+
+@inproceedings{ahn2024timechara,
+  author = {Ahn, Jaewoo and Lee, Taehyun and Lim, Junyoung and Kim, Jin-Hwa and Yun, Sangdoo and Lee, Hwaran and Kim, Gunhee},
+  title = {{TimeChara}: Evaluating Point-in-Time Character Hallucination of Role-Playing Large Language Models},
+  booktitle = {Findings of the Association for Computational Linguistics: ACL 2024},
+  pages = {3291--3325},
+  year = {2024},
+  publisher = {Association for Computational Linguistics},
+  address = {Bangkok, Thailand},
+  eprint = {2405.18027},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  doi = {10.18653/v1/2024.findings-acl.197},
+  url = {https://aclanthology.org/2024.findings-acl.197/},
+  keywords = {theory-of-mind},
+  annote = {Shaped: limiting what each member may claim to know at a given point in time}
+}
+
+@inproceedings{gu2026simpletom,
+  author = {Gu, Yuling and Tafjord, Oyvind and Kim, Hyunwoo and Moore, Jared and Le Bras, Ronan and Clark, Peter and Choi, Yejin},
+  title = {{SimpleToM}: Exposing the Gap between Explicit {ToM} Inference and Implicit {ToM} Application in {LLM}s},
+  booktitle = {The Fourteenth International Conference on Learning Representations},
+  year = {2026},
+  eprint = {2410.13648},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  url = {https://openreview.net/forum?id=iE2JmbRJow},
+  keywords = {theory-of-mind},
+  annote = {Shaped: reminding a member what it knows and what others do not, so that telling a secret is a decision}
+}
+
+@inproceedings{jung2024perceptions,
+  author = {Jung, Chani and Kim, Dongkwan and Jin, Jiho and Kim, Jiseon and Seonwoo, Yeon and Choi, Yejin and Oh, Alice and Kim, Hyunwoo},
+  title = {Perceptions to Beliefs: Exploring Precursory Inferences for Theory of Mind in Large Language Models},
+  booktitle = {Proceedings of the 2024 Conference on Empirical Methods in Natural Language Processing},
+  pages = {19794--19809},
+  year = {2024},
+  publisher = {Association for Computational Linguistics},
+  address = {Miami, Florida, USA},
+  eprint = {2407.06004},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  doi = {10.18653/v1/2024.emnlp-main.1105},
+  url = {https://aclanthology.org/2024.emnlp-main.1105/},
+  keywords = {theory-of-mind},
+  annote = {Shaped: perception-based context filtering before belief inference}
+}
+
+@inproceedings{kim2023fantom,
+  author = {Kim, Hyunwoo and Sclar, Melanie and Zhou, Xuhui and Le Bras, Ronan and Kim, Gunhee and Choi, Yejin and Sap, Maarten},
+  title = {{FANToM}: A Benchmark for Stress-testing Machine Theory of Mind in Interactions},
+  booktitle = {Proceedings of the 2023 Conference on Empirical Methods in Natural Language Processing},
+  pages = {14397--14413},
+  year = {2023},
+  publisher = {Association for Computational Linguistics},
+  address = {Singapore},
+  eprint = {2310.15421},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  doi = {10.18653/v1/2023.emnlp-main.890},
+  url = {https://aclanthology.org/2023.emnlp-main.890/},
+  keywords = {theory-of-mind},
+  annote = {Shaped: per-member knowledge tracking for group chats where people join and leave}
+}
+
+@inproceedings{kim2025hypothesisdriven,
+  author = {Kim, Hyunwoo and Sclar, Melanie and Zhi-Xuan, Tan and Ying, Lance and Levine, Sydney and Liu, Yang and Tenenbaum, Joshua B. and Choi, Yejin},
+  title = {Hypothesis-Driven Theory-of-Mind Reasoning for Large Language Models},
+  booktitle = {Second Conference on Language Modeling},
+  year = {2025},
+  eprint = {2502.11881},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.AI},
+  url = {https://openreview.net/forum?id=yGQqTuSJPK},
+  keywords = {theory-of-mind},
+  annote = {Shaped: ruled out per-inference hypothesis tracing as too many model calls}
+}
+
+@inproceedings{li2023theory,
+  author = {Li, Huao and Chong, Yu and Stepputtis, Simon and Campbell, Joseph and Hughes, Dana and Lewis, Charles and Sycara, Katia},
+  title = {Theory of Mind for Multi-Agent Collaboration via Large Language Models},
+  booktitle = {Proceedings of the 2023 Conference on Empirical Methods in Natural Language Processing},
+  pages = {180--192},
+  year = {2023},
+  publisher = {Association for Computational Linguistics},
+  address = {Singapore},
+  eprint = {2310.10701},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  doi = {10.18653/v1/2023.emnlp-main.13},
+  url = {https://aclanthology.org/2023.emnlp-main.13/},
+  keywords = {theory-of-mind},
+  annote = {Shaped: explicit belief-state tracking for multi-agent coordination}
+}
+
+@inproceedings{mireshghallah2024llms,
+  author = {Mireshghallah, Niloofar and Kim, Hyunwoo and Zhou, Xuhui and Tsvetkov, Yulia and Sap, Maarten and Shokri, Reza and Choi, Yejin},
+  title = {Can {LLM}s Keep a Secret? Testing Privacy Implications of Language Models via Contextual Integrity Theory},
+  booktitle = {The Twelfth International Conference on Learning Representations},
+  year = {2024},
+  eprint = {2310.17884},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.AI},
+  url = {https://openreview.net/forum?id=gmg7t8b4s0},
+  keywords = {theory-of-mind},
+  annote = {Shaped: secret-keeping probes, since models leak what sits in their context}
+}
+
+@inproceedings{rabinowitz2018machine,
+  author = {Rabinowitz, Neil and Perbet, Frank and Song, Francis and Zhang, Chiyuan and Eslami, S. M. Ali and Botvinick, Matthew},
+  title = {Machine Theory of Mind},
+  booktitle = {Proceedings of the 35th International Conference on Machine Learning},
+  series = {Proceedings of Machine Learning Research},
+  volume = {80},
+  pages = {4218--4227},
+  year = {2018},
+  publisher = {PMLR},
+  eprint = {1802.07740},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.AI},
+  url = {https://proceedings.mlr.press/v80/rabinowitz18a.html},
+  keywords = {theory-of-mind},
+  annote = {Shaped: planned belief-state tracking of opponents in combat}
+}
+
+@inproceedings{sclar2023minding,
+  author = {Sclar, Melanie and Kumar, Sachin and West, Peter and Suhr, Alane and Choi, Yejin and Tsvetkov, Yulia},
+  title = {Minding Language Models' (Lack of) Theory of Mind: A Plug-and-Play Multi-Character Belief Tracker},
+  booktitle = {Proceedings of the 61st Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers)},
+  pages = {13960--13980},
+  year = {2023},
+  publisher = {Association for Computational Linguistics},
+  address = {Toronto, Canada},
+  eprint = {2306.00924},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  doi = {10.18653/v1/2023.acl-long.780},
+  url = {https://aclanthology.org/2023.acl-long.780/},
+  keywords = {theory-of-mind},
+  annote = {Shaped: explicit per-character belief records kept outside the model}
+}
+
+@inproceedings{sclar2025explore,
+  author = {Sclar, Melanie and Dwivedi-Yu, Jane and Fazel-Zarandi, Maryam and Tsvetkov, Yulia and Bisk, Yonatan and Choi, Yejin and Celikyilmaz, Asli},
+  title = {Explore {Theory} of {Mind}: program-guided adversarial data generation for theory of mind reasoning},
+  booktitle = {The Thirteenth International Conference on Learning Representations},
+  year = {2025},
+  eprint = {2412.12175},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.LG},
+  url = {https://openreview.net/forum?id=246rHKUnnf},
+  keywords = {theory-of-mind},
+  annote = {Shaped: ruled out training the model's own theory of mind, which is left to model builders; state is tracked instead}
+}
+
+@inproceedings{shapira2024clever,
+  author = {Shapira, Natalie and Levy, Mosh and Alavi, Seyed Hossein and Zhou, Xuhui and Choi, Yejin and Goldberg, Yoav and Sap, Maarten and Shwartz, Vered},
+  title = {Clever Hans or Neural Theory of Mind? Stress Testing Social Reasoning in Large Language Models},
+  booktitle = {Proceedings of the 18th Conference of the European Chapter of the Association for Computational Linguistics (Volume 1: Long Papers)},
+  pages = {2257--2273},
+  year = {2024},
+  publisher = {Association for Computational Linguistics},
+  address = {St. Julian's, Malta},
+  eprint = {2305.14763},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  doi = {10.18653/v1/2024.eacl-long.138},
+  url = {https://aclanthology.org/2024.eacl-long.138/},
+  keywords = {theory-of-mind},
+  annote = {Shaped: stress-test evidence that LLM social reasoning is brittle, so knowledge is tracked in data}
+}
+
+@article{street2026llms,
+  author = {Street, Winnie and Siy, John Oliver and Keeling, Geoff and Baranes, Adrien and Barnett, Benjamin and McKibben, Michael and Kanyere, Tatenda and Lentz, Alison and Ag{\"u}era y Arcas, Blaise and Dunbar, Robin I. M.},
+  title = {{LLM}s achieve adult human performance on higher-order theory of mind tasks},
+  journal = {Frontiers in Human Neuroscience},
+  volume = {19},
+  pages = {1633272},
+  year = {2026},
+  eprint = {2405.18870},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.AI},
+  doi = {10.3389/fnhum.2025.1633272},
+  keywords = {theory-of-mind},
+  annote = {Shaped: treating LLM higher-order theory of mind as strong but contested, so belief state is kept outside the model}
+}
+
+@article{thomas2014psychology,
+  author = {Thomas, Kyle A. and DeScioli, Peter and Haque, Omar Sultan and Pinker, Steven},
+  title = {The psychology of coordination and common knowledge},
+  journal = {Journal of Personality and Social Psychology},
+  volume = {107},
+  number = {4},
+  pages = {657--676},
+  year = {2014},
+  doi = {10.1037/a0037037},
+  keywords = {theory-of-mind},
+  annote = {Shaped: private, shared and common knowledge as separate levels for each fact}
+}
+
+@misc{ullman2023large,
+  author = {Ullman, Tomer},
+  title = {Large Language Models Fail on Trivial Alterations to Theory-of-Mind Tasks},
+  year = {2023},
+  eprint = {2302.08399},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.AI},
+  url = {https://arxiv.org/abs/2302.08399},
+  keywords = {theory-of-mind},
+  annote = {Shaped: caution that LLM theory of mind breaks under trivial task changes, which motivates an explicit who-knows-what ledger}
+}
+
+@inproceedings{wilf2024think,
+  author = {Wilf, Alex and Lee, Sihyun and Liang, Paul Pu and Morency, Louis-Philippe},
+  title = {Think Twice: Perspective-Taking Improves Large Language Models' Theory-of-Mind Capabilities},
+  booktitle = {Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers)},
+  pages = {8292--8308},
+  year = {2024},
+  publisher = {Association for Computational Linguistics},
+  address = {Bangkok, Thailand},
+  eprint = {2311.10227},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.AI},
+  doi = {10.18653/v1/2024.acl-long.451},
+  url = {https://aclanthology.org/2024.acl-long.451/},
+  keywords = {theory-of-mind},
+  annote = {Shaped: filtering each member's prompt to what that member could perceive}
+}
+
+@inproceedings{wu2023hitom,
+  author = {Wu, Yufan and He, Yinghui and Jia, Yilin and Mihalcea, Rada and Chen, Yulong and Deng, Naihao},
+  title = {{Hi-ToM}: A Benchmark for Evaluating Higher-Order Theory of Mind Reasoning in Large Language Models},
+  booktitle = {Findings of the Association for Computational Linguistics: EMNLP 2023},
+  pages = {10691--10706},
+  year = {2023},
+  publisher = {Association for Computational Linguistics},
+  address = {Singapore},
+  eprint = {2310.16755},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  doi = {10.18653/v1/2023.findings-emnlp.717},
+  url = {https://aclanthology.org/2023.findings-emnlp.717/},
+  keywords = {theory-of-mind},
+  annote = {Shaped: limiting nested beliefs to two levels}
+}
+
+@misc{yi2026algorithmic,
+  author = {Yi, Qiutong Tony and Zhu, Wang Bill and Jia, Robin and Thomason, Jesse},
+  title = {Algorithmic Primitives of Theory of Mind Benchmarks},
+  year = {2026},
+  eprint = {2604.17819},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  url = {https://arxiv.org/abs/2604.17819},
+  keywords = {theory-of-mind},
+  annote = {Shaped: evidence that offloading state tracking closes most of the theory-of-mind gap}
+}
+
+% ---- Emotion and mood ----
+
+@article{barsade2002ripple,
+  author = {Barsade, Sigal G.},
+  title = {The Ripple Effect: Emotional Contagion and its Influence on Group Behavior},
+  journal = {Administrative Science Quarterly},
+  volume = {47},
+  number = {4},
+  pages = {644--675},
+  year = {2002},
+  doi = {10.2307/3094912},
+  keywords = {emotion-mood},
+  annote = {Shaped: group-level effects of contagion on cooperation and conflict}
+}
+
+@article{bosse2015agentbased,
+  author = {Bosse, Tibor and Duell, Rob and Memon, Zulfiqar A. and Treur, Jan and van der Wal, C. Natalie},
+  title = {Agent-Based Modeling of Emotion Contagion in Groups},
+  journal = {Cognitive Computation},
+  volume = {7},
+  number = {1},
+  pages = {111--136},
+  year = {2015},
+  doi = {10.1007/s12559-014-9277-9},
+  keywords = {emotion-mood},
+  annote = {Shaped: contagion weights from sender expressiveness, channel strength and receiver openness}
+}
+
+@article{bower1981mood,
+  author = {Bower, Gordon H.},
+  title = {Mood and memory},
+  journal = {American Psychologist},
+  volume = {36},
+  number = {2},
+  pages = {129--148},
+  year = {1981},
+  doi = {10.1037/0003-066X.36.2.129},
+  keywords = {emotion-mood},
+  annote = {Shaped: a mood-congruence term in recall}
+}
+
+@article{croissant2024appraisalbased,
+  author = {Croissant, Maximilian and Frister, Madeleine and Schofield, Guy and McCall, Cade},
+  title = {An appraisal-based chain-of-emotion architecture for affective language model game agents},
+  journal = {PLOS ONE},
+  volume = {19},
+  number = {5},
+  pages = {e0301033},
+  year = {2024},
+  doi = {10.1371/journal.pone.0301033},
+  keywords = {emotion-mood},
+  annote = {Shaped: an appraisal step before replies}
+}
+
+@inproceedings{gebhard2005alma,
+  author = {Gebhard, Patrick},
+  title = {{ALMA}: a layered model of affect},
+  booktitle = {Proceedings of the fourth international joint conference on Autonomous agents and multiagent systems},
+  pages = {29--36},
+  year = {2005},
+  publisher = {ACM},
+  address = {New York, NY, USA},
+  doi = {10.1145/1082473.1082478},
+  keywords = {emotion-mood},
+  annote = {Shaped: layered mood with a personality-set baseline that decays over days}
+}
+
+@article{hatfield1993emotional,
+  author = {Hatfield, Elaine and Cacioppo, John T. and Rapson, Richard L.},
+  title = {Emotional Contagion},
+  journal = {Current Directions in Psychological Science},
+  volume = {2},
+  number = {3},
+  pages = {96--100},
+  year = {1993},
+  doi = {10.1111/1467-8721.ep10770953},
+  keywords = {emotion-mood},
+  annote = {Shaped: mood contagion between members after shared sessions}
+}
+
+@inproceedings{huang2024emotional,
+  author = {Huang, Le and Lan, Hengzhi and Sun, Zijun and Shi, Chuan and Bai, Ting},
+  title = {Emotional {RAG}: Enhancing Role-Playing Agents through Emotional Retrieval},
+  booktitle = {2024 IEEE International Conference on Knowledge Graph (ICKG)},
+  pages = {120--127},
+  year = {2024},
+  publisher = {IEEE},
+  eprint = {2410.23041},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.AI},
+  doi = {10.1109/ickg63256.2024.00023},
+  keywords = {emotion-mood},
+  annote = {Shaped: emotional similarity as a retrieval signal for persona consistency}
+}
+
+@article{kramer2014experimental,
+  author = {Kramer, Adam D. I. and Guillory, Jamie E. and Hancock, Jeffrey T.},
+  title = {Experimental evidence of massive-scale emotional contagion through social networks},
+  journal = {Proceedings of the National Academy of Sciences},
+  volume = {111},
+  number = {24},
+  pages = {8788--8790},
+  year = {2014},
+  doi = {10.1073/pnas.1320040111},
+  keywords = {emotion-mood},
+  annote = {Shaped: contagion strength is a design choice, since measured online effects are tiny}
+}
+
+@article{mehrabian1996pleasurearousaldominance,
+  author = {Mehrabian, Albert},
+  title = {Pleasure-arousal-dominance: A general framework for describing and measuring individual differences in {Temperament}},
+  journal = {Current Psychology},
+  volume = {14},
+  number = {4},
+  pages = {261--292},
+  year = {1996},
+  doi = {10.1007/BF02686918},
+  keywords = {emotion-mood},
+  annote = {Shaped: mood as a point in pleasure-arousal-dominance space}
+}
+
+@book{ortony1988cognitive,
+  author = {Ortony, Andrew and Clore, Gerald L. and Collins, Allan},
+  title = {The Cognitive Structure of Emotions},
+  year = {1988},
+  publisher = {Cambridge University Press},
+  doi = {10.1017/CBO9780511571299},
+  keywords = {emotion-mood},
+  annote = {Shaped: appraisal labels (who felt what about whom) on extracted memories}
+}
+
+@article{steele1990alcohol,
+  author = {Steele, Claude M. and Josephs, Robert A.},
+  title = {Alcohol myopia: Its prized and dangerous effects},
+  journal = {American Psychologist},
+  volume = {45},
+  number = {8},
+  pages = {921--933},
+  year = {1990},
+  doi = {10.1037/0003-066X.45.8.921},
+  keywords = {emotion-mood},
+  annote = {Shaped: an altered-state modifier on what a member discloses}
+}
+
+@misc{tak2023gpt,
+  author = {Tak, Ala N. and Gratch, Jonathan},
+  title = {Is {GPT} a Computational Model of Emotion? Detailed Analysis},
+  year = {2023},
+  eprint = {2307.13779},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  url = {https://arxiv.org/abs/2307.13779},
+  keywords = {emotion-mood},
+  annote = {Shaped: keeping emotion labels coarse, since models appraise events better than intensity or coping}
+}
+
+@inproceedings{tak2024gpt4,
+  author = {Tak, Ala N. and Gratch, Jonathan},
+  title = {{GPT-4} Emulates Average-Human Emotional Cognition from a Third-Person Perspective},
+  booktitle = {2024 12th International Conference on Affective Computing and Intelligent Interaction (ACII)},
+  pages = {337--345},
+  year = {2024},
+  publisher = {IEEE},
+  eprint = {2408.13718},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.AI},
+  doi = {10.1109/acii63134.2024.00043},
+  keywords = {emotion-mood},
+  annote = {Shaped: third-person appraisal as a reasonable job for the extraction call}
+}
+
+@article{walker2009fading,
+  author = {Walker, W. Richard and Skowronski, John J.},
+  title = {The {Fading} affect bias: But what the hell is it for?},
+  journal = {Applied Cognitive Psychology},
+  volume = {23},
+  number = {8},
+  pages = {1122--1136},
+  year = {2009},
+  doi = {10.1002/acp.1614},
+  keywords = {emotion-mood},
+  annote = {Shaped: negative affect fading faster than positive in old memories}
+}
+
+@article{wildschut2006nostalgia,
+  author = {Wildschut, Tim and Sedikides, Constantine and Arndt, Jamie and Routledge, Clay},
+  title = {Nostalgia: Content, triggers, functions},
+  journal = {Journal of Personality and Social Psychology},
+  volume = {91},
+  number = {5},
+  pages = {975--993},
+  year = {2006},
+  doi = {10.1037/0022-3514.91.5.975},
+  keywords = {emotion-mood},
+  annote = {Shaped: nostalgic callbacks to dormant shared history}
+}
+
+% ---- Relationships ----
+
+@book{altman1973social,
+  author = {Altman, Irwin and Taylor, Dalmas A.},
+  title = {Social Penetration: The Development of Interpersonal Relationships},
+  year = {1973},
+  publisher = {Holt, Rinehart and Winston},
+  address = {New York},
+  keywords = {relationships},
+  annote = {Shaped: layered self-disclosure as closeness grows}
+}
+
+@article{aron1997experimental,
+  author = {Aron, Arthur and Melinat, Edward and Aron, Elaine N. and Vallone, Robert Darrin and Bator, Renee J.},
+  title = {The Experimental Generation of Interpersonal Closeness: A Procedure and Some Preliminary Findings},
+  journal = {Personality and Social Psychology Bulletin},
+  volume = {23},
+  number = {4},
+  pages = {363--377},
+  year = {1997},
+  doi = {10.1177/0146167297234003},
+  keywords = {relationships},
+  annote = {Shaped: pacing of escalating, reciprocal disclosure in the relationship update}
+}
+
+@article{bartholomew1991attachment,
+  author = {Bartholomew, Kim and Horowitz, Leonard M.},
+  title = {Attachment styles among young adults: A test of a four-category model},
+  journal = {Journal of Personality and Social Psychology},
+  volume = {61},
+  number = {2},
+  pages = {226--244},
+  year = {1991},
+  doi = {10.1037/0022-3514.61.2.226},
+  keywords = {relationships},
+  annote = {Shaped: per-member anxiety and avoidance dimensions in handling closeness}
+}
+
+@article{collins1994selfdisclosure,
+  author = {Collins, Nancy L. and Miller, Lynn Carol},
+  title = {Self-disclosure and liking: A meta-analytic review},
+  journal = {Psychological Bulletin},
+  volume = {116},
+  number = {3},
+  pages = {457--475},
+  year = {1994},
+  doi = {10.1037/0033-2909.116.3.457},
+  keywords = {relationships},
+  annote = {Shaped: reciprocity between disclosing and liking}
+}
+
+@article{driver2004daily,
+  author = {Driver, Janice L. and Gottman, John M.},
+  title = {Daily Marital Interactions and Positive Affect During Marital Conflict Among Newlywed Couples},
+  journal = {Family Process},
+  volume = {43},
+  number = {3},
+  pages = {301--314},
+  year = {2004},
+  doi = {10.1111/j.1545-5300.2004.00024.x},
+  keywords = {relationships},
+  annote = {Shaped: treating small bids for attention as the unit of responsiveness}
+}
+
+@article{gottman1992marital,
+  author = {Gottman, John M. and Levenson, Robert W.},
+  title = {Marital processes predictive of later dissolution: Behavior, physiology, and health},
+  journal = {Journal of Personality and Social Psychology},
+  volume = {63},
+  number = {2},
+  pages = {221--233},
+  year = {1992},
+  doi = {10.1037/0022-3514.63.2.221},
+  keywords = {relationships},
+  annote = {Shaped: a positive-to-negative interaction ratio as a pair-health signal, and repair attempts}
+}
+
+@article{laurenceau1998intimacy,
+  author = {Laurenceau, Jean-Philippe and Barrett, Lisa Feldman and Pietromonaco, Paula R.},
+  title = {Intimacy as an interpersonal process: The importance of self-disclosure, partner disclosure, and perceived partner responsiveness in interpersonal exchanges},
+  journal = {Journal of Personality and Social Psychology},
+  volume = {74},
+  number = {5},
+  pages = {1238--1251},
+  year = {1998},
+  doi = {10.1037/0022-3514.74.5.1238},
+  keywords = {relationships},
+  annote = {Shaped: closeness driven by disclosure plus the partner's perceived responsiveness}
+}
+
+@incollection{mikulincer2003attachment,
+  author = {Mikulincer, Mario and Shaver, Phillip R.},
+  title = {The Attachment Behavioral System In Adulthood: Activation, Psychodynamics, And Interpersonal Processes},
+  booktitle = {Advances in Experimental Social Psychology},
+  volume = {35},
+  pages = {53--152},
+  year = {2003},
+  publisher = {Academic Press},
+  doi = {10.1016/S0065-2601(03)01002-5},
+  keywords = {relationships},
+  annote = {Shaped: hyperactivating versus deactivating responses to a long absence}
+}
+
+% ---- Social dynamics ----
+
+@article{acerbi2023large,
+  author = {Acerbi, Alberto and Stubbersfield, Joseph M.},
+  title = {Large language models show human-like content biases in transmission chain experiments},
+  journal = {Proceedings of the National Academy of Sciences},
+  volume = {120},
+  number = {44},
+  pages = {e2313790120},
+  year = {2023},
+  doi = {10.1073/pnas.2313790120},
+  keywords = {social-dynamics},
+  annote = {Shaped: which details survive retelling}
+}
+
+@incollection{adams1965inequity,
+  author = {Adams, J. Stacy},
+  title = {Inequity In Social Exchange},
+  booktitle = {Advances in Experimental Social Psychology},
+  volume = {2},
+  pages = {267--299},
+  year = {1965},
+  publisher = {Academic Press},
+  doi = {10.1016/S0065-2601(08)60108-2},
+  keywords = {social-dynamics},
+  annote = {Shaped: perceived unfairness in contribution versus reward as a source of resentment}
+}
+
+@book{allport1947psychology,
+  author = {Allport, Gordon W. and Postman, Leo},
+  title = {The Psychology of Rumor},
+  year = {1947},
+  publisher = {Henry Holt and Company},
+  address = {New York},
+  keywords = {social-dynamics},
+  annote = {Shaped: rumour distortion by levelling, sharpening and assimilation}
+}
+
+@article{antal2005dynamics,
+  author = {Antal, T. and Krapivsky, P. L. and Redner, S.},
+  title = {Dynamics of social balance on networks},
+  journal = {Physical Review E},
+  volume = {72},
+  number = {3},
+  pages = {036121},
+  year = {2005},
+  doi = {10.1103/PhysRevE.72.036121},
+  keywords = {social-dynamics},
+  annote = {Shaped: balance dynamics that split a network into factions}
+}
+
+@article{ashery2025emergent,
+  author = {Ashery, Ariel Flint and Aiello, Luca Maria and Baronchelli, Andrea},
+  title = {Emergent social conventions and collective bias in {LLM} populations},
+  journal = {Science Advances},
+  volume = {11},
+  number = {20},
+  pages = {eadu9368},
+  year = {2025},
+  doi = {10.1126/sciadv.adu9368},
+  keywords = {social-dynamics},
+  annote = {Shaped: LLM populations converge on conventions and can be tipped by committed minorities}
+}
+
+@book{bandura1977social,
+  author = {Bandura, Albert},
+  title = {Social Learning Theory},
+  year = {1977},
+  publisher = {Prentice Hall},
+  address = {Englewood Cliffs, NJ},
+  keywords = {social-dynamics},
+  annote = {Shaped: observational learning of play from mentors}
+}
+
+@article{baronchelli2006sharp,
+  author = {Baronchelli, Andrea and Felici, Maddalena and Loreto, Vittorio and Caglioti, Emanuele and Steels, Luc},
+  title = {Sharp transition towards shared vocabularies in multi-agent systems},
+  journal = {Journal of Statistical Mechanics: Theory and Experiment},
+  pages = {P06014},
+  year = {2006},
+  eprint = {physics/0509075},
+  archivePrefix = {arXiv},
+  primaryClass = {physics.soc-ph},
+  doi = {10.1088/1742-5468/2006/06/p06014},
+  keywords = {social-dynamics},
+  annote = {Shaped: naming-game dynamics for shared nicknames and slang}
+}
+
+@article{burgoon1993interpersonal,
+  author = {Burgoon, Judee K.},
+  title = {Interpersonal Expectations, Expectancy Violations, and Emotional Communication},
+  journal = {Journal of Language and Social Psychology},
+  volume = {12},
+  number = {1-2},
+  pages = {30--48},
+  year = {1993},
+  doi = {10.1177/0261927X93121003},
+  keywords = {social-dynamics},
+  annote = {Shaped: weighting expectation violations in memory and relationship change}
+}
+
+@article{cartwright1956structural,
+  author = {Cartwright, Dorwin and Harary, Frank},
+  title = {Structural balance: a generalization of {Heider's} theory},
+  journal = {Psychological Review},
+  volume = {63},
+  number = {5},
+  pages = {277--293},
+  year = {1956},
+  doi = {10.1037/h0046049},
+  keywords = {social-dynamics},
+  annote = {Shaped: structural balance for the nightly feud and alliance pass}
+}
+
+@article{centola2018experimental,
+  author = {Centola, Damon and Becker, Joshua and Brackbill, Devon and Baronchelli, Andrea},
+  title = {Experimental evidence for tipping points in social convention},
+  journal = {Science},
+  volume = {360},
+  number = {6393},
+  pages = {1116--1119},
+  year = {2018},
+  doi = {10.1126/science.aas8827},
+  keywords = {social-dynamics},
+  annote = {Shaped: a tipping point for changing an established convention}
+}
+
+@inproceedings{chuang2024simulating,
+  author = {Chuang, Yun-Shiuan and Goyal, Agam and Harlalka, Nikunj and Suresh, Siddharth and Hawkins, Robert and Yang, Sijia and Shah, Dhavan and Hu, Junjie and Rogers, Timothy},
+  title = {Simulating Opinion Dynamics with Networks of {LLM-based} Agents},
+  booktitle = {Findings of the Association for Computational Linguistics: NAACL 2024},
+  pages = {3326--3346},
+  year = {2024},
+  publisher = {Association for Computational Linguistics},
+  address = {Mexico City, Mexico},
+  doi = {10.18653/v1/2024.findings-naacl.211},
+  url = {https://aclanthology.org/2024.findings-naacl.211/},
+  keywords = {social-dynamics},
+  annote = {Shaped: LLM agents drift toward agreement, so conflict is held in state rather than in disposition}
+}
+
+@article{daley1964epidemics,
+  author = {Daley, D. J. and Kendall, D. G.},
+  title = {Epidemics and Rumours},
+  journal = {Nature},
+  volume = {204},
+  number = {4963},
+  pages = {1118},
+  year = {1964},
+  doi = {10.1038/2041118a0},
+  keywords = {social-dynamics},
+  annote = {Shaped: spreaders going quiet once everyone they meet already knows}
+}
+
+@inproceedings{danescuniculescumizil2013no,
+  author = {Danescu-Niculescu-Mizil, Cristian and West, Robert and Jurafsky, Dan and Leskovec, Jure and Potts, Christopher},
+  title = {No country for old members: user lifecycle and linguistic change in online communities},
+  booktitle = {Proceedings of the 22nd international conference on World Wide Web},
+  pages = {307--318},
+  year = {2013},
+  publisher = {ACM},
+  address = {New York, NY, USA},
+  doi = {10.1145/2488388.2488416},
+  keywords = {social-dynamics},
+  annote = {Shaped: newcomers adopting house language and then stopping}
+}
+
+@article{deffuant2000mixing,
+  author = {Deffuant, Guillaume and Neau, David and Amblard, Frederic and Weisbuch, G{\'e}rard},
+  title = {Mixing beliefs among interacting agents},
+  journal = {Advances in Complex Systems},
+  volume = {3},
+  number = {01n04},
+  pages = {87--98},
+  year = {2000},
+  doi = {10.1142/S0219525900000078},
+  keywords = {social-dynamics},
+  annote = {Shaped: bounded-confidence opinion dynamics on a few live issues}
+}
+
+@article{degroot1974reaching,
+  author = {DeGroot, Morris H.},
+  title = {Reaching a Consensus},
+  journal = {Journal of the American Statistical Association},
+  volume = {69},
+  number = {345},
+  pages = {118--121},
+  year = {1974},
+  doi = {10.1080/01621459.1974.10480137},
+  keywords = {social-dynamics},
+  annote = {Shaped: averaging dynamics that converge to consensus}
+}
+
+@article{dunbar1997human,
+  author = {Dunbar, R. I. M. and Marriott, Anna and Duncan, N. D. C.},
+  title = {Human conversational behavior},
+  journal = {Human Nature},
+  volume = {8},
+  number = {3},
+  pages = {231--246},
+  year = {1997},
+  doi = {10.1007/BF02912493},
+  keywords = {social-dynamics},
+  annote = {Shaped: casual talk being mostly social content, which makes gossip worth simulating}
+}
+
+@article{friedkin1990social,
+  author = {Friedkin, Noah E. and Johnsen, Eugene C.},
+  title = {Social influence and opinions},
+  journal = {The Journal of Mathematical Sociology},
+  volume = {15},
+  number = {3-4},
+  pages = {193--206},
+  year = {1990},
+  doi = {10.1080/0022250X.1990.9990069},
+  keywords = {social-dynamics},
+  annote = {Shaped: anchoring to initial views so disagreement persists}
+}
+
+@article{hegselmann2002opinion,
+  author = {Hegselmann, Rainer and Krause, Ulrich},
+  title = {Opinion Dynamics and Bounded Confidence: Models, Analysis and Simulation},
+  journal = {Journal of Artificial Societies and Social Simulation},
+  volume = {5},
+  number = {3},
+  year = {2002},
+  url = {https://www.jasss.org/5/3/2.html},
+  keywords = {social-dynamics},
+  annote = {Shaped: bounded-confidence analysis of faction formation}
+}
+
+@article{heider1946attitudes,
+  author = {Heider, Fritz},
+  title = {Attitudes and Cognitive Organization},
+  journal = {The Journal of Psychology},
+  volume = {21},
+  number = {1},
+  pages = {107--112},
+  year = {1946},
+  doi = {10.1080/00223980.1946.9917275},
+  keywords = {social-dynamics},
+  annote = {Shaped: triad balance as the rule behind feuds and alliances}
+}
+
+@article{henrich2001evolution,
+  author = {Henrich, Joseph and Gil-White, Francisco J.},
+  title = {The evolution of prestige: freely conferred deference as a mechanism for enhancing the benefits of cultural transmission},
+  journal = {Evolution and Human Behavior},
+  volume = {22},
+  number = {3},
+  pages = {165--196},
+  year = {2001},
+  doi = {10.1016/S1090-5138(00)00071-4},
+  keywords = {social-dynamics},
+  annote = {Shaped: prestige as the weight on whom recruits copy}
+}
+
+@inproceedings{kreminski2023better,
+  author = {Kreminski, Max},
+  title = {Toward Better Gossip Simulation in Emergent Narrative Systems},
+  booktitle = {2023 IEEE Conference on Games (CoG)},
+  pages = {1--4},
+  year = {2023},
+  publisher = {IEEE},
+  doi = {10.1109/cog57401.2023.10333140},
+  keywords = {social-dynamics},
+  annote = {Shaped: gossip as small stories that mutate as they are retold}
+}
+
+@article{lehr2025kernels,
+  author = {Lehr, Steven A. and Saichandran, Ketan S. and Harmon-Jones, Eddie and Vitali, Nykko and Banaji, Mahzarin R.},
+  title = {Kernels of selfhood: {GPT-4o} shows humanlike patterns of cognitive dissonance moderated by free choice},
+  journal = {Proceedings of the National Academy of Sciences},
+  volume = {122},
+  number = {20},
+  pages = {e2501823122},
+  year = {2025},
+  doi = {10.1073/pnas.2501823122},
+  keywords = {social-dynamics},
+  annote = {Shaped: judged a thin base for a dissonance mechanic, so not adopted}
+}
+
+@inproceedings{leskovec2010signed,
+  author = {Leskovec, Jure and Huttenlocher, Daniel and Kleinberg, Jon},
+  title = {Signed networks in social media},
+  booktitle = {Proceedings of the SIGCHI Conference on Human Factors in Computing Systems},
+  pages = {1361--1370},
+  year = {2010},
+  publisher = {ACM},
+  address = {New York, NY, USA},
+  doi = {10.1145/1753326.1753532},
+  keywords = {social-dynamics},
+  annote = {Shaped: status as well as balance for directed ties}
+}
+
+@article{lewandowsky2012misinformation,
+  author = {Lewandowsky, Stephan and Ecker, Ullrich K. H. and Seifert, Colleen M. and Schwarz, Norbert and Cook, John},
+  title = {Misinformation and Its Correction: Continued Influence and Successful Debiasing},
+  journal = {Psychological Science in the Public Interest},
+  volume = {13},
+  number = {3},
+  pages = {106--131},
+  year = {2012},
+  doi = {10.1177/1529100612451018},
+  keywords = {social-dynamics},
+  annote = {Shaped: corrections that never fully land}
+}
+
+@article{lindenfors2021dunbars,
+  author = {Lindenfors, Patrik and Wartel, Andreas and Lind, Johan},
+  title = {`{Dunbar's} number' deconstructed},
+  journal = {Biology Letters},
+  volume = {17},
+  number = {5},
+  pages = {20210158},
+  year = {2021},
+  doi = {10.1098/rsbl.2021.0158},
+  keywords = {social-dynamics},
+  annote = {Shaped: treating group-size layers as soft budgets, not a hard cap}
+}
+
+@article{mcpherson2001birds,
+  author = {McPherson, Miller and Smith-Lovin, Lynn and Cook, James M.},
+  title = {Birds of a Feather: Homophily in Social Networks},
+  journal = {Annual Review of Sociology},
+  volume = {27},
+  number = {1},
+  pages = {415--444},
+  year = {2001},
+  doi = {10.1146/annurev.soc.27.1.415},
+  keywords = {social-dynamics},
+  annote = {Shaped: homophily in whom members spend time with}
+}
+
+@inproceedings{perez2025llms,
+  author = {Perez, J{\'e}r{\'e}my and Kova{\v{c}}, Grgur and L{\'e}ger, Corentin and Colas, C{\'e}dric and Molinaro, Gaia and Derex, Maxime and Oudeyer, Pierre-Yves and Moulin-Frier, Cl{\'e}ment},
+  title = {When {LLM}s Play the Telephone Game: Cultural Attractors as Conceptual Tools to Evaluate {LLM}s in Multi-turn Settings},
+  booktitle = {The Thirteenth International Conference on Learning Representations},
+  year = {2025},
+  eprint = {2407.04503},
+  archivePrefix = {arXiv},
+  primaryClass = {physics.soc-ph},
+  url = {https://openreview.net/forum?id=fN8yLc3eA7},
+  keywords = {social-dynamics},
+  annote = {Shaped: attractor drift in repeated retelling, countered by rule-chosen retelling operations}
+}
+
+@article{rendell2010copy,
+  author = {Rendell, L. and Boyd, R. and Cownden, D. and Enquist, M. and Eriksson, K. and Feldman, M. W. and Fogarty, L. and Ghirlanda, S. and Lillicrap, T. and Laland, K. N.},
+  title = {Why Copy Others? Insights from the Social Learning Strategies Tournament},
+  journal = {Science},
+  volume = {328},
+  number = {5975},
+  pages = {208--213},
+  year = {2010},
+  doi = {10.1126/science.1184719},
+  keywords = {social-dynamics},
+  annote = {Shaped: copying successful players as a learning strategy}
+}
+
+@inproceedings{ryan2015characters,
+  author = {Ryan, James and Summerville, Adam and Mateas, Michael and Wardrip-Fruin, Noah},
+  title = {Toward Characters Who Observe, Tell, Misremember, and Lie},
+  booktitle = {Proceedings of the AAAI Conference on Artificial Intelligence and Interactive Digital Entertainment},
+  volume = {11},
+  pages = {56--62},
+  year = {2015},
+  publisher = {Association for the Advancement of Artificial Intelligence (AAAI)},
+  doi = {10.1609/aiide.v11i3.12825},
+  keywords = {social-dynamics},
+  annote = {Shaped: characters who observe, tell, misremember and lie}
+}
+
+@article{sutcliffe2012relationships,
+  author = {Sutcliffe, Alistair and Dunbar, Robin and Binder, Jens and Arrow, Holly},
+  title = {Relationships and the social brain: Integrating psychological and evolutionary perspectives},
+  journal = {British Journal of Psychology},
+  volume = {103},
+  number = {2},
+  pages = {149--168},
+  year = {2012},
+  doi = {10.1111/j.2044-8295.2011.02061.x},
+  keywords = {social-dynamics},
+  annote = {Shaped: layers of close and wider contacts as soft budgets}
+}
+
+@article{szala2025much,
+  author = {Szala, Anna and Wacewicz, S{\l}awomir and Placi{\'n}ski, Marek and Poniewierska, Aleksandra Ewa and Schmeichel, Arkadiusz and Stefanczyk, Michal Mikolaj and {\.Z}ywiczy{\'n}ski, Przemys{\l}aw and Dunbar, Robin I. M.},
+  title = {How much conversation content is actually social: human conversational behaviour revisited},
+  journal = {Language and Cognition},
+  volume = {17},
+  pages = {e11},
+  year = {2025},
+  doi = {10.1017/langcog.2024.54},
+  keywords = {social-dynamics},
+  annote = {Shaped: a re-analysis putting social content even higher in casual talk}
+}
+
+@incollection{tesser1988selfevaluation,
+  author = {Tesser, Abraham},
+  title = {Toward a Self-Evaluation Maintenance Model of Social Behavior},
+  booktitle = {Advances in Experimental Social Psychology},
+  volume = {21},
+  pages = {181--227},
+  year = {1988},
+  publisher = {Academic Press},
+  doi = {10.1016/S0065-2601(08)60227-0},
+  keywords = {social-dynamics},
+  annote = {Shaped: comparison and reflected-glory effects behind pride and resentment over performance}
+}
+
+@article{vaidis2024multilab,
+  author = {Vaidis, David C. and Sleegers, Willem W. A. and van Leeuwen, Florian and DeMarree, Kenneth G. and S{\ae}trevik, Bj{\o}rn and Ross, Robert M. and Schmidt, Kathleen and Protzko, John and Morvinski, Coby and Ghasemi, Omid and others},
+  title = {A Multilab Replication of the Induced-Compliance Paradigm of Cognitive Dissonance},
+  journal = {Advances in Methods and Practices in Psychological Science},
+  volume = {7},
+  number = {1},
+  pages = {25152459231213375},
+  year = {2024},
+  doi = {10.1177/25152459231213375},
+  keywords = {social-dynamics},
+  annote = {Shaped: ruled out cognitive dissonance as a mechanic after a multi-lab replication failed}
+}
+
+@incollection{wegner1987transactive,
+  author = {Wegner, Daniel M.},
+  title = {Transactive Memory: A Contemporary Analysis of the Group Mind},
+  booktitle = {Theories of Group Behavior},
+  pages = {185--208},
+  year = {1987},
+  publisher = {Springer New York},
+  address = {New York, NY},
+  doi = {10.1007/978-1-4612-4634-3_9},
+  keywords = {social-dynamics},
+  annote = {Shaped: an expertise directory so members defer to the right colleague}
+}
+
+@article{weng2012competition,
+  author = {Weng, L. and Flammini, A. and Vespignani, A. and Menczer, F.},
+  title = {Competition among memes in a world with limited attention},
+  journal = {Scientific Reports},
+  volume = {2},
+  number = {1},
+  pages = {335},
+  year = {2012},
+  doi = {10.1038/srep00335},
+  keywords = {social-dynamics},
+  annote = {Shaped: limited attention producing a few hits among shared jokes}
+}
+
+@article{williams2007ostracism,
+  author = {Williams, Kipling D.},
+  title = {Ostracism},
+  journal = {Annual Review of Psychology},
+  volume = {58},
+  number = {1},
+  pages = {425--452},
+  year = {2007},
+  doi = {10.1146/annurev.psych.58.110405.085641},
+  keywords = {social-dynamics},
+  annote = {Shaped: exclusion from a raid as a threat to belonging, reflected in mood}
+}
+
+@article{zhou2005discrete,
+  author = {Zhou, W.-X. and Sornette, D. and Hill, R. A. and Dunbar, R. I. M.},
+  title = {Discrete hierarchical organization of social group sizes},
+  journal = {Proceedings of the Royal Society B: Biological Sciences},
+  volume = {272},
+  number = {1561},
+  pages = {439--444},
+  year = {2005},
+  doi = {10.1098/rspb.2004.2970},
+  keywords = {social-dynamics},
+  annote = {Shaped: layered social-time budgets rather than a uniform mesh}
+}
+
+% ---- Player motivation ----
+
+@article{fleeson2001structure,
+  author = {Fleeson, William},
+  title = {Toward a structure- and process-integrated view of personality: Traits as density distributions of states},
+  journal = {Journal of Personality and Social Psychology},
+  volume = {80},
+  number = {6},
+  pages = {1011--1027},
+  year = {2001},
+  doi = {10.1037/0022-3514.80.6.1011},
+  keywords = {player-motivation},
+  annote = {Shaped: daily personality states sampled around stable traits}
+}
+
+@article{fleeson2015whole,
+  author = {Fleeson, William and Jayawickreme, Eranda},
+  title = {Whole Trait Theory},
+  journal = {Journal of Research in Personality},
+  volume = {56},
+  pages = {82--92},
+  year = {2015},
+  doi = {10.1016/j.jrp.2014.10.009},
+  keywords = {player-motivation},
+  annote = {Shaped: traits as stable distributions of states}
+}
+
+@article{keramati2014homeostatic,
+  author = {Keramati, Mehdi and Gutkin, Boris},
+  title = {Homeostatic reinforcement learning for integrating reward collection and physiological stability},
+  journal = {eLife},
+  volume = {3},
+  pages = {e04811},
+  year = {2014},
+  doi = {10.7554/eLife.04811},
+  keywords = {player-motivation},
+  annote = {Shaped: motive deficits that fill while a need goes unmet}
+}
+
+@article{kiraly2015mediating,
+  author = {Kir{\'a}ly, Orsolya and Urb{\'a}n, R{\'o}bert and Griffiths, Mark D. and {\'A}goston, Csilla and Nagygy{\"o}rgy, Katalin and K{\"o}k{\"o}nyei, Gy{\"o}ngyi and Demetrovics, Zsolt},
+  title = {The Mediating Effect of Gaming Motivation Between Psychiatric Symptoms and Problematic Online Gaming: An Online Survey},
+  journal = {Journal of Medical Internet Research},
+  volume = {17},
+  number = {4},
+  pages = {e88},
+  year = {2015},
+  doi = {10.2196/jmir.3515},
+  keywords = {player-motivation},
+  annote = {Shaped: escapism and competition motives in the balance between play and life}
+}
+
+@article{yee2006motivations,
+  author = {Yee, Nick},
+  title = {Motivations for Play in Online Games},
+  journal = {CyberPsychology \& Behavior},
+  volume = {9},
+  number = {6},
+  pages = {772--775},
+  year = {2006},
+  doi = {10.1089/cpb.2006.9.772},
+  keywords = {player-motivation},
+  annote = {Shaped: member motives as weighted drives (achievement, social, immersion)}
+}
+
+% ---- Dialogue and persona style ----
+
+@article{ireland2011language,
+  author = {Ireland, Molly E. and Slatcher, Richard B. and Eastwick, Paul W. and Scissors, Lauren E. and Finkel, Eli J. and Pennebaker, James W.},
+  title = {Language Style Matching Predicts Relationship Initiation and Stability},
+  journal = {Psychological Science},
+  volume = {22},
+  number = {1},
+  pages = {39--44},
+  year = {2011},
+  doi = {10.1177/0956797610392928},
+  keywords = {dialogue-style},
+  annote = {Shaped: close members' typing styles drifting toward each other}
+}
+
+@misc{jones2025large,
+  author = {Jones, Cameron R. and Bergen, Benjamin K.},
+  title = {Large Language Models Pass the {Turing} Test},
+  year = {2025},
+  eprint = {2503.23674},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  url = {https://arxiv.org/abs/2503.23674},
+  keywords = {dialogue-style},
+  annote = {Shaped: typing habits and specific persona detail matter more than architecture for passing as a person}
+}
+
+@inproceedings{li2024measuring,
+  author = {Li, Kenneth and Liu, Tianle and Bashkansky, Naomi and Bau, David and Vi{\'e}gas, Fernanda and Pfister, Hanspeter and Wattenberg, Martin},
+  title = {Measuring and Controlling Instruction {(In)Stability} in Language Model Dialogs},
+  booktitle = {First Conference on Language Modeling},
+  year = {2024},
+  eprint = {2402.10962},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  url = {https://openreview.net/forum?id=60a1SAtH4e},
+  keywords = {dialogue-style},
+  annote = {Shaped: re-anchoring the persona in every prompt, since drift appears within a few rounds}
+}
+
+@misc{lu2026assistant,
+  author = {Lu, Christina and Gallagher, Jack and Michala, Jonathan and Fish, Kyle and Lindsey, Jack},
+  title = {The Assistant Axis: Situating and Stabilizing the Default Persona of Language Models},
+  year = {2026},
+  eprint = {2601.10387},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  url = {https://arxiv.org/abs/2601.10387},
+  note = {Accepted at ICML 2026 (OpenReview)},
+  keywords = {dialogue-style},
+  annote = {Shaped: emotionally charged and self-reflective talk as drift triggers that get stricter prompts}
+}
+
+@misc{ng2026microverse,
+  author = {Ng, Sky and Joshi, Brihi and Gupta, Ishan and Huang, Shirley and Di, Zonglin and Shen, Yun and Wen, Qianfeng and Liu, Yifan Simon and Gao, Ruoqi and others},
+  title = {{MicroVerse}: An Instrument for Measuring Self-Authored Identity Drift in Long-Horizon Multi-Agent Language-Model Simulations},
+  year = {2026},
+  eprint = {2608.15844},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  url = {https://arxiv.org/abs/2608.15844},
+  keywords = {dialogue-style},
+  annote = {Shaped: a weekly diff of self-notes against the owner-edited core persona}
+}
+
+@article{pinker2008logic,
+  author = {Pinker, Steven and Nowak, Martin A. and Lee, James J.},
+  title = {The logic of indirect speech},
+  journal = {Proceedings of the National Academy of Sciences},
+  volume = {105},
+  number = {3},
+  pages = {833--838},
+  year = {2008},
+  doi = {10.1073/pnas.0707192105},
+  keywords = {dialogue-style},
+  annote = {Shaped: deniable, indirect wording for sensitive topics}
+}
+
+% ---- Speech and voice ----
+
+@misc{chatterbox2025,
+  author = {{Resemble AI}},
+  title = {Chatterbox {TTS}},
+  year = {2025},
+  howpublished = {GitHub repository},
+  url = {https://github.com/resemble-ai/chatterbox},
+  keywords = {speech-voice},
+  annote = {Shaped: candidate expressive engine with voice cloning in the listening test}
+}
+
+@misc{ctranslate2019,
+  author = {{OpenNMT}},
+  title = {{CTranslate2}: Fast inference engine for Transformer models},
+  year = {2019},
+  howpublished = {GitHub repository},
+  url = {https://github.com/OpenNMT/CTranslate2},
+  keywords = {speech-voice},
+  annote = {Shaped: the inference engine under the recognition runtime}
+}
+
+@inproceedings{desplanques2020ecapatdnn,
+  author = {Desplanques, Brecht and Thienpondt, Jenthe and Demuynck, Kris},
+  title = {{ECAPA-TDNN}: Emphasized Channel Attention, Propagation and Aggregation in {TDNN} Based Speaker Verification},
+  booktitle = {Interspeech 2020},
+  pages = {3830--3834},
+  year = {2020},
+  publisher = {ISCA},
+  address = {ISCA},
+  eprint = {2005.07143},
+  archivePrefix = {arXiv},
+  primaryClass = {eess.AS},
+  doi = {10.21437/interspeech.2020-2650},
+  keywords = {speech-voice},
+  annote = {Shaped: speaker embeddings to check that generated voices stay distinct}
+}
+
+@inproceedings{ekstedt2022voice,
+  author = {Ekstedt, Erik and Skantze, Gabriel},
+  title = {Voice Activity Projection: Self-supervised Learning of Turn-taking Events},
+  booktitle = {Interspeech 2022},
+  pages = {5190--5194},
+  year = {2022},
+  publisher = {ISCA},
+  address = {ISCA},
+  eprint = {2205.09812},
+  archivePrefix = {arXiv},
+  primaryClass = {eess.AS},
+  doi = {10.21437/interspeech.2022-10955},
+  keywords = {speech-voice},
+  annote = {Shaped: predicting turn shifts for natural gaps and backchannels}
+}
+
+@misc{fasterwhisper2023,
+  author = {Klein, Guillaume},
+  title = {faster-whisper: Faster {Whisper} transcription with {CTranslate2}},
+  year = {2023},
+  howpublished = {GitHub repository},
+  url = {https://github.com/SYSTRAN/faster-whisper},
+  keywords = {speech-voice},
+  annote = {Shaped: the GPU recognition runtime for push-to-talk}
+}
+
+@misc{hu2026qwen3tts,
+  author = {Hu, Hangrui and Zhu, Xinfa and He, Ting and Guo, Dake and Zhang, Bin and Wang, Xiong and Guo, Zhifang and Jiang, Ziyue and Hao, Hongkun and Guo, Zishan and Zhang, Xinyu and Zhang, Pei and Yang, Baosong and Xu, Jin and Zhou, Jingren and Lin, Junyang},
+  title = {{Qwen3-TTS} Technical Report},
+  year = {2026},
+  eprint = {2601.15621},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.SD},
+  url = {https://arxiv.org/abs/2601.15621},
+  keywords = {speech-voice},
+  annote = {Shaped: candidate engine for inventing voices from persona descriptions}
+}
+
+@article{juslin2003communication,
+  author = {Juslin, Patrik N. and Laukka, Petri},
+  title = {Communication of emotions in vocal expression and music performance: Different channels, same code?},
+  journal = {Psychological Bulletin},
+  volume = {129},
+  number = {5},
+  pages = {770--814},
+  year = {2003},
+  doi = {10.1037/0033-2909.129.5.770},
+  keywords = {speech-voice},
+  annote = {Shaped: mapping mood to speaking rate, intensity and pitch}
+}
+
+@misc{kokoro2025,
+  author = {{hexgrad}},
+  title = {{Kokoro-82M}},
+  year = {2025},
+  howpublished = {Hugging Face model card},
+  url = {https://huggingface.co/hexgrad/Kokoro-82M},
+  note = {Model version 1.0, published 2025-01-27},
+  keywords = {speech-voice},
+  annote = {Shaped: the baseline voice model, with blended voices per member}
+}
+
+@misc{kokoroonnx2025,
+  author = {{thewh1teagle}},
+  title = {kokoro-onnx: {TTS} with {Kokoro} and {ONNX} Runtime},
+  year = {2025},
+  howpublished = {GitHub repository},
+  url = {https://github.com/thewh1teagle/kokoro-onnx},
+  keywords = {speech-voice},
+  annote = {Shaped: CPU runtime that keeps the voice service off the GPU}
+}
+
+@inproceedings{li2023styletts,
+  author = {Li, Yinghao Aaron and Han, Cong and Raghavan, Vinay and Mischler, Gavin and Mesgarani, Nima},
+  title = {{StyleTTS} 2: Towards Human-Level Text-to-Speech through Style Diffusion and Adversarial Training with Large Speech Language Models},
+  booktitle = {Advances in Neural Information Processing Systems},
+  volume = {36},
+  pages = {19594--19621},
+  year = {2023},
+  eprint = {2306.07691},
+  archivePrefix = {arXiv},
+  primaryClass = {eess.AS},
+  doi = {10.52202/075280-0860},
+  keywords = {speech-voice},
+  annote = {Shaped: the style-based synthesis that the chosen voice model builds on}
+}
+
+@misc{misaki2025,
+  author = {{hexgrad}},
+  title = {misaki: {G2P} engine for {Kokoro}},
+  year = {2025},
+  howpublished = {GitHub repository},
+  url = {https://github.com/hexgrad/misaki},
+  keywords = {speech-voice},
+  annote = {Shaped: grapheme-to-phoneme front end and stress markup for the chosen voice model}
+}
+
+@misc{onnxasr2025,
+  author = {Stupakov, Ilya},
+  title = {onnx-asr: A lightweight Python package for Automatic Speech Recognition using {ONNX} models},
+  year = {2025},
+  howpublished = {GitHub repository},
+  url = {https://github.com/istupakov/onnx-asr},
+  keywords = {speech-voice},
+  annote = {Shaped: the ONNX wrapper that runs the CPU recognizer}
+}
+
+@misc{orpheus2025,
+  author = {{Canopy Labs}},
+  title = {{Orpheus-TTS}: Towards Human-Sounding Speech},
+  year = {2025},
+  howpublished = {GitHub repository},
+  url = {https://github.com/canopyai/Orpheus-TTS},
+  keywords = {speech-voice},
+  annote = {Shaped: candidate expressive engine with inline vocal cues in the listening test}
+}
+
+@misc{parakeet2025,
+  author = {{NVIDIA}},
+  title = {parakeet-tdt-0.6b-v2},
+  year = {2025},
+  howpublished = {Hugging Face model card},
+  url = {https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2},
+  keywords = {speech-voice},
+  annote = {Shaped: the CPU recognition baseline that keeps the GPU free}
+}
+
+@misc{pedalboard2021,
+  author = {Sobot, Peter},
+  title = {Pedalboard: A {Python} library for audio},
+  year = {2021},
+  howpublished = {GitHub repository},
+  url = {https://github.com/spotify/pedalboard},
+  keywords = {speech-voice},
+  annote = {Shaped: per-member pitch, headset and codec effects}
+}
+
+@misc{pycaw2016,
+  author = {Miras, Andre},
+  title = {pycaw: Python Core Audio Windows Library},
+  year = {2016},
+  howpublished = {GitHub repository},
+  url = {https://github.com/AndreMiras/pycaw},
+  keywords = {speech-voice},
+  annote = {Shaped: ducking the game's audio while members speak}
+}
+
+@misc{pyloudnorm2017,
+  author = {Steinmetz, Christian J.},
+  title = {pyloudnorm: Flexible audio loudness meter in Python with implementation of {ITU-R BS.1770-4}},
+  year = {2017},
+  howpublished = {GitHub repository},
+  url = {https://github.com/csteinmetz1/pyloudnorm},
+  keywords = {speech-voice},
+  annote = {Shaped: loudness normalisation of every voiced line}
+}
+
+@misc{pynput2015,
+  author = {Palm{\'e}r, Moses},
+  title = {pynput: Monitor and control user input devices},
+  year = {2015},
+  howpublished = {GitHub repository},
+  url = {https://github.com/moses-palmer/pynput},
+  keywords = {speech-voice},
+  annote = {Shaped: the push-to-talk hotkey hook}
+}
+
+@inproceedings{radford2023robust,
+  author = {Radford, Alec and Kim, Jong Wook and Xu, Tao and Brockman, Greg and McLeavey, Christine and Sutskever, Ilya},
+  title = {Robust Speech Recognition via Large-Scale Weak Supervision},
+  booktitle = {Proceedings of the 40th International Conference on Machine Learning},
+  series = {Proceedings of Machine Learning Research},
+  volume = {202},
+  pages = {28492--28518},
+  year = {2023},
+  publisher = {PMLR},
+  eprint = {2212.04356},
+  archivePrefix = {arXiv},
+  primaryClass = {eess.AS},
+  url = {https://proceedings.mlr.press/v202/radford23a.html},
+  keywords = {speech-voice},
+  annote = {Shaped: the speech-recognition model family behind push-to-talk}
+}
+
+@misc{rapidfuzz2020,
+  author = {Bachmann, Max},
+  title = {{RapidFuzz}: Rapid fuzzy string matching in Python},
+  year = {2020},
+  howpublished = {GitHub repository},
+  url = {https://github.com/rapidfuzz/RapidFuzz},
+  keywords = {speech-voice},
+  annote = {Shaped: fuzzy correction of recognized names against the roster}
+}
+
+@misc{ravanelli2021speechbrain,
+  author = {Ravanelli, Mirco and Parcollet, Titouan and Plantinga, Peter and Rouhe, Aku and Cornell, Samuele and Lugosch, Loren and Subakan, Cem and Dawalatabad, Nauman and Heba, Abdelwahab and Zhong, Jianyuan and others},
+  title = {{SpeechBrain}: A General-Purpose Speech Toolkit},
+  year = {2021},
+  eprint = {2106.04624},
+  archivePrefix = {arXiv},
+  primaryClass = {eess.AS},
+  url = {https://arxiv.org/abs/2106.04624},
+  keywords = {speech-voice},
+  annote = {Shaped: the toolkit that provides the speaker-embedding model}
+}
+
+@misc{silerovad2020,
+  author = {{Silero Team}},
+  title = {Silero {VAD}: pre-trained enterprise-grade Voice Activity Detector},
+  year = {2020},
+  howpublished = {GitHub repository},
+  url = {https://github.com/snakers4/silero-vad},
+  keywords = {speech-voice},
+  annote = {Shaped: dropping non-speech clips before recognition}
+}
+
+@article{skantze2021turntaking,
+  author = {Skantze, Gabriel},
+  title = {Turn-taking in Conversational Systems and Human-Robot Interaction: A Review},
+  journal = {Computer Speech \& Language},
+  volume = {67},
+  pages = {101178},
+  year = {2021},
+  doi = {10.1016/j.csl.2020.101178},
+  keywords = {speech-voice},
+  annote = {Shaped: turn-taking model for multi-party voice timing}
+}
+
+@misc{sounddevice2015,
+  author = {Geier, Matthias},
+  title = {python-sounddevice: Play and record sound with Python},
+  year = {2015},
+  howpublished = {GitHub repository},
+  url = {https://github.com/spatialaudio/python-sounddevice},
+  keywords = {speech-voice},
+  annote = {Shaped: audio capture and mixed playback}
+}
+
+@article{stivers2009universals,
+  author = {Stivers, Tanya and Enfield, N. J. and Brown, Penelope and Englert, Christina and Hayashi, Makoto and Heinemann, Trine and Hoymann, Gertie and Rossano, Federico and de Ruiter, Jan Peter and Yoon, Kyung-Eun and Levinson, Stephen C.},
+  title = {Universals and cultural variation in turn-taking in conversation},
+  journal = {Proceedings of the National Academy of Sciences},
+  volume = {106},
+  number = {26},
+  pages = {10587--10592},
+  year = {2009},
+  doi = {10.1073/pnas.0903616106},
+  keywords = {speech-voice},
+  annote = {Shaped: short gaps and little overlap in multi-speaker timing}
+}
+
+@misc{whisperturbo2024,
+  author = {{OpenAI}},
+  title = {whisper-large-v3-turbo},
+  year = {2024},
+  howpublished = {Hugging Face model card},
+  url = {https://huggingface.co/openai/whisper-large-v3-turbo},
+  keywords = {speech-voice},
+  annote = {Shaped: the GPU recognition option for push-to-talk}
+}
+
+@inproceedings{zhou2026indextts2,
+  author = {Zhou, Siyi and Zhou, Yiquan and He, Yi and Zhou, Xun and Wang, Jinchao and Deng, Wei and Shu, Jingchen},
+  title = {{IndexTTS2}: A Breakthrough in Emotionally Expressive and Duration-Controlled Auto-Regressive Zero-Shot Text-to-Speech},
+  booktitle = {Proceedings of the AAAI Conference on Artificial Intelligence},
+  volume = {40},
+  pages = {35139--35148},
+  year = {2026},
+  publisher = {Association for the Advancement of Artificial Intelligence (AAAI)},
+  eprint = {2506.21619},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  doi = {10.1609/aaai.v40i41.40820},
+  keywords = {speech-voice},
+  annote = {Shaped: separating timbre from emotion in the expressive-engine listening test}
+}
+
+@misc{zhou2026voxcpm2,
+  author = {Zhou, Yixuan and Zeng, Guoyang and Liu, Xin and Li, Xiang and Yu, Renjie and Gui, Jiancheng and Wu, Jiaheng and Wang, Ziyang and Shen, Xudong and Ye, Runchuan and Zhang, Zhisheng and Zhou, Jiuyang and Bai, Bingsong and Sun, Weiyue and Deng, Mengyuan and Shi, Qundong and Wu, Zhiyong and Liu, Zhiyuan},
+  title = {{VoxCPM2} Technical Report},
+  year = {2026},
+  eprint = {2606.06928},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.SD},
+  url = {https://arxiv.org/abs/2606.06928},
+  keywords = {speech-voice},
+  annote = {Shaped: candidate engine for inventing voices from persona descriptions}
+}
+
+% ---- Models and tools ----
+
+@misc{azerothcore2016,
+  author = {{AzerothCore}},
+  title = {{AzerothCore}},
+  year = {2016},
+  howpublished = {GitHub repository},
+  url = {https://github.com/azerothcore/azerothcore-wotlk},
+  note = {Complete open source and modular solution for MMO},
+  keywords = {models-tools},
+  annote = {Shaped: the game server the whole project runs on}
+}
+
+@misc{azerothcoreplayerbots2023,
+  author = {{mod-playerbots}},
+  title = {azerothcore-wotlk ({Playerbot} branch of the mod-playerbots fork)},
+  year = {2023},
+  howpublished = {GitHub repository},
+  url = {https://github.com/mod-playerbots/azerothcore-wotlk},
+  keywords = {models-tools},
+  annote = {Shaped: the core fork carrying the patches the bot module depends on}
+}
+
+@inproceedings{carbonell1998use,
+  author = {Carbonell, Jaime and Goldstein, Jade},
+  title = {The use of {MMR}, diversity-based reranking for reordering documents and producing summaries},
+  booktitle = {Proceedings of the 21st annual international ACM SIGIR conference on Research and development in information retrieval},
+  pages = {335--336},
+  year = {1998},
+  publisher = {ACM},
+  address = {New York, NY, USA},
+  doi = {10.1145/290941.291025},
+  keywords = {models-tools},
+  annote = {Shaped: diversifying recalled memories so near-duplicates do not fill the slots}
+}
+
+@inproceedings{cormack2009reciprocal,
+  author = {Cormack, Gordon V. and Clarke, Charles L. A. and Buettcher, Stefan},
+  title = {Reciprocal rank fusion outperforms condorcet and individual rank learning methods},
+  booktitle = {Proceedings of the 32nd international ACM SIGIR conference on Research and development in information retrieval},
+  pages = {758--759},
+  year = {2009},
+  publisher = {ACM},
+  address = {New York, NY, USA},
+  doi = {10.1145/1571941.1572114},
+  keywords = {models-tools},
+  annote = {Shaped: fusing vector and keyword candidate lists by reciprocal rank}
+}
+
+@misc{creativewritingbench2025,
+  author = {{EQ-Bench}},
+  title = {Creative Writing Benchmark v3},
+  year = {2025},
+  howpublished = {Benchmark and leaderboard},
+  url = {https://eqbench.com/creative_writing.html},
+  keywords = {models-tools},
+  annote = {Shaped: leaderboard used to shortlist models for prose quality}
+}
+
+@misc{cydonia2025,
+  author = {{TheDrummer}},
+  title = {{Cydonia-24B-v4.3}},
+  year = {2025},
+  howpublished = {Hugging Face model card},
+  url = {https://huggingface.co/TheDrummer/Cydonia-24B-v4.3},
+  note = {Fine-tune of Mistral-Small-3.2-24B-Instruct-2506},
+  keywords = {models-tools},
+  annote = {Shaped: live-talk challenger and fallback in the blind test}
+}
+
+@inproceedings{enevoldsen2025mmteb,
+  author = {Enevoldsen, Kenneth and Chung, Isaac and Kerboua, Imene and Kardos, M{\'a}rton and Mathur, Ashwin and Stap, David and Gala, Jay and Siblini, Wissam and Krzemi{\'n}ski, Dominik and Winata, Genta Indra and others},
+  title = {{MMTEB}: Massive Multilingual Text Embedding Benchmark},
+  booktitle = {The Thirteenth International Conference on Learning Representations},
+  year = {2025},
+  eprint = {2502.13595},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  url = {https://openreview.net/forum?id=zl3pfz4VCV},
+  keywords = {models-tools},
+  annote = {Shaped: the English benchmark version behind the embedding model's reported score}
+}
+
+@misc{eqbench32025,
+  author = {{EQ-Bench}},
+  title = {{EQ-Bench} 3},
+  year = {2025},
+  howpublished = {Benchmark and leaderboard},
+  url = {https://eqbench.com/},
+  keywords = {models-tools},
+  annote = {Shaped: leaderboard used to shortlist models for in-character emotional intelligence}
+}
+
+@misc{gemmateam2026gemma,
+  author = {{Gemma Team}},
+  title = {{Gemma} 4 Technical Report},
+  year = {2026},
+  howpublished = {arXiv preprint},
+  eprint = {2607.02770},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  url = {https://arxiv.org/abs/2607.02770},
+  keywords = {models-tools},
+  annote = {Shaped: base family of the live-talk model and a reflection candidate}
+}
+
+@inproceedings{kusupati2022matryoshka,
+  author = {Kusupati, Aditya and Bhatt, Gantavya and Rege, Aniket and Wallingford, Matthew and Sinha, Aditya and Ramanujan, Vivek and Howard-Snyder, William and Chen, Kaifeng and Kakade, Sham and Jain, Prateek and Farhadi, Ali},
+  title = {{Matryoshka} Representation Learning},
+  booktitle = {Advances in Neural Information Processing Systems},
+  volume = {35},
+  pages = {30233--30249},
+  year = {2022},
+  eprint = {2205.13147},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.LG},
+  doi = {10.52202/068431-2192},
+  keywords = {models-tools},
+  annote = {Shaped: truncating embeddings to 512 dimensions}
+}
+
+@misc{lancedb2023,
+  author = {{LanceDB}},
+  title = {{LanceDB}},
+  year = {2023},
+  howpublished = {GitHub repository},
+  url = {https://github.com/lancedb/lancedb},
+  keywords = {models-tools},
+  annote = {Shaped: considered for storage and ruled out as a second store to keep in sync}
+}
+
+@misc{llamacpp2023,
+  author = {{ggml-org}},
+  title = {llama.cpp: {LLM} inference in {C/C++}},
+  year = {2023},
+  howpublished = {GitHub repository},
+  url = {https://github.com/ggml-org/llama.cpp},
+  keywords = {models-tools},
+  annote = {Shaped: the engine under the model server; adapters and control vectors would require running it directly}
+}
+
+@misc{moddungeonclear2026,
+  author = {{jrad7}},
+  title = {mod-dungeon-clear},
+  year = {2026},
+  howpublished = {GitHub repository},
+  url = {https://github.com/jrad7/mod-dungeon-clear},
+  note = {A module for AzerothCore's playerbots to help them clear dungeons},
+  keywords = {models-tools},
+  annote = {Shaped: the autonomous instance-run layer whose status events the bridge consumes}
+}
+
+@misc{modollamachat2025,
+  author = {Hendrickson, Dustin},
+  title = {mod-ollama-chat},
+  year = {2025},
+  howpublished = {GitHub repository},
+  url = {https://github.com/DustinHendrickson/mod-ollama-chat},
+  note = {AzerothCore module that adds LLM support to Player Bots via the Ollama API},
+  keywords = {models-tools},
+  annote = {Shaped: the stock LLM chat path for other bots, with guild members excluded by a local patch}
+}
+
+@misc{modplayerbots2023,
+  author = {{mod-playerbots}},
+  title = {mod-playerbots: {AzerothCore} Playerbots Module},
+  year = {2023},
+  howpublished = {GitHub repository},
+  url = {https://github.com/mod-playerbots/mod-playerbots},
+  keywords = {models-tools},
+  annote = {Shaped: the bot framework whose random bots became the guild members}
+}
+
+@inproceedings{muennighoff2023mteb,
+  author = {Muennighoff, Niklas and Tazi, Nouamane and Magne, Loic and Reimers, Nils},
+  title = {{MTEB}: Massive Text Embedding Benchmark},
+  booktitle = {Proceedings of the 17th Conference of the European Chapter of the Association for Computational Linguistics},
+  pages = {2014--2037},
+  year = {2023},
+  publisher = {Association for Computational Linguistics},
+  address = {Dubrovnik, Croatia},
+  eprint = {2210.07316},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  doi = {10.18653/v1/2023.eacl-main.148},
+  url = {https://aclanthology.org/2023.eacl-main.148/},
+  keywords = {models-tools},
+  annote = {Shaped: the benchmark used to compare embedding models}
+}
+
+@misc{museglimmerteam2026muse,
+  author = {{Muse Glimmer Team}},
+  title = {Muse Glimmer {30B}: An On-Device Agentic Model},
+  year = {2026},
+  howpublished = {arXiv preprint},
+  eprint = {2610.24628},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  url = {https://arxiv.org/abs/2610.24628},
+  keywords = {models-tools},
+  annote = {Shaped: reflection-model candidate for analytic consolidation}
+}
+
+@misc{ollama2023,
+  author = {{Ollama}},
+  title = {{Ollama}},
+  year = {2023},
+  howpublished = {GitHub repository},
+  url = {https://github.com/ollama/ollama},
+  keywords = {models-tools},
+  annote = {Shaped: the local model server for live talk, reflection and embeddings}
+}
+
+@misc{orion2026,
+  author = {{TheDrummer}},
+  title = {{Orion-26B-A4B-v1.1}},
+  year = {2026},
+  howpublished = {Hugging Face model card},
+  url = {https://huggingface.co/TheDrummer/Orion-26B-A4B-v1.1},
+  note = {Fine-tune of google/gemma-4-26B-A4B-it},
+  keywords = {models-tools},
+  annote = {Shaped: the live-talk model chosen in the blind test}
+}
+
+@misc{paech2023eqbench,
+  author = {Paech, Samuel J.},
+  title = {{EQ-Bench}: An Emotional Intelligence Benchmark for Large Language Models},
+  year = {2023},
+  eprint = {2312.06281},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  url = {https://arxiv.org/abs/2312.06281},
+  keywords = {models-tools},
+  annote = {Shaped: background for the emotional-intelligence leaderboards used to shortlist models}
+}
+
+@misc{pgvector2021,
+  author = {{pgvector}},
+  title = {pgvector: Open-source vector similarity search for Postgres},
+  year = {2021},
+  howpublished = {GitHub repository},
+  url = {https://github.com/pgvector/pgvector},
+  keywords = {models-tools},
+  annote = {Shaped: considered for storage and ruled out as another service with no benefit at this size}
+}
+
+@misc{qwen362026,
+  author = {{Qwen Team}},
+  title = {{Qwen3.6-27B}},
+  year = {2026},
+  howpublished = {Hugging Face model card},
+  url = {https://huggingface.co/Qwen/Qwen3.6-27B},
+  keywords = {models-tools},
+  annote = {Shaped: reflection-model candidate in the blind test}
+}
+
+@misc{qwen382026,
+  author = {{Qwen Team}},
+  title = {{Qwen3.8-27B}},
+  year = {2026},
+  howpublished = {Hugging Face model card},
+  url = {https://huggingface.co/Qwen/Qwen3.8-27B},
+  keywords = {models-tools},
+  annote = {Shaped: reflection-model candidate in the blind test}
+}
+
+@misc{qwenteam2025qwen3,
+  author = {{Qwen Team}},
+  title = {{Qwen3} Technical Report},
+  year = {2025},
+  howpublished = {arXiv preprint},
+  eprint = {2505.09388},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  url = {https://arxiv.org/abs/2505.09388},
+  keywords = {models-tools},
+  annote = {Shaped: the earlier live-talk baseline model family}
+}
+
+@inproceedings{raasveldt2019duckdb,
+  author = {Raasveldt, Mark and M{\"u}hleisen, Hannes},
+  title = {{DuckDB}: an Embeddable Analytical Database},
+  booktitle = {Proceedings of the 2019 International Conference on Management of Data},
+  pages = {1981--1984},
+  year = {2019},
+  publisher = {ACM},
+  address = {New York, NY, USA},
+  doi = {10.1145/3299869.3320212},
+  keywords = {models-tools},
+  annote = {Shaped: considered for analytics over a copy; its index persistence was judged too experimental for the live store}
+}
+
+@misc{repeng2024,
+  author = {Vogel, Theia},
+  title = {repeng: A library for making {RepE} control vectors},
+  year = {2024},
+  howpublished = {GitHub repository},
+  url = {https://github.com/vgel/repeng},
+  keywords = {models-tools},
+  annote = {Shaped: control-vector tooling that cannot be loaded by the chosen model server}
+}
+
+@inproceedings{rimsky2024steering,
+  author = {Rimsky, Nina and Gabrieli, Nick and Schulz, Julian and Tong, Meg and Hubinger, Evan and Turner, Alexander},
+  title = {Steering {Llama} 2 via Contrastive Activation Addition},
+  booktitle = {Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers)},
+  pages = {15504--15522},
+  year = {2024},
+  publisher = {Association for Computational Linguistics},
+  address = {Bangkok, Thailand},
+  eprint = {2312.06681},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  doi = {10.18653/v1/2024.acl-long.828},
+  url = {https://aclanthology.org/2024.acl-long.828/},
+  keywords = {models-tools},
+  annote = {Shaped: ruled out contrastive activation steering for persona control}
+}
+
+@article{robertson2009probabilistic,
+  author = {Robertson, Stephen and Zaragoza, Hugo},
+  title = {The Probabilistic Relevance Framework: {BM25} and Beyond},
+  journal = {Foundations and Trends{\textregistered} in Information Retrieval},
+  year = {2009},
+  doi = {10.1561/1500000019},
+  keywords = {models-tools},
+  annote = {Shaped: keyword scoring for names, bosses and items that embed poorly}
+}
+
+@misc{sqlite2000,
+  author = {{SQLite}},
+  title = {{SQLite}},
+  year = {2000},
+  howpublished = {Software},
+  url = {https://www.sqlite.org/},
+  note = {Project started 2000-05-09 (sqlite.org/about.html)},
+  keywords = {models-tools},
+  annote = {Shaped: the single-file store for memories, relationships and logs}
+}
+
+@misc{sqlitevec2024,
+  author = {Garcia, Alex},
+  title = {sqlite-vec: A vector search {SQLite} extension that runs anywhere},
+  year = {2024},
+  howpublished = {GitHub repository},
+  url = {https://github.com/asg017/sqlite-vec},
+  keywords = {models-tools},
+  annote = {Shaped: vector search for recall inside the same database file}
+}
+
+@misc{turner2023steering,
+  author = {Turner, Alexander Matt and Thiergart, Lisa and Leech, Gavin and Udell, David and Vazquez, Juan J. and Mini, Ulisse and MacDiarmid, Monte},
+  title = {Steering Language Models With Activation Engineering},
+  year = {2023},
+  eprint = {2308.10248},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  url = {https://arxiv.org/abs/2308.10248},
+  note = {Earlier arXiv title: Activation Addition: Steering Language Models Without Optimization},
+  keywords = {models-tools},
+  annote = {Shaped: ruled out activation steering for persona control}
+}
+
+@misc{vera2025embeddinggemma,
+  author = {Vera, Henrique Schechter and Dua, Sahil and Zhang, Biao and Salz, Daniel and Mullins, Ryan and Panyam, Sindhu Raghuram and Smoot, Sara and Naim, Iftekhar and Zou, Joe and Chen, Feiyang and others},
+  title = {{EmbeddingGemma}: Powerful and Lightweight Text Representations},
+  year = {2025},
+  eprint = {2509.20354},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  url = {https://arxiv.org/abs/2509.20354},
+  keywords = {models-tools},
+  annote = {Shaped: fallback embedding model}
+}
+
+@inproceedings{yu2024neeko,
+  author = {Yu, Xiaoyan and Luo, Tongxu and Wei, Yifan and Lei, Fangyu and Huang, Yiming and Peng, Hao and Zhu, Liehuang},
+  title = {{Neeko}: Leveraging Dynamic {LoRA} for Efficient Multi-Character Role-Playing Agent},
+  booktitle = {Proceedings of the 2024 Conference on Empirical Methods in Natural Language Processing},
+  pages = {12540--12557},
+  year = {2024},
+  publisher = {Association for Computational Linguistics},
+  address = {Miami, Florida, USA},
+  eprint = {2402.13717},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  doi = {10.18653/v1/2024.emnlp-main.697},
+  url = {https://aclanthology.org/2024.emnlp-main.697/},
+  keywords = {models-tools},
+  annote = {Shaped: ruled out per-persona adapters, given thin evidence and awkward serving}
+}
+
+@misc{zhang2025qwen3,
+  author = {Zhang, Yanzhao and Li, Mingxin and Long, Dingkun and Zhang, Xin and Lin, Huan and Yang, Baosong and Xie, Pengjun and Yang, An and Liu, Dayiheng and Lin, Junyang and Huang, Fei and Zhou, Jingren},
+  title = {{Qwen3} Embedding: Advancing Text Embedding and Reranking Through Foundation Models},
+  year = {2025},
+  eprint = {2506.05176},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  url = {https://arxiv.org/abs/2506.05176},
+  keywords = {models-tools},
+  annote = {Shaped: the embedding model for recall, used at reduced dimensions}
+}
+
+@misc{zou2023representation,
+  author = {Zou, Andy and Phan, Long and Chen, Sarah and Campbell, James and Guo, Phillip and Ren, Richard and Pan, Alexander and Yin, Xuwang and Mazeika, Mantas and Dombrowski, Ann-Kathrin and others},
+  title = {Representation Engineering: A Top-Down Approach to {AI} Transparency},
+  year = {2023},
+  eprint = {2310.01405},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.LG},
+  url = {https://arxiv.org/abs/2310.01405},
+  keywords = {models-tools},
+  annote = {Shaped: ruled out representation-level control of traits}
+}
+
+% ---- Game AI and learning ----
+
+@inproceedings{ethayarajh2024model,
+  author = {Ethayarajh, Kawin and Xu, Winnie and Muennighoff, Niklas and Jurafsky, Dan and Kiela, Douwe},
+  title = {Model Alignment as Prospect Theoretic Optimization},
+  booktitle = {Proceedings of the 41st International Conference on Machine Learning},
+  series = {Proceedings of Machine Learning Research},
+  volume = {235},
+  pages = {12634--12651},
+  year = {2024},
+  publisher = {PMLR},
+  eprint = {2402.01306},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.LG},
+  url = {https://proceedings.mlr.press/v235/ethayarajh24a.html},
+  note = {arXiv title: KTO: Model Alignment as Prospect Theoretic Optimization},
+  keywords = {game-ai-learning},
+  annote = {Shaped: ruled out preference optimisation (KTO) on a few noisy reaction signals}
+}
+
+@article{evans2014versu,
+  author = {Evans, Richard and Short, Emily},
+  title = {{Versu}---A Simulationist Storytelling System},
+  journal = {IEEE Transactions on Computational Intelligence and AI in Games},
+  volume = {6},
+  number = {2},
+  pages = {113--130},
+  year = {2014},
+  doi = {10.1109/TCIAIG.2013.2287297},
+  keywords = {game-ai-learning},
+  annote = {Shaped: rule-driven social moves with prose left to another layer}
+}
+
+@inproceedings{gao2024aligning,
+  author = {Gao, Ge and Taymanov, Alexey and Salinas, Eduardo and Mineiro, Paul and Misra, Dipendra},
+  title = {Aligning {LLM} Agents by Learning Latent Preference from User Edits},
+  booktitle = {Advances in Neural Information Processing Systems},
+  volume = {37},
+  pages = {136873--136896},
+  year = {2024},
+  eprint = {2404.15269},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  doi = {10.52202/079017-4349},
+  keywords = {game-ai-learning},
+  annote = {Shaped: a readable natural-language profile of what lands with the player}
+}
+
+@misc{irvine2023rewarding,
+  author = {Irvine, Robert and Boubert, Douglas and Raina, Vyas and Liusie, Adian and Zhu, Ziyi and Mudupalli, Vineet and Korshuk, Aliaksei and Liu, Zongyi and Cremer, Fritz and Assassi, Valentin and Beauchamp, Christie-Carol and Lu, Xiaoding and Rialan, Thomas and Beauchamp, William},
+  title = {Rewarding Chatbots for Real-World Engagement with Millions of Users},
+  year = {2023},
+  eprint = {2303.06135},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  url = {https://arxiv.org/abs/2303.06135},
+  keywords = {game-ai-learning},
+  annote = {Shaped: engagement signals as a reward for selecting among candidate lines}
+}
+
+@inproceedings{johnsonbey2022exploring,
+  author = {Johnson-Bey, Shi and Nelson, Mark J. and Mateas, Michael},
+  title = {Exploring the Design Space of Social Physics Engines in Games},
+  booktitle = {Interactive Storytelling},
+  series = {Lecture Notes in Computer Science},
+  pages = {559--576},
+  year = {2022},
+  publisher = {Springer International Publishing},
+  address = {Cham},
+  doi = {10.1007/978-3-031-22298-6_36},
+  keywords = {game-ai-learning},
+  annote = {Shaped: the design space of social-physics engines}
+}
+
+@inproceedings{kreminski2019felt,
+  author = {Kreminski, Max and Dickinson, Melanie and Wardrip-Fruin, Noah},
+  title = {{Felt}: A Simple Story Sifter},
+  booktitle = {Interactive Storytelling},
+  series = {Lecture Notes in Computer Science},
+  pages = {267--281},
+  year = {2019},
+  publisher = {Springer International Publishing},
+  address = {Cham},
+  doi = {10.1007/978-3-030-33894-7_27},
+  keywords = {game-ai-learning},
+  annote = {Shaped: sifting patterns queried over event logs}
+}
+
+@inproceedings{kreminski2021winnow,
+  author = {Kreminski, Max and Dickinson, Melanie and Mateas, Michael},
+  title = {{Winnow}: A Domain-Specific Language for Incremental Story Sifting},
+  booktitle = {Proceedings of the AAAI Conference on Artificial Intelligence and Interactive Digital Entertainment},
+  volume = {17},
+  pages = {156--163},
+  year = {2021},
+  publisher = {Association for the Advancement of Artificial Intelligence (AAAI)},
+  doi = {10.1609/aiide.v17i1.18903},
+  keywords = {game-ai-learning},
+  annote = {Shaped: incremental pattern matching over an ongoing simulation}
+}
+
+@inproceedings{kreminski2022select,
+  author = {Kreminski, Max and Dickinson, Melanie and Wardrip-Fruin, Noah and Mateas, Michael},
+  title = {Select the Unexpected: A Statistical Heuristic for Story Sifting},
+  booktitle = {Interactive Storytelling},
+  series = {Lecture Notes in Computer Science},
+  pages = {292--308},
+  year = {2022},
+  publisher = {Springer International Publishing},
+  address = {Cham},
+  doi = {10.1007/978-3-031-22298-6_18},
+  keywords = {game-ai-learning},
+  annote = {Shaped: ranking story matches by statistical unexpectedness}
+}
+
+@inproceedings{lessard2026narrative,
+  author = {Lessard, Jonathan and Friedrich, Stephen and Par{\'e}-Chouinard, Samuel and Kosseim, Leila},
+  title = {Narrative Gold Digging: Sifting and Narrating Stories from a Procedural Simulation},
+  booktitle = {Proceedings of the 21st International Conference on the Foundations of Digital Games},
+  pages = {1--8},
+  year = {2026},
+  publisher = {ACM},
+  address = {New York, NY, USA},
+  doi = {10.1145/3815598.3815687},
+  keywords = {game-ai-learning},
+  annote = {Shaped: narration quality mattering more than sifting heuristics}
+}
+
+@article{mccoy2014social,
+  author = {McCoy, Joshua and Treanor, Mike and Samuel, Ben and Reed, Aaron A. and Mateas, Michael and Wardrip-Fruin, Noah},
+  title = {Social Story Worlds With Comme il Faut},
+  journal = {IEEE Transactions on Computational Intelligence and AI in Games},
+  volume = {6},
+  number = {2},
+  pages = {97--112},
+  year = {2014},
+  doi = {10.1109/TCIAIG.2014.2304692},
+  keywords = {game-ai-learning},
+  annote = {Shaped: members choosing social moves from rules over relationships}
+}
+
+@inproceedings{mendez2023chatgpt,
+  author = {M{\'e}ndez, Gonzalo and Gerv{\'a}s, Pablo},
+  title = {Using {ChatGPT} for Story Sifting in Narrative Generation},
+  booktitle = {Proceedings of the International Conference on Computational Creativity},
+  year = {2023},
+  url = {https://computationalcreativity.net/iccc23/papers/ICCC-2023_paper_124.pdf},
+  keywords = {game-ai-learning},
+  annote = {Shaped: algorithms select the events and the LLM only narrates them}
+}
+
+@inproceedings{rafailov2023direct,
+  author = {Rafailov, Rafael and Sharma, Archit and Mitchell, Eric and Manning, Christopher D. and Ermon, Stefano and Finn, Chelsea},
+  title = {Direct Preference Optimization: Your Language Model is Secretly a Reward Model},
+  booktitle = {Advances in Neural Information Processing Systems},
+  volume = {36},
+  pages = {53728--53741},
+  year = {2023},
+  eprint = {2305.18290},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.LG},
+  doi = {10.52202/075280-2338},
+  keywords = {game-ai-learning},
+  annote = {Shaped: ruled out preference optimisation, with bandits and reranking first}
+}
+
+@article{riedl2013interactive,
+  author = {Riedl, Mark O. and Bulitko, Vadim},
+  title = {Interactive Narrative: An Intelligent Systems Approach},
+  journal = {AI Magazine},
+  volume = {34},
+  number = {1},
+  pages = {67--77},
+  year = {2013},
+  doi = {10.1609/aimag.v34i1.2449},
+  keywords = {game-ai-learning},
+  annote = {Shaped: a storyteller that paces arcs with a tension budget}
+}
+
+@article{russo2018tutorial,
+  author = {Russo, Daniel J. and Van Roy, Benjamin and Kazerouni, Abbas and Osband, Ian and Wen, Zheng},
+  title = {A Tutorial on Thompson Sampling},
+  journal = {Foundations and Trends{\textregistered} in Machine Learning},
+  volume = {11},
+  number = {1},
+  pages = {1--96},
+  year = {2018},
+  doi = {10.1561/2200000070},
+  keywords = {game-ai-learning},
+  annote = {Shaped: per-member bandits over their own repertoire of bit types}
+}
+
+@phdthesis{ryan2018curating,
+  author = {Ryan, James},
+  title = {Curating Simulated Storyworlds},
+  year = {2018},
+  school = {University of California, Santa Cruz},
+  url = {https://escholarship.org/uc/item/1340j5h2},
+  keywords = {game-ai-learning},
+  annote = {Shaped: over-generating events and then sifting stories out of the simulation logs}
+}
+
+@inproceedings{shinn2023reflexion,
+  author = {Shinn, Noah and Cassano, Federico and Gopinath, Ashwin and Narasimhan, Karthik and Yao, Shunyu},
+  title = {{Reflexion}: language agents with verbal reinforcement learning},
+  booktitle = {Advances in Neural Information Processing Systems},
+  volume = {36},
+  pages = {8634--8652},
+  year = {2023},
+  eprint = {2303.11366},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.AI},
+  doi = {10.52202/075280-0377},
+  keywords = {game-ai-learning},
+  annote = {Shaped: a planned post-fight reflection that writes tactics into a library}
+}
+
+@misc{simulationcraft2015,
+  author = {{SimulationCraft}},
+  title = {{SimulationCraft}},
+  year = {2015},
+  howpublished = {GitHub repository},
+  url = {https://github.com/simulationcraft/simc},
+  keywords = {game-ai-learning},
+  annote = {Shaped: simulation-based rotation optimisation from the server's own spell data}
+}
+
+@article{thompson1933likelihood,
+  author = {Thompson, William R.},
+  title = {On the Likelihood that One Unknown Probability Exceeds Another in View of the Evidence of Two Samples},
+  journal = {Biometrika},
+  volume = {25},
+  number = {3/4},
+  year = {1933},
+  doi = {10.2307/2332286},
+  keywords = {game-ai-learning},
+  annote = {Shaped: sampling from a posterior to choose which kind of bit a member tries}
+}
+
+@article{vinyals2019grandmaster,
+  author = {Vinyals, Oriol and Babuschkin, Igor and Czarnecki, Wojciech M. and Mathieu, Micha{\"e}l and Dudzik, Andrew and Chung, Junyoung and Choi, David H. and Powell, Richard and Ewalds, Timo and Georgiev, Petko and others},
+  title = {Grandmaster level in {StarCraft II} using multi-agent reinforcement learning},
+  journal = {Nature},
+  volume = {575},
+  number = {7782},
+  pages = {350--354},
+  year = {2019},
+  doi = {10.1038/s41586-019-1724-z},
+  keywords = {game-ai-learning},
+  annote = {Shaped: league-style self-play for an exploratory arena-training idea}
+}
+
+@article{wang2024voyager,
+  author = {Wang, Guanzhi and Xie, Yuqi and Jiang, Yunfan and Mandlekar, Ajay and Xiao, Chaowei and Zhu, Yuke and Fan, Linxi and Anandkumar, Anima},
+  title = {{Voyager}: An Open-Ended Embodied Agent with Large Language Models},
+  journal = {Transactions on Machine Learning Research},
+  year = {2024},
+  eprint = {2305.16291},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.AI},
+  url = {https://openreview.net/forum?id=ehfRiF0R3a},
+  keywords = {game-ai-learning},
+  annote = {Shaped: a planned growing skill library applied as bot commands}
+}
+
+@inproceedings{yu2022surprising,
+  author = {Yu, Chao and Velu, Akash and Vinitsky, Eugene and Gao, Jiaxuan and Wang, Yu and Bayen, Alexandre and Wu, Yi},
+  title = {The Surprising Effectiveness of {PPO} in Cooperative Multi-Agent Games},
+  booktitle = {Advances in Neural Information Processing Systems},
+  volume = {35},
+  pages = {24611--24624},
+  year = {2022},
+  eprint = {2103.01955},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.LG},
+  doi = {10.52202/068431-1787},
+  keywords = {game-ai-learning},
+  annote = {Shaped: an exploratory deep reinforcement learning idea for combat decisions}
+}
+
+% ---- Evaluation and safety ----
+
+@inproceedings{abdulhai2025consistently,
+  author = {Abdulhai, Marwa and Cheng, Ryan and Clay, Donovan and Althoff, Tim and Levine, Sergey and Jaques, Natasha},
+  title = {Consistently Simulating Human Personas with Multi-Turn Reinforcement Learning},
+  booktitle = {Advances in Neural Information Processing Systems},
+  volume = {38},
+  pages = {58923--58960},
+  year = {2025},
+  eprint = {2511.00222},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  doi = {10.52202/085713-1766},
+  keywords = {evaluation-safety},
+  annote = {Shaped: prompt-to-line and line-to-line consistency metrics for personas}
+}
+
+@misc{chen2025persona,
+  author = {Chen, Runjin and Arditi, Andy and Sleight, Henry and Evans, Owain and Lindsey, Jack},
+  title = {Persona Vectors: Monitoring and Controlling Character Traits in Language Models},
+  year = {2025},
+  eprint = {2507.21509},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  url = {https://arxiv.org/abs/2507.21509},
+  keywords = {evaluation-safety},
+  annote = {Shaped: ruled out trait vectors for persona monitoring and steering under the chosen model server}
+}
+
+@inproceedings{chen2026halumem,
+  author = {Chen, Ding and Niu, Simin and Li, Kehang and Liu, Peng and Zheng, Xiangping and Tang, Bo and Li, Xinchi and Xiong, Feiyu and Li, Zhiyu},
+  title = {{HaluMem}: Evaluating Hallucinations in Memory Systems of Agents},
+  booktitle = {Proceedings of the 2026 Conference on Empirical Methods in Natural Language Processing},
+  pages = {5073--5108},
+  year = {2026},
+  publisher = {Association for Computational Linguistics},
+  address = {Budapest, Hungary},
+  eprint = {2511.03506},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  doi = {10.18653/2026.emnlp-main.220},
+  url = {https://aclanthology.org/2026.emnlp-main.220/},
+  keywords = {evaluation-safety},
+  annote = {Shaped: validating memory writes and updates, where hallucinations enter}
+}
+
+@misc{han2025personality,
+  author = {Han, Pengrui and Kocielnik, Rafal and Song, Peiyang and Debnath, Ramit and Mobbs, Dean and Anandkumar, Anima and Alvarez, R. Michael},
+  title = {The Personality Illusion: Revealing Dissociation Between Self-Reports \& Behavior in {LLM}s},
+  year = {2025},
+  eprint = {2509.03730},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.AI},
+  url = {https://arxiv.org/abs/2509.03730},
+  note = {Accepted at ICML 2026 (OpenReview)},
+  keywords = {evaluation-safety},
+  annote = {Shaped: behavioural probes instead of personality questionnaires}
+}
+
+@inproceedings{maharana2024evaluating,
+  author = {Maharana, Adyasha and Lee, Dong-Ho and Tulyakov, Sergey and Bansal, Mohit and Barbieri, Francesco and Fang, Yuwei},
+  title = {Evaluating Very Long-Term Conversational Memory of {LLM} Agents},
+  booktitle = {Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers)},
+  pages = {13851--13870},
+  year = {2024},
+  publisher = {Association for Computational Linguistics},
+  address = {Bangkok, Thailand},
+  eprint = {2402.17753},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  doi = {10.18653/v1/2024.acl-long.747},
+  url = {https://aclanthology.org/2024.acl-long.747/},
+  keywords = {evaluation-safety},
+  annote = {Shaped: long-term conversational memory questions in the weekly quiz}
+}
+
+@inproceedings{samuel2025personagym,
+  author = {Samuel, Vinay and Zou, Henry Peng and Zhou, Yue and Chaudhari, Shreyas and Kalyan, Ashwin and Rajpurohit, Tanmay and Deshpande, Ameet and Narasimhan, Karthik R. and Murahari, Vishvak},
+  title = {{PersonaGym}: Evaluating Persona Agents and {LLM}s},
+  booktitle = {Findings of the Association for Computational Linguistics: EMNLP 2025},
+  pages = {6999--7022},
+  year = {2025},
+  publisher = {Association for Computational Linguistics},
+  address = {Suzhou, China},
+  eprint = {2407.18416},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  doi = {10.18653/v1/2025.findings-emnlp.368},
+  url = {https://aclanthology.org/2025.findings-emnlp.368/},
+  keywords = {evaluation-safety},
+  annote = {Shaped: persona probes in the weekly consistency evaluation}
+}
+
+@inproceedings{tan2024analysing,
+  author = {Tan, Daniel and Chanin, David and Lynch, Aengus and Paige, Brooks and Kanoulas, Dimitrios and Garriga-Alonso, Adri{\`a} and Kirk, Robert},
+  title = {Analysing the Generalisation and Reliability of Steering Vectors},
+  booktitle = {Advances in Neural Information Processing Systems},
+  volume = {37},
+  pages = {139179--139212},
+  year = {2024},
+  eprint = {2407.12404},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.LG},
+  doi = {10.52202/079017-4417},
+  keywords = {evaluation-safety},
+  annote = {Shaped: steering vectors judged unreliable even near their training inputs}
+}
+
+@inproceedings{williams2025targeted,
+  author = {Williams, Marcus and Carroll, Micah and Narang, Adhyyan and Weisser, Constantin and Murphy, Brendan and Dragan, Anca},
+  title = {On Targeted Manipulation and Deception when Optimizing {LLM}s for User Feedback},
+  booktitle = {The Thirteenth International Conference on Learning Representations},
+  year = {2025},
+  eprint = {2411.02306},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.LG},
+  url = {https://openreview.net/forum?id=Wf2ndb8nhf},
+  keywords = {evaluation-safety},
+  annote = {Shaped: guards against optimising on user feedback, which can teach manipulation}
+}
+
+@inproceedings{wu2025axbench,
+  author = {Wu, Zhengxuan and Arora, Aryaman and Geiger, Atticus and Wang, Zheng and Huang, Jing and Jurafsky, Dan and Manning, Christopher D. and Potts, Christopher},
+  title = {{AxBench}: Steering {LLM}s? Even Simple Baselines Outperform Sparse Autoencoders},
+  booktitle = {Proceedings of the 42nd International Conference on Machine Learning},
+  series = {Proceedings of Machine Learning Research},
+  volume = {267},
+  pages = {67035--67080},
+  year = {2025},
+  publisher = {PMLR},
+  eprint = {2501.17148},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  url = {https://proceedings.mlr.press/v267/wu25a.html},
+  keywords = {evaluation-safety},
+  annote = {Shaped: prompting outperforming steering methods for style control}
+}
+
+@inproceedings{wu2025longmemeval,
+  author = {Wu, Di and Wang, Hongwei and Yu, Wenhao and Zhang, Yuwei and Chang, Kai-Wei and Yu, Dong},
+  title = {{LongMemEval}: Benchmarking Chat Assistants on Long-Term Interactive Memory},
+  booktitle = {The Thirteenth International Conference on Learning Representations},
+  year = {2025},
+  eprint = {2410.10813},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  url = {https://openreview.net/forum?id=pZiyCaVuti},
+  keywords = {evaluation-safety},
+  annote = {Shaped: the weekly memory quiz categories, including abstention}
+}
+
+@inproceedings{zhou2024sotopia,
+  author = {Zhou, Xuhui and Zhu, Hao and Mathur, Leena and Zhang, Ruohong and Yu, Haofei and Qi, Zhengyang and Morency, Louis-Philippe and Bisk, Yonatan and Fried, Daniel and Neubig, Graham and Sap, Maarten},
+  title = {{SOTOPIA}: Interactive Evaluation for Social Intelligence in Language Agents},
+  booktitle = {The Twelfth International Conference on Learning Representations},
+  year = {2024},
+  eprint = {2310.11667},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.AI},
+  url = {https://openreview.net/forum?id=mM7VurbA4r},
+  keywords = {evaluation-safety},
+  annote = {Shaped: social evaluation dimensions, including a secret-keeping score}
+}
