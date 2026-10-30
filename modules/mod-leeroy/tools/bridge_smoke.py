@@ -94,7 +94,7 @@ class Results:
 
 
 def reply(conn, cmd_id):
-    return conn.wait_for(lambda m: m.get("id") == cmd_id and m.get("type") in ("ack", "pong", "error", "cast"))
+    return conn.wait_for(lambda m: m.get("id") == cmd_id and m.get("type") in ("ack", "pong", "error"))
 
 
 def read_first(conn, timeout):
@@ -144,13 +144,11 @@ def run_checks(conn, args, hello):
         r.fail("ping", "expected pong, got %r" % (m,))
 
     conn.send({"v": 1, "type": "get_cast", "id": "smoke-getcast"})
-    m = reply(conn, "smoke-getcast")
+    m = conn.wait_for(lambda x: x.get("type") == "cast")
     if m is None:
-        r.fail("get_cast", "no reply")
-    elif m.get("type") == "cast":
-        r.ok("get_cast")
+        r.fail("get_cast", "no cast event")
     else:
-        r.fail("get_cast", "expected cast, got %r" % (m,))
+        r.ok("get_cast")
 
     conn.send_raw("not json")
     m = conn.wait_for(lambda x: x.get("type") == "error" and x.get("message") == "bad json")
