@@ -17,25 +17,25 @@ with bots and several gameplay modules. Windows 11, MSVC, MySQL 8.4.
 | Maintenance scripts | `F:\azerothcore\scripts` |
 | Client-side patches | `F:\azerothcore\client-patches` |
 
-### Two dead copies — always confirm the drive first
+### A dead copy on Q: — always confirm the drive first
 
-**`D:\azerothcore` and `Q:\azerothcore` are both DEAD.** Each is a complete,
-convincing duplicate: same zips, its own source tree, its own `build\`, its own
-`Wow355a` client with a real character dir. The install moved D: -> F: on
-2026-09-07 and neither old copy was cleaned up.
+**`Q:\azerothcore` is DEAD.** It is a complete, convincing duplicate: same zips,
+its own source tree, its own `build\`, its own `Wow355a` client with a real
+character dir. A second one on `D:\azerothcore` (where the install lived until
+it moved to F: on 2026-09-07) was deleted by the owner on 2026-10-30.
 
-They are genuine decoys, not obvious junk — a previous session lost about an
+It is a genuine decoy, not obvious junk — a previous session lost about an
 hour to the D: tree before noticing. **Confirm you are on `F:` before touching
-any azerothcore path.** The giveaway is the build date: F: is current, the
-others stopped at 2026-09-06.
+any azerothcore path.** The giveaway is the build date: F: is current, Q:
+stopped at 2026-09-06.
 
-Do not build, read configs, or read logs from D: or Q:.
+Do not build, read configs, or read logs from Q: (or anything left on D:).
 
 ## This directory is a public git repo: `leeroy`
 
 `F:\azerothcore` is **github.com/raold/leeroy** (public, GPL-2.0, branch
 `main`). A whitelist `.gitignore` tracks only what is ours: this file, the
-README, `scripts/`, `config/`, `patches/` and `.github/`. The core repo, the
+README, `scripts/`, `config/`, `patches/`, `modules/` (mod-leeroy) and `.github/`. The core repo, the
 build tree, the client, boost, DB dumps and the zips stay out, and so do the
 local dev docs (`docs/`, `private/`).
 
@@ -234,10 +234,11 @@ Setting `SOAP.Enabled = 1` would let the script do a real graceful shutdown.
 | `mod-individual-progression` | zip (no git) | Rewrites a lot of world/character data. Gates raids per character by tier (ICC needs 16, from killing Anub'arak in ToC; tier = highest rewarded quest `66000+N`). `.ip set <name> <tier>` **ignores the name** and applies to your target or yourself, and from the console it would dereference an empty player: use it in game with no target. |
 | `mod-dungeon-clear` | jrad7/mod-dungeon-clear | git clone since 2026-10-29 (was a zip of `60f3d98`). **The autonomous tank lead**: `.dc on` (or `dc on` in party chat) inside an instance makes the group's tank bot route boss to boss over the navmesh, pull (Dynamic/Leeroy/Advanced), run scripted events (all 16 WotLK 5-mans), loot, rest and rez. Raids too: trash flow with a readiness quorum, pre-boss muster, wipe recovery; boss fights are left to the playerbots raid strategies. Companion addon: jrad7/mod-dungeon-clear-addon. It hooks playerbots without patching it (appends to the shared context registries). Ships its own `.cmake`; folder name must stay exact. Reads `PlayerbotAIConfig` members directly, so it breaks when playerbots renames them. AGPL-3.0. |
 | `mod-bg-slaveryvalley` | zip (no git) | Custom battleground, map 801 / BG id 31. Server side complete; **client patch still undistributed** — see below. |
+| `mod-leeroy` | this repo, `modules/mod-leeroy` | The guild bridge. `azerothcore-wotlk/modules/mod-leeroy` is a **junction** to `F:\azerothcore\modules\mod-leeroy`: remove it with `rmdir`, never `rm -rf` (that deletes the source through the link). Pins the cast (guild members at 80+, minus `Leeroy.HumanGuid`) via the playerbots pin API, mutes them in mod-ollama-chat, and serves NDJSON on `Leeroy.Bridge.Host`:`Leeroy.Bridge.Port` (`127.0.0.1:7878`, one mind at a time). Keys: `Leeroy.Enable`, `GuildId`, `HumanGuid`, `KeepCast`, `BringCastOnline`, `ExcludeFromOllamaChat`, `Bridge.*`. Start line in `Server.log`: `mod-leeroy: cast N members, pinned N ...`. Smoke test: `python modules/mod-leeroy/tools/bridge_smoke.py --expect-cast N` (0 pass, 1 fail, 2 no server or another mind connected); `--listen S` prints events, `--send` sends raw commands. |
 
-`mod-playerbots`, `mod-ollama-chat` and `mod-dungeon-clear` are git repos; the
-rest are zip extractions and `ac-update.sh` skips them. Updating those means
-re-downloading.
+`mod-playerbots`, `mod-ollama-chat` and `mod-dungeon-clear` are git repos and
+`mod-leeroy` lives in this one; the rest are zip extractions and
+`ac-update.sh` skips them. Updating those means re-downloading.
 
 ### Playerbots config prefix is `Playerbots.*`
 
@@ -421,10 +422,3 @@ It compiles clean and the BG registers, but in-game behaviour is unverified.
 - `ac-update.sh` only checks `<repo>/conf/*.conf.dist` for new keys, which
   misses the core's `worldserver.conf.dist` / `authserver.conf.dist` (under
   `src/server/apps/`).
-- `D:\azerothcore` still occupies ~30 GB. **Do not delete it yet: the live build
-  still reads Boost headers from it.** `build/CMakeCache.txt` has
-  `Boost_INCLUDE_DIR`, `_Boost_INCLUDE_DIR_LAST` and
-  `FIND_PACKAGE_MESSAGE_DETAILS_Boost` pointing at `D:\azerothcore\boost_1_92_0`
-  (the libraries already come from F:; both copies are Boost 1.92). Fix by setting
-  them to `F:/azerothcore/boost_1_92_0` and reconfiguring; that forces one full
-  rebuild, so it is planned alongside the first mod-leeroy build.
