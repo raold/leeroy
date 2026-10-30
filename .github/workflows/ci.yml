@@ -38,3 +38,5 @@ jobs:
           cmake -S modules/mod-leeroy/tests -B t -DCMAKE_BUILD_TYPE=Release
           cmake --build t -j "$(nproc)"
           ./t/leeroy_tests
+      - name: bridge smoke tool parses
+        run: python3 -m py_compile modules/mod-leeroy/tools/bridge_smoke.py
