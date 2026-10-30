@@ -1,3 +1,5 @@
+# This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
+
 cmake_minimum_required(VERSION 3.16)
 project(leeroy_tests CXX)
 

@@ -330,7 +330,10 @@ puts the ghost at the graveyard outside the instance, so the pin revives it
 there; `LeaveFarAwayAction` still makes non-leader members leave at
 `death count > 4` with no client master (also on a level gap > 4 or distance
 from the leader); random-bot BG, LFG and Raid Browser selection still apply to
-pins.
+pins. Pinned bots also skip playerbots' periodic `Refresh`, which clears inventory but
+is the only routine top-up of ammo, reagents and potions, so over long uptimes
+cast hunters run out of ammo and casters out of reagents. A master can whisper
+`maintenance` to bots in their group; a pin-safe top-up is planned for P1d.
 
 Commits here never carry a `Co-Authored-By` or other attribution trailer.
 

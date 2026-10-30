@@ -1,3 +1,5 @@
+# This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
+
 # Included from modules/CMakeLists.txt after the `modules` target exists.
 if (TARGET modules)
     # SYSTEM keeps the vendored json.hpp out of -Werror.

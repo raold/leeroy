@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 """Smoke test for the mod-leeroy bridge (NDJSON over 127.0.0.1:7878).
 
 Exit codes: 0 all checks passed, 1 a check failed, 2 could not connect or
