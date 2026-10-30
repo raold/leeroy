@@ -221,11 +221,11 @@ void DecodeFields(json const& msg, Command& cmd, std::string& error)
         case CommandType::AddFriend:
             r.Guid("guid", true, cmd.guid);
             r.Str("note", false, false, cmd.note);
-            r.Str("message", false, false, cmd.message);
             break;
         case CommandType::Afk:
             r.Guid("guid", true, cmd.guid);
             r.Bool("on", cmd.on);
+            r.Str("message", false, false, cmd.message);
             break;
         case CommandType::Ping:
         case CommandType::GetCast:

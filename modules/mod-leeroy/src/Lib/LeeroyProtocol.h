@@ -102,35 +102,35 @@ enum class BgWinner : std::uint8_t { Horde, Alliance, None };
 
 struct ChatEvent
 {
-    Channel channel;
-    std::uint32_t fromGuid;
+    Channel channel = Channel::Say;
+    std::uint32_t fromGuid = 0;
     std::string fromName;
-    std::uint32_t toGuid;
+    std::uint32_t toGuid = 0;
     std::string text;
-    std::uint32_t map;
-    std::uint32_t zone;
+    std::uint32_t map = 0;
+    std::uint32_t zone = 0;
     bool viaBridge = false;
 };
 
 struct BossEvent
 {
-    std::uint32_t map, instanceId, bossId;
+    std::uint32_t map = 0, instanceId = 0, bossId = 0;
     std::string bossName;
-    BossState state;
+    BossState state = BossState::Engaged;
     std::vector<std::uint32_t> members;
 };
 
 struct LootItem
 {
-    std::uint32_t itemId;
+    std::uint32_t itemId = 0;
     std::string name;
-    std::uint8_t quality;
-    std::uint32_t index;
+    std::uint8_t quality = 0;
+    std::uint32_t index = 0;
 };
 
 struct LootDropEvent
 {
-    std::uint32_t map, instanceId, sourceEntry;
+    std::uint32_t map = 0, instanceId = 0, sourceEntry = 0;
     std::vector<LootItem> items;
 };
 

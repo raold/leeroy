@@ -14,13 +14,13 @@ inline constexpr std::uint8_t kCastLevel = 80;
 
 struct CastMember
 {
-    std::uint32_t guid;
+    std::uint32_t guid = 0;
     std::string name;
-    std::uint8_t race, cls, gender, level, rank;
-    bool online;
-    std::int32_t map;      // -1 when offline
-    std::uint32_t zone;
-    std::int32_t specTab;  // -1 when offline
+    std::uint8_t race = 0, cls = 0, gender = 0, level = 0, rank = 0;
+    bool online = false;
+    std::int32_t map = -1;     // -1 when offline
+    std::uint32_t zone = 0;
+    std::int32_t specTab = -1; // -1 when offline
 };
 
 bool IsCastEligible(std::uint32_t guid, std::uint8_t level, std::uint32_t humanGuid);

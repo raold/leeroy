@@ -106,6 +106,12 @@ LEEROY_TEST(Decode_OtherCommands)
     CHECK(e.command); CHECK_EQ(e.command->targetGuid, 0u);
     auto f = DecodeCommand(R"({"v":1,"type":"add_friend","id":"f","guid":3})");
     CHECK(f.command); CHECK_EQ(f.command->note, "");
+    auto fm = DecodeCommand(R"({"v":1,"type":"add_friend","id":"f","guid":3,"message":"hi"})");
+    CHECK(fm.command); CHECK_EQ(fm.command->message, "");
+    auto am = DecodeCommand(R"({"v":1,"type":"afk","id":"a","guid":3,"on":true,"message":"brb"})");
+    CHECK(am.command); CHECK_EQ(am.command->message, "brb");
+    CHECK_EQ(DecodeCommand(R"({"v":1,"type":"afk","id":"a","guid":3,"on":true,"message":5})").error,
+        "bad field: message");
     CHECK(DecodeCommand(R"({"v":1,"type":"set_motd","id":"m","text":""})").command);
 }
 
