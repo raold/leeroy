@@ -7,7 +7,7 @@ name: build
 on:
   push:
     branches: [main]
-    paths: ['patches/**', '.github/workflows/build.yml']
+    paths: ['patches/**', 'modules/**', '.github/workflows/build.yml']
   schedule:
     - cron: '41 7 * * 0'
   workflow_dispatch:
@@ -45,6 +45,9 @@ jobs:
           git clone --filter=blob:none --branch master https://github.com/mod-playerbots/mod-playerbots.git core/modules/mod-playerbots
           git -C core/modules/mod-playerbots -c user.name=leeroy-ci -c user.email=ci@invalid \
             am --3way "$GITHUB_WORKSPACE"/leeroy/patches/mod-playerbots/*.patch
+
+      - name: Add mod-leeroy
+        run: cp -r "$GITHUB_WORKSPACE/leeroy/modules/mod-leeroy" core/modules/mod-leeroy
 
       - uses: actions/cache@v4
         with:

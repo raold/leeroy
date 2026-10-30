@@ -10,6 +10,7 @@
 !/README.md
 !/LICENSE
 !/scripts/
+!/modules/
 !/config/
 !/patches/
 # docs/ (design, research) and private/ are local dev docs for the owner and
@@ -17,3 +18,4 @@
 
 # ac-update.sh rollback state, local to this machine.
 /scripts/.last-update
+__pycache__/

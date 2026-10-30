@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Reconfigure CMake and build worldserver + authserver.
 #
-# Usage: ac-build.sh [--no-configure]
+# Usage: ac-build.sh [--no-configure | --preflight]
 #   AC_JOBS=N   override parallelism (default 16)
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 DO_CONFIGURE=1
 [ "${1:-}" = "--no-configure" ] && DO_CONFIGURE=0
+DO_PREFLIGHT_ONLY=0
+[ "${1:-}" = "--preflight" ] && DO_PREFLIGHT_ONLY=1
 
 # ---------------------------------------------------------------------------
 # Preflight: module folder names.
@@ -25,6 +27,9 @@ DO_CONFIGURE=1
 # ---------------------------------------------------------------------------
 preflight_modules() {
     local bad=0 d name cmake_file sym expected
+    if [ -d "$AC_ROOT/modules/mod-leeroy" ] && [ ! -e "$AC_MODULES/mod-leeroy" ]; then
+        die "mod-leeroy is not linked into the core. Run (PowerShell): New-Item -ItemType Junction -Path $AC_MODULES\mod-leeroy -Target $AC_ROOT\modules\mod-leeroy"
+    fi
     for d in "$AC_MODULES"/*/; do
         d="${d%/}"; name="$(basename "$d")"
         [ "$name" = "CMakeFiles" ] && continue
@@ -52,6 +57,7 @@ preflight_modules() {
 }
 
 preflight_modules
+[ "$DO_PREFLIGHT_ONLY" -eq 1 ] && exit 0
 
 [ -d "$AC_BUILD" ] || die "build dir not found: $AC_BUILD"
 

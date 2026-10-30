@@ -14,7 +14,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Package
-        run: tar -czf "leeroy-${GITHUB_REF_NAME}.tar.gz" patches config scripts README.md LICENSE
+        run: tar -czf "leeroy-${GITHUB_REF_NAME}.tar.gz" patches modules config scripts README.md LICENSE
 
       - name: Create the release
         env:

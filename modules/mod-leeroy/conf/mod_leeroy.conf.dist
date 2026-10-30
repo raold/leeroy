@@ -1,0 +1,29 @@
+[worldserver]
+
+# mod-leeroy configuration.
+# Leeroy.Bridge.Host and Leeroy.Bridge.Port need a worldserver restart;
+# every other key applies on `.reload config`.
+
+# Master switch for the module (1 = on, 0 = off).
+Leeroy.Enable = 1
+
+# Guild id of the cast's guild.
+Leeroy.GuildId = 21
+
+# Low GUID of the human's character.
+Leeroy.HumanGuid = 1
+
+# Bridge address. Loopback only: any other host refuses to start.
+Leeroy.Bridge.Host = "127.0.0.1"
+
+# Bridge TCP port (1-65535).
+Leeroy.Bridge.Port = 7878
+
+# Exempt the cast from randomize, refresh, teleport and revive-teleport.
+Leeroy.KeepCast = 1
+
+# Pin every cast member as an online random bot.
+Leeroy.BringCastOnline = 1
+
+# Stop mod-ollama-chat from voicing cast members.
+Leeroy.ExcludeFromOllamaChat = 1
