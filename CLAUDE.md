@@ -401,23 +401,32 @@ was empty). The Ollama tray app's own "Model location" setting
 
 Map 801, battleground id 31, levels 71-80, 5-10 per team.
 
-**Server side is done** (2026-10-06). `server-data.zip` from the module's 1.0
-release was unpacked over `Data/` — 12 DBCs, 6 maps, 7 mmaps, 33 vmaps. The DBC
-overwrite is strictly additive; record counts went Spell 49839→49842,
-Map 135→136, BattlemasterList 13→14, WorldSafeLocs 685→692, AreaTable unchanged.
-The large file-size jump is localization strings (the release ships all 7
-locales; the local extraction was enUS-only), not bulk content. The pre-install
-DBC folder is backed up next to it as `Data/dbc.bak-20261006_142211`.
+**Server side.** `server-data.zip` from the module's 1.0 release was unpacked over
+`Data/` on 2026-10-06: 12 DBCs, 6 maps, 7 mmaps, 33 vmaps. **The release's DBCs are
+damaged**: every float is truncated to an integer (Spell.dbc spell-power coefficients,
+chain-jump multipliers, per-level scaling; WorldStateUI strings), and its AreaTable
+lacks the BG's areas 5000-5004. The record-count check done then missed it. From
+10-06 to 10-30 about a thousand spells had no spell power on the server (Blizzard
+0.119 -> 0, Chain Lightning 0.571 -> 0). **Repaired 2026-10-30**: the 12 server DBCs
+are now the stock files (`Data/dbc.bak-20261006_142211`) plus exactly the mod's new
+records (BattlemasterList 31, Map 801, AreaTable 5000-5004, WorldSafeLocs, Spell
+85000-85002 and the rest). The damaged set is backed up as
+`Data/dbc.bak-pre-repair-20261030_112700`. **Never copy the release's DBCs again.**
 
-**Client side is NOT done.** Each player needs `patch-S.MPQ` (staged at
-`F:\azerothcore\client-patches\patch-S.MPQ`) copied into their
-`WoW/Data/<locale>/` as `patch-<locale>-4.MPQ`. Supported locales: enUS, enGB,
-ruRU, frFR, deDE, esES, esMX.
-
-The README also tells players to install a **modified `wow.exe`** from
-third-party file hosts so the client will load an unsigned custom patch. That is
-a cracked copy of Blizzard's binary; it was deliberately not fetched. That part
-is yours to decide and carry out.
+**Client side, no modified `wow.exe`.** The README wants players to install a cracked
+`wow.exe` (from file hosts) so the client accepts the patch's modified FrameXML; it
+was deliberately not used. Instead:
+- `Wow355a\Data\enUS\patch-enUS-4.MPQ`: the release's patch without
+  `Interface\FrameXML` and with the repaired DBCs. Built with StormLib v9.40
+  (`F:zerothcore	ools\`, untracked; scripts in `tools\slaveryvalley-scripts\`).
+  The untouched release patch is `client-patches\patch-S.MPQ`; a build with its
+  damaged DBCs is `client-patches\patch-enUS-4.shipped-dbc.MPQ`. Number future
+  custom patches 5 or higher.
+- `Wow355a\Interface\AddOns\SlaveryValleyUI\`: replays the only two FrameXML
+  changes (the PvP-tab background art for BG 31 and a 1-pixel width). Derived from
+  Blizzard code, so it stays local (staged in `client-patches\SlaveryValleyUI\`).
+- Queue from the PvP frame (H > Battlegrounds); the module ships no battlemaster NPC.
+  `.debug bg` starts an under-filled match.
 
 The repo (README, images, `client-side/` source assets) is kept at
 `F:\azerothcore\client-patches\mod-bg-slaveryvalley-repo`.
@@ -427,5 +436,5 @@ It compiles clean and the BG registers, but in-game behaviour is unverified.
 
 ## Outstanding
 
-- `mod-bg-slaveryvalley` server data + client patch (above).
+- `mod-bg-slaveryvalley`: in-game behaviour still unverified (above).
 - `mod-bg-slaveryvalley` has no update path (see the Modules table).
