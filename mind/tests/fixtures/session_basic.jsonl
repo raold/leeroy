@@ -1,0 +1,4 @@
+{"type":"hello","server":"mod-leeroy","version":"0.1.0","guild_id":1,"human_guid":0}
+{"type":"cast","members":[{"guid":101,"name":"Arkon","race":2,"class":1,"gender":0,"level":80,"rank":3,"online":true,"map":0,"zone":1519,"spec_tab":0},{"guid":102,"name":"Belra","race":8,"class":5,"gender":1,"level":80,"rank":3,"online":true,"map":0,"zone":1519,"spec_tab":1},{"guid":103,"name":"Coros","race":5,"class":8,"gender":0,"level":80,"rank":3,"online":true,"map":0,"zone":1519,"spec_tab":0},{"guid":104,"name":"Dunna","race":6,"class":11,"gender":1,"level":80,"rank":3,"online":true,"map":0,"zone":1519,"spec_tab":2},{"guid":105,"name":"Ebbo","race":10,"class":4,"gender":0,"level":80,"rank":3,"online":true,"map":0,"zone":1519,"spec_tab":1}]}
+{"type":"login","guid":1,"human":true}
+{"type":"chat","channel":"guild","from_guid":1,"from_name":"Testmage","to_guid":0,"text":"evening all, rough day at work","map":0,"zone":1519}

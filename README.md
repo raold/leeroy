@@ -27,6 +27,7 @@ Icecrown the way you once followed a good raid lead. Not built yet.
 | `patches/mod-playerbots/` | Local playerbots commits, as `git format-patch` output |
 | `patches/mod-ollama-chat/` | Local mod-ollama-chat commits, same format |
 | `modules/mod-leeroy/` | The guild module: a local bridge (NDJSON over `127.0.0.1:7878`) that lets an outside "mind" see the guild and speak for its members, with unit tests and a smoke test in `tools/` |
+| `mind/` | The mind: a Python service (`python -m leeroy_mind run`) that gives the guild's members personas, memories and their voice in guild chat, through the bridge and a local LLM (Ollama) |
 | `CLAUDE.md` | Operating notes: paths, build traps, module quirks, what each patch does |
 
 ## Patches
@@ -64,7 +65,7 @@ They assume this repo is the install root, with the core checked out in
 
 | Workflow | When | What |
 |---|---|---|
-| `ci` | every push | shellcheck on `scripts/`, gitleaks over the full history, mod-leeroy unit tests |
+| `ci` | every push | shellcheck on `scripts/`, gitleaks over the full history, mod-leeroy unit tests, the mind's pytest suite |
 | `patches` | patch changes, nightly | applies the patches to the newest upstream mod-playerbots (plus its codestyle check) and mod-ollama-chat; a nightly failure opens a `patch-drift` issue |
 | `build` | patch or module changes, weekly | compiles the fork core with the patched playerbots and mod-leeroy (clang, `-Werror`, ccache) |
 | `release` | `v*` tag | GitHub release with the patches, modules, configs and scripts |

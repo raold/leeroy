@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "leeroy-mind"
+version = "0.1.0"
+description = "The guild's mind: personas, memory and talk for mod-leeroy"
+requires-python = ">=3.14"
+license = "GPL-2.0-only"
+dependencies = ["sqlite-vec==0.1.9"]
+
+[project.optional-dependencies]
+test = ["pytest>=9.1,<10"]
+
+[tool.setuptools.packages.find]
+include = ["leeroy_mind*"]
+
+[tool.setuptools.package-data]
+"leeroy_mind.storage" = ["migrations/*.sql"]
+"leeroy_mind.library" = ["migrations/*.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-m", "not ollama and not live and not mysql"]
+markers = [
+  "ollama: needs a running Ollama with the configured models",
+  "live: needs the real mod-leeroy bridge (P1a) and a running worldserver",
+  "mysql: reads acore_characters through mysql.exe",
+]

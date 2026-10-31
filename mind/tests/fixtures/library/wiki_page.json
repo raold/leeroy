@@ -1,0 +1,40 @@
+{
+ "batchcomplete": true,
+ "query": {
+  "pages": [
+   {
+    "pageid": 4242,
+    "ns": 0,
+    "title": "Sindragosa",
+    "revisions": [
+     {
+      "revid": 777,
+      "parentid": 776,
+      "timestamp": "2026-05-01T12:00:00Z",
+      "slots": {
+       "main": {
+        "contentmodel": "wikitext",
+        "contentformat": "text/x-wiki",
+        "content": "{{Npcbox\n|name=Sindragosa\n|title=Queen of the Frostbrood\n|level=83 {{Boss}}\n|location=[[Icecrown Citadel (instance)|Icecrown Citadel]]\n}}\n{{for|the encounter|Sindragosa (tactics)}}\n'''Sindragosa''' was the first consort of [[Malygos]] in the [[blue dragonflight|blue flight]]. After she fell in [[Northrend]], the [[Lich King]] raised her as a [[frost wyrm]].<ref>A made-up citation for the fixture.</ref> She guards the upper spire of [[Icecrown Citadel]] and answers only to her master.\n\n== Biography ==\n=== Early days ===\nLong before the war she lived beside the [[Nexus]]. Her flight respected her, and other dragons feared her temper.\n\n=== Wrath of the Lich King ===\nWhen [[Highlord Tirion Fordring|Tirion]] led the [[Ashen Verdict]] into the citadel, heroes climbed to the [[Frost Queen's Lair]] to face her. She fell before the champions reached the [[Frozen Throne]].\n<!-- an editor note that must vanish -->\n\n=== Cataclysm ===\nThis later-era paragraph must never reach the library.\n\n=== The Shadowlands ===\nNor must this one.\n\n== Strategy ==\n* Keep stacks of [[Unchained Magic]] low.\n* Spread out when she casts {{spell|Blistering Cold}}.\nThe tank faces her away from the raid. In Cataclysm, the encounter was made easier. Players killed her many times. The fight was retuned in patch 4.0.1 for level 85.\n\n== Notes ==\n{| class=\"wikitable\"\n! Ability !! Effect\n|-\n| Frost Aura || Damages everyone nearby\n|}\nHer name means ''frost dragon'' in an old tongue.&nbsp;It appears in the books.\n\n== References ==\n<references/>\n\n[[Category:Bosses]]\n[[Category:Icecrown Citadel NPCs]]\n"
+       }
+      }
+     }
+    ],
+    "categories": [
+     {
+      "ns": 14,
+      "title": "Category:Added in patch 3.3.0"
+     },
+     {
+      "ns": 14,
+      "title": "Category:Bosses"
+     },
+     {
+      "ns": 14,
+      "title": "Category:Icecrown Citadel NPCs"
+     }
+    ]
+   }
+  ]
+ }
+}

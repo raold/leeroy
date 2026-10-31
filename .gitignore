@@ -14,6 +14,10 @@
 !/modules/
 !/config/
 !/patches/
+!/mind/
+/mind/.venv/
+/mind/.pytest_cache/
+/mind/*.egg-info/
 # docs/ (design, research) and private/ are local dev docs for the owner and
 # Claude only: deliberately not whitelisted, never pushed.
 

@@ -35,7 +35,8 @@ Do not build, read configs, or read logs from Q: (or anything left on D:).
 
 `F:\azerothcore` is **github.com/raold/leeroy** (public, GPL-2.0, branch
 `main`). A whitelist `.gitignore` tracks only what is ours: this file, the
-README, `scripts/`, `config/`, `patches/`, `modules/` (mod-leeroy) and `.github/`. The core repo, the
+README, `scripts/`, `config/`, `patches/`, `modules/` (mod-leeroy), `mind/` (the
+mind service) and `.github/`. The core repo, the
 build tree, the client, boost, DB dumps and the zips stay out, and so do the
 local dev docs (`docs/`, `private/`).
 
@@ -433,6 +434,41 @@ The repo (README, images, `client-side/` source assets) is kept at
 
 The README targets an AzerothCore revision from 2020 while this core is current.
 It compiles clean and the BG registers, but in-game behaviour is unverified.
+
+## The mind service (`leeroy_mind`)
+
+`mind/` is the Python service that speaks for the guild through mod-leeroy's
+bridge, on the local Ollama. It has its own venv in `mind\.venv`; run it from
+`F:\azerothcore\mind` in Git Bash inside Windows Terminal (in a standalone
+mintty window Ctrl+C may not reach python):
+
+```bash
+D=F:/azerothcore/mind-data                                  # pass --data-dir "$D" to every command
+.venv/Scripts/python -m leeroy_mind run --data-dir "$D"     # the service; Ctrl+C once stops it cleanly
+.venv/Scripts/python -m leeroy_mind doctor --data-dir "$D"  # one ok/FAIL/note line per check
+.venv/Scripts/python -m leeroy_mind db --data-dir "$D" migrate   # snapshot, then the code's schema
+.venv/Scripts/python -m leeroy_mind personas --data-dir "$D" card <guid>   # also export, import, mix
+.venv/Scripts/python -m leeroy_mind.library --data-dir "$D" stats   # the game library: build, search
+.venv/Scripts/python -m pytest -q                           # the unit tests
+.venv/Scripts/python -m pytest -m ollama                    # optional: also -m live, -m mysql
+```
+
+- `mind-data\` (next to `mind\`) holds all the personas, memories, prompts and
+  logs: `mind.toml`, `mind.db`, `library.db` (the game library the mind reads,
+  read-only, for facts in its answers), `personas\`, `prompts\`,
+  `logs\mind.log` and `snapshots\`. It is never committed.
+- Without `--data-dir` the data dir follows the code's folder, so a run from a
+  worktree would not use the real one (`run` and `doctor` refuse an empty one).
+- `run` takes a snapshot before it starts; each label keeps its newest 10
+  (`mind-<label>-<stamp>.db`), so copy one you must keep to another name. After
+  pulling new code, run `db migrate` before `doctor`.
+- Explicit prompt wording lives only in `mind-data\prompts\` overlays; the
+  built-in prompts in the repo stay non-explicit.
+- `pytest -m ollama|live|mysql` runs the optional checks against Ollama, the
+  running bridge and MySQL; the default run deselects them. `-m live` takes the
+  events the bridge queued for the mind, so never run it while they matter.
+- Do not run `personas generate`/`seed` or a library build while the mind is
+  live: they load another large model next to the live one and evict it.
 
 ## Outstanding
 
