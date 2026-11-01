@@ -1,6 +1,7 @@
 """Real serve(), extension and client; synthetic cast, FakeBridge and FakeLLM only."""
 import asyncio
 import json
+import random
 import sys
 from dataclasses import asdict
 
@@ -63,6 +64,7 @@ def test_mind_leg(tmp_path, monkeypatch, live_guard):
             f'[bridge]\nhost="127.0.0.1"\nport={bridge_port}\n'
             f'[ollama]\nurl="http://127.0.0.1:{ollama_port}"\n'
             '[talk]\nchattiness=0\n[voice]\nenabled=true\nautostart=false\n'
+            'hot_mic_per_month=0\nelsewhere_lines_per_10min=0\n'
             f'host="127.0.0.1"\nport={port}\non_comms_raider=1.0\non_comms_social=1.0\n',
             encoding="utf-8")
         cfg = load_config(root / "mind.toml")
@@ -85,6 +87,9 @@ def test_mind_leg(tmp_path, monkeypatch, live_guard):
             assert not hasattr(app, "nightly") and not hasattr(app, "guild")
             assert app.data_dir == root and app.voice.cfg.autostart is False
             assert app.cfg.bridge.port == bridge_port and app.voice.cfg.port == port
+            # Production remains random; this transport rehearsal must not roll an initial
+            # penalty visit before the other process checks the six-seat snapshot.
+            app.voice.movement.rng = random.Random(0)
             original = app.voice.client._on_message
 
             async def observe(message):
@@ -103,6 +108,24 @@ def test_mind_leg(tmp_path, monkeypatch, live_guard):
                         "real voice greeting and healthy status")
             await stage("snapshot-checked")
             assert app.voice.rooms.where == {g: "guild_hall" for g in (1, *TEST_CAST)}
+
+            # Real bridge events drive the room policy and its Moved messages. A party uses
+            # raid comms too, AFK returns to it, and disband returns the party home.
+            await bridge.push({"type": "group", "leader_guid": 102, "raid": False,
+                               "members": [1, 101, 102]})
+            await until(lambda: all(app.voice.rooms.where[g] == "raid" for g in (1, 101, 102)),
+                        "party room drag")
+            await bridge.push({"type": "afk", "guid": 101, "on": True})
+            await until(lambda: app.voice.rooms.where[101] == "afk", "member AFK room")
+            await bridge.push({"type": "afk", "guid": 101, "on": False})
+            await until(lambda: app.voice.rooms.where[101] == "raid", "member AFK return")
+            await bridge.push({"type": "group", "leader_guid": 0, "raid": False, "members": []})
+            await until(lambda: all(app.voice.rooms.where[g] == "guild_hall" for g in (1, 101, 102)),
+                        "party disband room return")
+            await bridge.push({"type": "logout", "guid": 105, "human": False})
+            await until(lambda: 105 not in app.voice.rooms.where, "member leaves comms")
+            await bridge.push({"type": "login", "guid": 105, "human": False})
+            await until(lambda: app.voice.rooms.where.get(105) == "guild_hall", "member returns to comms")
 
             def lines():
                 return app.store.conn.execute("SELECT * FROM voice_line ORDER BY rowid").fetchall()
@@ -162,6 +185,7 @@ def test_mind_leg(tmp_path, monkeypatch, live_guard):
                            played_states=first_states, logout_state=cut["state"],
                            logout_reason=cut["reason"], transcripts=1, ui_joins=2,
                            typed_fallback=True, ollama_connections=0, guard_hits=0,
+                           party_drag=True, afk_return=True, member_relogin=True,
                            nightly_extension="absent on inherited branch")
         finally:
             if app is not None:

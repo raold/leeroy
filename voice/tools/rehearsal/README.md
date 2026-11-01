@@ -32,6 +32,8 @@ The assertions cover:
 
 - Online room/spec snapshots and actual fake audio playback, with `Played`
   acknowledgements persisted by the mind.
+- Party room assignment, AFK return, disband, and member logout/relogin through
+  real bridge events and both services.
 - UI room changes through both real services and push-to-talk transcription
   from a fake microphone/recognizer into the mind's database.
 - Logout during playback and PTT: cut acknowledgement, stale transcript
@@ -44,3 +46,7 @@ copied/live database migration, real model quality, physical audio, GPU admissio
 WoW focus/elevation or Windows communications ducking. The mind leg explicitly
 checks that the inherited branch has no nightly/guild extensions; review that
 setup when those extensions land.
+
+Random hot-mic and elsewhere conversation policies are disabled in this transport
+rehearsal, and movement uses a fixed random seed. Their policy and send-time
+validation are covered by the mind's unit suite.

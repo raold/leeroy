@@ -142,7 +142,7 @@ def test_stops_at_first_silent_turn(vrig):
     assert len(vrig.rows("SELECT * FROM utterance")) == 1
 
 
-@pytest.mark.parametrize("change", ["down", "speaker_moves", "human_joins"])
+@pytest.mark.parametrize("change", ["down", "speaker_moves", "human_joins", "listeners_leave"])
 def test_scene_drops_if_room_changes_during_generation(vrig, change):
     v = vrig
     policy = setup(v)
@@ -154,6 +154,9 @@ def test_scene_drops_if_room_changes_during_generation(vrig, change):
                 v.fake.greeted = False
             elif change == "speaker_moves":
                 v.seat(turn.speaker, "guild_hall")
+            elif change == "listeners_leave":
+                for guid in v.ext.on_comms - {turn.speaker}:
+                    v.seat(guid, "guild_hall")
             else:
                 v.him("smoke_room")
             return "the kettle finally boiled"

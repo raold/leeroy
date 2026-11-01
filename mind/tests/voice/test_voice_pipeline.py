@@ -439,6 +439,7 @@ def test_other_room_unheard(vrig):
     hall(v)
     v.seat(104, "smoke_room")
     v.seat(105, "smoke_room")
+    v.ext.on_comms = {104, 105}  # an elsewhere conversation rechecks its enrolled listeners
     out = run(said(v, opener(104, "voice:smoke_room"), why="elsewhere:open", elsewhere=True))
     assert out and not v.speaks() and not v.sent.says()
     (row,) = voice_lines(v)
@@ -1067,7 +1068,7 @@ def test_raid_and_cancel_forwarded(vapp):
         assert vapp.sent == [wire.Raid("wipe_debrief", 102)]
         vapp.sent.clear()
         await vapp.app.handle(Logout(ts, 101, False))
-        assert vapp.sent == [wire.Cancel(guid=101)]
+        assert vapp.sent == [wire.Moved(101, ""), wire.Cancel(guid=101)]
     run(go())
 
 

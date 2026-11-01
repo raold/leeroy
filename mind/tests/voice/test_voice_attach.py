@@ -324,3 +324,26 @@ def test_policy_failure_is_contained(tmp_path, clock, caplog):
     run(app.voice._policy_tick("elsewhere", SimpleNamespace(tick=fail), clock.now()))
     assert "voice_handler_failed" in caplog.text
     assert "ValueError" in caplog.text and "private words" not in caplog.text
+
+
+def test_real_events_drive_group_afk_and_member_rejoin(vapp):
+    from leeroy_mind.protocol import AfkEvent, Group, Login, Logout
+    from voice.test_voice_movement import ready
+
+    async def check():
+        await ready(vapp)
+        await vapp.app.handle(Group(vapp._ts(), 102, True, (1, 101, 102)))
+        assert vapp.ext.rooms.where[1] == vapp.ext.rooms.where[101] == "raid"
+        await vapp.app.handle(AfkEvent(vapp._ts(), 101, True))
+        assert vapp.ext.rooms.where[101] == "afk"
+        await vapp.app.handle(AfkEvent(vapp._ts(), 101, False))
+        assert vapp.ext.rooms.where[101] == "raid"
+        await vapp.app.handle(Logout(vapp._ts(), 101, False))
+        assert 101 not in vapp.ext.rooms.where and 101 not in vapp.ext.on_comms
+        assert not vapp.rows("SELECT 1 FROM voice_presence WHERE guid=101 AND until IS NULL")
+        await vapp.app.handle(Login(vapp._ts(), 101, False))
+        assert vapp.ext.rooms.where[101] == "raid" and 101 in vapp.ext.on_comms
+        await vapp.app.handle(Group(vapp._ts(), 0, False, ()))
+        assert vapp.ext.rooms.where[101] == "guild_hall"
+        assert vapp.rows("SELECT room FROM voice_presence WHERE guid=101 AND until IS NULL")[0][0] == "guild_hall"
+    run(check())

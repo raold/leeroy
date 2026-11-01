@@ -36,3 +36,9 @@ def test_speak_template_defaults_false():
 def test_rejects_bad_word():
     with pytest.raises(WireError):
         parse(b'{"v":1,"type":"raid","ts":1,"phase":"nope","lead":0}')
+
+
+def test_member_leaving_comms_has_an_explicit_empty_channel():
+    line = b'{"v":1,"type":"moved","ts":1,"guid":101,"channel":"","by":0}\n'
+    assert parse(line) == wire.Moved(101, "")
+    assert encode(wire.Moved(101, ""), 1) == line
