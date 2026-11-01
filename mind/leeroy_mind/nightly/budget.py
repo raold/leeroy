@@ -2,8 +2,9 @@
 the reflection model, how many units each stage will run tonight, the slot-seconds the night
 has before 06:00, and the fixed order in which optional work is cut while the estimate is over.
 
-A unit's planning cost includes its generating and judging calls. Life and WoW-life each
-make two JSON calls when accepted, even though their fiction judge only checks invariants.
+A unit's planning cost includes its generating and judging calls. Encounters, life and
+WoW-life each make two JSON calls when accepted, even though their fiction judge only
+checks invariants.
 The per-call planning costs are the memo's upper ends. Once a stage has made calls on 3
 nights, its measured cost per call replaces them
 (measured_call_s), and the decide calls of a reflect unit with candidates and the core judge's
@@ -53,7 +54,7 @@ UNIT_CALLS: dict[str, dict[str, float]] = {
     "supersede": {"json": SUPERSEDE_CALLS},
     CORE_JUDGE: {"json": CORE_JUDGE_CALLS},    # a reflecting member's core judgements: 10 s
     "notes": {"json": 2.0},                    # the call and its own judge batch of one: 40 s
-    "encounters": {"json": 1.1},
+    "encounters": {"json": 2},                # scene generation and one judge batch
     "confide": {"json": 1.1},
     "life": {"json": 2},                      # generation and its invariant judge
     "wowlife": {"json": 2},                   # generation and its invariant judge
