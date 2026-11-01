@@ -236,8 +236,8 @@ def undo(store: Store, ledger_id: int, *, now: float, personas=None) -> bool:
     - note_dropped, note_rolled_back: the note is put back through add_note (a note this pushes
       out is ledgered note_dropped), unless it is there already;
     - drift_flag (Task 22): its review_queue row is resolved;
-    - stance_band: Task 12's branch (attraction.restore_stance, with `personas`); until then
-      nothing is reversed. An undo row is never undone.
+    - stance_band: restore the prior stance and its exact score; first sights and hand moves
+      are not reversed. An undo row is never undone.
     What was reversed writes an undo row with ref = ledger_id. False when the row is not there,
     was undone already, or nothing is left to reverse; then nothing is written."""
     with store.transaction():
@@ -254,9 +254,14 @@ def undo(store: Store, ledger_id: int, *, now: float, personas=None) -> bool:
             done = _put_back(store, row, now)
         elif kind == "drift_flag":
             done = _resolve(store, row["ref"], now)
-        else:  # stance_band until Task 12 adds its branch here; an undo row
+        elif kind == "stance_band":
+            from leeroy_mind.nightly.attraction import restore_stance
+            done = restore_stance(store, row, now=now)
+        else:
             done = False
         if done:
             ledger_add(store, guid=row["guid"], kind="undo", text=f"undid {kind}: {row['text']}",
                        evidence=json.loads(row["evidence"]), ref=ledger_id, now=now)
-        return done
+    if done and kind == "stance_band" and personas is not None:
+        personas.invalidate(row["guid"])
+    return done
