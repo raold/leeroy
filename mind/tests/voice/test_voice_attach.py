@@ -102,6 +102,9 @@ def spawner(monkeypatch):
 
 def test_autostart_once(tmp_path, clock, voice_data, fake_repo, monkeypatch):
     calls = spawner(monkeypatch)
+    # This mocks a Windows launch, including constants absent from subprocess on Linux.
+    monkeypatch.setattr(subprocess, "DETACHED_PROCESS", 1, raising=False)
+    monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 2, raising=False)
     pythonw = fake_repo / "voice" / ".venv" / "Scripts" / "pythonw.exe"
     pythonw.parent.mkdir(parents=True)
     pythonw.write_bytes(b"")
