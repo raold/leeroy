@@ -12,6 +12,8 @@ What takes time runs off it, and posts its result back:
   member), one member at a time, so neither runs under the other (Task 5's review). It runs
   beside the synthesis thread: as one job it would hold a p0 past its 3 s;
 - one recognizer thread, a press at a time.
+- optional CPU Turbo has one separate synthesis slot, with no waiting CPU backlog;
+  urgent and overflow work continues through the ordinary synthesis thread.
 
 A line: `speak` is refused with `played dropped` when he is offline, she has no voice, he muted
 her, or nothing is left to say; the scheduler refuses the rest (not_his_channel, raid, expired,
@@ -100,6 +102,12 @@ DUCK_HOLD_S = 0.4  # WoW comes back this long after the last voice ends
 IDLE_EXIT_S = 600.0  # no mind this long ends a session; with no session too, the service (M24)
 OUTPUT_LINGER_S = 0.3  # the output stays open this long after logout: the fade plays out
 CLIP_WAIT_S = 1.0  # a clip not whole this long after its Release is given up
+CPU_START_RAM_GIB = 12.0
+CPU_MIN_RAM_GIB = 4.0
+CPU_FALLBACK_RESERVE_S = 7.0  # bounded worker cleanup (5 s), then Kokoro (2 s)
+CPU_MIN_BUDGET_S = 2.0
+CPU_STARTUP_BUDGET_S = 60.0  # model loading and one discarded warmup together
+CPU_WARMUP_BUDGET_S = 30.0
 WOW_WATCH_S = 2.0  # WoW's level is read this often while the mic is open and nothing ducks
 WOW_MOVED = 0.005  # a change this large is no rounding
 DEBUG_KEEP_S = 24 * 3600.0  # M25
@@ -137,6 +145,8 @@ class _Job:
     spoken: tuple[str, ...] = ()  # the same sentences for the expressive engine, when it speaks
     fell_back: bool = False  # Kokoro has the rest of this line
     ended: bool = False  # nothing more of it needs synthesizing
+    expressive: object | None = None  # the worker selected when this line arrived
+    cpu: bool = False
 
 
 @dataclass(slots=True, eq=False)
@@ -152,6 +162,15 @@ def _why(e: Exception) -> str:
     """A failure as the log may keep it: an EngineError's message names no text, and anything
     else may quote the line."""
     return str(e) if isinstance(e, EngineError) else type(e).__name__
+
+
+def available_ram_gib() -> float | None:
+    """CPU fallback fails closed if its optional host-memory probe is unavailable."""
+    try:
+        import psutil
+        return psutil.virtual_memory().available / 2**30
+    except Exception:
+        return None
 
 
 class VoiceService:
@@ -176,6 +195,10 @@ class VoiceService:
         self._whisper_factory = None
         self._gpu_task: asyncio.Task | None = None
         self._expressive = None  # the engine the owner chose, while attached (Task 22)
+        self._expressive_cpu = None
+        self._cpu_active = False
+        self._cpu_check_at = 0.0
+        self._cpu_release_task: asyncio.Task | None = None
         self._expressive_stock: StockCache | None = None
         self._expressive_task: asyncio.Task | None = None
         self._expressive_at = 0.0  # no start before this
@@ -246,6 +269,10 @@ class VoiceService:
         self._tts_seq = itertools.count()
         self._tts_thread = threading.Thread(target=self._synth_loop, name="leeroy-voice-tts",
                                             daemon=True)
+        self._cpu_job: _Job | None = None  # one admitted CPU job, including handoff to its thread
+        self._cpu_queue: queue.SimpleQueue = queue.SimpleQueue()
+        self._cpu_thread = threading.Thread(target=self._cpu_synth_loop,
+                                            name="leeroy-voice-cpu-tts", daemon=True)
         self._stock_queue: queue.SimpleQueue = queue.SimpleQueue()
         self._stock_lock = threading.Lock()
         self._stock_wanted: dict[int, VoiceSpec] = {}
@@ -294,6 +321,8 @@ class VoiceService:
         await asyncio.to_thread(self.ducker.restore_after_crash)
         self._sweep(self._clock.now())
         self._tts_thread.start()
+        if self._expressive_cpu is not None:
+            self._cpu_thread.start()
         self._stock_thread.start()
         await self.ui.start()
         await self.server.start()
@@ -317,6 +346,8 @@ class VoiceService:
             self._guarded_step(step)
         if self._gpu is not None:
             await self._gpu.settle()
+        if self._cpu_release_task is not None:
+            await asyncio.gather(self._cpu_release_task, return_exceptions=True)
         if sender is not None:
             try:
                 await asyncio.wait_for(self._out.join(), JOIN_S)
@@ -343,9 +374,12 @@ class VoiceService:
     def _stop_workers(self) -> None:
         if self._expressive is not None:  # first: the synthesis thread may be waiting on it
             self._guarded_step(self._expressive.stop)
+        if self._expressive_cpu is not None:
+            self._guarded_step(self._expressive_cpu.stop)
         self._tts_queue.put((-1, 0, 0, None))
+        self._cpu_queue.put(None)
         self._stock_queue.put(None)
-        for thread in (self._tts_thread, self._stock_thread):
+        for thread in (self._tts_thread, self._cpu_thread, self._stock_thread):
             if thread.ident is not None:
                 thread.join(JOIN_S)
         self._fx_pool.shutdown(wait=False, cancel_futures=True)
@@ -460,6 +494,7 @@ class VoiceService:
 
     def _on_disconnect(self) -> None:
         self._epoch += 1
+        self._release_cpu("mind disconnected")
         self._drop_press()
         self._plan(self.scheduler.drop_waiting, "mind_gone")
         self.ui.broadcast({"type": "mind", "up": False})
@@ -522,6 +557,7 @@ class VoiceService:
         self._output_off_at = now + OUTPUT_LINGER_S
         if self._gpu is not None:
             self._gpu.release_all("logout")  # the night model gets the card
+        self._release_cpu("logout")
 
     def _drop_press(self) -> None:
         """A press under way, and every clip on its way, go no further."""
@@ -600,6 +636,10 @@ class VoiceService:
             return
         if clip is not None:
             self._fx_pool.submit(self._stock_ready, job, clip)
+        if job.cpu:
+            self._cpu_job = job
+            self._cpu_queue.put(job)
+            return
         for index in range(len(job.parts)):
             self._tts_queue.put((job.line.tier, next(self._tts_seq), index, job))
 
@@ -620,12 +660,27 @@ class VoiceService:
         levers = levers_for(msg.attitude, msg.state, msg.kind)
         clip = self._stock_clip(msg, spec)
         parts = spoken = ()
+        expressive = self._live_expressive() if self._speaks_expressive(spec) else None
+        cpu = expressive is not None and expressive is self._expressive_cpu
+        fallback_why = self._expressive_why
+        if cpu and self._cpu_job is not None:
+            expressive, cpu, fallback_why = None, False, "CPU synthesis busy"
+        if cpu and (msg.priority != "p3" or msg.kind == "hotmic" or
+                    msg.expires_ms / 1000 - self._clock.now() <
+                    CPU_FALLBACK_RESERVE_S + CPU_MIN_BUDGET_S):
+            expressive, cpu, fallback_why = None, False, "CPU deadline too short"
+        if clip is not None:
+            expressive, cpu = None, False
         if clip is None:
-            if self._speaks_expressive(spec) and self._expressive.up:
+            if self._speaks_expressive(spec) and expressive is not None:
                 spoken, parts = self._expressive_text(msg, levers)
+                if cpu:
+                    # CPU synthesis can exceed the scheduler's five-second segment gap.
+                    # Hand it one bounded clip, preserving every sentence and its voice.
+                    spoken, parts = (" ".join(spoken),), (" ".join(parts),)
             else:
                 if self._speaks_expressive(spec):
-                    log("engine_fallback", id=msg.id, guid=msg.guid, why=self._expressive_why)
+                    log("engine_fallback", id=msg.id, guid=msg.guid, why=fallback_why)
                 marked = kokoro_markup(self._ear(msg).text, levers, to_human=msg.to_human)
                 parts = tuple(sentences(marked))
         if msg.kind == "hotmic":
@@ -637,8 +692,16 @@ class VoiceService:
                     channel=msg.channel, whisper=msg.channel == WHISPER,
                     expires_at=msg.expires_ms / 1000, after=msg.after,
                     segments=[None] * (len(parts) or 1), template=msg.template)
-        return (_Job(msg, spec, line, levers.gain_db, spec.speed * levers.speed_mult, parts, spoken),
+        return (_Job(msg, spec, line, levers.gain_db, spec.speed * levers.speed_mult, parts, spoken,
+                     expressive=expressive, cpu=cpu),
                 clip)
+
+    def _live_expressive(self):
+        if self._expressive is not None and self._expressive.up:
+            return self._expressive
+        if self._cpu_active and self._expressive_cpu is not None and self._expressive_cpu.up:
+            return self._expressive_cpu
+        return None
 
     def _speaks_expressive(self, spec: VoiceSpec) -> bool:
         return self._expressive is not None and spec.engine == self._expressive.name
@@ -689,9 +752,16 @@ class VoiceService:
     def _dry(self, job: _Job, index: int) -> np.ndarray:
         """The sentence from the member's engine; Kokoro's reading of it, and of the rest of the
         line, once that engine has failed on it."""
-        x = self._expressive
+        x = job.expressive or self._expressive
         if job.spoken and not job.fell_back:
             try:
+                if job.cpu:
+                    budget = min(self._cfg.tts_cpu_timeout_s,
+                                 job.line.expires_at - self._clock.now() - CPU_FALLBACK_RESERVE_S)
+                    if budget < CPU_MIN_BUDGET_S:
+                        raise EngineError("CPU voice: insufficient time before expiry")
+                    return x.synth(job.spoken[index], job.spec, x.levers(job.speak.attitude),
+                                   job.speed, timeout_s=budget)
                 return x.synth(job.spoken[index], job.spec, x.levers(job.speak.attitude), job.speed)
             except EngineError as e:
                 job.fell_back = True
@@ -714,6 +784,25 @@ class VoiceService:
                 self._post(self._on_failed, job, _why(e))
             else:
                 self._post(self._on_segment, job, index, clip)
+
+    def _cpu_synth_loop(self) -> None:
+        while (job := self._cpu_queue.get()) is not None:
+            try:
+                if job.ended:
+                    continue
+                clip = self._process(job, self._dry(job, 0))
+            except Exception as exc:
+                job.ended = True
+                self._post(self._on_failed, job, _why(exc))
+            else:
+                if not job.ended:
+                    self._post(self._on_segment, job, 0, clip)
+            finally:
+                self._post(self._cpu_job_finished, job)
+
+    def _cpu_job_finished(self, job: _Job) -> None:
+        if self._cpu_job is job:
+            self._cpu_job = None
 
     def _stock_ready(self, job: _Job, dry: np.ndarray) -> None:
         try:
@@ -867,6 +956,7 @@ class VoiceService:
             "invites": [dict(i) for i in self._invites],
             "transcript": list(self._transcript),
             "mind": self.server.connected,
+            "expressive_device": self._expressive_device(),
             "status": as_fields(self._status()),
         }
 
@@ -976,9 +1066,11 @@ class VoiceService:
         stt.recognizer "parakeet" it is never called."""
         self._gpu, self._whisper_factory = guard, whisper_factory
 
-    def attach_expressive(self, engine) -> None:
+    def attach_expressive(self, engine, *, cpu_fallback=None) -> None:
         """Before run(), with attach_gpu: without the guard it never starts."""
         self._expressive = engine
+        self._expressive_cpu = (cpu_fallback if self._cfg.tts_cpu_fallback and
+                                engine.name == "chatterbox-turbo" else None)
         self._expressive_stock = StockCache(self._data / "cache" / "stock", engine, self._bank,
                                             self._decision)
 
@@ -986,6 +1078,20 @@ class VoiceService:
         x, guard = self._expressive, self._gpu
         if x is None or guard is None or self._expressive_task is not None:
             return
+        if self._cpu_release_task is not None and not self._cpu_release_task.done():
+            return
+        if self._cpu_active:
+            if not self._expressive_cpu.up:
+                self._cpu_active = False
+                self._expressive_why, self._expressive_at = "CPU worker stopped", now + RESTART_S
+                self._state_stale = True
+                log("engine_lost", level=logging.WARNING, engine=x.name, device="cpu")
+            elif now >= self._cpu_check_at:
+                self._cpu_check_at = now + CHECK_S
+                available = available_ram_gib()
+                if available is None or available < CPU_MIN_RAM_GIB:
+                    self._release_cpu("host memory unavailable")
+            return  # keep one device for this session; do not flap back to CUDA
         if x.name in guard.holders and not x.up:  # it died: nothing is left to unload
             guard.drop(x.name)
             self._expressive_why, self._expressive_at = "the worker stopped", now + RESTART_S
@@ -1002,6 +1108,8 @@ class VoiceService:
             if reason != self._expressive_why:
                 log("engine_refused", engine=x.name, why=reason)
             self._expressive_why = reason
+            if self._expressive_cpu is not None:
+                await self._start_cpu_expressive()
             return
         self._expressive_why = "loading"
         try:
@@ -1013,6 +1121,7 @@ class VoiceService:
             return
         if x.name in guard.holders and self._online:
             guard.confirm(x.name)
+            self._state_stale = True
             log("gpu_loaded", holder=x.name)
         else:  # released while it loaded (logout, a split): keep nothing
             guard.drop(x.name)
@@ -1029,6 +1138,78 @@ class VoiceService:
         """GpuGuard's unload: he logged out, a model split or went missing."""
         self._expressive_why, self._expressive_at = "released", self._clock.now() + RETRY_S
         await asyncio.to_thread(self._expressive.stop)
+        self._state_stale = True
+
+    async def _start_cpu_expressive(self) -> None:
+        cpu, epoch = self._expressive_cpu, self._epoch
+        spec = next((s for s in sorted(self._specs.values(), key=lambda s: s.guid)
+                     if s.engine == cpu.name), None)
+        available = available_ram_gib()
+        if (spec is None or not self._online or not self.server.connected or available is None
+                or available < CPU_START_RAM_GIB):
+            self._expressive_at = self._clock.now() + RETRY_S
+            return
+        self._expressive_why = "loading CPU"
+        cancelled = threading.Event()
+        deadline = time.monotonic() + CPU_STARTUP_BUDGET_S
+
+        def load():
+            if (not cancelled.is_set() and self._online and self.server.connected
+                    and self._epoch == epoch):
+                cpu.start()
+                if (not cancelled.is_set() and self._online and self._epoch == epoch):
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise EngineError("CPU voice: startup deadline reached")
+                    cpu.warmup(spec, timeout_s=min(CPU_WARMUP_BUDGET_S, remaining))
+                # The thread still reaches this check if its awaiting task is cancelled.
+                if cancelled.is_set() or not self._online or self._epoch != epoch:
+                    cpu.stop()
+
+        loading = asyncio.create_task(asyncio.to_thread(load))
+        try:
+            while not loading.done():
+                await asyncio.wait({loading}, timeout=.25)
+                available = available_ram_gib()
+                if (time.monotonic() >= deadline or not self._online
+                        or self._epoch != epoch or available is None
+                        or available < CPU_MIN_RAM_GIB):
+                    cancelled.set()
+                    await asyncio.to_thread(cpu.stop)
+            await loading
+        except asyncio.CancelledError:
+            cancelled.set()
+            await asyncio.to_thread(cpu.stop)
+            loading.cancel()
+            raise
+        except Exception as exc:
+            await asyncio.to_thread(cpu.stop)
+            self._expressive_why, self._expressive_at = _why(exc), self._clock.now() + RETRY_S
+            log("engine_start_failed", level=logging.WARNING, engine=cpu.name,
+                device="cpu", error=_why(exc))
+            return
+        available = available_ram_gib()
+        if (not cancelled.is_set() and self._online and self._epoch == epoch and cpu.up
+                and available is not None and available >= CPU_MIN_RAM_GIB):
+            self._cpu_active = True
+            self._cpu_check_at = self._clock.now() + CHECK_S
+            self._state_stale = True
+            log("engine_loaded", engine=cpu.name, device="cpu")
+        else:
+            await asyncio.to_thread(cpu.stop)
+
+    def _release_cpu(self, why: str) -> None:
+        if self._expressive_cpu is None:
+            return
+        self._cpu_active = False
+        self._state_stale = True
+        self._expressive_why, self._expressive_at = why, self._clock.now() + RETRY_S
+        if self._cpu_release_task is None or self._cpu_release_task.done():
+            self._cpu_release_task = asyncio.create_task(asyncio.to_thread(self._expressive_cpu.stop))
+
+    def _expressive_device(self) -> str:
+        active = self._live_expressive()
+        return "none" if active is None else "cpu" if active is self._expressive_cpu else "cuda"
 
     def build_whisper(self):
         return self._whisper_factory()

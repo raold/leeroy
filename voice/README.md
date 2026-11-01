@@ -33,6 +33,25 @@ The default test run needs no audio device, GPU, model file, network or running 
 that do are marked `engines`, `device`, `windows`, `gpu`, `ollama` or `live` and deselected
 unless asked for (`pytest -m device`).
 
+For a cast already configured for Chatterbox Turbo, `voice.toml` can opt into CPU rendering
+when GPU admission refuses the model:
+
+```toml
+[tts]
+cpu_fallback = true
+cpu_threads = 12
+cpu_timeout_s = 15.0
+```
+
+This fallback is limited to direct replies, private-room conversation and whispers (p3).
+Ambient chatter and urgent lines continue through cached clips or Kokoro, preserving the warm
+Turbo worker for the next direct reply. CPU fallback is disabled by default; its thread budget
+is capped at 24. Loading and a discarded neutral warmup happen in the background within a
+60-second startup budget. One CPU reply runs at a time; other lines use Kokoro while it is busy.
+Synthesis has a maximum 15-second limit, shortened to leave seven seconds before the existing
+line expiry for cleanup and fallback. CPU use is reported separately from GPU residency and
+does not pin the chat models in VRAM.
+
 ## License
 
 GPL-3.0-or-later (`LICENSE`), unlike the rest of this repository, which is GPL-2.0. This

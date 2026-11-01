@@ -569,7 +569,8 @@ def test_the_engine_comes_up_with_his_session_and_reports_on_status(tmp_path, fa
     async def body(rig):
         assert not made.up
         await rig.seat(101)
-        await until(rig, lambda: made.up)
+        await until(rig, lambda: made.up and TURBO in rig.guard.holders
+                    and rig.guard.holders[TURBO].confirmed)
         assert rig.guard.holders[TURBO].confirmed
         await rig.tick(0.1)
         status = await rig.next_of(Status, lambda s: s.gpu == TURBO)

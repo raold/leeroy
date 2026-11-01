@@ -16,6 +16,8 @@ standard library and numpy, and nothing else of this package."""
 import json
 import os
 import sys
+import threading
+import time
 from dataclasses import dataclass
 from typing import BinaryIO, Callable
 
@@ -25,6 +27,151 @@ READY = "ready"
 MAX_HEAD = 1 << 16  # an answer's JSON line
 SAMPLE = "<f4"
 SAMPLE_BYTES = 4
+
+
+class WorkerTree:
+    """Service-side ownership of a worker, including Windows venv redirector children.
+
+    Import psutil only when the service creates this tracker. Worker venvs importing the
+    wire protocol still need only numpy and the standard library. Never find processes by
+    executable name: ownership starts with Popen and follows verified parent identities.
+    """
+
+    def __init__(self):
+        import psutil
+        self.ps = psutil
+        self.owned: dict[int, float] = {}
+        self._lock = threading.RLock()
+        self._done = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def attach(self, process) -> None:
+        root = self.ps.Process(process.pid)
+        self.owned[root.pid] = root.create_time()
+        self.capture()
+        self._thread = threading.Thread(target=self._watch, name="leeroy-worker-tree", daemon=True)
+        self._thread.start()
+
+    def _matching(self, pid):
+        try:
+            process = self.ps.Process(pid)
+            if process.create_time() != self.owned[pid] or not process.is_running():
+                return None
+            if process.status() == self.ps.STATUS_ZOMBIE:
+                return None
+            return process
+        except self.ps.NoSuchProcess:
+            return None
+
+    def capture(self) -> bool:
+        """Retain descendants even after their launcher exits; never follow a reused PID."""
+        complete = True
+        with self._lock:
+            pending = list(self.owned)
+            seen = set()
+            while pending:
+                pid = pending.pop()
+                if pid in seen:
+                    continue
+                seen.add(pid)
+                try:
+                    parent = self._matching(pid)
+                    if parent is None:
+                        continue
+                    children = parent.children()
+                    if self._matching(pid) is None:
+                        continue  # the parent exited/reused during process enumeration
+                    for child in children:
+                        created = child.create_time()
+                        if created < self.owned[pid] or child.ppid() != pid:
+                            continue
+                        if self._matching(pid) is None:
+                            break
+                        if child.pid not in self.owned:
+                            self.owned[child.pid] = created
+                        if self.owned[child.pid] == created:
+                            pending.append(child.pid)
+                except self.ps.NoSuchProcess:
+                    # Disappearance is different from an unreadable live ancestry.
+                    continue
+                except self.ps.Error:
+                    complete = False
+        return complete
+
+    def _watch(self) -> None:
+        while not self._done.wait(0.05):
+            self.capture()
+
+    def _alive(self):
+        living = []
+        with self._lock:
+            for pid in self.owned:
+                try:
+                    process = self._matching(pid)
+                    if process is not None:
+                        living.append(process)
+                except self.ps.Error:
+                    # Unreadable is not evidence of exit. Cleanup will report failure.
+                    living.append(None)
+        return living
+
+    def stop(self, *, timeout: float, grace: float = 0.5) -> bool:
+        """After stdin EOF, wait briefly, then kill only captured process identities.
+
+        Freeze parents before the final descendant scan, preventing a launcher from
+        spawning an unobserved child while it is terminated. Resume any survivors if an
+        OS operation fails. The return value reports whether all owned processes exited.
+        """
+        deadline = time.monotonic() + timeout
+        grace_end = min(deadline, time.monotonic() + (0 if self._done.is_set() else grace))
+        while time.monotonic() < grace_end:
+            self.capture()
+            if not self._alive():
+                break
+            self._done.wait(min(0.025, max(0.0, grace_end - time.monotonic())))
+        self._done.set()
+        if self._thread is not None:
+            self._thread.join(max(0.0, min(0.5, deadline - time.monotonic())))
+        frozen = set()
+        attempted = set()
+        try:
+            with self._lock:
+                self.capture()
+                while time.monotonic() < deadline:
+                    pending = [pid for pid in self.owned if pid not in attempted]
+                    if not pending:
+                        break
+                    for pid in pending:  # insertion order: parent before child
+                        attempted.add(pid)
+                        try:
+                            process = self._matching(pid)
+                            if process is not None:
+                                process.suspend()
+                                frozen.add(pid)
+                        except self.ps.Error:
+                            continue
+                    self.capture()  # includes children born just before each suspension
+                if (not self.capture()
+                        or any(process is None or process.pid not in frozen for process in self._alive())):
+                    return False  # unreadable ancestry or an unfrozen parent is not a complete tree
+                for pid in reversed(tuple(self.owned)):
+                    try:
+                        process = self._matching(pid)
+                        if process is not None:
+                            process.kill()
+                    except self.ps.Error:
+                        continue
+        finally:
+            for pid in frozen:
+                try:
+                    process = self._matching(pid)
+                    if process is not None:
+                        process.resume()
+                except self.ps.Error:
+                    pass
+        while self._alive() and time.monotonic() < deadline:
+            time.sleep(min(0.025, max(0.0, deadline - time.monotonic())))
+        return not self._alive()
 
 
 @dataclass(frozen=True, slots=True)
