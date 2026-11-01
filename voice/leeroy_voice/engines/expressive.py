@@ -15,6 +15,8 @@ applies `speed` after synthesis, keeping pitch and formants before the mic chain
 
 Nothing of a line leaves here but its audio: an EngineError names a type or a count, and the
 worker's stderr is thrown away."""
+import hashlib
+import io
 import math
 import os
 import queue
@@ -24,6 +26,7 @@ import tomllib
 from pathlib import Path
 
 import numpy as np
+import soundfile as sf
 
 from ..fx import change_tempo
 from ..wire import ATTITUDES
@@ -36,6 +39,7 @@ LINE_TIMEOUT_S = 20.0  # longer than any line's wait on the card: a stuck worker
 STOP_S = 5.0
 JOIN_S = 2.0
 LOCAL_NAME = "attitudes.toml"  # in the data dir
+REFERENCE_MIN_S = 5.0  # Chatterbox refuses a reference this short, on every line
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _BELOW_NORMAL = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
 
@@ -54,6 +58,34 @@ LEVERS: dict[str, dict[str, dict]] = {
 
 class LeverError(ValueError):
     pass
+
+
+def validate_reference(audio, rate: int) -> np.ndarray:
+    """A cloneable mono reference, or an EngineError with no private data in its message."""
+    if type(rate) is not int or rate <= 0:
+        raise EngineError("reference: invalid sample rate")
+    try:
+        a = np.asarray(audio, dtype=np.float32)
+    except (TypeError, ValueError, OverflowError):
+        raise EngineError("reference: invalid samples") from None
+    if a.ndim != 1 or not np.isfinite(a).all():
+        raise EngineError("reference: expected finite mono samples")
+    if len(a) / rate <= REFERENCE_MIN_S:
+        raise EngineError(f"a reference of {len(a) / rate:.1f} s")
+    if float(np.abs(a).max()) < 1 / 32768:
+        raise EngineError("reference: silent at 16-bit PCM precision")
+    return a
+
+
+def reference_fingerprint(path: Path) -> str:
+    """Hash the same file bytes we validate, including replacement at the same filename."""
+    try:
+        data = path.read_bytes()
+        audio, rate = sf.read(io.BytesIO(data), dtype="float32")
+    except (OSError, sf.SoundFileError) as e:
+        raise EngineError(f"reference: cannot read: {type(e).__name__}") from None
+    validate_reference(audio, rate)
+    return hashlib.sha256(data).hexdigest()
 
 
 def _read_overlay(path: Path) -> dict:
@@ -245,6 +277,10 @@ class ExpressiveEngine:
         if path.parent != self._refs.resolve() or not path.is_file():
             raise EngineError(f"{self.name}: no reference clip for {spec.guid}")
         return path
+
+    def reference_fingerprint(self, spec) -> str:
+        """Stock clips depend on reference contents, even while the worker is down."""
+        return reference_fingerprint(self._reference(spec))
 
     def synth(self, text: str, spec, style, speed: float) -> np.ndarray:
         """`style` is the attitude's levers; anything else (StockCache hands the bank's style)

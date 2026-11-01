@@ -42,7 +42,8 @@ import soundfile as sf
 
 from .decision import Decision
 from .engines import EngineError
-from .engines.expressive import WorkerProcess
+from .engines.expressive import (REFERENCE_MIN_S as REF_MIN_S, WorkerProcess,
+                                 reference_fingerprint, validate_reference)
 from .fx import MIC_PROFILES
 from .logs import log
 from .voices import (GROUPS, SPEC_VERSION, SPEED_RANGE, SpecError, VoiceSpec, spec_from_dict,
@@ -81,7 +82,6 @@ BRIEF_KEYS = ("guid", "name", "gender", "accent", "age", "descriptors", "speed",
 REF_TEXT = ("Hi, it's me. I just got home from work, made myself a cup of tea, and logged on for "
             "the night. Honestly, I could play until two in the morning. Is anyone around for "
             "heroics? My repair bill is paid, and I'm in a really good mood.")
-REF_MIN_S = 5.0  # Chatterbox refuses a reference this short, on every line
 DESIGN_TAKES = 3  # a designed voice gets this many to fit the member's gender (the kit's rule)
 DESIGN_TIMEOUT_S = 900.0  # three takes on the CPU, at about 100 s each
 PEAK = 0.99
@@ -433,10 +433,8 @@ class KokoroSource:
 
 
 def write_reference(path: Path, audio: np.ndarray, rate: int) -> None:
-    """16-bit PCM, whole or not at all. EngineError for a clip too short to clone from."""
-    a = np.asarray(audio, dtype=np.float32).reshape(-1)
-    if len(a) / rate <= REF_MIN_S:
-        raise EngineError(f"a reference of {len(a) / rate:.1f} s")
+    """Validated mono 16-bit PCM, whole or not at all; bad audio never replaces a voice."""
+    a = validate_reference(audio, rate)
     peak = float(np.abs(a).max())
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.stem}-", suffix=".tmp")
     os.close(fd)
@@ -448,13 +446,21 @@ def write_reference(path: Path, audio: np.ndarray, rate: int) -> None:
         raise
 
 
+def _reference_ready(path: Path) -> bool:
+    try:
+        reference_fingerprint(path)
+    except EngineError:
+        return False
+    return True
+
+
 def render_designed_references(brief: list[BriefEntry], source, out_dir: Path, *,
                                decision: Decision, stock: Callable | None = None) -> dict:
     """A reference clip for each unlocked member of the brief whose engine the decision says is
     a cloning one, core members and officers first. `source` has clip(entry, spec) and close();
     `out_dir` holds the specs and the clips. A locked spec is never changed (N9), and listed. A
-    run that stopped goes on where it was: a member already done keeps their clip. One a source
-    fails on stays as they were, and is listed.
+    run that stopped goes on where it was: a member with a valid clip keeps it; a missing or
+    corrupt clip is repaired. One a source fails on stays as they were, and is listed.
 
     `stock()`, called once after the design source has closed, gives the StockCache of the
     expressive engine. Each member changed, or left half done by a run that stopped, loses their
@@ -475,7 +481,7 @@ def render_designed_references(brief: list[BriefEntry], source, out_dir: Path, *
                 report["uncast"].append(e.guid)
             elif old.locked:
                 report["locked"].append(e.guid)
-            elif old.engine == engine and old.ref == ref and (out_dir / ref).is_file():
+            elif old.engine == engine and old.ref == ref and _reference_ready(out_dir / ref):
                 report["kept"].append(e.guid)
                 done.append(old)
             else:

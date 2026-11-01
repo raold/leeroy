@@ -8,7 +8,8 @@ A clip is dry, at the engine's rate: the pitch shift, the mic chain and the loud
 time (fx.process), so the same clip serves a whisper or any grit. It is a float WAV in
 root/<guid>/<voice_hash>/ (root is voice-data/cache/stock). The folder is keyed by the voice (I6):
 voice_hash covers what a dry clip depends on, the spec's RENDER_FIELDS and the decision's engine,
-prosody_swap and uk_timbre_mix, so a recast or a new decision never plays an old voice, and
+prosody_swap and uk_timbre_mix, plus a cloning engine's validated reference fingerprint,
+so a recast, repaired reference or new decision never plays an old voice, and
 drop_stale removes the member's other folders. The mic, pitch and gain act at play time and the
 name and the lock never reach the sound, so locking the guild or changing a mic keeps the clips.
 Each clip's file name ends in a digest of what was rendered (the line, the engine and its rate,
@@ -89,10 +90,14 @@ class StockCache:
     def voice_hash(self, spec) -> str:
         """The first 12 hex digits of the sha256 of the spec's RENDER_FIELDS and the decision's
         engine, prosody_swap and uk_timbre_mix (keys sorted, so a blend's order does not count).
-        SpecError for a spec changed in place since it was made."""
+        SpecError for a spec changed in place since it was made; EngineError when a cloning
+        engine's reference cannot be read or is invalid."""
         d, fields = self.decision, spec_to_dict(spec)
         voice = {"spec": {k: fields[k] for k in RENDER_FIELDS}, "engine": d.engine,
                  "prosody_swap": d.prosody_swap, "uk_timbre_mix": d.uk_timbre_mix}
+        fingerprint = getattr(self.engine, "reference_fingerprint", None)
+        if fingerprint is not None:
+            voice["reference_sha256"] = fingerprint(spec)
         blob = json.dumps(voice, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         return hashlib.sha256(blob.encode("ascii")).hexdigest()[:12]
 
@@ -101,13 +106,21 @@ class StockCache:
         it is not rendered for this voice (or `key` is not a STOCK key)."""
         if key not in STOCK:
             return None
-        return self._load(spec.guid, key, self._clip(self._folder(spec), spec, key))
+        try:
+            folder = self._folder(spec)
+        except EngineError:
+            return None
+        return self._load(spec.guid, key, self._clip(folder, spec, key))
 
     def render_missing(self, spec) -> int:
         """Render the member's clips this voice lacks; how many it wrote. A line the engine fails
         on is logged and left for the next pass. SpecError when the voice cannot be spoken (the
         bank refuses its style); then nothing is written."""
-        folder = self._folder(spec)
+        try:
+            folder = self._folder(spec)
+        except EngineError as e:
+            log("stock_render_failed", level=logging.WARNING, guid=spec.guid, error=str(e))
+            return 0
         missing = [key for key in STOCK
                    if self._load(spec.guid, key, self._clip(folder, spec, key)) is None]
         written = 0
@@ -129,7 +142,11 @@ class StockCache:
 
     def drop_stale(self, spec) -> int:
         """Remove the member's clip folders under any other voice hash; how many it removed."""
-        member, keep = self.root / str(spec.guid), self.voice_hash(spec)
+        try:
+            keep = self.voice_hash(spec)
+        except EngineError:
+            return 0
+        member = self.root / str(spec.guid)
         if not member.is_dir():
             return 0
         dropped = 0
