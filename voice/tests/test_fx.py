@@ -194,6 +194,27 @@ def test_silence_is_left_alone():                       # no gain, NaN or warnin
     assert len(fx.process(np.zeros(0, np.float32), SR, spec(), grit=3, whisper=False)) == 0
 
 
+@pytest.mark.parametrize("speed", [0.9, 1.08, 1.15])
+def test_tempo_changes_duration_without_changing_pitch(speed):
+    x = tone(220, 2.0)
+    y = fx.change_tempo(x, SR, speed)
+    assert y.dtype == np.float32 and np.isfinite(y).all()
+    assert len(y) == pytest.approx(len(x) / speed, abs=2)
+    assert peak_hz(y[len(y) // 4:3 * len(y) // 4], SR) == pytest.approx(220, abs=2)
+
+
+def test_tempo_unity_is_lossless_and_empty_stays_empty():
+    x = tone(220, 0.5)
+    assert np.array_equal(fx.change_tempo(x, SR, 1.0), x)
+    assert fx.change_tempo([], SR, 0.9).shape == (0,)
+
+
+@pytest.mark.parametrize("speed", [0, -1, np.nan, np.inf])
+def test_tempo_rejects_invalid_speed(speed):
+    with pytest.raises(ValueError, match="speed"):
+        fx.change_tempo(tone(220, 0.1), SR, speed)
+
+
 def test_pitch_shift():
     x = tone(220, 2.0)
     up = fx.shift_pitch(x, SR, 1.0)

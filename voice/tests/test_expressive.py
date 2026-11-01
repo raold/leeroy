@@ -481,6 +481,39 @@ def test_expressive_engine_sends_the_reference_and_the_levers(tmp_path, script):
     assert call["params"] == {"frames": 480, "temperature": 0.7}
 
 
+def test_expressive_speed_changes_audio_without_changing_worker_params(tmp_path, script):
+    made = engine(tmp_path, script)
+    made.start()
+    try:
+        params = {"frames": RATE * 2, "temperature": 0.7}
+        slow = made.synth("hello", spec_of(), params, 0.9)
+        fast = made.synth("hello", spec_of(), params, 1.15)
+        with pytest.raises(EngineError, match="invalid speed"):
+            made.synth("hello", spec_of(), params, float("nan"))
+    finally:
+        made.stop()
+    assert len(slow) == pytest.approx(RATE * 2 / 0.9, abs=2)
+    assert len(fast) == pytest.approx(RATE * 2 / 1.15, abs=2)
+    assert [c["params"] for c in calls_of(tmp_path)] == [params, params]
+
+
+def test_tempo_failure_is_an_engine_error_without_private_details(tmp_path, script, monkeypatch):
+    from leeroy_voice.engines import expressive
+
+    def fail(*args):
+        raise RuntimeError("private line or path")
+
+    monkeypatch.setattr(expressive, "change_tempo", fail)
+    made = engine(tmp_path, script)
+    made.start()
+    try:
+        with pytest.raises(EngineError, match="tempo: RuntimeError") as error:
+            made.synth("hello", spec_of(), None, 0.9)
+        assert "private" not in str(error.value)
+    finally:
+        made.stop()
+
+
 def test_a_stock_render_takes_the_neutral_levers(tmp_path, script, fake_bank):
     """StockCache hands the bank's style; a cloning engine reads it as attitude none."""
     made = engine(tmp_path, script, levers={a: {"frames": 240, "mood": a} for a in

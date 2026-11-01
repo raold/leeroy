@@ -50,7 +50,7 @@ ALIASES: dict[str, str] = {
     "pull": "pulling", "pulling now": "pulling", "incoming": "inc", "out of mana": "oom",
     "bl": "lust", "hero": "lust", "heroism": "lust",
 }
-CLIP_FORMAT = 1  # how a clip is rendered and stored; a new value renders every clip afresh
+CLIP_FORMAT = 2  # expressive clips now honor speed; regenerate old clips that ignored it
 # the spec's fields a dry clip depends on; mic and pitch_st act in fx.process, gain_db in the
 # mixer, and version, name and locked never reach the sound
 RENDER_FIELDS = ("guid", "engine", "lang", "timbre", "prosody", "speed", "ref", "voices_sha256")

@@ -10,10 +10,12 @@ the commands that render on the CPU without it.
 Levers per attitude (M28): LEVERS holds neutral numbers only, the kit's. Wording never lives in
 the code: a local voice-data/attitudes.toml overrides them key by key at start, as
 [<engine>.<attitude>] tables. Turbo has neither exaggeration nor cfg, so its attitude rests on the
-sounds in its text (textear) and it has no speed either: `speed` is for the engines that have one.
+sounds in its text (textear). It has no native speed control: the service-side tempo step
+applies `speed` after synthesis, keeping pitch and formants before the mic chain.
 
 Nothing of a line leaves here but its audio: an EngineError names a type or a count, and the
 worker's stderr is thrown away."""
+import math
 import os
 import queue
 import subprocess
@@ -23,6 +25,7 @@ from pathlib import Path
 
 import numpy as np
 
+from ..fx import change_tempo
 from ..wire import ATTITUDES
 from . import EngineError
 from .worker import READY, read_answer, request_line
@@ -249,9 +252,17 @@ class ExpressiveEngine:
         worker = self.worker
         if worker is None or not worker.up:
             raise EngineError(f"{self.name}: not up")
+        if not math.isfinite(speed) or speed <= 0:
+            raise EngineError(f"{self.name}: invalid speed")
         params = style if isinstance(style, dict) else self._levers["none"]
         audio, rate = worker.ask(text, str(self._reference(spec)), params,
                                  timeout=self._timeout_s)
         if rate != self.sample_rate or not len(audio):
             raise EngineError(f"{self.name}: {len(audio)} samples at {rate} Hz")
+        try:
+            audio = change_tempo(audio, rate, speed)
+        except Exception as e:
+            raise EngineError(f"{self.name}: tempo: {type(e).__name__}") from None
+        if not len(audio):
+            raise EngineError(f"{self.name}: tempo returned no samples")
         return audio
