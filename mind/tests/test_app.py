@@ -236,6 +236,35 @@ def test_cast_game_chat_is_logged_not_threaded(tmp_path, clock):
     run(main())
 
 
+def test_the_stored_cast_follows_each_cast_snapshot(tmp_path, clock, caplog):
+    """Fix wave G6: the owner kicked a member, and the bridge's next cast left him out, but
+    the stored roster (generation, seeding and doctor read it) kept him. Each cast is the
+    whole cast now: who is missing from it leaves the roster, persona and relationships kept.
+    His own row stays, before the bridge has named him too (the roster's guild master), and an
+    empty cast (a bridge that hasn't loaded the guild) changes nothing."""
+    without_ebbo = {"type": "cast", "members": [m for m in CAST["members"] if m["guid"] != 105]}
+
+    async def main():
+        async with running(tmp_path, clock, events=[hello(0), CAST]) as h:
+            store = h.app.store
+            await h.wait(lambda: h.app.world.online)
+            assert set(store.cast()) == {HUMAN, 101, 102, 103, 104, 105}
+            store.put_relationship(dataclasses.replace(store.get_relationship(105, HUMAN),
+                                                       affinity=30.0, interactions=4))
+            await h.bridge.push(without_ebbo)
+            await h.wait(lambda: 105 not in store.cast())
+            assert set(store.cast()) == {HUMAN, 101, 102, 103, 104}
+            assert store.get_persona_json(105) is not None
+            assert store.get_relationship(105, HUMAN).affinity == 30.0
+            assert store.get_meta("human_guid") is None  # not named yet: his row stayed anyway
+            await h.bridge.push({"type": "cast", "members": []})
+            await h.wait(lambda: not h.app.world.members)
+            assert set(store.cast()) == {HUMAN, 101, 102, 103, 104}
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        run(main())
+    assert "cast_left: guids=[105]" in caplog.text
+
+
 def test_human_bot_commands_are_stored_not_threaded(tmp_path, clock):
     async def main():
         group = {"type": "group", "leader_guid": HUMAN, "raid": False,

@@ -59,6 +59,8 @@ from leeroy_mind.talk.engine import COMMAND_CHANNELS, TalkEngine
 from leeroy_mind.talk.raid import RaidState
 from leeroy_mind.talk.turns import TurnKind
 from leeroy_mind.talk.world import WorldView, looks_like_bot_command
+from leeroy_mind.voice.attach import attach_voice
+from leeroy_mind.voice.heard import is_command
 
 log = logging.getLogger("leeroy_mind.app")
 
@@ -280,6 +282,14 @@ def _name(fn) -> str:
     return getattr(fn, "__qualname__", None) or type(fn).__name__
 
 
+def his_command(channel: str, text: str) -> bool:
+    """A line of his that is an order and not talk: a bot command typed in his group, or a
+    voice command spoken in a room (M27)."""
+    if channel.startswith("voice:"):
+        return is_command(text)
+    return channel in COMMAND_CHANNELS and looks_like_bot_command(text)
+
+
 def _cancelling() -> bool:
     task = asyncio.current_task()
     return task is not None and task.cancelling() > 0
@@ -381,6 +391,7 @@ class MindApp:
             log_event("threads_reclaimed", threads=orphans)
         # Extensions attach below, one line each: P1c's self.nightly = attach(self), then
         # P1d's self.guild = install(self).
+        self.voice = attach_voice(self)
 
     # -- extension points --------------------------------------------------------------------
 
@@ -653,7 +664,10 @@ class MindApp:
         if isinstance(ev, Hello):
             await self._on_hello(ev, now)
         elif isinstance(ev, Cast):
-            self.store.upsert_cast(ev.members, now)
+            # the whole cast: who is missing from it leaves the stored roster, but him
+            left = self.store.replace_cast(ev.members, now, keep=(self._human,))
+            if left:
+                log_event("cast_left", guids=left)
             self.world.apply(ev, now)
         elif isinstance(ev, Chat):
             return await self._on_chat(ev, now, backlog)
@@ -743,7 +757,7 @@ class MindApp:
         if origin != "human":
             return True  # game lines are kept in the log only
         self._note_human_name(ev.from_name)
-        if ev.channel in COMMAND_CHANNELS and looks_like_bot_command(ev.text):
+        if self.voice.echoes_command(ev) or his_command(ev.channel, ev.text):
             self.world.apply(ev, now)  # he is active, but a bot command is not talk
             return True
         row = self.store.chat_lines([line_id])[0]
@@ -1030,7 +1044,7 @@ class MindApp:
             talk = self.store.talk_stats(since, now)
             said, llm = talk["said"], talk["llm_s"]
             his = self.store.human_lines(since, now)
-            commands = sum(channel in COMMAND_CHANNELS and looks_like_bot_command(text)
+            commands = sum(his_command(channel, text)
                            for channel, text in his)  # the dispatch's own rule
             log_event("stats", window_s=round(now - since), said=sum(said.values()),
                       replies=sum(n for kind, n in said.items() if kind in ANSWERS_HIS_LINES),

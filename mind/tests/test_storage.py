@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import sqlite3
 from pathlib import Path
@@ -441,6 +442,56 @@ def test_cast_round_trip(store):
     assert store.cast()[5].online is False
     store.upsert_cast([m], 101)
     assert store.cast() == {5: m}
+
+
+def _cast_row(guid: int, name: str, rank: int = 3) -> Member:
+    return Member(guid=guid, name=name, race=1, class_=8, gender=0, level=80, rank=rank,
+                  online=True, map=0, zone=1519, spec_tab=0)
+
+
+def test_the_stored_cast_follows_the_bridges_snapshot(store):
+    """Fix wave G6: each Cast event is the whole cast, so a member missing from it (kicked, or
+    a leftover from before the bridge's filter) leaves the stored roster; the kept row (his:
+    the bridge never sends him) stays, and so do the persona and relationships of the one who
+    left."""
+    human, korvin, belra, arkon = (_cast_row(1, "Testmage", 0), _cast_row(106, "Korvin"),
+                                   _cast_row(102, "Belra"), _cast_row(101, "Arkon"))
+    store.upsert_cast([human, korvin, belra, arkon], 100)
+    store.put_persona(106, '{"guid": 106}', "You are Tarvo. You play Korvin.", 9, "seed", 100)
+    store.put_relationship(Relationship(a=106, b=1, affinity=-20.0, interactions=3))
+    moved = dataclasses.replace(arkon, zone=4395)
+    assert store.replace_cast([belra, moved], 200, keep=(1,)) == [106]
+    assert store.cast() == {1: human, 101: moved, 102: belra}
+    assert store.get_persona_json(106) == '{"guid": 106}'
+    assert store.get_relationship(106, 1).affinity == -20.0
+    assert store.replace_cast([], 300, keep=(1,)) == []  # a bridge that hasn't loaded the guild
+    assert set(store.cast()) == {1, 101, 102}
+    assert store.replace_cast([belra], 400) == [1, 101]  # nothing kept: only the snapshot
+    assert set(store.cast()) == {102}
+
+
+def test_lines_before_a_line_newest_first(store):
+    """What the pushback window reads (fix wave G6): a channel's lines before a line, from a
+    time on, every origin, optionally one speaker's."""
+    def line(text, guid, origin, ts, channel="guild"):
+        return store.insert_chat_line(chat(text, from_guid=guid, channel=channel),
+                                      session_id=None, origin=origin, ts=ts)
+    a = line("a", 101, "mind", 1000.0)
+    b = line("b", 102, "game", 1010.0)
+    p = line("p", 103, "game", 1010.0, channel="party")
+    c = line("c", 1, "human", 1010.0)
+    later = line("d", 101, "mind", 1020.0)
+
+    def ids(*args, **kw):
+        return [r.id for r in store.lines_before(*args, **kw)]
+    assert ids(later, ["guild"], since=1000.0) == [c, b, a]
+    assert ids(later, ["guild"], since=1000.5) == [c, b]
+    assert ids(c, ["guild", "party"], since=1000.0) == [p, b, a]
+    assert ids(later, ["guild"], since=1000.0, from_guid=101) == [a]
+    assert ids(later, ["guild"], since=1000.0, limit=1) == [c]
+    assert ids(a, ["guild"], since=0.0) == []
+    got = store.lines_before(later, ["guild"], since=1000.0)[0]
+    assert (got.text, got.origin, got.ts, got.from_guid) == ("c", "human", 1010.0, 1)
 
 
 def test_threads_and_bits_and_utterances(store):

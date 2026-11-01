@@ -155,7 +155,7 @@ def test_mention_routes_to_person_unless_afk():
     for _ in range(100):
         got = plan_replies("arkon you up?", channel="guild", to_guid=0, weights=W, names=NAMES,
                            afk=set(), rng=rng)
-        assert got[0] == 101 and 2 <= len(got) <= 3
+        assert got == [101]  # fix wave G5: the one he named, and no one else
         got = plan_replies("arkon you up?", channel="guild", to_guid=0, weights=W, names=NAMES,
                            afk={101}, rng=rng)
         assert 101 not in got
@@ -539,3 +539,134 @@ def test_a_bare_again_is_no_question_about_the_past(line, past):
     """Fix round 1 (review C1): every "...again?" read as a question about the past. An again
     with one subject word or none asks to be reminded of tonight, not of the guild's past."""
     assert asks_the_past(line) is past
+
+
+# -- fix wave G5: a line that names one member gets that member's answer only ------------------
+# Seen live: "whatever you need <name>, just link it in chat" planned a second replier from the
+# reason pool (a remark's count is 0-2, and a named line was held to at least 1), who riffed on
+# the named member's answer with the referents tangled.
+
+from leeroy_mind.talk.select import aimed_at_one, speaks_to_guild  # noqa: E402
+
+TO_ONE = [  # the live shape, then one member named in a question, a greeting and a goodbye
+    "whatever you need arkon, just link it in chat", "arkon can you link it in chat?",
+    "what do you need arkon?", "arkon you up?", "is the vault run still on arkon",
+    "thanks arkon, that was a great pull", "lol arkon", "hey arkon", "evening arkon",
+    "gn arkon", "night arkon"]
+TO_GUILD_TOO = [  # one member named, and the guild spoken to as well
+    "arkon, anyone know where the argent dailies start?", "who has the link arkon?",
+    "arkon who's tanking tonight", "gn all, thanks arkon", "evening all, arkon welcome back",
+    "guys, arkon is a legend", "thanks everyone, especially arkon",
+    "you guys are great, arkon especially", "any1 up for voa? arkon you in?"]
+
+
+def test_the_lines_cover_every_kind_of_line():
+    assert {classify_human_line(t) for t in TO_ONE} == {"remark", "question_all", "greeting",
+                                                       "goodbye"}
+    assert {classify_human_line(t) for t in TO_GUILD_TOO} == {"remark", "question_all",
+                                                             "greeting", "goodbye"}
+
+
+@pytest.mark.parametrize("line", TO_ONE)
+def test_a_line_naming_one_member_is_answered_by_that_member_only(line):
+    """Whoever else has a reason to answer him: the reason pool adds no one."""
+    for seed in range(200):
+        got = plan_replies(line, channel="guild", to_guid=0, weights=W, names=NAMES, afk=set(),
+                           rng=random.Random(seed), reasons={102, 103, 104})
+        assert got == [101], (line, seed, got)
+        turns = plan_reply_turns(line, channel="guild", to_guid=0, weights=W, names=NAMES,
+                                 afk=set(), rng=random.Random(seed), line_id=5,
+                                 reasons={102, 103, 104})
+        assert [t.speaker for t in turns] == [101]
+
+
+@pytest.mark.parametrize("line", TO_GUILD_TOO)
+def test_a_line_that_also_speaks_to_the_guild_keeps_the_pool(line):
+    sizes = Counter()
+    for seed in range(200):
+        got = plan_replies(line, channel="guild", to_guid=0, weights=W, names=NAMES, afk=set(),
+                           rng=random.Random(seed), reasons={102, 103})
+        assert got[0] == 101 and set(got[1:]) <= {102, 103}, (line, seed, got)
+        sizes[len(got)] += 1
+    assert max(sizes) >= 2, (line, sizes)
+
+
+def test_a_question_with_no_name_keeps_the_pool():
+    """Nothing named, so the line is the guild's: 2-3 answers, the members with a reason first
+    (the rule above changes nothing for it)."""
+    sizes = Counter()
+    for seed in range(200):
+        got = plan_replies("anyone know where the argent dailies start?", channel="guild",
+                           to_guid=0, weights=W, names=NAMES, afk=set(),
+                           rng=random.Random(seed), reasons={103, 104})
+        assert {103, 104} <= set(got), (seed, got)
+        sizes[len(got)] += 1
+    assert set(sizes) == {2, 3}, sizes
+
+
+def test_a_line_naming_two_members_plans_both_and_may_add_the_pool():
+    """Two names leave the line to the usual count: a remark is answered by the two, a question
+    by the two and, half the time, one from the reason pool."""
+    for line, want in (("arkon and belra, just link it in chat", {2}),
+                       ("arkon and belra, can you link it in chat?", {2, 3})):
+        sizes = Counter()
+        for seed in range(200):
+            got = plan_replies(line, channel="guild", to_guid=0, weights=W, names=NAMES,
+                               afk=set(), rng=random.Random(seed), reasons={103, 104})
+            assert got[:2] == [101, 102] and set(got[2:]) <= {103, 104}, got
+            sizes[len(got)] += 1
+        assert set(sizes) == want, (line, sizes)
+    for seed in range(50):
+        got = plan_replies("arkon belra coros link it", channel="guild", to_guid=0, weights=W,
+                           names=NAMES, afk=set(), rng=random.Random(seed))
+        assert got[:3] == [101, 102, 103]
+
+
+def test_the_one_he_named_is_the_only_one_unless_she_cannot_answer():
+    """The rule counts the members named who can answer: an AFK or gated one is not named, so
+    the line is no one's and the guild answers it as before (the mention test above)."""
+    rng = random.Random(7)
+    sizes = {len(plan_replies("arkon you up?", channel="guild", to_guid=0, weights=W,
+                              names=NAMES, afk={101}, rng=rng)) for _ in range(200)}
+    assert sizes == {2, 3}
+    no_arkon = {g: w for g, w in W.items() if g != 101}
+    sizes = {len(plan_replies("arkon you up?", channel="guild", to_guid=0, weights=no_arkon,
+                              names=NAMES, afk=set(), rng=rng)) for _ in range(200)}
+    assert sizes == {2, 3}
+    # two named, one of them away: the one who can answers, alone, as with any one name
+    assert plan_replies("arkon belra you up?", channel="guild", to_guid=0, weights=W,
+                        names=NAMES, afk={102}, rng=rng) == [101]
+
+
+def test_a_whisper_is_still_the_one_he_whispered():
+    got = {tuple(plan_replies("arkon, you around?", channel="whisper", to_guid=102, weights=W,
+                              names=NAMES, afk=set(), rng=random.Random(s)))
+           for s in range(100)}
+    assert got <= {(102,), ()}
+
+
+def test_aimed_at_one_wants_one_name_and_no_word_to_the_guild():
+    assert aimed_at_one("link it in chat arkon", [101])
+    assert not aimed_at_one("link it in chat", [])
+    assert not aimed_at_one("link it in chat arkon belra", [101, 102])
+    assert not aimed_at_one("anyone link it in chat arkon", [101])
+
+
+@pytest.mark.parametrize("line", [
+    "anyone know where it starts?", "any1 up for voa", "anybody around", "who has the link",
+    "who's got it", "whos tanking", "guys listen up", "thanks everyone", "everyone's here",
+    "you all rock", "you guys rock", "u all ready", "hey all", "evening all", "gn team",
+    "thx guild", "sup peeps", "yall ready", "y'all ready?", "hello people", "night all",
+    "ok folks", "whoever has it, link it"])
+def test_the_words_that_speak_to_the_whole_guild(line):
+    assert speaks_to_guild(line)
+
+
+@pytest.mark.parametrize("line", [
+    "whatever you need, just link it in chat", "thats all i need", "thanks for all the help",
+    "the guild bank is full", "people are weird", "he is a team player", "what do you need?",
+    "can you link it?", "hey", "gn", "all good", "i have the whole guild to thank",
+    "link |cff0070dd|Hitem:1234|h[Everyone's Friend]|h|r please",
+    "somebody told me you had it", "are you in"])
+def test_ordinary_words_speak_to_no_one_in_particular(line):
+    assert not speaks_to_guild(line)

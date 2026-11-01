@@ -53,3 +53,18 @@ jobs:
           python-version: "3.14"
       - run: python -m pip install -e ".[test]"
       - run: python -m pytest -q
+
+  voice:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: voice
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: libatomic for pedalboard
+        run: sudo apt-get update && sudo apt-get install -y libatomic1
+      - run: python -m pip install -e ".[test]"
+      - run: python -m pytest -q

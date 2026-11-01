@@ -144,6 +144,7 @@ public:
                 Leeroy::EncodeCast(now, cast.BuildMembers(module.GuildId())));
             _greetedSerial = serial;
             LeeroyResetAfk();   // the new mind hears about everyone already AFK on the next poll
+            LeeroyResetDcTanks();   // and about every dungeon-clear run under way
         }
 
         _commands.clear();
@@ -156,6 +157,7 @@ public:
         {
             _afkPollTimer = 0;
             LeeroyPollAfk();
+            LeeroyPollDcTanks();
         }
 
         // Pushed on a GUID-set change or a successful set_rank. With no greeted mind the push is dropped: the next

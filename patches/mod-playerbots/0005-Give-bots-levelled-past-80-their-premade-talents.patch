@@ -1,14 +1,14 @@
-From 8040a53ec50258cf12daf0de02529500474eaa77 Mon Sep 17 00:00:00 2001
+From 075efcb90fb1185e6af89b6f7c988d59906b7b9c Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 16:05:31 -0400
-Subject: [PATCH 5/7] Give bots levelled past 80 their premade talents
+Subject: [PATCH 5/9] Give bots levelled past 80 their premade talents
 
 ---
  src/Bot/Factory/PlayerbotFactory.cpp | 6 ++++--
  1 file changed, 4 insertions(+), 2 deletions(-)
 
 diff --git a/src/Bot/Factory/PlayerbotFactory.cpp b/src/Bot/Factory/PlayerbotFactory.cpp
-index d6fd00d4..45fb78ef 100644
+index f6d579d6..42e6231b 100644
 --- a/src/Bot/Factory/PlayerbotFactory.cpp
 +++ b/src/Bot/Factory/PlayerbotFactory.cpp
 @@ -1806,7 +1806,8 @@ void PlayerbotFactory::InitTalentsBySpecNo(Player* bot, int specNo, bool reset)

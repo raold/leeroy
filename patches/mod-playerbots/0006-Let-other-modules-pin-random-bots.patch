@@ -1,7 +1,7 @@
-From e847415be4b67aafd6f37ec3ae348622073477eb Mon Sep 17 00:00:00 2001
+From 9839dc574b98d3a1d432af8c37779fe8dc198ac4 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 23:14:14 -0400
-Subject: [PATCH 6/7] Let other modules pin random bots
+Subject: [PATCH 6/9] Let other modules pin random bots
 
 SetPinnedBots keeps chosen random bots online regardless of bot_count and skips randomize, refresh, teleport and revive-teleport for them. Inert until called.
 ---
@@ -10,10 +10,10 @@ SetPinnedBots keeps chosen random bots online regardless of bot_count and skips 
  2 files changed, 141 insertions(+)
 
 diff --git a/src/Bot/RandomPlayerbotMgr.cpp b/src/Bot/RandomPlayerbotMgr.cpp
-index c8d27201..0f42d600 100644
+index 92af453e..1686f89f 100644
 --- a/src/Bot/RandomPlayerbotMgr.cpp
 +++ b/src/Bot/RandomPlayerbotMgr.cpp
-@@ -315,6 +315,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 /*elapsed*/, bool /*minimal*/)
+@@ -316,6 +316,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 /*elapsed*/, bool /*minimal*/)
      }
  
      GetBots();
@@ -23,7 +23,7 @@ index c8d27201..0f42d600 100644
      // Copied deliberately: ProcessBot() erases from currentBots while this is
      // being iterated below, so the loops must run over a snapshot.
      std::unordered_set<uint32> availableBots = currentBots;
-@@ -1539,6 +1542,12 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
+@@ -1550,6 +1553,12 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
      uint32 isValid = GetEventValue(bot, "add");
      if (!isValid)
      {
@@ -36,7 +36,7 @@ index c8d27201..0f42d600 100644
          if (!player || !player->GetGroup())
          {
              if (player)
-@@ -1653,6 +1662,10 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
+@@ -1664,6 +1673,10 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
  
       uint32 botId = bot->GetGUID().GetCounter();
  
@@ -47,7 +47,7 @@ index c8d27201..0f42d600 100644
      // if death revive
      if (bot->isDead())
      {
-@@ -1758,6 +1771,121 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
+@@ -1769,6 +1782,121 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
      return false;
  }
  
@@ -170,10 +170,10 @@ index c8d27201..0f42d600 100644
  {
      uint32 bot = player->GetGUID().GetCounter();
 diff --git a/src/Bot/RandomPlayerbotMgr.h b/src/Bot/RandomPlayerbotMgr.h
-index 8dedbbf3..62ef1f6e 100644
+index 6b1b465d..67dcc8e3 100644
 --- a/src/Bot/RandomPlayerbotMgr.h
 +++ b/src/Bot/RandomPlayerbotMgr.h
-@@ -110,6 +110,11 @@ public:
+@@ -137,6 +137,11 @@ public:
      bool IsRandomBot(ObjectGuid::LowType bot);
      bool IsAddclassBot(Player* bot);
      bool IsAddclassBot(ObjectGuid::LowType bot);
@@ -185,7 +185,7 @@ index 8dedbbf3..62ef1f6e 100644
      void Randomize(Player* bot);
      void Clear(Player* bot);
      void RandomizeFirst(Player* bot);
-@@ -263,6 +268,14 @@ private:
+@@ -294,6 +299,14 @@ private:
      // Written on the world thread, read from map threads.
      std::set<std::pair<uint32, uint32>> _playerZones;
      std::mutex _playerZonesLock;

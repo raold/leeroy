@@ -518,7 +518,7 @@ class Reactions(Pipeline):
         if not hg or not self.world.human_online or self._login_quiet(now):
             return
         cands = {g: (self.personas.get(g), self.store.get_relationship(g, hg))
-                 for g in self._candidates()}
+                 for g in self._candidates(hearable=False)}  # a whisper reaches him anywhere
         g = self.whispers.maybe(now, trigger, cands)
         if g is None:
             return
@@ -566,10 +566,16 @@ class Reactions(Pipeline):
                                               exclude=(woman.guid,))
                if (q := self.personas.get(g)).identity.player_gender == "male"}
         plans = self.asides.on_trigger(trigger, woman, now, self.raid.phase(now), men)
-        self._queue([(Turn(kind=plan.kind, speaker=plan.speaker, channel=channel,
-                           instruction=plan.instruction, delay=self.rng.uniform(*ASIDE_S)),
-                      TurnMeta(self._new_id(), why=f"aside:{trigger}",
-                               aside=plan if plan.counted else None)) for plan in plans])
+        items: list[tuple[Turn, TurnMeta]] = []
+        for plan in plans:
+            meta = TurnMeta(self._new_id(), why=f"aside:{trigger}",
+                            aside=plan if plan.counted else None)
+            if items and not plan.counted:  # a defuse answers the sour aside before it (I7)
+                meta.after = items[-1][1].turn_id
+            items.append((Turn(kind=plan.kind, speaker=plan.speaker, channel=channel,
+                               instruction=plan.instruction, delay=self.rng.uniform(*ASIDE_S)),
+                          meta))
+        self._queue(items)
 
     def _turn_dropped(self, turn: Turn, meta: TurnMeta) -> None:
         if meta.aside is not None:  # never said: it gives its place in the hour back

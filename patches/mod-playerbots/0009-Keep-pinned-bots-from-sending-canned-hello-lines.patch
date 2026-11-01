@@ -1,0 +1,112 @@
+From 7c1e5b4989a2603ca75db3c2f4b5641643a3cbc6 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 13:29:03 -0400
+Subject: [PATCH 9/9] Keep pinned bots from sending canned hello lines
+
+The previous commit silenced the group-leader change lines. Pinned
+bots still said "Hello" after accepting a party invite, when the owner
+logs in, after an area trigger teleport and after reviving at a spirit
+healer. Those are now skipped for pinned bots.
+
+A command the master typed still gets its reply. The spirit healer
+greeting after "revive" and "AI was reset to defaults" after "reset ai"
+are kept, because chat commands carry the player who typed them and
+packet and automatic events carry none.
+
+Left alone on purpose: the meeting stone hello in SummonAction is
+unreachable (GetSecurity() >= SEC_PLAYER is always true), and the
+OnBotLogin hello only reaches a bot that has a master, which means one
+the master added with a typed command.
+---
+ src/Ai/Base/Actions/AcceptInvitationAction.cpp | 4 +++-
+ src/Ai/Base/Actions/AreaTriggerAction.cpp      | 4 +++-
+ src/Ai/Base/Actions/ResetAiAction.cpp          | 4 ++--
+ src/Ai/Base/Actions/ReviveFromCorpseAction.cpp | 6 ++++--
+ src/Bot/RandomPlayerbotMgr.cpp                 | 6 ++++--
+ 5 files changed, 16 insertions(+), 8 deletions(-)
+
+diff --git a/src/Ai/Base/Actions/AcceptInvitationAction.cpp b/src/Ai/Base/Actions/AcceptInvitationAction.cpp
+index 3a142a85..69add4d6 100644
+--- a/src/Ai/Base/Actions/AcceptInvitationAction.cpp
++++ b/src/Ai/Base/Actions/AcceptInvitationAction.cpp
+@@ -51,7 +51,9 @@ bool AcceptInvitationAction::Execute(Event /*event*/)
+     botAI->ChangeStrategy("+follow,-lfg,-bg", BOT_STATE_NON_COMBAT);
+     botAI->Reset();
+ 
+-    botAI->TellMaster(PlayerbotTextMgr::instance().GetBotTextOrDefault("hello", "Hello", {}));
++    // Pinned bots speak through the module that pinned them; no canned greeting.
++    if (!sRandomPlayerbotMgr.IsPinned(bot->GetGUID().GetCounter()))
++        botAI->TellMaster(PlayerbotTextMgr::instance().GetBotTextOrDefault("hello", "Hello", {}));
+ 
+     if (sPlayerbotAIConfig.SummonWhenGroup && bot->GetDistance(inviter) > sPlayerbotAIConfig.SightDistance)
+     {
+diff --git a/src/Ai/Base/Actions/AreaTriggerAction.cpp b/src/Ai/Base/Actions/AreaTriggerAction.cpp
+index a75bb3db..668f1ff0 100644
+--- a/src/Ai/Base/Actions/AreaTriggerAction.cpp
++++ b/src/Ai/Base/Actions/AreaTriggerAction.cpp
+@@ -79,6 +79,8 @@ bool AreaTriggerAction::Execute(Event /*event*/)
+     p.rpos(0);
+     bot->GetSession()->HandleAreaTriggerOpcode(p);
+ 
+-    botAI->TellMaster(PlayerbotTextMgr::instance().GetBotTextOrDefault("hello", "Hello", {}));
++    // Pinned bots speak through the module that pinned them; no canned greeting.
++    if (!sRandomPlayerbotMgr.IsPinned(bot->GetGUID().GetCounter()))
++        botAI->TellMaster(PlayerbotTextMgr::instance().GetBotTextOrDefault("hello", "Hello", {}));
+     return true;
+ }
+diff --git a/src/Ai/Base/Actions/ResetAiAction.cpp b/src/Ai/Base/Actions/ResetAiAction.cpp
+index d386be9c..152dfeef 100644
+--- a/src/Ai/Base/Actions/ResetAiAction.cpp
++++ b/src/Ai/Base/Actions/ResetAiAction.cpp
+@@ -61,8 +61,8 @@ bool ResetAiAction::Execute(Event event)
+     }
+     PlayerbotRepository::instance().Reset(botAI);
+     botAI->ResetStrategies(false);
+-    // Pinned bots speak through the module that pinned them; no canned status line.
+-    if (!sRandomPlayerbotMgr.IsPinned(bot->GetGUID().GetCounter()))
++    // Pinned bots speak through the module that pinned them; a typed command still gets its reply.
++    if (!sRandomPlayerbotMgr.IsPinned(bot->GetGUID().GetCounter()) || event.getOwner())
+         botAI->TellMaster("AI was reset to defaults");
+     return true;
+ }
+diff --git a/src/Ai/Base/Actions/ReviveFromCorpseAction.cpp b/src/Ai/Base/Actions/ReviveFromCorpseAction.cpp
+index 9b3c5fbf..c77c2f18 100644
+--- a/src/Ai/Base/Actions/ReviveFromCorpseAction.cpp
++++ b/src/Ai/Base/Actions/ReviveFromCorpseAction.cpp
+@@ -302,7 +302,7 @@ GraveyardStruct const* SpiritHealerAction::GetGrave(bool startZone)
+     return ClosestGrave;
+ }
+ 
+-bool SpiritHealerAction::Execute(Event /*event*/)
++bool SpiritHealerAction::Execute(Event event)
+ {
+     // GetGrave() picks world graveyards; teleporting there from a BG removes the bot from it.
+     if (bot->InBattleground())
+@@ -336,7 +336,9 @@ bool SpiritHealerAction::Execute(Event /*event*/)
+                 bot->SpawnCorpseBones();
+                 context->GetValue<Unit*>("current target")->Set(nullptr);
+                 bot->SetTarget();
+-                botAI->TellMaster(PlayerbotTextMgr::instance().GetBotTextOrDefault("hello", "Hello", {}));
++                // Pinned bots speak through the module that pinned them; a typed command still gets its reply.
++                if (!sRandomPlayerbotMgr.IsPinned(bot->GetGUID().GetCounter()) || event.getOwner())
++                    botAI->TellMaster(PlayerbotTextMgr::instance().GetBotTextOrDefault("hello", "Hello", {}));
+ 
+                 if (dCount > 20)
+                     context->GetValue<uint32>("death count")->Set(0);
+diff --git a/src/Bot/RandomPlayerbotMgr.cpp b/src/Bot/RandomPlayerbotMgr.cpp
+index b3d15e0f..9d4f7a65 100644
+--- a/src/Bot/RandomPlayerbotMgr.cpp
++++ b/src/Bot/RandomPlayerbotMgr.cpp
+@@ -3096,8 +3096,10 @@ void RandomPlayerbotMgr::OnPlayerLogin(Player* player)
+                 {
+                     botAI->SetMaster(player);
+                     botAI->ResetStrategies();
+-                    botAI->TellMaster(PlayerbotTextMgr::instance().GetBotTextOrDefault(
+-                        "hello", "Hello", {}));
++                    // Pinned bots speak through the module that pinned them; no canned greeting.
++                    if (!IsPinned(bot->GetGUID().GetCounter()))
++                        botAI->TellMaster(PlayerbotTextMgr::instance().GetBotTextOrDefault(
++                            "hello", "Hello", {}));
+                 }
+ 
+                 break;

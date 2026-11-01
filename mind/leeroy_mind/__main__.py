@@ -630,6 +630,42 @@ def _human_guid(store, explicit: int | None) -> int:
     return guid
 
 
+def cmd_voices(args) -> int:
+    """`voices brief`: what the casting reads of the cast (Task 19). Read-only (N1): the database
+    is opened mode=ro as doctor opens it, never through open_db, so nothing migrates, nothing is
+    written and no mind.lock is taken. It is safe on a snapshot or on the live file."""
+    from .storage.store import Store
+    from .voice.brief import brief_entries, write_entries
+    root = _root(args)
+    path = Path(args.db).resolve() if args.db else root / "mind.db"
+    if not path.is_file():
+        print(f"voices brief: no mind.db at {path}", file=sys.stderr)
+        return 1
+    try:
+        conn = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
+    except sqlite3.Error as e:
+        print(f"voices brief: cannot open {path}: {e}", file=sys.stderr)
+        return 1
+    conn.row_factory = sqlite3.Row
+    try:
+        if conn.execute("PRAGMA user_version").fetchone()[0] < 1:
+            print(f"voices brief: {path} has no schema", file=sys.stderr)
+            return 1
+        entries = brief_entries(Store(conn, clock=SystemClock()))
+    except sqlite3.Error as e:
+        print(f"voices brief: cannot read {path}: {e}", file=sys.stderr)
+        return 1
+    finally:
+        conn.close()
+    written = write_entries(entries, Path(args.out) if args.out else root / "voices")
+    women = [e for e in entries if e["gender"] == "female"]
+    british = sum(e["accent"] == "en-gb" for e in women)
+    share = f"{british / len(women):.0%}" if women else "n/a"
+    print(f"brief: {len(entries)} members -> {written}")
+    print(f"British women: {british} of {len(women)} ({share})")
+    return 0
+
+
 def cmd_roster(args) -> int:
     import asyncio
     from .app import AlreadyRunning
@@ -1139,6 +1175,17 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     p_fix.set_defaults(func=cmd_fix_typing)
     p_pers.set_defaults(func=cmd_personas)
     from .personas.roster import DEFAULT_CONF, DEFAULT_MYSQL, ROSTER_FILE_HELP
+    p_voices = sub.add_parser("voices", help="the guild's voices")
+    _add_data_dir(p_voices)
+    vsub = p_voices.add_subparsers(dest="action", required=True)
+    p_brief = vsub.add_parser("brief", help="write voices/brief.json for the casting, reading "
+                                            "mind.db read-only (never migrates, takes no lock)")
+    _add_data_dir(p_brief, after_action=True)
+    p_brief.add_argument("--db", default=None, help="read this mind.db (a snapshot) instead of "
+                                                    "the data dir's")
+    p_brief.add_argument("--out", default=None, help="where brief.json goes (default: "
+                                                     "<data dir>/voices)")
+    p_voices.set_defaults(func=cmd_voices)
     p_ros = sub.add_parser("roster", help="store the guild roster in mind.db")
     _add_data_dir(p_ros)
     src = p_ros.add_mutually_exclusive_group(required=True)

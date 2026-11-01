@@ -72,26 +72,18 @@ if [ "$changed" -eq 0 ]; then log "everything already current"; exit 0; fi
 [ "$DRY" -eq 1 ] && { log "dry run, nothing changed"; exit 0; }
 
 # --- new config keys -----------------------------------------------------
-# A pull often adds .conf.dist keys your live .conf does not have. Missing keys
-# fall back to compiled-in defaults, but you should know. Module templates live
-# in <repo>/conf/; the core's are under src/server/apps/ and map to configs/.
-new_keys() {
-    local dist="$1" livedir="$2" live
-    live="$livedir/$(basename "$dist" .dist)"
-    [ -f "$live" ] || { warn "$(basename "$dist" .dist) missing from $livedir -- copy it from $dist"; return; }
-    grep -oE '^[A-Za-z][A-Za-z0-9_.]*[[:space:]]*=' "$dist" | sed 's/[[:space:]]*=//' | sort -u |
-    while read -r k; do
-        grep -qE "^[#[:space:]]*${k}[[:space:]]*=" "$live" || printf '    new key: %-50s (%s)\n' "$k" "$(basename "$live")"
-    done
-}
-
+# A pulled module often adds .conf.dist keys your live .conf does not have.
+# Missing keys fall back to compiled-in defaults, but you should know.
 log "checking for new config keys"
-for dist in "$AC_SRC"/src/server/apps/{worldserver,authserver}/*.conf.dist; do
-    [ -e "$dist" ] && new_keys "$dist" "$AC_CONF"
-done
 for r in "${REPOS[@]}"; do
     for dist in "$r"/conf/*.conf.dist; do
-        [ -e "$dist" ] && new_keys "$dist" "$AC_MODCONF"
+        [ -e "$dist" ] || continue
+        live="$AC_MODCONF/$(basename "$dist" .dist)"
+        [ -f "$live" ] || { warn "$(basename "$dist" .dist) missing from $AC_MODCONF -- copy it from $dist"; continue; }
+        grep -oE '^[A-Za-z][A-Za-z0-9_.]*[[:space:]]*=' "$dist" | sed 's/[[:space:]]*=//' | sort -u |
+        while read -r k; do
+            grep -qE "^[#[:space:]]*${k}[[:space:]]*=" "$live" || printf '    new key: %-50s (%s)\n' "$k" "$(basename "$live")"
+        done
     done
 done
 

@@ -45,6 +45,8 @@ LEEROY_TEST(Protocol_EventShapes)
     CHECK_EQ(a["id"], "c1"); CHECK_EQ(a["ok"], true); CHECK_EQ(a["error"], "");
     CHECK_EQ(json::parse(EncodePong(1, "p"))["id"], "p");
     CHECK_EQ(json::parse(EncodeDcStatus(1, 9, true, false, "STATUS\tx"))["payload"], "STATUS\tx");
+    auto dc = json::parse(EncodeDcStatus(1, 9, false, false, ""));   // a run's edge has no addon payload
+    CHECK_EQ(dc["enabled"], false); CHECK_EQ(dc["paused"], false); CHECK_EQ(dc["payload"], "");
     auto te = json::parse(EncodeTextEmote(1, 7, "hug", 1, false));
     CHECK_EQ(te["type"], "text_emote"); CHECK_EQ(te["emote"], "hug");
     CHECK_EQ(te["target_guid"], 1); CHECK_EQ(te["via_bridge"], false);

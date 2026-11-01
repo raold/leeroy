@@ -1,0 +1,60 @@
+# How Kokoro should say public WoW nouns that misaki's G2P gets wrong (lexicon.py).
+# Each top-level key is a word, its value the IPA in misaki's phonemes (lexicon.PHONEMES;
+# its g is U+0261), sent to misaki as [word](/IPA/). The local voice-data/lexicon.toml has
+# the same shape and wins over this file.
+#
+# check: public WoW nouns whose reading is checked against misaki in both accents (Task 4
+# Step 5). A word misaki misreads gets an entry below; every word here is also known to the
+# recognizer's name correction.
+check = [
+  "Sindragosa", "Lich King", "Arthas", "Ulduar", "Icecrown", "Saurfang", "Putricide",
+  "Rotface", "Festergut", "Lana'thel", "Valithria", "Marrowgar", "Deathwhisper", "Algalon",
+  "Yogg-Saron", "Mimiron", "Thorim", "Hodir", "Freya", "Anub'arak", "Naxxramas", "Dalaran",
+  "Orgrimmar", "Thrall", "Garrosh", "Malygos", "Sartharion", "Onyxia", "Wintergrasp",
+  "Archavon",
+]
+
+# One IPA serves both accents, so a British voice says these as written, an r after a vowel
+# included. The readings below are misaki's US ones (UK where it differs), measured 2026-10-31.
+
+# misaki reads /kˈɛlθjuzˌæd/: the stress and the vowels wrong (measured 2026-10-30)
+"Kel'Thuzad" = "kˌɛlθˈuzɑd"
+
+# /lˈɪk/ ("lick"), in the Lich King too: espeak's reading
+Lich = "lˈɪʧ"
+
+# /sˈɔəfˌæŋ/ (UK /sˈɔːəfˌaŋ/): "saw-uh-fang", for "SOR-fang"
+Saurfang = "sˈɔɹfˌæŋ"
+
+# /lˈænæθᵊl/: "LAN-ath-ul", for "LAH-nuh-thel"
+"Lana'thel" = "lˈɑnəθˌɛl"
+
+# /mˈæɹOɡəɹ/ (UK /mˈaɹQɡə/): the last syllable reduced, for "MARE-oh-gar"
+Marrowgar = "mˈæɹOɡˌɑɹ"
+
+# /ˈælɡælən/: "AL-gal-un", for "AL-guh-lon"
+Algalon = "ˈælɡəlˌɑn"
+
+# /mˈɪmIəɹn/ (UK /mˈɪmIən/): "MIM-eye-ern", for "MIM-ih-ron"
+Mimiron = "mˈɪmɪɹˌɑn"
+
+# /hˈɑdɪɹ/ (UK /hˈɒdiə/): "HAH-deer", for "HOH-deer"
+Hodir = "hˈOdɪɹ"
+
+# /ˈænəbˌæɹæk/: the stress on the first syllable, for "uh-NOOB-uh-rak"
+"Anub'arak" = "ənˈubəɹˌæk"
+
+# /næksɹˈɑməz/: the stress on the second syllable, for "NAX-ruh-mas"
+Naxxramas = "nˈæksɹəmˌæs"
+
+# /dˈælæɹən/: "DAL-ar-un", for "DAL-uh-ran"
+Dalaran = "dˈæləɹˌæn"
+
+# /ˈɔɹɡɹɪməɹ/ (UK /ˈɔːɡɹɪmə/): the last syllable reduced, for "ORG-rim-ar"
+Orgrimmar = "ˈɔɹɡɹɪmˌɑɹ"
+
+# /mælˈɪɡOz/: the stress on the second syllable, for "MAL-ih-gohs"
+Malygos = "mˈælɪɡˌOs"
+
+# /ˌɑɹʧˈAvɑn/: "ar-CHAY-von", for "AR-kuh-von"
+Archavon = "ˈɑɹkəvˌɑn"

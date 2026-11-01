@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "leeroy-voice"
+version = "0.1.0"
+description = "The guild's voice comms: members speak in their rooms, push-to-talk for the human"
+requires-python = "==3.12.*"
+license = "GPL-3.0-or-later"
+dependencies = [
+  "numpy==2.5.4",
+  "scipy==1.17.1",
+  "soundfile==0.14.0",
+  "soxr==1.1.0",
+  "pyloudnorm==0.2.0",
+  "pedalboard==0.9.26",
+  "rapidfuzz==3.14.6",
+  "jellyfish==1.3.0",
+  "websockets==17.2",
+]
+
+[project.optional-dependencies]
+audio = [
+  "sounddevice==0.5.6",
+  "psutil==7.2.2",
+  "pycaw==20260927; sys_platform == 'win32'",
+  "comtypes==1.4.17; sys_platform == 'win32'",
+]
+# misaki without its [en] extra, which pulls torch. phonemizer, not phonemizer-fork as well:
+# kokoro-onnx requires phonemizer>=3.4.0, misaki's espeak fallback runs on it, and the fork
+# (which only misaki's [en] asks for) installs over the same phonemizer/ files
+tts = [
+  "kokoro-onnx==0.6.1",
+  "onnxruntime==1.31.1",
+  "misaki==0.9.4",
+  "num2words==0.5.14",
+  "spacy==3.8.18",
+  "phonemizer==3.4.0",
+  "espeakng-loader==0.2.4",
+  "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl#sha256=1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85",
+]
+# onnxruntime as in tts: onnx-asr takes it only through its [cpu] extra, and faster-whisper
+# unpinned (>=1.14,<2)
+stt = [
+  "onnx-asr==0.12.0",
+  "onnxruntime==1.31.1",
+  "huggingface-hub==1.33.0",
+  "faster-whisper==1.2.1",
+  "ctranslate2==4.8.4",
+]
+# CTranslate2 4.6.3 and later no longer needs cuDNN
+gpu = ["nvidia-cublas-cu12==12.9.2.10; sys_platform == 'win32'"]
+# PyPI's Windows wheels of torch are CPU builds
+cast = ["speechbrain==1.1.2", "torch==2.8.0", "torchaudio==2.8.0"]
+test = ["pytest==9.2.0"]
+
+[tool.setuptools.packages.find]
+include = ["leeroy_voice*"]
+
+[tool.setuptools.package-data]
+"leeroy_voice" = ["data/*.toml", "ui/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-m", "not engines and not device and not windows and not gpu and not ollama and not live"]
+markers = [
+  "engines: needs the model files under voice-data/models",
+  "device: opens real audio devices",
+  "windows: Raw Input, COM or the Windows audio session API",
+  "gpu: needs the GPU (nvidia-smi, CUDA)",
+  "ollama: needs a running Ollama",
+  "live: needs the running services (the mind or leeroy-voice)",
+]

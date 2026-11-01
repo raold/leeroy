@@ -1,6 +1,7 @@
 """Who speaks. A member speaks because the topic touches them, they were addressed, or they
 know the person who spoke last: the weights below reward those reasons and the reply planner
-never answers a line with the whole guild.
+never answers a line with the whole guild. A line of his that names one member, and speaks to
+no one else, gets that member's answer alone (aimed_at_one).
 
 Answering the human (final fix wave, ruling final I1): the reasons are being addressed or
 mentioned, the topic fitting the member (their interests, their role and title, how they play),
@@ -8,7 +9,11 @@ an open thread with him (they answered him in the last OPEN_THREAD_S), real clos
 history (lived_close: well liked or well known in a row with interactions, never the
 attraction or the romance stage) and, for women, quest talk. A woman's attitude only weights
 the draw, a little (ATTITUDE_WEIGHT). An unlived row (no interactions: a stance's seed, a
-relinked friend declaration) is no reason and adds no weight."""
+relinked friend declaration) is no reason and adds no weight.
+
+His pushback (fix wave G6): a line of his that doubts or is annoyed by what a member just said
+(pushback_kind) is answered first by that member (the engine finds them: the one it names, else
+whoever spoke last), whose answer is plain and one line."""
 import re
 from dataclasses import dataclass
 from typing import Callable, Collection, Literal, Sequence
@@ -18,7 +23,7 @@ from leeroy_mind.storage.rows import PersonaStateRow, Relationship
 from leeroy_mind.talk.budget import DayPhase
 from leeroy_mind.talk.filters import subject_words
 from leeroy_mind.talk.names import game_thing
-from leeroy_mind.text import strip_wow_markup
+from leeroy_mind.text import normalize_words, strip_wow_markup
 from leeroy_mind.talk.turns import TurnKind
 
 NON_CORE_FACTOR = 0.08
@@ -360,24 +365,129 @@ def _remark_count(rng) -> int:
     return next(n for cum, n in REPLY_COUNT_REMARK if r < cum)
 
 
+# Words that speak to the whole guild (fix wave G5): a line with one is for everyone, whoever
+# else it names. Not "someone" or "somebody": they point at no one in particular.
+_GUILD_WORDS = frozenset("""anyone any1 anybody everyone everybody who whos whoever guys yall
+y'all folks peeps ppl""".split())
+# A hello, a goodbye, thanks or "you" before one of the _ADDRESS words is a word to the guild
+# too: "hey all", "gn team", "thanks people", "you all".
+_SALUTE = frozenset("""hey hi hello yo sup evening morning afternoon night nite gn gnight
+goodnight bye cya later laters thanks thx ty gz gj you u""".split())
+_ADDRESS_WORDS = _ADDRESS - {"o"}
+
+
+def speaks_to_guild(text: str) -> bool:
+    """His line speaks to the whole guild: "anyone", "who", "guys", "everyone" and the like
+    (_GUILD_WORDS), or an address after a hello, a goodbye, thanks or "you" ("hey all", "gn
+    team", "you all"). The names inside item and quest links are not read."""
+    plain = _BRACKETS.sub(" ", strip_wow_markup(text)).casefold()
+    tokens = [t.removesuffix("'s").strip("'") for t in _WORD.findall(plain)]
+    return any(t in _GUILD_WORDS or (t in _ADDRESS_WORDS and i > 0 and tokens[i - 1] in _SALUTE)
+               for i, t in enumerate(tokens))
+
+
+def aimed_at_one(text: str, called: Sequence[int]) -> bool:
+    """His line names one member (`called`: the members it names who can answer) and speaks to
+    no one else, so that member answers it alone (fix wave G5, seen live: "whatever you need
+    <name>, just link it in chat" drew a second replier from the reason pool, who riffed on the
+    first one's answer). A second name, or a word to the whole guild (speaks_to_guild),
+    leaves it to the usual draw."""
+    return len(called) == 1 and not speaks_to_guild(text)
+
+
+# His pushback (fix wave G6, seen live: a member teased him with the facts inverted, and his
+# "what are you talking about?", "are you drunk?" and "you are fixing to get the boot" each drew
+# another tease). Whole words or phrases, matched after normalize_words, so "that's" and
+# "that’s" are one; ANGER wins over DOUBT.
+DOUBT_CUES = (
+    "what are you talking about", "what r u talking about", "what do you mean", "what do u mean",
+    "wdym", "what does that mean", "makes no sense", "make no sense", "doesn't make sense",
+    "doesnt make sense", "don't make sense", "dont make sense", "not following",
+    "i don't follow", "i dont follow", "you lost me", "come again", "wtf", "what the fuck",
+    "what the hell", "are you drunk", "are u drunk", "you drunk", "are you high",
+    "are you serious", "that's not true", "thats not true", "no i didn't", "no i didnt",
+    "i never did", "certainly not", "that's wrong", "thats wrong", "you're wrong", "youre wrong",
+    "ur wrong")
+ANGER_CUES = (
+    "get the boot", "you're out", "youre out", "ur out", "gkick", "kick you", "shut up",
+    "knock it off", "cut it out", "stop it", "that's enough", "thats enough", "last warning",
+    "watch your mouth")
+_DOUBT = tuple(f" {normalize_words(c)} " for c in DOUBT_CUES)
+_ANGER = tuple(f" {normalize_words(c)} " for c in ANGER_CUES)
+# "you're out" is a kick, but "you're out of range" (or mana, line of sight...) is a status
+# call: those phrases never count as ANGER ("you're out of line" still does).
+_NOT_ANGER = tuple(f" {normalize_words(f'{who} out of {what}')} "
+                   for who in ("you're", "youre", "ur")
+                   for what in ("range", "mana", "los", "combat", "position", "sight", "reach",
+                                "line of sight", "melee range", "healing range", "heal range",
+                                "energy", "rage", "runic power", "ammo", "arrows", "reagents",
+                                "bag space", "gold"))
+# Doubt too: two question marks in a row anywhere, or a line that is only "huh?", "what?" or
+# "seriously?".
+_ASKED_TWICE = "??"
+_ONE_WORD_DOUBT = re.compile(r"\W*(?:huh|what|seriously)\s*\?[\s?!]*")
+# A pushback that names nobody is aimed at whoever wrote the last member line in its channel
+# this long before it (the engine's _pushback).
+PUSHBACK_WINDOW_S = 120.0
+
+
+def pushback_kind(text: str) -> Literal["doubt", "anger"] | None:
+    """"anger" when his line is annoyed with someone (ANGER_CUES), "doubt" when he didn't
+    follow what they said or thinks it wrong (DOUBT_CUES, "??" anywhere, or the whole line
+    "huh?", "what?" or "seriously?"), else None. Case and punctuation don't count, typographic
+    apostrophes are typed ones, and the names inside item and quest links are not read."""
+    plain = _BRACKETS.sub(" ", strip_wow_markup(text))
+    words = f" {normalize_words(plain)} "
+    calm = words
+    for phrase in _NOT_ANGER:
+        calm = calm.replace(phrase, " ")
+    if any(c in calm for c in _ANGER):
+        return "anger"
+    if (any(c in words for c in _DOUBT) or _ASKED_TWICE in plain
+            or _ONE_WORD_DOUBT.fullmatch(plain.casefold().strip())):
+        return "doubt"
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class Pushback:
+    """His line pushing back on one member (fix wave G6): kind is pushback_kind's, target the
+    member it is aimed at, who can answer it, and line the id of the target's own last line on
+    its channel this session (0: none), which their prompt always shows."""
+    kind: Literal["doubt", "anger"]
+    target: int
+    line: int = 0
+
+
 def plan_replies(text: str, *, channel: str, to_guid: int, weights: dict[int, float],
                  names: dict[int, str], afk: set[int], rng,
                  reasons: Collection[int] = (),
                  allowed: Callable[[int], bool] | None = None,
-                 whisper_p: float = WHISPER_REPLY_P) -> list[int]:
+                 whisper_p: float = WHISPER_REPLY_P, target: int = 0) -> list[int]:
     """Who answers the human's line, in order. weights already hold recency and the callers'
     reasons to speak; a zero weight never answers (the addressee excepted). `reasons` are the
     members with a real reason (see has_reason) and are drawn first; `allowed` is the raid
     gate, e.g. lambda g: raid.allows(g, TurnKind.REPLY_HUMAN, now). A whisper is answered by
-    the one he whispered, `whisper_p` of the time (whisper_reply_p)."""
+    the one he whispered, `whisper_p` of the time (whisper_reply_p). A line that names one
+    member and speaks to no one else is answered by that member alone (aimed_at_one); the
+    members it names answer first in any other.
+    `target`: the member his pushback is aimed at (Pushback.target, fix wave G6). They answer
+    first, a whisper every time, and count among the line's answers as a member it names
+    would, whatever their weight; the usual draw follows. A target who can't answer (AFK, no
+    weight entry, refused by `allowed`) changes nothing."""
     if allowed is not None:
         weights = {g: w for g, w in weights.items() if allowed(g)}
     if channel == "whisper":
-        if to_guid not in weights or to_guid in afk or rng.random() >= whisper_p:
+        if to_guid not in weights or to_guid in afk or (
+                target != to_guid and rng.random() >= whisper_p):
             return []
         return [to_guid]
-    kind = classify_human_line(text)
     called = [g for g in mentioned(text, names) if g in weights and g not in afk][:3]
+    if aimed_at_one(text, called):
+        return called
+    if target and target in weights and target not in afk and target not in called:
+        called = [target, *called]
+    kind = classify_human_line(text)
     if kind == "remark":
         n = _remark_count(rng)
         if called:
@@ -393,10 +503,10 @@ def plan_reply_turns(text: str, *, channel: str, to_guid: int, weights: dict[int
                      names: dict[int, str], afk: set[int], rng, line_id: int,
                      human_guid: int = 0, reasons: Collection[int] = (),
                      allowed: Callable[[int], bool] | None = None,
-                     whisper_p: float = WHISPER_REPLY_P) -> list[ReplyTurn]:
+                     whisper_p: float = WHISPER_REPLY_P, target: int = 0) -> list[ReplyTurn]:
     speakers = plan_replies(text, channel=channel, to_guid=to_guid, weights=weights,
                             names=names, afk=afk, rng=rng, reasons=reasons, allowed=allowed,
-                            whisper_p=whisper_p)
+                            whisper_p=whisper_p, target=target)
     kind = TurnKind.GOODNIGHT if classify_human_line(text) == "goodbye" else TurnKind.REPLY_HUMAN
     to = human_guid if channel == "whisper" else 0
     return [ReplyTurn(g, f"reply-{line_id}-{i}", kind, channel, channel, to)

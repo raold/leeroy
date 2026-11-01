@@ -94,6 +94,57 @@ def test_name_mention_gets_that_person(store, clock, tmp_path):
     run(main())
 
 
+def test_a_line_naming_one_member_gets_that_members_answer_only(store, clock, tmp_path):
+    """Seen live (fix wave G5): "whatever you need <name>, just link it in chat" drew a second
+    replier from the reason pool, who riffed on the first one's answer with the referents
+    tangled. A line that names one member and speaks to nobody else is answered by that member
+    alone, however many have a reason to answer him."""
+    async def main():
+        seed_test_cast(store)
+        for g in (102, 103, 104):  # friendships he has lived: a real reason to answer him
+            store.put_relationship(Relationship(a=g, b=HUMAN, affinity=45, familiarity=60,
+                                                interactions=9))
+        talk = numbered()  # one count across the rigs: their lines stay in the store
+        for seed in range(40):
+            r = make_rig(store, clock, tmp_path, seed=seed, script=talk)
+            await r.human("whatever you need arkon, just link it in chat")
+            await r.advance(45, step=2)
+            assert [s.guid for s in r.sent.says()] == [101], seed
+            await r.engine.end_session()
+        r = make_rig(store, clock, tmp_path, script=talk)  # the pool is there for the guild
+        await r.human("anyone up for a run tonight?")
+        await r.advance(45, step=2)
+        assert len(r.sent.says()) >= 2
+        assert any(u["guid"] in (102, 103, 104) for u in r.utterances())
+    run(main())
+
+
+def test_a_line_naming_one_member_and_speaking_to_the_guild_keeps_the_guild(store, clock,
+                                                                           tmp_path):
+    async def main():
+        talk = numbered()
+        for seed in range(6):
+            r = make_rig(store, clock, tmp_path, seed=seed, script=talk)
+            await r.human("arkon, anyone up for a run tonight?")
+            await r.advance(45, step=2)
+            says = r.sent.says()
+            assert says[0].guid == 101 and 2 <= len(says) <= 3, seed
+            await r.engine.end_session()
+    run(main())
+
+
+def test_a_line_naming_two_members_is_answered_by_both(store, clock, tmp_path):
+    async def main():
+        talk = numbered()
+        for seed in range(6):
+            r = make_rig(store, clock, tmp_path, seed=seed, script=talk)
+            await r.human("arkon and belra, just link it in chat")
+            await r.advance(45, step=2)
+            assert [s.guid for s in r.sent.says()][:2] == [101, 102], seed
+            await r.engine.end_session()
+    run(main())
+
+
 def test_human_bot_command_gets_no_reply(store, clock, tmp_path):
     async def main():
         r = make_rig(store, clock, tmp_path)
@@ -2395,6 +2446,25 @@ def test_his_quest_question_gets_a_quest_helper_with_the_facts(store, clock, tmp
             hers = [p for p in r.prompts() if "You play Ebbo" in p]
             # the quest helper who knows it answers first, with the facts (fix wave G1)
             assert hers and FACTS_MARK in hers[0] and "You play Ebbo" in r.prompts()[0]
+            await r.engine.end_session()
+    run(main())
+
+
+def test_his_game_question_put_to_one_member_is_answered_by_that_member_alone(store, clock,
+                                                                             tmp_path):
+    """Fix wave G5: the topic-fit replier joins a question to the guild (the test above), not
+    one he put to a member by name. The member he named answers it, with the facts."""
+    async def main():
+        seed_test_cast(store)
+        save_member(store, 105, player_gender="female")  # the quest helper that would be added
+        talk = numbered()
+        for seed in range(6):
+            lib = FakeLibrary(FACT_CHUNKS)
+            r = make_rig(store, clock, tmp_path, seed=seed, script=talk, library=lib)
+            await r.human("arkon, where do the lancer's trial dailies start?")
+            await r.advance(45, step=2)
+            assert [s.guid for s in r.sent.says()] == [101], seed
+            assert FACTS_MARK in r.prompts()[0] and len(lib.searches) == 1
             await r.engine.end_session()
     run(main())
 

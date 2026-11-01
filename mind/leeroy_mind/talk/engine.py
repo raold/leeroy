@@ -12,6 +12,10 @@ With the library (fix wave part E), his game question (facts.game_question) gets
 lookup, started as the replies are planned; every reply to that line carries its facts, and a
 member who knows the topic (facts.fit_tier) is among those who answer.
 
+His pushback on what a member just said (fix wave G6, select.pushback_kind) is answered first
+by that member, in one line, told he is pushing back (prompt.pushback_help); the rest of the
+plan is as usual (_pushback).
+
 Silence is valid: a reply count can be 0, the model can answer (nothing), and every guard, raid
 rule and chain cap drops a turn rather than delaying it. Nothing here waits on a turn: on_event,
 on_human_chat and tick spawn them and return."""
@@ -40,15 +44,16 @@ from leeroy_mind.talk.filters import holds, word_counts
 from leeroy_mind.talk.pipeline import (FOLLOW_SOURCES, KEEPER, NOBODY, NOBODY_WHO, THEIRS,
                                        TurnMeta, _asks, _names_list, chain_base, log,
                                        picked_why)
+from leeroy_mind.talk.prompt import pushback_help
 from leeroy_mind.talk.questions import fit_tier, game_question, is_plan
 from leeroy_mind.talk.raid import RaidPhase, RaidState
 from leeroy_mind.talk.reactions import (EVENING_S, GZ_TEMPLATES, LEAD_CALL, LEAD_GROUP_CALL,
                                         LOGIN_QUIET_S, MID_GROUP, MID_RAID, Reactions)
 from leeroy_mind.talk.romance import JealousyAsides, WhisperPlanner, flirt_chance
-from leeroy_mind.talk.select import (WHISPER_REPLY_P, ReplyTurn, asks_the_past,
-                                     classify_human_line, is_quest_talk, mentioned,
-                                     pick_speakers, plan_reply_turns, topic_words,
-                                     whisper_reply_p)
+from leeroy_mind.talk.select import (PUSHBACK_WINDOW_S, WHISPER_REPLY_P, Pushback, ReplyTurn,
+                                     aimed_at_one, asks_the_past, classify_human_line,
+                                     is_quest_talk, mentioned, pick_speakers, plan_reply_turns,
+                                     pushback_kind, topic_words, whisper_reply_p)
 from leeroy_mind.talk.states import (Altered, advance_state, capped_states, roll_session_state,
                                      state_cap)
 from leeroy_mind.talk.turns import Turn, TurnKind
@@ -61,6 +66,8 @@ __all__ = ["GZ_TEMPLATES", "TalkEngine", "TurnSource", "flirt_chance", "share_re
 REPLY_CHANNEL = {"guild": "guild", "officer": "officer", "party": "party", "raid": "raid",
                  "raid_warning": "raid", "say": "say", "yell": "say", "whisper": "whisper"}
 COMMAND_CHANNELS = frozenset({"party", "raid", "raid_warning"})
+# Where a line of his can push back on a member (fix wave G6): every reply channel but /say.
+PUSHBACK_CHANNELS = frozenset({"guild", "officer", "party", "raid", "whisper"})
 REPLY_FIRST_S, REPLY_NEXT_S = (1.0, 4.0), (2.0, 6.0)
 OPEN_S, CONTINUE_S = (0.0, 3.0), (4.0, 15.0)
 STATE_STEP_S = 600.0
@@ -209,7 +216,9 @@ class TalkEngine(Reactions):
         the world. Bot commands in party or raid (the app also keeps them out of threads: the
         same check, a different job) and emote lines get nothing. Replies are spoken one after
         another, so each can see the one before."""
-        if row.channel not in REPLY_CHANNEL:
+        reply_to = REPLY_CHANNEL.get(row.channel) or (
+            row.channel if row.channel.startswith("voice:") else None)  # a line he spoke
+        if reply_to is None:
             return
         if row.channel in COMMAND_CHANNELS and looks_like_bot_command(row.text):
             return
@@ -220,11 +229,10 @@ class TalkEngine(Reactions):
         self._chain_line(chain_base(row.channel, row.from_guid, row.to_guid, row.zone), now,
                          from_human=True)
         self._touch_talk(now)
-        reply_to = REPLY_CHANNEL[row.channel]
         whisper = reply_to == "whisper"
         audience = {row.to_guid} if whisper else self.world.audience(
             reply_to, from_guid=hg, to_guid=row.to_guid, zone=row.zone)
-        cands = [g for g in self._candidates(audience)
+        cands = [g for g in self._candidates(audience, hearable=False)
                  if self.raid.allows(g, TurnKind.REPLY_HUMAN, now)
                  and not (reply_to == "say" and self._is_dead(g, now))]
         if not cands:  # liveops M5: a line nobody answers says why in the log
@@ -234,36 +242,42 @@ class TalkEngine(Reactions):
         ctx = self._context(now, topic_words([row.text]), quest=is_quest_talk(row.text))
         weights, pool = self._weigh(cands, last=hg, ctx=ctx, reply=True)
         names = {g: self.world.members[g].name for g in cands if g in self.world.members}
+        push = self._pushback(row, reply_to, cands)
         planned = plan_reply_turns(row.text, channel=reply_to, to_guid=row.to_guid,
                                    weights=weights, names=names, afk=self.world.afk,
                                    rng=self.rng, line_id=row.id, human_guid=hg, reasons=pool,
                                    whisper_p=whisper_reply_p(self.personas.get(row.to_guid))
-                                   if whisper else WHISPER_REPLY_P)
+                                   if whisper else WHISPER_REPLY_P,
+                                   target=push.target if push else 0)
         called = mentioned(row.text, names)
-        shared = share_reason_pool(planned, pool, weights, called, self.rng)
+        # the members he named and the one his pushback is aimed at keep their place
+        held = called if push is None or push.target in called else [push.target, *called]
+        shared = share_reason_pool(planned, pool, weights, held, self.rng)
         # the turn share_reason_pool re-drew (it hands back a new list) came from the draw
-        redrawn = ([t.turn_id for t in planned if t.speaker not in called][-1:]
+        redrawn = ([t.turn_id for t in planned if t.speaker not in held][-1:]
                    if shared is not planned else [])
         planned = shared
         question = game_question(row.text) if self.facts is not None else None
         fitted = None
-        if question is not None and not whisper:
-            planned, fitted = self._fit_replier(planned, question.topic, weights, called,
+        # a question put to the one member he named is answered by that member, not by whoever
+        # knows the topic (fix wave G5)
+        if question is not None and not whisper and not aimed_at_one(row.text, called):
+            planned, fitted = self._fit_replier(planned, question.topic, weights, held,
                                                 line_id=row.id, channel=reply_to)
             # only the first answer gets the facts: the one who knows the topic goes first,
             # after anyone he named
-            fit = [t for t in planned if t.turn_id == fitted and t.speaker not in called]
+            fit = [t for t in planned if t.turn_id == fitted and t.speaker not in held]
             if fit:
-                named = [t for t in planned if t.speaker in called]
+                named = [t for t in planned if t.speaker in held]
                 planned = named + fit + [t for t in planned if t not in named and t not in fit]
         lore: dict[str, tuple[str, int]] = {}
         kept = None  # the turn a keeper of the guild's past was put in
-        if not whisper and not called and question is None and (
+        if not whisper and not called and push is None and question is None and (
                 self.facts is not None or game_question(row.text) is None):
             planned, lore, kept = self._plan_lore(row, planned, weights, reply_to)
         if (not whisper and self._login_quiet(now)
                 and classify_human_line(row.text) == "greeting"):
-            planned = self._cap_hellos(planned, called)  # the login's 2-3 hellos in all
+            planned = self._cap_hellos(planned, held)  # the login's 2-3 hellos in all
         log.info("reply_planned: line=%d channel=%s pool=%d replies=%d game=%s", row.id,
                  reply_to, len(pool), len(planned), question.topic if question else "-")
         if question is not None and planned:
@@ -281,7 +295,9 @@ class TalkEngine(Reactions):
                 log.info("reply_skipped: line=%d reason=no_channel guid=%d", row.id, rt.speaker)
                 continue
             delay = self.rng.uniform(*(REPLY_FIRST_S if i == 0 else REPLY_NEXT_S))
+            pushed = push is not None and rt.speaker == push.target
             how = ("whisper" if whisper else "named" if rt.speaker in called
+                   else "pushback" if pushed
                    else "topic_fit" if rt.turn_id == fitted
                    else "memory" if rt.turn_id == kept
                    else "weighted_draw" if rt.turn_id in redrawn
@@ -291,14 +307,20 @@ class TalkEngine(Reactions):
             if group_chat and rt.kind is TurnKind.GOODNIGHT and self.world.in_group(rt.speaker):
                 told = self._mid_raid_text(group_chat, lead=rt.speaker == lead)
             said_lore, pin = lore.get(rt.turn_id, ("", 0))
-            items.append((Turn(kind=rt.kind, speaker=rt.speaker,
-                               channel=reply_to if rt.kind is TurnKind.GOODNIGHT else channel,
-                               to_guid=rt.to_guid, addressee=hg, trigger_line=row.id,
-                               instruction=told,
-                               delay=delay * self._effects(rt.speaker).delay_mult),
-                          TurnMeta(rt.turn_id, answers_human=True, whisper_reply=whisper,
-                                   why=f"reply:{how}", facts_line=facts, lore=said_lore,
-                                   lore_memory=pin)))
+            turn = Turn(kind=rt.kind, speaker=rt.speaker,
+                        channel=reply_to if rt.kind is TurnKind.GOODNIGHT else channel,
+                        to_guid=rt.to_guid, addressee=hg, trigger_line=row.id,
+                        instruction=told, delay=delay * self._effects(rt.speaker).delay_mult)
+            meta = TurnMeta(rt.turn_id, answers_human=True, whisper_reply=whisper,
+                            why=f"reply:{how}", facts_line=facts, lore=said_lore,
+                            lore_memory=pin)
+            if pushed:  # one line, told he is pushing back, by how agreeable they are
+                ease = self.personas.get(rt.speaker).big_five.agreeableness.score
+                turn.instruction = " ".join(
+                    x for x in (told, pushback_help(self.human, push.kind, ease)) if x)
+                turn.max_lines = 1
+                meta.pushback, meta.pushback_line = push.kind, push.line
+            items.append((turn, meta))
         if (lead and lead not in {rt.speaker for rt in planned} and lead in cands
                 and self.world.in_group(lead)):
             items.append((Turn(kind=TurnKind.GOODNIGHT, speaker=lead, channel=group_chat,
@@ -326,6 +348,57 @@ class TalkEngine(Reactions):
         else:
             text = LEAD_GROUP_CALL if lead else MID_GROUP
         return text.format(name=self.human.called, them=self.human.forms[1])
+
+    def _pushback(self, row: ChatLineRow, reply_to: str, cands: list[int]) -> Pushback | None:
+        """His line pushing back on a member (select.pushback_kind), and who it is aimed at (fix
+        wave G6): the one member it names; naming nobody, the one he whispers, or the one who
+        wrote the last member line on its channel within PUSHBACK_WINDOW_S before it, whether
+        the mind said that line or the bridge reported it. With voice on, a typed line is read
+        against the room he sits in too, since what he heard is what he is answering; the
+        answer stays typed (Comms.place). The names read are the whole cast's,
+        so a line naming a member who is away is no pushback on someone else. None for a line
+        naming two members or more, with nobody in the window, or when the one it is aimed at
+        can't answer it (not among `cands`: AFK, offline, the raid gate)."""
+        pushes = reply_to in PUSHBACK_CHANNELS or reply_to.startswith("voice:")
+        kind = pushback_kind(row.text) if pushes else None
+        if kind is None:
+            return None
+        hg = self.human.guid
+        named = mentioned(row.text, {g: m.name for g, m in self.world.members.items() if g != hg})
+        channels = [c for c, to in REPLY_CHANNEL.items() if to == reply_to] or [reply_to]
+        if self.comms is not None and not reply_to.startswith("voice:"):
+            room = self._comms_says("human_room", None)
+            if room:
+                channels.append(f"voice:{room}")
+        line = None
+        if len(named) > 1:
+            target, why = 0, "two_names"
+        elif named or reply_to == "whisper":
+            target, why = (named[0] if named else row.to_guid), "cannot_answer"
+        else:
+            line = self._line_before(row, channels,
+                                     since=max(row.ts - PUSHBACK_WINDOW_S, self._chat_from))
+            target, why = (line.from_guid, "cannot_answer") if line else (0, "nobody")
+        if target not in cands:
+            log.info("reply_pushback_none: line=%d kind=%s reason=%s", row.id, kind, why)
+            return None
+        if line is None:  # their own last line on its channel, for their prompt to show
+            line = self._line_before(row, channels, since=self._chat_from, guid=target)
+        push = Pushback(kind, target, line.id if line is not None else 0)
+        log.info("reply_pushback: line=%d kind=%s target=%d own_line=%d", row.id, kind, target,
+                 push.line)
+        return push
+
+    def _line_before(self, row: ChatLineRow, channels: list[str], *, since: float,
+                     guid: int = 0) -> ChatLineRow | None:
+        """The last line a cast member (`guid` when given) wrote on `channels` before his line
+        `row` and no older than `since`, from the log, so the mind's lines and those the
+        bridge reported alike; a whisper only one to him."""
+        cast, hg = self.world.cast_guids(), self.human.guid
+        return next((r for r in self.store.lines_before(row.id, channels, since=since,
+                                                        from_guid=guid)
+                     if r.from_guid in cast and (r.channel != "whisper" or r.to_guid == hg)),
+                    None)
 
     def _fit_replier(self, planned: list[ReplyTurn], topic: str, weights: dict[int, float],
                      called: list[int], *, line_id: int,
@@ -544,16 +617,19 @@ class TalkEngine(Reactions):
         kind, addressee, trigger, delay = TurnKind.OPEN, None, None, OPEN_S
         why = "burst:weighted_draw"
         lines, speakers = 0, {speaker}
+        typed_on = None  # the game channel it began on, for a line that can't be spoken
         while True:
             now = self.clock.now()
             turn, meta = self._social_turn(kind, speaker, channel, addressee=addressee,
                                            trigger=trigger, room=plan.size - lines, now=now,
                                            delay=self.rng.uniform(*delay), why=why)
+            meta.typed_on = typed_on
             sent = await self._speak(turn, meta)
+            typed_on = meta.typed_on
             lines += len(sent)
             if not sent or lines >= plan.size:
                 return
-            last, now = speaker, self.clock.now()
+            last, now, channel = speaker, self.clock.now(), turn.channel  # where it was said
             pool = [g for g in self._candidates(self._audience(channel, last), exclude=(last,))
                     if (len(speakers) < plan.max_speakers or g in speakers)
                     and self.raid.allows(g, TurnKind.CONTINUE, now)]
