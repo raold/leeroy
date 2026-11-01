@@ -2,12 +2,10 @@
 the reflection model, how many units each stage will run tonight, the slot-seconds the night
 has before 06:00, and the fixed order in which optional work is cut while the estimate is over.
 
-A raid night with about 100 members holding new memories comes to about 38,300 slot-seconds at
-planning costs (10.6 slot-hours): about 5.3 hours on 2 slots with perfect packing, about 6 with
-the stage barriers. (It was 27,900 until a notes rewrite was priced at the two JSON calls it
-makes, Task 9 review I2, 33,300 until each reflecting member's supersession calls were, Task 10
-K2, and 37,300 until the core judge's were, Task 11 I1.) The planning costs are the memo's upper
-ends. Once a stage has made calls on 3 nights, its measured cost per call replaces them
+A unit's planning cost includes its generating and judging calls. Life and WoW-life each
+make two JSON calls when accepted, even though their fiction judge only checks invariants.
+The per-call planning costs are the memo's upper ends. Once a stage has made calls on 3
+nights, its measured cost per call replaces them
 (measured_call_s), and the decide calls of a reflect unit with candidates and the core judge's
 calls of a reflecting member are the counts the nights measured (measured_supersede_calls,
 measured_core_judge_calls).
@@ -57,8 +55,8 @@ UNIT_CALLS: dict[str, dict[str, float]] = {
     "notes": {"json": 2.0},                    # the call and its own judge batch of one: 40 s
     "encounters": {"json": 1.1},
     "confide": {"json": 1.1},
-    "life": {"json": 1.1},
-    "wowlife": {"json": 1.1},
+    "life": {"json": 2},                      # generation and its invariant judge
+    "wowlife": {"json": 2},                   # generation and its invariant judge
     "follow": {"json": 1.1},
     "lexicon": {"json": 1.1},
     "profile": {"json": 1.1},

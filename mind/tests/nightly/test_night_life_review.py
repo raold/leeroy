@@ -6,6 +6,7 @@ import pytest
 
 from conftest import run
 from nightly.conftest import yes
+from leeroy_mind.nightly import budget
 from leeroy_mind.nightly.life import ensure_thread, stage_life
 from leeroy_mind.nightly.motives import sample_traits
 from leeroy_mind.nightly.wowlife import WowLife, put_wow_life, stage_wowlife
@@ -121,6 +122,11 @@ def test_actual_life_then_wowlife_uses_small_mood_and_new_title_after_window_clo
         h.store.conn.execute("DELETE FROM trait_state WHERE night=? AND guid=101", (ctx.night,))
     run(stage_life(ctx))
     run(stage_wowlife(ctx))
+    actual = [c["format"]["title"] for c in ctx.reasoner.llm.calls if c.get("format")]
+    assert actual == ["life_beat", "judge", "wow_line", "judge"]
+    for stage in ("life", "wowlife"):
+        assert budget.unit_calls(stage) == 2
+        assert budget.estimate({stage: 1}, measured={})[stage] == 2 * budget.PLAN_S["json"]
     after = sample_traits(ctx, 101)
     assert h.count("emotion") == 0
     assert after["extraversion"] == pytest.approx(before["extraversion"] + .5 * mood)
