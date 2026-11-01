@@ -5,14 +5,14 @@ import math
 from collections import Counter
 from itertools import combinations
 
-from leeroy_mind.nightly import knowledge
+from leeroy_mind.nightly import gossip, knowledge
 from leeroy_mind.nightly.evidence import Evidence, Item, load_facts, load_items, retrieve
 from leeroy_mind.nightly.ground import Claim, Verdict, check, ground, log_verdicts
 from leeroy_mind.nightly.llm import schema, system_prompt
 from leeroy_mind.nightly.motives import trait_today
 from leeroy_mind.nightly.places import PLACES, place_kind
 from leeroy_mind.nightly.relations import apply_capped, copresence
-from leeroy_mind.personas.screens import has_word
+from leeroy_mind.personas.screens import has_word, redact_real_name
 from leeroy_mind.storage.rows import MemoryRow
 from leeroy_mind.talk.prompt import relationship_card
 from leeroy_mind.text import strip_wow_markup, truncate_words
@@ -168,6 +168,10 @@ ENCOUNTER_SCHEMA = schema("encounter", {
         "delta": {"type": "integer"}})},
     "bystanders": {"type": "array", "maxItems": 3, "items": schema("bystander", {
         "who": {"type": "string"}, "noticed": {"type": "string", "maxLength": 120}})},
+    "gossip": schema("gossip", {
+        "teller": {"type": "string", "enum": ["a", "b"]},
+        "about": {"type": "string"}, "source": {"type": "integer"},
+        "text": {"type": "string", "maxLength": 200}}) | {"type": ["object", "null"]},
 })
 
 
@@ -253,6 +257,69 @@ def _text(text):
     return " ".join(strip_wow_markup(text).split())
 
 
+def _gossip_text(ctx, text):
+    return redact_real_name(_text(text), ctx.ident, ctx.ident.called)
+
+
+def _gossip_sources(ctx, row, memories, offer):
+    """Pick one teller before admitting anything private to a shared scene prompt."""
+    a, b = row["a"], row["b"]
+    named = row["volition"] in {"gossip", "correct"}
+    if named and (offer is None or row["volition"] == "correct"):
+        return a, []
+    known = set(load_facts(ctx).names.values())
+    options = []
+    for m in memories:
+        if m.owner not in {a, b}:
+            continue
+        other = b if m.owner == a else a
+        about = sorted(g for g in m.actors if g not in {a, b} and g in known)
+        if not about or not gossip.source_allowed(ctx, m, m.owner, other):
+            continue
+        if named and (m.owner != a or gossip.source_root(ctx.store, m) != offer["rumor"]["root"]):
+            continue
+        traits = trait_today(ctx.store, ctx.night, m.owner, ctx.persona(m.owner))
+        score = gossip.tell_score(m.importance, m.confidence, traits)
+        options.append((score, m, about, traits))
+    options.sort(key=lambda x: (-x[0], x[1].owner != a, x[1].id))
+    teller = a if named or not options else options[0][1].owner
+    return teller, [entry for entry in options if entry[1].owner == teller]
+
+
+def _gossip_prompt(ctx, row, ev, teller, options, offer):
+    named = row["volition"] in {"gossip", "correct"}
+    if named and offer is None:
+        return "The intended rumor is unavailable; return gossip null.\n"
+    hearer = row["b"] if teller == row["a"] else row["a"]
+    lines = []
+    if offer is not None:
+        rumor, version = offer["rumor"], offer["version"]
+        held = version["text"] if version else rumor["canonical"]
+        lines.append(f"Rumor {rumor['id']} about {ctx.name(offer['about'])}: "
+                     f"{_gossip_text(ctx, held)}")
+        if row["volition"] == "correct":
+            lines.append(f"Operation: correct. {ctx.name(teller)} explains the canonical account "
+                         f"to {ctx.name(hearer)}: {_gossip_text(ctx, rumor['canonical'])}. "
+                         "Return gossip null.")
+            return "\n".join(lines) + "\n"
+    if not options:
+        return "\n".join([*lines, "No memory may be passed on; return gossip null."]) + "\n"
+    key = "a" if teller == row["a"] else "b"
+    lines.append(f"Only {ctx.name(teller)} (teller {key}) may pass on one of these memories. "
+                 "If one of them passes on something from their memories, retell it in one "
+                 "sentence by the operation below. Use the source's bracketed evidence alias, "
+                 "the named person as about, and return gossip null if nothing is passed on.")
+    for _, m, abouts, traits in options:
+        for about in abouts:
+            if offer is not None and about != offer["about"]:
+                continue
+            op = gossip.choose_op(traits, ctx.store.get_relationship(hearer, about).affinity)
+            words = gossip.OP_WORDS[op].format(hearer=ctx.name(hearer), about=ctx.name(about))
+            lines.append(f"Source [{ev.alias(f'memory:{m.id}')}], about {ctx.name(about)}: "
+                         f"operation {op}, {words}.")
+    return "\n".join(lines) + "\n"
+
+
 def _title(ctx, guid):
     row = ctx.store.conn.execute("SELECT title FROM life_thread WHERE guid=? AND status='active' "
                                  "ORDER BY id DESC LIMIT 1", (guid,)).fetchone()
@@ -265,7 +332,7 @@ def _memory(owner, text, *, other, evidence, importance, valence, now, embedding
         t_created=int(now), t_accessed=int(now), access_n=0, actors=tuple(other), place=None,
         boss_id=None, raid_id=None, importance=importance, valence=valence, source="offscreen",
         evidence=tuple(evidence), embedding=embedding, scope=scope,
-        scope_with=other[0] if scope == "secret" and len(other) == 1 else 0)
+        scope_with=other[0] if scope != "open" and len(other) == 1 else 0)
 
 
 async def run_encounter(ctx, row):
@@ -279,21 +346,35 @@ async def run_encounter(ctx, row):
 
     found = await asyncio.gather(retrieve(ctx, a, ctx.name(b), 3),
                                  retrieve(ctx, b, ctx.name(a), 3))
-    shown, privacy, marked = [], {}, set()
+    shown, privacy, marked, admission = [], {}, set(), {}
     with ctx.store.transaction():
         # Either retrieval can await while the other finishes. Re-read both together before
         # filtering, so stale scope/text never enters the scene prompt in the first place.
         current_memories = {m.id: m for m in ctx.store.get_memories(
             [m.id for memories in found for m in memories if m.id is not None])}
+        offer = gossip.rumor_offer(ctx, row)
+        forced = [] if offer is None else offer["sources"]
+        available = {m.id: m for m in [*forced, *current_memories.values()]}
+        teller, options = _gossip_sources(ctx, row, available.values(), offer)
+        offered = {entry[1].id for entry in options}
+        # Named rumors carry both canonical and held-version provenance, even when ordinary
+        # retrieval did not find it. Their helper separately checks disclosure permission.
+        for m in forced:
+            if m.id not in privacy:
+                shown.append(m)
+                privacy[m.id] = _privacy(ctx.store, m)
+                admission[m.id] = "rumor"
         for owner, other, memories in ((a, b, found[0]), (b, a, found[1])):
             for retrieved_memory in memories:
                 m = current_memories.get(retrieved_memory.id)
                 if m is None or m.owner != owner:
                     continue
                 visible, secret, state = _visible(ctx, m, other)
-                if visible and m.id not in privacy:
+                private_offer = m.owner == teller and m.id in offered
+                if (visible or private_offer) and m.id not in privacy:
                     shown.append(m)
                     privacy[m.id] = state
+                    admission[m.id] = "context" if visible else "gossip"
                     if secret:
                         marked.add(f"memory:{m.id}")
         candidates = bystander_candidates(ctx, row, ctx.rng("enc", row["idx"], "around"), shown=shown)
@@ -311,13 +392,15 @@ async def run_encounter(ctx, row):
         relationships = "\n".join(f"{ctx.name(g)} toward " + relationship_card(ctx.name(other),
             ctx.store.get_relationship(g, other), is_human=False) for g, other in ((a, b), (b, a)))
         titles = f"{ctx.name(a)}: {_title(ctx, a)}\n{ctx.name(b)}: {_title(ctx, b)}"
+        gossip_prompt = _gossip_prompt(ctx, row, ev, teller, options, offer)
     system = system_prompt("encounter", "Write a small off-screen scene between two guildmates; "
         "no romance or flirting between them.\n{cards}", ctx.settings.data_dir, human=ctx.ident,
         cards=f"{ctx.card(a)}\n{ctx.card(b)}")
     user = (f"a: {ctx.name(a)}; b: {ctx.name(b)}\nSetting: {row['setting']}\n{relationships}\n"
             f"Life threads:\n{titles}\nEvidence:\n{ev.render(ctx.tz)}\n")
-    if row["volition"] in INTENT:
+    if row["volition"] in INTENT and (row["volition"] not in {"gossip", "correct"} or offer):
         user += INTENT[row["volition"]].format(a=ctx.name(a), b=ctx.name(b)) + "\n"
+    user += gossip_prompt
     if candidates:
         user += "People who might be around: " + ", ".join(ctx.name(g) for g in candidates) + ".\n"
     else:
@@ -337,6 +420,19 @@ async def run_encounter(ctx, row):
                   for key, g in (("a", a), ("b", b))]
         pairs = await ground(ctx, [scene, *claims], ev, facts)
     accepted = bool(claims) and all(verdict.ok for _, verdict in pairs)
+    telling = None
+    if reply.get("gossip") is not None and row["volition"] != "correct":
+        payload = reply["gossip"]
+        source = ev.ref(payload["source"])
+        # Only model-facing aliases are accepted; a coincident database ID is never a fallback.
+        source_id = int(source.removeprefix("memory:")) if source.startswith("memory:") else None
+        if source_id not in offered or payload["teller"] != ("a" if teller == a else "b"):
+            pairs.append((Claim("gossip", teller, _gossip_text(ctx, payload["text"]), [source]),
+                          Verdict(False, "deterministic", "gossip source not offered")))
+        else:
+            telling = {**payload, "source": source_id,
+                       "about": _gossip_text(ctx, payload["about"]),
+                       "text": _gossip_text(ctx, payload["text"])}
     around, seen = [], set()
     names = {ctx.name(g).casefold(): g for g in candidates}
     if accepted:
@@ -371,11 +467,17 @@ async def run_encounter(ctx, row):
             raise ValueError("Encounter changed while its scene was generated")
         if a not in ctx.members() or b not in ctx.members():
             raise ValueError("Encounter participant became unavailable")
+        if gossip.rumor_offer(ctx, row) != offer:
+            raise ValueError("Encounter rumor changed while its scene was generated")
         fresh = {m.id: m for m in store.get_memories([m.id for m in shown])}
         for m in shown:
             if fresh.get(m.id) != m:
                 raise ValueError("Encounter memory changed while its scene was generated")
             visible, _, state = _visible(ctx, m, b if m.owner == a else a)
+            if admission[m.id] == "rumor":
+                visible = offer is not None  # The fresh offer above rechecks its permissions.
+            elif admission[m.id] == "gossip":
+                visible = gossip.source_allowed(ctx, m, teller, b if teller == a else a)
             if not visible or state != privacy[m.id]:
                 raise ValueError("Encounter privacy changed while its scene was generated")
         now = ctx.clock.now()
@@ -387,6 +489,11 @@ async def run_encounter(ctx, row):
         if any(g not in eligible for g, _, _ in around):
             raise ValueError("Encounter bystander became unavailable")
         scope = "secret" if row["private"] or marked or knowledge.secret_rooted(store, shown_refs) else "open"
+        if scope == "open" and any(state[4] or any(s != "open" for _, s, _ in state[1])
+                                   for state in privacy.values()):
+            # Legacy rows can say open even though a deeper memory cites a whisper.
+            # The writer derives direct refs, so explicitly preserve the graph's restriction.
+            scope = "private"
         for i, (key, g, other) in enumerate((("a", a, b), ("b", b, a))):
             claim, data = claims[i], memories[key]
             ident = ctx.writer.put(_memory(g, claim.text, other=(other,), evidence=refs,
@@ -424,9 +531,18 @@ async def run_encounter(ctx, row):
         if row["volition"] in {"confront", "make_up"}:
             store.conn.execute("UPDATE story_arc SET last_beat=? WHERE key=? AND status='open'",
                                (now, arc_key("feud", a, b)))
+        gossip_enc = dict(row) | {"_gossip_teller": teller, "_gossip_sources": tuple(sorted(offered)),
+                                  "_shown_refs": tuple(shown_refs), "_shown": tuple(shown)}
+        if row["volition"] == "correct" and offer is not None:
+            gossip.after_correction(store, ctx, gossip_enc, offer["rumor"]["id"], b, now=now)
+        elif telling is not None:
+            gossip.after_gossip(store, ctx, gossip_enc, telling, shown, now=now)
     ctx.commit(STAGE, unit, write)
 
 
 async def stage_encounters(ctx):
+    if not ctx.done(STAGE, "fade") and not ctx.commit(
+            STAGE, "fade", lambda store: gossip.fade(store, now=ctx.clock.now())):
+        return
     rows = {f"enc:{row['idx']}": row for row in await plan(ctx) if row["status"] == "planned"}
     await ctx.map_units(STAGE, list(rows), lambda unit: run_encounter(ctx, rows[unit]))

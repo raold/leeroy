@@ -19,7 +19,7 @@ def reply(**changes):
     data = {"scene": "Arkon and Belra argued about kiting at the bank.",
         "memories": [{"who": "a", "text": "Belra lectured me on kiting.", "importance": 9, "valence": -0.8},
                      {"who": "b", "text": "Arkon listened to my advice.", "importance": 4, "valence": 0.5}],
-        "deltas": [{"from": "a", "dim": "affinity", "delta": -5}], "bystanders": []}
+        "deltas": [{"from": "a", "dim": "affinity", "delta": -5}], "bystanders": [], "gossip": None}
     return data | changes
 
 
