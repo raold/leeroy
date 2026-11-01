@@ -59,7 +59,7 @@ UNIT_CALLS: dict[str, dict[str, float]] = {
     "life": {"json": 2},                      # generation and its invariant judge
     "wowlife": {"json": 2},                   # generation and its invariant judge
     "follow": {"json": 1.1},
-    "lexicon": {"json": 1.1},
+    "lexicon": {"json": 1},                   # one proposal per eligible laughed-at moment
     "profile": {"json": 1.1},
     "stories": {"think": 1, "json": 2},        # 130 s
     "recap": {"think": 1, "json": 2},          # 130 s
@@ -362,6 +362,11 @@ def _forget(ctx: "NightContext") -> int:
     return count_pending(ctx)
 
 
+def _lexicon(ctx: "NightContext") -> int:
+    from leeroy_mind.nightly.language_births import count_candidates
+    return count_candidates(ctx)
+
+
 register_counter("reflect", _reflect)
 register_counter("reflect_small", _reflect_small)
 register_counter("encounters", _scenes)
@@ -371,4 +376,5 @@ register_counter("stories", _stories)
 register_counter("recap", _recap)
 register_counter("chronicle", _sunday)
 register_counter("forget", _forget)
+register_counter("lexicon", _lexicon)
 register_counter("eval", _sunday)
