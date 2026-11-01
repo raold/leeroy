@@ -143,6 +143,13 @@ def no_real_name(store: Store) -> list[tuple[str, str]]:
     return hits
 
 
+def put_wow(h, guid, **cols):
+    """A WoW-vs-life state row; shared with the later breaks stage's tests."""
+    from leeroy_mind.nightly.wowlife import get_wow_life, put_wow_life
+    with h.store.transaction():
+        put_wow_life(h.store, replace(get_wow_life(h.store, guid), **cols))
+
+
 class NightHarness:
     """What a nightly test works on. `store` is a migrated mind.db on `clock`, a StepClock at
     T, holding the test cast (101-105, P1b's seed), the human (guid 1, Testmage, level 83, the
