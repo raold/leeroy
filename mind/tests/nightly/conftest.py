@@ -197,6 +197,21 @@ class NightHarness:
     def rel(self, a: int, b: int, **cols) -> None:
         self.store.put_relationship(replace(self.store.get_relationship(a, b), **cols))
 
+    def live(self):
+        from leeroy_mind.nightly.attraction import LiveAttraction
+        return LiveAttraction(self.store, PersonaCache(self.store), self.clock, lambda: self.ident)
+
+    def seen(self, *guids):
+        from leeroy_mind.personas.io import load_persona
+        with self.store.transaction():
+            for guid in guids:
+                p = load_persona(self.store, guid)
+                self.store.conn.execute(
+                    "INSERT INTO attraction_state(guid,stance,version,updated) VALUES (?,?,?,?) "
+                    "ON CONFLICT(guid) DO UPDATE SET stance=excluded.stance, "
+                    "version=excluded.version, updated=excluded.updated",
+                    (guid, p.romance.stance, self.store.persona_versions()[guid], self.clock.now()))
+
     # -- game events: stamped at t, the clock left where it was --------------------------------
 
     @contextmanager
