@@ -106,6 +106,8 @@ CPU_START_RAM_GIB = 12.0
 CPU_MIN_RAM_GIB = 4.0
 CPU_FALLBACK_RESERVE_S = 7.0  # bounded worker cleanup (5 s), then Kokoro (2 s)
 CPU_MIN_BUDGET_S = 2.0
+CPU_STARTUP_BUDGET_S = 60.0  # model loading and one discarded warmup together
+CPU_WARMUP_BUDGET_S = 30.0
 WOW_WATCH_S = 2.0  # WoW's level is read this often while the mic is open and nothing ducks
 WOW_MOVED = 0.005  # a change this large is no rounding
 DEBUG_KEEP_S = 24 * 3600.0  # M25
@@ -1140,18 +1142,26 @@ class VoiceService:
 
     async def _start_cpu_expressive(self) -> None:
         cpu, epoch = self._expressive_cpu, self._epoch
+        spec = next((s for s in sorted(self._specs.values(), key=lambda s: s.guid)
+                     if s.engine == cpu.name), None)
         available = available_ram_gib()
-        if (not self._online or not self.server.connected or available is None
+        if (spec is None or not self._online or not self.server.connected or available is None
                 or available < CPU_START_RAM_GIB):
             self._expressive_at = self._clock.now() + RETRY_S
             return
         self._expressive_why = "loading CPU"
         cancelled = threading.Event()
+        deadline = time.monotonic() + CPU_STARTUP_BUDGET_S
 
         def load():
             if (not cancelled.is_set() and self._online and self.server.connected
                     and self._epoch == epoch):
                 cpu.start()
+                if (not cancelled.is_set() and self._online and self._epoch == epoch):
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise EngineError("CPU voice: startup deadline reached")
+                    cpu.warmup(spec, timeout_s=min(CPU_WARMUP_BUDGET_S, remaining))
                 # The thread still reaches this check if its awaiting task is cancelled.
                 if cancelled.is_set() or not self._online or self._epoch != epoch:
                     cpu.stop()
@@ -1161,7 +1171,8 @@ class VoiceService:
             while not loading.done():
                 await asyncio.wait({loading}, timeout=.25)
                 available = available_ram_gib()
-                if (not self._online or self._epoch != epoch or available is None
+                if (time.monotonic() >= deadline or not self._online
+                        or self._epoch != epoch or available is None
                         or available < CPU_MIN_RAM_GIB):
                     cancelled.set()
                     await asyncio.to_thread(cpu.stop)

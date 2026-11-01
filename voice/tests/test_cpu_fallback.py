@@ -22,6 +22,10 @@ class Cpu(Stand):
     def __init__(self):
         super().__init__(up=False)
         self.budgets = []
+        self.warmups = []
+
+    def warmup(self, spec, *, timeout_s=30.0):
+        self.warmups.append((spec.guid, timeout_s))
 
     def synth(self, text, spec, style, speed, *, timeout_s=None):
         self.budgets.append(timeout_s)
@@ -79,6 +83,7 @@ def test_cpu_preserves_two_sentences_without_gpu_lease_or_segment_gap(tmp_path, 
         assert rig.service.state()["expressive_device"] == "cpu"
         assert all(status.gpu == "none" for status in rig.got(Status))
         assert cpu.budgets == [15.0]
+        assert len(cpu.warmups) == 1 and cpu.warmups[0][0] == 101
     go(tmp_path, fake_bank, cpu, body)
     assert not cpu.up
 
@@ -170,6 +175,77 @@ def test_cpu_unloads_on_logout_and_reloads_next_session(tmp_path, fake_bank):
         await rig.seat(101)
         await until(rig, lambda: rig.service._cpu_active)
         assert cpu.loads == 2
+    go(tmp_path, fake_bank, cpu, body)
+
+
+def test_background_warmup_finishes_before_cpu_readiness_and_does_not_block_urgent(tmp_path, fake_bank):
+    cpu, entered, release = Cpu(), threading.Event(), threading.Event()
+    warmup = cpu.warmup
+
+    def slow_warmup(*args, **kwargs):
+        warmup(*args, **kwargs)
+        entered.set()
+        assert release.wait(5)
+    cpu.warmup = slow_warmup
+
+    async def body(rig):
+        try:
+            await rig.seat(101)
+            await until(rig, entered.is_set)
+            assert cpu.up and not rig.service._cpu_active
+            assert rig.service.state()["expressive_device"] == "none"
+            await rig.mind.send(rig.speak("warming", priority="p1", ttl=3))
+            await rig.sees("warming", "started")
+            assert rig.engine.live() == ["hello there everyone"]
+            assert cpu.budgets == []
+        finally:
+            release.set()
+        await until(rig, lambda: rig.service._cpu_active)
+        assert cpu.loads == 1 and len(cpu.warmups) == 1
+        assert 0 < cpu.warmups[0][1] <= 30
+        assert rig.guard.holders == {} and rig.service._status().gpu == "none"
+    go(tmp_path, fake_bank, cpu, body)
+
+
+def test_failed_warmup_unloads_and_backs_off_on_kokoro(tmp_path, fake_bank):
+    cpu = Cpu()
+
+    def fail(*args, **kwargs):
+        raise EngineError("warmup failed")
+    cpu.warmup = fail
+
+    async def body(rig):
+        await rig.seat(101)
+        await until(rig, lambda: cpu.loads == 1 and cpu.stops > 0)
+        assert not rig.service._cpu_active and not cpu.up
+        await rig.mind.send(rig.speak("failed-warmup"))
+        await rig.sees("failed-warmup", "started")
+        assert rig.engine.live() == ["hello there everyone"]
+        await rig.clock.advance(20)
+        await asyncio.sleep(.02)
+        assert cpu.loads == 1
+    go(tmp_path, fake_bank, cpu, body)
+
+
+def test_logout_during_warmup_never_advertises_cpu_ready(tmp_path, fake_bank):
+    cpu, entered, release = Cpu(), threading.Event(), threading.Event()
+
+    def warmup(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+    cpu.warmup = warmup
+
+    async def body(rig):
+        try:
+            await rig.seat(101)
+            await until(rig, entered.is_set)
+            await rig.snapshot(online=False)
+            await eventually(lambda: not rig.service.online)
+        finally:
+            release.set()
+        await until(rig, lambda: rig.service._expressive_task is None)
+        assert not rig.service._cpu_active and not cpu.up
+        assert rig.service._status().gpu == "none" and rig.guard.holders == {}
     go(tmp_path, fake_bank, cpu, body)
 
 
@@ -295,3 +371,26 @@ def test_per_call_timeout_can_only_shorten_engine_limit(tmp_path, monkeypatch):
     engine.synth("hello", None, None, 1.0, timeout_s=4)
     engine.synth("hello", None, None, 1.0, timeout_s=99)
     assert budgets == [4, 15]
+
+
+def test_neutral_warmup_has_separate_bounded_timeout_and_discards_audio(tmp_path, monkeypatch):
+    engine = ExpressiveEngine(TURBO, tmp_path / "python", need_gb=3, timeout_s=15)
+    requests = []
+
+    class Worker:
+        up = True
+
+        def ask(self, text, ref, params, *, timeout):
+            requests.append((text, ref, params, timeout))
+            return np.ones(240, dtype=np.float32), 24000
+    engine.worker = Worker()
+    reference = tmp_path / "reference.wav"
+    monkeypatch.setattr(engine, "_reference", lambda spec: reference)
+    assert engine.warmup(None, timeout_s=30) is None
+    engine.synth("hello", None, None, 1.0, timeout_s=99)
+    assert requests[0] == ("Ready.", str(reference), engine.levers("none"), 30)
+    assert requests[1][-1] == 15 and engine._timeout_s == 15
+    for invalid in (0, 31, float("inf"), float("nan")):
+        with pytest.raises(EngineError, match="warmup timeout"):
+            engine.warmup(None, timeout_s=invalid)
+    assert len(requests) == 2

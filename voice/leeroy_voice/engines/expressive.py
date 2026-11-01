@@ -338,6 +338,22 @@ class ExpressiveEngine:
         """Stock clips depend on reference contents, even while the worker is down."""
         return reference_fingerprint(self._reference(spec))
 
+    def warmup(self, spec, *, timeout_s: float = 30.0) -> None:
+        """Prime conditioning and inference with one neutral line; never play its audio.
+
+        Startup has its own bounded allowance. It must not consume the first live line's
+        shorter deadline, and it never changes that line's synthesis limit.
+        """
+        worker = self.worker
+        if worker is None or not worker.up:
+            raise EngineError(f"{self.name}: not up")
+        if not math.isfinite(timeout_s) or not 0 < timeout_s <= 30:
+            raise EngineError(f"{self.name}: invalid warmup timeout")
+        audio, rate = worker.ask("Ready.", str(self._reference(spec)), self._levers["none"],
+                                 timeout=timeout_s)
+        if rate != self.sample_rate or not len(audio) or not np.isfinite(audio).all():
+            raise EngineError(f"{self.name}: invalid warmup audio")
+
     def synth(self, text: str, spec, style, speed: float, *,
               timeout_s: float | None = None) -> np.ndarray:
         """`style` is the attitude's levers; anything else (StockCache hands the bank's style)
