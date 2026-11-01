@@ -67,7 +67,7 @@ They assume this repo is the install root, with the core checked out in
 
 | Workflow | When | What |
 |---|---|---|
-| `ci` | every push | shellcheck on `scripts/`, gitleaks over the full history, mod-leeroy unit tests, the mind's Python 3.14 suite and the `voice` job's Python 3.12 suite |
+| `ci` | main pushes and pull requests | shellcheck on `scripts/`, gitleaks over the full history, mod-leeroy unit tests, the mind's Python 3.14 suite, the `voice` job's Python 3.12 suite, and a headless cross-service rehearsal in separate environments |
 | `patches` | patch changes, nightly | applies the patches to the newest upstream mod-playerbots (plus its codestyle check) and mod-ollama-chat; a nightly failure opens a `patch-drift` issue |
 | `build` | patch or module changes, weekly | compiles the fork core with the patched playerbots and mod-leeroy (clang, `-Werror`, ccache) |
 | `release` | `v*` tag | GitHub release with the patches, modules, configs and scripts |
@@ -85,8 +85,10 @@ the ignored `voice-data/`; voice specs and synthetic references stay in
 `mind-data/voices/`. See [the operating notes](CLAUDE.md#the-voice-service-leeroy-voice)
 for commands, data-directory overrides and the rollout procedure.
 
-This branch's voice work is in development. The isolated end-to-end rehearsal,
-deployment and acceptance during a normal game session are still pending.
+This branch's voice work is in development. A [headless regression rehearsal](voice/tools/rehearsal/README.md)
+checks the two services together using synthetic data and fake audio devices.
+Rehearsal with a copied database and real devices, deployment, and acceptance
+during a normal game session are still pending.
 
 Voice dependencies include pedalboard (GPL-3.0) and
 [eSpeak NG](https://github.com/espeak-ng/espeak-ng/blob/master/COPYING)

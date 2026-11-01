@@ -68,3 +68,44 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libatomic1
       - run: python -m pip install -e ".[test]"
       - run: python -m pytest -q
+
+  voice-rehearsal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: libatomic for pedalboard
+        run: sudo apt-get update && sudo apt-get install -y libatomic1
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - name: mind test environment
+        run: |
+          python -m venv "$RUNNER_TEMP/mind-venv"
+          "$RUNNER_TEMP/mind-venv/bin/python" -m pip install -e "./mind[test]"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: voice test environment
+        run: |
+          python -m venv "$RUNNER_TEMP/voice-venv"
+          "$RUNNER_TEMP/voice-venv/bin/python" -m pip install -e "./voice[test]"
+      - name: headless cross-service regression
+        run: |
+          "$RUNNER_TEMP/mind-venv/bin/python" -B voice/tools/rehearsal/run_rehearsal.py \
+            --worktree "$GITHUB_WORKSPACE" \
+            --mind-python "$RUNNER_TEMP/mind-venv/bin/python" \
+            --voice-python "$RUNNER_TEMP/voice-venv/bin/python" \
+            --out "$RUNNER_TEMP/voice-rehearsal"
+      - name: rehearsal results
+        if: always()
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"]) / "voice-rehearsal"
+          for path in sorted(root.glob("*/*")):
+              if path.name == "summary.json" or path.name.endswith("-pytest.log"):
+                  print(path.name)
+                  print(path.read_text(encoding="utf-8"))
+          PY
