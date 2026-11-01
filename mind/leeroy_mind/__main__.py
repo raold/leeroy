@@ -184,6 +184,7 @@ async def doctor(root: Path, *, make_llm=None, ollama_conf: Path | None = None
                 for what in ("ollama", "models", "live chat", "embedding", "mod-ollama-chat",
                              "bridge")]
         return out
+    out += _doctor_voice_service(root)
     llm = (make_llm or _default_llm)(cfg)
     try:
         names = await llm.list_models()
@@ -254,6 +255,7 @@ def _doctor_db(root: Path, latest: int, cfg=None) -> list[tuple[bool | None, str
         personas = _cast_personas(store, human)
         lines.append((bool(personas), f"personas {len(personas)}: "
                       + _mix_line(mix_report(personas)).replace("\n", "; ")))
+        lines.append(_doctor_voice_specs(root, personas))
         if human is not None:
             lines += _doctor_notes(store, personas, human, cfg)
         return lines
@@ -261,6 +263,69 @@ def _doctor_db(root: Path, latest: int, cfg=None) -> list[tuple[bool | None, str
         return [(False, f"mind.db cannot be read: {e}"), (False, "personas: not read")]
     finally:
         conn.close()
+
+
+def _doctor_voice_specs(root: Path, personas) -> tuple[bool | None, str]:
+    """Count the cast's readable spec files; an incomplete casting is informational."""
+    from .voice.brief import load_specs
+    guids = {p.guid for p in personas}
+    try:
+        count = len(guids.intersection(load_specs(root)))
+    except OSError as e:
+        return None, f"voice specs: not read ({type(e).__name__})"
+    return (True if guids and count == len(guids) else None,
+            f"voice specs: {count} of {len(guids)} cast members")
+
+
+def _doctor_voice_service(root: Path) -> list[tuple[bool | None, str]]:
+    """Probe without a protocol greeting, autostart or model loading. Voice is optional.
+
+    Use the voice service's configured endpoint when its data directory has voice.toml;
+    report a mismatch with the mind's endpoint rather than silently probing a default port.
+    """
+    import socket
+    import tomllib
+    from .config import ConfigError, _HOSTS
+    from .voice.attach import PROBE_S, voice_data_dir
+    from .voice.config import load_voice_config
+
+    try:
+        cfg = load_voice_config(root / "mind.toml")
+    except (ConfigError, TypeError) as e:
+        return [(None, f"voice service: not checked ({type(e).__name__})")]
+    if not cfg.enabled:
+        return [(None, "voice service: disabled")]
+    host, port = cfg.host, cfg.port
+    path = voice_data_dir() / "voice.toml"
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        pass  # The mind's endpoint still lets doctor report a separately managed service.
+    except OSError as e:
+        return [(None, f"voice service: configuration not read ({type(e).__name__})")]
+    else:
+        try:
+            table = tomllib.loads(raw.decode("utf-8-sig")).get("mind", {})
+            if not isinstance(table, dict):
+                raise ValueError("mind table")
+            host, port = table.get("host", "127.0.0.1"), table.get("port", 7879)
+            if not isinstance(host, str) or host not in _HOSTS:
+                raise ValueError("host")
+            if type(port) is not int or not 1 <= port <= 65535:
+                raise ValueError("port")
+        except (UnicodeDecodeError, ValueError) as e:
+            return [(None, f"voice service: invalid configuration ({type(e).__name__})")]
+    lines = []
+    if (host, port) != (cfg.host, cfg.port):
+        lines.append((None, f"voice endpoint mismatch: mind uses {cfg.host}:{cfg.port}; "
+                           f"service uses {host}:{port}"))
+    try:
+        socket.create_connection((host, port), timeout=PROBE_S).close()
+    except OSError:
+        lines.append((None, f"voice service: not running on {host}:{port}"))
+    else:
+        lines.append((True, f"voice service: listening on {host}:{port}"))
+    return lines
 
 
 def _doctor_notes(store, personas, human_guid: int, cfg) -> list[tuple[bool | None, str]]:

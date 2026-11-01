@@ -1242,7 +1242,9 @@ def test_doctor_reports_every_check(tmp_path, capsys):
         argv = ["doctor", "--data-dir", str(tmp_path), "--ollama-conf", str(conf)]
         assert main(argv, make_llm=lambda c: llm) == 0
         out = capsys.readouterr().out.splitlines()
-        assert len(out) == 14 and all(line.startswith("ok") for line in out), out
+        voice_notes = [line for line in out if line.startswith("note voice ")]
+        assert voice_notes == ["note voice specs: 0 of 5 cast members", "note voice service: disabled"]
+        assert len(out) == 16 and all(line.startswith("ok") for line in out if line not in voice_notes), out
         assert any("live_fallback" in line and "not pulled" in line for line in out)
         assert any("personas 5" in line for line in out)
         assert any("fit every woman's attitude" in line for line in out)
