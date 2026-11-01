@@ -53,7 +53,8 @@ stt = [
 gpu = ["nvidia-cublas-cu12==12.9.2.10; sys_platform == 'win32'"]
 # PyPI's Windows wheels of torch are CPU builds
 cast = ["speechbrain==1.1.2", "torch==2.8.0", "torchaudio==2.8.0"]
-test = ["pytest==9.2.0"]
+# The process-probe unit tests patch psutil without opening audio devices.
+test = ["pytest==9.2.0", "psutil==7.2.2"]
 
 [tool.setuptools.packages.find]
 include = ["leeroy_voice*"]

@@ -163,6 +163,21 @@ def chain_for(profile: str, grit: int, *, whisper: bool) -> pedalboard.Pedalboar
     return pedalboard.Pedalboard(board)
 
 
+def change_tempo(audio, sr: int, speed: float) -> np.ndarray:
+    """Change speaking speed without shifting pitch or formants; 1.0 keeps every sample.
+
+    Engines without a native speed control use this before the mic chain. A speed above
+    one shortens the clip. Do not pad it back to its original length.
+    """
+    x = _mono(audio)
+    if not math.isfinite(speed) or speed <= 0:
+        raise ValueError("speed: expected a finite positive number")
+    if speed == 1.0 or not len(x):
+        return x.copy()
+    y = pedalboard.time_stretch(x, sr, float(speed), preserve_formants=True)
+    return _mono(np.asarray(y, dtype=np.float32).reshape(-1))
+
+
 def shift_pitch(audio, sr: int, semitones: float) -> np.ndarray:
     """`audio` `semitones` higher (lower when negative), its length and formants kept."""
     x = _mono(audio)

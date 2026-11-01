@@ -102,6 +102,9 @@ def spawner(monkeypatch):
 
 def test_autostart_once(tmp_path, clock, voice_data, fake_repo, monkeypatch):
     calls = spawner(monkeypatch)
+    # This mocks a Windows launch, including constants absent from subprocess on Linux.
+    monkeypatch.setattr(subprocess, "DETACHED_PROCESS", 1, raising=False)
+    monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 2, raising=False)
     pythonw = fake_repo / "voice" / ".venv" / "Scripts" / "pythonw.exe"
     pythonw.parent.mkdir(parents=True)
     pythonw.write_bytes(b"")
@@ -273,3 +276,74 @@ def test_bad_voice_config_leaves_the_mind_running(tmp_path, clock, caplog):
         app = make_app(tmp_path, clock, '[voice]\nenabled = true\nhost = "0.0.0.0"\n')
     assert app.voice.cfg == VoiceCfg() and app._background == []
     assert any("voice_config_invalid" in r.getMessage() for r in caplog.records)
+
+
+def test_slow_policy_does_not_stall_ticks_or_survive_shutdown(tmp_path, clock):
+    from types import SimpleNamespace
+    from leeroy_mind.testing.fake_voice import FakeVoice
+
+    async def go():
+        fake = FakeVoice()
+        await fake.start()
+        app = make_app(tmp_path, clock, f"[voice]\nenabled = true\nport = {fake.port}\n")
+        started, ended, calls, ticks = asyncio.Event(), asyncio.Event(), [], []
+
+        async def slow(now):
+            calls.append(now)
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                ended.set()
+
+        app.voice.elsewhere = SimpleNamespace(tick=slow)
+        app.voice.tickers.append(lambda: ticks.append(clock.now()))
+        task = asyncio.create_task(app.voice._serve())
+        try:
+            await _until(lambda: app.voice.client.greeted)
+            await clock.advance(1)
+            await _until(started.is_set)
+            for _ in range(4):
+                await clock.advance(1)
+            assert len(calls) == 1 and len(ticks) >= 4
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            await fake.close()
+        assert ended.is_set() and not app.voice._policy_tasks
+    run(go())
+
+
+def test_policy_failure_is_contained(tmp_path, clock, caplog):
+    from types import SimpleNamespace
+    app = make_app(tmp_path, clock)
+
+    async def fail(now):
+        raise ValueError("private words must stay out of the log")
+
+    run(app.voice._policy_tick("elsewhere", SimpleNamespace(tick=fail), clock.now()))
+    assert "voice_handler_failed" in caplog.text
+    assert "ValueError" in caplog.text and "private words" not in caplog.text
+
+
+def test_real_events_drive_group_afk_and_member_rejoin(vapp):
+    from leeroy_mind.protocol import AfkEvent, Group, Login, Logout
+    from voice.test_voice_movement import ready
+
+    async def check():
+        await ready(vapp)
+        await vapp.app.handle(Group(vapp._ts(), 102, True, (1, 101, 102)))
+        assert vapp.ext.rooms.where[1] == vapp.ext.rooms.where[101] == "raid"
+        await vapp.app.handle(AfkEvent(vapp._ts(), 101, True))
+        assert vapp.ext.rooms.where[101] == "afk"
+        await vapp.app.handle(AfkEvent(vapp._ts(), 101, False))
+        assert vapp.ext.rooms.where[101] == "raid"
+        await vapp.app.handle(Logout(vapp._ts(), 101, False))
+        assert 101 not in vapp.ext.rooms.where and 101 not in vapp.ext.on_comms
+        assert not vapp.rows("SELECT 1 FROM voice_presence WHERE guid=101 AND until IS NULL")
+        await vapp.app.handle(Login(vapp._ts(), 101, False))
+        assert vapp.ext.rooms.where[101] == "raid" and 101 in vapp.ext.on_comms
+        await vapp.app.handle(Group(vapp._ts(), 0, False, ()))
+        assert vapp.ext.rooms.where[101] == "guild_hall"
+        assert vapp.rows("SELECT room FROM voice_presence WHERE guid=101 AND until IS NULL")[0][0] == "guild_hall"
+    run(check())

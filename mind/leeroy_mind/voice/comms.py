@@ -103,6 +103,28 @@ class Comms:
     def _private_with_him(self, room: str | None) -> bool:
         return room in PRIVATE and room == self.human_room()
 
+    def scene_valid(self, turn: Turn, conversation: bool = False) -> bool:
+        """An elsewhere turn stays in its original room, even across a model call."""
+        room = turn.channel.removeprefix(VOICE)
+        valid = (turn.channel.startswith(VOICE) and self.available()
+                and room not in (*PRIVATE, "afk", self.human_room())
+                and self.room_of(turn.speaker) == room)
+        if not valid or not conversation:
+            return valid
+        world = self.ext.app.world
+        members = self.ext.rooms.occupants(room) & self.ext.on_comms & world.online - world.afk
+        return len(members) >= 2 and (turn.addressee is None or turn.addressee in members)
+
+    def hotmic_valid(self, turn: Turn) -> bool:
+        """An overheard household line is never sent as a typed fallback."""
+        app = self.ext.app
+        room = turn.channel.removeprefix(VOICE)
+        return (turn.channel.startswith(VOICE) and self.available()
+                and not app.world.human_afk and room not in (*PRIVATE, "afk")
+                and room == self.human_room() == self.room_of(turn.speaker)
+                and str(app.raid.phase(app.clock.now())) not in
+                {"combat", "wipe_silence", "wipe_debrief"})
+
     # -- where a turn goes -------------------------------------------------------------------
 
     def place(self, turn: Turn, meta) -> tuple[str, int, int | None]:
@@ -116,6 +138,8 @@ class Comms:
         arrived on its channel) stays there."""
         channel, room = turn.channel, self.room_of(turn.speaker)
         kept = channel, turn.to_guid, turn.addressee
+        if (meta.elsewhere or meta.why == route.HOTMIC) and channel.startswith(VOICE):
+            return kept  # never reroute an unheard conversation into guild or a private room
         on_voice = channel.startswith(VOICE)
         if room is None:
             return typed(turn, meta)

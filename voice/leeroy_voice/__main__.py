@@ -668,15 +668,19 @@ def cmd_references(args) -> int:
 
 def cmd_audition(args) -> int:
     import json
+    from dataclasses import replace
 
     from . import cast
     from .audition import build_audition
+    from .engines import EngineError
     root = default_data_dir()
+    made = None
     try:
         cfg = load_config(root / "voice.toml")
         decision = load_decision(root / "decision.toml")
         lexicon = load_lexicon(root)
-        specs = cast.load_existing(Path(args.specs) if args.specs else mind_voices_dir())
+        specs_dir = Path(args.specs) if args.specs else mind_voices_dir()
+        specs = cast.load_existing(specs_dir)
         if not specs:
             raise ValueError("no voice specs to audition: run cast first")
         try:
@@ -684,12 +688,33 @@ def cmd_audition(args) -> int:
         except (OSError, ValueError):
             raise ValueError("no cast report: run cast first") from None
         _offline(root)
-        engine, bank = load_engine(root, cfg)
-        page = build_audition([specs[g] for g in sorted(specs)], engine, root / "audition",
+        needs_kokoro = any(s.engine == "kokoro" for s in specs.values())
+        engine, bank = load_engine(root, cfg) if needs_kokoro else (None, None)
+
+        def expressive(name):
+            nonlocal made
+            if made is None or made.name != name:
+                if made is not None:
+                    made.stop()
+                    made = None
+                # Locked specs can retain an earlier engine after the decision changes.
+                selected = replace(decision, engine=name, featured={})
+                made = load_expressive(root, cfg, selected, device="cpu", refs_dir=specs_dir)
+                if made is None:
+                    raise EngineError(f"{name}: no engine for audition")
+                made.start()
+            return made
+
+        # Reuse one worker for each engine's members, then release it before the next engine.
+        ordered = sorted(specs.values(), key=lambda s: (s.engine != "kokoro", s.engine, s.guid))
+        page = build_audition(ordered, engine, root / "audition",
                               report=report, bank=bank, decision=decision, grit=cfg.comms_grit,
-                              lexicon=lexicon)
+                              lexicon=lexicon, expressive=expressive)
     except Exception as e:
         return _fail("audition", e)
+    finally:
+        if made is not None:
+            made.stop()
     print(f"ok   audition page: {page}")
     return 0
 

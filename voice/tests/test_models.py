@@ -98,7 +98,7 @@ def test_pins():                                     # the plan's Global Constra
         "whisper": ("dropbox-dash/faster-whisper-large-v3-turbo",
                     "0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf", "MIT"),
         "ecapa": ("speechbrain/spkrec-ecapa-voxceleb", "0f99f2d0ebe89ac095bcc5903c4dd8f72b367286",
-                  "Apache-2.0")
+                  "Apache-2.0"),
         "chatterbox-turbo": ("ResembleAI/chatterbox-turbo",
                              "749d1c1a46eb10492095d68fbcf55691ccf137cd", "MIT"),
     }

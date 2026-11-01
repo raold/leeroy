@@ -74,6 +74,7 @@ from .decision import Decision
 from .duck import WowDucker
 from .engines import EngineError
 from .hotkey import Press, PttMachine, Release
+from .hotmic import render_hotmic
 from .lexicon import load_lexicon
 from .lock import PID_FILE, ServiceLock, ServiceLocked  # noqa: F401
 from .gpu import CHECK_S, RETRY_S, GpuGuard, close_quietly
@@ -186,6 +187,8 @@ class VoiceService:
         self._foreground = foreground or hotkey.foreground_process
         self._lexicon = load_lexicon(self._data)
         self._fx = fx.process
+        self._hotmic = render_hotmic
+        self._hotmic_rng = np.random.default_rng()  # used only on the single TTS thread
         self._ui_path = self._data / "ui-state.json"
         self._ui_state: UiState = load_ui_state(self._ui_path)
 
@@ -625,6 +628,11 @@ class VoiceService:
                     log("engine_fallback", id=msg.id, guid=msg.guid, why=self._expressive_why)
                 marked = kokoro_markup(self._ear(msg).text, levers, to_human=msg.to_human)
                 parts = tuple(sentences(marked))
+        if msg.kind == "hotmic":
+            # One scene and one key-up click for the whole utterance, bounded to six
+            # seconds even when the model returns more than one sentence.
+            parts = (" ".join(parts),)
+            spoken = (" ".join(spoken),) if spoken else ()
         line = Line(id=msg.id, guid=msg.guid, tier=TIERS.index(msg.priority), kind=msg.kind,
                     channel=msg.channel, whisper=msg.channel == WHISPER,
                     expires_at=msg.expires_ms / 1000, after=msg.after,
@@ -649,6 +657,8 @@ class VoiceService:
         return self._expressive_stock if self._speaks_expressive(spec) else self.stock
 
     def _stock_clip(self, msg: Speak, spec: VoiceSpec) -> np.ndarray | None:
+        if msg.kind == "hotmic":
+            return None  # even a stock phrase needs the TTS-thread-only household scene
         if msg.kind not in RAID_CALLS and (msg.attitude != "none" or msg.state != "sober"):
             return None
         key = stock_key(msg.text)
@@ -666,8 +676,12 @@ class VoiceService:
     # on the workers
 
     def _process(self, job: _Job, dry: np.ndarray) -> np.ndarray:
-        clip = self._fx(dry, self._engine.sample_rate, job.spec, grit=self._cfg.comms_grit,
-                        whisper=job.line.whisper)
+        if job.speak.kind == "hotmic":
+            clip = self._hotmic(dry, self._engine.sample_rate, job.spec, rng=self._hotmic_rng,
+                                engine=self._engine, bank=self._bank)
+        else:
+            clip = self._fx(dry, self._engine.sample_rate, job.spec, grit=self._cfg.comms_grit,
+                            whisper=job.line.whisper)
         if not np.isfinite(clip).all():  # the mixer would refuse it on the loop, mid-Plan
             raise ValueError("audio that is not finite")
         return clip

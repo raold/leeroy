@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import socket
 import subprocess
 from pathlib import Path
@@ -19,8 +20,11 @@ from leeroy_mind.voice.brief import SpecWatch, load_specs
 from leeroy_mind.voice.client import VoiceClient, VoiceDown
 from leeroy_mind.voice.comms import Comms, roll_on_comms
 from leeroy_mind.voice.config import VoiceCfg, load_voice_config
+from leeroy_mind.voice.elsewhere import ElsewhereTalk
 from leeroy_mind.voice.gpu import OllamaPins
 from leeroy_mind.voice.heard import HeardHandler
+from leeroy_mind.voice.hotmic import HotMic
+from leeroy_mind.voice.movement import Movement
 from leeroy_mind.voice.rooms import BY_ID, HOME, RoomState
 from leeroy_mind.voice.store import VoiceStore
 
@@ -55,6 +59,7 @@ class VoiceExtension:
         # Later tasks fill these in
         self.movement = None
         self.elsewhere = self.hotmic = self.pins = None
+        self._policy_tasks: dict[str, asyncio.Task] = {}
         self.tickers: list[Callable[[], None]] = []  # called once per tick
         self.gpu_pins = OllamaPins(app.cfg.ollama.url)
         self._gpu_held = False  # the service's last status.gpu was not "none"
@@ -62,6 +67,11 @@ class VoiceExtension:
         self._pin_lock = asyncio.Lock()
         if self.comms is not None:
             self.tickers += [self._tick_raid, self.comms.age_out, SpecWatch(self)]
+            self.elsewhere = ElsewhereTalk(self, lines_per_10min=cfg.elsewhere_lines_per_10min,
+                                           rng=random.Random())
+            self.hotmic = HotMic(self, per_month=cfg.hot_mic_per_month, rng=random.Random())
+            self.movement = Movement(self, rng=random.Random())
+            self.tickers.append(lambda: self.movement.tick(app.clock.now()))
         self._service_checked = False
         self.client = VoiceClient(cfg.host, cfg.port, self.on_message, clock=app.clock,
                                   on_connection=self.on_connection)
@@ -72,6 +82,8 @@ class VoiceExtension:
         """What the service sends. The client logs a failure."""
         if isinstance(msg, wire.Status):
             await self._on_gpu(msg.gpu)
+            if self.movement is not None:
+                self._guard("room_status", lambda: self.movement.tick_rooms(self.app.clock.now()))
         if self.comms is None:
             return
         if isinstance(msg, wire.Played):
@@ -82,6 +94,8 @@ class VoiceExtension:
             await self.heard.on_heard(msg)
         elif isinstance(msg, wire.Join):
             await self.heard.on_join(msg)
+            if self.movement is not None:
+                self._guard("room_join", lambda: self.movement.tick_rooms(self.app.clock.now()))
 
     async def _on_gpu(self, gpu: str) -> None:
         """Each time the service takes VRAM, pin the models beside it; when it lets go, unpin
@@ -107,6 +121,8 @@ class VoiceExtension:
                 event("voice_pin_failed", level=logging.WARNING, reason=type(exc).__name__)
 
     async def on_connection(self, up: bool) -> None:
+        if self.movement is not None:
+            self._guard("room_connection", lambda: self.movement.on_connection(up))
         if not up:
             self._gpu_held = False
             for task in list(self._gpu_tasks):
@@ -134,8 +150,12 @@ class VoiceExtension:
     async def _on_login(self, ev) -> None:
         if ev.human:
             self._guard("login", self.begin_session)
+        elif self.movement is not None:
+            self._guard("member_login", lambda: self.movement.on_login(ev.guid))
 
     async def _on_logout(self, ev) -> None:
+        if self.movement is not None:
+            self._guard("member_logout", lambda: self.movement.on_logout(ev.guid))
         if ev.human:
             self._guard("logout", self.end_session)
         else:
@@ -144,12 +164,20 @@ class VoiceExtension:
     async def _on_hello(self, ev) -> None:
         self.dc.clear()  # mod-leeroy tells each new connection who is running, after the hello
         self._guard("hello", self.begin_session if ev.human_guid else self.end_session)
+        if ev.human_guid and self.movement is not None:
+            self._guard("room_hello", self.movement.on_hello)
 
     async def _on_chat(self, ev) -> None:
         self._guard("chat", lambda: self.heard.stored(ev))
 
     async def _on_dc_status(self, ev) -> None:
         self.dc[ev.tank_guid] = ev.enabled
+
+    async def _on_group(self, ev) -> None:
+        self._guard("room_group", lambda: self.movement.on_group(ev))
+
+    async def _on_afk(self, ev) -> None:
+        self._guard("room_afk", lambda: self.movement.on_afk(ev))
 
     def dc_run(self) -> bool:
         """A dungeon-clear run in his group: a tank in it whose latest status says enabled. No
@@ -178,12 +206,16 @@ class VoiceExtension:
             return
         if self._seated_sid != sid:
             now = app.clock.now()
+            if self.movement is not None:
+                self.movement.reset(now)
             self.specs = load_specs(app.data_dir)
             in_cast = set(app.store.cast()) | {human}
             open_rows = self.store.open_presence(sid)  # a crash left these open
             saved = self._saved_seats(now) if not open_rows else {}  # a clean stop saved these
             seats = {g: (r, by) for g, (r, by) in (open_rows or saved).items()
                      if r in BY_ID and g in in_cast}
+            if self.movement is not None:
+                seats = self.movement.restored_seats(seats, crashed=bool(open_rows))
             for g in open_rows.keys() - seats.keys():
                 self.store.leave(g, now)  # left the guild while the mind was down
             self.rooms.clear()
@@ -202,6 +234,10 @@ class VoiceExtension:
                 if g not in open_rows or open_rows[g][0] != r:
                     self.store.enter(g, r, self.rooms._by.get(g, 0), now, sid)
             self._seated_sid = sid
+            if self.movement is not None:
+                if app.world.group is not None:
+                    self.movement.on_group(app.world.group)
+                self.movement.tick_rooms(now)
             for msg in self.snapshot(reload=False):
                 self.send(msg)
         else:
@@ -229,6 +265,8 @@ class VoiceExtension:
         if self.store is None or self._seated_sid is None:
             return
         now = self.app.clock.now()
+        if self.movement is not None:
+            self.movement.prepare_shutdown(now)
         seats = {str(g): [r, self.rooms._by.get(g, 0)] for g, r in self.rooms.where.items()}
         self.app.store.set_meta(STOP_KEY, json.dumps({"at": now, "seats": seats}))
         self.store.close_all(now)
@@ -253,6 +291,10 @@ class VoiceExtension:
         empty, and the service hears `session online=false`."""
         if self.store is None:
             return
+        for task in self._policy_tasks.values():
+            task.cancel()
+        if self.movement is not None:
+            self.movement.reset(self.app.clock.now())
         self.store.close_all(self.app.clock.now())
         if self.app.store.get_meta(STOP_KEY):
             self.app.store.set_meta(STOP_KEY, "")
@@ -338,6 +380,14 @@ class VoiceExtension:
 
     # -- the background task ---------------------------------------------------------------
 
+    async def _policy_tick(self, name: str, policy, now: float) -> None:
+        try:
+            await (policy.invite_tick(now) if name == "invites" else policy.tick(now))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._failed(name, exc)
+
     async def _tick_loop(self) -> None:
         while True:
             await self.app.clock.sleep(TICK_S)
@@ -346,6 +396,14 @@ class VoiceExtension:
                     tick()
                 except Exception:
                     log.exception("voice_tick_failed")
+            # Model calls must not stall raid updates or service acknowledgements.
+            for name in ("elsewhere", "hotmic", "invites"):
+                policy = self.movement if name == "invites" else getattr(self, name)
+                task = self._policy_tasks.get(name)
+                if policy is not None and (task is None or task.done()):
+                    self._policy_tasks[name] = asyncio.create_task(
+                        self._policy_tick(name, policy, self.app.clock.now()),
+                        name=f"voice-{name}")
 
     async def _serve(self) -> None:
         try:
@@ -356,11 +414,14 @@ class VoiceExtension:
         try:
             await asyncio.gather(*tasks)
         finally:
+            for t in tasks:
+                t.cancel()  # stop the producer before waiting for its policy tasks
+            for task in self._policy_tasks.values():
+                task.cancel()
+            await asyncio.gather(*tasks, *self._policy_tasks.values(), return_exceptions=True)
+            self._policy_tasks.clear()
             self._guard("shutdown", self.shutdown)
             await self.client.close()
-            for t in tasks:
-                t.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def attach_voice(app) -> VoiceExtension:
@@ -378,5 +439,7 @@ def attach_voice(app) -> VoiceExtension:
         app.register_event_handler("hello", ext._on_hello)
         app.register_event_handler("chat", ext._on_chat)
         app.register_event_handler("dc_status", ext._on_dc_status)
+        app.register_event_handler("group", ext._on_group)
+        app.register_event_handler("afk", ext._on_afk)
         app.register_background(ext._serve)
     return ext

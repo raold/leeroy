@@ -1044,7 +1044,7 @@ class Pipeline:
         cuddle, blush) only ever goes to him or to nobody, and the turn's own target takes
         only a friendly one (fix round 1, review I2). A whisper sends none: an emote is
         public. A refused one is logged."""
-        if turn.channel == "whisper":
+        if turn.channel == "whisper" or meta.elsewhere or meta.why == "hotmic":
             return
         hg = self.human.guid
         for emote, target in emotes[:MAX_EMOTES]:
@@ -1074,6 +1074,11 @@ class Pipeline:
         """Why the turn can't speak now, or None. `deadline`: the turn's deadline counts
         (after its delay); a line the model gave in time is never expired after that."""
         g, w = turn.speaker, self.world
+        if meta.elsewhere and not self._comms_says(
+                "scene_valid", False, turn, meta.why.startswith("elsewhere:")):
+            return "elsewhere_changed"
+        if meta.why == "hotmic" and not self._comms_says("hotmic_valid", False, turn):
+            return "hotmic_changed"
         if g not in w.online:
             return "offline"
         if g in w.afk:

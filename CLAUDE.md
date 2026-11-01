@@ -181,6 +181,7 @@ Run from `F:\azerothcore\scripts` in Git Bash.
 ./ac-backup.sh [label]       # mysqldump all 4 DBs, keeps newest 5
 ./ac-build.sh                # preflight + cmake configure + build
 ./ac-server.sh start|stop|status
+./ac-voice.sh start|stop|status # voice service; reads its data directory and ports from `where`
 ./ac-snapshot.sh             # live configs (masked) + playerbots and ollama-chat patches -> config/, patches/
 ```
 
@@ -463,6 +464,79 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   events the bridge queued for the mind, so never run it while they matter.
 - Do not run `personas generate`/`seed` or a library build while the mind is
   live: they load another large model next to the live one and evict it.
+
+## The voice service (`leeroy-voice`)
+
+`voice/` adds local room playback and push-to-talk to the mind. It is a separate
+GPL-3.0-or-later process, with its own `voice\LICENSE` and `voice\.venv` on
+**Python 3.12**: the pinned speech/audio dependencies are kept apart from the
+mind's Python 3.14 environment. Expressive engines use another venv under
+`voice-data\engines\<engine>\.venv`; do not install their torch stack into the
+mind or voice-service venv.
+
+**Rollout is pending.** Development and validation belong in a separate
+worktree. Before deployment, complete an isolated rehearsal using a copied
+database, FakeBridge, FakeLLM and separate loopback ports. It must not contact
+the live bridge or load/unload models on live Ollama. Resolve migration numbering
+against the merge target, merge into the code the live mind runs, then use that
+live code's own `db migrate` with the mind stopped. Do not run a development
+migration on the live database. Acceptance with WoW focused remains a check of
+the next normal session after deployment.
+
+- The service listens on loopback only: `voice.toml` defaults to 7879 for the
+  mind connection and 7880 for the browser UI. The mind's `[voice]` endpoint
+  must match the service's `[mind]` endpoint. The mind doctor reports spec
+  coverage and optional service status; a stopped voice service is a note.
+- `voice-data\` holds `voice.toml`, `decision.toml`, `lexicon.toml`,
+  `attitudes.toml`, models, caches, UI state and logs. The local decision records
+  the listening choices; never commit it or device settings. Voice specs,
+  `brief.json` and synthetic `.ref.wav` clips live in `mind-data\voices\`.
+- `LEEROY_VOICE_DATA` overrides the voice data directory. `LEEROY_MIND_DATA`
+  selects the mind data directory used to locate voice specs. Defaults follow
+  the code's checkout, including worktrees. For tests with a borrowed venv,
+  set `PYTHONPATH` to the intended worktree's `voice` or `mind` directory and
+  check the imported package's `__file__`; an editable install may point back
+  at the live checkout. Use scratch data directories for development commands.
+- `scripts/ac-voice.sh start|stop|status` uses `voice\.venv` under `AC_ROOT`
+  (this checkout by default) and `python -m leeroy_voice where` to resolve its
+  data directory and ports.
+  It starts a hidden process. The mind can autostart it when configured; do not
+  enable that in a development checkout against live data.
+- On logout, playback fades, push-to-talk disarms, the microphone closes,
+  WoW's volume is restored and GPU leases are released. A refused or failed
+  expressive engine falls back to the member's Kokoro blend; cached expressive
+  callouts can still play. GPU admission requires headroom beside the live chat
+  and embedding models, and is measured before changing local settings.
+- Push-to-talk uses Raw Input and does not swallow the key. A tap under the
+  configured hold threshold is ignored. WoW and the listener need compatible
+  elevation: a non-elevated listener cannot hear an elevated foreground game.
+  `selftest --ptt` checks injected key events; it does not prove capture with
+  WoW focused. Check that and Windows communications ducking during acceptance.
+
+From this checkout's `voice/`, with data-directory overrides set as appropriate:
+
+```bash
+.venv/Scripts/python -m leeroy_voice where
+.venv/Scripts/python -m leeroy_voice doctor
+.venv/Scripts/python -m leeroy_voice devices
+.venv/Scripts/python -m leeroy_voice fetch-models --only kokoro,parakeet,silero
+.venv/Scripts/python -m leeroy_voice selftest             # writes a neutral stock line
+.venv/Scripts/python -m leeroy_voice selftest --guid 101 --cpu  # use an actual spec's guid
+.venv/Scripts/python -m pytest -q                       # isolated suite; no live devices/models
+```
+
+The casting commands are `cast --brief <brief.json> --out <specs-dir>`,
+`references --brief <brief.json> --specs <specs-dir> [--only <guids>]`,
+`audition --specs <specs-dir>` and `lock <guids|all> --specs <specs-dir>`.
+`references` runs on the CPU and prepares stock clips; locked specs are kept.
+`audition` uses each saved spec's engine and reference, including locked voices
+whose engine differs from the current decision. Expressive audition workers run
+offline on the CPU, one engine at a time. An unavailable or failed engine fails
+the command instead of substituting a fallback voice; check for a successful exit
+before using the page, since an older page can remain after a failed run.
+Models load offline after `fetch-models` has fetched and verified the pinned files. Default
+tests deselect real engines, audio devices, Windows, GPU, Ollama and live-service
+checks; those checks need a deliberate isolated setup.
 
 ## Outstanding
 

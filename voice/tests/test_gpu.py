@@ -355,8 +355,11 @@ def test_gpu_budget_is_logged_every_ten_minutes_while_online(tmp_path, fake_bank
         assert "gpu_budget:" not in caplog.text
         await rig.snapshot()
         await until(rig, lambda: gpu_of(rig) == "whisper")
-        await rig.clock.advance(1250, step=5)
-        await asyncio.sleep(0.1)
+        for expected in (1, 2):
+            await rig.clock.advance(625, step=5)
+            # The probe runs in a real thread. Let its report finish before
+            # advancing through the next reporting window on the fake clock.
+            await until(rig, lambda: caplog.text.count("gpu_budget:") >= expected)
     with caplog.at_level(logging.INFO, logger="leeroy_voice"):
         go(tmp_path, fake_bank, w, whisper, body)
     lines = [ln for ln in caplog.text.splitlines() if "gpu_budget:" in ln]

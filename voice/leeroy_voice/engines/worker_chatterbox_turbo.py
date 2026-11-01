@@ -4,11 +4,11 @@ leeroy_voice:
 
     <venv python> -I -X utf8 worker_chatterbox_turbo.py --model <dir> --device cuda --threads 6
 
-A voice is the member's reference clip, read once and kept for the worker's life. A tag the
+A voice is the member's reference clip, its conditioning kept until its contents change. A tag the
 tokenizer does not list is dropped, as the kit does, since Turbo would read it out."""
 import argparse
+import hashlib
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -37,12 +37,14 @@ def load(model: Path, device: str, threads: int):
     voices = {}
 
     def speak(text: str, ref: str, params: dict):
-        key = (ref, os.stat(ref).st_mtime_ns)
+        with open(ref, "rb") as f:
+            digest = hashlib.file_digest(f, "sha256").hexdigest()
         with torch.inference_mode():
-            if key not in voices:
+            cached = voices.get(ref)
+            if cached is None or cached[0] != digest:
                 tts.prepare_conditionals(ref)
-                voices[key] = tts.conds
-            tts.conds = voices[key]
+                voices[ref] = (digest, tts.conds)
+            tts.conds = voices[ref][1]
             wav = tts.generate(known_tags(text, known),
                                **{k: params[k] for k in SAMPLING if k in params})
         return wav.squeeze(0).cpu().numpy()
