@@ -22,6 +22,7 @@ import os
 import queue
 import subprocess
 import threading
+import time
 import tomllib
 from pathlib import Path
 
@@ -31,7 +32,7 @@ import soundfile as sf
 from ..fx import change_tempo
 from ..wire import ATTITUDES
 from . import EngineError
-from .worker import READY, read_answer, request_line
+from .worker import READY, WorkerTree, read_answer, request_line
 
 SAMPLE_RATE = 24000  # Chatterbox's, as Kokoro's: the chain takes one rate
 START_S = 110.0  # a little under GpuGuard's RESERVE_S, so a start that hangs gives its lease up
@@ -133,8 +134,12 @@ class WorkerProcess:
         self._start_s = start_s
         self._answers: queue.SimpleQueue = queue.SimpleQueue()
         self._reader: threading.Thread | None = None
+        self._closer: threading.Thread | None = None
+        self._tree: WorkerTree | None = None
         self._turn = threading.Lock()  # one line at a time
         self._guard = threading.Lock()  # start against stop
+        self._cleanup = threading.Lock()  # serialize cleanup attempts, including retries
+        self._cleanup_complete = False
         self._ready = self._stopped = False
         self._sequence = 0
 
@@ -148,12 +153,32 @@ class WorkerProcess:
             if self._stopped:
                 raise EngineError(f"{self.name}: stopped")
             try:
+                # The service tracks the venv launcher's actual interpreter children;
+                # the isolated worker still imports the dependency-light wire module.
+                self._tree = WorkerTree()
+            except ImportError:
+                self._stopped = True
+                raise EngineError(f"{self.name}: process tracking requires psutil") from None
+            try:
                 self.process = subprocess.Popen(
                     self._command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                     stderr=subprocess.DEVNULL, env=self._env, creationflags=self._flags)
             except OSError as e:
                 self._stopped = True
                 raise EngineError(f"{self.name}: cannot start: {type(e).__name__}") from None
+            try:
+                self._tree.attach(self.process)
+            except self._tree.ps.Error:
+                # Popen owns this exact process handle; no PID-name search is involved.
+                try:
+                    self.process.kill()
+                    self.process.wait(STOP_S)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+                self.process.stdin.close()
+                self.process.stdout.close()
+                self._stopped = True
+                raise EngineError(f"{self.name}: cannot track worker") from None
             self._reader = threading.Thread(target=self._read, name=f"leeroy-{self.name}",
                                             daemon=True)
             self._reader.start()
@@ -166,6 +191,7 @@ class WorkerProcess:
             self.stop()
             raise EngineError(f"{self.name}: did not load: "
                               f"{ready.error if ready is not None else 'it exited'}")
+        self._tree.capture()
         self._ready = True
 
     def _read(self) -> None:
@@ -183,7 +209,9 @@ class WorkerProcess:
         answer; a line it failed on leaves it running."""
         with self._turn:
             if not self.up:
+                self.stop()  # a dead launcher may have left its interpreter running
                 raise EngineError(f"{self.name}: not running")
+            self._tree.capture()
             self._sequence += 1
             id_ = str(self._sequence)
             try:
@@ -205,26 +233,50 @@ class WorkerProcess:
             return answer.audio, answer.sr
 
     def stop(self) -> None:
-        """The process is killed: the card's memory comes back at once. Idempotent."""
+        """Close the protocol and stop its owned tree; failed cleanup remains retryable."""
+        deadline = time.monotonic() + STOP_S
         with self._guard:
-            if self._stopped:
+            if self._cleanup_complete:
                 return
             self._stopped = True
             process = self.process
+        self._answers.put(None)  # wake a concurrent start()/ask() while cleanup proceeds
         if process is None:
+            self._cleanup_complete = True
             return
+        if not self._cleanup.acquire(timeout=max(0.0, deadline - time.monotonic())):
+            raise EngineError(f"{self.name}: worker cleanup still in progress")
         try:
-            process.kill()
-            process.wait(STOP_S)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-        try:
-            process.stdin.close()
-        except (OSError, ValueError):
-            pass
-        self._reader.join(JOIN_S)
-        if not self._reader.is_alive():
-            process.stdout.close()
+            if self._cleanup_complete:
+                return
+
+            def eof():
+                try:
+                    process.stdin.close()
+                except (OSError, ValueError):
+                    pass
+
+            # A buffered close can wait for a concurrent writer. Keep that thread across
+            # retries and let bounded tree cleanup unblock it if stdin is never read.
+            if self._closer is None:
+                self._closer = threading.Thread(target=eof, name=f"leeroy-{self.name}-eof", daemon=True)
+                self._closer.start()
+            cleaned = self._tree.stop(timeout=max(0.0, deadline - time.monotonic()))
+            try:
+                process.wait(0)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+            self._closer.join(max(0.0, min(JOIN_S, deadline - time.monotonic())))
+            if self._reader is not None:
+                self._reader.join(max(0.0, min(JOIN_S, deadline - time.monotonic())))
+            reader_stopped = self._reader is None or not self._reader.is_alive()
+            if reader_stopped:
+                process.stdout.close()
+            if not cleaned or self._closer.is_alive() or not reader_stopped or process.poll() is None:
+                raise EngineError(f"{self.name}: worker cleanup incomplete")
+            self._cleanup_complete = True
+        finally:
+            self._cleanup.release()
 
 
 class ExpressiveEngine:
@@ -237,7 +289,7 @@ class ExpressiveEngine:
     def __init__(self, engine: str, venv_python: Path, *, need_gb: float, refs_dir: Path = Path(),
                  levers: dict[str, dict] | None = None, script: Path | None = None, args=(),
                  env: dict | None = None, below_normal: bool = False,
-                 timeout_s: float = LINE_TIMEOUT_S):
+                 timeout_s: float = LINE_TIMEOUT_S, start_s: float = START_S):
         self.name = engine
         self.need_gb = need_gb
         self.worker: WorkerProcess | None = None
@@ -247,6 +299,7 @@ class ExpressiveEngine:
         self._refs = Path(refs_dir)
         self._levers = levers or {a: dict(p) for a, p in LEVERS[engine].items()}
         self._timeout_s = timeout_s
+        self._start_s = start_s
         self._starting = threading.Lock()
 
     @property
@@ -261,13 +314,16 @@ class ExpressiveEngine:
                 return
             self.stop()
             self.worker = WorkerProcess(self._python, self._script, args=self._args,
-                                        env=self._env, below_normal=self._below_normal)
+                                        env=self._env, below_normal=self._below_normal,
+                                        start_s=self._start_s)
             self.worker.start()
 
     def stop(self) -> None:
-        worker, self.worker = self.worker, None
+        worker = self.worker
         if worker is not None:
             worker.stop()
+            if self.worker is worker:
+                self.worker = None
 
     def levers(self, attitude: str) -> dict:
         return self._levers[attitude]
@@ -282,7 +338,8 @@ class ExpressiveEngine:
         """Stock clips depend on reference contents, even while the worker is down."""
         return reference_fingerprint(self._reference(spec))
 
-    def synth(self, text: str, spec, style, speed: float) -> np.ndarray:
+    def synth(self, text: str, spec, style, speed: float, *,
+              timeout_s: float | None = None) -> np.ndarray:
         """`style` is the attitude's levers; anything else (StockCache hands the bank's style)
         reads as attitude none. EngineError at once when the engine is down."""
         worker = self.worker
@@ -291,8 +348,10 @@ class ExpressiveEngine:
         if not math.isfinite(speed) or speed <= 0:
             raise EngineError(f"{self.name}: invalid speed")
         params = style if isinstance(style, dict) else self._levers["none"]
-        audio, rate = worker.ask(text, str(self._reference(spec)), params,
-                                 timeout=self._timeout_s)
+        timeout = self._timeout_s if timeout_s is None else min(self._timeout_s, timeout_s)
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise EngineError(f"{self.name}: invalid timeout")
+        audio, rate = worker.ask(text, str(self._reference(spec)), params, timeout=timeout)
         if rate != self.sample_rate or not len(audio):
             raise EngineError(f"{self.name}: {len(audio)} samples at {rate} Hz")
         try:

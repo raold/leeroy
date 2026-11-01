@@ -37,6 +37,9 @@ stereo_spread = 0.0           # 0-0.2: how far the voices are panned apart
 
 [tts]
 threads = 6                   # CPU threads for Kokoro
+cpu_fallback = false          # optional CPU Turbo when GPU admission refuses it
+cpu_threads = 12              # live CPU Turbo only, at most 24
+cpu_timeout_s = 15.0          # live CPU limit; each line's expiry can shorten it
 
 [stt]
 recognizer = "parakeet"       # "parakeet" on the CPU, or "auto": Whisper on the GPU when it fits
@@ -81,6 +84,9 @@ class VoiceConfig:
     min_confidence: float
     gpu_margin_gb: float
     debug_record: bool
+    tts_cpu_fallback: bool = False
+    tts_cpu_threads: int = 12
+    tts_cpu_timeout_s: float = 15.0
 
 
 def vk_for(key: str) -> int:
@@ -129,6 +135,9 @@ _RULES = {
     ("sound", "comms_grit"): ("comms_grit", _int_in(0, 10), "an integer 0-10", int),
     ("sound", "stereo_spread"): ("stereo_spread", _num_in(0, 0.2), "a number 0-0.2", float),
     ("tts", "threads"): ("tts_threads", _int_in(1, 64), "an integer 1-64", int),
+    ("tts", "cpu_fallback"): ("tts_cpu_fallback", lambda v: type(v) is bool, "true or false", bool),
+    ("tts", "cpu_threads"): ("tts_cpu_threads", _int_in(1, 24), "an integer 1-24", int),
+    ("tts", "cpu_timeout_s"): ("tts_cpu_timeout_s", _num_in(1, 15), "a number 1-15", float),
     ("stt", "recognizer"): ("recognizer", lambda v: v in RECOGNIZERS,
                             "one of " + ", ".join(RECOGNIZERS), str),
     ("stt", "threads"): ("stt_threads", _int_in(1, 64), "an integer 1-64", int),

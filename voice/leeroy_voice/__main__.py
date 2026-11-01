@@ -192,11 +192,11 @@ def worker_env(root: Path, *, cpu: bool) -> dict[str, str]:
 
 
 def load_expressive(root: Path, cfg: VoiceConfig, decision: Decision, *, device: str,
-                    refs_dir: Path):
+                    refs_dir: Path, live_cpu: bool = False):
     """The engine the decision names, not started, under its own venv
     (<data dir>/engines/<engine>/.venv); None when it names none. Raises ModelError when it is
     not set up, and LeverError on a bad attitudes.toml."""
-    from .engines.expressive import LINE_TIMEOUT_S, ExpressiveEngine, load_levers
+    from .engines.expressive import LINE_TIMEOUT_S, START_S, ExpressiveEngine, load_levers
     name = expressive_name(decision)
     if name is None:
         return None
@@ -205,12 +205,16 @@ def load_expressive(root: Path, cfg: VoiceConfig, decision: Decision, *, device:
         raise models.ModelError(f"{name}: no venv at {python}")
     _require(root, name)
     cpu = device == "cpu"
-    threads = CPU_THREADS if cpu else cfg.tts_threads
+    if live_cpu and (not cpu or name != "chatterbox-turbo"):
+        raise ValueError("live CPU fallback is only supported for Chatterbox Turbo")
+    threads = cfg.tts_cpu_threads if live_cpu else CPU_THREADS if cpu else cfg.tts_threads
     return ExpressiveEngine(
         name, python, need_gb=EXPRESSIVE_NEED_GB[name], refs_dir=refs_dir,
         levers=load_levers(root, name), env=worker_env(root, cpu=cpu), below_normal=cpu,
         args=("--model", models.model_dir(root, name), "--device", device, "--threads", threads),
-        timeout_s=CPU_LINE_TIMEOUT_S if cpu else LINE_TIMEOUT_S)
+        start_s=60.0 if live_cpu else START_S,
+        timeout_s=(cfg.tts_cpu_timeout_s if live_cpu
+                   else CPU_LINE_TIMEOUT_S if cpu else LINE_TIMEOUT_S))
 
 
 def attach_expressive(service, root: Path, cfg: VoiceConfig, decision: Decision) -> None:
@@ -223,7 +227,17 @@ def attach_expressive(service, root: Path, cfg: VoiceConfig, decision: Decision)
         log("engine_unavailable", level=logging.ERROR, error=str(e))
         return
     if engine is not None:
-        service.attach_expressive(engine)
+        cpu = None
+        if cfg.tts_cpu_fallback and engine.name == "chatterbox-turbo":
+            try:
+                cpu = load_expressive(root, cfg, decision, device="cpu", refs_dir=mind_voices_dir(),
+                                      live_cpu=True)
+            except (models.ModelError, ValueError) as e:
+                log("engine_unavailable", level=logging.ERROR, device="cpu", error=str(e))
+        if cpu is None:
+            service.attach_expressive(engine)
+        else:
+            service.attach_expressive(engine, cpu_fallback=cpu)
 
 
 def design_source(root: Path, cfg: VoiceConfig, decision: Decision, engine, bank):
