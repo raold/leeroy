@@ -5,13 +5,16 @@ import math
 from collections import Counter
 from itertools import combinations
 
-from leeroy_mind.nightly import gossip, knowledge
+from leeroy_mind.nightly import feuds, gossip, knowledge, mentors
 from leeroy_mind.nightly.evidence import Evidence, Item, load_facts, load_items, retrieve
 from leeroy_mind.nightly.ground import Claim, Verdict, check, ground, log_verdicts
 from leeroy_mind.nightly.llm import schema, system_prompt
 from leeroy_mind.nightly.motives import trait_today
 from leeroy_mind.nightly.places import PLACES, place_kind
 from leeroy_mind.nightly.relations import apply_capped, copresence
+from leeroy_mind.nightly.settings import iso_week, week_bounds
+from leeroy_mind.personas.io import load_persona
+from leeroy_mind.personas.schema import DEPTHS
 from leeroy_mind.personas.screens import has_word, redact_real_name
 from leeroy_mind.storage.rows import MemoryRow
 from leeroy_mind.talk.prompt import relationship_card
@@ -52,7 +55,14 @@ def layers(ctx, guid) -> dict[int, float]:
 
 
 def pair_bonus(ctx, a, b) -> float:
-    return 0.0
+    if mentors.active_pair(ctx, a, b) is not None:
+        return 2.0
+    return 1.5 if _pair_feud(ctx, a, b) is not None else 0.0
+
+
+def _pair_feud(ctx, a, b):
+    return next((row for row in feuds.open_feuds(ctx.store)
+                 if {row["a"], row["b"]} == {a, b} and row["started"] <= ctx.clock.now()), None)
 
 
 def pair_weight(ctx, a, b, co, *, shared, pair_setting) -> float:
@@ -88,6 +98,12 @@ def sample_pairs(weights, n, per_member, rng) -> list[tuple[int, int]]:
 def _setting(ctx, a, b, rng, volition=None):
     if volition in VOLITION_SETTINGS:
         return VOLITION_SETTINGS[volition]
+    mentor = mentors.active_pair(ctx, a, b)
+    if mentor is not None and rng.random() < 0.5:
+        return (f"a quiet run where {ctx.name(mentor['mentor'])} shows "
+                f"{ctx.name(mentor['mentee'])} the ropes")
+    if _pair_feud(ctx, a, b) is not None and rng.random() < 0.5:
+        return "a tense moment in guild chat"
     paired = pair_setting(ctx, a, b)
     if paired and rng.random() < 0.5:
         return paired
@@ -261,6 +277,80 @@ def _gossip_text(ctx, text):
     return redact_real_name(_text(text), ctx.ident, ctx.ident.called)
 
 
+def confession_offer(ctx, row):
+    """One earned disclosure, read again at commit so concurrent scenes cannot reuse it."""
+    if row["setting"] not in LATE_SETTINGS and row["volition"] != "confide":
+        return None
+    from leeroy_mind.nightly.storyteller import LAYER_TRUST, NIGHT_OWL_DROP
+    now, store = ctx.clock.now(), ctx.store
+    for confessor, other in ((row["a"], row["b"]), (row["b"], row["a"])):
+        p = load_persona(store, confessor)
+        if p is None or trait_today(store, ctx.night, confessor, p)["extraversion"] > 4:
+            continue
+        opened = {r["layer"] for r in store.conn.execute(
+            "SELECT layer FROM layer_open WHERE guid=? AND other=?", (confessor, other))}
+        next_layer = next(((i, layer) for i, layer in enumerate(p.disclosures) if i not in opened), None)
+        if next_layer is None:
+            continue
+        index, layer = next_layer
+        threshold = LAYER_TRUST[layer.depth] - (NIGHT_OWL_DROP if p.real_life.night_owl else 0)
+        if store.get_relationship(confessor, other).trust < threshold:
+            continue
+        reciprocal = store.conn.execute(
+            "SELECT 1 FROM layer_open WHERE guid=? AND other=? AND opened<=? LIMIT 1",
+            (other, confessor, now)).fetchone() or store.conn.execute(
+            "SELECT 1 FROM rel_delta WHERE a=? AND b=? AND dim='affinity' AND delta>0 "
+            "AND applied=1 AND ts>=? AND ts<=? LIMIT 1", (other, confessor, now - 7 * 86400, now)).fetchone()
+        if not reciprocal:
+            continue
+        if layer.depth == "deep":
+            week = iso_week(ctx.night)
+            start, end = week_bounds(week, ctx.tz)
+            disclosures = store.conn.execute("SELECT d.ts,e.night FROM disclosure d LEFT JOIN encounter e "
+                "ON d.ref='encounter:' || e.id WHERE d.guid=? AND d.depth=3", (confessor,)).fetchall()
+            # An interrupted Sunday night can finish on Monday. Its disclosure still spends
+            # Sunday's allowance; live disclosures without an encounter use their event time.
+            count = sum(iso_week(d["night"]) == week if d["night"] is not None
+                        else start <= d["ts"] < end for d in disclosures)
+            if count >= ctx.settings.deep_per_week:
+                continue
+        return {"confessor": confessor, "other": other, "layer": index,
+                "depth": layer.depth, "text": _gossip_text(ctx, layer.text)}
+    return None
+
+
+def _confession_visible(ctx, memory, a, b):
+    visible, secret, state = _visible(ctx, memory, b if memory.owner == a else a)
+    if visible and secret:
+        # A shared secret must really be scoped to these two, including every ancestor;
+        # a third person's confidence cannot acquire a new partner through the scene.
+        refs = [f"memory:{ident}" for ident, scope, _ in state[1] if scope != "open"]
+        visible = all(ctx.writer.scope_of(g, refs, scope="secret", scope_with=other) == ("secret", other)
+                      for g, other in ((a, b), (b, a)))
+        for root in state[3]:
+            parties = knowledge.parties(ctx.store, root)
+            if (parties and parties != {a, b}) or (not parties and not refs):
+                visible = False
+    return visible, secret, state
+
+
+def _confess(store, ctx, offer, root, refs, now):
+    a, b = offer["confessor"], offer["other"]
+    store.conn.execute("INSERT INTO layer_open(guid,other,layer,opened,ref) VALUES (?,?,?,?,?)",
+                       (a, b, offer["layer"], now, root))
+    store.conn.execute("INSERT INTO disclosure(guid,other,depth,response,layer,ts,ref) "
+                       "VALUES (?,?,?,'responsive',?,?,?)",
+                       (a, b, DEPTHS.index(offer["depth"]) + 1, offer["layer"], now, root))
+    knowledge.add_fact(store, kind="confession", root=root, about=a,
+                       text=truncate_words(offer["text"], 160), secret=1, now=now)
+    for g, other, how in ((a, b, "witnessed"), (b, a, "confided")):
+        apply_capped(store, night=ctx.night, a=g, b=other, dim="trust", delta=2,
+                     speed=ctx.settings.relationship_speed, reason="confession", evidence=refs,
+                     ts=now, human=ctx.human)
+        knowledge.learn(store, root, g, how, ts=now, may_tell=0)
+        knowledge.believe(store, g, other, root, "yes", now=now)
+
+
 def _gossip_sources(ctx, row, memories, offer):
     """Pick one teller before admitting anything private to a shared scene prompt."""
     a, b = row["a"], row["b"]
@@ -352,10 +442,12 @@ async def run_encounter(ctx, row):
         # filtering, so stale scope/text never enters the scene prompt in the first place.
         current_memories = {m.id: m for m in ctx.store.get_memories(
             [m.id for memories in found for m in memories if m.id is not None])}
-        offer = gossip.rumor_offer(ctx, row)
+        confession = confession_offer(ctx, row)
+        scene_row = dict(row) | {"private": 1} if confession else row
+        offer = None if confession else gossip.rumor_offer(ctx, row)
         forced = [] if offer is None else offer["sources"]
         available = {m.id: m for m in [*forced, *current_memories.values()]}
-        teller, options = _gossip_sources(ctx, row, available.values(), offer)
+        teller, options = (a, []) if confession else _gossip_sources(ctx, row, available.values(), offer)
         offered = {entry[1].id for entry in options}
         # Named rumors carry both canonical and held-version provenance, even when ordinary
         # retrieval did not find it. Their helper separately checks disclosure permission.
@@ -369,20 +461,28 @@ async def run_encounter(ctx, row):
                 m = current_memories.get(retrieved_memory.id)
                 if m is None or m.owner != owner:
                     continue
-                visible, secret, state = _visible(ctx, m, other)
+                visible, secret, state = (_confession_visible(ctx, m, a, b) if confession
+                                          else _visible(ctx, m, other))
+                if confession and secret and marked:
+                    continue  # At most one secret these two already share.
                 private_offer = m.owner == teller and m.id in offered
                 if (visible or private_offer) and m.id not in privacy:
                     shown.append(m)
                     privacy[m.id] = state
-                    admission[m.id] = "context" if visible else "gossip"
+                    admission[m.id] = "confession" if confession else "context" if visible else "gossip"
                     if secret:
                         marked.add(f"memory:{m.id}")
-        candidates = bystander_candidates(ctx, row, ctx.rng("enc", row["idx"], "around"), shown=shown)
+        candidates = bystander_candidates(ctx, scene_row, ctx.rng("enc", row["idx"], "around"), shown=shown)
         root = f"encounter:{row['id']}"
         shown_refs = [f"memory:{m.id}" for m in shown]
         refs = [root, *shown_refs]
         ev = Evidence()
-        ev.add(Item(root, row["setting"], frozenset({a, b}), ctx.clock.now()))
+        confession_prompt = (f"It's late. {ctx.name(confession['confessor'])} opens up to "
+            f"{ctx.name(confession['other'])} about this: {confession['text']}. "
+            f"{ctx.name(confession['other'])} listens. It stays between the two of them."
+            if confession else "")
+        ev.add(Item(root, row["setting"] + ("\n" + confession_prompt if confession else ""),
+                    frozenset({a, b}), ctx.clock.now()))
         for item in load_items(ctx.store, shown_refs, ident=ctx.ident):
             if item.ref in marked:
                 item = Item(item.ref, "(a secret you share: never passed on) " + item.text,
@@ -392,13 +492,14 @@ async def run_encounter(ctx, row):
         relationships = "\n".join(f"{ctx.name(g)} toward " + relationship_card(ctx.name(other),
             ctx.store.get_relationship(g, other), is_human=False) for g, other in ((a, b), (b, a)))
         titles = f"{ctx.name(a)}: {_title(ctx, a)}\n{ctx.name(b)}: {_title(ctx, b)}"
-        gossip_prompt = _gossip_prompt(ctx, row, ev, teller, options, offer)
+        gossip_prompt = (confession_prompt + "\nThis is a confidence; return gossip null.\n"
+                         if confession else _gossip_prompt(ctx, row, ev, teller, options, offer))
     system = system_prompt("encounter", "Write a small off-screen scene between two guildmates; "
         "no romance or flirting between them.\n{cards}", ctx.settings.data_dir, human=ctx.ident,
         cards=f"{ctx.card(a)}\n{ctx.card(b)}")
     user = (f"a: {ctx.name(a)}; b: {ctx.name(b)}\nSetting: {row['setting']}\n{relationships}\n"
             f"Life threads:\n{titles}\nEvidence:\n{ev.render(ctx.tz)}\n")
-    if row["volition"] in INTENT and (row["volition"] not in {"gossip", "correct"} or offer):
+    if not confession and row["volition"] in INTENT and (row["volition"] not in {"gossip", "correct"} or offer):
         user += INTENT[row["volition"]].format(a=ctx.name(a), b=ctx.name(b)) + "\n"
     user += gossip_prompt
     if candidates:
@@ -421,7 +522,7 @@ async def run_encounter(ctx, row):
         pairs = await ground(ctx, [scene, *claims], ev, facts)
     accepted = bool(claims) and all(verdict.ok for _, verdict in pairs)
     telling = None
-    if reply.get("gossip") is not None and row["volition"] != "correct":
+    if reply.get("gossip") is not None and row["volition"] != "correct" and not confession:
         payload = reply["gossip"]
         source = ev.ref(payload["source"])
         # Only model-facing aliases are accepted; a coincident database ID is never a fallback.
@@ -467,7 +568,9 @@ async def run_encounter(ctx, row):
             raise ValueError("Encounter changed while its scene was generated")
         if a not in ctx.members() or b not in ctx.members():
             raise ValueError("Encounter participant became unavailable")
-        if gossip.rumor_offer(ctx, row) != offer:
+        if confession_offer(ctx, row) != confession:
+            raise ValueError("Encounter disclosure changed while its scene was generated")
+        if not confession and gossip.rumor_offer(ctx, row) != offer:
             raise ValueError("Encounter rumor changed while its scene was generated")
         fresh = {m.id: m for m in store.get_memories([m.id for m in shown])}
         for m in shown:
@@ -478,6 +581,8 @@ async def run_encounter(ctx, row):
                 visible = offer is not None  # The fresh offer above rechecks its permissions.
             elif admission[m.id] == "gossip":
                 visible = gossip.source_allowed(ctx, m, teller, b if teller == a else a)
+            elif admission[m.id] == "confession":
+                visible, _, state = _confession_visible(ctx, m, a, b)
             if not visible or state != privacy[m.id]:
                 raise ValueError("Encounter privacy changed while its scene was generated")
         now = ctx.clock.now()
@@ -485,10 +590,12 @@ async def run_encounter(ctx, row):
         if not accepted:
             store.conn.execute("UPDATE encounter SET status='rejected' WHERE id=?", (row["id"],))
             return
-        eligible = bystander_candidates(ctx, current, ctx.rng("enc", row["idx"], "around"), shown=shown)
+        eligible = bystander_candidates(ctx, scene_row, ctx.rng("enc", row["idx"], "around"), shown=shown)
         if any(g not in eligible for g, _, _ in around):
             raise ValueError("Encounter bystander became unavailable")
-        scope = "secret" if row["private"] or marked or knowledge.secret_rooted(store, shown_refs) else "open"
+        if confession:
+            store.conn.execute("UPDATE encounter SET private=1 WHERE id=?", (row["id"],))
+        scope = "secret" if scene_row["private"] or marked or knowledge.secret_rooted(store, shown_refs) else "open"
         if scope == "open" and any(state[4] or any(s != "open" for _, s, _ in state[1])
                                    for state in privacy.values()):
             # Legacy rows can say open even though a deeper memory cites a whisper.
@@ -496,8 +603,11 @@ async def run_encounter(ctx, row):
             scope = "private"
         for i, (key, g, other) in enumerate((("a", a, b), ("b", b, a))):
             claim, data = claims[i], memories[key]
+            if confession and g == confession["other"] and not knowledge.secret_probe_passed(
+                    store, now=now, max_rate=ctx.settings.probe_max_rate):
+                continue
             ident = ctx.writer.put(_memory(g, claim.text, other=(other,), evidence=refs,
-                importance=min(6, data["importance"]), valence=claim.valence, now=now,
+                importance=min(7 if confession else 6, data["importance"]), valence=claim.valence, now=now,
                 embedding=vectors[i], scope=scope), shown=shown_refs)
             if abs(claim.valence) >= 0.4:
                 store.conn.execute("INSERT INTO emotion(guid,night,type,target,intensity,why,source,evidence,ts) "
@@ -505,17 +615,20 @@ async def run_encounter(ctx, row):
                     "admiration" if claim.valence > 0 else "reproach", other,
                     2 if abs(claim.valence) >= 0.7 else 1, claim.text[:80],
                     json.dumps([f"memory:{ident}"]), now))
-        total = 0
+        total, deltas = 0, []
         for delta in reply["deltas"]:
             g, other = (a, b) if delta["from"] == "a" else (b, a)
             amount = max(-3, min(3, delta["delta"]))
             total += amount
+            deltas.append(dict(delta) | {"delta": amount})
             apply_capped(store, night=ctx.night, a=g, b=other, dim=delta["dim"], delta=amount,
                          speed=ctx.settings.relationship_speed, reason="encounter", evidence=refs,
                          ts=now, human=ctx.human)
         store.conn.execute("UPDATE encounter SET status='done',scene=?,blowup=? WHERE id=?",
             (scene.text, int(row["volition"] == "confront" and total <= BLOWUP_DELTA), row["id"]))
-        if not row["private"]:
+        if confession:
+            _confess(store, ctx, confession, root, refs, now)
+        elif not row["private"]:
             knowledge.learn(store, root, a, "witnessed", ts=now)
             knowledge.learn(store, root, b, "witnessed", ts=now)
             knowledge.believe(store, a, b, root, "yes", now=now)
@@ -531,9 +644,12 @@ async def run_encounter(ctx, row):
         if row["volition"] in {"confront", "make_up"}:
             store.conn.execute("UPDATE story_arc SET last_beat=? WHERE key=? AND status='open'",
                                (now, arc_key("feud", a, b)))
-        gossip_enc = dict(row) | {"_gossip_teller": teller, "_gossip_sources": tuple(sorted(offered)),
-                                  "_shown_refs": tuple(shown_refs), "_shown": tuple(shown)}
-        if row["volition"] == "correct" and offer is not None:
+        gossip_enc = dict(scene_row) | {"status": "done", "scene": scene.text,
+            "_gossip_teller": teller, "_gossip_sources": tuple(sorted(offered)),
+            "_shown_refs": tuple(shown_refs), "_shown": tuple(shown)}
+        feuds.maybe_open(store, ctx, gossip_enc, deltas, tuple(shown_refs))
+        feuds.maybe_end(store, ctx, gossip_enc, deltas)
+        if not confession and row["volition"] == "correct" and offer is not None:
             gossip.after_correction(store, ctx, gossip_enc, offer["rumor"]["id"], b, now=now)
         elif telling is not None:
             gossip.after_gossip(store, ctx, gossip_enc, telling, shown, now=now)
