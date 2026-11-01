@@ -665,7 +665,7 @@ class VoiceService:
         fallback_why = self._expressive_why
         if cpu and self._cpu_job is not None:
             expressive, cpu, fallback_why = None, False, "CPU synthesis busy"
-        if cpu and (TIERS.index(msg.priority) <= 2 or msg.kind == "hotmic" or
+        if cpu and (msg.priority != "p3" or msg.kind == "hotmic" or
                     msg.expires_ms / 1000 - self._clock.now() <
                     CPU_FALLBACK_RESERVE_S + CPU_MIN_BUDGET_S):
             expressive, cpu, fallback_why = None, False, "CPU deadline too short"

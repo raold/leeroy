@@ -87,9 +87,10 @@ for commands, data-directory overrides and the rollout procedure.
 
 Chatterbox Turbo can optionally use the CPU when GPU admission refuses it. In the
 local `voice.toml`, set `[tts] cpu_fallback = true`; `cpu_threads` defaults to 12
-and is capped at 24. Cold loading runs in the background. One conversational reply
-can render on the CPU at a time, with a 15-second maximum shortened by its expiry.
-Urgent calls, overflow, and failed renders retain stock/Kokoro delivery. This option
+and is capped at 24. Cold loading runs in the background. One direct reply or private
+conversation can render on the CPU at a time, with a 15-second maximum shortened by
+its expiry. Ambient chatter, urgent calls, overflow, and failed renders retain
+stock/Kokoro delivery. This option
 keeps the same synthetic references and does not reserve GPU memory; it trades
 response speed for the expressive voice. It is disabled by default.
 

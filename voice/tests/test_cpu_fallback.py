@@ -42,6 +42,11 @@ class CpuRig(Rig22):
         self.service._cfg = self.cfg
         self.service.attach_expressive(self.expressive, cpu_fallback=cpu)
 
+    def speak(self, *args, **kwargs):
+        kwargs.setdefault("priority", "p3")
+        kwargs.setdefault("ttl", 20.0)
+        return super().speak(*args, **kwargs)
+
 
 @pytest.fixture(autouse=True)
 def memory(monkeypatch):
@@ -118,6 +123,30 @@ def test_cpu_failure_falls_back_once_for_the_whole_reply(tmp_path, fake_bank):
         assert len(cpu.budgets) == 1
         assert rig.engine.live() == ["We made it. Let us try again."]
         assert rig.service._jobs["failed"].fell_back
+    go(tmp_path, fake_bank, cpu, body)
+
+
+def test_ambient_reply_preserves_warmed_cpu_for_the_next_direct_reply(tmp_path, fake_bank):
+    cpu = Cpu()
+
+    async def body(rig):
+        await rig.seat(101)
+        await until(rig, lambda: rig.service._cpu_active)
+        await rig.mind.send(rig.speak("ambient", text="We made it. Let us try again.",
+                                      priority="p4", ttl=15))
+        await rig.sees("ambient", "started")
+        await eventually(lambda: len(rig.engine.live()) == 2)
+        assert rig.engine.live() == ["We made it.", "Let us try again."]
+        assert cpu.budgets == [] and cpu.up
+        assert cpu.loads == 1 and len(cpu.warmups) == 1
+        assert rig.service._cpu_job is None
+        await rig.play_out()
+        await rig.tick(.5)
+        await rig.mind.send(rig.speak("direct", text="I can help with that.", to_human=True))
+        await rig.sees("direct", "started")
+        assert [text for text, _ in cpu.said] == ["I can help with that."]
+        assert cpu.loads == 1 and len(cpu.warmups) == 1
+        assert rig.service._status().gpu == "none" and rig.guard.holders == {}
     go(tmp_path, fake_bank, cpu, body)
 
 
