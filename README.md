@@ -74,30 +74,6 @@ There is no deploy job: the server runs on one PC and is updated with the
 scripts above. A self-hosted runner on a public repo would let any pull request
 run code on that PC.
 
-## Research
-
-Where published work exists, the design leans on it. [`references.bib`](references.bib) lists every source (232 BibTeX entries grouped by topic); each entry's `annote` says what it shaped. Metadata was checked against DOI registries, arXiv, the ACL Anthology, OpenReview, PMLR and the projects' own pages.
-
-**Agents and memory.** The memory stream, the recency-importance-relevance recall score and reflection follow Park et al. (2023). Evidence-linked, time-aware facts follow Rasmussen et al. (2025), Latimer et al. (2025) and Wan et al. (2026), and writes are validated where hallucinations enter (Chen et al., 2026). Consolidation runs in the background (Lin et al., 2025) on a two-speed model (McClelland et al., 1995; Kumaran et al., 2016; Mattar and Daw, 2018), and recall uses activation-style decay (Anderson and Schooler, 1991).
-
-**Theory of mind and who-knows-what.** LLM theory of mind is strong on some tests and brittle on others (Street et al., 2026; Ullman, 2023; Shapira et al., 2024; Kim et al., 2023; Gu et al., 2026), so beliefs live in an explicit ledger and each prompt is filtered to what that member could perceive (Wilf et al., 2024; Sclar et al., 2023; Jung et al., 2024). Secret-keeping is probed (Mireshghallah et al., 2024).
-
-**Emotion and mood.** Appraisal labels follow Ortony, Clore and Collins (1988). Mood is a point in pleasure-arousal-dominance space (Mehrabian, 1996) with a personality-set baseline and decay (Gebhard, 2005); contagion follows Hatfield et al. (1993) and Bosse et al. (2015), and mood-congruent recall follows Bower (1981).
-
-**Relationships and social dynamics.** Closeness grows with reciprocal self-disclosure (Altman and Taylor, 1973; Aron et al., 1997; Collins and Miller, 1994), and members differ in how they handle closeness and absence (Bartholomew and Horowitz, 1991; Mikulincer and Shaver, 2003). Attraction responds to proximity (Festinger et al., 1950), reciprocity (Aronson and Linder, 1965), similarity (Montoya et al., 2008), playing hard to get (Walster et al., 1973) and arousal after intense shared moments (Dutton and Aron, 1974). Gossip and rumour mutate as they travel (Allport and Postman, 1947; Kreminski, 2023), conventions spread as naming games (Baronchelli et al., 2006; Centola et al., 2018), feuds follow balance theory (Heider, 1946; Cartwright and Harary, 1956), and guild-wide opinions follow bounded-confidence dynamics (Deffuant et al., 2000; Hegselmann and Krause, 2002).
-
-**Motivation and persona.** Members have weighted play motives (Yee, 2006) and daily states sampled around stable traits (Fleeson, 2001). Personas are re-anchored in every prompt because they drift (Li et al., 2024; Lu et al., 2026) and are built from specific detail (Park et al., 2024; Jones and Bergen, 2025).
-
-**Stories and game AI.** Events are over-generated and then sifted (Ryan, 2018; Kreminski et al., 2019, 2021, 2022); algorithms select and the LLM narrates (Mendez and Gervas, 2023). Social moves follow Comme il Faut and Versu (McCoy et al., 2014; Evans and Short, 2014), and per-member bandits use Thompson sampling (Russo et al., 2018).
-
-**Evaluation.** Weekly probes borrow from LongMemEval (Wu et al., 2025), LoCoMo (Maharana et al., 2024), SOTOPIA (Zhou et al., 2024), PersonaGym (Samuel et al., 2025) and persona-consistency metrics (Abdulhai et al., 2025).
-
-**Ruled out.** Activation steering and persona vectors (Turner et al., 2023; Rimsky et al., 2024; Chen et al., 2025; AxBench, Wu et al., 2025; Tan et al., 2024), per-persona adapters (Neeko, Yu et al., 2024), preference optimisation on a player's reactions (Rafailov et al., 2023; Ethayarajh et al., 2024; Williams et al., 2025), self-editing live memory (Packer et al., 2023) and a cognitive-dissonance mechanic (Vaidis et al., 2024).
-
-**Voice.** Mood maps to speaking rate, intensity and pitch (Juslin and Laukka, 2003); multi-speaker timing follows Stivers et al. (2009) and Ekstedt and Skantze (2022). The baseline voice model builds on StyleTTS 2 (Li et al., 2023) and speech recognition on Whisper (Radford et al., 2023).
-
-**Software and models.** AzerothCore, mod-playerbots, mod-ollama-chat, Ollama, llama.cpp, SQLite with sqlite-vec, Gemma 4, Qwen3 and Qwen3-Embedding, plus retrieval staples: MMR (Carbonell and Goldstein, 1998), reciprocal rank fusion (Cormack et al., 2009), BM25 (Robertson and Zaragoza, 2009) and Matryoshka embeddings (Kusupati et al., 2022). Candidate chat models were compared on the UGI leaderboard.
-
 ## License
 
 GPL-2.0, matching AzerothCore and mod-playerbots.

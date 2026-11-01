@@ -1,6 +1,7 @@
 """Who speaks. A member speaks because the topic touches them, they were addressed, or they
 know the person who spoke last: the weights below reward those reasons and the reply planner
-never answers a line with the whole guild.
+never answers a line with the whole guild. A line of his that names one member, and speaks to
+no one else, gets that member's answer alone (aimed_at_one).
 
 Answering the human (final fix wave, ruling final I1): the reasons are being addressed or
 mentioned, the topic fitting the member (their interests, their role and title, how they play),
@@ -360,6 +361,36 @@ def _remark_count(rng) -> int:
     return next(n for cum, n in REPLY_COUNT_REMARK if r < cum)
 
 
+# Words that speak to the whole guild (fix wave G5): a line with one is for everyone, whoever
+# else it names. Not "someone" or "somebody": they point at no one in particular.
+_GUILD_WORDS = frozenset("""anyone any1 anybody everyone everybody who whos whoever guys yall
+y'all folks peeps ppl""".split())
+# A hello, a goodbye, thanks or "you" before one of the _ADDRESS words is a word to the guild
+# too: "hey all", "gn team", "thanks people", "you all".
+_SALUTE = frozenset("""hey hi hello yo sup evening morning afternoon night nite gn gnight
+goodnight bye cya later laters thanks thx ty gz gj you u""".split())
+_ADDRESS_WORDS = _ADDRESS - {"o"}
+
+
+def speaks_to_guild(text: str) -> bool:
+    """His line speaks to the whole guild: "anyone", "who", "guys", "everyone" and the like
+    (_GUILD_WORDS), or an address after a hello, a goodbye, thanks or "you" ("hey all", "gn
+    team", "you all"). The names inside item and quest links are not read."""
+    plain = _BRACKETS.sub(" ", strip_wow_markup(text)).casefold()
+    tokens = [t.removesuffix("'s").strip("'") for t in _WORD.findall(plain)]
+    return any(t in _GUILD_WORDS or (t in _ADDRESS_WORDS and i > 0 and tokens[i - 1] in _SALUTE)
+               for i, t in enumerate(tokens))
+
+
+def aimed_at_one(text: str, called: Sequence[int]) -> bool:
+    """His line names one member (`called`: the members it names who can answer) and speaks to
+    no one else, so that member answers it alone (fix wave G5, seen live: "whatever you need
+    <name>, just link it in chat" drew a second replier from the reason pool, who riffed on the
+    first one's answer). A second name, or a word to the whole guild (speaks_to_guild),
+    leaves it to the usual draw."""
+    return len(called) == 1 and not speaks_to_guild(text)
+
+
 def plan_replies(text: str, *, channel: str, to_guid: int, weights: dict[int, float],
                  names: dict[int, str], afk: set[int], rng,
                  reasons: Collection[int] = (),
@@ -369,15 +400,19 @@ def plan_replies(text: str, *, channel: str, to_guid: int, weights: dict[int, fl
     reasons to speak; a zero weight never answers (the addressee excepted). `reasons` are the
     members with a real reason (see has_reason) and are drawn first; `allowed` is the raid
     gate, e.g. lambda g: raid.allows(g, TurnKind.REPLY_HUMAN, now). A whisper is answered by
-    the one he whispered, `whisper_p` of the time (whisper_reply_p)."""
+    the one he whispered, `whisper_p` of the time (whisper_reply_p). A line that names one
+    member and speaks to no one else is answered by that member alone (aimed_at_one); the
+    members it names answer first in any other."""
     if allowed is not None:
         weights = {g: w for g, w in weights.items() if allowed(g)}
     if channel == "whisper":
         if to_guid not in weights or to_guid in afk or rng.random() >= whisper_p:
             return []
         return [to_guid]
-    kind = classify_human_line(text)
     called = [g for g in mentioned(text, names) if g in weights and g not in afk][:3]
+    if aimed_at_one(text, called):
+        return called
+    kind = classify_human_line(text)
     if kind == "remark":
         n = _remark_count(rng)
         if called:

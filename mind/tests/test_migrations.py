@@ -1,5 +1,6 @@
 """Opening a populated mind.db from an older schema (tests lens M6) and the vec0 rebuild in
 0003 (liveops I2)."""
+import json
 import random
 import shutil
 import sqlite3
@@ -32,6 +33,29 @@ def _db_at(path, version: int, tmp_path, monkeypatch) -> sqlite3.Connection:
         monkeypatch.undo()
 
 
+# The memory columns of schemas v1-v4, before the nightly scope.
+_OLD_MEMORY_COLS = ("owner, kind, text, t_event, t_created, t_accessed, access_n, actors, place, "
+                    "boss_id, raid_id, importance, valence, source, evidence, confidence, status, "
+                    "superseded_by, key, merged_n, embedding")
+
+
+def _old_memory(conn, m) -> int:
+    """Memory `m`, its actors and its vector in an older schema's own columns, as that
+    release's Store wrote them (today's Store writes today's columns)."""
+    mid = conn.execute(
+        f"INSERT INTO memory({_OLD_MEMORY_COLS}) VALUES ({','.join('?' * 21)})",
+        (m.owner, m.kind, m.text, m.t_event, m.t_created, m.t_accessed, m.access_n,
+         json.dumps(list(m.actors)), m.place, m.boss_id, m.raid_id, m.importance, m.valence,
+         m.source, json.dumps(list(m.evidence)), m.confidence, m.status, m.superseded_by, m.key,
+         m.merged_n, m.embedding)).lastrowid
+    conn.executemany("INSERT INTO memory_actor(memory_id, guid) VALUES (?, ?)",
+                     [(mid, g) for g in m.actors])
+    if m.embedding is not None:
+        conn.execute("INSERT INTO memory_vec(memory_id, owner, embedding) VALUES (?, ?, ?)",
+                     (mid, m.owner, m.embedding))
+    return mid
+
+
 def _vectors(conn) -> list[tuple]:
     return [tuple(r) for r in conn.execute(
         "SELECT memory_id, owner, embedding FROM memory_vec ORDER BY memory_id")]
@@ -54,8 +78,8 @@ def test_a_v1_db_with_rows_opens_at_the_latest_schema(tmp_path, monkeypatch):
                      "VALUES (2, 101, 'guild', 'greet', 'o/')")
         conn.execute("INSERT INTO persona_core(guid, json, card, card_tokens, version, source, "
                      "updated) VALUES (101, '{}', 'card', 1, 1, 'seed', 3)")
-        store = Store(conn, clock=SystemClock())
-        mid = store.insert_memory(make_mem(owner=101, embedding=pack_vec(fake_embed("old"))))
+        mid = _old_memory(conn, make_mem(owner=101, embedding=pack_vec(fake_embed("old"))))
+        conn.commit()
     finally:
         conn.close()
     conn = open_db(path)
@@ -80,12 +104,12 @@ def test_0003_rebuilds_memory_vec_in_small_chunks_keeping_every_vector(tmp_path,
     conn = _db_at(path, 2, tmp_path, monkeypatch)
     rng = random.Random(3)
     try:
-        store = Store(conn, clock=SystemClock())
         for owner in OWNERS:
             for i in range(3):
                 text = f"memory {i} of {owner} about {rng.choice(['loot', 'wipes', 'gz'])}"
-                store.insert_memory(make_mem(owner=owner, text=text,
-                                             embedding=pack_vec(fake_embed(text))))
+                _old_memory(conn, make_mem(owner=owner, text=text,
+                                           embedding=pack_vec(fake_embed(text))))
+        conn.commit()
         before = _vectors(conn)
         knn_before = {o: _knn(conn, o, "wipes") for o in (1000, 1005, 1009)}
     finally:

@@ -6,6 +6,7 @@ from contextlib import contextmanager
 
 from leeroy_mind import protocol
 from leeroy_mind.clock import Clock
+from leeroy_mind.memory.privacy import stricter
 from leeroy_mind.protocol import Chat, Member
 from leeroy_mind.storage import db
 from leeroy_mind.storage.rows import (
@@ -54,7 +55,8 @@ def _memory_from_row(r: sqlite3.Row) -> MemoryRow:
         raid_id=r["raid_id"], importance=r["importance"], valence=r["valence"],
         source=r["source"], evidence=tuple(json.loads(r["evidence"])),
         confidence=r["confidence"], status=r["status"], superseded_by=r["superseded_by"],
-        key=r["key"], merged_n=r["merged_n"], embedding=r["embedding"])
+        key=r["key"], merged_n=r["merged_n"], embedding=r["embedding"], scope=r["scope"],
+        scope_with=r["scope_with"])
 
 
 def _check_vec(v: bytes) -> bytes:
@@ -342,11 +344,11 @@ class Store:
                 m.raid_id, m.importance, m.valence, m.source, _j(list(m.evidence)),
                 m.confidence, m.status, m.superseded_by,
                 None if m.key is None else clean(m.key), m.merged_n,
-                None if m.embedding is None else _check_vec(m.embedding))
+                None if m.embedding is None else _check_vec(m.embedding), m.scope, m.scope_with)
 
     _MEMORY_COLS = ("owner, kind, text, t_event, t_created, t_accessed, access_n, actors, place, "
                     "boss_id, raid_id, importance, valence, source, evidence, confidence, status, "
-                    "superseded_by, key, merged_n, embedding")
+                    "superseded_by, key, merged_n, embedding, scope, scope_with")
 
     def _index_actors(self, mid: int, actors) -> None:
         self.conn.execute("DELETE FROM memory_actor WHERE memory_id = ?", (mid,))
@@ -362,7 +364,7 @@ class Store:
 
     def insert_memory(self, m: MemoryRow) -> int:
         with self.transaction():
-            marks = ",".join("?" * 21)
+            marks = ",".join("?" * 23)
             mid = self.conn.execute(
                 f"INSERT INTO memory({self._MEMORY_COLS}) VALUES ({marks})",
                 self._memory_params(m)).lastrowid
@@ -374,21 +376,24 @@ class Store:
     def upsert_keyed_memory(self, m: MemoryRow) -> int:
         """Insert, or update in place the owner's memory with the same key (text, times, scores,
         evidence, actors and embedding are replaced; access_n and merged_n are kept). With no
-        embedding in `m` the stale one is dropped so the memory gets re-embedded."""
+        embedding in `m` the stale one is dropped so the memory gets re-embedded. The scope
+        becomes the stricter of the stored one and `m`'s, so a rewrite never lowers it."""
         if m.key is None:
             raise ValueError("upsert_keyed_memory needs a key")
         with self.transaction():
-            r = self._one("SELECT id FROM memory WHERE owner = ? AND key = ?", (m.owner, clean(m.key)))
+            r = self._one("SELECT id, scope, scope_with FROM memory WHERE owner = ? AND key = ?",
+                          (m.owner, clean(m.key)))
             if r is None:
                 return self.insert_memory(m)
             mid = r["id"]
+            scope, scope_with = stricter((r["scope"], r["scope_with"]), (m.scope, m.scope_with))
             p = self._memory_params(m)
             self.conn.execute(
                 "UPDATE memory SET kind=?, text=?, t_event=?, t_accessed=?, actors=?, place=?, "
                 "boss_id=?, raid_id=?, importance=?, valence=?, source=?, evidence=?, "
-                "confidence=?, status=?, embedding=? WHERE id = ?",
+                "confidence=?, status=?, embedding=?, scope=?, scope_with=? WHERE id = ?",
                 (p[1], p[2], p[3], p[5], p[7], p[8], p[9], p[10], p[11], p[12], p[13], p[14],
-                 p[15], p[16], p[20], mid))
+                 p[15], p[16], p[20], scope, scope_with, mid))
             self._index_actors(mid, m.actors)
             self._index_vec(mid, m.owner, m.embedding)
             return mid

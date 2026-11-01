@@ -45,7 +45,7 @@ from leeroy_mind.talk.raid import RaidPhase, RaidState
 from leeroy_mind.talk.reactions import (EVENING_S, GZ_TEMPLATES, LEAD_CALL, LEAD_GROUP_CALL,
                                         LOGIN_QUIET_S, MID_GROUP, MID_RAID, Reactions)
 from leeroy_mind.talk.romance import JealousyAsides, WhisperPlanner, flirt_chance
-from leeroy_mind.talk.select import (WHISPER_REPLY_P, ReplyTurn, asks_the_past,
+from leeroy_mind.talk.select import (WHISPER_REPLY_P, ReplyTurn, aimed_at_one, asks_the_past,
                                      classify_human_line, is_quest_talk, mentioned,
                                      pick_speakers, plan_reply_turns, topic_words,
                                      whisper_reply_p)
@@ -247,7 +247,9 @@ class TalkEngine(Reactions):
         planned = shared
         question = game_question(row.text) if self.facts is not None else None
         fitted = None
-        if question is not None and not whisper:
+        # a question put to the one member he named is answered by that member, not by whoever
+        # knows the topic (fix wave G5)
+        if question is not None and not whisper and not aimed_at_one(row.text, called):
             planned, fitted = self._fit_replier(planned, question.topic, weights, called,
                                                 line_id=row.id, channel=reply_to)
             # only the first answer gets the facts: the one who knows the topic goes first,

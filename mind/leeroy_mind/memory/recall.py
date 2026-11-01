@@ -19,6 +19,8 @@ log = logging.getLogger("leeroy_mind")
 _WORD = re.compile(r"\w+", re.UNICODE)
 _CHAT_REF = re.compile(r"chat:([0-9]+)")
 OWNER_REF = "owner:"  # owner-authored evidence (the guild's history): public, not a chat line
+# What a private or secret memory's prompt line ends with (memory.privacy).
+PRIVATE_TAIL = " (keep it between you two)"
 # A memory a live prompt brought up rests this long: it comes back only when nothing else
 # fills the prompt (final fix wave, prompts I3: the same five memories won every query).
 REST_S = 1800.0
@@ -55,11 +57,23 @@ def chat_ids(evidence) -> list[int]:
 
 def whisper_ok(channel: str, frm: int, to: int, *, speaker: int, turn_channel: str,
                to_guid: int) -> bool:
-    """The interim whisper rule for one chat line (until P1c's private scope), for a turn by
-    `speaker` on `turn_channel` (a whisper going to `to_guid`): a line on any channel but
-    whisper may reach every turn's prompt, a whisper only a whisper between the same two."""
+    """The pair rule for one chat line, for a turn by `speaker` on `turn_channel` (a whisper
+    going to `to_guid`): a line on any channel but whisper may reach every turn's prompt, a
+    whisper only a whisper between the same two. Memories are kept to it through their scope
+    (scope_ok), and their evidence still goes through it under the scope as a second check
+    (Recall._shareable; controller ruling B1)."""
     return channel != "whisper" or (turn_channel == "whisper"
                                     and {frm, to} == {speaker, to_guid})
+
+
+def scope_ok(m: MemoryRow, *, turn_channel: str, to_guid: int) -> bool:
+    """Whether a memory's scope lets it into a turn's prompt (controller rulings N4 and B1). An
+    open memory reaches every turn. A private or secret one counts as a whisper between its
+    owner and its partner, so it reaches only a whisper from her to that partner, and one with
+    no partner (scope_with 0) reaches none."""
+    return m.scope == "open" or (m.scope_with != 0 and whisper_ok(
+        "whisper", m.owner, m.scope_with, speaker=m.owner, turn_channel=turn_channel,
+        to_guid=to_guid))
 
 
 def recency(t_accessed: float, now: float, tau_days: float) -> float:
@@ -94,7 +108,8 @@ def format_memory(m: MemoryRow, now: float, *, tz: tzinfo) -> str:
     mind clock's zone (clock.local().tzinfo), required so the host's zone never leaks in;
     Recall.format passes it. A game memory (events.py's templates, whose stored text stays as
     written) reads "3 times" for "3\u00d7", and one from before tonight loses the "tonight" the
-    template baked in, since the age says when (prompts lens, minor 4)."""
+    template baked in, since the age says when (prompts lens, minor 4). A private or secret
+    memory ends with PRIVATE_TAIL."""
     when = memory_age(m.t_event, now, tz)
     text = m.text
     if m.kind == "event":
@@ -104,6 +119,8 @@ def format_memory(m: MemoryRow, now: float, *, tz: tzinfo) -> str:
             text = _BAKED_TONIGHT.sub("", text).strip()
             text = text[:1].upper() + text[1:]
     tail = " (heard)" if m.confidence < HEARD else ""
+    if m.scope != "open":
+        tail += PRIVATE_TAIL
     return f"- {when}: {text}{tail}"
 
 
@@ -191,11 +208,12 @@ class Recall:
 
     def _shareable(self, rows: list[MemoryRow], owner: int, channel: str,
                    to_guid: int) -> list[MemoryRow]:
-        """The interim whisper rule, until P1c's private scope. A memory whose stored chat lines
-        are all whispers stays out of a turn on any other channel, and out of a whisper unless
-        every one of them was between `owner` and `to_guid`. A memory with a public line, an
-        owner-authored ref (OWNER_REF: public, non-chat evidence) or no stored chat line (a
-        game event) stays. One store query for all of `rows`."""
+        """P1b's interim whisper rule, kept under the memory scope as a second check
+        (controller ruling B1). A memory whose stored chat lines are all whispers stays out of
+        a turn on any other channel, and out of a whisper unless every one of them was between
+        `owner` and `to_guid`. A memory with a public line, an owner-authored ref (OWNER_REF:
+        public, non-chat evidence) or no stored chat line (a game event) stays. One store query
+        for all of `rows`."""
         refs = {m.id: chat_ids(m.evidence) for m in rows}
         lines = self._store.chat_line_parties(i for ids in refs.values() for i in ids)
         keep = []
@@ -253,10 +271,12 @@ class Recall:
                      to_guid: int = 0) -> list[MemoryRow]:
         """The k memories to bring up. `touch` marks them accessed (recency); a look that
         doesn't use them (an evaluation, a quiz) passes False. `channel` is that of the turn
-        they are for and `to_guid` whom its whisper goes to: with a channel, a memory drawn
-        only from whispers comes up only in a whisper between the same two (_shareable), and
-        one of the owner's own lines of the open session not at all (_not_own_lines).
-        Without one nothing is left out.
+        they are for and `to_guid` whom its whisper goes to. With a channel, a private or
+        secret memory comes up only in a whisper to its partner (scope_ok), then a memory
+        drawn only from whispers only in a whisper between the same two (_shareable, the
+        second check), and one of the owner's own lines of the open session not at all
+        (_not_own_lines). Without one nothing is left out: only callers that build no prompt
+        omit it.
 
         Scores add recency (from the last access, with the tau_days half-life, not stretched
         over the candidates), importance and relevance (both spread 0..1) and 1.0 for one the
@@ -283,7 +303,10 @@ class Recall:
             by_id[m.id] = m
         rows = [m for m in by_id.values() if m.status == "active" and m.owner == owner]
         if channel is not None:
-            rows = self._not_own_lines(self._shareable(rows, owner, channel, to_guid), owner)
+            scoped = [m for m in rows if scope_ok(m, turn_channel=channel, to_guid=to_guid)]
+            if len(scoped) < len(rows):
+                log.debug("recall_scope_excluded: n=%d", len(rows) - len(scoped))
+            rows = self._not_own_lines(self._shareable(scoped, owner, channel, to_guid), owner)
         if not rows:
             return []
 

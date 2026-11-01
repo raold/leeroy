@@ -19,7 +19,9 @@ ROMANCE_STAGES = (
 
 @dataclass(frozen=True, slots=True)
 class MemoryRow:
-    """All times are mind-clock unix seconds. Evidence refs: chat:<id>, event:<id>, memory:<id>."""
+    """All times are mind-clock unix seconds. Evidence refs: chat:<id>, event:<id>, memory:<id>.
+    scope: open, private or secret (memory.privacy); scope_with: the one person a private or
+    secret memory may be spoken of with, 0 for nobody."""
     id: int | None
     owner: int
     kind: str
@@ -42,6 +44,8 @@ class MemoryRow:
     key: str | None = None
     merged_n: int = 1
     embedding: bytes | None = None
+    scope: str = "open"
+    scope_with: int = 0
 
 
 @dataclass(frozen=True, slots=True)
