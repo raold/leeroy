@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import socket
 import subprocess
 from pathlib import Path
@@ -19,6 +20,7 @@ from leeroy_mind.voice.brief import SpecWatch, load_specs
 from leeroy_mind.voice.client import VoiceClient, VoiceDown
 from leeroy_mind.voice.comms import Comms, roll_on_comms
 from leeroy_mind.voice.config import VoiceCfg, load_voice_config
+from leeroy_mind.voice.elsewhere import ElsewhereTalk
 from leeroy_mind.voice.gpu import OllamaPins
 from leeroy_mind.voice.heard import HeardHandler
 from leeroy_mind.voice.rooms import BY_ID, HOME, RoomState
@@ -55,6 +57,7 @@ class VoiceExtension:
         # Later tasks fill these in
         self.movement = None
         self.elsewhere = self.hotmic = self.pins = None
+        self._policy_tasks: dict[str, asyncio.Task] = {}
         self.tickers: list[Callable[[], None]] = []  # called once per tick
         self.gpu_pins = OllamaPins(app.cfg.ollama.url)
         self._gpu_held = False  # the service's last status.gpu was not "none"
@@ -62,6 +65,8 @@ class VoiceExtension:
         self._pin_lock = asyncio.Lock()
         if self.comms is not None:
             self.tickers += [self._tick_raid, self.comms.age_out, SpecWatch(self)]
+            self.elsewhere = ElsewhereTalk(self, lines_per_10min=cfg.elsewhere_lines_per_10min,
+                                           rng=random.Random())
         self._service_checked = False
         self.client = VoiceClient(cfg.host, cfg.port, self.on_message, clock=app.clock,
                                   on_connection=self.on_connection)
@@ -338,6 +343,14 @@ class VoiceExtension:
 
     # -- the background task ---------------------------------------------------------------
 
+    async def _policy_tick(self, name: str, policy, now: float) -> None:
+        try:
+            await policy.tick(now)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._failed(name, exc)
+
     async def _tick_loop(self) -> None:
         while True:
             await self.app.clock.sleep(TICK_S)
@@ -346,6 +359,14 @@ class VoiceExtension:
                     tick()
                 except Exception:
                     log.exception("voice_tick_failed")
+            # Model calls must not stall raid updates or service acknowledgements.
+            for name in ("elsewhere", "hotmic"):
+                policy = getattr(self, name)
+                task = self._policy_tasks.get(name)
+                if policy is not None and (task is None or task.done()):
+                    self._policy_tasks[name] = asyncio.create_task(
+                        self._policy_tick(name, policy, self.app.clock.now()),
+                        name=f"voice-{name}")
 
     async def _serve(self) -> None:
         try:
@@ -356,11 +377,14 @@ class VoiceExtension:
         try:
             await asyncio.gather(*tasks)
         finally:
+            for t in tasks:
+                t.cancel()  # stop the producer before waiting for its policy tasks
+            for task in self._policy_tasks.values():
+                task.cancel()
+            await asyncio.gather(*tasks, *self._policy_tasks.values(), return_exceptions=True)
+            self._policy_tasks.clear()
             self._guard("shutdown", self.shutdown)
             await self.client.close()
-            for t in tasks:
-                t.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def attach_voice(app) -> VoiceExtension:

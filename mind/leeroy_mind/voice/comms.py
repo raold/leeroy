@@ -103,6 +103,13 @@ class Comms:
     def _private_with_him(self, room: str | None) -> bool:
         return room in PRIVATE and room == self.human_room()
 
+    def scene_valid(self, turn: Turn) -> bool:
+        """An elsewhere turn stays in its original room, even across a model call."""
+        room = turn.channel.removeprefix(VOICE)
+        return (turn.channel.startswith(VOICE) and self.available()
+                and room not in (*PRIVATE, "afk", self.human_room())
+                and self.room_of(turn.speaker) == room)
+
     # -- where a turn goes -------------------------------------------------------------------
 
     def place(self, turn: Turn, meta) -> tuple[str, int, int | None]:
@@ -116,6 +123,8 @@ class Comms:
         arrived on its channel) stays there."""
         channel, room = turn.channel, self.room_of(turn.speaker)
         kept = channel, turn.to_guid, turn.addressee
+        if meta.elsewhere and channel.startswith(VOICE):
+            return kept  # never reroute an unheard conversation into guild or a private room
         on_voice = channel.startswith(VOICE)
         if room is None:
             return typed(turn, meta)
