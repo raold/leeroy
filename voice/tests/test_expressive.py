@@ -110,7 +110,8 @@ def refs(tmp_path, *guids):
 
 
 def engine(tmp_path, script, **kw) -> ExpressiveEngine:
-    kw.setdefault("refs_dir", refs(tmp_path, 101))
+    if "refs_dir" not in kw:
+        kw["refs_dir"] = refs(tmp_path, 101)
     kw.setdefault("need_gb", 3.0)
     return ExpressiveEngine(TURBO, sys.executable, script=script,
                             args=(ENGINES_DIR, str(tmp_path / "said.jsonl")), **kw)
@@ -295,6 +296,7 @@ def test_one_engine_per_member(tmp_path, fake_bank):
             await rig.mind.send(rig.speak(f"s{n}", guid, f"line number {n} now"))
             await rig.sees(f"s{n}", "started")
             await rig.play_out()
+            await rig.tick(0.5)  # let the gap between different speakers pass
         assert [t for t, _ in stand.said] == ["line number 0 now", "line number 2 now"]
         assert rig.engine.live() == ["line number 1 now"]
     go(tmp_path, fake_bank, stand, body)
@@ -565,7 +567,7 @@ def test_logout_unloads_the_worker_and_login_brings_it_back(tmp_path, fake_bank,
         assert TURBO not in rig.guard.holders
         await rig.tick(0.1)
         await rig.next_of(Status, lambda s: s.gpu == "none")
-        await rig.snapshot()
+        await rig.seat(101)  # re-send the member's expressive spec for the new session
         await until(rig, lambda: made.up)
     go(tmp_path, fake_bank, made, body)
 
