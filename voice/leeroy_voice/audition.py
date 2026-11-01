@@ -15,6 +15,7 @@ import numpy as np
 import soundfile as sf
 
 from . import fx
+from .engines import EngineError
 from .lexicon import Lexicon
 from .textear import ear
 from .voices import BASES, VoiceSpec
@@ -51,17 +52,30 @@ def _line(spec: VoiceSpec, engine, lexicon: Lexicon | None) -> str:
 
 
 def build_audition(specs, engine, out_dir: Path, *, report: dict, bank, decision,
-                   grit: int = 3, lexicon: Lexicon | None = None) -> Path:
+                   grit: int = 3, lexicon: Lexicon | None = None, expressive=None) -> Path:
     """<out_dir>/index.html and <out_dir>/clips/<guid>.wav for each spec; the page path.
-    `report` is the cast report (cast.cast_voices fills it): its closest_pairs and threshold."""
+    `report` is the cast report (cast.cast_voices fills it): its closest_pairs and threshold.
+    `engine` and `bank` are Kokoro's. For a cloning spec, `expressive(name)` supplies its
+    running engine; the caller owns its lifetime. A missing or different engine is an error,
+    never an audition of the member's fallback blend. A single cloning engine may also be
+    passed as `engine` when no resolver is needed."""
     out_dir = Path(out_dir)
     clips = out_dir / CLIPS
     clips.mkdir(parents=True, exist_ok=True)
     by_guid = {s.guid: s for s in specs}
     for spec in specs:
-        style = bank.style(spec, "none", decision)
-        dry = engine.synth(_line(spec, engine, lexicon), spec, style, spec.speed)
-        clip = fx.process(dry, engine.sample_rate, spec, grit=grit, whisper=False)
+        if spec.engine == "kokoro":
+            chosen = engine
+            if chosen is None or bank is None:
+                raise EngineError("kokoro: no engine for audition")
+            style = bank.style(spec, "none", decision)
+        else:
+            chosen = expressive(spec.engine) if expressive is not None else engine
+            if chosen is None or chosen.name != spec.engine:
+                raise EngineError(f"{spec.engine}: no matching engine for audition of {spec.guid}")
+            style = chosen.levers("none")
+        dry = chosen.synth(_line(spec, chosen, lexicon), spec, style, spec.speed)
+        clip = fx.process(dry, chosen.sample_rate, spec, grit=grit, whisper=False)
         _write_wav(clips / f"{spec.guid}.wav", np.clip(clip, -1.0, 1.0), fx.OUT_RATE)
     page = out_dir / PAGE
     fd, tmp = tempfile.mkstemp(dir=out_dir, prefix=".index-", suffix=".tmp")
@@ -98,6 +112,9 @@ def _html(specs, by_guid, report) -> str:
                      f'{_player(by_guid.get(p["a"]), p["a"])} '
                      f'{_player(by_guid.get(p["b"]), p["b"])}</li>')
     limit = f" (threshold {threshold:.2f})" if isinstance(threshold, (int, float)) else ""
+    pair_note = ("These scores come from the saved casting report, not from the clips on this "
+                 "page. Designed reference voices may differ from the voices scored during "
+                 "casting." if any(s.engine != "kokoro" for s in specs) else "")
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Guild voices: audition</title>
 <style>
@@ -114,6 +131,7 @@ until you lock them.</p>
 <h2>Closest pairs{html.escape(limit)}</h2>
 <p>The ten pairs ECAPA finds most alike, by cosine (1 is the same voice). Listen to each pair
 side by side; if they are clearly different people, the threshold can go up.</p>
+{f'<p>{pair_note}</p>' if pair_note else ''}
 <ol>
 {chr(10).join(pairs)}
 </ol>
