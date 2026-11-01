@@ -64,6 +64,7 @@ UNIT_CALLS: dict[str, dict[str, float]] = {
     "stories": {"think": 1, "json": 2},        # 130 s
     "recap": {"think": 1, "json": 2},          # 130 s
     "chronicle": {"json": 2},                  # 40 s
+    "forget": {"json": 1},                    # one grounded summary per eligible chunk
     "breaks": {"json": 1},                     # 20 s
     "critic": {"json": 1.1},                   # one call per sampled member (PR23): 22 s
     "enrich": {"think": 1, "json": 1},         # 110 s
@@ -355,6 +356,12 @@ def _sunday(ctx: "NightContext") -> int:
     return int(is_sunday(ctx.night))
 
 
+def _forget(ctx: "NightContext") -> int:
+    # Import lazily: planning must count unfinished weekly chunks before the stage runs.
+    from leeroy_mind.nightly.forget import count_pending
+    return count_pending(ctx)
+
+
 register_counter("reflect", _reflect)
 register_counter("reflect_small", _reflect_small)
 register_counter("encounters", _scenes)
@@ -363,4 +370,5 @@ register_counter("wowlife", _wow_lines)
 register_counter("stories", _stories)
 register_counter("recap", _recap)
 register_counter("chronicle", _sunday)
+register_counter("forget", _forget)
 register_counter("eval", _sunday)
