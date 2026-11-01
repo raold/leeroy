@@ -505,8 +505,9 @@ def _pair_knows(store: Store, root: str, *, now: float, human: int) -> None:
 def _learn_memories(ctx: "NightContext", store: Store) -> dict:
     """Unit "memories": every root of each active memory created in the window whose owner is a
     cast member. Hearsay is told (by actors[0], at the memory's confidence); anything else is
-    witnessed. Of an offscreen memory only its encounter: roots count: the other refs it cites
-    are what the scene drew on, learned only through gossip (Task 16; review N6). Then the
+    witnessed. Of an offscreen memory only its direct encounter: refs count: inherited roots,
+    including earlier encounters, are what the scene drew on and are learned only through
+    gossip (Task 16; review N6). Then the
     second-order rules: a teller and the hearer, the two ends of a whisper and the two members
     of a private scene believe "yes" of each other."""
     start, end = ctx.window
@@ -521,9 +522,10 @@ def _learn_memories(ctx: "NightContext", store: Store) -> dict:
         for m in store.get_memories(ids[at:at + ID_BATCH]):
             if m.owner not in cast:
                 continue
-            found = roots(store, m.evidence)
             if m.source == "offscreen":
-                found = {r for r in found if r.startswith("encounter:")}
+                found = {r for r in m.evidence if _number(r, "encounter") is not None}
+            else:
+                found = roots(store, m.evidence)
             told = m.source == "hearsay"
             via = m.actors[0] if told and m.actors and m.actors[0] != m.owner else None
             for root in sorted(found):

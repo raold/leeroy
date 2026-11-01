@@ -239,8 +239,8 @@ def test_plan_scales_with_the_window_and_degrades_in_order(h, task5_counters, mo
     roomy = run(plan_night(h.ctx()))
     assert roomy["budget_s"] == 2 * 8 * 3600 and roomy["steps"] == [] and roomy["settings"] == {}
     # the brief's raid night: 100 reflect (15,000), 300 notes (12,000: two JSON calls each, review-task9
-    # I2), 150 scenes (3,300), 60 confide (1,320), 20 WoW-vs-life lines (800) and 3 stories (390)
-    assert roomy["estimate_s"] == pytest.approx(32810)
+    # I2), 150 scenes (6,000), 60 confide (1,320), 20 WoW-vs-life lines (800) and 3 stories (390)
+    assert roomy["estimate_s"] == pytest.approx(35510)
 
     h.clock.set(end - 3600)                                         # 05:00: the 2-hour floor
     ctx = h.ctx()
@@ -257,7 +257,7 @@ def test_plan_scales_with_the_window_and_degrades_in_order(h, task5_counters, mo
     assert {k: getattr(ctx.settings, k) for k in plan["settings"]} == plan["settings"]
     # every floor reached and still over, so the night runs long: 100 small reflections (13,000),
     # 100 notes, 20 scenes, 5 lines, 1 story and confide
-    assert plan["estimate_s"] == pytest.approx(13000 + 4000 + 440 + 200 + 130 + 1320)
+    assert plan["estimate_s"] == pytest.approx(13000 + 4000 + 800 + 200 + 130 + 1320)
     assert run_get(h.store, ctx.night).plan == plan and "nightly_budget" in caplog.text
 
     # a resumed run reuses the stored plan, though 8 hours would now need no step
@@ -536,7 +536,7 @@ def test_a_woman_on_a_break_keeps_her_attitude(h):
 def test_planning_costs_and_the_budget(h):
     assert PLAN_S == {"think": 90.0, "json": 20.0, "live": 6.0}
     assert estimate({s: 1 for s in UNIT_CALLS}, measured={}) == pytest.approx({
-        "reflect": 150, "reflect_small": 130, "notes": 40, "encounters": 22, "confide": 22,
+        "reflect": 150, "reflect_small": 130, "notes": 40, "encounters": 40, "confide": 22,
         "life": 40, "wowlife": 40, "follow": 22, "lexicon": 22, "profile": 22, "stories": 130,
         "recap": 130, "chronicle": 40, "breaks": 20, "critic": 22, "enrich": 110, "eval": 2386,
         "supersede": 40,                                                # a reflect unit's 2 decide calls (Task 10, K2)
@@ -584,7 +584,7 @@ def test_the_plan_prices_a_stage_at_its_measured_cost_after_three_nights(h, task
             h.mem(g, f"Tonight's raid, take {i}.")
     for night in ("2026-10-25", "2026-10-26", "2026-10-27"):
         stage_record(h.store, night, "reflect", started=0, finished=1, calls=10, call_s=50.0)  # 5 s a call
-    rest = 15 * 40 + 150 * 22 + 20 * 40 + 3 * 130                       # notes, scenes, lines, stories
+    rest = 15 * 40 + 150 * 40 + 20 * 40 + 3 * 130                       # notes, scenes, lines, stories
     assert run(plan_night(h.ctx()))["estimate_s"] == pytest.approx(5 * 4 * 5 + rest)     # 4 calls each
     ctx = h.ctx()
     ctx.settings = replace(ctx.settings, questions_min_new=6)
@@ -596,13 +596,13 @@ def test_a_step_cuts_only_what_the_budget_needs(h, task5_counters, monkeypatch):
     h.clock.set(end - 3600)                                             # the floor: 14,400 slot-seconds
     monkeypatch.setitem(budget.COUNTERS, "confide", lambda ctx: 500)    # 11,000 s, plus 1,190 s of lines and stories
     plan = run(plan_night(h.ctx()))
-    assert plan["steps"] == ["encounters"] and plan["settings"] == {"encounters_per_night": 100}  # 101 is 12 s over
-    monkeypatch.setitem(budget.COUNTERS, "confide", lambda ctx: 592)    # 13,024 s
+    assert plan["steps"] == ["encounters"] and plan["settings"] == {"encounters_per_night": 55}  # 56 is 30 s over
+    monkeypatch.setitem(budget.COUNTERS, "confide", lambda ctx: 582)    # 12,804 s
     plan = run(plan_night(h.ctx()))
     assert plan["steps"] == ["encounters", "notes", "wow_lines"]         # notes cannot help, and still go to 100
     assert plan["settings"] == {"encounters_per_night": 20, "notes_per_night": 100,
                                 "wow_lines_per_night": 20}               # halved once: 400 s of lines fit
-    monkeypatch.setitem(budget.COUNTERS, "confide", lambda ctx: 610)
+    monkeypatch.setitem(budget.COUNTERS, "confide", lambda ctx: 605)
     plan = run(plan_night(h.ctx(window=(end - 2 * 3600, end))))         # 12 scenes, already below the floor
     assert plan["steps"] == ["notes", "wow_lines"] and plan["settings"] == {
         "encounters_per_night": 12, "notes_per_night": 100, "wow_lines_per_night": 10}
@@ -633,7 +633,7 @@ def test_a_failing_counter_is_logged_with_the_real_name_redacted(h, task5_counte
 def test_a_later_stage_counter_cannot_move_task_5s_pinned_plans(h, monkeypatch):
     # what a later stage module does at its import (B7; Task 14's breaks, say), before any test runs
     monkeypatch.setitem(budget.COUNTERS, "breaks", lambda ctx: 1000)
-    tonight = 150 * 22 + 20 * 40 + 3 * 130                              # scenes, lines and stories
+    tonight = 150 * 40 + 20 * 40 + 3 * 130                              # scenes, lines and stories
     assert run(plan_night(h.ctx()))["estimate_s"] == pytest.approx(tonight + 1000 * 20)   # it bites
     pin_task5_counters(monkeypatch)                                      # what task5_counters does
     assert run(plan_night(h.ctx()))["estimate_s"] == pytest.approx(tonight)
