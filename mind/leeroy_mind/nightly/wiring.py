@@ -90,6 +90,7 @@ def attach(app):
             asker=asker, extract_thread=extract_thread)
 
     runner = NightRunner(STAGES, make_ctx)
+    app.night_runner = runner
     scheduler = NightScheduler(app.store, settings, arbiter, runner.run, clock=app.clock)
     live = LiveAttraction(app.store, app.personas, app.clock, identity)
 

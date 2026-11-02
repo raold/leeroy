@@ -49,6 +49,7 @@ class NightlySettings:
     confide_per_night: int = 60
     enrich_per_night: int = 10
     stories_per_night: int = 3
+    coach_units: int = 20
     notes_per_night: int = 300
     wow_lines_per_night: int = 40
     notice_night_hours: float = 6.0

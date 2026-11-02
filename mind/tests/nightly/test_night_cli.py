@@ -50,7 +50,8 @@ def tiny_pipeline(monkeypatch):
         if not ctx.done("tiny", "all"):
             ctx.commit("tiny", "all", lambda store: store.set_meta("trial-proof", "written"))
 
-    async def plan(ctx):
+    async def plan(ctx, *, stages):
+        assert isinstance(stages, frozenset) and "coach" not in stages
         ctx.plan = {}
         return {}
 

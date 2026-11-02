@@ -48,6 +48,7 @@ CORE_JUDGE_CALLS = 0.5
 
 # What one unit of each stage costs, in calls of each kind, at planning costs:
 UNIT_CALLS: dict[str, dict[str, float]] = {
+    "coach": {"think": 1, "json": 2},
     "reflect": {"think": 1, "json": 3},        # the questions, the reflection, a judge batch: 150 s
     "reflect_small": {"think": 1, "json": 2},  # without the questions call (DEGRADE step 6): 130 s
     # a reflect unit with candidates, on top of its own: its decide calls (K2): 40 s
@@ -81,6 +82,9 @@ MEASURE_NIGHTS = 7  # measured_call_s reads the last 7 nights that made calls...
 MEASURE_MIN = 3     # ...once there are 3 of them
 
 COUNTERS: dict[str, Callable[["NightContext"], int]] = {}
+# Optional extensions must be admitted on the particular runner before budgeting.
+# Core counters may belong to substages, so their historical counting is unchanged.
+EXTENSION_STAGES = frozenset({"coach"})
 
 
 def register_counter(stage: str, fn: Callable[["NightContext"], int]) -> None:
@@ -195,6 +199,7 @@ class Degrade(NamedTuple):
 # of newcomers, the reflection itself, attraction, romance, jealousy, follow-ups and absence,
 # mood, forgetting, regression and the weekly evaluation.
 DEGRADE = (
+    Degrade("coach", (Cut("coach_units", "fit", 5),)),
     Degrade("encounters", (Cut("encounters_per_night", "fit", 20),)),
     Degrade("notes", (Cut("notes_per_night", "fit", 100),)),
     Degrade("wow_lines", (Cut("wow_lines_per_night", "halve", 10),)),
@@ -232,10 +237,12 @@ def _cut(c: Cut, s: NightlySettings, fits: Callable[[NightlySettings], bool]) ->
     return at(lo)
 
 
-def _counts(ctx: "NightContext", failed: set[str]) -> dict[str, int]:
+def _counts(ctx: "NightContext", failed: set[str], stages: frozenset[str] | None = None) -> dict[str, int]:
     """Each registered stage's units; a counter that raises counts 0, logged once a plan."""
     out = {}
     for stage, fn in COUNTERS.items():
+        if stages is not None and stage in EXTENSION_STAGES and stage not in stages:
+            continue
         try:
             out[stage] = max(0, int(fn(ctx)))
         except Exception as e:
@@ -247,7 +254,7 @@ def _counts(ctx: "NightContext", failed: set[str]) -> dict[str, int]:
     return out
 
 
-async def plan_night(ctx: "NightContext") -> dict:
+async def plan_night(ctx: "NightContext", *, stages: frozenset[str] | None = None) -> dict:
     """The night's plan, with no model. The units of each stage (COUNTERS), with the scene cap
     scaled to the window (encounters_per_night x min(1, window hours / 24)), priced by
     `estimate` against night_budget_s from now to the night's 06:00; then DEGRADE's steps in
@@ -260,7 +267,8 @@ async def plan_night(ctx: "NightContext") -> dict:
     each counted stage's units at the plan's settings, which measured_supersede_calls and
     measured_core_judge_calls read on later nights}. It is stored on the night's run
     (set_run_plan: a resumed run reuses it, like its window), applied to ctx.settings and
-    ctx.plan, and logged as nightly_budget."""
+    ctx.plan, and logged as nightly_budget. Runners pass their actual stage names;
+    direct callers may omit stages to retain the all-registered-counter interface."""
     base = ctx.settings
     hours = (ctx.window[1] - ctx.window[0]) / 3600
     work = replace(base, encounters_per_night=round(
@@ -275,7 +283,7 @@ async def plan_night(ctx: "NightContext") -> dict:
 
     def total(settings: NightlySettings) -> float:
         ctx.settings = settings  # the counters read the settings from the context
-        return sum(estimate(_counts(ctx, failed), measured=measured, calls=counted).values())
+        return sum(estimate(_counts(ctx, failed, stages), measured=measured, calls=counted).values())
 
     def fits(settings: NightlySettings) -> bool:
         return total(settings) <= budget
@@ -283,6 +291,8 @@ async def plan_night(ctx: "NightContext") -> dict:
     for step in DEGRADE:
         if est <= budget:
             break
+        if stages is not None and step.name in EXTENSION_STAGES and step.name not in stages:
+            continue
         cut = work
         for c in step.cuts:
             cut = _cut(c, cut, fits)
@@ -292,9 +302,11 @@ async def plan_night(ctx: "NightContext") -> dict:
     ctx.settings = work
     changed = {f.name: getattr(work, f.name) for f in fields(work)
                if getattr(work, f.name) != getattr(base, f.name)}
-    units = {stage: n for stage, n in _counts(ctx, failed).items() if n}
+    units = {stage: n for stage, n in _counts(ctx, failed, stages).items() if n}
     plan = {"settings": changed, "estimate_s": round(est, 1), "budget_s": round(budget, 1),
             "steps": steps, "units": units}
+    if stages is not None:
+        plan["extensions"] = sorted(stages & EXTENSION_STAGES)
     ctx.plan = plan
     set_run_plan(ctx.store, ctx.night, plan)
     log("nightly_budget", night=ctx.night, **plan)
