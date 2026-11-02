@@ -61,6 +61,7 @@ from leeroy_mind.talk.raid import RaidState
 from leeroy_mind.talk.turns import TurnKind
 from leeroy_mind.talk.world import WorldView, looks_like_bot_command
 from leeroy_mind.voice.attach import attach_voice
+from leeroy_mind.training.service import attach_training
 from leeroy_mind.nightly.wiring import attach as attach_nightly
 from leeroy_mind.guild.service import install as install_guild
 from leeroy_mind.voice.heard import is_command
@@ -369,6 +370,7 @@ class MindApp:
         self.models_seen: set[str] | None = None  # what the last model check listed
         self._model_ready = self._model_known = False  # the silent latch (check_model)
         self._handlers: dict[str, list[Callable[[Event], Awaitable[None]]]] = {}
+        self.skip_event_rows: set[str] = set()
         self._before_handlers: dict[str, list[Callable[[Event], Awaitable[None]]]] = {}
         self._connection_hooks: list[Callable[[bool], Awaitable[None]]] = []
         self._offline_hooks: list[Callable[[], Awaitable[None]]] = []
@@ -400,6 +402,7 @@ class MindApp:
         self.nightly = attach_nightly(self)
         self.voice = attach_voice(self)
         self.guild = install_guild(self)
+        self.training = attach_training(self)
 
     # -- extension points --------------------------------------------------------------------
 
@@ -703,8 +706,9 @@ class MindApp:
         elif isinstance(ev, Error):
             log.warning("bridge_error: message=%r", ev.message)
         elif name not in CORE_EVENT_TYPES:
-            self.store.insert_game_event(ev, session_id=self._session_id,
-                                         ts=self._event_at(ev, now, backlog))
+            if name not in self.skip_event_rows:
+                self.store.insert_game_event(ev, session_id=self._session_id,
+                                             ts=self._event_at(ev, now, backlog))
         else:
             at = self._event_at(ev, now, backlog)  # a replayed one is stored and remembered then
             event_id = self.store.insert_game_event(ev, session_id=self._session_id, ts=at)
@@ -793,6 +797,8 @@ class MindApp:
 
     def _record_only(self, ev: Event, name: str) -> None:
         """While stopping: keep what still arrives in the log and start nothing."""
+        if name in self.skip_event_rows:
+            return
         try:
             at = self._event_at(ev, self.clock.now(), self.is_backlog(ev))
             if isinstance(ev, Chat):
