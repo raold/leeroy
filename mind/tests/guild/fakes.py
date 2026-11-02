@@ -127,3 +127,31 @@ class FakePorts:
 
     async def release_gpu(self, holder):
         self.gpu.append(f"release:{holder}")
+
+
+class FakeArmory:
+    """Synthetic item templates and current equipment, with settable progression/names."""
+    def __init__(self, items, equipped, tier=16):
+        self._items = dict(items)
+        self._equipped = {guid: dict(slots) for guid, slots in equipped.items()}
+        self.tier = tier
+        self.names = {1: "Testmage"}
+        self.calls = []
+
+    def items(self, ids):
+        ids = tuple(ids)
+        self.calls.append(("items", ids))
+        return {entry: self._items[entry] for entry in ids if entry in self._items}
+
+    def equipped(self, guids):
+        guids = tuple(guids)
+        self.calls.append(("equipped", guids))
+        return {guid: dict(self._equipped.get(guid, {})) for guid in guids}
+
+    def human_tier(self, guid):
+        self.calls.append(("human_tier", guid))
+        return self.tier
+
+    def name(self, guid):
+        self.calls.append(("name", guid))
+        return self.names.get(guid)
