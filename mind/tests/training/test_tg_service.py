@@ -56,7 +56,7 @@ def test_listener_added_after_existing_listeners_and_report_registered(app_stub,
     registered = []
     monkeypatch.setattr(evaluation, "register_section", lambda *args: registered.append(args))
     ground = service.attach_training(app_stub)
-    assert all(len(rows) == 4 and rows[-1] is ground.listener for rows in lists)
+    assert all(len(rows) == 5 and rows[-2:] == [ground.experiments, ground.listener] for rows in lists)
     assert registered == [("training", service.report_section)]
 
 

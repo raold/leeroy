@@ -212,7 +212,8 @@ def test_attach_coach_only_on_actual_runner_and_hooks_live_calls(app_stub):
     ground = service.attach_training(app_stub)
     assert [stage.name for stage in app_stub.night_runner.stages] == ["reflect", "coach"]
     assert calls.pre_call == ground.pre_call and calls.lust_held == ground.listener.lust_held
-    assert ground.listener.lust_provider == calls.lust and listeners == [ground.listener, ground.listener]
+    assert ground.listener.lust_provider == calls.lust
+    assert listeners == [ground.experiments, ground.listener, ground.experiments, ground.listener]
     assert "chat" in app_stub.handlers and app_stub.hooks[0].change_for == ground.listener.change_for
 
 
