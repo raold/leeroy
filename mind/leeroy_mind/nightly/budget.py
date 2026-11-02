@@ -58,9 +58,9 @@ UNIT_CALLS: dict[str, dict[str, float]] = {
     "confide": {"json": 1.1},
     "life": {"json": 2},                      # generation and its invariant judge
     "wowlife": {"json": 2},                   # generation and its invariant judge
-    "follow": {"json": 1.1},
+    "follow": {"json": 2},                    # follow-up generation and its grounding judge
     "lexicon": {"json": 1},                   # one proposal per eligible laughed-at moment
-    "profile": {"json": 1.1},
+    "profile": {"json": 2},                   # preference profile and its grounding judge
     "stories": {"think": 1, "json": 2},        # 130 s
     "recap": {"think": 1, "json": 2},          # 130 s
     "chronicle": {"json": 2},                  # 40 s
@@ -367,6 +367,16 @@ def _lexicon(ctx: "NightContext") -> int:
     return count_candidates(ctx)
 
 
+def _follow(ctx: "NightContext") -> int:
+    from leeroy_mind.nightly.human_world import count_follow
+    return count_follow(ctx)
+
+
+def _profile(ctx: "NightContext") -> int:
+    from leeroy_mind.nightly.human_world import count_profile
+    return count_profile(ctx)
+
+
 register_counter("reflect", _reflect)
 register_counter("reflect_small", _reflect_small)
 register_counter("encounters", _scenes)
@@ -377,4 +387,6 @@ register_counter("recap", _recap)
 register_counter("chronicle", _sunday)
 register_counter("forget", _forget)
 register_counter("lexicon", _lexicon)
+register_counter("follow", _follow)
+register_counter("profile", _profile)
 register_counter("eval", _sunday)
