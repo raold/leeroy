@@ -43,7 +43,7 @@ class Vocab:
     at: float
     complete: bool = False
     # These must be authoritative class/spec receipts for this checked probe,
-    # supplied by a future caller which owns that proof. A roster is not proof.
+    # captured by the native probe with its checked spells. A roster is not proof.
     probe_specs: dict[int, tuple[int, int]] = field(default_factory=dict)
     rotations: dict[str, tuple[int, int]] = field(default_factory=dict)
     asked_triggers: frozenset[str] = frozenset()
@@ -78,6 +78,7 @@ class VocabCollector:
         self.triggers = frozenset(triggers)
         self._classes = {}
         self._probes = {}
+        self._probe_specs = {}
         self._dc = {}
         self._whitelist = frozenset()
         self._slot = 0
@@ -114,13 +115,18 @@ class VocabCollector:
                 self._bad = True
                 return
             self._probes[ev.probe] = cv
+            if (type(ev.class_) is int and ev.class_ in CLASSES
+                    and ev.spells_checked is True
+                    and type(ev.spec_tab) is int and 0 <= ev.spec_tab <= 2):
+                self._probe_specs[ev.probe] = (ev.class_, ev.spec_tab)
         self._slot += 1
         if ev.class_ not in CLASSES or not ev.strategies or not ev.actions:
             self._bad = True
 
     def result(self, *, at: float, rotations=None) -> Vocab:
         return Vocab(self._classes, self._probes, self._dc, self._whitelist, at,
-                     complete=self.complete, rotations=rotations or {}, asked_triggers=self.triggers)
+                     complete=self.complete, probe_specs=self._probe_specs,
+                     rotations=rotations or {}, asked_triggers=self.triggers)
 
 
 async def refresh(ports, *, probes: Sequence[int] = (), book: "SpellBook | None" = None) -> Vocab:
@@ -147,7 +153,7 @@ async def refresh(ports, *, probes: Sequence[int] = (), book: "SpellBook | None"
     rotations = {row["name"]: (row["class"], row["spec_tab"]) for row in ports.conn.execute(
         "SELECT * FROM tg_rotation WHERE status NOT IN ('retired','suspended')")
         if not snapshot.complete or not _rotation_missing(row, snapshot)}
-    # No roster lookup here: get_vocab does not report a probe's spec tab.
+    # Older producers leave spec unknown. Never substitute the roster's spec.
     return collector.result(at=snapshot.at, rotations=rotations)
 
 

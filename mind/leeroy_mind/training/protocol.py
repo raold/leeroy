@@ -274,6 +274,9 @@ class Vocab:
     triggers: tuple[str, ...]
     dc: tuple[DcKey, ...]
     whitelist: tuple[str, ...]
+    # Exact selected probe's active talent tab, captured with its spells.
+    # Old producers and non-probe rows establish no spec identity.
+    spec_tab: int = -1
 
 
 @dataclass(frozen=True, slots=True)
