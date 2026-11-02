@@ -377,6 +377,11 @@ def _profile(ctx: "NightContext") -> int:
     return count_profile(ctx)
 
 
+def _critic(ctx: "NightContext") -> int:
+    from leeroy_mind.nightly.critic import count_pending
+    return count_pending(ctx)
+
+
 register_counter("reflect", _reflect)
 register_counter("reflect_small", _reflect_small)
 register_counter("encounters", _scenes)
@@ -389,4 +394,5 @@ register_counter("forget", _forget)
 register_counter("lexicon", _lexicon)
 register_counter("follow", _follow)
 register_counter("profile", _profile)
+register_counter("critic", _critic)
 register_counter("eval", _sunday)
