@@ -56,6 +56,7 @@ class TrainingListener:
     def _reset_night(self):
         self._changes, self._wipes, self._applied = {}, {}, {}
         self._last_result_end = {}
+        self._farm_at_entry = {}
         self._used, self._old, self._benched = set(), set(), set()
         self._seen, self._drafted = set(), set()
         self._boss = self._fight = self._lust_due = self._pulse_id = None
@@ -122,13 +123,25 @@ class TrainingListener:
                         and r["score_basis"] == self.farm_basis and r["kind"] in {"his", "offline"}
                         and (before_ms is None or r["start_ms"] < before_ms)])
 
+    def _run_farm(self, context, run, *, before_ms=None):
+        """Freeze eligibility before this context's first pull of the run.
+
+        A farm wipe must not turn the next pull into an untested progression
+        experiment. The callback fallback excludes its just-stored pull.
+        """
+        key = (self.run_key(run), context)
+        if key not in self._farm_at_entry:
+            cutoff = int(self.ports.clock.now() * 1000) if before_ms is None else before_ms
+            self._farm_at_entry[key] = self._farm(context, before_ms=cutoff)
+        return self._farm_at_entry[key]
+
     def card_for(self, context, run):
         stock = stock_card(context)
         if not self._acting():
             return stock, None
         row = store.champion(self.ports.conn, context)
         champion = Card.from_row(row) if row else stock
-        farm = self._farm(context)
+        farm = self._run_farm(context, run)
         if run.human_in_raid and (context in self._old or farm and self._wipes.get(context, 0) >= 2):
             previous = self.ports.conn.execute("SELECT * FROM tg_card WHERE id=? AND context=?",
                 (champion.prev_champion, context)).fetchone()
@@ -141,7 +154,7 @@ class TrainingListener:
             if (not run.human_in_raid and self.ports.cfg.experiments and self.experimenter is not None
                     and context not in self._benched):
                 choice = self.experimenter.arm_for(context, run)
-                if choice is not None:
+                if choice is not None and self._arm_allowed(context, run, *choice):
                     return choice
             return champion, None
         change = self._changes.get(context)
@@ -152,6 +165,30 @@ class TrainingListener:
             champion = replace(champion, status="champion", directives=tuple(
                 d for d in champion.directives if d.lever != directive.lever) + (directive,), call=text)
         return champion, None
+
+    def _arm_allowed(self, context, run, card, arm):
+        """Only a persisted comparison can identify an omitted tested lever."""
+        if not isinstance(card, Card) or card.context != context or type(arm) is not int or arm <= 0:
+            return False
+        valid = getattr(self.experimenter, "arm_valid", None)
+        if not callable(valid) or not valid(context, arm):
+            return False
+        row = self.ports.conn.execute(
+            "SELECT t.lever,t.scope,t.status AS trial_status,a.status AS arm_status,a.card "
+            "FROM tg_arm a JOIN tg_trial t ON t.id=a.trial WHERE a.id=?", (arm,)).fetchone()
+        pooled = f"{context.split(':')[0]}:*:{context.rsplit(':', 1)[1]}"
+        if (row is None or row["trial_status"] != "open" or row["arm_status"] != "live"
+                or row["scope"] not in {context, pooled} or row["card"] != card.id
+                or row["lever"] not in {*LEVERS, "stock"}):
+            return False
+        # Full stock has no surviving directive from which to infer the removed
+        # key. Refuse any standing tactic, rather than guessing that key.
+        levers = set(LEVERS) if row["lever"] == "stock" else {row["lever"]}
+        # An authoritative arm also raises its baseline directives above the
+        # standing layer. Refuse every overlap, even an equal value, so moving
+        # an unrelated pooled baseline cannot introduce a second treatment.
+        levers.update(d.lever for d in card.directives)
+        return not self.applier.standing_conflicts(self.run_key(run), self._members(run), levers)
 
     def change_for(self, context):
         return self._changes.get(context, (None, ""))[1] if self._acting() and self.run is not None and not self._ending else ""
@@ -345,10 +382,28 @@ class TrainingListener:
                     ok = False
                     try:
                         async with asyncio.timeout(self.APPLY_TIMEOUT):
+                            await self.applier.revert(self.run_key(run), "arm")
+                            if not self._valid(token):
+                                return
+                            await self.applier.revert(self.run_key(run), "boss")
+                            if not self._valid(token):
+                                return
                             await self.applier.revert(self.run_key(run), "pooled")
-                            pooled = await self._pooled(token, context)
-                            if pooled and self._valid(token):
+                            if not self._valid(token):
+                                return
+                            if arm is not None and not self._arm_allowed(context, run, card, arm):
+                                row = store.champion(self.ports.conn, context)
+                                card, arm = Card.from_row(row) if row else stock_card(context), None
+                            # Experimenter cards are the complete merged
+                            # baseline. Reinstalling pooled beneath an omitted
+                            # trial key would silently turn stock into champion.
+                            baseline_ok = arm is not None or await self._pooled(token, context)
+                            if baseline_ok and self._valid(token):
                                 ok = await self._apply(run, "arm" if arm is not None else "boss", card)
+                            if (ok and arm is not None and self._valid(token)
+                                    and not self._arm_allowed(context, run, card, arm)):
+                                await self.applier.revert(self.run_key(run), "arm")
+                                ok = False
                     except TimeoutError:
                         pass
                     if not self._valid(token):
@@ -371,7 +426,7 @@ class TrainingListener:
                 self._prepared = True
                 await self._call("on_muster", run, boss)
             if held and self._prepared and self._release_ok and self._valid(token) and self._acting():
-                if await self.applier.release(run.plan.tank_guid) and self._valid(token):
+                if await self.applier.resume_held(run.plan.tank_guid) and self._valid(token):
                     self._release_ok = False
 
     async def _boss_event(self, ev):
@@ -382,6 +437,7 @@ class TrainingListener:
         if ev.state == "engaged":
             if self._pull:
                 return
+            self._run_farm(context, token[0], before_ms=ev.ts)
             self._pull, self._boss = True, ev.boss_id
             self._fight = (token, ev.boss_id, ev.ts, f"{ev.ts}-{ev.instance_id}-{ev.boss_id}")
             self._lust_sent = False
@@ -484,7 +540,7 @@ class TrainingListener:
         if h.end_ms <= self._last_result_end.get(context, -1):
             return
         self._last_result_end[context] = h.end_ms
-        if self._farm(context, before_ms=h.start_ms):
+        if self._run_farm(context, run, before_ms=h.start_ms):
             return
         if h.outcome == "wiped":
             roles = {r["guid"]: r["role"] for r in store.member_rows(self.ports.conn, h.id)}

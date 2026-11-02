@@ -87,6 +87,16 @@ async def start(setup):
     return ports, run, habits
 
 
+@_run_async
+async def test_flask_skip_snapshot_comes_from_this_raids_persisted_choices(setup):
+    ports, run, habits = setup
+    habits.flask_skips = {999}
+    await habits.on_start(run)
+    expected = {guid for guid in run.plan.members
+        if _get(ports.conn, f"guild:habits:skip:{habits._night}:{guid}") is True}
+    assert habits.flask_skips == expected and 999 not in habits.flask_skips
+
+
 def boss(ports, run, state="engaged", **changes):
     fields = dict(ts=stamp(ports), map=631, instance_id=77, boss_id=0, boss_name="",
                   state=state, members=tuple(run.plan.members))

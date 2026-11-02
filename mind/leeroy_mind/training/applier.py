@@ -20,7 +20,7 @@ from leeroy_mind.guild.protocol import BotDo, Job, RaidControl
 from leeroy_mind.protocol import Ack
 
 from . import store
-from .cards import Card, Directive, Targets, validate_card, validate_directive
+from .cards import Card, Directive, LEVERS, Targets, validate_card, validate_directive
 from .levers import Applied, MemberInfo, to_commands
 from .protocol import CustomStrategy, DcSetting
 from .vocab import Vocab
@@ -130,9 +130,10 @@ def _command_guids(command):
 
 
 class Applier:
-    def __init__(self, ports, ledger, *, state_provider=None):
+    def __init__(self, ports, ledger, *, state_provider=None, application_allowed=None):
         self.ports, self.ledger = ports, ledger
         self.state_provider = state_provider
+        self.application_allowed = application_allowed
         self._lock = asyncio.Lock()
         self._entries: list[_Entry] = []
         self._receipts: dict[int, _Receipt] = {}
@@ -164,7 +165,85 @@ class Applier:
             or any(r.run == run_key and r.task is not None and not r.task.done()
                    for r in self._receipts.values()))
 
+    def standing_conflicts(self, run_key, members, levers):
+        """Conservative admission check for a comparison's logical levers.
+
+        Hidden standing entries still matter when an arm omits its tested
+        lever. Desired setups count even if application was skipped. Unknown
+        journals/state cannot certify stock. The confirmed WaitAtBoss control
+        receipt shares the standing journal layer but is not a bot tactic.
+        """
+        try:
+            state = self._state(run_key)
+            tested = set(levers)
+            if (state is None or not state.vocab.complete or not isinstance(members, Mapping)
+                    or not members or not tested or not tested <= LEVERS.keys()
+                    or self._operations or self._lock.locked() or self._blocked
+                    or any(g not in state.members or state.members[g] != m for g, m in members.items())):
+                return True
+            selected, scope = set(members), self._scope(state)
+            if not self._available(state, selected):
+                return True
+            rotations = {r["id"]: r for r in store.rotation_rows(self.ports.conn)}
+            for guid, row in store.latest_setups(self.ports.conn).items():
+                if guid not in selected:
+                    continue
+                toggles, values = json.loads(row["toggles"]), json.loads(row["vals"])
+                if not isinstance(toggles, list) or not isinstance(values, dict):
+                    return True
+                if any(type(t) is not str or len(t) < 2 or t[0] not in "+-" for t in toggles):
+                    return True
+                directives = [Directive(t[1:], t[0]) for t in toggles]
+                directives.extend(Directive(k, v) for k, v in values.items())
+                if row["rotation"] is not None:
+                    rotation = rotations[row["rotation"]]
+                    member = state.members[guid]
+                    directives.append(Directive("rotation", rotation["name"],
+                        Targets(specs=((member.cls, member.spec_tab),))))
+                if any(validate_directive(d, state.vocab) is not None for d in directives):
+                    return True
+                if any(d.lever in tested for d in directives):
+                    return True
+            covered = set()
+            for entry in self._entries:
+                if entry.layer != "standing":
+                    continue
+                if entry.run != run_key or entry.scope != scope:
+                    return True
+                if not entry.directives or any(validate_directive(d, state.vocab) is not None for d in entry.directives):
+                    return True
+                # Logical metadata preserves bundle aliases (e.g. wait's co
+                # strategy and value; focus's strategy and target value).
+                if entry.key[0] in selected and any(d.lever in tested for d in entry.directives):
+                    return True
+                covered.update(entry.receipts)
+            for row in self._rows():
+                if row["layer"] != "standing":
+                    continue
+                saved = json.loads(row["command"])
+                receipt = self._receipts.get(row["id"])
+                if (row["run"] != run_key or saved["scope"] != scope or saved["settled"] is not True
+                        or receipt is None or not receipt.settled or not receipt.ok):
+                    return True
+                if saved != json.loads(json.dumps(receipt.envelope)):
+                    return True
+                if row["id"] in covered:
+                    continue
+                command = _decode(saved["wire"])
+                if not (isinstance(command, DcSetting) and command.leader_guid == state.tank_guid
+                        and command.key == "WaitAtBoss" and command.op == "set" and command.centi == 100
+                        and saved["keys"] == []):
+                    return True
+            return False
+        except (KeyError, TypeError, ValueError, AttributeError):
+            return True
+
     def acting(self, now):
+        try:
+            if self.application_allowed is not None and self.application_allowed() is not True:
+                return False
+        except Exception:
+            return False
         first = self.ledger.first_pull_ts()
         return (self.ports.cfg.act is True and type(first) in (int, float)
                 and type(now) in (int, float) and math.isfinite(first) and math.isfinite(now)
@@ -222,7 +301,8 @@ class Applier:
             return False
         rows = [row for row in self._rows() if row["id"] != exclude]
         try:
-            if any(row["id"] not in self._receipts or not json.loads(row["command"]).get("settled")
+            if any(row["id"] not in self._receipts or not self._receipts[row["id"]].ok
+                   or not json.loads(row["command"]).get("settled")
                    for row in rows):
                 return False
         except (ValueError, TypeError):
@@ -249,6 +329,7 @@ class Applier:
                     or not self._available(state, guids)
                     or any(g not in state.members or asdict(state.members[g]) != receipt.envelope["members"].get(str(g))
                            for g in guids)
+                    or receipt.envelope.get("application", False) and not self.acting(self.ports.clock.now())
                     or receipt.envelope.get("resume_held", False)
                     and not self._resume_allowed(state, receipt.run, exclude=receipt.id)):
                 # No transport call occurred. This local receipt is provably
@@ -309,13 +390,14 @@ class Applier:
             receipt.acked.set()
             self._write_receipt(receipt)
 
-    async def _send(self, run, layer, context, command, inverse, scope, keys=(), *, resume_held=False):
+    async def _send(self, run, layer, context, command, inverse, scope, keys=(), *,
+                    resume_held=False, application=False):
         if not self._matches(scope):
             return _Receipt(0, {}, settled=True, reason="stale")
         command = replace(command, id="tg_" + uuid4().hex)
         state = self._state(scope["run_key"])
         envelope = dict(wire=_encode(command), scope=scope, keys=list(keys), settled=False,
-                        resume_held=resume_held,
+                        resume_held=resume_held, application=application,
                         members={str(g): asdict(state.members[g]) for g in _command_guids(command)
                                  if state is not None and g in state.members})
         ident = store.log_applied(self.ports.conn, run, layer, context, envelope,
@@ -356,7 +438,7 @@ class Applier:
         except (ValueError, TypeError):
             return True
 
-    async def _activate(self, entry):
+    async def _activate(self, entry, *, application=True):
         hello = self._hello
         for applied in entry.commands:
             if not self._matches(entry.scope) or self._pending():
@@ -366,7 +448,7 @@ class Applier:
                     or any(validate_directive(d, state.vocab) for d in entry.directives)):
                 return False, "ownership"
             receipt = await self._send(entry.run, entry.layer, entry.context,
-                applied.command, applied.inverse, entry.scope, (entry.key,))
+                applied.command, applied.inverse, entry.scope, (entry.key,), application=application)
             entry.receipts.append(receipt.id)
             if (hello != self._hello or not self._matches(entry.scope) or not receipt.settled or not receipt.ok
                     or not self._available(self._state(entry.scope["run_key"]), (entry.key[0],))):
@@ -532,7 +614,7 @@ class Applier:
             if top:
                 lower = self._top(entry.run, entry.key)
                 if lower is not None and entry.run not in self._stopped:
-                    ok, reason = await self._activate(lower)
+                    ok, reason = await self._activate(lower, application=False)
                     if not ok or reason == "skipped":
                         self._blocked.add(entry.run)
                         return count
@@ -644,7 +726,7 @@ class Applier:
                 command = replace(compiled[0].command, probe=probes[0])
             except (ValueError, KeyError, TypeError, IndexError):
                 continue
-            receipt = await self._send(run, "standing", context, command, None, self._scope(state))
+            receipt = await self._send(run, "standing", context, command, None, self._scope(state), application=True)
             if receipt.settled and receipt.ok and hello == self._hello and self._matches(self._scope(state)):
                 store.mark_undone(self.ports.conn, [receipt.id], self.ports.clock.now())
                 self._primed.add((state.connection_epoch, name))
@@ -721,8 +803,19 @@ class Applier:
 
     async def _standing(self, guids, run_key):
         state = self._state(run_key)
-        if state is None or not self.acting(self.ports.clock.now()) or self._rows() and not self._entries:
+        if state is None or not self.acting(self.ports.clock.now()):
             return 0
+        rows = self._rows()
+        if rows and not self._entries:
+            # Listener startup holds before installing the first setup. Permit
+            # only that one proven current-run hold, never an orphan journal or
+            # a partially failed previous mutation without layer ownership.
+            if (run_key is None or len(rows) != 1 or rows[0]["run"] != run_key
+                    or not self._resume_allowed(state, run_key)):
+                return 0
+            receipt = self._receipts.get(rows[0]["id"])
+            if receipt is None or not receipt.settled or not receipt.ok:
+                return 0
         selected = set(guids) & state.online & set(state.members) - {self.ports.human_guid}
         outside = run_key is None
         if outside:
@@ -833,7 +926,8 @@ class Applier:
             if (provider is not self.state_provider or not self._matches(self._scope(state))
                     or not self._available(self._state(state.run_key), (tank,))):
                 return False
-            receipt = await self._send(run, "standing", "0:0:0", command, inverse, self._scope(state))
+            receipt = await self._send(run, "standing", "0:0:0", command, inverse, self._scope(state),
+                                       application=applying)
             if receipt.settled and receipt.ok and not applying:
                 store.mark_undone(self.ports.conn, [receipt.id], self.ports.clock.now())
             return receipt.settled and receipt.ok

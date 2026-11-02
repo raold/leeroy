@@ -181,13 +181,16 @@ class EventWaiter:
 
 class LivePorts:
     def __init__(self, app, *, cfg=None):
-        from leeroy_mind.guild.ports import LivePorts as GuildPorts
+        from leeroy_mind.guild.ports import JobWaiter, LivePorts as GuildPorts
         from .config import load_training_config
         self.app, self.clock, self.conn = app, app.clock, app.store.conn
         self.cfg = cfg or load_training_config(app.data_dir / "mind.toml")
         guild = getattr(app, "guild", None)
         self.guild = guild.ports if guild is not None else GuildPorts(app)
         self.waiter = EventWaiter()
+        # Guild shutdown closes its own mailbox before training receipts have
+        # necessarily drained. Training owns the jobs it waits for separately.
+        self.jobs = JobWaiter()
         self._requests = set()
         self._generation = 0
         self._prefix, self._sequence = uuid4().hex, 0
@@ -197,6 +200,15 @@ class LivePorts:
 
     def feed(self, ev):
         self.waiter.feed(ev)
+        if isinstance(ev, Job):
+            self.jobs.feed(ev)
+
+    async def send(self, cmd):
+        self.jobs.expect(cmd.id)
+        return await self.guild.send(cmd)
+
+    async def wait_job(self, cmd_id, timeout_s):
+        return await self.jobs.wait(cmd_id, timeout_s)
 
     @property
     def connection_epoch(self):
@@ -211,6 +223,7 @@ class LivePorts:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self.waiter = EventWaiter()
+        self.jobs.close()
 
     async def request(self, cmd, event_type, *, until, timeout_s):
         from dataclasses import replace
@@ -274,10 +287,7 @@ class LivePorts:
             return set()
 
     async def say(self, guid, channel, text, *, kind=TurnKind.CALLOUT, to_guid=0):
-        # The guild speech boundary currently supports raid/guild callouts only.
-        if kind is not TurnKind.CALLOUT or to_guid:
-            raise ValueError("guild speech does not support this training turn")
-        return await self.guild.say(guid, channel, text)
+        return await self.guild.say(guid, channel, text, kind=kind, to_guid=to_guid)
 
     def standing_lead(self):
         return self.app.raid.lead()
