@@ -63,6 +63,12 @@ Apply them to a checkout of each module with
 They assume this repo is the install root, with the core checked out in
 `azerothcore-wotlk/` and the build in `build/`. See `CLAUDE.md`.
 
+## Scholar library
+
+The mind's [scholar library](mind/leeroy_mind/library/README.md) also supports complete,
+pinned AzerothCore wiki/API snapshots and installed command/teleport references,
+with bounded parallel imports, provenance and model-free text search.
+
 ## CI
 
 | Workflow | When | What |

@@ -17,7 +17,8 @@ from pathlib import Path
 from ..clock import SystemClock
 from ..config import default_data_dir
 
-SOURCES = ("world", "atlasloot", "wiki", "curated")
+DEFAULT_SOURCES = ("world", "atlasloot", "wiki", "curated")
+SOURCES = (*DEFAULT_SOURCES, "acwiki", "acdoxygen", "serverref")
 
 
 def _root(args) -> Path:
@@ -61,6 +62,17 @@ def make_sources(args, root: Path) -> list:
         elif name == "curated":
             from .curated import CuratedSource
             out.append(CuratedSource())
+        elif name in ("acwiki", "acdoxygen", "serverref"):
+            path = getattr(args, name + "_snapshot", None)
+            if not path:
+                raise SystemExit(f"{name} requires --{name}-snapshot with a complete manifest")
+            if name == "serverref":
+                from .serverref import ServerRefSource
+                out.append(ServerRefSource(Path(path)))
+            else:
+                from .azeroth import AzerothDocsSource
+                out.append(AzerothDocsSource(Path(path), name=name,
+                    workers=args.snapshot_workers, parse_processes=args.snapshot_parse_processes, progress=print))
         else:
             from .wiki import WikiClient, WikiSource
             client = WikiClient(_cache(root), offline=args.offline,
@@ -83,7 +95,7 @@ def cmd_build(args) -> int:
     try:
         try:
             reports = lib.build(make_sources(args, root), progress=print)
-        except (QueryError, RosterError, WikiError, LuaSyntaxError, OSError) as e:
+        except (QueryError, RosterError, WikiError, LuaSyntaxError, OSError, ValueError) as e:
             print(f"build failed: {e.__class__.__name__}: {e}", file=sys.stderr)
             return 1
         log_path = root / "library-cache" / "build.log"
@@ -135,9 +147,13 @@ def cmd_search(args) -> int:
             return 1
         for c in hits:
             print(f"[{c.kind}] {c.heading()}  ({c.source}, {c.score:.2f})")
-            print(textwrap.fill(c.text, width=100, initial_indent="    ",
-                                subsequent_indent="    ", max_lines=8))
-            if c.source == "wiki":
+            if c.kind in ("command", "teleport", "documentation", "api"):
+                # Reference syntax and decimal coordinates are indivisible evidence.
+                print("\n".join("    " + line for line in c.text.splitlines()))
+            else:
+                print(textwrap.fill(c.text, width=100, initial_indent="    ",
+                                    subsequent_indent="    ", max_lines=8))
+            if c.source in ("wiki", "acwiki", "acdoxygen", "serverref"):
                 print(f"    source: {c.cite()}")
         return 0
     finally:
@@ -179,13 +195,21 @@ def main(argv: list[str] | None = None) -> int:
     from ..personas.roster import DEFAULT_CONF, DEFAULT_MYSQL
     from .atlasloot import DEFAULT_ADDONS
     from .chunks import KINDS
+    from .snapshots import DEFAULT_SNAPSHOT_WORKERS, snapshot_parse_processes, snapshot_workers
     parser = argparse.ArgumentParser(prog="leeroy_mind.library",
                                      description="the guild's WotLK reference library")
     parser.add_argument("--data-dir", default=None)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("build", help="load sources into library.db, then embed new chunks")
-    p.add_argument("--sources", default=",".join(SOURCES), help="comma list of " + ", ".join(SOURCES))
+    p.add_argument("--sources", default=",".join(DEFAULT_SOURCES), help="comma list of " + ", ".join(SOURCES))
+    for source in ("acwiki", "acdoxygen", "serverref"):
+        p.add_argument(f"--{source}-snapshot", help=f"complete offline {source} snapshot directory")
+    p.add_argument("--snapshot-workers", type=lambda value: snapshot_workers(int(value)),
+                   default=DEFAULT_SNAPSHOT_WORKERS,
+                   help="parallel documentation verification/parser workers (1-16; default 8)")
+    p.add_argument("--snapshot-parse-processes", type=lambda value: snapshot_parse_processes(int(value)),
+                   default=0, help="CPU processes for documentation parsing (0-16; default 0 uses threads)")
     p.add_argument("--no-embed", action="store_true", help="leave embedding for later")
     p.add_argument("--offline", action="store_true", help="wiki: use only cached pages")
     p.add_argument("--cap", type=int, default=1500, help="wiki: most pages to read")

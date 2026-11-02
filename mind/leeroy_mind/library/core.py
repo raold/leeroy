@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Callable, Iterable, Protocol, Sequence
 
 from leeroy_mind.clock import Clock
-from leeroy_mind.library.chunks import KINDS, SOURCES, Chunk, ChunkDraft, SourceResult
+from leeroy_mind.library.chunks import (KINDS, SOURCES, SNAPSHOT_SOURCES, Chunk, ChunkDraft,
+                                       SourceResult)
 from leeroy_mind.library.db import VEC_DIM, checkpoint, open_library_db
 from leeroy_mind.llm.client import LLMError
 from leeroy_mind.llm.scheduler import Priority, SchedulerError
@@ -32,7 +33,7 @@ _LEAD_BONUS = 1.25   # a page's first chunk or a curated summary, its title has 
 _TERM = re.compile(r'"([^"]+)"')
 _TITLE_WORD = re.compile(r"\w+")
 _LINK_ID = re.compile(r"Hitem:(\d+)")
-_SOURCE_ORDER = {"world": 0, "atlasloot": 1, "wiki": 2, "curated": 3}
+_SOURCE_ORDER = {name: i for i, name in enumerate(SOURCES)}
 # "what drops from X", "what does X drop", "loot from X", "X loot table", "X drops"
 _LOOT_QUESTIONS = (
     re.compile(r"^(?:what|which)\s+(?:\w+\s+)?(?:does|do|did|can|will)\s+(?P<who>.+?)\s+drop\b",
@@ -169,7 +170,9 @@ class Library:
                      section=r["section"], text=r["text"], url=r["url"], license=r["license"],
                      map_id=r["map_id"], instance=r["instance"],
                      ref_ids=tuple(json.loads(r["ref_ids"])), t_created=r["t_created"],
-                     score=score)
+                     score=score, source_revision=r["source_revision"],
+                     source_path=r["source_path"], source_sha256=r["source_sha256"],
+                     metadata=json.loads(r["metadata"]))
 
     def chunks_by_id(self, ids: Sequence[int]) -> list[Chunk]:
         ids = list(ids)
@@ -191,6 +194,8 @@ class Library:
             if progress:
                 progress(f"{src.name}: loading")
             res = src.load(self)
+            if res.name != src.name:
+                raise ValueError("source result does not match its adapter")
             rep = self._apply(res)
             if progress:
                 progress(f"{src.name}: {rep.total} chunks ({rep.inserted} new, {rep.updated} "
@@ -201,16 +206,55 @@ class Library:
     def _apply(self, res: SourceResult) -> BuildReport:
         if res.name not in SOURCES:
             raise ValueError(f"unknown source {res.name!r}")
+        if res.name in SNAPSHOT_SOURCES:
+            if res.provenance is None:
+                raise ValueError("complete snapshot provenance is required")
+            res.provenance.validate()
+            inventory = {f.path: f for f in res.provenance.files}
+            counts: dict[str, int] = {}
+            for draft in res.chunks:
+                entry = inventory.get(draft.source_path)
+                if (entry is None or draft.source_revision != res.provenance.revision
+                        or draft.source_sha256 != entry.sha256):
+                    raise ValueError("chunk is not backed by the complete inventory")
+                counts[entry.path] = counts.get(entry.path, 0) + 1
+            if any(f.chunks != counts.get(f.path, 0) for f in inventory.values()):
+                raise ValueError("snapshot chunk counts do not match its inventory")
+        if res.name == "serverref" and (res.commands is None or res.teleports is None):
+            raise ValueError("server reference requires complete commands and teleports")
+        if res.name != "serverref" and (res.commands is not None or res.teleports is not None):
+            raise ValueError("only serverref may replace server reference tables")
         rep = BuildReport(res.name, log=list(res.log))
         now = int(self.clock.now())
         drafts: dict[str, ChunkDraft] = {}
         for d in res.chunks:
             if d.key in drafts:
+                if res.name in SNAPSHOT_SOURCES:
+                    raise ValueError(f"duplicate snapshot chunk key {d.key!r}")
                 rep.log.append(f"duplicate key {d.key} ({d.title}): kept the first")
                 continue
             drafts[d.key] = d
         with self._tx():
             c = self.conn
+            if res.provenance is not None:
+                self._store_snapshot(res, now)
+            if res.commands is not None:
+                c.execute("DELETE FROM server_command")
+                c.executemany(
+                    "INSERT INTO server_command(name,syntax,help,handler,permission,allow_console,"
+                    "source_path,source_line,verification,metadata) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    [(r.name, r.syntax, r.help, r.handler, json.dumps(r.permission, sort_keys=True),
+                      r.allow_console, r.source_path, r.source_line, r.verification,
+                      json.dumps(r.metadata, ensure_ascii=False, sort_keys=True))
+                     for r in res.commands])
+            if res.teleports is not None:
+                c.execute("DELETE FROM game_tele")
+                c.executemany(
+                    "INSERT INTO game_tele(id,name,map,position_x,position_y,position_z,orientation,"
+                    "map_name,metadata) VALUES(?,?,?,?,?,?,?,?,?)",
+                    [(r.id, r.name, r.map, r.position_x, r.position_y, r.position_z, r.orientation,
+                      r.map_name, json.dumps(r.metadata, ensure_ascii=False, sort_keys=True))
+                     for r in res.teleports])
             if res.items is not None:
                 c.execute("DELETE FROM item")
                 c.executemany("INSERT INTO item(id, name, quality, ilvl, req_level, slot) "
@@ -225,29 +269,35 @@ class Library:
                                 q.next_id, q.exclusive_group) for q in res.quests])
             old = {r["key"]: r for r in c.execute(
                 "SELECT id, key, kind, title, section, text, url, license, map_id, instance, "
-                "ref_ids, weight FROM chunks WHERE source = ?", (res.name,))}
+                "ref_ids, weight, source_revision, source_path, source_sha256, metadata "
+                "FROM chunks WHERE source = ?", (res.name,))}
             for key, d in drafts.items():
                 vals = (d.kind, clean(d.title), clean(d.section), clean(d.text),
                         d.url, d.license, d.map_id, None if d.instance is None else clean(d.instance),
-                        json.dumps(list(d.ref_ids), ensure_ascii=False), float(d.weight))
+                        json.dumps(list(d.ref_ids), ensure_ascii=False), float(d.weight),
+                        d.source_revision, d.source_path, d.source_sha256,
+                        json.dumps(d.metadata, ensure_ascii=False, sort_keys=True))
                 r = old.get(key)
                 if r is None:
                     cid = c.execute(
                         "INSERT INTO chunks(source, key, kind, title, section, text, url, license, "
-                        "map_id, instance, ref_ids, weight, t_created) "
-                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "map_id, instance, ref_ids, weight, source_revision, source_path, "
+                        "source_sha256, metadata, t_created) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (res.name, key, *vals, now)).lastrowid
                     self._index_refs(cid, d.ref_ids)
                     rep.inserted += 1
                     continue
                 have = (r["kind"], r["title"], r["section"], r["text"], r["url"], r["license"],
-                        r["map_id"], r["instance"], r["ref_ids"], r["weight"])
+                        r["map_id"], r["instance"], r["ref_ids"], r["weight"], r["source_revision"],
+                        r["source_path"], r["source_sha256"], r["metadata"])
                 if have == vals:
                     rep.unchanged += 1
                     continue
                 reembed = have[:4] != vals[:4]
                 c.execute("UPDATE chunks SET kind=?, title=?, section=?, text=?, url=?, license=?, "
-                          "map_id=?, instance=?, ref_ids=?, weight=?, t_created=?"
+                          "map_id=?, instance=?, ref_ids=?, weight=?, source_revision=?, "
+                          "source_path=?, source_sha256=?, metadata=?, t_created=?"
                           + (", embedding=NULL" if reembed else "") + " WHERE id=?",
                           (*vals, now, r["id"]))
                 if reembed:
@@ -265,6 +315,29 @@ class Library:
                 c.execute("INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) "
                           "DO UPDATE SET value = excluded.value", (k, v))
         return rep
+
+    def _store_snapshot(self, res: SourceResult, now: int) -> None:
+        """Within _apply's transaction: provenance and corpus succeed or roll back together."""
+        p = res.provenance
+        assert p is not None
+        self.conn.execute("DELETE FROM source_inventory WHERE source=?", (res.name,))
+        self.conn.execute(
+            "INSERT INTO source_snapshot(source,origin,revision,retrieved_at,imported_at,license,"
+            "license_evidence,manifest_sha256,inventory_sha256,expected_files,complete,coverage) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,1,?) ON CONFLICT(source) DO UPDATE SET "
+            "origin=excluded.origin,revision=excluded.revision,retrieved_at=excluded.retrieved_at,"
+            "imported_at=excluded.imported_at,license=excluded.license,"
+            "license_evidence=excluded.license_evidence,manifest_sha256=excluded.manifest_sha256,"
+            "inventory_sha256=excluded.inventory_sha256,expected_files=excluded.expected_files,"
+            "complete=1,coverage=excluded.coverage",
+            (res.name, p.origin, p.revision, p.retrieved_at, now, p.license,
+             json.dumps(p.license_evidence, ensure_ascii=False, sort_keys=True), p.manifest_sha256,
+             p.inventory_sha256, p.expected_files, json.dumps(p.coverage, sort_keys=True)))
+        self.conn.executemany(
+            "INSERT INTO source_inventory(source,path,sha256,bytes,url,language,archived,version,"
+            "status,chunks,note) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            [(res.name, f.path, f.sha256, f.bytes, f.url, f.language, int(f.archived), f.version,
+              f.status, f.chunks, f.note) for f in p.files])
 
     def _index_refs(self, cid: int, refs) -> None:
         self.conn.execute("DELETE FROM chunk_ref WHERE chunk_id = ?", (cid,))
@@ -294,6 +367,48 @@ class Library:
             out.update({r["id"]: r for r in self._all(
                 f"SELECT * FROM item WHERE id IN ({marks})", part)})
         return out
+
+    def reference_matches(self, query: str, kinds=None, k: int = 8) -> list[Chunk]:
+        """Exact installed command paths, destination names, or explicit teleport IDs.
+
+        Only requested reference kinds participate, so an ordinary place/lore search
+        does not become a GM lookup. Coordinates and syntax come from stored records;
+        this lookup never executes a command or assumes an abbreviation is an alias.
+        """
+        requested = self._kinds(kinds) or []
+        wanted = set(requested) & {"command", "teleport"}
+        if not wanted or k <= 0:
+            return []
+        words = re.findall(r"[^\s?.,;!\"()]+", query.casefold())[:48]
+        phrases = {" ".join(words[i:j]) for i in range(len(words))
+                   for j in range(i + 1, min(len(words), i + 10) + 1)}
+        phrases.add(" ".join(query.casefold().strip().lstrip(".").split()))
+        values = sorted(phrases)
+        marks = ",".join("?" for _ in values)
+        refs: list[tuple[str, str]] = []
+        if "command" in wanted:
+            rows = self._all(f"SELECT name FROM server_command WHERE name COLLATE NOCASE IN ({marks})",
+                             values)
+            names = [r["name"] for r in rows]
+            # A child path is more specific than its handlerless parent namespace.
+            refs += [(f"command:{name}", name) for name in names
+                     if not any(other.casefold().startswith(name.casefold() + " ") for other in names)]
+        if "teleport" in wanted:
+            rows = self._all(f"SELECT id,name FROM game_tele WHERE name COLLATE NOCASE IN ({marks})",
+                             values)
+            refs += [(f"teleport:{r['id']}", r["name"]) for r in rows]
+            for match in re.finditer(r"\b(?:teleport|game_tele)\s+(?:id\s*[:#]?\s*)?(\d+)\b", query, re.I):
+                refs.append((f"teleport:{int(match[1])}", match[1]))
+        ordered = list(dict.fromkeys(ref for ref, _ in sorted(refs, key=lambda p: (-len(p[1]), p[0]))))
+        if not ordered:
+            return []
+        found = self._all("SELECT c.* FROM chunks c JOIN chunk_ref r ON r.chunk_id=c.id "
+                          "WHERE c.source='serverref' AND r.ref IN ("
+                          + ",".join("?" for _ in ordered) + ")", ordered)
+        positions = {ref: index for index, ref in enumerate(ordered)}
+        chunks = [self._chunk(row, score=1.0) for row in found]
+        return sorted(chunks, key=lambda c: (requested.index(c.kind),
+            min(positions.get(ref, len(positions)) for ref in c.ref_ids)))[:k]
 
     # -- embedding ---------------------------------------------------------------------
 
@@ -406,13 +521,81 @@ class Library:
         routed = self._routed(text, kinds, k)
         return self._fill(routed, self._rank(text, None, k, kinds), k)
 
+    def search_reference_text(self, query: str, k: int = 32, kinds=None, *,
+                              language: str | None = None) -> list[Chunk]:
+        """Bounded official-reference BM25, without lore MMR or embedding work.
+
+        Explicit reference kinds are required. Identifier questions keep an AND
+        anchor, so a missing setting cannot degrade into a generic configuration
+        answer. At most 96 rows are materialized; language/current-doc selection
+        happens before that limit, not after a translated page crowds out English.
+        """
+        wanted = [kind for kind in (self._kinds(kinds) or ())
+                  if kind in {"command", "teleport", "documentation", "api"}]
+        limit = min(96, max(0, int(k)))
+        if not wanted or limit == 0:
+            return []
+        text = " ".join(query.split())[:4096]
+        if not text:
+            return []
+        exact = self.reference_matches(text, wanted, limit)
+        if exact:
+            return exact
+        stop = set("what which where how why who can could does do did is are was were the a an in "
+                   "on for of to with and or me i you show tell explain find please about mean means "
+                   "docs documentation reference azerothcore azeroth core api my our this that".split())
+        identifiers = [word.casefold() for word in re.findall(
+            r"\b(?:[A-Z][a-z0-9]+(?:[A-Z][A-Za-z0-9]*)+|[A-Za-z][A-Za-z0-9]*_\w+)\b", text)
+            if word.casefold() not in {"azerothcore"}][:8]
+        terms = list(dict.fromkeys(word for word in re.findall(r"\w+", text.casefold())
+                                   if len(word) >= 2 and word not in stop))[:12]
+        if not terms:
+            return []
+        synonyms = {"build": ("build", "compile", "compiling", "compilation", "installation"),
+                    "compile": ("compile", "compiling", "compilation", "build"),
+                    "config": ("config", "configuration"), "configure": ("configure", "configuration"),
+                    "columns": ("columns", "field", "fields"), "schema": ("schema", "structure", "field")}
+
+        def quoted(word):
+            return '"' + word.replace('"', '""') + '"'
+
+        groups = ["(" + " OR ".join(quoted(value) for value in synonyms.get(term, (term,))) + ")"
+                  for term in terms]
+        queries = ([" AND ".join(quoted(word) for word in dict.fromkeys(identifiers))]
+                   if identifiers else [" AND ".join(groups), " OR ".join(groups)])
+        kind_marks = ",".join("?" for _ in wanted)
+        sql = ("SELECT c.*, bm25(chunks_fts,4.0,2.0,1.0) AS reference_rank FROM chunks_fts "
+               "JOIN chunks c ON c.id=chunks_fts.rowid WHERE chunks_fts MATCH ? "
+               "AND c.source IN ('acwiki','acdoxygen','serverref') "
+               f"AND c.kind IN ({kind_marks})")
+        language = language.casefold().split("-")[0] if language else None
+        filtered = (" AND (c.source='serverref' OR COALESCE(lower(json_extract(c.metadata,'$.language')),"
+                    "'und') IN (?, 'und') OR lower(json_extract(c.metadata,'$.language')) LIKE ?)"
+                    if language else "")
+        order = (" ORDER BY COALESCE(json_extract(c.metadata,'$.archived'),0), "
+                 "reference_rank, c.id LIMIT ?")
+        for fts in dict.fromkeys(queries):
+            for use_language in ([True, False] if language else [False]):
+                params = (fts, *wanted, *((language, language + "-%") if use_language else ()), limit)
+                try:
+                    rows = self._all(sql + (filtered if use_language else "") + order, params)
+                except sqlite3.OperationalError as exc:
+                    log.debug("reference FTS query rejected: %s", exc)
+                    self.conn.rollback()
+                    return []
+                if rows:
+                    return [self._chunk(row, max(0.0, -row["reference_rank"])) for row in rows]
+        return []
+
     def _routed(self, text: str, kinds: list[str] | None, k: int) -> list[Chunk]:
         """A loot question ("what drops from Sindragosa") answered by drops_from(): the boss's
         loot tables, the world database's first. [] for other queries or no such boss."""
+        reference = self.reference_matches(text, kinds, k)
         if not text or (kinds is not None and "loot" not in kinds):
-            return []
+            return reference
         who = loot_target(text)
-        return [replace(c, score=1.0) for c in self.drops_from(who)[:k]] if who else []
+        loot = [replace(c, score=1.0) for c in self.drops_from(who)[:k]] if who else []
+        return self._fill(reference, loot, k)
 
     @staticmethod
     def _fill(first: list[Chunk], rest: list[Chunk], k: int) -> list[Chunk]:

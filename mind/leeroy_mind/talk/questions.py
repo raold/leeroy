@@ -28,6 +28,7 @@ from leeroy_mind.personas.schema import Persona
 from leeroy_mind.talk import names as N
 from leeroy_mind.talk.names import ALIASES, CLASS_NAMES, bare, game_thing, names_in, words_re
 from leeroy_mind.talk.select import is_quest_talk, quest_helper
+from leeroy_mind.talk.reference import REFERENCE_KINDS, reference_topic
 from leeroy_mind.text import strip_wow_markup
 
 __all__ = ["ALIASES", "DETECTOR_WORDS", "FIT_TIERS", "GameQuestion", "SCHOLAR_TITLE",
@@ -47,6 +48,7 @@ class GameQuestion:
 
 
 TOPIC_KINDS: dict[str, tuple[str, ...]] = {
+    **REFERENCE_KINDS,
     "item": ("item", "loot"),
     "loot": ("loot", "item"),
     "mount": ("item", "event", "loot"),
@@ -762,6 +764,9 @@ def game_question(text: str) -> GameQuestion | None:
     plain = " ".join(strip_wow_markup(text).split())
     if not plain:
         return None
+    if topic := reference_topic(plain):
+        # Command names, config keys and coordinates must never undergo raider shorthand expansion.
+        return GameQuestion(topic, TOPIC_KINDS[topic], plain)
     slang = _slang(plain)
     low = _blank(plain, slang).casefold()
     low = _blank(low, [m.span(1) for m in _WHO_SO.finditer(low)])
@@ -786,6 +791,7 @@ SCHOLAR_TITLE = re.compile(r"\b(?:historian|scholar|lore\w*|archivist|librarian|
 # classes, professions and trainers like gear, with the scholar next; achievements and mounts
 # the collectors, then the scholar; reputation the scholar, then the theorycrafters.
 FIT_TIERS: dict[str, tuple[str, ...]] = {
+    **{topic: ("scholar", "theorycrafter") for topic in REFERENCE_KINDS},
     "lore": ("scholar", "lore"), "zone": ("scholar", "lore"),
     "strategy": ("scholar", "theorycrafter"),
     "item": ("theorycrafter", "scholar"), "loot": ("theorycrafter", "scholar"),

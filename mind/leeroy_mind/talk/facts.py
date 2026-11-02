@@ -37,6 +37,8 @@ from leeroy_mind.llm.scheduler import Priority
 from leeroy_mind.talk.names import (NEUTRAL_FACTIONS, name_level, name_pattern, sides_named,
                                     words_re)
 from leeroy_mind.talk.questions import GameQuestion, game_question
+from leeroy_mind.talk.reference import (REFERENCE_KINDS, preferred_reference_language,
+                                        reference_lines)
 from leeroy_mind.talk.style import to_ascii
 from leeroy_mind.text import truncate_words
 from leeroy_mind.wow import ENCOUNTER_MEMBERS
@@ -51,6 +53,7 @@ FACTS_TOKENS = 150  # the fact lines of one prompt, at most (text.estimate_token
 FACTS_CAP_S = 0.3  # wall time for a line's lookup (see the module docstring)
 TEXT_RESERVE_S = 0.1  # of the cap, kept for the text search after a slow hybrid one
 SEARCH_K = 8  # candidates the search brings for the gate to choose the facts from
+REFERENCE_SEARCH_K = 32  # language/current-version reranking happens before the small fact budget
 LINE_CHARS = 260  # one fact
 MIN_LINE_CHARS = 60  # a fact shorter than this is not worth its room
 FILL_CHARS = 100  # a fact with little that matches his words still says this much
@@ -322,6 +325,8 @@ def fact_lines(chunks: Sequence[Chunk], query: str, *, budget: int = FACTS_TOKEN
     wiki or curated one the sentences that match his words (`names`, the ones he named, count
     less), labelled with its page when they don't name it. `keep(chunk, line)` (the gate,
     relevant) leaves a line out."""
+    if chunks and all(c.kind in {k for kinds in REFERENCE_KINDS.values() for k in kinds} for c in chunks):
+        return reference_lines(chunks, budget=budget, query=query)
     terms, room = his_words(query), budget * 4
     named, extra = frozenset(_terms(" ".join(names))), frozenset(terms - _terms(query))
     out: list[str] = []
@@ -694,6 +699,24 @@ class LibraryFacts:
     async def _lookup(self, line_id: int, q: GameQuestion) -> list[str]:
         t0 = self.timer()
         kinds = list(q.kinds)
+        if q.topic in REFERENCE_KINDS:
+            try:
+                matches = getattr(self.library, "reference_matches", None)
+                hits = (matches(q.query, kinds=kinds, k=SEARCH_K)
+                        if matches is not None and q.topic in {"command", "teleport"} else [])
+                if not hits:
+                    fast_search = getattr(self.library, "search_reference_text", None)
+                    hits = (fast_search(q.query, kinds=kinds, k=REFERENCE_SEARCH_K,
+                                        language=preferred_reference_language(q.query))
+                            if fast_search is not None else
+                            self.library.search_text(q.query, kinds=kinds, k=REFERENCE_SEARCH_K))
+                lines = reference_lines(hits, budget=FACTS_TOKENS, query=q.query)
+                log.debug("facts_reference: line=%d topic=%s hits=%d facts=%d ms=%d", line_id,
+                          q.topic, len(hits), len(lines), round((self.timer() - t0) * 1000))
+                return lines
+            except Exception:
+                log.exception("facts_reference_failed: line=%d", line_id)
+                return []
         hits, outcome = [], "search"
         try:
             hits = await asyncio.wait_for(

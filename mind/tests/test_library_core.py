@@ -348,7 +348,7 @@ def test_a_v1_library_gains_weights(tmp_path, clock):
     conn.close()
     lib = Library(path, clock=clock)
     try:
-        assert lib.conn.execute("PRAGMA user_version").fetchone()[0] == latest_version() == 3
+        assert lib.conn.execute("PRAGMA user_version").fetchone()[0] == latest_version() == 4
         assert lib.search_text("old text")[0].title == "Old Page"
         with pytest.raises(sqlite3.IntegrityError):
             lib.conn.execute("UPDATE chunks SET weight = 0")
@@ -376,7 +376,7 @@ def test_a_v2_library_takes_curated_chunks_and_keeps_its_rows(tmp_path, clock):
     conn.close()
     lib = Library(path, clock=clock)
     try:
-        assert lib.conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert lib.conn.execute("PRAGMA user_version").fetchone()[0] == latest_version()
         row = lib.conn.execute("SELECT id, weight, embedding FROM chunks").fetchone()
         assert (row["id"], row["weight"], row["embedding"]) == (7, 0.5, vec)
         assert [tuple(r) for r in lib.conn.execute("SELECT * FROM chunk_ref")] == [(7, "item:1")]
