@@ -113,6 +113,20 @@ async def test_queue_drops_on_wipe_or_connection_change(fake):
 
 
 @_run_async
+async def test_dispatch_checks_actual_wipe_silence_even_with_queued_cast(fake):
+    from leeroy_mind.talk.raid import RaidPhase
+    voice, run = rig(fake)
+    phase = RaidPhase.COMBAT
+    voice.ground.app = SimpleNamespace(raid=SimpleNamespace(phase=lambda now: phase))
+    event = boss(fake, 12)
+    await voice.on_boss(event)
+    await voice.on_cast(cast(fake, event.ts))
+    phase = RaidPhase.WIPE_SILENCE
+    await voice.tick()
+    fake.say.assert_not_awaited()
+
+
+@_run_async
 async def test_refused_guard_is_not_retried(fake):
     voice, run = rig(fake)
     fake.say.return_value = False
@@ -179,7 +193,8 @@ def test_voicecheck_requires_delivered_utterance_for_pre_call(fake):
 
 
 @_run_async
-async def test_voicecheck_counts_recorded_combat_and_actual_lead_reactions(fake):
+@pytest.mark.parametrize("channel", ["raid", "voice:raid", "voice:raid2"])
+async def test_voicecheck_counts_recorded_combat_and_actual_lead_reactions(fake, channel):
     voice, run = rig(fake)
     start = boss(fake, 12)
     await voice.on_boss(start)
@@ -187,12 +202,12 @@ async def test_voicecheck_counts_recorded_combat_and_actual_lead_reactions(fake)
     await voice.on_boss(boss(fake, 12, "wiped"))
     with fake.conn:
         fake.conn.executemany("INSERT INTO utterance(ts,guid,channel,kind,text,why,dropped) VALUES (?,?,?,?,?,?,?)", [
-            (start.ts/1000+2, 102, "raid", "urgent", "move", "", None),
-            (start.ts/1000+3, 101, "raid", "urgent", "move", "", None),
-            (start.ts/1000+4, 102, "raid", "reply", "dropped", "", "guards"),
+            (start.ts/1000+2, 102, channel, "urgent", "move", "", None),
+            (start.ts/1000+3, 101, channel, "urgent", "move", "", None),
+            (start.ts/1000+4, 102, channel, "reply", "dropped", "", "guards"),
             (start.ts/1000+5, 102, "guild", "reply", "elsewhere", "", None),
-            (start.ts/1000+31, 101, "raid", "callout", "next pull", "wipe:lead", None),
-            (start.ts/1000+32, 102, "raid", "callout", "someone else", "wipe:lead", None),
+            (start.ts/1000+31, 101, channel, "callout", "next pull", "wipe:lead", None),
+            (start.ts/1000+32, 102, channel, "callout", "someone else", "wipe:lead", None),
         ])
     await fake.clock.advance(40, step=40)
     await voice.on_boss(boss(fake, 12))
@@ -200,7 +215,7 @@ async def test_voicecheck_counts_recorded_combat_and_actual_lead_reactions(fake)
     await voice.on_boss(boss(fake, 12, "killed"))
     with fake.conn:
         fake.conn.execute("INSERT INTO utterance(ts,guid,channel,kind,text,why) VALUES (?,?,?,?,?,?)",
-                          (fake.clock.now()+2, 101, "raid", "kill", "got him", "kill:lead"))
+                          (fake.clock.now()+2, 101, channel, "kill", "got him", "kill:lead"))
     report = voicecheck(fake.conn, night_of(fake.clock.local()))
     assert report["non_lead_raid_lines_in_combat"] == 1
     assert report["debriefs"] == report["kills"] == 1
@@ -231,6 +246,42 @@ async def test_new_connection_terminal_does_not_close_previous_fight_audit(fake)
     await voice.on_boss(boss(fake, 12, "killed"))
     report = voicecheck(fake.conn, night_of(fake.clock.local()))
     assert report["kills"] is None and report["non_lead_raid_lines_in_combat"] is None
+
+
+def test_observation_briefing_does_not_announce_an_unapplied_champion(fake):
+    voice, run = rig(fake)
+    voice.ground.applier = SimpleNamespace(acting=lambda now: False)
+    voice.ground.listener.card_for = lambda *args: (
+        Card(None, "631:12:0", 1, "champion", "coach", (), call="unapplied experimental tactic"), None)
+    line = voice.pre_call(631, 12)
+    assert "unapplied experimental tactic" not in line
+    assert line.startswith("the Lich King next. plan: ")
+
+
+@_run_async
+async def test_service_routes_cast_without_waiting_for_speech_then_drains_voice(fake):
+    from leeroy_mind.training.service import TrainingGround
+    from leeroy_mind.training.protocol import register
+    register()
+    fake.online = True
+    fake.feed = lambda event: None
+    fake.say = AsyncMock(return_value=True)
+    ground = TrainingGround(SimpleNamespace(), fake)
+    ground._connected = True
+    ground.listener.run = run_for(fake, offline=False)
+    ground._book = SimpleNamespace(name=lambda spell: "Defile")
+    ground.gate.recording = lambda: True
+    event = boss(fake, 12)
+    await ground.voice.on_boss(event)
+    await asyncio.wait_for(ground.on_event(cast(fake, event.ts)), .1)
+    fake.say.assert_not_awaited()
+    lane = asyncio.create_task(ground._voicing())
+    await fake.clock.advance(.2, step=.1)
+    fake.say.assert_awaited_once_with(101, "raid", "defile on Testy, move", kind=TurnKind.URGENT)
+    lane.cancel()
+    await asyncio.gather(lane, return_exceptions=True)
+    await ground.voice.close()
+    assert ground.voice._closed and ground.voice._speech is None
 
 
 @_run_async

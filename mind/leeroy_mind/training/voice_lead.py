@@ -103,6 +103,8 @@ class VoiceLead:
         self._minute = deque()
         self._speech = None
         self._closed = False
+        self._ended = {}
+        self.lifecycle = _EndListener(self)
 
     def _run(self):
         run = self.ground.listener.run
@@ -125,6 +127,13 @@ class VoiceLead:
     def _fresh(self, ts, *, age=3.0):
         return type(ts) is int and 0 <= self.ports.clock.now() - ts/1000 <= age
 
+    def _wipe_silence(self):
+        raid = getattr(getattr(self.ground, "app", None), "raid", None)
+        if raid is None:
+            return False
+        from leeroy_mind.talk.raid import RaidPhase
+        return raid.phase(self.ports.clock.now()) is RaidPhase.WIPE_SILENCE
+
     def pre_call(self, map_id, boss_id, *, call=None):
         """Replace the normal lead pre-call; never send a duplicate speech turn."""
         run = self._run()
@@ -132,7 +141,10 @@ class VoiceLead:
             return None
         context = context_key(map_id, boss_id, int(run.plan.size == 25) + 2 * int(run.plan.heroic))
         chosen = getattr(self.ground.listener, "card_for", None)
-        if chosen is not None:
+        applier = getattr(self.ground, "applier", None)
+        if applier is not None and not applier.acting(self.ports.clock.now()):
+            card = stock_card(context)
+        elif chosen is not None:
             card, _ = chosen(context, run)
         else:
             row = store.champion(self.ports.conn, context)
@@ -211,14 +223,20 @@ class VoiceLead:
                 or ev.map != run.session.ctx.map_id or ev.instance_id != run.session.ctx.instance_id
                 or not set(run.plan.members).intersection(ev.members)):
             return
+        key = (run.session.raid_id, run.session.started, ev.instance_id, ev.boss_id)
         if ev.state == "engaged":
+            if ev.ts <= self._ended.get(key, -1):
+                return
             if self._fight is not None:
                 return  # Duplicate/reordered engage never replaces a live fight.
             self._fight = (self._token(run), ev.boss_id, ev.ts)
             self._pull_id = None
             self._fight_receipt(run, ev.boss_id, ev.ts)
-        elif ev.state in {"wiped", "killed"} and self._fight is not None:
-            if ev.boss_id == self._fight[1] and ev.ts >= self._fight[2]:
+        elif ev.state in {"wiped", "killed"}:
+            self._ended[key] = max(ev.ts, self._ended.get(key, -1))
+            while len(self._ended) > 256:
+                del self._ended[next(iter(self._ended))]
+            if self._fight is not None and ev.boss_id == self._fight[1] and ev.ts >= self._fight[2]:
                 self._fight_receipt(run, ev.boss_id, self._fight[2], end=ev.ts, outcome=ev.state)
                 self._clear()
 
@@ -239,6 +257,7 @@ class VoiceLead:
     async def on_cast(self, ev):
         fight = self._fight
         if (fight is None or not self._valid(fight[0]) or not self._fresh(ev.ts)
+                or self._wipe_silence()
                 or not self.ground.gate.recording() or ev.map != fight[0][3]
                 or ev.instance_id != fight[0][4] or ev.ts < fight[2]):
             return
@@ -285,6 +304,7 @@ class VoiceLead:
             return
         fight, ts, text = self._queue.popleft()
         if (self._fight is not fight or not self._valid(fight[0]) or not self._fresh(ts)
+                or self._wipe_silence()
                 or not self.ground.gate.recording()):
             return
         self._speech = asyncio.create_task(self.ports.say(fight[0][0].plan.lead_guid,
@@ -307,6 +327,23 @@ class VoiceLead:
         self._clear()
         if task is not None:
             await asyncio.gather(task, return_exceptions=True)
+
+
+class _EndListener:
+    """Only end/invalidation follows the guild's possibly slow listener queue.
+
+    Boss boundaries are consumed inline by TrainingGround, before a following
+    cast can be considered. Replaying them from the guild queue is unnecessary.
+    """
+
+    def __init__(self, voice):
+        self.voice = voice
+
+    def invalidate(self, run):
+        self.voice.invalidate(run)
+
+    async def on_end(self, outcome, *, run=None):
+        await self.voice.on_end(outcome, run=run)
 
 
 def voicecheck(conn, night):
@@ -336,7 +373,7 @@ def voicecheck(conn, night):
                     continue
                 fight_count += 1
                 combat_lines.update(row[0] for row in conn.execute(
-                    "SELECT id FROM utterance WHERE channel='raid' AND dropped IS NULL "
+                    "SELECT id FROM utterance WHERE channel IN ('raid','voice:raid','voice:raid2') AND dropped IS NULL "
                     "AND guid<>? AND ts>=? AND ts<?", (lead, start/1000, end/1000)))
                 # Count actual delivered lead lines with the existing reaction's
                 # durable reason. The next engage ends this reaction window.
@@ -345,7 +382,7 @@ def voicecheck(conn, night):
                 until = min(end+60000, next_start)
                 wiped = fight["outcome"] == "wiped"
                 lines = {row[0] for row in conn.execute(
-                    "SELECT id FROM utterance WHERE guid=? AND channel='raid' AND dropped IS NULL "
+                    "SELECT id FROM utterance WHERE guid=? AND channel IN ('raid','voice:raid','voice:raid2') AND dropped IS NULL "
                     "AND kind=? AND why=? AND ts>=? AND ts<?",
                     (lead, "callout" if wiped else "kill", "wipe:lead" if wiped else "kill:lead",
                      end/1000, until/1000))}

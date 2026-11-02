@@ -58,7 +58,7 @@ def training_main(argv=None):
     parser = argparse.ArgumentParser(prog="leeroy_mind training")
     _add_data_dir(parser)
     subs = parser.add_subparsers(dest="command", required=True)
-    for name in ("status", "gate", "rescore", "report", "spells", "cards", "lessons"):
+    for name in ("status", "gate", "rescore", "report", "spells", "cards", "lessons", "voicecheck"):
         sub = subs.add_parser(name)
         _add_data_dir(sub, after_action=True)
         if name == "gate":
@@ -70,6 +70,8 @@ def training_main(argv=None):
             _add_data_dir(actions.add_parser("check"), after_action=True)
         elif name in {"cards", "lessons"}:
             sub.add_argument("--context", required=name == "lessons")
+        elif name == "voicecheck":
+            sub.add_argument("--night", required=True)
     args = parser.parse_args(argv)
     root = _root(args)
     write = args.command == "rescore" or args.command == "gate" and args.reset
@@ -84,6 +86,9 @@ def training_main(argv=None):
                     result = _gate(conn)
                 elif args.command == "rescore":
                     result = {"rescored": asyncio.run(_rescore(conn, root))}
+                elif args.command == "voicecheck":
+                    from .voice_lead import voicecheck
+                    result = voicecheck(conn, args.night)
                 elif args.command == "cards":
                     fields = "id,context,version,lineage,status,origin,directives,call,assignment,reason,evidence,vetoes,prev_champion,created,changed"
                     rows = conn.execute("SELECT " + fields + " FROM tg_card"
