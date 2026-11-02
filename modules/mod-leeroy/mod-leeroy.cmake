@@ -47,6 +47,11 @@ if (TARGET modules)
             message(FATAL_ERROR "[mod-leeroy] mod-ollama-chat has no speaker filter, so the cast would speak twice: "
                 "apply leeroy patches/mod-ollama-chat")
         endif()
+        string(FIND "${LEEROY_PROBE_TEXT}" "#define OLLAMA_SPEAKER_FILTER_AT_DELIVERY 1" LEEROY_PROBE_POS)
+        if (LEEROY_PROBE_POS EQUAL -1)
+            message(FATAL_ERROR "[mod-leeroy] mod-ollama-chat does not recheck muted speakers at delivery: "
+                "apply the complete leeroy patches/mod-ollama-chat series")
+        endif()
         set(LEEROY_HAS_OLLAMA_FILTER 1)
     endif()
 
