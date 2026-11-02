@@ -240,7 +240,7 @@ class LabRunner:
         self._owned = dict(id=uuid4().hex, phase="preparing", night=night, spec=list(spec),
             guids=guids, alive=list(guids), current=None, candidates=[], remaining=[], round=0,
             candidate=0, batch=0, leg=0, before={}, middle={}, scores={}, totals={}, rounds=[],
-            attempts=0, gaps=[], halt="", preempted=[], round_scores=[], started=self.ports.clock.now())
+            attempts=0, attempt_ids=[], gaps=[], halt="", preempted=[], round_scores=[], started=self.ports.clock.now())
         self._save()
         try:
             snapshot = await refresh(self.ports, probes=guids, book=book)
@@ -568,6 +568,11 @@ class LabRunner:
         if not self._due() or not self._still_ours(self._owned["alive"]):
             await self._finish("admission_changed")
             return
+        manifest = self._owned.setdefault("attempt_ids", [])
+        if (type(manifest) is not list or len(manifest) >= 128
+                or any(type(ident) is not str for ident in manifest) or len(set(manifest)) != len(manifest)):
+            await self._finish("attempt_manifest_unavailable")
+            return
         batch = self._batches()[self._owned["batch"]]
         guids = [g for g in batch if g in self._owned["alive"]]
         if not guids:
@@ -582,6 +587,7 @@ class LabRunner:
             sent_ms=int(now * 1000), deadline=now + seconds + CLEANUP_SECONDS,
             results={}, terminal=None, bad="", ack="pending")
         self._owned["current"] = current
+        manifest.append(current["id"])
         self._owned["phase"] = "waiting"
         self._save()  # Durable ownership precedes anything that can move a bot.
         try:

@@ -17,7 +17,12 @@ def test_read_only_commands_preserve_database(fake, tmp_path, args, capsys):
     assert cli.training_main([*args, "--data-dir", str(tmp_path)]) == 0
     assert hashlib.sha256(path.read_bytes()).digest() == before
     assert not (tmp_path / "mind.lock").exists()
-    assert isinstance(json.loads(capsys.readouterr().out), dict)
+    result = json.loads(capsys.readouterr().out)
+    assert isinstance(result, dict)
+    if args[0] == "status":
+        assert len(result["checklist"]) == 6
+        assert all(line.startswith("[ ]") for line in result["checklist"])
+        assert sum("waiting for recording" in line for line in result["checklist"]) == 2
 
 
 @pytest.mark.parametrize("args", [["gate", "--reset"], ["rescore"],

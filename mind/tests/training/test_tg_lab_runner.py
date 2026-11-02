@@ -89,6 +89,9 @@ def test_complete_paired_lab_keeps_results_dummy_and_records_exact_attempts(fake
     assert [bool(cmd.co[0]) for cmd in commands] == [False, True, False, False, True, False]
     assert commands[1].co == ("+custom::tg_8_1_" + "a" * 16,) * 4
     assert len({cmd.id for cmd in commands}) == 6
+    assert runner._owned["attempt_ids"] == [cmd.id for cmd in commands]
+    assert all(_get(fake.conn, ATTEMPT_PREFIX + ident)["restoration"] == "complete_no_desired_setup"
+               for ident in runner._owned["attempt_ids"])
     assert len(store.rotation_rows(fake.conn, status="dummy")) == 2
     assert not store.rotation_rows(fake.conn, status="field")
     assert not store.rotation_rows(fake.conn, status="champion")

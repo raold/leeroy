@@ -183,6 +183,20 @@ def training_main(argv=None):
                     week = args.week if args.command == "report" else _week()
                     result = training_section(conn, week, now=SystemClock().now(), names=lambda guid: str(guid))
                     if args.command == "status":
+                        labels = {
+                            "four_weeks": "28 days of eligible observations",
+                            "won_tactic": "Offline-validated tactic adopted in a human raid",
+                            "won_rotation": "Field-validated rotation",
+                            "gate_within_1ms": "Measured telemetry overhead within 1 ms",
+                            "voice_run": "Voice delivery accepted in a live raid",
+                            "cast_callouts": "Cast callouts accepted in a live raid",
+                        }
+                        completed = result["done_when"]
+                        result["checklist"] = [
+                            f"[{'x' if completed.get(key) is True else ' '}] {label}"
+                            + (" (waiting for recording)" if key in {"voice_run", "cast_callouts"}
+                               and completed.get(key) is not True and completed.get("gate_within_1ms") is not True else "")
+                            for key, label in labels.items()]
                         monday = datetime.fromisocalendar(int(week[:4]), int(week[6:]), 1).replace(tzinfo=timezone.utc).timestamp()
                         result["week"] = week
                         result["pulls_by_kind"] = {row[0]: row[1] for row in conn.execute(
