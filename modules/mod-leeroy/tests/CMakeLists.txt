@@ -22,6 +22,7 @@ if (LEEROY_BOOST_INCLUDE_DIR)
 endif()
 
 target_compile_definitions(leeroy_tests PRIVATE BOOST_ASIO_NO_DEPRECATED)
+target_compile_definitions(leeroy_tests PRIVATE LEEROY_TEST_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 
 find_package(Threads REQUIRED)
 target_link_libraries(leeroy_tests PRIVATE Threads::Threads)

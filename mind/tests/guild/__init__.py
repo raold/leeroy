@@ -1,0 +1,1 @@
+"""Synthetic guild-life tests."""
