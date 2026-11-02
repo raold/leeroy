@@ -40,6 +40,12 @@ spawned parsers receive only verified bytes and metadata. When calling this API
 from a script with processes enabled, guard its entry point with
 `if __name__ == '__main__':`.
 
+Embedding uses a positive integer `--batch` (default 32) and an optional nonnegative
+`--limit`; a limit of zero does no work. Each complete, validated vector batch commits
+atomically. If source text changes during inference, that batch stops without attaching
+outdated vectors; completed batches remain saved. Finish the source refresh and rerun
+`embed` to resume pending chunks. Model/dimension metadata must continue to match.
+
 ## Snapshot contract
 
 Each directory contains UTF-8 `manifest.json` with these fields:

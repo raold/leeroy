@@ -21,6 +21,20 @@ DEFAULT_SOURCES = ("world", "atlasloot", "wiki", "curated")
 SOURCES = (*DEFAULT_SOURCES, "acwiki", "acdoxygen", "acmodules", "serverref")
 
 
+def _positive_int(value: str) -> int:
+    number = int(value)
+    if number <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return number
+
+
+def _nonnegative_int(value: str) -> int:
+    number = int(value)
+    if number < 0:
+        raise argparse.ArgumentTypeError("must be a nonnegative integer")
+    return number
+
+
 def _root(args) -> Path:
     return Path(args.data_dir) if args.data_dir else default_data_dir()
 
@@ -90,6 +104,7 @@ async def _embed(lib, llm, batch: int, limit: int | None) -> int:
 
 
 def cmd_build(args) -> int:
+    from ..llm.client import LLMError
     from .lua import LuaSyntaxError
     from .mysql import QueryError
     from .wiki import WikiError
@@ -116,7 +131,11 @@ def cmd_build(args) -> int:
             print(f"not embedding: {lib.pending_embeddings()} chunks wait for "
                   "`python -m leeroy_mind.library embed`")
             return 0
-        done = asyncio.run(_embed(lib, _ollama(root), args.batch, None))
+        try:
+            done = asyncio.run(_embed(lib, _ollama(root), args.batch, None))
+        except LLMError as e:
+            print(f"embed stopped: {e} ({lib.pending_embeddings()} still pending)", file=sys.stderr)
+            return 1
         print(f"embedded {done}")
         return 0
     finally:
@@ -219,15 +238,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--cap", type=int, default=1500, help="wiki: most pages to read")
     p.add_argument("--interval", type=float, default=1.0,
                    help="wiki: seconds between requests (never below 1)")
-    p.add_argument("--batch", type=int, default=32, help="texts per embed call")
+    p.add_argument("--batch", type=_positive_int, default=32, help="positive number of texts per embed call")
     p.add_argument("--conf", default=str(DEFAULT_CONF), help="worldserver.conf (credentials)")
     p.add_argument("--mysql", default=str(DEFAULT_MYSQL))
     p.add_argument("--addons", default=str(DEFAULT_ADDONS), help="the client's Interface/AddOns")
     p.set_defaults(func=cmd_build)
 
     p = sub.add_parser("embed", help="embed chunks that have no vector yet")
-    p.add_argument("--batch", type=int, default=32)
-    p.add_argument("--limit", type=int, default=None)
+    p.add_argument("--batch", type=_positive_int, default=32)
+    p.add_argument("--limit", type=_nonnegative_int, default=None, help="maximum chunks to embed; 0 does no work")
     p.set_defaults(func=cmd_embed)
 
     p = sub.add_parser("search", help="search the library")

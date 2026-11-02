@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import math
 import re
 import sqlite3
 import struct
@@ -92,6 +93,27 @@ async def _embed(llm, model: str, texts: list[str], priority: Priority) -> list[
     if hasattr(llm, "submit"):
         return await llm.submit(priority, lambda c: c.embed(model, texts, dimensions=VEC_DIM))
     return await llm.embed(model, texts, dimensions=VEC_DIM)
+
+
+def _pack_embeddings(vecs, expected: int) -> list[bytes]:
+    """Validate the entire response before a batch can change either vector table."""
+    try:
+        if len(vecs) != expected:
+            raise ValueError("wrong number of vectors")
+        blobs = []
+        for vector in vecs:
+            if isinstance(vector, (str, bytes, bytearray)) or len(vector) != VEC_DIM:
+                raise ValueError("wrong vector dimensions")
+            values = [float(value) for value in vector]
+            if not all(math.isfinite(value) for value in values):
+                raise ValueError("non-finite vector element")
+            blob = pack_vec(values)  # also rejects values outside float32's finite range
+            if not all(math.isfinite(value) for value in unpack_vec(blob)):
+                raise ValueError("non-finite float32 vector element")
+            blobs.append(blob)
+        return blobs
+    except (TypeError, ValueError, OverflowError, struct.error) as error:
+        raise LLMError(f"embed must return {expected} finite {VEC_DIM}d float32 vectors") from error
 
 
 def _scale(values: dict[int, float]) -> dict[int, float]:
@@ -413,13 +435,14 @@ class Library:
     # -- embedding ---------------------------------------------------------------------
 
     def _check_embed_meta(self, model: str) -> None:
-        have_model, have_dim = self.get_meta("embed_model"), self.get_meta("embed_dim")
-        if have_model is None and have_dim is None:
-            self.set_meta("embed_model", model)
-            self.set_meta("embed_dim", str(VEC_DIM))
-        elif have_model != model or have_dim != str(VEC_DIM):
-            raise EmbeddingMismatch(f"library.db was embedded with {have_model} ({have_dim}d), "
-                                    f"asked to use {model} ({VEC_DIM}d)")
+        with self._tx():
+            have_model, have_dim = self.get_meta("embed_model"), self.get_meta("embed_dim")
+            if have_model is None and have_dim is None:
+                self.set_meta("embed_model", model)
+                self.set_meta("embed_dim", str(VEC_DIM))
+            elif have_model != model or have_dim != str(VEC_DIM):
+                raise EmbeddingMismatch(f"library.db was embedded with {have_model} ({have_dim}d), "
+                                        f"asked to use {model} ({VEC_DIM}d)")
 
     def pending_embeddings(self) -> int:
         return self._all("SELECT count(*) AS n FROM chunks WHERE embedding IS NULL")[0]["n"]
@@ -430,8 +453,17 @@ class Library:
         """Embed chunks that have no vector yet, `batch` texts per call, committing and yielding
         to the loop after each batch, so it can run in the background and resume where it
         stopped. `llm` is an LLMScheduler (the call queues at `priority`) or an LLMClient.
-        Returns how many chunks were embedded; an embed error propagates after the batches
-        already done are saved."""
+        Returns how many chunks were embedded. Invalid responses or changed source rows fail
+        the whole current batch with LLMError; earlier batches stay saved for explicit resume.
+        A zero limit does no work, including metadata initialization."""
+        if type(batch) is not int or batch <= 0:
+            raise ValueError("embedding batch must be a positive integer")
+        if limit is not None and (type(limit) is not int or limit < 0):
+            raise ValueError("embedding limit must be a nonnegative integer or None")
+        if limit == 0:
+            return 0
+        if self._depth:
+            raise ValueError("embedding cannot await inside a library transaction")
         llm = llm if llm is not None else self.llm
         if llm is None:
             raise ValueError("embed_pending needs an LLM client or scheduler")
@@ -441,18 +473,22 @@ class Library:
         total = self.pending_embeddings()
         while limit is None or done < limit:
             n = batch if limit is None else min(batch, limit - done)
-            rows = self._all("SELECT id, kind, title, section, text FROM chunks "
+            rows = self._all("SELECT id, source, key, kind, title, section, text FROM chunks "
                              "WHERE embedding IS NULL ORDER BY id LIMIT ?", (n,))
             if not rows:
                 break
             vecs = await _embed(llm, model, [doc_text(r["title"], r["section"], r["text"])
                                              for r in rows], priority)
-            if len(vecs) != len(rows) or any(len(v) != VEC_DIM for v in vecs):
-                raise LLMError(f"embed returned {len(vecs)} vectors for {len(rows)} texts "
-                               f"or a vector that is not {VEC_DIM}d")
+            blobs = _pack_embeddings(vecs, len(rows))
             with self._tx():
-                for r, v in zip(rows, vecs):
-                    blob = pack_vec(v)
+                self._check_embed_meta(model)
+                for r in rows:
+                    current = self.conn.execute(
+                        "SELECT id,source,key,kind,title,section,text,embedding FROM chunks WHERE id=?",
+                        (r["id"],)).fetchone()
+                    if current is None or tuple(current)[:-1] != tuple(r) or current["embedding"] is not None:
+                        raise LLMError("embedding source changed during the request; resume the pending batch")
+                for r, blob in zip(rows, blobs):
                     self.conn.execute("UPDATE chunks SET embedding = ? WHERE id = ?",
                                       (blob, r["id"]))
                     self.conn.execute("DELETE FROM chunks_vec WHERE chunk_id = ?", (r["id"],))
