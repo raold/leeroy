@@ -47,10 +47,12 @@ DEBRIEF = "the plan for the next pull on {boss}"
 NO_JOKE = "Leave out the joke this time: only frustration or what went wrong."
 JOKE_OK = "That's {n} wipes on it tonight: one joke is fine if it's a good one."
 FACTS_RULE = "Go by what happened: no causes, no blame, and no mechanics you weren't given."
+FACTS_LOGGED = "Go by what happened and the combat log that follows: blame nobody, and no mechanics you weren't given."
 # The lead's wipe call with the boss's tactics page (fix wave part E); "the Northrend Beasts'".
 MECHANICS = "{whose} real mechanics:"
 WIPE_KNOWN = ("You know the time and who died first, not why: give the plan for the next pull "
               "from these mechanics.")
+WIPE_LOGGED = "Give the plan for the next pull from these mechanics and the combat log that follows."
 MECHANICS_RULE = "Never invent anything else, and blame nobody."
 KILL_RULE = "Say only what these facts give: no causes, no blame."
 # After a wipe the first reaction is offered to whoever died first (rehearsal 2, judge A 9).
@@ -446,6 +448,8 @@ class Reactions(Pipeline):
         items = [(Turn(kind=TurnKind.KILL, speaker=lead, channel=channel,
                        instruction=self._lead_facts(ev, name), delay=self.rng.uniform(*KILL_S)),
                   TurnMeta(self._new_id(), topic=name, why=self._lead_why("kill", lead),
+                           fight_map=ev.map, fight_boss=ev.boss_id,
+                           fight_instance=ev.instance_id, fight_end_ms=ev.ts,
                            again_tonight=self.raid.wipes_tonight(ev.map, ev.boss_id) >= 1))]
         others = [g for g in members if g != lead]
         weights, _ = self._weigh(others, last=lead, ctx=self._context(now), reply=False)
@@ -490,6 +494,8 @@ class Reactions(Pipeline):
                        instruction=self._lead_facts(ev, name),
                        delay=WIPE_SILENCE_S + self.rng.uniform(*DEBRIEF_S)),
                   TurnMeta(self._new_id(), topic=DEBRIEF.format(boss=name),
+                           fight_map=ev.map, fight_boss=ev.boss_id,
+                           fight_instance=ev.instance_id, fight_end_ms=ev.ts,
                            why=self._lead_why("wipe", lead), again_tonight=again))]
         others = [g for g in members if g != lead]
         weights, _ = self._weigh(others, last=lead, ctx=self._context(now), reply=False)
