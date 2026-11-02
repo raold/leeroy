@@ -14,6 +14,12 @@ LeeroyCommandResult StartRaidJob(std::string const& id, OfflineRaidCmd const&, R
 LeeroyCommandResult HandleStartOfflineRaid(nlohmann::json const& message);
 // Reservations include requested members before grouping and survive unresolved teardown.
 bool OfflineRaidOwns(std::uint32_t guid);
+std::string AdmitTrainingRun(std::string const& handle, std::vector<std::uint32_t> const& guids,
+    std::uint32_t leader = 0);
+LeeroyCommandResult HandleGetTrainingCleanup(nlohmann::json const&);
+bool RestoreOfflineTraining();
+bool OfflineTrainingCleanupPending();
+bool OfflineRaidCanClearTraining(std::uint32_t leader, std::uint64_t token);
 bool BenchmarkRunning();
 bool BenchmarkOwnsRun(std::uint32_t leader);
 bool BenchmarkCanClearRun(std::uint32_t leader, std::uint64_t token);

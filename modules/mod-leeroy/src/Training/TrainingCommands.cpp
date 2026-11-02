@@ -45,9 +45,11 @@ void TrainingOffCleanup()
     EndDummyTrial("training_off");
     bool const benchmark = Guild::BenchmarkRunning();
     Guild::EndBenchmark("training_off");
+    bool const offline = Guild::RestoreOfflineTraining();
     bool const runs = ClearTrainingRuns();
     bool const bots = RestoreTrainingBots();
-    cleanupPending = !runs || !bots || DummyTrialRunning() || Guild::BenchmarkRunning();
+    cleanupPending = !offline || !runs || !bots || DummyTrialRunning() || Guild::BenchmarkRunning()
+        || Guild::OfflineTrainingCleanupPending();
     if (benchmark)
         LOG_INFO("module.leeroy", "mod-leeroy: training cleanup benchmark retained={}", Guild::BenchmarkRunning());
 }

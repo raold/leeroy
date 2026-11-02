@@ -242,6 +242,8 @@ std::optional<RaidControlCmd> ParseRaidControl(json const& j, std::string& error
     bool disband = out.action == "disband";
     f.Number("leader_guid", out.leaderGuid, disband ? 0 : 1, kU32Max, disband);
     f.String("param", out.param, true);
+    f.String("training_run", out.trainingRun, true);
+    f.Require(Training::TrainingRunFieldValid(out.trainingRun), "training_run");
     return f.Result(std::move(out));
 }
 
@@ -273,6 +275,8 @@ std::optional<BotDoCmd> ParseBotDo(json const& j, std::string& error)
     f.String("param", out.param);
     f.Require(BotDoParamAllowed(out.action, out.param), "param");
     f.Number("target_guid", out.targetGuid, 0, kU32Max, true);
+    f.String("training_run", out.trainingRun, true);
+    f.Require(Training::TrainingRunFieldValid(out.trainingRun), "training_run");
     return f.Result(std::move(out));
 }
 
@@ -392,6 +396,6 @@ json MakeJobEvent(JobEvent const& e)
     return {{"type", "job"}, {"id", e.id}, {"kind", e.kind}, {"state", e.state},
         {"reason", e.reason}, {"stage", e.stage}, {"guids", e.guids}, {"skipped", skipped},
         {"kills", e.kills}, {"wipes", e.wipes}, {"instance_id", e.instanceId},
-        {"guid", e.guid}, {"level", e.level}, {"avg_ilvl", e.avgIlvl}};
+        {"guid", e.guid}, {"level", e.level}, {"avg_ilvl", e.avgIlvl}, {"training_run", e.trainingRun}};
 }
 }

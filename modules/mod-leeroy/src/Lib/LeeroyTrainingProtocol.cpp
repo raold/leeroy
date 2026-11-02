@@ -11,6 +11,26 @@
 
 namespace Leeroy::Training
 {
+bool TrainingRunFieldValid(std::string_view value, bool optional)
+{
+    return (optional && value.empty()) || (!value.empty() && value.size() <= 128
+        && std::all_of(value.begin(), value.end(), [](char c)
+            { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-'; }));
+}
+
+nlohmann::json MakeTrainingCleanup(std::string const& id, std::string const& handle, CleanupReceipt const* receipt)
+{
+    CleanupReceipt const empty;
+    auto const& r = receipt ? *receipt : empty;
+    std::string state = !receipt ? "unknown" : r.phase == CleanupReceipt::Phase::Complete ? "complete"
+        : r.phase == CleanupReceipt::Phase::Open ? "open" : "restoring";
+    return {{"type", "training_cleanup"}, {"id", id}, {"receipt_version", 1}, {"training_run", handle},
+        {"job_id", r.jobId}, {"training_token", std::to_string(r.token)}, {"leader_guid", r.leader},
+        {"guild_id", r.scope.guild}, {"human_guid", r.scope.human}, {"map_id", r.scope.map},
+        {"instance_id", r.scope.instance}, {"group_id", std::to_string(r.scope.group)},
+        {"members", r.members}, {"state", state}};
+}
+
 bool RivalUsable(RivalState const& state, std::uint32_t requiredLevel)
 {
     return state.online && state.isBot && state.isRandomBot && !state.isCast && !state.isHuman
@@ -188,6 +208,15 @@ std::optional<GetVocabCmd> ParseGetVocab(json const& j, std::string& error)
     return f.Result(std::move(out));
 }
 
+std::optional<GetTrainingCleanupCmd> ParseGetTrainingCleanup(json const& j, std::string& error)
+{
+    Fields f(j, error);
+    GetTrainingCleanupCmd out;
+    f.String("training_run", out.trainingRun);
+    f.Require(TrainingRunFieldValid(out.trainingRun, false), "training_run");
+    return f.Result(std::move(out));
+}
+
 std::optional<CustomStrategyCmd> ParseCustomStrategy(json const& j, std::string& error)
 {
     Fields f(j, error);
@@ -216,6 +245,8 @@ std::optional<DcSettingCmd> ParseDcSetting(json const& j, std::string& error)
     f.Require(op == "clear" ? out.key.empty() || DcKeyAllowed(out.key) : DcKeyAllowed(out.key), "key");
     f.Signed("centi", out.centi);
     f.Require(op != "scale" || (out.centi >= 50 && out.centi <= 150), "centi");
+    f.String("training_run", out.trainingRun, true);
+    f.Require(TrainingRunFieldValid(out.trainingRun), "training_run");
     return f.Result(std::move(out));
 }
 

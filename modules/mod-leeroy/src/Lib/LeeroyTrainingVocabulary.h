@@ -18,6 +18,7 @@ struct Vocabulary
     std::vector<std::string> strategies, actions, spells, triggers, whitelist;
     bool spellsChecked = false;
     std::vector<VocabSetting> dc;
+    std::int32_t specTab = -1;
 };
 // Encoder-thread helper: an oversize result is an explicit failure, never a partial vocabulary.
 inline std::optional<std::string> EncodeVocabulary(Vocabulary const& data, std::uint64_t timestamp)
@@ -29,7 +30,7 @@ inline std::optional<std::string> EncodeVocabulary(Vocabulary const& data, std::
     auto line = EncodeEvent(timestamp, {{"type", "vocab"}, {"id", data.id}, {"class", data.cls},
         {"probe", data.probe}, {"strategies", data.strategies}, {"actions", data.actions}, {"spells", data.spells},
         {"spells_checked", data.spellsChecked}, {"triggers", data.triggers}, {"dc", std::move(dc)},
-        {"whitelist", data.whitelist}});
+        {"whitelist", data.whitelist}, {"spec_tab", data.specTab}});
     if (line.size() > kMaxLineBytes) return {};
     return line;
 }

@@ -2,7 +2,9 @@
 
 #include "RaidAssembly.h"
 #include "GuildPorts.h"
+#include "OfflineRaidJob.h"
 #include "Training/TrainingCommands.h"
+#include "LeeroyTrainingCleanup.h"
 
 #include "AiObjectContext.h"
 #include "DBCStores.h"
@@ -421,6 +423,12 @@ LeeroyCommandResult HandleRaidControl(json const& msg)
     auto const cmd = ParseRaidControl(msg, error);
     if (!cmd)
         return Fail(error);
+    if (!cmd->trainingRun.empty() && !Training::ScopedRaidControlAllowed(cmd->action, cmd->param))
+        return Fail("training_run_ownership");
+    std::vector<uint32> trainingTargets{cmd->memberGuid};
+    if (cmd->leaderGuid && cmd->leaderGuid != cmd->memberGuid) trainingTargets.push_back(cmd->leaderGuid);
+    if (auto scopeError = AdmitTrainingRun(cmd->trainingRun, trainingTargets, cmd->leaderGuid); !scopeError.empty())
+        return Fail(std::move(scopeError));
     if (!Owned(cmd->memberGuid))
         return Fail(NotCast(cmd->memberGuid));
     if (cmd->leaderGuid && !Owned(cmd->leaderGuid))
@@ -429,6 +437,11 @@ LeeroyCommandResult HandleRaidControl(json const& msg)
     Group* group = member ? member->GetGroup() : nullptr;
     if (!group)
         return Fail("no_group");
+    // A caller can select an extra cast member in a mixed group. Target-only
+    // admission must not let that alias disband or control an offline-owned run.
+    if (cmd->trainingRun.empty())
+        for (auto const& slot : group->GetMemberSlots())
+            if (OfflineRaidOwns(slot.guid.GetCounter())) return Fail("training_run_required");
     if (auto const ownership = GroupOwnership(group); !ownership.empty())
         return Fail(ownership);
     if (group->isLFGGroup() || group->isBGGroup() || group->isBFGroup())

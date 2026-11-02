@@ -11,12 +11,13 @@
 #include <utility>
 #include <vector>
 #include <nlohmann/json.hpp>
+#include "LeeroyTrainingCleanup.h"
 
 namespace Leeroy::Training
 {
-inline constexpr std::array<std::string_view, 8> kTrainingCommandTypes = {
+inline constexpr std::array<std::string_view, 9> kTrainingCommandTypes = {
     "telemetry", "get_stats", "get_vocab", "custom_strategy", "dc_setting", "dummy_trial",
-    "get_rivals", "start_benchmark"
+    "get_rivals", "start_benchmark", "get_training_cleanup"
 };
 inline constexpr std::array<std::string_view, 18> kDcKeys = {
     "PartyMaxSpread", "PullCombatSpread", "CombatRegroupDistance", "BossEngageRangeFloor",
@@ -34,6 +35,7 @@ inline constexpr std::array<std::string_view, 4> kTrainingValues = {
 
 struct TelemetryCmd { bool record = false; std::vector<std::uint32_t> watch; };
 struct GetStatsCmd { };
+struct GetTrainingCleanupCmd { std::string trainingRun; };
 struct GetVocabCmd
 {
     std::vector<std::uint32_t> classes, probes;
@@ -52,6 +54,7 @@ struct DcSettingCmd
     DcOp op = DcOp::Set;
     std::string key;
     std::int32_t centi = 0;
+    std::string trainingRun;
 };
 struct DummyTrialCmd
 {
@@ -81,6 +84,9 @@ struct StartBenchmarkCmd
 // Envelope validation stays in DecodeCommand. These parsers validate command fields only.
 std::optional<TelemetryCmd> ParseTelemetry(nlohmann::json const&, std::string& error);
 std::optional<GetStatsCmd> ParseGetStats(nlohmann::json const&, std::string& error);
+std::optional<GetTrainingCleanupCmd> ParseGetTrainingCleanup(nlohmann::json const&, std::string& error);
+bool TrainingRunFieldValid(std::string_view, bool optional = true);
+nlohmann::json MakeTrainingCleanup(std::string const& id, std::string const& handle, CleanupReceipt const*);
 std::optional<GetVocabCmd> ParseGetVocab(nlohmann::json const&, std::string& error);
 std::optional<CustomStrategyCmd> ParseCustomStrategy(nlohmann::json const&, std::string& error);
 std::optional<DcSettingCmd> ParseDcSetting(nlohmann::json const&, std::string& error);

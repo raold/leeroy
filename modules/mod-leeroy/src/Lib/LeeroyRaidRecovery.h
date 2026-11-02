@@ -29,6 +29,12 @@ struct RaidBodyLease
 };
 
 enum class RaidCleanupReport { None, Complete, Failed };
+// Proof-bearing cleanup retains ownership after the reporting deadline. A sent
+// return that never arrives must become retryable without resetting that deadline.
+inline bool RaidReturnReady(bool retainOwnership, bool issued, std::uint32_t elapsed, std::uint32_t retryAt)
+{
+    return retainOwnership ? elapsed >= retryAt : !issued;
+}
 class RaidFinalReset
 {
 public:

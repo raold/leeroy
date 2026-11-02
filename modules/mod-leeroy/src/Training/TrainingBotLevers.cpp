@@ -178,6 +178,7 @@ void JournalReset(uint32 guid, std::vector<std::string_view> const& values)
     }
 }
 void JournalForget(uint32 guid) { journals.erase(guid); }
+bool HasTrainingJournal(uint32 guid) { return journals.contains(guid); }
 void JournalValueReplaced(uint32 guid, std::string_view name)
 {
     if (auto found = journals.find(guid); found != journals.end())
@@ -208,8 +209,9 @@ bool RestoreJournaled(Player* bot, std::string_view name, uint32* changes)
     return success;
 }
 
-std::string_view ApplyTrainingStrategies(Player* bot, std::string const& param, Engine engine)
+std::string_view ApplyTrainingStrategies(Player* bot, std::string const& param, Engine engine, bool journalAll)
 {
+    if (journalAll && !TrainingAllowed()) return "training_off";
     if (!TierTwoAllowed(TrainingAllowed(), engine == Engine::Combat ? "co" : "nc", param)) return "training_off";
     auto* ai = GET_PLAYERBOT_AI(bot);
     std::vector<std::string> parts;
@@ -228,7 +230,7 @@ std::string_view ApplyTrainingStrategies(Player* bot, std::string const& param, 
     auto guid = bot->GetGUID().GetCounter();
     // Snapshot every affected group before touching any of them. A failure leaves a complete retryable journal.
     for (auto const& part : parts)
-        if (IsTierTwo("co", part) && TrainingAllowed())
+        if ((journalAll || IsTierTwo("co", part)) && TrainingAllowed())
             JournalOf(guid).NoteStrategy(engine, part.substr(1), Present(ai));
     ai->ChangeStrategy(param, State(engine));
     for (auto const& part : parts)
@@ -286,7 +288,7 @@ bool RestoreTrainingBots()
     {
         if (DummyTrialOwns(guid)) continue; // Trial-owned return validates the session/master before touching its AI.
         // The benchmark adapter verifies its captured body/controller before restoring and returning it.
-        if (Guild::BenchmarkRunning() && Guild::OfflineRaidOwns(guid)) continue;
+        if (Guild::OfflineRaidOwns(guid)) continue;
         try
         {
             auto* bot = Guild::FindOnline(guid);

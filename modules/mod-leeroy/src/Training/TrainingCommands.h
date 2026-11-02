@@ -27,10 +27,11 @@ void RequireTrainingCleanup();
 BotJournal& JournalOf(std::uint32_t guid);
 void JournalReset(std::uint32_t guid, std::vector<std::string_view> const& values = {});
 void JournalForget(std::uint32_t guid);
+bool HasTrainingJournal(std::uint32_t guid);
 void JournalValueReplaced(std::uint32_t guid, std::string_view name);
 // False keeps failed restoration entries for retry. The optional count includes only verified changes.
 bool RestoreJournaled(Player*, std::string_view name, std::uint32_t* changes = nullptr);
-std::string_view ApplyTrainingStrategies(Player*, std::string const& param, Engine);
+std::string_view ApplyTrainingStrategies(Player*, std::string const& param, Engine, bool journalAll = false);
 std::string_view ApplyTrainingValue(Player*, std::string const& param);
 bool RestoreTrainingBots();
 // Job teardown MUST pass its returned token. A stale job cannot erase a newer run for the same leader.
@@ -38,6 +39,7 @@ std::uint64_t MarkJobRun(std::uint32_t leader);
 bool ClearTrainingRun(std::uint32_t leader, std::uint64_t token);
 bool ClearTrainingRuns();
 void ResetTrainingVocabulary();
+void ForgetVocabularyProbe(std::uint32_t guid);
 void TrainingOffCleanup();
 }
 #endif

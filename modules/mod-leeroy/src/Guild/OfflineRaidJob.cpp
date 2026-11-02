@@ -1,6 +1,7 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 
 #include "OfflineRaidJob.h"
+#include "BotCommands.h"
 #include "GuildPorts.h"
 #include "LeeroyOfflineRaidPolicy.h"
 #include "LeeroyRaidRecovery.h"
@@ -57,12 +58,32 @@
 
 #include <string>
 #include <utility>
+#include <random>
+#include <sstream>
+#include <iomanip>
 
 namespace Leeroy::Guild
 {
 namespace
 {
 LeeroyCommandResult Fail(std::string reason) { return {false, std::move(reason)}; }
+
+Training::CleanupReceipts& CleanupProofs()
+{
+    static Training::CleanupReceipts receipts([]
+    {
+        try
+        {
+            std::random_device random;
+            std::ostringstream nonce;
+            for (unsigned i = 0; i != 4; ++i)
+                nonce << std::hex << std::setw(8) << std::setfill('0') << static_cast<std::uint32_t>(random());
+            return nonce.str();
+        }
+        catch (...) { return std::string{}; } // No weak time/connection fallback permits training admission.
+    }());
+    return receipts;
+}
 
 #if LEEROY_HAS_DUNGEON_CLEAR
 constexpr uint32 GroupingMs = 10000;
@@ -132,6 +153,7 @@ struct Job
     bool announced = false, prepared = false, leaderSent = false, followersSent = false;
     bool dcIssued = false, cleanupFailed = false;
     bool waitOverrideInstalled = false, previousWaitOverride = false, previousWaitValue = false;
+    bool trainingSealed = false, trainingRestored = false, trainingTouched = false, proofPublished = false;
     std::string terminalReason, terminalState = "done";
 };
 
@@ -178,12 +200,9 @@ bool Controlled(Job const& job, Player* player)
     if (!player || !GET_PLAYERBOT_AI(player) || IsSelfBot(player)
         || player->GetGUID().GetCounter() == job.human || player->GetGUID().GetCounter() == HumanGuid()
         || DcTestRunManager::Instance().IsReserved(player->GetGUID())) return false;
-    if (Benchmark(job))
-    {
-        auto body = job.bodies.find(player->GetGUID().GetCounter());
-        if (body == job.bodies.end() || !SameBody(body->second, player)
-            || !player->GetSession() || player->GetSession()->IsLoggingOut()) return false;
-    }
+    auto body = job.bodies.find(player->GetGUID().GetCounter());
+    if (body == job.bodies.end() || !SameBody(body->second, player)
+        || !player->GetSession() || player->GetSession()->IsLoggingOut()) return false;
     return Benchmark(job) ? Training::RivalIdentity(player) && player->GetLevel() >= 80
         && player->GetTeamId() == job.team : IsCast(player->GetGUID().GetCounter());
 }
@@ -289,6 +308,8 @@ void Stop(Job& job, std::string reason, bool failed = false)
     job.terminalReason = std::move(reason);
     job.terminalState = failed ? "failed" : "done";
     if (job.rewardToken) Training::BenchmarkRewards().Returning(job.rewardToken);
+    job.trainingSealed = true;
+    CleanupProofs().Seal(job.event.trainingRun);
     Enter(job, Stage::TearingDown);
 }
 
@@ -310,7 +331,7 @@ Player* Driver(Job const& job)
 {
     Player* driver = DcTestDriver::Get();
     return driver && driver->GetGUID() == job.driver
-        && (!Benchmark(job) || SameBody(job.driverBody, driver)) ? driver : nullptr;
+        && SameBody(job.driverBody, driver) && !driver->GetSession()->IsLoggingOut() ? driver : nullptr;
 }
 
 void ApplyRaidHabits(Job const& job, Player* player, Player* driver)
@@ -388,6 +409,11 @@ void Grouping(Job& job)
         if (auto const reason = Benchmark(job) ? std::string{} : Unusable(player); !reason.empty())
         {
             job.event.skipped.emplace_back(low, reason);
+            continue;
+        }
+        if (!Controlled(job, player))
+        {
+            job.event.skipped.emplace_back(low, "session_changed");
             continue;
         }
         job.members.push_back({low, WorldLocation(player->GetMapId(), player->GetPosition()),
@@ -548,7 +574,7 @@ void Teleporting(Job& job)
         SetupFailure(job, "instance_changed");
         return;
     }
-    if (!job.trainingToken)
+    if (!job.trainingToken && job.event.trainingRun.empty())
     {
         job.trainingToken = Training::MarkJobRun(job.command.leaderGuid);
         if (!job.trainingToken)
@@ -556,6 +582,17 @@ void Teleporting(Job& job)
             SetupFailure(job, "training_run_unavailable");
             return;
         }
+        std::vector<uint32> members;
+        for (auto const& member : job.members) members.push_back(member.guid);
+        job.event.trainingRun = CleanupProofs().Register(job.event.id, job.trainingToken,
+            job.command.leaderGuid, {job.command.mapId, job.event.instanceId, job.guild, job.human, job.group.GetRawValue()},
+            std::move(members));
+        if (job.event.trainingRun.empty())
+        {
+            SetupFailure(job, "training_receipt_unavailable");
+            return;
+        }
+        Progress(job); // The first published handle is already bound to the exact native instance/token.
     }
     if (Benchmark(job) && !job.registered)
     {
@@ -830,7 +867,7 @@ bool BenchmarkRecoveryLocation(Job const& job, Member const& member, Player* pla
 void CleanupFailure(Job& job, Member& member, std::string reason, bool retain = false)
 {
     job.cleanupFailed = true;
-    member.finished = !Benchmark(job) && !retain; // Never release a failed restoration or an unverified rival return.
+    member.finished = !Benchmark(job) && job.event.trainingRun.empty() && !retain;
     if (!member.cleanupNoted)
     {
         job.event.skipped.emplace_back(member.guid, "cleanup:" + reason);
@@ -881,6 +918,12 @@ bool RestoreWaitOverride(Job& job)
 
 bool Teardown(Job& job)
 {
+    job.trainingSealed = true;
+    CleanupProofs().Seal(job.event.trainingRun);
+    if (!CancelTrainingBotJobs(job.event.trainingRun)) return false;
+    // Original controller identity is required before the first undo, not merely
+    // when clearing its DC token after other members have already been mutated.
+    if (!job.trainingRestored && !Driver(job)) return false;
     // Cancellation can arrive between the leader's teleport request and its acknowledgement. Bind the cleanup
     // to the returned leader's actual instance only while the group we created still owns that participant.
     if (!job.event.instanceId && job.leaderSent)
@@ -898,7 +941,7 @@ bool Teardown(Job& job)
         if (Player* player = ObjectAccessor::FindConnectedPlayer(Guid(member.guid)); member.changed && player)
             pendingTransfer = pendingTransfer || player->IsBeingTeleported();
 
-    if (Benchmark(job))
+    if (!job.trainingRestored && (Benchmark(job) || !job.event.trainingRun.empty() || job.trainingToken))
     {
         // Restore BEFORE disband/releasing the master. A groupless random bot clears its master on the next
         // AI update, which would destroy the proof needed for a failed journal's safe retry.
@@ -906,7 +949,7 @@ bool Teardown(Job& job)
         for (Member& member : job.members)
         {
             if (pendingTransfer) { pendingRestore = true; break; }
-            if (member.changed && !member.finished)
+            if (Benchmark(job) && member.changed && !member.finished)
                 if (auto* player = FindOnline(member.guid); Controlled(job, player)
                     && !Training::RivalBindingsSafe(player, job.command.mapId, job.event.instanceId, job.difficulty))
                 {
@@ -923,7 +966,9 @@ bool Teardown(Job& job)
                 pendingRestore = true;
                 continue;
             }
-            if (!BenchmarkRecoveryLocation(job, member, player))
+            bool const untouchedAtOrigin = !job.trainingTouched && AtOrigin(member, player)
+                && !Training::HasTrainingJournal(member.guid);
+            if (Benchmark(job) ? !BenchmarkRecoveryLocation(job, member, player) : !Present(job, player) && !untouchedAtOrigin)
             {
                 CleanupFailure(job, member, "location_changed", true);
                 pendingRestore = true;
@@ -946,7 +991,7 @@ bool Teardown(Job& job)
             for (Member& member : job.members)
             {
                 auto* player = FindOnline(member.guid);
-                if (!member.changed || !Controlled(job, player) || player->IsBeingTeleported()
+                if (!Benchmark(job) || !member.changed || !Controlled(job, player) || player->IsBeingTeleported()
                     || !player->GetGroup() || player->GetGroup()->GetGUID() != job.group
                     || Identity(GET_PLAYERBOT_AI(player)->GetMaster()) != job.driverBody.player
                     || !BenchmarkRecoveryLocation(job, member, player)) continue;
@@ -955,7 +1000,7 @@ bool Teardown(Job& job)
                     || player->GetMapId() != job.command.mapId || player->GetInstanceId() != job.event.instanceId)
                     continue;
                 Revive(player);
-                if (!member.returnIssued || job.stageElapsed >= member.returnRetryAt)
+                if (RaidReturnReady(true, member.returnIssued, job.stageElapsed, member.returnRetryAt))
                 {
                     member.returnIssued = player->TeleportTo(member.origin);
                     member.returnRetryAt = AdvanceElapsed(job.stageElapsed, 5000);
@@ -971,6 +1016,11 @@ bool Teardown(Job& job)
             job.trainingToken = 0;
         }
         if (!RestoreWaitOverride(job)) return false;
+        if (!job.event.trainingRun.empty())
+        {
+            if (!CleanupProofs().Restored(job.event.trainingRun, true)) return false;
+        }
+        job.trainingRestored = true;
     }
 
     Group* group = FindGroup(job);
@@ -1010,7 +1060,7 @@ bool Teardown(Job& job)
         }
         PlayerbotAI* ai = GET_PLAYERBOT_AI(player);
         if (member.masterAssigned && ((ai->GetMaster() && Identity(ai->GetMaster()) != job.driverBody.player)
-            || (Benchmark(job) && !member.masterReleased && !ai->GetMaster())))
+            || (!member.masterReleased && !ai->GetMaster())))
         {
             CleanupFailure(job, member, "master_changed");
             continue;
@@ -1047,7 +1097,7 @@ bool Teardown(Job& job)
         }
         if (Identity(ai->GetMaster()) == job.driverBody.player)
         {
-            if (Benchmark(job) && !member.journalRestored && !Training::RestoreJournaled(player, "*"))
+            if (!member.journalRestored && !Training::RestoreJournaled(player, "*"))
             {
                 CleanupFailure(job, member, "journal_restore", true);
                 continue;
@@ -1055,18 +1105,13 @@ bool Teardown(Job& job)
             member.journalRestored = true;
             ai->SetMaster(nullptr);
             member.masterReleased = true;
-            if (!Benchmark(job))
-            {
-                ai->ResetStrategies();
-                Training::JournalReset(member.guid);
-            }
         }
-        if (Benchmark(job) && member.masterReleased)
+        if (member.masterReleased)
         {
             bool const reset = member.finalReset.TryRun([&]
             {
                 ai->ResetStrategies(); // Ungrouped, masterless stock strategies, independent of release receipt.
-                ai->Reset(false); // Controlled already rejected IsLoggingOut; never cancel a pending logout.
+                if (Benchmark(job)) ai->Reset(false); // Controlled already rejected IsLoggingOut.
                 Training::JournalReset(member.guid);
             });
             if (!reset)
@@ -1088,14 +1133,13 @@ bool Teardown(Job& job)
             member.finished = true;
             continue;
         }
-        if (job.stageElapsed >= CleanupMs && !Benchmark(job))
+        if (job.stageElapsed >= CleanupMs && !Benchmark(job) && job.event.trainingRun.empty())
         {
             CleanupFailure(job, member, "return_timeout");
             continue;
         }
-        if (Benchmark(job) && member.returnIssued && job.stageElapsed >= member.returnRetryAt)
-            member.returnIssued = false;
-        if (!member.returnIssued)
+        if (RaidReturnReady(Benchmark(job) || !job.event.trainingRun.empty(), member.returnIssued,
+            job.stageElapsed, member.returnRetryAt))
         {
             member.returnIssued = player->TeleportTo(member.origin);
             member.returnRetryAt = AdvanceElapsed(job.stageElapsed, 5000);
@@ -1142,6 +1186,19 @@ bool RunTeardown(Job& job)
         job.cleanupFailed = true; // Keep every incomplete receipt and the original cleanup deadline.
         LOG_ERROR("module.leeroy", "leeroy: raid {} cleanup exception; recovery retained", job.event.id);
     }
+    if (complete && !job.event.trainingRun.empty() && !job.proofPublished)
+    {
+        try
+        {
+            if (!CleanupProofs().Complete(job.event.trainingRun,
+                    CancelTrainingBotJobs(job.event.trainingRun), true)) return false;
+            auto* proof = CleanupProofs().Find(job.event.trainingRun);
+            LeeroyModule::Instance().Publish(EncodeEvent(NowUnixMs(),
+                Training::MakeTrainingCleanup(job.event.id, job.event.trainingRun, proof)), false);
+            job.proofPublished = true;
+        }
+        catch (...) { return false; } // The queryable completed receipt survives a publication retry.
+    }
     auto report = job.terminal.Observe(complete, job.stageElapsed, Benchmark(job));
     if (report != RaidCleanupReport::None)
     {
@@ -1186,6 +1243,9 @@ LeeroyCommandResult StartRaidJob([[maybe_unused]] std::string const& id,
         return Fail("driver_unavailable:instance_strategies_off");
     if (active)
         return Fail("busy");
+    if (HasPendingBotCommands(Requested(*cmd))) return Fail("training_commands_pending");
+    for (auto guid : Requested(*cmd))
+        if (Training::HasTrainingJournal(guid)) return Fail("training_journal_pending");
     if (benchmark && !Training::TrainingAllowed()) return Fail("training_off");
     if (benchmark && !Training::BenchmarkLootHooksReady()) return Fail("loot_guard_unavailable");
     if (benchmark && (bosses.empty() || bosses.size() > 20)) return Fail("bad field: bosses");
@@ -1247,8 +1307,8 @@ LeeroyCommandResult StartRaidJob([[maybe_unused]] std::string const& id,
     job->team = static_cast<uint8>(leader->GetTeamId());
     job->driver = driver->GetGUID();
     job->driverBody = Lease(driver);
-    if (benchmark)
-        for (uint32 low : Requested(*cmd)) job->bodies.emplace(low, Lease(FindOnline(low)));
+    for (uint32 low : Requested(*cmd))
+        if (auto* player = FindOnline(low)) job->bodies.emplace(low, Lease(player));
     job->limits = {cmd->maxWipes, cmd->maxWipesPerBoss, cmd->timeoutMin * 60000, cmd->minMembers, 8};
     job->event.id = id;
     job->event.kind = benchmark ? "benchmark" : "offline_raid";
@@ -1330,6 +1390,120 @@ bool OfflineRaidOwns([[maybe_unused]] uint32 guid)
 #endif
 }
 
+std::string AdmitTrainingRun(std::string const& handle, std::vector<std::uint32_t> const& guids, uint32 leader)
+{
+#if LEEROY_HAS_DUNGEON_CLEAR
+    if (handle.empty())
+        return std::any_of(guids.begin(), guids.end(), OfflineRaidOwns) ? "training_run_required" : "";
+    if (!active || active->event.trainingRun != handle || active->trainingSealed
+        || active->stage != Stage::Running || (leader && leader != active->command.leaderGuid)
+        || !CleanupProofs().Admits(handle, guids)) return "training_run_closed";
+    auto& job = *active;
+    auto* receipt = CleanupProofs().Find(handle);
+    if (!receipt || !job.trainingToken || receipt->token != job.trainingToken || !Driver(job)
+        || job.guild != LeeroyModule::Instance().GuildId() || job.human != HumanGuid()
+        || receipt->scope != Training::RunScope{job.command.mapId, job.event.instanceId, job.guild, job.human,
+                                               job.group.GetRawValue()}) return "training_run_ownership";
+    auto* group = FindGroup(job);
+    if (!OwnsGroup(job, group) || group->GetMembersCount() != job.members.size()
+        || group->GetLeaderGUID() != Guid(job.command.leaderGuid))
+        return "training_run_ownership";
+    auto targets = guids;
+    if (leader) // DC settings/control affect the whole original roster, not just the leader.
+    {
+        targets.clear();
+        for (auto const& member : job.members) targets.push_back(member.guid);
+    }
+    for (auto guid : targets)
+    {
+        auto* player = FindOnline(guid);
+        auto member = std::find_if(job.members.begin(), job.members.end(), [&](auto const& m) { return m.guid == guid; });
+        if (member == job.members.end() || !member->masterAssigned || member->masterReleased || member->finished
+            || !Present(job, player) || Identity(GET_PLAYERBOT_AI(player)->GetMaster()) != job.driverBody.player)
+            return "training_run_ownership";
+    }
+    job.trainingTouched = true;
+    return {};
+#else
+    (void)guids; (void)leader;
+    return handle.empty() ? "" : "training_run_closed";
+#endif
+}
+
+LeeroyCommandResult HandleGetTrainingCleanup(nlohmann::json const& message)
+{
+    std::string error;
+    auto command = Training::ParseGetTrainingCleanup(message, error);
+    if (!command) return Fail(std::move(error));
+    LeeroyModule::Instance().Publish(EncodeEvent(NowUnixMs(), Training::MakeTrainingCleanup(
+        message.at("id").get<std::string>(), command->trainingRun, CleanupProofs().Find(command->trainingRun))), false);
+    return {true, {}}; // Cleanup evidence is available even when training/guild admission is disabled.
+}
+
+bool OfflineRaidCanClearTraining([[maybe_unused]] uint32 leader, [[maybe_unused]] uint64 token)
+{
+#if LEEROY_HAS_DUNGEON_CLEAR
+    if (!active || active->command.leaderGuid != leader || !token || active->trainingToken != token) return false;
+    auto& job = *active;
+    if (Benchmark(job)) return BenchmarkCanClearRun(leader, token);
+    auto* player = FindOnline(leader);
+    auto* receipt = CleanupProofs().Find(job.event.trainingRun);
+    return (job.event.trainingRun.empty() || (receipt && !receipt->revoked && receipt->token == token)) && Driver(job)
+        && job.guild == LeeroyModule::Instance().GuildId() && job.human == HumanGuid()
+        && Present(job, player) && Identity(GET_PLAYERBOT_AI(player)->GetMaster()) == job.driverBody.player;
+#else
+    return false;
+#endif
+}
+
+bool RestoreOfflineTraining()
+{
+#if LEEROY_HAS_DUNGEON_CLEAR
+    try
+    {
+    if (!active || Benchmark(*active) || active->event.trainingRun.empty()) return true;
+    auto& job = *active;
+    job.trainingSealed = true;
+    CleanupProofs().Seal(job.event.trainingRun);
+    if (!CancelTrainingBotJobs(job.event.trainingRun)) return false;
+    if (job.trainingRestored) return true;
+    auto* proof = CleanupProofs().Find(job.event.trainingRun);
+    if (!proof || proof->revoked || !Driver(job)
+        || job.guild != LeeroyModule::Instance().GuildId() || job.human != HumanGuid()) return false;
+    for (auto& member : job.members)
+    {
+        if (!member.masterAssigned || member.journalRestored) continue;
+        auto* player = FindOnline(member.guid);
+        bool const untouchedAtOrigin = Controlled(job, player) && !job.trainingTouched && AtOrigin(member, player)
+            && !Training::HasTrainingJournal(member.guid) && InJobGroup(job, player);
+        if ((!Present(job, player) && !untouchedAtOrigin)
+            || Identity(GET_PLAYERBOT_AI(player)->GetMaster()) != job.driverBody.player)
+            return false;
+        if (!Training::RestoreJournaled(player, "*")) return false;
+        member.journalRestored = true;
+    }
+    if (job.trainingToken)
+    {
+        if (!Training::ClearTrainingRun(job.command.leaderGuid, job.trainingToken)) return false;
+        job.trainingToken = 0;
+    }
+    if (!RestoreWaitOverride(job) || !CleanupProofs().Restored(job.event.trainingRun, true)) return false;
+    job.trainingRestored = true; // Ordinary DC continues with its defaults; this handle never reopens.
+    }
+    catch (...) { return false; } // A failed world callback retains the sealed recovery reservation.
+#endif
+    return true;
+}
+
+bool OfflineTrainingCleanupPending()
+{
+#if LEEROY_HAS_DUNGEON_CLEAR
+    return active && active->trainingSealed && !active->trainingRestored && !active->event.trainingRun.empty();
+#else
+    return false;
+#endif
+}
+
 bool BenchmarkRunning()
 {
 #if LEEROY_HAS_DUNGEON_CLEAR
@@ -1392,7 +1566,7 @@ void EndBenchmark([[maybe_unused]] std::string const& reason)
 void BenchmarkPlayerLogout([[maybe_unused]] uint32 guid)
 {
 #if LEEROY_HAS_DUNGEON_CLEAR
-    if (!active || !Benchmark(*active)) return;
+    if (!active) return;
     bool owned = false;
     if (auto body = active->bodies.find(guid); body != active->bodies.end())
     {
@@ -1402,6 +1576,8 @@ void BenchmarkPlayerLogout([[maybe_unused]] uint32 guid)
     if (guid == active->driver.GetCounter()) { active->driverBody.Revoke(); owned = true; }
     if (owned)
     {
+        CleanupProofs().Revoke(active->event.trainingRun);
+        active->trainingSealed = true;
         if (active->rewardToken) Training::BenchmarkRewards().Revoke(active->rewardToken);
         Stop(*active, "participant_logout", true);
     }

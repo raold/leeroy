@@ -4,6 +4,7 @@
 #include "GuildPorts.h"
 #include "LeeroyTrainingVocabulary.h"
 #include "AiObjectContext.h"
+#include "AiFactory.h"
 #include "CustomStrategy.h"
 #include "PlayerbotAI.h"
 #include "Playerbots.h"
@@ -35,6 +36,10 @@ struct PendingVocab
     uint32 guild = 0, human = 0;
     std::size_t nextAction = 0;
     bool loaded = false;
+    bool spellSnapshot = false;
+    std::uintptr_t playerIdentity = 0, aiIdentity = 0, sessionIdentity = 0;
+    uint8 activeSpecMask = 0;
+    std::map<uint8, uint32> talentTabs;
 };
 std::deque<PendingVocab> pending;
 std::map<std::string, std::string, std::less<>> primed;
@@ -223,6 +228,7 @@ void TickVocab()
                 item.plan.wantSpells = false;
                 item.data.spells.clear();
                 item.data.spellsChecked = false;
+                item.data.specTab = -1;
             }
             else
             {
@@ -234,6 +240,31 @@ void TickVocab()
                     return;
                 }
                 auto* context = GET_PLAYERBOT_AI(bot)->GetAiObjectContext();
+                // Use the installed active-talent helper in the same world
+                // callback as spell enumeration. Its no-talents default is not
+                // evidence of a chosen spec, so report unknown in that case.
+                auto tabs = AiFactory::GetPlayerSpecTabs(bot);
+                auto spec = tabs[0] + tabs[1] + tabs[2] > 0 ? int(AiFactory::GetPlayerSpecTab(bot)) : -1;
+                if (spec < 0 || spec > 2) spec = -1;
+                auto playerIdentity = reinterpret_cast<std::uintptr_t>(bot);
+                auto aiIdentity = reinterpret_cast<std::uintptr_t>(GET_PLAYERBOT_AI(bot));
+                auto sessionIdentity = reinterpret_cast<std::uintptr_t>(bot->GetSession());
+                if (!sessionIdentity || (item.spellSnapshot && (item.playerIdentity != playerIdentity
+                    || item.aiIdentity != aiIdentity || item.sessionIdentity != sessionIdentity
+                    || item.data.specTab != spec || item.activeSpecMask != bot->GetActiveSpecMask()
+                    || item.talentTabs != tabs)))
+                {
+                    Failed(item, "probe_changed");
+                    pending.pop_front();
+                    return;
+                }
+                item.spellSnapshot = true;
+                item.playerIdentity = playerIdentity;
+                item.aiIdentity = aiIdentity;
+                item.sessionIdentity = sessionIdentity;
+                item.data.specTab = spec;
+                item.activeSpecMask = bot->GetActiveSpecMask();
+                item.talentTabs = std::move(tabs);
                 auto end = std::min(item.data.actions.size(), item.nextAction + kSpellLookupsPerTick);
                 for (; item.nextAction < end; ++item.nextAction)
                 {
@@ -262,4 +293,13 @@ void TickVocab()
 }
 
 void ResetTrainingVocabulary() { pending.clear(); } // Cached immutable definitions can still be held by bot engines.
+void ForgetVocabularyProbe(uint32 guid)
+{
+    for (auto it = pending.begin(); it != pending.end();)
+    {
+        if (it->data.probe != guid && it->plan.probe != guid) { ++it; continue; }
+        try { Failed(*it, "probe_logout"); } catch (...) { } // Never turn a partial result into success.
+        it = pending.erase(it);
+    }
+}
 }

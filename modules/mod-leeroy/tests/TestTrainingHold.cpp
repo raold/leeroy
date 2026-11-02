@@ -44,12 +44,16 @@ LEEROY_TEST(Training_VocabularyEncodingIsCompleteOrExplicitlyTooLarge)
     data.actions = {"frost strike", "obliterate"};
     data.spells = {"frost strike"};
     data.spellsChecked = true;
+    data.specTab = 1;
     auto encoded = EncodeVocabulary(data, 123);
     CHECK(encoded);
     auto parsed = nlohmann::json::parse(*encoded);
     CHECK_EQ(parsed.at("actions").size(), 2);
     CHECK_EQ(parsed.at("spells").size(), 1);
     CHECK(parsed.at("spells_checked").get<bool>());
+    CHECK_EQ(parsed.at("spec_tab").get<int>(), 1);
+    data.specTab = -1;
+    CHECK_EQ(nlohmann::json::parse(*EncodeVocabulary(data, 123)).at("spec_tab").get<int>(), -1);
     data.actions.push_back(std::string(Leeroy::kMaxLineBytes, 'x'));
     CHECK(!EncodeVocabulary(data, 123));
 }

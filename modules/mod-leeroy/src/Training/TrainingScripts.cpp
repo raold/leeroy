@@ -23,6 +23,7 @@ public:
     {
         LeeroyRegisterCommand("telemetry", Leeroy::Training::HandleTelemetry);
         LeeroyRegisterCommand("get_stats", Leeroy::Training::HandleGetStats);
+        LeeroyRegisterCommand("get_training_cleanup", Leeroy::Guild::HandleGetTrainingCleanup);
         LeeroyRegisterCommand("get_vocab", Leeroy::Training::HandleGetVocab);
         LeeroyRegisterCommand("custom_strategy", Leeroy::Training::HandleCustomStrategy);
         LeeroyRegisterCommand("dc_setting", Leeroy::Training::HandleDcSetting);
@@ -75,6 +76,7 @@ public:
     }
     void OnPlayerLogout(Player* player) override
     {
+        Leeroy::Training::ForgetVocabularyProbe(player->GetGUID().GetCounter());
         Leeroy::Training::DummyPlayerLogout(player->GetGUID().GetCounter());
         Leeroy::Guild::BenchmarkPlayerLogout(player->GetGUID().GetCounter());
         Leeroy::Training::JournalForget(player->GetGUID().GetCounter());

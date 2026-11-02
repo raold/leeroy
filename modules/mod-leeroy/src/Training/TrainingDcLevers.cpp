@@ -225,10 +225,11 @@ std::uint64_t MarkJobRun(std::uint32_t guid)
 bool ClearTrainingRun(std::uint32_t guid, std::uint64_t token)
 {
 #if LEEROY_HAS_DUNGEON_CLEAR
-    if (Guild::BenchmarkRunning() && Guild::OfflineRaidOwns(guid) && !Guild::BenchmarkCanClearRun(guid, token))
+    if (Guild::OfflineRaidOwns(guid) && !Guild::OfflineRaidCanClearTraining(guid, token))
         return false; // A matching GUID/group is insufficient after the original session was revoked.
     auto found = runs.find(guid);
     auto* job = jobs.Find(guid);
+    if (Guild::OfflineRaidOwns(guid) && (!job || job->token != token)) return false;
     if (!token || (job && job->token != token) || (found != runs.end() && found->second.token != token))
         return false; // Explicit stale ownership failure; no mutation of a newer receipt or override journal.
     if (found != runs.end())
@@ -253,6 +254,8 @@ LeeroyCommandResult HandleDcSetting(nlohmann::json const& message)
     std::string error;
     auto command = ParseDcSetting(message, error);
     if (!command) return {false, error};
+    if (auto scopeError = Guild::AdmitTrainingRun(command->trainingRun, {command->leaderGuid}, command->leaderGuid);
+        !scopeError.empty()) return {false, std::move(scopeError)};
 #if LEEROY_HAS_DUNGEON_CLEAR
     bool undo = command->op == DcOp::Reset || command->op == DcOp::Clear;
     if (!Guild::GuildEnabled()) return {false, "guild_off"};
@@ -342,7 +345,7 @@ void TickDcHolds(std::uint32_t diff)
     {
         auto guid = it->first;
         auto& run = it->second;
-        if (Guild::BenchmarkRunning() && Guild::OfflineRaidOwns(guid) && !Guild::BenchmarkOwnsRun(guid))
+        if (Guild::OfflineRaidOwns(guid) && !Guild::OfflineRaidCanClearTraining(guid, run.token))
         {
             ++it; // The exact-session job teardown owns recovery; generic cleanup must not adopt a replacement AI.
             continue;
@@ -389,7 +392,7 @@ void TickDcHolds(std::uint32_t diff)
     }
     for (auto guid : jobs.Leaders())
     {
-        if (Guild::BenchmarkRunning() && Guild::OfflineRaidOwns(guid)) continue;
+        if (Guild::OfflineRaidOwns(guid)) continue;
         if (auto* job = jobs.Find(guid); !runs.contains(guid) && !SameScope(Guild::FindOnline(guid), job->scope))
             jobs.End(guid, job->token); // Keep the receipt until old overrides have finished restoring.
     }
@@ -404,7 +407,7 @@ bool ClearTrainingRuns()
     uint32 cleared = 0;
     for (auto it = runs.begin(); it != runs.end();)
     {
-        if (Guild::BenchmarkRunning() && Guild::OfflineRaidOwns(it->first) && !Guild::BenchmarkOwnsRun(it->first))
+        if (Guild::OfflineRaidOwns(it->first))
         {
             ++it;
             continue;
