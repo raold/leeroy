@@ -2845,6 +2845,408 @@
   annote = {Shaped: an exploratory deep reinforcement learning idea for combat decisions}
 }
 
+% ---- Dojo: deep reinforcement learning and combat ----
+% Focused literature survey, 2026-11-02. Annotations describe proposed uses,
+% not implemented features or demonstrated results in this project.
+% Existing foundations above: vinyals2019grandmaster (AlphaStar league),
+% yu2022surprising (MAPPO). Do not duplicate those entries here.
+% Preprints and the WoW master's thesis are identified by entry type/notes.
+% The self-play survey is a reading map; empirical claims use original papers.
+
+@inproceedings{agarwal2021deep,
+  author = {Agarwal, Rishabh and Schwarzer, Max and Castro, Pablo Samuel and Courville, Aaron and Bellemare, Marc G.},
+  title = {Deep Reinforcement Learning at the Edge of the Statistical Precipice},
+  booktitle = {Advances in Neural Information Processing Systems},
+  volume = {34},
+  year = {2021},
+  eprint = {2108.13264},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.LG},
+  url = {https://papers.nips.cc/paper/2021/hash/f514cec81cb148559cf475e7426eed5e-Abstract.html},
+  keywords = {game-ai-learning, dojo, evaluation},
+  annote = {Dojo: Report uncertainty across training runs and held-out scenarios rather than a best-seed win rate. More evaluation games do not replace independent training seeds.}
+}
+
+@misc{andrychowicz2020matters,
+  author = {Andrychowicz, Marcin and Raichuk, Anton and Sta{\'n}czyk, Piotr and Orsini, Manu and Girgin, Sertan and Marinier, Raphael and Hussenot, L{\'e}onard and Geist, Matthieu and Pietquin, Olivier and Michalski, Marcin and Gelly, Sylvain and Bachem, Olivier},
+  title = {What Matters In On-Policy Reinforcement Learning? A Large-Scale Empirical Study},
+  year = {2020},
+  eprint = {2006.05990},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.LG},
+  url = {https://arxiv.org/abs/2006.05990},
+  keywords = {game-ai-learning, dojo, optimization},
+  annote = {Dojo: Implementation and hyperparameter choices deserve controlled ablations. Treat continuous-control findings as tuning hypotheses, not universal settings for masked discrete combat actions.}
+}
+
+@inproceedings{carroll2019utility,
+  author = {Carroll, Micah and Shah, Rohin and Ho, Mark K. and Griffiths, Thomas L. and Seshia, Sanjit A. and Abbeel, Pieter and Dragan, Anca},
+  title = {On the Utility of Learning about Humans for {Human-AI} Coordination},
+  booktitle = {Advances in Neural Information Processing Systems},
+  volume = {32},
+  year = {2019},
+  eprint = {1910.05789},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.LG},
+  url = {https://arxiv.org/abs/1910.05789},
+  keywords = {game-ai-learning, dojo, human-ai-coordination},
+  annote = {Dojo: Strong self-play does not establish compatibility with human teammates. Evaluate human cooperation separately and consider training with behavioral models of human partners.}
+}
+
+@inproceedings{cobbe2020leveraging,
+  author = {Cobbe, Karl and Hesse, Chris and Hilton, Jacob and Schulman, John},
+  title = {Leveraging Procedural Generation to Benchmark Reinforcement Learning},
+  booktitle = {Proceedings of the 37th International Conference on Machine Learning},
+  series = {Proceedings of Machine Learning Research},
+  volume = {119},
+  pages = {2048--2056},
+  year = {2020},
+  url = {https://proceedings.mlr.press/v119/cobbe20a.html},
+  keywords = {game-ai-learning, dojo, generalization, evaluation},
+  annote = {Dojo: Vary training scenarios and reserve unseen conditions for evaluation. Motivates separate training and test distributions for starts, maps and opponents rather than replaying training seeds.}
+}
+
+@misc{firoiu2018human,
+  author = {Firoiu, Vlad and Ju, Tina and Tenenbaum, Josh},
+  title = {At Human Speed: Deep Reinforcement Learning with Action Delay},
+  year = {2018},
+  eprint = {1810.07286},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.AI},
+  url = {https://arxiv.org/abs/1810.07286},
+  keywords = {game-ai-learning, dojo, action-delay, human-like-behavior},
+  annote = {Dojo: Action delay materially changes fighting-game control. Include the intended delay in training and evaluation; the paper's predictive approach is an optional later experiment.}
+}
+
+@mastersthesis{goncevatt2020reinforcement,
+  author = {Goncevatt, Carlos Alejandro},
+  title = {Reinforcement learning applied as a game mechanic and design element in a custom boss for {World of Warcraft}},
+  school = {Universitat Polit{\`e}cnica de Catalunya},
+  year = {2020},
+  url = {https://hdl.handle.net/2117/335239},
+  note = {Master's thesis, Master in Artificial Intelligence, dated 23 June 2020},
+  keywords = {game-ai-learning, dojo, world-of-warcraft, server-integration},
+  annote = {Dojo: Direct precedent for a TrinityCore-based C++ server connected to Python Rainbow learning across encounter instances. Controls Cataclysm boss mechanics, not a general player policy; evidence is a master's thesis.}
+}
+
+@inproceedings{henderson2018deep,
+  author = {Henderson, Peter and Islam, Riashat and Bachman, Philip and Pineau, Joelle and Precup, Doina and Meger, David},
+  title = {Deep Reinforcement Learning That Matters},
+  booktitle = {Proceedings of the AAAI Conference on Artificial Intelligence},
+  volume = {32},
+  number = {1},
+  year = {2018},
+  doi = {10.1609/aaai.v32i1.11694},
+  eprint = {1709.06560},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.LG},
+  url = {https://ojs.aaai.org/index.php/AAAI/article/view/11694},
+  keywords = {game-ai-learning, dojo, reproducibility},
+  annote = {Dojo: Record seeds, environment versions, hyperparameters and independent runs. Establish reproducible baselines before attributing gains to an algorithm or reward change.}
+}
+
+@inproceedings{hessel2019multitask,
+  author = {Hessel, Matteo and Soyer, Hubert and Espeholt, Lasse and Czarnecki, Wojciech and Schmitt, Simon and van Hasselt, Hado},
+  title = {Multi-Task Deep Reinforcement Learning with {PopArt}},
+  booktitle = {Proceedings of the AAAI Conference on Artificial Intelligence},
+  volume = {33},
+  number = {1},
+  year = {2019},
+  doi = {10.1609/aaai.v33i01.33013796},
+  eprint = {1809.04474},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.LG},
+  url = {https://ojs.aaai.org/index.php/AAAI/article/view/4266},
+  keywords = {game-ai-learning, dojo, multi-task},
+  annote = {Dojo: Reward-scale imbalance can distort shared-policy training across tasks. PopArt is a later candidate for mixed objectives; it does not establish that heterogeneous classes should share all weights.}
+}
+
+@inproceedings{ho2024human,
+  author = {Ho, Kuo-Hao and Hsieh, Ping-Chun and Lin, Chiu-Chou and Lou, You-Ren and Wang, Feng-Jian and Wu, I-Chen},
+  title = {Towards Human-Like {RL}: Taming Non-Naturalistic Behavior in Deep {RL} via Adaptive Behavioral Costs in {3D} Games},
+  booktitle = {Proceedings of the 15th Asian Conference on Machine Learning},
+  series = {Proceedings of Machine Learning Research},
+  volume = {222},
+  pages = {438--453},
+  year = {2024},
+  eprint = {2309.15484},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.AI},
+  url = {https://proceedings.mlr.press/v222/ho24a.html},
+  keywords = {game-ai-learning, dojo, human-like-behavior},
+  annote = {Dojo: Adaptive behavioral costs address unnatural movement while retaining task performance. Provides a method to investigate jitter and spinning, not a demonstrated model of personality or human combat style.}
+}
+
+@inproceedings{huang2022closer,
+  author = {Huang, Shengyi and Onta{\~n}{\'o}n, Santiago},
+  title = {A Closer Look at Invalid Action Masking in Policy Gradient Algorithms},
+  booktitle = {The International FLAIRS Conference Proceedings},
+  volume = {35},
+  year = {2022},
+  doi = {10.32473/flairs.v35i.130584},
+  eprint = {2006.14171},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.LG},
+  url = {https://arxiv.org/abs/2006.14171},
+  keywords = {game-ai-learning, dojo, action-masking},
+  annote = {Dojo: Supports masking invalid actions in policy-gradient learning. Apply identical mask semantics during rollout and optimization; independently audit masks so they cannot disclose hidden enemy state.}
+}
+
+@inproceedings{huang2021gym,
+  author = {Huang, Shengyi and Onta{\~n}{\'o}n, Santiago and Bamford, Chris and Grela, Lukasz},
+  title = {{Gym-$\mu$RTS}: Toward Affordable Full Game Real-time Strategy Games Research with Deep Reinforcement Learning},
+  booktitle = {2021 IEEE Conference on Games (CoG)},
+  year = {2021},
+  eprint = {2105.13807},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.LG},
+  url = {https://arxiv.org/abs/2105.13807},
+  keywords = {game-ai-learning, dojo, real-time-strategy, action-masking},
+  annote = {Dojo: Affordable game-RL reference for structured observations, action selection and self-play. Its simulator and throughput are not representative of a full MMORPG server.}
+}
+
+@article{jaderberg2019human,
+  author = {Jaderberg, Max and Czarnecki, Wojciech M. and Dunning, Iain and Marris, Luke and Lever, Guy and Garcia Casta{\~n}eda, Antonio and Beattie, Charles and Rabinowitz, Neil C. and Morcos, Ari S. and Ruderman, Avraham and Sonnerat, Nicolas and Green, Tim and Deason, Louise and Leibo, Joel Z. and Silver, David and Hassabis, Demis and Kavukcuoglu, Koray and Graepel, Thore},
+  title = {Human-level performance in {3D} multiplayer games with population-based reinforcement learning},
+  journal = {Science},
+  volume = {364},
+  number = {6443},
+  pages = {859--865},
+  year = {2019},
+  doi = {10.1126/science.aau6249},
+  eprint = {1807.01281},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.LG},
+  url = {https://doi.org/10.1126/science.aau6249},
+  keywords = {game-ai-learning, dojo, multi-agent, population-based-training},
+  annote = {Dojo: Population training and tournament evaluation in cooperative-competitive real-time combat. Supports testing varied teammates and opponents; human-level scores alone do not establish human-like behavior.}
+}
+
+@inproceedings{kumar2020conservative,
+  author = {Kumar, Aviral and Zhou, Aurick and Tucker, George and Levine, Sergey},
+  title = {Conservative {Q}-Learning for Offline Reinforcement Learning},
+  booktitle = {Advances in Neural Information Processing Systems},
+  volume = {33},
+  year = {2020},
+  eprint = {2006.04779},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.LG},
+  url = {https://arxiv.org/abs/2006.04779},
+  keywords = {game-ai-learning, dojo, offline-rl},
+  annote = {Dojo: Offline value learning must address distribution shift beyond recorded actions. A later option for complete decision trajectories, not justification for treating sparse telemetry as an RL dataset.}
+}
+
+@inproceedings{lanctot2017unified,
+  author = {Lanctot, Marc and Zambaldi, Vinicius and Gruslys, Audrunas and Lazaridou, Angeliki and Tuyls, Karl and Perolat, Julien and Silver, David and Graepel, Thore},
+  title = {A Unified Game-Theoretic Approach to Multiagent Reinforcement Learning},
+  booktitle = {Advances in Neural Information Processing Systems},
+  volume = {30},
+  year = {2017},
+  eprint = {1711.00832},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.AI},
+  url = {https://proceedings.neurips.cc/paper/2017/hash/3323fe11e9595c09af38fe67567a9394-Abstract.html},
+  keywords = {game-ai-learning, dojo, self-play},
+  annote = {Dojo: Policy-space response oracles motivate opponent mixtures and cross-play payoff tables to reduce overfitting. Start with a frozen opponent pool before implementing a full game-theoretic meta-solver.}
+}
+
+@inproceedings{liang2024learning,
+  author = {Liang, Yancheng and Chen, Daphne and Gupta, Abhishek and Du, Simon S. and Jaques, Natasha},
+  title = {Learning to Cooperate with Humans using Generative Agents},
+  booktitle = {Advances in Neural Information Processing Systems},
+  volume = {37},
+  year = {2024},
+  eprint = {2411.13934},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.LG},
+  url = {https://proceedings.nips.cc/paper_files/paper/2024/hash/6e9f99809b6df59e8fe5c9ffe269bf40-Abstract-Conference.html},
+  keywords = {game-ai-learning, dojo, human-ai-coordination, partner-modeling},
+  annote = {Dojo: GAMMA samples varied partner strategies from a learned latent model. Later candidate for teammate diversity and adaptation; its Overcooked results require validation in combat.}
+}
+
+@inproceedings{ng1999policy,
+  author = {Ng, Andrew Y. and Harada, Daishi and Russell, Stuart},
+  title = {Policy invariance under reward transformations: Theory and application to reward shaping},
+  booktitle = {Proceedings of the Sixteenth International Conference on Machine Learning},
+  pages = {278--287},
+  year = {1999},
+  url = {https://people.eecs.berkeley.edu/~russell/papers/icml99-shaping.pdf},
+  keywords = {game-ai-learning, dojo, reward-shaping},
+  annote = {Dojo: Basis for potential-based shaping rather than unbounded damage or healing bonuses. Preserve discount and terminal-boundary semantics; the theorem does not guarantee convergence of a learned multi-agent policy.}
+}
+
+@inproceedings{ni2022recurrent,
+  author = {Ni, Tianwei and Eysenbach, Benjamin and Salakhutdinov, Ruslan},
+  title = {Recurrent Model-Free {RL} Can Be a Strong Baseline for Many {POMDP}s},
+  booktitle = {Proceedings of the 39th International Conference on Machine Learning},
+  series = {Proceedings of Machine Learning Research},
+  volume = {162},
+  pages = {16691--16723},
+  year = {2022},
+  eprint = {2110.05038},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.LG},
+  url = {https://proceedings.mlr.press/v162/ni22a.html},
+  keywords = {game-ai-learning, dojo, partial-observability, recurrence},
+  annote = {Dojo: Motivates a carefully tuned recurrent baseline for delayed observations and hidden information. Its off-policy experiments do not directly establish recurrent PPO as the best combat algorithm.}
+}
+
+@misc{openai2019dota,
+  author = {{OpenAI} and Berner, Christopher and Brockman, Greg and Chan, Brooke and Cheung, Vicki and D{\k{e}}biak, Przemys{\l}aw and Dennison, Christy and Farhi, David and Fischer, Quirin and Hashme, Shariq and Hesse, Chris and others},
+  title = {{Dota 2} with Large Scale Deep Reinforcement Learning},
+  year = {2019},
+  eprint = {1912.06680},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.LG},
+  url = {https://arxiv.org/abs/1912.06680},
+  keywords = {game-ai-learning, dojo, self-play, multi-agent},
+  annote = {Dojo: Reference for recurrent policies, structured game interfaces and large-scale self-play in real-time team combat. Its distributed training budget is not evidence for local training times.}
+}
+
+@inproceedings{pardo2018time,
+  author = {Pardo, Fabio and Tavakoli, Arash and Levdik, Vitaly and Kormushev, Petar},
+  title = {Time Limits in Reinforcement Learning},
+  booktitle = {Proceedings of the 35th International Conference on Machine Learning},
+  series = {Proceedings of Machine Learning Research},
+  volume = {80},
+  pages = {4045--4054},
+  year = {2018},
+  url = {https://proceedings.mlr.press/v80/pardo18a.html},
+  keywords = {game-ai-learning, dojo, episode-semantics},
+  annote = {Dojo: Distinguish a match deadline from an artificial rollout cutoff. Expose remaining match time, and bootstrap training truncations when appropriate rather than treating every cutoff as terminal.}
+}
+
+@inproceedings{petrenko2020sample,
+  author = {Petrenko, Aleksei and Huang, Zhehui and Kumar, Tushar and Sukhatme, Gaurav and Koltun, Vladlen},
+  title = {{Sample Factory}: Egocentric {3D} Control from Pixels at 100000 {FPS} with Asynchronous Reinforcement Learning},
+  booktitle = {Proceedings of the 37th International Conference on Machine Learning},
+  series = {Proceedings of Machine Learning Research},
+  volume = {119},
+  pages = {7652--7662},
+  year = {2020},
+  url = {https://proceedings.mlr.press/v119/petrenko20a.html},
+  keywords = {game-ai-learning, dojo, training-systems, throughput},
+  annote = {Dojo: Relevant single-machine sampler, learner and self-play architecture. Profile server stepping, resets, IPC and inference first; published FPS is specific to its environments and hardware.}
+}
+
+@inproceedings{ross2011reduction,
+  author = {Ross, Stephane and Gordon, Geoffrey and Bagnell, Drew},
+  title = {A Reduction of Imitation Learning and Structured Prediction to No-Regret Online Learning},
+  booktitle = {Proceedings of the Fourteenth International Conference on Artificial Intelligence and Statistics},
+  series = {Proceedings of Machine Learning Research},
+  volume = {15},
+  pages = {627--635},
+  year = {2011},
+  url = {https://proceedings.mlr.press/v15/ross11a.html},
+  keywords = {game-ai-learning, dojo, imitation-learning},
+  annote = {Dojo: DAgger addresses imitation errors accumulating under the learner's own state distribution. Relevant when an expert can label learner-visited states; behavior cloning alone does not supply that correction.}
+}
+
+@inproceedings{schulman2016high,
+  author = {Schulman, John and Moritz, Philipp and Levine, Sergey and Jordan, Michael I. and Abbeel, Pieter},
+  title = {High-Dimensional Continuous Control Using Generalized Advantage Estimation},
+  booktitle = {International Conference on Learning Representations},
+  year = {2016},
+  eprint = {1506.02438},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.LG},
+  url = {https://arxiv.org/abs/1506.02438},
+  keywords = {game-ai-learning, dojo, optimization},
+  annote = {Dojo: Generalized advantage estimation supplies the bias-variance trade-off for policy-gradient updates. Validate value targets at episode boundaries and rollout cutoffs before tuning the estimator.}
+}
+
+@misc{schulman2017proximal,
+  author = {Schulman, John and Wolski, Filip and Dhariwal, Prafulla and Radford, Alec and Klimov, Oleg},
+  title = {Proximal Policy Optimization Algorithms},
+  year = {2017},
+  eprint = {1707.06347},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.LG},
+  url = {https://arxiv.org/abs/1707.06347},
+  keywords = {game-ai-learning, dojo, optimization},
+  annote = {Dojo: Practical first actor-critic baseline for masked combat actions. Establish feed-forward PPO before adding memory and opponent populations; clipping alone is not a guarantee of stable improvement.}
+}
+
+@article{silver2018general,
+  author = {Silver, David and Hubert, Thomas and Schrittwieser, Julian and Antonoglou, Ioannis and Lai, Matthew and Guez, Arthur and Lanctot, Marc and Sifre, Laurent and Kumaran, Dharshan and Graepel, Thore and Lillicrap, Timothy and Simonyan, Karen and Hassabis, Demis},
+  title = {A general reinforcement learning algorithm that masters chess, shogi, and {Go} through self-play},
+  journal = {Science},
+  volume = {362},
+  number = {6419},
+  pages = {1140--1144},
+  year = {2018},
+  doi = {10.1126/science.aar6404},
+  url = {https://doi.org/10.1126/science.aar6404},
+  keywords = {game-ai-learning, dojo, self-play, tree-search},
+  annote = {Dojo: AlphaZero is the policy-value plus search reference. Applying its search to partially observed real-time combat would require an appropriate planning model and affordable branching simulations.}
+}
+
+@inproceedings{strouse2021collaborating,
+  author = {Strouse, DJ and McKee, Kevin R. and Botvinick, Matt and Hughes, Edward and Everett, Richard},
+  title = {Collaborating with Humans without Human Data},
+  booktitle = {Advances in Neural Information Processing Systems},
+  volume = {34},
+  year = {2021},
+  eprint = {2110.08176},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.LG},
+  url = {https://arxiv.org/abs/2110.08176},
+  keywords = {game-ai-learning, dojo, human-ai-coordination, population-training},
+  annote = {Dojo: Fictitious co-play trains against varied partners and their historical checkpoints. Motivates retaining weaker and differently skilled partners rather than only the latest champion.}
+}
+
+@misc{suarez2019neural,
+  author = {Suarez, Joseph and Du, Yilun and Isola, Phillip and Mordatch, Igor},
+  title = {Neural {MMO}: A Massively Multiagent Game Environment for Training and Evaluating Intelligent Agents},
+  year = {2019},
+  eprint = {1903.00784},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.MA},
+  url = {https://arxiv.org/abs/1903.00784},
+  keywords = {game-ai-learning, dojo, massively-multiagent},
+  annote = {Dojo: MMO-inspired research environment for population interaction, combat, navigation and specialization. Useful for later open-world experiments; it does not implement Warcraft mechanics.}
+}
+
+@misc{warchalski2020deep,
+  author = {Warchalski, Michal and Radojevic, Dimitrije and Milosevic, Milos},
+  title = {Deep {RL} Agent for a Real-Time Action Strategy Game},
+  year = {2020},
+  eprint = {2002.06290},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.AI},
+  url = {https://arxiv.org/abs/2002.06290},
+  keywords = {game-ai-learning, dojo, real-time-combat, self-play},
+  annote = {Dojo: Nearby precedent for PPO, population self-play and an outcome-only reward in an imperfect-information real-time duel. Reported results concern Heroic: Magic Duel, not Warcraft.}
+}
+
+@inproceedings{weng2022envpool,
+  author = {Weng, Jiayi and Lin, Min and Huang, Shengyi and Liu, Bo and Makoviichuk, Denys and Makoviychuk, Viktor and Liu, Zichen and Song, Yufan and Luo, Ting and Jiang, Yukun and Xu, Zhongwen and Yan, Shuicheng},
+  title = {{EnvPool}: A Highly Parallel Reinforcement Learning Environment Execution Engine},
+  booktitle = {Advances in Neural Information Processing Systems},
+  volume = {35},
+  year = {2022},
+  doi = {10.52202/068431-1628},
+  eprint = {2206.10558},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.LG},
+  url = {https://proceedings.neurips.cc/paper_files/paper/2022/hash/8caaf08e49ddbad6694fae067442ee21-Abstract-Datasets_and_Benchmarks.html},
+  keywords = {game-ai-learning, dojo, training-systems, throughput},
+  annote = {Dojo: Environment execution can dominate training cost. Informs batching and parallel-worker measurements; it does not make a server's wall-clock timers safe to accelerate.}
+}
+
+@misc{zhang2024survey,
+  author = {Zhang, Ruize and Xu, Zelai and Ma, Chengdong and Yu, Chao and Tu, Wei-Wei and Tang, Wenhao and Huang, Shiyu and Ye, Deheng and Ding, Wenbo and Yang, Yaodong and Wang, Yu},
+  title = {A Survey on Self-play Methods in Reinforcement Learning},
+  year = {2024},
+  eprint = {2408.01072},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.AI},
+  url = {https://arxiv.org/abs/2408.01072},
+  note = {Version 4, revised 18 October 2025},
+  keywords = {game-ai-learning, dojo, self-play, survey},
+  annote = {Dojo: Reading map for self-play families, population selection and evaluation. Consult the original algorithm papers for implementation and empirical evidence.}
+}
+
 % ---- Evaluation and safety ----
 
 @inproceedings{abdulhai2025consistently,
