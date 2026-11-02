@@ -7,6 +7,7 @@ import logging
 import threading
 import time
 import warnings
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -463,6 +464,7 @@ class StubStream:
     def __init__(self, sd: "StubSd", kind: str, settings: dict):
         self.sd, self.kind, self.settings = sd, kind, settings
         self.samplerate, self.channels = settings["samplerate"], settings["channels"]
+        self.latency = settings["latency"] if isinstance(settings["latency"], float) else 0.01
         self.active = self.closed = False
         sd.calls.append(("open", kind, settings["device"]))
         sd.streams.append(self)
@@ -551,6 +553,7 @@ def test_sounddevice_opens_shared_wasapi_streams():
     assert (settings["samplerate"], settings["channels"], settings["dtype"],
             settings["blocksize"]) == (48000, 2, "float32", 480)
     assert settings["extra_settings"] == ("wasapi", False, True, False)  # shared, auto-convert
+    assert settings["latency"] == 0.1
     buffer = bytearray(480 * 2 * 4)  # what PortAudio hands a raw output stream's callback
     settings["callback"](buffer, 480, None, 0)
     assert filled[0].shape == (480, 2) and filled[0].dtype == np.float32
@@ -573,6 +576,70 @@ def test_sounddevice_opens_shared_wasapi_streams():
         with pytest.raises(DeviceError) as e:
             opener(name, filled.append)
         assert name not in str(e.value)  # PR15
+
+
+def test_output_status_is_reported_off_callback_without_losing_counts(monkeypatch):
+    sd = StubSd()
+    api = stub_api(sd)
+    events = []
+    monkeypatch.setattr(audio_io, "log", lambda event, **fields: events.append((event, fields)))
+    out = started(api, pinned="Speakers A")
+    timing = next(fields for event, fields in events if event == "output_timing")
+    assert timing == {"sample_rate": 48000.0, "channels": 2, "block_frames": 480,
+                      "requested_latency_ms": 100.0, "actual_latency_ms": 100.0}
+    callback = sd.streams[-1].settings["callback"]
+    buf = bytearray(480 * 2 * 4)
+    under = SimpleNamespace(output_underflow=True, output_overflow=False)
+    both = SimpleNamespace(output_underflow=True, output_overflow=True)
+    events.clear()
+    callback(buf, 480, None, under)
+    callback(buf, 480, None, 0)
+    callback(buf, 480, None, both)
+    assert not events  # the audio callback cannot log or perform IO
+    out.poll(now=0.1)
+    assert events == [("output_xrun", {"level": logging.WARNING, "underflows": 2,
+                       "overflows": 1, "total_underflows": 2, "total_overflows": 1,
+                       "total_callbacks": 3})]
+    events.clear()
+    out.poll(now=0.2)
+    assert not events  # cumulative counters are read once, never reset
+    callback(buf, 480, None, under)
+    out.stop()  # final callback since the last poll is not lost on close
+    xruns = [fields for event, fields in events if event == "output_xrun"]
+    assert len(xruns) == 1 and xruns[0]["underflows"] == 1
+    assert xruns[0]["total_underflows"] == 3 and xruns[0]["total_callbacks"] == 4
+    out.start(now=0.3)
+    callback = sd.streams[-1].settings["callback"]
+    callback(buf, 480, None, both)
+    out.poll(now=0.4)
+    last = [fields for event, fields in events if event == "output_xrun"][-1]
+    assert (last["total_underflows"], last["total_overflows"], last["total_callbacks"]) == (4, 2, 5)
+    assert "Speakers A" not in str(events)
+    out.stop()
+
+
+def test_callback_during_poll_is_reported_on_next_poll(monkeypatch):
+    sd = StubSd()
+    api = stub_api(sd)
+    out = started(api, pinned="Speakers A")
+    callback = sd.streams[-1].settings["callback"]
+    buf = bytearray(480 * 2 * 4)
+    under = SimpleNamespace(output_underflow=True, output_overflow=False)
+    callback(buf, 480, None, under)
+    reports = []
+
+    def logging_during_callback(event, **fields):
+        if event == "output_xrun":
+            reports.append(fields)
+            if len(reports) == 1:
+                callback(buf, 480, None, under)
+
+    monkeypatch.setattr(audio_io, "log", logging_during_callback)
+    out.poll(now=0.1)
+    out.poll(now=0.2)
+    assert [r["underflows"] for r in reports] == [1, 1]
+    assert reports[-1]["total_underflows"] == 2
+    out.stop()
 
 
 def test_the_stream_callbacks_raise_no_warning():
