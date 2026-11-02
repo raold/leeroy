@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from .cards import CLASSES, Card, validate_directive
+from .cards import CLASSES, Card, directive_vocab_missing
 from .protocol import DcKey, GetVocab, Vocab as VocabEvent
 
 if TYPE_CHECKING:
@@ -193,16 +193,18 @@ def suspend_missing(conn, vocab: Vocab, *, ts) -> list[int]:
         return []
     suspended = []
     with conn:
-        lost_rotations = set()
+        # This DB query is authoritative even when the optional snapshot
+        # registry was never populated. Exclude newly proven invalid rows too.
+        rotations = {}
         for row in conn.execute("SELECT * FROM tg_rotation WHERE status NOT IN ('retired','suspended')").fetchall():
             if _rotation_missing(row, vocab):
                 conn.execute("UPDATE tg_rotation SET status='suspended' WHERE id=?", (row["id"],))
-                lost_rotations.add(row["name"])
                 suspended.append(row["id"])
+            else:
+                rotations[row["name"]] = (row["class"], row["spec_tab"])
         for row in conn.execute("SELECT * FROM tg_card WHERE status NOT IN ('retired','suspended')").fetchall():
             card = Card.from_row(row)
-            if any(validate_directive(d, vocab) in {"unknown_lever", "not_in_vocab"}
-                   or d.lever == "rotation" and d.value in lost_rotations for d in card.directives):
+            if any(directive_vocab_missing(d, vocab, rotations=rotations) for d in card.directives):
                 conn.execute("UPDATE tg_card SET status='suspended',changed=? WHERE id=?", (ts, card.id))
                 suspended.append(card.id)
     return suspended

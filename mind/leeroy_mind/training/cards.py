@@ -151,6 +151,12 @@ def _target_classes(d, lever):
     return set().union(*(by_role[r] for r in (d.targets.roles or lever.roles)))
 
 
+def _required_strategy(d, lever):
+    return (d.lever if lever.kind == "strategy" else {
+        "wait for attack time": "wait for attack", "focus tanks": "focus heal targets"
+    }.get(d.lever))
+
+
 def validate_directive(d: Directive, vocab) -> str | None:
     if not isinstance(d, Directive) or type(d.lever) is not str:
         return "unknown_lever"
@@ -176,9 +182,7 @@ def validate_directive(d: Directive, vocab) -> str | None:
     if lever.kind == "rotation":
         spec = vocab.rotations.get(d.value)
         return None if spec == d.targets.specs[0] else "not_in_vocab"
-    required = (d.lever if lever.kind == "strategy" else {
-        "wait for attack time": "wait for attack", "focus tanks": "focus heal targets"
-    }.get(d.lever))
+    required = _required_strategy(d, lever)
     if required:
         if required not in vocab.whitelist:
             return "not_in_vocab"
@@ -186,6 +190,36 @@ def validate_directive(d: Directive, vocab) -> str | None:
                for c in _target_classes(d, lever)):
             return "not_in_vocab"
     return None
+
+
+def directive_vocab_missing(d: Directive, vocab, *, rotations) -> bool:
+    """Proven disappearance, unlike admission's refusal of unknown vocabulary.
+
+    ``rotations`` must be the complete current active DB registry, not the
+    snapshot's optional registry. A complete collected request proves only its
+    observed class namespaces and the terminal whitelist/DC namespace.
+    """
+    if not vocab.complete:
+        return False
+    reason = validate_directive(d, vocab)
+    if reason == "unknown_lever":
+        return True
+    if reason not in (None, "not_in_vocab"):
+        return False
+    lever = LEVERS[d.lever]
+    if lever.kind == "rotation":
+        return rotations.get(d.value) != d.targets.specs[0]
+    if lever.kind == "dc":
+        return d.lever not in vocab.dc
+    required = _required_strategy(d, lever)
+    if required:
+        if required not in vocab.whitelist:
+            return True
+        for cls in _target_classes(d, lever):
+            cv = vocab.classes.get(cls)
+            if cv is not None and cv.strategies and cv.actions and required not in cv.strategies:
+                return True
+    return False
 
 
 def validate_card(card: Card, vocab, *, names: set[str], human) -> list[str]:

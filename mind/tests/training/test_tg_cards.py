@@ -152,6 +152,51 @@ def test_incomplete_vocabulary_never_suspends(store):
     assert validate_directive(Directive("threat", "+"), vocabulary(complete=False)) == "not_in_vocab"
 
 
+@pytest.mark.parametrize("queried_class,expected", [(8, False), (1, True)])
+def test_suspension_requires_observed_target_class_absence(store, queried_class, expected):
+    directive = Directive("threat", "+", Targets(classes=(1,)))
+    ident = ts.put_card(store.conn, card(directive, status="champion", changed=2))
+    collector = VocabCollector("subset", classes=(queried_class,))
+    collector.feed(event("subset", queried_class, queried_class * 100 + 1,
+                         strategies=tuple(STRATEGIES - {"threat"})))
+    collector.feed(terminal("subset"))
+    vocab = collector.result(at=3)
+    assert vocab.complete
+    # Both absent and unknown dependencies refuse new admission. Only the
+    # actually queried target class establishes a reason to suspend old cards.
+    assert validate_directive(directive, vocab) == "not_in_vocab"
+    assert suspend_missing(store.conn, vocab, ts=5) == ([ident] if expected else [])
+    row = store.conn.execute("SELECT status,changed FROM tg_card WHERE id=?", (ident,)).fetchone()
+    assert tuple(row) == (("suspended", 5) if expected else ("champion", 2))
+
+
+@pytest.mark.parametrize("status", ["champion", "retired", "suspended", "absent"])
+def test_rotation_suspension_uses_db_when_snapshot_registry_is_unsupplied(store, status):
+    if status != "absent":
+        rotation(store.conn, status=status)
+    directive = Directive("rotation", "tg_frost", Targets(specs=((8, 2),)))
+    ident = ts.put_card(store.conn, card(directive, status="champion", changed=2))
+    collector = VocabCollector("subset", classes=(8,))
+    collector.feed(event("subset"))
+    collector.feed(terminal("subset"))
+    vocab = collector.result(at=3)
+    assert vocab.complete and not vocab.rotations
+    assert validate_directive(directive, vocab) == "not_in_vocab"
+    expected = status != "champion"
+    assert suspend_missing(store.conn, vocab, ts=5) == ([ident] if expected else [])
+    row = store.conn.execute("SELECT status,changed FROM tg_card WHERE id=?", (ident,)).fetchone()
+    assert tuple(row) == (("suspended", 5) if expected else ("champion", 2))
+
+
+def test_snapshot_registry_cannot_override_retired_db_rotation(store):
+    rotation(store.conn, status="retired")
+    directive = Directive("rotation", "tg_frost", Targets(specs=((8, 2),)))
+    ident = ts.put_card(store.conn, card(directive, status="champion"))
+    vocab = vocabulary(rotations={"tg_frost": (8, 2)})
+    assert validate_directive(directive, vocab) is None
+    assert suspend_missing(store.conn, vocab, ts=5) == [ident]
+
+
 @pytest.mark.parametrize("checked,probe_class,proof,expected", [
     (True, 8, {801: (8, 2)}, True),
     (False, 8, {801: (8, 2)}, False),
