@@ -11,9 +11,11 @@ from conftest import TEST_CAST, seed_test_cast
 from leeroy_mind.__main__ import serve
 from leeroy_mind.clock import SystemClock
 from leeroy_mind.config import load_config
+from leeroy_mind.guild.service import GuildLife
 from leeroy_mind.llm.presets import LIVE
 from leeroy_mind.nightly.gpu import NullAdmin
 from leeroy_mind.nightly.scheduler import NightScheduler
+from leeroy_mind.personas import roster as roster_db
 from leeroy_mind.protocol import Member
 from leeroy_mind.storage.db import open_db
 from leeroy_mind.storage.store import Store
@@ -34,6 +36,14 @@ def test_mind_leg(tmp_path, monkeypatch, live_guard):
     monkeypatch.setenv("LEEROY_MIND_DATA", str(root))
     monkeypatch.setenv("LEEROY_VOICE_DATA", str(tmp_path / "unused-voice-data"))
     assert not (root / "mind.db").exists()
+    game_database_attempts = []
+
+    def refused_game_database(*args, **kwargs):
+        game_database_attempts.append("attempt")
+        raise AssertionError("synthetic rehearsal must not read game database configuration or query MySQL")
+
+    monkeypatch.setattr(roster_db, "read_db_info", refused_game_database)
+    monkeypatch.setattr(roster_db, "run_mysql", refused_game_database)
 
     async def run():
         ready = await stage("voice-ready")
@@ -86,10 +96,14 @@ def test_mind_leg(tmp_path, monkeypatch, live_guard):
         def app_ready(app):
             apps.append(app)
             # Exercise the production attachment with fake model administration.
-            assert isinstance(app.nightly, NightScheduler) and not hasattr(app, "guild")
+            assert isinstance(app.nightly, NightScheduler) and isinstance(app.guild, GuildLife)
             assert app.nightly.arbiter is app.arbiter
             assert isinstance(app.arbiter.admin, NullAdmin)
             assert app._background.count(app.nightly.run_forever) == 1
+            assert app._background.count(app.guild.run) == 1
+            assert app.engine._sources.count(app.guild.source) == 1
+            assert not app.guild._tasks and not app.guild.source.managed
+            assert not app.guild.armory.available and app.guild.armory._backend is None
             assert app.nightly.running is None and not app._bg_tasks
             assert app.data_dir == root and app.voice.cfg.autostart is False
             assert app.cfg.bridge.port == bridge_port and app.voice.cfg.port == port
@@ -112,6 +126,11 @@ def test_mind_leg(tmp_path, monkeypatch, live_guard):
             app = apps[0]
             await until(lambda: app.world.human_online and app.voice.comms.available(),
                         "real voice greeting and healthy status")
+            await until(lambda: app.guild._tasks and app.guild.source.managed and app.guild._ready(),
+                        "guild extension managed lanes")
+            guild_tasks = list(app.guild._tasks)
+            assert all(not task.done() for task in guild_tasks)
+            assert not app.guild.raid_night.active and not app.guild.offline.active
             assert "human" in app.arbiter.holders and app.nightly.due() is None
             await stage("snapshot-checked")
             assert app.voice.rooms.where == {g: "guild_hall" for g in (1, *TEST_CAST)}
@@ -194,6 +213,10 @@ def test_mind_leg(tmp_path, monkeypatch, live_guard):
             assert app.store.conn.execute("SELECT COUNT(*) FROM night_run").fetchone()[0] == 0
             assert not any(call["model"] == cfg.models.reflection for call in fake_llm.calls)
             assert not any(cmd.get("type") == "afk" for cmd in bridge.commands)
+            assert not game_database_attempts
+            assert not app.guild.armory.available and app.guild.armory._backend is None
+            assert not app.guild.maintenance.members
+            assert app.store.conn.execute("SELECT COUNT(*) FROM guild_raid").fetchone()[0] == 0
             summary = dict(passed=True, imported=imported, python=sys.version,
                            ports=[bridge_port, ollama_port], synthetic_personas=5,
                            played_states=first_states, logout_state=cut["state"],
@@ -201,7 +224,9 @@ def test_mind_leg(tmp_path, monkeypatch, live_guard):
                            typed_fallback=True, ollama_connections=0, guard_hits=0,
                            party_drag=True, afk_return=True, member_relogin=True,
                            nightly_extension="attached with fake model administration",
-                           nightly_presence_leases=True, nightly_runs=0)
+                           nightly_presence_leases=True, nightly_runs=0,
+                           guild_extension="attached with game database access disabled",
+                           guild_source_registered=True, guild_raids=0, game_database_attempts=0)
         finally:
             if app is not None:
                 await app.stop()
@@ -212,6 +237,10 @@ def test_mind_leg(tmp_path, monkeypatch, live_guard):
             await trap.wait_closed()
         assert task.result() == 0 and app._closed and not app.running
         assert app.nightly.running is None and not app.nightly._handbacks
+        assert not app.guild._tasks and all(t.done() for t in guild_tasks)
+        assert not app.guild.ports.enabled and not app.guild.ports._speech
+        assert not app.guild.ports._gpu_requests and not app.guild.source._turns
+        assert not game_database_attempts
         assert all(t.done() for t in app._bg_tasks)
         assert bridge._server is None and all(t.done() for t in bridge._handlers)
         assert not live_guard.hits and not unexpected_ollama

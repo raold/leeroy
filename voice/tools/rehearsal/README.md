@@ -42,11 +42,14 @@ The assertions cover:
   process teardown.
 - The attached nightly scheduler's human lease across login, logout and relogin,
   with fake model administration and no overnight run during the grace period.
+- The attached guild-life service's talk source and managed task lifecycle,
+  with game database access disabled, no raid started, and clean task shutdown.
 
 This is **regression coverage, not live device acceptance**. It does not test
 copied/live database migration, real model quality, physical audio, GPU admission,
 WoW focus/elevation or Windows communications ducking. The mind leg includes the
-nightly extension; the guild-life extension is not attached yet.
+nightly and guild-life extensions; guild-life game commands remain covered by
+their separate synthetic tests.
 
 Random hot-mic and elsewhere conversation policies are disabled in this transport
 rehearsal, and movement uses a fixed random seed. Their policy and send-time
