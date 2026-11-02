@@ -100,3 +100,21 @@ def test_config_is_frozen_including_nested_prices_and_ranks():
         cfg.ranks["officer"] = 0
     with pytest.raises(TypeError):
         cfg.dkp.prices["other"] = 0
+
+
+def test_rotation_keys_use_catalog_and_canonical_storage_keys(tmp_path):
+    from leeroy_mind.guild.raids import CATALOG, split_key
+
+    cfg = config(tmp_path, '[guild]\noffline_rotation = ["ICC25", "ToC10H"]\n')
+    assert cfg.offline_rotation == ("icc25", "toc10h")
+    for raid in CATALOG.values():
+        for size in raid.sizes:
+            for heroic in (False, True) if raid.heroic else (False,):
+                key = f"{raid.key}{size}{'h' if heroic else ''}"
+                assert split_key(key) == (raid, size, heroic)
+                text = f'[guild]\noffline_rotation = ["{key}"]\n'
+                if raid.key == "voa":
+                    with pytest.raises(ConfigError, match=r"guild\.offline_rotation"):
+                        config(tmp_path, text)
+                else:
+                    assert config(tmp_path, text).offline_rotation == (key,)

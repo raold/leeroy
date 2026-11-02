@@ -10,6 +10,7 @@ from types import MappingProxyType
 from typing import Mapping
 
 from leeroy_mind.config import ConfigError
+from .raids import split_key
 
 
 @dataclass(frozen=True)
@@ -80,12 +81,12 @@ def _bad(section, key, want):
 
 
 def _rotation_key(value):
-    # Task8's catalog/split_key is not installed yet. Keep this bounded contract
-    # local until that module becomes available: canonical keys, not chat aliases.
-    if type(value) is not str:
-        return False
-    match = re.fullmatch(r"(icc|toc|ulduar|naxx|os|eoe|ony|rs)(10|25)(h?)", value)
-    return match is not None and (not match[3] or match[1] in {"icc", "toc", "rs"})
+    try:
+        raid, size, heroic = split_key(value)
+    except ValueError:
+        return None
+    # VoA has no boss-state events. Persist the same canonical key last_run uses.
+    return None if raid.key == "voa" else f"{raid.key}{size}{'h' if heroic else ''}"
 
 
 def _table(data, section, defaults):
@@ -158,10 +159,12 @@ def load_guild_config(path: Path) -> GuildConfig:
         _bad("guild", "late_summon_s", "two integers with 0 <= lo <= hi <= 600")
     guild["late_summon_s"] = tuple(late)
     rotation = guild["offline_rotation"]
-    if (not isinstance(rotation, (list, tuple)) or not rotation
-            or not all(_rotation_key(key) for key in rotation)):
+    if not isinstance(rotation, (list, tuple)) or not rotation:
         _bad("guild", "offline_rotation", "raid rotation keys, excluding voa")
-    guild["offline_rotation"] = tuple(rotation)
+    normalized = tuple(_rotation_key(key) for key in rotation)
+    if any(key is None for key in normalized):
+        _bad("guild", "offline_rotation", "raid rotation keys, excluding voa")
+    guild["offline_rotation"] = normalized
     guild["ranks"] = _mapping("guild", "ranks", guild["ranks"], defaults.ranks, 1, 9)
     for key in ("worldserver_conf", "mysql_exe"):
         value = guild[key]
