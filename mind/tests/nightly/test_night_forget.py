@@ -103,6 +103,8 @@ def test_runs_once_across_distinct_nights_in_same_week(h):
 
 
 def test_summaries_never_mix_scopes_or_partners(h):
+    h.store.conn.execute("INSERT INTO probe_run(ts,model,n,leaks,rate) VALUES (?,'live',36,0,0)",
+                         (h.clock.now(),))
     ids = [old(h), old(h)]
     line = h.say(h.T - 10 * 86400, 1, "Quiet dailies again.", channel="whisper", to=101)
     h.clock.set(h.T)
