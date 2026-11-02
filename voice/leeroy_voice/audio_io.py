@@ -37,7 +37,7 @@ from .logs import log
 OUTPUT_RATE = 48000  # the mixer's, so WASAPI converts if the device runs at another rate
 OUTPUT_CHANNELS = 2
 BLOCK_FRAMES = 480  # 10 ms
-OUTPUT_LATENCY_S = 0.05  # room for a late callback: Python's audio thread shares the GIL
+OUTPUT_LATENCY_S = 0.10  # room for CPU synthesis/GIL contention; the callback still runs at 10 ms
 INPUT_BLOCK_S = 0.01
 POLL_S = 2.0  # the service polls AudioOut at least this often
 RETRY_S = 10.0  # a device that is missing, or will not open, is tried again this often
@@ -244,10 +244,23 @@ def _why(e: Exception) -> str:
     return str(e.args[0]) if e.args else type(e).__name__
 
 
+class _OutputStatus:
+    """One callback writer, immutable cumulative snapshots; polling never clears a counter."""
+
+    def __init__(self):
+        self.counts = (0, 0, 0)  # callbacks, output underflows, output overflows
+
+    def record(self, status) -> None:
+        calls, under, over = self.counts
+        self.counts = (calls + 1, under + bool(getattr(status, "output_underflow", False)),
+                       over + bool(getattr(status, "output_overflow", False)))
+
+
 class _SdStream:
-    def __init__(self, api: "SoundDeviceApi", stream):
+    def __init__(self, api: "SoundDeviceApi", stream, output_status=None):
         self._api = api
         self._stream = stream
+        self._output_status = output_status
 
     @property
     def active(self) -> bool:
@@ -263,6 +276,14 @@ class _SdStream:
     @property
     def channels(self) -> int:
         return int(self._stream.channels)
+
+    @property
+    def latency(self) -> float:
+        return float(self._stream.latency)
+
+    @property
+    def output_counts(self) -> tuple[int, int, int]:
+        return self._output_status.counts if self._output_status is not None else (0, 0, 0)
 
     def close(self) -> None:
         self._api._forget(self)
@@ -344,13 +365,16 @@ class SoundDeviceApi:
     def open_output(self, name: str, callback: Callable[[np.ndarray], None]) -> Stream:
         sd = self._sd
         index, _ = self._find(name, "output")
+        counts = _OutputStatus()
 
         def fill(outdata, frames, time_info, status):
+            counts.record(status)  # no logging, IO, locks or counter resets on the audio thread
             callback(np.frombuffer(outdata, np.float32).reshape(frames, OUTPUT_CHANNELS))
         return self._start(lambda: sd.RawOutputStream(
             device=index, samplerate=OUTPUT_RATE, blocksize=BLOCK_FRAMES,
             channels=OUTPUT_CHANNELS, dtype="float32", latency=OUTPUT_LATENCY_S,
-            extra_settings=sd.WasapiSettings(auto_convert=True), callback=fill))
+            extra_settings=sd.WasapiSettings(auto_convert=True), callback=fill),
+            output_status=counts)
 
     def open_input(self, name: str, callback: Callable[[np.ndarray], None]) -> Stream:
         sd = self._sd
@@ -403,7 +427,7 @@ class SoundDeviceApi:
                 return d["index"], d
         raise DeviceError(f"no WASAPI {kind} by that name")
 
-    def _start(self, make) -> Stream:
+    def _start(self, make, *, output_status=None) -> Stream:
         sd = self._sd
         try:
             stream = make()
@@ -414,7 +438,7 @@ class SoundDeviceApi:
         except sd.PortAudioError as e:
             stream.close()
             raise DeviceError(f"cannot start the stream: {_why(e)}") from None
-        kept = _SdStream(self, stream)
+        kept = _SdStream(self, stream, output_status)
         with self._lock:
             self._streams.append(kept)
         return kept
@@ -604,11 +628,15 @@ class AudioOut:
         self._pinned = pinned
         self._clock = clock if clock is not None else _Monotonic()
         self._keeper = StreamKeeper(devices, "output", self._fill, label="output",
-                                    fields={"pinned": bool(pinned)})
+                                    fields={"pinned": bool(pinned)}, on_stream=self._stream_changed)
         self._running = False
         self._default_name = ""  # the Windows default as last read ...
         self._read_at: float | None = None  # ... and when
         self._render_failures = 0
+        self._reported_render_failures = 0
+        self._diagnostic_stream: Stream | None = None
+        self._reported_counts = (0, 0, 0)
+        self._total_counts = (0, 0, 0)
         self.device = pinned
 
     @property
@@ -629,13 +657,42 @@ class AudioOut:
         if not self._running:
             return
         now = self._clock.now() if now is None else now
-        if self._render_failures:
-            failures, self._render_failures = self._render_failures, 0
-            log("mixer_render_failed", level=logging.WARNING, blocks=failures)
+        self._report_status()
         want = self._pinned or self._default(now)
         if want:
             self.device = want
         self._keeper.keep(want, now)
+
+    def _report_status(self) -> None:
+        failures = self._render_failures
+        if failures != self._reported_render_failures:
+            log("mixer_render_failed", level=logging.WARNING,
+                blocks=failures - self._reported_render_failures, total_blocks=failures)
+            self._reported_render_failures = failures
+        stream = self._diagnostic_stream
+        counts = getattr(stream, "output_counts", (0, 0, 0))
+        delta = tuple(n - old for n, old in zip(counts, self._reported_counts))
+        self._reported_counts = counts
+        self._total_counts = tuple(n + d for n, d in zip(self._total_counts, delta))
+        if delta[1] or delta[2]:
+            log("output_xrun", level=logging.WARNING, underflows=delta[1], overflows=delta[2],
+                total_underflows=self._total_counts[1], total_overflows=self._total_counts[2],
+                total_callbacks=self._total_counts[0])
+
+    def _stream_changed(self, stream: Stream | None) -> None:
+        """Service thread only. Closing has joined the callback, so its final counts survive."""
+        if stream is None:
+            self._report_status()
+            log("output_summary", callbacks=self._total_counts[0],
+                underflows=self._total_counts[1], overflows=self._total_counts[2],
+                render_failures=self._render_failures)
+        self._diagnostic_stream = stream
+        self._reported_counts = (0, 0, 0)
+        if stream is not None:
+            latency = getattr(stream, "latency", None)
+            log("output_timing", sample_rate=stream.samplerate, channels=stream.channels,
+                block_frames=BLOCK_FRAMES, requested_latency_ms=OUTPUT_LATENCY_S * 1000,
+                actual_latency_ms=latency * 1000 if latency is not None else None)
 
     def _fill(self, outdata: np.ndarray) -> None:
         """The stream's callback, on PortAudio's thread."""
