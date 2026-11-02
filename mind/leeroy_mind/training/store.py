@@ -166,10 +166,12 @@ def track_rows(conn, pull_id):
     return conn.execute("SELECT * FROM tg_track WHERE pull=? ORDER BY who,entry", (pull_id,)).fetchall()
 
 
-def set_checks(conn, pull_id, failures, causes, *, deaths, failed, version):
+def set_checks(conn, pull_id, failures, causes, *, deaths, failed, version, complete=False, coverage=()):
     failures, causes = [_row(f) for f in failures], tuple(causes)
+    coverage = tuple(coverage)
     keys = [(f["kind"], f["key"], f["guid"]) for f in failures]
-    if len(set(keys)) != len(keys) or type(version) is not int or version < 1:
+    if (len(set(keys)) != len(keys) or type(version) is not int or version < 1
+            or type(complete) is not bool or any(type(reason) is not str for reason in coverage)):
         raise ValueError("invalid check result")
     with conn:
         old = conn.execute("SELECT checks_version FROM tg_pull WHERE id=?", (pull_id,)).fetchone()
@@ -194,18 +196,22 @@ def set_checks(conn, pull_id, failures, causes, *, deaths, failed, version):
                              (*key, f["count"], f["deaths"], f["damage_share"]))
         conn.executemany("UPDATE tg_death SET cause=? WHERE id=?",
                          [(cause, row["id"]) for row, cause in zip(detail, causes)])
-        conn.execute("UPDATE tg_pull SET deaths=?,failed_mechanics=?,checks_version=?,score=NULL WHERE id=?",
-                     (deaths, failed, version, pull_id))
+        conn.execute("UPDATE tg_pull SET deaths=?,failed_mechanics=?,checks_version=?,checks_complete=?,"
+                     "checks_coverage=?,score=NULL,score_basis='unknown' WHERE id=?",
+                     (deaths, failed, version, int(complete), _json(coverage), pull_id))
 
 
-def set_score(conn, pull_id, score):
+def set_score(conn, pull_id, score, *, basis="unknown"):
     # This is the death/mechanic/duration pull score, not a damage/DPS score.
     # Producers must gate each damage-derived mechanic/spec metric on its basis;
     # requested_pre_ai and unknown are not actual damage or taken-health loss.
     if score is not None and not _finite(score):
         raise ValueError("score must be finite")
+    if basis not in {"unknown", "deaths_time", "mechanics_deaths_time"}:
+        raise ValueError("unknown score basis")
     with conn:
-        conn.execute("UPDATE tg_pull SET score=? WHERE id=? AND scoreable=1", (score, pull_id))
+        conn.execute("UPDATE tg_pull SET score=?,score_basis=? WHERE id=? AND scoreable=1",
+                     (score, basis if score is not None else "unknown", pull_id))
 
 
 def prune_tracks(conn, before_ms):
