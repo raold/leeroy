@@ -36,6 +36,7 @@ inline std::vector<uint32> CastMembers()
     return {guids.begin(), guids.end()};
 }
 inline uint32 HumanGuid() { return LeeroyModule::Instance().HumanGuid(); }
+inline bool GuildEnabled() { return LeeroyModule::Instance().Enabled(); }
 inline bool KeepCast() { return LeeroyModule::Instance().Config().keepCast; }
 
 inline Player* FindOnline(uint32 low)
