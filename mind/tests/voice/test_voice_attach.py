@@ -45,13 +45,13 @@ def test_attach_starts_nothing(tmp_path, clock, live_guard, monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: spawned.append(a))
     app = make_app(tmp_path, clock)
     assert app.voice.cfg.enabled is False
-    assert app._background == [] and not spawned and not live_guard.hits
+    assert app._background == [app.nightly.run_forever] and not spawned and not live_guard.hits
     assert app.voice.run_id == f"{int(clock.now()):x}"
 
 
 def test_enabled_registers_background(tmp_path, clock):
     app = make_app(tmp_path, clock, "[voice]\nenabled = true\nport = 7999\n")
-    assert len(app._background) == 1
+    assert app._background == [app.nightly.run_forever, app.voice._serve]
 
 
 def test_snapshot_order(tmp_path, clock):
@@ -274,7 +274,7 @@ def test_serve_starts_the_client_when_ensure_service_fails(tmp_path, clock, capl
 def test_bad_voice_config_leaves_the_mind_running(tmp_path, clock, caplog):
     with caplog.at_level("WARNING"):
         app = make_app(tmp_path, clock, '[voice]\nenabled = true\nhost = "0.0.0.0"\n')
-    assert app.voice.cfg == VoiceCfg() and app._background == []
+    assert app.voice.cfg == VoiceCfg() and app._background == [app.nightly.run_forever]
     assert any("voice_config_invalid" in r.getMessage() for r in caplog.records)
 
 

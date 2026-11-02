@@ -544,7 +544,9 @@ def test_app_exposes_extension_attributes(tmp_path, clock):
                 assert isinstance(getattr(app, name), kind), name
             assert app.cfg.talk.chattiness == 4 and app.data_dir == tmp_path
             assert app.clock is clock and isinstance(app.llm, FakeLLM)
-            assert app.extractor is not None and app.arbiter is None
+            from leeroy_mind.nightly.gpu import GpuArbiter, NullAdmin
+            assert app.extractor is not None and isinstance(app.arbiter, GpuArbiter)
+            assert isinstance(app.arbiter.admin, NullAdmin)
             for hook in ("register_event_handler", "register_connection_hook",
                          "register_offline_hook", "register_background", "handle", "origin_of"):
                 assert callable(getattr(app, hook)), hook

@@ -32,6 +32,7 @@ import os
 import random
 import re
 import statistics
+from dataclasses import replace
 from pathlib import Path
 from typing import Awaitable, Callable, Literal
 
@@ -60,6 +61,7 @@ from leeroy_mind.talk.raid import RaidState
 from leeroy_mind.talk.turns import TurnKind
 from leeroy_mind.talk.world import WorldView, looks_like_bot_command
 from leeroy_mind.voice.attach import attach_voice
+from leeroy_mind.nightly.wiring import attach as attach_nightly
 from leeroy_mind.voice.heard import is_command
 
 log = logging.getLogger("leeroy_mind.app")
@@ -325,6 +327,8 @@ class MindApp:
     def __init__(self, cfg: MindConfig, data_dir: Path, *, llm: LLMClient | None = None,
                  clock: Clock | None = None, rng_seed: int | None = None):
         self.cfg = cfg
+        self._runtime_url = cfg.ollama.url
+        self._runtime_embedding = cfg.models.embedding
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.clock: Clock = clock or SystemClock()
@@ -364,6 +368,7 @@ class MindApp:
         self.models_seen: set[str] | None = None  # what the last model check listed
         self._model_ready = self._model_known = False  # the silent latch (check_model)
         self._handlers: dict[str, list[Callable[[Event], Awaitable[None]]]] = {}
+        self._before_handlers: dict[str, list[Callable[[Event], Awaitable[None]]]] = {}
         self._connection_hooks: list[Callable[[bool], Awaitable[None]]] = []
         self._offline_hooks: list[Callable[[], Awaitable[None]]] = []
         self._background: list[Callable[[], Awaitable[None]]] = []
@@ -391,17 +396,23 @@ class MindApp:
             log_event("threads_reclaimed", threads=orphans)
         # Extensions attach below, one line each: P1c's self.nightly = attach(self), then
         # P1d's self.guild = install(self).
+        self.nightly = attach_nightly(self)
         self.voice = attach_voice(self)
 
     # -- extension points --------------------------------------------------------------------
 
     def register_event_handler(self, type_name: str,
-                               handler: Callable[[Event], Awaitable[None]]) -> None:
+                               handler: Callable[[Event], Awaitable[None]], *, before: bool = False) -> None:
         """Awaited after the app's own row for every event of that type it receives (echoes
         and replayed events included, see is_backlog; ack and pong never arrive). One that
         raises is logged and the others still run. Once stop() has begun, events are only
-        recorded and no handler runs."""
-        self._handlers.setdefault(type_name, []).append(handler)
+        recorded and no handler runs. before=True is reserved for short presence hooks
+        that must preempt background work before session startup can await a model;
+        those hooks see no persisted event row yet."""
+        if before and type_name not in ("hello", "login", "logout"):
+            raise ValueError("before handlers are only for presence events")
+        registry = self._before_handlers if before else self._handlers
+        registry.setdefault(type_name, []).append(handler)
 
     def register_connection_hook(self, hook: Callable[[bool], Awaitable[None]]) -> None:
         """Called with True when the bridge connects and False when it drops."""
@@ -626,18 +637,24 @@ class MindApp:
 
     async def _on_connection(self, up: bool) -> None:
         log_event("bridge_connected" if up else "bridge_disconnected")
+        if not up:
+            # The scheduler starts its offline grace here too. A stale online world
+            # must not keep scheduling live talk after the bridge is gone; hello
+            # restores presence without closing/reopening the persisted session.
+            self.world.human_online = False
         await self._call_hooks("connection", self._connection_hooks, up)
 
     # -- the dispatch ------------------------------------------------------------------------
 
     async def handle(self, ev: Event) -> None:
-        """One bridge event: the app's row, then the handlers registered for its type."""
+        """Presence preemption, the app's row, then ordinary registered handlers."""
         if self._closed:
             return
         name = event_type(ev)
         if self._stopping:
             self._record_only(ev, name)
             return
+        await self._dispatch_handlers(ev, name, self._before_handlers)
         try:
             if await self._row(ev, name) is False:
                 return  # ignored outright (C27): no handler sees it either
@@ -645,7 +662,10 @@ class MindApp:
             raise
         except Exception:
             log.exception("event_failed: type=%s", name)
-        for handler in list(self._handlers.get(name, ())):
+        await self._dispatch_handlers(ev, name, self._handlers)
+
+    async def _dispatch_handlers(self, ev, name, registry):
+        for handler in list(registry.get(name, ())):
             try:
                 await handler(ev)
             except asyncio.CancelledError:
@@ -693,7 +713,7 @@ class MindApp:
                 self.raid.on_boss(ev, now)
             if isinstance(ev, _MEMORY_EVENTS):
                 self._memory_queue.put_nowait((ev, event_id, at))
-            if not backlog:
+            if not backlog and self.world.human_online:
                 await self.engine.on_event(ev, now)
 
     async def _on_hello(self, ev: Hello, now: float) -> None:
@@ -796,6 +816,11 @@ class MindApp:
         except ConfigError as e:
             log.warning("config_invalid: kept the running config: %s", e)
             return False
+        if (cfg.ollama.url, cfg.models.embedding) != (self._runtime_url, self._runtime_embedding):
+            log_event("config_restart_required", level=logging.WARNING,
+                      fields=["ollama.url", "models.embedding"])
+            cfg = replace(cfg, ollama=replace(cfg.ollama, url=self._runtime_url),
+                          models=replace(cfg.models, embedding=self._runtime_embedding))
         changed = cfg.models.live != self.cfg.models.live
         self.cfg = cfg
         self.engine.apply_config(cfg)
@@ -908,7 +933,7 @@ class MindApp:
         self._loops = {
             "bridge": loop.create_task(self.bridge.run(), name="mind-bridge"),
             "ticker": loop.create_task(self._ticker(), name="mind-ticker"),
-            "extraction": loop.create_task(self.extractor.run(self._extract_queue),
+            "extraction": loop.create_task(self._extract_worker(),
                                            name="mind-extraction"),
             "memories": loop.create_task(self._memory_worker(), name="mind-memories"),
             "health": loop.create_task(self._health(), name="mind-health"),
@@ -959,7 +984,10 @@ class MindApp:
             await self.clock.sleep(TICK_S)
             now = self.clock.now()
             try:
-                await self.engine.tick(now)
+                # The night may own the reflection model while he is offline. Ticking
+                # deferred raid cheers can otherwise queue a new live-model request.
+                if self.world.human_online:
+                    await self.engine.tick(now)
             except Exception:
                 log.exception("tick_failed")
             try:
@@ -972,6 +1000,33 @@ class MindApp:
                 if self._embed_task is None or self._embed_task.done():
                     self._embed_task = asyncio.get_running_loop().create_task(
                         self._embed_pending(), name="mind-embed")
+
+    async def _extract_worker(self) -> None:
+        """Ordinary queued extraction waits for the night's model work and hand-back.
+
+        The nightly threads stage calls the extractor directly. Its per-thread lock joins
+        any ordinary extraction already in flight when the night began; later queued work
+        must not reload the live model during reflection. Keep the normal extractor loop's
+        failure handling and queue accounting, including cancellation during this wait.
+        """
+        app = self
+
+        class Queue:
+            async def get(self):
+                closed = await app._extract_queue.get()
+                try:
+                    await app.nightly.wait_idle()
+                    if (admit := getattr(app.engine, "live_admission", None)) is not None:
+                        await admit()
+                except BaseException:
+                    app._extract_queue.task_done()
+                    raise
+                return closed
+
+            def task_done(self):
+                app._extract_queue.task_done()
+
+        await self.extractor.run(Queue())
 
     async def _embed_pending(self) -> None:
         try:

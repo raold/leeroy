@@ -35,6 +35,8 @@ PROBE_S = 1.0  # ensure_service: how long a probe of the port may take
 TICK_S = 1.0
 RESTORE_S = 1800.0  # seats saved at a clean stop are restored if he is back within this
 STOP_KEY = "voice_stop_seats"  # meta: the seats at the last clean stop
+VOICE_GPU = "voice_gpu"  # independent of the human's live-model lease
+GPU_STOP_S = 2.0  # owned admin tasks must not hold up extension shutdown
 
 
 def voice_data_dir() -> Path:
@@ -64,6 +66,11 @@ class VoiceExtension:
         self.gpu_pins = OllamaPins(app.cfg.ollama.url)
         self._gpu_held = False  # the service's last status.gpu was not "none"
         self._gpu_tasks: set[asyncio.Task] = set()
+        self._gpu_handbacks: set[asyncio.Task] = set()
+        self._gpu_arbiter = None  # retained across disconnect: a lost socket proves no release
+        self._gpu_generation = 0
+        self._gpu_release_generation = -1
+        self._gpu_closing = False
         self._pin_lock = asyncio.Lock()
         if self.comms is not None:
             self.tickers += [self._tick_raid, self.comms.age_out, SpecWatch(self)]
@@ -101,14 +108,41 @@ class VoiceExtension:
         """Each time the service takes VRAM, pin the models beside it; when it lets go, unpin
         them. Run as a task, one at a time and in order, so a hung Ollama never stalls the
         client's receive loop (Ptt, Heard, Played)."""
+        if self._gpu_closing:
+            return
         was, self._gpu_held = self._gpu_held, gpu != "none"
-        if was != self._gpu_held:
-            task = asyncio.create_task(self._pin_job(self._gpu_held))
+        # Take the lease before yielding, so a scheduler tick cannot admit reflection
+        # between this status and the admin task. CPU rendering reports gpu="none".
+        arbiter = getattr(self.app, "arbiter", None)
+        if self._gpu_held and arbiter is not None:
+            self._gpu_arbiter = arbiter
+            if arbiter.hold(VOICE_GPU):
+                task = asyncio.create_task(arbiter.hand_over(), name="voice-gpu-handback")
+                self._gpu_handbacks.add(task)
+                task.add_done_callback(self._handback_done)
+        if was != self._gpu_held or (not self._gpu_held and self._gpu_arbiter is not None
+                                    and self._gpu_release_generation != self._gpu_generation):
+            self._gpu_generation += 1
+            if not self._gpu_held:
+                self._gpu_release_generation = self._gpu_generation
+            task = asyncio.create_task(self._pin_job(self._gpu_held, self._gpu_generation))
             self._gpu_tasks.add(task)
             task.add_done_callback(self._gpu_tasks.discard)
 
-    async def _pin_job(self, pin: bool) -> None:
+    def _handback_done(self, task: asyncio.Task) -> None:
+        self._gpu_handbacks.discard(task)
+        if not task.cancelled() and (exc := task.exception()) is not None:
+            event("voice_handback_failed", level=logging.WARNING, reason=type(exc).__name__)
+
+    async def handback(self) -> None:
+        """Live generation waits for a voice-initiated GPU handback too."""
+        while self._gpu_handbacks:
+            await asyncio.wait(set(self._gpu_handbacks))
+
+    async def _pin_job(self, pin: bool, generation: int) -> None:
         async with self._pin_lock:
+            if self._gpu_closing:
+                return
             models = self.app.cfg.models
             try:
                 if pin:
@@ -119,11 +153,37 @@ class VoiceExtension:
                 raise
             except Exception as exc:
                 event("voice_pin_failed", level=logging.WARNING, reason=type(exc).__name__)
+            # Do not let queued pin work reload the live model after the night was admitted.
+            # A disconnect or newer GPU status supersedes this proof that the GPU was freed.
+            if not pin and generation == self._gpu_generation and not self._gpu_held:
+                arbiter, self._gpu_arbiter = self._gpu_arbiter, None
+                if arbiter is not None:
+                    await arbiter.release_live(VOICE_GPU)
+
+    async def _close_gpu(self) -> None:
+        """Drain owned admin tasks and release the lease only at extension shutdown.
+
+        Disconnect alone retains a held lease: the remote worker could still own VRAM.
+        A reconnect must report gpu="none" to permit a night, or the app must shut down.
+        """
+        self._gpu_closing = True
+        self._gpu_generation += 1
+        tasks = set(self._gpu_tasks) | set(self._gpu_handbacks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            _, pending = await asyncio.wait(tasks, timeout=GPU_STOP_S)
+            if pending:
+                event("voice_gpu_cleanup_timeout", level=logging.WARNING, tasks=len(pending))
+        arbiter, self._gpu_arbiter = self._gpu_arbiter, None
+        if arbiter is not None:
+            await arbiter.release_live(VOICE_GPU)
 
     async def on_connection(self, up: bool) -> None:
         if self.movement is not None:
             self._guard("room_connection", lambda: self.movement.on_connection(up))
         if not up:
+            self._gpu_generation += 1
             self._gpu_held = False
             for task in list(self._gpu_tasks):
                 task.cancel()
@@ -420,6 +480,7 @@ class VoiceExtension:
                 task.cancel()
             await asyncio.gather(*tasks, *self._policy_tasks.values(), return_exceptions=True)
             self._policy_tasks.clear()
+            await self._close_gpu()
             self._guard("shutdown", self.shutdown)
             await self.client.close()
 

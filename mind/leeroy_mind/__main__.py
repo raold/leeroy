@@ -1140,8 +1140,15 @@ def cmd_generate(args, root, store) -> int:
 
 def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     """`make_llm(cfg)` replaces the Ollama client for `run` and `doctor` (tests)."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] in ("nightly", "eval"):
+        from .nightly.cli import eval_main, nightly_main
+        command = nightly_main if argv[0] == "nightly" else eval_main
+        return command(argv[1:], make_llm=make_llm)
     parser = argparse.ArgumentParser(prog="leeroy_mind")
     sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("nightly", help="nightly status, trials, ledger and owner controls")
+    sub.add_parser("eval", help="weekly evaluation on a copied database by default")
     p_init = sub.add_parser("init", help="create the data dir and a default mind.toml")
     _add_data_dir(p_init)
     p_init.set_defaults(func=cmd_init)

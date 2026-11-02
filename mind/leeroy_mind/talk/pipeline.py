@@ -360,6 +360,7 @@ class Pipeline:
     comms = None  # the voice extension's Comms; None: voice off, and nothing here changes
 
     def _init_pipeline(self, now: float) -> None:
+        self.live_admission: Callable[[], Awaitable[None]] | None = None
         self._session_id: int | None = None
         self._altered: dict[int, Altered] = {}  # tonight's state per member
         self._dead: dict[int, float] = {}  # guid -> when they died
@@ -1129,12 +1130,15 @@ class Pipeline:
         self._quiet_fired = False
 
     async def _ask(self, turn: Turn, messages: list[dict]) -> str:
-        model = self.cfg.models.live
         # a bit of several rows keeps the rows a blank line separates (prompts lens, minor 9)
         preset = LIVE_BIT if turn.kind is TurnKind.BIT and turn.max_lines > 1 else LIVE
 
         async def job(llm):
-            return await llm.chat(model, messages, options=dict(preset.options),
+            if self.live_admission is not None:
+                await self.live_admission()
+            if self.scheduler.expired(turn.deadline):
+                raise Expired(turn.deadline)
+            return await llm.chat(self.cfg.models.live, messages, options=dict(preset.options),
                                   think=preset.think, timeout=preset.timeout)
         result = await self.scheduler.submit(turn.priority, job, deadline=turn.deadline)
         return result.text

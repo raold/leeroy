@@ -133,7 +133,12 @@ def test_0003_rebuilds_memory_vec_in_small_chunks_keeping_every_vector(tmp_path,
     finally:
         plain.close()
     assert big > 2_000_000 * len(OWNERS)  # a 2 MB chunk for every owner
-    assert path.stat().st_size < 1_000_000  # 16 vectors a chunk
+    # Later migrations add unrelated tables. Measure this fixture's data above an
+    # empty current schema so voice/nightly metadata cannot mask vector compaction.
+    empty_path = tmp_path / "empty-current.db"
+    empty = open_db(empty_path)
+    empty.close()
+    assert path.stat().st_size - empty_path.stat().st_size < 1_000_000
     conn = open_db(path)
     try:
         mid = Store(conn, clock=SystemClock()).insert_memory(make_mem(
