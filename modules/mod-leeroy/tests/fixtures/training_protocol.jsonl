@@ -1,4 +1,5 @@
 {"name":"telemetry_on","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"telemetry","id":"g1","ts":0,"record":true,"watch":[69291]}}
+{"name":"get_training_cleanup","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"get_training_cleanup","id":"cleanup_request","ts":0,"training_run":"tr_synthetic_1"}}
 {"name":"telemetry_not_bool","kind":"command","valid":false,"error":"bad field: record","msg":{"v":1,"type":"telemetry","id":"g1","ts":0,"record":1}}
 {"name":"telemetry_watch_zero","kind":"command","valid":false,"error":"bad field: watch","msg":{"v":1,"type":"telemetry","id":"g1","ts":0,"record":true,"watch":[0]}}
 {"name":"get_stats_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"get_stats","id":"g2","ts":0}}
@@ -9,8 +10,8 @@
 {"name":"custom_strategy_bad_name","kind":"command","valid":false,"error":"bad field: name","msg":{"v":1,"type":"custom_strategy","id":"g4","ts":0,"name":"frost","class":6,"lines":["often>frost strike!7"]}}
 {"name":"custom_strategy_relevance_too_high","kind":"command","valid":false,"error":"bad field: lines","msg":{"v":1,"type":"custom_strategy","id":"g4","ts":0,"name":"tg_dk_frost_v2","class":6,"lines":["often>frost strike!12"]}}
 {"name":"custom_strategy_quote","kind":"command","valid":false,"error":"bad field: lines","msg":{"v":1,"type":"custom_strategy","id":"g4","ts":0,"name":"tg_dk_frost_v3","class":6,"lines":["often>frost strike'!7"]}}
-{"name":"dc_setting_set","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"dc_setting","id":"g5","ts":0,"leader_guid":1101,"op":"set","key":"WaitAtBoss","centi":100}}
-{"name":"dc_setting_scale","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"dc_setting","id":"g5","ts":0,"leader_guid":1101,"op":"scale","key":"PartyMaxSpread","centi":125}}
+{"name":"dc_setting_set","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"dc_setting","id":"g5","ts":0,"leader_guid":1101,"op":"set","key":"WaitAtBoss","centi":100,"training_run":""}}
+{"name":"dc_setting_scale","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"dc_setting","id":"g5","ts":0,"leader_guid":1101,"op":"scale","key":"PartyMaxSpread","centi":125,"training_run":""}}
 {"name":"dc_setting_scale_range","kind":"command","valid":false,"error":"bad field: centi","msg":{"v":1,"type":"dc_setting","id":"g5","ts":0,"leader_guid":1101,"op":"scale","key":"PartyMaxSpread","centi":160}}
 {"name":"dc_setting_clear","kind":"command","valid":true,"msg":{"v":1,"type":"dc_setting","id":"g5","ts":0,"leader_guid":1101,"op":"clear"}}
 {"name":"dc_setting_bad_key","kind":"command","valid":false,"error":"bad field: key","msg":{"v":1,"type":"dc_setting","id":"g5","ts":0,"leader_guid":1101,"op":"set","key":"PathCenterStep","centi":100}}
@@ -46,5 +47,5 @@
 {"name":"server_stats","kind":"event","valid":true,"msg":{"v":1,"type":"server_stats","ts":0,"id":"g2","mean_ms":41,"last_ms":37,"telemetry":false,"armed":0}}
 {"name":"dummy_result","kind":"event","valid":true,"msg":{"v":1,"type":"dummy_result","ts":0,"id":"g6","guid":1101,"damage":1800000,"ms":180000,"hits":410,"dropped":"","damage_basis":"requested_pre_ai","spell_basis":"best_effort_thread_pair"}}
 {"name":"rivals","kind":"event","valid":true,"msg":{"v":1,"type":"rivals","ts":0,"id":"g7","members":[{"guid":5001,"name":"Testrival1","class":1,"spec_tab":2,"guild_id":3,"ilvl":226,"zone":1637,"team":1}]}}
-{"name":"job_benchmark_done","kind":"event","valid":true,"msg":{"v":1,"type":"job","ts":0,"id":"g8","kind":"benchmark","state":"done","reason":"cleared","stage":"","guids":[5001,5002],"skipped":[],"kills":12,"wipes":2,"instance_id":81,"guid":0,"level":0,"avg_ilvl":0}}
-{"name":"job_benchmark_frontier","kind":"event","valid":true,"msg":{"v":1,"type":"job","ts":0,"id":"g8","kind":"benchmark","state":"done","reason":"frontier","stage":"","guids":[5001,5002],"skipped":[],"kills":2,"wipes":0,"instance_id":81,"guid":0,"level":0,"avg_ilvl":0}}
+{"name":"job_benchmark_done","kind":"event","valid":true,"msg":{"v":1,"type":"job","ts":0,"id":"g8","kind":"benchmark","state":"done","reason":"cleared","stage":"","guids":[5001,5002],"skipped":[],"kills":12,"wipes":2,"instance_id":81,"guid":0,"level":0,"avg_ilvl":0,"training_run":""}}
+{"name":"job_benchmark_frontier","kind":"event","valid":true,"msg":{"v":1,"type":"job","ts":0,"id":"g8","kind":"benchmark","state":"done","reason":"frontier","stage":"","guids":[5001,5002],"skipped":[],"kills":2,"wipes":0,"instance_id":81,"guid":0,"level":0,"avg_ilvl":0,"training_run":""}}

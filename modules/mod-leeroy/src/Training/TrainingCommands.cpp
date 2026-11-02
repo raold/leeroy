@@ -1,12 +1,18 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "TrainingCommands.h"
 #include "TrainingTap.h"
+#include "DummyTrialJob.h"
 #include "LeeroyModule.h"
 #include "LeeroyTrainingProtocol.h"
 #include "UpdateTime.h"
+#include "OfflineRaidJob.h"
+#include "Log.h"
 
 namespace Leeroy::Training
 {
+namespace { bool cleanupPending = false; }
+bool TrainingCleanupPending() { return cleanupPending; }
+void RequireTrainingCleanup() { cleanupPending = true; }
 LeeroyCommandResult HandleTelemetry(nlohmann::json const& message)
 {
     std::string error;
@@ -32,6 +38,19 @@ LeeroyCommandResult HandleGetStats(nlohmann::json const& message)
     return {true, {}};
 }
 
-// No training mutations are enabled in this slice. The journal/lever task fills this before runtime wiring.
-void TrainingOffCleanup() { }
+void TrainingOffCleanup()
+{
+    // Each adapter retains failures for its next bounded tick. No blanket DC clear or default reset of unowned values.
+    cleanupPending = true;
+    EndDummyTrial("training_off");
+    bool const benchmark = Guild::BenchmarkRunning();
+    Guild::EndBenchmark("training_off");
+    bool const offline = Guild::RestoreOfflineTraining();
+    bool const runs = ClearTrainingRuns();
+    bool const bots = RestoreTrainingBots();
+    cleanupPending = !offline || !runs || !bots || DummyTrialRunning() || Guild::BenchmarkRunning()
+        || Guild::OfflineTrainingCleanupPending();
+    if (benchmark)
+        LOG_INFO("module.leeroy", "mod-leeroy: training cleanup benchmark retained={}", Guild::BenchmarkRunning());
+}
 }

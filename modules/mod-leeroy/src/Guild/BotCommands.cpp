@@ -2,8 +2,11 @@
 
 #include "BotCommands.h"
 #include "GuildPorts.h"
+#include "OfflineRaidJob.h"
 #include "LeeroyTrainingProtocol.h"
 #include "LeeroyBotCommandPolicy.h"
+#include "Training/TrainingCommands.h"
+#include "Training/TrainingTap.h"
 
 #include "AiObjectContext.h"
 #include "ChatHelper.h"
@@ -44,6 +47,7 @@ struct BotJob
     BotDoCmd command;
     JobEvent result;
     uint32 guild = 0, human = 0;
+    std::uint64_t trainingEpoch = 0;
     Clock::time_point deadline;
 };
 
@@ -218,6 +222,27 @@ bool BuffFromBags(Player* bot, PlayerbotAI* ai)
 
 std::string_view Apply(Player* bot, BotDoCmd const& command)
 {
+    if (!command.trainingRun.empty())
+    {
+        if (!Training::ScopedBotMutationAllowed(command.action)) return "training_run_ownership";
+        if (command.action == "formation")
+            return Training::ApplyTrainingValue(bot, "formation " + command.param);
+        if (command.action == "co" || command.action == "nc")
+            return Training::ApplyTrainingStrategies(bot, command.param,
+                command.action == "co" ? Training::Engine::Combat : Training::Engine::NonCombat, true);
+    }
+    // Recheck at the mutation boundary: the acknowledged queue can outlive a configuration change.
+    if (Training::IsTierTwo(command.action, command.param))
+    {
+        if (!Training::TierTwoAllowed(Training::TrainingAllowed(), command.action, command.param))
+            return "training_off";
+        if (command.action == "co" || command.action == "nc")
+            return Training::ApplyTrainingStrategies(bot, command.param,
+                command.action == "co" ? Training::Engine::Combat : Training::Engine::NonCombat);
+        if (command.action == "value") return Training::ApplyTrainingValue(bot, command.param);
+        if (command.action == "restore")
+            return Training::RestoreJournaled(bot, command.param) ? std::string_view{} : std::string_view{"failed"};
+    }
     PlayerbotAI* ai = GET_PLAYERBOT_AI(bot);
     bool applied = false;
     if (command.action == "co" || command.action == "nc")
@@ -236,6 +261,7 @@ std::string_view Apply(Player* bot, BotDoCmd const& command)
     {
         auto* value = dynamic_cast<FormationValue*>(ai->GetAiObjectContext()->GetValue<Formation*>("formation"));
         applied = value && value->Load(command.param); // The chat action emits an unnecessary whisper.
+        if (applied) Training::JournalValueReplaced(bot->GetGUID().GetCounter(), "formation");
     }
     else if (command.action == "cast")
         return Cast(bot, ai, command);
@@ -294,9 +320,15 @@ LeeroyCommandResult HandleBotDo(nlohmann::json const& message)
         return Fail(std::move(error));
     if (!GuildEnabled())
         return Fail("disabled");
-    // Protocol foundation only: no training mutation is enabled before its journal and restoration land.
-    // Task4 replaces this admission guard with the configured gate plus unconditional safe undo paths.
-    if (Training::IsTierTwo(command->action, command->param))
+    // Formation is the tier-one alias that can replace a journaled value.
+    if (!command->trainingRun.empty() && !Training::ScopedBotMutationAllowed(command->action))
+        return Fail("training_run_ownership");
+    if (!command->trainingRun.empty() || Training::IsTierTwo(command->action, command->param)
+        || command->action == "formation")
+        if (auto admissionError = AdmitTrainingRun(command->trainingRun, command->guids); !admissionError.empty())
+            return Fail(std::move(admissionError));
+    if (Training::IsTierTwo(command->action, command->param)
+        && !Training::TierTwoAllowed(Training::TrainingAllowed(), command->action, command->param))
         return Fail("training_off");
     for (uint32 guid : command->guids)
         if (!OwnedCast(guid))
@@ -309,8 +341,10 @@ LeeroyCommandResult HandleBotDo(nlohmann::json const& message)
     job.command = std::move(*command);
     job.result.id = message.at("id").get<std::string>();
     job.result.kind = "bot_do";
+    job.result.trainingRun = job.command.trainingRun;
     job.guild = LeeroyModule::Instance().GuildId();
     job.human = HumanGuid();
+    job.trainingEpoch = Training::TrainingTap::Instance().TrainingEpoch();
     job.deadline = Clock::now() + kActionLifetime;
     pending.push_back(std::move(job));
     return {true, {}}; // No player mutation or job publication until TickBotCommands, after the ack is queued.
@@ -328,6 +362,16 @@ void TickBotCommands()
         abort = "cancelled";
     else if (Clock::now() >= job.deadline)
         abort = "timeout";
+    else if (!job.command.trainingRun.empty() && !Training::ScopedBotMutationAllowed(job.command.action))
+        abort = "training_run_ownership";
+    else if (auto error = (!job.command.trainingRun.empty() || Training::IsTierTwo(job.command.action, job.command.param)
+        || job.command.action == "formation") ? AdmitTrainingRun(job.command.trainingRun, job.command.guids) : std::string{};
+        !error.empty())
+        abort = std::move(error);
+    else if (Training::IsTierTwo(job.command.action, job.command.param)
+        && !Training::TierTwoAllowed(false, job.command.action, job.command.param)
+        && job.trainingEpoch != Training::TrainingTap::Instance().TrainingEpoch())
+        abort = "training_off"; // An off/on pair invalidates old mutations even when the final switch is on again.
     job.result.state = abort.empty() ? "done" : "failed";
     job.result.reason = abort;
     for (uint32 guid : job.command.guids)
@@ -350,11 +394,13 @@ void TickBotCommands()
                 catch (std::exception const& e)
                 {
                     LOG_ERROR("module.leeroy", "mod-leeroy: bot_do failed for guid {}: {}", guid, e.what());
+                    if (Training::IsTierTwo(job.command.action, job.command.param)) Training::RequireTrainingCleanup();
                     failure = "failed";
                 }
                 catch (...)
                 {
                     LOG_ERROR("module.leeroy", "mod-leeroy: bot_do failed for guid {}", guid);
+                    if (Training::IsTierTwo(job.command.action, job.command.param)) Training::RequireTrainingCleanup();
                     failure = "failed";
                 }
             }
@@ -365,6 +411,33 @@ void TickBotCommands()
             job.result.skipped.emplace_back(guid, std::move(failure));
     }
     PublishJob(job.result);
+}
+
+bool HasPendingBotCommands(std::vector<std::uint32_t> const& guids)
+{
+    return std::any_of(pending.begin(), pending.end(), [&](auto const& job)
+    {
+        return std::any_of(job.command.guids.begin(), job.command.guids.end(), [&](auto guid)
+            { return std::find(guids.begin(), guids.end(), guid) != guids.end(); });
+    });
+}
+
+bool CancelTrainingBotJobs(std::string const& handle)
+{
+    if (handle.empty()) return true;
+    for (auto it = pending.begin(); it != pending.end();)
+    {
+        if (it->command.trainingRun != handle) { ++it; continue; }
+        auto event = it->result;
+        event.state = "failed";
+        event.reason = "training_run_closed";
+        event.guids.clear();
+        event.skipped.clear();
+        for (auto guid : it->command.guids) event.skipped.emplace_back(guid, event.reason);
+        PublishJob(event); // Failure to publish retains a fenced queue entry for retry.
+        it = pending.erase(it);
+    }
+    return true;
 }
 
 LeeroyCommandResult HandleStockItems(nlohmann::json const& message)

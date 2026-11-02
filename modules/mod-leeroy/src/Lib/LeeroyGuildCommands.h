@@ -83,6 +83,7 @@ struct RaidControlCmd
     std::string action;
     std::uint32_t leaderGuid = 0;
     std::string param;
+    std::string trainingRun;
 };
 struct RemoveFriendCmd { std::uint32_t guid = 0; };
 struct SetSpecCmd
@@ -95,6 +96,7 @@ struct BotDoCmd
     std::vector<std::uint32_t> guids;
     std::string action, param;
     std::uint32_t targetGuid = 0;
+    std::string trainingRun;
 };
 struct StockItemsCmd
 {
@@ -129,6 +131,7 @@ struct JobEvent
     std::vector<std::uint32_t> guids;
     std::vector<std::pair<std::uint32_t, std::string>> skipped;
     std::uint32_t kills = 0, wipes = 0, instanceId = 0, guid = 0, level = 0, avgIlvl = 0;
+    std::string trainingRun;
 };
 nlohmann::json MakeJobEvent(JobEvent const&);
 }

@@ -2,6 +2,7 @@
 
 #include "LeeroyIntegrations.h"
 #include "LeeroyModule.h"
+#include "LeeroyPinSet.h"
 
 #include "ObjectGuid.h"
 #include "RandomPlayerbotMgr.h"
@@ -66,7 +67,7 @@ uint32 LeeroyApplyPins()
     LeeroyConfig const& cfg = module.Config();
     bool const enabled = module.Enabled();
     std::unordered_set<ObjectGuid::LowType> const bots =
-        enabled ? module.Cast().Guids() : std::unordered_set<ObjectGuid::LowType>();
+        enabled ? Leeroy::Pins().Union(module.Cast().Guids()) : std::unordered_set<ObjectGuid::LowType>();
     return sRandomPlayerbotMgr.SetPinnedBots(bots, enabled && cfg.keepCast, enabled && cfg.bringCastOnline);
 }
 
@@ -80,8 +81,9 @@ bool LeeroyInstallOllamaFilter()
         try
         {
             LeeroyModule& module = LeeroyModule::Instance();
-            return !(module.Enabled() && module.ExcludeFromOllama()
-                && module.Cast().IsCast(ObjectGuid(raw).GetCounter()));
+            auto const guid = ObjectGuid(raw).GetCounter();
+            return !Leeroy::SpeakerSuppressed(module.Enabled(), module.ExcludeFromOllama(),
+                module.Cast().IsCast(guid), Leeroy::Pins().Muted(guid));
         }
         catch (...)
         {
