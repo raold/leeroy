@@ -7,7 +7,6 @@ import json
 import re
 from collections import defaultdict
 
-from leeroy_mind.memory.privacy import stricter
 from leeroy_mind.nightly import knowledge
 from leeroy_mind.nightly.evidence import Evidence, load_facts, load_items
 from leeroy_mind.nightly.ground import Claim, check, log_verdicts
@@ -94,45 +93,20 @@ def _snapshot(store, chunk):
     retelling's sharing partner. An old open wrapper around a whisper cannot become an
     open summary merely because the writer only follows direct references.
     """
-    nodes, active, computed = {}, set(), {}
+    # Mood's full walker reuses this module's persisted-node reader. Import it only
+    # at call time to avoid a top-level cycle, and include its paired-chat recall
+    # links and retained lexicon origins in the comparable snapshot.
+    from leeroy_mind.nightly.mood import _evidence_scope_state
 
-    def visit(ref, owner):
-        key = (ref, owner)
-        if key in computed:
-            return computed[key]
-        if ref in active:
-            raise ValueError("cyclic provenance")
-        if ref not in nodes:
-            if len(nodes) >= PROVENANCE_MAX:
-                raise ValueError("oversized provenance")
-            node = _node(store, ref)
-            if node is None:
-                raise ValueError("incomplete provenance")
-            nodes[ref] = node
-        _, children, holder, scope, parties = nodes[ref]
-        active.add(ref)
-        if holder is None:
-            if scope[0] != "open":
-                partners = parties - {owner} if owner in parties else set()
-                scope = (scope[0], next(iter(partners)) if len(partners) == 1 else 0)
-            for child in children:
-                scope = stricter(scope, visit(child, owner))
-        else:
-            for child in children:
-                scope = stricter(scope, visit(child, holder))
-            if holder != owner and scope[0] != "open":
-                scope = (scope[0], holder)
-        active.remove(ref)
-        computed[key] = scope
-        return scope
-
-    try:
-        for m in chunk:
-            if visit(f"memory:{m.id}", m.owner) != (m.scope, m.scope_with):
-                return None
-    except (ValueError, TypeError, KeyError):
-        return None
-    return tuple(sorted((ref, node[0]) for ref, node in nodes.items()))
+    nodes = {}
+    for memory in chunk:
+        state = _evidence_scope_state(store, memory.owner, [f"memory:{memory.id}"])
+        if state is None or state[0] != (memory.scope, memory.scope_with):
+            return None
+        nodes.update(state[1])
+        if len(nodes) > PROVENANCE_MAX:
+            return None
+    return tuple(sorted(nodes.items()))
 
 
 def _unit(week, owner, n):
@@ -188,6 +162,10 @@ def _current(ctx, owner, chunk):
 
 async def summarize(ctx, owner, chunk, n):
     """One checked summary and its archived originals, accepted in one transaction."""
+    # The shared subject/probe policy walks _node through mood; defer this import
+    # until both modules are initialized, just as _snapshot does above.
+    from leeroy_mind.nightly.mood import secret_memory_ok
+
     week = iso_week(ctx.night)
     unit = _unit(week, owner, n)
     with ctx.store.transaction():
@@ -202,6 +180,8 @@ async def summarize(ctx, owner, chunk, n):
         chunk = current
         scope = (chunk[0].scope, chunk[0].scope_with)
         refs = [f"memory:{m.id}" for m in chunk]
+        if not secret_memory_ok(ctx, owner, refs):
+            return  # wait with sources, frozen chunk and checkpoint untouched
         ev = Evidence()
         for item in load_items(ctx.store, refs, ident=ctx.ident):
             ev.add(item)
@@ -212,16 +192,21 @@ async def summarize(ctx, owner, chunk, n):
     user = (f"These are {ctx.name(owner)}'s memories:\n{ev.render(ctx.tz)}\n"
             "Summarize their common thread in at most 200 characters.")
     reply = await ctx.reasoner.json(system, user, SUMMARY_SCHEMA)
+    if not secret_memory_ok(ctx, owner, refs):
+        return  # the probe or subject may have changed during generation
     text = " ".join(strip_wow_markup(reply["text"]).split())
     claim = Claim("summary", owner, text, refs)
     verdict = check(claim, ev, facts)
     vectors = await ctx.embed([text]) if verdict.ok else []
     if verdict.ok and len(vectors) != 1:
         raise ValueError("Summary received an incomplete embedding batch")
+    if not secret_memory_ok(ctx, owner, refs):
+        return  # embedding also awaits; a blocked unit remains retryable
 
     def write(store):
         fresh = _current(ctx, owner, chunk)
-        if fresh is None or _snapshot(store, fresh) != before:
+        if (fresh is None or _snapshot(store, fresh) != before
+                or not secret_memory_ok(ctx, owner, refs)):
             raise ValueError("Summary evidence changed while it was generated")
         now = int(ctx.clock.now())
         log_verdicts(store, ctx.night, STAGE, [(claim, verdict)], now, ctx.ident)

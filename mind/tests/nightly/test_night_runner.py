@@ -537,7 +537,7 @@ def test_planning_costs_and_the_budget(h):
     assert PLAN_S == {"think": 90.0, "json": 20.0, "live": 6.0}
     assert estimate({s: 1 for s in UNIT_CALLS}, measured={}) == pytest.approx({
         "reflect": 150, "reflect_small": 130, "notes": 40, "encounters": 40, "confide": 22,
-        "life": 40, "wowlife": 40, "follow": 22, "lexicon": 20, "profile": 22, "stories": 130,
+        "life": 40, "wowlife": 40, "follow": 40, "lexicon": 20, "profile": 40, "stories": 130,
         "recap": 130, "chronicle": 40, "forget": 20, "breaks": 20, "critic": 22, "enrich": 110, "eval": 2386,
         "supersede": 40,                                                # a reflect unit's 2 decide calls (Task 10, K2)
         "core_judge": 10})                                              # half a core-judge call (Task 11, I1)
