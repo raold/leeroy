@@ -1,0 +1,567 @@
+"""Clock-driven offline raids, with durable command ownership and bounded retries.
+
+Dispatch hooks only enqueue input. The ticker owns bridge, writer and GPU awaits;
+an uncertain remote start is watched, never sent again under another command ID.
+"""
+
+import asyncio
+from collections import deque
+from dataclasses import asdict, replace
+from datetime import datetime, time, timedelta
+import logging
+import math
+from uuid import uuid4
+
+from leeroy_mind.memory.writer import MemoryCandidate
+
+from .comp import NoTankError, candidates_from, choose_leads, select_comp
+from .lines import public_text
+from .loot import _get, _put
+from .protocol import StartOfflineRaid
+from .raid_night import RaidRun
+from .raids import split_key
+from .session import RaidPlan, RaidSession
+from .store import attendance_counts, bench_streaks, last_run, offline_raid_between
+
+
+log = logging.getLogger(__name__)
+HOLDER = "offline_raid"
+MAX_ATTEMPTS = 5
+RETRY_S = 60
+CLEANUP_GRACE_S = 60
+INPUT_LIMIT = 256
+OWNED_KEY = "guild:offline:owned"
+DAY_PREFIX = "guild:offline:day:"
+LOGOUT_KEY = "guild:offline:last-logout"
+
+
+def is_due(now: datetime, *, human_online: bool, last_logout: datetime | None,
+           raided_today: bool, window: tuple[time, time], min_away_min: int,
+           raid_active: bool) -> bool:
+    """Half-open local wall-clock window; equal endpoints mean an empty window.
+
+    Overnight windows are supported. Aware away durations use elapsed UTC time,
+    so the autumn clock repetition does not shorten an hour of actual absence.
+    """
+    if human_online or raided_today or raid_active or min_away_min < 0:
+        return False
+    start, end = window
+    current = now.time().replace(tzinfo=None)
+    if start == end or not (start <= current < end if start < end else current >= start or current < end):
+        return False
+    if last_logout is None:
+        return True
+    if (now.tzinfo is None) != (last_logout.tzinfo is None):
+        return False
+    elapsed = ((now - last_logout).total_seconds() if now.tzinfo is None
+               else now.timestamp() - last_logout.timestamp())
+    return elapsed >= min_away_min * 60
+
+
+def next_raid_key(rotation, last_run: dict[str, float]) -> str:
+    """Never-run first, then oldest; the configured order resolves ties."""
+    keys = []
+    for key in rotation:
+        raid, size, heroic = split_key(key)
+        if raid.key == "voa":
+            raise ValueError("offline raid needs boss-state events")
+        canonical = f"{raid.key}{size}{'h' if heroic else ''}"
+        if canonical not in keys:
+            keys.append(canonical)
+    if not keys:
+        raise ValueError("offline rotation is empty")
+
+    def rank(key):
+        value = last_run.get(key)
+        return (1, value) if type(value) in (int, float) and math.isfinite(value) else (0, 0)
+
+    return min(keys, key=rank)
+
+
+class OfflineRaids:
+    def __init__(self, ports, cfg, armory, rng):
+        self.ports, self.cfg, self.armory, self.rng = ports, cfg, armory, rng
+        self.session = None
+        self.run = None
+        self._listeners = []
+        self._lock = asyncio.Lock()
+        self._inputs = deque()
+        self._votes = []
+        last_logout = _get(ports.conn, LOGOUT_KEY)
+        self._last_logout = (datetime.fromtimestamp(last_logout, tz=ports.clock.local().tzinfo)
+                             if last_logout is not None else None)
+        self._online = ports.human_online()
+        self._lease = False
+        self._owned = _get(ports.conn, OWNED_KEY)
+        if self.active:
+            if self._owned["phase"] == "acquiring":
+                # Dispatch was never reached. A new process owns no previous
+                # arbiter hold and may safely try a fresh acquisition later.
+                self._owned["phase"] = "rejected"
+                self._save()
+            else:
+                # The remote command survives this process, its local model
+                # lease does not. Recover accounting/terminal monitoring only.
+                self._cancel()
+                if self._owned.get("raid_id"):
+                    self._restore_session()
+
+    @property
+    def active(self):
+        return bool(self._owned and self._owned["phase"] not in {"complete", "rejected"})
+
+    def add_listener(self, listener):
+        self._listeners.append(listener)
+
+    def _save(self):
+        with self.ports.conn:
+            _put(self.ports.conn, OWNED_KEY, self._owned)
+
+    def _day(self):
+        return self.ports.clock.local().date().isoformat()
+
+    def _day_state(self, day=None):
+        return _get(self.ports.conn, DAY_PREFIX + (day or self._day())) or {"attempts": 0, "next_try": 0, "blocked": False}
+
+    def _update_day(self, **changes):
+        day = self._owned["day"] if self._owned else self._day()
+        value = self._day_state(day)
+        value.update(changes)
+        with self.ports.conn:
+            _put(self.ports.conn, DAY_PREFIX + day, value)
+
+    def _due(self):
+        now = self.ports.clock.local()
+        begin = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = begin + timedelta(days=1)
+        # Use the boolean helper for the common one-per-day case, count for the
+        # configurable higher quota; both retain local calendar-day boundaries.
+        if self.cfg.offline_raids_per_day == 1:
+            quota = offline_raid_between(self.ports.conn, begin.timestamp(), end.timestamp())
+        else:
+            quota = self.ports.conn.execute("SELECT COUNT(*) FROM guild_raid WHERE offline=1 AND started>=? AND started<?",
+                                            (begin.timestamp(), end.timestamp())).fetchone()[0] >= self.cfg.offline_raids_per_day
+        day = self._day_state()
+        quota = quota or day.get("accepted", 0) >= self.cfg.offline_raids_per_day
+        active = self.ports.conn.execute("SELECT 1 FROM guild_raid WHERE ended IS NULL").fetchone() is not None
+        return (not day["blocked"] and day["attempts"] < MAX_ATTEMPTS
+                and self.ports.clock.now() >= day["next_try"]
+                and is_due(now, human_online=self._online or self.ports.human_online(),
+                           last_logout=self._last_logout, raided_today=quota,
+                           window=tuple(time.fromisoformat(t) for t in self.cfg.offline_window),
+                           min_away_min=self.cfg.offline_min_away_min, raid_active=active))
+
+    def _plan(self):
+        raid, size, heroic = split_key(next_raid_key(self.cfg.offline_rotation, last_run(self.ports.conn)))
+        cast = {g: m for g, m in self.ports.cast().items() if g != self.ports.human_guid}
+        candidates = candidates_from(cast, {g: self.ports.persona(g) for g in cast},
+                                     bench_streaks(self.ports.conn, cast),
+                                     attendance_counts(self.ports.conn, cast, self.ports.clock.now() - 30 * 86400),
+                                     self.ports.away())
+        leads = choose_leads(candidates, requested=None, human_leads=False, human_guid=self.ports.human_guid)
+        comp = select_comp(size, candidates, must_include=[leads.tank_guid, leads.loot_guid],
+                           human_in_raid=False, seed=self.rng.getrandbits(64))
+        if len(comp.members) < size * 4 // 5:
+            raise ValueError("too few available participants")
+        return RaidPlan(raid.key, size, heroic, True, leads.tank_guid, leads.tank_guid,
+                        leads.loot_guid, comp.members, comp.bench, False)
+
+    async def _notify(self, name, *args):
+        for listener in tuple(self._listeners):
+            if name != "on_end" and not self._actions_allowed():
+                return
+            hook = getattr(listener, name, None)
+            if hook is not None:
+                try:
+                    await hook(*args)
+                except Exception:
+                    log.warning("offline raid listener failed: %s", name)
+
+    def _actions_allowed(self):
+        return (self.active and not self._owned["cancelled"] and self._owned.get("terminal") is None
+                and not self._online and not self.ports.human_online())
+
+    async def _release(self):
+        if self._lease:
+            # The arbiter reserves this holder before acquire's first await,
+            # including when hand-over later raises or is cancelled.
+            await self.ports.release_gpu(HOLDER)
+            self._lease = False
+
+    def _cancel(self):
+        if self.active and not self._owned["cancelled"]:
+            self._owned["cancelled"] = True
+            self._owned["cancel_at"] = self.ports.clock.now()
+            self._save()
+
+    async def on_login(self, ev):
+        if ev.guid == self.ports.human_guid and ev.human:
+            self._online = True
+            self._cancel()
+
+    async def on_logout(self, ev):
+        if ev.guid == self.ports.human_guid and ev.human:
+            self._online = False
+            self._last_logout = self.ports.clock.local()
+            with self.ports.conn:
+                _put(self.ports.conn, LOGOUT_KEY, self._last_logout.timestamp())
+
+    def _valid_job(self, ev):
+        if (not self.active or ev.id != self._owned["id"] or ev.kind != "offline_raid"
+                or ev.state not in {"progress", "done", "failed"}
+                or ev.ts and ev.ts / 1000 < self._owned["sent_at"] - 5):
+            return False
+        if ev.state == "progress" and ev.stage not in {"grouping", "teleporting", "starting", "running", "restarting", "tearing_down"}:
+            return False
+        plan = RaidPlan(**self._owned["plan"])
+        raid, _, _ = split_key(f"{plan.raid_key}{plan.size}{'h' if plan.heroic else ''}")
+        members, skipped = set(ev.guids), [s.guid for s in ev.skipped if not s.reason.startswith("cleanup:")]
+        if (any(type(g) is not int for g in (*ev.guids, *skipped)) or len(members) != len(ev.guids)
+                or not members <= set(plan.members) or not set(skipped) <= set(plan.members)
+                or members & set(skipped) or len(set(skipped)) != len(skipped)
+                or type(ev.instance_id) is not int or not 0 <= ev.instance_id <= 0xFFFFFFFF
+                # Encounter-state slots include minibosses (ICC has 13 slots,
+                # versus 12 catalog bosses). Match the game runner's bound.
+                or type(ev.kills) is not int or not 0 <= ev.kills <= 1024
+                or type(ev.wipes) is not int or not 0 <= ev.wipes <= 0xFFFFFFFF
+                or ev.kills and not ev.instance_id):
+            return False
+        accepted = self._owned.get("accepted")
+        if accepted is not None and members != set(accepted):
+            return False
+        bound = self._owned.get("instance")
+        if bound and ev.instance_id != bound:
+            return False
+        if ev.stage in {"starting", "running", "restarting"} and not ev.instance_id:
+            return False
+        usable = ({plan.tank_guid, plan.loot_guid} <= members and len(members) >= plan.size * 4 // 5
+                  and members | set(skipped) == set(plan.members))
+        if (ev.stage in {"teleporting", "starting", "running", "restarting"} or ev.kills) and not usable:
+            return False
+        return True
+
+    async def on_job(self, ev):
+        if not self._valid_job(ev) or self._owned.get("terminal") is not None:
+            return
+        if ev.guids and ev.stage in {"teleporting", "starting", "running", "restarting"}:
+            self._owned["accepted"] = list(ev.guids)
+        if ev.instance_id:
+            self._owned["instance"] = ev.instance_id
+        if ev.stage == "running" and ev.state == "progress":
+            self._owned["running_seen"] = True
+        if ev.state in {"done", "failed"}:
+            self._owned["terminal"] = asdict(ev)
+        self._save()
+        self._enqueue("job", ev)
+
+    def _enqueue(self, kind, ev):
+        item = (kind, ev)
+        if item in self._inputs:
+            return
+        if len(self._inputs) >= INPUT_LIMIT:
+            cosmetic = next((old for old in self._inputs if old[0] in {"death", "dc_status"}), None)
+            if cosmetic is not None:
+                self._inputs.remove(cosmetic)
+            elif kind in {"death", "dc_status"}:
+                return
+            else:
+                self._cancel()
+                log.warning("offline raid event queue is full")
+                return
+        self._inputs.append(item)
+
+    def _event(self, name, ev):
+        if (not self.active or self._owned["cancelled"] or self._owned.get("terminal") is not None
+                or not self._owned.get("running_seen")):
+            return
+        plan = self.session.plan if self.session else RaidPlan(**self._owned["plan"])
+        members = set(self._owned["accepted"] or ())
+        raid, _, _ = split_key(f"{plan.raid_key}{plan.size}{'h' if plan.heroic else ''}")
+        if ev.ts and ev.ts / 1000 < self._owned["sent_at"] - 5:
+            return
+        if name in {"boss", "loot_drop"}:
+            if ev.map != raid.map_id or ev.instance_id != self._owned["instance"]:
+                return
+            if name == "boss" and (ev.state not in {"engaged", "killed", "wiped"} or not members.intersection(ev.members)):
+                return
+        elif name == "death" and (ev.guid not in members or ev.map != raid.map_id):
+            return
+        elif name == "dc_status" and ev.tank_guid != plan.tank_guid:
+            return
+        self._enqueue(name, ev)
+
+    async def on_boss(self, ev):
+        self._event("boss", ev)
+
+    async def on_death(self, ev):
+        self._event("death", ev)
+
+    async def on_dc_status(self, ev):
+        self._event("dc_status", ev)
+
+    async def on_loot_drop(self, ev):
+        self._event("loot_drop", ev)
+
+    async def _start(self):
+        try:
+            plan = self._plan()
+        except (ValueError, NoTankError):
+            with self.ports.conn:
+                state = self._day_state()
+                state["blocked"] = True
+                _put(self.ports.conn, DAY_PREFIX + self._day(), state)
+            return
+        now = self.ports.clock.now()
+        self._owned = dict(id=uuid4().hex, day=self._day(), phase="acquiring", plan=asdict(plan),
+                           sent_at=now, deadline=now + self.cfg.offline_timeout_min * 60,
+                           cancelled=False, cancel_at=None, accepted=None, instance=None,
+                           raid_id=None, started=False, running_seen=False, terminal=None, end_notified=False)
+        self._save()
+        try:
+            self._lease = True
+            result = await self.ports.acquire_gpu(HOLDER)
+            if result is False:
+                self._lease = False  # An explicitly denied acquisition grants no holder.
+                self._owned["phase"] = "rejected"
+                self._save()
+                return
+            if self._online or self.ports.human_online() or self._owned["cancelled"] or not self._due():
+                self._owned["phase"] = "rejected"
+                self._save()
+                await self._release()
+                return
+            self._owned["phase"] = "awaiting_ack"
+            self._owned["sent_at"] = self.ports.clock.now()
+            self._owned["deadline"] = self.ports.clock.now() + self.cfg.offline_timeout_min * 60
+            self._save()
+            state = self._day_state(self._owned["day"])
+            self._update_day(attempts=state["attempts"] + 1, next_try=self.ports.clock.now() + RETRY_S)
+            assistants = tuple(g for g in plan.members if g != plan.tank_guid
+                               and self.ports.persona(g).play.guild_role == "officer")
+            raid, _, _ = split_key(f"{plan.raid_key}{plan.size}{'h' if plan.heroic else ''}")
+            command = StartOfflineRaid(self._owned["id"], raid.map_id, plan.size, plan.tank_guid,
+                                       tuple(g for g in plan.members if g != plan.tank_guid), plan.loot_guid,
+                                       heroic=plan.heroic, assistants=assistants,
+                                       max_wipes=self.cfg.offline_max_wipes,
+                                       max_wipes_per_boss=self.cfg.offline_max_wipes_per_boss,
+                                       timeout_min=self.cfg.offline_timeout_min, min_members=plan.size * 4 // 5)
+            ack = await self.ports.send(command)
+            if ack is None or ack.id != command.id:
+                self._owned["phase"] = "uncertain"
+                self._owned["cancelled"] = True
+                self._update_day(blocked=True)
+                await self._release()
+            elif ack.ok is not True:
+                self._owned["phase"] = "rejected"
+                retry = ack.error in {"driver_pending", "busy"} and not self._owned["cancelled"]
+                self._update_day(blocked=not retry or self._day_state(self._owned["day"])["attempts"] >= MAX_ATTEMPTS)
+                await self._release()
+            else:
+                self._owned["phase"] = "accepted"
+                state = self._day_state(self._owned["day"])
+                self._update_day(accepted=state.get("accepted", 0) + 1)
+            self._save()
+        except asyncio.CancelledError:
+            if self._owned["phase"] == "acquiring":
+                self._owned["phase"] = "rejected"
+            else:
+                self._owned["phase"] = "uncertain"
+                self._update_day(blocked=True)
+            self._cancel()
+            self._save()
+            await self._release()
+            raise
+        except Exception:
+            if self._owned["phase"] == "acquiring":
+                self._owned["phase"] = "rejected"
+            else:
+                self._owned["phase"] = "uncertain"
+                self._owned["cancelled"] = True
+            self._update_day(blocked=True)
+            self._save()
+            await self._release()
+            log.warning("offline raid start could not complete")
+
+    def _restore_session(self):
+        saved = self._owned
+        plan = RaidPlan(**saved["actual_plan"])
+        row = self.ports.conn.execute("SELECT raid_id FROM guild_raid WHERE raid_id=?", (saved["raid_id"],)).fetchone()
+        if row is not None and _get(self.ports.conn, f"guild:raid:{saved['raid_id']}:plan") == asdict(plan):
+            self.session = RaidSession(self.ports, self.cfg, self.armory, plan, saved["raid_id"])
+            self.run = RaidRun(plan, self.session, False, False)
+
+    async def _open(self, ev):
+        if self.session is not None:
+            if self.run is None:
+                self.run = RaidRun(self.session.plan, self.session, False, False)
+            return
+        if self._owned["cancelled"] or self._online or self.ports.human_online():
+            # A late progress packet cannot start local raid activity after a
+            # login/cancellation. Existing attendance remains owned until done.
+            return
+        if self._owned.get("accepted") is None:
+            # Grouping can fail after the runner listed eligible participants
+            # but before AddMember succeeded. Terminal guids alone prove none.
+            return
+        plan = RaidPlan(**self._owned["plan"])
+        accepted = set(ev.guids)
+        if (not {plan.tank_guid, plan.loot_guid} <= accepted
+                or len(accepted) < plan.size * 4 // 5
+                or accepted | {s.guid for s in ev.skipped if not s.reason.startswith("cleanup:")} != set(plan.members)):
+            return
+        actual = replace(plan, members=[g for g in plan.members if g in accepted])
+        self._owned["accepted"] = list(actual.members)
+        self._owned["actual_plan"] = asdict(actual)
+        self._save()
+        before = {r[0] for r in self.ports.conn.execute("SELECT raid_id FROM guild_raid WHERE ended IS NULL")}
+        try:
+            self.session = await RaidSession.open(self.ports, self.cfg, self.armory, actual)
+        except BaseException:
+            for row in self.ports.conn.execute("SELECT raid_id FROM guild_raid WHERE ended IS NULL").fetchall():
+                if row[0] not in before and _get(self.ports.conn, f"guild:raid:{row[0]}:plan") == asdict(actual):
+                    self.session = RaidSession(self.ports, self.cfg, self.armory, actual, row[0])
+                    self.run = RaidRun(actual, self.session, False, False)
+                    self._owned["raid_id"] = row[0]
+                    self._save()
+            raise
+        self._owned["raid_id"] = self.session.raid_id
+        self._save()
+        self.run = RaidRun(self.session.plan, self.session, False, False)
+        if self._owned["cancelled"] or self._online or self.ports.human_online():
+            self.ports.set_lead(None)
+
+    async def _job(self, ev):
+        if ev.guids and (ev.stage in {"teleporting", "starting", "running", "restarting", "tearing_down"}
+                         or ev.state in {"done", "failed"}):
+            await self._open(ev)
+        if ev.instance_id:
+            if self.session is not None and not self.session.bind_instance(ev.instance_id):
+                self._cancel()
+                return
+            self._owned["instance"] = ev.instance_id
+            self._save()
+        if (ev.stage == "running" and ev.state == "progress" and self.run is not None
+                and not self._owned["cancelled"] and not self._online and not self.ports.human_online()
+                and self._owned.get("terminal") is None
+                and not self._owned["started"]):
+            self._owned["started"] = True
+            self._save()
+            await self._notify("on_start", self.run)
+
+    async def _drain(self):
+        while self._inputs:
+            kind, ev = self._inputs[0]
+            if kind == "job":
+                await self._job(ev)
+            elif self.session is not None:
+                actionable = self._actions_allowed()
+                # Preserve accepted kill/wipe accounting across cancellation,
+                # but never start casts, loot transfers or chatter afterward.
+                if kind == "boss" or kind == "loot_drop" and actionable:
+                    await getattr(self.session, "on_" + kind)(ev)
+                if kind in {"boss", "death", "dc_status"} and actionable:
+                    await self._notify("on_" + kind, ev)
+            self._inputs.popleft()
+
+    async def _finish(self):
+        terminal = self._owned.get("terminal")
+        if terminal is None:
+            return
+        # A restart may retain the terminal receipt but not the in-memory inbox.
+        if self.session is None:
+            from .protocol import Job, JobSkip
+            ev = Job(**{**terminal, "guids": tuple(terminal["guids"]),
+                        "skipped": tuple(JobSkip(**s) for s in terminal["skipped"])})
+            await self._job(ev)
+        try:
+            if self.session is not None:
+                session = self.session
+                with self.ports.conn:
+                    self.ports.conn.execute("UPDATE guild_raid SET kills=MAX(kills,?),wipes=MAX(wipes,?) WHERE raid_id=?",
+                                            (terminal["kills"], terminal["wipes"], session.raid_id))
+                session.kills = max(session.kills, terminal["kills"])
+                session.wipes = max(session.wipes, terminal["wipes"])
+                vote = await session.close(public_text(self.ports, terminal["reason"] or terminal["state"])[:160])
+                if vote is not None and vote not in self._votes:
+                    self._votes.append(vote)
+            if self._owned["started"] and not self._owned["end_notified"]:
+                self._owned["end_notified"] = True
+                self._save()
+                await self._notify("on_end", terminal["reason"] or terminal["state"])
+        finally:
+            await self._release()
+        await self._memories()
+        if terminal["state"] == "failed":
+            self._update_day(blocked=True)
+        self._owned["phase"] = "complete"
+        self._save()
+        self.session = self.run = None
+
+    async def _memories(self):
+        if self.session is None:
+            return
+        saved, session = self._owned, self.session
+        key = f"guild:offline:result:{saved['id']}"
+        event_id = _get(self.ports.conn, key)
+        if event_id is None:
+            import json
+            payload = dict(command=saved["id"], raid_id=session.raid_id, map=session.ctx.map_id,
+                           instance_id=session.ctx.instance_id or 0, members=session.plan.members,
+                           kills=session.kills, wipes=session.wipes)
+            with self.ports.conn:
+                row = self.ports.conn.execute("INSERT INTO game_event(ts,type,guid,payload) VALUES (?,?,?,?)",
+                                              (self.ports.clock.now(), "guild_offline_raid", 0, json.dumps(payload)))
+                event_id = row.lastrowid
+                _put(self.ports.conn, key, event_id)
+        raid, _, _ = split_key(f"{session.plan.raid_key}{session.plan.size}{'h' if session.plan.heroic else ''}")
+        text = public_text(self.ports, f"We raided {raid.name} without {self.ports.human().called}: "
+                           f"{session.kills} kills, {session.wipes} wipes.")
+        for guid in session.plan.members:
+            receipt = key + f":memory:{guid}"
+            if _get(self.ports.conn, receipt):
+                continue
+            await self.ports.remember(MemoryCandidate(guid, "event", text, int(self.ports.clock.now()),
+                                      tuple(session.plan.members), 5, 0.4 if session.kills else -0.3,
+                                      "game", (f"event:{event_id}",), raid_id=session.raid_id,
+                                      key=f"offline-raid:{session.raid_id}"))
+            with self.ports.conn:
+                _put(self.ports.conn, receipt, True)
+
+    async def tick(self):
+        if self._lock.locked():
+            return
+        async with self._lock:
+            try:
+                for vote in tuple(self._votes):
+                    if await vote.tick(self.ports.clock.now()):
+                        self._votes.remove(vote)
+                if self.active:
+                    if (self._online or self.ports.human_online()
+                            or self.ports.clock.now() >= self._owned["deadline"]):
+                        self._cancel()
+                    await self._drain()
+                    if self._owned.get("terminal") is not None:
+                        await self._finish()
+                    else:
+                        deadline = self._owned["deadline"]
+                        if self._owned.get("cancel_at") is not None:
+                            deadline = min(deadline, self._owned["cancel_at"])
+                        if self.ports.clock.now() >= deadline + CLEANUP_GRACE_S:
+                            self._cancel()
+                            await self._release()
+                            self._update_day(blocked=True)
+                            # Keep the old command identity until a terminal is
+                            # received; elapsed time is not remote cleanup proof.
+                        elif self.session is not None and not self._owned["cancelled"]:
+                            await self.session.tick()
+                    return
+                if self._due():
+                    await self._start()
+            except asyncio.CancelledError:
+                self._cancel()
+                await self._release()
+                raise
+            except Exception:
+                self._cancel()
+                await self._release()
+                raise
