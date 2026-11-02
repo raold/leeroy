@@ -342,7 +342,7 @@ LEEROY_TEST(Realm_CsvInputBoundsAndHeaders)
     CHECK(!ParseItems(csv, error)); CHECK_EQ(error, "line 4098: too many rows");
 }
 
-LEEROY_TEST(Realm_HeaderOnlyDistributionsParse)
+LEEROY_TEST(Realm_DistributionsParse)
 {
     for (auto const& [file, places] : std::vector<std::pair<std::string, bool>>{
             {"leeroy_places.csv.dist", true}, {"leeroy_items.csv.dist", false}})
@@ -351,7 +351,7 @@ LEEROY_TEST(Realm_HeaderOnlyDistributionsParse)
         CHECK(input.is_open());
         std::string csv((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
         std::string error;
-        if (places) { auto rows = ParsePlaces(csv, error); CHECK(rows && rows->empty()); }
+        if (places) { auto rows = ParsePlaces(csv, error); CHECK(rows && !rows->empty()); }
         else { auto rows = ParseItems(csv, error); CHECK(rows && rows->empty()); }
         CHECK(error.empty());
     }

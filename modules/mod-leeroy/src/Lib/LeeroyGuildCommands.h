@@ -19,12 +19,12 @@ inline constexpr std::array<std::string_view, 12> kCommandTypes = {
     "start_offline_raid", "gear_up", "raid_control", "remove_friend", "set_spec",
     "bot_do", "stock_items"
 };
-inline constexpr std::array<std::string_view, 10> kBotStrategyAdd = {
+inline constexpr std::array<std::string_view, 12> kBotStrategyAdd = {
     "behind", "tank face", "mark rti", "boost", "ss tank", "ss healer",
-    "threat", "dps aoe", "focus heal targets", "wait for attack"
+    "threat", "dps aoe", "focus heal targets", "wait for attack", "bg", "lfg"
 };
-inline constexpr std::array<std::string_view, 5> kBotStrategyRemove = {
-    "behind", "boost", "ss tank", "ss healer", "save mana"
+inline constexpr std::array<std::string_view, 7> kBotStrategyRemove = {
+    "behind", "boost", "ss tank", "ss healer", "save mana", "bg", "lfg"
 };
 inline constexpr std::array<std::string_view, 8> kRtiIcons = {
     "skull", "cross", "square", "moon", "triangle", "diamond", "circle", "star"
@@ -33,7 +33,7 @@ inline constexpr std::array<std::string_view, 9> kFormations = {
     "arrow", "circle", "chaos", "line", "near", "far", "melee", "queue", "shield"
 };
 inline constexpr std::array<std::string_view, 3> kBotSpells = {"bloodlust", "heroism", "rebirth"};
-inline constexpr std::array<std::string_view, 1> kBotActions = {"buff"};
+inline constexpr std::array<std::string_view, 2> kBotActions = {"buff", "go fishing"};
 inline constexpr std::array<std::uint32_t, 6> kStockItems = {43015, 34753, 46377, 46376, 46379, 46378};
 
 struct FormRaidCmd
