@@ -79,7 +79,7 @@ from .hotkey import Press, PttMachine, Release
 from .hotmic import render_hotmic
 from .lexicon import load_lexicon
 from .lock import PID_FILE, ServiceLock, ServiceLocked  # noqa: F401
-from .gpu import CHECK_S, RETRY_S, GpuGuard, close_quietly
+from .gpu import CHECK_S, RESERVE_S, RETRY_S, GpuGuard, close_quietly
 from .logs import log
 from .mixer import SAMPLE_RATE, Mixer
 from .schedule import WHISPER, Line, Plan, PlaybackScheduler
@@ -108,6 +108,12 @@ CPU_FALLBACK_RESERVE_S = 7.0  # bounded worker cleanup (5 s), then Kokoro (2 s)
 CPU_MIN_BUDGET_S = 2.0
 CPU_STARTUP_BUDGET_S = 60.0  # model loading and one discarded warmup together
 CPU_WARMUP_BUDGET_S = 30.0
+CUDA_STARTUP_BUDGET_S = 90.0  # load + warmup + validation, below the 120 s reservation
+CUDA_WARMUP_BUDGET_S = 30.0
+CUDA_POLL_S = 0.25
+CUDA_CLEANUP_S = 6.0  # worker.stop itself has a bounded five-second cleanup
+CUDA_MODEL_GRACE_S = 20.0  # one startup grace before choosing CPU, only for missing models
+CUDA_MISSING_MODELS = frozenset({"live model not loaded", "embedding model not loaded"})
 WOW_WATCH_S = 2.0  # WoW's level is read this often while the mic is open and nothing ducks
 WOW_MOVED = 0.005  # a change this large is no rounding
 DEBUG_KEEP_S = 24 * 3600.0  # M25
@@ -147,6 +153,7 @@ class _Job:
     ended: bool = False  # nothing more of it needs synthesizing
     expressive: object | None = None  # the worker selected when this line arrived
     cpu: bool = False
+    cuda_reservation: object | None = None
 
 
 @dataclass(slots=True, eq=False)
@@ -201,6 +208,15 @@ class VoiceService:
         self._cpu_release_task: asyncio.Task | None = None
         self._expressive_stock: StockCache | None = None
         self._expressive_task: asyncio.Task | None = None
+        self._cuda_ready = False
+        self._cuda_context_ready = None
+        self._cuda_holder = None
+        self._cuda_cancelled: threading.Event | None = None
+        self._cuda_phases: set[asyncio.Task] = set()
+        self._cuda_stop_task: asyncio.Task | None = None
+        self._cuda_missing_context = None
+        self._cuda_missing_until: float | None = None
+        self._cuda_missing_closed = False
         self._expressive_at = 0.0  # no start before this
         self._expressive_why = "not started"  # why it is down, for the log
         self._live_model = self._embed_model = ""
@@ -346,6 +362,12 @@ class VoiceService:
             self._guarded_step(step)
         if self._gpu is not None:
             await self._gpu.settle()
+        if self._cuda_stop_task is not None:
+            await asyncio.gather(self._cuda_stop_task, return_exceptions=True)
+        if self._cuda_phases:
+            _, pending = await asyncio.wait(self._cuda_phases, timeout=CUDA_CLEANUP_S)
+            if pending:
+                log("engine_cleanup_pending", level=logging.WARNING, device="cuda")
         if self._cpu_release_task is not None:
             await asyncio.gather(self._cpu_release_task, return_exceptions=True)
         if sender is not None:
@@ -494,6 +516,7 @@ class VoiceService:
 
     def _on_disconnect(self) -> None:
         self._epoch += 1
+        self._revoke_cuda("mind disconnected")
         self._release_cpu("mind disconnected")
         self._drop_press()
         self._plan(self.scheduler.drop_waiting, "mind_gone")
@@ -522,6 +545,12 @@ class VoiceService:
                 self._on_refused(msg)
 
     def _on_session(self, msg: Session) -> None:
+        if (self._online and msg.online
+                and (msg.human_guid, msg.live_model, msg.embed_model)
+                != (self.occupancy.human, self._live_model, self._embed_model)):
+            self._epoch += 1
+            self._revoke_cuda("session changed")
+            self._release_cpu("session changed")
         self.occupancy.human = msg.human_guid
         self._live_model, self._embed_model = msg.live_model, msg.embed_model
         if msg.online == self._online:
@@ -546,6 +575,7 @@ class VoiceService:
         self._online = False
         self.keys.armed = False
         self._epoch += 1
+        self._revoke_cuda("logout")
         if self.machine.held:
             self.machine.key(False, now)  # its Release goes with the press
         if self._pressing:
@@ -693,11 +723,15 @@ class VoiceService:
                     expires_at=msg.expires_ms / 1000, after=msg.after,
                     segments=[None] * (len(parts) or 1), template=msg.template)
         return (_Job(msg, spec, line, levers.gain_db, spec.speed * levers.speed_mult, parts, spoken,
-                     expressive=expressive, cpu=cpu),
+                     expressive=expressive, cpu=cpu,
+                     cuda_reservation=self._cuda_holder if expressive is not None and not cpu else None),
                 clip)
 
     def _live_expressive(self):
-        if self._expressive is not None and self._expressive.up:
+        if (self._cuda_ready and self._expressive is not None and self._expressive.up
+                and self._cuda_context_ready == self._cuda_context()
+                and self._online and self.server.connected and self._gpu is not None
+                and self._gpu.owns(self._expressive.name, self._cuda_holder)):
             return self._expressive
         if self._cpu_active and self._expressive_cpu is not None and self._expressive_cpu.up:
             return self._expressive_cpu
@@ -762,6 +796,9 @@ class VoiceService:
                         raise EngineError("CPU voice: insufficient time before expiry")
                     return x.synth(job.spoken[index], job.spec, x.levers(job.speak.attitude),
                                    job.speed, timeout_s=budget)
+                if (self._live_expressive() is not x
+                        or job.cuda_reservation is not self._cuda_holder):
+                    raise EngineError("CUDA voice: readiness changed")
                 return x.synth(job.spoken[index], job.spec, x.levers(job.speak.attitude), job.speed)
             except EngineError as e:
                 job.fell_back = True
@@ -1078,6 +1115,12 @@ class VoiceService:
         x, guard = self._expressive, self._gpu
         if x is None or guard is None or self._expressive_task is not None:
             return
+        if self._cuda_phases or (self._cuda_stop_task is not None and not self._cuda_stop_task.done()):
+            return  # an old load/unload must finish before this engine object is reused
+        if (self._cuda_stop_task is not None and not self._cuda_stop_task.cancelled()
+                and self._cuda_stop_task.exception() is not None):
+            self._stop_cuda(x)  # retry owned cleanup; never start over a failed stop
+            return
         if self._cpu_release_task is not None and not self._cpu_release_task.done():
             return
         if self._cpu_active:
@@ -1092,53 +1135,188 @@ class VoiceService:
                 if available is None or available < CPU_MIN_RAM_GIB:
                     self._release_cpu("host memory unavailable")
             return  # keep one device for this session; do not flap back to CUDA
-        if x.name in guard.holders and not x.up:  # it died: nothing is left to unload
-            guard.drop(x.name)
+        if self._cuda_ready and not x.up:
+            self._cuda_ready = False
+            guard.drop(x.name, expected=self._cuda_holder)
             self._expressive_why, self._expressive_at = "the worker stopped", now + RESTART_S
             log("engine_lost", level=logging.WARNING, engine=x.name)
-        elif (self._online and not x.up and now >= self._expressive_at
+        elif (self._online and self.server.connected and not self._cuda_ready
+              and now >= self._expressive_at
               and any(s.engine == x.name for s in self._specs.values())):
             self._expressive_task = asyncio.create_task(self._start_expressive(x, guard))
             self._expressive_task.add_done_callback(self._expressive_settled)
 
+    def _cuda_context(self):
+        return self._epoch, self.occupancy.human, self._live_model, self._embed_model
+
+    def _cuda_current(self, x, context, cancelled) -> bool:
+        return (not cancelled.is_set() and not self._stop.is_set() and self._online
+                and self.server.connected and self._expressive is x
+                and self._cuda_context() == context)
+
+    def _revoke_cuda(self, why: str) -> None:
+        self._cuda_ready = False
+        self._state_stale = True
+        if self._cuda_cancelled is not None:
+            self._cuda_cancelled.set()
+        if self._gpu is not None and self._expressive is not None and self._cuda_holder is not None:
+            self._gpu.release(self._expressive.name, why, expected=self._cuda_holder)
+
+    def _stop_cuda(self, x) -> asyncio.Task:
+        if self._cuda_stop_task is None or self._cuda_stop_task.done():
+            self._cuda_stop_task = asyncio.create_task(asyncio.to_thread(x.stop))
+        return self._cuda_stop_task
+
+    def _defer_cpu_for_missing_models(self, reason: str, context) -> bool:
+        """Give this session one bounded chance to finish loading its chat models.
+
+        Nothing is reserved or loaded during the grace. A real refusal closes it immediately;
+        repeated missing-model answers cannot extend the original monotonic deadline.
+        """
+        if self._cuda_missing_context != context:
+            self._cuda_missing_context = context
+            self._cuda_missing_until = None
+            self._cuda_missing_closed = False
+        if reason not in CUDA_MISSING_MODELS:
+            self._cuda_missing_closed = True
+            return False
+        if self._cuda_missing_closed:
+            return False
+        now = time.monotonic()
+        if self._cuda_missing_until is None:
+            self._cuda_missing_until = now + CUDA_MODEL_GRACE_S
+            log("engine_cpu_deferred", engine=self._expressive.name, seconds=CUDA_MODEL_GRACE_S)
+        remaining = self._cuda_missing_until - now
+        if remaining <= 0:
+            self._cuda_missing_closed = True
+            return False
+        self._expressive_at = self._clock.now() + min(CHECK_S, remaining)
+        return True
+
+    async def _cuda_phase(self, x, guard, holder, context, cancelled, deadline, function):
+        def work():
+            try:
+                if self._cuda_current(x, context, cancelled):
+                    if time.monotonic() >= deadline:
+                        raise EngineError("CUDA voice: startup deadline reached")
+                    function()
+            finally:
+                if cancelled.is_set():
+                    x.stop()  # also covers a thread whose awaiting task was cancelled
+
+        phase = asyncio.create_task(asyncio.to_thread(work))
+        self._cuda_phases.add(phase)
+
+        def settled(task):
+            self._cuda_phases.discard(task)
+            if not task.cancelled():
+                task.exception()  # retrieve any late exception after cancellation/timeout
+
+        phase.add_done_callback(settled)
+        while not phase.done():
+            if (not self._cuda_current(x, context, cancelled) or not guard.owns(x.name, holder)):
+                raise EngineError("CUDA voice: startup revoked")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise EngineError("CUDA voice: startup deadline reached")
+            await asyncio.wait({phase}, timeout=min(CUDA_POLL_S, remaining))
+        return phase.result()
+
     async def _start_expressive(self, x, guard: GpuGuard) -> None:
-        reason = await guard.acquire(x.name, x.need_gb, self._let_expressive_go)
-        if reason is not None:
-            self._expressive_at = self._clock.now() + CHECK_S
-            if reason != self._expressive_why:
-                log("engine_refused", engine=x.name, why=reason)
-            self._expressive_why = reason
-            if self._expressive_cpu is not None:
-                await self._start_cpu_expressive()
-            return
-        self._expressive_why = "loading"
+        context, cancelled = self._cuda_context(), threading.Event()
+        self._cuda_cancelled = cancelled
+        self._cuda_ready = False
+        holder, succeeded, started = None, False, False
+
+        def unload():
+            cancelled.set()
+            if self._cuda_cancelled is cancelled:
+                self._cuda_ready = False
+                self._state_stale = True
+                self._expressive_why, self._expressive_at = "released", self._clock.now() + RETRY_S
+            return asyncio.shield(self._stop_cuda(x))
+
         try:
-            await asyncio.to_thread(x.start)
-        except Exception as e:  # EngineError; anything else may name a path
-            guard.drop(x.name)
-            self._expressive_why, self._expressive_at = _why(e), self._clock.now() + RETRY_S
-            log("engine_start_failed", level=logging.WARNING, engine=x.name, error=_why(e))
-            return
-        if x.name in guard.holders and self._online:
-            guard.confirm(x.name)
-            self._state_stale = True
+            reason = await guard.acquire(x.name, x.need_gb, unload)
+            if reason is not None:
+                if self._cuda_current(x, context, cancelled):
+                    self._expressive_at = self._clock.now() + CHECK_S
+                    if reason != self._expressive_why:
+                        log("engine_refused", engine=x.name, why=reason)
+                    self._expressive_why = reason
+                    if self._expressive_cpu is not None:
+                        if self._defer_cpu_for_missing_models(reason, context):
+                            return
+                        await self._start_cpu_expressive()
+                return
+            self._cuda_missing_context, self._cuda_missing_closed = context, True
+            holder = guard.holders.get(x.name)
+            self._cuda_holder = holder
+            if not self._cuda_current(x, context, cancelled) or not guard.owns(x.name, holder):
+                raise EngineError("CUDA voice: startup revoked")
+            spec = next((s for s in sorted(self._specs.values(), key=lambda s: s.guid)
+                         if s.engine == x.name), None)
+            if spec is None:
+                raise EngineError("CUDA voice: no reference voice")
+            # Leave reservation headroom for the bounded worker cleanup. No lease extension.
+            deadline = time.monotonic() + min(CUDA_STARTUP_BUDGET_S, RESERVE_S - CUDA_CLEANUP_S)
+            self._expressive_why = "loading CUDA"
+            started = True
+            await self._cuda_phase(x, guard, holder, context, cancelled, deadline,
+                                   lambda: x.start(cancelled=cancelled))
+
+            def warm():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise EngineError("CUDA voice: startup deadline reached")
+                x.warmup(spec, timeout_s=min(CUDA_WARMUP_BUDGET_S, remaining))
+
+            for warming in (True, False):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise EngineError("CUDA voice: startup deadline reached")
+                reason = await asyncio.wait_for(guard.validate(x.name, holder), remaining)
+                if time.monotonic() >= deadline:
+                    raise EngineError("CUDA voice: startup deadline reached")
+                if (reason is not None or not self._cuda_current(x, context, cancelled)
+                        or self._specs.get(spec.guid) != spec or not x.up):
+                    raise EngineError("CUDA voice: readiness validation failed")
+                if warming:
+                    self._expressive_why = "warming CUDA"
+                    await self._cuda_phase(
+                        x, guard, holder, context, cancelled, deadline, warm)
+            if not guard.confirm(x.name, expected=holder):
+                raise EngineError("CUDA voice: reservation lost")
+            self._cuda_context_ready, self._cuda_ready = context, True
+            self._expressive_why = "ready CUDA"
+            self._state_stale, succeeded = True, True
             log("gpu_loaded", holder=x.name)
-        else:  # released while it loaded (logout, a split): keep nothing
-            guard.drop(x.name)
-            await asyncio.to_thread(x.stop)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if self._cuda_context() == context:
+                self._expressive_why, self._expressive_at = _why(exc), self._clock.now() + RETRY_S
+            log("engine_start_failed", level=logging.WARNING, engine=x.name, error=_why(exc))
+        finally:
+            if not succeeded:
+                cancelled.set()
+                if holder is None:
+                    candidate = guard.holders.get(x.name)
+                    if candidate is not None and candidate.unload is unload:
+                        holder = candidate  # cancelled just as admission completed
+                if holder is not None:
+                    guard.drop(x.name, expected=holder)
+                if started or holder is not None:
+                    await asyncio.shield(self._stop_cuda(x))
 
     def _expressive_settled(self, task: asyncio.Task) -> None:
+        if self._expressive_task is not task:
+            return
         self._expressive_task = None
         if not task.cancelled() and task.exception() is not None:
             self._expressive_at = self._clock.now() + RETRY_S
             log("engine_start_failed", level=logging.WARNING, engine=self._expressive.name,
                 error=type(task.exception()).__name__)
-
-    async def _let_expressive_go(self) -> None:
-        """GpuGuard's unload: he logged out, a model split or went missing."""
-        self._expressive_why, self._expressive_at = "released", self._clock.now() + RETRY_S
-        await asyncio.to_thread(self._expressive.stop)
-        self._state_stale = True
 
     async def _start_cpu_expressive(self) -> None:
         cpu, epoch = self._expressive_cpu, self._epoch

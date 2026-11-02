@@ -174,12 +174,15 @@ class Stand:
         self.loads = self.stops = 0
         self.said: list[tuple[str, dict]] = []
         self.fail: EngineError | None = None
+        self.warmups = []
 
     @property
     def up(self):
         return self.running
 
-    def start(self):
+    def start(self, *, cancelled=None):
+        if cancelled is not None and cancelled.is_set():
+            raise EngineError("fake startup cancelled")
         self.loads += 1
         self.running = True
 
@@ -189,6 +192,9 @@ class Stand:
 
     def levers(self, attitude):
         return {"attitude": attitude}
+
+    def warmup(self, spec, *, timeout_s=30.0):
+        self.warmups.append((spec.guid, timeout_s))
 
     def synth(self, text, spec, style, speed):
         if self.fail is not None:
@@ -221,11 +227,15 @@ class Rig22(Rig):
 
     async def seat(self, *guids, room=ROOM, **fields):
         """His session, and these members in an expressive voice in his room."""
+        already_loaded = self.expressive.up
         await self.snapshot()
         for guid in guids:
             await self.mind.send(VoiceDef(guid, f"Member{guid}", turbo_spec(guid, **fields)))
             await self.mind.send(Moved(guid, room))
         await eventually(lambda: all(g in self.service._specs for g in guids))
+        if already_loaded:
+            # A fake preloaded worker still needs admission and neutral readiness validation.
+            await until(self, lambda: self.service._cuda_ready)
 
 
 def go(tmp_path, bank, expressive, body, **kw):
@@ -269,17 +279,17 @@ def test_worker_crash_falls_back(tmp_path, fake_bank, script, caplog):
 
     async def body(rig):
         await rig.seat(101)
-        await until(rig, lambda: made.up)
+        await until(rig, lambda: rig.service._live_expressive() is made)
         await rig.mind.send(rig.speak("s1", text="this one will crash it"))
         await rig.sees("s1", "started")
         assert rig.engine.live() == ["this one will crash it"]
-        await until(rig, lambda: not made.up or len(calls_of(tmp_path)) > 1)
-        await until(rig, lambda: made.up)
+        await until(rig, lambda: rig.service._live_expressive() is made
+                    and sum(c["text"] == "Ready." for c in calls_of(tmp_path)) == 2)
         await rig.play_out()
         await rig.mind.send(rig.speak("s2", text="and the next one is fine"))
         await rig.sees("s2", "started")
-        assert [c["text"] for c in calls_of(tmp_path)] == ["this one will crash it",
-                                                           "and the next one is fine"]
+        assert [c["text"] for c in calls_of(tmp_path)] == ["Ready.", "this one will crash it",
+                                                           "Ready.", "and the next one is fine"]
         assert rig.engine.live() == ["this one will crash it"]
     go(tmp_path, fake_bank, made, body)
     assert "this one" not in caplog.text
@@ -635,7 +645,7 @@ def test_the_engine_preempts_a_held_whisper(tmp_path, fake_bank):
         await rig.snapshot()
         await until(rig, lambda: rig.service._stt_name() == "whisper")
         await rig.seat(101)
-        await until(rig, lambda: stand.up)
+        await until(rig, lambda: rig.service._live_expressive() is stand)
         assert rig.service._stt_name() == "parakeet"
         assert "whisper" not in rig.guard.holders and rig.guard.holders[TURBO].confirmed
     go(tmp_path, fake_bank, stand, body, world=w, whisper=whisper, mode="auto")
@@ -646,9 +656,9 @@ def test_a_load_that_outlives_the_session_keeps_nothing(tmp_path, fake_bank):
     release = threading.Event()
     real_start = stand.start
 
-    def slow():
+    def slow(*, cancelled=None):
         assert release.wait(5)
-        real_start()
+        real_start(cancelled=cancelled)
     stand.start = slow
 
     async def body(rig):
@@ -667,7 +677,7 @@ def test_a_failed_start_backs_off_on_kokoro(tmp_path, fake_bank, caplog):
     stand = Stand(up=False)
     tries = []
 
-    def refuse():
+    def refuse(**kwargs):
         tries.append(1)
         raise EngineError(f"{TURBO}: ImportError")
     stand.start = refuse
@@ -729,7 +739,7 @@ def test_kokoro_never_gets_tags_on_a_fall_back(tmp_path, fake_bank):
 def test_a_refused_line_is_plain_kokoro_with_its_own_reading(tmp_path, fake_bank):
     """Engine down at the speak: the line is what a Kokoro member would say, cue words too."""
     stand = Stand(up=False)
-    stand.start = lambda: None
+    stand.start = lambda **kwargs: None
 
     async def body(rig):
         await rig.seat(101)
@@ -756,7 +766,7 @@ def test_the_kokoro_fall_back_keeps_its_levers_once_a_line(tmp_path, fake_bank):
 def test_a_designed_members_stock_clip_plays_with_the_engine_down(tmp_path, fake_bank):
     """A rendered clip needs no GPU: he hears her real voice on a callout."""
     stand = Stand(up=False)
-    stand.start = lambda: None
+    stand.start = lambda **kwargs: None
 
     async def body(rig):
         await rig.seat(101)

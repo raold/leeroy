@@ -116,6 +116,11 @@ def admit(*, ps, free_gb, wow, live, embed, need_gb, margin_gb) -> str | None:
     reason = models_reason(ps, live, embed)
     if reason is not None:
         return reason
+    return _resources_reason(free_gb=free_gb, wow=wow, need_gb=need_gb, margin_gb=margin_gb)
+
+
+def _resources_reason(*, free_gb, wow, need_gb, margin_gb) -> str | None:
+    """Independent resource failures must not be hidden behind a transient missing model."""
     if not wow:
         return "WoW not running"
     if free_gb is None:
@@ -182,13 +187,21 @@ class GpuGuard:
         on a failed load or a normal stop call drop()."""
         async with self._lock:
             s = self._service
-            now = s.clock.now()
+            context = (s.online, s.live_model, s.embed_model)
+            if not s.online:
+                return "offline"
             ps, free, wow = await asyncio.to_thread(self._read)
+            if not s.online or context != (s.online, s.live_model, s.embed_model):
+                return "session changed"
+            now = s.clock.now()
             pending = sum(h.need_gb for h in self.holders.values()
                           if not h.confirmed and h.deadline > now)
             args = dict(ps=ps, wow=wow, live=s.live_model, embed=s.embed_model,
                         margin_gb=self.margin_gb)
             reason = admit(free_gb=free, need_gb=need_gb + pending, **args)
+            if reason in ("live model not loaded", "embedding model not loaded"):
+                reason = (_resources_reason(free_gb=free, wow=wow, need_gb=need_gb + pending,
+                                            margin_gb=self.margin_gb) or reason)
             if reason is not None and free is not None:
                 lower = {n: h for n, h in self.holders.items()
                          if h.priority < priority and h.confirmed}
@@ -199,7 +212,10 @@ class GpuGuard:
                     await self.settle()
                     reason = None
             if reason is None:
-                self.holders[name] = _Holder(unload, need_gb, priority, False, now + RESERVE_S)
+                if not s.online or context != (s.online, s.live_model, s.embed_model):
+                    return "session changed"
+                self.holders[name] = _Holder(unload, need_gb, priority, False,
+                                             s.clock.now() + RESERVE_S)
             return reason
 
     def hold(self, name: str, unload, *, need_gb: float = 0.0, priority: int = 1) -> None:
@@ -207,14 +223,48 @@ class GpuGuard:
         entry. See acquire() for `unload`."""
         self.holders[name] = _Holder(unload, need_gb, priority, True, 0.0)
 
-    def confirm(self, name: str) -> None:
-        """The reserved model is loaded: the card shows it now."""
-        if name in self.holders:
-            self.holders[name].confirmed = True
+    def owns(self, name: str, expected) -> bool:
+        """The exact reservation still belongs to this caller and has not expired."""
+        holder = self.holders.get(name)
+        return (holder is not None and holder is expected
+                and (holder.confirmed or self._service.clock.now() < holder.deadline))
 
-    def drop(self, name: str) -> None:
+    async def validate(self, name: str, expected) -> str | None:
+        """Recheck an owned loaded reservation; its VRAM need is already resident.
+
+        Keep the configured free margin, require both chat models fully on the GPU and WoW
+        running, and compare identity again after the blocking probes.
+        """
+        if not self.owns(name, expected):
+            return "reservation lost"
+        s = self._service
+        context = (s.online, s.live_model, s.embed_model)
+        ps, free, wow = await asyncio.to_thread(self._read)
+        if not self.owns(name, expected):
+            return "reservation lost"
+        if not s.online or context != (s.online, s.live_model, s.embed_model):
+            return "session changed"
+        return admit(ps=ps, free_gb=free, wow=wow, live=s.live_model, embed=s.embed_model,
+                     need_gb=0.0, margin_gb=self.margin_gb)
+
+    def confirm(self, name: str, *, expected=None) -> bool:
+        """Confirm only this reservation when expected is supplied; legacy callers may omit it."""
+        if expected is not None and not self.owns(name, expected):
+            return False
+        if name not in self.holders:
+            return False
+        self.holders[name].confirmed = True
+        return True
+
+    def drop(self, name: str, *, expected=None) -> None:
         """Forget a holder without calling its unload (it has stopped, or never loaded)."""
-        self.holders.pop(name, None)
+        if expected is None or self.holders.get(name) is expected:
+            self.holders.pop(name, None)
+
+    def release(self, name: str, why: str, *, expected=None) -> None:
+        """Release one owned holder, without disturbing other engines or newer reservations."""
+        if expected is None or self.holders.get(name) is expected:
+            self._release([name], why)
 
     def release_all(self, why: str) -> None:
         """Every holder lets go at once (his logout; a model gone). Never raises."""
@@ -298,7 +348,13 @@ class GpuGuard:
             self._report_at = now + REPORT_S
             self._log_budget(ps, free, wow)
         if self.holders:
+            expired = [name for name, h in self.holders.items()
+                       if not h.confirmed and now >= h.deadline]
+            if expired:
+                self._release(expired, "reservation expired")
             reason = models_reason(ps, s.live_model, s.embed_model)
+            if reason is None and not wow:
+                reason = "WoW not running"
             if reason is not None:
                 self.release_all(reason)
                 return

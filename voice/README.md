@@ -42,6 +42,19 @@ stock clips before expecting expressive cache hits; missing stocks use the norma
 path. Regenerate old audition files rather than relabeling them as native. Sound settings are
 loaded at service startup.
 
+CUDA voice loading also performs one discarded neutral warmup before live synthesis becomes
+ready. Loading, warmup and the final residency checks share a 90-second budget within the
+GPU reservation; warmup itself is limited to 30 seconds. During preparation, cached clips and
+Kokoro remain available. GPU status still accounts for a resident worker while it warms, but
+the expressive device becomes available only after warmup and fresh checks confirm that both
+chat models remain fully on the GPU and WoW is running. Logout, disconnect, changed session
+identity, expired admission or lost residency revoke readiness and clean up the owned worker.
+When CPU fallback is enabled, an exact missing-chat-model refusal gets one startup grace of
+at most 20 seconds per session before choosing CPU. Kokoro stays responsive while admission
+is retried. Split models, unreadable probes, insufficient VRAM and WoW absence do not receive
+that grace; repeated missing-model answers never extend it.
+CPU fallback does not automatically promote back to CUDA during the same session.
+
 The default test run needs no audio device, GPU, model file, network or running service. Tests
 that do are marked `engines`, `device`, `windows`, `gpu`, `ollama` or `live` and deselected
 unless asked for (`pytest -m device`).

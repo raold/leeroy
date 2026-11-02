@@ -320,16 +320,34 @@ class ExpressiveEngine:
         worker = self.worker
         return worker is not None and worker.up
 
-    def start(self) -> None:
-        """Until the model has loaded; blocking, so off the event loop. EngineError otherwise."""
+    def start(self, *, cancelled: threading.Event | None = None) -> None:
+        """Load off the event loop, optionally refusing a revoked preparation.
+
+        Publish the exact worker before its final cancellation check. A concurrent stop then
+        either marks that worker stopped before it starts, or cleans up its owned process.
+        The caller still stops an in-progress load when cancellation arrives.
+        """
+        def check_cancelled(worker=None):
+            if cancelled is not None and cancelled.is_set():
+                if worker is not None:
+                    worker.stop()
+                    if self.worker is worker:
+                        self.worker = None
+                raise EngineError(f"{self.name}: startup cancelled")
+
         with self._starting:
+            check_cancelled()
             if self.up:
                 return
             self.stop()
-            self.worker = WorkerProcess(self._python, self._script, args=self._args,
-                                        env=self._env, below_normal=self._below_normal,
-                                        start_s=self._start_s)
-            self.worker.start()
+            check_cancelled()
+            worker = WorkerProcess(self._python, self._script, args=self._args,
+                                    env=self._env, below_normal=self._below_normal,
+                                    start_s=self._start_s)
+            self.worker = worker
+            check_cancelled(worker)
+            worker.start()  # stop() may clear self.worker; keep this captured identity
+            check_cancelled(worker)
 
     def stop(self) -> None:
         worker = self.worker
