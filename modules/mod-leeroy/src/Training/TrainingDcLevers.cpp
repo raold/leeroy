@@ -37,6 +37,7 @@ struct TrainingRun
 {
     uint64 token = 0;
     RunScope scope;
+    RunManifest manifest;
     TrainingOverrides overrides;
     TrainingHold hold;
     std::optional<uint64> dcOffSince;
@@ -65,6 +66,29 @@ RunScope Scope(Player* leader)
     if (!leader || !leader->GetGroup()) return {};
     return {leader->GetMapId(), leader->GetInstanceId(), LeeroyModule::Instance().GuildId(), Guild::HumanGuid(),
         leader->GetGroup()->GetGUID().GetRawValue()};
+}
+
+std::optional<RunManifest> GroupManifest(Player* leader)
+{
+    auto* group = leader ? leader->GetGroup() : nullptr;
+    if (!group || group->GetMemberSlots().size() > kMaxRunMembers) return std::nullopt;
+    std::vector<std::uint32_t> members;
+    members.reserve(group->GetMemberSlots().size());
+    for (auto const& member : group->GetMemberSlots()) members.push_back(member.guid.GetCounter());
+    return RunManifest::Capture(leader->GetGUID().GetCounter(), std::move(members));
+}
+
+bool OwnsBody(uint32 leaderGuid, RunScope const& scope, RunManifest const& manifest, uint32 guid)
+{
+    if (RunOwnsBody(manifest, scope, guid)) return true;
+    auto* leader = Guild::FindOnline(leaderGuid);
+    auto* group = leader ? leader->GetGroup() : nullptr;
+    if (group && RunOwnsBody(manifest, scope, guid, group->GetGUID().GetRawValue(), group->IsMember(Guid(guid)))) return true;
+    // The original group can remain online after its original leader leaves or
+    // disconnects. A new live member still supplies that exact group's identity.
+    auto* member = Guild::FindOnline(guid);
+    group = member ? member->GetGroup() : nullptr;
+    return group && RunOwnsBody(manifest, scope, guid, group->GetGUID().GetRawValue(), group->IsMember(Guid(guid)));
 }
 
 bool SameScope(Player* leader, RunScope const& scope)
@@ -178,6 +202,11 @@ bool Clear(uint32 guid, TrainingRun& run)
 TrainingRun* GetRun(Player* leader)
 {
     auto guid = leader->GetGUID().GetCounter();
+    auto manifest = GroupManifest(leader); // Capture before any newly admitted DC mutation.
+    if (!manifest) return nullptr;
+    auto scope = Scope(leader);
+    auto* job = jobs.Find(guid);
+    if (job && job->scope != scope) return nullptr; // A retained old job cannot authorize a replacement scope.
     auto found = runs.find(guid);
     if (found != runs.end())
     {
@@ -187,12 +216,13 @@ TrainingRun* GetRun(Player* leader)
     }
     if (runs.size() >= 128) return nullptr;
     TrainingRun run;
-    run.scope = Scope(leader);
-    auto* job = jobs.Find(guid);
+    run.scope = scope;
+    run.manifest = std::move(*manifest);
     if (job && job->scope == run.scope)
     {
         run.token = job->token;
         run.jobOwned = true;
+        run.manifest = job->manifest; // Preserve admission membership, including unknown legacy proof.
     }
     else run.token = jobs.NextToken();
     if (!run.token) return nullptr;
@@ -201,15 +231,35 @@ TrainingRun* GetRun(Player* leader)
 }
 #endif
 
+bool TrainingDcOwns(std::uint32_t guid)
+{
+#if LEEROY_HAS_DUNGEON_CLEAR
+    if (!guid) return false;
+    // Settings journals and jobs are separate existing owners. Neither switch-off
+    // nor a missing/replaced player or group is permission to forget their bodies.
+    for (auto const& [leader, run] : runs)
+        if (OwnsBody(leader, run.scope, run.manifest, guid)) return true;
+    if (jobs.Owns(guid)) return true;
+    for (auto leader : jobs.Leaders())
+        if (auto* job = jobs.Find(leader); job && OwnsBody(leader, job->scope, job->manifest, guid)) return true;
+    return false;
+#else
+    (void)guid;
+    return false;
+#endif
+}
+
 std::uint64_t MarkJobRun(std::uint32_t guid)
 {
 #if LEEROY_HAS_DUNGEON_CLEAR
     if (!Guild::GuildEnabled() || !DcModule::IsEnabled()) return 0;
     auto* leader = OwnedLeader(guid);
     if (!leader) return 0;
+    auto manifest = GroupManifest(leader);
+    if (!manifest) return 0;
     auto run = runs.find(guid);
     if (run != runs.end() && (!SameRun(leader, run->second) || run->second.clearing || run->second.jobOwned)) return 0;
-    auto token = jobs.Register(guid, Scope(leader));
+    auto token = jobs.Register(guid, Scope(leader), std::move(*manifest));
     if (token && run != runs.end())
     {
         run->second.token = token;
@@ -390,12 +440,8 @@ void TickDcHolds(std::uint32_t diff)
             ++it;
         }
     }
-    for (auto guid : jobs.Leaders())
-    {
-        if (Guild::OfflineRaidOwns(guid)) continue;
-        if (auto* job = jobs.Find(guid); !runs.contains(guid) && !SameScope(Guild::FindOnline(guid), job->scope))
-            jobs.End(guid, job->token); // Keep the receipt until old overrides have finished restoring.
-    }
+    // Orphaned job receipts remain excluded until exact-token ClearTrainingRun.
+    // A missing leader or changed scope is not evidence of successful teardown.
 #else
     (void)diff;
 #endif
