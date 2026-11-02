@@ -376,7 +376,7 @@ def test_the_migration_backfills_existing_memories(tmp_path, monkeypatch):
         conn.close()
     conn = open_db(path)
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == nightly_version()
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db_mod.latest_version()
         rows = conn.execute("SELECT id, owner, evidence, scope, scope_with FROM memory").fetchall()
         assert {r["id"]: (r["scope"], r["scope_with"]) for r in rows} == want
         for r in rows:
