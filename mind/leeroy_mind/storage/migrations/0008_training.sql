@@ -8,7 +8,8 @@ CREATE TABLE tg_pull (id TEXT PRIMARY KEY, context TEXT NOT NULL, map INTEGER NO
   raid_id INTEGER, card_id INTEGER, arm_id INTEGER, change TEXT NOT NULL DEFAULT '',
   complete INTEGER NOT NULL, scoreable INTEGER NOT NULL, deaths INTEGER NOT NULL DEFAULT 0,
   failed_mechanics INTEGER NOT NULL DEFAULT 0, score REAL, covariates TEXT NOT NULL DEFAULT '{}',
-  checks_version INTEGER NOT NULL DEFAULT 0, received REAL NOT NULL,
+  checks_version INTEGER NOT NULL DEFAULT 0, checks_complete INTEGER NOT NULL DEFAULT 0,
+  checks_coverage TEXT NOT NULL DEFAULT '[]', score_basis TEXT NOT NULL DEFAULT 'unknown', received REAL NOT NULL,
   damage_basis TEXT NOT NULL DEFAULT 'unknown', healing_basis TEXT NOT NULL DEFAULT 'unknown',
   spell_basis TEXT NOT NULL DEFAULT 'unknown', interrupt_basis TEXT NOT NULL DEFAULT 'unknown');
 CREATE INDEX tg_pull_context ON tg_pull (context, start_ms);
