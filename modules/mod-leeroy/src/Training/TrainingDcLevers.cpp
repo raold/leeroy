@@ -13,6 +13,7 @@
 #include "AiObjectContext.h"
 #include "Event.h"
 #include "Group.h"
+#include "GroupMgr.h"
 #include "Log.h"
 #include "Map.h"
 #include "PlayerbotAI.h"
@@ -78,17 +79,17 @@ std::optional<RunManifest> GroupManifest(Player* leader)
     return RunManifest::Capture(leader->GetGUID().GetCounter(), std::move(members));
 }
 
-bool OwnsBody(uint32 leaderGuid, RunScope const& scope, RunManifest const& manifest, uint32 guid)
+bool OwnsBody(RunScope const& scope, RunManifest const& manifest, uint32 guid)
 {
     if (RunOwnsBody(manifest, scope, guid)) return true;
-    auto* leader = Guild::FindOnline(leaderGuid);
-    auto* group = leader ? leader->GetGroup() : nullptr;
-    if (group && RunOwnsBody(manifest, scope, guid, group->GetGUID().GetRawValue(), group->IsMember(Guid(guid)))) return true;
-    // The original group can remain online after its original leader leaves or
-    // disconnects. A new live member still supplies that exact group's identity.
-    auto* member = Guild::FindOnline(guid);
-    group = member ? member->GetGroup() : nullptr;
-    return group && RunOwnsBody(manifest, scope, guid, group->GetGUID().GetRawValue(), group->IsMember(Guid(guid)));
+    if (!guid || !scope.group) return false;
+    // Resolve the saved group itself: both the old leader and a later-added
+    // member can be offline while their exact group still owns that member.
+    // The registry uses a low key, so verify the full saved identity as well.
+    ObjectGuid const savedGroup(scope.group);
+    auto* group = sGroupMgr->GetGroupByGUID(savedGroup.GetCounter());
+    return group && group->GetGUID() == savedGroup
+        && RunOwnsBody(manifest, scope, guid, group->GetGUID().GetRawValue(), group->IsMember(Guid(guid)));
 }
 
 bool SameScope(Player* leader, RunScope const& scope)
@@ -238,10 +239,10 @@ bool TrainingDcOwns(std::uint32_t guid)
     // Settings journals and jobs are separate existing owners. Neither switch-off
     // nor a missing/replaced player or group is permission to forget their bodies.
     for (auto const& [leader, run] : runs)
-        if (OwnsBody(leader, run.scope, run.manifest, guid)) return true;
+        if (OwnsBody(run.scope, run.manifest, guid)) return true;
     if (jobs.Owns(guid)) return true;
     for (auto leader : jobs.Leaders())
-        if (auto* job = jobs.Find(leader); job && OwnsBody(leader, job->scope, job->manifest, guid)) return true;
+        if (auto* job = jobs.Find(leader); job && OwnsBody(job->scope, job->manifest, guid)) return true;
     return false;
 #else
     (void)guid;
