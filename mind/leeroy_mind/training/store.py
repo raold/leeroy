@@ -67,19 +67,33 @@ def _insert(conn, table, row, columns, json_fields=()):
                         [values[k] for k in keys]).lastrowid
 
 
-def put_pull(conn, rec, ctx, roles, *, received, scoreable=None) -> None:
+def put_pull(conn, rec, ctx, roles, *, received, scoreable=None,
+             first_pull_ts=None, consume_unscoreable=None) -> bool:
     """Atomically save one assembled pull. Explicit False supports ledger vetoes.
 
     An explicit True still cannot score incomplete, aborted, or non-fight data.
     Replay keeps the original context and receipt, including pruned tracks.
+    Optional first-observation time and the exact run/context veto receipt are
+    committed with a new pull only. No arbitrary metadata key can be consumed.
+    A veto affects the first successfully committed matching pull. A cached
+    token already consumed or replaced does not veto another retry.
+    Returns whether a new pull was inserted.
     """
     h = rec.header
     eligible = bool(rec.complete and h.outcome != "aborted" and is_raid_fight(h.map, h.boss_id))
     eligible = eligible and scoreable is not False
     context = f"{h.map}:{h.boss_id}:{h.difficulty}"
+    if first_pull_ts is not None and (not _finite(first_pull_ts) or first_pull_ts < 0):
+        raise ValueError("invalid first pull receipt time")
+    if consume_unscoreable is not None:
+        expected = f"tg:unscoreable:{ctx.raid_id}:{context}"
+        if (type(ctx.raid_id) is not int or ctx.raid_id <= 0
+                or type(consume_unscoreable) is not tuple or len(consume_unscoreable) != 2
+                or consume_unscoreable[0] != expected or type(consume_unscoreable[1]) is not str):
+            raise ValueError("invalid training veto receipt")
     with conn:
         if conn.execute("SELECT 1 FROM tg_pull WHERE id=?", (h.id,)).fetchone():
-            return
+            return False
         conn.execute("INSERT INTO tg_pull(id,context,map,instance_id,boss_id,difficulty,size,outcome,"
             "start_ms,end_ms,members,assisted,boss_entry,upd_mean_ms,kind,lead_guid,raid_id,card_id,arm_id,"
             "change,complete,scoreable,deaths,covariates,received,damage_basis,healing_basis,spell_basis,"
@@ -109,6 +123,17 @@ def put_pull(conn, rec, ctx, roles, *, received, scoreable=None) -> None:
                 data["casts"] = rec.casts
             conn.execute("INSERT INTO tg_track(pull,who,entry,data) VALUES (?,?,?,?)",
                          (h.id, who, entry, _json(data)))
+        if first_pull_ts is not None:
+            conn.execute("INSERT INTO meta(key,value) VALUES ('tg_first_pull',?) ON CONFLICT(key) DO NOTHING",
+                         (_json(first_pull_ts),))
+        if consume_unscoreable is not None:
+            # The first INSERT above has acquired the SQLite write transaction.
+            # Applying the veto only when its exact receipt was consumed keeps
+            # a failed pull's cached token from vetoing a second committed pull.
+            consumed = conn.execute("DELETE FROM meta WHERE key=? AND value=?", consume_unscoreable).rowcount
+            if consumed:
+                conn.execute("UPDATE tg_pull SET scoreable=0 WHERE id=?", (h.id,))
+    return True
 
 
 def pull_rows(conn, *, context=None, kinds=None, since_ms=None, scoreable=None):
