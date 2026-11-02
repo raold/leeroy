@@ -274,10 +274,7 @@ class LivePorts:
             return set()
 
     async def say(self, guid, channel, text, *, kind=TurnKind.CALLOUT, to_guid=0):
-        # The guild speech boundary currently supports raid/guild callouts only.
-        if kind is not TurnKind.CALLOUT or to_guid:
-            raise ValueError("guild speech does not support this training turn")
-        return await self.guild.say(guid, channel, text)
+        return await self.guild.say(guid, channel, text, kind=kind, to_guid=to_guid)
 
     def standing_lead(self):
         return self.app.raid.lead()

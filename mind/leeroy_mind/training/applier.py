@@ -130,9 +130,10 @@ def _command_guids(command):
 
 
 class Applier:
-    def __init__(self, ports, ledger, *, state_provider=None):
+    def __init__(self, ports, ledger, *, state_provider=None, application_allowed=None):
         self.ports, self.ledger = ports, ledger
         self.state_provider = state_provider
+        self.application_allowed = application_allowed
         self._lock = asyncio.Lock()
         self._entries: list[_Entry] = []
         self._receipts: dict[int, _Receipt] = {}
@@ -165,6 +166,11 @@ class Applier:
                    for r in self._receipts.values()))
 
     def acting(self, now):
+        try:
+            if self.application_allowed is not None and self.application_allowed() is not True:
+                return False
+        except Exception:
+            return False
         first = self.ledger.first_pull_ts()
         return (self.ports.cfg.act is True and type(first) in (int, float)
                 and type(now) in (int, float) and math.isfinite(first) and math.isfinite(now)
@@ -222,7 +228,8 @@ class Applier:
             return False
         rows = [row for row in self._rows() if row["id"] != exclude]
         try:
-            if any(row["id"] not in self._receipts or not json.loads(row["command"]).get("settled")
+            if any(row["id"] not in self._receipts or not self._receipts[row["id"]].ok
+                   or not json.loads(row["command"]).get("settled")
                    for row in rows):
                 return False
         except (ValueError, TypeError):
@@ -249,6 +256,7 @@ class Applier:
                     or not self._available(state, guids)
                     or any(g not in state.members or asdict(state.members[g]) != receipt.envelope["members"].get(str(g))
                            for g in guids)
+                    or receipt.envelope.get("application", False) and not self.acting(self.ports.clock.now())
                     or receipt.envelope.get("resume_held", False)
                     and not self._resume_allowed(state, receipt.run, exclude=receipt.id)):
                 # No transport call occurred. This local receipt is provably
@@ -309,13 +317,14 @@ class Applier:
             receipt.acked.set()
             self._write_receipt(receipt)
 
-    async def _send(self, run, layer, context, command, inverse, scope, keys=(), *, resume_held=False):
+    async def _send(self, run, layer, context, command, inverse, scope, keys=(), *,
+                    resume_held=False, application=False):
         if not self._matches(scope):
             return _Receipt(0, {}, settled=True, reason="stale")
         command = replace(command, id="tg_" + uuid4().hex)
         state = self._state(scope["run_key"])
         envelope = dict(wire=_encode(command), scope=scope, keys=list(keys), settled=False,
-                        resume_held=resume_held,
+                        resume_held=resume_held, application=application,
                         members={str(g): asdict(state.members[g]) for g in _command_guids(command)
                                  if state is not None and g in state.members})
         ident = store.log_applied(self.ports.conn, run, layer, context, envelope,
@@ -356,7 +365,7 @@ class Applier:
         except (ValueError, TypeError):
             return True
 
-    async def _activate(self, entry):
+    async def _activate(self, entry, *, application=True):
         hello = self._hello
         for applied in entry.commands:
             if not self._matches(entry.scope) or self._pending():
@@ -366,7 +375,7 @@ class Applier:
                     or any(validate_directive(d, state.vocab) for d in entry.directives)):
                 return False, "ownership"
             receipt = await self._send(entry.run, entry.layer, entry.context,
-                applied.command, applied.inverse, entry.scope, (entry.key,))
+                applied.command, applied.inverse, entry.scope, (entry.key,), application=application)
             entry.receipts.append(receipt.id)
             if (hello != self._hello or not self._matches(entry.scope) or not receipt.settled or not receipt.ok
                     or not self._available(self._state(entry.scope["run_key"]), (entry.key[0],))):
@@ -532,7 +541,7 @@ class Applier:
             if top:
                 lower = self._top(entry.run, entry.key)
                 if lower is not None and entry.run not in self._stopped:
-                    ok, reason = await self._activate(lower)
+                    ok, reason = await self._activate(lower, application=False)
                     if not ok or reason == "skipped":
                         self._blocked.add(entry.run)
                         return count
@@ -644,7 +653,7 @@ class Applier:
                 command = replace(compiled[0].command, probe=probes[0])
             except (ValueError, KeyError, TypeError, IndexError):
                 continue
-            receipt = await self._send(run, "standing", context, command, None, self._scope(state))
+            receipt = await self._send(run, "standing", context, command, None, self._scope(state), application=True)
             if receipt.settled and receipt.ok and hello == self._hello and self._matches(self._scope(state)):
                 store.mark_undone(self.ports.conn, [receipt.id], self.ports.clock.now())
                 self._primed.add((state.connection_epoch, name))
@@ -833,7 +842,8 @@ class Applier:
             if (provider is not self.state_provider or not self._matches(self._scope(state))
                     or not self._available(self._state(state.run_key), (tank,))):
                 return False
-            receipt = await self._send(run, "standing", "0:0:0", command, inverse, self._scope(state))
+            receipt = await self._send(run, "standing", "0:0:0", command, inverse, self._scope(state),
+                                       application=applying)
             if receipt.settled and receipt.ok and not applying:
                 store.mark_undone(self.ports.conn, [receipt.id], self.ports.clock.now())
             return receipt.settled and receipt.ok

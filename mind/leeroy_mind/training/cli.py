@@ -14,6 +14,7 @@ from leeroy_mind.config import ConfigError
 from .mechanics import BOSS_MECHANICS
 from .report import training_section
 from .service import load_book, rescore_stored
+from . import store
 
 
 def _week():
@@ -57,7 +58,7 @@ def training_main(argv=None):
     parser = argparse.ArgumentParser(prog="leeroy_mind training")
     _add_data_dir(parser)
     subs = parser.add_subparsers(dest="command", required=True)
-    for name in ("status", "gate", "rescore", "report", "spells"):
+    for name in ("status", "gate", "rescore", "report", "spells", "cards", "lessons"):
         sub = subs.add_parser(name)
         _add_data_dir(sub, after_action=True)
         if name == "gate":
@@ -67,6 +68,8 @@ def training_main(argv=None):
         elif name == "spells":
             actions = sub.add_subparsers(dest="action", required=True)
             _add_data_dir(actions.add_parser("check"), after_action=True)
+        elif name in {"cards", "lessons"}:
+            sub.add_argument("--context", required=name == "lessons")
     args = parser.parse_args(argv)
     root = _root(args)
     write = args.command == "rescore" or args.command == "gate" and args.reset
@@ -81,6 +84,19 @@ def training_main(argv=None):
                     result = _gate(conn)
                 elif args.command == "rescore":
                     result = {"rescored": asyncio.run(_rescore(conn, root))}
+                elif args.command == "cards":
+                    fields = "id,context,version,lineage,status,origin,directives,call,assignment,reason,evidence,vetoes,prev_champion,created,changed"
+                    rows = conn.execute("SELECT " + fields + " FROM tg_card"
+                        + (" WHERE context=?" if args.context else "") + " ORDER BY context,version,id LIMIT 200",
+                        (args.context,) if args.context else ()).fetchall()
+                    result = {"cards": [dict(row) for row in rows]}
+                    for row in result["cards"]:
+                        for field in ("directives", "assignment", "evidence", "vetoes"):
+                            row[field] = json.loads(row[field])
+                elif args.command == "lessons":
+                    result = {"context": args.context, "lessons": [dict(row) for row in store.lessons(conn, args.context)]}
+                    for row in result["lessons"]:
+                        row["evidence"] = json.loads(row["evidence"])
                 elif args.command == "spells":
                     async def read():
                         return await asyncio.to_thread(load_book, root)

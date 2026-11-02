@@ -440,3 +440,32 @@ async def test_older_saved_state_without_resurrection_watermark_still_loads_cons
     await recovered.on_resurrect(Resurrect(stamp(ports), 104))
     await recovered.on_boss(boss(ports, run))
     assert len(ports.sent) == 1 and ports.sent[0].param == "bloodlust"
+
+
+@_run_async
+async def test_training_lust_provider_uses_one_shared_pull_receipt(setup):
+    ports, run, calls = await start(setup)
+    calls.lust_held = lambda map_id, boss_id: True
+    await calls.on_boss(boss(ports, run))
+    assert not ports.sent
+    assert await calls.lust(run)
+    assert not await calls.lust(run)
+    assert len(ports.sent) == 1 and ports.sent[0].param == "bloodlust"
+    await calls.on_boss(boss(ports, run, "wiped"))
+    assert not await calls.lust(run)
+    assert len(ports.sent) == 1
+
+
+@_run_async
+async def test_training_pre_call_resolves_encounter_index_from_validated_boss_name(setup):
+    ports, run, calls = await start(setup)
+    seen = []
+    def pre_call(map_id, boss_id):
+        seen.append((map_id, boss_id))
+        return "use the tested formation"
+    calls.pre_call = pre_call
+    ev = DcStatus(stamp(ports), run.plan.tank_guid, True, False,
+                  "STATUS\t0\t36612\tLord Marrowgar\t0\t0\tresting")
+    await calls.on_dc_status(ev)
+    assert seen == [(631, 0)]
+    assert ports.said[-1][2] == "use the tested formation"
