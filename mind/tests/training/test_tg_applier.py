@@ -732,3 +732,100 @@ def test_cleanup_pending_includes_waiting_operation_before_any_journal(fake):
         await fake.applier.end_run(RUN)
         assert not fake.applier.cleanup_pending(RUN)
     run(exercise())
+
+
+def test_resume_held_preserves_installed_card_and_future_hold_until_end_run(fake):
+    async def exercise():
+        effective = {"WaitAtBoss": 0.0, "threat": False}
+        async def server_semantics(command):
+            if isinstance(command, DcSetting):
+                if command.key == "WaitAtBoss" and command.op == "set":
+                    effective["WaitAtBoss"] = command.centi / 100.0
+                elif command.op in {"reset", "clear"}:
+                    effective["WaitAtBoss"] = 0.0
+            elif isinstance(command, BotDo):
+                if command.param == "+threat":
+                    effective["threat"] = True
+                elif command.action == "restore" and command.param in {"threat", "*"}:
+                    effective["threat"] = False
+            elif isinstance(command, RaidControl):
+                assert effective == {"WaitAtBoss": 1.0, "threat": True}
+        fake.hook = server_semantics
+        assert await fake.applier.hold(101)
+        c = card(Directive("threat", "+"))
+        c = replace(c, id=ts.put_card(fake.conn, c))
+        assert await fake.apply(c, members={102: MEMBERS[102]})
+        before, owned = len(fake.sent), {row["id"] for row in fake.open()}
+        layers = tuple(fake.applier._entries)
+        assert await fake.applier.resume_held(101)
+        assert len(fake.sent) == before + 1
+        assert isinstance(fake.sent[-1], RaidControl) and fake.sent[-1].param == "resume"
+        assert {row["id"] for row in fake.open()} == owned
+        assert tuple(fake.applier._entries) == layers
+        assert effective == {"WaitAtBoss": 1.0, "threat": True}
+        assert fake.applier.cleanup_pending(RUN)
+        await fake.applier.end_run(RUN)
+        assert effective == {"WaitAtBoss": 0.0, "threat": False}
+        assert not fake.open() and not fake.applier.cleanup_pending(RUN)
+    run(exercise())
+
+
+@pytest.mark.parametrize("change", ["acting", "holder", "session", "membership", "provider"])
+def test_resume_held_revalidates_authority_at_actual_scheduled_dispatch(fake, change):
+    async def exercise():
+        assert await fake.applier.hold(101)
+        assert await fake.apply(card(Directive("threat", "+")), members={102: MEMBERS[102]})
+        owned = {row["id"] for row in fake.open()}
+        perform = fake.applier._perform
+        async def preempted(receipt, command):
+            if isinstance(command, RaidControl):
+                if change == "acting":
+                    fake.cfg = replace(fake.cfg, act=False)
+                elif change == "holder":
+                    fake.holders[101] = "replacement-owner"
+                elif change == "session":
+                    fake.state = replace(fake.state, session_key="replacement-session")
+                elif change == "membership":
+                    fake.state = replace(fake.state, members={g: m for g, m in MEMBERS.items() if g != 101})
+                else:
+                    fake.applier.state_provider = lambda run: fake.snapshot(run)
+            await perform(receipt, command)
+        fake.applier._perform = preempted
+        assert not await fake.applier.resume_held(101)
+        assert not any(isinstance(c, RaidControl) for c in fake.sent)
+        assert {row["id"] for row in fake.open()} == owned
+        assert fake.applier._entries and fake.applier.cleanup_pending(RUN)
+    run(exercise())
+
+
+@pytest.mark.parametrize("failure", ["missing", "failed_restore"])
+def test_resume_held_refuses_unresolved_or_blocked_mutation(fake, failure):
+    async def exercise():
+        assert await fake.applier.hold(101)
+        if failure == "missing":
+            fake.fail_job["+threat"] = "missing"
+            assert not await fake.apply(card(Directive("threat", "+")), members={102: MEMBERS[102]})
+        else:
+            assert await fake.apply(card(Directive("threat", "+")), members={102: MEMBERS[102]})
+            fake.fail_job["threat"] = "failed"
+            await fake.applier.revert(RUN, "boss")
+        before = len(fake.sent)
+        assert not await fake.applier.resume_held(101)
+        assert len(fake.sent) == before and fake.applier.cleanup_pending(RUN)
+    run(exercise())
+
+
+def test_resume_held_requires_a_confirmed_hold_and_retains_uncertain_resume(fake):
+    async def exercise():
+        assert not await fake.applier.resume_held(101)
+        assert not fake.sent
+        assert await fake.applier.hold(101)
+        fake.fail_ack["resume"] = "dc_refused"
+        assert not await fake.applier.resume_held(101)
+        assert len(fake.open()) == 2
+        resume = next(row for row in fake.open() if json.loads(row["command"])["wire"]["type"] == "RaidControl")
+        assert json.loads(resume["command"])["settled"] is False
+        assert json.loads(resume["inverse"]) is None
+        assert fake.applier.cleanup_pending(RUN)
+        assert not await fake.applier.resume_held(101)
+    run(exercise())
