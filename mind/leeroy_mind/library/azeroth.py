@@ -20,6 +20,9 @@ from .snapshots import (DEFAULT_SNAPSHOT_WORKERS, OfflineSnapshot, _bounded_exec
 _HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
 _FENCE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
 _WORDS = 240
+CONFIG_TEMPLATE_NOTICE = "Configuration template defaults; not active runtime settings."
+_ASSIGNMENT = re.compile(
+    r"^[ \t]*(?P<comment>[#;][ \t]*)?(?P<key>[A-Za-z_][A-Za-z0-9_.:\[\]-]*)[ \t]*=(?P<value>.*)$")
 
 
 class _HTMLText(HTMLParser):
@@ -160,10 +163,133 @@ class _Document:
     revision: str
 
 
+def _assignment_end(lines: list[str], start: int, match: re.Match) -> int:
+    """Locate a literal assignment unit, without evaluating its value or escapes.
+
+    Quoted/bracketed values and explicit backslash continuations stay together.
+    An unclosed value retains the remaining lines rather than losing source text.
+    Commented examples never consume a following uncommented assignment.
+    """
+    quote, brackets = "", []
+    commented = bool(match.group("comment"))
+    for index in range(start, len(lines)):
+        line = lines[index].rstrip("\r\n")
+        if index == start:
+            value = match.group("value")
+        elif commented:
+            continuation = re.match(r"^[ \t]*[#;][ \t]?(.*)$", line)
+            if not continuation and line.strip():
+                return index
+            value = continuation.group(1) if continuation else line
+        else:
+            value = line
+        escaped = False
+        for offset, char in enumerate(value):
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif quote:
+                if char == quote:
+                    quote = ""
+            elif char in "#;" and (offset == 0 or value[offset - 1].isspace()):
+                break
+            elif char in "\"'" and (offset == 0 or value[offset - 1].isspace()
+                                       or value[offset - 1] in "=([{,:"):
+                quote = char
+            elif char in "([{":
+                brackets.append(char)
+            elif char in ")]}":
+                if brackets and brackets[-1] == {")": "(", "]": "[", "}": "{"}[char]:
+                    brackets.pop()
+        if not quote and not brackets and not escaped:
+            return index + 1
+    return len(lines)
+
+
+def _config_pieces(lines: list[str], start: int, end: int):
+    """Word-bound commentary at line boundaries, retaining whitespace verbatim."""
+    first, words = start, 0
+    for index in range(start, end):
+        count = len(lines[index].split())
+        if index > first and words + count > _WORDS:
+            yield first, index
+            first, words = index, 0
+        words += count
+    if first < end:
+        yield first, end
+
+
+def _parse_config(document: _Document, text: str) -> tuple[list[ChunkDraft], SourceFile]:
+    """Partition a template into literal comments/defaults; no Markdown rules apply."""
+    lines = text.splitlines(keepends=True)
+    units, index = [], 0
+    while index < len(lines):
+        match = _ASSIGNMENT.fullmatch(lines[index].rstrip("\r\n"))
+        if match is None:
+            index += 1
+            continue
+        end = _assignment_end(lines, index, match)
+        units.append((index, end, match.group("key"),
+                      "commented" if match.group("comment") else "active"))
+        index = end
+
+    file, chunks, seen = document.file, [], {}
+
+    def add(start, end, section, key="", state="none", assignment_start=None, assignment_end=None):
+        raw = "".join(lines[start:end])
+        piece = CONFIG_TEMPLATE_NOTICE + "\n" + raw
+        digest = hashlib.sha256((section + "\x00" + piece).encode("utf-8")).hexdigest()
+        occurrence = seen.get(digest, 0)
+        seen[digest] = occurrence + 1
+        chunks.append(ChunkDraft(
+            f"acmodules:{file.path}:{digest}:{occurrence}", "documentation",
+            f"Configuration template: {Path(file.path).name}", piece,
+            section=section, url=file.url, license=document.license,
+            ref_ids=(f"acmodules:{file.path}",), source_revision=document.revision,
+            source_path=file.path, source_sha256=file.sha256,
+            metadata={"language": file.language, "archived": file.archived,
+                      "version": file.version, "game_version": "3.3.5", "reference_only": True,
+                      "document_format": "configuration-template", "template_only": True,
+                      "setting_key": key, "assignment_state": state,
+                      "source_line_start": start + 1, "source_line_end": end,
+                      "assignment_line_start": assignment_start,
+                      "assignment_line_end": assignment_end}))
+
+    def notes(start, end, section, key=""):
+        for first, last in _config_pieces(lines, start, end):
+            add(first, last, section, key)
+
+    cursor = 0
+    for start, end, key, state in units:
+        leading = start
+        while leading > cursor:
+            previous = lines[leading - 1].lstrip()
+            if previous.strip() and not previous.startswith(("#", ";")):
+                break
+            leading -= 1
+        notes(cursor, leading, "Template preamble" if cursor == 0 else "Template notes")
+        # Keep the complete value indivisible, even when a long prompt exceeds
+        # the ordinary word target. Earlier commentary can be separate chunks.
+        keep, words = start, sum(len(line.split()) for line in lines[start:end])
+        while keep > leading and words + len(lines[keep - 1].split()) <= _WORDS:
+            keep -= 1
+            words += len(lines[keep].split())
+        notes(leading, keep, key + " (template commentary)", key)
+        add(keep, end, key, key, state, start + 1, end)
+        cursor = end
+    notes(cursor, len(lines), "Template preamble" if not units else "Template notes")
+    added = len(chunks)
+    return chunks, replace(file, chunks=added, status="imported" if added else "empty",
+                           note="" if added else "no visible document text")
+
+
 def _parse_document(document: _Document) -> tuple[list[ChunkDraft], SourceFile]:
     """Pure CPU work; module-level entry point is importable by Windows spawn."""
     file, name = document.file, document.name
     text = document.raw.decode("utf-8-sig")
+    if name == "acmodules" and file.path.lower().endswith(".conf.dist"):
+        return _parse_config(document, text)
     fallback = Path(file.path).stem.replace("-", " ").replace("_", " ")
     if name == "acdoxygen":
         parser = _HTMLText()

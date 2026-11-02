@@ -189,7 +189,9 @@ class OfflineSnapshot:
             suffixes = {".md", ".markdown"} if source in {"acwiki", "acmodules"} else {".html", ".htm"}
             actual = {p.relative_to(self.root).as_posix() for p in self.root.rglob("*")
                       if ".git" not in p.relative_to(self.root).parts
-                      and p.suffix.lower() in suffixes and p.is_file()}
+                      and (p.suffix.lower() in suffixes
+                           or source == "acmodules" and p.name.lower().endswith(".conf.dist"))
+                      and p.is_file()}
             if actual != expected_paths:
                 raise ValueError("inventory does not cover every documentation file")
         elif not {"commands.json", "teleports.json"} <= expected_paths:

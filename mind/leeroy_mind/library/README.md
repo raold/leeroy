@@ -2,7 +2,7 @@
 
 The library combines game references with complete, pinned AzerothCore documentation
 snapshots. Official wiki Markdown uses source `acwiki`, generated API HTML uses
-`acdoxygen`, installed core/module Markdown uses `acmodules`, and installed
+`acdoxygen`, installed core/module Markdown and configuration templates use `acmodules`, and installed
 command/teleport exports use `serverref`. Wiki/module documents have kind
 `documentation`; API, command and teleport records use `api`, `command` and `teleport`.
 
@@ -77,14 +77,16 @@ Each directory contains UTF-8 `manifest.json` with these fields:
 
 The placeholder hashes above must be replaced with 64 lowercase hexadecimal digits.
 Hash the `files` array using UTF-8 JSON with sorted object keys, `ensure_ascii=False`
-and separators `(',', ':')`. Include every Markdown file for `acwiki`/`acmodules` or every HTML
-file for `acdoxygen`, excluding `.git`. Each original URL, relative path, revision,
+and separators `(',', ':')`. Include every `.md`/`.markdown` file for `acwiki`/`acmodules`,
+also every `.conf.dist` template for `acmodules`, or every HTML file for `acdoxygen`,
+excluding `.git`. Live `.conf` files are not documentation inputs. Each original URL, relative path, revision,
 hash, language and archive marker is retained. A declared license requires hashed
 `license_evidence` entries with `path`, `sha256` and `url`; use `unknown` when the
 snapshot does not establish its license. Do not infer the generated API snapshot's
 underlying core commit from its publication date.
 
-For `acmodules`, acquire tracked Markdown from each installed repository into a
+For `acmodules`, acquire tracked Markdown and committed `.conf.dist` template blobs
+from each installed repository into a
 separate subdirectory, retain each repository's original URL and installed revision
 in its file entries, and pin the aggregate manifest to its content inventory. Record
 local modifications explicitly in `version`; an upstream commit URL alone does not
@@ -93,6 +95,15 @@ the upstream revision is unknown and identify the installed files by their hashe
 Keep per-module license evidence; a mixed collection may use global `unknown` rather
 than assigning one module's license to every file. These documents are installed
 source evidence, not proof that every described feature is enabled at runtime.
+
+Configuration templates retain literal comments, whitespace, assignments, disabled
+examples, and unfamiliar syntax; they are never parsed as Markdown or executed.
+Setting keys identify their sections, and complete multiline assignments stay together.
+Every template chunk is labeled as template defaults, not effective runtime settings.
+Do not substitute an installed template with local edits for its committed baseline;
+record the installed hash and modification status separately during acquisition.
+Missing committed baselines are coverage gaps. This import does not read live configs
+or establish that template contents are free of secrets.
 
 `serverref` requires `commands.json` and `teleports.json`, and may inventory extra
 source/export evidence. `command_export.export_commands(sources, command_overrides=(),
