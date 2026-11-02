@@ -51,8 +51,8 @@ def retrieved(monkeypatch, h, *ids):
 
 def probe(h):
     with h.store.transaction():
-        h.store.conn.execute("INSERT INTO probe_run(ts,model,n,leaks,rate) VALUES (?,'live',36,0,0)",
-                            (h.clock.now(),))
+        h.store.conn.execute("INSERT INTO probe_run(ts,model,n,leaks,rate) VALUES (?,?,36,0,0)",
+                            (h.clock.now(), h.LIVE))
 
 
 def secret_memory(h, *, known=True, scope="private"):

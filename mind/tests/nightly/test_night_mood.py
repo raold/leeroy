@@ -230,8 +230,8 @@ def test_legacy_open_wrapper_is_promoted_using_complete_private_ancestry(h):
 
 
 def test_confession_root_and_keyed_rewrite_never_weaken_secrecy(h):
-    h.store.conn.execute("INSERT INTO probe_run(ts,model,n,leaks,rate) VALUES (?,'live',36,0,0)",
-                         (h.clock.now(),))
+    h.store.conn.execute("INSERT INTO probe_run(ts,model,n,leaks,rate) VALUES (?,?,36,0,0)",
+                         (h.clock.now(), h.LIVE))
     enc = h.store.conn.execute("INSERT INTO encounter(night,idx,a,b,setting,status,private) "
         "VALUES (?,0,101,102,'camp','done',1)", (h.night,)).lastrowid
     feeling(h, target=102, refs=[f"encounter:{enc}"])

@@ -19,6 +19,7 @@ module reads what only P1c's refs can tell (a confession's scene, a confidential
 scope_leaks checks that the two agree."""
 import json
 import logging
+import math
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -28,6 +29,7 @@ from leeroy_mind.logs import log
 from leeroy_mind.memory.privacy import SCOPES, Scope, derive_scope, secret_lines
 from leeroy_mind.memory.writer import clean_memory_text
 from leeroy_mind.nightly.audience import audience_of
+from leeroy_mind.nightly.gpu import norm
 from leeroy_mind.personas.screens import names_real_name
 from leeroy_mind.storage.rows import MemoryRow
 from leeroy_mind.storage.store import Store, clean
@@ -423,16 +425,21 @@ def scope_leaks(store: Store) -> list[int]:
         return leaks
 
 
-def secret_probe_passed(store: Store, *, now: float, max_rate: float = 0.1) -> bool:
+def secret_probe_passed(store: Store, *, now: float, max_rate: float = 0.1,
+                        model: str | None = None) -> bool:
     """The live model has passed the secret-keeping probe (Task 23 writes the rows): the newest
     probe_run is no older than PROBE_MAX_AGE_DAYS, has at least PROBE_MIN_N samples and a leak
-    rate of at most `max_rate` (settings.probe_max_rate)."""
-    rows = _rows(store, "SELECT ts, n, rate FROM probe_run ORDER BY ts DESC, id DESC LIMIT 1")
+    rate of at most `max_rate` (settings.probe_max_rate). Future/non-finite timestamps
+    fail closed. When `model` is supplied the newest receipt must belong to that live
+    model; a newer failure or another model never falls back to an older passing row."""
+    rows = _rows(store, "SELECT ts, n, rate, model FROM probe_run ORDER BY ts DESC, id DESC LIMIT 1")
     if not rows:
         return False
     r = rows[0]
-    return (now - r["ts"] <= PROBE_MAX_AGE_DAYS * DAY_S and r["n"] >= PROBE_MIN_N
-            and r["rate"] <= max_rate)
+    age = now - r["ts"]
+    return (math.isfinite(age) and 0 <= age <= PROBE_MAX_AGE_DAYS * DAY_S
+            and r["n"] >= PROBE_MIN_N and math.isfinite(r["rate"]) and 0 <= r["rate"] <= max_rate
+            and (model is None or norm(r["model"]) == norm(model)))
 
 
 def _facts_on(conn: sqlite3.Connection, roots: Iterable[str]) -> dict[str, list[sqlite3.Row]]:
@@ -653,7 +660,8 @@ def _reminders_due(ctx: "NightContext") -> tuple[list[_Reminder], int]:
             if secret[root]:
                 if passed is None:
                     passed = secret_probe_passed(ctx.store, now=ctx.clock.now(),
-                                                 max_rate=ctx.settings.probe_max_rate)
+                                                 max_rate=ctx.settings.probe_max_rate,
+                                                 model=ctx.settings.live_model)
                 if not passed:
                     waiting += 1
                     continue
