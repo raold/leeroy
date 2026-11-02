@@ -9,7 +9,8 @@ from leeroy_mind.app import acquire_instance_lock
 from leeroy_mind.training import cli
 
 
-@pytest.mark.parametrize("args", [["status"], ["gate"], ["report", "--week", "2026-W44"], ["trials"]])
+@pytest.mark.parametrize("args", [["status"], ["gate"], ["report", "--week", "2026-W44"],
+                                 ["voicecheck", "--night", "2026-11-02"], ["trials"]])
 def test_read_only_commands_preserve_database(fake, tmp_path, args, capsys):
     path = tmp_path / "mind.db"
     before = hashlib.sha256(path.read_bytes()).digest()

@@ -1,6 +1,7 @@
 """Actual guild/listener, ledger/scorer and owned experiment lane integration."""
 
 import asyncio
+from collections import deque
 from dataclasses import asdict
 import json
 from types import SimpleNamespace
@@ -19,8 +20,9 @@ from leeroy_mind.training.spells import SpellBook
 from guild.fakes import FakeArmory, member as guild_member, persona
 from .test_tg_applier import vocabulary
 from .test_tg_experiments import CTX, candidate, experiment, meta, pull
-from .test_tg_gate import _run_async
+from .test_tg_gate import _run_async, boss
 from .test_tg_ledger import header, member
+from .test_tg_native_cleanup import progress, receipt
 
 
 @pytest.fixture
@@ -29,17 +31,23 @@ def wired(fake, experiment, tmp_path):
     fake.connection_epoch = 1
     fake.set_lead = lambda guid: setattr(fake, "lead", guid)
     fake.disconnect = AsyncMock()
-    for guid in (101, 102, 103):
+    for guid in range(101, 109):
         fake.members[guid] = guild_member(guid, f"Member{guid}", 1 if guid == 101 else 8, 2, map=631)
         fake.personas[guid] = persona(guid, f"Member{guid}")
-    plan = RaidPlan("icc", 10, False, True, 101, 101, 101, [101, 102, 103], [], False)
+    plan = RaidPlan("icc", 10, False, True, 101, 101, 101, list(range(101, 109)), [], False)
     meta(fake, f"guild:raid:{prior.session.raid_id}:plan", asdict(plan))
     session = asyncio.run(RaidSession.open(fake, GuildConfig(), FakeArmory({}, {}), plan))
     session.bind_instance(77)
     run = RaidRun(session.plan, session, False, False)
     offline = OfflineRaids.__new__(OfflineRaids)
     offline.ports, offline.run, offline.session = fake, run, session
-    offline._owned = {"phase": "running", "cancelled": False, "terminal": None}
+    offline._owned = dict(id="original_job", phase="running", cancelled=False, terminal=None,
+        sent_at=fake.clock.now()-1, accepted=list(plan.members), actual_plan=asdict(plan),
+        plan=asdict(plan), instance=77, raid_id=session.raid_id, started=True, running_seen=True)
+    offline._inputs = deque()
+    offline._save()
+    with fake.conn:
+        fake.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES ('guild_id','10')")
     offline._online, offline._listeners = False, []
     app = SimpleNamespace(data_dir=tmp_path, guild=SimpleNamespace(offline=offline,
                            raid_night=SimpleNamespace(active=False)))
@@ -47,6 +55,9 @@ def wired(fake, experiment, tmp_path):
     ground._connected = ground._presence_known = ground._startup_ready = True
     ground.gate._phase = "passed"
     ground.vocab = vocabulary()
+    ground.native.feed(progress(fake, run))
+    fake.request = AsyncMock(side_effect=lambda cmd, *a, **k:
+        [receipt(ident=cmd.id, members=tuple(run.plan.members))])
     offline.add_listener(ground.experiments)
     offline.add_listener(ground.listener)
     return fake, run, ground, offline
@@ -159,7 +170,7 @@ async def test_stale_preparation_after_await_does_not_open_or_install(wired, mon
 
 
 @_run_async
-async def test_tick_can_prepare_late_startup_without_resetting_listener(wired):
+async def test_tick_can_prepare_late_startup_without_resetting_listener(wired, monkeypatch):
     fake, run, ground, offline = wired
     candidate(fake)
     ground._startup_ready = False
@@ -173,6 +184,31 @@ async def test_tick_can_prepare_late_startup_without_resetting_listener(wired):
     assert ground.experiments.admission_allowed(run)
     # The native readiness adapter owns the separate explicit startup retry.
     assert ground.listener._start_ready is False
+    held = []
+    async def hold(guid):
+        assert ground.native.for_run(run) is not None
+        assert ground.experiments.admission_allowed(run)
+        held.append(guid)
+        return False
+    monkeypatch.setattr(ground.applier, "hold", hold)
+    await ground.listener.tick()
+    await ground.listener.tick()
+    assert held == [101] and ground.listener._start_attempted
+
+
+@_run_async
+async def test_late_readiness_after_first_combat_cannot_restart_startup(wired, monkeypatch):
+    fake, run, ground, offline = wired
+    ground._startup_ready = False
+    await offline._notify("on_start", run)
+    await ground.listener.on_boss(boss(fake, instance_id=77))
+    assert not ground.listener._start_waiting
+    ground._startup_ready = True
+    await ground.experiments.tick()
+    hold = AsyncMock(return_value=False)
+    monkeypatch.setattr(ground.applier, "hold", hold)
+    await ground.listener.tick()
+    hold.assert_not_awaited()
 
 
 @_run_async

@@ -30,6 +30,7 @@ from .report import training_section
 from .score import score_pull
 from .spells import SpellBook, load_spellbook, read_bonus_data
 from .vocab import Vocab, refresh, suspend_missing
+from .voice_lead import VoiceLead
 
 log = logging.getLogger(__name__)
 
@@ -89,8 +90,9 @@ class TrainingGround:
         self.applier = Applier(ports, self.ledger, state_provider=self.state_for,
                                application_allowed=self.application_allowed)
         self.listener.set_applier(self.applier)
+        self.voice = VoiceLead(ports, self)
         self.native = NativeCleanup(ports, self)
-        self.listener.prepare_run = self.native.prepare
+        self.listener.prepare_run = self.prepare_run
         self.ledger.after_store.insert(0, self._score)
         self.experimenter = Experimenter(ports, ports.cfg, score_basis=self.listener.farm_basis)
         self.experiments = ExperimentLifecycle(self, self.experimenter)
@@ -123,6 +125,12 @@ class TrainingGround:
     def application_allowed(self):
         return bool(self.base_application_allowed()
                     and self.experiments.admission_allowed(self.listener.run))
+
+    async def prepare_run(self, run):
+        if (run.plan.offline and self.ports.cfg.experiments
+                and not await self.experiments.prepare(run)):
+            return False
+        return await self.native.prepare(run)
 
     def members_for(self, run):
         members = {}
@@ -202,6 +210,10 @@ class TrainingGround:
             return template("new_plan", boss=BOSS_NAMES.get((map_id, boss_id), "boss"), when=when, call=call)
         return call
 
+    def lead_pre_call(self, map_id, boss_id):
+        call = self.pre_call(map_id, boss_id)
+        return self.voice.pre_call(map_id, boss_id, call=call) or call
+
     async def _score(self, rec, ctx):
         if self._book is None:
             return
@@ -229,6 +241,7 @@ class TrainingGround:
         self._connected = False
         self._presence_known = False
         self._startup_ready = False
+        self.voice.invalidate(self.listener.run)
         self.native.disconnect()
         self.experiments.preempt()
         self.experiments.replay_again()
@@ -257,6 +270,10 @@ class TrainingGround:
         elif name == "chat":
             if ev.from_guid == self.ports.human_guid:
                 await self.listener.on_human_chat(ev)
+        elif name == "boss_cast":
+            await self.voice.on_cast(ev)
+        elif name == "boss":
+            await self.voice.on_boss(ev)
         elif name == "login" and ev.guid == self.ports.human_guid and ev.human:
             self.experiments.preempt()
         elif name == "hello":
@@ -266,7 +283,8 @@ class TrainingGround:
             self._presence_known = True
             self.submit("on_hello")
             self.submit("startup")
-        # Bosses deliberately arrive only through the validated guild listener.
+        # Training actions use the validated guild listener. Voice consumes
+        # independently checked boss boundaries inline, ahead of following casts.
         # Presence is read from app.world by the independent loader lane.
 
     async def _commands(self):
@@ -339,6 +357,15 @@ class TrainingGround:
                     self._sample = None
             await self.ports.clock.sleep(1)
 
+    async def _voicing(self):
+        while True:
+            if self._connected:
+                try:
+                    await self.voice.tick()
+                except Exception:
+                    log.warning("training_voice_tick_failed")
+            await self.ports.clock.sleep(.1)
+
     async def _experimenting(self):
         while True:
             try:
@@ -388,7 +415,7 @@ class TrainingGround:
         self._running = True
         self._lanes = {asyncio.create_task(fn()) for fn in
                        (self._commands, self._sampling, self._maintenance, self._load, self._listening,
-                        self._native_cleanup, self._experimenting)}
+                        self._voicing, self._native_cleanup, self._experimenting)}
         try:
             # Cancellation fences promptly; one shared drain owns cancellation
             # and joins instead of allowing gather to cancel the loader twice.
@@ -424,6 +451,7 @@ class TrainingGround:
             log.warning("training listener shutdown is still draining")
         while not await self.applier.close():
             log.warning("training command shutdown is still draining")
+        await self.voice.close()
         await self.on_connection(False)
         self._lanes.clear()
 
@@ -446,9 +474,10 @@ def attach_training(app):
         for controller in (guild.raid_night, guild.offline):
             controller.add_listener(ground.experiments)
             controller.add_listener(ground.listener)
+            controller.add_listener(ground.voice.lifecycle)
         calls = getattr(guild, "calls", None)
         if calls is not None:
-            calls.pre_call, calls.lust_held = ground.pre_call, ground.listener.lust_held
+            calls.pre_call, calls.lust_held = ground.lead_pre_call, ground.listener.lust_held
             ground.listener.lust_provider = calls.lust
     hook = TalkHook(ground.ports)
     hook.change_for = ground.listener.change_for

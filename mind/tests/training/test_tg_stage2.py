@@ -211,9 +211,9 @@ def test_attach_coach_only_on_actual_runner_and_hooks_live_calls(app_stub):
         offline=SimpleNamespace(add_listener=listeners.append))
     ground = service.attach_training(app_stub)
     assert [stage.name for stage in app_stub.night_runner.stages] == ["reflect", "coach"]
-    assert calls.pre_call == ground.pre_call and calls.lust_held == ground.listener.lust_held
+    assert calls.pre_call == ground.lead_pre_call and calls.lust_held == ground.listener.lust_held
     assert ground.listener.lust_provider == calls.lust
-    assert listeners == [ground.experiments, ground.listener, ground.experiments, ground.listener]
+    assert listeners == [ground.experiments, ground.listener, ground.voice.lifecycle] * 2
     assert "chat" in app_stub.handlers and app_stub.hooks[0].change_for == ground.listener.change_for
 
 
@@ -276,3 +276,65 @@ def test_cards_and_lessons_cli_are_read_only_and_omit_embeddings(fake, tmp_path,
     assert lessons[0]["evidence"] == ["pull:example"]
     assert hashlib.sha256(path.read_bytes()).digest() == before
     assert not (tmp_path / "mind.lock").exists()
+
+
+@_run_async
+async def test_inline_voice_boundaries_precede_blocked_real_guild_listener_queue(raid, app):
+    from leeroy_mind.protocol import Boss, Group
+    from leeroy_mind.training.protocol import BossCast, register
+    from leeroy_mind.talk.raid import RaidPhase
+    register()
+    ports, run, ground = raid
+    ground.app = app
+    ports.feed = lambda event: None
+    ports.say = AsyncMock(return_value=True)
+    ground._book = SimpleNamespace(name=lambda spell: "Defile")
+    ground.gate.recording = lambda: True
+    app._human = app.world.human_guid = 1
+    app.world.human_online = True
+    app.raid.on_group(Group(0, 101, True, (1, 101, 102, 103)))
+    # Real app storage/RaidState and guild queue are exercised; unrelated model
+    # reaction generation is not needed to reproduce delayed listener delivery.
+    app.engine.on_event = AsyncMock()
+    night = app.guild.raid_night
+    night.run, night.session, night.state = run, run.session, State.RUNNING
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def blocked(event):
+        entered.set()
+        await release.wait()
+    night._listeners = [SimpleNamespace(on_boss=blocked), ground.voice.lifecycle]
+    app.register_event_handler("boss", night.on_boss)
+    app.register_event_handler("boss", ground.on_event)
+    app.register_event_handler("boss_cast", ground.on_event)
+    start = int(ports.clock.now()*1000)
+    engage = Boss(start, 631, 77, 12, "", "engaged", (1, 101, 102, 103))
+    cast = BossCast(start, f"{start}-77-12", 631, 77, 36597, 999, 1, 1, "start", 1000)
+    draining = None
+    try:
+        await asyncio.wait_for(app.handle(engage), 1)
+        draining = asyncio.create_task(night._drain_events(None))
+        await asyncio.wait_for(entered.wait(), 1)
+        assert not draining.done()
+        await asyncio.wait_for(app.handle(cast), 1)
+        await ground.voice.tick()
+        ports.say.assert_awaited_once_with(101, "raid", "defile on Testy, move", kind=TurnKind.URGENT)
+        await ports.clock.advance(9, step=9)
+        await app.handle(replace(cast, ts=int(ports.clock.now()*1000)))
+        assert ground.voice._queue
+        await app.handle(replace(engage, ts=int(ports.clock.now()*1000), state="wiped"))
+        assert app.raid.phase(ports.clock.now()) is RaidPhase.WIPE_SILENCE
+        assert ground.voice._fight is None and not ground.voice._queue
+        await app.handle(replace(cast, ts=int(ports.clock.now()*1000)))
+        await ground.voice.tick()
+        assert ports.say.await_count == 1 and not draining.done()
+        # An old engage replay cannot resurrect the ended fight, even if the
+        # core RaidState itself accepted that reordered event.
+        await app.handle(engage)
+        await app.handle(replace(cast, ts=int(ports.clock.now()*1000)))
+        await ground.voice.tick()
+        assert ground.voice._fight is None and ports.say.await_count == 1
+    finally:
+        release.set()
+        if draining is not None:
+            await asyncio.wait_for(draining, 1)
+        await ground.voice.close()

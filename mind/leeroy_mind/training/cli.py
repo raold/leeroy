@@ -103,7 +103,8 @@ def training_main(argv=None):
     parser = argparse.ArgumentParser(prog="leeroy_mind training")
     _add_data_dir(parser)
     subs = parser.add_subparsers(dest="command", required=True)
-    for name in ("status", "gate", "rescore", "report", "spells", "cards", "lessons", "trials", "rollback", "stock"):
+    for name in ("status", "gate", "rescore", "report", "spells", "cards", "lessons", "voicecheck",
+                 "trials", "rollback", "stock"):
         sub = subs.add_parser(name)
         _add_data_dir(sub, after_action=True)
         if name == "gate":
@@ -113,6 +114,8 @@ def training_main(argv=None):
         elif name == "spells":
             actions = sub.add_subparsers(dest="action", required=True)
             _add_data_dir(actions.add_parser("check"), after_action=True)
+        elif name == "voicecheck":
+            sub.add_argument("--night", required=True)
         elif name in {"cards", "lessons", "trials", "rollback", "stock"}:
             sub.add_argument("--context", required=name in {"lessons", "rollback", "stock"})
     args = parser.parse_args(argv)
@@ -129,6 +132,9 @@ def training_main(argv=None):
                     result = _gate(conn)
                 elif args.command == "rescore":
                     result = {"rescored": asyncio.run(_rescore(conn, root))}
+                elif args.command == "voicecheck":
+                    from .voice_lead import voicecheck
+                    result = voicecheck(conn, args.night)
                 elif args.command == "trials":
                     result = _trials(conn, _context(args.context) if args.context else None)
                 elif args.command in {"rollback", "stock"}:
