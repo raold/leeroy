@@ -61,7 +61,8 @@ class Gate:
         self._phase, self._raids, self._verdict_ms = "ab", 0, None
         saved = self._read("tg_gate")
         if saved is not None:
-            if (isinstance(saved, dict) and saved.get("phase") in {"ab", "passed", "failed"}
+            if (isinstance(saved, dict) and type(saved.get("phase")) is str
+                    and saved["phase"] in {"ab", "passed", "failed"}
                     and type(saved.get("raids")) is int and saved["raids"] >= 0
                     and (saved.get("verdict_ms") is None or _number(saved["verdict_ms"]))
                     and (saved["phase"] != "passed" or _number(saved.get("verdict_ms")))):
@@ -71,6 +72,7 @@ class Gate:
                 self._phase = "failed"  # Corrupt state cannot silently re-arm a final gate.
         self._run = self._raid_index = self._boss_index = None
         self._muster_ms = 0
+        self._connection_ms = -1
         self._record, self._watch, self._acked = False, (), False
         self._revision = 0
         self._generation = uuid4().hex
@@ -83,7 +85,8 @@ class Gate:
         if raw is None:
             return None
         try:
-            return json.loads(raw)
+            value = json.loads(raw)
+            return False if value is None else value  # Only an absent key returns None.
         except (ValueError, TypeError):
             return False
 
@@ -181,9 +184,11 @@ class Gate:
     async def on_connection(self, connected):
         # Preserve the desired flag for hello, never a pre-disconnect ACK/fight.
         self._fence()
+        self._connection_ms = max(self._connection_ms, int(self.ports.clock.now() * 1000))
 
     async def on_hello(self):
         self._fence()
+        self._connection_ms = max(self._connection_ms, int(self.ports.clock.now() * 1000))
         self._watch = tuple(self.watch())
         if self._run is not None:
             self._record = self.record_flag(self._run, self._boss_index)
@@ -195,6 +200,9 @@ class Gate:
             return False
         ctx = run.session.ctx
         return (type(ev.ts) is int and ev.ts >= max(self._muster_ms, run.session.started * 1000)
+                # Same-millisecond ordering around a connection/hello boundary
+                # is unknown. A later muster must not lower this causal floor.
+                and ev.ts > self._connection_ms
                 and ev.ts <= self.ports.clock.now() * 1000 + 5000
                 and type(ctx.instance_id) is int and ctx.instance_id > 0
                 and ev.map == ctx.map_id and ev.instance_id == ctx.instance_id
@@ -297,7 +305,7 @@ class Gate:
                 or type(r.get("raid")) is not int or r["raid"] <= 0
                 or type(r.get("instance_id")) is not int or r["instance_id"] <= 0
                 or not _number(r.get("started"))
-                or r.get("outcome") not in {"killed", "wiped"}
+                or type(r.get("outcome")) is not str or r["outcome"] not in {"killed", "wiped"}
                 or type(r.get("start_ms")) is not int or type(r.get("end_ms")) is not int
                 or r["end_ms"] < r["start_ms"]):
             return False

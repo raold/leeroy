@@ -404,3 +404,87 @@ async def test_corrupt_metadata_fails_closed(fake):
         await gate.on_start(run)
         await gate.on_muster(run, 0)
         assert gate.phase == "failed" and not gate.recording()
+
+
+@_run_async
+@pytest.mark.parametrize("invalid", [[], {}], ids=["list", "dict"])
+async def test_container_values_in_gate_metadata_fail_closed(fake, invalid):
+    store = Store(fake.conn, clock=fake.clock)
+    for field in ("phase", "raids", "verdict_ms"):
+        saved = dict(phase="passed", raids=2, verdict_ms=0.5)
+        saved[field] = invalid
+        store.set_meta("tg_gate", json.dumps(saved))
+        gate, run = Gate(fake), run_for(fake)
+        await gate.on_start(run)
+        await gate.on_muster(run, 0)
+        assert gate.verdict() == ("failed", None)
+        assert not gate.recording() and not gate.record_flag(run, 0)
+
+
+@_run_async
+@pytest.mark.parametrize("invalid", [[], {}], ids=["list", "dict"])
+async def test_container_values_in_persisted_receipt_are_ignored(fake, invalid):
+    gate, run = Gate(fake), run_for(fake)
+    await gate.on_start(run)
+    await fight(fake, gate, run)
+    row = perf_rows(fake.conn)[0]
+    key = f"tg_gate:perf:{row['fight']}"
+    receipt = metadata(fake, key)
+    assert gate._eligible(row)
+    store = Store(fake.conn, clock=fake.clock)
+    for field in receipt:
+        store.set_meta(key, json.dumps({**receipt, field: invalid}))
+        assert not gate._eligible(row)
+        assert Gate(fake).verdict() == ("ab", None)
+
+
+@_run_async
+async def test_absent_gate_metadata_starts_ab_but_json_null_fails_closed(fake):
+    assert metadata(fake) is None
+    assert Gate(fake).phase == "ab"
+    Store(fake.conn, clock=fake.clock).set_meta("tg_gate", "null")
+    gate, run = Gate(fake), run_for(fake)
+    await gate.on_start(run)
+    await gate.on_muster(run, 0)
+    assert gate.verdict() == ("failed", None)
+    assert not gate.record_flag(run, 0) and not gate.recording()
+    assert fake.sent[-1].record is False
+
+
+@_run_async
+@pytest.mark.parametrize("transition", ["disconnect", "hello"])
+@pytest.mark.parametrize("same_ms", [False, True], ids=["older", "same-ms"])
+async def test_unseen_engaged_before_connection_fence_cannot_qualify(fake, transition, same_ms):
+    gate, run = Gate(fake), run_for(fake)
+    await gate.on_start(run)
+    await gate.on_muster(run, 0)
+    await fake.clock.advance(1, step=1)
+    delayed = boss(fake)  # This engagement has never reached Gate.
+    if not same_ms:
+        await fake.clock.advance(1, step=1)
+    boundary_ms = int(fake.clock.now() * 1000)
+    if transition == "disconnect":
+        await gate.on_connection(False)
+        await gate.on_connection(True)
+    await gate.on_hello()
+    assert gate.recording()  # New ACK alone cannot rehabilitate the old pull.
+    if same_ms:
+        await gate.on_muster(run, 0)  # Cannot lower the connection's timestamp floor.
+    await gate.on_boss(delayed)
+    for _ in range(2):
+        await fake.clock.advance(30, step=30)
+        await gate.sample()
+    await gate.on_boss(boss(fake, state="killed"))
+    assert not perf_rows(fake.conn)
+    assert not any(isinstance(cmd, GetStats) for cmd in fake.sent)
+
+    # A newly observed post-fence pull still follows the normal workflow.
+    await gate.on_muster(run, 0)
+    fresh = boss(fake)
+    assert fresh.ts > boundary_ms
+    await gate.on_boss(fresh)
+    await collect(fake, gate, True)
+    await gate.on_boss(boss(fake, state="killed"))
+    rows = perf_rows(fake.conn)
+    assert len(rows) == 1 and gate._eligible(rows[0])
+    assert metadata(fake, f"tg_gate:perf:{rows[0]['fight']}")["start_ms"] == fresh.ts
