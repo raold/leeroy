@@ -111,6 +111,78 @@ def fake(store, clock):
     return Fake(store, clock)
 
 
+def test_standing_conflicts_distinguishes_confirmed_hold_from_tactics(fake):
+    async def exercise():
+        assert await fake.applier.hold(101)
+        assert not fake.applier.standing_conflicts(RUN, {102: MEMBERS[102]}, {"threat"})
+        assert await fake.apply(card(Directive("threat", "+")), "standing", {102: MEMBERS[102]})
+        assert fake.applier.standing_conflicts(RUN, {102: MEMBERS[102]}, {"threat"})
+        assert not fake.applier.standing_conflicts(RUN, {102: MEMBERS[102]}, {"dps aoe"})
+    run(exercise())
+
+
+def test_standing_conflicts_includes_desired_and_hidden_logical_bundles(fake):
+    async def exercise():
+        ts.put_setup(fake.conn, dict(guid=102, since=1, rotation=None, toggles=[],
+            vals={"wait for attack time": 6}, premade=None, copied_from=None, explored="", applied=None))
+        assert fake.applier.standing_conflicts(RUN, {102: MEMBERS[102]}, {"wait for attack time"})
+        assert not fake.applier.standing_conflicts(RUN, {102: MEMBERS[102]}, {"threat"})
+        # Replace the desired row with an empty setup. Applied hidden layers
+        # remain evidence even when no corresponding journal command was sent.
+        ts.put_setup(fake.conn, dict(guid=102, since=2, rotation=None, toggles=[],
+            vals={}, premade=None, copied_from=None, explored="", applied=None))
+        assert await fake.apply(card(Directive("wait for attack time", 4)), "arm", {102: MEMBERS[102]})
+        assert await fake.apply(card(Directive("wait for attack time", 6)), "standing", {102: MEMBERS[102]})
+        assert not [r for r in fake.open() if r["layer"] == "standing"]
+        assert fake.applier.standing_conflicts(RUN, {102: MEMBERS[102]}, {"wait for attack time"})
+        assert await fake.apply(card(Directive("focus tanks", "on")), "standing", {103: MEMBERS[103]})
+        assert fake.applier.standing_conflicts(RUN, {103: MEMBERS[103]}, {"focus tanks"})
+    run(exercise())
+
+
+def test_standing_conflicts_fails_closed_on_unknown_state_or_malformed_setup(fake):
+    assert fake.applier.standing_conflicts("other-run", {102: MEMBERS[102]}, {"threat"})
+    assert fake.applier.standing_conflicts(RUN, {102: replace(MEMBERS[102], role="melee")}, {"threat"})
+    ts.put_setup(fake.conn, dict(guid=102, since=1, rotation=None, toggles=["unknown"],
+        vals={}, premade=None, copied_from=None, explored="", applied=None))
+    assert fake.applier.standing_conflicts(RUN, {102: MEMBERS[102]}, {"threat"})
+
+
+def test_standing_conflicts_rejects_unresolved_and_changed_journal(fake):
+    async def exercise():
+        assert await fake.applier.hold(101)
+        row = fake.open()[0]
+        saved = json.loads(row["command"])
+        saved.pop("wire")
+        with fake.conn:
+            fake.conn.execute("UPDATE tg_applied SET command=? WHERE id=?", (json.dumps(saved), row["id"]))
+        assert fake.applier.standing_conflicts(RUN, {102: MEMBERS[102]}, {"threat"})
+        with fake.conn:
+            fake.conn.execute("UPDATE tg_applied SET command=? WHERE id=?",
+                              (json.dumps(fake.applier._receipts[row["id"]].envelope), row["id"]))
+        fake.fail_job["+threat"] = "missing"
+        assert not await fake.apply(card(Directive("threat", "+")), "standing", {102: MEMBERS[102]})
+        assert fake.applier.standing_conflicts(RUN, {102: MEMBERS[102]}, {"dps aoe"})
+    run(exercise())
+
+
+@pytest.mark.parametrize("mode", ["orphan", "failed_hold"])
+def test_startup_standing_does_not_adopt_unknown_or_failed_hold_journal(fake, mode):
+    async def exercise():
+        ts.put_setup(fake.conn, dict(guid=102, since=1, rotation=None, toggles=["+threat"],
+            vals={}, premade=None, copied_from=None, explored="", applied=None))
+        if mode == "orphan":
+            ts.log_applied(fake.conn, RUN, "standing", "0:0:0", {"unknown": True}, None, fake.clock.now())
+        else:
+            fake.fail_ack[""] = "apply_failed"
+            assert not await fake.applier.hold(101)
+        before = len(fake.sent)
+        assert await fake.applier.apply_standing([102], run_key=RUN) == 0
+        assert len(fake.sent) == before
+        assert fake.open()
+    run(exercise())
+
+
 def run(coro):
     return asyncio.run(coro)
 

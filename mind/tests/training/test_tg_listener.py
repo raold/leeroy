@@ -3,6 +3,8 @@ from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
+import pytest
+
 from leeroy_mind.protocol import Chat, DcStatus
 from leeroy_mind.training import store
 from leeroy_mind.training.cards import Card, Directive
@@ -20,7 +22,8 @@ def setup(fake, *, acting=True, human=False):
                            on_end=AsyncMock(), invalidate=Mock(), recording=lambda: True)
     ledger = SimpleNamespace(set_run=Mock(), set_in_play=Mock(), mark_unscoreable=Mock())
     applier = SimpleNamespace(acting=lambda now: acting, hold=AsyncMock(return_value=True),
-        release=AsyncMock(return_value=True), apply=AsyncMock(return_value=True),
+        release=AsyncMock(return_value=True), resume_held=AsyncMock(return_value=True),
+        standing_conflicts=Mock(return_value=False), apply=AsyncMock(return_value=True),
         apply_standing=AsyncMock(return_value=0), revert=AsyncMock(return_value=0),
         end_run=AsyncMock(return_value=0), cleanup_pending=Mock(return_value=False))
     listener = TrainingListener(fake, ledger, gate, applier, lust_provider=AsyncMock(),
@@ -38,6 +41,12 @@ def card(fake, *, context="631:4:0", value=35, status="champion", previous=None,
                  prev_champion=previous)
     ident = store.put_card(fake.conn, value.to_row())
     return replace(value, id=ident)
+
+
+def trial_arm(fake, card, lever="lust_at", scope=None):
+    trial = store.open_trial(fake.conn, scope or card.context, lever, "raid",
+                             opened=fake.clock.now(), arms=({"card": card.id, "champion": False},))
+    return fake.conn.execute("SELECT id FROM tg_arm WHERE trial=?", (trial,)).fetchone()[0]
 
 
 async def record(fake, run, *, outcome="wiped", change="", complete=True, scoreable=True, basis="deaths_time"):
@@ -70,7 +79,7 @@ async def test_observation_month_applies_nothing(fake):
     await listener.on_end("ended", run=run)
     listener.applier.apply.assert_not_awaited()
     listener.applier.hold.assert_not_awaited()
-    listener.applier.release.assert_not_awaited()
+    listener.applier.resume_held.assert_not_awaited()
     assert listener.change_for("631:4:0") == ""
     assert fake.sent == []
 
@@ -81,15 +90,16 @@ async def test_card_at_resting_release_only_at_waiting_pause(fake):
     chosen = card(fake)
     await listener.on_start(run)
     await listener.on_dc_status(status(fake))
-    listener.applier.release.assert_not_awaited()
+    listener.applier.resume_held.assert_not_awaited()
     assert listener.applier.apply.await_args.args[3] == chosen
     listener.ledger.set_in_play.assert_called_with("631:4:0", card_id=chosen.id, arm_id=None, change="")
     for reason in ("holding position", "waiting for door", "door closed"):
         await listener.on_dc_status(status(fake, state="paused", reason=reason, paused=True))
+    listener.applier.resume_held.assert_not_awaited()
+    await listener.on_dc_status(status(fake, state="paused", reason="waiting at Festergut", paused=True))
+    await listener.on_dc_status(status(fake, state="paused", reason="waiting at Festergut", paused=True))
+    listener.applier.resume_held.assert_awaited_once_with(101)
     listener.applier.release.assert_not_awaited()
-    await listener.on_dc_status(status(fake, state="paused", reason="waiting at Festergut", paused=True))
-    await listener.on_dc_status(status(fake, state="paused", reason="waiting at Festergut", paused=True))
-    listener.applier.release.assert_awaited_once_with(101)
 
 
 @_run_async
@@ -99,7 +109,7 @@ async def test_waiting_pause_can_prepare_before_resting(fake):
     await listener.on_start(run)
     await listener.on_dc_status(status(fake, state="paused", reason="waiting at Festergut", paused=True))
     listener.applier.apply.assert_awaited_once()
-    listener.applier.release.assert_awaited_once()
+    listener.applier.resume_held.assert_awaited_once()
 
 
 @_run_async
@@ -116,7 +126,7 @@ async def test_failed_and_timed_out_apply_never_resume_or_claim_applied(fake):
         await listener.on_start(run)
         await listener.on_dc_status(status(fake))
         await listener.on_dc_status(status(fake, state="paused", reason="waiting at Festergut", paused=True))
-        listener.applier.release.assert_not_awaited()
+        listener.applier.resume_held.assert_not_awaited()
         listener.ledger.mark_unscoreable.assert_called_with("631:4:0")
         assert listener.ledger.set_in_play.call_args.kwargs == {}
         assert not listener.lust_held(631, 4)
@@ -138,7 +148,7 @@ async def test_apply_ack_from_old_connection_never_sets_in_play(fake):
     finish.set()
     await task
     listener.ledger.set_in_play.assert_not_called()
-    listener.applier.release.assert_not_awaited()
+    listener.applier.resume_held.assert_not_awaited()
 
 
 @_run_async
@@ -154,6 +164,10 @@ async def test_his_raid_uses_previous_after_two_wipes(fake):
         await listener.on_dc_status(status(fake))
         await listener.on_boss(boss(fake, 4))
         await listener.on_boss(boss(fake, 4, "wiped"))
+        rec, ctx = await record(fake, run)
+        await listener.after_pull(rec, ctx, check())
+        assert listener.change_for("631:4:0") == ""
+    assert not listener._farm("631:4:0")
     assert listener.card_for("631:4:0", run)[0].id == previous.id
 
 
@@ -374,14 +388,19 @@ async def test_experimental_arm_is_not_used_in_his_raid_and_benched_after_wipe(f
     arm = card(fake, status="trial", version=2, value=20)
     for _ in range(3):
         await record(fake, run, outcome="killed")
-    experimenter = SimpleNamespace(arm_for=Mock(return_value=(arm, 7)))
+    arm_id = trial_arm(fake, arm)
+    experimenter = SimpleNamespace(arm_for=Mock(return_value=(arm, arm_id)), arm_valid=Mock(return_value=True))
     listener.set_experimenter(experimenter)
     await listener.on_start(run)
     assert listener.card_for("631:4:0", replace(run, human_in_raid=True)) == (champion, None)
     await listener.on_dc_status(status(fake))
-    listener.ledger.set_in_play.assert_called_with("631:4:0", card_id=arm.id, arm_id=7, change="")
+    listener.ledger.set_in_play.assert_called_with("631:4:0", card_id=arm.id, arm_id=arm_id, change="")
     await listener.on_boss(boss(fake, 4))
     await listener.on_boss(boss(fake, 4, "wiped"))
+    rec, ctx = await record(fake, run)
+    await listener.after_pull(rec, ctx, check())
+    assert not listener._farm("631:4:0")
+    assert listener.change_for("631:4:0") == ""
     assert listener.card_for("631:4:0", run) == (champion, None)
 
 
@@ -401,3 +420,195 @@ def test_held_at_boss_checks_both_status_fields(fake):
     assert not held_at_boss(status(fake, state="resting", reason="waiting at Festergut", paused=True))
     assert not held_at_boss(status(fake, state="paused", reason="waiting at Festergut", paused=False))
     assert not held_at_boss(status(fake, state="paused", reason="holding position", paused=True))
+
+
+def real_listener(fake):
+    from .test_tg_applier import Fake as ApplierPorts
+    listener, run = setup(fake)
+    ports = ApplierPorts(SimpleNamespace(conn=fake.conn), fake.clock)
+    ports.state = replace(ports.state, run_key=listener.run_key(run), instance_id=100)
+    listener.ports, listener.applier = ports, ports.applier
+    listener.members_provider = lambda run: {g: ports.state.members[g] for g in run.plan.members}
+    return listener, run, ports
+
+
+def plan_card(fake, *directives, context="631:4:0", status="champion", version=1):
+    value = Card(None, context, version, status, "progression", tuple(directives))
+    return replace(value, id=store.put_card(fake.conn, value.to_row()))
+
+
+class JournalEffects:
+    """Small command emulator; production Applier owns all receipts/layers."""
+    def __init__(self):
+        self.values, self.saved = {}, {}
+
+    async def __call__(self, command):
+        from leeroy_mind.guild.protocol import BotDo
+        from leeroy_mind.training.protocol import DcSetting
+        if isinstance(command, BotDo):
+            for guid in command.guids:
+                if command.action == "co" and command.param.startswith("+"):
+                    key = (guid, command.param[1:])
+                    self.saved.setdefault(key, self.values.get(key, False))
+                    self.values[key] = True
+                elif command.action == "restore":
+                    keys = ([k for k in self.saved if k[0] == guid] if command.param == "*"
+                            else [(guid, command.param)])
+                    for key in keys:
+                        self.values[key] = self.saved.pop(key, False)
+        elif isinstance(command, DcSetting):
+            key = ("dc", command.key)
+            if command.op in {"scale", "set"}:
+                default = 0 if command.key == "WaitAtBoss" else 1
+                self.saved.setdefault(key, self.values.get(key, default))
+                self.values[key] = (command.centi / 100 if command.op == "set" else
+                                    self.values.get(key, default) * command.centi / 100)
+            elif command.op == "reset":
+                self.values[key] = self.saved.pop(key, 0 if command.key == "WaitAtBoss" else 1)
+            elif command.op == "clear":
+                for saved in [k for k in self.saved if k[0] == "dc"]:
+                    self.values[saved] = self.saved.pop(saved)
+
+
+@_run_async
+async def test_real_applier_resume_preserves_bot_dc_effects_and_journals_until_terminal(fake):
+    from leeroy_mind.guild.protocol import RaidControl
+    listener, run, ports = real_listener(fake)
+    effects = ports.hook = JournalEffects()
+    chosen = plan_card(fake, Directive("dps aoe", "+"), Directive("HealRepositionMaxRange", 75))
+    await listener.on_start(run)
+    await listener.on_dc_status(status(fake))
+    assert effects.values[102, "dps aoe"] is True
+    assert effects.values["dc", "HealRepositionMaxRange"] == .75
+    before = {r["id"] for r in ports.open()}
+    sent = len(ports.sent)
+    await listener.on_dc_status(status(fake, state="paused", reason="waiting at Festergut", paused=True))
+    assert len(ports.sent) == sent + 1 and isinstance(ports.sent[-1], RaidControl)
+    assert ports.sent[-1].param == "resume"
+    assert {r["id"] for r in ports.open()} == before
+    assert effects.values[102, "dps aoe"] is True
+    assert effects.values["dc", "HealRepositionMaxRange"] == .75
+    assert effects.values["dc", "WaitAtBoss"] == 1
+    listener.ledger.set_in_play.assert_called_with("631:4:0", card_id=chosen.id, arm_id=None, change="")
+    await listener.on_boss(boss(fake, 4))
+    await listener.on_boss(boss(fake, 4, "wiped"))
+    assert effects.values[102, "dps aoe"] is False
+    assert effects.values["dc", "HealRepositionMaxRange"] == 1
+    assert not [r for r in ports.open() if r["layer"] == "boss"]
+    assert await listener.on_before_end(run)
+    assert effects.values["dc", "WaitAtBoss"] == 0
+    assert not ports.open() and not ports.applier.cleanup_pending(listener.run_key(run))
+    assert await ports.applier.close()
+
+
+@_run_async
+async def test_real_startup_applies_desired_standing_after_confirmed_hold(fake):
+    from leeroy_mind.guild.protocol import BotDo
+    from leeroy_mind.training.protocol import DcSetting
+    listener, run, ports = real_listener(fake)
+    effects = ports.hook = JournalEffects()
+    store.put_setup(fake.conn, dict(guid=102, since=fake.clock.now(), rotation=None,
+        toggles=["+threat"], vals={}, premade=None, copied_from=None, explored="", applied=None))
+    plan_card(fake, Directive("dps aoe", "+"), context="631:*:0")
+    await listener.on_start(run)
+    assert isinstance(ports.sent[0], DcSetting) and ports.sent[0].key == "WaitAtBoss"
+    bot = [c for c in ports.sent if isinstance(c, BotDo)]
+    assert [c.param for c in bot] == ["+threat", "+dps aoe"]
+    assert effects.values[102, "threat"] and effects.values[102, "dps aoe"]
+    assert {e.layer for e in ports.applier._entries} == {"standing", "pooled"}
+    assert await listener.on_before_end(run)
+    assert not effects.values[102, "threat"] and not effects.values[102, "dps aoe"]
+    assert await ports.applier.close()
+
+
+async def pooled_stock_trial(fake, listener, run):
+    pooled = plan_card(fake, Directive("threat", "+"), context="631:*:0")
+    champion = plan_card(fake, Directive("dps aoe", "+"))
+    stock = plan_card(fake, context="631:*:0", status="trial", version=2)
+    arm_id = trial_arm(fake, stock, "threat")
+    effective = replace(stock, context="631:4:0", directives=champion.directives)
+    listener.set_experimenter(SimpleNamespace(arm_for=Mock(return_value=(effective, arm_id)),
+                                              arm_valid=Mock(return_value=True)))
+    for _ in range(3):
+        await record(fake, run, outcome="killed")
+    return pooled, champion, stock, arm_id
+
+
+@_run_async
+async def test_real_applier_pooled_stock_arm_omits_tested_lever_preserves_other_baseline(fake):
+    listener, run, ports = real_listener(fake)
+    effects = ports.hook = JournalEffects()
+    _, champion, stock, arm_id = await pooled_stock_trial(fake, listener, run)
+    await listener.on_start(run)
+    assert effects.values[102, "threat"] is True
+    await listener.on_dc_status(status(fake))
+    assert effects.values[102, "threat"] is False
+    assert effects.values[102, "dps aoe"] is True
+    assert {e.layer for e in ports.applier._entries} == {"arm"}
+    assert not [r for r in ports.open() if r["layer"] in {"pooled", "boss"}]
+    listener.ledger.set_in_play.assert_called_with("631:4:0", card_id=stock.id, arm_id=arm_id, change="")
+    await listener.on_dc_status(status(fake, state="paused", reason="waiting at Festergut", paused=True))
+    assert effects.values[102, "threat"] is False
+    assert effects.values[102, "dps aoe"] is True
+    await listener.on_boss(boss(fake, 4))
+    await listener.on_boss(boss(fake, 4, "wiped"))
+    assert effects.values[102, "dps aoe"] is False
+    # The normal champion path restores pooled plus boss after the arm is benched.
+    await listener.on_dc_status(status(fake))
+    assert effects.values[102, "threat"] is True
+    assert effects.values[102, "dps aoe"] is True
+    listener.ledger.set_in_play.assert_called_with("631:4:0", card_id=champion.id, arm_id=None, change="")
+    assert await listener.on_before_end(run)
+    assert await ports.applier.close()
+
+
+@pytest.mark.parametrize("applied", [False, True])
+@pytest.mark.parametrize("standing_lever", ["threat", "dps aoe"])
+@_run_async
+async def test_real_applier_desired_or_applied_standing_conflict_declines_stock_comparison(fake, applied, standing_lever):
+    listener, run, ports = real_listener(fake)
+    effects = ports.hook = JournalEffects()
+    _, champion, _, _ = await pooled_stock_trial(fake, listener, run)
+    def desired():
+        store.put_setup(fake.conn, dict(guid=102, since=fake.clock.now(), rotation=None,
+            toggles=["+"+standing_lever], vals={}, premade=None, copied_from=None, explored="", applied=None))
+    await listener.on_start(run)
+    if applied:
+        standing = Card(None, "0:0:0", 1, "champion", "stock", (Directive(standing_lever, "+"),))
+        assert await ports.applier.apply(listener.run_key(run), "standing", standing.context,
+            standing, {102: ports.state.members[102]}, tank_guid=101, lead_is_human=False)
+        assert any(e.layer == "standing" for e in ports.applier._entries)
+    else:
+        desired()
+    await listener.on_dc_status(status(fake))
+    assert effects.values[102, "threat"] is True
+    assert effects.values[102, "dps aoe"] is True
+    assert not [e for e in ports.applier._entries if e.layer == "arm"]
+    listener.ledger.set_in_play.assert_called_with("631:4:0", card_id=champion.id, arm_id=None, change="")
+    assert await listener.on_before_end(run)
+    assert await ports.applier.close()
+
+
+@_run_async
+async def test_real_applier_arm_baseline_change_during_apply_reverts_and_declines_receipt(fake):
+    from leeroy_mind.guild.protocol import BotDo
+    listener, run, ports = real_listener(fake)
+    effects = JournalEffects()
+    await pooled_stock_trial(fake, listener, run)
+    async def changed(command):
+        await effects(command)
+        if isinstance(command, BotDo) and command.action == "co" and command.param == "+dps aoe":
+            listener.experimenter.arm_valid.return_value = False
+    ports.hook = changed
+    await listener.on_start(run)
+    await listener.on_dc_status(status(fake))
+    assert effects.values[102, "threat"] is False
+    assert effects.values[102, "dps aoe"] is False
+    assert not [r for r in ports.open() if r["layer"] == "arm"]
+    listener.ledger.set_in_play.assert_called_with("631:4:0")
+    listener.ledger.mark_unscoreable.assert_called_with("631:4:0")
+    sent = len(ports.sent)
+    await listener.on_dc_status(status(fake, state="paused", reason="waiting at Festergut", paused=True))
+    assert len(ports.sent) == sent
+    assert await listener.on_before_end(run)
+    assert await ports.applier.close()
