@@ -331,6 +331,7 @@ class OfflineRaids:
                 await self._release()
                 return
             self._owned["phase"] = "awaiting_ack"
+            self._owned["day"] = self._day()  # Acquisition may have crossed midnight in an overnight window.
             self._owned["sent_at"] = self.ports.clock.now()
             self._owned["deadline"] = self.ports.clock.now() + self.cfg.offline_timeout_min * 60
             self._save()
@@ -362,7 +363,7 @@ class OfflineRaids:
                 self._update_day(accepted=state.get("accepted", 0) + 1)
             self._save()
         except asyncio.CancelledError:
-            if self._owned["phase"] == "acquiring":
+            if self._owned["phase"] in {"acquiring", "rejected"}:
                 self._owned["phase"] = "rejected"
             else:
                 self._owned["phase"] = "uncertain"
@@ -372,7 +373,7 @@ class OfflineRaids:
             await self._release()
             raise
         except Exception:
-            if self._owned["phase"] == "acquiring":
+            if self._owned["phase"] in {"acquiring", "rejected"}:
                 self._owned["phase"] = "rejected"
             else:
                 self._owned["phase"] = "uncertain"
@@ -457,8 +458,10 @@ class OfflineRaids:
                 actionable = self._actions_allowed()
                 # Preserve accepted kill/wipe accounting across cancellation,
                 # but never start casts, loot transfers or chatter afterward.
-                if kind == "boss" or kind == "loot_drop" and actionable:
-                    await getattr(self.session, "on_" + kind)(ev)
+                if kind == "boss":
+                    await self.session.on_boss(ev, can_announce=self._actions_allowed)
+                elif kind == "loot_drop" and actionable:
+                    await self.session.on_loot_drop(ev)
                 if kind in {"boss", "death", "dc_status"} and actionable:
                     await self._notify("on_" + kind, ev)
             self._inputs.popleft()
@@ -535,6 +538,10 @@ class OfflineRaids:
                 for vote in tuple(self._votes):
                     if await vote.tick(self.ports.clock.now()):
                         self._votes.remove(vote)
+                if self._lease and not self.active:
+                    # A failed local release cannot turn a proved rejection
+                    # into an uncertain remotely running command.
+                    await self._release()
                 if self.active:
                     if (self._online or self.ports.human_online()
                             or self.ports.clock.now() >= self._owned["deadline"]):

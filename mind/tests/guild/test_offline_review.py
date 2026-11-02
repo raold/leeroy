@@ -1,6 +1,7 @@
 """Independent recovery and real game-runner boundary regressions."""
 
 import random
+from dataclasses import replace
 
 import pytest
 
@@ -79,12 +80,14 @@ async def test_login_preserves_queued_kill_accounting_but_drops_loot_and_cast_li
         pytest.fail("cancelled run must not transfer queued loot")
 
     controller.session.on_loot_drop = unexpected
+    before_said, before_proposed = list(ports.said), list(ports.proposed)
     await controller.on_boss(Boss(0, 631, 77, 1, "Testboss", "killed", (101, 104)))
     await controller.on_loot_drop(LootDrop(0, 631, 77, 1000, ()))
     await controller.on_login(Login(0, 1, True))
     ports.online = True
     await controller.tick()
     assert not heard and controller.session.kills == 1
+    assert ports.said == before_said and ports.proposed == before_proposed
     assert dict(ports.conn.execute("SELECT guid,delta FROM dkp_ledger WHERE reason='kill'")) == {101: 10, 104: 10}
 
 
@@ -137,3 +140,46 @@ async def test_crash_before_dispatch_can_retry_acquisition_without_remote_ambigu
     recreated._update_day(accepted=0, next_try=0)
     await recreated.tick()
     assert len(ports.sent) == 1
+
+
+@_run_async
+async def test_acquisition_crossing_midnight_charges_dispatch_day_quota(setup):
+    ports, _, controller = setup
+    controller.cfg = replace(controller.cfg, offline_window=("22:00", "02:00"))
+    await advance(ports, 10 * 3600 - 30)
+    before_day = ports.clock.local().date().isoformat()
+    original = ports.acquire_gpu
+
+    async def acquire(holder):
+        await original(holder)
+        await advance(ports, 60)
+
+    ports.acquire_gpu = acquire
+    await start(setup)
+    dispatch_day = ports.clock.local().date().isoformat()
+    assert controller._owned["day"] == dispatch_day != before_day
+    assert controller._day_state(dispatch_day)["accepted"] == 1
+    assert controller._day_state(before_day).get("accepted", 0) == 0
+
+
+@_run_async
+async def test_failed_local_release_does_not_invent_remote_job_after_rejected_ack(setup):
+    ports, _, controller = setup
+    ports.acks["start_offline_raid"].append((False, "busy"))
+    original = ports.release_gpu
+    releases = 0
+
+    async def release(holder):
+        nonlocal releases
+        releases += 1
+        if releases == 1:
+            raise RuntimeError("synthetic local release failure")
+        await original(holder)
+
+    ports.release_gpu = release
+    await controller.tick()
+    assert not controller.active and controller._owned["phase"] == "rejected"
+    assert not controller._lease and releases == 2
+    await advance(ports, 86400)
+    await controller.tick()
+    assert len(ports.sent) == 2

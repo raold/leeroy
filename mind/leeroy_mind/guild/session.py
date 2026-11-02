@@ -151,7 +151,7 @@ class RaidSession:
     def _fresh(self, ev):
         return ev.ts == 0 or ev.ts / 1000 >= self.started - 5
 
-    async def on_boss(self, ev):
+    async def on_boss(self, ev, *, can_announce=None):
         async with self._lock:
             actual = sorted(self._participants.intersection(ev.members))
             if (self._closing or ev.map != self.ctx.map_id or not actual or not self._fresh(ev)
@@ -173,7 +173,7 @@ class RaidSession:
                 self.ports.conn.execute("UPDATE guild_raid SET kills=?,wipes=? WHERE raid_id=?", (kills, wipes, self.raid_id))
                 _put(self.ports.conn, key, True)
             self.kills, self.wipes = kills, wipes
-            if ev.state == "killed":
+            if ev.state == "killed" and (can_announce is None or can_announce()):
                 boss = public_text(self.ports, ev.boss_name or f"boss {ev.boss_id + 1}")
                 await self.ports.say(self.plan.loot_guid, "raid", template("dkp_kill", amount=self.cfg.dkp.kill, count=len(actual), boss=boss))
 
