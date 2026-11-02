@@ -101,6 +101,7 @@ class RaidControl:
     action: str
     leader_guid: int = 0
     param: str = ""
+    training_run: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +125,7 @@ class BotDo:
     action: str
     param: str
     target_guid: int = 0
+    training_run: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +158,7 @@ class Job:
     guid: int
     level: int
     avg_ilvl: int
+    training_run: str = ""
 
 
 COMMANDS: dict[str, type] = {

@@ -23,6 +23,8 @@ from . import store
 from .cards import Card, Directive, LEVERS, Targets, validate_card, validate_directive
 from .levers import Applied, MemberInfo, to_commands
 from .protocol import CustomStrategy, DcSetting
+from .native_cleanup import NativeRun, PREFIX as NATIVE_PREFIX, PROOF_PREFIX
+from leeroy_mind.guild.loot import _get, _put
 from .vocab import Vocab
 
 
@@ -51,6 +53,8 @@ class ApplierState:
     # None certifies that the integration has no body arbiter installed. An
     # installed arbiter with unknown ownership must yield no state snapshot.
     body_owner: str | None = None
+    native_run: NativeRun | None = None
+    native_required: bool = False
 
     def __post_init__(self):
         object.__setattr__(self, "members", MappingProxyType(dict(self.members)))
@@ -102,6 +106,9 @@ def _decode(value):
 
 def _premutation_refusal(command, error):
     """Only errors emitted before mutation by the consumed C++ handlers."""
+    if (isinstance(command, (BotDo, DcSetting, RaidControl))
+            and error in {"training_run_required", "training_run_closed", "training_run_ownership"}):
+        return True
     if isinstance(command, BotDo):
         return error in {"disabled", "training_off", "busy"} or bool(re.fullmatch(r"not_cast:[0-9]+", error))
     if isinstance(command, DcSetting):
@@ -146,6 +153,7 @@ class Applier:
         self._primed: set[tuple[int, str]] = set()
         self._closing = False
         self._operations: dict[str, int] = {}
+        self._native_fences = set()
 
     @contextmanager
     def _operation(self, run):
@@ -256,19 +264,132 @@ class Applier:
         if (not isinstance(state, ApplierState) or run is not None and state.run_key != run
                 or not state.session_key):
             return None
+        native = state.native_run
+        if (state.native_required and native is None or native is not None and (
+                not isinstance(native, NativeRun) or native.run_key != state.run_key
+                or native.session_key != state.session_key or native.instance_id != state.instance_id
+                or native.human_guid != self.ports.human_guid
+                or native.leader_guid != state.tank_guid or set(native.members) != set(state.members)
+                or self.native_fenced(native))):
+            return None
+        if native is not None:
+            try:
+                if NativeRun.load(_get(self.ports.conn, NATIVE_PREFIX + native.run_key)) != native:
+                    return None
+            except (TypeError, ValueError, KeyError):
+                return None
         return state
 
     @staticmethod
     def _scope(state):
-        return dict(run_key=state.run_key, session_key=state.session_key,
+        scope = dict(run_key=state.run_key, session_key=state.session_key,
                     instance_id=state.instance_id, connection_epoch=state.connection_epoch,
                     body_owner=state.body_owner, tank_guid=state.tank_guid,
                     lead_is_human=state.lead_is_human)
+        if state.native_run is not None:
+            scope["native"] = state.native_run.saved()
+        return scope
 
     def _matches(self, scope, *, epoch=True):
         state = self._state(scope["run_key"])
-        return state is not None and all(self._scope(state)[k] == v for k, v in scope.items()
-                                        if epoch or k != "connection_epoch")
+        # A legacy unscoped receipt must never borrow a newly bound native run.
+        return state is not None and ({k: v for k, v in self._scope(state).items()
+                                       if epoch or k != "connection_epoch"}
+                                      == {k: v for k, v in scope.items() if epoch or k != "connection_epoch"})
+
+    def native_fenced(self, binding):
+        try:
+            return (binding.training_run in self._native_fences
+                    or _get(self.ports.conn, "tg_native_sealed:" + binding.training_run) is not None)
+        except (TypeError, ValueError):
+            return True
+
+    def fence_native(self, binding):
+        """Prevent local reactivation before waiting for an operation's lock."""
+        self._native_fences.add(binding.training_run)
+        self._stopped.add(binding.run_key)
+        with self.ports.conn:
+            _put(self.ports.conn, "tg_native_sealed:" + binding.training_run, binding.saved())
+
+    @staticmethod
+    def _native_command_covered(command, binding):
+        if (not isinstance(command, (BotDo, DcSetting, RaidControl))
+                or command.training_run != binding.training_run):
+            return False
+        targets = _command_guids(command)
+        if not targets or not set(targets) <= set(binding.members):
+            return False
+        if isinstance(command, BotDo):
+            return command.action in {"co", "nc", "value", "restore", "formation"}
+        if isinstance(command, DcSetting):
+            return command.leader_guid == binding.leader_guid and command.op in {"set", "scale", "reset", "clear"}
+        return (command.action == "dc_pause" and command.param == "resume"
+                and command.member_guid == command.leader_guid == binding.leader_guid)
+
+    async def settle_native(self, binding, proof):
+        """Consume an exact sealed restoration proof without touching game bodies.
+
+        Durable pre-query binding is mandatory. Only covered body/DC envelopes
+        settle, even if their ACK/job was lost. Cache primes and legacy journals
+        remain open. No local body claim is released from an owner string alone.
+        """
+        try:
+            saved = NativeRun.load(_get(self.ports.conn, NATIVE_PREFIX + binding.run_key))
+        except (TypeError, ValueError, KeyError):
+            return False
+        if saved != binding or not binding.matches(proof) or proof.state != "complete":
+            return False
+        self.fence_native(binding)
+        proof_key = PROOF_PREFIX + binding.training_run
+        with self.ports.conn:
+            _put(self.ports.conn, proof_key, dict(receipt=asdict(proof), consumed=False))
+        try:
+            async with asyncio.timeout(_WAIT_S):
+                async with self._lock:
+                    tasks = {r.task for r in self._receipts.values() if r.run == binding.run_key
+                             and r.task is not None and not r.task.done()}
+                    if tasks:
+                        _, pending = await asyncio.wait(tasks, timeout=_WAIT_S)
+                        if pending:
+                            return False
+                    covered = []
+                    for row in self._rows(binding.run_key):
+                        try:
+                            envelope = json.loads(row["command"])
+                            scope = envelope["scope"]
+                            command = _decode(envelope["wire"])
+                            inverse = _decode(json.loads(row["inverse"]))
+                            if (scope.get("native") != binding.saved()
+                                    or scope.get("run_key") != binding.run_key
+                                    or scope.get("session_key") != binding.session_key
+                                    or scope.get("instance_id") != binding.instance_id
+                                    or scope.get("tank_guid") != binding.leader_guid
+                                    or not self._native_command_covered(command, binding)
+                                    or inverse is not None and not self._native_command_covered(inverse, binding)
+                                    or not {str(g) for g in _command_guids(command)} <= envelope["members"].keys()):
+                                continue
+                            covered.append(row["id"])
+                        except (TypeError, ValueError, KeyError, AttributeError):
+                            continue
+                    # Raw SQL keeps proof acceptance and covered row settlement
+                    # in one transaction (store helpers open their own scopes).
+                    now = self.ports.clock.now()
+                    with self.ports.conn:
+                        self.ports.conn.executemany("UPDATE tg_applied SET undone=? WHERE id=? AND undone IS NULL",
+                                                     ((now, ident) for ident in covered))
+                        _put(self.ports.conn, proof_key, dict(receipt=asdict(proof), consumed=True))
+                    remaining = {r["id"] for r in self._rows(binding.run_key)}
+                    self._entries = [e for e in self._entries if not (e.run == binding.run_key
+                        and e.scope.get("native") == binding.saved() and not remaining.intersection(e.receipts))]
+                    if (not remaining and not any(e.run == binding.run_key for e in self._entries)
+                            and not self._claims.get(binding.run_key)):
+                        scope = self._scopes.get(binding.run_key)
+                        if scope is None or scope.get("native") == binding.saved():
+                            self._scopes.pop(binding.run_key, None)
+                            self._blocked.discard(binding.run_key)
+                    return not self.cleanup_pending(binding.run_key)
+        except TimeoutError:
+            return False
 
     def _rows(self, run=None):
         # Old unresolved mutations are not safe to forget after an arbitrary TTL.
@@ -362,7 +483,7 @@ class Applier:
                 async with asyncio.timeout(_WAIT_S):
                     job = await self.ports.wait_job(command.id, 5.0)
                 if (not isinstance(job, Job) or job.id != command.id or job.kind != "bot_do"
-                        or job.state not in {"done", "failed"}):
+                        or job.state not in {"done", "failed"} or job.training_run != command.training_run):
                     return
                 targets = set(command.guids)
                 seen = set(job.guids) | {s.guid for s in job.skipped}
@@ -394,6 +515,16 @@ class Applier:
                     resume_held=False, application=False):
         if not self._matches(scope):
             return _Receipt(0, {}, settled=True, reason="stale")
+        native = scope.get("native")
+        if native is not None:
+            binding = NativeRun.load(native)
+            if isinstance(command, (BotDo, DcSetting, RaidControl)):
+                command = replace(command, training_run=binding.training_run)
+                if inverse is not None:
+                    inverse = replace(inverse, training_run=binding.training_run)
+                if (not self._native_command_covered(command, binding)
+                        or inverse is not None and not self._native_command_covered(inverse, binding)):
+                    return _Receipt(0, {}, settled=True, reason="unsupported_native_command")
         command = replace(command, id="tg_" + uuid4().hex)
         state = self._state(scope["run_key"])
         envelope = dict(wire=_encode(command), scope=scope, keys=list(keys), settled=False,

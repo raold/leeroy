@@ -37,6 +37,7 @@ bool Parse(std::string_view type, json const& j, std::string& error)
 {
     if (type == "telemetry") return ParseTelemetry(j, error).has_value();
     if (type == "get_stats") return ParseGetStats(j, error).has_value();
+    if (type == "get_training_cleanup") return ParseGetTrainingCleanup(j, error).has_value();
     if (type == "get_vocab") return ParseGetVocab(j, error).has_value();
     if (type == "custom_strategy") return ParseCustomStrategy(j, error).has_value();
     if (type == "dc_setting") return ParseDcSetting(j, error).has_value();

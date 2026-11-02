@@ -11,6 +11,40 @@
 
 namespace Leeroy::Training
 {
+bool TrainingRunFieldValid(std::string_view value, bool optional)
+{
+    return (optional && value.empty()) || (!value.empty() && value.size() <= 128
+        && std::all_of(value.begin(), value.end(), [](char c)
+            { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-'; }));
+}
+
+nlohmann::json MakeTrainingCleanup(std::string const& id, std::string const& handle, CleanupReceipt const* receipt)
+{
+    CleanupReceipt const empty;
+    auto const& r = receipt ? *receipt : empty;
+    std::string state = !receipt ? "unknown" : r.phase == CleanupReceipt::Phase::Complete ? "complete"
+        : r.phase == CleanupReceipt::Phase::Open ? "open" : "restoring";
+    return {{"type", "training_cleanup"}, {"id", id}, {"receipt_version", 1}, {"training_run", handle},
+        {"job_id", r.jobId}, {"training_token", std::to_string(r.token)}, {"leader_guid", r.leader},
+        {"guild_id", r.scope.guild}, {"human_guid", r.scope.human}, {"map_id", r.scope.map},
+        {"instance_id", r.scope.instance}, {"group_id", std::to_string(r.scope.group)},
+        {"members", r.members}, {"state", state}};
+}
+
+bool RivalUsable(RivalState const& state, std::uint32_t requiredLevel)
+{
+    return state.online && state.isBot && state.isRandomBot && !state.isCast && !state.isHuman
+        && !state.grouped && !state.inInstance && !state.inBattleground && !state.inLfg
+        && !state.dead && !state.inFlight && state.level >= requiredLevel;
+}
+
+bool FrontierReached(std::vector<std::uint8_t> const& states, std::vector<std::uint32_t> const& allowed)
+{
+    for (std::size_t index = 0; index < states.size(); ++index)
+        if (states[index] == 1 && std::find(allowed.begin(), allowed.end(), index) == allowed.end()) return true;
+    return false;
+}
+
 namespace
 {
 using json = nlohmann::json;
@@ -174,6 +208,15 @@ std::optional<GetVocabCmd> ParseGetVocab(json const& j, std::string& error)
     return f.Result(std::move(out));
 }
 
+std::optional<GetTrainingCleanupCmd> ParseGetTrainingCleanup(json const& j, std::string& error)
+{
+    Fields f(j, error);
+    GetTrainingCleanupCmd out;
+    f.String("training_run", out.trainingRun);
+    f.Require(TrainingRunFieldValid(out.trainingRun, false), "training_run");
+    return f.Result(std::move(out));
+}
+
 std::optional<CustomStrategyCmd> ParseCustomStrategy(json const& j, std::string& error)
 {
     Fields f(j, error);
@@ -202,6 +245,8 @@ std::optional<DcSettingCmd> ParseDcSetting(json const& j, std::string& error)
     f.Require(op == "clear" ? out.key.empty() || DcKeyAllowed(out.key) : DcKeyAllowed(out.key), "key");
     f.Signed("centi", out.centi);
     f.Require(op != "scale" || (out.centi >= 50 && out.centi <= 150), "centi");
+    f.String("training_run", out.trainingRun, true);
+    f.Require(TrainingRunFieldValid(out.trainingRun), "training_run");
     return f.Result(std::move(out));
 }
 
@@ -351,5 +396,57 @@ BossRecordDecision ReviewBossState(bool awaitingStart, bool terminalIntent, std:
 bool RecordingStillCurrent(bool enabled, std::uint64_t openingEpoch, std::uint64_t currentEpoch)
 {
     return enabled && openingEpoch == currentEpoch;
+}
+
+bool HoldShouldResume(HoldState const& state, std::uint64_t nowMs)
+{
+    return state.paused && state.atBoss && !state.resumed && nowMs >= state.pausedSinceMs
+        && nowMs - state.pausedSinceMs >= 20000;
+}
+
+PrimeDecision PrimeEntry(std::string_view existing, std::string_view wanted)
+{
+    return existing.empty() ? PrimeDecision::Write : existing == wanted ? PrimeDecision::Same : PrimeDecision::Taken;
+}
+
+PrimeDecision PrimeOwnedEntry(std::string_view existing, std::string_view wanted, std::string_view recorded)
+{
+    // CustomStrategy::Reset can empty its shared cache while existing strategy objects retain their old lines.
+    if (!recorded.empty() && wanted != recorded) return PrimeDecision::Taken;
+    return PrimeEntry(existing, wanted);
+}
+
+bool RestorePrimedEntry(std::map<std::string, std::string>& cache,
+    std::map<std::string, std::string, std::less<>> const& recorded, std::string const& name)
+{
+    auto receipt = recorded.find(name);
+    if (receipt == recorded.end() || receipt->second.empty()) return false;
+    auto existing = cache.find(name);
+    auto decision = PrimeOwnedEntry(existing == cache.end() ? "" : existing->second, receipt->second, receipt->second);
+    if (decision == PrimeDecision::Taken) return false;
+    if (decision == PrimeDecision::Write) cache[name] = receipt->second;
+    return true;
+}
+
+bool ShouldClearRun(RunWatch const& state, std::uint64_t nowMs)
+{
+    return !state.leaderOnline || !state.sameMap || (state.jobOwned && state.jobEnded)
+        || (!state.jobOwned && !state.dcEnabled && nowMs >= state.dcOffSinceMs
+            && nowMs - state.dcOffSinceMs >= 60000);
+}
+
+std::vector<VocabJob> PlanVocab(GetVocabCmd const& command, bool humanOnline)
+{
+    std::vector<VocabJob> jobs;
+    for (auto cls : command.classes) jobs.push_back({VocabKind::Class, static_cast<std::uint8_t>(cls), 0, false});
+    for (auto probe : command.probes) jobs.push_back({VocabKind::Probe, 0, probe, !humanOnline});
+    jobs.push_back({VocabKind::Server, 0, 0, false});
+    return jobs;
+}
+
+bool DummyBotUsable(DummyBotState const& state)
+{
+    return state.isCast && state.online && state.alive && !state.inCombat && !state.grouped
+        && !state.onInstanceMap && !state.inBattleground && !state.inOfflineRaid && !state.nonPermanentBound;
 }
 }

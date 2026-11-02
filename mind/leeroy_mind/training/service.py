@@ -22,6 +22,7 @@ from .levers import MemberInfo
 from .lines import template
 from .listener import TrainingListener
 from .mechanics import watch_names
+from .native_cleanup import NativeCleanup
 from .ports import LivePorts
 from .report import training_section
 from .score import score_pull
@@ -86,6 +87,8 @@ class TrainingGround:
         self.applier = Applier(ports, self.ledger, state_provider=self.state_for,
                                application_allowed=self.application_allowed)
         self.listener.set_applier(self.applier)
+        self.native = NativeCleanup(ports, self)
+        self.listener.prepare_run = self.native.prepare
         self.ledger.after_store.insert(0, self._score)
         self._queue = deque()
         self._wake = asyncio.Event()
@@ -164,7 +167,8 @@ class TrainingGround:
             and cast[g].online and cast[g].map == session.ctx.map_id and g not in self.ports.away())
         return ApplierState(self.listener.run_key(run), f"guild:raid:{session.raid_id}:{session.started}",
             session.ctx.instance_id, self.ports.connection_epoch, run.plan.tank_guid,
-            run.lead_is_human, members, online, self.vocab, owner)
+            run.lead_is_human, members, online, self.vocab, owner,
+            self.native.for_run(run) if run.plan.offline else None, run.plan.offline)
 
     def pre_call(self, map_id, boss_id):
         run = self.listener.run
@@ -215,6 +219,7 @@ class TrainingGround:
         self._connected = False
         self._presence_known = False
         self._startup_ready = False
+        self.native.disconnect()
         self.listener.invalidate(self.listener.run)
         self._epoch += 1
         self._queue.clear()
@@ -231,6 +236,7 @@ class TrainingGround:
 
     async def on_event(self, ev):
         self.ports.feed(ev)  # Reply delivery never waits for a command's ACK.
+        self.native.feed(ev)
         name = event_type(ev)
         if name.startswith("pull"):
             await self.ledger.on_event(ev)
@@ -294,6 +300,15 @@ class TrainingGround:
                     log.warning("training_listener_tick_failed")
             await self.ports.clock.sleep(1)
 
+    async def _native_cleanup(self):
+        while True:
+            if self._connected and not self._stopping:
+                try:
+                    await self.native.tick()
+                except Exception:
+                    log.warning("training_native_cleanup_pending")
+            await self.ports.clock.sleep(1)
+
     async def _sampling(self):
         while True:
             if self._connected:
@@ -348,7 +363,8 @@ class TrainingGround:
             raise RuntimeError("training already running")
         self._running = True
         self._lanes = {asyncio.create_task(fn()) for fn in
-                       (self._commands, self._sampling, self._maintenance, self._load, self._listening)}
+                       (self._commands, self._sampling, self._maintenance, self._load, self._listening,
+                        self._native_cleanup)}
         try:
             # Cancellation fences promptly; one shared drain owns cancellation
             # and joins instead of allowing gather to cancel the loader twice.
@@ -396,7 +412,7 @@ def attach_training(app):
     ground = TrainingGround(app, LivePorts(app, cfg=cfg))
     for name in (*protocol.TG_EVENT_TYPES, "hello", "boss", "login", "logout", "chat", "job"):
         app.register_event_handler(name, ground.on_event)
-    for name in ("job", "vocab", "server_stats", "dummy_result", "rivals"):
+    for name in ("job", "vocab", "server_stats", "dummy_result", "rivals", "training_cleanup"):
         app.register_shutdown_receipt(name, ground.ports.feed)
     app.register_connection_hook(ground.on_connection)
     guild = getattr(app, "guild", None)
