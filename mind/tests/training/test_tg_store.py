@@ -41,6 +41,29 @@ def card(**over):
                 created=10.0, changed=10.0) | over
 
 
+def test_checks_coverage_and_score_basis_are_explicit_and_versioned(fake):
+    rec, ctx = record(), context()
+    s.put_pull(fake.conn, rec, ctx, {101: "tank"}, received=10)
+    row = s.pull_rows(fake.conn)[0]
+    assert row["checks_complete"] == 0 and row["checks_coverage"] == "[]"
+    assert row["score_basis"] == "unknown"
+    s.set_checks(fake.conn, rec.header.id, [], ["unknown"], deaths=1, failed=3, version=1,
+                 complete=False, coverage=("positions_missing",))
+    s.set_score(fake.conn, rec.header.id, -8, basis="deaths_time")
+    row = s.pull_rows(fake.conn)[0]
+    assert row["failed_mechanics"] == 3 and row["score"] == -8
+    assert row["checks_complete"] == 0 and json.loads(row["checks_coverage"]) == ["positions_missing"]
+    assert row["score_basis"] == "deaths_time"
+    s.set_checks(fake.conn, rec.header.id, [], ["unknown"], deaths=1, failed=0, version=1, complete=True)
+    assert s.pull_rows(fake.conn)[0]["checks_complete"] == 0
+    s.set_checks(fake.conn, rec.header.id, [], ["unknown"], deaths=1, failed=0, version=2, complete=True)
+    row = s.pull_rows(fake.conn)[0]
+    assert row["checks_complete"] == 1 and row["checks_coverage"] == "[]"
+    assert row["score"] is None and row["score_basis"] == "unknown"
+    s.set_score(fake.conn, rec.header.id, -8)  # Legacy callers cannot imply verification.
+    assert s.pull_rows(fake.conn)[0]["score_basis"] == "unknown"
+
+
 @pytest.mark.parametrize("version", [5, 6, 7])
 def test_actual_migration_ancestry_preserves_existing_rows_and_vectors(tmp_path, monkeypatch, version):
     actual = db.MIGRATIONS_DIR
