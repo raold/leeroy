@@ -139,10 +139,43 @@ class GpuArbiter:
         self._live = settings.live_model
         self._reflection = settings.reflection_model
         self._embedding = settings.embedding_model
+        self._url = settings.ollama_url.rstrip("/")
+        self._revision = 0
+        self._managed = {norm(m): m for m in (self._live, self._reflection)
+                         if norm(m) != norm(self._embedding)}
         self._preempt_timeout = preempt_timeout
         self._holders: set[str] = set()
         self._preempt: Callable[[], Awaitable[None]] | None = None
         self._lock = asyncio.Lock()
+
+    def reconfigure(self, settings: NightlySettings) -> bool:
+        """Change the swappable names inline, without waiting for a model operation.
+
+        The client endpoint and embedding model belong to the app's startup resources and
+        require a restart. Retired live/reflection names remain ours until a successful
+        reconciliation confirms them unloaded; unrelated and embedding models stay untouched.
+        A hand-back in flight follows the newest revision. An in-flight ensure_model instead
+        fails, so its old context cannot proceed with a model that the reload superseded.
+        Callers must cancel an old night's run before reconfiguring it for a live login.
+        """
+        if settings.ollama_url.rstrip("/") != self._url:
+            raise ValueError("changing the Ollama endpoint requires a restart")
+        if norm(settings.embedding_model) != norm(self._embedding):
+            raise ValueError("changing the embedding model requires a restart")
+        changed = (norm(settings.live_model), norm(settings.reflection_model)) != (
+            norm(self._live), norm(self._reflection))
+        self._live, self._reflection = settings.live_model, settings.reflection_model
+        for model in (self._live, self._reflection):
+            if norm(model) != norm(self._embedding):
+                self._managed[norm(model)] = model
+        if changed:
+            self._revision += 1
+        return changed
+
+    def _prune_managed(self, listed: list[str]) -> None:
+        """Keep the current pair and retired names still resident after reconciliation."""
+        keep = {norm(self._live), norm(self._reflection), *(norm(n) for n in listed)}
+        self._managed = {key: name for key, name in self._managed.items() if key in keep}
 
     def set_preempt(self, cb: Callable[[], Awaitable[None]]) -> None:
         """`cb` cancels the night's run and waits for it to stop. hand_over awaits it with the
@@ -197,10 +230,29 @@ class GpuArbiter:
             if not self._holders:
                 return
             await self._run_preempt()
-            if norm(self._reflection) != norm(self._live):
-                await self._unload(self._reflection, await self.admin.loaded_models())
-            await self.admin.preload(self._live, -1,
-                                     options={"num_ctx": LIVE_PRESET.options["num_ctx"]})
+            while self._holders:
+                revision, target = self._revision, self._live
+                listed = await self.admin.loaded_models()
+                if revision != self._revision:
+                    continue
+                remaining = list(listed)
+                for name in listed:
+                    if norm(name) in self._managed and norm(name) not in {
+                            norm(target), norm(self._embedding)}:
+                        await self.admin.unload(name)
+                        remaining.remove(name)
+                        if revision != self._revision:
+                            break
+                if revision != self._revision:
+                    continue
+                if not self._holders:
+                    self._prune_managed(remaining)
+                    return
+                await self.admin.preload(target, -1,
+                                         options={"num_ctx": LIVE_PRESET.options["num_ctx"]})
+                if revision == self._revision:
+                    self._prune_managed([*remaining, target])
+                    return
 
     async def acquire_live(self, holder: str) -> None:
         """hold(holder) and, for the first lease, hand_over(): it returns once the GPU is the live
@@ -228,18 +280,28 @@ class GpuArbiter:
             await self.release_live(holder)
 
     def _swappable(self) -> list[str]:
-        """The live and reflection models, once each (a misconfigured pair may be one model)."""
-        return list({norm(m): m for m in (self._live, self._reflection)}.values())
+        """Current and not-yet-reconciled retired models, excluding the embedding model."""
+        return list(self._managed.values())
 
     async def ensure_model(self, model: str) -> None:
         """Make room for `model`: unload whichever of the live and reflection models is loaded
         and is not `model`. No other model is touched, and `model` itself is left to load on its
         first request."""
+        revision = self._revision
         async with self._lock:
+            if revision != self._revision:
+                raise RuntimeError("nightly models changed during model admission")
             listed = await self.admin.loaded_models()
+            if revision != self._revision:
+                raise RuntimeError("nightly models changed during model admission")
+            remaining = list(listed)
             for other in self._swappable():
                 if norm(other) != norm(model):
                     await self._unload(other, listed)
+                    remaining = [n for n in remaining if norm(n) != norm(other)]
+                    if revision != self._revision:
+                        raise RuntimeError("nightly models changed during model admission")
+            self._prune_managed(remaining)
 
     async def foreign_models(self, expected: str) -> list[str]:
         """The loaded models other than `expected` and the embedding model, as Ollama lists

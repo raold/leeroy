@@ -1,6 +1,6 @@
 """The tests' guard against the owner's live services. conftest arms it for every test.
 
-The live bridge takes one mind and hands it every event it buffered; Ollama runs the owner's
+The live bridge (and the voice service on 7879) takes one mind and hands it every event it buffered; Ollama runs the owner's
 models; mind-data holds his guild. A test, or a regression in one, that reaches any of them
 gets LiveServiceTouched *before* the connection, the open or the launch happens. The hit is also
 recorded and fails the test at teardown, so app code that swallows the exception (a worker's
@@ -16,7 +16,8 @@ Routes covered:
 - files and databases under the real mind-data (the package-relative one, the main checkout's
   and the one LEEROY_MIND_DATA named when the run began): open, sqlite3.connect (plain paths
   and file: URIs), mkdir, rename/replace, remove, rmdir, listing, copy and the like;
-- launching the mind service (`leeroy_mind` in a subprocess, os.system, spawn or exec), and
+- launching the mind service (`leeroy_mind`) or the voice service (`leeroy_voice`) in a subprocess,
+  os.system, spawn or exec, and
   the `ollama` CLI.
 
 Tests marked `live` may reach the bridge's port and launch the service, but never on the real
@@ -42,6 +43,7 @@ from pathlib import Path
 import pytest
 
 from leeroy_mind import config
+from leeroy_mind.voice.config import VoiceCfg
 
 # default_data_dir() when LEEROY_MIND_DATA is not set: the package-relative mind-data
 REAL_MIND_DATA = Path(config.__file__).resolve().parents[2] / "mind-data"
@@ -80,7 +82,8 @@ def live_ports() -> dict[int, str]:
     """The bridge's and Ollama's ports, from the defaults the service would use."""
     defaults = tomllib.loads(config.DEFAULT_TOML)
     ollama = urllib.parse.urlsplit(defaults["ollama"]["url"])
-    return {defaults["bridge"]["port"]: "live", ollama.port or 80: "ollama"}
+    return {defaults["bridge"]["port"]: "live", VoiceCfg().port: "live",
+            ollama.port or 80: "ollama"}
 
 
 def _main_checkout() -> Path | None:
@@ -156,6 +159,8 @@ class Guard:
         text = repr(what)
         if _OLLAMA_CLI.search(text) and "ollama" not in self.allowed:
             self.hit(f"{how} of the ollama CLI: {what!r} (only tests marked 'ollama' may)")
+        if "leeroy_voice" in text and "live" not in self.allowed:
+            self.hit(f"{how} of the voice service: {what!r}")
         if "leeroy_mind" not in text:
             return
         if "live" not in self.allowed:

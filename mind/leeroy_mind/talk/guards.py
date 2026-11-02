@@ -35,15 +35,17 @@ class Guards:
         return len(self._window)
 
     def allow(self, guid: int, kind: TurnKind, now: float, *, continuation: bool = False,
-              reply: bool = False) -> bool:
+              reply: bool = False, pushback: bool = False) -> bool:
         """`reply` marks an answer to the human's whisper: it always may go out (rehearsal 3,
         check 4: her reply to his whisper was dropped 4 s after a guild bit of hers). Her lines
         elsewhere and the guild's pace hold back only what the guild reads; it still counts
-        toward them once said (record)."""
+        toward them once said (record). `pushback` marks the answer of the member his
+        pushback is aimed at (fix wave G6): their own interval never holds it back, since his
+        "are you drunk?" comes seconds after their line; the guild's pace still does."""
         if continuation or reply:
             return True
         n = self._in_window(now)
-        if kind not in _NO_PERSON_LIMIT:
+        if kind not in _NO_PERSON_LIMIT and not pushback:
             interval = REPLY_S if kind is TurnKind.REPLY_HUMAN else self.per_person_s
             last = self._last.get(guid)
             if last is not None and now - last < interval:

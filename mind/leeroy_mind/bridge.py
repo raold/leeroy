@@ -205,6 +205,11 @@ class BridgeClient:
             except (OSError, asyncio.TimeoutError):
                 pass
 
+    def inject(self, ev: Event) -> None:
+        """Put an event on the dispatcher's queue, behind those already there: an extension's
+        own events (his transcribed lines) are handled in order with the bridge's."""
+        self._enqueue(("event", ev))
+
     def _enqueue(self, item) -> None:
         self._queue.put_nowait(item)
         size = self._queue.qsize()

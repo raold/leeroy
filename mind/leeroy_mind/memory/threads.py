@@ -14,7 +14,7 @@ def thread_key(ev: Chat) -> str:
     if ch == "whisper":
         lo, hi = sorted((ev.from_guid, ev.to_guid))
         return f"whisper:{lo}:{hi}"
-    if ch in ("guild", "officer"):
+    if ch in ("guild", "officer") or ch.startswith("voice:"):
         return ch
     if ch in ("party", "raid", "raid_warning"):
         return "group"

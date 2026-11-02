@@ -59,6 +59,14 @@ def _memory_from_row(r: sqlite3.Row) -> MemoryRow:
         scope_with=r["scope_with"])
 
 
+def _chat_from_row(r: sqlite3.Row) -> ChatLineRow:
+    return ChatLineRow(
+        id=r["id"], ts=r["ts"], channel=r["channel"], from_guid=r["from_guid"],
+        from_name=r["from_name"], to_guid=r["to_guid"], text=r["text"], map=r["map"],
+        zone=r["zone"], session_id=r["session_id"], thread_id=r["thread_id"],
+        origin=r["origin"], audience=_guids(r["audience"]))
+
+
 def _check_vec(v: bytes) -> bytes:
     if len(v) != VEC_DIM * 4:
         raise ValueError(f"embedding must be {VEC_DIM} float32 values, got {len(v)} bytes")
@@ -190,6 +198,26 @@ class Store:
                     (m.guid, clean(m.name), m.race, m.class_, m.gender, m.level, m.rank,
                      int(m.online), m.map, m.zone, m.spec_tab, ts))
 
+    def replace_cast(self, members, ts: float, *, keep=()) -> list[int]:
+        """The bridge's whole cast (a Cast event: mod-leeroy sends every member each time):
+        its members are upserted and every other row goes, but the guids in `keep` (his: the
+        bridge never sends him, and human_identity reads his row). An empty snapshot, from a
+        bridge that hasn't loaded the guild yet, deletes nothing. Only the roster changes: the
+        personas, memories and relationships of a member who left stay (fix wave G6). The
+        guids deleted, in order."""
+        members = list(members)
+        with self.transaction():
+            self.upsert_cast(members, ts)
+            if not members:
+                return []
+            stay = json.dumps(sorted({m.guid for m in members} | set(keep)))
+            gone = [r["guid"] for r in self._all(
+                "SELECT guid FROM cast_member WHERE guid NOT IN (SELECT value FROM json_each(?)) "
+                "ORDER BY guid", (stay,))]
+            self.conn.execute("DELETE FROM cast_member WHERE guid NOT IN "
+                              "(SELECT value FROM json_each(?))", (stay,))
+            return gone
+
     def cast(self) -> dict[int, Member]:
         return {
             r["guid"]: Member(
@@ -225,13 +253,20 @@ class Store:
         if not ids:
             return []
         marks = ",".join("?" * len(ids))
-        return [
-            ChatLineRow(
-                id=r["id"], ts=r["ts"], channel=r["channel"], from_guid=r["from_guid"],
-                from_name=r["from_name"], to_guid=r["to_guid"], text=r["text"], map=r["map"],
-                zone=r["zone"], session_id=r["session_id"], thread_id=r["thread_id"],
-                origin=r["origin"], audience=_guids(r["audience"]))
-            for r in self._all(f"SELECT * FROM chat_line WHERE id IN ({marks}) ORDER BY id", ids)]
+        return [_chat_from_row(r) for r in
+                self._all(f"SELECT * FROM chat_line WHERE id IN ({marks}) ORDER BY id", ids)]
+
+    def lines_before(self, line_id: int, channels, *, since: float, from_guid: int = 0,
+                     limit: int = 50) -> list[ChatLineRow]:
+        """The lines on `channels` stored before line `line_id` and no older than `since`
+        (mind seconds), newest first, at most `limit`; with `from_guid`, only theirs. Every
+        origin: his lines, the mind's and the game's (fix wave G6: the pushback window)."""
+        who = " AND from_guid = ?" if from_guid else ""
+        return [_chat_from_row(r) for r in self._all(
+            "SELECT * FROM chat_line WHERE id < ? AND ts >= ? AND channel IN "
+            f"(SELECT value FROM json_each(?)){who} ORDER BY id DESC LIMIT ?",
+            (line_id, since, json.dumps(sorted(set(channels))),
+             *((from_guid,) if from_guid else ()), limit))]
 
     def recent_mind_lines(self, speaker_guid: int, n: int, *, model_only: bool = True
                           ) -> list[tuple[str, int, str]]:

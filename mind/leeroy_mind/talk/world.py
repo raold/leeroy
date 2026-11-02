@@ -65,6 +65,8 @@ class WorldView:
         self.afk: set[int] = set()
         self.history: deque[SeenLine] = deque(maxlen=300)
         self.last_spoke: dict[int, float] = {}
+        # who sits in a `voice:` channel's room, once the voice extension is attached
+        self.room_audience: Callable[[str], frozenset[int]] | None = None
 
     def cast_guids(self) -> set[int]:
         return {g for g, m in self.members.items()
@@ -172,6 +174,8 @@ class WorldView:
         """Cast guids that can see a line on this channel right now."""
         cast = self.cast_guids()
         online = self.online & cast
+        if channel.startswith("voice:"):
+            return self.room_audience(channel) & online if self.room_audience else frozenset()
         if channel == "guild":
             return frozenset(online)
         if channel == "officer":

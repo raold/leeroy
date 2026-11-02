@@ -236,6 +236,35 @@ def test_cast_game_chat_is_logged_not_threaded(tmp_path, clock):
     run(main())
 
 
+def test_the_stored_cast_follows_each_cast_snapshot(tmp_path, clock, caplog):
+    """Fix wave G6: the owner kicked a member, and the bridge's next cast left him out, but
+    the stored roster (generation, seeding and doctor read it) kept him. Each cast is the
+    whole cast now: who is missing from it leaves the roster, persona and relationships kept.
+    His own row stays, before the bridge has named him too (the roster's guild master), and an
+    empty cast (a bridge that hasn't loaded the guild) changes nothing."""
+    without_ebbo = {"type": "cast", "members": [m for m in CAST["members"] if m["guid"] != 105]}
+
+    async def main():
+        async with running(tmp_path, clock, events=[hello(0), CAST]) as h:
+            store = h.app.store
+            await h.wait(lambda: h.app.world.online)
+            assert set(store.cast()) == {HUMAN, 101, 102, 103, 104, 105}
+            store.put_relationship(dataclasses.replace(store.get_relationship(105, HUMAN),
+                                                       affinity=30.0, interactions=4))
+            await h.bridge.push(without_ebbo)
+            await h.wait(lambda: 105 not in store.cast())
+            assert set(store.cast()) == {HUMAN, 101, 102, 103, 104}
+            assert store.get_persona_json(105) is not None
+            assert store.get_relationship(105, HUMAN).affinity == 30.0
+            assert store.get_meta("human_guid") is None  # not named yet: his row stayed anyway
+            await h.bridge.push({"type": "cast", "members": []})
+            await h.wait(lambda: not h.app.world.members)
+            assert set(store.cast()) == {HUMAN, 101, 102, 103, 104}
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        run(main())
+    assert "cast_left: guids=[105]" in caplog.text
+
+
 def test_human_bot_commands_are_stored_not_threaded(tmp_path, clock):
     async def main():
         group = {"type": "group", "leader_guid": HUMAN, "raid": False,
@@ -515,7 +544,9 @@ def test_app_exposes_extension_attributes(tmp_path, clock):
                 assert isinstance(getattr(app, name), kind), name
             assert app.cfg.talk.chattiness == 4 and app.data_dir == tmp_path
             assert app.clock is clock and isinstance(app.llm, FakeLLM)
-            assert app.extractor is not None and app.arbiter is None
+            from leeroy_mind.nightly.gpu import GpuArbiter, NullAdmin
+            assert app.extractor is not None and isinstance(app.arbiter, GpuArbiter)
+            assert isinstance(app.arbiter.admin, NullAdmin)
             for hook in ("register_event_handler", "register_connection_hook",
                          "register_offline_hook", "register_background", "handle", "origin_of"):
                 assert callable(getattr(app, hook)), hook
@@ -1213,7 +1244,9 @@ def test_doctor_reports_every_check(tmp_path, capsys):
         argv = ["doctor", "--data-dir", str(tmp_path), "--ollama-conf", str(conf)]
         assert main(argv, make_llm=lambda c: llm) == 0
         out = capsys.readouterr().out.splitlines()
-        assert len(out) == 14 and all(line.startswith("ok") for line in out), out
+        voice_notes = [line for line in out if line.startswith("note voice ")]
+        assert voice_notes == ["note voice specs: 0 of 5 cast members", "note voice service: disabled"]
+        assert len(out) == 16 and all(line.startswith("ok") for line in out if line not in voice_notes), out
         assert any("live_fallback" in line and "not pulled" in line for line in out)
         assert any("personas 5" in line for line in out)
         assert any("fit every woman's attitude" in line for line in out)

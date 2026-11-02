@@ -1,7 +1,7 @@
-From ac039eba2a5b4366e932a7a915cb0ef0e3ccc7de Mon Sep 17 00:00:00 2001
+From ea1b7de1351ba5b1c0557ca86a10c5df2657bbc9 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 23:31:06 -0400
-Subject: [PATCH 7/7] Keep pinned bots in place when revived
+Subject: [PATCH 7/9] Keep pinned bots in place when revived
 
 FindCorpseAction calls Revive for a masterless ghost after five deaths; Revive runs Refresh, which leaves the group, and a grind teleport. For a pinned bot it now only revives in place.
 ---
@@ -10,10 +10,10 @@ FindCorpseAction calls Revive for a masterless ghost after five deaths; Revive r
  2 files changed, 26 insertions(+), 8 deletions(-)
 
 diff --git a/src/Bot/RandomPlayerbotMgr.cpp b/src/Bot/RandomPlayerbotMgr.cpp
-index 0f42d600..13a5319d 100644
+index 1686f89f..b3d15e0f 100644
 --- a/src/Bot/RandomPlayerbotMgr.cpp
 +++ b/src/Bot/RandomPlayerbotMgr.cpp
-@@ -1861,11 +1861,7 @@ bool RandomPlayerbotMgr::ProcessPinnedBot(Player* bot)
+@@ -1872,11 +1872,7 @@ bool RandomPlayerbotMgr::ProcessPinnedBot(Player* bot)
          if (GetEventValue(botId, "revive"))
              return false;
  
@@ -26,7 +26,7 @@ index 0f42d600..13a5319d 100644
          return true;
      }
  
-@@ -1886,10 +1882,31 @@ bool RandomPlayerbotMgr::ProcessPinnedBot(Player* bot)
+@@ -1897,10 +1893,31 @@ bool RandomPlayerbotMgr::ProcessPinnedBot(Player* bot)
      return false;
  }
  
@@ -59,10 +59,10 @@ index 0f42d600..13a5319d 100644
      SetEventValue(bot, "dead", 0, 0);
      SetEventValue(bot, "revive", 0, 0);
 diff --git a/src/Bot/RandomPlayerbotMgr.h b/src/Bot/RandomPlayerbotMgr.h
-index 62ef1f6e..aa411796 100644
+index 67dcc8e3..b39490ed 100644
 --- a/src/Bot/RandomPlayerbotMgr.h
 +++ b/src/Bot/RandomPlayerbotMgr.h
-@@ -110,9 +110,9 @@ public:
+@@ -137,9 +137,9 @@ public:
      bool IsRandomBot(ObjectGuid::LowType bot);
      bool IsAddclassBot(Player* bot);
      bool IsAddclassBot(ObjectGuid::LowType bot);
@@ -75,7 +75,7 @@ index 62ef1f6e..aa411796 100644
      uint32 SetPinnedBots(std::unordered_set<ObjectGuid::LowType> const& bots, bool keep, bool online);
      bool IsPinned(ObjectGuid::LowType bot) const;  // any thread
      void Randomize(Player* bot);
-@@ -276,6 +276,7 @@ private:
+@@ -307,6 +307,7 @@ private:
      mutable std::mutex _pinnedBotsLock;
      void LoginPinnedBots();
      bool ProcessPinnedBot(Player* bot);

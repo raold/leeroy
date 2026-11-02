@@ -61,7 +61,8 @@ class PromptParts:
     first. instruction: render_instruction. real_name: real_name_line ("" almost always).
     facts: the library's fact lines for his game question (facts.fact_lines), under
     facts_head (facts_head()). pinned: the index in chat of his line the reply answers; with
-    facts, the trim never cuts it."""
+    facts, the trim never cuts it. kept: the index in chat of the speaker's own line his
+    pushback is about (fix wave G6); the trim never cuts it either."""
     card: str
     samples: list[str]
     rules: str
@@ -75,6 +76,7 @@ class PromptParts:
     facts: list[str] = field(default_factory=list)
     facts_head: str = ""
     pinned: int | None = None
+    kept: int | None = None
 
 
 FACTS_HEAD = ("Facts you know (use them if they help, in your own words; never invent anything "
@@ -152,6 +154,39 @@ def quest_help(human: HumanIdentity) -> str:
     line."""
     they, them, _ = human.forms
     return QUEST_HELP.format(human=human.called, them=them, they=they)
+
+
+# His pushback on what a member just said (fix wave G6, seen live: her note toward him said she
+# teases him about being too serious, so each serious line drew a harder tease, and nothing in
+# her reply knew he was confused or annoyed). It ends that member's answer to the line; when he
+# is annoyed, how agreeable they are picks the answer.
+PUSHBACK_DOUBT = ("{human} is pushing back on what you just said: {they} didn't follow it or "
+                  "think it's wrong. Answer {them} plainly: say what you meant, or admit you got "
+                  "it wrong. No joke this time.")
+PUSHBACK_SORRY = ("{human} is annoyed with you. Take it seriously: apologise and make it right. "
+                  "No joke this time.")
+PUSHBACK_FIRM = ("{human} is annoyed with you. Take it seriously: stand your ground if you were "
+                 "right, going only by what was actually said. No joke this time.")
+PUSHBACK_STRAIGHT = ("{human} is annoyed with you. Take it seriously and answer {them} straight. "
+                     "No joke this time.")
+SORRY_FROM, FIRM_UNTIL = 7, 4  # agreeableness: who apologises, who stands their ground
+
+
+def pushback_help(human: HumanIdentity, kind: str, agreeableness: float) -> str:
+    """The text for the answer of the member his pushback (select.pushback_kind) is aimed at,
+    with his name and pronouns as the reply's own instruction has them: PUSHBACK_DOUBT, or for
+    "anger" by the member's agreeableness, PUSHBACK_SORRY from SORRY_FROM, PUSHBACK_FIRM up to
+    FIRM_UNTIL and PUSHBACK_STRAIGHT between."""
+    they, them, _ = human.forms
+    if kind == "doubt":
+        text = PUSHBACK_DOUBT
+    elif agreeableness >= SORRY_FROM:
+        text = PUSHBACK_SORRY
+    elif agreeableness <= FIRM_UNTIL:
+        text = PUSHBACK_FIRM
+    else:
+        text = PUSHBACK_STRAIGHT
+    return text.format(human=human.called, they=they, them=them)
 
 
 INSTRUCTIONS: dict[TurnKind, str] = {
@@ -442,8 +477,9 @@ def line_age(seconds: float) -> str:
 
 def chat_line_text(row: ChatLineRow, names: dict[int, str], *,
                    now: float | None = None) -> str:
-    """'Name: text' for guild chat, 'Name (raid): text' elsewhere, markup stripped, and with
-    `now` its age in front ('[3m ago] Name: text'), so an old line never reads as current.
+    """'Name: text' for guild chat, 'Name (raid): text' elsewhere, 'Name (on vent): text' in a
+    voice room, markup stripped, and with `now` its age in front ('[3m ago] Name: text'), so an
+    old line never reads as current.
     `names` maps guids to how the speaker knows them (the human by his nickname)."""
     who = names.get(row.from_guid) or row.from_name or "someone"
     text = " ".join(strip_wow_markup(row.text).split())
@@ -452,6 +488,8 @@ def chat_line_text(row: ChatLineRow, names: dict[int, str], *,
     elif row.channel == "whisper":
         to = names.get(row.to_guid)
         tag = f" (whisper to {to})" if to else " (whisper)"
+    elif row.channel.startswith("voice:"):
+        tag = " (on vent)"
     else:
         tag = f" ({row.channel})"
     age = "" if now is None else f"[{line_age(now - row.ts)}] "
@@ -503,12 +541,16 @@ def trim_to_budget(p: PromptParts, *, budget: int = LIVE_BUDGET) -> PromptParts:
     cards, and drops chat down to the newest line. With facts, the older chat goes first in
     both rounds (fix wave E: the facts answer his line, the chat before it matters less), and
     his line the reply answers (pinned) is never cut nor shortened: it is the floor, even
-    when later answers came after it. The system message, mood, real-name line, facts and
-    instruction are never cut. Memories stay a prefix of the input, so len(result.memories)
-    says which recalled memories were used."""
+    when later answers came after it. The speaker's own line his pushback is about (kept, fix
+    wave G6) is never cut nor shortened either, and the last resort keeps it with the floor.
+    The system message, mood, real-name line, facts and instruction are never cut. Memories
+    stay a prefix of the input, so len(result.memories) says which recalled memories were
+    used."""
     t = replace(p, rel_cards=list(p.rel_cards), memories=list(p.memories), chat=list(p.chat),
                 own_recent=list(p.own_recent))
     pin = p.pinned if p.facts and p.pinned is not None and 0 <= p.pinned < len(p.chat) else None
+    kept = p.kept if p.kept is not None and 0 <= p.kept < len(p.chat) else None
+    least = 1 if kept is None else 2  # the chat the last resort leaves
 
     def over() -> bool:
         return _tokens(render_messages(t)) > budget
@@ -518,12 +560,15 @@ def trim_to_budget(p: PromptParts, *, budget: int = LIVE_BUDGET) -> PromptParts:
             items.pop(0 if oldest_first else -1)
 
     def drop_chat(floor: int) -> None:
-        nonlocal pin
+        nonlocal pin, kept
         while len(t.chat) > floor and over():
-            i = 1 if pin == 0 else 0  # the oldest that isn't his pinned line
+            # the oldest line that is neither his pinned line nor her kept one
+            i = next(j for j in range(len(t.chat)) if j not in (pin, kept))
             t.chat.pop(i)
             if pin is not None and i < pin:
                 pin -= 1
+            if kept is not None and i < kept:
+                kept -= 1
 
     if t.facts:
         drop_chat(MIN_CHAT)
@@ -534,18 +579,18 @@ def trim_to_budget(p: PromptParts, *, budget: int = LIVE_BUDGET) -> PromptParts:
     for i in range(len(t.chat) - 1):  # never the newest line, the one being answered
         if not over():
             break
-        if i != pin:
+        if i not in (pin, kept):
             t.chat[i] = truncate_words(t.chat[i], SHORT_CHAT_CHARS)
     if over():
         log.warning("prompt over its %d-token budget after the usual trims: last-resort trim",
                     budget)
     if t.facts:
-        drop_chat(1)
+        drop_chat(least)
     drop(t.memories, 0, False)
     drop(t.own_recent, 0, True)
     drop(t.rel_cards, 0, False)
-    drop_chat(1)
-    t.pinned = pin
+    drop_chat(least)
+    t.pinned, t.kept = pin, kept
     return t
 
 

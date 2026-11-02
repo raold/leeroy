@@ -47,7 +47,7 @@ max_inflight = 3              # 1-4 of Ollama's 4 slots
 '''
 
 RAID_RULES = frozenset({"leaders_and_urgent"})
-EXTENSION_SECTIONS = frozenset({"guild", "dkp", "life"})
+EXTENSION_SECTIONS = frozenset({"guild", "dkp", "life", "voice"})
 _HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 

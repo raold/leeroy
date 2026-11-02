@@ -90,6 +90,52 @@ _TITLE = re.compile(r'"title":\s*"([^"]+)"')
 _ITEM = re.compile(r"\bITEM (\d+)\b")
 
 
+def generic(prompt: str) -> dict:
+    """Schema-valid quiet replies for full-pipeline synthetic integration tests.
+
+    Explicit judge/scene replies keep those tests about persistence and orchestration;
+    individual stage tests exercise the content decisions with their scripted answers.
+    """
+    shape, _ = json.JSONDecoder().raw_decode(prompt.rsplit("matching this schema:", 1)[-1].lstrip())
+
+    def smallest(part):
+        if "enum" in part:
+            return next((v for v in (None, "none", "neutral") if v in part["enum"]), part["enum"][0])
+        kind = part.get("type")
+        if isinstance(kind, list):
+            if "null" in kind:
+                return None
+            kind = kind[0]
+        if kind == "object":
+            return {key: smallest(part["properties"][key]) for key in part.get("required", [])}
+        if kind == "array":
+            return [smallest(part["items"]) for _ in range(part.get("minItems", 0))]
+        if kind in ("integer", "number"):
+            return max(0, part.get("minimum", 0))
+        if kind == "boolean":
+            return False
+        if kind == "null":
+            return None
+        return "Taking a quiet moment."[:part.get("maxLength", 200)]
+
+    title = shape["title"]
+    result = smallest(shape)
+    if title == "judge":
+        return {"verdicts": [{"i": int(i), "support": "yes", "invariants_ok": True,
+                               "why": "Supported by the supplied evidence."}
+                              for i in dict.fromkeys(_ITEM.findall(prompt.split("matching this schema:")[0]))]}
+    if title == "reflection":
+        return {"outputs": [], "emotions": [], "diary": {"text": "Taking a quiet moment.", "evidence": [1]}}
+    if title == "encounter":
+        return {"scene": "We took a quiet moment.", "memories": [
+            {"who": who, "text": "We took a quiet moment.", "importance": 1, "valence": 0}
+            for who in ("a", "b")], "deltas": [], "bystanders": [], "gossip": None}
+    if title == "critic":
+        indices = re.findall(r"^(\d+): ", prompt, re.MULTILINE)
+        return {"scores": [{"i": int(i), "score": 5, "why": "Consistent."} for i in indices]}
+    return result
+
+
 def scripted(replies: dict[str, list[dict | Callable[[str], dict]]],
              default: Callable[[str], dict] | None = None) -> Callable[[str, list[dict]], str]:
     """A FakeLLM script. A call's schema title (`"title": "<t>"` in the schema P1b's chat_json
