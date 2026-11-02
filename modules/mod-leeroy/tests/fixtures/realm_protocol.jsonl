@@ -38,7 +38,7 @@
 {"name":"calendar_post_defaults","kind":"command","valid":true,"error":"","msg":{"v":1,"type":"calendar_post","id":"realm-test","ts":0,"creator_guid":11001,"title":"Test Meeting","event_type":"meeting","at":2000000000}}
 {"name":"calendar_update_defaults","kind":"command","valid":true,"error":"","msg":{"v":1,"type":"calendar_update","id":"realm-test","ts":0,"event_id":14001}}
 {"name":"mail_send_defaults","kind":"command","valid":true,"error":"","msg":{"v":1,"type":"mail_send","id":"realm-test","ts":0,"from_guid":11001,"subject":"A letter"}}
-{"name":"bank_deposit_defaults","kind":"command","valid":true,"error":"","msg":{"v":1,"type":"bank_deposit","id":"realm-test","ts":0,"guid":11001,"item_id":43015,"tab":0}}
+{"name":"bank_deposit_missing_count","kind":"command","valid":false,"error":"bad field: count","msg":{"v":1,"type":"bank_deposit","id":"realm-test","ts":0,"guid":11001,"item_id":43015,"tab":0}}
 {"name":"guild_admit_defaults","kind":"command","valid":true,"error":"","msg":{"v":1,"type":"guild_admit","id":"realm-test","ts":0,"guid":11001}}
 {"name":"announce_defaults","kind":"command","valid":true,"error":"","msg":{"v":1,"type":"announce","id":"realm-test","ts":0,"map":631,"instance_id":15001,"boss_id":0,"boss_name":"Lord Marrowgar","first":"ever"}}
 {"name":"arena_team_add","kind":"command","valid":true,"error":"","msg":{"v":1,"type":"arena_team","id":"realm-test","ts":0,"action":"add","team_id":13001,"guid":11001}}
