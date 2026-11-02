@@ -340,7 +340,13 @@ from the leader); random-bot BG, LFG and Raid Browser selection still apply to
 pins. Pinned bots also skip playerbots' periodic `Refresh`, which clears inventory but
 is the only routine top-up of ammo, reagents and potions, so over long uptimes
 cast hunters run out of ammo and casters out of reagents. A master can whisper
-`maintenance` to bots in their group; a pin-safe top-up is planned for P1d.
+`maintenance` to bots in their group. mod-leeroy's world-tick job (`TopUpJob`)
+tops up pinned cast bots outside combat, groups and instances, at most once an
+hour each and five bots per 15-minute pass. It preserves inventory: additive
+ammo and shaman reagent paths replace factory helpers that destroy old stacks.
+Food and drink are filled independently so existing food cannot crowd out missing
+water; shifted druids retain drink coverage. Audited factory helpers add potions
+and class consumables.
 
 Local commits `e36fca36` and `7c1e5b49` (built 2026-10-31) keep pins quiet: for a
 pinned bot three `TellMaster` lines are skipped, "AI was reset to defaults"
