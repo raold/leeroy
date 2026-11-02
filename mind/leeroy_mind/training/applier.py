@@ -215,6 +215,30 @@ class Applier:
             self.ports.conn.execute("UPDATE tg_applied SET command=? WHERE id=?",
                 (json.dumps(receipt.envelope, separators=(",", ":")), receipt.id))
 
+    def _resume_allowed(self, state, run, *, exclude=0):
+        if (state is None or state.run_key != run or not self._matches(self._scope(state))
+                or not self.acting(self.ports.clock.now()) or self._blocked or run in self._stopped
+                or not self._available(state, (state.tank_guid,))):
+            return False
+        rows = [row for row in self._rows() if row["id"] != exclude]
+        try:
+            if any(row["id"] not in self._receipts or not json.loads(row["command"]).get("settled")
+                   for row in rows):
+                return False
+        except (ValueError, TypeError):
+            return False
+        active = {row["id"] for row in rows if row["run"] == run}
+        for ident in active:
+            receipt = self._receipts[ident]
+            command = _decode(receipt.envelope["wire"])
+            if (receipt.ok and receipt.settled and receipt.envelope["scope"] == self._scope(state)
+                    and isinstance(command, DcSetting) and command.op == "set"
+                    and command.key == "WaitAtBoss" and command.centi == 100
+                    and command.leader_guid == state.tank_guid and state.tank_guid in state.members
+                    and receipt.envelope["members"].get(str(state.tank_guid)) == asdict(state.members[state.tank_guid])):
+                return True
+        return False
+
     async def _perform(self, receipt, command):
         """Survives caller timeout/cancellation; only terminal evidence settles it."""
         try:
@@ -224,7 +248,9 @@ class Applier:
             if (receipt.provider is not self.state_provider or not self._matches(scope)
                     or not self._available(state, guids)
                     or any(g not in state.members or asdict(state.members[g]) != receipt.envelope["members"].get(str(g))
-                           for g in guids)):
+                           for g in guids)
+                    or receipt.envelope.get("resume_held", False)
+                    and not self._resume_allowed(state, receipt.run, exclude=receipt.id)):
                 # No transport call occurred. This local receipt is provably
                 # unsent, unlike a negative acknowledgement from the server.
                 receipt.settled, receipt.reason = True, "unsent"
@@ -283,12 +309,13 @@ class Applier:
             receipt.acked.set()
             self._write_receipt(receipt)
 
-    async def _send(self, run, layer, context, command, inverse, scope, keys=()):
+    async def _send(self, run, layer, context, command, inverse, scope, keys=(), *, resume_held=False):
         if not self._matches(scope):
             return _Receipt(0, {}, settled=True, reason="stale")
         command = replace(command, id="tg_" + uuid4().hex)
         state = self._state(scope["run_key"])
         envelope = dict(wire=_encode(command), scope=scope, keys=list(keys), settled=False,
+                        resume_held=resume_held,
                         members={str(g): asdict(state.members[g]) for g in _command_guids(command)
                                  if state is not None and g in state.members})
         ident = store.log_applied(self.ports.conn, run, layer, context, envelope,
@@ -732,6 +759,33 @@ class Applier:
 
     async def release(self, tank):
         return await self._control(tank, RaidControl("", tank, "dc_pause", tank, "resume"), None)
+
+    async def resume_held(self, tank):
+        """Resume this held boss while keeping tactic layers and future boss holds.
+
+        Unlike terminal release, this never restores cards or clears WaitAtBoss.
+        Only this resume command's confirmed receipt is closed.
+        """
+        initial = self._state(None)
+        if initial is None or initial.run_key is None:
+            return False
+        run, provider = initial.run_key, self.state_provider
+        with self._operation(run):
+            async with self._lock:
+                state = self._state(run)
+                if (provider is not self.state_provider or not self._matches(self._scope(initial))
+                        or state is None or tank != state.tank_guid or state.lead_is_human
+                        or tank == self.ports.human_guid or not self._resume_allowed(state, run)):
+                    return False
+                receipt = await self._send(run, "standing", "0:0:0",
+                    RaidControl("", tank, "dc_pause", tank, "resume"), None,
+                    self._scope(state), resume_held=True)
+                if not receipt.settled or not receipt.ok:
+                    return False
+                store.mark_undone(self.ports.conn, [receipt.id], self.ports.clock.now())
+                return (provider is self.state_provider and self._matches(self._scope(state))
+                        and self._available(self._state(run), (tank,))
+                        and self.acting(self.ports.clock.now()))
 
     async def clear_run(self, tank):
         return await self._control(tank, DcSetting("", tank, "clear"), DcSetting("", tank, "clear"))
