@@ -211,6 +211,44 @@ async def test_late_readiness_after_first_combat_cannot_restart_startup(wired, m
     hold.assert_not_awaited()
 
 
+@pytest.mark.parametrize("boundary", ["native", "hold"])
+@_run_async
+async def test_consumed_offline_engage_fences_inflight_startup(wired, monkeypatch, boundary):
+    fake, run, ground, offline = wired
+    entered, release = asyncio.Event(), asyncio.Event()
+    holds = []
+    async def query(command, *args, **kwargs):
+        if boundary == "native":
+            entered.set()
+            await release.wait()
+        return [receipt(ident=command.id, members=tuple(run.plan.members))]
+    async def hold(guid):
+        holds.append(guid)
+        if boundary == "hold":
+            entered.set()
+            await release.wait()
+        return True
+    fake.request = query
+    monkeypatch.setattr(ground.applier, "hold", hold)
+    standing = AsyncMock()
+    monkeypatch.setattr(ground.applier, "apply_standing", standing)
+    starting = asyncio.create_task(offline._notify("on_start", run))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        await offline.on_boss(boss(fake, instance_id=77))
+        await asyncio.wait_for(offline._drain(), 1)
+        assert not offline._inputs and ground.listener._pull
+        assert not ground.listener._start_waiting
+        release.set()
+        await asyncio.wait_for(starting, 1)
+        assert holds == ([] if boundary == "native" else [101])
+        standing.assert_not_awaited()
+        assert not ground.listener._start_ready
+    finally:
+        release.set()
+        await starting
+
+
 @_run_async
 async def test_actual_after_store_scores_then_observes_without_inline_transport(wired, monkeypatch):
     fake, run, ground, _ = wired
