@@ -1,0 +1,104 @@
+// This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
+#ifndef MOD_LEEROY_TRAINING_PROTOCOL_H
+#define MOD_LEEROY_TRAINING_PROTOCOL_H
+
+#include <array>
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+#include <nlohmann/json.hpp>
+
+namespace Leeroy::Training
+{
+inline constexpr std::array<std::string_view, 8> kTrainingCommandTypes = {
+    "telemetry", "get_stats", "get_vocab", "custom_strategy", "dc_setting", "dummy_trial",
+    "get_rivals", "start_benchmark"
+};
+inline constexpr std::array<std::string_view, 18> kDcKeys = {
+    "PartyMaxSpread", "PullCombatSpread", "CombatRegroupDistance", "BossEngageRangeFloor",
+    "BossEngageRangeCap", "HealRepositionMaxRange", "HealRepositionHpFloor", "PullPlayerReleaseDelay",
+    "PullPetReleaseDelay", "PullThreatLeadPanicHp", "PullSafetyHpPct", "SmartRestHealthPct",
+    "SmartRestDpsManaPct", "SmartRestHealerManaPct", "RaidMusterRestTimeoutSecs",
+    "RaidMusterRebuffTimeoutSecs", "RaidMusterTotalTimeoutSecs", "WaitAtBoss"
+};
+inline constexpr std::array<std::string_view, 5> kTierTwoStrategies = {
+    "threat", "dps aoe", "focus heal targets", "wait for attack", "save mana"
+};
+inline constexpr std::array<std::string_view, 4> kTrainingValues = {
+    "mana save level", "wait for attack time", "focus heal targets", "formation"
+};
+
+struct TelemetryCmd { bool record = false; std::vector<std::uint32_t> watch; };
+struct GetStatsCmd { };
+struct GetVocabCmd
+{
+    std::vector<std::uint32_t> classes, probes;
+    std::vector<std::string> triggers;
+};
+struct CustomStrategyCmd
+{
+    std::string name;
+    std::uint32_t cls = 0, probe = 0;
+    std::vector<std::string> lines;
+};
+enum class DcOp { Set, Scale, Reset, Clear };
+struct DcSettingCmd
+{
+    std::uint32_t leaderGuid = 0;
+    DcOp op = DcOp::Set;
+    std::string key;
+    std::int32_t centi = 0;
+};
+struct DummyTrialCmd
+{
+    std::vector<std::uint32_t> guids;
+    std::vector<std::string> co;
+    std::uint32_t place = 0, seconds = 0;
+};
+struct GetRivalsCmd { std::uint32_t level = 80, max = 200; };
+struct StartBenchmarkCmd
+{
+    std::uint32_t mapId = 0, size = 0;
+    bool heroic = false;
+    std::uint32_t leaderGuid = 0;
+    std::vector<std::uint32_t> members, bosses;
+    std::uint32_t maxWipes = 6, maxWipesPerBoss = 3, timeoutMin = 180, minMembers = 0;
+};
+
+// Envelope validation stays in DecodeCommand. These parsers validate command fields only.
+std::optional<TelemetryCmd> ParseTelemetry(nlohmann::json const&, std::string& error);
+std::optional<GetStatsCmd> ParseGetStats(nlohmann::json const&, std::string& error);
+std::optional<GetVocabCmd> ParseGetVocab(nlohmann::json const&, std::string& error);
+std::optional<CustomStrategyCmd> ParseCustomStrategy(nlohmann::json const&, std::string& error);
+std::optional<DcSettingCmd> ParseDcSetting(nlohmann::json const&, std::string& error);
+std::optional<DummyTrialCmd> ParseDummyTrial(nlohmann::json const&, std::string& error);
+std::optional<GetRivalsCmd> ParseGetRivals(nlohmann::json const&, std::string& error);
+std::optional<StartBenchmarkCmd> ParseStartBenchmark(nlohmann::json const&, std::string& error);
+void RegisterTrainingCommandTypes();
+bool DcKeyAllowed(std::string_view);
+bool CustomLineValid(std::string_view);
+std::string FormatCacheEntry(std::string_view name, std::vector<std::string> const& lines);
+bool IsTierTwo(std::string_view action, std::string_view param);
+bool TierTwoAllowed(bool trainingOn, std::string_view action, std::string_view param);
+
+inline constexpr std::array<std::pair<std::uint32_t, std::uint32_t>, 5> kNonFightSteps = {
+    {{631, 13}, {631, 14}, {724, 3}, {724, 4}, {724, 5}}
+};
+inline constexpr std::array<std::uint32_t, 6> kAidSpells = {36886, 69910, 70115, 70227, 71188, 71638};
+struct ArmInputs
+{
+    bool isRaid = false, telemetryOn = false, mindArmed = false, trackedOnMap = false,
+        registered = false, bossAllowed = false;
+    std::uint32_t map = 0, bossId = 0;
+};
+bool ShouldArm(ArmInputs const&);
+bool ShouldAbort(std::uint64_t startMs, std::uint64_t nowMs);
+enum class BossRecordDecision { Retain, Confirm, Discard, Killed, Wiped };
+// BeforeSetBossState is an intent hook: DONE can still be rejected. Only the committed post-map state closes a pull.
+BossRecordDecision ReviewBossState(bool awaitingStart, bool terminalIntent, std::uint8_t actualState);
+bool RecordingStillCurrent(bool enabled, std::uint64_t openingEpoch, std::uint64_t currentEpoch);
+}
+#endif

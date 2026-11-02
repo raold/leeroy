@@ -2,6 +2,7 @@
 
 #include "BotCommands.h"
 #include "GuildPorts.h"
+#include "LeeroyTrainingProtocol.h"
 #include "LeeroyBotCommandPolicy.h"
 
 #include "AiObjectContext.h"
@@ -293,6 +294,10 @@ LeeroyCommandResult HandleBotDo(nlohmann::json const& message)
         return Fail(std::move(error));
     if (!GuildEnabled())
         return Fail("disabled");
+    // Protocol foundation only: no training mutation is enabled before its journal and restoration land.
+    // Task4 replaces this admission guard with the configured gate plus unconditional safe undo paths.
+    if (Training::IsTierTwo(command->action, command->param))
+        return Fail("training_off");
     for (uint32 guid : command->guids)
         if (!OwnedCast(guid))
             return Fail("not_cast:" + std::to_string(guid));

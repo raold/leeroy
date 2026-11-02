@@ -19,11 +19,12 @@ inline constexpr std::array<std::string_view, 12> kCommandTypes = {
     "start_offline_raid", "gear_up", "raid_control", "remove_friend", "set_spec",
     "bot_do", "stock_items"
 };
-inline constexpr std::array<std::string_view, 6> kBotStrategyAdd = {
-    "behind", "tank face", "mark rti", "boost", "ss tank", "ss healer"
+inline constexpr std::array<std::string_view, 10> kBotStrategyAdd = {
+    "behind", "tank face", "mark rti", "boost", "ss tank", "ss healer",
+    "threat", "dps aoe", "focus heal targets", "wait for attack"
 };
-inline constexpr std::array<std::string_view, 4> kBotStrategyRemove = {
-    "behind", "boost", "ss tank", "ss healer"
+inline constexpr std::array<std::string_view, 5> kBotStrategyRemove = {
+    "behind", "boost", "ss tank", "ss healer", "save mana"
 };
 inline constexpr std::array<std::string_view, 8> kRtiIcons = {
     "skull", "cross", "square", "moon", "triangle", "diamond", "circle", "star"
@@ -117,6 +118,9 @@ std::optional<BotDoCmd> ParseBotDo(nlohmann::json const&, std::string& error);
 std::optional<StockItemsCmd> ParseStockItems(nlohmann::json const&, std::string& error);
 void RegisterGuildCommandTypes();
 bool BotDoParamAllowed(std::string_view action, std::string_view param);
+bool CustomStrategyName(std::string_view);
+bool BotValueParamAllowed(std::string_view);
+bool BotRestoreParamAllowed(std::string_view);
 std::uint8_t RaidDifficulty(std::uint32_t size, bool heroic); // size has passed its field parser
 
 struct JobEvent

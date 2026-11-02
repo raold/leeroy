@@ -2,7 +2,9 @@
 
 #include "LeeroyGuildCommands.h"
 #include "LeeroyProtocol.h"
+#include "LeeroyTrainingProtocol.h"
 #include <algorithm>
+#include <charconv>
 #include <limits>
 #include <set>
 
@@ -13,7 +15,9 @@ namespace
 using json = nlohmann::json;
 constexpr auto kU32Max = std::numeric_limits<std::uint32_t>::max();
 constexpr auto kNoListLimit = std::numeric_limits<std::size_t>::max();
-constexpr std::array<std::string_view, 7> kBotCommandActions = {"co", "nc", "rti", "formation", "cast", "do", "use"};
+constexpr std::array<std::string_view, 9> kBotCommandActions = {
+    "co", "nc", "rti", "formation", "cast", "do", "use", "value", "restore"
+};
 constexpr std::array<std::string_view, 5> kRaidActions = {"ready_check", "dc_on", "dc_off", "dc_pause", "disband"};
 
 template <typename Range, typename T>
@@ -300,8 +304,11 @@ bool BotDoParamAllowed(std::string_view action, std::string_view param)
         {
             auto comma = param.find(',');
             auto entry = param.substr(0, comma);
-            if (entry.size() < 2 || (entry.front() == '+' ? !Contains(kBotStrategyAdd, entry.substr(1))
-                : entry.front() == '-' ? !Contains(kBotStrategyRemove, entry.substr(1)) : true))
+            if (entry.size() < 2 || (entry.front() != '+' && entry.front() != '-'))
+                return false;
+            auto const name = entry.substr(1);
+            if (!CustomStrategyName(name) && (entry.front() == '+' ? !Contains(kBotStrategyAdd, name)
+                : !Contains(kBotStrategyRemove, name)))
                 return false;
             if (comma == std::string_view::npos)
                 return true;
@@ -312,10 +319,64 @@ bool BotDoParamAllowed(std::string_view action, std::string_view param)
     if (action == "formation") return Contains(kFormations, param);
     if (action == "cast") return Contains(kBotSpells, param);
     if (action == "do") return Contains(kBotActions, param);
+    if (action == "value") return BotValueParamAllowed(param);
+    if (action == "restore") return BotRestoreParamAllowed(param);
     if (action == "use")
         return std::any_of(kStockItems.begin(), kStockItems.end(),
             [&](auto item) { return param == std::to_string(item); });
     return false;
+}
+
+bool CustomStrategyName(std::string_view name)
+{
+    constexpr std::string_view prefix = "custom::tg_";
+    if (!name.starts_with(prefix))
+        return false;
+    name.remove_prefix(prefix.size());
+    return !name.empty() && name.size() <= 40 && std::all_of(name.begin(), name.end(), [](char c)
+    {
+        return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
+    });
+}
+
+bool BotValueParamAllowed(std::string_view param)
+{
+    auto number = [](std::string_view value, std::uint32_t low, std::uint32_t high)
+    {
+        std::uint32_t parsed = 0;
+        auto const result = std::from_chars(value.data(), value.data() + value.size(), parsed);
+        return !value.empty() && result.ec == std::errc{} && result.ptr == value.data() + value.size()
+            && parsed >= low && parsed <= high;
+    };
+    constexpr std::string_view mana = "mana save level ", wait = "wait for attack time ";
+    constexpr std::string_view targets = "focus heal targets ", formation = "formation ";
+    if (param.starts_with(mana)) return number(param.substr(mana.size()), 1, 2);
+    if (param.starts_with(wait)) return number(param.substr(wait.size()), 0, 10);
+    if (param.starts_with(formation)) return Contains(kFormations, param.substr(formation.size()));
+    if (!param.starts_with(targets))
+        return false;
+    param.remove_prefix(targets.size());
+    std::set<std::uint32_t> guids;
+    for (;;)
+    {
+        auto const comma = param.find(',');
+        auto const value = param.substr(0, comma);
+        if (!number(value, 1, kU32Max))
+            return false;
+        std::uint32_t guid = 0;
+        std::from_chars(value.data(), value.data() + value.size(), guid);
+        if (!guids.insert(guid).second || guids.size() > 5)
+            return false;
+        if (comma == std::string_view::npos)
+            return true;
+        param.remove_prefix(comma + 1);
+    }
+}
+
+bool BotRestoreParamAllowed(std::string_view param)
+{
+    return param == "*" || CustomStrategyName(param) || Contains(Training::kTierTwoStrategies, param)
+        || Contains(Training::kTrainingValues, param);
 }
 
 std::uint8_t RaidDifficulty(std::uint32_t size, bool heroic)

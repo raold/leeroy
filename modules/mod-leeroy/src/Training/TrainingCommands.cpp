@@ -1,0 +1,37 @@
+// This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
+#include "TrainingCommands.h"
+#include "TrainingTap.h"
+#include "LeeroyModule.h"
+#include "LeeroyTrainingProtocol.h"
+#include "UpdateTime.h"
+
+namespace Leeroy::Training
+{
+LeeroyCommandResult HandleTelemetry(nlohmann::json const& message)
+{
+    std::string error;
+    auto command = ParseTelemetry(message, error);
+    if (!command) return {false, error};
+    if (!LeeroyModule::Instance().Enabled()) return {false, "guild_off"};
+    auto& tap = TrainingTap::Instance();
+    tap.SetMindArmed(command->record);
+    tap.SetWatch(command->watch);
+    return tap.TelemetryOn() ? LeeroyCommandResult{true, {}} : LeeroyCommandResult{false, "telemetry_off"};
+}
+
+LeeroyCommandResult HandleGetStats(nlohmann::json const& message)
+{
+    std::string error;
+    if (!ParseGetStats(message, error)) return {false, error};
+    if (!LeeroyModule::Instance().Enabled()) return {false, "guild_off"};
+    auto& tap = TrainingTap::Instance();
+    LeeroyModule::Instance().Publish(EncodeEvent(NowUnixMs(), {{"type", "server_stats"},
+        {"id", message.at("id")}, {"mean_ms", sWorldUpdateTime.GetAverageUpdateTime()},
+        {"last_ms", sWorldUpdateTime.GetLastUpdateTime()}, {"telemetry", tap.TelemetryOn() && tap.MindArmed()},
+        {"armed", tap.ArmedCount()}}), false);
+    return {true, {}};
+}
+
+// No training mutations are enabled in this slice. The journal/lever task fills this before runtime wiring.
+void TrainingOffCleanup() { }
+}
