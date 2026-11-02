@@ -146,6 +146,24 @@ class SpellBook:
     def coefficient(self, id: int) -> tuple[int, int]:
         return self._world.get(id, (0, 0))
 
+    def cast_time_known(self, id: int) -> bool:
+        """Whether this spell references an actually available cast-time row.
+
+        Neither a loaded table nor the zero returned by info() proves that row.
+        A signed negative time is retained by info(), but is not usable timing.
+        """
+        row = self._rows.get(id)
+        return row is not None and self._casts.get(self._uint(28, row), -1) >= 0
+
+    def coefficient_known(self, id: int) -> bool:
+        """Whether an explicit, non-sentinel direct coefficient is available.
+
+        This says nothing about periodic coefficients; a negative periodic
+        sentinel does not erase a known direct coefficient, including zero.
+        """
+        values = self._world.get(id)
+        return values is not None and values[0] >= 0
+
 
 def _read_checked(path: Path, fields: int, limit: int) -> tuple[bytes, int, int]:
     """Validate bounds before allocating the file or asking Dbc to build row tuples."""

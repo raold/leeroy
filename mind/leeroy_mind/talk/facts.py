@@ -38,7 +38,7 @@ from leeroy_mind.talk.names import (NEUTRAL_FACTIONS, name_level, name_pattern, 
                                     words_re)
 from leeroy_mind.talk.questions import GameQuestion, game_question
 from leeroy_mind.talk.style import to_ascii
-from leeroy_mind.text import truncate_words
+from leeroy_mind.text import estimate_tokens, truncate_words
 from leeroy_mind.wow import ENCOUNTER_MEMBERS
 
 __all__ = ["FACTS_CAP_S", "FACTS_TOKENS", "GameQuestion", "LibraryFacts", "boss_mechanics",
@@ -666,6 +666,18 @@ class LibraryFacts:
         self.faction = faction
         self._lines: OrderedDict[int, asyncio.Task] = OrderedDict()
         self._mechanics: dict[tuple[str, str | None], list[str]] = {}
+        self._providers: list[Callable[[str], list[str]]] = []
+
+    def add_provider(self, provider: Callable[[str], list[str]]) -> None:
+        """Add a small, local synchronous fact source to the shared line lookup.
+
+        Providers must be bounded and do no model, bridge or network work.
+        Their lines share the library's existing total prompt token budget.
+        """
+        if not callable(provider):
+            raise TypeError("fact provider must be callable")
+        if provider not in self._providers:
+            self._providers.append(provider)
 
     def start(self, line_id: int, q: GameQuestion) -> None:
         """Start the lookup for his line `line_id` (once: a second call does nothing)."""
@@ -736,6 +748,25 @@ class LibraryFacts:
         except Exception:  # a chunk the formatter chokes on: no facts, never a lost reply
             log.exception("facts_format_failed: line=%d", line_id)
             lines = []
+        for provider in tuple(self._providers):
+            try:
+                supplied = provider(q.query)
+                if not isinstance(supplied, list):
+                    raise TypeError("fact provider must return a list")
+                for line in supplied[:KEEP_LINES]:
+                    if not isinstance(line, str):
+                        continue
+                    # Preserve complete evidence qualifiers; truncating a line
+                    # could turn a provisional result into a stronger claim.
+                    if len(line) > FACTS_TOKENS * 4:
+                        continue
+                    line = clean_text(line).strip()
+                    if (line and line not in lines
+                            and estimate_tokens("\n".join([*lines, line])) <= FACTS_TOKENS):
+                        lines.append(line)
+            except Exception:
+                # Provider messages can contain human questions or private rows.
+                log.warning("facts_provider_failed: line=%d", line_id)
         log.debug("facts_lookup: line=%d topic=%s outcome=%s hits=%d facts=%d named=%d "
                   "other_side=%d ms=%d", line_id, q.topic, outcome, len(hits), len(lines),
                   len(named), found - len(hits) - len(named), round((self.timer() - t0) * 1000))
