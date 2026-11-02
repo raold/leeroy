@@ -215,7 +215,7 @@ class TrainingListener:
         self._reset_night()
         self.ledger.set_run(run)
         await self._call("on_start", run)
-        if self._acting() and not self._ending:
+        if not self._ending:
             self._start_waiting = True
             async with self._lock:
                 await self._start(self._token())
@@ -230,17 +230,17 @@ class TrainingListener:
                 if self.prepare_run is not None and not await self.prepare_run(run):
                     self._start_retry_at = self.ports.clock.now() + 5
                     return  # No mutation yet: independent ticker may retry proof lookup.
-                if not self._valid(token):
+                if not self._valid(token) or not self._start_waiting or self._pull:
                     return
                 # Once a hold may have been sent, ordinary cleanup owns failure;
                 # retrying startup would duplicate partially applied journals.
                 self._start_attempted = True
                 if not run.human_in_raid and not await self.applier.hold(run.plan.tank_guid):
                     return
-                if not self._valid(token):
+                if not self._valid(token) or not self._start_waiting or self._pull:
                     return
                 await self.applier.apply_standing(run.plan.members, run_key=self.run_key(run))
-                if self._valid(token):
+                if self._valid(token) and self._start_waiting and not self._pull:
                     self._start_ready = await self._pooled(token, self._context(0))
                     self._start_waiting = False
         except TimeoutError:
@@ -452,6 +452,9 @@ class TrainingListener:
             return
         context = self._context(ev.boss_id)
         if ev.state == "engaged":
+            # Startup may wait for vocabulary/experiment/native proof, but it
+            # must never restart a whole setup after the first combat boundary.
+            self._start_waiting = False
             if self._pull:
                 return
             self._run_farm(context, token[0], before_ms=ev.ts)

@@ -538,6 +538,45 @@ async def test_native_dispatch_binding_must_still_belong_to_the_original_start_c
     assert ground.native.for_run(run) is None
 
 
+@pytest.mark.parametrize("boundary", ["native", "hold"])
+@_run_async
+async def test_consumed_first_engage_fences_native_only_startup(offline, monkeypatch, boundary):
+    from .test_tg_gate import boss
+    ports, run, controller, ground = offline
+    entered, release = asyncio.Event(), asyncio.Event()
+    holds = []
+    async def query(command, *args, **kwargs):
+        if boundary == "native":
+            entered.set()
+            await release.wait()
+        return [receipt(ident=command.id, members=tuple(run.plan.members))]
+    async def hold(guid):
+        holds.append(guid)
+        if boundary == "hold":
+            entered.set()
+            await release.wait()
+        return True
+    ports.request = query
+    ground.native.feed(progress(ports, run))
+    monkeypatch.setattr(ground.applier, "hold", hold)
+    standing = AsyncMock()
+    monkeypatch.setattr(ground.applier, "apply_standing", standing)
+    starting = asyncio.create_task(controller._notify("on_start", run))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        await controller.on_boss(boss(ports, instance_id=77))
+        await asyncio.wait_for(controller._drain(), 1)
+        assert not controller._inputs and ground.listener._pull
+        release.set()
+        await asyncio.wait_for(starting, 1)
+        assert holds == ([] if boundary == "native" else [101])
+        standing.assert_not_awaited()
+        assert not ground.listener._start_ready
+    finally:
+        release.set()
+        await starting
+
+
 @_run_async
 async def test_reconnect_queries_detached_receipts_and_unknown_is_not_reset_proof(offline):
     ports, run, controller, ground = offline
