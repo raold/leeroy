@@ -104,7 +104,7 @@ def training_main(argv=None):
     _add_data_dir(parser)
     subs = parser.add_subparsers(dest="command", required=True)
     for name in ("status", "gate", "rescore", "report", "spells", "cards", "lessons", "voicecheck",
-                 "trials", "rollback", "stock"):
+                 "trials", "rollback", "stock", "lab"):
         sub = subs.add_parser(name)
         _add_data_dir(sub, after_action=True)
         if name == "gate":
@@ -137,6 +137,20 @@ def training_main(argv=None):
                     result = voicecheck(conn, args.night)
                 elif args.command == "trials":
                     result = _trials(conn, _context(args.context) if args.context else None)
+                elif args.command == "lab":
+                    rotations = [dict(r) for r in conn.execute(
+                        "SELECT id,name,class,spec_tab,status,origin,created FROM tg_rotation ORDER BY id DESC LIMIT 200")]
+                    nights = []
+                    for row in conn.execute("SELECT key,value FROM meta WHERE key GLOB 'tg:lab:summary:*' ORDER BY key DESC LIMIT 8"):
+                        try:
+                            value = json.loads(row["value"])
+                            if type(value) is dict:
+                                nights.append(value)
+                        except (TypeError, ValueError):
+                            continue
+                    result = {"rotations": rotations, "nights": nights,
+                              "dummy_rows": conn.execute("SELECT count(*) FROM tg_dummy").fetchone()[0],
+                              "measurement": "requested_pre_ai proxy; actual DPS and field improvement unavailable"}
                 elif args.command in {"rollback", "stock"}:
                     context = _context(args.context)
                     ports = SimpleNamespace(conn=conn, clock=SystemClock())

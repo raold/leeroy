@@ -539,6 +539,10 @@ async def run_week(ports, applier, week, *, schedule=None, rng=None):
                 evidence={str(g): evidence[g] for g in sources}, application="deferred"))
         receipt = dict(state="desired", at=now, week=week, reason=DEFERRED, metric_coverage=METRIC_COVERAGE,
             changes=rows, schedule_observed_at=fresh.observed_at,
-            rotations=rotations, premades=dict(policy.premades))
+            rotations=rotations, premades=dict(policy.premades), normalization_version=1,
+            week_bounds=list(_week_bounds(week, local.tzinfo)),
+            timezone_key=getattr(local.tzinfo, "key", None),
+            utc_offset_seconds=local.utcoffset().total_seconds(), score_cohort=evidence,
+            cohort_kind="rank_eligible_scores_requires_original_sql")
         conn.execute("UPDATE meta SET value=? WHERE key=?", (store._json(receipt), WEEK_PREFIX + week))
     return len(rows)

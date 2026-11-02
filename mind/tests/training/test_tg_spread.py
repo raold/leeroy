@@ -332,6 +332,12 @@ def test_week_runs_once_and_records_desired_provenance_without_social_or_applica
     assert asyncio.run(run_week(fake, applier, week, schedule=lambda: proof, rng=NoExplore())) == 2
     receipt = _receipt(fake, week)
     assert receipt["state"] == "desired" and receipt["reason"] == DEFERRED
+    cohort = json.loads(json.dumps(score_evidence(fake.conn, week, now=receipt["at"], tz=timezone.utc)))
+    assert receipt["normalization_version"] == 1 and receipt["utc_offset_seconds"] == 0
+    assert receipt["score_cohort"] == cohort
+    assert receipt["cohort_kind"] == "rank_eligible_scores_requires_original_sql"
+    assert len(receipt["score_cohort"]) == 8  # Retain the cohort, not only the two planned recipients.
+    assert receipt["week_bounds"][1] - receipt["week_bounds"][0] == 7 * 86400
     assert receipt["metric_coverage"]["damage"].startswith("unavailable")
     assert len(receipt["changes"]) == 2
     for change in receipt["changes"]:

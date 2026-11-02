@@ -742,6 +742,8 @@ def test_results_do_not_adopt_recent_foreign_unforwarded_or_incomplete_pulls(ben
         await step(bench)
         result = meta(bench, "tg:benchmark:result:2026-W45")
         assert result["result"]["kills"] == 0 and result["result"]["wipes"] == 1
+        assert result["baselines"] == {"0": []}
+        assert result["admitted_pulls"][0]["id"] == "owned_wipe"
         assert result["comparisons"][0]["pulls"] == ["owned_wipe"]
         assert percentiles(bench.conn, 201) == {}
         bench.memory_result = WriteResult(None, "rejected")

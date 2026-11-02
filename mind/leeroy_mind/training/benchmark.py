@@ -372,7 +372,7 @@ class Benchmarks:
                 return False
             payload = seal["payload"]
             if not isinstance(payload, dict) or set(payload) != {"result", "comparisons", "receipt",
-                    "admitted_pulls", "provenance", "percentiles", "percentile_reason", "stopped_at_frontier"}:
+                    "admitted_pulls", "baselines", "provenance", "percentiles", "percentile_reason", "stopped_at_frontier"}:
                 return False
             original = payload["receipt"]
             if (not isinstance(original, dict) or "finalization" in original
@@ -385,7 +385,7 @@ class Benchmarks:
                 if _copy(state[key]) != original[key]:
                     return False
             rows, baselines, result = payload["admitted_pulls"], seal["baselines"], payload["result"]
-            if (not isinstance(rows, list) or len(rows) > _MAX_PULLS
+            if (payload["baselines"] != baselines or not isinstance(rows, list) or len(rows) > _MAX_PULLS
                     or any(not _sealed_pull(r, original) for r in rows)
                     or len({r["id"] for r in rows}) != len(rows)
                     or not isinstance(baselines, dict)
@@ -791,7 +791,7 @@ class Benchmarks:
         payload = dict(result=result, comparisons=summaries,
             provenance="complete_exact_native_scope_and_explicit_pull_receipts",
             receipt={key: value for key, value in state.items() if key != "finalization"},
-            admitted_pulls=rows, percentiles={}, percentile_reason=DPS_UNAVAILABLE,
+            admitted_pulls=rows, baselines=baselines, percentiles={}, percentile_reason=DPS_UNAVAILABLE,
             stopped_at_frontier=result["outcome"] == "frontier")
         seal = _copy(dict(version=1, payload=payload, baselines=baselines,
             memories=self._memory_items(state, summaries, result["outcome"], result["ts"])))

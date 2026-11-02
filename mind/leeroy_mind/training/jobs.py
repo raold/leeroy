@@ -6,10 +6,14 @@ import logging
 from leeroy_mind.guild.loot import _get
 from leeroy_mind.guild.offline import LOGOUT_KEY
 from leeroy_mind.guild.protocol import Job
+from leeroy_mind.guild.armory import read_premade_specs
 
 from .benchmark import BenchmarkSchedule, Benchmarks
 from .lab_runner import LabRunner, guild_schedule, next_window
-from .protocol import DummyResult, Rivals
+from .ledger import combat_role
+from .levers import MemberInfo
+from .protocol import Rivals
+from .spread import SpreadSchedule, run_week, week_key
 
 
 log = logging.getLogger(__name__)
@@ -20,6 +24,9 @@ class TrainingJobs:
         self.ground, self.ports = ground, ground.ports
         self._closed = False
         self._lab_task = None
+        self._spread_task = self._premades_task = None
+        self._next_spread = 0
+        self._disconnect_task = None
         self.lab = LabRunner(self.ports, self.ports.cfg, ground, ground.applier,
                              schedule=self.lab_schedule)
         self.benchmarks = Benchmarks(self.ports, self.ports.cfg,
@@ -57,7 +64,8 @@ class TrainingJobs:
         if guild is None:
             return None
         return guild_schedule(self.ports, guild.cfg, offline_active=self._busy(guild),
-            benchmark_active=self.benchmarks.active, benchmark_due_at=self.benchmarks.next_due)
+            benchmark_active=self.benchmarks.active,
+            benchmark_due_at=self.benchmarks.next_due if self.ports.cfg.enabled and self.ports.cfg.benchmark else None)
 
     def benchmark_schedule(self):
         guild = self._guild()
@@ -85,6 +93,42 @@ class TrainingJobs:
         self.lab.feed(ev)
         if isinstance(ev, Job):
             self.benchmarks.feed_job(ev)
+        elif isinstance(ev, Rivals):
+            self.benchmarks.feed_rivals(ev)
+
+    def spread_schedule(self, premades):
+        guild = self._guild()
+        if guild is None:
+            return None
+        members = {}
+        for guid, member in self.ports.cast().items():
+            persona = self.ports.persona(guid)
+            if guid == self.ports.human_guid or persona is None:
+                continue
+            role = combat_role(member.class_, member.spec_tab, persona.play.raid_role)
+            members[guid] = MemberInfo(guid, role, member.class_, member.spec_tab)
+        return SpreadSchedule(self.ports.clock.now(), True, self.ports.human_online(),
+            self._busy(guild), self.lab.active, self.benchmarks.active,
+            any(c._lock.locked() for c in (guild.raid_night, guild.offline)), members, premades)
+
+    async def _spread(self):
+        guild = self._guild()
+        epoch = self.ground._epoch
+        if (guild is None or self._busy(guild) or self.lab.active or self.benchmarks.active
+                or not self.ground.applier.acting(self.ports.clock.now())):
+            return
+        try:
+            premades = getattr(getattr(guild, "roster", None), "premade", None)
+            if premades is None:
+                path = guild.cfg.worldserver_conf.parent / "modules" / "playerbots.conf"
+                self._premades_task = asyncio.create_task(asyncio.to_thread(read_premade_specs, path))
+                premades = await asyncio.shield(self._premades_task)
+            if epoch != self.ground._epoch or self._guild() is not guild:
+                return
+            await run_week(self.ports, self.ground.applier, week_key(self.ports.clock.local()),
+                           schedule=lambda: self.spread_schedule(premades))
+        except Exception:
+            log.warning("training_spread_planning_failed")
 
     async def after_store(self, record, context):
         await self.benchmarks.on_pull(record.header)
@@ -103,12 +147,30 @@ class TrainingJobs:
         await self.benchmarks.tick()
         if self._lab_task is None or self._lab_task.done():
             self._lab_task = asyncio.create_task(self._lab_tick(), name="training-lab")
+        now, local = self.ports.clock.now(), self.ports.clock.local()
+        if (self.ports.cfg.spread and self.ports.cfg.act and local.weekday() == 6 and local.hour >= 12
+                and now >= self._next_spread and (self._spread_task is None or self._spread_task.done())):
+            self._next_spread = now + 300
+            self._spread_task = asyncio.create_task(self._spread(), name="training-spread")
 
     async def disconnect(self):
-        task = self._lab_task
-        if task is not None and not task.done():
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+        # Connection hooks and app shutdown can overlap. One retained owner
+        # cancels each child once and joins it even if a caller is cancelled.
+        if self._disconnect_task is None or self._disconnect_task.done():
+            self._disconnect_task = asyncio.create_task(self._disconnect())
+        await asyncio.shield(self._disconnect_task)
+
+    async def _disconnect(self):
+        tasks = [task for task in (self._lab_task, self._spread_task) if task is not None]
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        if self._premades_task is not None:
+            # The synchronous file read cannot be cancelled. Preserve ownership
+            # until it actually ends, including reconnect/shutdown cancellation.
+            await asyncio.shield(asyncio.gather(self._premades_task, return_exceptions=True))
         await self.benchmarks.disconnect()
         await self.lab.disconnect()
 
