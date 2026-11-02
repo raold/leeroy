@@ -3,6 +3,8 @@
 #include "RaidAssembly.h"
 #include "LootMaster.h"
 #include "GearUpJob.h"
+#include "TopUpJob.h"
+#include "BotCommands.h"
 #include "ScriptMgr.h"
 
 class LeeroyGuildWorldScript : public WorldScript
@@ -17,12 +19,15 @@ public:
         Leeroy::Guild::RegisterLootMasterHandler();
         Leeroy::Guild::RegisterGearUpHandler();
         Leeroy::Guild::RegisterSocialCommands();
+        Leeroy::Guild::RegisterBotCommandHandlers();
     }
 
     void OnUpdate(uint32 diff) override
     {
         Leeroy::Guild::TickSummons();
         Leeroy::Guild::TickGearUp();
+        Leeroy::Guild::TickBotCommands();
+        Leeroy::Guild::TickTopUp(diff);
         if (diff >= _untilExpire)
         {
             Leeroy::Guild::LootSourceLedger::Instance().Expire();
