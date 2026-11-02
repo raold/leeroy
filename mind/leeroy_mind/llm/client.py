@@ -9,8 +9,10 @@ import socket
 import threading
 import time
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
+
+from leeroy_mind.llm.diagnostics import ResponseDiagnostics, capture_response
 
 log = logging.getLogger("leeroy_mind")
 
@@ -19,7 +21,9 @@ _OPEN_THINK_RE = re.compile(r"<think>.*\Z", re.DOTALL)
 
 
 class LLMError(Exception):
-    pass
+    def __init__(self, *args, diagnostics: ResponseDiagnostics | None = None):
+        super().__init__(*args)
+        self.diagnostics = diagnostics
 
 
 @dataclass(frozen=True)
@@ -28,6 +32,7 @@ class ChatResult:
     thinking: str
     eval_count: int
     seconds: float
+    diagnostics: ResponseDiagnostics | None = field(default=None, compare=False)
 
 
 EMBED_DIMENSIONS = 512
@@ -204,9 +209,10 @@ class OllamaClient:
         t0 = time.monotonic()
         out = await self._call("/api/chat", body, timeout)
         seconds = time.monotonic() - t0
+        diagnostics = capture_response(out)
         msg = out.get("message")
         if not isinstance(msg, dict) or not isinstance(msg.get("content", ""), str):
-            raise LLMError("/api/chat: no message in reply")
+            raise LLMError("/api/chat: no message in reply", diagnostics=diagnostics)
         content = msg.get("content", "")
         thinking = msg.get("thinking") or ""
         tags = _THINK_RE.findall(content)
@@ -219,7 +225,7 @@ class OllamaClient:
         if not content and thinking:
             log.warning("chat: empty content but the model thought (%s); is think:false honoured?", model)
         count = out.get("eval_count")
-        return ChatResult(content, thinking, count if isinstance(count, int) else 0, seconds)
+        return ChatResult(content, thinking, count if isinstance(count, int) else 0, seconds, diagnostics)
 
     async def embed(self, model, inputs, *, dimensions=EMBED_DIMENSIONS, timeout=None):
         out = await self._call("/api/embed", {
