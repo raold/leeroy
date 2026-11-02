@@ -182,7 +182,8 @@ def test_spec_missing_is_counted(vapp, caplog):
 def test_disabled_does_nothing(tmp_path, clock):
     (tmp_path / "mind.toml").write_text("", encoding="utf-8")
     app = MindApp(load_config(tmp_path / "mind.toml"), tmp_path, llm=FakeLLM(), clock=clock)
-    assert app.voice.store is None and app._handlers.get("login", []) == []
+    assert app.voice.store is None and app.voice._on_login not in app._handlers.get("login", ())
+    assert app._handlers.get("login")  # another extension may observe presence
     run(app.handle(Login(1, 1, True)))
     assert app.voice.rooms.where == {}
 

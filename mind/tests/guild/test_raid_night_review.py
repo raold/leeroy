@@ -72,8 +72,42 @@ async def test_review_pre_end_kill_is_accounted_before_close_and_later_kill_is_i
     awards = ports.conn.execute("SELECT guid FROM dkp_ledger WHERE raid_id=? AND reason='kill' ORDER BY guid",
                                 (session.raid_id,)).fetchall()
     assert [row[0] for row in awards] == [1, 101]
-    assert heard == [("boss", 1), ("end", ending)]
+    # Session accounting drains accepted input; action listeners are retired
+    # immediately at the end boundary and must not react to that old boss.
+    assert heard == [("end", ending)]
     assert night._votes
+
+
+@pytest.mark.parametrize("ending", ["called", "logout"])
+@_run_async
+async def test_review_ending_invalidates_actions_before_background_close(setup, ending):
+    ports, _, night = setup
+    await running(setup)
+    old_run = night.run
+    invalidated, acted, ended = [], [], []
+
+    class ActionListener:
+        def invalidate(self, run):
+            invalidated.append(run)
+
+        async def on_boss(self, ev):
+            acted.append(ev)
+
+        async def on_end(self, outcome, *, run=None):
+            ended.append((outcome, run))
+
+    night.add_listener(ActionListener())
+    await night.on_boss(Boss(0, 631, 77, 1, "Testboss", "killed", (1, 101)))
+    if ending == "logout":
+        ports.online = False
+        await night.on_logout(Logout(0, 1, True))
+    else:
+        await night.on_chat(chat(ports, "calling it"))
+    assert invalidated == [old_run] and not ended and not acted
+    await night.tick()
+    assert not acted and ended == [(ending, old_run)]
+    assert ports.conn.execute("SELECT kills FROM guild_raid WHERE raid_id=?",
+                              (old_run.session.raid_id,)).fetchone()[0] == 1
 
 
 @_run_async

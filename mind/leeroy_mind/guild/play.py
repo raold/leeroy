@@ -173,15 +173,22 @@ class Play:
                                           needs_remove=guid in self._restoring)
         self._save_owned()
 
-    async def on_end(self, outcome):
-        # Listener end has no run ID. A late end from an older controller cannot
-        # retire a newer raid that is still active in the shared session store.
-        if self._run is not None and self._active(self._run):
+    def invalidate(self, run):
+        if run is not self._run:
             return
         self._generation += 1
         self._run = None
         self._initial = False
         self._next_check = self.ports.clock.now()
+
+    async def on_end(self, outcome, *, run=None):
+        if run is not None and self._run is not None and run is not self._run:
+            return
+        # Listener end has no run ID. A late end from an older controller cannot
+        # retire a newer raid that is still active in the shared session store.
+        if run is None and self._run is not None and self._active(self._run):
+            return
+        self.invalidate(self._run)
 
     def _current(self, generation):
         return generation == self._generation

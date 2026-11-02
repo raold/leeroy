@@ -47,6 +47,7 @@ class RaidCalls:
         self._epoch = 0
         self._lock = asyncio.Lock()
         self._go_due = None
+        self._ready_revision = 0
         self._dead = {}
         self._resurrected = {}
         self._pull = None
@@ -180,20 +181,34 @@ class RaidCalls:
         if run is not self._run or not self._valid(epoch):
             return
         async with self._lock:
-            if await self._say(template("pull_countdown", seconds=5), epoch, key="countdown", urgent=True):
-                self._go_due = (self.ports.clock.now() + 5, epoch)
+            revision = self._ready_revision
+            attempt = _get(self.ports.conn, f"guild:raid:{self._raid_id}:ready-attempt") or 0
+            if (await self._say(template("pull_countdown", seconds=5), epoch, key=f"countdown:{attempt}", urgent=True)
+                    and revision == self._ready_revision):
+                self._go_due = (self.ports.clock.now() + 5, epoch, attempt)
+
+    def cancel_ready(self, run):
+        if run is self._run:
+            self._ready_revision += 1
+            self._go_due = None
+            if hasattr(self.ports, "invalidate_run"):
+                self.ports.invalidate_run(run)
 
     async def tick(self):
         if self._lock.locked() or self._go_due is None:
             return
         async with self._lock:
-            due, epoch = self._go_due
+            due, epoch, attempt = self._go_due
             now = self.ports.clock.now()
             if now < due and self._valid(epoch):
                 return
             self._go_due = None
             if due <= now <= due + 5 and self._pull is None:
-                await self._say(template("pull_go"), epoch, key="go", urgent=True)
+                await self._say(template("pull_go"), epoch, key=f"go:{attempt}", urgent=True)
+
+    async def on_go(self, run):
+        if run is self._run:
+            await self.tick()
 
     async def on_dc_status(self, ev):
         epoch = self._epoch
@@ -275,10 +290,17 @@ class RaidCalls:
                 self._dead.pop(ev.guid, None)
             self._save()
 
-    async def on_end(self, outcome):
+    def invalidate(self, run):
+        if run is not self._run:
+            return
         self._epoch += 1
         self._go_due = None
         self._run = None
         self._pull = None
         self._dead.clear()
         self._resurrected.clear()
+
+    async def on_end(self, outcome, *, run=None):
+        if run is not None and self._run is not None and run is not self._run:
+            return
+        self.invalidate(self._run)

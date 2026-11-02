@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from leeroy_mind.clock import night_of
 from leeroy_mind.talk.turns import TurnKind
+from leeroy_mind.wow import is_raid_fight
 
 from .comp import TARGETS, NoTankError, candidates_from, choose_leads, select_comp
 from .lines import instruction, public_text, template
@@ -89,6 +90,10 @@ class RaidNight:
         self._zone_revision = 0
         self._outside_since = None
         self._assemble_due = self._ready_due = self._dc_due = None
+        self._countdown_sent = False
+        self._assembly_pulls = {}
+        self._assembly_ended = {}
+        self._assembly_revision = 0
         self._inside = False
         self._arrived = set()
         self._on_time = []
@@ -138,14 +143,17 @@ class RaidNight:
         if guid is not None and guid != self.ports.human_guid:
             self.ports.propose(guid, channel, public_text(self.ports, instruction(key, **facts)), kind=kind)
 
-    async def _notify(self, name, *args, epoch=None):
+    async def _notify(self, name, *args, epoch=None, ended_run=None):
         for listener in tuple(self._listeners):
             if epoch is not None:
                 self._check(epoch)
             hook = getattr(listener, name, None)
             if hook is not None:
                 try:
-                    await hook(*args)
+                    if name == "on_end" and hasattr(listener, "invalidate"):
+                        await hook(*args, run=ended_run)
+                    else:
+                        await hook(*args)
                 except Exception:
                     # A listener's exception text can contain chat/model inputs.
                     log.warning("guild raid listener failed: %s", name)
@@ -178,11 +186,20 @@ class RaidNight:
 
     def _end(self, outcome):
         forming = self.state is State.FORMING and self._forming_group
+        if self.run is not None and hasattr(self.ports, "invalidate_run"):
+            self.ports.invalidate_run(self.run)
+        for listener in tuple(self._listeners):
+            invalidate = getattr(listener, "invalidate", None)
+            if invalidate is not None and self.run is not None:
+                invalidate(self.run)
         self._epoch += 1
         self.state = State.ENDED
         self._pick = None
         self._call_due = self._call_deadline = None
         self._ready_due = self._dc_due = None
+        self._countdown_sent = False
+        self._assembly_pulls.clear()
+        self._assembly_ended.clear()
         self._late = []
         if self.session is not None:
             # Preserve inputs received before the end event, in delivery order.
@@ -278,8 +295,14 @@ class RaidNight:
         self._events.append(item)
 
     def _event(self, name, ev):
-        if self.state is State.RUNNING and self.run is not None:
+        if self.state in {State.ASSEMBLING, State.RUNNING} and self.run is not None:
             session, plan = self.run.session, self.run.plan
+            assembling = self.state is State.ASSEMBLING
+            if assembling and (type(session.ctx.instance_id) is not int or session.ctx.instance_id <= 0
+                    or _get(self.ports.conn, f"guild:raid:{session.raid_id}:instance") != session.ctx.instance_id
+                    or type(ev.ts) is not int or ev.ts <= 0
+                    or not -5 <= self.ports.clock.now() - ev.ts / 1000 <= 60):
+                return
             if ev.ts and ev.ts / 1000 < session.started - 5:
                 return
             if name in {"boss", "loot_drop"}:
@@ -288,17 +311,52 @@ class RaidNight:
                 if name == "boss" and (ev.state not in {"engaged", "killed", "wiped"}
                         or not (set(plan.members) | {self.ports.human_guid}).intersection(ev.members)):
                     return
+                if assembling and name == "boss" and not is_raid_fight(ev.map, ev.boss_id):
+                    return
             elif name == "death" and (ev.map != session.ctx.map_id or ev.guid not in {*plan.members, self.ports.human_guid}):
+                return
+            elif name == "resurrect" and ev.guid not in {*plan.members, self.ports.human_guid}:
                 return
             elif name == "dc_status" and ev.tank_guid != plan.tank_guid:
                 return
+            if assembling and name == "boss":
+                self._assembly_phase(ev)
             self._enqueue(name, ev)
+
+    def _assembly_phase(self, ev):
+        """A proved manual pull owns this interval; duplicates never extend it."""
+        prior = self._assembly_pulls.get(ev.boss_id)
+        ended = self._assembly_ended.get(ev.boss_id, 0)
+        if ev.state == "engaged":
+            if prior is not None or ev.ts <= ended:
+                return
+            if not self._assembly_pulls:
+                self._assemble_due = self.ports.clock.now() + self.cfg.assemble_timeout_min * 60
+            self._assembly_pulls[ev.boss_id] = ev.ts
+            self._assembly_revision += 1
+            self._ready_due = self._dc_due = None
+            self._countdown_sent = False
+            for listener in self._listeners:
+                cancel = getattr(listener, "cancel_ready", None)
+                if cancel is not None:
+                    cancel(self.run)
+        elif ev.ts > ended and (prior is None or ev.ts >= prior):
+            self._assembly_revision += 1
+            self._assembly_ended[ev.boss_id] = ev.ts
+            self._assembly_pulls.pop(ev.boss_id, None)
+            if not self._assembly_pulls:
+                self._ready_due = self._dc_due = None
+                self._countdown_sent = False
+                self._assemble_due = self.ports.clock.now() + self.cfg.assemble_timeout_min * 60
 
     async def on_boss(self, ev):
         self._event("boss", ev)
 
     async def on_death(self, ev):
         self._event("death", ev)
+
+    async def on_resurrect(self, ev):
+        self._event("resurrect", ev)
 
     async def on_dc_status(self, ev):
         self._event("dc_status", ev)
@@ -500,8 +558,13 @@ class RaidNight:
         raid = CATALOG[self.run.plan.raid_key]
         now = self.ports.clock.now()
         revision = self._zone_revision
+        phase_revision = self._assembly_revision
         if now >= self._assemble_due:
             self._end("assemble_timeout")
+            return
+        if self._assembly_pulls:
+            # Existing assembly timeout, refreshed once at the observed pull,
+            # still bounds a lost terminal event. Session/loot keep ticking.
             return
         if self._zones.get(self.ports.human_guid) != raid.zone_id:
             self._ready_due = self._dc_due = None
@@ -510,7 +573,7 @@ class RaidNight:
             # Even a zone event for every bot cannot establish instance identity.
             # Zone alone cannot prove a bot is in this group's instance either.
             await self._summon_inside(self._on_time, epoch)
-            if self._zone_revision != revision:
+            if self._zone_revision != revision or self._assembly_revision != phase_revision:
                 return
             self._inside = True
         plan = self.run.plan
@@ -522,15 +585,29 @@ class RaidNight:
             if not self._started:
                 self._started = True
                 await self._notify("on_start", self.run, epoch=epoch)
-            if self._zone_revision != revision:
+            if self._zone_revision != revision or self._assembly_revision != phase_revision:
                 return
             self.ports.set_lead(self.ports.human_guid)
             self.state = State.RUNNING
             return
         if self._dc_due is not None:
+            if not self._countdown_sent and now >= self._dc_due - 5:
+                self._countdown_sent = True
+                await self._notify("on_ready", self.run, epoch=epoch)
+                if self._zone_revision != revision or self._assembly_revision != phase_revision:
+                    return
+                # The countdown's actual delivery may take time. Never enable
+                # DC before its five seconds have elapsed.
+                self._dc_due = max(self._dc_due, self.ports.clock.now() + 5)
             if now >= self._dc_due:
+                # Deliver the timed 'go' before DC; independent listener ticks
+                # may already have done so, and both paths are idempotent.
+                await self._notify("on_go", self.run, epoch=epoch)
+                if self._zone_revision != revision or self._assembly_revision != phase_revision:
+                    return
                 # An uncertain acknowledgement can still mean DC was enabled.
                 self._dc_attempted = True
+                self.state = State.RUNNING
                 await self._send(RaidControl(uuid4().hex, self.ports.human_guid, "dc_on", plan.tank_guid), epoch)
                 if self._zone_revision != revision:
                     return
@@ -540,22 +617,38 @@ class RaidNight:
         if self._ready_due is None:
             self._ready_due = now + self.cfg.ready_check_delay_s
         if now >= self._ready_due:
+            ready_key = f"guild:raid:{self.session.raid_id}:ready-attempt"
+            with self.ports.conn:
+                _put(self.ports.conn, ready_key, int(_get(self.ports.conn, ready_key) or 0) + 1)
             await self._send(RaidControl(uuid4().hex, self.ports.human_guid, "ready_check", plan.lead_guid), epoch)
-            if self._zone_revision != revision:
+            if self._zone_revision != revision or self._assembly_revision != phase_revision:
                 self._ready_due = None
                 return
             await self.ports.say(plan.lead_guid, "raid", template("ready_check"))
             self._check(epoch)
+            if self._assembly_revision != phase_revision:
+                return
             if not self._started:
                 self._started = True
                 await self._notify("on_start", self.run, epoch=epoch)
-            await self._notify("on_ready", self.run, epoch=epoch)
-            if self._zone_revision != revision:
+            if self._zone_revision != revision or self._assembly_revision != phase_revision:
                 return
-            self._dc_due = self.ports.clock.now() + self.cfg.dc_start_delay_s
+            timed_countdown = any(hasattr(listener, "on_go") for listener in self._listeners)
+            self._countdown_sent = not timed_countdown
+            if not timed_countdown:
+                # Preserve the standalone controller's lifecycle contract for
+                # listeners which do not implement a clock-driven countdown.
+                await self._notify("on_ready", self.run, epoch=epoch)
+                if self._zone_revision != revision or self._assembly_revision != phase_revision:
+                    return
+            self._dc_due = self.ports.clock.now() + max(5 if timed_countdown else 0, self.cfg.dc_start_delay_s)
 
     async def _arrivals(self, epoch):
+        phase_revision = self._assembly_revision
         for guid, due in tuple(self._late):
+            self._check(epoch)
+            if self._assembly_pulls or self._assembly_revision != phase_revision:
+                return
             if due > self.ports.clock.now():
                 continue
             self._late.remove((guid, due))  # A failed/unknown job is never automatically resent.
@@ -570,6 +663,11 @@ class RaidNight:
                 # Include it in the owner's eventual inside summon as well.
                 self._on_time.append(guid)
                 self._inside = False
+            # Keep the completed arrival's accounting, but a manual pull which
+            # began during its job wait owns the rest of this assembly interval.
+            # Unsent members stay queued; the already-dispatched member never retries.
+            if self._assembly_pulls or self._assembly_revision != phase_revision:
+                return
             self._propose("late_arrival", guid=guid, channel="raid", kind=TurnKind.ASIDE)
 
     async def _drain_events(self, epoch, *, events=None, current=None):
@@ -595,15 +693,21 @@ class RaidNight:
                 if name == "boss" and (not members.intersection(ev.members) or ev.state not in {"engaged", "killed", "wiped"}):
                     events.popleft()
                     continue
-                await getattr(session, "on_" + name)(ev)
+                if name == "boss":
+                    await session.on_boss(ev, can_announce=lambda: current is self.run and self.active)
+                elif current is self.run and self.active:
+                    await session.on_loot_drop(ev)
                 if name == "boss":
                     # Finish delivery of this already accepted event in order,
                     # even when an end hook ran while its bookkeeping awaited.
-                    await self._notify("on_boss", ev)
+                    if current is self.run and self.active:
+                        await self._notify("on_boss", ev)
             elif name == "death":
-                if ev.map == session.ctx.map_id and ev.guid in members:
+                if current is self.run and self.active and ev.map == session.ctx.map_id and ev.guid in members:
                     await self._notify("on_death", ev)
-            elif name == "dc_status" and ev.tank_guid == plan.tank_guid:
+            elif name == "resurrect" and ev.guid in members and current is self.run and self.active:
+                await self._notify("on_resurrect", ev)
+            elif name == "dc_status" and ev.tank_guid == plan.tank_guid and current is self.run and self.active:
                 await self._notify("on_dc_status", ev)
             events.popleft()
             if epoch is not None:
@@ -620,7 +724,7 @@ class RaidNight:
                 self._votes.append(vote)
             self._closing.popleft()
             if run is not None:
-                await self._notify("on_end", outcome)
+                await self._notify("on_end", outcome, ended_run=run)
 
     async def _stop_dc(self, run):
         raid_id = run.session.raid_id
@@ -684,7 +788,13 @@ class RaidNight:
                 elif self.state is State.FORMING:
                     await self._form(epoch)
                 elif self.state in {State.ASSEMBLING, State.RUNNING}:
-                    await self._arrivals(epoch)
+                    if self.state is State.ASSEMBLING and self._events:
+                        if not self._started:
+                            self._started = True
+                            await self._notify("on_start", self.run, epoch=epoch)
+                        await self._drain_events(epoch)
+                    if not self._assembly_pulls:
+                        await self._arrivals(epoch)
                     if self.state is State.ASSEMBLING:
                         await self._assemble(epoch)
                     elif self._outside_since is not None and now - self._outside_since >= 600:

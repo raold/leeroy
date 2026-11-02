@@ -876,7 +876,8 @@ def test_voice_off_keeps_typed_chat(tmp_path, clock, voice_data):
     app = MindApp(load_config(tmp_path / "mind.toml"), tmp_path, llm=FakeLLM(), clock=clock)
     assert app.voice.heard is None
     assert app.voice._on_chat not in app._handlers.get("chat", ())
-    assert "dc_status" not in app._handlers
+    assert app.voice._on_dc_status not in app._handlers.get("dc_status", ())
+    assert app._handlers.get("dc_status")  # guild-life still observes game events
     assert app.voice.echoes_command(Chat(0, "raid", HUMAN, HIS_NAME, 0, "pull", 0, 0)) is False
 
 

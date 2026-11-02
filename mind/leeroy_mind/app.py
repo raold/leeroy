@@ -62,6 +62,7 @@ from leeroy_mind.talk.turns import TurnKind
 from leeroy_mind.talk.world import WorldView, looks_like_bot_command
 from leeroy_mind.voice.attach import attach_voice
 from leeroy_mind.nightly.wiring import attach as attach_nightly
+from leeroy_mind.guild.service import install as install_guild
 from leeroy_mind.voice.heard import is_command
 
 log = logging.getLogger("leeroy_mind.app")
@@ -398,6 +399,7 @@ class MindApp:
         # P1d's self.guild = install(self).
         self.nightly = attach_nightly(self)
         self.voice = attach_voice(self)
+        self.guild = install_guild(self)
 
     # -- extension points --------------------------------------------------------------------
 

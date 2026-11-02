@@ -173,7 +173,10 @@ class OfflineRaids:
             hook = getattr(listener, name, None)
             if hook is not None:
                 try:
-                    await hook(*args)
+                    if name == "on_end" and hasattr(listener, "invalidate"):
+                        await hook(*args, run=self.run)
+                    else:
+                        await hook(*args)
                 except Exception:
                     log.warning("offline raid listener failed: %s", name)
 
@@ -189,10 +192,20 @@ class OfflineRaids:
             self._lease = False
 
     def _cancel(self):
+        self._invalidate()
         if self.active and not self._owned["cancelled"]:
             self._owned["cancelled"] = True
             self._owned["cancel_at"] = self.ports.clock.now()
             self._save()
+
+    def _invalidate(self):
+        if self.run is not None:
+            if hasattr(self.ports, "invalidate_run"):
+                self.ports.invalidate_run(self.run)
+            for listener in tuple(self._listeners):
+                invalidate = getattr(listener, "invalidate", None)
+                if invalidate is not None:
+                    invalidate(self.run)
 
     async def on_login(self, ev):
         if ev.guid == self.ports.human_guid and ev.human:
@@ -251,6 +264,7 @@ class OfflineRaids:
             self._owned["running_seen"] = True
         if ev.state in {"done", "failed"}:
             self._owned["terminal"] = asdict(ev)
+            self._invalidate()
         self._save()
         self._enqueue("job", ev)
 
@@ -286,6 +300,8 @@ class OfflineRaids:
                 return
         elif name == "death" and (ev.guid not in members or ev.map != raid.map_id):
             return
+        elif name == "resurrect" and ev.guid not in members:
+            return
         elif name == "dc_status" and ev.tank_guid != plan.tank_guid:
             return
         self._enqueue(name, ev)
@@ -295,6 +311,9 @@ class OfflineRaids:
 
     async def on_death(self, ev):
         self._event("death", ev)
+
+    async def on_resurrect(self, ev):
+        self._event("resurrect", ev)
 
     async def on_dc_status(self, ev):
         self._event("dc_status", ev)
@@ -462,7 +481,7 @@ class OfflineRaids:
                     await self.session.on_boss(ev, can_announce=self._actions_allowed)
                 elif kind == "loot_drop" and actionable:
                     await self.session.on_loot_drop(ev)
-                if kind in {"boss", "death", "dc_status"} and actionable:
+                if kind in {"boss", "death", "resurrect", "dc_status"} and actionable:
                     await self._notify("on_" + kind, ev)
             self._inputs.popleft()
 
