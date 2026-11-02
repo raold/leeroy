@@ -11,6 +11,20 @@
 
 namespace Leeroy::Training
 {
+bool RivalUsable(RivalState const& state, std::uint32_t requiredLevel)
+{
+    return state.online && state.isBot && state.isRandomBot && !state.isCast && !state.isHuman
+        && !state.grouped && !state.inInstance && !state.inBattleground && !state.inLfg
+        && !state.dead && !state.inFlight && state.level >= requiredLevel;
+}
+
+bool FrontierReached(std::vector<std::uint8_t> const& states, std::vector<std::uint32_t> const& allowed)
+{
+    for (std::size_t index = 0; index < states.size(); ++index)
+        if (states[index] == 1 && std::find(allowed.begin(), allowed.end(), index) == allowed.end()) return true;
+    return false;
+}
+
 namespace
 {
 using json = nlohmann::json;

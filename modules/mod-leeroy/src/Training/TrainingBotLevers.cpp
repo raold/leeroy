@@ -3,6 +3,7 @@
 #include "TrainingTap.h"
 #include "DummyTrialJob.h"
 #include "GuildPorts.h"
+#include "OfflineRaidJob.h"
 #include "LeeroyTrainingProtocol.h"
 #include "AiObjectContext.h"
 #include "Formations.h"
@@ -284,6 +285,8 @@ bool RestoreTrainingBots()
     for (auto guid : guids)
     {
         if (DummyTrialOwns(guid)) continue; // Trial-owned return validates the session/master before touching its AI.
+        // The benchmark adapter verifies its captured body/controller before restoring and returning it.
+        if (Guild::BenchmarkRunning() && Guild::OfflineRaidOwns(guid)) continue;
         try
         {
             auto* bot = Guild::FindOnline(guid);

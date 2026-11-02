@@ -5,6 +5,8 @@
 #include "LeeroyModule.h"
 #include "LeeroyTrainingProtocol.h"
 #include "UpdateTime.h"
+#include "OfflineRaidJob.h"
+#include "Log.h"
 
 namespace Leeroy::Training
 {
@@ -41,8 +43,12 @@ void TrainingOffCleanup()
     // Each adapter retains failures for its next bounded tick. No blanket DC clear or default reset of unowned values.
     cleanupPending = true;
     EndDummyTrial("training_off");
+    bool const benchmark = Guild::BenchmarkRunning();
+    Guild::EndBenchmark("training_off");
     bool const runs = ClearTrainingRuns();
     bool const bots = RestoreTrainingBots();
-    cleanupPending = !runs || !bots || DummyTrialRunning();
+    cleanupPending = !runs || !bots || DummyTrialRunning() || Guild::BenchmarkRunning();
+    if (benchmark)
+        LOG_INFO("module.leeroy", "mod-leeroy: training cleanup benchmark retained={}", Guild::BenchmarkRunning());
 }
 }

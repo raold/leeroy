@@ -26,9 +26,9 @@ Implemented pieces:
   watches incoming damage requests and distance, and verifies
   the original location after asynchronous return. An admitted request reserves its participants through cleanup.
 
-Remaining work includes actual runtime acceptance of the task 4 adapters and task 5 dummy controller,
-task 6 benchmark/pin integration, and task 7 integrated build/lifecycle/raid acceptance. The Python ingestion,
-analysis, scoring, search and application work in tasks 9 onward also remains. The module loader must stay
+Remaining work includes runtime acceptance of the task 4 adapters, task 5 dummy controller and task 6
+benchmark, plus task 7 integrated lifecycle/raid acceptance. Python ingestion ships separately in PR48;
+analysis, scoring, search and application work remains. The module loader must stay
 unwired until the accepted slice has complete restoration and shutdown behavior. Configuration defaults are
 off when the tap reads them; this foundation does not add active configuration settings.
 
@@ -66,6 +66,71 @@ Dummy `ms` records elapsed trial time from an accepted normal attack until stopp
 it does not infer uninterrupted casting uptime. The incoming-damage alarm conservatively observes positive
 pre-AI requests from a source other than the dummy, so an absorbed/adjusted request may abort a trial. Damage
 and spell results retain the measurement bases below, and aborted/partial participants carry a drop reason.
+
+## Benchmark candidate and shared pins
+
+Task 6 adds a thread-safe owner pin set and the single upstream pin composer. Empty contributions remove only
+that owner; overlapping owners retain their own pins and flags. Benchmark admission requires an unused
+`benchmark` owner, and verifies every requested GUID with `RandomPlayerbotMgr::IsPinned` after composing.
+The upstream accepted count describes the whole union, so subtracting two counts cannot verify this job.
+
+`get_rivals` returns available level-qualified random bots, sorted by item level then GUID. Live admission
+also excludes queued LFG/BG players, test-driver reservations, existing masters, cast/human characters and
+dummy reservations. Every benchmark member must still qualify when grouping, with the leader's faction.
+Group join/leave can discard non-permanent instance bindings in the installed core. Admission therefore rejects
+pre-existing temporary saves and any target-map save. Cleanup permits only the exact newly created trial bind,
+plus unrelated permanent saves that core preserves; an externally added temporary save retains recovery instead
+of triggering a blanket reset. Benchmark mode never invokes offline mode's target-map unbind loop.
+The shared raid reservation covers all requested members from admission through completed teardown, even
+before they have a group. The included task 5 controller supplies the reciprocal `DummyTrialOwns` implementation.
+
+`StartRaidJob` takes the request ID explicitly because `OfflineRaidCmd` does not carry the bridge envelope.
+Ordinary offline raids keep their existing roster/loot policy. Both modes reset the training strategy journal
+after an intentional AI strategy reset, capture a fresh training-run token after verified instance entry,
+and clear that exact token on teardown. The benchmark-only leader exception proves the active job's exact
+driver, group, roster, map and instance; its scope is owned by the configured guild, not the rivals' guilds.
+Per-key restoration still works after return/group removal without operating on a newer run.
+
+Benchmarks use master loot at threshold zero, remove the ordinary noncombat loot strategy, and issue no
+loot-award, equipment or gear-up commands. These settings alone do not prevent automatic FFA currency,
+quest rewards or loot-money packets. A separate bounded loot guard publishes a pending ownership snapshot
+before the first teleport. A matching reward on the target map before verified instance binding contaminates
+the trial without suppressing that reward. Completed leader worldport binds the instance once and preserves
+any contamination. Hooks then suppress newly generated creature/GO item rewards before automatic currency
+storage, and matching reward money before sharing, only for the captured bodies, group and instance with
+an exact source/Loot match. Callback classification and mutation share a mutex; no map thread reads the job.
+Personal inventory containers and unrelated actors are untouched. An owned actor encountering an unproven
+public/foreign creature or GO reward leaves that reward intact, marks the trial contaminated, and fails the
+benchmark at the next safe world tick. There is no inventory rollback. Baseline analysis must require clean,
+successful benchmark completion and inspect the reason: `done` with `human_online`, a timeout or another
+cancellation is not a completed clean baseline. Normal combat consumption of ammunition, reagents and consumables remains
+allowed: this is an owned-loot-reward guard, not a claim that bags never change. Admission fails closed unless
+the guard hooks are registered. Only allowed boss IDs are registered for benchmark telemetry.
+An unapproved `IN_PROGRESS` boss stops the job and initiates owned DC disable/combat stop/return in the
+same world tick that observes it. This is a post-map barrier: it cannot prevent damage during the map update
+that first entered combat. Returns finish asynchronously; they are not falsely reported as completed teleports.
+
+Human login, identity changes, training disable, lost pins, timeout and normal completion all enter owned
+teardown. Restoration failures and unverified rival returns retain the job/pins and block another admission.
+The 60-second cleanup grace publishes one failed terminal; it does not authorize abandoning a rival or deleting
+its journal. A later successful recovery releases the reservation without publishing another terminal. Return
+attempts remain tick-driven. Captured Player/AI/session identities and irreversible logout revocation prevent
+a reconnected body from inheriting old cleanup, even if pointer addresses are reused. Journals restore before
+disbanding their owned group; a pending restore retains the group/controller proof while safe returns proceed.
+Generic DC cleanup and watchdogs cannot bypass that captured-body proof. Final strategy reset runs after group
+and master release, and guarded `Reset(false)` clears old raid targets and the combat engine without cancelling
+logout. Final reset has its own completion receipt: a reset exception is caught, stays incomplete and retries
+without renewing the cleanup deadline. The owned DC token/journal and the job's WaitAtBoss value restore before
+the leader is released, so normal wandering cannot strand or redirect old recovery. Human login is latched even
+if the human logs out again before the next world tick. Loot callbacks also check the atomic current human GUID:
+if any captured member becomes the configured human, shared rewards are left intact and the trial is contaminated.
+An externally replaced benchmark pin contribution is never erased.
+
+The speaker filter excludes muted rivals until their owner releases them, including retained cleanup after
+module disable. Ordinary cast exclusion still follows the module-enabled flag. **Deployment prerequisite:** mod-ollama-chat must recheck that
+filter at delivery (`OLLAMA_SPEAKER_FILTER_AT_DELIVERY=1` in the reviewed dependency patch); an admission-only
+filter cannot suppress a generation queued before benchmark admission. This work does not modify that dependency,
+register the training loader, start a server, or claim live raid/loot/restore acceptance.
 
 ## Measurement contract
 

@@ -13,6 +13,10 @@ LeeroyCommandResult HandleGetStats(nlohmann::json const&);
 LeeroyCommandResult HandleGetVocab(nlohmann::json const&);
 LeeroyCommandResult HandleCustomStrategy(nlohmann::json const&);
 LeeroyCommandResult HandleDcSetting(nlohmann::json const&);
+LeeroyCommandResult HandleGetRivals(nlohmann::json const&);
+LeeroyCommandResult HandleStartBenchmark(nlohmann::json const&);
+// Implemented by Task5; covers pending, active and unresolved cleanup bodies.
+bool DummyTrialOwns(std::uint32_t guid);
 void TickVocab();
 void TickDcHolds(std::uint32_t diff);
 bool IsPrimed(std::string const& qualifier);

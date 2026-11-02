@@ -1,6 +1,7 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "TrainingCommands.h"
 #include "GuildPorts.h"
+#include "OfflineRaidJob.h"
 #include "LeeroyTrainingHold.h"
 #include "LeeroyTrainingOverrides.h"
 #include "LeeroyTrainingRuns.h"
@@ -62,7 +63,7 @@ DcRunState* State(Player* leader)
 RunScope Scope(Player* leader)
 {
     if (!leader || !leader->GetGroup()) return {};
-    return {leader->GetMapId(), leader->GetInstanceId(), leader->GetGuildId(), Guild::HumanGuid(),
+    return {leader->GetMapId(), leader->GetInstanceId(), LeeroyModule::Instance().GuildId(), Guild::HumanGuid(),
         leader->GetGroup()->GetGUID().GetRawValue()};
 }
 
@@ -76,13 +77,17 @@ bool SameRun(Player* leader, TrainingRun const& run) { return SameScope(leader, 
 
 Player* OwnedLeader(uint32 guid)
 {
-    if (!guid || guid == Guild::HumanGuid() || !Guild::IsCast(guid)) return nullptr;
+    if (!guid || guid == Guild::HumanGuid()) return nullptr;
+    // The benchmark exception is an exact live job/group/driver/instance proof, never a general noncast permission.
+    bool const benchmark = Guild::BenchmarkOwnsRun(guid);
+    if (!Guild::IsCast(guid) && !benchmark) return nullptr;
     auto* leader = Guild::FindOnline(guid);
-    if (!leader || leader->GetGuildId() != LeeroyModule::Instance().GuildId()
+    if (!leader || (!benchmark && leader->GetGuildId() != LeeroyModule::Instance().GuildId())
         || !GET_PLAYERBOT_AI(leader) || IsSelfBot(leader) || !leader->GetGroup() || leader->IsBeingTeleported()
         || DcLeaderSignal::FindLeaderTank(leader) != leader) return nullptr;
-    for (auto const& member : leader->GetGroup()->GetMemberSlots())
-        if (member.guid.GetCounter() != Guild::HumanGuid() && !Guild::IsCast(member.guid.GetCounter())) return nullptr;
+    if (!benchmark)
+        for (auto const& member : leader->GetGroup()->GetMemberSlots())
+            if (member.guid.GetCounter() != Guild::HumanGuid() && !Guild::IsCast(member.guid.GetCounter())) return nullptr;
     return leader;
 }
 
@@ -220,6 +225,8 @@ std::uint64_t MarkJobRun(std::uint32_t guid)
 bool ClearTrainingRun(std::uint32_t guid, std::uint64_t token)
 {
 #if LEEROY_HAS_DUNGEON_CLEAR
+    if (Guild::BenchmarkRunning() && Guild::OfflineRaidOwns(guid) && !Guild::BenchmarkCanClearRun(guid, token))
+        return false; // A matching GUID/group is insufficient after the original session was revoked.
     auto found = runs.find(guid);
     auto* job = jobs.Find(guid);
     if (!token || (job && job->token != token) || (found != runs.end() && found->second.token != token))
@@ -255,6 +262,9 @@ LeeroyCommandResult HandleDcSetting(nlohmann::json const& message)
     if (undo)
     {
         if (found == runs.end()) return {true, {}}; // No receipt means no ownership, even if an override exists.
+        if (Guild::BenchmarkRunning() && Guild::OfflineRaidOwns(command->leaderGuid)
+            && !Guild::BenchmarkCanClearRun(command->leaderGuid, found->second.token))
+            return {false, "restore_ownership"};
         if (command->op == DcOp::Clear)
         {
             if (!Clear(command->leaderGuid, found->second))
@@ -332,6 +342,11 @@ void TickDcHolds(std::uint32_t diff)
     {
         auto guid = it->first;
         auto& run = it->second;
+        if (Guild::BenchmarkRunning() && Guild::OfflineRaidOwns(guid) && !Guild::BenchmarkOwnsRun(guid))
+        {
+            ++it; // The exact-session job teardown owns recovery; generic cleanup must not adopt a replacement AI.
+            continue;
+        }
         try
         {
             auto* leader = Guild::FindOnline(guid);
@@ -373,8 +388,11 @@ void TickDcHolds(std::uint32_t diff)
         }
     }
     for (auto guid : jobs.Leaders())
+    {
+        if (Guild::BenchmarkRunning() && Guild::OfflineRaidOwns(guid)) continue;
         if (auto* job = jobs.Find(guid); !runs.contains(guid) && !SameScope(Guild::FindOnline(guid), job->scope))
             jobs.End(guid, job->token); // Keep the receipt until old overrides have finished restoring.
+    }
 #else
     (void)diff;
 #endif
@@ -386,6 +404,11 @@ bool ClearTrainingRuns()
     uint32 cleared = 0;
     for (auto it = runs.begin(); it != runs.end();)
     {
+        if (Guild::BenchmarkRunning() && Guild::OfflineRaidOwns(it->first) && !Guild::BenchmarkOwnsRun(it->first))
+        {
+            ++it;
+            continue;
+        }
         bool done = false;
         try { done = Clear(it->first, it->second); }
         catch (...) { it->second.clearing = true; }

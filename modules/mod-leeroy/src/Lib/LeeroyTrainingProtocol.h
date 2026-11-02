@@ -60,6 +60,15 @@ struct DummyTrialCmd
     std::uint32_t place = 0, seconds = 0;
 };
 struct GetRivalsCmd { std::uint32_t level = 80, max = 200; };
+struct RivalState
+{
+    bool online = false, isBot = false, isRandomBot = false, isCast = false, isHuman = false,
+        grouped = false, inInstance = false, inBattleground = false, inLfg = false, dead = false,
+        inFlight = false;
+    std::uint8_t level = 0, team = 0;
+};
+bool RivalUsable(RivalState const&, std::uint32_t requiredLevel);
+bool FrontierReached(std::vector<std::uint8_t> const& bossStates, std::vector<std::uint32_t> const& allowed);
 struct StartBenchmarkCmd
 {
     std::uint32_t mapId = 0, size = 0;

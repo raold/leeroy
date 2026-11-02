@@ -3,6 +3,8 @@
 #include "TrainingTap.h"
 #include "DummyTrialJob.h"
 #include "GuildPorts.h"
+#include "OfflineRaidJob.h"
+#include "TrainingBenchmarkLoot.h"
 #include "Log.h"
 #include "Player.h"
 #include "ScriptMgr.h"
@@ -25,6 +27,8 @@ public:
         LeeroyRegisterCommand("custom_strategy", Leeroy::Training::HandleCustomStrategy);
         LeeroyRegisterCommand("dc_setting", Leeroy::Training::HandleDcSetting);
         LeeroyRegisterCommand("dummy_trial", Leeroy::Training::HandleDummyTrial);
+        LeeroyRegisterCommand("get_rivals", Leeroy::Training::HandleGetRivals);
+        LeeroyRegisterCommand("start_benchmark", Leeroy::Training::HandleStartBenchmark);
         auto& tap = Leeroy::Training::TrainingTap::Instance();
         tap.Start();
         LOG_INFO("module.leeroy", "mod-leeroy: training ground loaded (telemetry {}, training {})",
@@ -65,18 +69,21 @@ public:
         { PLAYERHOOK_ON_LOGIN, PLAYERHOOK_ON_LOGOUT }) { }
     void OnPlayerLogin(Player* player) override
     {
+        Leeroy::Guild::BenchmarkPlayerLogin(player->GetGUID().GetCounter());
         if (player->GetGUID().GetCounter() == Leeroy::Guild::HumanGuid())
             Leeroy::Training::EndDummyTrial("human_login");
     }
     void OnPlayerLogout(Player* player) override
     {
         Leeroy::Training::DummyPlayerLogout(player->GetGUID().GetCounter());
+        Leeroy::Guild::BenchmarkPlayerLogout(player->GetGUID().GetCounter());
         Leeroy::Training::JournalForget(player->GetGUID().GetCounter());
     }
 };
 
 void AddSC_leeroy_training()
 {
+    AddSC_leeroy_benchmark_loot();
     new LeeroyTrainingWorldScript();
     new LeeroyTrainingPlayerScript();
     AddSC_leeroy_training_hooks();
