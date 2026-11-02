@@ -216,7 +216,8 @@ def secret_memory_ok(ctx, owner, refs):
         return False
     scope, nodes = state
     if scope[0] != "secret" or knowledge.secret_probe_passed(ctx.store, now=ctx.clock.now(),
-                                                          max_rate=ctx.settings.probe_max_rate):
+                                                          max_rate=ctx.settings.probe_max_rate,
+                                                          model=ctx.settings.live_model):
         return True
     proved = {}
 

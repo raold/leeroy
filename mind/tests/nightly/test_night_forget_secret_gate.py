@@ -11,7 +11,7 @@ from leeroy_mind.nightly.store import step_finished_at
 
 def probe(h, *, age=0, n=36, rate=0):
     return h.store.conn.execute("INSERT INTO probe_run(ts,model,n,leaks,rate) "
-        "VALUES (?,'live',?,0,?)", (h.clock.now() - age * 86400, n, rate)).lastrowid
+        "VALUES (?,?,?,0,?)", (h.clock.now() - age * 86400, h.LIVE, n, rate)).lastrowid
 
 
 def old(h, *, secret=True, importance=2):

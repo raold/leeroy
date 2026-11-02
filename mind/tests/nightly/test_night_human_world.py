@@ -339,8 +339,8 @@ def test_profile_revalidates_current_romance_eligibility_after_model(h):
 
 
 def pass_probe(h):
-    h.store.conn.execute("INSERT INTO probe_run(ts,model,n,leaks,rate) VALUES (?,'live',36,0,0)",
-                         (h.clock.now(),))
+    h.store.conn.execute("INSERT INTO probe_run(ts,model,n,leaks,rate) VALUES (?,?,36,0,0)",
+                         (h.clock.now(), h.LIVE))
 
 
 def test_secret_followup_waits_without_prompt_then_resumes_after_probe(h):
@@ -364,8 +364,8 @@ def test_probe_revoked_during_followup_prevents_judging_and_commit(h):
     pass_probe(h)
 
     def revoke(_):
-        h.store.conn.execute("INSERT INTO probe_run(ts,model,n,leaks,rate) VALUES (?,'live',36,36,1)",
-                             (h.clock.now() + 1,))
+        h.store.conn.execute("INSERT INTO probe_run(ts,model,n,leaks,rate) VALUES (?,?,36,36,1)",
+                             (h.clock.now() + 1, h.LIVE))
         return {"question": "how is the job?"}
 
     ctx = h.ctx({"followup": [revoke]}, default=yes)

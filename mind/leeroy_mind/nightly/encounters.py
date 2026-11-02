@@ -236,7 +236,8 @@ def _visible(ctx, memory, other):
     if secret:
         allowed = (not private and bool(secrets)
                    and knowledge.secret_probe_passed(ctx.store, now=ctx.clock.now(),
-                                                     max_rate=ctx.settings.probe_max_rate)
+                                                     max_rate=ctx.settings.probe_max_rate,
+                                                     model=ctx.settings.live_model)
                    and all(other in knowledge.knowers(ctx.store, root) for root in secrets))
         # An unrelated nested scope-only secret must not borrow a known root's permission.
         for ident, scope, _ in scopes:
@@ -604,7 +605,7 @@ async def run_encounter(ctx, row):
         for i, (key, g, other) in enumerate((("a", a, b), ("b", b, a))):
             claim, data = claims[i], memories[key]
             if confession and g == confession["other"] and not knowledge.secret_probe_passed(
-                    store, now=now, max_rate=ctx.settings.probe_max_rate):
+                    store, now=now, max_rate=ctx.settings.probe_max_rate, model=ctx.settings.live_model):
                 continue
             ident = ctx.writer.put(_memory(g, claim.text, other=(other,), evidence=refs,
                 importance=min(7 if confession else 6, data["importance"]), valence=claim.valence, now=now,

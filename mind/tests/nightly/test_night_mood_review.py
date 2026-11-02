@@ -68,8 +68,8 @@ def test_emotion_does_not_launder_recalled_private_context_through_public_chat(h
 
 
 def probe(h, *, age=0, n=36, rate=0):
-    h.store.conn.execute("INSERT INTO probe_run(ts,model,n,leaks,rate) VALUES (?,'live',?,0,?)",
-                         (h.clock.now() - age * 86400, n, rate))
+    h.store.conn.execute("INSERT INTO probe_run(ts,model,n,leaks,rate) VALUES (?,?,?,0,?)",
+                         (h.clock.now() - age * 86400, h.LIVE, n, rate))
 
 
 @pytest.mark.parametrize("subject,allowed", [(101, True), (102, False), (None, False)])

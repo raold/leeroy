@@ -43,7 +43,7 @@ def scope(h, mid: int) -> tuple[str, int]:
 def probe(h, ts: float, n: int = 36, leaks: int = 2, rate: float = 0.056) -> None:
     with h.store.transaction():
         h.store.conn.execute("INSERT INTO probe_run(ts, model, n, leaks, rate) "
-                             "VALUES (?, 'live', ?, ?, ?)", (ts, n, leaks, rate))
+                             "VALUES (?, ?, ?, ?, ?)", (ts, h.LIVE, n, leaks, rate))
 
 
 def encounter(h, eid: int, a: int, b: int, *, private: int) -> None:
@@ -74,7 +74,7 @@ def test_reminders_wait_for_the_probe(h):
     run(stage_knows(h.ctx()))
     assert [m for m in h.rows(101) if (m.key or "").startswith("tom:")] == []          # no probe run yet: it waits
     with h.store.transaction():
-        h.store.conn.execute("INSERT INTO probe_run(ts, model, n, leaks, rate) VALUES (?, 'live', 36, 2, 0.056)", (h.T,))
+        h.store.conn.execute("INSERT INTO probe_run(ts, model, n, leaks, rate) VALUES (?, ?, 36, 2, 0.056)", (h.T, h.LIVE))
     run(stage_knows(h.ctx(night="2026-10-30")))
     (m,) = [m for m in h.rows(101) if m.key == f"tom:102:{f}"]
     assert m.text == "Belra failed her exam. Belra doesn't know you know." and (m.scope, m.scope_with) == ("secret", 0)   # a column, not a mark
@@ -95,7 +95,7 @@ def test_long_secret_reminder_fits(h):                               # review C2
     with h.store.transaction():
         f = add_fact(h.store, kind="said_about", root=f"chat:{line}", about=102, text=text, secret=1, now=h.T)
         learn(h.store, f"chat:{line}", 101, "overheard", ts=h.T); believe(h.store, 102, 101, f"chat:{line}", "no", now=h.T)
-        h.store.conn.execute("INSERT INTO probe_run(ts, model, n, leaks, rate) VALUES (?, 'live', 36, 1, 0.028)", (h.T,))
+        h.store.conn.execute("INSERT INTO probe_run(ts, model, n, leaks, rate) VALUES (?, ?, 36, 1, 0.028)", (h.T, h.LIVE))
     run(stage_knows(h.ctx()))                                        # no IntegrityError: the night goes on
     (m,) = [m for m in h.rows(101) if m.key == f"tom:102:{f}"]
     assert len(m.text) <= 200 and (m.scope, m.scope_with) == ("secret", 0) and m.text.endswith("Belra doesn't know you know.")
