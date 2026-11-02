@@ -9,6 +9,7 @@ from leeroy_mind.guild.protocol import Job
 from leeroy_mind.guild.armory import read_premade_specs
 
 from .benchmark import BenchmarkSchedule, Benchmarks
+from .discoveries import Discoveries, DiscoverySchedule
 from .lab_runner import LabRunner, guild_schedule, next_window
 from .ledger import combat_role
 from .levers import MemberInfo
@@ -31,6 +32,7 @@ class TrainingJobs:
                              schedule=self.lab_schedule)
         self.benchmarks = Benchmarks(self.ports, self.ports.cfg,
                                      schedule_provider=self.benchmark_schedule)
+        self.discoveries = Discoveries(self.ports, self.ports.cfg, schedule=self.discovery_schedule)
 
     def members(self):
         return self.lab.members() | self.benchmarks.members()
@@ -88,6 +90,28 @@ class TrainingJobs:
         # benchmark_busy is false because this is the one benchmark owner. Its
         # own acquisition task must be able to revalidate this snapshot.
 
+    def discovery_schedule(self):
+        """Current session and installed scheduler facts for a normal ASIDE."""
+        try:
+            if self._disconnect_task is not None and not self._disconnect_task.done():
+                return None
+            guild = self._guild()
+            session = getattr(self.ground.app, "session_id", None)
+            if guild is None or type(session) is not int or not 0 < session <= 0xffffffff:
+                return None
+            connected, presence = self.ground._connected, self.ground._presence_known
+            human = self.ports.human_online()
+            lab, benchmark = self.lab.active, self.benchmarks.active
+            locks = [c._lock.locked() for c in (guild.raid_night, guild.offline)]
+            if any(type(fact) is not bool for fact in (connected, presence, human, lab, benchmark, *locks)):
+                return None
+            acquiring = (any(locks) or benchmark
+                         or self._lab_task is not None and not self._lab_task.done())
+            return DiscoverySchedule(self.ports.clock.now(), connected, presence, human, session,
+                                     self._busy(guild), lab, benchmark, acquiring)
+        except Exception:
+            return None
+
     def feed(self, ev):
         """Synchronous receipts also work during MindApp's shutdown drain."""
         self.lab.feed(ev)
@@ -140,7 +164,18 @@ class TrainingJobs:
             log.warning("training_lab_tick_failed")
 
     async def tick(self):
-        if self._closed or not self.ground._connected or self.ground._stopping:
+        if (self._closed or not self.ground._connected or self.ground._stopping
+                or self._disconnect_task is not None and not self._disconnect_task.done()):
+            return
+        # Discovery work is bounded local SQL and a synchronous normal proposal.
+        # Check before creating even a no-op benchmark/lab acquisition task;
+        # otherwise that fresh task would suppress every eligible social tick.
+        try:
+            await self.discoveries.tick()
+        except Exception:
+            log.warning("training_discovery_tick_failed")
+        if (self._closed or not self.ground._connected or self.ground._stopping
+                or self._disconnect_task is not None and not self._disconnect_task.done()):
             return
         # Schedule benchmark first. Its active acquisition task is visible to
         # the lab before the first request yields; both recheck after awaits.
