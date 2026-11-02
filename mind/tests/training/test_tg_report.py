@@ -21,7 +21,7 @@ def add(fake, day, deaths=2, *, duration=300, **changes):
     rec = record(ident)
     rec.header = dataclasses.replace(rec.header, start_ms=int(ts * 1000),
         end_ms=int((ts + duration) * 1000), deaths=deaths)
-    store.put_pull(fake.conn, rec, context(), {101: "tank"}, received=ts)
+    store.put_pull(fake.conn, rec, context(), {101: "tank"}, received=ts + duration)
     with fake.conn:
         fake.conn.execute("UPDATE tg_pull SET score=-8*deaths,score_basis='deaths_time' WHERE id=?", (ident,))
         for key, value in changes.items():
@@ -74,7 +74,7 @@ def test_section_counts_only_scoreable_pulls(fake):
 def test_section_is_json_serialisable_and_has_every_key(fake):
     result = section(fake)
     assert set(result) == {"since", "gate", "contexts", "nothing_improved", "trials", "promotions",
-        "rollbacks", "suspended", "rotations", "spread", "mentees", "rivals", "done_when"}
+        "rollbacks", "suspended", "rotations", "spread", "mentees", "rivals", "done_when", "evidence"}
     assert json.loads(json.dumps(result, allow_nan=False)) == result
     assert result["since"] is None and result["gate"] is None
     assert not any(result["done_when"].values())

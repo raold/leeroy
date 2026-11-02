@@ -3,6 +3,46 @@
 A WotLK private server built from the **mod-playerbots fork** of AzerothCore,
 with bots and several gameplay modules. Windows 11, MSVC, MySQL 8.4.
 
+## Training ground
+
+The optional training controller stores private fight records, tactics, trials,
+setups and command journals in the configured mind data directory's `mind.db`
+(`tg_` tables and scoped `meta` receipts). Schema support and code tests are
+separate from measured acceptance. Adaptation requires at least 28 days of
+eligible receipt history plus a passed overhead gate. Reports keep score bases
+separate and state missing coverage; historical backlog imports cannot shorten
+the observation period. A verified offline tactic win used later in a human raid
+shows adoption, not causal improvement there. Dummy requested-damage proxies do
+not prove actual boss DPS or a field rotation win. Voice send receipts do not
+prove that audio was heard, facts were spoken, or every cast was covered.
+
+Native keys `Leeroy.Telemetry.Enable` and `Leeroy.Training.Enable` are reloaded
+with `.reload config`. The first stops new telemetry recording when zero. The
+second refuses training additions and requests cleanup of owned bot changes,
+DC run settings, dummy jobs and benchmarks. Cleanup retries with exact ownership
+and completion checks; unavailable bodies or ambiguous receipts can remain
+pending. Disabling a flag is not proof that everything was restored. Preserve
+journals and pending receipts until verified cleanup completes. `[training]
+enabled = false` disables the Python attachment on the next mind start; it does
+not clear an outstanding native or Python journal.
+
+Inspection commands use `python -m leeroy_mind training`: `status`, `report
+--week YYYY-Www`, `gate`, `trials`, `cards`, `lessons --context MAP:BOSS:DIFFICULTY`,
+and `voicecheck --night YYYY-MM-DD`. Read-only inspection does not migrate an old
+database. With the mind stopped, `rollback --context MAP:BOSS:DIFFICULTY` restores
+the prior stored champion and `stock --context ...` selects stock; the service OS
+lock is held throughout. These card changes leave applied-command cleanup
+journals intact. `gate --reset` discards gate evidence; `rescore` rechecks stored
+pulls and restores matching scores.
+
+The bridge exposes `telemetry`, `get_stats`, `get_vocab`, `custom_strategy`,
+`dc_setting`, `dummy_trial`, `get_rivals`, `start_benchmark` and
+`get_training_cleanup`. Recorder hooks are gated by the telemetry tap. Native
+`bot_do restore` uses the training mutation journal; reset/clear operations retain
+their cleanup role when new additions are disabled. Extra pins pass through
+`LeeroySetExtraPins` into the single pin composer instead of calling
+`SetPinnedBots` independently. Research background is in [references.bib](references.bib).
+
 ## Canonical paths
 
 | What | Where |
