@@ -20,7 +20,7 @@ from leeroy_mind.guild.protocol import BotDo, Job, RaidControl
 from leeroy_mind.protocol import Ack
 
 from . import store
-from .cards import Card, Directive, Targets, validate_card, validate_directive
+from .cards import Card, Directive, LEVERS, Targets, validate_card, validate_directive
 from .levers import Applied, MemberInfo, to_commands
 from .protocol import CustomStrategy, DcSetting
 from .vocab import Vocab
@@ -164,6 +164,79 @@ class Applier:
             or any(e.run == run_key for e in self._entries)
             or any(r.run == run_key and r.task is not None and not r.task.done()
                    for r in self._receipts.values()))
+
+    def standing_conflicts(self, run_key, members, levers):
+        """Conservative admission check for a comparison's logical levers.
+
+        Hidden standing entries still matter when an arm omits its tested
+        lever. Desired setups count even if application was skipped. Unknown
+        journals/state cannot certify stock. The confirmed WaitAtBoss control
+        receipt shares the standing journal layer but is not a bot tactic.
+        """
+        try:
+            state = self._state(run_key)
+            tested = set(levers)
+            if (state is None or not state.vocab.complete or not isinstance(members, Mapping)
+                    or not members or not tested or not tested <= LEVERS.keys()
+                    or self._operations or self._lock.locked() or self._blocked
+                    or any(g not in state.members or state.members[g] != m for g, m in members.items())):
+                return True
+            selected, scope = set(members), self._scope(state)
+            if not self._available(state, selected):
+                return True
+            rotations = {r["id"]: r for r in store.rotation_rows(self.ports.conn)}
+            for guid, row in store.latest_setups(self.ports.conn).items():
+                if guid not in selected:
+                    continue
+                toggles, values = json.loads(row["toggles"]), json.loads(row["vals"])
+                if not isinstance(toggles, list) or not isinstance(values, dict):
+                    return True
+                if any(type(t) is not str or len(t) < 2 or t[0] not in "+-" for t in toggles):
+                    return True
+                directives = [Directive(t[1:], t[0]) for t in toggles]
+                directives.extend(Directive(k, v) for k, v in values.items())
+                if row["rotation"] is not None:
+                    rotation = rotations[row["rotation"]]
+                    member = state.members[guid]
+                    directives.append(Directive("rotation", rotation["name"],
+                        Targets(specs=((member.cls, member.spec_tab),))))
+                if any(validate_directive(d, state.vocab) is not None for d in directives):
+                    return True
+                if any(d.lever in tested for d in directives):
+                    return True
+            covered = set()
+            for entry in self._entries:
+                if entry.layer != "standing":
+                    continue
+                if entry.run != run_key or entry.scope != scope:
+                    return True
+                if not entry.directives or any(validate_directive(d, state.vocab) is not None for d in entry.directives):
+                    return True
+                # Logical metadata preserves bundle aliases (e.g. wait's co
+                # strategy and value; focus's strategy and target value).
+                if entry.key[0] in selected and any(d.lever in tested for d in entry.directives):
+                    return True
+                covered.update(entry.receipts)
+            for row in self._rows():
+                if row["layer"] != "standing":
+                    continue
+                saved = json.loads(row["command"])
+                receipt = self._receipts.get(row["id"])
+                if (row["run"] != run_key or saved["scope"] != scope or saved["settled"] is not True
+                        or receipt is None or not receipt.settled or not receipt.ok):
+                    return True
+                if saved != json.loads(json.dumps(receipt.envelope)):
+                    return True
+                if row["id"] in covered:
+                    continue
+                command = _decode(saved["wire"])
+                if not (isinstance(command, DcSetting) and command.leader_guid == state.tank_guid
+                        and command.key == "WaitAtBoss" and command.op == "set" and command.centi == 100
+                        and saved["keys"] == []):
+                    return True
+            return False
+        except (KeyError, TypeError, ValueError, AttributeError):
+            return True
 
     def acting(self, now):
         try:
@@ -730,8 +803,19 @@ class Applier:
 
     async def _standing(self, guids, run_key):
         state = self._state(run_key)
-        if state is None or not self.acting(self.ports.clock.now()) or self._rows() and not self._entries:
+        if state is None or not self.acting(self.ports.clock.now()):
             return 0
+        rows = self._rows()
+        if rows and not self._entries:
+            # Listener startup holds before installing the first setup. Permit
+            # only that one proven current-run hold, never an orphan journal or
+            # a partially failed previous mutation without layer ownership.
+            if (run_key is None or len(rows) != 1 or rows[0]["run"] != run_key
+                    or not self._resume_allowed(state, run_key)):
+                return 0
+            receipt = self._receipts.get(rows[0]["id"])
+            if receipt is None or not receipt.settled or not receipt.ok:
+                return 0
         selected = set(guids) & state.online & set(state.members) - {self.ports.human_guid}
         outside = run_key is None
         if outside:
