@@ -301,6 +301,13 @@ class LabRunner:
     async def on_result(self, event):
         self._enqueue("result", event, DummyResult)
 
+    def feed(self, event):
+        """No await: preserve receipts while the application's shutdown drains."""
+        if isinstance(event, Job):
+            self._enqueue("job", event, Job)
+        elif isinstance(event, DummyResult):
+            self._enqueue("result", event, DummyResult)
+
     def _enqueue(self, kind, event, cls):
         current = self._owned.get("current") if self.active else None
         if not isinstance(event, cls) or current is None or event.id != current["id"]:
@@ -657,6 +664,16 @@ class LabRunner:
             if self._due():
                 await self._start()
 
+    async def disconnect(self):
+        """Fence future legs; queued exact receipts remain available for recovery."""
+        async with self._lock:
+            if self.active:
+                self._drain()
+                if self._owned["current"] is None:
+                    await self._finish("connection_lost")
+                else:
+                    self._block("connection_lost")
+
     async def close(self):
         """Stop admission; persist unresolved bodies for operator/native recovery.
 
@@ -666,6 +683,7 @@ class LabRunner:
         self._stopping = True
         async with self._lock:
             if self.active:
+                self._drain()
                 if self._owned["current"] is None:
                     await self._finish("shutdown")
                 else:

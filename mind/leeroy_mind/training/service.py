@@ -20,6 +20,7 @@ from .facts import TalkHook
 from .gate import Gate
 from .ledger import Ledger
 from .ledger import combat_role
+from .jobs import TrainingJobs
 from .levers import MemberInfo
 from .lines import template
 from .listener import TrainingListener
@@ -108,6 +109,8 @@ class TrainingGround:
         self._lanes = set()
         self._loader = None
         self._close_task = None
+        self.jobs = TrainingJobs(self)
+        self.ledger.after_store.append(self.jobs.after_store)
 
     def book(self):
         return self._book
@@ -116,7 +119,7 @@ class TrainingGround:
         return tuple(sorted({id for name in watch_names() for id in self._book.ids(name)})) if self._book else ()
 
     def training_members(self):
-        return set()
+        return self.jobs.members()
 
     def base_application_allowed(self):
         return bool(self._connected and self._presence_known and not self._stopping
@@ -249,6 +252,7 @@ class TrainingGround:
         self._epoch += 1
         self._queue.clear()
         # Fence before cancellation can yield to a late response.
+        await self.jobs.disconnect()
         await self.gate.on_connection(connected)
         await self.ledger.on_connection(connected)
         await self.ports.disconnect()
@@ -262,6 +266,7 @@ class TrainingGround:
     async def on_event(self, ev):
         self.ports.feed(ev)  # Reply delivery never waits for a command's ACK.
         self.native.feed(ev)
+        self.jobs.feed(ev)
         name = event_type(ev)
         if name.startswith("pull"):
             await self.ledger.on_event(ev)
@@ -342,6 +347,14 @@ class TrainingGround:
                     log.warning("training_native_cleanup_pending")
             await self.ports.clock.sleep(1)
 
+    async def _jobs(self):
+        while True:
+            try:
+                await self.jobs.tick()
+            except Exception:
+                log.warning("training_jobs_tick_failed")
+            await self.ports.clock.sleep(1)
+
     async def _sampling(self):
         while True:
             if self._connected:
@@ -415,7 +428,7 @@ class TrainingGround:
         self._running = True
         self._lanes = {asyncio.create_task(fn()) for fn in
                        (self._commands, self._sampling, self._maintenance, self._load, self._listening,
-                        self._voicing, self._native_cleanup, self._experimenting)}
+                        self._voicing, self._native_cleanup, self._experimenting, self._jobs)}
         try:
             # Cancellation fences promptly; one shared drain owns cancellation
             # and joins instead of allowing gather to cancel the loader twice.
@@ -446,6 +459,7 @@ class TrainingGround:
             # Never cancel the to_thread worker: its synchronous IO cannot be
             # cancelled, and it remains owned until this actual join completes.
             await asyncio.gather(self._loader, return_exceptions=True)
+        await self.jobs.close()
         await self.experiments.close()
         while not await self.listener.close():
             log.warning("training listener shutdown is still draining")
@@ -468,6 +482,8 @@ def attach_training(app):
         app.register_event_handler(name, ground.on_event)
     for name in ("job", "vocab", "server_stats", "dummy_result", "rivals", "training_cleanup"):
         app.register_shutdown_receipt(name, ground.ports.feed)
+    for name in ("job", "dummy_result"):
+        app.register_shutdown_receipt(name, ground.jobs.feed)
     app.register_connection_hook(ground.on_connection)
     guild = getattr(app, "guild", None)
     if guild is not None:
@@ -482,6 +498,9 @@ def attach_training(app):
     hook = TalkHook(ground.ports)
     hook.change_for = ground.listener.change_for
     app.engine.add_instruction_hook(hook)
+    facts = getattr(app.engine, "facts", None)
+    if facts is not None:
+        facts.add_provider(ground.jobs.lab.rotation_facts)
     runner = getattr(app, "night_runner", None)
     if runner is not None:
         from .coach import CoachSources, stage_coach
