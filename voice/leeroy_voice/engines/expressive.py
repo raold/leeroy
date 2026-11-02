@@ -1,0 +1,379 @@
+"""The expressive engine (Task 22): a cloning engine in its own process (worker.py), speaking each
+member from their reference clip.
+
+The engine implements `Engine`, but it may be down at any moment: GpuGuard has refused it, or let
+it go, or the worker died. synth() then raises EngineError at once, and never waits for a model:
+the service speaks that line with Kokoro, so a line is never lost to it (service.py). Whether it
+is up is decided outside it: start() and stop() are called by the service under GpuGuard, and by
+the commands that render on the CPU without it.
+
+Levers per attitude (M28): LEVERS holds neutral numbers only, the kit's. Wording never lives in
+the code: a local voice-data/attitudes.toml overrides them key by key at start, as
+[<engine>.<attitude>] tables. Turbo has neither exaggeration nor cfg, so its attitude rests on the
+sounds in its text (textear). It has no native speed control: the service-side tempo step
+applies `speed` after synthesis, keeping pitch and formants before the mic chain.
+
+Nothing of a line leaves here but its audio: an EngineError names a type or a count, and the
+worker's stderr is thrown away."""
+import hashlib
+import io
+import math
+import os
+import queue
+import subprocess
+import threading
+import time
+import tomllib
+from pathlib import Path
+
+import numpy as np
+import soundfile as sf
+
+from ..fx import change_tempo
+from ..wire import ATTITUDES
+from . import EngineError
+from .worker import READY, WorkerTree, read_answer, request_line
+
+SAMPLE_RATE = 24000  # Chatterbox's, as Kokoro's: the chain takes one rate
+START_S = 110.0  # a little under GpuGuard's RESERVE_S, so a start that hangs gives its lease up
+LINE_TIMEOUT_S = 20.0  # longer than any line's wait on the card: a stuck worker, not a long line
+STOP_S = 5.0
+JOIN_S = 2.0
+LOCAL_NAME = "attitudes.toml"  # in the data dir
+REFERENCE_MIN_S = 5.0  # Chatterbox refuses a reference this short, on every line
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+_BELOW_NORMAL = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
+
+_TURBO = {"temperature": 0.8, "top_p": 0.95, "top_k": 1000, "repetition_penalty": 1.2}
+_INDEX = {"emo_vector": [0, 0, 0, 0, 0, 0, 0, 0.6], "emo_alpha": 0.6}
+LEVERS: dict[str, dict[str, dict]] = {
+    "chatterbox": {
+        "none": {"exaggeration": 0.5, "cfg_weight": 0.5, "temperature": 0.8},
+        "fond": {"exaggeration": 0.6, "cfg_weight": 0.45, "temperature": 0.8},
+        "drawn": {"exaggeration": 0.75, "cfg_weight": 0.35, "temperature": 0.8},
+        "lust": {"exaggeration": 0.9, "cfg_weight": 0.3, "temperature": 0.85}},
+    "chatterbox-turbo": dict.fromkeys(ATTITUDES, _TURBO),
+    "indextts2": dict.fromkeys(ATTITUDES, _INDEX),
+}
+
+
+class LeverError(ValueError):
+    pass
+
+
+def validate_reference(audio, rate: int) -> np.ndarray:
+    """A cloneable mono reference, or an EngineError with no private data in its message."""
+    if type(rate) is not int or rate <= 0:
+        raise EngineError("reference: invalid sample rate")
+    try:
+        a = np.asarray(audio, dtype=np.float32)
+    except (TypeError, ValueError, OverflowError):
+        raise EngineError("reference: invalid samples") from None
+    if a.ndim != 1 or not np.isfinite(a).all():
+        raise EngineError("reference: expected finite mono samples")
+    if len(a) / rate <= REFERENCE_MIN_S:
+        raise EngineError(f"a reference of {len(a) / rate:.1f} s")
+    if float(np.abs(a).max()) < 1 / 32768:
+        raise EngineError("reference: silent at 16-bit PCM precision")
+    return a
+
+
+def reference_fingerprint(path: Path) -> str:
+    """Hash the same file bytes we validate, including replacement at the same filename."""
+    try:
+        data = path.read_bytes()
+        audio, rate = sf.read(io.BytesIO(data), dtype="float32")
+    except (OSError, sf.SoundFileError) as e:
+        raise EngineError(f"reference: cannot read: {type(e).__name__}") from None
+    validate_reference(audio, rate)
+    return hashlib.sha256(data).hexdigest()
+
+
+def _read_overlay(path: Path) -> dict:
+    try:
+        return tomllib.loads(path.read_bytes().decode("utf-8-sig"))
+    except OSError as e:
+        raise LeverError(f"{path}: cannot read it: {e.strerror or e}") from e
+    except UnicodeDecodeError as e:
+        raise LeverError(f"{path}: not UTF-8 (byte {e.start}); save it as UTF-8") from e
+    except tomllib.TOMLDecodeError as e:
+        raise LeverError(f"{path}: {e}") from e
+
+
+def load_levers(data_dir: Path, engine: str) -> dict[str, dict]:
+    """Each attitude's params for `engine`: LEVERS under <data_dir>/attitudes.toml. A file that
+    cannot be read, or an attitude that is not one, raises LeverError naming the key, and never
+    a value (the wording is private)."""
+    levers = {attitude: dict(params) for attitude, params in LEVERS[engine].items()}
+    path = Path(data_dir) / LOCAL_NAME
+    if not path.exists():
+        return levers
+    overlay = _read_overlay(path)
+    for name, table in overlay.items():
+        for attitude, params in (table.items() if isinstance(table, dict) else ((name, table),)):
+            if attitude not in ATTITUDES or not isinstance(params, dict):
+                raise LeverError(f"{path}: {name}.{attitude}: expected a table for one of "
+                                 f"{', '.join(ATTITUDES)}")
+    for attitude, params in overlay.get(engine, {}).items():
+        levers[attitude].update(params)
+    return levers
+
+
+class WorkerProcess:
+    """One worker script under a venv's interpreter, from start() to stop(); one line at a time.
+    Any thread may call stop(), which ends a start() or an ask() under way with an EngineError.
+    Used once: a worker that has stopped is replaced, never restarted."""
+
+    def __init__(self, python: Path, script: Path, *, args=(), env: dict | None = None,
+                 below_normal: bool = False, start_s: float = START_S):
+        self.name = Path(script).stem
+        self.process: subprocess.Popen | None = None
+        self._command = [str(python), "-I", "-X", "utf8", str(script), *map(str, args)]
+        self._env = {**os.environ, **env} if env else None
+        self._flags = _NO_WINDOW | (_BELOW_NORMAL if below_normal else 0)
+        self._start_s = start_s
+        self._answers: queue.SimpleQueue = queue.SimpleQueue()
+        self._reader: threading.Thread | None = None
+        self._closer: threading.Thread | None = None
+        self._tree: WorkerTree | None = None
+        self._turn = threading.Lock()  # one line at a time
+        self._guard = threading.Lock()  # start against stop
+        self._cleanup = threading.Lock()  # serialize cleanup attempts, including retries
+        self._cleanup_complete = False
+        self._ready = self._stopped = False
+        self._sequence = 0
+
+    @property
+    def up(self) -> bool:
+        return self._ready and not self._stopped and self.process.poll() is None
+
+    def start(self) -> None:
+        """Until the model has loaded. Raises EngineError when it cannot."""
+        with self._guard:
+            if self._stopped:
+                raise EngineError(f"{self.name}: stopped")
+            try:
+                # The service tracks the venv launcher's actual interpreter children;
+                # the isolated worker still imports the dependency-light wire module.
+                self._tree = WorkerTree()
+            except ImportError:
+                self._stopped = True
+                raise EngineError(f"{self.name}: process tracking requires psutil") from None
+            try:
+                self.process = subprocess.Popen(
+                    self._command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL, env=self._env, creationflags=self._flags)
+            except OSError as e:
+                self._stopped = True
+                raise EngineError(f"{self.name}: cannot start: {type(e).__name__}") from None
+            try:
+                self._tree.attach(self.process)
+            except self._tree.ps.Error:
+                # Popen owns this exact process handle; no PID-name search is involved.
+                try:
+                    self.process.kill()
+                    self.process.wait(STOP_S)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+                self.process.stdin.close()
+                self.process.stdout.close()
+                self._stopped = True
+                raise EngineError(f"{self.name}: cannot track worker") from None
+            self._reader = threading.Thread(target=self._read, name=f"leeroy-{self.name}",
+                                            daemon=True)
+            self._reader.start()
+        try:
+            ready = self._answers.get(timeout=self._start_s)
+        except queue.Empty:
+            self.stop()
+            raise EngineError(f"{self.name}: no model after {self._start_s:g} s") from None
+        if ready is None or ready.id != READY or not ready.ok:
+            self.stop()
+            raise EngineError(f"{self.name}: did not load: "
+                              f"{ready.error if ready is not None else 'it exited'}")
+        self._tree.capture()
+        self._ready = True
+
+    def _read(self) -> None:
+        try:
+            while True:
+                answer = read_answer(self.process.stdout)
+                self._answers.put(answer)
+                if answer is None:
+                    return
+        except (OSError, ValueError):  # the pipe has closed under it
+            self._answers.put(None)
+
+    def ask(self, text: str, ref: str, params: dict, *, timeout: float) -> tuple[np.ndarray, int]:
+        """One line: (audio, rate). Raises EngineError, stopping the worker when it did not
+        answer; a line it failed on leaves it running."""
+        with self._turn:
+            if not self.up:
+                self.stop()  # a dead launcher may have left its interpreter running
+                raise EngineError(f"{self.name}: not running")
+            self._tree.capture()
+            self._sequence += 1
+            id_ = str(self._sequence)
+            try:
+                self.process.stdin.write(request_line(id_, text, ref, params))
+                self.process.stdin.flush()
+            except (OSError, ValueError):  # it has gone, or stop() closed the pipe
+                self.stop()
+                raise EngineError(f"{self.name}: gone") from None
+            try:
+                answer = self._answers.get(timeout=timeout)
+            except queue.Empty:
+                self.stop()
+                raise EngineError(f"{self.name}: no answer in {timeout:g} s") from None
+            if answer is None or answer.id != id_:
+                self.stop()
+                raise EngineError(f"{self.name}: gone mid-line")
+            if not answer.ok:
+                raise EngineError(f"{self.name}: {answer.error}")
+            return answer.audio, answer.sr
+
+    def stop(self) -> None:
+        """Close the protocol and stop its owned tree; failed cleanup remains retryable."""
+        deadline = time.monotonic() + STOP_S
+        with self._guard:
+            if self._cleanup_complete:
+                return
+            self._stopped = True
+            process = self.process
+        self._answers.put(None)  # wake a concurrent start()/ask() while cleanup proceeds
+        if process is None:
+            self._cleanup_complete = True
+            return
+        if not self._cleanup.acquire(timeout=max(0.0, deadline - time.monotonic())):
+            raise EngineError(f"{self.name}: worker cleanup still in progress")
+        try:
+            if self._cleanup_complete:
+                return
+
+            def eof():
+                try:
+                    process.stdin.close()
+                except (OSError, ValueError):
+                    pass
+
+            # A buffered close can wait for a concurrent writer. Keep that thread across
+            # retries and let bounded tree cleanup unblock it if stdin is never read.
+            if self._closer is None:
+                self._closer = threading.Thread(target=eof, name=f"leeroy-{self.name}-eof", daemon=True)
+                self._closer.start()
+            cleaned = self._tree.stop(timeout=max(0.0, deadline - time.monotonic()))
+            try:
+                process.wait(0)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+            self._closer.join(max(0.0, min(JOIN_S, deadline - time.monotonic())))
+            if self._reader is not None:
+                self._reader.join(max(0.0, min(JOIN_S, deadline - time.monotonic())))
+            reader_stopped = self._reader is None or not self._reader.is_alive()
+            if reader_stopped:
+                process.stdout.close()
+            if not cleaned or self._closer.is_alive() or not reader_stopped or process.poll() is None:
+                raise EngineError(f"{self.name}: worker cleanup incomplete")
+            self._cleanup_complete = True
+        finally:
+            self._cleanup.release()
+
+
+class ExpressiveEngine:
+    """See the module's docstring. `venv_python` is the engine's own venv's interpreter, `refs_dir`
+    the folder of the members' reference clips (mind-data/voices), `levers` load_levers()'s, and
+    `args` go to the worker script, worker_<engine>.py beside this file unless `script` says."""
+
+    sample_rate = SAMPLE_RATE
+
+    def __init__(self, engine: str, venv_python: Path, *, need_gb: float, refs_dir: Path = Path(),
+                 levers: dict[str, dict] | None = None, script: Path | None = None, args=(),
+                 env: dict | None = None, below_normal: bool = False,
+                 timeout_s: float = LINE_TIMEOUT_S, start_s: float = START_S):
+        self.name = engine
+        self.need_gb = need_gb
+        self.worker: WorkerProcess | None = None
+        self._python = Path(venv_python)
+        self._script = script or Path(__file__).with_name(f"worker_{engine.replace('-', '_')}.py")
+        self._args, self._env, self._below_normal = args, env, below_normal
+        self._refs = Path(refs_dir)
+        self._levers = levers or {a: dict(p) for a, p in LEVERS[engine].items()}
+        self._timeout_s = timeout_s
+        self._start_s = start_s
+        self._starting = threading.Lock()
+
+    @property
+    def up(self) -> bool:
+        worker = self.worker
+        return worker is not None and worker.up
+
+    def start(self) -> None:
+        """Until the model has loaded; blocking, so off the event loop. EngineError otherwise."""
+        with self._starting:
+            if self.up:
+                return
+            self.stop()
+            self.worker = WorkerProcess(self._python, self._script, args=self._args,
+                                        env=self._env, below_normal=self._below_normal,
+                                        start_s=self._start_s)
+            self.worker.start()
+
+    def stop(self) -> None:
+        worker = self.worker
+        if worker is not None:
+            worker.stop()
+            if self.worker is worker:
+                self.worker = None
+
+    def levers(self, attitude: str) -> dict:
+        return self._levers[attitude]
+
+    def _reference(self, spec) -> Path:
+        path = (self._refs / spec.ref).resolve()
+        if path.parent != self._refs.resolve() or not path.is_file():
+            raise EngineError(f"{self.name}: no reference clip for {spec.guid}")
+        return path
+
+    def reference_fingerprint(self, spec) -> str:
+        """Stock clips depend on reference contents, even while the worker is down."""
+        return reference_fingerprint(self._reference(spec))
+
+    def warmup(self, spec, *, timeout_s: float = 30.0) -> None:
+        """Prime conditioning and inference with one neutral line; never play its audio.
+
+        Startup has its own bounded allowance. It must not consume the first live line's
+        shorter deadline, and it never changes that line's synthesis limit.
+        """
+        worker = self.worker
+        if worker is None or not worker.up:
+            raise EngineError(f"{self.name}: not up")
+        if not math.isfinite(timeout_s) or not 0 < timeout_s <= 30:
+            raise EngineError(f"{self.name}: invalid warmup timeout")
+        audio, rate = worker.ask("Ready.", str(self._reference(spec)), self._levers["none"],
+                                 timeout=timeout_s)
+        if rate != self.sample_rate or not len(audio) or not np.isfinite(audio).all():
+            raise EngineError(f"{self.name}: invalid warmup audio")
+
+    def synth(self, text: str, spec, style, speed: float, *,
+              timeout_s: float | None = None) -> np.ndarray:
+        """`style` is the attitude's levers; anything else (StockCache hands the bank's style)
+        reads as attitude none. EngineError at once when the engine is down."""
+        worker = self.worker
+        if worker is None or not worker.up:
+            raise EngineError(f"{self.name}: not up")
+        if not math.isfinite(speed) or speed <= 0:
+            raise EngineError(f"{self.name}: invalid speed")
+        params = style if isinstance(style, dict) else self._levers["none"]
+        timeout = self._timeout_s if timeout_s is None else min(self._timeout_s, timeout_s)
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise EngineError(f"{self.name}: invalid timeout")
+        audio, rate = worker.ask(text, str(self._reference(spec)), params, timeout=timeout)
+        if rate != self.sample_rate or not len(audio):
+            raise EngineError(f"{self.name}: {len(audio)} samples at {rate} Hz")
+        try:
+            audio = change_tempo(audio, rate, speed)
+        except Exception as e:
+            raise EngineError(f"{self.name}: tempo: {type(e).__name__}") from None
+        if not len(audio):
+            raise EngineError(f"{self.name}: tempo returned no samples")
+        return audio

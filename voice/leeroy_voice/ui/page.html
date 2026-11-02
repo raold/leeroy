@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Guild Voice</title>
+<link rel="icon" href="data:,">
+<style>
+:root {
+  --face: #d4d0c8; --dark: #404040; --shadow: #808080; --light: #ffffff; --sel: #0a246a;
+  --on: #3df03d; --off: #0b4a0b; --ptt-on: #ff5030; --ptt-off: #4a1608;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { display: flex; flex-direction: column; background: var(--face); color: #000;
+  font: 12px/1.4 Tahoma, "Segoe UI", Verdana, sans-serif; }
+[hidden] { display: none !important; }
+
+.banner { padding: 4px 8px; text-align: center; font-weight: bold; border-bottom: 1px solid var(--dark);
+  background: #ffe680; color: #402800; }
+#banner-lost { background: #f4b4a4; color: #400800; }
+
+main { flex: 1; min-height: 0; display: flex; gap: 4px; padding: 4px; }
+body.lost main { opacity: 0.5; pointer-events: none; }
+.pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+#left { width: 320px; min-width: 200px; max-width: 70vw; overflow: hidden; resize: horizontal; }
+#right { flex: 1; }
+h2 { margin: 0 0 2px; padding: 2px 6px; font-size: 11px; font-weight: bold; background: var(--face);
+  border: 1px solid; border-color: var(--light) var(--shadow) var(--shadow) var(--light); }
+.list { flex: 1; min-height: 0; overflow: auto; background: #fff; padding: 2px;
+  border: 2px solid; border-color: var(--shadow) var(--light) var(--light) var(--shadow);
+  box-shadow: inset 1px 1px var(--dark); }
+
+.row { display: flex; align-items: center; gap: 5px; min-height: 18px; padding: 0 4px;
+  white-space: nowrap; cursor: default; outline-offset: -1px; }
+.row:focus-visible { outline: 1px dotted #000; }
+.room { font-weight: bold; }
+.room:hover .rname { text-decoration: underline; }
+.room.here { background: var(--sel); color: #fff; }
+.kids { margin-left: 16px; }
+.count { font-weight: normal; opacity: 0.7; }
+
+.twist { position: relative; flex: none; width: 9px; height: 9px; background: #fff;
+  border: 1px solid var(--shadow); cursor: pointer; }
+.twist::before { content: ""; position: absolute; left: 1px; top: 3px; width: 5px; height: 1px;
+  background: #000; }
+.twist.closed::after { content: ""; position: absolute; left: 3px; top: 1px; width: 1px; height: 5px;
+  background: #000; }
+.twist.none { visibility: hidden; }
+
+.lock { position: relative; flex: none; width: 9px; height: 7px; margin-top: 5px;
+  background: #d9b020; border: 1px solid #6b5a10; }
+.lock::before { content: ""; position: absolute; left: 1px; top: -6px; width: 5px; height: 5px;
+  border: 1px solid #6b5a10; border-bottom: none; border-radius: 3px 3px 0 0; }
+
+.light { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--off);
+  border: 1px solid #062a06; }
+.speaking .light { background: var(--on); box-shadow: 0 0 5px var(--on); }
+.member.you { font-weight: bold; }
+.member.muted .mname { color: #707070; text-decoration: line-through; }
+.member:hover { background: #e8e4dc; }
+.tag { color: #606060; font-size: 11px; }
+
+.line { padding: 1px 4px; overflow-wrap: anywhere; }
+.ts { color: #707070; }
+.who { font-weight: bold; }
+.you .who { color: var(--sel); }
+.whisper { color: #8a1f9a; font-style: italic; }
+.system { color: #707070; }
+
+#status { display: flex; flex-wrap: wrap; gap: 2px; padding: 2px 4px;
+  border-top: 1px solid var(--light); }
+.seg { display: flex; align-items: center; gap: 6px; padding: 1px 8px; border: 1px solid;
+  border-color: var(--shadow) var(--light) var(--light) var(--shadow); }
+.seg.bad { color: #a00000; font-weight: bold; }
+#st-ptt { background: var(--ptt-off); border-color: #2a0c04; }
+#st-ptt.on { background: var(--ptt-on); box-shadow: 0 0 6px var(--ptt-on); }
+
+button { font: inherit; min-width: 64px; padding: 1px 12px; background: var(--face); color: #000;
+  border: 2px solid; border-color: var(--light) var(--dark) var(--dark) var(--light); }
+button:active { border-color: var(--dark) var(--light) var(--light) var(--dark); }
+
+#toasts { position: fixed; top: 10px; right: 12px; z-index: 10; width: 300px; display: flex;
+  flex-direction: column; gap: 6px; }
+.toast, #menu { background: var(--face); padding: 6px 8px; border: 2px solid;
+  border-color: var(--light) var(--dark) var(--dark) var(--light);
+  box-shadow: 2px 2px 6px rgba(0, 0, 0, 0.45); }
+.toast .msg { margin-bottom: 6px; }
+.toast .acts { display: flex; gap: 6px; justify-content: flex-end; }
+#menu { position: fixed; z-index: 20; min-width: 230px; }
+#menu .title { margin-bottom: 4px; font-weight: bold; }
+#menu label { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+#menu input[type="range"] { flex: 1; min-width: 100px; }
+#menu output { min-width: 58px; text-align: right; }
+</style>
+</head>
+<body class="lost">
+<div id="banner-mind" class="banner" hidden>mind offline: members stay quiet and push-to-talk is discarded until it reconnects</div>
+<div id="banner-lost" class="banner">voice service not reachable: retrying</div>
+<main>
+  <section id="left" class="pane">
+    <h2>Channels</h2>
+    <div id="tree" class="list" aria-label="Channels"></div>
+  </section>
+  <section id="right" class="pane">
+    <h2>Transcript</h2>
+    <div id="transcript" class="list" role="log"></div>
+  </section>
+</main>
+<footer id="status">
+  <span class="seg"><i id="st-ptt" class="light"></i>push-to-talk</span>
+  <span id="st-room" class="seg"></span>
+  <span id="st-out" class="seg"></span>
+  <span id="st-mic" class="seg"></span>
+  <span id="st-stt" class="seg"></span>
+  <span id="st-queue" class="seg"></span>
+  <span id="st-err" class="seg"></span>
+</footer>
+<div id="toasts" role="status"></div>
+<div id="menu" role="dialog" aria-label="Member volume" hidden>
+  <div id="menu-name" class="title"></div>
+  <label>Volume
+    <input id="menu-vol" type="range" min="-12" max="12" step="0.5" value="0">
+    <output id="menu-db">0.0 dB</output>
+  </label>
+  <label><input id="menu-mute" type="checkbox"> Mute</label>
+  <button id="menu-reset" type="button">Reset</button>
+</div>
+<script>
+(function () {
+  "use strict";
+
+  var LIMIT = 200;                       // transcript lines kept, as the state keeps them
+  var DB_LIMIT = 12;                     // per-member volume, +-12 dB
+  var KINDS = { say: true, you: true, whisper: true, system: true };
+  var REASONS = { locked: "is locked", full: "is full", unknown: "does not exist",
+                  offline: "cannot be joined while the mind is offline" };
+  var COLLAPSED_KEY = "voice-ui-collapsed";
+
+  function $(id) { return document.getElementById(id); }
+  function own(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
+  function arr(x) { return Array.isArray(x) ? x : []; }
+  function obj(x) { return x && typeof x === "object" && !Array.isArray(x) ? x : {}; }
+  function str(x) { return typeof x === "string" ? x : ""; }
+  function num(x) { return typeof x === "number" && isFinite(x) ? x : 0; }
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+
+  // Everything shown is set as text: nothing here builds markup from what members or he said
+  function el(tag, cls) {
+    var e = document.createElement(tag);
+    if (cls) { e.className = cls; }
+    return e;
+  }
+  function textEl(tag, cls, text) {
+    var e = el(tag, cls);
+    e.textContent = text;
+    return e;
+  }
+  function clear(e) {
+    while (e.firstChild) { e.removeChild(e.firstChild); }
+  }
+
+  var S = blank();
+  var ws = null, retry = null, connected = false, ready = false, menuGuid = 0;
+  var collapsed = loadCollapsed();
+
+  function blank() {
+    return { tree: [], where: {}, names: {}, room: "", human: 0, speaking: {}, ptt: false,
+             volumes: {}, mutes: {}, invites: [], transcript: [], mind: false, status: {} };
+  }
+  function setOf(list) {
+    var o = {};
+    arr(list).forEach(function (g) { o[g] = true; });
+    return o;
+  }
+  function adopt(m) {
+    S = blank();
+    S.tree = arr(m.tree).filter(function (r) { return r && typeof r.id === "string"; });
+    S.where = obj(m.where);
+    S.names = obj(m.names);
+    S.room = str(m.room);
+    S.human = num(m.human);
+    S.speaking = setOf(m.speaking);
+    S.ptt = m.ptt === true;
+    S.volumes = obj(m.volumes);
+    S.mutes = setOf(m.mutes);
+    S.invites = arr(m.invites).filter(function (i) { return i && typeof i.channel === "string"; });
+    S.transcript = arr(m.transcript).slice(-LIMIT);
+    S.mind = m.mind === true;
+    S.status = obj(m.status);
+  }
+
+  function loadCollapsed() {
+    try {
+      return obj(JSON.parse(localStorage.getItem(COLLAPSED_KEY) || "{}"));
+    } catch (e) {
+      return {};
+    }
+  }
+  function saveCollapsed() {
+    try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify(collapsed)); } catch (e) { /* no storage */ }
+  }
+
+  function name(guid) {
+    var n = S.names[guid];
+    return typeof n === "string" && n ? n : "#" + guid;
+  }
+  function youName() {
+    var n = S.human ? S.names[S.human] : "";
+    return typeof n === "string" && n ? n + " (you)" : "You";
+  }
+  function hereRoom() {
+    return S.room || (S.human && typeof S.where[S.human] === "string" ? S.where[S.human] : "");
+  }
+  function roomName(id) {
+    for (var i = 0; i < S.tree.length; i++) {
+      if (S.tree[i].id === id) { return str(S.tree[i].name) || id; }
+    }
+    return id;
+  }
+  function fmtDb(db) {
+    return (db > 0 ? "+" : db < 0 ? "-" : "") + Math.abs(db).toFixed(1) + " dB";
+  }
+  function clock(ts) {
+    if (typeof ts !== "number" || !isFinite(ts)) { return ""; }
+    var d = new Date(ts);
+    return pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+  }
+
+  function send(o) {
+    if (ws && ws.readyState === 1) { ws.send(JSON.stringify(o)); }
+  }
+
+  // -- the tree ---------------------------------------------------------------------------------
+
+  function peopleByRoom() {
+    var by = {};
+    function put(room, p) { (by[room] = by[room] || []).push(p); }
+    Object.keys(S.where).forEach(function (g) {
+      var room = S.where[g];
+      if (typeof room !== "string" || !room || Number(g) === S.human) { return; }
+      put(room, { guid: Number(g), you: false, label: name(g) });
+    });
+    var here = hereRoom();
+    if (here) { put(here, { guid: S.human, you: true, label: youName() }); }
+    Object.keys(by).forEach(function (room) {
+      by[room].sort(function (a, b) {
+        if (a.you !== b.you) { return a.you ? -1 : 1; }
+        return a.label.toLowerCase() < b.label.toLowerCase() ? -1 : 1;
+      });
+    });
+    return by;
+  }
+
+  function rowKey(d) {
+    return d.room !== undefined ? "room:" + d.room : "guid:" + d.guid;
+  }
+  function focusKey() {
+    var a = document.activeElement;
+    return a && a.dataset && $("tree").contains(a) ? rowKey(a.dataset) : null;
+  }
+  function refocus(key) {
+    if (!key) { return; }
+    var rows = $("tree").querySelectorAll(".row");
+    for (var i = 0; i < rows.length; i++) {
+      if (rowKey(rows[i].dataset) === key) {
+        rows[i].focus();
+        return;
+      }
+    }
+  }
+
+  function renderTree() {
+    var box = $("tree"), key = focusKey(), here = hereRoom();
+    var known = {}, children = {}, people = peopleByRoom(), drawn = {};
+    S.tree.forEach(function (r) { known[r.id] = true; });
+    S.tree.forEach(function (r) {
+      var parent = r.parent && known[r.parent] && r.parent !== r.id ? r.parent : "";
+      (children[parent] = children[parent] || []).push(r);
+    });
+    clear(box);
+
+    function drawPerson(p, into) {
+      var talking = p.you ? S.ptt : !!S.speaking[p.guid];
+      var muted = !p.you && !!S.mutes[p.guid];
+      var row = el("div", "row member" + (p.you ? " you" : "") + (talking ? " speaking" : "")
+                   + (muted ? " muted" : ""));
+      row.dataset.guid = String(p.guid);
+      row.tabIndex = 0;
+      row.appendChild(el("span", "light"));
+      row.appendChild(textEl("span", "mname", p.label));
+      var db = S.volumes[p.guid];
+      if (!p.you && typeof db === "number" && db !== 0) {
+        row.appendChild(textEl("span", "tag", fmtDb(db)));
+      }
+      if (muted) { row.appendChild(textEl("span", "tag", "muted")); }
+      into.appendChild(row);
+    }
+
+    function drawRoom(r, into) {
+      if (drawn[r.id]) { return; }
+      drawn[r.id] = true;
+      var inside = people[r.id] || [], subs = children[r.id] || [];
+      var open = !collapsed[r.id];
+      var row = el("div", "row room" + (r.id === here ? " here" : ""));
+      row.dataset.room = r.id;
+      row.tabIndex = 0;
+      row.appendChild(el("span", "twist" + (inside.length || subs.length ? (open ? "" : " closed") : " none")));
+      if (r.locked === true) { row.appendChild(el("span", "lock")); }
+      row.appendChild(textEl("span", "rname", str(r.name) || r.id));
+      var cap = num(r.capacity);
+      if (inside.length || cap) {
+        row.appendChild(textEl("span", "count", "(" + inside.length + (cap ? "/" + cap : "") + ")"));
+      }
+      into.appendChild(row);
+      if (open && (inside.length || subs.length)) {
+        var kids = el("div", "kids");
+        inside.forEach(function (p) { drawPerson(p, kids); });
+        subs.forEach(function (c) { drawRoom(c, kids); });
+        into.appendChild(kids);
+      }
+    }
+
+    (children[""] || []).forEach(function (r) { drawRoom(r, box); });
+    S.tree.forEach(function (r) { drawRoom(r, box); });      // a loop in the tree still shows
+    Object.keys(people).filter(function (room) { return !known[room]; }).forEach(function (room) {
+      drawRoom({ id: room, name: room, locked: false, capacity: 0 }, box);   // a room the tree lacks
+    });
+    refocus(key);
+  }
+
+  function lights() {
+    var rows = $("tree").querySelectorAll(".member");
+    for (var i = 0; i < rows.length; i++) {
+      var you = rows[i].classList.contains("you");
+      rows[i].classList.toggle("speaking", you ? S.ptt : !!S.speaking[Number(rows[i].dataset.guid)]);
+    }
+  }
+
+  // -- transcript, invites, status, banners ------------------------------------------------------
+
+  function lineEl(e) {
+    var kind = own(KINDS, e.kind) ? e.kind : "say";
+    var row = el("div", "line " + kind);
+    // The gaps are text, not margins, so a copied transcript reads "12:03:44 Arkon: adds"
+    var when = clock(e.ts), who = str(e.who);
+    if (when) { row.appendChild(textEl("span", "ts", when + " ")); }
+    if (who && kind !== "system") {
+      row.appendChild(textEl("span", "who", who + (kind === "whisper" ? " whispers: " : ": ")));
+    }
+    row.appendChild(textEl("span", "msg", str(e.text)));
+    return row;
+  }
+  function renderTranscript() {
+    var box = $("transcript");
+    clear(box);
+    S.transcript.forEach(function (e) { box.appendChild(lineEl(obj(e))); });
+    box.scrollTop = box.scrollHeight;
+  }
+  function addLine(e) {
+    var box = $("transcript");
+    var stick = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+    S.transcript.push(e);
+    if (S.transcript.length > LIMIT) { S.transcript.shift(); }
+    box.appendChild(lineEl(e));
+    while (box.childNodes.length > LIMIT) { box.removeChild(box.firstChild); }
+    if (stick) { box.scrollTop = box.scrollHeight; }
+  }
+  function note(text) {
+    addLine({ who: "", text: text, ts: Date.now(), kind: "system" });
+  }
+
+  function dropInvite(inv) {
+    S.invites = S.invites.filter(function (i) { return i !== inv; });
+    renderToasts();
+  }
+  function renderToasts() {
+    var box = $("toasts");
+    clear(box);
+    S.invites.forEach(function (inv) {
+      var toast = el("div", "toast");
+      toast.appendChild(textEl("div", "msg",
+                               name(inv.from) + " asks you to join " + roomName(inv.channel) + "."));
+      var acts = el("div", "acts");
+      var join = textEl("button", "", "Join");
+      join.type = "button";
+      join.addEventListener("click", function () {
+        send({ type: "join", channel: inv.channel });     // accepting an invite is a join
+        dropInvite(inv);
+      });
+      var ignore = textEl("button", "", "Ignore");
+      ignore.type = "button";
+      ignore.addEventListener("click", function () { dropInvite(inv); });   // ignoring stays here
+      acts.appendChild(join);
+      acts.appendChild(ignore);
+      toast.appendChild(acts);
+      box.appendChild(toast);
+    });
+  }
+
+  function renderBanners() {
+    $("banner-lost").hidden = connected;
+    $("banner-mind").hidden = !(connected && ready && !S.mind);
+    document.body.classList.toggle("lost", !connected);
+  }
+  function seg(id, text, bad) {
+    var e = $(id);
+    e.textContent = text;
+    e.classList.toggle("bad", !!bad);
+  }
+  function renderStatus() {
+    var s = S.status, errs = arr(s.errors);
+    $("st-ptt").classList.toggle("on", S.ptt);
+    seg("st-room", "Channel: " + (hereRoom() ? roomName(hereRoom()) : "none"), false);
+    seg("st-out", "Output: " + (s.ok === true ? "ok" : s.ok === false ? "down" : "-"), s.ok === false);
+    seg("st-mic", "Mic: " + (str(s.mic) || "-"), s.mic === "missing");
+    seg("st-stt", "Recognition: " + (str(s.stt) || "-"), s.stt === "off");
+    seg("st-queue", "Queue: " + (typeof s.queue === "number" ? s.queue : "-"), false);
+    seg("st-err", errs.length ? errs.length + (errs.length === 1 ? " problem" : " problems")
+                              : "No problems", errs.length > 0);
+    $("st-err").title = errs.join(", ");
+  }
+  function renderAll() {
+    renderBanners();
+    renderTree();
+    renderTranscript();
+    renderToasts();
+    renderStatus();
+  }
+
+  // -- what the service sends --------------------------------------------------------------------
+
+  var HANDLERS = {
+    state: function (m) { adopt(m); ready = true; renderAll(); },
+    speaking: function (m) {
+      if (m.on === true) { S.speaking[m.guid] = true; } else { delete S.speaking[m.guid]; }
+      lights();
+    },
+    ptt: function (m) { S.ptt = m.down === true; lights(); renderStatus(); },
+    moved: function (m) {
+      var g = String(m.guid), room = str(m.channel), before = S.where[g];
+      if (room) { S.where[g] = room; } else { delete S.where[g]; }
+      if (S.human && Number(m.guid) === S.human) {
+        S.room = room;
+        S.invites = S.invites.filter(function (i) { return i.channel !== room; });   // he is there now
+      }
+      S.invites = S.invites.filter(function (i) {          // its sender has left the invited room
+        return !(String(i.from) === g && before === i.channel && room !== i.channel);
+      });
+      renderTree();
+      renderToasts();
+      renderStatus();
+    },
+    invite: function (m) {
+      var channel = str(m.channel);
+      if (!channel) { return; }
+      var dup = S.invites.some(function (i) { return i.from === m.from && i.channel === channel; });
+      if (!dup) { S.invites.push({ from: m.from, channel: channel }); }
+      renderToasts();
+    },
+    refused: function (m) {
+      var channel = str(m.channel);
+      var why = own(REASONS, m.reason) ? REASONS[m.reason] : "cannot be joined";
+      note(roomName(channel) + " " + why + ".");
+      S.invites = S.invites.filter(function (i) { return i.channel !== channel; });
+      renderToasts();
+    },
+    transcript: function (m) { addLine({ who: m.who, text: m.text, ts: m.ts, kind: m.kind }); },
+    status: function (m) {
+      var s = {};
+      Object.keys(m).forEach(function (k) { if (k !== "type") { s[k] = m[k]; } });
+      S.status = s;
+      renderStatus();
+    },
+    mind: function (m) { S.mind = m.up === true; renderBanners(); }
+  };
+
+  function handle(m) {
+    if (typeof m.type === "string" && own(HANDLERS, m.type)) { HANDLERS[m.type](m); }
+  }
+
+  // -- what he does ------------------------------------------------------------------------------
+
+  function setVolume(guid, db) {
+    db = Math.max(-DB_LIMIT, Math.min(DB_LIMIT, db));
+    if (db === 0) { delete S.volumes[guid]; } else { S.volumes[guid] = db; }
+    send({ type: "volume", guid: guid, db: db });
+    renderTree();
+  }
+  function setMute(guid, on) {
+    if (on) { S.mutes[guid] = true; } else { delete S.mutes[guid]; }
+    send({ type: "mute", guid: guid, on: on });
+    renderTree();
+  }
+
+  function closeMenu() {
+    $("menu").hidden = true;
+    menuGuid = 0;
+  }
+  function openMenu(guid, x, y) {
+    var menu = $("menu"), db = S.volumes[guid] || 0;
+    menuGuid = guid;
+    $("menu-name").textContent = name(guid);
+    $("menu-vol").value = String(db);
+    $("menu-db").textContent = fmtDb(db);
+    $("menu-mute").checked = !!S.mutes[guid];
+    menu.hidden = false;
+    menu.style.left = Math.max(4, Math.min(x, window.innerWidth - menu.offsetWidth - 4)) + "px";
+    menu.style.top = Math.max(4, Math.min(y, window.innerHeight - menu.offsetHeight - 4)) + "px";
+    $("menu-vol").focus();
+  }
+
+  $("menu-vol").addEventListener("input", function () {
+    $("menu-db").textContent = fmtDb(Number(this.value));
+  });
+  $("menu-vol").addEventListener("change", function () {
+    if (menuGuid) { setVolume(menuGuid, Number(this.value)); }
+  });
+  $("menu-mute").addEventListener("change", function () {
+    if (menuGuid) { setMute(menuGuid, this.checked); }
+  });
+  $("menu-reset").addEventListener("click", function () {
+    $("menu-vol").value = "0";
+    $("menu-db").textContent = fmtDb(0);
+    if (menuGuid) { setVolume(menuGuid, 0); }
+  });
+  document.addEventListener("mousedown", function (ev) {
+    if (!$("menu").hidden && !$("menu").contains(ev.target)) { closeMenu(); }
+  });
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape") { closeMenu(); }
+  });
+  window.addEventListener("blur", closeMenu);
+  window.addEventListener("resize", closeMenu);
+  $("tree").addEventListener("scroll", closeMenu);
+
+  $("tree").addEventListener("contextmenu", function (ev) {
+    var row = ev.target.closest(".member");
+    if (!row || row.classList.contains("you")) { closeMenu(); return; }
+    ev.preventDefault();
+    openMenu(Number(row.dataset.guid), ev.clientX, ev.clientY);
+  });
+  $("tree").addEventListener("click", function (ev) {
+    var row = ev.target.closest(".room");
+    if (!row) { return; }
+    var id = row.dataset.room;
+    if (ev.target.closest(".twist")) {
+      if (collapsed[id]) { delete collapsed[id]; } else { collapsed[id] = true; }
+      saveCollapsed();
+      renderTree();
+    } else if (id !== hereRoom()) {
+      send({ type: "join", channel: id });                  // the mind answers with moved or refused
+    }
+  });
+  $("tree").addEventListener("keydown", function (ev) {
+    var row = ev.target.closest ? ev.target.closest(".row") : null;
+    if (!row || (ev.key !== "Enter" && ev.key !== " ")) { return; }
+    ev.preventDefault();
+    if (row.dataset.room !== undefined) {
+      if (row.dataset.room !== hereRoom()) { send({ type: "join", channel: row.dataset.room }); }
+    } else if (!row.classList.contains("you")) {
+      var box = row.getBoundingClientRect();
+      openMenu(Number(row.dataset.guid), box.left + 24, box.bottom);
+    }
+  });
+
+  // -- the connection ------------------------------------------------------------------------------
+
+  function connect() {
+    retry = null;
+    var sock = new WebSocket("ws://" + location.host + "/ws");
+    ws = sock;
+    sock.onopen = function () { connected = true; renderBanners(); };
+    sock.onmessage = function (ev) {
+      var m;
+      try { m = JSON.parse(ev.data); } catch (e) { return; }
+      if (m && typeof m === "object") { handle(m); }
+    };
+    sock.onclose = function () {
+      if (ws !== sock) { return; }
+      ws = null;
+      connected = false;
+      closeMenu();
+      renderBanners();
+      retry = setTimeout(connect, 2000);
+    };
+  }
+
+  renderAll();
+  connect();
+}());
+</script>
+</body>
+</html>

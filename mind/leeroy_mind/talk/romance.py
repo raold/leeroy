@@ -288,6 +288,8 @@ def romance_instruction(p: Persona, rel: Relationship | None, *, dial: int, chan
     rest = [
         INVARIANTS,
         ("It's a private whisper, just the two of you." if channel == "whisper"
+         else "The people in the room can hear you, so play to the room."
+         if channel.startswith("voice:")
          else f"The {audience} can read it, so play to the room."),
         "It's late, and late-night talk runs warmer." if phase in _LATE else "",
         SPECIFIC,
