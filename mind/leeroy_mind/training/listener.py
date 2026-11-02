@@ -34,12 +34,13 @@ class TrainingListener:
     CLEANUP_TIMEOUT = 15.0
 
     def __init__(self, ports, ledger, gate, applier=None, *, submit=None,
-                 lust_provider=None, members_provider=None, farm_basis="deaths_time"):
+                 lust_provider=None, members_provider=None, farm_basis="deaths_time", prepare_run=None):
         if farm_basis not in {"deaths_time", "mechanics_deaths_time"}:
             raise ValueError("unsupported farm score basis")
         self.ports, self.ledger, self.gate, self.applier = ports, ledger, gate, applier
         self.submit = submit
         self.lust_provider, self.members_provider = lust_provider, members_provider
+        self.prepare_run = prepare_run
         self.farm_basis = farm_basis
         self.run = None
         self._muster = None
@@ -65,6 +66,8 @@ class TrainingListener:
         self._prepared = self._release_ok = False
         self._old_next = False
         self._start_ready = False
+        self._start_waiting = self._start_attempted = False
+        self._start_retry_at = 0
         self._effective_context = None
 
     @staticmethod
@@ -213,21 +216,35 @@ class TrainingListener:
         self.ledger.set_run(run)
         await self._call("on_start", run)
         if self._acting() and not self._ending:
-            token = self._token()
+            self._start_waiting = True
             async with self._lock:
+                await self._start(self._token())
+
+    async def _start(self, token):
+        if (not self._valid(token) or not self._acting() or not self._start_waiting
+                or self._start_attempted or self._pull or self.ports.clock.now() < self._start_retry_at):
+            return
+        run = token[0]
+        try:
+            async with asyncio.timeout(self.APPLY_TIMEOUT):
+                if self.prepare_run is not None and not await self.prepare_run(run):
+                    self._start_retry_at = self.ports.clock.now() + 5
+                    return  # No mutation yet: independent ticker may retry proof lookup.
                 if not self._valid(token):
                     return
-                try:
-                    async with asyncio.timeout(self.APPLY_TIMEOUT):
-                        if not run.human_in_raid and not await self.applier.hold(run.plan.tank_guid):
-                            return
-                        if not self._valid(token):
-                            return
-                        await self.applier.apply_standing(run.plan.members, run_key=self.run_key(run))
-                        if self._valid(token):
-                            self._start_ready = await self._pooled(token, self._context(0))
-                except TimeoutError:
-                    pass  # No boss application/resume until confirmed startup.
+                # Once a hold may have been sent, ordinary cleanup owns failure;
+                # retrying startup would duplicate partially applied journals.
+                self._start_attempted = True
+                if not run.human_in_raid and not await self.applier.hold(run.plan.tank_guid):
+                    return
+                if not self._valid(token):
+                    return
+                await self.applier.apply_standing(run.plan.members, run_key=self.run_key(run))
+                if self._valid(token):
+                    self._start_ready = await self._pooled(token, self._context(0))
+                    self._start_waiting = False
+        except TimeoutError:
+            self._start_retry_at = self.ports.clock.now() + 5
 
     async def _pooled(self, token, context):
         run = token[0]
@@ -570,6 +587,7 @@ class TrainingListener:
         async with self._lock:
             if self._closed:
                 return
+            await self._start(self._token())
             fight = self._fight
             if (self._lust_due is not None and self.ports.clock.now() >= self._lust_due
                     and fight is not None and self._valid(fight[0]) and not self._lust_sent):

@@ -5,6 +5,7 @@ Guild life continues to own the shared ``job`` event.
 """
 
 from dataclasses import dataclass
+import re
 from typing import cast
 
 from leeroy_mind.protocol import register_command, register_event
@@ -49,6 +50,56 @@ class DcSetting:
     op: str
     key: str = ""
     centi: int = 0
+    training_run: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class GetTrainingCleanup:
+    id: str
+    training_run: str
+
+
+@dataclass(frozen=True, slots=True)
+class TrainingCleanup:
+    ts: int
+    id: str
+    receipt_version: int
+    training_run: str
+    job_id: str
+    training_token: str
+    leader_guid: int
+    guild_id: int
+    human_guid: int
+    map_id: int
+    instance_id: int
+    group_id: str
+    members: tuple[int, ...]
+    state: str
+
+    def __post_init__(self):
+        valid_id = lambda value: type(value) is str and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value)
+        uint = lambda value: type(value) is int and 0 <= value <= 0xFFFFFFFF
+        decimal = lambda value: (type(value) is str and re.fullmatch(r"0|[1-9][0-9]{0,19}", value)
+                                  and int(value) <= 0xFFFFFFFFFFFFFFFF)
+        if (type(self.ts) is not int or not 0 <= self.ts <= 0x7FFFFFFFFFFFFFFF
+                or type(self.receipt_version) is not int or self.receipt_version != 1
+                or not valid_id(self.id) or not valid_id(self.training_run)
+                or self.state not in {"open", "restoring", "complete", "unknown"}
+                or any(not uint(v) for v in (self.leader_guid, self.guild_id, self.human_guid,
+                                             self.map_id, self.instance_id))
+                or not decimal(self.training_token) or not decimal(self.group_id)
+                or type(self.members) is not tuple or len(self.members) > 40
+                or any(not uint(g) or g == 0 for g in self.members)
+                or len(set(self.members)) != len(self.members)):
+            raise ValueError("invalid native cleanup receipt")
+        if self.state == "unknown":
+            if (self.job_id or self.training_token != "0" or self.group_id != "0" or self.members
+                    or any((self.leader_guid, self.guild_id, self.human_guid, self.map_id, self.instance_id))):
+                raise ValueError("unknown native receipt carries scope")
+        elif (not valid_id(self.job_id) or not all((self.leader_guid, self.guild_id, self.human_guid,
+                self.instance_id, int(self.training_token), int(self.group_id)))
+                or self.leader_guid not in self.members or self.human_guid in self.members):
+            raise ValueError("incomplete native cleanup scope")
 
 
 @dataclass(frozen=True, slots=True)
@@ -310,11 +361,13 @@ COMMANDS: dict[str, type] = {
     "telemetry": Telemetry, "get_stats": GetStats, "get_vocab": GetVocab,
     "custom_strategy": CustomStrategy, "dc_setting": DcSetting,
     "dummy_trial": DummyTrial, "get_rivals": GetRivals, "start_benchmark": StartBenchmark,
+    "get_training_cleanup": GetTrainingCleanup,
 }
 EVENTS: dict[str, type] = {
     "pull": Pull, "pull_member": PullMember, "pull_death": PullDeath,
     "pull_track": PullTrack, "boss_cast": BossCast, "pull_pulse": PullPulse,
     "vocab": Vocab, "server_stats": ServerStats, "dummy_result": DummyResult, "rivals": Rivals,
+    "training_cleanup": TrainingCleanup,
 }
 TG_EVENT_TYPES = frozenset(EVENTS)
 
