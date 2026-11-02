@@ -173,3 +173,41 @@ def test_revoked_queued_speech_admission_never_calls_engine(app):
         await service.ports.release_gpu("offline_raid")
         assert not app.arbiter.holders
     asyncio.run(go())
+
+
+def test_actual_disconnect_revokes_speech_queued_behind_offline_model_admission(app):
+    async def go():
+        service = ready(app)
+        app.world.human_online = False
+        service.offline._online = False
+        service.offline._plan = lambda: RaidPlan(
+            "icc", 10, False, True, 101, 101, 104, list(range(101, 111)), [], False)
+        admin = PausingAdmin()
+        admin.preload = AsyncMock(wraps=admin.preload)
+        app.arbiter = arbiter(admin)
+        offline = asyncio.create_task(service.offline._start())
+        await asyncio.wait_for(admin.entered.wait(), 1)
+        service.ports.propose(101, "guild", "A completed raid recap.")
+        speech = asyncio.create_task(service.speech_tick())
+        await asyncio.sleep(0)
+        assert set(service.ports._gpu_requests) == {"offline_raid", "guild_speech"}
+        await service.connection(False)
+        assert not service.ports._gpu_requests and not app.arbiter.holders
+        admin.resume.set()
+        await asyncio.wait_for(asyncio.gather(offline, speech), 1)
+        assert admin.preload.await_count == 1
+        app.engine.speak.assert_not_awaited()
+        app.bridge.send.assert_not_awaited()
+        assert not app.arbiter.holders and not service.offline._lease
+    asyncio.run(go())
+
+
+def test_disconnect_attempts_offline_cleanup_even_if_speech_release_fails(app):
+    async def go():
+        service = ready(app)
+        service.ports.release_gpu = AsyncMock(side_effect=RuntimeError("synthetic cleanup failure"))
+        service.offline._release = AsyncMock()
+        with pytest.raises(RuntimeError, match="synthetic cleanup failure"):
+            await service.connection(False)
+        service.offline._release.assert_awaited_once()
+    asyncio.run(go())

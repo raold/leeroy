@@ -183,7 +183,12 @@ class GuildLife:
         self.ports.jobs.close()
         self.raid_night._end("disconnected")
         self.offline._cancel()
-        await self.offline._release()
+        # Revoke queued speech before releasing a blocking offline admission:
+        # otherwise the waiter could preload a model after this disconnect.
+        try:
+            await self.ports.release_gpu("guild_speech")
+        finally:
+            await self.offline._release()
 
     async def online_tick(self):
         if self._ready() and self._available() and not self.offline.active:
