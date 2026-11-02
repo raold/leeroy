@@ -40,12 +40,13 @@ The assertions cover:
   suppression, closed fake streams, disarmed keys and restored fake volume.
 - Typed bridge fallback after voice exits, zero Ollama connections, and clean
   process teardown.
+- The attached nightly scheduler's human lease across login, logout and relogin,
+  with fake model administration and no overnight run during the grace period.
 
 This is **regression coverage, not live device acceptance**. It does not test
 copied/live database migration, real model quality, physical audio, GPU admission,
-WoW focus/elevation or Windows communications ducking. The mind leg explicitly
-checks that the inherited branch has no nightly/guild extensions; review that
-setup when those extensions land.
+WoW focus/elevation or Windows communications ducking. The mind leg includes the
+nightly extension; the guild-life extension is not attached yet.
 
 Random hot-mic and elsewhere conversation policies are disabled in this transport
 rehearsal, and movement uses a fixed random seed. Their policy and send-time

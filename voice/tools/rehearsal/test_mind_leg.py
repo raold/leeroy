@@ -12,6 +12,8 @@ from leeroy_mind.__main__ import serve
 from leeroy_mind.clock import SystemClock
 from leeroy_mind.config import load_config
 from leeroy_mind.llm.presets import LIVE
+from leeroy_mind.nightly.gpu import NullAdmin
+from leeroy_mind.nightly.scheduler import NightScheduler
 from leeroy_mind.protocol import Member
 from leeroy_mind.storage.db import open_db
 from leeroy_mind.storage.store import Store
@@ -83,8 +85,12 @@ def test_mind_leg(tmp_path, monkeypatch, live_guard):
 
         def app_ready(app):
             apps.append(app)
-            # The inherited branch has no P1c nightly/P1d guild extension yet.
-            assert not hasattr(app, "nightly") and not hasattr(app, "guild")
+            # Exercise the production attachment with fake model administration.
+            assert isinstance(app.nightly, NightScheduler) and not hasattr(app, "guild")
+            assert app.nightly.arbiter is app.arbiter
+            assert isinstance(app.arbiter.admin, NullAdmin)
+            assert app._background.count(app.nightly.run_forever) == 1
+            assert app.nightly.running is None and not app._bg_tasks
             assert app.data_dir == root and app.voice.cfg.autostart is False
             assert app.cfg.bridge.port == bridge_port and app.voice.cfg.port == port
             # Production remains random; this transport rehearsal must not roll an initial
@@ -106,6 +112,7 @@ def test_mind_leg(tmp_path, monkeypatch, live_guard):
             app = apps[0]
             await until(lambda: app.world.human_online and app.voice.comms.available(),
                         "real voice greeting and healthy status")
+            assert "human" in app.arbiter.holders and app.nightly.due() is None
             await stage("snapshot-checked")
             assert app.voice.rooms.where == {g: "guild_hall" for g in (1, *TEST_CAST)}
 
@@ -126,6 +133,7 @@ def test_mind_leg(tmp_path, monkeypatch, live_guard):
             await until(lambda: 105 not in app.voice.rooms.where, "member leaves comms")
             await bridge.push({"type": "login", "guid": 105, "human": False})
             await until(lambda: app.voice.rooms.where.get(105) == "guild_hall", "member returns to comms")
+            assert app.nightly.presence.online is True and app.arbiter.holders == {"human"}
 
             def lines():
                 return app.store.conn.execute("SELECT * FROM voice_line ORDER BY rowid").fetchall()
@@ -166,6 +174,8 @@ def test_mind_leg(tmp_path, monkeypatch, live_guard):
             cut = next(row for row in lines() if row["state"] == "cut")
             assert cut["reason"] == "offline"
             assert not app.voice.comms.ptt_down and not app.voice.rooms.where
+            assert app.nightly.presence.online is False and not app.arbiter.holders
+            assert app.nightly.due() is None  # the offline grace period still applies
             assert len(heard_rows()) == 1
             assert app.store.conn.execute("SELECT COUNT(*) FROM voice_presence WHERE until IS NULL").fetchone()[0] == 0
             publish("stop-voice")
@@ -173,6 +183,7 @@ def test_mind_leg(tmp_path, monkeypatch, live_guard):
             await until(lambda: not app.voice.client.greeted, "real service disconnect")
             await bridge.push({"type": "login", "guid": 1, "human": True})
             await until(lambda: app.world.human_online, "synthetic relogin")
+            assert "human" in app.arbiter.holders and app.nightly.due() is None
             assert not app.voice.comms.available()
             before = len(lines())
             assert await app.engine.say_as(103, "guild", "still here", kind=TurnKind.OPEN)
@@ -180,13 +191,17 @@ def test_mind_leg(tmp_path, monkeypatch, live_guard):
             assert says and says[-1]["guid"] == 103 and says[-1]["channel"] == "guild"
             assert len(lines()) == before
             assert not unexpected_ollama and not app.voice._gpu_tasks
+            assert app.store.conn.execute("SELECT COUNT(*) FROM night_run").fetchone()[0] == 0
+            assert not any(call["model"] == cfg.models.reflection for call in fake_llm.calls)
+            assert not any(cmd.get("type") == "afk" for cmd in bridge.commands)
             summary = dict(passed=True, imported=imported, python=sys.version,
                            ports=[bridge_port, ollama_port], synthetic_personas=5,
                            played_states=first_states, logout_state=cut["state"],
                            logout_reason=cut["reason"], transcripts=1, ui_joins=2,
                            typed_fallback=True, ollama_connections=0, guard_hits=0,
                            party_drag=True, afk_return=True, member_relogin=True,
-                           nightly_extension="absent on inherited branch")
+                           nightly_extension="attached with fake model administration",
+                           nightly_presence_leases=True, nightly_runs=0)
         finally:
             if app is not None:
                 await app.stop()
@@ -196,6 +211,8 @@ def test_mind_leg(tmp_path, monkeypatch, live_guard):
             trap.close()
             await trap.wait_closed()
         assert task.result() == 0 and app._closed and not app.running
+        assert app.nightly.running is None and not app.nightly._handbacks
+        assert all(t.done() for t in app._bg_tasks)
         assert bridge._server is None and all(t.done() for t in bridge._handlers)
         assert not live_guard.hits and not unexpected_ollama
         publish("mind-result", **summary, app_stopped=True, bridge_stopped=True)
