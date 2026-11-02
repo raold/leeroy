@@ -169,6 +169,16 @@ std::string_view Cast(Player* bot, PlayerbotAI* ai, BotDoCmd const& command)
 
 bool UseStockItem(Player* bot, PlayerbotAI* ai, uint32 entry)
 {
+    ItemTemplate const* definition = sObjectMgr->GetItemTemplate(entry);
+    if (!definition)
+        return false;
+    // Task17 explicitly chooses a role's flask. Its death-persistent aura already
+    // satisfies that exact request, even after consuming the last carried copy.
+    // Feasts retain their normal item-use path and may be placed again.
+    if (IsBotFlask(entry))
+        for (auto const& effect : definition->Spells)
+            if (effect.SpellId > 0 && bot->HasAura(static_cast<uint32>(effect.SpellId)))
+                return true;
     Item* item = bot->GetItemByEntry(entry); // This core helper searches equipped/inventory bags, never the bank.
     if (!item || item->GetOwnerGUID() != bot->GetGUID() || !item->GetCount()
         || bot->CanUseItem(item) != EQUIP_ERR_OK)
