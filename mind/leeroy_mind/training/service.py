@@ -14,6 +14,8 @@ from . import protocol, store
 from .applier import Applier, ApplierState
 from .checks import CHECKS_VERSION, _restore, run_checks
 from .config import load_training_config
+from .experiment_lifecycle import ExperimentLifecycle
+from .experiments import Experimenter
 from .facts import TalkHook
 from .gate import Gate
 from .ledger import Ledger
@@ -87,6 +89,9 @@ class TrainingGround:
                                application_allowed=self.application_allowed)
         self.listener.set_applier(self.applier)
         self.ledger.after_store.insert(0, self._score)
+        self.experimenter = Experimenter(ports, ports.cfg, score_basis=self.listener.farm_basis)
+        self.experiments = ExperimentLifecycle(self, self.experimenter)
+        self.ledger.after_store.append(self.experiments.after_store)
         self._queue = deque()
         self._wake = asyncio.Event()
         self._epoch = 0
@@ -108,9 +113,13 @@ class TrainingGround:
     def training_members(self):
         return set()
 
-    def application_allowed(self):
+    def base_application_allowed(self):
         return bool(self._connected and self._presence_known and not self._stopping
                     and self._startup_ready and self.vocab.complete and self.gate.phase == "passed")
+
+    def application_allowed(self):
+        return bool(self.base_application_allowed()
+                    and self.experiments.admission_allowed(self.listener.run))
 
     def members_for(self, run):
         members = {}
@@ -202,6 +211,7 @@ class TrainingGround:
             return
         if len(self._queue) >= self.CAPACITY:
             # Missing a lifecycle boundary invalidates the whole experiment run.
+            self.experiments.preempt()
             self.listener.invalidate(self.listener.run)
             self._queue.clear()
             if self._operation:
@@ -215,6 +225,8 @@ class TrainingGround:
         self._connected = False
         self._presence_known = False
         self._startup_ready = False
+        self.experiments.preempt()
+        self.experiments.replay_again()
         self.listener.invalidate(self.listener.run)
         self._epoch += 1
         self._queue.clear()
@@ -239,6 +251,8 @@ class TrainingGround:
         elif name == "chat":
             if ev.from_guid == self.ports.human_guid:
                 await self.listener.on_human_chat(ev)
+        elif name == "login" and ev.guid == self.ports.human_guid and ev.human:
+            self.experiments.preempt()
         elif name == "hello":
             # A hello is a new observed server boundary even when a transport
             # implementation did not issue a separate reconnect notification.
@@ -283,6 +297,7 @@ class TrainingGround:
         self.vocab = current
         suspend_missing(self.ports.conn, current, ts=self.ports.clock.now())
         self._startup_ready = current.complete
+        self.experiments.replay_again()
         log.info("training_vocab_refreshed classes=%d complete=%s", len(current.classes), current.complete)
 
     async def _listening(self):
@@ -307,6 +322,14 @@ class TrainingGround:
                     log.warning("training_sample_failed")
                 finally:
                     self._sample = None
+            await self.ports.clock.sleep(1)
+
+    async def _experimenting(self):
+        while True:
+            try:
+                await self.experiments.tick()
+            except Exception:
+                log.warning("training_experiment_tick_failed")
             await self.ports.clock.sleep(1)
 
     async def _maintenance(self):
@@ -335,6 +358,7 @@ class TrainingGround:
             # shielded worker until it actually ends, even after repeated cancel.
             raise
         await rescore_stored(self.ports, self._book)
+        self.experiments.replay_again()
 
     def _guild_busy(self):
         guild = getattr(self.app, "guild", None)
@@ -348,7 +372,8 @@ class TrainingGround:
             raise RuntimeError("training already running")
         self._running = True
         self._lanes = {asyncio.create_task(fn()) for fn in
-                       (self._commands, self._sampling, self._maintenance, self._load, self._listening)}
+                       (self._commands, self._sampling, self._maintenance, self._load, self._listening,
+                        self._experimenting)}
         try:
             # Cancellation fences promptly; one shared drain owns cancellation
             # and joins instead of allowing gather to cancel the loader twice.
@@ -364,6 +389,7 @@ class TrainingGround:
             self._connected = self._presence_known = self._startup_ready = False
             self._epoch += 1
             self._queue.clear()
+            self.experiments.preempt()
             self.listener.invalidate(self.listener.run)
             self._close_task = asyncio.create_task(self._drain())
         await asyncio.shield(self._close_task)
@@ -378,6 +404,7 @@ class TrainingGround:
             # Never cancel the to_thread worker: its synchronous IO cannot be
             # cancelled, and it remains owned until this actual join completes.
             await asyncio.gather(self._loader, return_exceptions=True)
+        await self.experiments.close()
         while not await self.listener.close():
             log.warning("training listener shutdown is still draining")
         while not await self.applier.close():
@@ -402,6 +429,7 @@ def attach_training(app):
     guild = getattr(app, "guild", None)
     if guild is not None:
         for controller in (guild.raid_night, guild.offline):
+            controller.add_listener(ground.experiments)
             controller.add_listener(ground.listener)
         calls = getattr(guild, "calls", None)
         if calls is not None:
@@ -423,5 +451,5 @@ def attach_training(app):
     register_section("training", report_section)
     app.register_background(ground.run)
     app.register_shutdown_drain(ground.close)
-    log.info("training_attached stage=2")
+    log.info("training_attached stage=3")
     return ground
