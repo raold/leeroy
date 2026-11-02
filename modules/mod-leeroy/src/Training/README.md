@@ -21,8 +21,12 @@ Implemented pieces:
 - Per-key dungeon-setting restoration that preserves unrelated overrides and detectable later replacements.
   Cleanup tracks the leader's map, instance, group and generation token. The boss-hold watchdog ignores door
   pauses and pre-existing holds, verifies the actual resume, and retains a refused resume for retry.
+- A bounded dummy-trial controller using the normal playerbots attack path. It admits idle masterless cast bots,
+  establishes a separate owned solo party and harness driver for each candidate before moving,
+  watches incoming damage requests and distance, and verifies
+  the original location after asynchronous return. An admitted request reserves its participants through cleanup.
 
-Remaining work includes actual runtime acceptance of the task 4 adapters, task 5 dummy jobs,
+Remaining work includes actual runtime acceptance of the task 4 adapters and task 5 dummy controller,
 task 6 benchmark/pin integration, and task 7 integrated build/lifecycle/raid acceptance. The Python ingestion,
 analysis, scoring, search and application work in tasks 9 onward also remains. The module loader must stay
 unwired until the accepted slice has complete restoration and shutdown behavior. Configuration defaults are
@@ -38,6 +42,30 @@ a refusal is not completed restoration. Failed cleanup blocks new training mutat
 The dungeon-clear API has no ownership generation for overrides: removing and recreating an identical value
 is indistinguishable from the original (ABA). In-memory journals also cannot promise restoration after a crash;
 explicit stock-value restores remain available after restart. These limits require lifecycle acceptance before wiring.
+
+Dummy setup has a 20-second deadline; fighting lasts the requested interval, and return has a 30-second deadline.
+A failed return emits one failed terminal job and retains its receipt/reservations for bounded recovery attempts.
+Cleanup never resets or teleports a participant acquired by another master, group, session, or reserved job.
+Transferred or logged-out sessions require operator reconciliation; the in-memory receipt cannot survive process exit.
+Shutdown makes one bounded cleanup attempt and reports unresolved return failure instead of claiming completion.
+Strategies return through the harness's stock reset; later standing-setup application remains the mind's responsibility.
+The installed playerbots AI clears a random bot's driver whenever it is ungrouped, so trials temporarily create
+one solo party per participant. Admission still requires an ungrouped bot; candidates never share these parties.
+Reset completes while the exact driver/session/group still prove ownership, then cleanup removes only that solo
+member, restores the prior leader flag, rebuilds stock defaults for the restored ungrouped state and verifies return.
+AI target/engine state is cleared too, including on same-map returns; pending logout is never cancelled for cleanup.
+Added members, invitations, group transfers, or a
+participant becoming the configured human block further mutation. A partially created group retains its identity
+for cleanup rather than destroying an object that may already be linked to the player. As with other in-memory
+job receipts, abnormal process termination requires reconciliation of any remaining harness parties.
+Admission excludes existing non-permanent instance bindings because native group removal would discard them.
+Bindings are checked again before cleanup; a later non-permanent binding blocks disband instead of being erased.
+Permanent raid bindings are preserved by that native path. The controller never snapshots or recreates saved locks.
+
+Dummy `ms` records elapsed trial time from an accepted normal attack until stopping/dropping that participant;
+it does not infer uninterrupted casting uptime. The incoming-damage alarm conservatively observes positive
+pre-AI requests from a source other than the dummy, so an absorbed/adjusted request may abort a trial. Damage
+and spell results retain the measurement bases below, and aborted/partial participants carry a drop reason.
 
 ## Measurement contract
 

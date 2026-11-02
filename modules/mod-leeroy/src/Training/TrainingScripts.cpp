@@ -1,6 +1,8 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "TrainingCommands.h"
 #include "TrainingTap.h"
+#include "DummyTrialJob.h"
+#include "GuildPorts.h"
 #include "Log.h"
 #include "Player.h"
 #include "ScriptMgr.h"
@@ -22,6 +24,7 @@ public:
         LeeroyRegisterCommand("get_vocab", Leeroy::Training::HandleGetVocab);
         LeeroyRegisterCommand("custom_strategy", Leeroy::Training::HandleCustomStrategy);
         LeeroyRegisterCommand("dc_setting", Leeroy::Training::HandleDcSetting);
+        LeeroyRegisterCommand("dummy_trial", Leeroy::Training::HandleDummyTrial);
         auto& tap = Leeroy::Training::TrainingTap::Instance();
         tap.Start();
         LOG_INFO("module.leeroy", "mod-leeroy: training ground loaded (telemetry {}, training {})",
@@ -31,6 +34,7 @@ public:
     void OnUpdate(uint32 diff) override
     {
         auto& tap = Leeroy::Training::TrainingTap::Instance();
+        Leeroy::Training::TickDummyTrial(diff); // Snapshot/close trial counters before an off-transition recycles a slot.
         tap.Tick(diff);
         if (tap.TakeTrainingTurnedOff()) Leeroy::Training::TrainingOffCleanup();
         Leeroy::Training::TickVocab();
@@ -45,6 +49,7 @@ public:
 
     void OnShutdown() override
     {
+        Leeroy::Training::ShutdownDummyTrial();
         Leeroy::Training::TrainingOffCleanup();
         Leeroy::Training::ResetTrainingVocabulary();
         Leeroy::Training::TrainingTap::Instance().Stop();
@@ -56,9 +61,16 @@ private:
 class LeeroyTrainingPlayerScript : public PlayerScript
 {
 public:
-    LeeroyTrainingPlayerScript() : PlayerScript("LeeroyTrainingPlayerScript", { PLAYERHOOK_ON_LOGOUT }) { }
+    LeeroyTrainingPlayerScript() : PlayerScript("LeeroyTrainingPlayerScript",
+        { PLAYERHOOK_ON_LOGIN, PLAYERHOOK_ON_LOGOUT }) { }
+    void OnPlayerLogin(Player* player) override
+    {
+        if (player->GetGUID().GetCounter() == Leeroy::Guild::HumanGuid())
+            Leeroy::Training::EndDummyTrial("human_login");
+    }
     void OnPlayerLogout(Player* player) override
     {
+        Leeroy::Training::DummyPlayerLogout(player->GetGUID().GetCounter());
         Leeroy::Training::JournalForget(player->GetGUID().GetCounter());
     }
 };

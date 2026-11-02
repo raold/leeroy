@@ -124,5 +124,17 @@ bool ShouldClearRun(RunWatch const&, std::uint64_t nowMs);
 enum class VocabKind { Class, Probe, Server };
 struct VocabJob { VocabKind kind; std::uint8_t cls = 0; std::uint32_t probe = 0; bool wantSpells = false; };
 std::vector<VocabJob> PlanVocab(GetVocabCmd const&, bool humanOnline);
+
+struct DummyPlace { std::uint32_t map; float x, y, z; };
+inline constexpr std::array<DummyPlace, 2> kDummyPlaces = {
+    {{1, 2015.18f, -4842.30f, 51.74f}, {1, 2157.80f, -4629.35f, 53.08f}}
+};
+inline constexpr std::uint32_t kDummyEntry = 31146;
+struct DummyBotState
+{
+    bool isCast = false, online = false, alive = false, inCombat = false, grouped = false,
+        onInstanceMap = false, inBattleground = false, inOfflineRaid = false, nonPermanentBound = false;
+};
+bool DummyBotUsable(DummyBotState const&);
 }
 #endif

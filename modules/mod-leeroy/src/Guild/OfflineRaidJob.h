@@ -9,6 +9,7 @@ namespace Leeroy::Guild
 {
 LeeroyCommandResult HandleStartOfflineRaid(nlohmann::json const& message);
 void TickOfflineRaid(std::uint32_t diffMs);
+bool OfflineRaidOwns(std::uint32_t guid);
 void SweepLeftoverGroups();
 void RegisterOfflineRaidHandler();
 }

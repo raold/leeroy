@@ -398,4 +398,10 @@ std::vector<VocabJob> PlanVocab(GetVocabCmd const& command, bool humanOnline)
     jobs.push_back({VocabKind::Server, 0, 0, false});
     return jobs;
 }
+
+bool DummyBotUsable(DummyBotState const& state)
+{
+    return state.isCast && state.online && state.alive && !state.inCombat && !state.grouped
+        && !state.onInstanceMap && !state.inBattleground && !state.inOfflineRaid && !state.nonPermanentBound;
+}
 }

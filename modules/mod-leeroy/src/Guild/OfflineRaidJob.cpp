@@ -916,5 +916,17 @@ void SweepLeftoverGroups()
 #endif
 }
 
+bool OfflineRaidOwns(std::uint32_t guid)
+{
+#if LEEROY_HAS_DUNGEON_CLEAR
+    return active && (active->command.leaderGuid == guid
+        || std::find(active->command.members.begin(), active->command.members.end(), guid)
+            != active->command.members.end());
+#else
+    (void)guid;
+    return false;
+#endif
+}
+
 void RegisterOfflineRaidHandler() { RegisterCommand("start_offline_raid", HandleStartOfflineRaid); }
 }

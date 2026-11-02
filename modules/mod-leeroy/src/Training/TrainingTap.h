@@ -37,6 +37,7 @@ public:
     void UnregisterInstance(uint32 map, uint32 instance);
     int OpenDummy(std::vector<uint32> const& guids, ObjectGuid dummy, uint32 map);
     PullTable const* Dummy(int slot) const;
+    bool DummyAttacked(int slot, uint32 member) const;
     void CloseDummy(int slot);
     void EnqueueEncode(std::function<std::vector<std::string>()> job);
 

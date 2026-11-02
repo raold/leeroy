@@ -1,6 +1,7 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "TrainingCommands.h"
 #include "TrainingTap.h"
+#include "DummyTrialJob.h"
 #include "GuildPorts.h"
 #include "LeeroyTrainingProtocol.h"
 #include "AiObjectContext.h"
@@ -282,6 +283,7 @@ bool RestoreTrainingBots()
     uint32 restored = 0, failed = 0;
     for (auto guid : guids)
     {
+        if (DummyTrialOwns(guid)) continue; // Trial-owned return validates the session/master before touching its AI.
         try
         {
             auto* bot = Guild::FindOnline(guid);

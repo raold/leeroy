@@ -1,5 +1,6 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "TrainingTap.h"
+#include "LeeroyDummyDamage.h"
 #include "LeeroyModule.h"
 #include "LeeroyTrainingProtocol.h"
 #include "LeeroyTrainingSlot.h"
@@ -86,6 +87,7 @@ struct TrainingTap::Impl
         std::unique_ptr<PullTable> table;
         ObjectGuid boss, dummy;
         std::array<uint32, 10> dummyMembers{};
+        DummyDamageAlarm dummyDamage;
         std::array<bool, kMaxMembers> enriched{};
         std::size_t dummyCount = 0;
         std::uint64_t started = 0, nextSample = 0, nextPulse = 0, closeAt = 0;
@@ -384,7 +386,11 @@ void TrainingTap::OnDealDamage(Unit* attacker, Unit* victim, uint32 damage)
     auto slot = _impl->Find(MapOf(victim));
     auto tag = tTags.TakeDamage(Raw(attacker), Raw(victim), _impl->Scope(slot));
     if (!slot || !LeeroyModule::Instance().Enabled()) return;
-    if (slot->dummyCount && victim->GetGUID() != slot->dummy) return;
+    if (slot->dummyCount && victim->GetGUID() != slot->dummy)
+    {
+        if (victim->IsPlayer()) slot->dummyDamage.Damage(Raw(attacker), victim->GetGUID().GetCounter(), damage);
+        return;
+    }
     auto owner = _impl->Member(*slot, attacker);
     auto target = victim->IsPlayer() ? _impl->Member(*slot, victim) : 0;
     auto creature = attacker ? attacker->ToCreature() : nullptr;
@@ -486,6 +492,7 @@ int TrainingTap::OpenDummy(std::vector<uint32> const& guids, ObjectGuid dummy, u
     slot->awaitingStart = false;
     slot->openingEpoch = _impl->trainingEpoch.load();
     slot->dummyCount = guids.size();
+    slot->dummyDamage.Reset(dummy.GetRawValue(), guids);
     std::copy(guids.begin(), guids.end(), slot->dummyMembers.begin());
     slot->publish = false;
     for (auto guid : guids)
@@ -504,6 +511,12 @@ PullTable const* TrainingTap::Dummy(int handle) const
     auto token = slot.publication.Snapshot();
     return token && token->generation == std::size_t(handle) / kSlots && slot.dummyCount && !slot.closing
         ? slot.table.get() : nullptr;
+}
+
+bool TrainingTap::DummyAttacked(int handle, uint32 member) const
+{
+    if (!Dummy(handle)) return false;
+    return _impl->slots[std::size_t(handle) % kSlots].dummyDamage.Attacked(member);
 }
 
 void TrainingTap::CloseDummy(int handle)
