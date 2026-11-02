@@ -51,7 +51,7 @@ CREATE TABLE tg_applied (id INTEGER PRIMARY KEY, ts REAL NOT NULL, run TEXT NOT 
 CREATE INDEX tg_applied_open ON tg_applied (undone);
 CREATE TABLE tg_rotation (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, class INTEGER NOT NULL,
   spec_tab INTEGER NOT NULL, lines TEXT NOT NULL, origin TEXT NOT NULL, parent INTEGER,
-  status TEXT NOT NULL CHECK (status IN ('candidate','dummy','field','champion','retired')), created REAL NOT NULL);
+  status TEXT NOT NULL CHECK (status IN ('candidate','dummy','field','champion','retired','suspended')), created REAL NOT NULL);
 CREATE TABLE tg_dummy (id INTEGER PRIMARY KEY, rotation INTEGER REFERENCES tg_rotation(id), guid INTEGER NOT NULL,
   round INTEGER NOT NULL, seconds INTEGER NOT NULL, dps INTEGER NOT NULL, stock_dps INTEGER NOT NULL,
   dropped TEXT NOT NULL DEFAULT '', ts REAL NOT NULL, damage_basis TEXT NOT NULL DEFAULT 'unknown',
