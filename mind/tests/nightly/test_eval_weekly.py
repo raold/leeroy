@@ -36,6 +36,8 @@ class Asker:
 
 def setup(h, monkeypatch, *, replies=None, fail_first=False):
     ctx = h.ctx({"quiz_judge": replies or [{"verdict": "correct"}, {"verdict": "abstained"}]})
+    # Task23-only cases disable the additional interview workload explicitly.
+    ctx.settings = replace(ctx.settings, interview_members=0)
     ctx.asker = Asker(h.ident, fail_first=fail_first)
     models = []
 
@@ -76,8 +78,11 @@ def test_deterministic_run_marks_missing_model_sections_honestly(h, monkeypatch,
     assert path == h.settings.data_dir / "reports" / f"{WEEK}.md"
     assert "_skipped_" in path.read_text(encoding="utf-8")
     report = sections(path)
-    assert set(report) == {"secret_probe", "memory_quiz", "grounding_audit", "night_health"}
+    assert set(report) == {"secret_probe", "memory_quiz", "interview", "consistency", "distinctiveness",
+        "stability", "grounding_audit", "night_health", "texture", "callbacks", "noise", "cast_mix",
+        "signals", "leaks", "drift"}
     assert report["secret_probe"]["reason"] == report["memory_quiz"]["reason"] == reason
+    assert all(report[name]["reason"] == reason for name in ("interview", "consistency", "distinctiveness", "stability"))
     assert models == [] and ctx.reasoner.llm.calls == [] and h.count("probe_run") == 0
     assert receipt(h) == {"complete": complete, "status": "complete" if complete else "partial", "requested_llm": use_llm}
 
@@ -257,3 +262,104 @@ def test_future_latest_receipt_does_not_fall_back_to_older_success(h):
     record_probe(h.store, full_probe(), model=h.LIVE, now=h.T + 1)
     assert not secret_probe_passed(h.store, now=h.T, model=h.LIVE)
     assert secret_probe_passed(h.store, now=h.T + 1, model=h.LIVE)
+
+
+def task24_setup(h, monkeypatch, consistency_replies):
+    base, models = setup(h, monkeypatch)
+    ctx = h.ctx({"quiz_judge": [{"verdict": "correct"}, {"verdict": "abstained"}],
+                 "consistency": consistency_replies, "who_said": [{"pick": 1}] * 3})
+    ctx.settings = replace(ctx.settings, interview_members=1)
+    ctx.asker, ctx.arbiter = base.asker, base.arbiter
+    for n in range(3):
+        h.say(h.T + n, 101, f"The boots have opinions about pull {n}.")
+    return ctx, models
+
+
+def test_task24_live_interview_precedes_reflection_and_all_sections_are_reported(h, monkeypatch):
+    ctx, models = task24_setup(h, monkeypatch, [{"scores": [{"i": i, "score": 5} for i in range(3)]}])
+    ask = ctx.asker.ask
+
+    async def live_only(guid, question):
+        assert models == [h.LIVE]
+        return await ask(guid, question)
+
+    monkeypatch.setattr(ctx.asker, "ask", live_only)
+    path = run(weekly.run_weekly(ctx, WEEK))
+    report = sections(path)
+    assert models == [h.LIVE, h.REFL] and len(ctx.asker.calls) == 12
+    assert report["interview"]["status"] == "complete" and report["interview"]["answered"] == 10
+    assert report["consistency"]["members"] == {"101": 1}
+    assert report["consistency"]["sampled_lines"] == report["consistency"]["scored_lines"] == 3
+    assert report["distinctiveness"]["trials_scored"] == 3
+    assert report["stability"]["reason"] == "no_previous_answers"
+    assert report["stability"]["trait_similarity"] is None
+    assert report["drift"] == {"status": "complete", "rolled_back": []}
+    assert report["callbacks"]["lines"] == 3 and report["noise"]["online_hours"] == 0
+    assert report["cast_mix"]["rebalance_start"] == {"lust": 13, "drawn": 19, "fond": 26, "none": 6}
+    assert receipt(h)["complete"] is True
+
+
+def test_partial_consistency_does_not_freeze_drift_receipt_and_retry_rolls_back(h, monkeypatch):
+    ctx, _ = task24_setup(h, monkeypatch, [{"scores": []},
+        {"scores": [{"i": i, "score": 2} for i in range(3)]}])
+    h.store.put_state(replace(h.store.get_state(101), self_notes=(
+        {"text": "A recent synthetic note.", "evidence": [], "added": h.T - 100},)))
+    path = run(weekly.run_weekly(ctx, WEEK))
+    assert sections(path)["consistency"]["status"] == "partial" and not receipt(h)["complete"]
+    assert h.store.get_meta(f"eval:drift:{WEEK}") is None and len(h.store.get_state(101).self_notes) == 1
+    run(weekly.run_weekly(ctx, WEEK))
+    assert sections(path)["consistency"]["status"] == "complete" and receipt(h)["complete"]
+    assert sections(path)["drift"]["rolled_back"] == [101] and h.store.get_state(101).self_notes == ()
+    assert len(ctx.asker.calls) == 12 and h.count("review_queue") == 1
+
+
+def test_partial_interview_is_not_reported_as_complete_and_only_pending_answer_retries(h, monkeypatch):
+    ctx, _ = setup(h, monkeypatch)
+    ctx.settings = replace(ctx.settings, interview_members=1)
+    ask = ctx.asker.ask
+    failed = False
+
+    async def fail_one(guid, question):
+        nonlocal failed
+        if question == "What do you do for a living?" and not failed:
+            failed = True
+            raise LLMError("private answer unavailable")
+        return await ask(guid, question)
+
+    monkeypatch.setattr(ctx.asker, "ask", fail_one)
+    path = run(weekly.run_weekly(ctx, WEEK))
+    report = sections(path)
+    assert report["interview"]["status"] == "partial" and report["interview"]["pending"] == 1
+    assert report["interview"]["expected"] == 10 and report["stability"]["status"] == "partial"
+    assert not receipt(h)["complete"]
+    run(weekly.run_weekly(ctx, WEEK))
+    assert sections(path)["interview"]["pending"] == 0 and receipt(h)["complete"]
+    assert len(ctx.asker.calls) == 12
+
+
+def test_deterministic_task24_failure_prevents_complete_but_other_sections_survive(h, monkeypatch):
+    ctx, _ = setup(h, monkeypatch)
+
+    def fail(*args, **kwargs):
+        raise ValueError("private data text")
+
+    monkeypatch.setattr(weekly.social_eval, "signals", fail)
+    path = run(weekly.run_weekly(ctx, WEEK, use_llm=False))
+    report = sections(path)
+    assert report["signals"] == {"status": "failed", "error_type": "ValueError"}
+    assert "pairs" in report["texture"] and "secret_leaks" in report["leaks"]
+    assert receipt(h)["complete"] is False and "private data text" not in json.dumps(report)
+
+
+def test_task24_interview_cancellation_keeps_probe_but_no_report(h, monkeypatch):
+    ctx, _ = setup(h, monkeypatch)
+    ctx.settings = replace(ctx.settings, interview_members=1)
+
+    async def cancelled(*args, **kwargs):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(weekly.interview_eval, "interview", cancelled)
+    with pytest.raises(asyncio.CancelledError):
+        run(weekly.run_weekly(ctx, WEEK))
+    assert h.count("probe_run") == 1 and receipt(h) is None
+    assert not (h.settings.data_dir / "reports" / f"{WEEK}.md").exists()
