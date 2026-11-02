@@ -27,6 +27,8 @@ public:
     void LoadConfig();
     bool TelemetryOn() const;
     bool TrainingOn() const;
+    bool TrainingCleanupPending() const;
+    std::uint64_t TrainingEpoch() const;
     bool MindArmed() const;
     bool TakeTrainingTurnedOff();
     void SetMindArmed(bool);

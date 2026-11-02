@@ -277,6 +277,8 @@ TrainingTap& TrainingTap::Instance() { static TrainingTap tap; return tap; }
 bool TrainingTap::AnyArmed() { return gAnyArmed.load(std::memory_order_relaxed); }
 bool TrainingTap::TelemetryOn() const { return _impl->telemetry.load(); }
 bool TrainingTap::TrainingOn() const { return _impl->training.load(); }
+bool TrainingTap::TrainingCleanupPending() const { return _impl->turnedOff.load(); }
+std::uint64_t TrainingTap::TrainingEpoch() const { return _impl->trainingEpoch.load(); }
 bool TrainingTap::MindArmed() const { return _impl->mindArmed.load(); }
 bool TrainingTap::TakeTrainingTurnedOff() { return _impl->turnedOff.exchange(false); }
 

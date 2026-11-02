@@ -4,6 +4,8 @@
 #include "GuildPorts.h"
 #include "LeeroyTrainingProtocol.h"
 #include "LeeroyBotCommandPolicy.h"
+#include "Training/TrainingCommands.h"
+#include "Training/TrainingTap.h"
 
 #include "AiObjectContext.h"
 #include "ChatHelper.h"
@@ -44,6 +46,7 @@ struct BotJob
     BotDoCmd command;
     JobEvent result;
     uint32 guild = 0, human = 0;
+    std::uint64_t trainingEpoch = 0;
     Clock::time_point deadline;
 };
 
@@ -218,6 +221,18 @@ bool BuffFromBags(Player* bot, PlayerbotAI* ai)
 
 std::string_view Apply(Player* bot, BotDoCmd const& command)
 {
+    // Recheck at the mutation boundary: the acknowledged queue can outlive a configuration change.
+    if (Training::IsTierTwo(command.action, command.param))
+    {
+        if (!Training::TierTwoAllowed(Training::TrainingAllowed(), command.action, command.param))
+            return "training_off";
+        if (command.action == "co" || command.action == "nc")
+            return Training::ApplyTrainingStrategies(bot, command.param,
+                command.action == "co" ? Training::Engine::Combat : Training::Engine::NonCombat);
+        if (command.action == "value") return Training::ApplyTrainingValue(bot, command.param);
+        if (command.action == "restore")
+            return Training::RestoreJournaled(bot, command.param) ? std::string_view{} : std::string_view{"failed"};
+    }
     PlayerbotAI* ai = GET_PLAYERBOT_AI(bot);
     bool applied = false;
     if (command.action == "co" || command.action == "nc")
@@ -236,6 +251,7 @@ std::string_view Apply(Player* bot, BotDoCmd const& command)
     {
         auto* value = dynamic_cast<FormationValue*>(ai->GetAiObjectContext()->GetValue<Formation*>("formation"));
         applied = value && value->Load(command.param); // The chat action emits an unnecessary whisper.
+        if (applied) Training::JournalValueReplaced(bot->GetGUID().GetCounter(), "formation");
     }
     else if (command.action == "cast")
         return Cast(bot, ai, command);
@@ -294,9 +310,8 @@ LeeroyCommandResult HandleBotDo(nlohmann::json const& message)
         return Fail(std::move(error));
     if (!GuildEnabled())
         return Fail("disabled");
-    // Protocol foundation only: no training mutation is enabled before its journal and restoration land.
-    // Task4 replaces this admission guard with the configured gate plus unconditional safe undo paths.
-    if (Training::IsTierTwo(command->action, command->param))
+    if (Training::IsTierTwo(command->action, command->param)
+        && !Training::TierTwoAllowed(Training::TrainingAllowed(), command->action, command->param))
         return Fail("training_off");
     for (uint32 guid : command->guids)
         if (!OwnedCast(guid))
@@ -311,6 +326,7 @@ LeeroyCommandResult HandleBotDo(nlohmann::json const& message)
     job.result.kind = "bot_do";
     job.guild = LeeroyModule::Instance().GuildId();
     job.human = HumanGuid();
+    job.trainingEpoch = Training::TrainingTap::Instance().TrainingEpoch();
     job.deadline = Clock::now() + kActionLifetime;
     pending.push_back(std::move(job));
     return {true, {}}; // No player mutation or job publication until TickBotCommands, after the ack is queued.
@@ -328,6 +344,10 @@ void TickBotCommands()
         abort = "cancelled";
     else if (Clock::now() >= job.deadline)
         abort = "timeout";
+    else if (Training::IsTierTwo(job.command.action, job.command.param)
+        && !Training::TierTwoAllowed(false, job.command.action, job.command.param)
+        && job.trainingEpoch != Training::TrainingTap::Instance().TrainingEpoch())
+        abort = "training_off"; // An off/on pair invalidates old mutations even when the final switch is on again.
     job.result.state = abort.empty() ? "done" : "failed";
     job.result.reason = abort;
     for (uint32 guid : job.command.guids)
@@ -350,11 +370,13 @@ void TickBotCommands()
                 catch (std::exception const& e)
                 {
                     LOG_ERROR("module.leeroy", "mod-leeroy: bot_do failed for guid {}: {}", guid, e.what());
+                    if (Training::IsTierTwo(job.command.action, job.command.param)) Training::RequireTrainingCleanup();
                     failure = "failed";
                 }
                 catch (...)
                 {
                     LOG_ERROR("module.leeroy", "mod-leeroy: bot_do failed for guid {}", guid);
+                    if (Training::IsTierTwo(job.command.action, job.command.param)) Training::RequireTrainingCleanup();
                     failure = "failed";
                 }
             }

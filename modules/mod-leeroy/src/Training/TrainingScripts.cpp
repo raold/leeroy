@@ -2,6 +2,7 @@
 #include "TrainingCommands.h"
 #include "TrainingTap.h"
 #include "Log.h"
+#include "Player.h"
 #include "ScriptMgr.h"
 
 void AddSC_leeroy_training_hooks();
@@ -18,6 +19,9 @@ public:
     {
         LeeroyRegisterCommand("telemetry", Leeroy::Training::HandleTelemetry);
         LeeroyRegisterCommand("get_stats", Leeroy::Training::HandleGetStats);
+        LeeroyRegisterCommand("get_vocab", Leeroy::Training::HandleGetVocab);
+        LeeroyRegisterCommand("custom_strategy", Leeroy::Training::HandleCustomStrategy);
+        LeeroyRegisterCommand("dc_setting", Leeroy::Training::HandleDcSetting);
         auto& tap = Leeroy::Training::TrainingTap::Instance();
         tap.Start();
         LOG_INFO("module.leeroy", "mod-leeroy: training ground loaded (telemetry {}, training {})",
@@ -29,13 +33,39 @@ public:
         auto& tap = Leeroy::Training::TrainingTap::Instance();
         tap.Tick(diff);
         if (tap.TakeTrainingTurnedOff()) Leeroy::Training::TrainingOffCleanup();
+        Leeroy::Training::TickVocab();
+        Leeroy::Training::TickDcHolds(diff);
+        if (diff >= _cleanupRemaining)
+        {
+            _cleanupRemaining = 1000;
+            if (!Leeroy::Training::TrainingAllowed()) Leeroy::Training::TrainingOffCleanup();
+        }
+        else _cleanupRemaining -= diff;
     }
 
-    void OnShutdown() override { Leeroy::Training::TrainingTap::Instance().Stop(); }
+    void OnShutdown() override
+    {
+        Leeroy::Training::TrainingOffCleanup();
+        Leeroy::Training::ResetTrainingVocabulary();
+        Leeroy::Training::TrainingTap::Instance().Stop();
+    }
+private:
+    uint32 _cleanupRemaining = 0;
+};
+
+class LeeroyTrainingPlayerScript : public PlayerScript
+{
+public:
+    LeeroyTrainingPlayerScript() : PlayerScript("LeeroyTrainingPlayerScript", { PLAYERHOOK_ON_LOGOUT }) { }
+    void OnPlayerLogout(Player* player) override
+    {
+        Leeroy::Training::JournalForget(player->GetGUID().GetCounter());
+    }
 };
 
 void AddSC_leeroy_training()
 {
     new LeeroyTrainingWorldScript();
+    new LeeroyTrainingPlayerScript();
     AddSC_leeroy_training_hooks();
 }

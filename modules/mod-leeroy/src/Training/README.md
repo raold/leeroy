@@ -1,7 +1,7 @@
 # Training-ground foundation
 
 This is an **unwired foundation**, not an enabled training system. The main script loader does not register
-these scripts, and the existing bot-command handler rejects training-only mutations. No live configuration
+these scripts, and training mutations require the configured training gate and completed cleanup. No live configuration
 change or raid acceptance is implied by the unit tests or an object compile.
 
 Implemented pieces:
@@ -12,14 +12,32 @@ Implemented pieces:
   separates map-thread recording from world-thread sampling and encoder-thread reset. Terminal boss intents
   are checked against the committed instance state after map updates; a rejected `DONE` is not a kill.
   An ambiguous same-boss re-engage before that barrier is discarded rather than merging two pulls.
-- Pure strategy/value and per-setting override journals. These are the foundation for task 4, not completed
-  runtime levers. Runtime undo must apply and verify a journal copy before consuming the original receipt.
+- Strategy/value journals with typed runtime setters, verified restoration from journal copies, and retryable
+  cleanup. Wildcard undo affects journaled names only; an explicit value restore can use its documented stock
+  fallback. Queued mutations recheck the gate and reject an obsolete off/on control epoch.
+- Immutable custom-strategy cache priming with trigger/action/known-spell checks before any strategy is installed.
+  Vocabulary discovery has a 64-job queue, at most 64 spell lookups per tick, and rechecks the human-online gate
+  before each scan slice. Oversize results produce a failed `get_vocab` job, never a partial success.
+- Per-key dungeon-setting restoration that preserves unrelated overrides and detectable later replacements.
+  Cleanup tracks the leader's map, instance, group and generation token. The boss-hold watchdog ignores door
+  pauses and pre-existing holds, verifies the actual resume, and retains a refused resume for retry.
 
-Remaining work includes the task 4 runtime journal integration and verified cleanup, task 5 dummy jobs,
+Remaining work includes actual runtime acceptance of the task 4 adapters, task 5 dummy jobs,
 task 6 benchmark/pin integration, and task 7 integrated build/lifecycle/raid acceptance. The Python ingestion,
 analysis, scoring, search and application work in tasks 9 onward also remains. The module loader must stay
 unwired until the accepted slice has complete restoration and shutdown behavior. Configuration defaults are
 off when the tap reads them; this foundation does not add active configuration settings.
+
+Job integration must capture the nonzero token returned by `MarkJobRun(leader)` after entering the intended
+instance and pass that same token to `ClearTrainingRun(leader, token)` at teardown. Never resolve the current
+token for an old job. Registration records ownership without changing the game and is independent of the
+training switch. These job receipts survive off-state override cleanup, allowing training to be enabled
+during an already registered raid. Job teardown retains its receipt if restoration fails.
+`RestoreJournaled` reports success separately from its optional verified-change count;
+a refusal is not completed restoration. Failed cleanup blocks new training mutations and is retried.
+The dungeon-clear API has no ownership generation for overrides: removing and recreating an identical value
+is indistinguishable from the original (ABA). In-memory journals also cannot promise restoration after a crash;
+explicit stock-value restores remain available after restart. These limits require lifecycle acceptance before wiring.
 
 ## Measurement contract
 

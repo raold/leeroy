@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -100,5 +101,28 @@ enum class BossRecordDecision { Retain, Confirm, Discard, Killed, Wiped };
 // BeforeSetBossState is an intent hook: DONE can still be rejected. Only the committed post-map state closes a pull.
 BossRecordDecision ReviewBossState(bool awaitingStart, bool terminalIntent, std::uint8_t actualState);
 bool RecordingStillCurrent(bool enabled, std::uint64_t openingEpoch, std::uint64_t currentEpoch);
+
+struct HoldState
+{
+    bool paused = false, atBoss = false;
+    std::uint64_t pausedSinceMs = 0;
+    bool resumed = false;
+};
+bool HoldShouldResume(HoldState const&, std::uint64_t nowMs);
+enum class PrimeDecision { Write, Same, Taken };
+PrimeDecision PrimeEntry(std::string_view existing, std::string_view wanted);
+PrimeDecision PrimeOwnedEntry(std::string_view existing, std::string_view wanted, std::string_view recorded);
+// Restore-only repair from a previously validated immutable receipt; never creates a new definition.
+bool RestorePrimedEntry(std::map<std::string, std::string>& cache,
+    std::map<std::string, std::string, std::less<>> const& recorded, std::string const& name);
+struct RunWatch
+{
+    bool leaderOnline = false, sameMap = false, jobOwned = false, jobEnded = false, dcEnabled = false;
+    std::uint64_t dcOffSinceMs = 0;
+};
+bool ShouldClearRun(RunWatch const&, std::uint64_t nowMs);
+enum class VocabKind { Class, Probe, Server };
+struct VocabJob { VocabKind kind; std::uint8_t cls = 0; std::uint32_t probe = 0; bool wantSpells = false; };
+std::vector<VocabJob> PlanVocab(GetVocabCmd const&, bool humanOnline);
 }
 #endif

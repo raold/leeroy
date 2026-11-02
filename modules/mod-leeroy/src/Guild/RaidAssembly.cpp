@@ -2,6 +2,7 @@
 
 #include "RaidAssembly.h"
 #include "GuildPorts.h"
+#include "Training/TrainingCommands.h"
 
 #include "AiObjectContext.h"
 #include "DBCStores.h"
@@ -112,6 +113,7 @@ void RaidHabits(Player* bot, Player* leader, uint32 map, Difficulty difficulty)
             ai->ChangeStrategy("+wait for attack", BOT_STATE_COMBAT);
             ai->GetAiObjectContext()->GetValue<uint8>("wait for attack time")->Set(4);
         }
+        Training::JournalReset(bot->GetGUID().GetCounter(), {"formation", "wait for attack time"});
     }
     DcDungeonAccess::GrantEntry(bot, map, difficulty);
 }
