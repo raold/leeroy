@@ -95,6 +95,9 @@ class TrainingGround:
         self._presence_known = False
         self._stopping = False
         self._running = False
+        self._lanes = set()
+        self._loader = None
+        self._close_task = None
 
     def book(self):
         return self._book
@@ -324,12 +327,12 @@ class TrainingGround:
         while (not self._presence_known or not self._connected or self.ports.human_online()
                 or self.listener.run is not None or self._guild_busy()):
             await self.ports.clock.sleep(1)
-        worker = asyncio.create_task(asyncio.to_thread(load_book, self.app.data_dir))
+        worker = self._loader = asyncio.create_task(asyncio.to_thread(load_book, self.app.data_dir))
         try:
             self._book = await asyncio.shield(worker)
         except asyncio.CancelledError:
-            # to_thread cannot stop file IO; join it before closing the service.
-            await asyncio.gather(worker, return_exceptions=True)
+            # to_thread cannot stop file IO. The shared close task owns this
+            # shielded worker until it actually ends, even after repeated cancel.
             raise
         await rescore_stored(self.ports, self._book)
 
@@ -339,27 +342,48 @@ class TrainingGround:
                                         for name in ("raid_night", "offline"))
 
     async def run(self):
+        if self._stopping:
+            return
         if self._running:
             raise RuntimeError("training already running")
         self._running = True
-        tasks = [asyncio.create_task(fn()) for fn in
-                 (self._commands, self._sampling, self._maintenance, self._load, self._listening)]
+        self._lanes = {asyncio.create_task(fn()) for fn in
+                       (self._commands, self._sampling, self._maintenance, self._load, self._listening)}
         try:
-            await asyncio.gather(*tasks)
+            # Cancellation fences promptly; one shared drain owns cancellation
+            # and joins instead of allowing gather to cancel the loader twice.
+            await asyncio.shield(asyncio.gather(*self._lanes))
         finally:
-            self._stopping = True
-            self.listener.invalidate(self.listener.run)
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            while not await self.listener.close():
-                log.warning("training listener shutdown is still draining")
-            while not await self.applier.close():
-                # The app awaits this lane before closing SQL. A transport that
-                # swallows cancellation must not outlive the database it uses.
-                log.warning("training command shutdown is still draining")
-            await self.on_connection(False)
+            await self.close()
             self._running = False
+
+    async def close(self):
+        """One shared, shielded resource barrier, also safe before run()."""
+        if self._close_task is None:
+            self._stopping = True
+            self._connected = self._presence_known = self._startup_ready = False
+            self._epoch += 1
+            self._queue.clear()
+            self.listener.invalidate(self.listener.run)
+            self._close_task = asyncio.create_task(self._drain())
+        await asyncio.shield(self._close_task)
+
+    async def _drain(self):
+        owned = self._lanes | {task for task in (self._operation, self._sample) if task is not None}
+        for task in owned:
+            task.cancel()
+        if owned:
+            await asyncio.gather(*owned, return_exceptions=True)
+        if self._loader is not None:
+            # Never cancel the to_thread worker: its synchronous IO cannot be
+            # cancelled, and it remains owned until this actual join completes.
+            await asyncio.gather(self._loader, return_exceptions=True)
+        while not await self.listener.close():
+            log.warning("training listener shutdown is still draining")
+        while not await self.applier.close():
+            log.warning("training command shutdown is still draining")
+        await self.on_connection(False)
+        self._lanes.clear()
 
 
 def attach_training(app):
@@ -370,8 +394,10 @@ def attach_training(app):
     protocol.register()
     app.skip_event_rows |= protocol.TG_EVENT_TYPES
     ground = TrainingGround(app, LivePorts(app, cfg=cfg))
-    for name in (*protocol.TG_EVENT_TYPES, "hello", "boss", "login", "logout", "chat"):
+    for name in (*protocol.TG_EVENT_TYPES, "hello", "boss", "login", "logout", "chat", "job"):
         app.register_event_handler(name, ground.on_event)
+    for name in ("job", "vocab", "server_stats", "dummy_result", "rivals"):
+        app.register_shutdown_receipt(name, ground.ports.feed)
     app.register_connection_hook(ground.on_connection)
     guild = getattr(app, "guild", None)
     if guild is not None:
@@ -396,5 +422,6 @@ def attach_training(app):
     from leeroy_mind.eval import register_section
     register_section("training", report_section)
     app.register_background(ground.run)
+    app.register_shutdown_drain(ground.close)
     log.info("training_attached stage=2")
     return ground

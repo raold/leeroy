@@ -375,6 +375,8 @@ class MindApp:
         self._connection_hooks: list[Callable[[bool], Awaitable[None]]] = []
         self._offline_hooks: list[Callable[[], Awaitable[None]]] = []
         self._background: list[Callable[[], Awaitable[None]]] = []
+        self._shutdown_drains: list[Callable[[], Awaitable[None]]] = []
+        self._shutdown_receipts: dict[str, list[Callable[[Event], None]]] = {}
         self._session_id: int | None = None
         self._hello_ts: int | None = None  # the server's ms ts of the last hello
         self._spoke_at: dict[int, float] = {}  # anyone's last line, any channel or origin
@@ -447,6 +449,28 @@ class MindApp:
         self._background.append(factory)
         if self.running and not self._stopping:
             self._start_background(factory)
+
+    def register_shutdown_drain(self, hook: Callable[[], Awaitable[None]]) -> None:
+        """Require an extension to release its owned resource users before close.
+
+        Generic background cancellation has a diagnostic timeout. A drain has
+        no abandonment timeout: it must join its owned children, or raise and
+        leave bridge/scheduler/database open. It must be safe before run() and
+        after ordinary cancellation. stop() shields the shared shutdown task.
+        """
+        if self._stopping:
+            raise RuntimeError("cannot register a shutdown drain while stopping")
+        self._shutdown_drains.append(hook)
+
+    def register_shutdown_receipt(self, type_name: str, handler: Callable[[Event], None]) -> None:
+        """Deliver only bounded synchronous receipt bookkeeping during shutdown.
+
+        This does not run ordinary gameplay/presence handlers. A receipt sink
+        may feed an already-owned command mailbox, never start work or await.
+        """
+        if self._stopping:
+            raise RuntimeError("cannot register shutdown receipts while stopping")
+        self._shutdown_receipts.setdefault(type_name, []).append(handler)
 
     @property
     def human_guid(self) -> int:
@@ -657,6 +681,12 @@ class MindApp:
             return
         name = event_type(ev)
         if self._stopping:
+            for handler in tuple(self._shutdown_receipts.get(name, ())):
+                try:
+                    handler(ev)
+                except Exception:
+                    # Receipt payloads and exception text can contain private data.
+                    log.warning("shutdown_receipt_failed: type=%s", name)
             self._record_only(ev, name)
             return
         await self._dispatch_handlers(ev, name, self._before_handlers)
@@ -1222,6 +1252,12 @@ class MindApp:
         await _cancel_wait([*self._bg_tasks, *self._offline_tasks])
         await _cancel_wait([self._loops.get("ticker"), self._embed_task, self._loops.get("health")])
         await _cancel_wait([self._loops.get("stats"), self._banner_task])
+        # These owners may outlive the generic diagnostic cancellation window.
+        # A failure is deliberately not swallowed by _step: closing SQL or the
+        # bridge underneath an unjoined receipt worker would lose durable state.
+        for drain in tuple(self._shutdown_drains):
+            if await drain() is False:
+                raise RuntimeError("extension shutdown drain did not complete")
         await self._step("turns", self.engine.end_session())
         if self._stats_since is not None and self.clock.now() > self._stats_since:
             self._log_stats(self.clock.now(), final=True)

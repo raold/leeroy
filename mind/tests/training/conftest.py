@@ -27,7 +27,7 @@ def app_stub(fake, tmp_path):
     from leeroy_mind.storage.store import Store
     app = SimpleNamespace(cfg=load_config(tmp_path / "mind.toml"), data_dir=tmp_path,
         clock=fake.clock, store=Store(fake.conn, clock=fake.clock), human_guid=fake.human_guid,
-        handlers={}, backgrounds=[], connections=[], before={},
+        handlers={}, backgrounds=[], connections=[], before={}, drains=[], receipts={},
         world=SimpleNamespace(human_online=fake.online),
         personas=SimpleNamespace(get=fake.persona), writer=SimpleNamespace(write=AsyncMock()),
         bridge=SimpleNamespace(send=fake.send), guild=None, voice=None, nightly=None,
@@ -36,6 +36,8 @@ def app_stub(fake, tmp_path):
         (app.before if before else app.handlers).setdefault(name, []).append(handler)
     app.register_event_handler = register
     app.register_background = app.backgrounds.append
+    app.register_shutdown_drain = app.drains.append
+    app.register_shutdown_receipt = lambda name, handler: app.receipts.setdefault(name, []).append(handler)
     app.register_connection_hook = app.connections.append
     return app
 
