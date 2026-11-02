@@ -18,7 +18,7 @@ from ..clock import SystemClock
 from ..config import default_data_dir
 
 DEFAULT_SOURCES = ("world", "atlasloot", "wiki", "curated")
-SOURCES = (*DEFAULT_SOURCES, "acwiki", "acdoxygen", "serverref")
+SOURCES = (*DEFAULT_SOURCES, "acwiki", "acdoxygen", "acmodules", "serverref")
 
 
 def _root(args) -> Path:
@@ -62,13 +62,17 @@ def make_sources(args, root: Path) -> list:
         elif name == "curated":
             from .curated import CuratedSource
             out.append(CuratedSource())
-        elif name in ("acwiki", "acdoxygen", "serverref"):
+        elif name in ("acwiki", "acdoxygen", "acmodules", "serverref"):
             path = getattr(args, name + "_snapshot", None)
             if not path:
                 raise SystemExit(f"{name} requires --{name}-snapshot with a complete manifest")
             if name == "serverref":
                 from .serverref import ServerRefSource
                 out.append(ServerRefSource(Path(path)))
+            elif name == "acmodules":
+                from .azeroth import AzerothModulesSource
+                out.append(AzerothModulesSource(Path(path), workers=args.snapshot_workers,
+                    parse_processes=args.snapshot_parse_processes, progress=print))
             else:
                 from .azeroth import AzerothDocsSource
                 out.append(AzerothDocsSource(Path(path), name=name,
@@ -153,7 +157,7 @@ def cmd_search(args) -> int:
             else:
                 print(textwrap.fill(c.text, width=100, initial_indent="    ",
                                     subsequent_indent="    ", max_lines=8))
-            if c.source in ("wiki", "acwiki", "acdoxygen", "serverref"):
+            if c.source in ("wiki", "acwiki", "acdoxygen", "acmodules", "serverref"):
                 print(f"    source: {c.cite()}")
         return 0
     finally:
@@ -203,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("build", help="load sources into library.db, then embed new chunks")
     p.add_argument("--sources", default=",".join(DEFAULT_SOURCES), help="comma list of " + ", ".join(SOURCES))
-    for source in ("acwiki", "acdoxygen", "serverref"):
+    for source in ("acwiki", "acdoxygen", "acmodules", "serverref"):
         p.add_argument(f"--{source}-snapshot", help=f"complete offline {source} snapshot directory")
     p.add_argument("--snapshot-workers", type=lambda value: snapshot_workers(int(value)),
                    default=DEFAULT_SNAPSHOT_WORKERS,

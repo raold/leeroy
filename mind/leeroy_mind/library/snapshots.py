@@ -186,7 +186,7 @@ class OfflineSnapshot:
         expected_paths = {f.path for f in files}
         if source != "serverref":
             self.notify(f"{source}: checking documentation file coverage")
-            suffixes = {".md", ".markdown"} if source == "acwiki" else {".html", ".htm"}
+            suffixes = {".md", ".markdown"} if source in {"acwiki", "acmodules"} else {".html", ".htm"}
             actual = {p.relative_to(self.root).as_posix() for p in self.root.rglob("*")
                       if ".git" not in p.relative_to(self.root).parts
                       and p.suffix.lower() in suffixes and p.is_file()}

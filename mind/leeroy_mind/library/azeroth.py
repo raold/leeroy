@@ -1,4 +1,4 @@
-"""All pages of pinned official AzerothCore wiki and generated API snapshots.
+"""All pages of pinned official wiki/API and installed module documentation snapshots.
 
 No web requests, lore-era cutoff, language filter, or page cap. Code and table
 lines remain intact; upstream instructions are reference text, never executed.
@@ -181,7 +181,7 @@ def _parse_document(document: _Document) -> tuple[list[ChunkDraft], SourceFile]:
             seen[digest] = occurrence + 1
             chunks.append(ChunkDraft(
                 f"{name}:{file.path}:{digest}:{occurrence}",
-                "documentation" if name == "acwiki" else "api", title, piece,
+                "api" if name == "acdoxygen" else "documentation", title, piece,
                 section=section, url=file.url,
                 license=document.license,
                 ref_ids=(f"{name}:{file.path}",),
@@ -203,8 +203,8 @@ class AzerothDocsSource:
         Application scripts enabling processes must guard their entry point with
         ``if __name__ == '__main__'``. Library construction never starts a pool.
         """
-        if name not in {"acwiki", "acdoxygen"}:
-            raise ValueError("documentation source must be acwiki or acdoxygen")
+        if name not in {"acwiki", "acdoxygen", "acmodules"}:
+            raise ValueError("documentation source must be acwiki, acdoxygen or acmodules")
         self.root = Path(root)
         self.name = name
         self.workers = snapshot_workers(workers)
@@ -273,3 +273,9 @@ class AzerothDoxygenSource(AzerothDocsSource):
     def __init__(self, root: Path, *, workers: int = DEFAULT_SNAPSHOT_WORKERS,
                  parse_processes: int = 0, progress: Callable[[str], None] | None = None):
         super().__init__(root, name="acdoxygen", workers=workers, parse_processes=parse_processes, progress=progress)
+
+
+class AzerothModulesSource(AzerothDocsSource):
+    def __init__(self, root: Path, *, workers: int = DEFAULT_SNAPSHOT_WORKERS,
+                 parse_processes: int = 0, progress: Callable[[str], None] | None = None):
+        super().__init__(root, name="acmodules", workers=workers, parse_processes=parse_processes, progress=progress)

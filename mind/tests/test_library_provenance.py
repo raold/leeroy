@@ -33,7 +33,7 @@ def test_schema_three_migration_preserves_ids_refs_fts_and_exact_vector_bytes(tm
     conn.close()
     library = Library(path, clock=clock)
     try:
-        assert library.conn.execute("PRAGMA user_version").fetchone()[0] == latest_version() == 4
+        assert library.conn.execute("PRAGMA user_version").fetchone()[0] == latest_version() == 5
         row = library.conn.execute("SELECT * FROM chunks WHERE id=81").fetchone()
         assert tuple(row)[:len(before)] == before
         assert row["embedding"] == vec and row["metadata"] == "{}" and row["source_revision"] is None

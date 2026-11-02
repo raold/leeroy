@@ -68,6 +68,24 @@ def test_existing_build_defaults_do_not_require_new_snapshot_paths():
     assert cli.DEFAULT_SOURCES == ('world', 'atlasloot', 'wiki', 'curated')
 
 
+def test_installed_module_cli_requires_explicit_snapshot_and_keeps_citation(tmp_path, capsys):
+    from library_snapshot_helpers import snapshot
+    source = tmp_path / 'modules'
+    snapshot(source, 'acmodules', {'mod-test/README.md': '# Module setup\nSet TestOption to 7.\n'},
+             entries={'mod-test/README.md': {'version': 'installed mod-test @ revision-123'}},
+             license='unknown')
+    args = ['--data-dir', str(tmp_path / 'data'), 'build', '--sources', 'acmodules', '--no-embed']
+    with pytest.raises(SystemExit, match='requires --acmodules-snapshot'):
+        cli.main(args)
+    assert cli.main([*args, '--acmodules-snapshot', str(source)]) == 0
+    assert 'acmodules: 1 chunks' in capsys.readouterr().out
+    assert cli.main(['--data-dir', str(tmp_path / 'data'), 'search', 'TestOption',
+                     '--kind', 'documentation', '--text-only']) == 0
+    out = capsys.readouterr().out
+    assert 'Set TestOption to 7.' in out and 'source:' in out
+    assert 'installed mod-test @ revision-123' in out
+
+
 def test_snapshot_worker_cli_parses_count_and_rejects_unbounded_values(tmp_path, monkeypatch):
     received = []
     monkeypatch.setattr(cli, 'cmd_build', lambda args: received.append(args.snapshot_workers) or 0)

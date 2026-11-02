@@ -15,7 +15,8 @@ REFERENCE_KINDS = {
     "documentation": ("documentation", "api"),
     "api": ("api", "documentation"),
 }
-REFERENCE_SOURCES = frozenset({"serverref", "acwiki", "acdoxygen"})
+DOCUMENT_SOURCES = frozenset({"acwiki", "acdoxygen", "acmodules"})
+REFERENCE_SOURCES = DOCUMENT_SOURCES | {"serverref"}
 _AC = re.compile(r"\b(?:azeroth\s*core|acore)\b", re.I)
 _ASK = re.compile(r"\?|^(?:(?:hey|ok|okay|so|please|quick question)[\s,:]+)*"
                   r"(?:what|which|where|how|why|can|could|does|is|are|explain|show|list|find|"
@@ -27,11 +28,12 @@ _GM_PERSON = re.compile(r"\b(?:(?:our|my|your|their)\s+gm|guild\s*master)\b", re
 _GM_VERB = re.compile(r"\b(?:the|our|my|your|their)\s+gm\s+commands?\s+"
                       r"(?:the|our|your|every|all|this|us|them|me|you|everyone)\b", re.I)
 _API = re.compile(r"\bdoxygen\b|\bapi\b|\b[A-Za-z_]\w*::[A-Za-z_]\w*", re.I)
-_DOC = re.compile(r"\b(?:docs?|documentation|wiki|config(?:uration)?|settings?|database|tables?|schema|"
+_DOC = re.compile(r"\b(?:docs?|documentation|readme|wiki|config(?:uration|ure|uring)?|settings?|database|tables?|schema|"
                   r"dbc|scripting|scripts?|modules?|install(?:ation)?|compile|build|cmake|source code|"
                   r"maintenance|troubleshoot(?:ing)?|backups?)\b", re.I)
 _INSTALLED_DOC = re.compile(r"\b(?:worldserver\.conf|authserver\.conf|acore_world|acore_auth|"
-                            r"acore_characters|mod-[a-z0-9_-]+)\b", re.I)
+                            r"acore_characters)\b", re.I)
+_MODULE = re.compile(r"\b(?:mod-[a-z0-9_-]+|playerbots?)\b", re.I)
 _TELE = re.compile(r"\bgame_tele\b|\bnamed\s+teleports?\b|\bteleport\s+(?:destinations?|locations?|"
                    r"coordinates?|ids?)\b", re.I)
 _TELE_LOOKUP = re.compile(r"\b(?:coordinates?|destinations?|locations?|ids?|where|find|lookup|look up)\b", re.I)
@@ -50,6 +52,7 @@ _IDENTIFIER = re.compile(r"\b(?:[A-Z][a-z0-9]+(?:[A-Z][A-Za-z0-9]*)+|[A-Za-z][A-
 _IDENTITY_CONTEXT = {"azerothcore", "worldserver", "authserver"}
 _NAVIGATION = re.compile(r"^\s*(?:\[[^\]]+\]:\s*\S+|\[<?[-←].*|\*\*[^*]+\*\*|#{1,6}\s+.*)\s*$")
 _STEP = re.compile(r"^\s*\d+[.)]\s+\S")
+_BULLET = re.compile(r"^\s*[-*+]\s+\S")
 
 
 def _words(text: str) -> set[str]:
@@ -80,11 +83,14 @@ def preferred_reference_language(query: str) -> str | None:
 def reference_candidates(chunks: Sequence[Chunk], query: str) -> list[Chunk]:
     """Prefer suitable language/current docs without removing translations from the corpus."""
     identifiers = _identifiers(query)
-    docs = [c for c in chunks if c.source in {"acwiki", "acdoxygen"}
+    docs = [c for c in chunks if c.source in DOCUMENT_SOURCES
             and _document_mentions(c, identifiers)]
     structured = [c for c in chunks if c.source == "serverref"]
     preferred = preferred_reference_language(query)
     query_words = _words(query)
+    modules = {m.group().casefold() for m in _MODULE.finditer(query)}
+    if modules & {"playerbot", "playerbots"}:
+        modules.add("mod-playerbots")
     general_build = bool(query_words & {"build", "compile", "compiling", "cmake"}) and not query_words & {
         "test", "tests", "unit", "hook", "hooks", "modules", "module", "plugins", "plugin", "docker"}
 
@@ -93,6 +99,8 @@ def reference_candidates(chunks: Sequence[Chunk], query: str) -> list[Chunk]:
         language = str(c.metadata.get("language", "und")).casefold().split("-")[0]
         language_rank = 0 if preferred is None or language == preferred else (1 if language == "und" else 2)
         title = (c.heading() + " " + (c.source_path or "")).replace("\\_", "_")
+        installed_match = c.source == "acmodules" and bool(modules & set((c.source_path or "").casefold().split("/")))
+        module_rank = int(bool(modules) and not installed_match)
         specialized = 0
         if general_build:
             if re.search(r"\b(?:unimplemented|hooks?|unit[ _-]?tests?)\b", title, re.I):
@@ -100,7 +108,7 @@ def reference_candidates(chunks: Sequence[Chunk], query: str) -> list[Chunk]:
             elif not re.search(r"\b(?:install(?:ation)?|build(?:ing)?|compil(?:e|ing|ation))\b", title, re.I):
                 specialized = 1
         score = 3 * len(query_words & _words(title)) + len(query_words & _words(c.text))
-        return language_rank, bool(c.metadata.get("archived")), specialized, -score, index
+        return language_rank, bool(c.metadata.get("archived")), specialized, module_rank, -score, index
 
     ordered = sorted(enumerate(docs), key=rank)
     if general_build and any(rank(pair)[2] == 0 for pair in ordered):
@@ -132,6 +140,8 @@ def reference_topic(text: str) -> str | None:
         return "teleport"
     if dot or _ADMIN_COMMAND.search(text) or (ac and _COMMAND_DETAIL.search(text)):
         return "command"
+    if _MODULE.search(text) and (_DOC.search(text) or _COMMAND_DETAIL.search(text)):
+        return "documentation"
     if ac or _INSTALLED_DOC.search(text):
         return "documentation"
     return None
@@ -145,9 +155,13 @@ def _quoted(value: str) -> str:
 def _label(chunk: Chunk) -> str:
     meta = chunk.metadata
     origin = {"acwiki": "AzerothCore docs", "acdoxygen": "AzerothCore API",
-              "serverref": "Installed server export"}[chunk.source]
+              "serverref": "Installed server export",
+              "acmodules": "Installed module documentation"}[chunk.source]
     labels = [origin]
-    if chunk.source_revision:
+    # A composite installed snapshot has an aggregate inventory hash as well as
+    # each repository's revision. Keep the useful installed version in the small
+    # facts budget; full snapshot provenance remains available through cite().
+    if chunk.source_revision and not (chunk.source == "acmodules" and meta.get("version")):
         labels.append("revision " + chunk.source_revision)
     if meta.get("archived"):
         labels.append("archived")
@@ -217,6 +231,9 @@ def _doc_fields(text: str, query: str) -> list[str]:
         elif not line.strip():
             prose(block)
             block = []
+        elif _BULLET.match(line):
+            prose(block)
+            block = [line]
         elif _CODE_LINE.match(line) or _STEP.match(line):
             prose(block)
             candidates.append(line)
@@ -285,7 +302,7 @@ def _fields(chunk: Chunk, query: str) -> tuple[str, list[str]] | None:
             fields.append("Map name: " + _quoted(m["map_name"]))
         fields.append("Source: " + _label(chunk))
         return header, fields
-    if chunk.kind not in {"documentation", "api"} or chunk.source not in {"acwiki", "acdoxygen"}:
+    if chunk.kind not in {"documentation", "api"} or chunk.source not in DOCUMENT_SOURCES:
         return None
     header = f"{_label(chunk)}; {_quoted(chunk.heading())}."
     return header, _doc_fields(chunk.text, query)

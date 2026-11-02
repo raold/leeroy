@@ -348,7 +348,7 @@ def test_a_v1_library_gains_weights(tmp_path, clock):
     conn.close()
     lib = Library(path, clock=clock)
     try:
-        assert lib.conn.execute("PRAGMA user_version").fetchone()[0] == latest_version() == 4
+        assert lib.conn.execute("PRAGMA user_version").fetchone()[0] == latest_version() == 5
         assert lib.search_text("old text")[0].title == "Old Page"
         with pytest.raises(sqlite3.IntegrityError):
             lib.conn.execute("UPDATE chunks SET weight = 0")

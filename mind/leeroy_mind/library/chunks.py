@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 
 KINDS = ("item", "loot", "quest", "lore", "strategy", "class", "zone", "event",
          "documentation", "api", "command", "teleport")
-SOURCES = ("world", "atlasloot", "wiki", "curated", "acwiki", "acdoxygen", "serverref")
-SNAPSHOT_SOURCES = ("acwiki", "acdoxygen", "serverref")
+SOURCES = ("world", "atlasloot", "wiki", "curated", "acwiki", "acdoxygen", "serverref", "acmodules")
+SNAPSHOT_SOURCES = ("acwiki", "acdoxygen", "serverref", "acmodules")
 MIN_WORDS = 120
 MAX_WORDS = 250
 
@@ -73,8 +73,9 @@ class Chunk:
             return f"warcraft.wiki.gg: {self.title} ({self.license}) {self.url}"
         if self.source in SNAPSHOT_SOURCES:
             label = {"acwiki": "AzerothCore documentation", "acdoxygen": "AzerothCore API",
-                     "serverref": "installed server reference"}[self.source]
-            return (f"{label}: {self.title} (revision {self.source_revision}; "
+                     "serverref": "installed server reference", "acmodules": "installed module documentation"}[self.source]
+            version = f"version {self.metadata['version']}; " if self.metadata.get("version") else ""
+            return (f"{label}: {self.title} ({version}revision {self.source_revision}; "
                     f"license {self.license or 'unknown'}) {self.url or self.source_path or ''}")
         return {"world": "the server's world database",
                 "atlasloot": "AtlasLoot (WotLK tables)",

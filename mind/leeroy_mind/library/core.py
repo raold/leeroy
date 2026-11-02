@@ -566,7 +566,7 @@ class Library:
         kind_marks = ",".join("?" for _ in wanted)
         sql = ("SELECT c.*, bm25(chunks_fts,4.0,2.0,1.0) AS reference_rank FROM chunks_fts "
                "JOIN chunks c ON c.id=chunks_fts.rowid WHERE chunks_fts MATCH ? "
-               "AND c.source IN ('acwiki','acdoxygen','serverref') "
+               "AND c.source IN ('acwiki','acdoxygen','serverref','acmodules') "
                f"AND c.kind IN ({kind_marks})")
         language = language.casefold().split("-")[0] if language else None
         filtered = (" AND (c.source='serverref' OR COALESCE(lower(json_extract(c.metadata,'$.language')),"
