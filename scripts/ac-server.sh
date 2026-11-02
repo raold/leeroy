@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start, stop, or check worldserver and authserver.
+# Start, stop, or check worldserver, authserver, and the mind service.
 #
 # Usage: ac-server.sh start|stop|status
 #
@@ -17,11 +17,27 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 running() { tasklist //FI "IMAGENAME eq $1" 2>/dev/null | grep -qi "$1"; }
 
+mind() {
+    local action="$1" python="$AC_ROOT/mind/.venv/Scripts/python.exe"
+    local data="${LEEROY_MIND_DATA:-$AC_ROOT/mind-data}"
+    if [ ! -x "$python" ]; then
+        if [ "$action" = stop ] && [ -e "$data/mind.lock" ]; then
+            die "mind venv is unavailable but mind.lock exists; stop the mind manually first"
+        fi
+        warn "mind venv not installed; mind $action skipped"
+        return 0
+    fi
+    PYTHONPATH="$(cygpath -w "$AC_ROOT/mind")" \
+        "$python" "$AC_ROOT/scripts/ac-mind.py" "$action" \
+        --root "$(cygpath -w "$AC_ROOT")" --data-dir "$(cygpath -w "$data")"
+}
+
 case "${1:-status}" in
 status)
     for p in authserver.exe worldserver.exe; do
         if running "$p"; then printf '    %-18s running\n' "$p"; else printf '    %-18s stopped\n' "$p"; fi
     done
+    mind status
     ;;
 start)
     [ -x "$AC_BIN/worldserver.exe" ] || die "worldserver.exe not built. Run ./ac-build.sh"
@@ -33,8 +49,19 @@ start)
             ( cd "$AC_BIN" && cmd //c start "$p" "$p.exe" )
         fi
     done
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        if running authserver.exe && running worldserver.exe; then break; fi
+        sleep 1
+    done
+    if ! running authserver.exe || ! running worldserver.exe; then
+        die "servers did not start; mind not started"
+    fi
+    mind start
     ;;
 stop)
+    # Stop only the exact mind instance first. An unknown held lock or failed stop
+    # aborts here, before either server is touched. Like worldserver, this is forced.
+    mind stop
     if running worldserver.exe; then
         warn "worldserver cannot be shut down cleanly from a script on this install."
         warn "If characters are online, type 'server shutdown 30' in its console first."
