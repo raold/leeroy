@@ -165,7 +165,9 @@ LEEROY_TEST(Realm_DefaultsAndConditionalFields)
     CHECK(update && update->title.empty() && update->description.empty() && update->at == 0);
     auto mail = ParseMailSend(Message("mail_send_defaults"), error);
     CHECK(mail && mail->body.empty() && mail->items.empty() && mail->money == 0 && mail->delayS == 600);
-    CHECK_EQ(ParseBankDeposit(Message("bank_deposit_defaults"), error)->count, 0u);
+    auto deposit = ParseBankDeposit(Message("bank_deposit_ok"), error);
+    CHECK(deposit && deposit->count == 0);  // Explicit zero is the deliberate "all" request.
+    Reject(Message("bank_deposit_missing_count"), "count");
     CHECK_EQ(ParseGuildAdmit(Message("guild_admit_defaults"), error)->rank, 4u);
     auto announce = ParseAnnounce(Message("announce_defaults"), error);
     CHECK(announce && announce->attempts == 0 && announce->fightS == 0);
@@ -270,7 +272,8 @@ LEEROY_TEST(Realm_GrantWhitelist)
 
 LEEROY_TEST(Realm_EquipOnlyTheTabard)
 {
-    std::string error; CHECK(ParseEquip(Message("equip_ok"), error)); CHECK_EQ(kGuildTabard, 5976u);
+    static_assert(kGuildTabard == 5976u);
+    std::string error; CHECK(ParseEquip(Message("equip_ok"), error));
     for (auto item : {6256u,0u,43015u}) RejectField("equip_ok", "item_id", item);
 }
 

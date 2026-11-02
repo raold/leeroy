@@ -303,7 +303,7 @@ std::optional<BankMoneyCmd> ParseBankMoney(json const& j, std::string& error)
 std::optional<BankDepositCmd> ParseBankDeposit(json const& j, std::string& error)
 {
     Fields f(j, error); BankDepositCmd out; f.Number("guid", out.guid); f.Number("item_id", out.itemId);
-    f.Number("count", out.count, 0, kMaxItemCount, true); f.Number("tab", out.tab, 0, 5); return f.Result(std::move(out));
+    f.Number("count", out.count, 0, kMaxItemCount); f.Number("tab", out.tab, 0, 5); return f.Result(std::move(out));
 }
 std::optional<BankWithdrawCmd> ParseBankWithdraw(json const& j, std::string& error)
 {
