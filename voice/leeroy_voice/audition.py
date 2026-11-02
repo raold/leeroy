@@ -1,5 +1,5 @@
-"""The audition page (Task 19): every member reading one line in their voice, as the mixer would
-play it (the voice through the mic chain at the configured grit), with name, gender, accent and
+"""The audition page (Task 19): every member reading one line in their voice, with native
+playback by default and optional legacy effects only by explicit opt-in; name, gender, accent and
 lock state, and the closest pairs by ECAPA cosine played side by side, so the owner's ear can set
 the distinctness threshold (M25). A static page with its clips beside it; the whole folder is
 local (voice-data/audition), never committed.
@@ -52,7 +52,8 @@ def _line(spec: VoiceSpec, engine, lexicon: Lexicon | None) -> str:
 
 
 def build_audition(specs, engine, out_dir: Path, *, report: dict, bank, decision,
-                   grit: int = 3, lexicon: Lexicon | None = None, expressive=None) -> Path:
+                   grit: int = 3, effects_enabled: bool = False,
+                   lexicon: Lexicon | None = None, expressive=None) -> Path:
     """<out_dir>/index.html and <out_dir>/clips/<guid>.wav for each spec; the page path.
     `report` is the cast report (cast.cast_voices fills it): its closest_pairs and threshold.
     `engine` and `bank` are Kokoro's. For a cloning spec, `expressive(name)` supplies its
@@ -75,7 +76,8 @@ def build_audition(specs, engine, out_dir: Path, *, report: dict, bank, decision
                 raise EngineError(f"{spec.engine}: no matching engine for audition of {spec.guid}")
             style = chosen.levers("none")
         dry = chosen.synth(_line(spec, chosen, lexicon), spec, style, spec.speed)
-        clip = fx.process(dry, chosen.sample_rate, spec, grit=grit, whisper=False)
+        clip = fx.process(dry, chosen.sample_rate, spec, grit=grit, whisper=False,
+                          effects_enabled=effects_enabled)
         _write_wav(clips / f"{spec.guid}.wav", np.clip(clip, -1.0, 1.0), fx.OUT_RATE)
     page = out_dir / PAGE
     fd, tmp = tempfile.mkstemp(dir=out_dir, prefix=".index-", suffix=".tmp")

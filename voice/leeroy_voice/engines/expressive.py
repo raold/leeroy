@@ -10,8 +10,9 @@ the commands that render on the CPU without it.
 Levers per attitude (M28): LEVERS holds neutral numbers only, the kit's. Wording never lives in
 the code: a local voice-data/attitudes.toml overrides them key by key at start, as
 [<engine>.<attitude>] tables. Turbo has neither exaggeration nor cfg, so its attitude rests on the
-sounds in its text (textear). It has no native speed control: the service-side tempo step
-applies `speed` after synthesis, keeping pitch and formants before the mic chain.
+sounds in its text (textear). Native output keeps the worker's timing and waveform intact.
+It has no native speed control: only effects_enabled=True opts into the legacy post-synthesis
+tempo step. Intrinsic model prosody, text pauses and attitude parameters remain unchanged.
 
 Nothing of a line leaves here but its audio: an EngineError names a type or a count, and the
 worker's stderr is thrown away."""
@@ -289,7 +290,10 @@ class ExpressiveEngine:
     def __init__(self, engine: str, venv_python: Path, *, need_gb: float, refs_dir: Path = Path(),
                  levers: dict[str, dict] | None = None, script: Path | None = None, args=(),
                  env: dict | None = None, below_normal: bool = False,
-                 timeout_s: float = LINE_TIMEOUT_S, start_s: float = START_S):
+                 timeout_s: float = LINE_TIMEOUT_S, start_s: float = START_S,
+                 effects_enabled: bool = False):
+        if type(effects_enabled) is not bool:
+            raise ValueError("effects_enabled: expected a boolean")
         self.name = engine
         self.need_gb = need_gb
         self.worker: WorkerProcess | None = None
@@ -301,6 +305,15 @@ class ExpressiveEngine:
         self._timeout_s = timeout_s
         self._start_s = start_s
         self._starting = threading.Lock()
+        self._effects_enabled = effects_enabled
+
+    @property
+    def render_policy(self) -> str | None:
+        """Native caches must never reuse previously time-stretched expressive clips.
+
+        None retains the original legacy cache identity for explicit effects opt-in.
+        """
+        return None if self._effects_enabled else "native-v1"
 
     @property
     def up(self) -> bool:
@@ -370,6 +383,10 @@ class ExpressiveEngine:
         audio, rate = worker.ask(text, str(self._reference(spec)), params, timeout=timeout)
         if rate != self.sample_rate or not len(audio):
             raise EngineError(f"{self.name}: {len(audio)} samples at {rate} Hz")
+        if audio.ndim != 1 or not np.isfinite(audio).all():
+            raise EngineError(f"{self.name}: invalid audio")
+        if not self._effects_enabled:
+            return audio
         try:
             audio = change_tempo(audio, rate, speed)
         except Exception as e:

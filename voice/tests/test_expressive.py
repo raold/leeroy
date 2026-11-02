@@ -482,7 +482,7 @@ def test_expressive_engine_sends_the_reference_and_the_levers(tmp_path, script):
 
 
 def test_expressive_speed_changes_audio_without_changing_worker_params(tmp_path, script):
-    made = engine(tmp_path, script)
+    made = engine(tmp_path, script, effects_enabled=True)
     made.start()
     try:
         params = {"frames": RATE * 2, "temperature": 0.7}
@@ -504,7 +504,7 @@ def test_tempo_failure_is_an_engine_error_without_private_details(tmp_path, scri
         raise RuntimeError("private line or path")
 
     monkeypatch.setattr(expressive, "change_tempo", fail)
-    made = engine(tmp_path, script)
+    made = engine(tmp_path, script, effects_enabled=True)
     made.start()
     try:
         with pytest.raises(EngineError, match="tempo: RuntimeError") as error:

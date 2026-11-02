@@ -156,9 +156,9 @@ def test_mp3_quality_follows_the_grit(mic, grit, vbr):  # LAME's VBR quality, no
 
 def test_whisper_skips_the_codec():
     x, s = noise(2.0, rms=0.05), spec(mic="headset_cheap")
-    whisper = fx.process(x, SR, s, grit=10, whisper=True)
-    clean = fx.process(x, SR, s, grit=0, whisper=False)
-    rough = fx.process(x, SR, s, grit=10, whisper=False)
+    whisper = fx.process(x, SR, s, grit=10, whisper=True, effects_enabled=True)
+    clean = fx.process(x, SR, s, grit=0, whisper=False, effects_enabled=True)
+    rough = fx.process(x, SR, s, grit=10, whisper=False, effects_enabled=True)
     assert abs(band(whisper, 5500, 6500, OUT) - band(clean, 5500, 6500, OUT)) <= 3.0
     assert band(rough, 5500, 6500, OUT) < band(clean, 5500, 6500, OUT) - 30   # the same mic
     for mic in fx.MIC_PROFILES:
@@ -249,15 +249,17 @@ def test_pitch_shift_keeps_the_formants():              # the voice moves, its v
 
 
 def test_process_shifts_the_spec_pitch():               # pitch first, at the engine's rate
-    out = fx.process(tone(220, 2.0), SR, spec(pitch_st=1.0), grit=0, whisper=True)
+    out = fx.process(tone(220, 2.0), SR, spec(pitch_st=1.0), grit=0, whisper=True,
+                     effects_enabled=True)
     assert peak_hz(out[OUT // 2: 3 * OUT // 2], OUT) == pytest.approx(233.0, abs=2)
 
 
 @pytest.mark.parametrize("mic", ["hot_mic", "laptop", "headset_cheap"])
 def test_the_chain_hears_every_engine_alike(mic):       # loud or quiet, it meets one level
     x = np.concatenate([tone(220, 0.5, amp=0.5), tone(220, 0.5, amp=0.1)])   # a loud, a soft word
-    loud = fx.process(x, SR, spec(mic=mic), grit=10, whisper=False)
-    soft = fx.process(x * np.float32(0.05), SR, spec(mic=mic), grit=10, whisper=False)
+    loud = fx.process(x, SR, spec(mic=mic), grit=10, whisper=False, effects_enabled=True)
+    soft = fx.process(x * np.float32(0.05), SR, spec(mic=mic), grit=10, whisper=False,
+                      effects_enabled=True)
     assert np.allclose(loud, soft, atol=1e-3)
 
 
@@ -279,12 +281,12 @@ def test_output_is_48k_float32(fake_engine, mic, grit):
 def test_room_tone_under_the_line(mic, grit):            # room_db - 20(1 - grit/10) dBFS
     gap = np.zeros(SR // 2, np.float32)
     out = fx.process(np.concatenate([gap, tone(220, 1.0), gap]), SR, spec(mic=mic), grit=grit,
-                     whisper=False)
+                     whisper=False, effects_enabled=True)
     before = out[:OUT // 2 - OUT // 20]                 # clear of the line's own onset
     p = fx.MIC_PROFILES[mic]
     assert rms_db(before) == pytest.approx(p.room_db - 20 * (1 - grit / 10), abs=1.5)
     dry = fx.process(np.concatenate([gap, tone(220, 1.0), gap]), SR, spec(mic=mic), grit=grit,
-                     whisper=True)
+                     whisper=True, effects_enabled=True)
     assert rms_db(dry[:OUT // 2 - OUT // 20]) < -100    # a whisper is dry: no room
 
 

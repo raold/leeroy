@@ -32,7 +32,8 @@ min_press_ms = 150            # a shorter tap is typing, not talking (50-1000 ms
 
 [sound]
 duck_db = 8.0                 # WoW turned down this far while members talk, 0-20 dB; 0 is off
-comms_grit = 3                # 0 clean to 10 rough: 2009 band-limited mics and a codec
+effects_enabled = false      # native voice; true opts into tempo/pitch/mic/room/hot-mic effects
+comms_grit = 3                # legacy effects only, when effects_enabled = true (0-10)
 stereo_spread = 0.0           # 0-0.2: how far the voices are panned apart
 
 [tts]
@@ -87,6 +88,7 @@ class VoiceConfig:
     tts_cpu_fallback: bool = False
     tts_cpu_threads: int = 12
     tts_cpu_timeout_s: float = 15.0
+    effects_enabled: bool = False
 
 
 def vk_for(key: str) -> int:
@@ -132,6 +134,8 @@ _RULES = {
     ("ptt", "max_hold_s"): ("max_hold_s", _num_in(1, 120), "a number 1-120", float),
     ("ptt", "min_press_ms"): ("min_press_ms", _int_in(50, 1000), "an integer 50-1000", int),
     ("sound", "duck_db"): ("duck_db", _num_in(0, 20), "a number 0-20", float),
+    ("sound", "effects_enabled"): ("effects_enabled", lambda v: type(v) is bool,
+                                    "true or false", bool),
     ("sound", "comms_grit"): ("comms_grit", _int_in(0, 10), "an integer 0-10", int),
     ("sound", "stereo_spread"): ("stereo_spread", _num_in(0, 0.2), "a number 0-0.2", float),
     ("tts", "threads"): ("tts_threads", _int_in(1, 64), "an integer 1-64", int),

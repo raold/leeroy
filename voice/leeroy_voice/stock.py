@@ -15,6 +15,11 @@ name and the lock never reach the sound, so locking the guild or changing a mic 
 Each clip's file name ends in a digest of what was rendered (the line, the engine and its rate,
 the speed), so a changed line or engine renders afresh too and the old clip is removed.
 
+Native expressive synthesis skips legacy tempo DSP. Its render_policy is part of the identity
+and uses the separate native-v1/ subtree. Legacy clips stay in place, are never returned as
+native output, and remain available if effects are explicitly enabled again. Kokoro clips
+already contain its native model timing and keep their existing cache layout.
+
 A stock line reads as a raid call does, whatever the line's attitude and state: the voice's
 neutral style at its speed times attitude.RAID_CALL_LEVERS (x1.08), the clip a callout or urgent
 line of these words would render live.
@@ -83,6 +88,11 @@ class StockCache:
 
     def __init__(self, root: Path, engine, bank, decision):
         self.root = Path(root)
+        self._render_policy = getattr(engine, "render_policy", None)
+        if self._render_policy not in (None, "native-v1"):
+            raise ValueError("stock: unsupported render policy")
+        if self._render_policy is not None:
+            self.root /= self._render_policy
         self.engine = engine
         self.bank = bank
         self.decision = decision
@@ -95,6 +105,8 @@ class StockCache:
         d, fields = self.decision, spec_to_dict(spec)
         voice = {"spec": {k: fields[k] for k in RENDER_FIELDS}, "engine": d.engine,
                  "prosody_swap": d.prosody_swap, "uk_timbre_mix": d.uk_timbre_mix}
+        if self._render_policy is not None:
+            voice["render_policy"] = self._render_policy
         fingerprint = getattr(self.engine, "reference_fingerprint", None)
         if fingerprint is not None:
             voice["reference_sha256"] = fingerprint(spec)

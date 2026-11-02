@@ -1,7 +1,7 @@
 # leeroy-voice
 
 The guild's voice comms. The mind (`../mind`) decides who says what; this service speaks the
-members' lines aloud in Ventrilo-style rooms, each member in a voice of their own, and turns the
+members' lines aloud in voice rooms, each member in a voice of their own, and turns the
 player's push-to-talk into transcripts for the mind. It holds no persona logic and never talks to
 the game: if it is down, the guild types in chat as before.
 
@@ -28,6 +28,19 @@ Its settings and data live outside the repo, in `LEEROY_VOICE_DATA` (default: `v
 beside the repo): `voice.toml` (ports, devices, push-to-talk, sound), `decision.toml` and
 `ui-state.json`. The defaults name no audio device: sound plays on the Windows default device,
 and no microphone opens until `voice.toml` names one.
+
+Audio defaults to the engine's native sound: `[sound] effects_enabled = false`. Model expression
+and pauses remain, with scalar volume matching and the sample-rate conversion required by
+playback. Pitch shifting, post-synthesis tempo changes, microphone filters, codec simulation,
+compression, added room noise and hot-mic scenes are bypassed. Playback mixing and peak
+protection remain. The older effects require explicit `effects_enabled = true`; `comms_grit`
+only controls that optional effects path.
+
+Native expressive stock clips use a separate `native-v1` cache. Existing clips are preserved,
+but clips rendered with the older tempo policy are not reused as native audio. Prepare native
+stock clips before expecting expressive cache hits; missing stocks use the normal fallback
+path. Regenerate old audition files rather than relabeling them as native. Sound settings are
+loaded at service startup.
 
 The default test run needs no audio device, GPU, model file, network or running service. Tests
 that do are marked `engines`, `device`, `windows`, `gpu`, `ollama` or `live` and deselected

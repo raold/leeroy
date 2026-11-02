@@ -1,8 +1,12 @@
-"""The 2009 sound (draft section 5): each member's mic and codec profile, scaled by the one
+"""Native playback by default: one scalar loudness gain and conversion to the mixer's 48 kHz.
+No pitch, mic filtering, compression, codec or generated room noise is applied unless the
+caller explicitly enables effects. The synthesis engine's prosody is left alone.
+
+The optional legacy 2009 sound (draft section 5): each member's mic and codec profile, scaled by the one
 comms_grit knob (0 studio clean, 10 full 2009), a room tone, loudness matching and the move to
 the mixer's 48 kHz.
 
-process() takes a dry clip at the engine's rate (a fresh render or a stock clip) through:
+With effects_enabled=True, process() takes a dry clip at the engine's rate through:
 1. the spec's pitch shift (Rubber Band through pedalboard, formants kept);
 2. loudness to the target, so the chain's compressor, clipping and codec meet speech at one level
    whatever the engine's output level;
@@ -241,11 +245,18 @@ def to_48k(audio, sr: int) -> np.ndarray:
     return np.asarray(soxr.resample(x, sr, OUT_RATE, quality="HQ"), dtype=np.float32)
 
 
-def process(audio, sr: int, spec, *, grit: int, whisper: bool) -> np.ndarray:
-    """A dry clip at `sr` as the mixer plays it: mono float32 at 48 kHz, through the spec's pitch
-    and mic (a voice whisper through the whisper chain), at the target loudness. Raises
-    ValueError for a mic profile, grit or clip it cannot take."""
+def process(audio, sr: int, spec, *, grit: int, whisper: bool,
+            effects_enabled: bool = False) -> np.ndarray:
+    """Mono float32 at 48 kHz and a matched playback level, without colouring by default.
+
+    Legacy pitch/mic/room effects require explicit opt-in, including for whispers. Loudness
+    matching is a single constant gain across the clip, not a compressor or audio filter.
+    """
     x = _mono(audio)
+    if type(effects_enabled) is not bool:
+        raise ValueError("effects_enabled: expected a boolean")
+    if not effects_enabled:
+        return to_48k(normalize_loudness(x, sr), sr)
     board = chain_for(spec.mic, grit, whisper=whisper)  # the mic and grit checked first
     x = shift_pitch(x, sr, spec.pitch_st)
     level = loudness(x, sr)

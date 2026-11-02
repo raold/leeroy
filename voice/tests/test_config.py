@@ -20,6 +20,7 @@ def test_defaults_carry_the_owner_answers(tmp_path):
     assert c.input_device == "" and c.output_device == ""          # PR15: names only in the local file
     assert c.ptt_key == "\\" and c.ptt_vk == 0xDC and c.min_press_ms == 150 and c.max_hold_s == 30.0
     assert c.duck_db == 8.0 and c.comms_grit == 3 and c.stereo_spread == 0.0
+    assert c.effects_enabled is False
     assert c.recognizer == "parakeet" and c.tts_threads == 6 and c.stt_threads == 4
     assert c.min_confidence == 0.4 and c.gpu_margin_gb == 1.0 and c.debug_record is False
 
@@ -47,6 +48,11 @@ def test_local_values_win(tmp_path):
     assert c.debug_record is True
 
 
+def test_effects_require_explicit_opt_in_even_in_an_old_config(tmp_path):
+    assert not load_config(write(tmp_path, '[sound]\ncomms_grit = 10\n')).effects_enabled
+    assert load_config(write(tmp_path, '[sound]\neffects_enabled = true\n')).effects_enabled
+
+
 def test_loopback_only(tmp_path):
     with pytest.raises(ConfigError, match=r"mind\.host"):
         load_config(write(tmp_path, '[mind]\nhost = "0.0.0.0"\n'))
@@ -60,6 +66,8 @@ def test_loopback_only(tmp_path):
     ("[sound]\ncomms_grit = 11", "sound.comms_grit"),
     ("[sound]\ncomms_grit = -1", "sound.comms_grit"),
     ("[sound]\ncomms_grit = 2.5", "sound.comms_grit"),
+    ("[sound]\neffects_enabled = 1", "sound.effects_enabled"),
+    ('[sound]\neffects_enabled = "false"', "sound.effects_enabled"),
     ("[sound]\nstereo_spread = 0.3", "sound.stereo_spread"),
     ("[sound]\nstereo_spread = -0.1", "sound.stereo_spread"),
     ('[stt]\nrecognizer = "whisper"', "stt.recognizer"),

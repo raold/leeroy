@@ -68,7 +68,7 @@ def test_tv_uses_another_base_and_never_writes(fake_bank, tmp_path):
 
 def test_hotmic_service_synthesizes_once_on_tts_thread_and_skips_stock(tmp_path, fake_bank):
     async def test():
-        async with Rig(tmp_path, fake_bank) as rig:
+        async with Rig(tmp_path, fake_bank, effects_enabled=True) as rig:
             await rig.snapshot()
             await rig.stock_rendered()
             before = {p: p.read_bytes() for p in rig.data.rglob("*.wav")}
@@ -91,7 +91,7 @@ def test_hotmic_service_synthesizes_once_on_tts_thread_and_skips_stock(tmp_path,
 
 def test_hotmic_multi_sentence_is_one_bounded_scene(tmp_path, fake_bank):
     async def test():
-        async with Rig(tmp_path, fake_bank) as rig:
+        async with Rig(tmp_path, fake_bank, effects_enabled=True) as rig:
             await rig.snapshot()
             calls = []
             rig.service._hotmic = lambda audio, *a, **kw: (calls.append(len(audio)) or np.zeros(96000, np.float32))

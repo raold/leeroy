@@ -739,12 +739,12 @@ class VoiceService:
     # on the workers
 
     def _process(self, job: _Job, dry: np.ndarray) -> np.ndarray:
-        if job.speak.kind == "hotmic":
+        if job.speak.kind == "hotmic" and self._cfg.effects_enabled:
             clip = self._hotmic(dry, self._engine.sample_rate, job.spec, rng=self._hotmic_rng,
                                 engine=self._engine, bank=self._bank)
         else:
             clip = self._fx(dry, self._engine.sample_rate, job.spec, grit=self._cfg.comms_grit,
-                            whisper=job.line.whisper)
+                            whisper=job.line.whisper, effects_enabled=self._cfg.effects_enabled)
         if not np.isfinite(clip).all():  # the mixer would refuse it on the loop, mid-Plan
             raise ValueError("audio that is not finite")
         return clip

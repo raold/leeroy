@@ -212,6 +212,7 @@ def load_expressive(root: Path, cfg: VoiceConfig, decision: Decision, *, device:
         name, python, need_gb=EXPRESSIVE_NEED_GB[name], refs_dir=refs_dir,
         levers=load_levers(root, name), env=worker_env(root, cpu=cpu), below_normal=cpu,
         args=("--model", models.model_dir(root, name), "--device", device, "--threads", threads),
+        effects_enabled=cfg.effects_enabled,
         start_s=60.0 if live_cpu else START_S,
         timeout_s=(cfg.tts_cpu_timeout_s if live_cpu
                    else CPU_LINE_TIMEOUT_S if cpu else LINE_TIMEOUT_S))
@@ -433,7 +434,7 @@ def _selftest_spec(sha256: str):
 
 
 def _render_selftest(root: Path, cfg: VoiceConfig):
-    """The stock line in the test voice through the chain at the configured grit: (clip, path)."""
+    """The stock line with the configured playback processing: (clip, path)."""
     import soundfile as sf
 
     from . import fx
@@ -444,7 +445,8 @@ def _render_selftest(root: Path, cfg: VoiceConfig):
     style = bank.style(spec, "none", Decision())
     dry = engine.synth(STOCK[SELFTEST_KEY], spec, style,
                        spec.speed * RAID_CALL_LEVERS.speed_mult)
-    clip = fx.process(dry, engine.sample_rate, spec, grit=cfg.comms_grit, whisper=False)
+    clip = fx.process(dry, engine.sample_rate, spec, grit=cfg.comms_grit, whisper=False,
+                      effects_enabled=cfg.effects_enabled)
     path = root / "debug" / SELFTEST_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
     sf.write(path, clip, fx.OUT_RATE, subtype="FLOAT")
@@ -487,7 +489,7 @@ def _expressive_line(root: Path, cfg: VoiceConfig, decision: Decision, spec, tex
 
 
 def _render_member(root: Path, cfg: VoiceConfig, guid: int, specs_dir: Path, cpu: bool):
-    """The stock line in the member's own voice through the chain: (clip, path, who spoke)."""
+    """A member's stock line with the configured processing: (clip, path, who spoke)."""
     import soundfile as sf
 
     from . import cast, fx
@@ -506,7 +508,8 @@ def _render_member(root: Path, cfg: VoiceConfig, guid: int, specs_dir: Path, cpu
     who = "kokoro" if dry is None else spec.engine
     if dry is None:
         dry = engine.synth(text, spec, bank.style(spec, "none", decision), speed)
-    clip = fx.process(dry, engine.sample_rate, spec, grit=cfg.comms_grit, whisper=False)
+    clip = fx.process(dry, engine.sample_rate, spec, grit=cfg.comms_grit, whisper=False,
+                      effects_enabled=cfg.effects_enabled)
     path = root / "debug" / SELFTEST_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
     sf.write(path, clip, fx.OUT_RATE, subtype="FLOAT")
@@ -723,6 +726,7 @@ def cmd_audition(args) -> int:
         ordered = sorted(specs.values(), key=lambda s: (s.engine != "kokoro", s.engine, s.guid))
         page = build_audition(ordered, engine, root / "audition",
                               report=report, bank=bank, decision=decision, grit=cfg.comms_grit,
+                              effects_enabled=cfg.effects_enabled,
                               lexicon=lexicon, expressive=expressive)
     except Exception as e:
         return _fail("audition", e)

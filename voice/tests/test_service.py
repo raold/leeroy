@@ -1066,9 +1066,10 @@ def test_a_whisper_is_his_wherever_he_is(tmp_path, fake_bank):
         chains = []
         real = rig.service._fx
 
-        def spy(audio, sr, spec, *, grit, whisper):
-            chains.append((grit, whisper))
-            return real(audio, sr, spec, grit=grit, whisper=whisper)
+        def spy(audio, sr, spec, *, grit, whisper, effects_enabled):
+            chains.append((grit, whisper, effects_enabled))
+            return real(audio, sr, spec, grit=grit, whisper=whisper,
+                        effects_enabled=effects_enabled)
         rig.service._fx = spy
         await rig.mind.send(rig.speak("s1", channel="whisper", priority="p3", kind="whisper"))
         await rig.sees("s1", "started")
@@ -1076,7 +1077,7 @@ def test_a_whisper_is_his_wherever_he_is(tmp_path, fake_bank):
         assert entry["kind"] == "whisper" and entry["who"] == "Arkon"
         await rig.mind.send(rig.speak("s2"))
         await eventually(lambda: len(chains) == 2)
-        assert chains == [(3, True), (3, False)]  # dry and close, then the room's chain
+        assert chains == [(3, True, False), (3, False, False)]  # neither adds voice effects
     go(tmp_path, fake_bank, body)
 
 

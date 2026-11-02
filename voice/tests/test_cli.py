@@ -189,17 +189,20 @@ def test_selftest_writes_a_stock_line(data, small_voice, capsys):
     assert any("selftest.wav" in line for line in lines(capsys))
 
 
-def test_selftest_follows_the_grit(data, small_voice, monkeypatch):
+@pytest.mark.parametrize("effects_enabled", [False, True])
+def test_selftest_follows_effects_setting(data, small_voice, monkeypatch, effects_enabled):
     seen = []
     real = fx.process
 
-    def spy(audio, sr, spec, *, grit, whisper):
-        seen.append((spec.timbre, grit, whisper))
-        return real(audio, sr, spec, grit=grit, whisper=whisper)
+    def spy(audio, sr, spec, *, grit, whisper, effects_enabled):
+        seen.append((spec.timbre, grit, whisper, effects_enabled))
+        return real(audio, sr, spec, grit=grit, whisper=whisper, effects_enabled=effects_enabled)
     monkeypatch.setattr(fx, "process", spy)
-    (data / "voice.toml").write_text("[sound]\ncomms_grit = 7\n", encoding="utf-8")
+    (data / "voice.toml").write_text("[sound]\ncomms_grit = 7\n"
+                                    f"effects_enabled = {str(effects_enabled).lower()}\n",
+                                    encoding="utf-8")
     assert main(["selftest"]) == 0
-    assert seen == [({"af_heart": 1.0}, 7, False)]
+    assert seen == [({"af_heart": 1.0}, 7, False, effects_enabled)]
 
 
 def test_selftest_play_opens_the_output(data, small_voice, monkeypatch):

@@ -146,3 +146,23 @@ def test_builder_cannot_accidentally_audition_a_cloning_spec_on_kokoro(rig):
         audition.build_audition([spec()], rig.base, rig.root / "audition",
                                  report=rig.report, bank=rig.bank, decision=Decision())
     assert not rig.base.said
+
+
+@pytest.mark.parametrize("effects_enabled", [False, True])
+def test_audition_honors_effects_config_and_preserves_engine_prosody(rig, monkeypatch,
+                                                                  effects_enabled):
+    if effects_enabled:
+        (rig.root / "voice.toml").write_text('[sound]\neffects_enabled = true\n',
+                                             encoding="utf-8")
+    seen = []
+    original = fx.process
+
+    def process(audio, sr, voice, **kwargs):
+        seen.append(kwargs["effects_enabled"])
+        return original(audio, sr, voice, **kwargs)
+
+    monkeypatch.setattr(fx, "process", process)
+    voice = spec(pitch_st=2.0)
+    assert run(rig, voice) == 0
+    assert seen == [effects_enabled]
+    assert rig.workers[0].said[0][3] == voice.speed
