@@ -17,6 +17,10 @@ LeeroyCommandResult HandleGetRivals(nlohmann::json const&);
 LeeroyCommandResult HandleStartBenchmark(nlohmann::json const&);
 // Implemented by Task5; covers pending, active and unresolved cleanup bodies.
 bool DummyTrialOwns(std::uint32_t guid);
+// World-thread, read-only exclusion. Includes original and current original-group
+// members while DC override/hold cleanup or an exact job receipt is retained.
+// Unknown legacy membership is conservatively busy; the DC0 variant returns false.
+bool TrainingDcOwns(std::uint32_t guid);
 void TickVocab();
 void TickDcHolds(std::uint32_t diff);
 bool IsPrimed(std::string const& qualifier);
