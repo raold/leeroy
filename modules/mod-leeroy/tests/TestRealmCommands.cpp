@@ -380,7 +380,7 @@ LEEROY_TEST(Realm_DistributionsParse)
         std::string csv((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
         std::string error;
         if (places) { auto rows = ParsePlaces(csv, error); CHECK(rows && !rows->empty()); }
-        else { auto rows = ParseItems(csv, error); CHECK(rows && rows->empty()); }
+        else { auto rows = ParseItems(csv, error); CHECK(rows && !rows->empty()); }
         CHECK(error.empty());
     }
 }
