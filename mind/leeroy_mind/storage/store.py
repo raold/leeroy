@@ -84,6 +84,11 @@ class Store:
 
     # -- transactions ------------------------------------------------------------------
 
+    @property
+    def in_unit(self) -> bool:
+        """Whether this Store is inside one of its transaction units."""
+        return self._depth > 0
+
     @contextmanager
     def transaction(self):
         """The outermost block commits on a clean exit and rolls back on an exception. An inner
