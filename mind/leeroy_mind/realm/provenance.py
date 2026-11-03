@@ -24,7 +24,8 @@ from leeroy_mind.wow import BOSS_NAMES, RAID_INSTANCES, is_raid_fight
 from .actions import ActionContext
 from .protocol import ArenaEnd, ChannelChat, PvpKill, RealmKill, Wg
 from .records import (ActorQualification, FactDraft, FactRow, ForumCandidate, ProofNode,
-                      PublicProof, QualificationSnapshot, RealmObservation, Rejected, StoredSource)
+                      PublicProof, QualificationSnapshot, RealmFactReadStamp, RealmObservation,
+                      RealmReadStamp, Rejected, StoredSource)
 
 _POLICY = "stored_forum_topic_v1"
 _UNIT_ERROR = "Realm public proof requires Store.transaction()"
@@ -269,7 +270,7 @@ class _Resolver:
         row["payload"] = payload
         self._node("game_event", str(identifier), row)
 
-    def _memory(self, identifier):
+    def _memory(self, identifier, *, realm=False):
         row = self._row("memory", _MEMORY_COLUMNS, identifier)
         _integer(row["id"], 1, _SQLITE_MAX)
         _integer(row["owner"], 0)  # Zero denotes a guild-owned memory.
@@ -306,12 +307,12 @@ class _Resolver:
         if len(set(actors)) != len(actors):
             _fail()
         refs = _strict_json(row["evidence"])
-        if type(refs) is not list or not refs:
+        if type(refs) is not list or (not refs and not realm):
             _fail()
         if len(refs) > 64:
             _fail("graph_limit")
         for ref in refs:
-            _reference(ref)
+            (_realm_reference if realm else _reference)(ref)
         row["actors"], row["evidence"] = actors, refs
         self.memories[identifier] = row
         self._node("memory", str(identifier), row)
@@ -861,14 +862,15 @@ def _receipt(receipt):
 
 
 def _live_row(store, row_id, policy, *, counter=None):
-    row = store.conn.execute(f'SELECT {_EVENT_COLUMNS} FROM game_event WHERE id=?', (row_id,)).fetchone()
-    if row is None:
-        _fail('missing_row')
-    row = dict(row)
     if counter is not None:
-        counter._strings(row)
-    elif sum(len(_utf8(value)) for value in row.values() if type(value) is str) > 65536:
-        _fail('graph_limit')
+        row = counter._row('game_event', _EVENT_COLUMNS, row_id)
+    else:
+        row = store.conn.execute(f'SELECT {_EVENT_COLUMNS} FROM game_event WHERE id=?', (row_id,)).fetchone()
+        if row is None:
+            _fail('missing_row')
+        row = dict(row)
+        if sum(len(_utf8(value)) for value in row.values() if type(value) is str) > 65536:
+            _fail('graph_limit')
     _integer(row['id'], 1, _SQLITE_MAX); _seconds(row['ts']); _nullable_id(row['session_id'])
     if row['guid'] is not None or type(row['type']) is not str or row['type'] != _LIVE[policy][1]:
         _fail()
@@ -1042,12 +1044,15 @@ def validate_live_observation_in_unit(store, observation, *, human: HumanIdentit
 
 def _read_source(store, *, key=None, identifier=None, policy, counter=None):
     column, value = ('source_key', key) if key is not None else ('id', identifier)
-    raw = store.conn.execute(f'SELECT {_SOURCE_COLUMNS} FROM realm_source WHERE {column}=?', (value,)).fetchone()
-    if raw is None:
-        _fail('missing_row')
-    projection = dict(raw)
-    if counter is not None:
-        counter._strings(projection)
+    if counter is not None and column == 'id':
+        projection = counter._row('realm_source', _SOURCE_COLUMNS, identifier)
+    else:
+        raw = store.conn.execute(f'SELECT {_SOURCE_COLUMNS} FROM realm_source WHERE {column}=?', (value,)).fetchone()
+        if raw is None:
+            _fail('missing_row')
+        projection = dict(raw)
+        if counter is not None:
+            counter._strings(projection)
     top = _strict_json(projection['top_keys_json'])
     if type(top) is not list or any(type(key) is not str for key in top):
         _fail()
@@ -1071,6 +1076,23 @@ def _read_source(store, *, key=None, identifier=None, policy, counter=None):
 
 
 class _LiveResolver(_Resolver):
+    def __init__(self, store, human, *, context=None, origin=None):
+        super().__init__(store, human)
+        self.context = context
+        self.origin = origin
+
+    def _row(self, table, columns, identifier):
+        if self.context is not None:
+            return self.context._row(table, columns, identifier)
+        return super()._row(table, columns, identifier)
+
+    def _node(self, kind, key, projection):
+        if self.context is None:
+            super()._node(kind, key, projection)
+        else:
+            scope = self.origin if kind in ('qualification', 'privacy_set') else None
+            self.nodes[kind, key] = self.context._node(kind, key, projection, scope=scope)
+
     def resolve_live(self, source, source_projection, row, policy, qualification):
         snapshot, context = _decode_qualification(qualification)
         if (snapshot.guild, snapshot.human) != (source.guild, source.human):
@@ -1081,9 +1103,11 @@ class _LiveResolver(_Resolver):
         roots = (f'event:{source.row_id}',)
         self._node('game_event', str(source.row_id), row)
         self._node('realm_source', str(source.id), source_projection)
-        self._strings({'qualification': _canonical(qualification).decode('utf-8')})
+        if self.context is None:  # Origin JSON was already charged by the shared reader.
+            self._strings({'qualification': _canonical(qualification).decode('utf-8')})
         self._node('qualification', policy, qualification)
-        self._edge(); self._edge(); self._edge()
+        if self.context is None:  # Batch fact topology is charged once by its reader.
+            self._edge(); self._edge(); self._edge()
         text = _live_output(policy, output)
         self._privacy_live(roots, text, output, policy)
         nodes = tuple(sorted(self.nodes.values(), key=lambda node: (node.kind, node.key, node.projection_version)))
@@ -1094,14 +1118,18 @@ class _LiveResolver(_Resolver):
             _canonical(qualification).decode('utf-8'), _canonical(output).decode('utf-8'), digest)
 
     def _privacy_live(self, roots, text, output, policy):
-        rows = self.store.conn.execute(
-            f'SELECT {_FACT_COLUMNS} FROM fact WHERE root=? ORDER BY id LIMIT 201', roots).fetchall()
-        if len(rows) > 200:
-            _fail('graph_limit')
+        if self.context is None:
+            rows = self.store.conn.execute(
+                f'SELECT {_FACT_COLUMNS} FROM fact WHERE root=? ORDER BY id LIMIT 201', roots).fetchall()
+            if len(rows) > 200:
+                _fail('graph_limit')
+        else:
+            rows = self.context.annotations(roots[0])
         projection = []
         for raw in rows:
             row = dict(raw)
-            self._strings(row)
+            if self.context is None:
+                self._strings(row)
             _integer(row['id'], 1, _SQLITE_MAX); _nullable_id(row['about'], _U32)
             _integer(row['holder']); _seconds(row['created'])
             if row['root'] != roots[0] or type(row['secret']) is not int or row['secret'] not in (0, 1):
@@ -1279,70 +1307,78 @@ def _revalidate_live(store, proof, human):
     return current
 
 
-def public_fact_in_unit(store, fact_id: int, *, human: HumanIdentity):
-    """Read one active public origin, including its exact complete knowledge set.
+def _read_public_fact(context, fact_id):
+    """The single current-origin path, shared by standalone and graph reads."""
+    if fact_id in context.facts:
+        return context.facts[fact_id]
+    store, human = context.store, context.human
+    fact = context._row('realm_fact', 'id,kind,text,source,ref,public,ts', fact_id)
+    origin = context.origin(fact_id)
+    if (type(fact['public']) is not int or fact['public'] != 1
+            or origin['state'] != 'active' or type(origin['policy']) is not str
+            or origin['policy'] not in _LIVE or origin['assurance'] != _LIVE[origin['policy']][3]):
+        _fail('private_evidence')
+    _integer(origin['revision'], 1, _SQLITE_MAX); _integer(origin['source'], 1, _SQLITE_MAX)
+    proof = public_proof_from_json(origin['proof_json'])
+    if type(proof) is Rejected:
+        _fail(proof.reason)
+    if (proof.policy != origin['policy'] or proof.assurance != origin['assurance']
+            or proof.sources != (origin['source'],) or proof.qualification_json != origin['qualification_json']):
+        _fail('proof_changed')
+    qualification, output = _validated_proof(proof)
+    resolver = _LiveResolver(store, human, context=context, origin=fact_id)
+    source, projection, row = _read_source(store, identifier=origin['source'], policy=proof.policy, counter=resolver)
+    if (proof.roots != (f'event:{source.row_id}',)
+            or origin['producer_key'] != f'event:{source.source_key}:{proof.policy}'):
+        _fail('proof_changed')
+    current = resolver.resolve_live(source, projection, row, proof.policy, qualification)
+    if current != proof:
+        _fail('proof_changed')
+    text = _live_output(proof.policy, output)
+    _screen(text, human)
+    expected_source = 'channel' if proof.policy == 'channel_raid_topic_v1' else 'event'
+    expected = dict(id=fact_id, kind=_LIVE[proof.policy][2], text=text, source=expected_source,
+                    ref=proof.roots[0], public=1, ts=source.server_ms / 1000)
+    _seconds(fact['ts'])
+    if fact != expected or origin['text_sha256'] != hashlib.sha256(text.encode('utf-8')).hexdigest():
+        _fail('proof_changed')
+    rows = store.conn.execute('SELECT guild,since,how FROM realm_knows WHERE fact=? ORDER BY guild LIMIT 130', (fact_id,)).fetchall()
+    if len(rows) > 129:
+        _fail('graph_limit')
+    actual = []
+    for known in rows:
+        context._strings(dict(known))
+        _integer(known['guild'], 1); _seconds(known['since'])
+        if known['since'] != source.server_ms / 1000:
+            _fail('proof_changed')
+        actual.append([known['guild'], known['how']])
+    if actual != qualification['known_by']:
+        _fail('proof_changed')
+    privacy = context.privacy((f'realm:fact:{fact_id}',), {f'realm:fact:{fact_id}': {text}})
+    node = context._node('realm_fact', str(fact_id), dict(fact,
+        revision=origin['revision'], policy=origin['policy'], assurance=origin['assurance'],
+        text_sha256=origin['text_sha256'], qualification=qualification, proof_sha256=proof.sha256,
+        privacy=_node_metadata(privacy)))
+    # Fact -> direct proof nodes + its annotation set; source -> exact event.
+    for _ in range(6):
+        context._edge()
+    try:
+        accepted = (FactRow(fact_id, fact['kind'], text, fact['source'], fact['ref'], True,
+                           fact['ts'], origin['revision']), proof,
+                    RealmFactReadStamp(fact_id, origin['revision'], node.sha256, proof.sha256), output)
+    except (ValueError, TypeError):
+        _fail()
+    context.facts[fact_id] = accepted
+    return accepted
 
-    The returned base proof does not stamp fact identity/revision/state. Every
-    read must revisit these rows; future cached-memory use needs a fact stamp.
-    """
+
+def public_fact_in_unit(store, fact_id: int, *, human: HumanIdentity):
+    """Read a current active origin; no acceptance is cached across calls."""
     _require_unit(store)
     try:
         _identity(human); _input_id(fact_id)
-        fact = store.conn.execute('SELECT id,kind,text,source,ref,public,ts FROM realm_fact WHERE id=?', (fact_id,)).fetchone()
-        origin = store.conn.execute('SELECT fact,producer_key,source,policy,assurance,proof_json,'
-            'qualification_json,text_sha256,revision,state FROM realm_fact_origin WHERE fact=?', (fact_id,)).fetchone()
-        if fact is None or origin is None:
-            _fail('missing_row')
-        fact, origin = dict(fact), dict(origin)
-        counter = _Resolver(store, human)
-        counter._strings(fact); counter._strings(origin)
-        if (type(fact['public']) is not int or fact['public'] != 1
-                or origin['state'] != 'active' or type(origin['policy']) is not str
-                or origin['policy'] not in _LIVE or origin['assurance'] != _LIVE[origin['policy']][3]):
-            _fail('private_evidence')
-        _integer(origin['revision'], 1, _SQLITE_MAX); _integer(origin['source'], 1, _SQLITE_MAX)
-        proof = public_proof_from_json(origin['proof_json'])
-        if type(proof) is Rejected:
-            _fail(proof.reason)
-        if (proof.policy != origin['policy'] or proof.assurance != origin['assurance']
-                or proof.sources != (origin['source'],) or proof.qualification_json != origin['qualification_json']):
-            _fail('proof_changed')
-        # Do not reset evidence budgets for nested/composite origins: this API
-        # accepts exactly one direct base proof and never recurses into origins.
-        qualification, output = _validated_proof(proof)
-        resolver = _LiveResolver(store, human)
-        resolver.text_bytes = counter.text_bytes
-        source, projection, row = _read_source(store, identifier=origin['source'], policy=proof.policy, counter=resolver)
-        if (proof.roots != (f'event:{source.row_id}',)
-                or origin['producer_key'] != f'event:{source.source_key}:{proof.policy}'):
-            _fail('proof_changed')
-        current = resolver.resolve_live(source, projection, row, proof.policy, qualification)
-        if current != proof:
-            _fail('proof_changed')
-        text = _live_output(proof.policy, output)
-        _screen(text, human)
-        expected_source = 'channel' if proof.policy == 'channel_raid_topic_v1' else 'event'
-        expected = dict(id=fact_id, kind=_LIVE[proof.policy][2], text=text, source=expected_source,
-                        ref=proof.roots[0], public=1, ts=source.server_ms / 1000)
-        _seconds(fact['ts'])
-        if (fact != expected or origin['text_sha256'] != hashlib.sha256(text.encode('utf-8')).hexdigest()):
-            _fail('proof_changed')
-        rows = store.conn.execute('SELECT guild,since,how FROM realm_knows WHERE fact=? ORDER BY guild LIMIT 130', (fact_id,)).fetchall()
-        if len(rows) > 129:
-            _fail('graph_limit')
-        actual = []
-        for known in rows:
-            _integer(known['guild'], 1); _seconds(known['since'])
-            if known['since'] != source.server_ms / 1000:
-                _fail('proof_changed')
-            actual.append([known['guild'], known['how']])
-        if actual != qualification['known_by']:
-            _fail('proof_changed')
-        try:
-            return FactRow(fact_id, fact['kind'], text, fact['source'], fact['ref'], True,
-                           fact['ts'], origin['revision']), proof
-        except (ValueError, TypeError):
-            _fail()
+        fact, proof, _, _ = _read_public_fact(_RealmReader(store, human), fact_id)
+        return fact, proof
     except _Evidence as error:
         return Rejected(error.reason)
 
@@ -1370,3 +1406,251 @@ def public_fact_draft(proof: PublicProof, source: StoredSource) -> FactDraft:
                          source.server_ms / 1000, proof.policy, tuple(sorted(output.items())), True)
     except _Evidence:
         raise ValueError('invalid Realm public draft') from None
+
+
+def _node_metadata(node):
+    return dict(kind=node.kind, key=node.key, projection_version=node.projection_version,
+                sha256=node.sha256)
+
+
+def _realm_reference(ref):
+    raw = _utf8(ref)
+    if len(raw) > 128:
+        _fail('graph_limit')
+    if ref.startswith('realm:'):
+        suffix = ref[11:] if ref.startswith('realm:fact:') else ''
+        if not re.fullmatch(r'[1-9][0-9]{0,18}', suffix) or int(suffix) > _SQLITE_MAX:
+            _fail('invalid_row')
+        return 'realm_fact', int(suffix)
+    if ref.startswith(('memory:', 'event:')):
+        return _reference(ref)
+    _fail('unsupported_policy')
+
+
+class _RealmReader(_Resolver):
+    """One synchronous operation's rows, graph and budget; never caller supplied."""
+    def __init__(self, store, human):
+        super().__init__(store, human)
+        self.rows = {}
+        self.origins = {}
+        self.facts = {}
+        self.dependencies = {}
+        self.annotation_sets = {}
+        self.annotation_ids = set()
+        self.closures = {}
+
+    def _row(self, table, columns, identifier):
+        key = table, identifier
+        if key not in self.rows:
+            self.rows[key] = (columns, super()._row(table, columns, identifier))
+        prior_columns, row = self.rows[key]
+        if prior_columns != columns:
+            _fail('proof_changed')
+        return dict(row)  # Parsers may replace JSON strings only in their own copy.
+
+    def origin(self, identifier):
+        if identifier not in self.origins:
+            row = self.store.conn.execute('SELECT fact,producer_key,source,policy,assurance,proof_json,'
+                'qualification_json,text_sha256,revision,state FROM realm_fact_origin WHERE fact=?',
+                (identifier,)).fetchone()
+            if row is None:
+                _fail('missing_row')
+            row = dict(row)
+            self._strings(row)
+            self.origins[identifier] = row
+        return self.origins[identifier]
+
+    def remember(self, node, *, scope=None):
+        key = node.kind, node.key, node.projection_version, scope
+        previous = self.nodes.get(key)
+        if previous is not None:
+            if previous != node:
+                _fail('proof_changed')
+        else:
+            if len(self.nodes) >= 200:
+                _fail('graph_limit')
+            self.nodes[key] = node
+        return node
+
+    def _node(self, kind, key, projection, *, scope=None):
+        body = _canonical(dict(kind=kind, key=key, projection_version=1, projection=projection))
+        digest = hashlib.sha256(b'realm-proof-node-v1\0' + len(body).to_bytes(8, 'big') + body).hexdigest()
+        return self.remember(ProofNode(kind, key, 1, digest), scope=scope)
+
+    def annotations(self, ref):
+        if ref not in self.annotation_sets:
+            rows = self.store.conn.execute(
+                f'SELECT {_FACT_COLUMNS} FROM fact WHERE root=? ORDER BY id LIMIT 201', (ref,)).fetchall()
+            if len(rows) > 200:
+                _fail('graph_limit')
+            result = []
+            for raw in rows:
+                row = dict(raw)
+                _integer(row['id'], 1, _SQLITE_MAX)
+                if row['id'] not in self.annotation_ids:
+                    self.annotation_ids.add(row['id'])
+                    if len(self.annotation_ids) > 200:
+                        _fail('graph_limit')
+                    self._strings(row)
+                result.append(row)
+            self.annotation_sets[ref] = tuple(result)
+        return self.annotation_sets[ref]
+
+    def privacy(self, refs, support):
+        refs = tuple(sorted(refs))
+        projection = []
+        for ref in refs:
+            for row in self.annotations(ref):
+                _nullable_id(row['about'], _U32); _integer(row['holder']); _seconds(row['created'])
+                if row['root'] != ref or type(row['secret']) is not int or row['secret'] not in (0, 1):
+                    _fail()
+                _screen(row['text'], self.human)
+                if row['secret'] or row['kind'] in ('whisper_scene', 'confession', 'life_news', 'real_name'):
+                    _fail('private_evidence')
+                if row['kind'] not in ('said_about', 'feud_cause', 'noticed'):
+                    _fail()
+                if row['text'] and row['text'] not in support[ref]:
+                    _fail('unsupported_text')
+                projection.append(row)
+        projection.sort(key=lambda row: row['id'])
+        return self._node('privacy_set', hashlib.sha256(_canonical(list(refs))).hexdigest(), projection)
+
+    def links(self, identifier):
+        if identifier not in self.dependencies:
+            rows = self.store.conn.execute('SELECT memory,fact FROM realm_memory_dependency '
+                'WHERE memory=? ORDER BY fact LIMIT 201', (identifier,)).fetchall()
+            if len(rows) > 200:
+                _fail('graph_limit')
+            links = []
+            for row in rows:
+                _integer(row['memory'], 1, _SQLITE_MAX); _integer(row['fact'], 1, _SQLITE_MAX)
+                if row['memory'] != identifier:
+                    _fail()
+                links.append((row['memory'], row['fact']))
+            self.dependencies[identifier] = tuple(links)
+        return self.dependencies[identifier]
+
+    def related(self, identifier):
+        row = self._row('memory', _MEMORY_COLUMNS, identifier)
+        if self.links(identifier):
+            return True
+        refs = _strict_json(row['evidence'])
+        if type(refs) is not list:
+            _fail()
+        for ref in refs:
+            _utf8(ref)
+            if ref.startswith('realm:'):
+                _realm_reference(ref)
+                return True
+        return False
+
+    def _support(self, row, fact_ids):
+        for identifier in fact_ids:
+            fact, proof, _, output = self.facts[identifier]
+            if row['text'] != fact.text or row['t_event'] != int(fact.ts):
+                continue
+            boss, raid = row['boss_id'], row['raid_id']
+            if proof.policy == 'verified_raid_kill_v1':
+                if ((boss is None or boss == output['boss_id'])
+                        and (raid is None or raid == output['map'])):
+                    return
+            elif proof.policy == 'channel_raid_topic_v1':
+                if boss is None and (raid is None or raid == output['raid_id']):
+                    return
+            elif boss is None and raid is None:
+                return
+        _fail('unsupported_text')
+
+    def walk(self, ref, depth=0):
+        if depth > 32:
+            _fail('graph_limit')
+        kind, identifier = _realm_reference(ref)
+        if kind == 'realm_fact':
+            if depth + 2 > 32:
+                _fail('graph_limit')
+            _read_public_fact(self, identifier)
+            return frozenset(), frozenset((identifier,)), 2
+        if kind != 'memory':
+            _fail('invalid_input')
+        if self.states.get(ref) == 'visiting':
+            _fail('cycle')
+        if self.states.get(ref) == 'done':
+            memories, facts, height = self.closures[identifier]
+            if depth + height > 32:
+                _fail('graph_limit')
+            return memories, facts, height
+        self.states[ref] = 'visiting'
+        refs = self._memory(identifier, realm=True)
+        links = self.links(identifier)
+        if not refs and not links:
+            _fail('unsupported_policy')
+        memories, facts, events, height = {identifier}, set(), [], 0
+        children = list(refs) + [f'realm:fact:{fact}' for _, fact in links]
+        for child in children:
+            self._edge()  # Declared duplicates still count, even with cached targets.
+            child_kind, _ = _realm_reference(child)
+            if child_kind == 'event':
+                if depth + 1 > 32:
+                    _fail('graph_limit')
+                events.append(child)
+                height = max(height, 1)
+                continue
+            child_memories, child_facts, child_height = self.walk(child, depth + 1)
+            memories.update(child_memories); facts.update(child_facts)
+            height = max(height, child_height + 1)
+        # Resolve event leaves after this node's own complete fact closure. Sibling
+        # roots and evidence ordering cannot provide or conceal authority.
+        backed_events = {self.facts[fact][0].ref for fact in facts}
+        if any(event not in backed_events for event in events):
+            _fail('unsupported_policy')
+        self._support(self.memories[identifier], facts)
+        self.states[ref] = 'done'
+        result = frozenset(memories), frozenset(facts), height
+        self.closures[identifier] = result
+        return result
+
+    def stamp(self, identifier):
+        memories, facts, _ = self.closures[identifier]
+        support = {f'memory:{memory}': {self.facts[fact][0].text for fact in self.closures[memory][1]}
+                   for memory in memories}
+        support.update({f'realm:fact:{fact}': {self.facts[fact][0].text} for fact in facts})
+        privacy = self.privacy(tuple(support), support)
+        body = dict(schema='realm_memory_read_v1', root=f'memory:{identifier}',
+            memories=[dict(memory_id=memory, sha256=self.nodes['memory', str(memory), 1, None].sha256)
+                      for memory in sorted(memories)],
+            facts=[dict(fact_id=fact, revision=self.facts[fact][2].revision,
+                        fact_sha256=self.facts[fact][2].fact_sha256,
+                        proof_sha256=self.facts[fact][2].proof_sha256) for fact in sorted(facts)],
+            dependency_rows=sorted(link for memory in memories for link in self.links(memory)),
+            privacy=_node_metadata(privacy))
+        return RealmReadStamp(identifier, self.nodes['memory', str(identifier), 1, None].sha256,
+                              tuple(sorted(facts)), _tagged_hash(b'realm-memory-read-v1\0', body))
+
+
+def audit_realm_reads_in_unit(store, refs: tuple[str, ...], *, human: HumanIdentity):
+    """Audit all classified roots atomically under one internal complete budget."""
+    _require_unit(store)
+    try:
+        _identity(human)
+        if type(refs) is not tuple or len(refs) > 256:
+            _fail('invalid_input')
+        if any(type(ref) is not str for ref in refs) or refs != tuple(sorted(set(refs))):
+            _fail('invalid_input')
+        if sum(len(_utf8(ref)) for ref in refs) > 32768:
+            _fail('graph_limit')
+        reader = _RealmReader(store, human)
+        roots = []
+        for ref in refs:
+            kind, identifier = _realm_reference(ref)
+            if kind == 'memory':
+                if not reader.related(identifier):
+                    _fail('invalid_input')
+                roots.append(identifier)
+            elif kind != 'realm_fact':
+                _fail('invalid_input')
+            reader.walk(ref)
+        stamps = tuple(reader.stamp(identifier) for identifier in sorted(roots))
+        fact_stamps = tuple(reader.facts[identifier][2] for identifier in sorted(reader.facts))
+        return stamps, fact_stamps
+    except _Evidence as error:
+        return Rejected(error.reason)

@@ -489,3 +489,41 @@ for name in ('leeroy_mind.ingress', 'leeroy_mind.protocol', 'leeroy_mind.storage
     subprocess.run([sys.executable, "-I", str(probe), str(package_root)], cwd=tmp_path,
         env={**os.environ, "LEEROY_MIND_DATA": str(data_dir)}, timeout=10,
         check=True, capture_output=True, text=True)
+
+
+def test_fact_read_stamp_is_frozen_and_appended_manifest_default_preserves_old_calls():
+    stamp = records.RealmFactReadStamp(1, 7, H, H)
+    assert [field.name for field in dataclasses.fields(stamp)] == [
+        'fact_id', 'revision', 'fact_sha256', 'proof_sha256']
+    assert not hasattr(stamp, '__dict__')
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        stamp.revision = 8
+    old = records.RealmInputs(('memory:1',), (), 'exclude')
+    assert old.fact_stamps == ()
+    incoming = [stamp]
+    new = records.RealmInputs(('realm:fact:1',), (), 'memory', incoming)
+    incoming.clear()
+    assert new.fact_stamps == (stamp,)
+    assert [field.name for field in dataclasses.fields(new)] == ['refs', 'stamps', 'mode', 'fact_stamps']
+
+
+@pytest.mark.parametrize('changes', [dict(fact_id=True), dict(fact_id=0), dict(fact_id=1 << 63),
+    dict(revision=True), dict(revision=0), dict(revision=1.0), dict(revision=1 << 63),
+    dict(fact_sha256='A' * 64), dict(fact_sha256='a' * 63), dict(proof_sha256=b'a' * 64)])
+def test_fact_read_stamp_requires_exact_bounded_ids_and_lowercase_hashes(changes):
+    values = dict(fact_id=1, revision=1, fact_sha256=H, proof_sha256=H)
+    with pytest.raises(ValueError):
+        records.RealmFactReadStamp(**(values | changes))
+
+
+def test_manifest_fact_stamp_shape_has_sorted_unique_exact_elements_and_cap():
+    stamp = records.RealmFactReadStamp(1, 1, H, H)
+    later = records.RealmFactReadStamp(2, 1, H, H)
+    class SubStamp(records.RealmFactReadStamp):
+        pass
+    for invalid in ((stamp, stamp), (later, stamp), (object(),), (SubStamp(1, 1, H, H),),
+                    tuple(records.RealmFactReadStamp(i, 1, H, H) for i in range(1, 202))):
+        with pytest.raises(ValueError):
+            records.RealmInputs((), (), 'memory', invalid)
+    # Semantic acceptance is deliberately not granted by the leaf DTO.
+    assert records.RealmInputs((), (), 'exclude', (stamp,)).fact_stamps == (stamp,)

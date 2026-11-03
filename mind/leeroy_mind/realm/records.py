@@ -425,10 +425,23 @@ class RealmReadStamp:
 
 
 @dataclass(frozen=True, slots=True)
+class RealmFactReadStamp:
+    fact_id: int
+    revision: int
+    fact_sha256: str
+    proof_sha256: str
+
+    def __post_init__(self):
+        _integer(self.fact_id, "fact_id"); _integer(self.revision, "revision")
+        _hash(self.fact_sha256, "fact_sha256"); _hash(self.proof_sha256, "proof_sha256")
+
+
+@dataclass(frozen=True, slots=True)
 class RealmInputs:
     refs: tuple[str, ...]
     stamps: tuple[RealmReadStamp, ...]
     mode: Literal["exclude", "memory"]
+    fact_stamps: tuple[RealmFactReadStamp, ...] = ()
 
     def __post_init__(self):
         refs = _refs(self, "refs", 256)
@@ -440,6 +453,12 @@ class RealmInputs:
         ids = tuple(stamp.memory_id for stamp in stamps)
         if ids != tuple(sorted(set(ids))):
             raise ValueError("invalid stamps")
+        fact_stamps = _tuple(self, "fact_stamps", 200)
+        if any(type(stamp) is not RealmFactReadStamp for stamp in fact_stamps):
+            raise ValueError("invalid fact_stamps")
+        fact_ids = tuple(stamp.fact_id for stamp in fact_stamps)
+        if fact_ids != tuple(sorted(set(fact_ids))):
+            raise ValueError("invalid fact_stamps")
         _enum(self.mode, "mode", ("exclude", "memory"))
 
 

@@ -86,7 +86,7 @@ def _mark(store, chat=1, utterance=1):
 
 def _forged(**overrides):
     record = object.__new__(RealmInputs)
-    fields = dict(refs=(), stamps=(), mode="exclude")
+    fields = dict(refs=(), stamps=(), mode="exclude", fact_stamps=())
     fields.update(overrides)
     for key, value in fields.items():
         object.__setattr__(record, key, value)
@@ -319,9 +319,13 @@ def test_ordinary_content_changes_and_unshown_labels_do_not_claim_snapshot_or_pr
     assert _final(sample, admitted, human=changed_identity) is True
 
 
-@pytest.mark.parametrize("refs", [(), ("rule:ordinary",), ("realm:fact:1",)])
-def test_memory_mode_never_accepts_even_empty_inputs(store, refs):
-    assert _admit(store, refs, mode="memory") == Rejected("unsupported_policy")
+@pytest.mark.parametrize("refs", [(), ("rule:ordinary",)])
+def test_memory_mode_empty_related_set_preserves_ordinary_inputs(store, refs):
+    assert _admit(store, refs, mode="memory") == RealmInputs(refs, (), "memory")
+
+
+def test_memory_mode_fact_requires_real_current_origin(store):
+    assert _admit(store, ("realm:fact:1",), mode="memory") == Rejected("missing_row")
 
 
 @pytest.mark.parametrize("mode", ["unknown", "Exclude", "", None, 1, True])
@@ -346,7 +350,7 @@ def test_explicit_exact_human_required_but_never_used_for_prose_or_config(sample
     assert _admit(sample, ["memory:1"]) == RealmInputs(("memory:1",), (), "exclude")
 
 
-@pytest.mark.parametrize("inputs", [None, (), object(), RealmInputs((), (), "memory"),
+@pytest.mark.parametrize("inputs", [None, (), object(),
     RealmInputs(("memory:1",), (RealmReadStamp(1, "a" * 64, (1,), "b" * 64),), "exclude"),
     _forged(refs=("owner:z", "owner:a")), _forged(refs=("rule:one", "rule:one")),
     _forged(refs=("unknown:1",)), _forged(refs=("realm:fact:1",)),
