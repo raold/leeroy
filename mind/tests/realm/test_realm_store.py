@@ -58,7 +58,7 @@ def _receipt(conn, command_id="r1", **overrides):
 
 def test_fresh_migration_adds_exact_plan_tables_and_diagnostics(conn):
     latest = db.latest_version()
-    assert latest == 11
+    assert latest == 12
     assert _tables(conn) == REALM_TABLES
     assert conn.execute("PRAGMA user_version").fetchone()[0] == latest
     assert db.migrate(conn) == latest
