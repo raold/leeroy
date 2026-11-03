@@ -1595,6 +1595,13 @@ bool RealmPvpArenaObserverOwns(std::uint32_t guid, std::uintptr_t session)
     return found != inbox.watches.end() && !found->second.wintergrasp && found->second.session == session;
 }
 
+bool RealmPvpForeignWintergraspHistory(std::uint32_t guid, std::uintptr_t session)
+{
+    if (!guid || !session) return true;
+    std::lock_guard lock(inbox.mutex);
+    return !inbox.wgHistory.Allows(guid, session);
+}
+
 void RegisterRealmPvpHandlers()
 {
     auto& module = RealmModule::Instance();

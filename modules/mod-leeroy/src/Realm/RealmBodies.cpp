@@ -1,5 +1,6 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "RealmBodies.h"
+#include "RealmCleanup.h"
 #include "RealmPorts.h"
 #include "LeeroyEvents.h"
 #include "Bag.h"
@@ -486,29 +487,6 @@ RealmStep Duel(Queued& entry, std::uint32_t guid)
     return Refuse("duel_refused");
 }
 
-RealmStep Craft(Queued& entry, std::uint32_t guid)
-{
-    if (auto why = Eligible(entry, guid, Purpose::Craft, true); !why.empty()) return Refuse(why);
-    auto const spellId = entry.payload.at("spell_id").get<std::uint32_t>();
-    auto* bot = FindOnline(guid);
-    if (!bot->HasSpell(spellId)) return Refuse("not_known");
-    if (bot->IsNonMeleeSpellCast(false)) return Refuse("busy:casting");
-    auto const* info = sSpellMgr->GetSpellInfo(spellId);
-    if (!info) return Refuse("not_known");
-    bool recipe = false;
-    for (auto skill : kProfessionSkills)
-        for (auto const* ability : GetSkillLineAbilitiesBySkillLine(skill))
-            if (ability->Spell == spellId && bot->HasSkill(static_cast<uint16>(skill))) recipe = true;
-    if (!recipe) return Refuse("not_recipe");
-    for (std::size_t i = 0; i < info->Reagent.size(); ++i)
-        if (info->Reagent[i] > 0 && bot->GetItemCount(static_cast<uint32>(info->Reagent[i]), false) < info->ReagentCount[i])
-            return Refuse("no_mats");
-    // The installed OnPlayerCreateItem callback omits the producing Spell.
-    // A concurrent generic cast or inventory delta cannot establish that
-    // provenance. Refuse BEFORE casting until an exact producer hook exists.
-    return Refuse("craft_receipt_unavailable");
-}
-
 LfgPhase Phase(lfg::LfgState state)
 {
     switch (state)
@@ -565,17 +543,22 @@ RealmStep LeavePvp(Queued& entry, std::uint32_t guid)
     {
         if (auto why = module.MutationReason(guid, entry.id); !why.empty()) return Unproved(entry.payload.at("step"), why);
     }
-    else if (auto why = Eligible(entry, guid, Purpose::LeavePvp); !why.empty()) return Refuse(why);
+    else if (auto why = Eligible(entry, guid, Purpose::LeavePvp); !why.empty())
+        return entry.payload.value("cleanup_mutated", false) ? Unknown(why) : Refuse(why);
     auto* bot = ObjectAccessor::FindConnectedPlayer(PlayerGuid(guid));
-    if (!bot) return started ? Unproved(entry.payload.at("step"), "leave_identity") : Refuse("offline");
+    if (!bot) return started ? Unproved(entry.payload.at("step"), "leave_identity")
+        : (entry.payload.value("cleanup_mutated", false) ? Unknown("leave_identity") : Refuse("offline"));
     if (!started) entry.payload["step"] = Json{{"at", NowMs()}, {"changed", false}, {"stage", "queues"}};
     auto& state = entry.payload["step"];
     auto fail = [&](std::string why)
     {
-        return state.at("changed").get<bool>() ? Unproved(state, std::move(why)) : Refuse(std::move(why));
+        return state.at("changed").get<bool>() || entry.payload.value("cleanup_mutated", false)
+            ? Unproved(state, std::move(why)) : Refuse(std::move(why));
     };
     if (Expired(state)) return fail("leave_cleanup_unproved");
+    if (auto why = OrdinaryCleanupReason(entry); !why.empty()) return fail(why);
     auto stage = state.at("stage").get<std::string>();
+    if (stage == "shared_lfg") return LeaveOnlineLfgGroup(entry, guid);
     auto* field = sBattlefieldMgr->GetBattlefieldToZoneId(4197);
     if (stage == "worldport")
     {
@@ -583,6 +566,8 @@ RealmStep LeavePvp(Queued& entry, std::uint32_t guid)
         if (bot->IsBeingTeleported())
             return TeleportMatches(bot, destination) ? Pending(state) : Unproved(state, "leave_worldport_changed");
         if (!At(FindOnline(guid), destination)) return Pending(state);
+        if (bot->GetDelayedOperations() & (DELAYED_BG_MOUNT_RESTORE | DELAYED_BG_TAXI_RESTORE | DELAYED_BG_GROUP_RESTORE))
+            return Pending(state);
         auto group = GroupId(bot);
         if (group != state.at("result_group").get<std::uint64_t>()) return Unproved(state, "leave_group_cleanup_unproved");
         auto source = state.at("source").get<std::string>();
@@ -596,7 +581,7 @@ RealmStep LeavePvp(Queued& entry, std::uint32_t guid)
     if (FindOnline(guid) != bot) return fail("body_unavailable");
     if (auto why = Eligible(entry, guid, Purpose::LeavePvp); !why.empty()) return fail(why);
     auto* currentGroup = bot->GetGroup();
-    if (currentGroup && (currentGroup->isBGGroup() || currentGroup->isBFGroup() || currentGroup->isLFGGroup()))
+    if (currentGroup && (currentGroup->isBGGroup() || currentGroup->isBFGroup()))
         if (auto why = GroupDepartureReason(bot, currentGroup); !why.empty()) return fail(why);
     if (bot->InBattleground())
     {
@@ -616,29 +601,7 @@ RealmStep LeavePvp(Queued& entry, std::uint32_t guid)
         if (type == BATTLEGROUND_QUEUE_NONE) continue;
         if (bot->InBattleground() && type == BattlegroundMgr::BGQueueTypeId(bot->GetBattleground()->GetBgTypeID(),
             bot->GetBattleground()->GetArenaType())) continue; // Active BG slot is cleared by native map leave.
-        auto& queue = sBattlegroundMgr->GetBattlegroundQueue(type);
-        GroupQueueInfo info;
-        if (!queue.GetPlayerGroupInfoData(bot->GetGUID(), &info)) return fail("queue_receipt_unavailable");
-        // RemovePlayer recursively drops an entire uninvited rated group.
-        // Until the owner can debit/validate every affected body atomically,
-        // that native multi-body operation is deliberately refused.
-        if (info.IsRated && !info.IsInvitedToBGInstanceGUID && info.Players.size() > 1)
-            return fail("shared_rated_queue");
-        auto* templateBg = sBattlegroundMgr->GetBattlegroundTemplate(info.BgTypeId);
-        if (!templateBg) return fail("queue_template_unavailable");
-        state["changed"] = true;
-        queue.RemovePlayer(bot->GetGUID(), true);
-        GroupQueueInfo after;
-        if (queue.GetPlayerGroupInfoData(bot->GetGUID(), &after)) return Unproved(state, "queue_leave_unproved");
-        bot->RemoveBattlegroundQueueId(type);
-        if (bot->GetBattlegroundQueueIndex(type) < PLAYER_MAX_BATTLEGROUND_QUEUES)
-            return Unproved(state, "queue_slot_unproved");
-        WorldPacket status;
-        sBattlegroundMgr->BuildBattlegroundStatusPacket(&status, templateBg, static_cast<uint8>(slot), STATUS_NONE, 0, 0, 0, TEAM_NEUTRAL);
-        bot->SendDirectMessage(&status);
-        sBattlegroundMgr->ScheduleQueueUpdate(info.ArenaMatchmakerRating, info.ArenaType, type, info.BgTypeId,
-            static_cast<BattlegroundBracketId>(info.BracketId));
-        return Pending(state);
+        return LeaveNativeQueue(entry, guid, slot);
     }
     auto transition = [&](std::string source, Destination const& destination, std::uint64_t group)
     {
@@ -655,6 +618,7 @@ RealmStep LeavePvp(Queued& entry, std::uint32_t guid)
             return fail("busy:raid_owner");
         auto targetGroup = original ? original->GetGUID().GetRawValue() : 0;
         transition("bg", destination, targetGroup);
+        if (auto why = PrepareOrdinaryCleanupMutation(entry, guid, Scopes(state)); !why.empty()) return fail(why);
         bot->LeaveBattleground();
         return Pending(state);
     }
@@ -679,49 +643,23 @@ RealmStep LeavePvp(Queued& entry, std::uint32_t guid)
         if (lfgGroup && (lfgState == lfg::LFG_STATE_QUEUED || lfgState == lfg::LFG_STATE_ROLECHECK))
             return fail("shared_lfg_queue");
         if (exit == LfgExit::LeaveGroup)
-        {
-            // Removing the penultimate member may disband/teleport the last
-            // member too. Do not mutate a second body without its own proof.
-            if (group->GetMembersCount() == 2) return fail("shared_lfg_cleanup");
-            bool const teleports = bot->GetMap()->IsDungeon()
-                && bot->GetMapId() == sLFGMgr->GetDungeonMapId(group->GetGUID());
-            auto destination = teleports ? EntryPoint(bot)
-                : Destination{bot->GetMapId(), bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ(), bot->GetOrientation()};
-            if (!GroundMap(destination.map)) return fail("entry_point_unavailable");
-            transition("lfg", destination, 0);
-            group->RemoveMember(bot->GetGUID(), GROUP_REMOVEMETHOD_LEAVE);
-            return Pending(state);
-        }
+            return LeaveOnlineLfgGroup(entry, guid);
+        if (auto why = PrepareOrdinaryCleanupMutation(entry, guid,
+            {{bot->GetMapId(), bot->GetInstanceId(), GroupId(bot)}}); !why.empty()) return fail(why);
         state["changed"] = true;
         sLFGMgr->LeaveLfg(bot->GetGUID());
         if (sLFGMgr->GetState(bot->GetGUID()) != lfg::LFG_STATE_NONE) return Unproved(state, "lfg_queue_leave_unproved");
         return Pending(state);
     }
     if (field && WgMember(field, bot->GetGUID()))
-    {
-        for (auto team : {TEAM_ALLIANCE, TEAM_HORDE})
-            if (field->GetPlayersQueueSet(team).contains(bot->GetGUID()))
-            {
-                if (team != bot->GetTeamId()) return fail("wg_team_changed");
-                state["changed"] = true;
-                field->AskToLeaveQueue(bot);
-                if (field->GetPlayersQueueSet(team).contains(bot->GetGUID())) return Unproved(state, "wg_queue_leave_unproved");
-                return Pending(state);
-            }
-        if (bot->GetZoneId() != 4197) return fail("wg_membership_unproved");
-        auto destination = Home(bot);
-        if (!GroundMap(destination.map)) return fail("home_unavailable");
-        auto* original = bot->GetOriginalGroup();
-        if (original && (original->isRaidGroup() || original->IsMember(PlayerGuid(HumanGuid())))) return fail("busy:raid_owner");
-        auto resultingGroup = group && group->isBFGroup() ? (original ? original->GetGUID().GetRawValue() : 0) : GroupId(bot);
-        transition("wg", destination, resultingGroup);
-        field->PlayerAskToLeave(bot);
-        return Pending(state);
-    }
+        return fail("wg_private_state_unavailable");
     if (QueuedForPvp(bot) || bot->InBattleground() || sLFGMgr->GetState(bot->GetGUID()) != lfg::LFG_STATE_NONE
         || (bot->GetGroup() && (bot->GetGroup()->isLFGGroup() || bot->GetGroup()->isBGGroup() || bot->GetGroup()->isBFGroup())))
         return fail("leave_cleanup_unproved");
-    return Done(entry, state.at("changed").get<bool>() ? 1 : 0);
+    if (auto why = VerifyCleanupReceipts(entry); !why.empty()) return Unproved(state, why);
+    auto const changed = entry.payload.value("cleanup_changed_guids", Json::array());
+    bool const affected = std::find(changed.begin(), changed.end(), Json(guid)) != changed.end();
+    return Done(entry, state.at("changed").get<bool>() || affected ? 1 : 0);
 }
 
 template<class Parse, class Payload>
@@ -784,8 +722,6 @@ void RegisterRealmBodyHandlers()
         { entry.guids = command.guids; entry.payload = Json::object(); }, Rearm);
     QueueHandler("duel", ParseDuel, [](DuelCmd const& command, Queued& entry)
         { entry.guids = {command.guid, command.targetGuid}; entry.payload = {{"guid", command.guid}, {"target_guid", command.targetGuid}}; }, Duel);
-    QueueHandler("craft", ParseCraft, [](CraftCmd const& command, Queued& entry)
-        { entry.guids = {command.guid}; entry.payload = {{"spell_id", command.spellId}, {"count", command.count}}; }, Craft);
     QueueHandler("equip", ParseEquip, [](EquipCmd const& command, Queued& entry)
         { entry.guids = {command.guid}; entry.payload = Json::object(); }, Equip);
     QueueHandler("set_profession", ParseSetProfession, [](SetProfessionCmd const& command, Queued& entry)
