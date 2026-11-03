@@ -4,6 +4,7 @@
 #include "RealmPvp.h"
 #include "RealmArenaObserver.h"
 #include "RealmCraft.h"
+#include "RealmLfgReceipts.h"
 #include "Guild/GuildFishing.h"
 #include "ScriptMgr.h"
 
@@ -69,6 +70,7 @@ void AddSC_leeroy_realm()
     Leeroy::Realm::AddRealmPvpScripts();
     Leeroy::Realm::AddRealmArenaObserverScripts();
     Leeroy::Realm::AddRealmCraftScripts();
+    Leeroy::Realm::AddRealmLfgReceiptScripts();
     Leeroy::Guild::AddGuildFishingScripts();
 #if LEEROY_REALM_SPEECH
     Leeroy::Realm::AddRealmSpeechScripts();

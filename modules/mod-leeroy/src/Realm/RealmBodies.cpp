@@ -628,20 +628,19 @@ RealmStep LeavePvp(Queued& entry, std::uint32_t guid)
     if (exit != LfgExit::None)
     {
         auto lfgGroup = sLFGMgr->GetGroup(bot->GetGUID());
-        // Queued/rolecheck/proposal leave can alter other applicants. A
-        // proposal's complete participant set is not publicly available.
+        // Shared applicants need the exact native producer receipt. Proposal
+        // coverage remains unavailable without its complete participant proof.
         if (lfgState == lfg::LFG_STATE_PROPOSAL) return fail("shared_lfg_proposal");
         if (lfgGroup)
         {
             auto groupState = sLFGMgr->GetState(lfgGroup);
             if (groupState == lfg::LFG_STATE_PROPOSAL) return fail("shared_lfg_proposal");
             if (groupState == lfg::LFG_STATE_QUEUED || groupState == lfg::LFG_STATE_ROLECHECK)
-                return fail("shared_lfg_queue");
+                return LeaveObservedLfgApplicants(entry, guid);
         }
-        // The full LFG participant set is private. A nonempty group identity
-        // cannot prove that the apparently solo applicant is the only body.
+        // A reverse group identity alone cannot prove the affected closure.
         if (lfgGroup && (lfgState == lfg::LFG_STATE_QUEUED || lfgState == lfg::LFG_STATE_ROLECHECK))
-            return fail("shared_lfg_queue");
+            return LeaveObservedLfgApplicants(entry, guid);
         if (exit == LfgExit::LeaveGroup)
             return LeaveOnlineLfgGroup(entry, guid);
         if (auto why = PrepareOrdinaryCleanupMutation(entry, guid,
