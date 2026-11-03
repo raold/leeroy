@@ -8,6 +8,7 @@
 #include "RealmGuild.h"
 #include "RealmBank.h"
 #include "RealmMail.h"
+#include "RealmCalendar.h"
 #include "Guild/GuildFishing.h"
 #include "ScriptMgr.h"
 
@@ -37,6 +38,7 @@ void RegisterRealmHandlers()
     RegisterRealmGuildHandlers();
     RegisterRealmBankHandlers();
     RegisterRealmMailHandlers();
+    RegisterRealmCalendarHandlers();
     RegisterCommand("realm_actors", [](nlohmann::json const& message)
     {
         std::string error;
@@ -79,6 +81,7 @@ void AddSC_leeroy_realm()
     Leeroy::Realm::AddRealmLfgReceiptScripts();
     Leeroy::Realm::AddRealmBankScripts();
     Leeroy::Realm::AddRealmMailScripts();
+    Leeroy::Realm::AddRealmCalendarScripts();
     Leeroy::Guild::AddGuildFishingScripts();
 #if LEEROY_REALM_SPEECH
     Leeroy::Realm::AddRealmSpeechScripts();
