@@ -342,7 +342,9 @@ class MindApp:
         self.embedder = Embedder(self.scheduler, cfg.models.embedding)
         self.personas = PersonaCache(self.store)
         stored = self.store.get_meta("human_guid")
-        self._human_named = bool(stored and stored.isdigit() and int(stored))  # by the bridge
+        self._human_named = bool(type(stored) is str and len(stored) <= 10
+                                 and stored.isascii() and stored.isdecimal()
+                                 and 0 < int(stored) <= 0xFFFFFFFF)  # by the bridge
         self._human = int(stored) if self._human_named else self._guild_master()
         self._human_name = self.store.get_meta("human_name")
         self.writer = MemoryWriter(self.store, self.embedder, self.clock, human=self._identity)
@@ -480,6 +482,12 @@ class MindApp:
         human_guid); before the bridge has named him, the stored roster's guild master (0 when
         there is none)."""
         return self._human
+
+    @property
+    def confirmed_human_guid(self) -> int:
+        """Bridge-confirmed persisted/current identity; excludes roster fallback."""
+        return (self._human if self._human_named and type(self._human) is int
+                and 0 < self._human <= 0xFFFFFFFF else 0)
 
     def _guild_master(self) -> int:
         """Who the human is on the very first start (an empty meta), as the CLI assumes: the
@@ -628,7 +636,8 @@ class MindApp:
     def _note_human(self, guid: int) -> None:
         """Keep the last non-zero human guid (pre-flight ruling 6); the first one the bridge
         names is stored even when it is the guild master assumed until then."""
-        if not guid or (guid == self._human and self._human_named):
+        if (type(guid) is not int or not 0 < guid <= 0xFFFFFFFF
+                or guid == self._human and self._human_named):
             return
         changed, self._human, self._human_named = guid != self._human, guid, True
         self.world.human_guid = guid

@@ -34,10 +34,13 @@ def test_real_mindapp_always_attaches_realm_last_and_default_off(tmp_path, clock
         assert app._background[-1] == app.realm.run
         assert app._shutdown_drains[-1] == app.realm.close
         assert app.skip_event_rows >= protocol.NOISY
-        assert not hasattr(app, "bodies")
+        assert app.bodies is app.realm.bodies
         assert app._before_handlers["hello"][-1] == app.realm.on_presence
         assert app._before_handlers["login"][-1] == app.realm.on_presence
         assert app._shutdown_receipts["realm_job"][-1] == app.realm.on_job
+        assert app._shutdown_receipts["job"][-1] == app.realm.on_bot_job
+        assert app._shutdown_receipts["realm_pvp"][-1] == app.realm.on_realm_pvp
+        assert app._connection_hooks[-1] == app.realm.on_connection
     finally:
         run(app.realm.close())
         app.store.close()

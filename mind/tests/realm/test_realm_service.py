@@ -11,6 +11,18 @@ from leeroy_mind.realm.service import JOB_COMMANDS, attach_realm
 from realm.fakes import RealmApp, enabled
 
 
+
+def enroll(realm, cmd):
+    """Enter the real synchronous queue barrier without starting its worker."""
+    async def establish():
+        if not realm.action_context().presence_known:
+            await realm.app.connection(True)
+            await realm.app.event(Hello(0, "test", "1", 21, realm.app.human_guid))
+    run(establish())
+    realm.queue.submit(cmd, owner="realm_day")
+    realm.on_send(cmd)
+
+
 @pytest.fixture
 def app(tmp_path, store, clock):
     return RealmApp(tmp_path, store, clock)
@@ -27,7 +39,7 @@ def test_disabled_attach_registers_only_without_runtime_work(app, monkeypatch):
     assert set(protocol.EVENTS) <= app.handlers.keys()
     assert all(len(handlers) == 1 for handlers in app.handlers.values())
     assert app.skip_event_rows >= protocol.NOISY | {"training_test"}
-    assert not hasattr(app, "bodies") and not hasattr(app, "night_runner")
+    assert app.bodies is realm.bodies and not hasattr(app, "night_runner")
     assert app.sent == []
     app.engine.speak.assert_not_called()
     app.engine.say_as.assert_not_called()
@@ -166,7 +178,7 @@ def test_already_sent_job_and_ack_settle_once_while_disabled(app, job_first):
     enabled(app.data_dir, True)
     realm = attach_realm(app)
     cmd = protocol.RealmMove("moving", 101, "harbor")
-    realm.on_send(cmd)
+    enroll(realm, cmd)
     enabled(app.data_dir, False)
     realm.reload()
     job = protocol.RealmJob(1000, cmd.id, "realm_move", "done", "", 101, 9)
@@ -178,33 +190,32 @@ def test_already_sent_job_and_ack_settle_once_while_disabled(app, job_first):
         action()
     rows = realm_store.recent_receipts(app.store.conn)
     assert {(r.stage, r.value) for r in rows} == {("ack", 0), ("job", 9)}
-    assert not realm._pending and len(realm._completed) == 1
+    assert not realm._pending and realm.action_store.get(cmd.id).state == "completed"
     assert not app.sent
 
 
-def test_only_exact_sent_identity_kind_and_cleanup_token_are_recorded(app):
+def test_only_exact_sent_identity_kind_and_target_are_recorded(app):
     enabled(app.data_dir, True)
     realm = attach_realm(app)
-    token = "a" * 32 + "-" + "b" * 16
-    other = "c" * 32 + "-" + "d" * 16
-    cmd = protocol.LeavePvp("cleanup", (101,), token)
+    cmd = protocol.ItemCount("count", 101, (5976,))
     realm.on_send(cmd)
-    realm.on_ack(protocol.LeavePvp("cleanup", (101,), token), Ack(0, "cleanup", True, ""))
+    realm.on_ack(protocol.ItemCount("count", 101, (5976,)), Ack(0, "count", True, ""))
     realm.on_ack(cmd, Ack(0, "other", True, ""))
-    for identity, kind, owner in [("other", "leave_pvp", token),
-                                  ("cleanup", "rearm", token), ("cleanup", "leave_pvp", other)]:
-        realm.on_job(protocol.RealmJob(0, identity, kind, "done", "", 0, 0, owner))
+    for identity, kind, guid, owner in [("other", "item_count", 101, ""),
+                                       ("count", "rearm", 101, ""),
+                                       ("count", "item_count", 102, ""),
+                                       ("count", "item_count", 101, "a" * 32 + "-" + "b" * 16)]:
+        realm.on_job(protocol.RealmJob(0, identity, kind, "done", "", guid, 0, owner))
     assert realm_store.recent_receipts(app.store.conn) == []
-    realm.on_ack(cmd, Ack(0, "cleanup", True, ""))
-    realm.on_job(protocol.RealmJob(0, "cleanup", "leave_pvp", "done", "", 0, 1, token))
+    realm.on_ack(cmd, Ack(0, "count", True, ""))
+    realm.on_job(protocol.RealmJob(0, "count", "item_count", "done", "", 101, 1))
     assert len(realm_store.recent_receipts(app.store.conn)) == 2
-
 
 def test_ack_only_commands_do_not_leak_pending_capacity(app):
     enabled(app.data_dir, True)
     realm = attach_realm(app)
     for i in range(realm.CAPACITY * 3):
-        cmd = protocol.GuildNote(f"note_{i}", 101, "test")
+        cmd = protocol.BankMoney(f"money_{i}", 1)
         realm.on_send(cmd)
         realm.on_ack(cmd, Ack(0, cmd.id, True, ""))
     assert not realm._pending and len(realm._completed) == realm.COMPLETED
@@ -215,7 +226,7 @@ def test_negative_calendar_ack_keeps_bounded_identity_for_later_job(app):
     enabled(app.data_dir, True)
     realm = attach_realm(app)
     cmd = protocol.CalendarPost("calendar", 101, "Meeting", "meeting", 1234567890)
-    realm.on_send(cmd)
+    enroll(realm, cmd)
     realm.on_ack(cmd, Ack(0, "calendar", False, "calendar_outcome_unknown"))
     assert not realm._pending
     enabled(app.data_dir, False)
@@ -226,27 +237,34 @@ def test_negative_calendar_ack_keeps_bounded_identity_for_later_job(app):
     assert {(r.stage, r.value) for r in realm_store.recent_receipts(app.store.conn)} == {("ack", 0), ("job", 777)}
 
 
-@pytest.mark.parametrize("action", ["create", "add", "drop"])
-def test_all_native_arena_team_actions_require_job_and_keep_value(app, action):
+def test_native_arena_team_create_requires_job_and_keeps_value(app):
     enabled(app.data_dir, True)
     realm = attach_realm(app)
-    cmd = (protocol.ArenaTeam("team", action, captain_guid=101, arena_type=2, name="Test Team")
-           if action == "create" else protocol.ArenaTeam("team", action, team_id=7, guid=102))
-    realm.on_send(cmd)
+    cmd = protocol.ArenaTeam("team", "create", captain_guid=101, arena_type=2, name="Test Team")
+    enroll(realm, cmd)
     realm.on_ack(cmd, Ack(0, "team", True, ""))
-    assert "team" in realm._pending
+    assert realm.action_store.get("team").state != "completed"
     realm.on_job(protocol.RealmJob(0, "team", "arena_team", "done", "", 101, 777))
-    assert not realm._pending
+    assert realm.action_store.get("team").state == "completed"
     assert realm_store.recent_receipts(app.store.conn)[0].value == 777
     assert "arena_team" in JOB_COMMANDS
 
+
+@pytest.mark.parametrize("action", ["add", "drop"])
+def test_arena_roster_mutation_requires_future_full_roster_admission(app, action):
+    enabled(app.data_dir, True)
+    realm = attach_realm(app)
+    cmd = protocol.ArenaTeam("team", action, team_id=7, guid=102)
+    with pytest.raises(ValueError):
+        enroll(realm, cmd)
+    assert not app.sent
 
 def test_pending_capacity_denies_before_dispatch_and_uncertain_errors_stay(app):
     enabled(app.data_dir, True)
     realm = attach_realm(app)
     for i in range(realm.CAPACITY):
-        realm.on_send(protocol.RealmMove(f"move_{i}", 101, "harbor"))
-    cmd = protocol.RealmMove("overflow", 101, "harbor")
+        realm.on_send(protocol.ItemCount(f"move_{i}", 101, (5976,)))
+    cmd = protocol.ItemCount("overflow", 101, (5976,))
     with pytest.raises(RuntimeError, match="capacity"):
         realm.on_send(cmd)
     first = realm._pending["move_0"].command
@@ -267,7 +285,7 @@ def test_real_ports_transport_started_before_disable_settles_through_close(app):
             await release.wait()
             return Ack(0, cmd.id, True, "")
         app.bridge.send = send
-        cmd = protocol.GuildNote("issued", 101, "test")
+        cmd = protocol.BankMoney("issued", 1)
         sending = asyncio.create_task(realm.ports.send(cmd))
         await started.wait()
         enabled(app.data_dir, False)

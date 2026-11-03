@@ -1,33 +1,39 @@
-"""Default-off Realm attachment and bounded, matched receipt diagnostics.
+"""Realm lifecycle, durable admission and bounded receipt diagnostics.
 
-Receipt rows are observations only. They never establish native body ownership
-and the in-memory command identities are intentionally not recovered on restart.
+The action journal and BodyLedger are ownership authority. Receipt rows remain
+observations; direct no-body diagnostics have their own bounded correlation.
 """
 
 import asyncio
 from collections import OrderedDict
 from dataclasses import dataclass
 import logging
+import uuid
 
+from leeroy_mind.bodies import BodyLedger
+from leeroy_mind.bridge import TransportState
 from leeroy_mind.config import ConfigError
 from leeroy_mind.protocol import event_type
 
 from . import protocol, store
+from .action_policy import classify
+from .action_store import ActionStore
+from .actions import ActionContext, ActionQueue
 from .config import load_realm_config
 from .ports import LivePorts, RealmDisabled
+from .recall import Recall
 
 log = logging.getLogger(__name__)
 
-# Native kQueued in Lib/LeeroyRealmCommands.cpp, plus the two direct handlers
-# which publish a value/result. All three arena_team actions use the queue and
-# therefore publish a job (create returns the new team ID).
 JOB_COMMANDS = frozenset({
     "realm_move", "rpg_status", "leave_pvp", "rearm", "wg_join", "arena_queue",
     "duel", "craft", "equip", "set_profession", "transmog_set",
     "calendar_signup", "mail_send", "bank_deposit", "bank_withdraw",
     "bank_stock", "guild_grow", "arena_team", "item_count", "calendar_post",
 })
-_PVP_ORIGINS = frozenset({"wg_join", "arena_queue", "duel"})
+_DIRECT = frozenset({protocol.RealmActors, protocol.RealmSay, protocol.RealmEmote,
+                     protocol.Announce, protocol.CalendarUpdate, protocol.BankMoney,
+                     protocol.GuildRename, protocol.ItemCount})
 
 
 @dataclass(slots=True)
@@ -40,13 +46,6 @@ class _Sent:
 
 
 class Realm:
-    """Service foundation. Future parts implement async on_event(ev) and tick().
-
-    add_part registers declared events once. Parts must use this service's ports
-    for external work; their owned child tasks are cancelled on local disable.
-    Construction only registers callbacks; run() owns the asynchronous work.
-    """
-
     CAPACITY = 128
     COMPLETED = 256
 
@@ -55,6 +54,13 @@ class Realm:
         self.cfg = load_realm_config(app.data_dir / "mind.toml")
         self.enabled = self.cfg.enabled
         self._generation = 0
+        self._process_id = uuid.uuid4().hex
+        self._connected = False
+        self._presence_known = False
+        self._connection_epoch = 0
+        self._transport_epoch = 0
+        self._guild = 0
+        self._human = 0
         self._parts = []
         self._handlers = set()
         self._children = set()
@@ -63,39 +69,131 @@ class Realm:
         self._stopping = False
         self._running = False
         self._close_task = None
+        self._queue_task = None
         self.ports = LivePorts(app, on_send=self.on_send, on_ack=self.on_ack,
                                on_send_error=self.on_send_error)
         self.ports.set_enabled(self.enabled)
+        self.action_store = ActionStore(self.ports.conn)
+        # Recovery is local bookkeeping, exactly once, before the source and
+        # app attachment exist. Prepared payloads are never replayed.
+        self.action_store.recover(process_id=self._process_id, now=self.ports.now())
+        self.bodies = BodyLedger(app.clock, run_proof=self.ports.run_body_proof)
+        self.bodies.add_holder_source("raid", self.ports.raid_body_holds)
+        self.bodies.add_holder_source("offline_raid", self.ports.offline_body_holds)
+        self.bodies.add_holder_source("training", self.ports.training_body_holds)
+        self.bodies.add_holder_source("realm_actions", self.action_store.holds)
+        self.queue = ActionQueue(self.ports.send, self.bodies, app.clock,
+                                 store=self.action_store, context=self.action_context,
+                                 actor_probe=None)
+        self.recall = Recall(self.ports, self.queue, self.bodies, app.clock)
+        self._raid_state = self.ports.raid_state()
+        app.bodies = self.bodies
+
+    def _transport(self):
+        try:
+            state = self.app.bridge.transport_state
+        except AttributeError:
+            return TransportState(0, False)
+        if (type(state) is not TransportState or type(state.epoch) is not int or state.epoch < 0
+                or type(state.connected) is not bool):
+            return TransportState(0, False)
+        return state
+
+    def _delivery_epoch(self, value):
+        try:
+            epoch = self.app.bridge.delivery_epoch(value)
+        except AttributeError:
+            return None
+        return epoch if type(epoch) is int and epoch > 0 else None
+
+    def action_context(self):
+        transport = self._transport()
+        connected = (self._connected and transport.connected
+                     and transport.epoch == self._transport_epoch)
+        known = (connected and self._presence_known and self._human > 0
+                 and self.app.confirmed_human_guid == self._human)
+        return ActionContext(self.enabled and not self._stopping, connected, known,
+                             self._generation, self._process_id, self._connection_epoch,
+                             self._guild, self._human)
+
+    def _invalidate(self):
+        self._generation += 1
+        for task in tuple(self._children):
+            task.cancel()
+        # Also fence ports-owned speech/model children before any presence await.
+        self.ports.set_enabled(False)
+        self.ports.set_enabled(self.enabled and not self._stopping)
+        if hasattr(self, "queue"):
+            self.queue.context_changed()
+            self.recall.invalidate()
 
     def _set_enabled(self, enabled):
-        self.enabled = enabled and not self._stopping
-        if not self.enabled:
-            self._generation += 1
-            for task in tuple(self._children):
-                task.cancel()
-        self.ports.set_enabled(self.enabled)
+        enabled = enabled and not self._stopping
+        changed = enabled != self.enabled
+        self.enabled = enabled
+        if changed or not enabled:
+            self._invalidate()
+        else:
+            self.ports.set_enabled(enabled)
 
     def reload(self):
-        """Synchronous presence-boundary reload, before any app session awaits."""
+        """Synchronous switch reload; never establishes connection identity."""
         try:
             self.cfg = load_realm_config(self.app.data_dir / "mind.toml")
         except ConfigError:
-            # An unreadable switch cannot authorize continued work.
             log.warning("realm_config_unavailable")
             self._set_enabled(False)
             return
         self._set_enabled(self.cfg.enabled)
 
+    async def on_connection(self, up):
+        if type(up) is not bool:
+            raise ValueError("connection state must be bool")
+        transport = self._transport()
+        epoch = self._delivery_epoch(up)
+        self._connected = bool(up and transport.connected and epoch == transport.epoch and epoch)
+        self._presence_known = False
+        if self._connected:
+            if epoch != self._transport_epoch:
+                self._connection_epoch += 1
+            self._transport_epoch = epoch
+        self._invalidate()
+
     async def on_presence(self, ev):
         name = event_type(ev)
+        if name in {"login", "logout"} and self.app.is_backlog(ev):
+            return
         if name == "hello":
-            if ev.human_guid != self.ports.human().guid:
-                # The app adopts this identity after its before handlers. Fence
-                # both service and ports children before that row can await.
-                self._set_enabled(False)
+            # Ordinary hello bookkeeping can await session/model work. Invalidate
+            # every old ticket synchronously before that app row begins.
+            self._presence_known = False
+            self._invalidate()
             self.reload()
-        elif name == "login" and ev.human and ev.guid == self.ports.human().guid:
-            self.reload()
+        elif name in {"login", "logout"} and ev.human:
+            if ev.guid != self.app.human_guid:
+                self._presence_known = False
+                self._invalidate()
+            if name == "login":
+                self.reload()
+
+    def _adopt_hello(self, ev):
+        transport = self._transport()
+        epoch = self._delivery_epoch(ev)
+        human = self.app.confirmed_human_guid
+        valid = (self._connected and transport.connected and epoch == transport.epoch
+                 and epoch == self._transport_epoch and epoch is not None
+                 and type(ev.guild_id) is int and 0 < ev.guild_id <= 0xFFFFFFFF
+                 and type(human) is int and 0 < human <= 0xFFFFFFFF
+                 and human == self.app.human_guid
+                 and type(ev.human_guid) is int and 0 <= ev.human_guid <= 0xFFFFFFFF
+                 and (ev.human_guid == 0 or ev.human_guid == human))
+        self._guild = ev.guild_id if valid else 0
+        self._human = human if valid else 0
+        self._presence_known = valid
+        self.queue.context_changed()
+        if valid:
+            self.queue.on_hello(ev)
+            self.recall.on_hello(ev)
 
     def _register_event(self, name):
         if name not in self._handlers:
@@ -103,7 +201,6 @@ class Realm:
             self._handlers.add(name)
 
     def add_part(self, part, *, event_types=()):
-        """Attach a real part without starting tasks or invoking its methods."""
         if self._stopping:
             raise RuntimeError("realm is closing")
         names = frozenset(event_types)
@@ -116,8 +213,8 @@ class Realm:
         human = self.ports.human().guid
 
         def valid():
-            return (self.enabled and not self._stopping
-                    and generation == self._generation and self.ports.human().guid == human)
+            return (self.enabled and not self._stopping and generation == self._generation
+                    and self.ports.human().guid == human)
 
         async def invoke():
             if valid():
@@ -137,15 +234,24 @@ class Realm:
 
     async def on_event(self, ev):
         name = event_type(ev)
+        # Authority reducers precede both local gates and first-receipt diagnostic
+        # dedup. In particular Wg enrollment success and later failure both run.
         if name == "realm_job":
-            if not self.on_job(ev):
-                return
+            self.on_job(ev)
+        elif name == "job":
+            self.on_bot_job(ev)
+        elif name == "realm_pvp":
+            self.on_realm_pvp(ev)
         elif name == "guard" and ev.action == "his_kick":
-            # App ordinary handlers run outside Store.transaction(). This local
-            # write is deliberately allowed even while Realm is disabled.
             store.record_kick(self.ports.conn, ev.guid, ev.ts / 1000, ev.rank)
+        elif name == "hello" and not self._stopping:
+            self._adopt_hello(ev)
+        if name in {"login", "logout"} and self.app.is_backlog(ev):
+            return
         if not self.enabled or self._stopping:
             return
+        if name == "login" and ev.human and ev.guid == self._human and self._presence_known:
+            self.recall.on_login(self.ports.now())
         generation = self._generation
         self.ports.observe(ev, name)
         for part, names in tuple(self._parts):
@@ -155,9 +261,15 @@ class Realm:
                 await self._owned(lambda part=part: part.on_event(ev))
 
     async def tick(self):
-        """Advance real registered parts and the ports-owned speech queue once."""
+        # Retained reservations and provider releases continue to be observed
+        # while disabled. Callbacks still cannot admit local-disabled work.
+        self.bodies.poll()
         if not self.enabled or self._stopping:
             return
+        state = self.ports.raid_state()
+        self.recall.on_raid_state(self._raid_state, state)
+        self._raid_state = state
+        self.recall.tick(self.ports.now())
         generation = self._generation
         for part, _ in tuple(self._parts):
             if generation != self._generation or not self.enabled or self._stopping:
@@ -172,8 +284,12 @@ class Realm:
         if self._running:
             raise RuntimeError("realm already running")
         self._running = True
+        self._queue_task = asyncio.create_task(self.queue.run())
         try:
             while not self._stopping:
+                if self._queue_task.done():
+                    self._queue_task.result()
+                    raise RuntimeError("realm action queue stopped")
                 await self.tick()
                 await self.app.clock.sleep(1)
         finally:
@@ -190,24 +306,26 @@ class Realm:
     async def _drain(self):
         if self._children:
             await asyncio.gather(*tuple(self._children), return_exceptions=True)
-        # Ports joins already-entered shielded transport settlement, including
-        # ACK callbacks, before app closes its bridge and database.
+        await self.queue.close()
+        if self._queue_task is not None:
+            await self._queue_task
+        # Actual settlement callbacks remain active while both drains wait.
         await self.ports.close()
 
     def on_send(self, cmd):
-        """Enroll immediately before Bridge.send; may deny before dispatch."""
         if not self.enabled or self._stopping:
             raise RealmDisabled("realm disabled")
-        kind = next((name for name, cls in protocol.COMMANDS.items()
-                     if type(cmd) is cls), None)
-        if (kind is None or type(cmd.id) is not str or not cmd.id
-                or len(cmd.id) > 128 or not cmd.id.isascii()
-                or not all(c.isalnum() or c in "_-" for c in cmd.id)
-                or cmd.id in self._pending or cmd.id in self._completed):
+        if self.queue.owns_command(cmd):
+            self.queue.before_send(cmd)
+            return
+        if type(cmd) not in _DIRECT:
+            raise ValueError("realm body command requires queue enrollment")
+        classified = classify(cmd)
+        if cmd.id in self._pending or cmd.id in self._completed:
             raise ValueError("invalid realm command identity")
         if len(self._pending) >= self.CAPACITY:
             raise RuntimeError("realm command capacity exhausted")
-        self._pending[cmd.id] = _Sent(cmd, kind, kind in JOB_COMMANDS)
+        self._pending[cmd.id] = _Sent(cmd, classified.kind, classified.kind in JOB_COMMANDS)
 
     def _finish(self, command_id):
         sent = self._pending.pop(command_id)
@@ -215,38 +333,44 @@ class Realm:
         while len(self._completed) > self.COMPLETED:
             self._completed.popitem(last=False)
 
+    def _queued_receipt(self, command_id, *, stage, ok, reason, ts, value=0):
+        record = self.action_store.get(command_id)
+        if record is not None:
+            return store.record_receipt(self.ports.conn, command_id=command_id, kind=record.kind,
+                                        stage=stage, ok=ok, reason=reason, value=value, ts=ts)
+
     def on_ack(self, cmd, ack):
-        """Short synchronous local bookkeeping, including after local disable."""
+        if self.queue.on_ack(cmd, ack):
+            self._queued_receipt(cmd.id, stage="ack", ok=ack.ok, reason=ack.error, ts=self.ports.now())
+            return
         sent = self._pending.get(cmd.id)
         if (sent is None or sent.command is not cmd or sent.ack or ack.id != cmd.id
                 or type(ack.ok) is not bool or type(ack.error) is not str):
             return
         store.record_receipt(self.ports.conn, command_id=cmd.id, kind=sent.kind,
-                             stage="ack", ok=ack.ok, reason=ack.error,
-                             ts=self.ports.now())
+                             stage="ack", ok=ack.ok, reason=ack.error, ts=self.ports.now())
         sent.ack = True
         if not ack.ok or not sent.expects_job or sent.job:
             self._finish(cmd.id)
 
     def on_send_error(self, cmd, error_type):
+        if self.queue.on_send_error(cmd, error_type):
+            return
         sent = self._pending.get(cmd.id)
         if sent is not None and sent.command is cmd and error_type == "NotConnected":
-            # This Bridge error proves writer.write was never entered. Timeouts,
-            # connection loss and unknown errors retain uncertain enrollment.
             del self._pending[cmd.id]
 
     def on_job(self, ev):
-        # calendar_post can publish an uncertain/failed result and return a
-        # negative ACK. The ACK frees pending capacity, while bounded completed
-        # identity evidence still permits its later matching job in either order.
+        """RealmJob authority and independent first-job diagnostics."""
+        if self.queue.on_realm_job(ev):
+            return self._queued_receipt(ev.id, stage="job", ok=ev.state == "done", reason=ev.reason,
+                                        value=ev.value, ts=ev.ts / 1000)
         sent = self._pending.get(ev.id) or self._completed.get(ev.id)
-        if sent is None or not sent.expects_job or sent.job or ev.kind != sent.kind:
+        if (sent is None or not sent.expects_job or sent.job or ev.kind != sent.kind
+                or ev.pvp_owner):
             return False
-        owner = getattr(sent.command, "pvp_owner", "")
-        if owner:
-            if ev.pvp_owner != owner:
-                return False
-        elif ev.pvp_owner and sent.kind not in _PVP_ORIGINS:
+        # ItemCount is the sole direct no-body command which emits a result.
+        if ev.guid != sent.command.guid:
             return False
         store.record_receipt(self.ports.conn, command_id=ev.id, kind=sent.kind,
                              stage="job", ok=ev.state == "done", reason=ev.reason,
@@ -256,18 +380,29 @@ class Realm:
             self._finish(ev.id)
         return True
 
+    def on_bot_job(self, ev):
+        if not self.queue.on_job(ev):
+            return False
+        return self._queued_receipt(ev.id, stage="job", ok=ev.state == "done" and not ev.skipped,
+                                    reason=ev.reason, ts=ev.ts / 1000)
+
+    def on_realm_pvp(self, ev):
+        return self.queue.on_realm_pvp(ev)
+
 
 def attach_realm(app) -> Realm:
-    """Always attach the foundation, without sockets, tasks, MySQL or models."""
+    """Attach recovered local ownership without sockets, tasks or models."""
     protocol.register()
     realm = Realm(app)
     app.skip_event_rows |= protocol.NOISY
-    # Presence switches preempt before app session startup can await a model.
-    for name in ("hello", "login"):
+    for name in ("hello", "login", "logout"):
         app.register_event_handler(name, realm.on_presence, before=True)
-    for name in (*protocol.EVENTS, "hello", "login", "logout", "boss", "group"):
+    for name in (*protocol.EVENTS, "job", "hello", "login", "logout", "boss", "group"):
         realm._register_event(name)
+    app.register_connection_hook(realm.on_connection)
     app.register_background(realm.run)
     app.register_shutdown_receipt("realm_job", realm.on_job)
+    app.register_shutdown_receipt("job", realm.on_bot_job)
+    app.register_shutdown_receipt("realm_pvp", realm.on_realm_pvp)
     app.register_shutdown_drain(realm.close)
     return realm
