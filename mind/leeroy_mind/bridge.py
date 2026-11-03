@@ -7,8 +7,9 @@ import random
 from typing import Awaitable, Callable
 
 from .clock import Clock, SystemClock, now_ms
+from .ingress import WireOrigin
 from .protocol import (MAX_LINE_BYTES, Ack, Cast, Command, Error, Event, GetCast, Hello, Ping,
-                       Pong, ProtocolError, encode_command, parse_event)
+                       Pong, ProtocolError, encode_command, parse_event_with_origin)
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +60,13 @@ class TransportState:
     """Synchronous local writer generation; queued callbacks cannot prolong it."""
     epoch: int
     connected: bool
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _DeliveryMetadata:
+    epoch: int | None
+    origin: WireOrigin | None = None
+    task: asyncio.Task | None = None
 
 
 class BridgeClient:
@@ -122,7 +130,19 @@ class BridgeClient:
         if (item is None or item[1] is not value
                 or item[0] != ("conn" if type(value) is bool else "event")):
             return None
-        return item[2]
+        return item[2].epoch
+
+    def delivery_origin(self, value: Event) -> WireOrigin | None:
+        """Origin of the exact event, only inside its active dispatcher task."""
+        item = self._delivery
+        if item is None or item[0] != "event" or item[1] is not value:
+            return None
+        try:
+            task = asyncio.current_task()
+        except RuntimeError:  # a synchronous caller outside an event loop
+            return None
+        metadata = item[2]
+        return metadata.origin if task is not None and metadata.task is task else None
 
     async def wait_connected(self, timeout: float | None = None) -> None:
         await asyncio.wait_for(self._connected_event.wait(), timeout)
@@ -255,7 +275,11 @@ class BridgeClient:
         try:
             while (item := await self._queue.get()) is not None:
                 kind, value = item[:2]
-                self._delivery = (kind, value, item[2] if len(item) == 3 else None)
+                payload = item[2] if len(item) == 3 else None
+                metadata = (payload if isinstance(payload, _DeliveryMetadata)
+                            else _DeliveryMetadata(payload))
+                self._delivery = (kind, value, dataclasses.replace(
+                    metadata, task=asyncio.current_task()))
                 try:
                     if kind == "conn":
                         if self._on_connection is not None:
@@ -295,12 +319,13 @@ class BridgeClient:
             if not line:
                 continue
             try:
-                ev = parse_event(line)
+                ev, origin = parse_event_with_origin(
+                    line, received_at=self._clock.now(), transport_epoch=transport_epoch)
             except ProtocolError as exc:
                 log.warning("bridge_line_rejected: %s", exc)
                 continue
             if self._handle(ev):
-                self._enqueue(("event", ev, transport_epoch))
+                self._enqueue(("event", ev, _DeliveryMetadata(transport_epoch, origin)))
 
     def _handle(self, ev: Event) -> bool:
         """Resolve pending sends. Returns True when the event goes on to on_event."""

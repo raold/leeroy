@@ -7,6 +7,8 @@ import typing
 import unicodedata
 from dataclasses import dataclass
 
+from .ingress import WireOrigin, _wire_origin
+
 PROTOCOL_VERSION = 1
 MAX_LINE_BYTES = 65536
 MAX_TEXT_BYTES = 255
@@ -400,6 +402,17 @@ def parse_event(line: bytes | str) -> Event:
         raise
     except Exception as exc:
         raise ProtocolError(f"unparseable line: {exc.__class__.__name__}") from None
+
+
+def parse_event_with_origin(line: bytes | str, *, received_at: float,
+                            transport_epoch: int) -> tuple[Event, WireOrigin | None]:
+    """Parse compatibly, adding strict complete-envelope metadata when available.
+
+    Constructing metadata here does not grant native dispatcher authority.
+    An ordinary accepted event may have no strict provenance.
+    """
+    ev = parse_event(line)
+    return ev, _wire_origin(line, received_at=received_at, transport_epoch=transport_epoch)
 
 
 def sanitize_say_text(text: str) -> str:

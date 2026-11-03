@@ -26,13 +26,14 @@ attach(self), then self.guild = install(self)) and use the registries and attrib
 import asyncio
 import functools
 import importlib.metadata
+import json
 import logging
 import math
 import os
 import random
 import re
 import statistics
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Awaitable, Callable, Literal
 
@@ -40,6 +41,7 @@ from leeroy_mind.bridge import BridgeClient
 from leeroy_mind.clock import Clock, SystemClock
 from leeroy_mind.config import ConfigError, MindConfig, load_config
 from leeroy_mind.human import HumanIdentity
+from leeroy_mind.ingress import RowReceipt, WireOrigin, chat_row_binding, game_row_binding
 from leeroy_mind.library.core import Library
 from leeroy_mind.llm.client import LLMClient, LLMError, OllamaClient
 from leeroy_mind.llm.presets import LIVE
@@ -98,6 +100,16 @@ LIBRARY_FILE = "library.db"  # the reference shelf `python -m leeroy_mind.librar
 OLLAMA_CHAT_CONF = Path(
     r"F:\azerothcore\build\bin\RelWithDebInfo\configs\modules\mod_ollama_chat.conf")
 _MEMORY_EVENTS = (Boss, Death, LootWon, Achievement, BgEnd, Zone)
+
+
+@dataclass(frozen=True, slots=True)
+class _RowDelivery:
+    event: Event
+    task: asyncio.Task
+    wire: WireOrigin
+    bound: bool = False
+    receipt: RowReceipt | None = None
+    ready: bool = False
 
 
 class _ActivityFlush:
@@ -368,6 +380,7 @@ class MindApp:
             on_line_sent=self._on_line_sent, library=self.library)
         self.bridge = BridgeClient(cfg.bridge.host, cfg.bridge.port, self.handle,
                                    clock=self.clock, on_connection=self._on_connection)
+        self._row_delivery: _RowDelivery | None = None
         self.arbiter = None
         self.running = False
         self.models_seen: set[str] | None = None  # what the last model check listed
@@ -690,25 +703,82 @@ class MindApp:
         """Presence preemption, the app's row, then ordinary registered handlers."""
         if self._closed:
             return
-        name = event_type(ev)
-        if self._stopping:
-            for handler in tuple(self._shutdown_receipts.get(name, ())):
-                try:
-                    handler(ev)
-                except Exception:
-                    # Receipt payloads and exception text can contain private data.
-                    log.warning("shutdown_receipt_failed: type=%s", name)
-            self._record_only(ev, name)
-            return
-        await self._dispatch_handlers(ev, name, self._before_handlers)
+        origin = getattr(self.bridge, "delivery_origin", lambda value: None)(ev)
+        self._row_delivery = (_RowDelivery(ev, asyncio.current_task(), origin)
+                              if origin is not None else None)
         try:
-            if await self._row(ev, name) is False:
-                return  # ignored outright (C27): no handler sees it either
-        except asyncio.CancelledError:
-            raise
+            name = event_type(ev)
+            if self._stopping:
+                for handler in tuple(self._shutdown_receipts.get(name, ())):
+                    try:
+                        handler(ev)
+                    except Exception:
+                        # Receipt payloads and exception text can contain private data.
+                        log.warning("shutdown_receipt_failed: type=%s", name)
+                self._record_only(ev, name)
+                return
+            await self._dispatch_handlers(ev, name, self._before_handlers)
+            try:
+                if await self._row(ev, name) is False:
+                    return  # ignored outright (C27): no handler sees it either
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("event_failed: type=%s", name)
+            else:
+                if (binding := self._active_row_delivery(ev)) is not None:
+                    self._row_delivery = replace(binding, ready=True)
+            await self._dispatch_handlers(ev, name, self._handlers)
+        finally:
+            self._row_delivery = None
+
+    def _active_row_delivery(self, ev: Event) -> _RowDelivery | None:
+        binding = self._row_delivery
+        if binding is None or binding.event is not ev:
+            return None
+        try:
+            task = asyncio.current_task()
+        except RuntimeError:
+            return None
+        if (task is not binding.task or self.bridge.delivery_origin(ev) is not binding.wire):
+            return None
+        return binding
+
+    def row_receipt(self, value: Event) -> RowReceipt | None:
+        """Committed source snapshot, after the row succeeds in its dispatcher task.
+
+        The digest is captured once, before subsequent row processing can mutate
+        source fields. A retained receipt must be revalidated against storage by
+        its eventual consumer; it is not future effect authority.
+        """
+        binding = self._active_row_delivery(value)
+        return binding.receipt if binding is not None and binding.ready else None
+
+    def _capture_row(self, ev: Event, row_kind: str, row_id: int, backlog: bool) -> None:
+        binding = self._active_row_delivery(ev)
+        if binding is None or binding.bound:
+            return
+        # Even a failed capture is final for this delivery. Never refresh a
+        # digest after later source-field or threading mutations.
+        self._row_delivery = replace(binding, bound=True)
+        try:
+            if row_kind == "game_event":
+                row = self.store._one(
+                    "SELECT id, type, payload FROM game_event WHERE id = ?", (row_id,))
+                digest = game_row_binding(row["id"], row["type"], json.loads(row["payload"]))
+            else:
+                row = self.store._one(
+                    "SELECT id, channel, from_guid, from_name, to_guid, text, map, zone, origin "
+                    "FROM chat_line WHERE id = ?", (row_id,))
+                digest = chat_row_binding(row["id"], **{
+                    key: row[key] for key in ("channel", "from_guid", "from_name", "to_guid",
+                                              "text", "map", "zone", "origin")})
+            receipt = RowReceipt(row_kind, row_id, digest, binding.wire, backlog)
         except Exception:
-            log.exception("event_failed: type=%s", name)
-        await self._dispatch_handlers(ev, name, self._handlers)
+            # Optional provenance cannot change ordinary event processing.
+            log.warning("row_binding_unavailable: kind=%s", row_kind)
+            return
+        self._row_delivery = replace(self._row_delivery, receipt=receipt)
 
     async def _dispatch_handlers(self, ev, name, registry):
         for handler in list(registry.get(name, ())):
@@ -741,18 +811,21 @@ class MindApp:
             await self._on_human_presence(ev, now, backlog)
         elif isinstance(ev, (AfkEvent, TextEmote)):
             if not getattr(ev, "via_bridge", False):  # C5: the mind's own emotes, as echoes
-                self.store.insert_game_event(ev, session_id=self._session_id,
-                                             ts=self._event_at(ev, now, backlog))
+                event_id = self.store.insert_game_event(ev, session_id=self._session_id,
+                                                       ts=self._event_at(ev, now, backlog))
+                self._capture_row(ev, "game_event", event_id, backlog)
                 self.world.apply(ev, now)
         elif isinstance(ev, Error):
             log.warning("bridge_error: message=%r", ev.message)
         elif name not in CORE_EVENT_TYPES:
             if name not in self.skip_event_rows:
-                self.store.insert_game_event(ev, session_id=self._session_id,
-                                             ts=self._event_at(ev, now, backlog))
+                event_id = self.store.insert_game_event(ev, session_id=self._session_id,
+                                                       ts=self._event_at(ev, now, backlog))
+                self._capture_row(ev, "game_event", event_id, backlog)
         else:
             at = self._event_at(ev, now, backlog)  # a replayed one is stored and remembered then
             event_id = self.store.insert_game_event(ev, session_id=self._session_id, ts=at)
+            self._capture_row(ev, "game_event", event_id, backlog)
             self.world.apply(ev, now)
             if isinstance(ev, Group):
                 self.raid.on_group(ev)
@@ -795,8 +868,9 @@ class MindApp:
         login = isinstance(ev, Login)
         if login and not backlog and self._session_id is None:
             await self._start_session(now)
-        self.store.insert_game_event(ev, session_id=self._session_id,
-                                     ts=self._event_at(ev, now, backlog))
+        event_id = self.store.insert_game_event(ev, session_id=self._session_id,
+                                               ts=self._event_at(ev, now, backlog))
+        self._capture_row(ev, "game_event", event_id, backlog)
         self.world.apply(ev, now)
         if backlog:
             return
@@ -819,6 +893,7 @@ class MindApp:
         at = self._event_at(ev, now, backlog)
         line_id = self.store.insert_chat_line(ev, session_id=self._session_id, origin=origin,
                                               audience=audience, ts=at)
+        self._capture_row(ev, "chat_line", line_id, backlog)
         if not backlog:
             self._spoke_at[ev.from_guid] = now
         if origin != "human":
