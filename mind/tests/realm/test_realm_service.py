@@ -38,7 +38,9 @@ def test_disabled_attach_registers_only_without_runtime_work(app, monkeypatch):
     assert app.drains == [realm.close]
     assert set(protocol.EVENTS) <= app.handlers.keys()
     assert all(len(handlers) == 1 for handlers in app.handlers.values())
-    assert app.skip_event_rows >= protocol.NOISY | {"training_test"}
+    assert app.skip_event_rows >= (protocol.NOISY - {"channel_chat"}) | {"training_test"}
+    assert "channel_chat" not in app.skip_event_rows
+    assert app.handlers["bg_end"] == [realm.on_event]
     assert app.bodies is realm.bodies and not hasattr(app, "night_runner")
     assert app.sent == []
     app.engine.speak.assert_not_called()

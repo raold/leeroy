@@ -13,15 +13,19 @@ import uuid
 from leeroy_mind.bodies import BodyLedger
 from leeroy_mind.bridge import TransportState
 from leeroy_mind.config import ConfigError
-from leeroy_mind.protocol import event_type
+from leeroy_mind.protocol import BgEnd, event_type
 
 from . import protocol, store
 from .action_policy import classify
 from .action_store import ActionStore
 from .actions import ActionContext, ActionQueue
 from .config import load_realm_config
+from .fact_store import FactStore, FactWriteRejected
+from .kill_retention import PrivateKillRejected, PrivateKillStore
 from .ports import LivePorts, RealmDisabled
+from .provenance import capture_qualification_in_unit
 from .recall import Recall
+from .records import RealmObservation, Rejected
 
 log = logging.getLogger(__name__)
 
@@ -34,6 +38,8 @@ JOB_COMMANDS = frozenset({
 _DIRECT = frozenset({protocol.RealmActors, protocol.RealmSay, protocol.RealmEmote,
                      protocol.Announce, protocol.CalendarUpdate, protocol.BankMoney,
                      protocol.GuildRename, protocol.ItemCount})
+_SOURCES = frozenset({BgEnd, protocol.ArenaEnd, protocol.Wg, protocol.PvpKill,
+                      protocol.ChannelChat, protocol.RealmKill})
 
 
 @dataclass(slots=True)
@@ -51,6 +57,11 @@ class Realm:
 
     def __init__(self, app):
         self.app = app
+        self._source_app = app
+        self._source_store = app.store
+        self._source_bridge = app.bridge
+        self._facts = FactStore(app.store)
+        self._private_kills = PrivateKillStore(app.store)
         self.cfg = load_realm_config(app.data_dir / "mind.toml")
         self.enabled = self.cfg.enabled
         self._generation = 0
@@ -232,6 +243,79 @@ class Realm:
         finally:
             self._children.discard(task)
 
+    def _source_context_current(self, context: ActionContext, transport_epoch: int) -> bool:
+        """Check actual owners and writer, independently of queued connection hooks."""
+        app = self.app
+        if (app is not self._source_app or getattr(app, "realm", None) is not self
+                or app.store is not self._source_store or app.bridge is not self._source_bridge
+                or self._facts.store is not self._source_store
+                or self._private_kills.store is not self._source_store
+                or getattr(app, "stopping", None) is not False
+                or not self.enabled or self._stopping or type(context) is not ActionContext):
+            return False
+        current = self.action_context()
+        transport = self._transport()
+        return (current == context
+                and all(getattr(current, key) is True for key in ("enabled", "connected", "presence_known"))
+                and all(type(getattr(current, key)) is int and getattr(current, key) > 0
+                        for key in ("guild", "human", "connection_epoch"))
+                and app.confirmed_human_guid == current.human == app.human_guid
+                and self.ports.human().guid == current.human
+                and type(transport_epoch) is int and transport_epoch > 0
+                and transport.connected and transport.epoch == self._transport_epoch == transport_epoch)
+
+    def _capture_source_observation(self, ev):
+        """Capture the exact dispatcher receipt before creating any owned child."""
+        if type(ev) not in _SOURCES:
+            return None
+        receipt_reader = getattr(self.app, "row_receipt", None)
+        if receipt_reader is None:
+            return Rejected("invalid_input")
+        receipt = receipt_reader(ev)
+        if (receipt is None or self.app.bridge.delivery_origin(ev) is not receipt.wire
+                or self._delivery_epoch(ev) != receipt.wire.transport_epoch):
+            return Rejected("invalid_input")
+        with self._source_store.transaction():
+            context = self.action_context()
+            if not self._source_context_current(context, receipt.wire.transport_epoch):
+                return Rejected("proof_changed")
+            qualification = capture_qualification_in_unit(self._source_store,
+                human=self.ports.human(), event=ev, receipt=receipt, context=context,
+                confirmed_human_guid=self.app.confirmed_human_guid,
+                transport_epoch=self._transport().epoch, captured_at=self.app.clock.now())
+            if type(qualification) is Rejected:
+                return qualification
+            return RealmObservation(ev, receipt, context, qualification)
+
+    async def _on_source_observation(self, observation):
+        # There is deliberately no await from the final current-state barrier
+        # through reducer validation and commit of the original Store unit.
+        try:
+            with self._source_store.transaction():
+                if not self._source_context_current(observation.context,
+                                                    observation.receipt.wire.transport_epoch):
+                    return Rejected("proof_changed")
+                human = self.ports.human()
+                ev = observation.event
+                if type(ev) is not protocol.RealmKill:
+                    return self._facts.put_fact_in_unit(observation, human=human)
+                existing = self._source_store.conn.execute(
+                    "SELECT fact FROM realm_kill WHERE kill_id=?", (ev.kill_id,)).fetchone()
+                public = (existing["fact"] is not None if existing is not None else
+                          ev.human_present or len(set(ev.cast_members) & set(observation.qualification.cast)) >= 5)
+                if public:
+                    return self._facts.record_verified_kill_in_unit(observation, human=human)
+                return self._private_kills.record_in_unit(observation, human=human)
+        except (FactWriteRejected, PrivateKillRejected) as error:
+            # Semantic exceptions must leave the complete Store unit first.
+            return error.rejection
+
+    async def _admit_source_observation(self, observation):
+        result = await self._on_source_observation(observation)
+        if type(result) is Rejected:
+            log.debug("realm_source_rejected: type=%s reason=%s",
+                      event_type(observation.event), result.reason)
+
     async def on_event(self, ev):
         name = event_type(ev)
         # Authority reducers precede both local gates and first-receipt diagnostic
@@ -254,6 +338,11 @@ class Realm:
             self.recall.on_login(self.ports.now())
         generation = self._generation
         self.ports.observe(ev, name)
+        observation = self._capture_source_observation(ev)
+        if type(observation) is RealmObservation:
+            await self._owned(lambda: self._admit_source_observation(observation))
+        elif type(observation) is Rejected:
+            log.debug("realm_source_rejected: type=%s reason=%s", name, observation.reason)
         for part, names in tuple(self._parts):
             if generation != self._generation or not self.enabled or self._stopping:
                 return
@@ -394,10 +483,11 @@ def attach_realm(app) -> Realm:
     """Attach recovered local ownership without sockets, tasks or models."""
     protocol.register()
     realm = Realm(app)
-    app.skip_event_rows |= protocol.NOISY
+    app.skip_event_rows |= protocol.NOISY - {"channel_chat"}
+    app.skip_event_rows.discard("channel_chat")
     for name in ("hello", "login", "logout"):
         app.register_event_handler(name, realm.on_presence, before=True)
-    for name in (*protocol.EVENTS, "job", "hello", "login", "logout", "boss", "group"):
+    for name in (*protocol.EVENTS, "job", "hello", "login", "logout", "boss", "group", "bg_end"):
         realm._register_event(name)
     app.register_connection_hook(realm.on_connection)
     app.register_background(realm.run)

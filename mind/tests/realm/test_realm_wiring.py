@@ -33,7 +33,10 @@ def test_real_mindapp_always_attaches_realm_last_and_default_off(tmp_path, clock
         assert app.realm is not None and not app.realm.enabled
         assert app._background[-1] == app.realm.run
         assert app._shutdown_drains[-1] == app.realm.close
-        assert app.skip_event_rows >= protocol.NOISY
+        assert app.skip_event_rows >= protocol.NOISY - {"channel_chat"}
+        assert "channel_chat" not in app.skip_event_rows
+        assert app._handlers["bg_end"] == [app.realm.on_event]
+        assert app.stopping is False
         assert app.bodies is app.realm.bodies
         assert app._before_handlers["hello"][-1] == app.realm.on_presence
         assert app._before_handlers["login"][-1] == app.realm.on_presence

@@ -490,6 +490,11 @@ class MindApp:
         self._shutdown_receipts.setdefault(type_name, []).append(handler)
 
     @property
+    def stopping(self) -> bool:
+        """Expose the existing shutdown fence before asynchronous drains start."""
+        return self._stopping or self._closed
+
+    @property
     def human_guid(self) -> int:
         """The human's guid: the last non-zero one from hello, login or logout (meta
         human_guid); before the bridge has named him, the stored roster's guild master (0 when
