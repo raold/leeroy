@@ -779,7 +779,7 @@ void RegisterRealmBodyHandlers()
     QueueHandler("rpg_status", ParseRpgStatus, [](RpgStatusCmd const& command, Queued& entry)
         { entry.guids = {command.guid}; entry.payload = {{"status", command.status}, {"quest_id", command.questId}}; }, Rpg);
     QueueHandler("leave_pvp", ParseLeavePvp, [](LeavePvpCmd const& command, Queued& entry)
-        { entry.guids = command.guids; entry.payload = Json::object(); }, LeavePvp);
+        { entry.guids = command.guids; entry.payload = {{"pvp_owner", command.pvpOwner}}; }, LeavePvp);
     QueueHandler("rearm", ParseRearm, [](RearmCmd const& command, Queued& entry)
         { entry.guids = command.guids; entry.payload = Json::object(); }, Rearm);
     QueueHandler("duel", ParseDuel, [](DuelCmd const& command, Queued& entry)

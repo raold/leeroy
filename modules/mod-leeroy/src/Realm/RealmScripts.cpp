@@ -1,6 +1,8 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "RealmModule.h"
 #include "RealmPorts.h"
+#include "RealmPvp.h"
+#include "RealmArenaObserver.h"
 #include "ScriptMgr.h"
 
 // These later slices are registered only when their real implementation is
@@ -22,6 +24,9 @@ namespace Leeroy::Realm
 {
 void RegisterRealmHandlers()
 {
+    RegisterRealmContinuationHandlers();
+    RegisterRealmPvpHandlers();
+    RegisterRealmArenaObserverHandlers();
     RegisterCommand("realm_actors", [](nlohmann::json const& message)
     {
         std::string error;
@@ -58,6 +63,8 @@ void AddSC_leeroy_realm()
 {
     Leeroy::Realm::AddCastGuardScripts();
     new Leeroy::Realm::RealmLifecycleScript();
+    Leeroy::Realm::AddRealmPvpScripts();
+    Leeroy::Realm::AddRealmArenaObserverScripts();
 #if LEEROY_REALM_SPEECH
     Leeroy::Realm::AddRealmSpeechScripts();
 #endif
