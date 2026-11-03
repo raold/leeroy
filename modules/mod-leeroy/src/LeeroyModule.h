@@ -20,6 +20,12 @@ struct LeeroyConfig
     bool keepCast = true;
     bool bringCastOnline = true;
     bool excludeFromOllamaChat = true;
+    bool realmEnable = false;
+    uint32 realmMaxActionsPerTick = 5;
+    bool realmAnnounce = true;
+    bool castGuard = false;
+    std::string realmPlacesFile = "leeroy_places.csv";
+    std::string realmItemsFile = "leeroy_items.csv";
 };
 
 class LeeroyModule

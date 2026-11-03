@@ -7,6 +7,7 @@
 #include "LeeroyIntegrations.h"
 #include "LeeroyModule.h"
 #include "LeeroyProtocol.h"
+#include "RealmModule.h"
 
 #include "Log.h"
 #include "ObjectAccessor.h"
@@ -45,6 +46,7 @@ public:
         LeeroyModule& module = LeeroyModule::Instance();
         LeeroyConfig const old = module.Config();
         module.LoadConfig(reload);
+        Leeroy::Realm::RealmModule::Instance().Reload();
         if (!reload)
             return;
 
@@ -61,10 +63,12 @@ public:
     void OnStartup() override
     {
         LeeroyModule& module = LeeroyModule::Instance();
+        Leeroy::Realm::RealmModule::Instance().Start();
+        Leeroy::Realm::RegisterRealmHandlers();
         if (!module.Enabled())
         {
             LeeroyApplyPins();
-            LOG_INFO("module.leeroy", "mod-leeroy: disabled (Leeroy.Enable = 0), pins cleared, nothing started");
+            LOG_INFO("module.leeroy", "mod-leeroy: disabled (Leeroy.Enable = 0), ordinary cast released, owned cleanup pins retained");
             return;
         }
 
@@ -83,6 +87,7 @@ public:
     {
         LeeroyModule& module = LeeroyModule::Instance();
         LeeroyCastRegistry& cast = module.Cast();
+        Leeroy::Realm::TickCastGuard(diff); // Confirmed membership facts precede cast refresh and pinning.
         if (!module.Enabled())
         {
             // A reload turned the module off: let the cast go, and drop the mind rather than queue its commands
@@ -91,8 +96,9 @@ public:
             {
                 LeeroyApplyPins();
                 module.Bridge().Stop();
-                LOG_INFO("module.leeroy", "mod-leeroy: disabled by a config reload, pins cleared, bridge stopped");
+                LOG_INFO("module.leeroy", "mod-leeroy: disabled by a config reload, ordinary cast released, owned cleanup pins retained, bridge stopped");
             }
+            Leeroy::Realm::RealmModule::Instance().Tick(diff);
             return;
         }
 
@@ -153,6 +159,8 @@ public:
             bridge.Reply(LeeroyExecuteCommand(cmd));
         _commands.clear();
 
+        Leeroy::Realm::RealmModule::Instance().Tick(diff);
+
         if ((_afkPollTimer += diff) >= kAfkPollMs)
         {
             _afkPollTimer = 0;
@@ -169,6 +177,7 @@ public:
     void OnShutdown() override
     {
         LeeroyModule& module = LeeroyModule::Instance();
+        Leeroy::Realm::RealmModule::Instance().Shutdown();
         module.Bridge().Stop();
         module.CloseLog();
     }
