@@ -364,6 +364,8 @@ class RealmKill:
     human_guid: int
     killed_at_ms: int
     verified_at_ms: int
+    fight_started_at_ms: int
+    fight_ms: int
     map: int
     instance_id: int
     boss_id: int
@@ -374,10 +376,16 @@ class RealmKill:
     cast_members: tuple[int, ...]
 
     def __post_init__(self):
+        # The native steady elapsed value is independent of Unix chronology.
         if (not _proof_identity(self)
                 or any(not _uint(value, 253402300799999)
                        for value in (self.killed_at_ms, self.verified_at_ms, self.ts))
                 or not self.killed_at_ms <= self.verified_at_ms <= self.ts
+                or type(self.fight_started_at_ms) is not int or type(self.fight_ms) is not int
+                or not ((self.fight_started_at_ms == 0 and self.fight_ms == -1)
+                        or (_uint(self.fight_started_at_ms, 253402300799999)
+                            and self.fight_started_at_ms <= self.killed_at_ms
+                            and 0 <= self.fight_ms <= 3600000 and self.human_present is True))
                 or type(self.human_present) is not bool
                 or type(self.cast_members) is not tuple or len(self.cast_members) > 128
                 or not all(_uint(member) and member != self.human_guid for member in self.cast_members)

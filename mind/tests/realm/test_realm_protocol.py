@@ -62,8 +62,9 @@ EVENT_FIELDS = {
     "guard": "ts guid action rank reason",
     "realm_pvp": ("ts id pvp_owner origin_id kind origin_epoch revision guild human members stage "
                   "application_fenced reason cleanup_id"),
-    "realm_kill": ("ts kill_id native_epoch guild_id human_guid killed_at_ms verified_at_ms map instance_id "
-                   "boss_id difficulty size heroic human_present cast_members"),
+    "realm_kill": ("ts kill_id native_epoch guild_id human_guid killed_at_ms verified_at_ms "
+                   "fight_started_at_ms fight_ms map instance_id boss_id difficulty size heroic "
+                   "human_present cast_members"),
 }
 
 
@@ -188,6 +189,10 @@ def test_events_parse_from_native_fixture():
         if row["kind"] != "event":
             continue
         msg = row["msg"]
+        if row.get("valid", True) is False:
+            with pytest.raises(wire.ProtocolError):
+                wire.parse_event(json.dumps(msg))
+            continue
         parsed = wire.parse_event(json.dumps(msg))
         assert type(parsed) is protocol.EVENTS[msg["type"]]
         assert wire.event_type(parsed) == msg["type"]
@@ -204,7 +209,7 @@ def test_events_parse_from_native_fixture():
 def test_event_fields_remain_required_unless_native_contract_has_a_default():
     protocol.register()
     for row in fixtures():
-        if row["kind"] != "event":
+        if row["kind"] != "event" or row.get("valid", True) is False:
             continue
         msg = row["msg"]
         for field in dataclasses.fields(protocol.EVENTS[msg["type"]]):
@@ -350,14 +355,17 @@ def test_native_kill_exact_fixture_and_no_steady_fields():
     msg = kill_event()
     assert list(msg) == ["v", "type", *EVENT_FIELDS["realm_kill"].split()]
     assert set(msg) == {"v", "type", *EVENT_FIELDS["realm_kill"].split()}
+    assert len(msg) == 19
     parsed = wire.parse_event(json.dumps(msg))
     assert type(parsed) is protocol.RealmKill
     assert parsed.ts == msg["ts"] and parsed.cast_members == tuple(msg["cast_members"])
+    assert (parsed.fight_started_at_ms, parsed.fight_ms) == (0, -1)
     assert not any(key in msg for key in ("at_ms", "verified_ms", "steady_ms", "lifecycle"))
     with pytest.raises(dataclasses.FrozenInstanceError):
         parsed.ts = parsed.ts + 1
 
 
+@pytest.mark.parametrize("duration", [(0, -1), (1699999999000, 1000)])
 @pytest.mark.parametrize("field,value", [
     ("kill_id", ""), ("kill_id", "a" * 32 + ":0"), ("kill_id", "a" * 32 + ":01"),
     ("kill_id", "A" * 32 + ":1"), ("kill_id", "a" * 31 + ":1"),
@@ -379,10 +387,11 @@ def test_native_kill_exact_fixture_and_no_steady_fields():
     ("ts", 0), ("ts", False), ("ts", 253402300800000),
     ("verified_at_ms", 253402300800000), ("killed_at_ms", 253402300800000),
 ])
-def test_native_kill_rejects_invalid_proof_fields(field, value):
+def test_native_kill_rejects_invalid_proof_fields(field, value, duration):
     protocol.register()
+    msg = {**kill_event(), "fight_started_at_ms": duration[0], "fight_ms": duration[1], field: value}
     with pytest.raises(wire.ProtocolError):
-        wire.parse_event(json.dumps({**kill_event(), field: value}))
+        wire.parse_event(json.dumps(msg))
 
 
 @pytest.mark.parametrize("difficulty,size,heroic", [
@@ -425,6 +434,95 @@ def test_native_kill_direct_constructor_requires_immutable_cast():
         protocol.RealmKill(**fields)
     fields["cast_members"] = tuple(fields["cast_members"])
     assert protocol.RealmKill(**fields).cast_members == fields["cast_members"]
+
+
+@pytest.mark.parametrize("fight_started_at_ms,fight_ms,human_present", [
+    (0, -1, True), (0, -1, False),
+    (1699999999000, 0, True), (1699999999000, 999, True),
+    (1699999999000, 1000, True), (1699999999000, 3600000, True),
+])
+def test_native_kill_duration_preserves_exact_unknown_and_measured_pairs(
+        fight_started_at_ms, fight_ms, human_present):
+    protocol.register()
+    msg = {**kill_event(), "fight_started_at_ms": fight_started_at_ms, "fight_ms": fight_ms,
+           "human_present": human_present}
+    parsed = wire.parse_event(json.dumps(msg))
+    assert (parsed.fight_started_at_ms, parsed.fight_ms) == (fight_started_at_ms, fight_ms)
+    assert type(parsed.fight_started_at_ms) is type(parsed.fight_ms) is int
+    fields = {key: tuple(value) if key == "cast_members" else value for key, value in msg.items()
+              if key not in {"v", "type"}}
+    assert protocol.RealmKill(**fields) == parsed
+
+
+@pytest.mark.parametrize("wall_elapsed_ms,fight_ms", [
+    (1000, 0), (1000, 999), (0, 1000), (1, 3600000), (3600001, 1),
+])
+def test_native_kill_duration_does_not_derive_steady_elapsed_from_unix_times(wall_elapsed_ms, fight_ms):
+    protocol.register()
+    msg = kill_event()
+    msg.update(fight_started_at_ms=msg["killed_at_ms"] - wall_elapsed_ms, fight_ms=fight_ms)
+    parsed = wire.parse_event(json.dumps(msg))
+    assert parsed.fight_started_at_ms == msg["killed_at_ms"] - wall_elapsed_ms
+    assert parsed.fight_ms == fight_ms
+    assert parsed.fight_ms != parsed.killed_at_ms - parsed.fight_started_at_ms
+
+
+@pytest.mark.parametrize("at_ms", [1, 253402300799999])
+def test_native_kill_measured_start_accepts_inclusive_unix_boundaries(at_ms):
+    protocol.register()
+    msg = {**kill_event(), "fight_started_at_ms": at_ms, "fight_ms": 3600000,
+           "killed_at_ms": at_ms, "verified_at_ms": at_ms, "ts": at_ms}
+    parsed = wire.parse_event(json.dumps(msg))
+    assert parsed.fight_started_at_ms == parsed.killed_at_ms == at_ms
+    assert parsed.fight_ms == 3600000
+
+
+@pytest.mark.parametrize("fight_started_at_ms,fight_ms", [
+    (0, 0), (0, 1000), (1699999999000, -1), (1699999999000, -2),
+    (1699999999000, 3600001), (-1, -1), (-1, 1000),
+    (1700000000001, 1000), (253402300800000, 1000),
+    (True, 1000), (False, -1), (1699999999000, True), (1699999999000, False),
+    (1699999999000.0, 1000), (1699999999000, 1000.0), (0.0, -1), (0, -1.0),
+    ("1699999999000", 1000), (1699999999000, "1000"),
+    (None, 1000), (1699999999000, None),
+])
+def test_native_kill_duration_rejects_malformed_pairs_in_decoder_and_constructor(
+        fight_started_at_ms, fight_ms):
+    protocol.register()
+    msg = {**kill_event(), "fight_started_at_ms": fight_started_at_ms, "fight_ms": fight_ms}
+    with pytest.raises(wire.ProtocolError):
+        wire.parse_event(json.dumps(msg))
+    fields = {key: tuple(value) if key == "cast_members" else value for key, value in msg.items()
+              if key not in {"v", "type"}}
+    with pytest.raises(ValueError, match="kill proof"):
+        protocol.RealmKill(**fields)
+
+
+@pytest.mark.parametrize("human_present", [False, 0, 1, "true", None])
+def test_native_kill_measured_duration_requires_exact_human_presence(human_present):
+    protocol.register()
+    msg = {**kill_event(), "fight_started_at_ms": 1699999999000, "fight_ms": 1000,
+           "human_present": human_present}
+    with pytest.raises(wire.ProtocolError):
+        wire.parse_event(json.dumps(msg))
+    fields = {key: tuple(value) if key == "cast_members" else value for key, value in msg.items()
+              if key not in {"v", "type"}}
+    with pytest.raises(ValueError, match="kill proof"):
+        protocol.RealmKill(**fields)
+
+
+@pytest.mark.parametrize("missing", [
+    ("fight_started_at_ms",), ("fight_ms",), ("fight_started_at_ms", "fight_ms"),
+])
+def test_native_kill_duration_fields_are_required_without_legacy_upgrade(missing):
+    protocol.register()
+    msg = {key: value for key, value in kill_event().items() if key not in missing}
+    with pytest.raises(wire.ProtocolError, match=missing[0]):
+        wire.parse_event(json.dumps(msg))
+    fields = {key: tuple(value) if key == "cast_members" else value for key, value in msg.items()
+              if key not in {"v", "type"}}
+    with pytest.raises(TypeError, match=missing[0]):
+        protocol.RealmKill(**fields)
 
 
 def test_announce_proof_fields_are_required_and_zero_metrics_encode_explicitly():
