@@ -575,11 +575,14 @@ def test_annotation_row_bound_is_complete_not_a_prefix(graph):
     "verified_raid_kill_v1", "bg_result_v1", "arena_result_v1", "wg_result_v1",
     "pvp_result_v1", "channel_raid_topic_v1", "unknown",
 ])
-def test_all_live_and_unknown_policies_are_explicitly_unsupported(graph, policy):
+def test_live_and_unknown_policies_cannot_use_stored_rumor_graphs(graph, policy):
     with graph.transaction():
         rejected(audit(graph, policy=policy), "unsupported_policy")
-        with pytest.raises(ValueError, match="^invalid Realm public rendering$"):
-            render_public(policy, FIELDS)
+        if policy == "verified_raid_kill_v1":
+            assert render_public(policy, FIELDS) == f"The guild killed {BOSS}."
+        else:
+            with pytest.raises(ValueError, match="^invalid Realm public rendering$"):
+                render_public(policy, FIELDS)
 
 
 @pytest.mark.parametrize("changes", [
@@ -648,15 +651,19 @@ def test_database_faults_are_not_evidence_rejections(graph):
             audit(graph)
 
 
-def test_imports_do_not_initialize_service_config_ports_or_realm_wire(tmp_path):
+def test_definition_imports_do_not_register_wire_or_initialize_service_config_ports(tmp_path):
     package_root = Path(__file__).resolve().parents[2]
     script = """
 import sys
 sys.path.insert(0, sys.argv[1])
+import leeroy_mind.protocol as protocol
+before = dict(protocol._events), dict(protocol._commands)
 import leeroy_mind.realm.records
 import leeroy_mind.realm.provenance
+import leeroy_mind.realm.source_store
+assert before == (dict(protocol._events), dict(protocol._commands))
 for name in ('leeroy_mind.realm.service', 'leeroy_mind.realm.ports',
-             'leeroy_mind.realm.protocol', 'leeroy_mind.config'):
+             'leeroy_mind.config'):
     assert name not in sys.modules, name
 """
     probe = tmp_path / "import_probe.py"

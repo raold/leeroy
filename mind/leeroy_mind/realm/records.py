@@ -184,6 +184,10 @@ class QualificationSnapshot:
     speaker_kind: Literal["none", "human", "actor"]
     speaker_guid: int
     speaker_guild: int
+    transport_epoch: int
+    speaker_name: str
+    speaker_name_source: Literal["none", "human_meta", "cast_member", "realm_actor"]
+    speaker_name_sha256: str | None
 
     def __post_init__(self):
         _integer(self.guild, "guild", maximum=_U32); _integer(self.human, "human", maximum=_U32)
@@ -202,6 +206,18 @@ class QualificationSnapshot:
         if ((self.speaker_kind == "none") != (self.speaker_guid == 0 and self.speaker_guild == 0)
                 or (self.speaker_kind != "none" and (not self.speaker_guid or not self.speaker_guild))):
             raise ValueError("invalid speaker identity")
+        _integer(self.transport_epoch, "transport_epoch", maximum=(1 << 64) - 1)
+        _text(self.speaker_name, "speaker_name", 48, minimum=0)
+        _enum(self.speaker_name_source, "speaker_name_source", ("none", "human_meta", "cast_member", "realm_actor"))
+        if self.speaker_kind == "none":
+            if self.speaker_name != "" or self.speaker_name_source != "none" or self.speaker_name_sha256 is not None:
+                raise ValueError("invalid speaker name")
+        else:
+            _text(self.speaker_name, "speaker_name", 48)
+            _hash(self.speaker_name_sha256, "speaker_name_sha256")
+            allowed = ("human_meta", "cast_member") if self.speaker_kind == "human" else ("realm_actor",)
+            if self.speaker_name_source not in allowed:
+                raise ValueError("invalid speaker name source")
 
 
 @dataclass(frozen=True, slots=True)

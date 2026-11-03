@@ -403,7 +403,8 @@ def test_fact_draft_rejects_mutable_or_unbounded_scalar_shape(change):
 def test_actor_snapshot_and_read_stamps_reject_wrong_exact_numeric_types_and_duplicates():
     actor = records.ActorQualification(20, 50, "officer", "active", H)
     cast = [20]
-    snapshot = records.QualificationSnapshot(50, 10, 1.0, True, cast, [actor], [60], "none", 0, 0)
+    snapshot = records.QualificationSnapshot(50, 10, 1.0, True, cast, [actor], [60], "none", 0, 0,
+                                             7, "", "none", None)
     cast.append(21)
     assert snapshot.cast == (20,) and snapshot.actors == (actor,)
     with pytest.raises(ValueError):
@@ -412,6 +413,34 @@ def test_actor_snapshot_and_read_stamps_reject_wrong_exact_numeric_types_and_dup
         records.RealmReadStamp(1, H, (1, 1), H)
     with pytest.raises(ValueError):
         records.RealmInputs(("memory:1",), (records.RealmReadStamp(1, H, (1,), H),) * 2, "memory")
+
+
+@pytest.mark.parametrize("change", [
+    {"transport_epoch": True}, {"transport_epoch": 0}, {"transport_epoch": 1 << 64},
+    {"speaker_name": "Arkon"}, {"speaker_name_sha256": H}, {"speaker_name_source": "human_meta"},
+    {"speaker_kind": "human", "speaker_guid": 10, "speaker_guild": 50},
+])
+def test_qualification_requires_exact_transport_and_coherent_absent_speaker(change):
+    values = dict(guild=50, human=10, captured_at=1.0, human_confirmed=True, cast=(), actors=(),
+        rival_guilds=(), speaker_kind="none", speaker_guid=0, speaker_guild=0,
+        transport_epoch=7, speaker_name="", speaker_name_source="none", speaker_name_sha256=None)
+    with pytest.raises(ValueError):
+        records.QualificationSnapshot(**{**values, **change})
+
+
+@pytest.mark.parametrize("name,source,digest", [
+    ("é" * 24, "human_meta", H), ("Arkon", "cast_member", H),
+])
+def test_qualification_name_shape_does_not_claim_channel_legal_name_or_source_authority(name, source, digest):
+    snapshot = records.QualificationSnapshot(50, 10, 1.0, True, (), (), (), "human", 10, 50,
+                                             (1 << 64) - 1, name, source, digest)
+    assert snapshot.speaker_name == name and snapshot.speaker_name_sha256 == digest
+    with pytest.raises(ValueError):
+        dataclasses.replace(snapshot, speaker_name="é" * 25)
+    with pytest.raises(ValueError):
+        dataclasses.replace(snapshot, speaker_name_source="realm_actor")
+    with pytest.raises(ValueError):
+        dataclasses.replace(snapshot, speaker_name_sha256="A" * 64)
 
 
 def test_prepared_embedding_is_an_exact_finite_packed_vector_and_question_times_are_integer_ms():
