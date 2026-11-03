@@ -9,20 +9,29 @@ from leeroy_mind.app import acquire_instance_lock
 from leeroy_mind.training import cli
 
 
-@pytest.mark.parametrize("args", [["status"], ["gate"], ["report", "--week", "2026-W44"]])
+@pytest.mark.parametrize("args", [["status"], ["gate"], ["report", "--week", "2026-W44"],
+                                 ["voicecheck", "--night", "2026-11-02"], ["trials"], ["lab"]])
 def test_read_only_commands_preserve_database(fake, tmp_path, args, capsys):
     path = tmp_path / "mind.db"
     before = hashlib.sha256(path.read_bytes()).digest()
     assert cli.training_main([*args, "--data-dir", str(tmp_path)]) == 0
     assert hashlib.sha256(path.read_bytes()).digest() == before
     assert not (tmp_path / "mind.lock").exists()
-    assert isinstance(json.loads(capsys.readouterr().out), dict)
+    result = json.loads(capsys.readouterr().out)
+    assert isinstance(result, dict)
+    if args[0] == "status":
+        assert len(result["checklist"]) == 6
+        assert all(line.startswith("[ ]") for line in result["checklist"])
+        assert sum("waiting for recording" in line for line in result["checklist"]) == 2
 
 
-@pytest.mark.parametrize("args", [["gate", "--reset"], ["rescore"]])
+@pytest.mark.parametrize("args", [["gate", "--reset"], ["rescore"],
+                                 ["rollback", "--context", "631:0:0"], ["stock", "--context", "631:*:0"]])
 def test_mutation_refuses_held_service_lock(fake, tmp_path, args):
+    before = (tmp_path / "mind.db").read_bytes()
     with acquire_instance_lock(tmp_path):
         assert cli.training_main([*args, "--data-dir", str(tmp_path)]) == 1
+    assert (tmp_path / "mind.db").read_bytes() == before
 
 
 def test_reset_clears_experiment_evidence_and_parity_only(fake, tmp_path):
@@ -58,6 +67,66 @@ def test_missing_or_old_database_never_created_or_migrated(tmp_path):
     conn.close()
     before = (tmp_path / "mind.db").read_bytes()
     assert cli.training_main(["gate", "--reset", "--data-dir", str(tmp_path)]) == 1
+    assert (tmp_path / "mind.db").read_bytes() == before
+
+
+@pytest.mark.parametrize("action", ["rollback", "stock"])
+def test_card_mutations_hold_lock_through_actual_operation_and_preserve_cleanup(fake, tmp_path, monkeypatch, capsys, action):
+    from leeroy_mind.app import AlreadyRunning
+    from leeroy_mind.training.cards import Card, Directive
+    from leeroy_mind.training import store
+    previous = store.put_card(fake.conn, Card(None, "631:0:0", 1, "retired", "coach", (Directive("formation", "near"),)))
+    current = store.put_card(fake.conn, Card(None, "631:0:0", 2, "champion", "coach",
+                                            (Directive("formation", "far"),), prev_champion=previous))
+    with fake.conn:
+        fake.conn.execute("INSERT INTO tg_applied(ts,run,layer,context,command,inverse) "
+                          "VALUES (1,'training:raid:1','boss','631:0:0','{}','{}')")
+    applied = [tuple(row) for row in fake.conn.execute("SELECT * FROM tg_applied")]
+    original = getattr(cli.Experimenter, action)
+    async def operate(self, context):
+        with pytest.raises(AlreadyRunning):
+            acquire_instance_lock(tmp_path)
+        return await original(self, context)
+    monkeypatch.setattr(cli.Experimenter, action, operate)
+    assert cli.training_main([action, "--context", "631:0:0", "--data-dir", str(tmp_path)]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result == {"context": "631:0:0", "changed": True, "applied_commands_unchanged": True, "pending_cleanup": 1}
+    fake.conn.rollback()  # End the fixture's prior WAL read snapshot before inspecting CLI commits.
+    champion = store.champion(fake.conn, "631:0:0")
+    assert champion["id"] == previous if action == "rollback" else champion["origin"] == "stock"
+    assert champion["id"] != current
+    assert [tuple(row) for row in fake.conn.execute("SELECT * FROM tg_applied")] == applied
+    with acquire_instance_lock(tmp_path):
+        pass
+
+
+@pytest.mark.parametrize("context", ["631:0", "631:0:4", "631:999:0", "631:13:0", "631:*:9",
+                                     "0631:0:0", "631:00:0", "1:0:0", "533:0:2", "631:0:0 ", "631:٠:0"])
+def test_mutation_rejects_noncanonical_or_unknown_context_without_changes(fake, tmp_path, context):
+    before = (tmp_path / "mind.db").read_bytes()
+    assert cli.training_main(["stock", "--context", context, "--data-dir", str(tmp_path)]) == 1
+    assert (tmp_path / "mind.db").read_bytes() == before
+
+
+def test_trials_include_arms_refusals_and_fixed_basis_provenance_read_only(fake, tmp_path, capsys):
+    from leeroy_mind.training import store
+    from .test_tg_experiments import candidate, meta
+    card = candidate(fake)
+    trial = store.open_trial(fake.conn, "631:0:0", "formation", "raid", opened=fake.clock.now(),
+                             arms=[{"card": card, "champion": False}])
+    provenance = {"basis": "deaths_time", "treatment": "tactic_only_fixed_speech_and_assignments",
+                  "revisions": {"synthetic": "a" * 40}, "contexts": ["631:0:0"]}
+    meta(fake, f"tg:trial:{trial}", provenance)
+    meta(fake, "tg:experiment_refusals", {"ts": fake.clock.now(), "reasons": {card: cli.Experimenter.SPEC_UNAVAILABLE}})
+    before = (tmp_path / "mind.db").read_bytes()
+    with acquire_instance_lock(tmp_path):
+        assert cli.training_main(["trials", "--context", "631:0:0", "--data-dir", str(tmp_path)]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["trials"][0]["provenance"] == provenance
+    assert result["trials"][0]["arms"][0]["card"] == card
+    assert result["trials"][0]["arms"][0]["observations"] == 0
+    assert result["refusals"]["reasons"][str(card)] == cli.Experimenter.SPEC_UNAVAILABLE
+    assert result["metrics"]["spec"]["available"] is False
     assert (tmp_path / "mind.db").read_bytes() == before
 
 

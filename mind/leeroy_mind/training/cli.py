@@ -5,12 +5,17 @@ import asyncio
 from contextlib import closing, nullcontext
 from datetime import datetime, timezone
 import json
+import re
 import sqlite3
 from types import SimpleNamespace
 
 from leeroy_mind.clock import SystemClock
 from leeroy_mind.config import ConfigError
+from leeroy_mind.guild.raids import CATALOG, validate
+from leeroy_mind.wow import BOSS_NAMES, is_raid_fight
 
+from .config import load_training_config
+from .experiments import Experimenter
 from .mechanics import BOSS_MECHANICS
 from .report import training_section
 from .service import load_book, rescore_stored
@@ -47,6 +52,46 @@ def _open(root, *, write):
     return conn
 
 
+def _context(value):
+    """Canonical supported boss or pooled raid scope; never invent a context."""
+    if not isinstance(value, str) or not re.fullmatch(r"[1-9][0-9]{0,3}:(?:0|[1-9][0-9]?|\*):[0-3]", value):
+        raise ValueError("invalid training context")
+    map_text, boss, difficulty_text = value.split(":")
+    map_id, difficulty = int(map_text), int(difficulty_text)
+    raid = next((r for r in CATALOG.values() if r.map_id == map_id), None)
+    if (raid is None or validate(raid, 25 if difficulty % 2 else 10, difficulty >= 2, raid.min_tier)
+            or boss != "*" and ((map_id, int(boss)) not in BOSS_NAMES or not is_raid_fight(map_id, int(boss)))):
+        raise ValueError("unsupported training context")
+    return value
+
+
+def _meta(conn, key):
+    row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    return json.loads(row[0]) if row else None
+
+
+def _trials(conn, context):
+    rows = conn.execute("SELECT * FROM tg_trial" + (" WHERE scope=?" if context else "")
+        + " ORDER BY opened DESC,id DESC LIMIT 200", (context,) if context else ()).fetchall()
+    result = {"trials": [], "refusals": _meta(conn, "tg:experiment_refusals"),
+              "metrics": {"raid": "fixed per-trial score basis",
+                          "spec": {"available": False, "reason": Experimenter.SPEC_UNAVAILABLE}}}
+    for row in rows:
+        trial = dict(row)
+        trial["provenance"] = _meta(conn, f"tg:trial:{row['id']}")
+        trial["invalidation"] = _meta(conn, f"tg:trial_invalidated:{row['id']}")
+        trial["arms"] = []
+        for arm in conn.execute("SELECT a.*,c.lineage,c.origin,c.evidence,"
+                "(SELECT count(*) FROM tg_obs o WHERE o.arm=a.id) AS observations "
+                "FROM tg_arm a LEFT JOIN tg_card c ON c.id=a.card WHERE a.trial=? ORDER BY a.id",
+                (row["id"],)).fetchall():
+            entry = dict(arm)
+            entry["evidence"] = json.loads(entry["evidence"]) if entry["evidence"] else []
+            trial["arms"].append(entry)
+        result["trials"].append(trial)
+    return result
+
+
 async def _rescore(conn, root):
     book = await asyncio.to_thread(load_book, root)
     return await rescore_stored(SimpleNamespace(conn=conn), book)
@@ -58,7 +103,8 @@ def training_main(argv=None):
     parser = argparse.ArgumentParser(prog="leeroy_mind training")
     _add_data_dir(parser)
     subs = parser.add_subparsers(dest="command", required=True)
-    for name in ("status", "gate", "rescore", "report", "spells", "cards", "lessons"):
+    for name in ("status", "gate", "rescore", "report", "spells", "cards", "lessons", "voicecheck",
+                 "trials", "rollback", "stock", "lab"):
         sub = subs.add_parser(name)
         _add_data_dir(sub, after_action=True)
         if name == "gate":
@@ -68,11 +114,13 @@ def training_main(argv=None):
         elif name == "spells":
             actions = sub.add_subparsers(dest="action", required=True)
             _add_data_dir(actions.add_parser("check"), after_action=True)
-        elif name in {"cards", "lessons"}:
-            sub.add_argument("--context", required=name == "lessons")
+        elif name == "voicecheck":
+            sub.add_argument("--night", required=True)
+        elif name in {"cards", "lessons", "trials", "rollback", "stock"}:
+            sub.add_argument("--context", required=name in {"lessons", "rollback", "stock"})
     args = parser.parse_args(argv)
     root = _root(args)
-    write = args.command == "rescore" or args.command == "gate" and args.reset
+    write = args.command in {"rescore", "rollback", "stock"} or args.command == "gate" and args.reset
     try:
         # Acquisition is the exclusion test. Keep this exact lock until all IO
         # and scoring has completed and the SQLite connection is closed.
@@ -84,6 +132,33 @@ def training_main(argv=None):
                     result = _gate(conn)
                 elif args.command == "rescore":
                     result = {"rescored": asyncio.run(_rescore(conn, root))}
+                elif args.command == "voicecheck":
+                    from .voice_lead import voicecheck
+                    result = voicecheck(conn, args.night)
+                elif args.command == "trials":
+                    result = _trials(conn, _context(args.context) if args.context else None)
+                elif args.command == "lab":
+                    rotations = [dict(r) for r in conn.execute(
+                        "SELECT id,name,class,spec_tab,status,origin,created FROM tg_rotation ORDER BY id DESC LIMIT 200")]
+                    nights = []
+                    for row in conn.execute("SELECT key,value FROM meta WHERE key GLOB 'tg:lab:summary:*' ORDER BY key DESC LIMIT 8"):
+                        try:
+                            value = json.loads(row["value"])
+                            if type(value) is dict:
+                                nights.append(value)
+                        except (TypeError, ValueError):
+                            continue
+                    result = {"rotations": rotations, "nights": nights,
+                              "dummy_rows": conn.execute("SELECT count(*) FROM tg_dummy").fetchone()[0],
+                              "measurement": "requested_pre_ai proxy; actual DPS and field improvement unavailable"}
+                elif args.command in {"rollback", "stock"}:
+                    context = _context(args.context)
+                    ports = SimpleNamespace(conn=conn, clock=SystemClock())
+                    experimenter = Experimenter(ports, load_training_config(root / "mind.toml"))
+                    changed = asyncio.run(getattr(experimenter, args.command)(context))
+                    result = {"context": context, "changed": changed,
+                              "applied_commands_unchanged": True,
+                              "pending_cleanup": conn.execute("SELECT count(*) FROM tg_applied WHERE undone IS NULL").fetchone()[0]}
                 elif args.command == "cards":
                     fields = "id,context,version,lineage,status,origin,directives,call,assignment,reason,evidence,vetoes,prev_champion,created,changed"
                     rows = conn.execute("SELECT " + fields + " FROM tg_card"
@@ -108,6 +183,20 @@ def training_main(argv=None):
                     week = args.week if args.command == "report" else _week()
                     result = training_section(conn, week, now=SystemClock().now(), names=lambda guid: str(guid))
                     if args.command == "status":
+                        labels = {
+                            "four_weeks": "28 days of eligible observations",
+                            "won_tactic": "Offline-validated tactic adopted in a human raid",
+                            "won_rotation": "Field-validated rotation",
+                            "gate_within_1ms": "Measured telemetry overhead within 1 ms",
+                            "voice_run": "Voice delivery accepted in a live raid",
+                            "cast_callouts": "Cast callouts accepted in a live raid",
+                        }
+                        completed = result["done_when"]
+                        result["checklist"] = [
+                            f"[{'x' if completed.get(key) is True else ' '}] {label}"
+                            + (" (waiting for recording)" if key in {"voice_run", "cast_callouts"}
+                               and completed.get(key) is not True and completed.get("gate_within_1ms") is not True else "")
+                            for key, label in labels.items()]
                         monday = datetime.fromisocalendar(int(week[:4]), int(week[6:]), 1).replace(tzinfo=timezone.utc).timestamp()
                         result["week"] = week
                         result["pulls_by_kind"] = {row[0]: row[1] for row in conn.execute(

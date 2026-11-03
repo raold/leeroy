@@ -302,7 +302,8 @@ async def test_saved_complete_proof_reconciles_after_restart_without_resending(n
 @pytest.fixture
 def offline(tmp_path, clock):
     ports = FakePorts(tmp_path, clock)
-    ports.cfg, ports.connection_epoch, ports.online = TrainingConfig(enabled=True), 1, False
+    # This fixture isolates native ownership from statistical experiment admission.
+    ports.cfg, ports.connection_epoch, ports.online = TrainingConfig(enabled=True, experiments=False), 1, False
     ports.holder = lambda guid: None
     ports.feed = lambda ev: None
     for guid in range(101, 109):

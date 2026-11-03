@@ -14,10 +14,13 @@ from . import protocol, store
 from .applier import Applier, ApplierState
 from .checks import CHECKS_VERSION, _restore, run_checks
 from .config import load_training_config
+from .experiment_lifecycle import ExperimentLifecycle
+from .experiments import Experimenter
 from .facts import TalkHook
 from .gate import Gate
 from .ledger import Ledger
 from .ledger import combat_role
+from .jobs import TrainingJobs
 from .levers import MemberInfo
 from .lines import template
 from .listener import TrainingListener
@@ -28,6 +31,7 @@ from .report import training_section
 from .score import score_pull
 from .spells import SpellBook, load_spellbook, read_bonus_data
 from .vocab import Vocab, refresh, suspend_missing
+from .voice_lead import VoiceLead
 
 log = logging.getLogger(__name__)
 
@@ -87,9 +91,13 @@ class TrainingGround:
         self.applier = Applier(ports, self.ledger, state_provider=self.state_for,
                                application_allowed=self.application_allowed)
         self.listener.set_applier(self.applier)
+        self.voice = VoiceLead(ports, self)
         self.native = NativeCleanup(ports, self)
-        self.listener.prepare_run = self.native.prepare
+        self.listener.prepare_run = self.prepare_run
         self.ledger.after_store.insert(0, self._score)
+        self.experimenter = Experimenter(ports, ports.cfg, score_basis=self.listener.farm_basis)
+        self.experiments = ExperimentLifecycle(self, self.experimenter)
+        self.ledger.after_store.append(self.experiments.after_store)
         self._queue = deque()
         self._wake = asyncio.Event()
         self._epoch = 0
@@ -101,6 +109,8 @@ class TrainingGround:
         self._lanes = set()
         self._loader = None
         self._close_task = None
+        self.jobs = TrainingJobs(self)
+        self.ledger.after_store.append(self.jobs.after_store)
 
     def book(self):
         return self._book
@@ -109,11 +119,21 @@ class TrainingGround:
         return tuple(sorted({id for name in watch_names() for id in self._book.ids(name)})) if self._book else ()
 
     def training_members(self):
-        return set()
+        return self.jobs.members()
 
-    def application_allowed(self):
+    def base_application_allowed(self):
         return bool(self._connected and self._presence_known and not self._stopping
                     and self._startup_ready and self.vocab.complete and self.gate.phase == "passed")
+
+    def application_allowed(self):
+        return bool(self.base_application_allowed()
+                    and self.experiments.admission_allowed(self.listener.run))
+
+    async def prepare_run(self, run):
+        if (run.plan.offline and self.ports.cfg.experiments
+                and not await self.experiments.prepare(run)):
+            return False
+        return await self.native.prepare(run)
 
     def members_for(self, run):
         members = {}
@@ -193,6 +213,10 @@ class TrainingGround:
             return template("new_plan", boss=BOSS_NAMES.get((map_id, boss_id), "boss"), when=when, call=call)
         return call
 
+    def lead_pre_call(self, map_id, boss_id):
+        call = self.pre_call(map_id, boss_id)
+        return self.voice.pre_call(map_id, boss_id, call=call) or call
+
     async def _score(self, rec, ctx):
         if self._book is None:
             return
@@ -206,6 +230,7 @@ class TrainingGround:
             return
         if len(self._queue) >= self.CAPACITY:
             # Missing a lifecycle boundary invalidates the whole experiment run.
+            self.experiments.preempt()
             self.listener.invalidate(self.listener.run)
             self._queue.clear()
             if self._operation:
@@ -219,11 +244,15 @@ class TrainingGround:
         self._connected = False
         self._presence_known = False
         self._startup_ready = False
+        self.voice.invalidate(self.listener.run)
         self.native.disconnect()
+        self.experiments.preempt()
+        self.experiments.replay_again()
         self.listener.invalidate(self.listener.run)
         self._epoch += 1
         self._queue.clear()
         # Fence before cancellation can yield to a late response.
+        await self.jobs.disconnect()
         await self.gate.on_connection(connected)
         await self.ledger.on_connection(connected)
         await self.ports.disconnect()
@@ -237,6 +266,7 @@ class TrainingGround:
     async def on_event(self, ev):
         self.ports.feed(ev)  # Reply delivery never waits for a command's ACK.
         self.native.feed(ev)
+        self.jobs.feed(ev)
         name = event_type(ev)
         if name.startswith("pull"):
             await self.ledger.on_event(ev)
@@ -245,6 +275,12 @@ class TrainingGround:
         elif name == "chat":
             if ev.from_guid == self.ports.human_guid:
                 await self.listener.on_human_chat(ev)
+        elif name == "boss_cast":
+            await self.voice.on_cast(ev)
+        elif name == "boss":
+            await self.voice.on_boss(ev)
+        elif name == "login" and ev.guid == self.ports.human_guid and ev.human:
+            self.experiments.preempt()
         elif name == "hello":
             # A hello is a new observed server boundary even when a transport
             # implementation did not issue a separate reconnect notification.
@@ -252,7 +288,8 @@ class TrainingGround:
             self._presence_known = True
             self.submit("on_hello")
             self.submit("startup")
-        # Bosses deliberately arrive only through the validated guild listener.
+        # Training actions use the validated guild listener. Voice consumes
+        # independently checked boss boundaries inline, ahead of following casts.
         # Presence is read from app.world by the independent loader lane.
 
     async def _commands(self):
@@ -289,6 +326,7 @@ class TrainingGround:
         self.vocab = current
         suspend_missing(self.ports.conn, current, ts=self.ports.clock.now())
         self._startup_ready = current.complete
+        self.experiments.replay_again()
         log.info("training_vocab_refreshed classes=%d complete=%s", len(current.classes), current.complete)
 
     async def _listening(self):
@@ -309,6 +347,14 @@ class TrainingGround:
                     log.warning("training_native_cleanup_pending")
             await self.ports.clock.sleep(1)
 
+    async def _jobs(self):
+        while True:
+            try:
+                await self.jobs.tick()
+            except Exception:
+                log.warning("training_jobs_tick_failed")
+            await self.ports.clock.sleep(1)
+
     async def _sampling(self):
         while True:
             if self._connected:
@@ -322,6 +368,23 @@ class TrainingGround:
                     log.warning("training_sample_failed")
                 finally:
                     self._sample = None
+            await self.ports.clock.sleep(1)
+
+    async def _voicing(self):
+        while True:
+            if self._connected:
+                try:
+                    await self.voice.tick()
+                except Exception:
+                    log.warning("training_voice_tick_failed")
+            await self.ports.clock.sleep(.1)
+
+    async def _experimenting(self):
+        while True:
+            try:
+                await self.experiments.tick()
+            except Exception:
+                log.warning("training_experiment_tick_failed")
             await self.ports.clock.sleep(1)
 
     async def _maintenance(self):
@@ -350,6 +413,7 @@ class TrainingGround:
             # shielded worker until it actually ends, even after repeated cancel.
             raise
         await rescore_stored(self.ports, self._book)
+        self.experiments.replay_again()
 
     def _guild_busy(self):
         guild = getattr(self.app, "guild", None)
@@ -364,7 +428,7 @@ class TrainingGround:
         self._running = True
         self._lanes = {asyncio.create_task(fn()) for fn in
                        (self._commands, self._sampling, self._maintenance, self._load, self._listening,
-                        self._native_cleanup)}
+                        self._voicing, self._native_cleanup, self._experimenting, self._jobs)}
         try:
             # Cancellation fences promptly; one shared drain owns cancellation
             # and joins instead of allowing gather to cancel the loader twice.
@@ -380,6 +444,7 @@ class TrainingGround:
             self._connected = self._presence_known = self._startup_ready = False
             self._epoch += 1
             self._queue.clear()
+            self.experiments.preempt()
             self.listener.invalidate(self.listener.run)
             self._close_task = asyncio.create_task(self._drain())
         await asyncio.shield(self._close_task)
@@ -394,10 +459,13 @@ class TrainingGround:
             # Never cancel the to_thread worker: its synchronous IO cannot be
             # cancelled, and it remains owned until this actual join completes.
             await asyncio.gather(self._loader, return_exceptions=True)
+        await self.jobs.close()
+        await self.experiments.close()
         while not await self.listener.close():
             log.warning("training listener shutdown is still draining")
         while not await self.applier.close():
             log.warning("training command shutdown is still draining")
+        await self.voice.close()
         await self.on_connection(False)
         self._lanes.clear()
 
@@ -414,18 +482,25 @@ def attach_training(app):
         app.register_event_handler(name, ground.on_event)
     for name in ("job", "vocab", "server_stats", "dummy_result", "rivals", "training_cleanup"):
         app.register_shutdown_receipt(name, ground.ports.feed)
+    for name in ("job", "dummy_result"):
+        app.register_shutdown_receipt(name, ground.jobs.feed)
     app.register_connection_hook(ground.on_connection)
     guild = getattr(app, "guild", None)
     if guild is not None:
         for controller in (guild.raid_night, guild.offline):
+            controller.add_listener(ground.experiments)
             controller.add_listener(ground.listener)
+            controller.add_listener(ground.voice.lifecycle)
         calls = getattr(guild, "calls", None)
         if calls is not None:
-            calls.pre_call, calls.lust_held = ground.pre_call, ground.listener.lust_held
+            calls.pre_call, calls.lust_held = ground.lead_pre_call, ground.listener.lust_held
             ground.listener.lust_provider = calls.lust
     hook = TalkHook(ground.ports)
     hook.change_for = ground.listener.change_for
     app.engine.add_instruction_hook(hook)
+    facts = getattr(app.engine, "facts", None)
+    if facts is not None:
+        facts.add_provider(ground.jobs.lab.rotation_facts)
     runner = getattr(app, "night_runner", None)
     if runner is not None:
         from .coach import CoachSources, stage_coach
@@ -439,5 +514,5 @@ def attach_training(app):
     register_section("training", report_section)
     app.register_background(ground.run)
     app.register_shutdown_drain(ground.close)
-    log.info("training_attached stage=2")
+    log.info("training_attached stage=3")
     return ground
