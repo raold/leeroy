@@ -231,15 +231,19 @@ void TickCastGuard(std::uint32_t diff)
                 if (!guild) reason = "guild_unavailable";
                 else
                 {
-                    if (!guild->GetRankRights(step.rank))
-                    {
-                        step.rank = GUILD_RANK_NONE;
-                        for (uint8 rank = 0; rank < GUILD_RANKS_MAX_COUNT; ++rank)
-                            if (guild->GetRankRights(rank)) step.rank = rank;
-                    }
-                    if (step.rank == GUILD_RANK_NONE || !guild->AddMember(PlayerGuid(step.guid), step.rank))
+                    // Zero rights is ambiguous: a valid restricted rank and an
+                    // invalid index both return zero. Never scan for a rank
+                    // with rights, which could promote this returning member.
+                    // Let the core select its actual lowest rank in that case.
+                    auto const requestedRank = guild->GetRankRights(step.rank) ? step.rank : uint8(GUILD_RANK_NONE);
+                    if (!guild->AddMember(PlayerGuid(step.guid), requestedRank))
                         reason = "readd_failed";
-                    else Changed();
+                    else if (auto const* restored = guild->GetMember(PlayerGuid(step.guid)))
+                    {
+                        step.rank = restored->GetRankId();
+                        Changed();
+                    }
+                    else reason = "readd_unproved";
                 }
             }
             if (!reason.empty())

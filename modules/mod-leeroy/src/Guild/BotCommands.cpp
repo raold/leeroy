@@ -84,6 +84,8 @@ std::string_view BotFailure(Player* bot)
 {
     if (!bot)
         return "offline";
+    if (Realm::RealmOwns(bot->GetGUID().GetCounter()))
+        return "busy:realm_owner";
     if (bot->GetGuildId() != LeeroyModule::Instance().GuildId() || !OwnedCast(bot->GetGUID().GetCounter()))
         return "not_cast";
     if (!GET_PLAYERBOT_AI(bot) || IsSelfBot(bot))
@@ -134,6 +136,15 @@ std::string_view Cast(Player* bot, PlayerbotAI* ai, BotDoCmd const& command)
         && (target->GetGuildId() != LeeroyModule::Instance().GuildId()
             || !GET_PLAYERBOT_AI(target) || IsSelfBot(target)))
         return "no_target";
+    // Explicit, default-self and selected targets are all resolved again here.
+    // A group haste spell can affect unrequested teammates as well as its target.
+    auto realmConflict = [&]()
+    {
+        return Realm::RealmOwns(bot->GetGUID().GetCounter()) || Realm::RealmOwns(target->GetGUID().GetCounter())
+            || ((command.param == "bloodlust" || command.param == "heroism")
+                && (GroupHasRealmOwner(bot->GetGroup()) || GroupHasRealmOwner(target->GetGroup())));
+    };
+    if (realmConflict()) return "busy:realm_owner";
 
     auto* value = ai->GetAiObjectContext()->GetValue<uint32>("spell id", command.param);
     uint32 const spellId = value ? value->Get() : 0;
@@ -158,6 +169,7 @@ std::string_view Cast(Player* bot, PlayerbotAI* ai, BotDoCmd const& command)
                 return "failed";
             SpellCastTargets targets;
             targets.SetCorpseTarget(corpse);
+            if (realmConflict()) return "busy:realm_owner";
             if (bot->CastSpell(targets, spell, nullptr, TRIGGERED_NONE) != SPELL_CAST_OK)
                 return "failed";
             return {};
@@ -168,7 +180,9 @@ std::string_view Cast(Player* bot, PlayerbotAI* ai, BotDoCmd const& command)
 
     if (target->GetMap() != bot->GetMap() || !bot->InSamePhase(target))
         return "no_target";
-    return ai->CanCastSpell(command.param, target) && ai->CastSpell(command.param, target)
+    if (!ai->CanCastSpell(command.param, target)) return "failed";
+    if (realmConflict()) return "busy:realm_owner";
+    return ai->CastSpell(command.param, target)
         ? std::string_view{} : std::string_view{"failed"};
 }
 
@@ -194,6 +208,7 @@ bool UseStockItem(Player* bot, PlayerbotAI* ai, uint32 entry)
             castable = true;
     if (!castable)
         return false;
+    if (Realm::RealmOwns(bot->GetGUID().GetCounter())) return false;
     return ai->DoSpecificAction("use", Event("use", ChatHelper::FormatItem(item->GetTemplate())), true);
 }
 
@@ -222,6 +237,9 @@ bool BuffFromBags(Player* bot, PlayerbotAI* ai)
 
 std::string_view Apply(Player* bot, BotDoCmd const& command)
 {
+    if (Realm::RealmOwns(bot->GetGUID().GetCounter())
+        || (command.targetGuid && Realm::RealmOwns(command.targetGuid)))
+        return "busy:realm_owner";
     if (!command.trainingRun.empty())
     {
         if (!Training::ScopedBotMutationAllowed(command.action)) return "training_run_ownership";
@@ -292,6 +310,7 @@ LeeroyCommandResult HandleSetSpec(nlohmann::json const& message)
         return Fail("disabled");
     if (!OwnedCast(command->guid))
         return Fail("not_cast:" + std::to_string(command->guid));
+    if (Realm::RealmOwns(command->guid)) return Fail("busy:realm_owner");
     Player* bot = FindOnline(command->guid);
     if (auto const failure = BotFailure(bot); !failure.empty())
         return Fail(std::string(failure));
@@ -304,8 +323,10 @@ LeeroyCommandResult HandleSetSpec(nlohmann::json const& message)
         || sPlayerbotAIConfig.ParsedSpecLinkOrder[cls][command->specNo][80].empty())
         return Fail("bad_spec");
     PlayerbotFactory::InitTalentsBySpecNo(bot, command->specNo, true);
+    if (Realm::RealmOwns(command->guid)) return Fail("busy:realm_owner");
     if (command->glyphs)
         PlayerbotFactory(bot, bot->GetLevel()).InitGlyphs(false);
+    if (Realm::RealmOwns(command->guid)) return Fail("busy:realm_owner");
     bot->SaveToDB(false, false);
     LeeroyModule::Instance().Cast().MarkDirty();
     LeeroyModule::Instance().Cast().RequestPush();
@@ -331,10 +352,14 @@ LeeroyCommandResult HandleBotDo(nlohmann::json const& message)
         && !Training::TierTwoAllowed(Training::TrainingAllowed(), command->action, command->param))
         return Fail("training_off");
     for (uint32 guid : command->guids)
+    {
         if (!OwnedCast(guid))
             return Fail("not_cast:" + std::to_string(guid));
+        if (Realm::RealmOwns(guid)) return Fail("busy:realm_owner");
+    }
     if (command->targetGuid && !OwnedTarget(command->targetGuid))
         return Fail("not_cast:" + std::to_string(command->targetGuid));
+    if (command->targetGuid && Realm::RealmOwns(command->targetGuid)) return Fail("busy:realm_owner");
     if (pending.size() >= kMaxPending)
         return Fail("busy");
     BotJob job;
@@ -381,6 +406,9 @@ void TickBotCommands()
             failure = "not_cast";
         if (failure.empty() && job.command.targetGuid && !OwnedTarget(job.command.targetGuid))
             failure = "no_target";
+        if (failure.empty() && (Realm::RealmOwns(guid)
+            || (job.command.targetGuid && Realm::RealmOwns(job.command.targetGuid))))
+            failure = "busy:realm_owner";
         if (failure.empty())
         {
             Player* bot = FindOnline(guid);
@@ -417,7 +445,8 @@ bool HasPendingBotCommands(std::vector<std::uint32_t> const& guids)
 {
     return std::any_of(pending.begin(), pending.end(), [&](auto const& job)
     {
-        return std::any_of(job.command.guids.begin(), job.command.guids.end(), [&](auto guid)
+        return (job.command.targetGuid && std::find(guids.begin(), guids.end(), job.command.targetGuid) != guids.end())
+            || std::any_of(job.command.guids.begin(), job.command.guids.end(), [&](auto guid)
             { return std::find(guids.begin(), guids.end(), guid) != guids.end(); });
     });
 }
@@ -451,6 +480,7 @@ LeeroyCommandResult HandleStockItems(nlohmann::json const& message)
         return Fail("disabled");
     if (!OwnedCast(command->guid))
         return Fail("not_cast:" + std::to_string(command->guid));
+    if (Realm::RealmOwns(command->guid)) return Fail("busy:realm_owner");
     Player* bot = FindOnline(command->guid);
     if (auto const failure = BotFailure(bot); !failure.empty())
         return Fail(std::string(failure));
@@ -461,6 +491,7 @@ LeeroyCommandResult HandleStockItems(nlohmann::json const& message)
     bool changed = false, full = false;
     for (uint32 entry : command->items)
     {
+        if (Realm::RealmOwns(command->guid)) return Fail("busy:realm_owner");
         uint32 const missing = StockMissing(bot->GetItemCount(entry, false), command->count);
         if (!missing)
             continue;
@@ -472,8 +503,10 @@ LeeroyCommandResult HandleStockItems(nlohmann::json const& message)
             planned += slot.count;
         auto const count = StockPlanCount(missing, noSpace, planned,
             result == EQUIP_ERR_OK, result == EQUIP_ERR_INVENTORY_FULL);
+        if (Realm::RealmOwns(command->guid)) return Fail("busy:realm_owner");
         if (!count || (*count && !bot->StoreNewItem(dest, entry, true)))
         {
+            if (Realm::RealmOwns(command->guid)) return Fail("busy:realm_owner");
             if (changed)
                 bot->SaveToDB(false, false);
             return Fail("failed");
@@ -481,6 +514,7 @@ LeeroyCommandResult HandleStockItems(nlohmann::json const& message)
         changed = changed || *count != 0;
         full = full || noSpace != 0;
     }
+    if (Realm::RealmOwns(command->guid)) return Fail("busy:realm_owner");
     if (changed)
         bot->SaveToDB(false, false);
     if (!full)
