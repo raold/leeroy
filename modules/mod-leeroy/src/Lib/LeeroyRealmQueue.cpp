@@ -42,4 +42,18 @@ void ActionQueue::DropAll(std::string const& reason,
         for (auto const& entry : removed)
             dropped(entry, reason);
 }
+void ActionQueue::DropIf(std::function<bool(Entry const&)> const& predicate, std::string const& reason,
+    std::function<void(Entry const&, std::string const&)> const& dropped)
+{
+    if (!predicate) return;
+    std::deque<Entry> kept, removed;
+    while (!_entries.empty())
+    {
+        auto entry = std::move(_entries.front());
+        _entries.pop_front();
+        (predicate(entry) ? removed : kept).push_back(std::move(entry));
+    }
+    _entries = std::move(kept);
+    if (dropped) for (auto const& entry : removed) dropped(entry, reason);
+}
 }

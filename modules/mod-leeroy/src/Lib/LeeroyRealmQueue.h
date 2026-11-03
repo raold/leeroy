@@ -11,6 +11,7 @@
 
 namespace Leeroy::Realm
 {
+enum class ActivityDomain { Realm, Guild };
 class ActionQueue
 {
 public:
@@ -20,6 +21,7 @@ public:
         std::vector<std::uint32_t> guids;
         std::size_t cursor = 0;
         nlohmann::json payload;
+        ActivityDomain domain = ActivityDomain::Realm; // Trusted native admission only.
     };
     static constexpr std::size_t Capacity = 500;
     bool Push(Entry entry);
@@ -28,6 +30,8 @@ public:
     // until next tick. Callbacks must never recursively mutate this queue.
     void Drain(TickBudget& budget, std::function<bool(Entry&)> const& step);
     void DropAll(std::string const& reason, std::function<void(Entry const&, std::string const&)> const& dropped);
+    void DropIf(std::function<bool(Entry const&)> const& predicate, std::string const& reason,
+        std::function<void(Entry const&, std::string const&)> const& dropped);
     std::size_t Size() const { return _entries.size(); }
 private:
     std::deque<Entry> _entries;

@@ -30,17 +30,18 @@ bool ContinuationLedger::SameManifest(std::vector<std::uint32_t> first, std::vec
 }
 std::optional<ContinuationOwner> ContinuationLedger::Prepare(std::string originId, ContinuationKind kind,
     std::vector<std::uint32_t> members, std::uint64_t epoch, std::uint32_t guild, std::uint32_t human,
-    std::size_t totalReservations, std::string& error)
+    std::size_t totalReservations, std::string& error, ActivityDomain domain)
 {
     error.clear();
     std::sort(members.begin(), members.end());
-    if (originId.empty() || originId.size() > 128 || !ValidManifest(members) || !epoch || !guild || !human)
+    if (originId.empty() || originId.size() > 128 || !ValidManifest(members) || !epoch || !guild || !human
+        || (domain == ActivityDomain::Guild && kind != ContinuationKind::Fishing))
     { error = "bad field: continuation"; return std::nullopt; }
     if (auto old = FindOrigin(originId))
     {
         if (old->stage == PvpStage::Clean) { error = "operation_receipt_available"; return std::nullopt; }
         if (old->kind == kind && old->members == members && old->originEpoch == epoch
-            && old->guild == guild && old->human == human) return old;
+            && old->guild == guild && old->human == human && old->domain == domain) return old;
         error = "busy:duplicate_operation"; return std::nullopt;
     }
     if (!totalReservations || totalReservations > ActionQueue::Capacity || _owners.size() >= totalReservations)
@@ -51,6 +52,7 @@ std::optional<ContinuationOwner> ContinuationLedger::Prepare(std::string originI
     std::ostringstream token;
     token << _nonce << '-' << std::hex << std::setfill('0') << std::setw(16) << ++_serial;
     ContinuationOwner owner{token.str(), std::move(originId), kind, epoch, 1, guild, human, std::move(members)};
+    owner.domain = domain;
     _owners.emplace(owner.token, Record{owner});
     return owner;
 }
@@ -109,11 +111,12 @@ std::string ContinuationLedger::Validate(std::string_view token, ContinuationMod
     auto it = _owners.find(token);
     if (it == _owners.end()) return "busy:operation_identity";
     auto const& owner = it->second.owner;
-    if (!enabled) return "realm_off";
+    if (!enabled) return owner.domain == ActivityDomain::Guild ? "guild_off" : "realm_off";
     if (owner.guild != guild || owner.human != human) return "busy:owner_authority";
     if (owner.stage == PvpStage::Unknown) return "busy:owner_unknown";
     if (mode == ContinuationMode::Cleanup)
-        return owner.stage == PvpStage::Cleaning && !owner.cleanupId.empty() ? "" : "busy:cleanup_controller";
+        return owner.stage == PvpStage::Cleaning && (!owner.cleanupId.empty() || owner.internalCleanup)
+            ? "" : "busy:cleanup_controller";
     return !owner.applicationFenced && owner.originEpoch == epoch ? "" : "busy:application_fenced";
 }
 bool ContinuationLedger::RequestCleanup(std::string_view token, std::string cleanupId,
@@ -122,6 +125,7 @@ bool ContinuationLedger::RequestCleanup(std::string_view token, std::string clea
     error.clear();
     auto owner = Get(token);
     if (!owner) { error = "owner_unavailable"; return false; }
+    if (owner->domain != ActivityDomain::Realm) { error = "owner_unavailable"; return false; }
     if (cleanupId.empty() || cleanupId.size() > 128 || !SameManifest(owner->members, std::move(members)))
     { error = "bad field: cleanup_manifest"; return false; }
     if (!enabled) { error = "realm_off"; return false; }
@@ -165,6 +169,15 @@ bool ContinuationLedger::Advance(std::string_view token, std::uint64_t revision,
     auto& owner = it->second.owner;
     if (stage == PvpStage::Unknown) { Unknown(token, std::move(reason)); return true; }
     if (owner.stage == PvpStage::Unknown || stage == PvpStage::Clean) return false;
+    if (stage == PvpStage::Cleaning && owner.domain == ActivityDomain::Guild
+        && owner.kind == ContinuationKind::Fishing && owner.stage != PvpStage::Cleaning)
+    {
+        owner.applicationFenced = true;
+        owner.internalCleanup = true;
+        owner.stage = stage;
+        owner.reason = reason.substr(0, 128);
+        return Bump(owner);
+    }
     // Cleanup deliberately fences application, but can wait on budget or native
     // worldport progress. Diagnostic changes invalidate older cleanup proofs;
     // repeated identical observations do not consume another revision.
@@ -172,7 +185,7 @@ bool ContinuationLedger::Advance(std::string_view token, std::uint64_t revision,
     {
         if (stage == PvpStage::Cleaning)
         {
-            if (!owner.applicationFenced || owner.cleanupId.empty()) return false;
+            if (!owner.applicationFenced || (owner.cleanupId.empty() && !owner.internalCleanup)) return false;
         }
         else if (owner.applicationFenced) return false;
         reason = reason.substr(0, 128);
@@ -198,12 +211,25 @@ void ContinuationLedger::Unknown(std::string_view token, std::string reason)
 }
 void ContinuationLedger::FenceAll(std::string reason)
 {
+    FenceDomain(ActivityDomain::Realm, reason);
+    FenceDomain(ActivityDomain::Guild, std::move(reason));
+}
+void ContinuationLedger::FenceDomain(ActivityDomain domain, std::string reason)
+{
     for (auto& [token, record] : _owners)
     {
         (void)token;
         auto& owner = record.owner;
-        if (owner.stage == PvpStage::Unknown) continue;
+        if (owner.domain != domain || owner.stage == PvpStage::Unknown) continue;
         owner.applicationFenced = true;
+        if (domain == ActivityDomain::Guild)
+        {
+            owner.internalCleanup = true;
+            owner.stage = PvpStage::Cleaning;
+            owner.reason = reason.substr(0, 128);
+            Bump(owner);
+            continue;
+        }
         if (!owner.cleanupId.empty())
         {
             if (record.canceledControllers.size() == 16)
@@ -222,7 +248,9 @@ bool ContinuationLedger::CanCommit(ContinuationCleanReceipt const& receipt) cons
     auto it = _owners.find(receipt.token);
     if (it == _owners.end()) return false;
     auto const& owner = it->second.owner;
-    return owner.stage == PvpStage::Cleaning && owner.applicationFenced && !owner.cleanupId.empty()
+    return owner.stage == PvpStage::Cleaning && owner.applicationFenced
+        && (!owner.cleanupId.empty() || (owner.internalCleanup && owner.domain == ActivityDomain::Guild
+            && owner.kind == ContinuationKind::Fishing))
         && owner.cleanupId == receipt.cleanupId && owner.revision == receipt.revision
         && SameManifest(owner.members, receipt.members);
 }

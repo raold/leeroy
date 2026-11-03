@@ -60,6 +60,8 @@ public:
     ~RealmModule();
     bool On() const;
     std::uint64_t Epoch() const; // Any-thread enable/configured-identity boundary.
+    bool GuildOn() const;
+    std::uint64_t GuildEpoch() const;
     void Start(); // World startup, after DBC/map initialization, before commands.
     void Reload();
     void Tick(std::uint32_t diff);
@@ -68,6 +70,11 @@ public:
     // A refused admission has no body mutation. Successful admission reserves
     // every exact body and snapshots identity before a later world tick acts.
     bool Accept(Queued entry, std::string& error);
+    using ActivityOutcome = std::function<void(Queued const&, bool clean, std::string const& reason)>;
+    bool RegisterGuildFishing(Executor, Admission, std::function<PvpContinuationStep(PvpOwner const&)>, ActivityOutcome);
+    bool AcceptGuildFishing(std::string id, std::vector<std::uint32_t> guids, std::string& error);
+    std::optional<PvpOwner> PrepareGuildFishingContinuation(std::string_view originId,
+        std::vector<std::uint32_t> const& members, std::string& error);
     std::string MutationReason(std::uint32_t guid, std::string_view operation = {}) const;
     // Exact lifetime/generation and original or declared pending scope. This
     // checks every referenced body, including a duel's non-current target.
@@ -78,6 +85,8 @@ public:
     // busy:tick_budget means wait without mutating; action_cost_exceeds_cap
     // means this operation cannot fit the configured whole-tick budget.
     std::string ChargeAffectedBodies(std::string_view operation, std::vector<std::uint32_t> const& guids);
+    std::string DeclareAffectedBodyScopes(std::string_view operation, std::uint32_t guid,
+        std::vector<BodyScope> scopes);
     using Continuation = std::function<PvpContinuationStep(PvpOwner const&)>;
     bool RegisterPvpContinuation(PvpKind kind, Continuation continuation);
     // Active executor only, before the first mutation. The manifest must equal
@@ -117,6 +126,11 @@ private:
     RealmModule();
     void ReconcileConfiguration();
     void TickContinuations(TickBudget& budget);
+    bool AcceptDomain(Queued entry, std::string& error);
+    void PublishOutcome(Queued const& entry, RealmJob const& job);
+    void DrainGuildOutcomes();
+    std::optional<PvpOwner> PrepareContinuation(std::string_view originId, PvpKind kind,
+        std::vector<std::uint32_t> const& members, ActivityDomain domain, std::string& error);
     struct State;
     std::unique_ptr<State> _state;
 };

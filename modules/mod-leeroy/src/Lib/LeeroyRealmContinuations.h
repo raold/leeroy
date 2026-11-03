@@ -25,6 +25,8 @@ struct ContinuationOwner
     PvpStage stage = PvpStage::Acquiring;
     bool applicationFenced = false;
     std::string reason, cleanupId;
+    ActivityDomain domain = ActivityDomain::Realm;
+    bool internalCleanup = false;
 };
 using PvpOwner = ContinuationOwner;
 struct ContinuationCleanReceipt
@@ -42,7 +44,7 @@ public:
     explicit ContinuationLedger(std::string bootNonce);
     std::optional<ContinuationOwner> Prepare(std::string originId, ContinuationKind kind,
         std::vector<std::uint32_t> members, std::uint64_t epoch, std::uint32_t guild, std::uint32_t human,
-        std::size_t totalReservations, std::string& error);
+        std::size_t totalReservations, std::string& error, ActivityDomain domain = ActivityDomain::Realm);
     std::optional<ContinuationOwner> Get(std::string_view token) const;
     std::optional<ContinuationOwner> FindOrigin(std::string_view originId) const;
     bool Detach(std::string_view token);
@@ -56,6 +58,7 @@ public:
     bool Advance(std::string_view token, std::uint64_t revision, PvpStage stage, std::string reason = {});
     void Unknown(std::string_view token, std::string reason);
     void FenceAll(std::string reason);
+    void FenceDomain(ActivityDomain domain, std::string reason);
     bool CanCommit(ContinuationCleanReceipt const& receipt) const;
     bool CanRelease(ContinuationCleanReceipt const& receipt, bool nativeQuiescent) const;
     bool Commit(ContinuationCleanReceipt const& receipt);

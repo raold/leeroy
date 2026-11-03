@@ -68,17 +68,21 @@ struct RealmModule::State
         std::uint64_t epoch = 0;
         std::map<std::uint32_t, Lease> bodies;
         std::map<std::uint32_t, std::vector<BodyScope>> pending;
+        std::set<std::uint32_t> declaredScopes;
         bool retained = false;
         std::uint64_t value = 0;
         Queued admitted;
         std::string continuation;
     };
     struct Poll { std::uint32_t interval, remaining = 0; std::function<void()> fn; };
-    struct Handler { Executor execute; Admission admit; };
+    struct Handler { Executor execute; Admission admit; ActivityOutcome outcome; };
     std::atomic<bool> on{false};
     std::atomic<std::uint64_t> epoch{1};
+    std::atomic<bool> guildOn{false};
+    std::atomic<std::uint64_t> guildEpoch{1};
     std::uint32_t guild = 0, human = 0;
     bool disablePending = false;
+    bool guildDisablePending = false;
     bool started = false;
     ActionQueue queue;
     std::map<std::string, Handler, std::less<>> executors;
@@ -105,6 +109,11 @@ struct RealmModule::State
     std::string activeContinuation;
     std::uint64_t activeRevision = 0;
     std::set<std::uint32_t> chargedBodies;
+    std::deque<std::pair<Queued, RealmJob>> guildOutcomes;
+
+    bool Enabled(ActivityDomain domain) const { return domain == ActivityDomain::Guild ? guildOn.load() : on.load(); }
+    std::uint64_t EpochFor(ActivityDomain domain) const
+    { return domain == ActivityDomain::Guild ? guildEpoch.load() : epoch.load(); }
 
     std::uint64_t Generation(std::uint32_t guid) const
     {
@@ -156,6 +165,8 @@ RealmModule::RealmModule() : _state(std::make_unique<State>()) { }
 RealmModule::~RealmModule() = default;
 bool RealmModule::On() const { return _state->on.load(); }
 std::uint64_t RealmModule::Epoch() const { return _state->epoch.load(); }
+bool RealmModule::GuildOn() const { return _state->guildOn.load(); }
+std::uint64_t RealmModule::GuildEpoch() const { return _state->guildEpoch.load(); }
 
 void RealmModule::Start()
 {
@@ -168,6 +179,15 @@ void RealmModule::Reload()
     auto const& cfg = Config();
     bool const enabled = cfg.enable && cfg.realmEnable && cfg.guildId && cfg.humanGuid;
     bool const changed = On() != enabled || _state->guild != cfg.guildId || _state->human != cfg.humanGuid;
+    bool const guildEnabled = cfg.enable && cfg.guildId && cfg.humanGuid;
+    bool const guildChanged = GuildOn() != guildEnabled || _state->guild != cfg.guildId || _state->human != cfg.humanGuid;
+    if (guildChanged)
+    {
+        std::lock_guard lock(_state->factsMutex);
+        _state->guildDisablePending = true;
+        _state->guildOn = guildEnabled;
+        ++_state->guildEpoch;
+    }
     if (changed)
     {
         std::lock_guard lock(_state->factsMutex);
@@ -220,19 +240,71 @@ bool RealmModule::RegisterPvpContinuation(PvpKind kind, Continuation continuatio
     return continuation && _state->continuationHandlers.emplace(kind, std::move(continuation)).second;
 }
 
+bool RealmModule::RegisterGuildFishing(Executor executor, Admission admission, Continuation continuation,
+    ActivityOutcome outcome)
+{
+    if (!executor || !admission || !continuation || !outcome
+        || _state->executors.contains("guild_fishing") || _state->continuationHandlers.contains(PvpKind::Fishing)) return false;
+    _state->executors.emplace("guild_fishing", State::Handler{std::move(executor), std::move(admission), std::move(outcome)});
+    _state->continuationHandlers.emplace(PvpKind::Fishing, std::move(continuation));
+    return true;
+}
+
+bool RealmModule::AcceptGuildFishing(std::string id, std::vector<std::uint32_t> guids, std::string& error)
+{
+    if (guids.empty() || guids.size() > 40) { error = "bad field: guids"; return false; }
+    Queued entry{std::move(id), "guild_fishing", std::move(guids), 0, nlohmann::json::object(), ActivityDomain::Guild};
+    return AcceptDomain(std::move(entry), error);
+}
+
+void RealmModule::PublishOutcome(Queued const& entry, RealmJob const& job)
+{
+    if (entry.domain == ActivityDomain::Realm) { PublishJob(job); return; }
+    // May be called while final native/lifecycle proof guards are held. Native
+    // outcome callbacks run later without those locks, never in inverse order.
+    // Each admitted Guild operation produces one result. Admission counts this
+    // backlog with all live/retained reservations, so even a permanently failing
+    // callback cannot grow it past the shared Capacity. A prepared finite owner
+    // never also publishes a configuration-drop result.
+    _state->guildOutcomes.emplace_back(entry, job);
+}
+void RealmModule::DrainGuildOutcomes()
+{
+    for (unsigned count = 0; count < 20 && !_state->guildOutcomes.empty(); ++count)
+    {
+        auto const& [entry, job] = _state->guildOutcomes.front();
+        auto handler = _state->executors.find(entry.kind);
+        if (handler != _state->executors.end() && handler->second.outcome)
+        {
+            try { handler->second.outcome(entry, job.ok, job.reason); }
+            catch (...) { return; } // Preserve the immutable result for retry.
+        }
+        _state->guildOutcomes.pop_front();
+    }
+}
+
 std::optional<PvpOwner> RealmModule::PreparePvpContinuation(std::string_view originId, PvpKind kind,
     std::vector<std::uint32_t> const& members, std::string& error)
+{ return PrepareContinuation(originId, kind, members, ActivityDomain::Realm, error); }
+
+std::optional<PvpOwner> RealmModule::PrepareGuildFishingContinuation(std::string_view originId,
+    std::vector<std::uint32_t> const& members, std::string& error)
+{ return PrepareContinuation(originId, PvpKind::Fishing, members, ActivityDomain::Guild, error); }
+
+std::optional<PvpOwner> RealmModule::PrepareContinuation(std::string_view originId, PvpKind kind,
+    std::vector<std::uint32_t> const& members, ActivityDomain domain, std::string& error)
 {
     error.clear();
     auto it = _state->reservations.find(originId);
     if (!_state->activeEntry || _state->activeOperation != originId || it == _state->reservations.end()
-        || !_state->continuationHandlers.contains(kind) || !On() || it->second.epoch != Epoch()
+        || !_state->continuationHandlers.contains(kind) || !_state->Enabled(domain)
+        || it->second.admitted.domain != domain || it->second.epoch != _state->EpochFor(domain)
         || !ContinuationLedger::SameManifest(it->second.admitted.guids, members))
     { error = "busy:operation_identity"; return std::nullopt; }
     for (auto guid : members)
         if (!(error = MutationReason(guid, originId)).empty()) return std::nullopt;
-    auto owner = _state->continuations.Prepare(std::string(originId), kind, members, Epoch(),
-        _state->guild, _state->human, _state->reservations.size(), error);
+    auto owner = _state->continuations.Prepare(std::string(originId), kind, members, _state->EpochFor(domain),
+        _state->guild, _state->human, _state->reservations.size(), error, domain);
     if (owner)
     {
         it->second.continuation = owner->token;
@@ -271,9 +343,11 @@ bool RealmModule::RequestPvpCleanup(std::string cleanupId, std::string_view toke
 std::string RealmModule::ValidateContinuation(std::string_view token, std::uint32_t guid,
     ContinuationMode mode) const
 {
-    if (auto reason = _state->continuations.Validate(token, mode, On(), Epoch(), _state->guild, _state->human);
-        !reason.empty()) return reason;
     auto owner = GetPvpOwner(token);
+    if (!owner) return "busy:operation_identity";
+    if (auto reason = _state->continuations.Validate(token, mode, _state->Enabled(owner->domain),
+        _state->EpochFor(owner->domain), _state->guild, _state->human);
+        !reason.empty()) return reason;
     auto it = owner ? _state->reservations.find(owner->originId) : _state->reservations.end();
     if (it == _state->reservations.end() || it->second.continuation != token || it->second.retained
         || Holder(guid) != owner->originId) return "busy:operation_identity";
@@ -301,7 +375,8 @@ bool RealmModule::DeclareContinuationScopes(std::string_view token, std::uint64_
     auto owner = GetPvpOwner(token);
     if (!owner || owner->revision != revision) return false;
     auto mode = owner->stage == PvpStage::Cleaning ? ContinuationMode::Cleanup : ContinuationMode::Application;
-    if (!_state->continuations.Validate(token, mode, On(), Epoch(), _state->guild, _state->human).empty())
+    if (!_state->continuations.Validate(token, mode, _state->Enabled(owner->domain),
+        _state->EpochFor(owner->domain), _state->guild, _state->human).empty())
         return false;
     auto it = _state->reservations.find(owner->originId);
     if (it == _state->reservations.end() || it->second.retained || Holder(guid) != owner->originId) return false;
@@ -370,7 +445,7 @@ std::string RealmModule::ValidateOwnedBody(std::uint32_t guid, std::string_view 
     if (it != _state->reservations.end() && !it->second.continuation.empty())
         return ValidateContinuation(it->second.continuation, guid, ContinuationMode::Application);
     if (operation.empty() || it == _state->reservations.end() || Holder(guid) != operation
-        || it->second.retained || it->second.epoch != Epoch())
+        || it->second.retained || it->second.epoch != _state->EpochFor(it->second.admitted.domain))
         return "busy:operation_identity";
     auto lease = it->second.bodies.find(guid);
     if (lease == it->second.bodies.end()) return "busy:operation_identity";
@@ -409,10 +484,32 @@ std::string RealmModule::ChargeAffectedBodies(std::string_view operation,
     return "";
 }
 
+std::string RealmModule::DeclareAffectedBodyScopes(std::string_view operation, std::uint32_t guid,
+    std::vector<BodyScope> scopes)
+{
+    if (!_state->activeEntry || !_state->activeContinuation.empty() || operation.empty()
+        || operation != _state->activeOperation || !_state->chargedBodies.contains(guid)
+        || scopes.size() > 4) return "busy:operation_identity";
+    if (auto why = MutationReason(guid, operation); !why.empty()) return why;
+    auto found = _state->reservations.find(operation);
+    if (found == _state->reservations.end() || !found->second.bodies.contains(guid)) return "busy:operation_identity";
+    found->second.pending[guid] = std::move(scopes);
+    found->second.declaredScopes.insert(guid);
+    return "";
+}
+
 bool RealmModule::Accept(Queued entry, std::string& error)
 {
+    if (entry.domain != ActivityDomain::Realm || entry.kind == "guild_fishing")
+    { error = "unsupported"; return false; }
+    return AcceptDomain(std::move(entry), error);
+}
+
+bool RealmModule::AcceptDomain(Queued entry, std::string& error)
+{
     error.clear();
-    if (!On()) { error = "realm_off"; return false; }
+    if (!_state->Enabled(entry.domain))
+    { error = entry.domain == ActivityDomain::Guild ? "guild_off" : "realm_off"; return false; }
     if (!_state->started) { error = "realm_not_started"; return false; }
     if (entry.kind == "leave_pvp" && entry.payload.is_object() && entry.payload.contains("pvp_owner"))
     {
@@ -422,10 +519,19 @@ bool RealmModule::Accept(Queued entry, std::string& error)
             return RequestPvpCleanup(entry.id, token.get<std::string>(), entry.guids, error);
     }
     if (!_state->executors.contains(entry.kind)) { error = "unsupported"; return false; }
+    for (auto const& [completed, outcome] : _state->guildOutcomes)
+    {
+        (void)outcome;
+        if (completed.id != entry.id) continue;
+        if (completed.domain == entry.domain && completed.kind == entry.kind
+            && completed.guids == entry.guids && completed.payload == entry.payload) return true;
+        error = "busy:duplicate_operation"; return false;
+    }
     if (auto existing = _state->reservations.find(entry.id); existing != _state->reservations.end())
     {
         auto const& admitted = existing->second.admitted;
-        if (admitted.kind == entry.kind && admitted.guids == entry.guids && admitted.payload == entry.payload)
+        if (admitted.domain == entry.domain && admitted.kind == entry.kind
+            && admitted.guids == entry.guids && admitted.payload == entry.payload)
             return true; // Exact retry never schedules a second native action.
         error = "busy:duplicate_operation"; return false;
     }
@@ -434,11 +540,12 @@ bool RealmModule::Accept(Queued entry, std::string& error)
     // Unknown/pending work can leave the runnable queue while its exact lease
     // remains retained. Bound all outstanding reservations, not only runnable
     // entries, so repeated unknown outcomes cannot grow native ownership forever.
-    if (_state->queue.Size() >= ActionQueue::Capacity || _state->reservations.size() >= ActionQueue::Capacity)
+    if (_state->queue.Size() >= ActionQueue::Capacity
+        || _state->reservations.size() + _state->guildOutcomes.size() >= ActionQueue::Capacity)
     { error = "busy:queue_full"; return false; }
     if (_state->reservations.contains(entry.id)) { error = "busy:duplicate_operation"; return false; }
     State::Reservation reservation;
-    reservation.epoch = Epoch();
+    reservation.epoch = _state->EpochFor(entry.domain);
     reservation.admitted = entry;
     for (auto guid : entry.guids)
     {
@@ -584,7 +691,7 @@ void RealmModule::TickContinuations(TickBudget& budget)
         {
             reservation.retained = true;
             _state->continuations.Unknown(owner.token, reason);
-            PublishJob({owner.cleanupId.empty() ? owner.originId : owner.cleanupId,
+            PublishOutcome(reservation.admitted, {owner.cleanupId.empty() ? owner.originId : owner.cleanupId,
                 owner.cleanupId.empty() ? reservation.admitted.kind : "leave_pvp", false, std::move(reason),
                 0, 0, owner.token});
         };
@@ -598,7 +705,8 @@ void RealmModule::TickContinuations(TickBudget& budget)
                 || Holder(guid) != owner.originId)
             { unknown("body_identity_changed"); return; }
         }
-        if (!On() || (owner.applicationFenced && owner.cleanupId.empty())) return;
+        if (!_state->Enabled(owner.domain) || (owner.applicationFenced && owner.cleanupId.empty()
+            && !owner.internalCleanup)) return;
         auto executor = _state->continuationHandlers.find(owner.kind);
         if (executor == _state->continuationHandlers.end()) { unknown("continuation_unavailable"); return; }
         struct ActiveContinuation
@@ -634,6 +742,7 @@ void RealmModule::TickContinuations(TickBudget& budget)
             { unknown(std::move(reason)); return; }
         if (result.stage == PvpStage::Clean)
         {
+            auto const admitted = reservation.admitted;
             // The adapter guard remains alive through native identity checks,
             // terminal receipt allocation and the one holder-map release.
             // Missing/stale proof cannot release even an apparently empty body.
@@ -658,7 +767,9 @@ void RealmModule::TickContinuations(TickBudget& budget)
             }
             catch (...) { unknown("cleanup_receipt_unavailable"); return; }
             result.clean->quiescence.reset();
-            PublishJob({owner.cleanupId, "leave_pvp", true, "", 0, owner.members.size(), owner.token});
+            PublishOutcome(admitted, {owner.domain == ActivityDomain::Guild ? owner.originId : owner.cleanupId,
+                owner.domain == ActivityDomain::Guild ? admitted.kind : "leave_pvp", true, "", 0,
+                owner.members.size(), owner.token});
             _state->ApplyPins();
             return;
         }
@@ -671,11 +782,12 @@ void RealmModule::Tick(std::uint32_t diff)
 {
     _state->DrainKills();
     ReconcileConfiguration();
-    if (!On())
+    if (!On() && !GuildOn())
     {
         TickBudget noMutations(1);
         TickContinuations(noMutations); // Only same-life checks run while disabled.
         if (Due(_state->pinRemaining, diff, 1000)) _state->ApplyPins();
+        DrainGuildOutcomes();
         return;
     }
     TickBudget budget(Config().realmMaxActionsPerTick);
@@ -688,13 +800,14 @@ void RealmModule::Tick(std::uint32_t diff)
         auto found = _state->reservations.find(entry.id);
         if (found == _state->reservations.end() || entry.cursor >= entry.guids.size())
         {
-            PublishJob({entry.id, entry.kind, false, "operation_identity"});
+            PublishOutcome(entry, {entry.id, entry.kind, false, "operation_identity"});
             return true;
         }
         auto& reservation = found->second;
         auto const guid = entry.guids[entry.cursor];
-        auto finish = [&](std::string reason, bool retain)
+        auto finish = [&](std::string reason, bool retain, bool refused = false)
         {
+            if (!refused && !reservation.declaredScopes.empty()) retain = true;
             if (!reservation.continuation.empty())
             {
                 _state->continuations.Unknown(reservation.continuation, reason);
@@ -703,7 +816,7 @@ void RealmModule::Tick(std::uint32_t diff)
             }
             if (retain) reservation.retained = true;
             else _state->Release(entry.id);
-            PublishJob({entry.id, entry.kind, false, std::move(reason), guid});
+            PublishOutcome(entry, {entry.id, entry.kind, false, std::move(reason), guid});
             return true;
         };
         bool const pending = reservation.pending.contains(guid);
@@ -764,10 +877,16 @@ void RealmModule::Tick(std::uint32_t diff)
         }
         if (result.state == StepState::Detached) return finish("continuation_unprepared", true);
         auto after = Identity(guid, result.state == StepState::Pending);
+        auto expectedScopes = result.expectedScopes;
+        if (reservation.declaredScopes.contains(guid))
+            for (auto const& scope : reservation.pending.at(guid))
+                if (std::find(expectedScopes.begin(), expectedScopes.end(), scope) == expectedScopes.end())
+                    expectedScopes.push_back(scope);
         // The pre-step full lease check already ran. Post-step scope comes
         // only from the executor's explicit transition receipt below.
         auto afterReason = NativeMutationReason(guid);
-        if (Holder(guid) != entry.id || reservation.retained || reservation.epoch != Epoch())
+        if (Holder(guid) != entry.id || reservation.retained
+            || reservation.epoch != _state->EpochFor(entry.domain))
             afterReason = "busy:operation_identity";
         // The first TeleportTo may make the original Player transiently out of
         // world before its Pending receipt is saved. No other failed fence is
@@ -775,30 +894,32 @@ void RealmModule::Tick(std::uint32_t diff)
         if (afterReason == "busy:body_unavailable" && result.state == StepState::Pending && after
             && SameLife(*after, lease->second.body) && _state->Generation(guid) == lease->second.generation)
             afterReason.clear();
-        if (result.expectedScopes.size() > 4 || !after || !SameLife(*after, lease->second.body)
+        if (expectedScopes.size() > 4 || !after || !SameLife(*after, lease->second.body)
             || _state->Generation(guid) != lease->second.generation || !afterReason.empty()
-            || !scopeAllowed(*after, result.expectedScopes))
+            || !scopeAllowed(*after, expectedScopes))
             return finish("operation_transition_unknown", true);
         if (result.state == StepState::Unknown)
             return finish(result.reason.empty() ? "native_cleanup_unproved" : result.reason, true);
         if (result.state == StepState::Pending)
         {
-            reservation.pending[guid] = std::move(result.expectedScopes);
+            reservation.pending[guid] = std::move(expectedScopes);
             return false;
         }
         if (result.state == StepState::Refused)
-            return finish(result.reason.empty() ? "refused" : result.reason, false);
-        reservation.pending.erase(guid);
+            return finish(result.reason.empty() ? "refused" : result.reason, false, true);
+        if (!reservation.declaredScopes.contains(guid)) reservation.pending.erase(guid);
         reservation.value = result.value;
         ++entry.cursor;
         if (entry.cursor < entry.guids.size())
             return false;
         auto value = reservation.value;
         _state->Release(entry.id);
-        PublishJob({entry.id, entry.kind, true, "", entry.guids.size() == 1 ? guid : 0, value});
+        PublishOutcome(entry, {entry.id, entry.kind, true, "", entry.guids.size() == 1 ? guid : 0, value});
         return true;
     });
     if (!_state->continuationsFirst) TickContinuations(budget);
+    DrainGuildOutcomes();
+    if (!On()) return; // Guild availability never enables Realm polling/events.
     if (Due(_state->flagRemaining, diff, 1000))
     {
         auto human = Human();
@@ -827,34 +948,46 @@ void RealmModule::Tick(std::uint32_t diff)
 
 void RealmModule::ReconcileConfiguration()
 {
-    if (!_state->disablePending) return;
-    _state->disablePending = false;
+    bool const realmChanged = _state->disablePending;
+    bool const guildChanged = _state->guildDisablePending;
+    if (!realmChanged && !guildChanged) return;
+    _state->disablePending = _state->guildDisablePending = false;
     for (auto const& [id, reservation] : _state->reservations)
     {
         (void)id;
         if (reservation.continuation.empty()) continue;
         auto owner = GetPvpOwner(reservation.continuation);
-        if (owner && !owner->cleanupId.empty())
+        if (realmChanged && owner && owner->domain == ActivityDomain::Realm && !owner->cleanupId.empty())
             PublishJob({owner->cleanupId, "leave_pvp", false, "realm_off", 0, 0, owner->token});
     }
-    _state->continuations.FenceAll("realm_off");
-    _state->queue.DropAll("realm_off", [&](Queued const& entry, std::string const& reason)
+    if (realmChanged) _state->continuations.FenceDomain(ActivityDomain::Realm, "realm_off");
+    if (guildChanged) _state->continuations.FenceDomain(ActivityDomain::Guild, "guild_off");
+    _state->queue.DropIf([&](Queued const& entry)
+    { return entry.domain == ActivityDomain::Guild ? guildChanged : realmChanged; }, "configuration_changed",
+        [&](Queued const& entry, std::string const&)
     {
         auto it = _state->reservations.find(entry.id);
         if (it != _state->reservations.end() && !it->second.continuation.empty())
+        {
             _state->continuations.Detach(it->second.continuation);
+            if (entry.domain == ActivityDomain::Guild) return; // Finite cleanup owns its one terminal outcome.
+        }
         else if (it != _state->reservations.end() && (!it->second.pending.empty() || it->second.retained))
             it->second.retained = true;
         else
             _state->Release(entry.id);
-        PublishJob({entry.id, entry.kind, false, reason});
+        PublishOutcome(entry, {entry.id, entry.kind, false,
+            entry.domain == ActivityDomain::Guild ? "guild_off" : "realm_off"});
     });
     // Actor/guild declarations belong to the old enable/configured-identity
     // epoch. An enable or identity switch requires a fresh declaration.
-    _state->actors.clear();
-    _state->gankers.clear();
-    _state->guilds.clear();
-    _state->weapons.clear();
+    if (realmChanged)
+    {
+        _state->actors.clear();
+        _state->gankers.clear();
+        _state->guilds.clear();
+        _state->weapons.clear();
+    }
     _state->ApplyPins();
 }
 
@@ -863,8 +996,11 @@ void RealmModule::Shutdown()
     {
         std::lock_guard lock(_state->factsMutex);
         _state->on = false;
+        _state->guildOn = false;
         ++_state->epoch;
+        ++_state->guildEpoch;
         _state->disablePending = true;
+        _state->guildDisablePending = true;
         _state->killInbox.clear();
     }
     ReconcileConfiguration(); // Retain unresolved operations; never fake restoration or run another action.
@@ -880,7 +1016,7 @@ void RegisterRealmContinuationHandlers()
         auto& module = RealmModule::Instance();
         auto owner = command->pvpOwner.empty() ? module.FindPvpOwner(command->originId)
             : module.GetPvpOwner(command->pvpOwner);
-        if (!owner) return {false, "owner_unavailable"};
+        if (!owner || owner->domain != ActivityDomain::Realm) return {false, "owner_unavailable"};
         // Exact read-only query works while disabled, so retained owners remain
         // discoverable. No wire status or caller-local state can authorize release.
         Publish(MakeRealmPvp(message.at("id").get<std::string>(), *owner));
