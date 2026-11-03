@@ -18,6 +18,7 @@ import statistics
 from typing import Protocol
 
 from leeroy_mind.clock import SystemClock, night_of
+from leeroy_mind.bodies import ALL, BodyHold, RunBodyProof
 from leeroy_mind.human import HumanIdentity, human_identity
 from leeroy_mind.memory.writer import MemoryCandidate, WriteResult
 from leeroy_mind.personas.io import PersonaCache
@@ -283,6 +284,10 @@ class RealmPorts(Protocol):
     def night_window(self, now: float) -> tuple[float, float] | None: ...
     def raid_state(self) -> str: ...
     def raid_holds_all(self) -> bool: ...
+    def raid_body_holds(self) -> tuple[BodyHold, ...]: ...
+    def offline_body_holds(self) -> tuple[BodyHold, ...]: ...
+    def training_body_holds(self) -> tuple[BodyHold, ...]: ...
+    def run_body_proof(self, run) -> RunBodyProof | None: ...
     def offline_raid_members(self) -> set[int]: ...
     def offline_window(self) -> tuple[time, time] | None: ...
     def hangout_tonight(self) -> bool: ...
@@ -573,6 +578,169 @@ class LivePorts(RealmPorts):
     def training_members(self):
         training = getattr(self.app, "training", None)
         return set(training.training_members()) if training is not None else set()
+
+    def raid_body_holds(self):
+        """Scheduling intent and exact restoration reservations are distinct."""
+        from leeroy_mind.training.body_holds import session_evidence
+        controller = self._raid_night()
+        if controller is None:
+            # A persisted open online session cannot silently become idle just
+            # because its controller was not installed/recovered.
+            if self._tables("guild_raid") and self.conn.execute(
+                    "SELECT 1 FROM guild_raid WHERE ended IS NULL AND offline=0 LIMIT 1").fetchone():
+                raise RealmEvidenceUnavailable("raid body evidence unavailable")
+            return ()
+        try:
+            holds = [BodyHold("raid:scheduling", "raid", 0, ALL, False)] if self.raid_holds_all() else []
+            sessions = []
+            current = controller.session
+            if current is not None:
+                sessions.append(current)
+            for session, run, outcome, events, stop_dc in controller._closing:
+                if all(session is not s for s in sessions):
+                    sessions.append(session)
+            scopes = set()
+            for session in sessions:
+                scope, guids, _ = session_evidence(self.conn, session, self.app.human_guid)
+                if session.plan.offline or scope in scopes:
+                    raise ValueError("ambiguous raid scope")
+                scopes.add(scope)
+                holds.append(BodyHold(scope, "raid", 0, guids, True))
+            known_ids = {s.raid_id for s in sessions}
+            if any(row[0] not in known_ids for row in self.conn.execute(
+                    "SELECT raid_id FROM guild_raid WHERE ended IS NULL AND offline=0")):
+                raise ValueError("unowned raid session")
+            return tuple(holds)
+        except Exception:
+            raise RealmEvidenceUnavailable("raid body evidence unavailable") from None
+
+    def _offline_owned(self):
+        offline = getattr(self._guild(), "offline", None)
+        return offline._owned if offline is not None else self._meta("guild:offline:owned")
+
+    def offline_body_holds(self):
+        try:
+            hold = self._offline_body_hold()
+            return (hold,) if hold is not None else ()
+        except Exception:
+            raise RealmEvidenceUnavailable("offline body evidence unavailable") from None
+
+    def _offline_body_hold(self):
+        """Shared source read, never another registered provider callback."""
+        owned = self._offline_owned()
+        if owned is None:
+            return None
+        from leeroy_mind.training.body_holds import identity
+        scope = identity(owned["id"])
+        if owned.get("phase") not in {"acquiring", "awaiting_ack", "accepted", "uncertain",
+                                       "complete", "rejected"}:
+            raise ValueError("invalid offline phase")
+        guids = frozenset(self.offline_raid_members())
+        return BodyHold(scope, "offline_raid", 1, guids, True) if guids else None
+
+    def _corroborate_training_journals(self, training):
+        from leeroy_mind.training.body_holds import session_evidence, validate_journals
+        if training.ports.conn is not self.conn or training.ports.human_guid != self.app.human_guid:
+            raise ValueError("unowned training journals")
+        for evidence in validate_journals(training):
+            run, session = evidence.run, evidence.run.session
+            if evidence.owner == "offline_raid":
+                offline = getattr(self._guild(), "offline", None)
+                owned = self._offline_owned()
+                persisted = self._meta("guild:offline:owned")
+                hold = self._offline_body_hold()
+                if (offline is None or offline.run is not run or offline.session is not session
+                        or type(owned) is not dict or type(owned.get("raid_id")) is not int
+                        or owned.get("raid_id") != session.raid_id
+                        or owned.get("phase") not in {"awaiting_ack", "accepted", "uncertain"}
+                        or type(persisted) is not dict or persisted.get("id") != evidence.scope_id
+                        or type(persisted.get("raid_id")) is not int or persisted.get("raid_id") != session.raid_id
+                        or persisted.get("phase") not in {"awaiting_ack", "accepted", "uncertain"}
+                        or hold is None or hold.scope_id != evidence.scope_id
+                        or not evidence.members <= hold.guids):
+                    raise ValueError("unowned training journals")
+            else:
+                raid = self._raid_night()
+                current = (raid is not None and raid.run is run and raid.session is session
+                           and self.raid_state() in _HOLDS)
+                closing = (raid is not None and any(s is session and r is run for s, r, *_ in raid._closing))
+                scope, guids, _ = session_evidence(self.conn, session, self.app.human_guid)
+                if not (current or closing) or scope != evidence.scope_id or not evidence.members <= guids:
+                    raise ValueError("unowned training journals")
+
+    def training_body_holds(self):
+        training = getattr(self.app, "training", None)
+        # Disabled/unattached Training has no controller able to validate an
+        # unresolved journal or operation. It cannot certify an empty source.
+        try:
+            if training is not None:
+                holds = tuple(training.body_holds())
+                self._corroborate_training_journals(training)
+                return holds
+            if self._tables("tg_applied") and self.conn.execute(
+                    "SELECT 1 FROM tg_applied WHERE undone IS NULL LIMIT 1").fetchone():
+                raise ValueError("unowned training journal")
+            for key in ("tg:lab:owned", "tg:benchmark:active"):
+                owned = self._meta(key)
+                if owned is not None:
+                    if key != "tg:lab:owned" or type(owned) is not dict or owned.get("phase") != "complete":
+                        raise ValueError("unowned training operation")
+                    from leeroy_mind.training.body_holds import validate_lab_complete
+                    validate_lab_complete(self.conn, owned)
+            return ()
+        except Exception:
+            raise RealmEvidenceUnavailable("training body evidence unavailable") from None
+
+    def run_body_proof(self, run):
+        """Resolve a real current/retained run without calling Training.state_for.
+
+        This supplies local identity only. BodyLedger checks source coverage and
+        conflicts; Training still checks its native offline binding and fences.
+        """
+        from leeroy_mind.training.body_holds import identity, session_evidence
+        training = getattr(self.app, "training", None)
+        if training is None or run is None:
+            return None
+        try:
+            epoch = training.ports.connection_epoch
+            if (training._connected is not True or training._presence_known is not True
+                    or training._stopping is not False or type(epoch) is not int
+                    or not 0 < epoch <= 0xFFFFFFFFFFFFFFFF or training._epoch != epoch
+                    or training.ports.human_guid != self.app.human_guid
+                    or training.ports.conn is not self.conn):
+                return None
+            listener = training.listener
+            key = listener.run_key(run)
+            retained = listener._ending.get(key)
+            if (retained is not None and retained is not run
+                    or not (listener.run is run or retained is run)):
+                return None
+            session = run.session
+            session_key, guids, instance = session_evidence(
+                self.conn, session, self.app.human_guid, run=run, proof=True)
+            if run.plan.offline:
+                controller = getattr(self._guild(), "offline", None)
+                owned = self._offline_owned()
+                if (controller is None or controller.run is not run or controller.session is not session
+                        or type(owned) is not dict or owned.get("raid_id") != session.raid_id
+                        or owned.get("phase") not in {"awaiting_ack", "accepted", "uncertain"}):
+                    return None
+                owner, scope = "offline_raid", identity(owned["id"])
+            else:
+                controller = self._raid_night()
+                if controller is None:
+                    return None
+                current = (controller.run is run and controller.session is session
+                           and self.raid_state() in _HOLDS)
+                closing = any(s is session and r is run for s, r, *_ in controller._closing)
+                if not (current or closing):
+                    return None
+                owner, scope = "raid", session_key
+            if training.ports.connection_epoch != epoch or training._epoch != epoch:
+                return None
+            return RunBodyProof(run, session, owner, scope, session_key, epoch, instance, guids)
+        except Exception:
+            return None
 
     def armory(self):
         if not self._armory_loaded:

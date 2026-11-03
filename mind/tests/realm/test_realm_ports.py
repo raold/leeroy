@@ -367,8 +367,14 @@ class BenchmarkProducer:
         return granted
 
     def release(self, owner, guids):
+        removed = set()
         for guid in guids:
             assert self.holders.pop(guid) == owner
+            removed.add(guid)
+        return removed
+
+    def claims_for(self, owner):
+        return frozenset(g for g, held in self.holders.items() if held == owner)
 
     def standing_lead(self):
         return 0
