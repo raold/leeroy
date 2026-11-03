@@ -1,3 +1,4 @@
+import importlib
 import os
 import re
 import sqlite3
@@ -11,6 +12,10 @@ MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 _MIGRATION_RE = re.compile(r"^(\d{4})_.*\.sql$")
 VEC_DIM = 512
 _LABEL_BAD = re.compile(r"[^A-Za-z0-9_-]+")
+# A migration's Python data step, keyed by the name after the file's NNNN_: "module:function",
+# called with the connection after the file's script and before its user_version bump, in the
+# same transaction. It must not commit.
+DATA_STEPS = {"nightly": "leeroy_mind.memory.privacy:backfill_scopes"}
 
 
 class EmbeddingMismatch(RuntimeError):
@@ -56,7 +61,8 @@ def latest_version() -> int:
 
 def migrate(conn: sqlite3.Connection) -> int:
     """Apply every migrations/NNNN_*.sql above PRAGMA user_version, each in its own transaction
-    (DDL is transactional in SQLite, so a failing file leaves no partial schema). Idempotent."""
+    with its DATA_STEPS step, if it has one (DDL is transactional in SQLite, so a failing file
+    or step leaves no partial schema). Idempotent."""
     conn.commit()
     current = conn.execute("PRAGMA user_version").fetchone()[0]
     files = _migration_files()
@@ -71,9 +77,13 @@ def migrate(conn: sqlite3.Connection) -> int:
         if version <= current:
             continue
         try:
-            # executescript does not commit when autocommit=False, so the script and the
-            # user_version bump commit together below.
+            # executescript does not commit when autocommit=False, so the script, its data step
+            # and the user_version bump commit together below.
             conn.executescript(path.read_text(encoding="utf-8"))
+            step = DATA_STEPS.get(path.stem.split("_", 1)[1])
+            if step is not None:
+                module, func = step.split(":")
+                getattr(importlib.import_module(module), func)(conn)
             conn.execute(f"PRAGMA user_version = {int(version)}")
             conn.commit()
         except BaseException:

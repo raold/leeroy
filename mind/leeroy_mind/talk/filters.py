@@ -60,11 +60,12 @@ _ACTION = re.compile(r"\*([^*\n]+)\*")
 _DASH = re.compile(r"\s*[—–]\s*")
 # A semicolon, unless it is the eye of an emoticon: ;) ;-) ;P ;D and both eyes of ;_;
 _SEMI = re.compile(r"\s*(?<!_);(?![-']?[)(\]\[DPpOo3*/\\|_])\s*")
-# The frame of a prompt chat line the model may copy: "[3m ago]", "(whisper to Zan):", "(raid)".
+# The frame of a prompt chat line the model may copy: "[3m ago]", "(whisper to Zan):", "(raid)",
+# "(on vent):".
 _AGE = r"(?:just now|\d{1,3}\s?[smhd] ago)"
 _COPIED_TAG = re.compile(
     rf"^\s*(?:\[{_AGE}\]|\((?:{_AGE}|whisper(?: (?:to|from) [^)\n]{{1,24}})?|guild|officer"
-    r"|party|raid(?: warning)?|say|yell)\))\s*:?\s*", re.IGNORECASE)
+    r"|party|raid(?: warning)?|say|yell|on vent)\))\s*:?\s*", re.IGNORECASE)
 _QUOTES = "\"“”"
 # A tag's colon, never the eyes of an emoticon ("zan :) welcome back", "zan: D", "zan :S":
 # fix round 1, review M2); "Zan: Done with the boss" is a tag.
@@ -501,12 +502,17 @@ _SLANG = re.compile(
     # rehearsal 3: "that kill was so hype", "literally so down"; "so hyped", "literally just"
     # and "he literally said so" are 2009's
     r"|\bso hype\b(?!-?d)|\bhype af\b"
-    r"|\bliterally so\b(?=\s+[a-z])(?!\s+(?:that|as|far as|long as)\b)", re.IGNORECASE)
+    r"|\bliterally so\b(?=\s+[a-z])(?!\s+(?:that|as|far as|long as)\b)"
+    # live session 1: "u dont gotta apologize for being a flex machine". Flex for showing off
+    # is 2010s. Flexible, flexweave, reflexes, the /flex emote, flex time at work and a raid's
+    # flex spot or spec are older
+    r"|(?<![\w/])flex(?:ing|in)?\b(?!\s+(?:time|hours?|schedule|days?|shifts?|spots?|slots?"
+    r"|specs?|roles?|dps|tanks?|healers?|heals)\b)", re.IGNORECASE)
 
 
 def slang(text: str) -> bool:
     """A post-2012 idiom ("vibes", "is fire", "on brand", "lowkey", "no cap", "sus", "rizz",
-    "so hype", "literally so down")."""
+    "so hype", "literally so down", "flex", "flexing")."""
     return bool(_SLANG.search(text))
 
 

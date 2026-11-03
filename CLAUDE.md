@@ -170,9 +170,7 @@ were present in `modules/` when CMake last ran.
 
 Live configs are `.conf`; the `.conf.dist` files are templates that a pull
 updates. New `.dist` keys do not appear in your live `.conf` — missing keys fall
-back to compiled-in defaults. `ac-update.sh` reports them, for the modules'
-`conf/*.conf.dist` and for the core's `worldserver.conf.dist` / `authserver.conf.dist`
-(under `src/server/apps/`).
+back to compiled-in defaults. `ac-update.sh` reports them.
 
 ## Scripts
 
@@ -183,6 +181,7 @@ Run from `F:\azerothcore\scripts` in Git Bash.
 ./ac-backup.sh [label]       # mysqldump all 4 DBs, keeps newest 5
 ./ac-build.sh                # preflight + cmake configure + build
 ./ac-server.sh start|stop|status
+./ac-voice.sh start|stop|status # voice service; reads its data directory and ports from `where`
 ./ac-snapshot.sh             # live configs (masked) + playerbots and ollama-chat patches -> config/, patches/
 ```
 
@@ -237,17 +236,16 @@ Setting `SOAP.Enabled = 1` would let the script do a real graceful shutdown.
 |---|---|---|
 | `mod-playerbots` | mod-playerbots/mod-playerbots | Core feature. Tuned config; `.bak-500bots` / `.bak-1000bots` variants kept. |
 | `mod-ollama-chat` | DustinHendrickson/mod-ollama-chat | LLM bot chat. git clone, updatable. |
-| `mod-transmog` | azerothcore/mod-transmog | git since 2026-10-30 (history attached in place to the unpacked zip, which matched `0d85cbc` exactly; repo-local `core.autocrlf=false`, `core.filemode=false`). **Upstream `327753a` renames and moves its SQL files and deletes `data/sql/updates/`**: review before the next `ac-update.sh`, since the DB updater may re-run the renamed files. |
-| `mod-individual-progression` | ZhengPeiRu21/mod-individual-progression | git since 2026-10-30 (attached in place at `60336b3`; same repo-local settings as transmog). Rewrites a lot of world/character data. Gates raids per character by tier (ICC needs 16, from killing Anub'arak in ToC; tier = highest rewarded quest `66000+N`). `.ip set <name> <tier>` **ignores the name** and applies to your target or yourself, and from the console it would dereference an empty player: use it in game with no target. |
+| `mod-transmog` | zip (no git) | |
+| `mod-individual-progression` | zip (no git) | Rewrites a lot of world/character data. Gates raids per character by tier (ICC needs 16, from killing Anub'arak in ToC; tier = highest rewarded quest `66000+N`). `.ip set <name> <tier>` **ignores the name** and applies to your target or yourself, and from the console it would dereference an empty player: use it in game with no target. Old PvP rank titles come from lifetime kills; live conf has `VanillaPvpEarnTitlesAfterVanilla = 1` and `VanillaPvpKillRequirement.Rank14 = 3000` (2026-11-01, so the owner holds High Warlord; bots do not earn ranks). A rank above what kills allow is stripped at each map change, even if set with `.titles add`. |
 | `mod-dungeon-clear` | jrad7/mod-dungeon-clear | git clone since 2026-10-29 (was a zip of `60f3d98`). **The autonomous tank lead**: `.dc on` (or `dc on` in party chat) inside an instance makes the group's tank bot route boss to boss over the navmesh, pull (Dynamic/Leeroy/Advanced), run scripted events (all 16 WotLK 5-mans), loot, rest and rez. Raids too: trash flow with a readiness quorum, pre-boss muster, wipe recovery; boss fights are left to the playerbots raid strategies. Companion addon: jrad7/mod-dungeon-clear-addon. It hooks playerbots without patching it (appends to the shared context registries). Ships its own `.cmake`; folder name must stay exact. Reads `PlayerbotAIConfig` members directly, so it breaks when playerbots renames them. AGPL-3.0. |
-| `mod-bg-slaveryvalley` | zip (no git; upstream Helias/mod-bg-slaveryvalley is a monorepo with the module under `server-side/`, so it can't be cloned in place) | Custom battleground, map 801 / BG id 31. The local copy matches upstream `9be4de0` exactly. Server side complete; **client patch still undistributed** — see below. |
+| `mod-bg-slaveryvalley` | zip (no git) | Custom battleground, map 801 / BG id 31. Server side complete; **client patch still undistributed** — see below. |
 | `mod-ah-bot-plus` | NathanHandley/mod-ah-bot-plus | Auction house bot (git clone since 2026-10-30). Sells under, and buys player auctions as, the ordinary account `ahbot` (auth id 352): characters Fatiggeritch (3502) and Bonqueefa (3503), set in `AuctionHouseBot.GUIDs` (comma list, no spaces). Never use a playerbot character for it, and never enter the world on those characters. Seller and buyer both on; everything else is the `.dist` default (about 150 listings a minute per house, up to 15000 each). GM commands: `.ahbot reload` (re-reads the conf, GUIDs included, no restart), `.ahbot update`, `.ahbot empty`. Loader `Addmod_ah_bot_plusScripts`, so the folder name must stay exact. No SQL. |
 | `mod-leeroy` | this repo, `modules/mod-leeroy` | The guild bridge. `azerothcore-wotlk/modules/mod-leeroy` is a **junction** to `F:\azerothcore\modules\mod-leeroy`: remove it with `rmdir`, never `rm -rf` (that deletes the source through the link). Pins the cast (guild members at 80+, minus `Leeroy.HumanGuid`) via the playerbots pin API, mutes them in mod-ollama-chat, and serves NDJSON on `Leeroy.Bridge.Host`:`Leeroy.Bridge.Port` (`127.0.0.1:7878`, one mind at a time). Keys: `Leeroy.Enable`, `GuildId`, `HumanGuid`, `KeepCast`, `BringCastOnline`, `ExcludeFromOllamaChat`, `Bridge.*`. Start line in `Server.log`: `mod-leeroy: cast N members, pinned N ...`. Smoke test: `python modules/mod-leeroy/tools/bridge_smoke.py --expect-cast N` (0 pass, 1 fail, 2 no server or another mind connected); `--listen S` prints events, `--send` sends raw commands. |
 
-`mod-playerbots`, `mod-ollama-chat`, `mod-dungeon-clear`, `mod-ah-bot-plus`,
-`mod-transmog` and `mod-individual-progression` are git repos, and `mod-leeroy`
-lives in this one. `mod-bg-slaveryvalley` is the only zip extraction left, and
-`ac-update.sh` skips it; updating it means re-copying `server-side/` from upstream.
+`mod-playerbots`, `mod-ollama-chat`, `mod-dungeon-clear` and `mod-ah-bot-plus` are
+git repos and `mod-leeroy` lives in this one; the rest are zip extractions and
+`ac-update.sh` skips them. Updating those means re-downloading.
 
 ### Playerbots config prefix is `Playerbots.*`
 
@@ -261,7 +259,7 @@ If `ac-update.sh` reports hundreds of "new keys" at once, suspect a rename.
 ### Local patch: randombots in the Raid Browser
 
 Playerbots randombots only copy Dungeon Finder queues that real players are
-in, so the Raid Browser was always empty. Local commit `1257c843` on
+in, so the Raid Browser was always empty. Local commit `b5e9a62b` on
 `mod-playerbots` `master` ("List idle randombots in the Raid Browser") adds
 `RandomPlayerbotMgr::CheckRaidBrowser()`: once a minute on the world thread it
 keeps `Playerbots.RandomBotRaidBrowserListings` (20) idle bots per faction
@@ -273,7 +271,7 @@ which disabled the raid browser entirely; `lfg options 7` sets it live).
 
 ### Local patch: `.playerbots bot add5|add10|add25|add40`
 
-Local commits `ed5a442f`, `e72145d4` and `1f1cb5cd` (add5) on `mod-playerbots`
+Local commits `010d5ff2`, `8a6e15fe` and `19248990` (add5) on `mod-playerbots`
 `master`. Tops the player's group up to a 5-man party or a 10/25/40-man raid
 with addclass bots: 1/1/3, 2/3/5, 3/6/16 and 4/10/26
 tank/healer/damage, counting roles already in the group (so re-running it only
@@ -281,20 +279,20 @@ fills gaps). Classes come from fixed rotations in `PlayerbotMgr.cpp`
 (`RAID_TANKS`, `RAID_HEALERS`, `RAID_DAMAGE`) matched to
 `Playerbots.PremadeSpecName` by name; each bot gets that premade spec, glyphs
 and fresh gear in `OnBotLogin`, plus `formation arrow`, and damage bots get
-`co +wait for attack` with a 4 s hold so the tank opens pulls (`e72145d4`).
+`co +wait for attack` with a 4 s hold so the tank opens pulls (`8a6e15fe`).
 Limited by `Playerbots.MaxAddedBots` (40).
 Do not run `.playerbots bot init=auto` on such a raid: `Randomize()` re-rolls
 the spec. Use the bots' `autogear` chat command instead.
 Bots take the master's level, and the main character is 83 (GM-levelled past
 `MaxPlayerLevel = 80`). Playerbots' talent code only knew spec links up to 80
 and gave such bots **no talents at all**: no tank strategy, so dungeon-clear
-said "No tank bot found". Local commit `8040a53e` clamps to 80.
+said "No tank bot found". Local commit `075efcb9` clamps to 80.
 Do not pass party/raid leadership to a bot: every bot then runs `reset botAI`
 (`ResetStrategies`), which drops `wait for attack` (formation survives).
 
 ### Local patch: pinned random bots
 
-Local commit `e847415b` on `mod-playerbots` `master` ("Let other modules pin
+Local commit `9839dc57` on `mod-playerbots` `master` ("Let other modules pin
 random bots"). An API on `RandomPlayerbotMgr` that mod-leeroy uses to keep the
 owner's guild of ~106 level-80 random bots permanent and always online. No
 config key: nothing changes until a caller pins something.
@@ -330,7 +328,7 @@ M rejected: not on a random-bot account`, and per bot `Pinned bot #<guid>
 <name>: kept, skipped randomize`, `…: kept, skipped refresh and teleport` and
 `…: revived in place`.
 
-`Revive()` is guarded too (commit `ac039eba`): `FindCorpseAction` calls it
+`Revive()` is guarded too (commit `ea1b7de1`): `FindCorpseAction` calls it
 for a masterless ghost at death count >= 5, and for a pin it now only revives
 in place instead of `Refresh` (group leave) + grind teleport. Unpinning logs
 nobody out: the bots keep their armed `add` and carry on as ordinary random
@@ -342,7 +340,18 @@ from the leader); random-bot BG, LFG and Raid Browser selection still apply to
 pins. Pinned bots also skip playerbots' periodic `Refresh`, which clears inventory but
 is the only routine top-up of ammo, reagents and potions, so over long uptimes
 cast hunters run out of ammo and casters out of reagents. A master can whisper
-`maintenance` to bots in their group; a pin-safe top-up is planned for P1d.
+`maintenance` to bots in their group. mod-leeroy's world-tick job (`TopUpJob`)
+tops up pinned cast bots outside combat, groups and instances, at most once an
+hour each and five bots per 15-minute pass. It preserves inventory: additive
+ammo and shaman reagent paths replace factory helpers that destroy old stacks.
+Food and drink are filled independently so existing food cannot crowd out missing
+water; shifted druids retain drink coverage. Audited factory helpers add potions
+and class consumables.
+
+Local commits `e36fca36` and `7c1e5b49` (built 2026-10-31) keep pins quiet: for a
+pinned bot three `TellMaster` lines are skipped, "AI was reset to defaults"
+(`ResetAiAction`, which playerbots runs on "group set leader") and the
+`hello_follow`/`hello` lines after `FindNewMaster`. The reset and `+follow` still run.
 
 Commits here never carry a `Co-Authored-By` or other attribution trailer.
 
@@ -388,7 +397,8 @@ in the bots make ~2 requests/minute regardless of bot count.
 Playerbots' own canned chatter is off (2026-10-29), so bots only talk through
 Ollama: `RandomBotTalk`, `RandomBotEmote`, `RandomBotSuggestDungeons`,
 `EnableGreet`, `EnableBroadcasts` all `0` (backup
-`playerbots.conf.bak-prequiet-20261029`). `RandomBotEmote = 1` made stacked
+`playerbots.conf.bak-prequiet-20261029`), and `AnnounceConsumableUse = 0`
+(new upstream 2026-10-31: "Eating [item] (85%)" whispers to the master). `RandomBotEmote = 1` made stacked
 raid bots answer each other's `/nod` forever ("At least SOMEONE agrees with
 me!"). `RandomBotTalk = 0` also stops the canned chat replies; master commands
 use a separate path and still work.
@@ -402,32 +412,23 @@ was empty). The Ollama tray app's own "Model location" setting
 
 Map 801, battleground id 31, levels 71-80, 5-10 per team.
 
-**Server side.** `server-data.zip` from the module's 1.0 release was unpacked over
-`Data/` on 2026-10-06: 12 DBCs, 6 maps, 7 mmaps, 33 vmaps. **The release's DBCs are
-damaged**: every float is truncated to an integer (Spell.dbc spell-power coefficients,
-chain-jump multipliers, per-level scaling; WorldStateUI strings), and its AreaTable
-lacks the BG's areas 5000-5004. The record-count check done then missed it. From
-10-06 to 10-30 about a thousand spells had no spell power on the server (Blizzard
-0.119 -> 0, Chain Lightning 0.571 -> 0). **Repaired 2026-10-30**: the 12 server DBCs
-are now the stock files (`Data/dbc.bak-20261006_142211`) plus exactly the mod's new
-records (BattlemasterList 31, Map 801, AreaTable 5000-5004, WorldSafeLocs, Spell
-85000-85002 and the rest). The damaged set is backed up as
-`Data/dbc.bak-pre-repair-20261030_112700`. **Never copy the release's DBCs again.**
+**Server side is done** (2026-10-06). `server-data.zip` from the module's 1.0
+release was unpacked over `Data/` — 12 DBCs, 6 maps, 7 mmaps, 33 vmaps. The DBC
+overwrite is strictly additive; record counts went Spell 49839→49842,
+Map 135→136, BattlemasterList 13→14, WorldSafeLocs 685→692, AreaTable unchanged.
+The large file-size jump is localization strings (the release ships all 7
+locales; the local extraction was enUS-only), not bulk content. The pre-install
+DBC folder is backed up next to it as `Data/dbc.bak-20261006_142211`.
 
-**Client side, no modified `wow.exe`.** The README wants players to install a cracked
-`wow.exe` (from file hosts) so the client accepts the patch's modified FrameXML; it
-was deliberately not used. Instead:
-- `Wow355a\Data\enUS\patch-enUS-4.MPQ`: the release's patch without
-  `Interface\FrameXML` and with the repaired DBCs. Built with StormLib v9.40
-  (`F:\azerothcore\tools\`, untracked; scripts in `tools\slaveryvalley-scripts\`).
-  The untouched release patch is `client-patches\patch-S.MPQ`; a build with its
-  damaged DBCs is `client-patches\patch-enUS-4.shipped-dbc.MPQ`. Number future
-  custom patches 5 or higher.
-- `Wow355a\Interface\AddOns\SlaveryValleyUI\`: replays the only two FrameXML
-  changes (the PvP-tab background art for BG 31 and a 1-pixel width). Derived from
-  Blizzard code, so it stays local (staged in `client-patches\SlaveryValleyUI\`).
-- Queue from the PvP frame (H > Battlegrounds); the module ships no battlemaster NPC.
-  `.debug bg` starts an under-filled match.
+**Client side is NOT done.** Each player needs `patch-S.MPQ` (staged at
+`F:\azerothcore\client-patches\patch-S.MPQ`) copied into their
+`WoW/Data/<locale>/` as `patch-<locale>-4.MPQ`. Supported locales: enUS, enGB,
+ruRU, frFR, deDE, esES, esMX.
+
+The README also tells players to install a **modified `wow.exe`** from
+third-party file hosts so the client will load an unsigned custom patch. That is
+a cracked copy of Blizzard's binary; it was deliberately not fetched. That part
+is yours to decide and carry out.
 
 The repo (README, images, `client-side/` source assets) is kept at
 `F:\azerothcore\client-patches\mod-bg-slaveryvalley-repo`.
@@ -470,7 +471,84 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 - Do not run `personas generate`/`seed` or a library build while the mind is
   live: they load another large model next to the live one and evict it.
 
+## The voice service (`leeroy-voice`)
+
+`voice/` adds local room playback and push-to-talk to the mind. It is a separate
+GPL-3.0-or-later process, with its own `voice\LICENSE` and `voice\.venv` on
+**Python 3.12**: the pinned speech/audio dependencies are kept apart from the
+mind's Python 3.14 environment. Expressive engines use another venv under
+`voice-data\engines\<engine>\.venv`; do not install their torch stack into the
+mind or voice-service venv.
+
+**Rollout is pending.** Development and validation belong in a separate
+worktree. Before deployment, complete an isolated rehearsal using a copied
+database, FakeBridge, FakeLLM and separate loopback ports. It must not contact
+the live bridge or load/unload models on live Ollama. Resolve migration numbering
+against the merge target, merge into the code the live mind runs, then use that
+live code's own `db migrate` with the mind stopped. Do not run a development
+migration on the live database. Acceptance with WoW focused remains a check of
+the next normal session after deployment.
+
+- The service listens on loopback only: `voice.toml` defaults to 7879 for the
+  mind connection and 7880 for the browser UI. The mind's `[voice]` endpoint
+  must match the service's `[mind]` endpoint. The mind doctor reports spec
+  coverage and optional service status; a stopped voice service is a note.
+- `voice-data\` holds `voice.toml`, `decision.toml`, `lexicon.toml`,
+  `attitudes.toml`, models, caches, UI state and logs. The local decision records
+  the listening choices; never commit it or device settings. Voice specs,
+  `brief.json` and synthetic `.ref.wav` clips live in `mind-data\voices\`.
+- `LEEROY_VOICE_DATA` overrides the voice data directory. `LEEROY_MIND_DATA`
+  selects the mind data directory used to locate voice specs. Defaults follow
+  the code's checkout, including worktrees. For tests with a borrowed venv,
+  set `PYTHONPATH` to the intended worktree's `voice` or `mind` directory and
+  check the imported package's `__file__`; an editable install may point back
+  at the live checkout. Use scratch data directories for development commands.
+- `scripts/ac-voice.sh start|stop|status` uses `voice\.venv` under `AC_ROOT`
+  (this checkout by default) and `python -m leeroy_voice where` to resolve its
+  data directory and ports.
+  It starts a hidden process. The mind can autostart it when configured; do not
+  enable that in a development checkout against live data.
+- On logout, playback fades, push-to-talk disarms, the microphone closes,
+  WoW's volume is restored and GPU leases are released. A refused or failed
+  expressive engine falls back to the member's Kokoro blend; cached expressive
+  callouts can still play. GPU admission requires headroom beside the live chat
+  and embedding models, and is measured before changing local settings.
+- Push-to-talk uses Raw Input and does not swallow the key. A tap under the
+  configured hold threshold is ignored. WoW and the listener need compatible
+  elevation: a non-elevated listener cannot hear an elevated foreground game.
+  `selftest --ptt` checks injected key events; it does not prove capture with
+  WoW focused. Check that and Windows communications ducking during acceptance.
+
+From this checkout's `voice/`, with data-directory overrides set as appropriate:
+
+```bash
+.venv/Scripts/python -m leeroy_voice where
+.venv/Scripts/python -m leeroy_voice doctor
+.venv/Scripts/python -m leeroy_voice devices
+.venv/Scripts/python -m leeroy_voice fetch-models --only kokoro,parakeet,silero
+.venv/Scripts/python -m leeroy_voice selftest             # writes a neutral stock line
+.venv/Scripts/python -m leeroy_voice selftest --guid 101 --cpu  # use an actual spec's guid
+.venv/Scripts/python -m pytest -q                       # isolated suite; no live devices/models
+```
+
+The casting commands are `cast --brief <brief.json> --out <specs-dir>`,
+`references --brief <brief.json> --specs <specs-dir> [--only <guids>]`,
+`audition --specs <specs-dir>` and `lock <guids|all> --specs <specs-dir>`.
+`references` runs on the CPU and prepares stock clips; locked specs are kept.
+`audition` uses each saved spec's engine and reference, including locked voices
+whose engine differs from the current decision. Expressive audition workers run
+offline on the CPU, one engine at a time. An unavailable or failed engine fails
+the command instead of substituting a fallback voice; check for a successful exit
+before using the page, since an older page can remain after a failed run.
+Models load offline after `fetch-models` has fetched and verified the pinned files. Default
+tests deselect real engines, audio devices, Windows, GPU, Ollama and live-service
+checks; those checks need a deliberate isolated setup.
+
 ## Outstanding
 
-- `mod-bg-slaveryvalley`: in-game behaviour still unverified (above).
-- `mod-bg-slaveryvalley` has no update path (see the Modules table).
+- `mod-bg-slaveryvalley` server data + client patch (above).
+- Zip-sourced modules (transmog, individual-progression, slaveryvalley) have no
+  update path; converting them to git clones would let `ac-update.sh` cover them.
+- `ac-update.sh` only checks `<repo>/conf/*.conf.dist` for new keys, which
+  misses the core's `worldserver.conf.dist` / `authserver.conf.dist` (under
+  `src/server/apps/`).

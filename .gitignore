@@ -9,7 +9,6 @@
 !/CLAUDE.md
 !/README.md
 !/LICENSE
-!/references.bib
 !/scripts/
 !/modules/
 !/config/
@@ -18,6 +17,32 @@
 /mind/.venv/
 /mind/.pytest_cache/
 /mind/*.egg-info/
+!/voice/
+/voice/.venv/
+/voice/.pytest_cache/
+/voice/*.egg-info/
+/voice/build/
+/voice/voice-data/
+/voice/models/
+/voice/cache/
+/voice/hf-cache/
+/voice/voice.toml
+/voice/decision.toml
+/voice/**/*.wav
+/voice/**/*.onnx
+/voice/**/*.bin
+/voice/**/*.pt
+/voice/**/*.safetensors
+/voice/**/*.npy
+/voice/**/*.flac
+/voice/**/*.mp3
+/voice/**/*.ogg
+/voice/**/*.opus
+/voice/**/*.m4a
+/voice/**/*.gguf
+/voice/**/*.pth
+/voice/**/*.ckpt
+/voice/.ruff_cache/
 # docs/ (design, research) and private/ are local dev docs for the owner and
 # Claude only: deliberately not whitelisted, never pushed.
 

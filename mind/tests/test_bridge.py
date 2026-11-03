@@ -102,6 +102,48 @@ def test_send_resolves_with_ack():
     run(go())
 
 
+def test_preserved_job_identity_survives_wire_and_default_ids_still_allocate():
+    async def go():
+        async with session() as s:
+            ack = await s.client.send(dataclasses.replace(say(), id="guild-owned-123"), preserve_id=True)
+            assert ack.id == s.bridge.commands[-1]["id"] == "guild-owned-123"
+            ordinary = await s.client.send(say())
+            assert ordinary.id.startswith("m") and ordinary.id != ack.id
+            with pytest.raises(ValueError, match="already issued"):
+                await s.client.send(dataclasses.replace(say(), id=ack.id), preserve_id=True)
+            with pytest.raises(ValueError, match="already issued"):
+                await s.client.send(dataclasses.replace(say(), id=ordinary.id), preserve_id=True)
+    run(go())
+
+
+def test_preserved_id_cannot_collide_with_pending_or_automatic_command():
+    async def go():
+        async with session(bridge_kw=dict(ack=lambda c: None), client_kw=dict(ack_timeout=.1)) as s:
+            first = asyncio.create_task(s.client.send(dataclasses.replace(say(), id="m1"), preserve_id=True))
+            await s.bridge.wait_for_command("say")
+            with pytest.raises(ValueError, match="already issued"):
+                await s.client.send(dataclasses.replace(say(), id="m1"), preserve_id=True)
+            second = asyncio.create_task(s.client.send(say()))
+            await s.wait_for(lambda: len(s.bridge.commands) >= 2)
+            assert [cmd["id"] for cmd in s.bridge.commands[:2]] == ["m1", "m2"]
+            results = await asyncio.gather(first, second, return_exceptions=True)
+            assert all(isinstance(value, AckTimeout) for value in results)
+            with pytest.raises(ValueError, match="already issued"):
+                await s.client.send(dataclasses.replace(say(), id="m1"), preserve_id=True)
+    run(go())
+
+
+@pytest.mark.parametrize("identity", ["", "space value", "line\nbreak", "ümlaut", "x" * 129])
+def test_invalid_preserved_identity_is_rejected_without_echo(identity):
+    async def go():
+        async with session() as s:
+            with pytest.raises(ValueError, match="invalid preserved command identity") as error:
+                await s.client.send(dataclasses.replace(say(), id=identity), preserve_id=True)
+            assert str(error.value) == "invalid preserved command identity"
+            assert not s.bridge.commands
+    run(go())
+
+
 def test_failed_ack_is_returned_not_raised():
     async def go():
         async with session(bridge_kw=dict(ack=lambda c: (False, "offline"))) as s:

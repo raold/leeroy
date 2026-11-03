@@ -17,7 +17,22 @@ from pathlib import Path
 from ..clock import SystemClock
 from ..config import default_data_dir
 
-SOURCES = ("world", "atlasloot", "wiki", "curated")
+DEFAULT_SOURCES = ("world", "atlasloot", "wiki", "curated")
+SOURCES = (*DEFAULT_SOURCES, "acwiki", "acdoxygen", "acmodules", "serverref")
+
+
+def _positive_int(value: str) -> int:
+    number = int(value)
+    if number <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return number
+
+
+def _nonnegative_int(value: str) -> int:
+    number = int(value)
+    if number < 0:
+        raise argparse.ArgumentTypeError("must be a nonnegative integer")
+    return number
 
 
 def _root(args) -> Path:
@@ -61,6 +76,21 @@ def make_sources(args, root: Path) -> list:
         elif name == "curated":
             from .curated import CuratedSource
             out.append(CuratedSource())
+        elif name in ("acwiki", "acdoxygen", "acmodules", "serverref"):
+            path = getattr(args, name + "_snapshot", None)
+            if not path:
+                raise SystemExit(f"{name} requires --{name}-snapshot with a complete manifest")
+            if name == "serverref":
+                from .serverref import ServerRefSource
+                out.append(ServerRefSource(Path(path)))
+            elif name == "acmodules":
+                from .azeroth import AzerothModulesSource
+                out.append(AzerothModulesSource(Path(path), workers=args.snapshot_workers,
+                    parse_processes=args.snapshot_parse_processes, progress=print))
+            else:
+                from .azeroth import AzerothDocsSource
+                out.append(AzerothDocsSource(Path(path), name=name,
+                    workers=args.snapshot_workers, parse_processes=args.snapshot_parse_processes, progress=print))
         else:
             from .wiki import WikiClient, WikiSource
             client = WikiClient(_cache(root), offline=args.offline,
@@ -74,6 +104,7 @@ async def _embed(lib, llm, batch: int, limit: int | None) -> int:
 
 
 def cmd_build(args) -> int:
+    from ..llm.client import LLMError
     from .lua import LuaSyntaxError
     from .mysql import QueryError
     from .wiki import WikiError
@@ -83,7 +114,7 @@ def cmd_build(args) -> int:
     try:
         try:
             reports = lib.build(make_sources(args, root), progress=print)
-        except (QueryError, RosterError, WikiError, LuaSyntaxError, OSError) as e:
+        except (QueryError, RosterError, WikiError, LuaSyntaxError, OSError, ValueError) as e:
             print(f"build failed: {e.__class__.__name__}: {e}", file=sys.stderr)
             return 1
         log_path = root / "library-cache" / "build.log"
@@ -100,7 +131,11 @@ def cmd_build(args) -> int:
             print(f"not embedding: {lib.pending_embeddings()} chunks wait for "
                   "`python -m leeroy_mind.library embed`")
             return 0
-        done = asyncio.run(_embed(lib, _ollama(root), args.batch, None))
+        try:
+            done = asyncio.run(_embed(lib, _ollama(root), args.batch, None))
+        except LLMError as e:
+            print(f"embed stopped: {e} ({lib.pending_embeddings()} still pending)", file=sys.stderr)
+            return 1
         print(f"embedded {done}")
         return 0
     finally:
@@ -135,9 +170,13 @@ def cmd_search(args) -> int:
             return 1
         for c in hits:
             print(f"[{c.kind}] {c.heading()}  ({c.source}, {c.score:.2f})")
-            print(textwrap.fill(c.text, width=100, initial_indent="    ",
-                                subsequent_indent="    ", max_lines=8))
-            if c.source == "wiki":
+            if c.kind in ("command", "teleport", "documentation", "api"):
+                # Reference syntax and decimal coordinates are indivisible evidence.
+                print("\n".join("    " + line for line in c.text.splitlines()))
+            else:
+                print(textwrap.fill(c.text, width=100, initial_indent="    ",
+                                    subsequent_indent="    ", max_lines=8))
+            if c.source in ("wiki", "acwiki", "acdoxygen", "acmodules", "serverref"):
                 print(f"    source: {c.cite()}")
         return 0
     finally:
@@ -179,27 +218,35 @@ def main(argv: list[str] | None = None) -> int:
     from ..personas.roster import DEFAULT_CONF, DEFAULT_MYSQL
     from .atlasloot import DEFAULT_ADDONS
     from .chunks import KINDS
+    from .snapshots import DEFAULT_SNAPSHOT_WORKERS, snapshot_parse_processes, snapshot_workers
     parser = argparse.ArgumentParser(prog="leeroy_mind.library",
                                      description="the guild's WotLK reference library")
     parser.add_argument("--data-dir", default=None)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("build", help="load sources into library.db, then embed new chunks")
-    p.add_argument("--sources", default=",".join(SOURCES), help="comma list of " + ", ".join(SOURCES))
+    p.add_argument("--sources", default=",".join(DEFAULT_SOURCES), help="comma list of " + ", ".join(SOURCES))
+    for source in ("acwiki", "acdoxygen", "acmodules", "serverref"):
+        p.add_argument(f"--{source}-snapshot", help=f"complete offline {source} snapshot directory")
+    p.add_argument("--snapshot-workers", type=lambda value: snapshot_workers(int(value)),
+                   default=DEFAULT_SNAPSHOT_WORKERS,
+                   help="parallel documentation verification/parser workers (1-16; default 8)")
+    p.add_argument("--snapshot-parse-processes", type=lambda value: snapshot_parse_processes(int(value)),
+                   default=0, help="CPU processes for documentation parsing (0-16; default 0 uses threads)")
     p.add_argument("--no-embed", action="store_true", help="leave embedding for later")
     p.add_argument("--offline", action="store_true", help="wiki: use only cached pages")
     p.add_argument("--cap", type=int, default=1500, help="wiki: most pages to read")
     p.add_argument("--interval", type=float, default=1.0,
                    help="wiki: seconds between requests (never below 1)")
-    p.add_argument("--batch", type=int, default=32, help="texts per embed call")
+    p.add_argument("--batch", type=_positive_int, default=32, help="positive number of texts per embed call")
     p.add_argument("--conf", default=str(DEFAULT_CONF), help="worldserver.conf (credentials)")
     p.add_argument("--mysql", default=str(DEFAULT_MYSQL))
     p.add_argument("--addons", default=str(DEFAULT_ADDONS), help="the client's Interface/AddOns")
     p.set_defaults(func=cmd_build)
 
     p = sub.add_parser("embed", help="embed chunks that have no vector yet")
-    p.add_argument("--batch", type=int, default=32)
-    p.add_argument("--limit", type=int, default=None)
+    p.add_argument("--batch", type=_positive_int, default=32)
+    p.add_argument("--limit", type=_nonnegative_int, default=None, help="maximum chunks to embed; 0 does no work")
     p.set_defaults(func=cmd_embed)
 
     p = sub.add_parser("search", help="search the library")

@@ -1,0 +1,57 @@
+From e36fca36f356f2e439312ea39320b941d35261e3 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 13:18:19 -0400
+Subject: [PATCH 8/9] Keep pinned bots from whispering canned status lines
+
+When the group leader changed, ResetAiAction whispered "AI was reset to
+defaults" and UpdateAIGroupMaster then added "Hello, I follow you!" or
+"Hello!" for the new master. Pinned bots speak through the module that
+pinned them, so these hard-coded lines broke the illusion. They are now
+skipped for pinned bots; the reset and the follow still happen, silently.
+Unpinned bots are unchanged.
+---
+ src/Ai/Base/Actions/ResetAiAction.cpp |  4 +++-
+ src/Bot/PlayerbotAI.cpp               | 16 ++++++++++------
+ 2 files changed, 13 insertions(+), 7 deletions(-)
+
+diff --git a/src/Ai/Base/Actions/ResetAiAction.cpp b/src/Ai/Base/Actions/ResetAiAction.cpp
+index 0ec911dd..d386be9c 100644
+--- a/src/Ai/Base/Actions/ResetAiAction.cpp
++++ b/src/Ai/Base/Actions/ResetAiAction.cpp
+@@ -61,6 +61,8 @@ bool ResetAiAction::Execute(Event event)
+     }
+     PlayerbotRepository::instance().Reset(botAI);
+     botAI->ResetStrategies(false);
+-    botAI->TellMaster("AI was reset to defaults");
++    // Pinned bots speak through the module that pinned them; no canned status line.
++    if (!sRandomPlayerbotMgr.IsPinned(bot->GetGUID().GetCounter()))
++        botAI->TellMaster("AI was reset to defaults");
+     return true;
+ }
+diff --git a/src/Bot/PlayerbotAI.cpp b/src/Bot/PlayerbotAI.cpp
+index 5d320280..d0910fa5 100644
+--- a/src/Bot/PlayerbotAI.cpp
++++ b/src/Bot/PlayerbotAI.cpp
+@@ -530,12 +530,16 @@ void PlayerbotAI::UpdateAIGroupMaster()
+             {
+                 botAI->ChangeStrategy("+follow", BOT_STATE_NON_COMBAT);
+ 
+-                if (botAI->GetMaster() == botAI->GetGroupLeader())
+-                    botAI->TellMaster(PlayerbotTextMgr::instance().GetBotTextOrDefault(
+-                        "hello_follow", "Hello, I follow you!", {}));
+-                else
+-                    botAI->TellMaster(PlayerbotTextMgr::instance().GetBotTextOrDefault(
+-                        "hello", "Hello!", {}));
++                // Pinned bots speak through the module that pinned them; no canned greeting.
++                if (!sRandomPlayerbotMgr.IsPinned(bot->GetGUID().GetCounter()))
++                {
++                    if (botAI->GetMaster() == botAI->GetGroupLeader())
++                        botAI->TellMaster(PlayerbotTextMgr::instance().GetBotTextOrDefault(
++                            "hello_follow", "Hello, I follow you!", {}));
++                    else
++                        botAI->TellMaster(PlayerbotTextMgr::instance().GetBotTextOrDefault(
++                            "hello", "Hello!", {}));
++                }
+             }
+             else
+             {

@@ -3,8 +3,10 @@ cuts wiki sections into pieces of about 120-250 words."""
 import re
 from dataclasses import dataclass, field
 
-KINDS = ("item", "loot", "quest", "lore", "strategy", "class", "zone", "event")
-SOURCES = ("world", "atlasloot", "wiki", "curated")
+KINDS = ("item", "loot", "quest", "lore", "strategy", "class", "zone", "event",
+         "documentation", "api", "command", "teleport")
+SOURCES = ("world", "atlasloot", "wiki", "curated", "acwiki", "acdoxygen", "serverref", "acmodules")
+SNAPSHOT_SOURCES = ("acwiki", "acdoxygen", "serverref", "acmodules")
 MIN_WORDS = 120
 MAX_WORDS = 250
 
@@ -27,6 +29,10 @@ class ChunkDraft:
     instance: str | None = None
     ref_ids: tuple[str, ...] = ()
     weight: float = 1.0
+    source_revision: str | None = None
+    source_path: str | None = None
+    source_sha256: str | None = None
+    metadata: dict = field(default_factory=dict)
 
     def __post_init__(self):
         if self.kind not in KINDS:
@@ -52,6 +58,10 @@ class Chunk:
     ref_ids: tuple[str, ...]
     t_created: int
     score: float = 0.0
+    source_revision: str | None = None
+    source_path: str | None = None
+    source_sha256: str | None = None
+    metadata: dict = field(default_factory=dict)
 
     def heading(self) -> str:
         return f"{self.title} - {self.section}" if self.section else self.title
@@ -61,6 +71,12 @@ class Chunk:
         local source."""
         if self.source == "wiki":
             return f"warcraft.wiki.gg: {self.title} ({self.license}) {self.url}"
+        if self.source in SNAPSHOT_SOURCES:
+            label = {"acwiki": "AzerothCore documentation", "acdoxygen": "AzerothCore API",
+                     "serverref": "installed server reference", "acmodules": "installed module documentation"}[self.source]
+            version = f"version {self.metadata['version']}; " if self.metadata.get("version") else ""
+            return (f"{label}: {self.title} ({version}revision {self.source_revision}; "
+                    f"license {self.license or 'unknown'}) {self.url or self.source_path or ''}")
         return {"world": "the server's world database",
                 "atlasloot": "AtlasLoot (WotLK tables)",
                 "curated": "a hand-written 3.3.5 summary of the server's world database"
@@ -92,6 +108,79 @@ class QuestRow:
     exclusive_group: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class SourceFile:
+    path: str
+    sha256: str
+    bytes: int
+    url: str
+    language: str = "und"
+    archived: bool = False
+    version: str = ""
+    status: str = "verified"
+    chunks: int = 0
+    note: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class SnapshotProvenance:
+    origin: str
+    revision: str
+    retrieved_at: int
+    license: str
+    manifest_sha256: str
+    inventory_sha256: str
+    expected_files: int
+    files: tuple[SourceFile, ...]
+    complete: bool = True
+    license_evidence: tuple[dict, ...] = ()
+    coverage: dict = field(default_factory=dict)
+
+    def validate(self, *, require_processed: bool = True) -> None:
+        states = {"imported", "empty", "evidence"} | (set() if require_processed else {"verified"})
+        if (self.complete is not True or type(self.expected_files) is not int or self.expected_files <= 0
+                or self.expected_files != len(self.files)
+                or len({f.path.casefold() for f in self.files}) != len(self.files)
+                or any(not f.path or f.status not in states or type(f.bytes) is not int or f.bytes < 0
+                       or type(f.chunks) is not int or f.chunks < 0
+                       or (f.status == "imported" and f.chunks == 0)
+                       or (f.status in {"empty", "evidence", "verified"} and f.chunks != 0)
+                       for f in self.files)):
+            raise ValueError("incomplete source snapshot")
+        if not self.origin or not self.revision or not self.license:
+            raise ValueError("source snapshot lacks provenance")
+        if any(not re.fullmatch(r"[0-9a-f]{64}", h) for h in
+               (self.manifest_sha256, self.inventory_sha256, *(f.sha256 for f in self.files))):
+            raise ValueError("invalid source snapshot hash")
+
+
+@dataclass(frozen=True, slots=True)
+class CommandRow:
+    name: str
+    syntax: str
+    help: str
+    handler: str
+    permission: dict
+    allow_console: bool | None
+    source_path: str
+    source_line: int | None
+    verification: str
+    metadata: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class TeleportRow:
+    id: int
+    name: str
+    map: int
+    position_x: str
+    position_y: str
+    position_z: str
+    orientation: str
+    map_name: str = ""
+    metadata: dict = field(default_factory=dict)
+
+
 @dataclass
 class SourceResult:
     name: str
@@ -99,6 +188,9 @@ class SourceResult:
     items: list[ItemRow] | None = None    # None: leave the item table alone
     quests: list[QuestRow] | None = None  # None: leave the quest table alone
     log: list[str] = field(default_factory=list)
+    provenance: SnapshotProvenance | None = None
+    commands: list[CommandRow] | None = None
+    teleports: list[TeleportRow] | None = None
 
 
 def word_count(text: str) -> int:

@@ -11,7 +11,7 @@ license = "GPL-2.0-only"
 dependencies = ["sqlite-vec==0.1.9"]
 
 [project.optional-dependencies]
-test = ["pytest>=9.1,<10"]
+test = ["pytest>=9.1,<10", "tzdata>=2025.2"]
 
 [tool.setuptools.packages.find]
 include = ["leeroy_mind*"]

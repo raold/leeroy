@@ -1,12 +1,13 @@
 import logging
 import re
-from dataclasses import dataclass
-from typing import Callable, Literal
+from dataclasses import dataclass, replace
+from typing import Callable, Iterable, Literal
 
 from leeroy_mind.clock import Clock
 from leeroy_mind.human import HumanIdentity
 from leeroy_mind.llm.client import LLMClient, LLMError
 from leeroy_mind.llm.scheduler import LLMScheduler, Priority, SchedulerError
+from leeroy_mind.memory.privacy import derive_scope, with_request
 from leeroy_mind.personas.screens import redact_real_name
 from leeroy_mind.storage.rows import MemoryRow, cosine, pack_vec, unpack_vec
 from leeroy_mind.storage.store import Store
@@ -36,6 +37,8 @@ class MemoryCandidate:
     raid_id: int | None = None
     key: str | None = None
     t_created: int | None = None  # when it was made (and last touched); None: the clock's now
+    scope: str = "open"  # the caller's request: the writer may make it stricter, never weaker
+    scope_with: int = 0
 
 
 @dataclass(frozen=True)
@@ -67,8 +70,9 @@ def clean_memory_text(text: str, human: HumanIdentity | None) -> str:
 
 
 class MemoryWriter:
-    """Validates, limits, embeds, dedups and stores memories. Every time here is mind-clock
-    seconds. `human` (optional) screens the owner's real name out of the text."""
+    """Validates, limits, embeds, dedups and stores memories, each with the scope its evidence
+    derives (scope_of). Every time here is mind-clock seconds. `human` (optional) screens the
+    owner's real name out of the text."""
 
     PARK_S = 3600.0  # a memory Ollama cannot embed is left alone this long before another try
     _PROBE = "guild"  # a text any embedder can embed: tells an outage from one bad text
@@ -96,6 +100,38 @@ class MemoryWriter:
         return (s.count_inserted_since(owner, now - 3600 + 1) >= self._per_hour
                 or s.count_inserted_since(owner, now - 86400 + 1) >= self._per_day)
 
+    def scope_of(self, owner: int, evidence: Iterable[str], *, shown: Iterable[str] = (),
+                 scope: str = "open", scope_with: int = 0) -> tuple[str, int]:
+        """The (scope, scope_with) a memory of `owner` citing `evidence` is stored with
+        (controller ruling B2): what its evidence, and what its prompt showed beyond it
+        (`shown`), derive (privacy.derive_scope), raised by the caller's request but never
+        lowered (privacy.with_request). It reads inside a store transaction, which nests, so
+        any caller may use it."""
+        with self._store.transaction():
+            derived = derive_scope(self._store.conn, owner, evidence, shown=shown)
+        if scope == "secret" and derived.public:
+            log.info("scope_secret_refused: owner=%d", owner)
+        return with_request(derived, scope, scope_with)
+
+    def _scoped(self, row: MemoryRow, scope: str, scope_with: int,
+                shown: Iterable[str] = ()) -> MemoryRow:
+        scope, scope_with = self.scope_of(row.owner, row.evidence, shown=shown, scope=scope,
+                                          scope_with=scope_with)
+        return replace(row, scope=scope, scope_with=scope_with)
+
+    def put(self, row: MemoryRow, *, shown: Iterable[str] = ()) -> int:
+        """Store `row` with the scope scope_of gives it, the row's own scope and scope_with
+        being the request and `shown` what its prompt showed beyond its evidence; through
+        upsert_keyed_memory when it has a key. Returns the id. The night's write path (P1c):
+        synchronous, joining the caller's transaction, with no rate limit, dedup or text screen
+        (the caller screens the text)."""
+        store = self._store
+        with store.transaction():
+            row = self._scoped(row, row.scope, row.scope_with, shown)
+            if row.key is not None:
+                return store.upsert_keyed_memory(row)
+            return store.insert_memory(row)
+
     async def write(self, c: MemoryCandidate, *, enforce_limits: bool = True) -> WriteResult:
         store = self._store
         text = self._clean_text(c.text)
@@ -116,7 +152,9 @@ class MemoryWriter:
             valence=max(-1.0, min(1.0, float(c.valence))), source=c.source,
             evidence=tuple(c.evidence), confidence=c.confidence, key=c.key)
         if c.key is not None:
-            return WriteResult(store.upsert_keyed_memory(row), "updated")
+            with store.transaction():
+                row = self._scoped(row, c.scope, c.scope_with)
+                return WriteResult(store.upsert_keyed_memory(row), "updated")
         if enforce_limits and self._limited(c.owner, now):
             return WriteResult(None, "rate_limited")
         vec: bytes | None = None
@@ -124,19 +162,22 @@ class MemoryWriter:
             vec = (await self._embedder.embed([text], Priority.EXTRACTION))[0]
         except (LLMError, SchedulerError) as e:
             log.warning("memory embed failed, storing without a vector: %s", e)
-        # No await below: the checks and the insert are one step for the event loop.
-        if enforce_limits and self._limited(c.owner, int(self._clock.now())):
-            return WriteResult(None, "rate_limited")
-        twin = self._find_twin(row, vec)
-        if twin is not None:
-            store.merge_memory(twin, row.evidence, row.importance)
-            return WriteResult(twin, "merged")
-        mid = store.insert_memory(MemoryRow(**{**_fields(row), "embedding": vec}))
-        return WriteResult(mid, "inserted")
+        # No await below: the checks, the scope and the insert are one transaction and one step
+        # for the event loop.
+        with store.transaction():
+            if enforce_limits and self._limited(c.owner, int(self._clock.now())):
+                return WriteResult(None, "rate_limited")
+            row = self._scoped(row, c.scope, c.scope_with)
+            twin = self._find_twin(row, vec)
+            if twin is not None:
+                store.merge_memory(twin, row.evidence, row.importance)
+                return WriteResult(twin, "merged")
+            return WriteResult(store.insert_memory(replace(row, embedding=vec)), "inserted")
 
     def _find_twin(self, row: MemoryRow, vec: bytes | None) -> int | None:
         """The earlier memory `row` duplicates, if any. Only one of the same privacy class
-        counts (_privacy_class), so a merge never makes whispered text public."""
+        (_privacy_class) and the same scope counts, so a merge never makes whispered text
+        public or hands it to another partner."""
         since = row.t_created - self._dedup_window + 1
         best_id, best = None, 0.0
         mine = unpack_vec(vec) if vec is not None else None
@@ -146,7 +187,8 @@ class MemoryWriter:
             i for ev in (row.evidence, *(c.evidence for c in cands)) for i in _chat_ids(ev))
         mine_class = _privacy_class(row.evidence, parties)
         for cand in cands:
-            if _privacy_class(cand.evidence, parties) != mine_class:
+            if (_privacy_class(cand.evidence, parties) != mine_class
+                    or (cand.scope, cand.scope_with) != (row.scope, row.scope_with)):
                 continue
             if row.source != "game" and mine is not None and cand.embedding is not None:
                 score = cosine(mine, unpack_vec(cand.embedding))
@@ -204,10 +246,6 @@ class MemoryWriter:
             self._store.set_embedding(r.id, v)
             done += 1
         return done
-
-
-def _fields(row: MemoryRow) -> dict:
-    return {f: getattr(row, f) for f in row.__dataclass_fields__}
 
 
 def _chat_ids(evidence) -> list[int]:

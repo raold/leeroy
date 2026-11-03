@@ -28,6 +28,7 @@ Icecrown the way you once followed a good raid lead. Not built yet.
 | `patches/mod-ollama-chat/` | Local mod-ollama-chat commits, same format |
 | `modules/mod-leeroy/` | The guild module: a local bridge (NDJSON over `127.0.0.1:7878`) that lets an outside "mind" see the guild and speak for its members, with unit tests and a smoke test in `tools/` |
 | `mind/` | The mind: a Python service (`python -m leeroy_mind run`) that gives the guild's members personas, memories and their voice in guild chat, through the bridge and a local LLM (Ollama) |
+| `voice/` | Local voice comms and push-to-talk (`python -m leeroy_voice`), in a separate Python 3.12 process; GPL-3.0-or-later, with its own [LICENSE](voice/LICENSE) |
 | `CLAUDE.md` | Operating notes: paths, build traps, module quirks, what each patch does |
 
 ## Patches
@@ -55,17 +56,24 @@ Apply them to a checkout of each module with
 ./ac-backup.sh [label]       # mysqldump all four databases
 ./ac-build.sh                # preflight checks, configure, build
 ./ac-server.sh start|stop|status
+./ac-voice.sh start|stop|status # voice service; follows LEEROY_VOICE_DATA and voice.toml
 ./ac-snapshot.sh             # copy live configs and module patches into this repo
 ```
 
 They assume this repo is the install root, with the core checked out in
 `azerothcore-wotlk/` and the build in `build/`. See `CLAUDE.md`.
 
+## Scholar library
+
+The mind's [scholar library](mind/leeroy_mind/library/README.md) also supports complete,
+pinned AzerothCore wiki/API snapshots and installed command/teleport references,
+with bounded parallel imports, provenance and model-free text search.
+
 ## CI
 
 | Workflow | When | What |
 |---|---|---|
-| `ci` | every push | shellcheck on `scripts/`, gitleaks over the full history, mod-leeroy unit tests, the mind's pytest suite |
+| `ci` | main pushes and pull requests | shellcheck on `scripts/`, gitleaks over the full history, mod-leeroy unit tests, the mind's Python 3.14 suite, the `voice` job's Python 3.12 suite, and a headless cross-service rehearsal in separate environments |
 | `patches` | patch changes, nightly | applies the patches to the newest upstream mod-playerbots (plus its codestyle check) and mod-ollama-chat; a nightly failure opens a `patch-drift` issue |
 | `build` | patch or module changes, weekly | compiles the fork core with the patched playerbots and mod-leeroy (clang, `-Werror`, ccache) |
 | `release` | `v*` tag | GitHub release with the patches, modules, configs and scripts |
@@ -74,30 +82,38 @@ There is no deploy job: the server runs on one PC and is updated with the
 scripts above. A self-hosted runner on a public repo would let any pull request
 run code on that PC.
 
-## Research
+## Voice
 
-Where published work exists, the design leans on it. [`references.bib`](references.bib) lists every source (232 BibTeX entries grouped by topic); each entry's `annote` says what it shaped. Metadata was checked against DOI registries, arXiv, the ACL Anthology, OpenReview, PMLR and the projects' own pages.
+The voice service adds local room playback, per-member voices, mic effects,
+push-to-talk recognition and a browser control panel. Its default loopback ports
+are 7879 for the mind and 7880 for the panel. Runtime settings and models stay in
+the ignored `voice-data/`; voice specs and synthetic references stay in
+`mind-data/voices/`. See [the operating notes](CLAUDE.md#the-voice-service-leeroy-voice)
+for commands, data-directory overrides and the rollout procedure.
 
-**Agents and memory.** The memory stream, the recency-importance-relevance recall score and reflection follow Park et al. (2023). Evidence-linked, time-aware facts follow Rasmussen et al. (2025), Latimer et al. (2025) and Wan et al. (2026), and writes are validated where hallucinations enter (Chen et al., 2026). Consolidation runs in the background (Lin et al., 2025) on a two-speed model (McClelland et al., 1995; Kumaran et al., 2016; Mattar and Daw, 2018), and recall uses activation-style decay (Anderson and Schooler, 1991).
+Chatterbox Turbo can optionally use the CPU when GPU admission refuses it. In the
+local `voice.toml`, set `[tts] cpu_fallback = true`; `cpu_threads` defaults to 12
+and is capped at 24. Cold loading runs in the background. One direct reply or private
+conversation can render on the CPU at a time, with a 15-second maximum shortened by
+its expiry. Ambient chatter, urgent calls, overflow, and failed renders retain
+stock/Kokoro delivery. This option
+keeps the same synthetic references and does not reserve GPU memory; it trades
+response speed for the expressive voice. It is disabled by default.
 
-**Theory of mind and who-knows-what.** LLM theory of mind is strong on some tests and brittle on others (Street et al., 2026; Ullman, 2023; Shapira et al., 2024; Kim et al., 2023; Gu et al., 2026), so beliefs live in an explicit ledger and each prompt is filtered to what that member could perceive (Wilf et al., 2024; Sclar et al., 2023; Jung et al., 2024). Secret-keeping is probed (Mireshghallah et al., 2024).
+This branch's voice work is in development. A [headless regression rehearsal](voice/tools/rehearsal/README.md)
+checks the two services together using synthetic data and fake audio devices.
+Rehearsal with a copied database and real devices, deployment, and acceptance
+during a normal game session are still pending.
 
-**Emotion and mood.** Appraisal labels follow Ortony, Clore and Collins (1988). Mood is a point in pleasure-arousal-dominance space (Mehrabian, 1996) with a personality-set baseline and decay (Gebhard, 2005); contagion follows Hatfield et al. (1993) and Bosse et al. (2015), and mood-congruent recall follows Bower (1981).
-
-**Relationships and social dynamics.** Closeness grows with reciprocal self-disclosure (Altman and Taylor, 1973; Aron et al., 1997; Collins and Miller, 1994), and members differ in how they handle closeness and absence (Bartholomew and Horowitz, 1991; Mikulincer and Shaver, 2003). Attraction responds to proximity (Festinger et al., 1950), reciprocity (Aronson and Linder, 1965), similarity (Montoya et al., 2008), playing hard to get (Walster et al., 1973) and arousal after intense shared moments (Dutton and Aron, 1974). Gossip and rumour mutate as they travel (Allport and Postman, 1947; Kreminski, 2023), conventions spread as naming games (Baronchelli et al., 2006; Centola et al., 2018), feuds follow balance theory (Heider, 1946; Cartwright and Harary, 1956), and guild-wide opinions follow bounded-confidence dynamics (Deffuant et al., 2000; Hegselmann and Krause, 2002).
-
-**Motivation and persona.** Members have weighted play motives (Yee, 2006) and daily states sampled around stable traits (Fleeson, 2001). Personas are re-anchored in every prompt because they drift (Li et al., 2024; Lu et al., 2026) and are built from specific detail (Park et al., 2024; Jones and Bergen, 2025).
-
-**Stories and game AI.** Events are over-generated and then sifted (Ryan, 2018; Kreminski et al., 2019, 2021, 2022); algorithms select and the LLM narrates (Mendez and Gervas, 2023). Social moves follow Comme il Faut and Versu (McCoy et al., 2014; Evans and Short, 2014), and per-member bandits use Thompson sampling (Russo et al., 2018).
-
-**Evaluation.** Weekly probes borrow from LongMemEval (Wu et al., 2025), LoCoMo (Maharana et al., 2024), SOTOPIA (Zhou et al., 2024), PersonaGym (Samuel et al., 2025) and persona-consistency metrics (Abdulhai et al., 2025).
-
-**Ruled out.** Activation steering and persona vectors (Turner et al., 2023; Rimsky et al., 2024; Chen et al., 2025; AxBench, Wu et al., 2025; Tan et al., 2024), per-persona adapters (Neeko, Yu et al., 2024), preference optimisation on a player's reactions (Rafailov et al., 2023; Ethayarajh et al., 2024; Williams et al., 2025), self-editing live memory (Packer et al., 2023) and a cognitive-dissonance mechanic (Vaidis et al., 2024).
-
-**Voice.** Mood maps to speaking rate, intensity and pitch (Juslin and Laukka, 2003); multi-speaker timing follows Stivers et al. (2009) and Ekstedt and Skantze (2022). The baseline voice model builds on StyleTTS 2 (Li et al., 2023) and speech recognition on Whisper (Radford et al., 2023).
-
-**Software and models.** AzerothCore, mod-playerbots, mod-ollama-chat, Ollama, llama.cpp, SQLite with sqlite-vec, Gemma 4, Qwen3 and Qwen3-Embedding, plus retrieval staples: MMR (Carbonell and Goldstein, 1998), reciprocal rank fusion (Cormack et al., 2009), BM25 (Robertson and Zaragoza, 2009) and Matryoshka embeddings (Kusupati et al., 2022). Candidate chat models were compared on the UGI leaderboard.
+Voice dependencies include pedalboard (GPL-3.0) and
+[eSpeak NG](https://github.com/espeak-ng/espeak-ng/blob/master/COPYING)
+(GPL-3.0, loaded through espeakng-loader). The model pins in
+[models.py](voice/leeroy_voice/models.py) record revisions and licenses:
+Kokoro-82M (Apache-2.0), NVIDIA Parakeet TDT 0.6B v2 (CC-BY-4.0),
+Silero VAD (MIT), SpeechBrain ECAPA (Apache-2.0), and the optional
+Whisper large-v3-turbo and Chatterbox Turbo models (MIT).
 
 ## License
 
-GPL-2.0, matching AzerothCore and mod-playerbots.
+GPL-2.0, matching AzerothCore and mod-playerbots, except the separate `voice/`
+service, which is GPL-3.0-or-later under [voice/LICENSE](voice/LICENSE).

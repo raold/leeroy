@@ -30,13 +30,17 @@ class ChatResult:
     seconds: float
 
 
+EMBED_DIMENSIONS = 512
+EMBED_NUM_CTX = 2048
+
+
 class LLMClient(Protocol):
     async def chat(self, model: str, messages: list[dict], *, options: dict,
                    think: bool | None = None, format: dict | None = None,
                    keep_alive: str | int | None = None,
                    timeout: float | None = None) -> ChatResult: ...
 
-    async def embed(self, model: str, inputs: list[str], *, dimensions: int = 512,
+    async def embed(self, model: str, inputs: list[str], *, dimensions: int = EMBED_DIMENSIONS,
                     timeout: float | None = None) -> list[list[float]]: ...
 
     async def list_models(self) -> set[str]: ...
@@ -217,10 +221,10 @@ class OllamaClient:
         count = out.get("eval_count")
         return ChatResult(content, thinking, count if isinstance(count, int) else 0, seconds)
 
-    async def embed(self, model, inputs, *, dimensions=512, timeout=None):
+    async def embed(self, model, inputs, *, dimensions=EMBED_DIMENSIONS, timeout=None):
         out = await self._call("/api/embed", {
             "model": model, "input": inputs, "dimensions": dimensions, "keep_alive": -1,
-            "options": {"num_ctx": 2048}}, timeout)
+            "options": {"num_ctx": EMBED_NUM_CTX}}, timeout)
         vecs = out.get("embeddings")
         if not isinstance(vecs, list) or len(vecs) != len(inputs):
             raise LLMError("/api/embed: wrong number of vectors")

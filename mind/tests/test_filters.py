@@ -774,3 +774,26 @@ def test_a_second_wipe_on_the_boss_tonight_makes_a_passive_again_true(line):
     assert history_claim(line, PEOPLE)
     assert not history_claim(line, PEOPLE, tonight=True)
     assert history_claim("you've been stealing my loot for 2 years", PEOPLE, tonight=True)
+
+
+# -- fix wave G5: "flex" is 2010s slang for showing off (seen live) -----------------------------
+
+@pytest.mark.parametrize("line", [
+    "thanks for being the flex machine arkon", "u dont gotta apologize for being a flex machine",
+    "stop flexing on us", "flexin again huh", "flexing in the guild bank", "thats a flex",
+    "weird flex but ok", "not to flex but i got the drake", "big flex", "flex on em", "FLEX",
+    "flexin' on the whole guild", "lol flex", "such a flex.", "ok flex", "a flex"])
+def test_flex_for_showing_off_is_a_soft_tell(line):
+    assert slang(line)
+    assert [t for t in find_tells(line) if t.reason == "slang"] == [Tell("slang", False, True)]
+
+
+@pytest.mark.parametrize("line", [
+    "im flexible on friday", "flexible schedule tonight", "flexibility is key on this fight",
+    "inflexible tank imo", "my reflexes are shot", "lol reflexes",
+    "the flexweave underlay is worth it for the parachute", "flexweave underlay on the cloak",
+    "gz /flex", "/flex", "/flex arkon", "he does /flex at every kill",
+    "my job has flex time on fridays", "need a flex spot for the 10 man",
+    "we run a flex spec in 25", "flex hours at work"])
+def test_flexible_the_emote_and_the_games_own_words_are_no_slang(line):
+    assert not slang(line)

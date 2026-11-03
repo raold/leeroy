@@ -268,7 +268,9 @@ def test_dedup_merges_only_within_one_privacy_class(store, clock):
         owner=102, kind="conversation", text="He talked about the new job.", t_event=1000,
         actors=(1, 102), importance=5, valence=0.0, source="extract",
         evidence=(f"chat:{w1}", f"chat:{g1}"))))
-    assert mixed == WriteResult(public.id, "merged")  # a public line makes it public
+    assert mixed.action == "inserted" and mixed.id not in (public.id, whisper.id, other_pair.id)
+    kept = store.get_memories([mixed.id])[0]
+    assert (kept.scope, kept.scope_with) == ("private", 1)  # B2: any whisper line makes it private
     assert store.get_memories([whisper.id])[0].evidence == (f"chat:{w1}", f"chat:{w2}")
 
 

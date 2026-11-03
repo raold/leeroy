@@ -59,7 +59,8 @@ def test_the_guard_is_armed_and_aimed_at_the_real_services(live_guard, tmp_path)
                 asyncio.selector_events.BaseSelectorEventLoop):
         assert cls.sock_connect is not live_guard.originals[f"{cls.__name__}.sock_connect"]
     defaults = load_config(tmp_path / "absent.toml")  # what the service would connect to
-    assert live_guard.ports == live_ports() == {defaults.bridge.port: "live", 11434: "ollama"}
+    assert live_guard.ports == live_ports() == {defaults.bridge.port: "live", 7879: "live",
+                                                11434: "ollama"}
     assert norm(REAL_MIND_DATA) in live_guard.dirs  # checked by name only, never opened
     assert config.default_data_dir() == live_guard.data_dir  # LEEROY_MIND_DATA, per test
     assert norm(live_guard.data_dir).startswith(norm(tmp_path))

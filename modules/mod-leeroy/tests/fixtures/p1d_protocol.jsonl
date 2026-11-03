@@ -1,0 +1,37 @@
+{"name":"form_raid_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"form_raid","id":"t1","ts":0,"leader_guid":1,"members":[1101,1102,1103],"size":10,"heroic":false,"map_id":631,"main_tank_guid":1101,"assistants":[1101,1102]}}
+{"name":"form_raid_bad_size","kind":"command","valid":false,"error":"bad field: size","msg":{"v":1,"type":"form_raid","id":"t1","ts":0,"leader_guid":1,"members":[1101],"size":20,"map_id":631,"main_tank_guid":1101}}
+{"name":"form_raid_duplicate","kind":"command","valid":false,"error":"bad field: members","msg":{"v":1,"type":"form_raid","id":"t1","ts":0,"leader_guid":1,"members":[1101,1101],"size":10,"map_id":631,"main_tank_guid":1101}}
+{"name":"form_raid_too_many","kind":"command","valid":false,"error":"bad field: members","msg":{"v":1,"type":"form_raid","id":"t1","ts":0,"leader_guid":1,"members":[1101,1102,1103,1104,1105,1106,1107,1108,1109,1110],"size":10,"map_id":631,"main_tank_guid":1101}}
+{"name":"form_raid_tank_outside","kind":"command","valid":false,"error":"bad field: main_tank_guid","msg":{"v":1,"type":"form_raid","id":"t1","ts":0,"leader_guid":1,"members":[1101],"size":10,"map_id":631,"main_tank_guid":999}}
+{"name":"summon_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"summon","id":"t2","ts":0,"map_id":631,"guids":[1101,1102],"where":"entrance","summon_human":true,"summoner_guid":1102}}
+{"name":"summon_bad_where","kind":"command","valid":false,"error":"bad field: where","msg":{"v":1,"type":"summon","id":"t2","ts":0,"map_id":631,"guids":[1101],"where":"lobby"}}
+{"name":"clear_lockout_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"clear_lockout","id":"t3","ts":0,"map_id":631,"guids":[1,1101],"difficulties":[0,1,2,3]}}
+{"name":"clear_lockout_defaults","kind":"command","valid":true,"msg":{"v":1,"type":"clear_lockout","id":"t3","ts":0,"map_id":631,"guids":[1]}}
+{"name":"clear_lockout_bad_difficulty","kind":"command","valid":false,"error":"bad field: difficulties","msg":{"v":1,"type":"clear_lockout","id":"t3","ts":0,"map_id":631,"guids":[1],"difficulties":[4]}}
+{"name":"set_loot_master_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"set_loot_master","id":"t4","ts":0,"member_guid":1,"looter_guid":1104,"threshold":4}}
+{"name":"set_loot_master_bad_threshold","kind":"command","valid":false,"error":"bad field: threshold","msg":{"v":1,"type":"set_loot_master","id":"t4","ts":0,"member_guid":1,"looter_guid":1104,"threshold":6}}
+{"name":"give_loot_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"give_loot","id":"t5","ts":0,"map":631,"instance_id":77,"source_entry":36597,"index":0,"item_id":50735,"to_guid":1103}}
+{"name":"give_loot_bad_index","kind":"command","valid":false,"error":"bad field: index","msg":{"v":1,"type":"give_loot","id":"t5","ts":0,"map":631,"instance_id":77,"source_entry":36597,"index":300,"item_id":50735,"to_guid":1103}}
+{"name":"start_offline_raid_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"start_offline_raid","id":"t6","ts":0,"map_id":631,"size":10,"heroic":false,"leader_guid":1101,"members":[1102,1103,1104,1105,1106,1107,1108,1109,1110],"assistants":[1102],"loot_master_guid":1104,"max_wipes":6,"max_wipes_per_boss":3,"timeout_min":180,"min_members":8}}
+{"name":"start_offline_raid_defaults","kind":"command","valid":true,"msg":{"v":1,"type":"start_offline_raid","id":"t6","ts":0,"map_id":631,"size":25,"leader_guid":1101,"members":[1102],"loot_master_guid":1101}}
+{"name":"start_offline_raid_loot_outside","kind":"command","valid":false,"error":"bad field: loot_master_guid","msg":{"v":1,"type":"start_offline_raid","id":"t6","ts":0,"map_id":631,"size":10,"leader_guid":1101,"members":[1102],"loot_master_guid":1200}}
+{"name":"gear_up_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"gear_up","id":"t7","ts":0,"guids":[1010,1337],"ilvl":264,"level_to":80}}
+{"name":"gear_up_defaults","kind":"command","valid":true,"msg":{"v":1,"type":"gear_up","id":"t7","ts":0,"guids":[1010]}}
+{"name":"gear_up_empty","kind":"command","valid":false,"error":"bad field: guids","msg":{"v":1,"type":"gear_up","id":"t7","ts":0,"guids":[]}}
+{"name":"raid_control_dc_on","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"raid_control","id":"t8","ts":0,"member_guid":1,"action":"dc_on","leader_guid":1101,"param":""}}
+{"name":"raid_control_disband","kind":"command","valid":true,"msg":{"v":1,"type":"raid_control","id":"t8","ts":0,"member_guid":1,"action":"disband"}}
+{"name":"raid_control_bad_action","kind":"command","valid":false,"error":"bad field: action","msg":{"v":1,"type":"raid_control","id":"t8","ts":0,"member_guid":1,"action":"pull","leader_guid":1101}}
+{"name":"raid_control_dc_no_leader","kind":"command","valid":false,"error":"bad field: leader_guid","msg":{"v":1,"type":"raid_control","id":"t8","ts":0,"member_guid":1,"action":"dc_on"}}
+{"name":"remove_friend_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"remove_friend","id":"t9","ts":0,"guid":1101}}
+{"name":"set_spec_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"set_spec","id":"t10","ts":0,"guid":1101,"spec_no":2,"glyphs":true}}
+{"name":"set_spec_bad_no","kind":"command","valid":false,"error":"bad field: spec_no","msg":{"v":1,"type":"set_spec","id":"t10","ts":0,"guid":1101,"spec_no":10}}
+{"name":"bot_do_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"bot_do","id":"t11","ts":0,"guids":[1101,1102],"action":"co","param":"+behind","target_guid":0}}
+{"name":"bot_do_cast_target","kind":"command","valid":true,"msg":{"v":1,"type":"bot_do","id":"t11","ts":0,"guids":[1103],"action":"cast","param":"rebirth","target_guid":1104}}
+{"name":"bot_do_bad_strategy","kind":"command","valid":false,"error":"bad field: param","msg":{"v":1,"type":"bot_do","id":"t11","ts":0,"guids":[1101],"action":"co","param":"+attack anything"}}
+{"name":"bot_do_remove_survival","kind":"command","valid":false,"error":"bad field: param","msg":{"v":1,"type":"bot_do","id":"t11","ts":0,"guids":[1101],"action":"co","param":"-avoid aoe"}}
+{"name":"bot_do_bad_action","kind":"command","valid":false,"error":"bad field: action","msg":{"v":1,"type":"bot_do","id":"t11","ts":0,"guids":[1101],"action":"leave","param":""}}
+{"name":"stock_items_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"stock_items","id":"t12","ts":0,"guid":1101,"items":[43015,46377],"count":2}}
+{"name":"stock_items_bad_item","kind":"command","valid":false,"error":"bad field: items","msg":{"v":1,"type":"stock_items","id":"t12","ts":0,"guid":1101,"items":[49623],"count":1}}
+{"name":"missing_id","kind":"command","valid":false,"error":"missing id","msg":{"v":1,"type":"remove_friend","ts":0,"guid":1101}}
+{"name":"job_form_raid_done","kind":"event","valid":true,"msg":{"v":1,"type":"job","ts":0,"id":"t1","kind":"form_raid","state":"done","reason":"","stage":"","guids":[1101,1102],"skipped":[{"guid":1103,"reason":"in_bg"}],"kills":0,"wipes":0,"instance_id":0,"guid":0,"level":0,"avg_ilvl":0}}
+{"name":"job_bot_do_done","kind":"event","valid":true,"msg":{"v":1,"type":"job","ts":0,"id":"t11","kind":"bot_do","state":"done","reason":"","stage":"","guids":[1101],"skipped":[{"guid":1102,"reason":"offline"}],"kills":0,"wipes":0,"instance_id":0,"guid":0,"level":0,"avg_ilvl":0}}

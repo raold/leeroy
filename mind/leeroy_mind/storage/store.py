@@ -6,6 +6,7 @@ from contextlib import contextmanager
 
 from leeroy_mind import protocol
 from leeroy_mind.clock import Clock
+from leeroy_mind.memory.privacy import stricter
 from leeroy_mind.protocol import Chat, Member
 from leeroy_mind.storage import db
 from leeroy_mind.storage.rows import (
@@ -54,7 +55,16 @@ def _memory_from_row(r: sqlite3.Row) -> MemoryRow:
         raid_id=r["raid_id"], importance=r["importance"], valence=r["valence"],
         source=r["source"], evidence=tuple(json.loads(r["evidence"])),
         confidence=r["confidence"], status=r["status"], superseded_by=r["superseded_by"],
-        key=r["key"], merged_n=r["merged_n"], embedding=r["embedding"])
+        key=r["key"], merged_n=r["merged_n"], embedding=r["embedding"], scope=r["scope"],
+        scope_with=r["scope_with"])
+
+
+def _chat_from_row(r: sqlite3.Row) -> ChatLineRow:
+    return ChatLineRow(
+        id=r["id"], ts=r["ts"], channel=r["channel"], from_guid=r["from_guid"],
+        from_name=r["from_name"], to_guid=r["to_guid"], text=r["text"], map=r["map"],
+        zone=r["zone"], session_id=r["session_id"], thread_id=r["thread_id"],
+        origin=r["origin"], audience=_guids(r["audience"]))
 
 
 def _check_vec(v: bytes) -> bytes:
@@ -188,6 +198,26 @@ class Store:
                     (m.guid, clean(m.name), m.race, m.class_, m.gender, m.level, m.rank,
                      int(m.online), m.map, m.zone, m.spec_tab, ts))
 
+    def replace_cast(self, members, ts: float, *, keep=()) -> list[int]:
+        """The bridge's whole cast (a Cast event: mod-leeroy sends every member each time):
+        its members are upserted and every other row goes, but the guids in `keep` (his: the
+        bridge never sends him, and human_identity reads his row). An empty snapshot, from a
+        bridge that hasn't loaded the guild yet, deletes nothing. Only the roster changes: the
+        personas, memories and relationships of a member who left stay (fix wave G6). The
+        guids deleted, in order."""
+        members = list(members)
+        with self.transaction():
+            self.upsert_cast(members, ts)
+            if not members:
+                return []
+            stay = json.dumps(sorted({m.guid for m in members} | set(keep)))
+            gone = [r["guid"] for r in self._all(
+                "SELECT guid FROM cast_member WHERE guid NOT IN (SELECT value FROM json_each(?)) "
+                "ORDER BY guid", (stay,))]
+            self.conn.execute("DELETE FROM cast_member WHERE guid NOT IN "
+                              "(SELECT value FROM json_each(?))", (stay,))
+            return gone
+
     def cast(self) -> dict[int, Member]:
         return {
             r["guid"]: Member(
@@ -223,13 +253,20 @@ class Store:
         if not ids:
             return []
         marks = ",".join("?" * len(ids))
-        return [
-            ChatLineRow(
-                id=r["id"], ts=r["ts"], channel=r["channel"], from_guid=r["from_guid"],
-                from_name=r["from_name"], to_guid=r["to_guid"], text=r["text"], map=r["map"],
-                zone=r["zone"], session_id=r["session_id"], thread_id=r["thread_id"],
-                origin=r["origin"], audience=_guids(r["audience"]))
-            for r in self._all(f"SELECT * FROM chat_line WHERE id IN ({marks}) ORDER BY id", ids)]
+        return [_chat_from_row(r) for r in
+                self._all(f"SELECT * FROM chat_line WHERE id IN ({marks}) ORDER BY id", ids)]
+
+    def lines_before(self, line_id: int, channels, *, since: float, from_guid: int = 0,
+                     limit: int = 50) -> list[ChatLineRow]:
+        """The lines on `channels` stored before line `line_id` and no older than `since`
+        (mind seconds), newest first, at most `limit`; with `from_guid`, only theirs. Every
+        origin: his lines, the mind's and the game's (fix wave G6: the pushback window)."""
+        who = " AND from_guid = ?" if from_guid else ""
+        return [_chat_from_row(r) for r in self._all(
+            "SELECT * FROM chat_line WHERE id < ? AND ts >= ? AND channel IN "
+            f"(SELECT value FROM json_each(?)){who} ORDER BY id DESC LIMIT ?",
+            (line_id, since, json.dumps(sorted(set(channels))),
+             *((from_guid,) if from_guid else ()), limit))]
 
     def recent_mind_lines(self, speaker_guid: int, n: int, *, model_only: bool = True
                           ) -> list[tuple[str, int, str]]:
@@ -342,11 +379,11 @@ class Store:
                 m.raid_id, m.importance, m.valence, m.source, _j(list(m.evidence)),
                 m.confidence, m.status, m.superseded_by,
                 None if m.key is None else clean(m.key), m.merged_n,
-                None if m.embedding is None else _check_vec(m.embedding))
+                None if m.embedding is None else _check_vec(m.embedding), m.scope, m.scope_with)
 
     _MEMORY_COLS = ("owner, kind, text, t_event, t_created, t_accessed, access_n, actors, place, "
                     "boss_id, raid_id, importance, valence, source, evidence, confidence, status, "
-                    "superseded_by, key, merged_n, embedding")
+                    "superseded_by, key, merged_n, embedding, scope, scope_with")
 
     def _index_actors(self, mid: int, actors) -> None:
         self.conn.execute("DELETE FROM memory_actor WHERE memory_id = ?", (mid,))
@@ -362,7 +399,7 @@ class Store:
 
     def insert_memory(self, m: MemoryRow) -> int:
         with self.transaction():
-            marks = ",".join("?" * 21)
+            marks = ",".join("?" * 23)
             mid = self.conn.execute(
                 f"INSERT INTO memory({self._MEMORY_COLS}) VALUES ({marks})",
                 self._memory_params(m)).lastrowid
@@ -374,21 +411,24 @@ class Store:
     def upsert_keyed_memory(self, m: MemoryRow) -> int:
         """Insert, or update in place the owner's memory with the same key (text, times, scores,
         evidence, actors and embedding are replaced; access_n and merged_n are kept). With no
-        embedding in `m` the stale one is dropped so the memory gets re-embedded."""
+        embedding in `m` the stale one is dropped so the memory gets re-embedded. The scope
+        becomes the stricter of the stored one and `m`'s, so a rewrite never lowers it."""
         if m.key is None:
             raise ValueError("upsert_keyed_memory needs a key")
         with self.transaction():
-            r = self._one("SELECT id FROM memory WHERE owner = ? AND key = ?", (m.owner, clean(m.key)))
+            r = self._one("SELECT id, scope, scope_with FROM memory WHERE owner = ? AND key = ?",
+                          (m.owner, clean(m.key)))
             if r is None:
                 return self.insert_memory(m)
             mid = r["id"]
+            scope, scope_with = stricter((r["scope"], r["scope_with"]), (m.scope, m.scope_with))
             p = self._memory_params(m)
             self.conn.execute(
                 "UPDATE memory SET kind=?, text=?, t_event=?, t_accessed=?, actors=?, place=?, "
                 "boss_id=?, raid_id=?, importance=?, valence=?, source=?, evidence=?, "
-                "confidence=?, status=?, embedding=? WHERE id = ?",
+                "confidence=?, status=?, embedding=?, scope=?, scope_with=? WHERE id = ?",
                 (p[1], p[2], p[3], p[5], p[7], p[8], p[9], p[10], p[11], p[12], p[13], p[14],
-                 p[15], p[16], p[20], mid))
+                 p[15], p[16], p[20], scope, scope_with, mid))
             self._index_actors(mid, m.actors)
             self._index_vec(mid, m.owner, m.embedding)
             return mid

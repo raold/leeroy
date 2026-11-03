@@ -1,0 +1,223 @@
+[
+  {
+    "type": "session",
+    "ts": 1793404800000,
+    "line": "{\"v\":1,\"type\":\"session\",\"ts\":1793404800000,\"online\":true,\"human_guid\":1,\"live_model\":\"live:test\",\"embed_model\":\"embed:test\"}",
+    "fields": {
+      "online": true,
+      "human_guid": 1,
+      "live_model": "live:test",
+      "embed_model": "embed:test"
+    }
+  },
+  {
+    "type": "channels",
+    "ts": 1793404801000,
+    "line": "{\"v\":1,\"type\":\"channels\",\"ts\":1793404801000,\"channels\":[{\"id\":\"guild_hall\",\"name\":\"Guild Hall\",\"parent\":\"\",\"locked\":false,\"allowed\":[],\"capacity\":0},{\"id\":\"officers\",\"name\":\"Officers\",\"parent\":\"guild_hall\",\"locked\":true,\"allowed\":[1,102,104],\"capacity\":0},{\"id\":\"private1\",\"name\":\"Private 1\",\"parent\":\"guild_hall\",\"locked\":false,\"allowed\":[],\"capacity\":2}]}",
+    "fields": {
+      "channels": [
+        {
+          "id": "guild_hall",
+          "name": "Guild Hall",
+          "parent": "",
+          "locked": false,
+          "allowed": [],
+          "capacity": 0
+        },
+        {
+          "id": "officers",
+          "name": "Officers",
+          "parent": "guild_hall",
+          "locked": true,
+          "allowed": [
+            1,
+            102,
+            104
+          ],
+          "capacity": 0
+        },
+        {
+          "id": "private1",
+          "name": "Private 1",
+          "parent": "guild_hall",
+          "locked": false,
+          "allowed": [],
+          "capacity": 2
+        }
+      ]
+    }
+  },
+  {
+    "type": "moved",
+    "ts": 1793404802000,
+    "line": "{\"v\":1,\"type\":\"moved\",\"ts\":1793404802000,\"guid\":101,\"channel\":\"guild_hall\",\"by\":0}",
+    "fields": {
+      "guid": 101,
+      "channel": "guild_hall",
+      "by": 0
+    }
+  },
+  {
+    "type": "invite",
+    "ts": 1793404803000,
+    "line": "{\"v\":1,\"type\":\"invite\",\"ts\":1793404803000,\"from\":102,\"channel\":\"private1\"}",
+    "fields": {
+      "from": 102,
+      "channel": "private1"
+    }
+  },
+  {
+    "type": "refused",
+    "ts": 1793404804000,
+    "line": "{\"v\":1,\"type\":\"refused\",\"ts\":1793404804000,\"channel\":\"officers\",\"reason\":\"locked\"}",
+    "fields": {
+      "channel": "officers",
+      "reason": "locked"
+    }
+  },
+  {
+    "type": "voice",
+    "ts": 1793404805000,
+    "line": "{\"v\":1,\"type\":\"voice\",\"ts\":1793404805000,\"guid\":101,\"name\":\"Arkon\",\"spec\":{\"version\":1,\"guid\":101,\"name\":\"Arkon\",\"engine\":\"kokoro\",\"lang\":\"a\",\"timbre\":{\"am_michael\":0.7,\"am_fenrir\":0.3},\"prosody\":{},\"speed\":1.05,\"pitch_st\":-1.0,\"mic\":\"desk_mic\",\"gain_db\":0.0,\"locked\":false,\"voices_sha256\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ref\":\"\"}}",
+    "fields": {
+      "guid": 101,
+      "name": "Arkon",
+      "spec": {
+        "version": 1,
+        "guid": 101,
+        "name": "Arkon",
+        "engine": "kokoro",
+        "lang": "a",
+        "timbre": {
+          "am_michael": 0.7,
+          "am_fenrir": 0.3
+        },
+        "prosody": {},
+        "speed": 1.05,
+        "pitch_st": -1.0,
+        "mic": "desk_mic",
+        "gain_db": 0.0,
+        "locked": false,
+        "voices_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "ref": ""
+      }
+    }
+  },
+  {
+    "type": "speak",
+    "ts": 1793404806000,
+    "line": "{\"v\":1,\"type\":\"speak\",\"ts\":1793404806000,\"id\":\"s1\",\"guid\":102,\"text\":\"Testy, adds on the left \\u2014 grab them!\",\"channel\":\"guild_hall\",\"to_human\":true,\"priority\":\"p1\",\"kind\":\"urgent\",\"attitude\":\"none\",\"state\":\"sober\",\"expires_ms\":1793404809000,\"after\":\"\",\"template\":false}",
+    "fields": {
+      "id": "s1",
+      "guid": 102,
+      "text": "Testy, adds on the left \u2014 grab them!",
+      "channel": "guild_hall",
+      "to_human": true,
+      "priority": "p1",
+      "kind": "urgent",
+      "attitude": "none",
+      "state": "sober",
+      "expires_ms": 1793404809000,
+      "after": "",
+      "template": false
+    }
+  },
+  {
+    "type": "cancel",
+    "ts": 1793404807000,
+    "line": "{\"v\":1,\"type\":\"cancel\",\"ts\":1793404807000,\"id\":\"\",\"guid\":101,\"below\":\"\"}",
+    "fields": {
+      "id": "",
+      "guid": 101,
+      "below": ""
+    }
+  },
+  {
+    "type": "raid",
+    "ts": 1793404808000,
+    "line": "{\"v\":1,\"type\":\"raid\",\"ts\":1793404808000,\"phase\":\"combat\",\"lead\":101}",
+    "fields": {
+      "phase": "combat",
+      "lead": 101
+    }
+  },
+  {
+    "type": "hello",
+    "ts": 1793404809000,
+    "line": "{\"v\":1,\"type\":\"hello\",\"ts\":1793404809000,\"server\":\"leeroy-voice\",\"version\":\"0.1.0\",\"engines\":[\"kokoro\"],\"input_device\":\"Mic A\",\"output_device\":\"Speakers A\",\"ptt_key\":\"\\\\\"}",
+    "fields": {
+      "server": "leeroy-voice",
+      "version": "0.1.0",
+      "engines": [
+        "kokoro"
+      ],
+      "input_device": "Mic A",
+      "output_device": "Speakers A",
+      "ptt_key": "\\"
+    }
+  },
+  {
+    "type": "join",
+    "ts": 1793404810000,
+    "line": "{\"v\":1,\"type\":\"join\",\"ts\":1793404810000,\"channel\":\"officers\"}",
+    "fields": {
+      "channel": "officers"
+    }
+  },
+  {
+    "type": "played",
+    "ts": 1793404811000,
+    "line": "{\"v\":1,\"type\":\"played\",\"ts\":1793404811000,\"id\":\"s1\",\"state\":\"dropped\",\"reason\":\"expired\"}",
+    "fields": {
+      "id": "s1",
+      "state": "dropped",
+      "reason": "expired"
+    }
+  },
+  {
+    "type": "ptt",
+    "ts": 1793404812000,
+    "line": "{\"v\":1,\"type\":\"ptt\",\"ts\":1793404812000,\"down\":true,\"channel\":\"guild_hall\"}",
+    "fields": {
+      "down": true,
+      "channel": "guild_hall"
+    }
+  },
+  {
+    "type": "heard",
+    "ts": 1793404813000,
+    "line": "{\"v\":1,\"type\":\"heard\",\"ts\":1793404813000,\"text\":\"Belra, you're on adds\",\"raw\":\"bella youre on adds\",\"confidence\":0.82,\"channel\":\"raid\",\"speech_ms\":1480,\"latency_ms\":310}",
+    "fields": {
+      "text": "Belra, you're on adds",
+      "raw": "bella youre on adds",
+      "confidence": 0.82,
+      "channel": "raid",
+      "speech_ms": 1480,
+      "latency_ms": 310
+    }
+  },
+  {
+    "type": "status",
+    "ts": 1793404814000,
+    "line": "{\"v\":1,\"type\":\"status\",\"ts\":1793404814000,\"ok\":true,\"mic\":\"unset\",\"gpu\":\"none\",\"stt\":\"parakeet\",\"ui\":false,\"queue\":2,\"errors\":[\"wow_elevated\"]}",
+    "fields": {
+      "ok": true,
+      "mic": "unset",
+      "gpu": "none",
+      "stt": "parakeet",
+      "ui": false,
+      "queue": 2,
+      "errors": [
+        "wow_elevated"
+      ]
+    }
+  },
+  {
+    "type": "error",
+    "ts": 1793404815000,
+    "line": "{\"v\":1,\"type\":\"error\",\"ts\":1793404815000,\"message\":\"another mind is connected\"}",
+    "fields": {
+      "message": "another mind is connected"
+    }
+  }
+]

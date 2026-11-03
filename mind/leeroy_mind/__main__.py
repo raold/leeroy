@@ -184,6 +184,7 @@ async def doctor(root: Path, *, make_llm=None, ollama_conf: Path | None = None
                 for what in ("ollama", "models", "live chat", "embedding", "mod-ollama-chat",
                              "bridge")]
         return out
+    out += _doctor_voice_service(root)
     llm = (make_llm or _default_llm)(cfg)
     try:
         names = await llm.list_models()
@@ -254,6 +255,7 @@ def _doctor_db(root: Path, latest: int, cfg=None) -> list[tuple[bool | None, str
         personas = _cast_personas(store, human)
         lines.append((bool(personas), f"personas {len(personas)}: "
                       + _mix_line(mix_report(personas)).replace("\n", "; ")))
+        lines.append(_doctor_voice_specs(root, personas))
         if human is not None:
             lines += _doctor_notes(store, personas, human, cfg)
         return lines
@@ -261,6 +263,69 @@ def _doctor_db(root: Path, latest: int, cfg=None) -> list[tuple[bool | None, str
         return [(False, f"mind.db cannot be read: {e}"), (False, "personas: not read")]
     finally:
         conn.close()
+
+
+def _doctor_voice_specs(root: Path, personas) -> tuple[bool | None, str]:
+    """Count the cast's readable spec files; an incomplete casting is informational."""
+    from .voice.brief import load_specs
+    guids = {p.guid for p in personas}
+    try:
+        count = len(guids.intersection(load_specs(root)))
+    except OSError as e:
+        return None, f"voice specs: not read ({type(e).__name__})"
+    return (True if guids and count == len(guids) else None,
+            f"voice specs: {count} of {len(guids)} cast members")
+
+
+def _doctor_voice_service(root: Path) -> list[tuple[bool | None, str]]:
+    """Probe without a protocol greeting, autostart or model loading. Voice is optional.
+
+    Use the voice service's configured endpoint when its data directory has voice.toml;
+    report a mismatch with the mind's endpoint rather than silently probing a default port.
+    """
+    import socket
+    import tomllib
+    from .config import ConfigError, _HOSTS
+    from .voice.attach import PROBE_S, voice_data_dir
+    from .voice.config import load_voice_config
+
+    try:
+        cfg = load_voice_config(root / "mind.toml")
+    except (ConfigError, TypeError) as e:
+        return [(None, f"voice service: not checked ({type(e).__name__})")]
+    if not cfg.enabled:
+        return [(None, "voice service: disabled")]
+    host, port = cfg.host, cfg.port
+    path = voice_data_dir() / "voice.toml"
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        pass  # The mind's endpoint still lets doctor report a separately managed service.
+    except OSError as e:
+        return [(None, f"voice service: configuration not read ({type(e).__name__})")]
+    else:
+        try:
+            table = tomllib.loads(raw.decode("utf-8-sig")).get("mind", {})
+            if not isinstance(table, dict):
+                raise ValueError("mind table")
+            host, port = table.get("host", "127.0.0.1"), table.get("port", 7879)
+            if not isinstance(host, str) or host not in _HOSTS:
+                raise ValueError("host")
+            if type(port) is not int or not 1 <= port <= 65535:
+                raise ValueError("port")
+        except (UnicodeDecodeError, ValueError) as e:
+            return [(None, f"voice service: invalid configuration ({type(e).__name__})")]
+    lines = []
+    if (host, port) != (cfg.host, cfg.port):
+        lines.append((None, f"voice endpoint mismatch: mind uses {cfg.host}:{cfg.port}; "
+                           f"service uses {host}:{port}"))
+    try:
+        socket.create_connection((host, port), timeout=PROBE_S).close()
+    except OSError:
+        lines.append((None, f"voice service: not running on {host}:{port}"))
+    else:
+        lines.append((True, f"voice service: listening on {host}:{port}"))
+    return lines
 
 
 def _doctor_notes(store, personas, human_guid: int, cfg) -> list[tuple[bool | None, str]]:
@@ -628,6 +693,42 @@ def _human_guid(store, explicit: int | None) -> int:
         raise SystemExit(f"human guid {guid} is not in the stored roster; run `roster` first "
                          "or pass a valid --human-guid")
     return guid
+
+
+def cmd_voices(args) -> int:
+    """`voices brief`: what the casting reads of the cast (Task 19). Read-only (N1): the database
+    is opened mode=ro as doctor opens it, never through open_db, so nothing migrates, nothing is
+    written and no mind.lock is taken. It is safe on a snapshot or on the live file."""
+    from .storage.store import Store
+    from .voice.brief import brief_entries, write_entries
+    root = _root(args)
+    path = Path(args.db).resolve() if args.db else root / "mind.db"
+    if not path.is_file():
+        print(f"voices brief: no mind.db at {path}", file=sys.stderr)
+        return 1
+    try:
+        conn = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
+    except sqlite3.Error as e:
+        print(f"voices brief: cannot open {path}: {e}", file=sys.stderr)
+        return 1
+    conn.row_factory = sqlite3.Row
+    try:
+        if conn.execute("PRAGMA user_version").fetchone()[0] < 1:
+            print(f"voices brief: {path} has no schema", file=sys.stderr)
+            return 1
+        entries = brief_entries(Store(conn, clock=SystemClock()))
+    except sqlite3.Error as e:
+        print(f"voices brief: cannot read {path}: {e}", file=sys.stderr)
+        return 1
+    finally:
+        conn.close()
+    written = write_entries(entries, Path(args.out) if args.out else root / "voices")
+    women = [e for e in entries if e["gender"] == "female"]
+    british = sum(e["accent"] == "en-gb" for e in women)
+    share = f"{british / len(women):.0%}" if women else "n/a"
+    print(f"brief: {len(entries)} members -> {written}")
+    print(f"British women: {british} of {len(women)} ({share})")
+    return 0
 
 
 def cmd_roster(args) -> int:
@@ -1039,8 +1140,15 @@ def cmd_generate(args, root, store) -> int:
 
 def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     """`make_llm(cfg)` replaces the Ollama client for `run` and `doctor` (tests)."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] in ("nightly", "eval"):
+        from .nightly.cli import eval_main, nightly_main
+        command = nightly_main if argv[0] == "nightly" else eval_main
+        return command(argv[1:], make_llm=make_llm)
     parser = argparse.ArgumentParser(prog="leeroy_mind")
     sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("nightly", help="nightly status, trials, ledger and owner controls")
+    sub.add_parser("eval", help="weekly evaluation on a copied database by default")
     p_init = sub.add_parser("init", help="create the data dir and a default mind.toml")
     _add_data_dir(p_init)
     p_init.set_defaults(func=cmd_init)
@@ -1139,6 +1247,17 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     p_fix.set_defaults(func=cmd_fix_typing)
     p_pers.set_defaults(func=cmd_personas)
     from .personas.roster import DEFAULT_CONF, DEFAULT_MYSQL, ROSTER_FILE_HELP
+    p_voices = sub.add_parser("voices", help="the guild's voices")
+    _add_data_dir(p_voices)
+    vsub = p_voices.add_subparsers(dest="action", required=True)
+    p_brief = vsub.add_parser("brief", help="write voices/brief.json for the casting, reading "
+                                            "mind.db read-only (never migrates, takes no lock)")
+    _add_data_dir(p_brief, after_action=True)
+    p_brief.add_argument("--db", default=None, help="read this mind.db (a snapshot) instead of "
+                                                    "the data dir's")
+    p_brief.add_argument("--out", default=None, help="where brief.json goes (default: "
+                                                     "<data dir>/voices)")
+    p_voices.set_defaults(func=cmd_voices)
     p_ros = sub.add_parser("roster", help="store the guild roster in mind.db")
     _add_data_dir(p_ros)
     src = p_ros.add_mutually_exclusive_group(required=True)

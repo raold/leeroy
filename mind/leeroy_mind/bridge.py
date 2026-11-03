@@ -205,6 +205,11 @@ class BridgeClient:
             except (OSError, asyncio.TimeoutError):
                 pass
 
+    def inject(self, ev: Event) -> None:
+        """Put an event on the dispatcher's queue, behind those already there: an extension's
+        own events (his transcribed lines) are handled in order with the bridge's."""
+        self._enqueue(("event", ev))
+
     def _enqueue(self, item) -> None:
         self._queue.put_nowait(item)
         size = self._queue.qsize()
@@ -320,7 +325,7 @@ class BridgeClient:
             except BridgeError:
                 return
 
-    async def send(self, cmd: Command) -> Ack:
+    async def send(self, cmd: Command, *, preserve_id: bool = False) -> Ack:
         """Send a command and wait for its ack (real-time timeout).
 
         Acks, pongs and the cast that answers get_cast resolve in the reader, while events go to
@@ -330,8 +335,28 @@ class BridgeClient:
         writer = self._writer
         if not self._connected or writer is None:
             raise NotConnected("bridge is not connected")
-        cmd_id = f"m{self._next_id}"
-        self._next_id += 1
+        # Guild jobs persist their UUID before dispatch and receive progress long
+        # after the ack. Rewriting it would sever both replay and ownership proof.
+        issued = getattr(self, "_preserved_ids", None)
+        if issued is None:
+            issued = self._preserved_ids = set()
+        if preserve_id:
+            cmd_id = cmd.id
+            if (not isinstance(cmd_id, str) or not cmd_id or len(cmd_id) > 128
+                    or not cmd_id.isascii() or not all(c.isalnum() or c in "_-" for c in cmd_id)):
+                raise ValueError("invalid preserved command identity")
+            old_auto = cmd_id.startswith("m") and cmd_id[1:].isdigit() and int(cmd_id[1:]) < self._next_id
+            if cmd_id in issued or cmd_id in self._pending or old_auto:
+                raise ValueError("command identity already issued")
+            if len(issued) >= 65536:
+                raise ValueError("preserved command identity capacity reached")
+            issued.add(cmd_id)
+        else:
+            cmd_id = f"m{self._next_id}"
+            self._next_id += 1
+            while cmd_id in issued or cmd_id in self._pending:
+                cmd_id = f"m{self._next_id}"
+                self._next_id += 1
         line = encode_command(dataclasses.replace(cmd, id=cmd_id), now_ms(self._clock))
         fut = asyncio.get_running_loop().create_future()
         self._pending[cmd_id] = fut

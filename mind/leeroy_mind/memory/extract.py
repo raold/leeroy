@@ -656,6 +656,10 @@ class Extractor:
         self._said = said if said is not None else (lambda line_id: None)
         self._night: str | None = None  # the night _tally counts
         self._tally: Counter[str] = Counter()
+        # The live queue and nightly recovery can encounter the same closed thread.
+        # Refcounts retain the lock until every waiter has left; unrelated threads
+        # may still extract concurrently.
+        self._thread_locks: dict[int, tuple[asyncio.Lock, int]] = {}
 
     def _count(self, night: str, result: Extraction) -> None:
         """extraction_counts, after every extraction: the night's running totals of what the
@@ -762,6 +766,19 @@ class Extractor:
                 if all(lines[i][0] != "whisper" for i in refs[m.id] if i in lines)}
 
     async def extract(self, t: ClosedThread) -> ExtractReport:
+        lock, users = self._thread_locks.get(t.thread_id, (asyncio.Lock(), 0))
+        self._thread_locks[t.thread_id] = (lock, users + 1)
+        try:
+            async with lock:
+                return await self._extract(t)
+        finally:
+            _, users = self._thread_locks[t.thread_id]
+            if users == 1:
+                del self._thread_locks[t.thread_id]
+            else:
+                self._thread_locks[t.thread_id] = (lock, users - 1)
+
+    async def _extract(self, t: ClosedThread) -> ExtractReport:
         store = self._store
         done = store.thread_status(t.thread_id)
         if done in ("extracted", "skipped"):

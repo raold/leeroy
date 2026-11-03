@@ -3,10 +3,12 @@
 void AddSC_leeroy_world();
 void AddSC_leeroy_cast();
 void AddSC_leeroy_events();
+void AddSC_leeroy_guild_life();
 
 void Addmod_leeroyScripts()
 {
     AddSC_leeroy_world();
     AddSC_leeroy_cast();
     AddSC_leeroy_events();
+    AddSC_leeroy_guild_life();
 }

@@ -73,10 +73,19 @@ def parse_roster_tsv(text: str) -> list[Member]:
 
 
 def _quote(v: str) -> str:
-    return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return ('"' + v.replace("\\", "\\\\").replace('"', '\\"')
+            .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t").replace("\0", "\\0") + '"')
 
 
-def query_roster(db: DbInfo, guild_id: int, mysql_exe: Path) -> list[Member]:
+def run_mysql(db: DbInfo, sql: str, mysql_exe: Path) -> list[list[str]]:
+    """Run a query with a private, short-lived option file; return batch TSV rows.
+
+    Credentials never enter argv. Failed queries with a password omit diagnostic
+    payloads altogether: mysql can quote or escape a secret differently from the
+    option file, so replacing just the literal password is insufficient.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9_]+", db.name):
+        raise RosterError("mysql database name is invalid")
     tmp = tempfile.mkdtemp(prefix="leeroy-mysql-")
     try:
         cnf = Path(tmp) / "client.cnf"
@@ -88,18 +97,25 @@ def query_roster(db: DbInfo, guild_id: int, mysql_exe: Path) -> list[Member]:
         try:
             r = subprocess.run(
                 [str(mysql_exe), f"--defaults-extra-file={cnf}", "--batch",
-                 "--skip-column-names", db.name, "-e", ROSTER_SQL.format(guild_id=guild_id)],
+                 "--skip-column-names", db.name, "-e", sql],
                 capture_output=True, text=True, encoding="utf-8", timeout=60)
         except (OSError, subprocess.TimeoutExpired) as e:
             raise RosterError(f"mysql did not run: {e.__class__.__name__}") from None
         if r.returncode != 0:
-            raise RosterError(f"mysql failed ({r.returncode}): "
-                              f"{(r.stderr.replace(db.password, '***') if db.password else r.stderr).strip()[:300]}")
-        return parse_roster_tsv(r.stdout)
+            detail = f": {r.stderr.strip()[:300]}" if not db.password else ""
+            raise RosterError(f"mysql failed ({r.returncode}){detail}")
+        return [line.split("\t") for line in r.stdout.splitlines() if line.strip()]
     finally:
         for p in Path(tmp).glob("*"):
             p.unlink(missing_ok=True)
         os.rmdir(tmp)
+
+
+def query_roster(db: DbInfo, guild_id: int, mysql_exe: Path) -> list[Member]:
+    if type(guild_id) is not int or not 0 < guild_id <= 0xFFFFFFFF:
+        raise RosterError("guild id must be a positive uint32 integer")
+    rows = run_mysql(db, ROSTER_SQL.format(guild_id=guild_id), mysql_exe)
+    return parse_roster_tsv("\n".join("\t".join(row) for row in rows))
 
 
 def _strict_bool(v) -> bool:

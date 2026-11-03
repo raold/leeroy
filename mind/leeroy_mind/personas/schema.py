@@ -25,11 +25,12 @@ class PersonaError(ValueError):
 
 
 def _f(*, lo=None, hi=None, min_items=None, max_items=None, max_len=None, doc=None,
-       mm_dd=False, default=MISSING):
+       mm_dd=False, enrichment=False, default=MISSING):
     """doc: a description the JSON schema carries, which the model reads with it. mm_dd: a
-    month and day as MM-DD (the strings, or each string of a list)."""
+    month and day as MM-DD (the strings, or each string of a list). enrichment: a field the
+    nightly looks pass fills (P1c Task 7), which the JSON schema leaves out unless asked."""
     meta = {"lo": lo, "hi": hi, "min_items": min_items, "max_items": max_items, "max_len": max_len,
-            "doc": doc, "mm_dd": mm_dd}
+            "doc": doc, "mm_dd": mm_dd, "enrichment": enrichment}
     if default is MISSING:
         return field(metadata=meta)
     return field(default=default, metadata=meta)
@@ -119,6 +120,8 @@ class Romance:
     style: Literal["bold", "shy", "earnest", "theatrical", "guarded", "competitive"] | None
     jealousy_mode: Literal["good_sport", "sulker", "grumbler", "teaser", "play_by_play"] | None
     dial: int | None = _f(lo=1, hi=10, default=None)  # hers alone, set by hand; None: mind.toml's
+    drawn_to: tuple[str, ...] = _f(max_items=6, max_len=80, default=(), enrichment=True)
+    turned_off_by: tuple[str, ...] = _f(max_items=6, max_len=80, default=(), enrichment=True)
 
 
 # how a man takes it when someone else gets the human's attention (Romance.jealousy_mode)
@@ -172,6 +175,31 @@ class Relationship:
     note: str = _f(max_len=200)
 
 
+# The looks and the disclosure ladder (P1c Task 7), written by the nightly looks pass and
+# reviewable by hand like every other field. Optional: a persona without them still loads.
+@dataclass(frozen=True)
+class Appearance:
+    height_cm: int = _f(lo=140, hi=210)
+    build: Literal["slim", "athletic", "average", "curvy", "stocky", "heavy"]
+    weight_kg: int = _f(lo=40, hi=180)
+    hair_colour: str = _f(max_len=30)
+    hair_length: Literal["shaved", "short", "chin", "shoulder", "long", "very_long"]
+    hair_style: str = _f(max_len=40)
+    skin_tone: str = _f(max_len=30)
+    eye_colour: str = _f(max_len=20)
+    face: tuple[str, ...] = _f(max_items=4, max_len=40)      # freckles, glasses, piercings, tattoos, a beard
+    at_the_pc: str = _f(max_len=120)                         # what they wear at the keyboard
+
+
+@dataclass(frozen=True)
+class Disclosure:
+    depth: Literal["surface", "middle", "deep"]
+    text: str = _f(max_len=160)
+
+
+DEPTHS = get_args(get_type_hints(Disclosure)["depth"])  # the order the layers open in
+
+
 @dataclass(frozen=True)
 class Persona:
     guid: int = _f(lo=1)
@@ -199,6 +227,8 @@ class Persona:
     bits: tuple[Bit, ...] = _f(max_items=2)
     relationships: tuple[Relationship, ...] = _f(max_items=8)
     mock_interview: str = _f(max_len=4000, default="")
+    appearance: Appearance | None = _f(default=None, enrichment=True)
+    disclosures: tuple[Disclosure, ...] = _f(max_items=4, default=(), enrichment=True)
 
 
 # -- type helpers ---------------------------------------------------------------------------
@@ -476,6 +506,22 @@ def validate_persona(p: Persona) -> list[str]:
         if r.other == p.character_name:
             errs.append(f"relationships[{i}].other: must be someone else or @human")
     errs += _typing_errors(p.typing)
+    errs += _enrichment_errors(p)
+    return errs
+
+
+def _enrichment_errors(p: Persona) -> list[str]:
+    """Men stay friends (owner, 2026-10-30), so a man has no tastes; the disclosure layers run
+    surface, then middle, then deep, with one deep layer (P1c Task 7)."""
+    errs = []
+    if p.identity.player_gender == "male":
+        errs += [f"romance.{name}: men stay friends; leave it empty"
+                 for name in ("drawn_to", "turned_off_by") if getattr(p.romance, name)]
+    ranks = [DEPTHS.index(d.depth) for d in p.disclosures if d.depth in DEPTHS]
+    if ranks != sorted(ranks):
+        errs.append("disclosures: depths must run surface, then middle, then deep")
+    if p.disclosures and sum(d.depth == "deep" for d in p.disclosures) != 1:
+        errs.append("disclosures: exactly one deep layer")
     return errs
 
 
@@ -502,17 +548,17 @@ def _typing_errors(t: Typing) -> list[str]:
 
 # -- JSON schema ----------------------------------------------------------------------------
 
-def _js(t, f) -> dict:
+def _js(t, f, enrichment: bool = False) -> dict:
     meta = f.metadata if f is not None else {}
-    out = _js_type(t, f, meta)
+    out = _js_type(t, f, meta, enrichment)
     if meta.get("doc"):
         out["description"] = meta["doc"]
     return out
 
 
-def _js_type(t, f, meta) -> dict:
+def _js_type(t, f, meta, enrichment: bool) -> dict:
     if _is_union(t):
-        return {"anyOf": [_js(_optional_inner(t), f), {"type": "null"}]}
+        return {"anyOf": [_js(_optional_inner(t), f, enrichment), {"type": "null"}]}
     origin = get_origin(t)
     if origin is Literal:
         return {"enum": list(get_args(t))}
@@ -531,34 +577,40 @@ def _js_type(t, f, meta) -> dict:
             out["pattern"] = MM_DD_PATTERN
         return out
     if origin is tuple:
-        out = {"type": "array", "items": _js(get_args(t)[0], _Elem(f))}
+        out = {"type": "array", "items": _js(get_args(t)[0], _Elem(f), enrichment)}
         if meta.get("min_items") is not None:
             out["minItems"] = meta["min_items"]
         if meta.get("max_items") is not None:
             out["maxItems"] = meta["max_items"]
         return out
     if origin is dict:
-        out = {"type": "object", "additionalProperties": _js(get_args(t)[1], _Elem(f))}
+        out = {"type": "object",
+               "additionalProperties": _js(get_args(t)[1], _Elem(f), enrichment)}
         if meta.get("max_len") is not None:
             out["propertyNames"] = {"maxLength": meta["max_len"]}
         if meta.get("max_items") is not None:
             out["maxProperties"] = meta["max_items"]
         return out
-    return _js_obj(t)
+    return _js_obj(t, enrichment)
 
 
-def _js_obj(cls) -> dict:
+def _js_obj(cls, enrichment: bool = False) -> dict:
+    """The fields marked enrichment are left out unless `enrichment` is set."""
     hints = _hints(cls)
+    shown = [f for f in fields(cls) if enrichment or not f.metadata.get("enrichment")]
     return {
         "type": "object",
-        "properties": {f.name: _js(hints[f.name], f) for f in fields(cls)},
-        "required": [f.name for f in fields(cls) if not _has_default(f)],
+        "properties": {f.name: _js(hints[f.name], f, enrichment) for f in shown},
+        "required": [f.name for f in shown if not _has_default(f)],
         "additionalProperties": False,
     }
 
 
-def persona_json_schema() -> dict:
-    s = _js_obj(Persona)
+def persona_json_schema(*, enrichment: bool = False) -> dict:
+    """The schema P1b's generator and seeder send (as the format and in the prompt). It leaves
+    out the looks, tastes and disclosure layers, which only the nightly looks pass writes
+    (controller ruling I9), unless `enrichment` is set."""
+    s = _js_obj(Persona, enrichment)
     s["properties"] = {"schema": {"const": SCHEMA_VERSION}, **s["properties"]}
     s["required"] = ["schema", *s["required"]]
     return s
