@@ -1,0 +1,2 @@
+# A test's SQL scope value, not a secret; the line was reworded in the next commit.
+70da6d2a6980691bdff0044268ca501b19493c31:mind/tests/realm/test_realm_memory_lineage.py:generic-api-key:162

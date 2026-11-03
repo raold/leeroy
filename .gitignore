@@ -5,6 +5,7 @@
 /*
 !/.gitignore
 !/.gitattributes
+!/.gitleaksignore
 !/.github/
 !/CLAUDE.md
 !/README.md

@@ -159,7 +159,7 @@ def test_vector_access_and_scope_edits_leave_links(roster):
     roster.set_embedding(mid, bytes(2048))
     roster.touch_memories([mid], 1234)
     with roster.transaction():
-        roster.conn.execute("UPDATE memory SET scope='secret',scope_with=0 WHERE id=?", (mid,))
+        roster.conn.execute("UPDATE memory SET scope=?, scope_with=0 WHERE id=?", ('secret', mid))
     assert links(roster, mid) == (fact.id,)
 
 
