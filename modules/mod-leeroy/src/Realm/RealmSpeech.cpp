@@ -311,13 +311,15 @@ LeeroyCommandResult Announce(nlohmann::json const& message)
     if (!cmd) return {false, why};
     auto const kill = module.MatchProof(*cmd, NowMs());
     if (!kill) return {false, "no_kill"};
+    auto const fightSeconds = ValidatedAnnouncementFightSeconds(*cmd, *kill);
+    if (!fightSeconds) return {false, "unproved_metrics"};
     auto const* guild = sGuildMgr->GetGuildById(GuildId());
     if (!guild) return {false, "no_guild"};
     auto const boss = Leeroy::SanitizeChatText(cmd->bossName, 48);
     auto const guildName = Leeroy::SanitizeChatText(guild->GetName(), 48);
     if (boss.empty() || guildName.empty()) return {false, "empty text"};
     sWorldSessionMgr->SendServerMessage(SERVER_MSG_STRING,
-        FormatAnnouncement(guildName, boss, kill->size, kill->heroic, cmd->attempts, cmd->fightS, cmd->first == "ever"));
+        FormatAnnouncement(guildName, boss, kill->size, kill->heroic, 0, *fightSeconds, cmd->first == "ever"));
     return {true, {}};
 }
 
@@ -371,26 +373,63 @@ public:
     }
 };
 
+FightState ObservedFightState(EncounterState state)
+{
+    if (state == NOT_STARTED || state == FAIL) return FightState::Resting;
+    if (state == IN_PROGRESS) return FightState::Progress;
+    if (state == DONE) return FightState::Done;
+    return FightState::Other;
+}
+
 struct PendingKill
 {
     Map* identity = nullptr; // Identity only; dereferenced only through the current map-hook argument.
     std::uint64_t lifecycle = 0;
     std::uint8_t spawnMode = 0;
     Kill kill;
+    FightTerminal fight;
 };
 constexpr std::size_t kMaxPendingKills = 128;
 std::mutex pendingMutex;
 std::vector<PendingKill> pendingKills;
+FightStarts fightStarts; // All access under pendingMutex; no independent terminal observer.
 std::map<Map*, std::uint64_t> mapLifecycles;
 std::uint64_t nextMapLifecycle = 0;
+
+FightContext FightContextFor(Map* map, std::uint64_t lifecycle, std::uint8_t spawnMode, KillIdentity const& kill)
+{
+    FightContext context;
+    static_cast<KillIdentity&>(context) = kill;
+    context.mapIdentity = reinterpret_cast<std::uintptr_t>(map);
+    context.lifecycle = lifecycle;
+    context.spawnMode = spawnMode;
+    return context;
+}
 
 void ForgetMap(Map* map, bool created)
 {
     std::lock_guard lock(pendingMutex);
     std::erase_if(pendingKills, [map](PendingKill const& pending) { return pending.identity == map; });
+    fightStarts.ForgetMap(reinterpret_cast<std::uintptr_t>(map));
     mapLifecycles.erase(map);
     if (created && map && nextMapLifecycle != std::numeric_limits<std::uint64_t>::max())
         mapLifecycles.emplace(map, ++nextMapLifecycle);
+}
+
+std::optional<KillParticipants> PresentParticipants(Map* map, std::uint32_t guild, std::uint32_t human)
+{
+    auto const capturedCast = CastMembers(); // Thread-safe snapshot before the complete present scan.
+    std::vector<PresentKillPlayer> present;
+    present.reserve(kMaxKillPlayers);
+    for (auto const& reference : map->GetPlayers())
+    {
+        if (present.size() == kMaxKillPlayers) return std::nullopt; // Never qualify a prefix.
+        auto const* player = reference.GetSource();
+        if (!player || !player->IsInWorld() || player->IsDuringRemoveFromWorld() || player->GetMap() != map)
+            return std::nullopt;
+        present.push_back({player->GetGUID().GetCounter(), player->GetGuildId()});
+    }
+    return QualifyKillParticipants(present, capturedCast, guild, human);
 }
 
 class RealmBossScript final : public GlobalScript
@@ -400,15 +439,23 @@ public:
     void OnBeforeSetBossState(uint32 id, EncounterState next, EncounterState old, Map* map) override
     {
         auto& module = RealmModule::Instance();
-        if (!module.On()) return;
         if (!map || !map->IsRaid()) return;
+        if (!module.On())
+        {
+            std::lock_guard lock(pendingMutex);
+            fightStarts.Clear();
+            return;
+        }
         // This hook precedes SetBossState's validation; it is not kill proof.
         auto const epoch = module.Epoch();
         auto const now = NowMs();
         auto const unixNow = NowUnixMs();
+        auto const guild = GuildId();
+        auto const human = HumanGuid();
         std::uint64_t lifecycle = 0;
         {
             std::lock_guard lock(pendingMutex);
+            fightStarts.Synchronize(epoch, guild, human, now);
             std::erase_if(pendingKills, [=](PendingKill const& pending) {
                 return (pending.identity == map && pending.kill.bossId == id) || pending.kill.nativeEpoch != epoch
                     || now < pending.kill.atMs || now - pending.kill.atMs > kKillVerifyWithinMs;
@@ -417,37 +464,41 @@ public:
             if (life == mapLifecycles.end()) return;
             lifecycle = life->second;
         }
-        if (old != IN_PROGRESS || next != DONE || unixNow <= 0) return;
         auto* instance = map->ToInstanceMap();
-        if (!instance || !map->GetInstanceId()) return;
-        auto const guild = GuildId();
-        auto const human = HumanGuid();
-        auto const capturedCast = CastMembers(); // Thread-safe native snapshot, before the complete present scan.
+        auto* script = instance ? instance->GetInstanceScript() : nullptr;
         auto const spawnMode = map->GetSpawnMode();
         Kill kill;
         kill.nativeEpoch = epoch; kill.guildId = guild; kill.humanGuid = human;
         kill.map = map->GetId(); kill.instanceId = map->GetInstanceId(); kill.bossId = id;
         kill.difficulty = spawnMode <= 3 ? static_cast<std::int32_t>(spawnMode) : -1;
-        kill.size = instance->GetMaxPlayers(); kill.heroic = map->IsHeroic();
-        kill.atMs = now; kill.killedAtMs = static_cast<std::uint64_t>(unixNow);
-        if (!guild || !human || !ValidRaidMode(kill.difficulty, kill.size, kill.heroic)) return;
-        std::vector<PresentKillPlayer> present;
-        present.reserve(kMaxKillPlayers);
-        for (auto const& reference : map->GetPlayers())
+        kill.size = instance ? instance->GetMaxPlayers() : 0; kill.heroic = map->IsHeroic();
+        kill.atMs = now; kill.killedAtMs = unixNow > 0 ? static_cast<std::uint64_t>(unixNow) : 0;
+        if (!kill.instanceId || !guild || !human || !ValidRaidMode(kill.difficulty, kill.size, kill.heroic))
         {
-            if (present.size() == kMaxKillPlayers) return; // No prefix, even if the human was already seen.
-            auto const* player = reference.GetSource();
-            if (!player || !player->IsInWorld() || player->IsDuringRemoveFromWorld() || player->GetMap() != map) return;
-            present.push_back({player->GetGUID().GetCounter(), player->GetGuildId()});
+            std::lock_guard lock(pendingMutex);
+            fightStarts.ForgetBoss(reinterpret_cast<std::uintptr_t>(map), id);
+            return;
         }
-        auto participants = QualifyKillParticipants(present, capturedCast, guild, human);
-        if (!participants || !module.On() || epoch != module.Epoch() || guild != GuildId() || human != HumanGuid()) return;
-        kill.humanPresent = participants->humanPresent;
-        kill.castMembers = std::move(participants->castMembers);
+        // Missing start/terminal state evidence removes only duration. The
+        // existing kill candidate still has its later actual-DONE verifier.
+        auto const actual = script ? ObservedFightState(script->GetBossState(id)) : FightState::Other;
+        bool const startIntent = (old == NOT_STARTED || old == FAIL) && next == IN_PROGRESS;
+        bool const killIntent = old == IN_PROGRESS && next == DONE;
+        std::optional<KillParticipants> participants;
+        if (startIntent || killIntent) participants = PresentParticipants(map, guild, human);
+        if (!module.On() || epoch != module.Epoch() || guild != GuildId() || human != HumanGuid()) return;
+        auto const context = FightContextFor(map, lifecycle, spawnMode, kill);
         std::lock_guard lock(pendingMutex);
         auto const life = mapLifecycles.find(map);
-        if (life == mapLifecycles.end() || life->second != lifecycle || pendingKills.size() >= kMaxPendingKills) return;
-        pendingKills.push_back({map, lifecycle, spawnMode, std::move(kill)});
+        if (life == mapLifecycles.end() || life->second != lifecycle) return;
+        auto const generation = fightStarts.Intent(context, ObservedFightState(old), ObservedFightState(next), actual,
+            now, kill.killedAtMs, participants && participants->humanPresent);
+        if (old != IN_PROGRESS || next != DONE || unixNow <= 0 || !participants
+            || pendingKills.size() >= kMaxPendingKills) return;
+        kill.humanPresent = participants->humanPresent;
+        kill.castMembers = std::move(participants->castMembers);
+        auto const fight = fightStarts.CaptureTerminal(context, generation, kill.atMs, kill.killedAtMs, kill.humanPresent);
+        pendingKills.push_back({map, lifecycle, spawnMode, std::move(kill), fight});
     }
 };
 
@@ -463,26 +514,33 @@ public:
     void OnMapUpdate(Map* map, uint32) override
     {
         auto& module = RealmModule::Instance();
-        if (!module.On()) return;
         if (!map || !map->IsRaid()) return;
+        auto const now = NowMs();
+        auto const unixNow = NowUnixMs();
         std::vector<PendingKill> candidates;
+        std::vector<FightContext> starts;
         std::uint64_t lifecycle = 0;
         {
             std::lock_guard lock(pendingMutex);
+            if (!module.On()) { fightStarts.Clear(); return; }
+            fightStarts.Synchronize(module.Epoch(), GuildId(), HumanGuid(), now);
             auto const life = mapLifecycles.find(map);
             if (life == mapLifecycles.end()) return;
             lifecycle = life->second;
             for (auto const& pending : pendingKills)
                 if (pending.identity == map && pending.lifecycle == lifecycle) candidates.push_back(pending);
             std::erase_if(pendingKills, [map](PendingKill const& pending) { return pending.identity == map; });
+            starts = fightStarts.Contexts(reinterpret_cast<std::uintptr_t>(map));
         }
         auto* instance = map->ToInstanceMap();
         auto* script = instance ? instance->GetInstanceScript() : nullptr;
-        if (!script) return;
-        auto const now = NowMs();
-        auto const unixNow = NowUnixMs();
-        if (unixNow <= 0) return;
-        for (auto const& pending : candidates)
+        if (!script || unixNow <= 0)
+        {
+            std::lock_guard lock(pendingMutex);
+            fightStarts.ForgetMap(reinterpret_cast<std::uintptr_t>(map));
+            return;
+        }
+        for (auto& pending : candidates)
         {
             auto kill = pending.kill;
             if (!module.On() || kill.nativeEpoch != module.Epoch() || now < kill.atMs || now - kill.atMs > kKillVerifyWithinMs
@@ -490,18 +548,40 @@ public:
                 || map->GetId() != kill.map || map->GetInstanceId() != kill.instanceId
                 || map->GetSpawnMode() != pending.spawnMode || instance->GetMaxPlayers() != kill.size
                 || map->IsHeroic() != kill.heroic) continue;
-            // All InstanceScript reads stay on this map's update thread. A load,
-            // duplicate DONE, refused transition or intervening reset is no kill.
-            if (script->GetBossState(kill.bossId) == DONE)
+            // Actual state reads and terminal verification stay on this map's
+            // update thread. Intent, load and duplicate DONE are never receipts.
+            auto const actual = script->GetBossState(kill.bossId);
+            std::lock_guard lock(pendingMutex);
+            auto const life = mapLifecycles.find(map);
+            if (life == mapLifecycles.end() || life->second != lifecycle) continue;
+            auto const context = FightContextFor(map, lifecycle, pending.spawnMode, kill);
+            auto const duration = fightStarts.Finish(pending.fight, context, ObservedFightState(actual), now);
+            if (actual == DONE)
             {
+                kill.fightStartedAtMs = duration.startedAtMs;
+                kill.fightMs = duration.elapsedMs;
                 kill.verifiedMs = now;
                 kill.verifiedAtMs = static_cast<std::uint64_t>(unixNow);
                 if (!ValidKillObservation(kill)) continue; // Includes Unix reversal and separate steady bound.
-                std::lock_guard lock(pendingMutex);
-                auto const life = mapLifecycles.find(map);
-                if (life != mapLifecycles.end() && life->second == lifecycle)
-                    module.RecordKill(std::move(kill));
+                module.RecordKill(std::move(kill));
             }
+        }
+        // Confirm new starts only from actual IN_PROGRESS, within their own 5s
+        // window. Pending terminals were handled first so DONE cannot erase an
+        // exact start before its immutable kill has copied the duration.
+        for (auto const& context : starts)
+        {
+            bool const current = module.On() && context.nativeEpoch == module.Epoch()
+                && context.guildId == GuildId() && context.humanGuid == HumanGuid()
+                && context.lifecycle == lifecycle && map->GetId() == context.map && map->GetInstanceId() == context.instanceId
+                && map->GetSpawnMode() == context.spawnMode && instance->GetMaxPlayers() == context.size
+                && map->IsHeroic() == context.heroic;
+            auto const actual = current ? ObservedFightState(script->GetBossState(context.bossId)) : FightState::Other;
+            std::lock_guard lock(pendingMutex);
+            auto const life = mapLifecycles.find(map);
+            if (life == mapLifecycles.end() || life->second != lifecycle) continue;
+            if (current) fightStarts.ObserveActual(context, actual, now);
+            else fightStarts.ForgetBoss(context.mapIdentity, context.bossId);
         }
     }
 };

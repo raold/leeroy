@@ -110,6 +110,32 @@ json Event(std::string_view type)
     if (type == "guard") return MakeGuard(11001, "readded", 4, "");
     throw std::runtime_error("unhandled Realm event maker");
 }
+bool FixtureFightDurationValid(json const& msg)
+{
+    // Outgoing native events have no wire decoder. These shared-fixture checks
+    // exercise the strict pair types/shape before the pure proof validator.
+    std::set<std::string> expected{"v", "ts"}, actual;
+    auto const canonical = Event("realm_kill");
+    for (auto const& [key, value] : canonical.items()) { (void)value; expected.insert(key); }
+    for (auto const& [key, value] : msg.items()) { (void)value; actual.insert(key); }
+    if (actual != expected || !msg.at("human_present").is_boolean()) return false;
+    auto const integer = [](json const& value) -> std::optional<std::int64_t> {
+        if (!value.is_number_integer()) return std::nullopt;
+        if (value.is_number_unsigned())
+        {
+            auto const number = value.get<std::uint64_t>();
+            if (number > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) return std::nullopt;
+            return static_cast<std::int64_t>(number);
+        }
+        return value.get<std::int64_t>();
+    };
+    auto const start = integer(msg.at("fight_started_at_ms"));
+    auto const elapsed = integer(msg.at("fight_ms"));
+    auto const killed = integer(msg.at("killed_at_ms"));
+    return start && elapsed && killed && *start >= 0 && *killed > 0
+        && ValidFightDuration(static_cast<std::uint64_t>(*start), *elapsed, static_cast<std::uint64_t>(*killed),
+            msg.at("human_present").get<bool>());
+}
 std::string const kPlacesHeader = "name,map,zone,x,y,z,o,kind\n";
 std::string const kItemsHeader = "item_id,use,max_count\n";
 }
@@ -125,7 +151,19 @@ LEEROY_TEST(Realm_FixtureLines)
         if (row.at("kind") == "event")
         {
             events.insert(type);
-            CHECK_EQ(json::parse(Leeroy::EncodeEvent(msg.at("ts").get<std::int64_t>(), Event(type))), msg);
+            auto body = Event(type);
+            if (type == "realm_kill")
+            {
+                CHECK_EQ(FixtureFightDurationValid(msg), row.at("valid").get<bool>());
+                if (!row.at("valid").get<bool>()) continue;
+                if (!row.value("full", false))
+                {
+                    body["fight_started_at_ms"] = msg.at("fight_started_at_ms");
+                    body["fight_ms"] = msg.at("fight_ms");
+                    body["human_present"] = msg.at("human_present");
+                }
+            }
+            CHECK_EQ(json::parse(Leeroy::EncodeEvent(msg.at("ts").get<std::int64_t>(), body)), msg);
             continue;
         }
         auto decoded = Leeroy::DecodeCommand(msg.dump());
@@ -284,6 +322,9 @@ LEEROY_TEST(Realm_AnnounceRequiresExactProofBindingAndEveryPayloadField)
     msg = original; msg["heroic"] = true; Reject(msg, "heroic");
     msg = original; msg["size"] = 40u; Reject(msg, "size");
     msg = original; msg["legacy_tuple"] = true; Reject(msg, "legacy_tuple");
+    msg = original; msg["attempts"] = 99u; msg["fight_s"] = 3600u;
+    parsed = ParseAnnounce(msg, error);
+    CHECK(parsed && parsed->attempts == 99 && parsed->fightS == 3600); // Structural ranges stay unchanged.
     auto legacy = original;
     for (auto field : {"kill_id", "native_epoch", "guild_id", "human_guid", "difficulty", "size", "heroic"})
         legacy.erase(field);

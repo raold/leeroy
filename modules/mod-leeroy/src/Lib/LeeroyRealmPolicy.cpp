@@ -80,6 +80,7 @@ bool ValidKillObservation(Kill const& kill)
         && ValidRaidMode(kill.difficulty, kill.size, kill.heroic)
         && kill.verifiedMs >= kill.atMs && kill.verifiedMs - kill.atMs <= kKillVerifyWithinMs
         && kill.killedAtMs && kill.killedAtMs <= kill.verifiedAtMs && kill.verifiedAtMs <= maximum
+        && ValidFightDuration(kill.fightStartedAtMs, kill.fightMs, kill.killedAtMs, kill.humanPresent)
         && (kill.humanPresent || !kill.castMembers.empty()) && kill.castMembers.size() <= kMaxKillPlayers
         && (!kill.humanPresent || kill.castMembers.size() < kMaxKillPlayers)
         && std::is_sorted(kill.castMembers.begin(), kill.castMembers.end())
@@ -87,6 +88,16 @@ bool ValidKillObservation(Kill const& kill)
         && std::all_of(kill.castMembers.begin(), kill.castMembers.end(), [&](auto guid) {
             return guid != 0 && guid != kill.humanGuid;
         });
+}
+
+bool ValidFightDuration(std::uint64_t startedAtMs, std::int64_t elapsedMs,
+    std::uint64_t killedAtMs, bool humanPresent)
+{
+    if (!startedAtMs) return elapsedMs == -1;
+    return humanPresent && startedAtMs <= killedAtMs
+        && startedAtMs <= kMaxFightStartedAtMs
+        && killedAtMs <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())
+        && elapsedMs >= 0 && static_cast<std::uint64_t>(elapsedMs) <= kMaxFightMs;
 }
 
 bool ValidKillProof(Kill const& kill)
@@ -110,6 +121,127 @@ std::optional<KillParticipants> QualifyKillParticipants(std::vector<PresentKillP
     }
     if (!result.humanPresent && result.castMembers.empty()) return std::nullopt;
     std::sort(result.castMembers.begin(), result.castMembers.end());
+    return result;
+}
+
+void FightStarts::Clear() { _starts.clear(); }
+void FightStarts::ForgetMap(std::uintptr_t mapIdentity)
+{
+    std::erase_if(_starts, [=](Start const& start) { return start.context.mapIdentity == mapIdentity; });
+}
+void FightStarts::ForgetBoss(std::uintptr_t mapIdentity, std::uint32_t boss)
+{
+    std::erase_if(_starts, [=](Start const& start) {
+        return start.context.mapIdentity == mapIdentity && start.context.bossId == boss;
+    });
+}
+void FightStarts::Prune(std::uint64_t nowMs)
+{
+    std::erase_if(_starts, [=](Start const& start) {
+        // Different map threads can deliver samples out of order. Reversal is
+        // checked against each exact start below, never against another map.
+        return nowMs >= start.atMs && (nowMs - start.atMs > kMaxFightMs
+            || (!start.confirmed && nowMs - start.atMs > kKillVerifyWithinMs));
+    });
+}
+void FightStarts::Synchronize(std::uint64_t epoch, std::uint32_t guild, std::uint32_t human, std::uint64_t nowMs)
+{
+    Prune(nowMs);
+    std::erase_if(_starts, [=](Start const& start) {
+        return start.context.nativeEpoch != epoch || start.context.guildId != guild || start.context.humanGuid != human;
+    });
+}
+std::uint64_t FightStarts::Intent(FightContext const& context, FightState old, FightState next, FightState actual,
+    std::uint64_t nowMs, std::uint64_t unixMs, bool humanPresent)
+{
+    Prune(nowMs);
+    // A changed lifecycle, identity or raw mode for this slot revokes its start.
+    std::erase_if(_starts, [&](Start const& start) {
+        return start.context.mapIdentity == context.mapIdentity && start.context.bossId == context.bossId
+            && start.context != context;
+    });
+    auto found = std::find_if(_starts.begin(), _starts.end(), [&](Start const& start) { return start.context == context; });
+    if (found != _starts.end())
+    {
+        if (nowMs < found->lastMs) { _starts.erase(found); return 0; }
+        found->lastMs = nowMs;
+    }
+    if (old == FightState::Resting && next == FightState::Progress)
+    {
+        if (found != _starts.end())
+        {
+            _starts.erase(found); // Overlapping uncommitted starts are ambiguous.
+            return 0;
+        }
+        if (actual != FightState::Resting || !humanPresent || !unixMs
+            || unixMs > kMaxFightStartedAtMs
+            || !context.mapIdentity || !context.lifecycle || !context.nativeEpoch || !context.guildId
+            || !context.humanGuid || !context.instanceId || !ValidRaidMode(context.difficulty, context.size, context.heroic)
+            || _starts.size() >= Capacity || _generation == std::numeric_limits<std::uint64_t>::max()) return 0;
+        _starts.push_back({context, ++_generation, nowMs, unixMs, nowMs, false});
+        return 0;
+    }
+    if (old == FightState::Progress && (next == FightState::Progress || next == FightState::Done)
+        && actual == FightState::Progress)
+    {
+        if (found == _starts.end()) return 0;
+        // A duplicate Progress does not confirm or reset the captured time.
+        if (next == FightState::Progress) return 0;
+        found->confirmed = true; // Prune already enforced the pending-start 5s window.
+        return found->generation;
+    }
+    if (found != _starts.end()) _starts.erase(found);
+    return 0;
+}
+void FightStarts::ObserveActual(FightContext const& context, FightState actual, std::uint64_t nowMs)
+{
+    Prune(nowMs);
+    auto found = std::find_if(_starts.begin(), _starts.end(), [&](Start const& start) { return start.context == context; });
+    if (found == _starts.end()) return;
+    if (nowMs < found->lastMs) { _starts.erase(found); return; }
+    found->lastMs = nowMs;
+    if (actual == FightState::Progress) found->confirmed = true;
+    else _starts.erase(found);
+}
+FightTerminal FightStarts::CaptureTerminal(FightContext const& context, std::uint64_t generation,
+    std::uint64_t terminalMs, std::uint64_t terminalUnixMs, bool humanPresent)
+{
+    Prune(terminalMs);
+    auto const found = std::find_if(_starts.begin(), _starts.end(), [&](Start const& start) { return start.context == context; });
+    if (found == _starts.end() || !generation || found->generation != generation || !found->confirmed
+        || terminalMs < found->lastMs || terminalMs < found->atMs || terminalMs - found->atMs > kMaxFightMs) return {};
+    auto const elapsed = static_cast<std::int64_t>(terminalMs - found->atMs);
+    if (!ValidFightDuration(found->unixMs, elapsed, terminalUnixMs, humanPresent)) return {};
+    return {context, generation, found->atMs, terminalMs, {found->unixMs, elapsed}};
+}
+FightDuration FightStarts::Finish(FightTerminal& terminal, FightContext const& current, FightState actual, std::uint64_t nowMs)
+{
+    Prune(nowMs);
+    auto const saved = terminal;
+    terminal = {}; // A drained candidate can never yield its immutable pair twice.
+    auto found = std::find_if(_starts.begin(), _starts.end(), [&](Start const& start) { return start.context == current; });
+    if (actual != FightState::Done)
+    {
+        // A vetoed DONE can retain only a start still actually in Progress.
+        ObserveActual(current, actual, nowMs);
+        return {};
+    }
+    bool const hadStart = found != _starts.end();
+    bool const sameStart = hadStart && found->generation == saved.generation && nowMs >= found->lastMs;
+    if (found != _starts.end()) _starts.erase(found); // Actual DONE consumes the live start once.
+    if (!saved.generation || saved.context != current || nowMs < saved.atMs
+        || nowMs - saved.atMs > kKillVerifyWithinMs) return {};
+    // Live starts expire at one hour, but the existing bounded pending candidate
+    // retains its already checked terminal pair through the separate DONE window.
+    // Same-boss hooks cancel that candidate; lifecycle/epoch/mode are rechecked by
+    // the adapter. Thus only ordinary age expiry can outlive the live start here.
+    bool const agedOut = !hadStart && nowMs >= saved.startMs && nowMs - saved.startMs > kMaxFightMs;
+    return sameStart || agedOut ? saved.duration : FightDuration{};
+}std::vector<FightContext> FightStarts::Contexts(std::uintptr_t mapIdentity) const
+{
+    std::vector<FightContext> result;
+    for (auto const& start : _starts)
+        if (start.context.mapIdentity == mapIdentity) result.push_back(start.context);
     return result;
 }
 

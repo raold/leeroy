@@ -74,6 +74,8 @@ struct Kill : KillIdentity
     std::string killId;
     std::uint64_t atMs = 0, verifiedMs = 0; // Independent steady clock.
     std::uint64_t killedAtMs = 0, verifiedAtMs = 0, publishedAtMs = 0; // Unix ms.
+    std::uint64_t fightStartedAtMs = 0; // Unix chronology only; never used for elapsed time.
+    std::int64_t fightMs = -1; // Checked steady elapsed; (0, -1) is unavailable.
     bool humanPresent = false;
     std::vector<std::uint32_t> castMembers; // Sorted, unique, present native cast only.
     bool operator==(Kill const&) const = default;
@@ -81,6 +83,10 @@ struct Kill : KillIdentity
 
 inline constexpr std::size_t kMaxKillPlayers = 128;
 inline constexpr std::uint64_t kKillVerifyWithinMs = 5000;
+inline constexpr std::uint64_t kMaxFightMs = 3600000;
+inline constexpr std::uint64_t kMaxFightStartedAtMs = 253402300799999;
+bool ValidFightDuration(std::uint64_t startedAtMs, std::int64_t elapsedMs,
+    std::uint64_t killedAtMs, bool humanPresent);
 bool ValidKillId(std::string_view id);
 bool ValidRaidMode(std::int32_t difficulty, std::uint32_t size, bool heroic);
 bool ValidKillObservation(Kill const& kill);
@@ -96,6 +102,61 @@ struct KillParticipants
 // player identity refuses the whole observation, including a human-only kill.
 std::optional<KillParticipants> QualifyKillParticipants(std::vector<PresentKillPlayer> const& present,
     std::unordered_set<std::uint32_t> const& capturedCast, std::uint32_t guild, std::uint32_t human);
+
+// Pure observation state. The adapter supplies actual state from the same map
+// thread; an intent alone never confirms a start or a completed encounter.
+enum class FightState { Resting, Progress, Done, Other };
+struct FightContext : KillIdentity
+{
+    std::uintptr_t mapIdentity = 0; // Identity only; never dereferenced here.
+    std::uint64_t lifecycle = 0;
+    std::uint8_t spawnMode = 0;
+    bool operator==(FightContext const&) const = default;
+};
+struct FightDuration
+{
+    std::uint64_t startedAtMs = 0;
+    std::int64_t elapsedMs = -1;
+    bool operator==(FightDuration const&) const = default;
+};
+// Lives only inside the existing bounded PendingKill until its DONE verifier.
+// The adapter cancels that whole candidate on any subsequent same-boss hook.
+struct FightTerminal
+{
+    FightContext context;
+    std::uint64_t generation = 0, startMs = 0, atMs = 0;
+    FightDuration duration;
+};
+class FightStarts
+{
+public:
+    static constexpr std::size_t Capacity = 128;
+    void Clear();
+    void ForgetMap(std::uintptr_t mapIdentity);
+    void ForgetBoss(std::uintptr_t mapIdentity, std::uint32_t boss);
+    void Synchronize(std::uint64_t epoch, std::uint32_t guild, std::uint32_t human, std::uint64_t nowMs);
+    // Returns the immutable start generation only for a terminal intent with an
+    // already confirmed start, or a unique candidate confirmed by actual Progress.
+    std::uint64_t Intent(FightContext const&, FightState old, FightState next, FightState actual,
+        std::uint64_t nowMs, std::uint64_t unixMs, bool humanPresent);
+    void ObserveActual(FightContext const&, FightState actual, std::uint64_t nowMs);
+    FightTerminal CaptureTerminal(FightContext const&, std::uint64_t generation,
+        std::uint64_t terminalMs, std::uint64_t terminalUnixMs, bool humanPresent);
+    FightDuration Finish(FightTerminal&, FightContext const& current, FightState actual, std::uint64_t nowMs);
+    std::vector<FightContext> Contexts(std::uintptr_t mapIdentity) const;
+    std::size_t Size() const { return _starts.size(); }
+
+private:
+    struct Start
+    {
+        FightContext context;
+        std::uint64_t generation, atMs, unixMs, lastMs;
+        bool confirmed = false;
+    };
+    void Prune(std::uint64_t nowMs);
+    std::vector<Start> _starts;
+    std::uint64_t _generation = 0;
+};
 
 class KillRing
 {

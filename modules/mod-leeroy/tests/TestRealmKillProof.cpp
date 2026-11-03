@@ -32,6 +32,27 @@ Kill Proof(std::uint64_t serial = 1, std::uint64_t steady = 1000)
     return kill;
 }
 
+FightContext Fight(std::uint32_t boss = 0)
+{
+    FightContext context;
+    static_cast<KillIdentity&>(context) = Proof();
+    context.bossId = boss; context.mapIdentity = 123; context.lifecycle = 9; context.spawnMode = 1;
+    return context;
+}
+void Start(FightStarts& starts, FightContext const& context, std::uint64_t at = 0, bool human = true)
+{
+    starts.Intent(context, FightState::Resting, FightState::Progress, FightState::Resting,
+        at, 1699999999000, human);
+}
+FightDuration End(FightStarts& starts, FightContext const& context, std::uint64_t at,
+    bool human = true, std::uint64_t unixMs = 1700000000000)
+{
+    auto const generation = starts.Intent(context, FightState::Progress, FightState::Done, FightState::Progress,
+        at, unixMs, human);
+    auto terminal = starts.CaptureTerminal(context, generation, at, unixMs, human);
+    return starts.Finish(terminal, context, FightState::Done, at);
+}
+
 std::string Source(char const* file)
 {
     auto const path = std::string(LEEROY_TEST_FIXTURES) + "/../../src/Realm/" + file;
@@ -195,10 +216,11 @@ LEEROY_TEST(RealmKillProof_EventHasExactFrozenFieldsAndNoSteadyClockLeak)
     for (auto const& [key, value] : event.items()) { (void)value; keys.insert(key); }
     CHECK((keys == std::set<std::string>{"v", "type", "ts", "kill_id", "native_epoch", "guild_id", "human_guid",
         "killed_at_ms", "verified_at_ms", "map", "instance_id", "boss_id", "difficulty", "size", "heroic",
-        "human_present", "cast_members"}));
+        "human_present", "cast_members", "fight_started_at_ms", "fight_ms"}));
     CHECK_EQ(event.at("v"), 1); CHECK_EQ(event.at("type"), "realm_kill");
     CHECK_EQ(event.at("ts"), kill.publishedAtMs); CHECK_EQ(event.at("kill_id"), kill.killId);
     CHECK_EQ(event.at("killed_at_ms"), kill.killedAtMs); CHECK_EQ(event.at("verified_at_ms"), kill.verifiedAtMs);
+    CHECK_EQ(event.at("fight_started_at_ms"), 0); CHECK_EQ(event.at("fight_ms"), -1);
     CHECK_EQ(event.at("cast_members"), json(kill.castMembers));
     CHECK_EQ(encoded, Leeroy::EncodeEvent(static_cast<std::int64_t>(kill.publishedAtMs), MakeRealmKill(kill)));
 }
@@ -211,13 +233,21 @@ LEEROY_TEST(RealmKillProof_SourceContractKeepsDoneVerificationOnMapThreadAndWorl
     CHECK(candidate.find("RecordKill(") == std::string::npos);
     CHECK(candidate.find("old != IN_PROGRESS || next != DONE") != std::string::npos);
     CHECK(candidate.find("map->IsRaid()") != std::string::npos);
-    CHECK(candidate.find("CastMembers()") < candidate.find("map->GetPlayers()"));
-    CHECK(candidate.find("present.size() == kMaxKillPlayers) return") != std::string::npos);
+    auto const scan = Section(speech, "std::optional<KillParticipants> PresentParticipants", "class RealmBossScript");
+    CHECK(scan.find("CastMembers()") < scan.find("map->GetPlayers()"));
+    CHECK(scan.find("present.size() == kMaxKillPlayers) return std::nullopt") != std::string::npos);
+    CHECK(candidate.find("script->GetBossState(id)") < candidate.find("fightStarts.Intent("));
+    CHECK(candidate.find("old == NOT_STARTED || old == FAIL") != std::string::npos);
+    CHECK(candidate.find("pending.identity == map && pending.kill.bossId == id") < candidate.find("fightStarts.CaptureTerminal("));
+    CHECK(candidate.find("generation, kill.atMs, kill.killedAtMs, kill.humanPresent") != std::string::npos);
     CHECK(candidate.find("NowMs()") != std::string::npos && candidate.find("NowUnixMs()") != std::string::npos);
     auto const verifier = Section(speech, "void OnMapUpdate(Map* map", "void RegisterRealmSpeechHandlers");
-    CHECK(verifier.find("script->GetBossState(kill.bossId) == DONE") < verifier.find("module.RecordKill("));
+    CHECK(verifier.find("script->GetBossState(kill.bossId)") < verifier.find("module.RecordKill("));
+    CHECK(verifier.find("fightStarts.Finish(") < verifier.find("kill.fightMs = duration.elapsedMs"));
+    CHECK(verifier.find("Finish(pending.fight, context, ObservedFightState(actual), now)") != std::string::npos);
+    CHECK(verifier.find("fightStarts.ObserveActual(context, actual, now)") != std::string::npos);
     CHECK(verifier.find("map->GetSpawnMode() != pending.spawnMode") != std::string::npos);
-    CHECK(verifier.find("life->second == lifecycle") != std::string::npos);
+    CHECK(verifier.find("life->second != lifecycle") != std::string::npos);
     CHECK(verifier.find("ValidKillObservation(kill)") < verifier.find("module.RecordKill("));
     auto const module = Source("RealmModule.cpp");
     auto const drain = Section(module, "void DrainKills()", "void ApplyPins()");
@@ -231,5 +261,267 @@ LEEROY_TEST(RealmKillProof_SourceContractKeepsDoneVerificationOnMapThreadAndWorl
     CHECK(matching.find("request.nativeEpoch != Epoch()") != std::string::npos);
     CHECK(matching.find("request.guildId != GuildId()") != std::string::npos);
     CHECK(matching.find("request.humanGuid != HumanGuid()") != std::string::npos);
+    auto const announce = Section(speech, "LeeroyCommandResult Announce(", "class RealmChannelScript");
+    CHECK(announce.find("module.MatchProof(") < announce.find("ValidatedAnnouncementFightSeconds("));
+    CHECK(announce.find("ValidatedAnnouncementFightSeconds(") < announce.find("SendServerMessage("));
+    CHECK(announce.find("0, *fightSeconds, cmd->first") != std::string::npos);
     CHECK(speech.find("module.MatchKill(") == std::string::npos);
+}
+
+LEEROY_TEST(RealmFight_StartIntentNeedsActualAcceptanceIncludingFastTerminalConfirmation)
+{
+    auto const context = Fight();
+    FightStarts vetoed; Start(vetoed, context, 100);
+    vetoed.ObserveActual(context, FightState::Resting, 101);
+    CHECK(End(vetoed, context, 150) == FightDuration{});
+    FightStarts accepted; Start(accepted, context, 100);
+    accepted.ObserveActual(context, FightState::Progress, 101);
+    CHECK(End(accepted, context, 150) == (FightDuration{1699999999000, 50}));
+    FightStarts fast; Start(fast, context, 100);
+    CHECK(End(fast, context, 100) == (FightDuration{1699999999000, 0}));
+    CHECK_EQ(fast.Size(), 0u);
+    CHECK(End(fast, context, 101) == FightDuration{}); // Consumed once.
+    FightStarts missing;
+    CHECK(End(missing, context, 100) == FightDuration{}); // Old Progress cannot invent a start.
+}
+
+LEEROY_TEST(RealmFight_PendingConfirmationHasIndependentFiveSecondBound)
+{
+    for (auto delay : {5000u, 5001u})
+    {
+        FightStarts starts; auto const context = Fight(); Start(starts, context);
+        starts.ObserveActual(context, FightState::Progress, delay);
+        auto const duration = End(starts, context, delay);
+        CHECK(duration == (delay == 5000 ? FightDuration{1699999999000, 5000} : FightDuration{}));
+        FightStarts fast; Start(fast, context);
+        CHECK(End(fast, context, delay) == duration); // Same bound for same-thread terminal confirmation.
+    }
+}
+
+LEEROY_TEST(RealmFight_TerminalTimeIsImmutableAcrossVerifierDelayAndDistinctMapSamples)
+{
+    auto const context = Fight(); FightStarts starts; Start(starts, context, 100);
+    starts.ObserveActual(context, FightState::Progress, 101);
+    auto const token = starts.Intent(context, FightState::Progress, FightState::Done, FightState::Progress,
+        1100, 1700000000000, true);
+    auto terminal = starts.CaptureTerminal(context, token, 1100, 1700000000000, true);
+    CHECK(starts.Finish(terminal, context, FightState::Done, 6100)
+        == (FightDuration{1699999999000, 1000})); // Verifier delay never enters elapsed time.
+    CHECK(starts.Finish(terminal, context, FightState::Done, 6100) == FightDuration{});
+    for (auto elapsed : {3600000u, 3600001u})
+    {
+        FightStarts boundary; Start(boundary, context); boundary.ObserveActual(context, FightState::Progress, 1);
+        auto const generation = boundary.Intent(context, FightState::Progress, FightState::Done, FightState::Progress,
+            elapsed, 1700000000000, true);
+        auto snapshot = boundary.CaptureTerminal(context, generation, elapsed, 1700000000000, true);
+        CHECK(boundary.Finish(snapshot, context, FightState::Done, elapsed + 1) == (elapsed == 3600000
+            ? FightDuration{1699999999000, 3600000} : FightDuration{}));
+        CHECK_EQ(boundary.Size(), 0u);
+    }
+    auto otherMap = context; ++otherMap.mapIdentity; ++otherMap.instanceId;
+    FightStarts interleaved; Start(interleaved, context, 100); Start(interleaved, otherMap, 200);
+    interleaved.ObserveActual(context, FightState::Progress, 150); // Earlier sample from another map thread.
+    interleaved.ObserveActual(otherMap, FightState::Progress, 201);
+    CHECK(End(interleaved, context, 300) == (FightDuration{1699999999000, 200}));
+    CHECK(End(interleaved, otherMap, 301) == (FightDuration{1699999999000, 101}));
+}
+
+LEEROY_TEST(RealmFight_DuplicateProgressNeverResetsOrCreatesStartAndAmbiguityRevokes)
+{
+    auto const context = Fight(); FightStarts starts; Start(starts, context, 100);
+    starts.ObserveActual(context, FightState::Progress, 101);
+    starts.Intent(context, FightState::Progress, FightState::Progress, FightState::Progress, 200, 1700000000000, true);
+    CHECK(End(starts, context, 1000) == (FightDuration{1699999999000, 900}));
+    FightStarts missing;
+    missing.Intent(context, FightState::Progress, FightState::Progress, FightState::Progress, 200, 1700000000000, true);
+    CHECK(End(missing, context, 1000) == FightDuration{});
+    FightStarts overlap; Start(overlap, context, 100); Start(overlap, context, 101);
+    CHECK(End(overlap, context, 102) == FightDuration{});
+    for (auto old : {FightState::Done, FightState::Other})
+    {
+        FightStarts ambiguous;
+        ambiguous.Intent(context, old, FightState::Progress, old, 100, 1700000000000, true);
+        CHECK(End(ambiguous, context, 101) == FightDuration{});
+    }
+}
+
+LEEROY_TEST(RealmFight_VetoedDoneRetainsOnlyActuallyContinuingExactStart)
+{
+    auto const context = Fight();
+    for (auto actual : {FightState::Progress, FightState::Resting, FightState::Other})
+    {
+        FightStarts starts; Start(starts, context, 100); starts.ObserveActual(context, FightState::Progress, 101);
+        auto const token = starts.Intent(context, FightState::Progress, FightState::Done, FightState::Progress,
+            200, 1700000000000, true);
+        CHECK(token);
+        auto terminal = starts.CaptureTerminal(context, token, 200, 1700000000000, true);
+        CHECK(starts.Finish(terminal, context, actual, 201) == FightDuration{});
+        CHECK(End(starts, context, 400) == (actual == FightState::Progress
+            ? FightDuration{1699999999000, 300} : FightDuration{}));
+    }
+}
+
+LEEROY_TEST(RealmFight_ResetWipeAndFreshGenerationCannotReuseAnEarlierTerminal)
+{
+    auto const context = Fight(); FightStarts starts; Start(starts, context);
+    starts.ObserveActual(context, FightState::Progress, 1);
+    auto const oldToken = starts.Intent(context, FightState::Progress, FightState::Done, FightState::Progress,
+        10, 1700000000000, true);
+    auto oldTerminal = starts.CaptureTerminal(context, oldToken, 10, 1700000000000, true);
+    starts.Intent(context, FightState::Progress, FightState::Resting, FightState::Progress, 11, 1700000000000, true);
+    CHECK(End(starts, context, 12) == FightDuration{});
+    Start(starts, context, 20); starts.ObserveActual(context, FightState::Progress, 21);
+    auto const freshToken = starts.Intent(context, FightState::Progress, FightState::Done, FightState::Progress,
+        30, 1700000000000, true);
+    CHECK(freshToken && freshToken != oldToken);
+    CHECK(starts.Finish(oldTerminal, context, FightState::Done, 30) == FightDuration{});
+    CHECK_EQ(starts.Size(), 0u); // The stale generation cannot attach to the fresh DONE.
+    Start(starts, context, 40); starts.ObserveActual(context, FightState::Progress, 41);
+    CHECK(End(starts, context, 50) == (FightDuration{1699999999000, 10}));
+}
+
+LEEROY_TEST(RealmFight_LifecyclePointerReuseEpochIdentityModeAndDisableRevoke)
+{
+    for (auto const& change : std::vector<std::function<void(FightContext&)>>{
+        [](auto& c) { ++c.lifecycle; }, [](auto& c) { ++c.nativeEpoch; }, [](auto& c) { ++c.guildId; },
+        [](auto& c) { ++c.humanGuid; }, [](auto& c) { ++c.map; }, [](auto& c) { ++c.instanceId; },
+        [](auto& c) { ++c.spawnMode; }, [](auto& c) { c.difficulty = 3; c.heroic = true; },
+        [](auto& c) { c.difficulty = 0; c.size = 10; }})
+    {
+        auto const original = Fight(); auto changed = original; change(changed);
+        FightStarts starts; Start(starts, original); starts.ObserveActual(original, FightState::Progress, 1);
+        CHECK(End(starts, changed, 10) == FightDuration{});
+        CHECK(End(starts, original, 11) == FightDuration{}); // Switching back cannot recover it.
+    }
+    auto const context = Fight();
+    for (auto clear : {0u, 1u, 2u, 3u, 4u})
+    {
+        FightStarts starts; Start(starts, context); starts.ObserveActual(context, FightState::Progress, 1);
+        if (clear == 0) starts.Clear();
+        else if (clear == 1) starts.ForgetMap(context.mapIdentity);
+        else if (clear == 2) starts.Synchronize(context.nativeEpoch + 1, context.guildId, context.humanGuid, 2);
+        else if (clear == 3) starts.Synchronize(context.nativeEpoch, context.guildId + 1, context.humanGuid, 2);
+        else starts.Synchronize(context.nativeEpoch, context.guildId, context.humanGuid + 1, 2);
+        CHECK(End(starts, context, 10) == FightDuration{});
+    }
+}
+
+LEEROY_TEST(RealmFight_HumanAtBothEndpointsAndCompleteScanAreRequiredOnlyForDuration)
+{
+    auto const context = Fight();
+    for (auto endpoints : {0u, 1u, 2u, 3u})
+    {
+        FightStarts starts; Start(starts, context, 0, (endpoints & 1) != 0);
+        starts.ObserveActual(context, FightState::Progress, 1);
+        auto const duration = End(starts, context, 10, (endpoints & 2) != 0);
+        CHECK(duration == (endpoints == 3 ? FightDuration{1699999999000, 10} : FightDuration{}));
+    }
+    std::vector<PresentKillPlayer> overflow(kMaxKillPlayers + 1, {1, 21});
+    CHECK(!QualifyKillParticipants(overflow, {}, 21, 1));
+    FightStarts starts; Start(starts, context, 0, false); // Adapter maps failed complete scan to no start.
+    auto kill = Proof(); auto const duration = End(starts, context, 10);
+    kill.fightStartedAtMs = duration.startedAtMs; kill.fightMs = duration.elapsedMs;
+    CHECK(ValidKillProof(kill)); // Missing duration never invalidates otherwise valid kill evidence.
+}
+
+LEEROY_TEST(RealmFight_CacheCapExpiryReversalAndElapsedBoundsAreCheckedWithoutClamping)
+{
+    auto const context = Fight(); FightStarts bounded;
+    for (std::uint32_t boss = 0; boss < FightStarts::Capacity; ++boss)
+    { auto c = Fight(boss); Start(bounded, c); bounded.ObserveActual(c, FightState::Progress, 0); }
+    Start(bounded, Fight(128)); CHECK_EQ(bounded.Size(), FightStarts::Capacity);
+    CHECK(End(bounded, Fight(128), 1) == FightDuration{});
+    CHECK(End(bounded, context, 1) == (FightDuration{1699999999000, 1}));
+    for (auto elapsed : {0u, 999u, 1000u, 3600000u, 3600001u})
+    {
+        FightStarts starts; Start(starts, context); starts.ObserveActual(context, FightState::Progress, 0);
+        CHECK(End(starts, context, elapsed) == (elapsed <= kMaxFightMs
+            ? FightDuration{1699999999000, elapsed} : FightDuration{}));
+    }
+    FightStarts reversal; Start(reversal, context, 100); reversal.ObserveActual(context, FightState::Progress, 200);
+    reversal.ObserveActual(context, FightState::Progress, 150); // Even when still later than the start.
+    CHECK(End(reversal, context, 201) == FightDuration{});
+    FightStarts unixReversal; Start(unixReversal, context);
+    CHECK(End(unixReversal, context, 1, true, 1699999998999) == FightDuration{});
+    FightStarts invalidClock;
+    invalidClock.Intent(context, FightState::Resting, FightState::Progress, FightState::Resting,
+        0, std::numeric_limits<std::uint64_t>::max(), true);
+    CHECK(End(invalidClock, context, 1) == FightDuration{});
+}
+
+LEEROY_TEST(RealmKillProof_DurationPairIsStrictImmutableAndHumanQualified)
+{
+    auto unknown = Proof(); CHECK(ValidKillProof(unknown));
+    for (auto const& pair : std::vector<FightDuration>{{0, 0}, {0, 1000}, {1, -1}, {1, -2}, {1, 3600001},
+        {1700000000001, 0}, {std::numeric_limits<std::uint64_t>::max(), 0}})
+    {
+        auto malformed = unknown; malformed.fightStartedAtMs = pair.startedAtMs; malformed.fightMs = pair.elapsedMs;
+        CHECK(!ValidKillProof(malformed));
+    }
+    for (auto elapsed : {0, 999, 1000, 3600000})
+    {
+        auto measured = Proof(); measured.fightStartedAtMs = measured.killedAtMs; measured.fightMs = elapsed;
+        CHECK(ValidKillProof(measured));
+        KillRing ring; CHECK(ring.Add(measured)); CHECK(ring.Add(measured));
+        CHECK(!ring.Add(unknown)); // Same kill_id cannot acquire or shed a duration.
+        auto changed = measured; ++changed.fightMs; CHECK(!ring.Add(changed));
+        changed = measured; --changed.fightStartedAtMs; CHECK(!ring.Add(changed));
+        measured.humanPresent = false; CHECK(!ValidKillProof(measured));
+    }
+}
+
+LEEROY_TEST(RealmKillProof_FightStartUnixWireBoundaryAppliesToPairProofAndAdmission)
+{
+    constexpr std::uint64_t sourceMaximum = 253402300799999ULL;
+    CHECK(ValidFightDuration(1, 0, 1, true));
+    CHECK(ValidFightDuration(sourceMaximum, 0, sourceMaximum, true));
+    CHECK(ValidFightDuration(sourceMaximum, 0, sourceMaximum + 1, true));
+    CHECK(!ValidFightDuration(sourceMaximum + 1, 0, sourceMaximum + 1, true));
+    CHECK(ValidFightDuration(0, -1, sourceMaximum + 1, false));
+
+    auto proof = Proof();
+    proof.killedAtMs = sourceMaximum; proof.verifiedAtMs = sourceMaximum; proof.publishedAtMs = sourceMaximum;
+    proof.fightStartedAtMs = sourceMaximum; proof.fightMs = 0;
+    CHECK(ValidKillProof(proof));
+    ++proof.fightStartedAtMs; ++proof.killedAtMs; ++proof.verifiedAtMs; ++proof.publishedAtMs;
+    CHECK(!ValidKillProof(proof));
+    proof.fightStartedAtMs = 0; proof.fightMs = -1;
+    CHECK(ValidKillProof(proof)); // Existing B terminal chronology bounds remain unchanged.
+
+    auto const context = Fight();
+    for (auto unixMs : {sourceMaximum, sourceMaximum + 1})
+    {
+        FightStarts starts;
+        starts.Intent(context, FightState::Resting, FightState::Progress, FightState::Resting,
+            0, unixMs, true);
+        CHECK_EQ(starts.Size(), unixMs == sourceMaximum ? 1u : 0u);
+        starts.ObserveActual(context, FightState::Progress, 1);
+        CHECK(End(starts, context, 1, true, sourceMaximum + 1) == (unixMs == sourceMaximum
+            ? FightDuration{sourceMaximum, 1} : FightDuration{}));
+    }
+}
+
+LEEROY_TEST(RealmKillProof_AnnouncementMetricsUseOnlyExactRequestedProofAndSeconds)
+{
+    auto a = Proof(1, 1000), b = Proof(2, 2000);
+    a.fightStartedAtMs = 1699999999000; a.fightMs = 999;
+    b.fightStartedAtMs = 1699999999000; b.fightMs = 1000;
+    KillRing ring; CHECK(ring.Add(a)); CHECK(ring.Add(b));
+    AnnounceCmd request; static_cast<KillIdentity&>(request) = a; request.killId = a.killId;
+    auto proof = ring.MatchProof(request.killId, request, 3000); CHECK(proof && *proof == a);
+    CHECK(ValidatedAnnouncementFightSeconds(request, *proof) == std::optional<std::uint32_t>{0});
+    request.fightS = 1; CHECK(!ValidatedAnnouncementFightSeconds(request, *proof));
+    CHECK(!ValidatedAnnouncementFightSeconds(request, b)); // Newer same tuple is never a substitute.
+    request.killId = b.killId;
+    CHECK(ValidatedAnnouncementFightSeconds(request, b) == std::optional<std::uint32_t>{1});
+    request.fightS = 2; CHECK(!ValidatedAnnouncementFightSeconds(request, b));
+    request.fightS = 0; request.attempts = 1; CHECK(!ValidatedAnnouncementFightSeconds(request, b));
+    request.attempts = 0; auto unknown = b; unknown.fightStartedAtMs = 0; unknown.fightMs = -1;
+    CHECK(ValidatedAnnouncementFightSeconds(request, unknown) == std::optional<std::uint32_t>{0});
+    request.fightS = 1; CHECK(!ValidatedAnnouncementFightSeconds(request, unknown));
+    auto noHuman = b; noHuman.humanPresent = false; CHECK(!ValidatedAnnouncementFightSeconds(request, noHuman));
+    auto wrongMode = request; wrongMode.difficulty = -1;
+    CHECK(!ValidatedAnnouncementFightSeconds(wrongMode, b));
+    b.fightMs = 3600000; request.fightS = 3600;
+    CHECK(ValidatedAnnouncementFightSeconds(request, b) == std::optional<std::uint32_t>{3600});
 }
