@@ -315,7 +315,9 @@ def _old_schema(conn):
 
 
 def test_disposable_v10_upgrade_preserves_every_existing_schema_and_cap_row(tmp_path, monkeypatch):
-    files = db._migration_files()
+    # This historical upgrade stops at v11 even when newer migrations exist.
+    files = [(n, p) for n, p in db._migration_files() if n <= 11]
+    monkeypatch.setattr(db, "_migration_files", lambda: files)
     with monkeypatch.context() as patch:
         patch.setattr(db, "_migration_files", lambda: [(n, p) for n, p in files if n <= 10])
         conn = db.open_db(tmp_path / "old-copy.db")
