@@ -1144,6 +1144,9 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     if argv and argv[0] == "training":
         from .training.cli import training_main
         return training_main(argv[1:])
+    if argv and argv[0] == "realm":
+        from .realm.cli import realm_main
+        return realm_main(argv[1:])
     if argv and argv[0] in ("nightly", "eval"):
         from .nightly.cli import eval_main, nightly_main
         command = nightly_main if argv[0] == "nightly" else eval_main
@@ -1151,6 +1154,7 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     parser = argparse.ArgumentParser(prog="leeroy_mind")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("training", help="training ledger, gate, reports and spell checks")
+    sub.add_parser("realm", help="read-only realm status and title diagnostics")
     sub.add_parser("nightly", help="nightly status, trials, ledger and owner controls")
     sub.add_parser("eval", help="weekly evaluation on a copied database by default")
     p_init = sub.add_parser("init", help="create the data dir and a default mind.toml")

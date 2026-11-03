@@ -31,12 +31,17 @@ def create_app(tmp_path, clock):
 
 
 def observe_drain(app):
+    """Observe Training's registered drain regardless of extension order."""
     entered = asyncio.Event()
-    original = app._shutdown_drains[-1]
+    matches = [(index, hook) for index, hook in enumerate(app._shutdown_drains)
+               if getattr(hook, "__self__", None) is app.training
+               and getattr(hook, "__func__", None) is type(app.training).close]
+    assert len(matches) == 1, "Training must register exactly one owned shutdown drain"
+    index, original = matches[0]
     async def drain():
         entered.set()
         await original()
-    app._shutdown_drains[-1] = drain
+    app._shutdown_drains[index] = drain
     return entered
 
 

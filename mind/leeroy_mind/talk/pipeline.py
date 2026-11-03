@@ -260,6 +260,21 @@ class TurnMeta:
     fight_boss: int = 0
     fight_instance: int = 0
     fight_end_ms: int = 0
+    # An optional owner fence; omitted by ordinary engine callers.
+    still_valid: Callable[[], bool] | None = None
+
+
+class _ScopeChanged(SchedulerError):
+    """The owner invalidated a turn before its next side effect."""
+
+
+def _scope_valid(meta: TurnMeta | None) -> bool:
+    if meta is None or meta.still_valid is None:
+        return True
+    try:
+        return bool(meta.still_valid())
+    except Exception:
+        return False
 
 
 def _secs(s: float | None) -> str:
@@ -851,22 +866,25 @@ class Pipeline:
     # -- speaking ------------------------------------------------------------------------------
 
     async def speak(self, turn: Turn, *, why: str = "speak", elsewhere: bool = False,
-                    guards: Guards | None = None, after: str = "") -> list[str]:
+                    guards: Guards | None = None, after: str = "",
+                    still_valid: Callable[[], bool] | None = None) -> list[str]:
         """Speak one turn (after turn.delay) through the whole pipeline: the lines sent, or []
         when it was dropped (the reason is in the utterance log). The caller's Turn is left as
         it was: the pipeline fills in its own copy's priority, deadline and channel. The
         keywords go on its TurnMeta."""
         return await self._speak(replace(turn), TurnMeta(
-            self._new_id(), why=why, elsewhere=elsewhere, guards=guards, after=after))
+            self._new_id(), why=why, elsewhere=elsewhere, guards=guards, after=after,
+            still_valid=still_valid))
 
     async def say_as(self, guid: int, channel: str, text: str, *, kind: TurnKind,
-                     to_guid: int = 0) -> bool:
+                     to_guid: int = 0,
+                     still_valid: Callable[[], bool] | None = None) -> bool:
         """The template path (P1d): guards, raid rules and the member's typing apply, the text
         is used as given and no model is asked. True when a line really went out, to the game
         or to the voice service: one left in a room he is not in did not."""
         turn = Turn(kind=TurnKind(kind), speaker=guid, channel=channel, to_guid=to_guid,
                     template=text)
-        meta = TurnMeta(self._new_id(), why="say_as")
+        meta = TurnMeta(self._new_id(), why="say_as", still_valid=still_valid)
         said = await self._speak(turn, meta)
         return bool(said) and not (self.comms is not None and self._comms_says(
             "unheard", False, turn.channel, meta))
@@ -897,7 +915,11 @@ class Pipeline:
                 self._real_name_hold = None
 
     async def _speak_now(self, turn: Turn, meta: TurnMeta) -> list[str]:
+        if not _scope_valid(meta):
+            return self._drop(turn, meta, "scope_changed")
         await self.clock.sleep(turn.delay)
+        if not _scope_valid(meta):
+            return self._drop(turn, meta, "scope_changed")
         now = self.clock.now()
         rule = self._rule_priority(turn, meta)
         turn.priority = rule if meta.elsewhere else min(turn.priority, rule)
@@ -942,8 +964,12 @@ class Pipeline:
                 # A reusable mutable Turn must not retain facts from a previous
                 # composition, even if a later lookup has no matching record.
                 turn.instruction = original_instruction
+            if not _scope_valid(meta):
+                return self._drop(turn, meta, "scope_changed", c.memory_ids)
             memory_ids, close = c.memory_ids, c.close
             text, why = await self._generate(turn, meta, c, spoken=voiced)
+            if not _scope_valid(meta):
+                return self._drop(turn, meta, "scope_changed", memory_ids, text=text)
             if why:
                 return self._drop(turn, meta, why, memory_ids, text=text)
             if voiced:  # the model takes time: the service may be gone, the speaker moved on
@@ -1079,6 +1105,8 @@ class Pipeline:
             if romantic and target != hg:
                 target = 0
             await self.clock.sleep(self.rng.uniform(*EMOTE_AFTER_S))
+            if not _scope_valid(meta):
+                return
             try:
                 ack = await self.send(Emote(id="", guid=turn.speaker, emote=emote,
                                             target_guid=target))
@@ -1099,6 +1127,8 @@ class Pipeline:
                  deadline: bool = True) -> str | None:
         """Why the turn can't speak now, or None. `deadline`: the turn's deadline counts
         (after its delay); a line the model gave in time is never expired after that."""
+        if not _scope_valid(meta):
+            return "scope_changed"
         g, w = turn.speaker, self.world
         if meta.elsewhere and not self._comms_says(
                 "scene_valid", False, turn, meta.why.startswith("elsewhere:")):
@@ -1154,17 +1184,24 @@ class Pipeline:
         self._last_talk_at = now
         self._quiet_fired = False
 
-    async def _ask(self, turn: Turn, messages: list[dict]) -> str:
+    async def _ask(self, turn: Turn, messages: list[dict], *,
+                   meta: TurnMeta | None = None) -> str:
         # a bit of several rows keeps the rows a blank line separates (prompts lens, minor 9)
         preset = LIVE_BIT if turn.kind is TurnKind.BIT and turn.max_lines > 1 else LIVE
 
         async def job(llm):
+            if not _scope_valid(meta):
+                raise _ScopeChanged("scope_changed")
             if self.live_admission is not None:
                 await self.live_admission()
+            if not _scope_valid(meta):
+                raise _ScopeChanged("scope_changed")
             if self.scheduler.expired(turn.deadline):
                 raise Expired(turn.deadline)
             return await llm.chat(self.cfg.models.live, messages, options=dict(preset.options),
                                   think=preset.think, timeout=preset.timeout)
+        if not _scope_valid(meta):
+            raise _ScopeChanged("scope_changed")
         result = await self.scheduler.submit(turn.priority, job, deadline=turn.deadline)
         return result.text
 
@@ -1187,9 +1224,13 @@ class Pipeline:
             return _with_hint(out, SPOKEN_HINT) if spoken else out
         messages, text = asking(), ""
         for attempt in (0, 1):
+            if not _scope_valid(meta):
+                return text, "scope_changed"
             asked = self.clock.now()
             try:
-                raw = await self._ask(turn, messages)
+                raw = await self._ask(turn, messages, meta=meta)
+            except _ScopeChanged:
+                return text, "scope_changed"
             except Expired:
                 return text, "expired"
             except (SchedulerError, LLMError) as e:
@@ -1197,6 +1238,8 @@ class Pipeline:
                 return text, "llm_error"
             finally:
                 meta.llm_s = (meta.llm_s or 0.0) + self.clock.now() - asked
+            if not _scope_valid(meta):
+                return raw, "scope_changed"
             if self.scheduler.expired(turn.deadline):
                 return raw, "expired"
             silent, tells = is_silence(raw), []
@@ -1388,6 +1431,9 @@ class Pipeline:
         """Send one line and record it on the ack: None, or why it wasn't said. Never raises,
         since nobody may be waiting for it any more. A voice channel never reaches the bridge
         (C1): it would refuse it, and the line belongs in a room."""
+        # This shielded child may first run after its parent was invalidated.
+        if not _scope_valid(meta):
+            return "scope_changed"
         if turn.channel.startswith("voice:"):
             log.error("say_refused_voice_channel: guid=%d channel=%s", turn.speaker, turn.channel)
             return "voice_channel"
