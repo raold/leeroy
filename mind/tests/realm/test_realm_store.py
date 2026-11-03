@@ -18,7 +18,7 @@ REALM_TABLES = {
     "realm_stance", "realm_plan", "realm_event", "realm_rsvp", "realm_calendar",
     "realm_mail", "realm_bank", "realm_arena", "realm_match", "realm_recruit",
     "realm_step", "realm_canon", "realm_canon_kill", "realm_kick", "realm_meeting",
-    "realm_goal", "realm_notable", "realm_receipt",
+    "realm_goal", "realm_notable", "realm_receipt", "realm_action",
 }
 
 
@@ -55,10 +55,13 @@ def _receipt(conn, command_id="r1", **overrides):
 
 
 def test_fresh_migration_adds_exact_plan_tables_and_diagnostics(conn):
+    latest = db.latest_version()
     assert _tables(conn) == REALM_TABLES
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.latest_version() == 9
-    assert db.migrate(conn) == 9
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == latest
+    assert db.migrate(conn) == latest
     assert _tables(conn) == REALM_TABLES
+    action_columns = {row[1] for row in conn.execute("PRAGMA table_info(realm_action)")}
+    assert {"reserved_manifest", "native_manifest", "transport_state", "evidence", "policy"} <= action_columns
 
 
 def test_migration_upgrades_only_a_disposable_v8_copy_and_preserves_old_schema_and_rows(
@@ -87,7 +90,7 @@ def test_migration_upgrades_only_a_disposable_v8_copy_and_preserves_old_schema_a
         assert _unrelated_schema(upgraded) == schema
         assert upgraded.execute("SELECT value FROM meta WHERE key=?",
                                 ("realm-upgrade-sentinel",)).fetchone()[0] == "preserve-existing-row"
-        assert db.migrate(upgraded) == 9
+        assert db.migrate(upgraded) == db.latest_version()
         assert _unrelated_schema(upgraded) == schema
     finally:
         upgraded.close()

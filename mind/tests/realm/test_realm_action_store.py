@@ -1,0 +1,586 @@
+"""Durable reducers use the real ledger records and disposable SQLite only."""
+from dataclasses import replace
+import json
+from pathlib import Path
+import sqlite3
+
+import pytest
+
+from leeroy_mind.guild.protocol import BotDo, Job, JobSkip
+from leeroy_mind.protocol import Ack
+from leeroy_mind.realm import protocol as p
+from leeroy_mind.realm.action_policy import classify
+from leeroy_mind.realm.action_store import ActionCapacity, ActionSpec, ActionStore, ActionUnavailable, REFUSALS
+
+TOKEN = "a" * 32 + "-" + "b" * 16
+
+
+@pytest.fixture
+def store():
+    conn = sqlite3.connect(":memory:", autocommit=False)
+    migration = Path(__file__).parents[2] / "leeroy_mind/storage/migrations/0010_realm_actions.sql"
+    conn.executescript(migration.read_text(encoding="utf-8-sig"))
+    yield ActionStore(conn)
+    conn.close()
+
+
+def prepare(store, cmd=None, now=0):
+    cmd = cmd or p.RealmMove("move", 2, "home")
+    c = classify(cmd)
+    return store.prepare(ActionSpec(cmd.id, None, "root", c.policy, "realm_day", 4, c.kind,
+                                  c.payload, c.reserved_manifest, 50, 1), now=now)
+
+
+def dispatch(store, record, now=1):
+    return store.begin_dispatch(record.command_id, payload=record.payload, process_id="process",
+                                connection_epoch=2**64-1, now=now)
+
+
+def job(command_id="move", kind="realm_move", state="done", reason="", guid=2, value=0, token=""):
+    return p.RealmJob(0, command_id, kind, state, reason, guid, value, token)
+
+
+def bot(command_id="defaults", *, guids=(2, 3), skipped=(), state="done", reason=""):
+    return Job(0, command_id, "bot_do", state, reason, "", guids, skipped, 0, 0, 0, 0, 0, 0)
+
+
+def wg(store, *, settle=True):
+    root = dispatch(store, prepare(store, p.WgJoin("wg", (4, 3, 2))))
+    if settle: store.observe_ack(Ack(0, "wg", True, ""), now=2)
+    store.observe_realm_job(job("wg", "wg_join", guid=0, value=2, token=TOKEN), now=3)
+    return store.get(root.command_id)
+
+
+def snapshot(store, *, command_id="query", now=10, stage="active", revision=1,
+             cleanup_id="", fenced=False, native=(2, 3), ack=True, origin_epoch=2**64-1,
+             guild=50, human=1, token=TOKEN):
+    query = store.prepare_query("wg", p.GetRealmPvp(command_id, origin_id="wg"), now=now)
+    dispatch(store, query, now=now)
+    ev = p.RealmPvp(0, command_id, token, "wg", "wintergrasp", origin_epoch, revision, guild,
+                    human, native, stage, fenced, "", cleanup_id)
+    store.observe_pvp(ev, now=now)
+    if ack: store.observe_ack(Ack(0, command_id, True, ""), now=now)
+    return ev
+
+
+def cleanup(store, command_id="cleanup", now=11):
+    root = store.get("wg")
+    record = store.prepare_cleanup("wg", p.LeavePvp(command_id, root.native_manifest, TOKEN), now=now)
+    return dispatch(store, record, now=now)
+
+
+@pytest.mark.parametrize("job_first", [False, True])
+def test_ordinary_ack_job_both_orders_and_idempotence(store, job_first):
+    r = dispatch(store, prepare(store))
+    handlers = [lambda: store.observe_ack(Ack(0, "move", True, ""), now=2),
+                lambda: store.observe_realm_job(job(value=2**64-1), now=3)]
+    if job_first: handlers.reverse()
+    assert not handlers[0]().result_ready
+    assert store.holds()[0].scope_id == "move"
+    t = handlers[1]()
+    assert (t.result_ready, t.result_ok, t.value) == (True, True, 2**64-1)
+    assert store.get("move").state == "completed"
+    assert store.holds() == ()
+    assert not handlers[0]().result_ready
+    assert store.get("move").connection_epoch == 2**64-1
+
+
+def test_dispatch_barrier_immutable_payload_and_prepared_has_no_hold(store):
+    r = prepare(store)
+    assert store.holds() == ()
+    with pytest.raises(ValueError): store.begin_dispatch("move", payload=r.payload + " ", process_id="p", connection_epoch=1, now=1)
+    assert store.get("move").state == "prepared"
+    dispatch(store, r)
+    with pytest.raises(ValueError): dispatch(store, r)
+    hold, = store.holds()
+    assert (hold.owner, hold.rank, hold.retained, hold.guids) == ("realm_day", 4, True, frozenset({2}))
+
+
+def test_restart_never_replays_prepared_or_dispatched_and_retains_unknown(store):
+    prepare(store, p.Rearm("prepared", (2,)))
+    dispatch(store, prepare(store, p.Rearm("written", (3,))))
+    unresolved = store.recover(process_id="new_process", now=20)
+    assert [r.command_id for r in unresolved] == ["written"]
+    assert store.get("prepared").state == "not_sent"
+    assert (store.get("written").state, store.get("written").transport_state) == ("unknown", "settled")
+    assert store.holds()[0].guids == frozenset({3})
+
+
+@pytest.mark.parametrize("reason", sorted(REFUSALS))
+def test_exact_ordinary_no_admission_refusal_allowlist(store, reason):
+    dispatch(store, prepare(store))
+    t = store.observe_ack(Ack(0, "move", False, reason), now=2)
+    assert t.result_ready and t.result_ok is False
+    assert store.get("move").state == "completed"
+    assert store.holds() == ()
+
+
+@pytest.mark.parametrize("reason", ["busy:combat", "busy:duplicate_operation", "operation_receipt_available", "refused", "busy:queue_full:extra"])
+def test_nonallowlisted_refusal_retains_scope(store, reason):
+    dispatch(store, prepare(store))
+    store.observe_ack(Ack(0, "move", False, reason), now=2)
+    assert store.get("move").state == "unknown"
+    assert store.holds()[0].guids == frozenset({2})
+
+
+@pytest.mark.parametrize("first", ["ack", "job"])
+def test_late_contradictory_ack_is_absorbing_and_reinstates_hold(store, first):
+    dispatch(store, prepare(store))
+    if first == "ack": store.observe_ack(Ack(0, "move", True, ""), now=2)
+    store.observe_realm_job(job(), now=3)
+    store.observe_ack(Ack(0, "move", False, "realm_off"), now=4)
+    assert store.get("move").state == "conflict"
+    store.observe_ack(Ack(0, "move", True, ""), now=5)
+    assert store.get("move").state == "conflict"
+    assert store.holds()[0].guids == frozenset({2})
+
+
+def test_failed_job_with_positive_ack_remains_unknown_and_conflicting_jobs_hold(store):
+    dispatch(store, prepare(store))
+    store.observe_ack(Ack(0, "move", True, ""), now=2)
+    t = store.observe_realm_job(job(state="failed", reason="busy:body_identity"), now=3)
+    assert t.result_ready and t.result_ok is False
+    assert store.get("move").state == "unknown"
+    store.observe_realm_job(job(), now=4)
+    assert store.get("move").state == "conflict"
+    assert store.holds()
+
+
+def test_unsolicited_mismatched_kind_guid_and_token_are_not_enrolled(store):
+    dispatch(store, prepare(store))
+    for ev in (job("other"), job(kind="craft"), job(guid=3), job(token=TOKEN)):
+        assert not store.observe_realm_job(ev, now=2).matched
+    assert store.get("move").state == "dispatched"
+    assert len(store.records()) == 1
+
+
+def test_duel_is_ordinary_pair_and_requires_empty_token_and_generic_done(store):
+    dispatch(store, prepare(store, p.Duel("duel", 3, 2)))
+    store.observe_ack(Ack(0, "duel", True, ""), now=2)
+    assert not store.observe_realm_job(job("duel", "duel", guid=0, token=TOKEN), now=3).matched
+    assert store.holds()[0].guids == frozenset({2, 3})
+    assert store.observe_realm_job(job("duel", "duel", guid=0), now=4).result_ok
+
+
+@pytest.mark.parametrize("cmd", [p.GuildAdmit("direct", 2), p.GuildNote("direct", 2, "note"),
+                                p.BankTabBuy("direct", 2, 0, "T", ""), p.GrantAchievement("direct", 2, 3117)])
+def test_synchronous_ack_known_target_holds_through_settlement(store, cmd):
+    dispatch(store, prepare(store, cmd))
+    assert store.holds()[0].guids == frozenset({2})
+    store.observe_ack(Ack(0, "direct", True, ""), now=2)
+    assert store.holds() == ()
+
+
+@pytest.mark.parametrize("reason", ["realm_off", "database_error"])
+def test_direct_negative_ack_only_realm_off_proves_no_admission(store, reason):
+    dispatch(store, prepare(store, p.GuildAdmit("direct", 2)))
+    store.observe_ack(Ack(0, "direct", False, reason), now=2)
+    assert bool(store.holds()) == (reason != "realm_off")
+
+
+def test_no_body_operations_never_release_unrelated_hold(store):
+    dispatch(store, prepare(store))
+    dispatch(store, prepare(store, p.BankMoney("money", 1)))
+    store.observe_ack(Ack(0, "money", True, ""), now=2)
+    assert [h.scope_id for h in store.holds()] == ["move"]
+
+
+@pytest.mark.parametrize("kind", ["item_count", "calendar_post"])
+def test_direct_result_requires_positive_ack_correct_guid_and_calendar_event_id(store, kind):
+    cmd = p.ItemCount("result", 2, (1,)) if kind == "item_count" else p.CalendarPost("result", 2, "T", "raid", 1)
+    dispatch(store, prepare(store, cmd))
+    assert not store.observe_realm_job(job("result", kind, guid=3, value=1), now=2).matched
+    if kind == "calendar_post": assert not store.observe_realm_job(job("result", kind, value=0), now=2).matched
+    assert not store.observe_realm_job(job("result", kind, value=1), now=3).result_ready
+    assert store.observe_ack(Ack(0, "result", True, ""), now=4).result_ok
+
+
+@pytest.mark.parametrize("guids,skipped,state,reason,terminal,ok", [
+    ((2, 3), (), "done", "", True, True),
+    ((2,), (JobSkip(3, "offline"),), "done", "", True, False),
+    ((2,), (JobSkip(3, "offline"),), "failed", "failed", True, False),
+    ((2,), (), "done", "", False, False),
+    ((2, 3), (JobSkip(3, "offline"),), "failed", "failed", False, False),
+    ((2, 4), (), "done", "", False, False),
+])
+def test_restricted_defaults_full_accounting_only_hands_back(store, guids, skipped, state, reason, terminal, ok):
+    dispatch(store, prepare(store, BotDo("defaults", (2, 3), "nc", "-bg,-lfg")))
+    store.observe_ack(Ack(0, "defaults", True, ""), now=2)
+    t = store.observe_bot_job(bot(guids=guids, skipped=skipped, state=state, reason=reason), now=3)
+    assert t.result_ok is ok
+    assert (store.get("defaults").state == "completed") is terminal
+    assert bool(store.holds()) is not terminal
+
+
+def test_defaults_full_result_without_ack_stays_reserved(store):
+    dispatch(store, prepare(store, BotDo("defaults", (2, 3), "nc", "-bg,-lfg")))
+    assert not store.observe_bot_job(bot(), now=2).result_ready
+    assert store.holds()
+    assert store.observe_ack(Ack(0, "defaults", True, ""), now=3).result_ok
+
+
+@pytest.mark.parametrize("reason", ["disabled", "busy", "busy:realm_owner", "not_cast:2"])
+def test_restricted_defaults_refusal_allowlist(store, reason):
+    dispatch(store, prepare(store, BotDo("defaults", (2, 3), "nc", "-bg,-lfg")))
+    store.observe_ack(Ack(0, "defaults", False, reason), now=2)
+    assert store.holds() == ()
+
+
+def test_defaults_invalid_duplicate_accounting_rejects_without_overwriting_evidence(store):
+    dispatch(store, prepare(store, BotDo("defaults", (2, 3), "nc", "-bg,-lfg")))
+    with pytest.raises(ValueError): store.observe_bot_job(bot(guids=(2, 2)), now=2)
+    assert store.get("defaults").evidence == "{}"
+
+
+def test_wg_requested_superset_retained_and_status_waits_for_its_query_ack(store):
+    wg(store)
+    snapshot(store, ack=False)
+    assert store.get("wg").native_manifest is None
+    assert store.holds()[0].guids == frozenset({2, 3, 4})
+    store.observe_ack(Ack(0, "query", True, ""), now=10)
+    assert store.get("wg").native_manifest == (2, 3)
+    assert store.holds()[0].guids == frozenset({2, 3, 4})
+    record = cleanup(store)
+    assert json.loads(record.payload)["guids"] == [2, 3]
+    assert len(store.holds()) == 1
+    with pytest.raises(ValueError): store.prepare_cleanup("wg", p.LeavePvp("split", (2,), TOKEN), now=12)
+
+
+def test_wg_enrollment_then_same_origin_failure_is_progression(store):
+    wg(store)
+    store.observe_realm_job(job("wg", "wg_join", "failed", "ending", 0, 0, TOKEN), now=5)
+    root = store.get("wg"); ev = json.loads(root.evidence)
+    assert root.state == "unknown"
+    assert "enrollment_job" in ev and "origin_failure" in ev
+    snapshot(store, stage="ending", fenced=True)
+    cleanup(store)
+    assert store.get("wg").state == "unknown"
+    assert store.holds()
+
+
+@pytest.mark.parametrize("change", [{"native": (2,)}, {"origin_epoch": 1}, {"token": "c"*32 + "-" + "d"*16},
+                                     {"guild": 51}, {"human": 2}])
+def test_wg_binding_is_immutable_and_identity_changes_conflict(store, change):
+    wg(store); snapshot(store)
+    snapshot(store, command_id="query2", now=20, revision=2, **change)
+    assert store.get("wg").state == "conflict"
+    assert store.get("wg").native_manifest == (2, 3)
+    assert store.holds()[0].guids == frozenset({2, 3, 4})
+
+
+def test_wg_rejects_foreign_manifest_and_same_revision_disagreement(store):
+    wg(store)
+    snapshot(store, native=(2, 5))
+    assert store.get("wg").state == "conflict"
+
+
+def test_status_same_revision_disagreement_conflicts_but_older_progression_is_ignored(store):
+    wg(store); snapshot(store, revision=3)
+    snapshot(store, command_id="query2", now=20, revision=2, stage="queued")
+    assert json.loads(store.get("wg").evidence)["status"]["revision"] == 3
+    snapshot(store, command_id="query3", now=30, revision=3, stage="ending", fenced=True)
+    assert store.get("wg").state == "conflict"
+    assert store.holds()
+
+
+def test_application_fence_never_reverses_and_unknown_is_absorbing(store):
+    wg(store); snapshot(store, stage="unknown", fenced=True)
+    snapshot(store, command_id="query2", now=20, revision=2, stage="active")
+    assert store.get("wg").state == "conflict"
+    assert store.holds()
+
+
+def test_clean_cannot_override_witnessed_unknown_even_at_new_revision(store):
+    wg(store); snapshot(store); cleanup(store)
+    snapshot(store, command_id="query2", now=20, stage="unknown", fenced=True, revision=2)
+    store.observe_send_error("cleanup", "TimeoutError", now=21)
+    snapshot(store, command_id="query3", now=30, stage="clean", cleanup_id="cleanup", fenced=True, revision=3)
+    assert store.get("wg").state == "conflict"
+    assert store.holds()
+
+
+@pytest.mark.parametrize("waiting", ["origin", "cleanup", "both"])
+def test_clean_lost_ack_proof_waits_for_actual_transport_settlement(store, waiting):
+    wg(store, settle=waiting not in {"origin", "both"}); snapshot(store); cleanup(store)
+    if waiting not in {"cleanup", "both"}: store.observe_send_error("cleanup", "TimeoutError", now=12)
+    snapshot(store, command_id="query2", now=20, stage="clean", cleanup_id="cleanup", fenced=True, revision=2)
+    assert store.holds()
+    if waiting in {"origin", "both"}: store.observe_send_error("wg", "TimeoutError", now=21)
+    if waiting in {"cleanup", "both"}: store.observe_send_error("cleanup", "TimeoutError", now=22)
+    assert store.get("wg").state == "completed"
+    assert store.holds() == ()
+
+
+def test_restart_can_settle_old_inflight_clean_proof_without_replaying_mutations(store):
+    wg(store, settle=False); snapshot(store); cleanup(store)
+    snapshot(store, command_id="query2", now=20, stage="clean", cleanup_id="cleanup", fenced=True, revision=2)
+    assert store.holds()
+    store.recover(process_id="new", now=30)
+    assert store.get("wg").state == "completed"
+    assert store.holds() == ()
+
+
+def test_cleanup_ack_plus_exact_success_hands_back_full_requested_superset(store):
+    wg(store); snapshot(store); cleanup(store)
+    store.observe_ack(Ack(0, "cleanup", True, ""), now=12)
+    assert not store.observe_realm_job(job("cleanup", "leave_pvp", guid=0, value=1, token=TOKEN), now=13).matched
+    assert store.holds()
+    t = store.observe_realm_job(job("cleanup", "leave_pvp", guid=0, value=2, token=TOKEN), now=14)
+    assert t.command_id == "wg" and t.result_ok
+    assert store.holds() == ()
+
+
+@pytest.mark.parametrize("target", ["wg", "cleanup"])
+def test_negative_ack_cannot_be_bypassed_by_clean_query(store, target):
+    wg(store, settle=False); snapshot(store); cleanup(store)
+    # Admit the read-only query before the negative origin ACK can fence the
+    # root. Its later clean response must never override that retained conflict.
+    query = store.prepare_query("wg", p.GetRealmPvp("query2", origin_id="wg"), now=20)
+    dispatch(store, query, now=20)
+    other = "cleanup" if target == "wg" else "wg"
+    store.observe_send_error(other, "TimeoutError", now=21)
+    store.observe_ack(Ack(0, target, False, "owner_unavailable"), now=22)
+    store.observe_pvp(p.RealmPvp(0, "query2", TOKEN, "wg", "wintergrasp", 2**64-1, 2,
+                               50, 1, (2, 3), "clean", True, "", "cleanup"), now=23)
+    store.observe_ack(Ack(0, "query2", True, ""), now=24)
+    assert store.get("wg").state == "conflict"
+    assert store.holds()
+
+
+def test_conflicted_origin_refuses_new_query_dispatch_without_weakening_hold(store):
+    wg(store, settle=False); snapshot(store)
+    store.observe_ack(Ack(0, "wg", False, "owner_unavailable"), now=11)
+    assert store.get("wg").state == "conflict"
+    query = store.prepare_query("wg", p.GetRealmPvp("query2", origin_id="wg"), now=20)
+    with pytest.raises(ValueError, match="invalid query dispatch"):
+        dispatch(store, query, now=20)
+    assert store.get("wg").state == "conflict"
+    assert store.holds()[0].guids == frozenset({2, 3, 4})
+
+
+def test_cleanup_uncertainty_never_retries_without_newer_fenced_cancellation(store):
+    wg(store); snapshot(store); cleanup(store)
+    store.observe_send_error("cleanup", "TimeoutError", now=12)
+    with pytest.raises(ValueError): store.prepare_cleanup("wg", p.LeavePvp("retry", (2, 3), TOKEN), now=13)
+    assert store.holds()
+
+
+def test_legal_native_cleaning_to_ending_cancels_controller_and_allows_one_replacement(store):
+    wg(store); snapshot(store); cleanup(store)
+    store.observe_ack(Ack(0, "cleanup", True, ""), now=12)
+    snapshot(store, command_id="query2", now=20, stage="cleaning", cleanup_id="cleanup", fenced=True, revision=2)
+    snapshot(store, command_id="query3", now=30, stage="ending", fenced=True, revision=3)
+    root = store.get("wg"); ev = json.loads(root.evidence)
+    assert root.state != "conflict"
+    assert ev["cleanup_id"] == "" and ev["canceled"] == ["cleanup"]
+    cleanup(store, "replacement", now=31)
+    store.observe_ack(Ack(0, "replacement", True, ""), now=32)
+    store.observe_realm_job(job("replacement", "leave_pvp", guid=0, value=2, token=TOKEN), now=33)
+    assert store.holds() == ()
+
+
+def test_old_refused_controller_does_not_poison_distinct_new_proved_controller(store):
+    wg(store); snapshot(store); cleanup(store)
+    store.observe_ack(Ack(0, "cleanup", False, "owner_unavailable"), now=12)
+    snapshot(store, command_id="query2", now=20, stage="ending", fenced=True, revision=2)
+    cleanup(store, "replacement", now=21)
+    store.observe_send_error("replacement", "TimeoutError", now=22)
+    snapshot(store, command_id="query3", now=30, stage="clean", cleanup_id="replacement", fenced=True, revision=3)
+    assert store.get("wg").state == "completed"
+    assert store.holds() == ()
+
+
+def test_replacement_controller_history_has_hard_limit_without_eviction(store):
+    wg(store); snapshot(store)
+    for i in range(17):
+        cleanup(store, f"cleanup{i}", now=11 + 20*i)
+        store.observe_send_error(f"cleanup{i}", "TimeoutError", now=12 + 20*i)
+        snapshot(store, command_id=f"query{i+2}", now=20+20*i, stage="ending", fenced=True, revision=i+2)
+    with pytest.raises(ActionCapacity): cleanup(store, "overflow", now=400)
+    assert len(json.loads(store.get("wg").evidence)["cleanup_ids"]) == 17
+    assert store.holds()
+
+
+def test_query_capacity_and_spacing_are_durable(store):
+    wg(store)
+    query = store.prepare_query("wg", p.GetRealmPvp("query", origin_id="wg"), now=10)
+    dispatch(store, query, now=10)
+    with pytest.raises(ValueError): store.prepare_query("wg", p.GetRealmPvp("query2", origin_id="wg"), now=20)
+    store.observe_send_error("query", "TimeoutError", now=20)
+    with pytest.raises(ValueError): store.prepare_query("wg", p.GetRealmPvp("query2", origin_id="wg"), now=19)
+    store.prepare_query("wg", p.GetRealmPvp("query2", origin_id="wg"), now=20)
+    assert store.get("query") is None
+    assert len([r for r in store.records() if r.role == "query"]) == 1
+
+
+def test_root_capacity_retains_all_unknown_ownership_across_recovery(store):
+    for i in range(128): dispatch(store, prepare(store, p.Rearm(f"r{i}", (i+1,))))
+    with pytest.raises(ActionCapacity): prepare(store, p.Rearm("overflow", (1000,)))
+    store.recover(process_id="new", now=20)
+    assert len(store.unresolved()) == len(store.holds()) == 128
+    with pytest.raises(ActionCapacity): prepare(store, p.Rearm("overflow", (1000,)))
+    assert store.prune(keep=0) == 0
+
+
+def test_terminal_history_is_bounded_without_evicting_unknown(store):
+    dispatch(store, prepare(store, p.Rearm("unknown", (2,))))
+    for i in range(270):
+        dispatch(store, prepare(store, p.BankMoney(f"money{i}", 1), now=i))
+        store.observe_ack(Ack(0, f"money{i}", True, ""), now=i)
+    store.prune()
+    assert len(store.records()) == 257
+    assert [h.scope_id for h in store.holds()] == ["unknown"]
+
+
+@pytest.mark.parametrize("column,value", [("evidence", "{broken"), ("reserved_manifest", "[]"),
+                                           ("payload", "{}"), ("state", "completed"),
+                                           ("connection_epoch", "-1")])
+def test_corrupt_recovery_and_holds_fail_closed(store, column, value):
+    dispatch(store, prepare(store))
+    with store.conn: store.conn.execute(f"UPDATE realm_action SET {column}=? WHERE command_id='move'", (value,))
+    with pytest.raises(ActionUnavailable, match="evidence unavailable"): store.holds()
+    with pytest.raises(ActionUnavailable): store.recover(process_id="new", now=20)
+
+
+@pytest.mark.parametrize("error,expected", [("NotConnected", "not_sent"), ("RealmDisabled", "not_sent"),
+                                           ("TimeoutError", "unknown"), ("OSError", "unknown")])
+def test_only_explicit_prewrite_errors_prove_no_send(store, error, expected):
+    dispatch(store, prepare(store))
+    store.observe_send_error("move", error, now=2)
+    assert store.get("move").state == expected
+    assert bool(store.holds()) == (expected == "unknown")
+
+
+def test_bound_sizes_and_unrelated_query_cannot_manufacture_scope(store):
+    r = prepare(store)
+    with pytest.raises(ValueError): store.prepare_query("move", p.GetRealmPvp("query", origin_id="move"), now=10)
+    assert len(store.records()) == 1
+    with pytest.raises(ValueError): store.prepare(replace(ActionSpec(r.command_id, None, "root", r.policy,
+        r.owner, r.rank, r.kind, r.payload, r.reserved_manifest, r.guild, r.human), command_id="other", payload="x"*65537), now=1)
+    assert len(store.records()) == 1
+
+
+def test_ack_done_reducer_is_committed_before_transition_returns(store):
+    dispatch(store, prepare(store))
+    store.observe_realm_job(job(), now=2)
+    transition = store.observe_ack(Ack(0, "move", True, ""), now=3)
+    assert transition.result_ready
+    # SQLite autocommit=False immediately begins a new transaction after commit;
+    # rollback here must not undo the ownership decision that was returned.
+    store.conn.rollback()
+    assert store.get("move").state == "completed"
+    assert store.holds() == ()
+
+
+def test_refused_old_controller_conflicts_if_it_was_previously_proved_admitted(store):
+    wg(store); snapshot(store); cleanup(store)
+    snapshot(store, command_id="query2", now=20, stage="cleaning", cleanup_id="cleanup", fenced=True, revision=2)
+    snapshot(store, command_id="query3", now=30, stage="ending", fenced=True, revision=3)
+    cleanup(store, "replacement", now=31)
+    store.observe_ack(Ack(0, "cleanup", False, "owner_unavailable"), now=32)
+    assert store.get("wg").state == "conflict"
+    assert store.holds()
+
+
+def test_status_clean_for_unenrolled_controller_never_hands_back(store):
+    wg(store); snapshot(store)
+    snapshot(store, command_id="query2", now=20, stage="clean", cleanup_id="foreign", fenced=True, revision=2)
+    assert store.get("wg").state != "completed"
+    assert store.holds()
+
+
+def test_false_query_ack_never_promotes_provisional_status(store):
+    wg(store); snapshot(store, ack=False)
+    store.observe_ack(Ack(0, "query", False, "realm_off"), now=11)
+    assert store.get("wg").native_manifest is None
+    assert store.holds()
+
+
+def test_repeated_query_replacement_keeps_one_child_and_ignores_old_receipts(store):
+    wg(store)
+    first = None
+    for i in range(40):
+        ev = snapshot(store, command_id=f"q{i}", now=10*(i+1), revision=i+1)
+        if first is None: first = ev
+        assert len([r for r in store.records() if r.role == "query"]) == 1
+        assert len(store.records()) == 2
+        store.prune()
+    assert not store.observe_pvp(first, now=500).matched
+    assert not store.observe_ack(Ack(0, first.id, True, ""), now=500).matched
+    assert store.get("wg").native_manifest == (2, 3)
+    assert store.holds()
+
+
+def test_restart_discards_prepared_cleanup_without_replaying_or_blocking_new_controller(store):
+    wg(store); snapshot(store)
+    old = store.prepare_cleanup("wg", p.LeavePvp("unsent", (2, 3), TOKEN), now=11)
+    assert old.transport_state == "not_entered"
+    store.recover(process_id="new", now=12)
+    assert store.get("unsent").state == "not_sent"
+    assert json.loads(store.get("wg").evidence)["cleanup_id"] == ""
+    cleanup(store, "new_controller", now=13)
+    assert store.holds()
+
+
+def test_late_contradictory_cleanup_ack_reinstates_root_after_clean_release(store):
+    wg(store); snapshot(store); cleanup(store)
+    store.observe_ack(Ack(0, "cleanup", True, ""), now=12)
+    store.observe_realm_job(job("cleanup", "leave_pvp", guid=0, value=2, token=TOKEN), now=13)
+    assert store.holds() == ()
+    store.observe_ack(Ack(0, "cleanup", False, "owner_unavailable"), now=14)
+    assert store.get("wg").state == "conflict"
+    assert store.holds()[0].guids == frozenset({2, 3, 4})
+
+
+def test_delayed_query_uses_actual_dispatch_time_for_next_ten_second_spacing(store):
+    wg(store)
+    query = store.prepare_query("wg", p.GetRealmPvp("query", origin_id="wg"), now=10)
+    dispatch(store, query, now=100)
+    store.observe_send_error("query", "TimeoutError", now=101)
+    with pytest.raises(ValueError): store.prepare_query("wg", p.GetRealmPvp("too_soon", origin_id="wg"), now=109)
+    store.prepare_query("wg", p.GetRealmPvp("next", origin_id="wg"), now=110)
+
+
+@pytest.mark.parametrize("reason", [*sorted(REFUSALS), "no_wintergrasp", "no_online_members"])
+def test_wg_exact_fresh_no_admission_refusal_releases_without_cleanup(store, reason):
+    dispatch(store, prepare(store, p.WgJoin("wg", (2, 3))))
+    transition = store.observe_ack(Ack(0, "wg", False, reason), now=2)
+    assert transition.result_ready and transition.result_ok is False
+    assert store.get("wg").state == "completed"
+    assert store.holds() == ()
+
+
+def test_cleanup_ack_and_job_wait_for_origin_actual_settlement(store):
+    wg(store, settle=False); snapshot(store); cleanup(store)
+    store.observe_ack(Ack(0, "cleanup", True, ""), now=12)
+    store.observe_realm_job(job("cleanup", "leave_pvp", guid=0, value=2, token=TOKEN), now=13)
+    assert store.get("cleanup").state == "completed"
+    assert store.get("wg").state != "completed"
+    assert store.holds()
+    store.observe_send_error("wg", "TimeoutError", now=14)
+    assert store.get("wg").state == "completed"
+    assert store.holds() == ()
+
+
+def test_fresh_failure_backoffs_reserve_bounded_history_and_cannot_be_evicted(store):
+    for i in range(256):
+        command_id = f"failed{i}"
+        dispatch(store, prepare(store, p.Rearm(command_id, (i+1,)), now=0))
+        store.observe_ack(Ack(0, command_id, False, "realm_off"), now=1)
+    with pytest.raises(ActionCapacity, match="backoff history"):
+        prepare(store, p.Rearm("overflow", (1000,)), now=2)
+    assert len(store.records()) == 256
+    assert store.prune(keep=0, now=599) == 0
+    assert store.prune(keep=0, now=601) == 256
+    prepare(store, p.Rearm("after_expiry", (1000,)), now=601)
+
+
+def test_local_backoff_cancellation_does_not_create_or_extend_native_failure_time(store):
+    first = dispatch(store, prepare(store, p.Rearm("first", (2,))))
+    store.observe_ack(Ack(0, first.command_id, False, "unsupported"), now=10)
+    prepare(store, p.Rearm("victim", (2,)), now=11)
+    transition = store.predispatch_failed("victim", reason="backoff", now=200)
+    assert transition.result_ready and transition.reason == "backoff"
+    assert json.loads(store.get("first").evidence)["failed_at"] == 10
+    assert "failed_at" not in json.loads(store.get("victim").evidence)
+    assert store.holds() == ()
