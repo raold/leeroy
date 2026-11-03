@@ -296,6 +296,35 @@ class BodyLedger:
         priority = min(rank for rank, _ in holds)
         return {held_by for rank, held_by in holds if rank == priority} == {owner}
 
+    def may_move_all(
+        self, owner: str, guids: Iterable[int], *, rank: int | str | None = None
+    ) -> bool:
+        """Check an immutable batch and optional expected rank in one settled view."""
+        owner = _identity(owner)
+        selected = _members(guids)
+        expected = None if rank is None else _rank(rank)
+        self._settle(refresh=True, observed=selected)
+        if not self._healthy:
+            return False
+        state = self._state()
+        if expected is not None:
+            ranks = self._owner_ranks(state).get(owner, set())
+            current = RANKS.get(owner)
+            if current is None and len(ranks) == 1:
+                current = next(iter(ranks))
+            if current != expected:
+                return False
+        for guid in selected:
+            if any(row.retained and self._covers(row, guid) for _, row in state.rows):
+                return False
+            holds = self._holders(state, guid)
+            if holds:
+                priority = min(held_rank for held_rank, _ in holds)
+                if {held_by for held_rank, held_by in holds if held_rank == priority} != {owner}:
+                    return False
+        # No refresh, notification finalization, or callback follows this result.
+        return True
+
     def rank_for(self, owner: str) -> int | None:
         owner = _identity(owner)
         self._settle(refresh=True)

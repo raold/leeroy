@@ -647,6 +647,242 @@ def test_outer_may_move_refreshes_retained_source_changed_only_by_callback():
     assert ledger.holder(101) == "offline_raid"
 
 
+def test_batch_gate_refresh_callback_acquires_an_earlier_batch_member():
+    source = Snapshot(hold("training", {102}, scope="lab"))
+    ledger, clock = ledger_with(source)
+    assert ledger.holder(102) == "training"
+    callback_grants = []
+
+    def handoff(owner, guids):
+        if owner == "training":
+            callback_grants.append(claim(ledger, clock, "offline_raid", {101}))
+
+    ledger.on_release(handoff)
+    source.rows = ()
+    returned = ledger.may_move_all("realm_day", (101, 102), rank="realm_day")
+    assert returned is False
+    assert callback_grants == [{101}]
+    assert ledger.claims_for("offline_raid") == frozenset({101})
+
+
+def test_batch_gate_denies_when_later_member_refresh_invalidates_an_earlier_approval():
+    def setup_scripted_handoff():
+        clock = FakeClock()
+        ledger = BodyLedger(clock)
+        training = hold("training", {102}, scope="lab")
+        reads = []
+        callback_grants = []
+
+        def snapshot():
+            # Baseline and first prospective check still hold 102; every later
+            # read observes release, including reads from reentrant callbacks.
+            held = len(reads) < 2
+            reads.append(held)
+            return (training,) if held else ()
+
+        def handoff(owner, guids):
+            if owner == "training":
+                callback_grants.append(claim(ledger, clock, "offline_raid", {101}))
+
+        ledger.add_holder_source("scripted", snapshot)
+        assert ledger.holder(102) == "training"
+        ledger.on_release(handoff)
+        return ledger, reads, callback_grants
+
+    control, control_reads, control_grants = setup_scripted_handoff()
+    earlier = control.may_move("realm_day", 101)
+    assert earlier is True
+    assert control_reads == [True, True]
+    assert control_grants == []
+    later = control.may_move("realm_day", 102)
+    assert later is True
+    assert control_grants == [{101}]
+    assert not any(control_reads[2:])
+    assert control.claims_for("offline_raid") == frozenset({101})
+    assert control.holder(101) == "offline_raid"
+    assert (earlier, later) == (True, True)
+
+    batch, batch_reads, batch_grants = setup_scripted_handoff()
+    returned = batch.may_move_all("realm_day", (101, 102), rank="realm_day")
+    assert returned is False
+    assert batch_reads == [True, True]
+    assert batch_grants == []
+
+
+@pytest.mark.parametrize("unavailable", [False, True])
+def test_batch_gate_rechecks_callback_only_retained_or_unavailable_evidence(unavailable):
+    source = Snapshot(hold("training", {103}, scope="lab"))
+    ledger, _ = ledger_with(source)
+    assert ledger.holder(103) == "training"
+
+    def change(owner, guids):
+        if owner == "training":
+            if unavailable:
+                source.failure = True
+            else:
+                source.rows = (hold("offline_raid", {101}, scope="new-job", retained=True),)
+
+    ledger.on_release(change)
+    source.rows = ()
+    returned = ledger.may_move_all("realm_day", (101, 102), rank=4)
+    assert returned is False
+
+
+def test_batch_gate_copies_members_before_source_refresh_and_listener_mutation():
+    selected = {101, 102}
+    source = Snapshot(hold("training", {103}, scope="lab"))
+    ledger, _ = ledger_with(source)
+    assert ledger.holder(103) == "training"
+
+    def change(owner, guids):
+        if owner == "training":
+            selected.clear()
+            source.rows = (hold("offline_raid", {101}, scope="new-job", retained=True),)
+
+    ledger.on_release(change)
+    source.rows = ()
+    returned = ledger.may_move_all("realm_day", selected)
+    assert returned is False
+    assert selected == set()
+
+
+@pytest.mark.parametrize("size", [1, 2, 40, 150])
+def test_batch_gate_refresh_count_is_independent_of_batch_size_and_never_cached(size):
+    source = Snapshot()
+    ledger, _ = ledger_with(source)
+    selected = tuple(range(101, 101 + size))
+    assert ledger.may_move_all("realm_day", selected, rank=4)
+    assert source.calls == 1
+    source.rows = (hold("offline_raid", {101}),)
+    assert not ledger.may_move_all("realm_day", selected, rank=4)
+    assert source.calls == 2
+
+
+def test_batch_gate_consumes_finite_members_once_and_accepts_duplicates():
+    source = Snapshot()
+    ledger, _ = ledger_with(source)
+    yielded = []
+
+    def members():
+        for guid in (101, 101, 102):
+            yielded.append(guid)
+            yield guid
+
+    assert ledger.may_move_all("realm_day", members())
+    assert yielded == [101, 101, 102]
+    assert source.calls == 1
+
+
+@pytest.mark.parametrize("members", [{0}, {True}, {1 << 32}, {"101"}, ALL, None])
+def test_batch_gate_rejects_invalid_members_before_source_inspection(members):
+    source = Snapshot()
+    ledger, _ = ledger_with(source)
+    with pytest.raises(ValueError):
+        ledger.may_move_all("realm_day", members)
+    assert source.calls == 0
+
+
+@pytest.mark.parametrize("owner, expected", [
+    ("realm_day", 4), ("realm_day", "realm_day"), ("raid", 0), ("raid", "raid"),
+])
+def test_batch_gate_normalizes_expected_rank_and_preserves_exact_owner(owner, expected):
+    source = Snapshot(hold(owner, {101}))
+    ledger, _ = ledger_with(source)
+    assert ledger.may_move_all(owner, {101, 102}, rank=expected)
+    assert source.calls == 1
+
+
+@pytest.mark.parametrize("expected", [True, -1, 5, 2.0, "unknown"])
+def test_batch_gate_rejects_invalid_expected_rank_before_source_inspection(expected):
+    source = Snapshot()
+    ledger, _ = ledger_with(source)
+    with pytest.raises(ValueError):
+        ledger.may_move_all("realm_day", {101}, rank=expected)
+    assert source.calls == 0
+
+
+def test_batch_gate_expected_rank_must_match_current_builtin_or_opaque_owner():
+    source = Snapshot()
+    ledger, _ = ledger_with(source)
+    assert not ledger.may_move_all("realm_day", {101}, rank="training")
+    assert ledger.may_move_all("benchmark:unregistered", {101})
+    assert not ledger.may_move_all("benchmark:unregistered", {101}, rank=2)
+    source.rows = (hold("benchmark:exact-command", {101}, rank=2),)
+    assert ledger.may_move_all("benchmark:exact-command", {101, 102}, rank="training")
+    assert not ledger.may_move_all("benchmark:another-command", {102}, rank=2)
+
+
+def test_batch_gate_checks_callback_changed_rank_in_its_movement_snapshot():
+    source = Snapshot(
+        hold("custom", {101}, rank=2, scope="custom-job"),
+        hold("training", {103}, scope="lab"),
+    )
+    ledger, _ = ledger_with(source)
+    assert ledger.may_move_all("custom", (101, 102), rank=2)
+
+    def replace(owner, guids):
+        if owner == "training":
+            source.rows = (hold("custom", {101}, rank=3, scope="custom-job"),)
+
+    ledger.on_release(replace)
+    source.rows = (source.rows[0],)
+    returned = ledger.may_move_all("custom", (101, 102), rank="training")
+    assert returned is False
+    assert ledger.may_move_all("custom", (101, 102), rank="realm_event")
+
+
+def test_batch_gate_denies_global_rank_conflict_even_outside_selected_members():
+    source = Snapshot(hold("custom", {103}, rank=2))
+    ledger, _ = ledger_with(source)
+    assert ledger.may_move_all("realm_day", (101, 102), rank=4)
+    ledger.add_holder_source("conflict", Snapshot(hold("custom", {104}, rank=3)))
+    assert not ledger.may_move_all("realm_day", (101, 102), rank=4)
+    assert not ledger.may_move_all("custom", (101, 102))
+
+
+@pytest.mark.parametrize("rows, owner, expected", [
+    ((), "realm_day", True),
+    ((hold("realm_day", {101}),), "realm_day", True),
+    ((hold("realm_day", {101}, retained=True),), "realm_day", False),
+    ((hold("offline_raid", {102}),), "realm_day", False),
+    ((hold("raid", ALL),), "raid", True),
+    ((hold("raid", ALL),), "realm_day", False),
+    ((hold("training", {101}, scope="lab"),
+      hold("benchmark:one", {101}, scope="bench")), "training", False),
+])
+def test_batch_gate_applies_movement_arbitration_to_every_selected_member(rows, owner, expected):
+    ledger, _ = ledger_with(Snapshot(*rows))
+    assert ledger.may_move_all(owner, (101, 102)) is expected
+
+
+def test_empty_batch_still_requires_fresh_healthy_evidence_and_expected_rank():
+    source = Snapshot()
+    ledger, _ = ledger_with(source)
+    assert ledger.may_move_all("realm_day", (), rank=4)
+    assert not ledger.may_move_all("custom", (), rank=2)
+    source.failure = True
+    assert not ledger.may_move_all("realm_day", ())
+
+
+def test_batch_gate_callback_evidence_churn_is_bounded_and_fails_closed(caplog):
+    source = Snapshot(hold("training", {103}))
+    ledger, _ = ledger_with(source)
+    assert ledger.holder(103) == "training"
+
+    def churn(owner, guids):
+        next_owner = "training" if source.rows[0].owner == "benchmark:churn" else "benchmark:churn"
+        source.rows = (hold(next_owner, {103}),)
+
+    ledger.on_release(churn)
+    source.rows = (hold("benchmark:churn", {103}),)
+    before = source.calls
+    with caplog.at_level(logging.WARNING):
+        returned = ledger.may_move_all("realm_day", (101, 102), rank=4)
+    assert returned is False
+    assert source.calls - before < 100
+    assert "body_evidence_unstable" in caplog.text
+
+
 @pytest.mark.parametrize("method, expected", [("holder", "offline_raid"), ("others", {"offline_raid"})])
 def test_outer_ownership_reads_include_release_callback_handoff(method, expected):
     source = Snapshot(hold("training", {101}))
