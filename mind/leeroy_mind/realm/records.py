@@ -139,6 +139,25 @@ def _public_text(value, name):
         raise ValueError(f"invalid {name}")
 
 
+RejectReason = Literal[
+    "unsupported_policy", "invalid_input", "missing_row", "invalid_row",
+    "graph_limit", "cycle", "private_evidence", "real_name", "romance",
+    "unsupported_text", "topic_mismatch", "proof_changed",
+]
+_REJECT_REASONS = (
+    "unsupported_policy", "invalid_input", "missing_row", "invalid_row",
+    "graph_limit", "cycle", "private_evidence", "real_name", "romance",
+    "unsupported_text", "topic_mismatch", "proof_changed",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Rejected:
+    reason: RejectReason
+
+    def __post_init__(self):
+        _enum(self.reason, "reason", _REJECT_REASONS)
+
 @dataclass(frozen=True, slots=True)
 class ActorQualification:
     guid: int
