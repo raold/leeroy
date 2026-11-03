@@ -287,14 +287,7 @@ class BodyLedger:
         self._settle(refresh=True, observed=(guid,))
         if not self._healthy:
             return False
-        state = self._state()
-        if any(row.retained and self._covers(row, guid) for _, row in state.rows):
-            return False
-        holds = self._holders(state, guid)
-        if not holds:
-            return True
-        priority = min(rank for rank, _ in holds)
-        return {held_by for rank, held_by in holds if rank == priority} == {owner}
+        return self._may_move_in(self._state(), owner, guid)
 
     def may_move_all(
         self, owner: str, guids: Iterable[int], *, rank: int | str | None = None
@@ -314,16 +307,35 @@ class BodyLedger:
                 current = next(iter(ranks))
             if current != expected:
                 return False
-        for guid in selected:
-            if any(row.retained and self._covers(row, guid) for _, row in state.rows):
-                return False
-            holds = self._holders(state, guid)
-            if holds:
-                priority = min(held_rank for held_rank, _ in holds)
-                if {held_by for held_rank, held_by in holds if held_rank == priority} != {owner}:
-                    return False
         # No refresh, notification finalization, or callback follows this result.
-        return True
+        return all(self._may_move_in(state, owner, guid) for guid in selected)
+
+    def movable(
+        self, owner: str, guids: Iterable[int], *, besides: Iterable[str] | None = None
+    ) -> frozenset[int]:
+        """Select eligible members whose holders are all in ``besides``, if supplied."""
+        owner = _identity(owner)
+        selected = _members(guids)
+        allowed = None
+        if besides is not None:
+            try:
+                if isinstance(besides, (str, bytes, bytearray)):
+                    raise ValueError("invalid body owner set")
+                allowed = frozenset(_identity(other) for other in besides)
+            except (TypeError, ValueError):
+                raise ValueError("invalid body owner set") from None
+        self._settle(refresh=True, observed=selected)
+        if not self._healthy:
+            return frozenset()
+        state = self._state()
+        # Selection and owner filtering are pure; no notifications follow them.
+        return frozenset(
+            guid for guid in selected
+            if self._may_move_in(state, owner, guid)
+            and (allowed is None or all(
+                held_by in allowed for _, held_by in self._holders(state, guid)
+            ))
+        )
 
     def rank_for(self, owner: str) -> int | None:
         owner = _identity(owner)
@@ -526,6 +538,17 @@ class BodyLedger:
             (claims[guid].rank, owner) for owner, claims in state.claims.items() if guid in claims
         )
         return holds
+
+    @classmethod
+    def _may_move_in(cls, state: _State, owner: str, guid: int) -> bool:
+        """Pure scheduling predicate; callers settle once before supplying state."""
+        if any(row.retained and cls._covers(row, guid) for _, row in state.rows):
+            return False
+        holds = cls._holders(state, guid)
+        if not holds:
+            return True
+        priority = min(rank for rank, _ in holds)
+        return {held_by for rank, held_by in holds if rank == priority} == {owner}
 
     def _grantable(self, owner: str, rank: int, guid: int) -> bool:
         state = self._state()

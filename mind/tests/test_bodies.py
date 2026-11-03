@@ -883,6 +883,260 @@ def test_batch_gate_callback_evidence_churn_is_bounded_and_fails_closed(caplog):
     assert "body_evidence_unstable" in caplog.text
 
 
+def test_movable_selects_partial_members_by_retention_priority_and_equal_rank_rules():
+    source = Snapshot(
+        hold("training", {101, 104, 106}, scope="own"),
+        hold("training", {102}, scope="retained", retained=True),
+        hold("offline_raid", {103}, scope="offline"),
+        hold("benchmark:one", {104}, scope="benchmark"),
+        hold("realm_day", {106}, scope="day"),
+    )
+    ledger, _ = ledger_with(source)
+    selected = {101, 102, 103, 104, 105, 106}
+    returned = ledger.movable("training", selected)
+    assert returned == frozenset({101, 105, 106})
+    assert type(returned) is frozenset
+    assert ledger.movable("training", selected, besides={"training"}) == frozenset({101, 105})
+
+
+@pytest.mark.parametrize("rows, owner, besides, expected", [
+    ((hold("raid", ALL),), "raid", {"raid"}, {101, 102}),
+    ((hold("raid", ALL, retained=True),), "raid", {"raid"}, set()),
+    ((hold("raid", ALL),), "realm_day", {"raid", "realm_day"}, set()),
+    ((hold("raid", ALL), hold("training", {101}, scope="lab", retained=True)),
+     "raid", {"raid", "training"}, {102}),
+])
+def test_movable_respects_all_and_retained_rows_even_for_allowed_owners(rows, owner, besides, expected):
+    ledger, _ = ledger_with(Snapshot(*rows))
+    assert ledger.movable(owner, {101, 102}, besides=besides) == frozenset(expected)
+
+
+def test_movable_excludes_lower_priority_foreign_holds_but_allows_exact_realm_owners():
+    source = Snapshot(
+        hold("raid", ALL, scope="raid"),
+        hold("realm_day", {101}, scope="day"),
+        hold("training", {102}, scope="lab"),
+        hold("benchmark:exact-command", {103}, scope="benchmark"),
+        hold("realm_event", {104}, scope="event"),
+    )
+    ledger, _ = ledger_with(source)
+    selected = {101, 102, 103, 104, 105}
+    assert ledger.movable("raid", selected) == frozenset(selected)
+    returned = ledger.movable("raid", selected, besides={"raid", "realm_day", "realm_event"})
+    assert returned == frozenset({101, 104, 105})
+    assert ledger.may_move("raid", 102)
+
+
+def test_movable_besides_uses_exact_owners_without_prefix_or_implicit_self_authority():
+    source = Snapshot(
+        hold("raid", ALL, scope="raid"),
+        hold("benchmark:exact-command", {101}, scope="benchmark"),
+    )
+    ledger, _ = ledger_with(source)
+    assert ledger.movable("raid", {101, 102}, besides={"raid", "benchmark"}) == frozenset({102})
+    assert ledger.movable(
+        "raid", {101, 102}, besides={"raid", "benchmark:exact-command"},
+    ) == frozenset({101, 102})
+    assert ledger.movable("raid", {101, 102}, besides={"benchmark:exact-command"}) == frozenset()
+
+
+def test_movable_empty_besides_allows_only_unheld_members():
+    ledger, _ = ledger_with(Snapshot(hold("realm_day", {101})))
+    assert ledger.movable("realm_day", {101, 102}) == frozenset({101, 102})
+    assert ledger.movable("realm_day", {101, 102}, besides=()) == frozenset({102})
+
+
+def test_movable_returns_partial_result_after_refresh_callback_claims_another_member():
+    source = Snapshot(hold("training", {103}, scope="lab"))
+    ledger, clock = ledger_with(source)
+    assert ledger.holder(103) == "training"
+    grants = []
+
+    def handoff(owner, guids):
+        if owner == "training":
+            grants.append(claim(ledger, clock, "offline_raid", {101}))
+
+    ledger.on_release(handoff)
+    source.rows = ()
+    returned = ledger.movable("realm_day", (101, 102), besides={"realm_day", "realm_event"})
+    assert returned == frozenset({102})
+    assert grants == [{101}]
+
+
+def test_movable_scripted_snapshot_distinguishes_sequential_member_selection():
+    def setup_scripted_handoff():
+        clock = FakeClock()
+        ledger = BodyLedger(clock)
+        training = hold("training", {102}, scope="lab")
+        reads = []
+        grants = []
+
+        def snapshot():
+            held = len(reads) < 2
+            reads.append(held)
+            return (training,) if held else ()
+
+        def handoff(owner, guids):
+            if owner == "training":
+                grants.append(claim(ledger, clock, "offline_raid", {101}))
+
+        ledger.add_holder_source("scripted", snapshot)
+        assert ledger.holder(102) == "training"
+        ledger.on_release(handoff)
+        return ledger, reads, grants
+
+    control, _, control_grants = setup_scripted_handoff()
+    sequential = frozenset(guid for guid in (101, 102) if control.may_move("realm_day", guid))
+    assert sequential == frozenset({101, 102})
+    assert control_grants == [{101}]
+    assert control.claims_for("offline_raid") == frozenset({101})
+
+    batch, batch_reads, batch_grants = setup_scripted_handoff()
+    returned = batch.movable("realm_day", (101, 102), besides={"realm_day", "realm_event"})
+    assert returned == frozenset({101})
+    assert batch_reads == [True, True]
+    assert batch_grants == []
+
+
+@pytest.mark.parametrize("unavailable", [False, True])
+def test_movable_uses_callback_only_source_changes_before_selecting_all_members(unavailable):
+    source = Snapshot(hold("training", {103}, scope="lab"))
+    ledger, _ = ledger_with(source)
+    assert ledger.holder(103) == "training"
+
+    def change(owner, guids):
+        if owner == "training":
+            if unavailable:
+                source.failure = True
+            else:
+                source.rows = (hold("offline_raid", {101}, scope="new-job", retained=True),)
+
+    ledger.on_release(change)
+    source.rows = ()
+    returned = ledger.movable("realm_day", {101, 102}, besides={"realm_day", "realm_event"})
+    assert returned == (frozenset() if unavailable else frozenset({102}))
+
+
+def test_movable_copies_members_and_besides_before_callbacks_mutate_inputs():
+    selected = {101, 102}
+    allowed = {"realm_event", "realm_day"}
+    source = Snapshot(hold("training", {103}, scope="lab"))
+    ledger, _ = ledger_with(source)
+    assert ledger.holder(103) == "training"
+
+    def change(owner, guids):
+        if owner == "training":
+            selected.clear()
+            allowed.clear()
+            source.rows = (
+                hold("realm_event", {101}, scope="event"),
+                hold("realm_day", {101}, scope="day"),
+                hold("offline_raid", {102}, scope="offline"),
+            )
+
+    ledger.on_release(change)
+    source.rows = ()
+    returned = ledger.movable("realm_event", selected, besides=allowed)
+    assert returned == frozenset({101})
+    assert selected == allowed == set()
+
+
+def test_movable_consumes_member_and_owner_iterables_once_before_source_inspection():
+    member_reads, owner_reads, source_reads = [], [], []
+
+    def members():
+        for guid in (101, 101, 102):
+            member_reads.append(guid)
+            yield guid
+
+    def owners():
+        for owner in ("realm_event", "realm_day", "realm_event"):
+            owner_reads.append(owner)
+            yield owner
+
+    def snapshot():
+        source_reads.append((tuple(member_reads), tuple(owner_reads)))
+        return (hold("realm_event", {101}),)
+
+    ledger, _ = ledger_with(snapshot)
+    assert ledger.movable("realm_event", members(), besides=owners()) == frozenset({101, 102})
+    assert source_reads == [((101, 101, 102), ("realm_event", "realm_day", "realm_event"))]
+
+
+@pytest.mark.parametrize("besides", [
+    "realm_day", b"realm_day", 3, [True], [None], [""], ["bad\0owner"], ["é" * 129], [["realm_day"]],
+])
+def test_movable_rejects_invalid_owner_sets_before_source_inspection(besides):
+    source = Snapshot()
+    ledger, _ = ledger_with(source)
+    with pytest.raises(ValueError):
+        ledger.movable("realm_day", {101}, besides=besides)
+    assert source.calls == 0
+
+
+@pytest.mark.parametrize("owner, members", [
+    ("", {101}), (True, {101}), ("realm_day", {0}), ("realm_day", {True}),
+    ("realm_day", {1 << 32}), ("realm_day", ALL), ("realm_day", None),
+])
+def test_movable_validates_owner_and_all_members_before_source_inspection(owner, members):
+    source = Snapshot()
+    ledger, _ = ledger_with(source)
+    with pytest.raises(ValueError):
+        ledger.movable(owner, members, besides={"realm_day"})
+    assert source.calls == 0
+
+
+@pytest.mark.parametrize("failure", ["exception", "rank_conflict", "malformed"])
+def test_movable_denies_all_members_on_unavailable_or_conflicting_evidence_and_recovers(failure):
+    source = Snapshot(hold("custom", {103}, rank=2))
+    ledger, _ = ledger_with(source)
+    assert ledger.movable("realm_day", {101, 102}) == frozenset({101, 102})
+    if failure == "exception":
+        source.failure = True
+    elif failure == "rank_conflict":
+        source.rows = (hold("custom", {103}, rank=2, scope="a"), hold("custom", {104}, rank=3, scope="b"))
+    else:
+        source.rows = (object(),)
+    assert ledger.movable("realm_day", {101, 102}) == frozenset()
+    source.failure = False
+    source.rows = ()
+    assert ledger.movable("realm_day", {101, 102}) == frozenset({101, 102})
+
+
+@pytest.mark.parametrize("size", [0, 1, 40, 150])
+def test_movable_source_count_is_fixed_for_batch_size_and_each_call_refreshes(size):
+    source = Snapshot()
+    ledger, _ = ledger_with(source)
+    selected = frozenset(range(101, 101 + size))
+    assert ledger.movable("realm_day", selected, besides={"realm_day", "realm_event"}) == selected
+    assert source.calls == 1
+    source.rows = (hold("offline_raid", {101}),)
+    assert ledger.movable("realm_day", selected, besides={"realm_day", "realm_event"}) == selected - {101}
+    assert source.calls == 2
+    source.rows = ()
+    assert ledger.movable("realm_day", selected, besides={"realm_day", "realm_event"}) == selected
+    assert source.calls == 3
+
+
+def test_movable_fails_closed_on_callback_instability_even_for_free_selected_members(caplog):
+    source = Snapshot(hold("training", {103}))
+    ledger, _ = ledger_with(source)
+    assert ledger.holder(103) == "training"
+
+    def churn(owner, guids):
+        next_owner = "training" if source.rows[0].owner == "benchmark:churn" else "benchmark:churn"
+        source.rows = (hold(next_owner, {103}),)
+
+    ledger.on_release(churn)
+    source.rows = (hold("benchmark:churn", {103}),)
+    before = source.calls
+    with caplog.at_level(logging.WARNING):
+        returned = ledger.movable("realm_day", {101, 102}, besides={"realm_day", "realm_event"})
+    assert returned == frozenset()
+    assert source.calls - before < 100
+    assert "body_evidence_unstable" in caplog.text
+
+
 @pytest.mark.parametrize("method, expected", [("holder", "offline_raid"), ("others", {"offline_raid"})])
 def test_outer_ownership_reads_include_release_callback_handoff(method, expected):
     source = Snapshot(hold("training", {101}))
