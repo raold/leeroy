@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <atomic>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <random>
@@ -19,8 +20,8 @@ namespace
 {
 std::string BootNonce()
 {
-    // Refuse continuation creation if native entropy is unavailable. The
-    // process-local serial alone must never authorize a previous boot's token.
+    // Refuse continuation/kill-proof creation if native entropy is unavailable.
+    // A process-local serial alone must never identify a previous boot's proof.
     try
     {
         std::random_device source;
@@ -105,8 +106,10 @@ struct RealmModule::State
     std::uint32_t flagRemaining = 0, weaponsRemaining = 0, pinRemaining = 0;
     mutable std::mutex factsMutex;
     std::map<std::uint32_t, std::uint64_t> generations;
-    std::vector<std::pair<std::uint64_t, Kill>> killInbox;
+    std::vector<Kill> killInbox;
     KillRing kills;
+    std::string killBoot = BootNonce(); // Unavailable entropy disables kill proof publication.
+    std::uint64_t killSerial = 0; // Never reset on identity/enable boundaries.
     TickBudget* activeBudget = nullptr;
     Queued const* activeEntry = nullptr;
     std::string activeOperation;
@@ -150,11 +153,31 @@ struct RealmModule::State
     }
     void DrainKills()
     {
-        std::lock_guard lock(factsMutex);
-        for (auto const& [generation, kill] : killInbox)
-            if (on.load() && generation == epoch.load())
-                kills.Add(kill);
-        killInbox.clear();
+        std::vector<std::string> lines;
+        {
+            std::lock_guard lock(factsMutex);
+            // Moving/removing the inbox before publication makes a second
+            // Tick/MatchProof drain unable to allocate or publish it again.
+            auto observations = std::move(killInbox);
+            killInbox.clear();
+            for (auto& kill : observations)
+            {
+                if (!on.load() || kill.nativeEpoch != epoch.load() || kill.guildId != guild
+                    || kill.humanGuid != human || !ValidKillObservation(kill)
+                    || killSerial == std::numeric_limits<std::uint64_t>::max()) continue;
+                auto const published = NowUnixMs(); // Independent Unix clock; never derive from steady time.
+                if (published <= 0 || static_cast<std::uint64_t>(published) < kill.verifiedAtMs) continue;
+                kill.killId = killBoot + ':' + std::to_string(killSerial + 1);
+                kill.publishedAtMs = static_cast<std::uint64_t>(published);
+                if (!ValidKillProof(kill)) continue;
+                auto line = EncodeEvent(published, MakeRealmKill(kill));
+                if (!kills.Add(kill)) continue;
+                ++killSerial;
+                lines.push_back(std::move(line)); // Exact ring record exists before any bridge publication.
+            }
+        }
+        for (auto& line : lines)
+            LeeroyModule::Instance().Publish(std::move(line), false); // Nondroppable; outside factsMutex.
     }
     void ApplyPins()
     {
@@ -742,17 +765,21 @@ bool RealmModule::RegisterPoll(std::string name, std::uint32_t intervalMs, std::
     return !name.empty() && intervalMs && poll && _state->polls.size() < 16
         && _state->polls.emplace(std::move(name), State::Poll{intervalMs, 0, std::move(poll)}).second;
 }
-void RealmModule::RecordKill(Kill kill, std::uint64_t expectedEpoch)
+void RealmModule::RecordKill(Kill kill)
 {
     std::lock_guard lock(_state->factsMutex);
-    if (On() && Epoch() == expectedEpoch && kill.guildKill && _state->killInbox.size() < 128)
-        _state->killInbox.emplace_back(expectedEpoch, kill);
+    // No caller can supply its own proof id/publication time. Only the world
+    // drain completes a proof after actual map-thread DONE verification.
+    if (On() && Epoch() == kill.nativeEpoch && kill.killId.empty() && !kill.publishedAtMs
+        && ValidKillObservation(kill) && _state->killInbox.size() < 128)
+        _state->killInbox.push_back(std::move(kill));
 }
-std::optional<Kill> RealmModule::MatchKill(std::uint32_t map, std::uint32_t instance, std::uint32_t boss,
-                                        std::uint64_t nowMs) const
+std::optional<Kill> RealmModule::MatchProof(AnnounceCmd const& request, std::uint64_t nowMs) const
 {
     _state->DrainKills();
-    return On() ? _state->kills.Match(map, instance, boss, nowMs) : std::nullopt;
+    if (!On() || request.nativeEpoch != Epoch() || request.guildId != GuildId()
+        || request.humanGuid != HumanGuid()) return std::nullopt;
+    return _state->kills.MatchProof(request.killId, request, nowMs);
 }
 void RealmModule::NotifyBodyChanged(std::uint32_t guid)
 {
@@ -1100,6 +1127,7 @@ void RealmModule::Shutdown()
         _state->disablePending = true;
         _state->guildDisablePending = true;
         _state->killInbox.clear();
+        _state->kills = {};
     }
     ReconcileConfiguration(); // Retain unresolved operations; never fake restoration or run another action.
 }

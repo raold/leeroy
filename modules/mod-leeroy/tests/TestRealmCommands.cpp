@@ -79,6 +79,17 @@ void RejectField(std::string_view fixture, char const* field, json bad)
 }
 json Event(std::string_view type)
 {
+    if (type == "realm_kill")
+    {
+        Kill kill;
+        kill.killId = "0123456789abcdef0123456789abcdef:1";
+        kill.nativeEpoch = 7; kill.guildId = 12001; kill.humanGuid = 11002;
+        kill.map = 631; kill.instanceId = 15001; kill.bossId = 0;
+        kill.difficulty = 1; kill.size = 25; kill.heroic = false;
+        kill.killedAtMs = 1700000000000; kill.verifiedAtMs = 1700000000001;
+        kill.humanPresent = true; kill.castMembers = {11001, 11003};
+        return MakeRealmKill(kill);
+    }
     if (type == "realm_job") return MakeRealmJob({"realm-test", "rearm", true, "", 11001, 2});
     if (type == "realm_pvp")
     {
@@ -114,7 +125,7 @@ LEEROY_TEST(Realm_FixtureLines)
         if (row.at("kind") == "event")
         {
             events.insert(type);
-            CHECK_EQ(json::parse(Leeroy::EncodeEvent(0, Event(type))), msg);
+            CHECK_EQ(json::parse(Leeroy::EncodeEvent(msg.at("ts").get<std::int64_t>(), Event(type))), msg);
             continue;
         }
         auto decoded = Leeroy::DecodeCommand(msg.dump());
@@ -134,7 +145,7 @@ LEEROY_TEST(Realm_FixtureLines)
             CHECK(valid); CHECK_EQ(row.at("name").get<std::string>(), type + "_ok"); full.insert(type);
         }
     }
-    CHECK_EQ(full.size(), kCommandTypes.size()); CHECK_EQ(events.size(), 13u);
+    CHECK_EQ(full.size(), kCommandTypes.size()); CHECK_EQ(events.size(), 14u);
     for (auto type : kCommandTypes) CHECK(full.contains(std::string(type)));
 }
 
@@ -224,9 +235,9 @@ LEEROY_TEST(Realm_NumbersDoNotAcceptBoolFloatStringOrNarrow)
             if (!value.is_number_integer() || key == "v" || key == "ts") continue;
             for (auto const& bad : std::vector<json>{true, 1.0, "1", nullptr, json::array(), -2})
             { auto changed = msg; changed[key] = bad; Reject(changed, key); }
-            if (key != "dungeon_id")
+            if (key != "dungeon_id" && key != "difficulty")
             { auto changed = msg; changed[key] = json::number_integer_t(1); Reject(changed, key); }
-            if (key != "event_id")
+            if (key != "event_id" && key != "native_epoch")
             { auto changed = msg; changed[key] = std::numeric_limits<std::uint64_t>::max(); Reject(changed, key); }
         }
     }
@@ -240,6 +251,43 @@ LEEROY_TEST(Realm_NumbersDoNotAcceptBoolFloatStringOrNarrow)
     auto post = Message("calendar_post_ok"); post["dungeon_id"] = std::uint32_t{2147483647};
     CHECK(ParseCalendarPost(post, error).has_value());
     post["dungeon_id"] = std::uint64_t{2147483648}; Reject(post, "dungeon_id");
+}
+
+LEEROY_TEST(Realm_AnnounceRequiresExactProofBindingAndEveryPayloadField)
+{
+    auto const original = Message("announce_ok");
+    for (auto key : {"id", "kill_id", "native_epoch", "guild_id", "human_guid", "map", "instance_id",
+        "boss_id", "difficulty", "size", "heroic", "boss_name", "attempts", "fight_s", "first"})
+    {
+        auto msg = original; msg.erase(key); Reject(msg, key);
+    }
+    for (auto const& bad : {std::string{}, std::string("0123456789ABCDEF0123456789abcdef:1"),
+        std::string("0123456789abcdef0123456789abcdef:0"), std::string("0123456789abcdef0123456789abcdef:01"),
+        std::string("0123456789abcdef0123456789abcdef:18446744073709551616"),
+        std::string("0123456789abcdef0123456789abcdef:1:2")})
+        RejectField("announce_ok", "kill_id", bad);
+    for (auto field : {"native_epoch", "guild_id", "human_guid", "instance_id"})
+        RejectField("announce_ok", field, 0u);
+    auto msg = original;
+    msg["native_epoch"] = std::numeric_limits<std::uint64_t>::max();
+    msg["kill_id"] = "0123456789abcdef0123456789abcdef:18446744073709551615";
+    std::string error;
+    auto parsed = ParseAnnounce(msg, error);
+    CHECK(parsed && parsed->nativeEpoch == std::numeric_limits<std::uint64_t>::max());
+    for (auto field : {"v", "type", "ts"})
+    {
+        msg = original; msg.erase(field);
+        CHECK(!ParseAnnounce(msg, error)); CHECK_EQ(error, std::string("bad field: ") + field);
+    }
+    msg = original; msg["difficulty"] = -1; CHECK(ParseAnnounce(msg, error));
+    msg["difficulty"] = 0; Reject(msg, "heroic"); // 25 normal cannot impersonate 10 normal.
+    msg = original; msg["heroic"] = true; Reject(msg, "heroic");
+    msg = original; msg["size"] = 40u; Reject(msg, "size");
+    msg = original; msg["legacy_tuple"] = true; Reject(msg, "legacy_tuple");
+    auto legacy = original;
+    for (auto field : {"kill_id", "native_epoch", "guild_id", "human_guid", "difficulty", "size", "heroic"})
+        legacy.erase(field);
+    Reject(legacy, "kill_id");
 }
 
 LEEROY_TEST(Realm_StringsBooleansAndContainersRequireTheirTypes)

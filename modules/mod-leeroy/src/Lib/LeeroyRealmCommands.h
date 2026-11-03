@@ -3,6 +3,7 @@
 #ifndef MOD_LEEROY_LEEROY_REALM_COMMANDS_H
 #define MOD_LEEROY_LEEROY_REALM_COMMANDS_H
 
+#include "LeeroyRealmPolicy.h"
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -103,10 +104,9 @@ struct GuildRenameCmd { std::uint32_t guildId = 0; std::string name; };
 struct GuildGrowCmd { std::uint32_t guildId = 0; std::vector<std::uint32_t> guids; };
 struct GuildAdmitCmd { std::uint32_t guid = 0, rank = 4; };
 struct GuildNoteCmd { std::uint32_t guid = 0; std::string officerNote; };
-struct AnnounceCmd
+struct AnnounceCmd : KillIdentity
 {
-    std::uint32_t map = 0, instanceId = 0, bossId = 0;
-    std::string bossName;
+    std::string id, killId, bossName;
     std::uint32_t attempts = 0, fightS = 0;
     std::string first;
 };
@@ -171,6 +171,9 @@ struct RealmJob
     std::string pvpOwner;
 };
 nlohmann::json MakeRealmJob(RealmJob const&);
+// Body only; the drain supplies this proof's already captured publishedAtMs to
+// EncodeEvent exactly once, before handing the encoded line to bridge replay.
+nlohmann::json MakeRealmKill(Kill const&);
 struct ContinuationOwner;
 nlohmann::json MakeRealmPvp(std::string_view id, ContinuationOwner const&);
 nlohmann::json MakeChannelChat(std::string_view channel, std::uint32_t fromGuid, std::string_view fromName,

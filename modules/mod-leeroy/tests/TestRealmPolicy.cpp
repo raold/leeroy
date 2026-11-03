@@ -28,11 +28,6 @@ std::array<BusyField, 9> const BusyFields{{
     {&BodyState::instance, "instance"}, {&BodyState::battleground, "battleground"},
     {&BodyState::arena, "arena"}, {&BodyState::lfg, "lfg"}
 }};
-
-Kill ObservedKill(std::uint64_t at = 1000)
-{
-    return {101, 500, 3, at, true, 25, true};
-}
 }
 
 LEEROY_TEST(RealmPolicy_BusyRulesEachFlagAndOrderedPrecedence)
@@ -157,83 +152,21 @@ LEEROY_TEST(RealmPolicy_FlaggedIsNarrowAndLocationAloneIsNotConsent)
     CHECK(Flagged(human)); // Online is a separate input to movement admission.
 }
 
-LEEROY_TEST(RealmPolicy_AnnounceNeedsMatchingObservedGuildKill)
+LEEROY_TEST(RealmPolicy_RaidModeMustAgreeWithNativeSizeAndHeroic)
 {
-    KillRing ring;
-    CHECK(!ring.Match(101, 500, 3, 1000));
-    auto kill = ObservedKill();
-    kill.guildKill = false;
-    ring.Add(kill);
-    CHECK(!ring.Match(101, 500, 3, 1000));
-    kill.guildKill = true;
-    ring.Add(kill);
-    CHECK(!ring.Match(102, 500, 3, 1000));
-    CHECK(!ring.Match(101, 501, 3, 1000));
-    CHECK(!ring.Match(101, 500, 4, 1000));
-    auto found = ring.Match(101, 500, 3, 1000);
-    CHECK(found.has_value());
-    if (found)
+    for (std::int32_t difficulty = 0; difficulty <= 3; ++difficulty)
     {
-        CHECK_EQ(found->size, 25u);
-        CHECK(found->heroic);
-        CHECK_EQ(found->atMs, 1000u);
+        auto const size = difficulty % 2 ? 25u : 10u;
+        auto const heroic = difficulty >= 2;
+        CHECK(ValidRaidMode(difficulty, size, heroic));
+        CHECK(!ValidRaidMode(difficulty, size == 10 ? 25 : 10, heroic));
+        CHECK(!ValidRaidMode(difficulty, size, !heroic));
     }
-}
-
-LEEROY_TEST(RealmPolicy_KillFreshnessIncludesBoundaryWithoutUnsignedUnderflow)
-{
-    KillRing ring;
-    ring.Add(ObservedKill(1000));
-    CHECK(ring.Match(101, 500, 3, 601000).has_value());
-    CHECK(!ring.Match(101, 500, 3, 601001));
-    CHECK(ring.Match(101, 500, 3, 1000, 0).has_value());
-    CHECK(!ring.Match(101, 500, 3, 1001, 0));
-    CHECK(!ring.Match(101, 500, 3, 999));
-    CHECK(!ring.Match(101, 500, 3, 0, std::numeric_limits<std::uint64_t>::max()));
-    KillRing nearLimit;
-    auto const maximum = std::numeric_limits<std::uint64_t>::max();
-    nearLimit.Add(ObservedKill(maximum - 5));
-    CHECK(nearLimit.Match(101, 500, 3, maximum, 5).has_value());
-    CHECK(!nearLimit.Match(101, 500, 3, maximum, 4));
-    CHECK(!nearLimit.Match(101, 500, 3, 3, maximum));
-}
-
-LEEROY_TEST(RealmPolicy_KillMatchUsesNewestEligibleObservation)
-{
-    KillRing ring;
-    auto newer = ObservedKill(2000);
-    newer.size = 10;
-    newer.heroic = false;
-    ring.Add(newer);
-    ring.Add(ObservedKill(1000)); // Out-of-order old receipt cannot replace newer facts.
-    ring.Add(ObservedKill(3001)); // Future receipt cannot mask a valid earlier one.
-    auto otherGuild = ObservedKill(3000);
-    otherGuild.guildKill = false;
-    ring.Add(otherGuild);
-    auto found = ring.Match(101, 500, 3, 3000);
-    CHECK(found.has_value());
-    if (found)
-    {
-        CHECK_EQ(found->atMs, 2000u);
-        CHECK_EQ(found->size, 10u);
-        CHECK(!found->heroic);
-    }
-}
-
-LEEROY_TEST(RealmPolicy_KillRingEvictsByInsertionAtFixedCapacity)
-{
-    KillRing ring;
-    for (std::uint32_t boss = 1; boss <= 32; ++boss)
-        ring.Add({101, 500, boss, boss, true, 10, false});
-    CHECK(ring.Match(101, 500, 1, 32).has_value());
-    ring.Add({101, 500, 33, 33, true, 10, false});
-    CHECK(!ring.Match(101, 500, 1, 33));
-    CHECK(ring.Match(101, 500, 2, 33).has_value());
-    for (std::uint32_t boss = 34; boss <= 96; ++boss)
-        ring.Add({101, 500, boss, boss, true, 10, false});
-    CHECK(!ring.Match(101, 500, 64, 96));
-    CHECK(ring.Match(101, 500, 65, 96).has_value());
-    CHECK(ring.Match(101, 500, 96, 96).has_value());
+    CHECK(ValidRaidMode(-1, 10, false));
+    CHECK(ValidRaidMode(-1, 25, true));
+    CHECK(!ValidRaidMode(-2, 10, false));
+    CHECK(!ValidRaidMode(4, 25, true));
+    for (auto size : {0u, 5u, 11u, 24u, 40u}) CHECK(!ValidRaidMode(-1, size, false));
 }
 
 LEEROY_TEST(RealmPolicy_TickBudgetCannotUnderflowAndResetsExactly)

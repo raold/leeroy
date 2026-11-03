@@ -121,9 +121,9 @@ public:
     bool RecordWeapons(std::uint32_t guid, std::string_view operation = {});
     void PublishJob(RealmJob const& job);
     bool RegisterPoll(std::string name, std::uint32_t intervalMs, std::function<void()> poll);
-    void RecordKill(Kill kill, std::uint64_t expectedEpoch); // Epoch-bound immutable facts, safe from map hooks.
-    std::optional<Kill> MatchKill(std::uint32_t map, std::uint32_t instance, std::uint32_t boss,
-                                  std::uint64_t nowMs) const;
+    void RecordKill(Kill kill); // Verified epoch-bound immutable observation, safe from map hooks.
+    // World thread: drains once, then matches only the exact current proof.
+    std::optional<Kill> MatchProof(AnnounceCmd const& request, std::uint64_t nowMs) const;
     void NotifyBodyChanged(std::uint32_t guid); // Login/logout invalidates queued identity.
     std::uint64_t BodyGeneration(std::uint32_t guid) const; // Read-only immediate-call life fence.
     GuardState* Guard(); // Same configured identity retains state across reload/off.

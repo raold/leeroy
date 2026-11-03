@@ -8,6 +8,8 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace Leeroy::Realm
@@ -52,16 +54,48 @@ struct HumanPvp
 bool Flagged(HumanPvp const& human);
 bool GankerMoveAllowed(HumanPvp const& human, std::uint32_t destZone);
 
-struct Kill
+struct KillIdentity
 {
+    std::uint64_t nativeEpoch = 0;
+    std::uint32_t guildId = 0, humanGuid = 0;
     std::uint32_t map = 0;
     std::uint32_t instanceId = 0;
     std::uint32_t bossId = 0;
-    std::uint64_t atMs = 0;
-    bool guildKill = false; // Observed kill by the configured guild, never simulated/canon progress.
+    std::int32_t difficulty = -1;
     std::uint32_t size = 0;
     bool heroic = false;
+    bool operator==(KillIdentity const&) const = default;
 };
+
+// Immutable map-thread observation, completed with id/publication time only by
+// the world-thread inbox drain. Unix and steady timestamps are never converted.
+struct Kill : KillIdentity
+{
+    std::string killId;
+    std::uint64_t atMs = 0, verifiedMs = 0; // Independent steady clock.
+    std::uint64_t killedAtMs = 0, verifiedAtMs = 0, publishedAtMs = 0; // Unix ms.
+    bool humanPresent = false;
+    std::vector<std::uint32_t> castMembers; // Sorted, unique, present native cast only.
+    bool operator==(Kill const&) const = default;
+};
+
+inline constexpr std::size_t kMaxKillPlayers = 128;
+inline constexpr std::uint64_t kKillVerifyWithinMs = 5000;
+bool ValidKillId(std::string_view id);
+bool ValidRaidMode(std::int32_t difficulty, std::uint32_t size, bool heroic);
+bool ValidKillObservation(Kill const& kill);
+bool ValidKillProof(Kill const& kill);
+
+struct PresentKillPlayer { std::uint32_t guid = 0, guildId = 0; };
+struct KillParticipants
+{
+    bool humanPresent = false;
+    std::vector<std::uint32_t> castMembers;
+};
+// Caller must supply the COMPLETE map-player scan. Overflow/duplicate/unknown
+// player identity refuses the whole observation, including a human-only kill.
+std::optional<KillParticipants> QualifyKillParticipants(std::vector<PresentKillPlayer> const& present,
+    std::unordered_set<std::uint32_t> const& capturedCast, std::uint32_t guild, std::uint32_t human);
 
 class KillRing
 {
@@ -69,9 +103,10 @@ public:
     static constexpr std::size_t Capacity = 32;
 
     // The world-thread adapter supplies actual observed encounter kills.
-    void Add(Kill kill);
-    std::optional<Kill> Match(std::uint32_t map, std::uint32_t instanceId, std::uint32_t bossId,
-                             std::uint64_t nowMs, std::uint64_t windowMs = 600000) const;
+    bool Add(Kill kill);
+    // There is intentionally no tuple-based lookup or current-mode default.
+    std::optional<Kill> MatchProof(std::string_view killId, KillIdentity const& expected,
+        std::uint64_t nowMs, std::uint64_t windowMs = 600000) const;
 
 private:
     std::array<Kill, Capacity> _kills{};

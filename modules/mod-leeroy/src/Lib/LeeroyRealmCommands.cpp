@@ -82,14 +82,22 @@ public:
         Require(valid, "dungeon_id");
         if (!Failed()) out = v->get<std::int32_t>();
     }
-    void Boolean(char const* key, bool& out)
+    void Difficulty(std::int32_t& out)
     {
         if (Failed()) return;
-        if (auto v = Find(key))
-        {
-            Require(v->is_boolean(), key);
-            if (!Failed()) out = v->get<bool>();
-        }
+        auto v = Find("difficulty");
+        bool const valid = v && (v->is_number_unsigned() ? v->get<std::uint64_t>() <= 3
+            : v->is_number_integer() && v->get<std::int64_t>() >= -1 && v->get<std::int64_t>() <= 3);
+        Require(valid, "difficulty");
+        if (!Failed()) out = v->get<std::int32_t>();
+    }
+    void Boolean(char const* key, bool& out, bool optional = true)
+    {
+        if (Failed()) return;
+        auto v = Find(key);
+        if (!v && optional) return;
+        Require(v && v->is_boolean(), key);
+        if (!Failed()) out = v->get<bool>();
     }
     void String(char const* key, std::string& out, std::size_t low, std::size_t high, bool optional = false)
     {
@@ -356,10 +364,36 @@ std::optional<GuildNoteCmd> ParseGuildNote(json const& j, std::string& error)
 }
 std::optional<AnnounceCmd> ParseAnnounce(json const& j, std::string& error)
 {
-    Fields f(j, error); AnnounceCmd out; f.Number("map", out.map, 0); f.Number("instance_id", out.instanceId);
-    f.Number("boss_id", out.bossId, 0); f.String("boss_name", out.bossName, 1, 48);
-    f.Number("attempts", out.attempts, 0, 99, true); f.Number("fight_s", out.fightS, 0, 3600, true);
-    f.Enum("first", out.first, kFirst); return f.Result(std::move(out));
+    Fields f(j, error); AnnounceCmd out;
+    f.String("id", out.id, 1, 128);
+    f.String("kill_id", out.killId, 34, 53); f.Require(ValidKillId(out.killId), "kill_id");
+    f.Number("native_epoch", out.nativeEpoch, 1, kU64Max);
+    f.Number("guild_id", out.guildId); f.Number("human_guid", out.humanGuid);
+    f.Number("map", out.map, 0); f.Number("instance_id", out.instanceId);
+    f.Number("boss_id", out.bossId, 0);
+    f.Difficulty(out.difficulty); f.Number("size", out.size, 10, 25);
+    f.Require(out.size == 10 || out.size == 25, "size");
+    f.Boolean("heroic", out.heroic, false);
+    f.Require(ValidRaidMode(out.difficulty, out.size, out.heroic), "heroic");
+    f.String("boss_name", out.bossName, 1, 48);
+    f.Number("attempts", out.attempts, 0, 99); f.Number("fight_s", out.fightS, 0, 3600);
+    f.Enum("first", out.first, kFirst);
+    // Announce's complete frozen schema includes its ordinary v1 envelope.
+    auto const version = f.Find("v");
+    f.Require(version && version->is_number_integer() && *version == 1, "v");
+    auto const type = f.Find("type");
+    f.Require(type && type->is_string() && *type == "announce", "type");
+    std::uint64_t timestamp = 0;
+    f.Number("ts", timestamp, 0, kMaxTimestamp);
+    constexpr std::array<std::string_view, 18> keys = {"v", "type", "ts", "id", "kill_id", "native_epoch",
+        "guild_id", "human_guid", "map", "instance_id", "boss_id", "difficulty", "size", "heroic",
+        "boss_name", "attempts", "fight_s", "first"};
+    if (j.is_object()) for (auto const& [key, value] : j.items())
+    {
+        (void)value;
+        f.Require(Contains(keys, key), key.c_str());
+    }
+    return f.Result(std::move(out));
 }
 
 namespace
@@ -453,6 +487,15 @@ std::optional<std::vector<ItemRule>> ParseItems(std::string_view csv, std::strin
         if (!CsvInteger(fields[2], out.maxCount, 1, kMaxItemCount)) { why = "invalid max_count"; return false; }
         return true;
     });
+}
+
+json MakeRealmKill(Kill const& e)
+{
+    return {{"type", "realm_kill"}, {"kill_id", e.killId}, {"native_epoch", e.nativeEpoch},
+        {"guild_id", e.guildId}, {"human_guid", e.humanGuid}, {"killed_at_ms", e.killedAtMs},
+        {"verified_at_ms", e.verifiedAtMs}, {"map", e.map}, {"instance_id", e.instanceId},
+        {"boss_id", e.bossId}, {"difficulty", e.difficulty}, {"size", e.size}, {"heroic", e.heroic},
+        {"human_present", e.humanPresent}, {"cast_members", e.castMembers}};
 }
 
 json MakeRealmJob(RealmJob const& e)
