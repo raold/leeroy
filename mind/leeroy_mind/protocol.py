@@ -2,6 +2,7 @@
 
 import dataclasses
 import json
+import math
 import typing
 import unicodedata
 from dataclasses import dataclass
@@ -337,6 +338,16 @@ def _convert(value, hint, where: str):
         if type(value) is not hint:
             raise ProtocolError(f"field {where}: expected {hint.__name__}")
         return value
+    if hint is float:
+        if type(value) not in (int, float):
+            raise ProtocolError(f"field {where}: expected finite number")
+        try:
+            number = float(value)
+        except OverflowError:
+            raise ProtocolError(f"field {where}: expected finite number") from None
+        if not math.isfinite(number):
+            raise ProtocolError(f"field {where}: expected finite number")
+        return number
     if typing.get_origin(hint) is tuple:
         item_hint = typing.get_args(hint)[0]
         if type(value) is not list:
@@ -410,7 +421,8 @@ def sanitize_say_text(text: str) -> str:
 
 def _jsonable(value):
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        return {_key(f.name): _jsonable(getattr(value, f.name)) for f in dataclasses.fields(value)}
+        return {_key(f.name): _jsonable(getattr(value, f.name)) for f in dataclasses.fields(value)
+                if not (f.metadata.get("omit_none") is True and getattr(value, f.name) is None)}
     if isinstance(value, (tuple, list)):
         return [_jsonable(v) for v in value]
     return value

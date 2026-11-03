@@ -1,10 +1,12 @@
-"""Bounded native Realm owner receipts. Registration is explicit and default off.
+"""Additive Realm messages for bridge v1. Registration is explicit and default off.
 
 These snapshots are observations, never Python authority to release a body.
 Cleanup must return through the original native token and complete manifest.
+Game handlers validate command fields, except the native owner and action-shape
+checks needed to preserve their wire contracts here.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import re
 
 from leeroy_mind.protocol import register_command, register_event
@@ -29,6 +31,47 @@ def _manifest(members: tuple[int, ...]) -> bool:
 
 
 @dataclass(frozen=True, slots=True)
+class RealmActors:
+    id: str
+    guids: tuple[int, ...]
+    gankers: tuple[int, ...] = ()
+    guilds: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class RealmSay:
+    id: str
+    guid: int
+    channel: str
+    text: str
+    to_guid: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class RealmEmote:
+    id: str
+    guid: int
+    emote: str
+    target_guid: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class RealmMove:
+    id: str
+    guid: int
+    place: str
+    slot: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class RpgStatus:
+    id: str
+    guid: int
+    status: str
+    quest_id: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class LeavePvp:
     id: str
     guids: tuple[int, ...]
@@ -38,6 +81,233 @@ class LeavePvp:
         if (not _id(self.id) or not _manifest(self.guids)
                 or (self.pvp_owner != "" and not _token(self.pvp_owner))):
             raise ValueError("invalid Realm cleanup request")
+
+
+@dataclass(frozen=True, slots=True)
+class Rearm:
+    id: str
+    guids: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class WgJoin:
+    id: str
+    guids: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ArenaTeam:
+    id: str
+    action: str
+    # Native parsing requires unused action fields to be absent, including zero
+    # and empty strings. Only these explicitly marked None values are omitted.
+    captain_guid: int | None = field(default=None, metadata={"omit_none": True})
+    arena_type: int | None = field(default=None, metadata={"omit_none": True})
+    name: str | None = field(default=None, metadata={"omit_none": True})
+    team_id: int | None = field(default=None, metadata={"omit_none": True})
+    guid: int | None = field(default=None, metadata={"omit_none": True})
+
+    def __post_init__(self):
+        if self.action == "create":
+            valid = (_uint(self.captain_guid) and type(self.arena_type) is int
+                     and self.arena_type in {2, 3, 5} and type(self.name) is str
+                     and 1 <= len(self.name.encode("utf-8")) <= 24 and "\0" not in self.name
+                     and self.team_id is None and self.guid is None)
+        elif self.action in {"add", "drop"}:
+            valid = (_uint(self.team_id) and _uint(self.guid) and self.captain_guid is None
+                     and self.arena_type is None and self.name is None)
+        else:
+            valid = False
+        if not valid:
+            raise ValueError("invalid Arena team action fields")
+
+
+@dataclass(frozen=True, slots=True)
+class ArenaQueue:
+    id: str
+    team_id: int
+    captain_guid: int
+
+
+@dataclass(frozen=True, slots=True)
+class Duel:
+    id: str
+    guid: int
+    target_guid: int
+
+
+@dataclass(frozen=True, slots=True)
+class Craft:
+    id: str
+    guid: int
+    spell_id: int
+    count: int = 1
+
+
+@dataclass(frozen=True, slots=True)
+class ItemCount:
+    id: str
+    guid: int
+    item_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class Equip:
+    id: str
+    guid: int
+    item_id: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetProfession:
+    id: str
+    guid: int
+    skill_id: int
+
+
+@dataclass(frozen=True, slots=True)
+class TransmogSet:
+    id: str
+    guid: int
+    slot: int
+    entry: int
+
+
+@dataclass(frozen=True, slots=True)
+class CalendarPost:
+    id: str
+    creator_guid: int
+    title: str
+    description: str = field(default="", kw_only=True)
+    event_type: str
+    at: int
+    dungeon_id: int = -1
+    guild_event: bool = True
+    invite_human: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class CalendarSignup:
+    id: str
+    event_id: int
+    guid: int
+    status: str
+
+
+@dataclass(frozen=True, slots=True)
+class CalendarUpdate:
+    id: str
+    event_id: int
+    title: str = ""
+    description: str = ""
+    at: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class MailItem:
+    item_id: int
+    count: int
+    from_: str
+
+
+@dataclass(frozen=True, slots=True)
+class MailSend:
+    id: str
+    from_guid: int
+    subject: str
+    body: str = ""
+    items: tuple[MailItem, ...] = ()
+    money: int = 0
+    delay_s: int = 600
+
+
+@dataclass(frozen=True, slots=True)
+class BankTabBuy:
+    id: str
+    officer_guid: int
+    tab: int
+    name: str
+    icon: str
+
+
+@dataclass(frozen=True, slots=True)
+class BankMoney:
+    id: str
+    amount: int
+
+
+@dataclass(frozen=True, slots=True)
+class BankDeposit:
+    id: str
+    guid: int
+    item_id: int
+    count: int
+    tab: int
+
+
+@dataclass(frozen=True, slots=True)
+class BankWithdraw:
+    id: str
+    guid: int
+    item_id: int
+    count: int
+    tab: int
+
+
+@dataclass(frozen=True, slots=True)
+class BankStock:
+    id: str
+    officer_guid: int
+    tab: int
+    item_id: int
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
+class GrantAchievement:
+    id: str
+    guid: int
+    achievement_id: int
+
+
+@dataclass(frozen=True, slots=True)
+class GuildRename:
+    id: str
+    guild_id: int
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
+class GuildGrow:
+    id: str
+    guild_id: int
+    guids: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class GuildAdmit:
+    id: str
+    guid: int
+    rank: int = 4
+
+
+@dataclass(frozen=True, slots=True)
+class GuildNote:
+    id: str
+    guid: int
+    officer_note: str
+
+
+@dataclass(frozen=True, slots=True)
+class Announce:
+    id: str
+    map: int
+    instance_id: int
+    boss_id: int
+    boss_name: str
+    attempts: int = field(default=0, kw_only=True)
+    fight_s: int = field(default=0, kw_only=True)
+    first: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +321,121 @@ class GetRealmPvp:
                 or (self.pvp_owner != "" and not _token(self.pvp_owner))
                 or bool(self.pvp_owner) == bool(self.origin_id)):
             raise ValueError("exactly one native owner selector is required")
+
+
+@dataclass(frozen=True, slots=True)
+class RealmJob:
+    ts: int
+    id: str
+    kind: str
+    state: str
+    reason: str
+    guid: int
+    value: int
+    pvp_owner: str = ""
+
+    def __post_init__(self):
+        if (type(self.ts) is not int or not 0 <= self.ts <= 0x7FFFFFFFFFFFFFFF
+                or not _id(self.id) or type(self.kind) is not str or not 1 <= len(self.kind) <= 64
+                or self.state not in {"done", "failed"} or type(self.reason) is not str
+                or type(self.guid) is not int or not 0 <= self.guid <= 0xFFFFFFFF
+                or type(self.value) is not int or not 0 <= self.value <= 0xFFFFFFFFFFFFFFFF
+                or (self.pvp_owner != "" and not _token(self.pvp_owner))):
+            raise ValueError("invalid Realm job receipt")
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelChat:
+    ts: int
+    channel: str
+    from_guid: int
+    from_name: str
+    zone: int
+    text: str
+    via_bridge: bool
+
+
+@dataclass(frozen=True, slots=True)
+class PvpKill:
+    ts: int
+    killer: int
+    victim: int
+    map: int
+    zone: int
+
+
+@dataclass(frozen=True, slots=True)
+class DuelEnd:
+    ts: int
+    winner: int
+    loser: int
+    result: str
+
+
+@dataclass(frozen=True, slots=True)
+class PvpFlag:
+    ts: int
+    guid: int
+    flagged: bool
+
+
+@dataclass(frozen=True, slots=True)
+class Wg:
+    ts: int
+    state: str
+    defender: str
+    seconds: int
+    update_ms: float
+
+
+@dataclass(frozen=True, slots=True)
+class ArenaQueueEvent:
+    ts: int
+    team_id: int
+    arena_type: int
+    rated: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ArenaEnd:
+    ts: int
+    arena_type: int
+    winner_team: int
+    loser_team: int
+    winner_change: int
+    loser_change: int
+    members: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class GameEvent:
+    ts: int
+    event_id: int
+    state: str
+
+
+@dataclass(frozen=True, slots=True)
+class CalendarRsvp:
+    ts: int
+    event_id: int
+    status: str
+
+
+@dataclass(frozen=True, slots=True)
+class MailTaken:
+    ts: int
+    item_guid: int
+    item_id: int
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
+class Guard:
+    ts: int
+    guid: int
+    action: str
+    rank: int
+    reason: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,29 +473,61 @@ class RealmPvp:
             raise ValueError("invalid native Realm owner receipt")
 
 
-@dataclass(frozen=True, slots=True)
-class RealmJob:
-    ts: int
-    id: str
-    kind: str
-    state: str
-    reason: str
-    guid: int
-    value: int
-    pvp_owner: str = ""
-
-    def __post_init__(self):
-        if (type(self.ts) is not int or not 0 <= self.ts <= 0x7FFFFFFFFFFFFFFF
-                or not _id(self.id) or type(self.kind) is not str or not 1 <= len(self.kind) <= 64
-                or self.state not in {"done", "failed"} or type(self.reason) is not str
-                or type(self.guid) is not int or not 0 <= self.guid <= 0xFFFFFFFF
-                or type(self.value) is not int or not 0 <= self.value <= 0xFFFFFFFFFFFFFFFF
-                or (self.pvp_owner != "" and not _token(self.pvp_owner))):
-            raise ValueError("invalid Realm job receipt")
+COMMANDS: dict[str, type] = {
+    "realm_actors": RealmActors,
+    "realm_say": RealmSay,
+    "realm_emote": RealmEmote,
+    "realm_move": RealmMove,
+    "rpg_status": RpgStatus,
+    "leave_pvp": LeavePvp,
+    "rearm": Rearm,
+    "wg_join": WgJoin,
+    "arena_team": ArenaTeam,
+    "arena_queue": ArenaQueue,
+    "duel": Duel,
+    "craft": Craft,
+    "item_count": ItemCount,
+    "equip": Equip,
+    "set_profession": SetProfession,
+    "transmog_set": TransmogSet,
+    "calendar_post": CalendarPost,
+    "calendar_signup": CalendarSignup,
+    "calendar_update": CalendarUpdate,
+    "mail_send": MailSend,
+    "bank_tab_buy": BankTabBuy,
+    "bank_money": BankMoney,
+    "bank_deposit": BankDeposit,
+    "bank_withdraw": BankWithdraw,
+    "bank_stock": BankStock,
+    "grant_achievement": GrantAchievement,
+    "guild_rename": GuildRename,
+    "guild_grow": GuildGrow,
+    "guild_admit": GuildAdmit,
+    "guild_note": GuildNote,
+    "announce": Announce,
+    "get_realm_pvp": GetRealmPvp,
+}
+EVENTS: dict[str, type] = {
+    "realm_job": RealmJob,
+    "channel_chat": ChannelChat,
+    "pvp_kill": PvpKill,
+    "duel_end": DuelEnd,
+    "pvp_flag": PvpFlag,
+    "wg": Wg,
+    "arena_queue": ArenaQueueEvent,
+    "arena_end": ArenaEnd,
+    "game_event": GameEvent,
+    "calendar_rsvp": CalendarRsvp,
+    "mail_taken": MailTaken,
+    "guard": Guard,
+    "realm_pvp": RealmPvp,
+}
+NOISY = frozenset({"realm_job", "channel_chat", "game_event"})
 
 
 def register() -> None:
-    register_command("leave_pvp", LeavePvp)
-    register_command("get_realm_pvp", GetRealmPvp)
-    register_event("realm_pvp", RealmPvp)
-    register_event("realm_job", RealmJob)
+    """Register all Realm types without enabling game hooks; safe to repeat."""
+    for name, cls in COMMANDS.items():
+        register_command(name, cls)
+    for name, cls in EVENTS.items():
+        register_event(name, cls)
