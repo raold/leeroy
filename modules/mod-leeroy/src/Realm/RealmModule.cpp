@@ -1,0 +1,573 @@
+// This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
+#include "RealmModule.h"
+#include "RealmOwnership.h"
+#include "RealmPorts.h"
+#include "Log.h"
+#include <algorithm>
+#include <atomic>
+#include <fstream>
+#include <map>
+#include <mutex>
+#include <set>
+
+namespace Leeroy::Realm
+{
+namespace
+{
+BodyScope Scope(BodyIdentity const& body) { return {body.map, body.instance, body.group}; }
+bool SameLife(BodyIdentity first, BodyIdentity second)
+{
+    first.map = second.map = first.instance = second.instance = 0;
+    first.group = second.group = 0;
+    return first == second;
+}
+std::optional<std::string> ReadFile(std::string const& path)
+{
+    std::ifstream stream(path, std::ios::binary | std::ios::ate);
+    if (!stream)
+        return std::nullopt;
+    auto const size = stream.tellg();
+    if (size < 0 || size > static_cast<std::streamoff>(kMaxCsvBytes))
+        return std::nullopt;
+    std::string text(static_cast<std::size_t>(size), '\0');
+    stream.seekg(0);
+    if (!text.empty() && !stream.read(text.data(), static_cast<std::streamsize>(text.size())))
+        return std::nullopt;
+    return text;
+}
+bool Due(std::uint32_t& remaining, std::uint32_t diff, std::uint32_t interval)
+{
+    if (diff < remaining)
+    {
+        remaining -= diff;
+        return false;
+    }
+    remaining = interval;
+    return true;
+}
+}
+
+struct RealmModule::State
+{
+    struct Lease { BodyIdentity body; std::uint64_t generation = 0; };
+    struct Reservation
+    {
+        std::uint64_t epoch = 0;
+        std::map<std::uint32_t, Lease> bodies;
+        std::map<std::uint32_t, std::vector<BodyScope>> pending;
+        bool retained = false;
+        std::uint64_t value = 0;
+    };
+    struct Poll { std::uint32_t interval, remaining = 0; std::function<void()> fn; };
+    struct Handler { Executor execute; Admission admit; };
+    std::atomic<bool> on{false};
+    std::atomic<std::uint64_t> epoch{1};
+    std::uint32_t guild = 0, human = 0;
+    bool disablePending = false;
+    bool started = false;
+    ActionQueue queue;
+    std::map<std::string, Handler, std::less<>> executors;
+    std::map<std::string, Reservation, std::less<>> reservations;
+    std::map<std::uint32_t, std::string> holders;
+    std::unordered_set<std::uint32_t> actors, gankers, guilds;
+    std::vector<Place> places;
+    std::vector<ItemRule> items;
+    std::map<std::uint32_t, WeaponRecord> weapons;
+    std::map<std::pair<std::uint32_t, std::uint32_t>, std::unique_ptr<GuardState>> guards;
+    std::map<std::string, Poll> polls;
+    std::optional<bool> humanFlag;
+    std::uint32_t flagRemaining = 0, weaponsRemaining = 0, pinRemaining = 0;
+    mutable std::mutex factsMutex;
+    std::map<std::uint32_t, std::uint64_t> generations;
+    std::vector<std::pair<std::uint64_t, Kill>> killInbox;
+    KillRing kills;
+    TickBudget* activeBudget = nullptr;
+    Queued const* activeEntry = nullptr;
+    std::string activeOperation;
+    std::set<std::uint32_t> chargedBodies;
+
+    std::uint64_t Generation(std::uint32_t guid) const
+    {
+        std::lock_guard lock(factsMutex);
+        auto it = generations.find(guid);
+        return it == generations.end() ? 0 : it->second;
+    }
+    void DrainKills()
+    {
+        std::lock_guard lock(factsMutex);
+        for (auto const& [generation, kill] : killInbox)
+            if (on.load() && generation == epoch.load())
+                kills.Add(kill);
+        killInbox.clear();
+    }
+    void ApplyPins()
+    {
+        auto wanted = on.load() ? actors : std::unordered_set<std::uint32_t>{};
+        for (auto const& [guid, owner] : holders)
+        {
+            (void)owner;
+            wanted.insert(guid);
+        }
+        // A Realm-only disable/removal cannot unpin an outstanding foreign
+        // operation that still needs a previously contributed body.
+        for (auto guid : Pins().Owned("realm"))
+            if (!NativeOwnershipReason(guid).empty())
+                wanted.insert(guid);
+        if (wanted != Pins().Owned("realm")) SetRealmPins(wanted);
+    }
+    void Release(std::string const& id)
+    {
+        auto it = reservations.find(id);
+        if (it == reservations.end())
+            return;
+        for (auto const& [guid, lease] : it->second.bodies)
+        {
+            (void)lease;
+            auto holder = holders.find(guid);
+            if (holder != holders.end() && holder->second == id)
+                holders.erase(holder);
+        }
+        reservations.erase(it);
+    }
+};
+
+RealmModule& RealmModule::Instance() { static RealmModule module; return module; }
+RealmModule::RealmModule() : _state(std::make_unique<State>()) { }
+RealmModule::~RealmModule() = default;
+bool RealmModule::On() const { return _state->on.load(); }
+std::uint64_t RealmModule::Epoch() const { return _state->epoch.load(); }
+
+void RealmModule::Start()
+{
+    _state->started = true;
+    Reload();
+}
+
+void RealmModule::Reload()
+{
+    auto const& cfg = Config();
+    bool const enabled = cfg.enable && cfg.realmEnable && cfg.guildId && cfg.humanGuid;
+    bool const changed = On() != enabled || _state->guild != cfg.guildId || _state->human != cfg.humanGuid;
+    if (changed)
+    {
+        std::lock_guard lock(_state->factsMutex);
+        _state->disablePending = true;
+        _state->on = enabled;
+        ++_state->epoch;
+        _state->killInbox.clear();
+        _state->kills = {};
+        _state->humanFlag.reset();
+    }
+    _state->guild = cfg.guildId;
+    _state->human = cfg.humanGuid;
+    if (cfg.guildId && cfg.humanGuid)
+    {
+        auto key = std::pair{cfg.guildId, cfg.humanGuid};
+        if (!_state->guards.contains(key))
+            _state->guards.emplace(key, std::make_unique<GuardState>(cfg.guildId, cfg.humanGuid));
+    }
+    std::string error;
+    // Initial config hooks precede DBC/maps. Native place checks belong to
+    // world startup and later world-thread reloads, before any admission.
+    auto placesText = _state->started ? ReadFile(cfg.realmPlacesFile) : std::nullopt;
+    auto places = placesText ? ParsePlaces(*placesText, error) : std::nullopt;
+    _state->places.clear();
+    if (places)
+        for (auto& place : *places)
+            if (ValidPlace(place)) _state->places.push_back(std::move(place));
+            else LOG_ERROR("module.leeroy", "mod-leeroy: realm place {} rejected: map/coordinates/zone mismatch", place.name);
+    error.clear();
+    auto itemsText = ReadFile(cfg.realmItemsFile);
+    auto items = itemsText ? ParseItems(*itemsText, error) : std::nullopt;
+    _state->items = items ? std::move(*items) : std::vector<ItemRule>{};
+    ReconcileConfiguration(); // Cancels the old epoch; never runs a queued action on reload.
+    LOG_INFO("module.leeroy", "mod-leeroy: realm {}, cast guard {}, places {}, items {}, max actions/tick {}",
+        enabled ? "on" : "off", cfg.castGuard && cfg.enable ? "on" : "off", _state->places.size(),
+        _state->items.size(), cfg.realmMaxActionsPerTick);
+}
+
+bool RealmModule::RegisterExecutor(std::string kind, Executor executor, Admission admission)
+{
+    if (!admission)
+        admission = [](Queued const&, std::uint32_t guid)
+        { return IsCast(guid) || RealmModule::Instance().IsActor(guid) ? "" : "not_actor"; };
+    return IsQueued(kind) && executor
+        && _state->executors.emplace(std::move(kind), State::Handler{std::move(executor), std::move(admission)}).second;
+}
+
+std::string RealmModule::Holder(std::uint32_t guid) const
+{
+    auto it = _state->holders.find(guid);
+    return it == _state->holders.end() ? "" : it->second;
+}
+
+std::string RealmModule::MutationReason(std::uint32_t guid, std::string_view operation) const
+{
+    auto owner = Holder(guid);
+    if (!owner.empty() && owner != operation)
+        return "busy:realm_owner";
+    if (!operation.empty())
+    {
+        if (auto reason = ValidateOwnedBody(guid, operation); !reason.empty())
+            return reason;
+    }
+    auto reason = NativeMutationReason(guid);
+    if (reason == "busy:body_unavailable" && !operation.empty())
+    {
+        auto const& reservation = _state->reservations.at(std::string(operation));
+        auto const& lease = reservation.bodies.at(guid);
+        auto current = Identity(guid, true);
+        if (reservation.pending.contains(guid) && current && SameLife(*current, lease.body)
+            && _state->Generation(guid) == lease.generation)
+            return ""; // Only exact pending worldport; scope is checked by the queue before the callback.
+    }
+    return reason;
+}
+
+std::string RealmModule::ValidateOwnedBody(std::uint32_t guid, std::string_view operation) const
+{
+    auto it = _state->reservations.find(operation);
+    if (operation.empty() || it == _state->reservations.end() || Holder(guid) != operation
+        || it->second.retained || it->second.epoch != Epoch())
+        return "busy:operation_identity";
+    auto lease = it->second.bodies.find(guid);
+    if (lease == it->second.bodies.end()) return "busy:operation_identity";
+    auto pending = it->second.pending.find(guid);
+    auto current = Identity(guid, pending != it->second.pending.end());
+    if (!current || !SameLife(*current, lease->second.body)
+        || _state->Generation(guid) != lease->second.generation)
+        return "busy:body_identity_changed";
+    if (Scope(*current) != Scope(lease->second.body) && (pending == it->second.pending.end()
+        || std::find(pending->second.begin(), pending->second.end(), Scope(*current)) == pending->second.end()))
+        return "busy:body_scope_changed";
+    return "";
+}
+
+bool RealmOwns(std::uint32_t guid) { return !RealmModule::Instance().Holder(guid).empty(); }
+
+std::string RealmModule::ChargeAffectedBodies(std::string_view operation,
+    std::vector<std::uint32_t> const& guids)
+{
+    if (!_state->activeBudget || !_state->activeEntry || operation.empty()
+        || operation != _state->activeOperation || guids.empty())
+        return "busy:operation_identity";
+    std::set<std::uint32_t> unique(guids.begin(), guids.end());
+    if (unique.size() != guids.size() || unique.contains(0)) return "bad field: affected_bodies";
+    std::size_t extra = 0;
+    for (auto guid : unique)
+    {
+        if (auto reason = MutationReason(guid, operation); !reason.empty()) return reason;
+        auto handler = _state->executors.find(_state->activeEntry->kind);
+        if (handler == _state->executors.end()) return "unsupported";
+        if (auto reason = handler->second.admit(*_state->activeEntry, guid); !reason.empty()) return reason;
+        if (!_state->chargedBodies.contains(guid)) ++extra;
+    }
+    if (_state->chargedBodies.size() + extra > Config().realmMaxActionsPerTick)
+        return "action_cost_exceeds_cap";
+    if (extra > _state->activeBudget->Left()) return "busy:tick_budget";
+    for (std::size_t i = 0; i < extra; ++i) _state->activeBudget->Take();
+    _state->chargedBodies.insert(unique.begin(), unique.end());
+    return "";
+}
+
+bool RealmModule::Accept(Queued entry, std::string& error)
+{
+    if (!On()) { error = "realm_off"; return false; }
+    if (!_state->started) { error = "realm_not_started"; return false; }
+    if (!_state->executors.contains(entry.kind)) { error = "unsupported"; return false; }
+    // Unknown/pending work can leave the runnable queue while its exact lease
+    // remains retained. Bound all outstanding reservations, not only runnable
+    // entries, so repeated unknown outcomes cannot grow native ownership forever.
+    if (_state->queue.Size() >= ActionQueue::Capacity || _state->reservations.size() >= ActionQueue::Capacity)
+    { error = "busy:queue_full"; return false; }
+    if (_state->reservations.contains(entry.id)) { error = "busy:duplicate_operation"; return false; }
+    State::Reservation reservation;
+    reservation.epoch = Epoch();
+    for (auto guid : entry.guids)
+    {
+        if (!(error = _state->executors.at(entry.kind).admit(entry, guid)).empty())
+            return false;
+        if (!(error = MutationReason(guid)).empty())
+            return false;
+        auto body = Identity(guid);
+        if (!body) { error = "busy:body_identity"; return false; }
+        reservation.bodies.emplace(guid, State::Lease{*body, _state->Generation(guid)});
+    }
+    auto const id = entry.id;
+    // No yield splits admission, reservation and deferred queue insertion.
+    for (auto const& [guid, lease] : reservation.bodies)
+    {
+        (void)lease;
+        _state->holders.emplace(guid, id);
+    }
+    _state->reservations.emplace(id, std::move(reservation));
+    _state->ApplyPins();
+    if (std::any_of(entry.guids.begin(), entry.guids.end(), [](auto guid) { return !IsPinned(guid); }))
+    {
+        _state->Release(id);
+        _state->ApplyPins();
+        error = "pin_rejected";
+        return false;
+    }
+    if (!_state->queue.Push(std::move(entry)))
+    {
+        _state->Release(id);
+        _state->ApplyPins();
+        error = "bad field: queued_operation";
+        return false;
+    }
+    return true;
+}
+
+bool RealmModule::SetActors(ActorsCmd const& command, std::string& error)
+{
+    if (!On()) { error = "realm_off"; return false; }
+    std::unordered_set<std::uint32_t> actors(command.guids.begin(), command.guids.end());
+    if (actors.size() != command.guids.size() || actors.size() > 16 || command.guilds.size() > 3)
+    { error = "bad field: actors"; return false; }
+    for (auto guid : actors)
+    {
+        if (!guid || guid == HumanGuid() || IsCast(guid) || IsConfiguredGuildMember(guid))
+        { error = "cast"; return false; }
+        if (!IsOnRandomBotAccount(guid)) { error = "not_bot"; return false; }
+        if (!_state->actors.contains(guid) && !(error = MutationReason(guid)).empty())
+            return false;
+    }
+    for (auto guid : command.gankers)
+        if (!actors.contains(guid)) { error = "bad field: gankers"; return false; }
+    for (auto guild : command.guilds)
+        if (!guild || guild == GuildId() || IsRealGuild(guild)) { error = "real_guild"; return false; }
+    auto oldActors = _state->actors;
+    _state->actors = actors;
+    _state->ApplyPins();
+    if (std::any_of(actors.begin(), actors.end(), [](auto guid) { return !IsPinned(guid); }))
+    {
+        _state->actors = std::move(oldActors);
+        _state->ApplyPins();
+        error = "pin_rejected";
+        return false;
+    }
+    _state->gankers = {command.gankers.begin(), command.gankers.end()};
+    _state->guilds = {command.guilds.begin(), command.guilds.end()};
+    LOG_INFO("module.leeroy", "mod-leeroy: realm actors {}, individually pinned {}", actors.size(), actors.size());
+    return true;
+}
+
+bool RealmModule::IsActor(std::uint32_t guid) const
+{
+    return _state->actors.contains(guid) && !IsConfiguredGuildMember(guid);
+}
+bool RealmModule::Watched(std::uint32_t guid) const { return guid == HumanGuid() || IsCast(guid) || Pins().Watched(guid); }
+std::unordered_set<std::uint32_t> const& RealmModule::Gankers() const { return _state->gankers; }
+std::unordered_set<std::uint32_t> const& RealmModule::RealmGuilds() const { return _state->guilds; }
+std::vector<Place> const& RealmModule::Places() const { return _state->places; }
+std::vector<ItemRule> const& RealmModule::Items() const { return _state->items; }
+WeaponRecord const* RealmModule::Weapons(std::uint32_t guid) const
+{
+    auto it = _state->weapons.find(guid);
+    return it == _state->weapons.end() ? nullptr : &it->second;
+}
+bool RealmModule::RecordWeapons(std::uint32_t guid, std::string_view operation)
+{
+    if (!MutationReason(guid, operation).empty() || (!IsCast(guid) && !IsActor(guid)))
+        return false;
+    auto now = ReadWeapons(FindOnline(guid));
+    if (!ShouldRecord(now))
+        return false;
+    _state->weapons[guid] = {now.mainHand, now.offHand, now.ranged};
+    return true;
+}
+GuardState* RealmModule::Guard()
+{
+    auto it = _state->guards.find({_state->guild, _state->human});
+    return it == _state->guards.end() ? nullptr : it->second.get();
+}
+void RealmModule::PublishJob(RealmJob const& job) { Publish(MakeRealmJob(job)); }
+bool RealmModule::RegisterPoll(std::string name, std::uint32_t intervalMs, std::function<void()> poll)
+{
+    return !name.empty() && intervalMs && poll && _state->polls.size() < 16
+        && _state->polls.emplace(std::move(name), State::Poll{intervalMs, 0, std::move(poll)}).second;
+}
+void RealmModule::RecordKill(Kill kill, std::uint64_t expectedEpoch)
+{
+    std::lock_guard lock(_state->factsMutex);
+    if (On() && Epoch() == expectedEpoch && kill.guildKill && _state->killInbox.size() < 128)
+        _state->killInbox.emplace_back(expectedEpoch, kill);
+}
+std::optional<Kill> RealmModule::MatchKill(std::uint32_t map, std::uint32_t instance, std::uint32_t boss,
+                                        std::uint64_t nowMs) const
+{
+    _state->DrainKills();
+    return On() ? _state->kills.Match(map, instance, boss, nowMs) : std::nullopt;
+}
+void RealmModule::NotifyBodyChanged(std::uint32_t guid)
+{
+    if (!guid || !Watched(guid))
+        return;
+    std::lock_guard lock(_state->factsMutex);
+    ++_state->generations[guid];
+}
+
+void RealmModule::Tick(std::uint32_t diff)
+{
+    _state->DrainKills();
+    ReconcileConfiguration();
+    if (!On())
+    {
+        if (Due(_state->pinRemaining, diff, 1000)) _state->ApplyPins();
+        return;
+    }
+    TickBudget budget(Config().realmMaxActionsPerTick);
+    _state->queue.Drain(budget, [&](Queued& entry)
+    {
+        auto found = _state->reservations.find(entry.id);
+        if (found == _state->reservations.end() || entry.cursor >= entry.guids.size())
+        {
+            PublishJob({entry.id, entry.kind, false, "operation_identity"});
+            return true;
+        }
+        auto& reservation = found->second;
+        auto const guid = entry.guids[entry.cursor];
+        auto finish = [&](std::string reason, bool retain)
+        {
+            if (retain) reservation.retained = true;
+            else _state->Release(entry.id);
+            PublishJob({entry.id, entry.kind, false, std::move(reason), guid});
+            return true;
+        };
+        bool const pending = reservation.pending.contains(guid);
+        auto const lease = reservation.bodies.find(guid);
+        auto before = Identity(guid, pending);
+        auto scopeAllowed = [&](BodyIdentity const& body, std::vector<BodyScope> const& scopes)
+        {
+            return Scope(body) == Scope(lease->second.body)
+                || std::find(scopes.begin(), scopes.end(), Scope(body)) != scopes.end();
+        };
+        auto reason = MutationReason(guid, entry.id);
+        if (!reason.empty()) return finish(reason, pending);
+        if (!before || lease == reservation.bodies.end() || _state->Generation(guid) != lease->second.generation
+            || !SameLife(*before, lease->second.body)
+            || (!pending && *before != lease->second.body)
+            || (pending && !scopeAllowed(*before, reservation.pending.at(guid))))
+            return finish("body_identity_changed", pending);
+        auto executor = _state->executors.find(entry.kind);
+        if (executor == _state->executors.end()) return finish("unsupported", pending);
+        if (auto admission = executor->second.admit(entry, guid); !admission.empty())
+            return finish(admission, pending);
+        RealmStep result;
+        struct ActiveStep
+        {
+            State& state;
+            ActiveStep(State& owner, TickBudget& budget, Queued const& entry, std::uint32_t current)
+                : state(owner)
+            {
+                state.activeBudget = &budget;
+                state.activeEntry = &entry;
+                state.activeOperation = entry.id;
+                state.chargedBodies = {current};
+            }
+            ~ActiveStep()
+            {
+                state.activeBudget = nullptr;
+                state.activeEntry = nullptr;
+                state.activeOperation.clear();
+                state.chargedBodies.clear();
+            }
+        } active(*_state, budget, entry, guid);
+        try { result = executor->second.execute(entry, guid); }
+        catch (...) { return finish("operation_outcome_unknown", true); }
+        auto after = Identity(guid, result.state == StepState::Pending);
+        // The pre-step full lease check already ran. Post-step scope comes
+        // only from the executor's explicit transition receipt below.
+        auto afterReason = NativeMutationReason(guid);
+        if (Holder(guid) != entry.id || reservation.retained || reservation.epoch != Epoch())
+            afterReason = "busy:operation_identity";
+        // The first TeleportTo may make the original Player transiently out of
+        // world before its Pending receipt is saved. No other failed fence is
+        // waived, and stable identity plus exact expected scope still follows.
+        if (afterReason == "busy:body_unavailable" && result.state == StepState::Pending && after
+            && SameLife(*after, lease->second.body) && _state->Generation(guid) == lease->second.generation)
+            afterReason.clear();
+        if (result.expectedScopes.size() > 4 || !after || !SameLife(*after, lease->second.body)
+            || _state->Generation(guid) != lease->second.generation || !afterReason.empty()
+            || !scopeAllowed(*after, result.expectedScopes))
+            return finish("operation_transition_unknown", true);
+        if (result.state == StepState::Unknown)
+            return finish(result.reason.empty() ? "native_cleanup_unproved" : result.reason, true);
+        if (result.state == StepState::Pending)
+        {
+            reservation.pending[guid] = std::move(result.expectedScopes);
+            return false;
+        }
+        if (result.state == StepState::Refused)
+            return finish(result.reason.empty() ? "refused" : result.reason, false);
+        reservation.pending.erase(guid);
+        reservation.value = result.value;
+        ++entry.cursor;
+        if (entry.cursor < entry.guids.size())
+            return false;
+        auto value = reservation.value;
+        _state->Release(entry.id);
+        PublishJob({entry.id, entry.kind, true, "", entry.guids.size() == 1 ? guid : 0, value});
+        return true;
+    });
+    if (Due(_state->flagRemaining, diff, 1000))
+    {
+        auto human = Human();
+        if (!human.online) _state->humanFlag.reset();
+        else if (!_state->humanFlag || *_state->humanFlag != Flagged(human))
+        {
+            _state->humanFlag = Flagged(human);
+            Publish(MakePvpFlag(HumanGuid(), *_state->humanFlag));
+        }
+    }
+    if (Due(_state->weaponsRemaining, diff, 60000))
+    {
+        auto guids = CastMembers();
+        guids.insert(_state->actors.begin(), _state->actors.end());
+        for (auto guid : guids)
+            RecordWeapons(guid);
+        _state->ApplyPins(); // Recheck retained foreign exclusions only after their producer clears them.
+    }
+    for (auto& [name, poll] : _state->polls)
+    {
+        (void)name;
+        if (Due(poll.remaining, diff, poll.interval))
+            poll.fn();
+    }
+}
+
+void RealmModule::ReconcileConfiguration()
+{
+    if (!_state->disablePending) return;
+    _state->disablePending = false;
+    _state->queue.DropAll("realm_off", [&](Queued const& entry, std::string const& reason)
+    {
+        auto it = _state->reservations.find(entry.id);
+        if (it != _state->reservations.end() && (!it->second.pending.empty() || it->second.retained))
+            it->second.retained = true;
+        else
+            _state->Release(entry.id);
+        PublishJob({entry.id, entry.kind, false, reason});
+    });
+    // Actor/guild declarations belong to the old enable/configured-identity
+    // epoch. An enable or identity switch requires a fresh declaration.
+    _state->actors.clear();
+    _state->gankers.clear();
+    _state->guilds.clear();
+    _state->weapons.clear();
+    _state->ApplyPins();
+}
+
+void RealmModule::Shutdown()
+{
+    {
+        std::lock_guard lock(_state->factsMutex);
+        _state->on = false;
+        ++_state->epoch;
+        _state->disablePending = true;
+        _state->killInbox.clear();
+    }
+    ReconcileConfiguration(); // Retain unresolved operations; never fake restoration or run another action.
+}
+}

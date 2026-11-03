@@ -29,6 +29,16 @@ private:
     std::map<std::string, Entry, std::less<>> _owners;
 };
 PinSet& Pins();
+struct PinPlan
+{
+    std::unordered_set<std::uint32_t> guids;
+    bool keep = false, online = false;
+};
+// Owner contributions are explicit cleanup obligations even when disabled.
+// Upstream flags apply to the whole set, so do not extend owner retention to
+// ordinary cast members when their keep flag has been turned off.
+PinPlan PlanPins(PinSet const& owners, std::unordered_set<std::uint32_t> const& cast,
+    bool enabled, bool keepCast, bool bringOnline);
 inline bool SpeakerSuppressed(bool moduleEnabled, bool excludeCast, bool isCast, bool ownerMuted)
 {
     return ownerMuted || (moduleEnabled && excludeCast && isCast);
