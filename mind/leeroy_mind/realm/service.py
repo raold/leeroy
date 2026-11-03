@@ -338,16 +338,26 @@ class Realm:
             self.recall.on_login(self.ports.now())
         generation = self._generation
         self.ports.observe(ev, name)
-        observation = self._capture_source_observation(ev)
-        if type(observation) is RealmObservation:
-            await self._owned(lambda: self._admit_source_observation(observation))
-        elif type(observation) is Rejected:
-            log.debug("realm_source_rejected: type=%s reason=%s", name, observation.reason)
-        for part, names in tuple(self._parts):
-            if generation != self._generation or not self.enabled or self._stopping:
-                return
-            if name in names:
-                await self._owned(lambda part=part: part.on_event(ev))
+        failure = None
+        try:
+            observation = self._capture_source_observation(ev)
+            if type(observation) is RealmObservation:
+                await self._owned(lambda: self._admit_source_observation(observation))
+            elif type(observation) is Rejected:
+                log.debug("realm_source_rejected: type=%s reason=%s", name, observation.reason)
+        except Exception as error:
+            # A database or programming fault stays this event's failure, raised
+            # only after the generic parts have still seen the event.
+            failure = error
+        try:
+            for part, names in tuple(self._parts):
+                if generation != self._generation or not self.enabled or self._stopping:
+                    break
+                if name in names:
+                    await self._owned(lambda part=part: part.on_event(ev))
+        finally:
+            if failure is not None:
+                raise failure
 
     async def tick(self):
         # Retained reservations and provider releases continue to be observed

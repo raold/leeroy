@@ -4,14 +4,15 @@ Only the byte stream/writer and model are test boundaries. Observation spies and
 race gates delegate to the real methods and never issue receipts or approvals.
 """
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import replace
 import json
+import logging
 import sqlite3
 
 import pytest
 
-from conftest import run, seed_test_cast
+from conftest import run as run_loop, seed_test_cast
 from leeroy_mind.app import MindApp
 from leeroy_mind.bridge import BridgeClient
 from leeroy_mind.config import load_config
@@ -28,6 +29,21 @@ from test_realm_live_proof import EXPECTED, PAYLOADS, TYPES, insert
 TABLES = ('realm_source', 'realm_fact', 'realm_fact_origin', 'realm_knows', 'realm_kill')
 KILL = 'verified_raid_kill_v1'
 PRIVATE = dict(human_present=False, cast_members=[101, 102, 103, 104])
+
+
+def run(scenario):
+    # A gate left shut by a failed assertion must fail the test, not hang the suite.
+    return run_loop(asyncio.wait_for(scenario, 60))
+
+
+@contextmanager
+def spied(native):
+    """App logs and swallows a handler's failure, so keep a spy's for the test."""
+    try:
+        yield
+    except AssertionError as error:
+        native.spy_errors.append(error)
+        raise
 
 
 def envelope(policy='bg_result_v1', **changes):
@@ -86,6 +102,7 @@ class Native:
         self.captures = []
         self.results = []
         self.failures = []
+        self.spy_errors = []
 
     async def connect(self):
         self.reader = asyncio.StreamReader()
@@ -148,16 +165,18 @@ async def application(tmp_path, clock, monkeypatch, *, enabled=True, confirmed=T
     def spy_capture(ev):
         result = capture(ev)
         if type(result) is RealmObservation:
-            assert app.row_receipt(ev) is result.receipt
-            assert app.bridge.delivery_origin(ev) is result.receipt.wire
+            with spied(native):
+                assert app.row_receipt(ev) is result.receipt
+                assert app.bridge.delivery_origin(ev) is result.receipt.wire
             native.captures.append((result, asyncio.current_task()))
         return result
 
     async def spy_reduce(observation):
-        assert app.row_receipt(observation.event) is None
-        assert native.bridge.delivery_origin(observation.event) is None
-        assert asyncio.current_task() in realm._children
-        assert asyncio.current_task() is not native.captures[-1][1]
+        with spied(native):
+            assert app.row_receipt(observation.event) is None
+            assert native.bridge.delivery_origin(observation.event) is None
+            assert asyncio.current_task() in realm._children
+            assert asyncio.current_task() is not native.captures[-1][1]
         try:
             result = await reduce(observation)
         except Exception as error:
@@ -177,12 +196,19 @@ async def application(tmp_path, clock, monkeypatch, *, enabled=True, confirmed=T
         if establish:
             await native.hello()
         yield native
+    except BaseException as error:
+        if native.spy_errors:
+            error.add_note(f'spy assertions failed: {native.spy_errors!r}')
+        raise
+    else:
+        assert not native.spy_errors, native.spy_errors
     finally:
-        if native.session is not None:
-            await native.disconnect()
-        if not app.stopping:
-            await native.drain()
-        await app.stop()
+        async with asyncio.timeout(20):
+            if native.session is not None:
+                await native.disconnect()
+            if not app.stopping:
+                await native.drain()
+            await app.stop()
 
 
 def pause_source(native, monkeypatch):
@@ -726,6 +752,46 @@ def test_integrated_sql_write_failure_rolls_back_all_realm_rows_keeps_raw(
             assert counts(store) == (0, 0, 0, 0, 0)
             with store.transaction():
                 assert store.conn.execute("SELECT count(*) FROM game_event WHERE type='realm_kill'").fetchone()[0] == 1
+    run(scenario())
+
+
+def test_source_sql_fault_still_reaches_generic_parts_then_fails(tmp_path, clock, monkeypatch, caplog):
+    async def scenario():
+        async with application(tmp_path, clock, monkeypatch) as native:
+            store, seen = native.app.store, []
+
+            class Part:
+                async def on_event(self, ev):
+                    seen.append(ev)
+
+            native.app.realm.add_part(Part(), event_types=('realm_kill',))
+            with store.transaction():
+                store.conn.execute('CREATE TEMP TRIGGER fail_source BEFORE INSERT ON realm_source '
+                                   "BEGIN SELECT RAISE(ABORT,'injected'); END")
+            with caplog.at_level(logging.ERROR):
+                await native.deliver(envelope(KILL))
+            assert native.failures == [sqlite3.IntegrityError]
+            assert len(seen) == 1 and counts(store) == (0, 0, 0, 0, 0)
+            assert 'event_handler_failed: type=realm_kill' in caplog.text
+    run(scenario())
+
+
+def test_final_barrier_through_commit_never_yields_the_loop(tmp_path, clock, monkeypatch):
+    async def scenario():
+        async with application(tmp_path, clock, monkeypatch) as native:
+            realm, store, seen = native.app.realm, native.app.store, []
+            barrier = realm._source_context_current
+
+            def probe(context, transport_epoch):
+                current = barrier(context, transport_epoch)
+                if current and store.in_unit:
+                    asyncio.get_running_loop().call_soon(lambda: seen.append(store.in_unit))
+                return current
+
+            monkeypatch.setattr(realm, '_source_context_current', probe)
+            await native.deliver(envelope())
+            assert type(native.results[0]) is FactRow
+            assert seen == [False, False]  # capture's check, then the reducer's final one
     run(scenario())
 
 
