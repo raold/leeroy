@@ -8,18 +8,31 @@
 #include <fstream>
 #include <map>
 #include <mutex>
+#include <random>
 #include <set>
 
 namespace Leeroy::Realm
 {
 namespace
 {
-BodyScope Scope(BodyIdentity const& body) { return {body.map, body.instance, body.group}; }
-bool SameLife(BodyIdentity first, BodyIdentity second)
+std::string BootNonce()
 {
-    first.map = second.map = first.instance = second.instance = 0;
-    first.group = second.group = 0;
-    return first == second;
+    // Refuse continuation creation if native entropy is unavailable. The
+    // process-local serial alone must never authorize a previous boot's token.
+    try
+    {
+        std::random_device source;
+        constexpr char digits[] = "0123456789abcdef";
+        std::string nonce;
+        for (unsigned word = 0; word < 4; ++word)
+        {
+            auto value = static_cast<std::uint32_t>(source());
+            for (unsigned nibble = 0; nibble < 8; ++nibble)
+                nonce.push_back(digits[(value >> (nibble * 4)) & 15]);
+        }
+        return nonce;
+    }
+    catch (...) { return {}; }
 }
 std::optional<std::string> ReadFile(std::string const& path)
 {
@@ -57,6 +70,8 @@ struct RealmModule::State
         std::map<std::uint32_t, std::vector<BodyScope>> pending;
         bool retained = false;
         std::uint64_t value = 0;
+        Queued admitted;
+        std::string continuation;
     };
     struct Poll { std::uint32_t interval, remaining = 0; std::function<void()> fn; };
     struct Handler { Executor execute; Admission admit; };
@@ -68,6 +83,9 @@ struct RealmModule::State
     ActionQueue queue;
     std::map<std::string, Handler, std::less<>> executors;
     std::map<std::string, Reservation, std::less<>> reservations;
+    ContinuationLedger continuations{BootNonce()};
+    std::map<PvpKind, Continuation> continuationHandlers;
+    bool continuationsFirst = false;
     std::map<std::uint32_t, std::string> holders;
     std::unordered_set<std::uint32_t> actors, gankers, guilds;
     std::vector<Place> places;
@@ -84,6 +102,8 @@ struct RealmModule::State
     TickBudget* activeBudget = nullptr;
     Queued const* activeEntry = nullptr;
     std::string activeOperation;
+    std::string activeContinuation;
+    std::uint64_t activeRevision = 0;
     std::set<std::uint32_t> chargedBodies;
 
     std::uint64_t Generation(std::uint32_t guid) const
@@ -195,6 +215,126 @@ bool RealmModule::RegisterExecutor(std::string kind, Executor executor, Admissio
         && _state->executors.emplace(std::move(kind), State::Handler{std::move(executor), std::move(admission)}).second;
 }
 
+bool RealmModule::RegisterPvpContinuation(PvpKind kind, Continuation continuation)
+{
+    return continuation && _state->continuationHandlers.emplace(kind, std::move(continuation)).second;
+}
+
+std::optional<PvpOwner> RealmModule::PreparePvpContinuation(std::string_view originId, PvpKind kind,
+    std::vector<std::uint32_t> const& members, std::string& error)
+{
+    error.clear();
+    auto it = _state->reservations.find(originId);
+    if (!_state->activeEntry || _state->activeOperation != originId || it == _state->reservations.end()
+        || !_state->continuationHandlers.contains(kind) || !On() || it->second.epoch != Epoch()
+        || !ContinuationLedger::SameManifest(it->second.admitted.guids, members))
+    { error = "busy:operation_identity"; return std::nullopt; }
+    for (auto guid : members)
+        if (!(error = MutationReason(guid, originId)).empty()) return std::nullopt;
+    auto owner = _state->continuations.Prepare(std::string(originId), kind, members, Epoch(),
+        _state->guild, _state->human, _state->reservations.size(), error);
+    if (owner)
+    {
+        it->second.continuation = owner->token;
+        _state->activeContinuation = owner->token;
+        _state->activeRevision = owner->revision;
+    }
+    return owner;
+}
+
+std::optional<PvpOwner> RealmModule::GetPvpOwner(std::string_view token) const
+{ return _state->continuations.Get(token); }
+std::optional<PvpOwner> RealmModule::FindPvpOwner(std::string_view originId) const
+{ return _state->continuations.FindOrigin(originId); }
+
+bool RealmModule::RequestPvpCleanup(std::string cleanupId, std::string_view token,
+    std::vector<std::uint32_t> const& members, std::string& error)
+{
+    // The same admission id cannot become a cleanup controller or control a
+    // second owner. All checks precede the absorbing application fence.
+    if (_state->reservations.contains(cleanupId)) { error = "busy:duplicate_operation"; return false; }
+    for (auto const& [id, reservation] : _state->reservations)
+    {
+        (void)id;
+        if (reservation.continuation.empty() || reservation.continuation == token) continue;
+        auto owner = GetPvpOwner(reservation.continuation);
+        if (owner && owner->cleanupId == cleanupId) { error = "busy:duplicate_operation"; return false; }
+    }
+    if (!_state->continuations.RequestCleanup(token, cleanupId, members, On(), _state->guild, _state->human, error))
+        return false;
+    auto owner = GetPvpOwner(token);
+    if (owner && owner->stage == PvpStage::Clean)
+        PublishJob({cleanupId, "leave_pvp", true, "", 0, owner->members.size(), owner->token});
+    return true;
+}
+
+std::string RealmModule::ValidateContinuation(std::string_view token, std::uint32_t guid,
+    ContinuationMode mode) const
+{
+    if (auto reason = _state->continuations.Validate(token, mode, On(), Epoch(), _state->guild, _state->human);
+        !reason.empty()) return reason;
+    auto owner = GetPvpOwner(token);
+    auto it = owner ? _state->reservations.find(owner->originId) : _state->reservations.end();
+    if (it == _state->reservations.end() || it->second.continuation != token || it->second.retained
+        || Holder(guid) != owner->originId) return "busy:operation_identity";
+    auto lease = it->second.bodies.find(guid);
+    if (lease == it->second.bodies.end()) return "busy:operation_identity";
+    auto current = Identity(guid, true);
+    auto scopes = it->second.pending.find(guid);
+    auto check = CheckBodyLease(lease->second.body, lease->second.generation, current, _state->Generation(guid),
+        scopes == it->second.pending.end() ? std::vector<BodyScope>{} : scopes->second);
+    if (check == LeaseCheck::LifeChanged) return "busy:body_identity_changed";
+    if (check == LeaseCheck::ScopeChanged) return "busy:body_scope_changed";
+    auto reason = NativeMutationReason(guid);
+    // Transit is permitted only inside an explicitly declared continuation
+    // scope with the exact original connected body. Foreign owners never waive.
+    if (reason == "busy:body_unavailable" && scopes != it->second.pending.end()
+        && current->player && current->player->IsBeingTeleported() && !IsSelfBot(current->player)) return "";
+    return reason;
+}
+
+bool RealmModule::DeclareContinuationScopes(std::string_view token, std::uint64_t revision,
+    std::uint32_t guid, std::vector<BodyScope> scopes)
+{
+    if (_state->activeContinuation != token || _state->activeRevision != revision || scopes.size() > 4)
+        return false;
+    auto owner = GetPvpOwner(token);
+    if (!owner || owner->revision != revision) return false;
+    auto mode = owner->stage == PvpStage::Cleaning ? ContinuationMode::Cleanup : ContinuationMode::Application;
+    if (!_state->continuations.Validate(token, mode, On(), Epoch(), _state->guild, _state->human).empty())
+        return false;
+    auto it = _state->reservations.find(owner->originId);
+    if (it == _state->reservations.end() || it->second.retained || Holder(guid) != owner->originId) return false;
+    auto lease = it->second.bodies.find(guid);
+    auto current = Identity(guid, true);
+    if (lease == it->second.bodies.end() || !current || !SameLife(*current, lease->second.body)
+        || _state->Generation(guid) != lease->second.generation || !NativeOwnershipReason(guid).empty()) return false;
+    it->second.pending[guid] = std::move(scopes);
+    return true;
+}
+
+std::string RealmModule::ChargeContinuationBodies(std::string_view token,
+    std::vector<std::uint32_t> const& members)
+{
+    if (!_state->activeBudget || _state->activeContinuation != token || members.empty())
+        return "busy:operation_identity";
+    auto owner = GetPvpOwner(token);
+    if (!owner || owner->revision != _state->activeRevision) return "busy:operation_identity";
+    auto mode = owner->stage == PvpStage::Cleaning ? ContinuationMode::Cleanup : ContinuationMode::Application;
+    std::set<std::uint32_t> unique(members.begin(), members.end());
+    if (unique.size() != members.size() || unique.contains(0)) return "bad field: affected_bodies";
+    std::size_t extra = 0;
+    for (auto guid : unique)
+    {
+        if (auto reason = ValidateContinuation(token, guid, mode); !reason.empty()) return reason;
+        if (!_state->chargedBodies.contains(guid)) ++extra;
+    }
+    if (_state->chargedBodies.size() + extra > _state->activeBudget->Cap()) return "action_cost_exceeds_cap";
+    if (!_state->activeBudget->Take(static_cast<std::uint32_t>(extra))) return "busy:tick_budget";
+    _state->chargedBodies.insert(unique.begin(), unique.end());
+    return "";
+}
+
 std::string RealmModule::Holder(std::uint32_t guid) const
 {
     auto it = _state->holders.find(guid);
@@ -227,6 +367,8 @@ std::string RealmModule::MutationReason(std::uint32_t guid, std::string_view ope
 std::string RealmModule::ValidateOwnedBody(std::uint32_t guid, std::string_view operation) const
 {
     auto it = _state->reservations.find(operation);
+    if (it != _state->reservations.end() && !it->second.continuation.empty())
+        return ValidateContinuation(it->second.continuation, guid, ContinuationMode::Application);
     if (operation.empty() || it == _state->reservations.end() || Holder(guid) != operation
         || it->second.retained || it->second.epoch != Epoch())
         return "busy:operation_identity";
@@ -234,12 +376,10 @@ std::string RealmModule::ValidateOwnedBody(std::uint32_t guid, std::string_view 
     if (lease == it->second.bodies.end()) return "busy:operation_identity";
     auto pending = it->second.pending.find(guid);
     auto current = Identity(guid, pending != it->second.pending.end());
-    if (!current || !SameLife(*current, lease->second.body)
-        || _state->Generation(guid) != lease->second.generation)
-        return "busy:body_identity_changed";
-    if (Scope(*current) != Scope(lease->second.body) && (pending == it->second.pending.end()
-        || std::find(pending->second.begin(), pending->second.end(), Scope(*current)) == pending->second.end()))
-        return "busy:body_scope_changed";
+    auto check = CheckBodyLease(lease->second.body, lease->second.generation, current, _state->Generation(guid),
+        pending == it->second.pending.end() ? std::vector<BodyScope>{} : pending->second);
+    if (check == LeaseCheck::LifeChanged) return "busy:body_identity_changed";
+    if (check == LeaseCheck::ScopeChanged) return "busy:body_scope_changed";
     return "";
 }
 
@@ -262,19 +402,35 @@ std::string RealmModule::ChargeAffectedBodies(std::string_view operation,
         if (auto reason = handler->second.admit(*_state->activeEntry, guid); !reason.empty()) return reason;
         if (!_state->chargedBodies.contains(guid)) ++extra;
     }
-    if (_state->chargedBodies.size() + extra > Config().realmMaxActionsPerTick)
+    if (_state->chargedBodies.size() + extra > _state->activeBudget->Cap())
         return "action_cost_exceeds_cap";
-    if (extra > _state->activeBudget->Left()) return "busy:tick_budget";
-    for (std::size_t i = 0; i < extra; ++i) _state->activeBudget->Take();
+    if (!_state->activeBudget->Take(static_cast<std::uint32_t>(extra))) return "busy:tick_budget";
     _state->chargedBodies.insert(unique.begin(), unique.end());
     return "";
 }
 
 bool RealmModule::Accept(Queued entry, std::string& error)
 {
+    error.clear();
     if (!On()) { error = "realm_off"; return false; }
     if (!_state->started) { error = "realm_not_started"; return false; }
+    if (entry.kind == "leave_pvp" && entry.payload.is_object() && entry.payload.contains("pvp_owner"))
+    {
+        auto const& token = entry.payload.at("pvp_owner");
+        if (!token.is_string()) { error = "bad field: pvp_owner"; return false; }
+        if (!token.get_ref<std::string const&>().empty())
+            return RequestPvpCleanup(entry.id, token.get<std::string>(), entry.guids, error);
+    }
     if (!_state->executors.contains(entry.kind)) { error = "unsupported"; return false; }
+    if (auto existing = _state->reservations.find(entry.id); existing != _state->reservations.end())
+    {
+        auto const& admitted = existing->second.admitted;
+        if (admitted.kind == entry.kind && admitted.guids == entry.guids && admitted.payload == entry.payload)
+            return true; // Exact retry never schedules a second native action.
+        error = "busy:duplicate_operation"; return false;
+    }
+    if (_state->continuations.CommandIdReserved(entry.id))
+    { error = "operation_receipt_available"; return false; }
     // Unknown/pending work can leave the runnable queue while its exact lease
     // remains retained. Bound all outstanding reservations, not only runnable
     // entries, so repeated unknown outcomes cannot grow native ownership forever.
@@ -283,6 +439,7 @@ bool RealmModule::Accept(Queued entry, std::string& error)
     if (_state->reservations.contains(entry.id)) { error = "busy:duplicate_operation"; return false; }
     State::Reservation reservation;
     reservation.epoch = Epoch();
+    reservation.admitted = entry;
     for (auto guid : entry.guids)
     {
         if (!(error = _state->executors.at(entry.kind).admit(entry, guid)).empty())
@@ -382,7 +539,13 @@ GuardState* RealmModule::Guard()
     auto it = _state->guards.find({_state->guild, _state->human});
     return it == _state->guards.end() ? nullptr : it->second.get();
 }
-void RealmModule::PublishJob(RealmJob const& job) { Publish(MakeRealmJob(job)); }
+void RealmModule::PublishJob(RealmJob const& job)
+{
+    // Off-tick lifetime checks and configuration fencing still update retained
+    // owners, but cannot emit unsolicited Realm events. Explicit owner queries
+    // publish their read-only snapshot directly and remain available while off.
+    if (On()) Publish(MakeRealmJob(job));
+}
 bool RealmModule::RegisterPoll(std::string name, std::uint32_t intervalMs, std::function<void()> poll)
 {
     return !name.empty() && intervalMs && poll && _state->polls.size() < 16
@@ -408,16 +571,118 @@ void RealmModule::NotifyBodyChanged(std::uint32_t guid)
     ++_state->generations[guid];
 }
 
+void RealmModule::TickContinuations(TickBudget& budget)
+{
+    bool const advancePriority = budget.Left() == budget.Cap();
+    _state->continuations.Visit(20, [&](PvpOwner const& owner)
+    {
+        auto found = _state->reservations.find(owner.originId);
+        if (found == _state->reservations.end()) return;
+        auto& reservation = found->second;
+        if (owner.stage == PvpStage::Unknown || reservation.retained) return;
+        auto unknown = [&](std::string reason)
+        {
+            reservation.retained = true;
+            _state->continuations.Unknown(owner.token, reason);
+            PublishJob({owner.cleanupId.empty() ? owner.originId : owner.cleanupId,
+                owner.cleanupId.empty() ? reservation.admitted.kind : "leave_pvp", false, std::move(reason),
+                0, 0, owner.token});
+        };
+        // Check unchanged lifetime before the adapter reconciles an exact native
+        // transition. Scope reconciliation needs its causal native receipts and
+        // is checked for the entire manifest after the callback.
+        for (auto const& [guid, lease] : reservation.bodies)
+        {
+            auto current = Identity(guid, true);
+            if (!current || !SameLife(*current, lease.body) || _state->Generation(guid) != lease.generation
+                || Holder(guid) != owner.originId)
+            { unknown("body_identity_changed"); return; }
+        }
+        if (!On() || (owner.applicationFenced && owner.cleanupId.empty())) return;
+        auto executor = _state->continuationHandlers.find(owner.kind);
+        if (executor == _state->continuationHandlers.end()) { unknown("continuation_unavailable"); return; }
+        struct ActiveContinuation
+        {
+            State& state;
+            ActiveContinuation(State& owner, TickBudget& budget, Queued const& entry, PvpOwner const& continuation)
+                : state(owner)
+            {
+                state.activeBudget = &budget;
+                state.activeEntry = &entry;
+                state.activeOperation = continuation.originId;
+                state.activeContinuation = continuation.token;
+                state.activeRevision = continuation.revision;
+                state.chargedBodies.clear(); // Observations cost no mutation units.
+            }
+            ~ActiveContinuation()
+            {
+                state.activeBudget = nullptr;
+                state.activeEntry = nullptr;
+                state.activeOperation.clear();
+                state.activeContinuation.clear();
+                state.activeRevision = 0;
+                state.chargedBodies.clear();
+            }
+        } active(*_state, budget, reservation.admitted, owner);
+        PvpContinuationStep result;
+        try { result = executor->second(owner); }
+        catch (...) { unknown("operation_outcome_unknown"); return; }
+        if (result.stage == PvpStage::Unknown) { unknown(result.reason); return; }
+        auto mode = owner.stage == PvpStage::Cleaning ? ContinuationMode::Cleanup : ContinuationMode::Application;
+        for (auto guid : owner.members)
+            if (auto reason = ValidateContinuation(owner.token, guid, mode); !reason.empty())
+            { unknown(std::move(reason)); return; }
+        if (result.stage == PvpStage::Clean)
+        {
+            // The adapter guard remains alive through native identity checks,
+            // terminal receipt allocation and the one holder-map release.
+            // Missing/stale proof cannot release even an apparently empty body.
+            if (!result.clean || result.clean->token != owner.token
+                || !_state->continuations.CanRelease(*result.clean, bool(result.clean->quiescence)))
+            { unknown("cleanup_proof_unavailable"); return; }
+            try
+            {
+                // Match the map/session lifecycle writer while the native
+                // inbox guard is held. No generation can change between this
+                // final comparison and erasing the exact holder manifest.
+                std::lock_guard lifecycle(_state->factsMutex);
+                for (auto const& [guid, lease] : reservation.bodies)
+                {
+                    auto generation = _state->generations.find(guid);
+                    if ((generation == _state->generations.end() ? 0 : generation->second) != lease.generation)
+                    { unknown("body_identity_changed"); return; }
+                }
+                if (!_state->continuations.Commit(*result.clean))
+                { unknown("cleanup_proof_changed"); return; }
+                _state->Release(owner.originId);
+            }
+            catch (...) { unknown("cleanup_receipt_unavailable"); return; }
+            result.clean->quiescence.reset();
+            PublishJob({owner.cleanupId, "leave_pvp", true, "", 0, owner.members.size(), owner.token});
+            _state->ApplyPins();
+            return;
+        }
+        if (!_state->continuations.Advance(owner.token, owner.revision, result.stage, std::move(result.reason)))
+            unknown("continuation_transition_unknown");
+    }, advancePriority);
+}
+
 void RealmModule::Tick(std::uint32_t diff)
 {
     _state->DrainKills();
     ReconcileConfiguration();
     if (!On())
     {
+        TickBudget noMutations(1);
+        TickContinuations(noMutations); // Only same-life checks run while disabled.
         if (Due(_state->pinRemaining, diff, 1000)) _state->ApplyPins();
         return;
     }
     TickBudget budget(Config().realmMaxActionsPerTick);
+    // Rotate which lane receives an untouched mutation budget. A large atomic
+    // closure cannot be starved forever by ordinary one-body work (or vice versa).
+    _state->continuationsFirst = !_state->continuationsFirst;
+    if (_state->continuationsFirst) TickContinuations(budget);
     _state->queue.Drain(budget, [&](Queued& entry)
     {
         auto found = _state->reservations.find(entry.id);
@@ -430,6 +695,12 @@ void RealmModule::Tick(std::uint32_t diff)
         auto const guid = entry.guids[entry.cursor];
         auto finish = [&](std::string reason, bool retain)
         {
+            if (!reservation.continuation.empty())
+            {
+                _state->continuations.Unknown(reservation.continuation, reason);
+                _state->continuations.Detach(reservation.continuation);
+                retain = true; // A prepared native source needs exact cleanup.
+            }
             if (retain) reservation.retained = true;
             else _state->Release(entry.id);
             PublishJob({entry.id, entry.kind, false, std::move(reason), guid});
@@ -471,11 +742,27 @@ void RealmModule::Tick(std::uint32_t diff)
                 state.activeBudget = nullptr;
                 state.activeEntry = nullptr;
                 state.activeOperation.clear();
+                state.activeContinuation.clear();
+                state.activeRevision = 0;
                 state.chargedBodies.clear();
             }
         } active(*_state, budget, entry, guid);
         try { result = executor->second.execute(entry, guid); }
         catch (...) { return finish("operation_outcome_unknown", true); }
+        if (!reservation.continuation.empty())
+        {
+            if (result.state != StepState::Detached)
+                return finish(result.reason.empty() ? "continuation_disposition_unknown" : result.reason, true);
+            for (auto const& [member, saved] : reservation.bodies)
+            {
+                (void)saved;
+                if (auto why = ValidateContinuation(reservation.continuation, member, ContinuationMode::Application);
+                    !why.empty()) return finish(std::move(why), true);
+            }
+            _state->continuations.Detach(reservation.continuation);
+            return true; // Stable reservation, holders and pins never leave.
+        }
+        if (result.state == StepState::Detached) return finish("continuation_unprepared", true);
         auto after = Identity(guid, result.state == StepState::Pending);
         // The pre-step full lease check already ran. Post-step scope comes
         // only from the executor's explicit transition receipt below.
@@ -511,6 +798,7 @@ void RealmModule::Tick(std::uint32_t diff)
         PublishJob({entry.id, entry.kind, true, "", entry.guids.size() == 1 ? guid : 0, value});
         return true;
     });
+    if (!_state->continuationsFirst) TickContinuations(budget);
     if (Due(_state->flagRemaining, diff, 1000))
     {
         auto human = Human();
@@ -541,10 +829,21 @@ void RealmModule::ReconcileConfiguration()
 {
     if (!_state->disablePending) return;
     _state->disablePending = false;
+    for (auto const& [id, reservation] : _state->reservations)
+    {
+        (void)id;
+        if (reservation.continuation.empty()) continue;
+        auto owner = GetPvpOwner(reservation.continuation);
+        if (owner && !owner->cleanupId.empty())
+            PublishJob({owner->cleanupId, "leave_pvp", false, "realm_off", 0, 0, owner->token});
+    }
+    _state->continuations.FenceAll("realm_off");
     _state->queue.DropAll("realm_off", [&](Queued const& entry, std::string const& reason)
     {
         auto it = _state->reservations.find(entry.id);
-        if (it != _state->reservations.end() && (!it->second.pending.empty() || it->second.retained))
+        if (it != _state->reservations.end() && !it->second.continuation.empty())
+            _state->continuations.Detach(it->second.continuation);
+        else if (it != _state->reservations.end() && (!it->second.pending.empty() || it->second.retained))
             it->second.retained = true;
         else
             _state->Release(entry.id);
@@ -569,5 +868,23 @@ void RealmModule::Shutdown()
         _state->killInbox.clear();
     }
     ReconcileConfiguration(); // Retain unresolved operations; never fake restoration or run another action.
+}
+
+void RegisterRealmContinuationHandlers()
+{
+    RegisterCommand("get_realm_pvp", [](nlohmann::json const& message) -> LeeroyCommandResult
+    {
+        std::string error;
+        auto command = ParseGetRealmPvp(message, error);
+        if (!command) return {false, error};
+        auto& module = RealmModule::Instance();
+        auto owner = command->pvpOwner.empty() ? module.FindPvpOwner(command->originId)
+            : module.GetPvpOwner(command->pvpOwner);
+        if (!owner) return {false, "owner_unavailable"};
+        // Exact read-only query works while disabled, so retained owners remain
+        // discoverable. No wire status or caller-local state can authorize release.
+        Publish(MakeRealmPvp(message.at("id").get<std::string>(), *owner));
+        return {true, ""};
+    });
 }
 }

@@ -1,6 +1,7 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 
 #include "LeeroyRealmCommands.h"
+#include "LeeroyRealmContinuations.h"
 #include "LeeroyProtocol.h"
 #include "TestHarness.h"
 #include <fstream>
@@ -38,6 +39,7 @@ bool Parse(std::string_view type, json const& j, std::string& error)
     if (type == "realm_move") return ParseMove(j, error).has_value();
     if (type == "rpg_status") return ParseRpgStatus(j, error).has_value();
     if (type == "leave_pvp") return ParseLeavePvp(j, error).has_value();
+    if (type == "get_realm_pvp") return ParseGetRealmPvp(j, error).has_value();
     if (type == "rearm") return ParseRearm(j, error).has_value();
     if (type == "wg_join") return ParseWgJoin(j, error).has_value();
     if (type == "arena_team") return ParseArenaTeam(j, error).has_value();
@@ -78,6 +80,12 @@ void RejectField(std::string_view fixture, char const* field, json bad)
 json Event(std::string_view type)
 {
     if (type == "realm_job") return MakeRealmJob({"realm-test", "rearm", true, "", 11001, 2});
+    if (type == "realm_pvp")
+    {
+        PvpOwner owner{"0123456789abcdef0123456789abcdef-0000000000000001", "queue-one",
+            PvpKind::RatedArena, 7, 3, 30, 1, {101, 102}, PvpStage::Cleaning, true, "", "cleanup-one"};
+        return MakeRealmPvp("query-one", owner);
+    }
     if (type == "channel_chat") return MakeChannelChat("trade", 11001, "Test Member", 1637, "Ready for a raid.", true);
     if (type == "pvp_kill") return MakePvpKill(11001, 11002, 571, 4197);
     if (type == "duel_end") return MakeDuelEnd(11001, 11002, "won");
@@ -110,6 +118,7 @@ LEEROY_TEST(Realm_FixtureLines)
             continue;
         }
         auto decoded = Leeroy::DecodeCommand(msg.dump());
+        if (row.contains("queued")) CHECK_EQ(IsQueued(type), row.at("queued").get<bool>());
         CHECK(decoded.command.has_value());
         if (!decoded.command) continue;
         CHECK(decoded.command->type == Leeroy::CommandType::Extension);
@@ -125,7 +134,7 @@ LEEROY_TEST(Realm_FixtureLines)
             CHECK(valid); CHECK_EQ(row.at("name").get<std::string>(), type + "_ok"); full.insert(type);
         }
     }
-    CHECK_EQ(full.size(), kCommandTypes.size()); CHECK_EQ(events.size(), 12u);
+    CHECK_EQ(full.size(), kCommandTypes.size()); CHECK_EQ(events.size(), 13u);
     for (auto type : kCommandTypes) CHECK(full.contains(std::string(type)));
 }
 
@@ -136,11 +145,30 @@ LEEROY_TEST(Realm_RegisterTypes)
     CHECK(!Leeroy::RegisterExtensionCommand("rearm"));
 }
 
+LEEROY_TEST(Realm_PvpOwnerTokenAndSelectorsAreStrictAndBounded)
+{
+    auto msg = Message("leave_pvp_owner");
+    std::string error;
+    auto parsed = ParseLeavePvp(msg, error);
+    CHECK(parsed && ContinuationLedger::ValidToken(parsed->pvpOwner));
+    for (json bad : {json(nullptr), json(42), json("queue-one"), json(std::string(50, 'a')),
+        json("0123456789ABCDEF0123456789abcdef-0000000000000001")})
+    { msg["pvp_owner"] = bad; Reject(msg, "pvp_owner"); }
+    CHECK(ParseLeavePvp(Message("leave_pvp_ok"), error)->pvpOwner.empty());
+    auto query = Message("get_realm_pvp_ok");
+    query["origin_id"] = "queue-one"; Reject(query, "owner_selector");
+    query.erase("pvp_owner"); CHECK(ParseGetRealmPvp(query, error));
+    query["origin_id"] = std::string(129, 'x'); Reject(query, "origin_id");
+    auto job = MakeRealmJob({"queue-one", "arena_queue", true, "", 0, 2, parsed->pvpOwner});
+    CHECK_EQ(job.at("pvp_owner").get<std::string>(), parsed->pvpOwner);
+    CHECK(!MakeRealmJob({"ordinary", "rearm", true}).contains("pvp_owner"));
+}
+
 LEEROY_TEST(Realm_QueuedAndValue)
 {
     std::set<std::string_view> queued = {"realm_move", "rpg_status", "leave_pvp", "rearm", "wg_join", "arena_queue", "duel",
         "craft", "equip", "set_profession", "transmog_set", "calendar_signup", "mail_send", "bank_deposit",
-        "bank_withdraw", "bank_stock", "guild_grow"};
+        "bank_withdraw", "bank_stock", "guild_grow", "arena_team"};
     std::set<std::string_view> values = {"arena_team", "item_count", "calendar_post"};
     for (auto type : kCommandTypes)
     {

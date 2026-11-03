@@ -4,9 +4,15 @@
 {"name":"realm_move_ok","kind":"command","valid":true,"error":"","full":true,"msg":{"v":1,"type":"realm_move","id":"realm-test","ts":0,"guid":11001,"place":"test_fountain","slot":119}}
 {"name":"rpg_status_ok","kind":"command","valid":true,"error":"","full":true,"msg":{"v":1,"type":"rpg_status","id":"realm-test","ts":0,"guid":11001,"status":"do quest","quest_id":1234}}
 {"name":"leave_pvp_ok","kind":"command","valid":true,"error":"","full":true,"msg":{"v":1,"type":"leave_pvp","id":"realm-test","ts":0,"guids":[11001,11002]}}
+{"name":"leave_pvp_owner","kind":"command","valid":true,"error":"","msg":{"v":1,"type":"leave_pvp","id":"cleanup-one","ts":0,"guids":[101,102],"pvp_owner":"0123456789abcdef0123456789abcdef-0000000000000001"}}
+{"name":"leave_pvp_bad_owner","kind":"command","valid":false,"error":"bad field: pvp_owner","msg":{"v":1,"type":"leave_pvp","id":"cleanup-one","ts":0,"guids":[101,102],"pvp_owner":"queue-one"}}
+{"name":"get_realm_pvp_ok","kind":"command","valid":true,"error":"","full":true,"msg":{"v":1,"type":"get_realm_pvp","id":"query-one","ts":0,"pvp_owner":"0123456789abcdef0123456789abcdef-0000000000000001"}}
+{"name":"get_realm_pvp_origin","kind":"command","valid":true,"error":"","msg":{"v":1,"type":"get_realm_pvp","id":"query-one","ts":0,"origin_id":"queue-one"}}
+{"name":"get_realm_pvp_missing_selector","kind":"command","valid":false,"error":"bad field: owner_selector","msg":{"v":1,"type":"get_realm_pvp","id":"query-one","ts":0}}
+{"name":"realm_pvp_event","kind":"event","msg":{"v":1,"ts":0,"type":"realm_pvp","id":"query-one","pvp_owner":"0123456789abcdef0123456789abcdef-0000000000000001","origin_id":"queue-one","kind":"rated_arena","origin_epoch":7,"revision":3,"guild":30,"human":1,"members":[101,102],"stage":"cleaning","application_fenced":true,"reason":"","cleanup_id":"cleanup-one"}}
 {"name":"rearm_ok","kind":"command","valid":true,"error":"","full":true,"msg":{"v":1,"type":"rearm","id":"realm-test","ts":0,"guids":[11001,11002]}}
 {"name":"wg_join_ok","kind":"command","valid":true,"error":"","full":true,"msg":{"v":1,"type":"wg_join","id":"realm-test","ts":0,"guids":[11001,11002]}}
-{"name":"arena_team_ok","kind":"command","valid":true,"error":"","full":true,"msg":{"v":1,"type":"arena_team","id":"realm-test","ts":0,"action":"create","captain_guid":11001,"arena_type":3,"name":"Test Team"}}
+{"name":"arena_team_ok","kind":"command","valid":true,"error":"","full":true,"queued":true,"result":"realm_job.value","msg":{"v":1,"type":"arena_team","id":"realm-test","ts":0,"action":"create","captain_guid":11001,"arena_type":3,"name":"Test Team"}}
 {"name":"arena_queue_ok","kind":"command","valid":true,"error":"","full":true,"msg":{"v":1,"type":"arena_queue","id":"realm-test","ts":0,"team_id":13001,"captain_guid":11001}}
 {"name":"duel_ok","kind":"command","valid":true,"error":"","full":true,"msg":{"v":1,"type":"duel","id":"realm-test","ts":0,"guid":11001,"target_guid":11002}}
 {"name":"craft_ok","kind":"command","valid":true,"error":"","full":true,"msg":{"v":1,"type":"craft","id":"realm-test","ts":0,"guid":11001,"spell_id":1234,"count":5}}

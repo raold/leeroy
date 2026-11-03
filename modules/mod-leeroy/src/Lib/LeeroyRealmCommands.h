@@ -14,12 +14,12 @@
 
 namespace Leeroy::Realm
 {
-inline constexpr std::array<std::string_view, 31> kCommandTypes = {
+inline constexpr std::array<std::string_view, 32> kCommandTypes = {
     "realm_actors", "realm_say", "realm_emote", "realm_move", "rpg_status", "leave_pvp", "rearm", "wg_join",
     "arena_team", "arena_queue", "duel", "craft", "item_count", "equip", "set_profession", "transmog_set",
     "calendar_post", "calendar_signup", "calendar_update", "mail_send", "bank_tab_buy", "bank_money",
     "bank_deposit", "bank_withdraw", "bank_stock", "grant_achievement", "guild_rename", "guild_grow",
-    "guild_admit", "guild_note", "announce"
+    "guild_admit", "guild_note", "announce", "get_realm_pvp"
 };
 inline constexpr std::array<std::uint32_t, 7> kGrantable = {3117, 4078, 4576, 2186, 3007, 1723, 1786};
 inline constexpr std::uint32_t kGuildTabard = 5976;
@@ -53,13 +53,16 @@ struct SayCmd { std::uint32_t guid = 0; std::string channel, text; std::uint32_t
 struct EmoteCmd { std::uint32_t guid = 0; std::string emote; std::uint32_t targetGuid = 0; };
 struct MoveCmd { std::uint32_t guid = 0; std::string place; std::uint32_t slot = 0; };
 struct RpgStatusCmd { std::uint32_t guid = 0; std::string status; std::uint32_t questId = 0; };
-struct LeavePvpCmd { std::vector<std::uint32_t> guids; };
+struct LeavePvpCmd { std::vector<std::uint32_t> guids; std::string pvpOwner; };
+struct GetRealmPvpCmd { std::string pvpOwner, originId; };
 struct RearmCmd { std::vector<std::uint32_t> guids; };
 struct WgJoinCmd { std::vector<std::uint32_t> guids; };
 // The v1 discriminator always occupies "type". Payload keys are arena_type/event_type,
 // including arena event bodies; there is no colliding legacy "type" alias.
 struct ArenaTeamCmd
 {
+    // Deferred through the shared body budget; terminal realm_job.value carries
+    // the team id. The immediate ACK proves admission only.
     std::string action;
     std::uint32_t captainGuid = 0, arenaType = 0;
     std::string name;
@@ -117,6 +120,7 @@ std::optional<EmoteCmd> ParseEmote(nlohmann::json const&, std::string& error);
 std::optional<MoveCmd> ParseMove(nlohmann::json const&, std::string& error);
 std::optional<RpgStatusCmd> ParseRpgStatus(nlohmann::json const&, std::string& error);
 std::optional<LeavePvpCmd> ParseLeavePvp(nlohmann::json const&, std::string& error);
+std::optional<GetRealmPvpCmd> ParseGetRealmPvp(nlohmann::json const&, std::string& error);
 std::optional<RearmCmd> ParseRearm(nlohmann::json const&, std::string& error);
 std::optional<WgJoinCmd> ParseWgJoin(nlohmann::json const&, std::string& error);
 std::optional<ArenaTeamCmd> ParseArenaTeam(nlohmann::json const&, std::string& error);
@@ -164,8 +168,11 @@ struct RealmJob
     std::string reason;
     std::uint32_t guid = 0;
     std::uint64_t value = 0;
+    std::string pvpOwner;
 };
 nlohmann::json MakeRealmJob(RealmJob const&);
+struct ContinuationOwner;
+nlohmann::json MakeRealmPvp(std::string_view id, ContinuationOwner const&);
 nlohmann::json MakeChannelChat(std::string_view channel, std::uint32_t fromGuid, std::string_view fromName,
     std::uint32_t zone, std::string_view text, bool viaBridge);
 nlohmann::json MakePvpKill(std::uint32_t killer, std::uint32_t victim, std::uint32_t map, std::uint32_t zone);

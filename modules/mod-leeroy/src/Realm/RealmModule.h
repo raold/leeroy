@@ -5,6 +5,8 @@
 #include "LeeroyCastGuard.h"
 #include "LeeroyRealmCommands.h"
 #include "LeeroyRealmQueue.h"
+#include "LeeroyRealmContinuations.h"
+#include "LeeroyRealmIdentity.h"
 #include <functional>
 #include <memory>
 #include <string_view>
@@ -13,13 +15,7 @@
 namespace Leeroy::Realm
 {
 using Queued = ActionQueue::Entry;
-enum class StepState { Complete, Refused, Pending, Unknown };
-struct BodyScope
-{
-    std::uint32_t map = 0, instance = 0;
-    std::uint64_t group = 0;
-    bool operator==(BodyScope const&) const = default;
-};
+enum class StepState { Complete, Refused, Pending, Unknown, Detached };
 struct RealmStep
 {
     StepState state = StepState::Refused;
@@ -30,6 +26,22 @@ struct RealmStep
     // Original account/guild/player/AI/session and lifecycle generation remain
     // immutable. Without an explicit scope, only the pre-step scope is allowed.
     std::vector<BodyScope> expectedScopes;
+};
+
+// The native adapter owns the lock represented by this guard. It must hold its
+// inbox/revision lock from final proof through reservation release. No native
+// mutation runs under this guard. Lock order: adapter inbox, then module facts;
+// hooks must not acquire the adapter inbox while holding module facts.
+struct CleanupQuiescence { virtual ~CleanupQuiescence() = default; };
+struct PvpCleanProof : ContinuationCleanReceipt
+{
+    std::shared_ptr<CleanupQuiescence> quiescence;
+};
+struct PvpContinuationStep
+{
+    PvpStage stage = PvpStage::Acquiring;
+    std::string reason;
+    std::optional<PvpCleanProof> clean;
 };
 
 // World-thread only except Watched/NotifyBodyChanged/RecordKill. Executors do
@@ -66,6 +78,24 @@ public:
     // busy:tick_budget means wait without mutating; action_cost_exceeds_cap
     // means this operation cannot fit the configured whole-tick budget.
     std::string ChargeAffectedBodies(std::string_view operation, std::vector<std::uint32_t> const& guids);
+    using Continuation = std::function<PvpContinuationStep(PvpOwner const&)>;
+    bool RegisterPvpContinuation(PvpKind kind, Continuation continuation);
+    // Active executor only, before the first mutation. The manifest must equal
+    // the admitted reservation. Detached parks that entry without publishing a
+    // successful queue job; the adapter publishes only proved native enrollment.
+    std::optional<PvpOwner> PreparePvpContinuation(std::string_view originId, PvpKind kind,
+        std::vector<std::uint32_t> const& members, std::string& error);
+    std::optional<PvpOwner> GetPvpOwner(std::string_view token) const;
+    std::optional<PvpOwner> FindPvpOwner(std::string_view originId) const;
+    bool RequestPvpCleanup(std::string cleanupId, std::string_view token,
+        std::vector<std::uint32_t> const& members, std::string& error);
+    std::string ValidateContinuation(std::string_view token, std::uint32_t guid, ContinuationMode mode) const;
+    std::string ChargeContinuationBodies(std::string_view token, std::vector<std::uint32_t> const& members);
+    // Native causal proof only, never a wire snapshot. The adapter may declare
+    // a core-created group after its exact synchronous creation receipt. This
+    // does not alter immutable identity/generation or the owner revision.
+    bool DeclareContinuationScopes(std::string_view token, std::uint64_t revision, std::uint32_t guid,
+        std::vector<BodyScope> scopes);
     std::string Holder(std::uint32_t guid) const;
     bool SetActors(ActorsCmd const& actors, std::string& error);
     bool IsActor(std::uint32_t guid) const;
@@ -86,6 +116,7 @@ public:
 private:
     RealmModule();
     void ReconcileConfiguration();
+    void TickContinuations(TickBudget& budget);
     struct State;
     std::unique_ptr<State> _state;
 };
@@ -95,6 +126,7 @@ private:
 void TickCastGuard(std::uint32_t diff);
 void AddCastGuardScripts();
 void RegisterRealmHandlers();
+void RegisterRealmContinuationHandlers();
 }
 
 void AddSC_leeroy_realm();

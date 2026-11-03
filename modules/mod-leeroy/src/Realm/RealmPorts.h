@@ -215,16 +215,6 @@ inline std::string AdmissionReason(std::uint32_t guid, Purpose purpose, std::str
     return reason.empty() ? "" : "busy:" + reason;
 }
 
-struct BodyIdentity
-{
-    std::uint32_t account = 0, guild = 0, map = 0, instance = 0;
-    std::uint64_t group = 0;
-    std::uint8_t classId = 0, race = 0, sex = 0;
-    Player* player = nullptr;
-    PlayerbotAI* ai = nullptr;
-    WorldSession* session = nullptr;
-    bool operator==(BodyIdentity const&) const = default;
-};
 inline std::optional<BodyIdentity> Identity(std::uint32_t guid, bool allowTransit = false)
 {
     auto const* character = sCharacterCache->GetCharacterCacheByGuid(PlayerGuid(guid));

@@ -86,6 +86,12 @@ bool TickBudget::Take()
 }
 
 std::uint32_t TickBudget::Left() const { return _left; }
+bool TickBudget::Take(std::uint32_t count)
+{
+    if (count > _left) return false;
+    _left -= count;
+    return true;
+}
 void TickBudget::Reset() { _left = _cap; }
 
 bool ShouldRecord(WeaponNow const& now)

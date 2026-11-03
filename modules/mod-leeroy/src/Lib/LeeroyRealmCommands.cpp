@@ -1,6 +1,7 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 
 #include "LeeroyRealmCommands.h"
+#include "LeeroyRealmContinuations.h"
 #include "LeeroyProtocol.h"
 #include <algorithm>
 #include <charconv>
@@ -17,10 +18,10 @@ using json = nlohmann::json;
 constexpr auto kU32Max = std::numeric_limits<std::uint32_t>::max();
 constexpr auto kU64Max = std::numeric_limits<std::uint64_t>::max();
 constexpr auto kMaxTimestamp = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
-constexpr std::array<std::string_view, 17> kQueued = {
+constexpr std::array<std::string_view, 18> kQueued = {
     "realm_move", "rpg_status", "leave_pvp", "rearm", "wg_join", "arena_queue", "duel", "craft", "equip",
     "set_profession", "transmog_set", "calendar_signup", "mail_send", "bank_deposit", "bank_withdraw",
-    "bank_stock", "guild_grow"
+    "bank_stock", "guild_grow", "arena_team"
 };
 constexpr std::array<std::string_view, 3> kArenaActions = {"create", "add", "drop"};
 constexpr std::array<std::string_view, 5> kCalendarTypes = {"raid", "dungeon", "pvp", "meeting", "other"};
@@ -187,7 +188,20 @@ std::optional<RpgStatusCmd> ParseRpgStatus(json const& j, std::string& error)
 }
 std::optional<LeavePvpCmd> ParseLeavePvp(json const& j, std::string& error)
 {
-    Fields f(j, error); LeavePvpCmd out; f.List("guids", out.guids, 1, 150); return f.Result(std::move(out));
+    Fields f(j, error); LeavePvpCmd out;
+    f.List("guids", out.guids, 1, 150);
+    f.String("pvp_owner", out.pvpOwner, 0, 49, true);
+    f.Require(out.pvpOwner.empty() || ContinuationLedger::ValidToken(out.pvpOwner), "pvp_owner");
+    return f.Result(std::move(out));
+}
+std::optional<GetRealmPvpCmd> ParseGetRealmPvp(json const& j, std::string& error)
+{
+    Fields f(j, error); GetRealmPvpCmd out;
+    f.String("pvp_owner", out.pvpOwner, 0, 49, true);
+    f.Require(out.pvpOwner.empty() || ContinuationLedger::ValidToken(out.pvpOwner), "pvp_owner");
+    f.String("origin_id", out.originId, 0, 128, true);
+    f.Require(out.pvpOwner.empty() != out.originId.empty(), "owner_selector");
+    return f.Result(std::move(out));
 }
 std::optional<RearmCmd> ParseRearm(json const& j, std::string& error)
 {
@@ -443,8 +457,18 @@ std::optional<std::vector<ItemRule>> ParseItems(std::string_view csv, std::strin
 
 json MakeRealmJob(RealmJob const& e)
 {
-    return {{"type", "realm_job"}, {"id", e.id}, {"kind", e.kind}, {"state", e.ok ? "done" : "failed"},
+    json body = {{"type", "realm_job"}, {"id", e.id}, {"kind", e.kind}, {"state", e.ok ? "done" : "failed"},
         {"reason", e.reason}, {"guid", e.guid}, {"value", e.value}};
+    if (!e.pvpOwner.empty()) body["pvp_owner"] = e.pvpOwner;
+    return body;
+}
+json MakeRealmPvp(std::string_view id, ContinuationOwner const& owner)
+{
+    return {{"type", "realm_pvp"}, {"id", id}, {"pvp_owner", owner.token}, {"origin_id", owner.originId},
+        {"kind", PvpKindName(owner.kind)}, {"origin_epoch", owner.originEpoch}, {"revision", owner.revision},
+        {"guild", owner.guild}, {"human", owner.human}, {"members", owner.members},
+        {"stage", PvpStageName(owner.stage)}, {"application_fenced", owner.applicationFenced},
+        {"reason", owner.reason}, {"cleanup_id", owner.cleanupId}};
 }
 json MakeChannelChat(std::string_view channel, std::uint32_t fromGuid, std::string_view fromName,
     std::uint32_t zone, std::string_view text, bool viaBridge)

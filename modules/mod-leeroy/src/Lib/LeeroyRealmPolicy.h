@@ -84,7 +84,9 @@ class TickBudget
 public:
     explicit TickBudget(std::uint32_t cap);
     bool Take();
+    bool Take(std::uint32_t count); // Atomic: a failed full-closure charge consumes nothing.
     std::uint32_t Left() const;
+    std::uint32_t Cap() const { return _cap; }
     void Reset();
 
 private:
