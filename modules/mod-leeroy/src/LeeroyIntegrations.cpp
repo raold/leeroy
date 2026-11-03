@@ -10,8 +10,8 @@
 #include <type_traits>
 #include <unordered_set>
 
-#if !defined(LEEROY_HAS_OLLAMA_FILTER) || !defined(LEEROY_HAS_DUNGEON_CLEAR)
-#error "LEEROY_HAS_OLLAMA_FILTER and LEEROY_HAS_DUNGEON_CLEAR come from mod-leeroy.cmake; re-run cmake"
+#if !defined(LEEROY_HAS_OLLAMA_FILTER) || !defined(LEEROY_HAS_DUNGEON_CLEAR) || !defined(LEEROY_HAS_TRANSMOG)
+#error "LEEROY_HAS_OLLAMA_FILTER, LEEROY_HAS_DUNGEON_CLEAR and LEEROY_HAS_TRANSMOG come from mod-leeroy.cmake; re-run cmake"
 #endif
 
 #if LEEROY_HAS_OLLAMA_FILTER

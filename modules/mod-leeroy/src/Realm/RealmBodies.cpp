@@ -3,6 +3,7 @@
 #include "RealmCleanup.h"
 #include "RealmPorts.h"
 #include "LeeroyEvents.h"
+#include "LeeroyRealmTransmog.h"
 #include "Bag.h"
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
@@ -21,6 +22,13 @@
 #include <map>
 #include <mutex>
 #include <set>
+
+#if !defined(LEEROY_HAS_TRANSMOG)
+#error "LEEROY_HAS_TRANSMOG comes from mod-leeroy.cmake; re-run cmake"
+#endif
+#if LEEROY_HAS_TRANSMOG
+#include "Transmogrification.h"
+#endif
 
 namespace Leeroy::Realm
 {
@@ -353,6 +361,102 @@ RealmStep Equip(Queued& entry, std::uint32_t guid)
     return actual && actual->GetGUID() == item->GetGUID() ? Done(entry, replaced) : Unknown("tabard_equip_unproved");
 }
 
+#if LEEROY_HAS_TRANSMOG
+static_assert(EQUIPMENT_SLOT_START == 0 && EQUIPMENT_SLOT_END == kTransmogSlots
+    && INVENTORY_SLOT_BAG_0 == kTransmogEquipmentBag && ITEM_END <= 128,
+    "transmog snapshots require the supported native equipment/item layout");
+std::optional<TransmogSnapshot> ReadTransmog(Player* player, Transmogrification const* transmog)
+{
+    if (!player || !transmog) return std::nullopt;
+    TransmogSnapshot snapshot;
+    auto const owner = player->GetGUID();
+    snapshot.owner = owner.GetRawValue(); snapshot.money = player->GetMoney();
+    auto const records = transmog->entryMap.find(owner);
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        snapshot.visibleEntries[slot] = player->GetUInt32Value(PLAYER_VISIBLE_ITEM_1_ENTRYID + slot * 2);
+        snapshot.visibleEnchants[slot] = player->GetUInt32Value(PLAYER_VISIBLE_ITEM_1_ENCHANTMENT + slot * 2);
+        auto* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!item) continue;
+        // Only ordinary equipped items, never a bag/container or an unknown
+        // extension of the native update-field layout.
+        if (item->GetValuesCount() != ITEM_END) return std::nullopt;
+        auto& fact = snapshot.items[slot];
+        fact.object = reinterpret_cast<std::uintptr_t>(item);
+        fact.container = reinterpret_cast<std::uintptr_t>(item->GetContainer());
+        fact.guid = item->GetGUID().GetRawValue(); fact.owner = item->GetOwnerGUID().GetRawValue();
+        fact.entry = item->GetEntry(); fact.bag = item->GetBagSlot(); fact.slot = item->GetSlot();
+        fact.equipped = item->IsEquipped(); fact.inTrade = item->IsInTrade();
+        fact.updateState = item->GetState(); fact.queuePosition = item->GetQueuePos();
+        fact.refundRecipient = item->GetRefundRecipient(); fact.paidMoney = item->GetPaidMoney();
+        fact.paidExtendedCost = item->GetPaidExtendedCost(); fact.text = item->GetText();
+        fact.fields.reserve(ITEM_END);
+        for (uint16 field = 0; field < ITEM_END; ++field) fact.fields.push_back(item->GetUInt32Value(field));
+        auto& appearance = snapshot.appearances[slot];
+        auto const indexed = transmog->dataMap.find(item->GetGUID());
+        if (indexed != transmog->dataMap.end())
+        { appearance.indexed = true; appearance.owner = indexed->second.GetRawValue(); }
+        if (records != transmog->entryMap.end())
+        {
+            auto const record = records->second.find(item->GetGUID());
+            if (record != records->second.end())
+            { appearance.recorded = true; appearance.entry = record->second; }
+        }
+        appearance.readback = transmog->GetFakeEntry(item->GetGUID());
+    }
+    return snapshot;
+}
+#endif
+
+RealmStep Transmog(Queued& entry, std::uint32_t guid)
+{
+#if LEEROY_HAS_TRANSMOG
+    if (auto why = Eligible(entry, guid, Purpose::Equip, true); !why.empty()) return Refuse(why);
+    auto& module = RealmModule::Instance();
+    auto* player = FindOnline(guid);
+    auto* transmog = sTransmogrification;
+    auto authority = [&]
+    {
+        return TransmogAuthority{module.On(), IsCast(guid), Eligible(entry, guid, Purpose::Equip, true).empty(),
+            module.Epoch(), module.BodyGeneration(guid), GuildId(), HumanGuid(), module.Holder(guid), Identity(guid)};
+    };
+    auto const originalAuthority = authority();
+    auto const slot = entry.payload.at("slot").get<std::uint32_t>();
+    auto const appearance = entry.payload.at("entry").get<std::uint32_t>();
+    if (slot >= EQUIPMENT_SLOT_END) return Refuse("bad_entry");
+    auto* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, static_cast<uint8>(slot));
+    auto const itemGuid = item ? item->GetGUID() : ObjectGuid::Empty;
+    auto exact = [&]
+    {
+        return SameTransmogAuthority(originalAuthority, authority(), entry.id)
+            && FindOnline(guid) == player && sTransmogrification == transmog
+            && player->GetItemByPos(INVENTORY_SLOT_BAG_0, static_cast<uint8>(slot)) == item
+            && (!item || (item->GetGUID() == itemGuid && item->GetOwnerGUID() == player->GetGUID()
+                && item->GetBagSlot() == INVENTORY_SLOT_BAG_0 && item->GetSlot() == slot && item->IsEquipped()));
+    };
+    auto const result = MutateTransmog(transmog != nullptr, slot, appearance,
+        [&] { return Eligible(entry, guid, Purpose::Equip, true); },
+        [&]() -> std::optional<TransmogSnapshot>
+        { return exact() ? ReadTransmog(player, transmog) : std::nullopt; },
+        [&]
+        {
+            auto const* source = sObjectMgr->GetItemTemplate(appearance);
+            auto const* target = item ? item->GetTemplate() : nullptr;
+            return source && target && source->DisplayInfoID && target->DisplayInfoID
+                && sItemDisplayInfoStore.LookupEntry(source->DisplayInfoID)
+                && sItemDisplayInfoStore.LookupEntry(target->DisplayInfoID)
+                && transmog->CanTransmogrifyItemWithItem(player, target, source);
+        }, exact,
+        [&] { transmog->SetFakeEntry(player, appearance, static_cast<uint8>(slot), item); },
+        [&] { transmog->DeleteFakeEntry(player, static_cast<uint8>(slot), item); });
+    if (result.state == TransmogState::Complete) return Done(entry);
+    return result.state == TransmogState::Unknown ? Unknown(result.reason) : Refuse(result.reason);
+#else
+    (void)entry; (void)guid;
+    return Refuse("no_transmog");
+#endif
+}
+
 RealmStep Profession(Queued& entry, std::uint32_t guid)
 {
     if (auto why = Eligible(entry, guid, Purpose::Craft, true); !why.empty()) return Refuse(why);
@@ -662,9 +766,10 @@ RealmStep LeavePvp(Queued& entry, std::uint32_t guid)
 }
 
 template<class Parse, class Payload>
-void QueueHandler(char const* kind, Parse parse, Payload payload, RealmModule::Executor executor)
+void QueueHandler(char const* kind, Parse parse, Payload payload, RealmModule::Executor executor,
+    RealmModule::Admission admission = {})
 {
-    RealmModule::Instance().RegisterExecutor(kind, std::move(executor));
+    RealmModule::Instance().RegisterExecutor(kind, std::move(executor), std::move(admission));
     RegisterCommand(kind, [kind, parse, payload](Json const& message) -> LeeroyCommandResult
     {
         std::string error;
@@ -726,7 +831,8 @@ void RegisterRealmBodyHandlers()
     QueueHandler("set_profession", ParseSetProfession, [](SetProfessionCmd const& command, Queued& entry)
         { entry.guids = {command.guid}; entry.payload = {{"skill_id", command.skillId}}; }, Profession);
     QueueHandler("transmog_set", ParseTransmogSet, [](TransmogSetCmd const& command, Queued& entry)
-        { entry.guids = {command.guid}; entry.payload = Json::object(); }, [](Queued&, std::uint32_t) { return Refuse("no_transmog"); });
+        { entry.guids = {command.guid}; entry.payload = {{"slot", command.slot}, {"entry", command.entry}}; }, Transmog,
+        [](Queued const&, std::uint32_t guid) -> std::string { return IsCast(guid) ? "" : "not_cast"; });
     RegisterCommand("item_count", [](Json const& message) -> LeeroyCommandResult
     {
         std::string error;
