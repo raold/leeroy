@@ -43,7 +43,8 @@ COMMAND_FIELDS = {
     "guild_grow": "id guild_id guids",
     "guild_admit": "id guid rank",
     "guild_note": "id guid officer_note",
-    "announce": "id map instance_id boss_id boss_name attempts fight_s first",
+    "announce": ("id kill_id native_epoch guild_id human_guid map instance_id boss_id difficulty size heroic "
+                 "boss_name attempts fight_s first"),
     "get_realm_pvp": "id pvp_owner origin_id",
 }
 EVENT_FIELDS = {
@@ -61,6 +62,8 @@ EVENT_FIELDS = {
     "guard": "ts guid action rank reason",
     "realm_pvp": ("ts id pvp_owner origin_id kind origin_epoch revision guild human members stage "
                   "application_fenced reason cleanup_id"),
+    "realm_kill": ("ts kill_id native_epoch guild_id human_guid killed_at_ms verified_at_ms map instance_id "
+                   "boss_id difficulty size heroic human_present cast_members"),
 }
 
 
@@ -70,6 +73,10 @@ def fixtures():
 
 def owner_event():
     return next(row["msg"] for row in fixtures() if row["name"] == "realm_pvp_event")
+
+
+def kill_event():
+    return next(row["msg"] for row in fixtures() if row["name"] == "realm_kill_event")
 
 
 def command_from_message(msg):
@@ -85,7 +92,7 @@ def command_from_message(msg):
 def test_authoritative_maps_fields_and_immutable_message_shapes():
     assert list(protocol.COMMANDS) == list(COMMAND_FIELDS)
     assert list(protocol.EVENTS) == list(EVENT_FIELDS)
-    assert len(protocol.COMMANDS) == 32 and len(protocol.EVENTS) == 13
+    assert len(protocol.COMMANDS) == 32 and len(protocol.EVENTS) == 14
     for registry, expected in ((protocol.COMMANDS, COMMAND_FIELDS), (protocol.EVENTS, EVENT_FIELDS)):
         for name, cls in registry.items():
             assert [field.name for field in dataclasses.fields(cls)] == expected[name].split()
@@ -94,6 +101,8 @@ def test_authoritative_maps_fields_and_immutable_message_shapes():
     assert protocol.COMMANDS["arena_queue"] is protocol.ArenaQueue
     assert protocol.EVENTS["arena_queue"] is protocol.ArenaQueueEvent
     assert protocol.NOISY == frozenset({"realm_job", "channel_chat", "game_event"})
+    assert all(field.kw_only for field in dataclasses.fields(protocol.Announce)
+               if field.name in {"attempts", "fight_s", "first"})
 
 
 def test_commands_round_trip_native_fixtures_with_ordered_wire_keys():
@@ -182,7 +191,7 @@ def test_events_parse_from_native_fixture():
         parsed = wire.parse_event(json.dumps(msg))
         assert type(parsed) is protocol.EVENTS[msg["type"]]
         assert wire.event_type(parsed) == msg["type"]
-        expected = {key: tuple(value) if key == "members" else value for key, value in msg.items()
+        expected = {key: tuple(value) if key in {"members", "cast_members"} else value for key, value in msg.items()
                     if key not in {"type", "v"}}
         if msg["type"] == "realm_job":
             expected.setdefault("pvp_owner", "")
@@ -334,3 +343,97 @@ def test_unknown_native_receipt_still_requires_fence_token_and_full_manifest(fie
            "cleanup_id": "", "reason": "body_identity_changed", field: value}
     with pytest.raises(wire.ProtocolError):
         wire.parse_event(json.dumps(msg))
+
+
+def test_native_kill_exact_fixture_and_no_steady_fields():
+    protocol.register()
+    msg = kill_event()
+    assert list(msg) == ["v", "type", *EVENT_FIELDS["realm_kill"].split()]
+    assert set(msg) == {"v", "type", *EVENT_FIELDS["realm_kill"].split()}
+    parsed = wire.parse_event(json.dumps(msg))
+    assert type(parsed) is protocol.RealmKill
+    assert parsed.ts == msg["ts"] and parsed.cast_members == tuple(msg["cast_members"])
+    assert not any(key in msg for key in ("at_ms", "verified_ms", "steady_ms", "lifecycle"))
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        parsed.ts = parsed.ts + 1
+
+
+@pytest.mark.parametrize("field,value", [
+    ("kill_id", ""), ("kill_id", "a" * 32 + ":0"), ("kill_id", "a" * 32 + ":01"),
+    ("kill_id", "A" * 32 + ":1"), ("kill_id", "a" * 31 + ":1"),
+    ("kill_id", "a" * 32 + ":18446744073709551616"), ("kill_id", "a" * 32 + ":+1"),
+    ("kill_id", "a" * 32 + ":1\n"), ("kill_id", 1),
+    ("native_epoch", 0), ("native_epoch", True), ("native_epoch", "7"), ("native_epoch", 2**64),
+    ("guild_id", 0), ("guild_id", 2**32), ("human_guid", True), ("human_guid", -1),
+    ("instance_id", 0), ("instance_id", 2**32), ("map", -1), ("map", 2**32),
+    ("boss_id", False), ("boss_id", 2**32),
+    ("difficulty", -2), ("difficulty", 4), ("difficulty", True), ("difficulty", "1"),
+    ("size", 5), ("size", True), ("size", 10), ("heroic", True), ("heroic", 0),
+    ("human_present", 1), ("human_present", "true"),
+    ("cast_members", [11003, 11001]), ("cast_members", [11001, 11001]),
+    ("cast_members", [11002]), ("cast_members", [0]), ("cast_members", [True]),
+    ("cast_members", [2**32]), ("cast_members", list(range(1, 129))),
+    ("cast_members", list(range(1, 130))), ("cast_members", None),
+    ("killed_at_ms", 0), ("killed_at_ms", True), ("killed_at_ms", "1700000000000"),
+    ("verified_at_ms", 1699999999999), ("ts", 1700000000000),
+    ("ts", 0), ("ts", False), ("ts", 253402300800000),
+    ("verified_at_ms", 253402300800000), ("killed_at_ms", 253402300800000),
+])
+def test_native_kill_rejects_invalid_proof_fields(field, value):
+    protocol.register()
+    with pytest.raises(wire.ProtocolError):
+        wire.parse_event(json.dumps({**kill_event(), field: value}))
+
+
+@pytest.mark.parametrize("difficulty,size,heroic", [
+    (0, 10, False), (1, 25, False), (2, 10, True), (3, 25, True),
+    (-1, 10, False), (-1, 25, True),
+])
+def test_native_kill_accepts_exact_known_and_unknown_modes(difficulty, size, heroic):
+    protocol.register()
+    msg = {**kill_event(), "difficulty": difficulty, "size": size, "heroic": heroic,
+           "cast_members": [], "human_present": True}
+    parsed = wire.parse_event(json.dumps(msg))
+    assert (parsed.difficulty, parsed.size, parsed.heroic, parsed.cast_members) == (difficulty, size, heroic, ())
+
+
+def test_native_kill_participant_scan_cap_and_human_absent_rule():
+    protocol.register()
+    msg = {**kill_event(), "human_present": False, "cast_members": list(range(1, 129))}
+    assert len(wire.parse_event(json.dumps(msg)).cast_members) == 128
+    with pytest.raises(wire.ProtocolError):
+        wire.parse_event(json.dumps({**msg, "cast_members": []}))
+    msg = {**msg, "human_present": True, "cast_members": list(range(1, 128))}
+    assert len(wire.parse_event(json.dumps(msg)).cast_members) == 127
+
+
+def test_native_kill_uint_and_unix_time_upper_boundaries():
+    protocol.register()
+    msg = {**kill_event(), "kill_id": "f" * 32 + ":18446744073709551615",
+           "native_epoch": 2**64 - 1, "guild_id": 2**32 - 1, "human_guid": 2**32 - 1,
+           "map": 2**32 - 1, "instance_id": 2**32 - 1, "boss_id": 2**32 - 1,
+           "killed_at_ms": 253402300799999, "verified_at_ms": 253402300799999,
+           "ts": 253402300799999, "cast_members": [], "human_present": True}
+    assert wire.parse_event(json.dumps(msg)).ts == 253402300799999
+    assert wire.parse_event(json.dumps({**msg, "map": 0, "boss_id": 0, "killed_at_ms": 1,
+                                       "verified_at_ms": 1, "ts": 1})).ts == 1
+
+
+def test_native_kill_direct_constructor_requires_immutable_cast():
+    fields = {key: value for key, value in kill_event().items() if key not in {"v", "type"}}
+    with pytest.raises(ValueError):
+        protocol.RealmKill(**fields)
+    fields["cast_members"] = tuple(fields["cast_members"])
+    assert protocol.RealmKill(**fields).cast_members == fields["cast_members"]
+
+
+def test_announce_proof_fields_are_required_and_zero_metrics_encode_explicitly():
+    protocol.register()
+    msg = next(row["msg"] for row in fixtures() if row["name"] == "announce_defaults")
+    cmd = command_from_message(msg)
+    assert {"attempts", "fight_s"} <= msg.keys()
+    encoded = json.loads(wire.encode_command(cmd, 0))
+    assert encoded["attempts"] == encoded["fight_s"] == 0
+    for field in ("kill_id", "native_epoch", "guild_id", "human_guid", "difficulty", "size", "heroic", "first"):
+        with pytest.raises(TypeError, match=field):
+            command_from_message({key: value for key, value in msg.items() if key != field})

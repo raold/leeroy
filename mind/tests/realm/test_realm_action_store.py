@@ -9,7 +9,7 @@ import pytest
 from leeroy_mind.guild.protocol import BotDo, Job, JobSkip
 from leeroy_mind.protocol import Ack
 from leeroy_mind.realm import protocol as p
-from leeroy_mind.realm.action_policy import classify
+from leeroy_mind.realm.action_policy import classify, decode, document
 from leeroy_mind.realm.action_store import ActionCapacity, ActionSpec, ActionStore, ActionUnavailable, REFUSALS
 
 TOKEN = "a" * 32 + "-" + "b" * 16
@@ -67,6 +67,25 @@ def cleanup(store, command_id="cleanup", now=11):
     root = store.get("wg")
     record = store.prepare_cleanup("wg", p.LeavePvp(command_id, root.native_manifest, TOKEN), now=now)
     return dispatch(store, record, now=now)
+
+
+def legacy_announce(store, *, command_id="legacy", state="prepared", transport="not_entered", **changes):
+    """Insert actual old persisted bytes, without passing new-command admission."""
+    payload = document(dict(type="announce", id=command_id, map=631, instance_id=123, boss_id=0,
+                            boss_name="Example", attempts=0, fight_s=0, first="week"))
+    entered = transport != "not_entered"
+    values = dict(command_id=command_id, parent_id=None, role="root", policy="ack", owner="realm_day", rank=4,
+                  kind="announce", payload=payload, reserved_manifest="[]", native_manifest=None, guild=50, human=1,
+                  state=state, transport_state=transport, process_id="old_process" if entered else "",
+                  connection_epoch="7" if entered else "0", send_error="", evidence="{}", result_ok=None,
+                  result_reason="", created=0.0, updated=1.0, dispatched=1.0 if entered else None)
+    if state == "completed":
+        values.update(evidence=document({"ack": {"ok": True, "error": ""}}), result_ok=1)
+    values.update(changes)
+    with store.conn:
+        store.conn.execute("INSERT INTO realm_action(" + ",".join(values) + ") VALUES("
+                           + ",".join("?" for _ in values) + ")", tuple(values.values()))
+    return payload
 
 
 @pytest.mark.parametrize("job_first", [False, True])
@@ -631,3 +650,146 @@ def test_matching_defaults_still_strictly_validates_evidence_after_correlation(s
     with pytest.raises(ValueError):
         store.observe_bot_job(replace(bot(), **change), now=3)
     assert store.records() == records and store.holds() == holds
+
+
+@pytest.mark.parametrize("state,transport,expected", [
+    ("prepared", "not_entered", "not_sent"),
+    ("dispatched", "inflight", "unknown"),
+    ("unknown", "settled", "unknown"),
+    ("completed", "settled", "completed"),
+])
+def test_exact_legacy_announce_history_recovers_without_proof_replay_or_body_hold(store, state, transport, expected):
+    payload = legacy_announce(store, state=state, transport=transport)
+    before = store.get("legacy")
+    assert before.payload == payload and before.reserved_manifest == () and before.native_manifest is None
+    assert store.records() == (before,) and store.holds() == ()
+    with pytest.raises((TypeError, ValueError)):
+        decode(payload)
+    unresolved = store.recover(process_id="new_process", now=20)
+    after = store.get("legacy")
+    assert after.payload == payload and after.state == expected
+    assert after.evidence == before.evidence and after.native_manifest is None
+    assert after.process_id == before.process_id and after.connection_epoch == before.connection_epoch
+    assert after.reserved_manifest == () and store.holds() == ()
+    assert [r.command_id for r in unresolved] == (["legacy"] if expected == "unknown" else [])
+    if transport == "inflight":
+        assert after.transport_state == "settled" and after.send_error == "ProcessRestart"
+        assert after.result_ok is before.result_ok is None
+    elif state == "prepared":
+        assert after.transport_state == "not_entered" and after.result_reason == "restart_not_sent"
+        assert after.result_ok is False and after.dispatched is None
+    else:
+        assert after == before
+    assert not {"kill_id", "native_epoch", "guild_id", "human_guid", "difficulty", "size", "heroic"} & json.loads(after.payload).keys()
+
+
+def test_legacy_prepared_cannot_dispatch_or_be_submitted_as_new_journal_action(store):
+    payload = legacy_announce(store)
+    before = store.get("legacy")
+    with pytest.raises((TypeError, ValueError)):
+        store.begin_dispatch("legacy", payload=payload, process_id="new", connection_epoch=8, now=2)
+    assert store.get("legacy") == before
+    raw = {**json.loads(payload), "id": "new_legacy"}
+    spec = ActionSpec("new_legacy", None, "root", "ack", "realm_day", 4, "announce", document(raw), (), 50, 1)
+    with pytest.raises((TypeError, ValueError)):
+        store.prepare(spec, now=2)
+    assert store.get("new_legacy") is None and store.records() == (before,)
+
+
+def test_legacy_unknown_and_completed_history_preserve_actual_ack_authority(store):
+    legacy_announce(store, state="dispatched", transport="inflight")
+    transition = store.observe_ack(Ack(0, "legacy", True, ""), now=2)
+    assert transition.result_ready and transition.result_ok is True
+    completed = store.get("legacy")
+    assert completed.state == "completed" and completed.transport_state == "settled"
+    assert json.loads(completed.evidence) == {"ack": {"ok": True, "error": ""}}
+    assert store.holds() == ()
+    store.observe_ack(Ack(0, "legacy", False, "owner_unavailable"), now=3)
+    conflict = store.get("legacy")
+    assert conflict.state == "conflict" and json.loads(conflict.evidence)["conflict"] is True
+    store.recover(process_id="new", now=4)
+    assert store.get("legacy").state == "conflict" and store.holds() == ()
+
+
+def test_legacy_unknown_no_body_history_does_not_release_unrelated_body_authority(store):
+    dispatch(store, prepare(store, p.Rearm("body", (2, 3))))
+    legacy_announce(store, state="unknown", transport="settled", send_error="TimeoutError",
+                    result_ok=0, result_reason="transport_unknown", evidence=document({"failed_at": 1.0}))
+    before = store.get("legacy")
+    store.recover(process_id="new", now=20)
+    assert store.get("legacy") == before
+    hold, = store.holds()
+    assert hold.scope_id == "body" and hold.guids == frozenset({2, 3})
+    assert {r.command_id for r in store.unresolved()} == {"body", "legacy"}
+
+
+@pytest.mark.parametrize("changes", [
+    {"kind": "realm_move"}, {"kind": "unknown_body"}, {"policy": "ordinary"},
+    {"reserved_manifest": "[2]"}, {"reserved_manifest": "[true]"}, {"native_manifest": "[]"},
+    {"role": "query"}, {"role": "cleanup"}, {"parent_id": "parent"},
+    {"command_id": "different"}, {"guild": 0}, {"human": 0}, {"rank": 0},
+    {"state": "completed"}, {"state": "unknown"}, {"transport_state": "inflight"},
+    {"evidence": '{"ack":{"ok":true,"error":"unexpected"}}'},
+    {"evidence": '{"ack":{"ok":1,"error":""}}'},
+    {"evidence": '{"ack":{"ok":true,"error":""},"ack":{"ok":true,"error":""}}'},
+    {"evidence": '{"unknown":true}'}, {"evidence": '{"conflict":false}'},
+    {"evidence": '{"job":{"kind":"announce","state":"done","reason":"","guid":0,"value":0,"pvp_owner":""}}'},
+    {"evidence": '{"cleanup_ids":[]}'}, {"evidence": '{"status":{}}'},
+])
+def test_legacy_exception_never_accepts_corrupt_or_body_bearing_record(store, changes):
+    legacy_announce(store)
+    with store.conn:
+        store.conn.execute("UPDATE realm_action SET " + ",".join(key + "=?" for key in changes),
+                           tuple(changes.values()))
+    with pytest.raises(ActionUnavailable):
+        store.records()
+    with pytest.raises(ActionUnavailable):
+        store.holds()
+    with pytest.raises(ActionUnavailable):
+        store.recover(process_id="new", now=20)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("type", "realm_move"), ("id", "bad id"), ("map", -1), ("map", True),
+    ("instance_id", 0), ("instance_id", 2**32), ("boss_id", 2**32),
+    ("boss_name", ""), ("boss_name", "é" * 25), ("boss_name", "bad\0name"),
+    ("attempts", True), ("attempts", 100), ("fight_s", -1), ("fight_s", 3601),
+    ("first", "month"), ("kill_id", "a" * 32 + ":1"), ("unknown", 1),
+])
+def test_legacy_payload_requires_exact_validated_old_schema(store, field, value):
+    payload = legacy_announce(store)
+    with store.conn:
+        store.conn.execute("UPDATE realm_action SET payload=?", (document({**json.loads(payload), field: value}),))
+    with pytest.raises(ActionUnavailable):
+        store.recover(process_id="new", now=20)
+
+
+@pytest.mark.parametrize("corruption", ["missing_attempts", "missing_fight_s", "duplicate", "noncanonical", "malformed"])
+def test_legacy_reader_rejects_missing_fields_duplicates_and_noncanonical_bytes(store, corruption):
+    payload = legacy_announce(store)
+    raw = json.loads(payload)
+    if corruption.startswith("missing_"):
+        del raw[corruption.removeprefix("missing_")]
+        payload = document(raw)
+    elif corruption == "duplicate":
+        payload = payload[:-1] + ',"id":"legacy"}'
+    elif corruption == "noncanonical":
+        payload += " "
+    else:
+        payload = "{broken"
+    with store.conn:
+        store.conn.execute("UPDATE realm_action SET payload=?", (payload,))
+    with pytest.raises(ActionUnavailable):
+        store.holds()
+    with pytest.raises(ActionUnavailable):
+        store.recover(process_id="new", now=20)
+
+
+def test_new_exact_announce_keeps_existing_ack_no_body_policy(store):
+    cmd = p.Announce("announce", "a" * 32 + ":1", 7, 50, 1, 631, 123, 0, 1, 25, False,
+                     "Example", first="week")
+    record = dispatch(store, prepare(store, cmd))
+    assert record.policy == "ack" and record.reserved_manifest == () and store.holds() == ()
+    assert not store.observe_realm_job(job(cmd.id, "announce", guid=0), now=2).matched
+    assert store.observe_ack(Ack(0, cmd.id, True, ""), now=3).result_ok is True
+    assert store.get(cmd.id).state == "completed" and store.holds() == ()

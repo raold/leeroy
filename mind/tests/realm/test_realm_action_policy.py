@@ -6,9 +6,19 @@ import pytest
 
 from leeroy_mind.guild.protocol import BotDo
 from leeroy_mind.realm import protocol as p
-from leeroy_mind.realm.action_policy import classify, decode
+from leeroy_mind.realm.action_policy import classify, decode, document
 
 TOKEN = "a" * 32 + "-" + "b" * 16
+KILL_ID = "0123456789abcdef0123456789abcdef:1"
+
+
+def announce(**changes):
+    values = dict(id="announce", kill_id=KILL_ID, native_epoch=7, guild_id=50, human_guid=1,
+                  map=0, instance_id=1, boss_id=0, difficulty=0, size=10, heroic=False,
+                  boss_name="Example", first="week")
+    return p.Announce(**{**values, **changes})
+
+
 CASES = [
     (p.RealmActors("actors", (3, 2), (2,), (50,)), "ack", ()),
     (p.RealmSay("say", 2, "trade", "hello"), "ack", ()),
@@ -39,7 +49,7 @@ CASES = [
     (p.GuildGrow("grow", 50, (3, 2)), "ordinary", (2, 3)),
     (p.GuildAdmit("admit", 2), "ack", (2,)),
     (p.GuildNote("note", 2, ""), "ack", (2,)),
-    (p.Announce("announce", 0, 1, 0, "Example", "week"), "ack", ()),
+    (announce(), "ack", ()),
     (p.GetRealmPvp("query", origin_id="wg"), "query", ()),
     (BotDo("defaults", (3, 2), "nc", "-bg,-lfg"), "defaults", (2, 3)),
 ]
@@ -89,7 +99,7 @@ def test_unsupported_shapes_and_unattached_children_reject(cmd):
     p.BankTabBuy("bad", 2, 6, "T", ""), p.BankMoney("bad", 60001),
     p.BankWithdraw("bad", 2, 100, 0, 0), p.GuildAdmit("bad", 2, 1),
     p.GuildNote("bad", 2, "a" * 32), p.GrantAchievement("bad", 2, 1),
-    p.GuildRename("bad", 50, "é" * 13), p.Announce("bad", 0, 0, 0, "B", "ever"),
+    p.GuildRename("bad", 50, "é" * 13),
 ])
 def test_native_field_bounds_reject_before_journaling(cmd):
     with pytest.raises(ValueError): classify(cmd)
@@ -106,3 +116,73 @@ def test_payload_copies_mutable_input_preserving_order():
     source.clear()
     assert result.reserved_manifest == (2, 3)
     assert json.loads(result.payload)["guids"] == [3, 2]
+
+
+@pytest.mark.parametrize("field,value", [
+    ("id", "bad id"), ("kill_id", ""), ("kill_id", "a" * 32 + ":0"),
+    ("kill_id", "a" * 32 + ":01"), ("kill_id", "A" * 32 + ":1"),
+    ("kill_id", "a" * 32 + ":18446744073709551616"), ("kill_id", True),
+    ("native_epoch", 0), ("native_epoch", True), ("native_epoch", 2**64),
+    ("guild_id", 0), ("guild_id", 2**32), ("human_guid", False), ("human_guid", "1"),
+    ("map", -1), ("map", 2**32), ("instance_id", 0), ("instance_id", True),
+    ("boss_id", -1), ("boss_id", 2**32), ("difficulty", -2), ("difficulty", 4),
+    ("difficulty", True), ("difficulty", 0.0), ("size", 25), ("size", "10"),
+    ("heroic", True), ("heroic", 0), ("boss_name", ""), ("boss_name", "é" * 25),
+    ("boss_name", "bad\0name"), ("boss_name", "\ud800"),
+    ("attempts", -1), ("attempts", 100), ("attempts", True),
+    ("fight_s", -1), ("fight_s", 3601), ("fight_s", 1.0), ("first", "month"),
+])
+def test_exact_announce_constructor_and_mutated_dataclass_reject(field, value):
+    with pytest.raises(ValueError):
+        announce(**{field: value})
+    cmd = announce()
+    object.__setattr__(cmd, field, value)
+    with pytest.raises(ValueError):
+        classify(cmd)
+
+
+@pytest.mark.parametrize("difficulty,size,heroic", [
+    (0, 10, False), (1, 25, False), (2, 10, True), (3, 25, True),
+    (-1, 10, True), (-1, 25, False),
+])
+def test_exact_announce_modes_and_upper_identity_bounds_roundtrip(difficulty, size, heroic):
+    cmd = announce(kill_id="f" * 32 + ":18446744073709551615", native_epoch=2**64 - 1,
+                   guild_id=2**32 - 1, human_guid=2**32 - 1, map=2**32 - 1,
+                   instance_id=2**32 - 1, boss_id=2**32 - 1, difficulty=difficulty, size=size,
+                   heroic=heroic, boss_name="é" * 24, attempts=99, fight_s=3600, first="ever")
+    result = classify(cmd)
+    assert result.policy == "ack" and result.reserved_manifest == ()
+    assert decode(result.payload) == (cmd, result)
+
+
+@pytest.mark.parametrize("field", [
+    "kill_id", "native_epoch", "guild_id", "human_guid", "difficulty", "size", "heroic",
+    "attempts", "fight_s", "first",
+])
+def test_announce_decode_requires_every_serialized_proof_and_metric_field(field):
+    raw = json.loads(classify(announce()).payload)
+    del raw[field]
+    with pytest.raises((TypeError, ValueError)):
+        decode(document(raw))
+
+
+def test_announce_old_shape_unknown_fields_and_duplicate_keys_are_not_live_payloads():
+    payload = classify(announce()).payload
+    raw = json.loads(payload)
+    old = {key: value for key, value in raw.items() if key not in {
+        "kill_id", "native_epoch", "guild_id", "human_guid", "difficulty", "size", "heroic"}}
+    with pytest.raises(TypeError):
+        decode(document(old))
+    with pytest.raises(TypeError):
+        decode(document({**raw, "native_proof": KILL_ID}))
+    with pytest.raises(ValueError):
+        decode(payload[:-1] + ',"kill_id":"' + KILL_ID + '"}')
+    with pytest.raises(ValueError):
+        decode(payload + " ")
+
+
+def test_announce_metrics_default_locally_but_are_always_serialized():
+    result = classify(announce())
+    raw = json.loads(result.payload)
+    assert raw["attempts"] == raw["fight_s"] == 0
+    assert set(raw) == {"type", *p.Announce.__dataclass_fields__}

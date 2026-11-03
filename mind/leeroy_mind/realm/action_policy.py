@@ -1,6 +1,6 @@
 """Exact outgoing Realm registry and native field validation.
 
-Bounds mirror Lib/LeeroyRealmCommands.cpp:149-363; native roster-bound arena
+Bounds mirror Lib/LeeroyRealmCommands.cpp; native roster-bound arena
 admission is deliberately deferred until Task24 can prove the atomic full roster.
 Payloads are immutable canonical business JSON, retaining source array order.
 """
@@ -173,8 +173,9 @@ def classify(cmd, *, child=False):
     elif kind == "guild_admit": scope = (n("guid"),); n("rank", 2, 9)
     elif kind == "guild_note": scope = (n("guid"),); s("officer_note", 0, 31)
     elif kind == "announce":
-        n("map", 0); n("instance_id"); n("boss_id", 0); s("boss_name", 1, 48)
-        n("attempts", 0, 99); n("fight_s", 0, 3600); e("first", {"week", "ever"})
+        # Frozen dataclasses can still be mutated through object.__setattr__.
+        # Recheck every exact proof field at the journaling boundary.
+        p.Announce(**{f.name: getattr(cmd, f.name) for f in fields(cmd)})
     elif kind == "get_realm_pvp":
         if not child: raise ValueError("query requires journaled origin")
         p.GetRealmPvp(cmd.id, cmd.pvp_owner, cmd.origin_id); policy = "query"

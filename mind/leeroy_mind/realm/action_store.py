@@ -14,7 +14,7 @@ from leeroy_mind.bodies import BodyEvidenceUnavailable, BodyHold, RANKS
 from leeroy_mind.guild.protocol import Job, JobSkip
 from leeroy_mind.protocol import Ack
 from . import protocol as p
-from .action_policy import classify, decode, document, identity, integer, members, text, token, U64
+from .action_policy import Classified, classify, decode, document, identity, integer, members, text, token, U64
 
 TERMINAL = frozenset({"completed", "not_sent"})
 STATES = frozenset({"prepared", "dispatched", "unknown", "conflict", *TERMINAL})
@@ -77,6 +77,25 @@ def _bot(value, command_id):
     return ev
 
 
+def _stored_announce_v1(payload):
+    """Read the exact historical no-body schema, never a dispatchable command.
+
+    This reader is used only after strict current-schema decoding fails while
+    validating an existing journal record. No missing proof identity or native
+    mode is inferred. Canonical serialization also rejects duplicate JSON keys.
+    """
+    raw = json.loads(payload)
+    keys = {"type", "id", "map", "instance_id", "boss_id", "boss_name", "attempts", "fight_s", "first"}
+    if type(raw) is not dict or set(raw) != keys or raw["type"] != "announce":
+        raise ValueError("invalid historical announcement")
+    command_id = identity(raw["id"])
+    integer(raw["map"], 0); integer(raw["instance_id"]); integer(raw["boss_id"], 0)
+    text(raw["boss_name"], 1, 48); integer(raw["attempts"], 0, 99); integer(raw["fight_s"], 0, 3600)
+    if text(raw["first"], 1, 64) not in {"week", "ever"} or document(raw) != payload:
+        raise ValueError("invalid historical announcement")
+    return command_id, Classified("announce", "ack", payload, ())
+
+
 @dataclass(frozen=True, slots=True)
 class ActionSpec:
     command_id: str
@@ -124,12 +143,24 @@ class ActionStore:
     def __init__(self, conn):
         self.conn = conn
 
-    def _validate(self, r):
+    def _validate(self, r, *, stored=False):
         identity(r.command_id)
         if r.parent_id is not None: identity(r.parent_id)
         _rank(r.owner, r.rank); integer(r.guild); integer(r.human)
-        cmd, c = decode(r.payload)
-        if (cmd.id != r.command_id or c.kind != r.kind or c.policy != r.policy
+        legacy = False
+        try:
+            cmd, c = decode(r.payload)
+            command_id = cmd.id
+        except (ValueError, TypeError, KeyError):
+            if not stored:
+                raise
+            command_id, c = _stored_announce_v1(r.payload)
+            cmd = None
+            legacy = True
+            if (r.kind != "announce" or r.policy != "ack" or r.role != "root"
+                    or r.parent_id is not None or r.reserved_manifest != () or r.native_manifest is not None):
+                raise ValueError("invalid historical announcement binding")
+        if (command_id != r.command_id or c.kind != r.kind or c.policy != r.policy
                 or c.reserved_manifest != r.reserved_manifest
                 or r.reserved_manifest != tuple(sorted(members(r.reserved_manifest, 0)))):
             raise ValueError("invalid action binding")
@@ -157,6 +188,8 @@ class ActionStore:
         allowed = {"ack", "job", "bot", "enrollment_job", "origin_failure", "status", "binding", "query_id",
                    "last_query", "cleanup_id", "cleanup_ids", "cleanup_admitted", "canceled", "dispatch_revision", "conflict", "failed_at"}
         if not set(ev) <= allowed: raise ValueError("invalid action evidence keys")
+        if legacy and not set(ev) <= {"ack", "conflict", "failed_at"}:
+            raise ValueError("invalid historical announcement evidence")
         if "ack" in ev:
             ack = ev["ack"]
             if type(ack) is not dict or set(ack) != {"ok", "error"} or type(ack["ok"]) is not bool: raise ValueError("invalid action ack")
@@ -237,7 +270,7 @@ class ActionStore:
         if d["result_ok"] is not None:
             if type(d["result_ok"]) is not int or d["result_ok"] not in (0, 1): raise ValueError("invalid action result")
             d["result_ok"] = bool(d["result_ok"])
-        return self._validate(ActionRecord(**d))
+        return self._validate(ActionRecord(**d), stored=True)
 
     def _read(self, command_id):
         cursor = self.conn.execute("SELECT * FROM realm_action WHERE command_id=?", (command_id,))
@@ -306,7 +339,7 @@ class ActionStore:
             evidence = json.loads(r.evidence)
             evidence.setdefault("failed_at", r.updated)
             r = replace(r, evidence=document(evidence, limit=32768))
-        self._validate(r)
+        self._validate(r, stored=True)
         values = asdict(r)
         values["reserved_manifest"] = document(list(r.reserved_manifest))
         values["native_manifest"] = None if r.native_manifest is None else document(list(r.native_manifest))
@@ -342,6 +375,9 @@ class ActionStore:
         with self.conn:
             r = self.get(command_id)
             if r is None or r.state != "prepared" or r.payload != payload: raise ValueError("invalid action dispatch")
+            # Historical v1 Announce can be read/recovered but never replayed.
+            # Admission and transport both require the complete current schema.
+            decode(r.payload)
             if r.role == "query":
                 parent = self.get(r.parent_id)
                 data = json.loads(parent.evidence)

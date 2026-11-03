@@ -30,6 +30,36 @@ def _manifest(members: tuple[int, ...]) -> bool:
         and all(_uint(member) for member in members) and len(set(members)) == len(members))
 
 
+def _kill_id(value: str) -> bool:
+    if type(value) is not str or re.fullmatch(r"[0-9a-f]{32}:[1-9][0-9]{0,19}", value) is None:
+        return False
+    return _uint(int(value[33:]), 0xFFFFFFFFFFFFFFFF)
+
+
+def _raid_mode(difficulty: int, size: int, heroic: bool) -> bool:
+    return (type(difficulty) is int and difficulty in {-1, 0, 1, 2, 3}
+        and type(size) is int and size in {10, 25} and type(heroic) is bool
+        and (difficulty == -1 or (size == (25 if difficulty % 2 else 10)
+                                  and heroic == (difficulty >= 2))))
+
+
+def _proof_identity(value) -> bool:
+    return (_kill_id(value.kill_id) and _uint(value.native_epoch, 0xFFFFFFFFFFFFFFFF)
+        and _uint(value.guild_id) and _uint(value.human_guid) and _uint(value.instance_id)
+        and type(value.map) is int and 0 <= value.map <= 0xFFFFFFFF
+        and type(value.boss_id) is int and 0 <= value.boss_id <= 0xFFFFFFFF
+        and _raid_mode(value.difficulty, value.size, value.heroic))
+
+
+def _bounded_text(value, lo, hi) -> bool:
+    if type(value) is not str or "\0" in value:
+        return False
+    try:
+        return lo <= len(value.encode("utf-8")) <= hi
+    except UnicodeError:
+        return False
+
+
 @dataclass(frozen=True, slots=True)
 class RealmActors:
     id: str
@@ -301,13 +331,60 @@ class GuildNote:
 @dataclass(frozen=True, slots=True)
 class Announce:
     id: str
+    kill_id: str
+    native_epoch: int
+    guild_id: int
+    human_guid: int
     map: int
     instance_id: int
     boss_id: int
+    difficulty: int
+    size: int
+    heroic: bool
     boss_name: str
     attempts: int = field(default=0, kw_only=True)
     fight_s: int = field(default=0, kw_only=True)
-    first: str
+    first: str = field(kw_only=True)
+
+    def __post_init__(self):
+        if (not _id(self.id) or not _proof_identity(self)
+                or not _bounded_text(self.boss_name, 1, 48)
+                or type(self.attempts) is not int or not 0 <= self.attempts <= 99
+                or type(self.fight_s) is not int or not 0 <= self.fight_s <= 3600
+                or type(self.first) is not str or self.first not in {"week", "ever"}):
+            raise ValueError("invalid exact Realm announcement")
+
+
+@dataclass(frozen=True, slots=True)
+class RealmKill:
+    ts: int
+    kill_id: str
+    native_epoch: int
+    guild_id: int
+    human_guid: int
+    killed_at_ms: int
+    verified_at_ms: int
+    map: int
+    instance_id: int
+    boss_id: int
+    difficulty: int
+    size: int
+    heroic: bool
+    human_present: bool
+    cast_members: tuple[int, ...]
+
+    def __post_init__(self):
+        if (not _proof_identity(self)
+                or any(not _uint(value, 253402300799999)
+                       for value in (self.killed_at_ms, self.verified_at_ms, self.ts))
+                or not self.killed_at_ms <= self.verified_at_ms <= self.ts
+                or type(self.human_present) is not bool
+                or type(self.cast_members) is not tuple or len(self.cast_members) > 128
+                or not all(_uint(member) and member != self.human_guid for member in self.cast_members)
+                or tuple(sorted(set(self.cast_members))) != self.cast_members
+                or (self.human_present and len(self.cast_members) == 128)
+                or (not self.human_present and not self.cast_members)):
+            raise ValueError("invalid native Realm kill proof")
 
 
 @dataclass(frozen=True, slots=True)
@@ -521,6 +598,7 @@ EVENTS: dict[str, type] = {
     "mail_taken": MailTaken,
     "guard": Guard,
     "realm_pvp": RealmPvp,
+    "realm_kill": RealmKill,
 }
 NOISY = frozenset({"realm_job", "channel_chat", "game_event"})
 

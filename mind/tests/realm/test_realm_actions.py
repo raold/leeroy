@@ -12,7 +12,7 @@ from leeroy_mind.guild.protocol import BotDo, Job, JobSkip
 from leeroy_mind.protocol import Ack, Hello
 from leeroy_mind.realm import protocol as p
 from leeroy_mind.realm.actions import ActionContext, ActionQueue, ActionRejected
-from leeroy_mind.realm.action_policy import classify
+from leeroy_mind.realm.action_policy import classify, document
 from leeroy_mind.realm.action_store import ActionSpec, ActionStore
 
 
@@ -838,3 +838,52 @@ def test_configured_probe_capacity_is_deferred_while_worker_and_receipts_continu
             await h.finish()
             await worker
     run(scenario())
+
+
+@pytest.mark.parametrize("state,transport", [
+    ("prepared", "not_entered"), ("dispatched", "inflight"),
+    ("unknown", "settled"), ("completed", "settled"),
+])
+def test_recovered_legacy_announce_never_enters_queue_transport_or_body_ledger(harness, state, transport):
+    async def scenario():
+        h = harness
+        payload = document(dict(type="announce", id="legacy", map=631, instance_id=123, boss_id=0,
+                                boss_name="Example", attempts=0, fight_s=0, first="week"))
+        entered = transport != "not_entered"
+        values = dict(command_id="legacy", role="root", policy="ack", owner="realm_day", rank=4,
+                      kind="announce", payload=payload, reserved_manifest="[]", guild=50, human=1,
+                      state=state, transport_state=transport, created=0.0, updated=1.0,
+                      process_id="old" if entered else "", connection_epoch="7" if entered else "0",
+                      dispatched=1.0 if entered else None, result_ok=1 if state == "completed" else None,
+                      evidence=document({"ack": {"ok": True, "error": ""}}) if state == "completed" else "{}")
+        with h.store.conn:
+            h.store.conn.execute("INSERT INTO realm_action(" + ",".join(values) + ") VALUES("
+                                 + ",".join("?" for _ in values) + ")", tuple(values.values()))
+        h.store.recover(process_id="new", now=20)
+        old = h.store.get("legacy")
+        assert h.store.holds() == () and old.payload == payload and old.native_manifest is None
+        await h.cycle(20)
+        await h.cycle(30)
+        assert h.sent == [] and h.queue._pending == {} and h.queue._entries == {}
+        assert h.store.get("legacy") == old
+        assert h.bodies.may_move_all("realm_day", (2,))
+        # Ordinary work and actual receipt routing continue beside the history.
+        h.queue.submit(p.RealmMove("move_after_legacy", 2, "home"), owner="realm_day")
+        await h.cycle(31)
+        assert [cmd.id for _, cmd in h.sent] == ["move_after_legacy"]
+        h.ack("move_after_legacy")
+        await h.cycle(32)
+        h.queue.on_realm_job(done("move_after_legacy", 2))
+        assert h.store.get("move_after_legacy").state == "completed"
+        assert h.store.holds() == () and h.store.get("legacy").payload == payload
+        await h.finish()
+    run(scenario())
+
+
+def test_queue_rejects_mutated_announce_before_creating_journal_or_transport_entry(harness):
+    cmd = p.Announce("announce", "a" * 32 + ":1", 7, 50, 1, 631, 123, 0, 1, 25, False,
+                     "Example", first="week")
+    object.__setattr__(cmd, "kill_id", "")
+    with pytest.raises(ValueError):
+        harness.queue.submit(cmd, owner="realm_day")
+    assert harness.store.records() == () and harness.queue._pending == {} and harness.sent == []
