@@ -36,6 +36,34 @@ struct FishingProof
             && (!prepared || (bobber ? removed : canceled));
     }
 };
+// Fishing channels cast on a later native SpellEvent. Object facts are only a
+// candidate inside the exact pre/post cast frame, committed by that post hook.
+struct FishingCastCandidate
+{
+    std::uint64_t serial = 0, bobber = 0;
+    std::uintptr_t spell = 0;
+    bool active = false, poisoned = false;
+    bool Open(FishingProof const& proof, std::uintptr_t pointer)
+    {
+        if (active || !proof.prepared || proof.cast || proof.sealed || proof.poisoned || pointer != proof.spell)
+        { poisoned = true; return false; }
+        serial = proof.serial; spell = pointer; active = true; return true;
+    }
+    bool Add(std::uint64_t guid)
+    {
+        if (!active || poisoned || !guid || bobber) { poisoned = true; return false; }
+        bobber = guid; return true;
+    }
+    bool Commit(FishingProof& proof, std::uintptr_t pointer)
+    {
+        if (!active || poisoned || pointer != spell || serial != proof.serial || spell != proof.spell)
+        { proof.poisoned = true; active = false; return false; }
+        active = false;
+        if (bobber && !proof.AddBobber(serial, spell, bobber)) return false;
+        proof.Cast(pointer);
+        return !proof.poisoned;
+    }
+};
 inline bool FishingActionName(std::string_view name)
 {
     return name == "go fishing" || name == "move near water" || name == "use fishing bobber"

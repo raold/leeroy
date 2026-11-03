@@ -3,6 +3,8 @@
 #include "RealmPorts.h"
 #include "RealmPvp.h"
 #include "RealmArenaObserver.h"
+#include "RealmCraft.h"
+#include "Guild/GuildFishing.h"
 #include "ScriptMgr.h"
 
 // These later slices are registered only when their real implementation is
@@ -27,6 +29,7 @@ void RegisterRealmHandlers()
     RegisterRealmContinuationHandlers();
     RegisterRealmPvpHandlers();
     RegisterRealmArenaObserverHandlers();
+    RegisterRealmCraftHandlers();
     RegisterCommand("realm_actors", [](nlohmann::json const& message)
     {
         std::string error;
@@ -65,6 +68,8 @@ void AddSC_leeroy_realm()
     new Leeroy::Realm::RealmLifecycleScript();
     Leeroy::Realm::AddRealmPvpScripts();
     Leeroy::Realm::AddRealmArenaObserverScripts();
+    Leeroy::Realm::AddRealmCraftScripts();
+    Leeroy::Guild::AddGuildFishingScripts();
 #if LEEROY_REALM_SPEECH
     Leeroy::Realm::AddRealmSpeechScripts();
 #endif

@@ -1,6 +1,8 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 
 #include "BotCommands.h"
+#include "GuildFishing.h"
+#include "Realm/RealmModule.h"
 #include "GuildPorts.h"
 #include "OfflineRaidJob.h"
 #include "LeeroyTrainingProtocol.h"
@@ -342,6 +344,7 @@ LeeroyCommandResult HandleBotDo(nlohmann::json const& message)
     if (!GuildEnabled())
         return Fail("disabled");
     // Formation is the tier-one alias that can replace a journaled value.
+    bool const fishing = command->action == "do" && command->param == "go fishing";
     if (!command->trainingRun.empty() && !Training::ScopedBotMutationAllowed(command->action))
         return Fail("training_run_ownership");
     if (!command->trainingRun.empty() || Training::IsTierTwo(command->action, command->param)
@@ -355,11 +358,17 @@ LeeroyCommandResult HandleBotDo(nlohmann::json const& message)
     {
         if (!OwnedCast(guid))
             return Fail("not_cast:" + std::to_string(guid));
-        if (Realm::RealmOwns(guid)) return Fail("busy:realm_owner");
+        if (Realm::RealmOwns(guid) && !fishing) return Fail("busy:realm_owner");
     }
     if (command->targetGuid && !OwnedTarget(command->targetGuid))
         return Fail("not_cast:" + std::to_string(command->targetGuid));
     if (command->targetGuid && Realm::RealmOwns(command->targetGuid)) return Fail("busy:realm_owner");
+    if (fishing)
+    {
+        bool const accepted = Realm::RealmModule::Instance().AcceptGuildFishing(
+            message.at("id").get<std::string>(), command->guids, error);
+        return {accepted, std::move(error)};
+    }
     if (pending.size() >= kMaxPending)
         return Fail("busy");
     BotJob job;
@@ -535,6 +544,7 @@ LeeroyCommandResult HandleStockItems(nlohmann::json const& message)
 
 void RegisterBotCommandHandlers()
 {
+    RegisterGuildFishing();
     RegisterCommand("set_spec", HandleSetSpec);
     RegisterCommand("bot_do", HandleBotDo);
     RegisterCommand("stock_items", HandleStockItems);

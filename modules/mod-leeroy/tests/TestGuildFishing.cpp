@@ -37,6 +37,39 @@ LEEROY_TEST(GuildFishing_PointerReuseAndForeignReceiptsPoison)
     value = original; value.Cancel(0x1235); CHECK(value.poisoned);
     value = original; CHECK(value.AddBobber(7, 0x1234, 901)); value.Remove(902); CHECK(value.poisoned);
 }
+LEEROY_TEST(GuildFishing_AsyncBobberCandidateCommitsOnlyAtExactPostCast)
+{
+    FishingProof proof;
+    CHECK(proof.Prepare(11, 0x3456));
+    // Native prepare returns before the later channel SpellEvent casts.
+    CHECK(!proof.Started()); CHECK_EQ(proof.bobber, std::uint64_t{0});
+    FishingCastCandidate candidate;
+    CHECK(candidate.Open(proof, 0x3456));
+    CHECK(candidate.Add(903));
+    CHECK(!proof.Started()); CHECK_EQ(proof.bobber, std::uint64_t{0});
+    CHECK(candidate.Commit(proof, 0x3456));
+    CHECK(proof.Started()); CHECK_EQ(proof.bobber, std::uint64_t{903});
+    CHECK(!candidate.Commit(proof, 0x3456)); CHECK(proof.poisoned);
+}
+LEEROY_TEST(GuildFishing_MissingMismatchedAndDuplicateCastFramesCannotAdoptBobber)
+{
+    FishingProof original;
+    CHECK(original.Prepare(11, 0x3456));
+    FishingCastCandidate candidate;
+    CHECK(candidate.Open(original, 0x3456)); CHECK(candidate.Add(903));
+    // A missing post hook leaves the object uncommitted, regardless of time.
+    CHECK_EQ(original.bobber, std::uint64_t{0}); CHECK(!original.Started());
+    auto proof = original;
+    auto wrong = candidate;
+    CHECK(!wrong.Commit(proof, 0x3457)); CHECK(proof.poisoned); CHECK_EQ(proof.bobber, std::uint64_t{0});
+    proof = original; auto nested = candidate;
+    CHECK(!nested.Add(904)); CHECK(!nested.Commit(proof, 0x3456)); CHECK(proof.poisoned);
+    proof = original; auto reused = candidate;
+    CHECK(!reused.Open(proof, 0x3456)); CHECK(!reused.Commit(proof, 0x3456)); CHECK(proof.poisoned);
+    proof = original; proof.sealed = true;
+    FishingCastCandidate sealed;
+    CHECK(!sealed.Open(proof, 0x3456));
+}
 LEEROY_TEST(GuildFishing_SealedPreparationAndUnprovedMissingChannelCannotRelease)
 {
     FishingProof value;
