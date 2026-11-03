@@ -2,6 +2,7 @@
 #include "RealmCleanup.h"
 #include "RealmPorts.h"
 #include "RealmPvp.h"
+#include "RealmLfgReceipts.h"
 #include "LeeroyRealmCleanup.h"
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
@@ -202,10 +203,15 @@ std::string OrdinaryCleanupReason(Queued const& entry)
         auto const lfgGroup = sLFGMgr->GetGroup(player->GetGUID());
         auto const groupPhase = lfgGroup ? sLFGMgr->GetState(lfgGroup) : lfg::LFG_STATE_NONE;
         if (phase == lfg::LFG_STATE_PROPOSAL || groupPhase == lfg::LFG_STATE_PROPOSAL) return "shared_lfg_proposal";
-        if (phase == lfg::LFG_STATE_ROLECHECK || groupPhase == lfg::LFG_STATE_ROLECHECK
-            || phase == lfg::LFG_STATE_BOOT || groupPhase == lfg::LFG_STATE_BOOT)
+        if (phase == lfg::LFG_STATE_BOOT || groupPhase == lfg::LFG_STATE_BOOT)
             return "shared_lfg_participants_unavailable";
-        if (lfgGroup && (phase == lfg::LFG_STATE_QUEUED || groupPhase == lfg::LFG_STATE_QUEUED)) return "shared_lfg_queue";
+        if (phase == lfg::LFG_STATE_ROLECHECK || groupPhase == lfg::LFG_STATE_ROLECHECK
+            || (lfgGroup && (phase == lfg::LFG_STATE_QUEUED || groupPhase == lfg::LFG_STATE_QUEUED)))
+        {
+            auto const receipt = lfgGroup ? ReadLfgApplicants(lfgGroup.GetRawValue(), groupPhase == lfg::LFG_STATE_QUEUED) : std::nullopt;
+            if (!receipt) return "shared_lfg_participants_unavailable";
+            if (auto why = ValidateMembers(entry, LfgReceiptGuids(*receipt)); !why.empty()) return why;
+        }
         if (RealmPvpForeignWintergraspHistory(guid, reinterpret_cast<std::uintptr_t>(player->GetSession()))
             || player->GetZoneId() == 4197 || (player->GetGroup() && player->GetGroup()->isBFGroup()))
             return "wg_private_state_unavailable";
@@ -310,6 +316,43 @@ RealmStep LeaveNativeQueue(Queued& entry, std::uint32_t guid, std::uint32_t slot
     bot->SendDirectMessage(&status);
     sBattlegroundMgr->ScheduleQueueUpdate(info.ArenaMatchmakerRating, info.ArenaType, type, info.BgTypeId,
         static_cast<BattlegroundBracketId>(info.BracketId));
+    return Result(entry, StepState::Pending);
+}
+
+RealmStep LeaveObservedLfgApplicants(Queued& entry, std::uint32_t guid)
+{
+    auto& module = RealmModule::Instance();
+    auto* player = FindOnline(guid);
+    auto const group = player ? sLFGMgr->GetGroup(player->GetGUID()) : ObjectGuid::Empty;
+    auto const phase = group ? sLFGMgr->GetState(group) : lfg::LFG_STATE_NONE;
+    if (phase != lfg::LFG_STATE_ROLECHECK && phase != lfg::LFG_STATE_QUEUED)
+        return Failure(entry, "lfg_applicant_phase_changed");
+    auto const receipt = ReadLfgApplicants(group.GetRawValue(), phase == lfg::LFG_STATE_QUEUED);
+    if (!receipt) return Failure(entry, "shared_lfg_participants_unavailable");
+    auto const members = LfgReceiptGuids(*receipt);
+    if (std::find(members.begin(), members.end(), guid) == members.end()) return Failure(entry, "lfg_applicant_member_changed");
+    if (auto why = ValidateMembers(entry, members); !why.empty()) return Failure(entry, why);
+    auto const budget = ChargeMembers(entry, members);
+    if (budget == "busy:tick_budget") return Result(entry, StepState::Pending);
+    if (!budget.empty()) return Failure(entry, budget);
+    for (auto member : members)
+    {
+        auto const body = Identity(member);
+        if (!body) return Failure(entry, "lfg_applicant_identity_unavailable");
+        if (auto why = module.DeclareAffectedBodyScopes(entry.id, member, {Scope(*body)}); !why.empty()) return Failure(entry, why);
+        if (member == guid)
+            entry.payload["step"]["scopes"] = Json::array({Json::array({body->map, body->instance, body->group})});
+    }
+    if (auto why = BeginLfgApplicantCleanup(entry.id, *receipt); !why.empty()) return Failure(entry, why);
+    // Normal LeaveLfg(group) affects exactly the witnessed private roles or
+    // group-player producer set. It preserves this ordinary native Group.
+    entry.payload["step"]["changed"] = true;
+    MarkChanged(entry, members);
+    if (!entry.payload.contains("lfg_applicant_cleanup_receipts")) entry.payload["lfg_applicant_cleanup_receipts"] = Json::array();
+    entry.payload["lfg_applicant_cleanup_receipts"].push_back({{"group", receipt->group}, {"join", receipt->join}});
+    CancelLfgApplicants(*receipt);
+    if (!VerifyLfgApplicantCleanup(entry.id, receipt->group, receipt->join))
+        return Result(entry, StepState::Unknown, "lfg_applicant_leave_unproved");
     return Result(entry, StepState::Pending);
 }
 
@@ -434,6 +477,10 @@ std::string VerifyCleanupReceipts(Queued const& entry)
 {
     auto& module = RealmModule::Instance();
     if (auto why = OrdinaryCleanupReason(entry); !why.empty()) return why;
+    if (entry.payload.contains("lfg_applicant_cleanup_receipts"))
+        for (auto const& receipt : entry.payload.at("lfg_applicant_cleanup_receipts"))
+            if (!VerifyLfgApplicantCleanup(entry.id, receipt.at("group").get<std::uint64_t>(), receipt.at("join").get<std::uint64_t>()))
+                return "lfg_applicant_cleanup_readback_changed";
     if (entry.payload.contains("queue_cleanup_receipts"))
         for (auto const& receipt : entry.payload.at("queue_cleanup_receipts"))
         {
