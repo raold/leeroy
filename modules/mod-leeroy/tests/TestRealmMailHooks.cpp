@@ -7,8 +7,8 @@ using namespace Leeroy::Realm;
 
 LEEROY_TEST(RealmMailHooks_InstalledDefaultEnabledNoOpsPermitBagAndMoneyMail)
 {
-    // This is the installed registration set at MoneyChanged, expanded from
-    // the three providers' empty PlayerScript enabled-hooks lists.
+    // These three installed providers register both boundaries through empty
+    // PlayerScript enabled-hooks lists. The assembled bank observer is tested below.
     std::array<std::string_view,3> const money{"IndividualProgression","NaxxPlayerScript","OnyNaxxLogoutTeleport"};
     CHECK(MailHooksSupported(MailHookBoundary::MoneyChanged,money));
     std::array<std::string_view,4> const move{"IndividualProgression","NaxxPlayerScript","OnyNaxxLogoutTeleport","Player_Transmogrify"};
@@ -18,6 +18,23 @@ LEEROY_TEST(RealmMailHooks_InstalledDefaultEnabledNoOpsPermitBagAndMoneyMail)
         CHECK(MailProviderContract(MailHookBoundary::MoneyChanged,provider) == MailProviderEffect::NoEffect);
         CHECK(MailProviderContract(MailHookBoundary::AfterMoveFromInventory,provider) == MailProviderEffect::NoEffect);
     }
+}
+LEEROY_TEST(RealmMailHooks_AssembledBankMoneyObserverPermitsMoneyMailOnlyAtItsBoundary)
+{
+    std::array<std::string_view,4> const money{
+        "IndividualProgression","NaxxPlayerScript","OnyNaxxLogoutTeleport","LeeroyRealmBankPlayerScripts"};
+    CHECK(MailHooksSupported(MailHookBoundary::MoneyChanged,money));
+    CHECK(MailProviderContract(MailHookBoundary::MoneyChanged,"LeeroyRealmBankPlayerScripts") == MailProviderEffect::ReceiptObserver);
+    for (auto boundary : {MailHookBoundary::BeforeSend,MailHookBoundary::AfterMoveFromInventory,
+        MailHookBoundary::ItemCreate,MailHookBoundary::ObjectConstruct,MailHookBoundary::ObjectDestruct})
+    {
+        CHECK(MailProviderContract(boundary,"LeeroyRealmBankPlayerScripts") == MailProviderEffect::Unsupported);
+        std::array<std::string_view,1> const bank{"LeeroyRealmBankPlayerScripts"};
+        CHECK(!MailHooksSupported(boundary,bank));
+    }
+    std::array<std::string_view,5> const dangerous{
+        "IndividualProgression","NaxxPlayerScript","OnyNaxxLogoutTeleport","LeeroyRealmBankPlayerScripts","ForeignMoneyMutator"};
+    CHECK(!MailHooksSupported(MailHookBoundary::MoneyChanged,dangerous));
 }
 LEEROY_TEST(RealmMailHooks_ForeignProviderCannotRideTheInstalledNoOpAllowance)
 {

@@ -5,6 +5,9 @@
 #include "RealmArenaObserver.h"
 #include "RealmCraft.h"
 #include "RealmLfgReceipts.h"
+#include "RealmGuild.h"
+#include "RealmBank.h"
+#include "RealmMail.h"
 #include "Guild/GuildFishing.h"
 #include "ScriptMgr.h"
 
@@ -31,6 +34,9 @@ void RegisterRealmHandlers()
     RegisterRealmPvpHandlers();
     RegisterRealmArenaObserverHandlers();
     RegisterRealmCraftHandlers();
+    RegisterRealmGuildHandlers();
+    RegisterRealmBankHandlers();
+    RegisterRealmMailHandlers();
     RegisterCommand("realm_actors", [](nlohmann::json const& message)
     {
         std::string error;
@@ -71,6 +77,8 @@ void AddSC_leeroy_realm()
     Leeroy::Realm::AddRealmArenaObserverScripts();
     Leeroy::Realm::AddRealmCraftScripts();
     Leeroy::Realm::AddRealmLfgReceiptScripts();
+    Leeroy::Realm::AddRealmBankScripts();
+    Leeroy::Realm::AddRealmMailScripts();
     Leeroy::Guild::AddGuildFishingScripts();
 #if LEEROY_REALM_SPEECH
     Leeroy::Realm::AddRealmSpeechScripts();

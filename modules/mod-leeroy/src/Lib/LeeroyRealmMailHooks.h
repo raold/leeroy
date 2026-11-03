@@ -9,7 +9,7 @@ namespace Leeroy::Realm
 {
 inline constexpr std::size_t kMailBoundaryProviders = 32;
 enum class MailHookBoundary { BeforeSend, AfterMoveFromInventory, MoneyChanged, ItemCreate, ObjectConstruct, ObjectDestruct };
-enum class MailProviderEffect { Unsupported, NoEffect, AppearanceRemoval, ReceiverPolicy };
+enum class MailProviderEffect { Unsupported, NoEffect, AppearanceRemoval, ReceiverPolicy, ReceiptObserver };
 
 // Contracts cover an exact installed provider at one exact hook. An audited
 // no-op on a PlayerScript boundary grants no authority on other boundaries.

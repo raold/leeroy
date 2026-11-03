@@ -3,6 +3,20 @@
 
 namespace Leeroy::Realm
 {
+namespace
+{
+bool InheritedPlayerNoOp(std::string_view provider)
+{
+    // These installed mod-individual-progression PlayerScript classes use an
+    // empty enabled-hooks list, which the core expands to all hooks.
+    // IndividualPlayerProgression (IndividualProgressionPlayer.cpp),
+    // NaxxPlayerScript (naxx40Scripts/custom_scripts_40.cpp), and
+    // OnyNaxxLogoutTeleport (naxx40Scripts/instance_naxxramas.cpp) override
+    // neither MoneyChanged nor AfterMoveFromInventory. Both inherited methods
+    // are empty in PlayerScript.h. Only those two boundaries use this contract.
+    return provider == "IndividualProgression" || provider == "NaxxPlayerScript" || provider == "OnyNaxxLogoutTeleport";
+}
+}
 MailProviderEffect MailProviderContract(MailHookBoundary boundary, std::string_view provider)
 {
     switch (boundary)
@@ -16,19 +30,13 @@ MailProviderEffect MailProviderContract(MailHookBoundary boundary, std::string_v
             // mod-transmog/transmog_scripts.cpp: this exact observer removes
             // only the fake appearance record, preserving the Item lifetime.
             if (provider == "Player_Transmogrify") return MailProviderEffect::AppearanceRemoval;
-            [[fallthrough]];
+            return InheritedPlayerNoOp(provider) ? MailProviderEffect::NoEffect : MailProviderEffect::Unsupported;
         case MailHookBoundary::MoneyChanged:
-            // These installed mod-individual-progression PlayerScript classes
-            // use an empty enabled-hooks list, which the core expands to all
-            // hooks. IndividualPlayerProgression (IndividualProgressionPlayer.cpp),
-            // NaxxPlayerScript (naxx40Scripts/custom_scripts_40.cpp), and
-            // OnyNaxxLogoutTeleport (naxx40Scripts/instance_naxxramas.cpp)
-            // override neither of these two methods. Both inherited methods
-            // are empty in PlayerScript.h. Their other hooks remain unaudited
-            // by this contract and receive no allowance here.
-            if (provider == "IndividualProgression" || provider == "NaxxPlayerScript" || provider == "OnyNaxxLogoutTeleport")
-                return MailProviderEffect::NoEffect;
-            return MailProviderEffect::Unsupported;
+            // RealmBank.cpp's exact observer only records facts in an active
+            // bank money receipt and returns when absent. It does not modify
+            // amount or Player; this grants no allowance at any other hook.
+            if (provider == "LeeroyRealmBankPlayerScripts") return MailProviderEffect::ReceiptObserver;
+            return InheritedPlayerNoOp(provider) ? MailProviderEffect::NoEffect : MailProviderEffect::Unsupported;
         case MailHookBoundary::ItemCreate:
         case MailHookBoundary::ObjectConstruct:
         case MailHookBoundary::ObjectDestruct:
