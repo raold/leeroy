@@ -87,6 +87,10 @@ public:
     std::string ChargeAffectedBodies(std::string_view operation, std::vector<std::uint32_t> const& guids);
     std::string DeclareAffectedBodyScopes(std::string_view operation, std::uint32_t guid,
         std::vector<BodyScope> scopes);
+    // Active exact guild_grow only. One synchronous native add with a causal
+    // receipt kept in the existing whole-manifest reservation. The original
+    // identity stays immutable; no other command gains a guild-change waiver.
+    RealmStep PerformGuildGrowJoin(std::string_view operation, std::uint32_t guid, std::uint32_t destination);
     using Continuation = std::function<PvpContinuationStep(PvpOwner const&)>;
     bool RegisterPvpContinuation(PvpKind kind, Continuation continuation);
     // Active executor only, before the first mutation. The manifest must equal
@@ -121,6 +125,7 @@ public:
     std::optional<Kill> MatchKill(std::uint32_t map, std::uint32_t instance, std::uint32_t boss,
                                   std::uint64_t nowMs) const;
     void NotifyBodyChanged(std::uint32_t guid); // Login/logout invalidates queued identity.
+    std::uint64_t BodyGeneration(std::uint32_t guid) const; // Read-only immediate-call life fence.
     GuardState* Guard(); // Same configured identity retains state across reload/off.
 private:
     RealmModule();
@@ -138,6 +143,9 @@ private:
 // Called before cast refresh/repinning. Hooks record facts even with the guard
 // disabled; only the world-thread pass can apply protected membership changes.
 void TickCastGuard(std::uint32_t diff);
+// Includes current/former protected members and verified kicks awaiting the
+// next guard pass. Unknown guard facts conservatively exclude recruitment.
+bool CastRecruitmentProtected(std::uint32_t guid);
 void AddCastGuardScripts();
 void RegisterRealmHandlers();
 void RegisterRealmContinuationHandlers();

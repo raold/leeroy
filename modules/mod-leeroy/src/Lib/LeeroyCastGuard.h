@@ -60,6 +60,8 @@ public:
     void NoteFailed(std::uint32_t guid, std::uint64_t nowMs);
     std::vector<GuardStep> Pass(GuardInput const& input, std::size_t maxReadds = 5);
     std::map<std::uint32_t, std::uint8_t> const& Known() const { return _known; }
+    bool RecruitmentProtected(std::uint32_t guid) const
+    { return _known.contains(guid) || _removedByHuman.contains(guid); }
 
 private:
     bool Protectable(std::uint32_t guid) const;

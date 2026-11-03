@@ -6,6 +6,7 @@
 #include "Log.h"
 #include "ObjectMgr.h"
 #include "ScriptMgr.h"
+#include <algorithm>
 #include <atomic>
 #include <deque>
 #include <mutex>
@@ -149,6 +150,16 @@ public:
         return false;
     }
 };
+}
+
+bool CastRecruitmentProtected(std::uint32_t guid)
+{
+    auto* guard = RealmModule::Instance().Guard();
+    if (!guard || unknown.load() || guard->RecruitmentProtected(guid)) return true;
+    auto const configuredGuild = GuildId(), human = HumanGuid();
+    std::lock_guard lock(factsMutex);
+    return std::any_of(kicks.begin(), kicks.end(), [&](KickFact const& fact)
+    { return fact.guild == configuredGuild && fact.human == human && fact.target == guid; });
 }
 
 void TickCastGuard(std::uint32_t diff)

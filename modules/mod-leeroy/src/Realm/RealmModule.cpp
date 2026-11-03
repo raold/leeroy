@@ -2,6 +2,8 @@
 #include "RealmModule.h"
 #include "RealmOwnership.h"
 #include "RealmPorts.h"
+#include "RealmGuild.h"
+#include "LeeroyRealmGuild.h"
 #include "Log.h"
 #include <algorithm>
 #include <atomic>
@@ -69,6 +71,8 @@ struct RealmModule::State
         std::map<std::uint32_t, Lease> bodies;
         std::map<std::uint32_t, std::vector<BodyScope>> pending;
         std::set<std::uint32_t> declaredScopes;
+        std::map<std::uint32_t, GuildJoinReceipt> guildJoins;
+        std::set<std::uint32_t> guildJoinAttempts;
         bool retained = false;
         std::uint64_t value = 0;
         Queued admitted;
@@ -121,6 +125,29 @@ struct RealmModule::State
         auto it = generations.find(guid);
         return it == generations.end() ? 0 : it->second;
     }
+    LeaseCheck CheckLease(Reservation const& reservation, std::uint32_t guid,
+        std::optional<BodyIdentity> const& current, std::vector<BodyScope> const& scopes) const
+    {
+        auto const& saved = reservation.bodies.at(guid);
+        auto joined = reservation.guildJoins.find(guid);
+        if (joined == reservation.guildJoins.end())
+            return CheckBodyLease(saved.body, saved.generation, current, Generation(guid), scopes);
+        auto const& receipt = joined->second;
+        auto* destination = sGuildMgr->GetGuildById(receipt.destination);
+        auto const* member = destination ? destination->GetMember(PlayerGuid(guid)) : nullptr;
+        auto const* character = sCharacterCache->GetCharacterCacheByGuid(PlayerGuid(guid));
+        if (reservation.admitted.kind != "guild_grow" || reservation.admitted.domain != ActivityDomain::Realm
+            || reservation.admitted.payload.at("guild_id").get<std::uint32_t>() != receipt.destination
+            || !guilds.contains(receipt.destination) || IsRealGuild(receipt.destination)
+            || !member || member->GetGUID() != PlayerGuid(guid) || member->GetRankId() != receipt.rank
+            || member->GetAccountId() != saved.body.account || member->GetClass() != saved.body.classId
+            || member->GetGender() != saved.body.sex || member->GetLevel() != 80
+            || !character || character->GuildId != receipt.destination || character->AccountId != saved.body.account
+            || IsCast(guid) || IsConfiguredGuildMember(guid) || actors.contains(guid) || CastRecruitmentProtected(guid))
+            return LeaseCheck::LifeChanged;
+        return CheckGuildJoinLease(receipt, reservation.admitted.id, guid, GuildId(), HumanGuid(),
+            EpochFor(reservation.admitted.domain), saved.body, saved.generation, current, Generation(guid), scopes);
+    }
     void DrainKills()
     {
         std::lock_guard lock(factsMutex);
@@ -167,6 +194,7 @@ bool RealmModule::On() const { return _state->on.load(); }
 std::uint64_t RealmModule::Epoch() const { return _state->epoch.load(); }
 bool RealmModule::GuildOn() const { return _state->guildOn.load(); }
 std::uint64_t RealmModule::GuildEpoch() const { return _state->guildEpoch.load(); }
+std::uint64_t RealmModule::BodyGeneration(std::uint32_t guid) const { return _state->Generation(guid); }
 
 void RealmModule::Start()
 {
@@ -451,7 +479,7 @@ std::string RealmModule::ValidateOwnedBody(std::uint32_t guid, std::string_view 
     if (lease == it->second.bodies.end()) return "busy:operation_identity";
     auto pending = it->second.pending.find(guid);
     auto current = Identity(guid, pending != it->second.pending.end());
-    auto check = CheckBodyLease(lease->second.body, lease->second.generation, current, _state->Generation(guid),
+    auto check = _state->CheckLease(it->second, guid, current,
         pending == it->second.pending.end() ? std::vector<BodyScope>{} : pending->second);
     if (check == LeaseCheck::LifeChanged) return "busy:body_identity_changed";
     if (check == LeaseCheck::ScopeChanged) return "busy:body_scope_changed";
@@ -496,6 +524,62 @@ std::string RealmModule::DeclareAffectedBodyScopes(std::string_view operation, s
     found->second.pending[guid] = std::move(scopes);
     found->second.declaredScopes.insert(guid);
     return "";
+}
+
+RealmStep RealmModule::PerformGuildGrowJoin(std::string_view operation, std::uint32_t guid,
+    std::uint32_t destination)
+{
+    auto* active = _state->activeEntry;
+    auto found = _state->reservations.find(operation);
+    if (!active || operation.empty() || operation != _state->activeOperation
+        || active->kind != "guild_grow" || active->domain != ActivityDomain::Realm
+        || !_state->activeContinuation.empty() || !_state->chargedBodies.contains(guid)
+        || active->cursor >= active->guids.size() || active->guids[active->cursor] != guid
+        || found == _state->reservations.end()) return {StepState::Refused, "busy:operation_identity"};
+    auto& reservation = found->second;
+    auto const& admitted = reservation.admitted;
+    if (admitted.kind != "guild_grow" || admitted.domain != ActivityDomain::Realm || admitted.id != active->id
+        || admitted.guids != active->guids || admitted.payload != active->payload
+        || admitted.payload.at("guild_id").get<std::uint32_t>() != destination
+        || !reservation.bodies.contains(guid) || reservation.guildJoinAttempts.contains(guid))
+        return {StepState::Refused, "busy:operation_identity"};
+    if (auto why = MutationReason(guid, operation); !why.empty()) return {StepState::Refused, why};
+    auto handler = _state->executors.find("guild_grow");
+    if (handler == _state->executors.end()) return {StepState::Refused, "unsupported"};
+    if (auto why = handler->second.admit(*active, guid); !why.empty()) return {StepState::Refused, why};
+    auto* guild = sGuildMgr->GetGuildById(destination);
+    auto const ranks = guild ? RealmGuildRankCount(*guild) : 0;
+    auto const& lease = reservation.bodies.at(guid);
+    if (!On() || destination == GuildId() || !_state->guilds.contains(destination) || !guild
+        || IsRealGuild(destination) || !ranks || ranks > GUILD_RANKS_MAX_COUNT || lease.body.guild != 0)
+        return {StepState::Refused, "refused_guild"};
+    GuildJoinReceipt intended{std::string(operation), guid, destination, GuildId(), HumanGuid(),
+        reservation.epoch, lease.generation, lease.body, static_cast<std::uint8_t>(ranks - 1)};
+    // Install the attempted-call marker before native entry. Exceptions or
+    // reentrant configuration changes must retain this exact whole manifest.
+    reservation.guildJoinAttempts.insert(guid);
+    bool const added = guild->AddMember(PlayerGuid(guid), GUILD_RANK_NONE);
+    if (sGuildMgr->GetGuildById(destination) != guild || !On() || reservation.epoch != Epoch()
+        || GuildId() != intended.configuredGuild || HumanGuid() != intended.human
+        || !_state->guilds.contains(destination) || IsRealGuild(destination))
+        return {StepState::Unknown, "guild_join_authority_changed"};
+    auto current = Identity(guid);
+    auto const* member = guild->GetMember(PlayerGuid(guid));
+    auto const* character = sCharacterCache->GetCharacterCacheByGuid(PlayerGuid(guid));
+    if (!added && !member && character && character->GuildId == 0
+        && CheckBodyLease(lease.body, lease.generation, current, _state->Generation(guid), {}) == LeaseCheck::Exact)
+    {
+        reservation.guildJoinAttempts.erase(guid);
+        return {StepState::Refused, "refused"};
+    }
+    if (!character || character->AccountId != lease.body.account || !member
+        || member->GetGUID() != PlayerGuid(guid) || member->GetClass() != lease.body.classId
+        || member->GetGender() != lease.body.sex || member->GetLevel() != 80
+        || !ProveGuildJoin(intended, added, member != nullptr, member ? member->GetAccountId() : 0,
+            member ? member->GetRankId() : 0, character->GuildId, current, _state->Generation(guid)))
+        return {StepState::Unknown, "guild_join_unproved"};
+    reservation.guildJoins.emplace(guid, std::move(intended));
+    return {StepState::Complete, "", reservation.guildJoins.size()};
 }
 
 bool RealmModule::Accept(Queued entry, std::string& error)
@@ -805,9 +889,25 @@ void RealmModule::Tick(std::uint32_t diff)
         }
         auto& reservation = found->second;
         auto const guid = entry.guids[entry.cursor];
+        auto guildManifestClean = [&]
+        {
+            if (reservation.guildJoinAttempts.empty()) return true;
+            if (entry.kind != "guild_grow" || reservation.bodies.size() != reservation.admitted.guids.size()
+                || entry.guids != reservation.admitted.guids
+                || reservation.retained || reservation.epoch != _state->EpochFor(entry.domain)) return false;
+            return GuildJoinManifestClean(reservation.admitted.guids, reservation.guildJoinAttempts,
+                reservation.guildJoins, [&](std::uint32_t member)
+            {
+                return reservation.bodies.contains(member) && Holder(member) == entry.id
+                    && NativeMutationReason(member).empty()
+                    && _state->CheckLease(reservation, member, Identity(member), {}) == LeaseCheck::Exact;
+            });
+        };
         auto finish = [&](std::string reason, bool retain, bool refused = false)
         {
+            auto const knownJoins = reservation.guildJoins.size();
             if (!refused && !reservation.declaredScopes.empty()) retain = true;
+            if (!guildManifestClean()) retain = true;
             if (!reservation.continuation.empty())
             {
                 _state->continuations.Unknown(reservation.continuation, reason);
@@ -816,23 +916,17 @@ void RealmModule::Tick(std::uint32_t diff)
             }
             if (retain) reservation.retained = true;
             else _state->Release(entry.id);
-            PublishOutcome(entry, {entry.id, entry.kind, false, std::move(reason), guid});
+            PublishOutcome(entry, {entry.id, entry.kind, false, std::move(reason), guid, knownJoins});
             return true;
         };
         bool const pending = reservation.pending.contains(guid);
         auto const lease = reservation.bodies.find(guid);
         auto before = Identity(guid, pending);
-        auto scopeAllowed = [&](BodyIdentity const& body, std::vector<BodyScope> const& scopes)
-        {
-            return Scope(body) == Scope(lease->second.body)
-                || std::find(scopes.begin(), scopes.end(), Scope(body)) != scopes.end();
-        };
         auto reason = MutationReason(guid, entry.id);
         if (!reason.empty()) return finish(reason, pending);
-        if (!before || lease == reservation.bodies.end() || _state->Generation(guid) != lease->second.generation
-            || !SameLife(*before, lease->second.body)
-            || (!pending && *before != lease->second.body)
-            || (pending && !scopeAllowed(*before, reservation.pending.at(guid))))
+        if (!before || lease == reservation.bodies.end()
+            || _state->CheckLease(reservation, guid, before,
+                pending ? reservation.pending.at(guid) : std::vector<BodyScope>{}) != LeaseCheck::Exact)
             return finish("body_identity_changed", pending);
         auto executor = _state->executors.find(entry.kind);
         if (executor == _state->executors.end()) return finish("unsupported", pending);
@@ -894,9 +988,8 @@ void RealmModule::Tick(std::uint32_t diff)
         if (afterReason == "busy:body_unavailable" && result.state == StepState::Pending && after
             && SameLife(*after, lease->second.body) && _state->Generation(guid) == lease->second.generation)
             afterReason.clear();
-        if (expectedScopes.size() > 4 || !after || !SameLife(*after, lease->second.body)
-            || _state->Generation(guid) != lease->second.generation || !afterReason.empty()
-            || !scopeAllowed(*after, expectedScopes))
+        if (expectedScopes.size() > 4 || !after || !afterReason.empty()
+            || _state->CheckLease(reservation, guid, after, expectedScopes) != LeaseCheck::Exact)
             return finish("operation_transition_unknown", true);
         if (result.state == StepState::Unknown)
             return finish(result.reason.empty() ? "native_cleanup_unproved" : result.reason, true);
@@ -912,6 +1005,7 @@ void RealmModule::Tick(std::uint32_t diff)
         ++entry.cursor;
         if (entry.cursor < entry.guids.size())
             return false;
+        if (!guildManifestClean()) return finish("guild_manifest_unproved", true);
         auto value = reservation.value;
         _state->Release(entry.id);
         PublishOutcome(entry, {entry.id, entry.kind, true, "", entry.guids.size() == 1 ? guid : 0, value});
@@ -967,17 +1061,21 @@ void RealmModule::ReconcileConfiguration()
         [&](Queued const& entry, std::string const&)
     {
         auto it = _state->reservations.find(entry.id);
+        RealmJob outcome{entry.id, entry.kind, false,
+            entry.domain == ActivityDomain::Guild ? "guild_off" : "realm_off"};
         if (it != _state->reservations.end() && !it->second.continuation.empty())
         {
             _state->continuations.Detach(it->second.continuation);
             if (entry.domain == ActivityDomain::Guild) return; // Finite cleanup owns its one terminal outcome.
         }
-        else if (it != _state->reservations.end() && (!it->second.pending.empty() || it->second.retained))
-            it->second.retained = true;
+        else if (it != _state->reservations.end())
+            outcome = CancelGuildJoinReservation(std::move(outcome),
+                !it->second.pending.empty() || it->second.retained,
+                it->second.guildJoinAttempts, it->second.guildJoins,
+                [&] { it->second.retained = true; }, [&] { _state->Release(entry.id); });
         else
             _state->Release(entry.id);
-        PublishOutcome(entry, {entry.id, entry.kind, false,
-            entry.domain == ActivityDomain::Guild ? "guild_off" : "realm_off"});
+        PublishOutcome(entry, outcome);
     });
     // Actor/guild declarations belong to the old enable/configured-identity
     // epoch. An enable or identity switch requires a fresh declaration.
