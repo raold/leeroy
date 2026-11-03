@@ -2,6 +2,7 @@
 #include "TrainingCommands.h"
 #include "GuildPorts.h"
 #include "OfflineRaidJob.h"
+#include "LeeroyTrainingDcAdmission.h"
 #include "LeeroyTrainingHold.h"
 #include "LeeroyTrainingOverrides.h"
 #include "LeeroyTrainingRuns.h"
@@ -76,7 +77,9 @@ std::optional<RunManifest> GroupManifest(Player* leader)
     std::vector<std::uint32_t> members;
     members.reserve(group->GetMemberSlots().size());
     for (auto const& member : group->GetMemberSlots()) members.push_back(member.guid.GetCounter());
-    return RunManifest::Capture(leader->GetGUID().GetCounter(), std::move(members));
+    // Recheck at capture as well as leader selection: neither an override journal
+    // nor a job receipt may acquire a body still held by Realm or Guild fishing.
+    return CaptureUnownedDcRun(leader->GetGUID().GetCounter(), std::move(members), Realm::RealmOwns);
 }
 
 bool OwnsBody(RunScope const& scope, RunManifest const& manifest, uint32 guid)
@@ -110,6 +113,9 @@ Player* OwnedLeader(uint32 guid)
     if (!leader || (!benchmark && leader->GetGuildId() != LeeroyModule::Instance().GuildId())
         || !GET_PLAYERBOT_AI(leader) || IsSelfBot(leader) || !leader->GetGroup() || leader->IsBeingTeleported()
         || DcLeaderSignal::FindLeaderTank(leader) != leader) return nullptr;
+    // Use the complete native roster, including offline members. RealmOwns also
+    // covers retained holders while Realm is off; benchmark identity is no waiver.
+    if (Realm::RealmOwns(guid) || Guild::GroupHasRealmOwner(leader->GetGroup())) return nullptr;
     if (!benchmark)
         for (auto const& member : leader->GetGroup()->GetMemberSlots())
             if (member.guid.GetCounter() != Guild::HumanGuid() && !Guild::IsCast(member.guid.GetCounter())) return nullptr;
