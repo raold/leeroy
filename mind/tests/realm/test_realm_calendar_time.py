@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from dataclasses import FrozenInstanceError
+import math
 from zoneinfo import ZoneInfoNotFoundError
 
 import pytest
@@ -28,6 +29,24 @@ def test_exact_tuesday_boundary_starts_the_new_half_open_period():
         current.key = "2026-11-10"
 
 
+@pytest.mark.parametrize("boundary,previous_key,current_key", [
+    (_utc(2026, 3, 3, 9), "2026-02-24", "2026-03-03"),
+    (_utc(2026, 3, 10, 8), "2026-03-03", "2026-03-10"),
+    (_utc(2026, 10, 27, 8), "2026-10-20", "2026-10-27"),
+    (_utc(2026, 11, 3, 9), "2026-10-27", "2026-11-03"),
+])
+def test_adjacent_floats_preserve_exact_week_boundary_sides(boundary, previous_key, current_key):
+    before = math.nextafter(boundary, -math.inf)
+    after = math.nextafter(boundary, math.inf)
+    previous = product_period(before)
+    current = product_period(boundary)
+    assert before < boundary < after
+    assert previous.key == previous_key
+    assert previous.starts_at <= before < previous.ends_at == boundary
+    assert current.key == current_key and current.starts_at == boundary
+    assert product_period(after) == current
+
+
 @pytest.mark.parametrize("sample,key,start,end,hours", [
     (_utc(2026, 3, 8, 12), "2026-03-03", _utc(2026, 3, 3, 9), _utc(2026, 3, 10, 8), 167),
     (_utc(2026, 11, 1, 12), "2026-10-27", _utc(2026, 10, 27, 8), _utc(2026, 11, 3, 9), 169),
@@ -44,6 +63,31 @@ def test_local_write_day_changes_at_actual_new_york_midnight():
     assert local_write_day(source) == "2026-11-02"
     assert local_write_day(actual_write) == "2026-11-03"
     assert product_period(source).key == product_period(actual_write).key == "2026-10-27"
+
+
+@pytest.mark.parametrize("boundary,previous_day,current_day", [
+    (_utc(2026, 3, 8, 5), "2026-03-07", "2026-03-08"),
+    (_utc(2026, 3, 9, 4), "2026-03-08", "2026-03-09"),
+    (_utc(2026, 11, 1, 4), "2026-10-31", "2026-11-01"),
+    (_utc(2026, 11, 2, 5), "2026-11-01", "2026-11-02"),
+    (_utc(2026, 11, 3, 5), "2026-11-02", "2026-11-03"),
+])
+def test_adjacent_floats_preserve_exact_local_midnight_sides(boundary, previous_day, current_day):
+    before = math.nextafter(boundary, -math.inf)
+    after = math.nextafter(boundary, math.inf)
+    assert local_write_day(before) == previous_day
+    assert local_write_day(boundary) == local_write_day(after) == current_day
+    assert product_period(before) == product_period(boundary) == product_period(after)
+
+
+@pytest.mark.parametrize("boundary,day,key,start,end", [
+    (_utc(2026, 3, 8, 7), "2026-03-08", "2026-03-03", _utc(2026, 3, 3, 9), _utc(2026, 3, 10, 8)),
+    (_utc(2026, 11, 1, 6), "2026-11-01", "2026-10-27", _utc(2026, 10, 27, 8), _utc(2026, 11, 3, 9)),
+])
+def test_adjacent_floats_at_dst_clock_changes_keep_their_day_and_week(boundary, day, key, start, end):
+    for instant in (math.nextafter(boundary, -math.inf), boundary, math.nextafter(boundary, math.inf)):
+        assert local_write_day(instant) == day
+        assert product_period(instant) == ProductPeriod(CADENCE, key, start, end)
 
 
 def test_repeated_fall_hour_and_spring_gap_do_not_change_day_or_period():

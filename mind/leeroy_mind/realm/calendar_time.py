@@ -28,8 +28,15 @@ def _local(seconds: float) -> datetime:
     except ZoneInfoNotFoundError as error:
         raise ProductCalendarUnavailable(f"timezone unavailable: {TIMEZONE}") from error
     try:
-        # Aware datetime arithmetic avoids platform CRT timestamp limits.
-        return (_UTC_EPOCH + timedelta(seconds=seconds)).astimezone(zone)
+        # Floor fractional microseconds so an instant before a boundary stays before it.
+        # Integer components also avoid CRT limits and large-epoch float multiplication.
+        if type(seconds) is int:
+            whole_seconds, microseconds = seconds, 0
+        else:
+            numerator, denominator = seconds.as_integer_ratio()
+            whole_seconds, remainder = divmod(numerator, denominator)
+            microseconds = remainder * 1_000_000 // denominator
+        return (_UTC_EPOCH + timedelta(seconds=whole_seconds, microseconds=microseconds)).astimezone(zone)
     except (OverflowError, OSError, ValueError) as error:
         raise ValueError("seconds cannot be represented in the product timezone") from error
 
