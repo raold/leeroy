@@ -179,11 +179,12 @@ class Store:
 
     def session_last_activity(self, id: int) -> float:
         """The last time anything was recorded in the session (a chat line, a game event or an
-        utterance), else its start; 0.0 for an unknown session."""
+        utterance), else its start; 0.0 for an unknown session. Public channel lines are kept
+        raw for Realm but are other people's activity, so they neither resume nor extend it."""
         r = self._one(
             "SELECT max(t) AS t FROM ("
             "SELECT max(ts) AS t FROM chat_line WHERE session_id = ? UNION ALL "
-            "SELECT max(ts) FROM game_event WHERE session_id = ? UNION ALL "
+            "SELECT max(ts) FROM game_event WHERE session_id = ? AND type <> 'channel_chat' UNION ALL "
             "SELECT max(ts) FROM utterance WHERE session_id = ? UNION ALL "
             "SELECT started FROM session WHERE id = ?)", (id, id, id, id))
         return float(r["t"]) if r is not None and r["t"] is not None else 0.0
