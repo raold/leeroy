@@ -2,6 +2,7 @@
 
 import asyncio
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -10,8 +11,11 @@ from conftest import run
 from leeroy_mind.app import MindApp
 from leeroy_mind.bridge import Backoff, BridgeClient
 from leeroy_mind.config import load_config
+from leeroy_mind.guild.protocol import BotDo, Job, JobSkip
 from leeroy_mind.protocol import Hello, Member
 from leeroy_mind.realm import protocol as p
+from leeroy_mind.realm.action_policy import classify
+from leeroy_mind.realm.action_store import ActionSpec
 from leeroy_mind.realm.actions import ActionRejected
 from leeroy_mind.storage.db import open_db
 from leeroy_mind.storage.store import Store
@@ -233,4 +237,85 @@ def test_replayed_login_preserves_current_claims_actions_and_recall_timers(tmp_p
             assert realm.recall._last_recall == clock.now() and realm.recall._second_at == clock.now() + 45
             assert realm.bodies.claims_for("realm_day") == realm.bodies.claims_for("realm_event") == frozenset()
             assert all(realm.action_store.get(i).state == "not_sent" for i in ("current-day", "current-event"))
+    run(scenario())
+
+
+@pytest.mark.parametrize("route", ["enabled", "disabled", "shutdown"])
+def test_shared_guild_and_training_jobs_are_unmatched_through_real_app_routes(tmp_path, clock, caplog, route):
+    async def scenario():
+        async with application(tmp_path, clock) as (app, client, server, hellos):
+            realm = app.realm
+            context = realm.action_context()
+            for cmd in (BotDo("realm-defaults", (501, 502), "nc", "-bg,-lfg"),
+                        p.RealmMove("realm-move", 503, "harbor")):
+                c = classify(cmd)
+                realm.action_store.prepare(ActionSpec(cmd.id, None, "root", c.policy, "realm_day", 4,
+                    c.kind, c.payload, c.reserved_manifest, context.guild, context.human), now=clock.now())
+                realm.action_store.begin_dispatch(cmd.id, payload=c.payload, process_id=context.process_id,
+                    connection_epoch=context.connection_epoch, now=clock.now())
+            part = SimpleNamespace(on_event=AsyncMock())
+            realm.add_part(part, event_types={"job"})
+            ordinary_seen, shutdown_seen = [], []
+            async def downstream(ev):
+                ordinary_seen.append(ev)
+            app.register_event_handler("job", downstream)
+            app.register_shutdown_receipt("job", shutdown_seen.append)
+            entered, release = asyncio.Event(), asyncio.Event()
+            closing = None
+            if route == "disabled":
+                realm._set_enabled(False)
+            elif route == "shutdown":
+                async def pause_shutdown_before_database_close():
+                    entered.set()
+                    await release.wait()
+                app.register_shutdown_drain(pause_shutdown_before_database_close)
+                closing = asyncio.create_task(app.stop())
+            try:
+                if closing is not None:
+                    await asyncio.wait_for(entered.wait(), 3)
+                    assert app._stopping and not app._closed
+                records, holds = realm.action_store.records(), realm.action_store.holds()
+                diagnostics = tuple(tuple(row) for row in app.store.conn.execute("SELECT * FROM realm_receipt ORDER BY seq"))
+                command_count = len(server.commands)
+                ts = int(clock.now()*1000)
+                def event(command_id, kind, state, scope="", *, guid=0):
+                    # GearUp publishes singleton progress; offline raid publishes
+                    # stage progress; BotDo echoes the native Training handle.
+                    progress = state == "progress"
+                    skipped = (JobSkip(501, "cancelled"), JobSkip(502, "cancelled")) if kind == "bot_do" and state == "failed" else ()
+                    guids = () if progress and kind == "gear_up" or skipped else (501, 502)
+                    return Job(ts, command_id, kind, state, "cancelled" if state == "failed" else "",
+                               "assembling" if kind == "offline_raid" and progress else "", guids, skipped,
+                               0, 0, 0, guid, 80 if guid else 0, 200 if guid else 0, scope)
+                events = [
+                    event("gear-progress", "gear_up", "progress", guid=501),
+                    event("gear-terminal", "gear_up", "done"),
+                    event("raid-progress", "offline_raid", "progress", "training-scope"),
+                    event("raid-terminal", "offline_raid", "failed", "training-scope"),
+                    event("benchmark-progress", "benchmark", "progress", "benchmark-scope"),
+                    event("benchmark-terminal", "benchmark", "done", "benchmark-scope"),
+                    event("training-defaults", "bot_do", "done", "training-scope"),
+                    event("realm-defaults", "gear_up", "progress", guid=501),
+                    event("realm-defaults", "gear_up", "done"),
+                    event("realm-defaults", "bot_do", "done", "training-scope"),
+                    event("realm-defaults", "bot_do", "failed", "training-scope"),
+                    event("realm-move", "bot_do", "done"),
+                ]
+                for ev in events:
+                    await app.handle(ev)
+                    assert realm.action_store.records() == records, (route, ev.id, ev.kind, ev.state)
+                    assert realm.action_store.holds() == holds
+                    assert tuple(tuple(row) for row in app.store.conn.execute("SELECT * FROM realm_receipt ORDER BY seq")) == diagnostics
+                assert len(server.commands) == command_count
+                assert [call.args[0] for call in part.on_event.await_args_list] == (events if route == "enabled" else [])
+                assert ordinary_seen == ([] if route == "shutdown" else events)
+                assert shutdown_seen == (events if route == "shutdown" else [])
+                assert any(hold.scope_id == "realm-defaults" and hold.guids == frozenset({501, 502}) for hold in holds)
+                assert "event_handler_failed" not in caplog.text
+                assert "shutdown_receipt_failed" not in caplog.text
+                assert "event_failed" not in caplog.text
+            finally:
+                release.set()
+                if closing is not None:
+                    await asyncio.wait_for(closing, 3)
     run(scenario())

@@ -195,4 +195,3 @@ def decode(payload):
     result = classify(cmd, child=True)
     if result.payload != payload: raise ValueError("noncanonical action payload")
     return cmd, result
-

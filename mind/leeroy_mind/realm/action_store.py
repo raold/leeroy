@@ -488,11 +488,19 @@ class ActionStore:
 
     def observe_bot_job(self, ev, *, now):
         if type(ev) is not Job: return Transition(False)
-        identity(ev.id); integer(ev.ts, 0, 0x7FFFFFFFFFFFFFFF)
-        now = _now(now); incoming = json.loads(document(_evidence(ev), limit=32768)); _bot(incoming, ev.id)
+        # Job is shared with Guild progress and scoped Training mutations.
+        # Establish our dispatched command and exact receipt namespace before
+        # applying the narrower terminal/default-accounting validator.
+        if type(ev.id) is not str: return Transition(False)
         with self.conn:
             old = self.get(ev.id)
-            if old is None or old.policy != "defaults" or old.transport_state == "not_entered": return Transition(False)
+            if (old is None or old.role != "root" or old.policy != "defaults"
+                    or old.transport_state == "not_entered" or ev.kind != old.kind
+                    or ev.training_run != json.loads(old.payload)["training_run"]):
+                return Transition(False)
+            identity(ev.id); integer(ev.ts, 0, 0x7FFFFFFFFFFFFFFF)
+            now = _now(now)
+            incoming = json.loads(document(_evidence(ev), limit=32768)); _bot(incoming, ev.id)
             data = json.loads(old.evidence)
             if "bot" in data and data["bot"] != incoming: data["conflict"] = True
             else: data["bot"] = incoming

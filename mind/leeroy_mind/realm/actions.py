@@ -407,4 +407,3 @@ class ActionQueue:
         self._pending.clear(); self._entries.clear()
         # Do not cancel queue sends or ports' already-entered settlements.
         if self._tasks: await asyncio.gather(*tuple(self._tasks), return_exceptions=True)
-

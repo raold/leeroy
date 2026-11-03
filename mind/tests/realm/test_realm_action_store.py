@@ -584,3 +584,50 @@ def test_local_backoff_cancellation_does_not_create_or_extend_native_failure_tim
     assert json.loads(store.get("first").evidence)["failed_at"] == 10
     assert "failed_at" not in json.loads(store.get("victim").evidence)
     assert store.holds() == ()
+
+
+@pytest.mark.parametrize("command_id,kind,state,scope", [
+    ("foreign", "gear_up", "progress", ""),
+    ("foreign", "gear_up", "done", ""),
+    ("foreign", "offline_raid", "progress", "training-scope"),
+    ("foreign", "offline_raid", "failed", "training-scope"),
+    ("foreign", "benchmark", "progress", "training-scope"),
+    ("foreign", "benchmark", "done", "training-scope"),
+    ("foreign", "bot_do", "done", "training-scope"),
+    ("foreign", "bot_do", "failed", "training-scope"),
+    ("defaults", "gear_up", "progress", ""),
+    ("defaults", "gear_up", "done", ""),
+    ("defaults", "offline_raid", "progress", "training-scope"),
+    ("defaults", "offline_raid", "failed", "training-scope"),
+    ("defaults", "bot_do", "done", "training-scope"),
+    ("defaults", "bot_do", "failed", "training-scope"),
+    ("ordinary", "bot_do", "done", ""),
+    ("ordinary", "bot_do", "progress", ""),
+    ("ordinary", "bot_do", "done", "training-scope"),
+    ("prepared", "bot_do", "done", ""),
+    ("prepared", "bot_do", "progress", ""),
+])
+def test_shared_job_screens_unknown_policy_kind_and_scope_before_defaults_validation(store, command_id, kind, state, scope):
+    dispatch(store, prepare(store, BotDo("defaults", (2, 3), "nc", "-bg,-lfg")))
+    store.observe_ack(Ack(0, "defaults", True, ""), now=2)
+    dispatch(store, prepare(store, p.RealmMove("ordinary", 4, "home")))
+    prepare(store, BotDo("prepared", (5,), "nc", "-bg,-lfg"))
+    records, holds = store.records(), store.holds()
+    ev = replace(bot(command_id), kind=kind, state=state, training_run=scope,
+                 stage="assembling" if kind == "offline_raid" and state == "progress" else "",
+                 reason="cancelled" if state == "failed" else "")
+    transition = store.observe_bot_job(ev, now=3)
+    assert not transition.matched and not transition.changed and not transition.result_ready
+    assert store.records() == records and store.holds() == holds
+    assert store.get("defaults").state == "dispatched"
+
+
+@pytest.mark.parametrize("change", [{"state": "progress"}, {"guids": (2, 2)}, {"ts": True},
+                                     {"skipped": (JobSkip(3, "offline"), JobSkip(3, "offline"))}])
+def test_matching_defaults_still_strictly_validates_evidence_after_correlation(store, change):
+    dispatch(store, prepare(store, BotDo("defaults", (2, 3), "nc", "-bg,-lfg")))
+    store.observe_ack(Ack(0, "defaults", True, ""), now=2)
+    records, holds = store.records(), store.holds()
+    with pytest.raises(ValueError):
+        store.observe_bot_job(replace(bot(), **change), now=3)
+    assert store.records() == records and store.holds() == holds
