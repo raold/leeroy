@@ -96,16 +96,22 @@ def test_parts_registry_attaches_present_modules(app, monkeypatch, caplog):
             speech=module("speech", attach_as("speech", ("channel_chat", "zone"))),
             bank=module("bank", lambda realm: None),          # Declines.
             mail=module("mail", lambda realm: 1 / 0))         # Broken: left out, logged by type.
+    def attach_itself(realm):  # A part that adds itself and returns only the part.
+        part = Part("canon")
+        realm.add_part(part, event_types=("achievement",))
+        return part
+
+    install(monkeypatch, canon=module("canon", attach_itself))
     caplog.set_level(logging.INFO, logger="leeroy_mind.realm.parts")
     enabled(app.data_dir, True)
     realm = attach_realm(app)
-    assert list(realm.parts) == ["direct", "speech"]
+    assert list(realm.parts) == ["direct", "steps", "speech", "canon"]  # Steps is the real module.
     assert realm.part("speech").name == "speech" and realm.part("bank") is None and realm.part("x") is None
-    assert [p.name for p, _ in realm._parts] == ["direct", "speech"]
+    assert [p.name for p, _ in realm._parts] == ["direct", "steps", "speech", "canon"]  # Each once.
     assert realm.on_event in app.handlers["zone"]  # The part's own event type, registered once.
     assert all(len(handlers) == 1 for handlers in app.handlers.values())
     absent = [r.getMessage() for r in caplog.records if r.getMessage().startswith("realm_part_absent")]
-    assert absent == ["realm_part_absent names=steps,talk,rivals,race,poach,canon,calendar"]
+    assert absent == ["realm_part_absent names=talk,rivals,race,poach,calendar"]
     assert "realm_part_failed name=mail error=ZeroDivisionError" in caplog.text
     assert "realm_part_declined name=bank" in caplog.text
     assert parts.PART_MODULES == ("direct", "steps", "speech", "talk", "rivals", "race", "poach",
@@ -124,17 +130,17 @@ def test_parts_registry_attaches_present_modules(app, monkeypatch, caplog):
 
 def test_a_present_module_with_a_broken_import_is_a_failure_not_an_absence(app, monkeypatch, caplog):
     def broken(name, *args, **kwargs):
-        if name == "leeroy_mind.realm.steps":
+        if name == "leeroy_mind.realm.speech":
             raise ModuleNotFoundError("No module named 'missing_dependency'", name="missing_dependency")
         return real(name, *args, **kwargs)
     real = parts.importlib.import_module
     monkeypatch.setattr(parts.importlib, "import_module", broken)
     caplog.set_level(logging.INFO, logger="leeroy_mind.realm.parts")
     realm = attach_realm(app)
-    assert realm.parts == {}
-    assert "realm_part_failed name=steps error=ModuleNotFoundError" in caplog.text
-    assert "steps" not in next(r.getMessage() for r in caplog.records
-                               if r.getMessage().startswith("realm_part_absent"))
+    assert "speech" not in realm.parts
+    assert "realm_part_failed name=speech error=ModuleNotFoundError" in caplog.text
+    assert "speech" not in next(r.getMessage() for r in caplog.records
+                                if r.getMessage().startswith("realm_part_absent"))
 
 
 @pytest.mark.parametrize("on", [False, True])

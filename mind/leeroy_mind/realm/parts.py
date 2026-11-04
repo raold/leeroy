@@ -1,7 +1,8 @@
 """The Realm's parts: each later feature attaches here, without editing shared files.
 
 A part module is ``leeroy_mind.realm.<name>`` for a name in PART_MODULES. Its
-``attach(realm)`` returns ``(part, event_types)``, or None when the part declines, and does
+``attach(realm)`` returns ``(part, event_types)``, or None when the part declines (a part
+that added itself with ``realm.add_part``, as steps does, may return just the part), and does
 no I/O at all: no socket, task, thread, subprocess, database write or model call. The
 Realm then awaits ``part.tick()`` (optional) each second and ``part.on_event(ev)`` for its
 event types, both only while it is enabled. Anything longer than a moment goes to
@@ -76,8 +77,9 @@ def build_parts(realm) -> dict:
             if attached is None:
                 log.info("realm_part_declined name=%s", name)
                 continue
-            part, event_types = attached
-            realm.add_part(part, event_types=event_types)
+            part, event_types = attached if type(attached) is tuple else (attached, ())
+            if not any(added is part for added, _ in realm._parts):
+                realm.add_part(part, event_types=event_types)
         except Exception as error:
             log.error("realm_part_failed name=%s error=%s", name, type(error).__name__)
             continue
