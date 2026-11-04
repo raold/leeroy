@@ -61,7 +61,7 @@ struct OwnerFacts
 {
     std::uint64_t revision = 0, insertion = 0, createdGroup = 0, groupGeneration = 0, disband = 0;
     std::string poison;
-    std::map<std::uint32_t, MemberFacts> members;
+    std::map<std::uint32_t, MemberFacts> members{};
     std::uintptr_t battlefield = 0;
 };
 struct Watch
@@ -112,7 +112,7 @@ struct Capability
     std::uint64_t insertion = 0, group = 0, groupGeneration = 0;
     std::uint8_t wgTravelKind = 0;
     std::uint32_t wgDefender = 0;
-    PvpDestination wgDestination;
+    PvpDestination wgDestination{};
 };
 thread_local Capability* capability = nullptr;
 struct NativeCall

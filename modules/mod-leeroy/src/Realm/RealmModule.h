@@ -19,13 +19,13 @@ enum class StepState { Complete, Refused, Pending, Unknown, Detached };
 struct RealmStep
 {
     StepState state = StepState::Refused;
-    std::string reason;
+    std::string reason{};
     std::uint64_t value = 0;
     // At most four exact scopes derived from this operation's known intended
     // transitions, never a blind snapshot of whatever state appeared later.
     // Original account/guild/player/AI/session and lifecycle generation remain
     // immutable. Without an explicit scope, only the pre-step scope is allowed.
-    std::vector<BodyScope> expectedScopes;
+    std::vector<BodyScope> expectedScopes{};
 };
 
 // The native adapter owns the lock represented by this guard. It must hold its
@@ -40,8 +40,8 @@ struct PvpCleanProof : ContinuationCleanReceipt
 struct PvpContinuationStep
 {
     PvpStage stage = PvpStage::Acquiring;
-    std::string reason;
-    std::optional<PvpCleanProof> clean;
+    std::string reason{};
+    std::optional<PvpCleanProof> clean{};
 };
 
 // World-thread only except Watched/NotifyBodyChanged/RecordKill. Executors do

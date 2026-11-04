@@ -24,7 +24,7 @@ struct ContinuationOwner
     std::vector<std::uint32_t> members;
     PvpStage stage = PvpStage::Acquiring;
     bool applicationFenced = false;
-    std::string reason, cleanupId;
+    std::string reason{}, cleanupId{};
     ActivityDomain domain = ActivityDomain::Realm;
     bool internalCleanup = false;
 };
@@ -78,7 +78,7 @@ private:
         bool detached = false;
         // Never evict a canceled controller while its source can still act.
         // Exhaustion becomes Unknown instead of accepting an old command id.
-        std::vector<std::string> canceledControllers;
+        std::vector<std::string> canceledControllers{};
     };
     std::string _nonce, _cursor;
     std::uint64_t _serial = 0;

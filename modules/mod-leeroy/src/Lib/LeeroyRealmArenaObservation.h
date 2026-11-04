@@ -54,12 +54,12 @@ struct ObservedArenaDestination
 struct ArenaObservation
 {
     ObservedArenaQueue source;
-    std::optional<ObservedArenaInstance> match;
-    std::map<std::uint32_t, ObservedArenaEntry> entries;
-    std::map<std::uint32_t, ObservedArenaLife> transits;
-    ObservedArenaDestination destination;
+    std::optional<ObservedArenaInstance> match{};
+    std::map<std::uint32_t, ObservedArenaEntry> entries{};
+    std::map<std::uint32_t, ObservedArenaLife> transits{};
+    ObservedArenaDestination destination{};
     std::uintptr_t teamObject = 0;
-    std::vector<std::uint32_t> teamRoster;
+    std::vector<std::uint32_t> teamRoster{};
     std::uint32_t baseline = 0, side = 0, expiry = 0, teamCaptain = 0;
     bool verified = false, baselineAvailable = false, reported = false, poisoned = false, endCopied = false;
 };

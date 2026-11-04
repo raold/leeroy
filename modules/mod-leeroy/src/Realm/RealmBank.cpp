@@ -131,7 +131,7 @@ struct CreationReceipt
     Player* player;
     std::uint32_t entry, count, calls = 0;
     Item const* returned = nullptr;
-    BankItemFact item;
+    BankItemFact item{};
     bool exact = true;
 };
 thread_local CreationReceipt* creationReceipt = nullptr;

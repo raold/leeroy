@@ -171,7 +171,7 @@ struct RealmJob
     std::string reason;
     std::uint32_t guid = 0;
     std::uint64_t value = 0;
-    std::string pvpOwner;
+    std::string pvpOwner{};
 };
 nlohmann::json MakeRealmJob(RealmJob const&);
 // Body only; the drain supplies this proof's already captured publishedAtMs to

@@ -80,7 +80,7 @@ struct RealmModule::State
         std::string continuation;
     };
     struct Poll { std::uint32_t interval, remaining = 0; std::function<void()> fn; };
-    struct Handler { Executor execute; Admission admit; ActivityOutcome outcome; };
+    struct Handler { Executor execute; Admission admit; ActivityOutcome outcome{}; };
     std::atomic<bool> on{false};
     std::atomic<std::uint64_t> epoch{1};
     std::atomic<bool> guildOn{false};
@@ -264,9 +264,11 @@ void RealmModule::Reload()
     auto places = placesText ? ParsePlaces(*placesText, error) : std::nullopt;
     _state->places.clear();
     if (places)
+    {
         for (auto& place : *places)
             if (ValidPlace(place)) _state->places.push_back(std::move(place));
             else LOG_ERROR("module.leeroy", "mod-leeroy: realm place {} rejected: map/coordinates/zone mismatch", place.name);
+    }
     error.clear();
     auto itemsText = ReadFile(cfg.realmItemsFile);
     auto items = itemsText ? ParseItems(*itemsText, error) : std::nullopt;
