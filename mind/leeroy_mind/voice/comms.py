@@ -256,6 +256,9 @@ class Comms:
             reason = type(exc).__name__
             event("voice_deliver_failed", level=logging.WARNING, reason=reason)
         else:
+            timing = self._timing()
+            if timing is not None:
+                timing.voice_sent(getattr(meta, "timing_trace", None), speak.id)
             self._speaks[meta.turn_id] = speak.id
             while len(self._speaks) > SPEAKS_KEPT:
                 del self._speaks[next(iter(self._speaks))]
@@ -275,15 +278,28 @@ class Comms:
                                 self.ext.app.clock.now())
 
     def played(self, msg: wire.Played) -> None:
+        if (timing := self._timing()) is not None:
+            timing.played(msg.id, msg.state, msg.reason)
         self._unanswered.pop(msg.id, None)
         self.ext.store.set_line(msg.id, msg.state, msg.reason or None, self.ext.app.clock.now())
+
+    def _timing(self):
+        return getattr(getattr(self.ext.app, "engine", None), "timing", None)
+
+    def disconnected(self) -> None:
+        if (timing := self._timing()) is not None:
+            timing.voice_missing(reason="disconnected")
 
     def age_out(self) -> None:
         """The tick: a line the service never answered for (it refuses a bad speak with an
         error, no played, and a line in the air dies with the connection) stops reading as
         sent, so nothing takes it for a line he heard."""
         now = self.ext.app.clock.now()
+        if (timing := self._timing()) is not None:
+            timing.expire()
         for speak_id, at in list(self._unanswered.items()):
             if now >= at:
                 del self._unanswered[speak_id]
                 self.ext.store.set_line(speak_id, "dropped", "no_ack", now)
+                if timing is not None:
+                    timing.voice_missing(speak_id, reason="no_ack")

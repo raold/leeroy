@@ -202,6 +202,7 @@ class TalkEngine(Reactions):
         session."""
         await self._cancel_all()
         self._settle_unacked(self.clock.now(), everything=True)
+        self.timing.flush("session_end")
         if self.facts is not None:
             await self.facts.reset_session()
         self._greeted_login = False
@@ -221,6 +222,7 @@ class TalkEngine(Reactions):
         the world. Bot commands in party or raid (the app also keeps them out of threads: the
         same check, a different job) and emote lines get nothing. Replies are spoken one after
         another, so each can see the one before."""
+        timing_origin = self.timing.now()
         reply_to = REPLY_CHANNEL.get(row.channel) or (
             row.channel if row.channel.startswith("voice:") else None)  # a line he spoke
         if reply_to is None:
@@ -334,6 +336,8 @@ class TalkEngine(Reactions):
                                delay=self.rng.uniform(*REPLY_NEXT_S)),
                           TurnMeta(f"reply-{row.id}-lead", answers_human=True,
                                    why="reply:raid_lead")))
+        for _, meta in items:
+            meta.timing_origin = timing_origin
         self._queue(items)
 
     def _mid_raid(self) -> str | None:
@@ -531,6 +535,7 @@ class TalkEngine(Reactions):
             self._advance_states(now)
         self.world.refresh(now)
         self._settle_unacked(now)
+        self.timing.expire()
         self._gz_after_fight(now)
         if self.world.human_online:
             quiet = self._login_quiet(now)
