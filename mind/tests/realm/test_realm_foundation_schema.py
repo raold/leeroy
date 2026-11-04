@@ -149,7 +149,7 @@ def test_required_columns_reject_null_including_exact_fk_primary_keys(conn, tabl
     ("realm_kill", "native_cast_json", json.dumps([1] * 129, separators=(",", ":"))),
     ("realm_announcement", "command_id", "with space"), ("realm_announcement", "command_id", "id\0x"),
     ("realm_announcement", "period_key", "2026-02-30"), ("realm_announcement", "period_key", "2026-1-1"),
-    ("realm_announcement", "cadence", "weekly"), ("realm_announcement", "first", "ever"),
+    ("realm_announcement", "cadence", "weekly"), ("realm_announcement", "first", "month"),
     ("realm_announcement", "payload_json", "[]"),
     ("realm_announcement", "payload_json", '{"x":"' + "é" * 2048 + '"}'),
     ("realm_announcement", "process_id", b"process"),

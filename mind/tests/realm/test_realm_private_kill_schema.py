@@ -19,6 +19,8 @@ def old_store(tmp_path, monkeypatch, clock):
     with monkeypatch.context() as patch:
         patch.setattr(db, '_migration_files', lambda: [(n, p) for n, p in files if n <= 11])
         store = Store(db.open_db(tmp_path / 'v11.db'), clock=clock)
+    # This historical upgrade stops at v12 even when newer migrations exist.
+    monkeypatch.setattr(db, '_migration_files', lambda: [(n, p) for n, p in files if n <= 12])
     return store, files
 
 
