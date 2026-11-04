@@ -9,7 +9,7 @@ from leeroy_mind.console.app import ConsoleApp, Settings
 from leeroy_mind.console.control import Controls
 from leeroy_mind.console.ws import WsError
 
-KEY = "test-key-0123456789abcdef"
+KEY = "k" * 32  # a fixed key; the real one is secrets.token_urlsafe(24)
 
 
 class FakeMind:
