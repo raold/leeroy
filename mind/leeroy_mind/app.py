@@ -55,6 +55,7 @@ from leeroy_mind.memory.threads import ClosedThread, ThreadTracker
 from leeroy_mind.memory.writer import Embedder, MemoryWriter
 from leeroy_mind.personas.io import PersonaCache
 from leeroy_mind.tuning.world import merge as merge_world
+from leeroy_mind.tuning.service import TuningService
 from leeroy_mind.protocol import (CORE_EVENT_TYPES, Ack, Achievement, AfkEvent, BgEnd, Boss,
                                   Cast, Chat, Death, Error, Event, Group, Hello, Login, Logout,
                                   LootWon, TextEmote, Zone, event_type)
@@ -427,6 +428,7 @@ class MindApp:
         self.voice = attach_voice(self)
         self.guild = install_guild(self)
         self.training = attach_training(self)
+        self.tuning = TuningService(self)  # the owner's dials: the control endpoint's tune op
         self.control = attach_control(self)
         self.realm = attach_realm(self)  # Last: tests/realm/test_realm_wiring.py
 
