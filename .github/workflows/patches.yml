@@ -21,6 +21,7 @@ permissions:
 jobs:
   mod-playerbots:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
@@ -64,6 +65,7 @@ jobs:
 
   mod-ollama-chat:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
