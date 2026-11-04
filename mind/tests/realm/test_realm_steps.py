@@ -12,7 +12,7 @@ from leeroy_mind.realm import cli, protocol
 from leeroy_mind.realm.actions import ActionContext
 from leeroy_mind.realm.ports import RealmDisabled
 from leeroy_mind.realm.service import attach_realm
-from leeroy_mind.realm.steps import Steps, approve, attach, digest, write_plan
+from leeroy_mind.realm.steps import Steps, approve, digest, write_plan
 from realm.fakes import RealmApp
 
 
@@ -234,12 +234,13 @@ def test_disabled_never_applies(tmp_path, store, clock, realm, monkeypatch):
     # The real Realm, attached disabled: the part registers with no I/O and never applies.
     (tmp_path / "real").mkdir()
     app = RealmApp(tmp_path / "real", store, clock)
-    real = attach_realm(app)
     def forbidden(*args, **kwargs):
         raise AssertionError("attach started asynchronous work")
     monkeypatch.setattr(asyncio, "create_task", forbidden)
-    part = attach(real)
+    real = attach_realm(app)  # The parts registry attaches steps.
     monkeypatch.undo()
+    part = real.part("steps")
+    assert type(part) is Steps
     assert [p for p, _ in real._parts] == [part] and not (app.data_dir / "realm").exists()
     part.register("rivals", renamer(calls))
     approved(app.data_dir, clock, {"names": ["Alpha"]})
