@@ -482,6 +482,33 @@ def test_birthday_posted_the_week_before(rig):
     assert [p.title for p in rig.posts("other")][-1] == "Belra's birthday"
 
 
+def test_a_crowded_birthday_is_one_combined_event(rig):
+    rig.lead(birthday="09-01")
+    names = ["Ebbo", "Fenna", "Garr", "Hilde", "Ivo"]
+    for i, name in enumerate(names):
+        rig.member(105 + i, name, birthday="11-06")
+    rig.tick()
+    events = rig.posts("other")
+    assert 1 <= len(events) <= 3
+    text = " | ".join(f"{e.title} {e.description}" for e in events)
+    for name in names:
+        assert text.count(name) == 1
+    rig.tick(86400)
+    assert len(rig.posts("other")) == len(events)  # Posted once.
+    rig.hours(9)
+    event = rig.rows("birthday")[0]["event_id"]
+    assert 0 < len(rig.signups(event)) <= calendar.SIGNUP_CAP
+
+
+def test_two_birthdays_on_a_date_stay_single_events(rig):
+    rig.lead(birthday="09-01")
+    rig.member(105, "Ebbo", birthday="11-06")
+    rig.member(106, "Fenna", birthday="11-06")
+    rig.tick()
+    assert sorted((p.title, p.description) for p in rig.posts("other")) == [
+        ("Ebbo's birthday", ""), ("Fenna's birthday", "")]
+
+
 # -- signups -------------------------------------------------------------------------------------
 
 def test_signups_capped(rig):
