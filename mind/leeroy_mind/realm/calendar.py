@@ -14,7 +14,8 @@ What is posted (realm_calendar.kind), by whom (a title word), and when:
                the raid-lead rotation
   anniversary  the same                        the week before [realm] guild_anniversary, only
                                                when it is set (local data: never in a log)
-  meeting      the standing raid lead          from Monday, for Thursday at 21:00, inviting him
+  meeting      the standing raid lead          Monday (caught up until Wednesday), for Thursday
+                                               at 21:00, inviting him
 
 The raid-lead rotation is the standing raid lead (the one cast tank titled raid lead: the kick
 guard's rule), then the others titled raid lead. A creator already holding 25 live events (its
@@ -81,6 +82,7 @@ NIGHTS_MAX = 4
 DEFAULT_NIGHTS = (1, 2, 3)  # Tuesday, Wednesday, Thursday (Monday is 0).
 NIGHT_HOUR = 20
 MEETING_DAY, MEETING_HOUR = 3, 21  # Thursday 21:00.
+MEETING_LAST_POST_DAY = 2  # Posted on Monday, caught up until Wednesday; never on its own day.
 WEEK_BEFORE_DAYS = 7
 EVENT_HOUR = 20  # Birthdays and the anniversary.
 MISSED_AFTER_S = 4 * 3600  # A night he missed is updated this long after it began...
@@ -392,7 +394,7 @@ class CalendarDesk:
                               "Raid night", "raid", rotation))
         local = self._clock.local()
         today = local.date()
-        if local.weekday() <= MEETING_DAY:
+        if local.weekday() <= MEETING_LAST_POST_DAY:
             thursday = today + timedelta(days=MEETING_DAY - local.weekday())
             posts.append(Post("meeting", f"meeting:{thursday.isoformat()}", self._local(thursday, MEETING_HOUR),
                               "Officer meeting", "meeting", rotation, invite_human=True))

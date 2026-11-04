@@ -416,12 +416,18 @@ def test_meeting_invites_him(tmp_path):
         rig.close()
 
 
-def test_no_meeting_after_thursday(tmp_path):
-    rig = Rig(tmp_path, start=datetime(2026, 11, 13, 10, 0, tzinfo=NY))  # A Friday.
+@pytest.mark.parametrize("start, posted", [
+    (datetime(2026, 11, 11, 10, 0, tzinfo=NY), True),   # Wednesday: a missed Monday caught up.
+    (datetime(2026, 11, 12, 10, 0, tzinfo=NY), False),  # Thursday: never on its own day.
+    (datetime(2026, 11, 13, 10, 0, tzinfo=NY), False),  # Friday.
+])
+def test_meeting_posted_from_monday_until_wednesday(tmp_path, start, posted):
+    rig = Rig(tmp_path, start=start)
     try:
         rig.lead()
         rig.tick()
-        assert rig.posts("meeting") == []
+        assert [datetime.fromtimestamp(p.at, NY) for p in rig.posts("meeting")] == (
+            [_local(date(2026, 11, 12), 21)] if posted else [])
     finally:
         rig.close()
 
