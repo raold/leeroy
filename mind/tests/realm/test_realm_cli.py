@@ -116,6 +116,55 @@ def test_titles_unavailable_armory_is_partial_and_redacted(tmp_path, store, monk
     assert "titles" in result and "private" not in output and "password" not in output
 
 
+def test_cli_unknown_step_exit1(tmp_path, store, clock, capsys, monkeypatch):
+    assert cli.realm_main(["plan", "no-such-step", "--data-dir", str(tmp_path)], clock=clock) == 1
+    output = capsys.readouterr().out
+    assert "unknown step" in output and "no-such-step" not in output
+    # A registered step whose module is not in this build is not available, and says so.
+    monkeypatch.setitem(cli.PLAN_STEPS, "ghost", cli.Entry("no_such_realm_module", "plan_cli", False))
+    monkeypatch.setitem(cli.CANON_ACTIONS, "ghost", cli.Entry("no_such_realm_module", "history_ok_cli", False))
+    for argv in (["plan", "ghost"], ["canon", "ghost", "seed.json", "canon.json"]):
+        assert cli.realm_main([*argv, "--data-dir", str(tmp_path)], clock=clock) == 1
+        output = capsys.readouterr().out
+        assert "not available in this build" in output and str(tmp_path) not in output
+
+
+def test_cli_model_step_refused_in_night_window(tmp_path, store, clock, capsys, monkeypatch):
+    from leeroy_mind.clock import night_of
+    calls = []
+    def plan_cli(ctx):
+        calls.append((ctx.name, ctx.argv, ctx.root))
+        return 0
+    monkeypatch.setitem(cli.PLAN_STEPS, "dreamy", cli.Entry("dreamy", "plan_cli", True))
+    monkeypatch.setitem(cli.PLAN_STEPS, "plain", cli.Entry("plain", "plan_cli", False))
+    monkeypatch.setattr(cli, "load_entry", lambda entry: plan_cli)
+    with store.conn:
+        store.conn.execute("INSERT INTO night_run(night,window_start,window_end,status,started) "
+                           "VALUES (?,0,?,'running',?)", (night_of(clock.local()), clock.now(), clock.now()))
+    argv = ["plan", "dreamy", "--progression-name", "Rival", "--data-dir", str(tmp_path)]
+    assert cli.realm_main(argv, clock=clock) == 2
+    assert "night_window" in capsys.readouterr().out and calls == []
+    # A step without the model runs during the night; the model step once the night is done.
+    assert cli.realm_main(["plan", "plain", "--data-dir", str(tmp_path)], clock=clock) == 0
+    with store.conn:
+        store.conn.execute("UPDATE night_run SET status='done',finished=?", (clock.now(),))
+    assert cli.realm_main(argv, clock=clock) == 0
+    assert calls == [("plain", (), tmp_path), ("dreamy", ("--progression-name", "Rival"), tmp_path)]
+
+
+def test_cards_show_reads_only_the_cards_directory(tmp_path, capsys):
+    cards = tmp_path / "realm" / "cards"
+    cards.mkdir(parents=True)
+    (cards / "3001.json").write_text(json.dumps({"name": "Vex", "role": "officer"}), encoding="utf-8")
+    (cards / "3002.json").write_text("{broken", encoding="utf-8")
+    assert cli.realm_main(["cards", "--data-dir", str(tmp_path)]) == 0
+    assert json.loads(capsys.readouterr().out) == {"cards": ["3001", "3002"], "count": 2}
+    assert cli.realm_main(["cards", "--show", "--data-dir", str(tmp_path)]) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "cards": {"3001": {"name": "Vex", "role": "officer"}, "3002": {"error": "unreadable"}}, "count": 2}
+    assert not (tmp_path / "mind.db").exists()
+
+
 def test_cli_errors_do_not_echo_local_values(tmp_path, store, capsys):
     (tmp_path / "mind.toml").write_text('[realm]\ntrial_rank = "private-name"\n')
     assert cli.realm_main(["titles", "--data-dir", str(tmp_path)]) == 1

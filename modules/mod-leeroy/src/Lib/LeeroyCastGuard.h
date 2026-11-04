@@ -31,8 +31,9 @@ struct GuardStep
 
 // The guard's exact record of one published his_kick step: the Unix-ms ts of
 // that guard event and the rank it reported (0 when the guard never learned one).
-// It binds a consented re-admission to that one kick. Memory only: a worldserver
-// restart forgets it, and a re-admission then has no native authority.
+// It binds a consented re-admission to that one kick. The adapter also keeps it
+// in the characters DB, so a worldserver restart within the consent window can
+// restore it; one it could not store or restore has no native authority.
 struct KickReceipt
 {
     enum class State { Open, Readmitted, Unknown };
@@ -40,6 +41,24 @@ struct KickReceipt
     std::uint8_t rank = 0;
     State state = State::Open;
 };
+
+inline constexpr std::size_t kMaxKickReceipts = 1024;
+
+// One stored receipt (table leeroy_kick_receipt): a row per kicked guid of the
+// guard's guild and human; a newer kick of that guid replaces it.
+struct StoredKickReceipt
+{
+    std::uint32_t guid = 0;
+    std::uint64_t kickTs = 0;
+    std::uint8_t rank = 0;
+    std::uint8_t state = 0;
+};
+
+// Stored codes: Open 0, Readmitted 1, Unknown 2. Any other code reads as Unknown.
+std::uint8_t KickReceiptCode(KickReceipt::State state);
+KickReceipt::State KickReceiptFromCode(std::uint8_t code);
+// The stored row is exactly this receipt of this guid (the store's readback proof).
+bool StoredReceiptIs(StoredKickReceipt const& row, std::uint32_t guid, KickReceipt const& receipt);
 
 struct GuardInput
 {
@@ -80,6 +99,15 @@ public:
     bool CompleteReadmit(std::uint32_t guid, std::uint64_t kickTs);
     // An add whose outcome is unproved: this receipt never authorizes another.
     void ReadmitUnknown(std::uint32_t guid, std::uint64_t kickTs);
+    // Receipts an earlier worldserver stored, restored as they were: an open or
+    // unknown one with his exclusion, a readmitted one without. Skips any older
+    // than windowMs at nowUnixMs (every one when the clock is unavailable, 0) and
+    // any guid this process already learned something about, and keeps the
+    // receipt bound, newest first. A malformed state or rank restores as Unknown.
+    std::size_t RestoreReceipts(std::vector<StoredKickReceipt> rows, std::uint64_t nowUnixMs,
+        std::uint64_t windowMs);
+    std::uint32_t Guild() const { return _guildId; }
+    std::uint32_t Human() const { return _humanLow; }
 
     void NoteFailed(std::uint32_t guid, std::uint64_t nowMs);
     std::vector<GuardStep> Pass(GuardInput const& input, std::size_t maxReadds = 5);
