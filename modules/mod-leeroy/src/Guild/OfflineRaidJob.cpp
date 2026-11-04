@@ -117,7 +117,7 @@ struct Member
     bool changed = false;
     bool masterAssigned = false;
     bool masterReleased = false, journalRestored = false;
-    RaidFinalReset finalReset;
+    RaidFinalReset finalReset{};
     bool moved = false;
     bool restartIssued = false;
     bool returnIssued = false;
