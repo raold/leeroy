@@ -30,8 +30,8 @@ def test_attachment_registers_without_starting_and_reuses_app_dependencies(h):
     app = app_for(h)  # constructing outside an event loop must be safe
     try:
         assert isinstance(app.arbiter.admin, NullAdmin)
-        assert app._background == [app.nightly.run_forever, app.guild.run, app.realm.run,
-                                   app.control.serve]
+        assert app._background == [app.nightly.run_forever, app.guild.run, app.control.serve,
+                                   app.realm.run]
         assert app._bg_tasks == [] and app.nightly.running is None
         ctx = context(app)
         assert ctx.writer is app.writer and ctx.embedder is app.embedder

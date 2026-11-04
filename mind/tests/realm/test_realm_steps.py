@@ -241,7 +241,8 @@ def test_disabled_never_applies(tmp_path, store, clock, realm, monkeypatch):
     monkeypatch.undo()
     part = real.part("steps")
     assert type(part) is Steps
-    assert [p for p, _ in real._parts] == [part] and not (app.data_dir / "realm").exists()
+    # Registered once, beside the other present parts; no realm dir yet.
+    assert [p for p, _ in real._parts].count(part) == 1 and not (app.data_dir / "realm").exists()
     part.register("rivals", renamer(calls))
     approved(app.data_dir, clock, {"names": ["Alpha"]})
     for _ in range(3):

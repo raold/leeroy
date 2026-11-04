@@ -422,8 +422,8 @@ class MindApp:
         self.voice = attach_voice(self)
         self.guild = install_guild(self)
         self.training = attach_training(self)
-        self.realm = attach_realm(self)
         self.control = attach_control(self)
+        self.realm = attach_realm(self)  # Last: tests/realm/test_realm_wiring.py
 
     # -- extension points --------------------------------------------------------------------
 
