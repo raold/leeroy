@@ -20,6 +20,10 @@ cannot read an answer or send a preflighted request (the key header needs one).
     GET  /api/raid     the Raid tab: mind.db's raids, loot and DKP (raidview.raid_view), and
                        the raid night's live state from the mind's control endpoint
     GET  /api/guild    the Guild tab: roster, DKP ladder, loot history, awards, chronicle
+    GET  /api/personas the Personas tab: the cast with each member's mood, stance, ties, memory
+                       counts, persona version and drift (personaview.roster_view)
+    GET  /api/persona  ?guid=<guid>: one member in detail, its persona card summary, ties,
+                       memories by kind and persona ledger (personaview.member_view)
     POST /api/voice    {"type": "join", "channel"} | {"type": "volume", "guid", "db"} |
                        {"type": "mute", "guid", "on"}: on to the voice service
     POST /api/control  {"service": "mind"|"voice", "action": "start"|"restart"|"stop",
@@ -30,8 +34,9 @@ cannot read an answer or send a preflighted request (the key header needs one).
                        then on to the mind's control endpoint (mindlink); refused with
                        --no-control, while a start or stop runs, or while the mind is not up
 
-The Raid and Guild tabs read mind.db read-only. Raid actions are the mind's to take: the
-console forwards them and shows the mind's answer, which says why when it refuses."""
+The Raid, Guild and Personas tabs read mind.db read-only; the Personas tab has no write path.
+Raid actions are the mind's to take: the console forwards them and shows the mind's answer,
+which says why when it refuses."""
 import asyncio
 import base64
 import hashlib
@@ -46,7 +51,7 @@ from pathlib import Path
 from typing import Callable
 
 from .. import endpoint
-from . import feed, mindlog, netinfo, raidview, status
+from . import feed, mindlog, netinfo, personaview, raidview, status
 from .control import Controls, Refused
 from .httpd import Request, Response, Stream, digits, encode_json, json_response, text
 from .mindlink import RAID_S, LinkError
@@ -395,6 +400,8 @@ class ConsoleApp:
                   ("GET", "/api/feed"): self._api_feed,
                   ("GET", "/api/raid"): self._api_raid,
                   ("GET", "/api/guild"): self._api_guild,
+                  ("GET", "/api/personas"): self._api_personas,
+                  ("GET", "/api/persona"): self._api_persona,
                   ("POST", "/api/voice"): self._api_voice,
                   ("POST", "/api/control"): self._api_control,
                   ("POST", "/api/raid"): self._api_raid_action}
@@ -486,6 +493,34 @@ class ConsoleApp:
             log.warning("console_guild_unread: error=%s", type(e).__name__)
             return json_response(503, {"ok": False, "error": f"mind.db could not be read "
                                                              f"({type(e).__name__})"})
+        return json_response(200, view)
+
+    # -- the personas tab (read-only) ----------------------------------------------------------
+
+    async def _api_personas(self, req: Request):
+        try:
+            view = await asyncio.to_thread(feed.read, self.s.data_dir / "mind.db",
+                                           personaview.roster_view, now=self._clock())
+        except Exception as e:
+            log.warning("console_personas_unread: error=%s", type(e).__name__)
+            return json_response(503, {"ok": False, "error": f"mind.db could not be read "
+                                                             f"({type(e).__name__})"})
+        return json_response(200, view)
+
+    async def _api_persona(self, req: Request):
+        values = req.query.get("guid", [])
+        guid = digits(values[0], 10) if len(values) == 1 else None
+        if guid is None:
+            return json_response(400, {"ok": False, "error": "guid: one member's guid"})
+        try:
+            view = await asyncio.to_thread(feed.read, self.s.data_dir / "mind.db",
+                                           personaview.member_view, guid, now=self._clock())
+        except Exception as e:
+            log.warning("console_persona_unread: error=%s", type(e).__name__)
+            return json_response(503, {"ok": False, "error": f"mind.db could not be read "
+                                                             f"({type(e).__name__})"})
+        if view is None:
+            return json_response(404, {"ok": False, "error": f"mind.db has no member {guid}"})
         return json_response(200, view)
 
     def _raid_problem(self) -> tuple[int, str] | None:
