@@ -133,7 +133,7 @@ button:active { border-color: var(--dark) var(--light) var(--light) var(--dark);
   var DB_LIMIT = 12;                     // per-member volume, +-12 dB
   var KINDS = { say: true, you: true, whisper: true, system: true };
   var REASONS = { locked: "is locked", full: "is full", unknown: "does not exist",
-                  offline: "cannot be joined while the mind is offline" };
+                  offline: "cannot be joined while you are not in game" };
   var COLLAPSED_KEY = "voice-ui-collapsed";
 
   function $(id) { return document.getElementById(id); }
