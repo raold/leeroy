@@ -4,14 +4,18 @@ import asyncio
 import base64
 import hashlib
 import re
+import socket
+import sqlite3
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
 
-from leeroy_mind.console import status
+from leeroy_mind.console import feed, httpd, status
 from leeroy_mind.console.control import Controls
 from console.rig import KEY, FakeMind, events, http, make_app, running
+
+LINKED = [SimpleNamespace(state=5, remote_port=7878, remote="127.0.0.1", pid=101)]
 
 
 @pytest.fixture
@@ -104,7 +108,8 @@ def test_a_change_needs_both_the_key_and_the_origin(data):
                            headers={"Content-Type": "application/x-www-form-urlencoded"})
             assert r.status == 415
             assert mind.acts == []
-            r = await http(app, "POST", "/api/control", body=body, origin=True)
+            r = await http(app, "POST", "/api/control", body={**body, "confirm": True},
+                           origin=True)  # confirmed: its game state is unknown here
             assert r.status == 200 and r.json()["ok"] and mind.acts == ["restart"]
     run(go())
 
@@ -200,6 +205,47 @@ def test_stop_needs_no_question_when_he_is_not_in_game(data):
             r = await http(app, "POST", "/api/control", origin=True,
                            body={"service": "mind", "action": "stop"})
             assert r.status == 200 and mind.acts == ["stop"]
+    run(go())
+
+
+def test_an_unreadable_session_is_unknown_and_a_stop_asks_first(data, monkeypatch):
+    def unreadable(conn):
+        raise sqlite3.OperationalError("database is locked at C:/private/mind.db")
+    monkeypatch.setattr(feed, "open_session", unreadable)
+    mind = running(data)
+    async def go():
+        async with served(make_app(data, mind=mind, tcp=lambda: LINKED)) as app:
+            assert app.view.state == "running" and app.bridge is True
+            assert (app.game.state, app.game.reason) == (
+                status.UNKNOWN, "the mind's session could not be read (OperationalError)")
+            st = (await http(app, "GET", "/api/state")).json()["status"]
+            assert st["game"]["state"] == "unknown" and "private" not in repr(st)
+            for service in ("mind", "voice"):
+                for action in ("stop", "restart"):
+                    r = await http(app, "POST", "/api/control", origin=True,
+                                   body={"service": service, "action": action})
+                    assert r.status == 409
+                    assert r.json()["confirm"].startswith(
+                        "The console cannot tell whether you're in game (the mind's session "
+                        "could not be read (OperationalError)).")
+            assert mind.acts == []
+            r = await http(app, "POST", "/api/control", origin=True,
+                           body={"service": "mind", "action": "stop", "confirm": True})
+            assert r.status == 200 and mind.acts == ["stop"]
+    run(go())
+
+
+def test_a_stop_asks_first_whenever_the_game_state_is_unknown(data):
+    async def go():
+        async with served(make_app(data, mind=FakeMind(data))) as app:  # the mind is down
+            assert app.game.state == status.UNKNOWN
+            r = await http(app, "POST", "/api/control", origin=True,
+                           body={"service": "voice", "action": "stop"})
+            assert r.status == 409 and "(the mind is not running)" in r.json()["confirm"]
+            assert "comms go silent" in r.json()["confirm"]
+            r = await http(app, "POST", "/api/control", origin=True,
+                           body={"service": "mind", "action": "start"})
+            assert r.status == 200  # a start never asks
     run(go())
 
 

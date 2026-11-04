@@ -13,8 +13,8 @@ The mind: its process family (leeroy_mind.lifecycle's identity rules) and mind.l
 The owner's game state comes from what the running mind knows, and only from that: in game
 while it has his session open (mind.db `session`, ended NULL) and its game bridge is up, not in
 game while the bridge is up and no session is open. While the mind is not running, or its
-bridge is down, nobody knows: unknown, with the reason. Never "not in game" for a mind that is
-merely down."""
+bridge is down, or its session cannot be read, nobody knows: unknown, with the reason. Never
+"not in game" for a mind that is merely down or a database that did not answer."""
 import json
 import shutil
 import subprocess
@@ -81,13 +81,18 @@ def mind_view(found, held: bool, *, error: str | None = None, run_failed: bool =
     return MindView("stopped")
 
 
-def game_view(mind: str, bridge: bool | None, session: dict | None) -> GameView:
+def game_view(mind: str, bridge: bool | None, session: dict | None, *,
+              unread: str | None = None) -> GameView:
+    """`unread`: why the mind's session could not be read (an exception's class), if it could
+    not; that is never "not in game"."""
     if mind != "running":
         return GameView(UNKNOWN, "the mind is not running" if mind in ("stopped", "crashed")
                         else f"the mind is {mind}")
     if bridge is not True:
         return GameView(UNKNOWN, "the mind's game bridge is down" if bridge is False
                         else "the mind's game bridge state is unknown")
+    if unread is not None:
+        return GameView(UNKNOWN, f"the mind's session could not be read ({unread})")
     if session is not None:
         return GameView(IN_GAME, since=session.get("started"))
     return GameView(NOT_IN_GAME)

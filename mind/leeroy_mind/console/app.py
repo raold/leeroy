@@ -17,8 +17,8 @@ script cannot read an answer or send a preflighted request.
     POST /api/voice    {"type": "join", "channel"} | {"type": "volume", "guid", "db"} |
                        {"type": "mute", "guid", "on"}: on to the voice service
     POST /api/control  {"service": "mind"|"voice", "action": "start"|"restart"|"stop",
-                       "confirm": bool}: a stop or restart while the owner is in game is
-                       answered 409 with a question until it is confirmed"""
+                       "confirm": bool}: a stop or restart while the owner is in game, or while
+                       nobody can tell, is answered 409 with a question until it is confirmed"""
 import asyncio
 import base64
 import hashlib
@@ -170,21 +170,20 @@ class ConsoleApp:
             bridge = tcp if tcp is not None else logview.bridge
         self.bridge = bridge
 
-    def _session(self):
-        if self.view.state != "running" or self.bridge is not True:
-            return None
+    def _session(self) -> tuple[dict | None, str | None]:
+        """(the session the mind has open or None, why it could not be read or None)."""
         try:
-            return feed.read(self.s.data_dir / "mind.db", feed.open_session)
+            return feed.read(self.s.data_dir / "mind.db", feed.open_session), None
         except Exception as e:
             log.warning("console_session_unread: error=%s", type(e).__name__)
-            return None
+            return None, type(e).__name__
 
     async def refresh(self, *, force: bool = False) -> None:
         await asyncio.to_thread(self._probe, force)
         self._derive()
-        session = await asyncio.to_thread(self._session) if (
-            self.view.state == "running" and self.bridge is True) else None
-        self.game = status.game_view(self.view.state, self.bridge, session)
+        session, unread = await asyncio.to_thread(self._session) if (
+            self.view.state == "running" and self.bridge is True) else (None, None)
+        self.game = status.game_view(self.view.state, self.bridge, session, unread=unread)
         self._publish_status()
 
     def _publish_status(self) -> None:
@@ -443,12 +442,16 @@ class ConsoleApp:
             self.controls.check(service, action)
         except Refused as e:
             return json_response(e.status, {"ok": False, "error": str(e)})
-        if (action in ("stop", "restart") and self.game.state == status.IN_GAME
+        if (action in ("stop", "restart") and self.game.state in (status.IN_GAME, status.UNKNOWN)
                 and msg.get("confirm") is not True):
             what = "the guild goes quiet" if service == "mind" else "comms go silent"
-            return json_response(409, {"ok": False, "confirm": (
-                f"You're in game. If you {action} the {service}, {what} until it is back. "
-                f"{action.capitalize()} it anyway?")})
+            if self.game.state == status.IN_GAME:
+                ask = f"You're in game. If you {action} the {service}, {what} until it is back. "
+            else:
+                ask = (f"The console cannot tell whether you're in game ({self.game.reason}). "
+                       f"If you are and you {action} the {service}, {what} until it is back. ")
+            return json_response(409, {"ok": False,
+                                       "confirm": ask + f"{action.capitalize()} it anyway?"})
         self.broadcast("control", {"service": service, "action": action, "phase": "running"})
         self._publish_status()
         try:
