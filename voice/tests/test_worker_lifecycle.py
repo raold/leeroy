@@ -7,6 +7,7 @@ import sys
 import textwrap
 import threading
 import time
+from types import SimpleNamespace
 
 import psutil
 import pytest
@@ -349,6 +350,53 @@ def test_unreadable_live_ancestry_refuses_cleanup_then_retries_safely():
     assert tree.stop(timeout=0.2, grace=0)
     assert not root.living and not child.living
     assert processes.events.index(("kill", 11)) < processes.events.index(("kill", 10))
+
+
+def test_windows_scans_never_ask_status():
+    """On Windows status() snapshots every thread on the system while holding the GIL (about
+    15 ms a call, and the audio callback waits), and Windows has no zombies to find."""
+    tree, processes = wire.WorkerTree(), FakeProcesses()
+    tree.ps, tree._zombies = processes, False
+    tree.owned = {10: 100.0}
+    root = processes.add(10, 100.0)
+    processes.add(11, 101.0, parent=10)
+
+    def forbidden():
+        raise AssertionError("status() asked on Windows")
+
+    root.status = processes.processes[11].status = forbidden
+    assert tree.capture() and tree.owned == {10: 100.0, 11: 101.0}
+    assert tree.stop(timeout=0.2, grace=0)
+    assert ("kill", 11) in processes.events and ("kill", 10) in processes.events
+
+
+def test_the_background_scan_ends_once_settled(monkeypatch):
+    """A scan walks every process on the system with the GIL held: it runs on a timer only
+    while the worker loads, and never once the worker has answered."""
+    monkeypatch.setattr(wire, "WATCH_S", 0.01)
+    tree, processes = wire.WorkerTree(), FakeProcesses()
+    tree.ps = processes
+    processes.add(10, 100.0)
+    tree.attach(SimpleNamespace(pid=10))
+    wait_until(lambda: processes.events.count(("children", 10)) >= 3)
+    tree.settle()
+    tree._thread.join(2)
+    assert not tree._thread.is_alive()
+    scans = len(processes.events)
+    time.sleep(0.1)
+    assert len(processes.events) == scans
+    assert tree.stop(timeout=0.2, grace=0)
+
+
+def test_a_started_worker_has_no_background_scan(workers):
+    worker, pid_file, _, _ = workers("hang")
+    worker.start()
+    child, created = tracked_child(worker, pid_file)
+    worker._tree._thread.join(wire.WATCH_S + 2)
+    assert not worker._tree._thread.is_alive()
+    assert worker._tree.owned[child.pid] == created  # captured at READY, not by the timer
+    worker.stop()
+    assert not original_running(child, created)
 
 
 def test_missing_tracker_dependency_refuses_before_launch(monkeypatch, tmp_path):

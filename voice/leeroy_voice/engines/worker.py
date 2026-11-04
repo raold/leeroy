@@ -27,6 +27,7 @@ READY = "ready"
 MAX_HEAD = 1 << 16  # an answer's JSON line
 SAMPLE = "<f4"
 SAMPLE_BYTES = 4
+WATCH_S = 1.0  # the background scan's period, while the worker loads
 
 
 class WorkerTree:
@@ -35,6 +36,12 @@ class WorkerTree:
     Import psutil only when the service creates this tracker. Worker venvs importing the
     wire protocol still need only numpy and the standard library. Never find processes by
     executable name: ownership starts with Popen and follows verified parent identities.
+
+    A scan holds the GIL: on Windows each children() walks every process on the system (about
+    20 ms here), and the audio callback in this process waits for it. So the background scan
+    runs every WATCH_S while the worker loads, and settle() ends it once the worker answers;
+    after that a scan runs at each request and at stop(), never on a timer. On Windows,
+    which has no zombies, status() is never asked: it snapshots every thread on the system.
     """
 
     def __init__(self):
@@ -43,7 +50,9 @@ class WorkerTree:
         self.owned: dict[int, float] = {}
         self._lock = threading.RLock()
         self._done = threading.Event()
+        self._settled = threading.Event()
         self._thread: threading.Thread | None = None
+        self._zombies = not getattr(psutil, "WINDOWS", False)
 
     def attach(self, process) -> None:
         root = self.ps.Process(process.pid)
@@ -52,12 +61,16 @@ class WorkerTree:
         self._thread = threading.Thread(target=self._watch, name="leeroy-worker-tree", daemon=True)
         self._thread.start()
 
+    def settle(self) -> None:
+        """The worker has answered, so its interpreter is captured: end the background scan."""
+        self._settled.set()
+
     def _matching(self, pid):
         try:
             process = self.ps.Process(pid)
             if process.create_time() != self.owned[pid] or not process.is_running():
                 return None
-            if process.status() == self.ps.STATUS_ZOMBIE:
+            if self._zombies and process.status() == self.ps.STATUS_ZOMBIE:
                 return None
             return process
         except self.ps.NoSuchProcess:
@@ -99,7 +112,7 @@ class WorkerTree:
         return complete
 
     def _watch(self) -> None:
-        while not self._done.wait(0.05):
+        while not self._done.wait(WATCH_S) and not self._settled.is_set():
             self.capture()
 
     def _alive(self):
