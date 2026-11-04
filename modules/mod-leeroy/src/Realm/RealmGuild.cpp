@@ -5,6 +5,7 @@
 #include "LeeroyRealmReadmit.h"
 #include "LeeroyEvents.h"
 #include "LeeroyText.h"
+#include "Log.h"
 #include "PlayerScript.h"
 #include "RBAC.h"
 #include "World.h"
@@ -133,6 +134,7 @@ LeeroyCommandResult Readmit(nlohmann::json const& message)
     auto* guild = sGuildMgr->GetGuildById(configuredGuild);
     if (!guild) return {false, "guild not found"};
     auto* guard = module.Guard();
+    if (guard) EnsureKickReceiptStore(*guard); // A receipt from before a restart counts as before it.
     auto const ranks = RealmGuildRankCount(*guild);
     auto const* character = sCharacterCache->GetCharacterCacheByGuid(PlayerGuid(command->guid));
     auto* connected = ObjectAccessor::FindConnectedPlayer(PlayerGuid(command->guid));
@@ -159,12 +161,23 @@ LeeroyCommandResult Readmit(nlohmann::json const& message)
     auto const generation = module.BodyGeneration(command->guid);
     auto const before = Identity(command->guid);
     if (!before || before->guild != 0) return {false, "not_guildless"};
+    // Write-ahead: until the add is proved the stored receipt is unknown, so a
+    // crash between the add and its proof never leaves a reusable consent.
+    auto const open = *guard->Receipt(command->guid);
+    if (!StoreKickReceipt(*guard, command->guid, {open.kickTs, open.rank, KickReceipt::State::Unknown}))
+        return {false, "receipt_unstored"};
     auto const epoch = module.Epoch();
     bool const added = guild->AddMember(PlayerGuid(command->guid), static_cast<uint8>(command->rank));
     auto const unproved = [&]
     {
         guard->ReadmitUnknown(command->guid, command->kickTs); // This receipt never authorizes another add.
         return LeeroyCommandResult{false, "guild_join_unproved"};
+    };
+    auto const settle = [&](KickReceipt::State state)
+    {
+        if (!StoreKickReceipt(*guard, command->guid, {open.kickTs, open.rank, state}))
+            LOG_ERROR("module.leeroy", "mod-leeroy: guild_readmit receipt for {} stays unknown in the store",
+                command->guid);
     };
     if (!module.On() || module.Epoch() != epoch || GuildId() != configuredGuild || HumanGuid() != human
         || module.Guard() != guard || module.BodyGeneration(command->guid) != generation
@@ -175,8 +188,14 @@ LeeroyCommandResult Readmit(nlohmann::json const& message)
     auto const* after = sCharacterCache->GetCharacterCacheByGuid(PlayerGuid(command->guid));
     auto expected = *before; expected.guild = configuredGuild;
     if (!added)
-        return !member && after && after->GuildId == 0 && current == before
-            ? LeeroyCommandResult{false, "refused"} : unproved();
+    {
+        if (!member && after && after->GuildId == 0 && current == before)
+        {
+            settle(KickReceipt::State::Open); // Provably nothing changed: the consent stands.
+            return {false, "refused"};
+        }
+        return unproved();
+    }
     if (!member || member->GetGUID() != PlayerGuid(command->guid) || member->GetRankId() != command->rank
         || member->GetAccountId() != before->account || member->GetClass() != before->classId
         || member->GetGender() != before->sex
@@ -184,6 +203,7 @@ LeeroyCommandResult Readmit(nlohmann::json const& message)
         || !current || *current != expected) return unproved();
     // Only this proved add lifts his exclusion, and only for this exact kick.
     if (!guard->CompleteReadmit(command->guid, command->kickTs)) return unproved();
+    settle(KickReceipt::State::Readmitted);
     return {true, ""};
 }
 

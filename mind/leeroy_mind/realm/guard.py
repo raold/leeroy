@@ -24,9 +24,10 @@ voice service's transcript is injected into the dispatcher without the native wi
 answer is bound to, and is ignored without a word; in a private room with the lead it is also
 stored as a whisper between them, so it unties any typed answer after it. A yes asks native for one
 guild_readmit bound to the kick's own ts and rank (an officer, rank 1, comes back at 2; a
-rank never learned, 0, sends nothing). Native keeps its kick receipts in memory only, so after
-a worldserver restart it refuses (not_kicked); on any refusal the lead tells him plainly to
-invite the member himself. No, silence or any doubt: nothing is ever sent.
+rank never learned, 0, sends nothing). Native keeps its kick receipts in the characters DB
+for the week a consent can last, so a worldserver restart does not forget them; one it could
+not store or restore refuses (not_kicked, receipt_unstored). On any refusal the lead tells him
+plainly to invite the member himself. No, silence or any doubt: nothing is ever sent.
 
 Every transition is one synchronous Store unit, with no await inside. Recovery runs at
 start, before anything can send: a reserved question becomes unknown, a prepared admission is

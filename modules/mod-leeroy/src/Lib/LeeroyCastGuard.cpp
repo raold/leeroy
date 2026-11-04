@@ -13,7 +13,8 @@ constexpr std::uint64_t IntentMs = 120000;
 constexpr std::uint64_t RetryMs = 60000;
 constexpr std::size_t MaxIntents = 1024;
 constexpr std::size_t MaxReadds = 5;
-constexpr std::size_t MaxReceipts = 1024;
+constexpr std::size_t MaxReceipts = kMaxKickReceipts;
+constexpr std::uint8_t MaxRank = 9; // A guild has ranks 0-9.
 
 bool Elapsed(std::uint64_t now, std::uint64_t then, std::uint64_t duration)
 {
@@ -198,6 +199,63 @@ void GuardState::ReadmitUnknown(std::uint32_t guid, std::uint64_t kickTs)
     auto const it = _receipts.find(guid);
     if (it != _receipts.end() && it->second.kickTs == kickTs)
         it->second.state = KickReceipt::State::Unknown;
+}
+
+std::size_t GuardState::RestoreReceipts(std::vector<StoredKickReceipt> rows, std::uint64_t nowUnixMs,
+    std::uint64_t windowMs)
+{
+    if (!nowUnixMs)
+        return 0;
+    std::stable_sort(rows.begin(), rows.end(), [](auto const& a, auto const& b) { return a.kickTs > b.kickTs; });
+    std::size_t restored = 0;
+    for (auto const& row : rows)
+    {
+        if (_receipts.size() >= MaxReceipts)
+            break;
+        // Older than the window has no authority. A future ts is kept: the
+        // decision refuses it as a changed clock, as it would have before.
+        if (!Protectable(row.guid) || !row.kickTs || (nowUnixMs >= row.kickTs && nowUnixMs - row.kickTs > windowMs))
+            continue;
+        // What this process learned is newer than any stored row.
+        if (_receipts.contains(row.guid) || _removedByHuman.contains(row.guid) || _pendingKicks.contains(row.guid)
+            || _known.contains(row.guid))
+            continue;
+        auto state = KickReceiptFromCode(row.state);
+        if (row.rank > MaxRank)
+            state = KickReceipt::State::Unknown;
+        _receipts[row.guid] = KickReceipt{row.kickTs, row.rank, state};
+        if (state != KickReceipt::State::Readmitted)
+            _removedByHuman.insert(row.guid); // Readmission already lifted it; nothing else did.
+        ++restored;
+    }
+    return restored;
+}
+
+std::uint8_t KickReceiptCode(KickReceipt::State state)
+{
+    switch (state)
+    {
+        case KickReceipt::State::Open: return 0;
+        case KickReceipt::State::Readmitted: return 1;
+        case KickReceipt::State::Unknown: return 2;
+    }
+    return 2;
+}
+
+KickReceipt::State KickReceiptFromCode(std::uint8_t code)
+{
+    switch (code)
+    {
+        case 0: return KickReceipt::State::Open;
+        case 1: return KickReceipt::State::Readmitted;
+        default: return KickReceipt::State::Unknown; // Never a consent nobody recorded.
+    }
+}
+
+bool StoredReceiptIs(StoredKickReceipt const& row, std::uint32_t guid, KickReceipt const& receipt)
+{
+    return row.guid == guid && row.kickTs == receipt.kickTs && row.rank == receipt.rank
+        && row.state == KickReceiptCode(receipt.state);
 }
 
 void GuardState::NoteFailed(std::uint32_t guid, std::uint64_t nowMs)

@@ -1,0 +1,1063 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guild Console</title>
+<link rel="icon" href="data:,">
+<style>
+:root {
+  --bg: #1e1f22; --panel: #232428; --raised: #2b2d31; --line: #3a3c42; --hover: #34363c;
+  --text: #dcdde0; --dim: #9a9ca3; --faint: #6d7078; --bright: #ffffff;
+  --ok-bg: #1f5130; --ok: #bfe9c8; --warn-bg: #5a4a12; --warn: #f3e2a3;
+  --bad-bg: #5c1f1f; --bad: #ffc9c2; --off-bg: #3a3c42; --off: #b7b9bf;
+  --accent: #9cc9ff; --here: #2f3f63; --talk: #7ee787; --lamp: #ff5a3c;
+  --guild: #7ee787; --officer: #5fd0b0; --party: #8fb8ff; --raid: #ff9f5a; --rw: #ff6f5a;
+  --whisper: #e59cff; --voice: #ffd479; --system: #9a9ca3;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { display: flex; flex-direction: column; background: var(--bg); color: var(--text);
+  font: 13px/1.4 system-ui, "Segoe UI", sans-serif; }
+[hidden] { display: none !important; }
+button { font: inherit; color: var(--text); background: var(--hover); border: 1px solid var(--line);
+  border-radius: 4px; padding: 3px 12px; cursor: pointer; }
+button:hover:not(:disabled) { background: #3f4249; }
+button:disabled { opacity: 0.45; cursor: default; }
+button.danger:not(:disabled) { border-color: #8a3a32; }
+button:focus-visible, .row:focus-visible, [role="tab"]:focus-visible { outline: 2px solid var(--accent);
+  outline-offset: -2px; }
+
+/* the strip */
+.strip { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 10px;
+  background: var(--raised); border-bottom: 1px solid var(--line); }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 10px;
+  font-size: 12px; background: var(--off-bg); color: var(--off); white-space: nowrap; }
+.pill.ok { background: var(--ok-bg); color: var(--ok); }
+.pill.warn { background: var(--warn-bg); color: var(--warn); }
+.pill.bad { background: var(--bad-bg); color: var(--bad); }
+.pill.room { background: #2c3340; color: var(--text); max-width: 46vw; overflow: hidden;
+  text-overflow: ellipsis; }
+.links { display: inline-flex; gap: 10px; font-size: 12px; color: var(--dim); }
+.link { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: none; }
+.ok > .dot, .link.ok > .dot { background: #4fd07a; }
+.warn > .dot, .link.warn > .dot { background: #e8c547; }
+.bad > .dot, .link.bad > .dot { background: #ff6b5c; }
+.ptt { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim);
+  margin-left: auto; }
+.lamp { width: 12px; height: 12px; border-radius: 50%; background: #4a1608; border: 1px solid #2a0c04; }
+.ptt.on .lamp { background: var(--lamp); box-shadow: 0 0 8px var(--lamp); }
+.ptt.on { color: var(--bright); }
+.lost { width: 100%; padding: 3px 8px; border-radius: 4px; background: var(--bad-bg); color: var(--bad);
+  font-weight: 600; text-align: center; }
+
+/* the tabs */
+.tabs { display: flex; gap: 2px; padding: 6px 10px 0; background: #26282c; border-bottom: 1px solid var(--line); }
+[role="tab"] { border: 0; border-radius: 6px 6px 0 0; padding: 6px 16px; background: #303237;
+  color: var(--dim); }
+[role="tab"][aria-selected="true"] { background: var(--bg); color: var(--bright); font-weight: 600; }
+main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.tab { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+/* comms */
+.banner { margin: 8px 10px 0; padding: 6px 10px; border-radius: 4px; background: var(--warn-bg);
+  color: var(--warn); }
+.banner.bad { background: var(--bad-bg); color: var(--bad); }
+.cols { flex: 1; min-height: 0; display: flex; gap: 8px; padding: 8px 10px; }
+.panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 6px; }
+.panel.tree { width: 300px; min-width: 200px; max-width: 60vw; resize: horizontal; overflow: hidden; }
+.panel.feedpanel { flex: 1; }
+h2 { margin: 0; padding: 6px 10px; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--dim); }
+.list { flex: 1; min-height: 0; overflow: auto; padding: 2px 4px 6px; }
+.row { display: flex; align-items: center; gap: 6px; min-height: 22px; padding: 1px 6px; border-radius: 4px;
+  white-space: nowrap; cursor: default; }
+.room { font-weight: 600; color: var(--bright); cursor: pointer; }
+.room:hover { background: var(--hover); }
+.room.here { background: var(--here); }
+.count { font-weight: 400; color: var(--faint); }
+.kids { margin-left: 14px; }
+.twist { width: 12px; flex: none; color: var(--faint); text-align: center; cursor: pointer; }
+.twist.none { visibility: hidden; }
+.padlock { flex: none; font-size: 10px; color: #d9b020; }
+.member { color: #c4c6cc; }
+.member:hover { background: var(--hover); }
+.member .light { width: 8px; height: 8px; border-radius: 50%; background: #2a3b2a; flex: none; }
+.member.speaking { color: var(--talk); }
+.member.speaking .light { background: var(--talk); box-shadow: 0 0 6px var(--talk); }
+.member.you { font-weight: 600; }
+.member.muted .mname { color: var(--faint); text-decoration: line-through; }
+.tag { font-size: 11px; color: var(--faint); }
+.feedhead { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding-right: 8px; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
+.chips button { padding: 1px 9px; font-size: 12px; border-radius: 10px; }
+.chips button[aria-pressed="true"] { background: #44506a; border-color: #5b6c8f; color: var(--bright); }
+.line { padding: 1px 6px; overflow-wrap: anywhere; }
+.ts { color: var(--faint); font-variant-numeric: tabular-nums; }
+.chan { font-size: 11px; font-weight: 600; }
+.who { font-weight: 600; color: var(--accent); }
+.line.mine .who { color: var(--bright); }
+.c-guild .chan { color: var(--guild); } .c-officer .chan { color: var(--officer); }
+.c-party .chan { color: var(--party); } .c-raid .chan { color: var(--raid); }
+.c-raid_warning .chan { color: var(--rw); } .c-whisper .chan, .c-whisper .msg { color: var(--whisper); }
+.c-voice .chan { color: var(--voice); }
+.c-system { color: var(--system); font-style: italic; }
+.vstatus { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 10px 8px; }
+.seg { padding: 1px 9px; border: 1px solid var(--line); border-radius: 10px; font-size: 12px; color: var(--dim); }
+.seg.bad { color: var(--bad); border-color: #7a3a32; }
+#toasts { position: fixed; top: 64px; right: 14px; z-index: 10; width: 300px; display: flex;
+  flex-direction: column; gap: 6px; }
+.toast, #menu, .dialog { background: var(--raised); border: 1px solid var(--line); border-radius: 6px;
+  padding: 8px 10px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5); }
+.toast .acts, .dialog .acts { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; }
+#menu { position: fixed; z-index: 20; min-width: 240px; }
+#menu .title { font-weight: 600; margin-bottom: 4px; }
+#menu label { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+#menu input[type="range"] { flex: 1; }
+#menu output { min-width: 58px; text-align: right; font-variant-numeric: tabular-nums; }
+.scrim { position: fixed; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, 0.55); }
+.dialog { max-width: 420px; }
+
+/* placeholders */
+.placeholder { padding: 28px 24px; max-width: 760px; }
+.placeholder h3 { margin: 0 0 6px; color: var(--bright); font-size: 16px; }
+.placeholder p { color: var(--dim); margin: 0 0 10px; }
+.placeholder ul { color: var(--dim); margin: 0; padding-left: 18px; }
+
+/* the mind tab */
+.mindtab { overflow: auto; padding: 10px; gap: 10px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 10px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px;
+  min-width: 0; }
+.card.span { grid-column: 1 / -1; }
+.card h3 { margin: 0; font-size: 14px; color: var(--bright); }
+.card header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.card .acts { display: flex; gap: 6px; margin-top: 8px; }
+.why { margin: 6px 0 0; font-size: 12px; color: var(--dim); }
+.why.bad { color: var(--bad); }
+dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 4px 0 0; font-size: 12px; }
+dl.kv dt { color: var(--dim); }
+dl.kv dd { margin: 0; overflow-wrap: anywhere; }
+table { border-collapse: collapse; width: 100%; font-size: 12px; }
+th { text-align: left; color: var(--dim); font-weight: 400; border-bottom: 1px solid var(--line); padding: 2px 6px 2px 0; }
+td { padding: 2px 6px 2px 0; overflow-wrap: anywhere; }
+.bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; margin: 3px 0 6px; }
+.bar > i { display: block; height: 100%; background: #6ea8fe; }
+.log { font: 12px/1.45 ui-monospace, Consolas, monospace; max-height: 320px; overflow: auto; }
+.log .r { white-space: pre-wrap; overflow-wrap: anywhere; }
+.log .WARNING { color: var(--warn); } .log .ERROR, .log .CRITICAL { color: var(--bad); }
+.muted { color: var(--faint); }
+
+@media (max-width: 720px) {
+  .cols { flex-direction: column; }
+  .panel.tree { width: auto; max-width: none; resize: none; max-height: 40vh; }
+  .ptt { margin-left: 0; }
+}
+</style>
+</head>
+<body>
+<header class="strip" aria-label="Status">
+  <span id="s-mind" class="pill"><i class="dot"></i><span class="t">mind</span></span>
+  <span class="links">
+    <span id="s-bridge" class="link"><i class="dot"></i><span class="t">game bridge</span></span>
+    <span id="s-vlink" class="link"><i class="dot"></i><span class="t">voice</span></span>
+  </span>
+  <span id="s-game" class="pill"><span class="t">you: unknown</span></span>
+  <span id="s-room" class="pill room"><span class="t">no room</span></span>
+  <span id="s-ptt" class="ptt"><i class="lamp"></i><span>push-to-talk</span></span>
+  <div id="s-lost" class="lost" hidden></div>
+</header>
+<nav class="tabs" role="tablist" aria-label="Areas">
+  <button role="tab" id="t-comms" data-tab="comms" aria-controls="tab-comms">Comms</button>
+  <button role="tab" id="t-raid" data-tab="raid" aria-controls="tab-raid">Raid</button>
+  <button role="tab" id="t-guild" data-tab="guild" aria-controls="tab-guild">Guild</button>
+  <button role="tab" id="t-personas" data-tab="personas" aria-controls="tab-personas">Personas</button>
+  <button role="tab" id="t-mind" data-tab="mind" aria-controls="tab-mind">Mind</button>
+</nav>
+<main>
+  <section id="tab-comms" class="tab" role="tabpanel" aria-labelledby="t-comms">
+    <div id="comms-banner" class="banner" hidden></div>
+    <div class="cols">
+      <aside class="panel tree">
+        <h2>Channels</h2>
+        <div id="tree" class="list" aria-label="Channels"></div>
+      </aside>
+      <section class="panel feedpanel">
+        <div class="feedhead">
+          <h2>Voice and chat</h2>
+          <div id="chips" class="chips" role="group" aria-label="Show">
+            <button type="button" data-f="all" aria-pressed="true">All</button>
+            <button type="button" data-f="voice" aria-pressed="false">Voice</button>
+            <button type="button" data-f="guild" aria-pressed="false">Guild</button>
+            <button type="button" data-f="officer" aria-pressed="false">Officer</button>
+            <button type="button" data-f="group" aria-pressed="false">Party and raid</button>
+            <button type="button" data-f="whisper" aria-pressed="false">Whispers</button>
+          </div>
+        </div>
+        <div id="feed" class="list" role="log" aria-label="Voice and chat"></div>
+      </section>
+    </div>
+    <footer class="vstatus" aria-label="Voice status">
+      <span id="v-out" class="seg"></span><span id="v-mic" class="seg"></span>
+      <span id="v-stt" class="seg"></span><span id="v-queue" class="seg"></span>
+      <span id="v-err" class="seg"></span>
+    </footer>
+  </section>
+  <section id="tab-raid" class="tab placeholder" role="tabpanel" aria-labelledby="t-raid" hidden>
+    <h3>Raid</h3>
+    <p>Coming in the next phase. This page will show the raid night as it happens:</p>
+    <ul><li>tonight's call, the picks and the composition, and who leads</li>
+      <li>the members, the loot and DKP as it is awarded, and the raids done</li>
+      <li>then the actions the mind's guild life already performs (call, form, summon, start or
+        stop the run, end) through a mind control endpoint</li></ul>
+  </section>
+  <section id="tab-guild" class="tab placeholder" role="tabpanel" aria-labelledby="t-guild" hidden>
+    <h3>Guild</h3>
+    <p>Coming in the next phase: the roster and ranks, the DKP ladder and stats, loot history,
+      season awards, the chronicle, and the guild bank when it is available.</p>
+  </section>
+  <section id="tab-personas" class="tab placeholder" role="tabpanel" aria-labelledby="t-personas" hidden>
+    <h3>Personas</h3>
+    <p>Coming after the raid and guild views: each member's mood, stance, relationships and
+      memory count, then the tuning dials at world, group and member level with a sample line
+      and versioned undo.</p>
+  </section>
+  <section id="tab-mind" class="tab mindtab" role="tabpanel" aria-labelledby="t-mind" hidden>
+    <div class="cards">
+      <article class="card">
+        <header><h3>Mind</h3><span id="m-state" class="pill"><i class="dot"></i><span class="t"></span></span></header>
+        <dl class="kv"><dt>process</dt><dd id="m-proc">-</dd><dt>mind.lock</dt><dd id="m-lock">-</dd>
+          <dt>data dir</dt><dd id="m-data">-</dd></dl>
+        <div class="acts">
+          <button type="button" data-svc="mind" data-act="start">Start</button>
+          <button type="button" data-svc="mind" data-act="restart">Restart</button>
+          <button type="button" data-svc="mind" data-act="stop" class="danger">Stop</button>
+        </div>
+        <p id="m-why" class="why"></p>
+      </article>
+      <article class="card">
+        <header><h3>Voice service</h3><span id="w-state" class="pill"><i class="dot"></i><span class="t"></span></span></header>
+        <dl class="kv"><dt>process</dt><dd id="w-proc">-</dd><dt>ports</dt><dd id="w-ports">-</dd>
+          <dt>mind link</dt><dd id="w-link">-</dd></dl>
+        <div class="acts">
+          <button type="button" data-svc="voice" data-act="start">Start</button>
+          <button type="button" data-svc="voice" data-act="restart">Restart</button>
+          <button type="button" data-svc="voice" data-act="stop" class="danger">Stop</button>
+        </div>
+        <p id="w-why" class="why"></p>
+      </article>
+      <article class="card">
+        <header><h3>Links and game</h3></header>
+        <dl class="kv"><dt>game bridge</dt><dd id="h-bridge">-</dd><dt>voice link</dt><dd id="h-vlink">-</dd>
+          <dt>you</dt><dd id="h-game">-</dd><dt>the night</dt><dd id="h-night">-</dd></dl>
+        <p id="h-config" class="why bad" hidden></p>
+      </article>
+      <article class="card">
+        <header><h3>GPU</h3></header>
+        <div id="h-gpu" class="muted">-</div>
+      </article>
+      <article class="card span">
+        <header><h3>Models resident in Ollama</h3><span id="h-ollama" class="muted"></span></header>
+        <table><thead><tr><th>model</th><th>role</th><th>size</th><th>in VRAM</th><th>expires</th></tr></thead>
+          <tbody id="h-models"></tbody></table>
+      </article>
+      <article class="card span">
+        <header><h3>Latest warnings and errors</h3></header>
+        <div id="h-errors" class="log"></div>
+      </article>
+      <article class="card span">
+        <header><h3>mind.log</h3><span class="muted">events and counts only, never what was said</span></header>
+        <div id="h-log" class="log"></div>
+      </article>
+    </div>
+  </section>
+</main>
+<div id="toasts" role="status"></div>
+<div id="menu" role="dialog" aria-label="Member volume" hidden>
+  <div id="menu-name" class="title"></div>
+  <label>Volume <input id="menu-vol" type="range" min="-12" max="12" step="0.5" value="0">
+    <output id="menu-db">0.0 dB</output></label>
+  <label><input id="menu-mute" type="checkbox"> Mute</label>
+  <button id="menu-reset" type="button">Reset</button>
+</div>
+<div id="confirm" class="scrim" hidden>
+  <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-text">
+    <div id="confirm-text"></div>
+    <div class="acts"><button id="confirm-no" type="button">Cancel</button>
+      <button id="confirm-yes" type="button" class="danger">Yes</button></div>
+  </div>
+</div>
+<script>
+(function () {
+  "use strict";
+
+  var KEEP = 200;                 // lines kept per source, as the services keep them
+  var DB_LIMIT = 12;
+  var HEALTH_MS = 5000;
+  var COLLAPSED_KEY = "guild-console-collapsed";
+  var CHANNEL_TAGS = { guild: "Guild", officer: "Officer", party: "Party", raid: "Raid",
+                       raid_warning: "Raid warning", whisper: "Whisper", voice: "Voice" };
+  var FILTERS = { all: null, voice: ["voice"], guild: ["guild"], officer: ["officer"],
+                  group: ["party", "raid", "raid_warning"], whisper: ["whisper"] };
+  var MIND_WORDS = { running: "mind running", starting: "mind starting", stopping: "mind stopping",
+                     stopped: "mind stopped", crashed: "mind crashed", unknown: "mind: unclear" };
+
+  function $(id) { return document.getElementById(id); }
+  function own(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
+  function arr(x) { return Array.isArray(x) ? x : []; }
+  function obj(x) { return x && typeof x === "object" && !Array.isArray(x) ? x : {}; }
+  function str(x) { return typeof x === "string" ? x : ""; }
+  function num(x) { return typeof x === "number" && isFinite(x) ? x : 0; }
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+  // Everything shown is set as text: nothing here builds markup from what anyone said
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) { e.className = cls; }
+    if (text !== undefined) { e.textContent = text; }
+    return e;
+  }
+  function clear(e) { while (e.firstChild) { e.removeChild(e.firstChild); } }
+  function clock(ms) {
+    if (!ms) { return ""; }
+    var d = new Date(ms);
+    return pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+  }
+  function hhmm(sec) {
+    if (!sec) { return ""; }
+    var d = new Date(sec * 1000);
+    return pad(d.getHours()) + ":" + pad(d.getMinutes());
+  }
+
+  var ST = { mind: { state: "unknown", detail: "connecting" }, bridge: null,
+             game: { state: "unknown", reason: "connecting" },
+             voice: { enabled: false, service: false, link: null }, control: { enabled: false } };
+  var V = null;                   // the voice service's page state; null while it is down
+  var CHAT = [];                  // the mind's text lines, by id
+  var TRANS = [];                 // the voice transcript and the console's own notes
+  var seen = {};
+  var filter = "all";
+  var collapsed = loadCollapsed();
+  var tab = "comms";
+  var es = null, retry = null, healthTimer = null, healthBusy = false, menuGuid = 0;
+  var lastHealth = null;
+
+  function loadCollapsed() {
+    try { return obj(JSON.parse(localStorage.getItem(COLLAPSED_KEY) || "{}")); }
+    catch (e) { return {}; }
+  }
+  function saveCollapsed() {
+    try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify(collapsed)); } catch (e) { /* none */ }
+  }
+
+  // The key comes in the URL's fragment, which the browser never sends anywhere: it is kept in
+  // this page's memory only (not a cookie, which every 127.0.0.1 port would be handed) and goes
+  // with each request as a header. A reload loses it: open the printed URL again.
+  var KEY = "";
+  (function () {
+    var m = /^#key=([A-Za-z0-9_-]{16,128})$/.exec(location.hash);
+    if (m) { KEY = m[1]; }
+    if (/^#key=/.test(location.hash)) { history.replaceState(null, "", location.pathname + "#comms"); }
+  }());
+  function api(path, opts) {
+    opts = opts || {};
+    var headers = { "X-Console-Key": KEY };
+    Object.keys(opts.headers || {}).forEach(function (k) { headers[k] = opts.headers[k]; });
+    return fetch(path, { method: opts.method || "GET", headers: headers, body: opts.body,
+                         signal: opts.signal, cache: "no-store", credentials: "omit" });
+  }
+
+  function post(path, body) {
+    return api(path, { method: "POST", headers: { "Content-Type": "application/json" },
+                       body: JSON.stringify(body) })
+      .then(function (r) {
+        return r.json().catch(function () { return { ok: false, error: "HTTP " + r.status }; })
+          .then(function (j) { j.status = r.status; return j; });
+      });
+  }
+
+  // -- the strip ----------------------------------------------------------------------------------
+
+  function setPill(id, cls, text, title) {
+    var e = $(id);
+    e.className = e.className.replace(/\b(ok|warn|bad)\b/g, "").trim() + (cls ? " " + cls : "");
+    e.querySelector(".t").textContent = text;
+    e.title = title || "";
+  }
+  function mindClass(state) {
+    return state === "running" ? "ok" : state === "crashed" ? "bad"
+         : (state === "starting" || state === "stopping" || state === "unknown") ? "warn" : "";
+  }
+  function name(guid) {
+    var n = V && V.names[guid];
+    return typeof n === "string" && n ? n : "#" + guid;
+  }
+  function roomName(id) {
+    var tree = V ? V.tree : [];
+    for (var i = 0; i < tree.length; i++) { if (tree[i].id === id) { return str(tree[i].name) || id; } }
+    return id;
+  }
+  function hereRoom() {
+    if (!V) { return ""; }
+    return V.room || (V.human && typeof V.where[V.human] === "string" ? V.where[V.human] : "");
+  }
+  function gameWords() {
+    var g = ST.game;
+    if (g.state === "in_game") { return "you: in game" + (g.since ? " since " + hhmm(g.since) : ""); }
+    if (g.state === "not_in_game") { return "you: not in game"; }
+    return "you: unknown";
+  }
+  function renderStrip() {
+    var m = ST.mind;
+    setPill("s-mind", mindClass(m.state), MIND_WORDS[m.state] || ("mind " + m.state),
+            m.detail || (m.pid ? "pid " + m.pid : ""));
+    var bridge = ST.bridge;
+    setPill("s-bridge", m.state !== "running" ? "" : bridge === true ? "ok" : "bad",
+            "game bridge" + (m.state !== "running" ? " -" : bridge === true ? "" : " down"),
+            m.state !== "running" ? "the mind is not running" : "");
+    var v = ST.voice, vtext, vcls;
+    if (!v.enabled) { vtext = "voice off"; vcls = ""; }
+    else if (!v.service) { vtext = "voice service down"; vcls = "bad"; }
+    else if (v.link) { vtext = "voice linked"; vcls = "ok"; }
+    else { vtext = "voice: mind not linked"; vcls = "warn"; }
+    setPill("s-vlink", vcls, vtext, "");
+    setPill("s-game", ST.game.state === "in_game" ? "ok" : ST.game.state === "not_in_game" ? "warn" : "",
+            gameWords(), ST.game.reason || "");
+    var here = hereRoom(), roomText;
+    if (!V) { roomText = "voice not connected"; }
+    else if (!here) { roomText = "not in a room"; }
+    else {
+      var talking = arr(V.speaking).map(function (g) { return name(g); });
+      roomText = roomName(here) + (talking.length ? " · " + talking.join(", ") + " speaking" : "");
+    }
+    setPill("s-room", "", roomText, roomText);
+    $("s-ptt").classList.toggle("on", !!(V && V.ptt));
+    renderBanner();
+    if (tab === "mind") { renderMind(); }
+  }
+
+  // -- comms: the channel tree ---------------------------------------------------------------------
+
+  function blankVoice() {
+    return { tree: [], where: {}, names: {}, room: "", human: 0, speaking: [], ptt: false,
+             volumes: {}, mutes: [], invites: [], transcript: [], mind: false, status: {} };
+  }
+  function adoptVoice(m) {
+    if (!m) { V = null; return; }
+    V = blankVoice();
+    V.tree = arr(m.tree).filter(function (r) { return r && typeof r.id === "string"; });
+    V.where = obj(m.where); V.names = obj(m.names); V.room = str(m.room); V.human = num(m.human);
+    V.speaking = arr(m.speaking); V.ptt = m.ptt === true; V.volumes = obj(m.volumes);
+    V.mutes = arr(m.mutes); V.invites = arr(m.invites).filter(function (i) { return i && typeof i.channel === "string"; });
+    V.mind = m.mind === true; V.status = obj(m.status);
+    TRANS = TRANS.filter(function (t) { return t.note; });
+    arr(m.transcript).slice(-KEEP).forEach(function (t) { addTranscript(obj(t), true); });
+  }
+  function isSpeaking(g) { return V && V.speaking.indexOf(g) >= 0; }
+  function isMuted(g) { return V && V.mutes.indexOf(g) >= 0; }
+
+  function peopleByRoom() {
+    var by = {};
+    function put(room, p) { (by[room] = by[room] || []).push(p); }
+    Object.keys(V.where).forEach(function (g) {
+      var room = V.where[g];
+      if (typeof room !== "string" || !room || Number(g) === V.human) { return; }
+      put(room, { guid: Number(g), you: false, label: name(g) });
+    });
+    var here = hereRoom();
+    if (here) {
+      var n = V.human ? V.names[V.human] : "";
+      put(here, { guid: V.human, you: true, label: (typeof n === "string" && n ? n + " (you)" : "You") });
+    }
+    Object.keys(by).forEach(function (room) {
+      by[room].sort(function (a, b) {
+        if (a.you !== b.you) { return a.you ? -1 : 1; }
+        return a.label.toLowerCase() < b.label.toLowerCase() ? -1 : 1;
+      });
+    });
+    return by;
+  }
+  function renderTree() {
+    var box = $("tree");
+    clear(box);
+    if (!V) { box.appendChild(el("div", "row muted", "The voice service is not connected.")); return; }
+    var here = hereRoom(), known = {}, children = {}, people = peopleByRoom(), drawn = {};
+    V.tree.forEach(function (r) { known[r.id] = true; });
+    V.tree.forEach(function (r) {
+      var parent = r.parent && known[r.parent] && r.parent !== r.id ? r.parent : "";
+      (children[parent] = children[parent] || []).push(r);
+    });
+    function person(p, into) {
+      var talking = p.you ? V.ptt : isSpeaking(p.guid), muted = !p.you && isMuted(p.guid);
+      var row = el("div", "row member" + (p.you ? " you" : "") + (talking ? " speaking" : "") + (muted ? " muted" : ""));
+      row.dataset.guid = String(p.guid);
+      row.tabIndex = 0;
+      row.appendChild(el("span", "light"));
+      row.appendChild(el("span", "mname", p.label));
+      var db = V.volumes[p.guid];
+      if (!p.you && typeof db === "number" && db !== 0) {
+        row.appendChild(el("span", "tag", (db > 0 ? "+" : "") + db.toFixed(1) + " dB"));
+      }
+      if (muted) { row.appendChild(el("span", "tag", "muted")); }
+      into.appendChild(row);
+    }
+    function room(r, into) {
+      if (drawn[r.id]) { return; }
+      drawn[r.id] = true;
+      var inside = people[r.id] || [], subs = children[r.id] || [], open = !collapsed[r.id];
+      var row = el("div", "row room" + (r.id === here ? " here" : ""));
+      row.dataset.room = r.id;
+      row.tabIndex = 0;
+      row.title = r.id === here ? "You are here" : "Join " + (str(r.name) || r.id);
+      row.appendChild(el("span", "twist" + (inside.length || subs.length ? "" : " none"), open ? "▾" : "▸"));
+      if (r.locked === true) { row.appendChild(el("span", "padlock", "▣")); }
+      row.appendChild(el("span", "rname", str(r.name) || r.id));
+      var cap = num(r.capacity);
+      if (inside.length || cap) { row.appendChild(el("span", "count", "(" + inside.length + (cap ? "/" + cap : "") + ")")); }
+      into.appendChild(row);
+      if (open && (inside.length || subs.length)) {
+        var kids = el("div", "kids");
+        inside.forEach(function (p) { person(p, kids); });
+        subs.forEach(function (c) { room(c, kids); });
+        into.appendChild(kids);
+      }
+    }
+    (children[""] || []).forEach(function (r) { room(r, box); });
+    V.tree.forEach(function (r) { room(r, box); });
+    Object.keys(people).filter(function (r) { return !known[r]; }).forEach(function (r) {
+      room({ id: r, name: r, locked: false, capacity: 0 }, box);
+    });
+  }
+
+  // -- comms: one feed of voice and text -----------------------------------------------------------
+
+  function addTranscript(t, quiet) {
+    var kind = own({ say: 1, you: 1, whisper: 1, system: 1 }, t.kind) ? t.kind : "say";
+    TRANS.push({ ms: num(t.ts) || Date.now(), who: str(t.who), text: str(t.text), kind: kind,
+                 note: !!t.note });
+    if (TRANS.length > KEEP * 2) { TRANS.splice(0, TRANS.length - KEEP * 2); }
+    if (!quiet) { renderFeed(true); }
+  }
+  function note(text) { addTranscript({ who: "", text: text, ts: Date.now(), kind: "system", note: true }); }
+  function addChat(lines) {
+    arr(lines).forEach(function (l) {
+      if (!l || typeof l.id !== "number" || seen[l.id]) { return; }
+      seen[l.id] = true;
+      CHAT.push(l);
+    });
+    CHAT.sort(function (a, b) { return a.id - b.id; });
+    if (CHAT.length > KEEP) {
+      CHAT.splice(0, CHAT.length - KEEP).forEach(function (l) { delete seen[l.id]; });
+    }
+  }
+  function feedItems() {
+    var want = FILTERS[filter], out = [];
+    TRANS.forEach(function (t) {
+      if (t.kind === "system") { out.push({ ms: t.ms, chan: "system", t: t }); return; }
+      if (!want || want.indexOf("voice") >= 0) { out.push({ ms: t.ms, chan: "voice", t: t }); }
+    });
+    CHAT.forEach(function (l) {
+      if (!want || want.indexOf(l.channel) >= 0) { out.push({ ms: num(l.ts) * 1000, chan: l.channel, l: l }); }
+    });
+    out.sort(function (a, b) { return a.ms - b.ms; });
+    return out;
+  }
+  function itemEl(it) {
+    var row = el("div", "line c-" + it.chan);
+    row.appendChild(el("span", "ts", clock(it.ms) + " "));
+    if (it.chan === "system") {
+      row.appendChild(el("span", "msg", it.t.text));
+      return row;
+    }
+    row.appendChild(el("span", "chan", "[" + (CHANNEL_TAGS[it.chan] || it.chan) + "] "));
+    if (it.t) {
+      var t = it.t;
+      if (t.kind === "you") { row.classList.add("mine"); }
+      if (t.who) { row.appendChild(el("span", "who", t.who + (t.kind === "whisper" ? " whispers: " : ": "))); }
+      row.appendChild(el("span", "msg", t.text));
+      return row;
+    }
+    var l = it.l, who;
+    if (l.you) { row.classList.add("mine"); }
+    if (l.channel === "whisper") {
+      who = l.you ? "To " + (l.to || "#" + l.to_guid) + ": " : (l.from || "#" + l.from_guid) + " whispers: ";
+    } else {
+      who = (l.from || "#" + l.from_guid) + ": ";
+    }
+    row.appendChild(el("span", "who", who));
+    row.appendChild(el("span", "msg", str(l.text)));
+    return row;
+  }
+  function renderFeed(keepPlace) {
+    var box = $("feed");
+    var stick = !keepPlace || box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+    clear(box);
+    var items = feedItems();
+    if (!items.length) { box.appendChild(el("div", "line muted", "Nothing said yet.")); }
+    items.forEach(function (it) { box.appendChild(itemEl(it)); });
+    if (stick) { box.scrollTop = box.scrollHeight; }
+  }
+
+  // -- comms: invites, the banner, the voice status ------------------------------------------------
+
+  function renderToasts() {
+    var box = $("toasts");
+    clear(box);
+    if (!V) { return; }
+    V.invites.forEach(function (inv) {
+      var t = el("div", "toast");
+      t.appendChild(el("div", "", name(inv.from) + " asks you to join " + roomName(inv.channel) + "."));
+      var acts = el("div", "acts");
+      var ignore = el("button", "", "Ignore");
+      ignore.type = "button";
+      ignore.addEventListener("click", function () { dropInvite(inv); });
+      var join = el("button", "", "Join");
+      join.type = "button";
+      join.addEventListener("click", function () { askJoin(inv.channel); dropInvite(inv); });
+      acts.appendChild(ignore);
+      acts.appendChild(join);
+      t.appendChild(acts);
+      box.appendChild(t);
+    });
+  }
+  function dropInvite(inv) {
+    if (!V) { return; }
+    V.invites = V.invites.filter(function (i) { return i !== inv; });
+    renderToasts();
+  }
+  function renderBanner() {
+    var b = $("comms-banner"), text = "", bad = false;
+    if (!ST.voice.enabled) { text = "Voice is off in mind.toml ([voice] enabled = false)."; }
+    else if (!V) { text = "The voice service is not running. Start it from the Mind tab."; bad = true; }
+    else if (!V.mind) {
+      text = ST.mind.state === "running"
+        ? "The mind is running but not connected to the voice service yet: members stay quiet."
+        : "The mind is " + ST.mind.state + ": members stay quiet and push-to-talk is discarded until it is back.";
+    }
+    b.textContent = text;
+    b.hidden = !text;
+    b.classList.toggle("bad", bad);
+  }
+  function seg(id, text, bad) {
+    var e = $(id);
+    e.textContent = text;
+    e.classList.toggle("bad", !!bad);
+  }
+  function renderVoiceStatus() {
+    var s = V ? V.status : {}, errs = arr(s.errors);
+    seg("v-out", "Output: " + (s.ok === true ? "ok" : s.ok === false ? "down" : "-"), s.ok === false);
+    seg("v-mic", "Mic: " + (str(s.mic) || "-"), s.mic === "missing");
+    seg("v-stt", "Recognition: " + (str(s.stt) || "-"), s.stt === "off");
+    seg("v-queue", "Queue: " + (typeof s.queue === "number" ? s.queue : "-"), false);
+    seg("v-err", errs.length ? errs.length + (errs.length === 1 ? " problem" : " problems") : "No problems", errs.length > 0);
+    $("v-err").title = errs.join(", ");
+  }
+  function renderComms() { renderTree(); renderToasts(); renderVoiceStatus(); renderBanner(); }
+
+  // -- comms: what he does --------------------------------------------------------------------------
+
+  function refusal(room, reason) {
+    var r = roomName(room);
+    if (reason === "offline") {
+      return ST.bridge === false
+        ? "The game bridge is down, so the mind cannot see you in game: " + r + " stays closed."
+        : "You're not in game: rooms open when you log in.";
+    }
+    if (reason === "locked") { return r + " is locked."; }
+    if (reason === "full") { return r + " is full."; }
+    if (reason === "unknown") { return r + " does not exist."; }
+    return r + " cannot be joined.";
+  }
+  function askJoin(room) {
+    post("/api/voice", { type: "join", channel: room }).then(function (j) {
+      if (!j.ok) { note(j.error || "That room cannot be joined now."); }
+    }, function () { note("The console is not reachable."); });
+  }
+  function setVolume(guid, db) {
+    db = Math.max(-DB_LIMIT, Math.min(DB_LIMIT, db));
+    if (V) { if (db === 0) { delete V.volumes[guid]; } else { V.volumes[guid] = db; } }
+    post("/api/voice", { type: "volume", guid: guid, db: db }).then(function (j) {
+      if (!j.ok) { note(j.error || "The volume did not change."); }
+    });
+    renderTree();
+  }
+  function setMute(guid, on) {
+    if (V) {
+      V.mutes = V.mutes.filter(function (g) { return g !== guid; });
+      if (on) { V.mutes.push(guid); }
+    }
+    post("/api/voice", { type: "mute", guid: guid, on: on }).then(function (j) {
+      if (!j.ok) { note(j.error || "Mute did not change."); }
+    });
+    renderTree();
+  }
+  function closeMenu() { $("menu").hidden = true; menuGuid = 0; }
+  function fmtDb(db) { return (db > 0 ? "+" : db < 0 ? "-" : "") + Math.abs(db).toFixed(1) + " dB"; }
+  function openMenu(guid, x, y) {
+    var menu = $("menu"), db = (V && V.volumes[guid]) || 0;
+    menuGuid = guid;
+    $("menu-name").textContent = name(guid);
+    $("menu-vol").value = String(db);
+    $("menu-db").textContent = fmtDb(db);
+    $("menu-mute").checked = isMuted(guid);
+    menu.hidden = false;
+    menu.style.left = Math.max(4, Math.min(x, window.innerWidth - menu.offsetWidth - 4)) + "px";
+    menu.style.top = Math.max(4, Math.min(y, window.innerHeight - menu.offsetHeight - 4)) + "px";
+    $("menu-vol").focus();
+  }
+  $("menu-vol").addEventListener("input", function () { $("menu-db").textContent = fmtDb(Number(this.value)); });
+  $("menu-vol").addEventListener("change", function () { if (menuGuid) { setVolume(menuGuid, Number(this.value)); } });
+  $("menu-mute").addEventListener("change", function () { if (menuGuid) { setMute(menuGuid, this.checked); } });
+  $("menu-reset").addEventListener("click", function () {
+    $("menu-vol").value = "0";
+    $("menu-db").textContent = fmtDb(0);
+    if (menuGuid) { setVolume(menuGuid, 0); }
+  });
+  document.addEventListener("mousedown", function (ev) {
+    if (!$("menu").hidden && !$("menu").contains(ev.target)) { closeMenu(); }
+  });
+  document.addEventListener("keydown", function (ev) { if (ev.key === "Escape") { closeMenu(); closeConfirm(); } });
+  window.addEventListener("resize", closeMenu);
+  $("tree").addEventListener("scroll", closeMenu);
+  $("tree").addEventListener("contextmenu", function (ev) {
+    var row = ev.target.closest(".member");
+    if (!row || row.classList.contains("you")) { closeMenu(); return; }
+    ev.preventDefault();
+    openMenu(Number(row.dataset.guid), ev.clientX, ev.clientY);
+  });
+  $("tree").addEventListener("click", function (ev) {
+    var row = ev.target.closest(".room");
+    if (!row) { return; }
+    var id = row.dataset.room;
+    if (ev.target.closest(".twist")) {
+      if (collapsed[id]) { delete collapsed[id]; } else { collapsed[id] = true; }
+      saveCollapsed();
+      renderTree();
+    } else if (id !== hereRoom()) {
+      askJoin(id);
+    }
+  });
+  $("tree").addEventListener("keydown", function (ev) {
+    var row = ev.target.closest ? ev.target.closest(".row") : null;
+    if (!row || (ev.key !== "Enter" && ev.key !== " ")) { return; }
+    ev.preventDefault();
+    if (row.dataset.room !== undefined) {
+      if (row.dataset.room !== hereRoom()) { askJoin(row.dataset.room); }
+    } else if (!row.classList.contains("you")) {
+      var box = row.getBoundingClientRect();
+      openMenu(Number(row.dataset.guid), box.left + 24, box.bottom);
+    }
+  });
+  $("chips").addEventListener("click", function (ev) {
+    var b = ev.target.closest("button");
+    if (!b) { return; }
+    filter = b.dataset.f;
+    var all = $("chips").querySelectorAll("button");
+    for (var i = 0; i < all.length; i++) { all[i].setAttribute("aria-pressed", String(all[i] === b)); }
+    renderFeed(false);
+  });
+
+  // -- what the voice service sends (through the console) -------------------------------------------
+
+  var VOICE = {
+    state: function (m) { adoptVoice(m); renderComms(); renderFeed(false); renderStrip(); },
+    down: function () { V = null; renderComms(); renderStrip(); },
+    speaking: function (m) {
+      if (!V) { return; }
+      V.speaking = V.speaking.filter(function (g) { return g !== m.guid; });
+      if (m.on === true) { V.speaking.push(m.guid); }
+      renderTree(); renderStrip();
+    },
+    ptt: function (m) { if (V) { V.ptt = m.down === true; renderTree(); renderStrip(); } },
+    moved: function (m) {
+      if (!V) { return; }
+      var g = String(m.guid), room = str(m.channel), before = V.where[g];
+      if (room) { V.where[g] = room; } else { delete V.where[g]; }
+      if (V.human && Number(m.guid) === V.human) {
+        V.room = room;
+        V.invites = V.invites.filter(function (i) { return i.channel !== room; });
+      }
+      V.invites = V.invites.filter(function (i) {
+        return !(String(i.from) === g && before === i.channel && room !== i.channel);
+      });
+      renderTree(); renderToasts(); renderStrip();
+    },
+    invite: function (m) {
+      if (!V || !str(m.channel)) { return; }
+      if (!V.invites.some(function (i) { return i.from === m.from && i.channel === m.channel; })) {
+        V.invites.push({ from: m.from, channel: m.channel });
+      }
+      renderToasts();
+    },
+    refused: function (m) {
+      note(refusal(str(m.channel), m.reason));
+      if (V) { V.invites = V.invites.filter(function (i) { return i.channel !== m.channel; }); }
+      renderToasts();
+    },
+    transcript: function (m) { addTranscript(m, false); },
+    status: function (m) {
+      if (!V) { return; }
+      var s = {};
+      Object.keys(m).forEach(function (k) { if (k !== "type") { s[k] = m[k]; } });
+      V.status = s;
+      renderVoiceStatus();
+    },
+    mind: function (m) { if (V) { V.mind = m.up === true; renderBanner(); } }
+  };
+
+  // -- the mind tab ---------------------------------------------------------------------------------
+
+  function setText(id, text) { $(id).textContent = text; }
+  function bytes(n) {
+    if (typeof n !== "number") { return "-"; }
+    return n >= 1e9 ? (n / 1e9).toFixed(1) + " GB" : (n / 1e6).toFixed(0) + " MB";
+  }
+  function serviceButtons(svc, can) {
+    var buttons = document.querySelectorAll('button[data-svc="' + svc + '"]');
+    for (var i = 0; i < buttons.length; i++) { buttons[i].disabled = !can[buttons[i].dataset.act]; }
+  }
+  function renderMind() {
+    var m = ST.mind, c = obj(ST.control), svc = obj(c.services), busy = c.busy;
+    setPill("m-state", mindClass(m.state), m.state, "");
+    setText("m-proc", m.pid ? "pid " + m.pid + (arr(m.pids).length > 1 ? " (launcher " + m.pids[m.pids.length - 1] + ")" : "") : "none");
+    setText("m-lock", m.lock ? "held" : "free");
+    var why = svc.mind || (busy ? busy[1] + " of the " + busy[0] + " is running" : "") || m.detail || "";
+    var wm = $("m-why");
+    wm.textContent = why;
+    wm.classList.toggle("bad", m.state === "crashed" || m.state === "unknown");
+    var ok = !svc.mind && !busy;
+    serviceButtons("mind", { start: ok && (m.state === "stopped" || m.state === "crashed"),
+                             restart: ok && m.state === "running",
+                             stop: ok && (m.state === "running" || m.state === "starting") });
+    var v = ST.voice, hv = lastHealth ? obj(lastHealth.voice) : {};
+    var up = v.service || hv.lock === true;
+    setPill("w-state", up ? "ok" : "", up ? "running" : "stopped", "");
+    setText("w-proc", hv.pid ? "pid " + hv.pid : up ? "running" : "none");
+    setText("w-ports", hv.ui_port ? "page " + hv.ui_port + ", mind " + hv.mind_port : "-");
+    setText("w-link", !v.service ? "-" : v.link ? "the mind is connected" : "the mind is not connected");
+    var vok = !svc.voice && !busy;
+    $("w-why").textContent = svc.voice || hv.detail || "";
+    serviceButtons("voice", { start: vok && !up, restart: vok && up, stop: vok && up });
+    setText("h-bridge", m.state !== "running" ? "- (the mind is not running)" : ST.bridge === true ? "connected" : ST.bridge === false ? "down" : "unknown");
+    setText("h-vlink", !v.enabled ? "voice off" : !v.service ? "voice service down" : v.link ? "linked" : "not linked");
+    setText("h-game", gameWords().replace(/^you: /, "") + (ST.game.reason ? " (" + ST.game.reason + ")" : ""));
+  }
+  function renderLog(id, records) {
+    var box = $(id);
+    clear(box);
+    if (!records.length) { box.appendChild(el("div", "muted", "None.")); return; }
+    records.forEach(function (r) {
+      var f = obj(r.fields), parts = Object.keys(f).map(function (k) { return k + "=" + f[k]; });
+      var ts = str(r.ts).replace(/^\d{4}-\d\d-\d\dT/, "").replace(/\.\d+([+-].*|Z)?$/, "");
+      var line = el("div", "r " + str(r.level), ts + " " + str(r.level).toLowerCase() + " " + str(r.event)
+                    + (parts.length ? " " + parts.join(" ") : "") + (r.exc ? " (" + r.exc + ")" : ""));
+      box.appendChild(line);
+    });
+    box.scrollTop = box.scrollHeight;
+  }
+  function renderHealth(h) {
+    lastHealth = h;
+    setText("m-data", str(obj(h.mind).data_dir) || "-");
+    var night = h.night;
+    setText("h-night", night ? night.night + ": " + night.status + (night.finished ? ", finished " + hhmm(night.finished) : "") : "no night run yet");
+    var cfg = $("h-config");
+    cfg.textContent = str(h.config);
+    cfg.hidden = !h.config;
+    var o = obj(h.ollama), rows = $("h-models");
+    clear(rows);
+    setText("h-ollama", o.ok ? arr(o.models).length + " resident at " + str(o.url) : str(o.error));
+    arr(o.models).forEach(function (mdl) {
+      var tr = el("tr");
+      [str(mdl.name), str(mdl.role) || "-", bytes(mdl.size), bytes(mdl.vram),
+       mdl.expires ? (/^0001-/.test(mdl.expires) ? "pinned" : str(mdl.expires).replace("T", " ").slice(0, 16)) : "-"]
+        .forEach(function (cell) { tr.appendChild(el("td", "", cell)); });
+      rows.appendChild(tr);
+    });
+    if (o.ok && !arr(o.models).length) {
+      var tr = el("tr"), td = el("td", "muted", "No model is loaded.");
+      td.colSpan = 5;
+      tr.appendChild(td);
+      rows.appendChild(tr);
+    }
+    var g = obj(h.gpu), box = $("h-gpu");
+    clear(box);
+    box.className = g.ok ? "" : "muted";
+    if (!g.ok) { box.textContent = str(g.error) || "-"; }
+    arr(g.gpus).forEach(function (gpu) {
+      box.appendChild(el("div", "", str(gpu.name) + ": " + (gpu.free_mb / 1024).toFixed(1) + " GB free of "
+                         + (gpu.total_mb / 1024).toFixed(1) + " GB, " + gpu.util + "% busy"));
+      var bar = el("div", "bar"), fill = el("i");
+      fill.style.width = Math.min(100, Math.round(100 * gpu.used_mb / Math.max(1, gpu.total_mb))) + "%";
+      bar.appendChild(fill);
+      box.appendChild(bar);
+    });
+    renderLog("h-errors", arr(h.errors));
+    renderLog("h-log", arr(h.log));
+    if (h.strip) { ST = h.strip; renderStrip(); }
+    renderMind();
+  }
+  function pollHealth() {
+    if (healthBusy || tab !== "mind") { return; }
+    healthBusy = true;
+    api("/api/health").then(function (r) {
+      if (r.status === 403) { keyLost(); return null; }
+      return r.json();
+    }).then(function (h) { if (h) { renderHealth(h); } }, function () { /* the strip says it */ })
+      .then(function () { healthBusy = false; });
+  }
+
+  var pending = null;
+  function closeConfirm() { $("confirm").hidden = true; pending = null; }
+  function act(svc, action, confirm) {
+    var why = $(svc === "mind" ? "m-why" : "w-why");
+    why.textContent = action + " requested…";
+    why.classList.remove("bad");
+    serviceButtons(svc, {});
+    post("/api/control", { service: svc, action: action, confirm: !!confirm }).then(function (j) {
+      if (j.confirm) {
+        pending = { svc: svc, action: action };
+        $("confirm-text").textContent = j.confirm;
+        $("confirm-yes").textContent = action.charAt(0).toUpperCase() + action.slice(1);
+        $("confirm").hidden = false;
+        $("confirm-no").focus();
+        why.textContent = "";
+      } else {
+        why.textContent = j.ok ? j.message : (j.error || "it did not work");
+        why.classList.toggle("bad", !j.ok);
+      }
+      renderMind();
+      pollHealth();
+    }, function () { why.textContent = "The console is not reachable."; why.classList.add("bad"); });
+  }
+  document.querySelector(".mindtab").addEventListener("click", function (ev) {
+    var b = ev.target.closest("button[data-svc]");
+    if (b && !b.disabled) { act(b.dataset.svc, b.dataset.act, false); }
+  });
+  $("confirm-no").addEventListener("click", closeConfirm);
+  $("confirm-yes").addEventListener("click", function () {
+    var p = pending;
+    closeConfirm();
+    if (p) { act(p.svc, p.action, true); }
+  });
+
+  // -- tabs -----------------------------------------------------------------------------------------
+
+  function showTab(name) {
+    if (!$("tab-" + name)) { name = "comms"; }
+    tab = name;
+    var tabs = document.querySelectorAll('[role="tab"]');
+    for (var i = 0; i < tabs.length; i++) {
+      var on = tabs[i].dataset.tab === name;
+      tabs[i].setAttribute("aria-selected", String(on));
+      tabs[i].tabIndex = on ? 0 : -1;
+      $("tab-" + tabs[i].dataset.tab).hidden = !on;
+    }
+    if (location.hash !== "#" + name) { history.replaceState(null, "", "#" + name); }
+    clearInterval(healthTimer);
+    healthTimer = null;
+    if (name === "mind") { renderMind(); pollHealth(); healthTimer = setInterval(pollHealth, HEALTH_MS); }
+    if (name === "comms") { renderFeed(false); }
+  }
+  document.querySelector(".tabs").addEventListener("click", function (ev) {
+    var b = ev.target.closest('[role="tab"]');
+    if (b) { showTab(b.dataset.tab); }
+  });
+  document.querySelector(".tabs").addEventListener("keydown", function (ev) {
+    if (ev.key !== "ArrowRight" && ev.key !== "ArrowLeft") { return; }
+    var tabs = Array.prototype.slice.call(document.querySelectorAll('[role="tab"]'));
+    var i = tabs.findIndex(function (t) { return t.dataset.tab === tab; });
+    var next = tabs[(i + (ev.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length];
+    showTab(next.dataset.tab);
+    next.focus();
+  });
+
+  // -- the connection -------------------------------------------------------------------------------
+
+  function lost(text) {
+    var e = $("s-lost");
+    e.textContent = text;
+    e.hidden = !text;
+  }
+  function keyLost() {
+    if (es) { es.abort(); es = null; }
+    clearTimeout(retry);
+    lost("This console has restarted, or this page was reloaded or opened without its key: open the URL the console printed when it started.");
+  }
+  var EVENTS = {
+    snapshot: function (d) {
+      ST = d.status || ST;
+      adoptVoice(d.voice);
+      CHAT = []; seen = {};
+      addChat(d.chat);
+      renderComms(); renderFeed(false); renderStrip();
+    },
+    status: function (d) { ST = d; renderStrip(); },
+    voice: function (m) { if (typeof m.type === "string" && own(VOICE, m.type)) { VOICE[m.type](m); } },
+    chat: function (d) { addChat(d.lines); renderFeed(true); },
+    control: function (d) {
+      var words = d.service + " " + d.action;
+      if (d.phase === "running") { note(words + ": requested"); }
+      else if (d.phase === "done") { note(words + ": " + str(d.message)); }
+      else { note(words + " failed: " + str(d.message)); }
+      if (tab === "mind") { pollHealth(); }
+    }
+  };
+  // One server-sent event block: "event: <kind>" and "data: <json>" lines; ": ping" is a comment
+  function dispatch(block) {
+    var kind = "", data = "";
+    block.split("\n").forEach(function (line) {
+      if (line.indexOf("event: ") === 0) { kind = line.slice(7); }
+      else if (line.indexOf("data: ") === 0) { data += line.slice(6); }
+    });
+    if (!kind || !own(EVENTS, kind)) { return; }
+    var d;
+    try { d = JSON.parse(data); } catch (e) { return; }
+    if (d && typeof d === "object") { EVENTS[kind](d); }
+  }
+  // The event stream is read with fetch, since an EventSource cannot send the key's header
+  function connect() {
+    retry = null;
+    var ctl = new AbortController();
+    es = ctl;
+    function again() {
+      if (es !== ctl) { return; }
+      es = null;
+      lost("The console is not reachable: retrying.");
+      api("/api/state").then(function (r) {
+        if (r.status === 403) { keyLost(); } else { retry = setTimeout(connect, 2000); }
+      }, function () { retry = setTimeout(connect, 2000); });
+    }
+    api("/api/events", { headers: { "Accept": "text/event-stream" }, signal: ctl.signal })
+      .then(function (r) {
+        if (r.status === 403) { if (es === ctl) { es = null; keyLost(); } return null; }
+        if (!r.ok || !r.body) { throw new Error("HTTP " + r.status); }
+        lost("");
+        var reader = r.body.getReader(), text = new TextDecoder(), buf = "";
+        function pump() {
+          return reader.read().then(function (step) {
+            if (step.done || es !== ctl) { return null; }
+            buf += text.decode(step.value, { stream: true });
+            var at;
+            while ((at = buf.indexOf("\n\n")) >= 0) {
+              dispatch(buf.slice(0, at));
+              buf = buf.slice(at + 2);
+            }
+            return pump();
+          });
+        }
+        return pump().then(again);
+      })
+      .catch(again);
+  }
+
+  renderStrip();
+  renderComms();
+  renderFeed(false);
+  showTab((location.hash || "#comms").slice(1));
+  connect();
+}());
+</script>
+</body>
+</html>

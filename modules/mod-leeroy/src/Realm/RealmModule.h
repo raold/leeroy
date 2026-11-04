@@ -150,6 +150,13 @@ bool CastRecruitmentProtected(std::uint32_t guid);
 bool CastGuardFactsUnknown();
 // A confirmed kick of this guid not yet drained into the guard.
 bool CastGuardKickFactPending(std::uint32_t guid);
+// Kick receipts in the characters DB (table leeroy_kick_receipt), world thread
+// only. Nothing touches the DB unless Leeroy.CastGuard or Realm is on. The first
+// use per guard identity creates the table, drops expired rows and restores the
+// rest into the guard; a failure is retried at most once a minute.
+bool EnsureKickReceiptStore(GuardState& guard);
+// Writes the guid's receipt and proves it by reading it back.
+bool StoreKickReceipt(GuardState& guard, std::uint32_t guid, KickReceipt const& receipt);
 void AddCastGuardScripts();
 void RegisterRealmHandlers();
 void RegisterRealmContinuationHandlers();
