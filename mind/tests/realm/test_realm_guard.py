@@ -622,6 +622,8 @@ def _others(conn):
 
 def test_0015_upgrade_keeps_episodes_and_allows_one_admission_per_yes(tmp_path, monkeypatch):
     conn, files = _v14(tmp_path, monkeypatch)
+    # This historical upgrade stops at v15 even when newer migrations exist.
+    monkeypatch.setattr(db, "_migration_files", lambda: [(n, p) for n, p in files if n <= 15])
     try:
         others = _others(conn)
         before = [tuple(r) for r in conn.execute("SELECT * FROM realm_kick_episode ORDER BY episode_id")]

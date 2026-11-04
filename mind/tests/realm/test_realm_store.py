@@ -21,6 +21,7 @@ REALM_TABLES = {
     "realm_goal", "realm_notable", "realm_receipt", "realm_action",
     "realm_source", "realm_fact_origin", "realm_kill", "realm_announcement",
     "realm_kick_episode", "realm_memory_dependency", "realm_speech_line", "realm_dungeon_kill",
+    "realm_direct", "realm_rule_origin", "realm_benchmark_seen",
 }
 
 
@@ -58,7 +59,7 @@ def _receipt(conn, command_id="r1", **overrides):
 
 def test_fresh_migration_adds_exact_plan_tables_and_diagnostics(conn):
     latest = db.latest_version()
-    assert latest == 15
+    assert latest == 16
     assert _tables(conn) == REALM_TABLES
     assert conn.execute("PRAGMA user_version").fetchone()[0] == latest
     assert db.migrate(conn) == latest
