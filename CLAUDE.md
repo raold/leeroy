@@ -526,6 +526,11 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   on the 4090 beside it) and runs the night's stages. The owner's login stops
   it and preloads the live model; the next run resumes at the first unfinished
   unit. So a swapped model in `ollama ps` while nobody is online is expected.
+- A live lease (his login, an offline raid, the voice service) pins the live
+  model (`ollama ps` says Forever). When the last one ends, the pin drops to
+  10 minutes (`RELEASED_KEEP_ALIVE` in `nightly/gpu.py`), so a relog finds it
+  loaded and an idle evening frees its 16 GB. The embedding model (1 GB) stays
+  pinned: the mind embeds through the night.
 - Guild life (raid nights, DKP and loot, offline raids, rank, spec and gear
   upkeep) runs with built-in defaults; `[guild]` and `[dkp]` tables in
   `mind.toml` override them.
