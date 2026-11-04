@@ -110,8 +110,6 @@ def test_parts_registry_attaches_present_modules(app, monkeypatch, caplog):
         return part
 
     install(monkeypatch, canon=module("canon", attach_itself))
-    for name in ("talk", "rivals", "race", "poach", "calendar"):  # Absent here even once they exist.
-        monkeypatch.setitem(sys.modules, f"leeroy_mind.realm.{name}", None)
     caplog.set_level(logging.INFO, logger="leeroy_mind.realm.parts")
     enabled(app.data_dir, True)
     realm = attach_realm(app)
@@ -149,8 +147,9 @@ def test_a_present_module_with_a_broken_import_is_a_failure_not_an_absence(app, 
     realm = attach_realm(app)
     assert "speech" not in realm.parts
     assert "realm_part_failed name=speech error=ModuleNotFoundError" in caplog.text
-    assert "speech" not in next(r.getMessage() for r in caplog.records
-                                if r.getMessage().startswith("realm_part_absent"))
+    # A failure, never an absence (with every part written, there may be no absent line at all).
+    assert not any("speech" in r.getMessage() for r in caplog.records
+                   if r.getMessage().startswith("realm_part_absent"))
 
 
 @pytest.mark.parametrize("on", [False, True])

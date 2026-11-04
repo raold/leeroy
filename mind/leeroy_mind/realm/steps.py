@@ -28,7 +28,7 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-OWNER = "steps"
+OWNER = "step"
 TICK_S = 60
 _NAME = re.compile(r"[a-z][a-z0-9_]{0,31}")
 _STEM = re.compile(r"([a-z][a-z0-9_]{0,31})-([0-9]{8}-[0-9]{4})(?:-([1-9][0-9]?))?")

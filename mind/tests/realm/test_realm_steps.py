@@ -163,7 +163,7 @@ def test_tick_applies_once(tmp_path, store, clock, realm):
     assert calls == [{"names": ["Alpha", "Beta"]}]
     assert [cmd.name for cmd in realm.sent] == ["Alpha", "Beta"]
     assert [(owner, ref) for owner, ref, _ in realm.ledger.prepared] == [
-        ("steps", f"step:rivals:{sha}:0"), ("steps", f"step:rivals:{sha}:1")]
+        ("step", f"step:rivals:{sha}:0"), ("step", f"step:rivals:{sha}:1")]
     [(name, row_sha, approved_at, applied, result)] = rows(store)
     assert (name, row_sha, approved_at, applied) == ("rivals", sha, clock.now() - 60, clock.now())
     assert json.loads(result) == {"states": ["acked", "acked"]}
@@ -210,7 +210,7 @@ def test_apply_resumes_from_progress(tmp_path, store, clock, realm):
     assert [cmd.name for cmd in realm.sent] == ["Alpha"]
     assert rows(store)[0][3] is None and json.loads(rows(store)[0][4]) == {}
     # Delta was prepared once before (its outcome unknown): never sent again.
-    realm.ledger.rows[("steps", f"step:rivals:{sha}:3")] = "unknown"
+    realm.ledger.rows[("step", f"step:rivals:{sha}:3")] = "unknown"
     realm.enabled, realm.on_sent = True, None
     restarted = Steps(realm)
     restarted.register("rivals", renamer(calls))
@@ -243,8 +243,8 @@ def test_disabled_never_applies(tmp_path, store, clock, realm, monkeypatch):
     assert type(part) is Steps
     # Registered once, beside the other present parts; no realm dir yet.
     assert [p for p, _ in real._parts].count(part) == 1 and not (app.data_dir / "realm").exists()
-    part.register("rivals", renamer(calls))
-    approved(app.data_dir, clock, {"names": ["Alpha"]})
+    part.register("drill", renamer(calls))  # "rivals" belongs to the real rivals part now.
+    approved(app.data_dir, clock, {"names": ["Alpha"]}, name="drill")
     for _ in range(3):
         run(clock.advance(60, step=60))
         run(real.tick())
