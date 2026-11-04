@@ -735,6 +735,13 @@ def test_the_page_has_what_the_brief_lists():
     assert "ventrilo" not in page.lower()  # no name and no logo
 
 
+def test_an_offline_refusal_says_he_is_not_in_game():
+    # the mind refuses a join with "offline" when he is not in game, not when it is down
+    reasons = re.search(r"var REASONS = \{(.*?)\};", page_text(), re.S).group(1)
+    offline = re.search(r'offline: "([^"]*)"', reasons).group(1)
+    assert "not in game" in offline and "mind" not in offline
+
+
 def test_the_page_is_plain_ascii_and_bare_blocks():
     page = page_text()
     assert page.isascii() and "\r" not in page

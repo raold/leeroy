@@ -3,10 +3,12 @@ import builtins
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import textwrap
 import threading
 import time
+from types import SimpleNamespace
 
 import psutil
 import pytest
@@ -157,6 +159,41 @@ def test_child_is_retained_after_its_launcher_exits(workers):
     assert not worker._reader.is_alive()
 
 
+ORPHANING = textwrap.dedent("""\
+    from pathlib import Path
+    import subprocess
+    import sys
+
+    sys.stdin.readline()
+    child = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(60)"])
+    Path(sys.argv[1]).write_text(str(child.pid), encoding="ascii")
+    """)
+
+
+@pytest.mark.skipif(not psutil.WINDOWS, reason="POSIX hands an orphan to init")
+def test_interpreter_is_captured_though_its_launcher_exited_before_any_scan(tmp_path):
+    script, pid_file = tmp_path / "orphaning.py", tmp_path / "child.pid"
+    script.write_text(ORPHANING, encoding="utf-8")
+    base = getattr(sys, "_base_executable", sys.executable)  # no venv redirector in between
+    launcher = subprocess.Popen([base, "-I", script, pid_file], stdin=subprocess.PIPE)
+    tree, child, created = wire.WorkerTree(), None, None
+    try:
+        tree.attach(launcher)
+        tree.settle()
+        tree._thread.join(wire.WATCH_S + 2)
+        assert tree.owned == {launcher.pid: psutil.Process(launcher.pid).create_time()}
+        launcher.communicate(b"go\n", timeout=10)  # it starts the interpreter and exits
+        child = psutil.Process(int(pid_file.read_text(encoding="ascii")))
+        created = child.create_time()
+        assert tree.capture() and tree.owned.get(child.pid) == created
+        assert tree.stop(timeout=5, grace=0)
+        assert not original_running(child, created)
+    finally:
+        tree.stop(timeout=2, grace=0)
+        if child is not None and original_running(child, created):
+            child.kill()
+
+
 def test_failed_cleanup_keeps_ownership_and_blocks_replacement_until_retry(workers, monkeypatch):
     worker, pid_file, _, _ = workers("hang")
     worker.start()
@@ -240,10 +277,6 @@ class FakeProcess:
     def ppid(self):
         return self.parent
 
-    def children(self):
-        self.owner.events.append(("children", self.pid))
-        return [p for p in self.owner.processes.values() if p.living and p.parent == self.pid]
-
     def suspend(self):
         self.owner.events.append(("suspend", self.pid))
 
@@ -272,6 +305,10 @@ class FakeProcesses:
         if pid not in self.processes:
             raise self.NoSuchProcess(pid)
         return self.processes[pid]
+
+    def _ppid_map(self):
+        self.events.append(("walk", None))
+        return {p.pid: p.parent for p in self.processes.values() if p.living}
 
 
 @pytest.mark.parametrize("reused_root", [False, True])
@@ -315,40 +352,200 @@ def test_parent_reused_during_enumeration_cannot_lend_ownership():
     tree, processes = wire.WorkerTree(), FakeProcesses()
     tree.ps = processes
     tree.owned = {10: 100.0}
-    original = processes.add(10, 100.0)
+    processes.add(10, 100.0)
+    walk = processes._ppid_map
 
     def replaced_parent():
         processes.add(10, 900.0)
-        return [processes.add(11, 901.0, parent=10)]
+        processes.add(11, 901.0, parent=10)
+        return walk()
 
-    original.children = replaced_parent
+    processes._ppid_map = replaced_parent
     tree.capture()
+    processes._ppid_map = walk
     assert tree.owned == {10: 100.0}
     assert tree.stop(timeout=0.2, grace=0)
     assert processes.processes[11].living
     assert not any(action in {"kill", "suspend"} for action, _ in processes.events)
 
 
-def test_unreadable_live_ancestry_refuses_cleanup_then_retries_safely():
+def test_child_pid_reused_after_the_walk_is_not_adopted():
+    """The walk saw 11 as 10's child; before 11's creation time was read, 11 exited and its PID
+    went to a stranger younger than 10. The second walk shows the stranger's own parent."""
+    tree, processes = wire.WorkerTree(), FakeProcesses()
+    tree.ps = processes
+    tree.owned = {10: 100.0}
+    processes.add(10, 100.0)
+    processes.add(11, 101.0, parent=10)
+    walk = processes._ppid_map
+
+    def then_reused():
+        table = walk()
+        processes._ppid_map = walk
+        processes.add(11, 950.0, parent=999)
+        return table
+
+    processes._ppid_map = then_reused
+    assert tree.capture() and tree.owned == {10: 100.0}
+    assert tree.stop(timeout=0.2, grace=0)
+    assert processes.processes[11].living
+    assert ("suspend", 11) not in processes.events and ("kill", 11) not in processes.events
+
+
+@pytest.mark.parametrize("unreadable", ["walk", "child"])
+def test_unreadable_live_ancestry_refuses_cleanup_then_retries_safely(unreadable):
     tree, processes = wire.WorkerTree(), FakeProcesses()
     tree.ps = processes
     tree.owned = {10: 100.0}
     root = processes.add(10, 100.0)
     child = processes.add(11, 101.0, parent=10)
-    children = root.children
+    target, name = (processes, "_ppid_map") if unreadable == "walk" else (child, "create_time")
+    readable = getattr(target, name)
 
-    def unreadable_children():
-        raise psutil.AccessDenied(root.pid)
+    def denied():
+        raise psutil.AccessDenied(11)
 
-    root.children = unreadable_children
+    setattr(target, name, denied)
     assert not tree.stop(timeout=0.2, grace=0)
     assert root.living and child.living
     assert not any(action == "kill" for action, _ in processes.events)
     assert ("resume", 10) in processes.events  # a failed inspection leaves no suspension
-    root.children = children
+    setattr(target, name, readable)
     assert tree.stop(timeout=0.2, grace=0)
     assert not root.living and not child.living
     assert processes.events.index(("kill", 11)) < processes.events.index(("kill", 10))
+
+
+def test_children_of_an_exited_owned_parent_are_captured():
+    """Windows keeps an exited parent's PID as its children's parent: an interpreter whose
+    launcher exited before any scan saw it, and a grandchild whose captured parent exited,
+    are still captured, and killed at stop; a process older than the owned parent is not its."""
+    tree, processes = wire.WorkerTree(), FakeProcesses()
+    tree.ps = processes
+    tree.owned = {10: 100.0, 20: 200.0}
+    processes.add(10, 100.0).living = False  # the launcher, gone before a scan saw its child
+    processes.add(11, 101.0, parent=10)
+    processes.add(12, 99.0, parent=10)  # 10's PID had another holder when 12 was born
+    processes.add(20, 200.0).living = False  # a captured helper, gone since
+    processes.add(21, 201.0, parent=20)  # born after the last scan
+    processes.add(22, 202.0, parent=21)
+    assert tree.capture()
+    assert tree.owned == {10: 100.0, 20: 200.0, 21: 201.0, 22: 202.0, 11: 101.0}
+    assert tree.stop(timeout=0.2, grace=0)
+    kills = [pid for action, pid in processes.events if action == "kill"]
+    assert sorted(kills) == [11, 21, 22] and kills.index(22) < kills.index(21)
+    assert processes.processes[12].living
+
+
+def test_a_reused_parent_pid_lends_only_children_born_before_its_new_holder():
+    tree, processes = wire.WorkerTree(), FakeProcesses()
+    tree.ps = processes
+    tree.owned = {10: 100.0}
+    processes.add(10, 900.0)  # the owned 10 exited; a stranger born at 900 holds its PID
+    processes.add(11, 101.0, parent=10)  # born to the owned 10
+    processes.add(12, 901.0, parent=10)  # born to the stranger
+    assert tree.capture() and tree.owned == {10: 100.0, 11: 101.0}
+    processes.processes[10].living = False  # the stranger exits, and one more of its children
+    processes.add(13, 950.0, parent=10)  # shows its stale parent PID: still not ours
+    assert tree.capture() and tree.owned == {10: 100.0, 11: 101.0}
+    assert tree.stop(timeout=0.2, grace=0)
+    assert [pid for action, pid in processes.events if action == "kill"] == [11]
+
+
+def test_no_child_found_after_its_parent_left_the_table_is_its():
+    """Once a walk lacks an owned parent, its children were all in that walk: a process that
+    names its PID later is a later holder's."""
+    tree, processes = wire.WorkerTree(), FakeProcesses()
+    tree.ps = processes
+    tree.owned = {10: 100.0}
+    processes.add(10, 100.0).living = False
+    assert tree.capture() and tree.owned == {10: 100.0}
+    processes.add(11, 950.0, parent=10)
+    assert tree.capture() and tree.owned == {10: 100.0}
+    assert tree.stop(timeout=0.2, grace=0)
+    assert processes.processes[11].living
+
+
+def test_one_walk_per_scan_and_one_more_only_for_a_new_process():
+    tree, processes = wire.WorkerTree(), FakeProcesses()
+    tree.ps = processes
+    tree.owned = {10: 100.0}
+    processes.add(10, 100.0)
+    processes.add(11, 101.0, parent=10)
+    processes.add(12, 102.0, parent=11)
+    assert tree.capture() and tree.owned == {10: 100.0, 11: 101.0, 12: 102.0}
+    assert processes.events == [("walk", None)] * 2
+    processes.events.clear()
+    assert tree.capture()
+    assert processes.events == [("walk", None)]
+
+
+def test_zombie_detection_follows_the_platform():
+    assert wire.WorkerTree()._zombies == (not psutil.WINDOWS)
+
+
+@pytest.mark.parametrize("zombies", [True, False])
+def test_a_zombie_is_exited_only_where_there_are_zombies(zombies):
+    """POSIX: a zombie has exited and is not suspended or killed. Windows has none, so no
+    status() is asked and a process reported as one is still live."""
+    tree, processes = wire.WorkerTree(), FakeProcesses()
+    tree.ps, tree._zombies = processes, zombies
+    tree.owned = {10: 100.0, 11: 101.0}
+    processes.add(10, 100.0)
+    zombie = processes.add(11, 101.0, parent=10)
+    zombie.status = lambda: psutil.STATUS_ZOMBIE
+    assert tree._matching(11) is (None if zombies else zombie)
+    assert tree.stop(timeout=0.2, grace=0)
+    assert (("suspend", 11) in processes.events) is not zombies
+    assert (("kill", 11) in processes.events) is not zombies
+    assert ("kill", 10) in processes.events
+
+
+def test_windows_scans_never_ask_status():
+    """On Windows status() snapshots every thread on the system while holding the GIL (about
+    15 ms a call, and the audio callback waits), and Windows has no zombies to find."""
+    tree, processes = wire.WorkerTree(), FakeProcesses()
+    tree.ps, tree._zombies = processes, False
+    tree.owned = {10: 100.0}
+    root = processes.add(10, 100.0)
+    processes.add(11, 101.0, parent=10)
+
+    def forbidden():
+        raise AssertionError("status() asked on Windows")
+
+    root.status = processes.processes[11].status = forbidden
+    assert tree.capture() and tree.owned == {10: 100.0, 11: 101.0}
+    assert tree.stop(timeout=0.2, grace=0)
+    assert ("kill", 11) in processes.events and ("kill", 10) in processes.events
+
+
+def test_the_background_scan_ends_once_settled(monkeypatch):
+    """A scan walks every process on the system with the GIL held: it runs on a timer only
+    while the worker loads, and never once the worker has answered."""
+    monkeypatch.setattr(wire, "WATCH_S", 0.01)
+    tree, processes = wire.WorkerTree(), FakeProcesses()
+    tree.ps = processes
+    processes.add(10, 100.0)
+    tree.attach(SimpleNamespace(pid=10))
+    wait_until(lambda: processes.events.count(("walk", None)) >= 3)
+    tree.settle()
+    tree._thread.join(2)
+    assert not tree._thread.is_alive()
+    scans = len(processes.events)
+    time.sleep(0.1)
+    assert len(processes.events) == scans
+    assert tree.stop(timeout=0.2, grace=0)
+
+
+def test_a_started_worker_has_no_background_scan(workers):
+    worker, pid_file, _, _ = workers("hang")
+    worker.start()
+    child, created = tracked_child(worker, pid_file)
+    worker._tree._thread.join(wire.WATCH_S + 2)
+    assert not worker._tree._thread.is_alive()
+    assert worker._tree.owned[child.pid] == created  # captured at READY, not by the timer
+    worker.stop()
+    assert not original_running(child, created)
 
 
 def test_missing_tracker_dependency_refuses_before_launch(monkeypatch, tmp_path):
