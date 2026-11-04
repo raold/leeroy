@@ -5,11 +5,13 @@ reinforcement learning. It runs against its own AzerothCore worldserver,
 databases and fixture characters, never the live realm, and steps the training
 world on a virtual clock so it can run faster than real time.
 
-This is the foundation increment: an isolated layout and its preflight check,
-and the environment protocol with its lifecycle state machine, written once in
-pure C++ (`modules/mod-dojo/src/Lib`, no AzerothCore includes) and once in
-Python (`leeroy_dojo`). There is no learner, no Torch or Gymnasium dependency
-and no native module build yet.
+This is the foundation increment: an isolated layout and its preflight check;
+the environment protocol with its lifecycle state machine and loopback
+transport, written once in pure C++ (`modules/mod-dojo/src/Lib`, no
+AzerothCore includes) and once in Python (`leeroy_dojo`); a deterministic fake
+worker; and a checksummed episode recorder. There is no learner, no Torch or
+Gymnasium dependency and no native module build yet: `mod-dojo` has no
+registration or loader, so it must not be linked into a core.
 
 ## Layout
 
@@ -143,6 +145,56 @@ ended) and `close_connection`. Both implementations run the golden cases in
 `modules/mod-dojo/tests/fixtures/dojo_protocol.jsonl`; its expectations are
 written out in `make_dojo_protocol.py` without importing either one.
 
+## Transport
+
+`Dojo::Transport` (C++, header-only Boost.Asio) and `leeroy_dojo.transport`
+(Python, for the fake worker) are the worker's side of the socket. They bind
+loopback only, port 0 for an ephemeral port that the worker records in its
+process receipt. One controller at a time: another connection gets a `busy`
+error line and is closed. The io thread only frames lines and decodes them
+into pure data; the worker thread polls connect, line and disconnect events
+and sends responses. Nothing is dropped to relieve pressure: while the worker
+has not taken 16 lines, or 64 responses wait unwritten, reading stops and TCP
+pushes back on the controller. Each connection has a serial, and a response
+for a connection that has gone is dropped, since its session has ended.
+
+## Fake worker, recorder and smoke
+
+`leeroy_dojo.fake_worker` runs the transport, the lifecycle machine and
+`fake_game.FakeDuel`, a deterministic two-actor duel that is not WoW but has
+the contract's shape: 10 ms substeps in 200 ms decisions, a 150 ms command
+delay, one pending command per actor (a new one supersedes it, noop keeps
+it), a bolt whose damage lands after its cast with the action id that started
+it, an instant lance, a global cooldown, rejections with a reason,
+simultaneous death and time limits, the +1/-1/0 terminal reward with
+optional potential shaping, a worker-lifetime clock that a reset does not
+rewind, and seeded combat that replays exactly. `leeroy_dojo.client` is a
+blocking controller that resends an identical line after a timeout and
+discards the extra answers it is owed.
+
+`leeroy_dojo.recording` writes an episode as `header.json` (scenario, seeds,
+worker and schema versions, clock and RNG capabilities, bounds, policies),
+chunks of up to 64 decision records each closed by a trailer with its
+SHA-256 and a hash chain over the chunks before it, and `footer.json` with the
+outcome and every chunk's hash, written last. A chunk is renamed into place
+only when complete. `verify_episode` names a missing, unfinished, altered or
+foreign chunk and a missing footer; `load_transitions` refuses an episode
+that is incomplete or aborted.
+
+```bash
+.venv/Scripts/python -m leeroy_dojo protocol-smoke --fake [--out DIR] [--json]
+.venv/Scripts/python -m leeroy_dojo verify-episode DIR/episodes/smoke-a
+```
+
+The smoke plays three recorded episodes against an in-process fake worker:
+one with a step delivered twice and a result replayed from the cache, one cut
+by dropping the connection right after a step was sent, and one on a new
+session that must replay the first exactly. It checks that every decision
+advanced the world once, that the old session is refused, that the cut
+episode is aborted and excluded, and that a deleted final chunk and a crash
+before the footer are both caught. It writes only under its output directory
+(a new temporary directory by default) and exits 0 when every check passes.
+
 ## Development
 
 The package is standard library only and targets Python 3.12, which current
@@ -156,10 +208,11 @@ uv pip install --python dojo/.venv/Scripts/python.exe -e "dojo[test]"
 cd dojo && .venv/Scripts/python -m pytest -q
 ```
 
-The pure C++ library builds without AzerothCore (Visual Studio 2022 or GCC):
+The pure C++ library builds without AzerothCore (Visual Studio 2022 or GCC);
+the transport needs Boost's headers:
 
 ```bash
-cmake -S modules/mod-dojo/tests -B build-dojo-tests
+cmake -S modules/mod-dojo/tests -B build-dojo-tests -DDOJO_BOOST_INCLUDE_DIR=F:/azerothcore/boost_1_92_0
 cmake --build build-dojo-tests --config RelWithDebInfo --parallel 4
 build-dojo-tests/RelWithDebInfo/dojo_tests.exe
 ```

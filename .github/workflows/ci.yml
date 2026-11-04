@@ -73,6 +73,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: install boost
+        run: sudo apt-get update && sudo apt-get install -y libboost-dev
       - name: build and run the pure mod-dojo tests
         run: |
           cmake -S modules/mod-dojo/tests -B t -DCMAKE_BUILD_TYPE=Release
@@ -93,6 +95,8 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install -e ".[test]"
       - run: python -m pytest -q
+      - name: fake worker protocol smoke
+        run: python -m leeroy_dojo protocol-smoke --fake --out "$RUNNER_TEMP/dojo-smoke"
 
   voice-rehearsal:
     runs-on: ubuntu-latest
