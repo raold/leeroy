@@ -1,7 +1,9 @@
 """Wave 4's seams: where two Realm parts, built apart against fakes, meet. Every test here runs
 both parts for real (with the real service, Store and DirectLedger where a send is involved);
 only the native side, the model and the clock are test boundaries."""
+import asyncio
 import json
+from types import SimpleNamespace
 import uuid
 
 from conftest import run, seed_test_cast
@@ -16,6 +18,7 @@ from leeroy_mind.training.benchmark import allowed_bosses
 from realm.fakes import RealmApp, enabled
 from test_realm_canon import KILLS as CANON_KILLS, Harness as CanonHarness, approved_plan as canon_plan
 from test_realm_direct import LIVE, PROCESS
+from test_realm_mail import Always
 from test_realm_race import DAY, RIVALS, T0, _training_ports, at, guild_kill
 from test_realm_rivals import (approved as rivals_approved, connect, finish, grows, kinds, live_realm,
                                plan_of, pump, seed_roster, step_row, with_cards)
@@ -183,3 +186,79 @@ def test_the_canon_step_seeds_the_real_race(tmp_path, store, clock, monkeypatch)
     assert {key[1:] for key, state in by_canon.items() if key[0] == 50 and state == "killed"} == canon_keys
     assert by_canon[(60, 631, 12, 3)] == "progressing"
     assert not any(key[0] == 80 for key in seeded)  # A retired rival is never seeded.
+
+
+# -- item 1: the post office's bank gifts go through the real bank ------------------------------------
+
+def _mail_realm(tmp_path, store, clock):
+    """The real service with every part, his raid quiet, the cast online and free to mail."""
+    app = RealmApp(tmp_path, store, clock)
+    app.personas = seed_test_cast(store)
+    app.world = SimpleNamespace(human_online=False, online=set(app.personas), afk=set(), group=None,
+                                in_group=lambda guid: False)
+    app.guild = SimpleNamespace(raid_night=None)
+    enabled(tmp_path, True)
+    return app, attach_realm(app)
+
+
+async def _settled(realm):
+    for _ in range(20):
+        children = tuple(realm._children)
+        if not children:
+            return
+        await asyncio.gather(*children, return_exceptions=True)
+
+
+def _of(app, kind):
+    return [c for c in app.sent if type(c) is kind]
+
+
+def test_a_bank_gift_is_withdrawn_once_through_the_real_bank(tmp_path, store, clock):
+    app, realm = _mail_realm(tmp_path, store, clock)
+    vault, post = realm.part("bank"), realm.part("mail")
+    vault.ledger.record("in", "stock", 104, 47586, 1)   # one of the stock step's BoEs
+    vault.ledger.record("in", "stock", 104, 47590, 1)
+    assert vault.gift_boe() == (47586, 3)                # the BoEs tab
+    post.rng = Always(1)                                  # the gift comes from the bank
+    items = post._gift_items()
+    assert items == [{"item_id": 47586, "count": 1, "from": "bags", "bank_tab": 3}]
+    with store.transaction():
+        first = post._insert(clock.now(), 102, "gift", items, "For you", "Saw this, thought of you.", "ready")
+    assert vault.gift_boe() == (47590, 3)                 # the waiting gift has its BoE claimed
+    with store.transaction():
+        second = post._insert(clock.now(), 103, "gift", post._gift_items(), "Here", "Take it.", "ready")
+    assert vault.gift_boe() is None
+
+    async def tick(seconds=10):
+        await clock.advance(seconds, step=seconds)
+        await post.tick()
+        await _settled(realm)
+
+    async def go():
+        await connect(app)
+        app.world.human_online = True
+        await tick()
+        withdraw, refused = _of(app, protocol.BankWithdraw)  # each BoE first, into her bags
+        assert (withdraw.guid, withdraw.item_id, withdraw.count, withdraw.tab) == (102, 47586, 1, 3)
+        assert (refused.guid, refused.item_id) == (103, 47590) and _of(app, protocol.MailSend) == []
+        await tick()                                       # their jobs are still to come: nothing again
+        assert len(_of(app, protocol.BankWithdraw)) == 2
+        await app.event(protocol.RealmJob(int(clock.now() * 1000), withdraw.id, "bank_withdraw", "done",
+                                          "", 102, 1))
+        await app.event(protocol.RealmJob(int(clock.now() * 1000), refused.id, "bank_withdraw", "failed",
+                                          "no_rights", 103, 0))
+        await tick()
+        [mail] = _of(app, protocol.MailSend)
+        assert mail.from_guid == 102 and mail.items == (protocol.MailItem(47586, 1, "bags"),)
+        for _ in range(3):
+            await tick()
+        await realm.close()
+    run(go())
+    assert len(_of(app, protocol.BankWithdraw)) == 2 and len(_of(app, protocol.MailSend)) == 1
+    states = dict(store.conn.execute("SELECT id,state FROM realm_mail").fetchall())
+    assert states[first] == "dispatched" and states[second] == "skipped"
+    assert store.conn.execute("SELECT reason FROM realm_mail WHERE id=?", (second,)).fetchone()[0] == "no_rights"
+    assert [tuple(r) for r in store.conn.execute(
+        "SELECT dir,reason,guid,item_id,count FROM realm_bank ORDER BY id")] == [
+        ("in", "stock", 104, 47586, 1), ("in", "stock", 104, 47590, 1), ("out", "gift", 102, 47586, 1)]
+    assert vault.ledger.balance(47586) == 0 and vault.ledger.balance(47590) == 1

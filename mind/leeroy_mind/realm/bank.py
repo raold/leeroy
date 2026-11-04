@@ -22,6 +22,13 @@ anything moved is asked again, at the step's next look.
 
 A step's apply only reads the ledger, starts the sends in an owned child (realm.spawn) and
 returns, so the Realm's loop never waits on the bank's pacing or its jobs.
+
+The post office's gifts (mail.py) take the bank's BoEs: gift_boe offers one the ledger holds
+and no waiting gift has claimed, and withdraw_gift moves it into the sender's bags with one
+bank_withdraw through the direct ledger (owner "mail", the gift's own ref gift:mail:<id>, its
+job expected). Its job's done is the gift's out row in the ledger, written once; no_rights
+records nothing. Only a withdrawal that never moved anything is asked again, at most
+GIFT_TRIES times, GIFT_RETRY_S apart; an unknown one is never sent again.
 """
 from __future__ import annotations
 
@@ -76,6 +83,12 @@ POLL_S, SETTLE_S = 0.25, 120.0
 # and the bridge's own before the wire: the same item may be asked again.
 RETRY = frozenset({"pretransport_refused", "native_refused", "job_failed", "realm_off",
                    "realm_not_started", "pin_rejected", "not_officer", "not_cast", "not_member"})
+GIFT_OWNER = "mail"  # A gift's withdrawal is its mail's; the direct ledger has no bank owner.
+GIFT_TAB = 3  # the BoEs tab
+GIFT_TRIES, GIFT_RETRY_S = 3, 600.0
+# A withdrawal refused before anything moved: the bridge's own, and native's realm switch.
+GIFT_AGAIN = frozenset({"pretransport_refused", "realm_off", "realm_not_started"})
+_WAITING_MAIL = ("awaiting_text", "ready")
 ITEMS_FILE = "leeroy_items.csv"
 ITEMS_HEADER = "item_id,use,max_count"
 ITEMS_DIST = Path(__file__).resolve().parents[3] / "modules" / "mod-leeroy" / "conf" / "leeroy_items.csv.dist"
@@ -441,6 +454,7 @@ class Bank:
         self.realm = realm
         self.ledger = BankLedger(realm.app.store, realm.app.clock)
         self._runs = {}
+        self._gifts = {}  # gift ref -> (withdrawals prepared, not before)
 
     async def apply_bank(self, payload, progress):
         return self._apply(STEP, bank_items(payload), progress, gap=BANK_GAP_S, officer=payload["officer"])
@@ -539,6 +553,97 @@ class Bank:
             direct.abandon_unsent(cmd)  # Only a row that never reached the barrier.
         return True
 
+    # -- the post office's gifts --------------------------------------------------------------
+
+    def _claimed(self, conn) -> dict[int, int]:
+        """BoEs a waiting gift will withdraw (its withdrawal not recorded yet), by item."""
+        claimed = {}
+        for mail_id, raw in conn.execute(
+                f"SELECT id,items FROM realm_mail WHERE state IN ({','.join('?' for _ in _WAITING_MAIL)})",
+                _WAITING_MAIL):
+            if conn.execute("SELECT 1 FROM meta WHERE key=?", (_gift_key(f"mail:{mail_id}"),)).fetchone():
+                continue
+            try:
+                items = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            for item in items if type(items) is list else ():
+                if type(item) is dict and item.get("bank_tab") == GIFT_TAB and type(item.get("item_id")) is int:
+                    count = item.get("count")
+                    claimed[item["item_id"]] = claimed.get(item["item_id"], 0) + (count if type(count) is int else 1)
+        return claimed
+
+    def gift_boe(self) -> tuple[int, int] | None:
+        """A BoE for a gift: (item_id, tab) of the one the bank holds most of that no waiting
+        gift has claimed; None when the BoEs tab has none to spare."""
+        store = self.realm.app.store
+        with store.transaction():
+            claimed = self._claimed(store.conn)
+            spare = [(self.ledger.balance(item) - claimed.get(item, 0), item) for item, _ in STOCK[GIFT_TAB]]
+        count, item = max(spare, key=lambda pair: (pair[0], -pair[1]))
+        return (item, GIFT_TAB) if count >= 1 else None
+
+    def withdraw_gift(self, ref, guid, item_id, count, tab) -> str:
+        """The gift's BoE into her bags, once per ref (mail:<id>): "pending" while it is on its
+        way, "done" once its job says so (its out row recorded), "no_rights", or why it never
+        will be ("refused", "unknown"). Synchronous: the send runs in an owned child."""
+        if type(ref) is not str or not ref.startswith("mail:"):
+            raise ValueError("a gift's ref is its mail's")
+        direct = self.realm.part("direct")
+        if direct is None:
+            return "pending"
+        key, gift = _gift_key(ref), f"gift:{ref}"
+        if self.realm.app.store.get_meta(key) is not None:
+            return "done"
+        state = direct.state(GIFT_OWNER, gift)
+        if state is not None:
+            name, reason, value = state
+            if name == "acked":
+                if value is None:
+                    return "pending"  # Native has it; its job is still to come.
+                self.ledger.record_once(key, [("out", "gift", guid, item_id, count)])
+                log.info("realm_bank_gift_out item=%d", item_id)
+                return "done"
+            if name in ("prepared", "dispatched"):
+                return "pending"
+            if name == "unknown":
+                return "unknown"
+            if name == "refused" and reason == "no_rights":
+                return "no_rights"
+            if name == "refused" and not (reason in GIFT_AGAIN or busy(reason)):
+                return "refused"
+        tries, not_before = self._gifts.get(gift, (0, 0.0))
+        now = self.realm.app.clock.now()
+        if tries >= GIFT_TRIES:
+            return "refused"
+        context = self.realm.action_context()
+        if now < not_before or not Steps.ready(context):
+            return "pending"
+        cmd = protocol.BankWithdraw(_new_id(), guid, item_id, count, tab)
+        if direct.prepare(cmd, owner=GIFT_OWNER, ref=gift, context=context, expects_job=True) is None:
+            return "pending"
+        self._gifts[gift] = (tries + 1, now + GIFT_RETRY_S)
+        ports = self.realm.ports
+
+        async def send():
+            try:
+                await ports.send(cmd)
+            except Exception as error:  # Its ledger row records what became of it.
+                log.debug("realm_bank_gift_send_failed error=%s", type(error).__name__)
+
+        def close(_task=None):
+            try:
+                direct.abandon_unsent(cmd)  # Only a row that never reached its barrier.
+            except Exception as error:
+                log.warning("realm_bank_gift_close_failed error=%s", type(error).__name__)
+
+        task = self.realm.spawn(send)
+        if task is None:
+            close()
+        else:
+            task.add_done_callback(close)
+        return "pending"
+
     async def _settled(self, direct, ref, kind) -> str:
         clock = self.realm.app.clock
         until = clock.now() + SETTLE_S
@@ -547,6 +652,10 @@ class Bank:
             if verdict != "wait" or clock.now() >= until:
                 return verdict
             await clock.sleep(POLL_S)
+
+
+def _gift_key(ref) -> str:
+    return f"realm:bank_gift:{ref}"
 
 
 def attach(realm):
