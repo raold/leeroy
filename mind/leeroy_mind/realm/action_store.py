@@ -20,9 +20,20 @@ TERMINAL = frozenset({"completed", "not_sent"})
 STATES = frozenset({"prepared", "dispatched", "unknown", "conflict", *TERMINAL})
 REFUSALS = frozenset({"realm_off", "realm_not_started", "unsupported", "busy:queue_full",
                       "busy:body_identity", "pin_rejected", "bad field: queued_operation"})
+# guild_grow's admission refusals (RealmGuild.cpp GrowAdmission, LeeroyRealmGuild.h): native
+# refused the whole grow at its ack, before reserving or moving anyone. A guid's reason names it.
+GROW_REFUSALS = frozenset({"refused_guild", "guild not found"})
+GROW_GUID_REFUSALS = frozenset({"cast", "actor", "not_bot", "not_guildless", "level", "faction"})
 LOCAL_CANCELED = frozenset({"stale_context", "stale_identity", "owner_dropped", "queue_closed",
                            "restart_not_sent", "held", "realm_off", "barrier_missing", "backoff",
                            "query_origin_unavailable", "cleanup_proof_unavailable"})
+
+
+def _grow_refusal(error, manifest) -> bool:
+    if error in GROW_REFUSALS:
+        return True
+    reason, _, guid = error.partition(":")
+    return reason in GROW_GUID_REFUSALS and guid.isdigit() and int(guid) in manifest
 
 
 class ActionUnavailable(BodyEvidenceUnavailable):
@@ -429,6 +440,7 @@ class ActionStore:
             if positive: return self._conflict(r, ev, now)
             error = ack["error"]
             refused = (r.policy in {"ordinary", "wg"} and error in REFUSALS
+                       or r.kind == "guild_grow" and _grow_refusal(error, r.reserved_manifest)
                        or r.policy == "wg" and error in {"no_wintergrasp", "no_online_members"}
                        or r.policy == "defaults" and (error in {"disabled", "busy", "busy:realm_owner"}
                            or error in {f"not_cast:{g}" for g in r.reserved_manifest})

@@ -11,8 +11,10 @@ approval is refused (``realm_step_hash_mismatch``) for good; a fresh plan needs 
 ``apply`` may be a coroutine function. It must be idempotent: each of its one-shot commands goes
 through ``progress.send(idx, cmd)``, which prepares the DirectLedger ref
 ``step:<name>:<sha>:<idx>`` at most once, so a resumed apply (after a disable, a lost
-connection or a restart) never sends an item twice. Raising ``StepPending`` leaves the step open
-for the next tick; any other exception is counted in its result and the step is tried again.
+connection or a restart) never sends an item twice. An item that never moved anything (lost
+before the barrier, or refused by the bridge, native's realm switch or a busy owner) is sent again
+with a fresh command id, the step staying open meanwhile. Raising ``StepPending`` leaves the step
+open for the next tick; any other exception is counted in its result and the step is tried again.
 """
 
 import dataclasses
@@ -23,13 +25,18 @@ import logging
 import math
 import os
 import re
+import uuid
 from datetime import datetime
 from pathlib import Path
+
+from .direct import busy
 
 log = logging.getLogger(__name__)
 
 OWNER = "step"
 TICK_S = 60
+# Refusals before anything moved: the bridge's own before the wire, and native's realm switch.
+_AGAIN = frozenset({"pretransport_refused", "realm_off", "realm_not_started"})
 _NAME = re.compile(r"[a-z][a-z0-9_]{0,31}")
 _STEM = re.compile(r"([a-z][a-z0-9_]{0,31})-([0-9]{8}-[0-9]{4})(?:-([1-9][0-9]?))?")
 _SHA = re.compile(r"[0-9a-f]{64}")
@@ -178,6 +185,16 @@ def _approval(path: Path):
     return doc["sha256"], float(doc["approved_at"])
 
 
+def _again(state) -> bool:
+    """An item the ledger says never moved anything, so it may be sent again: abandoned (it
+    never reached the wire), refused before the bridge wrote it, or refused by native's realm
+    switch or a busy owner. Any other refusal is the item's answer, and unknown is final."""
+    if state is None:
+        return False
+    name, reason, _ = state
+    return name == "abandoned" or (name == "refused" and (reason in _AGAIN or busy(reason)))
+
+
 class Progress:
     """One plan's exactly-once sends: item idx is the DirectLedger ref step:<name>:<sha>:<idx>."""
 
@@ -191,20 +208,26 @@ class Progress:
             raise ValueError("step item index must be a non-negative int")
         return f"step:{self.name}:{self.sha256}:{idx}"
 
-    def state(self, idx: int) -> str | None:
+    def state(self, idx: int) -> tuple[str, str | None, int | None] | None:
+        """The ledger's (state, reason, value) of item idx; None before it was ever prepared."""
         return self._steps.ledger().state(OWNER, self.ref(idx))
 
-    async def send(self, idx: int, cmd, *, expects_job: bool = False) -> str | None:
-        """Prepare and send item idx once. An item already in the ledger is never sent again:
-        its state is returned. None means the ledger prepared nothing (refused)."""
+    async def send(self, idx: int, cmd, *,
+                   expects_job: bool = False) -> tuple[str, str | None, int | None] | None:
+        """Prepare and send item idx once; the ledger's (state, reason, value) after it. An item
+        done, refused for good or unknown is never sent again: its state is returned. One that
+        never moved anything (_again) is sent again with a fresh command id, and the step
+        stays open (StepPending) while native still gives such a refusal."""
         ref, ledger = self.ref(idx), self._steps.ledger()
         state = ledger.state(OWNER, ref)
-        if state is not None:
+        if state is not None and not _again(state):
             return state
         realm = self._steps.realm
         context = realm.action_context()
         if not self._steps.ready(context):
             raise StepPending("realm not ready")
+        if state is not None:
+            cmd = dataclasses.replace(cmd, id=uuid.uuid4().hex)  # A command id is one intent's.
         prepared = ledger.prepare(cmd, owner=OWNER, ref=ref, context=context, expects_job=expects_job)
         if prepared is None:
             return ledger.state(OWNER, ref)
@@ -212,10 +235,15 @@ class Progress:
             cmd = dataclasses.replace(cmd, id=prepared)
         try:
             await realm.ports.send(cmd)
-        except Exception as error:  # The ledger row records the outcome; never resent.
+        except Exception as error:  # The ledger row records the outcome.
             log.debug("realm_step_send_failed step=%s idx=%d error=%s", self.name, idx,
                       type(error).__name__)
-        return ledger.state(OWNER, ref)
+        finally:
+            ledger.abandon_unsent(cmd)  # Only a row that never reached its barrier.
+        state = ledger.state(OWNER, ref)
+        if _again(state):
+            raise StepPending("step item refused before anything moved")
+        return state
 
 
 class Steps:

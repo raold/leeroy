@@ -618,16 +618,19 @@ class Rivals:
                              (g["guild_id"], r["guid"], r["class"], r["role"], r["avg_ilvl"], now))
         return kept
 
-    def _write_cards(self, cards, guids):
+    def _write_cards(self, cards, guids, guilds=()):
+        """The actors' cards (cards/<guid>.json) and, where none is there yet, each guild's own
+        (cards/guild-<id>.json: its name, its part in the realm and its faction), as speech
+        reads them. A guild card already there, his own words perhaps, is kept."""
         directory = self.realm.ports.realm_dir() / "cards"
         directory.mkdir(parents=True, exist_ok=True)
-        for guid in guids:
-            card = cards.get(str(guid))
-            if card is None:
-                continue
-            path = directory / f"{guid}.json"
-            text = json.dumps(card, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
-            if path.is_file() and path.read_text(encoding="utf-8") == text:
+        files = [(directory / f"{guid}.json", cards[str(guid)], True) for guid in guids if str(guid) in cards]
+        files += [(directory / f"guild-{g['guild_id']}.json",
+                   {"name": g["name"], "role": PERSONALITY[g["role"]], "faction": g["faction"]}, False)
+                  for g in guilds]
+        for path, card, renew in files:
+            text = json.dumps(card, sort_keys=renew, indent=2, ensure_ascii=False) + "\n"
+            if path.is_file() and (not renew or path.read_text(encoding="utf-8") == text):
                 continue
             tmp = path.with_name(f".{path.name}.tmp")
             tmp.write_text(text, encoding="utf-8")
@@ -670,7 +673,8 @@ class Rivals:
         if conflict:
             log.warning("realm_rivals_already_chosen")
             return {"refused": "rivals_already_chosen"}
-        self._write_cards(plan.get("cards", {}), [a["guid"] for actors, _ in kept.values() for a in actors])
+        self._write_cards(plan.get("cards", {}), [a["guid"] for actors, _ in kept.values() for a in actors],
+                          plan["guilds"])
         rename = await self._rename(plan, progress)
         if rename in _PENDING:
             raise StepPending("rename")

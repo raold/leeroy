@@ -17,7 +17,7 @@ from realm.fakes import RealmApp
 
 
 class FakeLedger:
-    """F1's DirectLedger interface only: one row per (owner, ref), then its state."""
+    """F1's DirectLedger interface only: one row per (owner, ref), then its (state, reason, value)."""
 
     def __init__(self):
         self.rows, self.prepared = {}, []
@@ -25,17 +25,22 @@ class FakeLedger:
     def prepare(self, cmd, *, owner, ref, context, expects_job):
         if (owner, ref) in self.rows or not context.enabled:
             return None
-        self.rows[(owner, ref)] = "prepared"
+        self.rows[(owner, ref)] = ("prepared", None, None)
         self.prepared.append((owner, ref, cmd))
         return cmd.id
 
     def state(self, owner, ref):
         return self.rows.get((owner, ref))
 
+    def abandon_unsent(self, cmd):
+        for owner, ref, sent in self.prepared:
+            if sent.id == cmd.id and self.rows[(owner, ref)][0] == "prepared":
+                self.rows[(owner, ref)] = ("abandoned", "unsent", None)
+
     def settle(self, cmd):
         for owner, ref, sent in self.prepared:
             if sent.id == cmd.id:
-                self.rows[(owner, ref)] = "acked"
+                self.rows[(owner, ref)] = ("acked", None, None)
 
 
 class FakeRealm:
@@ -71,7 +76,7 @@ def realm(tmp_path, store, clock):
 def renamer(calls):
     async def apply(plan, progress):
         calls.append(plan)
-        states = [await progress.send(i, protocol.GuildRename(f"rename-{i}", 21, name))
+        states = [(await progress.send(i, protocol.GuildRename(f"rename-{i}", 21, name)))[0]
                   for i, name in enumerate(plan["names"])]
         return {"states": states}
     return apply
@@ -210,7 +215,7 @@ def test_apply_resumes_from_progress(tmp_path, store, clock, realm):
     assert [cmd.name for cmd in realm.sent] == ["Alpha"]
     assert rows(store)[0][3] is None and json.loads(rows(store)[0][4]) == {}
     # Delta was prepared once before (its outcome unknown): never sent again.
-    realm.ledger.rows[("step", f"step:rivals:{sha}:3")] = "unknown"
+    realm.ledger.rows[("step", f"step:rivals:{sha}:3")] = ("unknown", "transport_unknown", None)
     realm.enabled, realm.on_sent = True, None
     restarted = Steps(realm)
     restarted.register("rivals", renamer(calls))

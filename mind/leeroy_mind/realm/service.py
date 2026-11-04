@@ -250,6 +250,11 @@ class Realm:
         """The attached part of that name (parts.PART_MODULES), or None while it is absent."""
         return self.parts.get(name)
 
+    @property
+    def race(self):
+        """The race part, as Training's benchmark gate reads it (app.realm.race); None while absent."""
+        return self.part("race")
+
     def spawn(self, fn):
         """Start fn(), an async callable, as an owned child nobody awaits; returns its task.
 
