@@ -154,6 +154,8 @@ class _Job:
     expressive: object | None = None  # the worker selected when this line arrived
     cpu: bool = False
     cuda_reservation: object | None = None
+    received: float = 0.0  # when its speak came, the clock's seconds
+    engine: str = ""  # what made its first segment: stock, kokoro, or <engine>/cpu|cuda
 
 
 @dataclass(slots=True, eq=False)
@@ -470,6 +472,8 @@ class VoiceService:
         job = self._jobs.get(played.id)
         if played.state == "started":
             guid = job.speak.guid
+            log("line_started", id=played.id, guid=guid, tier=job.speak.priority,
+                engine=job.engine, wait_ms=round((self._clock.now() - job.received) * 1000))
             self._speaking[played.id] = guid
             self.ui.broadcast({"type": "speaking", "guid": guid, "on": True})
             self._note_speaker(self.occupancy.names.get(guid, ""))
@@ -660,6 +664,7 @@ class VoiceService:
             self._send(Played(msg.id, "dropped", reason))
             return
         job, clip = self._job(msg)
+        job.received = self._clock.now()
         self._jobs[msg.id] = job
         self._plan(self.scheduler.submit, job.line)
         if job.ended:  # refused: not_his_channel, raid, expired, after_dropped
@@ -693,11 +698,14 @@ class VoiceService:
         expressive = self._live_expressive() if self._speaks_expressive(spec) else None
         cpu = expressive is not None and expressive is self._expressive_cpu
         fallback_why = self._expressive_why
-        if cpu and self._cpu_job is not None:
+        if cpu and msg.priority != "p3":
+            expressive, cpu, fallback_why = None, False, f"CPU voice: p3 only, not {msg.priority}"
+        elif cpu and msg.kind == "hotmic":
+            expressive, cpu, fallback_why = None, False, "CPU voice: no hot-mic lines"
+        elif cpu and self._cpu_job is not None:
             expressive, cpu, fallback_why = None, False, "CPU synthesis busy"
-        if cpu and (msg.priority != "p3" or msg.kind == "hotmic" or
-                    msg.expires_ms / 1000 - self._clock.now() <
-                    CPU_FALLBACK_RESERVE_S + CPU_MIN_BUDGET_S):
+        elif cpu and (msg.expires_ms / 1000 - self._clock.now() <
+                      CPU_FALLBACK_RESERVE_S + CPU_MIN_BUDGET_S):
             expressive, cpu, fallback_why = None, False, "CPU deadline too short"
         if clip is not None:
             expressive, cpu = None, False
@@ -783,9 +791,9 @@ class VoiceService:
             raise ValueError("audio that is not finite")
         return clip
 
-    def _dry(self, job: _Job, index: int) -> np.ndarray:
+    def _dry(self, job: _Job, index: int) -> tuple[np.ndarray, str]:
         """The sentence from the member's engine; Kokoro's reading of it, and of the rest of the
-        line, once that engine has failed on it."""
+        line, once that engine has failed on it. With the name of what made it."""
         x = job.expressive or self._expressive
         if job.spoken and not job.fell_back:
             try:
@@ -795,17 +803,30 @@ class VoiceService:
                     if budget < CPU_MIN_BUDGET_S:
                         raise EngineError("CPU voice: insufficient time before expiry")
                     return x.synth(job.spoken[index], job.spec, x.levers(job.speak.attitude),
-                                   job.speed, timeout_s=budget)
+                                   job.speed, timeout_s=budget), f"{x.name}/cpu"
                 if (self._live_expressive() is not x
                         or job.cuda_reservation is not self._cuda_holder):
                     raise EngineError("CUDA voice: readiness changed")
-                return x.synth(job.spoken[index], job.spec, x.levers(job.speak.attitude), job.speed)
+                return (x.synth(job.spoken[index], job.spec, x.levers(job.speak.attitude),
+                                job.speed), f"{x.name}/cuda")
             except EngineError as e:
                 job.fell_back = True
                 log("engine_fallback", level=logging.WARNING, id=job.speak.id,
                     guid=job.speak.guid, why=str(e))
         style = self._bank.style(job.spec, job.speak.attitude, self._decision)
-        return self._engine.synth(job.parts[index], job.spec, style, job.speed)
+        return self._engine.synth(job.parts[index], job.spec, style, job.speed), self._engine.name
+
+    def _segment(self, job: _Job, index: int, made) -> np.ndarray:
+        """A segment for the mixer, from (dry, engine name) or a stock clip, with its timing in
+        the log: which engine spoke and how long it took, never what it said."""
+        began = time.monotonic()
+        dry, engine = made() if callable(made) else (made, "stock")
+        clip = self._process(job, dry)
+        job.engine = job.engine or engine
+        log("segment_ready", id=job.speak.id, guid=job.speak.guid, segment=index, engine=engine,
+            synth_ms=round((time.monotonic() - began) * 1000),
+            audio_ms=round(len(clip) * 1000 / SAMPLE_RATE))
+        return clip
 
     def _synth_loop(self) -> None:
         while True:
@@ -815,7 +836,7 @@ class VoiceService:
             if job.ended:
                 continue
             try:
-                clip = self._process(job, self._dry(job, index))
+                clip = self._segment(job, index, lambda: self._dry(job, index))
             except Exception as e:
                 job.ended = True  # here, so its next sentence is not synthesized meanwhile
                 self._post(self._on_failed, job, _why(e))
@@ -827,7 +848,7 @@ class VoiceService:
             try:
                 if job.ended:
                     continue
-                clip = self._process(job, self._dry(job, 0))
+                clip = self._segment(job, 0, lambda: self._dry(job, 0))
             except Exception as exc:
                 job.ended = True
                 self._post(self._on_failed, job, _why(exc))
@@ -843,7 +864,7 @@ class VoiceService:
 
     def _stock_ready(self, job: _Job, dry: np.ndarray) -> None:
         try:
-            clip = self._process(job, dry)
+            clip = self._segment(job, 0, dry)
         except Exception as e:
             self._post(self._on_failed, job, _why(e))
         else:

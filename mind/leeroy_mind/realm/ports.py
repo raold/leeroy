@@ -20,6 +20,8 @@ from typing import Protocol
 from leeroy_mind.clock import SystemClock, night_of
 from leeroy_mind.bodies import ALL, BodyHold, RunBodyProof
 from leeroy_mind.human import HumanIdentity, human_identity
+from leeroy_mind.llm.client import LLMError
+from leeroy_mind.llm.scheduler import Priority, SchedulerError
 from leeroy_mind.memory.writer import MemoryCandidate, WriteResult
 from leeroy_mind.personas.io import PersonaCache
 from leeroy_mind.personas.schema import Persona
@@ -276,6 +278,7 @@ class RealmPorts(Protocol):
     async def say(self, guid, channel, text, *, to_guid=0, kind=TurnKind.ASIDE,
                   before_transport=None, on_recorded=None) -> bool: ...
     async def remember(self, candidate: MemoryCandidate) -> WriteResult: ...
+    async def remember_notable(self, text: str, write): ...
     def note_lately(self, guid: int, what: str, text: str) -> None: ...
     def away(self) -> set[int]: ...
     def open_rumors(self) -> list[RumorRow]: ...
@@ -462,6 +465,26 @@ class LivePorts(RealmPorts):
             self._disabled()
         return await self._owned(lambda: self.app.writer.write(candidate, enforce_limits=False),
                                  valid, disabled=self._disabled)
+
+    async def remember_notable(self, text, write):
+        """Embed `text` once, then return write(writer, vector) under this ticket.
+
+        The last validity check and write() run with no await between them, so nothing is
+        written once the Realm is disabled. A failed embed gives None: the memory is stored
+        without a vector, as the writer stores any memory it cannot embed."""
+        valid = self._ticket()
+        if not valid():
+            self._disabled()
+
+        async def operation():
+            try:
+                vector = (await self.app.embedder.embed([text], Priority.EXTRACTION))[0]
+            except (LLMError, SchedulerError):
+                vector = None
+            if not valid():
+                self._disabled()
+            return write(self.app.writer, vector)
+        return await self._owned(operation, valid, disabled=self._disabled)
 
     async def close(self):
         self.set_enabled(False)
