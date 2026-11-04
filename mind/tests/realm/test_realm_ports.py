@@ -15,6 +15,8 @@ from leeroy_mind.guild.config import GuildConfig
 from leeroy_mind.guild import protocol as guild_protocol
 from leeroy_mind.guild.raid_night import RaidRun, State
 from leeroy_mind.guild.session import RaidPlan
+from leeroy_mind.llm.client import LLMError
+from leeroy_mind.llm.scheduler import Priority
 from leeroy_mind.memory.writer import MemoryCandidate, WriteResult
 from leeroy_mind.personas.io import PersonaCache, save_persona
 from leeroy_mind.protocol import Ack, Boss
@@ -596,6 +598,45 @@ def test_memory_is_async_real_result_and_disable_cancels_pending_owned_work(app)
         ports.set_enabled(True)
         release.set()
         assert await ports.remember(candidate) is result
+        await ports.close()
+    run(scenario())
+
+
+def test_notable_embeds_then_writes_under_one_ticket(app):
+    async def scenario():
+        entered, release, writes, texts = asyncio.Event(), asyncio.Event(), [], []
+        mode = {"outage": False, "block": False}
+        async def embed(batch, priority):
+            assert priority == Priority.EXTRACTION
+            texts.append(tuple(batch))
+            if mode["block"]:
+                entered.set()
+                await release.wait()
+            if mode["outage"]:
+                raise LLMError("offline")
+            return [b"v" * 2048]
+        app.embedder, app.writer = NS(embed=embed), NS(name="writer")
+        def write(writer, vector):
+            writes.append((writer, vector))
+            return 7
+        ports = LivePorts(app)
+        with pytest.raises(RealmDisabled):  # Disabled: nothing is embedded or written.
+            await ports.remember_notable("Synthetic fact.", write)
+        assert texts == [] and writes == []
+        ports.set_enabled(True)
+        assert await ports.remember_notable("Synthetic fact.", write) == 7
+        assert texts == [("Synthetic fact.",)] and writes == [(app.writer, b"v" * 2048)]
+        mode["outage"] = True  # An embed that fails still writes, without a vector.
+        assert await ports.remember_notable("Synthetic fact.", write) == 7
+        assert writes[-1] == (app.writer, None)
+        mode.update(outage=False, block=True)
+        work = asyncio.create_task(ports.remember_notable("Synthetic fact.", write))
+        await entered.wait()
+        ports.set_enabled(False)  # Disabled while the vector is awaited: never written.
+        release.set()
+        with pytest.raises(RealmDisabled):
+            await work
+        assert len(writes) == 2
         await ports.close()
     run(scenario())
 
