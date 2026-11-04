@@ -22,6 +22,7 @@ from .actions import ActionContext, ActionQueue
 from .config import load_realm_config
 from .fact_store import FactStore, FactWriteRejected
 from .kill_retention import PrivateKillRejected, PrivateKillStore
+from .ledger import Ledger
 from .ports import LivePorts, RealmDisabled
 from .provenance import capture_qualification_in_unit
 from .recall import Recall
@@ -40,6 +41,7 @@ _DIRECT = frozenset({protocol.RealmActors, protocol.RealmSay, protocol.RealmEmot
                      protocol.GuildRename, protocol.ItemCount})
 _SOURCES = frozenset({BgEnd, protocol.ArenaEnd, protocol.Wg, protocol.PvpKill,
                       protocol.ChannelChat, protocol.RealmKill})
+_GUARD_ALERTS = frozenset({"gone", "blocked"})
 
 
 @dataclass(slots=True)
@@ -84,6 +86,7 @@ class Realm:
         self.ports = LivePorts(app, on_send=self.on_send, on_ack=self.on_ack,
                                on_send_error=self.on_send_error)
         self.ports.set_enabled(self.enabled)
+        self.ledger = Ledger(app.store, self.ports, self._facts)
         self.action_store = ActionStore(self.ports.conn)
         # Recovery is local bookkeeping, exactly once, before the source and
         # app attachment exist. Prepared payloads are never replayed.
@@ -328,6 +331,8 @@ class Realm:
             self.on_realm_pvp(ev)
         elif name == "guard" and ev.action == "his_kick":
             store.record_kick(self.ports.conn, ev.guid, ev.ts / 1000, ev.rank)
+        elif name == "guard":
+            self._guard_alert(ev)
         elif name == "hello" and not self._stopping:
             self._adopt_hello(ev)
         if name in {"login", "logout"} and self.app.is_backlog(ev):
@@ -358,6 +363,13 @@ class Realm:
         finally:
             if failure is not None:
                 raise failure
+
+    @staticmethod
+    def _guard_alert(ev):
+        """A cast member the guard could not keep; ids only, also while disabled."""
+        if (type(ev.action) is str and ev.action in _GUARD_ALERTS
+                and type(ev.guid) is int and 0 < ev.guid <= 0xFFFFFFFF):
+            log.warning("realm_guard_alert guid=%d action=%s", ev.guid, ev.action)
 
     async def tick(self):
         # Retained reservations and provider releases continue to be observed
