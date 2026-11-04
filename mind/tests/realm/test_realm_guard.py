@@ -28,6 +28,7 @@ from leeroy_mind.realm.ports import LivePorts
 from leeroy_mind.realm.service import attach_realm
 from leeroy_mind.storage import db
 from leeroy_mind.talk.turns import Turn, TurnKind
+from leeroy_mind.testing.fake_clock import FakeClock
 from leeroy_mind.wow import CLASSES, RACES
 from realm.fakes import RealmApp
 from test_realm_foundation_schema import _episode, _insert, _source
@@ -696,19 +697,35 @@ def _feed_ack(native, command_id, ok=True, error=""):
                                             ok=ok, error=error)).encode("utf-8") + b"\n")
 
 
+def _feed_job(native, body, value, *, guid=0):
+    native.reader.feed_data(json.dumps(dict(v=1, type="realm_job", ts=int(native.clock.now() * 1000),
+                                            id=body["id"], kind=body["type"], state="done", reason="",
+                                            guid=guid, value=value)).encode("utf-8") + b"\n")
+
+
 async def _acker(native, readmit, say=None):
     """Acks every say at once (with `say(body)`'s (ok, error) when given), each
-    guild_readmit with `readmit` (ok, error), and the actor set sent at each hello."""
-    seen = 0
+    guild_readmit with `readmit` (ok, error), the actor set sent at each hello, and what the
+    calendar desk sends on a raid day: each post and signup with its job (a post's value is its
+    new event id), each update by its ack alone."""
+    seen, events = 0, 9000
     while True:
         lines = _lines(native)
         for body in lines[seen:]:
-            if body.get("type") == "say":
+            kind = body.get("type")
+            if kind == "say":
                 _feed_ack(native, body["id"], *(say(body) if say is not None else ()))
-            elif body.get("type") == "guild_readmit" and readmit is not None:
+            elif kind == "guild_readmit" and readmit is not None:
                 _feed_ack(native, body["id"], *readmit)
-            elif body.get("type") == "realm_actors":
+            elif kind in ("realm_actors", "calendar_update"):
                 _feed_ack(native, body["id"])
+            elif kind == "calendar_post":
+                events += 1
+                _feed_ack(native, body["id"])
+                _feed_job(native, body, events, guid=body["creator_guid"])
+            elif kind == "calendar_signup":
+                _feed_ack(native, body["id"])
+                _feed_job(native, body, body["event_id"], guid=body["guid"])
         seen = len(lines)
         await asyncio.sleep(0)
 
@@ -1261,3 +1278,29 @@ def test_ports_pass_the_hooks_only_when_given(tmp_path, store, clock):
     assert set(plain.kwargs) == {"kind", "to_guid", "still_valid"} and plain.kwargs["kind"] is TurnKind.ASIDE
     assert hooked.kwargs["before_transport"] is before and hooked.kwargs["on_recorded"] is recorded
     assert hooked.kwargs["kind"] is TurnKind.WHISPER and hooked.kwargs["to_guid"] == HUMAN
+
+
+def test_service_on_a_raid_day_the_calendar_posts_and_the_guard_still_asks(tmp_path, monkeypatch):
+    """With the Realm on and a standing raid lead, the calendar desk posts whatever is due on the
+    clock's date (Tuesday: three raid nights and Thursday's meeting); the fake native acks each
+    post and sends its job, so nothing waits on the Realm's send child."""
+    tuesday = FakeClock(datetime(2026, 11, 3, 18, 0, tzinfo=timezone.utc))
+
+    async def scenario():
+        async with _guild(tmp_path, tuesday, monkeypatch) as native:
+            for _ in range(3):
+                await native.app.realm.tick()
+                await tuesday.advance(30)
+            await _settle(native)
+            await native.drain()  # the posts' jobs: each binds its event id
+            posts = [b for b in _lines(native) if b.get("type") == "calendar_post"]
+            assert len(posts) == 4 and all(b["creator_guid"] == LEAD for b in posts)
+            with native.app.store.transaction():
+                rows = native.app.store.conn.execute(
+                    "SELECT kind,state,event_id FROM realm_calendar ORDER BY at").fetchall()
+            assert [(r[0], r[1]) for r in rows] == [("raid", "posted")] * 3 + [("meeting", "posted")]
+            assert all(type(r[2]) is int for r in rows)
+            await _kick(native)
+            await _ask(native)
+            assert _episodes(native)[0]["ask_state"] == "delivered"
+    run_native(scenario())
