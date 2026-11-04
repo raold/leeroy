@@ -216,7 +216,10 @@ class TurnTiming:
     def voice_sent(self, token: str | None, speak_id: str) -> None:
         if (r := self._get(token)) is None:
             return
-        digest = voice_token(speak_id)
+        try:
+            digest = voice_token(speak_id)
+        except UnicodeEncodeError:
+            return  # wire accepts surrogate IDs; correlation must not affect delivery
         duplicates = [t for t, old in self._active.items() if old.voice_token == digest]
         r.voice_token, r.voice_sent = digest, self.now()
         if duplicates:  # ambiguous existing wire ID: do not guess which line an ACK belongs to
@@ -226,7 +229,10 @@ class TurnTiming:
 
     def played(self, speak_id: str, state: str, reason: str = "") -> None:
         self.expire()
-        digest = voice_token(speak_id)
+        try:
+            digest = voice_token(speak_id)
+        except UnicodeEncodeError:
+            return
         for token, r in list(self._active.items()):
             if r.voice_token != digest:
                 continue
@@ -241,7 +247,10 @@ class TurnTiming:
 
     def voice_missing(self, speak_id: str | None = None, *, reason: str) -> None:
         self.expire()
-        digest = voice_token(speak_id) if speak_id is not None else None
+        try:
+            digest = voice_token(speak_id) if speak_id is not None else None
+        except UnicodeEncodeError:
+            return  # invalid correlation is not the None sentinel for all voice traces
         for token, r in list(self._active.items()):
             if r.voice_token is not None and (digest is None or r.voice_token == digest):
                 self.finish(token, "incomplete", reason)

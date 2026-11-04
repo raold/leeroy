@@ -1,6 +1,7 @@
 """Existing Speak/Played behavior with separate bounded mind timing state."""
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -123,5 +124,85 @@ def test_failed_timing_sink_does_not_change_voice_delivery_or_ack(vrig):
         assert not v.engine.timing._active
         assert v.rows("SELECT state FROM voice_line WHERE speak_id = ?", (msg.id,))[0][0] == "done"
         assert not v.sent.says()
+        await v.engine.scheduler.close()
+    run(go())
+
+
+def test_wire_surrogate_id_skips_only_its_correlation():
+    events = []
+    timing = TurnTiming(emit=events.append)
+    malformed = wire.parse(wire.encode(wire.Played("\ud800", "started"), 1))
+    assert malformed.id == "\ud800"  # accepted unchanged by the existing wire
+    timing.played(malformed.id, malformed.state)
+    timing.voice_missing(malformed.id, reason="no_ack")
+    timing.voice_sent("unknown-trace", malformed.id)
+    assert not timing._active and not events
+
+    missing, valid = timing.begin(), timing.begin()
+    timing.voice_sent(missing, malformed.id)
+    timing.voice_sent(valid, "sample.speak-1")
+    timing.played(malformed.id, malformed.state)
+    timing.voice_missing(malformed.id, reason="no_ack")
+    assert set(timing._active) == {missing, valid}
+    assert timing._active[missing].voice_token is None
+    assert timing._active[missing].voice_sent is None
+    assert not events
+
+    timing.played("sample.speak-1", "started")
+    timing.played("sample.speak-1", "done")
+    assert len(events) == 2 and valid not in timing._active
+    assert all(e["voice_token"] == voice_token("sample.speak-1") for e in events)
+    timing.close()
+
+
+def test_surrogate_ack_still_reaches_existing_comms_store_handler(vrig, monkeypatch):
+    v = vrig
+    _, events = observed(v)
+    calls = []
+
+    def set_line(speak_id, state, reason, at):
+        assert speak_id not in v.comms._unanswered  # original pop-before-store ordering
+        calls.append((speak_id, state, reason, at))
+
+    async def go():
+        valid = await speak(v)
+        monkeypatch.setattr(v.ext, "store", SimpleNamespace(set_line=set_line))
+        malformed = wire.parse(wire.encode(wire.Played("\ud800", "started"), 1))
+        v.comms._unanswered[malformed.id] = v.clock.now() + 60
+        v.comms.played(malformed)
+        assert calls == [(malformed.id, "started", None, v.clock.now())]
+        assert not events
+        v.comms.played(wire.parse(wire.encode(wire.Played(valid.id, "started"), 1)))
+        assert len(calls) == 2 and calls[-1][0] == valid.id
+        assert events[-1]["phase"] == "first_ack"
+        assert events[-1]["voice_token"] == voice_token(valid.id)
+        v.engine.timing.close()
+        await v.engine.scheduler.close()
+    run(go())
+
+
+def test_surrogate_id_writer_acceptance_does_not_become_typed_fallback(vrig, monkeypatch):
+    v = vrig
+    _, events = observed(v)
+    stored = []
+    send = v.fake.send
+
+    def encoded_send(msg):
+        assert wire.parse(wire.encode(msg, 1)) == msg  # real wire accepts the writer's ID
+        send(msg)
+
+    monkeypatch.setattr(v.comms, "_speak_id", lambda meta: "\ud800")
+    monkeypatch.setattr(v.fake, "send", encoded_send)
+    monkeypatch.setattr(v.ext, "store", SimpleNamespace(
+        add_line=lambda *args, **kwargs: stored.append((args, kwargs))))
+
+    async def go():
+        msg = await speak(v)
+        assert msg.id == "\ud800" and msg.id in v.comms._unanswered
+        assert not v.sent.says()
+        assert len(stored) == 1 and stored[0][0][3] == "sent"
+        assert len(events) == 1 and events[0]["phase"] == "terminal"
+        assert events[0]["voice_token"] is None
+        assert events[0]["origin_to_voice_send_ms"] is None
         await v.engine.scheduler.close()
     run(go())
