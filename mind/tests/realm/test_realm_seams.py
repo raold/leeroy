@@ -3,13 +3,18 @@ both parts for real (with the real service, Store and DirectLedger where a send 
 only the native side, the model and the clock are test boundaries."""
 import uuid
 
-from conftest import run
+from conftest import run, seed_test_cast
 from leeroy_mind.protocol import Ack
 from leeroy_mind.realm import bank, canon, protocol, rivals
 from leeroy_mind.realm.direct import DirectLedger
 from leeroy_mind.realm.ports import RealmDisabled
 from leeroy_mind.realm.protocol import BankStock, GrantAchievement
+from leeroy_mind.realm.race import Race
+from leeroy_mind.realm.service import attach_realm
+from leeroy_mind.training.benchmark import allowed_bosses
+from realm.fakes import RealmApp, enabled
 from test_realm_direct import LIVE, PROCESS
+from test_realm_race import DAY, T0, _training_ports, at, guild_kill
 from test_realm_rivals import (approved as rivals_approved, connect, finish, grows, kinds, live_realm,
                                plan_of, pump, seed_roster, step_row, with_cards)
 
@@ -130,3 +135,21 @@ def test_a_grow_native_refuses_at_admission_frees_its_bodies_and_grows_again(tmp
     run(go())
     assert [g.id for g in grows(app, {7})] == [rivals.grow_id(sha, 7, 0), rivals.grow_id(sha, 7, 1)]
     assert step_row(store)[1]["grow"] == {"7": "acked", "8": "acked", "11": "acked"}
+
+
+# -- item 7: Training's benchmark gate reaches the real race part -----------------------------------
+
+def test_training_reaches_the_real_race_part_and_falls_back_without_it(tmp_path, store, clock):
+    seed_test_cast(store)
+    enabled(tmp_path, True)
+    realm = attach_realm(RealmApp(tmp_path, store, clock))
+    at(clock, T0)
+    guild_kill(store, T0 - DAY, boss=0)
+    training = _training_ports(store, clock, realm)
+    assert realm.race is realm.part("race") and type(realm.race) is Race
+    assert training.benchmark_allowed(631, 0, 25, False) is True
+    assert allowed_bosses(training, "icc25") == (0,)
+    realm.parts.pop("race")  # A Realm without its race part: Training's own history, exactly.
+    assert realm.race is None and training.benchmark_allowed(631, 0, 25, False) is None
+    assert allowed_bosses(training, "icc25") == ()
+    run(realm.close())
