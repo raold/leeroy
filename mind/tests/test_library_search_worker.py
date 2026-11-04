@@ -222,6 +222,38 @@ def test_embedding_keeps_logical_admission_and_cancellation_skips_rank(library_p
     run(main())
 
 
+def test_close_between_prepare_completion_and_resume_cannot_start_embedding(library_path,
+                                                                          monkeypatch):
+    async def main():
+        worker = LibrarySearchWorker(library_path)
+        llm = FakeLLM()
+        original_complete = worker._complete
+        prepared, closers = [], []
+
+        def complete(job, result=None, error=None):
+            if job.operation is Library._prepare_search and error is None:
+                prepared.append(result.embed)
+                # Queue close before set_result queues the successful prepare waiter.
+                closers.append(asyncio.create_task(worker.aclose()))
+            original_complete(job, result, error)
+
+        monkeypatch.setattr(worker, "_complete", complete)
+        search = asyncio.create_task(worker.search("Sindragosa", llm=llm))
+        try:
+            with pytest.raises(SearchClosed):
+                await asyncio.wait_for(search, 3)
+            await asyncio.gather(*closers)
+            assert prepared == [True] and len(closers) == 1
+            assert llm.calls == [] and llm.inflight == 0
+            assert not worker._requests and not worker._thread.is_alive()
+            with pytest.raises(SearchClosed):
+                await worker.search_text("late")
+        finally:
+            await asyncio.gather(search, *closers, return_exceptions=True)
+            await worker.aclose()
+    run(main())
+
+
 def test_close_is_shared_shielded_and_joins_running_work(library_path, monkeypatch):
     async def main():
         loop, entered, release = asyncio.get_running_loop(), asyncio.Event(), threading.Event()

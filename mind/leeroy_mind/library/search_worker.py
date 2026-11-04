@@ -134,6 +134,12 @@ class LibrarySearchWorker:
         try:
             plan = await self._submit(request, Library._prepare_search, query, k,
                                       _kinds(kinds), embed_available=llm is not None)
+            # Close may run after prepare completes but before this waiter resumes.
+            # Do not start embedding after close has captured its dependency drain.
+            if self._closed:
+                raise SearchClosed() from self._failure
+            if request.cancelled.is_set():
+                raise asyncio.CancelledError()
             qvec = None
             if plan.embed:
                 # No reader/transaction or physical job is held across this loop await.
