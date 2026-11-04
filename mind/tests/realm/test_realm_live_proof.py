@@ -12,7 +12,8 @@ from leeroy_mind import protocol
 from leeroy_mind.human import HumanIdentity
 from leeroy_mind.ingress import RowReceipt, _wire_origin, game_row_binding
 from leeroy_mind.realm.actions import ActionContext
-from leeroy_mind.realm.protocol import ArenaEnd, ChannelChat, PvpKill, RealmKill, Wg
+from leeroy_mind.realm.protocol import (ArenaEnd, ChannelChat, DuelEnd, PvpKill, RealmAchievement,
+                                        RealmDungeonKill, RealmKill, Wg)
 from leeroy_mind.realm.provenance import (
     audit_public_in_unit, capture_qualification_in_unit, public_fact_draft,
     public_fact_in_unit, public_proof_from_json, public_proof_to_json,
@@ -30,6 +31,9 @@ TYPES = {
     'pvp_result_v1': ('pvp_kill', PvpKill),
     'channel_raid_topic_v1': ('channel_chat', ChannelChat),
     'verified_raid_kill_v1': ('realm_kill', RealmKill),
+    'realm_first_achievement_v1': ('realm_achievement', RealmAchievement),
+    'duel_result_v1': ('duel_end', DuelEnd),
+    'verified_dungeon_kill_v1': ('realm_dungeon_kill', RealmDungeonKill),
 }
 PAYLOADS = {
     'bg_result_v1': dict(ts=1000000, bg_type=1, winner='horde', members=[201, 101, 10]),
@@ -43,6 +47,13 @@ PAYLOADS = {
         guild_id=50, human_guid=10, killed_at_ms=999990, verified_at_ms=999999,
         fight_started_at_ms=999000, fight_ms=2345, attempts=0, map=631, instance_id=9, boss_id=0,
         difficulty=0, size=10, heroic=False, human_present=True, cast_members=[101, 102, 103, 104, 105]),
+    'realm_first_achievement_v1': dict(ts=1000000, guid=101, achievement_id=457, name='Realm First! Level 80',
+        category=81, flags=0x100, realm_first=True),
+    'duel_result_v1': dict(ts=1000000, winner=201, loser=10, result='won', map=1, zone=14, city=False),
+    'verified_dungeon_kill_v1': dict(ts=1000000, kill_id='c' * 32 + ':1', native_epoch=29,
+        guild_id=50, human_guid=10, killed_at_ms=999990, verified_at_ms=999999,
+        fight_started_at_ms=999000, fight_ms=2345, attempts=2, map=601, instance_id=12, boss_id=2,
+        difficulty=1, size=5, heroic=True, human_present=True, cast_members=[101, 102, 103, 104]),
 }
 EXPECTED = {
     'bg_result_v1': ('Horde won battleground type 1.', [[50, 'present'], [60, 'present']]),
@@ -51,7 +62,15 @@ EXPECTED = {
     'pvp_result_v1': ('Character 201 defeated character 10 in zone 0.', [[50, 'present'], [60, 'present']]),
     'channel_raid_topic_v1': ('A public trade message discussed Icecrown Citadel.', [[50, 'own']]),
     'verified_raid_kill_v1': ('The guild killed Lord Marrowgar.', [[50, 'own'], [60, 'server']]),
+    'realm_first_achievement_v1': ('Character 101 earned Realm First! Level 80.', [[50, 'own'], [60, 'server']]),
+    'duel_result_v1': ('Character 201 beat character 10 in a duel in zone 14.', [[50, 'present'], [60, 'present']]),
+    'verified_dungeon_kill_v1': ("The guild defeated Anub'arak in Azjol-Nerub.", [[50, 'own'], [60, 'server']]),
 }
+# The fact kind each policy writes.
+KINDS = {'bg_result_v1': 'bg_result', 'arena_result_v1': 'arena_result', 'wg_result_v1': 'wg_result',
+         'pvp_result_v1': 'pvp_kill', 'channel_raid_topic_v1': 'channel_topic', 'verified_raid_kill_v1': 'kill',
+         'realm_first_achievement_v1': 'realm_first', 'duel_result_v1': 'duel_result',
+         'verified_dungeon_kill_v1': 'kill'}
 
 
 def canonical(value):
@@ -89,7 +108,8 @@ def observe(store, policy='bg_result_v1', *, payload=None, raw_extra=None, trans
     envelope = dict(v=1, type=wire_type, **data, **(raw_extra or {}))
     wire = _wire_origin(canonical(envelope), received_at=received, transport_epoch=transport)
     assert wire is not None
-    row_id = insert(store, 'game_event', ts=received, type=wire_type, guid=None,
+    # As the App's row: an event's own guid field (an achievement's earner), else none.
+    row_id = insert(store, 'game_event', ts=received, type=wire_type, guid=data.get('guid'),
                     payload=canonical(data), session_id=None)
     receipt = RowReceipt('game_event', row_id, game_row_binding(row_id, wire_type, data), wire, backlog)
     qualification = capture_qualification_in_unit(store, human=human, event=event, receipt=receipt,
@@ -109,7 +129,7 @@ def changed_observation(store, observation, policy, **changes):
     wire = _wire_origin(canonical(dict(v=1, type=wire_type, **payload)),
                         received_at=1011.0, transport_epoch=7)
     assert wire is not None
-    row_id = insert(store, 'game_event', ts=1011.0, type=wire_type, guid=None,
+    row_id = insert(store, 'game_event', ts=1011.0, type=wire_type, guid=payload.get('guid'),
                     payload=canonical(payload), session_id=None)
     receipt = RowReceipt('game_event', row_id, game_row_binding(row_id, wire_type, payload), wire, False)
     return replace(observation, event=event, receipt=receipt)
@@ -130,10 +150,7 @@ def origin_rows(store, source, proof, *, revision=1):
     """Raw persisted-origin fixtures exercise the reader, not a producer stub."""
     draft = public_fact_draft(proof, source)
     text = render_public(proof.policy, dict(draft.output_fields))
-    kind = {'bg_result_v1': 'bg_result', 'arena_result_v1': 'arena_result', 'wg_result_v1': 'wg_result',
-            'pvp_result_v1': 'pvp_kill', 'channel_raid_topic_v1': 'channel_topic',
-            'verified_raid_kill_v1': 'kill'}[proof.policy]
-    fact_id = insert(store, 'realm_fact', kind=kind, text=text,
+    fact_id = insert(store, 'realm_fact', kind=KINDS[proof.policy], text=text,
         source='channel' if proof.policy == 'channel_raid_topic_v1' else 'event',
         ref=proof.roots[0], public=1, ts=source.server_ms / 1000)
     insert(store, 'realm_fact_origin', fact=fact_id, producer_key=draft.producer_key, source=source.id,

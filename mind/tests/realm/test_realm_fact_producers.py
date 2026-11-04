@@ -1,11 +1,11 @@
-"""Six real producer paths, using captured observations and source proofs."""
+"""Every real producer path, using captured observations and source proofs."""
 import json
 
 import pytest
 
 from leeroy_mind.realm.fact_store import FactStore
 from leeroy_mind.realm.records import FactRow, Rejected
-from test_realm_live_proof import EXPECTED, HUMAN, TYPES, observe, roster
+from test_realm_live_proof import EXPECTED, HUMAN, KINDS, TYPES, observe, roster
 
 
 @pytest.mark.parametrize('policy', list(TYPES))
@@ -16,9 +16,7 @@ def test_producers_use_the_actual_audit_and_complete_initial_knowledge(roster, p
     fact = facts.record(observation, human=HUMAN)
     assert type(fact) is FactRow
     text, knowledge = EXPECTED[policy]
-    kind = {'bg_result_v1': 'bg_result', 'arena_result_v1': 'arena_result',
-            'wg_result_v1': 'wg_result', 'pvp_result_v1': 'pvp_kill',
-            'channel_raid_topic_v1': 'channel_topic', 'verified_raid_kill_v1': 'kill'}[policy]
+    kind = KINDS[policy]
     assert (fact.kind, fact.text, fact.source, fact.ref, fact.ts, fact.revision) == (
         kind, text, 'channel' if policy == 'channel_raid_topic_v1' else 'event',
         f'event:{observation.receipt.row_id}', 1000.0, 1)
@@ -32,6 +30,8 @@ def test_producers_use_the_actual_audit_and_complete_initial_knowledge(roster, p
                     'WHERE fact=? ORDER BY guild', (fact.id,))] == knowledge
         assert facts.get_in_unit(fact.id, human=HUMAN)[0] == fact
         assert roster.conn.execute('SELECT count(*) FROM realm_kill').fetchone()[0] == (policy == 'verified_raid_kill_v1')
+        assert roster.conn.execute('SELECT count(*) FROM realm_dungeon_kill').fetchone()[0] == (
+            policy == 'verified_dungeon_kill_v1')
 
 
 def test_four_native_cast_without_human_rejected_without_realm_output(roster):

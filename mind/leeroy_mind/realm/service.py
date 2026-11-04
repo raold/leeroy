@@ -42,7 +42,8 @@ _DIRECT = frozenset({protocol.RealmActors, protocol.RealmSay, protocol.RealmEmot
                      protocol.CalendarUpdate, protocol.BankMoney,
                      protocol.GuildRename, protocol.ItemCount})
 _SOURCES = frozenset({BgEnd, protocol.ArenaEnd, protocol.Wg, protocol.PvpKill,
-                      protocol.ChannelChat, protocol.RealmKill})
+                      protocol.ChannelChat, protocol.RealmKill, protocol.RealmAchievement,
+                      protocol.DuelEnd, protocol.RealmDungeonKill})
 _GUARD_ALERTS = frozenset({"gone", "blocked"})
 
 
@@ -305,6 +306,7 @@ class Realm:
                 human = self.ports.human()
                 ev = observation.event
                 if type(ev) is not protocol.RealmKill:
+                    # A 5-man kill is a fact or nothing: never retained privately, never announced.
                     return self._facts.put_fact_in_unit(observation, human=human)
                 existing = self._source_store.conn.execute(
                     "SELECT fact FROM realm_kill WHERE kill_id=?", (ev.kill_id,)).fetchone()

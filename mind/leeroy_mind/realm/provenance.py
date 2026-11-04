@@ -20,10 +20,11 @@ from leeroy_mind.personas.schema import persona_from_dict
 from leeroy_mind.personas.screens import ROMANCE_RE, names_real_name
 from leeroy_mind.protocol import BgEnd, sanitize_say_text
 from leeroy_mind.storage.store import Store
-from leeroy_mind.wow import BOSS_NAMES, RAID_INSTANCES, is_raid_fight
+from leeroy_mind.wow import BOSS_NAMES, DUNGEON_BOSS_NAMES, DUNGEONS, RAID_INSTANCES, is_raid_fight
 
 from .actions import ActionContext
-from .protocol import ArenaEnd, ChannelChat, PvpKill, RealmKill, Wg
+from .protocol import (ArenaEnd, ChannelChat, DuelEnd, PvpKill, RealmAchievement, RealmDungeonKill,
+                       RealmKill, Wg)
 from .records import (ActorQualification, FactDraft, FactRow, ForumCandidate, ProofNode,
                       PublicProof, QualificationSnapshot, RealmFactReadStamp, RealmObservation,
                       RealmReadStamp, Rejected, StoredSource)
@@ -524,7 +525,15 @@ _LIVE = {
     'pvp_result_v1': (PvpKill, 'pvp_kill', 'pvp_kill', 'observed_event'),
     'channel_raid_topic_v1': (ChannelChat, 'channel_chat', 'channel_topic', 'observed_topic'),
     'verified_raid_kill_v1': (RealmKill, 'realm_kill', 'kill', 'verified_event'),
+    'realm_first_achievement_v1': (RealmAchievement, 'realm_achievement', 'realm_first', 'observed_event'),
+    'duel_result_v1': (DuelEnd, 'duel_end', 'duel_result', 'observed_event'),
+    'verified_dungeon_kill_v1': (RealmDungeonKill, 'realm_dungeon_kill', 'kill', 'verified_event'),
 }
+# Native guild kills (one wire body for both) and the catalogue each one's boss must be in.
+_KILLS = {'verified_raid_kill_v1': 'raid_catalogue_v1', 'verified_dungeon_kill_v1': 'dungeon_catalogue_v1'}
+# Facts the whole server knows: the guild itself as 'own', every rival guild as 'server'.
+_SERVER_WIDE = ('wg_result_v1', 'realm_first_achievement_v1', *_KILLS)
+_DUEL_RESULTS = ('won', 'fled')  # 'interrupted' has no winner, so it is no result
 _SOURCE_COLUMNS = ('id,source_key,protocol_version,event_type,game_event_id,chat_line_id,'
                    'row_sha256,server_ms,received_at,guild,human,top_keys_json')
 _U64 = (1 << 64) - 1
@@ -726,6 +735,33 @@ def _live_output(policy, output):
                 or output['raid_id'] not in RAID_INSTANCES):
             _fail()
         return f"A public {output['channel']} message discussed {RAID_INSTANCES[output['raid_id']]}."
+    if policy == 'realm_first_achievement_v1':
+        _keys(output, {'achievement_id', 'guid', 'name'})
+        _integer(output['achievement_id'], 1); _integer(output['guid'], 1)
+        # Native DBC text; the fact text it makes goes through every screen and cleaning step.
+        if type(output['name']) is not str or not 1 <= len(_utf8(output['name'])) <= 128:
+            _fail('unsupported_text')
+        return f"Character {output['guid']} earned {output['name']}."
+    if policy == 'duel_result_v1':
+        _keys(output, {'winner', 'loser', 'result', 'zone'})
+        _integer(output['winner'], 1); _integer(output['loser'], 1); _integer(output['zone'])
+        if (output['winner'] == output['loser'] or type(output['result']) is not str
+                or output['result'] not in _DUEL_RESULTS):
+            _fail()
+        if output['result'] == 'won':
+            return (f"Character {output['winner']} beat character {output['loser']} in a duel "
+                    f"in zone {output['zone']}.")
+        return (f"Character {output['loser']} fled a duel with character {output['winner']} "
+                f"in zone {output['zone']}.")
+    if policy == 'verified_dungeon_kill_v1':
+        _keys(output, {'catalogue', 'map', 'boss_id'})
+        _integer(output['map']); _integer(output['boss_id'])
+        if (type(output['catalogue']) is not str or output['catalogue'] != 'dungeon_catalogue_v1'
+                or (output['map'], output['boss_id']) not in DUNGEON_BOSS_NAMES):
+            _fail('topic_mismatch')
+        # Defeated: some 5-man fights end without a death (Mal'Ganis, the Argent Champion).
+        return (f"The guild defeated {DUNGEON_BOSS_NAMES[output['map'], output['boss_id']]} "
+                f"in {DUNGEONS[output['map']]}.")
     _keys(output, {'catalogue', 'map', 'boss_id'})
     _integer(output['map']); _integer(output['boss_id'])
     if (type(output['catalogue']) is not str or output['catalogue'] != 'raid_catalogue_v1'
@@ -794,11 +830,36 @@ def _derive(policy, payload, snapshot, human, *, qualify=True):
         output = dict(catalogue='raid_catalogue_v1', channel=payload['channel'],
                       raid_id=_channel_raid(payload['text'], human))
         participants = [payload['from_guid']]
-    else:
-        # The real 19-key wire class checks the exact native mode, duration pair,
-        # timestamps, kill id, native epoch and sorted bounded native manifest.
+    elif policy == 'realm_first_achievement_v1':
+        # The real wire class checks every field, and that a realm first carries its DBC flag.
         try:
-            RealmKill(**{**payload, 'cast_members': tuple(_ids(payload['cast_members']))})
+            RealmAchievement(**payload)
+        except (ValueError, TypeError):
+            _fail()
+        # Every earned achievement is published (never a quiet grant); only a realm first is a fact.
+        if payload['realm_first'] is not True:
+            _fail('private_evidence')
+        participants = [payload['guid']]
+        if qualify and payload['guid'] not in (snapshot.human, *snapshot.cast):
+            _fail('private_evidence')
+        output = {key: payload[key] for key in ('achievement_id', 'guid', 'name')}
+    elif policy == 'duel_result_v1':
+        winner, loser = _integer(payload['winner'], 1), _integer(payload['loser'], 1)
+        _integer(payload['map']); _integer(payload['zone'])
+        if (winner == loser or type(payload['city']) is not bool or type(payload['result']) is not str
+                or payload['result'] not in (*_DUEL_RESULTS, 'interrupted')):
+            _fail()
+        # A duel in a city zone (either duelist's) is never a fact, nor one without a winner.
+        if payload['city'] or payload['result'] not in _DUEL_RESULTS:
+            _fail('private_evidence')
+        output = {key: payload[key] for key in ('winner', 'loser', 'result', 'zone')}
+        participants = sorted([winner, loser])
+    else:
+        # The real wire class (raid or 5-man, one body) checks every field: the exact native
+        # mode, the duration pair, the attempt count, timestamps, kill id, native epoch and
+        # the sorted bounded native manifest.
+        try:
+            cls(**{**payload, 'cast_members': tuple(_ids(payload['cast_members']))})
         except (ValueError, TypeError):
             _fail()
         if (payload['guild_id'], payload['human_guid']) != (snapshot.guild, snapshot.human):
@@ -808,7 +869,7 @@ def _derive(policy, payload, snapshot, human, *, qualify=True):
         qualified = sorted(set(payload['cast_members']) & set(snapshot.cast))
         if qualify and not payload['human_present'] and len(qualified) < 5:
             _fail('private_evidence')
-        output = dict(catalogue='raid_catalogue_v1', map=payload['map'], boss_id=payload['boss_id'])
+        output = dict(catalogue=_KILLS[policy], map=payload['map'], boss_id=payload['boss_id'])
     text = _live_output(policy, output)
     _screen(text, human)
     from leeroy_mind.memory.writer import clean_memory_text
@@ -818,7 +879,7 @@ def _derive(policy, payload, snapshot, human, *, qualify=True):
         # Replay still validates every raw field and current privacy rule. Its
         # original active origin alone supplies participant/speaker admission.
         return output, participants, native, qualified, []
-    if policy in ('wg_result_v1', 'verified_raid_kill_v1'):
+    if policy in _SERVER_WIDE:
         known = {snapshot.guild: 'own', **{guild: 'server' for guild in snapshot.rival_guilds}}
     elif policy == 'channel_raid_topic_v1':
         known = {snapshot.speaker_guild: 'own'}
@@ -873,10 +934,14 @@ def _live_row(store, row_id, policy, *, counter=None):
         if sum(len(_utf8(value)) for value in row.values() if type(value) is str) > 65536:
             _fail('graph_limit')
     _integer(row['id'], 1, _SQLITE_MAX); _seconds(row['ts']); _nullable_id(row['session_id'])
-    if row['guid'] is not None or type(row['type']) is not str or row['type'] != _LIVE[policy][1]:
+    if type(row['type']) is not str or row['type'] != _LIVE[policy][1]:
         _fail()
     row['payload'] = _strict_json(row['payload'])
     _keys(row['payload'], {field.name for field in fields(_LIVE[policy][0])})
+    # The App's row keeps an event's own guid field (an achievement's earner), else none.
+    guid = row['payload'].get('guid')
+    if type(row['guid']) is not type(guid) or row['guid'] != guid:
+        _fail()
     return row
 
 
@@ -1210,7 +1275,7 @@ def _qualification_sets(policy, qualification, snapshot):
     """Structural consistency only; raw-source revalidation is still required."""
     participants = qualification['participants']
     native, qualified = qualification['native_present'], qualification['qualified_cast']
-    if policy == 'verified_raid_kill_v1':
+    if policy in _KILLS:
         if (snapshot.speaker_kind != 'none' or participants != native or not native
                 or qualified != sorted((set(native) - {snapshot.human}) & set(snapshot.cast))
                 or (snapshot.human not in native and len(qualified) < 5)):
@@ -1226,9 +1291,12 @@ def _qualification_sets(policy, qualification, snapshot):
             _fail()
         if policy == 'wg_result_v1' and participants:
             _fail()
-        if policy == 'pvp_result_v1' and len(participants) != 2:
+        if policy in ('pvp_result_v1', 'duel_result_v1') and len(participants) != 2:
             _fail()
-        if policy in ('wg_result_v1', 'verified_raid_kill_v1'):
+        if policy == 'realm_first_achievement_v1' and (
+                len(participants) != 1 or participants[0] not in (snapshot.human, *snapshot.cast)):
+            _fail()
+        if policy in _SERVER_WIDE:
             known = {snapshot.guild: 'own', **{guild: 'server' for guild in snapshot.rival_guilds}}
         else:
             known = {snapshot.guild: 'present'} if set(participants) & {snapshot.human, *snapshot.cast} else {}
@@ -1281,6 +1349,10 @@ def _validated_proof(proof):
             _fail('proof_changed')
         _live_output(proof.policy, output)
         if proof.policy == 'pvp_result_v1' and qualification['participants'] != sorted([output['killer'], output['victim']]):
+            _fail()
+        if proof.policy == 'duel_result_v1' and qualification['participants'] != sorted([output['winner'], output['loser']]):
+            _fail()
+        if proof.policy == 'realm_first_achievement_v1' and qualification['participants'] != [output['guid']]:
             _fail()
     else:
         _fail('unsupported_policy')
@@ -1590,7 +1662,7 @@ class _RealmReader(_Resolver):
             if row['text'] != fact.text or row['t_event'] != int(fact.ts):
                 continue
             boss, raid = row['boss_id'], row['raid_id']
-            if proof.policy == 'verified_raid_kill_v1':
+            if proof.policy in _KILLS:
                 if ((boss is None or boss == output['boss_id'])
                         and (raid is None or raid == output['map'])):
                     return
