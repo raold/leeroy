@@ -1,0 +1,85 @@
+{
+  "kind": "leeroy-dojo-training-rules",
+  "format": 1,
+  "about": "What a dojo training realm's configuration may and must say. Each file starts as the isolated build's .dist (stock AzerothCore and playerbots values, WotLK rules). 'training' keys are the deliberate differences, each with its reason; 'ordinary' keys must keep their stock value; 'isolation' keys hold this machine's paths, ports and credentials and are checked separately (loopback, dojo ports, dojo schemas). Every other key must equal the .dist, and every .dist key must be present, so no compiled-in default can differ unseen. scripts/dojo/preflight.ps1 enforces this before any start; python -m leeroy_dojo realm provision writes it.",
+  "files": {
+    "worldserver.conf": {
+      "dist": "worldserver.conf.dist",
+      "isolation": [
+        "LoginDatabaseInfo", "WorldDatabaseInfo", "CharacterDatabaseInfo",
+        "WorldServerPort", "Ra.Port", "SOAP.Port",
+        "DataDir", "LogsDir", "TempDir", "SourceDirectory", "MySQLExecutable", "PidFile",
+        "UseProcessors"
+      ],
+      "training": {
+        "BindIP": {"value": "127.0.0.1", "why": "loopback only; the training realm takes no outside client"},
+        "MapUpdate.Threads": {"value": "0", "why": "D11: map updates stay on the world thread for the first worker"},
+        "Console.Enable": {"value": "0", "why": "a hidden process has no console; it is driven through RA on loopback"},
+        "Ra.Enable": {"value": "1", "why": "the dojo tooling's control channel, bound to a dojo port on loopback"},
+        "Ra.IP": {"value": "127.0.0.1", "why": "loopback only"},
+        "SOAP.Enabled": {"value": "0", "why": "unused"},
+        "ProcessPriority": {"value": "0", "why": "never raise the training worker above the owner's game"},
+        "MinWorldUpdateTime": {"value": "10", "why": "at most one world update per 10 ms, the substep D07 fixes for the step driver; at the stock 1 ms an idle worker spends most of a core polling beside the owner's game"}
+      },
+      "ordinary": {
+        "Expansion": "2",
+        "MaxPlayerLevel": "80",
+        "Rate.Health": "1",
+        "Rate.Mana": "1",
+        "Rate.Rage.Income": "1",
+        "Rate.Rage.Loss": "1",
+        "Rate.RunicPower.Income": "1",
+        "Rate.RunicPower.Loss": "1",
+        "Rate.Focus": "1",
+        "Rate.Energy": "1",
+        "Rate.Talent": "1",
+        "Rate.MoveSpeed.Player": "1",
+        "Rate.Damage.Fall": "1",
+        "Rate.MissChanceMultiplier.TargetPlayer": "7",
+        "Rate.MissChanceMultiplier.OnlyAffectsPlayer": "0",
+        "Rate.Honor": "1",
+        "Rate.ArenaPoints": "1",
+        "DurabilityLoss.InPvP": "0",
+        "Arena.PrepTime": "60",
+        "PlayerStart.CustomSpells": "0",
+        "Updates.AutoSetup": "1",
+        "Updates.EnableDatabases": "7"
+      }
+    },
+    "modules/playerbots.conf": {
+      "dist": "modules/playerbots.conf.dist",
+      "isolation": ["PlayerbotsDatabaseInfo"],
+      "training": {
+        "Playerbots.RandomBotAutologin": {"value": "0", "why": "no random-bot population"},
+        "Playerbots.MinRandomBots": {"value": "0", "why": "no random-bot population"},
+        "Playerbots.MaxRandomBots": {"value": "0", "why": "no random-bot population, and no random-bot accounts are created"},
+        "Playerbots.AddClassAccountPoolSize": {"value": "0", "why": "no add-class accounts or characters are created"},
+        "Playerbots.RandomBotGuildCount": {"value": "0", "why": "no bot guilds"},
+        "Playerbots.RandomBotArenaTeam2v2Count": {"value": "0", "why": "no bot arena teams"},
+        "Playerbots.RandomBotArenaTeam3v3Count": {"value": "0", "why": "no bot arena teams"},
+        "Playerbots.RandomBotArenaTeam5v5Count": {"value": "0", "why": "no bot arena teams"},
+        "Playerbots.RandomBotJoinLfg": {"value": "0", "why": "no dungeon-finder queues"},
+        "Playerbots.RandomBotJoinBG": {"value": "0", "why": "no battleground queues"},
+        "Playerbots.RandomBotRaidBrowserListings": {"value": "0", "why": "no raid-browser listings (local patch)"},
+        "Playerbots.BotCheats": {"value": "", "why": "no bot cheats: the stock list is food,taxi,raid"},
+        "Playerbots.WorldBuffMatrix": {"value": "", "why": "no free world buffs (flasks and food) for bots"}
+      },
+      "ordinary": {
+        "Playerbots.Enabled": "1",
+        "Playerbots.RandomBotAccountCount": "0",
+        "Playerbots.DeleteRandomBotAccounts": "0",
+        "Playerbots.EnablePeriodicOnlineOffline": "0",
+        "Playerbots.AutoGearScoreLimit": "0"
+      }
+    },
+    "modules/mod_dojo.conf": {
+      "dist": "modules/mod_dojo.conf.dist",
+      "isolation": ["Dojo.Instance", "Dojo.Scenario.Manifest", "Dojo.Scenario.Sha256"],
+      "training": {
+        "Dojo.Enable": {"value": "1", "why": "this is the training realm"},
+        "Dojo.Marker": {"value": "leeroy-dojo-training", "why": "the training marker"}
+      },
+      "ordinary": {}
+    }
+  }
+}

@@ -74,6 +74,36 @@ jobs:
       - run: python -m pip install -e ".[test]"
       - run: python -m pytest -q
 
+  dojo-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: install boost
+        run: sudo apt-get update && sudo apt-get install -y libboost-dev
+      - name: build and run the pure mod-dojo tests
+        run: |
+          cmake -S modules/mod-dojo/tests -B t -DCMAKE_BUILD_TYPE=Release -DDOJO_WARNINGS_AS_ERRORS=ON
+          cmake --build t -j "$(nproc)"
+          ./t/dojo_tests
+      - name: golden fixture generator parses
+        run: python3 -m py_compile modules/mod-dojo/tests/fixtures/make_dojo_protocol.py
+
+  dojo:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dojo
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[test]"
+      # The preflight tests link directories with symlinks here; their junction paths only run on Windows.
+      - run: python -m pytest -q
+      - name: fake worker protocol smoke
+        run: python -m leeroy_dojo protocol-smoke --fake --out "$RUNNER_TEMP/dojo-smoke"
+
   voice-rehearsal:
     runs-on: ubuntu-latest
     timeout-minutes: 15

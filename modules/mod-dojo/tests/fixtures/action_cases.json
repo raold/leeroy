@@ -1,0 +1,750 @@
+{
+ "comment": "Shared cases for mod-dojo's DojoActionCatalog.cpp (tests/TestActions.cpp) and leeroy_dojo.actions (dojo/tests/test_actions.py). Open counts follow 1 + 27 per open ability with every facing open - 9 per front-facing cast (turning away) - 9 per closed facing per open ability.",
+ "kit": [
+  {
+   "spell_id": 42842,
+   "name": "Frostbolt",
+   "target": "enemy",
+   "facing": true
+  },
+  {
+   "spell_id": 42914,
+   "name": "Ice Lance",
+   "target": "enemy",
+   "facing": true
+  },
+  {
+   "spell_id": 42917,
+   "name": "Frost Nova",
+   "target": "self",
+   "facing": false
+  }
+ ],
+ "catalog": {
+  "size": 244,
+  "sha256": "60d4f7e4b05d7548bb142bb2e71e0a862809658470fd61dbe499fde86242712a",
+  "abilities": [
+   "none",
+   "frostbolt",
+   "ice_lance",
+   "frost_nova",
+   "stop_cast",
+   "target_enemy",
+   "clear_target",
+   "attack_on",
+   "attack_off"
+  ],
+  "names": {
+   "noop": 0,
+   "none/hold/keep": 1,
+   "none/hold/toward": 2,
+   "none/forward/keep": 4,
+   "frostbolt/hold/keep": 28,
+   "frostbolt/hold/toward": 29,
+   "frost_nova/hold/keep": 82,
+   "stop_cast/hold/keep": 109,
+   "attack_off/forward_right/away": 243
+  }
+ },
+ "bad_kits": [
+  {
+   "kit": [],
+   "error": "the kit is empty"
+  },
+  {
+   "kit": [
+    {
+     "spell_id": 0,
+     "name": "Frostbolt",
+     "target": "enemy",
+     "facing": true
+    }
+   ],
+   "error": "kit spell 0 needs an id, a name and a self or enemy target"
+  },
+  {
+   "kit": [
+    {
+     "spell_id": 1,
+     "name": "Frostbolt",
+     "target": "none",
+     "facing": true
+    }
+   ],
+   "error": "kit spell 0 needs an id, a name and a self or enemy target"
+  },
+  {
+   "kit": [
+    {
+     "spell_id": 1,
+     "name": "Frostbolt",
+     "target": "enemy",
+     "facing": true
+    },
+    {
+     "spell_id": 2,
+     "name": "frostbolt!",
+     "target": "enemy",
+     "facing": true
+    }
+   ],
+   "error": "kit spell frostbolt! repeats or reuses the ability name frostbolt"
+  },
+  {
+   "kit": [
+    {
+     "spell_id": 1,
+     "name": "Stop Cast",
+     "target": "self",
+     "facing": false
+    }
+   ],
+   "error": "kit spell Stop Cast repeats or reuses the ability name stop_cast"
+  }
+ ],
+ "masks": [
+  {
+   "name": "all open but stop_cast",
+   "knowledge": {
+    "alive": true,
+    "mana": 10000,
+    "mana_regen_bound": 0,
+    "casting": false,
+    "cast_remaining_ms": 0,
+    "cast_queued": false,
+    "kit": [
+     {
+      "known": true,
+      "cooldown_ms": 0,
+      "gcd_ms": 0,
+      "cost_known": true,
+      "cost": 400,
+      "range_known": true,
+      "max_range": 36.0
+     },
+     {
+      "known": true,
+      "cooldown_ms": 0,
+      "gcd_ms": 0,
+      "cost_known": true,
+      "cost": 400,
+      "range_known": true,
+      "max_range": 36.0
+     },
+     {
+      "known": true,
+      "cooldown_ms": 0,
+      "gcd_ms": 0,
+      "cost_known": true,
+      "cost": 300,
+      "range_known": false,
+      "max_range": 0.0
+     }
+    ],
+    "enemy_known": true,
+    "enemy_alive": true,
+    "enemy_distance": 20.0
+   },
+   "abilities": {
+    "none": "",
+    "frostbolt": "",
+    "ice_lance": "",
+    "frost_nova": "",
+    "stop_cast": "not casting",
+    "target_enemy": "",
+    "clear_target": "",
+    "attack_on": "",
+    "attack_off": ""
+   },
+   "facings": {
+    "keep": "",
+    "toward": "",
+    "away": ""
+   },
+   "open": 199,
+   "check": {
+    "noop": 1,
+    "frostbolt/forward/away": 0,
+    "frostbolt/forward/toward": 1,
+    "frost_nova/back/away": 1,
+    "stop_cast/hold/keep": 0
+   }
+  },
+  {
+   "name": "dead",
+   "knowledge": {
+    "alive": false,
+    "mana": 10000,
+    "mana_regen_bound": 0,
+    "casting": false,
+    "cast_remaining_ms": 0,
+    "cast_queued": false,
+    "kit": [
+     {
+      "known": true,
+      "cooldown_ms": 0,
+      "gcd_ms": 0,
+      "cost_known": true,
+      "cost": 400,
+      "range_known": true,
+      "max_range": 36.0
+     },
+     {
+      "known": true,
+      "cooldown_ms": 0,
+      "gcd_ms": 0,
+      "cost_known": true,
+      "cost": 400,
+      "range_known": true,
+      "max_range": 36.0
+     },
+     {
+      "known": true,
+      "cooldown_ms": 0,
+      "gcd_ms": 0,
+      "cost_known": true,
+      "cost": 300,
+      "range_known": false,
+      "max_range": 0.0
+     }
+    ],
+    "enemy_known": true,
+    "enemy_alive": true,
+    "enemy_distance": 20.0
+   },
+   "abilities": {
+    "none": "dead",
+    "frostbolt": "dead",
+    "ice_lance": "dead",
+    "frost_nova": "dead",
+    "stop_cast": "dead",
+    "target_enemy": "dead",
+    "clear_target": "dead",
+    "attack_on": "dead",
+    "attack_off": "dead"
+   },
+   "facings": {
+    "keep": "dead",
+    "toward": "dead",
+    "away": "dead"
+   },
+   "open": 1,
+   "check": {
+    "noop": 1,
+    "none/hold/keep": 0
+   }
+  },
+  {
+   "name": "no visible enemy",
+   "knowledge": {
+    "alive": true,
+    "mana": 10000,
+    "mana_regen_bound": 0,
+    "casting": false,
+    "cast_remaining_ms": 0,
+    "cast_queued": false,
+    "kit": [
+     {
+      "known": true,
+      "cooldown_ms": 0,
+      "gcd_ms": 0,
+      "cost_known": true,
+      "cost": 400,
+      "range_known": true,
+      "max_range": 36.0
+     },
+     {
+      "known": true,
+      "cooldown_ms": 0,
+      "gcd_ms": 0,
+      "cost_known": true,
+      "cost": 400,
+      "range_known": true,
+      "max_range": 36.0
+     },
+     {
+      "known": true,
+      "cooldown_ms": 0,
+      "gcd_ms": 0,
+      "cost_known": true,
+      "cost": 300,
+      "range_known": false,
+      "max_range": 0.0
+     }
+    ],
+    "enemy_known": false,
+    "enemy_alive": false,
+    "enemy_distance": 20.0
+   },
+   "abilities": {
+    "none": "",
+    "frostbolt": "no visible enemy",
+    "ice_lance": "no visible enemy",
+    "frost_nova": "",
+    "stop_cast": "not casting",
+    "target_enemy": "no visible enemy",
+    "clear_target": "",
+    "attack_on": "no visible enemy",
+    "attack_off": ""
+   },
+   "facings": {
+    "keep": "",
+    "toward": "no visible enemy",
+    "away": "no visible enemy"
+   },
+   "open": 37,
+   "check": {
+    "frost_nova/left/keep": 1,
+    "frost_nova/left/toward": 0,
+    "none/hold/keep": 1
+   }
+  },
+  {
+   "name": "waits at the boundary",
+   "knowledge": {
+    "alive": true,
+    "mana": 10000,
+    "mana_regen_bound": 0,
+    "casting": false,
+    "cast_remaining_ms": 0,
+    "cast_queued": true,
+    "kit": [
+     {
+      "known": true,
+      "cooldown_ms": 0,
+      "gcd_ms": 551,
+      "cost_known": true,
+      "cost": 400,
+      "range_known": true,
+      "max_range": 36.0
+     },
+     {
+      "known": true,
+      "cooldown_ms": 0,
+      "gcd_ms": 550,
+      "cost_known": true,
+      "cost": 400,
+      "range_known": true,
+      "max_range": 36.0
+     },
+     {
+      "known": true,
+      "cooldown_ms": 551,
+      "gcd_ms": 0,
+      "cost_known": true,
+      "cost": 300,
+      "range_known": false,
+      "max_range": 0.0
+     }
+    ],
+    "enemy_known": true,
+    "enemy_alive": true,
+    "enemy_distance": 20.0
+   },
+   "abilities": {
+    "none": "",
+    "frostbolt": "global cooldown",
+    "ice_lance": "",
+    "frost_nova": "cooldown",
+    "stop_cast": "",
+    "target_enemy": "",
+    "clear_target": "",
+    "attack_on": "",
+    "attack_off": ""
+   },
+   "facings": {
+    "keep": "",
+    "toward": "",
+    "away": ""
+   },
+   "open": 181,
+   "check": {
+    "ice_lance/hold/toward": 1,
+    "stop_cast/hold/keep": 1
+   }
+  },
+  {
+   "name": "casting",
+   "knowledge": {
+    "alive": true,
+    "mana": 10000,
+    "mana_regen_bound": 0,
+    "casting": true,
+    "cast_remaining_ms": 1800,
+    "cast_queued": false,
+    "kit": [
+     {
+      "known": true,
+      "cooldown_ms": 0,
+      "gcd_ms": 0,
+      "cost_known": true,
+      "cost": 400,
+      "range_known": true,
+      "max_range": 36.0
+     },
+     {
+      "known": true,
+      "cooldown_ms": 0,
+      "gcd_ms": 0,
+      "cost_known": true,
+      "cost": 400,
+      "range_known": true,
+      "max_range": 36.0
+     },
+     {
+      "known": true,
+      "cooldown_ms": 0,
+      "gcd_ms": 0,
+      "cost_known": true,
+      "cost": 300,
+      "range_known": false,
+      "max_range": 0.0
+     }
+    ],
+    "enemy_known": true,
+    "enemy_alive": true,
+    "enemy_distance": 20.0
+   },
+   "abilities": {
+    "none": "",
+    "frostbolt": "casting",
+    "ice_lance": "casting",
+    "frost_nova": "casting",
+    "stop_cast": "",
+    "target_enemy": "",
+    "clear_target": "",
+    "attack_on": "",
+    "attack_off": ""
+   },
+   "facings": {
+    "keep": "",
+    "toward": "",
+    "away": ""
+   },
+   "open": 163,
+   "check": {
+    "stop_cast/back/keep": 1,
+    "ice_lance/hold/toward": 0
+   }
+  },
+  {
+   "name": "casting about to finish",
+   "knowledge": {
+    "alive": true,
+    "mana": 10000,
+    "mana_regen_bound": 0,
+    "casting": true,
+    "cast_remaining_ms": 550,
+    "cast_queued": false,
+    "kit": [
+     {
+      "known": true,
+      "cooldown_ms": 0,
+      "gcd_ms": 0,
+      "cost_known": true,
+      "cost": 400,
+      "range_known": true,
+      "max_range": 36.0
+     },
+     {
+      "known": true,
+      "cooldown_ms": 0,
+      "gcd_ms": 0,
+      "cost_known": true,
+      "cost": 400,
+      "range_known": true,
+      "max_range": 36.0
+     },
+     {
+      "known": true,
+      "cooldown_ms": 0,
+      "gcd_ms": 0,
+      "cost_known": true,
+      "cost": 300,
+      "range_known": false,
+      "max_range": 0.0
+     }
+    ],
+    "enemy_known": true,
+    "enemy_alive": true,
+    "enemy_distance": 20.0
+   },
+   "abilities": {
+    "none": "",
+    "frostbolt": "",
+    "ice_lance": "",
+    "frost_nova": "",
+    "stop_cast": "",
+    "target_enemy": "",
+    "clear_target": "",
+    "attack_on": "",
+    "attack_off": ""
+   },
+   "facings": {
+    "keep": "",
+    "toward": "",
+    "away": ""
+   },
+   "open": 226,
+   "check": {
+    "ice_lance/hold/toward": 1
+   }
+  },
+  {
+   "name": "mana and range",
+   "knowledge": {
+    "alive": true,
+    "mana": 300,
+    "mana_regen_bound": 99,
+    "casting": false,
+    "cast_remaining_ms": 0,
+    "cast_queued": false,
+    "kit": [
+     {
+      "known": true,
+      "cooldown_ms": 0,
+      "gcd_ms": 0,
+      "cost_known": true,
+      "cost": 400,
+      "range_known": true,
+      "max_range": 36.0
+     },
+     {
+      "known": true,
+      "cooldown_ms": 0,
+      "gcd_ms": 0,
+      "cost_known": true,
+      "cost": 399,
+      "range_known": true,
+      "max_range": 35.5
+     },
+     {
+      "known": true,
+      "cooldown_ms": 0,
+      "gcd_ms": 0,
+      "cost_known": true,
+      "cost": 0,
+      "range_known": false,
+      "max_range": 0.0
+     }
+    ],
+    "enemy_known": true,
+    "enemy_alive": true,
+    "enemy_distance": 38.9
+   },
+   "abilities": {
+    "none": "",
+    "frostbolt": "mana",
+    "ice_lance": "out of range",
+    "frost_nova": "",
+    "stop_cast": "not casting",
+    "target_enemy": "",
+    "clear_target": "",
+    "attack_on": "",
+    "attack_off": ""
+   },
+   "facings": {
+    "keep": "",
+    "toward": "",
+    "away": ""
+   },
+   "open": 163,
+   "check": {
+    "frostbolt/hold/toward": 0,
+    "frost_nova/hold/keep": 1
+   }
+  },
+  {
+   "name": "unknown spell and a dead enemy",
+   "knowledge": {
+    "alive": true,
+    "mana": 10000,
+    "mana_regen_bound": 0,
+    "casting": false,
+    "cast_remaining_ms": 0,
+    "cast_queued": false,
+    "kit": [
+     {
+      "known": false,
+      "cooldown_ms": 0,
+      "gcd_ms": 0,
+      "cost_known": true,
+      "cost": 400,
+      "range_known": true,
+      "max_range": 36.0
+     },
+     {
+      "known": true,
+      "cooldown_ms": 0,
+      "gcd_ms": 0,
+      "cost_known": true,
+      "cost": 400,
+      "range_known": true,
+      "max_range": 36.0
+     },
+     {
+      "known": true,
+      "cooldown_ms": 0,
+      "gcd_ms": 0,
+      "cost_known": true,
+      "cost": 300,
+      "range_known": false,
+      "max_range": 0.0
+     }
+    ],
+    "enemy_known": true,
+    "enemy_alive": false,
+    "enemy_distance": 20.0
+   },
+   "abilities": {
+    "none": "",
+    "frostbolt": "not known",
+    "ice_lance": "enemy dead",
+    "frost_nova": "",
+    "stop_cast": "not casting",
+    "target_enemy": "",
+    "clear_target": "",
+    "attack_on": "enemy dead",
+    "attack_off": ""
+   },
+   "facings": {
+    "keep": "",
+    "toward": "",
+    "away": ""
+   },
+   "open": 136,
+   "check": {
+    "target_enemy/hold/toward": 1
+   }
+  },
+  {
+   "name": "what is not known stays open",
+   "knowledge": {
+    "alive": true,
+    "mana": 0,
+    "mana_regen_bound": 0,
+    "casting": false,
+    "cast_remaining_ms": 0,
+    "cast_queued": false,
+    "kit": [
+     {
+      "known": true,
+      "cooldown_ms": 0,
+      "gcd_ms": 0,
+      "cost_known": false,
+      "cost": 400,
+      "range_known": false,
+      "max_range": 36.0
+     },
+     {
+      "known": true,
+      "cooldown_ms": 0,
+      "gcd_ms": 0,
+      "cost_known": false,
+      "cost": 400,
+      "range_known": false,
+      "max_range": 36.0
+     },
+     {
+      "known": true,
+      "cooldown_ms": 0,
+      "gcd_ms": 0,
+      "cost_known": false,
+      "cost": 400,
+      "range_known": false,
+      "max_range": 36.0
+     }
+    ],
+    "enemy_known": true,
+    "enemy_alive": true,
+    "enemy_distance": 500.0
+   },
+   "abilities": {
+    "none": "",
+    "frostbolt": "",
+    "ice_lance": "",
+    "frost_nova": "",
+    "stop_cast": "not casting",
+    "target_enemy": "",
+    "clear_target": "",
+    "attack_on": "",
+    "attack_off": ""
+   },
+   "facings": {
+    "keep": "",
+    "toward": "",
+    "away": ""
+   },
+   "open": 199,
+   "check": {
+    "frostbolt/hold/toward": 1
+   }
+  },
+  {
+   "name": "a slower command delay masks more",
+   "rules": {
+    "command_delay_ms": 0,
+    "queue_window_ms": 0,
+    "range_slack_yards": 0.0
+   },
+   "knowledge": {
+    "alive": true,
+    "mana": 10000,
+    "mana_regen_bound": 0,
+    "casting": false,
+    "cast_remaining_ms": 0,
+    "cast_queued": false,
+    "kit": [
+     {
+      "known": true,
+      "cooldown_ms": 0,
+      "gcd_ms": 1,
+      "cost_known": true,
+      "cost": 400,
+      "range_known": true,
+      "max_range": 36.0
+     },
+     {
+      "known": true,
+      "cooldown_ms": 0,
+      "gcd_ms": 0,
+      "cost_known": true,
+      "cost": 400,
+      "range_known": true,
+      "max_range": 36.0
+     },
+     {
+      "known": true,
+      "cooldown_ms": 1,
+      "gcd_ms": 0,
+      "cost_known": true,
+      "cost": 300,
+      "range_known": false,
+      "max_range": 0.0
+     }
+    ],
+    "enemy_known": true,
+    "enemy_alive": true,
+    "enemy_distance": 36.5
+   },
+   "abilities": {
+    "none": "",
+    "frostbolt": "out of range",
+    "ice_lance": "out of range",
+    "frost_nova": "cooldown",
+    "stop_cast": "not casting",
+    "target_enemy": "",
+    "clear_target": "",
+    "attack_on": "",
+    "attack_off": ""
+   },
+   "facings": {
+    "keep": "",
+    "toward": "",
+    "away": ""
+   },
+   "open": 136,
+   "check": {}
+  }
+ ]
+}

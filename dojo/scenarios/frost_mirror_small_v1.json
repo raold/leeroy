@@ -1,0 +1,87 @@
+{
+  "kind": "leeroy-dojo-scenario",
+  "format": 1,
+  "id": "frost_mirror_small_v1",
+  "curriculum": "frost_mirror_small",
+  "version": 1,
+  "description": "Two level-80 Human Frost Mages with one frozen loadout, one per side of an unrated training Nagrand Arena that no queue can join. Restricted kit: Frostbolt, Ice Lance and Frost Nova, plus movement and stop-cast.",
+  "rules": {"rated": false, "prep_seconds": 60, "match_seconds": 180},
+  "arena": {
+    "map_id": 559,
+    "map": "Nagrand Arena",
+    "battleground_type_id": 4,
+    "battleground": "Nagrand Arena",
+    "arena_type": 2,
+    "bounds": {"x": 4055.5, "y": 2919.66, "radius": 70.0, "z_min": 0.0, "z_max": 40.0}
+  },
+  "fixture": {
+    "account": "DOJOFIXTURE",
+    "staging": {"map_id": 1, "x": 16222.1, "y": 16252.1, "z": 12.5872, "o": 0.0}
+  },
+  "actors": [
+    {"slot": 0, "name": "Dojofrosta", "team": "alliance", "start": {"x": 4027.6, "y": 2972.78, "z": 12.0723, "o": 0.0}},
+    {"slot": 1, "name": "Dojofrostb", "team": "horde", "start": {"x": 4085.45, "y": 2866.83, "z": 12.4005, "o": 3.14159}}
+  ],
+  "loadout": {
+    "level": 80,
+    "race": {"id": 1, "name": "Human"},
+    "class": {"id": 8, "name": "Mage"},
+    "gender": 0,
+    "appearance": {"skin": 0, "face": 0, "hair_style": 0, "hair_color": 0, "facial_hair": 0},
+    "talents": [
+      {"talent_id": 38, "rank": 3, "spell_id": 12497, "name": "Frostbite"},
+      {"talent_id": 37, "rank": 5, "spell_id": 16766, "name": "Improved Frostbolt"},
+      {"talent_id": 62, "rank": 3, "spell_id": 55094, "name": "Ice Floes"},
+      {"talent_id": 73, "rank": 3, "spell_id": 15047, "name": "Ice Shards"},
+      {"talent_id": 70, "rank": 2, "spell_id": 28332, "name": "Frost Warding"},
+      {"talent_id": 1649, "rank": 3, "spell_id": 29440, "name": "Precision"},
+      {"talent_id": 65, "rank": 3, "spell_id": 12571, "name": "Permafrost"},
+      {"talent_id": 61, "rank": 3, "spell_id": 12953, "name": "Piercing Ice"},
+      {"talent_id": 69, "rank": 1, "spell_id": 12472, "name": "Icy Veins"},
+      {"talent_id": 741, "rank": 2, "spell_id": 16758, "name": "Arctic Reach"},
+      {"talent_id": 66, "rank": 3, "spell_id": 12519, "name": "Frost Channeling"},
+      {"talent_id": 67, "rank": 3, "spell_id": 12983, "name": "Shatter"},
+      {"talent_id": 72, "rank": 1, "spell_id": 11958, "name": "Cold Snap"},
+      {"talent_id": 64, "rank": 3, "spell_id": 12490, "name": "Improved Cone of Cold"},
+      {"talent_id": 1736, "rank": 3, "spell_id": 31669, "name": "Frozen Core"},
+      {"talent_id": 1737, "rank": 2, "spell_id": 55092, "name": "Cold as Ice"},
+      {"talent_id": 68, "rank": 3, "spell_id": 28593, "name": "Winter's Chill"},
+      {"talent_id": 71, "rank": 1, "spell_id": 11426, "name": "Ice Barrier"},
+      {"talent_id": 2214, "rank": 2, "spell_id": 54787, "name": "Shattered Barrier"},
+      {"talent_id": 1738, "rank": 5, "spell_id": 31678, "name": "Arctic Winds"},
+      {"talent_id": 1740, "rank": 2, "spell_id": 31683, "name": "Empowered Frostbolt"},
+      {"talent_id": 1853, "rank": 2, "spell_id": 44545, "name": "Fingers of Frost"},
+      {"talent_id": 1854, "rank": 3, "spell_id": 44549, "name": "Brain Freeze"},
+      {"talent_id": 1741, "rank": 1, "spell_id": 31687, "name": "Summon Water Elemental"},
+      {"talent_id": 1855, "rank": 3, "spell_id": 44561, "name": "Enduring Winter"},
+      {"talent_id": 1856, "rank": 5, "spell_id": 44571, "name": "Chilled to the Bone"},
+      {"talent_id": 1857, "rank": 1, "spell_id": 44572, "name": "Deep Freeze"}
+    ],
+    "glyphs": [
+      {"slot": 0, "glyph_id": 318, "spell_id": 56376, "name": "Glyph of Frost Nova"},
+      {"slot": 3, "glyph_id": 322, "spell_id": 56377, "name": "Glyph of Ice Lance"}
+    ],
+    "equipment": [
+      {"slot": 0, "item_id": 41943, "name": "Savage Gladiator's Silk Cowl"},
+      {"slot": 1, "item_id": 42022, "name": "Hateful Gladiator's Pendant of Dominance"},
+      {"slot": 2, "item_id": 41962, "name": "Savage Gladiator's Silk Amice"},
+      {"slot": 4, "item_id": 41949, "name": "Savage Gladiator's Silk Raiment"},
+      {"slot": 5, "item_id": 41896, "name": "Hateful Gladiator's Cord of Dominance"},
+      {"slot": 6, "item_id": 41956, "name": "Savage Gladiator's Silk Trousers"},
+      {"slot": 7, "item_id": 41901, "name": "Hateful Gladiator's Slippers of Dominance"},
+      {"slot": 8, "item_id": 41907, "name": "Hateful Gladiator's Cuffs of Dominance"},
+      {"slot": 9, "item_id": 41968, "name": "Savage Gladiator's Silk Handguards"},
+      {"slot": 10, "item_id": 42110, "name": "Hateful Gladiator's Band of Dominance"},
+      {"slot": 14, "item_id": 42055, "name": "Hateful Gladiator's Cloak of Dominance"},
+      {"slot": 15, "item_id": 42356, "name": "Savage Gladiator's Battle Staff"},
+      {"slot": 17, "item_id": 42448, "name": "Savage Gladiator's Touch of Defeat"}
+    ],
+    "kit": [
+      {"spell_id": 42842, "name": "Frostbolt", "rank": 16},
+      {"spell_id": 42914, "name": "Ice Lance", "rank": 3},
+      {"spell_id": 42917, "name": "Frost Nova", "rank": 6}
+    ],
+    "spellbook": [133, 168, 2479, 3365, 5019, 6233, 6246, 6247, 6477, 6478, 6603, 7266, 7267, 7355, 8386, 11426, 11958, 12472, 21651, 21652, 22027, 22810, 31687, 42842, 42914, 42917, 44572, 45927, 59752, 61437, 63644, 63645, 68398],
+    "initial": {"max_health": 16523, "max_mana": 11658}
+  }
+}
