@@ -270,6 +270,9 @@ class TurnMeta:
     # ack) runs once the acked line is stored.
     before_transport: Callable[[], bool] | None = None
     on_recorded: Callable[[int, Ack], None] | None = None
+    # the console's tuning preview (Pipeline.preview_line): the Ollama seed both of its
+    # requests carry, so before and after differ by the dial and not the sampler
+    seed: int | None = None
 
 
 class _ScopeChanged(SchedulerError):
@@ -599,6 +602,35 @@ class Pipeline:
         c = await self._compose(turn, TurnMeta(turn_id=""), live=False)
         return c.messages, c.memory_ids
 
+    async def preview_line(self, turn: Turn, persona: Persona, *, trigger: str, seed: int,
+                           dial: int | None = None) -> tuple[str, str | None]:
+        """The console's tuning preview: the line `persona` (a candidate effective persona)
+        would say for `turn`, answering his line `trigger` (text, never a stored line), through
+        the live prompt and the model with the tells, repairs and retries a line gets, styled
+        as she types with a generator of its own. Never sent, recorded or spent: no memory is
+        recalled or touched, no cooldown starts, his real name is never offered, and the
+        engine's own generator is never drawn from. Both of a preview's requests carry `seed`.
+        (the words, None) or ("", why it said nothing)."""
+        hg = self.human.guid
+        now = self.clock.now()
+        channel = turn.channel or "guild"
+        row = ChatLineRow(id=0, ts=now, channel=channel, from_guid=hg,
+                          from_name=self.human.character_name, to_guid=turn.to_guid,
+                          text=trigger, map=0, zone=0, session_id=None, thread_id=None,
+                          origin="human") if trigger else None
+        meta = TurnMeta(turn_id="preview", seed=seed)
+        c = await self._compose(turn, meta, live=False, persona=persona,
+                                window=[row] if row is not None else [],
+                                trigger_text=trigger or None, dial=dial)
+        text, why = await self._generate(turn, meta, c)
+        if why:
+            return "", why
+        styled = style_lines(text, persona.typing, EFFECTS[Altered.SOBER],
+                             random.Random(seed), protect=self._protect(),
+                             speaker=persona.character_name, kind=turn.kind,
+                             max_lines=max(1, turn.max_lines), aliases=aliases(persona))
+        return "\n".join(s.line for s in styled), None
+
     def _may_carry(self, turn: Turn, row: ChatLineRow) -> bool:
         """Whether a chat line may reach this turn's prompt (memory.recall.whisper_ok)."""
         return whisper_ok(row.channel, row.from_guid, row.to_guid, speaker=turn.speaker,
@@ -624,7 +656,8 @@ class Pipeline:
         return bool(hg) and (turn.addressee == hg or any(r.from_guid == hg for r in recent[-3:]))
 
     def _romance(self, turn: Turn, meta: TurnMeta, p: Persona, rel_h, phase: DayPhase,
-                 now: float, rng: random.Random, trigger: str = "") -> str | None:
+                 now: float, rng: random.Random, trigger: str = "",
+                 dial: int | None = None) -> str | None:
         """Her romance text on this turn, or None: only on turns to the human; every FLIRT,
         WHISPER, loot cheer, reply on the whisper channel to him and reply to a flirty line of
         his (`trigger`); otherwise on a share of turns (ROMANCE_SHARE; a drawn woman's
@@ -635,6 +668,7 @@ class Pipeline:
         if (not hg or turn.addressee != hg or p.identity.player_gender != "female"
                 or p.romance.stance not in ROMANCE_SHARE):
             return None
+        dial = self.cfg.romance.dial if dial is None else dial
         talked_to = turn.kind in (TurnKind.REPLY_HUMAN, TurnKind.GOODNIGHT) and bool(
             turn.trigger_line)
         always = (turn.kind in ROMANCE_ALWAYS or meta.loot_cheer
@@ -643,7 +677,7 @@ class Pipeline:
         if not always:
             share = ROMANCE_SHARE[p.romance.stance]
             if (p.romance.stance == "drawn" and talked_to
-                    and dial_for(p, self.cfg.romance.dial) >= NO_BRAKES_DIAL):
+                    and dial_for(p, dial) >= NO_BRAKES_DIAL):
                 share = DRAWN_TALKED_TO_SHARE
             if phase in _LATE:
                 share += ROMANCE_LATE_BONUS
@@ -654,11 +688,13 @@ class Pipeline:
                 share = min(1.0, share * f)
             if rng.random() >= share:
                 return None
-        return romance_instruction(p, rel_h, dial=self.cfg.romance.dial, channel=turn.channel,
+        return romance_instruction(p, rel_h, dial=dial, channel=turn.channel,
                                    addressee_is_human=True, phase=phase, human=self.human,
                                    data_dir=self.data_dir)
 
-    async def _compose(self, turn: Turn, meta: TurnMeta, *, live: bool) -> Composed:
+    async def _compose(self, turn: Turn, meta: TurnMeta, *, live: bool,
+                       persona: Persona | None = None, window: list | None = None,
+                       trigger_text: str | None = None, dial: int | None = None) -> Composed:
         """`live`: the prompt is for speaking now, so it may draw from the engine's rng and
         hold the guild-wide real-name slot for the turn; what it offered and used goes on
         `meta`, to be spent if a line is said (_spend). A whisper reaches it only as
@@ -670,17 +706,24 @@ class Pipeline:
         name said in chat is not mirrored back until the gap allows it again.
 
         A reply to his game question (meta.facts_line) carries that line's facts from the
-        library, under facts_head; they are reference text, never memories."""
-        p = self.personas.get(turn.speaker)
+        library, under facts_head; they are reference text, never memories.
+
+        The console's tuning preview (preview_line) composes with `persona` (a candidate
+        effective persona), `window` (the chat it shows: a line of his given as text, never a
+        stored one), `trigger_text` (that line) and `dial` (a candidate romance dial): no
+        memories are recalled, and his real name is never offered."""
+        preview = window is not None
+        p = persona if persona is not None else self.personas.get(turn.speaker)
         if p is None:
             raise ValueError(f"no persona for {turn.speaker}")
+        dial = self.cfg.romance.dial if dial is None else dial
         rng = self.rng if live else self._compose_rng
         now = self.clock.now()
         human, hg = self.human, self.human.guid
         names = self._names()
         rel_h = self.store.get_relationship(turn.speaker, hg) if hg else None
         close = knows_real_name(rel_h)  # his inner circle: his real name is theirs to use
-        recent = self.world.recent_visible(
+        recent = list(window) if preview else self.world.recent_visible(
             turn.speaker, 8,
             keep=lambda row: row.ts >= self._chat_from and self._may_carry(turn, row))
         quiet = not any(now - r.ts < QUIET_S for r in recent)
@@ -714,7 +757,9 @@ class Pipeline:
                  for g in people]
 
         trigger = ""
-        if turn.trigger_line:
+        if trigger_text is not None:
+            query = trigger = trigger_text
+        elif turn.trigger_line:
             rows = self.store.chat_lines([turn.trigger_line])
             query = trigger = rows[0].text if rows and self._may_carry(turn, rows[0]) else ""
         elif turn.kind is TurnKind.OPEN and meta.topic:
@@ -725,10 +770,9 @@ class Pipeline:
         present = list(dict.fromkeys(
             [r.from_guid for r in recent if r.from_guid and r.from_guid != turn.speaker]
             + ([hg] if hg and self.world.human_online else [])))
-        memories = await self.recall.recall(turn.speaker, query, present=present,
-                                            addressee=turn.addressee, k=5,
-                                            priority=turn.priority, touch=False,
-                                            channel=turn.channel, to_guid=turn.to_guid)
+        memories = [] if preview else await self.recall.recall(
+            turn.speaker, query, present=present, addressee=turn.addressee, k=5,
+            priority=turn.priority, touch=False, channel=turn.channel, to_guid=turn.to_guid)
         if meta.lore_memory and all(m.id != meta.lore_memory for m in memories):
             # the memory she answers his question from leads, even while it rests
             memories = [*self.store.get_memories([meta.lore_memory]), *memories][:5]
@@ -761,15 +805,14 @@ class Pipeline:
         story = self._their_story(turn, meta, trigger, memories) if to_human else ""
         ends = []
         if (to_human and turn.kind in (TurnKind.GREET, TurnKind.GOODNIGHT)
-                and dial_for(p, self.cfg.romance.dial) >= NO_BRAKES_DIAL  # the ruling's dial
+                and dial_for(p, dial) >= NO_BRAKES_DIAL  # the ruling's dial
                 and p.identity.player_gender == "female" and p.romance.stance in ROMANCE_SHARE):
             ends.append(FEELINGS.format(them=them))
         if greet and any(r.from_guid not in (hg, turn.speaker) for r in recent):
             ends.append(TALK_TO.format(name=human.called))
-        romance = self._romance(turn, meta, p, rel_h, phase, now, rng, trigger)
+        romance = self._romance(turn, meta, p, rel_h, phase, now, rng, trigger, dial)
         tail, two = "", False
         if romance:  # at the explicit band in a whisper: the owner's overlay, read last
-            dial = self.cfg.romance.dial
             tail = whisper_tail(p, rel_h, dial=dial, channel=turn.channel,
                                 data_dir=self.data_dir)
             # a line or two, unless the turn holds one (her answer to his pushback)
@@ -777,7 +820,8 @@ class Pipeline:
                                                           channel=turn.channel)
         meta.two_lines = two
         real = ""
-        if (close and self._human_in_talk(turn, recent) and self._real_name_hold is None
+        if (close and not preview and self._human_in_talk(turn, recent)
+                and self._real_name_hold is None
                 and now - self._real_name_at >= REAL_NAME_GAP_S):
             real = real_name_line(human, rel_h, rng)
             if real and live:
@@ -1229,7 +1273,10 @@ class Pipeline:
                 raise _ScopeChanged("scope_changed")
             if self.scheduler.expired(turn.deadline):
                 raise Expired(turn.deadline)
-            return await llm.chat(self.cfg.models.live, messages, options=dict(preset.options),
+            options = dict(preset.options)
+            if meta is not None and meta.seed is not None:  # a tuning preview's
+                options["seed"] = meta.seed
+            return await llm.chat(self.cfg.models.live, messages, options=options,
                                   think=preset.think, timeout=preset.timeout)
         if not _scope_valid(meta):
             raise _ScopeChanged("scope_changed")
