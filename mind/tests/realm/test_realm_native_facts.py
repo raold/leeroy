@@ -12,13 +12,14 @@ import pytest
 from leeroy_mind.memory.writer import clean_memory_text
 from leeroy_mind.protocol import sanitize_say_text
 from leeroy_mind.realm.fact_store import FactStore
+from leeroy_mind.realm.kill_retention import PrivateKillRecord
 from leeroy_mind.realm.provenance import public_fact_in_unit, render_public
 from leeroy_mind.realm.records import FactRow, Rejected
 from leeroy_mind.storage import db
 from leeroy_mind.wow import BOSS_NAMES, DUNGEON_BOSS_NAMES, DUNGEONS, RAID_MAPS
 from test_realm_foundation_schema import _announcement, _insert, _kill, _row, _source
 from test_realm_live_proof import HUMAN, observe, roster
-from test_realm_source_admission import KILL, application, envelope, run
+from test_realm_source_admission import KILL, PRIVATE, application, envelope, run
 
 ACHIEVEMENT, DUEL, DUNGEON = 'realm_first_achievement_v1', 'duel_result_v1', 'verified_dungeon_kill_v1'
 TABLES = ('realm_source', 'realm_fact', 'realm_fact_origin', 'realm_knows', 'realm_kill',
@@ -244,6 +245,22 @@ def test_non_realm_first_through_the_service_makes_no_fact(tmp_path, clock, monk
             await native.deliver(envelope(DUEL, city=True, ts=1000001))
             assert native.results == [Rejected('private_evidence')] * 2
             assert counts(native.app.store) == NOTHING
+    run(scenario())
+
+
+@pytest.mark.parametrize('policy,changes', [(KILL, {}), (KILL, PRIVATE), (DUNGEON, {})],
+                         ids=['public_raid', 'private_raid', 'dungeon'])
+def test_attempts_only_change_of_a_kill_is_refused_as_proof_changed(tmp_path, clock, monkeypatch, policy, changes):
+    async def scenario():
+        async with application(tmp_path, clock, monkeypatch) as native:
+            body = envelope(policy, **changes)
+            await native.deliver(body)
+            assert type(native.results[-1]) is (PrivateKillRecord if changes else FactRow)
+            before = counts(native.app.store)
+            # The same kill at the same server ts: only native's attempt count differs.
+            await native.deliver({**body, 'attempts': body['attempts'] + 3})
+            assert native.results[-1] == Rejected('proof_changed')
+            assert counts(native.app.store) == before
     run(scenario())
 
 
