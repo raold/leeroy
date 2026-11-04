@@ -6,6 +6,7 @@ import subprocess
 import sys
 import threading
 from types import ModuleType, SimpleNamespace
+import uuid
 
 import pytest
 
@@ -13,6 +14,8 @@ from conftest import run, seed_test_cast
 from leeroy_mind.nightly.runner import NightRunner, Stage
 from leeroy_mind.protocol import Ack, Hello
 from leeroy_mind.realm import parts, protocol, store as realm_store
+from leeroy_mind.realm.actions import ActionContext
+from leeroy_mind.realm.direct import DirectLedger
 from leeroy_mind.realm.ports import RealmDisabled
 from leeroy_mind.realm.service import attach_realm
 from realm.fakes import RealmApp, enabled
@@ -83,6 +86,9 @@ def test_parts_registry_attaches_present_modules(app, monkeypatch, caplog):
         def __init__(self, name):
             self.name = name
 
+        def recover(self, *, process_id):
+            return 0, 0
+
         async def on_event(self, ev):
             seen.append((self.name, ev))
 
@@ -149,7 +155,7 @@ def test_attach_makes_no_io(app, monkeypatch, on):
 
     def attach(realm):
         attached.append(realm)
-        return SimpleNamespace(), ()
+        return SimpleNamespace(recover=lambda *, process_id: (0, 0)), ()
 
     install(monkeypatch, direct=module("direct", attach), night=module("night", stage_realm=lambda ctx: None))
     app.night_runner = NightRunner([Stage("stories", lambda ctx: None, "reflection")], lambda *a: None)
@@ -298,6 +304,9 @@ class FakeDirect:
     def __init__(self, *owned):
         self.owned, self.calls, self.asked = set(owned), [], []
 
+    def recover(self, *, process_id):
+        return 0, 0
+
     def owns_command(self, cmd):
         self.asked.append(cmd.id)
         return cmd.id in self.owned
@@ -316,6 +325,25 @@ class FakeDirect:
     def on_job(self, ev):
         self.calls.append(("job", ev.id, ev.value))
         return ev.id in self.owned
+
+
+def test_attach_recovers_the_direct_ledger_once(app):
+    """An earlier process's prepared intent is abandoned and its dispatched one is unknown
+    by the time the Realm is attached, so neither blocks its ref nor is ever resent."""
+    earlier = "earlier-process"
+    ledger = DirectLedger(app.store, process_id=earlier, clock=app.clock)
+    context = ActionContext(True, True, True, 1, earlier, 1, 50, 10)
+    prepared = protocol.RealmSay(uuid.uuid4().hex, 201, "trade", "wts frostweave")
+    sent = protocol.RealmSay(uuid.uuid4().hex, 201, "trade", "lf2m voa")
+    ledger.prepare(prepared, owner="speech", ref="line:1", context=context, expects_job=False)
+    ledger.prepare(sent, owner="speech", ref="line:2", context=context, expects_job=False)
+    ledger.before_send(sent, context=context)
+    realm = attach_realm(app)
+    direct = realm.parts["direct"]
+    assert direct.state("speech", "line:1") == ("abandoned", "recovered_prepared", None)
+    assert direct.state("speech", "line:2") == ("unknown", "recovered_dispatched", None)
+    assert direct.recover(process_id=realm._process_id) == (0, 0)  # Nothing left for a second pass.
+    run(realm.close())
 
 
 def test_direct_owned_command_bypasses__DIRECT(app):

@@ -874,5 +874,8 @@ def attach_realm(app) -> Realm:
     app.register_shutdown_receipt("realm_pvp", realm.on_realm_pvp)
     app.register_shutdown_drain(realm.close)
     build_parts(realm)
+    if (direct := realm.parts.get("direct")) is not None:
+        # Like the recoveries in Realm.__init__: once, before anything can send.
+        direct.recover(process_id=realm._process_id)
     install_night(app, realm)
     return realm
