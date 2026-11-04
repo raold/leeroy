@@ -6,6 +6,7 @@
 #include "Guild/OfflineRaidJob.h"
 #include "LeeroyDummyLifecycle.h"
 #include "LeeroyTrainingProtocol.h"
+#include "Realm/RealmOwnership.h"
 
 #if !defined(LEEROY_HAS_DUNGEON_CLEAR)
 #error "LEEROY_HAS_DUNGEON_CLEAR comes from mod-leeroy.cmake; re-run cmake"
@@ -567,6 +568,7 @@ LeeroyCommandResult HandleDummyTrial(nlohmann::json const& message)
     for (auto guid : command->guids)
     {
         if (!Guild::IsCast(guid) || guid == Guild::HumanGuid()) return {false, "not_cast:" + std::to_string(guid)};
+        if (Realm::RealmOwns(guid)) return {false, "busy:realm_owner:" + std::to_string(guid)};
         if (Guild::OfflineRaidOwns(guid)) return {false, "busy:" + std::to_string(guid)};
         if (HasNonPermanentBind(guid)) return {false, "instance_bound:" + std::to_string(guid)};
     }

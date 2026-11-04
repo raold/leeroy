@@ -408,4 +408,3 @@ def test_metadata_size_and_depth_are_bounded_before_evidence_use(fake, monkeypat
     meta(fake, "oversized", {"data": "x" * 100})
     assert report._meta(fake.conn, "oversized") is None
     assert report._json("[" * 30 + "0" + "]" * 30) is None
-

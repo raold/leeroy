@@ -5,6 +5,7 @@ void AddSC_leeroy_cast();
 void AddSC_leeroy_events();
 void AddSC_leeroy_guild_life();
 void AddSC_leeroy_training();
+void AddSC_leeroy_realm();
 
 void Addmod_leeroyScripts()
 {
@@ -13,4 +14,5 @@ void Addmod_leeroyScripts()
     AddSC_leeroy_events();
     AddSC_leeroy_guild_life();
     AddSC_leeroy_training();
+    AddSC_leeroy_realm();
 }

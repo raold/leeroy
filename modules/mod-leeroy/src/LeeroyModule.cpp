@@ -6,6 +6,7 @@
 #include "Log.h"
 
 #include <utility>
+#include <algorithm>
 
 LeeroyModule& LeeroyModule::Instance()
 {
@@ -42,6 +43,12 @@ void LeeroyModule::LoadConfig(bool /*reload*/)
     cfg.keepCast = sConfigMgr->GetOption<bool>("Leeroy.KeepCast", true);
     cfg.bringCastOnline = sConfigMgr->GetOption<bool>("Leeroy.BringCastOnline", true);
     cfg.excludeFromOllamaChat = sConfigMgr->GetOption<bool>("Leeroy.ExcludeFromOllamaChat", true);
+    cfg.realmEnable = sConfigMgr->GetOption<bool>("Leeroy.Realm.Enable", false);
+    cfg.realmMaxActionsPerTick = std::clamp(sConfigMgr->GetOption<uint32>("Leeroy.Realm.MaxActionsPerTick", 5), 1u, 20u);
+    cfg.realmAnnounce = sConfigMgr->GetOption<bool>("Leeroy.Realm.Announce", true);
+    cfg.castGuard = sConfigMgr->GetOption<bool>("Leeroy.CastGuard", false);
+    cfg.realmPlacesFile = sConfigMgr->GetOption<std::string>("Leeroy.Realm.PlacesFile", "leeroy_places.csv");
+    cfg.realmItemsFile = sConfigMgr->GetOption<std::string>("Leeroy.Realm.ItemsFile", "leeroy_items.csv");
 
     _config = cfg;
     _enabled = cfg.enable;

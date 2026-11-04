@@ -66,7 +66,7 @@ def test_checks_coverage_and_score_basis_are_explicit_and_versioned(fake):
 
 @pytest.mark.parametrize("version", [5, 6, 7])
 def test_actual_migration_ancestry_preserves_existing_rows_and_vectors(tmp_path, monkeypatch, version):
-    actual = db.MIGRATIONS_DIR
+    latest = db.latest_version()
     assert [path.name for n, path in db._migration_files() if 5 <= n <= 8] == [
         "0005_voice.sql", "0006_nightly.sql", "0007_guild_life.sql", "0008_training.sql"]
     old = tmp_path / "old-migrations"
@@ -92,7 +92,7 @@ def test_actual_migration_ancestry_preserves_existing_rows_and_vectors(tmp_path,
     conn.close()
     conn = db.open_db(path)
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == latest
         assert {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name GLOB 'tg_*'")} == TABLES
         assert conn.execute("SELECT value FROM meta WHERE key='training_test'").fetchone()[0] == "keep"
         assert tuple(conn.execute("SELECT guid,room,since FROM voice_presence").fetchone()) == (101, "raid", 2)
@@ -103,7 +103,7 @@ def test_actual_migration_ancestry_preserves_existing_rows_and_vectors(tmp_path,
         if version >= 7:
             assert conn.execute("SELECT count(*) FROM guild_raid").fetchone()[0] == 1
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
-        assert db.migrate(conn) == 8
+        assert db.migrate(conn) == latest
     finally:
         conn.close()
 

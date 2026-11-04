@@ -119,6 +119,23 @@ class LabRunner:
     def members(self) -> set[int]:
         return set(self._owned["guids"]) if self.active else set()
 
+    def body_holds(self):
+        from leeroy_mind.bodies import BodyHold
+        from .body_holds import identity, members, validate_lab_complete
+        owned = self._owned
+        if owned is None:
+            return ()
+        if (type(owned) is not dict or owned.get("phase") not in
+                {"preparing", "ready", "waiting", "restoring", "blocked", "complete"}):
+            raise ValueError("lab body evidence unavailable")
+        scope, guids = identity(owned["id"]), members(owned["guids"])
+        if owned["phase"] == "complete":
+            validate_lab_complete(self.ports.conn, owned)
+            return ()
+        # Preparing already awaits probe/cache transport. Recovered, canceled
+        # and blocked work keeps the complete source-owned manifest as well.
+        return (BodyHold(scope, OWNER, 2, guids, True),)
+
     def _save(self):
         with self.ports.conn:
             _put(self.ports.conn, OWNED_KEY, self._owned)

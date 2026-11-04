@@ -426,7 +426,7 @@ def test_lone_surrogate_is_stored_without_raising(store):
                                  session_id=None, origin="human")
     line, = store.chat_lines([lid])
     assert line.text == "bad � text" and line.from_name == "Be�lra"
-    mid = store.insert_memory(make_mem(text="x\ud800y", evidence=("chat:\ud800",)))
+    mid = store.insert_memory(make_mem(text="x\ud800y", evidence=(f"chat:{lid}",)))
     assert store.get_memories([mid])[0].text == "x�y"
     eid = store.insert_game_event(chat("\ud800", from_name="\ud800"), session_id=None)
     assert eid > 0

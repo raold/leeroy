@@ -29,6 +29,9 @@
 {"name":"bot_do_cast_target","kind":"command","valid":true,"msg":{"v":1,"type":"bot_do","id":"t11","ts":0,"guids":[1103],"action":"cast","param":"rebirth","target_guid":1104}}
 {"name":"bot_do_bad_strategy","kind":"command","valid":false,"error":"bad field: param","msg":{"v":1,"type":"bot_do","id":"t11","ts":0,"guids":[1101],"action":"co","param":"+attack anything"}}
 {"name":"bot_do_remove_survival","kind":"command","valid":false,"error":"bad field: param","msg":{"v":1,"type":"bot_do","id":"t11","ts":0,"guids":[1101],"action":"co","param":"-avoid aoe"}}
+{"name":"bot_do_bg_off","kind":"command","valid":true,"msg":{"v":1,"type":"bot_do","id":"rb1","ts":0,"guids":[1101],"action":"co","param":"-bg"}}
+{"name":"bot_do_lfg_on","kind":"command","valid":true,"msg":{"v":1,"type":"bot_do","id":"rb2","ts":0,"guids":[1101],"action":"nc","param":"+lfg"}}
+{"name":"bot_do_go_fishing","kind":"command","valid":true,"msg":{"v":1,"type":"bot_do","id":"rb3","ts":0,"guids":[1101],"action":"do","param":"go fishing"}}
 {"name":"bot_do_bad_action","kind":"command","valid":false,"error":"bad field: action","msg":{"v":1,"type":"bot_do","id":"t11","ts":0,"guids":[1101],"action":"leave","param":""}}
 {"name":"stock_items_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"stock_items","id":"t12","ts":0,"guid":1101,"items":[43015,46377],"count":2}}
 {"name":"stock_items_bad_item","kind":"command","valid":false,"error":"bad field: items","msg":{"v":1,"type":"stock_items","id":"t12","ts":0,"guid":1101,"items":[49623],"count":1}}

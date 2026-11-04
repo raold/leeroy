@@ -13,6 +13,7 @@
 #include "TrainingRivals.h"
 #include "TrainingTap.h"
 #include "TrainingBenchmarkLoot.h"
+#include "Realm/RealmOwnership.h"
 
 #if !defined(LEEROY_HAS_DUNGEON_CLEAR)
 #error "LEEROY_HAS_DUNGEON_CLEAR comes from mod-leeroy.cmake; re-run cmake"
@@ -374,6 +375,18 @@ void Grouping(Job& job)
         return;
     }
 
+    // Removing a requested bot from its old group can promote or disband
+    // other members. Check every source group before changing any body.
+    for (auto low : Requested(job.command))
+    {
+        auto* player = FindOnline(low);
+        if (Realm::RealmOwns(low) || (player && GroupHasRealmOwner(player->GetGroup())))
+        {
+            SetupFailure(job, "busy:realm_owner:" + std::to_string(low));
+            return;
+        }
+    }
+
     if (Benchmark(job))
     {
         if (!Pins().Owned(kPinOwnerBenchmark).empty())
@@ -429,6 +442,11 @@ void Grouping(Job& job)
     for (auto const& member : job.members)
         job.event.guids.push_back(member.guid);
 
+    if (Realm::RealmOwns(job.command.leaderGuid) || GroupHasRealmOwner(leader->GetGroup()))
+    {
+        SetupFailure(job, "busy:realm_owner");
+        return;
+    }
     job.members.front().changed = true;
     if (leader->GetGroup())
         leader->RemoveFromGroup();
@@ -446,6 +464,11 @@ void Grouping(Job& job)
     {
         Member& member = job.members[index];
         Player* player = FindOnline(member.guid);
+        if (!player || Realm::RealmOwns(member.guid) || GroupHasRealmOwner(player->GetGroup()))
+        {
+            SetupFailure(job, "busy:realm_owner:" + std::to_string(member.guid));
+            return;
+        }
         member.changed = true;
         if (player->GetGroup())
             player->RemoveFromGroup();
@@ -1254,6 +1277,9 @@ LeeroyCommandResult StartRaidJob([[maybe_unused]] std::string const& id,
         return Fail("human_online");
     for (uint32 low : Requested(*cmd))
     {
+        if (Realm::RealmOwns(low)) return Fail("busy:realm_owner:" + std::to_string(low));
+        if (auto* player = FindOnline(low); player && GroupHasRealmOwner(player->GetGroup()))
+            return Fail("busy:realm_group:" + std::to_string(low));
         if (Training::DummyTrialOwns(low)) return Fail("busy:" + std::to_string(low));
         if (benchmark)
         {
