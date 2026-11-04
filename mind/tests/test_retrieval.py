@@ -35,6 +35,8 @@ def test_similarity_owns_vectors_and_texts_and_uses_existing_fallback():
     texts.clear()
     assert sim(1, 2) == -1.0
     assert sim(1, 3) == 0.0
+    vectors[1][1] = 77.0
+    assert sim(1, 2) == -1.0  # cached norms and dot still use the original snapshot
     assert sim(1, 4) == word_jaccard("Raid RAID! boss", "Boss down") == 1 / 3
     assert sim(3, 5) == 0.0
     with pytest.raises(KeyError):
@@ -48,3 +50,62 @@ def test_mmr_keeps_ties_duplicates_negative_similarity_and_empty_edges():
     assert mmr(ids, {1: 0.0, 2: 0.0, 3: 0.0}, lambda a, b: 0.0, 0) == []
     matrix = {(2, 1): -0.2, (3, 1): -0.9, (2, 3): -0.4}
     assert mmr([1, 2, 3], {1: 1, 2: 1, 3: 1}, lambda a, b: matrix[a, b], 3, 0) == [1, 3, 2]
+
+
+def test_cached_similarity_matches_cosine_exactly_across_repeated_pairs():
+    vectors = {1: [0.1, -0.2, 0.3], 2: [-0.4, 0.5],
+               3: [0.0, 0.0, 0.0], 4: [], 5: [2.0, -3.0, 7.0, 0.01]}
+    sim = vector_or_word_similarity(vectors, {})
+    for _ in range(2):
+        for a in vectors:
+            for b in vectors:
+                assert sim(a, b) == cosine(vectors[a], vectors[b])
+    ids = [1, 2, 5, 3, 1]
+    scores = {1: 0.9, 2: 0.8, 3: 0.4, 5: 0.7}
+    for k in (0, 1, 3, 9):
+        assert mmr(ids, scores, sim, k) == mmr(
+            ids, scores, lambda a, b: cosine(vectors[a], vectors[b]), k)
+
+
+def test_norms_are_lazy_request_local_and_dot_is_computed_first(monkeypatch):
+    import leeroy_mind.retrieval as retrieval
+
+    calls = []
+    real_sqrt = math.sqrt
+
+    def counted_sqrt(value):
+        calls.append(value)
+        return real_sqrt(value)
+
+    monkeypatch.setattr(retrieval.math, "sqrt", counted_sqrt)
+    vectors = {1: [3.0, 4.0], 2: [0.0, 0.0], 3: [object()]}
+    sim = vector_or_word_similarity(vectors, {1: "one", 4: "one"})
+    assert mmr([1, 3], {1: 1.0, 3: 0.5}, sim, 0) == []
+    assert mmr([1, 3], {1: 1.0, 3: 0.5}, sim, 1) == [1]
+    assert sim(1, 4) == 1.0
+    assert calls == []
+    with pytest.raises(TypeError):
+        sim(1, 3)  # dot fails before either norm is evaluated
+    assert calls == []
+    assert sim(1, 2) == sim(2, 1) == 0.0
+    assert calls == [25.0, 0.0]  # zero norms are cached too
+    other = vector_or_word_similarity(vectors, {})
+    assert other(1, 2) == 0.0
+    assert calls == [25.0, 0.0, 25.0, 0.0]
+
+
+def test_zero_first_norm_does_not_skip_invalid_second_norm(monkeypatch):
+    import leeroy_mind.retrieval as retrieval
+
+    seen = []
+    real_sqrt = math.sqrt
+
+    def counted_sqrt(value):
+        seen.append(value)
+        return real_sqrt(value)
+
+    monkeypatch.setattr(retrieval.math, "sqrt", counted_sqrt)
+    sim = vector_or_word_similarity({1: [], 2: [object()]}, {})
+    with pytest.raises(TypeError):
+        sim(1, 2)  # empty zip permits dot; second norm is still evaluated
+    assert seen == [0]
