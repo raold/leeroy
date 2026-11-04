@@ -1,0 +1,59 @@
+{
+  "format": 1,
+  "marker": "leeroy-dojo-training",
+  "instance": "dojo-01",
+  "roots": {
+    "source": "F:/azerothcore/worktrees/codex-dojo-env",
+    "core": "F:/azerothcore/worktrees/codex-dojo-core",
+    "playerbots": "F:/azerothcore/worktrees/codex-dojo-playerbots",
+    "build": "F:/azerothcore/dojo-runtime/build",
+    "runtime": "F:/azerothcore/dojo-runtime/instances/dojo-01",
+    "data": "F:/azerothcore/dojo-data"
+  },
+  "provenance": "F:/azerothcore/dojo-data/manifests/provenance.json",
+  "modules": ["mod-playerbots", "mod-dojo"],
+  "assets": "F:/azerothcore/build/bin/RelWithDebInfo/Data",
+  "database": {
+    "host": "127.0.0.1",
+    "port": 3306,
+    "user": "dojo",
+    "schemas": {
+      "auth": "dojo_auth",
+      "characters": "dojo_characters",
+      "world": "dojo_world",
+      "playerbots": "dojo_playerbots"
+    },
+    "bootstrap_sources": ["acore_world"]
+  },
+  "ports": {
+    "auth": 13724,
+    "world": 18085,
+    "dojo_host": "127.0.0.1",
+    "dojo": 0
+  },
+  "toolchain": {
+    "boost": "F:/azerothcore/boost_1_92_0"
+  },
+  "production": {
+    "install_root": "F:/azerothcore",
+    "core": "F:/azerothcore/azerothcore-wotlk",
+    "build": "F:/azerothcore/build",
+    "configs": "F:/azerothcore/build/bin/RelWithDebInfo/configs",
+    "modules": "F:/azerothcore/modules",
+    "protected": [
+      "F:/azerothcore/mind",
+      "F:/azerothcore/mind-data",
+      "F:/azerothcore/voice",
+      "F:/azerothcore/voice-data",
+      "F:/azerothcore/db_backup",
+      "F:/azerothcore/scripts"
+    ],
+    "databases": [
+      {"host": "127.0.0.1", "port": 3306, "schema": "acore_auth"},
+      {"host": "127.0.0.1", "port": 3306, "schema": "acore_characters"},
+      {"host": "127.0.0.1", "port": 3306, "schema": "acore_world"},
+      {"host": "127.0.0.1", "port": 3306, "schema": "acore_playerbots"}
+    ],
+    "ports": [3724, 8085, 7878, 7879, 7880, 11434]
+  }
+}
