@@ -889,11 +889,14 @@ def test_service_his_answer_to_an_unrelated_lead_whisper_is_no_answer(tmp_path, 
             await _kick(native)
             await _ask(native)
             await native.clock.advance(120)  # Past the lead's own reply interval.
+            before = len(_says(native))
             other = asyncio.create_task(native.app.engine.say_as(
                 LEAD, "whisper", "u coming to icc tonight?", kind=TurnKind.WHISPER, to_guid=HUMAN))
             await native.clock.advance(60)
             assert await other
-            assert "icc tonight" in _says(native)[-1]["text"]  # An ordinary, styled whisper.
+            # One ordinary whisper went out; its words are styled, so typos may change them.
+            assert len(_says(native)) == before + 1
+            assert "want them back" not in _says(native)[-1]["text"]
             await _say(native, word)  # His answer to that whisper, not to the question.
             await _settle(native)
             (row,) = _episodes(native)
