@@ -618,6 +618,113 @@ def test_output_status_is_reported_off_callback_without_losing_counts(monkeypatc
     out.stop()
 
 
+def test_late_callbacks_are_counted_though_portaudio_flags_none(monkeypatch):
+    """WASAPI shared mode flags no underrun: a callback held off for longer than half the buffer
+    is counted from its own clock, reported off the callback and summed at close."""
+    sd = StubSd()
+    clock = [0.0]
+    api = SoundDeviceApi(sd=sd, default_name=lambda: "Speakers A", join=no_com,
+                         callback_clock=lambda: clock[0])
+    events = []
+    monkeypatch.setattr(audio_io, "log", lambda event, **fields: events.append((event, fields)))
+    out = started(api, pinned="Speakers A")
+    callback = sd.streams[-1].settings["callback"]
+    buf = bytearray(480 * 2 * 4)
+    for t in (0.0, 0.01, 0.02, 0.059, 0.069, 0.25, 0.26):  # a 39 ms gap is fine; 181 ms is not
+        clock[0] = t
+        callback(buf, 480, None, 0)
+    events.clear()
+    out.poll(now=0.1)
+    assert events == [("output_late", {"level": logging.WARNING, "callbacks": 1,
+                       "max_gap_ms": 181, "total_late": 1})]
+    events.clear()
+    out.poll(now=0.2)
+    assert not events  # read once, never reset
+    clock[0] = 0.33  # 70 ms late, just before the close: not lost
+    callback(buf, 480, None, 0)
+    out.stop()
+    summary = next(fields for event, fields in events if event == "output_summary")
+    assert (summary["late"], summary["max_gap_ms"], summary["underflows"]) == (2, 181, 0)
+    assert [fields["total_late"] for event, fields in events if event == "output_late"] == [2]
+
+
+def late_rig(monkeypatch):
+    sd = StubSd()
+    clock = [0.0]
+    api = SoundDeviceApi(sd=sd, default_name=lambda: "Speakers A", join=no_com,
+                         callback_clock=lambda: clock[0])
+    events = []
+    monkeypatch.setattr(audio_io, "log", lambda event, **fields: events.append((event, fields)))
+    out = started(api, pinned="Speakers A")
+    callback = sd.streams[-1].settings["callback"]
+    buf = bytearray(480 * 2 * 4)
+
+    def at(*times):
+        for t in times:
+            clock[0] = t
+            callback(buf, 480, None, 0)
+
+    return out, at, events
+
+
+def lates(events):
+    return [fields for event, fields in events if event == "output_late"]
+
+
+def test_output_late_reports_the_longest_gap_since_its_last_line(monkeypatch):
+    """A 190 ms gap, reported; then only a 60 ms one. The next line says 60, not the stream's
+    longest; the summary at close keeps the longest of all."""
+    out, at, events = late_rig(monkeypatch)
+    at(0.0, 0.01, 0.20, 0.21)
+    out.poll(now=1.0)
+    at(0.27, 0.28)
+    out.poll(now=3.5)
+    assert lates(events) == [
+        {"level": logging.WARNING, "callbacks": 1, "max_gap_ms": 190, "total_late": 1},
+        {"level": logging.WARNING, "callbacks": 1, "max_gap_ms": 60, "total_late": 2}]
+    out.stop()
+    summary = next(fields for event, fields in events if event == "output_summary")
+    assert (summary["late"], summary["max_gap_ms"]) == (2, 190)
+
+
+def test_output_late_is_logged_at_most_every_two_seconds(monkeypatch):
+    """The service polls at every 20 ms tick. A late callback before each poll makes one line
+    per LATE_LOG_S, whose counts cover every poll since the line before; the close logs the
+    rest at once, and the summary has them all."""
+    out, at, events = late_rig(monkeypatch)
+    at(0.0)
+    t, gaps = 0.0, []
+    for i in range(1, 251):  # 5 s of polls, each after a late gap of 51 ms, 53 at the 150th
+        gap = 0.053 if i == 150 else 0.051
+        t += gap
+        gaps.append(gap)
+        at(t)
+        out.poll(now=i * 0.02)
+    lines = lates(events)
+    assert [line["callbacks"] for line in lines] == [1, 100, 100]
+    assert [line["total_late"] for line in lines] == [1, 101, 201]
+    assert [line["max_gap_ms"] for line in lines] == [51, 51, 53]
+    out.stop()
+    lines = lates(events)
+    assert len(lines) == 4 and lines[-1]["callbacks"] == 49 and lines[-1]["total_late"] == 250
+    summary = next(fields for event, fields in events if event == "output_summary")
+    assert (summary["late"], summary["max_gap_ms"]) == (250, 53)
+
+
+def test_late_gaps_past_the_ring_keep_their_count():
+    """Past LATE_RING unread late gaps the newest LATE_RING give the longest; the count is exact."""
+    clock = [0.0]
+    status = audio_io._OutputStatus(lambda: clock[0])
+    for n in range(audio_io.LATE_RING + 11):
+        clock[0] = n * 0.1 + (0.08 if n == 3 else 0.0)  # 180 ms, the third late gap; then 20 ms
+        status.record(None)
+    late, longest, newest = status.late_since(0)
+    assert late == audio_io.LATE_RING + 9
+    assert round(longest, 3) == 0.18 and round(newest, 3) == 0.1
+    assert round(status.late_since(late - 1)[2], 3) == 0.1
+    assert status.late_since(late)[2] == 0.0
+
+
 def test_callback_during_poll_is_reported_on_next_poll(monkeypatch):
     sd = StubSd()
     api = stub_api(sd)

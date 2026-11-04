@@ -193,6 +193,7 @@ class WorkerProcess:
             raise EngineError(f"{self.name}: did not load: "
                               f"{ready.error if ready is not None else 'it exited'}")
         self._tree.capture()
+        self._tree.settle()
         self._ready = True
 
     def _read(self) -> None:

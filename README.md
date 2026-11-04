@@ -69,6 +69,10 @@ member say what they could not know.
   AtlasLoot, the world database and client data, plus pinned AzerothCore
   documentation snapshots and the server's installed command and teleport
   references, with text and vector search.
+- **Guild console**: `python -m leeroy_mind console` serves one local browser
+  window on `127.0.0.1:7881`: the voice rooms and the guild's chat in one feed,
+  the mind's and the voice service's health, and their start, restart and stop.
+  It runs apart from the mind, so it can start the mind again.
 
 Personas, memories, prompts and logs stay in the ignored `mind-data/`. See
 [the operating notes](CLAUDE.md#the-mind-service-leeroy_mind) for commands.
