@@ -22,8 +22,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from leeroy_dojo.realm import conf
+
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "dojo" / "preflight.ps1"
+RULES = REPO / "scripts" / "dojo" / "training-rules.json"
+TRAIN_PORT = 13306
 PWSH = shutil.which("pwsh")
 GIT = shutil.which("git")
 
@@ -91,6 +95,23 @@ def db(user: str, pw: str, schema: str, host: str = "127.0.0.1", port: int | str
     return f'"{host};{port};{user};{pw};{schema}"'
 
 
+def synthetic_dist(rules: conf.FileRules) -> str:
+    """A small .dist with every key the rules name: ordinary keys at their stock value, training keys at some other
+    value (as a real .dist has them), isolation keys at a placeholder, plus one stock key no rule mentions."""
+    def other(value: str) -> str:
+        return {"0": "1", "1": "0", "": "food,taxi,raid", "127.0.0.1": "0.0.0.0"}.get(value, "stock")
+
+    lines = ["# synthetic .dist", "StockOnly = 7"]
+    for key, value in rules.ordinary.items():
+        lines.append(f"{key} = {value}")
+    for key, value in rules.training.items():
+        v = other(value)
+        lines.append(f'{key} = "{v}"' if not v.isdigit() else f"{key} = {v}")
+    for key in sorted(rules.isolation):
+        lines.append(f"{key} = 0" if key.endswith("Port") or key == "UseProcessors" else f'{key} = ""')
+    return "\n".join(lines) + "\n"
+
+
 def snapshot(*roots: Path) -> dict[str, tuple[int, str]]:
     """Every file under roots (git internals included) by size and SHA-256, and every directory."""
     seen: dict[str, tuple[int, str]] = {}
@@ -132,7 +153,7 @@ class PreflightTest(unittest.TestCase):
         write(configs / "authserver.conf",
               f"LoginDatabaseInfo = {db(LIVE_USER, LIVE_PW, 'acore_auth')}\nRealmServerPort = 3724\n")
         write(configs / "modules" / "playerbots.conf",
-              f"Playerbots.DatabaseInfo = {db(LIVE_USER, LIVE_PW, 'acore_playerbots')}\n")
+              f"PlayerbotsDatabaseInfo = {db(LIVE_USER, LIVE_PW, 'acore_playerbots')}\n")
         cls.assets = live / "build" / "bin" / "RelWithDebInfo" / "Data"
         for sub in ("dbc", "maps", "vmaps", "mmaps"):
             (cls.assets / sub).mkdir(parents=True)
@@ -145,6 +166,7 @@ class PreflightTest(unittest.TestCase):
         for rel, text in DOJO_MODULE_FILES.items():
             write(cls.dojo_module / rel, text)
         (source / "dojo" / "leeroy_dojo").mkdir(parents=True)
+        write(source / "scripts" / "dojo" / "training-rules.json", RULES.read_text(encoding="utf-8"))
         cls.core = t / "core"
         cls.pb = t / "pb"
         git(t, "clone", "-q", str(cls.live_core), str(cls.core))
@@ -156,22 +178,31 @@ class PreflightTest(unittest.TestCase):
         cls.runtime = runtime
         (t / "rt" / "build").mkdir(parents=True)
         write(runtime / "dojo.marker", json.dumps({"marker": "leeroy-dojo-training", "instance": "t1"}))
-        world, auth = free_ports(2)
-        cls.world, cls.auth = world, auth
+        world, auth, ra = free_ports(3)
+        cls.world, cls.auth, cls.ra = world, auth, ra
         cls.train_configs = runtime / "configs"
-        write(cls.train_configs / "worldserver.conf", "\n".join([
-            f"LoginDatabaseInfo     = {db(TRAIN_USER, TRAIN_PW, 'dojo_auth')}",
-            f"WorldDatabaseInfo     = {db(TRAIN_USER, TRAIN_PW, 'dojo_world')}",
-            f"CharacterDatabaseInfo = {db(TRAIN_USER, TRAIN_PW, 'dojo_characters')}",
-            f'SourceDirectory = "{cls.core.as_posix()}"',
-            f'DataDir = "{cls.assets.as_posix()}"',
-            f'LogsDir = "{(runtime / "logs").as_posix()}"',
-            "MapUpdate.Threads = 0",
-            f"WorldServerPort = {world}", ""]))
+        cls.dist_configs = t / "rt" / "build" / "bin" / "RelWithDebInfo" / "configs"
+        isolation = {
+            "worldserver.conf": {
+                "LoginDatabaseInfo": db(TRAIN_USER, TRAIN_PW, "dojo_auth", port=TRAIN_PORT).strip('"'),
+                "WorldDatabaseInfo": db(TRAIN_USER, TRAIN_PW, "dojo_world", port=TRAIN_PORT).strip('"'),
+                "CharacterDatabaseInfo": db(TRAIN_USER, TRAIN_PW, "dojo_characters", port=TRAIN_PORT).strip('"'),
+                "SourceDirectory": cls.core.as_posix(), "DataDir": cls.assets.as_posix(),
+                "LogsDir": (runtime / "logs").as_posix(), "TempDir": (runtime / "tmp").as_posix(),
+                "WorldServerPort": str(world), "Ra.Port": str(ra)},
+            "modules/playerbots.conf": {
+                "PlayerbotsDatabaseInfo": db(TRAIN_USER, TRAIN_PW, "dojo_playerbots", port=TRAIN_PORT).strip('"')},
+            "modules/mod_dojo.conf": {"Dojo.Instance": "t1"},
+        }
+        cls.rules = conf.load_rules(RULES)
+        for name, rules in cls.rules.items():
+            dist = synthetic_dist(rules)
+            write(cls.dist_configs / rules.dist, dist)
+            write(cls.train_configs / name, conf.render(dist, {**rules.training, **isolation[name]}))
         write(cls.train_configs / "authserver.conf",
-              f"LoginDatabaseInfo = {db(TRAIN_USER, TRAIN_PW, 'dojo_auth')}\nRealmServerPort = {auth}\n")
-        write(cls.train_configs / "modules" / "playerbots.conf",
-              f"Playerbots.DatabaseInfo = {db(TRAIN_USER, TRAIN_PW, 'dojo_playerbots')}\n")
+              f"LoginDatabaseInfo = {db(TRAIN_USER, TRAIN_PW, 'dojo_auth', port=TRAIN_PORT)}\nRealmServerPort = {auth}\n")
+        cls.mysql_base = t / "mysql84"
+        write(cls.mysql_base / "bin" / ("mysqld.exe" if os.name == "nt" else "mysqld"), "")
 
         cls.data = t / "dd"
         cls.layout = {
@@ -184,16 +215,17 @@ class PreflightTest(unittest.TestCase):
             "provenance": (cls.data / "manifests" / "provenance.json").as_posix(),
             "modules": ["mod-playerbots", "mod-dojo"],
             "assets": cls.assets.as_posix(),
-            "database": {"host": "127.0.0.1", "port": 3306, "user": TRAIN_USER,
+            "database": {"host": "127.0.0.1", "port": TRAIN_PORT, "user": TRAIN_USER,
                          "schemas": {"auth": "dojo_auth", "characters": "dojo_characters", "world": "dojo_world",
                                      "playerbots": "dojo_playerbots"},
-                         "bootstrap_sources": ["acore_world"]},
-            "ports": {"auth": auth, "world": world, "dojo_host": "127.0.0.1", "dojo": 0},
+                         "server": {"basedir": cls.mysql_base.as_posix(), "root": (t / "rt" / "mysql").as_posix(),
+                                    "buffer_pool": "256M"}},
+            "ports": {"auth": auth, "world": world, "ra": ra, "dojo_host": "127.0.0.1", "dojo": 0},
             "production": {"install_root": live.as_posix(), "core": cls.live_core.as_posix(),
                            "build": (live / "build").as_posix(), "configs": configs.as_posix(),
                            "modules": (live / "modules").as_posix(), "protected": [(live / "mind-data").as_posix()],
                            "databases": [{"host": "127.0.0.1", "port": 3306, "schema": "acore_world"}],
-                           "ports": [3724, 8085, 7878]},
+                           "ports": [3306, 33060, 3724, 8085, 7878]},
         }
         cls.runs = 0
         code, report, output = cls.run_preflight(cls.layout, "-WriteProvenance")
@@ -425,7 +457,7 @@ class PreflightTest(unittest.TestCase):
              str(layout_path)], capture_output=True, text=True, encoding="utf-8", timeout=300)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("run configure.ps1 first", result.stdout)
-        self.assertEqual(list((self.tmp / "rt" / "build").iterdir()), [])
+        self.assertEqual([p.name for p in (self.tmp / "rt" / "build").iterdir()], ["bin"])   # only the synthetic .dist
 
     def test_rejects_a_missing_marker(self):
         marker = Path(self.layout["roots"]["runtime"]) / "dojo.marker"
@@ -462,11 +494,122 @@ class PreflightTest(unittest.TestCase):
     def test_rejects_writable_live_database_targets(self):
         code, report, output = self.run_preflight(self.changed(database__schemas__world="acore_world"))
         self.assertEqual(code, 1)
-        self.assertIn("writable live database target", self.failures(report)["database layout world"])
-        code, report, output2 = self.run_preflight(self.changed(database__user=LIVE_USER))
+        self.assertIn("reuses a live schema name", self.failures(report)["database layout world"])
+        code, report, output2 = self.run_preflight(self.changed(database__schemas__world="acore_world",
+                                                                database__port=3306))
+        self.assertEqual(code, 1)
+        failures = self.failures(report)
+        self.assertIn("writable live database target", failures["database layout world"])
+        self.assertIn("is a live port", failures["database port"])
+        code, report, output3 = self.run_preflight(self.changed(database__user=LIVE_USER, database__port=3306))
         self.assertEqual(code, 1)
         self.assertIn("live server's database user", self.failures(report)["database layout auth"])
-        self.assert_no_secrets(output + output2)
+        self.assert_no_secrets(output + output2 + output3)
+
+    def test_the_dojo_database_is_its_own_instance(self):
+        for port in (3306, 33060):
+            code, report, _ = self.run_preflight(self.changed(database__port=port))
+            self.assertEqual(code, 1, port)
+            self.assertIn("own MySQL instance", self.failures(report)["database port"])
+        layout = copy.deepcopy(self.layout)
+        del layout["database"]["server"]
+        code, report, _ = self.run_preflight(layout)
+        self.assertIn("own MySQL instance", self.failures(report)["database server"])
+        for root in ((self.live / "build" / "mysql").as_posix(), (self.live / "mind-data" / "db").as_posix(),
+                     self.tmp.as_posix(), (self.source / "mysql").as_posix()):
+            code, report, _ = self.run_preflight(self.changed(database__server__root=root))
+            self.assertEqual(code, 1, root)
+            self.assertIn("database server root", self.failures(report), root)
+        code, report, _ = self.run_preflight(self.changed(database__server__basedir=(self.tmp / "nomysql").as_posix()))
+        self.assertIn("database server binaries", self.failures(report))
+
+    def test_checks_the_dojo_my_ini(self):
+        root = Path(self.layout["database"]["server"]["root"])
+        good = "\n".join(["[client]", "port=3306", "[mysqld]", f'datadir="{(root / "data").as_posix()}"',
+                          f"port={TRAIN_PORT}", "bind-address=127.0.0.1", "mysqlx=OFF", "named-pipe=OFF",
+                          "shared-memory=OFF", ""])
+        with self.with_file(root / "my.ini", good):
+            code, report, output = self.run_preflight(self.layout)
+        self.assertEqual(self.failures(report), {}, output)
+        checks = {c["check"]: c for c in report["checks"]}
+        self.assertEqual(checks["database my.ini"]["status"], "ok")
+        for old, new, words in (("port=13306", "port=3306", "port is"), ("bind-address=127.0.0.1", "bind-address=0.0.0.0",
+                                "not loopback"), ("mysqlx=OFF", "mysqlx=ON", "mysqlx"),
+                                ("named-pipe=OFF", "named-pipe=ON", "named-pipe"), ("/data", "/elsewhere", "datadir"),
+                                ("shared-memory=OFF", "password=hunter2", "password")):
+            with self.subTest(words), self.with_file(root / "my.ini", good.replace(old, new)):
+                code, report, output = self.run_preflight(self.layout)
+                self.assertEqual(code, 1)
+                self.assertIn(words, self.failures(report)["database my.ini"])
+                self.assertNotIn("hunter2", output)
+
+    def test_training_configs_follow_the_rules(self):
+        world = self.train_configs / "worldserver.conf"
+        bots = self.train_configs / "modules" / "playerbots.conf"
+        world_text = world.read_text(encoding="utf-8")
+        bots_text = bots.read_text(encoding="utf-8")
+        cases = [
+            (world, world_text.replace("Rate.Health = 1", "Rate.Health = 2"), "rules worldserver.conf", "Rate.Health"),
+            (world, world_text + "Rate.Haste = 2\n", "rules worldserver.conf", "not in the .dist"),
+            (world, world_text.replace("StockOnly = 7", "StockOnly = 8"), "rules worldserver.conf", "not the stock"),
+            (world, world_text.replace("StockOnly = 7\n", ""), "rules worldserver.conf", "compiled-in default"),
+            (world, world_text.replace('BindIP = "127.0.0.1"', 'BindIP = "0.0.0.0"'), "rules worldserver.conf", "BindIP"),
+            (world, world_text.replace('Ra.IP = "127.0.0.1"', 'Ra.IP = "0.0.0.0"'), "rules worldserver.conf", "Ra.IP"),
+            (bots, bots_text.replace('Playerbots.BotCheats = ""', 'Playerbots.BotCheats = "food"'),
+             "rules modules/playerbots.conf", "BotCheats"),
+            (bots, bots_text.replace("Playerbots.MaxRandomBots = 0", "Playerbots.MaxRandomBots = 500"),
+             "rules modules/playerbots.conf", "MaxRandomBots"),
+            (world, world_text.replace(f'TempDir = "{(self.runtime / "tmp").as_posix()}"', 'TempDir = ""'),
+             "config TempDir", "not inside the dojo runtime"),
+        ]
+        for path, text, check, words in cases:
+            with self.subTest(words), self.with_file(path, text):
+                code, report, output = self.run_preflight(self.layout)
+                self.assertEqual(code, 1)
+                self.assertIn(words, self.failures(report).get(check, ""), output)
+        dist = self.dist_configs / "worldserver.conf.dist"
+        with self.with_file(dist, None):
+            code, report, _ = self.run_preflight(self.layout)
+        self.assertIn("cannot be verified", self.failures(report)["rules worldserver.conf"])
+        drifted = dist.read_text(encoding="utf-8").replace("Rate.Mana = 1", "Rate.Mana = 3")
+        with self.with_file(dist, drifted):
+            code, report, _ = self.run_preflight(self.layout)
+        self.assertIn("the .dist says", self.failures(report)["rules worldserver.conf"])
+
+    def test_mod_dojo_names_this_instance_and_a_pinned_scenario(self):
+        path = self.train_configs / "modules" / "mod_dojo.conf"
+        text = path.read_text(encoding="utf-8")
+        with self.with_file(path, text.replace('Dojo.Instance = "t1"', 'Dojo.Instance = "t2"')):
+            code, report, _ = self.run_preflight(self.layout)
+        self.assertIn("not the layout's instance", self.failures(report)["config Dojo.Instance"])
+        manifest = self.source / "dojo" / "scenarios" / "s.json"
+        sha = "a" * 64
+        pinned = text.replace('Dojo.Scenario.Manifest = ""', f'Dojo.Scenario.Manifest = "{manifest.as_posix()}"').replace(
+            'Dojo.Scenario.Sha256 = ""', f'Dojo.Scenario.Sha256 = "{sha}"')
+        with self.with_file(manifest, "{}"), self.with_file(manifest.with_suffix(".sha256"), f"{sha}  s.json\n"), \
+                self.with_file(path, pinned):
+            code, report, output = self.run_preflight(self.layout)
+            self.assertEqual(self.failures(report), {}, output)
+            with self.with_file(manifest.with_suffix(".sha256"), f"{'b' * 64}  s.json\n"):
+                code, report, _ = self.run_preflight(self.layout)
+            self.assertIn("records", self.failures(report)["config Dojo.Scenario.Sha256"])
+            with self.with_file(path, pinned.replace(sha, sha.upper())):
+                code, report, _ = self.run_preflight(self.layout)
+            self.assertIn("hex", self.failures(report)["config Dojo.Scenario.Sha256"])
+        outside = self.live / "s.json"
+        with self.with_file(outside, "{}"), self.with_file(path, pinned.replace(manifest.as_posix(), outside.as_posix())):
+            code, report, _ = self.run_preflight(self.layout)
+        self.assertIn("inside the source or data root", self.failures(report)["config Dojo.Scenario.Manifest"])
+
+    def test_reads_the_live_playerbots_database(self):
+        bots = self.train_configs / "modules" / "playerbots.conf"
+        text = bots.read_text(encoding="utf-8")
+        with self.with_file(bots, text.replace(f";{TRAIN_PORT};", ";3306;").replace("dojo_playerbots", "acore_playerbots")):
+            code, report, output = self.run_preflight(self.layout)
+        self.assertEqual(code, 1)
+        self.assertIn("writable live database target",
+                      self.failures(report)["database training modules/playerbots.conf PlayerbotsDatabaseInfo"])
+        self.assert_no_secrets(output)
 
     def test_refuses_when_the_live_targets_cannot_be_read(self):
         """The reviewer's probe: no readable production.configs and no production.databases let acore_world pass."""
@@ -506,7 +649,7 @@ class PreflightTest(unittest.TestCase):
         self.assertIn("not on loopback", self.failures(report)["database layout auth"])
         conf = self.train_configs / "worldserver.conf"
         original = conf.read_text(encoding="utf-8")
-        with self.with_file(conf, original.replace(f'"127.0.0.1;3306;{TRAIN_USER};{TRAIN_PW};dojo_characters"',
+        with self.with_file(conf, original.replace(f'"127.0.0.1;{TRAIN_PORT};{TRAIN_USER};{TRAIN_PW};dojo_characters"',
                                                    f'"{socket.gethostname()};3306;{TRAIN_USER};{TRAIN_PW};acore_characters"')):
             code, report, output = self.run_preflight(self.layout)
         self.assertEqual(code, 1)
@@ -520,9 +663,13 @@ class PreflightTest(unittest.TestCase):
             code, report, output = self.run_preflight(self.layout)
         self.assertEqual(code, 1)
         failures = self.failures(report)
+        self.assertIn("reuses a live schema name", failures["database training worldserver.conf CharacterDatabaseInfo"])
+        live = original.replace(f";{TRAIN_PORT};{TRAIN_USER};{TRAIN_PW};dojo_characters", f";3306;{TRAIN_USER};{TRAIN_PW};acore_characters")
+        with self.with_file(conf, live):
+            code, report, output2 = self.run_preflight(self.layout)
         self.assertIn("writable live database target",
-                      failures["database training worldserver.conf CharacterDatabaseInfo"])
-        self.assert_no_secrets(output)
+                      self.failures(report)["database training worldserver.conf CharacterDatabaseInfo"])
+        self.assert_no_secrets(output + output2)
 
     def test_rejects_production_ports(self):
         code, report, _ = self.run_preflight(self.changed(ports__world=8085))
@@ -549,7 +696,8 @@ class PreflightTest(unittest.TestCase):
              "config WorldServerPort", "the default 8085"),
             (auth, auth_text.replace(f"RealmServerPort = {self.auth}\n", ""), self.layout,
              "config RealmServerPort", "the default 3724"),
-            (world, world_text + "SOAP.Enabled = 1\n", self.layout, "config SOAP.Port", "the default 7878"),
+            (world, world_text.replace("SOAP.Port = 0\n", "") + "SOAP.Enabled = 1\n", self.layout, "config SOAP.Port",
+             "the default 7878"),
             (auth, auth_text.replace(f"RealmServerPort = {self.auth}", f"RealmServerPort = {self.world}"), self.layout,
              "config RealmServerPort", "also WorldServerPort"),
         ]

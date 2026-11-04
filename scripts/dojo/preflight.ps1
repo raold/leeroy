@@ -209,7 +209,7 @@ function Read-DojoDbTargets([string] $ConfigDir, [string] $Label) {
     $files = [ordered]@{
         'worldserver.conf'         = @('LoginDatabaseInfo', 'WorldDatabaseInfo', 'CharacterDatabaseInfo')
         'authserver.conf'          = @('LoginDatabaseInfo')
-        'modules/playerbots.conf'  = @('Playerbots.DatabaseInfo', 'AiPlayerbot.DatabaseInfo')
+        'modules/playerbots.conf'  = @('PlayerbotsDatabaseInfo', 'Playerbots.DatabaseInfo', 'AiPlayerbot.DatabaseInfo')
     }
     foreach ($file in $files.Keys) {
         $conf = Read-DojoConf (Join-Path $ConfigDir $file)
@@ -539,6 +539,101 @@ if ($configs) {
             if ($trainingConf.ContainsKey('MapUpdate.Threads') -and $trainingConf['MapUpdate.Threads'] -ne '0') {
                 Add-DojoCheck 'FAIL' 'config MapUpdate.Threads' "is $($trainingConf['MapUpdate.Threads']); the first worker needs 0 (D11)"
             }
+            # The core's updater writes its mysql option file (with the training password) into TempDir, or the
+            # user's %TEMP% when it is empty, where the live server writes its own.
+            $temp = if ($trainingConf.ContainsKey('TempDir') -and $trainingConf['TempDir']) { Resolve-DojoPath $trainingConf['TempDir'] } else { $null }
+            if (-not $temp -or -not (Test-DojoUnder $temp $resolved.runtime)) {
+                Add-DojoCheck 'FAIL' 'config TempDir' "'$temp' is not inside the dojo runtime $($resolved.runtime)"
+            } else {
+                Add-DojoCheck 'ok' 'config TempDir' $temp
+            }
+        }
+    }
+}
+
+# --- training rules: each training config is its .dist plus the reviewed differences in training-rules.json ---
+
+$rulesPath = if ($resolved.source) { "$($resolved.source)/scripts/dojo/training-rules.json" } else { $null }
+$rules = $null
+if ($rulesPath -and (Test-Path -LiteralPath $rulesPath -PathType Leaf)) {
+    try { $rules = Get-Content -LiteralPath $rulesPath -Raw | ConvertFrom-Json -AsHashtable } catch { $rules = $null }
+}
+if ($rules -isnot [System.Collections.IDictionary] -or (Get-DojoValue $rules 'kind') -ne 'leeroy-dojo-training-rules') {
+    Add-DojoCheck 'FAIL' 'training rules' "cannot read $rulesPath"
+} elseif ($configsUsable) {
+    $distDir = if ($resolved.build) { "$($resolved.build)/bin/RelWithDebInfo/configs" } else { $null }
+    foreach ($file in $rules.files.Keys) {
+        $spec = $rules.files[$file]
+        $confPath = "$configs/$file"
+        if (-not (Test-Path -LiteralPath $confPath -PathType Leaf)) {
+            Add-DojoCheck 'note' "rules $file" "$confPath not provisioned yet"
+            continue
+        }
+        $distPath = if ($distDir) { "$distDir/$($spec.dist)" } else { '' }
+        if (-not $distPath -or -not (Test-Path -LiteralPath $distPath -PathType Leaf)) {
+            Add-DojoCheck 'FAIL' "rules $file" "no $distPath to compare with, so ordinary rules cannot be verified"
+            continue
+        }
+        $conf = Read-DojoConf $confPath
+        $dist = Read-DojoConf $distPath
+        $training = if ($spec.Contains('training')) { $spec.training } else { @{} }
+        $ordinary = if ($spec.Contains('ordinary')) { $spec.ordinary } else { @{} }
+        $isolation = @(if ($spec.Contains('isolation')) { $spec.isolation } else { @() })
+        $problems = [System.Collections.Generic.List[string]]::new()
+        foreach ($key in $ordinary.Keys) {
+            $want = [string] $ordinary[$key]
+            if ($dist[$key] -cne $want) { $problems.Add("$key`: the .dist says '$($dist[$key])', the rules expect the stock '$want'") }
+            if ($conf[$key] -cne $want) { $problems.Add("$key is '$($conf[$key])', not the ordinary '$want'") }
+        }
+        foreach ($key in $training.Keys) {
+            $want = [string] $training[$key].value
+            if (-not $conf.ContainsKey($key) -or $conf[$key] -cne $want) { $problems.Add("$key is '$($conf[$key])', not the training '$want'") }
+        }
+        foreach ($key in $dist.Keys) {
+            if (-not $conf.ContainsKey($key)) { $problems.Add("$key is missing, so a compiled-in default would apply") }
+        }
+        foreach ($key in $conf.Keys) {
+            if ($training.Contains($key) -or $ordinary.Contains($key) -or $key -in $isolation) { continue }
+            if (-not $dist.ContainsKey($key)) { $problems.Add("$key is not in the .dist (an unreviewed setting)") }
+            elseif ($conf[$key] -cne $dist[$key]) { $problems.Add("$key is '$($conf[$key])', not the stock '$($dist[$key])'") }
+        }
+        if ($problems.Count -eq 0) {
+            Add-DojoCheck 'ok' "rules $file" "$($dist.Count) stock keys, $($training.Count) training differences, $($ordinary.Count) ordinary rules held"
+        } else {
+            foreach ($p in ($problems | Select-Object -First 20)) { Add-DojoCheck 'FAIL' "rules $file" $p }
+            if ($problems.Count -gt 20) { Add-DojoCheck 'FAIL' "rules $file" "and $($problems.Count - 20) more" }
+        }
+    }
+
+    # mod_dojo.conf: this layout's instance, and a scenario manifest from the isolated source or data root whose
+    # pinned hash is the one recorded next to it.
+    $dojoConfPath = "$configs/modules/mod_dojo.conf"
+    if (Test-Path -LiteralPath $dojoConfPath -PathType Leaf) {
+        $dojoConf = Read-DojoConf $dojoConfPath
+        $wantInstance = [string] (Get-DojoValue $DojoLayout 'instance' '')
+        if ($dojoConf['Dojo.Instance'] -cne $wantInstance) {
+            Add-DojoCheck 'FAIL' 'config Dojo.Instance' "'$($dojoConf['Dojo.Instance'])' is not the layout's instance '$wantInstance'"
+        } else {
+            Add-DojoCheck 'ok' 'config Dojo.Instance' $wantInstance
+        }
+        $manifest = [string] $dojoConf['Dojo.Scenario.Manifest']
+        $pin = [string] $dojoConf['Dojo.Scenario.Sha256']
+        if ($manifest -or $pin) {
+            $m = Resolve-DojoPath $manifest
+            $inside = $m -and ((Test-DojoUnder $m $resolved.source) -or (Test-DojoUnder $m $resolved.data))
+            if (-not $m -or -not (Test-Path -LiteralPath $m -PathType Leaf) -or -not $inside) {
+                Add-DojoCheck 'FAIL' 'config Dojo.Scenario.Manifest' "'$manifest' is not a file inside the source or data root"
+            } elseif ($pin -cnotmatch '^[0-9a-f]{64}$') {
+                Add-DojoCheck 'FAIL' 'config Dojo.Scenario.Sha256' 'is not 64 lower-case hex digits'
+            } else {
+                $pinFile = [System.IO.Path]::ChangeExtension($m, '.sha256')
+                $recorded = if (Test-Path -LiteralPath $pinFile -PathType Leaf) { ((Get-Content -LiteralPath $pinFile -Raw) -split '\s+')[0] } else { '' }
+                if ($recorded -and $recorded -cne $pin) {
+                    Add-DojoCheck 'FAIL' 'config Dojo.Scenario.Sha256' "pins $($pin.Substring(0, 12)), but $pinFile records $($recorded.Substring(0, [Math]::Min(12, $recorded.Length)))"
+                } else {
+                    Add-DojoCheck 'ok' 'config Dojo.Scenario' "$m pinned at $($pin.Substring(0, 12))"
+                }
+            }
         }
     }
 }
@@ -725,10 +820,12 @@ foreach ($d in @(Get-DojoValue $DojoLayout 'production.databases' @())) {
     }
 }
 $liveSchemas = @{}
+$liveSchemaNames = @{}
 $liveUsers = @{}
 foreach ($t in $liveTargets) {
     $endpoint = '{0}:{1}' -f (Get-DojoHostKey $t.host), $t.port
     $liveSchemas["$endpoint/$($t.schema)".ToLowerInvariant()] = $true
+    $liveSchemaNames[$t.schema.ToLowerInvariant()] = $true
     if ($t.user) { $liveUsers["$endpoint/$($t.user)"] = $true }
 }
 
@@ -766,6 +863,8 @@ foreach ($t in $trainingTargets) {
         Add-DojoCheck 'FAIL' "database $($t.source)" "$where is not on loopback; the dojo's databases stay on this machine's loopback"
     } elseif ($liveSchemas.ContainsKey($key)) {
         Add-DojoCheck 'FAIL' "database $($t.source)" "writable live database target $where"
+    } elseif ($liveSchemaNames.ContainsKey($t.schema.ToLowerInvariant()) -or $t.schema -like 'acore_*') {
+        Add-DojoCheck 'FAIL' "database $($t.source)" "$where reuses a live schema name; dojo schemas never share one, on any server"
     } elseif ($t.user -and $liveUsers.ContainsKey("$endpoint/$($t.user)")) {
         Add-DojoCheck 'FAIL' "database $($t.source)" "$where uses the live server's database user"
     } else {
@@ -778,14 +877,76 @@ foreach ($t in $trainingTargets) {
 }
 foreach ($t in $trainingTargets | Where-Object { $_.source -like 'training *' }) {
     $key = ('{0}:{1}/{2}' -f (Get-DojoHostKey $t.host), $t.port, $t.schema).ToLowerInvariant()
-    if (-not $seen.ContainsKey($key) -and -not $liveSchemas.ContainsKey($key)) {
+    if (-not $seen.ContainsKey($key) -and -not $liveSchemas.ContainsKey($key) -and -not $liveSchemaNames.ContainsKey($t.schema.ToLowerInvariant()) -and $t.schema -notlike 'acore_*') {
         Add-DojoCheck 'FAIL' "database $($t.source)" "$($t.host):$($t.port)/$($t.schema) is not one of the layout's schemas"
     }
 }
 foreach ($s in @(Get-DojoValue $DojoLayout 'database.bootstrap_sources' @())) {
     Add-DojoCheck 'note' 'database bootstrap' "$s may be read to provision the dojo schemas; runtime never writes it"
 }
-Add-DojoCheck 'note' 'database grants' 'not verified: preflight never connects to a database'
+Add-DojoCheck 'note' 'database grants' 'not verified: preflight never connects to a database (python -m leeroy_dojo realm db-check does)'
+
+# --- the dojo's own MySQL instance: a port no live database uses, its own folder, loopback only ---
+
+$dbPort = [int] (Get-DojoValue $DojoLayout 'database.port' 0)
+$liveDbPorts = @{ 3306 = 'MySQL default'; 33060 = 'MySQL X default' }
+foreach ($t in $liveTargets) { $liveDbPorts[[int] $t.port] = "live $($t.source)" }
+foreach ($p in @(Get-DojoValue $DojoLayout 'production.ports' @())) { if (-not $liveDbPorts.ContainsKey([int] $p)) { $liveDbPorts[[int] $p] = 'production' } }
+if ($liveDbPorts.ContainsKey($dbPort)) {
+    Add-DojoCheck 'FAIL' 'database port' "$dbPort is a live port ($($liveDbPorts[$dbPort])); the dojo runs its own MySQL instance"
+} else {
+    Add-DojoCheck 'ok' 'database port' "$dbPort (not a live database port)"
+}
+$server = Get-DojoValue $DojoLayout 'database.server'
+if ($server -isnot [System.Collections.IDictionary]) {
+    Add-DojoCheck 'FAIL' 'database server' 'layout database.server is missing: the dojo needs its own MySQL instance'
+} else {
+    $serverRoot = Resolve-DojoPath ([string] (Get-DojoValue $server 'root' ''))
+    $basedir = Resolve-DojoPath ([string] (Get-DojoValue $server 'basedir' ''))
+    $rootProblems = [System.Collections.Generic.List[string]]::new()
+    if (-not $serverRoot) { $rootProblems.Add('database.server.root is missing') }
+    foreach ($p in @($prod.core, $prod.build, $prod.configs, $prod.modules) + $protected) {
+        if ($serverRoot -and $p -and ((Test-DojoUnder $serverRoot $p) -or (Test-DojoUnder $p $serverRoot))) { $rootProblems.Add("overlaps $p") }
+    }
+    if ($serverRoot -and $prod.install_root -and (Test-DojoUnder $prod.install_root $serverRoot)) { $rootProblems.Add("contains the live install") }
+    if ($serverRoot -and $resolved.source -and (Test-DojoUnder $serverRoot $resolved.source)) { $rootProblems.Add('is inside the source checkout') }
+    if ($rootProblems.Count -gt 0) {
+        Add-DojoCheck 'FAIL' 'database server root' "$serverRoot $($rootProblems -join '; ')"
+    } else {
+        Add-DojoCheck 'ok' 'database server root' $serverRoot
+    }
+    $mysqld = if ($IsWindows) { "$basedir/bin/mysqld.exe" } else { "$basedir/bin/mysqld" }
+    Add-DojoCheck $(if ($basedir -and (Test-Path -LiteralPath $mysqld -PathType Leaf)) { 'ok' } else { 'FAIL' }) 'database server binaries' $mysqld
+    $myIni = if ($serverRoot) { "$serverRoot/my.ini" } else { $null }
+    if ($myIni -and (Test-Path -LiteralPath $myIni -PathType Leaf)) {
+        $ini = @{}
+        $section = ''
+        foreach ($line in [System.IO.File]::ReadAllLines($myIni)) {
+            $l = $line.Trim()
+            if (-not $l -or $l.StartsWith('#') -or $l.StartsWith(';')) { continue }
+            if ($l -match '^\[(.+)\]$') { $section = $Matches[1].Trim().ToLowerInvariant(); continue }
+            if ($section -ne 'mysqld') { continue }
+            $k, $v = $l.Split('=', 2)
+            $v = if ($null -eq $v) { '' } else { $v.Trim().Trim('"') }
+            $ini[$k.Trim().ToLowerInvariant().Replace('_', '-')] = $v
+        }
+        $iniProblems = [System.Collections.Generic.List[string]]::new()
+        if ($ini['port'] -ne "$dbPort") { $iniProblems.Add("port is '$($ini['port'])', not $dbPort") }
+        if ($ini['bind-address'] -notin '127.0.0.1', '::1') { $iniProblems.Add("bind-address '$($ini['bind-address'])' is not loopback") }
+        if (-not (Test-DojoSame (Resolve-DojoPath $ini['datadir']) "$serverRoot/data")) { $iniProblems.Add("datadir '$($ini['datadir'])' is not $serverRoot/data") }
+        foreach ($k in 'mysqlx', 'named-pipe', 'shared-memory') {
+            if ($ini[$k] -notin 'OFF', '0') { $iniProblems.Add("$k is not off") }
+        }
+        if ($ini.ContainsKey('password')) { $iniProblems.Add('holds a password') }
+        if ($iniProblems.Count -gt 0) {
+            Add-DojoCheck 'FAIL' 'database my.ini' "$myIni $($iniProblems -join '; ')"
+        } else {
+            Add-DojoCheck 'ok' 'database my.ini' "$myIni (127.0.0.1:$dbPort, own datadir, X plugin, pipes and shared memory off)"
+        }
+    } else {
+        Add-DojoCheck 'note' 'database my.ini' "not initialized yet (python -m leeroy_dojo realm db-init)"
+    }
+}
 
 # --- assets ---
 
@@ -857,7 +1018,7 @@ $bound = @{}
 $configPorts = @(
     @('worldserver.conf', $trainingConf, 'WorldServerPort', 'world', $true),
     @('authserver.conf', $trainingAuth, 'RealmServerPort', 'auth', $true),
-    @('worldserver.conf', $trainingConf, 'Ra.Port', $null, ($trainingConf['Ra.Enable'] -eq '1')),
+    @('worldserver.conf', $trainingConf, 'Ra.Port', 'ra', ($trainingConf['Ra.Enable'] -eq '1')),
     @('worldserver.conf', $trainingConf, 'SOAP.Port', $null, ($trainingConf['SOAP.Enabled'] -eq '1'))
 )
 foreach ($entry in $configPorts) {
