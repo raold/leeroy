@@ -9,7 +9,7 @@ import uuid
 from conftest import run, seed_test_cast
 from leeroy_mind.memory.writer import WriteResult
 from leeroy_mind.protocol import Ack
-from leeroy_mind.realm import bank, canon, mail, night, protocol, rivals
+from leeroy_mind.realm import bank, canon, mail, night, protocol, rivals, speech as speech_module
 from leeroy_mind.realm.direct import DirectLedger
 from leeroy_mind.realm.ports import RealmDisabled
 from leeroy_mind.realm.protocol import BankStock, GrantAchievement
@@ -369,3 +369,32 @@ def test_a_benchmark_loss_makes_the_rival_boast_in_trade(tmp_path, store, clock,
         await s.realm.close()
     run(go())
     assert [(r["kind"], r["state"]) for r in speech_lines(store)] == [("rival", "sent")]
+
+
+# -- item 6: the cards rivals writes are the cards speech reads -----------------------------------
+
+def test_speech_reads_the_cards_the_rivals_step_wrote(tmp_path, store, clock):
+    seed_roster(store)
+    app, realm = live_realm(tmp_path, store, clock)
+    plan = with_cards(plan_of())
+    rivals_approved(tmp_path, clock, plan)
+    progression = next(g for g in plan["guilds"] if g["role"] == "progression")
+    officer = progression["actors"][0]
+
+    async def go():
+        await connect(app)
+        await realm.part("steps").tick()      # the step writes its rows and cards first
+        await realm.close()
+    run(go())
+    spec = speech_module._Spec("rival", "officer", officer["guid"], officer["name"], progression["guild_id"],
+                               progression["name"], "trade", 0, 0, "Say one line in Trade.")
+    prompt = realm.part("speech")._messages(spec)[-1]["content"]
+    assert "About you: habits: short sentences" in prompt and f"name: {officer['name']};" in prompt
+    assert f"Your guild: name: {progression['name']}; role: {rivals.PERSONALITY['progression']}" in prompt
+    cards = tmp_path / "realm" / "cards"
+    assert (cards / f"guild-{progression['guild_id']}.json").is_file()
+    # A guild card he wrote by hand is never overwritten by a later apply.
+    mine = cards / f"guild-{progression['guild_id']}.json"
+    mine.write_text('{"name": "his own words"}\n', encoding="utf-8")
+    realm.part("rivals")._write_cards(plan["cards"], [officer["guid"]], plan["guilds"])
+    assert mine.read_text(encoding="utf-8") == '{"name": "his own words"}\n'

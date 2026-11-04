@@ -470,7 +470,8 @@ def test_plan_applies_once(tmp_path, store, clock):
     assert counts(store) == (3, len(every), sum(len(g["raiders"]) for g in plan["guilds"]))
     assert store.conn.execute("SELECT name FROM realm_guild WHERE id=7").fetchone()[0] == "Rival Name"
     cards = tmp_path / "realm" / "cards"
-    assert sorted(p.stem for p in cards.glob("*.json")) == sorted(plan["cards"])
+    assert sorted(p.stem for p in cards.glob("*.json") if not p.stem.startswith("guild-")) == sorted(plan["cards"])
+    assert sorted(p.stem for p in cards.glob("guild-*.json")) == ["guild-11", "guild-7", "guild-8"]
     assert json.loads((cards / f"{every[0]}.json").read_text(encoding="utf-8")) == plan["cards"][str(every[0])]
 
 
