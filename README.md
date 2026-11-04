@@ -100,7 +100,7 @@ Apply them to a checkout of each module with
 ./ac-update.sh [--dry-run]   # pull core + git modules, rebasing local patches
 ./ac-backup.sh [label]       # mysqldump all four databases
 ./ac-build.sh                # preflight checks, configure, build
-./ac-server.sh start|stop|status
+./ac-server.sh start|stop|status # the game servers and the mind
 ./ac-voice.sh start|stop|status # voice service; follows LEEROY_VOICE_DATA and voice.toml
 ./ac-snapshot.sh             # copy live configs and module patches into this repo
 ```
