@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import math
+import re
 from typing import Callable
 
 from .ws import WsClient, WsError
@@ -22,6 +23,7 @@ TRANSCRIPT = 200  # what a voice state keeps
 MAX_CHANNEL = 64
 MAX_GUID = 0xFFFFFFFF
 DB_LIMIT = 12.0
+_IDENT = re.compile(r"[a-z_]{1,32}\Z")  # a message type fit to log
 
 log = logging.getLogger("leeroy_mind.console")
 
@@ -164,8 +166,14 @@ class VoiceRelay:
                     ws = await self._connect(HOST, port, PATH, origin=f"http://{HOST}:{port}")
                 except WsError:
                     ws = None
+                except Exception as e:  # never the end of the relay: it tries again
+                    log.error("console_voice_connect_failed: error=%s", type(e).__name__)
+                    ws = None
                 if ws is not None:
-                    await self._serve(ws)
+                    try:
+                        await self._serve(ws)
+                    except Exception as e:
+                        log.error("console_voice_link_failed: error=%s", type(e).__name__)
             if not self._closing:
                 await asyncio.sleep(self._retry_s)
 
@@ -186,7 +194,13 @@ class VoiceRelay:
                     continue
                 if first and msg["type"] != "state":
                     continue  # the service's first message is the state
-                self.mirror.apply(msg)
+                try:
+                    self.mirror.apply(msg)
+                except Exception as e:  # a message of a shape the mirror does not know
+                    log.warning("console_voice_message_skipped: type=%s error=%s",
+                                msg["type"] if _IDENT.match(msg["type"]) else "other",
+                                type(e).__name__)
+                    continue
                 if first:
                     first = False
                     self.connected = True

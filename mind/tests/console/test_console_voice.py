@@ -2,6 +2,7 @@
 fake voice service built from the same frame helpers. Invented names only."""
 import asyncio
 import json
+import logging
 from contextlib import asynccontextmanager
 
 import pytest
@@ -228,6 +229,69 @@ def test_the_relay_connects_mirrors_forwards_and_reconnects():
             await until(lambda: relay.connected)  # it comes back
             await relay.close()
             task.cancel()
+    asyncio.run(go())
+
+
+def test_the_relay_survives_a_message_it_cannot_mirror_and_logs_its_class(caplog):
+    async def go():
+        async with voice_service() as fake:
+            got = []
+            relay = VoiceRelay(lambda: fake.port, got.append, retry_s=0.05)
+            task = asyncio.create_task(relay.run())
+            await until(lambda: relay.connected)
+            with caplog.at_level(logging.WARNING, logger="leeroy_mind.console"):
+                for bad in ({"type": "volume"}, {"type": "mute", "guid": 101},
+                            {"type": "speaking", "guid": [101], "on": True}):
+                    await fake.send(bad)
+                await fake.send({"type": "ptt", "down": True})
+                await until(lambda: relay.mirror.state["ptt"] is True)
+                mirror = relay.mirror.apply
+
+                def odd(msg):
+                    if msg["type"] != "ptt":
+                        raise ValueError("a private value")
+                    mirror(msg)
+                relay.mirror.apply = odd
+                await fake.send({"type": "Private Words"})
+                await fake.send({"type": "ptt", "down": False})
+                await until(lambda: relay.mirror.state["ptt"] is False)
+            assert relay.connected and not task.done()
+            assert got[-1] == {"type": "ptt", "down": False}
+            assert [m["type"] for m in got[2:]] == ["ptt", "ptt"]  # nothing bad passed on
+            skipped = [r.getMessage() for r in caplog.records
+                       if r.getMessage().startswith("console_voice_message_skipped")]
+            assert skipped == ["console_voice_message_skipped: type=volume error=KeyError",
+                               "console_voice_message_skipped: type=mute error=KeyError",
+                               "console_voice_message_skipped: type=speaking error=TypeError",
+                               "console_voice_message_skipped: type=other error=ValueError"]
+            await relay.close()
+            task.cancel()
+    asyncio.run(go())
+
+
+def test_the_relay_tries_again_after_an_unexpected_link_failure(caplog):
+    class Breaks:
+        async def recv(self):
+            raise ConnectionResetError("reset by a private peer")
+
+        async def close(self):
+            pass
+
+    async def go():
+        calls = []
+
+        async def connect(*a, **kw):
+            calls.append(1)
+            return Breaks()
+        relay = VoiceRelay(lambda: 7880, lambda m: None, connect=connect, retry_s=0.01)
+        with caplog.at_level(logging.ERROR, logger="leeroy_mind.console"):
+            task = asyncio.create_task(relay.run())
+            await until(lambda: len(calls) >= 3)
+            assert not task.done()
+            await relay.close()
+            task.cancel()
+        assert "console_voice_link_failed: error=ConnectionResetError" in caplog.text
+        assert "private" not in caplog.text
     asyncio.run(go())
 
 
