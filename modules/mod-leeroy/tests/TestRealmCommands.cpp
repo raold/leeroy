@@ -80,7 +80,7 @@ void RejectField(std::string_view fixture, char const* field, json bad)
 }
 json Event(std::string_view type)
 {
-    if (type == "realm_kill")
+    if (type == "realm_kill" || type == "realm_dungeon_kill")
     {
         Kill kill;
         kill.killId = "0123456789abcdef0123456789abcdef:1";
@@ -89,7 +89,10 @@ json Event(std::string_view type)
         kill.difficulty = 1; kill.size = 25; kill.heroic = false;
         kill.killedAtMs = 1700000000000; kill.verifiedAtMs = 1700000000001;
         kill.humanPresent = true; kill.castMembers = {11001, 11003};
-        return MakeRealmKill(kill);
+        if (type == "realm_kill") return MakeRealmKill(kill);
+        kill.map = 574; kill.instanceId = 15002; kill.bossId = 2;
+        kill.difficulty = 1; kill.size = 5; kill.heroic = true; kill.attempts = 2;
+        return MakeRealmDungeonKill(kill);
     }
     if (type == "realm_job") return MakeRealmJob({"realm-test", "rearm", true, "", 11001, 2});
     if (type == "realm_pvp")
@@ -100,7 +103,7 @@ json Event(std::string_view type)
     }
     if (type == "channel_chat") return MakeChannelChat("trade", 11001, "Test Member", 1637, "Ready for a raid.", true);
     if (type == "pvp_kill") return MakePvpKill(11001, 11002, 571, 4197);
-    if (type == "duel_end") return MakeDuelEnd(11001, 11002, "won");
+    if (type == "duel_end") return MakeDuelEnd(11001, 11002, "won", 0, 33, false);
     if (type == "realm_achievement")
         return MakeRealmAchievement(11002, 4576, "Realm First! Fall of the Lich King", 81, 512, true);
     if (type == "pvp_flag") return MakePvpFlag(11001, true);
@@ -173,11 +176,21 @@ std::optional<Kill> FixtureKill(json const& msg)
 std::optional<json> FixtureBody(json const& msg)
 {
     auto const type = msg.at("type").get<std::string>();
-    if (type == "realm_kill")
+    if (type == "realm_kill" || type == "realm_dungeon_kill")
     {
         auto const kill = FixtureKill(msg);
-        if (!kill || !ValidKillProof(*kill)) return std::nullopt;
-        return MakeRealmKill(*kill);
+        if (!kill || !ValidKillProof(*kill) || IsDungeonKill(*kill) != (type == "realm_dungeon_kill")) return std::nullopt;
+        return type == "realm_kill" ? MakeRealmKill(*kill) : MakeRealmDungeonKill(*kill);
+    }
+    if (type == "duel_end")
+    {
+        std::uint32_t winner = 0, loser = 0, map = 0, zone = 0;
+        if (!SameKeys(msg, Event(type)) || !Unsigned(msg.at("winner"), winner) || !Unsigned(msg.at("loser"), loser)
+            || !Unsigned(msg.at("map"), map) || !Unsigned(msg.at("zone"), zone) || !msg.at("city").is_boolean()
+            || !msg.at("result").is_string()) return std::nullopt;
+        auto const result = msg.at("result").get<std::string>();
+        if (result != "won" && result != "fled" && result != "interrupted") return std::nullopt;
+        return MakeDuelEnd(winner, loser, result, map, zone, msg.at("city").get<bool>());
     }
     if (type == "realm_achievement")
     {
@@ -249,7 +262,7 @@ LEEROY_TEST(Realm_FixtureLines)
             CHECK(valid); CHECK_EQ(row.at("name").get<std::string>(), type + "_ok"); full.insert(type);
         }
     }
-    CHECK_EQ(full.size(), kCommandTypes.size()); CHECK_EQ(events.size(), 15u);
+    CHECK_EQ(full.size(), kCommandTypes.size()); CHECK_EQ(events.size(), 16u);
     for (auto type : kCommandTypes) CHECK(full.contains(std::string(type)));
 }
 
@@ -591,6 +604,22 @@ LEEROY_TEST(Realm_RealmFirstUsesTheCoreAchievementFlags)
     CHECK(hook.find("RBAC_PERM_CANNOT_EARN_REALM_FIRST_ACHIEVEMENTS") != std::string::npos);
     auto const grant = RealmSection(guild, "LeeroyCommandResult Grant(", "class RealmAchievementScript");
     CHECK(grant.find("LeeroyQuietScope quiet;") < grant.find("player->CompletedAchievement(achievement);"));
+}
+
+LEEROY_TEST(Realm_DuelCityUsesTheCoreZoneFlag)
+{
+    // AreaTable.dbc 3.3.5a flags: Orgrimmar 0x200138, Undercity 0x4200138,
+    // Dalaran 0x20004d28 and Shattrath 0x4d28 carry AREA_FLAG_CAPITAL; the
+    // "City" channel zone (0x200), Stranglethorn (0x40) and Wintergrasp do not.
+    for (auto flags : {0x200138u, 0x4200138u, 0x20004d28u, 0x4d28u}) CHECK(IsCityZone(flags));
+    for (auto flags : {0x200u, 0x40u, 0x9004441u, 0u}) CHECK(!IsCityZone(flags));
+    auto duel = MakeDuelEnd(1, 2, "fled", 1, 1637, true);
+    CHECK_EQ(duel.size(), 7u); CHECK_EQ(duel.at("map"), 1u); CHECK_EQ(duel.at("zone"), 1637u);
+    CHECK_EQ(duel.at("city"), true);
+    // Source placement only: the zone flag is the core's, for either duelist.
+    auto const duelHook = RealmSection(RealmSource("RealmBodies.cpp"), "void OnPlayerDuelEnd(", "void OnPlayerPVPFlagChange(");
+    CHECK(duelHook.find("sAreaTableStore.LookupEntry(player->GetZoneId())") < duelHook.find("IsCityZone(zone->flags)"));
+    CHECK(duelHook.find("inCity(winner) || inCity(loser)") != std::string::npos);
 }
 
 LEEROY_TEST(Realm_AnnouncementText)

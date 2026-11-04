@@ -73,11 +73,18 @@ bool ValidRaidMode(std::int32_t difficulty, std::uint32_t size, bool heroic)
         && heroic == (difficulty >= 2);
 }
 
+bool ValidKillMode(std::int32_t difficulty, std::uint32_t size, bool heroic)
+{
+    if (size == 5) return (difficulty == 0 || difficulty == 1) && heroic == (difficulty == 1);
+    return ValidRaidMode(difficulty, size, heroic);
+}
+
 bool ValidKillObservation(Kill const& kill)
 {
     auto const maximum = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
     return kill.nativeEpoch && kill.guildId && kill.humanGuid && kill.instanceId
-        && ValidRaidMode(kill.difficulty, kill.size, kill.heroic) && kill.attempts <= kMaxAttempts
+        && ValidKillMode(kill.difficulty, kill.size, kill.heroic) && kill.attempts <= kMaxAttempts
+        && (!IsDungeonKill(kill) || kill.humanPresent || kill.castMembers.size() >= kDungeonGuildCast)
         && kill.verifiedMs >= kill.atMs && kill.verifiedMs - kill.atMs <= kKillVerifyWithinMs
         && kill.killedAtMs && kill.killedAtMs <= kill.verifiedAtMs && kill.verifiedAtMs <= maximum
         && ValidFightDuration(kill.fightStartedAtMs, kill.fightMs, kill.killedAtMs, kill.humanPresent)
@@ -176,7 +183,7 @@ std::uint64_t FightStarts::Intent(FightContext const& context, FightState old, F
         if (actual != FightState::Resting || !humanPresent || !unixMs
             || unixMs > kMaxFightStartedAtMs
             || !context.mapIdentity || !context.lifecycle || !context.nativeEpoch || !context.guildId
-            || !context.humanGuid || !context.instanceId || !ValidRaidMode(context.difficulty, context.size, context.heroic)
+            || !context.humanGuid || !context.instanceId || !ValidKillMode(context.difficulty, context.size, context.heroic)
             || _starts.size() >= Capacity || _generation == std::numeric_limits<std::uint64_t>::max()) return 0;
         _starts.push_back({context, ++_generation, nowMs, unixMs, nowMs, false});
         return 0;
@@ -249,7 +256,7 @@ std::vector<FightContext> FightStarts::Contexts(std::uintptr_t mapIdentity) cons
 
 bool KillRing::Add(Kill kill)
 {
-    if (!ValidKillProof(kill)) return false;
+    if (!ValidKillProof(kill) || !ValidRaidMode(kill.difficulty, kill.size, kill.heroic)) return false;
     for (std::size_t i = 0; i < _count; ++i)
         if (_kills[i].killId == kill.killId) return _kills[i] == kill;
     _kills[_next] = std::move(kill);

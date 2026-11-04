@@ -526,10 +526,12 @@ json KillBody(std::string_view type, Kill const& e)
 }
 
 json MakeRealmKill(Kill const& e) { return KillBody("realm_kill", e); }
+json MakeRealmDungeonKill(Kill const& e) { return KillBody("realm_dungeon_kill", e); }
 
 std::optional<AnnouncementMetrics> ValidatedAnnouncementMetrics(AnnounceCmd const& request, Kill const& proof)
 {
-    if (!ValidKillProof(proof) || request.killId != proof.killId
+    if (!ValidKillProof(proof) || !ValidRaidMode(proof.difficulty, proof.size, proof.heroic)
+        || request.killId != proof.killId
         || static_cast<KillIdentity const&>(request) != static_cast<KillIdentity const&>(proof)) return std::nullopt;
     AnnouncementMetrics metrics;
     if (request.attempts)
@@ -570,8 +572,12 @@ json MakeChannelChat(std::string_view channel, std::uint32_t fromGuid, std::stri
 }
 json MakePvpKill(std::uint32_t killer, std::uint32_t victim, std::uint32_t map, std::uint32_t zone)
 { return {{"type", "pvp_kill"}, {"killer", killer}, {"victim", victim}, {"map", map}, {"zone", zone}}; }
-json MakeDuelEnd(std::uint32_t winner, std::uint32_t loser, std::string_view result)
-{ return {{"type", "duel_end"}, {"winner", winner}, {"loser", loser}, {"result", result}}; }
+json MakeDuelEnd(std::uint32_t winner, std::uint32_t loser, std::string_view result,
+    std::uint32_t map, std::uint32_t zone, bool city)
+{
+    return {{"type", "duel_end"}, {"winner", winner}, {"loser", loser}, {"result", result},
+        {"map", map}, {"zone", zone}, {"city", city}};
+}
 json MakeRealmAchievement(std::uint32_t guid, std::uint32_t achievementId, std::string_view name,
     std::uint32_t category, std::uint32_t flags, bool realmFirst)
 {

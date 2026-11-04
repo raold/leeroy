@@ -800,8 +800,15 @@ public:
         if (!module.On() || !winner || !loser) return;
         EndedDuel(winner, loser);
         auto w = winner->GetGUID().GetCounter(), l = loser->GetGUID().GetCounter();
+        // The core's own city rule (its capital zone flag), for either duelist.
+        auto const inCity = [](Player const* player)
+        {
+            auto const* zone = sAreaTableStore.LookupEntry(player->GetZoneId());
+            return zone && IsCityZone(zone->flags);
+        };
         if (module.Watched(w) || module.Watched(l))
-            Publish(MakeDuelEnd(w, l, type == DUEL_WON ? "won" : type == DUEL_FLED ? "fled" : "interrupted"));
+            Publish(MakeDuelEnd(w, l, type == DUEL_WON ? "won" : type == DUEL_FLED ? "fled" : "interrupted",
+                winner->GetMapId(), winner->GetZoneId(), inCity(winner) || inCity(loser)));
     }
     void OnPlayerPVPFlagChange(Player* player, bool /*state*/) override
     {

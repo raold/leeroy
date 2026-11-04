@@ -170,8 +170,10 @@ struct RealmModule::State
                 kill.killId = killBoot + ':' + std::to_string(killSerial + 1);
                 kill.publishedAtMs = static_cast<std::uint64_t>(published);
                 if (!ValidKillProof(kill)) continue;
-                auto line = EncodeEvent(published, MakeRealmKill(kill));
-                if (!kills.Add(kill)) continue;
+                // A 5-man guild kill is evidence only: never announced, never in the ring.
+                bool const dungeon = IsDungeonKill(kill);
+                auto line = EncodeEvent(published, dungeon ? MakeRealmDungeonKill(kill) : MakeRealmKill(kill));
+                if (!dungeon && !kills.Add(kill)) continue;
                 ++killSerial;
                 lines.push_back(std::move(line)); // Exact ring record exists before any bridge publication.
             }

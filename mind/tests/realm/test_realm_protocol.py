@@ -52,7 +52,7 @@ EVENT_FIELDS = {
     "realm_job": "ts id kind state reason guid value pvp_owner",
     "channel_chat": "ts channel from_guid from_name zone text via_bridge",
     "pvp_kill": "ts killer victim map zone",
-    "duel_end": "ts winner loser result",
+    "duel_end": "ts winner loser result map zone city",
     "pvp_flag": "ts guid flagged",
     "wg": "ts state defender seconds update_ms",
     "arena_queue": "ts team_id arena_type rated",
@@ -66,6 +66,9 @@ EVENT_FIELDS = {
     "realm_kill": ("ts kill_id native_epoch guild_id human_guid killed_at_ms verified_at_ms "
                    "fight_started_at_ms fight_ms attempts map instance_id boss_id difficulty size heroic "
                    "human_present cast_members"),
+    "realm_dungeon_kill": ("ts kill_id native_epoch guild_id human_guid killed_at_ms verified_at_ms "
+                           "fight_started_at_ms fight_ms attempts map instance_id boss_id difficulty size "
+                           "heroic human_present cast_members"),
     "realm_achievement": "ts guid achievement_id name category flags realm_first",
 }
 
@@ -95,7 +98,7 @@ def command_from_message(msg):
 def test_authoritative_maps_fields_and_immutable_message_shapes():
     assert list(protocol.COMMANDS) == list(COMMAND_FIELDS)
     assert list(protocol.EVENTS) == list(EVENT_FIELDS)
-    assert len(protocol.COMMANDS) == 33 and len(protocol.EVENTS) == 15
+    assert len(protocol.COMMANDS) == 33 and len(protocol.EVENTS) == 16
     for registry, expected in ((protocol.COMMANDS, COMMAND_FIELDS), (protocol.EVENTS, EVENT_FIELDS)):
         for name, cls in registry.items():
             assert [field.name for field in dataclasses.fields(cls)] == expected[name].split()
@@ -542,6 +545,10 @@ def test_announce_proof_fields_are_required_and_zero_metrics_encode_explicitly()
             command_from_message({key: value for key, value in msg.items() if key != field})
 
 
+def dungeon_event():
+    return next(row["msg"] for row in fixtures() if row["name"] == "realm_dungeon_kill_event")
+
+
 def test_native_kill_attempts_are_the_exact_native_count_or_unknown():
     protocol.register()
     for attempts in (0, 1, 3, protocol.MAX_ATTEMPTS):
@@ -554,6 +561,48 @@ def test_native_kill_attempts_are_the_exact_native_count_or_unknown():
               if key not in {"v", "type"}}
     with pytest.raises(TypeError, match="attempts"):
         protocol.RealmKill(**fields)
+
+
+@pytest.mark.parametrize("difficulty,heroic", [(0, False), (1, True)])
+def test_dungeon_kill_accepts_exact_five_man_modes(difficulty, heroic):
+    protocol.register()
+    msg = {**dungeon_event(), "difficulty": difficulty, "heroic": heroic}
+    parsed = wire.parse_event(json.dumps(msg))
+    assert type(parsed) is protocol.RealmDungeonKill
+    assert (parsed.size, parsed.difficulty, parsed.heroic, parsed.attempts) == (5, difficulty, heroic, 2)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("size", 10), ("size", 25), ("difficulty", -1), ("difficulty", 2), ("heroic", False),
+    ("attempts", 100), ("cast_members", [11003, 11001]),
+])
+def test_dungeon_kill_rejects_raid_or_unmapped_modes(field, value):
+    protocol.register()
+    with pytest.raises(wire.ProtocolError):
+        wire.parse_event(json.dumps({**dungeon_event(), field: value}))
+
+
+@pytest.mark.parametrize("members,human,valid", [
+    ([11001, 11003, 11004, 11005, 11006], False, True), ([11001, 11003, 11004, 11005], False, False),
+    ([], True, True), ([11001], True, True), ([], False, False),
+])
+def test_dungeon_kill_is_a_guild_kill_only_with_him_or_the_whole_group(members, human, valid):
+    protocol.register()
+    msg = {**dungeon_event(), "cast_members": members, "human_present": human}
+    if valid:
+        assert wire.parse_event(json.dumps(msg)).cast_members == tuple(members)
+    else:
+        with pytest.raises(wire.ProtocolError):
+            wire.parse_event(json.dumps(msg))
+
+
+def test_raid_and_dungeon_kills_never_share_a_class():
+    protocol.register()
+    raid_as_dungeon = {**kill_event(), "type": "realm_dungeon_kill"}
+    dungeon_as_raid = {**dungeon_event(), "type": "realm_kill"}
+    for msg in (raid_as_dungeon, dungeon_as_raid):
+        with pytest.raises(wire.ProtocolError):
+            wire.parse_event(json.dumps(msg))
 
 
 def test_guild_readmit_binds_one_kick_and_a_guild_admit_rank():
@@ -595,3 +644,13 @@ def test_realm_achievement_rejects_malformed_metadata(field, value):
     with pytest.raises(wire.ProtocolError):
         wire.parse_event(json.dumps(msg))
 
+
+def test_duel_end_carries_the_zone_and_the_core_city_flag():
+    protocol.register()
+    city = wire.parse_event(json.dumps(next(row["msg"] for row in fixtures() if row["name"] == "duel_end_in_city")))
+    field = wire.parse_event(json.dumps(next(row["msg"] for row in fixtures() if row["name"] == "duel_end_event")))
+    assert (city.map, city.zone, city.city) == (1, 1637, True)
+    assert (field.map, field.zone, field.city) == (0, 33, False)
+    with pytest.raises(wire.ProtocolError, match="city"):
+        wire.parse_event(json.dumps({**next(row["msg"] for row in fixtures() if row["name"] == "duel_end_event"),
+                                     "city": 0}))

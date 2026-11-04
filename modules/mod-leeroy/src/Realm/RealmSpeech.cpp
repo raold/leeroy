@@ -454,7 +454,7 @@ public:
     void OnBeforeSetBossState(uint32 id, EncounterState next, EncounterState old, Map* map) override
     {
         auto& module = RealmModule::Instance();
-        if (!map || !map->IsRaid()) return;
+        if (!map || !map->IsDungeon()) return; // Raids and 5-man dungeons; never battlegrounds.
         if (!module.On())
         {
             std::lock_guard lock(pendingMutex);
@@ -489,7 +489,7 @@ public:
         kill.difficulty = spawnMode <= 3 ? static_cast<std::int32_t>(spawnMode) : -1;
         kill.size = instance ? instance->GetMaxPlayers() : 0; kill.heroic = map->IsHeroic();
         kill.atMs = now; kill.killedAtMs = unixNow > 0 ? static_cast<std::uint64_t>(unixNow) : 0;
-        if (!kill.instanceId || !guild || !human || !ValidRaidMode(kill.difficulty, kill.size, kill.heroic))
+        if (!kill.instanceId || !guild || !human || !ValidKillMode(kill.difficulty, kill.size, kill.heroic))
         {
             std::lock_guard lock(pendingMutex);
             fightStarts.ForgetBoss(reinterpret_cast<std::uintptr_t>(map), id);
@@ -516,6 +516,9 @@ public:
             now, kill.killedAtMs, participants && participants->humanPresent);
         if (old != IN_PROGRESS || next != DONE || unixNow <= 0 || !participants
             || pendingKills.size() >= kMaxPendingKills) return;
+        // A 5-man is a guild kill only with him present or the whole group cast.
+        if (IsDungeonKill(kill) && !participants->humanPresent
+            && participants->castMembers.size() < kDungeonGuildCast) return;
         kill.humanPresent = participants->humanPresent;
         kill.castMembers = std::move(participants->castMembers);
         auto const fight = fightStarts.CaptureTerminal(context, generation, kill.atMs, kill.killedAtMs, kill.humanPresent);
@@ -534,7 +537,7 @@ public:
     {
         ForgetMap(map, true);
         auto& module = RealmModule::Instance();
-        if (!map || !map->IsRaid() || !map->GetInstanceId()) return;
+        if (!map || !map->IsDungeon() || !map->GetInstanceId()) return;
         // MapInstanced::CreateInstance adds a new instance's save only after
         // this hook, so no save here means a new instance id: a witness.
         bool const fresh = !sInstanceSaveMgr->GetInstanceSave(map->GetInstanceId());
@@ -546,14 +549,15 @@ public:
     void OnDestroyMap(Map* map) override
     {
         ForgetMap(map, false);
-        if (!map || !map->IsRaid() || !map->GetInstanceId()) return;
+        if (!map || !map->IsDungeon() || !map->GetInstanceId()) return;
         std::lock_guard lock(pendingMutex);
         attempts.Unloaded(KeyOf(map));
     }
     void OnMapUpdate(Map* map, uint32) override
     {
         auto& module = RealmModule::Instance();
-        if (!map || !map->IsRaid()) return;
+        if (!map || !map->IsDungeon()) return;
+        if (!map->IsRaid() && !module.On()) return; // Disabled 5-man updates take no lock.
         auto const now = NowMs();
         auto const unixNow = NowUnixMs();
         std::vector<PendingKill> candidates;

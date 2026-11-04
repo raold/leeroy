@@ -44,8 +44,12 @@ inline constexpr std::size_t kMaxCsvBytes = 1024 * 1024, kMaxCsvRows = 4096, kMa
 inline constexpr std::uint32_t kMaxItemCount = 1000;
 // AchievementFlags (DBCEnums.h): the core's two realm-first kinds.
 inline constexpr std::uint32_t kAchievementRealmFirstReach = 0x100, kAchievementRealmFirstKill = 0x200;
+// AreaFlags (DBCEnums.h): the zone flag the core's own in-city rule tests
+// (Player::UpdateZone: rest and no-PvP in a capital, sanctuaries included).
+inline constexpr std::uint32_t kAreaFlagCapital = 0x100;
 inline bool IsRealmFirstAchievement(std::uint32_t flags)
 { return (flags & (kAchievementRealmFirstReach | kAchievementRealmFirstKill)) != 0; }
+inline bool IsCityZone(std::uint32_t zoneFlags) { return (zoneFlags & kAreaFlagCapital) != 0; }
 
 // Test-only registration. Runtime handlers register through LeeroyRegisterCommand.
 void RegisterRealmCommandTypes();
@@ -192,12 +196,16 @@ nlohmann::json MakeRealmJob(RealmJob const&);
 // Body only; the drain supplies this proof's already captured publishedAtMs to
 // EncodeEvent exactly once, before handing the encoded line to bridge replay.
 nlohmann::json MakeRealmKill(Kill const&);
+// The same exact body for a verified 5-man guild kill, under its own type.
+nlohmann::json MakeRealmDungeonKill(Kill const&);
 struct ContinuationOwner;
 nlohmann::json MakeRealmPvp(std::string_view id, ContinuationOwner const&);
 nlohmann::json MakeChannelChat(std::string_view channel, std::uint32_t fromGuid, std::string_view fromName,
     std::uint32_t zone, std::string_view text, bool viaBridge);
 nlohmann::json MakePvpKill(std::uint32_t killer, std::uint32_t victim, std::uint32_t map, std::uint32_t zone);
-nlohmann::json MakeDuelEnd(std::uint32_t winner, std::uint32_t loser, std::string_view result);
+// zone is the winner's; city is true when either duelist's zone is a city (IsCityZone).
+nlohmann::json MakeDuelEnd(std::uint32_t winner, std::uint32_t loser, std::string_view result,
+    std::uint32_t map, std::uint32_t zone, bool city);
 // An unscoped achievement completion: never published inside LeeroyQuietScope.
 nlohmann::json MakeRealmAchievement(std::uint32_t guid, std::uint32_t achievementId, std::string_view name,
     std::uint32_t category, std::uint32_t flags, bool realmFirst);

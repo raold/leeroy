@@ -10,6 +10,7 @@
 #include <limits>
 #include <set>
 #include <stdexcept>
+#include <tuple>
 
 using namespace Leeroy::Realm;
 using json = nlohmann::json;
@@ -233,7 +234,8 @@ LEEROY_TEST(RealmKillProof_SourceContractKeepsDoneVerificationOnMapThreadAndWorl
     auto const candidate = Section(speech, "void OnBeforeSetBossState", "class RealmKillMapScript");
     CHECK(candidate.find("RecordKill(") == std::string::npos);
     CHECK(candidate.find("old != IN_PROGRESS || next != DONE") != std::string::npos);
-    CHECK(candidate.find("map->IsRaid()") != std::string::npos);
+    CHECK(candidate.find("map->IsDungeon()") != std::string::npos);
+    CHECK(candidate.find("kDungeonGuildCast") < candidate.find("pendingKills.push_back("));
     CHECK(candidate.find("attempts.Intent(") < candidate.find("fightStarts.Intent("));
     auto const scan = Section(speech, "std::optional<KillParticipants> PresentParticipants", "class RealmBossScript");
     CHECK(scan.find("CastMembers()") < scan.find("map->GetPlayers()"));
@@ -264,6 +266,8 @@ LEEROY_TEST(RealmKillProof_SourceContractKeepsDoneVerificationOnMapThreadAndWorl
     CHECK(drain.find("kills.Add(kill)") < drain.find("Publish(std::move(line), false)"));
     CHECK(drain.find("}\n        for (auto& line : lines)") != std::string::npos); // Lock scope closed.
     CHECK(drain.find("NowUnixMs()") != std::string::npos);
+    CHECK(drain.find("if (!dungeon && !kills.Add(kill)) continue;") != std::string::npos);
+    CHECK(drain.find("MakeRealmDungeonKill(kill)") < drain.find("Publish(std::move(line), false)"));
     CHECK(drain.find("killSerial == std::numeric_limits<std::uint64_t>::max()") != std::string::npos);
     auto const matching = Section(module, "std::optional<Kill> RealmModule::MatchProof", "void RealmModule::NotifyBodyChanged");
     CHECK(matching.find("request.nativeEpoch != Epoch()") != std::string::npos);
@@ -554,4 +558,31 @@ LEEROY_TEST(RealmKillProof_AnnouncedAttemptsMustEqualTheNativeCount)
     for (std::uint32_t bad : {100u, 1000u})
     { auto over = Proof(); over.attempts = bad; CHECK(!ValidKillObservation(over)); KillRing ring; CHECK(!ring.Add(over)); }
     CHECK_EQ(MakeRealmKill(counted).at("attempts"), 4u);
+}
+
+LEEROY_TEST(RealmKillProof_FiveManGuildKillIsEvidenceButNeverAnnounceable)
+{
+    auto dungeon = Proof(); dungeon.map = 574; dungeon.size = 5; dungeon.difficulty = 1; dungeon.heroic = true;
+    CHECK(IsDungeonKill(dungeon) && ValidKillProof(dungeon)); // Human present.
+    for (auto const& [difficulty, heroic, valid] : std::vector<std::tuple<std::int32_t, bool, bool>>{
+        {0, false, true}, {1, true, true}, {0, true, false}, {1, false, false}, {-1, false, false}, {2, true, false}})
+    { auto changed = dungeon; changed.difficulty = difficulty; changed.heroic = heroic; CHECK_EQ(ValidKillProof(changed), valid); }
+    CHECK(ValidKillMode(0, 5, false) && ValidKillMode(1, 5, true) && !ValidKillMode(-1, 5, false));
+    CHECK(ValidKillMode(1, 25, false) && !ValidRaidMode(1, 5, true));
+    auto cast = dungeon; cast.humanPresent = false;
+    for (std::size_t members = 1; members <= 5; ++members)
+    {
+        cast.castMembers.clear();
+        for (std::uint32_t guid = 2; guid < 2 + members; ++guid) cast.castMembers.push_back(guid);
+        CHECK_EQ(ValidKillObservation(cast), members == 5); // The whole 5-man group, or him.
+    }
+    auto raid = Proof(); raid.humanPresent = false; raid.castMembers = {2, 3};
+    CHECK(ValidKillObservation(raid)); // Raids still publish private evidence; Python applies the rule.
+    KillRing ring; CHECK(!ring.Add(dungeon)); CHECK(!ring.Add(cast));
+    AnnounceCmd request; static_cast<KillIdentity&>(request) = dungeon; request.killId = dungeon.killId;
+    CHECK(!ValidatedAnnouncementMetrics(request, dungeon));
+    auto body = MakeRealmDungeonKill(dungeon);
+    CHECK_EQ(body.at("type"), "realm_dungeon_kill"); CHECK_EQ(body.at("size"), 5u);
+    auto raidBody = MakeRealmKill(dungeon); raidBody.erase("type"); body.erase("type");
+    CHECK_EQ(body, raidBody); // One exact body under two types.
 }

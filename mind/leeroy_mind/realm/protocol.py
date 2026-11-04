@@ -43,6 +43,12 @@ def _raid_mode(difficulty: int, size: int, heroic: bool) -> bool:
                                   and heroic == (difficulty >= 2))))
 
 
+def _dungeon_mode(difficulty: int, size: int, heroic: bool) -> bool:
+    """A 5-man: normal (0) or heroic (1), never an unmapped mode."""
+    return (type(difficulty) is int and difficulty in {0, 1} and type(size) is int and size == 5
+        and type(heroic) is bool and heroic == (difficulty == 1))
+
+
 def _proof_identity(value, mode=_raid_mode) -> bool:
     return (_kill_id(value.kill_id) and _uint(value.native_epoch, 0xFFFFFFFFFFFFFFFF)
         and _uint(value.guild_id) and _uint(value.human_guid) and _uint(value.instance_id)
@@ -425,6 +431,37 @@ class RealmKill:
 
 
 @dataclass(frozen=True, slots=True)
+class RealmDungeonKill:
+    """A verified 5-man guild kill: him present, or a whole group of native cast.
+
+    Evidence only: native never announces it, and its kill_id is in no proof ring.
+    """
+    ts: int
+    kill_id: str
+    native_epoch: int
+    guild_id: int
+    human_guid: int
+    killed_at_ms: int
+    verified_at_ms: int
+    fight_started_at_ms: int
+    fight_ms: int
+    attempts: int
+    map: int
+    instance_id: int
+    boss_id: int
+    difficulty: int
+    size: int
+    heroic: bool
+    human_present: bool
+    cast_members: tuple[int, ...]
+
+    def __post_init__(self):
+        if (not _kill_proof(self, _dungeon_mode)
+                or (not self.human_present and len(self.cast_members) < 5)):
+            raise ValueError("invalid native Realm dungeon kill proof")
+
+
+@dataclass(frozen=True, slots=True)
 class GetRealmPvp:
     id: str
     pvp_owner: str = ""
@@ -480,10 +517,14 @@ class PvpKill:
 
 @dataclass(frozen=True, slots=True)
 class DuelEnd:
+    """zone is the winner's; city: either duelist's zone has the core's capital flag."""
     ts: int
     winner: int
     loser: int
     result: str
+    map: int
+    zone: int
+    city: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -664,6 +705,7 @@ EVENTS: dict[str, type] = {
     "guard": Guard,
     "realm_pvp": RealmPvp,
     "realm_kill": RealmKill,
+    "realm_dungeon_kill": RealmDungeonKill,
     "realm_achievement": RealmAchievement,
 }
 NOISY = frozenset({"realm_job", "channel_chat", "game_event"})

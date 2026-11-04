@@ -167,6 +167,9 @@ LEEROY_TEST(RealmPolicy_RaidModeMustAgreeWithNativeSizeAndHeroic)
     CHECK(!ValidRaidMode(-2, 10, false));
     CHECK(!ValidRaidMode(4, 25, true));
     for (auto size : {0u, 5u, 11u, 24u, 40u}) CHECK(!ValidRaidMode(-1, size, false));
+    for (auto size : {0u, 11u, 24u, 40u}) CHECK(!ValidKillMode(-1, size, false));
+    CHECK(ValidKillMode(0, 5, false)); CHECK(ValidKillMode(1, 5, true));
+    CHECK(!ValidKillMode(1, 5, false)); CHECK(!ValidKillMode(2, 5, true)); CHECK(!ValidKillMode(-1, 5, true));
 }
 
 LEEROY_TEST(RealmPolicy_TickBudgetCannotUnderflowAndResetsExactly)

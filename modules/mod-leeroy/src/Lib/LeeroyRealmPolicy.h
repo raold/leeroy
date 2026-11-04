@@ -92,6 +92,12 @@ bool ValidFightDuration(std::uint64_t startedAtMs, std::int64_t elapsedMs,
     std::uint64_t killedAtMs, bool humanPresent);
 bool ValidKillId(std::string_view id);
 bool ValidRaidMode(std::int32_t difficulty, std::uint32_t size, bool heroic);
+// A raid mode, or a 5-man dungeon: size 5, difficulty 0 (normal) or 1 (heroic).
+bool ValidKillMode(std::int32_t difficulty, std::uint32_t size, bool heroic);
+inline bool IsDungeonKill(KillIdentity const& kill) { return kill.size == 5; }
+// A dungeon kill is a guild kill only with the human present or at least five
+// native cast members, which in a 5-man is the whole group.
+inline constexpr std::size_t kDungeonGuildCast = 5;
 bool ValidKillObservation(Kill const& kill);
 bool ValidKillProof(Kill const& kill);
 
@@ -166,7 +172,8 @@ class KillRing
 public:
     static constexpr std::size_t Capacity = 32;
 
-    // The world-thread adapter supplies actual observed encounter kills.
+    // The world-thread adapter supplies actual observed raid encounter kills;
+    // dungeon kills are never announced and never enter the ring.
     bool Add(Kill kill);
     // There is intentionally no tuple-based lookup or current-mode default.
     std::optional<Kill> MatchProof(std::string_view killId, KillIdentity const& expected,
