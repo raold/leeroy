@@ -32,16 +32,27 @@ def _context_sections(ctx):
     """Discover optional sections for this evaluated configuration and store.
 
     Standalone evaluation does not construct MindApp. Conversely, a previous
-    app attachment cannot enable training in another data directory.
+    app attachment cannot enable training or the Realm in another data directory.
     """
+    from leeroy_mind.config import ConfigError
+    from leeroy_mind.realm import canon
+    from leeroy_mind.realm.config import load_realm_config
     from leeroy_mind.training.config import load_training_config
+    config = Path(ctx.settings.data_dir) / "mind.toml"
     sections = dict(_sections)
     training = sections.pop("training", None)
-    if load_training_config(Path(ctx.settings.data_dir) / "mind.toml").enabled:
+    if load_training_config(config).enabled:
         if training is None:
             from leeroy_mind.training.service import report_section
             training = report_section
         sections["training"] = training
+    realm = sections.pop(canon.SECTION, None)
+    try:
+        realm_on = load_realm_config(config).enabled
+    except ConfigError:
+        realm_on = False
+    if realm_on:
+        sections[canon.SECTION] = realm or canon.report_section
     return sections
 
 

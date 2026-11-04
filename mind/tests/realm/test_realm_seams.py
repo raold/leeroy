@@ -7,9 +7,10 @@ from types import SimpleNamespace
 import uuid
 
 from conftest import run, seed_test_cast
+from leeroy_mind import eval as weekly
 from leeroy_mind.memory.writer import WriteResult
-from leeroy_mind.protocol import Ack
-from leeroy_mind.realm import bank, canon, mail, night, protocol, rivals, speech as speech_module
+from leeroy_mind.protocol import Ack, Member
+from leeroy_mind.realm import bank, canon, cli, mail, night, protocol, rivals, speech as speech_module
 from leeroy_mind.realm.direct import DirectLedger
 from leeroy_mind.realm.ports import RealmDisabled
 from leeroy_mind.realm.protocol import BankStock, GrantAchievement
@@ -398,3 +399,58 @@ def test_speech_reads_the_cards_the_rivals_step_wrote(tmp_path, store, clock):
     mine.write_text('{"name": "his own words"}\n', encoding="utf-8")
     realm.part("rivals")._write_cards(plan["cards"], [officer["guid"]], plan["guilds"])
     assert mine.read_text(encoding="utf-8") == '{"name": "his own words"}\n'
+
+
+# -- item 11: realm status counts the R1 tables -----------------------------------------------------
+
+def test_status_counts_what_the_direct_ledger_rule_facts_and_race_wrote(tmp_path, store, clock, capsys):
+    ledger = DirectLedger(store, process_id=PROCESS, clock=store.clock)
+    say = protocol.RealmSay(uuid.uuid4().hex, 201, "trade", "wts frostweave")
+    assert ledger.prepare(say, owner="speech", ref="line:1", context=LIVE, expects_job=False) == say.id
+    seed_test_cast(store)
+    enabled(tmp_path, True)
+    realm = attach_realm(RealmApp(tmp_path, store, clock))
+    with store.transaction():
+        for gid, role, faction, name, status in RIVALS:
+            store.conn.execute("INSERT INTO realm_guild(id,role,faction,name,added,status) VALUES (?,?,?,?,?,?)",
+                               (gid, role, faction, name, 1.0, status))
+    at(clock, T0)
+    guild_kill(store, T0 - 30 * DAY, boss=0)
+
+    async def go():
+        await connect(realm.app)
+        assert realm.part("race").weekly(clock.now())       # a rule kill: one rule fact
+        assert realm.part("race").on_benchmark(benchmark(1, clock.now(), kills=((0, 250.0),))) == "counted"
+        await realm.close()
+    run(go())
+    assert cli.realm_main(["status", "--data-dir", str(tmp_path)]) == 0
+    counts = json.loads(capsys.readouterr().out)["counts"]
+    assert counts["realm_direct"] == 1 and counts["realm_benchmark_seen"] == 1
+    assert counts["realm_rule_origin"] == store.conn.execute("SELECT count(*) FROM realm_rule_origin").fetchone()[0] > 0
+
+
+# -- item 12: the standalone weekly evaluation finds canon's section ---------------------------------
+
+def test_standalone_eval_reports_canon_when_the_realm_is_enabled(tmp_path, store, clock, monkeypatch):
+    from leeroy_mind.nightly import cli as nightly_cli
+    seed_test_cast(store)
+    store.upsert_cast([Member(1, "Testmage", 10, 8, 0, 80, 0, False, 0, 0, -1)], clock.now())
+    store.set_meta("human_guid", "1")
+    monkeypatch.setattr(weekly, "_sections", {})
+    monkeypatch.setattr(nightly_cli, "SystemClock", lambda: clock)
+    with store.transaction():
+        store.conn.execute("INSERT INTO realm_canon(achievement,guid,reason,ts,tries,state) "
+                           "VALUES (3117,1,'gm_mode',?,1,'planned')", (clock.now() - 86400,))
+    sections = {}
+    for name, on in (("on", True), ("off", False)):
+        enabled(tmp_path, on)
+        assert nightly_cli.eval_main(["--data-dir", str(tmp_path), "--week", "2026-W44", "--no-llm"],
+                                     make_llm=lambda: AssertionError("no model")) == 0
+        report = tmp_path / "reports" / "2026-W44.json"
+        sections[name] = json.loads(report.read_text(encoding="utf-8"))
+        report.unlink()
+    assert sections["on"]["realm_canon"]["status"] == "complete"
+    assert sections["on"]["realm_canon"]["deferred"] == [
+        {"achievement": 3117, "guid": 1, "reason": "gm_mode", "tries": 1}]
+    assert "realm_canon" not in sections["off"]
+    assert weekly._sections == {}  # Discovered per evaluation, never registered globally.

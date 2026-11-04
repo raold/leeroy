@@ -30,7 +30,8 @@ TABLES = (
     "realm_stance", "realm_plan", "realm_event", "realm_rsvp", "realm_calendar",
     "realm_mail", "realm_bank", "realm_arena", "realm_match", "realm_recruit",
     "realm_step", "realm_canon", "realm_canon_kill", "realm_kick", "realm_meeting",
-    "realm_goal", "realm_notable", "realm_receipt",
+    "realm_goal", "realm_notable", "realm_receipt", "realm_direct", "realm_rule_origin",
+    "realm_benchmark_seen",
 )
 
 
