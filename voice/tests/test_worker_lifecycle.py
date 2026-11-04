@@ -480,6 +480,27 @@ def test_one_walk_per_scan_and_one_more_only_for_a_new_process():
     assert processes.events == [("walk", None)]
 
 
+def test_zombie_detection_follows_the_platform():
+    assert wire.WorkerTree()._zombies == (not psutil.WINDOWS)
+
+
+@pytest.mark.parametrize("zombies", [True, False])
+def test_a_zombie_is_exited_only_where_there_are_zombies(zombies):
+    """POSIX: a zombie has exited and is not suspended or killed. Windows has none, so no
+    status() is asked and a process reported as one is still live."""
+    tree, processes = wire.WorkerTree(), FakeProcesses()
+    tree.ps, tree._zombies = processes, zombies
+    tree.owned = {10: 100.0, 11: 101.0}
+    processes.add(10, 100.0)
+    zombie = processes.add(11, 101.0, parent=10)
+    zombie.status = lambda: psutil.STATUS_ZOMBIE
+    assert tree._matching(11) is (None if zombies else zombie)
+    assert tree.stop(timeout=0.2, grace=0)
+    assert (("suspend", 11) in processes.events) is not zombies
+    assert (("kill", 11) in processes.events) is not zombies
+    assert ("kill", 10) in processes.events
+
+
 def test_windows_scans_never_ask_status():
     """On Windows status() snapshots every thread on the system while holding the GIL (about
     15 ms a call, and the audio callback waits), and Windows has no zombies to find."""
