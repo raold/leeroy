@@ -39,6 +39,7 @@ from typing import Awaitable, Callable, Literal
 from leeroy_mind.bridge import BridgeClient
 from leeroy_mind.clock import Clock, SystemClock
 from leeroy_mind.config import ConfigError, MindConfig, load_config
+from leeroy_mind.endpoint import attach_control
 from leeroy_mind.human import HumanIdentity
 from leeroy_mind.library.core import Library
 from leeroy_mind.llm.client import LLMClient, LLMError, OllamaClient
@@ -405,6 +406,7 @@ class MindApp:
         self.voice = attach_voice(self)
         self.guild = install_guild(self)
         self.training = attach_training(self)
+        self.control = attach_control(self)
 
     # -- extension points --------------------------------------------------------------------
 
@@ -1212,6 +1214,16 @@ class MindApp:
         """Shut down in order (see _shutdown). Idempotent and safe at any time: before run(),
         while it runs, twice at once. A caller cancelled meanwhile leaves the shutdown going."""
         await asyncio.shield(self._begin_stop())
+
+    @property
+    def stopping(self) -> bool:
+        return self._stopping
+
+    def request_stop(self) -> None:
+        """Begin the shutdown stop() runs (the one Ctrl+C runs), without waiting for it: for
+        the control endpoint, whose own task that shutdown cancels first. run() then returns
+        once it is over."""
+        self._begin_stop()
 
     def _begin_stop(self) -> asyncio.Task:
         if self._stop_task is None:

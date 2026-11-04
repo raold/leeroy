@@ -20,7 +20,7 @@ from leeroy_mind.wow import is_raid_fight
 from .comp import TARGETS, NoTankError, candidates_from, choose_leads, select_comp
 from .lines import instruction, public_text, template
 from .loot import _get, _put
-from .pick import Decline, Hangout, LeadOnly, Pick, is_end, parse
+from .pick import Decline, Hangout, Lead, LeadOnly, Pick, is_end, parse
 from .protocol import ClearLockout, FormRaid, RaidControl, SetLootMaster, Summon
 from .raids import CATALOG, validate
 from .session import RaidPlan, RaidSession
@@ -32,6 +32,8 @@ JOB_TIMEOUT_S = 60.0
 STOP_TIMEOUT_S = 5.0
 EVENT_LIMIT = 256
 QUIET_NIGHT_KEY = "guild:raid-night:quiet-night"
+CONSOLE_ACTIONS = ("call", "form", "summon", "start", "stop", "end")
+CONSOLE_LOCK_S = 10.0  # how long a console dungeon-clear switch waits for a busy tick
 
 
 class State(StrEnum):
@@ -67,6 +69,27 @@ class _Stale(Exception):
 
 class _Failed(Exception):
     pass
+
+
+class ConsoleRefused(Exception):
+    """A console raid action that was not taken; its text says why, in true words."""
+
+
+_STATE_WORDS = {
+    State.IDLE: "no raid night is open yet (it opens when you log in)",
+    State.WAITING_CALL: "the raid call has not gone out yet",
+    State.CALLED: "the raid call is out, waiting for your pick",
+    State.FORMING: "the raid is forming",
+    State.ASSEMBLING: "the raid is assembling",
+    State.RUNNING: "the raid is under way",
+    State.ENDED: "tonight's raid night has ended",
+}
+
+
+def _code(error) -> str:
+    """A server's error code as it may be shown: identifier characters only, short."""
+    text = "".join(c for c in str(error) if c.isascii() and (c.isalnum() or c in "_:.-"))
+    return text[:60] or "no reason given"
 
 
 class RaidNight:
@@ -227,13 +250,22 @@ class RaidNight:
                 and (ev.channel in {"guild", "officer", "party", "raid"} and ev.to_guid == 0
                      or ev.channel == "whisper" and ev.to_guid in self.ports.cast()))
 
-    async def on_chat(self, ev):
-        if not self._owner_chat(ev):
-            return
+    def _lapse_due(self):
         if (self.state is State.CALLED and self._call_deadline is not None
                 and self.ports.clock.now() >= self._call_deadline):
             self._propose("call_lapsed")
             self._end("lapsed")
+
+    def _choose(self, choice):
+        self._epoch += 1
+        self._pick_return_state = self.state
+        self._pick = Pick(choice.raid_key, choice.size, choice.heroic, choice.lead or self._lead)
+        self.state = State.FORMING
+
+    async def on_chat(self, ev):
+        if not self._owner_chat(ev):
+            return
+        self._lapse_due()
         if self.active and is_end(ev.text):
             self._end("called")
             return
@@ -256,10 +288,7 @@ class RaidNight:
         elif isinstance(choice, LeadOnly):
             self._lead = choice.lead
         elif isinstance(choice, Pick):
-            self._epoch += 1
-            self._pick_return_state = self.state
-            self._pick = Pick(choice.raid_key, choice.size, choice.heroic, choice.lead or self._lead)
-            self.state = State.FORMING
+            self._choose(choice)
 
     async def on_zone(self, ev):
         if ev.guid == self.ports.human_guid and self._zones.get(ev.guid) != ev.zone_id:
@@ -847,3 +876,182 @@ class RaidNight:
                 except Exception:
                     log.warning("guild raid cancellation cleanup remains pending")
                 raise
+
+    # -- the owner's console (leeroy_mind.endpoint) --------------------------------------------
+    # Each action enters this controller where his own chat or one of its timers would, with the
+    # same guards, on the same event loop: call brings the call's timer forward, form is his
+    # pick, summon brings the late arrivals' timers forward, start brings the ready check (or
+    # the countdown) forward, end is his "calling it" (or, before a pick, his decline). Only
+    # stop and a later start talk to the game themselves: the dungeon-clear switch the raid's
+    # own start and close send. Nothing runs while he is not in game.
+
+    @staticmethod
+    def _left(due, now):
+        return None if due is None else max(0.0, round(due - now, 1))
+
+    def console_refusal(self, action):
+        """Why `action` cannot run now, in true words; None when it can."""
+        if not (self._present and self.ports.human_online()):
+            return "you're not in game: guild life runs raid nights only while you are"
+        state, run = self.state, self.run
+        busy = state in {State.FORMING, State.ASSEMBLING, State.RUNNING}
+        if action == "call":
+            return None if state is State.WAITING_CALL else f"no call to make: {_STATE_WORDS[state]}"
+        if action == "form":
+            if busy:
+                return f"{_STATE_WORDS[state]}: end it first"
+            return "the last raid is still closing" if self._closing else None
+        if action == "end":
+            if busy or state is State.CALLED:
+                return None
+            return ("the last raid is already closing" if self._closing
+                    else f"nothing to end: {_STATE_WORDS[state]}")
+        if run is None or state not in {State.ASSEMBLING, State.RUNNING}:
+            return f"no raid is under way: {_STATE_WORDS[state]}"
+        if action == "summon":
+            if self._assembly_pulls:
+                return "a pull is under way: late members are summoned once it ends"
+            return None if self._late else "nobody is still on the way: everyone has been summoned"
+        if run.lead_is_human:
+            return "you lead tonight: dungeon-clear runs only under a bot lead"
+        held = run.session.raid_id in self._dc_stopped
+        if action == "stop":
+            if state is State.ASSEMBLING:
+                return "dungeon-clear has not started yet"
+            return "dungeon-clear is already stopped" if held else None
+        if state is State.RUNNING:
+            return None if held else "dungeon-clear is already running"
+        if self._assembly_pulls:
+            return "a pull is under way: the ready check waits for it to end"
+        if self._dc_due is not None:
+            return "the pull countdown is under way" if self._countdown_sent else None
+        if self._ready_due is not None:
+            return None
+        raid = CATALOG[run.plan.raid_key]
+        if self._zones.get(self.ports.human_guid) != raid.zone_id:
+            return f"you're not in {raid.name} yet: the ready check follows once you are"
+        if not self._inside:
+            return "the raid is being summoned inside"
+        required = {run.plan.tank_guid, run.plan.lead_guid, run.plan.loot_guid} - {self.ports.human_guid}
+        if not required <= self._arrived:
+            return "waiting for the lead, the main tank and the loot officer to arrive inside"
+        return "the ready check is being scheduled: try again in a moment"
+
+    def console_pick(self, raid_key, size, heroic, lead):
+        """His pick as his chat would make it: lead None (guild life chooses), "me", "rotate"
+        or an officer's guid (as parse resolves only officers' names)."""
+        if lead is None:
+            chosen = None
+        elif lead == "me":
+            chosen = Lead(True)
+        elif lead == "rotate":
+            chosen = Lead(False, None, True)
+        else:
+            persona = self.ports.persona(lead)
+            if (lead == self.ports.human_guid or lead not in self.ports.cast() or persona is None
+                    or persona.play.guild_role != "officer"):
+                raise ConsoleRefused("only an officer can be asked to lead")
+            chosen = Lead(False, lead)
+        return Pick(raid_key, size, heroic, chosen)
+
+    async def console_act(self, action, pick=None):
+        """Run one console action; what it did, or ConsoleRefused."""
+        if action not in CONSOLE_ACTIONS:
+            raise ConsoleRefused("unknown raid action")
+        if self._present and self.ports.human_online():
+            self._lapse_due()  # as any of his own lines would first
+        why = self.console_refusal(action)
+        if why is not None:
+            raise ConsoleRefused(why)
+        now = self.ports.clock.now()
+        if action == "call":
+            self._call_due = now if self._call_due is None else min(self._call_due, now)
+            return "the raid call goes out in a moment"
+        if action == "form":
+            self._choose(pick)
+            raid = CATALOG[pick.raid_key]
+            mode = (f" {pick.size}" if pick.size else "") + (" heroic" if pick.heroic else "")
+            return f"forming {raid.name}{mode}: the raid is checked, formed and summoned now"
+        if action == "end":
+            if self.state is State.CALLED:
+                self._propose("raid_declined")
+                self._end("declined")
+                return "no raid tonight: the guild has been told"
+            self._end("called")
+            return "tonight's raid is ending: the standings and the wrap-up follow"
+        if action == "summon":
+            count = len(self._late)
+            self._late = [(guid, min(due, now)) for guid, due in self._late]
+            return f"summoning {count} late member{'s' if count != 1 else ''} now"
+        if action == "start" and self.state is State.ASSEMBLING:
+            if self._dc_due is not None:
+                self._dc_due = min(self._dc_due, now)
+                return "the pull countdown starts now; dungeon-clear follows it"
+            self._ready_due = min(self._ready_due, now)
+            return "the ready check goes out now; dungeon-clear starts after the countdown"
+        return await self._console_dc("dc_on" if action == "start" else "dc_off")
+
+    async def _console_dc(self, command_action):
+        """Dungeon-clear off (stop) or on again (start after a stop), as the raid's own start
+        and close switch it, while no tick is talking to the game."""
+        action = "start" if command_action == "dc_on" else "stop"
+        try:
+            await asyncio.wait_for(self._lock.acquire(), CONSOLE_LOCK_S)
+        except TimeoutError:
+            raise ConsoleRefused("the raid is busy with the game: try again in a moment") from None
+        try:
+            why = self.console_refusal(action)
+            if why is not None:
+                raise ConsoleRefused(why)
+            run = self.run
+            raid_id = run.session.raid_id
+            command = RaidControl(uuid4().hex, self.ports.human_guid, command_action, run.plan.tank_guid)
+            if command_action == "dc_on":
+                # From here the raid's close stops dungeon-clear again, whatever the answer
+                self._dc_stopped.discard(raid_id)
+            try:
+                ack = await self.ports.send(command)
+            except Exception:
+                ack = None
+            if ack is None or ack.id != command.id:
+                raise ConsoleRefused(f"the game did not confirm it: dungeon-clear may or may not "
+                                     f"have {'started' if action == 'start' else 'stopped'}")
+            if ack.ok is not True:
+                raise ConsoleRefused(f"the server refused it ({_code(ack.error)})")
+            if command_action == "dc_off":
+                self._dc_stopped.add(raid_id)  # its close need not stop it again
+                return "dungeon-clear stopped: the raid goes on, and Start resumes it"
+            return "dungeon-clear resumed"
+        finally:
+            self._lock.release()
+
+    def console_status(self):
+        """The state the console shows, with each action's refusal (None: it can run)."""
+        now = self.ports.clock.now()
+        run, state = self.run, self.state
+        status = {"state": state.value, "closing": bool(self._closing),
+                  "present": bool(self._present), "online": bool(self.ports.human_online()),
+                  "call_in": self._left(self._call_due, now) if state is State.WAITING_CALL else None,
+                  "pick_left": self._left(self._call_deadline, now) if state is State.CALLED else None,
+                  "forming": None, "run": None}
+        if state is State.FORMING and self._pick is not None:
+            status["forming"] = {"raid": self._pick.raid_key, "size": self._pick.size,
+                                 "heroic": self._pick.heroic}
+        if run is not None:
+            plan, raid = run.plan, CATALOG[run.plan.raid_key]
+            status["run"] = {
+                "raid_id": run.session.raid_id, "raid": plan.raid_key, "size": plan.size,
+                "heroic": plan.heroic, "lead": plan.lead_guid, "tank": plan.tank_guid,
+                "loot": plan.loot_guid, "lead_is_human": run.lead_is_human,
+                "members": list(plan.members), "bench": list(plan.bench),
+                "inside": sorted(self._arrived),
+                "late": [[guid, self._left(due, now)] for guid, due in self._late],
+                "in_zone": self._zones.get(self.ports.human_guid) == raid.zone_id,
+                "pull": bool(self._assembly_pulls),
+                "ready_in": self._left(self._ready_due, now), "dc_in": self._left(self._dc_due, now),
+                "countdown": self._countdown_sent,
+                "dc": ("held" if run.session.raid_id in self._dc_stopped
+                       else "on" if state is State.RUNNING and not run.lead_is_human else "off"),
+                "kills": run.session.kills, "wipes": run.session.wipes}
+        status["actions"] = {action: self.console_refusal(action) for action in CONSOLE_ACTIONS}
+        return status

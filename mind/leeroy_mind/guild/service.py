@@ -13,7 +13,7 @@ from .offline import OfflineRaids
 from .play import Play, summon_waves
 from .ports import LazyArmory, LivePorts, MaintenancePorts
 from .protocol import register
-from .raid_night import RaidNight
+from .raid_night import ConsoleRefused, RaidNight
 from .roster import Roster
 
 
@@ -193,6 +193,44 @@ class GuildLife:
     async def online_tick(self):
         if self._ready() and self._available() and not self.offline.active:
             await self.raid_night.tick()
+
+    # -- the owner's console (leeroy_mind.endpoint): the raid night's own guards, then its own
+    # transitions (RaidNight.console_act), on this event loop
+
+    def _console_refusal(self):
+        if self._stopping:
+            return "the mind is stopping"
+        if not self._connected:
+            return "the mind is not connected to the game"
+        if self._presence_pending:
+            return "your login or logout is still being handled: try again in a moment"
+        if not self._available():
+            return ("the game's database (the guild armory) is unavailable, so guild life runs "
+                    "no raid nights")
+        if self.offline.active:
+            return "an offline raid is still running or closing"
+        return None
+
+    def console_status(self):
+        status = self.raid_night.console_status()
+        why = self._console_refusal()
+        if why is not None:
+            status["actions"] = dict.fromkeys(status["actions"], why)
+        status["blocked"] = why
+        status["offline_raid"] = bool(self.offline.active)
+        return status
+
+    async def console_action(self, args):
+        """args as leeroy_mind.endpoint.raid_args checked them; what it did, or
+        ConsoleRefused."""
+        why = self._console_refusal()
+        if why is not None:
+            raise ConsoleRefused(why)
+        pick = None
+        if args["action"] == "form":
+            pick = self.raid_night.console_pick(args["raid"], args["size"], args["heroic"],
+                                                args["lead"])
+        return await self.raid_night.console_act(args["action"], pick)
 
     async def offline_tick(self):
         if not self._ready():
