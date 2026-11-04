@@ -196,6 +196,8 @@ def test_night_installed_only_when_enabled(app, monkeypatch, caplog, on, night, 
         install(monkeypatch, night=module("night", stage_realm=_stage))
     elif night == "attach":
         install(monkeypatch, night=module("night", lambda realm: added.append(realm) or _stage))
+    else:
+        install(monkeypatch, night=None)  # Absent, though the real realm.night exists.
     runner = NightRunner([Stage("stories", _stage, "reflection"), Stage("critic", _stage, "reflection")],
                          lambda *a: None)
     app.night_runner = runner
