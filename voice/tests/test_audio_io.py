@@ -618,6 +618,36 @@ def test_output_status_is_reported_off_callback_without_losing_counts(monkeypatc
     out.stop()
 
 
+def test_late_callbacks_are_counted_though_portaudio_flags_none(monkeypatch):
+    """WASAPI shared mode flags no underrun: a callback held off for longer than half the buffer
+    is counted from its own clock, reported off the callback and summed at close."""
+    sd = StubSd()
+    clock = [0.0]
+    api = SoundDeviceApi(sd=sd, default_name=lambda: "Speakers A", join=no_com,
+                         callback_clock=lambda: clock[0])
+    events = []
+    monkeypatch.setattr(audio_io, "log", lambda event, **fields: events.append((event, fields)))
+    out = started(api, pinned="Speakers A")
+    callback = sd.streams[-1].settings["callback"]
+    buf = bytearray(480 * 2 * 4)
+    for t in (0.0, 0.01, 0.02, 0.059, 0.069, 0.25, 0.26):  # a 39 ms gap is fine; 181 ms is not
+        clock[0] = t
+        callback(buf, 480, None, 0)
+    events.clear()
+    out.poll(now=0.1)
+    assert events == [("output_late", {"level": logging.WARNING, "callbacks": 1,
+                       "max_gap_ms": 181, "total_late": 1})]
+    events.clear()
+    out.poll(now=0.2)
+    assert not events  # read once, never reset
+    clock[0] = 0.33  # 70 ms late, just before the close: not lost
+    callback(buf, 480, None, 0)
+    out.stop()
+    summary = next(fields for event, fields in events if event == "output_summary")
+    assert (summary["late"], summary["max_gap_ms"], summary["underflows"]) == (2, 181, 0)
+    assert [fields["total_late"] for event, fields in events if event == "output_late"] == [2]
+
+
 def test_callback_during_poll_is_reported_on_next_poll(monkeypatch):
     sd = StubSd()
     api = stub_api(sd)
