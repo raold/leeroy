@@ -1,0 +1,103 @@
+"""python -m leeroy_dojo realm --layout <layout.json> <command>: the dojo's training realm."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+from . import mysql, provision, world
+from .layout import LayoutError, load
+from .ra import RaError
+
+
+def add_parser(sub) -> None:
+    realm = sub.add_parser("realm", help="provision and run the dojo's disposable training realm")
+    realm.add_argument("--layout", required=True, help="the dojo layout file")
+    cmds = realm.add_subparsers(dest="realm_command", required=True)
+    cmds.add_parser("db-init", help="create the dojo MySQL instance: my.ini, credentials, a fresh data folder")
+    cmds.add_parser("db-start", help="start the dojo MySQL instance (a plain hidden process)")
+    cmds.add_parser("db-stop", help="shut the dojo MySQL instance down cleanly")
+    cmds.add_parser("db-status", help="report whether the dojo MySQL instance runs and is the dojo's")
+    cmds.add_parser("db-check", help="check the instance's identity, schema set and the restricted user's grants")
+    acc_run = cmds.add_parser("acceptance", help="open the training arena, verify both actors, close it, compare")
+    acc_run.add_argument("--scenario", type=Path, required=True)
+    acc_run.add_argument("--keep-running", action="store_true", help="leave a worldserver this command started")
+    prov = cmds.add_parser("provision", help="stage the dojo build's binaries and write the training configs")
+    prov.add_argument("--scenario", type=Path, help="scenario manifest the worldserver loads (pins its hash)")
+    prov.add_argument("--configs-only", action="store_true", help="rewrite the configs, keep the staged binaries")
+    prov.add_argument("--only", action="append", help="write only this config (repeatable), e.g. worldserver.conf")
+    cmds.add_parser("schema-build", help="build or update the dojo schemas with the core's auto-setup (dry run)")
+    acc = cmds.add_parser("accounts", help="create the RA admin and the fixture account; point realm 1 at the dojo")
+    acc.add_argument("--fixture-account", default="DOJOFIXTURE")
+    cmds.add_parser("world-start", help="start the dojo worldserver (preflight first) and wait for RA")
+    cmds.add_parser("world-stop", help="shut the dojo worldserver down through RA")
+    cmds.add_parser("world-status", help="report whether the dojo worldserver runs")
+    ra_cmd = cmds.add_parser("ra", help="run one console command on the dojo worldserver")
+    ra_cmd.add_argument("text", nargs="+")
+
+
+def run(args: argparse.Namespace) -> int:
+    try:
+        layout = load(args.layout)
+    except LayoutError as e:
+        print(f"realm: {e}", file=sys.stderr)
+        return 2
+    command = args.realm_command
+    try:
+        if command == "db-init":
+            mysql.init(layout)
+        elif command == "db-start":
+            ident = mysql.start(layout)
+            print(f"dojo mysql: {ident['version']} on 127.0.0.1:{ident['port']}, datadir {ident['datadir']}")
+        elif command == "db-stop":
+            mysql.stop(layout)
+        elif command == "db-status":
+            print(json.dumps(mysql.status(layout), indent=2))
+        elif command == "db-check":
+            from .checks import db_check
+            report = db_check(layout)
+            for c in report["checks"]:
+                print(f"{c['status']:<4} {c['check']}: {c['detail']}")
+            return 0 if report["ok"] else 1
+        elif command == "acceptance":
+            from ..scenario import load_manifest
+            from .acceptance import run as run_acceptance
+            report = run_acceptance(layout, load_manifest(args.scenario).data, stop_after=not args.keep_running)
+            arena = report.get("arena") or {}
+            print(f"open: {report['open_result']}")
+            print(f"close: {report['close_result']}")
+            print(f"identical loadouts: {arena.get('identical')}; arena problems: {arena.get('problems')}")
+            print(f"progression side effects: {report['side_effects']['progression'] or 'none'}")
+            print(f"bookkeeping changes: {report['side_effects']['bookkeeping'] or 'none'}")
+            print(f"live untouched: {report['live_untouched']}; worker peers {report['worker_peers_open']}")
+            print(f"acceptance: {'ok' if report['ok'] else 'FAILED'} ({report['out']})")
+            return 0 if report["ok"] else 1
+        elif command == "provision":
+            manifest = None
+            if args.scenario:
+                from ..scenario import load_manifest
+                m = load_manifest(args.scenario)
+                manifest = (args.scenario.resolve(), m.sha256)
+            if not args.configs_only:
+                provision.stage_binaries(layout)
+            provision.write_configs(layout, manifest, only=set(args.only) if args.only else None)
+        elif command == "schema-build":
+            return 0 if world.dry_run(layout) == 0 else 1
+        elif command == "accounts":
+            provision.ensure_accounts(layout, args.fixture_account)
+            provision.set_realm(layout)
+        elif command == "world-start":
+            world.start(layout)
+        elif command == "world-stop":
+            world.stop(layout)
+        elif command == "world-status":
+            print(json.dumps({"running": world.running(layout), "pid": world.pid(layout)}, indent=2))
+        elif command == "ra":
+            with world.ra(layout) as client:
+                print(client.command(" ".join(args.text)))
+        return 0
+    except (mysql.MysqlError, LayoutError, world.WorldError, RaError, OSError) as e:
+        print(f"realm {command}: {e}", file=sys.stderr)
+        return 1

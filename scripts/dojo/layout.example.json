@@ -11,11 +11,14 @@
     "data": "F:/azerothcore/dojo-data"
   },
   "provenance": "F:/azerothcore/dojo-data/manifests/provenance.json",
-  "modules": ["mod-playerbots", "mod-dojo"],
+  "modules": [
+    "mod-playerbots",
+    "mod-dojo"
+  ],
   "assets": "F:/azerothcore/build/bin/RelWithDebInfo/Data",
   "database": {
     "host": "127.0.0.1",
-    "port": 3306,
+    "port": 13306,
     "user": "dojo",
     "schemas": {
       "auth": "dojo_auth",
@@ -23,11 +26,16 @@
       "world": "dojo_world",
       "playerbots": "dojo_playerbots"
     },
-    "bootstrap_sources": ["acore_world"]
+    "server": {
+      "basedir": "C:/Program Files/MySQL/MySQL Server 8.4",
+      "root": "F:/azerothcore/dojo-runtime/mysql",
+      "buffer_pool": "256M"
+    }
   },
   "ports": {
     "auth": 13724,
     "world": 18085,
+    "ra": 13443,
     "dojo_host": "127.0.0.1",
     "dojo": 0
   },
@@ -48,14 +56,41 @@
       "F:/azerothcore/voice",
       "F:/azerothcore/voice-data",
       "F:/azerothcore/db_backup",
-      "F:/azerothcore/scripts"
+      "F:/azerothcore/scripts",
+      "C:/ProgramData/MySQL"
     ],
     "databases": [
-      {"host": "127.0.0.1", "port": 3306, "schema": "acore_auth"},
-      {"host": "127.0.0.1", "port": 3306, "schema": "acore_characters"},
-      {"host": "127.0.0.1", "port": 3306, "schema": "acore_world"},
-      {"host": "127.0.0.1", "port": 3306, "schema": "acore_playerbots"}
+      {
+        "host": "127.0.0.1",
+        "port": 3306,
+        "schema": "acore_auth"
+      },
+      {
+        "host": "127.0.0.1",
+        "port": 3306,
+        "schema": "acore_characters"
+      },
+      {
+        "host": "127.0.0.1",
+        "port": 3306,
+        "schema": "acore_world"
+      },
+      {
+        "host": "127.0.0.1",
+        "port": 3306,
+        "schema": "acore_playerbots"
+      }
     ],
-    "ports": [3724, 8085, 7878, 7879, 7880, 7881, 11434]
+    "ports": [
+      3306,
+      33060,
+      3724,
+      8085,
+      7878,
+      7879,
+      7880,
+      7881,
+      11434
+    ]
   }
 }

@@ -1,4 +1,4 @@
-"""python -m leeroy_dojo: protocol-smoke and verify-episode."""
+"""python -m leeroy_dojo: protocol-smoke, verify-episode, scenario and realm."""
 
 from __future__ import annotations
 
@@ -7,7 +7,9 @@ import json
 import sys
 from pathlib import Path
 
+from .realm import cli as realm_cli
 from .recording import verify_episode
+from .scenario import ScenarioError, load_manifest
 from .smoke import run_fake_smoke
 
 
@@ -22,8 +24,26 @@ def main(argv: list[str] | None = None) -> int:
     verify = sub.add_parser("verify-episode", help="check a recorded episode's chunks, checksums and footer")
     verify.add_argument("path", type=Path)
     verify.add_argument("--json", action="store_true")
+    scenario = sub.add_parser("scenario", help="check a scenario manifest and print or pin its SHA-256")
+    scenario.add_argument("action", choices=("check", "hash", "pin"),
+                          help="check: structure only; hash: print the hash; pin: write <name>.sha256 next to it")
+    scenario.add_argument("path", type=Path)
+    realm_cli.add_parser(sub)
     args = parser.parse_args(argv)
 
+    if args.command == "realm":
+        return realm_cli.run(args)
+    if args.command == "scenario":
+        try:
+            manifest = load_manifest(args.path)
+        except (OSError, ScenarioError) as e:
+            print(f"scenario: {e}", file=sys.stderr)
+            return 1
+        if args.action == "pin":
+            args.path.with_suffix(".sha256").write_text(f"{manifest.sha256}  {args.path.name}\n", encoding="ascii",
+                                                        newline="\n")
+        print(manifest.sha256 if args.action != "check" else f"{args.path}: ok ({manifest.id})")
+        return 0
     if args.command == "protocol-smoke":
         if not args.fake:
             print("protocol-smoke: only --fake exists until the native worker is built", file=sys.stderr)
