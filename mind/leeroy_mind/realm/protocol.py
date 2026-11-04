@@ -353,6 +353,24 @@ class GuildNote:
 
 
 @dataclass(frozen=True, slots=True)
+class GuildReadmit:
+    """Re-admit one member he kicked, after his yes.
+
+    kick_ts is the exact ts of the guard his_kick event; rank is that event's
+    rank, or 2 for an officer (rank 1). Native refuses any other rejoin.
+    """
+    id: str
+    guid: int
+    kick_ts: int
+    rank: int
+
+    def __post_init__(self):
+        if (not _id(self.id) or not _uint(self.guid) or not _uint(self.kick_ts, 253402300799999)
+                or type(self.rank) is not int or not 2 <= self.rank <= 9):
+            raise ValueError("invalid Realm re-admission")
+
+
+@dataclass(frozen=True, slots=True)
 class Announce:
     id: str
     kill_id: str
@@ -602,6 +620,7 @@ COMMANDS: dict[str, type] = {
     "guild_note": GuildNote,
     "announce": Announce,
     "get_realm_pvp": GetRealmPvp,
+    "guild_readmit": GuildReadmit,
 }
 EVENTS: dict[str, type] = {
     "realm_job": RealmJob,

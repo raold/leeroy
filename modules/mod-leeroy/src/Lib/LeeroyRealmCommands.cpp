@@ -18,6 +18,7 @@ using json = nlohmann::json;
 constexpr auto kU32Max = std::numeric_limits<std::uint32_t>::max();
 constexpr auto kU64Max = std::numeric_limits<std::uint64_t>::max();
 constexpr auto kMaxTimestamp = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+constexpr std::uint64_t kMaxWireUnixMs = kMaxFightStartedAtMs; // 9999-12-31, the mind's Unix-ms bound.
 constexpr std::array<std::string_view, 18> kQueued = {
     "realm_move", "rpg_status", "leave_pvp", "rearm", "wg_join", "arena_queue", "duel", "craft", "equip",
     "set_profession", "transmog_set", "calendar_signup", "mail_send", "bank_deposit", "bank_withdraw",
@@ -360,6 +361,28 @@ std::optional<GuildAdmitCmd> ParseGuildAdmit(json const& j, std::string& error)
 std::optional<GuildNoteCmd> ParseGuildNote(json const& j, std::string& error)
 {
     Fields f(j, error); GuildNoteCmd out; f.Number("guid", out.guid); f.String("officer_note", out.officerNote, 0, 31);
+    return f.Result(std::move(out));
+}
+std::optional<GuildReadmitCmd> ParseGuildReadmit(json const& j, std::string& error)
+{
+    Fields f(j, error); GuildReadmitCmd out;
+    f.String("id", out.id, 1, 128);
+    f.Number("guid", out.guid);
+    f.Number("kick_ts", out.kickTs, 1, kMaxWireUnixMs);
+    f.Number("rank", out.rank, 2, 9);
+    // A consent-bound mutation: its complete frozen schema includes the envelope.
+    auto const version = f.Find("v");
+    f.Require(version && version->is_number_integer() && *version == 1, "v");
+    auto const type = f.Find("type");
+    f.Require(type && type->is_string() && *type == "guild_readmit", "type");
+    std::uint64_t timestamp = 0;
+    f.Number("ts", timestamp, 0, kMaxTimestamp);
+    constexpr std::array<std::string_view, 7> keys = {"v", "type", "ts", "id", "guid", "kick_ts", "rank"};
+    if (j.is_object()) for (auto const& [key, value] : j.items())
+    {
+        (void)value;
+        f.Require(Contains(keys, key), key.c_str());
+    }
     return f.Result(std::move(out));
 }
 std::optional<AnnounceCmd> ParseAnnounce(json const& j, std::string& error)

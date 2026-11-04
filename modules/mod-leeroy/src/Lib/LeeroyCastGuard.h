@@ -29,6 +29,18 @@ struct GuardStep
     std::uint8_t rank;
 };
 
+// The guard's exact record of one published his_kick step: the Unix-ms ts of
+// that guard event and the rank it reported (0 when the guard never learned one).
+// It binds a consented re-admission to that one kick. Memory only: a worldserver
+// restart forgets it, and a re-admission then has no native authority.
+struct KickReceipt
+{
+    enum class State { Open, Readmitted, Unknown };
+    std::uint64_t kickTs = 0;
+    std::uint8_t rank = 0;
+    State state = State::Open;
+};
+
 struct GuardInput
 {
     std::map<std::uint32_t, std::uint8_t> members;
@@ -57,6 +69,18 @@ public:
     // does not learn a rank or schedule an add: a current roster must show the rejoin.
     bool AllowRejoin(std::uint32_t guid);
 
+    // After the adapter published this his_kick step at kickTs (Unix ms). Replaces
+    // an older receipt for the guid; refused for a guid not removed by him.
+    bool NoteKickReceipt(std::uint32_t guid, std::uint64_t kickTs, std::uint8_t rank);
+    KickReceipt const* Receipt(std::uint32_t guid) const;
+    // A confirmed kick of the guid that no published his_kick step reports yet.
+    bool KickPending(std::uint32_t guid) const { return _pendingKicks.contains(guid); }
+    // A proved native re-admission under this exact open receipt: AllowRejoin,
+    // and the receipt stays as Readmitted so a repeat answers without a second add.
+    bool CompleteReadmit(std::uint32_t guid, std::uint64_t kickTs);
+    // An add whose outcome is unproved: this receipt never authorizes another.
+    void ReadmitUnknown(std::uint32_t guid, std::uint64_t kickTs);
+
     void NoteFailed(std::uint32_t guid, std::uint64_t nowMs);
     std::vector<GuardStep> Pass(GuardInput const& input, std::size_t maxReadds = 5);
     std::map<std::uint32_t, std::uint8_t> const& Known() const { return _known; }
@@ -75,6 +99,7 @@ private:
     std::map<std::uint32_t, std::uint64_t> _commandIntents;
     std::map<std::uint32_t, std::uint64_t> _attemptedAt;
     std::map<std::uint32_t, std::uint32_t> _blockedGuild;
+    std::map<std::uint32_t, KickReceipt> _receipts;
 };
 
 bool UninviteEventIsHis(bool isUninvite, std::uint32_t guildId, std::uint32_t kickerLow,

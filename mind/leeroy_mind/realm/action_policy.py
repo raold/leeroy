@@ -171,6 +171,9 @@ def classify(cmd, *, child=False):
         if n("achievement_id") not in {3117, 4078, 4576, 2186, 3007, 1723, 1786}: raise ValueError("invalid achievement")
     elif kind == "guild_rename": n("guild_id"); s("name", 1, 24)
     elif kind == "guild_admit": scope = (n("guid"),); n("rank", 2, 9)
+    elif kind == "guild_readmit":
+        scope = (n("guid"),); n("kick_ts", 1, 253402300799999); n("rank", 2, 9)
+        p.GuildReadmit(**{f.name: getattr(cmd, f.name) for f in fields(cmd)})
     elif kind == "guild_note": scope = (n("guid"),); s("officer_note", 0, 31)
     elif kind == "announce":
         # Frozen dataclasses can still be mutated through object.__setattr__.

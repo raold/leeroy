@@ -146,6 +146,10 @@ void TickCastGuard(std::uint32_t diff);
 // Includes current/former protected members and verified kicks awaiting the
 // next guard pass. Unknown guard facts conservatively exclude recruitment.
 bool CastRecruitmentProtected(std::uint32_t guid);
+// Guard facts were lost (a full queue or an unknown command result).
+bool CastGuardFactsUnknown();
+// A confirmed kick of this guid not yet drained into the guard.
+bool CastGuardKickFactPending(std::uint32_t guid);
 void AddCastGuardScripts();
 void RegisterRealmHandlers();
 void RegisterRealmContinuationHandlers();

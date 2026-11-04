@@ -15,12 +15,12 @@
 
 namespace Leeroy::Realm
 {
-inline constexpr std::array<std::string_view, 32> kCommandTypes = {
+inline constexpr std::array<std::string_view, 33> kCommandTypes = {
     "realm_actors", "realm_say", "realm_emote", "realm_move", "rpg_status", "leave_pvp", "rearm", "wg_join",
     "arena_team", "arena_queue", "duel", "craft", "item_count", "equip", "set_profession", "transmog_set",
     "calendar_post", "calendar_signup", "calendar_update", "mail_send", "bank_tab_buy", "bank_money",
     "bank_deposit", "bank_withdraw", "bank_stock", "grant_achievement", "guild_rename", "guild_grow",
-    "guild_admit", "guild_note", "announce", "get_realm_pvp"
+    "guild_admit", "guild_note", "announce", "get_realm_pvp", "guild_readmit"
 };
 inline constexpr std::array<std::uint32_t, 7> kGrantable = {3117, 4078, 4576, 2186, 3007, 1723, 1786};
 inline constexpr std::uint32_t kGuildTabard = 5976;
@@ -103,6 +103,10 @@ struct GrantAchievementCmd { std::uint32_t guid = 0, achievementId = 0; };
 struct GuildRenameCmd { std::uint32_t guildId = 0; std::string name; };
 struct GuildGrowCmd { std::uint32_t guildId = 0; std::vector<std::uint32_t> guids; };
 struct GuildAdmitCmd { std::uint32_t guid = 0, rank = 4; };
+// Consented re-admission of one member he kicked. kick_ts is the exact ts of the
+// guard his_kick event the mind received; rank is the readmission rank the
+// native receipt derives from that kick (ReadmitRank).
+struct GuildReadmitCmd { std::string id; std::uint32_t guid = 0; std::uint64_t kickTs = 0; std::uint32_t rank = 0; };
 struct GuildNoteCmd { std::uint32_t guid = 0; std::string officerNote; };
 struct AnnounceCmd : KillIdentity
 {
@@ -154,6 +158,7 @@ std::optional<GuildRenameCmd> ParseGuildRename(nlohmann::json const&, std::strin
 std::optional<GuildGrowCmd> ParseGuildGrow(nlohmann::json const&, std::string& error);
 std::optional<GuildAdmitCmd> ParseGuildAdmit(nlohmann::json const&, std::string& error);
 std::optional<GuildNoteCmd> ParseGuildNote(nlohmann::json const&, std::string& error);
+std::optional<GuildReadmitCmd> ParseGuildReadmit(nlohmann::json const&, std::string& error);
 std::optional<AnnounceCmd> ParseAnnounce(nlohmann::json const&, std::string& error);
 
 struct Place

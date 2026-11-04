@@ -48,6 +48,7 @@ CASES = [
     (p.GuildRename("rename", 50, "Example"), "ack", ()),
     (p.GuildGrow("grow", 50, (3, 2)), "ordinary", (2, 3)),
     (p.GuildAdmit("admit", 2), "ack", (2,)),
+    (p.GuildReadmit("readmit", 2, 1700000000000, 4), "ack", (2,)),
     (p.GuildNote("note", 2, ""), "ack", (2,)),
     (announce(), "ack", ()),
     (p.GetRealmPvp("query", origin_id="wg"), "query", ()),
@@ -67,7 +68,7 @@ def test_exact_registry_scope_and_lossless_payload_roundtrip(cmd, policy, scope)
         assert json.loads(c.payload)["guids"] == list(cmd.guids)
 
 
-def test_registry_accounts_for_all_32_realm_types():
+def test_registry_accounts_for_all_33_realm_types():
     assert {type(c) for c, _, _ in CASES if type(c) is not BotDo} | {p.ArenaQueue} == set(p.COMMANDS.values())
 
 

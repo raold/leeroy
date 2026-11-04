@@ -2,6 +2,7 @@
 #include "RealmGuild.h"
 #include "RealmPorts.h"
 #include "LeeroyRealmGuild.h"
+#include "LeeroyRealmReadmit.h"
 #include "LeeroyEvents.h"
 
 namespace Leeroy::Realm
@@ -115,6 +116,73 @@ LeeroyCommandResult Admit(nlohmann::json const& message)
     return {true, ""};
 }
 
+// Consented re-admission of exactly one member he kicked, bound to the guard's
+// receipt of that kick. guild_admit keeps refusing every rejoin.
+LeeroyCommandResult Readmit(nlohmann::json const& message)
+{
+    auto& module = RealmModule::Instance();
+    if (!module.On()) return {false, "realm_off"};
+    std::string why;
+    auto const command = ParseGuildReadmit(message, why);
+    if (!command) return {false, why};
+    auto const configuredGuild = GuildId(), human = HumanGuid();
+    auto* guild = sGuildMgr->GetGuildById(configuredGuild);
+    if (!guild) return {false, "guild not found"};
+    auto* guard = module.Guard();
+    auto const ranks = RealmGuildRankCount(*guild);
+    auto const* character = sCharacterCache->GetCharacterCacheByGuid(PlayerGuid(command->guid));
+    auto* connected = ObjectAccessor::FindConnectedPlayer(PlayerGuid(command->guid));
+    auto const* leader = sCharacterCache->GetCharacterCacheByGuid(guild->GetLeaderGUID());
+    ReadmitFacts facts;
+    facts.guardAvailable = guard && !CastGuardFactsUnknown();
+    facts.kickPending = guard && (guard->KickPending(command->guid) || CastGuardKickFactPending(command->guid));
+    facts.human = command->guid == human;
+    facts.actor = module.IsActor(command->guid);
+    facts.exists = character != nullptr;
+    facts.randomAccount = IsOnRandomBotAccount(command->guid);
+    facts.member = IsConfiguredGuildMember(command->guid);
+    facts.guild = character ? character->GuildId : 0;
+    if (connected && connected->GetGuildId()) facts.guild = connected->GetGuildId();
+    facts.factionMatches = character && leader
+        && Player::TeamIdForRace(character->Race) == Player::TeamIdForRace(leader->Race);
+    facts.rankExists = command->rank < ranks && ranks <= GUILD_RANKS_MAX_COUNT;
+    auto const unixNow = NowUnixMs();
+    facts.nowUnixMs = unixNow > 0 ? static_cast<std::uint64_t>(unixNow) : 0;
+    auto const decision = DecideReadmit(guard ? guard->Receipt(command->guid) : nullptr, *command, facts);
+    if (decision.verdict == ReadmitVerdict::AlreadyDone) return {true, ""}; // Idempotent: no second add.
+    if (decision.verdict != ReadmitVerdict::Admit) return {false, decision.reason};
+    if (!(why = module.MutationReason(command->guid)).empty()) return {false, why};
+    auto const generation = module.BodyGeneration(command->guid);
+    auto const before = Identity(command->guid);
+    if (!before || before->guild != 0) return {false, "not_guildless"};
+    auto const epoch = module.Epoch();
+    bool const added = guild->AddMember(PlayerGuid(command->guid), static_cast<uint8>(command->rank));
+    auto const unproved = [&]
+    {
+        guard->ReadmitUnknown(command->guid, command->kickTs); // This receipt never authorizes another add.
+        return LeeroyCommandResult{false, "guild_join_unproved"};
+    };
+    if (!module.On() || module.Epoch() != epoch || GuildId() != configuredGuild || HumanGuid() != human
+        || module.Guard() != guard || module.BodyGeneration(command->guid) != generation
+        || sGuildMgr->GetGuildById(configuredGuild) != guild || !module.Holder(command->guid).empty()
+        || !module.MutationReason(command->guid).empty()) return unproved();
+    auto const current = Identity(command->guid);
+    auto const* member = guild->GetMember(PlayerGuid(command->guid));
+    auto const* after = sCharacterCache->GetCharacterCacheByGuid(PlayerGuid(command->guid));
+    auto expected = *before; expected.guild = configuredGuild;
+    if (!added)
+        return !member && after && after->GuildId == 0 && current == before
+            ? LeeroyCommandResult{false, "refused"} : unproved();
+    if (!member || member->GetGUID() != PlayerGuid(command->guid) || member->GetRankId() != command->rank
+        || member->GetAccountId() != before->account || member->GetClass() != before->classId
+        || member->GetGender() != before->sex
+        || !after || after->GuildId != configuredGuild || after->AccountId != before->account
+        || !current || *current != expected) return unproved();
+    // Only this proved add lifts his exclusion, and only for this exact kick.
+    if (!guard->CompleteReadmit(command->guid, command->kickTs)) return unproved();
+    return {true, ""};
+}
+
 LeeroyCommandResult Note(nlohmann::json const& message)
 {
     auto& module = RealmModule::Instance();
@@ -207,6 +275,7 @@ void RegisterRealmGuildHandlers()
     });
     RegisterCommand("guild_rename", Rename);
     RegisterCommand("guild_admit", Admit);
+    RegisterCommand("guild_readmit", Readmit);
     RegisterCommand("guild_note", Note);
     RegisterCommand("grant_achievement", Grant);
 }

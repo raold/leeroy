@@ -152,6 +152,14 @@ public:
 };
 }
 
+bool CastGuardFactsUnknown() { return unknown.load(); }
+
+bool CastGuardKickFactPending(std::uint32_t guid)
+{
+    std::lock_guard lock(factsMutex);
+    return std::any_of(kicks.begin(), kicks.end(), [&](KickFact const& fact) { return fact.target == guid; });
+}
+
 bool CastRecruitmentProtected(std::uint32_t guid)
 {
     auto* guard = RealmModule::Instance().Guard();
@@ -263,7 +271,12 @@ void TickCastGuard(std::uint32_t diff)
                 step.action = GuardAction::Failed;
             }
         }
-        Publish(MakeGuard(step.guid, ActionName(step.action), step.rank, reason));
+        // Exactly Publish's encoding; a his_kick's own ts becomes its receipt.
+        auto const ts = NowUnixMs();
+        LeeroyModule::Instance().Publish(EncodeEvent(ts, MakeGuard(step.guid, ActionName(step.action), step.rank, reason)),
+            false);
+        if (step.action == GuardAction::HisKick && ts > 0)
+            guard->NoteKickReceipt(step.guid, static_cast<std::uint64_t>(ts), step.rank);
         LOG_INFO("module.leeroy", "mod-leeroy: cast guard {} {} rank {}", ActionName(step.action), step.guid, uint32(step.rank));
     }
 }

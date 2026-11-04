@@ -33,6 +33,16 @@
 {"name":"guild_rename_ok","kind":"command","valid":true,"error":"","full":true,"msg":{"v":1,"type":"guild_rename","id":"realm-test","ts":0,"guild_id":12001,"name":"Test Guild"}}
 {"name":"guild_grow_ok","kind":"command","valid":true,"error":"","full":true,"msg":{"v":1,"type":"guild_grow","id":"realm-test","ts":0,"guild_id":12001,"guids":[11001,11002]}}
 {"name":"guild_admit_ok","kind":"command","valid":true,"error":"","full":true,"msg":{"v":1,"type":"guild_admit","id":"realm-test","ts":0,"guid":11001,"rank":9}}
+{"name":"guild_readmit_ok","kind":"command","valid":true,"error":"","full":true,"msg":{"v":1,"type":"guild_readmit","id":"realm-test","ts":0,"guid":11001,"kick_ts":1700000000000,"rank":4}}
+{"name":"guild_readmit_officer_rank","kind":"command","valid":true,"error":"","msg":{"v":1,"type":"guild_readmit","id":"realm-test","ts":0,"guid":11001,"kick_ts":1700000000000,"rank":2}}
+{"name":"guild_readmit_rank_officer","kind":"command","valid":false,"error":"bad field: rank","msg":{"v":1,"type":"guild_readmit","id":"realm-test","ts":0,"guid":11001,"kick_ts":1700000000000,"rank":1}}
+{"name":"guild_readmit_rank_cap","kind":"command","valid":false,"error":"bad field: rank","msg":{"v":1,"type":"guild_readmit","id":"realm-test","ts":0,"guid":11001,"kick_ts":1700000000000,"rank":10}}
+{"name":"guild_readmit_missing_rank","kind":"command","valid":false,"error":"bad field: rank","msg":{"v":1,"type":"guild_readmit","id":"realm-test","ts":0,"guid":11001,"kick_ts":1700000000000}}
+{"name":"guild_readmit_missing_kick_ts","kind":"command","valid":false,"error":"bad field: kick_ts","msg":{"v":1,"type":"guild_readmit","id":"realm-test","ts":0,"guid":11001,"rank":4}}
+{"name":"guild_readmit_kick_ts_zero","kind":"command","valid":false,"error":"bad field: kick_ts","msg":{"v":1,"type":"guild_readmit","id":"realm-test","ts":0,"guid":11001,"kick_ts":0,"rank":4}}
+{"name":"guild_readmit_kick_ts_cap","kind":"command","valid":false,"error":"bad field: kick_ts","msg":{"v":1,"type":"guild_readmit","id":"realm-test","ts":0,"guid":11001,"kick_ts":253402300800000,"rank":4}}
+{"name":"guild_readmit_bad_guid","kind":"command","valid":false,"error":"bad field: guid","msg":{"v":1,"type":"guild_readmit","id":"realm-test","ts":0,"guid":0,"kick_ts":1700000000000,"rank":4}}
+{"name":"guild_readmit_unknown_field","kind":"command","valid":false,"error":"bad field: note","msg":{"v":1,"type":"guild_readmit","id":"realm-test","ts":0,"guid":11001,"kick_ts":1700000000000,"rank":4,"note":"welcome back"}}
 {"name":"guild_note_ok","kind":"command","valid":true,"error":"","full":true,"msg":{"v":1,"type":"guild_note","id":"realm-test","ts":0,"guid":11001,"officer_note":"Trial member"}}
 {"name":"announce_ok","kind":"command","valid":true,"error":"","full":true,"msg":{"v":1,"type":"announce","id":"realm-test","ts":0,"kill_id":"0123456789abcdef0123456789abcdef:1","native_epoch":7,"guild_id":12001,"human_guid":11002,"difficulty":1,"size":25,"heroic":false,"map":631,"instance_id":15001,"boss_id":0,"boss_name":"Lord Marrowgar","attempts":3,"fight_s":250,"first":"week"}}
 {"name":"realm_actors_defaults","kind":"command","valid":true,"error":"","msg":{"v":1,"type":"realm_actors","id":"realm-test","ts":0,"guids":[]}}

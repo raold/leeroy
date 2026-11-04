@@ -13,6 +13,7 @@ constexpr std::uint64_t IntentMs = 120000;
 constexpr std::uint64_t RetryMs = 60000;
 constexpr std::size_t MaxIntents = 1024;
 constexpr std::size_t MaxReadds = 5;
+constexpr std::size_t MaxReceipts = 1024;
 
 bool Elapsed(std::uint64_t now, std::uint64_t then, std::uint64_t duration)
 {
@@ -156,6 +157,47 @@ bool GuardState::AllowRejoin(std::uint32_t guid)
     _attemptedAt.erase(guid);
     _blockedGuild.erase(guid);
     return true;
+}
+
+bool GuardState::NoteKickReceipt(std::uint32_t guid, std::uint64_t kickTs, std::uint8_t rank)
+{
+    if (!Protectable(guid) || !kickTs || !_removedByHuman.contains(guid) || _pendingKicks.contains(guid))
+        return false;
+    if (!_receipts.contains(guid) && _receipts.size() >= MaxReceipts)
+    {
+        // Drop a settled receipt first; never displace another open consent.
+        auto settled = std::find_if(_receipts.begin(), _receipts.end(), [](auto const& entry) {
+            return entry.second.state != KickReceipt::State::Open;
+        });
+        if (settled == _receipts.end())
+            return false;
+        _receipts.erase(settled);
+    }
+    _receipts[guid] = KickReceipt{kickTs, rank, KickReceipt::State::Open};
+    return true;
+}
+
+KickReceipt const* GuardState::Receipt(std::uint32_t guid) const
+{
+    auto const it = _receipts.find(guid);
+    return it == _receipts.end() ? nullptr : &it->second;
+}
+
+bool GuardState::CompleteReadmit(std::uint32_t guid, std::uint64_t kickTs)
+{
+    auto const it = _receipts.find(guid);
+    if (it == _receipts.end() || it->second.kickTs != kickTs || it->second.state != KickReceipt::State::Open
+        || _pendingKicks.contains(guid) || !AllowRejoin(guid))
+        return false;
+    it->second.state = KickReceipt::State::Readmitted;
+    return true;
+}
+
+void GuardState::ReadmitUnknown(std::uint32_t guid, std::uint64_t kickTs)
+{
+    auto const it = _receipts.find(guid);
+    if (it != _receipts.end() && it->second.kickTs == kickTs)
+        it->second.state = KickReceipt::State::Unknown;
 }
 
 void GuardState::NoteFailed(std::uint32_t guid, std::uint64_t nowMs)

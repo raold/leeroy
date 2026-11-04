@@ -46,6 +46,7 @@ COMMAND_FIELDS = {
     "announce": ("id kill_id native_epoch guild_id human_guid map instance_id boss_id difficulty size heroic "
                  "boss_name attempts fight_s first"),
     "get_realm_pvp": "id pvp_owner origin_id",
+    "guild_readmit": "id guid kick_ts rank",
 }
 EVENT_FIELDS = {
     "realm_job": "ts id kind state reason guid value pvp_owner",
@@ -93,7 +94,7 @@ def command_from_message(msg):
 def test_authoritative_maps_fields_and_immutable_message_shapes():
     assert list(protocol.COMMANDS) == list(COMMAND_FIELDS)
     assert list(protocol.EVENTS) == list(EVENT_FIELDS)
-    assert len(protocol.COMMANDS) == 32 and len(protocol.EVENTS) == 14
+    assert len(protocol.COMMANDS) == 33 and len(protocol.EVENTS) == 14
     for registry, expected in ((protocol.COMMANDS, COMMAND_FIELDS), (protocol.EVENTS, EVENT_FIELDS)):
         for name, cls in registry.items():
             assert [field.name for field in dataclasses.fields(cls)] == expected[name].split()
@@ -552,4 +553,19 @@ def test_native_kill_attempts_are_the_exact_native_count_or_unknown():
               if key not in {"v", "type"}}
     with pytest.raises(TypeError, match="attempts"):
         protocol.RealmKill(**fields)
+
+
+def test_guild_readmit_binds_one_kick_and_a_guild_admit_rank():
+    protocol.register()
+    msg = next(row["msg"] for row in fixtures() if row["name"] == "guild_readmit_ok")
+    cmd = command_from_message(msg)
+    assert (cmd.guid, cmd.kick_ts, cmd.rank) == (11001, 1700000000000, 4)
+    assert list(json.loads(wire.encode_command(cmd, 0))) == ["v", "type", "ts", "id", "guid", "kick_ts", "rank"]
+    for change in ({"rank": 1}, {"rank": 10}, {"rank": True}, {"kick_ts": 0}, {"kick_ts": 253402300800000},
+                   {"guid": 0}, {"guid": 2**32}, {"id": ""}, {"id": "a b"}):
+        with pytest.raises(ValueError, match="re-admission"):
+            protocol.GuildReadmit(**{**{key: value for key, value in msg.items() if key not in {"v", "type", "ts"}},
+                                     **change})
+    with pytest.raises(TypeError, match="rank"):
+        protocol.GuildReadmit("readmit", 11001, 1700000000000)  # No default rank.
 

@@ -64,6 +64,7 @@ bool Parse(std::string_view type, json const& j, std::string& error)
     if (type == "guild_grow") return ParseGuildGrow(j, error).has_value();
     if (type == "guild_admit") return ParseGuildAdmit(j, error).has_value();
     if (type == "guild_note") return ParseGuildNote(j, error).has_value();
+    if (type == "guild_readmit") return ParseGuildReadmit(j, error).has_value();
     if (type == "announce") return ParseAnnounce(j, error).has_value();
     throw std::runtime_error("unhandled Realm command parser");
 }
@@ -521,6 +522,29 @@ LEEROY_TEST(Realm_JobEventShape)
     CHECK_EQ(MakeArenaEnd(3,13001,13002,12,-12,{}).at("arena_type"), 3u);
     auto encoded = json::parse(Leeroy::EncodeEvent(123, MakeRealmJob(e)));
     CHECK_EQ(encoded.at("ts"), 123); CHECK_EQ(encoded.at("v"), 1);
+}
+
+LEEROY_TEST(Realm_GuildReadmitIsAFrozenConsentBoundSchema)
+{
+    std::string error;
+    auto parsed = ParseGuildReadmit(Message("guild_readmit_ok"), error);
+    CHECK(parsed && parsed->id == "realm-test" && parsed->guid == 11001 && parsed->kickTs == 1700000000000
+        && parsed->rank == 4);
+    parsed = ParseGuildReadmit(Message("guild_readmit_officer_rank"), error);
+    CHECK(parsed && parsed->rank == 2);
+    for (auto field : {"id", "guid", "kick_ts", "rank", "v", "type", "ts"})
+    {
+        auto msg = Message("guild_readmit_ok"); msg.erase(field);
+        CHECK(!ParseGuildReadmit(msg, error)); CHECK_EQ(error, std::string("bad field: ") + field);
+    }
+    auto msg = Message("guild_readmit_ok"); msg["kick_ts"] = 253402300799999u;
+    CHECK(ParseGuildReadmit(msg, error));
+    msg["type"] = "guild_admit";
+    CHECK(!ParseGuildReadmit(msg, error)); CHECK_EQ(error, "bad field: type");
+    RejectField("guild_readmit_ok", "rank", 0u);
+    RejectField("guild_readmit_ok", "kick_ts", -1);
+    // No rank default: guild_admit's rank 4 never applies to a re-admission.
+    auto admit = Message("guild_admit_defaults"); CHECK(!ParseGuildReadmit(admit, error));
 }
 
 LEEROY_TEST(Realm_AnnouncementText)
