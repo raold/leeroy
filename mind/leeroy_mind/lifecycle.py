@@ -10,8 +10,9 @@ another process. An unidentified held lock always requires manual intervention.
 
 The voice service is located as scripts/ac-voice.sh locates it: its own `python -m
 leeroy_voice where` names the data dir and ports, and `held` the pid holding voice.lock. That
-pid must also be this checkout's voice venv running `-m leeroy_voice run` before it is asked to
-close (WM_CLOSE, so WoW's volume is restored) and, after five seconds, terminated.
+pid must also be this checkout's voice service (the base interpreter its venv launcher started,
+running `-m leeroy_voice run` under that launcher) before it is asked to close (WM_CLOSE, so
+WoW's volume is restored) and, after five seconds, terminated.
 
 Nothing here prints: an action returns an Outcome, whose message the script prints. Errors are
 OwnershipError with a message that never carries a raw process command line."""
@@ -376,18 +377,46 @@ class VoiceControl:
         text = (result.stdout or "").strip()
         return int(text) if text.isdigit() else 0
 
+    def _bases(self) -> dict[str, str]:
+        """{venv interpreter: the base interpreter its launcher starts}, from the venv's
+        pyvenv.cfg `home` (python.exe starts python.exe, pythonw.exe starts pythonw.exe)."""
+        try:
+            text = (self.python.parent.parent / "pyvenv.cfg").read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            text = ""
+        homes = [value.strip() for key, sep, value in (line.partition("=")
+                 for line in text.splitlines()) if sep and key.strip().lower() == "home"]
+        if len(homes) != 1 or not Path(homes[0]).is_absolute():
+            raise OwnershipError("cannot read the voice venv's base interpreter from its "
+                                 "pyvenv.cfg; no action taken")
+        home = Path(homes[0])
+        return {canonical(self.python): canonical(home / "python.exe"),
+                canonical(self.pythonw): canonical(home / "pythonw.exe")}
+
     def _identify(self, pid: int):
-        """The process row for `pid`, which must be this checkout's voice service."""
-        allowed = {canonical(self.python), canonical(self.pythonw)}
-        for row in self.processes.snapshot():
-            if row.pid != pid:
-                continue
-            args = row.argv
-            if (len(args) >= 4 and Path(args[0]).is_absolute()
-                    and canonical(args[0]) in allowed
-                    and args[1:4] == ("-m", "leeroy_voice", "run")):
+        """The process row for `pid`, which must be this checkout's voice service: the base
+        interpreter that this checkout's venv launcher started (Windows runs a venv that way),
+        whose parent is that launcher running `-m leeroy_voice run` and was created before it;
+        or, in a venv without a launcher, the venv's interpreter itself. Every executable path
+        must be absolute, and the image (exe) must be the one named, as for the mind."""
+        bases = self._bases()
+
+        def runs(row):
+            return (Path(row.exe).is_absolute() and len(row.argv) == 4
+                    and Path(row.argv[0]).is_absolute()
+                    and row.argv[1:] == ("-m", "leeroy_voice", "run"))
+        rows = {row.pid: row for row in self.processes.snapshot()}
+        row = rows.get(pid)
+        if row is not None and runs(row):
+            exe, first = canonical(row.exe), canonical(row.argv[0])
+            if exe in bases and first == exe:
                 return row
-            break
+            venv = next((v for v, base in bases.items() if base == exe), None)
+            parent = rows.get(row.parent)
+            if (venv is not None and first in (venv, exe) and parent is not None
+                    and runs(parent) and canonical(parent.exe) == venv
+                    and canonical(parent.argv[0]) == venv and parent.created < row.created):
+                return row
         raise OwnershipError(f"voice.lock is held by pid {pid}, which is not this checkout's "
                              "voice service; no action taken")
 

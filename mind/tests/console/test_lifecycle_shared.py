@@ -1,6 +1,7 @@
 """leeroy_mind.lifecycle as the console uses it: structured outcomes, the console's mind handle
 and the voice service's control. Every process, port and subprocess is a fake."""
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -223,8 +224,14 @@ def test_parse_where_reads_the_services_three_lines(tmp_path):
             parse_where(bad)
 
 
+def voice_run(exe, first=None):
+    return (str(first or exe), "-m", "leeroy_voice", "run")
+
+
 class VoiceRig:
-    """A fake voice service: `where`, `held`, a launch, its ports and its process."""
+    """A fake voice service: `where`, `held`, a launch, its ports and its processes, as Windows
+    runs a venv: the venv's pythonw.exe is a launcher (pid 499) that starts the base interpreter
+    named by pyvenv.cfg's home (pid 500, the one that holds voice.lock and writes voice.pid)."""
 
     def __init__(self, tmp_path):
         self.root = tmp_path / "checkout"
@@ -232,6 +239,11 @@ class VoiceRig:
         scripts.mkdir(parents=True)
         for exe in ("python.exe", "pythonw.exe"):
             (scripts / exe).write_bytes(b"")
+        self.home = tmp_path / "uv" / "cpython-3.12"
+        (scripts.parent / "pyvenv.cfg").write_text(
+            f"home = {self.home}\nimplementation = CPython\nversion_info = 3.12.12\n"
+            "include-system-site-packages = false\n", encoding="utf-8")
+        self.venvw, self.basew = scripts / "pythonw.exe", self.home / "pythonw.exe"
         self.data = tmp_path / "voice-data"
         self.pid = None
         self.ports: set[int] = set()
@@ -239,10 +251,14 @@ class VoiceRig:
         self.launched: list[list[str]] = []
         self.kills: list[int] = []
         self.clock = Clock()
-        self.row = Process(500, 499, 7, str(scripts / "pythonw.exe"),
-                           (str(scripts / "pythonw.exe"), "-m", "leeroy_voice", "run"))
+        self.launcher = Process(499, 20, 7, str(self.venvw), voice_run(self.venvw))
+        self.row = Process(500, 499, 8, str(self.basew), voice_run(self.basew))
         self.processes = Processes()
         self.close_works = True
+
+    def up(self, *rows):
+        self.pid = 500
+        self.processes.rows = list(rows or (self.launcher, self.row))
 
     def run(self, argv, **kw):
         command = argv[-1]
@@ -258,8 +274,7 @@ class VoiceRig:
 
     def popen(self, argv, **kw):
         self.launched.append(list(argv))
-        self.pid = 500
-        self.processes.rows = [self.row]
+        self.up()
         self.ports = {7879, 7880}
         return SimpleNamespace(pid=499, poll=lambda: None)
 
@@ -310,30 +325,70 @@ def test_voice_start_reports_an_early_exit_and_a_timeout(tmp_path):
 
 def test_voice_stop_asks_it_to_close_first(tmp_path):
     rig = VoiceRig(tmp_path)
-    rig.pid, rig.processes.rows = 500, [rig.row]
+    rig.up()
     out = rig.control().stop()
     assert out.message == "voice stopped" and rig.kills == [500]
-    assert rig.processes.killed == [] and rig.processes.closed == [(500, 7)]
+    assert rig.processes.killed == [] and rig.processes.closed == [(500, 8)]
 
 
 def test_voice_stop_terminates_the_verified_process_after_five_seconds(tmp_path):
     rig = VoiceRig(tmp_path)
-    rig.pid, rig.processes.rows = 500, [rig.row]
+    rig.up()
     rig.close_works = False
     out = rig.control().stop()
     assert out.message == "voice terminated after 5 s"
-    assert rig.processes.killed == [(500, 7)] and rig.processes.closed == [(500, 7)]
+    assert rig.processes.killed == [(500, 8)] and rig.processes.closed == [(500, 8)]
 
 
-def test_voice_stop_refuses_a_pid_that_is_not_this_checkouts_service(tmp_path):
+def test_voice_identity_accepts_the_launchers_child_as_windows_runs_it(tmp_path):
+    """voice.pid names the base interpreter (pyvenv.cfg's home) that the venv's pythonw.exe
+    launcher started. uv's launcher passes the base path as argv[0], CPython's keeps its own."""
     rig = VoiceRig(tmp_path)
-    rig.pid = 500
-    rig.processes.rows = [Process(500, 1, 7, "C:/other/pythonw.exe",
-                                  ("C:/other/pythonw.exe", "-m", "leeroy_voice", "run"))]
-    with pytest.raises(OwnershipError, match="not this checkout's voice service"):
-        rig.control().stop()
-    rig.processes.rows = [Process(500, 1, 7, rig.row.exe, (rig.row.exe, "-m", "something"))]
-    with pytest.raises(OwnershipError, match="not this checkout's"):
+    rig.up()
+    assert rig.control()._identify(500) == rig.row
+    kept = Process(500, 499, 8, str(rig.basew), voice_run(rig.basew, rig.venvw))
+    rig.up(rig.launcher, kept)
+    assert rig.control()._identify(500) == kept
+    console = Process(500, 499, 8, str(rig.home / "python.exe"), voice_run(rig.home / "python.exe"))
+    python = rig.root / "voice" / ".venv" / "Scripts" / "python.exe"
+    rig.up(Process(499, 20, 7, str(python), voice_run(python)), console)
+    assert rig.control()._identify(500) == console
+    direct = Process(500, 20, 8, str(rig.venvw), voice_run(rig.venvw))  # a venv without one
+    rig.up(direct)
+    assert rig.control()._identify(500) == direct
+
+
+def test_voice_identity_refuses_anything_short_of_a_verified_family(tmp_path):
+    rig = VoiceRig(tmp_path)
+    other = tmp_path / "other" / ".venv" / "Scripts" / "pythonw.exe"
+    python = rig.root / "voice" / ".venv" / "Scripts" / "python.exe"
+    refused = {
+        "another venv": [Process(500, 1, 7, str(other), voice_run(other))],
+        "another job": [rig.launcher, Process(500, 499, 8, str(rig.basew),
+                                              (str(rig.basew), "-m", "something", "run"))],
+        "extra arguments": [rig.launcher, Process(500, 499, 8, str(rig.basew),
+                                                  (*voice_run(rig.basew), "--x"))],
+        "no launcher": [rig.row],
+        "a launcher started after it": [replace(rig.launcher, created=9), rig.row],
+        "another venv's launcher": [Process(499, 20, 7, str(other), voice_run(other)), rig.row],
+        "the launcher's argv only": [Process(499, 20, 7, str(other), voice_run(rig.venvw)),
+                                     rig.row],
+        "the base interpreter's argv only": [rig.launcher, Process(
+            500, 499, 8, str(other), voice_run(rig.basew))],
+        "the venv's argv only": [Process(500, 20, 8, str(other), voice_run(rig.venvw))],
+        "a launcher of the other kind": [Process(499, 20, 7, str(python), voice_run(python)),
+                                         rig.row],
+        "a relative path": [rig.launcher, Process(500, 499, 8, str(rig.basew),
+                                                  voice_run("pythonw.exe"))],
+    }
+    for why, rows in refused.items():
+        rig.up(*rows)
+        with pytest.raises(OwnershipError, match="not this checkout's voice service"):
+            rig.control().stop()
+        assert rig.kills == [] and rig.processes.killed == [], why
+    rig.up()
+    (rig.root / "voice" / ".venv" / "pyvenv.cfg").unlink()
+    with pytest.raises(OwnershipError, match="pyvenv.cfg"):
         rig.control().stop()
     assert rig.kills == [] and rig.processes.killed == []
 
@@ -348,7 +403,7 @@ def test_voice_stop_refuses_a_lock_without_a_pid_and_is_idempotent(tmp_path):
 
 def test_voice_restart_through_the_console_handle(tmp_path):
     rig = VoiceRig(tmp_path)
-    rig.pid, rig.processes.rows = 500, [rig.row]
+    rig.up()
     out = VoiceHandle(rig.control()).act("restart")
     assert rig.kills == [500] and len(rig.launched) == 1 and out.state == "running"
 
