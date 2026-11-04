@@ -178,14 +178,15 @@ class MysqlFilesTest(unittest.TestCase):
 
     def test_client_never_puts_a_password_on_the_command_line(self):
         cnf = self.s.tmp / "c.cnf"
-        mysql.write_client_cnf(cnf, "dojo", "s3cretPW", 13306)
-        self.assertEqual(mysql.read_client_cnf(cnf)["password"], "s3cretPW")
+        pw = mysql.new_password()
+        mysql.write_client_cnf(cnf, "dojo", pw, 13306)
+        self.assertEqual(mysql.read_client_cnf(cnf)["password"], pw)
         client = mysql.Client(self.lay, cnf)
         with mock.patch("subprocess.run") as run:
             run.return_value = mock.Mock(returncode=0, stdout="1\t2\n", stderr="")
             self.assertEqual(client.query("SELECT 1, 2;"), [["1", "2"]])
             argv = run.call_args.args[0]
-        self.assertTrue(all("s3cretPW" not in a for a in argv))
+        self.assertTrue(all(pw not in a for a in argv))
         self.assertIn(f"--defaults-file={cnf}", argv)
 
     def test_client_refuses_a_live_or_foreign_port_before_running_anything(self):
