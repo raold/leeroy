@@ -7,6 +7,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
+import hashlib
 import json
 import sqlite3
 from types import SimpleNamespace
@@ -100,6 +101,11 @@ def mind_line(store, *, speaker=LEAD, to_guid=HUMAN, channel="whisper", text="sa
                                   session_id=None, origin="mind")
 
 
+def his_line(store, text, *, to_guid=LEAD, channel="whisper"):
+    return store.insert_chat_line(Chat(0, channel, HUMAN, "Testmaster", to_guid, text, 0, 0),
+                                  session_id=None, origin="human")
+
+
 class Rig:
     """The guard over the roster store, with a clock it moves by hand."""
 
@@ -119,7 +125,7 @@ class Rig:
 
     def deliver(self, intent, *, ack_ts=None):
         assert self.guard.before_transport(intent, context=CONTEXT)
-        line = mind_line(self.store, speaker=intent.lead_guid)
+        line = mind_line(self.store, speaker=intent.lead_guid, text=intent.text)
         ack = Ack(int(self.clock.t * 1000) if ack_ts is None else ack_ts, "m1", True, "")
         assert self.guard.on_recorded(intent, line, ack)
         assert self.guard.settle_question(intent) == "delivered"
@@ -300,10 +306,14 @@ def test_the_recorded_line_must_be_the_leads_typed_whisper_to_him(rig):
     intent = rig.ask()
     assert rig.guard.before_transport(intent, context=CONTEXT)
     ack = Ack(int(T0 * 1000), "m1", True, "")
-    for line in (mind_line(rig.store, channel="guild"), mind_line(rig.store, speaker=OTHER),
-                 mind_line(rig.store, to_guid=OTHER)):
+    for line in (mind_line(rig.store, channel="guild", text=intent.text),
+                 mind_line(rig.store, speaker=OTHER, text=intent.text),
+                 mind_line(rig.store, to_guid=OTHER, text=intent.text),
+                 # Restyled on its way out: not the question whose hash the row keeps.
+                 mind_line(rig.store, text="saw coros got kicked, want them back? (yes/no) :)")):
         assert rig.guard.on_recorded(intent, line, ack) is False
-    assert rig.guard.on_recorded(intent, mind_line(rig.store), ack) is True
+    assert rig.row()["ask_text_sha256"] == hashlib.sha256(intent.text.encode("utf-8")).hexdigest()
+    assert rig.guard.on_recorded(intent, mind_line(rig.store, text=intent.text), ack) is True
     row = rig.row()
     assert (row["ask_state"], row["delivered_ms"], row["reply_expires_ms"]) == (
         "delivered", row["ask_ack_ms"], row["ask_ack_ms"] + WINDOW_MS)
@@ -315,7 +325,7 @@ def test_native_ack_time_is_bounded_by_the_barrier_and_its_receipt(rig):
     intent = rig.ask()
     assert rig.guard.before_transport(intent, context=CONTEXT)
     rig.clock.t += 2
-    assert rig.guard.on_recorded(intent, mind_line(rig.store), Ack(5, "m1", True, ""))
+    assert rig.guard.on_recorded(intent, mind_line(rig.store, text=intent.text), Ack(5, "m1", True, ""))
     row = rig.row()
     assert row["ask_ack_ms"] == row["dispatched_ms"] == int(T0 * 1000)
     assert row["ack_received_ms"] == int((T0 + 2) * 1000)
@@ -395,6 +405,52 @@ def test_a_second_answer_changes_nothing(rig):
     assert rig.answer("yes") is None and rig.answer("no") is None
     assert rig.row()["admission_command_id"] == first.command_id
     assert count(rig.store, "realm_source", "event_type='chat'") == 1
+
+
+# -- his answer answers the question, and nothing else ---------------------------------------
+
+@pytest.mark.parametrize("between", [
+    lambda store: mind_line(store, text="u coming to icc tonight?"),  # The lead asked something else.
+    lambda store: his_line(store, "wait which one"),  # He said something first.
+])
+@pytest.mark.parametrize("word", ["yes", "no"])
+def test_a_whisper_between_the_question_and_his_answer_unties_it(rig, between, word):
+    rig.asked()
+    between(rig.store)
+    sources = count(rig.store, "realm_source")
+    assert rig.answer(word) is None  # It may answer that line: his yes readmits nobody, his no declines nothing.
+    assert rig.states() == ("delivered", "none", "none", None)
+    row = rig.row()
+    assert (row["answer"], row["answer_source"], row["answered_ms"]) == (None, None, None)
+    assert count(rig.store, "realm_source") == sources  # Refused before anything is consumed.
+    assert rig.answer("yes") is None and rig.answer("no") is None  # The line still lies between.
+    rig.clock.t = row["reply_expires_ms"] / 1000
+    assert rig.guard.sweep() == 1
+    assert rig.states() == ("expired", "expired", "none", None)
+
+
+def test_only_a_whisper_between_the_lead_and_him_unties_his_answer(rig):
+    rig.asked()
+    mind_line(rig.store, channel="guild", to_guid=0, text="u coming to icc tonight?")
+    mind_line(rig.store, to_guid=OTHER, text="u coming to icc tonight?")
+    mind_line(rig.store, speaker=OTHER, text="u coming to icc tonight?")
+    his_line(rig.store, "lol", to_guid=OTHER)
+    his_line(rig.store, "brb", channel="guild", to_guid=0)
+    admission = rig.answer("yes")  # The question itself is the line before it.
+    assert type(admission) is Admission and rig.states() == ("delivered", "pending_native", "prepared", None)
+
+
+def test_an_answer_stored_before_its_question_answers_nothing(rig):
+    rig.kick()
+    intent = rig.ask()
+    assert rig.guard.before_transport(intent, context=CONTEXT)
+    ev, receipt = chat_event(rig.store, "yes", ts=int(T0 * 1000) + 1, received=T0 + 1)
+    ack = Ack(int(T0 * 1000), "m1", True, "")
+    assert rig.guard.on_recorded(intent, mind_line(rig.store, text=intent.text), ack)
+    rig.clock.t = T0 + 1
+    assert rig.row()["delivered_ms"] <= int((T0 + 1) * 1000)  # In its window, but stored first.
+    assert rig.guard.answer(ev, receipt, CONTEXT) is None
+    assert rig.states() == ("delivered", "none", "none", None)
 
 
 # -- the readmission --------------------------------------------------------------------------
@@ -637,14 +693,15 @@ def _feed_ack(native, command_id, ok=True, error=""):
                                             ok=ok, error=error)).encode("utf-8") + b"\n")
 
 
-async def _acker(native, readmit):
-    """Acks every say at once, and each guild_readmit with `readmit` (ok, error)."""
+async def _acker(native, readmit, say=None):
+    """Acks every say at once (with `say(body)`'s (ok, error) when given), and each
+    guild_readmit with `readmit` (ok, error)."""
     seen = 0
     while True:
         lines = _lines(native)
         for body in lines[seen:]:
             if body.get("type") == "say":
-                _feed_ack(native, body["id"])
+                _feed_ack(native, body["id"], *(say(body) if say is not None else ()))
             elif body.get("type") == "guild_readmit" and readmit is not None:
                 _feed_ack(native, body["id"], *readmit)
         seen = len(lines)
@@ -666,8 +723,16 @@ def _guard_says(native, kind):
             "SELECT guid,channel,to_guid,dropped FROM utterance WHERE why='say_as' AND kind=? ORDER BY id", (kind,))]
 
 
+def _says(native, *, guid=LEAD):
+    return [body for body in _lines(native) if body.get("type") == "say" and body.get("guid") == guid]
+
+
+async def _presence(native, name, guid=HUMAN):
+    await native.deliver(dict(v=1, type=name, ts=int(native.clock.now() * 1000), guid=guid, human=guid == HUMAN))
+
+
 @asynccontextmanager
-async def _guild(tmp_path, clock, monkeypatch, *, readmit=(True, ""), enabled=True):
+async def _guild(tmp_path, clock, monkeypatch, *, readmit=(True, ""), enabled=True, say=None):
     async with application(tmp_path, clock, monkeypatch, enabled=enabled) as native:
         native.clock = clock
         app = native.app
@@ -677,7 +742,7 @@ async def _guild(tmp_path, clock, monkeypatch, *, readmit=(True, ""), enabled=Tr
         await native.hello(human=HUMAN, ts=at)
         await native.deliver(dict(v=1, type="login", ts=at, guid=LEAD, human=False))
         app._model_ready = True  # The live model is there (FakeLLM lists none): the guild may speak.
-        acks = asyncio.create_task(_acker(native, readmit))
+        acks = asyncio.create_task(_acker(native, readmit, say))
         try:
             yield native
         finally:
@@ -721,7 +786,9 @@ def test_service_his_kick_question_yes_and_one_readmission(tmp_path, clock, monk
             assert (episode["ask_state"], episode["lead"], episode["kick_ms"]) == ("delivered", LEAD, kick["ts"])
             asked = [b for b in _lines(native) if b.get("type") == "say" and b.get("guid") == LEAD]
             assert len(asked) == 1 and asked[0]["channel"] == "whisper" and asked[0]["to_guid"] == HUMAN
-            assert "coros" in asked[0]["text"].casefold()
+            # Exactly the question, unstyled, and the row keeps the hash of the text that went out.
+            assert asked[0]["text"] == QUESTION.format(name="Coros") == "saw Coros got kicked, want them back? (yes/no)"
+            assert episode["ask_text_sha256"] == hashlib.sha256(asked[0]["text"].encode("utf-8")).hexdigest()
             # The same kick again, and another tick: nothing more is asked.
             await native.deliver(kick)
             await _ask(native)
@@ -811,6 +878,205 @@ def test_service_refuses_an_unowned_readmission(tmp_path, clock, monkeypatch):
             with pytest.raises(GuardRefused, match="not_owned"):
                 await realm.ports.send(cmd)
             assert _readmits(native) == [] and not realm._pending
+    run_native(scenario())
+
+
+@pytest.mark.parametrize("word", ["yes", "no"])
+def test_service_his_answer_to_an_unrelated_lead_whisper_is_no_answer(tmp_path, clock, monkeypatch, word):
+    async def scenario():
+        async with _guild(tmp_path, clock, monkeypatch) as native:
+            await _kick(native)
+            await _ask(native)
+            await native.clock.advance(120)  # Past the lead's own reply interval.
+            other = asyncio.create_task(native.app.engine.say_as(
+                LEAD, "whisper", "u coming to icc tonight?", kind=TurnKind.WHISPER, to_guid=HUMAN))
+            await native.clock.advance(60)
+            assert await other
+            assert "icc tonight" in _says(native)[-1]["text"]  # An ordinary, styled whisper.
+            await _say(native, word)  # His answer to that whisper, not to the question.
+            await _settle(native)
+            (row,) = _episodes(native)
+            assert (row["ask_state"], row["answer"], row["consent_state"], row["admission_state"]) == (
+                "delivered", None, "none", "none")
+            assert _readmits(native) == [] and _guard_says(native, "reply_human") == []
+    run_native(scenario())
+
+
+def test_service_a_question_the_model_latch_holds_back_is_refused_and_asked_again(tmp_path, clock, monkeypatch):
+    async def scenario():
+        async with _guild(tmp_path, clock, monkeypatch) as native:
+            native.app._model_ready = False  # Ollama briefly away: app._send would refuse the say.
+            await _kick(native)
+            await _ask(native)
+            (row,) = _episodes(native)
+            assert (row["ask_state"], row["dispatched_ms"]) == ("refused", None)  # Never on the wire.
+            assert _says(native) == [] and _guard_says(native, "whisper") == [(LEAD, "whisper", HUMAN,
+                                                                                "transport_refused")]
+            native.app._model_ready = True
+            await native.clock.advance(RETRY_MS / 1000)
+            await _ask(native)
+            (row,) = _episodes(native)
+            assert row["ask_state"] == "delivered" and len(_says(native)) == 1
+    run_native(scenario())
+
+
+def test_service_he_offline_at_the_tick_is_asked_once_he_is_back(tmp_path, clock, monkeypatch):
+    async def scenario():
+        async with _guild(tmp_path, clock, monkeypatch) as native:
+            await _kick(native)
+            await _presence(native, "logout")
+            await _ask(native)
+            (row,) = _episodes(native)
+            assert (row["ask_state"], row["lead"]) == ("unasked", None) and _says(native) == []
+            await _presence(native, "login")
+            await _ask(native)
+            (row,) = _episodes(native)
+            assert row["ask_state"] == "delivered" and len(_says(native)) == 1
+    run_native(scenario())
+
+
+def _late_logout(native, monkeypatch):
+    """His logout lands after the pipeline's last guard passed a hooked line, right before
+    its write (the send lock hands the line to its own task): only the sender's barrier can
+    still see it. Once."""
+    engine, world, fired = native.app.engine, native.app.world, []
+    blocked = engine._blocked
+
+    def late(turn, meta, now, **kw):
+        why = blocked(turn, meta, now, **kw)
+        if why is None and kw.get("deadline") is False and meta.before_transport is not None and not fired:
+            fired.append(turn.kind)
+            world.human_online = False
+        return why
+    monkeypatch.setattr(engine, "_blocked", late)
+    return fired
+
+
+async def _advance_until(native, predicate, limit=60):
+    for _ in range(limit):
+        if predicate():
+            return
+        await native.clock.advance(1)
+        for _ in range(20):
+            await asyncio.sleep(0)
+    raise AssertionError("the fake clock never reached it")
+
+
+@pytest.mark.parametrize("when,dropped", [("typing", "human_offline"), ("write", "transport_refused")])
+def test_service_his_logout_between_the_reservation_and_the_send_refuses_the_question(tmp_path, clock,
+                                                                                    monkeypatch, when, dropped):
+    async def scenario():
+        async with _guild(tmp_path, clock, monkeypatch) as native:
+            await _kick(native)
+            fired = _late_logout(native, monkeypatch) if when == "write" else None
+            await native.app.realm.tick()  # Reserved; the lead's typing comes before the send.
+            (row,) = _episodes(native)
+            assert row["ask_state"] == "reserved" and native.app.realm._asking is not None
+            if when == "typing":  # The pipeline's own guard sees this one.
+                await _presence(native, "logout")
+            await native.clock.advance(30)
+            await reached(lambda: not native.app.realm._asking)
+            assert fired is None or fired == [TurnKind.WHISPER]
+            (row,) = _episodes(native)
+            assert (row["ask_state"], row["dispatched_ms"]) == ("refused", None) and _says(native) == []
+            assert _guard_says(native, "whisper") == [(LEAD, "whisper", HUMAN, dropped)]
+            await _presence(native, "login")
+            await native.clock.advance(RETRY_MS / 1000)
+            await _ask(native)
+            (row,) = _episodes(native)
+            assert row["ask_state"] == "delivered" and len(_says(native)) == 1
+    run_native(scenario())
+
+
+def _fallbacks(native):
+    return [body for body in _says(native) if body["text"] == FALLBACK.format(name="Coros")]
+
+
+async def _refused_yes(native):
+    """His yes, and native's refusal of the readmission: the lead's fallback is due."""
+    await _kick(native)
+    await _ask(native)
+    await _say(native, "yes")
+    await reached(lambda: _episodes(native)[0]["admission_state"] == "refused")
+
+
+@pytest.mark.parametrize("held", ["latch", "logout"])
+def test_service_a_held_back_fallback_is_tried_again(tmp_path, clock, monkeypatch, held):
+    async def scenario():
+        async with _guild(tmp_path, clock, monkeypatch, readmit=(False, "not_kicked")) as native:
+            await _refused_yes(native)
+            if held == "latch":
+                native.app._model_ready = False
+            else:
+                _late_logout(native, monkeypatch)
+            await _advance_until(native, lambda: _guard_says(native, "reply_human"))
+            assert _guard_says(native, "reply_human") == [(LEAD, "whisper", HUMAN, "transport_refused")]
+            assert _fallbacks(native) == []
+            if held == "latch":
+                native.app._model_ready = True
+            else:
+                await _presence(native, "login")
+            await _settle(native)
+            # Held back before the wire, so tried again: on the wire exactly once.
+            assert len(_fallbacks(native)) == 1
+            assert _guard_says(native, "reply_human") == [(LEAD, "whisper", HUMAN, "transport_refused"),
+                                                          (LEAD, "whisper", HUMAN, None)]
+    run_native(scenario())
+
+
+def test_service_a_fallback_held_back_on_every_try_never_goes_out(tmp_path, clock, monkeypatch):
+    async def scenario():
+        async with _guild(tmp_path, clock, monkeypatch, readmit=(False, "not_kicked")) as native:
+            await _refused_yes(native)
+            native.app._model_ready = False
+            for _ in range(4):
+                await _settle(native)
+            assert _fallbacks(native) == []
+            assert _guard_says(native, "reply_human") == [(LEAD, "whisper", HUMAN, "transport_refused")] * 3
+            native.app._model_ready = True
+            await _settle(native)
+            assert _fallbacks(native) == []
+    run_native(scenario())
+
+
+def test_service_a_fallback_that_reached_the_wire_is_never_sent_again(tmp_path, clock, monkeypatch):
+    def say(body):  # Native refuses the fallback whisper after it was written: it is not retried.
+        return (False, "target offline") if body["text"] == FALLBACK.format(name="Coros") else (True, "")
+
+    async def scenario():
+        async with _guild(tmp_path, clock, monkeypatch, readmit=(False, "not_kicked"), say=say) as native:
+            await _refused_yes(native)
+            for _ in range(4):
+                await _settle(native)
+            assert len(_fallbacks(native)) == 1
+            assert _guard_says(native, "reply_human") == [(LEAD, "whisper", HUMAN, "target offline")]
+    run_native(scenario())
+
+
+def test_service_a_spoken_yes_never_answers(tmp_path, clock, monkeypatch):
+    """Push-to-talk: his transcript is injected into the dispatcher without the native wire
+    origin an answer is bound to, so it never counts, and (stored as a whisper between them in
+    a private room with the lead) it also unties any typed answer after it. Fail closed."""
+    async def scenario():
+        async with _guild(tmp_path, clock, monkeypatch) as native:
+            await _kick(native)
+            await _ask(native)
+            at = int(native.clock.now() * 1000)
+            native.app.bridge.inject(Chat(at, "whisper", HUMAN, "Testmaster", LEAD, "yes", 0, 0))
+            await native.drain()
+            with native.app.store.transaction():
+                spoken = native.app.store.conn.execute(
+                    "SELECT channel,from_guid,to_guid,text,origin FROM chat_line WHERE from_guid=? ORDER BY id DESC",
+                    (HUMAN,)).fetchone()
+            assert tuple(spoken) == ("whisper", HUMAN, LEAD, "yes", "human")
+            await _settle(native)
+            assert _episodes(native)[0]["answer"] is None and _readmits(native) == []
+            await _say(native, "yes")  # Typed after it: the spoken line lies between.
+            await _settle(native)
+            (row,) = _episodes(native)
+            assert (row["ask_state"], row["answer"], row["consent_state"], row["admission_state"]) == (
+                "delivered", None, "none", "none")
+            assert _readmits(native) == [] and count(native.app.store, "realm_source", "event_type='chat'") == 0
     run_native(scenario())
 
 
@@ -909,11 +1175,24 @@ def test_a_barrier_turn_is_one_typed_line_recorded_with_its_ack(store, tmp_path)
                                                 on_recorded=lambda line, ack: recorded.append((line, ack)))))
     assert said is True and calls == [0]  # Right before the one Say, and only once.
     (say,) = r.sent.says()
+    assert say.text == LONG  # As given: no typing style.
     ((line, ack),) = recorded
     assert type(ack) is Ack and ack.ok is True and ack.id == say.id
     row = store.conn.execute("SELECT channel,from_guid,to_guid,text,origin FROM chat_line WHERE id=?",
                              (line,)).fetchone()
     assert tuple(row) == ("whisper", 103, RIG_HUMAN, say.text, "mind")
+
+
+def test_a_barrier_turn_is_sent_exactly_as_given(store, tmp_path):
+    """Untagged, this member types the question as "saw coros got kicked, want them back?
+    (yes/no) :)" (above). A sender's barrier vouches for its exact text: no typos,
+    abbreviations, case changes or emoticon."""
+    r = _speech_rig(store, tmp_path)
+    text = QUESTION.format(name="Coros")
+    assert _whisper(r, text, before_transport=lambda: True) is True
+    (say,) = r.sent.says()
+    assert say.text == text
+    assert store.conn.execute("SELECT text FROM chat_line").fetchone()[0] == text
 
 
 def test_a_barrier_turn_is_never_voiced(store, tmp_path):

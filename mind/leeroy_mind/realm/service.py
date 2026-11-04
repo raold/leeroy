@@ -400,6 +400,15 @@ class Realm:
         world = self.app.world
         return guid in getattr(world, "online", ()) and guid not in getattr(world, "afk", ())
 
+    def _speakable(self):
+        """What a guard whisper's barrier needs besides its own row, read synchronously: the
+        live model's latch (app._send refuses every say while it is off, before the bridge)
+        and his presence (native refuses a whisper to him offline). The barrier runs right
+        before the Say is written, with no await between it and those checks or the bridge's
+        own connection check, so a line it lets through cannot be held back before the wire;
+        one it holds back never left, and is refused, not unknown."""
+        return getattr(self.app, "model_ready", False) is True and self.ports.human_online() is True
+
     def _guard_tick(self):
         """Close stale windows, then reserve and ask at most one question at a time."""
         try:
@@ -418,8 +427,9 @@ class Realm:
         outcome; the barrier and the recorded hook make the send exact."""
         valid, guard = self._valid_ticket(), self.guard
 
-        def before_transport():
-            return valid() and guard.before_transport(intent, context=self.action_context())
+        def before_transport():  # Held back here, the row stays undispatched: settled refused.
+            return (valid() and self._speakable()
+                    and guard.before_transport(intent, context=self.action_context()))
 
         def on_recorded(line_id, ack):
             guard.on_recorded(intent, line_id, ack)
@@ -479,12 +489,13 @@ class Realm:
 
     async def _fallback(self, admission, valid):
         """The lead tells him plainly to invite the member himself: one typed line, at most
-        once on the wire, tried again only while no attempt has reached transport."""
+        once on the wire, tried again only while no attempt has passed its barrier (held back
+        there by the model latch or his absence, it never left)."""
         reached = False
 
         def once():
             nonlocal reached
-            if reached or not valid():
+            if reached or not valid() or not self._speakable():
                 return False
             reached = True
             return True

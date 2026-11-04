@@ -4,14 +4,25 @@ He kicks a cast member himself: the native guard's his_kick. With the Realm enab
 event's own Store unit retains the episode, bound to its exact game_event row, and the lead
 may ask for 72 h from the kick. The standing raid lead is the one cast tank whose title reads
 "raid lead", never him, the kicked member or a former member; with none or several nobody
-asks. That lead whispers him once, typed, through say_as. Two TurnMeta hooks make the send
-exact: before_transport commits dispatched_ms immediately before the bridge writes the line,
-and on_recorded binds the stored line to its ack. A question that never reached that barrier
-is refused and may be asked again after RETRY_MS. One that did, without a recorded ack, is
-unknown: never answered, asked again or replaced until every window it had has passed.
+asks. That lead whispers him once, typed and unstyled (the text exactly as reserved, no typos
+or emoticon), through say_as. Two TurnMeta hooks make the send exact: before_transport
+commits dispatched_ms immediately before the bridge writes the line, and on_recorded binds
+the stored line to its ack and to the reserved text's hash. The service's barrier first
+requires, synchronously, the live model's latch (app._send would refuse the say) and his
+presence (native would refuse a whisper to him offline); nothing awaits between that and the
+write, so a line held back there never reached the wire. A question that never reached that
+barrier, or was refused by it, is refused and may be asked again after RETRY_MS. One that
+passed it, without a recorded ack, is unknown: never answered, asked again or replaced until
+every window it had has passed.
 
 His answer is his own live whisper to that lead, exactly "yes" or "no" once stripped and
-casefolded, within 72 h of delivery, bound to its chat_line row. A yes asks native for one
+casefolded, within 72 h of delivery, bound to its chat_line row, and with no other whisper
+between the lead and him (either way) stored after the question and before it: his yes could
+answer that line instead. Such an answer is refused and consumes nothing; the question stays
+open, unanswerable, until its window passes. A spoken (push-to-talk) yes never counts: the
+voice service's transcript is injected into the dispatcher without the native wire origin an
+answer is bound to, and is ignored without a word; in a private room with the lead it is also
+stored as a whisper between them, so it unties any typed answer after it. A yes asks native for one
 guild_readmit bound to the kick's own ts and rank (an officer, rank 1, comes back at 2; a
 rank never learned, 0, sends nothing). Native keeps its kick receipts in memory only, so after
 a worldserver restart it refuses (not_kicked); on any refusal the lead tells him plainly to
@@ -62,8 +73,8 @@ _MAX_MS = 253402300799999
 _U32 = 0xFFFFFFFF
 _CHAT_KEYS = frozenset({"v", "type", *(f.name for f in fields(Chat))})
 _CHAT_REQUIRED = frozenset({"v", "type", "ts", "channel", "from_guid", "to_guid", "text"})
-_COLUMNS = ("episode_id,source,guid,guild,human,kick_ms,old_rank,lead,ask_id,ask_state,"
-            "ask_expires_ms,attempted_ms,dispatched_ms,delivered_ms,reply_expires_ms,answer,"
+_COLUMNS = ("episode_id,source,guid,guild,human,kick_ms,old_rank,lead,ask_id,ask_line,ask_text_sha256,"
+            "ask_state,ask_expires_ms,attempted_ms,dispatched_ms,delivered_ms,reply_expires_ms,answer,"
             "consent_state,admission_command_id,admission_state,admission_reason,"
             "admission_dispatched_ms")
 
@@ -158,6 +169,21 @@ def _bound_answer(conn, receipt, ev) -> bool:
         return False
     return chat_row_binding(row["id"], **{key: row[key] for key in (
         "channel", "from_guid", "from_name", "to_guid", "text", "map", "zone", "origin")}) == receipt.row_sha256
+
+
+def _untied(conn, row, answer_line) -> bool:
+    """His answer is not tied to the question: it was stored before the question's own line,
+    or a whisper between the lead and him, either way, lies between the two. His yes or no
+    may answer that line instead (an unrelated "u coming to icc tonight?"), so it answers
+    nothing; the question stays open, and the same line keeps untying every later answer."""
+    ask_line = row["ask_line"]
+    if type(ask_line) is not int or type(answer_line) is not int or answer_line <= ask_line:
+        return True
+    lead, human = row["lead"], row["human"]
+    return conn.execute(
+        "SELECT 1 FROM chat_line WHERE id>? AND id<? AND channel='whisper' "
+        "AND ((from_guid=? AND to_guid=?) OR (from_guid=? AND to_guid=?)) LIMIT 1",
+        (ask_line, answer_line, lead, human, human, lead)).fetchone() is not None
 
 
 def _insert_source(conn, receipt, event_type, context) -> int | None:
@@ -315,7 +341,8 @@ class KickGuard:
         """The synchronous final barrier right before the line's Say is written; never await.
 
         It commits dispatched_ms for exactly this reserved, undispatched question while its
-        reserving context still holds. Otherwise the question is refused (it never left).
+        reserving context still holds. Otherwise the question is refused (it never left). The
+        service calls it only once the model latch and his presence hold (Realm._speakable).
         """
         self._own_unit()
         now = self._now_ms()
@@ -337,7 +364,8 @@ class KickGuard:
         return current
 
     def on_recorded(self, intent, line_id, ack) -> bool:
-        """The acked line is stored: the question is delivered and his 72 h start."""
+        """The acked line is stored: the question is delivered and his 72 h start. Only the
+        lead's whisper to him whose text is exactly the reserved question's (its sha256)."""
         self._own_unit()
         if type(ack) is not Ack or ack.ok is not True or type(ack.ts) is not int or type(line_id) is not int:
             return False
@@ -347,9 +375,11 @@ class KickGuard:
             row = self._reserved(intent)
             if row is None or row["ask_state"] != "reserved" or row["dispatched_ms"] is None:
                 return False
-            line = conn.execute("SELECT channel,from_guid,to_guid,origin FROM chat_line WHERE id=?",
+            line = conn.execute("SELECT channel,from_guid,to_guid,origin,text FROM chat_line WHERE id=?",
                                 (line_id,)).fetchone()
-            if line is None or tuple(line) != ("whisper", intent.lead_guid, intent.human_guid, "mind"):
+            # The stored line is the text that went out: its hash must be the reserved question's.
+            if (line is None or tuple(line)[:4] != ("whisper", intent.lead_guid, intent.human_guid, "mind")
+                    or type(line["text"]) is not str or _sha256(line["text"]) != row["ask_text_sha256"]):
                 return False
             dispatched = row["dispatched_ms"]
             received = max(now, dispatched)
@@ -387,7 +417,8 @@ class KickGuard:
     # -- his answer ----------------------------------------------------------------------------
 
     def answer(self, ev, receipt, context) -> Admission | str | None:
-        """His exact live yes or no to the lead holding his open delivered question.
+        """His exact live yes or no to the lead holding his open delivered question, with no
+        whisper between them since that question (_untied).
 
         Returns the Admission of a yes, "no" for a no, or None when this line is no answer.
         """
@@ -407,6 +438,9 @@ class KickGuard:
                                 (context.guild, context.human, ev.to_guid))
             if (row is None or not row["delivered_ms"] <= received < row["reply_expires_ms"]
                     or now >= row["reply_expires_ms"] or not _bound_answer(conn, receipt, ev)):
+                return None
+            if _untied(conn, row, receipt.row_id):  # Refused before anything is consumed.
+                log.info("realm_guard_answer_refused: guid=%d reason=intervening_whisper", row["guid"])
                 return None
             source = _insert_source(conn, receipt, "chat", context)
             if source is None:

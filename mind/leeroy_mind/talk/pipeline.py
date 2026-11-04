@@ -265,8 +265,9 @@ class TurnMeta:
     # Optional exact transport hooks of a say_as sender; ordinary turns leave both None, and
     # then nothing below changes. before_transport() runs synchronously right before the
     # line's Say is written and may refuse it (a turn with one is typed, one line, never
-    # voiced: the voice path has no barrier). on_recorded(line_id, ack) runs once the acked
-    # line is stored.
+    # voiced: the voice path has no barrier; and sent as given, with none of the member's
+    # typing style, so what the sender vouched for is what goes out). on_recorded(line_id,
+    # ack) runs once the acked line is stored.
     before_transport: Callable[[], bool] | None = None
     on_recorded: Callable[[int, Ack], None] | None = None
 
@@ -902,7 +903,7 @@ class Pipeline:
         """The template path (P1d): guards, raid rules and the member's typing apply, the text
         is used as given and no model is asked. True when a line really went out, to the game
         or to the voice service: one left in a room he is not in did not. A sender's
-        before_transport barrier makes the turn one typed line (TurnMeta)."""
+        before_transport barrier makes the turn one typed line, sent unstyled (TurnMeta)."""
         turn = Turn(kind=TurnKind(kind), speaker=guid, channel=channel, to_guid=to_guid,
                     template=text)
         if before_transport is not None:
@@ -1016,8 +1017,11 @@ class Pipeline:
                     await self._send_emotes(turn, meta, emotes)
                 return spoken
             turn.channel, turn.to_guid, turn.addressee = typed(turn, meta)  # it never got there
-        lines = [] if only else self._style(turn, p, text, close=close,
-                                            two_lines=meta.two_lines, romance=meta.romance)
+        if meta.before_transport is not None:  # its sender's barrier vouches for exactly this text
+            lines = [] if only or not text.strip() else [Styled(text, text)]
+        else:
+            lines = [] if only else self._style(turn, p, text, close=close,
+                                                two_lines=meta.two_lines, romance=meta.romance)
         if not lines:
             if emotes:  # a line that was only an emote: the emote goes out (review minor 8)
                 await self._send_emotes(turn, meta, emotes)
