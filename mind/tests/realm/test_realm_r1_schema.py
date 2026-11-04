@@ -48,9 +48,11 @@ def test_migration_0016_applies_and_keeps_rows(tmp_path, monkeypatch):
     try:
         others = _schema(conn, rebuilt=False)
         before = {table: _rows(conn, table) for table in REBUILT}
-        assert db.latest_version() == 16
-        assert db.migrate(conn) == 16
-        assert db.migrate(conn) == 16
+        with monkeypatch.context() as patch:  # 0016 itself; later migrations have tests of their own
+            patch.setattr(db, "_migration_files", lambda: [(n, p) for n, p in files if n <= 16])
+            assert db.latest_version() == 16
+            assert db.migrate(conn) == 16
+            assert db.migrate(conn) == 16
         assert _schema(conn, rebuilt=False) == others
         # Every old column of every old row, unchanged; the new ones filled as the copy says.
         assert _rows(conn, "realm_line", "id,ts,guid,guild,channel,text,dropped") == before["realm_line"]
