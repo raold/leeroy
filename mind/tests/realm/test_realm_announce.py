@@ -36,14 +36,14 @@ class Clock:
         return self.t
 
 
-def payload(at, *, n, instance, boss=0, difficulty=1, human=True, cast=CAST, fight_ms=251_900):
+def payload(at, *, n, instance, boss=0, difficulty=1, human=True, cast=CAST, fight_ms=251_900, attempts=0):
     at_ms = int(at * 1000)
     size, heroic = (25, False) if difficulty == -1 else (25 if difficulty % 2 else 10, difficulty >= 2)
     measured = human and fight_ms is not None
     return dict(ts=at_ms + 20, kill_id=f'{"a" * 32}:{n}', native_epoch=29, guild_id=50, human_guid=10,
                 killed_at_ms=at_ms, verified_at_ms=at_ms + 10,
                 fight_started_at_ms=at_ms - fight_ms if measured else 0,
-                fight_ms=fight_ms if measured else -1, map=631, instance_id=instance, boss_id=boss,
+                fight_ms=fight_ms if measured else -1, attempts=attempts, map=631, instance_id=instance, boss_id=boss,
                 difficulty=difficulty, size=size, heroic=heroic, human_present=human, cast_members=list(cast))
 
 
@@ -109,14 +109,15 @@ def h(roster):
 # -- first: ever or week ---------------------------------------------------------------------
 
 def test_announce_first_kill_ever(h):
-    plan = h.kill(THU, difficulty=1)  # (631, 0, 1): 25-man normal, nothing stored, not canon.
+    # (631, 0, 1): 25-man normal, nothing stored, not canon; native counted three pulls.
+    plan = h.kill(THU, difficulty=1, attempts=3)
     cmd = h.announcer.command(plan)
     assert cmd == protocol.Announce(plan.command_id, f'{"a" * 32}:1', 29, 50, 10, 631, 101, 0, 1, 25,
-                                    False, 'Lord Marrowgar', attempts=0, fight_s=251, first='ever')
+                                    False, 'Lord Marrowgar', attempts=3, fight_s=251, first='ever')
     assert h.rows() == [('ever', '2026-10-27', 'prepared', 'none')]
     stored = h.store.conn.execute('SELECT payload_json,expires_at,process_id,generation,connection_epoch '
                                   'FROM realm_announcement').fetchone()
-    assert json.loads(stored['payload_json'])['first'] == 'ever'
+    assert {k: json.loads(stored['payload_json'])[k] for k in ('first', 'attempts')} == dict(first='ever', attempts=3)
     assert stored['expires_at'] == THU + 30
     assert tuple(stored)[2:] == (CONTEXT.process_id, CONTEXT.generation, str(CONTEXT.connection_epoch))
     assert h.announcer.owns_command(cmd)
@@ -181,18 +182,21 @@ def test_announce_once_a_week(h):
 # -- what is said ------------------------------------------------------------------------------
 
 def test_offline_raid_announcement_omits_attempts(h):
-    # Five cast members without him: a guild kill, but an offline raid has no attempts or time.
+    # Five cast members without him: a guild kill, but an offline raid has no time, and no
+    # attempts when native could not count them (0 is unknown, never a number).
     plan = h.kill(THU, human=False, cast=CAST)
     assert h.store.conn.execute('SELECT fact FROM realm_kill WHERE kill_id=?',
                                 (plan.kill_id,)).fetchone()[0] is not None
     cmd = h.announcer.command(plan)
     assert (cmd.attempts, cmd.fight_s) == (0, 0)
-    # His raid's measured fight is whole seconds, rounded down as native checks it; attempts
-    # stay 0 until native counts them.
+    # A cast-only kill carries native's count; its time stays his raid's only.
+    counted = h.announcer.command(h.kill(THU, boss=4, human=False, cast=CAST, attempts=2))
+    assert (counted.attempts, counted.fight_s) == (2, 0)
+    # His raid's measured fight is whole seconds, rounded down as native checks it.
     measured = h.announcer.command(h.kill(THU, boss=1, fight_ms=251_999))
     assert (measured.attempts, measured.fight_s) == (0, 251)
-    unmeasured = h.announcer.command(h.kill(THU, boss=3, fight_ms=None))
-    assert (unmeasured.attempts, unmeasured.fight_s) == (0, 0)
+    unmeasured = h.announcer.command(h.kill(THU, boss=3, fight_ms=None, attempts=7))
+    assert (unmeasured.attempts, unmeasured.fight_s) == (7, 0)
 
 
 def test_no_announcement_for_a_wipe(h):
@@ -411,6 +415,21 @@ def test_service_announces_a_kill_once_and_settles_on_its_ack(tmp_path, clock, m
                 await asyncio.sleep(0)
             assert len(announces(native)) == 1 and len(announcement_rows(native)) == 1
             assert not native.app.realm._children
+    run_native(scenario())
+
+
+def test_native_attempt_count_reaches_the_command_and_its_stored_payload(tmp_path, clock, monkeypatch):
+    async def scenario():
+        async with application(tmp_path, clock, monkeypatch) as native:
+            await native.deliver(fresh_kill(clock, attempts=4))
+            await reached(lambda: announces(native))
+            (sent,) = announces(native)
+            assert (sent['attempts'], sent['fight_s']) == (4, 251)
+            with native.app.store.transaction():
+                stored = native.app.store.conn.execute(
+                    'SELECT payload_json FROM realm_announcement WHERE command_id=?', (sent['id'],)).fetchone()
+            assert json.loads(stored['payload_json'])['attempts'] == 4
+            assert {k: v for k, v in sent.items() if k not in ('v', 'type', 'ts')} == json.loads(stored['payload_json'])
     run_native(scenario())
 
 
