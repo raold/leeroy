@@ -489,25 +489,39 @@ std::optional<std::vector<ItemRule>> ParseItems(std::string_view csv, std::strin
     });
 }
 
-json MakeRealmKill(Kill const& e)
+namespace
 {
-    return {{"type", "realm_kill"}, {"kill_id", e.killId}, {"native_epoch", e.nativeEpoch},
+json KillBody(std::string_view type, Kill const& e)
+{
+    return {{"type", type}, {"kill_id", e.killId}, {"native_epoch", e.nativeEpoch},
         {"guild_id", e.guildId}, {"human_guid", e.humanGuid}, {"killed_at_ms", e.killedAtMs},
         {"verified_at_ms", e.verifiedAtMs}, {"fight_started_at_ms", e.fightStartedAtMs}, {"fight_ms", e.fightMs},
-        {"map", e.map}, {"instance_id", e.instanceId},
+        {"attempts", e.attempts}, {"map", e.map}, {"instance_id", e.instanceId},
         {"boss_id", e.bossId}, {"difficulty", e.difficulty}, {"size", e.size}, {"heroic", e.heroic},
         {"human_present", e.humanPresent}, {"cast_members", e.castMembers}};
 }
+}
 
-std::optional<std::uint32_t> ValidatedAnnouncementFightSeconds(AnnounceCmd const& request, Kill const& proof)
+json MakeRealmKill(Kill const& e) { return KillBody("realm_kill", e); }
+
+std::optional<AnnouncementMetrics> ValidatedAnnouncementMetrics(AnnounceCmd const& request, Kill const& proof)
 {
     if (!ValidKillProof(proof) || request.killId != proof.killId
-        || static_cast<KillIdentity const&>(request) != static_cast<KillIdentity const&>(proof)
-        || request.attempts) return std::nullopt;
-    if (!request.fightS) return 0;
-    if (!proof.humanPresent || !proof.fightStartedAtMs || proof.fightMs < 0) return std::nullopt;
-    auto const seconds = static_cast<std::uint32_t>(proof.fightMs / 1000);
-    return seconds == request.fightS ? std::optional{seconds} : std::nullopt;
+        || static_cast<KillIdentity const&>(request) != static_cast<KillIdentity const&>(proof)) return std::nullopt;
+    AnnouncementMetrics metrics;
+    if (request.attempts)
+    {
+        if (!proof.attempts || request.attempts != proof.attempts) return std::nullopt;
+        metrics.attempts = proof.attempts;
+    }
+    if (request.fightS)
+    {
+        if (!proof.humanPresent || !proof.fightStartedAtMs || proof.fightMs < 0) return std::nullopt;
+        auto const seconds = static_cast<std::uint32_t>(proof.fightMs / 1000);
+        if (seconds != request.fightS) return std::nullopt;
+        metrics.fightS = seconds;
+    }
+    return metrics;
 }
 
 json MakeRealmJob(RealmJob const& e)

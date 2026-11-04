@@ -63,7 +63,7 @@ EVENT_FIELDS = {
     "realm_pvp": ("ts id pvp_owner origin_id kind origin_epoch revision guild human members stage "
                   "application_fenced reason cleanup_id"),
     "realm_kill": ("ts kill_id native_epoch guild_id human_guid killed_at_ms verified_at_ms "
-                   "fight_started_at_ms fight_ms map instance_id boss_id difficulty size heroic "
+                   "fight_started_at_ms fight_ms attempts map instance_id boss_id difficulty size heroic "
                    "human_present cast_members"),
 }
 
@@ -355,9 +355,10 @@ def test_native_kill_exact_fixture_and_no_steady_fields():
     msg = kill_event()
     assert list(msg) == ["v", "type", *EVENT_FIELDS["realm_kill"].split()]
     assert set(msg) == {"v", "type", *EVENT_FIELDS["realm_kill"].split()}
-    assert len(msg) == 19
+    assert len(msg) == 20
     parsed = wire.parse_event(json.dumps(msg))
     assert type(parsed) is protocol.RealmKill
+    assert parsed.attempts == 0
     assert parsed.ts == msg["ts"] and parsed.cast_members == tuple(msg["cast_members"])
     assert (parsed.fight_started_at_ms, parsed.fight_ms) == (0, -1)
     assert not any(key in msg for key in ("at_ms", "verified_ms", "steady_ms", "lifecycle"))
@@ -383,6 +384,8 @@ def test_native_kill_exact_fixture_and_no_steady_fields():
     ("cast_members", [2**32]), ("cast_members", list(range(1, 129))),
     ("cast_members", list(range(1, 130))), ("cast_members", None),
     ("killed_at_ms", 0), ("killed_at_ms", True), ("killed_at_ms", "1700000000000"),
+    ("attempts", -1), ("attempts", 100), ("attempts", True), ("attempts", "3"), ("attempts", 3.0),
+    ("attempts", None),
     ("verified_at_ms", 1699999999999), ("ts", 1700000000000),
     ("ts", 0), ("ts", False), ("ts", 253402300800000),
     ("verified_at_ms", 253402300800000), ("killed_at_ms", 253402300800000),
@@ -535,3 +538,18 @@ def test_announce_proof_fields_are_required_and_zero_metrics_encode_explicitly()
     for field in ("kill_id", "native_epoch", "guild_id", "human_guid", "difficulty", "size", "heroic", "first"):
         with pytest.raises(TypeError, match=field):
             command_from_message({key: value for key, value in msg.items() if key != field})
+
+
+def test_native_kill_attempts_are_the_exact_native_count_or_unknown():
+    protocol.register()
+    for attempts in (0, 1, 3, protocol.MAX_ATTEMPTS):
+        msg = {**kill_event(), "attempts": attempts}
+        assert wire.parse_event(json.dumps(msg)).attempts == attempts
+    without = {key: value for key, value in kill_event().items() if key != "attempts"}
+    with pytest.raises(wire.ProtocolError, match="attempts"):
+        wire.parse_event(json.dumps(without))  # An older module's kill is refused, never zero-filled.
+    fields = {key: tuple(value) if key == "cast_members" else value for key, value in without.items()
+              if key not in {"v", "type"}}
+    with pytest.raises(TypeError, match="attempts"):
+        protocol.RealmKill(**fields)
+

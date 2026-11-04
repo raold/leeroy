@@ -41,7 +41,7 @@ PAYLOADS = {
         from_name='Testmaster', zone=0, text='Ready for Icecrown Citadel.', via_bridge=True),
     'verified_raid_kill_v1': dict(ts=1000000, kill_id='a' * 32 + ':1', native_epoch=29,
         guild_id=50, human_guid=10, killed_at_ms=999990, verified_at_ms=999999,
-        fight_started_at_ms=999000, fight_ms=2345, map=631, instance_id=9, boss_id=0,
+        fight_started_at_ms=999000, fight_ms=2345, attempts=0, map=631, instance_id=9, boss_id=0,
         difficulty=0, size=10, heroic=False, human_present=True, cast_members=[101, 102, 103, 104, 105]),
 }
 EXPECTED = {

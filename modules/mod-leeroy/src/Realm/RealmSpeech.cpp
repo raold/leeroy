@@ -13,6 +13,7 @@
 #include "EmoteAction.h"
 #include "GameEventScript.h"
 #include "GlobalScript.h"
+#include "InstanceSaveMgr.h"
 #include "InstanceScript.h"
 #include "Opcodes.h"
 #include "PlayerScript.h"
@@ -311,15 +312,16 @@ LeeroyCommandResult Announce(nlohmann::json const& message)
     if (!cmd) return {false, why};
     auto const kill = module.MatchProof(*cmd, NowMs());
     if (!kill) return {false, "no_kill"};
-    auto const fightSeconds = ValidatedAnnouncementFightSeconds(*cmd, *kill);
-    if (!fightSeconds) return {false, "unproved_metrics"};
+    auto const metrics = ValidatedAnnouncementMetrics(*cmd, *kill);
+    if (!metrics) return {false, "unproved_metrics"};
     auto const* guild = sGuildMgr->GetGuildById(GuildId());
     if (!guild) return {false, "no_guild"};
     auto const boss = Leeroy::SanitizeChatText(cmd->bossName, 48);
     auto const guildName = Leeroy::SanitizeChatText(guild->GetName(), 48);
     if (boss.empty() || guildName.empty()) return {false, "empty text"};
     sWorldSessionMgr->SendServerMessage(SERVER_MSG_STRING,
-        FormatAnnouncement(guildName, boss, kill->size, kill->heroic, 0, *fightSeconds, cmd->first == "ever"));
+        FormatAnnouncement(guildName, boss, kill->size, kill->heroic, metrics->attempts, metrics->fightS,
+            cmd->first == "ever"));
     return {true, {}};
 }
 
@@ -381,6 +383,18 @@ FightState ObservedFightState(EncounterState state)
     return FightState::Other;
 }
 
+// The attempt counter also distinguishes the core's never-set TO_BE_DECIDED.
+EncounterPhase ObservedPhase(EncounterState state)
+{
+    if (state == TO_BE_DECIDED) return EncounterPhase::Unset;
+    if (state == NOT_STARTED || state == FAIL) return EncounterPhase::Resting;
+    if (state == IN_PROGRESS) return EncounterPhase::Progress;
+    if (state == DONE) return EncounterPhase::Done;
+    return EncounterPhase::Special;
+}
+
+InstanceKey KeyOf(Map const* map) { return {map->GetId(), map->GetInstanceId()}; }
+
 struct PendingKill
 {
     Map* identity = nullptr; // Identity only; dereferenced only through the current map-hook argument.
@@ -393,6 +407,7 @@ constexpr std::size_t kMaxPendingKills = 128;
 std::mutex pendingMutex;
 std::vector<PendingKill> pendingKills;
 FightStarts fightStarts; // All access under pendingMutex; no independent terminal observer.
+AttemptLedger attempts; // All access under pendingMutex; keyed by instance, not by Map pointer.
 std::map<Map*, std::uint64_t> mapLifecycles;
 std::uint64_t nextMapLifecycle = 0;
 
@@ -444,6 +459,7 @@ public:
         {
             std::lock_guard lock(pendingMutex);
             fightStarts.Clear();
+            attempts.Clear();
             return;
         }
         // This hook precedes SetBossState's validation; it is not kill proof.
@@ -481,16 +497,21 @@ public:
         }
         // Missing start/terminal state evidence removes only duration. The
         // existing kill candidate still has its later actual-DONE verifier.
-        auto const actual = script ? ObservedFightState(script->GetBossState(id)) : FightState::Other;
+        auto const actualState = script ? script->GetBossState(id) : SPECIAL;
+        auto const actual = ObservedFightState(actualState);
         bool const startIntent = (old == NOT_STARTED || old == FAIL) && next == IN_PROGRESS;
+        bool const attemptStart = (startIntent || old == TO_BE_DECIDED) && next == IN_PROGRESS;
         bool const killIntent = old == IN_PROGRESS && next == DONE;
         std::optional<KillParticipants> participants;
-        if (startIntent || killIntent) participants = PresentParticipants(map, guild, human);
+        if (attemptStart || killIntent) participants = PresentParticipants(map, guild, human);
         if (!module.On() || epoch != module.Epoch() || guild != GuildId() || human != HumanGuid()) return;
         auto const context = FightContextFor(map, lifecycle, spawnMode, kill);
         std::lock_guard lock(pendingMutex);
         auto const life = mapLifecycles.find(map);
         if (life == mapLifecycles.end() || life->second != lifecycle) return;
+        attempts.Synchronize(epoch, guild, human);
+        attempts.Intent(KeyOf(map), id, spawnMode, ObservedPhase(old), ObservedPhase(next), ObservedPhase(actualState),
+            participants.has_value(), now);
         auto const generation = fightStarts.Intent(context, ObservedFightState(old), ObservedFightState(next), actual,
             now, kill.killedAtMs, participants && participants->humanPresent);
         if (old != IN_PROGRESS || next != DONE || unixNow <= 0 || !participants
@@ -509,8 +530,26 @@ public:
         {ALLMAPHOOK_ON_CREATE_MAP, ALLMAPHOOK_ON_DESTROY_MAP, ALLMAPHOOK_ON_MAP_UPDATE}) { }
     // Lifecycle cleanup runs even while disabled; it publishes nothing and never
     // retains a dead map pointer across address/instance-ID reuse.
-    void OnCreateMap(Map* map) override { ForgetMap(map, true); }
-    void OnDestroyMap(Map* map) override { ForgetMap(map, false); }
+    void OnCreateMap(Map* map) override
+    {
+        ForgetMap(map, true);
+        auto& module = RealmModule::Instance();
+        if (!map || !map->IsRaid() || !map->GetInstanceId()) return;
+        // MapInstanced::CreateInstance adds a new instance's save only after
+        // this hook, so no save here means a new instance id: a witness.
+        bool const fresh = !sInstanceSaveMgr->GetInstanceSave(map->GetInstanceId());
+        std::lock_guard lock(pendingMutex);
+        if (!module.On()) { attempts.Clear(); return; }
+        attempts.Synchronize(module.Epoch(), GuildId(), HumanGuid());
+        attempts.Created(KeyOf(map), fresh);
+    }
+    void OnDestroyMap(Map* map) override
+    {
+        ForgetMap(map, false);
+        if (!map || !map->IsRaid() || !map->GetInstanceId()) return;
+        std::lock_guard lock(pendingMutex);
+        attempts.Unloaded(KeyOf(map));
+    }
     void OnMapUpdate(Map* map, uint32) override
     {
         auto& module = RealmModule::Instance();
@@ -519,11 +558,13 @@ public:
         auto const unixNow = NowUnixMs();
         std::vector<PendingKill> candidates;
         std::vector<FightContext> starts;
+        std::vector<std::pair<std::uint32_t, std::uint8_t>> unconfirmed;
         std::uint64_t lifecycle = 0;
         {
             std::lock_guard lock(pendingMutex);
-            if (!module.On()) { fightStarts.Clear(); return; }
+            if (!module.On()) { fightStarts.Clear(); attempts.Clear(); return; }
             fightStarts.Synchronize(module.Epoch(), GuildId(), HumanGuid(), now);
+            attempts.Synchronize(module.Epoch(), GuildId(), HumanGuid());
             auto const life = mapLifecycles.find(map);
             if (life == mapLifecycles.end()) return;
             lifecycle = life->second;
@@ -531,6 +572,7 @@ public:
                 if (pending.identity == map && pending.lifecycle == lifecycle) candidates.push_back(pending);
             std::erase_if(pendingKills, [map](PendingKill const& pending) { return pending.identity == map; });
             starts = fightStarts.Contexts(reinterpret_cast<std::uintptr_t>(map));
+            unconfirmed = attempts.Unconfirmed(KeyOf(map));
         }
         auto* instance = map->ToInstanceMap();
         auto* script = instance ? instance->GetInstanceScript() : nullptr;
@@ -560,6 +602,8 @@ public:
             {
                 kill.fightStartedAtMs = duration.startedAtMs;
                 kill.fightMs = duration.elapsedMs;
+                // Exact only for a witnessed, untainted open engagement; else 0.
+                kill.attempts = attempts.Kill(KeyOf(map), kill.bossId, pending.spawnMode, now);
                 kill.verifiedMs = now;
                 kill.verifiedAtMs = static_cast<std::uint64_t>(unixNow);
                 if (!ValidKillObservation(kill)) continue; // Includes Unix reversal and separate steady bound.
@@ -582,6 +626,14 @@ public:
             if (life == mapLifecycles.end() || life->second != lifecycle) continue;
             if (current) fightStarts.ObserveActual(context, actual, now);
             else fightStarts.ForgetBoss(context.mapIdentity, context.bossId);
+        }
+        // An attempt start counts only once the map's own actual state shows it.
+        for (auto const& [boss, spawnMode] : unconfirmed)
+        {
+            bool const current = module.On() && map->GetSpawnMode() == spawnMode;
+            auto const actual = current ? ObservedPhase(script->GetBossState(boss)) : EncounterPhase::Special;
+            std::lock_guard lock(pendingMutex);
+            attempts.ObserveActual(KeyOf(map), boss, spawnMode, actual, now);
         }
     }
 };

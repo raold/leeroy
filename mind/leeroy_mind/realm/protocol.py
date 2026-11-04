@@ -43,12 +43,36 @@ def _raid_mode(difficulty: int, size: int, heroic: bool) -> bool:
                                   and heroic == (difficulty >= 2))))
 
 
-def _proof_identity(value) -> bool:
+def _proof_identity(value, mode=_raid_mode) -> bool:
     return (_kill_id(value.kill_id) and _uint(value.native_epoch, 0xFFFFFFFFFFFFFFFF)
         and _uint(value.guild_id) and _uint(value.human_guid) and _uint(value.instance_id)
         and type(value.map) is int and 0 <= value.map <= 0xFFFFFFFF
         and type(value.boss_id) is int and 0 <= value.boss_id <= 0xFFFFFFFF
-        and _raid_mode(value.difficulty, value.size, value.heroic))
+        and mode(value.difficulty, value.size, value.heroic))
+
+
+# Native AttemptLedger: an exact count of confirmed pulls, 1..99; 0 is unknown.
+MAX_ATTEMPTS = 99
+
+
+def _kill_proof(value, mode) -> bool:
+    # The native steady elapsed value is independent of Unix chronology.
+    return not (not _proof_identity(value, mode)
+            or any(not _uint(field, 253402300799999)
+                   for field in (value.killed_at_ms, value.verified_at_ms, value.ts))
+            or not value.killed_at_ms <= value.verified_at_ms <= value.ts
+            or type(value.fight_started_at_ms) is not int or type(value.fight_ms) is not int
+            or not ((value.fight_started_at_ms == 0 and value.fight_ms == -1)
+                    or (_uint(value.fight_started_at_ms, 253402300799999)
+                        and value.fight_started_at_ms <= value.killed_at_ms
+                        and 0 <= value.fight_ms <= 3600000 and value.human_present is True))
+            or type(value.attempts) is not int or not 0 <= value.attempts <= MAX_ATTEMPTS
+            or type(value.human_present) is not bool
+            or type(value.cast_members) is not tuple or len(value.cast_members) > 128
+            or not all(_uint(member) and member != value.human_guid for member in value.cast_members)
+            or tuple(sorted(set(value.cast_members))) != value.cast_members
+            or (value.human_present and len(value.cast_members) == 128)
+            or (not value.human_present and not value.cast_members))
 
 
 def _bounded_text(value, lo, hi) -> bool:
@@ -357,6 +381,7 @@ class Announce:
 
 @dataclass(frozen=True, slots=True)
 class RealmKill:
+    """A verified raid boss kill. attempts: the native exact count, 0 when unknown."""
     ts: int
     kill_id: str
     native_epoch: int
@@ -366,6 +391,7 @@ class RealmKill:
     verified_at_ms: int
     fight_started_at_ms: int
     fight_ms: int
+    attempts: int
     map: int
     instance_id: int
     boss_id: int
@@ -376,22 +402,7 @@ class RealmKill:
     cast_members: tuple[int, ...]
 
     def __post_init__(self):
-        # The native steady elapsed value is independent of Unix chronology.
-        if (not _proof_identity(self)
-                or any(not _uint(value, 253402300799999)
-                       for value in (self.killed_at_ms, self.verified_at_ms, self.ts))
-                or not self.killed_at_ms <= self.verified_at_ms <= self.ts
-                or type(self.fight_started_at_ms) is not int or type(self.fight_ms) is not int
-                or not ((self.fight_started_at_ms == 0 and self.fight_ms == -1)
-                        or (_uint(self.fight_started_at_ms, 253402300799999)
-                            and self.fight_started_at_ms <= self.killed_at_ms
-                            and 0 <= self.fight_ms <= 3600000 and self.human_present is True))
-                or type(self.human_present) is not bool
-                or type(self.cast_members) is not tuple or len(self.cast_members) > 128
-                or not all(_uint(member) and member != self.human_guid for member in self.cast_members)
-                or tuple(sorted(set(self.cast_members))) != self.cast_members
-                or (self.human_present and len(self.cast_members) == 128)
-                or (not self.human_present and not self.cast_members)):
+        if not _kill_proof(self, _raid_mode):
             raise ValueError("invalid native Realm kill proof")
 
 

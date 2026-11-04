@@ -2,6 +2,8 @@
 #ifndef MOD_LEEROY_REALM_POLICY_H
 #define MOD_LEEROY_REALM_POLICY_H
 
+#include "LeeroyRealmAttempts.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -76,6 +78,7 @@ struct Kill : KillIdentity
     std::uint64_t killedAtMs = 0, verifiedAtMs = 0, publishedAtMs = 0; // Unix ms.
     std::uint64_t fightStartedAtMs = 0; // Unix chronology only; never used for elapsed time.
     std::int64_t fightMs = -1; // Checked steady elapsed; (0, -1) is unavailable.
+    std::uint32_t attempts = 0; // AttemptLedger's exact count, 1..kMaxAttempts; 0 is unknown.
     bool humanPresent = false;
     std::vector<std::uint32_t> castMembers; // Sorted, unique, present native cast only.
     bool operator==(Kill const&) const = default;

@@ -110,9 +110,15 @@ struct AnnounceCmd : KillIdentity
     std::uint32_t attempts = 0, fightS = 0;
     std::string first;
 };
-// Runtime-only metric gate, after exact proof lookup. Zero seconds omits the
-// metric; attempts remain unavailable until a separate native baseline exists.
-std::optional<std::uint32_t> ValidatedAnnouncementFightSeconds(AnnounceCmd const&, Kill const&);
+// Runtime-only metric gate, after exact proof lookup. Zero omits a metric. A
+// named metric must equal the proof's own: attempts the native count (never
+// 0, which is unknown), fight seconds the measured human-present duration.
+struct AnnouncementMetrics
+{
+    std::uint32_t attempts = 0, fightS = 0;
+    bool operator==(AnnouncementMetrics const&) const = default;
+};
+std::optional<AnnouncementMetrics> ValidatedAnnouncementMetrics(AnnounceCmd const&, Kill const&);
 
 // The bridge owns envelope validation. Parsers validate wire fields only;
 // identities, live busy/ownership rules, emote IDs, place/item whitelist lookup,

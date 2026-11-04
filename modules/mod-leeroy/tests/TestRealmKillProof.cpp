@@ -216,7 +216,8 @@ LEEROY_TEST(RealmKillProof_EventHasExactFrozenFieldsAndNoSteadyClockLeak)
     for (auto const& [key, value] : event.items()) { (void)value; keys.insert(key); }
     CHECK((keys == std::set<std::string>{"v", "type", "ts", "kill_id", "native_epoch", "guild_id", "human_guid",
         "killed_at_ms", "verified_at_ms", "map", "instance_id", "boss_id", "difficulty", "size", "heroic",
-        "human_present", "cast_members", "fight_started_at_ms", "fight_ms"}));
+        "human_present", "cast_members", "fight_started_at_ms", "fight_ms", "attempts"}));
+    CHECK_EQ(event.at("attempts"), 0); // Unknown, never a guessed lower bound.
     CHECK_EQ(event.at("v"), 1); CHECK_EQ(event.at("type"), "realm_kill");
     CHECK_EQ(event.at("ts"), kill.publishedAtMs); CHECK_EQ(event.at("kill_id"), kill.killId);
     CHECK_EQ(event.at("killed_at_ms"), kill.killedAtMs); CHECK_EQ(event.at("verified_at_ms"), kill.verifiedAtMs);
@@ -233,6 +234,7 @@ LEEROY_TEST(RealmKillProof_SourceContractKeepsDoneVerificationOnMapThreadAndWorl
     CHECK(candidate.find("RecordKill(") == std::string::npos);
     CHECK(candidate.find("old != IN_PROGRESS || next != DONE") != std::string::npos);
     CHECK(candidate.find("map->IsRaid()") != std::string::npos);
+    CHECK(candidate.find("attempts.Intent(") < candidate.find("fightStarts.Intent("));
     auto const scan = Section(speech, "std::optional<KillParticipants> PresentParticipants", "class RealmBossScript");
     CHECK(scan.find("CastMembers()") < scan.find("map->GetPlayers()"));
     CHECK(scan.find("present.size() == kMaxKillPlayers) return std::nullopt") != std::string::npos);
@@ -249,6 +251,12 @@ LEEROY_TEST(RealmKillProof_SourceContractKeepsDoneVerificationOnMapThreadAndWorl
     CHECK(verifier.find("map->GetSpawnMode() != pending.spawnMode") != std::string::npos);
     CHECK(verifier.find("life->second != lifecycle") != std::string::npos);
     CHECK(verifier.find("ValidKillObservation(kill)") < verifier.find("module.RecordKill("));
+    CHECK(verifier.find("attempts.Kill(KeyOf(map), kill.bossId, pending.spawnMode, now)")
+        < verifier.find("ValidKillObservation(kill)"));
+    CHECK(verifier.find("attempts.ObserveActual(") != std::string::npos);
+    auto const created = Section(speech, "void OnCreateMap(Map* map)", "void OnDestroyMap(Map* map)");
+    CHECK(created.find("sInstanceSaveMgr->GetInstanceSave(map->GetInstanceId())")
+        < created.find("attempts.Created(KeyOf(map), fresh)"));
     auto const module = Source("RealmModule.cpp");
     auto const drain = Section(module, "void DrainKills()", "void ApplyPins()");
     CHECK(drain.find("auto observations = std::move(killInbox)") < drain.find("kills.Add(kill)"));
@@ -262,9 +270,9 @@ LEEROY_TEST(RealmKillProof_SourceContractKeepsDoneVerificationOnMapThreadAndWorl
     CHECK(matching.find("request.guildId != GuildId()") != std::string::npos);
     CHECK(matching.find("request.humanGuid != HumanGuid()") != std::string::npos);
     auto const announce = Section(speech, "LeeroyCommandResult Announce(", "class RealmChannelScript");
-    CHECK(announce.find("module.MatchProof(") < announce.find("ValidatedAnnouncementFightSeconds("));
-    CHECK(announce.find("ValidatedAnnouncementFightSeconds(") < announce.find("SendServerMessage("));
-    CHECK(announce.find("0, *fightSeconds, cmd->first") != std::string::npos);
+    CHECK(announce.find("module.MatchProof(") < announce.find("ValidatedAnnouncementMetrics("));
+    CHECK(announce.find("ValidatedAnnouncementMetrics(") < announce.find("SendServerMessage("));
+    CHECK(announce.find("metrics->attempts, metrics->fightS") != std::string::npos);
     CHECK(speech.find("module.MatchKill(") == std::string::npos);
 }
 
@@ -503,25 +511,47 @@ LEEROY_TEST(RealmKillProof_FightStartUnixWireBoundaryAppliesToPairProofAndAdmiss
 
 LEEROY_TEST(RealmKillProof_AnnouncementMetricsUseOnlyExactRequestedProofAndSeconds)
 {
+    using M = AnnouncementMetrics;
     auto a = Proof(1, 1000), b = Proof(2, 2000);
     a.fightStartedAtMs = 1699999999000; a.fightMs = 999;
     b.fightStartedAtMs = 1699999999000; b.fightMs = 1000;
     KillRing ring; CHECK(ring.Add(a)); CHECK(ring.Add(b));
     AnnounceCmd request; static_cast<KillIdentity&>(request) = a; request.killId = a.killId;
     auto proof = ring.MatchProof(request.killId, request, 3000); CHECK(proof && *proof == a);
-    CHECK(ValidatedAnnouncementFightSeconds(request, *proof) == std::optional<std::uint32_t>{0});
-    request.fightS = 1; CHECK(!ValidatedAnnouncementFightSeconds(request, *proof));
-    CHECK(!ValidatedAnnouncementFightSeconds(request, b)); // Newer same tuple is never a substitute.
+    CHECK((ValidatedAnnouncementMetrics(request, *proof) == std::optional<M>{M{0, 0}}));
+    request.fightS = 1; CHECK(!ValidatedAnnouncementMetrics(request, *proof));
+    CHECK(!ValidatedAnnouncementMetrics(request, b)); // Newer same tuple is never a substitute.
     request.killId = b.killId;
-    CHECK(ValidatedAnnouncementFightSeconds(request, b) == std::optional<std::uint32_t>{1});
-    request.fightS = 2; CHECK(!ValidatedAnnouncementFightSeconds(request, b));
-    request.fightS = 0; request.attempts = 1; CHECK(!ValidatedAnnouncementFightSeconds(request, b));
+    CHECK((ValidatedAnnouncementMetrics(request, b) == std::optional<M>{M{0, 1}}));
+    request.fightS = 2; CHECK(!ValidatedAnnouncementMetrics(request, b));
+    request.fightS = 0; request.attempts = 1; CHECK(!ValidatedAnnouncementMetrics(request, b)); // Unknown count.
     request.attempts = 0; auto unknown = b; unknown.fightStartedAtMs = 0; unknown.fightMs = -1;
-    CHECK(ValidatedAnnouncementFightSeconds(request, unknown) == std::optional<std::uint32_t>{0});
-    request.fightS = 1; CHECK(!ValidatedAnnouncementFightSeconds(request, unknown));
-    auto noHuman = b; noHuman.humanPresent = false; CHECK(!ValidatedAnnouncementFightSeconds(request, noHuman));
+    CHECK((ValidatedAnnouncementMetrics(request, unknown) == std::optional<M>{M{0, 0}}));
+    request.fightS = 1; CHECK(!ValidatedAnnouncementMetrics(request, unknown));
+    auto noHuman = b; noHuman.humanPresent = false; CHECK(!ValidatedAnnouncementMetrics(request, noHuman));
     auto wrongMode = request; wrongMode.difficulty = -1;
-    CHECK(!ValidatedAnnouncementFightSeconds(wrongMode, b));
+    CHECK(!ValidatedAnnouncementMetrics(wrongMode, b));
     b.fightMs = 3600000; request.fightS = 3600;
-    CHECK(ValidatedAnnouncementFightSeconds(request, b) == std::optional<std::uint32_t>{3600});
+    CHECK((ValidatedAnnouncementMetrics(request, b) == std::optional<M>{M{0, 3600}}));
+}
+
+LEEROY_TEST(RealmKillProof_AnnouncedAttemptsMustEqualTheNativeCount)
+{
+    using M = AnnouncementMetrics;
+    auto counted = Proof(); counted.attempts = 4;
+    CHECK(ValidKillProof(counted));
+    AnnounceCmd request; static_cast<KillIdentity&>(request) = counted; request.killId = counted.killId;
+    CHECK((ValidatedAnnouncementMetrics(request, counted) == std::optional<M>{M{0, 0}})); // Omitting is allowed.
+    for (std::uint32_t claimed : {1u, 3u, 5u, 99u})
+    { request.attempts = claimed; CHECK(!ValidatedAnnouncementMetrics(request, counted)); }
+    request.attempts = 4; CHECK((ValidatedAnnouncementMetrics(request, counted) == std::optional<M>{M{4, 0}}));
+    counted.fightStartedAtMs = 1699999999000; counted.fightMs = 251000; request.fightS = 251;
+    CHECK((ValidatedAnnouncementMetrics(request, counted) == std::optional<M>{M{4, 251}}));
+    auto offline = Proof(); offline.humanPresent = false; offline.attempts = 2; // A cast-only raid's own count.
+    request = {}; static_cast<KillIdentity&>(request) = offline; request.killId = offline.killId; request.attempts = 2;
+    CHECK((ValidatedAnnouncementMetrics(request, offline) == std::optional<M>{M{2, 0}}));
+    request.fightS = 1; CHECK(!ValidatedAnnouncementMetrics(request, offline)); // Duration stays human-only.
+    for (std::uint32_t bad : {100u, 1000u})
+    { auto over = Proof(); over.attempts = bad; CHECK(!ValidKillObservation(over)); KillRing ring; CHECK(!ring.Add(over)); }
+    CHECK_EQ(MakeRealmKill(counted).at("attempts"), 4u);
 }

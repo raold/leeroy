@@ -77,7 +77,7 @@ bool ValidKillObservation(Kill const& kill)
 {
     auto const maximum = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
     return kill.nativeEpoch && kill.guildId && kill.humanGuid && kill.instanceId
-        && ValidRaidMode(kill.difficulty, kill.size, kill.heroic)
+        && ValidRaidMode(kill.difficulty, kill.size, kill.heroic) && kill.attempts <= kMaxAttempts
         && kill.verifiedMs >= kill.atMs && kill.verifiedMs - kill.atMs <= kKillVerifyWithinMs
         && kill.killedAtMs && kill.killedAtMs <= kill.verifiedAtMs && kill.verifiedAtMs <= maximum
         && ValidFightDuration(kill.fightStartedAtMs, kill.fightMs, kill.killedAtMs, kill.humanPresent)
@@ -237,7 +237,9 @@ FightDuration FightStarts::Finish(FightTerminal& terminal, FightContext const& c
     // the adapter. Thus only ordinary age expiry can outlive the live start here.
     bool const agedOut = !hadStart && nowMs >= saved.startMs && nowMs - saved.startMs > kMaxFightMs;
     return sameStart || agedOut ? saved.duration : FightDuration{};
-}std::vector<FightContext> FightStarts::Contexts(std::uintptr_t mapIdentity) const
+}
+
+std::vector<FightContext> FightStarts::Contexts(std::uintptr_t mapIdentity) const
 {
     std::vector<FightContext> result;
     for (auto const& start : _starts)

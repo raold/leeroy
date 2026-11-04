@@ -110,31 +110,73 @@ json Event(std::string_view type)
     if (type == "guard") return MakeGuard(11001, "readded", 4, "");
     throw std::runtime_error("unhandled Realm event maker");
 }
-bool FixtureFightDurationValid(json const& msg)
+// Outgoing native events have no wire decoder. These strict conversions of the
+// shared fixture lines exercise the exact native wire types and validators;
+// nullopt is a line the native maker could never produce.
+bool SameKeys(json const& msg, json const& body)
 {
-    // Outgoing native events have no wire decoder. These shared-fixture checks
-    // exercise the strict pair types/shape before the pure proof validator.
     std::set<std::string> expected{"v", "ts"}, actual;
-    auto const canonical = Event("realm_kill");
-    for (auto const& [key, value] : canonical.items()) { (void)value; expected.insert(key); }
+    for (auto const& [key, value] : body.items()) { (void)value; expected.insert(key); }
     for (auto const& [key, value] : msg.items()) { (void)value; actual.insert(key); }
-    if (actual != expected || !msg.at("human_present").is_boolean()) return false;
-    auto const integer = [](json const& value) -> std::optional<std::int64_t> {
-        if (!value.is_number_integer()) return std::nullopt;
-        if (value.is_number_unsigned())
-        {
-            auto const number = value.get<std::uint64_t>();
-            if (number > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) return std::nullopt;
-            return static_cast<std::int64_t>(number);
-        }
-        return value.get<std::int64_t>();
-    };
-    auto const start = integer(msg.at("fight_started_at_ms"));
-    auto const elapsed = integer(msg.at("fight_ms"));
-    auto const killed = integer(msg.at("killed_at_ms"));
-    return start && elapsed && killed && *start >= 0 && *killed > 0
-        && ValidFightDuration(static_cast<std::uint64_t>(*start), *elapsed, static_cast<std::uint64_t>(*killed),
-            msg.at("human_present").get<bool>());
+    return actual == expected;
+}
+std::optional<std::int64_t> Signed(json const& value)
+{
+    if (!value.is_number_integer()) return std::nullopt;
+    if (value.is_number_unsigned())
+    {
+        auto const number = value.get<std::uint64_t>();
+        if (number > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) return std::nullopt;
+        return static_cast<std::int64_t>(number);
+    }
+    return value.get<std::int64_t>();
+}
+template <typename T>
+bool Unsigned(json const& value, T& out)
+{
+    if (!value.is_number_unsigned() || value.get<std::uint64_t>() > std::numeric_limits<T>::max()) return false;
+    out = static_cast<T>(value.get<std::uint64_t>());
+    return true;
+}
+std::optional<Kill> FixtureKill(json const& msg)
+{
+    if (!SameKeys(msg, Event("realm_kill")) || !msg.at("kill_id").is_string() || !msg.at("heroic").is_boolean()
+        || !msg.at("human_present").is_boolean() || !msg.at("cast_members").is_array()) return std::nullopt;
+    Kill kill;
+    kill.killId = msg.at("kill_id").get<std::string>();
+    kill.heroic = msg.at("heroic").get<bool>();
+    kill.humanPresent = msg.at("human_present").get<bool>();
+    auto const difficulty = Signed(msg.at("difficulty"));
+    auto const elapsed = Signed(msg.at("fight_ms"));
+    if (!difficulty || *difficulty < std::numeric_limits<std::int32_t>::min()
+        || *difficulty > std::numeric_limits<std::int32_t>::max() || !elapsed) return std::nullopt;
+    kill.difficulty = static_cast<std::int32_t>(*difficulty);
+    kill.fightMs = *elapsed;
+    if (!Unsigned(msg.at("native_epoch"), kill.nativeEpoch) || !Unsigned(msg.at("guild_id"), kill.guildId)
+        || !Unsigned(msg.at("human_guid"), kill.humanGuid) || !Unsigned(msg.at("map"), kill.map)
+        || !Unsigned(msg.at("instance_id"), kill.instanceId) || !Unsigned(msg.at("boss_id"), kill.bossId)
+        || !Unsigned(msg.at("size"), kill.size) || !Unsigned(msg.at("attempts"), kill.attempts)
+        || !Unsigned(msg.at("killed_at_ms"), kill.killedAtMs) || !Unsigned(msg.at("verified_at_ms"), kill.verifiedAtMs)
+        || !Unsigned(msg.at("fight_started_at_ms"), kill.fightStartedAtMs)
+        || !Unsigned(msg.at("ts"), kill.publishedAtMs)) return std::nullopt;
+    for (auto const& member : msg.at("cast_members"))
+    {
+        std::uint32_t guid = 0;
+        if (!Unsigned(member, guid)) return std::nullopt;
+        kill.castMembers.push_back(guid);
+    }
+    return kill;
+}
+std::optional<json> FixtureBody(json const& msg)
+{
+    auto const type = msg.at("type").get<std::string>();
+    if (type == "realm_kill")
+    {
+        auto const kill = FixtureKill(msg);
+        if (!kill || !ValidKillProof(*kill)) return std::nullopt;
+        return MakeRealmKill(*kill);
+    }
+    return Event(type); // Every other event has only its canonical line.
 }
 std::string const kPlacesHeader = "name,map,zone,x,y,z,o,kind\n";
 std::string const kItemsHeader = "item_id,use,max_count\n";
@@ -151,19 +193,13 @@ LEEROY_TEST(Realm_FixtureLines)
         if (row.at("kind") == "event")
         {
             events.insert(type);
-            auto body = Event(type);
-            if (type == "realm_kill")
-            {
-                CHECK_EQ(FixtureFightDurationValid(msg), row.at("valid").get<bool>());
-                if (!row.at("valid").get<bool>()) continue;
-                if (!row.value("full", false))
-                {
-                    body["fight_started_at_ms"] = msg.at("fight_started_at_ms");
-                    body["fight_ms"] = msg.at("fight_ms");
-                    body["human_present"] = msg.at("human_present");
-                }
-            }
-            CHECK_EQ(json::parse(Leeroy::EncodeEvent(msg.at("ts").get<std::int64_t>(), body)), msg);
+            auto const ts = Signed(msg.at("ts"));
+            auto const body = FixtureBody(msg);
+            bool const produced = ts && body && json::parse(Leeroy::EncodeEvent(*ts, *body)) == msg;
+            if (produced != row.value("valid", true))
+                LeeroyTest::Fail(__FILE__, __LINE__, row.at("name").get<std::string>() + ": native validity differs");
+            if (row.value("full", false))
+                CHECK_EQ(json::parse(Leeroy::EncodeEvent(msg.at("ts").get<std::int64_t>(), Event(type))), msg);
             continue;
         }
         auto decoded = Leeroy::DecodeCommand(msg.dump());
