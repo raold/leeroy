@@ -37,17 +37,20 @@ class WorkerTree:
     wire protocol still need only numpy and the standard library. Never find processes by
     executable name: ownership starts with Popen and follows verified parent identities.
 
-    A scan holds the GIL: on Windows each children() walks every process on the system (about
-    20 ms here), and the audio callback in this process waits for it. So the background scan
-    runs every WATCH_S while the worker loads, and settle() ends it once the worker answers;
-    after that a scan runs at each request and at stop(), never on a timer. On Windows,
-    which has no zombies, status() is never asked: it snapshots every thread on the system.
+    A scan holds the GIL: on Windows a walk of every process on the system takes about 16 ms
+    here, and the audio callback in this process waits for it. So a scan walks once (psutil's
+    _ppid_map(), the walk children() makes; on Windows ppid() makes another per call), the
+    background scan runs every WATCH_S while the worker loads, and settle() ends it once the
+    worker answers; after that a scan runs at each request and at stop(), never on a timer.
+    On Windows, which has no zombies, status() is never asked: it snapshots every thread on
+    the system.
     """
 
     def __init__(self):
         import psutil
         self.ps = psutil
         self.owned: dict[int, float] = {}
+        self._gone: set[int] = set()  # owned PIDs exited or reused: none found later is theirs
         self._lock = threading.RLock()
         self._done = threading.Event()
         self._settled = threading.Event()
@@ -76,39 +79,80 @@ class WorkerTree:
         except self.ps.NoSuchProcess:
             return None
 
+    def _walk(self) -> dict[int, int] | None:
+        """{pid: parent pid} for every process, from one walk; None when it fails."""
+        try:
+            return self.ps._ppid_map()
+        except (OSError, self.ps.Error):
+            return None
+
+    def _born(self, pid: int, births: dict[int, float | None]) -> float | None:
+        """The creation time of what holds `pid` now, None when nothing does. Raises an
+        unreadable process's psutil.Error: that is not evidence of exit."""
+        if pid not in births:
+            try:
+                births[pid] = self.ps.Process(pid).create_time()
+            except self.ps.NoSuchProcess:
+                births[pid] = None
+        return births[pid]
+
     def capture(self) -> bool:
-        """Retain descendants even after their launcher exits; never follow a reused PID."""
-        complete = True
+        """Retain descendants even after their launcher exits; never follow a reused PID.
+
+        One walk gives every process's parent PID, which Windows keeps after the parent exits,
+        so a child of an owned process is found though that process has exited: an interpreter
+        whose launcher exited early, or a grandchild whose captured parent did. A child counts
+        only if it is no older than the owned parent and older than whatever holds the parent's
+        PID now. Once a walk lacks the parent, or another process holds its PID, its children
+        are all in that walk, so none found later is its. A PID new to the tree must show the
+        same parent in a second walk, as it may have been reused between the first walk and the
+        read of its creation time."""
         with self._lock:
+            parents = self._walk()
+            if parents is None:
+                return False
+            children: dict[int, list[int]] = {}
+            for pid, ppid in parents.items():
+                if pid != ppid:
+                    children.setdefault(ppid, []).append(pid)
+            complete, births, found, via, gone = True, {}, {}, {}, []
             pending = list(self.owned)
             seen = set()
             while pending:
                 pid = pending.pop()
-                if pid in seen:
+                if pid in seen or pid in self._gone:
                     continue
                 seen.add(pid)
+                created = self.owned[pid] if pid in self.owned else found[pid]
                 try:
-                    parent = self._matching(pid)
-                    if parent is None:
-                        continue
-                    children = parent.children()
-                    if self._matching(pid) is None:
-                        continue  # the parent exited/reused during process enumeration
-                    for child in children:
-                        created = child.create_time()
-                        if created < self.owned[pid] or child.ppid() != pid:
-                            continue
-                        if self._matching(pid) is None:
-                            break
-                        if child.pid not in self.owned:
-                            self.owned[child.pid] = created
-                        if self.owned[child.pid] == created:
-                            pending.append(child.pid)
-                except self.ps.NoSuchProcess:
-                    # Disappearance is different from an unreadable live ancestry.
-                    continue
+                    holder = self._born(pid, births) if pid in parents else None
                 except self.ps.Error:
                     complete = False
+                    continue
+                reused = holder if holder is not None and holder != created else None
+                read = True
+                for child in children.get(pid, ()):
+                    try:
+                        born = self._born(child, births)
+                    except self.ps.Error:
+                        complete = read = False
+                        continue
+                    if born is None or born < created or (reused is not None and born >= reused):
+                        continue
+                    if child not in self.owned and child not in found:
+                        found[child], via[child] = born, pid
+                    if self.owned.get(child, found.get(child)) == born:
+                        pending.append(child)
+                if (pid not in parents or reused is not None) and read:
+                    gone.append(pid)
+            if found:
+                again = self._walk()
+                if again is None:
+                    return False
+                for child, born in found.items():  # parents before children
+                    if via[child] in self.owned and again.get(child) == via[child]:
+                        self.owned[child] = born
+            self._gone.update(gone)
         return complete
 
     def _watch(self) -> None:
