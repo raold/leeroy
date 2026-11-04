@@ -553,15 +553,27 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   counts, persona version and who last wrote it (seed, owner, generator, the
   night's looks pass, a stance move or an undo), open drift flags and the night's
   trait sample, and per member the persona card summary, ties, memories by kind
-  and ledger. It has no write path; a table an older mind.db lacks shows as
-  unavailable.
+  and ledger; a table an older mind.db lacks shows as unavailable. Its only
+  write is the tuning (`leeroy_mind/tuning/`, console `tuneview.py`): the
+  owner's dials, stored in mind.db's `tuning_*` tables as an overlay that never
+  rewrites a persona. Member dials: talkative, argumentative, forward/flirty
+  (women only), humour amount, theorycrafter, lore nerd, drama, jealousy, party
+  (drinking and smoking habits), opening up, reliability; world dials
+  chattiness, romance and jealousy override mind.toml without writing it. A
+  member's own value wins over group offsets, which add up. With nothing set,
+  every prompt and weight is what it was (`tests/tuning/golden_prompts.json`).
+  Writes and previews go through the mind's `tune` op; a preview runs only
+  while the live model is already loaded, never loads one, and its text is never
+  logged or stored. `python -m leeroy_mind tuning --data-dir "$D" status|history`
+  reads it; `undo N|revert N` work with the mind stopped.
 - The mind's control endpoint (`leeroy_mind/endpoint.py`) is on by default
   (`[control] enabled = false` turns it off; `[control] port`, default 0, picks
   a free port). It listens on 127.0.0.1 only and writes a new key each start,
   with its port and pid, to `mind-data/control.json`, readable by the owner's
   user only (a protected one-entry DACL) and removed when the mind stops
   cleanly. One JSON line per connection, exactly `v`, `key`, `op` (and `args`):
-  `status`, `stop` (the mind's own shutdown, the one Ctrl+C runs) and `raid`
+  `status`, `stop` (the mind's own shutdown, the one Ctrl+C runs), `tune`
+  (the owner's dials: status, set, undo, revert, group, retire, preview) and `raid`
   (`call`, `form` {raid, size, heroic, lead}, `summon`, `start`, `stop`,
   `end`), which enter guild life's raid night where the owner's chat or its
   timers would, with the same guards, and are refused while he is not in game.
