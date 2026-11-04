@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from conftest import make_persona, run, seed_test_cast
+from leeroy_mind.nightly.knowledge import ROOT_PREFIXES, roots
 from leeroy_mind.personas.io import save_persona
 from leeroy_mind.realm import protocol
 from leeroy_mind.realm.calendar_time import local_write_day
@@ -296,3 +297,18 @@ def test_guard_alert_logs_ids_only(tmp_path, store, clock, caplog, on):
         assert store.conn.execute('SELECT count(*) FROM realm_kick').fetchone()[0] == 0
     assert not app.sent
     run(realm.close())
+
+
+# -- the knowledge ledger -----------------------------------------------------------------------
+
+def test_realm_prefix_is_a_knowledge_root(store):
+    assert 'realm:' in ROOT_PREFIXES
+    with store.transaction():
+        fact = insert(store, 'realm_fact', kind='kill', text='The guild killed Lord Marrowgar.',
+                      source='event', ts=1000.0)
+        memory = insert(store, 'memory', owner=101, kind='event', text='We killed Marrowgar.',
+                        t_event=1000, t_created=1000, t_accessed=1000, importance=4, valence=0.0,
+                        source='game', evidence=json.dumps([f'realm:fact:{fact}']))
+    # A Realm memory is ordinary: the ledger follows it to its Realm root like any other.
+    assert roots(store, [f'memory:{memory}']) == {f'realm:fact:{fact}'}
+    assert roots(store, [f'realm:fact:{fact}', 'owner:canon']) == {f'realm:fact:{fact}'}
