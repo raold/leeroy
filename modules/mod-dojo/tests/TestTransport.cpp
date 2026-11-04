@@ -169,7 +169,8 @@ private:
             {
                 auto const gen = effect["generation"].get<std::uint64_t>();
                 _episodes[gen] = effect["episode"].get<std::string>();
-                Apply(_lc.CompleteReset(gen, Json{{"ok", true}, {"observations", Open()}, {"sim_ms", 0}}));
+                Apply(_lc.CompleteReset(gen, effect["token"].get<std::uint64_t>(),
+                    Json{{"ok", true}, {"observations", Open()}, {"sim_ms", 0}}));
             }
             else if (kind == "begin_step")
             {
@@ -189,13 +190,14 @@ private:
     void RunStep(Json const& effect)
     {
         auto const gen = effect["generation"].get<std::uint64_t>();
+        auto const token = effect["token"].get<std::uint64_t>();
         if (!_lc.AcceptsCallback(gen))
         {
-            Apply(_lc.CompleteStep(gen, Json{{"fault", "abandoned"}}));
+            Apply(_lc.CompleteStep(gen, token, Json{{"fault", "abandoned"}}));
             return;
         }
         ++_applied[{effect["episode"].get<std::string>(), effect["decision"].get<std::int64_t>()}];
-        Apply(_lc.CompleteStep(gen, StepDone()));
+        Apply(_lc.CompleteStep(gen, token, StepDone()));
     }
 
     Transport _transport;
@@ -263,7 +265,7 @@ DOJO_TEST(Transport_RefusesNonLoopback)
 {
     Transport t(NoLog);
     CHECK(!t.Start("0.0.0.0", 0));
-    CHECK(!t.Start("192.168.1.69", 0));
+    CHECK(!t.Start("192.0.2.1", 0));   // TEST-NET-1 (RFC 5737): never a real host
     CHECK(!t.Running());
     CHECK(t.Start("localhost", 0));
     CHECK(t.BoundPort() != 0);
@@ -453,4 +455,65 @@ DOJO_TEST(Transport_CloseWithAStepInFlight)
     w.Hold(false);
     CHECK(WaitFor([&] { return w.State() == "ready"; }, 2s));
     CHECK_EQ(w.Applied("e1", 0), 0);
+}
+
+// Responses the controller does not read stop the transport reading: a line already being read is delivered, the rest
+// wait in the socket until the outbox drains, and nothing is lost or reordered.
+DOJO_TEST(Transport_UnreadOutboxPausesReading)
+{
+    Transport::Options options;
+    options.outboxLimit = 2;
+    Transport t(NoLog, options);
+    CHECK(t.Start("127.0.0.1", 0));
+    std::vector<TransportEvent> events;
+    TestClient c;
+    CHECK(c.Connect(t.BoundPort()));
+    CHECK(WaitFor([&] { return t.Poll(events, 1) == 1; }, 2s));
+    std::uint64_t const serial = events.at(0).connection;
+    std::string const big(16 << 20, 'w');   // more than loopback buffers hold: the writer stays blocked
+    CHECK(t.Send(serial, big));
+    std::this_thread::sleep_for(200ms);       // the io thread has taken it and is blocked writing it
+    for (int i = 0; i < 4; ++i)
+        CHECK(t.Send(serial, R"({"id":"small)" + std::to_string(i) + R"("})"));
+    CHECK(t.Stats().maxOutbox >= options.outboxLimit);
+    std::string burst;
+    for (int i = 0; i < 5; ++i)
+        burst += Encode(Status("q" + std::to_string(i))) + "\n";
+    c.SendRaw(burst);
+    std::this_thread::sleep_for(500ms);
+    CHECK(t.Stats().linesIn <= 1);           // at most the read already in progress
+    CHECK(t.Stats().readPauses > 0);
+    std::optional<std::string> const first = c.ReadLine(10s);
+    CHECK(first.has_value() && first->size() == big.size());
+    for (int i = 0; i < 4; ++i)
+        CHECK_EQ(Read(c)["id"], "small" + std::to_string(i));
+    events.clear();
+    CHECK(WaitFor([&] { t.Poll(events, 8); return events.size() >= 5; }, 3s));
+    CHECK_EQ(events.size(), std::size_t(5));
+    for (std::size_t i = 0; i < events.size(); ++i)
+        CHECK_EQ(events[i].decoded.id.value_or(""), "q" + std::to_string(i));
+    CHECK_EQ(t.Stats().linesIn, 5u);
+}
+
+// Only spaces, tabs and carriage returns make a line blank; a vertical tab or form feed is a malformed request.
+DOJO_TEST(Transport_OnlyJsonWhitespaceIsBlank)
+{
+    Transport t(NoLog);
+    CHECK(t.Start("127.0.0.1", 0));
+    std::vector<TransportEvent> events;
+    TestClient c;
+    CHECK(c.Connect(t.BoundPort()));
+    CHECK(WaitFor([&] { return t.Poll(events, 1) == 1; }, 2s));
+    c.SendRaw(" \t\r\n\r\n\n\x0b\n\x0c\n" + Encode(Status("q1")) + "\r\n");
+    events.clear();
+    CHECK(WaitFor([&] { t.Poll(events, 8); return events.size() >= 3; }, 2s));
+    std::this_thread::sleep_for(50ms);
+    t.Poll(events, 8);
+    CHECK_EQ(events.size(), std::size_t(3));
+    if (events.size() == 3)
+    {
+        CHECK_EQ(events[0].decoded.code, std::string(Err::Malformed));
+        CHECK_EQ(events[1].decoded.code, std::string(Err::Malformed));
+        CHECK(events[2].decoded.request.has_value());
+    }
 }

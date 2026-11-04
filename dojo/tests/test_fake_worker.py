@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from leeroy_dojo import fake_game
-from leeroy_dojo.client import ConnectionLost, DojoClient, DojoError
+from leeroy_dojo.client import ConnectionLost, DojoClient, DojoError, UnexpectedAnswer
 from leeroy_dojo.fake_worker import FakeWorker
 from leeroy_dojo.protocol import encode
 
@@ -88,15 +88,78 @@ class FakeWorkerTest(unittest.TestCase):
     def test_a_retry_after_a_timeout_applies_once(self):
         client = self.client
         client.reset("e1", 7)
-        client.timeout, client.retries = 0.15, 5
+        client.timeout, client.retries = 0.2, 3
         self.worker.hold_steps()
         threading.Timer(0.5, self.worker.release_steps).start()
         result = client.step([fake_game.LANCE, fake_game.LANCE])
         self.assertGreaterEqual(client.resends, 1)
         self.assertEqual(self.worker.applied[("e1", 0)], 1)
+        self.assertEqual(sum(client.owed.values()), client.resends)
         client.timeout = 3.0
-        self.assertEqual(client.status()["decision"], 1, "the owed duplicate answers were discarded")
+        # status() would raise UnexpectedAnswer on any duplicate answer that was not owed.
+        self.assertEqual(client.status()["decision"], 1)
+        self.assertEqual((client.discarded, client.owed), (client.resends, {}))
         self.assertEqual(result["decision"], 0)
+
+    def test_an_answer_nobody_asked_for_is_refused(self):
+        """An answer the client did not send for (or more copies than it sent) breaks the contract: no guessing."""
+        self.client.send_line(encode({"v": 1, "type": "status", "id": "stray"}))
+        with self.assertRaises(UnexpectedAnswer) as refused:
+            self.client.status()
+        self.assertEqual(refused.exception.answer["id"], "stray")
+
+    def test_resends_stop_at_the_workers_copy_bound(self):
+        client = self.client
+        self.assertEqual(client.hello_result["bounds"]["max_copies"], 4)   # the inbox capacity
+        client.reset("e1", 7)
+        client.timeout, client.retries = 0.05, 50
+        self.worker.hold_steps()
+        threading.Timer(0.6, self.worker.release_steps).start()
+        with self.assertRaises(TimeoutError):
+            client.step([fake_game.LANCE, fake_game.LANCE])
+        self.assertEqual(client.resends, 3)
+        self.assertTrue(wait(lambda: self.worker.applied[("e1", 0)] == 1))
+        client.timeout = 3.0
+        self.assertEqual(client.status()["decision"], 1, "the four owed answers were all discarded")
+        self.assertEqual(client.discarded, 4)
+
+    def test_copies_beyond_the_inbox_are_answered_busy(self):
+        """The reviewer's probe over the socket: thousands of copies of a held step, one world advance."""
+        self.client.reset("e1", 7)
+        self.worker.hold_steps()
+        message = self.client.step_message([fake_game.LANCE, 0])
+        line = encode(message) + "\n"
+        self.client.send_line((line * 200).encode()[:-1])
+        answers = [self.answer(self.client, message["id"]) for _ in range(200 - 4)]
+        self.assertTrue(all(a["code"] == "busy" for a in answers))
+        self.worker.release_steps()
+        results = [self.answer(self.client, message["id"]) for _ in range(4)]
+        self.assertTrue(all(r["type"] == "step_result" for r in results))
+        self.assertIsNone(self.client.read_message(0.3), "nothing more is owed")
+        self.assertEqual(self.worker.applied[("e1", 0)], 1)
+        server = self.worker.server
+        self.assertLessEqual(server.stats.max_outbox, server.outbox_limit + server.inbox_capacity + 4,
+                             "unread answers stop the reader line by line, not one socket read later")
+
+    def test_bookkeeping_is_bounded(self):
+        worker = FakeWorker(history=3)
+        port = worker.start()
+        try:
+            client = DojoClient(timeout=3.0)
+            client.connect("127.0.0.1", port)
+            client.hello()
+            client.reset("e1", 7)
+            for _ in range(5):
+                client.step([0, 0])
+            for n in range(2, 7):
+                client.reset(f"e{n}", 7)
+            self.assertEqual(list(worker.applied), [("e1", 2), ("e1", 3), ("e1", 4)])
+            self.assertEqual(list(worker.resets), ["e4", "e5", "e6"])
+            self.assertEqual(len(worker.aborted), 0)
+            client.disconnect()
+            self.assertTrue(wait(lambda: ("e6", "disconnect") in worker.aborted))
+        finally:
+            worker.stop()
 
     def test_close_while_paused_at_a_boundary(self):
         self.client.reset("e1", 7)

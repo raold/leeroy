@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <optional>
 #include <random>
 #include <set>
 #include <stdexcept>
@@ -111,7 +112,7 @@ DOJO_TEST(Lifecycle_RecentEpisodeIdsCannotBeReused)
         Output out = Recv(lc, Json{{"v", 1}, {"type", "reset"}, {"id", "r" + std::to_string(n++)}, {"session", "s1"},
             {"episode", episode}, {"decision", 0}, {"scenario_seed", 1}});
         if (!out.effects.empty())
-            lc.CompleteReset(lc.Generation(), Json{{"ok", true}, {"observations", Open()}, {"sim_ms", 0}});
+            lc.CompleteReset(lc.Generation(), lc.LastToken(), Json{{"ok", true}, {"observations", Open()}, {"sim_ms", 0}});
         return out;
     };
     for (std::size_t i = 0; i < kRecentEpisodes; ++i)
@@ -135,7 +136,14 @@ DOJO_TEST(Lifecycle_RandomSequencesNeverApplyADecisionTwice)
         Lifecycle lc(worker, bounds);
         int serial = 0;
         std::set<std::pair<std::uint64_t, std::int64_t>> stepsBegun;
-        std::vector<std::pair<std::string, std::uint64_t>> pending;
+        std::set<std::uint64_t> tokens;
+        struct Pending
+        {
+            std::string kind;
+            std::uint64_t generation;
+            std::uint64_t token;
+        };
+        std::vector<Pending> pending;
         std::vector<Json> history;
         std::vector<std::string> begunEpisodes;
         std::uint64_t lastGeneration = 0;
@@ -162,10 +170,19 @@ DOJO_TEST(Lifecycle_RandomSequencesNeverApplyADecisionTwice)
             else if (choice < 0.25 && !pending.empty())
             {
                 std::size_t const pick = rng() % pending.size();
-                auto const [kind, gen] = pending[pick];
+                Pending p = pending[pick];
                 pending.erase(pending.begin() + static_cast<std::ptrdiff_t>(pick));
-                out = kind == "reset" ? lc.CompleteReset(gen, Json{{"ok", true}, {"observations", Open()}, {"sim_ms", 0}})
-                                      : lc.CompleteStep(gen, StepDone(chance() < 0.05));
+                bool const forged = chance() < 0.2;   // a completion naming another operation's token
+                if (forged)
+                    p.token = p.token + 1 + rng() % 3;
+                std::optional<std::string> const before = lc.InFlight();
+                out = p.kind == "reset"
+                    ? lc.CompleteReset(p.generation, p.token, Json{{"ok", true}, {"observations", Open()}, {"sim_ms", 0}})
+                    : lc.CompleteStep(p.generation, p.token, StepDone(chance() < 0.05));
+                if (forged && !out.stale)
+                    CHECK_MSG(false, "a forged token completed an operation, seed " + std::to_string(seed));
+                if (out.stale)
+                    CHECK(lc.InFlight() == before);
             }
             else if (choice < 0.3)
                 out = lc.Fault();
@@ -210,7 +227,8 @@ DOJO_TEST(Lifecycle_RandomSequencesNeverApplyADecisionTwice)
                     auto const key = std::make_pair(effect["generation"].get<std::uint64_t>(),
                         effect["decision"].get<std::int64_t>());
                     CHECK_MSG(stepsBegun.insert(key).second, "a decision was applied twice, seed " + std::to_string(seed));
-                    pending.emplace_back("step", key.first);
+                    CHECK(tokens.insert(effect["token"].get<std::uint64_t>()).second);
+                    pending.push_back({"step", key.first, effect["token"].get<std::uint64_t>()});
                 }
                 else if (effect["effect"] == "begin_reset")
                 {
@@ -220,11 +238,87 @@ DOJO_TEST(Lifecycle_RandomSequencesNeverApplyADecisionTwice)
                     CHECK_MSG(std::find(begunEpisodes.begin() + static_cast<std::ptrdiff_t>(from), begunEpisodes.end(),
                         episode) == begunEpisodes.end(), "a recent episode was reset twice, seed " + std::to_string(seed));
                     begunEpisodes.push_back(episode);
-                    pending.emplace_back("reset", effect["generation"].get<std::uint64_t>());
+                    CHECK(tokens.insert(effect["token"].get<std::uint64_t>()).second);
+                    pending.push_back({"reset", effect["generation"].get<std::uint64_t>(),
+                        effect["token"].get<std::uint64_t>()});
                 }
             }
             for (Json const& m : out.send)
                 CHECK(!HasNonFinite(m));
         }
     }
+}
+
+// The reviewer's probe: thousands of copies of one step while it is in flight. Only maxCopies are owed; the rest are
+// answered busy at once, so a completion can never fan out without bound.
+DOJO_TEST(Lifecycle_InFlightCopiesAreCapped)
+{
+    Lifecycle lc(FixtureWorker());
+    lc.Connect("s1");
+    Recv(lc, Json{{"v", 1}, {"type", "hello"}, {"id", "h"}, {"protocol", {{"min", 1}, {"max", 1}}}});
+    Recv(lc, Json{{"v", 1}, {"type", "reset"}, {"id", "r1"}, {"session", "s1"}, {"episode", "e1"}, {"decision", 0},
+        {"scenario_seed", 1}});
+    lc.CompleteReset(lc.Generation(), lc.LastToken(), Json{{"ok", true}, {"observations", Open()}, {"sim_ms", 0}});
+    Json const step{{"v", 1}, {"type", "step"}, {"id", "s9"}, {"session", "s1"}, {"episode", "e1"}, {"decision", 0},
+        {"actions", Json::array({Json{{"actor", 0}, {"action", 0}}, Json{{"actor", 1}, {"action", 0}}})}};
+    CHECK_EQ(Recv(lc, step).effects.size(), std::size_t(1));
+    std::size_t busy = 0;
+    for (int i = 0; i < 5000; ++i)
+    {
+        Output const out = Recv(lc, step);
+        CHECK(out.send.size() <= 1);
+        if (!out.send.empty() && out.send[0]["code"] == "busy")
+            ++busy;
+    }
+    CHECK_EQ(busy, std::size_t(5001 - kMaxCopies));
+    Output const done = lc.CompleteStep(lc.Generation(), lc.LastToken(), StepDone(false));
+    CHECK_EQ(done.send.size(), kMaxCopies);
+    for (Json const& m : done.send)
+        CHECK_EQ(m["type"], "step_result");
+}
+
+// The reviewer's probe: with decision 1 in flight, a late completion of decision 0 (same generation) is stale.
+DOJO_TEST(Lifecycle_ALateCompletionCannotFinishTheNextStep)
+{
+    Lifecycle lc(FixtureWorker());
+    lc.Connect("s1");
+    Recv(lc, Json{{"v", 1}, {"type", "hello"}, {"id", "h"}, {"protocol", {{"min", 1}, {"max", 1}}}});
+    Recv(lc, Json{{"v", 1}, {"type", "reset"}, {"id", "r1"}, {"session", "s1"}, {"episode", "e1"}, {"decision", 0},
+        {"scenario_seed", 1}});
+    lc.CompleteReset(lc.Generation(), lc.LastToken(), Json{{"ok", true}, {"observations", Open()}, {"sim_ms", 0}});
+    auto step = [](std::string const& id, int decision)
+    {
+        return Json{{"v", 1}, {"type", "step"}, {"id", id}, {"session", "s1"}, {"episode", "e1"}, {"decision", decision},
+            {"actions", Json::array({Json{{"actor", 0}, {"action", 0}}, Json{{"actor", 1}, {"action", 0}}})}};
+    };
+    Recv(lc, step("a0", 0));
+    std::uint64_t const first = lc.LastToken();
+    CHECK_EQ(lc.CompleteStep(lc.Generation(), first, StepDone(false)).send.at(0)["id"], "a0");
+    Recv(lc, step("a1", 1));
+    Output const late = lc.CompleteStep(lc.Generation(), first, StepDone(false));
+    CHECK(late.stale);
+    CHECK(late.send.empty());
+    CHECK(lc.InFlight() == std::optional<std::string>("a1"));
+    CHECK(lc.Decision() == std::optional<std::int64_t>(1));
+    CHECK_EQ(lc.CompleteStep(lc.Generation(), lc.LastToken(), StepDone(false)).send.at(0)["id"], "a1");
+}
+
+DOJO_TEST(Lifecycle_ErrorMessagesAreClipped)
+{
+    Lifecycle lc(FixtureWorker());
+    lc.Connect("s1");
+    Recv(lc, Json{{"v", 1}, {"type", "hello"}, {"id", "h"}, {"protocol", {{"min", 1}, {"max", 1}}}});
+    Recv(lc, Json{{"v", 1}, {"type", "reset"}, {"id", "r1"}, {"session", "s1"}, {"episode", "e1"}, {"decision", 0},
+        {"scenario_seed", 1}});
+    std::string bad = std::string(3000, 'x') + "\xff\xfe";   // long and not even UTF-8
+    Output const out = lc.CompleteReset(lc.Generation(), lc.LastToken(), Json{{"ok", false}, {"reason", bad}});
+    CHECK_EQ(out.send.size(), std::size_t(1));
+    std::string const message = out.send.at(0)["message"].get<std::string>();
+    CHECK(message.size() <= kMaxTextBytes);
+    CHECK(!Encode(out.send.at(0)).empty());
+    CHECK_EQ(Clip("caf\xc3\xa9", 5), std::string("caf\xc3\xa9"));
+    CHECK_EQ(Clip("a\xc3\xa9\xc3\xa9" "b", 5), std::string("a..."));   // never half a character
+    CHECK_EQ(Clip("\xc3\xa9\xc3\xa9\xc3\xa9", 5), std::string("\xc3\xa9..."));
+    CHECK_EQ(Clip("ok\xff", 10), std::string("ok?"));
+    CHECK_EQ(Clip("\xed\xa0\x80", 10), std::string("???"));   // an encoded surrogate is not UTF-8
 }

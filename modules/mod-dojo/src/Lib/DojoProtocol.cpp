@@ -120,7 +120,8 @@ std::string CheckFields(std::string_view type, Json const& obj, Bounds const& bo
 Json Bounds::ToWire() const
 {
     return Json{{"max_line_bytes", maxLineBytes}, {"max_actors", maxActors}, {"max_events", maxEvents},
-        {"result_cache", resultCache}, {"recent_episodes", kRecentEpisodes}, {"in_flight", 1}};
+        {"result_cache", resultCache}, {"recent_episodes", kRecentEpisodes}, {"in_flight", 1},
+        {"max_copies", maxCopies}};
 }
 
 Bounds Bounds::FromWire(Json const& wire)
@@ -136,6 +137,8 @@ Bounds Bounds::FromWire(Json const& wire)
         b.maxEvents = wire["max_events"].get<std::uint32_t>();
     if (wire.contains("result_cache"))
         b.resultCache = wire["result_cache"].get<std::size_t>();
+    if (wire.contains("max_copies"))
+        b.maxCopies = wire["max_copies"].get<std::size_t>();
     return b;
 }
 
@@ -206,11 +209,52 @@ std::string Encode(Json const& j)
     return j.dump(-1, ' ', false, Json::error_handler_t::strict);
 }
 
+bool IsBlankLine(std::string_view line)
+{
+    return line.find_first_not_of(" \t\r") == std::string_view::npos;
+}
+
+std::string Clip(std::string_view text, std::size_t limit)
+{
+    std::string valid;
+    valid.reserve(text.size());
+    for (std::size_t i = 0; i < text.size();)
+    {
+        auto const at = [&text](std::size_t k) { return static_cast<unsigned char>(text[k]); };
+        unsigned char const c = at(i);
+        std::size_t const n = c < 0x80 ? 1 : c >= 0xC2 && c <= 0xDF ? 2 : c >= 0xE0 && c <= 0xEF ? 3
+            : c >= 0xF0 && c <= 0xF4 ? 4 : 0;
+        bool ok = n != 0 && i + n <= text.size();
+        for (std::size_t k = 1; ok && k < n; ++k)
+            ok = (at(i + k) & 0xC0) == 0x80;
+        if (ok && n == 3)   // no overlong forms, no surrogates
+            ok = !(c == 0xE0 && at(i + 1) < 0xA0) && !(c == 0xED && at(i + 1) > 0x9F);
+        if (ok && n == 4)   // no overlong forms, nothing above U+10FFFF
+            ok = !(c == 0xF0 && at(i + 1) < 0x90) && !(c == 0xF4 && at(i + 1) > 0x8F);
+        if (ok)
+        {
+            valid.append(text.substr(i, n));
+            i += n;
+        }
+        else
+        {
+            valid += '?';
+            ++i;
+        }
+    }
+    if (valid.size() <= limit)
+        return valid;
+    std::size_t cut = limit >= 3 ? limit - 3 : 0;
+    while (cut > 0 && (static_cast<unsigned char>(valid[cut]) & 0xC0) == 0x80)
+        --cut;
+    return valid.substr(0, cut) + "...";
+}
+
 Json MakeError(std::string_view code, std::optional<std::string> const& id, std::string_view message,
     std::optional<std::string_view> reason)
 {
     Json e{{"v", kProtocolVersion}, {"type", "error"}, {"id", id ? Json(*id) : Json(nullptr)}, {"ok", false},
-        {"code", std::string(code)}, {"message", std::string(message)}};
+        {"code", std::string(code)}, {"message", Clip(message)}};
     if (reason)
         e["reason"] = std::string(*reason);
     return e;
@@ -220,6 +264,8 @@ Decoded DecodeRequest(std::string_view line, Bounds const& bounds)
 {
     if (line.size() > bounds.maxLineBytes)
         return Refuse(Err::LineTooLong, std::nullopt, "line over " + std::to_string(bounds.maxLineBytes) + " bytes");
+    if (line.substr(0, 3) == "\xEF\xBB\xBF")   // nlohmann would skip a byte order mark; the contract refuses it
+        return Refuse(Err::Malformed, std::nullopt, "not JSON");
 
     bool tooDeep = false;
     Json::parser_callback_t const depthGuard = [&tooDeep](int depth, Json::parse_event_t event, Json&)
@@ -232,7 +278,7 @@ Decoded DecodeRequest(std::string_view line, Bounds const& bounds)
         }
         return true;
     };
-    Json obj = Json::parse(line.begin(), line.end(), depthGuard, false);
+    Json obj = Json::parse(line.begin(), line.end(), depthGuard, false);   // an overflowing number is not JSON
     if (tooDeep)
         return Refuse(Err::Malformed, std::nullopt, "nested deeper than " + std::to_string(kMaxDepth));
     if (obj.is_discarded())
@@ -264,7 +310,7 @@ Decoded DecodeRequest(std::string_view line, Bounds const& bounds)
         (void)value;
         if (key != "v" && key != "type" && key != "id" && !Contains(fields->required, key)
             && !Contains(fields->optional, key))
-            return Refuse(Err::Malformed, id, "unknown field: " + key);
+            return Refuse(Err::Malformed, id, Clip("unknown field: " + key));
     }
     for (std::string_view name : fields->required)
         if (!obj.contains(name))

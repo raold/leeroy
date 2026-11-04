@@ -5,10 +5,14 @@ either implementation, so a bug in one cannot leak into the fixture. Run it afte
 
     python modules/mod-dojo/tests/fixtures/make_dojo_protocol.py
 
-Line kinds: "defaults" (the worker info later session cases use), "decode" (one request line and the expected
-decision) and "session" (a script of transport, request and worker events with the exact responses, effects and
-state each must produce; an omitted "send" or "effects" means none). Error messages are free text and are not
-compared.
+Line kinds: "defaults" (the worker info later session cases use), "info" (a worker description and whether it is
+usable), "frame" (a framed line and whether a transport skips it as blank), "decode" (one request line and the
+expected decision) and "session" (a script of transport, request and worker events with the exact responses, effects
+and state each must produce; an omitted "send" or "effects" means none). Error messages are free text and are not
+compared, but every one a runner sees must fit MAX_MESSAGE_BYTES.
+
+Every begin_reset and begin_step effect carries a token, counted from 1 per worker and never reused; a completion
+names the generation and the token of the operation it finishes. The tokens below are counted by hand.
 """
 
 import json
@@ -17,6 +21,7 @@ from pathlib import Path
 
 OUT = Path(os.environ.get("DOJO_FIXTURE_OUT") or Path(__file__).with_name("dojo_protocol.jsonl"))
 
+MAX_MESSAGE_BYTES = 256
 WORKER = {
     "worker": {"kind": "fixture", "module": "mod-dojo 0.1.0", "core": None, "playerbots": None},
     "scenario": "fixture_duel_v1",
@@ -27,10 +32,10 @@ WORKER = {
     "rng": {"scenario_seed": True, "combat_replay": False},
 }
 BOUNDS = {"max_line_bytes": 262144, "max_actors": 2, "max_events": 64, "result_cache": 8, "recent_episodes": 64,
-          "in_flight": 1}
+          "in_flight": 1, "max_copies": 16}
 OPEN = ([1, 0, 1], [1, 0, 1])          # noop and bolt open, stop_cast closed (nobody is casting)
 
-lines = [{"kind": "defaults", "worker": WORKER}]
+lines = [{"kind": "defaults", "max_message_bytes": MAX_MESSAGE_BYTES, "worker": WORKER}]
 
 
 # --- builders ---
@@ -71,13 +76,13 @@ def reset(rid, episode, seed=7, session="s1", decision=0, **extra):
             "scenario_seed": seed, **extra}
 
 
-def begin_reset(generation, episode, seed=7):
-    return {"effect": "begin_reset", "generation": generation, "episode": episode, "scenario": "fixture_duel_v1",
-            "scenario_seed": seed}
+def begin_reset(generation, token, episode, seed=7):
+    return {"effect": "begin_reset", "generation": generation, "token": token, "episode": episode,
+            "scenario": "fixture_duel_v1", "scenario_seed": seed}
 
 
-def observations(masks=OPEN, values=((1.0, 0.5), (1.0, 0.5))):
-    return [{"actor": i, "obs": list(values[i]), "mask": list(masks[i])} for i in range(2)]
+def observations(masks=OPEN, values=((1.0, 0.5), (1.0, 0.5)), actors=(0, 1)):
+    return [{"actor": actors[i], "obs": list(values[i]), "mask": list(masks[i])} for i in range(2)]
 
 
 def reset_done(masks=OPEN, sim_ms=0):
@@ -99,16 +104,16 @@ def requested(decision, actions):
     return [{"actor": a, "action": b, "action_id": decision * 2 + a} for a, b in sorted(actions)]
 
 
-def begin_step(generation, episode, decision, actions=((0, 0), (1, 0))):
-    return {"effect": "begin_step", "generation": generation, "episode": episode, "decision": decision,
-            "actions": requested(decision, actions)}
+def begin_step(generation, token, episode, decision, actions=((0, 0), (1, 0))):
+    return {"effect": "begin_step", "generation": generation, "token": token, "episode": episode,
+            "decision": decision, "actions": requested(decision, actions)}
 
 
 def step_done(sim_ms, events=(), terminated=False, truncated=False, outcome=None, rewards=((0, 0.0), (0, 0.0)),
-              masks=OPEN, elapsed_ms=200):
+              masks=OPEN, elapsed_ms=200, reward_actors=(0, 1)):
     return {"elapsed_ms": elapsed_ms, "substeps": elapsed_ms // 10, "sim_ms": sim_ms,
             "observations": observations(masks), "events": list(events),
-            "rewards": [{"actor": i, "terminal": t, "shaping": s} for i, (t, s) in enumerate(rewards)],
+            "rewards": [{"actor": reward_actors[i], "terminal": t, "shaping": s} for i, (t, s) in enumerate(rewards)],
             "terminated": terminated, "truncated": truncated, "outcome": outcome}
 
 
@@ -151,14 +156,14 @@ def recv(message, send=(), effects=(), **expect):
     return {**op, "send": list(send), "effects": list(effects), **expect}
 
 
-def complete_reset(generation, payload, send=(), effects=(), **expect):
-    return {"op": "complete_reset", "generation": generation, "payload": payload, "send": list(send),
-            "effects": list(effects), **expect}
+def complete_reset(generation, token, payload, send=(), effects=(), **expect):
+    return {"op": "complete_reset", "generation": generation, "token": token, "payload": payload,
+            "send": list(send), "effects": list(effects), **expect}
 
 
-def complete_step(generation, payload, send=(), effects=(), **expect):
-    return {"op": "complete_step", "generation": generation, "payload": payload, "send": list(send),
-            "effects": list(effects), **expect}
+def complete_step(generation, token, payload, send=(), effects=(), **expect):
+    return {"op": "complete_step", "generation": generation, "token": token, "payload": payload,
+            "send": list(send), "effects": list(effects), **expect}
 
 
 def op(name, send=(), effects=(), **expect):
@@ -179,12 +184,13 @@ def session(name, script, bounds=None, booted=True):
 
 
 def started(episode="e1", masks=OPEN, bounds=None):
-    """connect s1, hello and reset `episode` at generation 1, ready for decision 0."""
+    """connect s1, hello and reset `episode` at generation 1 with token 1, ready for decision 0."""
     return [
         connect(),
         recv(hello(), [hello_result(bounds=bounds)]),
-        recv(reset("r1", episode), effects=[begin_reset(1, episode)], state="resetting"),
-        complete_reset(1, reset_done(masks), [reset_result("r1", episode, 1, masks=masks)], state="awaiting_action"),
+        recv(reset("r1", episode), effects=[begin_reset(1, 1, episode)], state="resetting"),
+        complete_reset(1, 1, reset_done(masks), [reset_result("r1", episode, 1, masks=masks)],
+                       state="awaiting_action"),
     ]
 
 
@@ -199,6 +205,43 @@ def decode(name, message, code=None, rid=None, rtype=None, bounds=None):
     case["expect"] = {"code": code, "id": rid} if code else {"code": None, "id": rid, "type": rtype}
     lines.append(case)
 
+
+def info(name, worker, valid):
+    lines.append({"kind": "info", "name": name, "worker": worker, "valid": valid})
+
+
+def frame(name, line, blank):
+    lines.append({"kind": "frame", "name": name, "line": line, "blank": blank})
+
+
+def actors(*pairs):
+    return {**WORKER, "actors": [dict(p) for p in pairs]}
+
+
+# --- worker descriptions: types are exact, as everywhere else ---
+
+info("info_fixture_worker", WORKER, True)
+info("info_slot_bool", actors({"slot": False, "team": 0}, {"slot": True, "team": 1}), False)
+info("info_slot_float", actors({"slot": 0, "team": 0}, {"slot": 1.0, "team": 1}), False)
+info("info_team_bool", actors({"slot": 0, "team": 0}, {"slot": 1, "team": True}), False)
+info("info_actor_extra_key", actors({"slot": 0, "team": 0, "name": "x"}, {"slot": 1, "team": 1}), False)
+info("info_slot_out_of_order", actors({"slot": 1, "team": 0}, {"slot": 0, "team": 1}), False)
+info("info_noop_not_first", {**WORKER, "actions": ["bolt", "noop"]}, False)
+
+# --- framing: only spaces, tabs and carriage returns make a blank line ---
+
+frame("frame_empty", "", True)
+frame("frame_spaces", "   ", True)
+frame("frame_tab", "\t", True)
+frame("frame_carriage_return", "\r", True)
+frame("frame_mixed_blank", " \t\r \t", True)
+frame("frame_vertical_tab", "\x0b", False)
+frame("frame_form_feed", "\x0c", False)
+frame("frame_vertical_tab_in_spaces", " \x0b ", False)
+frame("frame_nul", "\x00", False)
+frame("frame_no_break_space", " ", False)
+frame("frame_next_line", "\u0085", False)
+frame("frame_request", '{"v":1,"type":"status","id":"q"}', False)
 
 # --- decode cases ---
 
@@ -230,6 +273,7 @@ decode("id_number", {"v": 1, "type": "status", "id": 7}, "malformed")
 decode("unknown_type", {"v": 1, "type": "dance", "id": "q"}, "malformed", "q")
 decode("missing_type", {"v": 1, "id": "q"}, "malformed", "q")
 decode("unknown_field", {**status("q"), "extra": True}, "malformed", "q")
+decode("unknown_field_name_is_clipped", {**status("q"), "k" * 3000: 1}, "malformed", "q")
 decode("status_bad_session", {**status("q"), "session": "a b"}, "malformed", "q")
 decode("reset_missing_seed", {k: v for k, v in reset("r1", "e1").items() if k != "scenario_seed"}, "malformed", "r1")
 decode("reset_negative_seed", reset("r1", "e1", seed=-1), "malformed", "r1")
@@ -257,6 +301,22 @@ decode("nested_65_is_too_deep", {**status("q"), "session": json.loads("[" * 64 +
 decode("brackets_in_strings_do_not_nest", hello("h1", client="[" * 200), rid="h1", rtype="hello")
 decode("line_too_long", status("q" * 40), "line_too_long", bounds={"max_line_bytes": 64})
 decode("line_at_bound", status("q" * 33), rid="q" * 33, rtype="status", bounds={"max_line_bytes": 64})
+# A byte order mark is not JSON whitespace: refused at the start of a line as anywhere else.
+decode("bom_is_refused", '﻿{"v":1,"type":"status","id":"q"}', "malformed")
+decode("bom_after_space_is_refused", ' ﻿{"v":1,"type":"status","id":"q"}', "malformed")
+# A line that is not blank by the framing rule is decoded, and a lone vertical tab or form feed is not JSON.
+decode("vertical_tab_line", "\x0b", "malformed")
+decode("form_feed_line", "\x0c", "malformed")
+# An integer that no double can hold makes the whole line not JSON, so its id cannot be trusted; one that a double
+# holds is merely out of range for its field.
+RESET_HEAD = '{"v":1,"type":"reset","id":"r1","session":"s1","episode":"e1","scenario_seed":7,"decision":'
+decode("integer_beyond_double", RESET_HEAD + "9" * 400 + "}", "malformed")
+decode("negative_integer_beyond_double", RESET_HEAD + "-" + "9" * 400 + "}", "malformed")
+decode("integer_just_beyond_double", RESET_HEAD + "2" + "0" * 308 + "}", "malformed")
+decode("integer_within_double", RESET_HEAD + "1" + "0" * 308 + "}", "malformed", "r1")
+decode("integer_beyond_uint64", RESET_HEAD + "18446744073709551616}", "malformed", "r1")
+decode("float_beyond_double", RESET_HEAD + "1e400}", "malformed")
+decode("id_beyond_double", '{"v":1,"type":"status","id":' + "9" * 400 + "}", "malformed")
 
 # --- session cases ---
 
@@ -264,18 +324,19 @@ session("happy_episode", [
     connect(),
     recv(status("q0"), [status_result("q0", "ready", session=None)]),
     recv(hello(), [hello_result()]),
-    recv(reset("r1", "e1"), effects=[begin_reset(1, "e1")], state="resetting"),
+    recv(reset("r1", "e1"), effects=[begin_reset(1, 1, "e1")], state="resetting"),
     recv(status("q1"), [status_result("q1", "resetting", episode="e1", generation=1, in_flight="r1")]),
-    complete_reset(1, reset_done(), [reset_result("r1", "e1", 1)], state="awaiting_action"),
-    recv(step("r2", "e1", 0, ((0, 2), (1, 0))), effects=[begin_step(1, "e1", 0, ((0, 2), (1, 0)))], state="stepping"),
-    complete_step(1, d := step_done(200, [{"kind": "cast_start", "actor": 0, "action_id": 0, "t_ms": 150}],
-                                    rewards=((0, 0.0), (0, 0.0)), masks=([1, 1, 0], [1, 0, 1])),
+    complete_reset(1, 1, reset_done(), [reset_result("r1", "e1", 1)], state="awaiting_action"),
+    recv(step("r2", "e1", 0, ((0, 2), (1, 0))), effects=[begin_step(1, 2, "e1", 0, ((0, 2), (1, 0)))],
+         state="stepping"),
+    complete_step(1, 2, d := step_done(200, [{"kind": "cast_start", "actor": 0, "action_id": 0, "t_ms": 150}],
+                                       rewards=((0, 0.0), (0, 0.0)), masks=([1, 1, 0], [1, 0, 1])),
                   [step_result("r2", "e1", 0, 1, ((0, 2), (1, 0)), d)], state="awaiting_action"),
     recv(status("q2"), [status_result("q2", "awaiting_action", episode="e1", decision=1, generation=1)]),
-    recv(step("r3", "e1", 1), effects=[begin_step(1, "e1", 1)], state="stepping"),
-    complete_step(1, d := step_done(400, [{"kind": "damage", "actor": 1, "action_id": 0, "t_ms": 360}],
-                                    terminated=True, outcome={"reason": "death", "winner": 0},
-                                    rewards=((1, 0.025), (-1, -0.025))),
+    recv(step("r3", "e1", 1), effects=[begin_step(1, 3, "e1", 1)], state="stepping"),
+    complete_step(1, 3, d := step_done(400, [{"kind": "damage", "actor": 1, "action_id": 0, "t_ms": 360}],
+                                       terminated=True, outcome={"reason": "death", "winner": 0},
+                                       rewards=((1, 0.025), (-1, -0.025))),
                   [step_result("r3", "e1", 1, 1, ((0, 0), (1, 0)), d)], state="terminal"),
     recv(step("r4", "e1", 2), [err("not_ready", "r4")], state="terminal"),
     recv(close(), [close_result()], [release("closed"), CLOSE_CONNECTION], state="ready"),
@@ -284,11 +345,11 @@ session("happy_episode", [
 
 session("duplicate_step_applies_once", [
     *started(),
-    recv(step("r2", "e1", 0, ((0, 2), (1, 2))), effects=[begin_step(1, "e1", 0, ((0, 2), (1, 2)))]),
+    recv(step("r2", "e1", 0, ((0, 2), (1, 2))), effects=[begin_step(1, 2, "e1", 0, ((0, 2), (1, 2)))]),
     recv(step("r2", "e1", 0, ((0, 2), (1, 2))), state="stepping"),
     recv(step("r2", "e1", 0, ((0, 0), (1, 2))), [err("conflicting_duplicate", "r2")]),
     recv(status("q1"), [status_result("q1", "stepping", episode="e1", decision=0, generation=1, in_flight="r2")]),
-    complete_step(1, d := step_done(200), [r := step_result("r2", "e1", 0, 1, ((0, 2), (1, 2)), d), r],
+    complete_step(1, 2, d := step_done(200), [r := step_result("r2", "e1", 0, 1, ((0, 2), (1, 2)), d), r],
                   state="awaiting_action"),
     recv(step("r2", "e1", 0, ((0, 2), (1, 2))), [r], state="awaiting_action"),
     recv(step("r9", "e1", 0, ((0, 2), (1, 2))), [err("wrong_step", "r9")]),
@@ -302,9 +363,9 @@ session("duplicate_hello_and_reset", [
     recv(hello(), [hello_result()]),
     recv(hello(), [hello_result()]),
     recv(hello("h2"), [err("not_ready", "h2")]),
-    recv(reset("r1", "e1"), effects=[begin_reset(1, "e1")]),
+    recv(reset("r1", "e1"), effects=[begin_reset(1, 1, "e1")]),
     recv(reset("r1", "e1"), state="resetting"),
-    complete_reset(1, reset_done(), [r := reset_result("r1", "e1", 1), r], state="awaiting_action"),
+    complete_reset(1, 1, reset_done(), [r := reset_result("r1", "e1", 1), r], state="awaiting_action"),
     recv(reset("r1", "e1"), [r], state="awaiting_action"),
     recv(reset("r5", "e1"), [err("stale_episode", "r5")]),
     recv(reset("r6", "e2", decision=3), [err("wrong_step", "r6")]),
@@ -312,17 +373,53 @@ session("duplicate_hello_and_reset", [
     recv(status("q1"), [status_result("q1", "awaiting_action", episode="e1", decision=0, generation=1)]),
 ])
 
+# Copies of the request in flight are owed only up to bounds.max_copies, the original included: the inbox's worth.
+# Beyond that a copy is answered busy at once, so no controller can make one completion fan out without bound.
+session("duplicate_copies_are_capped", [
+    *started(bounds=wire_bounds(max_copies=3)),
+    recv(step("r2", "e1", 0), effects=[begin_step(1, 2, "e1", 0)]),
+    recv(step("r2", "e1", 0)),
+    recv(step("r2", "e1", 0), state="stepping"),
+    recv(step("r2", "e1", 0), [err("busy", "r2")]),
+    recv(step("r2", "e1", 0), [err("busy", "r2")]),
+    recv(step("r2", "e1", 0, ((0, 2), (1, 0))), [err("conflicting_duplicate", "r2")]),
+    recv(status("q1"), [status_result("q1", "stepping", episode="e1", decision=0, generation=1, in_flight="r2")]),
+    complete_step(1, 2, d := step_done(200), [r := step_result("r2", "e1", 0, 1, ((0, 0), (1, 0)), d), r, r],
+                  state="awaiting_action"),
+    recv(step("r2", "e1", 0), [r]),
+    recv(reset("r3", "e2"), effects=[begin_reset(2, 3, "e2")]),
+    recv(reset("r3", "e2")),
+    recv(reset("r3", "e2")),
+    recv(reset("r3", "e2"), [err("busy", "r3")], state="resetting"),
+    complete_reset(2, 3, reset_done(), [r := reset_result("r3", "e2", 2), r, r], state="awaiting_action"),
+    recv(step("r4", "e2", 0), effects=[begin_step(2, 4, "e2", 0)]),
+    recv(step("r4", "e2", 0)),
+    recv(step("r4", "e2", 0)),
+    recv(step("r4", "e2", 0), [err("busy", "r4")]),
+    recv(close(), [err("aborted", "r4", "closed")] * 3 + [close_result()],
+         [abort(2, "closed"), release("closed"), CLOSE_CONNECTION], state="closing"),
+], bounds={"max_copies": 3})
+
+session("one_copy_means_no_duplicates_in_flight", [
+    *started(bounds=wire_bounds(max_copies=1)),
+    recv(step("r2", "e1", 0), effects=[begin_step(1, 2, "e1", 0)]),
+    recv(step("r2", "e1", 0), [err("busy", "r2")], state="stepping"),
+    complete_step(1, 2, d := step_done(200), [r := step_result("r2", "e1", 0, 1, ((0, 0), (1, 0)), d)],
+                  state="awaiting_action"),
+    recv(step("r2", "e1", 0), [r]),
+], bounds={"max_copies": 1})
+
 session("stale_episode_and_wrong_step", [
     *started(),
     recv(step("r2", "e0", 0), [err("stale_episode", "r2")]),
     recv(step("r3", "e1", 1), [err("wrong_step", "r3")]),
-    recv(step("r4", "e1", 0), effects=[begin_step(1, "e1", 0)]),
-    complete_step(1, d := step_done(200), [step_result("r4", "e1", 0, 1, ((0, 0), (1, 0)), d)]),
-    recv(reset("r5", "e2"), effects=[begin_reset(2, "e2")], state="resetting"),
-    complete_reset(2, reset_done(), [reset_result("r5", "e2", 2)]),
+    recv(step("r4", "e1", 0), effects=[begin_step(1, 2, "e1", 0)]),
+    complete_step(1, 2, d := step_done(200), [step_result("r4", "e1", 0, 1, ((0, 0), (1, 0)), d)]),
+    recv(reset("r5", "e2"), effects=[begin_reset(2, 3, "e2")], state="resetting"),
+    complete_reset(2, 3, reset_done(), [reset_result("r5", "e2", 2)]),
     recv(step("r6", "e1", 1), [err("stale_episode", "r6")]),
     recv(reset("r7", "e1"), [err("stale_episode", "r7")]),
-    recv(step("r8", "e2", 0), effects=[begin_step(2, "e2", 0)], state="stepping"),
+    recv(step("r8", "e2", 0), effects=[begin_step(2, 4, "e2", 0)], state="stepping"),
 ])
 
 session("invalid_actions_have_no_effect", [
@@ -334,15 +431,15 @@ session("invalid_actions_have_no_effect", [
     recv(step("r6", "e1", 0, ((0, 1), (1, 0))), [err("invalid_action", "r6")]),
     recv(step("r7", "e1", 0, ((0, 0), (1, 2))), [err("invalid_action", "r7")]),
     recv(step("r8", "e1", 0, ()), [err("invalid_action", "r8")], state="awaiting_action"),
-    recv(step("r9", "e1", 0, ((1, 1), (0, 2))), effects=[begin_step(1, "e1", 0, ((0, 2), (1, 1)))],
+    recv(step("r9", "e1", 0, ((1, 1), (0, 2))), effects=[begin_step(1, 2, "e1", 0, ((0, 2), (1, 1)))],
          state="stepping"),
-    complete_step(1, d := step_done(200), [step_result("r9", "e1", 0, 1, ((0, 2), (1, 1)), d)]),
+    complete_step(1, 2, d := step_done(200), [step_result("r9", "e1", 0, 1, ((0, 2), (1, 1)), d)]),
 ])
 
 session("noop_is_always_a_command", [
     *started(masks=([1, 0, 0], [1, 0, 0])),
-    recv(step("r2", "e1", 0, ((0, 0), (1, 0))), effects=[begin_step(1, "e1", 0)], state="stepping"),
-    complete_step(1, d := step_done(200, masks=([1, 0, 0], [1, 0, 0])),
+    recv(step("r2", "e1", 0, ((0, 0), (1, 0))), effects=[begin_step(1, 2, "e1", 0)], state="stepping"),
+    complete_step(1, 2, d := step_done(200, masks=([1, 0, 0], [1, 0, 0])),
                   [step_result("r2", "e1", 0, 1, ((0, 0), (1, 0)), d)], state="awaiting_action"),
     recv(step("r3", "e1", 1, ((0, 2), (1, 0))), [err("invalid_action", "r3")]),
 ])
@@ -356,11 +453,11 @@ session("not_ready_bad_session_and_busy", [
     recv(step("r3", "e1", 0), [err("not_ready", "r3")]),
     recv(reset("r4", "e1", session="s9"), [err("bad_session", "r4")]),
     recv(close("c2", session="s9"), [err("bad_session", "c2")]),
-    recv(reset("r5", "e1"), effects=[begin_reset(1, "e1")]),
+    recv(reset("r5", "e1"), effects=[begin_reset(1, 1, "e1")]),
     recv(step("r6", "e1", 0), [err("busy", "r6")]),
     recv(reset("r7", "e2"), [err("busy", "r7")], state="resetting"),
-    complete_reset(1, reset_done(), [reset_result("r5", "e1", 1)]),
-    recv(step("r8", "e1", 0), effects=[begin_step(1, "e1", 0)]),
+    complete_reset(1, 1, reset_done(), [reset_result("r5", "e1", 1)]),
+    recv(step("r8", "e1", 0), effects=[begin_step(1, 2, "e1", 0)]),
     recv(reset("r9", "e2"), [err("busy", "r9")], state="stepping"),
 ])
 
@@ -370,29 +467,54 @@ session("booting_refuses_reset", [
     recv(reset("r1", "e1"), [err("not_ready", "r1")]),
     recv(status("q1"), [status_result("q1", "booting")]),
     op("boot_complete", state="ready"),
-    recv(reset("r2", "e1"), effects=[begin_reset(1, "e1")], state="resetting"),
+    recv(reset("r2", "e1"), effects=[begin_reset(1, 1, "e1")], state="resetting"),
 ], booted=False)
 
 session("callbacks_are_fenced_by_generation", [
     connect(),
     recv(hello(), [hello_result()]),
-    recv(reset("r1", "e1"), effects=[begin_reset(1, "e1")]),
+    recv(reset("r1", "e1"), effects=[begin_reset(1, 1, "e1")]),
     callback(1, True),
     callback(0, False),
-    complete_reset(1, reset_done(), [reset_result("r1", "e1", 1)]),
+    complete_reset(1, 1, reset_done(), [reset_result("r1", "e1", 1)]),
     callback(1, True),
-    recv(reset("r2", "e2"), effects=[begin_reset(2, "e2")]),
+    recv(reset("r2", "e2"), effects=[begin_reset(2, 2, "e2")]),
     callback(1, False),
-    complete_reset(1, reset_done(), stale=True, state="resetting"),
-    complete_reset(2, reset_done(), [reset_result("r2", "e2", 2)], state="awaiting_action"),
+    complete_reset(1, 1, reset_done(), stale=True, state="resetting"),
+    complete_reset(1, 2, reset_done(), stale=True, state="resetting"),     # the right token, an old generation
+    complete_reset(2, 2, reset_done(), [reset_result("r2", "e2", 2)], state="awaiting_action"),
     callback(2, True),
-    recv(step("r3", "e2", 0), effects=[begin_step(2, "e2", 0)]),
-    complete_step(1, step_done(200), stale=True, state="stepping"),
-    complete_reset(2, reset_done(), stale=True, state="stepping"),
-    complete_step(2, d := step_done(200, terminated=True, outcome={"reason": "death", "winner": 1},
-                                    rewards=((-1, 0.0), (1, 0.0))),
+    recv(step("r3", "e2", 0), effects=[begin_step(2, 3, "e2", 0)]),
+    complete_step(1, 3, step_done(200), stale=True, state="stepping"),
+    complete_reset(2, 3, reset_done(), stale=True, state="stepping"),     # generation and token right, kind wrong
+    complete_step(2, 3, d := step_done(200, terminated=True, outcome={"reason": "death", "winner": 1},
+                                       rewards=((-1, 0.0), (1, 0.0))),
                   [step_result("r3", "e2", 0, 2, ((0, 0), (1, 0)), d)], state="terminal"),
     callback(2, False),
+])
+
+# A completion finishes only the operation whose token it carries: a late or repeated completion of an earlier
+# decision, in the same generation, can never answer the next one, and only the abandoned operation's own
+# completion ends a drain.
+session("completions_need_their_token", [
+    *started(),
+    complete_reset(1, 1, reset_done(), stale=True, state="awaiting_action"),
+    recv(step("r2", "e1", 0), effects=[begin_step(1, 2, "e1", 0)]),
+    complete_step(1, 1, step_done(200), stale=True, state="stepping"),
+    complete_step(1, 3, step_done(200), stale=True, state="stepping"),
+    complete_reset(1, 2, reset_done(), stale=True, state="stepping"),
+    complete_step(1, 2, d := step_done(200), [step_result("r2", "e1", 0, 1, ((0, 0), (1, 0)), d)],
+                  state="awaiting_action"),
+    recv(step("r3", "e1", 1), effects=[begin_step(1, 3, "e1", 1)]),
+    complete_step(1, 2, step_done(200), stale=True, state="stepping"),
+    recv(status("q1"), [status_result("q1", "stepping", episode="e1", decision=1, generation=1, in_flight="r3")]),
+    complete_step(1, 3, d := step_done(400), [step_result("r3", "e1", 1, 1, ((0, 0), (1, 0)), d)],
+                  state="awaiting_action"),
+    recv(step("r4", "e1", 2), effects=[begin_step(1, 4, "e1", 2)]),
+    op("disconnect", effects=[abort(1, "disconnect"), release("disconnect")], state="closing"),
+    complete_step(1, 3, step_done(600), stale=True, state="closing"),
+    complete_step(2, 4, step_done(600), stale=True, state="closing"),
+    complete_step(1, 4, step_done(600), stale=True, state="ready"),
 ])
 
 session("fault_while_paused", [
@@ -402,97 +524,148 @@ session("fault_while_paused", [
     recv(step("r2", "e1", 0), [err("aborted", "r2", "fault")]),
     recv(status("q1"), [status_result("q1", "aborted", episode="e1", generation=2, abort_reason="fault")]),
     recv(reset("r3", "e1"), [err("stale_episode", "r3")]),
-    recv(reset("r4", "e2"), effects=[begin_reset(3, "e2")], state="resetting"),
-    complete_reset(3, reset_done(), [reset_result("r4", "e2", 3)], state="awaiting_action"),
+    recv(reset("r4", "e2"), effects=[begin_reset(3, 2, "e2")], state="resetting"),
+    complete_reset(3, 2, reset_done(), [reset_result("r4", "e2", 3)], state="awaiting_action"),
     recv(status("q2"), [status_result("q2", "awaiting_action", episode="e2", decision=0, generation=3)]),
 ])
 
 session("fault_mid_step_drains", [
     *started(),
-    recv(step("r2", "e1", 0), effects=[begin_step(1, "e1", 0)]),
+    recv(step("r2", "e1", 0), effects=[begin_step(1, 2, "e1", 0)]),
     op("fault", [err("aborted", "r2", "fault")], [abort(1, "fault")], state="aborted"),
     recv(step("r2", "e1", 0), [err("aborted", "r2", "fault")]),
     recv(reset("r3", "e2"), [err("not_ready", "r3")]),
     recv(status("q1"), [status_result("q1", "aborted", episode="e1", generation=2, draining=True,
                                       abort_reason="fault")]),
-    complete_step(1, step_done(200), stale=True, state="aborted"),
-    recv(reset("r3", "e2"), effects=[begin_reset(3, "e2")], state="resetting"),
+    complete_step(1, 2, step_done(200), stale=True, state="aborted"),
+    recv(reset("r3", "e2"), effects=[begin_reset(3, 3, "e2")], state="resetting"),
 ])
 
 session("reset_failure_aborts", [
     connect(),
     recv(hello(), [hello_result()]),
-    recv(reset("r1", "e1"), effects=[begin_reset(1, "e1")]),
-    complete_reset(1, {"ok": False, "reason": "fixture login timed out"}, [err("aborted", "r1", "reset_failed")],
+    recv(reset("r1", "e1"), effects=[begin_reset(1, 1, "e1")]),
+    complete_reset(1, 1, {"ok": False, "reason": "fixture login timed out"}, [err("aborted", "r1", "reset_failed")],
                    [abort(1, "reset_failed")], state="aborted"),
     recv(reset("r1", "e1"), [err("aborted", "r1", "reset_failed")]),
     recv(step("r2", "e1", 0), [err("aborted", "r2", "reset_failed")]),
     recv(reset("r3", "e1"), [err("stale_episode", "r3")]),
-    recv(reset("r4", "e2"), effects=[begin_reset(3, "e2")], state="resetting"),
+    recv(reset("r4", "e2"), effects=[begin_reset(3, 2, "e2")], state="resetting"),
+])
+
+# A worker's reason or fault text is echoed in the error, clipped to the message bound the runners check.
+session("worker_reasons_are_clipped", [
+    connect(),
+    recv(hello(), [hello_result()]),
+    recv(reset("r1", "e1"), effects=[begin_reset(1, 1, "e1")]),
+    complete_reset(1, 1, {"ok": False, "reason": "x" * 5000}, [err("aborted", "r1", "reset_failed")],
+                   [abort(1, "reset_failed")], state="aborted"),
+    recv(reset("r2", "e2"), effects=[begin_reset(3, 2, "e2")]),
+    complete_reset(3, 2, reset_done(), [reset_result("r2", "e2", 3)]),
+    recv(step("r3", "e2", 0), effects=[begin_step(3, 3, "e2", 0)]),
+    complete_step(3, 3, {"fault": "é" * 3000}, [err("aborted", "r3", "fault")], [abort(3, "fault")],
+                  state="aborted"),
+    recv({**step("r4", "e3", 0), "x" * 3000: 1}, [err("malformed", "r4")]),
 ])
 
 session("event_overflow_aborts", [
     *started(bounds=wire_bounds(max_events=2)),
-    recv(step("r2", "e1", 0), effects=[begin_step(1, "e1", 0)]),
-    complete_step(1, step_done(200, [{"kind": "tick"}] * 3), [err("result_overflow", "r2", "result_overflow")],
+    recv(step("r2", "e1", 0), effects=[begin_step(1, 2, "e1", 0)]),
+    complete_step(1, 2, step_done(200, [{"kind": "tick"}] * 3), [err("result_overflow", "r2", "result_overflow")],
                   [abort(1, "result_overflow")], state="aborted"),
     recv(step("r3", "e1", 0), [err("aborted", "r3", "result_overflow")]),
-    recv(reset("r4", "e2"), effects=[begin_reset(3, "e2")]),
-    complete_reset(3, reset_done(), [reset_result("r4", "e2", 3)]),
-    recv(step("r5", "e2", 0), effects=[begin_step(3, "e2", 0)]),
-    complete_step(3, d := step_done(200, [{"kind": "tick"}] * 2), [step_result("r5", "e2", 0, 3, ((0, 0), (1, 0)), d)],
-                  state="awaiting_action"),
+    recv(reset("r4", "e2"), effects=[begin_reset(3, 3, "e2")]),
+    complete_reset(3, 3, reset_done(), [reset_result("r4", "e2", 3)]),
+    recv(step("r5", "e2", 0), effects=[begin_step(3, 4, "e2", 0)]),
+    complete_step(3, 4, d := step_done(200, [{"kind": "tick"}] * 2),
+                  [step_result("r5", "e2", 0, 3, ((0, 0), (1, 0)), d)], state="awaiting_action"),
 ], bounds={"max_events": 2})
 
 session("line_overflow_aborts", [
     connect(),
     recv(hello(), [hello_result(bounds=wire_bounds(max_line_bytes=2048))]),
-    recv(reset("r1", "e1"), effects=[begin_reset(1, "e1")]),
-    complete_reset(1, {"ok": True, "observations": [{"actor": i, "obs": [0.25] * 300, "mask": [1, 0, 1]}
-                                                    for i in range(2)], "sim_ms": 0},
+    recv(reset("r1", "e1"), effects=[begin_reset(1, 1, "e1")]),
+    complete_reset(1, 1, {"ok": True, "observations": [{"actor": i, "obs": [0.25] * 300, "mask": [1, 0, 1]}
+                                                       for i in range(2)], "sim_ms": 0},
                    [err("result_overflow", "r1", "result_overflow")], [abort(1, "result_overflow")], state="aborted"),
-    recv(reset("r2", "e2"), effects=[begin_reset(3, "e2")]),
-    complete_reset(3, reset_done(), [reset_result("r2", "e2", 3)], state="awaiting_action"),
+    recv(reset("r2", "e2"), effects=[begin_reset(3, 2, "e2")]),
+    complete_reset(3, 2, reset_done(), [reset_result("r2", "e2", 3)], state="awaiting_action"),
 ], bounds={"max_line_bytes": 2048})
 
 session("invalid_results_abort", [
     connect(),
     recv(hello(), [hello_result()]),
-    recv(reset("r1", "e1"), effects=[begin_reset(1, "e1")]),
-    complete_reset(1, reset_done(masks=([0, 0, 1], [1, 0, 1])), [err("aborted", "r1", "invalid_result")],
+    recv(reset("r1", "e1"), effects=[begin_reset(1, 1, "e1")]),
+    complete_reset(1, 1, reset_done(masks=([0, 0, 1], [1, 0, 1])), [err("aborted", "r1", "invalid_result")],
                    [abort(1, "invalid_result")], state="aborted"),
-    recv(reset("r2", "e2"), effects=[begin_reset(3, "e2")]),
-    complete_reset(3, {"ok": True, "observations": observations()[:1], "sim_ms": 0},
+    recv(reset("r2", "e2"), effects=[begin_reset(3, 2, "e2")]),
+    complete_reset(3, 2, {"ok": True, "observations": observations()[:1], "sim_ms": 0},
                    [err("aborted", "r2", "invalid_result")], [abort(3, "invalid_result")], state="aborted"),
-    recv(reset("r3", "e3"), effects=[begin_reset(5, "e3")]),
-    complete_reset(5, reset_done(), [reset_result("r3", "e3", 5)]),
-    recv(step("r4", "e3", 0), effects=[begin_step(5, "e3", 0)]),
-    complete_step(5, step_done(200, terminated=True, truncated=True, outcome={"reason": "external", "winner": None}),
+    recv(reset("r3", "e3"), effects=[begin_reset(5, 3, "e3")]),
+    complete_reset(5, 3, reset_done(), [reset_result("r3", "e3", 5)]),
+    recv(step("r4", "e3", 0), effects=[begin_step(5, 4, "e3", 0)]),
+    complete_step(5, 4, step_done(200, terminated=True, truncated=True,
+                                  outcome={"reason": "external", "winner": None}),
                   [err("aborted", "r4", "invalid_result")], [abort(5, "invalid_result")], state="aborted"),
-    recv(reset("r5", "e4"), effects=[begin_reset(7, "e4")]),
-    complete_reset(7, reset_done(), [reset_result("r5", "e4", 7)]),
-    recv(step("r6", "e4", 0), effects=[begin_step(7, "e4", 0)]),
-    complete_step(7, step_done(200, terminated=True, outcome={"reason": "death", "winner": None}),
+    recv(reset("r5", "e4"), effects=[begin_reset(7, 5, "e4")]),
+    complete_reset(7, 5, reset_done(), [reset_result("r5", "e4", 7)]),
+    recv(step("r6", "e4", 0), effects=[begin_step(7, 6, "e4", 0)]),
+    complete_step(7, 6, step_done(200, terminated=True, outcome={"reason": "death", "winner": None}),
                   [err("aborted", "r6", "invalid_result")], [abort(7, "invalid_result")], state="aborted"),
-    recv(reset("r7", "e5"), effects=[begin_reset(9, "e5")]),
-    complete_reset(9, reset_done(), [reset_result("r7", "e5", 9)]),
-    recv(step("r8", "e5", 0), effects=[begin_step(9, "e5", 0)]),
-    complete_step(9, {"fault": "fixture map crashed"}, [err("aborted", "r8", "fault")], [abort(9, "fault")],
+    recv(reset("r7", "e5"), effects=[begin_reset(9, 7, "e5")]),
+    complete_reset(9, 7, reset_done(), [reset_result("r7", "e5", 9)]),
+    recv(step("r8", "e5", 0), effects=[begin_step(9, 8, "e5", 0)]),
+    complete_step(9, 8, {"fault": "fixture map crashed"}, [err("aborted", "r8", "fault")], [abort(9, "fault")],
                   state="aborted"),
+])
+
+# Worker payload types are as exact as request types: a bool or a float is never an actor index, a mask bit or a
+# millisecond count, in either language.
+session("worker_payload_types_are_exact", [
+    connect(),
+    recv(hello(), [hello_result()]),
+    recv(reset("r1", "e1"), effects=[begin_reset(1, 1, "e1")]),
+    complete_reset(1, 1, {"ok": True, "observations": observations(actors=(False, True)), "sim_ms": 0},
+                   [err("aborted", "r1", "invalid_result")], [abort(1, "invalid_result")], state="aborted"),
+    recv(reset("r2", "e2"), effects=[begin_reset(3, 2, "e2")]),
+    complete_reset(3, 2, {"ok": True, "observations": observations(actors=(0.0, 1.0)), "sim_ms": 0},
+                   [err("aborted", "r2", "invalid_result")], [abort(3, "invalid_result")], state="aborted"),
+    recv(reset("r3", "e3"), effects=[begin_reset(5, 3, "e3")]),
+    complete_reset(5, 3, reset_done(), [reset_result("r3", "e3", 5)]),
+    recv(step("r4", "e3", 0), effects=[begin_step(5, 4, "e3", 0)]),
+    complete_step(5, 4, step_done(200, reward_actors=(False, 1)), [err("aborted", "r4", "invalid_result")],
+                  [abort(5, "invalid_result")], state="aborted"),
+    recv(reset("r5", "e4"), effects=[begin_reset(7, 5, "e4")]),
+    complete_reset(7, 5, reset_done(), [reset_result("r5", "e4", 7)]),
+    recv(step("r6", "e4", 0), effects=[begin_step(7, 6, "e4", 0)]),
+    complete_step(7, 6, step_done(200, reward_actors=(0, 1.0)), [err("aborted", "r6", "invalid_result")],
+                  [abort(7, "invalid_result")], state="aborted"),
+    recv(reset("r7", "e5"), effects=[begin_reset(9, 7, "e5")]),
+    complete_reset(9, 7, {"ok": True, "observations": observations(masks=([True, False, True], [1, 0, 1])),
+                          "sim_ms": 0},
+                   [err("aborted", "r7", "invalid_result")], [abort(9, "invalid_result")], state="aborted"),
+    recv(reset("r8", "e6"), effects=[begin_reset(11, 8, "e6")]),
+    complete_reset(11, 8, {"ok": True, "observations": observations(values=((True, 0.5), (1.0, 0.5))), "sim_ms": 0},
+                   [err("aborted", "r8", "invalid_result")], [abort(11, "invalid_result")], state="aborted"),
+    recv(reset("r9", "e7"), effects=[begin_reset(13, 9, "e7")]),
+    complete_reset(13, 9, {"ok": True, "observations": observations(), "sim_ms": 1.0},
+                   [err("aborted", "r9", "invalid_result")], [abort(13, "invalid_result")], state="aborted"),
+    recv(reset("r10", "e8"), effects=[begin_reset(15, 10, "e8")]),
+    complete_reset(15, 10, reset_done(), [reset_result("r10", "e8", 15)], state="awaiting_action"),
 ])
 
 session("disconnect_mid_step", [
     *started(),
-    recv(step("r2", "e1", 0), effects=[begin_step(1, "e1", 0)]),
+    recv(step("r2", "e1", 0), effects=[begin_step(1, 2, "e1", 0)]),
     op("disconnect", effects=[abort(1, "disconnect"), release("disconnect")], state="closing"),
     callback(1, False),
     connect("s2"),
     recv(hello(), [hello_result(session="s2", state="closing")]),
     recv(reset("r1", "e1", session="s2"), [err("not_ready", "r1")]),
     recv(status("q1"), [status_result("q1", "closing", session="s2", generation=2, draining=True)]),
-    complete_step(1, step_done(200), stale=True, state="ready"),
-    recv(reset("r1", "e1", session="s2"), effects=[begin_reset(3, "e1")], state="resetting"),
-    complete_reset(3, reset_done(), [reset_result("r1", "e1", 3, session="s2")], state="awaiting_action"),
+    complete_step(1, 2, step_done(200), stale=True, state="ready"),
+    recv(reset("r1", "e1", session="s2"), effects=[begin_reset(3, 3, "e1")], state="resetting"),
+    complete_reset(3, 3, reset_done(), [reset_result("r1", "e1", 3, session="s2")], state="awaiting_action"),
 ])
 
 session("disconnect_while_paused", [
@@ -502,26 +675,26 @@ session("disconnect_while_paused", [
     recv(hello(), [hello_result(session="s2")]),
     recv(step("r2", "e1", 0, session="s2"), [err("not_ready", "r2")]),
     recv(step("r3", "e1", 0), [err("bad_session", "r3")]),
-    recv(reset("r4", "e1", session="s2"), effects=[begin_reset(3, "e1")]),
+    recv(reset("r4", "e1", session="s2"), effects=[begin_reset(3, 2, "e1")]),
 ])
 
 session("disconnect_while_resetting", [
     connect(),
     recv(hello(), [hello_result()]),
-    recv(reset("r1", "e1"), effects=[begin_reset(1, "e1")]),
+    recv(reset("r1", "e1"), effects=[begin_reset(1, 1, "e1")]),
     op("disconnect", effects=[abort(1, "disconnect"), release("disconnect")], state="closing"),
     op("drained", state="ready"),
     connect("s2"),
     recv(hello(), [hello_result(session="s2")]),
-    complete_reset(1, reset_done(), stale=True, state="ready"),
-    recv(reset("r1", "e1", session="s2"), effects=[begin_reset(3, "e1")], state="resetting"),
+    complete_reset(1, 1, reset_done(), stale=True, state="ready"),
+    recv(reset("r1", "e1", session="s2"), effects=[begin_reset(3, 2, "e1")], state="resetting"),
 ])
 
 session("disconnect_after_terminal_and_before_hello", [
     *started(),
-    recv(step("r2", "e1", 0), effects=[begin_step(1, "e1", 0)]),
-    complete_step(1, d := step_done(120, terminated=True, outcome={"reason": "simultaneous_death", "winner": None},
-                                    elapsed_ms=120),
+    recv(step("r2", "e1", 0), effects=[begin_step(1, 2, "e1", 0)]),
+    complete_step(1, 2, d := step_done(120, terminated=True, outcome={"reason": "simultaneous_death", "winner": None},
+                                       elapsed_ms=120),
                   [step_result("r2", "e1", 0, 1, ((0, 0), (1, 0)), d)], state="terminal"),
     op("disconnect", effects=[release("disconnect")], state="ready"),
     connect("s2"),
@@ -531,12 +704,12 @@ session("disconnect_after_terminal_and_before_hello", [
 
 session("close_while_stepping", [
     *started(),
-    recv(step("r2", "e1", 0), effects=[begin_step(1, "e1", 0)]),
+    recv(step("r2", "e1", 0), effects=[begin_step(1, 2, "e1", 0)]),
     recv(step("r2", "e1", 0)),
     recv(close(reason="controller done"), [err("aborted", "r2", "closed"), err("aborted", "r2", "closed"),
                                            close_result()],
          [abort(1, "closed"), release("closed"), CLOSE_CONNECTION], state="closing"),
-    complete_step(1, step_done(200), stale=True, state="ready"),
+    complete_step(1, 2, step_done(200), stale=True, state="ready"),
 ])
 
 session("close_while_paused", [
@@ -548,19 +721,19 @@ session("close_while_paused", [
 
 session("terminal_outcomes", [
     *started(),
-    recv(step("r2", "e1", 0), effects=[begin_step(1, "e1", 0)]),
-    complete_step(1, d := step_done(150, terminated=True, outcome={"reason": "simultaneous_death", "winner": None},
-                                    elapsed_ms=150),
+    recv(step("r2", "e1", 0), effects=[begin_step(1, 2, "e1", 0)]),
+    complete_step(1, 2, d := step_done(150, terminated=True, outcome={"reason": "simultaneous_death", "winner": None},
+                                       elapsed_ms=150),
                   [step_result("r2", "e1", 0, 1, ((0, 0), (1, 0)), d)], state="terminal"),
-    recv(reset("r3", "e2"), effects=[begin_reset(2, "e2")]),
-    complete_reset(2, reset_done(), [reset_result("r3", "e2", 2)]),
-    recv(step("r4", "e2", 0), effects=[begin_step(2, "e2", 0)]),
-    complete_step(2, d := step_done(200, truncated=True, outcome={"reason": "external", "winner": None}),
+    recv(reset("r3", "e2"), effects=[begin_reset(2, 3, "e2")]),
+    complete_reset(2, 3, reset_done(), [reset_result("r3", "e2", 2)]),
+    recv(step("r4", "e2", 0), effects=[begin_step(2, 4, "e2", 0)]),
+    complete_step(2, 4, d := step_done(200, truncated=True, outcome={"reason": "external", "winner": None}),
                   [step_result("r4", "e2", 0, 2, ((0, 0), (1, 0)), d)], state="terminal"),
-    recv(reset("r5", "e3"), effects=[begin_reset(3, "e3")]),
-    complete_reset(3, reset_done(sim_ms=179800), [reset_result("r5", "e3", 3, sim_ms=179800)]),
-    recv(step("r6", "e3", 0), effects=[begin_step(3, "e3", 0)]),
-    complete_step(3, d := step_done(180000, terminated=True, outcome={"reason": "time_limit", "winner": None}),
+    recv(reset("r5", "e3"), effects=[begin_reset(3, 5, "e3")]),
+    complete_reset(3, 5, reset_done(sim_ms=179800), [reset_result("r5", "e3", 3, sim_ms=179800)]),
+    recv(step("r6", "e3", 0), effects=[begin_step(3, 6, "e3", 0)]),
+    complete_step(3, 6, d := step_done(180000, terminated=True, outcome={"reason": "time_limit", "winner": None}),
                   [step_result("r6", "e3", 0, 3, ((0, 0), (1, 0)), d)], state="terminal"),
     recv(step("r7", "e3", 1), [err("not_ready", "r7")]),
 ])
@@ -571,8 +744,11 @@ session("malformed_requests_change_nothing", [
     recv({**step("r2", "e1", 0), "extra": 1}, [err("malformed", "r2")]),
     recv({**step("r2", "e1", 0), "v": 2}, [err("unsupported_version", "r2")]),
     recv({**step("r2", "e1", 0), "decision": "0"}, [err("malformed", "r2")]),
+    recv('﻿{"v":1,"type":"status","id":"q9"}', [err("malformed", None)]),
+    recv('{"v":1,"type":"step","id":"r2","session":"s1","episode":"e1","actions":[],"decision":' + "9" * 400 + "}",
+         [err("malformed", None)]),
     recv(status("q1"), [status_result("q1", "awaiting_action", episode="e1", decision=0, generation=1)]),
-    recv(step("r2", "e1", 0), effects=[begin_step(1, "e1", 0)], state="stepping"),
+    recv(step("r2", "e1", 0), effects=[begin_step(1, 2, "e1", 0)], state="stepping"),
 ])
 
 session("hello_version_and_scenario_checks", [
@@ -585,15 +761,15 @@ session("hello_version_and_scenario_checks", [
                              "scenario": "fixture_duel_v1"}),
          [hello_result("h4")]),
     recv(reset("r1", "e1", scenario="other_v1"), [err("unsupported_version", "r1")]),
-    recv(reset("r2", "e1", scenario="fixture_duel_v1"), effects=[begin_reset(1, "e1")]),
+    recv(reset("r2", "e1", scenario="fixture_duel_v1"), effects=[begin_reset(1, 1, "e1")]),
 ])
 
 session("evicted_duplicates_still_cannot_apply", [
     *started(bounds=wire_bounds(result_cache=2)),
-    recv(step("r2", "e1", 0), effects=[begin_step(1, "e1", 0)]),
-    complete_step(1, d2 := step_done(200), [r2 := step_result("r2", "e1", 0, 1, ((0, 0), (1, 0)), d2)]),
-    recv(step("r3", "e1", 1), effects=[begin_step(1, "e1", 1)]),
-    complete_step(1, d3 := step_done(400), [r3 := step_result("r3", "e1", 1, 1, ((0, 0), (1, 0)), d3)]),
+    recv(step("r2", "e1", 0), effects=[begin_step(1, 2, "e1", 0)]),
+    complete_step(1, 2, d2 := step_done(200), [r2 := step_result("r2", "e1", 0, 1, ((0, 0), (1, 0)), d2)]),
+    recv(step("r3", "e1", 1), effects=[begin_step(1, 3, "e1", 1)]),
+    complete_step(1, 3, d3 := step_done(400), [r3 := step_result("r3", "e1", 1, 1, ((0, 0), (1, 0)), d3)]),
     recv(step("r2", "e1", 0), [r2]),
     recv(step("r3", "e1", 1), [r3]),
     recv(reset("r1", "e1"), [err("stale_episode", "r1")]),
@@ -606,7 +782,7 @@ session("fault_without_a_session", [
     connect(),
     recv(hello(), [hello_result(state="aborted")]),
     recv(status("q1"), [status_result("q1", "aborted", abort_reason="fault")]),
-    recv(reset("r1", "e1"), effects=[begin_reset(1, "e1")], state="resetting"),
+    recv(reset("r1", "e1"), effects=[begin_reset(1, 1, "e1")], state="resetting"),
     recv(status("q2"), [status_result("q2", "resetting", episode="e1", generation=1, in_flight="r1")]),
 ])
 

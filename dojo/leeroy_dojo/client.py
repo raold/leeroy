@@ -2,8 +2,10 @@
 
 request() sends one line and waits for the response with the same id. On a timeout it resends the identical line,
 which the worker treats as an exact duplicate: it never applies twice, and every copy is answered once, so the extra
-answers are owed and discarded when they arrive. A lost connection is never retried: reconnecting starts a new session
-and the old episode is aborted, so nobody has to guess whether the last step was applied.
+answers are owed and discarded when they arrive. Any other answer is one this client never asked for, which breaks
+the contract, so request() raises UnexpectedAnswer rather than guess. A lost connection is never retried:
+reconnecting starts a new session and the old episode is aborted, so nobody has to guess whether the last step was
+applied.
 """
 
 from __future__ import annotations
@@ -33,6 +35,14 @@ class ConnectionLost(Exception):
     pass
 
 
+class UnexpectedAnswer(Exception):
+    """An answer to no request this client sent, or more copies than it sent."""
+
+    def __init__(self, answer: dict[str, Any]):
+        self.answer = answer
+        super().__init__(f"unexpected answer {answer.get('type')} for id {answer.get('id')!r}")
+
+
 class DojoClient:
     def __init__(self, *, timeout: float = 10.0, retries: int = 2, max_line_bytes: int = MAX_LINE_BYTES,
                  id_prefix: str = "q"):
@@ -46,6 +56,7 @@ class DojoClient:
         self.episode: str | None = None
         self.decision: int | None = None
         self.resends = 0
+        self.discarded = 0                  # owed duplicate answers dropped on arrival
         self._buffer = bytearray()
         self._owed: Counter[str] = Counter()
         self._ids = itertools.count(1)
@@ -72,6 +83,11 @@ class DojoClient:
 
     def next_id(self, kind: str = "") -> str:
         return f"{self.id_prefix}{kind}{next(self._ids)}"
+
+    @property
+    def owed(self) -> dict[str, int]:
+        """Answers still to come for copies of earlier requests, by id."""
+        return {rid: n for rid, n in self._owed.items() if n > 0}
 
     # --- lines ---
 
@@ -120,6 +136,9 @@ class DojoClient:
         rid = message["id"]
         timeout = self.timeout if timeout is None else timeout
         retries = self.retries if retries is None else retries
+        copies = (self.hello_result or {}).get("bounds", {}).get("max_copies")
+        if isinstance(copies, int) and copies >= 1:
+            retries = min(retries, copies - 1)   # a copy beyond the worker's bound would only be answered busy
         resent = 0
         self.send_line(line)
         deadline = time.monotonic() + timeout
@@ -127,6 +146,7 @@ class DojoClient:
             left = deadline - time.monotonic()
             if left <= 0:
                 if resent >= retries:
+                    self._owed[rid] += resent + 1
                     raise TimeoutError(f"no answer to {rid} after {resent} resends")
                 resent += 1
                 self.resends += 1
@@ -145,9 +165,11 @@ class DojoClient:
                 return answer
             if aid is not None and self._owed[aid] > 0:
                 self._owed[aid] -= 1
+                self.discarded += 1
                 continue
             if answer.get("type") == "error" and aid is None:
                 raise DojoError(answer)
+            raise UnexpectedAnswer(answer)
 
     def track(self, answer: dict[str, Any]) -> None:
         """Follows the session, episode and decision a result reports; request() calls it for every answer."""

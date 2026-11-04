@@ -2,8 +2,11 @@
 
 The loopback transport feeds the lifecycle state machine, and the state machine's effects drive fake_game.FakeDuel,
 exactly as the native worker will drive the core: the world advances only on an accepted step, an abort or a
-disconnect tears the episode down, and completions carry the generation they started under. hold_steps() parks
-accepted steps without completing them, which is how tests make a step stay in flight.
+disconnect tears the episode down, and completions carry the generation and token of the operation they finish.
+hold_steps() parks accepted steps without completing them, which is how tests make a step stay in flight.
+
+applied, resets and aborted record what the world did, for tests and the smoke; each keeps at most `history` entries,
+oldest first out, so a long-running worker does not grow without bound.
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ import secrets
 import threading
 import time
 from collections import Counter, deque
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -23,21 +27,27 @@ from .protocol import Bounds
 from .transport import Event, LoopbackServer
 
 
+HISTORY = 100_000
+
+
 class FakeWorker:
     def __init__(self, *, host: str = "127.0.0.1", port: int = 0, bounds: Bounds | None = None,
-                 time_limit_ms: int = fake_game.TIME_LIMIT_MS, inbox_capacity: int = 16, outbox_limit: int = 64):
-        self.bounds = bounds or Bounds()
+                 time_limit_ms: int = fake_game.TIME_LIMIT_MS, inbox_capacity: int = 16, outbox_limit: int = 64,
+                 history: int = HISTORY):
+        # A duplicate beyond the inbox's worth of copies is answered busy rather than owed (Bounds.max_copies).
+        self.bounds = replace(bounds or Bounds(), max_copies=max(inbox_capacity, 1))
         self.game = fake_game.FakeDuel(time_limit_ms)
         self.lifecycle = Lifecycle(fake_game.info(time_limit_ms), self.bounds)
         self.server = LoopbackServer(self.bounds, inbox_capacity=inbox_capacity, outbox_limit=outbox_limit)
         self.host = host
         self.requested_port = port
         self.nonce = secrets.token_hex(3)
+        self.history = max(history, 1)
         self.applied: Counter[tuple[str, int]] = Counter()     # (episode, decision) -> times the world advanced
-        self.resets: list[str] = []
-        self.aborted: list[tuple[str, str]] = []                # (episode, reason)
+        self.resets: deque[str] = deque(maxlen=self.history)
+        self.aborted: deque[tuple[str, str]] = deque(maxlen=self.history)   # (episode, reason)
         self.lock = threading.RLock()
-        self._episodes: dict[int, str] = {}
+        self._episode: tuple[int, str] | None = None            # (generation, episode) of the latest reset
         self._connection = 0
         self._held: deque[dict[str, Any]] = deque()
         self._holding = False
@@ -125,10 +135,10 @@ class FakeWorker:
         for effect in out.effects:
             kind = effect["effect"]
             if kind == "begin_reset":
-                self._episodes[effect["generation"]] = effect["episode"]
+                self._episode = (effect["generation"], effect["episode"])
                 self.resets.append(effect["episode"])
                 payload = self.game.reset(effect["scenario_seed"])
-                self._apply(self.lifecycle.complete_reset(effect["generation"], payload))
+                self._apply(self.lifecycle.complete_reset(effect["generation"], effect["token"], payload))
             elif kind == "begin_step":
                 if self._holding:
                     self._held.append(effect)
@@ -136,16 +146,20 @@ class FakeWorker:
                     self._run_step(effect)
             elif kind == "abort":
                 self.game.abort()
-                self.aborted.append((self._episodes.get(effect["generation"], "?"), effect["reason"]))
+                generation, episode = self._episode or (None, "?")
+                self.aborted.append((episode if generation == effect["generation"] else "?", effect["reason"]))
             elif kind == "release":
                 self.game.abort()
             elif kind == "close_connection":
                 self.server.close(connection)
 
     def _run_step(self, effect: dict[str, Any]) -> None:
-        if not self.lifecycle.accepts_callback(effect["generation"]):
+        generation, token = effect["generation"], effect["token"]
+        if not self.lifecycle.accepts_callback(generation):
             # Abandoned while parked: report it so the state machine stops draining; the world never moves.
-            self._apply(self.lifecycle.complete_step(effect["generation"], {"fault": "abandoned"}))
+            self._apply(self.lifecycle.complete_step(generation, token, {"fault": "abandoned"}))
             return
         self.applied[(effect["episode"], effect["decision"])] += 1
-        self._apply(self.lifecycle.complete_step(effect["generation"], self.game.step(effect["actions"])))
+        while len(self.applied) > self.history:
+            del self.applied[next(iter(self.applied))]
+        self._apply(self.lifecycle.complete_step(generation, token, self.game.step(effect["actions"])))

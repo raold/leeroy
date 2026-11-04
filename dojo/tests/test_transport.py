@@ -94,6 +94,44 @@ class TransportTest(unittest.TestCase):
         self.assertEqual(third.decoded.request.id, "q2")
         self.assertIsNone(self.server.poll(0.1), "blank lines are not requests")
 
+    def test_only_spaces_tabs_and_carriage_returns_are_blank(self):
+        """A lone vertical tab or form feed used to be skipped here but decoded (and refused) in C++."""
+        p = self.peer()
+        self.event("connected")
+        p.send(" \t\r\n\r\r\n\n\x0b\n\x0c\n" + status(1))
+        first, second, third = self.event("line"), self.event("line"), self.event("line")
+        self.assertEqual((first.decoded.code, second.decoded.code), ("malformed", "malformed"))
+        self.assertEqual(third.decoded.request.id, "q1")
+        self.assertIsNone(self.server.poll(0.1))
+
+    def test_a_refused_controller_cannot_hold_a_thread(self):
+        """The refusal drains for linger_s in all, however slowly the second controller trickles bytes."""
+        self.peer()
+        self.event("connected")
+        p2 = self.peer()
+        self.assertEqual(p2.line()["code"], "busy")
+        start = time.monotonic()
+        while time.monotonic() - start < 3.0:   # the busy line came with a half-close; only a full close stops sends
+            try:
+                p2.sock.sendall(b"x")
+            except OSError:
+                break
+            time.sleep(0.05)
+        else:
+            self.fail("the refusal outlived its linger")
+        self.assertLess(time.monotonic() - start, 2.0)
+
+    def test_finished_connection_threads_are_forgotten(self):
+        for _ in range(5):
+            p = self.peer()
+            self.event("connected")
+            p.close()
+            self.event("disconnected")
+        time.sleep(0.3)
+        p = self.peer()
+        self.event("connected")
+        self.assertLessEqual(len(self.server._threads), 1 + 2 + 2)   # accept, the live pair and one closing pair
+
     def test_a_second_controller_is_refused(self):
         p1 = self.peer()
         self.event("connected")
@@ -152,6 +190,23 @@ class TransportTest(unittest.TestCase):
         self.assertTrue(all(r is not None and len(r["pad"]) == 1_000_000 for r in received))
         ids = [self.event("line").decoded.request.id for _ in range(5)]
         self.assertEqual(ids, [f"q{i}" for i in range(5)])
+
+    def test_a_buffered_burst_stops_at_the_outbox_limit(self):
+        """Lines already in the reader's buffer used to keep flowing while answers piled up unread; now each line
+        waits for the outbox, as in C++, so the outbox stays within its limit plus what the inbox held."""
+        p = self.peer()
+        serial = self.event("connected").connection
+        big = {"v": 1, "type": "status_result", "id": "x", "pad": "w" * 1_000_000}
+        p.send("".join(status(i) for i in range(40)))   # one write: the reader gets it in one or two chunks
+        answered = 0
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            e = self.server.poll(0.05)
+            if e is not None and e.kind == "line":
+                self.server.send(serial, big)
+                answered += 1
+        self.assertLess(answered, 40, "the controller reads nothing, so the burst must stall")
+        self.assertLessEqual(self.server.stats.max_outbox, self.server.outbox_limit + self.server.inbox_capacity)
 
     def test_sends_for_an_old_connection_are_dropped(self):
         p1 = self.peer()

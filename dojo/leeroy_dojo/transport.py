@@ -19,7 +19,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from .protocol import Bounds, Decoded, ErrorCode, decode_request, encode, error
+from .protocol import Bounds, Decoded, ErrorCode, decode_request, encode, error, is_blank_line
 
 LOOPBACK = ("127.0.0.1", "::1", "localhost")
 
@@ -159,6 +159,7 @@ class LoopbackServer:
 
     def _spawn(self, target: Callable[..., None], name: str, *args: Any) -> None:
         thread = threading.Thread(target=target, args=args, name=name, daemon=True)
+        self._threads = [t for t in self._threads if t.is_alive()]   # finished connections are forgotten
         self._threads.append(thread)
         thread.start()
 
@@ -191,12 +192,16 @@ class LoopbackServer:
             self._spawn(self._write_loop, f"dojo-write-{conn.serial}", conn)
 
     def _refuse(self, sock: socket.socket) -> None:
+        """Answers busy and drains until EOF, for at most linger_s in all however slowly the peer trickles."""
+        deadline = time.monotonic() + self.linger_s
         try:
             sock.settimeout(self.linger_s)
             sock.sendall(_busy_line("another controller is connected"))
             sock.shutdown(socket.SHUT_WR)
-            while sock.recv(4096):
-                pass
+            while (left := deadline - time.monotonic()) > 0:
+                sock.settimeout(left)
+                if not sock.recv(4096):
+                    break
         except OSError:
             pass
         finally:
@@ -237,9 +242,11 @@ class LoopbackServer:
                         self._too_long(conn)
                         buffer.clear()
                         break
-                    line = bytes(buffer[:end]).rstrip(b"\r")
+                    line = bytes(buffer[:end])
                     del buffer[:end + 1]
-                    if not line.strip():
+                    if line.endswith(b"\r"):
+                        line = line[:-1]
+                    if is_blank_line(line):
                         continue
                     if not self._enqueue(conn, decode_request(line, self.bounds)):
                         return
@@ -256,8 +263,10 @@ class LoopbackServer:
             self._lock.notify_all()
 
     def _enqueue(self, conn: _Connection, decoded: Decoded) -> bool:
+        """Waits for room in the inbox, and for the outbox to drain, before each line, as the C++ transport does: a
+        buffered burst cannot pile up answers the controller is not reading."""
         with self._lock:
-            while self._lines_queued >= self.inbox_capacity:
+            while self._lines_queued >= self.inbox_capacity or len(conn.outbox) >= self.outbox_limit:
                 if self._stopping or conn.dead:
                     return False
                 self.stats.read_pauses += 1

@@ -2,14 +2,15 @@
 
 booting -> ready -> resetting -> awaiting_action -> stepping -> awaiting_action | terminal, with aborted and closing
 exits. The transport feeds it connections and decoded requests; the worker adapter performs the effects it emits
-(begin_reset, begin_step, abort, release, close_connection) and reports completions tagged with the generation they
-started under. A completion or callback from an older generation is ignored, so an abandoned operation can never
-touch a new episode.
+(begin_reset, begin_step, abort, release, close_connection) and reports completions tagged with the generation and
+the token of the operation they finish. A completion or callback from an older generation is ignored, so an abandoned
+operation can never touch a new episode, and a completion whose token is not the operation in flight is ignored, so a
+late or repeated completion of an earlier step can never finish the next one.
 
-At most one mutating request (reset or step) is in flight. An exact duplicate of the in-flight request is answered
-again when it completes; an exact duplicate of a recent result is answered from the bounded cache without touching
-the world; a different payload under a known id is a conflicting_duplicate. Every request line gets exactly one
-response line.
+At most one mutating request (reset or step) is in flight. Up to bounds.max_copies exact duplicates of it, the
+original included, are answered again when it completes and further copies get busy; an exact duplicate of a recent
+result is answered from the bounded cache without touching the world; a different payload under a known id is a
+conflicting_duplicate. Every request line gets exactly one response line.
 
 modules/mod-dojo/src/Lib/DojoLifecycle.* is the same machine in C++; the shared golden fixture checks they agree.
 """
@@ -23,7 +24,7 @@ from typing import Any
 
 from .protocol import (
     MAX_OBSERVATION_VALUES, PROTOCOL_VERSION, RECENT_EPISODES, AbortReason, Bounds, Decoded, ErrorCode, Request,
-    encode, error, is_id, is_int, is_number, is_text,
+    clip, encode, error, is_id, is_int, is_number, is_text,
 )
 
 BOOTING = "booting"
@@ -54,6 +55,7 @@ class Output:
 class _InFlight:
     kind: str
     request: Request
+    token: int
     copies: int = 1
     actions: list[dict[str, int]] = field(default_factory=list)
 
@@ -72,7 +74,8 @@ def check_info(info: dict[str, Any], bounds: Bounds) -> None:
     if not isinstance(actors, list) or not 1 <= len(actors) <= bounds.max_actors:
         raise ValueError("bad actors")
     for slot, actor in enumerate(actors):
-        if not isinstance(actor, dict) or actor.get("slot") != slot or not is_int(actor.get("team"), 0, 255):
+        if not isinstance(actor, dict) or set(actor) != {"slot", "team"} or not is_int(actor["slot"], slot, slot) \
+                or not is_int(actor["team"], 0, 255):
             raise ValueError("bad actors")
     actions = info["actions"]
     if not isinstance(actions, list) or not actions or actions[0] != "noop" or not all(is_id(a) for a in actions):
@@ -80,6 +83,10 @@ def check_info(info: dict[str, Any], bounds: Bounds) -> None:
     for key in ("worker", "clock", "rng"):
         if not isinstance(info[key], dict):
             raise ValueError(f"bad {key}")
+    try:
+        encode(info).encode("utf-8")
+    except (TypeError, ValueError, UnicodeError, RecursionError):
+        raise ValueError("worker info is not encodable JSON") from None
 
 
 class Lifecycle:
@@ -95,7 +102,8 @@ class Lifecycle:
         self.episode: str | None = None
         self.decision: int | None = None
         self.generation = 0
-        self.draining: int | None = None
+        self.tokens = 0                                  # the last operation token handed out, never reused
+        self.draining: tuple[int, int] | None = None    # (generation, token) of an abandoned operation
         self.abort_reason: str | None = None
         self._inflight: _InFlight | None = None
         self._masks: list[list[int]] | None = None
@@ -170,10 +178,13 @@ class Lifecycle:
             return out
         req = decoded.request
         if self._inflight is not None and self._inflight.request.id == req.id:
-            if self._inflight.request.fingerprint == req.fingerprint:
-                self._inflight.copies += 1
-            else:
+            if self._inflight.request.fingerprint != req.fingerprint:
                 out.send.append(error(ErrorCode.CONFLICTING_DUPLICATE, req.id, "id is in flight with another payload"))
+            elif self._inflight.copies >= max(self.bounds.max_copies, 1):
+                out.send.append(error(ErrorCode.BUSY, req.id, f"{req.id} is in flight with "
+                                      f"{self._inflight.copies} copies owed"))
+            else:
+                self._inflight.copies += 1
             return out
         if req.id in self._cache:
             fingerprint, response = self._cache[req.id]
@@ -198,14 +209,14 @@ class Lifecycle:
             return out
         return self._reset(req) if req.type == "reset" else self._step(req)
 
-    def complete_reset(self, generation: int, payload: dict[str, Any]) -> Output:
-        inflight = self._current("reset", generation)
+    def complete_reset(self, generation: int, token: int, payload: dict[str, Any]) -> Output:
+        inflight = self._current("reset", generation, token)
         if inflight is None:
             return Output(stale=True)
         out = Output()
         if not isinstance(payload, dict) or payload.get("ok") is not True:
             reason = payload.get("reason", "reset failed") if isinstance(payload, dict) else "reset failed"
-            self._fail(out, ErrorCode.ABORTED, AbortReason.RESET_FAILED, str(reason))
+            self._fail(out, ErrorCode.ABORTED, AbortReason.RESET_FAILED, clip(str(reason)))
             return out
         sim_ms = payload.get("sim_ms", 0)
         masks = self._check_observations(payload.get("observations"))
@@ -227,8 +238,8 @@ class Lifecycle:
         self._masks = masks
         return out
 
-    def complete_step(self, generation: int, payload: dict[str, Any]) -> Output:
-        inflight = self._current("step", generation)
+    def complete_step(self, generation: int, token: int, payload: dict[str, Any]) -> Output:
+        inflight = self._current("step", generation, token)
         if inflight is None:
             return Output(stale=True)
         out = Output()
@@ -236,7 +247,7 @@ class Lifecycle:
             self._fail(out, ErrorCode.ABORTED, AbortReason.INVALID_RESULT, "step result is not an object")
             return out
         if "fault" in payload:
-            self._fail(out, ErrorCode.ABORTED, AbortReason.FAULT, str(payload["fault"]))
+            self._fail(out, ErrorCode.ABORTED, AbortReason.FAULT, clip(str(payload["fault"])))
             return out
         events = payload.get("events")
         if isinstance(events, list) and len(events) > self.bounds.max_events:
@@ -333,10 +344,12 @@ class Lifecycle:
         self.decision = None
         self._masks = None
         self.abort_reason = None
-        self._inflight = _InFlight("reset", req)
+        self.tokens += 1
+        self._inflight = _InFlight("reset", req, self.tokens)
         self.state = RESETTING
-        out.effects.append({"effect": "begin_reset", "generation": self.generation, "episode": self.episode,
-                            "scenario": self.info["scenario"], "scenario_seed": body["scenario_seed"]})
+        out.effects.append({"effect": "begin_reset", "generation": self.generation, "token": self.tokens,
+                            "episode": self.episode, "scenario": self.info["scenario"],
+                            "scenario_seed": body["scenario_seed"]})
         return out
 
     def _step(self, req: Request) -> Output:
@@ -369,19 +382,21 @@ class Lifecycle:
             return out
         actions = [{"actor": actor, "action": chosen[actor], "action_id": self.decision * self.actor_count + actor}
                    for actor in range(self.actor_count)]
-        self._inflight = _InFlight("step", req, actions=actions)
+        self.tokens += 1
+        self._inflight = _InFlight("step", req, self.tokens, actions=actions)
         self.state = STEPPING
-        out.effects.append({"effect": "begin_step", "generation": self.generation, "episode": self.episode,
-                            "decision": self.decision, "actions": copy.deepcopy(actions)})
+        out.effects.append({"effect": "begin_step", "generation": self.generation, "token": self.tokens,
+                            "episode": self.episode, "decision": self.decision, "actions": copy.deepcopy(actions)})
         return out
 
     # --- helpers ---
 
-    def _current(self, kind: str, generation: int) -> _InFlight | None:
+    def _current(self, kind: str, generation: int, token: int) -> _InFlight | None:
+        """The operation a completion finishes: kind, generation and token must all be the one in flight."""
         inflight = self._inflight
-        if inflight is not None and inflight.kind == kind and generation == self.generation:
+        if inflight is not None and (inflight.kind, generation, token) == (kind, self.generation, inflight.token):
             return inflight
-        if self.draining is not None and generation == self.draining:
+        if self.draining is not None and self.draining == (generation, token):
             self.drained()
         return None
 
@@ -390,7 +405,7 @@ class Lifecycle:
         if self.state in _LIVE:
             out.effects.append({"effect": "abort", "generation": self.generation, "reason": reason})
             if self._inflight is not None:
-                self.draining = self.generation
+                self.draining = (self.generation, self._inflight.token)
             self.generation += 1
         self._inflight = None
 
@@ -423,7 +438,7 @@ class Lifecycle:
     def _fits(self, out: Output, response: dict[str, Any]) -> bool:
         try:
             size = len(encode(response).encode("utf-8"))
-        except (ValueError, UnicodeError):
+        except (TypeError, ValueError, UnicodeError, RecursionError):
             self._fail(out, ErrorCode.ABORTED, AbortReason.INVALID_RESULT, "result is not encodable")
             return False
         if size > self.bounds.max_line_bytes:
@@ -449,7 +464,7 @@ class Lifecycle:
             return None
         masks = []
         for slot, o in enumerate(observations):
-            if not isinstance(o, dict) or set(o) != {"actor", "obs", "mask"} or o["actor"] != slot:
+            if not isinstance(o, dict) or set(o) != {"actor", "obs", "mask"} or not is_int(o["actor"], slot, slot):
                 return None
             values, mask = o["obs"], o["mask"]
             if not isinstance(values, list) or len(values) > MAX_OBSERVATION_VALUES \
@@ -476,8 +491,9 @@ class Lifecycle:
         if not isinstance(rewards, list) or len(rewards) != self.actor_count:
             return None
         for slot, r in enumerate(rewards):
-            if not isinstance(r, dict) or set(r) != {"actor", "terminal", "shaping"} or r["actor"] != slot \
-                    or not is_number(r["terminal"]) or not is_number(r["shaping"]):
+            if not isinstance(r, dict) or set(r) != {"actor", "terminal", "shaping"} \
+                    or not is_int(r["actor"], slot, slot) or not is_number(r["terminal"]) \
+                    or not is_number(r["shaping"]):
                 return None
         terminated, truncated, outcome = payload["terminated"], payload["truncated"], payload["outcome"]
         if not isinstance(terminated, bool) or not isinstance(truncated, bool) or (terminated and truncated):

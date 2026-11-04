@@ -36,11 +36,6 @@ std::string ErrorLine(std::string_view code, std::string_view message)
 {
     return Encode(MakeError(code, std::nullopt, message));
 }
-
-bool IsBlank(std::string_view line)
-{
-    return std::all_of(line.begin(), line.end(), [](char c) { return c == ' ' || c == '\t' || c == '\r'; });
-}
 }
 
 struct Transport::Impl
@@ -231,7 +226,7 @@ struct Transport::Impl
             std::lock_guard<std::mutex> lock(_mutex);
             closing = _closeRequested;   // the session has ended; what follows is drained, not delivered
         }
-        if (!closing && !IsBlank(line)
+        if (!closing && !IsBlankLine(line)
             && !Enqueue(conn, TransportEvent{TransportEvent::Kind::Line, conn->serial,
                 DecodeRequest(line, _options.bounds)}))
             return;   // parked; Resume reads on once the worker makes room

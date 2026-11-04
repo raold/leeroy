@@ -2,8 +2,9 @@
 
 Requests are hello, reset, step, status and close. Every line is one JSON object of at most MAX_LINE_BYTES bytes
 (UTF-8, without the newline) carrying ``"v": 1``, a ``"type"`` and a request ``"id"``. Unknown fields are refused, so a
-typo cannot silently change meaning. The worker answers every request line with exactly one line: a ``<type>_result``
-with ``"ok": true`` or an ``"error"`` with a code from ErrorCode.
+typo cannot silently change meaning, and so are a byte order mark, NaN and an integer that no double can hold. The
+worker answers every request line with exactly one line: a ``<type>_result`` with ``"ok": true`` or an ``"error"``
+with a code from ErrorCode and a message of at most MAX_TEXT_BYTES.
 
 modules/mod-dojo/src/Lib/DojoProtocol.* implements the same rules; tests/fixtures/dojo_protocol.jsonl in that module
 holds the cases both must agree on.
@@ -21,6 +22,7 @@ PROTOCOL_VERSION = 1
 MAX_LINE_BYTES = 256 * 1024
 MAX_ACTORS = 2
 MAX_EVENTS = 64
+MAX_COPIES = 16                  # answers owed to the request in flight, the original included (the inbox capacity)
 RESULT_CACHE = 8
 RECENT_EPISODES = 64
 MAX_DECISION = 1_000_000
@@ -53,7 +55,7 @@ class ErrorCode:
     UNSUPPORTED_VERSION = "unsupported_version"      # protocol, schema or scenario the worker does not speak
     NOT_READY = "not_ready"                          # not allowed in the current lifecycle state
     BAD_SESSION = "bad_session"                      # session is not this connection's
-    BUSY = "busy"                                    # another mutating request is in flight
+    BUSY = "busy"                                    # another request in flight, or max_copies of this one
     STALE_EPISODE = "stale_episode"                  # an episode that is not the current one, or a reused id
     WRONG_STEP = "wrong_step"                        # decision index is not the expected one
     CONFLICTING_DUPLICATE = "conflicting_duplicate"  # a known request id with a different payload
@@ -80,17 +82,18 @@ class Bounds:
     max_actors: int = MAX_ACTORS
     max_events: int = MAX_EVENTS
     result_cache: int = RESULT_CACHE
+    max_copies: int = MAX_COPIES
 
     def to_wire(self) -> dict[str, int]:
         return {"max_line_bytes": self.max_line_bytes, "max_actors": self.max_actors,
                 "max_events": self.max_events, "result_cache": self.result_cache,
-                "recent_episodes": RECENT_EPISODES, "in_flight": 1}
+                "recent_episodes": RECENT_EPISODES, "in_flight": 1, "max_copies": self.max_copies}
 
     @classmethod
     def from_wire(cls, data: dict[str, Any] | None) -> Bounds:
         data = data or {}
-        return cls(**{k: int(data[k]) for k in ("max_line_bytes", "max_actors", "max_events", "result_cache")
-                      if k in data})
+        return cls(**{k: int(data[k]) for k in ("max_line_bytes", "max_actors", "max_events", "result_cache",
+                                                "max_copies") if k in data})
 
 
 @dataclass(frozen=True)
@@ -124,7 +127,7 @@ def line_bytes(obj: Any) -> int:
 
 def error(code: str, request_id: str | None, message: str, reason: str | None = None) -> dict[str, Any]:
     out: dict[str, Any] = {"v": PROTOCOL_VERSION, "type": "error", "id": request_id, "ok": False, "code": code,
-                           "message": message}
+                           "message": clip(message)}
     if reason is not None:
         out["reason"] = reason
     return out
@@ -146,8 +149,37 @@ def is_text(value: Any) -> bool:
     return isinstance(value, str) and len(value.encode("utf-8")) <= MAX_TEXT_BYTES
 
 
+def is_blank_line(line: bytes) -> bool:
+    """A framed line (without its newline) that carries no request: only spaces, tabs and carriage returns.
+
+    Transports skip it without an answer; anything else, a lone vertical tab or form feed included, is decoded.
+    """
+    return not line.strip(b" \t\r")
+
+
+def clip(text: str, limit: int = MAX_TEXT_BYTES) -> str:
+    """text as valid UTF-8 of at most limit bytes, cut on a character boundary and marked with "..." when cut.
+
+    Error messages pass through it, so an echoed field name or a worker's reason can never outgrow a line.
+    """
+    data = text.encode("utf-8", "replace")
+    if len(data) <= limit:
+        return data.decode("utf-8")
+    return data[:max(limit - 3, 0)].decode("utf-8", "ignore") + "..."
+
+
 def _refuse_constant(name: str) -> Any:
     raise ValueError(f"{name} is not JSON")
+
+
+def _parse_int(text: str) -> int:
+    """An integer literal that no double can hold is not JSON here, as in nlohmann, where it overflows to inf."""
+    value = int(text)
+    try:
+        float(value)
+    except OverflowError:
+        raise ValueError("number overflow") from None
+    return value
 
 
 class _Malformed(Exception):
@@ -188,7 +220,7 @@ def decode_request(line: bytes | str, bounds: Bounds | None = None) -> Decoded:
         text = raw.decode("utf-8")
         if _too_deep(text):
             return Decoded(None, ErrorCode.MALFORMED, None, f"nested deeper than {MAX_DEPTH}")
-        obj = json.loads(text, parse_constant=_refuse_constant)
+        obj = json.loads(text, parse_constant=_refuse_constant, parse_int=_parse_int)   # a BOM is refused too
         canonical(obj).encode("utf-8")   # a lone surrogate escape parses here but is not valid Unicode
     except (UnicodeError, ValueError, RecursionError):
         return Decoded(None, ErrorCode.MALFORMED, None, "not JSON")
@@ -212,7 +244,7 @@ def decode_request(line: bytes | str, bounds: Bounds | None = None) -> Decoded:
     allowed = set(_ENVELOPE) | set(required) | set(optional)
     unknown = sorted(k for k in obj if k not in allowed)
     if unknown:
-        return Decoded(None, ErrorCode.MALFORMED, request_id, f"unknown field: {unknown[0]}")
+        return Decoded(None, ErrorCode.MALFORMED, request_id, clip(f"unknown field: {unknown[0]}"))
     for name in required:
         if name not in obj:
             return Decoded(None, ErrorCode.MALFORMED, request_id, f"missing {name}")

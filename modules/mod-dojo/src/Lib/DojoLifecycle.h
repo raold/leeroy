@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace Dojo
@@ -31,10 +32,12 @@ struct Output
 
 // The worker's lifecycle state machine: pure, single-threaded, no I/O and no clock. Completions and callbacks carry
 // the generation they started under; an older generation is ignored, so abandoned work cannot touch a new episode.
-// At most one reset or step is in flight; an exact duplicate of it is answered again when it completes, an exact
-// duplicate of a recent result is replayed from a bounded cache, and a different payload under a known id is a
-// conflicting_duplicate. Every request line gets exactly one response line. dojo/leeroy_dojo/lifecycle.py is the
-// same machine; the shared golden fixture checks that they agree.
+// Completions also carry the token of their begin_reset or begin_step effect, so a late or repeated completion of an
+// earlier operation can never finish the one in flight. At most one reset or step is in flight; up to
+// Bounds::maxCopies exact duplicates of it, the original included, are answered again when it completes and further
+// copies get busy; an exact duplicate of a recent result is replayed from a bounded cache, and a different payload
+// under a known id is a conflicting_duplicate. Every request line gets exactly one response line.
+// dojo/leeroy_dojo/lifecycle.py is the same machine; the shared golden fixture checks that they agree.
 class Lifecycle
 {
 public:
@@ -48,6 +51,7 @@ public:
     std::optional<std::string> const& Episode() const { return _episode; }
     std::optional<std::int64_t> Decision() const { return _decision; }
     std::uint64_t Generation() const { return _generation; }
+    std::uint64_t LastToken() const { return _tokens; }   // the token of the latest begin effect, 0 before any
     std::optional<std::string> InFlight() const;
     Bounds const& GetBounds() const { return _bounds; }
     bool AcceptsCallback(std::uint64_t generation) const;
@@ -58,8 +62,8 @@ public:
     Output Fault();
     Output Drained();
     Output Handle(Decoded const& decoded);
-    Output CompleteReset(std::uint64_t generation, Json const& payload);
-    Output CompleteStep(std::uint64_t generation, Json const& payload);
+    Output CompleteReset(std::uint64_t generation, std::uint64_t token, Json const& payload);
+    Output CompleteStep(std::uint64_t generation, std::uint64_t token, Json const& payload);
 
     static void CheckInfo(Json const& info, Bounds const& bounds);
 
@@ -68,6 +72,7 @@ private:
     {
         std::string kind;
         Request request;
+        std::uint64_t token = 0;
         std::size_t copies = 1;
         Json actions = Json::array();
     };
@@ -84,7 +89,7 @@ private:
     Output HandleClose(Request const& req);
     Output HandleReset(Request const& req);
     Output HandleStep(Request const& req);
-    InFlightOp* Current(std::string_view kind, std::uint64_t generation);
+    InFlightOp* Current(std::string_view kind, std::uint64_t generation, std::uint64_t token);
     void CutEpisode(std::string_view reason, Output& out);
     void EndSession();
     void Fail(Output& out, std::string_view code, std::string_view reason, std::string const& message);
@@ -105,7 +110,8 @@ private:
     std::optional<std::string> _episode;
     std::optional<std::int64_t> _decision;
     std::uint64_t _generation = 0;
-    std::optional<std::uint64_t> _draining;
+    std::uint64_t _tokens = 0;
+    std::optional<std::pair<std::uint64_t, std::uint64_t>> _draining;   // generation and token of abandoned work
     std::optional<std::string> _abortReason;
     std::optional<InFlightOp> _inflight;
     std::optional<std::vector<std::vector<int>>> _masks;

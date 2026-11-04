@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 from leeroy_dojo.lifecycle import Lifecycle
-from leeroy_dojo.protocol import Bounds, decode_request, encode
+from leeroy_dojo.protocol import MAX_TEXT_BYTES, Bounds, decode_request, encode, is_blank_line
 
 FIXTURES = Path(__file__).resolve().parents[2] / "modules" / "mod-dojo" / "tests" / "fixtures"
 FIXTURE = FIXTURES / "dojo_protocol.jsonl"
@@ -17,7 +17,8 @@ GENERATOR = FIXTURES / "make_dojo_protocol.py"
 
 
 def load_cases():
-    return [json.loads(line) for line in FIXTURE.read_text(encoding="utf-8").splitlines() if line.strip()]
+    # Lines end in "\n" only: str.splitlines() would also split inside a string holding U+0085 or U+2028.
+    return [json.loads(line) for line in FIXTURE.read_bytes().decode("utf-8").split("\n") if line.strip()]
 
 
 def same(a, b) -> bool:
@@ -33,13 +34,6 @@ def same(a, b) -> bool:
     return type(a) is type(b) and a == b
 
 
-def without_message(message: dict) -> dict:
-    if message.get("type") == "error":
-        assert isinstance(message.get("message"), str), message
-        message = {k: v for k, v in message.items() if k != "message"}
-    return message
-
-
 class GoldenFixtureTest(unittest.TestCase):
     def test_fixture_matches_its_generator(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -51,22 +45,44 @@ class GoldenFixtureTest(unittest.TestCase):
     def test_every_case(self):
         cases = load_cases()
         self.assertEqual(cases[0]["kind"], "defaults")
+        self.assertEqual(cases[0]["max_message_bytes"], MAX_TEXT_BYTES)
         worker = cases[0]["worker"]
-        counts = {"decode": 0, "session": 0}
+        counts = {"info": 0, "frame": 0, "decode": 0, "session": 0}
         for case in cases[1:]:
             counts[case["kind"]] += 1
             with self.subTest(case["name"]):
-                if case["kind"] == "decode":
-                    self.run_decode(case)
-                else:
-                    self.run_session(case, worker)
-        self.assertGreaterEqual(counts["decode"], 40)
-        self.assertGreaterEqual(counts["session"], 25)
+                getattr(self, f"run_{case['kind']}")(case, worker)
+        self.assertGreaterEqual(counts["info"], 5)
+        self.assertGreaterEqual(counts["frame"], 10)
+        self.assertGreaterEqual(counts["decode"], 60)
+        self.assertGreaterEqual(counts["session"], 30)
 
-    def run_decode(self, case):
+    def message_fits(self, message: str, where: str):
+        self.assertIsInstance(message, str, where)
+        self.assertLessEqual(len(message.encode("utf-8")), MAX_TEXT_BYTES, f"{where}: message {message[:80]!r}...")
+
+    def without_message(self, message: dict, where: str) -> dict:
+        if message.get("type") == "error":
+            self.message_fits(message.get("message"), where)
+            message = {k: v for k, v in message.items() if k != "message"}
+        return message
+
+    def run_info(self, case, worker):
+        try:
+            Lifecycle(case["worker"])
+            valid = True
+        except ValueError:
+            valid = False
+        self.assertEqual(valid, case["valid"])
+
+    def run_frame(self, case, worker):
+        self.assertEqual(is_blank_line(case["line"].encode("utf-8")), case["blank"])
+
+    def run_decode(self, case, worker):
         line = case["line"] if "line" in case else encode(case["json"])
         decoded = decode_request(line, Bounds.from_wire(case.get("bounds")))
         expect = case["expect"]
+        self.message_fits(decoded.message, case["name"])
         if expect["code"] is None:
             self.assertIsNotNone(decoded.request, decoded.message)
             self.assertEqual((decoded.request.type, decoded.request.id), (expect["type"], expect["id"]))
@@ -91,9 +107,9 @@ class GoldenFixtureTest(unittest.TestCase):
                 line = op["line"] if "line" in op else encode(op["json"])
                 out = lc.handle(decode_request(line, bounds))
             elif kind == "complete_reset":
-                out = lc.complete_reset(op["generation"], op["payload"])
+                out = lc.complete_reset(op["generation"], op["token"], op["payload"])
             elif kind == "complete_step":
-                out = lc.complete_step(op["generation"], op["payload"])
+                out = lc.complete_step(op["generation"], op["token"], op["payload"])
             elif kind == "fault":
                 out = lc.fault()
             elif kind == "drained":
@@ -102,7 +118,7 @@ class GoldenFixtureTest(unittest.TestCase):
                 out = lc.boot_complete()
             else:
                 self.fail(f"{where}: unknown op")
-            sent = [without_message(json.loads(encode(m))) for m in out.send]
+            sent = [self.without_message(json.loads(encode(m)), where) for m in out.send]
             expected_send = op.get("send", [])
             self.assertTrue(same(sent, expected_send), f"{where}\n sent {sent}\n want {expected_send}")
             self.assertTrue(same(out.effects, op.get("effects", [])),

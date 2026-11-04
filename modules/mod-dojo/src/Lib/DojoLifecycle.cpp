@@ -110,8 +110,7 @@ void Lifecycle::CheckInfo(Json const& info, Bounds const& bounds)
     {
         Json const& a = actors[slot];
         auto const s = static_cast<std::int64_t>(slot);
-        if (!a.is_object() || !a.contains("slot") || !IsInt(a["slot"], s, s) || !a.contains("team")
-            || !IsInt(a["team"], 0, 255))
+        if (!HasExactly(a, {"slot", "team"}) || !IsInt(a["slot"], s, s) || !IsInt(a["team"], 0, 255))
             fail("bad actors");
     }
     Json const& actions = info["actions"];
@@ -123,6 +122,17 @@ void Lifecycle::CheckInfo(Json const& info, Bounds const& bounds)
     for (std::string_view key : {"worker", "clock", "rng"})
         if (!info[std::string(key)].is_object())
             fail("bad " + std::string(key));
+    bool encodable = !HasNonFinite(info);
+    try
+    {
+        encodable = encodable && !Encode(info).empty();
+    }
+    catch (Json::type_error const&)
+    {
+        encodable = false;
+    }
+    if (!encodable)
+        fail("not encodable JSON");
 }
 
 Lifecycle::Lifecycle(Json info, Bounds bounds, bool booted) : _bounds(bounds)
@@ -219,10 +229,13 @@ Output Lifecycle::Handle(Decoded const& decoded)
     Request const& req = *decoded.request;
     if (_inflight && _inflight->request.id == req.id)
     {
-        if (_inflight->request.fingerprint == req.fingerprint)
-            ++_inflight->copies;
-        else
+        if (_inflight->request.fingerprint != req.fingerprint)
             out.send.push_back(MakeError(Err::ConflictingDuplicate, req.id, "id is in flight with another payload"));
+        else if (_inflight->copies >= std::max<std::size_t>(_bounds.maxCopies, 1))
+            out.send.push_back(MakeError(Err::Busy, req.id,
+                req.id + " is in flight with " + std::to_string(_inflight->copies) + " copies owed"));
+        else
+            ++_inflight->copies;
         return out;
     }
     if (Cached const* cached = FindCached(req.id))
@@ -358,10 +371,11 @@ Output Lifecycle::HandleReset(Request const& req)
     _decision.reset();
     _masks.reset();
     _abortReason.reset();
-    _inflight = InFlightOp{"reset", req};
+    _inflight = InFlightOp{"reset", req, ++_tokens};
     _state = State::Resetting;
     Json effect = Effect("begin_reset");
     effect["generation"] = _generation;
+    effect["token"] = _tokens;
     effect["episode"] = episode;
     effect["scenario"] = _info["scenario"];
     effect["scenario_seed"] = body["scenario_seed"];
@@ -427,10 +441,11 @@ Output Lifecycle::HandleStep(Request const& req)
     for (std::size_t actor = 0; actor < _actorCount; ++actor)
         actions.push_back(Json{{"actor", actor}, {"action", chosen[actor]},
             {"action_id", decision * _actorCount + actor}});
-    _inflight = InFlightOp{"step", req, 1, actions};
+    _inflight = InFlightOp{"step", req, ++_tokens, 1, actions};
     _state = State::Stepping;
     Json effect = Effect("begin_step");
     effect["generation"] = _generation;
+    effect["token"] = _tokens;
     effect["episode"] = *_episode;
     effect["decision"] = *_decision;
     effect["actions"] = std::move(actions);
@@ -438,9 +453,9 @@ Output Lifecycle::HandleStep(Request const& req)
     return out;
 }
 
-Output Lifecycle::CompleteReset(std::uint64_t generation, Json const& payload)
+Output Lifecycle::CompleteReset(std::uint64_t generation, std::uint64_t token, Json const& payload)
 {
-    InFlightOp* op = Current("reset", generation);
+    InFlightOp* op = Current("reset", generation, token);
     if (!op)
     {
         Output stale;
@@ -452,7 +467,7 @@ Output Lifecycle::CompleteReset(std::uint64_t generation, Json const& payload)
     {
         std::string const why = payload.is_object() && payload.contains("reason") ? Describe(payload["reason"])
                                                                                  : "reset failed";
-        Fail(out, Err::Aborted, AbortReason::ResetFailed, why);
+        Fail(out, Err::Aborted, AbortReason::ResetFailed, Clip(why));
         return out;
     }
     Json const sim = payload.contains("sim_ms") ? payload["sim_ms"] : Json(0);
@@ -482,9 +497,9 @@ Output Lifecycle::CompleteReset(std::uint64_t generation, Json const& payload)
     return out;
 }
 
-Output Lifecycle::CompleteStep(std::uint64_t generation, Json const& payload)
+Output Lifecycle::CompleteStep(std::uint64_t generation, std::uint64_t token, Json const& payload)
 {
-    InFlightOp* op = Current("step", generation);
+    InFlightOp* op = Current("step", generation, token);
     if (!op)
     {
         Output stale;
@@ -499,7 +514,7 @@ Output Lifecycle::CompleteStep(std::uint64_t generation, Json const& payload)
     }
     if (payload.contains("fault"))
     {
-        Fail(out, Err::Aborted, AbortReason::Fault, Describe(payload["fault"]));
+        Fail(out, Err::Aborted, AbortReason::Fault, Clip(Describe(payload["fault"])));
         return out;
     }
     if (payload.contains("events") && payload["events"].is_array() && payload["events"].size() > _bounds.maxEvents)
@@ -531,11 +546,12 @@ Output Lifecycle::CompleteStep(std::uint64_t generation, Json const& payload)
     return out;
 }
 
-Lifecycle::InFlightOp* Lifecycle::Current(std::string_view kind, std::uint64_t generation)
+// The operation a completion finishes: kind, generation and token must all be the one in flight.
+Lifecycle::InFlightOp* Lifecycle::Current(std::string_view kind, std::uint64_t generation, std::uint64_t token)
 {
-    if (_inflight && _inflight->kind == kind && generation == _generation)
+    if (_inflight && _inflight->kind == kind && generation == _generation && token == _inflight->token)
         return &*_inflight;
-    if (_draining && generation == *_draining)
+    if (_draining && *_draining == std::make_pair(generation, token))
         Drained();
     return nullptr;
 }
@@ -546,7 +562,7 @@ void Lifecycle::CutEpisode(std::string_view reason, Output& out)
     {
         out.effects.push_back(AbortEffect(_generation, reason));
         if (_inflight)
-            _draining = _generation;
+            _draining = std::make_pair(_generation, _inflight->token);
         ++_generation;
     }
     _inflight.reset();
