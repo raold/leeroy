@@ -95,7 +95,7 @@ LEEROY_TEST(RealmReadmit_AdmitsExactlyTheRecordedKickAtItsRank)
     CHECK_EQ(Reason(DecideReadmit(guard.Receipt(Kicked), Request(3), Facts())), "admit");
     CHECK_EQ(Reason(DecideReadmit(guard.Receipt(Kicked), Request(3, KickTs + 1), Facts())), "not_kicked");
     CHECK_EQ(Reason(DecideReadmit(guard.Receipt(Kicked), Request(4), Facts())), "rank_mismatch");
-    CHECK_EQ(Reason(DecideReadmit(nullptr, Request(3), Facts())), "not_kicked"); // Includes after a restart.
+    CHECK_EQ(Reason(DecideReadmit(nullptr, Request(3), Facts())), "not_kicked"); // Never stored, or not restored.
     CHECK(guard.RecruitmentProtected(Kicked)); // guild_admit keeps refusing him.
     CHECK(guard.CompleteReadmit(Kicked, KickTs));
     CHECK(!guard.RecruitmentProtected(Kicked)); // His exclusion is lifted for the readmitted member only.
@@ -195,6 +195,169 @@ LEEROY_TEST(RealmReadmit_ReceiptCapacityNeverDisplacesAnOpenConsent)
     CHECK(guard.NoteKickReceipt(2024, KickTs, 4)); // A settled receipt makes room.
     CHECK(!guard.Receipt(1000));
     CHECK(guard.Receipt(1001) && guard.Receipt(2024));
+}
+
+namespace
+{
+constexpr std::uint64_t Now = KickTs + 3600000;
+
+// What the store holds for a receipt, as the adapter writes it.
+StoredKickReceipt Stored(KickReceipt const& receipt, std::uint32_t guid = Kicked)
+{
+    return {guid, receipt.kickTs, receipt.rank, KickReceiptCode(receipt.state)};
+}
+
+StoredKickReceipt Row(std::uint8_t state, std::uint64_t kickTs = KickTs, std::uint8_t rank = 3,
+    std::uint32_t guid = Kicked)
+{
+    return {guid, kickTs, rank, state};
+}
+}
+
+LEEROY_TEST(RealmReadmit_StoredStatesRoundTripAndUnknownCodesNeverOpen)
+{
+    for (auto state : {KickReceipt::State::Open, KickReceipt::State::Readmitted, KickReceipt::State::Unknown})
+        CHECK(KickReceiptFromCode(KickReceiptCode(state)) == state);
+    CHECK_EQ(int(KickReceiptCode(KickReceipt::State::Open)), 0);
+    CHECK_EQ(int(KickReceiptCode(KickReceipt::State::Readmitted)), 1);
+    CHECK_EQ(int(KickReceiptCode(KickReceipt::State::Unknown)), 2);
+    for (int code = 3; code <= 255; ++code)
+        CHECK(KickReceiptFromCode(static_cast<std::uint8_t>(code)) == KickReceipt::State::Unknown);
+    KickReceipt const receipt{KickTs, 3, KickReceipt::State::Open};
+    CHECK(StoredReceiptIs(Stored(receipt), Kicked, receipt));
+    CHECK(!StoredReceiptIs(Stored(receipt), Kicked + 1, receipt));
+    CHECK(!StoredReceiptIs(Row(0, KickTs + 1), Kicked, receipt));
+    CHECK(!StoredReceiptIs(Row(0, KickTs, 4), Kicked, receipt));
+    CHECK(!StoredReceiptIs(Row(2), Kicked, receipt)); // A write-ahead unknown is not the open receipt.
+}
+
+LEEROY_TEST(RealmReadmit_ARestartRestoresAnOpenConsentExactly)
+{
+    auto const before = Kickedby(3);
+    GuardState restarted(GuildId, Human);
+    CHECK_EQ(restarted.RestoreReceipts({Stored(*before.Receipt(Kicked))}, Now, kReadmitWindowMs), std::size_t{1});
+    auto const* receipt = restarted.Receipt(Kicked);
+    CHECK(receipt && receipt->kickTs == KickTs && receipt->rank == 3 && receipt->state == KickReceipt::State::Open);
+    CHECK(restarted.RecruitmentProtected(Kicked)); // guild_admit refuses him again after the restart.
+    CHECK_EQ(Reason(DecideReadmit(receipt, Request(3), Facts())), "admit");
+    CHECK_EQ(Reason(DecideReadmit(receipt, Request(3, KickTs + 1), Facts())), "not_kicked");
+    auto steps = restarted.Pass({{{101, 2}}, {}, 5000});
+    CHECK(steps.empty()); // A restored kick is never re-added by the guard.
+    CHECK(restarted.CompleteReadmit(Kicked, KickTs)); // His exclusion came back with it.
+    CHECK(!restarted.RecruitmentProtected(Kicked));
+    CHECK(StoredReceiptIs(Row(1), Kicked, *restarted.Receipt(Kicked)));
+    CHECK(!restarted.CompleteReadmit(Kicked, KickTs));
+}
+
+LEEROY_TEST(RealmReadmit_AStoredReceiptPastTheWindowIsNotRestored)
+{
+    GuardState edge(GuildId, Human);
+    CHECK_EQ(edge.RestoreReceipts({Row(0)}, KickTs + kReadmitWindowMs, kReadmitWindowMs), std::size_t{1});
+    auto at = Facts(); at.nowUnixMs = KickTs + kReadmitWindowMs;
+    CHECK_EQ(Reason(DecideReadmit(edge.Receipt(Kicked), Request(3), at)), "admit");
+    GuardState expired(GuildId, Human);
+    CHECK_EQ(expired.RestoreReceipts({Row(0), Row(2, KickTs, 3, 103), Row(1, KickTs, 3, 104)},
+        KickTs + kReadmitWindowMs + 1, kReadmitWindowMs), std::size_t{0});
+    CHECK(!expired.Receipt(Kicked) && !expired.Receipt(103) && !expired.Receipt(104));
+    CHECK(!expired.RecruitmentProtected(Kicked));
+    CHECK_EQ(Reason(DecideReadmit(expired.Receipt(Kicked), Request(3), Facts())), "not_kicked");
+    GuardState future(GuildId, Human); // A clock that went back keeps it, and the decision refuses.
+    CHECK_EQ(future.RestoreReceipts({Row(0, Now + 1)}, Now, kReadmitWindowMs), std::size_t{1});
+    auto facts = Facts(); facts.nowUnixMs = Now;
+    CHECK_EQ(Reason(DecideReadmit(future.Receipt(Kicked), Request(3, Now + 1), facts)), "clock_changed");
+    GuardState noClock(GuildId, Human);
+    CHECK_EQ(noClock.RestoreReceipts({Row(0)}, 0, kReadmitWindowMs), std::size_t{0});
+    CHECK(!noClock.Receipt(Kicked));
+}
+
+LEEROY_TEST(RealmReadmit_ARestoredConsumedReceiptNeverAdmitsAgain)
+{
+    auto before = Kickedby(3);
+    CHECK(before.CompleteReadmit(Kicked, KickTs));
+    GuardState restarted(GuildId, Human);
+    CHECK_EQ(restarted.RestoreReceipts({Stored(*before.Receipt(Kicked))}, Now, kReadmitWindowMs), std::size_t{1});
+    CHECK(restarted.Receipt(Kicked)->state == KickReceipt::State::Readmitted);
+    CHECK(!restarted.RecruitmentProtected(Kicked)); // Readmission already lifted his exclusion.
+    auto member = Facts(); member.member = true; member.guild = GuildId;
+    CHECK_EQ(Reason(DecideReadmit(restarted.Receipt(Kicked), Request(3), member)), "done");
+    CHECK_EQ(Reason(DecideReadmit(restarted.Receipt(Kicked), Request(3), Facts())), "readmit_consumed");
+    CHECK(!restarted.CompleteReadmit(Kicked, KickTs));
+}
+
+LEEROY_TEST(RealmReadmit_UnknownAndMalformedStoredReceiptsNeverAuthorize)
+{
+    // 2: an unproved add, or the write-ahead of one a crash interrupted.
+    for (auto const& row : {Row(2), Row(3), Row(255), Row(0, KickTs, 10), Row(1, KickTs, 200)})
+    {
+        GuardState restarted(GuildId, Human);
+        CHECK_EQ(restarted.RestoreReceipts({row}, Now, kReadmitWindowMs), std::size_t{1});
+        CHECK(restarted.Receipt(Kicked)->state == KickReceipt::State::Unknown);
+        CHECK(restarted.RecruitmentProtected(Kicked));
+        CHECK_EQ(Reason(DecideReadmit(restarted.Receipt(Kicked), Request(3), Facts())), "readmit_unproved");
+        CHECK(!restarted.CompleteReadmit(Kicked, KickTs));
+    }
+    GuardState none(GuildId, Human); // No guid, no ts, or the human himself: nothing to restore.
+    CHECK_EQ(none.RestoreReceipts({Row(0, KickTs, 3, 0), Row(0, 0), Row(0, KickTs, 3, Human)}, Now,
+        kReadmitWindowMs), std::size_t{0});
+    CHECK(!none.Receipt(Kicked) && !none.Receipt(Human) && !none.RecruitmentProtected(Kicked));
+}
+
+LEEROY_TEST(RealmReadmit_WhatThisProcessLearnedOutranksTheStore)
+{
+    auto guard = Kickedby(3); // A receipt from this process.
+    CHECK_EQ(guard.RestoreReceipts({Row(0, KickTs - 1000)}, Now, kReadmitWindowMs), std::size_t{0});
+    CHECK(guard.Receipt(Kicked)->kickTs == KickTs);
+    GuardState pending(GuildId, Human); // A kick this process confirmed but has not yet published.
+    pending.Pass({{{101, 2}, {Kicked, 3}}, {}, 1000});
+    pending.NoteKick(Kicked, 2000);
+    CHECK_EQ(pending.RestoreReceipts({Row(0)}, Now, kReadmitWindowMs), std::size_t{0});
+    CHECK(!pending.Receipt(Kicked) && pending.KickPending(Kicked));
+    GuardState member(GuildId, Human); // The roster already shows him as a member.
+    member.Pass({{{101, 2}, {Kicked, 3}}, {}, 1000});
+    CHECK_EQ(member.RestoreReceipts({Row(0)}, Now, kReadmitWindowMs), std::size_t{0});
+    CHECK(!member.Receipt(Kicked) && member.Known().contains(Kicked));
+    GuardState duplicate(GuildId, Human); // The newest row of a guid wins.
+    CHECK_EQ(duplicate.RestoreReceipts({Row(0, KickTs - 5), Row(2, KickTs)}, Now, kReadmitWindowMs), std::size_t{1});
+    CHECK(duplicate.Receipt(Kicked)->kickTs == KickTs && duplicate.Receipt(Kicked)->state == KickReceipt::State::Unknown);
+}
+
+LEEROY_TEST(RealmReadmit_RestoreKeepsTheReceiptBoundNewestFirst)
+{
+    std::vector<StoredKickReceipt> rows;
+    for (std::uint32_t guid = 1000; guid < 1000 + kMaxKickReceipts + 76; ++guid)
+        rows.push_back(Row(0, KickTs + guid, 4, guid));
+    GuardState restarted(GuildId, Human);
+    CHECK_EQ(restarted.RestoreReceipts(rows, Now + 10000, kReadmitWindowMs), kMaxKickReceipts);
+    CHECK(!restarted.Receipt(1000) && !restarted.Receipt(1075));
+    CHECK(restarted.Receipt(1076) && restarted.Receipt(1000 + kMaxKickReceipts + 75));
+}
+
+LEEROY_TEST(RealmReadmit_SourceContractStoresReceiptsAheadOfTheirEffects)
+{
+    // Source-placement regressions only, NOT runtime/core integration evidence.
+    auto const guild = Source("RealmGuild.cpp");
+    auto const readmit = Section(guild, "LeeroyCommandResult Readmit(", "LeeroyCommandResult Note(");
+    CHECK(readmit.find("EnsureKickReceiptStore(*guard)") < readmit.find("DecideReadmit("));
+    auto const ahead = readmit.find(
+        "StoreKickReceipt(*guard, command->guid, {open.kickTs, open.rank, KickReceipt::State::Unknown})");
+    CHECK(ahead != std::string::npos && ahead < readmit.find("guild->AddMember("));
+    CHECK(ahead < readmit.find("return {false, \"receipt_unstored\"};"));
+    CHECK(readmit.find("guard->CompleteReadmit(command->guid, command->kickTs)")
+        < readmit.find("settle(KickReceipt::State::Readmitted)"));
+    CHECK(readmit.find("settle(KickReceipt::State::Open)") < readmit.find("return {false, \"refused\"};"));
+    auto const guard = Source("RealmCastGuard.cpp");
+    auto const tick = Section(guard, "void TickCastGuard(", "void AddCastGuardScripts()");
+    CHECK(tick.find("EnsureKickReceiptStore(*guard)") < tick.find("guard->Pass(input)"));
+    CHECK(tick.find("guard->NoteKickReceipt(step.guid") < tick.find("StoreKickReceipt(*guard, step.guid"));
+    auto const store = Source("RealmKickReceipts.cpp");
+    CHECK(store.find("return Config().enable && (Config().castGuard || RealmModule::Instance().On());")
+        != std::string::npos); // With both off, nothing touches the characters DB.
+    auto const ensure = Section(store, "bool EnsureKickReceiptStore(", "bool StoreKickReceipt(");
+    CHECK(ensure.find("if (!Active())") < ensure.find("CharacterDatabase."));
+    CHECK(ensure.find("guard.RestoreReceipts(rows, now, kReadmitWindowMs)") != std::string::npos);
+    auto const write = Section(store, "bool StoreKickReceipt(", "\n}\n}");
+    CHECK(write.find("if (!EnsureKickReceiptStore(guard))") < write.find("CharacterDatabase."));
+    CHECK(write.find("StoredReceiptIs(") != std::string::npos); // Proved by reading it back.
 }
 
 LEEROY_TEST(RealmReadmit_SourceContractAddsOnlyUnderAnExactReceipt)
