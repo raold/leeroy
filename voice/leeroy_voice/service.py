@@ -90,6 +90,7 @@ from .stt import Transcript
 from .stt.names import RosterCorrector
 from .stt.phantoms import is_phantom
 from .textear import ear, sentences
+from .timing import TurnTiming, WorkReceipt, read_timer
 from .ui.server import TRANSCRIPT_ENTRIES, UiServer
 from .voices import VoiceSpec, spec_from_dict
 from .wire import (BAD_FIELD, SERVER_NAME, TIERS, Cancel, Channels, Error, Heard, Hello, Invite,
@@ -154,6 +155,7 @@ class _Job:
     expressive: object | None = None  # the worker selected when this line arrived
     cpu: bool = False
     cuda_reservation: object | None = None
+    timing: str | None = None  # opaque local observation handle, never the wire ID
 
 
 @dataclass(slots=True, eq=False)
@@ -189,11 +191,13 @@ class VoiceService:
     def __init__(self, cfg: VoiceConfig, decision: Decision, data_dir: Path, *, clock, engine,
                  bank, devices, sessions, keys_factory, recognizer, corrector: RosterCorrector,
                  ui_port: int | None = None, mind_port: int | None = None, wow_elevated=None,
-                 foreground=None):
+                 foreground=None, timer=time.monotonic):
         self._cfg = cfg
         self._decision = decision
         self._data = Path(data_dir)
         self._clock = clock
+        self._timer = timer  # independent of wall-clock expiry and scheduling policy
+        self._timing = TurnTiming(timer=timer)
         self._engine = engine
         self._bank = bank
         self._recognizer = recognizer  # the CPU one, always the fallback
@@ -385,6 +389,7 @@ class VoiceService:
                 log("stop_failed", level=logging.ERROR, error=type(e).__name__, exc_info=True)
         self._guarded_step(self.keys.stop)
         self._stop_workers()
+        self._timing.close()
         log("service_stopped")
 
     def _guarded_step(self, step) -> None:
@@ -459,6 +464,8 @@ class VoiceService:
         own = {line_id: self._own_db(jobs[line_id]) for line_id, _, _ in plan.starts}
         self.mixer.apply(plan, lines, own)
         for played in plan.played:
+            if played.state == "started":
+                self._timing.handoff(jobs[played.id].timing)
             self._note(played)
         self._follow_voices(now)
 
@@ -480,6 +487,7 @@ class VoiceService:
             if guid is not None:
                 self.ui.broadcast({"type": "speaking", "guid": guid, "on": False})
             if job is not None:
+                self._timing.finish(job.timing, played.state, played.reason)
                 job.ended = True
                 del self._jobs[played.id]
             if played.state != "done":
@@ -650,20 +658,26 @@ class VoiceService:
     # a line
 
     def _on_speak(self, msg: Speak) -> None:
+        timing = self._timing.begin(msg.id)
         if not msg.id or self.scheduler.knows(msg.id):
+            self._timing.finish(timing, "refused", "duplicate" if msg.id else "invalid_id")
             log("speak_refused", level=logging.WARNING, reason="id")
             self._send(Error(BAD_FIELD + "id"))
             return
         reason = self._refusal(msg)
         if reason:
+            self._timing.finish(timing, "dropped", reason)
             log("line_dropped", id=msg.id, reason=reason)
             self._send(Played(msg.id, "dropped", reason))
             return
         job, clip = self._job(msg)
+        job.timing = timing
         self._jobs[msg.id] = job
         self._plan(self.scheduler.submit, job.line)
         if job.ended:  # refused: not_his_channel, raid, expired, after_dropped
             return
+        self._timing.enqueued(timing, "stock" if clip is not None else
+                              "cpu" if job.cpu else "normal")
         if clip is not None:
             self._fx_pool.submit(self._stock_ready, job, clip)
         if job.cpu:
@@ -761,11 +775,16 @@ class VoiceService:
         key = stock_key(msg.text)
         return None if key is None else self._stock_of(spec).get(spec, key)
 
-    def _on_segment(self, job: _Job, index: int, clip: np.ndarray) -> None:
+    def _on_segment(self, job: _Job, index: int, clip: np.ndarray,
+                    receipt: WorkReceipt | None = None) -> None:
+        if receipt is not None and self._jobs.get(job.speak.id) is job:
+            self._timing.worked(job.timing, receipt, ready=True)
         self.scheduler.ready(job.speak.id, index, clip)
         self._plan(self.scheduler.tick)
 
-    def _on_failed(self, job: _Job, why: str) -> None:
+    def _on_failed(self, job: _Job, why: str, receipt: WorkReceipt | None = None) -> None:
+        if receipt is not None and self._jobs.get(job.speak.id) is job:
+            self._timing.worked(job.timing, receipt, ready=False)
         log("synthesis_failed", level=logging.WARNING, id=job.speak.id, guid=job.speak.guid,
             error=why)
         self._plan(self.scheduler.engine_failed, job.speak.id)
@@ -814,26 +833,56 @@ class VoiceService:
                 return
             if job.ended:
                 continue
+            started = read_timer(self._timer)
+            synth_end = process_at = process_end = None
             try:
-                clip = self._process(job, self._dry(job, index))
+                try:
+                    dry = self._dry(job, index)
+                finally:
+                    synth_end = read_timer(self._timer)
+                process_at = read_timer(self._timer)
+                try:
+                    clip = self._process(job, dry)
+                finally:
+                    process_end = read_timer(self._timer)
+                    del dry
             except Exception as e:
                 job.ended = True  # here, so its next sentence is not synthesized meanwhile
-                self._post(self._on_failed, job, _why(e))
+                receipt = WorkReceipt("normal", started, synth_end, process_at, process_end,
+                                      read_timer(self._timer))
+                self._post(self._on_failed, job, _why(e), receipt)
             else:
-                self._post(self._on_segment, job, index, clip)
+                receipt = WorkReceipt("normal", started, synth_end, process_at, process_end,
+                                      read_timer(self._timer))
+                self._post(self._on_segment, job, index, clip, receipt)
 
     def _cpu_synth_loop(self) -> None:
         while (job := self._cpu_queue.get()) is not None:
+            started = read_timer(self._timer)
+            synth_end = process_at = process_end = None
             try:
                 if job.ended:
                     continue
-                clip = self._process(job, self._dry(job, 0))
+                try:
+                    dry = self._dry(job, 0)
+                finally:
+                    synth_end = read_timer(self._timer)
+                process_at = read_timer(self._timer)
+                try:
+                    clip = self._process(job, dry)
+                finally:
+                    process_end = read_timer(self._timer)
+                    del dry
             except Exception as exc:
                 job.ended = True
-                self._post(self._on_failed, job, _why(exc))
+                receipt = WorkReceipt("cpu", started, synth_end, process_at, process_end,
+                                      read_timer(self._timer))
+                self._post(self._on_failed, job, _why(exc), receipt)
             else:
                 if not job.ended:
-                    self._post(self._on_segment, job, 0, clip)
+                    receipt = WorkReceipt("cpu", started, synth_end, process_at, process_end,
+                                          read_timer(self._timer))
+                    self._post(self._on_segment, job, 0, clip, receipt)
             finally:
                 self._post(self._cpu_job_finished, job)
 
@@ -842,12 +891,21 @@ class VoiceService:
             self._cpu_job = None
 
     def _stock_ready(self, job: _Job, dry: np.ndarray) -> None:
+        started = read_timer(self._timer)
+        process_end = None
         try:
-            clip = self._process(job, dry)
+            try:
+                clip = self._process(job, dry)
+            finally:
+                process_end = read_timer(self._timer)
         except Exception as e:
-            self._post(self._on_failed, job, _why(e))
+            receipt = WorkReceipt("stock", started, None, started, process_end,
+                                  read_timer(self._timer))
+            self._post(self._on_failed, job, _why(e), receipt)
         else:
-            self._post(self._on_segment, job, 0, clip)
+            receipt = WorkReceipt("stock", started, None, started, process_end,
+                                  read_timer(self._timer))
+            self._post(self._on_segment, job, 0, clip, receipt)
 
     def _want_stock(self, spec: VoiceSpec) -> None:
         with self._stock_lock:
@@ -1029,6 +1087,7 @@ class VoiceService:
     # the tick
 
     def _tick_scheduler(self, now: float) -> None:
+        self._timing.expire()
         self._plan(self.scheduler.tick)
 
     def _tick_key(self, now: float) -> None:
