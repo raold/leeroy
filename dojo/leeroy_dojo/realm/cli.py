@@ -24,6 +24,9 @@ def add_parser(sub) -> None:
     acc_run = cmds.add_parser("acceptance", help="open the training arena, verify both actors, close it, compare")
     acc_run.add_argument("--scenario", type=Path, required=True)
     acc_run.add_argument("--keep-running", action="store_true", help="leave a worldserver this command started")
+    ctl = cmds.add_parser("control-acceptance",
+                          help="exclusive control and ordinary execution in the training arena, then shutdown while owned")
+    ctl.add_argument("--scenario", type=Path, required=True)
     prov = cmds.add_parser("provision", help="stage the dojo build's binaries and write the training configs")
     prov.add_argument("--scenario", type=Path, help="scenario manifest the worldserver loads (pins its hash)")
     prov.add_argument("--configs-only", action="store_true", help="rewrite the configs, keep the staged binaries")
@@ -73,6 +76,18 @@ def run(args: argparse.Namespace) -> int:
             print(f"bookkeeping changes: {report['side_effects']['bookkeeping'] or 'none'}")
             print(f"live untouched: {report['live_untouched']}; worker peers {report['worker_peers_open']}")
             print(f"acceptance: {'ok' if report['ok'] else 'FAILED'} ({report['out']})")
+            return 0 if report["ok"] else 1
+        elif command == "control-acceptance":
+            from ..scenario import load_manifest
+            from .control import ControlError, run as run_control
+            try:
+                report = run_control(layout, load_manifest(args.scenario).data)
+            except ControlError as e:
+                print(f"realm control-acceptance: {e}", file=sys.stderr)
+                return 1
+            for case in report["cases"]:
+                print(f"{'ok  ' if case['ok'] else 'FAIL'} {case['case']}")
+            print(f"control acceptance: {'ok' if report['ok'] else 'FAILED'} ({report['out']})")
             return 0 if report["ok"] else 1
         elif command == "provision":
             manifest = None
