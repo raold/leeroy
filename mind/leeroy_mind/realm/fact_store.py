@@ -15,6 +15,7 @@ from .provenance import (audit_public_in_unit, public_fact_draft,
                          public_fact_in_unit, public_proof_to_json, render_public,
                          validate_live_binding_in_unit)
 from .records import FactRow, RealmObservation, Rejected
+from .rule_facts import rule_fact_in_unit
 from .source_store import claim_source_in_unit
 
 _POLICIES = {
@@ -220,20 +221,30 @@ class FactStore:
             raise ValueError('invalid guild')
 
     def known_in_unit(self, guild, *, human, limit=5):
+        """The guild's prompt facts: public, with an active event or rule origin, server-wide
+        first, then the newest. Each is read again in full before it counts; a fact with both
+        kinds of origin has no single one and never counts."""
         self._require_unit()
         self._guild(guild)
         if type(limit) is not int or not 1 <= limit <= 5:
             raise ValueError('invalid limit')
-        cursor = self.store.conn.execute('SELECT f.id FROM realm_knows AS k '
-            'JOIN realm_fact AS f ON f.id=k.fact JOIN realm_fact_origin AS o ON o.fact=f.id '
-            "WHERE k.guild=? AND f.public=1 AND o.state='active' "
+        cursor = self.store.conn.execute('SELECT f.id,o.state AS event,r.state AS rule FROM realm_knows AS k '
+            'JOIN realm_fact AS f ON f.id=k.fact LEFT JOIN realm_fact_origin AS o ON o.fact=f.id '
+            'LEFT JOIN realm_rule_origin AS r ON r.fact=f.id '
+            "WHERE k.guild=? AND f.public=1 AND (o.state='active' OR r.state='active') "
             "ORDER BY CASE k.how WHEN 'server' THEN 0 ELSE 1 END, f.ts DESC, f.id DESC", (guild,))
         result = []
         try:
             for row in cursor:
-                current = public_fact_in_unit(self.store, row['id'], human=human)
-                if type(current) is not Rejected:
-                    result.append(current[0])
+                if row['event'] is not None and row['rule'] is not None:
+                    continue
+                if row['event'] is not None:
+                    current = public_fact_in_unit(self.store, row['id'], human=human)
+                    current = current if type(current) is Rejected else current[0]
+                else:
+                    current = rule_fact_in_unit(self.store, row['id'], human=human)
+                if type(current) is FactRow and current.public is True:
+                    result.append(current)
                     if len(result) == limit:
                         break
         finally:
