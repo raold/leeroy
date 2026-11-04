@@ -18,7 +18,7 @@ from leeroy_mind.storage import db
 from leeroy_mind.wow import BOSS_NAMES, DUNGEON_BOSS_NAMES, DUNGEONS, RAID_MAPS
 from test_realm_foundation_schema import _announcement, _insert, _kill, _row, _source
 from test_realm_live_proof import HUMAN, observe, roster
-from test_realm_source_admission import application, envelope, run
+from test_realm_source_admission import KILL, application, envelope, run
 
 ACHIEVEMENT, DUEL, DUNGEON = 'realm_first_achievement_v1', 'duel_result_v1', 'verified_dungeon_kill_v1'
 TABLES = ('realm_source', 'realm_fact', 'realm_fact_origin', 'realm_knows', 'realm_kill',
@@ -143,15 +143,35 @@ def test_dungeon_kill_is_a_public_fact_with_its_own_row(roster):
     fact, observation = record(roster, DUNGEON)
     assert type(fact) is FactRow
     assert (fact.kind, fact.text) == ('kill', "The guild defeated Anub'arak in Azjol-Nerub.")
-    assert knows(roster, fact) == [[50, 'own'], [60, 'server']]
+    assert knows(roster, fact) == [[50, 'own']]
     assert counts(roster) == {**NOTHING, 'realm_source': 1, 'realm_fact': 1, 'realm_fact_origin': 1,
-                              'realm_knows': 2, 'realm_dungeon_kill': 1}
+                              'realm_knows': 1, 'realm_dungeon_kill': 1}
     with roster.transaction():
         row = dict(roster.conn.execute('SELECT * FROM realm_dungeon_kill').fetchone())
     assert {k: row[k] for k in ('kill_id', 'map', 'boss_id', 'difficulty', 'size', 'heroic', 'human_present',
                                 'native_cast_json', 'qualified_cast_json', 'fact')} == dict(
         kill_id='c' * 32 + ':1', map=601, boss_id=2, difficulty=1, size=5, heroic=1, human_present=1,
         native_cast_json='[101,102,103,104]', qualified_cast_json='[101,102,103,104]', fact=fact.id)
+
+
+def test_5_man_kill_is_the_guilds_own_and_never_known_server_wide(roster):
+    # Controller ruling: a 5-man kill is the guild's own, never 'server'; raid kills stay server-wide.
+    facts = FactStore(roster)
+    dungeons = [record(roster, DUNGEON)[0],
+                record(roster, DUNGEON, **solo_cast(kill_id='c' * 32 + ':2', instance_id=13, boss_id=0))[0]]
+    raid, _ = record(roster, KILL)
+    assert all(type(fact) is FactRow for fact in (*dungeons, raid))
+    assert [knows(roster, fact) for fact in dungeons] == [[[50, 'own']]] * 2
+    assert knows(roster, raid) == [[50, 'own'], [60, 'server']]
+    assert facts.known(60, human=HUMAN) == (raid,)
+    assert set(facts.known(50, human=HUMAN)) == {raid, *dungeons}
+    # A rival guild's actor in the group makes his guild know that kill as present, no more.
+    joined, _ = record(roster, DUNGEON, kill_id='c' * 32 + ':3', instance_id=14, cast_members=[101, 102, 103, 201])
+    assert knows(roster, joined) == [[50, 'own'], [60, 'present']]
+    assert facts.known(60, human=HUMAN) == (raid, joined)
+    with roster.transaction():
+        assert roster.conn.execute("SELECT count(*) FROM realm_knows k JOIN realm_fact_origin o ON o.fact=k.fact "
+                                   "WHERE o.policy=? AND k.how='server'", (DUNGEON,)).fetchone()[0] == 0
 
 
 def test_dungeon_kill_without_him_needs_five_qualified_cast(roster):
@@ -212,7 +232,7 @@ def test_dungeon_kill_through_the_service_is_evidence_never_announced(tmp_path, 
             assert not any(json.loads(line).get('type') == 'announce'
                            for writer in native.writers for line in writer.sent)
             assert counts(native.app.store) == {**NOTHING, 'realm_source': 1, 'realm_fact': 1,
-                'realm_fact_origin': 1, 'realm_knows': 2, 'realm_dungeon_kill': 1}
+                'realm_fact_origin': 1, 'realm_knows': 1, 'realm_dungeon_kill': 1}
             assert not native.app.realm._children
     run(scenario())
 

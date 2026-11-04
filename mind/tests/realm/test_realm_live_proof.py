@@ -64,7 +64,7 @@ EXPECTED = {
     'verified_raid_kill_v1': ('The guild killed Lord Marrowgar.', [[50, 'own'], [60, 'server']]),
     'realm_first_achievement_v1': ('Character 101 earned Realm First! Level 80.', [[50, 'own'], [60, 'server']]),
     'duel_result_v1': ('Character 201 beat character 10 in a duel in zone 14.', [[50, 'present'], [60, 'present']]),
-    'verified_dungeon_kill_v1': ("The guild defeated Anub'arak in Azjol-Nerub.", [[50, 'own'], [60, 'server']]),
+    'verified_dungeon_kill_v1': ("The guild defeated Anub'arak in Azjol-Nerub.", [[50, 'own']]),
 }
 # The fact kind each policy writes.
 KINDS = {'bg_result_v1': 'bg_result', 'arena_result_v1': 'arena_result', 'wg_result_v1': 'wg_result',

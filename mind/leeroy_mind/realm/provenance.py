@@ -531,8 +531,9 @@ _LIVE = {
 }
 # Native guild kills (one wire body for both) and the catalogue each one's boss must be in.
 _KILLS = {'verified_raid_kill_v1': 'raid_catalogue_v1', 'verified_dungeon_kill_v1': 'dungeon_catalogue_v1'}
-# Facts the whole server knows: the guild itself as 'own', every rival guild as 'server'.
-_SERVER_WIDE = ('wg_result_v1', 'realm_first_achievement_v1', *_KILLS)
+# Facts the whole server knows: the guild itself as 'own', every rival guild as 'server'. A 5-man
+# kill is not one: it is the guild's own, and present for a rival actor's guild that took part.
+_SERVER_WIDE = ('wg_result_v1', 'realm_first_achievement_v1', 'verified_raid_kill_v1')
 _DUEL_RESULTS = ('won', 'fled')  # 'interrupted' has no winner, so it is no result
 _SOURCE_COLUMNS = ('id,source_key,protocol_version,event_type,game_event_id,chat_line_id,'
                    'row_sha256,server_ms,received_at,guild,human,top_keys_json')
@@ -879,20 +880,25 @@ def _derive(policy, payload, snapshot, human, *, qualify=True):
         # Replay still validates every raw field and current privacy rule. Its
         # original active origin alone supplies participant/speaker admission.
         return output, participants, native, qualified, []
-    if policy in _SERVER_WIDE:
-        known = {snapshot.guild: 'own', **{guild: 'server' for guild in snapshot.rival_guilds}}
-    elif policy == 'channel_raid_topic_v1':
-        known = {snapshot.speaker_guild: 'own'}
-    else:
-        known = {}
-        if set(participants) & {snapshot.human, *snapshot.cast}:
-            known[snapshot.guild] = 'present'
-        for actor in snapshot.actors:
-            if actor.guid in participants:
-                known[actor.guild] = 'present'
+    known = _knowers(policy, snapshot, participants)
     if not known:
         _fail('private_evidence')
     return output, participants, native, qualified, [[guild, known[guild]] for guild in sorted(known)]
+
+
+def _knowers(policy, snapshot, participants):
+    """Each guild that knows a fact, and how."""
+    if policy in _SERVER_WIDE:
+        return {snapshot.guild: 'own', **{guild: 'server' for guild in snapshot.rival_guilds}}
+    if policy == 'channel_raid_topic_v1':
+        return {snapshot.speaker_guild: 'own'}
+    known = {snapshot.guild: 'own'} if policy == 'verified_dungeon_kill_v1' else {}
+    if set(participants) & {snapshot.human, *snapshot.cast}:
+        known.setdefault(snapshot.guild, 'present')
+    for actor in snapshot.actors:
+        if actor.guid in participants:
+            known.setdefault(actor.guild, 'present')
+    return known
 
 
 def _policy_event(event):
@@ -1285,7 +1291,6 @@ def _qualification_sets(policy, qualification, snapshot):
     if policy == 'channel_raid_topic_v1':
         if snapshot.speaker_kind == 'none' or participants != [snapshot.speaker_guid]:
             _fail()
-        known = {snapshot.speaker_guild: 'own'}
     else:
         if snapshot.speaker_kind != 'none':
             _fail()
@@ -1296,13 +1301,7 @@ def _qualification_sets(policy, qualification, snapshot):
         if policy == 'realm_first_achievement_v1' and (
                 len(participants) != 1 or participants[0] not in (snapshot.human, *snapshot.cast)):
             _fail()
-        if policy in _SERVER_WIDE:
-            known = {snapshot.guild: 'own', **{guild: 'server' for guild in snapshot.rival_guilds}}
-        else:
-            known = {snapshot.guild: 'present'} if set(participants) & {snapshot.human, *snapshot.cast} else {}
-            for actor in snapshot.actors:
-                if actor.guid in participants:
-                    known[actor.guild] = 'present'
+    known = _knowers(policy, snapshot, participants)
     if qualification['known_by'] != [[guild, known[guild]] for guild in sorted(known)] or not known:
         _fail()
 
