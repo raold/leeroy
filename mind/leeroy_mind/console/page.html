@@ -121,12 +121,6 @@ h2 { margin: 0; padding: 6px 10px; font-size: 11px; letter-spacing: 0.06em; text
   background: rgba(0, 0, 0, 0.55); }
 .dialog { max-width: 420px; }
 
-/* placeholders */
-.placeholder { padding: 28px 24px; max-width: 760px; }
-.placeholder h3 { margin: 0 0 6px; color: var(--bright); font-size: 16px; }
-.placeholder p { color: var(--dim); margin: 0 0 10px; }
-.placeholder ul { color: var(--dim); margin: 0; padding-left: 18px; }
-
 /* the mind tab */
 .mindtab { overflow: auto; padding: 10px; gap: 10px; }
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 10px; }
@@ -172,6 +166,15 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .entry p { margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .season { margin: 0 0 8px; }
 .season h4 { margin: 0 0 2px; font-size: 12px; color: var(--dim); font-weight: 600; }
+
+/* the personas tab */
+.pick tbody tr { cursor: pointer; }
+.pick tbody tr:hover td { background: var(--hover); }
+.pick tbody tr.sel td { background: var(--here); }
+.pick tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.card header .close { margin-left: auto; }
+.card h4 { margin: 10px 0 2px; font-size: 12px; color: var(--dim); font-weight: 600; }
+.card h4:first-of-type { margin-top: 0; }
 
 @media (max-width: 720px) {
   .cols { flex-direction: column; }
@@ -310,11 +313,58 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
       </article>
     </div>
   </section>
-  <section id="tab-personas" class="tab placeholder" role="tabpanel" aria-labelledby="t-personas" hidden>
-    <h3>Personas</h3>
-    <p>Coming in the next phase: each member's mood, stance, relationships and memory count,
-      then the tuning dials at world, group and member level with a sample line and versioned
-      undo.</p>
+  <section id="tab-personas" class="tab mindtab" role="tabpanel" aria-labelledby="t-personas" hidden>
+    <div id="personas-banner" class="banner bad" hidden></div>
+    <div class="cards wide">
+      <article class="card span">
+        <header><h3>The cast</h3><span id="p-count" class="muted"></span></header>
+        <p id="p-mood" class="lead">-</p>
+        <p id="p-missing" class="why" hidden></p>
+        <div class="scroll"><table class="pick"><thead><tr><th>name</th><th>class and role</th><th class="num">rank</th>
+          <th>mood</th><th>stance</th><th>toward you</th><th>closest ties</th><th class="num" id="p-memhead">memories</th>
+          <th>persona</th><th>drift</th></tr></thead>
+          <tbody id="p-roster"></tbody></table></div>
+        <p class="why">Read from mind.db; nothing here changes a persona. Pick a member for their card, ties, memories and ledger.</p>
+      </article>
+    </div>
+    <div id="p-detail" class="cards wide" hidden>
+      <article class="card span">
+        <header><h3 id="p-name">-</h3><span id="p-sub" class="muted"></span>
+          <button type="button" id="p-close" class="close">Close</button></header>
+        <p id="p-lead" class="lead"></p>
+        <p id="p-why" class="why"></p>
+      </article>
+      <article class="card">
+        <header><h3>Who they are</h3></header>
+        <table><thead><tr><th>trait</th><th class="num">persona</th><th class="num" id="p-nighthead">the night</th>
+          <th class="num">shift</th><th>how it shows</th></tr></thead><tbody id="p-five"></tbody></table>
+        <dl id="p-who" class="kv"></dl>
+      </article>
+      <article class="card">
+        <header><h3>How they type and play</h3></header>
+        <h4>Typing</h4><dl id="p-typing" class="kv"></dl>
+        <h4>In game</h4><dl id="p-game" class="kv"></dl>
+      </article>
+      <article class="card">
+        <header><h3>Looks</h3></header>
+        <dl id="p-looks" class="kv"></dl>
+      </article>
+      <article class="card">
+        <header><h3>Memories</h3><span id="p-memn" class="muted"></span></header>
+        <table><thead><tr><th>kind</th><th class="num" id="p-kindhead">recent</th><th class="num">held</th></tr></thead>
+          <tbody id="p-kinds"></tbody></table>
+      </article>
+      <article class="card span">
+        <header><h3>Relationships</h3><span id="p-tien" class="muted"></span></header>
+        <div class="scroll"><table><thead><tr><th>with</th><th>label</th><th class="num">affinity</th><th class="num">trust</th>
+          <th class="num">respect</th><th class="num">attraction</th><th class="num">familiarity</th><th>stage</th>
+          <th class="num">talks</th><th>last seen</th><th>notes</th></tr></thead><tbody id="p-ties"></tbody></table></div>
+      </article>
+      <article class="card span">
+        <header><h3>Persona ledger</h3><span class="muted">growth, drift flags, stance moves and undos, newest first</span></header>
+        <div id="p-ledger" class="log"></div>
+      </article>
+    </div>
   </section>
   <section id="tab-mind" class="tab mindtab" role="tabpanel" aria-labelledby="t-mind" hidden>
     <div class="cards">
@@ -1423,6 +1473,258 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
       .then(function () { guildBusy = false; });
   }
 
+  // The Personas tab: mind.db only, and read-only: nothing here can change a persona
+  var PERSONAS_MS = 30000;  // as the Guild tab: the live mind writes this database meanwhile
+  var TRAITS = ["openness", "conscientiousness", "extraversion", "agreeableness", "neuroticism"];
+  var BY = { seed: "the seeding", owner: "you (an import or a personas command)", generator: "the generator",
+             night: "the night's looks pass", stance: "a stance move", undo: "an undo of a stance move" };
+  var LEDGER_KINDS = { note_added: "note added", note_dropped: "note dropped", note_rolled_back: "note rolled back (drift)",
+                       drift_flag: "drift flag", stance_band: "stance move", undo: "undo" };
+  var personasTimer = null, personasBusy = false, pick = 0, pickSeq = 0;
+
+  function signed(v, places) { return typeof v === "number" ? (v > 0 ? "+" : "") + v.toFixed(places) : "-"; }
+  function pname(view, guid) {
+    if (!guid) { return "-"; }
+    if (view && guid === view.human) { return "you"; }
+    return str(obj(obj(view).names)[String(guid)]) || "#" + guid;
+  }
+  function tdT(tr, text, cls, title) {
+    var td = el("td", cls || "", text);
+    if (title) { td.title = title; }
+    tr.appendChild(td);
+  }
+  function kv(dl, pairs) {
+    clear(dl);
+    pairs.forEach(function (p) {
+      if (p[1] === null || p[1] === undefined || p[1] === "") { return; }
+      dl.appendChild(el("dt", "", p[0]));
+      dl.appendChild(el("dd", "", String(p[1])));
+    });
+  }
+  function moodText(m) { return m ? str(m.octant) : "not recorded yet"; }
+  function moodTitle(m) {
+    return m ? "pleasure " + signed(m.p, 2) + ", arousal " + signed(m.a, 2) + ", dominance " + signed(m.d, 2)
+               + ", set by the night's mood stage " + when(m.updated)
+             : "The night's mood stage has not set one yet.";
+  }
+  function youText(y) {
+    if (!y) { return "no row yet"; }
+    var bits = ["affinity " + signed(y.affinity, 0)];
+    if (y.attraction) { bits.push("attraction " + Math.round(y.attraction)); }
+    if (y.romance_stage && y.romance_stage !== "none") { bits.push(y.romance_stage); }
+    return bits.join(", ");
+  }
+  function youTitle(y) {
+    return y ? "trust " + Math.round(num(y.trust)) + ", respect " + Math.round(num(y.respect)) + ", familiarity "
+               + Math.round(num(y.familiarity)) + (y.label ? ", " + y.label : "") : "";
+  }
+  function tiesText(view, t) {
+    if (!t) { return "unavailable"; }
+    if (!arr(t.top).length) { return "none yet"; }
+    return t.top.map(function (r) { return pname(view, r.guid) + " " + signed(r.affinity, 0); }).join(", ")
+      + (t.total > t.top.length ? " (+" + (t.total - t.top.length) + " more)" : "");
+  }
+  function memText(m) {
+    if (!m) { return "unavailable"; }
+    return m.total ? m.recent + " / " + m.total : "none yet";
+  }
+  function personaText(p) {
+    if (!p) { return "no persona"; }
+    return "v" + p.version + " · " + when(p.updated) + " · " + (BY[p.by] || str(p.by)) + (p.readable ? "" : " (unreadable)");
+  }
+  function biggestShift(traits) {
+    var best = null, values = obj(obj(traits).values);
+    TRAITS.forEach(function (t) {
+      var v = values[t];
+      if (v && typeof v.shift === "number" && (!best || Math.abs(v.shift) > Math.abs(best[1]))) { best = [t, v.shift]; }
+    });
+    return best;
+  }
+  function driftText(d) {
+    if (!d) { return "unavailable"; }
+    var bits = [], b = biggestShift(d.traits);
+    if (typeof d.flags === "number") { bits.push(d.flags ? plural(d.flags, "open flag") : "no open flags"); }
+    if (b) { bits.push(b[0] + " " + signed(b[1], 1)); }
+    else if (!d.traits) { bits.push("traits not sampled"); }
+    return bits.join(" · ");
+  }
+  function driftTitle(d) {
+    var t = obj(d).traits;
+    if (!t) { return "Open flags: lines the night's critic found off-persona in the last days, not undone or resolved."; }
+    return "Traits the night sampled for " + str(t.night) + ": " + TRAITS.filter(function (n) { return obj(t.values)[n]; })
+      .map(function (n) { var v = t.values[n]; return n + " " + num(v.sampled).toFixed(1) + (v.base !== null ? " (persona " + v.base + ")" : ""); })
+      .join(", ");
+  }
+
+  function renderPersonas(v) {
+    $("personas-banner").hidden = true;
+    var members = arr(v.members), days = num(v.recent_days) || 7, gm = v.guild_mood, missing = arr(v.missing);
+    setText("p-count", plural(members.length, "member") + ", "
+            + members.filter(function (m) { return m.persona; }).length + " with a persona");
+    setText("p-mood", gm ? "Guild mood, night of " + str(gm.night) + ": " + signed(gm.value, 2)
+            + (arr(gm.reasons).length ? " (" + gm.reasons.join(", ") + ")" : "")
+            : missing.indexOf("guild_mood") >= 0 ? "Guild mood: unavailable in this mind.db."
+            : "Guild mood: not recorded yet (the night's mood stage has not run).");
+    $("p-missing").textContent = missing.length ? "This mind.db is older than some of what this tab reads; "
+      + "unavailable here: " + missing.join(", ") + "." : "";
+    $("p-missing").hidden = !missing.length;
+    setText("p-memhead", "memories (" + days + " d / held)");
+    var body = $("p-roster");
+    clear(body);
+    members.forEach(function (m) {
+      var tr = el("tr", (m.online === false ? "off" : "") + (m.guid === pick ? " sel" : ""));
+      tr.tabIndex = 0;
+      tr.dataset.guid = String(m.guid);
+      tdT(tr, str(m.name) + (m.in_cast ? "" : " (not in the cast)"));
+      tdT(tr, m["class"] ? (CLASSES[m["class"]] || "-") + (m.role ? " · " + m.role : "") : "-", m.role ? "role-" + m.role : "");
+      tdT(tr, typeof m.rank === "number" ? String(m.rank) : "-", "num");
+      tdT(tr, missing.indexOf("pad_mood") >= 0 ? "unavailable" : moodText(m.mood), "", m.mood ? moodTitle(m.mood) : "");
+      tdT(tr, m.stance || "-");
+      tdT(tr, missing.indexOf("relationship") >= 0 ? "unavailable" : youText(m.you), "", youTitle(m.you));
+      tdT(tr, tiesText(v, m.ties));
+      tdT(tr, memText(m.memories), "num");
+      tdT(tr, personaText(m.persona), "", m.persona ? "source " + m.persona.source : "The mind voices only members with a stored persona.");
+      tdT(tr, driftText(m.drift), "", m.drift ? driftTitle(m.drift) : "");
+      body.appendChild(tr);
+    });
+    if (!members.length) { emptyRow(body, 10, "The mind has no cast and no personas yet."); }
+  }
+  function pollPersonas() {
+    if (personasBusy || tab !== "personas") { return; }
+    personasBusy = true;
+    api("/api/personas").then(function (r) {
+      if (r.status === 403) { keyLost(); return null; }
+      return r.json().then(function (j) { return { status: r.status, j: j }; });
+    }).then(function (x) {
+      if (!x) { return; }
+      if (x.status === 200) { renderPersonas(x.j); }
+      else { $("personas-banner").textContent = str(x.j.error) || "mind.db could not be read."; $("personas-banner").hidden = false; }
+    }, function () { /* the strip says it */ })
+      .then(function () { personasBusy = false; if (pick) { pollMember(); } });
+  }
+
+  function renderMember(j) {
+    var m = obj(j.member), c = j.card ? obj(j.card) : null, p = m.persona, days = num(j.recent_days) || 7;
+    var missing = arr(j.missing), traits = obj(obj(m.drift).traits), values = obj(traits.values);
+    $("p-detail").hidden = false;
+    setText("p-name", str(m.name));
+    setText("p-sub", [m["class"] ? (CLASSES[m["class"]] || "-") + (m.spec ? " " + m.spec : "") : "", str(m.role),
+                      m.level ? "level " + m.level : "", typeof m.rank === "number" ? "rank " + m.rank : "",
+                      m.in_cast ? (m.online ? "online" : "offline") : "not in the cast"].filter(Boolean).join(" · "));
+    setText("p-lead", "Mood: " + (missing.indexOf("pad_mood") >= 0 ? "unavailable" : moodText(m.mood))
+            + (m.mood ? " (" + moodTitle(m.mood) + ")" : "") + " · stance: " + (m.stance || "-")
+            + " · toward you: " + (missing.indexOf("relationship") >= 0 ? "unavailable" : youText(m.you)));
+    setText("p-why", p ? "Persona v" + p.version + ", last changed " + when(p.updated) + " by " + (BY[p.by] || str(p.by))
+            + (p.readable ? "." : "; this console cannot read it (a newer persona schema?).")
+            : "No persona is stored for this member yet, so the mind does not voice them.");
+    var five = $("p-five");
+    setText("p-nighthead", traits.night ? "night " + str(traits.night).slice(5) : "the night");
+    clear(five);
+    if (c) {
+      TRAITS.forEach(function (t) {
+        var b = obj(obj(c.big_five)[t]), v = values[t], tr = el("tr");
+        cell(tr, t);
+        cell(tr, String(num(b.score)), "num");
+        cell(tr, v ? num(v.sampled).toFixed(1) : "-", "num");
+        cell(tr, v && typeof v.shift === "number" ? signed(v.shift, 1) : "-", "num");
+        cell(tr, str(b.behaviour));
+        five.appendChild(tr);
+      });
+    } else { emptyRow(five, 5, p ? "This persona could not be read." : "No persona yet."); }
+    var drift = obj(m.drift);
+    if (!c) { kv($("p-who"), []); kv($("p-typing"), []); kv($("p-game"), []); }
+    else {
+      var id = obj(c.identity), ro = obj(c.romance), ty = obj(c.typing), ga = obj(c.game), pl = obj(c.play);
+      kv($("p-who"), [["player", [id.age, id.player_gender, id.region].filter(Boolean).join(", ")],
+                      ["attachment", c.attachment], ["humour", c.humour],
+                      ["romance", ro.stance + (ro.style ? ", " + ro.style : "") + (ro.jealousy_mode ? ", " + ro.jealousy_mode.replace(/_/g, " ") : "")],
+                      ["drift flags", typeof drift.flags === "number" ? (drift.flags ? plural(drift.flags, "open flag") + " in " + days + " days" : "none open") : "unavailable"],
+                      ["the night's traits", traits.night ? "sampled for " + traits.night : missing.indexOf("trait_state") >= 0 ? "unavailable" : "not sampled yet"]]);
+      kv($("p-typing"), [["case", ty["case"]], ["end punctuation", ty.end_punct],
+                         ["emoticons", arr(ty.emoticons).length ? ty.emoticons.join(" ") + " (" + Math.round(num(ty.emoticon_rate) * 100) + "% of lines)" : "none"],
+                         ["abbreviations", Object.keys(obj(ty.abbreviations)).map(function (k) { return k + " > " + ty.abbreviations[k]; }).join(", ") || "none"],
+                         ["typos", Math.round(num(ty.typo_rate) * 100) + "% of words"],
+                         ["words per line", arr(ty.words_per_line).join(" to ")],
+                         ["split lines", Math.round(num(ty.split_rate) * 100) + "%"],
+                         ["typing speed", num(ty.chars_per_sec).toFixed(1) + " chars/s"]]);
+      kv($("p-game"), [["motivation", ga.motivation], ["thinks as", ga.thinks_as], ["wants", arr(ga.wants).join("; ")],
+                       ["outside raids", arr(ga.outside_raids).join(", ").replace(/_/g, " ")], ["favourite spot", ga.favourite_spot],
+                       ["years played", ga.years_played], ["spec", str(pl.main_spec) + (pl.off_spec ? " (off: " + pl.off_spec + ")" : "")],
+                       ["raid role", pl.raid_role], ["skill", pl.skill],
+                       ["guild role", str(pl.guild_role) + (pl.officer_title ? " (" + pl.officer_title + ")" : "")]]);
+    }
+    var a = c && c.appearance ? obj(c.appearance) : null;
+    kv($("p-looks"), a ? [["height", a.height_cm + " cm"], ["build", a.build], ["weight", a.weight_kg + " kg"],
+                          ["hair", [a.hair_colour, str(a.hair_length).replace(/_/g, " "), a.hair_style].filter(Boolean).join(", ")],
+                          ["skin", a.skin_tone], ["eyes", a.eye_colour], ["face", arr(a.face).join(", ")], ["at the PC", a.at_the_pc]]
+                       : [["looks", c ? "none yet: the night's looks pass gives them" : "-"]]);
+    var kinds = $("p-kinds"), mem = j.memories;
+    setText("p-kindhead", "in " + days + " d");
+    clear(kinds);
+    if (mem) {
+      Object.keys(mem).sort().forEach(function (k) {
+        var tr = el("tr");
+        cell(tr, k);
+        cell(tr, String(num(mem[k].recent)), "num");
+        cell(tr, String(num(mem[k].total)), "num");
+        kinds.appendChild(tr);
+      });
+    }
+    if (!mem || !Object.keys(mem).length) { emptyRow(kinds, 3, mem ? "None held yet." : "Unavailable in this mind.db."); }
+    setText("p-memn", m.memories && m.memories.total ? plural(m.memories.total, "memory", "memories") + " held" : "");
+    var ties = $("p-ties"), t = m.ties;
+    clear(ties);
+    arr(t && t.top).forEach(function (r) {
+      var tr = el("tr");
+      cell(tr, pname(j, r.guid));
+      cell(tr, str(r.label) || "-");
+      cell(tr, signed(r.affinity, 0), "num");
+      [r.trust, r.respect, r.attraction, r.familiarity].forEach(function (x) { cell(tr, String(Math.round(num(x))), "num"); });
+      cell(tr, r.romance_stage && r.romance_stage !== "none" ? r.romance_stage : "-");
+      cell(tr, String(num(r.interactions)), "num");
+      cell(tr, r.last_seen ? when(r.last_seen) : "-");
+      cell(tr, str(r.notes) || "-");
+      ties.appendChild(tr);
+    });
+    if (!t || !arr(t.top).length) { emptyRow(ties, 11, t ? "No ties yet." : "Unavailable in this mind.db."); }
+    setText("p-tien", t && t.total ? (t.total > arr(t.top).length ? "the strongest " + t.top.length + " of " + t.total : plural(t.total, "tie")) : "");
+    var box = $("p-ledger");
+    clear(box);
+    arr(j.ledger).forEach(function (r) {
+      box.appendChild(el("div", "r", when(r.ts) + "  " + (LEDGER_KINDS[r.kind] || str(r.kind)) + ": " + str(r.text) + (r.undone ? "  (undone)" : "")));
+    });
+    if (!arr(j.ledger).length) { box.appendChild(el("div", "muted", j.ledger ? "No ledger rows yet." : "Unavailable in this mind.db.")); }
+  }
+  function pollMember() {
+    if (!pick || tab !== "personas") { return; }
+    var seq = ++pickSeq, guid = pick;
+    api("/api/persona?guid=" + guid).then(function (r) {
+      if (r.status === 403) { keyLost(); return null; }
+      return r.json().then(function (j) { return { status: r.status, j: j }; });
+    }).then(function (x) {
+      if (!x || seq !== pickSeq || guid !== pick) { return; }
+      if (x.status === 200) { renderMember(x.j); }
+      else if (x.status === 404) { choose(0); }
+      else { setText("p-why", str(x.j.error) || "mind.db could not be read."); }
+    }, function () { /* the strip says it */ });
+  }
+  function choose(guid) {
+    pick = guid;
+    var rows = $("p-roster").querySelectorAll("tr[data-guid]");
+    for (var i = 0; i < rows.length; i++) { rows[i].classList.toggle("sel", Number(rows[i].dataset.guid) === guid); }
+    if (!guid) { $("p-detail").hidden = true; return; }
+    pollMember();
+  }
+  $("p-roster").addEventListener("click", function (ev) {
+    var tr = ev.target.closest("tr[data-guid]");
+    if (tr) { choose(Number(tr.dataset.guid)); }
+  });
+  $("p-roster").addEventListener("keydown", function (ev) {
+    var tr = ev.target.closest("tr[data-guid]");
+    if (tr && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); choose(Number(tr.dataset.guid)); }
+  });
+  $("p-close").addEventListener("click", function () { choose(0); });
+
   // -- tabs -----------------------------------------------------------------------------------------
 
   function showTab(name) {
@@ -1439,10 +1741,12 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
     clearInterval(healthTimer);
     clearInterval(raidTimer);
     clearInterval(guildTimer);
-    healthTimer = raidTimer = guildTimer = null;
+    clearInterval(personasTimer);
+    healthTimer = raidTimer = guildTimer = personasTimer = null;
     if (name === "mind") { renderMind(); pollHealth(); healthTimer = setInterval(pollHealth, HEALTH_MS); }
     if (name === "raid") { pollRaid(); raidTimer = setInterval(pollRaid, RAID_MS); }
     if (name === "guild") { pollGuild(); guildTimer = setInterval(pollGuild, GUILD_MS); }
+    if (name === "personas") { pollPersonas(); personasTimer = setInterval(pollPersonas, PERSONAS_MS); }
     if (name === "comms") { renderFeed(false); }
   }
   document.querySelector(".tabs").addEventListener("click", function (ev) {

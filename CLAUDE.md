@@ -548,7 +548,13 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   unknown, never "not in game". Its Raid and Guild tabs read mind.db read-only
   (raids, attendance, the DKP ledger, loot receipts, the roster, season awards,
   the chronicle); the Raid tab's live state and buttons come from the mind's
-  control endpoint.
+  control endpoint. The Personas tab is read-only too (`console/personaview.py`):
+  each member's night mood, stance, row toward the owner, strongest ties, memory
+  counts, persona version and who last wrote it (seed, owner, generator, the
+  night's looks pass, a stance move or an undo), open drift flags and the night's
+  trait sample, and per member the persona card summary, ties, memories by kind
+  and ledger. It has no write path; a table an older mind.db lacks shows as
+  unavailable.
 - The mind's control endpoint (`leeroy_mind/endpoint.py`) is on by default
   (`[control] enabled = false` turns it off; `[control] port`, default 0, picks
   a free port). It listens on 127.0.0.1 only and writes a new key each start,
