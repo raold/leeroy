@@ -42,7 +42,8 @@ from .voicelink import VoiceRelay
 
 HOST = "127.0.0.1"
 STATUS_S = 2.0
-SNAPSHOT_S = 15.0  # how often a steady mind's process list is taken again
+SNAPSHOT_S = 15.0  # a settled mind's process list is taken this often (an unclear one's at most)
+VOICE_LOCK_S = 15.0  # how long the Mind tab reuses its reading of voice.lock
 FEED_S = 1.5
 PING_S = 15.0
 QUEUE = 500  # events a page may fall behind before it is cut off (it reconnects)
@@ -120,7 +121,10 @@ class ConsoleApp:
         self._found = None  # the mind's family at the latest process list (None: none taken)
         self._ambiguous: str | None = None
         self._held = False
-        self._listed_at = float("-inf")
+        self._list_at = float("-inf")  # when the next process list is due
+        self._list_every = SNAPSHOT_S
+        self._settled = True
+        self._voice_lock: tuple | None = None  # (voice.lock's pid or None, when it was read)
         self._conns = None
         self.view = status.MindView("unknown", detail="not checked yet")
         self.bridge: bool | None = None
@@ -142,20 +146,30 @@ class ConsoleApp:
                 "control": self.controls.describe()}
 
     def _probe(self, force: bool) -> None:
-        """Worker thread: the lock every time, the process list when it is due. While the
-        console starts or stops the mind, the action's own checks are left to probe the lock
-        (a starting mind must find it free)."""
+        """Worker thread. A probe of a free mind.lock takes it for a moment, and a mind starting
+        just then would exit "already running", so the lock is probed each pass only while it is
+        held (a held lock cannot be taken), to see a stop at once. Otherwise it is probed only
+        with the process list (about a second of CIM), which is taken every SNAPSHOT_S while the
+        state is settled, at once when mind.log grows under a free lock (a mind logs only once it
+        holds its lock), and while the state is unclear (starting, or a lock or family that is
+        not plainly this checkout's mind) after STATUS_S, then twice as long each time up to
+        SNAPSHOT_S. While the console starts or stops the mind, the action's own checks are left
+        to probe the lock (a starting mind must find it free)."""
+        grew = self.follower.poll()
         busy = self.controls.busy is not None and self.controls.busy[0] == "mind"
         if not busy:
-            held = self.mind.held()
-            transitional = self.view.state in ("starting", "stopping", "unknown")
-            due = self._monotonic() - self._listed_at >= SNAPSHOT_S
-            if force or due or transitional or held != self._held:
+            held = self.mind.held() if self._held else False
+            now = self._monotonic()
+            if (force or now >= self._list_at or held != self._held
+                    or (grew and not self._held)):
                 found, held, error = self.mind.probe()
                 self._found, self._ambiguous = found, error
-                self._listed_at = self._monotonic()
+                settled = error is None and (found is None or bool(found) == bool(held))
+                self._list_every = (SNAPSHOT_S if settled else STATUS_S if self._settled
+                                    else min(SNAPSHOT_S, self._list_every * 2))
+                self._settled = settled
+                self._list_at = self._monotonic() + self._list_every
             self._held = held
-        self.follower.poll()
         self._conns = self._tcp()
 
     def _derive(self) -> None:
@@ -289,22 +303,25 @@ class ConsoleApp:
     # -- health ------------------------------------------------------------------------------
 
     def _health(self, tail: list, errors: list) -> dict:
-        if self.controls.busy is not None and self.controls.busy[0] == "mind":
-            found, held, error = self._found, self._held, self._ambiguous
-        else:
-            found, held, error = self.mind.probe()
+        # The status loop's latest reading: the Mind tab polls, and each process list costs
+        # about a second of CIM and each probe of a free lock takes it for a moment
+        found, held, error = self._found, self._held, self._ambiguous
         voice = {"enabled": self.s.voice_enabled, "service": self.relay.connected,
                  "ui_port": self.s.voice_ui_port, "mind_port": self.s.voice_mind_port,
                  "pid": None, "detail": ""}
         if self.controls.busy is not None:
             voice["detail"] = "not read while a start, restart or stop runs"
         elif self.voice is not None and self.voice.missing() is None:
-            try:
-                pid = self.voice.held()
+            now = self._monotonic()
+            if self._voice_lock is None or now - self._voice_lock[1] >= VOICE_LOCK_S:
+                try:
+                    self._voice_lock = (self.voice.held(), now)
+                except Exception as e:
+                    voice["detail"] = f"lock not read ({type(e).__name__})"
+            if self._voice_lock is not None and not voice["detail"]:
+                pid = self._voice_lock[0]
                 voice["pid"] = pid or None
                 voice["lock"] = pid is not None
-            except Exception as e:
-                voice["detail"] = f"lock not read ({type(e).__name__})"
         else:
             voice["detail"] = "no voice venv in this checkout"
         try:
@@ -462,6 +479,7 @@ class ConsoleApp:
                                    "state": outcome.state})
 
     async def _after_control(self) -> None:
+        self._voice_lock = None
         with suppress(Exception):
             await self.refresh(force=True)
 

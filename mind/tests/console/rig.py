@@ -13,7 +13,8 @@ KEY = "k" * 32  # a fixed key; the real one is secrets.token_urlsafe(24)
 
 
 class FakeMind:
-    """The mind handle's surface the app reads: probe, held, launch_exit, stopping."""
+    """The mind handle's surface the app reads: probe, held, launch_exit, stopping. It counts
+    the lock probes made by held() and the process lists taken by probe()."""
 
     def __init__(self, data, *, found=(), held=False, error=None):
         self.data = data
@@ -22,11 +23,14 @@ class FakeMind:
         self.exit = None
         self.locked = lambda _: self._held
         self.acts: list[str] = []
+        self.lock_probes = self.lists = 0
 
     def held(self, data=None):
+        self.lock_probes += 1
         return self._held
 
     def probe(self):
+        self.lists += 1
         return (None if self.error else list(self.found)), self._held, self.error
 
     def launch_exit(self):
@@ -47,7 +51,8 @@ async def no_voice(*a, **kw):
 
 
 def make_app(data, *, mind=None, controls=None, connect=no_voice, tcp=lambda: None,
-             ollama=None, gpu=None, clock=None, **settings) -> ConsoleApp:
+             ollama=None, gpu=None, clock=None, monotonic=None, voice=None,
+             **settings) -> ConsoleApp:
     mind = mind or FakeMind(data)
     s = Settings(data_dir=data, root=data.parent, port=0, key=KEY, **settings)
     controls = controls or Controls(enabled=True, mind=mind, voice=SimpleNamespace(
@@ -55,7 +60,9 @@ def make_app(data, *, mind=None, controls=None, connect=no_voice, tcp=lambda: No
     kw = {}
     if clock is not None:
         kw["clock"] = clock
-    return ConsoleApp(s, mind=mind, controls=controls, connect=connect, tcp=tcp,
+    if monotonic is not None:
+        kw["monotonic"] = monotonic
+    return ConsoleApp(s, mind=mind, controls=controls, connect=connect, tcp=tcp, voice=voice,
                       ollama=ollama or (lambda url, roles: {"ok": True, "url": url, "models": []}),
                       gpu=gpu or (lambda: {"ok": False, "error": "nvidia-smi not found",
                                            "gpus": []}), **kw)

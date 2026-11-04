@@ -322,10 +322,16 @@ def test_health_is_read_only_and_content_free(data):
     def ollama(url, roles):
         seen["url"] = url
         return {"ok": True, "url": url, "models": [{"name": "m", "role": "live"}]}
+
+    def files():
+        return {p.relative_to(data).as_posix(): (p.stat().st_size, p.stat().st_mtime_ns)
+                for p in sorted(data.rglob("*")) if p.is_file()}
     async def go():
         async with served(make_app(data, ollama=ollama,
                                    ollama_url="http://127.0.0.1:1")) as app:
+            before = files()
             h = (await http(app, "GET", "/api/health")).json()
+            assert files() == before  # nothing in the data dir was created or written
             assert seen["url"] == "http://127.0.0.1:1"
             assert h["ollama"]["models"][0]["role"] == "live"
             assert h["gpu"]["ok"] is False
@@ -335,6 +341,82 @@ def test_health_is_read_only_and_content_free(data):
             assert h["errors"][0]["exc"] == "ValueError"
             assert h["voice"]["detail"] == "no voice venv in this checkout"
     run(go())
+
+
+def test_health_reuses_the_status_loops_reading_and_its_voice_lock_reading(data):
+    mind = running(data)
+    reads = []
+    voice = SimpleNamespace(missing=lambda: None, held=lambda: reads.append(1) or 500)
+    clock = [0.0]
+    async def go():
+        async with served(make_app(data, mind=mind, voice=voice,
+                                   monotonic=lambda: clock[0])) as app:
+            lists = mind.lists
+            for _ in range(3):
+                h = (await http(app, "GET", "/api/health")).json()
+            assert mind.lists == lists  # no process list (nor the lock probe that comes with one)
+            assert h["mind"]["pids"] == [101, 100] and h["mind"]["lock"] is True
+            assert h["voice"]["pid"] == 500 and h["voice"]["lock"] is True and len(reads) == 1
+            clock[0] += 15.0
+            await http(app, "GET", "/api/health")
+            assert len(reads) == 2  # read again once it is VOICE_LOCK_S old
+    run(go())
+
+
+def passes(app, seconds, clock, *, every=2.0, between=None):
+    """The status loop's worker-thread half, once every `every` s of a fake clock."""
+    for step in range(int(seconds / every)):
+        if between is not None:
+            between(clock[0])
+        app._probe(step == 0)
+        app._derive()
+        clock[0] += every
+
+
+@pytest.mark.parametrize("mind_kw", [
+    {"error": "multiple mind process families match"},  # unclear: ambiguity
+    {"held": True},  # unclear: a lock that is not this checkout's mind
+    {"found": [SimpleNamespace(pid=101)]},  # starting: a family without its lock
+], ids=["ambiguous", "foreign-lock", "starting"])
+def test_an_unclear_mind_is_listed_less_and_less_often(data, mind_kw):
+    clock = [0.0]
+    mind = FakeMind(data, **mind_kw)
+    app = make_app(data, mind=mind, monotonic=lambda: clock[0])
+    passes(app, 60, clock)  # 30 passes in a minute
+    assert app.view.state in ("unknown", "starting")
+    assert mind.lists == 6  # at 0, 2, 6, 14, 30 and 46 s: each wait doubles, up to 15 s
+    # a free lock is probed only with a list; a held one (it cannot be taken) each later pass
+    assert mind.lock_probes == (29 if mind_kw.get("held") else 0)
+
+
+def test_a_settled_mind_is_listed_every_15_s_and_a_free_lock_never_probed_between(data):
+    clock = [0.0]
+    stopped = FakeMind(data)
+    app = make_app(data, mind=stopped, monotonic=lambda: clock[0])
+    passes(app, 60, clock)
+    assert app.view.state == "stopped" and stopped.lists == 4 and stopped.lock_probes == 0
+    clock = [0.0]
+    up = running(data)
+    app = make_app(data, mind=up, monotonic=lambda: clock[0])
+    passes(app, 60, clock)
+    assert app.view.state == "running" and up.lists == 4 and up.lock_probes == 29
+
+
+def test_a_log_that_grows_under_a_free_lock_is_listed_at_once(data):
+    clock = [0.0]
+    mind = FakeMind(data)
+    app = make_app(data, mind=mind, monotonic=lambda: clock[0])
+    logs = data / "logs"
+    logs.mkdir(exist_ok=True)
+
+    def start_at_6(now):  # a mind started elsewhere: it logs once it holds its lock
+        if now == 6.0:
+            mind.found, mind._held = [SimpleNamespace(pid=101)], True
+            with (logs / "mind.log").open("a", encoding="utf-8") as fh:
+                fh.write('{"ts": "t", "level": "INFO", "event": "mind_started"}\n')
+    passes(app, 10, clock, between=start_at_6)
+    assert app.view.state == "running" and mind.lists == 2  # at 0 and 6 s, not at 16
+    assert mind.lock_probes == 1  # at 8 s, held: harmless; none while it was free
 
 
 async def raw(app, head: str) -> bytes:
