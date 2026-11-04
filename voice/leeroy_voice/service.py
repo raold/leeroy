@@ -693,11 +693,14 @@ class VoiceService:
         expressive = self._live_expressive() if self._speaks_expressive(spec) else None
         cpu = expressive is not None and expressive is self._expressive_cpu
         fallback_why = self._expressive_why
-        if cpu and self._cpu_job is not None:
+        if cpu and msg.priority != "p3":
+            expressive, cpu, fallback_why = None, False, f"CPU voice: p3 only, not {msg.priority}"
+        elif cpu and msg.kind == "hotmic":
+            expressive, cpu, fallback_why = None, False, "CPU voice: no hot-mic lines"
+        elif cpu and self._cpu_job is not None:
             expressive, cpu, fallback_why = None, False, "CPU synthesis busy"
-        if cpu and (msg.priority != "p3" or msg.kind == "hotmic" or
-                    msg.expires_ms / 1000 - self._clock.now() <
-                    CPU_FALLBACK_RESERVE_S + CPU_MIN_BUDGET_S):
+        elif cpu and (msg.expires_ms / 1000 - self._clock.now() <
+                      CPU_FALLBACK_RESERVE_S + CPU_MIN_BUDGET_S):
             expressive, cpu, fallback_why = None, False, "CPU deadline too short"
         if clip is not None:
             expressive, cpu = None, False
