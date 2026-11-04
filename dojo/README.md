@@ -31,9 +31,11 @@ names each root by absolute path (see
 | `data` | manifests, trajectories, checkpoints and evaluation output |
 
 The core's `modules/` holds only `mod-playerbots` and `mod-dojo`, each a
-junction into the isolated checkouts. The training realm has its own schemas
-and database user; it may read the live world schema to provision itself but
-never writes a live schema. `runtime/dojo.marker` marks a training instance:
+junction into the isolated checkouts. The training realm has its own MySQL
+instance (its own data folder and loopback port, `database.server`), schemas
+and restricted database user, built from the dojo core's own SQL; it never
+connects to the live database server. `runtime/dojo.marker` marks a training
+instance:
 
 ```json
 {"marker": "leeroy-dojo-training", "instance": "dojo-01"}
@@ -92,14 +94,20 @@ to the script loader, `mod-dojo.cmake` sets up the core's `modules` target,
 | `Dojo.Enable` | `0` | the master switch |
 | `Dojo.Marker` | `""` | must be `leeroy-dojo-training` for `Dojo.Enable = 1` |
 | `Dojo.Instance` | `""` | the layout's instance, 1-64 of `A-Za-z0-9._:-` |
+| `Dojo.Scenario.Manifest` | `""` | a scenario manifest by absolute path |
+| `Dojo.Scenario.Sha256` | `""` | its pinned hash; both or neither |
 
 The runtime (`src/Runtime`) reads them once at start and logs one line: `off`
-(`Dojo.Enable = 0`), `refused` (on, but a disabled build or a missing marker
-or instance; logged as an error) or `armed` (a training build with its
-training configuration). In every state it starts no endpoint and controls no
-bot; the step driver and the controller hook bring those. A config reload is
-reported and never applied. `src/Lib` stays pure and is compiled into the core
-as well as into the standalone tests.
+(`Dojo.Enable = 0`), `refused` (on, but a disabled build, a missing marker or
+instance, or scenario keys that are not an absolute path and a 64-digit
+lower-case hash; logged as an error) or `armed` (a training build with its
+training configuration). Off and refused start nothing and control no bot.
+Armed loads the pinned scenario (see below); its fixture actors then move only
+through the console's `dojo` commands, and there is still no endpoint: the
+step driver and the controller hook bring that. A config reload is reported
+and never applied. `src/Lib` stays pure and is compiled into the core as well
+as into the standalone tests. The disabled variant compiles no fixture,
+arena, command or tick code at all.
 
 The build has two variants, chosen by the CMake option `AC_ENABLE_DOJO`
 (default `OFF`). Off is the disabled variant every core containing mod-dojo
@@ -150,6 +158,103 @@ and the copied `mod_dojo.conf.dist` keeps `Dojo.Enable = 0`. Its receipt goes
 to the build root's `dojo-build.json` and to the data root's `builds/`.
 Building starts nothing: running the worldserver needs the training realm and
 its configuration.
+
+## Training realm
+
+`python -m leeroy_dojo realm --layout <layout.json> <command>` (Python 3.12,
+stdlib only) provisions and runs one disposable realm. It never connects to
+the live server: the layout's `database.port` may not be a live database port,
+every client call refuses any other port before it runs, and anything that
+changes data first checks the server's port, datadir and recorded
+`server_uuid`. Credentials are generated locally, live only in git-ignored
+files under the dojo runtime (client option files and the instance's configs)
+and reach `mysql.exe`/`mysqladmin.exe` through `--defaults-file`, never a
+command line or a log.
+
+| Command | Does |
+|---|---|
+| `db-init` | writes `<server root>/my.ini` (loopback, its own port and data folder, X plugin, named pipes, shared memory, binary log and performance schema off, a small buffer pool) and initializes a fresh data folder with the installed MySQL binaries; an `--init-file` sets the root password, creates the four dojo schemas and a user with `ALL` on exactly those (`_` escaped in the grants) and nothing else |
+| `db-start` / `db-stop` / `db-status` | runs `mysqld --defaults-file=<my.ini>` as a hidden below-normal-priority process (never a Windows service), shuts it down with `mysqladmin shutdown`, reports it |
+| `db-check` | the instance's identity and options, its schema set, its users, the restricted user's exact grants and four refusals (create a schema, read `mysql.user`, grant itself more, drop another schema's table) |
+| `provision` | copies the dojo build's worldserver and the DLLs it loads into the instance's `bin/`, then writes `configs/` from the build's `.dist` files and `scripts/dojo/training-rules.json`; `--scenario` pins a manifest's hash in `mod_dojo.conf` |
+| `schema-build` | runs the staged worldserver with `--dry-run`: the core's own auto-setup builds and updates the dojo schemas from the dojo core's SQL (`SourceDirectory`), the playerbots module's included, then loads the world once and exits |
+| `accounts` | creates the RA admin (gm level 3, password kept in `secrets/ra.json`) and the fixture account (its password discarded) and points realm 1 at the dojo world port |
+| `world-start` / `world-stop` / `world-status` / `ra <command>` | starts the worldserver after the preflight passes (working directory the instance, `AC_*` overrides stripped from its environment), drives it through RA on loopback, and stops it with `server shutdown` so players are saved |
+| `acceptance --scenario <json>` | opens the training arena, verifies both actors, closes it and compares the fixture rows before and after (see below) |
+
+The training configs are each `.dist` with a reviewed set of differences:
+loopback `BindIP` and `Ra.IP`, `MapUpdate.Threads = 0`, no console, RA on,
+SOAP off and no raised process priority for the worldserver; for playerbots,
+no random-bot population, accounts, guilds or arena teams, no queues and no
+cheats (`Playerbots.BotCheats = ""`, empty world-buff matrix). Gameplay keys
+keep their stock WotLK values; the rules file lists the ones that must, every
+other key must equal its `.dist` value and every `.dist` key must be present
+so no compiled-in default can differ unseen. The preflight enforces the rules
+before any start, and the armed worker checks the effective values again
+(rates, expansion, level cap, arena preparation, map threads, bot cheat mask,
+world buffs, random-bot settings) and refuses its scenario if any differs.
+`TempDir` stays inside the instance, because the core's updater writes its
+mysql option file there.
+
+### Scenarios and fixtures
+
+A scenario manifest (`scenarios/*.json`) freezes the arena (map, battleground
+type, arena type, bounds, preparation and match time, unrated), the two
+synthetic fixture actors (account, names, arena side, start positions, a
+staging point outside the arena) and their one shared loadout: level, race,
+class, gender, appearance, talents with ranks and spell ids, glyphs, equipment
+by slot, the kit's spells and ranks, the whole active spellbook and the
+initial maximum health and mana. `python -m leeroy_dojo scenario
+check|hash|pin <json>` validates its shape and pins the SHA-256 of its
+canonical JSON next to it (`<name>.sha256`); mod-dojo's pure parser computes
+the same bytes and refuses the same malformed documents
+(`modules/mod-dojo/tests/fixtures/scenario_cases.json`). At start the armed
+worker loads the manifest, refuses a hash other than the pin and validates
+every id against the installed data: the map is an arena and the
+battleground's start positions are the manifest's, the bracket exists, race
+and class exist together, each kit spell has its name and rank and is the
+highest rank for the level, each talent is the class's and its rank is the
+talent's last, each glyph casts its spell, each item exists by name without
+random properties and fits the race, class and level. A failed lookup refuses
+the scenario; nothing is substituted.
+
+`frost_mirror_small_v1` is two level-80 Human Frost Mages (71 points in Frost,
+the Frost Nova and Ice Lance glyphs, Savage and Hateful Gladiator gear with no
+gems or enchants) with the kit Frostbolt, Ice Lance and Frost Nova at their
+highest ranks. The spellbook also freezes what ordinary rules give every such
+character at each login (general abilities, the racial, the class skill
+lines' first ranks of Fireball and Frost Armor, the talents' own spells); the
+action catalog, not the spellbook, restricts what an actor may use.
+
+The worker's console commands (RA or console only):
+
+| Command | Does |
+|---|---|
+| `dojo status` | state, scenario hash, actors, arena, job and result, and the last evidence as one `dojo-evidence {json}` line |
+| `dojo scenario` | every rule and id check, `ok` or `FAIL` |
+| `dojo fixture create` | creates the named characters on the fixture account, refusing a name another account holds |
+| `dojo fixture build` | logs them in, moves them to the staging point, applies the loadout under the core's own rules (`LearnTalent` checks points, tiers and dependencies), clears transient auras, verifies the result against the manifest, saves and logs out |
+| `dojo arena open` | logs them in, verifies both against the manifest and each other, creates an unrated instance of the stock arena that no queue can join (registered for updates, never offered to the free-slot queue), invites and sends one actor to each side, and verifies them in the map: on their side, at their start (within 1 yd), on the ground, in bounds, loadout as frozen, full health and mana, identical to each other |
+| `dojo arena close` | takes them out before the match starts (the arena's win check stays off while it tears its own instance down, so no outcome or achievement criterion is recorded), removes the auras and the raid-leader flag the arena left behind, logs them out and waits for the empty instance to go |
+
+Until the external controller exists (plan Task 6), a logged-in fixture is
+held dormant: its playerbots engines carry no strategy and its next AI check
+stays a minute away, while teleport acknowledgement and session housekeeping
+continue. Every untriggered cast by a fixture is counted and reported; a
+dormant fixture's count is 0. This is ordinary arena entry, preparation and
+leaving for one actor per side, not a claim that a stock queue supports 1v1.
+
+`acceptance` snapshots every row of the fixtures (character, achievements,
+arena stats and teams, quests, reputation, skills, spells, talents, glyphs,
+items, mail, cooldowns, auras, groups) and realm-wide counts (characters,
+arena teams and logs, battleground statistics, accounts, random-bot accounts
+and characters, guilds) before opening and after closing. A progression change
+fails it; position, played time, logout time and similar bookkeeping are
+reported. It also fingerprints the live install before and after (config
+hashes, the shared `Data` folder's listing, the live servers' processes and
+the MySQL service) and records the worker's established TCP peers, which must
+all be the dojo instance. Its report goes to
+`<data root>/runs/<stamp>-realm-acceptance/`.
 
 ## Protocol
 
