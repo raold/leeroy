@@ -104,7 +104,7 @@ def _bounded(text, lo: int, hi: int) -> bool:
         return False
 
 
-def _text_ok(subject, body, human=None) -> bool:
+def text_ok(subject, body, human=None) -> bool:
     """Native's bounds (subject 1-64 bytes, body 0-512), and never his real name."""
     if not _bounded(subject, 1, 64) or not _bounded(body, 0, 512):
         return False
@@ -155,7 +155,7 @@ def write_text(store, mail_id: int, *, subject: str, body: str, human=None) -> b
     """The night's text for one mail waiting for it, which becomes ready; joins the caller's Store
     unit when inside one. False (nothing written) when the text is out of native's bounds or names
     his real name (with `human`), or the mail is not waiting for text."""
-    if type(mail_id) is not int or not _text_ok(subject, body, human):
+    if type(mail_id) is not int or not text_ok(subject, body, human):
         return False
     with store.transaction():
         return store.conn.execute(
@@ -371,14 +371,16 @@ class PostOffice:
              due: float | None = None) -> int | None:
         """A mail another part hands in (the meeting's minutes, crafted goods, a prize): its row
         id, or None when refused. With a subject it is ready to go; without one it waits for the
-        night's text. items are MailItems (at most 4). Nothing while the Realm is disabled."""
+        night's text, so its sender needs a stored persona (the night writes in her voice).
+        items are MailItems (at most 4). Nothing while the Realm is disabled."""
         if not self.realm.enabled:
             return None
         human = self.realm.ports.human()
         if (type(sender) is not int or not 0 < sender <= _U32 or sender == human.guid
+                or (subject == "" and self.realm.ports.persona(sender) is None)
                 or type(kind) is not str or _KIND.fullmatch(kind) is None
                 or type(items) not in (tuple, list) or len(items) > 4
-                or (subject != "" and not _text_ok(subject, body, human))
+                or (subject != "" and not text_ok(subject, body, human))
                 or (due is not None and type(due) not in (int, float))):
             return None
         rows = []
@@ -435,7 +437,7 @@ class PostOffice:
             if mail_id in self._inflight or self._not_before.get(mail_id, 0) > now:
                 continue
             items = _items(raw)
-            if items is None or not _text_ok(subject, body, human):
+            if items is None or not text_ok(subject, body, human):
                 self._skip(mail_id, "invalid_mail")
                 continue
             if not self._sender_free(sender):

@@ -18,8 +18,10 @@ nothing awaited inside the commit (NightContext.commit):
   knows by `forum`. A post about an event fact also writes its way back in: Ledger.back_in's
   memories, embedded before the commit and written inside it by put_notable_in_unit through
   the night's writer. A rumor has no realm fact behind it, so its post writes no memory.
-- letter:<id>: at most 3 realm_mail rows waiting for text: the body (and a subject when the
-  row has none), then 'ready'. The text stays in the mail row: no fact and no memory.
+- letter:<id>: at most 3 realm_mail rows waiting for text (mail.texts_wanted), each from a
+  sender with a stored persona: the body (and a subject when the row has none), written with
+  mail.write_text, which makes it 'ready'. The text stays in the mail row: no fact and no
+  memory; the sender's memory of it is the post office's, once it is sent.
 - writeup:<id>: at most 2 scored or ended realm_event rows of the last week without one: the
   write-up goes into the event's result.
 A unit whose output the screen refuses fails, writes nothing and waits for a later night. The
@@ -49,6 +51,7 @@ from leeroy_mind.personas.screens import names_real_name
 from leeroy_mind.talk.filters import find_tells, is_silence, repair
 from leeroy_mind.wow import boss_name
 
+from . import mail
 from .config import LIMITS, load_realm_config
 from .fact_store import FactStore
 from .ledger import Ledger, put_notable_in_unit
@@ -65,7 +68,7 @@ CAPS = {"meeting": 1, "applicant": 1, "beat": 3, "letter": 3, "post": 3, "writeu
 PUBLIC = frozenset({"beat", "post", "writeup"})  # need the screen
 FRESH_S = LIMITS.week_s       # how new a fact or an event must be for the night to take it up
 POST_MAX = 200                # a post is its forum_post_v1 fact's text
-LETTER_MAX, LETTER_BYTES, SUBJECT_MAX = 400, 512, 40
+LETTER_MAX, SUBJECT_MAX = 400, 40
 WRITEUP_MAX = 400
 _U32 = 0xFFFFFFFF
 
@@ -264,10 +267,8 @@ class _Night:
             return (facts + [f"post:rumor:{c.rumor_id}" for c in self._fresh_rumors(need - len(facts))])
         if kind == "letter":
             with self.store.transaction():
-                rows = self.store.conn.execute(
-                    "SELECT id, sender FROM realm_mail WHERE state='awaiting_text' ORDER BY ts, id").fetchall()
-            return [f"letter:{row['id']}" for row in rows
-                    if self.ctx.personas.get(row["sender"]) is not None][:need]
+                wanted = mail.texts_wanted(self.store.conn, limit=need)
+            return [f"letter:{want.id}" for want in wanted if self.ctx.personas.get(want.sender) is not None]
         if kind == "writeup":
             return [f"writeup:{row['id']}" for row in self._events()][:need]
         return []
@@ -459,10 +460,10 @@ class _Night:
         self._commit(unit, write)
 
     async def _letter(self, key: str, unit: str) -> None:
-        ctx, mail = self.ctx, int(key)
+        ctx, mail_id = self.ctx, int(key)
         with self.store.transaction():
             row = self.store.conn.execute(
-                "SELECT sender, kind, subject, items, state FROM realm_mail WHERE id=?", (mail,)).fetchone()
+                "SELECT sender, kind, subject, items, state FROM realm_mail WHERE id=?", (mail_id,)).fetchone()
         p = None if row is None or row["state"] != "awaiting_text" else ctx.personas.get(row["sender"])
         if p is None:
             ctx.skip(STAGE, unit)  # Sent, skipped or gone meanwhile.
@@ -482,16 +483,14 @@ class _Night:
         body = repair(reply["body"], speaker=p.character_name)
         subject = row["subject"] or " ".join(repair(reply["subject"], speaker=p.character_name).split())
         reason = self._private(body) or self._private(subject)
-        if reason is None and len(body.encode("utf-8")) > LETTER_BYTES:
-            reason = "too_long"
+        if reason is None and not mail.text_ok(subject, body, ctx.ident):
+            reason = "too_long"  # Native's bounds are bytes: subject 1-64, body 0-512.
         if reason is not None:
             raise _Refused("letter", reason)
 
         def write(store):
             # A row that is no longer waiting was sent or skipped meanwhile: nothing to write.
-            store.conn.execute(
-                "UPDATE realm_mail SET body=?, subject=?, state='ready' WHERE id=? "
-                "AND state='awaiting_text'", (body, subject, mail))
+            mail.write_text(store, mail_id, subject=subject, body=body, human=ctx.ident)
         self._commit(unit, write)
 
     async def _writeup(self, key: str, unit: str) -> None:

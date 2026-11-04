@@ -7,8 +7,9 @@ from types import SimpleNamespace
 import uuid
 
 from conftest import run, seed_test_cast
+from leeroy_mind.memory.writer import WriteResult
 from leeroy_mind.protocol import Ack
-from leeroy_mind.realm import bank, canon, protocol, rivals
+from leeroy_mind.realm import bank, canon, mail, night, protocol, rivals
 from leeroy_mind.realm.direct import DirectLedger
 from leeroy_mind.realm.ports import RealmDisabled
 from leeroy_mind.realm.protocol import BankStock, GrantAchievement
@@ -19,6 +20,7 @@ from realm.fakes import RealmApp, enabled
 from test_realm_canon import KILLS as CANON_KILLS, Harness as CanonHarness, approved_plan as canon_plan
 from test_realm_direct import LIVE, PROCESS
 from test_realm_mail import Always
+from test_realm_night import Rig as NightRig
 from test_realm_race import DAY, RIVALS, T0, _training_ports, at, guild_kill
 from test_realm_rivals import (approved as rivals_approved, connect, finish, grows, kinds, live_realm,
                                plan_of, pump, seed_roster, step_row, with_cards)
@@ -262,3 +264,46 @@ def test_a_bank_gift_is_withdrawn_once_through_the_real_bank(tmp_path, store, cl
         "SELECT dir,reason,guid,item_id,count FROM realm_bank ORDER BY id")] == [
         ("in", "stock", 104, 47586, 1), ("in", "stock", 104, 47590, 1), ("out", "gift", 102, 47586, 1)]
     assert vault.ledger.balance(47586) == 0 and vault.ledger.balance(47590) == 1
+
+
+# -- item 2: the night writes the post office's letters through its API -------------------------------
+
+def test_the_night_writes_letters_through_the_post_office(tmp_path, store, clock):
+    app, realm = _mail_realm(tmp_path, store, clock)
+    post = realm.part("mail")
+    remembered = []
+
+    async def write(candidate, *, enforce_limits=True):
+        remembered.append(candidate)
+        return WriteResult(len(remembered), "inserted")
+    app.writer = SimpleNamespace(write=write)
+    assert post.post(999, "minutes") is None   # no stored persona: nobody could ever write it
+    letter, wide = post.post(102, "absence"), post.post(103, "absence")
+    assert [need.id for need in mail.texts_wanted(store.conn)] == [letter, wide]
+    rig = NightRig(store, tmp_path)
+    run(night.run_units(rig.ctx({"realm_letter": [{"subject": "Long time", "body": "Come back soon."}]}),
+                        [f"letter:{letter}"]))
+    # A subject of 40 characters may still be over the 64 bytes native takes: refused, it waits.
+    run(night.run_units(rig.ctx({"realm_letter": [{"subject": "é" * 40, "body": "Come back soon."}]}),
+                        [f"letter:{wide}"]))
+    rows = {r[0]: tuple(r[1:]) for r in store.conn.execute("SELECT id,state,subject FROM realm_mail")}
+    assert rows[letter] == ("ready", "Long time") and rows[wide] == ("awaiting_text", "")
+    assert [need.id for need in mail.texts_wanted(store.conn)] == [wide]
+    assert store.conn.execute("SELECT count(*) FROM memory WHERE key LIKE 'realm-mail%'").fetchone()[0] == 0
+
+    async def go():
+        await connect(app)
+        app.world.human_online = True
+        await clock.advance(10, step=10)
+        await post.tick()
+        await _settled(realm)
+        [sent] = _of(app, protocol.MailSend)
+        await app.event(protocol.RealmJob(int(clock.now() * 1000), sent.id, "mail_send", "done", "", 102, 0))
+        await clock.advance(10, step=10)
+        await post.tick()
+        await _settled(realm)
+        await realm.close()
+    run(go())
+    # The sender's one private memory of it is the post office's, never a second one from the night.
+    assert [(c.owner, c.key, c.scope, c.scope_with) for c in remembered] == [
+        (102, f"realm-mail:{letter}", "private", 1)]
