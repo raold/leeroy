@@ -108,7 +108,7 @@ class RaidNight:
 
     @property
     def active(self):
-        return self.state in {State.FORMING, State.ASSEMBLING, State.RUNNING}
+        return bool(self._closing) or self.state in {State.FORMING, State.ASSEMBLING, State.RUNNING}
 
     def add_listener(self, listener):
         self._listeners.append(listener)
@@ -716,6 +716,10 @@ class RaidNight:
     async def _close_pending(self):
         while self._closing:
             session, run, outcome, events, stop_dc = self._closing[0]
+            # A retained run still owns its applied tactics. Ordinary listener
+            # notification ignores return values and is not a cleanup barrier.
+            if run is not None and not await self._before_end(run, outcome):
+                return
             if stop_dc and run is not None and not run.lead_is_human:
                 await self._stop_dc(run)
             await self._drain_events(None, events=events, current=run)
@@ -725,6 +729,20 @@ class RaidNight:
             self._closing.popleft()
             if run is not None:
                 await self._notify("on_end", outcome, ended_run=run)
+
+    async def _before_end(self, run, outcome):
+        for listener in tuple(self._listeners):
+            hook = getattr(listener, "on_before_end", None)
+            if hook is None:
+                continue
+            try:
+                async with asyncio.timeout(20):
+                    if await hook(run, outcome) is not True:
+                        return False
+            except Exception:
+                log.warning("guild raid cleanup remains pending")
+                return False
+        return True
 
     async def _stop_dc(self, run):
         raid_id = run.session.raid_id
@@ -750,6 +768,8 @@ class RaidNight:
             log.warning("guild raid DC stop could not complete")
 
     async def _disband_due(self):
+        if self._closing:
+            return
         pending = self._disband
         if pending is None or pending[0] > self.ports.clock.now():
             return
@@ -768,6 +788,8 @@ class RaidNight:
             epoch = self._epoch
             try:
                 await self._close_pending()
+                if self._closing:
+                    return  # No replacement formation or disband before cleanup.
                 await self._disband_due()
                 for vote in tuple(self._votes):
                     if await vote.tick(self.ports.clock.now()):

@@ -37,7 +37,7 @@ from leeroy_mind.human import HumanIdentity
 from leeroy_mind.llm.scheduler import Priority
 from leeroy_mind.logs import log
 from leeroy_mind.memory.writer import Embedder, MemoryWriter
-from leeroy_mind.nightly.budget import plan_night
+from leeroy_mind.nightly.budget import EXTENSION_STAGES, plan_night
 from leeroy_mind.nightly.gpu import GpuArbiter
 from leeroy_mind.nightly.llm import Reasoner, ReflectionError
 from leeroy_mind.nightly.settings import NightlySettings
@@ -310,6 +310,19 @@ class NightRunner:
             if names.count(s.name) > 1:
                 raise ValueError(f"stage {s.name!r} is listed twice")
 
+    def add_stage(self, name: str, fn: Callable[[NightContext], Awaitable[None]], *,
+                  after: str, model: Literal["live", "reflection"] | None = "reflection") -> None:
+        """Insert an extension on this runner only; the base pipeline stays immutable."""
+        names = [stage.name for stage in self.stages]
+        if name in names:
+            raise ValueError(f"stage {name!r} is listed twice")
+        if after not in names:
+            raise ValueError(f"unknown predecessor stage {after!r}")
+        if model not in (None, "live", "reflection"):
+            raise ValueError(f"stage {name!r}: unknown model {model!r}")
+        index = names.index(after) + 1
+        self.stages = self.stages[:index] + (Stage(name, fn, model),) + self.stages[index:]
+
     async def run(self, night: str, window: tuple[float, float]) -> None:
         ctx = self.make_ctx(night, window)
         prior = run_get(ctx.store, night)
@@ -337,16 +350,21 @@ class NightRunner:
         return ctx.settings.live_model if which == "live" else ctx.settings.reflection_model
 
     async def _run(self, ctx: NightContext, prior: NightRun | None) -> None:
+        active = frozenset(stage.name for stage in self.stages)
         if any(s.model == "reflection" for s in self.stages):
             await ctx.reasoner.preflight()
-        if prior is not None and prior.plan:
+        prior_extensions = (set(prior.plan.get("extensions", (
+            name for name in EXTENSION_STAGES if prior.plan.get("units", {}).get(name, 0))))
+            if prior is not None else set())
+        if (prior is not None and prior.plan
+                and prior_extensions == active & EXTENSION_STAGES):
             known = {f.name for f in fields(ctx.settings)}
             ctx.plan = prior.plan
             ctx.settings = replace(ctx.settings, **{k: v for k, v in
                                                     prior.plan.get("settings", {}).items()
                                                     if k in known})
         else:
-            await plan_night(ctx)
+            await plan_night(ctx, stages=active)
         current = None  # the model the last model stage needed
         for stage in self.stages:
             started = ctx.clock.now()

@@ -12,6 +12,14 @@ from leeroy_mind.personas.roster import DEFAULT_CONF, DEFAULT_MYSQL, read_db_inf
 
 Runner = Callable[[str], list[list[str | None]]]
 
+
+def dbc_dir_of(conf: Path) -> Path | None:
+    """The existing quoted DataDir setting, with the client table folder appended."""
+    m = re.search(r'^\s*DataDir\s*=\s*"([^"]*)"',
+                  Path(conf).read_text(encoding="utf-8", errors="replace"), re.MULTILINE)
+    return Path(m.group(1)) / "dbc" if m else None
+
+
 QUALITY = ("poor", "common", "uncommon", "rare", "epic", "legendary", "artifact", "heirloom")
 _SLOTS = {1: "head", 2: "neck", 3: "shoulder", 4: "shirt", 5: "chest", 6: "waist", 7: "legs",
           8: "feet", 9: "wrist", 10: "hands", 11: "finger", 12: "trinket", 13: "one-hand",
@@ -325,9 +333,7 @@ class WorldSource:
             return self._names
         d = self._dbc_dir
         if d is None:
-            m = re.search(r'^\s*DataDir\s*=\s*"([^"]*)"',
-                          self._conf.read_text(encoding="utf-8", errors="replace"), re.MULTILINE)
-            d = Path(m.group(1)) / "dbc" if m else None
+            d = dbc_dir_of(self._conf)
         return load_client_names(d)
 
     # -- helpers -----------------------------------------------------------------------

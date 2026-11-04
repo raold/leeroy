@@ -5,8 +5,8 @@
 
 #include "Define.h"
 
-// World thread. Pins the cast in playerbots (an empty set with both flags off when the module is disabled);
-// returns how many characters SetPinnedBots accepted.
+// World thread. Applies cast + owner contributions (empty with both flags off when disabled).
+// Returns the whole accepted union count; it is not proof of an individual owner's acceptance.
 uint32 LeeroyApplyPins();
 
 // OnStartup. Each returns false when the module was built without that integration.

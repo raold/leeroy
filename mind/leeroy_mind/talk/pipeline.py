@@ -255,6 +255,11 @@ class TurnMeta:
     elsewhere: bool = False
     guards: object = None
     typed_on: tuple[str, int] | None = None
+    # Exact event behind a lead's debrief/kill; absent for unrelated turns.
+    fight_map: int = 0
+    fight_boss: int = 0
+    fight_instance: int = 0
+    fight_end_ms: int = 0
 
 
 def _secs(s: float | None) -> str:
@@ -361,6 +366,7 @@ class Pipeline:
 
     def _init_pipeline(self, now: float) -> None:
         self.live_admission: Callable[[], Awaitable[None]] | None = None
+        self._instruction_hooks: list[Callable[[Turn, TurnMeta, str], str]] = []
         self._session_id: int | None = None
         self._altered: dict[int, Altered] = {}  # tonight's state per member
         self._dead: dict[int, float] = {}  # guid -> when they died
@@ -391,6 +397,10 @@ class Pipeline:
         self._words: dict[int, str] = {}  # a said line's id -> its words before styling
         self._turn_lines: dict[str, int] = {}  # a turn id -> the lines it said
         self._compose_rng = random.Random("compose")  # compose() never draws from self.rng
+
+    def add_instruction_hook(self, fn: Callable[[Turn, TurnMeta, str], str]) -> None:
+        """Extend live, generated instructions immediately before composition."""
+        self._instruction_hooks.append(fn)
 
     # -- identity and lookups ------------------------------------------------------------------
 
@@ -912,11 +922,26 @@ class Pipeline:
         memory_ids: list[int] = []
         text = turn.template
         if text is None:
+            original_instruction = turn.instruction
             try:
+                for hook in tuple(self._instruction_hooks):
+                    previous = turn.instruction
+                    try:
+                        instruction = hook(turn, meta, previous)
+                        if not isinstance(instruction, str):
+                            raise TypeError("instruction hook must return text")
+                        turn.instruction = instruction
+                    except Exception:
+                        turn.instruction = previous
+                        log.warning("instruction_hook_failed")
                 c = await self._compose(turn, meta, live=True)
             except ValueError as e:  # a turn the instruction can't be written for
                 log.warning("talk_bad_turn: guid=%d kind=%s: %s", turn.speaker, turn.kind, e)
                 return self._drop(turn, meta, "bad_turn")
+            finally:
+                # A reusable mutable Turn must not retain facts from a previous
+                # composition, even if a later lookup has no matching record.
+                turn.instruction = original_instruction
             memory_ids, close = c.memory_ids, c.close
             text, why = await self._generate(turn, meta, c, spoken=voiced)
             if why:

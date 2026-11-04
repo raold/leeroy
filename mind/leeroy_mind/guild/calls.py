@@ -10,7 +10,7 @@ from dataclasses import asdict
 import math
 from uuid import uuid4
 
-from leeroy_mind.wow import boss_name, faction_known, is_raid_fight
+from leeroy_mind.wow import BOSS_NAMES, boss_name, faction_known, is_raid_fight
 
 from .boss_calls import BOSS_CALLS, call_for, parse_dc_status
 from .lines import member_name, public_text, template
@@ -41,8 +41,9 @@ class CallGap:
 
 
 class RaidCalls:
-    def __init__(self, ports, *, gap: CallGap):
+    def __init__(self, ports, *, gap: CallGap, pre_call=None, lust_held=None):
         self.ports, self.gap = ports, gap
+        self.pre_call, self.lust_held = pre_call, lust_held
         self._run = None
         self._epoch = 0
         self._lock = asyncio.Lock()
@@ -225,7 +226,14 @@ class RaidCalls:
             # Drop crowded plans rather than queueing a stale plan for a later boss.
             self._last_pre = name
             self._save()
-            await self._say(call.pre, epoch, key=f"pre:{state.next_entry}:{ev.ts}")
+            text = call.pre
+            indexes = [boss for (map_id, boss), known in BOSS_NAMES.items()
+                       if map_id == self._map and known == name]
+            if self.pre_call is not None and len(indexes) == 1:
+                replacement = self.pre_call(self._map, indexes[0])
+                if replacement:
+                    text = replacement
+            await self._say(text, epoch, key=f"pre:{state.next_entry}:{ev.ts}")
 
     async def on_boss(self, ev):
         epoch = self._epoch
@@ -255,12 +263,32 @@ class RaidCalls:
             self._go_due = None
             self._save()
             call = BOSS_CALLS.get((ev.map, ev.boss_id), call_for(ev.map, boss_name(ev.map, ev.boss_id, ev.boss_name))[1])
-            shaman = self._caster(7, participants=ev.members)
-            if call.lust and shaman is not None:
-                faction = faction_known(self.ports.cast()[shaman].race)
-                key = f"pull:{ev.boss_id}:{ev.ts}:lust"
-                if faction and await self._action((shaman,), "cast", "bloodlust" if faction == "horde" else "heroism", epoch, key=key):
-                    await self._say(template("lust_now"), epoch, key=key, urgent=True)
+            held = self.lust_held is not None and self.lust_held(ev.map, ev.boss_id)
+            if call.lust and not held:
+                await self._lust_locked(epoch, self._pull)
+
+    async def lust(self, run):
+        """Shared once-per-pull path for engage and a validated delayed call."""
+        epoch, pull = self._epoch, self._pull
+        if run is not self._run or pull is None or not self._valid(epoch):
+            return False
+        async with self._lock:
+            return await self._lust_locked(epoch, pull)
+
+    async def _lust_locked(self, epoch, pull):
+        if pull is not self._pull or pull is None or not self._valid(epoch):
+            return False
+        shaman = self._caster(7, participants=pull["members"])
+        if shaman is None:
+            return False
+        faction = faction_known(self.ports.cast()[shaman].race)
+        key = f"pull:{pull['boss']}:{pull['ts']}:lust"
+        if (not faction or not await self._action((shaman,), "cast",
+                "bloodlust" if faction == "horde" else "heroism", epoch, key=key)
+                or pull is not self._pull or not self._valid(epoch)):
+            return False
+        await self._say(template("lust_now"), epoch, key=key, urgent=True)
+        return pull is self._pull and self._valid(epoch)
 
     async def on_death(self, ev):
         epoch = self._epoch

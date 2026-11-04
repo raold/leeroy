@@ -249,8 +249,9 @@ def test_plan_scales_with_the_window_and_degrades_in_order(h, task5_counters, mo
         plan = run(plan_night(ctx))
     assert plan["budget_s"] == 2 * 2 * 3600
     assert plan["steps"] == [step.name for step in DEGRADE] == [
-        "encounters", "notes", "wow_lines", "extras", "critic", "questions"]
+        "coach", "encounters", "notes", "wow_lines", "extras", "critic", "questions"]
     assert plan["settings"] == {
+        "coach_units": 5,
         "encounters_per_night": 20, "notes_per_night": 100, "wow_lines_per_night": 10,
         "stories_per_night": 1, "lexicon_candidates": 0, "profile_per_night": 0, "critic_lines": 0,
         "questions_min_new": 6}
@@ -536,6 +537,7 @@ def test_a_woman_on_a_break_keeps_her_attitude(h):
 def test_planning_costs_and_the_budget(h):
     assert PLAN_S == {"think": 90.0, "json": 20.0, "live": 6.0}
     assert estimate({s: 1 for s in UNIT_CALLS}, measured={}) == pytest.approx({
+        "coach": 130,
         "reflect": 150, "reflect_small": 130, "notes": 40, "encounters": 40, "confide": 22,
         "life": 40, "wowlife": 40, "follow": 40, "lexicon": 20, "profile": 40, "stories": 130,
         "recap": 130, "chronicle": 40, "forget": 20, "breaks": 20, "critic": 22, "enrich": 110, "eval": 2386,
@@ -596,16 +598,18 @@ def test_a_step_cuts_only_what_the_budget_needs(h, task5_counters, monkeypatch):
     h.clock.set(end - 3600)                                             # the floor: 14,400 slot-seconds
     monkeypatch.setitem(budget.COUNTERS, "confide", lambda ctx: 500)    # 11,000 s, plus 1,190 s of lines and stories
     plan = run(plan_night(h.ctx()))
-    assert plan["steps"] == ["encounters"] and plan["settings"] == {"encounters_per_night": 55}  # 56 is 30 s over
+    # Coach has no counter in this fixture; the first cut still reaches its floor.
+    assert plan["steps"] == ["coach", "encounters"] and plan["settings"] == {
+        "coach_units": 5, "encounters_per_night": 55}  # 56 is 30 s over
     monkeypatch.setitem(budget.COUNTERS, "confide", lambda ctx: 582)    # 12,804 s
     plan = run(plan_night(h.ctx()))
-    assert plan["steps"] == ["encounters", "notes", "wow_lines"]         # notes cannot help, and still go to 100
-    assert plan["settings"] == {"encounters_per_night": 20, "notes_per_night": 100,
+    assert plan["steps"] == ["coach", "encounters", "notes", "wow_lines"]  # notes cannot help, and still go to 100
+    assert plan["settings"] == {"coach_units": 5, "encounters_per_night": 20, "notes_per_night": 100,
                                 "wow_lines_per_night": 20}               # halved once: 400 s of lines fit
     monkeypatch.setitem(budget.COUNTERS, "confide", lambda ctx: 605)
     plan = run(plan_night(h.ctx(window=(end - 2 * 3600, end))))         # 12 scenes, already below the floor
-    assert plan["steps"] == ["notes", "wow_lines"] and plan["settings"] == {
-        "encounters_per_night": 12, "notes_per_night": 100, "wow_lines_per_night": 10}
+    assert plan["steps"] == ["coach", "notes", "wow_lines"] and plan["settings"] == {
+        "coach_units": 5, "encounters_per_night": 12, "notes_per_night": 100, "wow_lines_per_night": 10}
 
 
 def test_a_counter_that_fails_counts_zero_and_is_logged_once(h, task5_counters, monkeypatch, caplog):
