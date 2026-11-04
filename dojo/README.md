@@ -9,11 +9,12 @@ This is the foundation increment: an isolated layout and its preflight check;
 the environment protocol with its lifecycle state machine and loopback
 transport, written once in pure C++ (`modules/mod-dojo/src/Lib`, no
 AzerothCore includes) and once in Python (`leeroy_dojo`); a deterministic fake
-worker; a checksummed episode recorder; and `mod-dojo` registered as a native
-module that builds into an isolated core, where so far it only reads its
-configuration and reports its state. There is no learner and no Torch or
-Gymnasium dependency, and nothing in the worldserver opens an endpoint or
-controls a bot yet.
+worker; a checksummed episode recorder; `mod-dojo` registered as a native
+module that builds into an isolated core; a disposable training realm with two
+synthetic fixture actors in a training-only arena; and exclusive control of
+those actors through a narrow executor that plays the part of a client (plan
+Task 6). There is no learner and no Torch or Gymnasium dependency, and nothing
+in the worldserver opens an endpoint yet: commands come from the console.
 
 ## Layout
 
@@ -104,7 +105,7 @@ lower-case hash; logged as an error) or `armed` (a training build with its
 training configuration). Off and refused start nothing and control no bot.
 Armed loads the pinned scenario (see below); its fixture actors then move only
 through the console's `dojo` commands, and there is still no endpoint: the
-step driver and the controller hook bring that. A config reload is reported
+step driver brings that. A config reload is reported
 and never applied. `src/Lib` stays pure and is compiled into the core as well
 as into the standalone tests. The disabled variant compiles no fixture,
 arena, command or tick code at all.
@@ -146,9 +147,15 @@ same generator. It checks that the generated script loader registers exactly
 `mod_playerbots` and `mod_dojo` and that the variant reached the cache and the
 runtime sources, then writes `dojo-configure.json` in the build root.
 
-`build.ps1` builds with a true global compiler cap (`-m:N`, MultiToolTask,
-`EnforceProcessCountAcrossBuilds`, `CL_MPCount=N`, no node reuse; default 4,
-at most 16) and reports the peak number of compilers its build ran. Never
+Both also run `scripts/dojo/patches.ps1` (below) and stop unless the isolated
+playerbots checkout carries exactly the dojo's playerbots patch series;
+`configure.ps1 -ApplyPatches` lets it apply a missing tail first.
+
+`build.ps1` lowers its own priority to below normal (cmake, MSBuild and every
+compiler inherit it), builds with a true global compiler cap (`-m:N`,
+MultiToolTask, `EnforceProcessCountAcrossBuilds`, `CL_MPCount=N`, no node
+reuse; default 4, at most 16) and reports the peak number of compilers its
+build ran. Never
 interrupt it mid-compile (CLAUDE.md, build trap 4); stopping the script leaves
 the build running. It then checks the link, not just the exit code:
 `modules.lib` defines `Addmod_dojoScripts`, `AddSC_dojo_world` and
@@ -235,14 +242,18 @@ The worker's console commands (RA or console only):
 | `dojo fixture create` | creates the named characters on the fixture account, refusing a name another account holds |
 | `dojo fixture build` | logs them in, moves them to the staging point, applies the loadout under the core's own rules (`LearnTalent` checks points, tiers and dependencies), clears transient auras, verifies the result against the manifest, saves and logs out |
 | `dojo arena open` | logs them in, verifies both against the manifest and each other, creates an unrated instance of the stock arena that no queue can join (registered for updates, never offered to the free-slot queue), invites and sends one actor to each side, and verifies them in the map: on their side, at their start (within 1 yd), on the ground, in bounds, loadout as frozen, full health and mana, identical to each other |
-| `dojo arena close` | takes them out before the match starts (the arena's win check stays off while it tears its own instance down, so no outcome or achievement criterion is recorded), removes the auras and the raid-leader flag the arena left behind, logs them out and waits for the empty instance to go |
+| `dojo arena close` | takes them out, during preparation or after the gates opened, removes the auras and the raid-leader flag the arena left behind, restores the staging baseline (nothing on cooldown, full health, mana and durability), logs them out and waits for the empty instance to go |
+| `dojo fixture restore` | logs them in, moves them to the staging point, restores the staging baseline without touching items, talents or spells, verifies the loadout, saves and logs out |
 
-Until the external controller exists (plan Task 6), a logged-in fixture is
-held dormant: its playerbots engines carry no strategy and its next AI check
-stays a minute away, while teleport acknowledgement and session housekeeping
-continue. Every untriggered cast by a fixture is counted and reported; a
-dormant fixture's count is 0. This is ordinary arena entry, preparation and
-leaving for one actor per side, not a claim that a stock queue supports 1v1.
+The arena's stock win check stays off for the dojo's own instance for as long
+as it exists, so leaving, logging out or dying there ends no match and records
+no outcome or achievement criterion; the dojo will decide outcomes itself. A
+fixture earns no achievement progress anywhere (the criteria and completion
+hooks refuse it). A logged-in fixture is owned by the external controller
+(below) from its AI's first tick. Every untriggered cast by a fixture that no
+executor command produced is counted as a stock cast and reported; an owned
+fixture's count is 0. This is ordinary arena entry, preparation and leaving
+for one actor per side, not a claim that a stock queue supports 1v1.
 
 `acceptance` snapshots every row of the fixtures (character, achievements,
 arena stats and teams, quests, reputation, skills, spells, talents, glyphs,
@@ -255,6 +266,142 @@ hashes, the shared `Data` folder's listing, the live servers' processes and
 the MySQL service) and records the worker's established TCP peers, which must
 all be the dojo instance. Its report goes to
 `<data root>/runs/<stamp>-realm-acceptance/`.
+
+## External control and execution
+
+### The playerbots hook
+
+The dojo's only change to mod-playerbots is an external-controller interface
+in `PlayerbotAI` (`src/Bot/PlayerbotAI.{h,cpp}`), shipped as a reviewed patch
+series in [`patches/dojo/mod-playerbots/`](../patches/dojo/mod-playerbots)
+(never `patches/mod-playerbots/`, which `scripts/ac-snapshot.sh` owns). It is
+inert until a caller acquires a bot:
+
+- `AcquireExternalControl(owner)` returns an epoch, unique for the process's
+  lifetime, or 0 for a self-bot, a bot with a game-client master or one that
+  is already owned. It drops what was queued for stock behaviour: reactions,
+  chat commands and replies, queued packets and a pending interrupt request.
+  `ReleaseExternalControl(epoch)` takes only the current epoch, so a stale
+  owner cannot release a newer one, and resets the AI as a far teleport does
+  (`Reset(true)`), so stock behaviour resumes from a clean state. Ownership
+  lives in the `PlayerbotAI` and ends with it: a logout or shutdown ends it.
+- The gate sits in `UpdateAI` right after the state checks and the fall
+  information, before the cheat refill, `UpdateAIReaction`, the
+  preparing-cast handling (cast cancellation and facing), the transport and
+  group-master updates and `UpdateAIInternal` (chat replies, commands, packet
+  handlers, the engines). Owned with no command is simply this gate's idle
+  state.
+- While owned, `HandleCommand` (both forms), `QueueChatResponse`,
+  `DoSpecificAction`, `DoNextAction`, `CastSpell`, `CastVehicleSpell`,
+  `RequestSpellInterrupt` and the master's packet handlers refuse their input
+  and count it; the bot's own outgoing packets are dropped except root,
+  unroot, knockback and dismount, which emulate what a client does.
+- Housekeeping stays outside the gate: teleport and world-port acks and the
+  bot session's packets (`PlayerbotHolder::UpdateSessions`), login and logout.
+
+`scripts/dojo/patches.ps1 -Layout <layout.json> [-Apply] [-Json]` checks the
+isolated checkout against the series: tracked files clean, and its commits
+since the provenance baseline exactly the series by stable patch id; `-Apply`
+applies a missing tail with `git am --3way` and never resets or drops a
+commit. It also checks the gate's place in `UpdateAI` on every run, as the pin
+guard check does. The nightly `patches` workflow applies the series on top of
+`patches/mod-playerbots` and runs the playerbots codestyle check.
+
+### The controller and its executor
+
+`src/Runtime/DojoExecutor.*` owns the scenario's two fixture actors, and only
+them: the director registers the characters it resolved on the fixture
+account, and the controller acquires a registered actor as soon as its AI
+exists, unless the console handed it back. It never holds a pointer across
+ticks; each tick it looks the actor up and compares epochs, so a logout or a
+new AI shows as ownership lost. Acquisition neutralizes what stock behaviour
+may have started (a cast, the spell queue, movement, auto-attack, a pet) and
+traces it.
+
+The executor plays the part of a client, so ordinary server rules apply. A
+cast is a `CMSG_CAST_SPELL` request with the actor's cast count handed to
+`WorldSession::HandleCastSpellOpcode`: costs, cooldowns, the global cooldown,
+the spell queue window, range, line of sight, facing, crowd control and
+immunity are the core's, and the result is what the server tells the session
+(`SMSG_CAST_FAILED`, `SMSG_SPELL_START`, `SMSG_SPELL_GO`). Stop-cast is
+`CMSG_CANCEL_CAST`, selection `CMSG_SET_SELECTION`, auto-attack
+`CMSG_ATTACKSWING` and `CMSG_ATTACKSTOP`, each through its handler.
+Facing turns in place with an orientation-only spline; movement is a spline at
+the actor's own run (or run-back) speed for `250 ms`, keeping its facing, to the
+first collision along the direction (`MovePositionToFirstCollision`). Movement
+is refused while dead, stunned, rooted or without control; turning only while
+dead or without control (a rooted client can turn). A command's parts run in
+the order stop-cast, hold, facing, ability, movement, so a move launched with
+a cast-time spell cancels it under the core's own rule. PlayerbotAI's
+`CanCastSpell` and `CastSpell` (facing adjustment, pet autocast) are never
+used, and nothing else is castable: pets are unsupported and a pet found at
+acquisition is dismissed.
+
+### Catalog, masks and the command queue
+
+The v1 catalog (`src/Lib/DojoActionCatalog.*`, `leeroy_dojo.actions`, schema
+`leeroy-dojo-actions-v1`) is entry 0, the noop, then every
+`<ability>/<movement>/<facing>`: abilities `none`, one cast per kit spell in
+manifest order, `stop_cast`, `target_enemy`, `clear_target`, `attack_on`,
+`attack_off`; movements `hold` and eight directions relative to the facing;
+facings `keep`, `toward`, `away` (the visible enemy). A cast's target slot is
+fixed by its spell: the enemy for a spell that needs an explicit unit target,
+the caster otherwise. For `frost_mirror_small_v1` that is Frostbolt, Ice
+Lance and Frost Nova only, 244 actions, SHA-256
+`60d4f7e4b05d7548bb142bb2e71e0a862809658470fd61dbe499fde86242712a`; the
+acceptance publishes it as `<data root>/manifests/actions-<scenario>.json`.
+
+Masks are a pure function of what the actor knows (`ActorKnowledge`) and mask
+only what cannot succeed (D23); the noop never is. A wait (cooldown, global
+cooldown, a cast in progress) masks only when it outlasts the command delay
+plus the core's spell queue window; mana only when one regeneration tick could
+not cover the cost; range only beyond a 3-yard slack. Line of sight, facing
+with `keep`, roots, stuns and immunity are left to execution. Turning away
+while casting a front-facing spell is the one combination masked in every
+state. The knowledge read calls only getters, and the cost and range lookups
+pass no spell, so `ApplySpellMod` registers and drops no charge; `dojo
+control maskcheck` fingerprints both actors (selection, auras with stacks and
+charges, cooldowns, global cooldowns, the current spell, the spell queue,
+position, splines) before and after any number of queries. Both languages run
+the shared cases in `modules/mod-dojo/tests/fixtures/action_cases.json`.
+
+`DojoActionQueue` holds one pending command per actor (D30): it becomes due
+150 ms after its input; a new command replaces a pending one that has not run
+and is recorded as superseding it; a noop keeps whatever is pending; an
+executing command is never superseded. Release, logout and shutdown drop the
+pending command and record why.
+
+### Tracing
+
+Every action is traced with its producer, origin, action id, input, due and
+execution times and the outcome or reason: `executor`, `acquire`, `release`,
+`harness` (acceptance set-up), `core` (a cast the core cancelled because the
+actor moved, a selection or auto-attack the core ended) or `stock` for
+anything no one here asked for, which is what a gate failure would look like:
+an untriggered cast, a movement spline or motion generator the executor did
+not start, a new selection, auto-attack or pet. Each record is logged as a
+`dojo-trace {json}` line and kept in a bounded buffer.
+
+| Command (console or RA) | Does |
+|---|---|
+| `dojo control status` | ownership, epochs, the AI's skipped updates and refused inputs, the pending command, counters and each actor's state, as one `dojo-control {json}` line |
+| `dojo control own <0\|1\|all>` / `release <...>` | acquire again, or hand an actor back to stock behaviour |
+| `dojo control act <0\|1> <action>... [force]` | submit commands by name or index; a masked action is refused unless forced |
+| `dojo control masks <0\|1> [all]` | the actor's knowledge, the reason per ability and facing, and with `all` the mask bits |
+| `dojo control maskcheck <0\|1> <n>` | n mask queries, and whether either actor's fingerprint changed |
+| `dojo control trace [n]` / `actions` | the last trace records; the catalog's canonical JSON |
+| `dojo harness place\|mana\|restore\|los` | acceptance set-up in the training arena, each traced as `harness` |
+
+`python -m leeroy_dojo realm --layout <layout.json> control-acceptance
+--scenario <json>` runs the plan's Task 6 acceptance and writes its evidence to
+`<data root>/runs/<stamp>-control-acceptance/`: owned idle actors produce
+nothing; a released actor resumes stock behaviour and stops when re-owned;
+mask queries change nothing; the global cooldown, insufficient mana, rooted
+movement, line of sight, interruption, a superseded command and a target
+moving behind a cast are refused or carried out by the core's rules with the
+reason recorded; and the worldserver shuts down while both actors are owned,
+its logs showing ownership held to the end. Fixture rows are compared before
+and after and the live install is fingerprinted, as in the realm acceptance.
 
 ## Protocol
 
