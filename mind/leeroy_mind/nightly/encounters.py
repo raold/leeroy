@@ -282,11 +282,11 @@ def confession_offer(ctx, row):
     """One earned disclosure, read again at commit so concurrent scenes cannot reuse it."""
     if row["setting"] not in LATE_SETTINGS and row["volition"] != "confide":
         return None
-    from leeroy_mind.nightly.storyteller import LAYER_TRUST, NIGHT_OWL_DROP
+    from leeroy_mind.nightly.storyteller import layer_trust, opens_up
     now, store = ctx.clock.now(), ctx.store
     for confessor, other in ((row["a"], row["b"]), (row["b"], row["a"])):
         p = load_effective(store, confessor, tuning=getattr(ctx, "tuning", None))
-        if p is None or trait_today(store, ctx.night, confessor, p)["extraversion"] > 4:
+        if p is None or not opens_up(p, trait_today(store, ctx.night, confessor, p)["extraversion"]):
             continue
         opened = {r["layer"] for r in store.conn.execute(
             "SELECT layer FROM layer_open WHERE guid=? AND other=?", (confessor, other))}
@@ -294,7 +294,7 @@ def confession_offer(ctx, row):
         if next_layer is None:
             continue
         index, layer = next_layer
-        threshold = LAYER_TRUST[layer.depth] - (NIGHT_OWL_DROP if p.real_life.night_owl else 0)
+        threshold = layer_trust(p, layer.depth)
         if store.get_relationship(confessor, other).trust < threshold:
             continue
         reciprocal = store.conn.execute(
@@ -370,7 +370,7 @@ def _gossip_sources(ctx, row, memories, offer):
         if named and (m.owner != a or gossip.source_root(ctx.store, m) != offer["rumor"]["root"]):
             continue
         traits = trait_today(ctx.store, ctx.night, m.owner, ctx.persona(m.owner))
-        score = gossip.tell_score(m.importance, m.confidence, traits)
+        score = gossip.tell_score(m.importance, m.confidence, traits, gossip.drama_of(ctx, m.owner))
         options.append((score, m, about, traits))
     options.sort(key=lambda x: (-x[0], x[1].owner != a, x[1].id))
     teller = a if named or not options else options[0][1].owner

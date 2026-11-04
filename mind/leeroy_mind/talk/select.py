@@ -25,6 +25,7 @@ from leeroy_mind.talk.filters import subject_words
 from leeroy_mind.talk.names import game_thing
 from leeroy_mind.text import normalize_words, strip_wow_markup
 from leeroy_mind.talk.turns import TurnKind
+from leeroy_mind.tuning.effective import dials_of
 
 NON_CORE_FACTOR = 0.08
 INTROVERT_OPENER_FACTOR = 0.25
@@ -146,17 +147,63 @@ def _words(text: str) -> list[str]:
             if (len(w) >= MIN_WORD and w not in _STOP) or w in _SHORT_TOPIC]
 
 
+# The interest dials (tuning: theorycraft, lore) by the way of playing they stand for.
+INTEREST_DIALS = {"theorycrafter": "theorycraft", "lore": "lore"}
+INTEREST_ON, INTEREST_OFF = 7, 3  # from this level an interest counts, up to this one it doesn't
+_PLAY_WORDS = {way: frozenset(_words(_PLAY_TOPICS[way])) for way in INTEREST_DIALS}
+
+
+def interested(p: Persona, thinks_as: str) -> bool:
+    """Whether the member thinks this way: their game.thinks_as, unless the owner has turned
+    its interest dial to INTEREST_OFF or below, or any member whose dial he has turned to
+    INTEREST_ON or above (theorycrafter and lore only: the other ways are categories)."""
+    dial = INTEREST_DIALS.get(thinks_as)
+    level = dials_of(p).values.get(dial) if dial else None
+    if level is None:
+        return p.game.thinks_as == thinks_as
+    return level >= INTEREST_ON or (p.game.thinks_as == thinks_as and level > INTEREST_OFF)
+
+
+def _play_topics(p: Persona) -> list[str]:
+    mt = dials_of(p)
+    if not mt.values:
+        return [_PLAY_TOPICS.get(p.game.thinks_as, "")]
+    out = [_PLAY_TOPICS.get(p.game.thinks_as, "")] if (
+        p.game.thinks_as not in INTEREST_DIALS or interested(p, p.game.thinks_as)) else []
+    return out + [_PLAY_TOPICS[way] for way in INTEREST_DIALS
+                  if way != p.game.thinks_as and interested(p, way)]
+
+
 def persona_keywords(p: Persona) -> frozenset[str]:
     """What touches this member: their interests and life, their spec, and what their role,
-    officer title and way of playing make them care about."""
+    officer title and way of playing make them care about (the interest dials included:
+    interested)."""
     title = p.play.officer_title.casefold()
     bits = [*p.likes, *p.dislikes, *p.opinions, *p.game.wants, *p.game.outside_raids,
             p.game.favourite_spot, p.play.main_spec, p.play.off_spec, p.real_life.job,
             p.real_life.life_thread, p.play.officer_title,
             _ROLE_TOPICS.get(p.play.raid_role, ""),
             *(words for key, words in _TITLE_TOPICS.items() if key in title),
-            _PLAY_TOPICS.get(p.game.thinks_as, ""), _PLAY_TOPICS.get(p.game.motivation, "")]
+            *_play_topics(p), _PLAY_TOPICS.get(p.game.motivation, "")]
     return frozenset(w for b in bits for w in _words(b))
+
+
+def _interest_pull(p: Persona, topic: set[str]) -> float:
+    """How much more (or less) a topic on an interest dial's ground pulls the member in:
+    0.5 at level 0, 1 as written, 1.5 at 10."""
+    mt, pull = dials_of(p), 1.0
+    for way, dial in INTEREST_DIALS.items():
+        if dial in mt.values and topic & _PLAY_WORDS[way]:
+            pull *= 0.5 + mt.mult(dial) / 2
+    return pull
+
+
+def _attitude_weight(p: Persona) -> float:
+    """ATTITUDE_WEIGHT for her stance, its lift scaled by her forward dial (tuning): 0 makes
+    her lift nothing, 10 twice the lift."""
+    w = ATTITUDE_WEIGHT.get(p.romance.stance, 1.0)
+    f = dials_of(p).mult("forward")
+    return w if f == 1.0 else 1 + (w - 1) * f
 
 
 def topic_words(lines: Sequence[str]) -> set[str]:
@@ -229,8 +276,11 @@ def speaker_weight(p: Persona, state: PersonaStateRow, rel_to_last: Relationship
     if ctx.to_human:  # his row counts for what was lived; her attitude, a little
         close = close if lived_close(rel_to_last) else 1.0
         if p.identity.player_gender == "female":
-            close *= ATTITUDE_WEIGHT.get(p.romance.stance, 1.0)
+            close *= _attitude_weight(p)
     w = (0.2 + ext / 10) * interest * close * max(0.0, 1 + 0.3 * state.mood) * talk_mult
+    mt = dials_of(p)
+    if mt.values:  # the owner's dials (tuning): talkative, and the interest dials' pull
+        w *= mt.mult("talkative") * _interest_pull(p, ctx.topic)
     if not p.core:
         w *= NON_CORE_FACTOR
     if ctx.opener and ext <= 4:

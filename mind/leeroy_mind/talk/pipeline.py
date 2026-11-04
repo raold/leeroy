@@ -59,8 +59,8 @@ from leeroy_mind.talk.prompt import (PromptParts, chat_line_text, comms_rules, f
 from leeroy_mind.talk.questions import game_question
 from leeroy_mind.talk.raid import RaidState
 from leeroy_mind.talk.romance import (FULL_DIAL, NO_BRAKES_DIAL, dial_for, explicit_whisper,
-                                      flirt_chance, own_dial, romance_instruction,
-                                      whisper_tail)
+                                      flirt_chance, forward, own_dial,
+                                      romance_instruction, whisper_tail)
 from leeroy_mind.talk.select import (OPEN_THREAD_S, SpeakerContext, has_reason, is_quest_talk,
                                      mentioned, quest_helper, speaker_weight, typing_delay)
 from leeroy_mind.talk.states import EFFECTS, Altered, Effects, effects_for, substance_of
@@ -649,6 +649,9 @@ class Pipeline:
                 share += ROMANCE_LATE_BONUS
             if now - self._romance_at.get(p.guid, -math.inf) < ROMANCE_COOL_S:
                 share /= 2
+            f = forward(p)  # her forward dial (tuning): how often her turns carry it
+            if f != 1.0:
+                share = min(1.0, share * f)
             if rng.random() >= share:
                 return None
         return romance_instruction(p, rel_h, dial=self.cfg.romance.dial, channel=turn.channel,
@@ -796,7 +799,7 @@ class Pipeline:
             forms=human.forms if to_human else THEY_FORMS, tail=tail, long=two, quiet=quiet)
         parts = PromptParts(
             card=self._card(p), samples=samples,
-            rules=comms_rules(human, p), rel_cards=cards,
+            rules=comms_rules(human, p, data_dir=self.data_dir), rel_cards=cards,
             memories=[self.recall.format(m) for m in memories],
             mood=mood_line(state, altered, substance_of(p, altered, local), phase,
                            kind=turn.kind, life_thread=p.real_life.life_thread,

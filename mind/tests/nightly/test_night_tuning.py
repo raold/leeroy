@@ -33,3 +33,22 @@ def test_a_change_made_while_a_night_runs_waits_for_the_next_one(h):
     ctx.personas.set_tuning(Tuning.load(h.store.conn))  # the live mind takes the change
     assert dials_of(ctx.personas.get(101)).values == {"talkative": 2}
     assert dials_of(ctx.persona(101)).values == {"talkative": 9}
+
+
+def test_drama_scales_confront_and_opening_up_lets_a_louder_member_confide(h):
+    from leeroy_mind.nightly.storyteller import Volition, volitions
+    from nightly.test_night_storyteller import ext, feud
+    feud(h, 101, 102, 2)
+    h.persona(105, disclosures=(("surface", "I keep a garden."),
+                               ("deep", "I am afraid of letting my family down.")))
+    ext(h, 105, 6)  # too outgoing to confide, as written
+    h.rel(105, 101, trust=25)
+    plain = volitions(h.ctx())
+    assert plain[101] == [Volition(101, "confront", 102, 1.0)]
+    assert all(v.kind != "confide" for v in plain.get(105, []))
+    put(h.store, ("member", "101", "drama", 10), ("member", "105", "openup", 8))
+    tuned = volitions(h.ctx())
+    assert tuned[101] == [Volition(101, "confront", 102, 2.0)]
+    assert tuned[102] == [Volition(102, "confront", 101, 1.0)]
+    confide = [v for v in tuned[105] if v.kind == "confide"]
+    assert [(v.target, round(v.weight, 9)) for v in confide] == [(101, 1.44)]
