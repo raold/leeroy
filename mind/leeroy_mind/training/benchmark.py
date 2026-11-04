@@ -426,6 +426,16 @@ class Benchmarks:
         return set(members) if (isinstance(members, list) and len(members) <= 40
             and all(_positive(g) for g in members)) else set()
 
+    def body_holds(self):
+        from leeroy_mind.bodies import BodyHold
+        if self._corrupt or self._state is not None and not self._valid_state(self._state):
+            raise ValueError("benchmark body evidence unavailable")
+        state = self._state
+        if state is None:
+            return ()
+        return (BodyHold(state["command_id"], state["owner"], 2,
+                         frozenset(state["members"]), state["dispatched"]),)
+
     @property
     def next_due(self):
         window = _window(self.ports.clock, self.cfg)
@@ -621,10 +631,10 @@ class Benchmarks:
 
     def _release_owned(self):
         state = self._state
-        owned = [g for g in state["members"] if self.ports.holder(g) == state["owner"]]
+        owned = set(state["members"]) & self.ports.claims_for(state["owner"])
         if owned:
             self.ports.release(state["owner"], owned)
-        if any(self.ports.holder(g) == state["owner"] for g in state["members"]):
+        if set(state["members"]) & self.ports.claims_for(state["owner"]):
             raise RuntimeError("benchmark body release unconfirmed")
 
     def _release_presend(self):

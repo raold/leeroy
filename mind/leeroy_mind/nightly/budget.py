@@ -49,6 +49,9 @@ CORE_JUDGE_CALLS = 0.5
 # What one unit of each stage costs, in calls of each kind, at planning costs:
 UNIT_CALLS: dict[str, dict[str, float]] = {
     "coach": {"think": 1, "json": 2},
+    # the realm's night (realm/night.py) counts in 20 s JSON equivalents: a beat, post, letter
+    # or write-up is 1, the weekly meeting 7 and the monthly applicant 6
+    "realm": {"json": 1},
     "reflect": {"think": 1, "json": 3},        # the questions, the reflection, a judge batch: 150 s
     "reflect_small": {"think": 1, "json": 2},  # without the questions call (DEGRADE step 6): 130 s
     # a reflect unit with candidates, on top of its own: its decide calls (K2): 40 s
@@ -84,7 +87,7 @@ MEASURE_MIN = 3     # ...once there are 3 of them
 COUNTERS: dict[str, Callable[["NightContext"], int]] = {}
 # Optional extensions must be admitted on the particular runner before budgeting.
 # Core counters may belong to substages, so their historical counting is unchanged.
-EXTENSION_STAGES = frozenset({"coach"})
+EXTENSION_STAGES = frozenset({"coach", "realm"})
 
 
 def register_counter(stage: str, fn: Callable[["NightContext"], int]) -> None:
@@ -197,8 +200,10 @@ class Degrade(NamedTuple):
 # The degrade order. Each step runs only while the estimate is over the budget, and stops at its
 # floor. Never cut: the snapshot, threads, confide (the secrets), knows, nudges, tier-0, the looks
 # of newcomers, the reflection itself, attraction, romance, jealousy, follow-ups and absence,
-# mood, forgetting, regression and the weekly evaluation.
+# mood, forgetting, regression and the weekly evaluation. The realm's units go first, down to
+# none: the realm's own order keeps its meeting longest (realm/night.py).
 DEGRADE = (
+    Degrade("realm", (Cut("realm_units", "fit", 0),)),
     Degrade("coach", (Cut("coach_units", "fit", 5),)),
     Degrade("encounters", (Cut("encounters_per_night", "fit", 20),)),
     Degrade("notes", (Cut("notes_per_night", "fit", 100),)),

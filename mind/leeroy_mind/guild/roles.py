@@ -2,6 +2,8 @@
 
 import re
 
+from leeroy_mind.tuning.effective import dials_of
+
 
 _SPECS = {
     1: ("arms", "fury", "protection"),
@@ -81,7 +83,10 @@ def is_achievement_hunter(persona) -> bool:
 
 
 def reliability(persona) -> int:
-    return persona.big_five.conscientiousness.score
+    """How reliably they turn up: the conscientiousness score, unless the owner has set their
+    reliability dial (tuning), which moves this and nothing else (not their discretion)."""
+    tuned = dials_of(persona).score("reliability")
+    return persona.big_five.conscientiousness.score if tuned is None else tuned
 
 
 def spec_tab_for(cls, main_spec, raid_role) -> int | None:

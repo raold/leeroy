@@ -5,7 +5,8 @@
 
 #include "Define.h"
 
-// World thread. Applies cast + owner contributions (empty with both flags off when disabled).
+// World thread. Applies cast + owner contributions. Disable releases ordinary
+// cast pins but retains explicit owners with keep on and bring-online off until cleanup.
 // Returns the whole accepted union count; it is not proof of an individual owner's acceptance.
 uint32 LeeroyApplyPins();
 

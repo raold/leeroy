@@ -90,9 +90,15 @@ class Ports:
 
     def release(self, owner, guids=None):
         self.released.append((owner, set(guids or ())))
+        removed = set()
         for guid in guids or ():
             assert self.holder(guid) == owner, "must not release a preempting owner"
             self.holders.pop(guid)
+            removed.add(guid)
+        return removed
+
+    def claims_for(self, owner):
+        return frozenset(g for g, held in self.holders.items() if held == owner)
 
     def benchmark_allowed(self, *args):
         return self.realm(*args)

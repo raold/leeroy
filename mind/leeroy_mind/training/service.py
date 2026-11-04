@@ -121,6 +121,16 @@ class TrainingGround:
     def training_members(self):
         return self.jobs.members()
 
+    def body_holds(self):
+        from .body_holds import validate_journals
+        try:
+            holds = self.jobs.body_holds()
+            validate_journals(self)
+            return holds
+        except Exception:
+            # Unknown evidence is different from a successfully empty source.
+            raise RuntimeError("training body evidence unavailable") from None
+
     def base_application_allowed(self):
         return bool(self._connected and self._presence_known and not self._stopping
                     and self._startup_ready and self.vocab.complete and self.gate.phase == "passed")

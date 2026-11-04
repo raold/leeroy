@@ -4,20 +4,24 @@ import asyncio
 import json
 import sqlite3
 import threading
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
+from conftest import make_persona
+from guild.fakes import FakeArmory
 from leeroy_mind.app import MindApp
 from leeroy_mind.config import load_config
 from leeroy_mind.guild.protocol import Job
-from leeroy_mind.protocol import Ack
+from leeroy_mind.guild.raid_night import RaidRun, State
+from leeroy_mind.guild.session import RaidPlan, RaidSession
+from leeroy_mind.personas.io import save_persona
+from leeroy_mind.protocol import Ack, Member
 from leeroy_mind.testing.fake_llm import FakeLLM
 from leeroy_mind.training.cards import Directive
 from leeroy_mind.training.spells import SpellBook
 
-from .test_tg_applier import Fake, MEMBERS, RUN, card, vocabulary
+from .test_tg_applier import MEMBERS, card, vocabulary
 from .test_tg_gate import _run_async
 
 
@@ -30,13 +34,43 @@ def create_app(tmp_path, clock):
     return app
 
 
+async def bind_online_raid(app, clock):
+    """Supply the real current-session proof required by the attached ledger."""
+    for guid, name, cls, spec, role, class_name in ((101, "Rook", 1, 2, "tank", "Warrior"),
+                                                   (102, "Vale", 8, 2, "ranged", "Mage")):
+        app.store.upsert_cast([Member(guid, name, 1, cls, 0, 80, 3, True, 631, 0, spec)], clock.now())
+        save_persona(app.store, make_persona(guid, name, raid_role=role),
+                     source="seed", ts=clock.now(), race="Human", class_name=class_name)
+    plan = RaidPlan("icc", 10, False, False, 101, 101, 102, [101, 102], [], False)
+    session = await RaidSession.open(app.guild.ports, app.guild.cfg, FakeArmory({}, {}), plan)
+    assert session.bind_instance(77)
+    run = RaidRun(session.plan, session, False, False)
+    controller = app.guild.raid_night
+    controller.session, controller.run, controller.state = session, run, State.RUNNING
+    ground = app.training
+    ground.listener.run = run
+    ground.ledger.set_run(run)
+    ground.ports._generation = ground._epoch = 1
+    ground._connected = ground._presence_known = ground._startup_ready = True
+    ground.vocab, ground.gate._phase = vocabulary(), "passed"
+    assert app.bodies.owner_for_run(run) == "raid"
+    assert not app.bodies.may_move("raid", 102)
+    assert ground.state_for(ground.listener.run_key(run)).members[102] == MEMBERS[102]
+    return run
+
+
 def observe_drain(app):
+    """Observe Training's registered drain regardless of extension order."""
     entered = asyncio.Event()
-    original = app._shutdown_drains[-1]
+    matches = [(index, hook) for index, hook in enumerate(app._shutdown_drains)
+               if getattr(hook, "__self__", None) is app.training
+               and getattr(hook, "__func__", None) is type(app.training).close]
+    assert len(matches) == 1, "Training must register exactly one owned shutdown drain"
+    index, original = matches[0]
     async def drain():
         entered.set()
         await original()
-    app._shutdown_drains[-1] = drain
+    app._shutdown_drains[index] = drain
     return entered
 
 
@@ -51,11 +85,9 @@ async def test_real_app_keeps_resources_for_late_training_job_after_generic_canc
     app = create_app(tmp_path, clock)
     ground = app.training
     app._human = 1
-    proof = Fake(SimpleNamespace(conn=app.store.conn), clock)
-    ground.applier.state_provider = proof.snapshot
-    ground.applier.application_allowed = lambda: not ground._stopping
-    ground.ledger.first_pull_ts = proof.first_pull_ts
-    ground.vocab = vocabulary()
+    run = await bind_online_raid(app, clock)
+    run_key = ground.listener.run_key(run)
+    ground.ledger.first_pull_ts = lambda: clock.now() - 28 * 86400
     entered, release = asyncio.Event(), asyncio.Event()
     sent = []
     async def transport(command, *, preserve_id):
@@ -72,7 +104,7 @@ async def test_real_app_keeps_resources_for_late_training_job_after_generic_canc
         return Ack(0, command.id, True, "")
     app.bridge.send = transport
     app._start_background(ground.run)
-    apply = asyncio.create_task(ground.applier.apply(RUN, "boss", "631:0:0",
+    apply = asyncio.create_task(ground.applier.apply(run_key, "boss", "631:0:0",
         card(Directive("threat", "+")), {102: MEMBERS[102]}, tank_guid=101, lead_is_human=False))
     app._bg_tasks.append(apply)
     draining = observe_drain(app)

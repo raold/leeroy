@@ -175,6 +175,24 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .card header .close { margin-left: auto; }
 .card h4 { margin: 10px 0 2px; font-size: 12px; color: var(--dim); font-weight: 600; }
 .card h4:first-of-type { margin-top: 0; }
+/* the dials */
+.dial { display: grid; grid-template-columns: minmax(120px, 13em) 1fr; gap: 2px 10px; padding: 6px 0;
+  border-top: 1px solid var(--line); font-size: 12px; }
+.dial:first-child { border-top: 0; }
+.dial .nm { color: var(--bright); }
+.dial .nm small { display: block; color: var(--faint); font-weight: 400; }
+.dial .ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.dial .ctl input[type="range"] { width: 11em; }
+.dial .ctl .v { min-width: 2.5em; font-variant-numeric: tabular-nums; color: var(--bright); }
+.dial .ctl button { padding: 1px 8px; }
+.dial .moves { grid-column: 2; color: var(--dim); }
+.dial.off .nm, .dial.off .moves { color: var(--faint); }
+.pv { margin: 4px 0 0; font-size: 12px; }
+.pv .said { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--bright); }
+.chg { margin: 0 0 8px; }
+.chg .acts { margin-top: 2px; }
+input[type="text"], input[type="number"] { font: inherit; color: var(--text); background: var(--raised);
+  border: 1px solid var(--line); border-radius: 4px; padding: 2px 4px; }
 
 @media (max-width: 720px) {
   .cols { flex-direction: column; }
@@ -324,7 +342,47 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
           <th>mood</th><th>stance</th><th>toward you</th><th>closest ties</th><th class="num" id="p-memhead">memories</th>
           <th>persona</th><th>drift</th></tr></thead>
           <tbody id="p-roster"></tbody></table></div>
-        <p class="why">Read from mind.db; nothing here changes a persona. Pick a member for their card, ties, memories and ledger.</p>
+        <p class="why">Read from mind.db; nothing here changes a stored persona. Pick a member for their card, dials, ties, memories and ledger.</p>
+      </article>
+    </div>
+    <div id="p-tuning" class="cards wide">
+      <article class="card span">
+        <header><h3>Tuning</h3><span id="t-sum" class="muted"></span></header>
+        <p id="t-lead" class="lead">-</p>
+        <p class="why">Dials are numbers laid over the stored personas; nothing is rewritten. A member's own value wins over
+          group and world changes. 5 is as the persona is written (a score dial starts at their own score). Preview first:
+          lines for the dials that change how they talk, numbers for the ones that change how often.</p>
+      </article>
+      <article class="card">
+        <header><h3>World</h3><span class="muted">over mind.toml, which is never written</span></header>
+        <div id="t-world"></div>
+      </article>
+      <article class="card">
+        <header><h3>Groups</h3><span class="muted">offsets add up for every group a member is in</span></header>
+        <div id="t-groups"></div>
+        <h4>A group</h4>
+        <div class="formrow" id="t-gform">
+          <label>name <input type="text" id="t-gname" maxlength="40" size="14"></label>
+          <label>field <select id="t-gfield"></select></label>
+          <label>values <select id="t-gvalues" multiple size="3"></select></label>
+          <label>age <input type="number" id="t-gfrom" min="18" max="99" size="3"> to <input type="number" id="t-gto" min="18" max="99" size="3"></label>
+          <button type="button" id="t-gadd">Add condition</button>
+          <span id="t-gwhere" class="muted"></span>
+          <button type="button" id="t-gsave">Save group</button>
+          <button type="button" id="t-gclear">Clear</button>
+        </div>
+      </article>
+      <article id="t-pvcard" class="card span" hidden>
+        <header><h3>Preview</h3><span id="t-pvwhat" class="muted"></span>
+          <button type="button" id="t-pvclose" class="close">Close</button></header>
+        <div id="t-preview"></div>
+      </article>
+      <article class="card span">
+        <header><h3>Change log</h3><span class="muted">your dial changes, newest first</span></header>
+        <div id="t-history" class="scroll"></div>
+        <p class="why">Undo reverses one change and is itself a change (undo it to redo). It is refused when a later change
+          moved the same value. Neither undo nor revert takes back what was said, remembered, felt or gossiped while a value
+          was in force; that is the guild's history now. A full rewind is a snapshot restore with the mind stopped.</p>
       </article>
     </div>
     <div id="p-detail" class="cards wide" hidden>
@@ -333,6 +391,10 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
           <button type="button" id="p-close" class="close">Close</button></header>
         <p id="p-lead" class="lead"></p>
         <p id="p-why" class="why"></p>
+      </article>
+      <article class="card span">
+        <header><h3>Dials</h3><span id="p-dialsum" class="muted"></span></header>
+        <div id="p-dials"></div>
       </article>
       <article class="card">
         <header><h3>Who they are</h3></header>
@@ -1713,6 +1775,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
     var rows = $("p-roster").querySelectorAll("tr[data-guid]");
     for (var i = 0; i < rows.length; i++) { rows[i].classList.toggle("sel", Number(rows[i].dataset.guid) === guid); }
     if (!guid) { $("p-detail").hidden = true; return; }
+    if (TUNE) { renderDials(guid); }
     pollMember();
   }
   $("p-roster").addEventListener("click", function (ev) {
@@ -1724,6 +1787,250 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
     if (tr && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); choose(Number(tr.dataset.guid)); }
   });
   $("p-close").addEventListener("click", function () { choose(0); });
+
+  // The dials: read from mind.db (/api/tuning); every change and preview goes to the running
+  // mind's tune op (/api/tune), which checks it again and says why when it refuses. Preview text
+  // is shown here only: never stored, logged or sent anywhere else.
+  var TUNE = null, tuneBusy = false, lastPreview = "", gWhere = {};
+  var WHO = { women: "women only", party: "drinkers and smokers only" };
+  function tuneView() { return obj(obj(TUNE).view); }
+  function tuneLive() { return !!TUNE && obj(TUNE.mind).ok === true && obj(TUNE.control).enabled !== false; }
+  function tuneWhy() {
+    if (!TUNE) { return "reading"; }
+    if (obj(TUNE.control).enabled === false) { return str(obj(TUNE.control).reason) || "control is off"; }
+    return obj(TUNE.mind).ok === true ? "" : str(obj(TUNE.mind).error);
+  }
+  function previewKey(scope, target, dial, value) { return [scope, target, dial, value].join("|"); }
+  function showPreview(what, r) {
+    var box = $("t-preview");
+    clear(box);
+    $("t-pvcard").hidden = false;
+    setText("t-pvwhat", what);
+    if (r.ok !== true) { box.appendChild(el("p", "why bad", str(r.error) || "refused")); return; }
+    arr(r.world).forEach(function (x) { box.appendChild(el("p", "pv", numberText(x))); });
+    if (r.note) { box.appendChild(el("p", "why", str(r.note))); }
+    arr(r.subjects).forEach(function (s) {
+      var d = el("div", "pv");
+      d.appendChild(el("h4", "", str(s.name) || "#" + s.guid));
+      if (s.numbers) { arr(s.numbers).forEach(function (x) { d.appendChild(el("p", "pv", numberText(x))); }); }
+      ["before", "after"].forEach(function (k) {
+        var line = obj(s[k]);
+        if (!s.numbers) {
+          var p = el("p", "pv", k + ": ");
+          p.appendChild(el("span", line.text ? "said" : "muted", line.text ? str(line.text) : str(line.note)));
+          d.appendChild(p);
+        }
+      });
+      box.appendChild(d);
+    });
+    if (typeof r.reach === "number") { box.appendChild(el("p", "why", "It reaches " + plural(r.reach, "member") + " now.")); }
+  }
+  function numberText(x) {
+    function v(y) { return y === true ? "yes" : y === false ? "no" : y === null ? "never" : String(y) + (x.unit ? " " + x.unit : ""); }
+    return str(x.what) + ": " + v(x.before) + " → " + v(x.after);
+  }
+  function tuneAsk(args, what) {
+    if (args.action === "preview") { setText("t-pvwhat", what + ": asking the mind"); $("t-pvcard").hidden = false; }
+    return post("/api/tune", args).then(function (r) {
+      if (r.status === 403 && !r.error) { keyLost(); return r; }
+      if (args.action === "preview") {
+        showPreview(what, r);
+        if (r.ok === true) { lastPreview = previewKey(args.scope, args.target, args.dial, args.value); }
+      } else if (r.ok !== true) { note(what + " refused: " + str(r.error)); }
+      else { note(what + ": " + str(r.message)); pollTuning(); }
+      return r;
+    }, function () { note(what + ": the console could not be reached"); });
+  }
+  function setValue(scope, target, dial, value, what) {
+    return tuneAsk({ action: "set", scope: scope, target: target, dial: dial, value: value,
+                     previewed: lastPreview === previewKey(scope, target, dial, value) }, what);
+  }
+  // One dial: its name and what it moves, a slider, and Preview / Set / Clear
+  function dialRow(box, o) {
+    var row = el("div", "dial" + (o.off ? " off" : ""));
+    var nm = el("div", "nm", o.label);
+    if (o.sub) { nm.appendChild(el("small", "", o.sub)); }
+    row.appendChild(nm);
+    var ctl = el("div", "ctl");
+    if (o.off) { ctl.appendChild(el("span", "muted", o.off)); }
+    else {
+      var range = el("input");
+      range.type = "range"; range.min = o.lo; range.max = o.hi; range.step = 1; range.value = o.start;
+      range.setAttribute("aria-label", o.label);
+      var shown = el("span", "v", String(o.start));
+      range.addEventListener("input", function () { shown.textContent = (o.signed && range.value > 0 ? "+" : "") + range.value; });
+      ctl.appendChild(range); ctl.appendChild(shown);
+      var live = tuneLive();
+      [["Preview", function () { tuneAsk({ action: "preview", scope: o.scope, target: o.target, dial: o.dial,
+                                            value: Number(range.value) }, o.what + " " + range.value); }],
+       ["Set", function () { setValue(o.scope, o.target, o.dial, Number(range.value), o.what + " " + range.value); }],
+       [o.clear || "Clear", function () { setValue(o.scope, o.target, o.dial, null, o.what + ": cleared"); }]]
+        .forEach(function (b, i) {
+          var btn = el("button", "", b[0]);
+          btn.type = "button";
+          btn.disabled = !live || (i === 2 && !o.clearable);
+          if (!live) { btn.title = tuneWhy(); }
+          btn.addEventListener("click", b[1]);
+          ctl.appendChild(btn);
+        });
+      if (o.state) { ctl.appendChild(el("span", "muted", o.state)); }
+    }
+    row.appendChild(ctl);
+    if (o.moves) { row.appendChild(el("div", "moves", o.moves)); }
+    box.appendChild(row);
+  }
+  function dialSpec(name) { return arr(tuneView().dials).filter(function (d) { return d.name === name; })[0] || {}; }
+  function renderTuning() {
+    var v = tuneView(), live = tuneLive();
+    setText("t-sum", v.available ? "version " + num(v.version) : "");
+    if (!v.available) {
+      setText("t-lead", "This mind.db has no tuning tables yet (" + arr(v.missing).join(", ") + "): `db migrate` with the mind stopped adds them.");
+    } else {
+      setText("t-lead", plural(num(v.pinned_members), "member has", "members have") + " values of their own (they win over group and world changes)."
+              + (live ? "" : " Read-only now: " + tuneWhy()));
+    }
+    var world = $("t-world");
+    clear(world);
+    arr(v.world_dials).forEach(function (d) {
+      dialRow(world, { label: d.label, sub: "mind.toml " + (d.file === null || d.file === undefined ? "unread" : d.file)
+                       + (d.override !== null && d.override !== undefined ? ", set here " + d.override : ""),
+                       lo: d.lo, hi: d.hi, start: d.value === null || d.value === undefined ? d.lo : d.value,
+                       scope: "world", target: "", dial: d.name, what: "world " + d.label,
+                       clear: "Back to mind.toml", clearable: d.override !== null && d.override !== undefined,
+                       moves: str(d.moves) + " (" + str(d.when) + ")", off: v.available ? "" : "unavailable" });
+    });
+    var groups = $("t-groups");
+    clear(groups);
+    arr(v.groups).forEach(function (g) {
+      var head = el("h4", "", (g.builtin ? "everyone" : str(g.name)) + " · " + plural(num(g.members), "member")
+                    + (g.builtin ? "" : " · " + str(g.describe)));
+      groups.appendChild(head);
+      if (!g.builtin) {
+        var rt = el("button", "", "Retire");
+        rt.type = "button"; rt.disabled = !live;
+        rt.addEventListener("click", function () { tuneAsk({ action: "retire", id: Number(g.target) }, "retire " + g.name); });
+        head.appendChild(document.createTextNode(" "));
+        head.appendChild(rt);
+      }
+      var offs = obj(g.offsets);
+      arr(v.dials).forEach(function (d) {
+        var set = own(offs, d.name);
+        if (!set && !g.showAll) { return; }
+        dialRow(groups, { label: d.label, sub: set ? "offset " + (offs[d.name] > 0 ? "+" : "") + offs[d.name] : "",
+                          lo: -10, hi: 10, start: set ? offs[d.name] : 0, signed: true,
+                          scope: "group", target: g.target, dial: d.name, what: (g.builtin ? "everyone" : g.name) + " " + d.label,
+                          clearable: set, moves: d.who !== "everyone" ? WHO[d.who] + ": the others are skipped" : "" });
+      });
+      var add = el("select");
+      add.appendChild(el("option", "", "offset another dial"));
+      arr(v.dials).forEach(function (d) { if (!own(offs, d.name)) { var o = el("option", "", d.label); o.value = d.name; add.appendChild(o); } });
+      add.addEventListener("change", function () {
+        if (!add.value) { return; }
+        var d = dialSpec(add.value), box = el("div");
+        add.parentNode.insertBefore(box, add);
+        dialRow(box, { label: d.label, lo: -10, hi: 10, start: 0, signed: true, scope: "group", target: g.target,
+                       dial: d.name, what: (g.builtin ? "everyone" : g.name) + " " + d.label, clearable: false,
+                       moves: d.who !== "everyone" ? WHO[d.who] + ": the others are skipped" : "" });
+        add.remove();
+      });
+      groups.appendChild(add);
+    });
+    var fields = obj(v.fields), fsel = $("t-gfield");
+    if (!fsel.options.length) {
+      Object.keys(fields).forEach(function (k) { var o = el("option", "", k.replace(/_/g, " ")); o.value = k; fsel.appendChild(o); });
+      fillValues();
+    }
+    var hist = $("t-history");
+    clear(hist);
+    arr(v.history).forEach(function (c) {
+      var d = el("div", "chg");
+      d.appendChild(el("div", "", "#" + c.id + " " + when(c.ts) + " · " + str(c.source) + " · " + str(c.label)
+                       + (c.previewed ? " · previewed" : "") + (c.undone_by ? " · undone by #" + c.undone_by : "")));
+      arr(c.rows).forEach(function (r) { d.appendChild(el("div", "muted", "  " + rowText(v, r))); });
+      var acts = el("div", "acts");
+      [["Undo", { action: "undo", change: c.id }, "undo #" + c.id], ["Revert to here", { action: "revert", to: c.id }, "revert to #" + c.id]]
+        .forEach(function (b) {
+          var btn = el("button", "", b[0]);
+          btn.type = "button"; btn.disabled = !live;
+          btn.addEventListener("click", function () { tuneAsk(b[1], b[2]); });
+          acts.appendChild(btn);
+        });
+      d.appendChild(acts);
+      hist.appendChild(d);
+    });
+    if (!arr(v.history).length) { hist.appendChild(el("div", "muted", v.available ? "No dial changes yet." : "Unavailable in this mind.db.")); }
+    if (pick) { renderDials(pick); }
+  }
+  function rowText(v, r) {
+    var who = r.scope === "world" ? "world" : r.scope === "group" ? "group " + groupName(v, r.target) : pname(v, Number(r.target));
+    if (r.dial === "definition") {
+      return who + (r.after ? " saved: " + str(obj(r.after).name) : " retired");
+    }
+    function val(x) { return x === null || x === undefined ? "unset" : String(x); }
+    return who + " " + r.dial + " " + val(r.before) + " → " + val(r.after);
+  }
+  function groupName(v, target) {
+    var g = arr(v.groups).filter(function (x) { return x.target === target; })[0];
+    return g ? str(g.name) : "#" + target;
+  }
+  function renderDials(guid) {
+    var v = tuneView(), box = $("p-dials");
+    clear(box);
+    var m = arr(v.members).filter(function (x) { return x.guid === guid; })[0];
+    if (!m) { setText("p-dialsum", ""); box.appendChild(el("p", "muted", v.available ? "No dials: this member has no readable persona, or is you." : "Unavailable in this mind.db.")); return; }
+    var mine = 0;
+    arr(v.dials).forEach(function (d) {
+      var x = obj(obj(m.dials)[d.name]), owned = x.own !== null && x.own !== undefined;
+      if (owned) { mine += 1; }
+      var state = owned ? "your value " + x.own + (x.stale ? " (their persona changed since you set it)" : "")
+                : x.value !== x.base ? "groups make it " + x.value : "";
+      dialRow(box, { label: d.label, sub: (d.kind === "score" ? "their own score " : "as written ") + x.base
+                     + (x.value !== x.base ? " · now " + x.value : ""),
+                     lo: d.lo, hi: d.hi, start: owned ? x.own : x.value, scope: "member", target: String(guid),
+                     dial: d.name, what: m.name + " " + d.label, clearable: owned, state: state,
+                     moves: str(d.moves) + " (from " + str(d.when) + ")", off: x.applies ? "" : str(x.note) });
+    });
+    setText("p-dialsum", mine ? plural(mine, "value") + " of your own" : "nothing of your own set");
+  }
+  function fillValues() {
+    var vals = arr(obj(tuneView().fields)[$("t-gfield").value]), sel = $("t-gvalues");
+    clear(sel);
+    vals.forEach(function (x, i) { var o = el("option", "", String(x)); o.value = String(i); sel.appendChild(o); });
+  }
+  function whereText() {
+    var parts = Object.keys(gWhere).map(function (k) { return k.replace(/_/g, " ") + ": " + gWhere[k].join(k === "age" ? "-" : " or "); });
+    setText("t-gwhere", parts.length ? parts.join("; ") : "no conditions yet");
+  }
+  $("t-gfield").addEventListener("change", fillValues);
+  $("t-gadd").addEventListener("click", function () {
+    var from = Number($("t-gfrom").value), to = Number($("t-gto").value);
+    if (from && to) { gWhere.age = [from, to]; $("t-gfrom").value = $("t-gto").value = ""; }
+    var field = $("t-gfield").value, all = arr(obj(tuneView().fields)[field]), picked = [];
+    var opts = $("t-gvalues").options;
+    for (var i = 0; i < opts.length; i++) { if (opts[i].selected) { picked.push(all[Number(opts[i].value)]); } }
+    if (picked.length) { gWhere[field] = picked; }
+    whereText();
+  });
+  $("t-gclear").addEventListener("click", function () { gWhere = {}; $("t-gname").value = ""; whereText(); });
+  $("t-gsave").addEventListener("click", function () {
+    tuneAsk({ action: "group", id: null, name: $("t-gname").value, where: gWhere }, "group " + $("t-gname").value)
+      .then(function (r) { if (r && r.ok === true) { gWhere = {}; $("t-gname").value = ""; whereText(); } });
+  });
+  $("t-pvclose").addEventListener("click", function () { $("t-pvcard").hidden = true; });
+  function pollTuning() {
+    if (tuneBusy || tab !== "personas") { return; }
+    tuneBusy = true;
+    api("/api/tuning").then(function (r) {
+      if (r.status === 403) { keyLost(); return null; }
+      return r.json().then(function (j) { return { status: r.status, j: j }; });
+    }).then(function (x) {
+      if (!x) { return; }
+      if (x.status === 200) { TUNE = x.j; renderTuning(); }
+      else { setText("t-lead", str(x.j.error) || "mind.db could not be read."); }
+    }, function () { /* the strip says it */ })
+      .then(function () { tuneBusy = false; });
+  }
+  whereText();
 
   // -- tabs -----------------------------------------------------------------------------------------
 
@@ -1746,7 +2053,10 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
     if (name === "mind") { renderMind(); pollHealth(); healthTimer = setInterval(pollHealth, HEALTH_MS); }
     if (name === "raid") { pollRaid(); raidTimer = setInterval(pollRaid, RAID_MS); }
     if (name === "guild") { pollGuild(); guildTimer = setInterval(pollGuild, GUILD_MS); }
-    if (name === "personas") { pollPersonas(); personasTimer = setInterval(pollPersonas, PERSONAS_MS); }
+    if (name === "personas") {
+      pollPersonas(); pollTuning();
+      personasTimer = setInterval(function () { pollPersonas(); pollTuning(); }, PERSONAS_MS);
+    }
     if (name === "comms") { renderFeed(false); }
   }
   document.querySelector(".tabs").addEventListener("click", function (ev) {
@@ -1795,6 +2105,10 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
     raid: function (d) {
       note("raid, " + (RAID_LABEL[d.action] || str(d.action)) + ": " + str(d.message));
       if (tab === "raid") { pollRaid(); }
+    },
+    tuning: function (d) {
+      note("dials: change #" + num(d.change) + " saved");
+      if (tab === "personas") { pollTuning(); }
     }
   };
   // One server-sent event block: "event: <kind>" and "data: <json>" lines; ": ping" is a comment

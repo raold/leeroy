@@ -9,6 +9,11 @@ from leeroy_mind.llm.client import LLMClient, LLMError
 from leeroy_mind.llm.scheduler import LLMScheduler, Priority, SchedulerError
 from leeroy_mind.memory.privacy import derive_scope, with_request
 from leeroy_mind.personas.screens import redact_real_name
+from leeroy_mind.realm.memory_eligibility import (
+    _manifest_shape, realm_inputs_in_unit, revalidate_realm_inputs_in_unit)
+from leeroy_mind.realm.memory_lineage import (
+    RealmLineageError, _freeze, attach_realm_dependencies_in_unit)
+from leeroy_mind.realm.records import RealmInputs, Rejected
 from leeroy_mind.storage.rows import MemoryRow, cosine, pack_vec, unpack_vec
 from leeroy_mind.storage.store import Store
 from leeroy_mind.text import normalize_words, strip_wow_markup, truncate_words
@@ -94,6 +99,49 @@ class MemoryWriter:
     def _clean_text(self, text: str) -> str:
         return clean_memory_text(text, self._human() if self._human is not None else None)
 
+    @property
+    def store(self) -> Store:
+        return self._store
+
+    def _inputs(self, evidence, shown, inputs):
+        evidence, shown = _freeze(evidence, shown)
+        if inputs is not None:
+            if not _manifest_shape(inputs):
+                raise RealmLineageError(Rejected("invalid_input"))
+            if not set((*evidence, *shown)).issubset(inputs.refs):
+                raise RealmLineageError(Rejected("invalid_input"))
+            evidence, shown = _freeze(evidence, (*shown, *inputs.refs))
+        return evidence, shown
+
+    def _check_inputs(self, inputs):
+        if inputs is None:
+            return None
+        human = self._human() if self._human is not None else None
+        if type(human) is not HumanIdentity:
+            raise RealmLineageError(Rejected("invalid_input"))
+        if not revalidate_realm_inputs_in_unit(self._store, inputs, human=human):
+            raise RealmLineageError(Rejected("proof_changed"))
+        return human
+
+    def _finish_inputs(self, mid, inputs, human):
+        if inputs is None:
+            return
+        facts = {stamp.fact_id for stamp in inputs.fact_stamps}
+        for stamp in inputs.stamps:
+            facts.update(stamp.fact_ids)
+        attach_realm_dependencies_in_unit(self._store, mid, tuple(sorted(facts)))
+        tagged = self._store.conn.execute(
+            "SELECT 1 FROM realm_memory_dependency WHERE memory=? LIMIT 1", (mid,)).fetchone()
+        if inputs.mode == "exclude" and tagged is not None:
+            raise RealmLineageError(Rejected("unsupported_policy"))
+        if inputs.mode == "memory" and tagged is not None:
+            result = realm_inputs_in_unit(self._store, (f"memory:{mid}",), human=human,
+                                          mode="memory")
+            if type(result) is Rejected:
+                raise RealmLineageError(result)
+            if type(result) is not RealmInputs or not any(s.memory_id == mid for s in result.stamps):
+                raise RealmLineageError(Rejected("invalid_row"))
+
     def _limited(self, owner: int, now: int) -> bool:
         # "within the last hour/day" is exclusive of the boundary second
         s = self._store
@@ -119,22 +167,45 @@ class MemoryWriter:
                                           scope_with=scope_with)
         return replace(row, scope=scope, scope_with=scope_with)
 
-    def put(self, row: MemoryRow, *, shown: Iterable[str] = ()) -> int:
+    def put(self, row: MemoryRow, *, shown: Iterable[str] = (),
+            realm_inputs: RealmInputs | None = None) -> int:
         """Store `row` with the scope scope_of gives it, the row's own scope and scope_with
         being the request and `shown` what its prompt showed beyond its evidence; through
         upsert_keyed_memory when it has a key. Returns the id. The night's write path (P1c):
         synchronous, joining the caller's transaction, with no rate limit, dedup or text screen
         (the caller screens the text)."""
         store = self._store
+        evidence, shown = self._inputs(row.evidence, shown, realm_inputs)
+        row = replace(row, evidence=evidence)
         with store.transaction():
+            human = self._check_inputs(realm_inputs)
             row = self._scoped(row, row.scope, row.scope_with, shown)
             if row.key is not None:
-                return store.upsert_keyed_memory(row)
-            return store.insert_memory(row)
+                mid = store.upsert_keyed_memory(row, shown=shown)
+            else:
+                mid = store.insert_memory(row, shown=shown)
+            self._finish_inputs(mid, realm_inputs, human)
+            return mid
 
-    async def write(self, c: MemoryCandidate, *, enforce_limits: bool = True) -> WriteResult:
+    async def write(self, c: MemoryCandidate, *, enforce_limits: bool = True,
+                    shown: Iterable[str] = (), realm_inputs: RealmInputs | None = None) -> WriteResult:
+        try:
+            return await self._write(c, enforce_limits=enforce_limits, shown=shown,
+                                     realm_inputs=realm_inputs)
+        except RealmLineageError:
+            return WriteResult(None, "rejected")
+
+    async def _write(self, c: MemoryCandidate, *, enforce_limits: bool, shown,
+                     realm_inputs: RealmInputs | None) -> WriteResult:
         store = self._store
-        text = self._clean_text(c.text)
+        evidence, shown = self._inputs(c.evidence, shown, realm_inputs)
+        c = replace(c, evidence=evidence)
+        if realm_inputs is not None:
+            with store.transaction():
+                human = self._check_inputs(realm_inputs)
+            text = clean_memory_text(c.text, human)
+        else:
+            text = self._clean_text(c.text)
         if not text:
             return WriteResult(None, "rejected")
         if c.owner != 0 and store.get_persona_json(c.owner) is None:
@@ -153,8 +224,11 @@ class MemoryWriter:
             evidence=tuple(c.evidence), confidence=c.confidence, key=c.key)
         if c.key is not None:
             with store.transaction():
-                row = self._scoped(row, c.scope, c.scope_with)
-                return WriteResult(store.upsert_keyed_memory(row), "updated")
+                human = self._check_inputs(realm_inputs)
+                row = self._scoped(row, c.scope, c.scope_with, shown)
+                mid = store.upsert_keyed_memory(row, shown=shown)
+                self._finish_inputs(mid, realm_inputs, human)
+                return WriteResult(mid, "updated")
         if enforce_limits and self._limited(c.owner, now):
             return WriteResult(None, "rate_limited")
         vec: bytes | None = None
@@ -165,14 +239,18 @@ class MemoryWriter:
         # No await below: the checks, the scope and the insert are one transaction and one step
         # for the event loop.
         with store.transaction():
+            human = self._check_inputs(realm_inputs)
             if enforce_limits and self._limited(c.owner, int(self._clock.now())):
                 return WriteResult(None, "rate_limited")
-            row = self._scoped(row, c.scope, c.scope_with)
+            row = self._scoped(row, c.scope, c.scope_with, shown)
             twin = self._find_twin(row, vec)
             if twin is not None:
-                store.merge_memory(twin, row.evidence, row.importance)
+                store.merge_memory(twin, row.evidence, row.importance, shown=shown)
+                self._finish_inputs(twin, realm_inputs, human)
                 return WriteResult(twin, "merged")
-            return WriteResult(store.insert_memory(replace(row, embedding=vec)), "inserted")
+            mid = store.insert_memory(replace(row, embedding=vec), shown=shown)
+            self._finish_inputs(mid, realm_inputs, human)
+            return WriteResult(mid, "inserted")
 
     def _find_twin(self, row: MemoryRow, vec: bytes | None) -> int | None:
         """The earlier memory `row` duplicates, if any. Only one of the same privacy class

@@ -15,7 +15,7 @@ if (TARGET modules)
 
     # Integration probes, by token in the other modules' headers (like mod-dungeon-clear's core probes). The pin
     # API is required. mod-ollama-chat without the speaker filter would give every cast member two voices, so a
-    # built but unpatched mod-ollama-chat is an error too. mod-dungeon-clear is optional.
+    # built but unpatched mod-ollama-chat is an error too. Dungeon-clear and transmog are optional.
     function(leeroy_module_active name out)
         string(TOUPPER "${name}" upper)
         if (EXISTS "${CMAKE_SOURCE_DIR}/modules/${name}"
@@ -69,9 +69,30 @@ if (TARGET modules)
         endif()
     endif()
 
+    set(LEEROY_HAS_TRANSMOG 0)
+    set(LEEROY_TRANSMOG_H "${CMAKE_SOURCE_DIR}/modules/mod-transmog/src/Transmogrification.h")
+    leeroy_module_active(mod-transmog LEEROY_TRANSMOG_ACTIVE)
+    if (LEEROY_TRANSMOG_ACTIVE AND EXISTS "${LEEROY_TRANSMOG_H}")
+        file(READ "${LEEROY_TRANSMOG_H}" LEEROY_PROBE_TEXT)
+        set(LEEROY_TRANSMOG_COMPATIBLE TRUE)
+        # A zero GetFakeEntry cannot prove deletion. The adapter reads both
+        # public native indexes and uses the actual native clear primitive.
+        foreach(LEEROY_TRANSMOG_TOKEN IN ITEMS SetFakeEntry DeleteFakeEntry GetFakeEntry
+            CanTransmogrifyItemWithItem entryMap dataMap sTransmogrification)
+            string(FIND "${LEEROY_PROBE_TEXT}" "${LEEROY_TRANSMOG_TOKEN}" LEEROY_PROBE_POS)
+            if (LEEROY_PROBE_POS EQUAL -1)
+                set(LEEROY_TRANSMOG_COMPATIBLE FALSE)
+            endif()
+        endforeach()
+        if (LEEROY_TRANSMOG_COMPATIBLE)
+            set(LEEROY_HAS_TRANSMOG 1)
+        endif()
+    endif()
+
     target_compile_definitions(modules PRIVATE
         LEEROY_HAS_OLLAMA_FILTER=${LEEROY_HAS_OLLAMA_FILTER}
-        LEEROY_HAS_DUNGEON_CLEAR=${LEEROY_HAS_DUNGEON_CLEAR})
+        LEEROY_HAS_DUNGEON_CLEAR=${LEEROY_HAS_DUNGEON_CLEAR}
+        LEEROY_HAS_TRANSMOG=${LEEROY_HAS_TRANSMOG})
     set(LEEROY_OLLAMA_STATE OFF)
     if (LEEROY_HAS_OLLAMA_FILTER)
         set(LEEROY_OLLAMA_STATE ON)
@@ -80,7 +101,11 @@ if (TARGET modules)
     if (LEEROY_HAS_DUNGEON_CLEAR)
         set(LEEROY_DC_STATE ON)
     endif()
-    message(STATUS "[mod-leeroy] ollama filter: ${LEEROY_OLLAMA_STATE}, dungeon-clear: ${LEEROY_DC_STATE}")
+    set(LEEROY_TRANSMOG_STATE OFF)
+    if (LEEROY_HAS_TRANSMOG)
+        set(LEEROY_TRANSMOG_STATE ON)
+    endif()
+    message(STATUS "[mod-leeroy] ollama filter: ${LEEROY_OLLAMA_STATE}, dungeon-clear: ${LEEROY_DC_STATE}, transmog: ${LEEROY_TRANSMOG_STATE}")
 
     option(LEEROY_TESTS "Build the mod-leeroy unit tests" OFF)
     if (LEEROY_TESTS)

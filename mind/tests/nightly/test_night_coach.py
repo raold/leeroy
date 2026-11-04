@@ -137,13 +137,13 @@ def test_stock_call_version_preserves_winning_champion(h):
     assert row["status"] == "champion" and row["call"] == "Hold the line"
 
 
-def test_degrade_cuts_coach_first_to_five(h, monkeypatch):
+def test_degrade_cuts_coach_after_the_realm_to_five(h, monkeypatch):
     ctx = h.ctx()
     monkeypatch.setattr(budget, "COUNTERS", {"coach": lambda c: c.settings.coach_units,
                                            "encounters": lambda c: c.settings.encounters_per_night})
     monkeypatch.setattr(budget, "night_budget_s", lambda *args: 100)
     plan = asyncio.run(budget.plan_night(ctx))
-    assert plan["steps"][:2] == ["coach", "encounters"]
+    assert plan["steps"][:3] == ["realm", "coach", "encounters"]  # The realm's units go first.
     assert ctx.settings.coach_units == 5
 
 
@@ -285,8 +285,8 @@ def test_real_coach_units_are_priced_and_cut_before_people(h, monkeypatch):
     monkeypatch.setattr(budget, "night_budget_s", lambda *args: 6650)
     ctx = h.ctx()
     tight = asyncio.run(budget.plan_night(ctx))
-    assert tight["steps"] == ["coach"]
-    assert tight["settings"] == {"coach_units": 5}
+    assert tight["steps"] == ["realm", "coach"]  # The realm has no counter here: its floor, 0.
+    assert tight["settings"] == {"realm_units": 0, "coach_units": 5}
     assert tight["units"] == {"coach": 5, "encounters": 150}
     assert tight["estimate_s"] == tight["budget_s"] == 6650
     assert ctx.settings.encounters_per_night == h.settings.encounters_per_night

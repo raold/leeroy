@@ -53,6 +53,7 @@ std::string NotCast(uint32 low) { return "not_cast:" + std::to_string(low); }
 
 std::string GroupOwnership(Group const* group)
 {
+    if (GroupHasRealmOwner(group)) return "busy:realm_owner";
     for (auto const& slot : group->GetMemberSlots())
         if (!Owned(slot.guid.GetCounter()))
             return NotCast(slot.guid.GetCounter());
@@ -129,8 +130,11 @@ LeeroyCommandResult HandleClearLockout(json const& msg)
     if (!cmd)
         return Fail(error);
     for (uint32 low : cmd->guids)
+    {
         if (!Owned(low))
             return Fail(NotCast(low));
+        if (Realm::RealmOwns(low)) return Fail("busy:realm_owner");
+    }
 
     std::string inside;
     for (uint32 low : cmd->guids)
@@ -147,12 +151,16 @@ LeeroyCommandResult HandleClearLockout(json const& msg)
 
     for (uint32 low : cmd->guids)
     {
+        if (Realm::RealmOwns(low)) return Fail("busy:realm_owner");
         ObjectGuid const guid = Guid(low);
         // PlayerUnbindInstance dereferences this storage even for never-loaded characters.
         sInstanceSaveMgr->PlayerCreateBoundInstancesMaps(guid);
         Player* player = FindOnline(low);
         for (uint8 difficulty : cmd->difficulties)
+        {
+            if (Realm::RealmOwns(low)) return Fail("busy:realm_owner");
             sInstanceSaveMgr->PlayerUnbindInstance(guid, cmd->mapId, Difficulty(difficulty), true, player);
+        }
     }
     return Ok();
 }
@@ -165,9 +173,18 @@ LeeroyCommandResult HandleFormRaid(json const& msg)
         return Fail(error);
     if (!Owned(cmd->leaderGuid))
         return Fail(NotCast(cmd->leaderGuid));
+    if (Realm::RealmOwns(cmd->leaderGuid)) return Fail("busy:realm_owner");
     for (uint32 low : cmd->members)
+    {
         if (!IsCast(low))
             return Fail(NotCast(low));
+        if (Realm::RealmOwns(low)) return Fail("busy:realm_owner");
+        // Removing a member can promote a leader or disband its old group.
+        // Validate all affected old-group members before creating/changing any
+        // destination group, including members omitted from this request.
+        if (auto* bot = FindOnline(low); bot && GroupHasRealmOwner(bot->GetGroup()))
+            return Fail("busy:realm_owner");
+    }
     Player* leader = FindOnline(cmd->leaderGuid);
     if (!leader)
         return Fail("leader_offline");
@@ -194,6 +211,7 @@ LeeroyCommandResult HandleFormRaid(json const& msg)
 #if !LEEROY_HAS_DUNGEON_CLEAR
     return Fail("driver_unavailable:no_dungeon_clear");
 #else
+    if (Realm::RealmOwns(cmd->leaderGuid) || GroupHasRealmOwner(group)) return Fail("busy:realm_owner");
     if (!group)
     {
         auto created = std::make_unique<Group>();
@@ -202,6 +220,7 @@ LeeroyCommandResult HandleFormRaid(json const& msg)
         group = created.release();
         sGroupMgr->AddGroup(group);
     }
+    if (GroupHasRealmOwner(group)) return Fail("busy:realm_owner");
     if (!group->isRaidGroup())
         group->ConvertToRaid();
 
@@ -213,7 +232,10 @@ LeeroyCommandResult HandleFormRaid(json const& msg)
     {
         Player* bot = FindOnline(low);
         std::string skip;
-        if (!bot)
+        if (Realm::RealmOwns(low) || GroupHasRealmOwner(group)
+            || (bot && GroupHasRealmOwner(bot->GetGroup())))
+            skip = "busy:realm_owner";
+        else if (!bot)
             skip = "offline";
         else if (bot->InBattleground() || bot->InBattlegroundQueue())
             skip = "in_bg";
@@ -235,16 +257,22 @@ LeeroyCommandResult HandleFormRaid(json const& msg)
         if (bot->GetGroup() != group)
         {
             if (bot->GetGroup())
+            {
+                if (GroupHasRealmOwner(bot->GetGroup())) return Fail("busy:realm_owner");
                 bot->RemoveFromGroup();
+            }
+            if (Realm::RealmOwns(low) || GroupHasRealmOwner(group)) return Fail("busy:realm_owner");
             if (!group->AddMember(bot))
             {
                 result.skipped.emplace_back(low, "group_full");
                 continue;
             }
         }
+        if (Realm::RealmOwns(low) || GroupHasRealmOwner(group)) return Fail("busy:realm_owner");
         RaidHabits(bot, leader, cmd->mapId, difficulty);
         result.guids.push_back(low);
     }
+    if (GroupHasRealmOwner(group)) return Fail("busy:realm_owner");
     group->ChangeMembersGroup(leader->GetGUID(), 0);
     uint32 position = 1;
     // Copy GUIDs: flag/group changes send updates and must not hold a member iterator.
@@ -253,16 +281,26 @@ LeeroyCommandResult HandleFormRaid(json const& msg)
         members.push_back(slot.guid);
     for (ObjectGuid guid : members)
     {
+        if (GroupHasRealmOwner(group)) return Fail("busy:realm_owner");
         if (guid != leader->GetGUID())
             group->ChangeMembersGroup(guid, uint8(position++ % MAX_RAID_SUBGROUPS));
+        if (GroupHasRealmOwner(group)) return Fail("busy:realm_owner");
         group->SetGroupMemberFlag(guid, false, MEMBER_FLAG_MAINTANK);
+        if (GroupHasRealmOwner(group)) return Fail("busy:realm_owner");
         group->SetGroupMemberFlag(guid, false, MEMBER_FLAG_ASSISTANT);
     }
     if (group->IsMember(Guid(cmd->mainTankGuid)))
+    {
+        if (GroupHasRealmOwner(group)) return Fail("busy:realm_owner");
         group->SetGroupMemberFlag(Guid(cmd->mainTankGuid), true, MEMBER_FLAG_MAINTANK);
+    }
     for (uint32 low : cmd->assistants)
         if (group->IsMember(Guid(low)))
+        {
+            if (GroupHasRealmOwner(group)) return Fail("busy:realm_owner");
             group->SetGroupMemberFlag(Guid(low), true, MEMBER_FLAG_ASSISTANT);
+        }
+    if (GroupHasRealmOwner(group)) return Fail("busy:realm_owner");
     group->SetRaidDifficulty(difficulty);
     group->SendUpdate();
     completed.push_back(std::move(result));
@@ -277,8 +315,11 @@ LeeroyCommandResult HandleSetLootMaster(json const& msg)
     if (!cmd)
         return Fail(error);
     for (uint32 low : {cmd->memberGuid, cmd->looterGuid})
+    {
         if (!Owned(low))
             return Fail(NotCast(low));
+        if (Realm::RealmOwns(low)) return Fail("busy:realm_owner");
+    }
     Player* member = FindOnline(cmd->memberGuid);
     Group* group = member ? member->GetGroup() : nullptr;
     if (!group)
@@ -290,7 +331,9 @@ LeeroyCommandResult HandleSetLootMaster(json const& msg)
     if (!group->IsMember(Guid(cmd->looterGuid)))
         return Fail("not_member:" + std::to_string(cmd->looterGuid));
     group->SetLootMethod(MASTER_LOOT);
+    if (GroupHasRealmOwner(group)) return Fail("busy:realm_owner");
     group->SetMasterLooterGuid(Guid(cmd->looterGuid));
+    if (GroupHasRealmOwner(group)) return Fail("busy:realm_owner");
     group->SetLootThreshold(ItemQualities(cmd->threshold));
     group->SendUpdate();
     return Ok();
@@ -303,8 +346,13 @@ LeeroyCommandResult HandleSummon(json const& msg)
     if (!cmd)
         return Fail(error);
     for (uint32 low : cmd->guids)
+    {
         if (!IsCast(low))
             return Fail(NotCast(low));
+        if (Realm::RealmOwns(low)) return Fail("busy:realm_owner");
+        if (auto* bot = FindOnline(low); bot && GroupHasRealmOwner(bot->GetGroup()))
+            return Fail("busy:realm_owner");
+    }
     AreaTriggerTeleport const* dest = cmd->where == "inside"
         ? sObjectMgr->GetMapEntranceTrigger(cmd->mapId) : sObjectMgr->GetGoBackTrigger(cmd->mapId);
     if (!dest || !MapMgr::IsValidMapCoord(dest->target_mapId, dest->target_X, dest->target_Y,
@@ -332,6 +380,9 @@ LeeroyCommandResult HandleSummon(json const& msg)
     Player* summoner = nullptr;
     if (cmd->summonHuman)
     {
+        if (Realm::RealmOwns(summonerLow)) return Fail("busy:realm_owner");
+        if (auto* human = FindOnline(HumanGuid()); human && GroupHasRealmOwner(human->GetGroup()))
+            return Fail("busy:realm_owner");
         if (!Owned(summonerLow) || !(summoner = FindOnline(summonerLow)))
             return Fail("bad field: summoner_guid");
     }
@@ -346,6 +397,11 @@ LeeroyCommandResult HandleSummon(json const& msg)
     {
         uint32 const low = cmd->guids[index];
         Player* bot = FindOnline(low);
+        if (Realm::RealmOwns(low) || (bot && GroupHasRealmOwner(bot->GetGroup())))
+        {
+            job.result.skipped.emplace_back(low, "busy:realm_owner");
+            continue;
+        }
         if (auto const failure = SummonFailure(bot); !failure.empty())
         {
             job.result.skipped.emplace_back(low, failure);
@@ -372,13 +428,22 @@ LeeroyCommandResult HandleSummon(json const& msg)
     if (cmd->summonHuman)
         if (Player* human = FindOnline(HumanGuid()); human && human->GetMapId() != dest->target_mapId)
         {
-            human->SetSummonPoint(dest->target_mapId, dest->target_X, dest->target_Y, dest->target_Z);
-            WorldPacket packet(SMSG_SUMMON_REQUEST, 8 + 4 + 4);
-            packet << summoner->GetGUID();
-            packet << uint32(sMapMgr->GetZoneId(PHASEMASK_NORMAL, dest->target_mapId,
-                                               dest->target_X, dest->target_Y, dest->target_Z));
-            packet << uint32(MAX_PLAYER_SUMMON_DELAY * IN_MILLISECONDS);
-            human->SendDirectMessage(&packet);
+            if (Realm::RealmOwns(summonerLow) || GroupHasRealmOwner(human->GetGroup()))
+            {
+                // Prior bot teleports still need their normal arrival observer;
+                // do not abandon that job after an intervening ownership change.
+                job.result.skipped.emplace_back(HumanGuid(), "busy:realm_owner");
+            }
+            else
+            {
+                human->SetSummonPoint(dest->target_mapId, dest->target_X, dest->target_Y, dest->target_Z);
+                WorldPacket packet(SMSG_SUMMON_REQUEST, 8 + 4 + 4);
+                packet << summoner->GetGUID();
+                packet << uint32(sMapMgr->GetZoneId(PHASEMASK_NORMAL, dest->target_mapId,
+                                                   dest->target_X, dest->target_Y, dest->target_Z));
+                packet << uint32(MAX_PLAYER_SUMMON_DELAY * IN_MILLISECONDS);
+                human->SendDirectMessage(&packet);
+            }
         }
     summons.push_back(std::move(job));
     return Ok();
@@ -433,6 +498,8 @@ LeeroyCommandResult HandleRaidControl(json const& msg)
         return Fail(NotCast(cmd->memberGuid));
     if (cmd->leaderGuid && !Owned(cmd->leaderGuid))
         return Fail(NotCast(cmd->leaderGuid));
+    if (Realm::RealmOwns(cmd->memberGuid) || (cmd->leaderGuid && Realm::RealmOwns(cmd->leaderGuid)))
+        return Fail("busy:realm_owner");
     Player* member = FindOnline(cmd->memberGuid);
     Group* group = member ? member->GetGroup() : nullptr;
     if (!group)
@@ -461,12 +528,16 @@ LeeroyCommandResult HandleRaidControl(json const& msg)
                 Group* current = human ? human->GetGroup() : sGroupMgr->GetGroupByGUID(original.GetCounter());
                 if (!current || current->GetGUID() != original || current->GetLeaderGUID() != Guid(HumanGuid()))
                     break;
+                if (auto const ownership = GroupOwnership(current); !ownership.empty()) return Fail(ownership);
                 // The final removal can delete the Group, even for a raid.
                 current->RemoveMember(guid);
             }
         }
         else
+        {
+            if (auto const ownership = GroupOwnership(group); !ownership.empty()) return Fail(ownership);
             group->Disband();
+        }
         return Ok();
     }
     if (cmd->action == "ready_check")
@@ -474,6 +545,7 @@ LeeroyCommandResult HandleRaidControl(json const& msg)
         ObjectGuid const leader = Guid(cmd->leaderGuid);
         if (!group->IsLeader(leader) && !group->IsAssistant(leader))
             return Fail("not_leader");
+        if (GroupHasRealmOwner(group)) return Fail("busy:realm_owner");
         WorldPacket packet(MSG_RAID_READY_CHECK, 8);
         packet << leader;
         group->BroadcastPacket(&packet, false, -1);
@@ -497,6 +569,7 @@ LeeroyCommandResult HandleRaidControl(json const& msg)
         return Fail("dc_refused");
     std::string const action = cmd->action == "dc_on" ? "dc on"
         : cmd->action == "dc_off" ? "dc off" : "dc pause";
+    if (GroupHasRealmOwner(group)) return Fail("busy:realm_owner");
     return ai->DoSpecificAction(action, Event("dc", cmd->param, issuer), true) ? Ok() : Fail("dc_refused");
 #else
     return Fail("driver_unavailable:no_dungeon_clear");

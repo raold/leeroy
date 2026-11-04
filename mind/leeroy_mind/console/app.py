@@ -33,10 +33,17 @@ cannot read an answer or send a preflighted request (the key header needs one).
                        "raid", "size", "heroic", "lead"}: checked as the endpoint checks it,
                        then on to the mind's control endpoint (mindlink); refused with
                        --no-control, while a start or stop runs, or while the mind is not up
+    GET  /api/tuning   the Personas tab's dials: world, groups and each member's values, and
+                       the change log, from mind.db (tuneview.tuning_view), mind.toml's own
+                       world values, and the running mind's tune status
+    POST /api/tune     a tune action ({"action": "set"|"undo"|"revert"|"group"|"retire"|
+                       "preview", ...}), checked as the endpoint checks it, then on to the
+                       mind's tune op, refused as raid actions are; a change is announced as a
+                       `tuning` event; a preview's answer goes only to the page that asked
 
-The Raid, Guild and Personas tabs read mind.db read-only; the Personas tab has no write path.
-Raid actions are the mind's to take: the console forwards them and shows the mind's answer,
-which says why when it refuses."""
+The Raid, Guild and Personas tabs read mind.db read-only. Raid actions and dial changes are the
+mind's to take: the console forwards them and shows the mind's answer, which says why when it
+refuses. A preview's text is never logged, stored or broadcast."""
 import asyncio
 import base64
 import hashlib
@@ -51,7 +58,7 @@ from pathlib import Path
 from typing import Callable
 
 from .. import endpoint
-from . import feed, mindlog, netinfo, personaview, raidview, status
+from . import feed, mindlog, netinfo, personaview, raidview, status, tuneview
 from .control import Controls, Refused
 from .httpd import Request, Response, Stream, digits, encode_json, json_response, text
 from .mindlink import RAID_S, LinkError
@@ -66,6 +73,10 @@ PING_S = 15.0
 QUEUE = 500  # events a page may fall behind before it is cut off (it reconnects)
 FEED_DAYS = 3.0  # how far back a page's first feed goes
 KEY_HEADER = "x-console-key"
+TUNE_S = 10.0  # a dial change's answer
+PREVIEW_S = endpoint.PREVIEW_S + 5.0  # a preview's two lines per member, at background priority
+MIND_DOWN = ("The mind isn't running, so it can't preview or change dials. Start it from the "
+             "Mind tab.")
 
 log = logging.getLogger("leeroy_mind.console")
 
@@ -402,6 +413,8 @@ class ConsoleApp:
                   ("GET", "/api/guild"): self._api_guild,
                   ("GET", "/api/personas"): self._api_personas,
                   ("GET", "/api/persona"): self._api_persona,
+                  ("GET", "/api/tuning"): self._api_tuning,
+                  ("POST", "/api/tune"): self._api_tune,
                   ("POST", "/api/voice"): self._api_voice,
                   ("POST", "/api/control"): self._api_control,
                   ("POST", "/api/raid"): self._api_raid_action}
@@ -522,6 +535,70 @@ class ConsoleApp:
         if view is None:
             return json_response(404, {"ok": False, "error": f"mind.db has no member {guid}"})
         return json_response(200, view)
+
+    # -- the personas tab's dials ---------------------------------------------------------------
+
+    def _file_values(self) -> dict | None:
+        """mind.toml's own world values (read-only), or None when it cannot be read."""
+        from ..config import ConfigError, load_config
+        from ..tuning.world import file_values
+        try:
+            return file_values(load_config(self.s.data_dir / "mind.toml"))
+        except ConfigError:
+            return None
+
+    async def _tune_status(self) -> dict:
+        if self.view.state != "running":
+            return {"ok": False, "error": MIND_DOWN}
+        if self.link is None:
+            return {"ok": False, "error": "no control endpoint here"}
+        try:
+            reply = await asyncio.to_thread(self.link.call, self._mind_pids(), "tune",
+                                            {"action": "status"})
+        except LinkError as e:
+            return {"ok": False, "error": str(e)}
+        if reply.get("ok") is not True:
+            return {"ok": False, "error": str(reply.get("error") or "refused")[:200]}
+        return {"ok": True, "version": reply.get("version"),
+                "pinned_members": reply.get("pinned_members")}
+
+    async def _api_tuning(self, req: Request):
+        files = await asyncio.to_thread(self._file_values)
+        try:
+            view = await asyncio.to_thread(feed.read, self.s.data_dir / "mind.db",
+                                           tuneview.tuning_view, file_values=files,
+                                           now=self._clock())
+        except Exception as e:
+            log.warning("console_tuning_unread: error=%s", type(e).__name__)
+            return json_response(503, {"ok": False, "error": f"mind.db could not be read "
+                                                             f"({type(e).__name__})"})
+        return json_response(200, {"view": view, "mind": await self._tune_status(),
+                                   "control": self.controls.describe()})
+
+    async def _api_tune(self, req: Request):
+        try:
+            args = endpoint.tune_args(req.json())  # exactly as the mind will check it
+        except endpoint.BadRequest as e:
+            return json_response(400, {"ok": False, "error": str(e)})
+        problem = self._raid_problem()
+        if problem is not None:
+            status_code, words = problem
+            if self.view.state != "running" and status_code == 409 and self.controls.busy is None:
+                words = MIND_DOWN
+            return json_response(status_code, {"ok": False, "error": words})
+        preview = args["action"] == "preview"
+        try:
+            reply = await asyncio.to_thread(self.link.call, self._mind_pids(), "tune", args,
+                                            timeout=PREVIEW_S if preview else TUNE_S)
+        except LinkError as e:
+            return json_response(409, {"ok": False, "error": str(e)})
+        if reply.get("ok") is not True:
+            return json_response(409, {"ok": False,
+                                       "error": str(reply.get("error") or "refused")[:300]})
+        if not preview and args["action"] != "status" and reply.get("change"):
+            self.broadcast("tuning", {"change": reply.get("change"),
+                                      "version": reply.get("version")})
+        return json_response(200, reply)  # a preview's text: to this page only, never logged
 
     def _raid_problem(self) -> tuple[int, str] | None:
         if not self.controls.enabled:
