@@ -454,3 +454,52 @@ def test_standalone_eval_reports_canon_when_the_realm_is_enabled(tmp_path, store
         {"achievement": 3117, "guid": 1, "reason": "gm_mode", "tries": 1}]
     assert "realm_canon" not in sections["off"]
     assert weekly._sections == {}  # Discovered per evaluation, never registered globally.
+
+
+# -- item 15: realm_direct keeps acked rows only while a ref could still be asked again -------------
+
+def _acked(realm, cmd, owner, ref, *, expects_job):
+    ledger = realm.part("direct")
+    assert ledger.prepare(cmd, owner=owner, ref=ref, context=realm.action_context(), expects_job=expects_job)
+    ledger.before_send(cmd, context=realm.action_context())
+    assert ledger.on_ack(cmd, Ack(1, cmd.id, True, ""))
+    if expects_job:
+        kind = "calendar_signup" if type(cmd) is protocol.CalendarSignup else "bank_stock"
+        assert ledger.on_job(protocol.RealmJob(1, cmd.id, kind, "done", "", 0, 1))
+
+
+def test_old_acked_signups_and_lines_are_pruned_and_never_asked_again(tmp_path, store, clock):
+    app, realm = _mail_realm(tmp_path, store, clock)
+    ledger, desk = realm.part("direct"), realm.part("calendar")
+
+    async def go():
+        await connect(app)
+        now = clock.now()
+        with store.transaction():
+            for event, at_ in ((7001, now - 30 * DAY), (7002, now + 2 * DAY)):
+                store.conn.execute("INSERT INTO realm_calendar(kind,creator,at,title,ref,updated,event_id,state) "
+                                   "VALUES ('raid',101,?,'Raid night',?,?,?,'posted')",
+                                   (at_, f"raid:{event}", at_ - 3 * DAY, event))
+        at(clock, now - 31 * DAY)                 # a month ago: a signup, a line and a step's item
+        _acked(realm, protocol.CalendarSignup(uuid.uuid4().hex, 7001, 101, "signed_up"), "calendar",
+               "signup:7001:101", expects_job=True)
+        _acked(realm, protocol.RealmSay(uuid.uuid4().hex, 201, "trade", "wts"), "speech", "line:1",
+               expects_job=False)
+        _acked(realm, BankStock(uuid.uuid4().hex, 104, 3, 47586, 1), "step", "step:bank_stock:" + "b" * 64 + ":0",
+               expects_job=True)
+        at(clock, now - DAY)                      # yesterday: the coming raid's signup
+        _acked(realm, protocol.CalendarSignup(uuid.uuid4().hex, 7002, 102, "signed_up"), "calendar",
+               "signup:7002:102", expects_job=True)
+        at(clock, now)
+        assert ledger.prune_acked() == 2
+        refs = {r[0]: r[1] for r in store.conn.execute("SELECT ref,state FROM realm_direct")}
+        assert refs == {"step:bank_stock:" + "b" * 64 + ":0": "acked", "signup:7002:102": "acked"}
+        out = []
+        desk._signups(clock.now(), realm.action_context(), out)
+        signed = {(cmd.event_id, cmd.guid) for cmd in out}
+        assert not any(event == 7001 for event, _ in signed)  # A past event is never signed again.
+        assert (7002, 102) not in signed                     # Done, its ref still taken.
+        for cmd in out:
+            ledger.abandon_unsent(cmd)
+        await realm.close()
+    run(go())

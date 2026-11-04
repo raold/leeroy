@@ -16,10 +16,13 @@ most one live intent per (owner, ref):
   abandoned  it never reached the wire (cancelled, refused at the barrier, or found prepared
              at a restart). The owner may prepare the ref again.
 
-An acked or unknown intent keeps its ref forever, so a ref is never dispatched twice; prune
-only ever removes refused and abandoned rows. Every transition after prepare is one
-synchronous Store unit of its own, with no await inside. The routing of on_send, on_ack,
-on_job and on_send_error to this ledger is the service's.
+An acked or unknown intent keeps its ref, so a ref is never dispatched twice. prune removes
+refused and abandoned rows (their refs are free already); prune_acked removes acked rows of the
+refs in RETAIN_ACKED a month after they settled: calendar signups (only ever asked for a coming
+event, and the event is long past) and speech's lines and emotes (each ref is one moment's,
+never asked again). Every other acked row, and every unknown one, is kept. Every transition
+after prepare is one synchronous Store unit of its own, with no await inside. The routing of
+on_send, on_ack, on_job and on_send_error to this ledger is the service's.
 """
 from __future__ import annotations
 
@@ -43,6 +46,10 @@ NOT_DIRECT = frozenset({"realm_move", "rpg_status", "leave_pvp", "rearm", "wg_jo
                         "arena_queue", "duel", "bot_do", "announce", "get_realm_pvp", "guild_readmit"})
 LIVE = ("prepared", "dispatched", "acked", "unknown")
 PRUNE_EVERY_S = 3600
+# (owner, ref prefix) whose acked rows are removed RETAIN_ACKED_S after they settled: refs no
+# owner can ask for again by then. A step's items, a mail, a grant or a post keep theirs.
+RETAIN_ACKED = (("calendar", "signup:"), ("speech", "line:"), ("speech", "emote:"))
+RETAIN_ACKED_S = 30 * 86400
 # Send errors raised before the bridge writes anything: the command cannot have gone out.
 _PRETRANSPORT = frozenset({"RealmDisabled", "NotConnected"})
 _ID = re.compile(r"[0-9a-f]{32}")
@@ -316,6 +323,22 @@ class DirectLedger:
             log.debug("realm_direct_pruned: rows=%d", removed)
         return removed
 
+    def prune_acked(self) -> int:
+        """Drop the acked, settled rows of RETAIN_ACKED's refs that settled more than
+        RETAIN_ACKED_S ago; returns how many were removed. An acked row still waiting for its
+        job, and every unknown one, stays."""
+        self._own_unit()
+        before = self._now_ms() - RETAIN_ACKED_S * 1000
+        removed = 0
+        with self._store.transaction():
+            for owner, prefix in RETAIN_ACKED:
+                removed += self._store.conn.execute(
+                    "DELETE FROM realm_direct WHERE owner=? AND state='acked' AND settled_ms IS NOT NULL "
+                    "AND settled_ms<? AND substr(ref,1,?)=?", (owner, before, len(prefix), prefix)).rowcount
+        if removed:
+            log.debug("realm_direct_pruned_acked: rows=%d", removed)
+        return removed
+
     # -- as a realm part ----------------------------------------------------------------------
 
     async def tick(self):
@@ -324,6 +347,7 @@ class DirectLedger:
         if self._pruned is None or now - self._pruned >= PRUNE_EVERY_S:
             self._pruned = now
             self.prune()
+            self.prune_acked()
 
     async def on_event(self, ev):
         """Receipts reach the ledger through the service's own routing, never as a part."""
