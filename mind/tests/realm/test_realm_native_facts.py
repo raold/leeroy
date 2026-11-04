@@ -110,7 +110,8 @@ def test_achievement_row_binds_its_earner(roster):
 
 @pytest.mark.parametrize('result,text', [
     ('won', 'Character 201 beat character 10 in a duel in zone 14.'),
-    ('fled', 'Character 10 fled a duel with character 201 in zone 14.'),
+    # The zone is the winner's: nothing on the wire places the duelist who fled in it.
+    ('fled', 'Character 10 fled a duel with character 201.'),
 ])
 def test_duel_outside_a_city_is_a_result_its_duelists_guilds_know(roster, result, text):
     fact, _ = record(roster, DUEL, result=result)

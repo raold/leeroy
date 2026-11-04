@@ -752,8 +752,8 @@ def _live_output(policy, output):
         if output['result'] == 'won':
             return (f"Character {output['winner']} beat character {output['loser']} in a duel "
                     f"in zone {output['zone']}.")
-        return (f"Character {output['loser']} fled a duel with character {output['winner']} "
-                f"in zone {output['zone']}.")
+        # The zone is the winner's: nothing places the duelist who fled in it.
+        return f"Character {output['loser']} fled a duel with character {output['winner']}."
     if policy == 'verified_dungeon_kill_v1':
         _keys(output, {'catalogue', 'map', 'boss_id'})
         _integer(output['map']); _integer(output['boss_id'])
