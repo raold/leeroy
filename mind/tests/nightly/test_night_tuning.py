@@ -52,3 +52,65 @@ def test_drama_scales_confront_and_opening_up_lets_a_louder_member_confide(h):
     assert tuned[102] == [Volition(102, "confront", 101, 1.0)]
     confide = [v for v in tuned[105] if v.kind == "confide"]
     assert [(v.target, round(v.weight, 9)) for v in confide] == [(101, 1.44)]
+
+
+# -- T8: the critic, the evaluation and the core judge read the tuned member ------------------
+
+def test_the_critic_judges_against_the_tuned_card_and_stamps_the_tuning(h):
+    from leeroy_mind.nightly import critic
+    put(h.store, ("member", "101", "argumentative", 9))
+    ids = [h.utter(h.T + i, 101, f"Synthetic guild line {i}.") for i in range(4)]
+    ctx = h.ctx()
+    snapshot, rows, card, name = critic._current(ctx, 101, ids)
+    assert card.endswith(BUILTIN_LINES[("argumentative", "high")])
+    untouched = [h.utter(h.T + 10 + i, 102, f"Another line {i}.") for i in range(4)]
+    assert BUILTIN_LINES[("argumentative", "high")] not in critic._current(ctx, 102, untouched)[2]
+
+
+def _flag_once(h, ctx):
+    from conftest import run
+    from leeroy_mind.nightly import critic
+    ids = [h.utter(h.T + i, 101, f"Synthetic guild line {i}.") for i in range(4)]
+    rows = [h.store.conn.execute("SELECT * FROM utterance WHERE id=?", (i,)).fetchone()
+            for i in ids[:2]]
+    run(critic.critic_member(ctx, 101, rows))
+    return h.store.conn.execute("SELECT id FROM persona_ledger WHERE kind='drift_flag'"
+                                ).fetchone()[0]
+
+
+def _answer():
+    return {"scores": [{"i": 0, "score": 5, "why": "fine"}, {"i": 1, "score": 1, "why": "odd"}]}
+
+
+def test_a_drift_flag_records_the_tuning_it_was_judged_under(h):
+    put(h.store, ("member", "101", "humour", 9))
+    ctx = h.ctx({"critic": [_answer()]})
+    ctx = replace(ctx, tuning=ctx.personas.tuning)
+    flag = _flag_once(h, ctx)
+    assert h.store.get_meta(f"nightly:critic-flag-tuning:{flag}") == "1"
+
+
+def test_with_nothing_tuned_a_drift_flag_carries_no_tuning_stamp(h):
+    flag = _flag_once(h, h.ctx({"critic": [_answer()]}))
+    assert h.store.get_meta(f"nightly:critic-flag-tuning:{flag}") is None
+
+
+def test_the_evaluation_reads_the_tuned_card(h):
+    from leeroy_mind.eval import persona as evalp
+    put(h.store, ("member", "101", "humour", 1))
+    _, card = evalp._card(h.store, 101)
+    assert card.endswith(BUILTIN_LINES[("humour", "low")])
+    _, plain = evalp._card(h.store, 102)
+    assert BUILTIN_LINES[("humour", "low")] not in plain
+
+
+def test_the_core_judge_reads_who_the_owner_tuned_them_to_be(h):
+    import json
+    from leeroy_mind.nightly.growth import core_text
+    put(h.store, ("member", "101", "lore", 9), ("member", "101", "argumentative", 9))
+    ctx = h.ctx()
+    core = json.loads(core_text(ctx.persona(101)))
+    assert core["big_five"]["agreeableness"]["score"] == 2
+    assert core["tuning"] == [BUILTIN_LINES[("argumentative", "high")],
+                              BUILTIN_LINES[("lore", "high")]]
+    assert "tuning" not in json.loads(core_text(ctx.persona(102)))
