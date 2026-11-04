@@ -77,7 +77,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libboost-dev
       - name: build and run the pure mod-dojo tests
         run: |
-          cmake -S modules/mod-dojo/tests -B t -DCMAKE_BUILD_TYPE=Release
+          cmake -S modules/mod-dojo/tests -B t -DCMAKE_BUILD_TYPE=Release -DDOJO_WARNINGS_AS_ERRORS=ON
           cmake --build t -j "$(nproc)"
           ./t/dojo_tests
       - name: golden fixture generator parses
@@ -94,6 +94,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install -e ".[test]"
+      # The preflight tests link directories with symlinks here; their junction paths only run on Windows.
       - run: python -m pytest -q
       - name: fake worker protocol smoke
         run: python -m leeroy_dojo protocol-smoke --fake --out "$RUNNER_TEMP/dojo-smoke"
