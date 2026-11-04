@@ -419,6 +419,41 @@ def test_a_log_that_grows_under_a_free_lock_is_listed_at_once(data):
     assert mind.lock_probes == 1  # at 8 s, held: harmless; none while it was free
 
 
+def test_a_stream_drops_a_client_that_stops_reading(data):
+    async def go():
+        closed = asyncio.Event()
+
+        async def endless():
+            while True:
+                yield b"data: " + b"x" * 65536 + b"\n\n"
+
+        async def handler(req):
+            return httpd.Stream(endless(), content_type="text/event-stream",
+                                closed=closed.set, drain_s=0.3)
+        server = await httpd.serve(handler, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        client = socket.socket()
+        client.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+        client.settimeout(10)
+        try:
+            client.connect(("127.0.0.1", port))
+            client.sendall(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+            await asyncio.wait_for(closed.wait(), 10)  # it never reads, and is dropped
+
+            def until_dropped():
+                try:
+                    while client.recv(65536):
+                        pass
+                except ConnectionError:
+                    pass
+            await asyncio.wait_for(asyncio.to_thread(until_dropped), 10)
+        finally:
+            client.close()
+            server.close()
+            await asyncio.wait_for(server.wait_closed(), 5)
+    run(go())
+
+
 async def raw(app, head: str) -> bytes:
     reader, writer = await asyncio.open_connection("127.0.0.1", app.s.port)
     writer.write(head.encode("latin-1"))

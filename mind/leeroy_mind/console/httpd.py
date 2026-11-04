@@ -1,6 +1,7 @@
 """The console's HTTP/1.1: one request per connection (every response says Connection: close),
 plus a server-sent event stream that stays open. Standard library only, as is the rest of the
-mind. Limits: a 16 KiB head of at most 100 headers, a 16 KiB body, 10 s to send a request.
+mind. Limits: a 16 KiB head of at most 100 headers, a 16 KiB body, 10 s to send a request, and
+10 s for a stream's client to take each chunk before it is dropped.
 
 handler(request) returns a Response or a Stream. A handler that raises answers 500 with no
 detail; its exception's class is logged, never its text."""
@@ -18,6 +19,7 @@ MAX_HEAD = 16384
 MAX_HEADERS = 100
 MAX_BODY = 16384
 READ_S = 10.0
+DRAIN_S = 10.0  # how long a stream waits for a client to take what it was sent
 
 log = logging.getLogger("leeroy_mind.console")
 
@@ -100,11 +102,12 @@ class Stream:
     the client goes. `closed()` is called once at the end either way."""
 
     def __init__(self, chunks: AsyncIterator[bytes], *, content_type: str,
-                 headers=(), closed: Callable[[], None] | None = None):
+                 headers=(), closed: Callable[[], None] | None = None, drain_s: float = DRAIN_S):
         self.chunks = chunks
         self.content_type = content_type
         self.headers = list(headers)
         self.closed = closed
+        self.drain_s = drain_s
 
     async def run(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         head = ["HTTP/1.1 200 OK", f"Content-Type: {self.content_type}", "Cache-Control: no-store",
@@ -113,7 +116,7 @@ class Stream:
         gone = asyncio.ensure_future(reader.read(1))  # EOF: the client has gone
         try:
             writer.write(("\r\n".join(head) + "\r\n\r\n").encode("latin-1"))
-            await writer.drain()
+            await self._drain(writer)
             iterator = aiter(self.chunks)
             while True:
                 step = asyncio.ensure_future(anext(iterator))
@@ -128,7 +131,7 @@ class Stream:
                 except StopAsyncIteration:
                     break
                 writer.write(chunk)
-                await writer.drain()
+                await self._drain(writer)
         except (ConnectionError, OSError):
             pass
         finally:
@@ -139,6 +142,15 @@ class Stream:
                 await self.chunks.aclose()
             if self.closed is not None:
                 self.closed()
+
+    async def _drain(self, writer: asyncio.StreamWriter) -> None:
+        """A client that stops reading fills the socket and would hold drain() forever: after
+        drain_s it is dropped (aborted, since a close would wait for it to take the rest)."""
+        try:
+            await asyncio.wait_for(writer.drain(), self.drain_s)
+        except asyncio.TimeoutError:
+            writer.transport.abort()
+            raise ConnectionAbortedError("the client stopped reading") from None
 
 
 Handler = Callable[[Request], Awaitable["Response | Stream"]]
