@@ -148,7 +148,7 @@ function Find-DojoLinks([string] $Root, [string[]] $Skip = @()) {
 function Read-DojoConf([string] $Path) {
     $values = @{}
     if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $values }
-    foreach ($line in [System.IO.File]::ReadLines($Path)) {
+    foreach ($line in [System.IO.File]::ReadAllLines($Path)) {
         if ($line -match '^\s*([A-Za-z0-9_.]+)\s*=\s*(.*?)\s*$') {
             $value = $Matches[2]
             if ($value.Length -ge 2 -and $value.StartsWith('"') -and $value.EndsWith('"')) {
@@ -348,7 +348,7 @@ if ($prod.build -and (Test-Path -LiteralPath $prod.build -PathType Container)) {
     $cache = "$($prod.build)/CMakeCache.txt"
     $cacheSource = $null
     if (Test-Path -LiteralPath $cache -PathType Leaf) {
-        foreach ($line in [System.IO.File]::ReadLines($cache)) {
+        foreach ($line in [System.IO.File]::ReadAllLines($cache)) {
             if ($line -match '^CMAKE_HOME_DIRECTORY:INTERNAL=(.*)$') { $cacheSource = Resolve-DojoPath $Matches[1]; break }
         }
     }
@@ -490,7 +490,7 @@ if ($resolved.build) {
     $cache = "$($resolved.build)/CMakeCache.txt"
     if (Test-Path -LiteralPath $cache -PathType Leaf) {
         $cacheSource = $null
-        foreach ($line in [System.IO.File]::ReadLines($cache)) {
+        foreach ($line in [System.IO.File]::ReadAllLines($cache)) {
             if ($line -match '^CMAKE_HOME_DIRECTORY:INTERNAL=(.*)$') { $cacheSource = Resolve-DojoPath $Matches[1]; break }
         }
         if (Test-DojoSame $cacheSource $resolved.core) {

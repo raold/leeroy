@@ -59,7 +59,7 @@ function Stop-DojoBuild([string] $Message) {
 
 function Get-DojoCacheValue([string] $Cache, [string] $Name) {
     if (-not (Test-Path -LiteralPath $Cache -PathType Leaf)) { return $null }
-    foreach ($line in [System.IO.File]::ReadLines($Cache)) {
+    foreach ($line in [System.IO.File]::ReadAllLines($Cache)) {
         if ($line -match "^$([regex]::Escape($Name)):[A-Z]+=(.*)$") { return $Matches[1] }
     }
     return $null

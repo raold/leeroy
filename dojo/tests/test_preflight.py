@@ -764,6 +764,12 @@ class PreflightSourceTest(unittest.TestCase):
             for forbidden in ("invoke-expression", "mysql.exe", "ac-server", "system.net.sockets", "bash"):
                 self.assertNotIn(forbidden, lowered, name)
 
+    def test_no_script_holds_a_file_open(self):
+        """File.ReadLines is lazy: a return or break inside its foreach left CMakeCache.txt open in configure.ps1's
+        process, and the reconfigure's cache save then failed silently (AC_ENABLE_DOJO stayed OFF)."""
+        for name in ("preflight.ps1", "configure.ps1", "build.ps1"):
+            self.assertNotIn("ReadLines(", (SCRIPT.parent / name).read_text(encoding="utf-8"), name)
+
 
 if __name__ == "__main__":
     unittest.main()
