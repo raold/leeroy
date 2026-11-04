@@ -35,10 +35,16 @@ Do not build, read configs, or read logs from Q: (or anything left on D:).
 
 `F:\azerothcore` is **github.com/raold/leeroy** (public, GPL-2.0, branch
 `main`). A whitelist `.gitignore` tracks only what is ours: this file, the
-README, `scripts/`, `config/`, `patches/`, `modules/` (mod-leeroy), `mind/` (the
-mind service) and `.github/`. The core repo, the
+README, `LICENSE`, `references.bib` (the bibliography), `scripts/`, `config/`,
+`patches/`, `modules/` (mod-leeroy), `mind/` (the mind service), `voice/` (the
+voice service) and `.github/`. The core repo, the
 build tree, the client, boost, DB dumps and the zips stay out, and so do the
 local dev docs (`docs/`, `private/`).
+
+The checkout at `F:\azerothcore` itself runs the installed release: a local
+branch (now `codex/live-release-20261102`) whose private history is never
+pushed wholesale. Public changes land on `main` from worktrees under
+`F:\azerothcore\worktrees\`.
 
 - `config/`, `patches/mod-playerbots/` and `patches/mod-ollama-chat/` are snapshots made by
   `scripts/ac-snapshot.sh`. Never edit them by hand; edit the live configs or
@@ -56,7 +62,8 @@ local dev docs (`docs/`, `private/`).
   delete any of them; update in place or add a new dated file.
 - Rewriting playerbots commits changes their hashes; update the hashes cited
   below and re-run `ac-snapshot.sh`.
-- CI (`.github/workflows`, see README): `ci` (shellcheck + gitleaks), `patches`
+- CI (`.github/workflows`, see README): `ci` (shellcheck, gitleaks, the
+  mod-leeroy, mind and voice test suites, and a headless mind-voice rehearsal), `patches`
   (applies the patches to upstream playerbots nightly; failure opens a
   `patch-drift` issue, which means rebase before the next `ac-update.sh`),
   `build` (weekly Linux compile, `-Werror`), `release` (on `v*` tags). No
@@ -177,7 +184,7 @@ back to compiled-in defaults. `ac-update.sh` reports them.
 Run from `F:\azerothcore\scripts` in Git Bash.
 
 ```bash
-./ac-update.sh [--dry-run]   # ff-only pull of core + git modules; refuses if dirty
+./ac-update.sh [--dry-run]   # pull core + git modules (ff-only, local commits rebased); refuses if dirty
 ./ac-backup.sh [label]       # mysqldump all 4 DBs, keeps newest 5
 ./ac-build.sh                # preflight + cmake configure + build
 ./ac-server.sh start|stop|status
@@ -450,6 +457,8 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 .venv/Scripts/python -m leeroy_mind db --data-dir "$D" migrate   # snapshot, then the code's schema
 .venv/Scripts/python -m leeroy_mind personas --data-dir "$D" card <guid>   # also export, import, mix
 .venv/Scripts/python -m leeroy_mind.library --data-dir "$D" stats   # the game library: build, search
+.venv/Scripts/python -m leeroy_mind nightly --data-dir "$D" status  # also run, ledger, undo, enrich, veto
+.venv/Scripts/python -m leeroy_mind eval --data-dir "$D"    # weekly evaluation, on a copied database by default
 .venv/Scripts/python -m pytest -q                           # the unit tests
 .venv/Scripts/python -m pytest -m ollama                    # optional: also -m live, -m mysql
 ```
@@ -470,6 +479,15 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   events the bridge queued for the mind, so never run it while they matter.
 - Do not run `personas generate`/`seed` or a library build while the mind is
   live: they load another large model next to the live one and evict it.
+- The night: once the owner has been offline for 10 minutes and no offline
+  raid holds the GPU, the mind unloads the live chat model, loads the
+  reflection model (`[models] reflection` in `mind.toml`, a 27B that cannot sit
+  on the 4090 beside it) and runs the night's stages. The owner's login stops
+  it and preloads the live model; the next run resumes at the first unfinished
+  unit. So a swapped model in `ollama ps` while nobody is online is expected.
+- Guild life (raid nights, DKP and loot, offline raids, rank, spec and gear
+  upkeep) runs with built-in defaults; `[guild]` and `[dkp]` tables in
+  `mind.toml` override them.
 
 ## The voice service (`leeroy-voice`)
 
@@ -480,14 +498,20 @@ mind's Python 3.14 environment. Expressive engines use another venv under
 `voice-data\engines\<engine>\.venv`; do not install their torch stack into the
 mind or voice-service venv.
 
-**Rollout is pending.** Development and validation belong in a separate
-worktree. Before deployment, complete an isolated rehearsal using a copied
-database, FakeBridge, FakeLLM and separate loopback ports. It must not contact
-the live bridge or load/unload models on live Ollama. Resolve migration numbering
+**Installed on 2026-11-02**, together with the mind's nightly, guild-life and
+library work. Changes are still developed and validated in a separate worktree.
+Before deploying one, complete an isolated rehearsal using a copied database,
+FakeBridge, FakeLLM and separate loopback ports. It must not contact the live
+bridge or load/unload models on live Ollama. Resolve migration numbering
 against the merge target, merge into the code the live mind runs, then use that
 live code's own `db migrate` with the mind stopped. Do not run a development
-migration on the live database. Acceptance with WoW focused remains a check of
-the next normal session after deployment.
+migration on the live database. Acceptance with WoW focused is a check of the
+next normal session after each deployment.
+
+Playback keeps each engine's native sound (`[sound] effects_enabled = false`).
+The owner wants native voices only: do not turn the old microphone, codec or
+room effects back on, and do not add post-synthesis processing to hide
+artefacts such as crackling; find and fix the cause.
 
 - The service listens on loopback only: `voice.toml` defaults to 7879 for the
   mind connection and 7880 for the browser UI. The mind's `[voice]` endpoint
