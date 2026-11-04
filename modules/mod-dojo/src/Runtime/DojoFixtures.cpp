@@ -2,6 +2,7 @@
 
 #include "DojoFixtures.h"
 
+#include "DojoExecutor.h"
 #include "DojoRuntime.h"
 
 #ifndef DOJO_TRAINING_BUILD
@@ -45,7 +46,6 @@ namespace
 constexpr std::uint32_t kLoginMs = 60000;
 constexpr std::uint32_t kTeleportMs = 60000;
 constexpr std::uint32_t kLogoutMs = 30000;
-constexpr std::uint32_t kHeldCheckDelayMs = 60000;
 constexpr float kArrivalTolerance = 1.0f;   // yards from the frozen start position
 constexpr float kGroundTolerance = 3.0f;    // yards between a start position and the map's ground height
 constexpr std::uint32_t kTeamMarkers[] = {SPELL_ALLIANCE_GOLD_FLAG, SPELL_ALLIANCE_GREEN_FLAG, SPELL_HORDE_GOLD_FLAG,
@@ -103,7 +103,8 @@ bool Director::Resolve(std::string& error)
             return false;
         }
         if (_actors[i].guid != guid.GetRawValue())
-            _actors[i] = Actor{guid.GetRawValue(), false};
+            _actors[i] = Actor{guid.GetRawValue()};
+        Control::Instance().Register(i, guid.GetRawValue());
     }
     return true;
 }
@@ -126,33 +127,10 @@ bool Director::AllOnline() const
     return true;
 }
 
-void Director::Hold()
-{
-    for (std::size_t i = 0; i < kScenarioActors; ++i)
-    {
-        Player* player = Find(i);
-        if (!player)
-        {
-            _actors[i].held = false;
-            continue;
-        }
-        PlayerbotAI* ai = GET_PLAYERBOT_AI(player);
-        if (!_actors[i].held)
-        {
-            for (BotState state : {BOT_STATE_COMBAT, BOT_STATE_NON_COMBAT, BOT_STATE_DEAD, BOT_STATE_REACTION})
-                ai->ClearStrategies(state);
-            _actors[i].held = true;
-            LOG_INFO("module.dojo", "mod-dojo: holding fixture {} dormant (no strategies, AI check deferred)",
-                player->GetName());
-        }
-        ai->SetNextCheckDelay(kHeldCheckDelayMs);
-    }
-}
-
 void Director::Begin(Job job, Step first)
 {
     _job = job;
-    _jobName = job == Job::Build ? "build" : job == Job::Open ? "open" : "close";
+    _jobName = job == Job::Build ? "build" : job == Job::Restore ? "restore" : job == Job::Open ? "open" : "close";
     _step = first;
     _stepMs = 0;
     _entered = false;
@@ -205,8 +183,6 @@ void Director::LogoutAll()
     for (std::size_t i = 0; i < kScenarioActors; ++i)
         if (Find(i))
             sRandomPlayerbotMgr.LogoutPlayerBot(ObjectGuid(_actors[i].guid));
-    for (Actor& a : _actors)
-        a.held = false;
 }
 
 void Director::RecordBaseline(std::size_t index, Player* player)
@@ -233,6 +209,8 @@ std::uint32_t Director::RestoreBaseline(std::size_t index, Player* player)
         player->RemoveAurasDueToSpell(spellId);
     if (!a.baselineLeader && !player->GetGroup())
         player->RemovePlayerFlag(PLAYER_FLAGS_GROUP_LEADER);
+    // The staging baseline is full health, mana and durability with nothing on cooldown: what a fight spent goes.
+    Control::RestoreBaseline(player);
     a.baselineRecorded = false;
     return std::uint32_t(extra.size());
 }
@@ -304,6 +282,19 @@ std::string Director::StartBuild()
     return "dojo fixture build: started (dojo status reports progress)";
 }
 
+std::string Director::StartRestore()
+{
+    if (!State().scenarioReady)
+        return "dojo fixture restore: refused, the scenario is not ready (see dojo status)";
+    if (_job != Job::None || _arenaInstance)
+        return "dojo fixture restore: refused, " + (_job != Job::None ? "the " + _jobName + " job is running" : std::string("the arena is open"));
+    std::string error;
+    if (!Resolve(error))
+        return "dojo fixture restore: " + error;
+    Begin(Job::Restore, Step::Login);
+    return "dojo fixture restore: started (dojo status reports progress)";
+}
+
 std::string Director::StartOpen()
 {
     if (!State().scenarioReady)
@@ -313,7 +304,8 @@ std::string Director::StartOpen()
     std::string error;
     if (!Resolve(error))
         return "dojo arena open: " + error;
-    _untriggeredCasts = 0;
+    _stockCasts = 0;
+    _executorCasts = 0;
     _triggeredCasts = 0;
     _evidence.clear();
     Begin(Job::Open, Step::Login);
@@ -340,20 +332,23 @@ Battleground* Director::Arena() const
 
 bool Director::SuppressesWinCheck(Battleground const* bg) const
 {
-    return _closing && bg && _arenaInstance && bg->GetInstanceID() == _arenaInstance;
+    return bg && _arenaInstance && bg->GetInstanceID() == _arenaInstance;
 }
 
-void Director::OnFixtureCast(Player const* player, std::uint32_t spellId, bool triggered)
+void Director::OnFixtureCast(Player const* player, std::uint32_t spellId, bool triggered, bool executor)
 {
     for (Actor const& a : _actors)
         if (a.guid && player->GetGUID().GetRawValue() == a.guid)
         {
             if (triggered)
                 ++_triggeredCasts;
+            else if (executor)
+                ++_executorCasts;
             else
             {
-                ++_untriggeredCasts;
-                LOG_WARN("module.dojo", "mod-dojo: fixture {} cast {} untriggered while dormant", player->GetName(), spellId);
+                ++_stockCasts;
+                LOG_WARN("module.dojo", "mod-dojo: fixture {} cast {} that no executor command asked for", player->GetName(),
+                    spellId);
             }
         }
 }
@@ -413,6 +408,8 @@ bool Director::ApplyLoadout(Player* player, std::string& error)
             return false;
         }
     }
+
+    player->RemoveAllSpellCooldown();
 
     // Spells: the kit at its frozen ranks and nothing else learned. What the core teaches every character on load
     // (its class skill lines' first ranks, general abilities, racials) and what the talents grant stays, as ordinary
@@ -630,8 +627,8 @@ bool Director::InspectArena(std::string& report)
         los = map->isInLineOfSight(float(m.actors[0].start.x), float(m.actors[0].start.y), float(m.actors[0].start.z) + 2.0f,
             float(m.actors[1].start.x), float(m.actors[1].start.y), float(m.actors[1].start.z) + 2.0f,
             PHASEMASK_NORMAL, LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing);
-    if (_untriggeredCasts)
-        problems.push_back(std::to_string(_untriggeredCasts) + " untriggered casts by dormant fixtures");
+    if (_stockCasts)
+        problems.push_back(std::to_string(_stockCasts) + " casts by fixtures that no executor command asked for");
     json evidence = {
         {"kind", "leeroy-dojo-arena-evidence"}, {"format", 1}, {"scenario", m.id}, {"manifest_sha256", m.sha256},
         {"instance", State().settings.instance}, {"arena_instance", bg->GetInstanceID()}, {"map", bg->GetMapId()},
@@ -640,7 +637,7 @@ bool Director::InspectArena(std::string& report)
         {"invited", {bg->GetInvitedCount(TEAM_ALLIANCE), bg->GetInvitedCount(TEAM_HORDE)}},
         {"arena_team_ids", {bg->GetArenaTeamIdForTeam(TEAM_ALLIANCE), bg->GetArenaTeamIdForTeam(TEAM_HORDE)}},
         {"start_line_of_sight", los}, {"identical", diff.empty()}, {"actors", actors},
-        {"fixture_casts", {{"untriggered", _untriggeredCasts}, {"triggered", _triggeredCasts}}},
+        {"fixture_casts", {{"stock", _stockCasts}, {"executor", _executorCasts}, {"triggered", _triggeredCasts}}},
         {"problems", problems}, {"ok", problems.empty()}};
     _evidence = CanonicalJson(evidence);
     report = problems.empty() ? "both actors in the training arena with identical verified loadouts"
@@ -652,7 +649,7 @@ void Director::Update(std::uint32_t diff)
 {
     if (!State().scenarioReady)
         return;
-    Hold();
+    Control::Instance().Update();
     if (_job == Job::None)
         return;
     _stepMs += diff;
@@ -670,9 +667,9 @@ void Director::Update(std::uint32_t diff)
                         sRandomPlayerbotMgr.AddPlayerBot(ObjectGuid(_actors[i].guid), 0);
             bool settled = AllOnline();
             for (std::size_t i = 0; settled && i < kScenarioActors; ++i)
-                settled = !Find(i)->IsBeingTeleported() && _actors[i].held;
+                settled = !Find(i)->IsBeingTeleported() && Control::Instance().Owns(i);
             if (settled)
-                Advance(_job == Job::Build ? Step::Stage : Step::Verify);
+                Advance(_job == Job::Build || _job == Job::Restore ? Step::Stage : Step::Verify);
             else if (StepTimedOut(kLoginMs))
                 Fail("the fixtures did not log in within " + std::to_string(kLoginMs / 1000) + " s");
             break;
@@ -711,7 +708,13 @@ void Director::Update(std::uint32_t diff)
             for (std::size_t i = 0; i < kScenarioActors; ++i)
             {
                 std::string error;
-                if (!ApplyLoadout(Find(i), error))
+                if (_job == Job::Restore)
+                {
+                    Player* player = Find(i);
+                    Control::RestoreBaseline(player);
+                    player->SaveToDB(false, false);
+                }
+                else if (!ApplyLoadout(Find(i), error))
                 {
                     Fail(m.actors[i].name + ": " + error);
                     return;
@@ -849,7 +852,7 @@ void Director::Update(std::uint32_t diff)
                 && !ObjectAccessor::FindConnectedPlayer(ObjectGuid(_actors[1].guid));
             if (offline)
             {
-                if (_job == Job::Build)
+                if (_job == Job::Build || _job == Job::Restore)
                     Finish(_jobOk, _log.empty() ? "built" : _log.back());
                 else
                     Advance(Step::ArenaGone);
@@ -897,13 +900,14 @@ std::string Director::Status() const
         Player* player = Find(i);
         out += "actor " + std::to_string(i) + " " + state.manifest->actors[i].name + ": "
             + (player ? "online, map " + std::to_string(player->GetMapId()) + ", instance " + std::to_string(player->GetInstanceId())
-                + (_actors[i].held ? ", held dormant" : "")
+                + (Control::Instance().Owns(i) ? ", owned by the external controller" : ", not owned")
                       : std::string("offline")) + "\n";
     }
     out += "arena: " + (_arenaInstance ? "instance " + std::to_string(_arenaInstance) + (_closing ? " (closing)" : " open") : std::string("none")) + "\n";
     out += "job: " + (_job == Job::None ? std::string("none") : _jobName + " at " + StepName(int(_step))) + "\n";
     out += "result: " + _result + "\n";
-    out += "fixture casts since open: " + std::to_string(_untriggeredCasts) + " untriggered, " + std::to_string(_triggeredCasts) + " triggered\n";
+    out += "fixture casts since open: " + std::to_string(_stockCasts) + " stock, " + std::to_string(_executorCasts) + " executor, "
+        + std::to_string(_triggeredCasts) + " triggered\n";
     if (!_evidence.empty())
         out += "dojo-evidence " + _evidence;
     return out;

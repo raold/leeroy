@@ -1,5 +1,6 @@
 // This file is part of leeroy (mod-dojo), released under the GNU GPL v2. See LICENSE.
 
+#include "DojoExecutor.h"
 #include "DojoRuntime.h"
 #include "DojoSettings.h"
 
@@ -59,6 +60,8 @@ void PrepareScenario(Dojo::WorkerState& state)
     state.checks = Dojo::CheckTrainingRules(state.manifest->rules.prepSeconds);
     std::vector<Dojo::ServerCheck> const scenario = Dojo::ValidateScenario(*state.manifest);
     state.checks.insert(state.checks.end(), scenario.begin(), scenario.end());
+    std::string const catalog = Dojo::Control::Instance().Prepare(*state.manifest);
+    state.checks.push_back({catalog.empty(), "action catalog", catalog.empty() ? "built from the kit" : catalog});
     std::size_t failed = 0;
     for (Dojo::ServerCheck const& c : state.checks)
         if (!c.ok)
