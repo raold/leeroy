@@ -10,8 +10,9 @@ What is posted (realm_calendar.kind), by whom (a title word), and when:
                                                it: the day's offline raid, or no raid.
   offline      the raid-lead rotation, by load when an offline raid starts; its result once it
                                                has ended (calendar_update)
-  birthday     events, social, historian, then  the week before a member's card birthday
-               the raid-lead rotation
+  birthday     events, social, historian, then  the week before a member's card birthday; a date
+               the raid-lead rotation           with more than two shares one "Guild birthdays"
+                                               event naming them all
   anniversary  the same                        the week before [realm] guild_anniversary, only
                                                when it is set (local data: never in a log)
   meeting      the standing raid lead          Monday (caught up until Wednesday), for Thursday
@@ -23,7 +24,7 @@ realm_calendar rows within 30 days) passes the post on down its chain; native re
 
 Every post, signup and update goes through the direct ledger (owner "calendar"), never the
 body ledger, so his raid's hold never holds one back; native fences each. A post's ref is its
-business identity (raid:<date>, meeting:<date>, birthday:<guid>:<year>, anniversary:<year>,
+business identity (raid:<date>, meeting:<date>, birthday:<guid>:<year> or birthday:<date> for a shared date, anniversary:<year>,
 offline:<command>): its realm_calendar row is written 'pending' in the same Store unit that
 prepares it, and it is bound to native's event id from the post's job value ('posted'). A
 refused or never-sent post is 'failed' and may be tried again after RETRY_S, by another holder
@@ -85,6 +86,7 @@ MEETING_DAY, MEETING_HOUR = 3, 21  # Thursday 21:00.
 MEETING_LAST_POST_DAY = 2  # Posted on Monday, caught up until Wednesday; never on its own day.
 WEEK_BEFORE_DAYS = 7
 EVENT_HOUR = 20  # Birthdays and the anniversary.
+BIRTHDAYS_SINGLE = 2  # More birthdays than this on one date share one combined event.
 MISSED_AFTER_S = 4 * 3600  # A night he missed is updated this long after it began...
 MISSED_UNTIL_S = 2 * 86400  # ...and not after this.
 CAME_BEFORE_S, CAME_AFTER_S = 3600, 3 * 3600
@@ -114,6 +116,7 @@ class Post:
     chain: tuple[int, ...]
     by_load: bool = False
     invite_human: bool = False
+    description: str = ""
 
 
 def _wipes(n: int) -> str:
@@ -398,12 +401,22 @@ class CalendarDesk:
             thursday = today + timedelta(days=MEETING_DAY - local.weekday())
             posts.append(Post("meeting", f"meeting:{thursday.isoformat()}", self._local(thursday, MEETING_HOUR),
                               "Officer meeting", "meeting", rotation, invite_human=True))
+        birthdays = {}  # day -> [(guid, character name)]
         for member in self._ports.cast():
             persona = self._ports.persona(member.guid) if member.guid not in former else None
             day = _on_or_after(persona.real_life.birthday, today, WEEK_BEFORE_DAYS) if persona else None
             if day is not None:
-                posts.append(Post("birthday", f"birthday:{member.guid}:{day.year}", self._local(day, EVENT_HOUR),
-                                  _clip(f"{persona.character_name}'s birthday", 64), "other", social))
+                birthdays.setdefault(day, []).append((member.guid, persona.character_name))
+        for day, people in birthdays.items():
+            at = self._local(day, EVENT_HOUR)
+            if len(people) <= BIRTHDAYS_SINGLE:
+                for guid, name in people:
+                    posts.append(Post("birthday", f"birthday:{guid}:{day.year}", at,
+                                      _clip(f"{name}'s birthday", 64), "other", social))
+            else:  # A crowded day is one event naming everyone, not one per member.
+                names = ", ".join(name for _, name in sorted(people))
+                posts.append(Post("birthday", f"birthday:{day.isoformat()}", at, "Guild birthdays",
+                                  "other", social, description=_clip(names, 255)))
         day = _on_or_after(getattr(self.realm.cfg, "guild_anniversary", ""), today, WEEK_BEFORE_DAYS)
         if day is not None:
             posts.append(Post("anniversary", f"anniversary:{day.year}", self._local(day, EVENT_HOUR),
@@ -425,7 +438,7 @@ class CalendarDesk:
             if creator is None:
                 self._note("realm_calendar_no_creator", post.kind)
                 return None
-            cmd = CalendarPost(uuid.uuid4().hex, creator, post.title, event_type=post.event_type,
+            cmd = CalendarPost(uuid.uuid4().hex, creator, post.title, description=post.description, event_type=post.event_type,
                                at=post.at, invite_human=post.invite_human)
             if ledger.prepare(cmd, owner=OWNER, ref=post.ref, context=context, expects_job=True) is None:
                 return None

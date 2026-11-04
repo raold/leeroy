@@ -8,7 +8,7 @@ import logging
 import random
 import re
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from ..config import CastCfg
@@ -20,6 +20,7 @@ from ..protocol import Member
 from ..storage.store import Store
 from ..text import estimate_tokens, truncate_words
 from ..wow import CAST_MIN_LEVEL, CLASSES, RACES, class_roles
+from .birthdays import draw_birthday
 from .io import load_persona, save_persona
 from .schema import (JEALOUSY_MODES, MIN_AGE, TYPING_RULE, Persona, persona_from_dict,
                      persona_json_schema, persona_to_dict, validate_persona)
@@ -720,6 +721,8 @@ async def generate_cast(store: Store, llm: LLMClient | None, cfg, *, human_guid:
                                        cast_summary(existing, human=human), rules, human=human,
                                        taken_names=frozenset(taken), member_names=members,
                                        notes=notes)
+            p = replace(p, real_life=replace(p.real_life, birthday=draw_birthday(
+                (q.real_life.birthday for q in existing), rng)))  # the model's own is ignored
             with store.transaction():
                 save_persona(store, p, source="generated", ts=store.clock.now(),
                              race=RACES.get(member.race, ""),
