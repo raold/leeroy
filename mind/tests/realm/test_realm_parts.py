@@ -108,6 +108,8 @@ def test_parts_registry_attaches_present_modules(app, monkeypatch, caplog):
         return part
 
     install(monkeypatch, canon=module("canon", attach_itself))
+    # Absent here, whichever of them has been written since: None in sys.modules is not found.
+    install(monkeypatch, **dict.fromkeys(("talk", "rivals", "race", "poach", "calendar")))
     caplog.set_level(logging.INFO, logger="leeroy_mind.realm.parts")
     enabled(app.data_dir, True)
     realm = attach_realm(app)
