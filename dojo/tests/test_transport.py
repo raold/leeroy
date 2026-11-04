@@ -140,15 +140,16 @@ class TransportTest(unittest.TestCase):
     def test_an_unread_outbox_pauses_reading(self):
         p = self.peer()
         serial = self.event("connected").connection
-        big = {"v": 1, "type": "status_result", "id": "x", "pad": "w" * 400_000}
-        for _ in range(12):
+        big = {"v": 1, "type": "status_result", "id": "x", "pad": "w" * 1_000_000}
+        count = 24   # more than loopback socket buffers hold, so the writer stays blocked until the peer reads
+        for _ in range(count):
             self.assertTrue(self.server.send(serial, big))
         p.send("".join(status(i) for i in range(5)))
         time.sleep(0.5)
+        self.assertEqual(self.server.stats.lines_in, 0, "nothing is read while responses wait unwritten")
         self.assertGreater(self.server.stats.read_pauses, 0)
-        self.assertGreaterEqual(self.server.stats.max_outbox, 2)
-        received = [p.line(10) for _ in range(12)]
-        self.assertTrue(all(r is not None and len(r["pad"]) == 400_000 for r in received))
+        received = [p.line(10) for _ in range(count)]
+        self.assertTrue(all(r is not None and len(r["pad"]) == 1_000_000 for r in received))
         ids = [self.event("line").decoded.request.id for _ in range(5)]
         self.assertEqual(ids, [f"q{i}" for i in range(5)])
 
