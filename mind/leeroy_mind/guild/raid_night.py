@@ -954,8 +954,9 @@ class RaidNight:
             chosen = Lead(False, lead)
         return Pick(raid_key, size, heroic, chosen)
 
-    async def console_act(self, action, pick=None):
-        """Run one console action; what it did, or ConsoleRefused."""
+    async def console_act(self, action, pick=None, *, guard=None):
+        """Run one console action; what it did, or ConsoleRefused. guard(): the caller's own
+        refusal (GuildLife's), asked again before anything is sent to the game."""
         if action not in CONSOLE_ACTIONS:
             raise ConsoleRefused("unknown raid action")
         if self._present and self.ports.human_online():
@@ -985,22 +986,25 @@ class RaidNight:
             return f"summoning {count} late member{'s' if count != 1 else ''} now"
         if action == "start" and self.state is State.ASSEMBLING:
             if self._dc_due is not None:
-                self._dc_due = min(self._dc_due, now)
-                return "the pull countdown starts now; dungeon-clear follows it"
-            self._ready_due = min(self._ready_due, now)
-            return "the ready check goes out now; dungeon-clear starts after the countdown"
-        return await self._console_dc("dc_on" if action == "start" else "dc_off")
+                due, self._dc_due = self._dc_due, min(self._dc_due, now)
+                return ("the pull countdown starts now; dungeon-clear follows it" if due > now
+                        else "the pull countdown is already due: it starts in a moment")
+            due, self._ready_due = self._ready_due, min(self._ready_due, now)
+            return ("the ready check goes out now; dungeon-clear starts after the countdown"
+                    if due > now else "the ready check is already due: it goes out in a moment")
+        return await self._console_dc("dc_on" if action == "start" else "dc_off", guard)
 
-    async def _console_dc(self, command_action):
+    async def _console_dc(self, command_action, guard=None):
         """Dungeon-clear off (stop) or on again (start after a stop), as the raid's own start
-        and close switch it, while no tick is talking to the game."""
+        and close switch it, while no tick is talking to the game. Every guard is asked again
+        once the lock is held: the wait for it can outlast a disconnect or a logout."""
         action = "start" if command_action == "dc_on" else "stop"
         try:
             await asyncio.wait_for(self._lock.acquire(), CONSOLE_LOCK_S)
         except TimeoutError:
             raise ConsoleRefused("the raid is busy with the game: try again in a moment") from None
         try:
-            why = self.console_refusal(action)
+            why = (guard() if guard is not None else None) or self.console_refusal(action)
             if why is not None:
                 raise ConsoleRefused(why)
             run = self.run

@@ -13,8 +13,8 @@ a crash left behind; the endpoint removes it when it closes. The console reads i
 key only to a listener that the TCP table shows is the running mind's own process.
 
 A request: one connection, one line. A JSON object of at most MAX_LINE bytes ending in a
-newline, sent within READ_S, with exactly the keys v (1), key, op and, for a raid action only,
-args. Anything else (an unknown or missing key, a wrong type, an HTTP request) is refused and
+newline, sent within READ_S (2 s), with exactly the keys v (1), key, op and, for a raid action
+only, args. Anything else (an unknown or missing key, a wrong type, an HTTP request) is refused and
 the connection closed; nothing after the first line is read. One answer line comes back,
 {"ok": true, ...} or {"ok": false, "error": ...}, and the connection closes.
 
@@ -30,6 +30,7 @@ import logging
 import os
 import secrets
 import socket
+import time
 import tomllib
 from contextlib import suppress
 from dataclasses import dataclass
@@ -42,9 +43,10 @@ VERSION = 1
 KEY_FILE = "control.json"
 MAX_LINE = 4096
 MAX_REPLY = 65536
-READ_S = 5.0
+READ_S = 2.0  # the console sends its line at once: a slot is not held longer
 RAID_S = 30.0  # how long one raid action may take before the console is answered anyway
 MAX_CONNECTIONS = 8
+REPLACE_TRIES = 40  # 2 s of 50 ms tries to move control.json over a file being read
 OPS = ("status", "stop", "raid")
 RAID_ACTIONS = ("call", "form", "summon", "start", "stop", "end")
 KEY_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
@@ -208,7 +210,16 @@ def write_key_file(path: Path, record: dict) -> None:
             f.write(json.dumps(record, separators=(",", ":"), ensure_ascii=True).encode("ascii"))
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)
+        for attempt in range(REPLACE_TRIES):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                # Windows refuses to replace a file another process has open (the console
+                # reads the old one every few seconds): that read lasts a moment
+                if attempt == REPLACE_TRIES - 1:
+                    raise
+                time.sleep(.05)
     except BaseException:
         with suppress(OSError):
             tmp.unlink()
@@ -364,8 +375,8 @@ class ControlEndpoint:
             raise
         try:
             self.port = sock.getsockname()[1]
-            write_key_file(self.path, {"v": VERSION, "pid": os.getpid(), "port": self.port,
-                                       "key": self.key})
+            await asyncio.to_thread(write_key_file, self.path, {
+                "v": VERSION, "pid": os.getpid(), "port": self.port, "key": self.key})
             log_event("control_listening", port=self.port)
             self.listening.set()
             await asyncio.Event().wait()  # until the shutdown cancels it
@@ -376,9 +387,16 @@ class ControlEndpoint:
                 await asyncio.wait_for(server.wait_closed(), 2)
 
     def _remove_key_file(self) -> None:
-        if (read_key_file(self.path) or {}).get("key") == self.key:
-            with suppress(OSError):
+        for _ in range(10):  # a console reading it at that moment holds it open briefly
+            if (read_key_file(self.path) or {}).get("key") != self.key:
+                return
+            try:
                 self.path.unlink()
+                return
+            except PermissionError:
+                time.sleep(.02)
+            except OSError:
+                return
 
     async def _connection(self, reader: asyncio.StreamReader,
                           writer: asyncio.StreamWriter) -> None:
@@ -394,7 +412,11 @@ class ControlEndpoint:
                     ConnectionError, OSError):
                 reply = {"ok": False, "error": "bad request"}
             else:
-                reply, after = await self._answer(line)
+                try:
+                    reply, after = await self._answer(line)
+                except Exception as e:  # its text can carry game data: the class only
+                    log_event("control_failed", level=logging.WARNING, error=type(e).__name__)
+                    reply = {"ok": False, "error": f"internal error ({type(e).__name__})"}
             writer.write(encode(reply))
             await asyncio.wait_for(writer.drain(), self.read_s)
         except (ConnectionError, OSError, TimeoutError):

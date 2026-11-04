@@ -561,9 +561,10 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   timers would, with the same guards, and are refused while he is not in game.
   `stop`/`start` of a raid switch dungeon-clear off and on again mid-raid. The
   console sends the key only to the listener the TCP table shows is the running
-  mind's own pid; its Stop and Restart use the clean stop, wait up to 60 s for
-  the process to end, and otherwise (or with no endpoint: a mind from before
-  it, or one with it off) stop it by force and say why.
+  mind's own pid; its Stop and Restart use the clean stop (asked up to five
+  times while the endpoint is there but busy), wait up to 60 s for the process
+  to end, and otherwise (or with no endpoint: a mind from before it, or one
+  with it off) stop it by force and say why.
 
 ## The voice service (`leeroy-voice`)
 

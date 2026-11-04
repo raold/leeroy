@@ -4,8 +4,9 @@ wait on processes. With control off (--no-control, or nothing here can control a
 every action is refused and nothing is launched or stopped.
 
 The mind is stopped cleanly when it can be: its control endpoint (leeroy_mind.endpoint) is
-asked to run the mind's own shutdown, the one Ctrl+C runs, and the console waits up to
-GRACEFUL_S for the process to end and mind.lock to free. Without a usable endpoint, or when the
+asked to run the mind's own shutdown, the one Ctrl+C runs (asked again, STOP_TRIES times in
+all, while it is there but does not answer), and the console waits up to GRACEFUL_S for the
+process to end and mind.lock to free. Without a usable endpoint, or when the
 mind has not ended by then, it is stopped by force as before, and the answer says why."""
 import asyncio
 import sys
@@ -20,6 +21,8 @@ from .mindlink import STOP_S, LinkError
 SERVICES = ("mind", "voice")
 ACTIONS = ("start", "stop", "restart")
 GRACEFUL_S = 60.0  # the mind's own shutdown spends up to about 30 s on its last writes
+STOP_TRIES = 5  # asks of an endpoint that is there but does not answer, STOP_RETRY_S apart
+STOP_RETRY_S = 2.0
 
 
 class Refused(Exception):
@@ -105,10 +108,16 @@ class MindHandle:
                                  "no action taken")
         if not found:
             return Outcome(0, "mind already stopped", "stopped"), ""
-        try:
-            reply = self.link.call([p.pid for p in found], "stop", timeout=STOP_S)
-        except LinkError as e:
-            return None, str(e)
+        for attempt in range(STOP_TRIES):
+            try:
+                reply = self.link.call([p.pid for p in found], "stop", timeout=STOP_S)
+                break
+            except LinkError as e:
+                # A checked endpoint that did not answer may only be busy (its few connection
+                # slots taken): the clean stop is worth a few more tries before force
+                if not e.unanswered or attempt == STOP_TRIES - 1:
+                    return None, str(e)
+                self._sleep(STOP_RETRY_S)
         if reply.get("ok") is not True:
             return None, "its control endpoint refused the stop"
         deadline = self._monotonic() + self.graceful_s

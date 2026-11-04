@@ -230,7 +230,8 @@ class GuildLife:
         if args["action"] == "form":
             pick = self.raid_night.console_pick(args["raid"], args["size"], args["heroic"],
                                                 args["lead"])
-        return await self.raid_night.console_act(args["action"], pick)
+        return await self.raid_night.console_act(args["action"], pick,
+                                                 guard=self._console_refusal)
 
     async def offline_tick(self):
         if not self._ready():

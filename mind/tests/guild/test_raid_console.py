@@ -1,6 +1,7 @@
 """The raid night's console actions (leeroy_mind.endpoint's raid ops): each enters RaidNight
 where the owner's chat or one of its timers would, with the same guards, and is refused, with
 a reason in true words, whenever guild life itself would not act. Fake ports only."""
+import asyncio
 from dataclasses import replace
 from datetime import datetime, timezone
 import random
@@ -463,3 +464,35 @@ async def test_guild_life_hands_his_pick_to_the_raid_night(app, fake):
     assert message.startswith("forming Icecrown Citadel 25")
     assert service.raid_night.state is State.FORMING
     assert service.raid_night._pick == Pick("icc", 25, False, None)
+
+
+@_run_async
+async def test_a_dungeon_clear_switch_asks_every_guard_again_once_it_has_the_lock(setup):
+    ports, _, night = setup
+    await running(setup)
+    held_reason = [None]
+    await night._lock.acquire()  # a tick talking to the game
+    stopping = asyncio.create_task(night.console_act("stop", guard=lambda: held_reason[0]))
+    await asyncio.sleep(0.01)
+    held_reason[0] = "the mind is not connected to the game"  # the bridge dropped meanwhile
+    night._lock.release()
+    with pytest.raises(ConsoleRefused, match="not connected"):
+        await stopping
+    assert not controls(ports, "dc_off") and night.console_status()["run"]["dc"] == "on"
+    await night.console_act("stop")
+    await night._lock.acquire()
+    starting = asyncio.create_task(night.console_act("start", guard=lambda: "the mind is stopping"))
+    night._lock.release()
+    with pytest.raises(ConsoleRefused, match="stopping"):
+        await starting
+    assert len(controls(ports, "dc_on")) == 1 and night.console_status()["run"]["dc"] == "held"
+
+
+@_run_async
+async def test_a_start_that_is_already_due_says_so(setup):
+    ports, _, night = setup
+    await form(setup)
+    await inside(setup)
+    night._ready_due = ports.clock.now() - 1  # the tick is about to send it
+    assert await night.console_act("start") == (
+        "the ready check is already due: it goes out in a moment")

@@ -470,6 +470,8 @@ def _state(tmp_path: Path) -> dict:
                 "memories": rows("SELECT owner, kind, text FROM memory ORDER BY id"),
                 "utterances": rows("SELECT count(*) FROM utterance"),
                 "cast": rows("SELECT guid, name, online FROM cast_member ORDER BY guid"),
+                "raids": rows("SELECT * FROM guild_raid ORDER BY raid_id"),
+                "dkp": rows("SELECT * FROM dkp_ledger ORDER BY id"),
                 "meta": rows("SELECT key, value FROM meta WHERE key NOT LIKE 'code_%' ORDER BY key")}
 
 
@@ -493,8 +495,11 @@ def test_the_clean_stop_leaves_the_minds_state_as_ctrl_c_leaves_it(tmp_path, cap
         assert not (data / KEY_FILE).exists()  # the endpoint took its key file with it
         assert sorted(p.name for p in data.iterdir() if p.name.startswith(".control")) == []
     assert states["ctrl_c"] == states["endpoint"]
-    assert states["endpoint"]["session"] and all(s[2] is not None for s in states["endpoint"]["session"])
-    assert {t[4] for t in states["endpoint"]["threads"]} <= {"extracted", "skipped", "pending"}
+    state = states["endpoint"]
+    # Not vacuous: his session was open, his two lines in a thread, one turn queued
+    assert state["session"] and all(s[2] is not None for s in state["session"])
+    assert len(state["lines"]) == 2 and state["threads"] and state["utterances"][0][0] >= 1
+    assert {t[4] for t in state["threads"]} == {"extracted"}  # the shutdown extracted it
     assert shutdowns["ctrl_c"] == shutdowns["endpoint"]
     assert shutdowns["endpoint"][0] == "shutdown_started"
     assert "session_ended" in shutdowns["endpoint"]
@@ -534,3 +539,36 @@ def test_run_returns_0_when_the_endpoint_stops_it(tmp_path):
 def test_the_private_descriptor_names_only_this_user():
     sddl = endpoint.private_sddl()
     assert sddl.startswith("D:P(A;;FA;;;S-1-") and sddl.endswith(")") and sddl.count(";") == 5
+
+
+def test_the_key_file_waits_for_a_reader_to_let_go(tmp_path, monkeypatch):
+    path, real, tries = tmp_path / KEY_FILE, os.replace, []
+
+    def busy(src, dst):
+        tries.append(dst)
+        if len(tries) < 3:
+            raise PermissionError(32, "in use by another process")  # a console reading it
+        real(src, dst)
+    monkeypatch.setattr(endpoint.os, "replace", busy)
+    write_key_file(path, {"v": 1, "pid": 4242, "port": 40000, "key": KEY})
+    assert len(tries) == 3 and read_key_file(path)["key"] == KEY
+
+    def never(src, dst):
+        raise PermissionError(32, "in use by another process")
+    monkeypatch.setattr(endpoint.os, "replace", never)
+    with pytest.raises(PermissionError):
+        write_key_file(path, {"v": 1, "pid": 4242, "port": 40001, "key": KEY})
+    assert read_key_file(path)["port"] == 40000  # the old one stays whole
+    assert sorted(p.name for p in tmp_path.iterdir()) == [KEY_FILE]
+
+
+def test_an_unexpected_failure_answers_with_its_class_only(tmp_path, caplog):
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            async def broken(line):
+                raise RuntimeError("private text")
+            ep._answer = broken
+            assert await ask(ep, "status") == {"ok": False, "error": "internal error (RuntimeError)"}
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        run(go())
+    assert "control_failed: error=RuntimeError" in caplog.text and "private text" not in caplog.text

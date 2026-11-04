@@ -18,7 +18,12 @@ RAID_S = endpoint.RAID_S + 5.0
 
 
 class LinkError(Exception):
-    """The endpoint was not used; the text says why."""
+    """The endpoint was not used; the text says why. unanswered: it was located and checked,
+    but did not answer (it may be busy: another try can reach it)."""
+
+    def __init__(self, message: str, *, unanswered: bool = False):
+        super().__init__(message)
+        self.unanswered = unanswered
 
 
 class MindLink:
@@ -51,4 +56,5 @@ class MindLink:
         try:
             return self._request(record["port"], record["key"], op, args, timeout=timeout)
         except (OSError, ValueError) as e:
-            raise LinkError(f"the control endpoint did not answer ({type(e).__name__})") from None
+            raise LinkError(f"the control endpoint did not answer ({type(e).__name__})",
+                            unanswered=True) from None

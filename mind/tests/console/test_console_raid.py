@@ -480,3 +480,29 @@ def test_a_clean_restart_starts_it_again_and_an_ambiguous_family_is_refused(mind
     processes.rows = []
     assert _handle(mind_rows, Processes(), StopLink(Processes())).act("stop").message == (
         "mind already stopped")
+
+
+def test_a_busy_endpoint_is_asked_again_before_the_stop_is_forced(mind_rows):
+    processes = Processes([mind_rows.launcher, mind_rows.child])
+    busy = LinkError("the control endpoint did not answer (ConnectionResetError)", unanswered=True)
+
+    class Busy(StopLink):
+        def __init__(self, failures):
+            super().__init__(processes)
+            self.failures = failures
+
+        def call(self, pids, op, args=None, *, timeout=3.0):
+            if self.failures:
+                self.failures -= 1
+                self.calls.append((tuple(pids), op))
+                raise busy
+            return super().call(pids, op, args, timeout=timeout)
+    link = Busy(2)  # its slots were taken twice, then it answered
+    out = _handle(mind_rows, processes, link).act("stop")
+    assert out.message.startswith("mind stopped cleanly") and len(link.calls) == 3
+    assert processes.killed == []
+    processes.rows = [mind_rows.launcher, mind_rows.child]
+    link = Busy(99)  # never answers
+    out = _handle(mind_rows, processes, link).act("stop")
+    assert out.message.startswith("mind stopped by force (the control endpoint did not answer")
+    assert len(link.calls) == 5 and processes.killed == [(101, 1120), (100, 1110)]
