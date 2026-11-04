@@ -108,6 +108,29 @@ Apply them to a checkout of each module with
 They assume this repo is the install root, with the core checked out in
 `azerothcore-wotlk/` and the build in `build/`. See `CLAUDE.md`.
 
+## Training ground
+
+The optional training ground records completed fights, checks observable mechanics,
+and compares tactics on established farm encounters. Adaptation requires at least
+28 days of eligible received records and a passed overhead gate. Reports separate
+fixed score bases, incomplete coverage, desired setups and verified observations.
+An offline tactic win followed by recorded use in a human raid proves adoption;
+it does not establish a causal improvement in that raid. Requested damage counters
+cannot establish actual boss DPS, and dummy results cannot establish a field
+rotation win. Voice send records do not prove audible playback or complete callouts.
+
+Training is disabled by default. Private records live in the mind data directory's
+`mind.db` (`tg_` tables and scoped receipts). Use `python -m leeroy_mind training
+status`, `training report --week YYYY-Www`, and `training trials` to inspect them;
+the latter commands follow the same module invocation. With the mind stopped,
+`training rollback --context MAP:BOSS:DIFFICULTY` or `training stock --context ...`
+changes the stored card selection under the service lock, while preserving pending
+command journals. Native `Leeroy.Training.Enable = 0` stops additions and requests
+verified cleanup, which may remain pending; `Leeroy.Telemetry.Enable = 0` stops
+recording. See [operating notes](CLAUDE.md#training-ground) and the
+[research references](references.bib). Implementation and passing tests are separate
+from live observation and acceptance.
+
 ## CI
 
 | Workflow | When | What |

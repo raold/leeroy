@@ -125,13 +125,21 @@ def test_job_rejects_malformed_typed_fields(field, value):
         bridge.parse_event(json.dumps(msg))
 
 
-@pytest.mark.parametrize("field", [f.name for f in dataclasses.fields(Job)])
-def test_every_job_field_is_required(field):
+@pytest.mark.parametrize("field", [f.name for f in dataclasses.fields(Job)
+                                  if f.default is dataclasses.MISSING])
+def test_every_nondefault_job_field_is_required(field):
     register()
     msg = lines(kind="event")[0]["msg"]
     del msg[field]
     with pytest.raises(bridge.ProtocolError, match=field):
         bridge.parse_event(json.dumps(msg))
+
+
+def test_older_job_producer_has_no_native_training_scope():
+    register()
+    msg = lines(kind="event")[0]["msg"]
+    msg.pop("training_run")
+    assert bridge.parse_event(json.dumps(msg)).training_run == ""
 
 
 def test_messages_are_frozen_and_slotted():
