@@ -170,9 +170,13 @@ def test_a_checkout_whose_lifecycle_will_not_load_fails_in_one_line(tmp_path):
     script.write_bytes(PATH.read_bytes())
     package = tmp_path / "mind" / "leeroy_mind"
     package.mkdir(parents=True)
-    (package / "__init__.py").write_text("", encoding="utf-8")  # no lifecycle.py
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    # A module that is there but will not load (a missing one could be found elsewhere by an
+    # editable install's finder)
+    (package / "lifecycle.py").write_text("raise ImportError('a private path')\n",
+                                          encoding="utf-8")
     result = subprocess.run([sys.executable, "-I", str(script), "status", "--root", str(tmp_path),
                              "--data-dir", str(tmp_path / "mind-data")],
                             capture_output=True, text=True, timeout=60)
     assert result.returncode == 1 and result.stdout == ""
-    assert result.stderr == "mind: ModuleNotFoundError; no unverified process was stopped\n"
+    assert result.stderr == "mind: ImportError; no unverified process was stopped\n"
