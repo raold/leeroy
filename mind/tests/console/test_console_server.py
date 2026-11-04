@@ -335,3 +335,30 @@ def test_health_is_read_only_and_content_free(data):
             assert h["errors"][0]["exc"] == "ValueError"
             assert h["voice"]["detail"] == "no voice venv in this checkout"
     run(go())
+
+
+async def raw(app, head: str) -> bytes:
+    reader, writer = await asyncio.open_connection("127.0.0.1", app.s.port)
+    writer.write(head.encode("latin-1"))
+    await writer.drain()
+    reply = await asyncio.wait_for(reader.read(), 10)
+    writer.close()
+    return reply
+
+
+def test_numbers_are_ascii_digits_of_a_bounded_length(data):
+    async def go():
+        async with served(make_app(data)) as app:
+            for value in (chr(0xB2), "1" * 5000, "-1", "+5", "0x10"):
+                reply = await raw(app, f"POST /api/control HTTP/1.1\r\nHost: 127.0.0.1:"
+                                       f"{app.s.port}\r\nContent-Length: {value}\r\n\r\n")
+                assert reply.startswith(b"HTTP/1.1 400 ") and b"bad Content-Length" in reply, \
+                    value[:8]
+            for value in ("%C2%B2", "%D9%A1", "9" * 19, "1" * 5000, "-1", ""):
+                r = await http(app, "GET", f"/api/feed?after={value}")
+                assert r.status == 400, value[:8]
+            r = await http(app, "GET", f"/api/feed?after={'9' * 18}")
+            assert r.status == 200 and r.json() == {"lines": []}
+    run(go())
+    assert httpd.digits("0", 1) == 0 and httpd.digits("12", 1) is None
+    assert httpd.digits(chr(0x661), 5) is None and httpd.digits("", 5) is None

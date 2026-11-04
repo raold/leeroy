@@ -74,6 +74,14 @@ class Response:
         return ("\r\n".join(lines) + "\r\n\r\n").encode("latin-1") + self.body
 
 
+def digits(value: str, most: int) -> int | None:
+    """`value` as a whole number when it is 1 to `most` ASCII digits; None otherwise (str.isdigit
+    also passes superscripts and other scripts' digits, which int() refuses or reads)."""
+    if 0 < len(value) <= most and value.isascii() and value.isdigit():
+        return int(value)
+    return None
+
+
 def text(status: int, message: str, headers=()) -> Response:
     return Response(status, (message.rstrip("\n") + "\n").encode("utf-8"), headers=list(headers))
 
@@ -172,9 +180,9 @@ async def read_request(reader: asyncio.StreamReader) -> Request:
     if len(lengths) > 1:
         raise BadRequest(400, "more than one Content-Length")
     if lengths:
-        if not lengths[0].isdigit():
+        size = digits(lengths[0], 9)
+        if size is None:
             raise BadRequest(400, "bad Content-Length")
-        size = int(lengths[0])
         if size > MAX_BODY:
             raise BadRequest(413, "body too large")
         try:

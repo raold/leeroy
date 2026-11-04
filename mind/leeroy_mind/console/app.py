@@ -37,7 +37,7 @@ from typing import Callable
 
 from . import feed, mindlog, netinfo, status
 from .control import Controls, Refused
-from .httpd import Request, Response, Stream, encode_json, json_response, text
+from .httpd import Request, Response, Stream, digits, encode_json, json_response, text
 from .voicelink import VoiceRelay
 
 HOST = "127.0.0.1"
@@ -47,8 +47,8 @@ FEED_S = 1.5
 PING_S = 15.0
 QUEUE = 500  # events a page may fall behind before it is cut off (it reconnects)
 FEED_DAYS = 3.0  # how far back a page's first feed goes
-
 KEY_HEADER = "x-console-key"
+
 log = logging.getLogger("leeroy_mind.console")
 
 
@@ -399,10 +399,10 @@ class ConsoleApp:
         return json_response(200, health)
 
     async def _api_feed(self, req: Request):
-        after = req.query.get("after", ["0"])[0]
-        if not after.isdigit():
+        after = digits(req.query.get("after", ["0"])[0], 18)  # an SQLite integer
+        if after is None:
             return text(400, "after: a line id")
-        lines, _ = await asyncio.to_thread(self._feed_since, int(after))
+        lines, _ = await asyncio.to_thread(self._feed_since, after)
         return json_response(200, {"lines": lines})
 
     async def _api_voice(self, req: Request):
