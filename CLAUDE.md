@@ -542,10 +542,28 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   `leeroy_mind/lifecycle.py`, the rules `scripts/ac-mind.py` uses, so only this
   checkout's own mind venv may control the mind (`--root` names another
   checkout); the voice service's pid must be the base interpreter its own venv
-  launcher started. `--no-control` turns start, restart and stop off. The
-  owner's game state is the running mind's open session; while the mind or its
-  bridge is down, or the session cannot be read, it is shown as unknown, never
-  "not in game".
+  launcher started. `--no-control` turns start, restart and stop off, and raid
+  actions too. The owner's game state is the running mind's open session; while
+  the mind or its bridge is down, or the session cannot be read, it is shown as
+  unknown, never "not in game". Its Raid and Guild tabs read mind.db read-only
+  (raids, attendance, the DKP ledger, loot receipts, the roster, season awards,
+  the chronicle); the Raid tab's live state and buttons come from the mind's
+  control endpoint.
+- The mind's control endpoint (`leeroy_mind/endpoint.py`) is on by default
+  (`[control] enabled = false` turns it off; `[control] port`, default 0, picks
+  a free port). It listens on 127.0.0.1 only and writes a new key each start,
+  with its port and pid, to `mind-data/control.json`, readable by the owner's
+  user only (a protected one-entry DACL) and removed when the mind stops
+  cleanly. One JSON line per connection, exactly `v`, `key`, `op` (and `args`):
+  `status`, `stop` (the mind's own shutdown, the one Ctrl+C runs) and `raid`
+  (`call`, `form` {raid, size, heroic, lead}, `summon`, `start`, `stop`,
+  `end`), which enter guild life's raid night where the owner's chat or its
+  timers would, with the same guards, and are refused while he is not in game.
+  `stop`/`start` of a raid switch dungeon-clear off and on again mid-raid. The
+  console sends the key only to the listener the TCP table shows is the running
+  mind's own pid; its Stop and Restart use the clean stop, wait up to 60 s for
+  the process to end, and otherwise (or with no endpoint: a mind from before
+  it, or one with it off) stop it by force and say why.
 
 ## The voice service (`leeroy-voice`)
 

@@ -17,11 +17,21 @@ cannot read an answer or send a preflighted request (the key header needs one).
     GET  /api/health   the Mind tab: processes, lock, links, Ollama's resident models, GPU,
                        the night, the latest errors and a content-free log tail
     GET  /api/feed     ?after=<id>: text lines after that id
+    GET  /api/raid     the Raid tab: mind.db's raids, loot and DKP (raidview.raid_view), and
+                       the raid night's live state from the mind's control endpoint
+    GET  /api/guild    the Guild tab: roster, DKP ladder, loot history, awards, chronicle
     POST /api/voice    {"type": "join", "channel"} | {"type": "volume", "guid", "db"} |
                        {"type": "mute", "guid", "on"}: on to the voice service
     POST /api/control  {"service": "mind"|"voice", "action": "start"|"restart"|"stop",
                        "confirm": bool}: a stop or restart while the owner is in game, or while
-                       nobody can tell, is answered 409 with a question until it is confirmed"""
+                       nobody can tell, is answered 409 with a question until it is confirmed
+    POST /api/raid     {"action": "call"|"summon"|"start"|"stop"|"end"} or {"action": "form",
+                       "raid", "size", "heroic", "lead"}: checked as the endpoint checks it,
+                       then on to the mind's control endpoint (mindlink); refused with
+                       --no-control, while a start or stop runs, or while the mind is not up
+
+The Raid and Guild tabs read mind.db read-only. Raid actions are the mind's to take: the
+console forwards them and shows the mind's answer, which says why when it refuses."""
 import asyncio
 import base64
 import hashlib
@@ -35,9 +45,11 @@ from importlib import resources
 from pathlib import Path
 from typing import Callable
 
-from . import feed, mindlog, netinfo, status
+from .. import endpoint
+from . import feed, mindlog, netinfo, raidview, status
 from .control import Controls, Refused
 from .httpd import Request, Response, Stream, digits, encode_json, json_response, text
+from .mindlink import RAID_S, LinkError
 from .voicelink import VoiceRelay
 
 HOST = "127.0.0.1"
@@ -99,11 +111,12 @@ class ConsoleApp:
                  connect: Callable | None = None, tcp: Callable = netinfo.tcp_table,
                  ollama: Callable = status.ollama_models, gpu: Callable = status.gpu_headroom,
                  follower: mindlog.LogFollower | None = None, clock: Callable = time.time,
-                 monotonic: Callable = time.monotonic):
+                 monotonic: Callable = time.monotonic, link=None):
         self.s = settings
         self.mind = mind
         self.controls = controls
         self.voice = voice
+        self.link = link  # a mindlink.MindLink: the mind's control endpoint; None: none here
         self.relay = VoiceRelay(lambda: self.s.voice_ui_port, self._voice_event,
                                 **({"connect": connect} if connect is not None else {}))
         self._tcp, self._ollama, self._gpu = tcp, ollama, gpu
@@ -380,8 +393,11 @@ class ConsoleApp:
                   ("GET", "/api/events"): self._api_events,
                   ("GET", "/api/health"): self._api_health,
                   ("GET", "/api/feed"): self._api_feed,
+                  ("GET", "/api/raid"): self._api_raid,
+                  ("GET", "/api/guild"): self._api_guild,
                   ("POST", "/api/voice"): self._api_voice,
-                  ("POST", "/api/control"): self._api_control}
+                  ("POST", "/api/control"): self._api_control,
+                  ("POST", "/api/raid"): self._api_raid_action}
         route = routes.get((req.method, req.path))
         if route is None:
             known = {path for _, path in routes}
@@ -412,8 +428,97 @@ class ConsoleApp:
         tail = self.follower.tail()
         errors = self.follower.view().errors
         health = await asyncio.to_thread(self._health, tail, errors)
+        health["endpoint"] = await asyncio.to_thread(self._endpoint_found)
         health["strip"] = self.strip()
         return json_response(200, health)
+
+    # -- the mind's control endpoint ---------------------------------------------------------
+
+    def _mind_pids(self) -> list[int]:
+        return [p.pid for p in self._found or []] if self.view.state == "running" else []
+
+    def _endpoint_found(self) -> dict:
+        """Worker thread. Whether a stop can be clean: the endpoint is located and checked,
+        and nothing is sent to it."""
+        if self.link is None:
+            return {"ok": False, "detail": "no control endpoint here"}
+        if self.view.state != "running":
+            return {"ok": False, "detail": f"the mind is {self.view.state}"}
+        try:
+            self.link.locate(self._mind_pids())
+        except LinkError as e:
+            return {"ok": False, "detail": str(e)}
+        return {"ok": True, "detail": ""}
+
+    async def _mind_status(self) -> dict:
+        """The raid night's state as the mind tells it (a read: it changes nothing)."""
+        if self.view.state != "running":
+            return {"ok": False, "error": f"the mind is {self.view.state}"}
+        if self.link is None:
+            return {"ok": False, "error": "no control endpoint here"}
+        try:
+            reply = await asyncio.to_thread(self.link.call, self._mind_pids(), "status")
+        except LinkError as e:
+            return {"ok": False, "error": str(e)}
+        if reply.get("ok") is not True:
+            return {"ok": False, "error": str(reply.get("error") or "refused")[:200]}
+        raid = reply.get("raid")
+        return {"ok": True, "stopping": reply.get("stopping") is True,
+                "raid": raid if isinstance(raid, dict) else None}
+
+    # -- the raid and guild tabs ---------------------------------------------------------------
+
+    async def _api_raid(self, req: Request):
+        try:
+            view = await asyncio.to_thread(feed.read, self.s.data_dir / "mind.db",
+                                           raidview.raid_view, now=self._clock())
+        except Exception as e:
+            log.warning("console_raid_unread: error=%s", type(e).__name__)
+            view = None
+        return json_response(200, {"view": view, "mind": await self._mind_status(),
+                                   "control": self.controls.describe()})
+
+    async def _api_guild(self, req: Request):
+        try:
+            view = await asyncio.to_thread(feed.read, self.s.data_dir / "mind.db",
+                                           raidview.guild_view)
+        except Exception as e:
+            log.warning("console_guild_unread: error=%s", type(e).__name__)
+            return json_response(503, {"ok": False, "error": f"mind.db could not be read "
+                                                             f"({type(e).__name__})"})
+        return json_response(200, view)
+
+    def _raid_problem(self) -> tuple[int, str] | None:
+        if not self.controls.enabled:
+            return 403, self.controls.reason or "control is off"
+        if self.controls.busy is not None:
+            service, action = self.controls.busy
+            return 409, f"a {action} of the {service} is still running"
+        if self.view.state != "running":
+            return 409, f"the mind is {self.view.state}: raid actions need it running"
+        if self.link is None:
+            return 409, "no control endpoint here"
+        return None
+
+    async def _api_raid_action(self, req: Request):
+        try:
+            args = endpoint.raid_args(req.json())  # exactly as the mind will check it
+        except endpoint.BadRequest as e:
+            return json_response(400, {"ok": False, "error": str(e)})
+        problem = self._raid_problem()
+        if problem is not None:
+            return json_response(problem[0], {"ok": False, "error": problem[1]})
+        try:
+            reply = await asyncio.to_thread(self.link.call, self._mind_pids(), "raid", args,
+                                            timeout=RAID_S)
+        except LinkError as e:
+            return json_response(409, {"ok": False, "error": str(e)})
+        if reply.get("ok") is not True:
+            return json_response(409, {"ok": False,
+                                       "error": str(reply.get("error") or "refused")[:300]})
+        message = str(reply.get("message") or "done")[:300]
+        self.broadcast("raid", {"action": args["action"], "message": message})
+        return json_response(200, {"ok": True, "message": message})
 
     async def _api_feed(self, req: Request):
         after = digits(req.query.get("after", ["0"])[0], 18)  # an SQLite integer
