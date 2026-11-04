@@ -24,6 +24,10 @@ if (TARGET modules)
     option(AC_ENABLE_DOJO "Build the dojo training variant of mod-dojo (never for a live server)" OFF)
     if (AC_ENABLE_DOJO)
         set(DOJO_TRAINING_BUILD 1)
+        # The training runtime logs fixture actors in through mod-playerbots, so it needs it in the same core.
+        if (NOT ";${MODULES_MODULE_LIST};" MATCHES ";mod-playerbots;")
+            message(FATAL_ERROR "[mod-dojo] AC_ENABLE_DOJO needs mod-playerbots in ${CMAKE_SOURCE_DIR}/modules")
+        endif()
         # D02: the training variant builds only with the minimal module set, so it never shares a core with the
         # live modules (mod-leeroy's bridge among them).
         foreach(DOJO_MODULE ${MODULES_MODULE_LIST})

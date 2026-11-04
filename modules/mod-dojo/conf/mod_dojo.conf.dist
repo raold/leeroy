@@ -17,3 +17,10 @@ Dojo.Marker = ""
 
 # Training instance: the layout's "instance", 1-64 of A-Z a-z 0-9 . _ : -
 Dojo.Instance = ""
+
+# Scenario manifest (dojo/scenarios/*.json) by absolute path, and its pinned
+# SHA-256 (64 lower-case hex digits, from python -m leeroy_dojo scenario hash).
+# Both or neither. The worker refuses a manifest that does not hash to the pin,
+# breaks the training rules or names an id the installed data does not have.
+Dojo.Scenario.Manifest = ""
+Dojo.Scenario.Sha256 = ""

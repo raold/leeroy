@@ -18,6 +18,24 @@ bool IsInstanceName(std::string_view name)
     return true;
 }
 
+bool IsSha256Hex(std::string_view text)
+{
+    if (text.size() != 64)
+        return false;
+    for (char const c : text)
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+            return false;
+    return true;
+}
+
+bool IsAbsolutePath(std::string_view path)
+{
+    if (!path.empty() && path[0] == '/')
+        return true;
+    return path.size() >= 3 && ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) && path[1] == ':'
+        && (path[2] == '/' || path[2] == '\\');
+}
+
 RuntimePlan PlanRuntime(Settings const& settings, bool trainingBuild)
 {
     if (!settings.enable)
@@ -28,6 +46,13 @@ RuntimePlan PlanRuntime(Settings const& settings, bool trainingBuild)
         return {RuntimeState::Refused, "Dojo.Enable = 1, but Dojo.Marker is not \"" + std::string(kTrainingMarker) + "\""};
     if (!IsInstanceName(settings.instance))
         return {RuntimeState::Refused, "Dojo.Enable = 1, but Dojo.Instance is not 1-64 of A-Z a-z 0-9 . _ : -"};
+    bool const named = !settings.scenarioManifest.empty();
+    if (named != !settings.scenarioSha256.empty())
+        return {RuntimeState::Refused, "Dojo.Scenario.Manifest and Dojo.Scenario.Sha256 must be set together"};
+    if (named && !IsAbsolutePath(settings.scenarioManifest))
+        return {RuntimeState::Refused, "Dojo.Scenario.Manifest must be an absolute path"};
+    if (named && !IsSha256Hex(settings.scenarioSha256))
+        return {RuntimeState::Refused, "Dojo.Scenario.Sha256 must be 64 lower-case hex digits"};
     return {RuntimeState::Armed, "training instance " + settings.instance};
 }
 
@@ -51,7 +76,8 @@ std::string StatusLine(RuntimePlan const& plan, bool trainingBuild)
     line += StateName(plan.state);
     line += " (" + plan.reason + "), ";
     line += trainingBuild ? "training build" : "disabled build";
-    line += "; no endpoint, no bot control";
+    line += plan.state == RuntimeState::Armed ? "; no endpoint, fixtures only through the dojo console commands"
+                                              : "; no endpoint, no bot control";
     return line;
 }
 }

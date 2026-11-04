@@ -52,7 +52,11 @@ class RegistrationTest(unittest.TestCase):
         loader = (MODULE / "src" / "mod_dojo_loader.cpp").read_text(encoding="utf-8")
         self.assertIn("AddSC_dojo_world();\n}", loader)
         runtime = (MODULE / "src" / "Runtime" / "DojoWorldScript.cpp").read_text(encoding="utf-8")
-        self.assertRegex(runtime, r"(?m)^void AddSC_dojo_world\(\)\s*\{\s*new DojoWorldScript\(\);\s*\}")
+        self.assertRegex(runtime, r"(?m)^void AddSC_dojo_world\(\)\s*\{\s*new DojoWorldScript\(\);\s*"
+                                  r"AddSC_dojo_commands\(\);\s*\}")
+        commands = (MODULE / "src" / "Runtime" / "DojoCommands.cpp").read_text(encoding="utf-8")
+        disabled = commands.split("#else", 1)[1]
+        self.assertRegex(disabled, r"void AddSC_dojo_commands\(\)\s*\{\s*\}")   # the disabled variant registers nothing
 
     def test_tests_stay_out_of_the_core(self):
         """The core collects every source under <module>/src; the test runner and its main() live in tests/."""
@@ -107,16 +111,69 @@ class BoundaryTest(unittest.TestCase):
                     else:
                         self.assertTrue("/" not in name or name.startswith(("nlohmann/", "boost/asio")), name)
 
-    def test_the_runtime_exposes_configuration_and_status_only(self):
-        """Task 4's acceptance: with the module off (and, in this build, in every state) nothing opens an endpoint or
-        claims a bot. The runtime may include only the settings and the core's config, log and script headers. The
-        step driver and the controller hook change this test when they arrive."""
+    def test_the_runtime_opens_no_endpoint_and_starts_no_thread(self):
+        """Until the step driver arrives nothing in the runtime listens, connects or runs a thread of its own."""
         for path in sources("src", "Runtime"):
-            self.assertEqual(sorted(name for _, name in includes(path)),
-                             ["Config.h", "DojoSettings.h", "Log.h", "ScriptMgr.h", "string"], path.name)
             text = path.read_text(encoding="utf-8")
-            for forbidden in ("Transport", "Lifecycle", "Playerbot", "asio", "std::thread", "Player*"):
+            for forbidden in ("Transport", "Lifecycle", "asio", "std::thread", "std::async", "tcp::", "Socket"):
                 self.assertNotIn(forbidden, text, path.name)
+
+    def test_the_disabled_variant_touches_no_bot_player_or_arena(self):
+        """Every reference to playerbots, players, battlegrounds and commands sits inside #if DOJO_TRAINING_BUILD,
+        so the variant every ordinary core gets compiles none of it. (Headers only declare.)"""
+        for path in [p for p in sources("src", "Runtime") if p.suffix == ".cpp"]:
+            outside = disabled_text(path.read_text(encoding="utf-8"))
+            for forbidden in ("Playerbot", "Player*", "Player const*", "Battleground", "ChatCommand", "AddPlayerBot",
+                              "TeleportTo", "CharacterCreateInfo"):
+                self.assertNotIn(forbidden, outside, path.name)
+
+    def test_only_the_director_logs_bots_in_and_only_the_manifests_fixtures(self):
+        fixtures = (MODULE / "src" / "Runtime" / "DojoFixtures.cpp").read_text(encoding="utf-8")
+        for path in sources("src", "Runtime"):
+            if path.name != "DojoFixtures.cpp":
+                text = path.read_text(encoding="utf-8")
+                self.assertNotIn("AddPlayerBot", text, path.name)
+                self.assertNotIn("LogoutPlayerBot", text, path.name)
+        self.assertEqual(re.findall(r"AddPlayerBot\(([^;]+)\);", fixtures), ["ObjectGuid(_actors[i].guid), 0"])
+        self.assertIn("is not on the fixture account; refusing to touch another account's character", fixtures)
+
+    def test_the_arena_factory_is_unrated_and_never_queued(self):
+        fixtures = (MODULE / "src" / "Runtime" / "DojoFixtures.cpp").read_text(encoding="utf-8")
+        self.assertIn("CreateNewBattleground(type, bracket, uint8(m.arena.arenaType), false)", fixtures)
+        self.assertIn("sBattlegroundMgr->AddBattleground(bg);", fixtures)
+        for forbidden in ("StartBattleground", "AddToBGFreeSlotQueue", "SetRated(true)", "sArenaTeamMgr", "SetArenaTeamIdForTeam"):
+            self.assertNotIn(forbidden, fixtures)
+        commands = (MODULE / "src" / "Runtime" / "DojoCommands.cpp").read_text(encoding="utf-8")
+        self.assertIn("return !Dojo::Director::Instance().SuppressesWinCheck(bg);", commands)
+        self.assertIn("return _closing && bg && _arenaInstance && bg->GetInstanceID() == _arenaInstance;", fixtures)
+
+    def test_commands_are_console_only(self):
+        commands = (MODULE / "src" / "Runtime" / "DojoCommands.cpp").read_text(encoding="utf-8")
+        entries = re.findall(r'\{"(\w+)", (Handle\w+), (\w+), Console::(\w+)\}', commands)
+        self.assertEqual(len(entries), 6)
+        for name, _, security, console in entries:
+            self.assertEqual((security, console), ("SEC_CONSOLE", "Yes"), name)
+
+
+def disabled_text(text: str) -> str:
+    """The source as the disabled variant compiles it: every #if DOJO_TRAINING_BUILD region (up to its #else or
+    #endif) removed, nested conditionals followed."""
+    out, stack = [], []   # stack of (is_training_region, in_else)
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("#if"):
+            stack.append([s == "#if DOJO_TRAINING_BUILD", False])
+            continue
+        if s.startswith("#else") and stack:
+            stack[-1][1] = True
+            continue
+        if s.startswith("#endif") and stack:
+            stack.pop()
+            continue
+        if any(training and not in_else for training, in_else in stack):
+            continue
+        out.append(line)
+    return "\n".join(out)
 
 
 if __name__ == "__main__":

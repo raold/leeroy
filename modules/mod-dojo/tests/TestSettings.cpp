@@ -113,13 +113,67 @@ DOJO_TEST(Settings_StatusLineSaysNothingStarts)
     Case const cases[] = {
         {off, false, "mod-dojo: off (Dojo.Enable = 0), disabled build; no endpoint, no bot control"},
         {off, true, "mod-dojo: off (Dojo.Enable = 0), training build; no endpoint, no bot control"},
-        {Training(), true, "mod-dojo: armed (training instance dojo-01), training build; no endpoint, no bot control"},
+        {Training(), true, "mod-dojo: armed (training instance dojo-01), training build; no endpoint, fixtures only "
+            "through the dojo console commands"},
     };
     for (Case const& c : cases)
         CHECK_EQ(StatusLine(PlanRuntime(c.settings, c.training), c.training), std::string(c.expected));
     std::string const refused = StatusLine(PlanRuntime(Training(), false), false);
     CHECK(refused.rfind("mod-dojo: refused (", 0) == 0);
     CHECK(refused.find("no endpoint, no bot control") != std::string::npos);
+}
+
+DOJO_TEST(Settings_ScenarioNeedsAnAbsolutePathAndItsHash)
+{
+    std::string const sha(64, 'a');
+    struct Case
+    {
+        char const* manifest;
+        std::string sha256;
+        RuntimeState state;
+        char const* reason;
+    };
+    Case const cases[] = {
+        {"", "", RuntimeState::Armed, "training instance"},
+        {"F:/azerothcore/worktrees/w/dojo/scenarios/x.json", sha, RuntimeState::Armed, "training instance"},
+        {"/srv/dojo/x.json", sha, RuntimeState::Armed, "training instance"},
+        {"C:\\dojo\\x.json", sha, RuntimeState::Armed, "training instance"},
+        {"F:/x.json", "", RuntimeState::Refused, "set together"},
+        {"", sha, RuntimeState::Refused, "set together"},
+        {"scenarios/x.json", sha, RuntimeState::Refused, "absolute path"},
+        {"F:x.json", sha, RuntimeState::Refused, "absolute path"},
+        {"F:/x.json", std::string(64, 'A'), RuntimeState::Refused, "Sha256"},
+        {"F:/x.json", std::string(63, 'a'), RuntimeState::Refused, "Sha256"},
+        {"F:/x.json", std::string(63, 'a') + "g", RuntimeState::Refused, "Sha256"},
+    };
+    for (Case const& c : cases)
+    {
+        Settings s = Training();
+        s.scenarioManifest = c.manifest;
+        s.scenarioSha256 = c.sha256;
+        RuntimePlan const plan = PlanRuntime(s, true);
+        CHECK_MSG(plan.state == c.state, std::string(c.manifest) + ": " + plan.reason);
+        CHECK_MSG(plan.reason.find(c.reason) != std::string::npos, plan.reason);
+    }
+    // Off stays off, whatever the scenario keys say.
+    Settings off;
+    off.scenarioManifest = "relative";
+    CHECK_EQ(PlanRuntime(off, true).state, RuntimeState::Off);
+}
+
+DOJO_TEST(Settings_HashAndPathHelpers)
+{
+    CHECK(IsSha256Hex(std::string(64, '0')));
+    CHECK(IsSha256Hex("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"));
+    CHECK(!IsSha256Hex(""));
+    CHECK(!IsSha256Hex("E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"));
+    CHECK(IsAbsolutePath("/a"));
+    CHECK(IsAbsolutePath("c:/a"));
+    CHECK(IsAbsolutePath("Z:\\a"));
+    CHECK(!IsAbsolutePath(""));
+    CHECK(!IsAbsolutePath("a/b"));
+    CHECK(!IsAbsolutePath("1:/a"));
+    CHECK(!IsAbsolutePath("C:"));
 }
 
 DOJO_TEST(Settings_StateNames)
