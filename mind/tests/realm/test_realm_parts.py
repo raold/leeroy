@@ -98,6 +98,8 @@ def test_parts_registry_attaches_present_modules(app, monkeypatch, caplog):
             return Part(name), events
         return attach
 
+    # Absent, whichever of these exist by now: None in sys.modules imports as not found.
+    install(monkeypatch, **dict.fromkeys(("talk", "rivals", "race", "poach", "calendar")))
     install(monkeypatch, direct=module("direct", attach_as("direct", ())),
             speech=module("speech", attach_as("speech", ("channel_chat", "zone"))),
             bank=module("bank", lambda realm: None),          # Declines.
