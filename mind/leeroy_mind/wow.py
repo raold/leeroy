@@ -136,6 +136,11 @@ DUNGEON_BOSS_NAMES: dict[tuple[int, int], str] = {
     (668, 0): "Falric", (668, 1): "Marwyn",
 }
 
+# The zones whose AreaTable entry has AREA_FLAG_CAPITAL (0x100), the core's in-city rule, in this
+# server's DBC: Undercity, Stormwind, Ironforge, Orgrimmar, Thunder Bluff, Darnassus, Silvermoon,
+# the Exodar, Shattrath, Dalaran and Awan (5001, mod-bg-slaveryvalley's map 801).
+CITY_ZONES = frozenset({1497, 1519, 1537, 1637, 1638, 1657, 3487, 3557, 3703, 4395, 5001})
+
 # SetBossState steps that are not a fight: the Sindragosa gauntlet, the blood-prince trash and
 # Halion's intro stages. They must never become kill or wipe memories.
 NON_FIGHT_STEPS = frozenset({(631, 13), (631, 14), (724, 3), (724, 4), (724, 5)})

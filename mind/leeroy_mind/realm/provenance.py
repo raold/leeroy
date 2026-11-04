@@ -20,7 +20,7 @@ from leeroy_mind.personas.schema import persona_from_dict
 from leeroy_mind.personas.screens import ROMANCE_RE, names_real_name
 from leeroy_mind.protocol import BgEnd, sanitize_say_text
 from leeroy_mind.storage.store import Store
-from leeroy_mind.wow import BOSS_NAMES, DUNGEON_BOSS_NAMES, DUNGEONS, RAID_INSTANCES, is_raid_fight
+from leeroy_mind.wow import BOSS_NAMES, CITY_ZONES, DUNGEON_BOSS_NAMES, DUNGEONS, RAID_INSTANCES, is_raid_fight
 
 from .actions import ActionContext
 from .protocol import (ArenaEnd, ChannelChat, DuelEnd, PvpKill, RealmAchievement, RealmDungeonKill,
@@ -850,8 +850,9 @@ def _derive(policy, payload, snapshot, human, *, qualify=True):
         if (winner == loser or type(payload['city']) is not bool or type(payload['result']) is not str
                 or payload['result'] not in (*_DUEL_RESULTS, 'interrupted')):
             _fail()
-        # A duel in a city zone (either duelist's) is never a fact, nor one without a winner.
-        if payload['city'] or payload['result'] not in _DUEL_RESULTS:
+        # A duel in a city is never a fact, nor one without a winner: native's flag covers either
+        # duelist's zone, and the winner's zone is checked here too.
+        if payload['city'] or payload['zone'] in CITY_ZONES or payload['result'] not in _DUEL_RESULTS:
             _fail('private_evidence')
         output = {key: payload[key] for key in ('winner', 'loser', 'result', 'zone')}
         participants = sorted([winner, loser])
@@ -1013,7 +1014,8 @@ def cannot_qualify(event):
     event alone, so the caller can refuse before any receipt read or Store unit."""
     if type(event) is RealmAchievement and event.realm_first is not True:
         return Rejected('private_evidence')
-    if type(event) is DuelEnd and (event.city is not False or event.result not in _DUEL_RESULTS):
+    if type(event) is DuelEnd and (event.city is not False or event.result not in _DUEL_RESULTS
+                                   or (type(event.zone) is int and event.zone in CITY_ZONES)):
         return Rejected('private_evidence')
     return None
 

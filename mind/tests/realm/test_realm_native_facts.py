@@ -9,6 +9,7 @@ import sqlite3
 
 import pytest
 
+from leeroy_mind import wow
 from leeroy_mind.memory.writer import clean_memory_text
 from leeroy_mind.protocol import sanitize_say_text
 from leeroy_mind.realm import service
@@ -23,6 +24,9 @@ from test_realm_live_proof import HUMAN, observe, roster
 from test_realm_source_admission import KILL, PRIVATE, application, envelope, run
 
 ACHIEVEMENT, DUEL, DUNGEON = 'realm_first_achievement_v1', 'duel_result_v1', 'verified_dungeon_kill_v1'
+# The zones whose AreaTable entry carries AREA_FLAG_CAPITAL (0x100) in this server's DBC: the
+# eight capitals, Shattrath (3703), Dalaran (4395) and Awan (5001, mod-bg-slaveryvalley's map 801).
+CITIES = (1497, 1519, 1537, 1637, 1638, 1657, 3487, 3557, 3703, 4395, 5001)
 TABLES = ('realm_source', 'realm_fact', 'realm_fact_origin', 'realm_knows', 'realm_kill',
           'realm_dungeon_kill', 'realm_announcement')
 CAST = [101, 102, 103, 104, 105]
@@ -112,6 +116,20 @@ def test_duel_outside_a_city_is_a_result_its_duelists_guilds_know(roster, result
     fact, _ = record(roster, DUEL, result=result)
     assert type(fact) is FactRow and (fact.kind, fact.text) == ('duel_result', text)
     assert knows(roster, fact) == [[50, 'present'], [60, 'present']]
+
+
+def test_city_zones_are_the_servers_capital_flagged_zones():
+    assert wow.CITY_ZONES == frozenset(CITIES)
+    assert not {14, 139, 4197} & wow.CITY_ZONES  # Durotar; Acherus's zone; Wintergrasp
+
+
+@pytest.mark.parametrize('result', ['won', 'fled'])
+@pytest.mark.parametrize('zone', CITIES)
+def test_duel_in_a_city_zone_makes_no_fact_even_when_native_says_no_city(roster, zone, result):
+    # Defence in depth: native's city flag is not the only guard.
+    fact, _ = record(roster, DUEL, zone=zone, result=result, city=False)
+    assert fact == Rejected('private_evidence')
+    assert counts(roster) == NOTHING
 
 
 def test_duel_between_two_cast_members_is_known_to_the_guild_only(roster):
@@ -241,7 +259,7 @@ def test_dungeon_kill_through_the_service_is_evidence_never_announced(tmp_path, 
 
 @pytest.mark.parametrize('policy,changes', [
     (ACHIEVEMENT, dict(realm_first=False, flags=0)), (ACHIEVEMENT, dict(realm_first=False)),
-    (DUEL, dict(city=True)), (DUEL, dict(result='interrupted')),
+    (DUEL, dict(city=True)), (DUEL, dict(result='interrupted')), (DUEL, dict(zone=4395)),
 ])
 def test_evidence_that_can_never_qualify_is_refused_before_any_capture_unit(
         tmp_path, clock, monkeypatch, policy, changes):
