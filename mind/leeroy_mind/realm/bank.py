@@ -39,6 +39,7 @@ from leeroy_mind.storage.store import Store
 
 from . import protocol
 from .action_policy import classify
+from .direct import busy
 from .places import MAX_BYTES, MAX_LINE_BYTES, MAX_ROWS
 from .ports import title_holders
 from .steps import StepError, StepPending, Steps
@@ -71,8 +72,8 @@ REASONS = ("stock", "gathering", "donation", "prize", "craft", "gift", "consumab
 JOB_KINDS = frozenset({"bank_stock", "bank_deposit", "bank_withdraw"})
 BANK_GAP_S, STOCK_GAP_S = 1.0, 0.5
 POLL_S, SETTLE_S = 0.25, 120.0
-# Refusals native gives before anything moved (busy:* is stored as native_refused or
-# job_failed), and the bridge's own before the wire: the same item may be asked again.
+# Refusals native gives before anything moved (busy:* too, which the ledger stores as busy_*),
+# and the bridge's own before the wire: the same item may be asked again.
 RETRY = frozenset({"pretransport_refused", "native_refused", "job_failed", "realm_off",
                    "realm_not_started", "pin_rejected", "not_officer", "not_cast", "not_member"})
 ITEMS_FILE = "leeroy_items.csv"
@@ -427,7 +428,7 @@ def _verdict(kind, state) -> str:
     if name == "refused":
         if reason == "no_rights":
             return "no_rights"
-        return "send" if reason in RETRY else "stop"
+        return "send" if reason in RETRY or busy(reason) else "stop"
     return "stop"  # unknown: it may have been done, so it is never sent again
 
 

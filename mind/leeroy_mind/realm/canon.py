@@ -55,6 +55,7 @@ from leeroy_mind.protocol import Ack, event_type
 from leeroy_mind.talk.turns import TurnKind
 
 from .armory import GUILD_ID
+from .direct import busy
 from .ports import armory_from_config
 from .protocol import GrantAchievement
 from .steps import StepError
@@ -85,8 +86,8 @@ _DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 _KILL_KEYS = frozenset({"map", "boss_id", "difficulty", "moment", "day"})
 _LEGEND_KEYS = frozenset({"moment", "cast", "human"})
 _FIGHTS = frozenset({"combat", "wipe_silence", "wipe_debrief"})
-# Refusals that did nothing and may pass: native's own, and the ledger's name for a native
-# reason it cannot store ("busy:*" has a colon).
+# Refusals that did nothing and may pass: native's own, busy:* (the ledger keeps it as busy_*)
+# and the ledger's fallback for a reason it cannot store.
 _DEFER = frozenset({"gm_mode", "realm_off", "native_refused"})
 _UNSENT = frozenset({"pretransport_refused", "context_unavailable", "unsent", "recovered_prepared"})
 
@@ -511,7 +512,7 @@ def _outcome(state, reason) -> str:
     reason = reason or ""
     if reason == "has_it":
         return "has_it"
-    if reason in _DEFER or reason.startswith("busy:"):
+    if reason in _DEFER or busy(reason):
         return "deferred"
     if reason == "offline":
         return "offline"

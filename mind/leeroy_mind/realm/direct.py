@@ -47,7 +47,9 @@ PRUNE_EVERY_S = 3600
 _PRETRANSPORT = frozenset({"RealmDisabled", "NotConnected"})
 _ID = re.compile(r"[0-9a-f]{32}")
 _REF = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
-_REASON = re.compile(r"[a-z0-9_]{1,64}")
+# Native's reasons: [a-z0-9_], with ':' before an owner or a guid (busy:training_owner,
+# level:<guid>). The column holds [a-z0-9_] only, so a ':' is stored as '_' (busy_training_owner).
+_REASON = re.compile(r"[a-z0-9_:]{1,64}")
 _U32 = 0xFFFFFFFF
 _U64 = 0xFFFFFFFFFFFFFFFF
 _MAX_MS = 253402300799999
@@ -79,7 +81,12 @@ def _classified(cmd):
 
 
 def _reason(text, fallback):
-    return text if type(text) is str and _REASON.fullmatch(text) else fallback
+    return text.replace(":", "_") if type(text) is str and _REASON.fullmatch(text) else fallback
+
+
+def busy(reason) -> bool:
+    """Native's busy:<owner> refusal, as the ledger stores it: refused before anything moved."""
+    return type(reason) is str and reason.startswith(("busy_", "busy:"))
 
 
 class DirectLedger:
