@@ -215,6 +215,58 @@ def test_his_kick_makes_a_former_member(tmp_path, store, clock, on):
     run(realm.close())
 
 
+def test_readmitted_member_not_former(roster):
+    """Owner ruling 4 (2026-11-04): a member his yes took back is a full member again, never an
+    actor or applicant. Only native's ack makes the readmission, and a later kick undoes it."""
+    from leeroy_mind.protocol import Ack
+    from test_realm_guard import KICK_MS, TARGET, Rig, raid_lead
+    from test_realm_live_proof import CONTEXT
+    raid_lead(roster)
+    persona(roster, TARGET, 'Coros', motivation='social')
+    rig = Rig(roster)
+    with roster.transaction():  # As the service records his kick, beside the guard's episode.
+        insert(roster, 'realm_kick', guid=TARGET, ts=KICK_MS / 1000, rank=4)
+    facts = ledger(roster)
+
+    def former():
+        return TARGET in facts.former_members()
+    rig.asked()
+    cmd = rig.guard.admission_command(rig.answer('yes'))
+    assert former()  # His yes alone is not a readmission.
+    rig.guard.before_admission(cmd, context=CONTEXT)
+    assert former()  # Nor is a dispatched one.
+    assert rig.guard.on_admission_ack(cmd, Ack(1, cmd.id, True, ''))
+    assert not former() and TARGET in facts.actor_exclusions()
+    with roster.transaction():
+        assert TARGET not in former_members_in_unit(roster, human_guid=10)
+        row = dict(roster.conn.execute('SELECT * FROM cast_member WHERE guid=?', (TARGET,)).fetchone())
+        roster.conn.execute('DELETE FROM cast_member WHERE guid=?', (TARGET,))
+    assert former()  # Admitted, but not back on the roster yet.
+    with roster.transaction():
+        insert(roster, 'cast_member', **row)
+    assert not former()
+    fact = record(roster)
+    assert TARGET in {plan.owner for plan in facts.back_in(fact.id, forum=True)}  # An audience again.
+    with roster.transaction():  # Kicked again while the Realm was off: no episode, former again.
+        roster.conn.execute('UPDATE realm_kick SET ts=? WHERE guid=?', (KICK_MS / 1000 + 60, TARGET))
+    assert former() and TARGET in facts.actor_exclusions()
+
+
+def test_a_refused_readmission_stays_former(roster):
+    from leeroy_mind.protocol import Ack
+    from test_realm_guard import KICK_MS, TARGET, Rig, raid_lead
+    from test_realm_live_proof import CONTEXT
+    raid_lead(roster)
+    rig = Rig(roster)
+    with roster.transaction():
+        insert(roster, 'realm_kick', guid=TARGET, ts=KICK_MS / 1000, rank=4)
+    rig.asked()
+    cmd = rig.guard.admission_command(rig.answer('yes'))
+    rig.guard.before_admission(cmd, context=CONTEXT)
+    rig.guard.on_admission_ack(cmd, Ack(1, cmd.id, False, 'not_kicked'))
+    assert TARGET in ledger(roster).former_members()  # He invites them himself, if he wants to.
+
+
 # -- back_in(): the way back in, a plan only ------------------------------------------------
 
 def social_cast(store, **game):

@@ -41,20 +41,55 @@ def _require_unit(store):
         raise RuntimeError("the realm ledger requires an active Store unit")
 
 
-def former_members_in_unit(store, *, human_guid) -> frozenset[int]:
-    """Every stored persona off the whole roster, plus every kick, never the human.
-
-    The whole cast_member roster counts at any level: a member below 80 is not
-    in the cast but has not left. An unreadable persona still counts as stored.
-    """
-    _require_unit(store)
+def _human(human_guid):
     if type(human_guid) is not int or not 0 <= human_guid <= _U32:
         raise ValueError("invalid human_guid")
+    return human_guid
+
+
+def _kicked(conn) -> dict[int, float]:
+    return {row[0]: row[1] for row in conn.execute("SELECT guid, ts FROM realm_kick")}
+
+
+def _readmitted(conn, kicked, roster) -> set[int]:
+    """Kicked members his yes took back: the latest kick episode was admitted by native, no
+    kick was observed after it (one while the Realm was off has no episode) and they are on
+    the roster again."""
+    latest = {}
+    for guid, kick_ms, state in conn.execute(
+            "SELECT guid, kick_ms, admission_state FROM realm_kick_episode ORDER BY guid, kick_ms, rowid"):
+        latest[guid] = (kick_ms, state)
+    return {guid for guid, (kick_ms, state) in latest.items()
+            if state == "admitted" and guid in roster and guid in kicked
+            and round(kicked[guid] * 1000) <= kick_ms}
+
+
+def former_members_in_unit(store, *, human_guid) -> frozenset[int]:
+    """Every stored persona off the whole roster, plus every kick he did not take back, never
+    the human.
+
+    The whole cast_member roster counts at any level: a member below 80 is not
+    in the cast but has not left. An unreadable persona still counts as stored. A member
+    readmitted after his yes is a full member again (owner ruling 4, 2026-11-04), but never
+    an actor or applicant: see actor_exclusions_in_unit.
+    """
+    _require_unit(store)
+    human_guid = _human(human_guid)
     conn = store.conn
     stored = {row[0] for row in conn.execute("SELECT guid FROM persona_core")}
     roster = {row[0] for row in conn.execute("SELECT guid FROM cast_member")}
-    kicked = {row[0] for row in conn.execute("SELECT guid FROM realm_kick")}
-    return frozenset(((stored - roster) | kicked) - {human_guid})
+    kicked = _kicked(conn)
+    readmitted = _readmitted(conn, kicked, roster)
+    return frozenset(((stored - roster) | (set(kicked) - readmitted)) - {human_guid})
+
+
+def actor_exclusions_in_unit(store, *, human_guid) -> frozenset[int]:
+    """Who may never be a realm actor or applicant: every former member and every guid he
+    ever kicked, taken back or not. Never the human, whom native refuses anyway."""
+    _require_unit(store)
+    human_guid = _human(human_guid)
+    kicked = set(_kicked(store.conn))
+    return frozenset((former_members_in_unit(store, human_guid=human_guid) | kicked) - {human_guid})
 
 
 def _forum_reader(store, guid):
@@ -203,6 +238,11 @@ class Ledger:
         human = self._ports.human().guid
         with self._store.transaction():
             return former_members_in_unit(self._store, human_guid=human)
+
+    def actor_exclusions(self) -> frozenset[int]:
+        human = self._ports.human().guid
+        with self._store.transaction():
+            return actor_exclusions_in_unit(self._store, human_guid=human)
 
     def back_in(self, fact_id, *, place_zone=None, forum=False) -> tuple[BackIn, ...]:
         """Who would get one open memory of a public fact; a plan only, nothing is written.
