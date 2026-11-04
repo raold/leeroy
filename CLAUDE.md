@@ -187,7 +187,7 @@ Run from `F:\azerothcore\scripts` in Git Bash.
 ./ac-update.sh [--dry-run]   # pull core + git modules (ff-only, local commits rebased); refuses if dirty
 ./ac-backup.sh [label]       # mysqldump all 4 DBs, keeps newest 5
 ./ac-build.sh                # preflight + cmake configure + build
-./ac-server.sh start|stop|status
+./ac-server.sh start|stop|status # also starts/stops the mind; stdout: mind-data/logs/mind-stdout.log
 ./ac-voice.sh start|stop|status # voice service; reads its data directory and ports from `where`
 ./ac-snapshot.sh             # live configs (masked) + playerbots and ollama-chat patches -> config/, patches/
 ```
