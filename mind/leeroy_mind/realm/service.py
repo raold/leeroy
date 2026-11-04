@@ -13,7 +13,8 @@ import uuid
 from leeroy_mind.bodies import BodyLedger
 from leeroy_mind.bridge import TransportState
 from leeroy_mind.config import ConfigError
-from leeroy_mind.protocol import BgEnd, event_type
+from leeroy_mind.protocol import BgEnd, Chat, event_type
+from leeroy_mind.talk.turns import TurnKind
 
 from . import protocol, store
 from .action_policy import classify
@@ -22,6 +23,7 @@ from .actions import ActionContext, ActionQueue
 from .announce import Announcer
 from .config import load_realm_config
 from .fact_store import FactStore, FactWriteRejected
+from .guard import FALLBACK, FALLBACK_RETRY_S, FALLBACK_TRIES, Admission, KickGuard
 from .kill_retention import PrivateKillRejected, PrivateKillStore
 from .ledger import Ledger
 from .ports import LivePorts, RealmDisabled
@@ -38,9 +40,10 @@ JOB_COMMANDS = frozenset({
     "bank_stock", "guild_grow", "arena_team", "item_count", "calendar_post",
 })
 # Announce is not here: only the announcer's own prepared row may reach the system channel.
+# GuildReadmit is, but only the kick guard's own prepared admission passes its barrier.
 _DIRECT = frozenset({protocol.RealmActors, protocol.RealmSay, protocol.RealmEmote,
                      protocol.CalendarUpdate, protocol.BankMoney,
-                     protocol.GuildRename, protocol.ItemCount})
+                     protocol.GuildRename, protocol.ItemCount, protocol.GuildReadmit})
 _SOURCES = frozenset({BgEnd, protocol.ArenaEnd, protocol.Wg, protocol.PvpKill,
                       protocol.ChannelChat, protocol.RealmKill})
 _GUARD_ALERTS = frozenset({"gone", "blocked"})
@@ -91,10 +94,13 @@ class Realm:
         self.ledger = Ledger(app.store, self.ports, self._facts)
         self.action_store = ActionStore(self.ports.conn)
         self.announcer = Announcer(app.store, process_id=self._process_id, clock=app.clock)
+        self.guard = KickGuard(app.store, self.ports, process_id=self._process_id, clock=app.clock)
+        self._asking = None
         # Recovery is local bookkeeping, exactly once, before the source and
         # app attachment exist. Prepared payloads are never replayed.
         self.action_store.recover(process_id=self._process_id, now=self.ports.now())
         self.announcer.recover(process_id=self._process_id, now=self.ports.now())
+        self.guard.recover(process_id=self._process_id)
         self.bodies = BodyLedger(app.clock, run_proof=self.ports.run_body_proof)
         self.bodies.add_holder_source("raid", self.ports.raid_body_holds)
         self.bodies.add_holder_source("offline_raid", self.ports.offline_body_holds)
@@ -353,6 +359,145 @@ class Realm:
             log.debug("realm_source_rejected: type=%s reason=%s",
                       event_type(observation.event), result.reason)
 
+    # -- the kick guard: his kick, the lead's question, his answer, one readmission -------------
+
+    def _guard_receipt(self, ev):
+        """The dispatcher's exact row receipt and the current context, before any await."""
+        receipt_reader = getattr(self.app, "row_receipt", None)
+        receipt = receipt_reader(ev) if receipt_reader is not None else None
+        if (receipt is None or self.app.bridge.delivery_origin(ev) is not receipt.wire
+                or self._delivery_epoch(ev) != receipt.wire.transport_epoch):
+            return None, None
+        context = self.action_context()
+        if not self._source_context_current(context, receipt.wire.transport_epoch):
+            return None, None
+        return receipt, context
+
+    def _retain_kick(self, ev):
+        receipt, context = self._guard_receipt(ev)
+        if receipt is not None:
+            self.guard.retain(ev, receipt, context)
+
+    def _answer(self, ev):
+        if type(ev) is not Chat or ev.channel != "whisper" or ev.via_bridge:
+            return
+        receipt, context = self._guard_receipt(ev)
+        if receipt is None:
+            return
+        result = self.guard.answer(ev, receipt, context)
+        if type(result) is Admission:
+            self._readmit(result)
+
+    def _valid_ticket(self):
+        generation, human = self._generation, self.ports.human().guid
+
+        def valid():
+            return (self.enabled and not self._stopping and generation == self._generation
+                    and self.ports.human().guid == human)
+        return valid
+
+    def _lead_ready(self, guid):
+        world = self.app.world
+        return guid in getattr(world, "online", ()) and guid not in getattr(world, "afk", ())
+
+    def _guard_tick(self):
+        """Close stale windows, then reserve and ask at most one question at a time."""
+        try:
+            self.guard.sweep()
+            if self._asking is not None or not self.ports.human_online():
+                return
+            intent = self.guard.reserve(self.action_context(), ready=self._lead_ready)
+        except Exception as error:  # Never the realm loop's failure; startup recovery closes rows.
+            log.warning("realm_guard_failed: %s", type(error).__name__)
+            return
+        if intent is not None:
+            self._ask(intent)
+
+    def _ask(self, intent):
+        """The lead's one typed whisper, from its own owned child. Its row records every
+        outcome; the barrier and the recorded hook make the send exact."""
+        valid, guard = self._valid_ticket(), self.guard
+
+        def before_transport():
+            return valid() and guard.before_transport(intent, context=self.action_context())
+
+        def on_recorded(line_id, ack):
+            guard.on_recorded(intent, line_id, ack)
+
+        async def ask():
+            if valid():
+                await self.ports.say(intent.lead_guid, "whisper", intent.text, to_guid=intent.human_guid,
+                                     kind=TurnKind.WHISPER, before_transport=before_transport,
+                                     on_recorded=on_recorded)
+
+        def done(task):
+            self._children.discard(task)
+            if self._asking is task:
+                self._asking = None
+            if not task.cancelled() and task.exception() is not None:
+                log.debug("realm_guard_question_unsent: %s", type(task.exception()).__name__)
+            try:
+                guard.settle_question(intent)
+            except Exception as error:  # Startup recovery makes a reserved row unknown.
+                log.warning("realm_guard_question_close_failed: %s", type(error).__name__)
+
+        task = asyncio.create_task(ask())
+        self._children.add(task)
+        self._asking = task
+        task.add_done_callback(done)
+
+    def _readmit(self, admission):
+        """His yes: the one guild_readmit, then, on any refusal, the lead's plain whisper."""
+        valid, guard = self._valid_ticket(), self.guard
+        cmd = guard.admission_command(admission) if admission.state == "prepared" else None
+
+        async def readmit():
+            if cmd is not None:
+                try:
+                    if valid():
+                        await self.ports.send(cmd)
+                except Exception as error:
+                    log.debug("realm_guard_readmit_unsent: %s", type(error).__name__)
+                guard.abandon_admission(cmd)  # Only a row that never reached its barrier.
+            state = guard.admission_state(admission.episode_id)
+            if state is not None and state[0] == "refused":
+                await self._fallback(admission, valid)
+
+        def done(task):
+            self._children.discard(task)
+            if not task.cancelled() and task.exception() is not None:
+                log.debug("realm_guard_readmit_failed: %s", type(task.exception()).__name__)
+            if cmd is not None:
+                try:
+                    guard.abandon_admission(cmd)
+                except Exception as error:  # Startup recovery refuses a prepared row.
+                    log.warning("realm_guard_readmit_close_failed: %s", type(error).__name__)
+
+        task = asyncio.create_task(readmit())
+        self._children.add(task)
+        task.add_done_callback(done)
+
+    async def _fallback(self, admission, valid):
+        """The lead tells him plainly to invite the member himself: one typed line, at most
+        once on the wire, tried again only while no attempt has reached transport."""
+        reached = False
+
+        def once():
+            nonlocal reached
+            if reached or not valid():
+                return False
+            reached = True
+            return True
+
+        text = FALLBACK.format(name=admission.name)
+        for attempt in range(FALLBACK_TRIES):
+            if attempt:
+                await self.app.clock.sleep(FALLBACK_RETRY_S)
+            if reached or not valid():
+                return
+            await self.ports.say(admission.lead, "whisper", text, to_guid=admission.human,
+                                 kind=TurnKind.REPLY_HUMAN, before_transport=once)
+
     async def on_event(self, ev):
         name = event_type(ev)
         # Authority reducers precede both local gates and first-receipt diagnostic
@@ -379,6 +524,11 @@ class Realm:
         self.ports.observe(ev, name)
         failure = None
         try:
+            # Synchronous, before any await: both read the dispatcher's own row receipt.
+            if name == "guard" and ev.action == "his_kick":
+                self._retain_kick(ev)
+            elif name == "chat":
+                self._answer(ev)
             observation = self._capture_source_observation(ev)
             if type(observation) is RealmObservation:
                 await self._owned(lambda: self._admit_source_observation(observation))
@@ -421,6 +571,7 @@ class Realm:
                 return
             await self._owned(part.tick)
         if generation == self._generation and self.enabled and not self._stopping:
+            self._guard_tick()
             await self.ports.speech_tick()
 
     async def run(self):
@@ -474,6 +625,9 @@ class Realm:
             raise ValueError("invalid realm command identity")
         if len(self._pending) >= self.CAPACITY:
             raise RuntimeError("realm command capacity exhausted")
+        if type(cmd) is protocol.GuildReadmit:
+            # Last, so nothing refuses it after its row commits 'dispatched'.
+            self.guard.before_admission(cmd, context=self.action_context())
         self._pending[cmd.id] = _Sent(cmd, classified.kind, classified.kind in JOB_COMMANDS)
 
     def _finish(self, command_id):
@@ -498,6 +652,8 @@ class Realm:
         if self.queue.on_ack(cmd, ack):
             self._queued_receipt(cmd.id, stage="ack", ok=ack.ok, reason=ack.error, ts=self.ports.now())
             return
+        if type(cmd) is protocol.GuildReadmit:
+            self.guard.on_admission_ack(cmd, ack)  # Its receipt is recorded below, as any direct one.
         sent = self._pending.get(cmd.id)
         if (sent is None or sent.command is not cmd or sent.ack or ack.id != cmd.id
                 or type(ack.ok) is not bool or type(ack.error) is not str):
@@ -514,6 +670,8 @@ class Realm:
             return
         if self.queue.on_send_error(cmd, error_type):
             return
+        if type(cmd) is protocol.GuildReadmit:
+            self.guard.on_admission_send_error(cmd, error_type)
         sent = self._pending.get(cmd.id)
         if sent is not None and sent.command is cmd and error_type == "NotConnected":
             del self._pending[cmd.id]
@@ -556,7 +714,7 @@ def attach_realm(app) -> Realm:
     app.skip_event_rows.discard("channel_chat")
     for name in ("hello", "login", "logout"):
         app.register_event_handler(name, realm.on_presence, before=True)
-    for name in (*protocol.EVENTS, "job", "hello", "login", "logout", "boss", "group", "bg_end"):
+    for name in (*protocol.EVENTS, "job", "hello", "login", "logout", "boss", "group", "bg_end", "chat"):
         realm._register_event(name)
     app.register_connection_hook(realm.on_connection)
     app.register_background(realm.run)

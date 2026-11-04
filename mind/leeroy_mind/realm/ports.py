@@ -273,7 +273,8 @@ class RealmPorts(Protocol):
     async def close(self) -> None: ...
     async def send(self, cmd) -> Ack: ...
     def propose(self, guid, channel, instruction, *, kind=TurnKind.ASIDE, to_guid=0, deadline_s=20) -> None: ...
-    async def say(self, guid, channel, text, *, to_guid=0) -> bool: ...
+    async def say(self, guid, channel, text, *, to_guid=0, kind=TurnKind.ASIDE,
+                  before_transport=None, on_recorded=None) -> bool: ...
     async def remember(self, candidate: MemoryCandidate) -> WriteResult: ...
     def note_lately(self, guid: int, what: str, text: str) -> None: ...
     def away(self) -> set[int]: ...
@@ -443,12 +444,17 @@ class LivePorts(RealmPorts):
                         why="source:Realm", still_valid=valid), valid, disabled=lambda: [])
                     return  # One admitted turn per tick.
 
-    async def say(self, guid, channel, text, *, to_guid=0):
+    async def say(self, guid, channel, text, *, to_guid=0, kind=TurnKind.ASIDE,
+                  before_transport=None, on_recorded=None):
+        """say_as under this ticket. The exact transport hooks (TurnMeta) pass through only
+        when given, so an ordinary say is the call it always was."""
         valid = self._ticket()
         if not valid():
             return False
+        hooks = {name: hook for name, hook in (("before_transport", before_transport),
+                                               ("on_recorded", on_recorded)) if hook is not None}
         return await self._owned(lambda: self.app.engine.say_as(guid, channel, text,
-            kind=TurnKind.ASIDE, to_guid=to_guid, still_valid=valid), valid, disabled=lambda: False)
+            kind=kind, to_guid=to_guid, still_valid=valid, **hooks), valid, disabled=lambda: False)
 
     async def remember(self, candidate):
         valid = self._ticket()

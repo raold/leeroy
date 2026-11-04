@@ -478,6 +478,8 @@ def _schema(conn, *, announcement=False):
 
 def test_v12_upgrade_keeps_announcements_and_allows_ever(tmp_path, monkeypatch):
     conn, files = _v12(tmp_path, monkeypatch)
+    # This upgrade stops at v13 even when newer migrations exist.
+    monkeypatch.setattr(db, '_migration_files', lambda: [(n, p) for n, p in files if n <= 13])
     try:
         others = _schema(conn)
         columns = conn.execute('PRAGMA table_info(realm_announcement)').fetchall()

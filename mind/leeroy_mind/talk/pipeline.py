@@ -262,6 +262,13 @@ class TurnMeta:
     fight_end_ms: int = 0
     # An optional owner fence; omitted by ordinary engine callers.
     still_valid: Callable[[], bool] | None = None
+    # Optional exact transport hooks of a say_as sender; ordinary turns leave both None, and
+    # then nothing below changes. before_transport() runs synchronously right before the
+    # line's Say is written and may refuse it (a turn with one is typed, one line, never
+    # voiced: the voice path has no barrier). on_recorded(line_id, ack) runs once the acked
+    # line is stored.
+    before_transport: Callable[[], bool] | None = None
+    on_recorded: Callable[[int, Ack], None] | None = None
 
 
 class _ScopeChanged(SchedulerError):
@@ -274,6 +281,17 @@ def _scope_valid(meta: TurnMeta | None) -> bool:
     try:
         return bool(meta.still_valid())
     except Exception:
+        return False
+
+
+def _transport_admitted(meta: TurnMeta) -> bool:
+    """The sender's final barrier, when it gave one; a failing barrier refuses."""
+    if meta.before_transport is None:
+        return True
+    try:
+        return meta.before_transport() is True
+    except Exception:
+        log.warning("say_barrier_failed")
         return False
 
 
@@ -878,13 +896,19 @@ class Pipeline:
 
     async def say_as(self, guid: int, channel: str, text: str, *, kind: TurnKind,
                      to_guid: int = 0,
-                     still_valid: Callable[[], bool] | None = None) -> bool:
+                     still_valid: Callable[[], bool] | None = None,
+                     before_transport: Callable[[], bool] | None = None,
+                     on_recorded: Callable[[int, Ack], None] | None = None) -> bool:
         """The template path (P1d): guards, raid rules and the member's typing apply, the text
         is used as given and no model is asked. True when a line really went out, to the game
-        or to the voice service: one left in a room he is not in did not."""
+        or to the voice service: one left in a room he is not in did not. A sender's
+        before_transport barrier makes the turn one typed line (TurnMeta)."""
         turn = Turn(kind=TurnKind(kind), speaker=guid, channel=channel, to_guid=to_guid,
                     template=text)
-        meta = TurnMeta(self._new_id(), why="say_as", still_valid=still_valid)
+        if before_transport is not None:
+            turn.max_lines = 1
+        meta = TurnMeta(self._new_id(), why="say_as", still_valid=still_valid,
+                        before_transport=before_transport, on_recorded=on_recorded)
         said = await self._speak(turn, meta)
         return bool(said) and not (self.comms is not None and self._comms_says(
             "unheard", False, turn.channel, meta))
@@ -1037,7 +1061,7 @@ class Pipeline:
         """Where the turn goes now its channel is known (Comms.place, which also fills in
         whom it is to), and the one decision on whether it is spoken, for the model's turns
         and templates alike (C1). Voice off, down or failing, it is typed as in phase 1."""
-        if self.comms is None:
+        if self.comms is None or meta.before_transport is not None:
             return False
         if meta.typed_on is None and not turn.channel.startswith("voice:"):
             meta.typed_on = turn.channel, turn.to_guid
@@ -1437,6 +1461,8 @@ class Pipeline:
         if turn.channel.startswith("voice:"):
             log.error("say_refused_voice_channel: guid=%d channel=%s", turn.speaker, turn.channel)
             return "voice_channel"
+        if not _transport_admitted(meta):
+            return "transport_refused"
         try:
             ack = await self.send(Say(id="", guid=turn.speaker, channel=turn.channel, text=text,
                                       to_guid=turn.to_guid))
@@ -1456,14 +1482,14 @@ class Pipeline:
                 self.world.mark_offline(turn.speaker, self.clock.now())
             return ack.error or "refused"
         try:
-            self._record(turn, meta, p, text, memory_ids)
+            self._record(turn, meta, p, text, memory_ids, ack=ack)
         except Exception:
             log.exception("say_record_failed: guid=%d channel=%s", turn.speaker, turn.channel)
             return "record_error"
         return None
 
     def _record(self, turn: Turn, meta: TurnMeta, p: Persona, text: str,
-                memory_ids: list[int]) -> int:
+                memory_ids: list[int], *, ack: Ack | None = None) -> int:
         """A line was said: the chat log (origin "mind", with who could see it), the world, the
         thread hook, the guards, the chain and the utterance log (with why and the bit). Its
         line id. A line he had no way of hearing (Comms.unheard: I8, N3) moves neither the
@@ -1522,6 +1548,11 @@ class Pipeline:
                 self.on_line_sent(line_id, chat)
             except Exception:
                 log.exception("on_line_sent hook failed")
+        if meta.on_recorded is not None and ack is not None:
+            try:
+                meta.on_recorded(line_id, ack)
+            except Exception:
+                log.warning("say_recorded_hook_failed: guid=%d line=%d", turn.speaker, line_id)
         return line_id
 
     def said_words(self, line_id: int) -> str | None:
