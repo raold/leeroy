@@ -333,3 +333,117 @@ def test_all_sources_deny_detached_offline_journal_until_authoritative_resolutio
         else:
             assert granted == set(guids) and b.bodies.may_move("realm_day", 101)
     asyncio.run(scenario())
+
+
+# -- the raid's hold, narrowed to his raid (owner ruling 2026-11-04, the middle option) ---------
+
+HIS_GROUP = (1, 101, 900)  # Him, a pick and a non-cast addclass fill-in.
+RIVAL = 950  # A rival officer, nowhere near his group.
+
+
+def narrowed(b, *, group=HIS_GROUP, roster=(1, 101, 102, 103)):
+    """Enable the Realm's ports with his group and the guild's roster as the app reads them."""
+    from conftest import mem
+    from leeroy_mind.protocol import Group
+    b.app.world = NS(group=None if group is None else Group(0, 1, True, tuple(group)))
+    if roster:
+        b.app.store.upsert_cast([mem(guid) for guid in roster], 1)
+    b.ports.set_enabled(True)
+
+
+def scheduling(b):
+    return next(h for h in b.ports.raid_body_holds() if h.scope_id == "raid:scheduling")
+
+
+def test_raid_hold_covers_his_group_and_the_raids_picks(boundary):
+    b = boundary
+    run = session_for(b, guids=(101, 102, 103))  # 103 is a late arrival, not grouped yet.
+    narrowed(b)
+    hold = scheduling(b)
+    assert hold.guids == frozenset({101, 102, 103, 900}) and not hold.retained
+    assert b.bodies.owner_for_run(run) == "raid"
+    for guid in (101, 102, 103, 900):
+        assert not b.bodies.may_move("realm_day", guid)
+    assert b.bodies.may_move("realm_day", RIVAL)  # Rival officers can be moved into capitals.
+    assert b.bodies.may_move("raid", 900)
+
+
+def test_rival_officer_outside_his_group_is_not_held(boundary):
+    b = boundary
+    session_for(b)
+    narrowed(b, group=(1, 101, 102))
+    assert b.bodies.may_move("realm_day", RIVAL) and not b.bodies.may_move("realm_day", 101)
+    assert b.bodies.claim("realm_day", {RIVAL}, rank=4, until=b.app.clock.now() + 600) == {RIVAL}
+
+
+@pytest.mark.parametrize("state", [State.WAITING_CALL, State.CALLED, State.FORMING])
+def test_waiting_call_holds_the_cast_and_his_group(boundary, state):
+    b = boundary
+    b.controller.state = state
+    narrowed(b, group=(1, 900))
+    assert b.ports.raid_body_holds() == (scheduling(b),)
+    assert scheduling(b).guids == frozenset({101, 102, 103, 900})  # Never him.
+    assert not b.bodies.may_move("realm_day", 103) and b.bodies.may_move("realm_day", RIVAL)
+    narrowed(b, group=None)  # Out of any group: the guild alone.
+    assert scheduling(b).guids == frozenset({101, 102, 103})
+
+
+@pytest.mark.parametrize("unreadable", ["no_session", "group", "roster"])
+def test_unreadable_member_list_falls_back_to_all(boundary, caplog, unreadable):
+    b = boundary
+    if unreadable == "no_session":
+        b.controller.state = State.RUNNING  # Formed, but its member list is not there.
+        narrowed(b)
+    elif unreadable == "group":
+        session_for(b)
+        narrowed(b)
+        b.app.world.group = NS(leader_guid=1, members=[101, "900"])
+    else:
+        b.controller.state = State.WAITING_CALL
+        narrowed(b, roster=())
+    for _ in range(3):
+        assert scheduling(b).guids is ALL
+    assert not b.bodies.may_move("realm_day", RIVAL)
+    assert caplog.text.count("realm_raid_hold_fallback") == 1  # Once, not at every poll.
+
+
+def test_fallback_logs_again_after_a_good_read(boundary, caplog):
+    b = boundary
+    b.controller.state = State.WAITING_CALL
+    narrowed(b)
+    world = b.app.world
+    b.app.world = NS()  # No group evidence at all.
+    assert scheduling(b).guids is ALL and scheduling(b).guids is ALL
+    b.app.world = world
+    assert scheduling(b).guids is not ALL
+    b.app.world = NS()
+    assert scheduling(b).guids is ALL
+    assert caplog.text.count("realm_raid_hold_fallback") == 2
+
+
+def test_hold_released_when_the_raid_night_ends(boundary):
+    b = boundary
+    run = session_for(b)
+    narrowed(b)
+    assert scheduling(b).guids == frozenset({101, 102, 900})
+    b.controller._end("ended")
+    holds = b.ports.raid_body_holds()
+    # Only the closing session's own exact, retained reservation is left; his fill-in is free.
+    assert [h.scope_id for h in holds if h.scope_id == "raid:scheduling"] == []
+    assert [h.guids for h in holds] == [frozenset({101, 102})] and holds[0].retained
+    assert b.bodies.may_move("realm_day", 900) and b.bodies.owner_for_run(run) == "raid"
+    asyncio.run(b.controller._close_pending())
+    assert b.ports.raid_body_holds() == () and b.bodies.may_move("realm_day", 101)
+
+
+@pytest.mark.parametrize("state", [State.WAITING_CALL, State.RUNNING])
+def test_nothing_changes_while_realm_is_disabled(boundary, state):
+    b = boundary
+    if state is State.RUNNING:
+        session_for(b)
+    else:
+        b.controller.state = state
+    narrowed(b)
+    b.ports.set_enabled(False)
+    assert scheduling(b).guids is ALL and not scheduling(b).retained
+    assert not b.bodies.may_move("realm_day", RIVAL) and not b.bodies.may_move("training", RIVAL)

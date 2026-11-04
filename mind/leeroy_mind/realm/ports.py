@@ -360,6 +360,7 @@ class LivePorts(RealmPorts):
         self._wipes = {}
         self._latest = None
         self._ordinal = 0
+        self._hold_fallback = False
 
     def _invalidate(self):
         self._generation += 1
@@ -713,6 +714,48 @@ class LivePorts(RealmPorts):
         training = getattr(self.app, "training", None)
         return set(training.training_members()) if training is not None else set()
 
+    def _his_group(self):
+        """Everyone in his current group or raid but him, cast or not (addclass fill-ins too)."""
+        group = self.app.world.group
+        if group is None:
+            return set()
+        if type(group.members) is not tuple or type(group.leader_guid) is not int:
+            raise ValueError("invalid group evidence")
+        guids = {_int(g, 0, 0xFFFFFFFF) for g in (*group.members, group.leader_guid)}
+        return guids - {0, self.app.human_guid}
+
+    def _scheduling_hold(self, state, members):
+        """The raid's hold from his login to the raid night's end (owner ruling, 2026-11-04).
+
+        Until the raid is formed, his whole guild roster and his group; once formed, the raid's
+        own members (its picks, late arrivals among them) and his group. Nobody else, so rival
+        actors can still move. While the Realm is disabled, or when a member list cannot be
+        read, it is today's hold of every body (fail closed), logged once per fallback.
+        """
+        everyone = BodyHold("raid:scheduling", "raid", 0, ALL, False)
+        if not self.enabled:
+            return everyone
+        try:
+            guids = self._his_group()
+            if state in {"ASSEMBLING", "RUNNING"}:
+                if members is None:
+                    raise ValueError("raid members unavailable")
+                guids |= set(members)
+            else:
+                roster = {_int(row[0], 1, 0xFFFFFFFF) for row in self.conn.execute(
+                    "SELECT guid FROM cast_member")} - {self.app.human_guid}
+                if not roster:
+                    raise ValueError("guild roster unavailable")
+                guids |= roster
+            hold = BodyHold("raid:scheduling", "raid", 0, frozenset(guids), False)
+        except Exception:
+            if not self._hold_fallback:
+                self._hold_fallback = True
+                log.warning("realm_raid_hold_fallback")
+            return everyone
+        self._hold_fallback = False
+        return hold
+
     def raid_body_holds(self):
         """Scheduling intent and exact restoration reservations are distinct."""
         from leeroy_mind.training.body_holds import session_evidence
@@ -725,7 +768,8 @@ class LivePorts(RealmPorts):
                 raise RealmEvidenceUnavailable("raid body evidence unavailable")
             return ()
         try:
-            holds = [BodyHold("raid:scheduling", "raid", 0, ALL, False)] if self.raid_holds_all() else []
+            state = self.raid_state()
+            holds = []
             sessions = []
             current = controller.session
             if current is not None:
@@ -733,17 +777,21 @@ class LivePorts(RealmPorts):
             for session, run, outcome, events, stop_dc in controller._closing:
                 if all(session is not s for s in sessions):
                     sessions.append(session)
-            scopes = set()
+            scopes, members = set(), None
             for session in sessions:
                 scope, guids, _ = session_evidence(self.conn, session, self.app.human_guid)
                 if session.plan.offline or scope in scopes:
                     raise ValueError("ambiguous raid scope")
                 scopes.add(scope)
                 holds.append(BodyHold(scope, "raid", 0, guids, True))
+                if session is current:
+                    members = guids
             known_ids = {s.raid_id for s in sessions}
             if any(row[0] not in known_ids for row in self.conn.execute(
                     "SELECT raid_id FROM guild_raid WHERE ended IS NULL AND offline=0")):
                 raise ValueError("unowned raid session")
+            if state in _HOLDS:
+                holds.insert(0, self._scheduling_hold(state, members))
             return tuple(holds)
         except Exception:
             raise RealmEvidenceUnavailable("raid body evidence unavailable") from None
