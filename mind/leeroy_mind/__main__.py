@@ -258,11 +258,34 @@ def _doctor_db(root: Path, latest: int, cfg=None) -> list[tuple[bool | None, str
         lines.append(_doctor_voice_specs(root, personas))
         if human is not None:
             lines += _doctor_notes(store, personas, human, cfg)
+        lines += _doctor_tuning(conn, cfg)
         return lines
     except sqlite3.Error as e:
         return [(False, f"mind.db cannot be read: {e}"), (False, "personas: not read")]
     finally:
         conn.close()
+
+
+def _doctor_tuning(conn, cfg) -> list[tuple[bool | None, str]]:
+    """Notes on the owner's dials (phase 3b): each world dial whose stored override shadows
+    mind.toml, and how many member values and group offsets are set. Nothing when none is.
+    Dial names and numbers only."""
+    from .tuning.state import Tuning
+    from .tuning.world import shadowed
+    t = Tuning.load(conn)
+    if t.empty:
+        return []
+    out = [(None, f"tuning: {name} {value} overrides mind.toml's {file} (the console's "
+                  "'back to mind.toml' clears it)")
+           for name, file, value in (shadowed(cfg, t) if cfg is not None else [])]
+    pins = sum(len(d) for d in t.pins.values())
+    offsets = sum(len(d) for d in t.offsets.values())
+    out.append((None, f"tuning: version {t.version}, {pins} member value"
+                      f"{'' if pins == 1 else 's'} on {len(t.pins)} member"
+                      f"{'' if len(t.pins) == 1 else 's'}, {offsets} group offset"
+                      f"{'' if offsets == 1 else 's'}, {len(t.world)} world override"
+                      f"{'' if len(t.world) == 1 else 's'}"))
+    return out
 
 
 def _doctor_voice_specs(root: Path, personas) -> tuple[bool | None, str]:
@@ -354,8 +377,10 @@ def _doctor_overlays(root: Path) -> list[tuple[bool, str]]:
     from .prompts import read_overlay
     from .talk.romance import OVERLAY_CAPS
     from .text import estimate_tokens
+    from .tuning.lines import OVERLAY_CAP_TOKENS as TUNING_CAP, OVERLAY_NAMES as TUNING_OVERLAYS
     caps = dict(OVERLAY_CAPS)
     caps["persona_rules"] = OVERLAY_TOKEN_CAP
+    caps.update({name: TUNING_CAP for name in TUNING_OVERLAYS})
     folder = root / "prompts"
     out = []
     for path in sorted(folder.glob("*.txt")) if folder.is_dir() else ():
