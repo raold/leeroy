@@ -108,6 +108,8 @@ def test_parts_registry_attaches_present_modules(app, monkeypatch, caplog):
         return part
 
     install(monkeypatch, canon=module("canon", attach_itself))
+    for name in ("talk", "rivals", "race", "poach", "calendar"):  # Absent here even once they exist.
+        monkeypatch.setitem(sys.modules, f"leeroy_mind.realm.{name}", None)
     caplog.set_level(logging.INFO, logger="leeroy_mind.realm.parts")
     enabled(app.data_dir, True)
     realm = attach_realm(app)
