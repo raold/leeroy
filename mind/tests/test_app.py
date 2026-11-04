@@ -1663,6 +1663,8 @@ def test_the_app_opens_the_library_read_only_and_closes_it(tmp_path, clock, capl
             assert isinstance(lib, Library) and lib.readonly and lib.llm is app.scheduler
             assert lib.embed_model == cfg.models.embedding
             assert app.engine.facts is not None and app.engine.facts.library is lib
+            assert app.engine.facts.search is app.library_search
+            assert app.library_search._thread is None  # construction is inert
             assert [c.title for c in lib.search_text("Lancer Grounds", k=1)] == ["Lancer Grounds"]
             with pytest.raises(sqlite3.OperationalError):
                 lib.set_meta("x", "y")
@@ -1674,6 +1676,72 @@ def test_the_app_opens_the_library_read_only_and_closes_it(tmp_path, clock, capl
         run(main())
     logs = _library_logs(caplog)
     assert len(logs) == 1 and logs[0].startswith("library_opened")
+
+
+def test_shutdown_joins_search_before_scheduler_and_main_databases(tmp_path, clock, monkeypatch):
+    import threading
+    from leeroy_mind.talk.questions import game_question
+
+    async def main():
+        make_library(tmp_path / "library.db", clock)
+        app = MindApp(load_config(tmp_path / "mind.toml"), tmp_path, llm=FakeLLM(), clock=clock)
+        loop, entered, release = asyncio.get_running_loop(), asyncio.Event(), threading.Event()
+        original_rank = Library._rank
+        order = []
+
+        def blocked_rank(reader, *args, **kwargs):
+            assert reader is not app.library
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(5)
+            return original_rank(reader, *args, **kwargs)
+
+        monkeypatch.setattr(Library, "_rank", blocked_rank)
+        original_scheduler = app.scheduler.close
+        original_library, original_store = app.library.close, app.store.close
+
+        async def scheduler_close():
+            assert not app.library_search._thread.is_alive()
+            assert not app.engine.facts._tasks
+            order.append("scheduler")
+            await original_scheduler()
+
+        def library_close():
+            assert not app.library_search._thread.is_alive()
+            order.append("library")
+            original_library()
+
+        def store_close():
+            assert not app.library_search._thread.is_alive()
+            order.append("store")
+            original_store()
+
+        monkeypatch.setattr(app.scheduler, "close", scheduler_close)
+        monkeypatch.setattr(app.library, "close", library_close)
+        monkeypatch.setattr(app.store, "close", store_close)
+        q = game_question("anyone know where the lancer's trial dailies start?")
+        assert q is not None
+        app.engine.facts.start(1, q)
+        stoppers = []
+        try:
+            await asyncio.wait_for(entered.wait(), 3)
+            stoppers = [asyncio.create_task(app.stop()) for _ in range(2)]
+            while app.library_search._close_task is None:
+                await asyncio.sleep(0)
+            stoppers[0].cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await stoppers[0]
+            assert not stoppers[1].done() and order == []
+            assert app.library.conn.execute("SELECT 1").fetchone()[0] == 1
+            assert app.store.conn.execute("SELECT 1").fetchone()[0] == 1
+            release.set()
+            await stoppers[1]
+            await app.stop()
+            assert order == ["scheduler", "store", "library"]
+        finally:
+            release.set()
+            await asyncio.gather(*stoppers, return_exceptions=True)
+            await app.stop()
+    run(main())
 
 
 @pytest.mark.parametrize("what", ["missing", "garbage"])

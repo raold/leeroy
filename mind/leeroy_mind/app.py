@@ -41,6 +41,7 @@ from leeroy_mind.clock import Clock, SystemClock
 from leeroy_mind.config import ConfigError, MindConfig, load_config
 from leeroy_mind.human import HumanIdentity
 from leeroy_mind.library.core import Library
+from leeroy_mind.library.search_worker import LibrarySearchWorker
 from leeroy_mind.llm.client import LLMClient, LLMError, OllamaClient
 from leeroy_mind.llm.presets import LIVE
 from leeroy_mind.llm.scheduler import LLMScheduler
@@ -357,11 +358,17 @@ class MindApp:
         self.recall = Recall(self.store, self.embedder, self.clock, tau_days=cfg.memory.depth_days)
         self.rng = random.Random(rng_seed)
         self.library = self._open_library()
+        # The compatibility reader stays on this thread for synchronous boss mechanics.
+        # The inert search service opens/closes a separate reader on its owned thread.
+        self.library_search = (LibrarySearchWorker(
+            self.data_dir / LIBRARY_FILE, embed_model=cfg.models.embedding)
+            if self.library is not None else None)
         self.engine = TalkEngine(
             store=self.store, world=self.world, raid=self.raid, recall=self.recall,
             scheduler=self.scheduler, personas=self.personas, cfg=cfg, data_dir=self.data_dir,
             clock=self.clock, rng=self.rng, send=self._send, human_guid=self._human,
-            on_line_sent=self._on_line_sent, library=self.library)
+            on_line_sent=self._on_line_sent, library=self.library,
+            library_search=self.library_search)
         self.bridge = BridgeClient(cfg.bridge.host, cfg.bridge.port, self.handle,
                                    clock=self.clock, on_connection=self._on_connection)
         self.arbiter = None
@@ -1228,6 +1235,8 @@ class MindApp:
                 self._session_id = None
         except Exception:
             log.exception("shutdown_step_failed: step=session")
+        if self.library_search is not None:
+            await self._step("library_search", self.library_search.aclose())
         await self._step("llm", self.scheduler.close())
         try:
             checkpoint(self.store.conn)

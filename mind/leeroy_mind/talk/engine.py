@@ -118,7 +118,8 @@ class TalkEngine(Reactions):
                  scheduler: LLMScheduler, personas: PersonaCache, cfg: MindConfig,
                  data_dir: Path, clock: Clock, rng, send: Callable[[Command], Awaitable[Ack]],
                  human_guid: int = 0,
-                 on_line_sent: Callable[[int, Chat], object] | None = None, library=None):
+                 on_line_sent: Callable[[int, Chat], object] | None = None, library=None,
+                 library_search=None):
         """send is BridgeClient.send. on_line_sent(line_id, chat) is told about every line the
         mind says once it is acknowledged and stored: the app wires it to
         ThreadTracker.on_line_sent, the only way the mind's own lines reach the threads.
@@ -129,7 +130,8 @@ class TalkEngine(Reactions):
         self.data_dir, self.clock, self.rng, self.send = Path(data_dir), clock, rng, send
         self.on_line_sent = on_line_sent
         self.facts = (LibraryFacts(library, scheduler,
-                                   faction=lambda: faction_known(self.human.race))
+                                   faction=lambda: faction_known(self.human.race),
+                                   search=library_search)
                       if library is not None else None)
         self.guards = Guards(rng=rng)
         self.budget = BurstBudget(cfg.talk.chattiness, rng)
@@ -198,7 +200,7 @@ class TalkEngine(Reactions):
         await self._cancel_all()
         self._settle_unacked(self.clock.now(), everything=True)
         if self.facts is not None:
-            self.facts.clear()
+            await self.facts.reset_session()
         self._greeted_login = False
         if self._session_id is None:
             return
