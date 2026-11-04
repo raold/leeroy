@@ -6,13 +6,16 @@ An episode is a directory:
                            bounds and the policies that chose the actions
     chunk-000000.jsonl     up to chunk_records transitions, one JSON line each, then a trailer line
     ...                    {"chunk": {"index", "records", "bytes", "sha256", "prev_chain", "chain"}}
-    footer.json            the outcome and every chunk's hash, written last
+    footer.json            the outcome, the header's SHA-256 and every chunk's hash, written last
 
-A chunk is written to a .tmp file and renamed once complete, so a crash leaves either a whole chunk or a visibly
-unfinished one. "sha256" covers the record lines; "chain" hashes the previous chunk's chain with this chunk's sha256,
-so a missing, reordered or replaced chunk breaks every later one. Only one chunk is held in memory. verify_episode()
-names every problem; load_transitions() refuses an episode that is incomplete or aborted, so neither can reach a
-learner.
+The directory is named after the episode id, which must be a single safe path component (no dots at either end, no
+drive or stream colon, no Windows device name). A chunk is written to a .tmp file and renamed once complete, so a
+crash leaves either a whole chunk or a visibly unfinished one. "sha256" covers the record lines; "chain" hashes the
+previous chain with this chunk's sha256, starting from the header's SHA-256, so a replaced header or a missing,
+reordered or replaced chunk breaks every later link. Only one chunk is held in memory. Every record but the last is
+non-terminal, and the last one's terminated and truncated flags must match the footer's outcome (an aborted episode
+may end anywhere). verify_episode() names every problem; load_transitions() refuses an episode that is incomplete or
+aborted, so neither can reach a learner.
 """
 
 from __future__ import annotations
@@ -34,6 +37,8 @@ GENESIS = "0" * 64
 OUTCOMES = ("terminated", "truncated", "aborted")
 _CHUNK = re.compile(r"chunk-(\d{6})\.jsonl")
 _TMP = re.compile(r"chunk-(\d{6})\.jsonl\.tmp")
+_SAFE_NAME = re.compile(r"[A-Za-z0-9_-](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9_-])?")
+_DEVICES = frozenset({"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(10)), *(f"LPT{i}" for i in range(10))})
 
 
 class IncompleteEpisode(Exception):
@@ -76,10 +81,18 @@ def _chain(previous: str, digest: str) -> str:
     return hashlib.sha256((previous + digest).encode("ascii")).hexdigest()
 
 
+def safe_episode_dir(episode: str) -> str:
+    """episode when it can name a directory of its own on every system; otherwise ValueError."""
+    if not isinstance(episode, str) or not _SAFE_NAME.fullmatch(episode) \
+            or episode.split(".")[0].upper() in _DEVICES:
+        raise ValueError(f"episode id {episode!r} cannot name a recording directory")
+    return episode
+
+
 class EpisodeRecorder:
     def __init__(self, root: Path, episode: str, header: dict[str, Any], *, chunk_records: int = CHUNK_RECORDS,
                  chunk_bytes: int = CHUNK_BYTES):
-        self.dir = Path(root) / episode
+        self.dir = Path(root) / safe_episode_dir(episode)
         self.dir.mkdir(parents=True, exist_ok=False)
         self.episode = episode
         self.chunk_records = max(chunk_records, 1)
@@ -90,10 +103,11 @@ class EpisodeRecorder:
         self.finished = False
         self._lines: list[bytes] = []
         self._size = 0
-        self._chain = GENESIS
-        _write_atomic(self.dir / "header.json", (json.dumps(
-            {"kind": "leeroy-dojo-episode", "format": FORMAT, "episode": episode, **header},
-            indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
+        data = (json.dumps({"kind": "leeroy-dojo-episode", "format": FORMAT, "episode": episode, **header},
+                           indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+        self.header_sha256 = hashlib.sha256(data).hexdigest()
+        self._chain = self.header_sha256          # the chain starts from the header, so it cannot be swapped
+        _write_atomic(self.dir / "header.json", data)
 
     def add(self, transition: dict[str, Any]) -> None:
         if self.finished:
@@ -113,7 +127,7 @@ class EpisodeRecorder:
             self._flush()
         footer = {"kind": "leeroy-dojo-episode-footer", "format": FORMAT, "episode": self.episode,
                   "outcome": outcome, "usable": outcome != "aborted", "transitions": self.transitions,
-                  "chunks": self.chunks, "chain": self._chain, **summary}
+                  "header_sha256": self.header_sha256, "chunks": self.chunks, "chain": self._chain, **summary}
         _write_atomic(self.dir / "footer.json", (json.dumps(footer, indent=2, ensure_ascii=False) + "\n").encode())
         self.finished = True
         return self.dir
@@ -159,9 +173,13 @@ def verify_episode(path: Path) -> EpisodeCheck:
     path = Path(path)
     check = EpisodeCheck(path)
     problems = check.problems
+    header_sha256 = None
     try:
-        header = json.loads((path / "header.json").read_text(encoding="utf-8"))
-        if header.get("kind") != "leeroy-dojo-episode" or header.get("format") != FORMAT:
+        data = (path / "header.json").read_bytes()
+        header_sha256 = hashlib.sha256(data).hexdigest()
+        header = json.loads(data)
+        if not isinstance(header, dict) or header.get("kind") != "leeroy-dojo-episode" \
+                or header.get("format") != FORMAT:
             problems.append("header.json is not a dojo episode header")
     except (OSError, ValueError):
         problems.append("header.json is missing or unreadable")
@@ -172,10 +190,12 @@ def verify_episode(path: Path) -> EpisodeCheck:
             problems.append(f"chunk {int(_TMP.fullmatch(name).group(1))} is incomplete ({name})")
     indices = sorted(int(m.group(1)) for m in (_CHUNK.fullmatch(n) for n in names) if m)
 
-    chain = GENESIS
+    chain = header_sha256 or GENESIS
     decision = 0
     found: dict[int, str] = {}
     broken = False
+    last: dict[str, Any] | None = None       # the latest record read
+    early_end: int | None = None             # a decision that ended the episode before the last record
     for expected, index in enumerate(indices):
         if index != expected:
             problems.append(f"chunk {expected} is missing")
@@ -197,15 +217,30 @@ def verify_episode(path: Path) -> EpisodeCheck:
             broken = True
             break
         if trailer.get("prev_chain") != chain or trailer.get("chain") != _chain(chain, digest):
-            problems.append(f"chunk {index} does not follow chunk {index - 1}")
+            problems.append(f"chunk {index} does not follow " + (f"chunk {index - 1}" if index else "the header"))
             broken = True
             break
         for line in lines:
-            record = json.loads(line)
+            try:
+                record = json.loads(line)
+            except ValueError:
+                record = None
+            if not isinstance(record, dict):
+                problems.append(f"chunk {index} holds a record that is not a JSON object")
+                broken = True
+                break
             if record.get("decision") != decision:
                 problems.append(f"chunk {index} has decision {record.get('decision')} where {decision} belongs")
                 broken = True
                 break
+            if not all(isinstance(record.get(k), bool) for k in ("terminated", "truncated")):
+                problems.append(f"decision {decision} has no terminated and truncated flags")
+                broken = True
+                break
+            if last is not None and (last["terminated"] or last["truncated"]) and early_end is None:
+                early_end = decision - 1
+                problems.append(f"decision {early_end} ended the episode but more records follow")
+            last = record
             decision += 1
         if broken:
             break
@@ -240,6 +275,15 @@ def verify_episode(path: Path) -> EpisodeCheck:
             problems.append("the footer's chain does not match the chunks")
         if check.outcome not in OUTCOMES:
             problems.append(f"unknown outcome {check.outcome!r}")
+        if footer.get("header_sha256") != header_sha256:
+            problems.append("header.json is not the header this episode was recorded with")
+        if check.outcome in ("terminated", "truncated") and not broken:
+            want = (check.outcome == "terminated", check.outcome == "truncated")
+            if last is None:
+                problems.append(f"a {check.outcome} episode has no records")
+            elif (last["terminated"], last["truncated"]) != want:
+                problems.append(f"the last record (decision {last['decision']}) does not end the episode as "
+                                f"{check.outcome}")
     check.complete = footer is not None and not problems
     check.usable = check.complete and check.outcome in ("terminated", "truncated")
     return check
