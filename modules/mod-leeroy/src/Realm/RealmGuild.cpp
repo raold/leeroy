@@ -4,6 +4,10 @@
 #include "LeeroyRealmGuild.h"
 #include "LeeroyRealmReadmit.h"
 #include "LeeroyEvents.h"
+#include "LeeroyText.h"
+#include "PlayerScript.h"
+#include "RBAC.h"
+#include "World.h"
 
 namespace Leeroy::Realm
 {
@@ -250,6 +254,28 @@ LeeroyCommandResult Grant(nlohmann::json const& message)
         });
     return {why.empty(), why};
 }
+
+class RealmAchievementScript final : public PlayerScript
+{
+public:
+    RealmAchievementScript() : PlayerScript("LeeroyRealmAchievementScript", {PLAYERHOOK_ON_ACHI_COMPLETE}) { }
+    void OnPlayerAchievementComplete(Player* player, AchievementEntry const* achievement) override
+    {
+        // A quiet grant (grant_achievement: the canon) stays invisible here as
+        // in the core achievement event. Copies only DBC values; Publish is thread-safe.
+        if (LeeroyQuietScope::Active() || !RealmModule::Instance().On() || !player || !achievement) return;
+        auto const guid = player->GetGUID().GetCounter();
+        if (guid != HumanGuid() && !IsCast(guid)) return;
+        auto* session = player->GetSession();
+        // The core's own realm-first rule (AchievementMgr::CompletedAchievement):
+        // the DBC flag, unless the account may not take a realm first.
+        bool const realmFirst = IsRealmFirstAchievement(achievement->flags) && session
+            && !session->HasPermission(rbac::RBAC_PERM_CANNOT_EARN_REALM_FIRST_ACHIEVEMENTS);
+        char const* name = achievement->name[sWorld->GetDefaultDbcLocale()];
+        Publish(MakeRealmAchievement(guid, achievement->ID, Leeroy::SanitizeChatText(name ? name : "", 128),
+            achievement->categoryId, achievement->flags, realmFirst));
+    }
+};
 }
 
 std::size_t RealmGuildRankCount(::Guild const& guild) { return GuildRankView::Count(guild); }
@@ -279,4 +305,6 @@ void RegisterRealmGuildHandlers()
     RegisterCommand("guild_note", Note);
     RegisterCommand("grant_achievement", Grant);
 }
+
+void AddRealmGuildScripts() { new RealmAchievementScript(); }
 }

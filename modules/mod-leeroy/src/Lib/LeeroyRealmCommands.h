@@ -42,6 +42,10 @@ inline constexpr std::array<std::string_view, 13> kPlaceKinds = {
 inline constexpr std::array<std::string_view, 4> kItemUses = {"gift", "bank", "holiday", "prize"};
 inline constexpr std::size_t kMaxCsvBytes = 1024 * 1024, kMaxCsvRows = 4096, kMaxCsvLineBytes = 1024;
 inline constexpr std::uint32_t kMaxItemCount = 1000;
+// AchievementFlags (DBCEnums.h): the core's two realm-first kinds.
+inline constexpr std::uint32_t kAchievementRealmFirstReach = 0x100, kAchievementRealmFirstKill = 0x200;
+inline bool IsRealmFirstAchievement(std::uint32_t flags)
+{ return (flags & (kAchievementRealmFirstReach | kAchievementRealmFirstKill)) != 0; }
 
 // Test-only registration. Runtime handlers register through LeeroyRegisterCommand.
 void RegisterRealmCommandTypes();
@@ -194,6 +198,9 @@ nlohmann::json MakeChannelChat(std::string_view channel, std::uint32_t fromGuid,
     std::uint32_t zone, std::string_view text, bool viaBridge);
 nlohmann::json MakePvpKill(std::uint32_t killer, std::uint32_t victim, std::uint32_t map, std::uint32_t zone);
 nlohmann::json MakeDuelEnd(std::uint32_t winner, std::uint32_t loser, std::string_view result);
+// An unscoped achievement completion: never published inside LeeroyQuietScope.
+nlohmann::json MakeRealmAchievement(std::uint32_t guid, std::uint32_t achievementId, std::string_view name,
+    std::uint32_t category, std::uint32_t flags, bool realmFirst);
 nlohmann::json MakePvpFlag(std::uint32_t guid, bool flagged);
 nlohmann::json MakeWg(std::string_view state, std::string_view defender, std::uint32_t seconds, double updateMs);
 nlohmann::json MakeArenaQueue(std::uint32_t teamId, std::uint32_t arenaType, bool rated);

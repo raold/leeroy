@@ -66,6 +66,7 @@ EVENT_FIELDS = {
     "realm_kill": ("ts kill_id native_epoch guild_id human_guid killed_at_ms verified_at_ms "
                    "fight_started_at_ms fight_ms attempts map instance_id boss_id difficulty size heroic "
                    "human_present cast_members"),
+    "realm_achievement": "ts guid achievement_id name category flags realm_first",
 }
 
 
@@ -94,7 +95,7 @@ def command_from_message(msg):
 def test_authoritative_maps_fields_and_immutable_message_shapes():
     assert list(protocol.COMMANDS) == list(COMMAND_FIELDS)
     assert list(protocol.EVENTS) == list(EVENT_FIELDS)
-    assert len(protocol.COMMANDS) == 33 and len(protocol.EVENTS) == 14
+    assert len(protocol.COMMANDS) == 33 and len(protocol.EVENTS) == 15
     for registry, expected in ((protocol.COMMANDS, COMMAND_FIELDS), (protocol.EVENTS, EVENT_FIELDS)):
         for name, cls in registry.items():
             assert [field.name for field in dataclasses.fields(cls)] == expected[name].split()
@@ -568,4 +569,29 @@ def test_guild_readmit_binds_one_kick_and_a_guild_admit_rank():
                                      **change})
     with pytest.raises(TypeError, match="rank"):
         protocol.GuildReadmit("readmit", 11001, 1700000000000)  # No default rank.
+
+
+@pytest.mark.parametrize("flags,realm_first,valid", [
+    (0x200, True, True), (0x100, True, True), (0x200, False, True), (0, False, True), (0x80, True, False),
+])
+def test_realm_achievement_names_a_realm_first_only_with_its_dbc_flag(flags, realm_first, valid):
+    protocol.register()
+    msg = {**next(row["msg"] for row in fixtures() if row["name"] == "realm_achievement_event"),
+           "flags": flags, "realm_first": realm_first}
+    if valid:
+        assert wire.parse_event(json.dumps(msg)).realm_first is realm_first
+    else:
+        with pytest.raises(wire.ProtocolError):
+            wire.parse_event(json.dumps(msg))
+
+
+@pytest.mark.parametrize("field,value", [
+    ("realm_first", 1), ("flags", -1), ("category", True), ("name", None), ("name", "x" * 129),
+    ("guid", 0), ("achievement_id", 0),
+])
+def test_realm_achievement_rejects_malformed_metadata(field, value):
+    protocol.register()
+    msg = {**next(row["msg"] for row in fixtures() if row["name"] == "realm_achievement_event"), field: value}
+    with pytest.raises(wire.ProtocolError):
+        wire.parse_event(json.dumps(msg))
 

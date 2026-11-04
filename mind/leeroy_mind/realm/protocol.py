@@ -543,6 +543,33 @@ class MailTaken:
     count: int
 
 
+REALM_FIRST_FLAGS = 0x100 | 0x200  # AchievementFlags: REALM_FIRST_REACH, REALM_FIRST_KILL
+
+
+@dataclass(frozen=True, slots=True)
+class RealmAchievement:
+    """An earned achievement of him or a cast member. Never a quiet grant.
+
+    category and flags are the DBC's; realm_first is the core's realm-first rule
+    (the flag, unless his account may not take one).
+    """
+    ts: int
+    guid: int
+    achievement_id: int
+    name: str
+    category: int
+    flags: int
+    realm_first: bool
+
+    def __post_init__(self):
+        if (not _uint(self.guid) or not _uint(self.achievement_id) or not _bounded_text(self.name, 0, 128)
+                or type(self.category) is not int or not 0 <= self.category <= 0xFFFFFFFF
+                or type(self.flags) is not int or not 0 <= self.flags <= 0xFFFFFFFF
+                or type(self.realm_first) is not bool
+                or (self.realm_first and not self.flags & REALM_FIRST_FLAGS)):
+            raise ValueError("invalid native Realm achievement")
+
+
 @dataclass(frozen=True, slots=True)
 class Guard:
     ts: int
@@ -637,6 +664,7 @@ EVENTS: dict[str, type] = {
     "guard": Guard,
     "realm_pvp": RealmPvp,
     "realm_kill": RealmKill,
+    "realm_achievement": RealmAchievement,
 }
 NOISY = frozenset({"realm_job", "channel_chat", "game_event"})
 

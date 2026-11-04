@@ -9,5 +9,6 @@ namespace Leeroy::Realm
 // or infers rank existence from its possibly-zero rights mask.
 std::size_t RealmGuildRankCount(::Guild const& guild);
 void RegisterRealmGuildHandlers();
+void AddRealmGuildScripts();
 }
 #endif

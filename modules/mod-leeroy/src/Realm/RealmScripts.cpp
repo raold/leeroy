@@ -82,6 +82,7 @@ void AddSC_leeroy_realm()
     Leeroy::Realm::AddRealmBankScripts();
     Leeroy::Realm::AddRealmMailScripts();
     Leeroy::Realm::AddRealmCalendarScripts();
+    Leeroy::Realm::AddRealmGuildScripts();
     Leeroy::Guild::AddGuildFishingScripts();
 #if LEEROY_REALM_SPEECH
     Leeroy::Realm::AddRealmSpeechScripts();

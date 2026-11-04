@@ -101,6 +101,8 @@ json Event(std::string_view type)
     if (type == "channel_chat") return MakeChannelChat("trade", 11001, "Test Member", 1637, "Ready for a raid.", true);
     if (type == "pvp_kill") return MakePvpKill(11001, 11002, 571, 4197);
     if (type == "duel_end") return MakeDuelEnd(11001, 11002, "won");
+    if (type == "realm_achievement")
+        return MakeRealmAchievement(11002, 4576, "Realm First! Fall of the Lich King", 81, 512, true);
     if (type == "pvp_flag") return MakePvpFlag(11001, true);
     if (type == "wg") return MakeWg("soon", "horde", 900, 3.5);
     if (type == "arena_queue") return MakeArenaQueue(13001, 3, true);
@@ -177,7 +179,34 @@ std::optional<json> FixtureBody(json const& msg)
         if (!kill || !ValidKillProof(*kill)) return std::nullopt;
         return MakeRealmKill(*kill);
     }
+    if (type == "realm_achievement")
+    {
+        std::uint32_t guid = 0, id = 0, category = 0, flags = 0;
+        if (!SameKeys(msg, Event(type)) || !Unsigned(msg.at("guid"), guid) || !Unsigned(msg.at("achievement_id"), id)
+            || !Unsigned(msg.at("category"), category) || !Unsigned(msg.at("flags"), flags)
+            || !msg.at("name").is_string() || !msg.at("realm_first").is_boolean()) return std::nullopt;
+        bool const realmFirst = msg.at("realm_first").get<bool>();
+        // The native hook names a realm first only from the DBC flag (and RBAC may withhold it).
+        if (realmFirst && !IsRealmFirstAchievement(flags)) return std::nullopt;
+        return MakeRealmAchievement(guid, id, msg.at("name").get<std::string>(), category, flags, realmFirst);
+    }
     return Event(type); // Every other event has only its canonical line.
+}
+std::string RealmSource(char const* file)
+{
+    std::ifstream stream(std::string(LEEROY_TEST_FIXTURES) + "/../../src/Realm/" + file);
+    if (!stream) throw std::runtime_error("cannot open native source contract");
+    std::string source{std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
+    std::erase(source, '\r');
+    return source;
+}
+std::string RealmSection(std::string const& source, std::string const& start, std::string const& end)
+{
+    auto const first = source.find(start);
+    auto const last = first == std::string::npos ? first : source.find(end, first + start.size());
+    if (first == std::string::npos || last == std::string::npos)
+        throw std::runtime_error("native source contract section missing: " + start);
+    return source.substr(first, last - first);
 }
 std::string const kPlacesHeader = "name,map,zone,x,y,z,o,kind\n";
 std::string const kItemsHeader = "item_id,use,max_count\n";
@@ -220,7 +249,7 @@ LEEROY_TEST(Realm_FixtureLines)
             CHECK(valid); CHECK_EQ(row.at("name").get<std::string>(), type + "_ok"); full.insert(type);
         }
     }
-    CHECK_EQ(full.size(), kCommandTypes.size()); CHECK_EQ(events.size(), 14u);
+    CHECK_EQ(full.size(), kCommandTypes.size()); CHECK_EQ(events.size(), 15u);
     for (auto type : kCommandTypes) CHECK(full.contains(std::string(type)));
 }
 
@@ -545,6 +574,23 @@ LEEROY_TEST(Realm_GuildReadmitIsAFrozenConsentBoundSchema)
     RejectField("guild_readmit_ok", "kick_ts", -1);
     // No rank default: guild_admit's rank 4 never applies to a re-admission.
     auto admit = Message("guild_admit_defaults"); CHECK(!ParseGuildReadmit(admit, error));
+}
+
+LEEROY_TEST(Realm_RealmFirstUsesTheCoreAchievementFlags)
+{
+    for (auto flags : {0x100u, 0x200u, 0x300u, 0x302u}) CHECK(IsRealmFirstAchievement(flags));
+    for (auto flags : {0u, 0x1u, 0x80u, 0x400u}) CHECK(!IsRealmFirstAchievement(flags));
+    auto achievement = MakeRealmAchievement(1, 4576, "Realm First! Fall of the Lich King", 81, 0x200, true);
+    CHECK_EQ(achievement.size(), 7u); CHECK_EQ(achievement.at("type"), "realm_achievement");
+    CHECK_EQ(achievement.at("realm_first"), true); CHECK_EQ(achievement.at("category"), 81u);
+    // Source placement only: a quiet grant never reaches the publication.
+    auto const guild = RealmSource("RealmGuild.cpp");
+    auto const hook = RealmSection(guild, "void OnPlayerAchievementComplete(", "void RegisterRealmGuildHandlers()");
+    CHECK(hook.find("LeeroyQuietScope::Active()") < hook.find("Publish(MakeRealmAchievement("));
+    CHECK(hook.find("!RealmModule::Instance().On()") < hook.find("Publish(MakeRealmAchievement("));
+    CHECK(hook.find("RBAC_PERM_CANNOT_EARN_REALM_FIRST_ACHIEVEMENTS") != std::string::npos);
+    auto const grant = RealmSection(guild, "LeeroyCommandResult Grant(", "class RealmAchievementScript");
+    CHECK(grant.find("LeeroyQuietScope quiet;") < grant.find("player->CompletedAchievement(achievement);"));
 }
 
 LEEROY_TEST(Realm_AnnouncementText)

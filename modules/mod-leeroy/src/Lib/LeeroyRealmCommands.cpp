@@ -572,6 +572,12 @@ json MakePvpKill(std::uint32_t killer, std::uint32_t victim, std::uint32_t map, 
 { return {{"type", "pvp_kill"}, {"killer", killer}, {"victim", victim}, {"map", map}, {"zone", zone}}; }
 json MakeDuelEnd(std::uint32_t winner, std::uint32_t loser, std::string_view result)
 { return {{"type", "duel_end"}, {"winner", winner}, {"loser", loser}, {"result", result}}; }
+json MakeRealmAchievement(std::uint32_t guid, std::uint32_t achievementId, std::string_view name,
+    std::uint32_t category, std::uint32_t flags, bool realmFirst)
+{
+    return {{"type", "realm_achievement"}, {"guid", guid}, {"achievement_id", achievementId}, {"name", name},
+        {"category", category}, {"flags", flags}, {"realm_first", realmFirst}};
+}
 json MakePvpFlag(std::uint32_t guid, bool flagged)
 { return {{"type", "pvp_flag"}, {"guid", guid}, {"flagged", flagged}}; }
 json MakeWg(std::string_view state, std::string_view defender, std::uint32_t seconds, double updateMs)
