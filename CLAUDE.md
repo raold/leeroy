@@ -566,6 +566,55 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   to end, and otherwise (or with no endpoint: a mind from before it, or one
   with it off) stop it by force and say why.
 
+## The Realm (`leeroy_mind.realm`)
+
+The mind's layer for the world outside the owner's guild: three rival bot guilds (a
+progression rival he names, a drama farm, Alliance gankers), their officers' rationed lines in
+Trade and General and the gankers' emotes, the race for first kills, canon achievement grants,
+the guild bank, the guild calendar, mail to him, the kick guard and the realm's night stage.
+Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
+
+- **Off by default, two switches.** `[realm] enabled = true` in `mind.toml` (read again at each
+  hello and login) and native `Leeroy.Realm.Enable = 1` in `mod_leeroy.conf` (`.reload config`;
+  while it is 0 native refuses every realm command `realm_off`). Other `[realm]` keys:
+  `his_birthday`, `guild_anniversary` (MM-DD, local only), `trial_rank`, `member_cap`,
+  `gank_human`. `mind-data/realm/` holds `blocklist.txt` (never committed), `cards/`, `plans/`
+  and `approved/`. Without the blocklist, or before the guild's name is cached (meta
+  `realm:guild_name`, read once per hello), the screen fails closed and no rival speaks.
+- **Data steps**, from `mind/` with `--data-dir "$D"`: `python -m leeroy_mind realm status`
+  and `titles` read `mind.db` read-only; `realm plan rivals --progression-name <name>`,
+  `plan canon`, `plan bank`, `plan bank-stock` write only a plan file (rivals asks the live
+  model and exits 2 while the night holds the GPU); `realm approve <plan file>` writes only
+  an approval bound to the plan's hash; the running mind applies each approved plan once
+  (`realm_step`), and a plan edited after its approval is refused for good. `realm canon
+  history-ok <seed> <canon>` approves the history files; `realm cards [--show]`. A bank step
+  that ends `needs_controller` needs a look at the bank in game, then a fresh plan
+  (`plan bank --no-money` or `--first-tab N`).
+- **Exactly once.** A command that moves no body (speech, actor sets, renames, bank money, tabs
+  and gift withdrawals, grants, calendar, mail) goes through the direct ledger `realm_direct`
+  (prepared, dispatched, acked, refused, unknown, abandoned): an unknown one is never sent
+  again, and a restart turns dispatched into unknown. Body moves go through the action queue
+  and the body ledger. Native's `busy:<owner>` is stored as `busy_<owner>`. Acked calendar
+  signups and speech lines are pruned 30 days after they settle; other acked rows stay. The
+  actor set is resent from memory at each hello; if it ever moves into the ledger, its ref
+  must name the process.
+- **Rulings.** His raid holds exactly his raid: waiting for the call, called and forming hold
+  the roster and his group; assembling and running hold the raid's members and his group;
+  everyone else, rival officers included, may move (an unreadable member list holds everyone).
+  Rivals never kill a boss before the guild and never an Ulduar hard mode. Training keeps its
+  own benchmark rival choice and asks the race (`app.realm.race.benchmark_allowed`: True or
+  None, never False). A member he took back counts as a full member again. No model call
+  while he is offline; no rival line in his raid's combat, wipe silence or debrief.
+- **Night.** With the Realm on at the mind's start, stage `realm` runs after `stories` on the
+  reflection model: 0-2 Trade beats per rival guild (said the next day, screened again), up to
+  3 forum posts, 3 letters (written through the post office) and 2 write-ups. It counts 0 and
+  writes nothing while `[realm] enabled` is false.
+- **Calendar and mail.** The desk posts raid nights (from his logins), Thursday's officer
+  meeting and the members' card birthdays a week ahead, signs members up and notes the raid
+  nights he missed; native keeps 100 guild events. Mail: a letter once per absence, a week
+  after his last logout; at most 2 gifts a product week (a spare BoE from the bank, else
+  flasks); holiday and birthday gifts; at most 3 a day, sent only while he is online.
+
 ## The voice service (`leeroy-voice`)
 
 `voice/` adds local room playback and push-to-talk to the mind. It is a separate
