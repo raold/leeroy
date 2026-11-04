@@ -5,7 +5,7 @@ import uuid
 
 from conftest import run
 from leeroy_mind.protocol import Ack
-from leeroy_mind.realm import bank, canon, protocol
+from leeroy_mind.realm import bank, canon, protocol, rivals
 from leeroy_mind.realm.direct import DirectLedger
 from leeroy_mind.realm.ports import RealmDisabled
 from leeroy_mind.realm.protocol import BankStock, GrantAchievement
@@ -94,3 +94,39 @@ def test_a_step_item_refused_before_anything_moved_is_sent_again(tmp_path, store
     applied, result = step_row(store)
     assert applied is not None and (result["rename"], result["actors"]) == ("acked", "acked")
     assert ledger.state("step", ref) == ("acked", None, None)
+
+
+# -- item 9: native's admission refusals of a guild_grow are refusals, not unknowns -----------------
+
+def test_a_grow_native_refuses_at_admission_frees_its_bodies_and_grows_again(tmp_path, store, clock):
+    seed_roster(store)
+    app, realm = live_realm(tmp_path, store, clock)
+    plan = with_cards(plan_of())
+    _, sha = rivals_approved(tmp_path, clock, plan)
+    seven = next(g for g in plan["guilds"] if g["guild_id"] == 7)
+    below = seven["raiders"][0]["guid"]  # Re-rolled below 80 between the plan and its apply.
+    _answering(app, protocol.GuildGrow, [(False, f"level:{below}"), (True, "")])
+    steps = realm.part("steps")
+
+    async def go():
+        await connect(app)
+        await steps.tick()
+        await pump(realm, clock)
+        refused = realm.action_store.get(rivals.grow_id(sha, 7, 0))
+        assert (refused.state, refused.result_ok, refused.result_reason) == ("completed", False, "refused")
+        held = {guid for hold in realm.action_store.holds() for guid in hold.guids}
+        assert not held & {r["guid"] for r in seven["raiders"]}  # Its bodies are free again.
+        await finish(app, clock, grows(app, {8, 11}))
+        await clock.advance(60, step=60)
+        await steps.tick()                       # the queue's ten-minute pause on a failed scope
+        await pump(realm, clock)
+        assert len(grows(app, {7})) == 1 and step_row(store)[0] is None
+        await clock.advance(600, step=60)
+        await steps.tick()                       # then the next attempt of guild 7's grow
+        await pump(realm, clock)
+        await finish(app, clock, grows(app, {7})[1:])
+        await clock.advance(60, step=60)
+        await steps.tick()
+    run(go())
+    assert [g.id for g in grows(app, {7})] == [rivals.grow_id(sha, 7, 0), rivals.grow_id(sha, 7, 1)]
+    assert step_row(store)[1]["grow"] == {"7": "acked", "8": "acked", "11": "acked"}
