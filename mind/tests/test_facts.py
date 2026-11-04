@@ -466,6 +466,44 @@ def test_clearing_cancels_a_pending_lookup():
     run(main())
 
 
+def test_session_reset_reuses_facts_and_final_close_survives_cancelled_waiter():
+    async def main():
+        facts = LibraryFacts(FakeLibrary([QUEST]), llm=None)
+        facts.start(3, question())
+        assert await facts.for_line(3)
+        await facts.reset_session()
+        assert await facts.for_line(3) == []
+        facts.start(3, question())
+        assert await facts.for_line(3)
+
+        entered, cancelled, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        async def blocked_lookup(line_id, q):
+            entered.set()
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                cancelled.set()
+                await release.wait()
+                raise
+        facts._lookup = blocked_lookup
+        facts.start(4, question())
+        await entered.wait()
+        waiter = asyncio.create_task(facts.aclose())
+        await cancelled.wait()
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        facts.start(5, question())
+        assert await facts.for_line(5) == []
+        second = asyncio.create_task(facts.aclose())
+        assert not second.done()
+        release.set()
+        await second
+        await facts.aclose()
+        assert not facts._tasks and facts.mechanics("Lord Grimbone") == []
+    run(main())
+
+
 def test_a_bosss_mechanics_are_looked_up_once():
     lib = FakeLibrary(strategy=GRIMBONE)
     facts = LibraryFacts(lib, llm=None)
