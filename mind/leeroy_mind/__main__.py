@@ -1172,6 +1172,9 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     if argv and argv[0] == "realm":
         from .realm.cli import realm_main
         return realm_main(argv[1:])
+    if argv and argv[0] == "tuning":
+        from .tuning.cli import tuning_main
+        return tuning_main(argv[1:])
     if argv and argv[0] in ("nightly", "eval"):
         from .nightly.cli import eval_main, nightly_main
         command = nightly_main if argv[0] == "nightly" else eval_main
@@ -1183,6 +1186,8 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("training", help="training ledger, gate, reports and spell checks")
     sub.add_parser("realm", help="read-only realm status and title diagnostics")
+    sub.add_parser("tuning", help="the owner's persona dials: status, history, and undo or "
+                   "revert with the mind stopped")
     sub.add_parser("nightly", help="nightly status, trials, ledger and owner controls")
     sub.add_parser("eval", help="weekly evaluation on a copied database by default")
     sub.add_parser("console", help="the guild console on http://127.0.0.1:7881/ (comms, the "
