@@ -28,6 +28,10 @@ LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 STARTED = "mind_started"
 CLEAN_END = "shutdown_complete"
 FAILURES = frozenset({"mind_failed", "loop_stopped", "embedding_mismatch", "config_invalid"})
+# A running mind that cannot reload an edited mind.toml keeps its config and says so as a
+# WARNING: that is a failure only at ERROR (a start that never got going logs it so) or between
+# a run's clean end and the next start
+KEPT_RUNNING = frozenset({"config_invalid"})
 BRIDGE = {"bridge_connected": True, "bridge_disconnected": False}
 
 
@@ -98,13 +102,21 @@ class LogView:
 def scan(records) -> LogView:
     view = LogView()
     failed = None
+    # Between a clean end and the next start (False), inside a run (True), or not known: the
+    # records begin inside a run more often than not (a long run, a midnight rotation)
+    running = None
     for r in records:
         event = r.get("event")
         if event == STARTED:
             view.started = r.get("ts") if isinstance(r.get("ts"), str) else ""
             failed, view.bridge = None, None
+            running = True
+        elif event == CLEAN_END:
+            running = False
         elif event in FAILURES:
-            failed = r
+            if (event not in KEPT_RUNNING or running is False
+                    or r.get("level") in ("ERROR", "CRITICAL")):
+                failed = r
         elif event in BRIDGE:
             view.bridge = BRIDGE[event]
         if r.get("level") in ("WARNING", "ERROR", "CRITICAL"):

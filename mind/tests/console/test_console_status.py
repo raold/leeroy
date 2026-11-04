@@ -188,3 +188,17 @@ def test_gpu_headroom_parses_nvidia_smi():
     out = status.gpu_headroom(which=lambda n: "x",
                               run=lambda *a, **k: SimpleNamespace(returncode=9, stdout=""))
     assert out["ok"] is False and "code 9" in out["error"]
+
+
+def test_a_running_minds_kept_config_warning_is_not_a_failure():
+    """A running mind that cannot reload an edited mind.toml logs config_invalid as a WARNING
+    and keeps its config; a start that never got going logs it as an ERROR."""
+    view = mindlog.scan([rec("mind_started"), rec("config_invalid", "WARNING")])
+    assert not view.run_failed and [e["event"] for e in view.errors] == ["config_invalid"]
+    # records that begin inside a run (a long one, or a midnight rotation)
+    assert not mindlog.scan([rec("config_invalid", "WARNING")]).run_failed
+    assert mindlog.scan([rec("mind_started"), rec("config_invalid", "ERROR")]).run_failed
+    assert mindlog.scan([rec("config_invalid", "ERROR")]).run_failed
+    assert mindlog.scan([rec("mind_started"), rec("shutdown_complete"),
+                         rec("config_invalid", "WARNING")]).run_failed  # between runs
+    assert mindlog.scan([rec("mind_started"), rec("loop_stopped", "WARNING")]).run_failed
