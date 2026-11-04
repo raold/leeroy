@@ -15,7 +15,8 @@ add_executable(dojo_tests ${DOJO_TEST_SOURCES} ${DOJO_LIB_SOURCES})
 
 target_include_directories(dojo_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/Lib")
 target_include_directories(dojo_tests SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../deps")
-target_compile_definitions(dojo_tests PRIVATE DOJO_TEST_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+target_compile_definitions(dojo_tests PRIVATE DOJO_TEST_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+    DOJO_SCENARIOS="${CMAKE_CURRENT_SOURCE_DIR}/../../../dojo/scenarios")
 
 # The transport uses header-only boost.asio, as mod-leeroy's bridge does.
 set(DOJO_BOOST_INCLUDE_DIR "" CACHE PATH "Boost include directory (for boost.asio)")
