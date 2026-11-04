@@ -21,9 +21,12 @@ if TYPE_CHECKING:
 
 
 FactPolicy = Literal["verified_raid_kill_v1", "bg_result_v1", "arena_result_v1",
-                     "wg_result_v1", "pvp_result_v1", "channel_raid_topic_v1"]
+                     "wg_result_v1", "pvp_result_v1", "channel_raid_topic_v1",
+                     "realm_first_achievement_v1", "duel_result_v1", "verified_dungeon_kill_v1"]
 PublicPolicy = Literal["verified_raid_kill_v1", "bg_result_v1", "arena_result_v1",
-                       "wg_result_v1", "pvp_result_v1", "channel_raid_topic_v1", "stored_forum_topic_v1"]
+                       "wg_result_v1", "pvp_result_v1", "channel_raid_topic_v1",
+                       "realm_first_achievement_v1", "duel_result_v1", "verified_dungeon_kill_v1",
+                       "stored_forum_topic_v1"]
 Assurance = Literal["verified_event", "observed_event", "observed_topic", "stored_topic"]
 AnnouncementReason = Literal["none", "expired", "context_unavailable", "capacity", "proof_unavailable",
     "payload_mismatch", "native_refused", "transport_unknown", "recovered_prepared", "recovered_dispatched",
@@ -35,7 +38,8 @@ QuestionReason = Literal["none", "expired", "context_unavailable", "capacity", "
 OutputFields = tuple[tuple[str, int | str | bool], ...]
 
 _FACT_POLICIES = ("verified_raid_kill_v1", "bg_result_v1", "arena_result_v1", "wg_result_v1",
-                  "pvp_result_v1", "channel_raid_topic_v1")
+                  "pvp_result_v1", "channel_raid_topic_v1", "realm_first_achievement_v1",
+                  "duel_result_v1", "verified_dungeon_kill_v1")
 _PUBLIC_POLICIES = (*_FACT_POLICIES, "stored_forum_topic_v1")
 _ASSURANCES = ("verified_event", "observed_event", "observed_topic", "stored_topic")
 _QUESTION_REASONS = ("none", "expired", "context_unavailable", "capacity", "proof_unavailable",

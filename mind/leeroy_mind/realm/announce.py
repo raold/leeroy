@@ -15,8 +15,8 @@ own mode, as the plan's (map, boss, difficulty) key says.
 The plan is written inside the kill's own Store unit and is authority to send only once that
 unit commits. before_send is the synchronous final barrier: it commits 'dispatched' before
 transport, or settles the row and refuses. Every outcome is final. The native side still
-requires its own recent kill proof before it sends anything. Attempts are always 0 for now
-(native refuses others); _attempts is the one place a native count will be read.
+requires its own recent kill proof before it sends anything, and refuses attempts other than
+0 or its own proof's count; _attempts is the one place that count is read.
 """
 from __future__ import annotations
 
@@ -96,12 +96,9 @@ def _fight_s(event: RealmKill) -> int:
 
 
 def _attempts(event: RealmKill) -> int:
-    """The attempts this kill took; 0 leaves them out of the message.
-
-    Native refuses any other value until its attempt counter exists. The counter will arrive
-    with the kill evidence, and this is the one place that reads it into the plan.
-    """
-    return 0
+    """The attempts this kill took, native's exact count of confirmed pulls; 0 is unknown and
+    leaves them out of the message, never a number. A cast-only kill carries its count too."""
+    return event.attempts
 
 
 class Announcer:

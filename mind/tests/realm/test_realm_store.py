@@ -20,7 +20,7 @@ REALM_TABLES = {
     "realm_step", "realm_canon", "realm_canon_kill", "realm_kick", "realm_meeting",
     "realm_goal", "realm_notable", "realm_receipt", "realm_action",
     "realm_source", "realm_fact_origin", "realm_kill", "realm_announcement",
-    "realm_kick_episode", "realm_memory_dependency", "realm_speech_line",
+    "realm_kick_episode", "realm_memory_dependency", "realm_speech_line", "realm_dungeon_kill",
 }
 
 

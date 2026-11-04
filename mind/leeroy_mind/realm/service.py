@@ -27,7 +27,7 @@ from .guard import FALLBACK, FALLBACK_RETRY_S, FALLBACK_TRIES, Admission, KickGu
 from .kill_retention import PrivateKillRejected, PrivateKillStore
 from .ledger import Ledger
 from .ports import LivePorts, RealmDisabled
-from .provenance import capture_qualification_in_unit
+from .provenance import cannot_qualify, capture_qualification_in_unit
 from .recall import Recall
 from .records import RealmObservation, Rejected
 
@@ -45,7 +45,8 @@ _DIRECT = frozenset({protocol.RealmActors, protocol.RealmSay, protocol.RealmEmot
                      protocol.CalendarUpdate, protocol.BankMoney,
                      protocol.GuildRename, protocol.ItemCount, protocol.GuildReadmit})
 _SOURCES = frozenset({BgEnd, protocol.ArenaEnd, protocol.Wg, protocol.PvpKill,
-                      protocol.ChannelChat, protocol.RealmKill})
+                      protocol.ChannelChat, protocol.RealmKill, protocol.RealmAchievement,
+                      protocol.DuelEnd, protocol.RealmDungeonKill})
 _GUARD_ALERTS = frozenset({"gone", "blocked"})
 
 
@@ -281,6 +282,9 @@ class Realm:
         """Capture the exact dispatcher receipt before creating any owned child."""
         if type(ev) not in _SOURCES:
             return None
+        refused = cannot_qualify(ev)
+        if refused is not None:
+            return refused
         receipt_reader = getattr(self.app, "row_receipt", None)
         if receipt_reader is None:
             return Rejected("invalid_input")
@@ -311,6 +315,7 @@ class Realm:
                 human = self.ports.human()
                 ev = observation.event
                 if type(ev) is not protocol.RealmKill:
+                    # A 5-man kill is a fact or nothing: never retained privately, never announced.
                     return self._facts.put_fact_in_unit(observation, human=human)
                 existing = self._source_store.conn.execute(
                     "SELECT fact FROM realm_kill WHERE kill_id=?", (ev.kill_id,)).fetchone()
