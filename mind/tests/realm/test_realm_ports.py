@@ -5,7 +5,9 @@ from dataclasses import asdict, replace
 from datetime import datetime
 import json
 import sqlite3
+import threading
 from types import SimpleNamespace as NS
+from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -15,8 +17,9 @@ from leeroy_mind.guild.config import GuildConfig
 from leeroy_mind.guild import protocol as guild_protocol
 from leeroy_mind.guild.raid_night import RaidRun, State
 from leeroy_mind.guild.session import RaidPlan
-from leeroy_mind.llm.client import LLMError
-from leeroy_mind.llm.scheduler import Priority
+from leeroy_mind.llm.client import ChatResult, LLMError
+from leeroy_mind.llm.presets import LIVE
+from leeroy_mind.llm.scheduler import LLMScheduler, Priority
 from leeroy_mind.memory.writer import MemoryCandidate, WriteResult
 from leeroy_mind.personas.io import PersonaCache, save_persona
 from leeroy_mind.protocol import Ack, Boss
@@ -714,3 +717,180 @@ def test_transport_queued_before_disable_never_enters_bridge_and_ack_callback_is
         assert calls == ["enrolled", "bridge"]
         await ports.close()
     run(scenario())
+
+
+# -- the light minds' live line, the guild's name and the realm's directory ------------------
+
+class FakeLLM:
+    def __init__(self, text="gz on the kill"):
+        self.text, self.calls, self.error = text, [], None
+
+    async def chat(self, model, messages, *, options, think=None, format=None, keep_alive=None, timeout=None):
+        self.calls.append(dict(model=model, messages=messages, options=options, think=think,
+                               format=format, timeout=timeout))
+        if self.error is not None:
+            raise self.error
+        return ChatResult(self.text, "", 4, 0.1)
+
+
+class RecordingScheduler(LLMScheduler):
+    def __init__(self, llm, clock):
+        super().__init__(llm, clock=clock)
+        self.submitted = []
+
+    async def submit(self, priority, job, *, deadline=None):
+        self.submitted.append((priority, deadline))
+        return await super().submit(priority, job, deadline=deadline)
+
+
+def live_app(app, *, ready=True, online=True):
+    llm = FakeLLM()
+    app.scheduler = RecordingScheduler(llm, app.clock)
+    app.cfg.models = NS(live="synthetic-live-model")
+    app.model_ready = ready
+    app.world.human_online = online
+    app.engine = NS(live_admission=AsyncMock())
+    return llm
+
+
+MESSAGES = [{"role": "system", "content": "One Trade line."}, {"role": "user", "content": "He pulled early."}]
+
+
+def test_llm_line_background_think_false_live_model(app):
+    llm = live_app(app)
+    ports = LivePorts(app)
+
+    async def scenario():
+        assert await ports.llm_line(MESSAGES) is None  # Disabled: nothing asked.
+        assert llm.calls == [] and app.scheduler.submitted == []
+        ports.set_enabled(True)
+        now = app.clock.now()
+        assert await ports.llm_line(MESSAGES) == "gz on the kill"
+        assert app.scheduler.submitted == [(Priority.BACKGROUND, now + 20)]
+        call = llm.calls[0]
+        assert call["model"] == "synthetic-live-model" and call["think"] is False and call["format"] is None
+        assert call["options"] == dict(LIVE.options) and call["options"]["num_ctx"] == 4096
+        assert call["timeout"] == LIVE.timeout and call["messages"] == MESSAGES
+        app.engine.live_admission.assert_awaited_once()  # The night hands the live model back first.
+        assert await ports.llm_line(MESSAGES, deadline_s=5) == "gz on the kill"
+        assert app.scheduler.submitted[-1] == (Priority.BACKGROUND, now + 5)
+        llm.text = "   "
+        assert await ports.llm_line(MESSAGES) is None  # An empty answer is no line.
+        llm.error = LLMError("synthetic outage")
+        assert await ports.llm_line(MESSAGES) is None
+        with pytest.raises(ValueError):
+            await ports.llm_line([{"role": "user"}])
+        await ports.close()
+        await app.scheduler.close()
+    run(scenario())
+
+
+def test_llm_line_none_offline_or_model_away(app):
+    llm = live_app(app, online=False)
+    ports = LivePorts(app)
+    ports.set_enabled(True)
+
+    async def scenario():
+        assert await ports.llm_line(MESSAGES) is None  # He is offline.
+        app.world.human_online = True
+        app.model_ready = False
+        assert await ports.llm_line(MESSAGES) is None  # The live model's latch is down.
+        del app.model_ready
+        assert await ports.llm_line(MESSAGES) is None
+        assert await ports.llm_line(MESSAGES, deadline_s=0) is None
+        assert llm.calls == [] and app.scheduler.submitted == []
+        app.model_ready = True
+
+        async def logout():  # He leaves while the job waits for admission: never asked.
+            app.world.human_online = False
+        app.engine.live_admission = logout
+        assert await ports.llm_line(MESSAGES) is None
+        assert len(app.scheduler.submitted) == 1 and llm.calls == []
+        app.world.human_online = True
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def held():
+            entered.set()
+            await release.wait()
+        app.engine.live_admission = held
+        work = asyncio.create_task(ports.llm_line(MESSAGES))
+        await entered.wait()
+        ports.set_enabled(False)  # Disabled while it waits: None, and the model is never asked.
+        release.set()
+        assert await work is None and llm.calls == []
+        await ports.close()
+        await app.scheduler.close()
+    run(scenario())
+
+
+class FakeArmory:
+    def __init__(self, name="Synthetic Guild"):
+        self.name, self.threads, self.error = name, [], None
+
+    def guild_name(self, guild_id):
+        assert guild_id == 21
+        self.threads.append(threading.get_ident())
+        if self.error is not None:
+            raise self.error
+        return self.name
+
+
+def test_guild_name_refresh_off_loop(app, monkeypatch, caplog):
+    armory = FakeArmory()
+    ports = LivePorts(app)
+    monkeypatch.setattr(ports, "armory", lambda: armory)
+
+    async def scenario():
+        loop_thread = threading.get_ident()
+        assert ports.guild_name() == ""
+        assert await ports.refresh_guild_name(21) == "" and armory.threads == []  # Disabled.
+        ports.set_enabled(True)
+        assert await ports.refresh_guild_name(21) == "Synthetic Guild"
+        assert armory.threads and loop_thread not in armory.threads  # The query ran off the loop.
+        assert ports.guild_name() == "Synthetic Guild"
+        cached = json.loads(app.store.get_meta("realm:guild_name"))
+        assert cached == {"guild": 21, "name": "Synthetic Guild", "at": app.clock.now()}
+        for bad in ("", " Padded", "x" * 25, None, "Tab\tGuild"):
+            armory.name = bad
+            assert await ports.refresh_guild_name(21) == "Synthetic Guild"  # The cache stays.
+        armory.name, armory.error = "Renamed Guild", RuntimeError("private detail")
+        assert await ports.refresh_guild_name(21) == "Synthetic Guild"
+        assert "realm_guild_name_unavailable" in caplog.text and "private detail" not in caplog.text
+        armory.error = None
+        assert await ports.refresh_guild_name(21) == "Renamed Guild"
+        with pytest.raises(ValueError):
+            await ports.refresh_guild_name(0)
+        app.store.set_meta("realm:guild_name", "not json")
+        assert ports.guild_name() == ""
+        monkeypatch.setattr(ports, "armory", lambda: None)
+        assert await ports.refresh_guild_name(21) == ""
+        await ports.close()
+    run(scenario())
+
+
+def test_guild_name_write_needs_the_ticket_after_the_thread(app, monkeypatch):
+    ports = LivePorts(app)
+    entered, release = threading.Event(), threading.Event()
+
+    class Slow:
+        def guild_name(self, guild_id):
+            entered.set()
+            release.wait(5)
+            return "Synthetic Guild"
+    monkeypatch.setattr(ports, "armory", lambda: Slow())
+
+    async def scenario():
+        ports.set_enabled(True)
+        work = asyncio.create_task(ports.refresh_guild_name(21))
+        await asyncio.to_thread(entered.wait, 5)
+        ports.set_enabled(False)
+        release.set()
+        assert await work == ""
+        assert app.store.get_meta("realm:guild_name") is None
+        await ports.close()
+    run(scenario())
+
+
+def test_realm_dir_is_beside_the_minds_data(app, tmp_path):
+    app.data_dir = tmp_path
+    assert LivePorts(app).realm_dir() == tmp_path / "realm" and not (tmp_path / "realm").exists()

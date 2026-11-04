@@ -21,6 +21,7 @@ from leeroy_mind.clock import SystemClock, night_of
 from leeroy_mind.bodies import ALL, BodyHold, RunBodyProof
 from leeroy_mind.human import HumanIdentity, human_identity
 from leeroy_mind.llm.client import LLMError
+from leeroy_mind.llm.presets import LIVE
 from leeroy_mind.llm.scheduler import Priority, SchedulerError
 from leeroy_mind.memory.writer import MemoryCandidate, WriteResult
 from leeroy_mind.personas.io import PersonaCache
@@ -39,10 +40,29 @@ TITLE_WORDS = ("raid lead", "dkp", "pvp", "achievement", "historian", "theorycra
 _HOLDS = frozenset({"WAITING_CALL", "CALLED", "FORMING", "ASSEMBLING", "RUNNING"})
 _CALLED = _HOLDS - {"WAITING_CALL"}
 _PROVENANCE = "complete_exact_native_scope_and_explicit_pull_receipts"
+GUILD_NAME_KEY = "realm:guild_name"
+_GUILD_NAME_MAX = 24  # The game's own limit on a guild's name.
 
 
 class RealmDisabled(RuntimeError):
     pass
+
+
+class _NoLine(Exception):
+    """The live line was given up before the model was asked."""
+
+
+def _guild_name_ok(name):
+    return (type(name) is str and 0 < len(name) <= _GUILD_NAME_MAX and name == name.strip()
+            and name.isprintable())
+
+
+def _messages(messages):
+    if type(messages) not in (list, tuple) or not messages or any(
+            type(m) is not dict or type(m.get("role")) is not str or type(m.get("content")) is not str
+            for m in messages):
+        raise ValueError("messages must be a non-empty list of role/content dicts")
+    return [dict(m) for m in messages]
 
 
 class RealmEvidenceUnavailable(RuntimeError):
@@ -279,6 +299,10 @@ class RealmPorts(Protocol):
                   before_transport=None, on_recorded=None) -> bool: ...
     async def remember(self, candidate: MemoryCandidate) -> WriteResult: ...
     async def remember_notable(self, text: str, write): ...
+    async def llm_line(self, messages: list[dict], *, deadline_s: float = 20) -> str | None: ...
+    def guild_name(self) -> str: ...
+    async def refresh_guild_name(self, guild_id: int) -> str: ...
+    def realm_dir(self) -> Path: ...
     def note_lately(self, guid: int, what: str, text: str) -> None: ...
     def away(self) -> set[int]: ...
     def open_rumors(self) -> list[RumorRow]: ...
@@ -485,6 +509,87 @@ class LivePorts(RealmPorts):
                 self._disabled()
             return write(self.app.writer, vector)
         return await self._owned(operation, valid, disabled=self._disabled)
+
+    def _may_speak(self):
+        """The live model may be asked only while he is online and its latch is up."""
+        return self.human_online() is True and getattr(self.app, "model_ready", False) is True
+
+    async def llm_line(self, messages, *, deadline_s=20):
+        """One line from the live model for a light mind, or None.
+
+        A BACKGROUND job under this ticket: the LIVE preset, think=False and the configured live
+        model. With him offline or the model latch down nothing is asked, and both are checked
+        again once the job is admitted. A failure, a missed deadline, an empty answer or a
+        disable gives None; a line finished after its deadline is dropped too.
+        """
+        messages = _messages(messages)
+        deadline_s = _number(deadline_s)
+        valid = self._ticket()
+        if not valid() or deadline_s <= 0 or not self._may_speak():
+            return None
+        scheduler, deadline = self.app.scheduler, self.now() + deadline_s
+
+        async def job(llm):
+            admission = getattr(self.app.engine, "live_admission", None)
+            if admission is not None:
+                await admission()  # The night hands the live model back first.
+            if not valid() or not self._may_speak() or scheduler.expired(deadline):
+                raise _NoLine()
+            return await llm.chat(self.app.cfg.models.live, messages, options=dict(LIVE.options),
+                                  think=False, timeout=LIVE.timeout)
+
+        async def operation():
+            try:
+                result = await scheduler.submit(Priority.BACKGROUND, job, deadline=deadline)
+            except (LLMError, SchedulerError, _NoLine):
+                return None
+            if scheduler.expired(deadline) or type(result.text) is not str:
+                return None
+            return result.text.strip() or None
+        return await self._owned(operation, valid, disabled=lambda: None)
+
+    def guild_name(self):
+        """The guild's own name from the meta cache, or "" when none has been read yet."""
+        try:
+            cached = self._meta(GUILD_NAME_KEY)
+        except (ValueError, TypeError):
+            return ""
+        name = cached.get("name") if type(cached) is dict else None
+        return name if _guild_name_ok(name) else ""
+
+    async def refresh_guild_name(self, guild_id):
+        """Read the guild's name through the armory on a worker thread and cache it in meta.
+
+        A missing armory, a failed or malformed read, or a disable keeps the cached name,
+        which is returned either way.
+        """
+        _int(guild_id, 1, 0xFFFFFFFF)
+        valid = self._ticket()
+        armory = self.armory() if valid() else None
+        read = getattr(armory, "guild_name", None)
+        if read is None:
+            return self.guild_name()
+
+        def query():
+            try:
+                return read(guild_id)
+            except Exception:  # The armory's own errors carry no configuration or data.
+                return None
+
+        async def operation():
+            name = await asyncio.to_thread(query)
+            if not _guild_name_ok(name):
+                log.warning("realm_guild_name_unavailable")
+                return self.guild_name()
+            if valid() and name != self.guild_name():
+                self.app.store.set_meta(GUILD_NAME_KEY, json.dumps(
+                    {"guild": guild_id, "name": name, "at": self.now()}, ensure_ascii=False))
+            return self.guild_name()
+        return await self._owned(operation, valid, disabled=self.guild_name)
+
+    def realm_dir(self):
+        """mind-data/realm: the blocklist, cards, plans and approvals. Nothing is created."""
+        return Path(self.app.data_dir) / "realm"
 
     async def close(self):
         self.set_enabled(False)

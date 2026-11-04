@@ -1,7 +1,8 @@
 """Realm lifecycle, durable admission and bounded receipt diagnostics.
 
 The action journal and BodyLedger are ownership authority. Receipt rows remain
-observations; direct no-body diagnostics have their own bounded correlation.
+observations; direct no-body diagnostics have their own bounded correlation. Later
+features attach as parts (parts.py); a command the direct part prepared is its own.
 """
 
 import asyncio
@@ -25,7 +26,8 @@ from .config import load_realm_config
 from .fact_store import FactStore, FactWriteRejected
 from .guard import FALLBACK, FALLBACK_RETRY_S, FALLBACK_TRIES, Admission, KickGuard
 from .kill_retention import PrivateKillRejected, PrivateKillStore
-from .ledger import Ledger
+from .ledger import Ledger, actor_exclusions_in_unit
+from .parts import build_parts, install_night
 from .ports import LivePorts, RealmDisabled
 from .provenance import cannot_qualify, capture_qualification_in_unit
 from .recall import Recall
@@ -48,6 +50,13 @@ _SOURCES = frozenset({BgEnd, protocol.ArenaEnd, protocol.Wg, protocol.PvpKill,
                       protocol.ChannelChat, protocol.RealmKill, protocol.RealmAchievement,
                       protocol.DuelEnd, protocol.RealmDungeonKill})
 _GUARD_ALERTS = frozenset({"gone", "blocked"})
+_U32 = 0xFFFFFFFF
+ACTORS_MAX, GUILDS_MAX = 16, 3  # Native's own bounds on one actor set.
+ACTORS_RETRY_S = 60  # An actor set that never reached the wire is tried again after this.
+
+
+def _kind(cmd):
+    return next((kind for kind, cls in protocol.COMMANDS.items() if type(cmd) is cls), "direct")
 
 
 @dataclass(slots=True)
@@ -62,6 +71,7 @@ class _Sent:
 class Realm:
     CAPACITY = 128
     COMPLETED = 256
+    SPAWN_CAPACITY = 64
 
     def __init__(self, app):
         self.app = app
@@ -81,6 +91,9 @@ class Realm:
         self._guild = 0
         self._human = 0
         self._parts = []
+        self.parts = {}
+        self._actors_ref = None  # "hello:<connection_epoch>" whose actor set went out
+        self._actors_due = 0.0
         self._handlers = set()
         self._children = set()
         self._pending = OrderedDict()
@@ -109,7 +122,7 @@ class Realm:
         self.bodies.add_holder_source("realm_actions", self.action_store.holds)
         self.queue = ActionQueue(self.ports.send, self.bodies, app.clock,
                                  store=self.action_store, context=self.action_context,
-                                 actor_probe=None)
+                                 actor_probe=self._actor_probe)
         self.recall = Recall(self.ports, self.queue, self.bodies, app.clock)
         self._raid_state = self.ports.raid_state()
         app.bodies = self.bodies
@@ -232,6 +245,102 @@ class Realm:
         self._parts.append((part, names))
         for name in sorted(names):
             self._register_event(name)
+
+    def part(self, name):
+        """The attached part of that name (parts.PART_MODULES), or None while it is absent."""
+        return self.parts.get(name)
+
+    def spawn(self, fn):
+        """Start fn(), an async callable, as an owned child nobody awaits; returns its task.
+
+        It starts only while the Realm is enabled, runs only while this generation and his
+        identity hold, is cancelled by every invalidation and drained by close, as the
+        announcer's sends are. Its failure is logged by type only. None when it did not start.
+        """
+        if not callable(fn):
+            raise TypeError("spawn takes an async callable")
+        valid = self._valid_ticket()
+        if not valid():
+            return None
+        if len(self._children) >= self.SPAWN_CAPACITY:
+            log.warning("realm_spawn_capacity")
+            return None
+
+        async def child():
+            if valid():
+                await fn()
+
+        def done(task):
+            self._children.discard(task)
+            if not task.cancelled() and task.exception() is not None:
+                log.warning("realm_spawn_failed: %s", type(task.exception()).__name__)
+
+        task = asyncio.create_task(child())
+        self._children.add(task)
+        task.add_done_callback(done)
+        return task
+
+    def actor_set(self):
+        """The complete actor set the rows hold, as one RealmActors for native; also the queue's
+        realm_off probe. Active realm_actor rows (gankers among them) and active rival guilds,
+        never him, a guild member, a former member or anyone he ever kicked (native would
+        refuse the whole set for one such guid). None when the rows exceed native's bounds."""
+        store = self.app.store
+        human = self.ports.human().guid
+        human = human if type(human) is int and 0 <= human <= _U32 else 0
+        with store.transaction():
+            excluded = actor_exclusions_in_unit(store, human_guid=human)
+            roster = {row[0] for row in store.conn.execute("SELECT guid FROM cast_member")}
+            actors = store.conn.execute(
+                "SELECT guid, role FROM realm_actor WHERE status='active' ORDER BY guid").fetchall()
+            guilds = [row[0] for row in store.conn.execute(
+                "SELECT id FROM realm_guild WHERE status='active' ORDER BY id")]
+        guids, gankers = [], []
+        for guid, role in actors:
+            if (type(guid) is not int or not 0 < guid <= _U32 or guid == human or guid in roster
+                    or guid in excluded):
+                log.warning("realm_actor_excluded guid=%s", guid if type(guid) is int else "?")
+                continue
+            guids.append(guid)
+            if role == "ganker":
+                gankers.append(guid)
+        guilds = [g for g in guilds if type(g) is int and 0 < g <= _U32 and g != self._guild]
+        if len(guids) > ACTORS_MAX or len(guilds) > GUILDS_MAX:
+            log.warning("realm_actors_invalid actors=%d guilds=%d", len(guids), len(guilds))
+            return None
+        return protocol.RealmActors(uuid.uuid4().hex, tuple(guids), tuple(gankers), tuple(guilds))
+
+    def _actor_probe(self):
+        """actor_set, but never the queue's or the Realm loop's failure."""
+        try:
+            return self.actor_set()
+        except Exception as error:
+            log.warning("realm_actors_unavailable: %s", type(error).__name__)
+            return None
+
+    def _upkeep(self):
+        """Once per valid hello, native's actor set (in memory only, so lost with each restart),
+        from an owned child. A set with nobody in it is not sent: native starts with none."""
+        if not self._presence_known or self._connection_epoch <= 0:
+            return
+        ref, now = f"hello:{self._connection_epoch}", self.ports.now()
+        if self._actors_ref != ref and now >= self._actors_due:
+            self._actors_ref = ref
+            cmd = self._actor_probe()
+            if cmd is not None and (cmd.guids or cmd.guilds):
+                task = self.spawn(lambda: self.ports.send(cmd))
+                if task is None:
+                    self._actors_ref, self._actors_due = None, now + ACTORS_RETRY_S
+                else:
+                    task.add_done_callback(lambda done: self._actors_settled(done, cmd, ref))
+
+    def _actors_settled(self, task, cmd, ref):
+        if self._actors_ref == ref and cmd.id not in self._pending and cmd.id not in self._completed:
+            # Never enrolled, so never on the wire: a later tick of this hello sends it again,
+            # after a pause when it failed rather than being cancelled.
+            failed = not task.cancelled() and task.exception() is not None
+            self._actors_ref = None
+            self._actors_due = self.ports.now() + ACTORS_RETRY_S if failed else 0.0
 
     async def _owned(self, operation):
         generation = self._generation
@@ -582,10 +691,16 @@ class Realm:
         self._raid_state = state
         self.recall.tick(self.ports.now())
         generation = self._generation
+        try:
+            self._upkeep()
+        except Exception as error:  # Never the Realm loop's failure.
+            log.warning("realm_upkeep_failed: %s", type(error).__name__)
         for part, _ in tuple(self._parts):
             if generation != self._generation or not self.enabled or self._stopping:
                 return
-            await self._owned(part.tick)
+            tick = getattr(part, "tick", None)
+            if tick is not None:
+                await self._owned(tick)
         if generation == self._generation and self.enabled and not self._stopping:
             self._guard_tick()
             await self.ports.speech_tick()
@@ -634,6 +749,11 @@ class Realm:
         if self.queue.owns_command(cmd):
             self.queue.before_send(cmd)
             return
+        direct = self.parts.get("direct")
+        if direct is not None and direct.owns_command(cmd):
+            # Its own committing barrier, last, so nothing refuses the command after it.
+            direct.before_send(cmd, context=self.action_context())
+            return
         if type(cmd) not in _DIRECT:
             raise ValueError("realm body command requires queue enrollment")
         classified = classify(cmd)
@@ -668,6 +788,12 @@ class Realm:
         if self.queue.on_ack(cmd, ack):
             self._queued_receipt(cmd.id, stage="ack", ok=ack.ok, reason=ack.error, ts=self.ports.now())
             return
+        direct = self.parts.get("direct")
+        if direct is not None and direct.on_ack(cmd, ack):
+            if type(ack.ok) is bool and type(ack.error) is str:
+                store.record_receipt(self.ports.conn, command_id=cmd.id, kind=_kind(cmd),
+                                     stage="ack", ok=ack.ok, reason=ack.error, ts=self.ports.now())
+            return
         if type(cmd) is protocol.GuildReadmit:
             self.guard.on_admission_ack(cmd, ack)  # Its receipt is recorded below, as any direct one.
         sent = self._pending.get(cmd.id)
@@ -686,6 +812,9 @@ class Realm:
             return
         if self.queue.on_send_error(cmd, error_type):
             return
+        direct = self.parts.get("direct")
+        if direct is not None and direct.on_send_error(cmd, error_type):
+            return
         if type(cmd) is protocol.GuildReadmit:
             self.guard.on_admission_send_error(cmd, error_type)
         sent = self._pending.get(cmd.id)
@@ -697,6 +826,12 @@ class Realm:
         if self.queue.on_realm_job(ev):
             return self._queued_receipt(ev.id, stage="job", ok=ev.state == "done", reason=ev.reason,
                                         value=ev.value, ts=ev.ts / 1000)
+        direct = self.parts.get("direct")
+        if direct is not None and direct.on_job(ev):
+            # The part reads the job's value (an event id, a count) itself; this is diagnostics.
+            store.record_receipt(self.ports.conn, command_id=ev.id, kind=ev.kind, stage="job",
+                                 ok=ev.state == "done", reason=ev.reason, value=ev.value, ts=ev.ts / 1000)
+            return True
         sent = self._pending.get(ev.id) or self._completed.get(ev.id)
         if (sent is None or not sent.expects_job or sent.job or ev.kind != sent.kind
                 or ev.pvp_owner):
@@ -738,4 +873,6 @@ def attach_realm(app) -> Realm:
     app.register_shutdown_receipt("job", realm.on_bot_job)
     app.register_shutdown_receipt("realm_pvp", realm.on_realm_pvp)
     app.register_shutdown_drain(realm.close)
+    build_parts(realm)
+    install_night(app, realm)
     return realm

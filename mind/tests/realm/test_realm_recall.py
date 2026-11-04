@@ -252,7 +252,8 @@ def test_native_off_fallback_only_eligible_bodies_then_rearm_on_clear(pipeline):
             h = pipeline
             h.cast(101, 102)
             h.realm.bodies.add_holder_source("retained", lambda: (BodyHold("foreign", "training", 2, {102}, True),))
-            h.realm.queue.off = True
+            # As native's realm_off answer leaves it: off, its actor-set probe 600 s away.
+            h.realm.queue.off, h.realm.queue._probe_at = True, h.clock.now() + 600
             h.realm.recall.tick(h.clock.now())
             await h.cycle()
             assert len(h.app.sent) == 1 and type(h.app.sent[0]) is BotDo and h.app.sent[0].guids == (101,)
@@ -269,7 +270,8 @@ def test_native_off_fallback_only_eligible_bodies_then_rearm_on_clear(pipeline):
             h.realm.queue.off = True
             h.realm.recall.tick(h.clock.now())
             await h.cycle(601)
-            assert len(h.app.sent) == 2 and h.realm.queue.actor_probe is None
+            # Disabled, not even the actor-set probe goes out.
+            assert len(h.app.sent) == 2 and not any(type(c) is p.RealmActors for c in h.app.sent)
     run(scenario())
 
 

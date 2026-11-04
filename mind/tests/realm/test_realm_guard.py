@@ -694,8 +694,8 @@ def _feed_ack(native, command_id, ok=True, error=""):
 
 
 async def _acker(native, readmit, say=None):
-    """Acks every say at once (with `say(body)`'s (ok, error) when given), and each
-    guild_readmit with `readmit` (ok, error)."""
+    """Acks every say at once (with `say(body)`'s (ok, error) when given), each
+    guild_readmit with `readmit` (ok, error), and the actor set sent at each hello."""
     seen = 0
     while True:
         lines = _lines(native)
@@ -704,6 +704,8 @@ async def _acker(native, readmit, say=None):
                 _feed_ack(native, body["id"], *(say(body) if say is not None else ()))
             elif body.get("type") == "guild_readmit" and readmit is not None:
                 _feed_ack(native, body["id"], *readmit)
+            elif body.get("type") == "realm_actors":
+                _feed_ack(native, body["id"])
         seen = len(lines)
         await asyncio.sleep(0)
 
