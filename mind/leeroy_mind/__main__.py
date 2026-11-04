@@ -1145,10 +1145,15 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
         from .nightly.cli import eval_main, nightly_main
         command = nightly_main if argv[0] == "nightly" else eval_main
         return command(argv[1:], make_llm=make_llm)
+    if argv and argv[0] == "console":
+        from .console.cli import main as console_main
+        return console_main(argv[1:])
     parser = argparse.ArgumentParser(prog="leeroy_mind")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("nightly", help="nightly status, trials, ledger and owner controls")
     sub.add_parser("eval", help="weekly evaluation on a copied database by default")
+    sub.add_parser("console", help="the guild console on http://127.0.0.1:7881/ (comms, the "
+                                   "mind's health, start and stop)")
     p_init = sub.add_parser("init", help="create the data dir and a default mind.toml")
     _add_data_dir(p_init)
     p_init.set_defaults(func=cmd_init)

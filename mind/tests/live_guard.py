@@ -1,6 +1,6 @@
 """The tests' guard against the owner's live services. conftest arms it for every test.
 
-The live bridge (and the voice service on 7879) takes one mind and hands it every event it buffered; Ollama runs the owner's
+The live bridge (and the voice service on 7879 and 7880) takes one mind and hands it every event it buffered; Ollama runs the owner's
 models; mind-data holds his guild. A test, or a regression in one, that reaches any of them
 gets LiveServiceTouched *before* the connection, the open or the launch happens. The hit is also
 recorded and fails the test at teardown, so app code that swallows the exception (a worker's
@@ -43,6 +43,7 @@ from pathlib import Path
 import pytest
 
 from leeroy_mind import config
+from leeroy_mind.console import VOICE_UI_PORT
 from leeroy_mind.voice.config import VoiceCfg
 
 # default_data_dir() when LEEROY_MIND_DATA is not set: the package-relative mind-data
@@ -79,10 +80,11 @@ def norm(p) -> str:
 
 
 def live_ports() -> dict[int, str]:
-    """The bridge's and Ollama's ports, from the defaults the service would use."""
+    """The bridge's and Ollama's ports, from the defaults the service would use, and the voice
+    service's two (the mind's and its page's, which the guild console opens)."""
     defaults = tomllib.loads(config.DEFAULT_TOML)
     ollama = urllib.parse.urlsplit(defaults["ollama"]["url"])
-    return {defaults["bridge"]["port"]: "live", VoiceCfg().port: "live",
+    return {defaults["bridge"]["port"]: "live", VoiceCfg().port: "live", VOICE_UI_PORT: "live",
             ollama.port or 80: "ollama"}
 
 

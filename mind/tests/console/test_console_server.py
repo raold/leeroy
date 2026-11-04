@@ -1,0 +1,288 @@
+"""The console's server: the key, the Origin and Host checks, the routes, the control rules and
+the event stream. A real server on a free port; the mind, voice and probes are fakes."""
+import asyncio
+import base64
+import hashlib
+import re
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
+
+import pytest
+
+from leeroy_mind.console import status
+from leeroy_mind.console.control import Controls
+from console.rig import KEY, FakeMind, events, http, make_app, running
+
+
+@pytest.fixture
+def data(store):
+    """The store fixture's tmp dir holds a migrated mind.db: the data dir."""
+    return store.conn.execute("PRAGMA database_list").fetchone()["file"] and \
+        __import__("pathlib").Path(store.conn.execute("PRAGMA database_list").fetchone()["file"]).parent
+
+
+@asynccontextmanager
+async def served(app):
+    await app.start()
+    try:
+        yield app
+    finally:
+        await app.close()
+
+
+def run(coro):
+    return asyncio.run(coro)
+
+
+# -- the gate ------------------------------------------------------------------------------------
+
+def test_every_request_needs_the_console_host(data):
+    async def go():
+        async with served(make_app(data)) as app:
+            for host in ("localhost:%d" % app.s.port, "evil.example", "127.0.0.1:1"):
+                r = await http(app, "GET", "/api/state", host=host)
+                assert r.status == 403 and b"served at" in r.body
+            r = await http(app, "GET", "/api/state",
+                           headers={"Host": f"127.0.0.1:{app.s.port}"})  # a second Host
+            assert r.status == 403
+    run(go())
+
+
+def test_the_key_comes_from_the_url_once_then_the_cookie(data):
+    async def go():
+        async with served(make_app(data)) as app:
+            assert (await http(app, "GET", "/", cookie=False)).status == 403
+            assert (await http(app, "GET", "/api/state", cookie=False)).status == 403
+            assert (await http(app, "GET", "/?key=wrong", cookie=False)).status == 403
+            r = await http(app, "GET", f"/?key={KEY}", cookie=False)
+            assert r.status == 303 and r.header("location") == "/"
+            cookie = r.header("set-cookie")
+            assert cookie.startswith(f"{app.cookie}={KEY};")
+            assert "HttpOnly" in cookie and "SameSite=Strict" in cookie and "Path=/" in cookie
+            page = await http(app, "GET", "/")
+            assert page.status == 200 and page.header("content-type").startswith("text/html")
+            assert (await http(app, "GET", "/api/state")).status == 200
+    run(go())
+
+
+def test_a_wrong_cookie_is_refused(data):
+    async def go():
+        async with served(make_app(data)) as app:
+            r = await http(app, "GET", "/api/state", cookie=False,
+                           headers={"Cookie": f"{app.cookie}=not-the-key"})
+            assert r.status == 403
+            r = await http(app, "GET", "/api/state", cookie=False,
+                           headers={"Cookie": f"leeroy_console_1={KEY}"})  # another console's
+            assert r.status == 403
+    run(go())
+
+
+def test_another_origin_or_site_is_refused_even_with_the_key(data):
+    async def go():
+        async with served(make_app(data)) as app:
+            r = await http(app, "GET", "/api/state", origin="http://127.0.0.1:7880")
+            assert r.status == 403 and b"another origin" in r.body
+            for site in ("cross-site", "same-site"):
+                r = await http(app, "GET", "/api/state", headers={"Sec-Fetch-Site": site})
+                assert r.status == 403
+            for site in ("same-origin", "none"):
+                assert (await http(app, "GET", "/api/state",
+                                   headers={"Sec-Fetch-Site": site})).status == 200
+            assert (await http(app, "GET", "/api/state", origin=True)).status == 200
+    run(go())
+
+
+def test_a_change_needs_both_the_key_and_the_origin(data):
+    mind = running(data)
+    async def go():
+        async with served(make_app(data, mind=mind)) as app:
+            body = {"service": "mind", "action": "restart"}
+            assert (await http(app, "POST", "/api/control", body=body)).status == 403
+            assert (await http(app, "POST", "/api/control", body=body, cookie=False,
+                               origin=True)).status == 403
+            r = await http(app, "POST", "/api/control", body=b"service=mind", origin=True,
+                           headers={"Content-Type": "application/x-www-form-urlencoded"})
+            assert r.status == 415
+            assert mind.acts == []
+            r = await http(app, "POST", "/api/control", body=body, origin=True)
+            assert r.status == 200 and r.json()["ok"] and mind.acts == ["restart"]
+    run(go())
+
+
+def test_methods_other_than_get_and_post_are_refused(data):
+    async def go():
+        async with served(make_app(data)) as app:
+            for method in ("OPTIONS", "PUT", "DELETE", "HEAD"):
+                r = await http(app, method, "/api/control", origin=True)
+                assert r.status == 405
+                assert r.header("access-control-allow-origin") is None
+            assert (await http(app, "GET", "/api/control")).status == 405
+            assert (await http(app, "GET", "/nothing")).status == 404
+    run(go())
+
+
+def test_bad_requests_get_short_answers(data):
+    async def go():
+        async with served(make_app(data)) as app:
+            r = await http(app, "POST", "/api/control", body=b"{not json", origin=True)
+            assert r.status == 400
+            r = await http(app, "POST", "/api/control", body=b"x" * 20000, origin=True)
+            assert r.status == 413
+    run(go())
+
+
+def test_the_page_carries_a_strict_policy_matching_its_inline_blocks(data):
+    async def go():
+        async with served(make_app(data)) as app:
+            r = await http(app, "GET", "/")
+            csp = r.header("content-security-policy")
+            html = r.body.decode()
+            for tag in ("script", "style"):
+                for block in re.findall(rf"<{tag}>(.*?)</{tag}>", html, re.S):
+                    digest = base64.b64encode(hashlib.sha256(block.encode()).digest()).decode()
+                    assert f"'sha256-{digest}'" in csp
+            assert "unsafe-inline" not in csp and "connect-src 'self'" in csp
+            assert "frame-ancestors 'none'" in csp and r.header("x-frame-options") == "DENY"
+            assert r.header("referrer-policy") == "same-origin"  # a POST keeps its Origin
+            assert "http://" not in html.split("<script>")[1]  # it loads nothing from elsewhere
+    run(go())
+
+
+# -- control -------------------------------------------------------------------------------------
+
+def test_no_control_refuses_and_launches_nothing(data):
+    mind = running(data)
+    controls = Controls(enabled=False, reason="process control is off (--no-control)",
+                        mind=mind, voice=SimpleNamespace(act=lambda a: pytest.fail("voice")))
+    async def go():
+        async with served(make_app(data, mind=mind, controls=controls)) as app:
+            for service in ("mind", "voice"):
+                for action in ("start", "stop", "restart"):
+                    r = await http(app, "POST", "/api/control", origin=True,
+                                   body={"service": service, "action": action, "confirm": True})
+                    assert r.status == 403 and "--no-control" in r.json()["error"]
+            state = (await http(app, "GET", "/api/state")).json()
+            assert state["status"]["control"]["enabled"] is False
+    run(go())
+    assert mind.acts == []
+
+
+def test_stop_while_in_game_asks_first(data, store):
+    sid = store.start_session(1000.0)
+    mind = running(data)
+    async def go():
+        app = make_app(data, mind=mind, tcp=lambda: [
+            SimpleNamespace(state=5, remote_port=7878, remote="127.0.0.1", pid=101)])
+        async with served(app):
+            assert app.game.state == status.IN_GAME and app.game.since == 1000.0
+            for action in ("stop", "restart"):
+                r = await http(app, "POST", "/api/control", origin=True,
+                               body={"service": "mind", "action": action})
+                assert r.status == 409 and r.json()["confirm"].startswith("You're in game.")
+            assert mind.acts == []
+            r = await http(app, "POST", "/api/control", origin=True,
+                           body={"service": "mind", "action": "stop", "confirm": True})
+            assert r.status == 200 and mind.acts == ["stop"]
+            r = await http(app, "POST", "/api/control", origin=True,
+                           body={"service": "voice", "action": "stop"})
+            assert r.status == 409 and "comms go silent" in r.json()["confirm"]
+    run(go())
+    assert sid
+
+
+def test_stop_needs_no_question_when_he_is_not_in_game(data):
+    mind = running(data)
+    async def go():
+        app = make_app(data, mind=mind, tcp=lambda: [
+            SimpleNamespace(state=5, remote_port=7878, remote="127.0.0.1", pid=101)])
+        async with served(app):
+            assert app.game.state == status.NOT_IN_GAME
+            r = await http(app, "POST", "/api/control", origin=True,
+                           body={"service": "mind", "action": "stop"})
+            assert r.status == 200 and mind.acts == ["stop"]
+    run(go())
+
+
+# -- the strip, voice and the stream -------------------------------------------------------------
+
+def test_a_down_mind_is_never_shown_as_not_in_game(data, store):
+    store.start_session(1000.0)  # a crash left it open
+    async def go():
+        async with served(make_app(data, mind=FakeMind(data))) as app:
+            st = (await http(app, "GET", "/api/state")).json()["status"]
+            assert st["mind"]["state"] == "stopped"
+            assert st["game"] == {"state": "unknown", "reason": "the mind is not running",
+                                  "since": None}
+            assert st["voice"] == {"enabled": False, "service": False, "link": None}
+    run(go())
+
+
+def test_a_join_says_what_is_true_when_it_cannot_be_asked(data):
+    async def go():
+        async with served(make_app(data, mind=running(data))) as app:
+            r = await http(app, "POST", "/api/voice", origin=True,
+                           body={"type": "join", "channel": "raid"})
+            assert r.status == 409 and r.json()["error"] == "The voice service is not running."
+            r = await http(app, "POST", "/api/voice", origin=True, body={"type": "mute",
+                                                                         "guid": 101, "on": True})
+            assert r.status == 409 and "not running" in r.json()["error"]
+            r = await http(app, "POST", "/api/voice", origin=True, body={"type": "speak"})
+            assert r.status == 400
+    run(go())
+
+
+def test_the_stream_starts_with_a_snapshot(data):
+    async def go():
+        async with served(make_app(data)) as app:
+            (kind, snap), = await events(app)
+            assert kind == "snapshot"
+            assert set(snap) == {"status", "voice", "chat"}
+            assert snap["voice"] is None and snap["chat"] == []
+            r = await http(app, "GET", "/api/events", cookie=False)
+            assert r.status == 403
+    run(go())
+
+
+def test_the_stream_carries_later_events(data):
+    async def go():
+        async with served(make_app(data)) as app:
+            reader = asyncio.create_task(events(app, count=2))
+            for _ in range(100):
+                if app._subs:
+                    break
+                await asyncio.sleep(0.02)
+            await asyncio.sleep(0.05)
+            app.broadcast("control", {"service": "mind", "action": "start", "phase": "running"})
+            got = await reader
+            assert got[1] == ("control", {"service": "mind", "action": "start",
+                                          "phase": "running"})
+        assert not app._subs
+    run(go())
+
+
+def test_health_is_read_only_and_content_free(data):
+    logs = data / "logs"
+    logs.mkdir(exist_ok=True)
+    (logs / "mind.log").write_text(
+        '{"ts": "2026-11-04T21:00:00.000+00:00", "level": "INFO", "event": "say_sent", '
+        '"guid": 101, "kind": "greet", "topic": "a private word", "detail": "said hi"}\n'
+        '{"ts": "2026-11-04T21:00:01.000+00:00", "level": "ERROR", "event": "tick_failed", '
+        '"exc": "Traceback...\\nValueError: secret text here"}\n', encoding="utf-8")
+    seen = {}
+
+    def ollama(url, roles):
+        seen["url"] = url
+        return {"ok": True, "url": url, "models": [{"name": "m", "role": "live"}]}
+    async def go():
+        async with served(make_app(data, ollama=ollama,
+                                   ollama_url="http://127.0.0.1:1")) as app:
+            h = (await http(app, "GET", "/api/health")).json()
+            assert seen["url"] == "http://127.0.0.1:1"
+            assert h["ollama"]["models"][0]["role"] == "live"
+            assert h["gpu"]["ok"] is False
+            text = repr(h["log"]) + repr(h["errors"])
+            assert "private" not in text and "said hi" not in text and "secret" not in text
+            assert h["log"][0]["fields"] == {"guid": 101, "kind": "greet"}
+            assert h["errors"][0]["exc"] == "ValueError"
+            assert h["voice"]["detail"] == "no voice venv in this checkout"
+    run(go())

@@ -459,6 +459,7 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 .venv/Scripts/python -m leeroy_mind.library --data-dir "$D" stats   # the game library: build, search
 .venv/Scripts/python -m leeroy_mind nightly --data-dir "$D" status  # also run, ledger, undo, enrich, veto
 .venv/Scripts/python -m leeroy_mind eval --data-dir "$D"    # weekly evaluation, on a copied database by default
+.venv/Scripts/python -m leeroy_mind console --data-dir "$D" # the guild console; open the URL it prints
 .venv/Scripts/python -m pytest -q                           # the unit tests
 .venv/Scripts/python -m pytest -m ollama                    # optional: also -m live, -m mysql
 ```
@@ -488,6 +489,18 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 - Guild life (raid nights, DKP and loot, offline raids, rank, spec and gear
   upkeep) runs with built-in defaults; `[guild]` and `[dkp]` tables in
   `mind.toml` override them.
+- The guild console (`leeroy_mind/console/`) is a process of its own on
+  `127.0.0.1:7881` (`--port`). It prints `http://127.0.0.1:7881/?key=...`; the
+  key changes at each start and becomes a cookie. Every request needs the
+  console's Host, and its Origin when the browser sends one; a change (POST)
+  always needs both the key and the Origin. It reads mind.db, mind.log and
+  mind.toml read-only and talks to the voice service through the voice page's
+  own socket. Start, restart and stop use `leeroy_mind/lifecycle.py`, the rules
+  `scripts/ac-mind.py` uses, so only this checkout's own mind venv may control
+  the mind (`--root` names another checkout). `--no-control` turns start,
+  restart and stop off. The owner's game state is the running mind's open
+  session; while the mind or its bridge is down it is shown as unknown, never
+  "not in game".
 
 ## The voice service (`leeroy-voice`)
 
