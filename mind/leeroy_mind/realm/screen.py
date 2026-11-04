@@ -118,13 +118,9 @@ def insults_a_group(text: str) -> bool:
     """A group noun within GROUP_WINDOW words of an insult, either side."""
     folded = _fold(text)
     groups = _token_spans(folded, _GROUP_RE)
-    if not groups:
-        return False
-    for a, b in groups:
-        for c, d in _token_spans(folded, _INSULT_RE):
-            if (c - b if c > b else a - d if a > d else 0) <= GROUP_WINDOW:
-                return True
-    return False
+    insults = _token_spans(folded, _INSULT_RE) if groups else []
+    return any((c - b if c > b else a - d if a > d else 0) <= GROUP_WINDOW
+               for a, b in groups for c, d in insults)
 
 
 def flirts(text: str) -> bool:
