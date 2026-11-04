@@ -14,9 +14,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "mind"))
 
-from leeroy_mind.lifecycle import (  # noqa: E402  (this checkout's own module)
-    OwnershipError, Outcome, Process, WindowsProcesses, canonical, family, launch_problem,
-    matches, mind_action, run_action, spawn_mind)
+try:
+    from leeroy_mind.lifecycle import (  # this checkout's own module
+        OwnershipError, Outcome, Process, WindowsProcesses, canonical, family, launch_problem,
+        matches, mind_action, run_action, spawn_mind)
+except Exception as exc:  # main() reports it in one line, as it reports every other failure
+    _UNLOADED = exc
+else:
+    _UNLOADED = None
 
 __all__ = ["OwnershipError", "Outcome", "Process", "WindowsProcesses", "canonical", "family",
            "launch_problem", "matches", "mind_action", "run_action", "spawn_mind", "main"]
@@ -28,6 +33,10 @@ def main(argv=None):
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--data-dir", type=Path, required=True)
     args = parser.parse_args(argv)
+    if _UNLOADED is not None:
+        print(f"mind: {type(_UNLOADED).__name__}; no unverified process was stopped",
+              file=sys.stderr)
+        return 1
     if os.name != "nt":
         parser.error("mind process control is supported only on Windows")
     root, data = args.root.resolve(), args.data_dir.resolve()

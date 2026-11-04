@@ -159,3 +159,20 @@ def test_explicit_equals_data_argument_is_recognized(rig):
     args = launcher.argv[:4] + ("--data-dir=" + str(data), "--log-level", "INFO")
     row = control.Process(100, 20, 1110, str(python), args)
     assert control.matches(row, python, base, data)
+
+
+def test_a_checkout_whose_lifecycle_will_not_load_fails_in_one_line(tmp_path):
+    """The script imports this checkout's leeroy_mind.lifecycle as it loads. When that fails it
+    says so in its one-line form, never with a traceback (as before the module moved)."""
+    import subprocess
+    script = tmp_path / "scripts" / "ac-mind.py"
+    script.parent.mkdir()
+    script.write_bytes(PATH.read_bytes())
+    package = tmp_path / "mind" / "leeroy_mind"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")  # no lifecycle.py
+    result = subprocess.run([sys.executable, "-I", str(script), "status", "--root", str(tmp_path),
+                             "--data-dir", str(tmp_path / "mind-data")],
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 1 and result.stdout == ""
+    assert result.stderr == "mind: ModuleNotFoundError; no unverified process was stopped\n"
