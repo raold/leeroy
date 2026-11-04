@@ -24,9 +24,13 @@ answer(ev) gives his Trade line naming a rival guild or officer one answer from 
 gz(fact) a grudging gz after a server-wide kill, once per fact. Both keep the hourly caps and
 raid silence (gz the three-in-a-row rule too) but not the 180 s gap: an answer that waited
 would answer nothing. Both need an officer whose record already says a Trade city.
-Every line is composed by one BACKGROUND call on the live model (ports.llm_line, from a spawned
-child: a tick never awaits a model), repaired as the pipeline repairs, then screened. A failed
-screen drops the line (realm_line_dropped id=<n> reason=<r>) and tries once more. Every line is
+boast(guild, fact) is the race's hook after a benchmark loss: that guild boasts in Trade once,
+rationed as a gz, at the first tick within a day that allows it.
+A rival's Trade line is one of last night's beats for its guild (night.beat_lines_in_unit) while
+one is left unsaid, screened again; otherwise, and for every other line, it is composed by one
+BACKGROUND call on the live model (ports.llm_line, from a spawned child: a tick never awaits a
+model), repaired as the pipeline repairs, then screened. A failed screen drops the line
+(realm_line_dropped id=<n> reason=<r>) and tries once more, composed. Every line is
 stored in realm_line; one that passes goes out once, as RealmSay through the DirectLedger (owner
 "speech", ref line:<id>), and its row follows the ledger: sent, refused or unknown, never sent
 again. A refusal rests the officer a while; not_in_city also clears his place record.
@@ -78,6 +82,7 @@ MOMENT_CHANCE = 1 / 12
 REST_S = 600  # an officer native refused (or a move of his did) rests this long
 MOVE_TIMEOUT_S = 600  # a move with no outcome by then no longer holds up its guild
 OFFLINE_PASS_S = 3600
+BEAT_FRESH_S = 2 * LIMITS.day_s  # a night's beats are for the day after it
 OFFICER_CARD_TOKENS, GUILD_CARD_TOKENS = 120, 150
 _CARD_BYTES = 64 * 1024
 _REMEMBER = 256
@@ -139,6 +144,7 @@ class _Spec:
     situation: str
     fact: object = None
     sketch: str = ""
+    line: str = ""  # a line written already (a night's beat): screened again, never composed
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,6 +268,7 @@ class Speech:
         self._next_moment = 0.0
         self._gz = OrderedDict()
         self._answered = OrderedDict()
+        self._boasts = OrderedDict()  # fact id -> (guild, fact, until), None once said or given up
         self._noted = set()
 
     # -- what it reads -----------------------------------------------------------------------
@@ -384,6 +391,7 @@ class Speech:
             return
         self._passes(context, now)
         self._position(now)
+        self._boast_due(now)
         if now >= self._next_moment:
             self._next_moment = now + MOMENT_S
             if self._rng.random() < self.moment_chance:
@@ -507,7 +515,7 @@ class Speech:
                 if speaker is not None:
                     return "trade" if self._rival(speaker, "trade", "rival", (
                         "Say one line in Trade, as your guild's officer would: your raids, "
-                        "recruiting, gear, or the news above.")) else None
+                        "recruiting, gear, or the news above."), line=self._beat(guild, now)) else None
                 if self._place_officer(guild, now):
                     return "moving"
                 continue
@@ -598,6 +606,60 @@ class Speech:
             return False
         return False
 
+    def boast(self, guild, fact):
+        """The race's hook after a benchmark loss: that guild boasts in Trade, once per fact, at
+        the first tick within a day whose rules allow it (rationed as a gz). Never awaits."""
+        fact_id = getattr(fact, "id", None)
+        if type(guild) is not int or type(fact_id) is not int or fact_id in self._boasts:
+            return False
+        self._boasts[fact_id] = (guild, fact, self.realm.ports.now() + LIMITS.day_s)
+        while len(self._boasts) > _REMEMBER:
+            self._boasts.popitem(last=False)
+        return True
+
+    def _boast_due(self, now):
+        for fact_id, pending in tuple(self._boasts.items()):
+            if pending is None:
+                continue
+            guild, fact, until = pending
+            outcome = "never" if now > until else self._boast_now(guild, fact, now)
+            if outcome != "wait":
+                self._boasts[fact_id] = None
+            if outcome != "never":
+                return  # One at a time: started, or nothing may be said now.
+
+    def _boast_now(self, guild, fact, now):
+        if guild not in {g for g, _ in self._guilds()}:
+            return "never"  # Not a guild that speaks.
+        if self._live() is None or not self._may_talk():
+            return "wait"
+        ration = self._ration(now)
+        if not ration.realm_ok() or not ration.run_ok(self._break) or not ration.guild_ok(guild):
+            return "wait"
+        speaker = next((o for o in self._officers(now, guild) if self._in_city(o)), None)
+        if speaker is None:
+            return "wait"
+        situation = (f"That player's guild was just told: \"{self._veil(fact.text)}\". "
+                     "Boast about it in Trade, one line.")
+        return "started" if self._rival(speaker, "trade", "rival", situation, fact=fact) else "wait"
+
+    def _beat(self, guild, now):
+        """The next of the guild's beats from the newest night (night.beat_lines_in_unit) that
+        no realm_line has said or dropped yet; "" when none is left or they are stale."""
+        from .night import beat_lines_in_unit
+        store = self._store()
+        try:
+            with store.transaction():
+                for fact in beat_lines_in_unit(store, guild, human=self.realm.ports.human()):
+                    if now - fact.ts > BEAT_FRESH_S:
+                        continue
+                    if store.conn.execute("SELECT 1 FROM realm_line WHERE guild=? AND text=? AND ts>=? LIMIT 1",
+                                          (guild, fact.text, fact.ts)).fetchone() is None:
+                        return fact.text
+        except Exception as error:  # A night's lines are a bonus: composing still works.
+            log.debug("realm_speech_beats_unavailable error=%s", type(error).__name__)
+        return ""
+
     def member_trade(self, guid, name, sketch, line):
         """A member's own Trade answer to a rival line, for talk; stored only in realm_line."""
         context = self._live()
@@ -608,11 +670,12 @@ class Speech:
         return self._start(_Spec("member", "member", guid, name, context.guild, "", "trade", 0, 0,
                                  situation, sketch=sketch))
 
-    def _rival(self, officer, channel, kind, situation, *, fact=None):
+    def _rival(self, officer, channel, kind, situation, *, fact=None, line=""):
         to_guid = self.realm.ports.human().guid if channel == "whisper" else 0
         zone = self._zone_of(officer.place) or 0
         return self._start(_Spec(kind, "officer", officer.guid, officer.name, officer.guild,
-                                 officer.guild_name, channel, to_guid, zone, situation, fact=fact))
+                                 officer.guild_name, channel, to_guid, zone, situation, fact=fact,
+                                 line=line))
 
     @staticmethod
     def _remember(seen, key):
@@ -672,8 +735,9 @@ class Speech:
         return repair(_one_line(text), speaker=spec.name) or None
 
     async def _deliver(self, spec):
-        for _ in range(2):  # One retry after a failed screen.
-            text = await self.compose(spec)
+        written = spec.line
+        for _ in range(2):  # One retry after a failed screen, composed.
+            text, written = written or await self.compose(spec), ""
             if text is None:
                 return
             reason = self.screen.check(text, speaker_kind=spec.speaker_kind)

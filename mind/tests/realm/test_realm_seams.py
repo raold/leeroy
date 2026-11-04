@@ -21,7 +21,11 @@ from test_realm_canon import KILLS as CANON_KILLS, Harness as CanonHarness, appr
 from test_realm_direct import LIVE, PROCESS
 from test_realm_mail import Always
 from test_realm_night import Rig as NightRig
-from test_realm_race import DAY, RIVALS, T0, _training_ports, at, guild_kill
+from test_realm_race import DAY, RIVALS, T0, _training_ports, at, benchmark, guild_kill, guild_pull
+from test_realm_speech import (OTHERGUILD, TESTGUILD, VEX, FakeLLM as SpeechLLM, lines as speech_lines,
+                               make_app as speech_app, place as speech_place, retire as speech_retire,
+                               says as speech_says, speak as speech_speak, start as speech_start,
+                               step as speech_step)
 from test_realm_rivals import (approved as rivals_approved, connect, finish, grows, kinds, live_realm,
                                plan_of, pump, seed_roster, step_row, with_cards)
 
@@ -307,3 +311,61 @@ def test_the_night_writes_letters_through_the_post_office(tmp_path, store, clock
     # The sender's one private memory of it is the post office's, never a second one from the night.
     assert [(c.owner, c.key, c.scope, c.scope_with) for c in remembered] == [
         (102, f"realm-mail:{letter}", "private", 1)]
+
+
+# -- item 3: speech says the night's beats, screened again -------------------------------------------
+
+BEATS = ["LF2M for ICC 25 tonight, tanks and healers.", "Lich King next week, mark it."]
+
+
+def test_speech_says_the_nights_beats_and_screens_them_again(tmp_path, store, clock, monkeypatch):
+    s = speech_app(tmp_path, store, clock, monkeypatch, llm=SpeechLLM("composed by the live model"))
+    speech_place(store, VEX, "uc_bank")
+    speech_retire(store, OTHERGUILD)
+    rig = NightRig(store, tmp_path)
+    run(night.run_units(rig.ctx({"realm_beat": [{"lines": BEATS}]}), [f"beat:{TESTGUILD}"]))
+    with store.transaction():
+        assert [f.text for f in night.beat_lines_in_unit(store, TESTGUILD, human=rig.ctx().ident)] == BEATS
+    # After the night, a word of the first beat joins the blocklist: speech screens it again.
+    (tmp_path / "realm" / "blocklist.txt").write_text("blockedword\ntanks\n", encoding="utf-8")
+
+    async def go():
+        await speech_start(s)
+        assert await speech_speak(s) == "trade"   # the first beat is dropped, a composed line goes
+        assert [line.text for line in speech_says(s, "trade")] == ["composed by the live model"]
+        assert len(s.llm.calls) == 1
+        await clock.advance(200, step=200)
+        assert await speech_speak(s) == "trade"   # the second beat, as the night wrote it
+        assert [line.text for line in speech_says(s, "trade")][1:] == [BEATS[1]]
+        assert len(s.llm.calls) == 1                # no model call for a beat
+        await s.realm.close()
+    run(go())
+    said = [(r["text"], r["state"], r["reason"]) for r in speech_lines(store)]
+    assert said == [(BEATS[0], "dropped", "blocklist"), ("composed by the live model", "sent", None),
+                    (BEATS[1], "sent", None)]
+
+
+# -- item 4: a benchmark loss makes its rival boast ------------------------------------------------
+
+def test_a_benchmark_loss_makes_the_rival_boast_in_trade(tmp_path, store, clock, monkeypatch):
+    s = speech_app(tmp_path, store, clock, monkeypatch, llm=SpeechLLM("too slow, as always"))
+    speech_place(store, VEX, "uc_bank")
+    speech_retire(store, OTHERGUILD)
+    at(clock, T0)
+    guild_kill(store, T0 - DAY, boss=0)
+    guild_pull(store, "his:1", T0 - 10 * DAY, 300.0, boss=0)
+    race = s.realm.part("race")
+
+    async def go():
+        await speech_start(s)
+        assert race.on_benchmark(benchmark(1, clock.now(), guild=TESTGUILD, kills=((0, 250.0),))) == "counted"
+        await speech_step(s)                      # the boast, at the speech part's next tick
+        [line] = speech_says(s, "trade")
+        assert (line.guid, line.text) == (VEX, "too slow, as always")
+        prompt = s.llm.calls[0]["messages"][-1]["content"]
+        assert "faster than us" in prompt and "Lord Marrowgar" in prompt
+        await speech_step(s, 3)                   # once per loss
+        assert len(speech_says(s, "trade")) == 1
+        await s.realm.close()
+    run(go())
+    assert [(r["kind"], r["state"]) for r in speech_lines(store)] == [("rival", "sent")]
