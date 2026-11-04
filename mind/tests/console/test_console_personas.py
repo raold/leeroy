@@ -81,9 +81,9 @@ def cast(store):
                        hair_length="short", hair_style="neat", skin_tone="fair",
                        eye_colour="green", face=("glasses",), at_the_pc="a grey hoodie")
 
-    def enrich(st):
+    def looks_pass(st):  # as the night's looks pass commits a persona with its unit
         _save(st, replace(load_persona(st, 305), appearance=looks), "generated", NOW - DAY + 0.4)
-    commit_unit(store, "2026-10-28", "enrich", "305", enrich, now=NOW - DAY)
+    commit_unit(store, "2026-10-28", personaview.LOOKS_STAGE, "305", looks_pass, now=NOW - DAY)
     with store.transaction():
         store.conn.execute("INSERT INTO persona_core(guid, json, card, card_tokens, version, "
                            "source, updated) VALUES (307, '{\"schema\": 99}', '', 0, 4, "

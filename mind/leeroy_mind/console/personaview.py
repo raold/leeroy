@@ -4,8 +4,8 @@ connection that is closed again). The mind writes these rows; the console only r
 - cast_member (the roster) and persona_core: each stored persona (personas.io.save_persona),
   its version (1, then one more per write that changed it), when it was saved and its source:
   seed (`personas seed`), owner (`personas import`, `rebalance-stances`, `fix-typing`) or
-  generated, which three writers share: `personas generate`; the night's looks pass
-  (nightly.enrich), which commits the persona with its night_step unit enrich/<guid>; and a
+  generated, which three writers share: `personas generate`; the night's looks pass, which
+  commits the persona together with its own night_step unit (LOOKS_STAGE, <guid>); and a
   stance move (nightly.attraction, live or at night), saved at the instant of its stance_band
   ledger row, or of the undo row when the owner undid one. `by` names the writer from those
   rows, and a generated write that matches neither is the generator's;
@@ -29,6 +29,7 @@ life or real name. A part whose table this mind.db lacks (an older schema) is No
 table is listed in `missing`; a part with no rows yet is empty or None, never zeros."""
 import json
 
+from leeroy_mind.nightly.enrich import STAGE as LOOKS_STAGE  # the looks pass's stage
 from leeroy_mind.nightly.mood import octant
 from leeroy_mind.nightly.motives import TRAITS
 from leeroy_mind.personas.schema import persona_from_dict, persona_to_dict
@@ -40,7 +41,7 @@ RECENT_DAYS = 7
 TIES = 3            # ties in the roster
 DETAIL_TIES = 40    # ties in a member's detail
 LEDGER = 25         # ledger rows in a member's detail
-ENRICH_S = 60.0     # a looks pass saves its persona this soon after its unit's time, at most
+LOOKS_S = 60.0      # a looks pass saves its persona this soon after its unit's time, at most
 TABLES = ("cast_member", "persona_core", "pad_mood", "guild_mood", "relationship", "memory",
           "persona_ledger", "trait_state")
 _SCORED = ("affinity != 0 OR trust != 0 OR respect != 0 OR attraction != 0 "
@@ -62,15 +63,16 @@ def _persona(js):
 
 
 def _writers(conn, have) -> tuple[dict, dict]:
-    """((guid, ts) -> stance or undo, guid -> [enrich unit times]): what placed a generated
-    persona write."""
+    """((guid, ts) -> stance or undo, guid -> [its looks pass units' times]): what placed a
+    generated persona write."""
     moves, looks = {}, {}
     if "persona_ledger" in have:
         for r in conn.execute("SELECT guid, ts, kind FROM persona_ledger "
                               "WHERE kind IN ('stance_band', 'undo')"):
             moves[(r["guid"], r["ts"])] = "stance" if r["kind"] == "stance_band" else "undo"
     if "night_step" in have:
-        for r in conn.execute("SELECT unit, finished FROM night_step WHERE stage = 'enrich'"):
+        for r in conn.execute("SELECT unit, finished FROM night_step WHERE stage = ?",
+                              (LOOKS_STAGE,)):
             if str(r["unit"]).isdigit():
                 looks.setdefault(int(r["unit"]), []).append(r["finished"])
     return moves, looks
@@ -81,7 +83,7 @@ def _by(guid, source, updated, moves, looks) -> str:
         return source  # seed or owner
     if (guid, updated) in moves:
         return moves[(guid, updated)]
-    if any(t <= updated <= t + ENRICH_S for t in looks.get(guid, ())):
+    if any(t <= updated <= t + LOOKS_S for t in looks.get(guid, ())):
         return "night"
     return "generator"
 
