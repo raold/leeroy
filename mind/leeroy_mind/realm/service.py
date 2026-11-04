@@ -19,6 +19,7 @@ from . import protocol, store
 from .action_policy import classify
 from .action_store import ActionStore
 from .actions import ActionContext, ActionQueue
+from .announce import Announcer
 from .config import load_realm_config
 from .fact_store import FactStore, FactWriteRejected
 from .kill_retention import PrivateKillRejected, PrivateKillStore
@@ -36,8 +37,9 @@ JOB_COMMANDS = frozenset({
     "calendar_signup", "mail_send", "bank_deposit", "bank_withdraw",
     "bank_stock", "guild_grow", "arena_team", "item_count", "calendar_post",
 })
+# Announce is not here: only the announcer's own prepared row may reach the system channel.
 _DIRECT = frozenset({protocol.RealmActors, protocol.RealmSay, protocol.RealmEmote,
-                     protocol.Announce, protocol.CalendarUpdate, protocol.BankMoney,
+                     protocol.CalendarUpdate, protocol.BankMoney,
                      protocol.GuildRename, protocol.ItemCount})
 _SOURCES = frozenset({BgEnd, protocol.ArenaEnd, protocol.Wg, protocol.PvpKill,
                       protocol.ChannelChat, protocol.RealmKill})
@@ -88,9 +90,11 @@ class Realm:
         self.ports.set_enabled(self.enabled)
         self.ledger = Ledger(app.store, self.ports, self._facts)
         self.action_store = ActionStore(self.ports.conn)
+        self.announcer = Announcer(app.store, process_id=self._process_id, clock=app.clock)
         # Recovery is local bookkeeping, exactly once, before the source and
         # app attachment exist. Prepared payloads are never replayed.
         self.action_store.recover(process_id=self._process_id, now=self.ports.now())
+        self.announcer.recover(process_id=self._process_id, now=self.ports.now())
         self.bodies = BodyLedger(app.clock, run_proof=self.ports.run_body_proof)
         self.bodies.add_holder_source("raid", self.ports.raid_body_holds)
         self.bodies.add_holder_source("offline_raid", self.ports.offline_body_holds)
@@ -306,12 +310,42 @@ class Realm:
                     "SELECT fact FROM realm_kill WHERE kill_id=?", (ev.kill_id,)).fetchone()
                 public = (existing["fact"] is not None if existing is not None else
                           ev.human_present or len(set(ev.cast_members) & set(observation.qualification.cast)) >= 5)
-                if public:
-                    return self._facts.record_verified_kill_in_unit(observation, human=human)
-                return self._private_kills.record_in_unit(observation, human=human)
+                if not public:
+                    return self._private_kills.record_in_unit(observation, human=human)
+                fact = self._facts.record_verified_kill_in_unit(observation, human=human)
+                # The announcement decision commits with the kill's own fact.
+                plan = self.announcer.prepare_in_unit(observation, fact)
         except (FactWriteRejected, PrivateKillRejected) as error:
             # Semantic exceptions must leave the complete Store unit first.
             return error.rejection
+        if plan is not None:
+            self._announce(plan)
+        return fact
+
+    def _announce(self, plan):
+        """Send one committed plan from its own owned child, so event dispatch never waits on
+        the native ack. Its row records every outcome; nothing is ever sent again."""
+        generation, human = self._generation, self.ports.human().guid
+        cmd = self.announcer.command(plan)
+
+        async def send():
+            if (self.enabled and not self._stopping and generation == self._generation
+                    and self.ports.human().guid == human):
+                await self.ports.send(cmd)
+
+        def done(task):
+            self._children.discard(task)
+            if not task.cancelled() and task.exception() is not None:
+                log.debug("realm_announcement_unsent: %s", type(task.exception()).__name__)
+            # Cancelled before it started, disabled or refused: the prepared row is closed.
+            try:
+                self.announcer.abandon_unsent(cmd, now=self.ports.now())
+            except Exception as error:  # Never sent either way; startup recovery closes it.
+                log.warning("realm_announcement_close_failed: %s", type(error).__name__)
+
+        task = asyncio.create_task(send())
+        self._children.add(task)
+        task.add_done_callback(done)
 
     async def _admit_source_observation(self, observation):
         result = await self._on_source_observation(observation)
@@ -426,6 +460,10 @@ class Realm:
     def on_send(self, cmd):
         if not self.enabled or self._stopping:
             raise RealmDisabled("realm disabled")
+        if type(cmd) is protocol.Announce:
+            # Before the queue and the direct path: an unowned announcement is refused.
+            self.announcer.before_send(cmd, context=self.action_context())
+            return
         if self.queue.owns_command(cmd):
             self.queue.before_send(cmd)
             return
@@ -451,6 +489,12 @@ class Realm:
                                         stage=stage, ok=ok, reason=reason, value=value, ts=ts)
 
     def on_ack(self, cmd, ack):
+        if type(cmd) is protocol.Announce:
+            now = self.ports.now()
+            if self.announcer.on_ack(cmd, ack, now=now):
+                store.record_receipt(self.ports.conn, command_id=cmd.id, kind="announce",
+                                     stage="ack", ok=ack.ok, reason=ack.error, ts=now)
+            return
         if self.queue.on_ack(cmd, ack):
             self._queued_receipt(cmd.id, stage="ack", ok=ack.ok, reason=ack.error, ts=self.ports.now())
             return
@@ -465,6 +509,9 @@ class Realm:
             self._finish(cmd.id)
 
     def on_send_error(self, cmd, error_type):
+        if type(cmd) is protocol.Announce:
+            self.announcer.on_send_error(cmd, error_type, now=self.ports.now())
+            return
         if self.queue.on_send_error(cmd, error_type):
             return
         sent = self._pending.get(cmd.id)
