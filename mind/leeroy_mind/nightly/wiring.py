@@ -87,11 +87,13 @@ def attach(app):
             settings=run_settings, reasoner=Reasoner(app.llm, run_settings.reflection_model,
                 parallel=run_settings.parallel), embedder=app.embedder, writer=app.writer,
             arbiter=arbiter, clock=app.clock, ident=ident, personas=app.personas,
-            asker=asker, extract_thread=extract_thread)
+            asker=asker, extract_thread=extract_thread,
+            tuning=getattr(app.personas, "tuning", None))
 
     runner = NightRunner(STAGES, make_ctx)
     app.night_runner = runner
     scheduler = NightScheduler(app.store, settings, arbiter, runner.run, clock=app.clock)
+    app.night_scheduler = scheduler  # the tuning preview asks whether a night runs or is due
     live = LiveAttraction(app.store, app.personas, app.clock, identity)
 
     async def live_ready():

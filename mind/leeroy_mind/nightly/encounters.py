@@ -13,7 +13,7 @@ from leeroy_mind.nightly.motives import trait_today
 from leeroy_mind.nightly.places import PLACES, place_kind
 from leeroy_mind.nightly.relations import apply_capped, copresence
 from leeroy_mind.nightly.settings import iso_week, week_bounds
-from leeroy_mind.personas.io import load_persona
+from leeroy_mind.personas.io import load_effective
 from leeroy_mind.personas.schema import DEPTHS
 from leeroy_mind.personas.screens import has_word, redact_real_name
 from leeroy_mind.storage.rows import MemoryRow
@@ -285,7 +285,7 @@ def confession_offer(ctx, row):
     from leeroy_mind.nightly.storyteller import LAYER_TRUST, NIGHT_OWL_DROP
     now, store = ctx.clock.now(), ctx.store
     for confessor, other in ((row["a"], row["b"]), (row["b"], row["a"])):
-        p = load_persona(store, confessor)
+        p = load_effective(store, confessor, tuning=getattr(ctx, "tuning", None))
         if p is None or trait_today(store, ctx.night, confessor, p)["extraversion"] > 4:
             continue
         opened = {r["layer"] for r in store.conn.execute(
