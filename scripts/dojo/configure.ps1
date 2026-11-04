@@ -19,6 +19,11 @@ place only when its cache names roots.core as its source and was made by the
 same generator; this script never copies, moves or edits a cache, and never
 touches the live build. The production ac-build.sh is not used.
 
+It then runs patches.ps1: the isolated playerbots checkout must carry exactly
+the dojo's patch series (patches/dojo/mod-playerbots, the external-controller
+hook) on top of its provenance baseline; -ApplyPatches lets patches.ps1 apply a
+missing tail of the series with git am first.
+
 -Variant disabled (the default) builds what any core containing mod-dojo would
 get: Dojo.Enable = 1 is refused at start. -Variant training sets
 AC_ENABLE_DOJO=ON, which mod-dojo.cmake allows only beside mod-playerbots.
@@ -39,7 +44,8 @@ pwsh -NoProfile -File scripts/dojo/configure.ps1 -Layout layout.json -Variant tr
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string] $Layout,
-    [ValidateSet('disabled', 'training')][string] $Variant = 'disabled'
+    [ValidateSet('disabled', 'training')][string] $Variant = 'disabled',
+    [switch] $ApplyPatches
 )
 
 Set-StrictMode -Version 3.0
@@ -84,6 +90,21 @@ if ($null -eq $report -or $preflightCode -ne 0 -or -not $report.ok) {
     }
     Stop-DojoConfigure "preflight did not pass (exit $preflightCode); nothing configured"
 }
+
+# --- the dojo's playerbots patch series must be exactly what the isolated checkout carries ---
+
+$patchesScript = Join-Path $PSScriptRoot 'patches.ps1'
+[string[]] $patchArgs = @('-NoProfile', '-NonInteractive', '-File', $patchesScript, '-Layout', $Layout, '-Json')
+if ($ApplyPatches) { $patchArgs += '-Apply' }
+$patchText = & pwsh @patchArgs
+$patchCode = $LASTEXITCODE
+$patches = $null
+try { $patches = ($patchText -join "`n") | ConvertFrom-Json -AsHashtable } catch { $patches = $null }
+if ($null -eq $patches -or $patchCode -ne 0 -or -not $patches.ok) {
+    if ($null -ne $patches) { foreach ($p in $patches.problems) { Write-Output "FAIL patches: $p" } }
+    Stop-DojoConfigure "the dojo patch series does not match roots.playerbots (exit $patchCode); see scripts/dojo/patches.ps1"
+}
+foreach ($name in @($patches.applied)) { Write-Output "configure: applied $name to roots.playerbots" }
 
 $DojoLayout = Get-Content -LiteralPath $Layout -Raw | ConvertFrom-Json -AsHashtable
 $core = [System.IO.Path]::GetFullPath($DojoLayout.roots.core).Replace('\', '/').TrimEnd('/')
@@ -189,7 +210,8 @@ $receipt = [ordered]@{
     variant     = $Variant
     fresh       = $fresh
     core        = [ordered]@{ path = $core; head = Get-DojoHead $core }
-    playerbots  = [ordered]@{ path = $DojoLayout.roots.playerbots; head = Get-DojoHead $DojoLayout.roots.playerbots }
+    playerbots  = [ordered]@{ path = $DojoLayout.roots.playerbots; head = Get-DojoHead $DojoLayout.roots.playerbots;
+        baseline = $patches.baseline; patches = @($patches.series) }
     source      = [ordered]@{ path = $DojoLayout.roots.source; head = Get-DojoHead $DojoLayout.roots.source }
     build       = $build
     registered  = $registered

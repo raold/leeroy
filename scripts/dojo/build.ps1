@@ -6,13 +6,16 @@
 Builds the dojo's isolated core and checks what got linked.
 
 .DESCRIPTION
-Runs preflight.ps1 on the layout and stops unless it passes, then builds
+Runs preflight.ps1 and patches.ps1 (the isolated playerbots checkout must carry
+exactly the dojo's patch series) and stops unless both pass, then builds
 roots.build (configured by configure.ps1, whose receipt must match the cache)
 in RelWithDebInfo with a true global compiler cap: -m:N plus MultiToolTask,
 EnforceProcessCountAcrossBuilds and CL_MPCount=N, as ac-build.sh does, and no
 MSBuild node reuse. -Jobs defaults to 4 and may not exceed 16, the memory limit
-of this machine's precompiled headers. While it builds it samples the cl.exe
-processes descended from the build and reports the peak.
+of this machine's precompiled headers. The script lowers its own priority to
+below normal first, so cmake, MSBuild and every compiler inherit it. While it
+builds it samples the cl.exe processes descended from the build and reports the
+peak.
 
 Never interrupt a build mid-compile: MSBuild records a file as built before
 cl.exe finishes, so a killed build leaves stale or missing objects (CLAUDE.md,
@@ -72,6 +75,9 @@ function Get-DojoHead([string] $Path) {
 }
 
 if (-not $IsWindows) { Stop-DojoBuild 'the dojo build is Windows-only (Visual Studio 2022)' }
+
+# Below normal for this process and, by inheritance, for cmake, MSBuild, cl.exe and link.exe.
+(Get-Process -Id $PID).PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
 
 # Which of the ASCII needles occur in a file, read in chunks so a large PDB never sits in memory whole.
 Add-Type -TypeDefinition @'
@@ -140,6 +146,21 @@ $flag = Get-DojoCacheValue $cache 'AC_ENABLE_DOJO'
 if (-not $DojoVariantTags.ContainsKey($variant) -or $flag -ne $(if ($variant -eq 'training') { 'ON' } else { 'OFF' })) {
     Stop-DojoBuild "the cache says AC_ENABLE_DOJO=$flag but configure.ps1 recorded '$variant'; run configure.ps1 again"
 }
+
+# --- the dojo's playerbots patch series must be exactly what the isolated checkout carries ---
+
+$patchesScript = Join-Path $PSScriptRoot 'patches.ps1'
+[string[]] $patchArgs = @('-NoProfile', '-NonInteractive', '-File', $patchesScript, '-Layout', $Layout, '-Json')
+if ($false) { $patchArgs += '-Apply' }
+$patchText = & pwsh @patchArgs
+$patchCode = $LASTEXITCODE
+$patches = $null
+try { $patches = ($patchText -join "`n") | ConvertFrom-Json -AsHashtable } catch { $patches = $null }
+if ($null -eq $patches -or $patchCode -ne 0 -or -not $patches.ok) {
+    if ($null -ne $patches) { foreach ($p in $patches.problems) { Write-Output "FAIL patches: $p" } }
+    Stop-DojoBuild "the dojo patch series does not match roots.playerbots (exit $patchCode); see scripts/dojo/patches.ps1"
+}
+foreach ($name in @($patches.applied)) { Write-Output "build: applied $name to roots.playerbots" }
 
 # --- the build: a child in this console (no new window), its output in a log, its compilers counted ---
 
@@ -276,6 +297,7 @@ $receipt = [ordered]@{
     samples         = $samples
     core            = Get-DojoHead $DojoLayout.roots.core
     playerbots      = Get-DojoHead $DojoLayout.roots.playerbots
+    patches         = @($patches.series)
     source          = Get-DojoHead $DojoLayout.roots.source
     artifacts       = $artifacts
     verified        = $symbols

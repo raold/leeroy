@@ -1,7 +1,7 @@
 name: patches
 
-# Applies patches/mod-playerbots and patches/mod-ollama-chat to the newest upstream. Nightly, so an
-# upstream change that breaks a local patch shows up as an issue here before
+# Applies patches/mod-playerbots (then the dojo's patches/dojo/mod-playerbots on top) and patches/mod-ollama-chat to
+# the newest upstream. Nightly, so an upstream change that breaks a local patch shows up as an issue here before
 # ac-update.sh runs into the same conflict.
 
 on:
@@ -34,6 +34,14 @@ jobs:
         run: |
           git -c user.name=leeroy-ci -c user.email=ci@invalid am --3way ../leeroy/patches/mod-playerbots/*.patch
           git log --oneline -n "$(find ../leeroy/patches/mod-playerbots -name '*.patch' | wc -l)"
+
+      # The dojo's own series (the external-controller hook) sits on top of the local patches, as in its isolated
+      # checkout; scripts/dojo/patches.ps1 checks that checkout against it before every dojo build.
+      - name: Apply the dojo's patch series
+        working-directory: playerbots
+        run: |
+          git -c user.name=leeroy-ci -c user.email=ci@invalid am --3way ../leeroy/patches/dojo/mod-playerbots/*.patch
+          git log --oneline -n "$(find ../leeroy/patches/dojo/mod-playerbots -name '*.patch' | wc -l)"
 
       - uses: actions/setup-python@v7
         with:
