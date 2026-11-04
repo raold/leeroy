@@ -1,6 +1,7 @@
 """Wave 4's seams: where two Realm parts, built apart against fakes, meet. Every test here runs
 both parts for real (with the real service, Store and DirectLedger where a send is involved);
 only the native side, the model and the clock are test boundaries."""
+import json
 import uuid
 
 from conftest import run, seed_test_cast
@@ -13,8 +14,9 @@ from leeroy_mind.realm.race import Race
 from leeroy_mind.realm.service import attach_realm
 from leeroy_mind.training.benchmark import allowed_bosses
 from realm.fakes import RealmApp, enabled
+from test_realm_canon import KILLS as CANON_KILLS, Harness as CanonHarness, approved_plan as canon_plan
 from test_realm_direct import LIVE, PROCESS
-from test_realm_race import DAY, T0, _training_ports, at, guild_kill
+from test_realm_race import DAY, RIVALS, T0, _training_ports, at, guild_kill
 from test_realm_rivals import (approved as rivals_approved, connect, finish, grows, kinds, live_realm,
                                plan_of, pump, seed_roster, step_row, with_cards)
 
@@ -153,3 +155,31 @@ def test_training_reaches_the_real_race_part_and_falls_back_without_it(tmp_path,
     assert realm.race is None and training.benchmark_allowed(631, 0, 25, False) is None
     assert allowed_bosses(training, "icc25") == ()
     run(realm.close())
+
+
+# -- item 5: the canon step seeds the real race ----------------------------------------------------
+
+def test_the_canon_step_seeds_the_real_race(tmp_path, store, clock, monkeypatch):
+    h = CanonHarness(tmp_path, store, clock, monkeypatch)
+    canon_plan(h.root, h.store, h.clock)
+    with store.transaction():
+        for gid, role, faction, name, status in RIVALS:
+            store.conn.execute("INSERT INTO realm_guild(id,role,faction,name,added,status) VALUES (?,?,?,?,?,?)",
+                               (gid, role, faction, name, 1.0, status))
+
+    async def go():
+        realm = await h.start()
+        assert type(realm.part("race")) is Race
+        await h.drive(2)
+        await h.close()
+    run(go())
+    [(result,)] = store.conn.execute("SELECT result FROM realm_step WHERE name='canon'").fetchall()
+    assert json.loads(result)["race_seeded"] is True
+    seeded = {(r[0], r[1], r[2], r[3]): (r[4], r[5]) for r in store.conn.execute(
+        "SELECT guild,map,boss_id,difficulty,state,source FROM realm_progress")}
+    canon_keys = {(k["map"], k["boss_id"], k["difficulty"]) for k in CANON_KILLS}
+    by_canon = {key: value[0] for key, value in seeded.items() if value[1] == "canon"}
+    # The progression rival holds every canon kill by canon; drama all but the newest.
+    assert {key[1:] for key, state in by_canon.items() if key[0] == 50 and state == "killed"} == canon_keys
+    assert by_canon[(60, 631, 12, 3)] == "progressing"
+    assert not any(key[0] == 80 for key in seeded)  # A retired rival is never seeded.
