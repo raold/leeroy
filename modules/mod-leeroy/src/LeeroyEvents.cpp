@@ -87,7 +87,7 @@ std::optional<Leeroy::Channel> ChannelFromChatMsg(uint32 type)
 // the same hooks but is not a chat line.
 std::optional<Leeroy::Channel> ChatChannel(uint32 type, uint32 language)
 {
-    if (language == LANG_ADDON)
+    if (language == static_cast<uint32>(LANG_ADDON))
         return std::nullopt;
     return ChannelFromChatMsg(type);
 }
