@@ -23,7 +23,8 @@ def parser() -> argparse.ArgumentParser:
                    help="the checkout whose mind and voice venvs it controls and recognises "
                         "(default: this code's checkout)")
     p.add_argument("--no-control", action="store_true",
-                   help="show status only: never start, restart or stop anything")
+                   help="show status only: never start, restart or stop anything, and send "
+                        "no raid action")
     p.add_argument("--voice-ui-port", type=int, default=None,
                    help="the voice service's page port (default: what `leeroy_voice where` "
                         f"says, else {VOICE_UI_PORT})")
@@ -67,6 +68,7 @@ def build(args, *, platform: str = sys.platform):
     from ..config import default_data_dir
     from .app import ConsoleApp
     from .control import Controls, MindHandle, VoiceHandle, control_problems
+    from .mindlink import MindLink
     data = (Path(args.data_dir) if args.data_dir else default_data_dir()).resolve()
     root = (args.root or CHECKOUT).resolve()
     if not 0 < args.port < 65536 or (args.voice_ui_port is not None
@@ -86,14 +88,15 @@ def build(args, *, platform: str = sys.platform):
             where = None
     settings = settings_from(data, root, args.port, secrets.token_urlsafe(24), where,
                              args.voice_ui_port)
+    link = MindLink(data)
     mind = MindHandle(root, data, python=lifecycle.venv_python(root),
                       base_python=getattr(sys, "_base_executable", sys.executable),
-                      processes=processes, locked=instance_lock_held)
+                      processes=processes, locked=instance_lock_held, link=link)
     problems = control_problems(root, platform=platform)
     controls = Controls(enabled=not args.no_control,
                         reason="process control is off (--no-control)" if args.no_control else "",
                         mind=mind, voice=VoiceHandle(voice), problems=problems)
-    return ConsoleApp(settings, mind=mind, controls=controls, voice=voice), None
+    return ConsoleApp(settings, mind=mind, controls=controls, voice=voice, link=link), None
 
 
 async def run(app, *, open_browser: bool = False) -> int:

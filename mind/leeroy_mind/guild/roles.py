@@ -26,6 +26,12 @@ _PREMADE = {
 }
 
 
+def spec_name(cls: int, spec_tab: int) -> str | None:
+    """The talent tree's name, such as "protection"; None for an unknown class or tab."""
+    tabs = _SPECS.get(cls, ())
+    return tabs[spec_tab] if type(spec_tab) is int and 0 <= spec_tab < len(tabs) else None
+
+
 def role_of(cls: int, spec_tab: int, raid_role: str | None) -> str:
     if spec_tab == -1:
         return raid_role if raid_role in {"tank", "healer"} else "damage"

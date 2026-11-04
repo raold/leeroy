@@ -51,7 +51,7 @@ async def no_voice(*a, **kw):
 
 
 def make_app(data, *, mind=None, controls=None, connect=no_voice, tcp=lambda: None,
-             ollama=None, gpu=None, clock=None, monotonic=None, voice=None,
+             ollama=None, gpu=None, clock=None, monotonic=None, voice=None, link=None,
              **settings) -> ConsoleApp:
     mind = mind or FakeMind(data)
     s = Settings(data_dir=data, root=data.parent, port=0, key=KEY, **settings)
@@ -63,6 +63,7 @@ def make_app(data, *, mind=None, controls=None, connect=no_voice, tcp=lambda: No
     if monotonic is not None:
         kw["monotonic"] = monotonic
     return ConsoleApp(s, mind=mind, controls=controls, connect=connect, tcp=tcp, voice=voice,
+                      link=link,
                       ollama=ollama or (lambda url, roles: {"ok": True, "url": url, "models": []}),
                       gpu=gpu or (lambda: {"ok": False, "error": "nvidia-smi not found",
                                            "gpus": []}), **kw)

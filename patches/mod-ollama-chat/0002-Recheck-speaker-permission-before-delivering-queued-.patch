@@ -1,7 +1,8 @@
-From a244b014ea4533abe4db96b98f2654ab3dca3479 Mon Sep 17 00:00:00 2001
+From 80bd8c9ec5fd747defade69f9ec848dd74d903ce Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Mon, 2 Nov 2026 13:38:16 -0500
-Subject: [PATCH] Recheck speaker permission before delivering queued replies
+Subject: [PATCH 2/2] Recheck speaker permission before delivering queued
+ replies
 
 ---
  src/mod-ollama-chat_dispatch.cpp | 25 +++++++++++++++++++------
