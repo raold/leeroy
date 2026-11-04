@@ -511,7 +511,8 @@ def test_a_changed_context_refuses_the_readmission_for_good(rig):
 
 
 @pytest.mark.parametrize("ok,error,outcome", [
-    (False, "not_kicked", ("refused", "not_kicked")),  # A worldserver restart forgot the kick.
+    (False, "not_kicked", ("refused", "not_kicked")),  # Native has no receipt of that kick.
+    (False, "receipt_unstored", ("refused", "receipt_unstored")),  # Refused before any add.
     (False, "kick_expired", ("refused", "kick_expired")),
     (False, "already_member", ("refused", "already_member")),
     (False, "not_guildless", ("refused", "not_guildless")),
