@@ -52,31 +52,34 @@ def test_every_request_needs_the_console_host(data):
     run(go())
 
 
-def test_the_key_comes_from_the_url_once_then_the_cookie(data):
+def test_the_key_stays_in_the_page_and_travels_in_a_header_never_a_cookie(data):
     async def go():
         async with served(make_app(data)) as app:
-            assert (await http(app, "GET", "/", cookie=False)).status == 403
-            assert (await http(app, "GET", "/api/state", cookie=False)).status == 403
-            assert (await http(app, "GET", "/?key=wrong", cookie=False)).status == 403
-            r = await http(app, "GET", f"/?key={KEY}", cookie=False)
-            assert r.status == 303 and r.header("location") == "/"
-            cookie = r.header("set-cookie")
-            assert cookie.startswith(f"{app.cookie}={KEY};")
-            assert "HttpOnly" in cookie and "SameSite=Strict" in cookie and "Path=/" in cookie
-            page = await http(app, "GET", "/")
-            assert page.status == 200 and page.header("content-type").startswith("text/html")
+            assert app.url == f"{app.origin}/#key={KEY}"  # a fragment: never sent to a server
+            for path in ("/", f"/?key={KEY}"):
+                page = await http(app, "GET", path, key=False)
+                assert page.status == 200 and page.header("content-type").startswith("text/html")
+                assert page.header("set-cookie") is None and KEY.encode() not in page.body
+            assert (await http(app, "GET", "/api/state", key=False)).status == 403
+            assert (await http(app, "GET", f"/api/state?key={KEY}", key=False)).status == 403
+            r = await http(app, "GET", "/api/state", key=False,
+                           headers={"Cookie": f"leeroy_console_{app.s.port}={KEY}"})
+            assert r.status == 403  # what the console used to set: no longer a key
             assert (await http(app, "GET", "/api/state")).status == 200
+            html = page.body.decode()
+            assert "X-Console-Key" in html and "history.replaceState" in html
+            assert "new EventSource" not in html and "document.cookie" not in html
     run(go())
 
 
-def test_a_wrong_cookie_is_refused(data):
+def test_a_wrong_or_repeated_key_is_refused(data):
     async def go():
         async with served(make_app(data)) as app:
-            r = await http(app, "GET", "/api/state", cookie=False,
-                           headers={"Cookie": f"{app.cookie}=not-the-key"})
-            assert r.status == 403
-            r = await http(app, "GET", "/api/state", cookie=False,
-                           headers={"Cookie": f"leeroy_console_1={KEY}"})  # another console's
+            for headers in ({"X-Console-Key": "not-the-key"}, {"X-Console-Key": ""},
+                            {"X-Console-Key": KEY[:-1]}):
+                r = await http(app, "GET", "/api/state", key=False, headers=headers)
+                assert r.status == 403
+            r = await http(app, "GET", "/api/state", headers={"X-Console-Key": KEY})  # twice
             assert r.status == 403
     run(go())
 
@@ -102,7 +105,7 @@ def test_a_change_needs_both_the_key_and_the_origin(data):
         async with served(make_app(data, mind=mind)) as app:
             body = {"service": "mind", "action": "restart"}
             assert (await http(app, "POST", "/api/control", body=body)).status == 403
-            assert (await http(app, "POST", "/api/control", body=body, cookie=False,
+            assert (await http(app, "POST", "/api/control", body=body, key=False,
                                origin=True)).status == 403
             r = await http(app, "POST", "/api/control", body=b"service=mind", origin=True,
                            headers={"Content-Type": "application/x-www-form-urlencoded"})
@@ -284,7 +287,7 @@ def test_the_stream_starts_with_a_snapshot(data):
             assert kind == "snapshot"
             assert set(snap) == {"status", "voice", "chat"}
             assert snap["voice"] is None and snap["chat"] == []
-            r = await http(app, "GET", "/api/events", cookie=False)
+            r = await http(app, "GET", "/api/events", key=False)
             assert r.status == 403
     run(go())
 

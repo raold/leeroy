@@ -75,12 +75,12 @@ class Reply:
         return json.loads(self.body)
 
 
-async def http(app, method, path, *, headers=None, body=None, host=None, cookie=True,
+async def http(app, method, path, *, headers=None, body=None, host=None, key=True,
                origin=False) -> Reply:
     port = app.s.port
     lines = [f"{method} {path} HTTP/1.1", f"Host: {host or f'127.0.0.1:{port}'}"]
-    if cookie:
-        lines.append(f"Cookie: {app.cookie}={KEY}")
+    if key:
+        lines.append(f"X-Console-Key: {KEY}")
     if origin:
         lines.append(f"Origin: {origin if isinstance(origin, str) else app.origin}")
     data = b""
@@ -110,7 +110,7 @@ async def events(app, *, count=1, timeout=10.0):
     port = app.s.port
     reader, writer = await asyncio.open_connection("127.0.0.1", port)
     writer.write((f"GET /api/events HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n"
-                  f"Cookie: {app.cookie}={KEY}\r\nAccept: text/event-stream\r\n\r\n").encode())
+                  f"X-Console-Key: {KEY}\r\nAccept: text/event-stream\r\n\r\n").encode())
     await writer.drain()
     head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout)
     assert b" 200 " in head.split(b"\r\n")[0], head

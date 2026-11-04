@@ -1,13 +1,16 @@
 """The console's server: the page, its event stream and the endpoints behind its tabs.
 
 Every request must carry exactly one Host header, 127.0.0.1:<port> (against DNS rebinding), an
-Origin that is the console's own when it carries one, a Sec-Fetch-Site of same-origin or none
-when it carries one, and the session key: `?key=` on the first load of / (answered with a cookie
-and a redirect to /) and the cookie after that. Anything else is 403. A mutating request (POST)
-must also carry the console's Origin and a JSON body; there is no CORS, so another origin's
-script cannot read an answer or send a preflighted request.
+Origin that is the console's own when it carries one, and a Sec-Fetch-Site of same-origin or none
+when it carries one. Every request but the page's own load must also carry the session key, once,
+in an X-Console-Key header. The printed URL holds the key in its fragment (/#key=...), which a
+browser never sends: the page takes it into memory, drops it from the address bar and sends it
+with each fetch, the event stream included. There is no cookie, so no other program on another
+127.0.0.1 port is ever handed the key. Anything else is 403. A mutating request (POST) must
+also carry the console's Origin and a JSON body; there is no CORS, so another origin's script
+cannot read an answer or send a preflighted request (the key header needs one).
 
-    GET  /             the page
+    GET  /             the page (static; it carries no key)
     GET  /api/state    the strip, the voice mirror, the text feed and the control rules
     GET  /api/events   the same as a first `snapshot` event, then `status`, `voice`, `chat`
                        and `control` events (server-sent events, a comment every 15 s)
@@ -45,6 +48,7 @@ PING_S = 15.0
 QUEUE = 500  # events a page may fall behind before it is cut off (it reconnects)
 FEED_DAYS = 3.0  # how far back a page's first feed goes
 
+KEY_HEADER = "x-console-key"
 log = logging.getLogger("leeroy_mind.console")
 
 
@@ -105,7 +109,6 @@ class ConsoleApp:
         self.follower = follower or mindlog.LogFollower(self.s.data_dir / "logs" / "mind.log")
         self._clock, self._monotonic = clock, monotonic
         self.origin = f"http://{HOST}:{settings.port}"
-        self.cookie = f"leeroy_console_{settings.port}"
         html = resources.files(__package__).joinpath("page.html").read_bytes()
         self._page = html
         page = html.decode("utf-8")
@@ -341,10 +344,10 @@ class ConsoleApp:
                 return text(415, "Send JSON.")
         elif req.method != "GET":
             return text(405, "Method not allowed.", [("Allow", "GET, POST")])
-        if self._key_ok(req.cookies().get(self.cookie)):
+        if req.path == "/" and req.method == "GET":
+            return None  # the page: static, and its key stays in the browser (the fragment)
+        if self._key_ok(req.one(KEY_HEADER)):
             return None
-        if req.path == "/" and req.method == "GET" and "key" in req.query:
-            return None  # the first load: answered with the cookie
         return text(403, "Forbidden: no console key. Open the URL the console printed when "
                          "it started (the key changes each time it starts).")
 
@@ -355,15 +358,6 @@ class ConsoleApp:
         if req.path == "/":
             if req.method != "GET":
                 return text(405, "Method not allowed.", [("Allow", "GET")])
-            keys = req.query.get("key", [])
-            if keys:
-                if len(keys) != 1 or not self._key_ok(keys[0]):
-                    return text(403, "Forbidden: that key is not this console's. Open the URL "
-                                     "it printed when it last started.")
-                return Response(303, b"", headers=[
-                    ("Location", "/"), ("Referrer-Policy", "no-referrer"),
-                    ("Set-Cookie", f"{self.cookie}={self.s.key}; Path=/; HttpOnly; "
-                                   "SameSite=Strict")])
             return self._page_response()
         routes = {("GET", "/api/state"): self._api_state,
                   ("GET", "/api/events"): self._api_events,
@@ -478,7 +472,6 @@ class ConsoleApp:
         self._server = await serve(self.handle, HOST, self.s.port)
         self.s.port = self._server.sockets[0].getsockname()[1]
         self.origin = f"http://{HOST}:{self.s.port}"
-        self.cookie = f"leeroy_console_{self.s.port}"
         await self.refresh(force=True)
         self._tasks = [asyncio.create_task(self._status_loop(), name="console-status"),
                        asyncio.create_task(self._feed_loop(), name="console-feed"),
@@ -486,7 +479,7 @@ class ConsoleApp:
 
     @property
     def url(self) -> str:
-        return f"{self.origin}/?key={self.s.key}"
+        return f"{self.origin}/#key={self.s.key}"
 
     async def close(self) -> None:
         for task in self._tasks:

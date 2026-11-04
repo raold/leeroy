@@ -490,16 +490,21 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   upkeep) runs with built-in defaults; `[guild]` and `[dkp]` tables in
   `mind.toml` override them.
 - The guild console (`leeroy_mind/console/`) is a process of its own on
-  `127.0.0.1:7881` (`--port`). It prints `http://127.0.0.1:7881/?key=...`; the
-  key changes at each start and becomes a cookie. Every request needs the
-  console's Host, and its Origin when the browser sends one; a change (POST)
-  always needs both the key and the Origin. It reads mind.db, mind.log and
-  mind.toml read-only and talks to the voice service through the voice page's
-  own socket. Start, restart and stop use `leeroy_mind/lifecycle.py`, the rules
-  `scripts/ac-mind.py` uses, so only this checkout's own mind venv may control
-  the mind (`--root` names another checkout). `--no-control` turns start,
-  restart and stop off. The owner's game state is the running mind's open
-  session; while the mind or its bridge is down it is shown as unknown, never
+  `127.0.0.1:7881` (`--port`). It prints `http://127.0.0.1:7881/#key=...`; the
+  key changes at each start, stays in the page's memory (never a cookie, which
+  every 127.0.0.1 port would be sent) and goes with each request as an
+  `X-Console-Key` header, so a reload needs the printed URL again. Every request
+  needs the console's Host, and its Origin when the browser sends one; a change
+  (POST) always needs both the key and the Origin. A stop or restart asks
+  first while the owner is in game or nobody can tell. It reads mind.db,
+  mind.log and mind.toml read-only and talks to the voice service through the
+  voice page's own socket. Start, restart and stop use
+  `leeroy_mind/lifecycle.py`, the rules `scripts/ac-mind.py` uses, so only this
+  checkout's own mind venv may control the mind (`--root` names another
+  checkout); the voice service's pid must be the base interpreter its own venv
+  launcher started. `--no-control` turns start, restart and stop off. The
+  owner's game state is the running mind's open session; while the mind or its
+  bridge is down, or the session cannot be read, it is shown as unknown, never
   "not in game".
 
 ## The voice service (`leeroy-voice`)

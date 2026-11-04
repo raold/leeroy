@@ -297,7 +297,7 @@ def test_a_page_without_the_key_cannot_drive_the_voice_service(data):
             await app.start()
             try:
                 await until(lambda: app.relay.connected)
-                r = await http(app, "POST", "/api/voice", cookie=False, origin=True,
+                r = await http(app, "POST", "/api/voice", key=False, origin=True,
                                body={"type": "join", "channel": "hall"})
                 assert r.status == 403
                 r = await http(app, "POST", "/api/voice", origin="http://127.0.0.1:9",

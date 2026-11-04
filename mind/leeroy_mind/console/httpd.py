@@ -45,15 +45,6 @@ class Request:
         values = self.all(name)
         return values[0] if len(values) == 1 else None
 
-    def cookies(self) -> dict[str, str]:
-        out: dict[str, str] = {}
-        for header in self.all("cookie"):
-            for part in header.split(";"):
-                name, sep, value = part.strip().partition("=")
-                if sep and name and name not in out:
-                    out[name] = value
-        return out
-
     def json(self):
         """The body as a JSON object; BadRequest otherwise."""
         try:
