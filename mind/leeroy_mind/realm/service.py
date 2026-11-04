@@ -25,7 +25,7 @@ from .fact_store import FactStore, FactWriteRejected
 from .kill_retention import PrivateKillRejected, PrivateKillStore
 from .ledger import Ledger
 from .ports import LivePorts, RealmDisabled
-from .provenance import capture_qualification_in_unit
+from .provenance import cannot_qualify, capture_qualification_in_unit
 from .recall import Recall
 from .records import RealmObservation, Rejected
 
@@ -276,6 +276,9 @@ class Realm:
         """Capture the exact dispatcher receipt before creating any owned child."""
         if type(ev) not in _SOURCES:
             return None
+        refused = cannot_qualify(ev)
+        if refused is not None:
+            return refused
         receipt_reader = getattr(self.app, "row_receipt", None)
         if receipt_reader is None:
             return Rejected("invalid_input")

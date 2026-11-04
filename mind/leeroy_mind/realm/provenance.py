@@ -1007,6 +1007,17 @@ class _PersonaRows:
 _persona_rows = _PersonaRows()
 
 
+def cannot_qualify(event):
+    """The refusal for native evidence that no capture could make a fact, else None: an
+    achievement that is not a realm first, a duel without a winner or in a city. It reads the
+    event alone, so the caller can refuse before any receipt read or Store unit."""
+    if type(event) is RealmAchievement and event.realm_first is not True:
+        return Rejected('private_evidence')
+    if type(event) is DuelEnd and (event.city is not False or event.result not in _DUEL_RESULTS):
+        return Rejected('private_evidence')
+    return None
+
+
 def capture_qualification_in_unit(store, *, human: HumanIdentity, event,
         receipt: RowReceipt, context: ActionContext, confirmed_human_guid: int,
         transport_epoch: int, captured_at: float):

@@ -11,6 +11,7 @@ import pytest
 
 from leeroy_mind.memory.writer import clean_memory_text
 from leeroy_mind.protocol import sanitize_say_text
+from leeroy_mind.realm import service
 from leeroy_mind.realm.fact_store import FactStore
 from leeroy_mind.realm.kill_retention import PrivateKillRecord
 from leeroy_mind.realm.provenance import public_fact_in_unit, render_public
@@ -238,13 +239,46 @@ def test_dungeon_kill_through_the_service_is_evidence_never_announced(tmp_path, 
     run(scenario())
 
 
-def test_non_realm_first_through_the_service_makes_no_fact(tmp_path, clock, monkeypatch):
+@pytest.mark.parametrize('policy,changes', [
+    (ACHIEVEMENT, dict(realm_first=False, flags=0)), (ACHIEVEMENT, dict(realm_first=False)),
+    (DUEL, dict(city=True)), (DUEL, dict(result='interrupted')),
+])
+def test_evidence_that_can_never_qualify_is_refused_before_any_capture_unit(
+        tmp_path, clock, monkeypatch, policy, changes):
     async def scenario():
         async with application(tmp_path, clock, monkeypatch) as native:
-            await native.deliver(envelope(ACHIEVEMENT, realm_first=False, flags=0))
-            await native.deliver(envelope(DUEL, city=True, ts=1000001))
-            assert native.results == [Rejected('private_evidence')] * 2
-            assert counts(native.app.store) == NOTHING
+            realm, store = native.app.realm, native.app.store
+            capture, transaction, qualify = (realm._capture_source_observation, store.transaction,
+                                             service.capture_qualification_in_unit)
+            inside, units, qualified = [], [], []
+
+            def tracked_capture(ev):
+                inside.append(type(ev).__name__)
+                try:
+                    return capture(ev)
+                finally:
+                    inside.pop()
+
+            def tracked_transaction():
+                if inside:
+                    units.append(inside[-1])
+                return transaction()
+
+            def tracked_qualify(*args, **kwargs):
+                qualified.append(type(kwargs['event']).__name__)
+                return qualify(*args, **kwargs)
+
+            monkeypatch.setattr(realm, '_capture_source_observation', tracked_capture)
+            monkeypatch.setattr(store, 'transaction', tracked_transaction)
+            monkeypatch.setattr(service, 'capture_qualification_in_unit', tracked_qualify)
+            await native.deliver(envelope(policy, **changes))
+            assert (units, qualified, native.captures, native.results) == ([], [], [], [])
+            assert counts(store) == NOTHING
+            # The same path still captures evidence that can qualify, in one Store unit.
+            await native.deliver(envelope(policy, ts=1000001))
+            name = 'RealmAchievement' if policy == ACHIEVEMENT else 'DuelEnd'
+            assert (units, qualified, len(native.captures)) == ([name], [name], 1)
+            assert type(native.results[-1]) is FactRow
     run(scenario())
 
 
