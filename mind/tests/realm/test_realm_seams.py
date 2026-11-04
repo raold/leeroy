@@ -3,11 +3,15 @@ both parts for real (with the real service, Store and DirectLedger where a send 
 only the native side, the model and the clock are test boundaries."""
 import uuid
 
+from conftest import run
 from leeroy_mind.protocol import Ack
-from leeroy_mind.realm import bank, canon
+from leeroy_mind.realm import bank, canon, protocol
 from leeroy_mind.realm.direct import DirectLedger
+from leeroy_mind.realm.ports import RealmDisabled
 from leeroy_mind.realm.protocol import BankStock, GrantAchievement
 from test_realm_direct import LIVE, PROCESS
+from test_realm_rivals import (approved as rivals_approved, connect, finish, grows, kinds, live_realm,
+                               plan_of, pump, seed_roster, step_row, with_cards)
 
 
 def _refused(ledger, cmd, owner, ref, error, *, expects_job=False):
@@ -34,3 +38,59 @@ def test_busy_reason_survives_the_ledger_for_canon_and_bank(store):
     # A reason native never gives (spaces, capitals) still reads as the ledger's own fallback.
     odd = GrantAchievement(uuid.uuid4().hex, 102, 2186)
     assert _refused(ledger, odd, "canon", "canon:2186:102:0", "Busy: Raid")[1] == "native_refused"
+
+
+# -- item 10: a step item refused or lost before anything moved is sent again ----------------------
+
+def _answering(app, kind, answers):
+    """Native answers each command of this type with the next (ok, error); the last repeats."""
+    send, queue = app.send, list(answers)
+
+    async def answer(cmd, *, preserve_id=False):
+        if type(cmd) is not kind:
+            return await send(cmd, preserve_id=preserve_id)
+        app.sent.append(cmd)
+        ok, error = queue.pop(0) if len(queue) > 1 else queue[0]
+        return Ack(0, cmd.id, ok, error)
+    app.send = answer
+
+
+def test_a_step_item_refused_before_anything_moved_is_sent_again(tmp_path, store, clock):
+    seed_roster(store)
+    app, realm = live_realm(tmp_path, store, clock)
+    _answering(app, protocol.GuildRename, [(False, "realm_off"), (True, "")])
+    plan = with_cards(plan_of())
+    _, sha = rivals_approved(tmp_path, clock, plan)
+    steps, ledger, ref = realm.part("steps"), realm.part("direct"), f"step:rivals:{sha}:0"
+    lost = []
+    send = realm.ports.send
+
+    async def lost_before_the_barrier(cmd):
+        if type(cmd) is protocol.RealmActors and not lost:
+            lost.append(cmd)
+            raise RealmDisabled("realm disabled")  # As the ports raise once a ticket goes stale.
+        return await send(cmd)
+
+    async def go():
+        await connect(app)
+        await steps.tick()                        # native's realm switch was off for a moment
+        assert kinds(app) == ["GuildRename"] and step_row(store)[0] is None
+        assert ledger.state("step", ref)[:2] == ("refused", "realm_off")
+        realm.ports.send = lost_before_the_barrier
+        await clock.advance(60, step=60)
+        await steps.tick()                        # the rename again, then the actor set is lost
+        assert kinds(app) == ["GuildRename", "GuildRename"]
+        assert ledger.state("step", f"step:rivals:{sha}:1")[0] == "abandoned"  # never left prepared
+        await clock.advance(60, step=60)
+        await steps.tick()                        # the actor set again; the grows are enrolled
+        await pump(realm, clock)
+        await finish(app, clock, grows(app))
+        await clock.advance(60, step=60)
+        await steps.tick()
+    run(go())
+    first, second, actors, *grown = app.sent
+    assert first.id != second.id and (first.name, second.name) == ("Rival Name", "Rival Name")
+    assert type(actors) is protocol.RealmActors and actors is not lost[0] and len(grown) == 3
+    applied, result = step_row(store)
+    assert applied is not None and (result["rename"], result["actors"]) == ("acked", "acked")
+    assert ledger.state("step", ref) == ("acked", None, None)
