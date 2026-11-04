@@ -39,6 +39,8 @@ OUTPUT_CHANNELS = 2
 BLOCK_FRAMES = 480  # 10 ms
 OUTPUT_LATENCY_S = 0.10  # room for CPU synthesis/GIL contention; the callback still runs at 10 ms
 LATE_GAP_S = OUTPUT_LATENCY_S / 2  # a callback this long after the one before: half the buffer gone
+LATE_RING = 256  # late gaps kept for the poller: one POLL_S holds at most 40
+LATE_LOG_S = 2.0  # output_late is logged at most this often; its counts lose nothing between
 INPUT_BLOCK_S = 0.01
 POLL_S = 2.0  # the service polls AudioOut at least this often
 RETRY_S = 10.0  # a device that is missing, or will not open, is tried again this often
@@ -251,11 +253,14 @@ class _OutputStatus:
     PortAudio's WASAPI host does not flag a shared-mode underrun: on 2026-11-04 callbacks held
     off by another thread's GIL left gaps of up to 190 ms in the output while `underflows`
     stayed 0. So each callback also measures the gap since the one before: `late` counts the
-    gaps of LATE_GAP_S or more (half the buffer gone), with the longest gap seen."""
+    gaps of LATE_GAP_S or more (half the buffer gone), with the longest gap seen. Late gap n is
+    kept at gaps[n % LATE_RING] before `late` counts it, so the poller can find the longest of
+    the ones it has not yet read without the callback ever resetting anything."""
 
     def __init__(self, clock: Callable[[], float] = time.perf_counter):
         self.counts = (0, 0, 0)  # callbacks, output underflows, output overflows
         self.late = (0, 0.0)  # callbacks LATE_GAP_S or more after the one before; longest gap
+        self.gaps = [0.0] * LATE_RING
         self._clock = clock
         self._last: float | None = None
 
@@ -266,9 +271,18 @@ class _OutputStatus:
                        over + bool(getattr(status, "output_overflow", False)))
         if self._last is not None:
             gap, (late, longest) = now - self._last, self.late
+            if gap >= LATE_GAP_S:
+                self.gaps[late % LATE_RING] = gap
             if gap >= LATE_GAP_S or gap > longest:
                 self.late = (late + (gap >= LATE_GAP_S), max(longest, gap))
         self._last = now
+
+    def late_since(self, seen: int) -> tuple[int, float, float]:
+        """The poller's read: (late, longest gap, the longest late gap after the first `seen`).
+        Past LATE_RING unread, the longest of the newest LATE_RING."""
+        late, longest = self.late
+        newest = range(max(seen, late - LATE_RING), late)
+        return late, longest, max((self.gaps[n % LATE_RING] for n in newest), default=0.0)
 
 
 class _SdStream:
@@ -300,9 +314,9 @@ class _SdStream:
     def output_counts(self) -> tuple[int, int, int]:
         return self._output_status.counts if self._output_status is not None else (0, 0, 0)
 
-    @property
-    def output_late(self) -> tuple[int, float]:
-        return self._output_status.late if self._output_status is not None else (0, 0.0)
+    def output_late(self, seen: int) -> tuple[int, float, float]:
+        status = self._output_status
+        return status.late_since(seen) if status is not None else (0, 0.0, 0.0)
 
     def close(self) -> None:
         self._api._forget(self)
@@ -661,6 +675,9 @@ class AudioOut:
         self._reported_late = 0
         self._total_late = 0
         self._max_gap = 0.0
+        self._unlogged_late = 0  # late callbacks since the last output_late line ...
+        self._unlogged_gap = 0.0  # ... and the longest of their gaps
+        self._late_logged_at: float | None = None
         self.device = pinned
 
     @property
@@ -681,13 +698,14 @@ class AudioOut:
         if not self._running:
             return
         now = self._clock.now() if now is None else now
-        self._report_status()
+        self._report_status(now)
         want = self._pinned or self._default(now)
         if want:
             self.device = want
         self._keeper.keep(want, now)
 
-    def _report_status(self) -> None:
+    def _report_status(self, now: float | None = None) -> None:
+        """`now` None: the stream is closing, so output_late is logged whatever LATE_LOG_S says."""
         failures = self._render_failures
         if failures != self._reported_render_failures:
             log("mixer_render_failed", level=logging.WARNING,
@@ -702,13 +720,21 @@ class AudioOut:
             log("output_xrun", level=logging.WARNING, underflows=delta[1], overflows=delta[2],
                 total_underflows=self._total_counts[1], total_overflows=self._total_counts[2],
                 total_callbacks=self._total_counts[0])
-        late, longest = getattr(stream, "output_late", (0, 0.0))
+        read = getattr(stream, "output_late", None)
+        late, longest, newest = read(self._reported_late) if read is not None else (0, 0.0, 0.0)
         new_late, self._reported_late = late - self._reported_late, late
         self._total_late += new_late
         self._max_gap = max(self._max_gap, longest)
-        if new_late:
-            log("output_late", level=logging.WARNING, callbacks=new_late,
-                max_gap_ms=round(longest * 1000), total_late=self._total_late)
+        self._unlogged_late += new_late
+        self._unlogged_gap = max(self._unlogged_gap, newest)
+        logged = self._late_logged_at
+        if self._unlogged_late and (now is None or logged is None
+                                    or not 0 <= now - logged < LATE_LOG_S):
+            log("output_late", level=logging.WARNING, callbacks=self._unlogged_late,
+                max_gap_ms=round(self._unlogged_gap * 1000), total_late=self._total_late)
+            self._unlogged_late, self._unlogged_gap = 0, 0.0
+            if now is not None:
+                self._late_logged_at = now
 
     def _stream_changed(self, stream: Stream | None) -> None:
         """Service thread only. Closing has joined the callback, so its final counts survive."""
