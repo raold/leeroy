@@ -186,11 +186,11 @@ async def enrich_one(ctx: "NightContext", guid: int) -> tuple[Persona | None, li
     merged persona and no problems, or (None, problems) when anything is wrong, a reply the
     model got wrong twice included; it is not asked again the same night. A fatal
     ReflectionError (the model is not there) is raised."""
-    p = ctx.persona(guid)
+    p = ctx.base(guid)  # a writer of persona fields: the stored persona, never a tuned one
     name = ctx.name(guid)
     system = system_prompt(
         STAGE, ENRICH_PROMPT, ctx.settings.data_dir, human=ctx.ident, name=name,
-        card=ctx.card(guid), facts=_facts(p),
+        card=ctx.base_card(guid), facts=_facts(p),
         tastes=TASTES_WOMAN.format(human=ctx.ident.called) if is_woman(p) else TASTES_MAN)
     ask = ENRICH_ASK.format(name=name)
     try:

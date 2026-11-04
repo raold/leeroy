@@ -22,8 +22,13 @@ the connection closed; nothing after the first line is read. One answer line com
     stop            the mind's own clean shutdown, the one Ctrl+C runs: answered, then begun
     raid {action}   call | form {raid, size, heroic, lead} | summon | start | stop | end:
                     guild life's own transitions, on the mind's event loop, with its guards
+    tune {action}   status | set {scope, target, dial, value, previewed} | undo {change} |
+                    revert {to} | group {id, name, where} | retire {id} |
+                    preview {scope, target, dial, value}: the owner's persona dials
+                    (leeroy_mind.tuning), written by this mind only, one change at a time,
+                    and in force from the next read; a preview's text goes only to the caller
 
-Logs carry the op, the action and the outcome, never the key or a name."""
+Logs carry the op, the action and the outcome, never the key, a name or a preview's text."""
 import asyncio
 import json
 import logging
@@ -45,10 +50,23 @@ MAX_LINE = 4096
 MAX_REPLY = 65536
 READ_S = 2.0  # the console sends its line at once: a slot is not held longer
 RAID_S = 30.0  # how long one raid action may take before the console is answered anyway
+PREVIEW_S = 40.0  # a preview's two lines, before and after, at background priority
 MAX_CONNECTIONS = 8
 REPLACE_TRIES = 40  # 2 s of 50 ms tries to move control.json over a file being read
-OPS = ("status", "stop", "raid")
+OPS = ("status", "stop", "raid", "tune")
 RAID_ACTIONS = ("call", "form", "summon", "start", "stop", "end")
+TUNE_ACTIONS = ("status", "set", "undo", "revert", "group", "retire", "preview")
+TUNE_SHAPES = {
+    "status": {"action"},
+    "set": {"action", "scope", "target", "dial", "value", "previewed"},
+    "undo": {"action", "change"},
+    "revert": {"action", "to"},
+    "group": {"action", "id", "name", "where"},
+    "retire": {"action", "id"},
+    "preview": {"action", "scope", "target", "dial", "value"},
+}
+TUNE_SCOPES = ("world", "group", "member")
+_DIAL_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz_")
 KEY_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
 
 
@@ -288,6 +306,75 @@ def raid_args(args) -> dict:
     return {"action": "form", "raid": raid, "size": size, "heroic": heroic, "lead": lead}
 
 
+def _count(v, lo: int) -> bool:
+    return type(v) is int and lo <= v < 1 << 32
+
+
+def _plain(v, most: int) -> bool:
+    return isinstance(v, str) and len(v) <= most and v.isprintable()
+
+
+def _where(where) -> bool:
+    """A group predicate's shape (tuning.groups checks what it means): up to 20 fields, each a
+    list of up to 12 short words, whole numbers or booleans."""
+    if not isinstance(where, dict) or len(where) > 20:
+        return False
+    for k, values in where.items():
+        if not (isinstance(k, str) and 1 <= len(k) <= 32 and set(k) <= _DIAL_CHARS):
+            return False
+        if not isinstance(values, list) or len(values) > 12:
+            return False
+        if not all((isinstance(x, str) and _plain(x, 40)) or type(x) in (int, bool)
+                   for x in values):
+            return False
+    return True
+
+
+def tune_args(args) -> dict:
+    """A tune action's arguments, exactly (TUNE_SHAPES), in raid_args' style: the shape here,
+    what it means (the dial, the member, the range) in the mind's tuning service, with the live
+    cast. BadRequest otherwise."""
+    if not isinstance(args, dict) or args.get("action") not in TUNE_ACTIONS:
+        raise BadRequest("tune: an action, one of " + ", ".join(TUNE_ACTIONS))
+    action = args["action"]
+    shape = TUNE_SHAPES[action]
+    if set(args) != shape:
+        if action == "status":
+            raise BadRequest("tune status: takes no arguments")
+        raise BadRequest(f"tune {action}: exactly " + ", ".join(sorted(shape - {"action"})))
+    if "scope" in shape:
+        if args["scope"] not in TUNE_SCOPES:
+            raise BadRequest(f"tune {action}: scope is world, group or member")
+        if not _plain(args["target"], 10):
+            raise BadRequest(f"tune {action}: target is text: '' for the world, everyone or a "
+                             "group id, or a member's guid")
+        dial = args["dial"]
+        if not (isinstance(dial, str) and 1 <= len(dial) <= 32 and set(dial) <= _DIAL_CHARS):
+            raise BadRequest(f"tune {action}: dial is a dial's name")
+        v = args["value"]
+        if v is not None and not (type(v) is int and -10 <= v <= 10):
+            raise BadRequest(f"tune {action}: value is a whole number from -10 to 10, or null")
+    if action == "set" and type(args["previewed"]) is not bool:
+        raise BadRequest("tune set: previewed is true or false")
+    if action == "undo" and not _count(args["change"], 1):
+        raise BadRequest("tune undo: change is a change's number")
+    if action == "revert" and not _count(args["to"], 0):
+        raise BadRequest("tune revert: to is a change's number (0: before any)")
+    if action in ("group", "retire"):
+        gid = args["id"]
+        if not (_count(gid, 1) or (action == "group" and gid is None)):
+            raise BadRequest(f"tune {action}: id is a group's number"
+                             + (", or null for a new one" if action == "group" else ""))
+    if action == "group":
+        if not _plain(args["name"], 40):
+            raise BadRequest("tune group: name is at most 40 printable characters")
+        if not _where(args["where"]):
+            raise BadRequest("tune group: where is fields mapped to lists of values")
+    return {k: args[k] for k in sorted(shape, key=["action", "scope", "target", "dial", "value",
+                                                     "previewed", "change", "to", "id", "name",
+                                                     "where"].index)}
+
+
 def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     """(op, args) from one request line; Forbidden for a wrong key, BadRequest otherwise."""
     if not line.endswith(b"\n") or len(line) > MAX_LINE:
@@ -298,7 +385,7 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
         raise BadRequest("bad request: not a JSON line") from None
     if not isinstance(value, dict) or not {"v", "key", "op"} <= set(value) <= {
             "v", "key", "op", "args"}:
-        raise BadRequest("bad request: exactly v, key, op (and args for a raid action)")
+        raise BadRequest("bad request: exactly v, key, op (and args for a raid or tune action)")
     given = value["key"]
     if not isinstance(given, str) or not secrets.compare_digest(
             given.encode("utf-8", "surrogatepass"), key.encode("ascii")):
@@ -308,13 +395,13 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     op = value["op"]
     if op not in OPS:
         raise BadRequest("bad request: op is one of " + ", ".join(OPS))
-    if op != "raid":
+    if op not in ("raid", "tune"):
         if "args" in value:
             raise BadRequest(f"bad request: {op} takes no args")
         return op, None
     if "args" not in value:
-        raise BadRequest("bad request: raid needs args")
-    return op, raid_args(value["args"])
+        raise BadRequest(f"bad request: {op} needs args")
+    return op, (raid_args if op == "raid" else tune_args)(value["args"])
 
 
 def encode(value) -> bytes:
@@ -364,6 +451,8 @@ class ControlEndpoint:
         self.listening = asyncio.Event()
         self._connections = 0
         self._raid = asyncio.Lock()
+        self._tune = asyncio.Lock()  # one tuning change at a time
+        self._preview = asyncio.Lock()  # one preview at a time
 
     async def serve(self) -> None:
         from leeroy_mind.console.httpd import listen_socket
@@ -444,8 +533,8 @@ class ControlEndpoint:
             already = self.app.stopping
             log_event("control_stop_requested", already=already)
             return {"ok": True, "stopping": True}, (None if already else self.app.request_stop)
-        reply = await self.raid(args)
-        log_event("control_request", op="raid", action=args["action"],
+        reply = await (self.raid(args) if op == "raid" else self.tune(args))
+        log_event("control_request", op=op, action=args["action"],
                   outcome="ok" if reply["ok"] else "refused")
         return reply, None
 
@@ -491,6 +580,32 @@ class ControlEndpoint:
             log_event("control_raid_failed", level=logging.WARNING, action=args["action"],
                       error=type(e).__name__)
             return {"ok": False, "error": f"the raid action failed ({type(e).__name__})"}
+
+
+    async def tune(self, args: dict) -> dict:
+        """The owner's dials (leeroy_mind.tuning.service): writes one at a time, previews one
+        at a time and bounded by PREVIEW_S; status at any time."""
+        service = getattr(self.app, "tuning", None)
+        if self.app.stopping:
+            return {"ok": False, "error": "the mind is stopping"}
+        if service is None:
+            return {"ok": False, "error": "tuning is not running in this mind"}
+        action = args["action"]
+        if action == "status":
+            return await service.handle(args)
+        if action == "preview":
+            if self._preview.locked():
+                return {"ok": False, "error": "another preview is still running"}
+            async with self._preview:
+                try:
+                    return await asyncio.wait_for(service.handle(args), PREVIEW_S)
+                except TimeoutError:
+                    return {"ok": False, "error": "The guild is talking a lot right now and the "
+                                                  "preview timed out. Try again in a moment."}
+        if self._tune.locked():
+            return {"ok": False, "error": "another tuning change is still being written"}
+        async with self._tune:
+            return await service.handle(args)
 
 
 def attach_control(app) -> ControlEndpoint | None:

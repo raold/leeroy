@@ -138,7 +138,14 @@ def cast_mix(ctx, *, start=REBALANCE_START):
         "stages": stages, "away": [r[0] for r in ctx.store.conn.execute("SELECT guid FROM away "
             "WHERE returned_at IS NULL AND left_at<=? ORDER BY guid", (ctx.clock.now(),))],
         "wow_bands": dict(wow), "dials": {"romance_dial": ctx.settings.romance_dial,
-            "jealousy": ctx.settings.jealousy, "wow_vs_life": ctx.settings.wow_vs_life}}
+            "jealousy": ctx.settings.jealousy, "wow_vs_life": ctx.settings.wow_vs_life,
+            **_tuning_stamp(ctx.store)}}
+
+
+def _tuning_stamp(store) -> dict:
+    """The owner's tuning version the week was played under (phase 3b), when there is one."""
+    version = store.get_meta("tuning_version")
+    return {"tuning_version": int(version)} if version and version.isdigit() else {}
 
 
 def _bids(store, bounds):

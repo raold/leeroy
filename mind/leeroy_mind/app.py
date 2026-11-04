@@ -54,6 +54,8 @@ from leeroy_mind.memory.recall import Recall
 from leeroy_mind.memory.threads import ClosedThread, ThreadTracker
 from leeroy_mind.memory.writer import Embedder, MemoryWriter
 from leeroy_mind.personas.io import PersonaCache
+from leeroy_mind.tuning.world import merge as merge_world
+from leeroy_mind.tuning.service import TuningService
 from leeroy_mind.protocol import (CORE_EVENT_TYPES, Ack, Achievement, AfkEvent, BgEnd, Boss,
                                   Cast, Chat, Death, Error, Event, Group, Hello, Login, Logout,
                                   LootWon, TextEmote, Zone, event_type)
@@ -354,6 +356,10 @@ class MindApp:
                                       max_inflight=cfg.ollama.max_inflight)
         self.embedder = Embedder(self.scheduler, cfg.models.embedding)
         self.personas = PersonaCache(self.store)
+        # mind.toml as read, and what runs: it with the owner's world dials stored in mind.db
+        # (tuning.world), which never write mind.toml
+        self.file_cfg = cfg
+        self.cfg = cfg = merge_world(cfg, self.personas.tuning)
         stored = self.store.get_meta("human_guid")
         self._human_named = bool(type(stored) is str and len(stored) <= 10
                                  and stored.isascii() and stored.isdecimal()
@@ -422,6 +428,7 @@ class MindApp:
         self.voice = attach_voice(self)
         self.guild = install_guild(self)
         self.training = attach_training(self)
+        self.tuning = TuningService(self)  # the owner's dials: the control endpoint's tune op
         self.control = attach_control(self)
         self.realm = attach_realm(self)  # Last: tests/realm/test_realm_wiring.py
 
@@ -947,6 +954,8 @@ class MindApp:
         except ConfigError as e:
             log.warning("config_invalid: kept the running config: %s", e)
             return False
+        self.file_cfg = cfg
+        cfg = merge_world(cfg, self.personas.tuning)
         if (cfg.ollama.url, cfg.models.embedding) != (self._runtime_url, self._runtime_embedding):
             log_event("config_restart_required", level=logging.WARNING,
                       fields=["ollama.url", "models.embedding"])

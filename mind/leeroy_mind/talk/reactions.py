@@ -26,7 +26,8 @@ from leeroy_mind.talk.channels import choose_channel
 from leeroy_mind.talk.filters import names_any
 from leeroy_mind.talk.pipeline import Pipeline, TurnMeta, log, picked_why
 from leeroy_mind.talk.raid import WIPE_SILENCE_S, RaidPhase
-from leeroy_mind.talk.romance import JealousyAsides, WhisperPlanner, rivalry_reply, rivalry_text
+from leeroy_mind.talk.romance import (JealousyAsides, WhisperPlanner, forward, rivalry_reply,
+                                      rivalry_text)
 from leeroy_mind.talk.seasons import holiday_topics
 from leeroy_mind.talk.select import pick_speakers
 from leeroy_mind.talk.states import substance_of
@@ -322,7 +323,7 @@ class Reactions(Pipeline):
         weights, _ = self._weigh(cands, last=hg, ctx=self._context(now), reply=False,
                                  fresh=women)
         for x in weights:
-            weights[x] *= LOOT_CHEER.get(self._cheer_stance(self.personas.get(x)), 1.0)
+            weights[x] *= _cheer_weight(self.personas.get(x), self._cheer_stance)
         items = []
         why = "gz_loot:weighted_draw"
         for i, x in enumerate(pick_speakers(weights, self.rng.randint(1, 2), self.rng)):
@@ -602,6 +603,14 @@ class Reactions(Pipeline):
                      addressee=self.human.guid, instruction=rivalry_text(woman, self.human),
                      delay=self.rng.uniform(*RIVAL_S))
         self._queue([(flirt, TurnMeta(self._new_id(), rivalry=True, why="rival:flirt"))])
+
+
+def _cheer_weight(p: Persona, stance_of) -> float:
+    """LOOT_CHEER for her stance, its lift scaled by her forward dial (tuning): 0 makes her
+    an ordinary cheerer, 10 twice the lift."""
+    w = LOOT_CHEER.get(stance_of(p), 1.0)
+    f = forward(p) if p is not None else 1.0
+    return w if f == 1.0 else 1 + (w - 1) * f
 
 
 def _fight_time(seconds: float) -> str:

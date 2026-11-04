@@ -74,10 +74,13 @@ member say what they could not know.
   the raid night (its call, comp, members, loot and DKP as they happen, recent
   raids, and the raid actions guild life performs: call, form, summon,
   start and stop the dungeon-clear run, end), the guild (roster, DKP ladder,
-  loot history, season awards, chronicle), the mind's and the voice service's
-  health, and their start, restart and stop. It runs apart from the mind, so it
-  can start the mind again; it stops the mind cleanly, and sends raid actions,
-  through the mind's loopback control endpoint.
+  loot history, season awards, chronicle), the cast's personas (mood, stance,
+  ties, memory counts, persona versions and drift) with their tuning dials at
+  world, group and member level (a sample-line preview, and a change log with
+  undo), the mind's and the voice service's health, and their start, restart
+  and stop. It runs apart from the mind, so it can start the mind again; it
+  stops the mind cleanly, and sends raid actions and dial changes, through the
+  mind's loopback control endpoint.
 
 Personas, memories, prompts and logs stay in the ignored `mind-data/`. See
 [the operating notes](CLAUDE.md#the-mind-service-leeroy_mind) for commands.

@@ -9,6 +9,7 @@ from leeroy_mind.nightly.motives import trait_today
 from leeroy_mind.nightly.relations import apply_capped
 from leeroy_mind.storage.rows import MemoryRow
 from leeroy_mind.text import strip_wow_markup, truncate_words
+from leeroy_mind.tuning.effective import dials_of
 
 OPS = ("level", "sharpen", "assimilate")
 OP_WORDS = {
@@ -32,9 +33,13 @@ def choose_op(teller_traits, hearer_affinity_to_about) -> str:
     return "level"
 
 
-def tell_score(importance, confidence, teller_traits) -> float:
-    return (importance / 10 * (1.5 - confidence)
-            * (0.5 + (teller_traits["extraversion"] + teller_traits["neuroticism"]) / 20))
+def tell_score(importance, confidence, teller_traits, drama: float = 1.0) -> float:
+    """How much a teller wants to pass a memory on. `drama`: the teller's drama dial
+    (tuning) as a multiplier, applied only to what has passed the privacy gates
+    (source_allowed checks them first)."""
+    score = (importance / 10 * (1.5 - confidence)
+             * (0.5 + (teller_traits["extraversion"] + teller_traits["neuroticism"]) / 20))
+    return score if drama == 1.0 else score * drama
 
 
 def discretion(p, traits_today) -> float:
@@ -55,6 +60,11 @@ def _privacy(store, memory):
 
 def _traits(ctx, teller):
     return trait_today(ctx.store, ctx.night, teller, ctx.persona(teller))
+
+
+def drama_of(ctx, teller) -> float:
+    """The teller's drama dial (tuning) as a multiplier: 1.0 as written."""
+    return dials_of(ctx.persona(teller)).mult("drama")
 
 
 def _disclosable(ctx, memory, teller, *, state=None, historical=False) -> bool:
@@ -136,7 +146,7 @@ def source_allowed(ctx, memory, teller, hearer, *, require_score=True) -> bool:
         if state and (state["state"] == "stifler" or state["tells"] >= MAX_TELLS):
             return False
     return not require_score or tell_score(memory.importance, memory.confidence,
-                                           _traits(ctx, teller)) >= TELL_MIN
+                                           _traits(ctx, teller), drama_of(ctx, teller)) >= TELL_MIN
 
 
 def rumor_offer(ctx, enc):

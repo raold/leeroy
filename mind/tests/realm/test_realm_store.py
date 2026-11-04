@@ -59,7 +59,7 @@ def _receipt(conn, command_id="r1", **overrides):
 
 def test_fresh_migration_adds_exact_plan_tables_and_diagnostics(conn):
     latest = db.latest_version()
-    assert latest == 16
+    assert latest >= 16  # the Realm's own end at 0016; a later migration adds no realm_ table
     assert _tables(conn) == REALM_TABLES
     assert conn.execute("PRAGMA user_version").fetchone()[0] == latest
     assert db.migrate(conn) == latest
@@ -88,16 +88,19 @@ def test_migration_upgrades_only_a_disposable_v8_copy_and_preserves_old_schema_a
     source_hash = hashlib.sha256(source.read_bytes()).digest()
     copy = tmp_path / "upgrade-copy.db"
     shutil.copy2(source, copy)
-    upgraded = db.open_db(copy)
-    try:
-        assert _tables(upgraded) == REALM_TABLES
-        assert _unrelated_schema(upgraded) == schema
-        assert upgraded.execute("SELECT value FROM meta WHERE key=?",
-                                ("realm-upgrade-sentinel",)).fetchone()[0] == "preserve-existing-row"
-        assert db.migrate(upgraded) == db.latest_version()
-        assert _unrelated_schema(upgraded) == schema
-    finally:
-        upgraded.close()
+    with monkeypatch.context() as patch:  # the Realm's migrations; later ones add tables of their own
+        patch.setattr(db, "_migration_files", lambda: [
+            (version, path) for version, path in migration_files() if version <= 16])
+        upgraded = db.open_db(copy)
+        try:
+            assert _tables(upgraded) == REALM_TABLES
+            assert _unrelated_schema(upgraded) == schema
+            assert upgraded.execute("SELECT value FROM meta WHERE key=?",
+                                    ("realm-upgrade-sentinel",)).fetchone()[0] == "preserve-existing-row"
+            assert db.migrate(upgraded) == db.latest_version() == 16
+            assert _unrelated_schema(upgraded) == schema
+        finally:
+            upgraded.close()
     assert hashlib.sha256(source.read_bytes()).digest() == source_hash
 
 

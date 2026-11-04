@@ -258,11 +258,34 @@ def _doctor_db(root: Path, latest: int, cfg=None) -> list[tuple[bool | None, str
         lines.append(_doctor_voice_specs(root, personas))
         if human is not None:
             lines += _doctor_notes(store, personas, human, cfg)
+        lines += _doctor_tuning(conn, cfg)
         return lines
     except sqlite3.Error as e:
         return [(False, f"mind.db cannot be read: {e}"), (False, "personas: not read")]
     finally:
         conn.close()
+
+
+def _doctor_tuning(conn, cfg) -> list[tuple[bool | None, str]]:
+    """Notes on the owner's dials (phase 3b): each world dial whose stored override shadows
+    mind.toml, and how many member values and group offsets are set. Nothing when none is.
+    Dial names and numbers only."""
+    from .tuning.state import Tuning
+    from .tuning.world import shadowed
+    t = Tuning.load(conn)
+    if t.empty:
+        return []
+    out = [(None, f"tuning: {name} {value} overrides mind.toml's {file} (the console's "
+                  "'back to mind.toml' clears it)")
+           for name, file, value in (shadowed(cfg, t) if cfg is not None else [])]
+    pins = sum(len(d) for d in t.pins.values())
+    offsets = sum(len(d) for d in t.offsets.values())
+    out.append((None, f"tuning: version {t.version}, {pins} member value"
+                      f"{'' if pins == 1 else 's'} on {len(t.pins)} member"
+                      f"{'' if len(t.pins) == 1 else 's'}, {offsets} group offset"
+                      f"{'' if offsets == 1 else 's'}, {len(t.world)} world override"
+                      f"{'' if len(t.world) == 1 else 's'}"))
+    return out
 
 
 def _doctor_voice_specs(root: Path, personas) -> tuple[bool | None, str]:
@@ -354,8 +377,10 @@ def _doctor_overlays(root: Path) -> list[tuple[bool, str]]:
     from .prompts import read_overlay
     from .talk.romance import OVERLAY_CAPS
     from .text import estimate_tokens
+    from .tuning.lines import OVERLAY_CAP_TOKENS as TUNING_CAP, OVERLAY_NAMES as TUNING_OVERLAYS
     caps = dict(OVERLAY_CAPS)
     caps["persona_rules"] = OVERLAY_TOKEN_CAP
+    caps.update({name: TUNING_CAP for name in TUNING_OVERLAYS})
     folder = root / "prompts"
     out = []
     for path in sorted(folder.glob("*.txt")) if folder.is_dir() else ():
@@ -1147,6 +1172,9 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     if argv and argv[0] == "realm":
         from .realm.cli import realm_main
         return realm_main(argv[1:])
+    if argv and argv[0] == "tuning":
+        from .tuning.cli import tuning_main
+        return tuning_main(argv[1:])
     if argv and argv[0] in ("nightly", "eval"):
         from .nightly.cli import eval_main, nightly_main
         command = nightly_main if argv[0] == "nightly" else eval_main
@@ -1158,6 +1186,8 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("training", help="training ledger, gate, reports and spell checks")
     sub.add_parser("realm", help="read-only realm status and title diagnostics")
+    sub.add_parser("tuning", help="the owner's persona dials: status, history, and undo or "
+                   "revert with the mind stopped")
     sub.add_parser("nightly", help="nightly status, trials, ledger and owner controls")
     sub.add_parser("eval", help="weekly evaluation on a copied database by default")
     sub.add_parser("console", help="the guild console on http://127.0.0.1:7881/ (comms, the "
