@@ -13,6 +13,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 import shutil
 import socket
 import stat
@@ -25,6 +26,13 @@ REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "dojo" / "preflight.ps1"
 PWSH = shutil.which("pwsh")
 GIT = shutil.which("git")
+
+# The parts of mod-dojo the preflight checks: a .cmake and a loader named after the folder, shipped off.
+DOJO_MODULE_FILES = {
+    "mod-dojo.cmake": "# dojo\n",
+    "src/mod_dojo_loader.cpp": "void AddSC_dojo_world();\n\nvoid Addmod_dojoScripts()\n{\n    AddSC_dojo_world();\n}\n",
+    "conf/mod_dojo.conf.dist": "[worldserver]\nDojo.Enable = 0\n",
+}
 
 LIVE_PW = "livepw-7c3x"
 LIVE_USER = "liveuser7"
@@ -110,7 +118,8 @@ class PreflightTest(unittest.TestCase):
         make_repo(cls.live_core, {"src/server/README": "core\n", "modules/.gitkeep": "",
                                   ".gitignore": "modules/mod-playerbots/\n"})
         cls.live_pb = cls.live_core / "modules" / "mod-playerbots"
-        make_repo(cls.live_pb, {"src/Bot/PlayerbotAI.cpp": "// bots\n"})
+        make_repo(cls.live_pb, {"src/Bot/PlayerbotAI.cpp": "// bots\n", "mod-playerbots.cmake": "# bots\n",
+                                "src/Script/playerbots_loader.cpp": "void Addmod_playerbotsScripts() { }\n"})
         write(live / "build" / "CMakeCache.txt", f"CMAKE_HOME_DIRECTORY:INTERNAL={cls.live_core.as_posix()}\n")
         configs = live / "build" / "bin" / "RelWithDebInfo" / "configs"
         cls.live_configs = configs
@@ -132,7 +141,9 @@ class PreflightTest(unittest.TestCase):
 
         source = t / "wt"
         cls.source = source
-        (source / "modules" / "mod-dojo").mkdir(parents=True)
+        cls.dojo_module = source / "modules" / "mod-dojo"
+        for rel, text in DOJO_MODULE_FILES.items():
+            write(cls.dojo_module / rel, text)
         (source / "dojo" / "leeroy_dojo").mkdir(parents=True)
         cls.core = t / "core"
         cls.pb = t / "pb"
@@ -333,8 +344,7 @@ class PreflightTest(unittest.TestCase):
     def test_rejects_a_link_nested_inside_a_module_or_the_core(self):
         """The reviewer's probe: mod-dojo/src as a junction into the live mod-leeroy used to pass."""
         for label, link, target in (
-                ("link module mod-dojo", self.source / "modules" / "mod-dojo" / "src",
-                 self.live / "modules" / "mod-leeroy"),
+                ("link module mod-dojo", self.dojo_module / "src" / "Runtime", self.live / "modules" / "mod-leeroy"),
                 ("link module mod-playerbots", self.pb / "src" / "live", self.live_pb / "src"),
                 ("link core", self.core / "src" / "server" / "shared", self.live_core / "src")):
             with self.subTest(label):
@@ -352,6 +362,70 @@ class PreflightTest(unittest.TestCase):
         finally:
             unlink_dir(inside)
         self.assertEqual((code, self.failures(report)), (0, {}), "a link within the isolated checkouts is fine")
+
+    def test_rejects_module_files_that_do_not_follow_the_folder_name(self):
+        """CLAUDE.md build trap 1: CMake includes only <dir>/<dir>.cmake and the loader calls Add<dir>Scripts(), so a
+        .cmake or loader named for another folder is skipped silently or fails to link."""
+        dojo = self.dojo_module
+        loader = dojo / "src" / "mod_dojo_loader.cpp"
+        cases = (
+            ("module rules mod-dojo", {dojo / "mod-dojo.cmake": None, dojo / "mod-dojo-master.cmake": "# dojo\n"},
+             "would be skipped silently"),
+            ("module rules mod-dojo", {dojo / "mod-dojo.cmake": None}, "has no mod-dojo.cmake"),
+            ("module rules mod-dojo", {loader: "void Addmod_dojo_masterScripts()\n{\n}\n"},
+             "defines no Addmod_dojoScripts()"),
+            ("module rules mod-dojo", {loader: "void Addmod_dojoScripts();\n"}, "defines no Addmod_dojoScripts()"),
+            ("module rules mod-playerbots", {self.pb / "src" / "Script" / "playerbots_loader.cpp": None},
+             "defines no Addmod_playerbotsScripts()"),
+        )
+        for check, files, words in cases:
+            with self.subTest(check=check, words=words, files=[p.name for p in files]):
+                with contextlib.ExitStack() as stack:
+                    for path, text in files.items():
+                        stack.enter_context(self.with_file(path, text))
+                    code, report, output = self.run_preflight(self.layout)
+                self.assertEqual(code, 1, output)
+                self.assertIn(words, self.failures(report).get(check, ""), output)
+        code, report, output = self.run_preflight(self.layout)
+        self.assertEqual((code, self.failures(report)), (0, {}), output)
+
+    def test_rejects_a_mod_dojo_that_ships_on(self):
+        dist = self.dojo_module / "conf" / "mod_dojo.conf.dist"
+        for text in ("[worldserver]\nDojo.Enable = 1\n", "[worldserver]\n", None):
+            with self.subTest(text=text):
+                with self.with_file(dist, text):
+                    code, report, _ = self.run_preflight(self.layout)
+                self.assertEqual(code, 1)
+                self.assertIn("does not ship Dojo.Enable = 0", self.failures(report)["module rules mod-dojo"])
+
+    def test_configure_and_build_refuse_what_the_preflight_refuses(self):
+        """Both stop before CMake when the preflight fails, here on the live build tree as roots.build."""
+        layout_path = self.tmp / "layout-refused.json"
+        layout_path.write_text(json.dumps(self.changed(roots__build=self.layout["production"]["build"])),
+                               encoding="utf-8")
+        before = snapshot(self.live, self.tmp / "rt")
+        for script in ("configure.ps1", "build.ps1"):
+            with self.subTest(script=script):
+                result = subprocess.run(
+                    [PWSH, "-NoProfile", "-NonInteractive", "-File", str(SCRIPT.parent / script), "-Layout",
+                     str(layout_path)], capture_output=True, text=True, encoding="utf-8", timeout=300)
+                output = result.stdout + result.stderr
+                self.assertEqual(result.returncode, 1, output)
+                expected = "preflight did not pass" if os.name == "nt" else "Windows-only"
+                self.assertIn(expected, output)
+                self.assert_no_secrets(output)
+        self.assertEqual(snapshot(self.live, self.tmp / "rt"), before)
+
+    @unittest.skipUnless(os.name == "nt", "the dojo build is Windows-only")
+    def test_build_refuses_a_tree_configure_did_not_make(self):
+        layout_path = self.tmp / "layout-unconfigured.json"
+        layout_path.write_text(json.dumps(self.layout), encoding="utf-8")
+        result = subprocess.run(
+            [PWSH, "-NoProfile", "-NonInteractive", "-File", str(SCRIPT.parent / "build.ps1"), "-Layout",
+             str(layout_path)], capture_output=True, text=True, encoding="utf-8", timeout=300)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("run configure.ps1 first", result.stdout)
+        self.assertEqual(list((self.tmp / "rt" / "build").iterdir()), [])
 
     def test_rejects_a_missing_marker(self):
         marker = Path(self.layout["roots"]["runtime"]) / "dojo.marker"
@@ -676,6 +750,19 @@ class PreflightSourceTest(unittest.TestCase):
                           "system.net.sockets", "dns]::gethostentry", "dns]::resolve", "invoke-webrequest",
                           "invoke-restmethod"):
             self.assertNotIn(forbidden, text)
+
+    def test_configure_and_build_run_only_the_build_tools(self):
+        """D03: neither uses the production ac-build.sh or ac-server.sh, a database client or a server. The only
+        programs they run are the preflight, cmake, git, vswhere and dumpbin."""
+        for name in ("configure.ps1", "build.ps1"):
+            text = (SCRIPT.parent / name).read_text(encoding="utf-8")
+            calls = set(re.findall(r"(?m)(?:^|[\s(=])&\s+(\$?[\w.-]+)", text))
+            self.assertTrue(calls, name)
+            self.assertLessEqual(calls, {"pwsh", "cmake", "git", "$vswhere", "$dumpbin"}, name)
+            self.assertLessEqual(set(re.findall(r"Start-Process\s+-FilePath\s+'([^']+)'", text)), {"cmake"}, name)
+            lowered = text.lower()
+            for forbidden in ("invoke-expression", "mysql.exe", "ac-server", "system.net.sockets", "bash"):
+                self.assertNotIn(forbidden, lowered, name)
 
 
 if __name__ == "__main__":

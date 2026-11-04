@@ -32,7 +32,9 @@
     "dojo": 0
   },
   "toolchain": {
-    "boost": "F:/azerothcore/boost_1_92_0"
+    "boost": "F:/azerothcore/boost_1_92_0",
+    "mysql": "C:/Program Files/MySQL/MySQL Server 8.4",
+    "openssl": "C:/Program Files/OpenSSL-Win64"
   },
   "production": {
     "install_root": "F:/azerothcore",
@@ -54,6 +56,6 @@
       {"host": "127.0.0.1", "port": 3306, "schema": "acore_world"},
       {"host": "127.0.0.1", "port": 3306, "schema": "acore_playerbots"}
     ],
-    "ports": [3724, 8085, 7878, 7879, 7880, 11434]
+    "ports": [3724, 8085, 7878, 7879, 7880, 7881, 11434]
   }
 }

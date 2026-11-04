@@ -9,9 +9,11 @@ This is the foundation increment: an isolated layout and its preflight check;
 the environment protocol with its lifecycle state machine and loopback
 transport, written once in pure C++ (`modules/mod-dojo/src/Lib`, no
 AzerothCore includes) and once in Python (`leeroy_dojo`); a deterministic fake
-worker; and a checksummed episode recorder. There is no learner, no Torch or
-Gymnasium dependency and no native module build yet: `mod-dojo` has no
-registration or loader, so it must not be linked into a core.
+worker; a checksummed episode recorder; and `mod-dojo` registered as a native
+module that builds into an isolated core, where so far it only reads its
+configuration and reports its state. There is no learner and no Torch or
+Gymnasium dependency, and nothing in the worldserver opens an endpoint or
+controls a bot yet.
 
 ## Layout
 
@@ -58,7 +60,10 @@ git checkout, the live `CMakeCache.txt` must name that core, and the live
 unparseable value is refused). It then refuses a root that is, is inside or
 contains the live install, its core, build, configuration, modules or
 protected folders; a module set other than playerbots and dojo (plus listed
-experiment modules); a junction or symlink that leaves the isolated checkouts,
+experiment modules); a module whose `.cmake` or `Add<dir>Scripts()` loader does
+not follow its folder name (CMake would skip the one silently and the link
+would miss the other), or a `mod-dojo` that does not ship `Dojo.Enable = 0`;
+a junction or symlink that leaves the isolated checkouts,
 including one nested anywhere inside the core or a module; a missing or
 mismatched marker; a training database that is not on loopback, names a live
 schema (this machine under any name: loopback, host name or interface address,
@@ -74,6 +79,77 @@ root check has passed, and then only inside the data root, never over a file
 that is not a provenance manifest. Later runtime commands require that
 manifest and the marker. Exit status is 0 when nothing failed, 1 on a failed
 check and 2 for an unreadable layout.
+
+## The native module
+
+`modules/mod-dojo` follows mod-leeroy's shape: `CMakeLists.txt` hands `src/`
+to the script loader, `mod-dojo.cmake` sets up the core's `modules` target,
+`src/mod_dojo_loader.cpp` defines `Addmod_dojoScripts()` and
+`conf/mod_dojo.conf.dist` ships the keys:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `Dojo.Enable` | `0` | the master switch |
+| `Dojo.Marker` | `""` | must be `leeroy-dojo-training` for `Dojo.Enable = 1` |
+| `Dojo.Instance` | `""` | the layout's instance, 1-64 of `A-Za-z0-9._:-` |
+
+The runtime (`src/Runtime`) reads them once at start and logs one line: `off`
+(`Dojo.Enable = 0`), `refused` (on, but a disabled build or a missing marker
+or instance; logged as an error) or `armed` (a training build with its
+training configuration). In every state it starts no endpoint and controls no
+bot; the step driver and the controller hook bring those. A config reload is
+reported and never applied. `src/Lib` stays pure and is compiled into the core
+as well as into the standalone tests.
+
+The build has two variants, chosen by the CMake option `AC_ENABLE_DOJO`
+(default `OFF`). Off is the disabled variant every core containing mod-dojo
+gets: it refuses `Dojo.Enable = 1`. `ON` is the training variant, which
+`mod-dojo.cmake` configures only when the core's other modules are absent or
+disabled (playerbots and dojo, D02). The switch reaches the runtime sources
+alone as `DOJO_TRAINING_BUILD`, so flipping it recompiles only those, and they
+refuse to compile without it, which also catches a skipped `mod-dojo.cmake`.
+The core's own time and control hooks will read the same switch: their patch
+series (`patches/azerothcore/`) declares it beside the other options in the
+core's `conf/dist/config.cmake`, reports it in `src/cmake/showoptions.cmake`
+and adds its definition there, as `WITH_COREDEBUG` does; `mod-dojo.cmake`'s
+own declaration then does nothing.
+
+mod-leeroy and mod-dojo both put their `deps/` on the `modules` target, and
+the first include directory wins, so their vendored `nlohmann/json.hpp`
+copies must stay byte-identical: `tests/test_module.py` and `mod-dojo.cmake`
+both refuse a difference.
+
+## Isolated build
+
+`scripts/dojo/configure.ps1` and `scripts/dojo/build.ps1` build the layout's
+core into its own build root. Both run the preflight first and stop unless it
+passes; neither uses `ac-build.sh` or touches the live build.
+
+```powershell
+pwsh -NoProfile -File scripts/dojo/configure.ps1 -Layout <layout.json> [-Variant disabled|training]
+pwsh -NoProfile -File scripts/dojo/build.ps1 -Layout <layout.json> [-Jobs 4]
+```
+
+`configure.ps1` configures a missing build root fresh (Visual Studio 2022,
+x64, RelWithDebInfo only, static scripts and modules, both servers, no tools)
+with Boost, MySQL and OpenSSL from the layout's `toolchain` section, and
+reconfigures an existing one only when its cache names the dojo core and the
+same generator. It checks that the generated script loader registers exactly
+`mod_playerbots` and `mod_dojo` and that the variant reached the cache and the
+runtime sources, then writes `dojo-configure.json` in the build root.
+
+`build.ps1` builds with a true global compiler cap (`-m:N`, MultiToolTask,
+`EnforceProcessCountAcrossBuilds`, `CL_MPCount=N`, no node reuse; default 4,
+at most 16) and reports the peak number of compilers its build ran. Never
+interrupt it mid-compile (CLAUDE.md, build trap 4); stopping the script leaves
+the build running. It then checks the link, not just the exit code:
+`modules.lib` defines `Addmod_dojoScripts`, `AddSC_dojo_world` and
+`Addmod_playerbotsScripts`, `worldserver.pdb` names them,
+`worldserver.exe` carries the configured variant's tag and not the other's,
+and the copied `mod_dojo.conf.dist` keeps `Dojo.Enable = 0`. Its receipt goes
+to the build root's `dojo-build.json` and to the data root's `builds/`.
+Building starts nothing: running the worldserver needs the training realm and
+its configuration.
 
 ## Protocol
 
@@ -256,8 +332,10 @@ build-dojo-tests/RelWithDebInfo/dojo_tests.exe
 CI builds the same tests with GCC and `-DDOJO_WARNINGS_AS_ERRORS=ON`
 (`-Wall -Wextra -Werror`; `/W4 /WX` with MSVC).
 
-The tests run without AzerothCore, MySQL, Torch or a running server. The
-preflight tests build a synthetic install in a temporary directory and are
+The tests run without AzerothCore, MySQL, Torch or a running server.
+`test_module.py` checks the module's source tree statically: names, defaults,
+the runtime's includes and the shared `json.hpp`. The preflight tests build a
+synthetic install in a temporary directory and are
 skipped when `pwsh` or `git` is missing; one of them runs the preflight with
 only logging shims on `PATH` and listeners on every database and game port,
 and another checks that nothing outside the data root changes. They link

@@ -8,7 +8,9 @@ Checks a dojo training layout without starting anything.
 .DESCRIPTION
 Reads a layout file (see layout.example.json) and reports one ok/FAIL/note line
 per check: the live install it must stay away from, source, core, playerbots,
-build, runtime and data roots, module linkage, the training marker, the
+build, runtime and data roots, module linkage and folder-name rules (each
+module's .cmake and script loader follow its folder name; mod-dojo ships with
+Dojo.Enable = 0), the training marker, the
 provenance manifest, database targets, asset availability, requested and
 configured ports and toolchains. It refuses rather than passes whenever it
 cannot positively identify the live install and its database targets. It never
@@ -555,6 +557,37 @@ function Test-DojoLeaves([string] $Target) {
     $live = @($liveAreas | Where-Object { Test-DojoUnder $Target $_ }).Count -gt 0
     return (-not $inside) -or $live
 }
+# CLAUDE.md build trap 1: CMake includes only modules/<dir>/<dir>.cmake, and the generated loader calls
+# Add<dir, dashes as underscores>Scripts(), so a module whose files do not follow its folder name is skipped
+# silently or fails to link. mod-dojo also needs its .cmake (the variant switch its runtime refuses to compile
+# without) and must ship off.
+function Get-DojoModuleProblems([string] $Name, [string] $Root) {
+    $problems = [System.Collections.Generic.List[string]]::new()
+    $cmakeFiles = @(Get-ChildItem -LiteralPath $Root -Filter '*.cmake' -File -Force -ErrorAction SilentlyContinue)
+    $own = Test-Path -LiteralPath "$Root/$Name.cmake" -PathType Leaf
+    if ($cmakeFiles.Count -gt 0 -and -not $own) {
+        $problems.Add("ships $($cmakeFiles[0].Name), but CMake includes only $Name.cmake, so it would be skipped silently")
+    }
+    $loader = 'Add' + $Name.Replace('-', '_') + 'Scripts'
+    $pattern = [regex]::new("(?m)^\s*void\s+$loader\s*\(\s*\)\s*(\{|$)")
+    $defined = $false
+    if (Test-Path -LiteralPath "$Root/src" -PathType Container) {
+        foreach ($file in [System.IO.Directory]::EnumerateFiles("$Root/src", '*.cpp', [System.IO.SearchOption]::AllDirectories)) {
+            $text = [System.IO.File]::ReadAllText($file)
+            if ($text.Contains($loader) -and $pattern.IsMatch($text)) { $defined = $true; break }
+        }
+    }
+    if (-not $defined) { $problems.Add("src defines no $loader(), which the generated script loader calls (LNK2019)") }
+    if ($Name -eq 'mod-dojo') {
+        if (-not $own) { $problems.Add('has no mod-dojo.cmake') }
+        $dist = Read-DojoConf "$Root/conf/mod_dojo.conf.dist"
+        if (-not $dist.ContainsKey('Dojo.Enable') -or $dist['Dojo.Enable'] -ne '0') {
+            $problems.Add('conf/mod_dojo.conf.dist does not ship Dojo.Enable = 0')
+        }
+    }
+    return , $problems
+}
+
 $scanned = [System.Collections.Generic.List[object]]::new()
 if ($resolved.core -and (Test-Path -LiteralPath "$($resolved.core)/modules" -PathType Container)) {
     $moduleRoots = @(@("$($resolved.source)/modules", $resolved.playerbots, $resolved.core) | Where-Object { $_ })
@@ -583,6 +616,14 @@ if ($resolved.core -and (Test-Path -LiteralPath "$($resolved.core)/modules" -Pat
         }
         if (-not (Test-DojoLeaves $target)) {
             $scanned.Add([pscustomobject]@{ label = "module $name"; root = $target; skip = @() })
+            if ($name -in $modules) {
+                $rules = Get-DojoModuleProblems $name $target
+                if ($rules.Count -gt 0) {
+                    Add-DojoCheck 'FAIL' "module rules $name" ($rules -join '; ')
+                } else {
+                    Add-DojoCheck 'ok' "module rules $name" "files follow the folder name (loader Add$($name.Replace('-', '_'))Scripts)"
+                }
+            }
         }
     }
     foreach ($name in $modules) {
