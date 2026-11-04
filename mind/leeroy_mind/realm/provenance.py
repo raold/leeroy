@@ -7,6 +7,7 @@ separate callers' responsibilities. Importing this module attaches no hooks.
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 import hashlib
 import json
 import math
@@ -15,7 +16,7 @@ from dataclasses import fields
 
 from leeroy_mind.human import HumanIdentity
 from leeroy_mind.ingress import RowReceipt, WireOrigin, game_row_binding
-from leeroy_mind.personas.io import load_persona
+from leeroy_mind.personas.schema import persona_from_dict
 from leeroy_mind.personas.screens import ROMANCE_RE, names_real_name
 from leeroy_mind.protocol import BgEnd, sanitize_say_text
 from leeroy_mind.storage.store import Store
@@ -893,6 +894,48 @@ def _bound_receipt(store, receipt, event, policy):
     return row, payload
 
 
+class _PersonaRows:
+    """How each member's stored persona row loads, reused by that row's exact text.
+
+    `load_persona` is a pure function of the guid and the persona_core.json text. The
+    text is still read in the caller's unit for every capture; only a parse of identical
+    text is reused, so a changed, added or removed persona is never answered from an
+    older row. Results: None (no row), 'ok', 'unreadable' (ValueError) or 'mismatch'.
+    Any other exception is raised every time, as before, and nothing is remembered.
+    """
+
+    LIMIT = 4096
+
+    def __init__(self):
+        self._rows: OrderedDict[int, tuple[object, str]] = OrderedDict()
+
+    def clear(self):
+        self._rows.clear()
+
+    def __call__(self, store, guid):
+        text = store.get_persona_json(guid)
+        if text is None:
+            return None
+        known = self._rows.get(guid)
+        if known is not None and type(known[0]) is type(text) and known[0] == text:
+            self._rows.move_to_end(guid)
+            return known[1]
+        try:
+            persona = persona_from_dict(json.loads(text))
+        except ValueError:  # Expected unreadable/newer persona data only.
+            result = 'unreadable'
+        else:
+            result = 'ok' if persona.guid == guid else 'mismatch'
+        self._rows[guid] = (text, result)
+        self._rows.move_to_end(guid)
+        while len(self._rows) > self.LIMIT:
+            self._rows.popitem(last=False)
+        return result
+
+
+_persona_rows = _PersonaRows()
+
+
 def capture_qualification_in_unit(store, *, human: HumanIdentity, event,
         receipt: RowReceipt, context: ActionContext, confirmed_human_guid: int,
         transport_epoch: int, captured_at: float):
@@ -925,13 +968,10 @@ def capture_qualification_in_unit(store, *, human: HumanIdentity, event,
             guid = _integer(row['guid'], 1)
             if guid == confirmed_human_guid or guid in kicked:
                 continue
-            try:
-                persona = load_persona(store, guid)
-            except ValueError:  # Expected unreadable/newer persona data only.
-                continue
-            if persona is not None:
-                if persona.guid != guid:
-                    _fail()
+            loaded = _persona_rows(store, guid)
+            if loaded == 'mismatch':
+                _fail()
+            if loaded == 'ok':
                 cast.append(guid)
         guilds = [_integer(row['id'], 1) for row in store.conn.execute(
             "SELECT id FROM realm_guild WHERE status='active' ORDER BY id")]
