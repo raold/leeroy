@@ -16,8 +16,8 @@ from leeroy_mind.realm.provenance import public_fact_in_unit, render_public
 from leeroy_mind.realm.records import FactRow, Rejected
 from leeroy_mind.storage import db
 from leeroy_mind.wow import BOSS_NAMES, DUNGEON_BOSS_NAMES, DUNGEONS, RAID_MAPS
-from test_realm_foundation_schema import H, _announcement, _insert, _kill, _row, _source
-from test_realm_live_proof import HUMAN, PAYLOADS, observe, roster
+from test_realm_foundation_schema import _announcement, _insert, _kill, _row, _source
+from test_realm_live_proof import HUMAN, observe, roster
 from test_realm_source_admission import application, envelope, run
 
 ACHIEVEMENT, DUEL, DUNGEON = 'realm_first_achievement_v1', 'duel_result_v1', 'verified_dungeon_kill_v1'
