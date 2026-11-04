@@ -212,7 +212,8 @@ class Progress:
         """The ledger's (state, reason, value) of item idx; None before it was ever prepared."""
         return self._steps.ledger().state(OWNER, self.ref(idx))
 
-    async def send(self, idx: int, cmd, *, expects_job: bool = False) -> tuple[str, str | None, int | None] | None:
+    async def send(self, idx: int, cmd, *,
+                   expects_job: bool = False) -> tuple[str, str | None, int | None] | None:
         """Prepare and send item idx once; the ledger's (state, reason, value) after it. An item
         done, refused for good or unknown is never sent again: its state is returned. One that
         never moved anything (_again) is sent again with a fresh command id, and the step
