@@ -166,10 +166,23 @@ def test_the_fallback_log_names_why_the_cpu_voice_was_skipped(tmp_path, fake_ban
         await rig.mind.send(rig.speak("rushed", text="Quick, over here.", ttl=8))
         await rig.sees("rushed", "started")
         assert cpu.budgets == []
+        await rig.play_out()
+        await rig.tick(.5)
+        await rig.mind.send(rig.speak("direct", text="I can help with that.", to_human=True))
+        await rig.sees("direct", "started")
     go(tmp_path, fake_bank, cpu, body)
-    why = {getattr(r, logs._FIELDS_ATTR)["id"]: getattr(r, logs._FIELDS_ATTR)["why"]
-           for r in events(caplog, "engine_fallback")}
+    fields = lambda name: [getattr(r, logs._FIELDS_ATTR) for r in events(caplog, name)]
+    why = {f["id"]: f["why"] for f in fields("engine_fallback")}
     assert why == {"ambient": "CPU voice: p3 only, not p4", "rushed": "CPU deadline too short"}
+    # which engine spoke each line, and how long it waited, are in the log; the words are not
+    kokoro = "fake"  # the rig's stand-in for Kokoro, by its engine name
+    made = {f["id"]: f["engine"] for f in fields("segment_ready")}
+    assert made == {"ambient": kokoro, "rushed": kokoro, "direct": f"{TURBO}/cpu"}
+    started = {f["id"]: f for f in fields("line_started")}
+    assert {i: (f["engine"], f["tier"]) for i, f in started.items()} == {
+        "ambient": (kokoro, "p4"), "rushed": (kokoro, "p3"), "direct": (f"{TURBO}/cpu", "p3")}
+    assert all(f["wait_ms"] >= 0 for f in started.values())
+    assert "help" not in str(fields("segment_ready") + fields("line_started"))
 
 
 def test_kokoro_member_keeps_all_sentences_while_cpu_turbo_is_warm(tmp_path, fake_bank):
