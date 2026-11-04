@@ -176,6 +176,7 @@ void TickCastGuard(std::uint32_t diff)
     auto* guard = module.Guard();
     if (!guard)
         return;
+    EnsureKickReceiptStore(*guard); // Before any pass: what a restart would otherwise forget.
     {
         std::lock_guard lock(factsMutex);
         for (auto it = kicks.begin(); it != kicks.end();)
@@ -275,8 +276,11 @@ void TickCastGuard(std::uint32_t diff)
         auto const ts = NowUnixMs();
         LeeroyModule::Instance().Publish(EncodeEvent(ts, MakeGuard(step.guid, ActionName(step.action), step.rank, reason)),
             false);
-        if (step.action == GuardAction::HisKick && ts > 0)
-            guard->NoteKickReceipt(step.guid, static_cast<std::uint64_t>(ts), step.rank);
+        if (step.action == GuardAction::HisKick && ts > 0
+            && guard->NoteKickReceipt(step.guid, static_cast<std::uint64_t>(ts), step.rank)
+            && !StoreKickReceipt(*guard, step.guid, *guard->Receipt(step.guid)))
+            LOG_ERROR("module.leeroy", "mod-leeroy: cast guard kick receipt for {} not stored; a restart forgets it",
+                step.guid);
         LOG_INFO("module.leeroy", "mod-leeroy: cast guard {} {} rank {}", ActionName(step.action), step.guid, uint32(step.rank));
     }
 }
