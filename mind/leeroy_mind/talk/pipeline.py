@@ -25,6 +25,7 @@ import math
 import random
 import re
 from collections import defaultdict, deque
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Awaitable, Callable
@@ -68,6 +69,7 @@ from leeroy_mind.talk.seasons import day_line
 from leeroy_mind.talk.style import (ROMANCE_EMOTES, Styled, command_only, emote_words,
                                     line_cap, split_emotes, style_lines, turn_lines)
 from leeroy_mind.talk.turns import Turn, TurnKind
+from leeroy_mind.talk.timing import TurnTiming
 from leeroy_mind.talk.world import WorldView
 from leeroy_mind.voice.comms import SPOKEN_HINT, typed
 from leeroy_mind.wow import CLASSES, RACES
@@ -255,6 +257,8 @@ class TurnMeta:
     elsewhere: bool = False
     guards: object = None
     typed_on: tuple[str, int] | None = None
+    timing_trace: str | None = None  # opaque scalar; empty means telemetry admission skipped
+    timing_origin: float | None = None  # on_human_chat's local monotonic entry, when observed
     # Exact event behind a lead's debrief/kill; absent for unrelated turns.
     fight_map: int = 0
     fight_boss: int = 0
@@ -402,6 +406,7 @@ class Pipeline:
     comms = None  # the voice extension's Comms; None: voice off, and nothing here changes
 
     def _init_pipeline(self, now: float) -> None:
+        self.timing = TurnTiming()
         self.live_admission: Callable[[], Awaitable[None]] | None = None
         self._instruction_hooks: list[Callable[[Turn, TurnMeta, str], str]] = []
         self._session_id: int | None = None
@@ -565,7 +570,29 @@ class Pipeline:
 
     def _queue(self, items: list[tuple[Turn, TurnMeta]]) -> None:
         if items:
-            self._spawn(self._run(items))
+            for _, meta in items:
+                self._admit_timing(meta)
+            tokens = tuple(meta.timing_trace for _, meta in items)
+            run = self._run(items)
+            task = self._spawn(run)
+            # A task cancelled before its first step never enters _run or _speak.
+            def done(t):
+                run.close()  # release an unawaited chain if the wrapper never started
+                self.timing.queued_done(tokens, cancelled=t.cancelled())
+            task.add_done_callback(done)
+
+    def _admit_timing(self, meta: TurnMeta) -> None:
+        if meta.timing_trace is None:
+            meta.timing_trace = self.timing.begin(origin=meta.timing_origin)
+
+    @asynccontextmanager
+    async def _timed_send_lock(self, meta: TurnMeta):
+        with self.timing.span(meta.timing_trace, "send_lock"):
+            await self._send_lock.acquire()
+        try:
+            yield
+        finally:
+            self._send_lock.release()
 
     def pending_turns(self) -> list[Turn]:
         """The turn each of the engine's running jobs is on (waiting, composing or typing)."""
@@ -972,15 +999,23 @@ class Pipeline:
         return Priority.SOCIAL
 
     async def _speak(self, turn: Turn, meta: TurnMeta) -> list[str]:
+        self._admit_timing(meta)
+        self.timing.dequeued(meta.timing_trace)
         task = asyncio.current_task()
         self._current[task] = turn
+        outcome = "completed"
         try:
             return await self._speak_now(turn, meta)
         except asyncio.CancelledError:
+            outcome = "cancelled"
             if not meta.settled:  # else the line at the bridge already has its row
                 self._drop(turn, meta, "cancelled")
             raise
+        except Exception:
+            outcome = "error"
+            raise
         finally:
+            self.timing.pipeline_done(meta.timing_trace, outcome)
             if self._current.get(task) is turn:
                 del self._current[task]
             if self._real_name_hold == meta.turn_id:  # ended without its line: free the slot
@@ -989,7 +1024,8 @@ class Pipeline:
     async def _speak_now(self, turn: Turn, meta: TurnMeta) -> list[str]:
         if not _scope_valid(meta):
             return self._drop(turn, meta, "scope_changed")
-        await self.clock.sleep(turn.delay)
+        with self.timing.span(meta.timing_trace, "delay"):
+            await self.clock.sleep(turn.delay)
         if not _scope_valid(meta):
             return self._drop(turn, meta, "scope_changed")
         now = self.clock.now()
@@ -1009,7 +1045,8 @@ class Pipeline:
         if self._follows_silence(meta):
             return self._drop(turn, meta, "after_dropped")
         if voiced:
-            await self._hold(turn)
+            with self.timing.span(meta.timing_trace, "hold"):
+                await self._hold(turn)
         why = self._blocked(turn, meta, self.clock.now(), first=True)
         if why:
             return self._drop(turn, meta, why)
@@ -1018,17 +1055,18 @@ class Pipeline:
         if text is None:
             original_instruction = turn.instruction
             try:
-                for hook in tuple(self._instruction_hooks):
-                    previous = turn.instruction
-                    try:
-                        instruction = hook(turn, meta, previous)
-                        if not isinstance(instruction, str):
-                            raise TypeError("instruction hook must return text")
-                        turn.instruction = instruction
-                    except Exception:
-                        turn.instruction = previous
-                        log.warning("instruction_hook_failed")
-                c = await self._compose(turn, meta, live=True)
+                with self.timing.span(meta.timing_trace, "compose"):
+                    for hook in tuple(self._instruction_hooks):
+                        previous = turn.instruction
+                        try:
+                            instruction = hook(turn, meta, previous)
+                            if not isinstance(instruction, str):
+                                raise TypeError("instruction hook must return text")
+                            turn.instruction = instruction
+                        except Exception:
+                            turn.instruction = previous
+                            log.warning("instruction_hook_failed")
+                    c = await self._compose(turn, meta, live=True)
             except ValueError as e:  # a turn the instruction can't be written for
                 log.warning("talk_bad_turn: guid=%d kind=%s: %s", turn.speaker, turn.kind, e)
                 return self._drop(turn, meta, "bad_turn")
@@ -1079,7 +1117,8 @@ class Pipeline:
         try:
             for i, s in enumerate(lines):
                 typing = typing_delay(s.line, p.typing.chars_per_sec, delay_mult, self.rng)
-                await self.clock.sleep(self._first_typing(turn, typing) if i == 0 else typing)
+                with self.timing.span(meta.timing_trace, "typing"):
+                    await self.clock.sleep(self._first_typing(turn, typing) if i == 0 else typing)
                 meta.words = s.plain
                 why = await self._send_line(turn, meta, p, s.line, memory_ids, first=i == 0)
                 if why:
@@ -1146,7 +1185,7 @@ class Pipeline:
         the log is a line said; there is no await between the two. `text` goes to Comms.deliver
         and to the log as two arguments: what he hears may come to differ from what is kept."""
         text = " ".join(text.split())
-        async with self._send_lock:
+        async with self._timed_send_lock(meta):
             why = self._blocked(turn, meta, self.clock.now(), first=True, deadline=False)
             if why:
                 return self._drop(turn, meta, why, memory_ids, text=text)
@@ -1224,8 +1263,11 @@ class Pipeline:
             p = self.personas.get(g)
             if p is None or flirt_chance(p, 1.0) <= 0:
                 return "flirt_stance"  # and only from a woman who wants him
-        if first and deadline and self.scheduler.expired(turn.deadline):
-            return "expired"
+        if first and deadline:
+            expired = self.scheduler.expired(turn.deadline)
+            self.timing.deadline_check(meta.timing_trace, "mind_before_generation", expired=expired)
+            if expired:
+                return "expired"
         if not self.raid.allows(g, turn.kind, now):
             return "raid"
         guards = meta.guards or self.guards
@@ -1260,27 +1302,71 @@ class Pipeline:
         self._quiet_fired = False
 
     async def _ask(self, turn: Turn, messages: list[dict], *,
-                   meta: TurnMeta | None = None) -> str:
+                   meta: TurnMeta | None = None, attempt: int = 0) -> str:
         # a bit of several rows keeps the rows a blank line separates (prompts lens, minor 9)
         preset = LIVE_BIT if turn.kind is TurnKind.BIT and turn.max_lines > 1 else LIVE
+        trace = meta.timing_trace if meta is not None else None
 
         async def job(llm):
-            if not _scope_valid(meta):
-                raise _ScopeChanged("scope_changed")
-            if self.live_admission is not None:
-                await self.live_admission()
-            if not _scope_valid(meta):
-                raise _ScopeChanged("scope_changed")
-            if self.scheduler.expired(turn.deadline):
-                raise Expired(turn.deadline)
-            options = dict(preset.options)
-            if meta is not None and meta.seed is not None:  # a tuning preview's
-                options["seed"] = meta.seed
-            return await llm.chat(self.cfg.models.live, messages, options=options,
-                                  think=preset.think, timeout=preset.timeout)
+            self.timing.model(trace, attempt, "started")
+            self.timing.deadline_check(trace, "mind_model_queue", expired=False)
+            outcome = "completed"
+            try:
+                if not _scope_valid(meta):
+                    raise _ScopeChanged("scope_changed")
+                if self.live_admission is not None:
+                    self.timing.model(trace, attempt, "admission")
+                    try:
+                        await self.live_admission()
+                    finally:
+                        self.timing.model(trace, attempt, "started")
+                if not _scope_valid(meta):
+                    raise _ScopeChanged("scope_changed")
+                expired = self.scheduler.expired(turn.deadline)
+                self.timing.deadline_check(trace, "mind_readiness_admission", expired=expired)
+                if expired:
+                    raise Expired(turn.deadline)
+                options = dict(preset.options)
+                if meta is not None and meta.seed is not None:  # a tuning preview's
+                    options["seed"] = meta.seed
+                self.timing.model(trace, attempt, "call")
+                return await llm.chat(self.cfg.models.live, messages, options=options,
+                                      think=preset.think, timeout=preset.timeout)
+            except asyncio.CancelledError:
+                outcome = "cancelled"
+                raise
+            except Expired:
+                outcome = "expired"
+                raise
+            except _ScopeChanged:
+                outcome = "scope_changed"
+                raise
+            except Exception:
+                outcome = "error"
+                raise
+            finally:
+                self.timing.model(trace, attempt, outcome)
         if not _scope_valid(meta):
             raise _ScopeChanged("scope_changed")
-        result = await self.scheduler.submit(turn.priority, job, deadline=turn.deadline)
+        self.timing.model(trace, attempt, "queue")
+        outcome = "completed"
+        try:
+            result = await self.scheduler.submit(turn.priority, job, deadline=turn.deadline)
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+            raise
+        except Expired:
+            outcome = "expired"
+            self.timing.decision(trace, "expired", deadline="mind_model_queue")
+            raise
+        except _ScopeChanged:
+            outcome = "scope_changed"
+            raise
+        except Exception:
+            outcome = "error"
+            raise
+        finally:
+            self.timing.model(trace, attempt, outcome)
         return result.text
 
     async def _generate(self, turn: Turn, meta: TurnMeta, c: Composed, *,
@@ -1306,7 +1392,7 @@ class Pipeline:
                 return text, "scope_changed"
             asked = self.clock.now()
             try:
-                raw = await self._ask(turn, messages, meta=meta)
+                raw = await self._ask(turn, messages, meta=meta, attempt=attempt)
             except _ScopeChanged:
                 return text, "scope_changed"
             except Expired:
@@ -1318,7 +1404,9 @@ class Pipeline:
                 meta.llm_s = (meta.llm_s or 0.0) + self.clock.now() - asked
             if not _scope_valid(meta):
                 return raw, "scope_changed"
-            if self.scheduler.expired(turn.deadline):
+            expired = self.scheduler.expired(turn.deadline)
+            self.timing.deadline_check(meta.timing_trace, "mind_after_generation", expired=expired)
+            if expired:
                 return raw, "expired"
             silent, tells = is_silence(raw), []
             if not silent:
@@ -1483,7 +1571,7 @@ class Pipeline:
         The send itself is shielded: once the server may have the line, it is recorded. A turn
         cancelled meanwhile keeps the lock until the line has settled, and that line's outcome
         is the turn's row."""
-        async with self._send_lock:
+        async with self._timed_send_lock(meta):
             why = self._blocked(turn, meta, self.clock.now(), first=first, deadline=False)
             if why:
                 return why
@@ -1518,13 +1606,16 @@ class Pipeline:
         if not _transport_admitted(meta):
             return "transport_refused"
         try:
-            ack = await self.send(Say(id="", guid=turn.speaker, channel=turn.channel, text=text,
-                                      to_guid=turn.to_guid))
+            self.timing.typed_send(meta.timing_trace)
+            with self.timing.span(meta.timing_trace, "bridge_ack"):
+                ack = await self.send(Say(id="", guid=turn.speaker, channel=turn.channel, text=text,
+                                          to_guid=turn.to_guid))
         except (AckTimeout, ConnectionLost) as e:
             # The bridge may still have said it: its echo can confirm it (is_echo).
             why = _CAMEL.sub("_", type(e).__name__).lower()
             self._unacked[(turn.speaker, turn.channel, text)] = (
                 self.clock.now(), turn, meta, p, list(memory_ids), why)
+            self.timing.uncertain(meta.timing_trace, why)
             return why
         except BridgeError as e:
             return _CAMEL.sub("_", type(e).__name__).lower()
@@ -1535,6 +1626,7 @@ class Pipeline:
             if ack.error == "offline":
                 self.world.mark_offline(turn.speaker, self.clock.now())
             return ack.error or "refused"
+        self.timing.typed_ack(meta.timing_trace)
         try:
             self._record(turn, meta, p, text, memory_ids, ack=ack)
         except Exception:
@@ -1630,6 +1722,7 @@ class Pipeline:
 
     def _drop(self, turn: Turn, meta: TurnMeta, reason: str, memory_ids=(), *, text: str = "",
               at: float | None = None) -> list[str]:
+        self.timing.decision(meta.timing_trace, reason)
         self.store.log_utterance(self.clock.now() if at is None else at, turn.speaker,
                                  turn.channel or "", turn.kind.value, text or "",
                                  list(memory_ids), reason, self._session_id,
@@ -1660,6 +1753,8 @@ class Pipeline:
                 except Exception:
                     log.exception("say_drop_failed: guid=%d channel=%s", turn.speaker,
                                   turn.channel)
+                finally:
+                    self.timing.echo_settled(meta.timing_trace, confirmed=False)
 
     def is_echo(self, ev: Chat, now: float) -> bool:
         """The bridge's report of a line a `say` produced (via_bridge). The mind stored its own
@@ -1679,6 +1774,7 @@ class Pipeline:
             log.exception("say_record_failed: guid=%d channel=%s", ev.from_guid, ev.channel)
         else:
             log.info("say_confirmed_by_echo: guid=%d channel=%s", ev.from_guid, ev.channel)
+        self.timing.echo_settled(meta.timing_trace, confirmed=True)
         return True
 
     def _lately_line(self, guid: int, now: float) -> str:
