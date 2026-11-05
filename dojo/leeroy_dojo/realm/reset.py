@@ -479,6 +479,14 @@ def run(layout: Layout, manifest: dict, resets: int = 100, cases: list[str] | No
     r = Run(layout, manifest, out_dir, log)
     checks: list[dict] = []
 
+    def keep_logs(label: str) -> None:
+        """A worldserver start rewrites its logs: keep each process's before the next one starts."""
+        logs = out_dir / "worker-logs"
+        logs.mkdir(exist_ok=True)
+        for name in ("Server.log", "Playerbots.log"):
+            if (layout.logs / name).exists():
+                shutil.copy2(layout.logs / name, logs / f"{label}-{name}")
+
     def restart(label: str) -> dict:
         """The reference: a fresh worldserver process, then a reset."""
         if world.running(layout):
@@ -486,6 +494,7 @@ def run(layout: Layout, manifest: dict, resets: int = 100, cases: list[str] | No
                 r.console.close()
                 r.console = None
             world.stop(layout, log=log)
+            keep_logs(f"before-{label}")
         world.start(layout, log=log)
         r.connect()
         r.seq = r.status()["trace_seq"]
