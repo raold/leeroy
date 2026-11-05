@@ -60,16 +60,19 @@ _ACTION = re.compile(r"\*([^*\n]+)\*")
 _DASH = re.compile(r"\s*[—–]\s*")
 # A semicolon, unless it is the eye of an emoticon: ;) ;-) ;P ;D and both eyes of ;_;
 _SEMI = re.compile(r"\s*(?<!_);(?![-']?[)(\]\[DPpOo3*/\\|_])\s*")
-# The frame of a prompt chat line the model may copy: "[3m ago]", "(whisper to Zan):", "(raid)",
-# "(on vent):".
-_AGE = r"(?:just now|\d{1,3}\s?[smhd] ago)"
-_COPIED_TAG = re.compile(
-    rf"^\s*(?:\[{_AGE}\]|\((?:{_AGE}|whisper(?: (?:to|from) [^)\n]{{1,24}})?|guild|officer"
-    r"|party|raid(?: warning)?|say|yell|on vent)\))\s*:?\s*", re.IGNORECASE)
-_QUOTES = "\"“”"
 # A tag's colon, never the eyes of an emoticon ("zan :) welcome back", "zan: D", "zan :S":
 # fix round 1, review M2); "Zan: Done with the boss" is a tag.
 _TAG_COLON = r"\s*:(?!\s?[-'^]?[)(\]\[DPpOo3*/\\|SsXxCcLl](?![A-Za-z]))"
+# The frame of a prompt chat line the model may copy: "[3m ago]", "(whisper to Zan):", "(raid)",
+# "(on vent):". The channel and whisper tags come in square brackets too ("[Whisper to Zan]:",
+# "[whisper]": seen live), and either one's colon is a tag's colon ("[guild] :) gz").
+_AGE = r"(?:just now|\d{1,3}\s?[smhd] ago)"
+_CHANNEL = r"guild|officer|party|raid(?: warning)?|say|yell|on vent"
+_COPIED_TAG = re.compile(
+    rf"^\s*(?:\[(?:{_AGE}|whisper(?: (?:to|from) [^\]\n]{{1,24}})?|{_CHANNEL})\]"
+    rf"|\((?:{_AGE}|whisper(?: (?:to|from) [^)\n]{{1,24}})?|{_CHANNEL})\))"
+    rf"(?:{_TAG_COLON})?\s*", re.IGNORECASE)
+_QUOTES = "\"“”"
 # The reply command the model typed in front of a line ("/r on my way"); never "/roll".
 _REPLY_CMD = re.compile(rf"^\s*/(?:r|reply)(?![\w/])(?:\s*,|{_TAG_COLON})?\s*", re.IGNORECASE)
 
