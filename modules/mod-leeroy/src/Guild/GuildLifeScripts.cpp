@@ -1,5 +1,6 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 
+#include "GuildAdd.h"
 #include "RaidAssembly.h"
 #include "LootMaster.h"
 #include "GearUpJob.h"
@@ -66,4 +67,5 @@ void AddSC_leeroy_guild_life()
 {
     new LeeroyGuildWorldScript();
     new LeeroyGuildPlayerScript();
+    Leeroy::Guild::AddGuildAddScripts();
 }

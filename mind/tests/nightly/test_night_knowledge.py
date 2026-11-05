@@ -109,7 +109,7 @@ def test_roots_follow_memory_refs_and_stop_at_depth(h):
     assert roots(h.store, {f"memory:{m3}"}, depth=2) == set()
     assert roots(h.store, ["memory:99999", "story:4", "session:2", "owner:canon"]) == {"story:4", "session:2"}
     assert roots(h.store, [f"{p}1" for p in ROOT_PREFIXES]) == {f"{p}1" for p in ROOT_PREFIXES}
-    loop = h.mem(102, "Round and round.", evidence=("memory:0",))
+    loop = h.mem(102, "Round and round.", evidence=())
     with h.store.transaction():                                      # a cycle ends at the depth
         h.store.conn.execute("UPDATE memory SET evidence = ? WHERE id = ?",
                              (json.dumps([f"memory:{loop}", "event:3"]), loop))

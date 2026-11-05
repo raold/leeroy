@@ -143,9 +143,24 @@ def test_review_guild_migration_preserves_voice_nightly_and_private_memory(
             conn.execute("INSERT INTO meta(key,value) VALUES ('review:preserve','synthetic')")
             conn.execute("INSERT INTO chat_line(ts,channel,from_guid,from_name,to_guid,text,origin) "
                          "VALUES (1,'whisper',1,'Testmage',101,'synthetic private note','human')")
-            Store(conn, clock=clock).insert_memory(make_mem(
-                owner=101, text="A synthetic confidence.", evidence=("chat:1",),
-                scope="secret", scope_with=1, embedding=pack_vec(fake_embed("synthetic"))))
+            # Seed through schema 6 itself: its FTS trigger maintains memory_fts,
+            # while the historical actor and vector indexes are populated explicitly.
+            memory = make_mem(owner=101, text="A synthetic confidence.", evidence=("chat:1",),
+                              scope="secret", scope_with=1, embedding=pack_vec(fake_embed("synthetic")))
+            mid = conn.execute(
+                "INSERT INTO memory(owner,kind,text,t_event,t_created,t_accessed,access_n,actors,"
+                "place,boss_id,raid_id,importance,valence,source,evidence,confidence,status,"
+                "superseded_by,key,merged_n,embedding,scope,scope_with) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (memory.owner, memory.kind, memory.text, memory.t_event, memory.t_created,
+                 memory.t_accessed, memory.access_n, "[]", memory.place, memory.boss_id,
+                 memory.raid_id, memory.importance, memory.valence, memory.source, '["chat:1"]',
+                 memory.confidence, memory.status, memory.superseded_by, memory.key,
+                 memory.merged_n, memory.embedding, memory.scope, memory.scope_with)).lastrowid
+            conn.executemany("INSERT OR IGNORE INTO memory_actor(memory_id,guid) VALUES (?,?)",
+                             [(mid, guid) for guid in memory.actors])
+            conn.execute("INSERT INTO memory_vec(memory_id,owner,embedding) VALUES (?,?,?)",
+                         (mid, memory.owner, memory.embedding))
             conn.execute("INSERT INTO voice_presence(guid,room,since) VALUES (101,'guild',1)")
             conn.execute("INSERT INTO voice_line(speak_id,line_id,room,state,ts) "
                          "VALUES ('review.1',1,'whisper','done',2)")

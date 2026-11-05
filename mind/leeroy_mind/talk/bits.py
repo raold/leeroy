@@ -17,6 +17,7 @@ from leeroy_mind.clock import Clock, night_of
 from leeroy_mind.personas.schema import Bit, Persona
 from leeroy_mind.storage.store import Store
 from leeroy_mind.talk.raid import RaidPhase
+from leeroy_mind.tuning.effective import dials_of
 
 DAY_S = 86400.0
 JITTER = (0.8, 1.2)
@@ -96,6 +97,9 @@ class BitScheduler:
             if self._cooled(p.guid, b, now):
                 usual.append(b)
         pool, chance = (special, SPECIAL_P) if special else (usual, self.p_fire)
+        humour = dials_of(p).mult("humour")  # how much they joke (tuning); dated bits as they are
+        if not special and humour != 1.0:
+            chance = min(1.0, chance * humour)
         if not pool or self._rng.random() >= chance:
             return None
         return pool[0] if len(pool) == 1 else self._rng.choice(pool)

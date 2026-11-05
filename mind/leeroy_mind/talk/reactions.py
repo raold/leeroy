@@ -26,7 +26,8 @@ from leeroy_mind.talk.channels import choose_channel
 from leeroy_mind.talk.filters import names_any
 from leeroy_mind.talk.pipeline import Pipeline, TurnMeta, log, picked_why
 from leeroy_mind.talk.raid import WIPE_SILENCE_S, RaidPhase
-from leeroy_mind.talk.romance import JealousyAsides, WhisperPlanner, rivalry_reply, rivalry_text
+from leeroy_mind.talk.romance import (JealousyAsides, WhisperPlanner, forward, rivalry_reply,
+                                      rivalry_text)
 from leeroy_mind.talk.seasons import holiday_topics
 from leeroy_mind.talk.select import pick_speakers
 from leeroy_mind.talk.states import substance_of
@@ -47,10 +48,12 @@ DEBRIEF = "the plan for the next pull on {boss}"
 NO_JOKE = "Leave out the joke this time: only frustration or what went wrong."
 JOKE_OK = "That's {n} wipes on it tonight: one joke is fine if it's a good one."
 FACTS_RULE = "Go by what happened: no causes, no blame, and no mechanics you weren't given."
+FACTS_LOGGED = "Go by what happened and the combat log that follows: blame nobody, and no mechanics you weren't given."
 # The lead's wipe call with the boss's tactics page (fix wave part E); "the Northrend Beasts'".
 MECHANICS = "{whose} real mechanics:"
 WIPE_KNOWN = ("You know the time and who died first, not why: give the plan for the next pull "
               "from these mechanics.")
+WIPE_LOGGED = "Give the plan for the next pull from these mechanics and the combat log that follows."
 MECHANICS_RULE = "Never invent anything else, and blame nobody."
 KILL_RULE = "Say only what these facts give: no causes, no blame."
 # After a wipe the first reaction is offered to whoever died first (rehearsal 2, judge A 9).
@@ -320,7 +323,7 @@ class Reactions(Pipeline):
         weights, _ = self._weigh(cands, last=hg, ctx=self._context(now), reply=False,
                                  fresh=women)
         for x in weights:
-            weights[x] *= LOOT_CHEER.get(self._cheer_stance(self.personas.get(x)), 1.0)
+            weights[x] *= _cheer_weight(self.personas.get(x), self._cheer_stance)
         items = []
         why = "gz_loot:weighted_draw"
         for i, x in enumerate(pick_speakers(weights, self.rng.randint(1, 2), self.rng)):
@@ -446,6 +449,8 @@ class Reactions(Pipeline):
         items = [(Turn(kind=TurnKind.KILL, speaker=lead, channel=channel,
                        instruction=self._lead_facts(ev, name), delay=self.rng.uniform(*KILL_S)),
                   TurnMeta(self._new_id(), topic=name, why=self._lead_why("kill", lead),
+                           fight_map=ev.map, fight_boss=ev.boss_id,
+                           fight_instance=ev.instance_id, fight_end_ms=ev.ts,
                            again_tonight=self.raid.wipes_tonight(ev.map, ev.boss_id) >= 1))]
         others = [g for g in members if g != lead]
         weights, _ = self._weigh(others, last=lead, ctx=self._context(now), reply=False)
@@ -490,6 +495,8 @@ class Reactions(Pipeline):
                        instruction=self._lead_facts(ev, name),
                        delay=WIPE_SILENCE_S + self.rng.uniform(*DEBRIEF_S)),
                   TurnMeta(self._new_id(), topic=DEBRIEF.format(boss=name),
+                           fight_map=ev.map, fight_boss=ev.boss_id,
+                           fight_instance=ev.instance_id, fight_end_ms=ev.ts,
                            why=self._lead_why("wipe", lead), again_tonight=again))]
         others = [g for g in members if g != lead]
         weights, _ = self._weigh(others, last=lead, ctx=self._context(now), reply=False)
@@ -596,6 +603,14 @@ class Reactions(Pipeline):
                      addressee=self.human.guid, instruction=rivalry_text(woman, self.human),
                      delay=self.rng.uniform(*RIVAL_S))
         self._queue([(flirt, TurnMeta(self._new_id(), rivalry=True, why="rival:flirt"))])
+
+
+def _cheer_weight(p: Persona, stance_of) -> float:
+    """LOOT_CHEER for her stance, its lift scaled by her forward dial (tuning): 0 makes her
+    an ordinary cheerer, 10 twice the lift."""
+    w = LOOT_CHEER.get(stance_of(p), 1.0)
+    f = forward(p) if p is not None else 1.0
+    return w if f == 1.0 else 1 + (w - 1) * f
 
 
 def _fight_time(seconds: float) -> str:

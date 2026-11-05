@@ -159,7 +159,8 @@ def test_scheduler_queue_readiness_and_client_call_use_independent_monotonic_clo
         blocker = asyncio.create_task(engine.scheduler.submit(Priority.SOCIAL, occupying))
         await busy_entered.wait()
         trace = engine.timing.begin()
-        task = asyncio.create_task(engine._ask(turn(deadline=wall.now() + 1000), [], trace=trace))
+        task = asyncio.create_task(engine._ask(turn(deadline=wall.now() + 1000), [],
+                                               meta=TurnMeta("t", timing_trace=trace)))
         await settle()
         assert not ready_entered.is_set()
         timer.advance(2)
@@ -210,7 +211,8 @@ def test_cancelled_model_wait_keeps_partial_stage(phase):
         elif phase == "admission":
             engine.live_admission = waiting
         trace = engine.timing.begin()
-        task = asyncio.create_task(engine._ask(turn(deadline=wall.now() + 100), [], trace=trace))
+        task = asyncio.create_task(engine._ask(turn(deadline=wall.now() + 100), [],
+                                               meta=TurnMeta("t", timing_trace=trace)))
         await settle()
         timer.advance(4)
         task.cancel()
@@ -243,7 +245,8 @@ def test_expiry_before_scheduler_closure_records_queue_without_inventing_call():
         engine.scheduler = LLMScheduler(object(), clock=wall)
         trace = engine.timing.begin()
         with pytest.raises(Expired):
-            await engine._ask(turn(deadline=wall.now() - 1), [], trace=trace)
+            await engine._ask(turn(deadline=wall.now() - 1), [],
+                              meta=TurnMeta("t", timing_trace=trace))
         engine.timing.pipeline_done(trace)
         event = terminals(events)[0]
         assert event["deadline_decision"] == "mind_model_queue"
@@ -489,5 +492,64 @@ def test_cancel_during_shielded_ack_waits_and_records_once(store, tmp_path):
         assert terminals(events)[0]["outcome"] == "cancelled"
         assert terminals(events)[0]["bridge_ack_ms"] == 3000
         assert terminals(events)[0]["typed_acks"] == 1
+        await rig.engine.scheduler.close()
+    run(go())
+
+
+def test_main_owner_fence_and_transport_barrier_are_named_reasons(store, tmp_path):
+    """The Realm's scope fence (still_valid) and say_as barrier (before_transport) came to
+    main after this collector was written: their drops are named, never "other"."""
+    async def go():
+        rig = make_rig(store, engine_clock(), tmp_path)
+        timer, events = observed(rig.engine)
+        sent = []
+
+        async def send(cmd):
+            sent.append(cmd)
+            return Ack(ts=0, id=cmd.id, ok=True, error="")
+
+        rig.engine.send = send
+        refused = asyncio.create_task(rig.engine.say_as(
+            101, "guild", "synthetic line", kind=TurnKind.CALLOUT,
+            before_transport=lambda: False))
+        await settle()
+        await rig.advance(30)
+        assert await refused is False
+        fenced = await rig.engine.say_as(101, "guild", "synthetic line", kind=TurnKind.CALLOUT,
+                                         still_valid=lambda: False)
+        assert fenced is False and not [c for c in sent if getattr(c, "text", None)]
+        ended = terminals(events)
+        assert [e["reason"] for e in ended] == ["transport_refused", "scope_changed"]
+        assert all(e["outcome"] == "dropped" for e in ended)
+        await rig.engine.scheduler.close()
+    run(go())
+
+
+def test_a_scope_change_during_admission_is_the_model_attempts_outcome(store, tmp_path):
+    async def go():
+        rig = make_rig(store, engine_clock(), tmp_path)
+        timer, events = observed(rig.engine)
+        valid = [True]
+        meta = TurnMeta("synthetic", still_valid=lambda: valid[0])
+        rig.engine._admit_timing(meta)
+        t = turn(deadline=rig.clock.now() + 10)
+        composed = await rig.engine._compose(t, meta, live=True)
+
+        async def admission():
+            timer.advance(2)
+            valid[0] = False
+
+        async def chat(*args, **kwargs):
+            raise AssertionError("no model call after the scope changed")
+
+        rig.llm.chat = chat
+        rig.engine.live_admission = admission
+        assert (await rig.engine._generate(t, meta, composed))[1] == "scope_changed"
+        rig.engine.timing.decision(meta.timing_trace, "scope_changed")
+        rig.engine.timing.pipeline_done(meta.timing_trace)
+        event = terminals(events)[0]
+        assert event["reason"] == "scope_changed" and event["outcome"] == "dropped"
+        assert event["model_attempt1_outcome"] == "scope_changed"
+        assert event["readiness_admission_ms"] == 2000 and event["llm_client_call_ms"] is None
         await rig.engine.scheduler.close()
     run(go())

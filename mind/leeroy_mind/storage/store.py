@@ -3,6 +3,7 @@ import logging
 import re
 import sqlite3
 from contextlib import contextmanager
+from dataclasses import replace
 
 from leeroy_mind import protocol
 from leeroy_mind.clock import Clock
@@ -83,6 +84,11 @@ class Store:
         self._depth = 0
 
     # -- transactions ------------------------------------------------------------------
+
+    @property
+    def in_unit(self) -> bool:
+        """Whether this Store is inside one of its transaction units."""
+        return self._depth > 0
 
     @contextmanager
     def transaction(self):
@@ -174,11 +180,12 @@ class Store:
 
     def session_last_activity(self, id: int) -> float:
         """The last time anything was recorded in the session (a chat line, a game event or an
-        utterance), else its start; 0.0 for an unknown session."""
+        utterance), else its start; 0.0 for an unknown session. Public channel lines are kept
+        raw for Realm but are other people's activity, so they neither resume nor extend it."""
         r = self._one(
             "SELECT max(t) AS t FROM ("
             "SELECT max(ts) AS t FROM chat_line WHERE session_id = ? UNION ALL "
-            "SELECT max(ts) FROM game_event WHERE session_id = ? UNION ALL "
+            "SELECT max(ts) FROM game_event WHERE session_id = ? AND type <> 'channel_chat' UNION ALL "
             "SELECT max(ts) FROM utterance WHERE session_id = ? UNION ALL "
             "SELECT started FROM session WHERE id = ?)", (id, id, id, id))
         return float(r["t"]) if r is not None and r["t"] is not None else 0.0
@@ -397,8 +404,12 @@ class Store:
                 "INSERT INTO memory_vec(memory_id, owner, embedding) VALUES (?, ?, ?)",
                 (mid, owner, vec))
 
-    def insert_memory(self, m: MemoryRow) -> int:
+    def insert_memory(self, m: MemoryRow, *, shown=()) -> int:
+        from leeroy_mind.realm.memory_lineage import _freeze, attach_realm_dependencies_in_unit, realm_dependencies_in_unit
+        evidence, shown = _freeze(m.evidence, shown)
+        m = replace(m, evidence=evidence)
         with self.transaction():
+            facts = realm_dependencies_in_unit(self, evidence=evidence, shown=shown)
             marks = ",".join("?" * 23)
             mid = self.conn.execute(
                 f"INSERT INTO memory({self._MEMORY_COLS}) VALUES ({marks})",
@@ -406,21 +417,27 @@ class Store:
             self._index_actors(mid, m.actors)
             if m.embedding is not None:
                 self._index_vec(mid, m.owner, m.embedding)
+            attach_realm_dependencies_in_unit(self, mid, facts)
             return mid
 
-    def upsert_keyed_memory(self, m: MemoryRow) -> int:
+    def upsert_keyed_memory(self, m: MemoryRow, *, shown=()) -> int:
         """Insert, or update in place the owner's memory with the same key (text, times, scores,
         evidence, actors and embedding are replaced; access_n and merged_n are kept). With no
         embedding in `m` the stale one is dropped so the memory gets re-embedded. The scope
         becomes the stricter of the stored one and `m`'s, so a rewrite never lowers it."""
         if m.key is None:
             raise ValueError("upsert_keyed_memory needs a key")
+        from leeroy_mind.realm.memory_lineage import _freeze, attach_realm_dependencies_in_unit, realm_dependencies_in_unit
+        evidence, shown = _freeze(m.evidence, shown)
+        m = replace(m, evidence=evidence)
         with self.transaction():
             r = self._one("SELECT id, scope, scope_with FROM memory WHERE owner = ? AND key = ?",
                           (m.owner, clean(m.key)))
             if r is None:
-                return self.insert_memory(m)
+                return self.insert_memory(m, shown=shown)
             mid = r["id"]
+            facts = realm_dependencies_in_unit(self, evidence=evidence, shown=shown,
+                                               existing_memory=mid)
             scope, scope_with = stricter((r["scope"], r["scope_with"]), (m.scope, m.scope_with))
             p = self._memory_params(m)
             self.conn.execute(
@@ -431,12 +448,17 @@ class Store:
                  p[15], p[16], p[20], scope, scope_with, mid))
             self._index_actors(mid, m.actors)
             self._index_vec(mid, m.owner, m.embedding)
+            attach_realm_dependencies_in_unit(self, mid, facts)
             return mid
 
-    def merge_memory(self, id: int, evidence, importance: int) -> None:
+    def merge_memory(self, id: int, evidence, importance: int, *, shown=()) -> None:
         """Fold a duplicate into memory `id`: evidence is unioned, importance takes the max,
         merged_n counts up."""
+        from leeroy_mind.realm.memory_lineage import _freeze, attach_realm_dependencies_in_unit, realm_dependencies_in_unit
+        evidence, shown = _freeze(evidence, shown)
         with self.transaction():
+            facts = realm_dependencies_in_unit(self, evidence=evidence, shown=shown,
+                                               existing_memory=id)
             r = self._one("SELECT evidence, importance FROM memory WHERE id = ?", (id,))
             if r is None:
                 raise KeyError(f"no memory {id}")
@@ -445,6 +467,7 @@ class Store:
             self.conn.execute(
                 "UPDATE memory SET evidence = ?, importance = ?, merged_n = merged_n + 1 "
                 "WHERE id = ?", (_j(ev), max(r["importance"], importance), id))
+            attach_realm_dependencies_in_unit(self, id, facts)
 
     def set_embedding(self, id: int, vec: bytes) -> None:
         with self.transaction():

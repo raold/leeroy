@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "leeroy-dojo"
+version = "0.1.0"
+description = "The dojo: an isolated reinforcement learning environment for leeroy's combat policies"
+requires-python = "==3.12.*"
+license = "GPL-2.0-only"
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest==9.2.0"]
+
+[tool.setuptools.packages.find]
+include = ["leeroy_dojo*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

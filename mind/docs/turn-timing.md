@@ -2,8 +2,10 @@
 
 `turn_timing` logs use schema 1, service `mind`, an opaque local `trace_id`, and
 `voice_token` when the existing voice writer accepted a Speak. The token is the
-lowercase SHA-256 hexadecimal digest of the UTF-8 Speak ID, identical in voice.
-It is a correlation handle, not an anonymity guarantee. The wire protocol is unchanged.
+lowercase SHA-256 hexadecimal digest of the UTF-8 Speak ID. The voice service logs
+that ID as `id` in its `segment_ready` and `line_started` events
+(`voice/docs/turn-timing.md`); hash it to join the two logs. The token is a
+correlation handle, not an anonymity guarantee. The wire protocol is unchanged.
 
 All durations end in `_ms` and use an independently injected process-local monotonic
 timer. Existing wall-clock deadlines, `expires_ms`, store updates, and `llm_s` retain

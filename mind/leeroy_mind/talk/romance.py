@@ -32,6 +32,7 @@ from leeroy_mind.talk.raid import RaidPhase
 from leeroy_mind.talk.select import pick_speakers
 from leeroy_mind.talk.turns import TurnKind
 from leeroy_mind.text import estimate_tokens, truncate_words
+from leeroy_mind.tuning.effective import dials_of
 
 log = logging.getLogger("leeroy_mind.romance")
 
@@ -41,12 +42,23 @@ FLIRT_BASE = {"drawn": 0.3, "lust": 0.45}
 FLIRT_CAP = 0.9
 
 
+def forward(p: Persona) -> float:
+    """Her forward / flirty dial (tuning) as a multiplier: 1.0 as written, 0 to 2."""
+    return dials_of(p).mult("forward")
+
+
+# Her forward dial (tuning) at these levels and past them makes her attitude's wording the
+# boldest, or the quietest, of its variants (attitude_text); in between, extraversion picks.
+FORWARD_BOLD, FORWARD_QUIET = 8, 2
+
+
 def flirt_chance(p: Persona, candour: float) -> float:
     """How likely a member's social turn turns into a FLIRT at the human. Fond and none women
-    never flirt like this (a fond woman's warmth rides her turns to him); men are friends."""
+    never flirt like this (a fond woman's warmth rides her turns to him); men are friends. Her
+    forward dial (tuning) scales it, never past FLIRT_CAP."""
     if p.identity.player_gender != "female" or p.romance.stance not in FLIRT_BASE:
         return 0.0
-    return min(FLIRT_CAP, FLIRT_BASE[p.romance.stance] * candour)
+    return min(FLIRT_CAP, FLIRT_BASE[p.romance.stance] * candour * forward(p))
 
 
 Band = Literal["warm", "flirty", "suggestive", "explicit"]
@@ -245,6 +257,10 @@ def attitude_text(p: Persona) -> str:
     dial 10), quiet to 3, open between; drawn bold from 6."""
     variants = ATTITUDE_TEXT[p.romance.stance]
     ext = p.big_five.extraversion.score
+    level = dials_of(p).values.get("forward")
+    if level is not None and p.romance.stance in ("drawn", "lust") and (
+            level >= FORWARD_BOLD or level <= FORWARD_QUIET):
+        return variants["bold" if level >= FORWARD_BOLD else "quiet"]
     if p.romance.stance == "lust":
         key = ("bold" if ext >= 7 or own_dial(p) == FULL_DIAL
                else "quiet" if ext <= 3 else "open")
@@ -386,8 +402,10 @@ class JealousyAsides:
         self._started = {n: t for n, t in self._started.items() if now - t < HOUR_S}
         if len(self._started) >= self.per_hour:
             return []
-        pool = {g: MODE_WEIGHTS[m.romance.jealousy_mode] for g, m in sorted(men.items())
+        pool = {g: MODE_WEIGHTS[m.romance.jealousy_mode] * dials_of(m).mult("jealousy")
+                for g, m in sorted(men.items())
                 if g != woman.guid and m.romance.jealousy_mode in MODE_WEIGHTS}
+        pool = {g: w for g, w in pool.items() if w > 0}  # a man at jealousy 0 never reacts
         if not pool or self._rng.random() >= self.p:
             return []
         speaker = pick_speakers(pool, 1, self._rng)[0]
@@ -423,9 +441,10 @@ def rivalry_reply(flirter: int, drawn: dict[int, Persona], jealousy: int,
     """Another woman who wants the human answers a public flirt with one of her own, with
     p = 0.3 * jealousy / 10. Candidates are the drawn and lust women other than the flirter;
     a competitive one is twice as likely. Use rivalry_text for her turn's extra."""
-    rivals = {g: 2.0 if p.romance.style == "competitive" else 1.0
+    rivals = {g: (2.0 if p.romance.style == "competitive" else 1.0) * dials_of(p).mult("jealousy")
               for g, p in sorted(drawn.items())
               if g != flirter and _is_woman(p) and p.romance.stance in RIVAL_STANCES}
+    rivals = {g: w for g, w in rivals.items() if w > 0}  # her jealousy dial (tuning) at 0
     if not rivals or rng.random() >= RIVALRY_P * jealousy / 10:
         return None
     return pick_speakers(rivals, 1, rng)[0]
@@ -474,7 +493,8 @@ class WhisperPlanner:
             if now - self._last.get(g, -math.inf) < WHISPER_GAP_S:
                 continue
             affinity = r.affinity if r is not None else 0.0
-            attitude = WHISPER_WEIGHT.get(p.romance.stance, 0.0) if _is_woman(p) else 0.0
+            attitude = (WHISPER_WEIGHT.get(p.romance.stance, 0.0) * forward(p) if _is_woman(p)
+                        else 0.0)
             w = attitude + max(0.0, affinity) / WHISPER_AFFINITY_SCALE
             if w > 0:
                 pool[g] = w

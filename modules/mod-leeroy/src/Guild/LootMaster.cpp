@@ -171,6 +171,7 @@ LeeroyCommandResult HandleGiveLoot(nlohmann::json const& message)
         return Fail("no_item");
 
     Player* target = FindOnline(cmd->toGuid);
+    if (Realm::RealmOwns(cmd->toGuid)) return Fail("busy:realm_owner");
     Group* group = target ? target->GetGroup() : nullptr;
     if (!target || target->GetMap() != map || target->IsBeingTeleported() || target->HasPendingBind()
         || target->HasPlayerFlag(PLAYER_FLAGS_NO_PLAY_TIME) || !OwnedGroup(group)
@@ -202,6 +203,7 @@ LeeroyCommandResult HandleGiveLoot(nlohmann::json const& message)
 
     AllowedLooterSet allowed = item.GetAllowedLooters();
     uint32 const count = item.count;
+    if (Realm::RealmOwns(cmd->toGuid)) return Fail("busy:realm_owner");
     Item* awarded = target->StoreNewItem(dest, item.itemid, true, item.randomPropertyId, allowed);
     if (!awarded)
         return Fail("not_eligible");

@@ -3,6 +3,46 @@
 A WotLK private server built from the **mod-playerbots fork** of AzerothCore,
 with bots and several gameplay modules. Windows 11, MSVC, MySQL 8.4.
 
+## Training ground
+
+The optional training controller stores private fight records, tactics, trials,
+setups and command journals in the configured mind data directory's `mind.db`
+(`tg_` tables and scoped `meta` receipts). Schema support and code tests are
+separate from measured acceptance. Adaptation requires at least 28 days of
+eligible receipt history plus a passed overhead gate. Reports keep score bases
+separate and state missing coverage; historical backlog imports cannot shorten
+the observation period. A verified offline tactic win used later in a human raid
+shows adoption, not causal improvement there. Dummy requested-damage proxies do
+not prove actual boss DPS or a field rotation win. Voice send receipts do not
+prove that audio was heard, facts were spoken, or every cast was covered.
+
+Native keys `Leeroy.Telemetry.Enable` and `Leeroy.Training.Enable` are reloaded
+with `.reload config`. The first stops new telemetry recording when zero. The
+second refuses training additions and requests cleanup of owned bot changes,
+DC run settings, dummy jobs and benchmarks. Cleanup retries with exact ownership
+and completion checks; unavailable bodies or ambiguous receipts can remain
+pending. Disabling a flag is not proof that everything was restored. Preserve
+journals and pending receipts until verified cleanup completes. `[training]
+enabled = false` disables the Python attachment on the next mind start; it does
+not clear an outstanding native or Python journal.
+
+Inspection commands use `python -m leeroy_mind training`: `status`, `report
+--week YYYY-Www`, `gate`, `trials`, `cards`, `lessons --context MAP:BOSS:DIFFICULTY`,
+and `voicecheck --night YYYY-MM-DD`. Read-only inspection does not migrate an old
+database. With the mind stopped, `rollback --context MAP:BOSS:DIFFICULTY` restores
+the prior stored champion and `stock --context ...` selects stock; the service OS
+lock is held throughout. These card changes leave applied-command cleanup
+journals intact. `gate --reset` discards gate evidence; `rescore` rechecks stored
+pulls and restores matching scores.
+
+The bridge exposes `telemetry`, `get_stats`, `get_vocab`, `custom_strategy`,
+`dc_setting`, `dummy_trial`, `get_rivals`, `start_benchmark` and
+`get_training_cleanup`. Recorder hooks are gated by the telemetry tap. Native
+`bot_do restore` uses the training mutation journal; reset/clear operations retain
+their cleanup role when new additions are disabled. Extra pins pass through
+`LeeroySetExtraPins` into the single pin composer instead of calling
+`SetPinnedBots` independently. Research background is in [references.bib](references.bib).
+
 ## Canonical paths
 
 | What | Where |
@@ -248,7 +288,7 @@ Setting `SOAP.Enabled = 1` would let the script do a real graceful shutdown.
 | `mod-dungeon-clear` | jrad7/mod-dungeon-clear | git clone since 2026-10-29 (was a zip of `60f3d98`). **The autonomous tank lead**: `.dc on` (or `dc on` in party chat) inside an instance makes the group's tank bot route boss to boss over the navmesh, pull (Dynamic/Leeroy/Advanced), run scripted events (all 16 WotLK 5-mans), loot, rest and rez. Raids too: trash flow with a readiness quorum, pre-boss muster, wipe recovery; boss fights are left to the playerbots raid strategies. Companion addon: jrad7/mod-dungeon-clear-addon. It hooks playerbots without patching it (appends to the shared context registries). Ships its own `.cmake`; folder name must stay exact. Reads `PlayerbotAIConfig` members directly, so it breaks when playerbots renames them. AGPL-3.0. |
 | `mod-bg-slaveryvalley` | zip (no git) | Custom battleground, map 801 / BG id 31. Server side complete; **client patch still undistributed** — see below. |
 | `mod-ah-bot-plus` | NathanHandley/mod-ah-bot-plus | Auction house bot (git clone since 2026-10-30). Sells under, and buys player auctions as, the ordinary account `ahbot` (auth id 352): characters Fatiggeritch (3502) and Bonqueefa (3503), set in `AuctionHouseBot.GUIDs` (comma list, no spaces). Never use a playerbot character for it, and never enter the world on those characters. Seller and buyer both on; everything else is the `.dist` default (about 150 listings a minute per house, up to 15000 each). GM commands: `.ahbot reload` (re-reads the conf, GUIDs included, no restart), `.ahbot update`, `.ahbot empty`. Loader `Addmod_ah_bot_plusScripts`, so the folder name must stay exact. No SQL. |
-| `mod-leeroy` | this repo, `modules/mod-leeroy` | The guild bridge. `azerothcore-wotlk/modules/mod-leeroy` is a **junction** to `F:\azerothcore\modules\mod-leeroy`: remove it with `rmdir`, never `rm -rf` (that deletes the source through the link). Pins the cast (guild members at 80+, minus `Leeroy.HumanGuid`) via the playerbots pin API, mutes them in mod-ollama-chat, and serves NDJSON on `Leeroy.Bridge.Host`:`Leeroy.Bridge.Port` (`127.0.0.1:7878`, one mind at a time). Keys: `Leeroy.Enable`, `GuildId`, `HumanGuid`, `KeepCast`, `BringCastOnline`, `ExcludeFromOllamaChat`, `Bridge.*`. Start line in `Server.log`: `mod-leeroy: cast N members, pinned N ...`. Smoke test: `python modules/mod-leeroy/tools/bridge_smoke.py --expect-cast N` (0 pass, 1 fail, 2 no server or another mind connected); `--listen S` prints events, `--send` sends raw commands. |
+| `mod-leeroy` | this repo, `modules/mod-leeroy` | The guild bridge. `azerothcore-wotlk/modules/mod-leeroy` is a **junction** to `F:\azerothcore\modules\mod-leeroy`: remove it with `rmdir`, never `rm -rf` (that deletes the source through the link). Pins the cast (guild members at 80+, minus `Leeroy.HumanGuid`) via the playerbots pin API, mutes them in mod-ollama-chat, and serves NDJSON on `Leeroy.Bridge.Host`:`Leeroy.Bridge.Port` (`127.0.0.1:7878`, one mind at a time). Keys: `Leeroy.Enable`, `GuildId`, `HumanGuid`, `KeepCast`, `BringCastOnline`, `ExcludeFromOllamaChat`, `Bridge.*`. Start line in `Server.log`: `mod-leeroy: cast N members, pinned N ...`. Smoke test: `python modules/mod-leeroy/tools/bridge_smoke.py --expect-cast N` (0 pass, 1 fail, 2 no server or another mind connected); `--listen S` prints events, `--send` sends raw commands. For the owner it answers `.playerbots bot add5/10/25/40` from his guild (see that patch below). |
 
 `mod-playerbots`, `mod-ollama-chat`, `mod-dungeon-clear` and `mod-ah-bot-plus` are
 git repos and `mod-leeroy` lives in this one; the rest are zip extractions and
@@ -296,6 +336,34 @@ and gave such bots **no talents at all**: no tank strategy, so dungeon-clear
 said "No tank bot found". Local commit `075efcb9` clamps to 80.
 Do not pass party/raid leadership to a bot: every bot then runs `reset botAI`
 (`ResetStrategies`), which drops `wait for attack` (formation survives).
+
+**For the owner (`Leeroy.HumanGuid`) mod-leeroy answers the command itself and
+fills from his guild only, never with addclass bots** (`src/Guild/GuildAdd.cpp`,
+pure policy in `src/Lib/LeeroyGuildAddPolicy.*`). An `AllCommandScript`
+resolves what he typed with the core's own parser
+(`Acore::ChatCommands::GetAutoCompletionsFor`, so abbreviations such as
+`.pl b add5` count) and, for `playerbots bot add5|add10|add25|add40` (the
+subcommand compared case-sensitively, as playerbots does), stops it before
+playerbots. Same composition and gap filling, from free cast members only:
+online, alive, out of combat, his faction, in no group, not in a battleground,
+arena or queue (a raid browser listing is fine), not teleporting or flying,
+not in another instance or saved to another copy of his, and clear of
+`RealmModule::MutationReason` (Realm leases, training, offline raids, pending
+bot jobs). Within a role, the classes his group has fewest of come first,
+lowest guid on ties. They join directly (`AddMember`; his group is made only
+once someone can join, and becomes a raid only when a party is full), take the
+raid night's `RaidHabits` (plus dungeon-clear's entry when he is inside an
+instance) and are teleported beside him. He is told per role how
+many were added and how many slots stayed empty, with a tally of why the
+others were not free. He must lead his group and be alive, out of combat and
+not travelling. Anyone else, `Leeroy.Enable = 0`, no guild or an empty cast:
+the command reaches playerbots unchanged. Each fill publishes a `guild_group`
+event (reason `built`). Taking that group onto an instance map grants
+dungeon-clear's entry for it (`GrantRaidEntry`, which writes only what a member
+lacks) to its guild members not yet in his copy, brings them in under the same
+fences (his copy only), and publishes another (`entered`, with map, instance id
+and difficulty). Such a group raids for DKP and attendance like a called raid
+night (see the mind's guild life).
 
 ### Local patch: pinned random bots
 
@@ -459,6 +527,7 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 .venv/Scripts/python -m leeroy_mind.library --data-dir "$D" stats   # the game library: build, search
 .venv/Scripts/python -m leeroy_mind nightly --data-dir "$D" status  # also run, ledger, undo, enrich, veto
 .venv/Scripts/python -m leeroy_mind eval --data-dir "$D"    # weekly evaluation, on a copied database by default
+.venv/Scripts/python -m leeroy_mind console --data-dir "$D" # the guild console; open the URL it prints
 .venv/Scripts/python -m pytest -q                           # the unit tests
 .venv/Scripts/python -m pytest -m ollama                    # optional: also -m live, -m mysql
 ```
@@ -485,9 +554,133 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   on the 4090 beside it) and runs the night's stages. The owner's login stops
   it and preloads the live model; the next run resumes at the first unfinished
   unit. So a swapped model in `ollama ps` while nobody is online is expected.
+- A live lease (his login, an offline raid, the voice service) pins the live
+  model (`ollama ps` says Forever). When the last one ends, the pin drops to
+  10 minutes (`RELEASED_KEEP_ALIVE` in `nightly/gpu.py`), so a relog finds it
+  loaded and an idle evening frees its 16 GB. The embedding model (1 GB) stays
+  pinned: the mind embeds through the night.
 - Guild life (raid nights, DKP and loot, offline raids, rank, spec and gear
   upkeep) runs with built-in defaults; `[guild]` and `[dkp]` tables in
   `mind.toml` override them.
+- A group he built with `.playerbots bot addN` (native `guild_group` events)
+  raids like a called raid night once he leads it into a raid instance in
+  `guild/raids.py`: size and heroic from the instance difficulty, his group's
+  guild members as the raid, he leads. Arrival is proved as a called raid
+  proves it, by the raid night's inside summon: only members the server finds in
+  his copy are the raid and earn attendance. Then tank and loot officer are
+  chosen among them as for a called raid (`SetLootMaster` is sent) and the
+  called raid's own start runs (`RaidNight._begin`: record, attendance and its
+  DKP, kills, DKP loot). It ends as a called raid does (10 minutes outside,
+  logout, "calling it") or when the group breaks up. Never beside another raid,
+  never twice for one instance within 7 days, never for 5-mans; nothing is
+  formed or disbanded.
+  The mind disbands only a group it formed itself (meta
+  `guild:raid-night:formed-group`, set at FormRaid, cleared once the disband
+  lands; a `guild_group` event outside a raid clears it too), so a group he
+  built survives his relogs and mind restarts.
+- The guild console (`leeroy_mind/console/`) is a process of its own on
+  `127.0.0.1:7881` (`--port`). It prints `http://127.0.0.1:7881/#key=...`; the
+  key changes at each start, stays in the page's memory (never a cookie, which
+  every 127.0.0.1 port would be sent) and goes with each request as an
+  `X-Console-Key` header, so a reload needs the printed URL again. Every request
+  needs the console's Host, and its Origin when the browser sends one; a change
+  (POST) always needs both the key and the Origin. A stop or restart asks
+  first while the owner is in game or nobody can tell. It reads mind.db,
+  mind.log and mind.toml read-only and talks to the voice service through the
+  voice page's own socket. Start, restart and stop use
+  `leeroy_mind/lifecycle.py`, the rules `scripts/ac-mind.py` uses, so only this
+  checkout's own mind venv may control the mind (`--root` names another
+  checkout); the voice service's pid must be the base interpreter its own venv
+  launcher started. `--no-control` turns start, restart and stop off, and raid
+  actions too. The owner's game state is the running mind's open session; while
+  the mind or its bridge is down, or the session cannot be read, it is shown as
+  unknown, never "not in game". Its Raid and Guild tabs read mind.db read-only
+  (raids, attendance, the DKP ledger, loot receipts, the roster, season awards,
+  the chronicle); the Raid tab's live state and buttons come from the mind's
+  control endpoint. The Personas tab is read-only too (`console/personaview.py`):
+  each member's night mood, stance, row toward the owner, strongest ties, memory
+  counts, persona version and who last wrote it (seed, owner, generator, the
+  night's looks pass, a stance move or an undo), open drift flags and the night's
+  trait sample, and per member the persona card summary, ties, memories by kind
+  and ledger; a table an older mind.db lacks shows as unavailable. Its only
+  write is the tuning (`leeroy_mind/tuning/`, console `tuneview.py`): the
+  owner's dials, stored in mind.db's `tuning_*` tables as an overlay that never
+  rewrites a persona. Member dials: talkative, argumentative, forward/flirty
+  (women only), humour amount, theorycrafter, lore nerd, drama, jealousy, party
+  (drinking and smoking habits), opening up, reliability; world dials
+  chattiness, romance and jealousy override mind.toml without writing it. A
+  member's own value wins over group offsets, which add up. With nothing set,
+  every prompt and weight is what it was (`tests/tuning/golden_prompts.json`).
+  Writes and previews go through the mind's `tune` op; a preview runs only
+  while the live model is already loaded, never loads one, and its text is never
+  logged or stored. `python -m leeroy_mind tuning --data-dir "$D" status|history`
+  reads it; `undo N|revert N` work with the mind stopped.
+- The mind's control endpoint (`leeroy_mind/endpoint.py`) is on by default
+  (`[control] enabled = false` turns it off; `[control] port`, default 0, picks
+  a free port). It listens on 127.0.0.1 only and writes a new key each start,
+  with its port and pid, to `mind-data/control.json`, readable by the owner's
+  user only (a protected one-entry DACL) and removed when the mind stops
+  cleanly. One JSON line per connection, exactly `v`, `key`, `op` (and `args`):
+  `status`, `stop` (the mind's own shutdown, the one Ctrl+C runs), `tune`
+  (the owner's dials: status, set, undo, revert, group, retire, preview) and `raid`
+  (`call`, `form` {raid, size, heroic, lead}, `summon`, `start`, `stop`,
+  `end`), which enter guild life's raid night where the owner's chat or its
+  timers would, with the same guards, and are refused while he is not in game.
+  `stop`/`start` of a raid switch dungeon-clear off and on again mid-raid. The
+  console sends the key only to the listener the TCP table shows is the running
+  mind's own pid; its Stop and Restart use the clean stop (asked up to five
+  times while the endpoint is there but busy), wait up to 60 s for the process
+  to end, and otherwise (or with no endpoint: a mind from before it, or one
+  with it off) stop it by force and say why.
+
+## The Realm (`leeroy_mind.realm`)
+
+The mind's layer for the world outside the owner's guild: three rival bot guilds (a
+progression rival he names, a drama farm, Alliance gankers), their officers' rationed lines in
+Trade and General and the gankers' emotes, the race for first kills, canon achievement grants,
+the guild bank, the guild calendar, mail to him, the kick guard and the realm's night stage.
+Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
+
+- **Off by default, two switches.** `[realm] enabled = true` in `mind.toml` (read again at each
+  hello and login) and native `Leeroy.Realm.Enable = 1` in `mod_leeroy.conf` (`.reload config`;
+  while it is 0 native refuses every realm command `realm_off`). Other `[realm]` keys:
+  `his_birthday`, `guild_anniversary` (MM-DD, local only), `trial_rank`, `member_cap`,
+  `gank_human`. `mind-data/realm/` holds `blocklist.txt` (never committed), `cards/`, `plans/`
+  and `approved/`. Without the blocklist, or before the guild's name is cached (meta
+  `realm:guild_name`, read once per hello), the screen fails closed and no rival speaks.
+- **Data steps**, from `mind/` with `--data-dir "$D"`: `python -m leeroy_mind realm status`
+  and `titles` read `mind.db` read-only; `realm plan rivals --progression-name <name>`,
+  `plan canon`, `plan bank`, `plan bank-stock` write only a plan file (rivals asks the live
+  model and exits 2 while the night holds the GPU); `realm approve <plan file>` writes only
+  an approval bound to the plan's hash; the running mind applies each approved plan once
+  (`realm_step`), and a plan edited after its approval is refused for good. `realm canon
+  history-ok <seed> <canon>` approves the history files; `realm cards [--show]`. A bank step
+  that ends `needs_controller` needs a look at the bank in game, then a fresh plan
+  (`plan bank --no-money` or `--first-tab N`).
+- **Exactly once.** A command that moves no body (speech, actor sets, renames, bank money, tabs
+  and gift withdrawals, grants, calendar, mail) goes through the direct ledger `realm_direct`
+  (prepared, dispatched, acked, refused, unknown, abandoned): an unknown one is never sent
+  again, and a restart turns dispatched into unknown. Body moves go through the action queue
+  and the body ledger. Native's `busy:<owner>` is stored as `busy_<owner>`. Acked calendar
+  signups and speech lines are pruned 30 days after they settle; other acked rows stay. The
+  actor set is resent from memory at each hello; if it ever moves into the ledger, its ref
+  must name the process.
+- **Rulings.** His raid holds exactly his raid: waiting for the call, called and forming hold
+  the roster and his group; assembling and running hold the raid's members and his group;
+  everyone else, rival officers included, may move (an unreadable member list holds everyone).
+  Rivals never kill a boss before the guild and never an Ulduar hard mode. Training keeps its
+  own benchmark rival choice and asks the race (`app.realm.race.benchmark_allowed`: True or
+  None, never False). A member he took back counts as a full member again. No model call
+  while he is offline; no rival line in his raid's combat, wipe silence or debrief.
+- **Night.** With the Realm on at the mind's start, stage `realm` runs after `stories` on the
+  reflection model: 0-2 Trade beats per rival guild (said the next day, screened again), up to
+  3 forum posts, 3 letters (written through the post office) and 2 write-ups. It counts 0 and
+  writes nothing while `[realm] enabled` is false.
+- **Calendar and mail.** The desk posts raid nights (from his logins), Thursday's officer
+  meeting and the members' card birthdays a week ahead, signs members up and notes the raid
+  nights he missed; native keeps 100 guild events. Mail: a letter once per absence, a week
+  after his last logout; at most 2 gifts a product week (a spare BoE from the bank, else
+  flasks); holiday and birthday gifts; at most 3 a day, sent only while he is online.
 
 ## The voice service (`leeroy-voice`)
 

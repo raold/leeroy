@@ -18,20 +18,25 @@
 {"name":"gear_up_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"gear_up","id":"t7","ts":0,"guids":[1010,1337],"ilvl":264,"level_to":80}}
 {"name":"gear_up_defaults","kind":"command","valid":true,"msg":{"v":1,"type":"gear_up","id":"t7","ts":0,"guids":[1010]}}
 {"name":"gear_up_empty","kind":"command","valid":false,"error":"bad field: guids","msg":{"v":1,"type":"gear_up","id":"t7","ts":0,"guids":[]}}
-{"name":"raid_control_dc_on","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"raid_control","id":"t8","ts":0,"member_guid":1,"action":"dc_on","leader_guid":1101,"param":""}}
+{"name":"raid_control_dc_on","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"raid_control","id":"t8","ts":0,"member_guid":1,"action":"dc_on","leader_guid":1101,"param":"","training_run":""}}
 {"name":"raid_control_disband","kind":"command","valid":true,"msg":{"v":1,"type":"raid_control","id":"t8","ts":0,"member_guid":1,"action":"disband"}}
 {"name":"raid_control_bad_action","kind":"command","valid":false,"error":"bad field: action","msg":{"v":1,"type":"raid_control","id":"t8","ts":0,"member_guid":1,"action":"pull","leader_guid":1101}}
 {"name":"raid_control_dc_no_leader","kind":"command","valid":false,"error":"bad field: leader_guid","msg":{"v":1,"type":"raid_control","id":"t8","ts":0,"member_guid":1,"action":"dc_on"}}
 {"name":"remove_friend_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"remove_friend","id":"t9","ts":0,"guid":1101}}
 {"name":"set_spec_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"set_spec","id":"t10","ts":0,"guid":1101,"spec_no":2,"glyphs":true}}
 {"name":"set_spec_bad_no","kind":"command","valid":false,"error":"bad field: spec_no","msg":{"v":1,"type":"set_spec","id":"t10","ts":0,"guid":1101,"spec_no":10}}
-{"name":"bot_do_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"bot_do","id":"t11","ts":0,"guids":[1101,1102],"action":"co","param":"+behind","target_guid":0}}
+{"name":"bot_do_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"bot_do","id":"t11","ts":0,"guids":[1101,1102],"action":"co","param":"+behind","target_guid":0,"training_run":""}}
 {"name":"bot_do_cast_target","kind":"command","valid":true,"msg":{"v":1,"type":"bot_do","id":"t11","ts":0,"guids":[1103],"action":"cast","param":"rebirth","target_guid":1104}}
 {"name":"bot_do_bad_strategy","kind":"command","valid":false,"error":"bad field: param","msg":{"v":1,"type":"bot_do","id":"t11","ts":0,"guids":[1101],"action":"co","param":"+attack anything"}}
 {"name":"bot_do_remove_survival","kind":"command","valid":false,"error":"bad field: param","msg":{"v":1,"type":"bot_do","id":"t11","ts":0,"guids":[1101],"action":"co","param":"-avoid aoe"}}
+{"name":"bot_do_bg_off","kind":"command","valid":true,"msg":{"v":1,"type":"bot_do","id":"rb1","ts":0,"guids":[1101],"action":"co","param":"-bg"}}
+{"name":"bot_do_lfg_on","kind":"command","valid":true,"msg":{"v":1,"type":"bot_do","id":"rb2","ts":0,"guids":[1101],"action":"nc","param":"+lfg"}}
+{"name":"bot_do_go_fishing","kind":"command","valid":true,"msg":{"v":1,"type":"bot_do","id":"rb3","ts":0,"guids":[1101],"action":"do","param":"go fishing"}}
 {"name":"bot_do_bad_action","kind":"command","valid":false,"error":"bad field: action","msg":{"v":1,"type":"bot_do","id":"t11","ts":0,"guids":[1101],"action":"leave","param":""}}
 {"name":"stock_items_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"stock_items","id":"t12","ts":0,"guid":1101,"items":[43015,46377],"count":2}}
 {"name":"stock_items_bad_item","kind":"command","valid":false,"error":"bad field: items","msg":{"v":1,"type":"stock_items","id":"t12","ts":0,"guid":1101,"items":[49623],"count":1}}
 {"name":"missing_id","kind":"command","valid":false,"error":"missing id","msg":{"v":1,"type":"remove_friend","ts":0,"guid":1101}}
-{"name":"job_form_raid_done","kind":"event","valid":true,"msg":{"v":1,"type":"job","ts":0,"id":"t1","kind":"form_raid","state":"done","reason":"","stage":"","guids":[1101,1102],"skipped":[{"guid":1103,"reason":"in_bg"}],"kills":0,"wipes":0,"instance_id":0,"guid":0,"level":0,"avg_ilvl":0}}
-{"name":"job_bot_do_done","kind":"event","valid":true,"msg":{"v":1,"type":"job","ts":0,"id":"t11","kind":"bot_do","state":"done","reason":"","stage":"","guids":[1101],"skipped":[{"guid":1102,"reason":"offline"}],"kills":0,"wipes":0,"instance_id":0,"guid":0,"level":0,"avg_ilvl":0}}
+{"name":"job_form_raid_done","kind":"event","valid":true,"msg":{"v":1,"type":"job","ts":0,"id":"t1","kind":"form_raid","state":"done","reason":"","stage":"","guids":[1101,1102],"skipped":[{"guid":1103,"reason":"in_bg"}],"kills":0,"wipes":0,"instance_id":0,"guid":0,"level":0,"avg_ilvl":0,"training_run":""}}
+{"name":"job_bot_do_done","kind":"event","valid":true,"msg":{"v":1,"type":"job","ts":0,"id":"t11","kind":"bot_do","state":"done","reason":"","stage":"","guids":[1101],"skipped":[{"guid":1102,"reason":"offline"}],"kills":0,"wipes":0,"instance_id":0,"guid":0,"level":0,"avg_ilvl":0,"training_run":""}}
+{"name":"guild_group_built","kind":"event","valid":true,"msg":{"v":1,"type":"guild_group","ts":0,"reason":"built","size":10,"leader_guid":1,"raid":true,"map":571,"instance_id":0,"difficulty":0,"added":[{"guid":1101,"role":"tank"},{"guid":1102,"role":"healer"},{"guid":1103,"role":"damage"}],"members":[1101,1102,1103]}}
+{"name":"guild_group_entered","kind":"event","valid":true,"msg":{"v":1,"type":"guild_group","ts":0,"reason":"entered","size":10,"leader_guid":1,"raid":true,"map":631,"instance_id":77,"difficulty":1,"added":[],"members":[1101,1102,1103]}}

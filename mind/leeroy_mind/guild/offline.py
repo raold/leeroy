@@ -495,6 +495,22 @@ class OfflineRaids:
             ev = Job(**{**terminal, "guids": tuple(terminal["guids"]),
                         "skipped": tuple(JobSkip(**s) for s in terminal["skipped"])})
             await self._job(ev)
+        if self.run is not None:
+            for listener in tuple(self._listeners):
+                hook = getattr(listener, "on_before_end", None)
+                if hook is None:
+                    continue
+                try:
+                    async with asyncio.timeout(20):
+                        ready = await hook(self.run, terminal["reason"] or terminal["state"])
+                except Exception:
+                    ready = False
+                    log.warning("offline raid cleanup remains pending")
+                if ready is not True:
+                    # This is only the GPU lease. Retain the exact run, terminal
+                    # receipt and body identity for a later cleanup attempt.
+                    await self._release()
+                    return
         try:
             if self.session is not None:
                 session = self.session
