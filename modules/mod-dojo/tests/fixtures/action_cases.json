@@ -745,6 +745,78 @@
    },
    "open": 136,
    "check": {}
+  },
+  {
+   "name": "the perceptual delay widens every wait",
+   "rules": {
+    "perceptual_delay_ms": 100,
+    "command_delay_ms": 150,
+    "queue_window_ms": 400,
+    "range_slack_yards": 3.0
+   },
+   "knowledge": {
+    "alive": true,
+    "mana": 10000,
+    "mana_regen_bound": 0,
+    "casting": false,
+    "cast_remaining_ms": 0,
+    "cast_queued": true,
+    "kit": [
+     {
+      "known": true,
+      "cooldown_ms": 0,
+      "gcd_ms": 650,
+      "cost_known": true,
+      "cost": 400,
+      "range_known": true,
+      "max_range": 36.0
+     },
+     {
+      "known": true,
+      "cooldown_ms": 0,
+      "gcd_ms": 651,
+      "cost_known": true,
+      "cost": 400,
+      "range_known": true,
+      "max_range": 36.0
+     },
+     {
+      "known": true,
+      "cooldown_ms": 551,
+      "gcd_ms": 0,
+      "cost_known": true,
+      "cost": 300,
+      "range_known": false,
+      "max_range": 0.0
+     }
+    ],
+    "enemy_known": true,
+    "enemy_alive": true,
+    "enemy_distance": 20.0
+   },
+   "abilities": {
+    "none": "",
+    "frostbolt": "",
+    "ice_lance": "global cooldown",
+    "frost_nova": "",
+    "stop_cast": "",
+    "target_enemy": "",
+    "clear_target": "",
+    "attack_on": "",
+    "attack_off": ""
+   },
+   "facings": {
+    "keep": "",
+    "toward": "",
+    "away": ""
+   },
+   "open": 208,
+   "check": {
+    "frostbolt/hold/toward": 1,
+    "frostbolt/hold/away": 0,
+    "ice_lance/hold/toward": 0,
+    "frost_nova/hold/keep": 1
+   }
   }
  ]
 }

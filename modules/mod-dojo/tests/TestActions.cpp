@@ -119,6 +119,7 @@ DOJO_TEST(masks_follow_the_shared_cases)
         MaskRules rules;
         if (c.contains("rules"))
         {
+            rules.perceptualDelayMs = c["rules"].value("perceptual_delay_ms", 0u);
             rules.commandDelayMs = c["rules"]["command_delay_ms"].get<std::uint32_t>();
             rules.queueWindowMs = c["rules"]["queue_window_ms"].get<std::uint32_t>();
             rules.rangeSlackYards = c["rules"]["range_slack_yards"].get<float>();
