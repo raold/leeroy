@@ -393,13 +393,17 @@ class Run:
     def line_of_sight(self, pos: dict) -> dict:
         c = self.console
         self.restore(((pos["blocked"]["a"], pos["blocked"]["a_facing"]), (pos["blocked"]["b"], pos["blocked"]["b_facing"])))
+        # Masks answer for the actor's delayed observation (Task 7, D19): an enemy out of its line of sight is not
+        # visible to it, so the cast is masked; forced, the core refuses it for line of sight.
+        time.sleep(PERCEIVED)
         mask = c.masks(0)
         seq = c.seq()
         cast = c.act(0, "frostbolt/hold/toward", force=mask["abilities"]["frostbolt"] != "")[0]
         r = self.executed(seq, cast)
-        ok = mask["abilities"]["frostbolt"] == "" and r["outcome"] == "rejected" and "line_of_sight" in r["detail"]
-        return self.case("line of sight: not masked (geometry is left to execution), refused by the core", ok,
-                         mask=mask["abilities"], distance=mask["knowledge"]["enemy_distance"], cast=r)
+        ok = (mask["abilities"]["frostbolt"] == "no visible enemy" and r["outcome"] == "rejected"
+              and "line_of_sight" in r["detail"])
+        return self.case("line of sight: masked once the enemy is out of sight (D19), and a forced cast is refused by "
+                         "the core", ok, mask=mask["abilities"], distance=mask["knowledge"]["enemy_distance"], cast=r)
 
     def interruption(self, pos: dict) -> dict:
         c = self.console

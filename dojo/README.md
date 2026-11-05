@@ -364,8 +364,11 @@ from its delayed observation; see below) and mask only what cannot succeed
 progress) masks only when it outlasts the knowledge's age (the 100 ms
 perceptual delay), the command delay and the core's spell queue window
 together; mana only when one regeneration tick could not cover the cost; range
-only beyond a 3-yard slack. Line of sight, facing
-with `keep`, roots, stuns and immunity are left to execution. Turning away
+only beyond a 3-yard slack. Facing with `keep`, roots, stuns and immunity
+are left to execution, and so is line of sight as a rule; but an enemy out of
+the actor's sight is not visible to it (see the observation below), so once
+that has been perceived its enemy-targeted actions are masked as `no visible
+enemy`, and a forced one is still the core's to refuse. Turning away
 while casting a front-facing spell is the one combination masked in every
 state. The knowledge read calls only getters, and the cost and range lookups
 pass no spell, so `ApplySpellMod` registers and drops no charge; `dojo
