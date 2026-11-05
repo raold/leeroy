@@ -16,12 +16,12 @@ from leeroy_mind.library.chunks import (KINDS, SOURCES, SNAPSHOT_SOURCES, Chunk,
 from leeroy_mind.library.db import VEC_DIM, checkpoint, open_library_db
 from leeroy_mind.llm.client import LLMError
 from leeroy_mind.llm.scheduler import Priority, SchedulerError
-from leeroy_mind.memory.recall import fts_query, mmr
+from leeroy_mind.memory.recall import fts_query
+from leeroy_mind.retrieval import mmr, vector_or_word_similarity
 from leeroy_mind.storage.db import EmbeddingMismatch
 from leeroy_mind.storage.rows import cosine, pack_vec, unpack_vec
 from leeroy_mind.storage.store import clean
 from leeroy_mind.storage.store import fts_query as quote_words
-from leeroy_mind.text import word_jaccard
 
 log = logging.getLogger("leeroy_mind")
 
@@ -751,11 +751,11 @@ class Library:
                     and terms <= set(_TITLE_WORD.findall(r["title"].casefold()))):
                 score[i] *= _LEAD_BONUS  # the page about it: "Arthas" -> Arthas Menethil
 
+        similarity = vector_or_word_similarity(vecs, {i: r["text"] for i, r in rows.items()})
+
         def sim(a: int, b: int) -> float:
             self._check_search_cancelled()
-            if a in vecs and b in vecs:
-                return cosine(vecs[a], vecs[b])
-            return word_jaccard(rows[a]["text"], rows[b]["text"])
+            return similarity(a, b)
 
         order = sorted(rows, key=lambda i: (-score[i], i))
         picked = mmr(order, score, sim, k, lam=0.75)

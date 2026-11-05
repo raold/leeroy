@@ -3,16 +3,17 @@ import math
 import re
 import struct
 from datetime import date, datetime, tzinfo
-from typing import Callable, Sequence
+from typing import Sequence
 
 from leeroy_mind.clock import Clock, night_of
 from leeroy_mind.llm.client import LLMError
 from leeroy_mind.llm.scheduler import Priority, SchedulerError
 from leeroy_mind.memory.writer import Embedder
+from leeroy_mind.retrieval import mmr, vector_or_word_similarity  # mmr remains a public import
 from leeroy_mind.storage.rows import MemoryRow, cosine, unpack_vec
 from leeroy_mind.storage.store import VEC_DIM, Store
 from leeroy_mind.storage.store import fts_query as _safe_fts_query
-from leeroy_mind.text import strip_wow_markup, word_jaccard
+from leeroy_mind.text import strip_wow_markup
 
 log = logging.getLogger("leeroy_mind")
 
@@ -83,32 +84,6 @@ def recency(t_accessed: float, now: float, tau_days: float) -> float:
 def resting(m: MemoryRow, now: float) -> bool:
     """A memory a live prompt used within REST_S."""
     return m.access_n > 0 and now - m.t_accessed < REST_S
-
-
-def mmr(ids: Sequence[int], scores: dict[int, float], sim: Callable[[int, int], float], k: int,
-        lam: float = 0.7) -> list[int]:
-    """Pick k ids, each maximising lam * score - (1 - lam) * (closest similarity to a pick).
-    Scores are scaled by the largest so the penalty is comparable at any score range.
-    Retain each candidate's maximum similarity: only the newest pick adds information."""
-    pool = list(ids)
-    nearest = [0.0] * len(pool)  # per occurrence, so repeated ids retain their original order
-    top = max((scores[i] for i in pool), default=0.0)
-    scale = top if top > 0 else 1.0
-    picked: list[int] = []
-    while pool and len(picked) < k:
-        def value(index: int) -> float:
-            return lam * scores[pool[index]] / scale - (1 - lam) * nearest[index]
-        best_index = max(range(len(pool)), key=value)
-        best = pool.pop(best_index)
-        nearest.pop(best_index)
-        picked.append(best)
-        if len(picked) < k:
-            for index, candidate in enumerate(pool):
-                similarity = sim(candidate, best)
-                # Zero is the empty-set default, not a floor for negative similarities.
-                nearest[index] = (similarity if len(picked) == 1
-                                  else max(nearest[index], similarity))
-    return picked
 
 
 def format_memory(m: MemoryRow, now: float, *, tz: tzinfo) -> str:
@@ -335,12 +310,7 @@ class Recall:
                  - (REST_PENALTY if resting(m, now) else 0.0)
                  for m in rows}
 
-        texts = {m.id: m.text for m in rows}
-
-        def sim(a: int, b: int) -> float:
-            if a in vecs and b in vecs:
-                return cosine(vecs[a], vecs[b])
-            return word_jaccard(texts[a], texts[b])
+        sim = vector_or_word_similarity(vecs, {m.id: m.text for m in rows})
 
         order = sorted(rows, key=lambda m: (-total[m.id], -m.t_created, m.id))
         picked = mmr([m.id for m in order], total, sim, k)

@@ -122,6 +122,30 @@ def test_mmr_end_to_end(rig, store, clock):
     assert len([i for i in got if i in dupes]) == 1
 
 
+def test_recall_passes_only_shareable_candidate_data_to_similarity(rig, store, clock, monkeypatch):
+    import leeroy_mind.memory.recall as recall_module
+
+    r, _ = rig
+    t = now_of(clock)
+    public = add(store, "The raid found frost treasure.", actors=(102,), embed=False,
+                 t_created=t, t_accessed=t)
+    private = add(store, "The raid found a secret treasure.", actors=(102,), embed=False,
+                  scope="private", scope_with=102, t_created=t, t_accessed=t)
+    snapshots = []
+    factory = recall_module.vector_or_word_similarity
+
+    def capture(vectors, texts):
+        snapshots.append((dict(vectors), dict(texts)))
+        return factory(vectors, texts)
+
+    monkeypatch.setattr(recall_module, "vector_or_word_similarity", capture)
+    got = run(r.recall(101, "raid treasure", present=[102], addressee=None, k=2,
+                       channel="say", touch=False))
+    assert [m.id for m in got] == [public]
+    assert len(snapshots) == 1 and set(snapshots[0][1]) == {public}
+    assert private not in snapshots[0][1]
+
+
 def test_recall_touches_selected(rig, store, clock):
     r, _ = rig
     t = now_of(clock)

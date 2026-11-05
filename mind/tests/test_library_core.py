@@ -133,6 +133,33 @@ def test_text_search_ranks_and_filters(lib):
         lib.search_text("x", kinds=["gossip"])
 
 
+def test_rank_checks_cancellation_before_each_shared_similarity(lib, monkeypatch):
+    import leeroy_mind.library.core as core
+
+    events = []
+    factory = core.vector_or_word_similarity
+    check = lib._check_search_cancelled
+
+    def checked():
+        events.append("check")
+        check()
+
+    def instrumented(vectors, texts):
+        similarity = factory(vectors, texts)
+
+        def compare(a, b):
+            events.append("compare")
+            return similarity(a, b)
+        return compare
+
+    monkeypatch.setattr(lib, "_check_search_cancelled", checked)
+    monkeypatch.setattr(core, "vector_or_word_similarity", instrumented)
+    hits = lib._rank("frost citadel", None, 3, None)
+    comparisons = [i for i, event in enumerate(events) if event == "compare"]
+    assert len(hits) >= 2 and comparisons
+    assert all(events[i - 1] == "check" for i in comparisons)
+
+
 def test_search_without_vectors_never_calls_the_embedder(lib):
     llm = FakeLLM()
     hits = run(lib.search("Wrathgate Bolvar", k=2, llm=llm))
