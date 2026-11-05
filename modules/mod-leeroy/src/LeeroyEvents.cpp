@@ -38,6 +38,8 @@ namespace
 constexpr std::size_t kLootSourceMemory = 512;
 
 thread_local uint32 tBridgeSpeechDepth = 0;
+thread_local uint32 tQuietDepth = 0;
+thread_local LeeroyDeferredChat* tDeferredChat = nullptr;
 
 uint32 LowGuid(Object const* object)
 {
@@ -258,6 +260,8 @@ Leeroy::BgWinner Winner(TeamId team)
 
 void LeeroyPublishChat(Player* speaker, Leeroy::Channel channel, std::string const& text, uint32 toGuid)
 {
+    if (!speaker || LeeroyDeferredChat::ActiveFor(LowGuid(speaker), channel, toGuid))
+        return;
     Leeroy::ChatEvent e;
     e.channel = channel;
     e.fromGuid = LowGuid(speaker);
@@ -283,6 +287,26 @@ LeeroyBridgeSpeech::~LeeroyBridgeSpeech()
 bool LeeroyBridgeSpeech::Active()
 {
     return tBridgeSpeechDepth > 0;
+}
+
+LeeroyQuietScope::LeeroyQuietScope() { ++tQuietDepth; }
+LeeroyQuietScope::~LeeroyQuietScope() { --tQuietDepth; }
+bool LeeroyQuietScope::Active() { return tQuietDepth != 0; }
+
+LeeroyDeferredChat::LeeroyDeferredChat(uint32 fromGuid, Leeroy::Channel channel, uint32 toGuid)
+    : _fromGuid(fromGuid), _toGuid(toGuid), _channel(channel), _previous(tDeferredChat)
+{
+    tDeferredChat = this;
+}
+
+LeeroyDeferredChat::~LeeroyDeferredChat() { tDeferredChat = _previous; }
+
+bool LeeroyDeferredChat::ActiveFor(uint32 fromGuid, Leeroy::Channel channel, uint32 toGuid)
+{
+    for (auto* scope = tDeferredChat; scope; scope = scope->_previous)
+        if (scope->_fromGuid == fromGuid && scope->_channel == channel && scope->_toGuid == toGuid)
+            return true;
+    return false;
 }
 
 void LeeroyPollAfk()
@@ -346,6 +370,8 @@ public:
     // Whispers (Player::Whisper), heard when either side is tracked.
     bool OnPlayerCanUseChat(Player* player, uint32 type, uint32 language, std::string& msg, Player* receiver) override
     {
+        if (LeeroyQuietScope::Active())
+            return true;
         std::optional<Leeroy::Channel> const channel = ChatChannel(type, language);
         if (!channel)
             return true;
@@ -410,6 +436,8 @@ public:
 
     void OnPlayerAchievementComplete(Player* player, AchievementEntry const* achievement) override
     {
+        if (LeeroyQuietScope::Active())
+            return;
         LeeroyModule& module = LeeroyModule::Instance();
         uint32 const guid = LowGuid(player);
         if (achievement && module.IsTracked(guid))

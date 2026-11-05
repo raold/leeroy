@@ -108,7 +108,8 @@ async def test_calls_raid_once_after_login_and_ignores_duplicate_login(setup):
     ports, _, night = setup
     await night.on_login(Login(0, 1, True))
     await night.tick()
-    assert len(controls(ports, "disband")) == 1
+    # Nothing the mind formed is standing, so his own group is left alone.
+    assert len(controls(ports, "disband")) == 0
     await advance(ports, 59)
     await night.on_login(Login(0, 1, True))
     await night.tick()

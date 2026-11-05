@@ -221,7 +221,8 @@ LEEROY_TEST(Guild_Review_JobSerializationKeepsAllFieldsAndEscapesWireText)
     event.wipes = 9;
     event.instanceId = std::numeric_limits<std::uint32_t>::max();
     auto body = MakeJobEvent(event);
-    CHECK_EQ(body.size(), 14u);
+    CHECK_EQ(body.size(), 15u);
+    CHECK_EQ(body.at("training_run"), "");
     CHECK(!body.contains("v") && !body.contains("ts"));
     CHECK_EQ(body.at("guid"), 0);
     CHECK_EQ(body.at("level"), 0);

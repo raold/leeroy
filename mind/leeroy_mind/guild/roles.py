@@ -2,6 +2,8 @@
 
 import re
 
+from leeroy_mind.tuning.effective import dials_of
+
 
 _SPECS = {
     1: ("arms", "fury", "protection"),
@@ -24,6 +26,12 @@ _PREMADE = {
     "fire": "fire", "affliction": "affli", "demonology": "demo", "destruction": "destro",
     "balance": "balance",
 }
+
+
+def spec_name(cls: int, spec_tab: int) -> str | None:
+    """The talent tree's name, such as "protection"; None for an unknown class or tab."""
+    tabs = _SPECS.get(cls, ())
+    return tabs[spec_tab] if type(spec_tab) is int and 0 <= spec_tab < len(tabs) else None
 
 
 def role_of(cls: int, spec_tab: int, raid_role: str | None) -> str:
@@ -75,7 +83,10 @@ def is_achievement_hunter(persona) -> bool:
 
 
 def reliability(persona) -> int:
-    return persona.big_five.conscientiousness.score
+    """How reliably they turn up: the conscientiousness score, unless the owner has set their
+    reliability dial (tuning), which moves this and nothing else (not their discretion)."""
+    tuned = dials_of(persona).score("reliability")
+    return persona.big_five.conscientiousness.score if tuned is None else tuned
 
 
 def spec_tab_for(cls, main_spec, raid_role) -> int | None:

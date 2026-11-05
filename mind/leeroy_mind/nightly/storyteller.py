@@ -10,6 +10,7 @@ import math
 from typing import TYPE_CHECKING
 
 from leeroy_mind.storage.store import Store
+from leeroy_mind.tuning.effective import dials_of
 from leeroy_mind.wow import is_raid_fight
 
 from .knowledge import is_private, is_secret, knowers
@@ -23,6 +24,29 @@ VOLITIONS = ("confront", "make_up", "confide", "gossip", "correct", "recruit", "
              "bond", "mentor", "tease")
 LAYER_TRUST = {"surface": 20.0, "middle": 45.0, "deep": 65.0}
 NIGHT_OWL_DROP = 10.0
+CONFIDE_EXTRAVERSION = 4  # who confides: the quieter ones, at most this extraverted tonight
+OPENUP_TRUST_STEP = 5.0  # trust a layer needs less (more) per step of opening up above (below) 5
+# The intentions the owner's drama dial (tuning) scales, after every gate that lets them form.
+DRAMA_KINDS = frozenset({"confront", "needle", "gossip"})
+
+
+def opens_up(p, extraversion: float) -> bool:
+    """Whether the member would confide tonight: someone quiet (CONFIDE_EXTRAVERSION), or,
+    with the owner's opening-up dial (tuning) above 5, one step more extraverted per step; at
+    0 never."""
+    level = dials_of(p).values.get("openup")
+    if level is None:
+        return extraversion <= CONFIDE_EXTRAVERSION
+    return level > 0 and extraversion <= CONFIDE_EXTRAVERSION + max(0, level - 5)
+
+
+def layer_trust(p, depth: str) -> float:
+    """The trust the member's next disclosure layer needs: LAYER_TRUST, less for a night owl,
+    and OPENUP_TRUST_STEP less (more) per step their opening-up dial (tuning) sits above
+    (below) 5."""
+    t = LAYER_TRUST[depth] - (NIGHT_OWL_DROP if p.real_life.night_owl else 0)
+    level = dials_of(p).values.get("openup")
+    return t if level is None else t - (level - 5) * OPENUP_TRUST_STEP
 RESOLVE_DAYS = 10
 BLOWUP_DAYS = 7
 BLOWUP_DELTA = -4
@@ -96,6 +120,12 @@ def volitions(ctx: "NightContext") -> dict[int, list[Volition]]:
         def add(guid: int, kind: str, target: int, weight: float, ref: str = "") -> None:
             if guid not in eligible or target not in eligible or guid == target:
                 return
+            mt = dials_of(people[guid])
+            if mt.values:  # the owner's dials (tuning): drama, and opening up for confide
+                if kind in DRAMA_KINDS:
+                    weight *= mt.mult("drama")
+                elif kind == "confide":
+                    weight *= mt.mult("openup")
             v = Volition(guid, kind, target, weight, ref)
             old = candidates[guid].get((kind, target))
             if old is None or _order(v) < _order(old):
@@ -129,11 +159,10 @@ def volitions(ctx: "NightContext") -> dict[int, list[Volition]]:
                 rel = ctx.store.get_relationship(a, b)
                 if (a, b) in negative and rel.affinity <= -30:
                     add(a, "confront", b, 0.8)
-                if traits[a]["extraversion"] <= 4:
+                if opens_up(p, traits[a]["extraversion"]):
                     layer = next((d for i, d in enumerate(p.disclosures)
                                   if (a, b, i) not in opened), None)
-                    if layer is not None and rel.trust >= (
-                            LAYER_TRUST[layer.depth] - (NIGHT_OWL_DROP if p.real_life.night_owl else 0)):
+                    if layer is not None and rel.trust >= layer_trust(p, layer.depth):
                         add(a, "confide", b, 0.9)
                 if desired & {"discovery", "customisation"} and (
                         b in inner or set(p.game.outside_raids) & set(people[b].game.outside_raids)

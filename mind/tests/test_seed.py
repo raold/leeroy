@@ -704,3 +704,10 @@ def test_sample_lines_take_the_renames_in_any_case_and_keep_it():
                            {"Quillo": "Arkon"}, TM))
     assert [x.text for x in p.sample_lines] == ["ask arkon, then ARKON", "arkon pulls, i heal"]
     assert p.secret == "Arkon once owed quillo money"  # prose: as written only
+
+
+def test_seed_cast_draws_birthdays_in_code(store, md_file):
+    store.upsert_cast(ROSTER, 1000.0)
+    run(seed_cast(store, _llm(), CFG, md_file, human_guid=HUMAN))  # The model writes 03-14 for all.
+    born = [load_persona(store, g).real_life.birthday for g in (101, 103, 107)]
+    assert len(set(born)) == 3 and "02-29" not in born

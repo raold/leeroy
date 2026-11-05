@@ -196,6 +196,21 @@ LEEROY_TEST(Guild_MakeJobEventMatchesFixture)
     CHECK(!progress.contains("v") && !progress.contains("ts"));
 }
 
+LEEROY_TEST(Guild_MakeGuildGroupEventMatchesFixture)
+{
+    GuildGroupEvent built{"built", 10, 1, true, 571, 0, 0, {{1101, "tank"}, {1102, "healer"}, {1103, "damage"}},
+        {1101, 1102, 1103}};
+    auto full = Message("guild_group_built");
+    auto body = full;
+    body.erase("v"); body.erase("ts");
+    CHECK_EQ(MakeGuildGroupEvent(built), body);
+    CHECK_EQ(json::parse(Leeroy::EncodeEvent(0, MakeGuildGroupEvent(built))), full);
+    GuildGroupEvent entered{"entered", 10, 1, true, 631, 77, 1, {}, {1101, 1102, 1103}};
+    auto const event = MakeGuildGroupEvent(entered);
+    CHECK(event.at("added").is_array() && event.at("added").empty());
+    CHECK_EQ(json::parse(Leeroy::EncodeEvent(0, event)), Message("guild_group_entered"));
+}
+
 LEEROY_TEST(Guild_NumericFieldsRequireUnsignedJsonAndDoNotNarrowOverflow)
 {
     std::vector<std::pair<std::string_view, char const*>> fields = {

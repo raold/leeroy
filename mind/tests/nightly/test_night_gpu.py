@@ -415,6 +415,78 @@ def test_a_failed_hand_over_keeps_the_lease_and_frees_the_arbiter(h):
     run(go())
 
 
+# -- the let-go: the live model after the last lease ends -----------------------------------------
+
+class DownAdmin(FakeAdmin):
+    """FakeAdmin whose /api/ps fails (LLMError)."""
+
+    async def loaded_models(self):
+        raise LLMError("/api/ps: connection refused")
+
+
+def test_the_last_release_keeps_the_live_model_ten_more_minutes(h):
+    admin = FakeAdmin([h.EMB]); arb = GpuArbiter(admin, h.settings)
+    async def go():
+        await arb.acquire_live("human")
+        await arb.release_live("human"); await arb.settled()
+        assert admin.calls == [("preload", h.LIVE, -1), ("preload", h.LIVE, "10m")]
+        assert admin.preload_options[-1] == {"num_ctx": LIVE_PRESET.options["num_ctx"]}   # no reload
+        assert admin.loaded == [h.EMB, h.LIVE]          # loaded still: a relog finds it
+    run(go())
+
+
+def test_a_release_that_leaves_a_holder_touches_no_model(h):
+    admin = FakeAdmin([h.EMB]); arb = GpuArbiter(admin, h.settings)
+    async def go():
+        await arb.acquire_live("human"); await arb.acquire_live("offline_raid")
+        await arb.release_live("human"); await arb.settled()
+        assert admin.calls == [("preload", h.LIVE, -1)]  # the raid still holds the pin
+        await arb.release_live("ghost"); await arb.settled()
+        assert admin.calls == [("preload", h.LIVE, -1)]  # nor does a lease nobody held
+    run(go())
+
+
+def test_the_let_go_never_loads_the_live_model(h):
+    admin = FakeAdmin([h.REFL, h.EMB]); arb = GpuArbiter(admin, h.settings)
+    async def go():
+        assert arb.hold("human")                        # a lease whose hand-over never ran
+        await arb.release_live("human"); await arb.settled()
+        assert admin.calls == [] and admin.loaded == [h.REFL, h.EMB]
+    run(go())
+
+
+def test_a_relog_before_the_let_go_keeps_the_pin(h):
+    admin = FakeAdmin([h.EMB]); arb = GpuArbiter(admin, h.settings); d = Dispatch(arb)
+    async def go():
+        await d.login(); await d.back
+        await d.logout(); await d.login()               # the let-go has not run yet
+        await d.back; await arb.settled()
+        assert admin.calls == [("preload", h.LIVE, -1), ("preload", h.LIVE, -1)]
+    run(go())
+
+
+def test_the_live_block_lets_the_live_model_go_when_it_ends(h):
+    admin = FakeAdmin([h.REFL, h.EMB]); arb = GpuArbiter(admin, h.settings)
+    async def go():
+        async with arb.live("offline_raid"):
+            pass
+        await arb.settled()
+        assert admin.calls[-1] == ("preload", h.LIVE, "10m")
+    run(go())
+
+
+def test_a_failed_let_go_is_logged_and_frees_the_arbiter(h, caplog):
+    admin = DownAdmin([h.LIVE, h.EMB]); arb = GpuArbiter(admin, h.settings)
+    async def go():
+        assert arb.hold("human")
+        await arb.release_live("human"); await arb.settled()
+        await asyncio.wait_for(arb.hand_over(), 1)      # nobody holds a lease: it only takes the lock
+        assert admin.calls == []
+    with caplog.at_level(logging.WARNING, logger="leeroy_mind"):
+        run(go())
+    assert 'gpu_let_go_failed: error="/api/ps: connection refused"' in caplog.text
+
+
 # -- live(): the lease for a block, whatever happens to its caller --------------------------------
 
 def test_live_holds_the_lease_for_the_block_and_gives_it_back(h):

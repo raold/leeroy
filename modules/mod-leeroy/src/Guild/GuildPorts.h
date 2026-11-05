@@ -6,6 +6,8 @@
 #include "LeeroyGuildCommands.h"
 #include "LeeroyModule.h"
 #include "LeeroyProtocol.h"
+#include "Realm/RealmOwnership.h"
+#include "Group.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 
@@ -38,6 +40,17 @@ inline std::vector<uint32> CastMembers()
 inline uint32 HumanGuid() { return LeeroyModule::Instance().HumanGuid(); }
 inline bool GuildEnabled() { return LeeroyModule::Instance().Enabled(); }
 inline bool KeepCast() { return LeeroyModule::Instance().Config().keepCast; }
+
+// World-thread exclusion, independent of Realm's enable flag. A retained or
+// queued lease still owns its body. Inspect the complete roster, not only live
+// GroupReferences: remove/leader/loot operations also affect offline members.
+inline bool GroupHasRealmOwner(Group const* group)
+{
+    if (group)
+        for (auto const& member : group->GetMemberSlots())
+            if (Realm::RealmOwns(member.guid.GetCounter())) return true;
+    return false;
+}
 
 inline Player* FindOnline(uint32 low)
 {

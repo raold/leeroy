@@ -28,6 +28,37 @@ public:
     static bool Active();
 };
 
+// Suppress only the synchronous whisper/achievement publications on this
+// thread. Separate from bridge-origin provenance; nested scopes remain quiet.
+class LeeroyQuietScope
+{
+public:
+    LeeroyQuietScope();
+    ~LeeroyQuietScope();
+    LeeroyQuietScope(LeeroyQuietScope const&) = delete;
+    LeeroyQuietScope& operator=(LeeroyQuietScope const&) = delete;
+    static bool Active();
+};
+
+// Suppress only this exact synchronous chat tuple while a caller obtains its
+// native acceptance receipt. After this scope ends, the caller may explicitly
+// LeeroyPublishChat only for the accepted, revalidated line. Nothing is buffered
+// or replayed, and unrelated/unscoped chat keeps its normal behavior. Nested
+// scopes restore the previous suppression; this scope is distinct from Quiet.
+class LeeroyDeferredChat
+{
+public:
+    LeeroyDeferredChat(uint32 fromGuid, Leeroy::Channel channel, uint32 toGuid);
+    ~LeeroyDeferredChat();
+    LeeroyDeferredChat(LeeroyDeferredChat const&) = delete;
+    LeeroyDeferredChat& operator=(LeeroyDeferredChat const&) = delete;
+    static bool ActiveFor(uint32 fromGuid, Leeroy::Channel channel, uint32 toGuid);
+private:
+    uint32 _fromGuid, _toGuid;
+    Leeroy::Channel _channel;
+    LeeroyDeferredChat* _previous;
+};
+
 // World thread. The `afk` event has no hook (Player::ToggleAFK has none): OnUpdate polls the human and the online
 // cast once a second and publishes each change; the reset after a greeting re-reports everyone who is AFK.
 void LeeroyPollAfk();

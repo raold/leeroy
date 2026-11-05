@@ -102,6 +102,7 @@ LeeroyCommandResult HandleGearUp(nlohmann::json const& message)
     // Validate the entire request before queuing it; a non-bot guild member never reaches a factory.
     for (uint32 guid : command->guids)
     {
+        if (Realm::RealmOwns(guid)) return {false, "busy:realm_owner"};
         if (!InOwnedGuild(guid, job.guild, job.human))
             return {false, "not_cast:" + std::to_string(guid)};
         if (Player* bot = FindOnline(guid))
@@ -138,7 +139,8 @@ void TickGearUp()
 
     uint32 const guid = job.command.guids[job.next++];
     Player* bot = FindOnline(guid);
-    std::string_view const skip = GearUpSkipReason(StateFor(guid, job, bot));
+    std::string_view const skip = Realm::RealmOwns(guid) ? "busy:realm_owner"
+        : GearUpSkipReason(StateFor(guid, job, bot));
     if (!skip.empty())
         job.result.skipped.emplace_back(guid, skip);
     else
@@ -152,31 +154,49 @@ void TickGearUp()
             // Randomize can initialize guild/talent state. Recheck the actual player and ownership after it
             // before running the separate gear mutation; never reuse an AI pointer across that call.
             bot = FindOnline(guid);
-            std::string_view const afterLevel = GearUpSkipReason(StateFor(guid, job, bot));
+            std::string_view const afterLevel = Realm::RealmOwns(guid) ? "busy:realm_owner"
+                : GearUpSkipReason(StateFor(guid, job, bot));
             if (!afterLevel.empty())
                 job.result.skipped.emplace_back(guid, afterLevel);
             else
             {
-                PlayerbotAI* ai = GET_PLAYERBOT_AI(bot);
-                // silent suppresses wrapper feedback. The installed BiS action may still TellMaster internally;
-                // changing global chat settings or temporarily changing the bot's master would be unsafe here.
-                if (!ai->DoSpecificAction("autogear bis",
-                    Event("autogear bis", std::to_string(job.command.ilvl)), true))
-                    PlayerbotFactory::AutoGear(bot, ITEM_QUALITY_EPIC, job.command.ilvl, false);
-                bot->SaveToDB(false, false);
-                LeeroyModule::Instance().Cast().MarkDirty();
-                LeeroyModule::Instance().Cast().RequestPush();
-                job.result.guids.push_back(guid);
+                auto const gearFailure = [&]() -> std::string_view
+                {
+                    PlayerbotAI* ai = GET_PLAYERBOT_AI(bot);
+                    // silent suppresses wrapper feedback. The installed BiS action may still TellMaster internally;
+                    // changing global chat settings or temporarily changing the bot's master would be unsafe here.
+                    bool const applied = ai->DoSpecificAction("autogear bis",
+                        Event("autogear bis", std::to_string(job.command.ilvl)), true);
+                    bot = FindOnline(guid);
+                    if (Realm::RealmOwns(guid)) return "busy:realm_owner";
+                    if (auto const failure = GearUpSkipReason(StateFor(guid, job, bot)); !failure.empty())
+                        return failure;
+                    if (!applied)
+                    {
+                        PlayerbotFactory::AutoGear(bot, ITEM_QUALITY_EPIC, job.command.ilvl, false);
+                        bot = FindOnline(guid);
+                    }
+                    return Realm::RealmOwns(guid) ? "busy:realm_owner" : GearUpSkipReason(StateFor(guid, job, bot));
+                }();
+                if (!gearFailure.empty())
+                    job.result.skipped.emplace_back(guid, gearFailure);
+                else
+                {
+                    bot->SaveToDB(false, false);
+                    LeeroyModule::Instance().Cast().MarkDirty();
+                    LeeroyModule::Instance().Cast().RequestPush();
+                    job.result.guids.push_back(guid);
 
-                JobEvent progress;
-                progress.id = job.result.id;
-                progress.kind = "gear_up";
-                progress.state = "progress";
-                progress.guid = guid;
-                progress.level = bot->GetLevel();
-                float const average = bot->GetAverageItemLevel();
-                progress.avgIlvl = std::isfinite(average) && average > 0 ? static_cast<uint32>(average) : 0;
-                PublishJob(progress);
+                    JobEvent progress;
+                    progress.id = job.result.id;
+                    progress.kind = "gear_up";
+                    progress.state = "progress";
+                    progress.guid = guid;
+                    progress.level = bot->GetLevel();
+                    float const average = bot->GetAverageItemLevel();
+                    progress.avgIlvl = std::isfinite(average) && average > 0 ? static_cast<uint32>(average) : 0;
+                    PublishJob(progress);
+                }
             }
         }
         catch (std::exception const& e)

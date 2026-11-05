@@ -2,6 +2,7 @@
 and convert it to a persona with the reflection model. Nothing from the sketches lives in this
 repository; the file is only ever read from the path the owner passes in."""
 import dataclasses
+import random
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -15,6 +16,7 @@ from ..storage.rows import Relationship
 from ..storage.store import Store
 from ..text import estimate_tokens
 from ..wow import CAST_MIN_LEVEL, CLASSES, RACES
+from .birthdays import draw_birthday
 from .io import load_persona, save_persona
 from .screens import (check_no_real_name, check_romance, has_word, mentions_real_name,
                       redact_real_name, refers_to_human)
@@ -640,6 +642,14 @@ async def seed_cast(store: Store, llm: LLMClient | None, cfg, md_path, *, human_
             report.failed[guid] = f"{e.__class__.__name__}: {str(e)[:200]}"
             continue
         m = by_guid[guid]
+        old = load_persona(store, guid)
+        if old is not None:  # a forced rerun keeps the date it has
+            birthday = old.real_life.birthday
+        else:
+            birthday = draw_birthday(
+                (q.real_life.birthday for g in sorted(store.persona_versions())
+                 if (q := load_persona(store, g))), random.Random(f"birthday:{guid}"))
+        p = dataclasses.replace(p, real_life=dataclasses.replace(p.real_life, birthday=birthday))
         save_persona(store, p, source="seed", ts=store.clock.now(), race=RACES.get(m.race, ""),
                      class_name=CLASSES.get(m.class_, ""))
         report.created.append(guid)

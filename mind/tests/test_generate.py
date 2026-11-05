@@ -1145,3 +1145,39 @@ def test_a_lower_case_member_name_next_to_a_romance_word_is_refused():
     p, llm = _gen_with(rels=[{"other": "Arkon", "kind": "friend",
                               "note": "laughs when belra flirts with Testy"}])
     assert len(llm.calls) == 2  # rivalry over him stays
+
+
+# -- birthdays are drawn in code ------------------------------------------------------------------
+
+def test_draw_birthday_fills_the_emptiest_dates_first():
+    from collections import Counter
+    from leeroy_mind.personas.birthdays import draw_birthday
+    taken = ["04-12"] * 5 + ["11-14"] * 4
+    rng = random.Random(3)
+    for _ in range(730):
+        day = draw_birthday(taken, rng)
+        assert day != "02-29" and re.fullmatch(r"\d\d-\d\d", day)
+        taken.append(day)
+    counts = Counter(taken)
+    assert counts["04-12"] == 5 and counts["11-14"] == 4  # The crowded dates got nobody.
+    assert max(c for d, c in counts.items() if d not in ("04-12", "11-14")) == 3
+    assert len(counts) == 365
+    assert draw_birthday(taken, random.Random(3)) == draw_birthday(taken, random.Random(3))
+
+
+def test_generate_cast_ignores_the_models_birthday(store, tmp_path):
+    cfg = _gen_store(store)  # Five stored personas, all born 03-14; the model always writes 03-14.
+    r = run(generate_cast(store, _cast_llm(), cfg, human_guid=HUMAN, data_dir=tmp_path,
+                          rng=random.Random(1)))
+    assert len(r.created) == 4
+    born = [load_persona(store, g).real_life.birthday for g in store.persona_versions()]
+    assert "03-14" not in [load_persona(store, g).real_life.birthday for g in r.created]
+    assert Counter(born)["03-14"] == 5 and len(set(born)) == 5 and "02-29" not in born
+
+
+def test_generate_cast_is_reproducible_by_its_rng(store, tmp_path):
+    cfg = _gen_store(store)
+    r = run(generate_cast(store, _cast_llm(), cfg, human_guid=HUMAN, data_dir=tmp_path,
+                          rng=random.Random(7)))
+    first = [load_persona(store, g).real_life.birthday for g in r.created]
+    assert len(set(first)) == 4  # Four free dates, four different ones.
