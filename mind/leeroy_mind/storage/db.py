@@ -62,13 +62,27 @@ def latest_version() -> int:
 def migrate(conn: sqlite3.Connection) -> int:
     """Apply every migrations/NNNN_*.sql above PRAGMA user_version, each in its own transaction
     with its DATA_STEPS step, if it has one (DDL is transactional in SQLite, so a failing file
-    or step leaves no partial schema). Idempotent."""
+    or step leaves no partial schema). Idempotent.
+
+    The numbering must run from 0001 to the latest without a hole, or nothing is migrated or
+    opened. user_version keeps only the highest number applied, so a database can never say
+    which lower one it skipped: a build missing NNNN (another branch's, not merged yet) would
+    record the number past it, and every later build would take NNNN as applied and never
+    run it. Refusing the hole itself, before the database is touched, means that such a
+    version is never recorded; refusing only the step over it would still have let a build
+    that never had NNNN open, and write to, a database already past it."""
     conn.commit()
     current = conn.execute("PRAGMA user_version").fetchone()[0]
     files = _migration_files()
     numbers = [v for v, _ in files]
     if len(numbers) != len(set(numbers)):
         raise RuntimeError(f"duplicate migration numbers in {MIGRATIONS_DIR}")
+    missing = sorted(set(range(1, max(numbers, default=0) + 1)) - set(numbers))
+    if missing:
+        raise RuntimeError(
+            f"migration numbering in {MIGRATIONS_DIR} skips "
+            f"{', '.join(f'{n:04d}' for n in missing)}: a database migrated past it would never "
+            "run it; refusing to migrate or open one")
     if current > latest_version():
         raise RuntimeError(
             f"mind.db is schema v{current}, newer than this code (v{latest_version()}); "

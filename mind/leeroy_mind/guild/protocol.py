@@ -101,6 +101,7 @@ class RaidControl:
     action: str
     leader_guid: int = 0
     param: str = ""
+    training_run: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +125,7 @@ class BotDo:
     action: str
     param: str
     target_guid: int = 0
+    training_run: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +158,31 @@ class Job:
     guid: int
     level: int
     avg_ilvl: int
+    training_run: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class GuildGroupAdd:
+    guid: int
+    role: str
+
+
+@dataclass(frozen=True, slots=True)
+class GuildGroup:
+    """His own `.playerbots bot addN` filled his group from free guild members (mod-leeroy, not a
+    raid call). reason "built": this run added `added`; "entered": he then reached an instance map
+    leading that same group. map/instance_id/difficulty are where he is (instance_id 0 outside an
+    instance); members are the guild's cast in his group, him excluded."""
+    ts: int
+    reason: str
+    size: int
+    leader_guid: int
+    raid: bool
+    map: int
+    instance_id: int
+    difficulty: int
+    added: tuple[GuildGroupAdd, ...]
+    members: tuple[int, ...]
 
 
 COMMANDS: dict[str, type] = {
@@ -179,3 +206,4 @@ def register() -> None:
     for name, cls in COMMANDS.items():
         register_command(name, cls)
     register_event("job", Job)
+    register_event("guild_group", GuildGroup)

@@ -15,7 +15,8 @@ from leeroy_mind.nightly.llm import check_schema, schema, system_prompt
 from leeroy_mind.nightly.settings import night_of_ts
 from leeroy_mind.nightly.store import enqueue_review, ledger_add, ledger_rows
 from leeroy_mind.personas.card import render_prompt_card
-from leeroy_mind.personas.io import load_persona
+from leeroy_mind.personas.io import load_effective
+from leeroy_mind.tuning.lines import tuned_card
 from leeroy_mind.text import strip_wow_markup
 from leeroy_mind.wow import CAST_MIN_LEVEL, CLASSES, RACES
 
@@ -164,14 +165,26 @@ def _current(ctx, guid, ids):
             return None
         rows.append(row)
     member = store.cast()[guid]
-    persona = load_persona(store, guid)  # bypass NightContext/PersonaCache after awaits
-    card = render_prompt_card(persona, race=RACES.get(member.race, ""),
-                              class_name=CLASSES.get(member.class_, ""))
+    # bypass NightContext/PersonaCache after awaits; the member as the owner tuned them, with
+    # the run's own tuning, so a tuned member is judged against who they were set to be
+    persona = load_effective(store, guid, tuning=getattr(ctx, "tuning", None))
+    card = tuned_card(render_prompt_card(persona, race=RACES.get(member.race, ""),
+                                         class_name=CLASSES.get(member.class_, "")), persona)
     identity = (store.get_persona_json(guid), store.persona_versions()[guid], member.name,
                 member.race, member.class_, member.level, store.get_meta("human_guid"))
     state = json.dumps(store.get_state(guid).self_notes, sort_keys=True)
     sources = tuple(_line(store, row) for row in rows)
     return (identity, card, state, sources), rows, card, member.name
+
+
+def _tuning_version(ctx, guid) -> int:
+    """The tuning version a tuned member's flag was judged under (0: the member is not tuned,
+    and nothing is stamped)."""
+    from leeroy_mind.tuning.effective import dials_of
+    tuning = getattr(ctx, "tuning", None) or getattr(ctx.personas, "tuning", None)
+    if tuning is None or not dials_of(ctx.persona(guid)).values:
+        return 0
+    return tuning.version
 
 
 def _flag_key(ident):
@@ -239,6 +252,8 @@ async def critic_member(ctx, guid, lines):
             flag = ledger_add(store, guid=guid, kind="drift_flag", text=text,
                               evidence=refs, ref=review, now=now)
             store.set_meta(_flag_key(flag), ctx.night)
+            if version := _tuning_version(ctx, guid):  # the dials it was judged under
+                store.set_meta(f"nightly:critic-flag-tuning:{flag}", str(version))
         flags = _recent_flags(ctx, guid)
         if len(flags) >= 3:
             since = min(row["ts"] for row in flags)

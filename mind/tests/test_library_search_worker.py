@@ -1,7 +1,9 @@
 """Synthetic readers only. Blocking gates are always released before owned teardown."""
 import asyncio
+import logging
 import sqlite3
 import threading
+import time
 
 import pytest
 
@@ -538,3 +540,123 @@ def test_facts_reference_and_text_fallback_wait_off_loop(library_path, clock, mo
             await worker.aclose()
             direct.close()
     run(main())
+
+
+@pytest.mark.parametrize("phase", ["embed", "prepare_text", "prepare_embed", "rank"])
+def test_timeout_bounds_only_the_wait_for_the_query_vector(library_path, clock, monkeypatch,
+                                                           phase):
+    """As on the inline search, whose only await was its embed call: a slow embed, or one that
+    would start past the deadline, ends in TimeoutError without a rank; a slow preparation
+    with nothing to embed, and a slow rank after the vector, keep their results."""
+    async def main():
+        query = "Sindragosa frost wyrm"
+        gate = asyncio.Event()
+        llm = None if phase == "prepare_text" else FakeLLM(
+            gate=gate if phase == "embed" else None)
+        direct = Library(library_path, clock=clock, readonly=True)
+        try:
+            expected = await direct.search(query, llm=None if llm is None else FakeLLM())
+        finally:
+            direct.close()
+        slow = {"embed": None, "prepare_text": "_prepare_search",
+                "prepare_embed": "_prepare_search", "rank": "_finish_search"}[phase]
+        ranked = []
+        prepare, finish = Library._prepare_search, Library._finish_search
+
+        def slowed(original, name):
+            def run_slowly(self, *args, **kwargs):
+                if name == "_finish_search":
+                    ranked.append(True)
+                if name == slow:
+                    time.sleep(0.2)  # past the deadline, on the owned reader
+                return original(self, *args, **kwargs)
+            return run_slowly
+
+        monkeypatch.setattr(Library, "_prepare_search", slowed(prepare, "_prepare_search"))
+        monkeypatch.setattr(Library, "_finish_search", slowed(finish, "_finish_search"))
+        worker = LibrarySearchWorker(library_path)
+        try:
+            if phase in ("embed", "prepare_embed"):
+                with pytest.raises(TimeoutError):
+                    await worker.search(query, llm=llm, timeout=0.05)
+                assert not ranked and not worker._requests and llm.inflight == 0
+                assert len(llm.calls) == (1 if phase == "embed" else 0)
+            else:
+                assert await worker.search(query, llm=llm, timeout=0.05) == expected
+                assert ranked == [True]
+            assert await worker.search_text("Sindragosa")  # the reader carries on
+        finally:
+            gate.set()
+            await worker.aclose()
+    run(main())
+
+
+def test_a_slow_rank_after_the_query_vector_keeps_the_facts_hybrid(library_path, clock,
+                                                                    monkeypatch, caplog):
+    """Review 2026-11-04 (#101): a rank past FACTS_CAP_S - TEXT_RESERVE_S on the owned reader
+    discarded the hybrid hits for a text fallback; it ran to the end on the inline search."""
+    async def main():
+        direct = Library(library_path, clock=clock, readonly=True)
+        worker = LibrarySearchWorker(library_path)
+        finish, text = Library._finish_search, Library.search_text
+        vectors, texts = [], []
+
+        def slow_rank(self, plan, qvec):
+            vectors.append(qvec is not None)
+            time.sleep(0.4)  # past the whole 0.3 s cap
+            return finish(self, plan, qvec)
+
+        def text_search(self, *args, **kwargs):
+            texts.append(True)
+            return text(self, *args, **kwargs)
+
+        monkeypatch.setattr(Library, "_finish_search", slow_rank)
+        monkeypatch.setattr(Library, "search_text", text_search)
+        facts = LibraryFacts(direct, FakeLLM(), search=worker)
+        q = game_question("Who is Sindragosa?")
+        assert q is not None
+        facts.start(1, q)
+        try:
+            assert await facts.for_line(1)
+            assert vectors == [True] and texts == []
+        finally:
+            await facts.reset_session()
+            await worker.aclose()
+            direct.close()
+    with caplog.at_level(logging.DEBUG, logger="leeroy_mind"):
+        run(main())
+    assert "outcome=search " in caplog.text
+
+
+def test_a_failed_reader_warns_once_and_its_thread_never_holds_exit(tmp_path, caplog):
+    """Review 2026-11-04 (#101): the failure was silent and permanent, and the reader's
+    non-daemon thread would have kept an interrupted shutdown's process alive."""
+    path = tmp_path / "missing" / "library.db"
+
+    async def main():
+        worker = LibrarySearchWorker(path)
+        try:
+            with pytest.raises((sqlite3.Error, RuntimeError)):
+                await asyncio.wait_for(worker.search_text("anything"), 3)
+            await until(lambda: worker._closed)
+            assert worker._thread.daemon
+            for _ in range(2):
+                with pytest.raises(SearchClosed):
+                    await worker.search_text("again")
+        finally:
+            await worker.aclose()
+    with caplog.at_level(logging.WARNING, logger="leeroy_mind"):
+        run(main())
+    warned = [r for r in caplog.records if r.getMessage().startswith("library_search_failed")]
+    assert len(warned) == 1 and warned[0].levelno == logging.WARNING
+    assert str(tmp_path) not in caplog.text and "missing" not in warned[0].getMessage()
+
+
+def test_a_close_logs_no_failure(library_path, caplog):
+    async def main():
+        worker = LibrarySearchWorker(library_path)
+        assert await worker.search_text("Sindragosa")
+        await worker.aclose()
+    with caplog.at_level(logging.WARNING, logger="leeroy_mind"):
+        run(main())
+    assert "library_search_failed" not in caplog.text

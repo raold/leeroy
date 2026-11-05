@@ -45,7 +45,7 @@ from leeroy_mind.talk.pipeline import (FOLLOW_SOURCES, KEEPER, NOBODY, NOBODY_WH
                                        TurnMeta, _asks, _names_list, chain_base, log,
                                        picked_why)
 from leeroy_mind.talk.prompt import pushback_help
-from leeroy_mind.talk.questions import fit_tier, game_question, is_plan
+from leeroy_mind.talk.questions import FIT_TIERS, fit_tier, game_question, is_plan
 from leeroy_mind.talk.raid import RaidPhase, RaidState
 from leeroy_mind.talk.reactions import (EVENING_S, GZ_TEMPLATES, LEAD_CALL, LEAD_GROUP_CALL,
                                         LOGIN_QUIET_S, MID_GROUP, MID_RAID, Reactions)
@@ -54,6 +54,7 @@ from leeroy_mind.talk.select import (PUSHBACK_WINDOW_S, WHISPER_REPLY_P, Pushbac
                                      aimed_at_one, asks_the_past, classify_human_line,
                                      is_quest_talk, mentioned, pick_speakers, plan_reply_turns,
                                      pushback_kind, topic_words, whisper_reply_p)
+from leeroy_mind.talk.select import _PLAY_WORDS, _interest_pull
 from leeroy_mind.talk.states import (Altered, advance_state, capped_states, roll_session_state,
                                      state_cap)
 from leeroy_mind.talk.turns import Turn, TurnKind
@@ -423,6 +424,13 @@ class TalkEngine(Reactions):
         best = tiers[min(tiers)]
         if any(t.speaker in best for t in planned):
             return planned, None
+        # the tie-break among the best of a theorycrafter or lore tier: how far the owner has
+        # turned their interest dial (tuning), as written for everyone else
+        tag = FIT_TIERS[topic][min(tiers)]
+        if tag in _PLAY_WORDS:
+            pull = {g: _interest_pull(self.personas.get(g), set(_PLAY_WORDS[tag])) for g in best}
+            if any(v != 1.0 for v in pull.values()):
+                best = {g: w * pull[g] for g, w in best.items()}
         pick = pick_speakers(best, 1, self.rng)
         drawn = [t for t in planned if t.speaker not in called]
         if drawn:

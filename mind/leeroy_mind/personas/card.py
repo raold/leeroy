@@ -64,10 +64,14 @@ def _article(word: str) -> str:
 
 
 def _furthest_trait(p: Persona):
-    traits = [("openness", p.big_five.openness), ("conscientiousness", p.big_five.conscientiousness),
-              ("extraversion", p.big_five.extraversion), ("agreeableness", p.big_five.agreeableness),
-              ("neuroticism", p.big_five.neuroticism)]
-    return max(traits, key=lambda kv: abs(kv[1].score - 5))  # first wins a tie
+    """The trait whose score sits furthest from 5, chosen by the stored persona's own scores
+    (a tuned score never brings a different trait onto the card: tuning.effective), and taken
+    from `p`, so a tuned trait shows its tuned wording, which is blank when a tuning line
+    says it instead."""
+    names = ("openness", "conscientiousness", "extraversion", "agreeableness", "neuroticism")
+    chosen = getattr(p, "base", None) or p
+    name = max(names, key=lambda n: abs(getattr(chosen.big_five, n).score - 5))  # first wins a tie
+    return name, getattr(p.big_five, name)
 
 
 def _identity_line(p: Persona, race: str, class_name: str) -> str:
