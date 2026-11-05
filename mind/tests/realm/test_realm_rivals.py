@@ -754,6 +754,71 @@ def test_weekly_top_up_only_adds(tmp_path, store, clock, caplog):
     assert app2.sent == [] and len(armory.threads) == 2
 
 
+def test_top_up_fills_past_an_unknown_grow(tmp_path, store, clock, caplog):
+    """A grow that ended unknown keeps its whole manifest held, those who joined and those who did
+    not: it is never sent again, and the top-up fills the guild with others, counting who is in."""
+    seed_roster(store)
+    app, realm = live_realm(tmp_path, store, clock)
+    plan = with_cards(plan_of())
+    approved(tmp_path, clock, plan)
+    steps, part = realm.part("steps"), realm.part("rivals")
+    drama = by_role(plan)["drama"]
+    planned = [r["guid"] for r in drama["raiders"]]
+
+    async def apply():
+        await connect(app)
+        await steps.tick()
+        await pump(realm, clock)
+        lost = grows(app, {8})[0]
+        await finish(app, clock, grows(app, {7, 11}))
+        await app.event(protocol.RealmJob(int(clock.now() * 1000), lost.id, "guild_grow", "failed",
+                                          "operation_transition_unknown", lost.guids[1], 1))
+        await clock.advance(60, step=60)
+        await steps.tick()
+    run(apply())
+    assert step_row(store)[1]["grow"] == {"7": "acked", "8": "unknown", "11": "acked"}
+    # Two of guild 8's raiders joined before native lost track; the rest are still guildless.
+    armory = FakeArmory(guilds=topup_guilds(prog=25, drama=drama["level80"] + 2))
+    gone = planned_guids(plan) - set(planned[2:])
+    armory.pools["horde"] = [c for c in armory.pools["horde"] if c.guid not in gone] + pool("horde", 7000, 40)
+    realm.ports.armory = lambda: armory
+    sent = len(app.sent)
+
+    async def top_up():
+        await clock.advance(86400, step=86400)
+        await part.tick()
+        await settle(realm)
+        await pump(realm, clock, rounds=1)
+    with caplog.at_level(logging.INFO, logger="leeroy_mind.realm.rivals"):
+        run(top_up())
+    [grow] = app.sent[sent:]
+    assert type(grow) is protocol.GuildGrow and grow.guild_id == 8
+    assert len(grow.guids) == rivals.TOPUP_TO - drama["level80"] - 2
+    assert not set(grow.guids) & set(planned)
+    assert sum(f"realm_rivals_topped guild=8 added={len(grow.guids)}" in r.getMessage()
+               for r in caplog.records) == 1
+    assert store.get_meta(rivals.TOPUP_KEY) == json.dumps("2026-10-25")
+
+
+def test_top_up_waits_when_the_holds_are_unreadable(tmp_path, store, clock, monkeypatch):
+    seed_roster(store)
+    app, realm = live_realm(tmp_path, store, clock)
+    rows_for_topup(store, clock, plan_of())
+    realm.ports.armory = lambda: FakeArmory(guilds=topup_guilds(prog=23))
+
+    def unreadable():
+        raise rivals.ActionUnavailable("realm action evidence unavailable")
+    monkeypatch.setattr(realm.action_store, "holds", unreadable)
+
+    async def go():
+        await connect(app)
+        await realm.part("rivals").tick()
+        await settle(realm)
+        await pump(realm, clock, rounds=1)
+    run(go())
+    assert grows(app) == [] and store.get_meta(rivals.TOPUP_KEY) is None
+
+
 def test_armory_never_on_loop(tmp_path, store, clock):
     seed_roster(store)
     app, realm = live_realm(tmp_path, store, clock)

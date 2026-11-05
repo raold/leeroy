@@ -28,7 +28,8 @@ without spending an attempt.
 The weekly top-up, from each Sunday once the step has been applied a day, reads the armory on a
 worker thread (never the Realm's loop) and refills each rival below 25 level-80 members by the
 same rules. It only adds: realm_raider rows, then one guild_grow, logged
-``realm_rivals_topped guild=<id> added=<n>``.
+``realm_rivals_topped guild=<id> added=<n>``. It counts who is in the guild, so after a grow
+that ended unknown it fills the gap with others: that grow's bodies stay held and are never picked.
 """
 import asyncio
 from contextlib import closing
@@ -754,7 +755,14 @@ class Rivals:
             roles = {}
             for gid, role in store.conn.execute("SELECT guild, role FROM realm_raider"):
                 roles.setdefault(gid, []).append(role)
-        taken, plans = set(), []
+        try:
+            # An unresolved action keeps its manifest held for good (a grow that ended unknown,
+            # say): none of it is picked, or the grow would wait on it forever.
+            held = {guid for hold in realm.action_store.holds() for guid in hold.guids}
+        except ActionUnavailable:
+            log.warning("realm_rivals_topup_unavailable error=ActionUnavailable")
+            return
+        taken, plans = held, []
         for gid, faction, _ in guilds:
             if gid not in counts or counts[gid] >= TOPUP_TO:
                 continue
