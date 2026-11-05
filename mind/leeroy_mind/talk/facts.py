@@ -23,7 +23,8 @@ raid lead made boss mechanics up. His question is read in talk/questions.py.
   text fallback, titles and formatting are not cut off, so a lookup can run past the cap by
   their time. Production retrieval/formatting uses the app's owned reader thread;
   compatibility fakes stay on the caller's loop. Boss mechanics retains its synchronous
-  session cache.
+  session cache. The fact providers (LibraryFacts.add_provider) add their lines on the loop
+  after the library's, also when the reader is busy or closed.
 
 Facts are not memories: they come only from library.db, which is public reference text, and
 none of it is logged."""
@@ -868,9 +869,11 @@ class LibraryFacts:
         try:
             return await self._lookup_ready(line_id, q)
         except (SearchBusy, SearchClosed) as exc:
-            log.debug("facts_lookup: line=%d outcome=%s hits=0 facts=0", line_id,
-                      "busy" if isinstance(exc, SearchBusy) else "closed")
-            return []
+            # The providers never needed the reader: a lore line still gets theirs.
+            lines = [] if q.topic in REFERENCE_KINDS else self._provided(line_id, q, [])
+            log.debug("facts_lookup: line=%d outcome=%s hits=0 facts=%d", line_id,
+                      "busy" if isinstance(exc, SearchBusy) else "closed", len(lines))
+            return lines
 
     async def _lookup_ready(self, line_id: int, q: GameQuestion) -> list[str]:
         t0 = self.timer()
@@ -936,6 +939,14 @@ class LibraryFacts:
         except Exception:  # a chunk the formatter chokes on: no facts, never a lost reply
             log.exception("facts_format_failed: line=%d", line_id)
             lines = []
+        lines = self._provided(line_id, q, lines)
+        log.debug("facts_lookup: line=%d topic=%s outcome=%s hits=%d facts=%d named=%d "
+                  "other_side=%d ms=%d", line_id, q.topic, outcome, hit_count, len(lines),
+                  named_count, found - hit_count - named_count, round((self.timer() - t0) * 1000))
+        return lines
+
+    def _provided(self, line_id: int, q: GameQuestion, lines: list[str]) -> list[str]:
+        """`lines` with the providers' lines added, on the loop, within the shared budget."""
         for provider in tuple(self._providers):
             try:
                 supplied = provider(q.query)
@@ -955,9 +966,6 @@ class LibraryFacts:
             except Exception:
                 # Provider messages can contain human questions or private rows.
                 log.warning("facts_provider_failed: line=%d", line_id)
-        log.debug("facts_lookup: line=%d topic=%s outcome=%s hits=%d facts=%d named=%d "
-                  "other_side=%d ms=%d", line_id, q.topic, outcome, hit_count, len(lines),
-                  named_count, found - hit_count - named_count, round((self.timer() - t0) * 1000))
         return lines
 
     def mechanics(self, boss: str, instance: str | None = None) -> list[str]:
