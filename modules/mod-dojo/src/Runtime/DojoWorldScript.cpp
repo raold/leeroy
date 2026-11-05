@@ -1,5 +1,6 @@
 // This file is part of leeroy (mod-dojo), released under the GNU GPL v2. See LICENSE.
 
+#include "DojoEndpoint.h"
 #include "DojoExecutor.h"
 #include "DojoObservation.h"
 #include "DojoRuntime.h"
@@ -79,14 +80,26 @@ void PrepareScenario(Dojo::WorkerState& state)
     state.scenarioReady = failed == 0;
     LOG_INFO("module.dojo", "mod-dojo: scenario {} sha256 {}: {} checks, {} failed{}", state.manifest->id,
         state.manifest->sha256, state.checks.size(), failed, state.scenarioReady ? "; ready" : "; refused");
+    if (!state.scenarioReady)
+        return;
+    // The endpoint opens on the next world tick, on the world thread that polls it.
+    Dojo::EndpointConfig endpoint;
+    endpoint.instance = state.settings.instance;
+    endpoint.scenario = state.manifest->id;
+    endpoint.scenarioSha256 = state.manifest->sha256;
+    for (Dojo::ActorSpec const& a : state.manifest->actors)
+        endpoint.teams.push_back(a.team == "horde" ? 1 : 0);
+    endpoint.matchMs = state.manifest->rules.matchSeconds * 1000;
+    Dojo::Endpoint::Instance().Configure(std::move(endpoint));
 }
 #endif
 }
 
 void AddSC_dojo_commands();
 
-// The mode is fixed at start: a reload is reported, never applied. Nothing here opens a socket or starts a thread;
-// in a training build the dojo console commands move the scenario's fixture actors, and only once armed and ready.
+// The mode is fixed at start: a reload is reported, never applied. Nothing here opens a socket or starts a thread; in a
+// training build that is armed with a ready scenario the endpoint (DojoEndpoint.h) opens on the first world tick, and
+// it and the dojo console commands move the scenario's fixture actors.
 class DojoWorldScript : public WorldScript
 {
 public:

@@ -6,11 +6,13 @@
 
 #if DOJO_TRAINING_BUILD
 
+#include "DojoEndpoint.h"
 #include "DojoExecutor.h"
 #include "DojoFixtures.h"
 #include "DojoReset.h"
 #include "DojoRuntime.h"
 
+#include "AllSpellScript.h"
 #include "ArenaScript.h"
 #include "Chat.h"
 #include "CommandScript.h"
@@ -19,6 +21,7 @@
 #include "ServerScript.h"
 #include "Spell.h"
 #include "SpellInfo.h"
+#include "UnitScript.h"
 #include "WorldScript.h"
 
 #include <algorithm>
@@ -171,6 +174,12 @@ public:
             {"schema", HandleEpisodeSchema, SEC_CONSOLE, Console::Yes},
             {"debug", HandleEpisodeDebug, SEC_CONSOLE, Console::Yes},
             {"fault", HandleEpisodeFault, SEC_CONSOLE, Console::Yes},
+            {"stock", HandleEpisodeStock, SEC_CONSOLE, Console::Yes},
+            {"score", HandleEpisodeScore, SEC_CONSOLE, Console::Yes},
+        };
+        static ChatCommandTable endpoint = {
+            {"status", HandleEndpointStatus, SEC_CONSOLE, Console::Yes},
+            {"boundaries", HandleEndpointBoundaries, SEC_CONSOLE, Console::Yes},
         };
         static ChatCommandTable dojo = {
             {"status", HandleStatus, SEC_CONSOLE, Console::Yes},
@@ -180,6 +189,7 @@ public:
             {"control", control},
             {"harness", harness},
             {"episode", episode},
+            {"endpoint", endpoint},
         };
         static ChatCommandTable root = {{"dojo", dojo}};
         return root;
@@ -495,6 +505,40 @@ public:
         return true;
     }
 
+    static bool HandleEpisodeStock(ChatHandler* handler)
+    {
+        if (!RefuseControl(handler))
+            Print(handler, Dojo::Episode::Instance().Stock());
+        return true;
+    }
+
+    static bool HandleEpisodeScore(ChatHandler* handler)
+    {
+        if (!RefuseControl(handler))
+            Print(handler, Dojo::Episode::Instance().Score());
+        return true;
+    }
+
+    static bool HandleEndpointStatus(ChatHandler* handler)
+    {
+        if (!Refuse(handler))
+            Print(handler, Dojo::Endpoint::Instance().Status());
+        return true;
+    }
+
+    static bool HandleEndpointBoundaries(ChatHandler* handler, Tail args)
+    {
+        if (Refuse(handler))
+            return true;
+        std::vector<std::string> const words = Words(args);
+        std::optional<std::uint64_t> const from = !words.empty() ? Count(words[0]) : std::optional<std::uint64_t>(0);
+        std::optional<std::uint64_t> const max = words.size() == 2 ? Count(words[1]) : std::optional<std::uint64_t>(100);
+        if (!from || !max || *max < 1 || words.size() > 2)
+            return Usage(handler, "dojo endpoint boundaries [from decision] [max]");
+        Print(handler, Dojo::Endpoint::Instance().Boundaries(*from, std::size_t(*max)));
+        return true;
+    }
+
     static bool HandleHarnessLos(ChatHandler* handler, Tail args)
     {
         if (RefuseControl(handler))
@@ -547,6 +591,30 @@ public:
     }
 };
 
+// Damage as the core's scoreboard counts it (after absorbs), for the episode's events and its reconciliation tallies.
+class DojoDamageScript : public UnitScript
+{
+public:
+    DojoDamageScript() : UnitScript("DojoDamageScript", true, {UNITHOOK_ON_DAMAGE}) { }
+
+    void OnDamage(Unit* attacker, Unit* victim, uint32& damage) override
+    {
+        Dojo::Episode::Instance().OnDamage(attacker, victim, damage);
+    }
+};
+
+// A cast that completed (the end of Spell::_cast, after its last checks), for the episode's reconciliation tallies.
+class DojoCastScript : public AllSpellScript
+{
+public:
+    DojoCastScript() : AllSpellScript("DojoCastScript", {ALLSPELLHOOK_ON_CAST}) { }
+
+    void OnSpellCast(Spell* spell, Unit* caster, SpellInfo const* spellInfo, bool /*skipCheck*/) override
+    {
+        Dojo::Episode::Instance().OnCast(caster, spellInfo, spell->IsTriggered());
+    }
+};
+
 // What the server tells a fixture's session is what a client would read: cast results, starts and completions.
 class DojoPacketScript : public ServerScript
 {
@@ -567,9 +635,11 @@ public:
 
     void OnUpdate(uint32 diff) override
     {
-        // Ownership and due commands, the director's job, then (after both) the actors' senses and the episode.
+        // Ownership and due commands, the director's job, then (after both) the actors' senses and the episode, and
+        // last the endpoint, which answers from what this tick made.
         Dojo::Director::Instance().Update(diff);
         Dojo::Episode::Instance().Update(diff);
+        Dojo::Endpoint::Instance().Update();
     }
 
     void OnShutdownInitiate(ShutdownExitCode /*code*/, ShutdownMask /*mask*/) override
@@ -585,6 +655,7 @@ public:
     void OnShutdown() override
     {
         Dojo::Control::Instance().OnShutdown("final");
+        Dojo::Endpoint::Instance().Shutdown();
     }
 };
 
@@ -594,6 +665,8 @@ void AddSC_dojo_commands()
     new DojoArenaScript();
     new DojoFixtureCastScript();
     new DojoPacketScript();
+    new DojoDamageScript();
+    new DojoCastScript();
     new DojoTickScript();
 }
 

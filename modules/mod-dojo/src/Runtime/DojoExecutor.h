@@ -113,6 +113,8 @@ public:
     std::string Status() const;
     std::string Trace(std::size_t last) const;
     std::string TraceSince(std::uint64_t seq, std::size_t max) const;
+    // The records after seq still in the buffer, oldest first; lost is set when some were already dropped.
+    std::vector<TraceRecord> RecordsSince(std::uint64_t seq, bool& lost) const;
     std::uint64_t TraceSeq() const { return _seq; }
     std::string CatalogText() const;
     std::string Place(std::size_t slot, float x, float y, float z, float o);

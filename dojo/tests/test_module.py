@@ -111,12 +111,21 @@ class BoundaryTest(unittest.TestCase):
                     else:
                         self.assertTrue("/" not in name or name.startswith(("nlohmann/", "boost/asio")), name)
 
-    def test_the_runtime_opens_no_endpoint_and_starts_no_thread(self):
-        """Until the step driver arrives nothing in the runtime listens, connects or runs a thread of its own."""
+    def test_only_the_endpoint_listens_and_nothing_starts_a_thread(self):
+        """The endpoint is the one place in the runtime that uses the transport and the lifecycle (whose io thread
+        lives in src/Lib); nothing in the runtime touches sockets or starts a thread of its own."""
+        endpoint = ("DojoEndpoint.cpp", "DojoEndpoint.h")
         for path in sources("src", "Runtime"):
             text = path.read_text(encoding="utf-8")
-            for forbidden in ("Transport", "Lifecycle", "asio", "std::thread", "std::async", "tcp::", "Socket"):
+            for forbidden in ("asio", "std::thread", "std::async", "tcp::", "Socket"):
                 self.assertNotIn(forbidden, text, path.name)
+            if path.name not in endpoint:
+                for forbidden in ("Transport", "Lifecycle"):
+                    self.assertNotIn(forbidden, text, path.name)
+        cpp = (MODULE / "src" / "Runtime" / "DojoEndpoint.cpp").read_text(encoding="utf-8")
+        self.assertIn('constexpr char const* kHost = "127.0.0.1";', cpp)
+        self.assertEqual(re.findall(r"_transport->Start\(([^)]*)\)", cpp), ["kHost, 0"])
+        self.assertEqual(cpp.count("std::make_unique<Transport>("), 1)
 
     def test_the_disabled_variant_touches_no_bot_player_or_arena(self):
         """Every reference to playerbots, players, battlegrounds and commands sits inside #if DOJO_TRAINING_BUILD,
@@ -150,7 +159,7 @@ class BoundaryTest(unittest.TestCase):
     def test_commands_are_console_only(self):
         commands = (MODULE / "src" / "Runtime" / "DojoCommands.cpp").read_text(encoding="utf-8")
         entries = re.findall(r'\{"(\w+)", (Handle\w+), (\w+), Console::(\w+)\}', commands)
-        self.assertEqual(len(entries), 31)
+        self.assertEqual(len(entries), 35)
         for name, _, security, console in entries:
             self.assertEqual((security, console), ("SEC_CONSOLE", "Yes"), name)
 
@@ -218,7 +227,9 @@ class ControlTest(unittest.TestCase):
         """Task 7 ruling 2: every mask the executor or the episode computes is made from an observation's knowledge,
         never from a read of current state."""
         reset = (MODULE / "src" / "Runtime" / "DojoReset.cpp").read_text(encoding="utf-8")
-        for name, text in (("DojoExecutor.cpp", self.executor), ("DojoReset.cpp", reset)):
+        endpoint = (MODULE / "src" / "Runtime" / "DojoEndpoint.cpp").read_text(encoding="utf-8")
+        for name, text in (("DojoExecutor.cpp", self.executor), ("DojoReset.cpp", reset),
+                           ("DojoEndpoint.cpp", endpoint)):
             calls = re.findall(r"ComputeMask\(([^;]+)\);", text)
             self.assertTrue(calls, name)
             for call in calls:
@@ -252,9 +263,13 @@ class ControlTest(unittest.TestCase):
         """D05: the reset drops the old episode's commands and holds perception before the director touches anything,
         and an action id from before the generation is refused if it ever reaches execution."""
         reset = (MODULE / "src" / "Runtime" / "DojoReset.cpp").read_text(encoding="utf-8")
-        body = function_body(reset, "std::string Episode::Reset(")
-        self.assertLess(body.index("Observer::Instance().Hold("), body.index("StartReset("))
-        self.assertLess(body.index("BeginGeneration("), body.index("StartReset("))
+        body = function_body(reset, "std::string Episode::StartReset(")
+        self.assertLess(body.index("Observer::Instance().Hold("), body.index("Director::Instance().StartReset("))
+        self.assertLess(body.index("BeginGeneration("), body.index("Director::Instance().StartReset("))
+        # The console's reset and the endpoint's both go through it.
+        self.assertIn("StartReset(reason, Mode::Console, started)", function_body(reset, "std::string Episode::Reset("))
+        self.assertIn("StartReset(reason, Mode::Protocol, started)",
+                      function_body(reset, "bool Episode::BeginProtocolReset("))
         execute = function_body(self.executor, "void Control::Execute(")
         self.assertLess(execute.index("command.actionId < _firstActionId"), execute.index("ai->GetExternalControlEpoch()"))
 
@@ -269,6 +284,58 @@ class ControlTest(unittest.TestCase):
             self.assertIn(state, move)
         self.assertIn("MovePositionToFirstCollision", move)
         self.assertIn("IsBackward(movement) ? MOVE_RUN_BACK : MOVE_RUN", move)
+
+
+class EndpointTest(unittest.TestCase):
+    """Plan Task 8: the worker's protocol endpoint and the episode's outcomes, checked statically."""
+
+    def setUp(self):
+        self.endpoint = (MODULE / "src" / "Runtime" / "DojoEndpoint.cpp").read_text(encoding="utf-8")
+        self.reset = (MODULE / "src" / "Runtime" / "DojoReset.cpp").read_text(encoding="utf-8")
+        self.commands = (MODULE / "src" / "Runtime" / "DojoCommands.cpp").read_text(encoding="utf-8")
+
+    def test_it_runs_on_the_world_tick_after_the_episode(self):
+        tick = function_body(self.commands, "void OnUpdate(uint32 diff) override")
+        self.assertLess(tick.index("Director::Instance().Update(diff)"), tick.index("Episode::Instance().Update(diff)"))
+        self.assertLess(tick.index("Episode::Instance().Update(diff)"), tick.index("Endpoint::Instance().Update()"))
+
+    def test_steps_queue_through_the_controller_with_the_protocol_as_producer(self):
+        step = function_body(self.endpoint, "void Endpoint::BeginStep(")
+        self.assertIn('Control::Instance().Enqueue(actor, action, "protocol",', step)
+        for forbidden in ("HandleCastSpellOpcode", "CastSpell", "Execute(", "->Kill", "SetHealth"):
+            self.assertNotIn(forbidden, self.endpoint)
+
+    def test_observations_and_the_debug_stream_stay_apart(self):
+        """D18: what an actor gets in a result is its delayed observation and mask; the boundary's authoritative
+        state is kept for the separate debug stream only."""
+        observe = function_body(self.endpoint, "bool Endpoint::Observations(")
+        for hidden in ("Debug", "Truth", "Standings", "GetHealth"):
+            self.assertNotIn(hidden, observe)
+        self.assertIn("Observer::Instance().Observe(i, now, reason)", observe)
+        self.assertIn('"dojo-boundary "', self.endpoint)
+        complete = function_body(self.endpoint, "void Endpoint::CompleteStep(")
+        self.assertNotIn("DebugJson", complete)
+
+    def test_an_abort_is_a_worker_fault_never_a_lost_game(self):
+        progress = function_body(self.endpoint, "void Endpoint::Progress(")
+        self.assertIn("Apply(_lifecycle->Fault());", progress)
+        complete = function_body(self.endpoint, "void Endpoint::CompleteStep(")
+        self.assertIn('{"truncated", false}', complete)
+        self.assertIn("Rewards(standings, _potential, outcome)", complete)
+
+    def test_the_dojo_decides_outcomes_and_never_ends_the_arena(self):
+        running = self.reset[self.reset.index("case Phase::Running:"):]
+        running = running[:running.index("default:")]
+        self.assertIn("DecideOutcome(standings,", running)
+        for forbidden in ("EndBattleground", "SetWinner", "UpdateArenaWorldState"):
+            self.assertNotIn(forbidden, self.reset)
+            self.assertNotIn(forbidden, self.endpoint)
+
+    def test_the_stock_baseline_hands_back_and_takes_ownership_again(self):
+        stock = function_body(self.reset, "std::string Episode::Stock(")
+        self.assertIn("Control::Instance().Release(i)", stock)
+        stop = function_body(self.reset, "void Episode::Stop(")
+        self.assertIn("Control::Instance().Own(i)", stop)
 
 
 class PlayerbotsSeriesTest(unittest.TestCase):

@@ -76,8 +76,9 @@ std::string StatusLine(RuntimePlan const& plan, bool trainingBuild)
     line += StateName(plan.state);
     line += " (" + plan.reason + "), ";
     line += trainingBuild ? "training build" : "disabled build";
-    line += plan.state == RuntimeState::Armed ? "; no endpoint, fixtures only through the dojo console commands"
-                                              : "; no endpoint, no bot control";
+    line += plan.state == RuntimeState::Armed
+        ? "; a loopback endpoint once the scenario is ready, fixtures only through it and the dojo console commands"
+        : "; no endpoint, no bot control";
     return line;
 }
 }

@@ -295,6 +295,21 @@ std::string Control::TraceSince(std::uint64_t seq, std::size_t max) const
         + std::to_string(_seq) + (lost ? ", LOST " + std::to_string(first - seq - 1) + " records" : "");
 }
 
+std::vector<TraceRecord> Control::RecordsSince(std::uint64_t seq, bool& lost) const
+{
+    std::vector<TraceRecord> out;
+    lost = false;
+    for (TraceRecord const& r : _trace)
+        if (r.seq > seq)
+        {
+            if (out.empty() && r.seq > seq + 1)
+                lost = true;
+            out.push_back(r);
+        }
+    lost = lost || (out.empty() && _seq > seq);
+    return out;
+}
+
 void Control::RecordQueue(std::vector<QueueEvent> const& events)
 {
     for (QueueEvent const& e : events)

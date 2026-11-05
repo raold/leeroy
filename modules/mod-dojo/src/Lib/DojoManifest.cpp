@@ -396,7 +396,7 @@ ManifestParse ParseManifest(std::string_view text)
                 if (s.team != "alliance" && s.team != "horde")
                     r.Fail(p + ".team", "must be \"alliance\" or \"horde\" (the arena side)");
                 s.start = r.Pos(a["start"], p + ".start");
-                Bounds const& b = m.arena.bounds;
+                ArenaBounds const& b = m.arena.bounds;
                 if (b.radius > 0 && (std::hypot(s.start.x - b.x, s.start.y - b.y) > b.radius
                     || s.start.z < b.zMin || s.start.z > b.zMax))
                     r.Fail(p + ".start", "is outside the arena bounds");
