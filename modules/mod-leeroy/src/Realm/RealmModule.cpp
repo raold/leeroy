@@ -7,7 +7,6 @@
 #include "Log.h"
 #include <algorithm>
 #include <atomic>
-#include <fstream>
 #include <limits>
 #include <map>
 #include <mutex>
@@ -36,20 +35,6 @@ std::string BootNonce()
         return nonce;
     }
     catch (...) { return {}; }
-}
-std::optional<std::string> ReadFile(std::string const& path)
-{
-    std::ifstream stream(path, std::ios::binary | std::ios::ate);
-    if (!stream)
-        return std::nullopt;
-    auto const size = stream.tellg();
-    if (size < 0 || size > static_cast<std::streamoff>(kMaxCsvBytes))
-        return std::nullopt;
-    std::string text(static_cast<std::size_t>(size), '\0');
-    stream.seekg(0);
-    if (!text.empty() && !stream.read(text.data(), static_cast<std::streamsize>(text.size())))
-        return std::nullopt;
-    return text;
 }
 bool Due(std::uint32_t& remaining, std::uint32_t diff, std::uint32_t interval)
 {
@@ -262,8 +247,11 @@ void RealmModule::Reload()
     std::string error;
     // Initial config hooks precede DBC/maps. Native place checks belong to
     // world startup and later world-thread reloads, before any admission.
-    auto placesText = _state->started ? ReadFile(cfg.realmPlacesFile) : std::nullopt;
+    auto placesText = _state->started ? ReadCsvFile(cfg.realmPlacesFile) : std::nullopt;
     auto places = placesText ? ParsePlaces(*placesText, error) : std::nullopt;
+    if (_state->started && !places && !cfg.realmPlacesFile.empty())
+        LOG_WARN("module.leeroy", "mod-leeroy: realm places file {} {}, so no places", cfg.realmPlacesFile,
+            placesText ? "rejected: " + error : std::string("not readable"));
     _state->places.clear();
     if (places)
     {
@@ -272,8 +260,11 @@ void RealmModule::Reload()
             else LOG_ERROR("module.leeroy", "mod-leeroy: realm place {} rejected: map/coordinates/zone mismatch", place.name);
     }
     error.clear();
-    auto itemsText = ReadFile(cfg.realmItemsFile);
+    auto itemsText = ReadCsvFile(cfg.realmItemsFile);
     auto items = itemsText ? ParseItems(*itemsText, error) : std::nullopt;
+    if (!items && !cfg.realmItemsFile.empty())
+        LOG_WARN("module.leeroy", "mod-leeroy: realm items file {} {}, so no items", cfg.realmItemsFile,
+            itemsText ? "rejected: " + error : std::string("not readable"));
     _state->items = items ? std::move(*items) : std::vector<ItemRule>{};
     ReconcileConfiguration(); // Cancels the old epoch; never runs a queued action on reload.
     LOG_INFO("module.leeroy", "mod-leeroy: realm {}, cast guard {}, places {}, items {}, max actions/tick {}",

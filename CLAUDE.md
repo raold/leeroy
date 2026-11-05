@@ -651,6 +651,16 @@ Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
   `gank_human`. `mind-data/realm/` holds `blocklist.txt` (never committed), `cards/`, `plans/`
   and `approved/`. Without the blocklist, or before the guild's name is cached (meta
   `realm:guild_name`, read once per hello), the screen fails closed and no rival speaks.
+- **Whitelists.** Native reads `Leeroy.Realm.PlacesFile` and `Leeroy.Realm.ItemsFile`
+  (`leeroy_places.csv`, `leeroy_items.csv`, copied from mod-leeroy's `conf/*.csv.dist`) at each
+  `.reload config`, places only once the world is up (so the boot line says `places 0`). A
+  relative path resolves against the module config directory, `configs/modules` beside
+  `mod_leeroy.conf`, where the mind's `realm/places.py` reads it too; an absolute path is used as
+  written; an empty value names no file. A missing or invalid file leaves its list empty and logs
+  `realm places file ... so no places` (or items); the `places N, items N` line shows the counts.
+  Builds before this fix read a relative path from the worldserver's working directory
+  (`RelWithDebInfo`), so the live conf names both by absolute path (2026-11-04); that keeps
+  working.
 - **Data steps**, from `mind/` with `--data-dir "$D"`: `python -m leeroy_mind realm status`
   and `titles` read `mind.db` read-only; `realm plan rivals --progression-name <name>`,
   `plan canon`, `plan bank`, `plan bank-stock` write only a plan file (rivals asks the live

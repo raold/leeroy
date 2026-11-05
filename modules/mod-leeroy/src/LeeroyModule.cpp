@@ -1,6 +1,7 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 
 #include "LeeroyModule.h"
+#include "LeeroyRealmCommands.h"
 
 #include "Config.h"
 #include "Log.h"
@@ -47,8 +48,12 @@ void LeeroyModule::LoadConfig(bool /*reload*/)
     cfg.realmMaxActionsPerTick = std::clamp(sConfigMgr->GetOption<uint32>("Leeroy.Realm.MaxActionsPerTick", 5), 1u, 20u);
     cfg.realmAnnounce = sConfigMgr->GetOption<bool>("Leeroy.Realm.Announce", true);
     cfg.castGuard = sConfigMgr->GetOption<bool>("Leeroy.CastGuard", false);
-    cfg.realmPlacesFile = sConfigMgr->GetOption<std::string>("Leeroy.Realm.PlacesFile", "leeroy_places.csv");
-    cfg.realmItemsFile = sConfigMgr->GetOption<std::string>("Leeroy.Realm.ItemsFile", "leeroy_items.csv");
+    // Relative whitelist paths name files beside mod_leeroy.conf, where the core loads module configs from.
+    std::string const moduleConfigDir = sConfigMgr->GetConfigPath() + "modules/";
+    cfg.realmPlacesFile = Leeroy::Realm::ResolveCsvPath(moduleConfigDir,
+        sConfigMgr->GetOption<std::string>("Leeroy.Realm.PlacesFile", "leeroy_places.csv"));
+    cfg.realmItemsFile = Leeroy::Realm::ResolveCsvPath(moduleConfigDir,
+        sConfigMgr->GetOption<std::string>("Leeroy.Realm.ItemsFile", "leeroy_items.csv"));
 
     _config = cfg;
     _enabled = cfg.enable;

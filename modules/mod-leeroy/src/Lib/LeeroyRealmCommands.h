@@ -182,6 +182,13 @@ struct ItemRule { std::uint32_t itemId = 0; std::string use; std::uint32_t maxCo
 // Map <=999, zone <=65535, xyz within +/-20000, orientation within [0,2*pi].
 std::optional<std::vector<Place>> ParsePlaces(std::string_view csv, std::string& error);
 std::optional<std::vector<ItemRule>> ParseItems(std::string_view csv, std::string& error);
+// Leeroy.Realm.PlacesFile and ItemsFile: a relative value names a file in the
+// module config directory (beside mod_leeroy.conf), a rooted one stays as
+// written, and an empty one names no file.
+std::string ResolveCsvPath(std::string_view moduleConfigDir, std::string_view configured);
+// The whole file, or nothing when it is missing, not a regular file, unreadable
+// or larger than kMaxCsvBytes.
+std::optional<std::string> ReadCsvFile(std::string const& path);
 
 struct RealmJob
 {
