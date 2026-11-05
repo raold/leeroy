@@ -12,12 +12,12 @@ import numpy as np
 
 VOICE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(VOICE))
-from leeroy_voice.engines.expressive import WorkerProcess  # noqa: E402
+from leeroy_voice.engines.expressive import _TURBO, WorkerProcess  # noqa: E402
 
 ADAPTER = Path(__file__).with_name("turbo_measurement_worker.py")
 FIXTURES = {"short": "Ready for the next step.",
             "pause": "First, take a breath. Then, continue."}
-PARAMS = {"temperature": 0.8, "top_p": 0.95, "top_k": 1000, "repetition_penalty": 1.2}
+PARAMS = dict(_TURBO)
 
 
 def validate_job(args):
@@ -120,10 +120,9 @@ def run(args):
                 write_report(report_path, report)
         report["status"] = "ok"
     except Exception as exc:
-        # Exception messages can contain user paths or speech; never include them.
-        message = str(exc)
-        report["status"] = ("timed_out" if "no answer in " in message or "no model after " in message
-                            else "failed")
+        # Exception messages can contain user paths or speech; never include them, and never
+        # parse them: a start or call that reached its deadline is the timeout.
+        report["status"] = "timed_out" if time.perf_counter() - started >= args.timeout else "failed"
         report["error_type"] = type(exc).__name__
     finally:
         try:

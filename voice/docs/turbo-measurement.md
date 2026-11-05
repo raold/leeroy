@@ -2,6 +2,8 @@
 
 This optional tool measures the checkout's production Turbo `load()` and `speak()` in an owned isolated worker. It does not play or record audio, alter the service, compile a model, download dependencies, or claim a speedup. Use only synthetic references and the built-in text fixtures. Run the controller in the voice environment with its existing dependencies (including psutil), and point `--python` at the separate Turbo environment's interpreter. The adapter always comes from this checkout.
 
+Run it only while the mind and the voice service are both stopped. A measured model then competes with neither the live chat model nor a live voice worker for the GPU or the CPU, and the measurement cannot evict or slow a live one.
+
 From the checkout's `voice` directory, for example:
 
 ```powershell
