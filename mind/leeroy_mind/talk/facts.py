@@ -35,6 +35,7 @@ import logging
 import re
 import time
 from collections import OrderedDict
+from dataclasses import dataclass
 from typing import Callable, Sequence
 
 from leeroy_mind.library.chunks import Chunk, split_sentences
@@ -761,8 +762,16 @@ def boss_mechanics(chunks: Sequence[Chunk], *, n: int = MECHANICS_LINES) -> list
 
 # -- the lookup --------------------------------------------------------------------------------
 
+@dataclass(frozen=True)
+class _LoreFactResult:
+    lines: tuple[str, ...]
+    hits: int
+    named: int
+    found: int
+
+
 def _lore_fact_lines(q: GameQuestion, hits: Sequence[Chunk], named: Sequence[Chunk],
-                     side: str | None) -> tuple[list[str], int, int, int]:
+                     side: str | None) -> _LoreFactResult:
     """Existing selection/formatting policy, with the loop-owned faction already resolved."""
     named = [c for c in named if _proper(c.title)]
     found = len(hits) + len(named)
@@ -774,7 +783,7 @@ def _lore_fact_lines(q: GameQuestion, hits: Sequence[Chunk], named: Sequence[Chu
                        q.query, names=names,
                        keep=lambda c, line: relevant(c, line, names, words,
                                                      strict=strict, trainer=trainer))
-    return lines, len(hits), len(named), found
+    return _LoreFactResult(tuple(lines), len(hits), len(named), found)
 
 
 class _InlineSearch:
@@ -808,6 +817,8 @@ class _InlineSearch:
 class LibraryFacts:
     """The library for live talk: one lookup per human line, shared by every reply to it (a
     task per line; KEEP_LINES are kept), and the mechanics per boss, kept for the session.
+    The app owns this service and its dependencies; session reset is reusable, while aclose
+    permanently stops admission and joins its tasks before the app closes those dependencies.
 
     A line's lookup (the module docstring has its time cap): Library.search(his written-out
     query, k=SEARCH_K, the question's kinds) at REPLY_HUMAN through `llm` (the app's
@@ -825,6 +836,8 @@ class LibraryFacts:
         self._lines: OrderedDict[int, asyncio.Task] = OrderedDict()
         self._tasks: set[asyncio.Task] = set()  # includes cancelled/evicted work until done
         self._mechanics: dict[tuple[str, str | None], list[str]] = {}
+        self._closed = False
+        self._close_task: asyncio.Task | None = None
         self._providers: list[Callable[[str], list[str]]] = []
 
     def add_provider(self, provider: Callable[[str], list[str]]) -> None:
@@ -840,7 +853,7 @@ class LibraryFacts:
 
     def start(self, line_id: int, q: GameQuestion) -> None:
         """Start the lookup for his line `line_id` (once: a second call does nothing)."""
-        if line_id in self._lines:
+        if self._closed or line_id in self._lines:
             return
         task = asyncio.get_running_loop().create_task(
             self._lookup(line_id, q), name=f"mind-facts-{line_id}")
@@ -932,8 +945,10 @@ class LibraryFacts:
         try:
             said = sides_named(q.query)
             side = (next(iter(said)) if len(said) == 1 else None) if said else self.faction()
-            lines, hit_count, named_count, found = await self.search._format(
+            result = await self.search._format(
                 _lore_fact_lines, q, hits, named, side)
+            lines = list(result.lines)
+            hit_count, named_count, found = result.hits, result.named, result.found
         except (SearchBusy, SearchClosed):
             raise
         except Exception:  # a chunk the formatter chokes on: no facts, never a lost reply
@@ -973,6 +988,8 @@ class LibraryFacts:
         session; for an encounter of several bosses with no page of its own
         (wow.ENCOUNTER_MEMBERS), a line from each member's tactics page. Never from a lore
         page or a search: [] when there is no tactics page or the library fails."""
+        if self._closed:
+            return []
         key = (boss.casefold(), instance)
         if key not in self._mechanics:
             try:
@@ -1006,3 +1023,10 @@ class LibraryFacts:
         self.clear()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def aclose(self) -> None:
+        """Permanently stop admission and drain owned lookups, even if a waiter is cancelled."""
+        if self._close_task is None:
+            self._closed = True
+            self._close_task = asyncio.create_task(self.reset_session())
+        await asyncio.shield(self._close_task)

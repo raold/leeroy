@@ -120,20 +120,23 @@ class TalkEngine(Reactions):
                  data_dir: Path, clock: Clock, rng, send: Callable[[Command], Awaitable[Ack]],
                  human_guid: int = 0,
                  on_line_sent: Callable[[int, Chat], object] | None = None, library=None,
-                 library_search=None):
+                 library_search=None, facts: LibraryFacts | None = None):
         """send is BridgeClient.send. on_line_sent(line_id, chat) is told about every line the
         mind says once it is acknowledged and stored: the app wires it to
         ThreadTracker.on_line_sent, the only way the mind's own lines reach the threads.
-        library: the app's read-only Library (None: no facts, talk as before part E); its
-        lookups queue on `scheduler`, and its facts are for the faction of his race."""
+        facts is the caller-owned service; the engine triggers its session reset. For standalone
+        callers, library constructs a compatible service using the current human's faction."""
+        if facts is not None and (library is not None or library_search is not None):
+            raise ValueError("facts cannot be combined with library or library_search")
+        if library is None and library_search is not None:
+            raise ValueError("library_search requires library")
         self.store, self.world, self.raid, self.recall = store, world, raid, recall
         self.scheduler, self.personas, self.cfg = scheduler, personas, cfg
         self.data_dir, self.clock, self.rng, self.send = Path(data_dir), clock, rng, send
         self.on_line_sent = on_line_sent
-        self.facts = (LibraryFacts(library, scheduler,
-                                   faction=lambda: faction_known(self.human.race),
-                                   search=library_search)
-                      if library is not None else None)
+        self.facts = facts if facts is not None else (
+            LibraryFacts(library, scheduler, faction=lambda: faction_known(self.human.race),
+                         search=library_search) if library is not None else None)
         self.guards = Guards(rng=rng)
         self.budget = BurstBudget(cfg.talk.chattiness, rng)
         self.bits = BitScheduler(store, clock, rng)

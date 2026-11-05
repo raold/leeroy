@@ -1682,7 +1682,7 @@ def test_the_app_opens_the_library_read_only_and_closes_it(tmp_path, clock, capl
             lib = app.library
             assert isinstance(lib, Library) and lib.readonly and lib.llm is app.scheduler
             assert lib.embed_model == cfg.models.embedding
-            assert app.engine.facts is not None and app.engine.facts.library is lib
+            assert app.engine.facts is app.facts and app.facts.library is lib
             assert app.engine.facts.search is app.library_search
             assert app.library_search._thread is None  # construction is inert
             assert [c.title for c in lib.search_text("Lancer Grounds", k=1)] == ["Lancer Grounds"]
@@ -1698,7 +1698,9 @@ def test_the_app_opens_the_library_read_only_and_closes_it(tmp_path, clock, capl
     assert len(logs) == 1 and logs[0].startswith("library_opened")
 
 
-def test_shutdown_joins_search_before_scheduler_and_main_databases(tmp_path, clock, monkeypatch):
+@pytest.mark.parametrize("turns_fail", [False, True])
+def test_shutdown_joins_search_before_scheduler_and_main_databases(tmp_path, clock, monkeypatch,
+                                                                 turns_fail):
     import threading
     from leeroy_mind.talk.questions import game_question
 
@@ -1717,7 +1719,12 @@ def test_shutdown_joins_search_before_scheduler_and_main_databases(tmp_path, clo
 
         monkeypatch.setattr(Library, "_rank", blocked_rank)
         original_scheduler = app.scheduler.close
+        original_search = app.library_search.aclose
         original_library, original_store = app.library.close, app.store.close
+
+        async def search_close():
+            assert app.facts._closed and not app.facts._tasks
+            await original_search()
 
         async def scheduler_close():
             assert not app.library_search._thread.is_alive()
@@ -1736,8 +1743,13 @@ def test_shutdown_joins_search_before_scheduler_and_main_databases(tmp_path, clo
             original_store()
 
         monkeypatch.setattr(app.scheduler, "close", scheduler_close)
+        monkeypatch.setattr(app.library_search, "aclose", search_close)
         monkeypatch.setattr(app.library, "close", library_close)
         monkeypatch.setattr(app.store, "close", store_close)
+        if turns_fail:
+            async def failed_end_session():
+                raise RuntimeError("turn shutdown failed")
+            monkeypatch.setattr(app.engine, "end_session", failed_end_session)
         q = game_question("anyone know where the lancer's trial dailies start?")
         assert q is not None
         app.engine.facts.start(1, q)
@@ -1760,6 +1772,38 @@ def test_shutdown_joins_search_before_scheduler_and_main_databases(tmp_path, clo
         finally:
             release.set()
             await asyncio.gather(*stoppers, return_exceptions=True)
+            await app.stop()
+    run(main())
+
+
+def test_facts_injection_and_current_human_faction(tmp_path, clock, monkeypatch):
+    import leeroy_mind.talk.pipeline as pipeline
+
+    async def main():
+        make_library(tmp_path / "library.db", clock)
+        app = MindApp(load_config(tmp_path / "mind.toml"), tmp_path, llm=FakeLLM(), clock=clock)
+        try:
+            assert app.engine.facts is app.facts
+            identity = app.engine.human
+            monkeypatch.setattr(pipeline, "human_identity", lambda cfg, store, guid:
+                                dataclasses.replace(identity, guid=guid, race=guid))
+            app.engine.set_human(1)
+            assert app.facts.faction() == "alliance"
+            app.engine.set_human(2)
+            assert app.facts.faction() == "horde"
+            args = dict(store=app.store, world=app.world, raid=app.raid, recall=app.recall,
+                        scheduler=app.scheduler, personas=app.personas, cfg=app.cfg,
+                        data_dir=app.data_dir, clock=app.clock, rng=app.rng, send=app._send)
+            standalone = TalkEngine(**args, library=app.library)
+            assert standalone.facts.library is app.library
+            assert standalone.facts is not app.facts
+            with pytest.raises(ValueError):
+                TalkEngine(**args, facts=app.facts, library=app.library)
+            with pytest.raises(ValueError):
+                TalkEngine(**args, facts=app.facts, library_search=app.library_search)
+            with pytest.raises(ValueError):
+                TalkEngine(**args, library_search=app.library_search)
+        finally:
             await app.stop()
     run(main())
 
