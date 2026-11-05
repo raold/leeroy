@@ -49,10 +49,13 @@ def rebuild(header: dict[str, Any]) -> tuple[actions.Catalog, observation.Schema
 
 
 def completed_casts(event: dict[str, Any]) -> list[str]:
-    """The kit abilities an execution event says went off: a cast that completed, or an instant the command cast."""
+    """The kit abilities an execution event says went off: a cast that completed, or an instant the command cast.
+
+    A command is rejected as a whole when any of its parts fails, so an instant can go off in a rejected command
+    (cast frost_nova ok: cast; move forward_right FAILED: rooted): the cast part decides, not the command's outcome."""
     if event.get("kind") == "cast" and event.get("outcome") == "completed":
         return ["?"]
-    if event.get("kind") == "command" and event.get("producer") == "executor" and event.get("outcome") == "executed":
+    if event.get("kind") == "command" and event.get("producer") == "executor":
         return _INSTANT.findall(event.get("detail", ""))
     return []
 

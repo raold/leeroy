@@ -143,9 +143,14 @@ class CountTest(unittest.TestCase):
                     "events": [{"kind": "cast", "producer": "executor", "outcome": "completed", "actor": 0, "action_id": 0},
                                {"kind": "damage", "actor": 0, "target": 1, "amount": 3000},
                                {"kind": "death", "actor": 1}]}]
+        # A command rejected for its movement still cast its instant.
+        records[1]["events"].append({"kind": "command", "producer": "executor", "outcome": "rejected", "actor": 1,
+                                     "action_id": 3, "detail": "cast frost_nova ok: cast; move forward_right FAILED: rooted"})
+        records[1]["events"].append({"kind": "command", "producer": "executor", "outcome": "rejected", "actor": 1,
+                                     "action_id": 3, "detail": "cast ice_lance FAILED: not_ready; move left ok: 1.75 yd"})
         counts = replay.count_events(records, catalog)
+        self.assertEqual(counts[1]["casts"], {"frost_nova": 1, "ice_lance": 1})
         self.assertEqual(counts[0]["casts"], {"frostbolt": 1})
-        self.assertEqual(counts[1]["casts"], {"ice_lance": 1})
         self.assertEqual((counts[0]["damage_done"], counts[0]["damage_taken"]), (3000, 900))
         self.assertEqual((counts[1]["deaths"], counts[1]["hits"]), (1, 1))
 
