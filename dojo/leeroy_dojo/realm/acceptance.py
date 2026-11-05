@@ -50,6 +50,7 @@ FIXTURE_TABLES = {
     "character_instance": "guid",
     "guild_member": "guid",
     "group_member": "memberGuid",
+    "corpse": "guid",
     # Bookkeeping a login, a teleport or a logout writes; reported, never a failure.
     "character_entry_point": "guid",
     "character_stats": "guid",

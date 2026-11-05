@@ -27,6 +27,7 @@ from .layout import Layout, norm
 
 ARENA_IN_PROGRESS = 3          # BattlegroundStatus STATUS_IN_PROGRESS
 SPELL_FROST_NOVA = 42917
+PERCEIVED = 0.25               # seconds for a change to pass the 100 ms perceptual delay and reach a mask
 
 
 class ControlError(Exception):
@@ -328,6 +329,7 @@ class Run:
         seq = c.seq()
         first = c.act(0, "ice_lance/hold/toward")[0]
         r1 = self.executed(seq, first)
+        time.sleep(PERCEIVED)   # masks answer for the actor's delayed observation (Task 7)
         mask = c.masks(0)
         second = c.act(0, "ice_lance/hold/toward", force=True)[0]
         r2 = self.executed(seq, second)
@@ -353,6 +355,7 @@ class Run:
         c = self.console
         self.restore(((pos["a"], pos["a_facing"]), (pos["b"], pos["b_facing"])))
         c("dojo harness mana 0 0")
+        time.sleep(PERCEIVED)
         mask = c.masks(0)
         seq = c.seq()
         forced = c.act(0, "frostbolt/hold/toward", force=True)[0]
