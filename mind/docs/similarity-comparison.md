@@ -21,10 +21,13 @@ The first observation is not OS-cold: no cache purge is performed. Python versio
 machine load, workload, and factory setup affect results; assess real Library and
 Recall paths separately before drawing conclusions or accepting a candidate.
 
-One eight-pair comparison found identical ordered results and finite pair values.
-For 50, 100, and 270 vectors at 1024 dimensions and k=5, median synthetic times
-fell from 13.63 to 6.49 ms, 26.93 to 13.65 ms, and 75.65 to 36.84 ms,
-respectively. The k=0, k=1, and text-only cases showed small overheads. In separate
+The tool uses `VEC_DIM` (512), the size of every stored memory and library
+vector. One eight-pair comparison at that size (Python 3.14.10) found identical
+ordered results and bit-identical similarity values. For 50, 100, and 270 vectors
+at k=5, median synthetic times fell from 6.84 to 3.35 ms, 14.06 to 6.73 ms, and
+41.38 to 19.47 ms, respectively (about 2.0–2.1×). The k=0, k=1, and text-only
+cases showed no meaningful difference (0.02, 0.05–0.06 and 0.85–0.86 ms). An
+earlier run at 1024 dimensions showed the same ratio. In separate
 offline whole-path comparisons, a narrow Library workload fell from 29.47 to
 25.78 ms and three Recall workloads improved by about 1.52–1.60×. A broad,
 SQL-dominated Library workload showed no improvement (548.23 to 563.55 ms).
