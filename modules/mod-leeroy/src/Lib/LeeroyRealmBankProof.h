@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -137,6 +138,14 @@ inline BankTransferResult ProveBankTransfer(BankSnapshot const& before, BankSnap
         if (now.item != expected) return BankTransferResult::Unknown;
     }
     return BankTransferResult::Complete;
+}
+// The operation a queued bank command's admission checks its body against. The
+// queue admits before it reserves, so at acceptance nothing holds the body yet
+// and it is checked unowned; once reserved, only as its own operation. Any
+// other holder is left to the unowned check, which reports it busy.
+inline std::string_view BankAdmissionOperation(std::string_view holder, std::string_view id)
+{
+    return !id.empty() && holder == id ? id : std::string_view{};
 }
 inline bool BankGoldCreditAllowed(std::uint64_t balance, std::uint32_t gold, std::uint64_t limit)
 {
