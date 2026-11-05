@@ -22,10 +22,21 @@ def vector_or_word_similarity(
     """Snapshot candidate data and return its vector-or-word similarity callable."""
     vecs = MappingProxyType({i: tuple(v) for i, v in vectors.items()})
     words = MappingProxyType(dict(texts))
+    norms: dict[int, float] = {}
+
+    def norm(i: int) -> float:
+        if i not in norms:
+            norms[i] = math.sqrt(sum(x * x for x in vecs[i]))
+        return norms[i]
 
     def sim(a: int, b: int) -> float:
         if a in vecs and b in vecs:
-            return cosine(vecs[a], vecs[b])
+            dot = sum(x * y for x, y in zip(vecs[a], vecs[b]))
+            na = norm(a)
+            nb = norm(b)
+            if na == 0 or nb == 0:
+                return 0.0
+            return dot / (na * nb)
         return word_jaccard(words[a], words[b])
 
     return sim
