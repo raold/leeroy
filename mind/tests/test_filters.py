@@ -208,6 +208,49 @@ def test_repair_strips_a_command_at_him_too():
     assert repair("\U0001F609 /w Zanthor hey", speaker="Belra", him=("Zanthor",)) == "hey"
 
 
+@pytest.mark.parametrize("raw, want", [
+    ("[Whisper to Zan]: come find me after raid", "come find me after raid"),
+    ("[whisper to zan] come find me after raid", "come find me after raid"),
+    ("[WHISPER TO ZAN]: ok", "ok"), ("[Whisper from Zan]: ok", "ok"),
+    ("[whisper] lol same", "lol same"), ("[Whisper]: lol same", "lol same"),
+    ("[Guild]: gz", "gz"), ("[guild] gz", "gz"), ("[OFFICER]: on it", "on it"),
+    ("[Party] pulling", "pulling"), ("[Raid]: on it", "on it"), ("[raid] on it", "on it"),
+    ("[Raid Warning]: spread out", "spread out"), ("[Say] hi", "hi"), ("[Yell]: run", "run"),
+    ("[On Vent]: that was close", "that was close"), ("[on vent] that was close",
+                                                      "that was close"),
+    ("[3m ago] [Raid]: on it", "on it"), ("[Guild] Belra: gz", "gz"),
+    ('"[Whisper to Zan]: ok"', "ok"), ("[Whisper to Zan]: [Frozen Orb] anyone?",
+                                       "[Frozen Orb] anyone?"),
+    ("[Whisper to Zan]:", ""), ("[Guild]", ""),
+])
+def test_a_channel_or_whisper_tag_in_square_brackets_is_stripped(raw, want):
+    """Seen live: whispers to him began "[Whisper to <his name>]:" or "[whisper]", the
+    prompt's "(whisper to Zan):" frame copied in square brackets. Every channel and whisper
+    tag the paren form takes is taken in square brackets too, in any case, with or without
+    its colon."""
+    assert strip_copied(raw, ("Belra",), him=("Zan", "Zanthor")) == want
+
+
+@pytest.mark.parametrize("kept", [
+    "[Thunderfury]", "[Thunderfury] finally dropped", "[Frozen Orb] anyone?",
+    "[Guild Tabard] anyone?", "[Raiders] lol", "[whispers] fine", "ok [Raid] in 5"])
+def test_a_bracketed_word_that_is_no_tag_stays(kept):
+    assert strip_copied(kept, ("Belra",), him=("Zan", "Zanthor")) == kept
+
+
+@pytest.mark.parametrize("raw, want", [
+    ("[Whisper to Zan] :) come find me", ":) come find me"),
+    ("[Whisper to Zan]: ;) come find me", ";) come find me"),
+    ("[Guild] :D gz", ":D gz"), ("[Raid]:P lol", ":P lol"),
+    ("(guild) :) welcome back", ":) welcome back"),
+    ("(whisper to Zan) :P ok", ":P ok"),
+])
+def test_an_emoticon_after_a_copied_tag_survives(raw, want):
+    """The tag's colon follows the speaker tag's rule (fix round 1, review M2): the eyes of
+    an emoticon are no colon, in either bracket."""
+    assert strip_copied(raw, ("Belra",), him=("Zan", "Zanthor")) == want
+
+
 # The rehearsal: he whispered her, and her reply came back as his own line.
 HIS_WHISPER = ("hey belra, heard you topped the meters again ;) what does a mage have to do to "
                "get a summon to dalaran after raid?")
