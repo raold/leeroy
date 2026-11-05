@@ -1,7 +1,7 @@
-From 650064cc3b1f7ad495aae07a04d053cc0e43cf85 Mon Sep 17 00:00:00 2001
+From b5e9a62bf7ba236ab452222adeab0b5bec231f7a Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 11:05:08 -0400
-Subject: [PATCH 1/7] List idle randombots in the Raid Browser
+Subject: [PATCH 1/9] List idle randombots in the Raid Browser
 
 Randombots only copy Dungeon Finder queues that real players are in, and the
 raid browser is not a queue, so it stayed empty. A world-thread check now keeps
