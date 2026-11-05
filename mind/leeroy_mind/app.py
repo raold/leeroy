@@ -26,20 +26,23 @@ attach(self), then self.guild = install(self)) and use the registries and attrib
 import asyncio
 import functools
 import importlib.metadata
+import json
 import logging
 import math
 import os
 import random
 import re
 import statistics
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Awaitable, Callable, Literal
 
 from leeroy_mind.bridge import BridgeClient
 from leeroy_mind.clock import Clock, SystemClock
 from leeroy_mind.config import ConfigError, MindConfig, load_config
+from leeroy_mind.endpoint import attach_control
 from leeroy_mind.human import HumanIdentity
+from leeroy_mind.ingress import RowReceipt, WireOrigin, chat_row_binding, game_row_binding
 from leeroy_mind.library.core import Library
 from leeroy_mind.library.search_worker import LibrarySearchWorker
 from leeroy_mind.llm.client import LLMClient, LLMError, OllamaClient
@@ -52,6 +55,8 @@ from leeroy_mind.memory.recall import Recall
 from leeroy_mind.memory.threads import ClosedThread, ThreadTracker
 from leeroy_mind.memory.writer import Embedder, MemoryWriter
 from leeroy_mind.personas.io import PersonaCache
+from leeroy_mind.tuning.world import merge as merge_world
+from leeroy_mind.tuning.service import TuningService
 from leeroy_mind.protocol import (CORE_EVENT_TYPES, Ack, Achievement, AfkEvent, BgEnd, Boss,
                                   Cast, Chat, Death, Error, Event, Group, Hello, Login, Logout,
                                   LootWon, TextEmote, Zone, event_type)
@@ -62,6 +67,8 @@ from leeroy_mind.talk.raid import RaidState
 from leeroy_mind.talk.turns import TurnKind
 from leeroy_mind.talk.world import WorldView, looks_like_bot_command
 from leeroy_mind.voice.attach import attach_voice
+from leeroy_mind.training.service import attach_training
+from leeroy_mind.realm.service import attach_realm
 from leeroy_mind.nightly.wiring import attach as attach_nightly
 from leeroy_mind.guild.service import install as install_guild
 from leeroy_mind.voice.heard import is_command
@@ -97,6 +104,16 @@ LIBRARY_FILE = "library.db"  # the reference shelf `python -m leeroy_mind.librar
 OLLAMA_CHAT_CONF = Path(
     r"F:\azerothcore\build\bin\RelWithDebInfo\configs\modules\mod_ollama_chat.conf")
 _MEMORY_EVENTS = (Boss, Death, LootWon, Achievement, BgEnd, Zone)
+
+
+@dataclass(frozen=True, slots=True)
+class _RowDelivery:
+    event: Event
+    task: asyncio.Task
+    wire: WireOrigin
+    bound: bool = False
+    receipt: RowReceipt | None = None
+    ready: bool = False
 
 
 class _ActivityFlush:
@@ -340,8 +357,14 @@ class MindApp:
                                       max_inflight=cfg.ollama.max_inflight)
         self.embedder = Embedder(self.scheduler, cfg.models.embedding)
         self.personas = PersonaCache(self.store)
+        # mind.toml as read, and what runs: it with the owner's world dials stored in mind.db
+        # (tuning.world), which never write mind.toml
+        self.file_cfg = cfg
+        self.cfg = cfg = merge_world(cfg, self.personas.tuning)
         stored = self.store.get_meta("human_guid")
-        self._human_named = bool(stored and stored.isdigit() and int(stored))  # by the bridge
+        self._human_named = bool(type(stored) is str and len(stored) <= 10
+                                 and stored.isascii() and stored.isdecimal()
+                                 and 0 < int(stored) <= 0xFFFFFFFF)  # by the bridge
         self._human = int(stored) if self._human_named else self._guild_master()
         self._human_name = self.store.get_meta("human_name")
         self.writer = MemoryWriter(self.store, self.embedder, self.clock, human=self._identity)
@@ -371,15 +394,19 @@ class MindApp:
             library_search=self.library_search)
         self.bridge = BridgeClient(cfg.bridge.host, cfg.bridge.port, self.handle,
                                    clock=self.clock, on_connection=self._on_connection)
+        self._row_delivery: _RowDelivery | None = None
         self.arbiter = None
         self.running = False
         self.models_seen: set[str] | None = None  # what the last model check listed
         self._model_ready = self._model_known = False  # the silent latch (check_model)
         self._handlers: dict[str, list[Callable[[Event], Awaitable[None]]]] = {}
+        self.skip_event_rows: set[str] = set()
         self._before_handlers: dict[str, list[Callable[[Event], Awaitable[None]]]] = {}
         self._connection_hooks: list[Callable[[bool], Awaitable[None]]] = []
         self._offline_hooks: list[Callable[[], Awaitable[None]]] = []
         self._background: list[Callable[[], Awaitable[None]]] = []
+        self._shutdown_drains: list[Callable[[], Awaitable[None]]] = []
+        self._shutdown_receipts: dict[str, list[Callable[[Event], None]]] = {}
         self._session_id: int | None = None
         self._hello_ts: int | None = None  # the server's ms ts of the last hello
         self._spoke_at: dict[int, float] = {}  # anyone's last line, any channel or origin
@@ -407,6 +434,10 @@ class MindApp:
         self.nightly = attach_nightly(self)
         self.voice = attach_voice(self)
         self.guild = install_guild(self)
+        self.training = attach_training(self)
+        self.tuning = TuningService(self)  # the owner's dials: the control endpoint's tune op
+        self.control = attach_control(self)
+        self.realm = attach_realm(self)  # Last: tests/realm/test_realm_wiring.py
 
     # -- extension points --------------------------------------------------------------------
 
@@ -452,12 +483,45 @@ class MindApp:
         if self.running and not self._stopping:
             self._start_background(factory)
 
+    def register_shutdown_drain(self, hook: Callable[[], Awaitable[None]]) -> None:
+        """Require an extension to release its owned resource users before close.
+
+        Generic background cancellation has a diagnostic timeout. A drain has
+        no abandonment timeout: it must join its owned children, or raise and
+        leave bridge/scheduler/database open. It must be safe before run() and
+        after ordinary cancellation. stop() shields the shared shutdown task.
+        """
+        if self._stopping:
+            raise RuntimeError("cannot register a shutdown drain while stopping")
+        self._shutdown_drains.append(hook)
+
+    def register_shutdown_receipt(self, type_name: str, handler: Callable[[Event], None]) -> None:
+        """Deliver only bounded synchronous receipt bookkeeping during shutdown.
+
+        This does not run ordinary gameplay/presence handlers. A receipt sink
+        may feed an already-owned command mailbox, never start work or await.
+        """
+        if self._stopping:
+            raise RuntimeError("cannot register shutdown receipts while stopping")
+        self._shutdown_receipts.setdefault(type_name, []).append(handler)
+
+    @property
+    def stopping(self) -> bool:
+        """Expose the existing shutdown fence before asynchronous drains start."""
+        return self._stopping or self._closed
+
     @property
     def human_guid(self) -> int:
         """The human's guid: the last non-zero one from hello, login or logout (meta
         human_guid); before the bridge has named him, the stored roster's guild master (0 when
         there is none)."""
         return self._human
+
+    @property
+    def confirmed_human_guid(self) -> int:
+        """Bridge-confirmed persisted/current identity; excludes roster fallback."""
+        return (self._human if self._human_named and type(self._human) is int
+                and 0 < self._human <= 0xFFFFFFFF else 0)
 
     def _guild_master(self) -> int:
         """Who the human is on the very first start (an empty meta), as the CLI assumes: the
@@ -606,7 +670,8 @@ class MindApp:
     def _note_human(self, guid: int) -> None:
         """Keep the last non-zero human guid (pre-flight ruling 6); the first one the bridge
         names is stored even when it is the guild master assumed until then."""
-        if not guid or (guid == self._human and self._human_named):
+        if (type(guid) is not int or not 0 < guid <= 0xFFFFFFFF
+                or guid == self._human and self._human_named):
             return
         changed, self._human, self._human_named = guid != self._human, guid, True
         self.world.human_guid = guid
@@ -659,19 +724,82 @@ class MindApp:
         """Presence preemption, the app's row, then ordinary registered handlers."""
         if self._closed:
             return
-        name = event_type(ev)
-        if self._stopping:
-            self._record_only(ev, name)
-            return
-        await self._dispatch_handlers(ev, name, self._before_handlers)
+        origin = getattr(self.bridge, "delivery_origin", lambda value: None)(ev)
+        self._row_delivery = (_RowDelivery(ev, asyncio.current_task(), origin)
+                              if origin is not None else None)
         try:
-            if await self._row(ev, name) is False:
-                return  # ignored outright (C27): no handler sees it either
-        except asyncio.CancelledError:
-            raise
+            name = event_type(ev)
+            if self._stopping:
+                for handler in tuple(self._shutdown_receipts.get(name, ())):
+                    try:
+                        handler(ev)
+                    except Exception:
+                        # Receipt payloads and exception text can contain private data.
+                        log.warning("shutdown_receipt_failed: type=%s", name)
+                self._record_only(ev, name)
+                return
+            await self._dispatch_handlers(ev, name, self._before_handlers)
+            try:
+                if await self._row(ev, name) is False:
+                    return  # ignored outright (C27): no handler sees it either
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("event_failed: type=%s", name)
+            else:
+                if (binding := self._active_row_delivery(ev)) is not None:
+                    self._row_delivery = replace(binding, ready=True)
+            await self._dispatch_handlers(ev, name, self._handlers)
+        finally:
+            self._row_delivery = None
+
+    def _active_row_delivery(self, ev: Event) -> _RowDelivery | None:
+        binding = self._row_delivery
+        if binding is None or binding.event is not ev:
+            return None
+        try:
+            task = asyncio.current_task()
+        except RuntimeError:
+            return None
+        if (task is not binding.task or self.bridge.delivery_origin(ev) is not binding.wire):
+            return None
+        return binding
+
+    def row_receipt(self, value: Event) -> RowReceipt | None:
+        """Committed source snapshot, after the row succeeds in its dispatcher task.
+
+        The digest is captured once, before subsequent row processing can mutate
+        source fields. A retained receipt must be revalidated against storage by
+        its eventual consumer; it is not future effect authority.
+        """
+        binding = self._active_row_delivery(value)
+        return binding.receipt if binding is not None and binding.ready else None
+
+    def _capture_row(self, ev: Event, row_kind: str, row_id: int, backlog: bool) -> None:
+        binding = self._active_row_delivery(ev)
+        if binding is None or binding.bound:
+            return
+        # Even a failed capture is final for this delivery. Never refresh a
+        # digest after later source-field or threading mutations.
+        self._row_delivery = replace(binding, bound=True)
+        try:
+            if row_kind == "game_event":
+                row = self.store._one(
+                    "SELECT id, type, payload FROM game_event WHERE id = ?", (row_id,))
+                digest = game_row_binding(row["id"], row["type"], json.loads(row["payload"]))
+            else:
+                row = self.store._one(
+                    "SELECT id, channel, from_guid, from_name, to_guid, text, map, zone, origin "
+                    "FROM chat_line WHERE id = ?", (row_id,))
+                digest = chat_row_binding(row["id"], **{
+                    key: row[key] for key in ("channel", "from_guid", "from_name", "to_guid",
+                                              "text", "map", "zone", "origin")})
+            receipt = RowReceipt(row_kind, row_id, digest, binding.wire, backlog)
         except Exception:
-            log.exception("event_failed: type=%s", name)
-        await self._dispatch_handlers(ev, name, self._handlers)
+            # Optional provenance cannot change ordinary event processing.
+            log.warning("row_binding_unavailable: kind=%s", row_kind)
+            return
+        self._row_delivery = replace(self._row_delivery, receipt=receipt)
 
     async def _dispatch_handlers(self, ev, name, registry):
         for handler in list(registry.get(name, ())):
@@ -704,17 +832,21 @@ class MindApp:
             await self._on_human_presence(ev, now, backlog)
         elif isinstance(ev, (AfkEvent, TextEmote)):
             if not getattr(ev, "via_bridge", False):  # C5: the mind's own emotes, as echoes
-                self.store.insert_game_event(ev, session_id=self._session_id,
-                                             ts=self._event_at(ev, now, backlog))
+                event_id = self.store.insert_game_event(ev, session_id=self._session_id,
+                                                       ts=self._event_at(ev, now, backlog))
+                self._capture_row(ev, "game_event", event_id, backlog)
                 self.world.apply(ev, now)
         elif isinstance(ev, Error):
             log.warning("bridge_error: message=%r", ev.message)
         elif name not in CORE_EVENT_TYPES:
-            self.store.insert_game_event(ev, session_id=self._session_id,
-                                         ts=self._event_at(ev, now, backlog))
+            if name not in self.skip_event_rows:
+                event_id = self.store.insert_game_event(ev, session_id=self._session_id,
+                                                       ts=self._event_at(ev, now, backlog))
+                self._capture_row(ev, "game_event", event_id, backlog)
         else:
             at = self._event_at(ev, now, backlog)  # a replayed one is stored and remembered then
             event_id = self.store.insert_game_event(ev, session_id=self._session_id, ts=at)
+            self._capture_row(ev, "game_event", event_id, backlog)
             self.world.apply(ev, now)
             if isinstance(ev, Group):
                 self.raid.on_group(ev)
@@ -757,8 +889,9 @@ class MindApp:
         login = isinstance(ev, Login)
         if login and not backlog and self._session_id is None:
             await self._start_session(now)
-        self.store.insert_game_event(ev, session_id=self._session_id,
-                                     ts=self._event_at(ev, now, backlog))
+        event_id = self.store.insert_game_event(ev, session_id=self._session_id,
+                                               ts=self._event_at(ev, now, backlog))
+        self._capture_row(ev, "game_event", event_id, backlog)
         self.world.apply(ev, now)
         if backlog:
             return
@@ -781,6 +914,7 @@ class MindApp:
         at = self._event_at(ev, now, backlog)
         line_id = self.store.insert_chat_line(ev, session_id=self._session_id, origin=origin,
                                               audience=audience, ts=at)
+        self._capture_row(ev, "chat_line", line_id, backlog)
         if not backlog:
             self._spoke_at[ev.from_guid] = now
         if origin != "human":
@@ -800,6 +934,8 @@ class MindApp:
 
     def _record_only(self, ev: Event, name: str) -> None:
         """While stopping: keep what still arrives in the log and start nothing."""
+        if name in self.skip_event_rows:
+            return
         try:
             at = self._event_at(ev, self.clock.now(), self.is_backlog(ev))
             if isinstance(ev, Chat):
@@ -825,6 +961,8 @@ class MindApp:
         except ConfigError as e:
             log.warning("config_invalid: kept the running config: %s", e)
             return False
+        self.file_cfg = cfg
+        cfg = merge_world(cfg, self.personas.tuning)
         if (cfg.ollama.url, cfg.models.embedding) != (self._runtime_url, self._runtime_embedding):
             log_event("config_restart_required", level=logging.WARNING,
                       fields=["ollama.url", "models.embedding"])
@@ -1184,6 +1322,16 @@ class MindApp:
         while it runs, twice at once. A caller cancelled meanwhile leaves the shutdown going."""
         await asyncio.shield(self._begin_stop())
 
+    @property
+    def stopping(self) -> bool:
+        return self._stopping
+
+    def request_stop(self) -> None:
+        """Begin the shutdown stop() runs (the one Ctrl+C runs), without waiting for it: for
+        the control endpoint, whose own task that shutdown cancels first. run() then returns
+        once it is over."""
+        self._begin_stop()
+
     def _begin_stop(self) -> asyncio.Task:
         if self._stop_task is None:
             self._stopping = True
@@ -1223,6 +1371,12 @@ class MindApp:
         await _cancel_wait([*self._bg_tasks, *self._offline_tasks])
         await _cancel_wait([self._loops.get("ticker"), self._embed_task, self._loops.get("health")])
         await _cancel_wait([self._loops.get("stats"), self._banner_task])
+        # These owners may outlive the generic diagnostic cancellation window.
+        # A failure is deliberately not swallowed by _step: closing SQL or the
+        # bridge underneath an unjoined receipt worker would lose durable state.
+        for drain in tuple(self._shutdown_drains):
+            if await drain() is False:
+                raise RuntimeError("extension shutdown drain did not complete")
         await self._step("turns", self.engine.end_session())
         if self._stats_since is not None and self.clock.now() > self._stats_since:
             self._log_stats(self.clock.now(), final=True)

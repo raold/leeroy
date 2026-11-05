@@ -95,6 +95,52 @@ def boss_name(map_id: int, boss_id: int, given: str = "") -> str:
 
 RAID_MAPS = frozenset(m for m, _ in BOSS_NAMES)
 
+# The Wrath 5-man dungeons, named as prose ("in the Nexus").
+DUNGEONS = {574: "Utgarde Keep", 576: "the Nexus", 595: "the Culling of Stratholme",
+            599: "the Halls of Stone", 600: "Drak'Tharon Keep", 601: "Azjol-Nerub",
+            602: "the Halls of Lightning", 604: "Gundrak", 608: "the Violet Hold",
+            619: "Ahn'kahet: The Old Kingdom", 632: "the Forge of Souls",
+            650: "the Trial of the Champion", 668: "the Halls of Reflection"}
+
+# Their fights by (map, boss_id), the instance script's SetBossState index, as for raids.
+# Only fights are listed. Left out on purpose: the Nexus's sphere locks (576, 5-7) and its
+# commander (576, 4: two NPCs by team under one index); the Tribunal of Ages event, Brann's
+# escort and Sjonnir's door (599, 2/4/5); Novos's crystal door (600, 2); the Violet Hold's two
+# prison-slot markers (608, 0/1); the Lich King escape (668, 2). Utgarde Pinnacle, the Oculus
+# and the Pit of Saron set no boss count, so none of their bosses can arrive. Some listed
+# fights cannot arrive either (they only use SetData, or never pass IN_PROGRESS to DONE:
+# 574, 1-2; 599, 0-1; 619, 4; 650, 0) and are kept for completeness.
+DUNGEON_BOSS_NAMES: dict[tuple[int, int], str] = {
+    **{(574, i): n for i, n in enumerate((
+        "Prince Keleseth", "Skarvald and Dalronn", "Ingvar the Plunderer"))},
+    **{(576, i): n for i, n in enumerate((
+        "Grand Magus Telestra", "Anomalus", "Ormorok the Tree-Shaper", "Keristrasza"))},
+    **{(595, i): n for i, n in enumerate((
+        "Meathook", "Salramm the Fleshcrafter", "Chrono-Lord Epoch", "Mal'Ganis",
+        "the Infinite Corruptor"))},
+    (599, 0): "Krystallus", (599, 1): "the Maiden of Grief", (599, 3): "Sjonnir the Ironshaper",
+    (600, 0): "Trollgore", (600, 1): "Novos the Summoner", (600, 3): "King Dred",
+    (600, 4): "the Prophet Tharon'ja",
+    **{(601, i): n for i, n in enumerate(("Krik'thir the Gatewatcher", "Hadronox", "Anub'arak"))},
+    **{(602, i): n for i, n in enumerate(("General Bjarngrim", "Ionar", "Loken", "Volkhan"))},
+    **{(604, i): n for i, n in enumerate((
+        "Slad'ran", "Moorabi", "the Drakkari Colossus", "Gal'darah", "Eck the Ferocious"))},
+    **{(608, i): n for i, n in enumerate((
+        "Cyanigosa", "Moragg", "Erekem", "Ichoron", "Lavanthor", "Xevozz",
+        "Zuramat the Obliterator"), start=2)},
+    **{(619, i): n for i, n in enumerate((
+        "Elder Nadox", "Prince Taldaram", "Jedoga Shadowseeker", "Herald Volazj", "Amanitar"))},
+    (632, 0): "Bronjahm", (632, 1): "the Devourer of Souls",
+    **{(650, i): n for i, n in enumerate((
+        "the Grand Champions", "the Argent Champion", "the Black Knight"))},
+    (668, 0): "Falric", (668, 1): "Marwyn",
+}
+
+# The zones whose AreaTable entry has AREA_FLAG_CAPITAL (0x100), the core's in-city rule, in this
+# server's DBC: Undercity, Stormwind, Ironforge, Orgrimmar, Thunder Bluff, Darnassus, Silvermoon,
+# the Exodar, Shattrath, Dalaran and Awan (5001, mod-bg-slaveryvalley's map 801).
+CITY_ZONES = frozenset({1497, 1519, 1537, 1637, 1638, 1657, 3487, 3557, 3703, 4395, 5001})
+
 # SetBossState steps that are not a fight: the Sindragosa gauntlet, the blood-prince trash and
 # Halion's intro stages. They must never become kill or wipe memories.
 NON_FIGHT_STEPS = frozenset({(631, 13), (631, 14), (724, 3), (724, 4), (724, 5)})

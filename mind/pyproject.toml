@@ -8,10 +8,10 @@ version = "0.1.0"
 description = "The guild's mind: personas, memory and talk for mod-leeroy"
 requires-python = ">=3.14"
 license = "GPL-2.0-only"
-dependencies = ["sqlite-vec==0.1.9"]
+dependencies = ["sqlite-vec==0.1.9", "tzdata>=2025.2"]
 
 [project.optional-dependencies]
-test = ["pytest>=9.1,<10", "tzdata>=2025.2"]
+test = ["pytest>=9.1,<10"]
 
 [tool.setuptools.packages.find]
 include = ["leeroy_mind*"]
@@ -19,6 +19,7 @@ include = ["leeroy_mind*"]
 [tool.setuptools.package-data]
 "leeroy_mind.storage" = ["migrations/*.sql"]
 "leeroy_mind.library" = ["migrations/*.sql"]
+"leeroy_mind.console" = ["page.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

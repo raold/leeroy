@@ -2,6 +2,7 @@
 
 #include "LeeroyIntegrations.h"
 #include "LeeroyModule.h"
+#include "LeeroyPinSet.h"
 
 #include "ObjectGuid.h"
 #include "RandomPlayerbotMgr.h"
@@ -9,8 +10,8 @@
 #include <type_traits>
 #include <unordered_set>
 
-#if !defined(LEEROY_HAS_OLLAMA_FILTER) || !defined(LEEROY_HAS_DUNGEON_CLEAR)
-#error "LEEROY_HAS_OLLAMA_FILTER and LEEROY_HAS_DUNGEON_CLEAR come from mod-leeroy.cmake; re-run cmake"
+#if !defined(LEEROY_HAS_OLLAMA_FILTER) || !defined(LEEROY_HAS_DUNGEON_CLEAR) || !defined(LEEROY_HAS_TRANSMOG)
+#error "LEEROY_HAS_OLLAMA_FILTER, LEEROY_HAS_DUNGEON_CLEAR and LEEROY_HAS_TRANSMOG come from mod-leeroy.cmake; re-run cmake"
 #endif
 
 #if LEEROY_HAS_OLLAMA_FILTER
@@ -64,10 +65,9 @@ uint32 LeeroyApplyPins()
 {
     LeeroyModule& module = LeeroyModule::Instance();
     LeeroyConfig const& cfg = module.Config();
-    bool const enabled = module.Enabled();
-    std::unordered_set<ObjectGuid::LowType> const bots =
-        enabled ? module.Cast().Guids() : std::unordered_set<ObjectGuid::LowType>();
-    return sRandomPlayerbotMgr.SetPinnedBots(bots, enabled && cfg.keepCast, enabled && cfg.bringCastOnline);
+    auto const plan = Leeroy::PlanPins(Leeroy::Pins(), module.Cast().Guids(),
+        module.Enabled(), cfg.keepCast, cfg.bringCastOnline);
+    return sRandomPlayerbotMgr.SetPinnedBots(plan.guids, plan.keep, plan.online);
 }
 
 bool LeeroyInstallOllamaFilter()
@@ -80,8 +80,9 @@ bool LeeroyInstallOllamaFilter()
         try
         {
             LeeroyModule& module = LeeroyModule::Instance();
-            return !(module.Enabled() && module.ExcludeFromOllama()
-                && module.Cast().IsCast(ObjectGuid(raw).GetCounter()));
+            auto const guid = ObjectGuid(raw).GetCounter();
+            return !Leeroy::SpeakerSuppressed(module.Enabled(), module.ExcludeFromOllama(),
+                module.Cast().IsCast(guid), Leeroy::Pins().Muted(guid));
         }
         catch (...)
         {

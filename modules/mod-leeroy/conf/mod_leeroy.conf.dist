@@ -29,3 +29,13 @@ Leeroy.BringCastOnline = 1
 
 # Stop mod-ollama-chat from voicing cast members.
 Leeroy.ExcludeFromOllamaChat = 1
+
+# Realm actors and cast protection stay off until separately accepted.
+Leeroy.Realm.Enable = 0
+Leeroy.CastGuard = 0
+# Bounded world-thread body steps per tick, clamped to 1-20.
+Leeroy.Realm.MaxActionsPerTick = 5
+Leeroy.Realm.Announce = 1
+# Strict local CSV whitelists; missing/invalid files leave the respective list empty.
+Leeroy.Realm.PlacesFile = "leeroy_places.csv"
+Leeroy.Realm.ItemsFile = "leeroy_items.csv"

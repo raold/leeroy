@@ -9,7 +9,8 @@ from leeroy_mind.nightly.growth import rollback_week
 from leeroy_mind.nightly.llm import check_schema, schema, system_prompt
 from leeroy_mind.nightly.settings import iso_week, night_of_ts
 from leeroy_mind.personas.card import render_prompt_card
-from leeroy_mind.personas.io import load_persona
+from leeroy_mind.personas.io import load_effective
+from leeroy_mind.tuning.lines import tuned_card
 from leeroy_mind.storage.rows import cosine, unpack_vec
 from leeroy_mind.wow import CLASSES, RACES
 
@@ -30,11 +31,11 @@ def _card(store, guid):
     if guid not in _members(store):
         return None
     member = store.cast()[guid]
-    persona = load_persona(store, guid)
+    persona = load_effective(store, guid)  # the member as the owner tuned them
     if persona is None:
         return None
-    card = render_prompt_card(persona, race=RACES.get(member.race, ""),
-                              class_name=CLASSES.get(member.class_, ""))
+    card = tuned_card(render_prompt_card(persona, race=RACES.get(member.race, ""),
+                                         class_name=CLASSES.get(member.class_, "")), persona)
     return (store.get_persona_json(guid), store.persona_versions()[guid], member.name,
             member.race, member.class_, member.level), card
 

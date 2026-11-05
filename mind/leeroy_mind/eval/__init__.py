@@ -3,6 +3,7 @@ import hashlib
 import json
 import math
 import random
+from collections.abc import Callable
 from pathlib import Path
 
 from leeroy_mind.eval.audit import grounding_audit, night_health
@@ -15,6 +16,44 @@ from leeroy_mind.llm.presets import LIVE
 from leeroy_mind.nightly.gpu import norm
 from leeroy_mind.nightly.knowledge import secret_probe_passed
 from leeroy_mind.nightly.settings import iso_week, night_of_ts, week_bounds
+
+
+_sections: dict[str, Callable[[object, str], dict]] = {}
+
+
+def register_section(name: str, fn: Callable[[object, str], dict]) -> None:
+    """Register a deterministic extension; repeat attachment replaces its adapter."""
+    if not isinstance(name, str) or not name or not callable(fn):
+        raise ValueError("invalid evaluation section")
+    _sections[name] = fn
+
+
+def _context_sections(ctx):
+    """Discover optional sections for this evaluated configuration and store.
+
+    Standalone evaluation does not construct MindApp. Conversely, a previous
+    app attachment cannot enable training or the Realm in another data directory.
+    """
+    from leeroy_mind.config import ConfigError
+    from leeroy_mind.realm import canon
+    from leeroy_mind.realm.config import load_realm_config
+    from leeroy_mind.training.config import load_training_config
+    config = Path(ctx.settings.data_dir) / "mind.toml"
+    sections = dict(_sections)
+    training = sections.pop("training", None)
+    if load_training_config(config).enabled:
+        if training is None:
+            from leeroy_mind.training.service import report_section
+            training = report_section
+        sections["training"] = training
+    realm = sections.pop(canon.SECTION, None)
+    try:
+        realm_on = load_realm_config(config).enabled
+    except ConfigError:
+        realm_on = False
+    if realm_on:
+        sections[canon.SECTION] = realm or canon.report_section
+    return sections
 
 
 def _hash(value):
@@ -212,6 +251,10 @@ async def run_weekly(ctx, week, *, use_llm=True):
         "signals": lambda: social_eval.signals(ctx.store, bounds, human=ctx.human),
         "leaks": lambda: social_eval.leaks(ctx.store, bounds, names=(ctx.ident.called,), model=ctx.settings.live_model),
     }
+    for name, measure in _context_sections(ctx).items():
+        if name in deterministic or name in sections:
+            raise ValueError("evaluation section collides with a built-in section")
+        deterministic[name] = lambda measure=measure: measure(ctx, week)
     for name, measure in deterministic.items():
         try:
             sections[name] = _safe_section(measure(), ctx.ident)
