@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -38,8 +39,28 @@ public:
     std::string StartOpen();
     // Takes both actors out of the arena (no outcome is recorded), logs them out and lets the arena close.
     std::string StartClose();
+    // The episode's reset (DojoReset.h): tears down whatever is there (out of the arena, the dead revived, transient
+    // state restored, both logged out, the old instance gone), then reconstructs: fresh logins, the staging baseline
+    // restored and the loadout verified, a new training arena, one actor per side. Done once both stand in the new
+    // instance, before its gates open; the episode checks the rest.
+    std::string StartReset(std::uint64_t token);
+    // A one-shot fault for the next reset's teardown: "leave" gives the actors no time to leave the arena, so they are
+    // logged out where they stand (the reset must still recover); "arena" gives the old instance no time to close, so
+    // the reset fails and the next one must clean up.
+    std::string ArmFault(std::string const& point);
+    // The harness's disconnect: the actor's session ends, as when a client's connection drops.
+    std::string Disconnect(std::size_t slot);
     // Progress and the last result, then one "dojo-evidence {json}" line with the last verification.
     std::string Status() const;
+
+    bool JobRunning() const { return _job != Job::None; }
+    bool LastJobOk() const { return _jobOk; }
+    std::string const& LastResult() const { return _result; }
+    std::uint64_t ResetToken() const { return _resetToken; }
+    std::uint32_t ArenaInstance() const { return _arenaInstance; }
+    Battleground* ArenaBattleground() const { return Arena(); }
+    // What a fixture actor is now (its loadout observation), for the episode's clean-state check.
+    std::optional<Observation> Inspect(std::size_t slot) const;
 
     void Update(std::uint32_t diff);
 
@@ -49,7 +70,7 @@ public:
     void OnFixtureCast(Player const* player, std::uint32_t spellId, bool triggered, bool executor);
 
 private:
-    enum class Job { None, Build, Restore, Open, Close };
+    enum class Job { None, Build, Restore, Open, Close, Reset };
     enum class Step { Idle, Login, Stage, Apply, Verify, Send, Arrive, InspectArena, Leave, Logout, ArenaGone, Done };
 
     struct Actor
@@ -69,7 +90,7 @@ private:
     void Advance(Step next);
     void Finish(bool ok, std::string const& message);
     void Fail(std::string const& message);
-    bool StepTimedOut(std::uint32_t limitMs) const;
+    bool StepTimedOut(std::uint32_t limitMs);
     void LogoutAll();
     void RecordBaseline(std::size_t index, Player* player);
     std::uint32_t RestoreBaseline(std::size_t index, Player* player);
@@ -91,6 +112,11 @@ private:
     std::uint32_t _arenaInstance = 0;
     std::uint32_t _arenaType = 0;
     bool _closing = false;
+    std::uint64_t _resetToken = 0;
+    bool _resetOpened = false;          // the reset's reconstruction opened its arena: a failure closes it
+    std::optional<Step> _fault;         // armed for the next reset's teardown
+    std::string _faultName;
+    bool _faultUsed = false;
     std::uint32_t _stockCasts = 0;
     std::uint32_t _executorCasts = 0;
     std::uint32_t _triggeredCasts = 0;

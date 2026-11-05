@@ -6,6 +6,7 @@
 #include "DojoActionCatalog.h"
 #include "DojoActionQueue.h"
 #include "DojoManifest.h"
+#include "DojoPerception.h"
 
 #include <array>
 #include <cstdint>
@@ -38,7 +39,15 @@ class WorldSession;
 //
 // Every action is traced with its producer: the executor (with the command's action id, input, due and execution
 // times), the acquisition, the harness (acceptance placement), the core's own rules (a cast cancelled by movement, a
-// lost target), or "stock" for anything no one here asked for, which is what a gate failure would look like.
+// lost target), or "stock" for anything no one here asked for, which is what a gate failure would look like. Records
+// stay in a bounded buffer that the tooling drains into its run files (dojo control trace since <seq>); only
+// ownership, generation and neutralize records, dropped or refused commands, changed fingerprints and stock actions
+// also go to the server log (Task 7 ruling 5).
+//
+// Masks come from the actor's delayed observation (DojoObservation.h, Task 7 ruling 2), never from current state; the
+// executor itself validates against actual state, so a choice the mask allowed can still be refused. Each episode is
+// a generation: BeginGeneration drops every pending command and in-flight cast record of the last one, and a command
+// with an action id from before it is refused if it ever reaches execution.
 namespace Dojo
 {
 struct TraceRecord
@@ -56,6 +65,7 @@ struct TraceRecord
     std::uint64_t execMs = 0;
     std::string outcome;    // executed, rejected, superseded, kept, dropped, observed, ...
     std::string detail;
+    std::uint64_t generation = 0;   // the episode generation the record was made in (set by Record)
 };
 
 class Control
@@ -75,6 +85,25 @@ public:
     // Every world tick: ownership checks and acquisition, due commands, producer tracing.
     void Update();
 
+    // The online fixture actor in a slot (any thread state the world thread sees), its ownership epoch and its own
+    // pending command, as the observer reads them.
+    Player* Actor(std::size_t slot) const { return Find(slot); }
+    std::uint64_t Epoch(std::size_t slot) const { return slot < kScenarioActors ? _slots[slot].epoch : 0; }
+    std::optional<PendingView> PendingFor(std::size_t slot) const;
+    ActionCatalog const& Catalog() const { return *_catalog; }
+    // The command delay and the core's spell queue window; the observer adds the perceptual delay.
+    MaskRules ExecutionRules() const;
+
+    // An episode boundary: pending commands and in-flight cast records of the last generation go, traced.
+    void BeginGeneration(std::uint64_t generation, std::string const& why);
+    std::uint64_t Generation() const { return _generation; }
+    std::uint64_t FirstActionId() const { return _firstActionId; }
+    std::uint64_t NextActionId() const { return _nextActionId; }
+
+    // Queues a catalog action for an owned actor; the caller has checked the mask. 0 and error when refused.
+    std::uint64_t Enqueue(std::size_t slot, std::size_t action, std::string const& producer, std::string const& origin,
+        std::string& error);
+
     // Console.
     std::string Own(std::size_t slot);
     std::string Release(std::size_t slot);
@@ -83,11 +112,18 @@ public:
     std::string MaskCheck(std::size_t slot, std::uint32_t repeats);
     std::string Status() const;
     std::string Trace(std::size_t last) const;
+    std::string TraceSince(std::uint64_t seq, std::size_t max) const;
+    std::uint64_t TraceSeq() const { return _seq; }
     std::string CatalogText() const;
     std::string Place(std::size_t slot, float x, float y, float z, float o);
     std::string SetMana(std::size_t slot, std::uint32_t mana);
     std::string Restore(std::size_t slot);
+    std::string Kill(std::size_t slot);
+    std::string ClearCooldowns(std::size_t slot);
     std::string LineOfSight(float x1, float y1, float z1, float x2, float y2, float z2) const;
+    // A plain record from another part of the runtime (the episode, the director's harness), traced like any other.
+    void Note(std::size_t actor, std::string const& producer, std::string const& kind, std::string const& outcome,
+        std::string const& detail);
 
     // The staging baseline: no transient aura, nothing on cooldown, full health and mana, full durability. Used by
     // the director's arena close and restore job and by the harness.
@@ -174,8 +210,7 @@ private:
     Part Face(std::size_t slot, Player* self, Player* enemy, Facing facing);
     Part Move(std::size_t slot, Player* self, Movement movement);
     void Observe(std::size_t slot, Player* player);
-    ActorKnowledge Knowledge(Player* self, Player* enemy) const;
-    MaskRules Rules() const;
+    void Perceive(std::size_t observer, WorldPacket const& packet);
     std::string Fingerprint(Player* self) const;
 
     std::optional<ActionCatalog> _catalog;
@@ -186,6 +221,8 @@ private:
     std::deque<TraceRecord> _trace;
     std::uint64_t _seq = 0;
     std::uint64_t _nextActionId = 1;
+    std::uint64_t _firstActionId = 1;   // the first action id of the current generation
+    std::uint64_t _generation = 0;
     std::uint64_t _nextOrigin = 1;
     bool _shuttingDown = false;
 };

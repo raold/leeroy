@@ -130,7 +130,8 @@ bool Director::AllOnline() const
 void Director::Begin(Job job, Step first)
 {
     _job = job;
-    _jobName = job == Job::Build ? "build" : job == Job::Restore ? "restore" : job == Job::Open ? "open" : "close";
+    _jobName = job == Job::Build ? "build" : job == Job::Restore ? "restore" : job == Job::Open ? "open"
+        : job == Job::Reset ? "reset" : "close";
     _step = first;
     _stepMs = 0;
     _entered = false;
@@ -152,6 +153,12 @@ void Director::Finish(bool ok, std::string const& message)
     _jobOk = ok;
     _result = _jobName + (ok ? " ok: " : " FAILED: ") + message;
     LOG_INFO("module.dojo", "mod-dojo: {}", _result);
+    // A fault is for the reset it was armed for: one whose step this reset never waited on is not kept for the next.
+    if (_job == Job::Reset && _fault)
+    {
+        Control::Instance().Note(0, "director", "fault", "unused", "the " + _faultName + " fault was never reached");
+        _fault.reset();
+    }
     _job = Job::None;
     _step = Step::Idle;
     _stepMs = 0;
@@ -159,22 +166,40 @@ void Director::Finish(bool ok, std::string const& message)
 
 void Director::Fail(std::string const& message)
 {
-    // A failed open never leaves actors behind: close what was opened, then report the original failure.
-    if (_job == Job::Open && _arenaInstance)
+    std::string const why = message + (_faultUsed ? " (injected fault: " + _faultName + ")" : std::string());
+    _faultUsed = false;
+    // A failed open (or a reset that had opened its arena) never leaves actors behind: close what was opened, then
+    // report the original failure.
+    if ((_job == Job::Open || (_job == Job::Reset && _resetOpened)) && _arenaInstance)
     {
-        _failure = message;
+        if (_job == Job::Reset && _fault)
+        {
+            Control::Instance().Note(0, "director", "fault", "unused", "the " + _faultName + " fault was never reached");
+            _fault.reset();
+        }
+        _failure = why;
+        _resetOpened = false;
         _job = Job::Close;
         _closing = true;
         Advance(Step::Leave);
-        _result = "open FAILED: " + message + " (closing the arena)";
+        _result = _jobName + " FAILED: " + why + " (closing the arena)";
         return;
     }
     LogoutAll();
-    Finish(false, message);
+    Finish(false, why);
 }
 
-bool Director::StepTimedOut(std::uint32_t limitMs) const
+bool Director::StepTimedOut(std::uint32_t limitMs)
 {
+    // An armed fault gives its step of the next reset no time at all; the step's own deadline handling does the rest.
+    if (_job == Job::Reset && _fault && *_fault == _step)
+    {
+        limitMs = 0;
+        _fault.reset();
+        _faultUsed = true;
+        Control::Instance().Note(0, "director", "fault", "injected", "the " + _faultName + " fault: the "
+            + StepName(int(_step)) + " step of this reset has no time");
+    }
     return _stepMs > limitMs;
 }
 
@@ -310,6 +335,61 @@ std::string Director::StartOpen()
     _evidence.clear();
     Begin(Job::Open, Step::Login);
     return "dojo arena open: started (dojo status reports progress)";
+}
+
+std::string Director::StartReset(std::uint64_t token)
+{
+    if (!State().scenarioReady)
+        return "dojo episode reset: refused, the scenario is not ready (see dojo status)";
+    if (_job != Job::None)
+        return "dojo episode reset: refused, the " + _jobName + " job is running";
+    std::string error;
+    if (!Resolve(error))
+        return "dojo episode reset: " + error;
+    _stockCasts = 0;
+    _executorCasts = 0;
+    _triggeredCasts = 0;
+    _evidence.clear();
+    _resetToken = token;
+    _resetOpened = false;
+    Begin(Job::Reset, Step::Leave);
+    _closing = _arenaInstance != 0;
+    return "";
+}
+
+std::string Director::ArmFault(std::string const& point)
+{
+    if (point == "leave")
+        _fault = Step::Leave;
+    else if (point == "arena")
+        _fault = Step::ArenaGone;
+    else if (point == "none")
+        _fault.reset();
+    else
+        return "dojo episode fault: unknown fault point " + point + " (leave, arena or none)";
+    _faultName = point;
+    return "dojo episode fault: " + (point == "none" ? std::string("disarmed") : "armed " + point + " for the next reset");
+}
+
+std::string Director::Disconnect(std::size_t slot)
+{
+    if (slot >= kScenarioActors || !Find(slot))
+        return "dojo harness disconnect: actor " + std::to_string(slot) + " is not online";
+    if (_job != Job::None)
+        return "dojo harness disconnect: refused, the " + _jobName + " job is running";
+    Player* player = Find(slot);
+    std::string const name = player->GetName();
+    Control::Instance().Note(slot, "harness", "disconnect", "executed", name + "'s session ends");
+    sRandomPlayerbotMgr.LogoutPlayerBot(ObjectGuid(_actors[slot].guid));
+    return "dojo harness disconnect: actor " + std::to_string(slot) + " (" + name + ") logged out";
+}
+
+std::optional<Observation> Director::Inspect(std::size_t slot) const
+{
+    Player* player = slot < kScenarioActors ? Find(slot) : nullptr;
+    if (!player)
+        return std::nullopt;
+    return Observe(player);
 }
 
 std::string Director::StartClose()
@@ -669,7 +749,7 @@ void Director::Update(std::uint32_t diff)
             for (std::size_t i = 0; settled && i < kScenarioActors; ++i)
                 settled = !Find(i)->IsBeingTeleported() && Control::Instance().Owns(i);
             if (settled)
-                Advance(_job == Job::Build || _job == Job::Restore ? Step::Stage : Step::Verify);
+                Advance(_job == Job::Build || _job == Job::Restore || _job == Job::Reset ? Step::Stage : Step::Verify);
             else if (StepTimedOut(kLoginMs))
                 Fail("the fixtures did not log in within " + std::to_string(kLoginMs / 1000) + " s");
             break;
@@ -705,6 +785,30 @@ void Director::Update(std::uint32_t diff)
         }
         case Step::Apply:
         {
+            if (_job == Job::Reset)
+            {
+                // Fresh logins, but what the database kept (a disconnect mid-fight, a logout inside the arena, a
+                // ghost) is put back to the staging baseline before the loadout is checked.
+                for (std::size_t i = 0; i < kScenarioActors; ++i)
+                {
+                    Player* player = Find(i);
+                    if (!player)
+                    {
+                        Fail(m.actors[i].name + " went offline");
+                        return;
+                    }
+                    if (!player->IsAlive())
+                    {
+                        player->ResurrectPlayer(1.0f);
+                        player->SpawnCorpseBones();
+                        _log.push_back(m.actors[i].name + " was revived at the staging point");
+                    }
+                    Control::RestoreBaseline(player);
+                    player->SaveToDB(false, false);
+                }
+                Advance(Step::Verify);
+                break;
+            }
             for (std::size_t i = 0; i < kScenarioActors; ++i)
             {
                 std::string error;
@@ -780,6 +884,7 @@ void Director::Update(std::uint32_t diff)
                 Fail(error);
                 return;
             }
+            _resetOpened = _job == Job::Reset;
             Advance(Step::Arrive);
             break;
         }
@@ -827,7 +932,8 @@ void Director::Update(std::uint32_t diff)
                 else if (Battleground* bg = player->GetBattleground(true))
                 {
                     left = false;
-                    if (first || _stepMs % 5000 < diff)
+                    bool const stuck = _job == Job::Reset && _fault && *_fault == Step::Leave;
+                    if (!stuck && (first || _stepMs % 5000 < diff))
                         player->LeaveBattleground(bg);
                 }
             }
@@ -863,6 +969,20 @@ void Director::Update(std::uint32_t diff)
         }
         case Step::ArenaGone:
         {
+            if (_job == Job::Reset)
+            {
+                if (!Arena())
+                {
+                    if (_arenaInstance)
+                        _log.push_back("arena instance " + std::to_string(_arenaInstance) + " closed empty, no outcome recorded");
+                    _arenaInstance = 0;
+                    _closing = false;
+                    Advance(Step::Login);
+                }
+                else if (StepTimedOut(kLogoutMs))
+                    Fail("arena instance " + std::to_string(_arenaInstance) + " still exists");
+                break;
+            }
             if (!Arena() || StepTimedOut(kLogoutMs))
             {
                 bool const gone = !Arena();
