@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace Leeroy::Guild
 {
@@ -27,6 +28,10 @@ struct Decision { Verdict verdict; std::string reason; };
 Decision Decide(OfflineRaidState const& state, OfflineRaidLimits const& limits);
 bool IsWipe(std::uint8_t oldState, std::uint8_t newState);
 std::uint32_t AdvanceElapsed(std::uint32_t elapsed, std::uint32_t diff);
+
+// A new copy keeps each boss at TO_BE_DECIDED (5) until that boss's own script loads with its grid, so
+// unloaded bosses are fresh. Only a recorded kill (DONE, 3) or a completed-encounter credit marks a used copy.
+bool FreshEncounters(std::vector<std::uint8_t> const& bossStates, std::uint32_t completedEncounterMask);
 
 // Configuration may release the cast pins while a job is running. These checks also apply during setup/restarts,
 // before the running-only policy can meaningfully count members or inspect encounter state.

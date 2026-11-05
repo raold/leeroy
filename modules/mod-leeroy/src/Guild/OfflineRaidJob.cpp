@@ -694,11 +694,11 @@ bool ReadBosses(Job& job, Player* leader, bool baseline)
         job.previousBossStates.clear();
         job.bossWipes.assign(count, 0);
         for (uint32 index = 0; index < count; ++index)
+            job.previousBossStates.push_back(static_cast<uint8>(instance->GetBossState(index)));
+        if (!FreshEncounters(job.previousBossStates, instance->GetCompletedEncounterMask()))
         {
-            uint8 const state = static_cast<uint8>(instance->GetBossState(index));
-            if (state == DONE || state == TO_BE_DECIDED)
-                return false;
-            job.previousBossStates.push_back(state);
+            job.previousBossStates.clear();
+            return false;
         }
     }
     else if (count != job.previousBossStates.size())

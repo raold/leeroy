@@ -1,6 +1,7 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "LeeroyOfflineRaidPolicy.h"
 
+#include <algorithm>
 #include <limits>
 
 namespace Leeroy::Guild
@@ -30,6 +31,12 @@ Decision Decide(OfflineRaidState const& state, OfflineRaidLimits const& limits)
 bool IsWipe(std::uint8_t oldState, std::uint8_t newState)
 {
     return oldState == 1 && (newState == 0 || newState == 2);
+}
+
+bool FreshEncounters(std::vector<std::uint8_t> const& bossStates, std::uint32_t completedEncounterMask)
+{
+    return !bossStates.empty() && completedEncounterMask == 0
+        && std::none_of(bossStates.begin(), bossStates.end(), [](std::uint8_t state) { return state == 3; });
 }
 
 std::uint32_t AdvanceElapsed(std::uint32_t elapsed, std::uint32_t diff)
