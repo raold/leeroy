@@ -99,7 +99,8 @@ std::string Eligible(std::uint32_t guid, std::string_view operation, bool office
 }
 std::string Admit(Queued const& entry, std::uint32_t guid)
 {
-    return Eligible(guid, entry.id, entry.kind == "bank_stock");
+    auto const holder = RealmModule::Instance().Holder(guid);
+    return Eligible(guid, BankAdmissionOperation(holder, entry.id), entry.kind == "bank_stock");
 }
 std::uint32_t BankWhitelistLimit(std::uint32_t entry)
 {

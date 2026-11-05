@@ -1,6 +1,7 @@
-import math
 import struct
 from dataclasses import dataclass
+
+from leeroy_mind.retrieval import cosine  # compatibility re-export
 
 KINDS = ("observation", "conversation", "event", "reflection", "plan", "story")
 SOURCES = ("game", "chat", "extract", "reflection", "offscreen", "hearsay", "owner")
@@ -108,12 +109,3 @@ def pack_vec(v) -> bytes:
 
 def unpack_vec(b: bytes) -> list[float]:
     return list(struct.unpack(f"<{len(b) // 4}f", b))
-
-
-def cosine(a, b) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(y * y for y in b))
-    if na == 0 or nb == 0:
-        return 0.0
-    return dot / (na * nb)

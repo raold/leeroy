@@ -323,3 +323,12 @@ LEEROY_TEST(RealmBank_MaximumNativeSnapshotUsesBoundedDistinctCoordinates)
     CHECK(ValidBankSnapshot(snapshot));
     snapshot.slots.back().item.guid = snapshot.slots.front().item.guid; CHECK(!ValidBankSnapshot(snapshot));
 }
+LEEROY_TEST(RealmBank_AdmissionChecksAnUnreservedBodyUnowned)
+{
+    // The queue admits before it reserves: a bank command was refused busy:operation_identity
+    // at acceptance when its own id was checked against a reservation that did not exist yet.
+    CHECK(BankAdmissionOperation("", "op-1").empty());
+    CHECK(BankAdmissionOperation("op-1", "op-1") == "op-1");
+    CHECK(BankAdmissionOperation("op-2", "op-1").empty());
+    CHECK(BankAdmissionOperation("", "").empty());
+}

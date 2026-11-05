@@ -6,7 +6,7 @@ to deliver jobs/logout while the independent ticker awaits bridge commands.
 
 import asyncio
 from collections import deque
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 import logging
 import math
@@ -28,12 +28,19 @@ from .store import attendance_counts, bench_streaks, last_led
 
 
 log = logging.getLogger(__name__)
-JOB_TIMEOUT_S = 60.0
+# A summon someone never finishes completes 60 s after the server handled it (mod-leeroy's RaidAssembly.cpp), in the
+# bridge's event lane and through the dispatcher; the wait starts at its ack, which takes the faster control lane.
+JOB_TIMEOUT_S = 65.0
 STOP_TIMEOUT_S = 5.0
 EVENT_LIMIT = 256
 QUIET_NIGHT_KEY = "guild:raid-night:quiet-night"
 CONSOLE_ACTIONS = ("call", "form", "summon", "start", "stop", "end")
 CONSOLE_LOCK_S = 10.0  # how long a console dungeon-clear switch waits for a busy tick
+# Set while a group the mind formed (FormRaid) may still stand; only such a group is ever disbanded.
+FORMED_GROUP_KEY = "guild:raid-night:formed-group"
+# A raid map's instance difficulty: (size, heroic).
+_DIFFICULTIES = {0: (10, False), 1: (25, False), 2: (10, True), 3: (25, True)}
+ONE_RECORD_S = 7 * 86400  # one raid record per instance within a lockout week
 
 
 class State(StrEnum):
@@ -128,6 +135,9 @@ class RaidNight:
         self._events = deque()
         self._closing = deque()
         self._votes = []
+        self._adoption = None
+        self._adopted = False
+        self._added_tanks = set()  # members of his group his add command filled a tank slot with
 
     @property
     def active(self):
@@ -217,7 +227,8 @@ class RaidNight:
                 invalidate(self.run)
         self._epoch += 1
         self.state = State.ENDED
-        self._pick = None
+        self._pick = self._adoption = None
+        self._adopted = False
         self._call_due = self._call_deadline = None
         self._ready_due = self._dc_due = None
         self._countdown_sent = False
@@ -304,6 +315,47 @@ class RaidNight:
             if not inside and self.state is State.ASSEMBLING:
                 self._inside = False
                 self._ready_due = self._dc_due = None
+
+    async def on_group(self, ev):
+        """His own group's raid ends with the group: he left it, or none of its members is in it
+        any more. A called raid's group is the mind's; that raid keeps its own ends."""
+        if (self._adopted and self.run is not None and self.state in {State.ASSEMBLING, State.RUNNING}
+                and (self.ports.human_guid not in ev.members or not set(self.run.plan.members) & set(ev.members))):
+            self._end("disbanded")
+
+    async def on_guild_group(self, ev):
+        """His own `.playerbots bot addN` group: mod-leeroy filled it from free guild members.
+
+        The group is his, so no later login disbands it. Once he leads it into a raid instance the
+        guild knows, it raids as a called raid would (`_adopt`), but never beside another raid,
+        never twice for one instance and never for a 5-man. A member the command added as a tank is a
+        tank of that raid: the server judges bear form, Thick Hide and Frost Presence, which the mind
+        cannot see. Raid nights the mind forms keep its own rule.
+        """
+        if ev.leader_guid != self.ports.human_guid or not self._present or not self.ports.human_online():
+            return
+        self._added_tanks = ({g for g in self._added_tanks if g in ev.members}
+                             | {a.guid for a in ev.added if a.role == "tank" and a.guid in ev.members})
+        if not self.active and self.run is None:
+            with self.ports.conn:
+                self.ports.conn.execute("DELETE FROM meta WHERE key=?", (FORMED_GROUP_KEY,))
+        raid = next((r for r in CATALOG.values() if r.map_id == ev.map), None)
+        mode = _DIFFICULTIES.get(ev.difficulty)
+        if (raid is None or mode is None or self.active or self.run is not None or self._adoption is not None
+                or type(ev.instance_id) is not int or not 0 < ev.instance_id <= 0xFFFFFFFF
+                or validate(raid, *mode, raid.min_tier) is not None):
+            return
+        members = tuple(dict.fromkeys(g for g in ev.members
+                                      if type(g) is int and g > 0 and g != self.ports.human_guid))
+        self._epoch += 1
+        self._pick_return_state = self.state
+        self._adoption = (raid.key, *mode, ev.instance_id, members, frozenset(self._added_tanks))
+        self.state = State.FORMING
+
+    def _instance_recorded(self, raid_key, instance_id):
+        rows = self.ports.conn.execute("SELECT raid_id FROM guild_raid WHERE raid_key=? AND started>=?",
+                                       (raid_key, self.ports.clock.now() - ONE_RECORD_S)).fetchall()
+        return any(_get(self.ports.conn, f"guild:raid:{raid_id}:instance") == instance_id for (raid_id,) in rows)
 
     def _enqueue(self, name, ev):
         item = (self.run, name, ev)
@@ -495,6 +547,8 @@ class RaidNight:
                 # An accepted command can form a group even if its later job is malformed.
                 formed = True
                 self._forming_group = True
+                with self.ports.conn:
+                    _put(self.ports.conn, FORMED_GROUP_KEY, True)
                 result = await self._job(command, "form_raid", epoch)
                 accepted = set(result.guids)
                 if not required <= accepted:
@@ -533,20 +587,7 @@ class RaidNight:
                           short=", ".join(f"{n} {r}" for r, n in shortfall.items() if n) or "none")
             plan = RaidPlan(raid.key, pick.size, pick.heroic, False, leaders.lead_guid, leaders.tank_guid,
                             leaders.loot_guid, members, bench, True)
-            session = await self._open_session(plan, epoch)
-            if epoch != self._epoch or not self._present or not self.ports.human_online():
-                self._closing.append((session, None, "logout" if not self._present else "cancelled", deque(), False))
-                raise _Stale
-            self.session = session
-            self.run = RaidRun(session.plan, session, True, leaders.lead_guid == self.ports.human_guid)
-            now = self.ports.clock.now()
-            self._on_time, self._late = on_time, [(g, now + delay) for g, delay in late]
-            self._arrived, self._inside, self._started = set(), False, False
-            self._dc_attempted = False
-            self._ready_due = self._dc_due = self._outside_since = None
-            self._assemble_due = now + self.cfg.assemble_timeout_min * 60
-            self.state = State.ASSEMBLING
-            self._forming_group = False
+            await self._begin(plan, epoch, on_time, late)
         except (NoTankError, ValueError, _Failed) as error:
             self._check(epoch)
             reason = str(error) if isinstance(error, _Failed) else "the available roster cannot fill this raid"
@@ -554,6 +595,70 @@ class RaidNight:
             self._end("failed")
             if formed:
                 self._disband = (self.ports.clock.now(), self._epoch)
+
+    async def _begin(self, plan, epoch, on_time, late, *, instance_id=None):
+        """Every raid night's start: the record with its attendance and DKP, then assembly.
+        instance_id: the instance the raid is already in (his own group's raid), whose on_time
+        members the server has just proved inside it."""
+        session = await self._open_session(plan, epoch)
+        if epoch != self._epoch or not self._present or not self.ports.human_online():
+            self._closing.append((session, None, "logout" if not self._present else "cancelled", deque(), False))
+            raise _Stale
+        if instance_id is not None and not session.bind_instance(instance_id):
+            self._closing.append((session, None, "failed", deque(), False))
+            raise _Failed("the raid's instance could not be bound")
+        self.session = session
+        self.run = RaidRun(session.plan, session, True, plan.lead_guid == self.ports.human_guid)
+        now = self.ports.clock.now()
+        inside = instance_id is not None
+        self._on_time, self._late = list(on_time), [(g, now + delay) for g, delay in late]
+        self._arrived, self._inside, self._started = set(on_time) if inside else set(), inside, False
+        self._dc_attempted = False
+        self._ready_due = self._dc_due = self._outside_since = None
+        self._assemble_due = now + self.cfg.assemble_timeout_min * 60
+        self.state = State.ASSEMBLING
+        self._forming_group = False
+
+    async def _adopt(self, epoch):
+        """His own group's raid (on_guild_group) through a called raid's start: arrival proved inside
+        his copy as the called raid proves it, then the loot master, the record with its attendance
+        for those who arrived, and assembly, with him leading. Nothing is formed or disbanded: the
+        group stays as he built it."""
+        raid_key, size, heroic, instance_id, members, tanks = self._adoption
+        self._adoption = None
+        try:
+            if self._instance_recorded(raid_key, instance_id):
+                raise _Failed("this instance already has a raid record")
+            wanted = set(members)
+            candidates = [replace(c, role="tank", dc_tank=True) if c.guid in tanks else c
+                          for c in self._candidates() if c.guid in wanted and c.available]
+            if not candidates or len(candidates) + 1 > size:
+                raise _Failed("his group does not fit this raid")
+            self._leaders(candidates, Lead(True))  # a tank among them before anyone is moved
+            # Only members the server finds in his copy are the raid; the rest earn nothing tonight.
+            result = await self._summon_into(CATALOG[raid_key], [c.guid for c in candidates], epoch)
+            if result.instance_id != instance_id:
+                raise _Failed("the summon did not reach his instance")
+            arrived = set(result.guids)
+            candidates = [c for c in candidates if c.guid in arrived]
+            if not candidates:
+                raise _Failed("nobody arrived in his instance")
+            leaders = self._leaders(candidates, Lead(True))
+            plan = RaidPlan(raid_key, size, heroic, False, leaders.lead_guid, leaders.tank_guid,
+                            leaders.loot_guid, [c.guid for c in candidates], [], True)
+            await self._send(SetLootMaster(uuid4().hex, self.ports.human_guid, leaders.loot_guid), epoch)
+            await self._begin(plan, epoch, plan.members, [], instance_id=instance_id)
+            self._call_due = self._call_deadline = None
+            self._adopted = True
+        except (_Stale, NoTankError, ValueError, _Failed) as error:
+            # Back to where his group found the night; a newer login or logout owns it instead.
+            if epoch == self._epoch and self.state is State.FORMING:
+                self.state = self._pick_return_state
+            if isinstance(error, _Stale):
+                raise
+            self._check(epoch)
+            log.info("guild raid not recorded for his own group: %s",
+                     str(error) if isinstance(error, _Failed) else type(error).__name__)
 
     async def _open_session(self, plan, epoch):
         before = {r[0] for r in self.ports.conn.execute("SELECT raid_id FROM guild_raid WHERE ended IS NULL")}
@@ -574,12 +679,18 @@ class RaidNight:
             self._check(epoch)
             raise _Failed("raid attendance could not be opened") from None
 
+    async def _summon_into(self, raid, members, epoch):
+        """A raid's proof of arrival: the server summons the members into his copy of the raid and
+        says who is there, and in which instance."""
+        result = await self._job(Summon(uuid4().hex, raid.map_id, tuple(members), where="inside"), "summon", epoch)
+        if type(result.instance_id) is not int or not 0 < result.instance_id <= 0xFFFFFFFF:
+            raise _Failed("inside summon did not verify this instance")
+        return result
+
     async def _summon_inside(self, members, epoch):
         run = self.run
-        raid = CATALOG[run.plan.raid_key]
-        result = await self._job(Summon(uuid4().hex, raid.map_id, tuple(members), where="inside"), "summon", epoch)
-        if (set(result.guids) != set(members) or type(result.instance_id) is not int
-                or not 0 < result.instance_id <= 0xFFFFFFFF or not run.session.bind_instance(result.instance_id)):
+        result = await self._summon_into(CATALOG[run.plan.raid_key], members, epoch)
+        if set(result.guids) != set(members) or not run.session.bind_instance(result.instance_id):
             raise _Failed("inside summon did not verify this instance")
         self._arrived.update(result.guids)
 
@@ -805,10 +916,19 @@ class RaidNight:
         self._disband = None
         if pending[1] != self._epoch:
             return
+        # Only a group the mind formed is cleared: a group he built himself stays his.
+        if _get(self.ports.conn, FORMED_GROUP_KEY) is None:
+            return
+        online = self.ports.human_online()
         try:
-            await self.ports.send(RaidControl(uuid4().hex, self.ports.human_guid, "disband"))
+            ack = await self.ports.send(RaidControl(uuid4().hex, self.ports.human_guid, "disband"))
         except Exception:
             log.warning("guild raid disband failed")
+            return
+        # While he is offline the server cannot see his group, so its "no_group" proves nothing.
+        if ack is not None and (ack.ok is True or online and ack.error == "no_group"):
+            with self.ports.conn:
+                self.ports.conn.execute("DELETE FROM meta WHERE key=?", (FORMED_GROUP_KEY,))
 
     async def tick(self):
         if self._lock.locked():
@@ -836,6 +956,8 @@ class RaidNight:
                 elif self.state is State.CALLED and now >= self._call_deadline:
                     self._propose("call_lapsed")
                     self._end("lapsed")
+                elif self.state is State.FORMING and self._adoption is not None:
+                    await self._adopt(epoch)
                 elif self.state is State.FORMING:
                     await self._form(epoch)
                 elif self.state in {State.ASSEMBLING, State.RUNNING}:

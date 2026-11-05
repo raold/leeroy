@@ -17,10 +17,14 @@ raid lead made boss mechanics up. His question is read in talk/questions.py.
   lead's call after a wipe or a kill;
 - LibraryFacts: one lookup per human line, shared by every reply to it. The chunks his line
   names by title lead (Library.titled), then the search's hits. The search gets FACTS_CAP_S -
-  TEXT_RESERVE_S of wall time to come back (its embed call is its only await), then the text
-  search runs while the FACTS_CAP_S last, else there are no facts; the ranking that follows
-  the embed, the title lookup and the formatting are not interrupted, so a lookup can run past
-  the cap by their time.
+  TEXT_RESERVE_S of wall time to have its query vector (the embed call is all the cap ever
+  bounded: it was the inline search's only await), then text search starts if FACTS_CAP_S
+  remains, else there are no facts. Preparation, the ranking that follows the vector, the
+  text fallback, titles and formatting are not cut off, so a lookup can run past the cap by
+  their time. Production retrieval/formatting uses the app's owned reader thread;
+  compatibility fakes stay on the caller's loop. Boss mechanics retains its synchronous
+  session cache. The fact providers (LibraryFacts.add_provider) add their lines on the loop
+  after the library's, also when the reader is busy or closed.
 
 Facts are not memories: they come only from library.db, which is public reference text, and
 none of it is logged."""
@@ -31,9 +35,11 @@ import logging
 import re
 import time
 from collections import OrderedDict
+from dataclasses import dataclass
 from typing import Callable, Sequence
 
 from leeroy_mind.library.chunks import Chunk, split_sentences
+from leeroy_mind.library.search_worker import SearchBusy, SearchClosed
 from leeroy_mind.llm.scheduler import Priority
 from leeroy_mind.talk.names import (NEUTRAL_FACTIONS, name_level, name_pattern, sides_named,
                                     words_re)
@@ -756,9 +762,63 @@ def boss_mechanics(chunks: Sequence[Chunk], *, n: int = MECHANICS_LINES) -> list
 
 # -- the lookup --------------------------------------------------------------------------------
 
+@dataclass(frozen=True)
+class _LoreFactResult:
+    lines: tuple[str, ...]
+    hits: int
+    named: int
+    found: int
+
+
+def _lore_fact_lines(q: GameQuestion, hits: Sequence[Chunk], named: Sequence[Chunk],
+                     side: str | None) -> _LoreFactResult:
+    """Existing selection/formatting policy, with the loop-owned faction already resolved."""
+    named = [c for c in named if _proper(c.title)]
+    found = len(hits) + len(named)
+    hits, named = for_side(hits, side), for_side(named, side)
+    names = list(dict.fromkeys([*q.names, *(_title_name(c.title) for c in named)]))
+    words = salient(q.query)
+    strict, trainer = q.topic in STRICT_TOPICS, q.topic == "trainer"
+    lines = fact_lines(by_place(lead_with(named, hits, q.query, names), names),
+                       q.query, names=names,
+                       keep=lambda c, line: relevant(c, line, names, words,
+                                                     strict=strict, trainer=trainer))
+    return _LoreFactResult(tuple(lines), len(hits), len(named), found)
+
+
+class _InlineSearch:
+    """Compatibility for existing libraries/fakes, including loop-owned asyncio.Events."""
+    def __init__(self, library):
+        self.library = library
+
+    async def search(self, *args, timeout=None, **kwargs):
+        return await asyncio.wait_for(self.library.search(*args, **kwargs), timeout)
+
+    async def search_text(self, *args, **kwargs):
+        return self.library.search_text(*args, **kwargs)
+
+    async def reference_matches(self, *args, **kwargs):
+        matches = getattr(self.library, "reference_matches", None)
+        return matches(*args, **kwargs) if matches is not None else []
+
+    async def search_reference_text(self, *args, language=None, **kwargs):
+        fast = getattr(self.library, "search_reference_text", None)
+        if fast is not None:
+            return fast(*args, language=language, **kwargs)
+        return self.library.search_text(*args, **kwargs)
+
+    async def titled(self, *args, **kwargs):
+        return self.library.titled(*args, **kwargs)
+
+    async def _format(self, function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+
 class LibraryFacts:
     """The library for live talk: one lookup per human line, shared by every reply to it (a
     task per line; KEEP_LINES are kept), and the mechanics per boss, kept for the session.
+    The app owns this service and its dependencies; session reset is reusable, while aclose
+    permanently stops admission and joins its tasks before the app closes those dependencies.
 
     A line's lookup (the module docstring has its time cap): Library.search(his written-out
     query, k=SEARCH_K, the question's kinds) at REPLY_HUMAN through `llm` (the app's
@@ -769,11 +829,15 @@ class LibraryFacts:
 
     def __init__(self, library, llm, *, cap_s: float = FACTS_CAP_S,
                  timer: Callable[[], float] = time.monotonic,
-                 faction: Callable[[], str | None] = lambda: None):
+                 faction: Callable[[], str | None] = lambda: None, search=None):
         self.library, self.llm, self.cap_s, self.timer = library, llm, cap_s, timer
+        self.search = search if search is not None else _InlineSearch(library)
         self.faction = faction
         self._lines: OrderedDict[int, asyncio.Task] = OrderedDict()
+        self._tasks: set[asyncio.Task] = set()  # includes cancelled/evicted work until done
         self._mechanics: dict[tuple[str, str | None], list[str]] = {}
+        self._closed = False
+        self._close_task: asyncio.Task | None = None
         self._providers: list[Callable[[str], list[str]]] = []
 
     def add_provider(self, provider: Callable[[str], list[str]]) -> None:
@@ -789,10 +853,13 @@ class LibraryFacts:
 
     def start(self, line_id: int, q: GameQuestion) -> None:
         """Start the lookup for his line `line_id` (once: a second call does nothing)."""
-        if line_id in self._lines:
+        if self._closed or line_id in self._lines:
             return
-        self._lines[line_id] = asyncio.get_running_loop().create_task(
+        task = asyncio.get_running_loop().create_task(
             self._lookup(line_id, q), name=f"mind-facts-{line_id}")
+        self._lines[line_id] = task
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
         while len(self._lines) > KEEP_LINES:
             self._lines.popitem(last=False)[1].cancel()
 
@@ -812,41 +879,54 @@ class LibraryFacts:
             raise
 
     async def _lookup(self, line_id: int, q: GameQuestion) -> list[str]:
+        try:
+            return await self._lookup_ready(line_id, q)
+        except (SearchBusy, SearchClosed) as exc:
+            # The providers never needed the reader: a lore line still gets theirs.
+            lines = [] if q.topic in REFERENCE_KINDS else self._provided(line_id, q, [])
+            log.debug("facts_lookup: line=%d outcome=%s hits=0 facts=%d", line_id,
+                      "busy" if isinstance(exc, SearchBusy) else "closed", len(lines))
+            return lines
+
+    async def _lookup_ready(self, line_id: int, q: GameQuestion) -> list[str]:
         t0 = self.timer()
         kinds = list(q.kinds)
         if q.topic in REFERENCE_KINDS:
             try:
-                matches = getattr(self.library, "reference_matches", None)
-                hits = (matches(q.query, kinds=kinds, k=SEARCH_K)
-                        if matches is not None and q.topic in {"command", "teleport"} else [])
+                hits = (await self.search.reference_matches(q.query, kinds=kinds, k=SEARCH_K)
+                        if q.topic in {"command", "teleport"} else [])
                 if not hits:
-                    fast_search = getattr(self.library, "search_reference_text", None)
-                    hits = (fast_search(q.query, kinds=kinds, k=REFERENCE_SEARCH_K,
-                                        language=preferred_reference_language(q.query))
-                            if fast_search is not None else
-                            self.library.search_text(q.query, kinds=kinds, k=REFERENCE_SEARCH_K))
-                lines = _reference_fact_lines(hits, budget=FACTS_TOKENS, query=q.query)
+                    hits = await self.search.search_reference_text(
+                        q.query, kinds=kinds, k=REFERENCE_SEARCH_K,
+                        language=preferred_reference_language(q.query))
+                lines = await self.search._format(
+                    _reference_fact_lines, hits, budget=FACTS_TOKENS, query=q.query)
                 log.debug("facts_reference: line=%d topic=%s hits=%d facts=%d ms=%d", line_id,
                           q.topic, len(hits), len(lines), round((self.timer() - t0) * 1000))
                 return lines
+            except (SearchBusy, SearchClosed):
+                raise
             except Exception:
                 log.exception("facts_reference_failed: line=%d", line_id)
                 return []
         hits, outcome = [], "search"
         try:
-            hits = await asyncio.wait_for(
-                self.library.search(q.query, k=SEARCH_K, kinds=kinds, llm=self.llm,
-                                    priority=Priority.REPLY_HUMAN),
-                max(0.0, self.cap_s - TEXT_RESERVE_S))
+            hits = await self.search.search(q.query, k=SEARCH_K, kinds=kinds, llm=self.llm,
+                                            priority=Priority.REPLY_HUMAN,
+                                            timeout=max(0.0, self.cap_s - TEXT_RESERVE_S))
         except TimeoutError:
             outcome = "timeout"
+        except (SearchBusy, SearchClosed):
+            raise
         except Exception as e:  # a broken or locked library.db: the reply goes on without it
             outcome = f"error:{type(e).__name__}"
         if outcome != "search":
             if self.timer() - t0 < self.cap_s:
                 try:
-                    hits = self.library.search_text(q.query, k=SEARCH_K, kinds=kinds)
+                    hits = await self.search.search_text(q.query, k=SEARCH_K, kinds=kinds)
                     outcome += "+text"
+                except (SearchBusy, SearchClosed):
+                    raise
                 except Exception as e:
                     outcome += f"+text_error:{type(e).__name__}"
             else:
@@ -855,25 +935,33 @@ class LibraryFacts:
         lines: list[str] = []
         if not outcome.endswith("+out_of_time"):
             try:
-                named = [c for c in self.library.titled(title_names(q), kinds)
-                         if _proper(c.title)]
+                named = await self.search.titled(title_names(q), kinds)
+            except (SearchBusy, SearchClosed):
+                raise
             except Exception as e:
                 outcome += f"+titled_error:{type(e).__name__}"
         found = len(hits) + len(named)
+        hit_count, named_count = len(hits), len(named)
         try:
             said = sides_named(q.query)
             side = (next(iter(said)) if len(said) == 1 else None) if said else self.faction()
-            hits, named = for_side(hits, side), for_side(named, side)
-            names = list(dict.fromkeys([*q.names, *(_title_name(c.title) for c in named)]))
-            words = salient(q.query)
-            strict, trainer = q.topic in STRICT_TOPICS, q.topic == "trainer"
-            lines = fact_lines(by_place(lead_with(named, hits, q.query, names), names),
-                               q.query, names=names,
-                               keep=lambda c, line: relevant(c, line, names, words,
-                                                             strict=strict, trainer=trainer))
+            result = await self.search._format(
+                _lore_fact_lines, q, hits, named, side)
+            lines = list(result.lines)
+            hit_count, named_count, found = result.hits, result.named, result.found
+        except (SearchBusy, SearchClosed):
+            raise
         except Exception:  # a chunk the formatter chokes on: no facts, never a lost reply
             log.exception("facts_format_failed: line=%d", line_id)
             lines = []
+        lines = self._provided(line_id, q, lines)
+        log.debug("facts_lookup: line=%d topic=%s outcome=%s hits=%d facts=%d named=%d "
+                  "other_side=%d ms=%d", line_id, q.topic, outcome, hit_count, len(lines),
+                  named_count, found - hit_count - named_count, round((self.timer() - t0) * 1000))
+        return lines
+
+    def _provided(self, line_id: int, q: GameQuestion, lines: list[str]) -> list[str]:
+        """`lines` with the providers' lines added, on the loop, within the shared budget."""
         for provider in tuple(self._providers):
             try:
                 supplied = provider(q.query)
@@ -893,9 +981,6 @@ class LibraryFacts:
             except Exception:
                 # Provider messages can contain human questions or private rows.
                 log.warning("facts_provider_failed: line=%d", line_id)
-        log.debug("facts_lookup: line=%d topic=%s outcome=%s hits=%d facts=%d named=%d "
-                  "other_side=%d ms=%d", line_id, q.topic, outcome, len(hits), len(lines),
-                  len(named), found - len(hits) - len(named), round((self.timer() - t0) * 1000))
         return lines
 
     def mechanics(self, boss: str, instance: str | None = None) -> list[str]:
@@ -903,6 +988,8 @@ class LibraryFacts:
         session; for an encounter of several bosses with no page of its own
         (wow.ENCOUNTER_MEMBERS), a line from each member's tactics page. Never from a lore
         page or a search: [] when there is no tactics page or the library fails."""
+        if self._closed:
+            return []
         key = (boss.casefold(), instance)
         if key not in self._mechanics:
             try:
@@ -921,7 +1008,25 @@ class LibraryFacts:
 
     def clear(self) -> None:
         """The session ended: pending lookups are cancelled and nothing is kept."""
-        for task in self._lines.values():
-            task.cancel()
+        for task in self._tasks:
+            if not task.cancelling():
+                task.cancel()
         self._lines.clear()
         self._mechanics.clear()
+
+    async def reset_session(self) -> None:
+        """Invalidate immediately, then join all logical lookups, including evicted tasks.
+
+        The app owns physical work and joins its search worker before closing dependencies.
+        """
+        tasks = tuple(self._tasks)
+        self.clear()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def aclose(self) -> None:
+        """Permanently stop admission and drain owned lookups, even if a waiter is cancelled."""
+        if self._close_task is None:
+            self._closed = True
+            self._close_task = asyncio.create_task(self.reset_session())
+        await asyncio.shield(self._close_task)

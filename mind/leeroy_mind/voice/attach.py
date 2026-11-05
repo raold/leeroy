@@ -189,6 +189,7 @@ class VoiceExtension:
                 task.cancel()
             if self.comms is not None:
                 self.comms.release()  # a press the dead service can't end (NP5)
+                self.comms.disconnected()
             return
         try:
             for msg in self.snapshot():

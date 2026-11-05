@@ -44,6 +44,7 @@ from leeroy_mind.endpoint import attach_control
 from leeroy_mind.human import HumanIdentity
 from leeroy_mind.ingress import RowReceipt, WireOrigin, chat_row_binding, game_row_binding
 from leeroy_mind.library.core import Library
+from leeroy_mind.library.search_worker import LibrarySearchWorker
 from leeroy_mind.llm.client import LLMClient, LLMError, OllamaClient
 from leeroy_mind.llm.presets import LIVE
 from leeroy_mind.llm.scheduler import LLMScheduler
@@ -62,6 +63,7 @@ from leeroy_mind.protocol import (CORE_EVENT_TYPES, Ack, Achievement, AfkEvent, 
 from leeroy_mind.storage.db import VEC_DIM, check_embedding_meta, checkpoint, open_db
 from leeroy_mind.storage.store import Store
 from leeroy_mind.talk.engine import COMMAND_CHANNELS, TalkEngine
+from leeroy_mind.talk.facts import LibraryFacts
 from leeroy_mind.talk.raid import RaidState
 from leeroy_mind.talk.turns import TurnKind
 from leeroy_mind.talk.world import WorldView, looks_like_bot_command
@@ -71,6 +73,7 @@ from leeroy_mind.realm.service import attach_realm
 from leeroy_mind.nightly.wiring import attach as attach_nightly
 from leeroy_mind.guild.service import install as install_guild
 from leeroy_mind.voice.heard import is_command
+from leeroy_mind.wow import faction_known
 
 log = logging.getLogger("leeroy_mind.app")
 
@@ -380,11 +383,20 @@ class MindApp:
         self.recall = Recall(self.store, self.embedder, self.clock, tau_days=cfg.memory.depth_days)
         self.rng = random.Random(rng_seed)
         self.library = self._open_library()
+        # The compatibility reader stays on this thread for synchronous boss mechanics.
+        # The inert search service opens/closes a separate reader on its owned thread.
+        self.library_search = (LibrarySearchWorker(
+            self.data_dir / LIBRARY_FILE, embed_model=cfg.models.embedding)
+            if self.library is not None else None)
+        # The provider is evaluated on the loop at lookup time, after engine construction.
+        self.facts = (LibraryFacts(self.library, self.scheduler, search=self.library_search,
+                                   faction=lambda: faction_known(self._identity().race))
+                      if self.library is not None else None)
         self.engine = TalkEngine(
             store=self.store, world=self.world, raid=self.raid, recall=self.recall,
             scheduler=self.scheduler, personas=self.personas, cfg=cfg, data_dir=self.data_dir,
             clock=self.clock, rng=self.rng, send=self._send, human_guid=self._human,
-            on_line_sent=self._on_line_sent, library=self.library)
+            on_line_sent=self._on_line_sent, facts=self.facts)
         self.bridge = BridgeClient(cfg.bridge.host, cfg.bridge.port, self.handle,
                                    clock=self.clock, on_connection=self._on_connection)
         self._row_delivery: _RowDelivery | None = None
@@ -1358,7 +1370,8 @@ class MindApp:
         the pending turns (engine.end_session) and the stats line of the window still open; 2.
         every open thread to extraction, within extract_budget_s, and whatever is left stays
         'pending' for P1c; 3. the queued event memories and the activity summaries; 4. the open
-        session ends; 5. checkpoint, then the bridge (its queued events are recorded), any
+        session ends; 5. close owned facts and their search worker, then the scheduler;
+        checkpoint, then the bridge (its queued events are recorded), any
         offline hooks begun since step 1, and the database close."""
         log_event("shutdown_started")
         await _cancel_wait([*self._bg_tasks, *self._offline_tasks])
@@ -1382,6 +1395,10 @@ class MindApp:
                 self._session_id = None
         except Exception:
             log.exception("shutdown_step_failed: step=session")
+        if self.facts is not None:
+            await self._step("facts", self.facts.aclose())
+        if self.library_search is not None:
+            await self._step("library_search", self.library_search.aclose())
         await self._step("llm", self.scheduler.close())
         try:
             checkpoint(self.store.conn)

@@ -16,12 +16,12 @@ from leeroy_mind.library.chunks import (KINDS, SOURCES, SNAPSHOT_SOURCES, Chunk,
 from leeroy_mind.library.db import VEC_DIM, checkpoint, open_library_db
 from leeroy_mind.llm.client import LLMError
 from leeroy_mind.llm.scheduler import Priority, SchedulerError
-from leeroy_mind.memory.recall import fts_query, mmr
+from leeroy_mind.memory.recall import fts_query
+from leeroy_mind.retrieval import mmr, vector_or_word_similarity
 from leeroy_mind.storage.db import EmbeddingMismatch
 from leeroy_mind.storage.rows import cosine, pack_vec, unpack_vec
 from leeroy_mind.storage.store import clean
 from leeroy_mind.storage.store import fts_query as quote_words
-from leeroy_mind.text import word_jaccard
 
 log = logging.getLogger("leeroy_mind")
 
@@ -95,6 +95,32 @@ async def _embed(llm, model: str, texts: list[str], priority: Priority) -> list[
     return await llm.embed(model, texts, dimensions=VEC_DIM)
 
 
+async def _query_vector(llm, model: str, text: str, priority: Priority) -> list[float] | None:
+    """The async phase shared by direct searches and the owned read worker."""
+    try:
+        v = (await _embed(llm, model, [QUERY_PREFIX + text], priority))[0]
+        if len(v) != VEC_DIM:
+            raise ValueError(f"query vector has {len(v)} dims")
+        return [float(x) for x in v]
+    except (LLMError, SchedulerError, ValueError, IndexError, TypeError, struct.error) as e:
+        log.warning("library query embed failed, using text search: %s", e)
+        return None
+
+
+@dataclass(frozen=True)
+class _SearchPlan:
+    text: str
+    k: int
+    kinds: tuple[str, ...] | None
+    routed: tuple[Chunk, ...]
+    complete: bool
+    embed: bool = False
+
+
+class _SearchCancelled(Exception):
+    """Internal owner-thread checkpoint; never a text-search fallback."""
+
+
 def _pack_embeddings(vecs, expected: int) -> list[bytes]:
     """Validate the entire response before a batch can change either vector table."""
     try:
@@ -145,6 +171,7 @@ class Library:
         self.llm = llm
         self.embed_model = embed_model
         self._depth = 0
+        self._search_cancelled: Callable[[], bool] | None = None
 
     # -- plumbing ----------------------------------------------------------------------
 
@@ -165,10 +192,20 @@ class Library:
             self._depth = 0
 
     def _all(self, sql: str, params=()) -> list[sqlite3.Row]:
-        rows = self.conn.execute(sql, params).fetchall()
-        if not self._depth:
-            self.conn.commit()  # never pin a WAL snapshot between calls
+        self._check_search_cancelled()
+        try:
+            rows = self.conn.execute(sql, params).fetchall()
+            if not self._depth:
+                self.conn.commit()  # never pin a WAL snapshot between calls
+        except sqlite3.OperationalError:
+            self._check_search_cancelled()  # interruption must not become an FTS fallback
+            raise
+        self._check_search_cancelled()
         return rows
+
+    def _check_search_cancelled(self) -> None:
+        if self._search_cancelled is not None and self._search_cancelled():
+            raise _SearchCancelled()
 
     def get_meta(self, key: str) -> str | None:
         rows = self._all("SELECT value FROM meta WHERE key = ?", (key,))
@@ -650,26 +687,33 @@ class Library:
         Each chunk's weight scales its score, so trade goods, recipes, grey items and quotes
         rank below the passages and gear the guild asks about. A loot question ("what drops
         from Sindragosa", "Sindragosa loot") is answered by drops_from() first."""
+        llm = llm if llm is not None else self.llm
+        plan = self._prepare_search(query, k, kinds, embed_available=llm is not None)
+        qvec = (await _query_vector(llm, self.embed_model, plan.text, priority)
+                if plan.embed else None)
+        return self._finish_search(plan, qvec)
+
+    def _prepare_search(self, query: str, k: int, kinds, *,
+                        embed_available: bool) -> _SearchPlan:
         kinds = self._kinds(kinds)
+        wanted = tuple(kinds) if kinds is not None else None
         text = " ".join(query.split())
         if not text:
-            return []
-        routed = self._routed(text, kinds, k)
+            return _SearchPlan(text, k, wanted, (), True)
+        routed = tuple(self._routed(text, kinds, k))
         if len(routed) >= k:
-            return routed
-        llm = llm if llm is not None else self.llm
-        qvec = None
-        if (llm is not None and self._has_vectors()
-                and self.get_meta("embed_model") in (None, self.embed_model)):
-            try:
-                v = (await _embed(llm, self.embed_model, [QUERY_PREFIX + text], priority))[0]
-                if len(v) != VEC_DIM:
-                    raise ValueError(f"query vector has {len(v)} dims")
-                qvec = [float(x) for x in v]
-            except (LLMError, SchedulerError, ValueError, IndexError, TypeError,
-                    struct.error) as e:
-                log.warning("library query embed failed, using text search: %s", e)
-        return self._fill(routed, self._rank(text, qvec, k, kinds), k)
+            return _SearchPlan(text, k, wanted, routed, True)
+        embed = (embed_available and self._has_vectors()
+                 and self.get_meta("embed_model") in (None, self.embed_model))
+        return _SearchPlan(text, k, wanted, routed, False, embed)
+
+    def _finish_search(self, plan: _SearchPlan, qvec: Sequence[float] | None) -> list[Chunk]:
+        self._check_search_cancelled()
+        if plan.complete:
+            return list(plan.routed)
+        kinds = list(plan.kinds) if plan.kinds is not None else None
+        return self._fill(list(plan.routed), self._rank(
+            plan.text, list(qvec) if qvec is not None else None, plan.k, kinds), plan.k)
 
     def _rank(self, text: str, qvec: list[float] | None, k: int,
               kinds: list[str] | None) -> list[Chunk]:
@@ -694,6 +738,7 @@ class Library:
         vecs: dict[int, list[float]] = {}
         score: dict[int, float] = {}
         for i, r in rows.items():
+            self._check_search_cancelled()
             if r["embedding"] is not None:
                 vecs[i] = unpack_vec(r["embedding"])
             if qvec is not None:
@@ -706,10 +751,11 @@ class Library:
                     and terms <= set(_TITLE_WORD.findall(r["title"].casefold()))):
                 score[i] *= _LEAD_BONUS  # the page about it: "Arthas" -> Arthas Menethil
 
+        similarity = vector_or_word_similarity(vecs, {i: r["text"] for i, r in rows.items()})
+
         def sim(a: int, b: int) -> float:
-            if a in vecs and b in vecs:
-                return cosine(vecs[a], vecs[b])
-            return word_jaccard(rows[a]["text"], rows[b]["text"])
+            self._check_search_cancelled()
+            return similarity(a, b)
 
         order = sorted(rows, key=lambda i: (-score[i], i))
         picked = mmr(order, score, sim, k, lam=0.75)

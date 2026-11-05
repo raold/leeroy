@@ -398,4 +398,14 @@ json MakeJobEvent(JobEvent const& e)
         {"kills", e.kills}, {"wipes", e.wipes}, {"instance_id", e.instanceId},
         {"guid", e.guid}, {"level", e.level}, {"avg_ilvl", e.avgIlvl}, {"training_run", e.trainingRun}};
 }
+
+json MakeGuildGroupEvent(GuildGroupEvent const& e)
+{
+    json added = json::array();
+    for (auto const& [guid, role] : e.added)
+        added.push_back({{"guid", guid}, {"role", role}});
+    return {{"type", "guild_group"}, {"reason", e.reason}, {"size", e.size}, {"leader_guid", e.leaderGuid},
+        {"raid", e.raid}, {"map", e.map}, {"instance_id", e.instanceId}, {"difficulty", e.difficulty},
+        {"added", added}, {"members", e.members}};
+}
 }
