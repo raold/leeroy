@@ -33,6 +33,7 @@ INPUT_LIMIT = 256
 OWNED_KEY = "guild:offline:owned"
 DAY_PREFIX = "guild:offline:day:"
 LOGOUT_KEY = "guild:offline:last-logout"
+REASON_LIMIT = 200
 
 
 def is_due(now: datetime, *, human_online: bool, last_logout: datetime | None,
@@ -265,6 +266,10 @@ class OfflineRaids:
         if ev.state in {"done", "failed"}:
             self._owned["terminal"] = asdict(ev)
             self._invalidate()
+            if ev.state == "failed":
+                # The day receipt outlives both the next day's job and the server log.
+                log.info("offline_raid_failed reason=%s", str(ev.reason)[:REASON_LIMIT])
+                self._update_day(failed=str(ev.reason)[:REASON_LIMIT])
         self._save()
         self._enqueue("job", ev)
 
@@ -374,7 +379,10 @@ class OfflineRaids:
             elif ack.ok is not True:
                 self._owned["phase"] = "rejected"
                 retry = ack.error in {"driver_pending", "busy"} and not self._owned["cancelled"]
-                self._update_day(blocked=not retry or self._day_state(self._owned["day"])["attempts"] >= MAX_ATTEMPTS)
+                refused = str(ack.error or "")[:REASON_LIMIT]
+                log.info("offline_raid_refused error=%s retry=%s", refused, retry)
+                self._update_day(blocked=not retry or self._day_state(self._owned["day"])["attempts"] >= MAX_ATTEMPTS,
+                                 refused=refused)
                 await self._release()
             else:
                 self._owned["phase"] = "accepted"
