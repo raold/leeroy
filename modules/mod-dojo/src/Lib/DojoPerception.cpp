@@ -171,11 +171,12 @@ void Emit(Emitter& e, std::vector<std::string> const& kit, std::vector<std::stri
     for (std::size_t k = 0; k < kit.size(); ++k)
     {
         // Inferred only from uses the actor saw: unknown until it has seen one this episode.
-        std::optional<std::uint64_t> const use = in.uses && k < in.uses->size() ? (*in.uses)[k] : std::nullopt;
+        bool const seen = in.uses && k < in.uses->size() && (*in.uses)[k].has_value();
+        std::uint64_t const usedAt = seen ? (*in.uses)[k].value() : 0;
         std::uint32_t const base = k < c.kitCooldownMs.size() ? c.kitCooldownMs[k] : 0;
         std::string const name = "enemy.kit." + kit[k];
-        e.Field(name + ".unknown", "flag", 1, 0, 1, 1, use ? 0.0 : 1.0);
-        e.Field(name + ".cooldown", "ms", 30000, 0, 1, 0, use ? std::max(0.0, double(base) - Since(p.atMs, *use)) : 0.0, !use);
+        e.Field(name + ".unknown", "flag", 1, 0, 1, 1, seen ? 0.0 : 1.0);
+        e.Field(name + ".cooldown", "ms", 30000, 0, 1, 0, seen ? std::max(0.0, double(base) - Since(p.atMs, usedAt)) : 0.0, !seen);
     }
 
     // Recent events the actor saw, newest first.
