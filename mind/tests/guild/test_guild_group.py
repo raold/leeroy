@@ -12,17 +12,22 @@ from leeroy_mind.guild.protocol import (ClearLockout, FormRaid, GuildGroup, Guil
 from leeroy_mind.guild.raid_night import FORMED_GROUP_KEY, RaidNight, State
 from leeroy_mind.protocol import Boss, Group, Login, Logout, Zone
 
-from .fakes import job
+from .fakes import job, member
 from .test_raid_night import _run_async, advance, controls, form, running, setup  # noqa: F401
 
 
 GROUP = tuple(range(101, 125))  # 24 guild members: tanks, healers and damage, officers among them
+# mod-leeroy's HandleSummon: a summon with a member still on the way completes 60 s after the server handled the
+# command, on the first world tick past that deadline (RaidAssembly.cpp, TickSummons).
+NATIVE_SUMMON_DEADLINE_S = 60.0
 
 
-def group_event(ports, *, reason="entered", map=631, instance_id=77, difficulty=1, members=GROUP, size=25):
+def group_event(ports, *, reason="entered", map=631, instance_id=77, difficulty=1, members=GROUP, size=25,
+                roles=None):
+    roles = roles or {}
     return GuildGroup(ts=int(ports.clock.now() * 1000), reason=reason, size=size, leader_guid=1, raid=True,
                       map=map, instance_id=instance_id, difficulty=difficulty,
-                      added=tuple(GuildGroupAdd(g, "damage") for g in members) if reason == "built" else (),
+                      added=tuple(GuildGroupAdd(g, roles.get(g, "damage")) for g in members) if reason == "built" else (),
                       members=tuple(members))
 
 
@@ -110,6 +115,34 @@ async def test_only_members_who_arrive_inside_count(setup):
     assert ports.sent[1].looter_guid == night.run.plan.loot_guid
 
 
+def native_timing(ports, *, lag_s):
+    """The fixture's summon results, delivered as the server times one that someone never finishes. The mind's
+    wait starts at the ack, which takes the bridge's control lane and is resolved in the mind's reader; the
+    completion leaves after native's deadline in the event lane, behind queued events, and reaches the waiter
+    through the mind's serial dispatcher, lag_s later than the ack's own trip took. A wait that has ended by then
+    gets nothing: its mailbox entry is gone, so the late completion is dropped."""
+    scripted = ports.wait_job
+
+    async def wait_job(cmd_id, timeout_s):
+        result = await scripted(cmd_id, timeout_s)
+        late = result is not None and any(skip.reason == "timeout" for skip in result.skipped)
+        return None if late and timeout_s < NATIVE_SUMMON_DEADLINE_S + lag_s else result
+    ports.wait_job = wait_job
+
+
+@pytest.mark.parametrize("lag_s", [0.05, 2.0])  # one world tick; a busy dispatcher
+@_run_async
+async def test_a_member_who_never_arrives_does_not_cost_the_others_their_record(setup, lag_s):
+    ports, _, night = setup
+    native_timing(ports, lag_s=lag_s)
+    ports.jobs["summon"].append(summoned(missing=(120,)))
+    await adopted(setup)
+    arrived = set(GROUP) - {120}
+    [(raid_id, *_)] = records(ports)
+    assert attendance(ports, raid_id) == {g: "raided" for g in (*arrived, 1)}
+    assert set(night.run.plan.members) == arrived
+
+
 @pytest.mark.parametrize("result", [
     summoned(instance_id=78),                                     # another copy than his
     summoned(missing=GROUP),                                      # nobody got in
@@ -159,6 +192,63 @@ async def test_no_record_outside_a_known_raid_or_for_a_group_that_cannot_raid_it
     await advance(ports, 120)
     await night.tick()
     assert night.state is State.CALLED
+
+
+FERAL_GROUP = (102, 111, 112, 104, 108, 109, 110, 130)  # healers and damage, no protection warrior; 130 is feral
+
+
+async def feral_group(setup, *fills):
+    """His add10 group whose tank slot the server filled with 130, a feral whose persona raid role is melee
+    (native counts a feral by bear form or Thick Hide, the mind by the persona): each fill's (members, roles)
+    first, then he takes the group into ICC 10."""
+    ports, _, night = setup
+    ports.members[130] = member(130, "M130", 11, 1)
+    await logged_in(setup)
+    for members, roles in fills:
+        await night.on_guild_group(group_event(ports, reason="built", map=571, instance_id=0, difficulty=0,
+                                               members=members, size=10, roles=roles))
+    await night.on_zone(Zone(0, 1, 4812, "Icecrown Citadel"))
+    await night.on_guild_group(group_event(ports, difficulty=0, members=FERAL_GROUP, size=10))
+    await night.tick()
+    await night.tick()
+    return night
+
+
+@_run_async
+async def test_a_tank_his_add_command_picked_is_his_raids_tank(setup):
+    ports, _, night = setup
+    await feral_group(setup, (FERAL_GROUP, {130: "tank", 102: "healer", 111: "healer", 112: "healer"}))
+    [(raid_id, size, *_)] = records(ports)
+    assert size == 10 and night.state is State.RUNNING
+    assert night.run.plan.tank_guid == 130
+    assert attendance(ports, raid_id) == {g: "raided" for g in (*FERAL_GROUP, 1)}
+
+
+@pytest.mark.parametrize("fills", [
+    [(FERAL_GROUP, {130: "damage"})],                                  # the server picked 130 as damage
+    [(FERAL_GROUP, {130: "tank"}), ((102, 111, 112, 104, 108), {})],   # 130 left the group the add command built
+])
+@_run_async
+async def test_only_a_tank_pick_in_his_group_counts_as_a_tank(setup, fills):
+    ports, _, night = setup
+    await feral_group(setup, *fills)
+    assert records(ports) == [] and night.run is None
+    assert not any(isinstance(c, Summon) for c in ports.sent)
+
+
+@_run_async
+async def test_a_raid_night_the_mind_forms_keeps_its_own_tank_rule(setup):
+    ports, _, night = setup
+    ports.members[130] = member(130, "M130", 11, 1)
+    for guid in (101, 103, 105, 106, 107):  # every protection warrior is offline
+        ports.members[guid] = member(guid, ports.members[guid].name, 1, 2, online=False)
+    await logged_in(setup)
+    await night.on_guild_group(group_event(ports, reason="built", map=571, instance_id=0, difficulty=0,
+                                           members=(130,), size=10, roles={130: "tank"}))
+    night.state, night._call_deadline = State.CALLED, ports.clock.now() + 600
+    await form(setup)
+    assert records(ports) == [] and ports.sent == []
+    assert night.state is State.ENDED
 
 
 @_run_async

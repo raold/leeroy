@@ -568,7 +568,10 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   guild members as the raid, he leads. Arrival is proved as a called raid
   proves it, by the raid night's inside summon: only members the server finds in
   his copy are the raid and earn attendance. Then tank and loot officer are
-  chosen among them as for a called raid (`SetLootMaster` is sent) and the
+  chosen among them as for a called raid, except that a member the add
+  command put in a tank slot counts as a tank (native judges bear form, Thick
+  Hide and Frost Presence, which the mind cannot see; raid nights the mind
+  forms keep its own rule), `SetLootMaster` is sent, and the
   called raid's own start runs (`RaidNight._begin`: record, attendance and its
   DKP, kills, DKP loot). It ends as a called raid does (10 minutes outside,
   logout, "calling it") or when the group breaks up. Never beside another raid,
