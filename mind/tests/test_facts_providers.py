@@ -1,6 +1,9 @@
 import asyncio
 import logging
 
+import pytest
+
+from leeroy_mind.library.search_worker import SearchBusy, SearchClosed
 from leeroy_mind.talk.facts import FACTS_TOKENS, LibraryFacts
 from leeroy_mind.talk.questions import GameQuestion
 from leeroy_mind.text import estimate_tokens
@@ -72,3 +75,32 @@ def test_provider_output_shape_and_oversize_lines_are_bounded():
         facts.start(1, GameQuestion("class", (), "mage rotation"))
         return await facts.for_line(1)
     assert asyncio.run(scenario()) == ["Retain this qualifier: provisional."]
+
+
+@pytest.mark.parametrize("failure", [SearchBusy, SearchClosed])
+def test_providers_still_answer_when_the_reader_is_busy_or_closed(failure):
+    """The providers never needed library.db: a busy or closing reader costs only its own
+    lines. A reference question keeps no provider lines, as before."""
+    class Reader:
+        def __init__(self):
+            self.calls = 0
+
+        async def search(self, *args, **kwargs):
+            self.calls += 1
+            raise failure()
+
+        async def reference_matches(self, *args, **kwargs):
+            raise failure()
+
+        async def search_reference_text(self, *args, **kwargs):
+            raise failure()
+
+    async def scenario():
+        reader = Reader()
+        facts = LibraryFacts(Library(), None, search=reader)
+        facts.add_provider(lambda q: ["A safe local fact."])
+        facts.start(1, GameQuestion("class", ("class",), "Icecrown Citadel mage rotation"))
+        facts.start(2, GameQuestion("command", ("documentation",), ".gm on"))
+        return await facts.for_line(1), await facts.for_line(2), reader.calls
+    lore, reference, calls = asyncio.run(scenario())
+    assert lore == ["A safe local fact."] and reference == [] and calls == 1
