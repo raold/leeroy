@@ -18,7 +18,8 @@ from .roster import Roster
 
 
 log = logging.getLogger(__name__)
-EVENTS = ("hello", "login", "logout", "chat", "zone", "boss", "death", "resurrect", "dc_status", "loot_drop", "job")
+EVENTS = ("hello", "login", "logout", "chat", "zone", "boss", "death", "resurrect", "dc_status", "loot_drop", "job",
+          "guild_group", "group")
 
 
 class GuildTurnSource:

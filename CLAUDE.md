@@ -288,7 +288,7 @@ Setting `SOAP.Enabled = 1` would let the script do a real graceful shutdown.
 | `mod-dungeon-clear` | jrad7/mod-dungeon-clear | git clone since 2026-10-29 (was a zip of `60f3d98`). **The autonomous tank lead**: `.dc on` (or `dc on` in party chat) inside an instance makes the group's tank bot route boss to boss over the navmesh, pull (Dynamic/Leeroy/Advanced), run scripted events (all 16 WotLK 5-mans), loot, rest and rez. Raids too: trash flow with a readiness quorum, pre-boss muster, wipe recovery; boss fights are left to the playerbots raid strategies. Companion addon: jrad7/mod-dungeon-clear-addon. It hooks playerbots without patching it (appends to the shared context registries). Ships its own `.cmake`; folder name must stay exact. Reads `PlayerbotAIConfig` members directly, so it breaks when playerbots renames them. AGPL-3.0. |
 | `mod-bg-slaveryvalley` | zip (no git) | Custom battleground, map 801 / BG id 31. Server side complete; **client patch still undistributed** — see below. |
 | `mod-ah-bot-plus` | NathanHandley/mod-ah-bot-plus | Auction house bot (git clone since 2026-10-30). Sells under, and buys player auctions as, the ordinary account `ahbot` (auth id 352): characters Fatiggeritch (3502) and Bonqueefa (3503), set in `AuctionHouseBot.GUIDs` (comma list, no spaces). Never use a playerbot character for it, and never enter the world on those characters. Seller and buyer both on; everything else is the `.dist` default (about 150 listings a minute per house, up to 15000 each). GM commands: `.ahbot reload` (re-reads the conf, GUIDs included, no restart), `.ahbot update`, `.ahbot empty`. Loader `Addmod_ah_bot_plusScripts`, so the folder name must stay exact. No SQL. |
-| `mod-leeroy` | this repo, `modules/mod-leeroy` | The guild bridge. `azerothcore-wotlk/modules/mod-leeroy` is a **junction** to `F:\azerothcore\modules\mod-leeroy`: remove it with `rmdir`, never `rm -rf` (that deletes the source through the link). Pins the cast (guild members at 80+, minus `Leeroy.HumanGuid`) via the playerbots pin API, mutes them in mod-ollama-chat, and serves NDJSON on `Leeroy.Bridge.Host`:`Leeroy.Bridge.Port` (`127.0.0.1:7878`, one mind at a time). Keys: `Leeroy.Enable`, `GuildId`, `HumanGuid`, `KeepCast`, `BringCastOnline`, `ExcludeFromOllamaChat`, `Bridge.*`. Start line in `Server.log`: `mod-leeroy: cast N members, pinned N ...`. Smoke test: `python modules/mod-leeroy/tools/bridge_smoke.py --expect-cast N` (0 pass, 1 fail, 2 no server or another mind connected); `--listen S` prints events, `--send` sends raw commands. |
+| `mod-leeroy` | this repo, `modules/mod-leeroy` | The guild bridge. `azerothcore-wotlk/modules/mod-leeroy` is a **junction** to `F:\azerothcore\modules\mod-leeroy`: remove it with `rmdir`, never `rm -rf` (that deletes the source through the link). Pins the cast (guild members at 80+, minus `Leeroy.HumanGuid`) via the playerbots pin API, mutes them in mod-ollama-chat, and serves NDJSON on `Leeroy.Bridge.Host`:`Leeroy.Bridge.Port` (`127.0.0.1:7878`, one mind at a time). Keys: `Leeroy.Enable`, `GuildId`, `HumanGuid`, `KeepCast`, `BringCastOnline`, `ExcludeFromOllamaChat`, `Bridge.*`. Start line in `Server.log`: `mod-leeroy: cast N members, pinned N ...`. Smoke test: `python modules/mod-leeroy/tools/bridge_smoke.py --expect-cast N` (0 pass, 1 fail, 2 no server or another mind connected); `--listen S` prints events, `--send` sends raw commands. For the owner it answers `.playerbots bot add5/10/25/40` from his guild (see that patch below). |
 
 `mod-playerbots`, `mod-ollama-chat`, `mod-dungeon-clear` and `mod-ah-bot-plus` are
 git repos and `mod-leeroy` lives in this one; the rest are zip extractions and
@@ -336,6 +336,30 @@ and gave such bots **no talents at all**: no tank strategy, so dungeon-clear
 said "No tank bot found". Local commit `075efcb9` clamps to 80.
 Do not pass party/raid leadership to a bot: every bot then runs `reset botAI`
 (`ResetStrategies`), which drops `wait for attack` (formation survives).
+
+**For the owner (`Leeroy.HumanGuid`) mod-leeroy answers the command itself and
+fills from his guild only, never with addclass bots** (`src/Guild/GuildAdd.cpp`,
+pure policy in `src/Lib/LeeroyGuildAddPolicy.*`). An `AllCommandScript`
+resolves what he typed with the core's own parser
+(`Acore::ChatCommands::GetAutoCompletionsFor`, so abbreviations such as
+`.pl b add5` count) and, for `playerbots bot add5|add10|add25|add40` (the
+subcommand compared case-sensitively, as playerbots does), stops it before
+playerbots. Same composition and gap filling, from free cast members only:
+online, alive, out of combat, his faction, in no group, not in a battleground,
+arena or queue (a raid browser listing is fine), not teleporting or flying,
+not in another instance or saved to another copy of his, and clear of
+`RealmModule::MutationReason` (Realm leases, training, offline raids, pending
+bot jobs). Within a role, the classes his group has fewest of come first,
+lowest guid on ties. They join directly (`AddMember`, converted to a raid past
+5), take the raid night's `RaidHabits` (plus dungeon-clear's entry when he is
+inside an instance) and are teleported beside him. He is told per role how
+many were added and how many slots stayed empty, with a tally of why the
+others were not free. He must lead his group and be alive, out of combat and
+not travelling. Anyone else, `Leeroy.Enable = 0`, no guild or an empty cast:
+the command reaches playerbots unchanged. Each fill publishes a `guild_group`
+event (reason `built`); taking that group onto an instance map publishes
+another (`entered`, with map, instance id and difficulty). Such a group raids
+for DKP and attendance like a called raid night (see the mind's guild life).
 
 ### Local patch: pinned random bots
 
@@ -534,6 +558,19 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 - Guild life (raid nights, DKP and loot, offline raids, rank, spec and gear
   upkeep) runs with built-in defaults; `[guild]` and `[dkp]` tables in
   `mind.toml` override them.
+- A group he built with `.playerbots bot addN` (native `guild_group` events)
+  raids like a called raid night once he leads it into a raid instance in
+  `guild/raids.py`: size and heroic from the instance difficulty, his group's
+  guild members as the raid, he leads, tank and loot officer chosen as for a
+  called raid (`SetLootMaster` is sent), then the called raid's own start
+  (`RaidNight._begin`: record, attendance and its DKP, kills, DKP loot). It ends
+  as a called raid does (10 minutes outside, logout, "calling it") or when the
+  group breaks up. Never beside another raid, never twice for one instance
+  within 7 days, never for 5-mans; nothing is formed, summoned or disbanded.
+  The mind disbands only a group it formed itself (meta
+  `guild:raid-night:formed-group`, set at FormRaid, cleared once the disband
+  lands; a `guild_group` event outside a raid clears it too), so a group he
+  built survives his relogs and mind restarts.
 - The guild console (`leeroy_mind/console/`) is a process of its own on
   `127.0.0.1:7881` (`--port`). It prints `http://127.0.0.1:7881/#key=...`; the
   key changes at each start, stays in the page's memory (never a cookie, which
