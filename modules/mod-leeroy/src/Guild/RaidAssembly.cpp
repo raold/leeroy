@@ -99,8 +99,21 @@ std::string SummonFailure(Player* player)
     return {};
 }
 
-#if LEEROY_HAS_DUNGEON_CLEAR
-void RaidHabits(Player* bot, Player* leader, uint32 map, Difficulty difficulty)
+}
+
+Group* LeaderGroup(Player* leader)
+{
+    if (Group* group = leader->GetGroup())
+        return group;
+    auto created = std::make_unique<Group>();
+    if (!created->Create(leader))
+        return nullptr;
+    Group* group = created.release();
+    sGroupMgr->AddGroup(group);
+    return group;
+}
+
+void RaidHabits(Player* bot, Player* leader)
 {
     if (PlayerbotAI* ai = GET_PLAYERBOT_AI(bot))
     {
@@ -118,8 +131,12 @@ void RaidHabits(Player* bot, Player* leader, uint32 map, Difficulty difficulty)
         }
         Training::JournalReset(bot->GetGUID().GetCounter(), {"formation", "wait for attack time"});
     }
-    DcDungeonAccess::GrantEntry(bot, map, difficulty);
 }
+
+void GrantRaidEntry([[maybe_unused]] Player* bot, [[maybe_unused]] uint32 map, [[maybe_unused]] Difficulty difficulty)
+{
+#if LEEROY_HAS_DUNGEON_CLEAR
+    DcDungeonAccess::GrantEntry(bot, map, difficulty);
 #endif
 }
 
@@ -212,14 +229,8 @@ LeeroyCommandResult HandleFormRaid(json const& msg)
     return Fail("driver_unavailable:no_dungeon_clear");
 #else
     if (Realm::RealmOwns(cmd->leaderGuid) || GroupHasRealmOwner(group)) return Fail("busy:realm_owner");
-    if (!group)
-    {
-        auto created = std::make_unique<Group>();
-        if (!created->Create(leader))
-            return Fail("not_leader");
-        group = created.release();
-        sGroupMgr->AddGroup(group);
-    }
+    if (!group && !(group = LeaderGroup(leader)))
+        return Fail("not_leader");
     if (GroupHasRealmOwner(group)) return Fail("busy:realm_owner");
     if (!group->isRaidGroup())
         group->ConvertToRaid();
@@ -269,7 +280,8 @@ LeeroyCommandResult HandleFormRaid(json const& msg)
             }
         }
         if (Realm::RealmOwns(low) || GroupHasRealmOwner(group)) return Fail("busy:realm_owner");
-        RaidHabits(bot, leader, cmd->mapId, difficulty);
+        RaidHabits(bot, leader);
+        GrantRaidEntry(bot, cmd->mapId, difficulty);
         result.guids.push_back(low);
     }
     if (GroupHasRealmOwner(group)) return Fail("busy:realm_owner");

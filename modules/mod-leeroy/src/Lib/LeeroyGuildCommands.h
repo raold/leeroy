@@ -134,6 +134,22 @@ struct JobEvent
     std::string trainingRun;
 };
 nlohmann::json MakeJobEvent(JobEvent const&);
+
+// The owner's `.playerbots bot addN` filled his group from the guild. reason "built": this run added members (added,
+// with their roles); "entered": he then reached an instance map leading that same group. map, instance_id and
+// difficulty are where he is at that moment (instance_id 0 outside an instance); members are the guild's cast in his
+// group now, him excluded.
+struct GuildGroupEvent
+{
+    std::string reason;
+    std::uint32_t size = 0, leaderGuid = 0;
+    bool raid = false;
+    std::uint32_t map = 0, instanceId = 0;
+    std::uint8_t difficulty = 0;
+    std::vector<std::pair<std::uint32_t, std::string>> added;
+    std::vector<std::uint32_t> members;
+};
+nlohmann::json MakeGuildGroupEvent(GuildGroupEvent const&);
 }
 
 #endif

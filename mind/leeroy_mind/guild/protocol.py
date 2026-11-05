@@ -161,6 +161,30 @@ class Job:
     training_run: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class GuildGroupAdd:
+    guid: int
+    role: str
+
+
+@dataclass(frozen=True, slots=True)
+class GuildGroup:
+    """His own `.playerbots bot addN` filled his group from free guild members (mod-leeroy, not a
+    raid call). reason "built": this run added `added`; "entered": he then reached an instance map
+    leading that same group. map/instance_id/difficulty are where he is (instance_id 0 outside an
+    instance); members are the guild's cast in his group, him excluded."""
+    ts: int
+    reason: str
+    size: int
+    leader_guid: int
+    raid: bool
+    map: int
+    instance_id: int
+    difficulty: int
+    added: tuple[GuildGroupAdd, ...]
+    members: tuple[int, ...]
+
+
 COMMANDS: dict[str, type] = {
     "form_raid": FormRaid,
     "summon": Summon,
@@ -182,3 +206,4 @@ def register() -> None:
     for name, cls in COMMANDS.items():
         register_command(name, cls)
     register_event("job", Job)
+    register_event("guild_group", GuildGroup)
