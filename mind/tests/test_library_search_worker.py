@@ -626,3 +626,37 @@ def test_a_slow_rank_after_the_query_vector_keeps_the_facts_hybrid(library_path,
     with caplog.at_level(logging.DEBUG, logger="leeroy_mind"):
         run(main())
     assert "outcome=search " in caplog.text
+
+
+def test_a_failed_reader_warns_once_and_its_thread_never_holds_exit(tmp_path, caplog):
+    """Review 2026-11-04 (#101): the failure was silent and permanent, and the reader's
+    non-daemon thread would have kept an interrupted shutdown's process alive."""
+    path = tmp_path / "missing" / "library.db"
+
+    async def main():
+        worker = LibrarySearchWorker(path)
+        try:
+            with pytest.raises((sqlite3.Error, RuntimeError)):
+                await asyncio.wait_for(worker.search_text("anything"), 3)
+            await until(lambda: worker._closed)
+            assert worker._thread.daemon
+            for _ in range(2):
+                with pytest.raises(SearchClosed):
+                    await worker.search_text("again")
+        finally:
+            await worker.aclose()
+    with caplog.at_level(logging.WARNING, logger="leeroy_mind"):
+        run(main())
+    warned = [r for r in caplog.records if r.getMessage().startswith("library_search_failed")]
+    assert len(warned) == 1 and warned[0].levelno == logging.WARNING
+    assert str(tmp_path) not in caplog.text and "missing" not in warned[0].getMessage()
+
+
+def test_a_close_logs_no_failure(library_path, caplog):
+    async def main():
+        worker = LibrarySearchWorker(library_path)
+        assert await worker.search_text("Sindragosa")
+        await worker.aclose()
+    with caplog.at_level(logging.WARNING, logger="leeroy_mind"):
+        run(main())
+    assert "library_search_failed" not in caplog.text

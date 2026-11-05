@@ -4,9 +4,11 @@ MAX_PENDING bounds logical requests (including embedding waits) and physical wor
 Cancellation returns promptly, but a queued/running job keeps its slot until the owner thread
 has discarded/finished it. There is no waiting room when admission is full. Construction is
 inert; aclose joins finite work and closes the private reader before dependencies may close.
+The thread is a daemon, so a shutdown interrupted before aclose cannot hold the process open.
 """
 import asyncio
 import copy
+import logging
 import queue
 import threading
 from dataclasses import dataclass, field
@@ -20,6 +22,7 @@ from leeroy_mind.llm.scheduler import Priority
 
 MAX_PENDING = 8  # active + queued + embedding, not just queue length
 T = TypeVar("T")
+log = logging.getLogger("leeroy_mind")
 
 
 class SearchBusy(Exception):
@@ -89,7 +92,8 @@ class LibrarySearchWorker:
             raise SearchBusy()
         if self._thread is None:
             self._stopped = loop.create_future()
-            self._thread = threading.Thread(target=self._work, name="mind-library-search")
+            self._thread = threading.Thread(target=self._work, name="mind-library-search",
+                                            daemon=True)
             try:
                 self._thread.start()
             except BaseException:
@@ -217,6 +221,9 @@ class LibrarySearchWorker:
 
     def _terminated(self, failure: BaseException | None, close_error: BaseException | None):
         if failure is not None:
+            if not self._closed:  # not a close: every later lookup is SearchClosed
+                log.warning("library_search_failed: %s; no library facts until the mind "
+                            "restarts", type(failure).__name__)
             self._failure, self._closed = failure, True
         # Also covers opening failure before the first submit was enqueued, or an error
         # during operation cleanup. The thread has stopped, so no physical work remains.
