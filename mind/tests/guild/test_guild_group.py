@@ -7,18 +7,19 @@ import pytest
 
 from leeroy_mind.guild.config import GuildConfig
 from leeroy_mind.guild.loot import _get, _put
-from leeroy_mind.guild.protocol import (ClearLockout, FormRaid, GuildGroup, GuildGroupAdd, RaidControl,
+from leeroy_mind.guild.protocol import (ClearLockout, FormRaid, GuildGroup, GuildGroupAdd, JobSkip, RaidControl,
                                         SetLootMaster, Summon)
 from leeroy_mind.guild.raid_night import FORMED_GROUP_KEY, RaidNight, State
 from leeroy_mind.protocol import Boss, Group, Login, Logout, Zone
 
+from .fakes import job
 from .test_raid_night import _run_async, advance, controls, form, running, setup  # noqa: F401
 
 
 GROUP = tuple(range(101, 125))  # 24 guild members: tanks, healers and damage, officers among them
 
 
-def group_event(ports, *, reason="entered", map=631, instance_id=91, difficulty=1, members=GROUP, size=25):
+def group_event(ports, *, reason="entered", map=631, instance_id=77, difficulty=1, members=GROUP, size=25):
     return GuildGroup(ts=int(ports.clock.now() * 1000), reason=reason, size=size, leader_guid=1, raid=True,
                       map=map, instance_id=instance_id, difficulty=difficulty,
                       added=tuple(GuildGroupAdd(g, "damage") for g in members) if reason == "built" else (),
@@ -52,6 +53,13 @@ def attendance(ports, raid_id):
                                                 (raid_id,))}
 
 
+def summoned(*, instance_id=77, missing=()):
+    """The server's inside summon: everyone arrives in that instance but the missing."""
+    return lambda command: job("summon", "done", guids=tuple(g for g in command.guids if g not in missing),
+                               skipped=tuple(JobSkip(g, "timeout") for g in command.guids if g in missing),
+                               instance_id=instance_id)
+
+
 def ledger(ports, raid_id, reason):
     return sorted(g for (g,) in ports.conn.execute("SELECT guid FROM dkp_ledger WHERE raid_id=? AND reason=?",
                                                    (raid_id, reason)))
@@ -62,27 +70,61 @@ async def test_his_group_in_a_raid_opens_one_record_like_a_called_raid(setup):
     ports, _, night = setup
     await adopted(setup)
     assert night.state is State.RUNNING and night.run.lead_is_human and night.run.human_in_raid
-    # Nothing is formed, cleared, summoned or disbanded: only the loot master is set.
-    assert [type(c) for c in ports.sent] == [SetLootMaster]
-    assert (ports.sent[0].member_guid, ports.sent[0].looter_guid) == (1, 104)
+    # Arrival is proved inside his copy first, then the loot master; nothing is formed, cleared or disbanded.
+    assert [type(c) for c in ports.sent] == [Summon, SetLootMaster]
+    summon, loot = ports.sent
+    assert (summon.where, summon.map_id, set(summon.guids), summon.summon_human) == ("inside", 631, set(GROUP), False)
+    assert (loot.member_guid, loot.looter_guid) == (1, 104)
     [(raid_id, size, heroic, offline, lead, ended, _)] = records(ports)
     assert (size, heroic, offline, lead, ended) == (25, 0, 0, 1, None)
     assert attendance(ports, raid_id) == {g: "raided" for g in (*GROUP, 1)}
     assert ledger(ports, raid_id, "attendance") == sorted((*GROUP, 1))
-    assert night.session.ctx.instance_id == 91 and night.run.plan.bench == []
+    assert night.session.ctx.instance_id == 77 and night.run.plan.bench == []
     assert ports.leads[-1] == 1
 
     # Entering again, or another fill of the same group, opens nothing new.
     await night.on_guild_group(group_event(ports))
     await night.on_guild_group(group_event(ports, reason="built"))
     await night.tick()
-    assert len(records(ports)) == 1 and [type(c) for c in ports.sent] == [SetLootMaster]
+    assert len(records(ports)) == 1 and [type(c) for c in ports.sent] == [Summon, SetLootMaster]
 
     # Kills pay DKP as a called raid's do.
-    await night.on_boss(Boss(int(ports.clock.now() * 1000), 631, 91, 0, "Lord Marrowgar", "killed", (1, *GROUP)))
+    await night.on_boss(Boss(int(ports.clock.now() * 1000), 631, 77, 0, "Lord Marrowgar", "killed", (1, *GROUP)))
     await night.tick()
     assert night.session.kills == 1
     assert ledger(ports, raid_id, "kill") == sorted((*GROUP, 1))
+
+
+@_run_async
+async def test_only_members_who_arrive_inside_count(setup):
+    ports, _, night = setup
+    # 104 (the DKP officer) and 120 are still outside when the summon's time runs out.
+    ports.jobs["summon"].append(summoned(missing=(104, 120)))
+    await adopted(setup)
+    arrived = set(GROUP) - {104, 120}
+    [(raid_id, *_)] = records(ports)
+    assert attendance(ports, raid_id) == {g: "raided" for g in (*arrived, 1)}
+    assert ledger(ports, raid_id, "attendance") == sorted((*arrived, 1))
+    assert set(night.run.plan.members) == arrived
+    assert night.run.plan.loot_guid in arrived and night.run.plan.tank_guid in arrived
+    assert ports.sent[1].looter_guid == night.run.plan.loot_guid
+
+
+@pytest.mark.parametrize("result", [
+    summoned(instance_id=78),                                     # another copy than his
+    summoned(missing=GROUP),                                      # nobody got in
+    lambda command: job("summon", "failed", guids=(), skipped=tuple(JobSkip(g, "offline") for g in command.guids),
+                        instance_id=77),
+    lambda command: None,                                         # no completion
+])
+@_run_async
+async def test_no_record_without_proved_arrival_in_his_instance(setup, result):
+    ports, _, night = setup
+    ports.jobs["summon"].append(result)
+    await adopted(setup)
+    assert records(ports) == [] and night.run is None
+    assert night.state is State.WAITING_CALL and not night.active
+    assert [type(c) for c in ports.sent] == [Summon]
 
 
 @pytest.mark.parametrize(("difficulty", "size", "heroic"), [(0, 10, 0), (1, 25, 0), (2, 10, 1), (3, 25, 1)])
@@ -125,7 +167,7 @@ async def test_a_called_raid_is_never_doubled(setup):
     await running(setup)
     sent = len(ports.sent)
     [(raid_id, *_)] = records(ports)
-    await night.on_guild_group(group_event(ports, instance_id=77))
+    await night.on_guild_group(group_event(ports))
     await night.on_guild_group(group_event(ports, instance_id=92))
     await night.tick()
     assert [row[0] for row in records(ports)] == [raid_id] and len(ports.sent) == sent
@@ -156,6 +198,7 @@ async def test_it_ends_when_his_group_breaks_up_and_his_group_is_never_disbanded
     await night.on_guild_group(group_event(ports))
     await night.tick()
     assert len(records(ports)) == 1 and night.state is State.WAITING_CALL
+    ports.jobs["summon"].append(summoned(instance_id=93))
     await night.on_guild_group(group_event(ports, instance_id=93))
     await night.tick()
     assert len(records(ports)) == 2 and night.state is State.ASSEMBLING
@@ -225,6 +268,7 @@ async def test_building_his_own_group_takes_it_over_from_the_mind(setup):
     await night.tick()
     assert controls(ports, "disband") == []
     assert not any(isinstance(c, (FormRaid, ClearLockout, Summon, RaidControl)) for c in ports.sent)
+    assert night.state is State.WAITING_CALL
 
 
 @_run_async

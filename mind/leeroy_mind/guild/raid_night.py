@@ -591,8 +591,8 @@ class RaidNight:
 
     async def _begin(self, plan, epoch, on_time, late, *, instance_id=None):
         """Every raid night's start: the record with its attendance and DKP, then assembly.
-        instance_id: the instance the raid is already in (his own group's raid), with everyone
-        on time counted as arrived inside."""
+        instance_id: the instance the raid is already in (his own group's raid), whose on_time
+        members the server has just proved inside it."""
         session = await self._open_session(plan, epoch)
         if epoch != self._epoch or not self._present or not self.ports.human_online():
             self._closing.append((session, None, "logout" if not self._present else "cancelled", deque(), False))
@@ -613,9 +613,10 @@ class RaidNight:
         self._forming_group = False
 
     async def _adopt(self, epoch):
-        """His own group's raid (on_guild_group) through a called raid's start: the loot master, the
-        record and its attendance, then assembly, with him leading and his group already inside.
-        Nothing is formed, summoned or disbanded: the group stays exactly as he built it."""
+        """His own group's raid (on_guild_group) through a called raid's start: arrival proved inside
+        his copy as the called raid proves it, then the loot master, the record with its attendance
+        for those who arrived, and assembly, with him leading. Nothing is formed or disbanded: the
+        group stays as he built it."""
         raid_key, size, heroic, instance_id, members = self._adoption
         self._adoption = None
         try:
@@ -625,6 +626,15 @@ class RaidNight:
             candidates = [c for c in self._candidates() if c.guid in wanted and c.available]
             if not candidates or len(candidates) + 1 > size:
                 raise _Failed("his group does not fit this raid")
+            self._leaders(candidates, Lead(True))  # a tank among them before anyone is moved
+            # Only members the server finds in his copy are the raid; the rest earn nothing tonight.
+            result = await self._summon_into(CATALOG[raid_key], [c.guid for c in candidates], epoch)
+            if result.instance_id != instance_id:
+                raise _Failed("the summon did not reach his instance")
+            arrived = set(result.guids)
+            candidates = [c for c in candidates if c.guid in arrived]
+            if not candidates:
+                raise _Failed("nobody arrived in his instance")
             leaders = self._leaders(candidates, Lead(True))
             plan = RaidPlan(raid_key, size, heroic, False, leaders.lead_guid, leaders.tank_guid,
                             leaders.loot_guid, [c.guid for c in candidates], [], True)
@@ -661,12 +671,18 @@ class RaidNight:
             self._check(epoch)
             raise _Failed("raid attendance could not be opened") from None
 
+    async def _summon_into(self, raid, members, epoch):
+        """A raid's proof of arrival: the server summons the members into his copy of the raid and
+        says who is there, and in which instance."""
+        result = await self._job(Summon(uuid4().hex, raid.map_id, tuple(members), where="inside"), "summon", epoch)
+        if type(result.instance_id) is not int or not 0 < result.instance_id <= 0xFFFFFFFF:
+            raise _Failed("inside summon did not verify this instance")
+        return result
+
     async def _summon_inside(self, members, epoch):
         run = self.run
-        raid = CATALOG[run.plan.raid_key]
-        result = await self._job(Summon(uuid4().hex, raid.map_id, tuple(members), where="inside"), "summon", epoch)
-        if (set(result.guids) != set(members) or type(result.instance_id) is not int
-                or not 0 < result.instance_id <= 0xFFFFFFFF or not run.session.bind_instance(result.instance_id)):
+        result = await self._summon_into(CATALOG[run.plan.raid_key], members, epoch)
+        if set(result.guids) != set(members) or not run.session.bind_instance(result.instance_id):
             raise _Failed("inside summon did not verify this instance")
         self._arrived.update(result.guids)
 

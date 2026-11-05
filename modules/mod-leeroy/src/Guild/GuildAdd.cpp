@@ -5,6 +5,7 @@
 #include "OfflineRaidJob.h"
 #include "RaidAssembly.h"
 #include "Realm/RealmModule.h"
+#include "Realm/RealmPorts.h"
 #include "LeeroyGuildAddPolicy.h"
 
 #include "Chat.h"
@@ -82,19 +83,31 @@ std::string HumanRefusal(Player* human)
     return {};
 }
 
-GuildAddBody BodyOf(uint32 guid, Player* bot, Player* human, uint32 guildId)
+// hisGroup: a member of the group he leads, whom only the add command's other fences can keep out.
+GuildAddBody BodyOf(uint32 guid, Player* bot, Player* human, uint32 guildId, bool hisGroup = false)
 {
     GuildAddBody body;
     if (!bot)
         return body;
     body.online = true;
     body.cast = IsCast(guid) && bot->GetGuildId() == guildId;
-    // Realm leases first, then training, offline raids, pending bot jobs and a body that is not a usable bot.
-    body.fence = Realm::RealmModule::Instance().MutationReason(guid);
+    if (!hisGroup)
+    {
+        // Realm leases first, then training, offline raids, pending bot jobs and a body that is not a usable bot.
+        body.fence = Realm::RealmModule::Instance().MutationReason(guid);
+        body.grouped = bot->GetGroup() || bot->GetOriginalGroup() || bot->GetGroupInvite();
+    }
+    else
+    {
+        // The same fences without the one that holds his own group's members away from the Realm.
+        body.fence = Realm::RealmOwns(guid) ? "busy:realm_owner" : Realm::NativeOwnershipReason(guid);
+        if (body.fence.empty() && (!GET_PLAYERBOT_AI(bot) || IsSelfBot(bot) || !Realm::IsOnRandomBotAccount(guid)))
+            body.fence = "not_bot";
+        body.grouped = bot->GetGroup() != human->GetGroup();
+    }
     body.otherTeam = bot->GetTeamId(true) != human->GetTeamId(true);
     body.dead = !bot->IsAlive();
     body.inCombat = bot->IsInCombat();
-    body.grouped = bot->GetGroup() || bot->GetOriginalGroup() || bot->GetGroupInvite();
     Map* map = bot->GetMap();
     body.inBattleground = bot->InBattleground() || bot->InArena() || (map && map->IsBattlegroundOrArena());
     // A raid browser listing is no commitment: joining a group drops it.
@@ -127,6 +140,29 @@ bool Bring(Player* bot, Player* human, std::size_t index, std::size_t count)
     float x, y, z;
     human->GetClosePoint(x, y, z, bot->GetObjectSize(), 3.0f, angle);
     return bot->TeleportTo(map->GetId(), x, y, z, human->GetOrientation());
+}
+
+// He took the group he built onto an instance map: what a called raid's formation grants (dungeon-clear's entry,
+// which only writes what a member lacks) and its summon does (his copy only), for the guild members of that group
+// who are not in his copy yet, under the add command's fences.
+void BringIn(Player* human, Group* group)
+{
+    if (!human->IsAlive() || GroupHasRealmOwner(group))
+        return;
+    Map* map = human->GetMap();
+    uint32 const guildId = LeeroyModule::Instance().GuildId();
+    std::vector<Player*> arrivals;
+    for (auto const& slot : group->GetMemberSlots())
+    {
+        uint32 const guid = slot.guid.GetCounter();
+        Player* bot = guid == HumanGuid() ? nullptr : FindOnline(guid);
+        if (!bot || bot->GetMap() == map || !GuildAddSkipReason(BodyOf(guid, bot, human, guildId, true)).empty())
+            continue;
+        GrantRaidEntry(bot, map->GetId(), map->GetDifficulty());
+        arrivals.push_back(bot);
+    }
+    for (std::size_t i = 0; i < arrivals.size(); ++i)
+        Bring(arrivals[i], human, i, arrivals.size());
 }
 
 void PublishGuildGroup(std::string reason, Player* human, Group* group,
@@ -187,19 +223,23 @@ std::vector<std::string> Fill(Player* human, uint32 size)
     std::vector<std::pair<std::uint32_t, std::string>> joined;
     if (!plan.full && !plan.picks.empty())
     {
-        group = LeaderGroup(human);
-        if (!group)
-            return {"Your group could not be created"};
-        if (!group->isRaidGroup() && members + plan.picks.size() > static_cast<std::size_t>(MAXGROUPSIZE))
-            group->ConvertToRaid();
+        bool const created = !group;
         Map* map = human->GetMap();
         std::vector<Player*> arrivals;
         for (auto const& pick : plan.picks)
         {
             // Every fence again at the mutation boundary: each join runs group hooks.
             Player* bot = FindOnline(pick.guid);
-            if (!bot || GroupHasRealmOwner(group) || group->IsFull()
-                || !GuildAddSkipReason(BodyOf(pick.guid, bot, human, guildId)).empty() || !group->AddMember(bot))
+            if (!bot || !GuildAddSkipReason(BodyOf(pick.guid, bot, human, guildId)).empty())
+                continue;
+            // His group only once someone can join it, and a raid only once a party is full.
+            if (!group && !(group = LeaderGroup(human)))
+                break;
+            if (GroupHasRealmOwner(group))
+                break;
+            if (!group->isRaidGroup() && group->GetMembersCount() >= MAXGROUPSIZE)
+                group->ConvertToRaid();
+            if (group->IsFull() || !group->AddMember(bot))
                 continue;
             RaidHabits(bot, human);
             if (map->IsDungeon())
@@ -211,6 +251,12 @@ std::vector<std::string> Fill(Player* human, uint32 size)
         for (std::size_t i = 0; i < arrivals.size(); ++i)
             if (!Bring(arrivals[i], human, i, arrivals.size()))
                 ++notBrought;
+        // Nobody joined the group made for them: never leave him in a group of one.
+        if (created && group && arrivals.empty())
+        {
+            group->Disband();
+            group = nullptr;
+        }
     }
 
     if (!joined.empty())
@@ -265,7 +311,10 @@ public:
         Group* group = player->GetGroup();
         Map* map = player->GetMap();
         if (group && group->GetGUID() == builtGroup && group->IsLeader(player->GetGUID()) && map && map->IsDungeon())
+        {
+            BringIn(player, group);
             PublishGuildGroup("entered", player, group, {});
+        }
     }
 };
 }

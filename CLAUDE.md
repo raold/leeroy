@@ -350,16 +350,20 @@ arena or queue (a raid browser listing is fine), not teleporting or flying,
 not in another instance or saved to another copy of his, and clear of
 `RealmModule::MutationReason` (Realm leases, training, offline raids, pending
 bot jobs). Within a role, the classes his group has fewest of come first,
-lowest guid on ties. They join directly (`AddMember`, converted to a raid past
-5), take the raid night's `RaidHabits` (plus dungeon-clear's entry when he is
-inside an instance) and are teleported beside him. He is told per role how
+lowest guid on ties. They join directly (`AddMember`; his group is made only
+once someone can join, and becomes a raid only when a party is full), take the
+raid night's `RaidHabits` (plus dungeon-clear's entry when he is inside an
+instance) and are teleported beside him. He is told per role how
 many were added and how many slots stayed empty, with a tally of why the
 others were not free. He must lead his group and be alive, out of combat and
 not travelling. Anyone else, `Leeroy.Enable = 0`, no guild or an empty cast:
 the command reaches playerbots unchanged. Each fill publishes a `guild_group`
-event (reason `built`); taking that group onto an instance map publishes
-another (`entered`, with map, instance id and difficulty). Such a group raids
-for DKP and attendance like a called raid night (see the mind's guild life).
+event (reason `built`). Taking that group onto an instance map grants
+dungeon-clear's entry for it (`GrantRaidEntry`, which writes only what a member
+lacks) to its guild members not yet in his copy, brings them in under the same
+fences (his copy only), and publishes another (`entered`, with map, instance id
+and difficulty). Such a group raids for DKP and attendance like a called raid
+night (see the mind's guild life).
 
 ### Local patch: pinned random bots
 
@@ -561,12 +565,15 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 - A group he built with `.playerbots bot addN` (native `guild_group` events)
   raids like a called raid night once he leads it into a raid instance in
   `guild/raids.py`: size and heroic from the instance difficulty, his group's
-  guild members as the raid, he leads, tank and loot officer chosen as for a
-  called raid (`SetLootMaster` is sent), then the called raid's own start
-  (`RaidNight._begin`: record, attendance and its DKP, kills, DKP loot). It ends
-  as a called raid does (10 minutes outside, logout, "calling it") or when the
-  group breaks up. Never beside another raid, never twice for one instance
-  within 7 days, never for 5-mans; nothing is formed, summoned or disbanded.
+  guild members as the raid, he leads. Arrival is proved as a called raid
+  proves it, by the raid night's inside summon: only members the server finds in
+  his copy are the raid and earn attendance. Then tank and loot officer are
+  chosen among them as for a called raid (`SetLootMaster` is sent) and the
+  called raid's own start runs (`RaidNight._begin`: record, attendance and its
+  DKP, kills, DKP loot). It ends as a called raid does (10 minutes outside,
+  logout, "calling it") or when the group breaks up. Never beside another raid,
+  never twice for one instance within 7 days, never for 5-mans; nothing is
+  formed or disbanded.
   The mind disbands only a group it formed itself (meta
   `guild:raid-night:formed-group`, set at FormRaid, cleared once the disband
   lands; a `guild_group` event outside a raid clears it too), so a group he
