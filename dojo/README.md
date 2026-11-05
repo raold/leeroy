@@ -11,10 +11,13 @@ transport, written once in pure C++ (`modules/mod-dojo/src/Lib`, no
 AzerothCore includes) and once in Python (`leeroy_dojo`); a deterministic fake
 worker; a checksummed episode recorder; `mod-dojo` registered as a native
 module that builds into an isolated core; a disposable training realm with two
-synthetic fixture actors in a training-only arena; and exclusive control of
-those actors through a narrow executor that plays the part of a client (plan
-Task 6). There is no learner and no Torch or Gymnasium dependency, and nothing
-in the worldserver opens an endpoint yet: commands come from the console.
+synthetic fixture actors in a training-only arena; exclusive control of those
+actors through a narrow executor that plays the part of a client (plan Task 6);
+and each actor's observation under visibility and a perceptual delay, with
+episodes that reset by tearing the arena and the actors down and building them
+again (plan Task 7). There is no learner and no Torch or Gymnasium dependency,
+and nothing in the worldserver opens an endpoint yet: commands come from the
+console.
 
 ## Layout
 
@@ -351,11 +354,13 @@ Lance and Frost Nova only, 244 actions, SHA-256
 `60d4f7e4b05d7548bb142bb2e71e0a862809658470fd61dbe499fde86242712a`; the
 acceptance publishes it as `<data root>/manifests/actions-<scenario>.json`.
 
-Masks are a pure function of what the actor knows (`ActorKnowledge`) and mask
-only what cannot succeed (D23); the noop never is. A wait (cooldown, global
-cooldown, a cast in progress) masks only when it outlasts the command delay
-plus the core's spell queue window; mana only when one regeneration tick could
-not cover the cost; range only beyond a 3-yard slack. Line of sight, facing
+Masks are a pure function of what the actor knows (`ActorKnowledge`, taken
+from its delayed observation; see below) and mask only what cannot succeed
+(D23); the noop never is. A wait (cooldown, global cooldown, a cast in
+progress) masks only when it outlasts the knowledge's age (the 100 ms
+perceptual delay), the command delay and the core's spell queue window
+together; mana only when one regeneration tick could not cover the cost; range
+only beyond a 3-yard slack. Line of sight, facing
 with `keep`, roots, stuns and immunity are left to execution. Turning away
 while casting a front-facing spell is the one combination masked in every
 state. The knowledge read calls only getters, and the cost and range lookups
@@ -379,8 +384,12 @@ execution times and the outcome or reason: `executor`, `acquire`, `release`,
 actor moved, a selection or auto-attack the core ended) or `stock` for
 anything no one here asked for, which is what a gate failure would look like:
 an untriggered cast, a movement spline or motion generator the executor did
-not start, a new selection, auto-attack or pet. Each record is logged as a
-`dojo-trace {json}` line and kept in a bounded buffer.
+not start, a new selection, auto-attack or pet. Each record carries the episode
+generation it was made in and is kept in a bounded buffer of 4096 that the
+tooling drains into its run files with `dojo control trace since <seq>`; a gap
+in sequence numbers is reported as lost records. Only ownership, generation
+and neutralize records, dropped or refused commands, changed fingerprints and
+stock actions are also logged to `Server.log` as `dojo-trace {json}` lines.
 
 | Command (console or RA) | Does |
 |---|---|
@@ -389,8 +398,8 @@ not start, a new selection, auto-attack or pet. Each record is logged as a
 | `dojo control act <0\|1> <action>... [force]` | submit commands by name or index; a masked action is refused unless forced |
 | `dojo control masks <0\|1> [all]` | the actor's knowledge, the reason per ability and facing, and with `all` the mask bits |
 | `dojo control maskcheck <0\|1> <n>` | n mask queries, and whether either actor's fingerprint changed |
-| `dojo control trace [n]` / `actions` | the last trace records; the catalog's canonical JSON |
-| `dojo harness place\|mana\|restore\|los` | acceptance set-up in the training arena, each traced as `harness` |
+| `dojo control trace [n]` / `trace since <seq> [max]` / `actions` | the last trace records, or those after a sequence number; the catalog's canonical JSON |
+| `dojo harness place\|mana\|restore\|los\|kill\|cooldowns\|disconnect` | acceptance set-up in the training arena, each traced as `harness`: placement, mana, the staging baseline, a line-of-sight probe, a death by the actor's own hand (no kill credit), clearing an actor's cooldowns and global cooldown (returns the time), and ending an actor's session as a dropped connection would |
 
 `python -m leeroy_dojo realm --layout <layout.json> control-acceptance
 --scenario <json>` runs the plan's Task 6 acceptance and writes its evidence to
@@ -402,6 +411,97 @@ moving behind a cast are refused or carried out by the core's rules with the
 reason recorded; and the worldserver shuts down while both actors are owned,
 its logs showing ownership held to the end. Fixture rows are compared before
 and after and the live install is fingerprinted, as in the realm acceptance.
+
+## Observations and episodes
+
+### The actor observation
+
+`leeroy-dojo-observation-v1` (`src/Lib/DojoPerception.*`, `leeroy_dojo.observation`)
+is an ordered list of numbers, each a raw quantity divided by its field's
+scale and clipped to the field's bounds, with a defined value for when what it
+describes is missing. Both languages build the same schema from the action
+catalog and hash its canonical JSON
+(`modules/mod-dojo/tests/fixtures/observation_cases.json`); for
+`frost_mirror_small_v1` it has 137 values, SHA-256
+`81802928597a300914e6b0004747a07c7ebb07fa87884556cb8191287c9e41a0`. In order:
+
+| Group | Fields |
+|---|---|
+| context | class one-hot (the ten WotLK classes), level, talent points per tree |
+| match | the time left of the scenario's match limit |
+| self | alive, health, mana, global cooldown, casting and which kit spell, cast time left and progress, a request in the core's spell queue; per kit spell known, cooldown, cost and in range; position in the arena frame, facing, distance to the edge, velocity, moving, run speed; rooted (and for how long), stunned, silenced, frozen, in combat, Fingers of Frost charges; the pending command (present, ability, moves, due) |
+| enemy | present, visible, age since last seen; health, mana and alive as last seen; its position relative to the actor's own; while visible, whether it faces the actor, its velocity, its cast bar, its effects (rooted, stunned, frozen, slowed) and whether it targets the actor; per kit spell a cooldown inferred only from uses the actor saw, with an unknown flag |
+| events | the four newest kit casts (started, completed, stopped) and deaths the actor saw, newest first: present, age, by self, kind, kit spell |
+
+Each world tick, after the maps have updated, the runtime
+(`src/Runtime/DojoObservation.*`) reads both actors' authoritative state with
+getters only and gives each actor a percept: itself, the enemy only while it
+is visible (in the map, detectable and in line of sight from eye height), and
+the cast starts, casts and interruptions its own session was told of whose
+caster it could see. The enemy's cooldowns, global cooldown, spell queue and
+pending command never enter a percept; neither does where it is while out of
+sight. A percept matures 100 ms after it was taken (the perceptual delay,
+D30), and only matured percepts update the actor's memory (the enemy last
+seen, its kit uses seen, recent events) and make its observation and mask
+knowledge at a decision, so any change reaches an actor no sooner than 100 ms
+later and a hidden one not at all. The delay is checked from timestamps, not
+by waiting, so it holds unchanged on simulation time. The authoritative state
+is kept as separate debug records and printed on separate console lines; it
+is never part of an observation.
+
+### Episodes and their reset
+
+An episode is a generation. `dojo episode reset` starts the next one and
+returns at once; the reset completes over later ticks. It first drops every
+pending command and in-flight cast record of the old generation and holds both
+actors' perception, so nothing of the old episode can execute, be traced to it
+or be perceived in the new one; an action id from before the generation is
+refused if it ever reaches the executor. The director then tears down
+whatever is there (out of the arena, the dead revived by leaving, the staging
+baseline restored, both logged out, the old instance closed with no outcome)
+and reconstructs it: fresh logins (new `Player` and `PlayerbotAI` objects, so
+no aura, diminishing return, threat, combat, spell event, projectile, motion or
+AI cache survives), the staging baseline restored and the loadout verified, a
+new unrated instance with one actor per side. After the stock preparation the
+gates open; the episode then verifies the clean state of both actors (loadout,
+full health and mana, no transient aura, cooldown, global cooldown,
+diminishing return, combat, selection, auto-attack, movement, spell, spell
+queue, pet or pending command, freshly owned, at its start and facing, on its
+side), starts their perception, and becomes ready only once each actor has an
+observation made under the delay and both still stand at their start. Until
+then nothing reports the reset complete; a failure leaves the episode failed,
+and the next reset starts from whatever is there. A running episode is aborted
+(never scored) when an actor goes offline or loses ownership, perception
+stops, or the core ends the arena; the scenario's match limit ends it.
+
+| Command (console or RA) | Does |
+|---|---|
+| `dojo episode reset [reason]` | starts the next generation's reset; `dojo-episode-reset {json}` with its generation and token |
+| `dojo episode status` / `evidence` | phase, generation, timings and counts; the last reset's clean-state evidence and both initial observations |
+| `dojo episode observe [full]` / `decide <a0> <a1> [force]` | both actors' observations now (with the values and mask bits); one decision for both actors answering the same observations, masked actions refused unless forced |
+| `dojo episode schema` / `debug [n]` | the observation schema and the actor context; the last n authoritative debug records |
+| `dojo episode abort [reason]` / `fault <leave\|arena\|none>` | abort the episode (an abandoned reset's completion is then ignored); arm a one-shot teardown fault for the next reset |
+
+`python -m leeroy_dojo realm --layout <layout.json> reset-acceptance
+--scenario <json> [--resets N]` runs the plan's Task 7 acceptance and writes
+`<data root>/runs/<stamp>-reset-acceptance/`: a reference reset straight after
+a worldserver restart, then N consecutive resets from idle, mid-combat, a
+death, a cast in progress, a root, a command inside its delay, a projectile
+in flight, an actor's session ended, the console connection dropped mid-reset,
+both teardown faults, an abort mid-reset and hidden changes (the actor's own
+cooldown cleared, the enemy's cooldown cleared, the enemy moved out of sight),
+then a second restart reference. Each completed reset must pass the worker's
+checks, equal the reference in clean state and initial observations, equal the
+manifest's own expectation, change no progression row and show no stock action
+or old-generation record after it began. The run keeps actor observations
+(`observations.jsonl`) and authoritative debug records (`debug.jsonl`) in
+separate files, beside the drained trace, every reset's record and the
+worker's logs.
+
+On the controller's side `leeroy_dojo.memory.EpisodeMemory` holds every
+actor's history and every policy's memory for one episode, clears them all
+when a reset result arrives and refuses a result from another episode or an
+older generation afterwards.
 
 ## Protocol
 
