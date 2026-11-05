@@ -31,6 +31,7 @@ from leeroy_mind.memory.threads import ClosedThread
 from leeroy_mind.memory.writer import Embedder, MemoryCandidate, MemoryWriter
 from leeroy_mind.personas.io import PersonaCache, save_persona
 from leeroy_mind.protocol import Cast, Chat, Hello, Member, register_event
+from leeroy_mind.realm.protocol import ChannelChat, register as register_realm_events
 from leeroy_mind.storage.db import EmbeddingMismatch, open_db
 from leeroy_mind.storage.store import Store
 from leeroy_mind.talk.engine import TalkEngine
@@ -757,6 +758,25 @@ def test_a_stale_crashed_session_is_closed_and_a_new_one_begun(tmp_path, clock):
             await h.advance(60)
             assert h.says() == []  # a resync never greets
             await answered_in(h, h.app.session_id)
+    run(main())
+
+
+def test_public_channel_chatter_neither_resumes_nor_extends_a_crashed_session(tmp_path, clock):
+    async def main():
+        sid, _, last = crashed(tmp_path, quiet_for=timedelta(hours=2))
+        register_realm_events()  # stored as App stores it: type "channel_chat"
+        s = Store(open_db(tmp_path / "mind.db"), clock=FakeClock(START))
+        try:  # strangers kept talking in a public channel until just before the crash
+            s.insert_game_event(ChannelChat(ts=0, channel="world", from_guid=999,
+                                            from_name="Stranger", zone=0, text="lfg icc",
+                                            via_bridge=False),
+                                session_id=sid, ts=FakeClock(START - timedelta(minutes=1)).now())
+        finally:
+            s.close()
+        async with running(tmp_path, clock, events=[hello(HUMAN), CAST]) as h:
+            await h.wait(lambda: h.app.session_id not in (None, sid))
+            rows = h.rows("SELECT id, ended FROM session ORDER BY id")
+            assert [r["ended"] for r in rows] == [last, None]  # ended where he went quiet
     run(main())
 
 

@@ -2,6 +2,7 @@
 #include "TrainingCommands.h"
 #include "GuildPorts.h"
 #include "OfflineRaidJob.h"
+#include "LeeroyTrainingDcAdmission.h"
 #include "LeeroyTrainingHold.h"
 #include "LeeroyTrainingOverrides.h"
 #include "LeeroyTrainingRuns.h"
@@ -13,6 +14,7 @@
 #include "AiObjectContext.h"
 #include "Event.h"
 #include "Group.h"
+#include "GroupMgr.h"
 #include "Log.h"
 #include "Map.h"
 #include "PlayerbotAI.h"
@@ -37,6 +39,7 @@ struct TrainingRun
 {
     uint64 token = 0;
     RunScope scope;
+    RunManifest manifest;
     TrainingOverrides overrides;
     TrainingHold hold;
     std::optional<uint64> dcOffSince;
@@ -67,6 +70,31 @@ RunScope Scope(Player* leader)
         leader->GetGroup()->GetGUID().GetRawValue()};
 }
 
+std::optional<RunManifest> GroupManifest(Player* leader)
+{
+    auto* group = leader ? leader->GetGroup() : nullptr;
+    if (!group || group->GetMemberSlots().size() > kMaxRunMembers) return std::nullopt;
+    std::vector<std::uint32_t> members;
+    members.reserve(group->GetMemberSlots().size());
+    for (auto const& member : group->GetMemberSlots()) members.push_back(member.guid.GetCounter());
+    // Recheck at capture as well as leader selection: neither an override journal
+    // nor a job receipt may acquire a body still held by Realm or Guild fishing.
+    return CaptureUnownedDcRun(leader->GetGUID().GetCounter(), std::move(members), Realm::RealmOwns);
+}
+
+bool OwnsBody(RunScope const& scope, RunManifest const& manifest, uint32 guid)
+{
+    if (RunOwnsBody(manifest, scope, guid)) return true;
+    if (!guid || !scope.group) return false;
+    // Resolve the saved group itself: both the old leader and a later-added
+    // member can be offline while their exact group still owns that member.
+    // The registry uses a low key, so verify the full saved identity as well.
+    ObjectGuid const savedGroup(scope.group);
+    auto* group = sGroupMgr->GetGroupByGUID(savedGroup.GetCounter());
+    return group && group->GetGUID() == savedGroup
+        && RunOwnsBody(manifest, scope, guid, group->GetGUID().GetRawValue(), group->IsMember(Guid(guid)));
+}
+
 bool SameScope(Player* leader, RunScope const& scope)
 {
     return leader && leader->GetGroup() && Scope(leader) == scope
@@ -85,6 +113,9 @@ Player* OwnedLeader(uint32 guid)
     if (!leader || (!benchmark && leader->GetGuildId() != LeeroyModule::Instance().GuildId())
         || !GET_PLAYERBOT_AI(leader) || IsSelfBot(leader) || !leader->GetGroup() || leader->IsBeingTeleported()
         || DcLeaderSignal::FindLeaderTank(leader) != leader) return nullptr;
+    // Use the complete native roster, including offline members. RealmOwns also
+    // covers retained holders while Realm is off; benchmark identity is no waiver.
+    if (Realm::RealmOwns(guid) || Guild::GroupHasRealmOwner(leader->GetGroup())) return nullptr;
     if (!benchmark)
         for (auto const& member : leader->GetGroup()->GetMemberSlots())
             if (member.guid.GetCounter() != Guild::HumanGuid() && !Guild::IsCast(member.guid.GetCounter())) return nullptr;
@@ -178,6 +209,11 @@ bool Clear(uint32 guid, TrainingRun& run)
 TrainingRun* GetRun(Player* leader)
 {
     auto guid = leader->GetGUID().GetCounter();
+    auto manifest = GroupManifest(leader); // Capture before any newly admitted DC mutation.
+    if (!manifest) return nullptr;
+    auto scope = Scope(leader);
+    auto* job = jobs.Find(guid);
+    if (job && job->scope != scope) return nullptr; // A retained old job cannot authorize a replacement scope.
     auto found = runs.find(guid);
     if (found != runs.end())
     {
@@ -187,12 +223,13 @@ TrainingRun* GetRun(Player* leader)
     }
     if (runs.size() >= 128) return nullptr;
     TrainingRun run;
-    run.scope = Scope(leader);
-    auto* job = jobs.Find(guid);
+    run.scope = scope;
+    run.manifest = std::move(*manifest);
     if (job && job->scope == run.scope)
     {
         run.token = job->token;
         run.jobOwned = true;
+        run.manifest = job->manifest; // Preserve admission membership, including unknown legacy proof.
     }
     else run.token = jobs.NextToken();
     if (!run.token) return nullptr;
@@ -201,15 +238,35 @@ TrainingRun* GetRun(Player* leader)
 }
 #endif
 
+bool TrainingDcOwns(std::uint32_t guid)
+{
+#if LEEROY_HAS_DUNGEON_CLEAR
+    if (!guid) return false;
+    // Settings journals and jobs are separate existing owners. Neither switch-off
+    // nor a missing/replaced player or group is permission to forget their bodies.
+    for (auto const& [leader, run] : runs)
+        if (OwnsBody(run.scope, run.manifest, guid)) return true;
+    if (jobs.Owns(guid)) return true;
+    for (auto leader : jobs.Leaders())
+        if (auto* job = jobs.Find(leader); job && OwnsBody(job->scope, job->manifest, guid)) return true;
+    return false;
+#else
+    (void)guid;
+    return false;
+#endif
+}
+
 std::uint64_t MarkJobRun(std::uint32_t guid)
 {
 #if LEEROY_HAS_DUNGEON_CLEAR
     if (!Guild::GuildEnabled() || !DcModule::IsEnabled()) return 0;
     auto* leader = OwnedLeader(guid);
     if (!leader) return 0;
+    auto manifest = GroupManifest(leader);
+    if (!manifest) return 0;
     auto run = runs.find(guid);
     if (run != runs.end() && (!SameRun(leader, run->second) || run->second.clearing || run->second.jobOwned)) return 0;
-    auto token = jobs.Register(guid, Scope(leader));
+    auto token = jobs.Register(guid, Scope(leader), std::move(*manifest));
     if (token && run != runs.end())
     {
         run->second.token = token;
@@ -390,12 +447,8 @@ void TickDcHolds(std::uint32_t diff)
             ++it;
         }
     }
-    for (auto guid : jobs.Leaders())
-    {
-        if (Guild::OfflineRaidOwns(guid)) continue;
-        if (auto* job = jobs.Find(guid); !runs.contains(guid) && !SameScope(Guild::FindOnline(guid), job->scope))
-            jobs.End(guid, job->token); // Keep the receipt until old overrides have finished restoring.
-    }
+    // Orphaned job receipts remain excluded until exact-token ClearTrainingRun.
+    // A missing leader or changed scope is not evidence of successful teardown.
 #else
     (void)diff;
 #endif

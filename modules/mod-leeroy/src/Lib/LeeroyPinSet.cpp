@@ -35,6 +35,16 @@ bool PinSet::Flag(std::uint32_t guid, std::uint8_t flag) const
 bool PinSet::Muted(std::uint32_t guid) const { return Flag(guid, kPinMute); }
 bool PinSet::Watched(std::uint32_t guid) const { return Flag(guid, kPinWatch); }
 PinSet& Pins() { static PinSet pins; return pins; }
+PinPlan PlanPins(PinSet const& owners, std::unordered_set<std::uint32_t> const& cast,
+    bool enabled, bool keepCast, bool bringOnline)
+{
+    PinPlan plan{owners.Union({})};
+    bool const held = !plan.guids.empty();
+    if (enabled && (keepCast || !held)) plan.guids.insert(cast.begin(), cast.end());
+    plan.keep = held || (enabled && keepCast);
+    plan.online = enabled && bringOnline;
+    return plan;
+}
 }
 void LeeroySetExtraPins(std::string_view owner, std::unordered_set<std::uint32_t> guids, std::uint8_t flags)
 {

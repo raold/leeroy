@@ -27,7 +27,7 @@ from leeroy_mind.library.wiki import SEEDS
 from leeroy_mind.personas.schema import Persona
 from leeroy_mind.talk import names as N
 from leeroy_mind.talk.names import ALIASES, CLASS_NAMES, bare, game_thing, names_in, words_re
-from leeroy_mind.talk.select import is_quest_talk, quest_helper
+from leeroy_mind.talk.select import interested, is_quest_talk, quest_helper
 from leeroy_mind.talk.reference import REFERENCE_KINDS, reference_topic
 from leeroy_mind.text import strip_wow_markup
 
@@ -805,8 +805,8 @@ FIT_TIERS: dict[str, tuple[str, ...]] = {
 
 def fit_tier(topic: str, p: Persona | None) -> int | None:
     """How well a member fits his question's topic (0 best, FIT_TIERS), from persona data
-    only: the officer title (SCHOLAR_TITLE), game.thinks_as, select.quest_helper. None: no
-    fit."""
+    only: the officer title (SCHOLAR_TITLE), game.thinks_as (as the owner's interest dials
+    move it: select.interested), select.quest_helper. None: no fit."""
     if p is None:
         return None
     for i, tag in enumerate(FIT_TIERS.get(topic, ())):
@@ -815,7 +815,7 @@ def fit_tier(topic: str, p: Persona | None) -> int | None:
         elif tag == "quest_helper":
             fits = quest_helper(p)
         else:
-            fits = p.game.thinks_as == tag
+            fits = interested(p, tag)
         if fits:
             return i
     return None

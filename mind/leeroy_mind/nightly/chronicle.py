@@ -12,7 +12,7 @@ from leeroy_mind.nightly.reactions import laughs_at
 from leeroy_mind.nightly.settings import is_sunday, iso_week, night_bounds, week_bounds
 from leeroy_mind.nightly.store import insert_story
 from leeroy_mind.nightly.stories import public_snapshot
-from leeroy_mind.personas.io import load_persona
+from leeroy_mind.personas.io import load_effective
 from leeroy_mind.personas.screens import redact_real_name
 from leeroy_mind.storage.rows import MemoryRow
 from leeroy_mind.text import strip_wow_markup, truncate_words
@@ -45,7 +45,8 @@ def _bosses(store, window):
 
 def chronicler(ctx):
     """An available historian by title, otherwise the lowest-guid lore-minded member."""
-    people = [(guid, load_persona(ctx.store, guid)) for guid in sorted(ctx.members())]
+    people = [(guid, load_effective(ctx.store, guid, tuning=getattr(ctx, "tuning", None)))
+              for guid in sorted(ctx.members())]
     historians = [guid for guid, p in people if p is not None and "historian" in p.play.officer_title.casefold()]
     if historians:
         return historians[0]
@@ -212,7 +213,8 @@ def _chronicle_sources(ctx):
     return {"refs": tuple(refs), "items": tuple(items), "snapshot": snapshot, "author": author,
             "participants": tuple(sorted((participants & members) | {author})),
             "era": era_name(store, end, ctx.tz), "card": ctx.card(author),
-            "persona": load_persona(store, author), "origins": tuple(origins)}
+            "persona": load_effective(store, author, tuning=getattr(ctx, "tuning", None)),
+            "origins": tuple(origins)}
 
 
 async def write_chronicle(ctx):

@@ -7,6 +7,8 @@ from pathlib import Path
 from ..human import HumanIdentity
 from ..storage.store import Store
 from ..text import estimate_tokens
+from ..tuning.effective import is_effective
+from ..tuning.state import EMPTY, Tuning
 from ..wow import CLASSES, RACES
 from .card import card_race_class, render_core_card
 from .schema import (Persona, PersonaError, persona_from_dict, persona_to_dict,
@@ -23,7 +25,11 @@ def canonical_json(p: Persona) -> str:
 def save_persona(store: Store, p: Persona, *, source: str, ts: float, race: str,
                  class_name: str) -> int:
     """Validate and store a persona; returns its version. Saving an identical persona with the
-    same card (race and class unchanged) changes nothing and returns the current version."""
+    same card (race and class unchanged) changes nothing and returns the current version. An
+    effective (tuned) persona is refused: the owner's dials are an overlay, never written into
+    persona_core (tuning.effective)."""
+    if is_effective(p):
+        raise TypeError("an effective (tuned) persona is never saved: save the stored one")
     errs = validate_persona(p)
     if errs:
         raise PersonaError(errs)
@@ -45,8 +51,29 @@ def _canonical_text(js: str) -> str | None:
 
 
 def load_persona(store: Store, guid: int) -> Persona | None:
+    """The stored persona, as written: the reader for every writer (attraction, enrichment,
+    imports, seed, generate, rebalance, typing fixes) and for exports."""
     js = store.get_persona_json(guid)
     return None if js is None else persona_from_dict(json.loads(js))
+
+
+def load_tuning(store: Store) -> Tuning:
+    """The tuning in force, read in a unit of its own so it pins no WAL snapshot."""
+    with store.transaction():
+        return Tuning.load(store.conn)
+
+
+def load_effective(store: Store, guid: int, *, tuning: Tuning | None = None) -> Persona | None:
+    """The persona with the owner's dials folded in (tuning.effective), for a reader of
+    behaviour that does not go through a PersonaCache: `tuning` when given (a night's frozen
+    values), else what mind.db holds now. The stored object itself when nothing reaches it."""
+    p = load_persona(store, guid)
+    if p is None:
+        return None
+    t = load_tuning(store) if tuning is None else tuning
+    if not (t.pins or t.offsets):
+        return p
+    return t.apply(p, store.cast().get(guid) if t.needs_cast else None)
 
 
 def export_personas(store: Store, out_dir: Path, guids=None) -> list[Path]:
@@ -153,16 +180,39 @@ def import_personas(store: Store, in_dir: Path, *, ts: float, dry_run: bool = Fa
 
 
 class PersonaCache:
-    def __init__(self, store: Store):
+    """The personas the mind reads. get() is the effective persona (the owner's dials folded
+    in: tuning.effective), for every reader of behaviour; base() the stored one, for writers.
+    With no dial reaching a member, both are the same stored object. The tuning is read from
+    mind.db once and again at each full invalidate (the session start); the running mind swaps
+    in a new one with set_tuning when the owner changes a dial. `tuning=False`: stored
+    personas only, as before tuning existed."""
+
+    def __init__(self, store: Store, *, tuning: bool = True):
         self._store = store
+        self._tuned = tuning
+        self._base: dict[int, Persona] = {}
         self._cache: dict[int, Persona] = {}
         self._unreadable: set[int] = set()
+        self._tuning: Tuning | None = None
+        self._cast: dict | None = None
 
-    def get(self, guid: int) -> Persona | None:
+    @property
+    def tuning(self) -> Tuning:
+        if self._tuning is None:
+            self._tuning = load_tuning(self._store) if self._tuned else EMPTY
+        return self._tuning
+
+    def set_tuning(self, tuning: Tuning) -> None:
+        """New values in force from the next read; the stored personas stay cached."""
+        self._tuning = tuning
+        self._cache.clear()
+        self._cast = None
+
+    def base(self, guid: int) -> Persona | None:
         """The stored persona, or None when there is none or it cannot be read (a row from a
         newer schema, say): one bad row must not silence the whole guild. An unreadable guid
         is logged once and not read again until invalidated (the app does at each session)."""
-        p = self._cache.get(guid)
+        p = self._base.get(guid)
         if p is None and guid not in self._unreadable:
             try:
                 p = load_persona(self._store, guid)
@@ -171,7 +221,23 @@ class PersonaCache:
                 log.warning("persona_unreadable: guid %d: %s", guid, str(e)[:200])
                 return None
             if p is not None:
-                self._cache[guid] = p
+                self._base[guid] = p
+        return p
+
+    def get(self, guid: int) -> Persona | None:
+        """The effective persona (see the class docstring), or None as base() is."""
+        p = self._cache.get(guid)
+        if p is not None:
+            return p
+        p = self.base(guid)
+        if p is None:
+            return None
+        t = self.tuning
+        if t.pins or t.offsets:
+            if t.needs_cast and self._cast is None:
+                self._cast = self._store.cast()
+            p = t.apply(p, (self._cast or {}).get(guid))
+        self._cache[guid] = p
         return p
 
     def all(self) -> dict[int, Persona]:
@@ -181,7 +247,11 @@ class PersonaCache:
     def invalidate(self, guid: int | None = None) -> None:
         if guid is None:
             self._cache.clear()
+            self._base.clear()
             self._unreadable.clear()
+            self._tuning = None
+            self._cast = None
         else:
             self._cache.pop(guid, None)
+            self._base.pop(guid, None)
             self._unreadable.discard(guid)

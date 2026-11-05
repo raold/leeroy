@@ -117,6 +117,9 @@ class FakeTrainingPorts:
     def standing_lead(self):
         return self.lead
 
+    def set_lead(self, guid):
+        self.lead = guid
+
     def boss_mechanics(self, boss, instance):
         return list(self.mechanics.get((boss, instance), ()))
 
@@ -130,9 +133,15 @@ class FakeTrainingPorts:
     def release(self, owner, guids=None):
         guids = tuple(self.holders) if guids is None else tuple(guids)
         self.released.append((owner, guids))
+        removed = set()
         for guid in guids:
             if self.holders.get(guid) == owner:
                 del self.holders[guid]
+                removed.add(guid)
+        return removed
+
+    def claims_for(self, owner):
+        return frozenset(g for g, held in self.holders.items() if held == owner)
 
     def holder(self, guid):
         return self.holders.get(guid)

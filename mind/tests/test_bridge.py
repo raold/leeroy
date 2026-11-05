@@ -804,3 +804,94 @@ def test_the_fake_bridge_never_listens_on_a_live_port():
             await bridge.stop()
         assert {7878, 11434} <= set(FakeBridge.AVOID_PORTS)
     run(go())
+
+
+def test_native_origin_requires_exact_object_and_dispatcher_task_and_clears_after_failure():
+    async def go():
+        seen, children, connections = [], [], []
+        client = None
+        async def child(ev):
+            children.append(client.delivery_origin(ev))
+        async def handler(ev):
+            origin = client.delivery_origin(ev)
+            if isinstance(ev, Chat):
+                seen.append((ev, origin, client.delivery_origin(dataclasses.replace(ev))))
+                await asyncio.create_task(child(ev))
+                raise RuntimeError("ordinary handler failure")
+        async def connection(up):
+            connections.append((client.delivery_epoch(up), client.delivery_origin(up)))
+        client = BridgeClient("127.0.0.1", 1, handler, on_connection=connection)
+        reader = asyncio.StreamReader()
+        raw = {"v": 1, "ts": 1793304000123, **chat_event("native"), "extra": "full envelope"}
+        reader.feed_data(json.dumps(raw).encode() + b"\n")
+        reader.feed_eof()
+        client._enqueue(("conn", True, 4))
+        await client._read_loop(reader, transport_epoch=4)
+        client._queue.put_nowait(None)
+        await client._dispatch()
+        assert len(seen) == 1
+        ev, origin, copied = seen[0]
+        assert origin is not None and origin.transport_epoch == 4 and "extra" in origin.top_keys
+        assert copied is None and children == [None] and connections == [(4, None)]
+        assert client.delivery_origin(ev) is None and client.delivery_epoch(ev) is None
+        assert client._delivery is None
+        client.inject(ev)  # Even reinjecting the exact former native object loses provenance.
+        client._queue.put_nowait(None)
+        await client._dispatch()
+        assert len(seen) == 2 and seen[1][1] is None
+        assert children == [None, None] and client._delivery is None
+    run(go())
+
+
+def test_origin_clears_on_cancel_and_is_unavailable_to_an_outside_task():
+    async def go():
+        entered = asyncio.Event()
+        held = []
+        async def handler(ev):
+            held.append((ev, client.delivery_origin(ev)))
+            entered.set()
+            await asyncio.Event().wait()
+        client = BridgeClient("127.0.0.1", 1, handler)
+        reader = asyncio.StreamReader()
+        reader.feed_data(json.dumps({"v": 1, "ts": 1793304000123,
+                                     **chat_event("blocked")}).encode() + b"\n")
+        reader.feed_eof()
+        await client._read_loop(reader, transport_epoch=8)
+        dispatch = asyncio.create_task(client._dispatch())
+        await asyncio.wait_for(entered.wait(), 2)
+        ev, origin = held[0]
+        assert origin is not None and client.delivery_origin(ev) is None
+        dispatch.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await dispatch
+        assert client._delivery is None and client.delivery_origin(ev) is None
+    run(go())
+
+
+def test_delayed_native_origin_keeps_reader_epoch_after_actual_writer_replacement():
+    async def go():
+        entered, release = asyncio.Event(), asyncio.Event()
+        retained = []
+        async def handler(client, ev):
+            if isinstance(ev, Chat):
+                before = client.delivery_origin(ev)
+                entered.set()
+                await release.wait()
+                retained.append((before, client.delivery_origin(ev), client.delivery_epoch(ev),
+                                 client.transport_state))
+        async with session(handler=handler) as s:
+            first_epoch = s.client.transport_state.epoch
+            try:
+                await s.bridge.push(chat_event("old delivery"))
+                await asyncio.wait_for(entered.wait(), 2)
+                await s.bridge.drop_client()
+                await s.wait_for(lambda: s.bridge.connections == 2 and s.client.greeted)
+                assert s.client.transport_state.epoch > first_epoch
+                release.set()
+                await s.wait_for(lambda: len(retained) == 1)
+                before, after, delivered_epoch, actual_writer = retained[0]
+                assert before is after and before.transport_epoch == delivered_epoch == first_epoch
+                assert actual_writer.connected and actual_writer.epoch > before.transport_epoch
+            finally:
+                release.set()
+    run(go())

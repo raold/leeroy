@@ -7,6 +7,41 @@
 using namespace Leeroy;
 using Guids = std::unordered_set<std::uint32_t>;
 
+LEEROY_TEST(pin_disable_retains_only_explicit_cleanup_owners_without_new_logins)
+{
+    PinSet owners;
+    owners.Set("realm", {71, 72});
+    owners.Set(kPinOwnerBenchmark, {72, 73});
+    auto off = PlanPins(owners, {70, 71}, false, true, true);
+    CHECK(off.guids == Guids({71, 72, 73}));
+    CHECK(off.keep && !off.online);
+    owners.Set("realm", {});
+    off = PlanPins(owners, {70, 71}, false, false, false);
+    CHECK(off.guids == Guids({72, 73}));
+    CHECK(off.keep && !off.online);
+    owners.Set(kPinOwnerBenchmark, {});
+    off = PlanPins(owners, {70, 71}, false, true, true);
+    CHECK(off.guids.empty());
+    CHECK(!off.keep && !off.online);
+}
+
+LEEROY_TEST(pin_owner_retention_does_not_extend_disabled_cast_keep_policy)
+{
+    PinSet owners;
+    owners.Set("realm", {71});
+    auto plan = PlanPins(owners, {70, 71, 72}, true, false, true);
+    CHECK(plan.guids == Guids({71}));
+    CHECK(plan.keep && plan.online);
+    owners.Set("realm", {});
+    plan = PlanPins(owners, {70, 71, 72}, true, false, true);
+    CHECK(plan.guids == Guids({70, 71, 72}));
+    CHECK(!plan.keep && plan.online); // Preserve ordinary pre-existing configuration semantics.
+    owners.Set("realm", {73});
+    plan = PlanPins(owners, {70}, true, true, false);
+    CHECK(plan.guids == Guids({70, 73}));
+    CHECK(plan.keep && !plan.online);
+}
+
 LEEROY_TEST(pin_owned_mute_survives_module_disable_until_owner_releases_it)
 {
     PinSet pins;

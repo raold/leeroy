@@ -37,6 +37,9 @@ class TrainingJobs:
     def members(self):
         return self.lab.members() | self.benchmarks.members()
 
+    def body_holds(self):
+        return self.lab.body_holds() + self.benchmarks.body_holds()
+
     def _guild(self):
         ground = self.ground
         guild = getattr(ground.app, "guild", None)

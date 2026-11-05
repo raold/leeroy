@@ -52,6 +52,7 @@ from leeroy_mind.personas.stances import is_woman
 from leeroy_mind.protocol import Member
 from leeroy_mind.storage.db import snapshot
 from leeroy_mind.storage.store import Store
+from leeroy_mind.tuning.lines import tuned_card
 from leeroy_mind.wow import CAST_MIN_LEVEL, CLASSES, RACES
 
 # The romance stances that are an attitude toward the owner (owner, 2026-10-30), and generic,
@@ -107,6 +108,9 @@ class NightContext:
     asker: object | None = None
     extract_thread: Callable[[int], Awaitable[None]] | None = None
     plan: dict = field(default_factory=dict)
+    # The owner's dials as the run found them (tuning.Tuning), so a change made while it runs
+    # waits for the next night; None: whatever `personas` holds when asked.
+    tuning: object | None = None
     _memo: dict = field(default_factory=dict, init=False, repr=False, compare=False)
 
     @property
@@ -219,7 +223,21 @@ class NightContext:
         return [g for g in cast if g not in away]
 
     def persona(self, guid: int) -> Persona:
+        """The effective persona (the owner's dials folded in, as the run found them): what
+        the night's stages read. A writer takes base()."""
         p = self.personas.get(guid)
+        if p is None:
+            raise KeyError(f"no stored persona for guid {guid}")
+        frozen = self.tuning
+        if frozen is not None and frozen is not getattr(self.personas, "tuning", frozen):
+            base = self.base(guid)
+            p = frozen.apply(base, self._roster().get(guid) if frozen.needs_cast else None)
+        return p
+
+    def base(self, guid: int) -> Persona:
+        """The stored persona, as written: for the stages that write persona fields."""
+        reader = getattr(self.personas, "base", self.personas.get)
+        p = reader(guid)
         if p is None:
             raise KeyError(f"no stored persona for guid {guid}")
         return p
@@ -235,15 +253,25 @@ class NightContext:
 
     def card(self, guid: int) -> str:
         """The card live talk shows (Pipeline._card, PR28): rendered from the persona, with race
-        and class from the roster, or from the stored card for a member the roster lacks."""
+        and class from the roster, or from the stored card for a member the roster lacks, and
+        the member's tuning lines after it when the owner has turned a wording dial far
+        (tuning.lines.tuned_card)."""
         def build() -> str:
-            m = self._roster().get(guid)
-            if m is not None:
-                race, class_name = RACES.get(m.race, ""), CLASSES.get(m.class_, "")
-            else:
-                race, class_name = card_race_class(self.store.get_card(guid) or "")
-            return render_prompt_card(self.persona(guid), race=race, class_name=class_name)
+            p = self.persona(guid)
+            return tuned_card(render_prompt_card(p, **self._kind(guid)), p)
         return self._cached(("card", guid), build)
+
+    def base_card(self, guid: int) -> str:
+        """The card of the stored persona, with no tuning: for the stages that write persona
+        fields (the looks pass)."""
+        return render_prompt_card(self.base(guid), **self._kind(guid))
+
+    def _kind(self, guid: int) -> dict:
+        m = self._roster().get(guid)
+        if m is not None:
+            return {"race": RACES.get(m.race, ""), "class_name": CLASSES.get(m.class_, "")}
+        race, class_name = card_race_class(self.store.get_card(guid) or "")
+        return {"race": race, "class_name": class_name}
 
     def attitudes(self, *, fresh: bool = False) -> dict[int, str]:
         """The women of the cast (away ones included) whose romance stance is an attitude toward

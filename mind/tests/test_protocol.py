@@ -1,5 +1,5 @@
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pytest
 
@@ -274,3 +274,59 @@ def test_register_event():
         register_event("chat", TestJob)
     with pytest.raises(ProtocolError, match="job"):
         parse_event('{"v":1,"type":"test_job","ts":3}')
+
+
+@dataclass(frozen=True, slots=True)
+class FloatSample:
+    ts: int
+    value: float
+
+
+@pytest.mark.parametrize("value", [0, 3, 3.5, -2.5])
+def test_float_fields_accept_finite_json_numbers(value):
+    register_event("test_finite_float", FloatSample)
+    parsed = parse_event(json.dumps({"v": 1, "type": "test_finite_float", "ts": 0, "value": value}))
+    assert parsed.value == value and type(parsed.value) is float
+
+
+@pytest.mark.parametrize("raw", ["true", '"3.5"', "null", "NaN", "Infinity", "-Infinity", "1e400", str(10**400)])
+def test_float_fields_reject_non_numeric_non_finite_and_overflow(raw):
+    register_event("test_finite_float", FloatSample)
+    with pytest.raises(ProtocolError, match="value.*finite number"):
+        parse_event('{"v":1,"type":"test_finite_float","ts":0,"value":' + raw + '}')
+
+
+@dataclass(frozen=True, slots=True)
+class OmitNoneItem:
+    from_: str
+    absent: str | None = field(default=None, metadata={"omit_none": True})
+    empty: str = field(default="", metadata={"omit_none": True})
+
+
+@dataclass(frozen=True, slots=True)
+class OmitNoneCommand:
+    id: str
+    unmarked: str | None = None
+    absent: str | None = field(default=None, metadata={"omit_none": True})
+    zero: int = field(default=0, metadata={"omit_none": True})
+    false: bool = field(default=False, metadata={"omit_none": True})
+    empty: str = field(default="", metadata={"omit_none": True})
+    items: tuple[OmitNoneItem, ...] = ()
+
+
+def test_omit_none_is_opt_in_and_preserves_false_zero_empty_nested_keys_and_order():
+    register_command("test_omit_none", OmitNoneCommand)
+    cmd = OmitNoneCommand("sample", items=(OmitNoneItem("bags"),))
+    encoded = json.loads(encode_command(cmd, 7))
+    assert list(encoded) == ["v", "type", "ts", "id", "unmarked", "zero", "false", "empty", "items"]
+    assert encoded == {"v": 1, "type": "test_omit_none", "ts": 7, "id": "sample", "unmarked": None,
+                       "zero": 0, "false": False, "empty": "", "items": [{"from": "bags", "empty": ""}]}
+    assert type(encoded["zero"]) is int and type(encoded["false"]) is bool
+    assert list(encoded["items"][0]) == ["from", "empty"]
+
+
+def test_omit_none_keeps_present_marked_values_in_their_declared_order():
+    register_command("test_omit_none", OmitNoneCommand)
+    encoded = json.loads(encode_command(OmitNoneCommand("sample", absent="present"), 0))
+    assert encoded["absent"] == "present"
+    assert list(encoded) == ["v", "type", "ts", "id", "unmarked", "absent", "zero", "false", "empty", "items"]
