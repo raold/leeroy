@@ -6,7 +6,7 @@ to deliver jobs/logout while the independent ticker awaits bridge commands.
 
 import asyncio
 from collections import deque
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 import logging
 import math
@@ -28,7 +28,9 @@ from .store import attendance_counts, bench_streaks, last_led
 
 
 log = logging.getLogger(__name__)
-JOB_TIMEOUT_S = 60.0
+# A summon someone never finishes completes 60 s after the server handled it (mod-leeroy's RaidAssembly.cpp), in the
+# bridge's event lane and through the dispatcher; the wait starts at its ack, which takes the faster control lane.
+JOB_TIMEOUT_S = 65.0
 STOP_TIMEOUT_S = 5.0
 EVENT_LIMIT = 256
 QUIET_NIGHT_KEY = "guild:raid-night:quiet-night"
@@ -135,6 +137,7 @@ class RaidNight:
         self._votes = []
         self._adoption = None
         self._adopted = False
+        self._added_tanks = set()  # members of his group his add command filled a tank slot with
 
     @property
     def active(self):
@@ -325,10 +328,14 @@ class RaidNight:
 
         The group is his, so no later login disbands it. Once he leads it into a raid instance the
         guild knows, it raids as a called raid would (`_adopt`), but never beside another raid,
-        never twice for one instance and never for a 5-man.
+        never twice for one instance and never for a 5-man. A member the command added as a tank is a
+        tank of that raid: the server judges bear form, Thick Hide and Frost Presence, which the mind
+        cannot see. Raid nights the mind forms keep its own rule.
         """
         if ev.leader_guid != self.ports.human_guid or not self._present or not self.ports.human_online():
             return
+        self._added_tanks = ({g for g in self._added_tanks if g in ev.members}
+                             | {a.guid for a in ev.added if a.role == "tank" and a.guid in ev.members})
         if not self.active and self.run is None:
             with self.ports.conn:
                 self.ports.conn.execute("DELETE FROM meta WHERE key=?", (FORMED_GROUP_KEY,))
@@ -342,7 +349,7 @@ class RaidNight:
                                       if type(g) is int and g > 0 and g != self.ports.human_guid))
         self._epoch += 1
         self._pick_return_state = self.state
-        self._adoption = (raid.key, *mode, ev.instance_id, members)
+        self._adoption = (raid.key, *mode, ev.instance_id, members, frozenset(self._added_tanks))
         self.state = State.FORMING
 
     def _instance_recorded(self, raid_key, instance_id):
@@ -617,13 +624,14 @@ class RaidNight:
         his copy as the called raid proves it, then the loot master, the record with its attendance
         for those who arrived, and assembly, with him leading. Nothing is formed or disbanded: the
         group stays as he built it."""
-        raid_key, size, heroic, instance_id, members = self._adoption
+        raid_key, size, heroic, instance_id, members, tanks = self._adoption
         self._adoption = None
         try:
             if self._instance_recorded(raid_key, instance_id):
                 raise _Failed("this instance already has a raid record")
             wanted = set(members)
-            candidates = [c for c in self._candidates() if c.guid in wanted and c.available]
+            candidates = [replace(c, role="tank", dc_tank=True) if c.guid in tanks else c
+                          for c in self._candidates() if c.guid in wanted and c.available]
             if not candidates or len(candidates) + 1 > size:
                 raise _Failed("his group does not fit this raid")
             self._leaders(candidates, Lead(True))  # a tank among them before anyone is moved
