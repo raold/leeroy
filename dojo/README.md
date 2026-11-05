@@ -631,8 +631,9 @@ against the health at each boundary. The run keeps `g1-report.json` and
 `control-acceptance` runs), `scenario-description.json` (one complete,
 reproducible description), `episodes/`, `debug/` (boundary state, apart from
 the recordings), `replays/`, `trace.jsonl`, `control-audit.jsonl` (each
-requested command and its final outcome), `outcomes.jsonl`, the RA transcript
-and the worker's logs.
+requested command and its final outcome), `reset-results.json` and
+`protocol-results.json` (the plan's evidence files, each naming the gate and
+its input hashes), `outcomes.jsonl`, the RA transcript and the worker's logs.
 
 The stock baseline is a separate system benchmark, not a controlled
 comparison: stock playerbots reads the server's own unit state (no perceptual

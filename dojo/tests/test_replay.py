@@ -186,6 +186,26 @@ class ReconcileTest(unittest.TestCase):
         self.assertFalse(g1.reconcile(result, catalog, None, None)["ok"])
 
 
+class ResultsFilesTest(unittest.TestCase):
+    def test_the_plans_evidence_files_name_the_gate_and_inputs(self):
+        tmp = Path(tempfile.mkdtemp(prefix="dojo-g1-"))
+        try:
+            report = {"inputs": {"scenario": {"id": "s", "sha256": "0" * 64}}, "reset_reliability": {"ok": True},
+                      "hello": {"session": "s1"}, "receipt": {"port": 1},
+                      "episodes": [{"name": "m", "reset": {"generation": 3}, "decisions": 9, "outcome": None,
+                                    "endpoint": {"counts": {"steps": 9}}},
+                                   {"name": "stock", "stock": True, "reset": {"generation": 4}}]}
+            g1.results_files(tmp, report)
+            resets = json.loads((tmp / "reset-results.json").read_text(encoding="utf-8"))
+            protocol = json.loads((tmp / "protocol-results.json").read_text(encoding="utf-8"))
+            self.assertEqual((resets["gate"], protocol["gate"]), ("G1", "G1"))
+            self.assertEqual(resets["inputs"], report["inputs"])
+            self.assertEqual([r["generation"] for r in resets["this_run"]], [3, 4])
+            self.assertEqual([e["episode"] for e in protocol["episodes"]], ["m"])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 class AuditTest(unittest.TestCase):
     def test_stock_in_a_controlled_episode_and_foreign_commands_fail(self):
         catalog, _ = setup()

@@ -672,6 +672,7 @@ def finish(out: Path, report: dict, r: Run, layout: Layout, manifest: dict, rese
     report["ok"] = all(c["ok"] for c in checks)
     report["stock_privileges"] = STOCK_PRIVILEGES
     report["inputs"] = inputs(r, layout, manifest)
+    results_files(out, report)
     (out / "scenario-description.json").write_text(json.dumps(scenario_description(r, layout, manifest), indent=2) + "\n",
                                                    encoding="utf-8")
     (out / "g1-report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
@@ -702,10 +703,26 @@ def _external(path: Path | None, kind: str) -> dict:
 
 def inputs(r: Run, layout: Layout, manifest: dict) -> dict:
     rules = Path(layout.roots["source"]) / "scripts" / "dojo" / "training-rules.json"
+    provenance = layout.data / "manifests" / "provenance.json"
     return {"scenario": {"id": manifest["id"], "sha256": (r.hello.get("worker") or {}).get("scenario_sha256")},
             "observation_schema": r.hello.get("schemas", {}).get("observation"),
             "action_schema": r.hello.get("schemas", {}).get("action"),
-            "training_rules_sha256": _sha256_file(rules), "versions": r.versions}
+            "training_rules_sha256": _sha256_file(rules), "versions": r.versions,
+            "provenance": {"path": norm(provenance), "sha256": _sha256_file(provenance)}}
+
+
+def results_files(out: Path, report: dict) -> None:
+    """The plan's evidence files by gate: reset-results.json and protocol-results.json, beside control-audit.jsonl."""
+    resets = [{"episode": e["name"], **(e.get("reset") or {}), "failed": e.get("reset_failed")} for e in report["episodes"]]
+    (out / "reset-results.json").write_text(json.dumps(
+        {"kind": "leeroy-dojo-reset-results", "gate": "G1", "inputs": report["inputs"],
+         "reset_acceptance": report["reset_reliability"], "this_run": resets}, indent=2) + "\n", encoding="utf-8")
+    protocol = [{"episode": e["name"], "decisions": e.get("decisions"), "outcome": e.get("outcome"),
+                 "aborted": e.get("aborted"), "reconnected": e.get("reconnected"),
+                 "endpoint": (e.get("endpoint") or {}).get("counts")} for e in report["episodes"] if not e.get("stock")]
+    (out / "protocol-results.json").write_text(json.dumps(
+        {"kind": "leeroy-dojo-protocol-results", "gate": "G1", "inputs": report["inputs"], "hello": report.get("hello"),
+         "receipt": report.get("receipt"), "episodes": protocol}, indent=2) + "\n", encoding="utf-8")
 
 
 def scenario_description(r: Run, layout: Layout, manifest: dict) -> dict:
