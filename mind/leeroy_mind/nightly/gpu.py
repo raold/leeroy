@@ -14,8 +14,9 @@ own. The lock serializes only the GPU work:
 - hold / acquire_live: the first holder needs the GPU handed over (hand_over): the preempt
   callback (set_preempt) cancels the night's run, the reflection model is unloaded if it is
   loaded, and the live model is preloaded and kept loaded, at the num_ctx live requests use;
-- release_live: drops the holder and touches no model, because the next night's ensure_model
-  makes room for the model that stage needs;
+- release_live: drops the holder; when it was the last, a let-go task (under the lock, if nobody
+  holds a lease by then) leaves the live model loaded for only RELEASED_KEEP_ALIVE more, instead
+  of the pin that kept it until the next night's ensure_model;
 - ensure_model: unloads whichever of the live and reflection models is loaded and is not the one
   asked for, and nothing else (the embedding model is never unloaded);
 - foreign_models: what else is loaded, for the night's count of loads it did not ask for.
@@ -39,6 +40,9 @@ from leeroy_mind.nightly.settings import NightlySettings
 
 # Seconds the preempt callback gets before the hand-over goes on without it.
 PREEMPT_TIMEOUT = 30.0
+# How long Ollama keeps the live model once the last lease ends: a relog finds it loaded, and an
+# evening with nobody online gives the 16 GB back.
+RELEASED_KEEP_ALIVE = "10m"
 
 
 def norm(name: str) -> str:
@@ -147,6 +151,7 @@ class GpuArbiter:
         self._holders: set[str] = set()
         self._preempt: Callable[[], Awaitable[None]] | None = None
         self._lock = asyncio.Lock()
+        self._letting_go: set[asyncio.Task] = set()
 
     def reconfigure(self, settings: NightlySettings) -> bool:
         """Change the swappable names inline, without waiting for a model operation.
@@ -265,8 +270,38 @@ class GpuArbiter:
 
     async def release_live(self, holder: str) -> None:
         """Drop a lease now, with no await, so it stays in event order with hold. A holder that
-        holds none is ignored."""
+        holds none is ignored. The last lease to end spawns the let-go (settled() waits for it)."""
+        if holder not in self._holders:
+            return
         self._holders.discard(holder)
+        if not self._holders:
+            task = asyncio.get_running_loop().create_task(self._let_go(), name="gpu-let-go")
+            self._letting_go.add(task)
+            task.add_done_callback(self._let_go_done)
+
+    async def _let_go(self) -> None:
+        """The GPU work of the last release, under the lock: if nobody holds a lease by then and
+        the live model is loaded, Ollama keeps it only RELEASED_KEEP_ALIVE longer, at the num_ctx
+        live requests use so it is not reloaded. It never loads a model, and a login that came
+        first keeps the pin its hand-over set."""
+        async with self._lock:
+            if self._holders:
+                return
+            for name in await self.admin.loaded_models():
+                if norm(name) == norm(self._live):
+                    await self.admin.preload(name, RELEASED_KEEP_ALIVE,
+                                             options={"num_ctx": LIVE_PRESET.options["num_ctx"]})
+                    return
+
+    def _let_go_done(self, task: asyncio.Task) -> None:
+        self._letting_go.discard(task)
+        if not task.cancelled() and (e := task.exception()) is not None:
+            log("gpu_let_go_failed", level=logging.WARNING, error=str(e))
+
+    async def settled(self) -> None:
+        """Wait for the let-gos in flight."""
+        if self._letting_go:
+            await asyncio.wait(set(self._letting_go))
 
     @contextlib.asynccontextmanager
     async def live(self, holder: str) -> AsyncIterator[None]:

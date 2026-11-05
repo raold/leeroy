@@ -15,6 +15,7 @@ from leeroy_mind.nightly.pipeline import STAGES
 from leeroy_mind.nightly.runner import NightContext, NightRunner
 from leeroy_mind.nightly.scheduler import NightScheduler
 from leeroy_mind.nightly.settings import load_settings
+from leeroy_mind.tuning.world import merge as merge_world
 
 
 def attach(app):
@@ -30,6 +31,8 @@ def attach(app):
         try:
             path = app.data_dir / "mind.toml"
             candidate = load_config(path) if path.exists() else app.cfg
+            # the owner's world dials (tuning.world) over the file, as the app reads it
+            candidate = merge_world(candidate, getattr(app.personas, "tuning", None))
             # The app owns the open client and embedding space for its whole lifetime.
             # Runtime dials and live/reflection models can change; these require restart.
             changed = (candidate.ollama.url, candidate.models.embedding)
@@ -87,10 +90,13 @@ def attach(app):
             settings=run_settings, reasoner=Reasoner(app.llm, run_settings.reflection_model,
                 parallel=run_settings.parallel), embedder=app.embedder, writer=app.writer,
             arbiter=arbiter, clock=app.clock, ident=ident, personas=app.personas,
-            asker=asker, extract_thread=extract_thread)
+            asker=asker, extract_thread=extract_thread,
+            tuning=getattr(app.personas, "tuning", None))
 
     runner = NightRunner(STAGES, make_ctx)
+    app.night_runner = runner
     scheduler = NightScheduler(app.store, settings, arbiter, runner.run, clock=app.clock)
+    app.night_scheduler = scheduler  # the tuning preview asks whether a night runs or is due
     live = LiveAttraction(app.store, app.personas, app.clock, identity)
 
     async def live_ready():

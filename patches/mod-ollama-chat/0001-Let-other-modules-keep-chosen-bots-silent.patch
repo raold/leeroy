@@ -1,7 +1,7 @@
 From 072d13d2cc0201e73203784da66d932e5ed98e9d Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 23:33:50 -0400
-Subject: [PATCH] Let other modules keep chosen bots silent
+Subject: [PATCH 1/2] Let other modules keep chosen bots silent
 
 ---
  src/mod-ollama-chat_dispatch.cpp | 23 +++++++++++++++++++++++

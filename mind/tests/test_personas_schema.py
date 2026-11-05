@@ -17,6 +17,19 @@ def test_round_trip():
     assert persona_from_dict(json.loads(json.dumps(persona_to_dict(p)))) == p
 
 
+def test_type_hints_are_resolved_once_per_class_and_read_only():
+    import typing
+    from leeroy_mind.personas import schema
+
+    for cls in (schema.Persona, *{f.type for f in dataclasses.fields(schema.Persona)
+                                  if dataclasses.is_dataclass(f.type)}):
+        hints = schema._hints(cls)
+        assert dict(hints) == typing.get_type_hints(cls)
+        assert schema._hints(cls) is hints
+        with pytest.raises(TypeError):
+            hints["guid"] = int
+
+
 def test_valid_persona_has_no_errors():
     assert validate_persona(make_persona(101, "Arkon")) == []
     assert validate_persona(make_persona(101, "Arkon", maximal=True)) == []

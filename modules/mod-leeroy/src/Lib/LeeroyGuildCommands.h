@@ -19,11 +19,12 @@ inline constexpr std::array<std::string_view, 12> kCommandTypes = {
     "start_offline_raid", "gear_up", "raid_control", "remove_friend", "set_spec",
     "bot_do", "stock_items"
 };
-inline constexpr std::array<std::string_view, 6> kBotStrategyAdd = {
-    "behind", "tank face", "mark rti", "boost", "ss tank", "ss healer"
+inline constexpr std::array<std::string_view, 12> kBotStrategyAdd = {
+    "behind", "tank face", "mark rti", "boost", "ss tank", "ss healer",
+    "threat", "dps aoe", "focus heal targets", "wait for attack", "bg", "lfg"
 };
-inline constexpr std::array<std::string_view, 4> kBotStrategyRemove = {
-    "behind", "boost", "ss tank", "ss healer"
+inline constexpr std::array<std::string_view, 7> kBotStrategyRemove = {
+    "behind", "boost", "ss tank", "ss healer", "save mana", "bg", "lfg"
 };
 inline constexpr std::array<std::string_view, 8> kRtiIcons = {
     "skull", "cross", "square", "moon", "triangle", "diamond", "circle", "star"
@@ -32,7 +33,7 @@ inline constexpr std::array<std::string_view, 9> kFormations = {
     "arrow", "circle", "chaos", "line", "near", "far", "melee", "queue", "shield"
 };
 inline constexpr std::array<std::string_view, 3> kBotSpells = {"bloodlust", "heroism", "rebirth"};
-inline constexpr std::array<std::string_view, 1> kBotActions = {"buff"};
+inline constexpr std::array<std::string_view, 2> kBotActions = {"buff", "go fishing"};
 inline constexpr std::array<std::uint32_t, 6> kStockItems = {43015, 34753, 46377, 46376, 46379, 46378};
 
 struct FormRaidCmd
@@ -82,6 +83,7 @@ struct RaidControlCmd
     std::string action;
     std::uint32_t leaderGuid = 0;
     std::string param;
+    std::string trainingRun;
 };
 struct RemoveFriendCmd { std::uint32_t guid = 0; };
 struct SetSpecCmd
@@ -94,6 +96,7 @@ struct BotDoCmd
     std::vector<std::uint32_t> guids;
     std::string action, param;
     std::uint32_t targetGuid = 0;
+    std::string trainingRun;
 };
 struct StockItemsCmd
 {
@@ -117,6 +120,9 @@ std::optional<BotDoCmd> ParseBotDo(nlohmann::json const&, std::string& error);
 std::optional<StockItemsCmd> ParseStockItems(nlohmann::json const&, std::string& error);
 void RegisterGuildCommandTypes();
 bool BotDoParamAllowed(std::string_view action, std::string_view param);
+bool CustomStrategyName(std::string_view);
+bool BotValueParamAllowed(std::string_view);
+bool BotRestoreParamAllowed(std::string_view);
 std::uint8_t RaidDifficulty(std::uint32_t size, bool heroic); // size has passed its field parser
 
 struct JobEvent
@@ -125,8 +131,25 @@ struct JobEvent
     std::vector<std::uint32_t> guids;
     std::vector<std::pair<std::uint32_t, std::string>> skipped;
     std::uint32_t kills = 0, wipes = 0, instanceId = 0, guid = 0, level = 0, avgIlvl = 0;
+    std::string trainingRun;
 };
 nlohmann::json MakeJobEvent(JobEvent const&);
+
+// The owner's `.playerbots bot addN` filled his group from the guild. reason "built": this run added members (added,
+// with their roles); "entered": he then reached an instance map leading that same group. map, instance_id and
+// difficulty are where he is at that moment (instance_id 0 outside an instance); members are the guild's cast in his
+// group now, him excluded.
+struct GuildGroupEvent
+{
+    std::string reason;
+    std::uint32_t size = 0, leaderGuid = 0;
+    bool raid = false;
+    std::uint32_t map = 0, instanceId = 0;
+    std::uint8_t difficulty = 0;
+    std::vector<std::pair<std::uint32_t, std::string>> added;
+    std::vector<std::uint32_t> members;
+};
+nlohmann::json MakeGuildGroupEvent(GuildGroupEvent const&);
 }
 
 #endif

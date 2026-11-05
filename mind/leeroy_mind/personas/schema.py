@@ -4,9 +4,11 @@ JSON schema are all generated from the annotations, so a field is declared exact
 `persona_from_dict` checks shape and enums only (raising PersonaError with dotted paths);
 `validate_persona` checks ranges, lengths and content rules and returns messages as
 "path: problem" so a caller can show every problem at once."""
+import functools
 import math
 import types
 import typing as _t
+from collections.abc import Mapping
 from dataclasses import MISSING, dataclass, field, fields, is_dataclass, replace
 from typing import Literal, get_args, get_origin, get_type_hints
 
@@ -233,8 +235,10 @@ class Persona:
 
 # -- type helpers ---------------------------------------------------------------------------
 
-def _hints(cls) -> dict:
-    return get_type_hints(cls)
+@functools.cache
+def _hints(cls) -> Mapping:
+    # Resolving annotations is most of a persona parse's cost; the classes never change.
+    return types.MappingProxyType(get_type_hints(cls))
 
 
 def _is_union(t) -> bool:

@@ -250,3 +250,12 @@ def test_import_screens_the_real_name_and_member_romance_when_it_knows_the_human
     assert "Pat" not in " ".join(report.errors["101.json"])
     assert any("romance" in e for e in report.errors["102.json"])
     assert report.imported == [] and set(store.persona_versions().values()) == {1}
+
+
+def test_import_keeps_the_birthday_the_owner_wrote(tmp_path, store):
+    seed_test_cast(store)
+    export_personas(store, tmp_path)
+    _edit(tmp_path / "101.json", lambda d: d["real_life"].update(birthday="12-25"))
+    report = import_personas(store, tmp_path, ts=2000.0)
+    assert report.imported == [101] and report.errors == {}
+    assert load_persona(store, 101).real_life.birthday == "12-25"

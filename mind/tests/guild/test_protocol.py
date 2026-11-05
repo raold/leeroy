@@ -6,8 +6,8 @@ import pytest
 
 from leeroy_mind import protocol as bridge
 from leeroy_mind.guild.protocol import (
-    COMMANDS, BotDo, ClearLockout, FormRaid, GearUp, Job, JobSkip, RaidControl,
-    SetLootMaster, SetSpec, StartOfflineRaid, StockItems, Summon, register,
+    COMMANDS, BotDo, ClearLockout, FormRaid, GearUp, GuildGroup, GuildGroupAdd, Job, JobSkip,
+    RaidControl, SetLootMaster, SetSpec, StartOfflineRaid, StockItems, Summon, register,
 )
 
 
@@ -49,12 +49,38 @@ def test_all_job_fixtures_round_trip_typed_nested_fields():
     register()
     for row in lines(kind="event"):
         msg = row["msg"]
+        if msg["type"] != "job":
+            continue
         ev = bridge.parse_event(json.dumps(msg))
         assert type(ev) is Job
         assert type(ev.guids) is tuple and type(ev.skipped) is tuple
         assert all(type(skip) is JobSkip for skip in ev.skipped)
         assert json.loads(json.dumps(dataclasses.asdict(ev))) == {
             key: value for key, value in msg.items() if key not in ("v", "type")}
+
+
+def test_guild_group_fixtures_parse_as_the_server_writes_them():
+    register()
+    rows = {row["name"]: row["msg"] for row in lines(kind="event") if row["msg"]["type"] == "guild_group"}
+    assert set(rows) == {"guild_group_built", "guild_group_entered"}
+    built = bridge.parse_event(json.dumps(rows["guild_group_built"]))
+    assert built == GuildGroup(ts=0, reason="built", size=10, leader_guid=1, raid=True, map=571,
+                               instance_id=0, difficulty=0,
+                               added=(GuildGroupAdd(1101, "tank"), GuildGroupAdd(1102, "healer"),
+                                      GuildGroupAdd(1103, "damage")),
+                               members=(1101, 1102, 1103))
+    assert bridge.event_type(built) == "guild_group"
+    entered = bridge.parse_event(json.dumps(rows["guild_group_entered"]))
+    assert (entered.reason, entered.map, entered.instance_id, entered.difficulty, entered.added) == (
+        "entered", 631, 77, 1, ())
+    for msg in rows.values():
+        ev = bridge.parse_event(json.dumps(msg))
+        assert json.loads(json.dumps(dataclasses.asdict(ev))) == {
+            key: value for key, value in msg.items() if key not in ("v", "type")}
+    missing = dict(rows["guild_group_entered"])
+    del missing["difficulty"]
+    with pytest.raises(bridge.ProtocolError):
+        bridge.parse_event(json.dumps(missing))
 
 
 def test_register_is_idempotent_and_preserves_existing_types():
@@ -65,6 +91,7 @@ def test_register_is_idempotent_and_preserves_existing_types():
     assert all(bridge._events[name] is cls for name, cls in original_events.items())
     assert all(bridge._commands[name] is cls for name, cls in original_commands.items())
     assert bridge._events["job"] is Job
+    assert bridge._events["guild_group"] is GuildGroup
     assert all(bridge._commands[name] is cls for name, cls in COMMANDS.items())
     assert json.loads(bridge.encode_command(bridge.Ping("still-core"), 5))["type"] == "ping"
 
@@ -125,13 +152,21 @@ def test_job_rejects_malformed_typed_fields(field, value):
         bridge.parse_event(json.dumps(msg))
 
 
-@pytest.mark.parametrize("field", [f.name for f in dataclasses.fields(Job)])
-def test_every_job_field_is_required(field):
+@pytest.mark.parametrize("field", [f.name for f in dataclasses.fields(Job)
+                                  if f.default is dataclasses.MISSING])
+def test_every_nondefault_job_field_is_required(field):
     register()
     msg = lines(kind="event")[0]["msg"]
     del msg[field]
     with pytest.raises(bridge.ProtocolError, match=field):
         bridge.parse_event(json.dumps(msg))
+
+
+def test_older_job_producer_has_no_native_training_scope():
+    register()
+    msg = lines(kind="event")[0]["msg"]
+    msg.pop("training_run")
+    assert bridge.parse_event(json.dumps(msg)).training_run == ""
 
 
 def test_messages_are_frozen_and_slotted():

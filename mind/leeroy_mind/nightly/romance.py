@@ -13,6 +13,7 @@ from leeroy_mind.nightly.audience import audience_of
 from leeroy_mind.nightly.confide import depth_with
 from leeroy_mind.nightly.knowledge import could_have_seen, roots
 from leeroy_mind.personas.io import load_persona
+from leeroy_mind.tuning.effective import dials_of
 from leeroy_mind.storage.rows import ROMANCE_STAGES
 
 LADDER = ROMANCE_STAGES[:7]
@@ -212,6 +213,9 @@ async def stage_jealousy(ctx) -> None:
         progressed = {g for g in attitudes if store.get_relationship(g, ctx.human).romance_stage in LADDER[2:]}
 
         def update(holder, target, kind, evidence, obs, spike, mult=1.):
+            tuned = dials_of(ctx.persona(holder)).mult("jealousy")  # the owner's dial (tuning)
+            if tuned != 1.0:
+                mult *= tuned
             row = store.conn.execute("SELECT * FROM jealousy WHERE holder=? AND target=?",
                                      (holder, target)).fetchone()
             before = float(row["level"]) if row else 0.

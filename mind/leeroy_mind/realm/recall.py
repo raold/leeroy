@@ -1,0 +1,386 @@
+"""Coalesced Realm recall and defaults; all external work enters ActionQueue.
+
+Local intents are disposable generation-bound scheduling wishes. The ledger and
+journal alone retain native ownership, including bodies no longer online.
+"""
+
+from dataclasses import dataclass
+import logging
+import uuid
+
+from leeroy_mind.bodies import BodyEvidenceUnavailable
+from leeroy_mind.guild.protocol import BotDo
+
+from .actions import ActionRejected
+from .action_store import ActionCapacity
+from .protocol import LeavePvp, Rearm
+
+log = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class _Chain:
+    key: str
+    ticket: tuple
+    owner: str
+    members: tuple[int, ...]
+    steps: tuple
+    index: int = 0
+    mode: str = "defaults"
+    waiting: bool = False
+
+
+class Recall:
+    def __init__(self, ports, queue, bodies, clock):
+        self.ports, self.queue, self.bodies, self.clock = ports, queue, bodies, clock
+        self._serial = 0
+        self._desired = {}
+        self._second = set()
+        self._fallback = set()
+        self._chains = {}
+        self._busy = {}
+        self._cleanup = {}
+        self._handback = set()
+        self._last_recall = None
+        self._second_at = None
+        self._last_defaults = clock.now()
+        self._off = queue.off
+        bodies.on_release(self._released)
+
+    def _ticket(self):
+        c = self.queue.context()
+        return (self._serial, c.generation, c.process_id, c.connection_epoch, c.guild, c.human)
+
+    def _live(self):
+        c = self.queue.context()
+        return (not self.queue.closed and c.enabled and c.connected and c.presence_known)
+
+    def _valid_ticket(self, ticket):
+        return self._live() and ticket == self._ticket()
+
+    def _current(self, chain):
+        return self._chains.get(chain.key) is chain and self._valid_ticket(chain.ticket)
+
+    def invalidate(self):
+        """Discard only local wishes. Never remove a native reservation."""
+        self._serial += 1
+        self._desired.clear()
+        self._second.clear()
+        self._fallback.clear()
+        self._chains.clear()
+        self._busy.clear()
+        self._cleanup.clear()
+        self._handback.clear()
+        # Cooldown survives hello/generation invalidation; intents do not.
+        self._second_at = None
+        self._last_defaults = self.clock.now()
+        self._off = self.queue.off
+
+    def _online(self):
+        try:
+            cast = self.ports.cast()
+            if any(type(m.guid) is not int or not 0 < m.guid <= 0xFFFFFFFF
+                   or type(m.online) is not bool for m in cast):
+                raise ValueError("invalid cast")
+            return {m.guid for m in cast if m.online}
+        except Exception:
+            log.warning("realm_recall_cast_unavailable")
+            return None
+
+    def _eligible(self, owner, guids):
+        try:
+            return self.bodies.movable(owner, guids, besides={owner, "realm_day", "realm_event"})
+        except BodyEvidenceUnavailable:
+            return frozenset()
+
+    def _released(self, owner, guids):
+        # Never enqueue inline: a provider refresh can call this during queue
+        # admission. Busy chains consume their own temporary reservation release.
+        if not self._live():
+            return
+        selected = set(guids) - self._busy.keys()
+        if owner in {"realm_day", "realm_event"}:
+            selected &= self._handback
+        for guid in selected:
+            self._desired.setdefault(guid, "defaults")
+        self._handback.difference_update(selected)
+        if selected:
+            self.queue.wake()
+
+    def restore_defaults(self, guids=None):
+        if not self._live():
+            return
+        if guids is None:
+            guids = self._online()
+            if guids is None:
+                return
+            self._last_defaults = self.clock.now()
+        guids = tuple(guids)
+        if self._off and not self.queue.off:
+            self._desired = {g: "defaults" for g in self._desired}
+            self._fallback.clear()
+        self._off = self.queue.off
+        for guid in guids:
+            busy = self._chains.get(self._busy.get(guid))
+            if busy is None or busy.mode == "fallback":
+                self._desired.setdefault(guid, "defaults")
+        if self.queue.off:
+            self._fallback.update(g for g in guids if g not in self._busy)
+        self._flush()
+
+    def _drop_realm_intent(self):
+        ticket = self._ticket()
+        for owner in ("realm_day", "realm_event"):
+            self.queue.drop_owner(owner)
+            self.bodies.release(owner)
+            if not self._valid_ticket(ticket):
+                return
+        # drop_owner deliberately has no completion callbacks. Discard chains
+        # belonging to its canceled application wishes, retaining dispatched rows.
+        for key, chain in tuple(self._chains.items()):
+            if chain.owner in {"realm_day", "realm_event"}:
+                self._finish(chain)
+
+    def _reconcile(self, *, all_roots=False):
+        c = self.queue.context()
+        try:
+            roots = self.queue.store.unresolved()
+            for root in roots:
+                if (root.policy != "wg" or (root.guild, root.human) != (c.guild, c.human)
+                        or not all_roots and root.command_id not in self._cleanup):
+                    continue
+                self._cleanup[root.command_id] = root.reserved_manifest
+                self._handback.update(root.reserved_manifest)
+                try:
+                    self.queue.request_cleanup(root.command_id)
+                except ActionRejected:
+                    # Conflicted/unknown roots remain held; no guessed token or
+                    # current-online intersection can repair their authority.
+                    pass
+            for origin_id, guids in tuple(self._cleanup.items()):
+                root = self.queue.store.get(origin_id)
+                if root is not None and root.state == "completed" and root.result_ok is True:
+                    for guid in guids:
+                        if guid not in self._busy:
+                            self._desired.setdefault(guid, "defaults")
+                    self._handback.difference_update(guids)
+                    del self._cleanup[origin_id]
+                elif root is None or root.state in {"completed", "not_sent"}:
+                    self._handback.difference_update(guids)
+                    del self._cleanup[origin_id]
+        except BodyEvidenceUnavailable:
+            log.warning("realm_recall_ownership_unavailable")
+
+    def on_login(self, now):
+        if not self._live():
+            return
+        ticket = self._ticket()
+        if self._last_recall is not None and now - self._last_recall < 120:
+            self._reconcile(all_roots=True)
+            return
+        self._last_recall = now
+        self._off = self.queue.off
+        self._second_at = now + 45
+        self._drop_realm_intent()
+        if not self._valid_ticket(ticket):
+            return
+        self._reconcile(all_roots=True)
+        online = self._online()
+        if online is not None:
+            available = self.bodies.rank_for("raid") is not None
+            if not self._valid_ticket(ticket):
+                return
+            candidates = online - self._busy.keys() - self._handback
+            eligible = self._eligible("raid", candidates)
+            if not self._valid_ticket(ticket):
+                return
+            for guid in candidates:
+                self._desired[guid] = "recall" if not available or guid in eligible else "defaults"
+            if self.queue.off:
+                self._fallback.update(online - self._busy.keys())
+        if self._valid_ticket(ticket):
+            self._flush()
+
+    def on_hello(self, ev):
+        if not self._live():
+            return
+        ticket = self._ticket()
+        if ev.human_guid:
+            self.on_login(self.clock.now())
+        if self._valid_ticket(ticket):
+            self.restore_defaults()
+
+    def on_raid_state(self, old, new):
+        old, new = getattr(old, "name", old), getattr(new, "name", new)
+        if old in {"IDLE", "ENDED"} and new == "FORMING":
+            self.on_login(self.clock.now())
+
+    def _finish(self, chain):
+        self._chains.pop(chain.key, None)
+        for guid in chain.members:
+            if self._busy.get(guid) == chain.key:
+                del self._busy[guid]
+
+    def _advance(self, chain, ok=True):
+        if not self._current(chain):
+            self._finish(chain)
+            return
+        online = self._online()
+        # Rank availability may refresh sources, so it precedes the final
+        # selection. Keep the complete chain busy while both reads consume its
+        # own effective reservation release, including failed/default results.
+        available = self.bodies.rank_for(chain.owner) is not None
+        if not self._current(chain):
+            self._finish(chain)
+            return
+        eligible = self._eligible(chain.owner, chain.members)
+        if not self._current(chain):
+            self._finish(chain)
+            return
+        if ok and (online is None or not available):
+            chain.waiting = True
+            return
+        chain.waiting = False
+        if not ok or not set(chain.members) <= online:
+            self._finish(chain)
+            return
+        if eligible != frozenset(chain.members):
+            # A denied selection never dispatches. This later rank read only
+            # distinguishes unavailable evidence (defer) from an actual holder
+            # (stop); no selected set is used for dispatch after that refresh.
+            available = self.bodies.rank_for(chain.owner) is not None
+            if not self._current(chain):
+                self._finish(chain)
+            elif not available:
+                chain.waiting = True
+            else:
+                self._finish(chain)
+            return
+        if chain.index == len(chain.steps):
+            self._finish(chain)
+            return
+        if self.queue.off and chain.mode != "fallback":
+            for guid in chain.members:
+                self._desired.setdefault(guid, chain.mode)
+            self._fallback.update(chain.members)
+            self._finish(chain)
+            return
+        if not self.queue.off and chain.mode == "fallback":
+            self._finish(chain)
+            return
+        kind, members = chain.steps[chain.index]
+        command_id = uuid.uuid4().hex
+        cmd = (LeavePvp(command_id, members) if kind == "leave" else
+               Rearm(command_id, members) if kind == "rearm" else
+               BotDo(command_id, members, "nc", "-bg,-lfg", target_guid=0, training_run=""))
+        if not self._current(chain):
+            self._finish(chain)
+            return
+        chain.index += 1
+        try:
+            self.queue.submit(cmd, owner=chain.owner,
+                              on_done=lambda ok, reason, value: self._advance(chain, ok))
+            if not self._current(chain):
+                # Queue enrollment has its own rank refresh. If that callback
+                # invalidated us, cancel the stale prepared entry immediately;
+                # the real queue/LivePorts transport barrier remains mandatory.
+                self.queue.context_changed()
+        except (ActionCapacity, BodyEvidenceUnavailable):
+            if self._current(chain):
+                chain.index -= 1
+                chain.waiting = True
+        except ActionRejected:
+            self._finish(chain)
+
+    def _start(self, members, mode):
+        members = tuple(members)
+        owner = "raid" if mode in {"recall", "second"} else "realm_day"
+        steps = []
+        if mode in {"recall", "second"}:
+            steps.append(("leave", members))
+        if mode in {"recall", "defaults"}:
+            steps.append(("rearm", members))
+        if mode != "second":
+            steps.extend(("defaults", members[i:i + 40]) for i in range(0, len(members), 40))
+        chain = _Chain(uuid.uuid4().hex, self._ticket(), owner, members, tuple(steps), mode=mode)
+        self._chains[chain.key] = chain
+        for guid in members:
+            self._busy[guid] = chain.key
+        self._advance(chain)
+
+    def _flush(self):
+        if not self._live():
+            return
+        ticket = self._ticket()
+        online = self._online()
+        if online is None:
+            return
+        if self.queue.off:
+            candidates = (self._fallback & online) - self._busy.keys()
+            if not candidates:
+                return
+            eligible = sorted(self._eligible("realm_day", candidates))
+            if not self._valid_ticket(ticket):
+                return
+            for i in range(0, len(eligible), 40):
+                if not self._valid_ticket(ticket):
+                    return
+                batch = [g for g in eligible[i:i + 40] if g not in self._busy]
+                if batch:
+                    self._fallback.difference_update(batch)
+                    self._start(batch, "fallback")
+            return
+        for mode in ("recall", "defaults", "second"):
+            source = self._second if mode == "second" else {g for g, wish in self._desired.items() if wish == mode}
+            owner = "raid" if mode in {"recall", "second"} else "realm_day"
+            candidates = (set(source) & online) - self._busy.keys()
+            if not candidates:
+                continue
+            eligible = sorted(self._eligible(owner, candidates))
+            if not self._valid_ticket(ticket):
+                return
+            for i in range(0, len(eligible), 150):
+                if not self._valid_ticket(ticket):
+                    return
+                batch = [g for g in eligible[i:i + 150] if g not in self._busy]
+                if not batch:
+                    continue
+                if mode == "second":
+                    self._second.difference_update(batch)
+                else:
+                    for guid in batch:
+                        self._desired.pop(guid, None)
+                self._start(batch, mode)
+
+    def tick(self, now):
+        if not self._live():
+            return
+        ticket = self._ticket()
+        if self.queue.off != self._off:
+            self._off = self.queue.off
+            if not self._off:
+                self._desired = {g: "defaults" for g in self._desired}
+            self.restore_defaults()
+            if not self._valid_ticket(ticket):
+                return
+            if not self._off:
+                self._fallback.clear()
+        self._reconcile()
+        for chain in tuple(self._chains.values()):
+            if chain.waiting:
+                self._advance(chain)
+                if not self._valid_ticket(ticket):
+                    return
+        if self._second_at is not None and now >= self._second_at:
+            self._second_at = None
+            self._reconcile(all_roots=True)
+            online = self._online()
+            if online is not None:
+                eligible = self._eligible("raid", online - self._busy.keys())
+                if not self._valid_ticket(ticket):
+                    return
+                self._second.update(eligible - self._busy.keys())
+        if now - self._last_defaults >= 1800 and not self.ports.human_online():
+            self.restore_defaults()
+        if self._valid_ticket(ticket):
+            self._flush()
