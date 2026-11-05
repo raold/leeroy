@@ -129,8 +129,15 @@ class LibrarySearchWorker:
             self._release(request)
 
     async def search(self, query: str, k: int = 5, kinds=None, *, llm=None,
-                     priority: Priority = Priority.SOCIAL) -> list[Chunk]:
+                     priority: Priority = Priority.SOCIAL,
+                     timeout: float | None = None) -> list[Chunk]:
+        """Library.search on the owned reader. `timeout` bounds what a wait_for bounded on the
+        inline search, whose only await was its embed call: the time until the query vector
+        is in hand. Past it the search ends with TimeoutError before or during the embed.
+        Preparation and the ranking that follows the vector are never cut off, so a slow
+        broad rank keeps its hybrid results."""
         request = self._admit()
+        deadline = None if timeout is None else self._loop.time() + max(0.0, timeout)
         try:
             plan = await self._submit(request, Library._prepare_search, query, k,
                                       _kinds(kinds), embed_available=llm is not None)
@@ -142,11 +149,14 @@ class LibrarySearchWorker:
                 raise asyncio.CancelledError()
             qvec = None
             if plan.embed:
+                if deadline is not None and self._loop.time() >= deadline:
+                    raise TimeoutError()
                 # No reader/transaction or physical job is held across this loop await.
                 request.embedding = asyncio.create_task(
                     _query_vector(llm, self._model, plan.text, priority))
                 try:
-                    qvec = await request.embedding
+                    async with asyncio.timeout_at(deadline):
+                        qvec = await request.embedding
                 except asyncio.CancelledError:
                     if self._closed and not asyncio.current_task().cancelling():
                         raise SearchClosed() from None

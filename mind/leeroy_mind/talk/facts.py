@@ -17,10 +17,13 @@ raid lead made boss mechanics up. His question is read in talk/questions.py.
   lead's call after a wipe or a kill;
 - LibraryFacts: one lookup per human line, shared by every reply to it. The chunks his line
   names by title lead (Library.titled), then the search's hits. The search gets FACTS_CAP_S -
-  TEXT_RESERVE_S of wall time to come back, including worker waits, then text search starts
-  if FACTS_CAP_S remains. Text fallback, titles and formatting can still run past that cap.
-  Production retrieval/formatting uses the app's owned reader thread; compatibility fakes
-  stay on the caller's loop. Boss mechanics retains its synchronous session cache.
+  TEXT_RESERVE_S of wall time to have its query vector (the embed call is all the cap ever
+  bounded: it was the inline search's only await), then text search starts if FACTS_CAP_S
+  remains, else there are no facts. Preparation, the ranking that follows the vector, the
+  text fallback, titles and formatting are not cut off, so a lookup can run past the cap by
+  their time. Production retrieval/formatting uses the app's owned reader thread;
+  compatibility fakes stay on the caller's loop. Boss mechanics retains its synchronous
+  session cache.
 
 Facts are not memories: they come only from library.db, which is public reference text, and
 none of it is logged."""
@@ -778,8 +781,8 @@ class _InlineSearch:
     def __init__(self, library):
         self.library = library
 
-    async def search(self, *args, **kwargs):
-        return await self.library.search(*args, **kwargs)
+    async def search(self, *args, timeout=None, **kwargs):
+        return await asyncio.wait_for(self.library.search(*args, **kwargs), timeout)
 
     async def search_text(self, *args, **kwargs):
         return self.library.search_text(*args, **kwargs)
@@ -892,10 +895,9 @@ class LibraryFacts:
                 return []
         hits, outcome = [], "search"
         try:
-            hits = await asyncio.wait_for(
-                self.search.search(q.query, k=SEARCH_K, kinds=kinds, llm=self.llm,
-                                   priority=Priority.REPLY_HUMAN),
-                max(0.0, self.cap_s - TEXT_RESERVE_S))
+            hits = await self.search.search(q.query, k=SEARCH_K, kinds=kinds, llm=self.llm,
+                                            priority=Priority.REPLY_HUMAN,
+                                            timeout=max(0.0, self.cap_s - TEXT_RESERVE_S))
         except TimeoutError:
             outcome = "timeout"
         except (SearchBusy, SearchClosed):
