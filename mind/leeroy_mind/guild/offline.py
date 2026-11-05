@@ -266,12 +266,17 @@ class OfflineRaids:
         if ev.state in {"done", "failed"}:
             self._owned["terminal"] = asdict(ev)
             self._invalidate()
-            if ev.state == "failed":
-                # The day receipt outlives both the next day's job and the server log.
-                log.info("offline_raid_failed reason=%s", str(ev.reason)[:REASON_LIMIT])
-                self._update_day(failed=str(ev.reason)[:REASON_LIMIT])
         self._save()
         self._enqueue("job", ev)
+        if ev.state == "failed":
+            # The day receipt outlives both the next day's job and the server log. It is a
+            # diagnostic only: terminal handling above is already saved and queued.
+            log.info("offline_raid_failed reason=%s", str(ev.reason)[:REASON_LIMIT])
+            try:
+                if self._owned.get("day"):
+                    self._update_day(failed=str(ev.reason)[:REASON_LIMIT])
+            except Exception:
+                log.warning("offline raid failure reason was not stored")
 
     def _enqueue(self, kind, ev):
         item = (kind, ev)
