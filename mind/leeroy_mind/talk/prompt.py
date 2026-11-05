@@ -20,6 +20,7 @@ import logging
 import random
 import re
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 
 from leeroy_mind.human import THEY_FORMS, HumanIdentity
 from leeroy_mind.personas.schema import Persona, Typing
@@ -29,6 +30,7 @@ from leeroy_mind.talk.budget import DayPhase
 from leeroy_mind.talk.states import RAID_CALLS, Altered, state_line
 from leeroy_mind.talk.turns import TurnKind
 from leeroy_mind.text import estimate_tokens, strip_wow_markup, truncate_words
+from leeroy_mind.tuning.lines import tuning_lines
 
 log = logging.getLogger("leeroy_mind")
 
@@ -133,10 +135,13 @@ def length_rule(t: Typing) -> str:
     return f"One or two lines in your own voice, usually {lo}-{hi} words each."
 
 
-def comms_rules(human: HumanIdentity, persona: Persona | None = None) -> str:
+def comms_rules(human: HumanIdentity, persona: Persona | None = None, *,
+                data_dir: Path | None = None) -> str:
     """COMMS_RULES for this guild: who the human is (never his real name), then the rules
-    with his name and the persona's line length (length_rule), then the persona's FLIRT_RULE.
-    The same on every turn for a speaker, for Ollama's prompt cache."""
+    with his name and the persona's line length (length_rule), then the persona's FLIRT_RULE,
+    then the persona's tuning lines (tuning.lines: only when the owner has turned a wording dial
+    far; the owner's overlays in `data_dir`'s prompts when given). The same on every turn for a
+    speaker, for Ollama's prompt cache."""
     rules = COMMS_RULES.format(human=human.called)
     if persona is not None:
         rules = rules.replace(SHORT_LINE, length_rule(persona.typing))
@@ -146,6 +151,8 @@ def comms_rules(human: HumanIdentity, persona: Persona | None = None) -> str:
     gender = persona.identity.player_gender
     if gender in FLIRT_RULE:
         out += "\n" + FLIRT_RULE[gender].format(human=human.called)
+    for line in tuning_lines(persona, data_dir):
+        out += "\n- " + line
     return out
 
 

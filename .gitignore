@@ -5,6 +5,7 @@
 /*
 !/.gitignore
 !/.gitattributes
+!/.gitleaksignore
 !/.github/
 !/CLAUDE.md
 !/README.md
@@ -44,6 +45,30 @@
 /voice/**/*.pth
 /voice/**/*.ckpt
 /voice/.ruff_cache/
+# The dojo: source only. Environments, recordings, checkpoints, models, local
+# manifests and runtime configuration stay on this machine (dojo-runtime/ and
+# dojo-data/ live next to the install root, outside this allowance).
+!/dojo/
+/dojo/.venv/
+/dojo/.pytest_cache/
+/dojo/*.egg-info/
+/dojo/build/
+/dojo/runs/
+/dojo/data/
+/dojo/manifests/
+/dojo/checkpoints/
+/dojo/models/
+/dojo/.ruff_cache/
+/dojo/**/*.pt
+/dojo/**/*.pth
+/dojo/**/*.ckpt
+/dojo/**/*.safetensors
+/dojo/**/*.onnx
+/dojo/**/*.npy
+/dojo/**/*.npz
+/dojo/**/*.gguf
+/dojo/**/provenance.json
+/dojo/**/dojo.marker
 # docs/ (design, research) and private/ are local dev docs for the owner and
 # Claude only: deliberately not whitelisted, never pushed.
 

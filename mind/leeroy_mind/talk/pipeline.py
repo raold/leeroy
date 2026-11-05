@@ -60,8 +60,8 @@ from leeroy_mind.talk.prompt import (PromptParts, chat_line_text, comms_rules, f
 from leeroy_mind.talk.questions import game_question
 from leeroy_mind.talk.raid import RaidState
 from leeroy_mind.talk.romance import (FULL_DIAL, NO_BRAKES_DIAL, dial_for, explicit_whisper,
-                                      flirt_chance, own_dial, romance_instruction,
-                                      whisper_tail)
+                                      flirt_chance, forward, own_dial,
+                                      romance_instruction, whisper_tail)
 from leeroy_mind.talk.select import (OPEN_THREAD_S, SpeakerContext, has_reason, is_quest_talk,
                                      mentioned, quest_helper, speaker_weight, typing_delay)
 from leeroy_mind.talk.states import EFFECTS, Altered, Effects, effects_for, substance_of
@@ -259,6 +259,48 @@ class TurnMeta:
     typed_on: tuple[str, int] | None = None
     timing_trace: str | None = None  # opaque scalar; empty means telemetry admission skipped
     timing_origin: float | None = None  # on_human_chat's local monotonic entry, when observed
+    # Exact event behind a lead's debrief/kill; absent for unrelated turns.
+    fight_map: int = 0
+    fight_boss: int = 0
+    fight_instance: int = 0
+    fight_end_ms: int = 0
+    # An optional owner fence; omitted by ordinary engine callers.
+    still_valid: Callable[[], bool] | None = None
+    # Optional exact transport hooks of a say_as sender; ordinary turns leave both None, and
+    # then nothing below changes. before_transport() runs synchronously right before the
+    # line's Say is written and may refuse it (a turn with one is typed, one line, never
+    # voiced: the voice path has no barrier; and sent as given, with none of the member's
+    # typing style, so what the sender vouched for is what goes out). on_recorded(line_id,
+    # ack) runs once the acked line is stored.
+    before_transport: Callable[[], bool] | None = None
+    on_recorded: Callable[[int, Ack], None] | None = None
+    # the console's tuning preview (Pipeline.preview_line): the Ollama seed both of its
+    # requests carry, so before and after differ by the dial and not the sampler
+    seed: int | None = None
+
+
+class _ScopeChanged(SchedulerError):
+    """The owner invalidated a turn before its next side effect."""
+
+
+def _scope_valid(meta: TurnMeta | None) -> bool:
+    if meta is None or meta.still_valid is None:
+        return True
+    try:
+        return bool(meta.still_valid())
+    except Exception:
+        return False
+
+
+def _transport_admitted(meta: TurnMeta) -> bool:
+    """The sender's final barrier, when it gave one; a failing barrier refuses."""
+    if meta.before_transport is None:
+        return True
+    try:
+        return meta.before_transport() is True
+    except Exception:
+        log.warning("say_barrier_failed")
+        return False
 
 
 def _secs(s: float | None) -> str:
@@ -366,6 +408,7 @@ class Pipeline:
     def _init_pipeline(self, now: float) -> None:
         self.timing = TurnTiming()
         self.live_admission: Callable[[], Awaitable[None]] | None = None
+        self._instruction_hooks: list[Callable[[Turn, TurnMeta, str], str]] = []
         self._session_id: int | None = None
         self._altered: dict[int, Altered] = {}  # tonight's state per member
         self._dead: dict[int, float] = {}  # guid -> when they died
@@ -396,6 +439,10 @@ class Pipeline:
         self._words: dict[int, str] = {}  # a said line's id -> its words before styling
         self._turn_lines: dict[str, int] = {}  # a turn id -> the lines it said
         self._compose_rng = random.Random("compose")  # compose() never draws from self.rng
+
+    def add_instruction_hook(self, fn: Callable[[Turn, TurnMeta, str], str]) -> None:
+        """Extend live, generated instructions immediately before composition."""
+        self._instruction_hooks.append(fn)
 
     # -- identity and lookups ------------------------------------------------------------------
 
@@ -582,6 +629,35 @@ class Pipeline:
         c = await self._compose(turn, TurnMeta(turn_id=""), live=False)
         return c.messages, c.memory_ids
 
+    async def preview_line(self, turn: Turn, persona: Persona, *, trigger: str, seed: int,
+                           dial: int | None = None) -> tuple[str, str | None]:
+        """The console's tuning preview: the line `persona` (a candidate effective persona)
+        would say for `turn`, answering his line `trigger` (text, never a stored line), through
+        the live prompt and the model with the tells, repairs and retries a line gets, styled
+        as she types with a generator of its own. Never sent, recorded or spent: no memory is
+        recalled or touched, no cooldown starts, his real name is never offered, and the
+        engine's own generator is never drawn from. Both of a preview's requests carry `seed`.
+        (the words, None) or ("", why it said nothing)."""
+        hg = self.human.guid
+        now = self.clock.now()
+        channel = turn.channel or "guild"
+        row = ChatLineRow(id=0, ts=now, channel=channel, from_guid=hg,
+                          from_name=self.human.character_name, to_guid=turn.to_guid,
+                          text=trigger, map=0, zone=0, session_id=None, thread_id=None,
+                          origin="human") if trigger else None
+        meta = TurnMeta(turn_id="preview", seed=seed)
+        c = await self._compose(turn, meta, live=False, persona=persona,
+                                window=[row] if row is not None else [],
+                                trigger_text=trigger or None, dial=dial)
+        text, why = await self._generate(turn, meta, c)
+        if why:
+            return "", why
+        styled = style_lines(text, persona.typing, EFFECTS[Altered.SOBER],
+                             random.Random(seed), protect=self._protect(),
+                             speaker=persona.character_name, kind=turn.kind,
+                             max_lines=max(1, turn.max_lines), aliases=aliases(persona))
+        return "\n".join(s.line for s in styled), None
+
     def _may_carry(self, turn: Turn, row: ChatLineRow) -> bool:
         """Whether a chat line may reach this turn's prompt (memory.recall.whisper_ok)."""
         return whisper_ok(row.channel, row.from_guid, row.to_guid, speaker=turn.speaker,
@@ -607,7 +683,8 @@ class Pipeline:
         return bool(hg) and (turn.addressee == hg or any(r.from_guid == hg for r in recent[-3:]))
 
     def _romance(self, turn: Turn, meta: TurnMeta, p: Persona, rel_h, phase: DayPhase,
-                 now: float, rng: random.Random, trigger: str = "") -> str | None:
+                 now: float, rng: random.Random, trigger: str = "",
+                 dial: int | None = None) -> str | None:
         """Her romance text on this turn, or None: only on turns to the human; every FLIRT,
         WHISPER, loot cheer, reply on the whisper channel to him and reply to a flirty line of
         his (`trigger`); otherwise on a share of turns (ROMANCE_SHARE; a drawn woman's
@@ -618,6 +695,7 @@ class Pipeline:
         if (not hg or turn.addressee != hg or p.identity.player_gender != "female"
                 or p.romance.stance not in ROMANCE_SHARE):
             return None
+        dial = self.cfg.romance.dial if dial is None else dial
         talked_to = turn.kind in (TurnKind.REPLY_HUMAN, TurnKind.GOODNIGHT) and bool(
             turn.trigger_line)
         always = (turn.kind in ROMANCE_ALWAYS or meta.loot_cheer
@@ -626,19 +704,24 @@ class Pipeline:
         if not always:
             share = ROMANCE_SHARE[p.romance.stance]
             if (p.romance.stance == "drawn" and talked_to
-                    and dial_for(p, self.cfg.romance.dial) >= NO_BRAKES_DIAL):
+                    and dial_for(p, dial) >= NO_BRAKES_DIAL):
                 share = DRAWN_TALKED_TO_SHARE
             if phase in _LATE:
                 share += ROMANCE_LATE_BONUS
             if now - self._romance_at.get(p.guid, -math.inf) < ROMANCE_COOL_S:
                 share /= 2
+            f = forward(p)  # her forward dial (tuning): how often her turns carry it
+            if f != 1.0:
+                share = min(1.0, share * f)
             if rng.random() >= share:
                 return None
-        return romance_instruction(p, rel_h, dial=self.cfg.romance.dial, channel=turn.channel,
+        return romance_instruction(p, rel_h, dial=dial, channel=turn.channel,
                                    addressee_is_human=True, phase=phase, human=self.human,
                                    data_dir=self.data_dir)
 
-    async def _compose(self, turn: Turn, meta: TurnMeta, *, live: bool) -> Composed:
+    async def _compose(self, turn: Turn, meta: TurnMeta, *, live: bool,
+                       persona: Persona | None = None, window: list | None = None,
+                       trigger_text: str | None = None, dial: int | None = None) -> Composed:
         """`live`: the prompt is for speaking now, so it may draw from the engine's rng and
         hold the guild-wide real-name slot for the turn; what it offered and used goes on
         `meta`, to be spent if a line is said (_spend). A whisper reaches it only as
@@ -650,17 +733,24 @@ class Pipeline:
         name said in chat is not mirrored back until the gap allows it again.
 
         A reply to his game question (meta.facts_line) carries that line's facts from the
-        library, under facts_head; they are reference text, never memories."""
-        p = self.personas.get(turn.speaker)
+        library, under facts_head; they are reference text, never memories.
+
+        The console's tuning preview (preview_line) composes with `persona` (a candidate
+        effective persona), `window` (the chat it shows: a line of his given as text, never a
+        stored one), `trigger_text` (that line) and `dial` (a candidate romance dial): no
+        memories are recalled, and his real name is never offered."""
+        preview = window is not None
+        p = persona if persona is not None else self.personas.get(turn.speaker)
         if p is None:
             raise ValueError(f"no persona for {turn.speaker}")
+        dial = self.cfg.romance.dial if dial is None else dial
         rng = self.rng if live else self._compose_rng
         now = self.clock.now()
         human, hg = self.human, self.human.guid
         names = self._names()
         rel_h = self.store.get_relationship(turn.speaker, hg) if hg else None
         close = knows_real_name(rel_h)  # his inner circle: his real name is theirs to use
-        recent = self.world.recent_visible(
+        recent = list(window) if preview else self.world.recent_visible(
             turn.speaker, 8,
             keep=lambda row: row.ts >= self._chat_from and self._may_carry(turn, row))
         quiet = not any(now - r.ts < QUIET_S for r in recent)
@@ -694,7 +784,9 @@ class Pipeline:
                  for g in people]
 
         trigger = ""
-        if turn.trigger_line:
+        if trigger_text is not None:
+            query = trigger = trigger_text
+        elif turn.trigger_line:
             rows = self.store.chat_lines([turn.trigger_line])
             query = trigger = rows[0].text if rows and self._may_carry(turn, rows[0]) else ""
         elif turn.kind is TurnKind.OPEN and meta.topic:
@@ -705,10 +797,9 @@ class Pipeline:
         present = list(dict.fromkeys(
             [r.from_guid for r in recent if r.from_guid and r.from_guid != turn.speaker]
             + ([hg] if hg and self.world.human_online else [])))
-        memories = await self.recall.recall(turn.speaker, query, present=present,
-                                            addressee=turn.addressee, k=5,
-                                            priority=turn.priority, touch=False,
-                                            channel=turn.channel, to_guid=turn.to_guid)
+        memories = [] if preview else await self.recall.recall(
+            turn.speaker, query, present=present, addressee=turn.addressee, k=5,
+            priority=turn.priority, touch=False, channel=turn.channel, to_guid=turn.to_guid)
         if meta.lore_memory and all(m.id != meta.lore_memory for m in memories):
             # the memory she answers his question from leads, even while it rests
             memories = [*self.store.get_memories([meta.lore_memory]), *memories][:5]
@@ -741,15 +832,14 @@ class Pipeline:
         story = self._their_story(turn, meta, trigger, memories) if to_human else ""
         ends = []
         if (to_human and turn.kind in (TurnKind.GREET, TurnKind.GOODNIGHT)
-                and dial_for(p, self.cfg.romance.dial) >= NO_BRAKES_DIAL  # the ruling's dial
+                and dial_for(p, dial) >= NO_BRAKES_DIAL  # the ruling's dial
                 and p.identity.player_gender == "female" and p.romance.stance in ROMANCE_SHARE):
             ends.append(FEELINGS.format(them=them))
         if greet and any(r.from_guid not in (hg, turn.speaker) for r in recent):
             ends.append(TALK_TO.format(name=human.called))
-        romance = self._romance(turn, meta, p, rel_h, phase, now, rng, trigger)
+        romance = self._romance(turn, meta, p, rel_h, phase, now, rng, trigger, dial)
         tail, two = "", False
         if romance:  # at the explicit band in a whisper: the owner's overlay, read last
-            dial = self.cfg.romance.dial
             tail = whisper_tail(p, rel_h, dial=dial, channel=turn.channel,
                                 data_dir=self.data_dir)
             # a line or two, unless the turn holds one (her answer to his pushback)
@@ -757,7 +847,8 @@ class Pipeline:
                                                           channel=turn.channel)
         meta.two_lines = two
         real = ""
-        if (close and self._human_in_talk(turn, recent) and self._real_name_hold is None
+        if (close and not preview and self._human_in_talk(turn, recent)
+                and self._real_name_hold is None
                 and now - self._real_name_at >= REAL_NAME_GAP_S):
             real = real_name_line(human, rel_h, rng)
             if real and live:
@@ -779,7 +870,7 @@ class Pipeline:
             forms=human.forms if to_human else THEY_FORMS, tail=tail, long=two, quiet=quiet)
         parts = PromptParts(
             card=self._card(p), samples=samples,
-            rules=comms_rules(human, p), rel_cards=cards,
+            rules=comms_rules(human, p, data_dir=self.data_dir), rel_cards=cards,
             memories=[self.recall.format(m) for m in memories],
             mood=mood_line(state, altered, substance_of(p, altered, local), phase,
                            kind=turn.kind, life_thread=p.real_life.life_thread,
@@ -868,22 +959,31 @@ class Pipeline:
     # -- speaking ------------------------------------------------------------------------------
 
     async def speak(self, turn: Turn, *, why: str = "speak", elsewhere: bool = False,
-                    guards: Guards | None = None, after: str = "") -> list[str]:
+                    guards: Guards | None = None, after: str = "",
+                    still_valid: Callable[[], bool] | None = None) -> list[str]:
         """Speak one turn (after turn.delay) through the whole pipeline: the lines sent, or []
         when it was dropped (the reason is in the utterance log). The caller's Turn is left as
         it was: the pipeline fills in its own copy's priority, deadline and channel. The
         keywords go on its TurnMeta."""
         return await self._speak(replace(turn), TurnMeta(
-            self._new_id(), why=why, elsewhere=elsewhere, guards=guards, after=after))
+            self._new_id(), why=why, elsewhere=elsewhere, guards=guards, after=after,
+            still_valid=still_valid))
 
     async def say_as(self, guid: int, channel: str, text: str, *, kind: TurnKind,
-                     to_guid: int = 0) -> bool:
+                     to_guid: int = 0,
+                     still_valid: Callable[[], bool] | None = None,
+                     before_transport: Callable[[], bool] | None = None,
+                     on_recorded: Callable[[int, Ack], None] | None = None) -> bool:
         """The template path (P1d): guards, raid rules and the member's typing apply, the text
         is used as given and no model is asked. True when a line really went out, to the game
-        or to the voice service: one left in a room he is not in did not."""
+        or to the voice service: one left in a room he is not in did not. A sender's
+        before_transport barrier makes the turn one typed line, sent unstyled (TurnMeta)."""
         turn = Turn(kind=TurnKind(kind), speaker=guid, channel=channel, to_guid=to_guid,
                     template=text)
-        meta = TurnMeta(self._new_id(), why="say_as")
+        if before_transport is not None:
+            turn.max_lines = 1
+        meta = TurnMeta(self._new_id(), why="say_as", still_valid=still_valid,
+                        before_transport=before_transport, on_recorded=on_recorded)
         said = await self._speak(turn, meta)
         return bool(said) and not (self.comms is not None and self._comms_says(
             "unheard", False, turn.channel, meta))
@@ -922,8 +1022,12 @@ class Pipeline:
                 self._real_name_hold = None
 
     async def _speak_now(self, turn: Turn, meta: TurnMeta) -> list[str]:
+        if not _scope_valid(meta):
+            return self._drop(turn, meta, "scope_changed")
         with self.timing.span(meta.timing_trace, "delay"):
             await self.clock.sleep(turn.delay)
+        if not _scope_valid(meta):
+            return self._drop(turn, meta, "scope_changed")
         now = self.clock.now()
         rule = self._rule_priority(turn, meta)
         turn.priority = rule if meta.elsewhere else min(turn.priority, rule)
@@ -949,14 +1053,33 @@ class Pipeline:
         memory_ids: list[int] = []
         text = turn.template
         if text is None:
+            original_instruction = turn.instruction
             try:
                 with self.timing.span(meta.timing_trace, "compose"):
+                    for hook in tuple(self._instruction_hooks):
+                        previous = turn.instruction
+                        try:
+                            instruction = hook(turn, meta, previous)
+                            if not isinstance(instruction, str):
+                                raise TypeError("instruction hook must return text")
+                            turn.instruction = instruction
+                        except Exception:
+                            turn.instruction = previous
+                            log.warning("instruction_hook_failed")
                     c = await self._compose(turn, meta, live=True)
             except ValueError as e:  # a turn the instruction can't be written for
                 log.warning("talk_bad_turn: guid=%d kind=%s: %s", turn.speaker, turn.kind, e)
                 return self._drop(turn, meta, "bad_turn")
+            finally:
+                # A reusable mutable Turn must not retain facts from a previous
+                # composition, even if a later lookup has no matching record.
+                turn.instruction = original_instruction
+            if not _scope_valid(meta):
+                return self._drop(turn, meta, "scope_changed", c.memory_ids)
             memory_ids, close = c.memory_ids, c.close
             text, why = await self._generate(turn, meta, c, spoken=voiced)
+            if not _scope_valid(meta):
+                return self._drop(turn, meta, "scope_changed", memory_ids, text=text)
             if why:
                 return self._drop(turn, meta, why, memory_ids, text=text)
             if voiced:  # the model takes time: the service may be gone, the speaker moved on
@@ -979,8 +1102,11 @@ class Pipeline:
                     await self._send_emotes(turn, meta, emotes)
                 return spoken
             turn.channel, turn.to_guid, turn.addressee = typed(turn, meta)  # it never got there
-        lines = [] if only else self._style(turn, p, text, close=close,
-                                            two_lines=meta.two_lines, romance=meta.romance)
+        if meta.before_transport is not None:  # its sender's barrier vouches for exactly this text
+            lines = [] if only or not text.strip() else [Styled(text, text)]
+        else:
+            lines = [] if only else self._style(turn, p, text, close=close,
+                                                two_lines=meta.two_lines, romance=meta.romance)
         if not lines:
             if emotes:  # a line that was only an emote: the emote goes out (review minor 8)
                 await self._send_emotes(turn, meta, emotes)
@@ -1025,7 +1151,7 @@ class Pipeline:
         """Where the turn goes now its channel is known (Comms.place, which also fills in
         whom it is to), and the one decision on whether it is spoken, for the model's turns
         and templates alike (C1). Voice off, down or failing, it is typed as in phase 1."""
-        if self.comms is None:
+        if self.comms is None or meta.before_transport is not None:
             return False
         if meta.typed_on is None and not turn.channel.startswith("voice:"):
             meta.typed_on = turn.channel, turn.to_guid
@@ -1093,6 +1219,8 @@ class Pipeline:
             if romantic and target != hg:
                 target = 0
             await self.clock.sleep(self.rng.uniform(*EMOTE_AFTER_S))
+            if not _scope_valid(meta):
+                return
             try:
                 ack = await self.send(Emote(id="", guid=turn.speaker, emote=emote,
                                             target_guid=target))
@@ -1113,6 +1241,8 @@ class Pipeline:
                  deadline: bool = True) -> str | None:
         """Why the turn can't speak now, or None. `deadline`: the turn's deadline counts
         (after its delay); a line the model gave in time is never expired after that."""
+        if not _scope_valid(meta):
+            return "scope_changed"
         g, w = turn.speaker, self.world
         if meta.elsewhere and not self._comms_says(
                 "scene_valid", False, turn, meta.why.startswith("elsewhere:")):
@@ -1172,27 +1302,35 @@ class Pipeline:
         self._quiet_fired = False
 
     async def _ask(self, turn: Turn, messages: list[dict], *,
-                   trace: str | None = None, attempt: int = 0) -> str:
+                   meta: TurnMeta | None = None, attempt: int = 0) -> str:
         # a bit of several rows keeps the rows a blank line separates (prompts lens, minor 9)
         preset = LIVE_BIT if turn.kind is TurnKind.BIT and turn.max_lines > 1 else LIVE
+        trace = meta.timing_trace if meta is not None else None
 
         async def job(llm):
             self.timing.model(trace, attempt, "started")
             self.timing.deadline_check(trace, "mind_model_queue", expired=False)
             outcome = "completed"
             try:
+                if not _scope_valid(meta):
+                    raise _ScopeChanged("scope_changed")
                 if self.live_admission is not None:
                     self.timing.model(trace, attempt, "admission")
                     try:
                         await self.live_admission()
                     finally:
                         self.timing.model(trace, attempt, "started")
+                if not _scope_valid(meta):
+                    raise _ScopeChanged("scope_changed")
                 expired = self.scheduler.expired(turn.deadline)
                 self.timing.deadline_check(trace, "mind_readiness_admission", expired=expired)
                 if expired:
                     raise Expired(turn.deadline)
+                options = dict(preset.options)
+                if meta is not None and meta.seed is not None:  # a tuning preview's
+                    options["seed"] = meta.seed
                 self.timing.model(trace, attempt, "call")
-                return await llm.chat(self.cfg.models.live, messages, options=dict(preset.options),
+                return await llm.chat(self.cfg.models.live, messages, options=options,
                                       think=preset.think, timeout=preset.timeout)
             except asyncio.CancelledError:
                 outcome = "cancelled"
@@ -1200,11 +1338,16 @@ class Pipeline:
             except Expired:
                 outcome = "expired"
                 raise
+            except _ScopeChanged:
+                outcome = "scope_changed"
+                raise
             except Exception:
                 outcome = "error"
                 raise
             finally:
                 self.timing.model(trace, attempt, outcome)
+        if not _scope_valid(meta):
+            raise _ScopeChanged("scope_changed")
         self.timing.model(trace, attempt, "queue")
         outcome = "completed"
         try:
@@ -1215,6 +1358,9 @@ class Pipeline:
         except Expired:
             outcome = "expired"
             self.timing.decision(trace, "expired", deadline="mind_model_queue")
+            raise
+        except _ScopeChanged:
+            outcome = "scope_changed"
             raise
         except Exception:
             outcome = "error"
@@ -1242,9 +1388,13 @@ class Pipeline:
             return _with_hint(out, SPOKEN_HINT) if spoken else out
         messages, text = asking(), ""
         for attempt in (0, 1):
+            if not _scope_valid(meta):
+                return text, "scope_changed"
             asked = self.clock.now()
             try:
-                raw = await self._ask(turn, messages, trace=meta.timing_trace, attempt=attempt)
+                raw = await self._ask(turn, messages, meta=meta, attempt=attempt)
+            except _ScopeChanged:
+                return text, "scope_changed"
             except Expired:
                 return text, "expired"
             except (SchedulerError, LLMError) as e:
@@ -1252,6 +1402,8 @@ class Pipeline:
                 return text, "llm_error"
             finally:
                 meta.llm_s = (meta.llm_s or 0.0) + self.clock.now() - asked
+            if not _scope_valid(meta):
+                return raw, "scope_changed"
             expired = self.scheduler.expired(turn.deadline)
             self.timing.deadline_check(meta.timing_trace, "mind_after_generation", expired=expired)
             if expired:
@@ -1445,9 +1597,14 @@ class Pipeline:
         """Send one line and record it on the ack: None, or why it wasn't said. Never raises,
         since nobody may be waiting for it any more. A voice channel never reaches the bridge
         (C1): it would refuse it, and the line belongs in a room."""
+        # This shielded child may first run after its parent was invalidated.
+        if not _scope_valid(meta):
+            return "scope_changed"
         if turn.channel.startswith("voice:"):
             log.error("say_refused_voice_channel: guid=%d channel=%s", turn.speaker, turn.channel)
             return "voice_channel"
+        if not _transport_admitted(meta):
+            return "transport_refused"
         try:
             self.timing.typed_send(meta.timing_trace)
             with self.timing.span(meta.timing_trace, "bridge_ack"):
@@ -1471,14 +1628,14 @@ class Pipeline:
             return ack.error or "refused"
         self.timing.typed_ack(meta.timing_trace)
         try:
-            self._record(turn, meta, p, text, memory_ids)
+            self._record(turn, meta, p, text, memory_ids, ack=ack)
         except Exception:
             log.exception("say_record_failed: guid=%d channel=%s", turn.speaker, turn.channel)
             return "record_error"
         return None
 
     def _record(self, turn: Turn, meta: TurnMeta, p: Persona, text: str,
-                memory_ids: list[int]) -> int:
+                memory_ids: list[int], *, ack: Ack | None = None) -> int:
         """A line was said: the chat log (origin "mind", with who could see it), the world, the
         thread hook, the guards, the chain and the utterance log (with why and the bit). Its
         line id. A line he had no way of hearing (Comms.unheard: I8, N3) moves neither the
@@ -1537,6 +1694,11 @@ class Pipeline:
                 self.on_line_sent(line_id, chat)
             except Exception:
                 log.exception("on_line_sent hook failed")
+        if meta.on_recorded is not None and ack is not None:
+            try:
+                meta.on_recorded(line_id, ack)
+            except Exception:
+                log.warning("say_recorded_hook_failed: guid=%d line=%d", turn.speaker, line_id)
         return line_id
 
     def said_words(self, line_id: int) -> str | None:

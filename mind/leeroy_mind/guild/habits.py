@@ -49,6 +49,7 @@ class BetweenPulls:
         self._revision = 0
         self._lock = asyncio.Lock()
         self._used = 0
+        self.flask_skips = set()
 
     def _get(self, key):
         return _get(self.ports.conn, self._prefix + key)
@@ -110,6 +111,7 @@ class BetweenPulls:
         self._generation += 1
         self._revision += 1
         self._run, self._human = run, self.ports.human_guid
+        self.flask_skips = set()
         self._raid, self._plan = run.session.raid_id, asdict(run.plan)
         self._map, self._instance = CATALOG[run.plan.raid_key].map_id, run.session.ctx.instance_id
         self._members = frozenset(run.plan.members)
@@ -146,6 +148,8 @@ class BetweenPulls:
                         category = role if role in {"tank", "healer"} else stat_family(m.class_, m.spec_tab, role)
                         choices[str(guid)] = {"item": FLASK_FOR[category], "fingerprint": self._fingerprint(guid)}
                 self._put("flasks", choices)
+        self.flask_skips = {guid for guid in self._members
+            if _get(self.ports.conn, f"guild:habits:skip:{self._night}:{guid}") is True}
 
     async def on_ready(self, run):
         pass

@@ -2,9 +2,12 @@
 
 import dataclasses
 import json
+import math
 import typing
 import unicodedata
 from dataclasses import dataclass
+
+from .ingress import WireOrigin, _wire_origin
 
 PROTOCOL_VERSION = 1
 MAX_LINE_BYTES = 65536
@@ -337,6 +340,16 @@ def _convert(value, hint, where: str):
         if type(value) is not hint:
             raise ProtocolError(f"field {where}: expected {hint.__name__}")
         return value
+    if hint is float:
+        if type(value) not in (int, float):
+            raise ProtocolError(f"field {where}: expected finite number")
+        try:
+            number = float(value)
+        except OverflowError:
+            raise ProtocolError(f"field {where}: expected finite number") from None
+        if not math.isfinite(number):
+            raise ProtocolError(f"field {where}: expected finite number")
+        return number
     if typing.get_origin(hint) is tuple:
         item_hint = typing.get_args(hint)[0]
         if type(value) is not list:
@@ -391,6 +404,17 @@ def parse_event(line: bytes | str) -> Event:
         raise ProtocolError(f"unparseable line: {exc.__class__.__name__}") from None
 
 
+def parse_event_with_origin(line: bytes | str, *, received_at: float,
+                            transport_epoch: int) -> tuple[Event, WireOrigin | None]:
+    """Parse compatibly, adding strict complete-envelope metadata when available.
+
+    Constructing metadata here does not grant native dispatcher authority.
+    An ordinary accepted event may have no strict provenance.
+    """
+    ev = parse_event(line)
+    return ev, _wire_origin(line, received_at=received_at, transport_epoch=transport_epoch)
+
+
 def sanitize_say_text(text: str) -> str:
     out = []
     for c in text:
@@ -410,7 +434,8 @@ def sanitize_say_text(text: str) -> str:
 
 def _jsonable(value):
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        return {_key(f.name): _jsonable(getattr(value, f.name)) for f in dataclasses.fields(value)}
+        return {_key(f.name): _jsonable(getattr(value, f.name)) for f in dataclasses.fields(value)
+                if not (f.metadata.get("omit_none") is True and getattr(value, f.name) is None)}
     if isinstance(value, (tuple, list)):
         return [_jsonable(v) for v in value]
     return value

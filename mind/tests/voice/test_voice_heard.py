@@ -65,7 +65,9 @@ async def settle(v) -> None:
     """The bridge's dispatcher, for what on_heard injected."""
     queue = v.app.bridge._queue
     while not queue.empty():
-        _, ev = queue.get_nowait()
+        kind, ev, transport_epoch = queue.get_nowait()
+        assert kind == "event" and transport_epoch is None
+        assert v.app.bridge.delivery_epoch(ev) is None
         await v.app.handle(ev)
 
 

@@ -1,0 +1,26 @@
+# This file is part of leeroy (mod-dojo), released under the GNU GPL v2. See LICENSE.
+
+[worldserver]
+
+# mod-dojo: the dojo's isolated training worker. A live server leaves this
+# module out or keeps it off. Every key is read once at start; a config reload
+# changes nothing until the worldserver restarts.
+
+# Master switch (1 = on, 0 = off). On takes effect only in a worldserver built
+# with AC_ENABLE_DOJO (the training variant) and with the marker and instance
+# below; otherwise the dojo stays off and the start log says why. Off starts no
+# endpoint and controls no bot.
+Dojo.Enable = 0
+
+# Training marker. Must be "leeroy-dojo-training" for Dojo.Enable = 1.
+Dojo.Marker = ""
+
+# Training instance: the layout's "instance", 1-64 of A-Z a-z 0-9 . _ : -
+Dojo.Instance = ""
+
+# Scenario manifest (dojo/scenarios/*.json) by absolute path, and its pinned
+# SHA-256 (64 lower-case hex digits, from python -m leeroy_dojo scenario hash).
+# Both or neither. The worker refuses a manifest that does not hash to the pin,
+# breaks the training rules or names an id the installed data does not have.
+Dojo.Scenario.Manifest = ""
+Dojo.Scenario.Sha256 = ""

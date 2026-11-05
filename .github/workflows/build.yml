@@ -46,8 +46,12 @@ jobs:
           git -C core/modules/mod-playerbots -c user.name=leeroy-ci -c user.email=ci@invalid \
             am --3way "$GITHUB_WORKSPACE"/leeroy/patches/mod-playerbots/*.patch
 
-      - name: Add mod-leeroy
-        run: cp -r "$GITHUB_WORKSPACE/leeroy/modules/mod-leeroy" core/modules/mod-leeroy
+      # mod-dojo builds its disabled variant here (AC_ENABLE_DOJO stays off); beside mod-leeroy, its configure also
+      # checks that the two vendored json.hpp copies are identical.
+      - name: Add mod-leeroy and mod-dojo
+        run: |
+          cp -r "$GITHUB_WORKSPACE/leeroy/modules/mod-leeroy" core/modules/mod-leeroy
+          cp -r "$GITHUB_WORKSPACE/leeroy/modules/mod-dojo" core/modules/mod-dojo
 
       - uses: actions/cache@v4
         with:

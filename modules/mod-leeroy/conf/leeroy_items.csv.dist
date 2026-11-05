@@ -1,0 +1,60 @@
+item_id,use,max_count
+# P1d stock: Fish Feast; Great Feast; Endless Rage; Frost Wyrm; Stoneblood; Pure Mojo.
+43015,bank,1000
+34753,bank,1000
+46377,bank,1000
+46376,bank,1000
+46379,bank,1000
+46378,bank,1000
+43015,gift,20
+34753,gift,20
+46377,gift,20
+46376,gift,20
+46379,gift,20
+46378,gift,20
+# Gems: Bold; Delicate; Runed; Precise Cardinal Ruby; Brilliant King's Amber; Purified Dreadstone.
+40111,bank,40
+40112,bank,40
+40113,bank,40
+40118,bank,40
+40123,bank,40
+40133,bank,40
+# Enchanting: Infinite Dust; Greater/Lesser Cosmic Essence; Abyss Crystal; Dream/Small Dream Shard.
+34054,bank,1000
+34055,bank,500
+34056,bank,500
+34057,bank,1000
+34052,bank,1000
+34053,bank,1000
+# Crafted BoEs: Bejeweled Wizard's Bracers; Titanium Razorplate; White Knight;
+# Crusader's Dragonscale Breastplate; Knightbane Carapace; Lunar Eclipse Robes.
+47586,bank,10
+47590,bank,10
+47592,bank,10
+47596,bank,10
+47600,bank,10
+47601,bank,10
+# Vanity: Bombay; Cornish Rex; Orange Tabby; Silver Tabby; White Kitten; Siamese.
+8485,bank,10
+8486,bank,10
+8487,bank,10
+8488,bank,10
+8489,bank,10
+8490,bank,10
+# Love is in the Air: Handful of Rose Petals; Buttermilk Delight; Dark Desire;
+# Very Berry Cream; Sweet Surprise. Holiday creation is mail-only.
+22218,holiday,20
+22236,holiday,20
+22237,holiday,20
+22238,holiday,20
+22239,holiday,20
+# Hallow's End: Soothing Spearmint Candy; Chewy Fel Taffy (native two-week duration).
+37584,holiday,20
+37585,holiday,20
+# Prizes: Siamese; Black Tabby; Green Wing Macaw; Hyacinth Macaw; Senegal; Cockatiel.
+8490,prize,1
+8491,prize,1
+8492,prize,1
+8494,prize,1
+8495,prize,1
+8496,prize,1

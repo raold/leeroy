@@ -159,7 +159,8 @@ def test_scheduler_queue_readiness_and_client_call_use_independent_monotonic_clo
         blocker = asyncio.create_task(engine.scheduler.submit(Priority.SOCIAL, occupying))
         await busy_entered.wait()
         trace = engine.timing.begin()
-        task = asyncio.create_task(engine._ask(turn(deadline=wall.now() + 1000), [], trace=trace))
+        task = asyncio.create_task(engine._ask(turn(deadline=wall.now() + 1000), [],
+                                               meta=TurnMeta("t", timing_trace=trace)))
         await settle()
         assert not ready_entered.is_set()
         timer.advance(2)
@@ -210,7 +211,8 @@ def test_cancelled_model_wait_keeps_partial_stage(phase):
         elif phase == "admission":
             engine.live_admission = waiting
         trace = engine.timing.begin()
-        task = asyncio.create_task(engine._ask(turn(deadline=wall.now() + 100), [], trace=trace))
+        task = asyncio.create_task(engine._ask(turn(deadline=wall.now() + 100), [],
+                                               meta=TurnMeta("t", timing_trace=trace)))
         await settle()
         timer.advance(4)
         task.cancel()
@@ -243,7 +245,8 @@ def test_expiry_before_scheduler_closure_records_queue_without_inventing_call():
         engine.scheduler = LLMScheduler(object(), clock=wall)
         trace = engine.timing.begin()
         with pytest.raises(Expired):
-            await engine._ask(turn(deadline=wall.now() - 1), [], trace=trace)
+            await engine._ask(turn(deadline=wall.now() - 1), [],
+                              meta=TurnMeta("t", timing_trace=trace))
         engine.timing.pipeline_done(trace)
         event = terminals(events)[0]
         assert event["deadline_decision"] == "mind_model_queue"

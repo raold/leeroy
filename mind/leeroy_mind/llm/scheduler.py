@@ -129,6 +129,9 @@ class LLMScheduler:
         entry.task.add_done_callback(lambda t, e=entry: self._task_done(e))
 
     async def _run(self, entry: _Entry) -> None:
+        # Cancellation can beat this task's first step after _pump admitted it.
+        if entry.fut.done():
+            return
         try:
             result = await entry.job(self._llm)
         except Exception as e:

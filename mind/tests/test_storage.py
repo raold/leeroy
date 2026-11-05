@@ -7,6 +7,7 @@ import pytest
 
 from conftest import make_mem, unit
 from leeroy_mind.protocol import Boss, Chat, Death, Member
+from leeroy_mind.storage import db as db_module
 from leeroy_mind.storage.db import (
     EmbeddingMismatch, check_embedding_meta, checkpoint, latest_version, migrate, open_db,
     snapshot)
@@ -270,6 +271,50 @@ def test_migrate_refuses_newer_db_and_duplicate_numbers(tmp_path, monkeypatch):
         c.close()
 
 
+def _dir(tmp_path, *names):
+    d = tmp_path / "mig"
+    d.mkdir(exist_ok=True)
+    for name in names:
+        (d / name).write_text(f"CREATE TABLE t{name[:4]}(x);")
+    return d
+
+
+@pytest.mark.parametrize("version", [0, 1, 3])  # Below the hole, at it and past it.
+def test_migrate_refuses_a_numbering_hole_before_touching_the_database(tmp_path, monkeypatch, version):
+    """user_version keeps only the highest number applied. A build missing 0002 (another
+    branch's, not merged yet) would record 3, and every later build would take 0002 as
+    applied and never run it, so a build with a hole migrates nothing."""
+    monkeypatch.setattr("leeroy_mind.storage.db.MIGRATIONS_DIR", _dir(tmp_path, "0001_a.sql", "0003_c.sql"))
+    c = sqlite3.connect(tmp_path / "hole.db", autocommit=False)
+    try:
+        c.execute(f"PRAGMA user_version = {version}")
+        c.commit()
+        with pytest.raises(RuntimeError, match=r"skips 0002"):
+            migrate(c)
+        assert c.execute("PRAGMA user_version").fetchone()[0] == version
+        assert c.execute("SELECT name FROM sqlite_master").fetchall() == []
+        _dir(tmp_path, "0002_b.sql")  # Its migration arrives: it runs in order.
+        assert migrate(c) == 3
+        assert [r[0] for r in c.execute("SELECT name FROM sqlite_master ORDER BY name")] == (
+            ["t0001", "t0002", "t0003"] if version == 0 else ["t0002", "t0003"] if version == 1 else [])
+    finally:
+        c.close()
+
+
+def test_open_db_refuses_the_shipped_numbering_without_one_of_its_migrations(tmp_path, monkeypatch):
+    files = db_module._migration_files()
+    assert [n for n, _ in files] == list(range(1, latest_version() + 1))  # The shipped numbering has no hole.
+    monkeypatch.setattr(db_module, "_migration_files", lambda: [(n, p) for n, p in files if n != 14])
+    with pytest.raises(RuntimeError, match="skips 0014"):
+        open_db(tmp_path / "m.db")
+    c = sqlite3.connect(tmp_path / "m.db")
+    try:
+        assert c.execute("PRAGMA user_version").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM sqlite_master WHERE type='table'").fetchone()[0] == 0
+    finally:
+        c.close()
+
+
 def test_failed_commit_rolls_the_unit_back(store):
     class Boom:
         def __init__(self, conn):
@@ -426,7 +471,7 @@ def test_lone_surrogate_is_stored_without_raising(store):
                                  session_id=None, origin="human")
     line, = store.chat_lines([lid])
     assert line.text == "bad � text" and line.from_name == "Be�lra"
-    mid = store.insert_memory(make_mem(text="x\ud800y", evidence=("chat:\ud800",)))
+    mid = store.insert_memory(make_mem(text="x\ud800y", evidence=(f"chat:{lid}",)))
     assert store.get_memories([mid])[0].text == "x�y"
     eid = store.insert_game_event(chat("\ud800", from_name="\ud800"), session_id=None)
     assert eid > 0

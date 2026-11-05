@@ -17,10 +17,14 @@ raid lead made boss mechanics up. His question is read in talk/questions.py.
   lead's call after a wipe or a kill;
 - LibraryFacts: one lookup per human line, shared by every reply to it. The chunks his line
   names by title lead (Library.titled), then the search's hits. The search gets FACTS_CAP_S -
-  TEXT_RESERVE_S of wall time to come back, including worker waits, then text search starts
-  if FACTS_CAP_S remains. Text fallback, titles and formatting can still run past that cap.
-  Production retrieval/formatting uses the app's owned reader thread; compatibility fakes
-  stay on the caller's loop. Boss mechanics retains its synchronous session cache.
+  TEXT_RESERVE_S of wall time to have its query vector (the embed call is all the cap ever
+  bounded: it was the inline search's only await), then text search starts if FACTS_CAP_S
+  remains, else there are no facts. Preparation, the ranking that follows the vector, the
+  text fallback, titles and formatting are not cut off, so a lookup can run past the cap by
+  their time. Production retrieval/formatting uses the app's owned reader thread;
+  compatibility fakes stay on the caller's loop. Boss mechanics retains its synchronous
+  session cache. The fact providers (LibraryFacts.add_provider) add their lines on the loop
+  after the library's, also when the reader is busy or closed.
 
 Facts are not memories: they come only from library.db, which is public reference text, and
 none of it is logged."""
@@ -43,7 +47,7 @@ from leeroy_mind.talk.questions import GameQuestion, game_question
 from leeroy_mind.talk.reference import (REFERENCE_KINDS, preferred_reference_language,
                                         reference_candidates, reference_lines)
 from leeroy_mind.talk.style import to_ascii
-from leeroy_mind.text import truncate_words
+from leeroy_mind.text import estimate_tokens, truncate_words
 from leeroy_mind.wow import ENCOUNTER_MEMBERS
 
 __all__ = ["FACTS_CAP_S", "FACTS_TOKENS", "GameQuestion", "LibraryFacts", "boss_mechanics",
@@ -787,8 +791,8 @@ class _InlineSearch:
     def __init__(self, library):
         self.library = library
 
-    async def search(self, *args, **kwargs):
-        return await self.library.search(*args, **kwargs)
+    async def search(self, *args, timeout=None, **kwargs):
+        return await asyncio.wait_for(self.library.search(*args, **kwargs), timeout)
 
     async def search_text(self, *args, **kwargs):
         return self.library.search_text(*args, **kwargs)
@@ -834,6 +838,18 @@ class LibraryFacts:
         self._mechanics: dict[tuple[str, str | None], list[str]] = {}
         self._closed = False
         self._close_task: asyncio.Task | None = None
+        self._providers: list[Callable[[str], list[str]]] = []
+
+    def add_provider(self, provider: Callable[[str], list[str]]) -> None:
+        """Add a small, local synchronous fact source to the shared line lookup.
+
+        Providers must be bounded and do no model, bridge or network work.
+        Their lines share the library's existing total prompt token budget.
+        """
+        if not callable(provider):
+            raise TypeError("fact provider must be callable")
+        if provider not in self._providers:
+            self._providers.append(provider)
 
     def start(self, line_id: int, q: GameQuestion) -> None:
         """Start the lookup for his line `line_id` (once: a second call does nothing)."""
@@ -866,9 +882,11 @@ class LibraryFacts:
         try:
             return await self._lookup_ready(line_id, q)
         except (SearchBusy, SearchClosed) as exc:
-            log.debug("facts_lookup: line=%d outcome=%s hits=0 facts=0", line_id,
-                      "busy" if isinstance(exc, SearchBusy) else "closed")
-            return []
+            # The providers never needed the reader: a lore line still gets theirs.
+            lines = [] if q.topic in REFERENCE_KINDS else self._provided(line_id, q, [])
+            log.debug("facts_lookup: line=%d outcome=%s hits=0 facts=%d", line_id,
+                      "busy" if isinstance(exc, SearchBusy) else "closed", len(lines))
+            return lines
 
     async def _lookup_ready(self, line_id: int, q: GameQuestion) -> list[str]:
         t0 = self.timer()
@@ -893,10 +911,9 @@ class LibraryFacts:
                 return []
         hits, outcome = [], "search"
         try:
-            hits = await asyncio.wait_for(
-                self.search.search(q.query, k=SEARCH_K, kinds=kinds, llm=self.llm,
-                                   priority=Priority.REPLY_HUMAN),
-                max(0.0, self.cap_s - TEXT_RESERVE_S))
+            hits = await self.search.search(q.query, k=SEARCH_K, kinds=kinds, llm=self.llm,
+                                            priority=Priority.REPLY_HUMAN,
+                                            timeout=max(0.0, self.cap_s - TEXT_RESERVE_S))
         except TimeoutError:
             outcome = "timeout"
         except (SearchBusy, SearchClosed):
@@ -937,9 +954,33 @@ class LibraryFacts:
         except Exception:  # a chunk the formatter chokes on: no facts, never a lost reply
             log.exception("facts_format_failed: line=%d", line_id)
             lines = []
+        lines = self._provided(line_id, q, lines)
         log.debug("facts_lookup: line=%d topic=%s outcome=%s hits=%d facts=%d named=%d "
                   "other_side=%d ms=%d", line_id, q.topic, outcome, hit_count, len(lines),
                   named_count, found - hit_count - named_count, round((self.timer() - t0) * 1000))
+        return lines
+
+    def _provided(self, line_id: int, q: GameQuestion, lines: list[str]) -> list[str]:
+        """`lines` with the providers' lines added, on the loop, within the shared budget."""
+        for provider in tuple(self._providers):
+            try:
+                supplied = provider(q.query)
+                if not isinstance(supplied, list):
+                    raise TypeError("fact provider must return a list")
+                for line in supplied[:KEEP_LINES]:
+                    if not isinstance(line, str):
+                        continue
+                    # Preserve complete evidence qualifiers; truncating a line
+                    # could turn a provisional result into a stronger claim.
+                    if len(line) > FACTS_TOKENS * 4:
+                        continue
+                    line = clean_text(line).strip()
+                    if (line and line not in lines
+                            and estimate_tokens("\n".join([*lines, line])) <= FACTS_TOKENS):
+                        lines.append(line)
+            except Exception:
+                # Provider messages can contain human questions or private rows.
+                log.warning("facts_provider_failed: line=%d", line_id)
         return lines
 
     def mechanics(self, boss: str, instance: str | None = None) -> list[str]:

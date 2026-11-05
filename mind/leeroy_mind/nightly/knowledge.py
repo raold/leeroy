@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     from leeroy_mind.nightly.runner import NightContext
 
 ROOT_PREFIXES = ("chat:", "event:", "session:", "story:", "beat:", "life:", "encounter:", "away:",
-                 "rule:", "joke:", "feud:", "mentor:", "chronicle:", "award:")
+                 "rule:", "joke:", "feud:", "mentor:", "chronicle:", "award:", "realm:")
 HOWS = ("witnessed", "overheard", "told", "confided", "inferred")
 BELIEFS = ("yes", "no", "unsure")
 PROBE_MAX_AGE_DAYS = 35
