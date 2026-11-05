@@ -1,4 +1,4 @@
-"""python -m leeroy_dojo: protocol-smoke, verify-episode, scenario and realm."""
+"""python -m leeroy_dojo: protocol-smoke, verify-episode, replay, scenario and realm."""
 
 from __future__ import annotations
 
@@ -17,13 +17,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m leeroy_dojo")
     sub = parser.add_subparsers(dest="command", required=True)
     smoke = sub.add_parser("protocol-smoke", help="run the worker contract end to end and record its episodes")
-    smoke.add_argument("--fake", action="store_true", help="use the in-process fake worker (the only one so far)")
+    smoke.add_argument("--fake", action="store_true",
+                       help="use the in-process fake worker (the native worker runs through realm g1)")
     smoke.add_argument("--out", type=Path, help="output directory (default: a new temporary directory)")
     smoke.add_argument("--seed", type=int, default=7, help="scenario seed of the replayed episode")
     smoke.add_argument("--json", action="store_true", help="print the report as JSON")
     verify = sub.add_parser("verify-episode", help="check a recorded episode's chunks, checksums and footer")
     verify.add_argument("path", type=Path)
     verify.add_argument("--json", action="store_true")
+    rep = sub.add_parser("replay", help="replay a recorded episode's observation and action timeline without a server")
+    rep.add_argument("path", type=Path)
+    rep.add_argument("--json", action="store_true", help="print the whole report, timeline included")
     scenario = sub.add_parser("scenario", help="check a scenario manifest and print or pin its SHA-256")
     scenario.add_argument("action", choices=("check", "hash", "pin"),
                           help="check: structure only; hash: print the hash; pin: write <name>.sha256 next to it")
@@ -33,6 +37,23 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "realm":
         return realm_cli.run(args)
+    if args.command == "replay":
+        from .replay import replay_episode
+        report = replay_episode(args.path)
+        if args.json:
+            print(json.dumps(report, indent=2))
+        else:
+            for line in report.get("timeline", []):
+                events = "; ".join(line["events"])
+                print(f"{line['t_ms']:>7} ms  #{line['decision']:<4} {' | '.join(line['actions'])}"
+                      + (f"  -- {events}" if events else ""))
+            for problem in report["problems"]:
+                print(f"FAIL {problem}")
+            rep = report.get("reproduced") or {}
+            print(f"{args.path}: {'ok' if report['ok'] else 'FAILED'}; {report['transitions']} decisions, outcome "
+                  f"{report['outcome']}" + (f", {rep['decisions']}/{rep['of']} requests reproduced" if rep else "")
+                  + (f"; {report['excluded']}" if report.get("excluded") else ""))
+        return 0 if report["ok"] else 1
     if args.command == "scenario":
         try:
             manifest = load_manifest(args.path)
@@ -46,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "protocol-smoke":
         if not args.fake:
-            print("protocol-smoke: only --fake exists until the native worker is built", file=sys.stderr)
+            print("protocol-smoke: only --fake; the native worker's episodes run through realm g1", file=sys.stderr)
             return 2
         report = run_fake_smoke(args.out, seed=args.seed)
         if args.json:
