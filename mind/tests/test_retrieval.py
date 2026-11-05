@@ -109,3 +109,24 @@ def test_zero_first_norm_does_not_skip_invalid_second_norm(monkeypatch):
     with pytest.raises(TypeError):
         sim(1, 2)  # empty zip permits dot; second norm is still evaluated
     assert seen == [0]
+
+
+def test_cached_similarity_is_bit_exact_at_the_real_dimension():
+    """The norm cache at VEC_DIM, the size of every stored memory and library vector, over a
+    candidate set like a broad search's: every value and every MMR order is cosine's."""
+    import random
+
+    from leeroy_mind.storage.db import VEC_DIM
+
+    rng = random.Random(512)
+    vectors = {i: [rng.uniform(-1.0, 1.0) for _ in range(VEC_DIM)] for i in range(60)}
+    vectors[60] = [0.0] * VEC_DIM
+    sim = vector_or_word_similarity(vectors, {})
+    for a in vectors:
+        for b in (0, 7, 59, 60, a):
+            assert sim(a, b).hex() == cosine(vectors[a], vectors[b]).hex()
+    ids = list(vectors)
+    scores = {i: rng.random() for i in ids}
+    for k in (0, 1, 5, 12):
+        assert mmr(ids, scores, vector_or_word_similarity(vectors, {}), k) == mmr(
+            ids, scores, lambda a, b: cosine(vectors[a], vectors[b]), k)

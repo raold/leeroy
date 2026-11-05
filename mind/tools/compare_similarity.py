@@ -16,6 +16,7 @@ import time
 MIND = Path(__file__).resolve().parents[1]
 CANDIDATE = MIND / "leeroy_mind" / "retrieval.py"
 sys.path.insert(0, str(MIND))
+from leeroy_mind.storage.db import VEC_DIM  # noqa: E402  (memories and library alike)
 
 
 def load_retrieval(path, name):
@@ -121,9 +122,10 @@ def main():
             report["candidate_sha256"] = hashlib.sha256(CANDIDATE.read_bytes()).hexdigest()
             baseline = load_retrieval(baseline_path, "comparison_baseline_retrieval")
             candidate = load_retrieval(CANDIDATE, "comparison_candidate_retrieval")
-            cases = [(f"vector_{n}_1024_k5", n, 1024, 5, False) for n in (50, 100, 270)]
-            cases += [("vector_270_1024_k0", 270, 1024, 0, False),
-                      ("vector_270_1024_k1", 270, 1024, 1, False),
+            dim = VEC_DIM
+            cases = [(f"vector_{n}_{dim}_k5", n, dim, 5, False) for n in (50, 100, 270)]
+            cases += [(f"vector_270_{dim}_k0", 270, dim, 0, False),
+                      (f"vector_270_{dim}_k1", 270, dim, 1, False),
                       ("text_100_k5", 100, 0, 5, True)]
             for name, size, dimensions, k, text_only in cases:
                 result = report["cases"][name] = {"pairs": []}
