@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { CROWDED, SHOWN_WHEN_CROWDED, roomRows, selfPress, selfView }
+import { CROWDED, SHOWN_WHEN_CROWDED, roomMates, roomRows, selfPress, selfView }
   from "../../../leeroy_mind/console/static/js/comms/tree.mjs";
 
 // The snapshot's 32 rooms in the mind's order, and invented members only. He is 1000; members are
@@ -140,4 +140,20 @@ test("deafen reads as mute too, and each press says what to send", () => {
   assert.deepEqual(press(false, true, "deafen"), { type: "self", mute: false, deafen: false });
   assert.deepEqual(press(false, true, "mute"), { type: "self", mute: false, deafen: false });   // unmute undeafens
   assert.deepEqual(press(true, true, "mute"), { type: "self", mute: false, deafen: false });
+});
+
+test("his room's faces are everyone there but him, by name, even in a crowded room", () => {
+  assert.deepEqual(roomMates(null), []);
+  assert.deepEqual(roomMates(voice(seat(3, "lore", 1101))), []);  // he is in no room
+  var s = seat(12, "guild_hall", 1101);
+  s.where[String(HIM)] = "guild_hall";
+  s.where["1201"] = "afk";
+  s.names["1105"] = "Aaron";
+  var mates = roomMates(voice(Object.assign(s, { room: "guild_hall", speaking: [1107], ptt: true })));
+  assert.equal(mates.length, 12);
+  assert.deepEqual(mates[0], { guid: 1105, name: "Aaron", speaking: false });
+  assert.ok(mates.every(function (p) { return p.guid !== HIM && p.guid !== 1201; }));
+  assert.deepEqual(mates.filter(function (p) { return p.speaking; }).map(function (p) { return p.guid; }), [1107]);
+  assert.deepEqual(roomMates(voice({ where: { 1000: "afk", 1101: "afk" }, names: { 1101: "Bexley" } })),
+                   [{ guid: 1101, name: "Bexley", speaking: false }]);  // his room known from where alone
 });

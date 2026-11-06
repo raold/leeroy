@@ -1,9 +1,10 @@
-import { $, api, arr, emit, on, own, remember, setKey } from "./core.mjs";
+import { $, api, arr, emit, hashKey, on, own, remember, setKey } from "./core.mjs";
 import { S, adoptVoice, applyVoice } from "./state.mjs";
+import { forgetFaces } from "./faces.mjs";
 import { renderStrip } from "./strip.mjs";
 import { renderFeed } from "./comms/feedview.mjs";
 import { renderLeft } from "./comms/leftview.mjs";
-import "./comms.mjs";
+import { renderRight } from "./comms/rightview.mjs";
 import "./raid.mjs";
 import "./guild.mjs";
 import "./personas.mjs";
@@ -87,15 +88,35 @@ function connect() {
 }
 
 // The key from the URL's fragment (see setKey), then out of the address bar
-var m = /^#key=([A-Za-z0-9_-]{16,128})$/.exec(location.hash);
-setKey(m ? m[1] : "");
-if (/^#key=/.test(location.hash)) { history.replaceState(null, "", location.pathname + "#comms"); }
+var first = hashKey(location.hash);
+setKey(first || "");
+if (first !== null) { history.replaceState(null, "", location.pathname + "#comms"); }
+
+// A new key pasted into this open tab (the console restarted on the same port) changes only the
+// fragment, so the page does not reload: take it and connect again with it. A malformed one
+// leaves the key as it was.
+function takeKey(key) {
+  setKey(key);
+  forgetFaces();  // the photos the old key was refused are asked for again
+  if (es) { es.abort(); es = null; }
+  clearTimeout(retry);
+  lost("");
+  connect();
+  showTab(S.tab);  // the open tab asks again at once
+}
 
 renderStrip();
 renderLeft();
 renderFeed(false);
+renderRight();
 showTab((location.hash || "#comms").slice(1));
 window.addEventListener("hashchange", function () {
+  var key = hashKey(location.hash);
+  if (key !== null) {
+    history.replaceState(null, "", location.pathname + "#" + S.tab);
+    if (key) { takeKey(key); }
+    return;
+  }
   var want = location.hash.slice(1);
   if (want !== S.tab) { showTab(want); }
 });

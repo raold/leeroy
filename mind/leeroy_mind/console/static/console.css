@@ -178,7 +178,7 @@ button.twist:hover { color: var(--ink); background: var(--surface-2); }
 .room-faces { display: flex; flex-wrap: wrap; gap: 3px; padding: 2px 8px 4px 24px; }
 .av.more { background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--line);
   font: 600 9px/1 var(--f-mono); }
-#whispers .none { padding: 2px 8px; font-size: 13px; color: var(--ink-3); }
+#whispers .none, .faces .none { padding: 2px 8px; font-size: 13px; color: var(--ink-3); margin: 0; }
 .ctl { flex: none; display: grid; gap: 8px; margin-top: 8px; padding: 10px 6px 0; border-top: 1px solid var(--line); }
 .ctl .now { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; }
 #c-room { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
@@ -189,6 +189,30 @@ button.twist:hover { color: var(--ink); background: var(--surface-2); }
 .vstatus { display: flex; flex-wrap: wrap; gap: 4px; }
 .seg { padding: 1px 7px; border: 1px solid var(--line); border-radius: 99px; font-size: 11.5px; color: var(--ink-3); }
 .seg.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); }
+
+/* comms, the right column: the faces of his room, then the member card */
+.comms > .panel.right { overflow-y: auto; }
+.faces { flex: none; display: flex; flex-wrap: wrap; gap: 8px; padding: 4px; margin: 0 -4px; max-height: 232px;
+  overflow-y: auto; }
+.mcard { flex: none; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); display: grid;
+  gap: 10px; align-content: start; }
+.panel .mcard h4 { margin: 0; font: 750 20px/1.1 var(--f-display); font-stretch: 108%; color: var(--ink);
+  overflow-wrap: anywhere; }
+.mcard .note { margin: 3px 0 0; }
+.cardface { width: 100%; max-width: 288px; }
+.mcard .facts { grid-template-columns: minmax(0, 1fr); }
+.mcard .fact { grid-template-columns: 6.5em minmax(0, 1fr); align-items: baseline; gap: 8px; border-left: 0;
+  border-top: 1px solid var(--line); }
+.mcard .fact:first-child { border-top: 0; }
+.mcard .fact .v { overflow-wrap: anywhere; }
+.mcard .lbl { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px;
+  font-size: 12px; color: var(--ink-3); }
+.mcard .lbl output { font: 500 12px var(--f-mono); color: var(--ink-2); }
+.volrow { display: flex; align-items: center; gap: 8px; }
+.volrow input[type="range"] { flex: 1; min-width: 0; accent-color: var(--accent); }
+.panel .mcard .acts { margin-top: 0; gap: 8px; }
+.mcard button[aria-pressed="true"] { color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, var(--surface));
+  border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); }
 
 .chip { --c: var(--muted); display: inline-flex; align-items: center; gap: 5px; font: 650 11px/1 var(--f-body);
   letter-spacing: 0.03em; text-transform: uppercase; padding: 3px 7px; border-radius: 5px; color: var(--c);
@@ -206,20 +230,21 @@ img.av { background: var(--surface-2); }
 .av.xl { width: 100%; height: auto; aspect-ratio: 1; border-radius: 12px; font-size: 40px; }
 .pface { width: 96px; margin-bottom: 8px; }
 div.who { display: flex; align-items: center; gap: 8px; }
-.av.speaking { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--live); }
+.av.speaking, .speaking > .av { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--live); }
+/* a member's face that opens their card */
+.facebtn { display: inline-flex; flex: none; padding: 0; border: 0; border-radius: 50%; background: none;
+  cursor: pointer; line-height: 0; }
+span.facebtn { cursor: inherit; }
+#whispers span.facebtn, .member[data-card] { cursor: pointer; }
+.msg > .facebtn { align-self: start; }
 
 #toasts { position: absolute; top: 100%; right: 14px; margin-top: 8px; z-index: 10; width: 300px; display: flex;
   flex-direction: column; gap: 6px; }
-.toast, #menu, .dialog { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+.toast, .dialog { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
   padding: 10px 12px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28); }
 .toast .acts, .dialog .acts { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; }
 .toast { font-size: 13px; box-shadow: inset 3px 0 0 var(--accent), 0 6px 20px rgba(0, 0, 0, 0.28); }
 .toast.invite .line { display: flex; align-items: center; gap: 8px; }
-#menu { position: fixed; z-index: 20; min-width: 240px; }
-#menu .title { font-weight: 700; margin-bottom: 4px; }
-#menu label { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
-#menu input[type="range"] { flex: 1; accent-color: var(--accent); }
-#menu output { min-width: 58px; text-align: right; font: 500 12px var(--f-mono); }
 .scrim { position: fixed; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center;
   background: rgba(0, 0, 0, 0.55); }
 .dialog { max-width: 420px; }
@@ -290,10 +315,23 @@ select, input[type="text"], input[type="number"] { color: var(--ink); background
 .chg { margin: 0 0 8px; }
 .chg .acts { margin-top: 2px; }
 
+/* the middle widths: the right column goes under the other two, the room's faces beside the card,
+   and the page scrolls down to it */
+@media (max-width: 1100px) {
+  .comms { flex: none; grid-template-columns: 240px minmax(0, 1fr); grid-template-rows: minmax(420px, 70vh) auto; }
+  .comms > .panel.right { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    column-gap: 24px; align-items: start; overflow: visible; }
+  .panel.right:has(> .mcard[hidden]) > .here { grid-column: 1 / -1; }
+  .panel.right > .mcard { margin-top: 0; padding-top: 0; border-top: 0; }
+  .panel.right .faces { max-height: none; }
+  .cardface { max-width: 220px; }
+}
 @media (max-width: 720px) {
   .comms { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; }
   .comms > .panel { max-height: 70vh; }
   .panel.left { max-height: 60vh; }
+  .comms > .panel.right { grid-column: auto; display: flex; align-items: stretch; max-height: none; }
+  .panel.right > .mcard { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
   .facts { grid-template-columns: 1fr; }
 }
 

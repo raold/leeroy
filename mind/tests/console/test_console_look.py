@@ -208,3 +208,49 @@ def test_each_banner_aligns_with_its_own_panels():
 def test_the_address_bar_hash_opens_a_tab():
     main = (STATIC / "js" / "main.mjs").read_text("utf-8")
     assert 'addEventListener("hashchange"' in main
+
+
+def _js(name: str) -> str:
+    return (STATIC / "js" / name).read_text("utf-8")
+
+
+def test_a_key_pasted_into_the_open_tab_is_taken():
+    """After a console restart he pastes the new URL into the tab already open: only the fragment
+    changes, so the page does not reload; the hashchange handler takes the key, clears it from the
+    address bar and connects again (key.test.mjs checks hashKey itself)."""
+    main = _js("main.mjs")
+    handler = main[main.index('addEventListener("hashchange"'):]
+    assert "hashKey(location.hash)" in handler and "takeKey(" in handler
+    take = re.search(r"function takeKey\(key\) \{(.*?)\n\}", main, re.S)
+    assert take, "takeKey"
+    for step in ("setKey(key)", "forgetFaces()", "connect()", 'lost("")'):
+        assert step in take.group(1), step
+    assert "history.replaceState" in handler
+
+
+def test_the_comms_columns_hold_at_narrow_widths():
+    """Three columns need room: below 1101 px the right column goes under the other two, so the
+    feed keeps its width (the page check measures 721, 900 and 1100 px)."""
+    css = _css()
+    m = re.search(r"@media \(max-width: 1100px\) \{(.*?)\n\}", css, re.S)
+    assert m, "no rule for the middle widths"
+    assert ".comms" in m.group(1) and ".panel.right" in m.group(1)
+
+
+def test_the_voice_status_and_a_crowded_room_are_named():
+    page = _page()
+    assert re.search(r'<div class="vstatus" role="group" aria-label="Voice status">', page)
+    left = (STATIC / "js" / "comms" / "leftview.mjs").read_text("utf-8")
+    assert 'strip.setAttribute("aria-label"' in left
+
+
+def test_speaking_lights_faces_without_a_redraw():
+    """A speaking event toggles the class on the faces already drawn: a redraw of the room tree on
+    every line would eat clicks and move the focus."""
+    left = (STATIC / "js" / "comms" / "leftview.mjs").read_text("utf-8")
+    on_voice = left[left.index("var ON_VOICE"):]
+    assert re.search(r"speaking:\s*function", on_voice)
+    assert not re.search(r"speaking:\s*renderRooms", on_voice)
+    assert not re.search(r"ptt:\s*function \(\) \{ renderRooms", on_voice)
+    right = (STATIC / "js" / "comms" / "rightview.mjs").read_text("utf-8")
+    assert "lightSpeakers(" in left and "lightSpeakers(" in right

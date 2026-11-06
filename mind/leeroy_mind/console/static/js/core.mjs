@@ -43,6 +43,13 @@ export function hhmm(sec) {
 // this page's memory only (not a cookie, which every 127.0.0.1 port would be handed) and goes
 // with each request as a header. A reload loses it: open the printed URL again.
 export function setKey(key) { KEY = key; }
+// The key in a "#key=..." fragment: the key, "" for a malformed one, null for any other fragment
+export function hashKey(hash) {
+  hash = str(hash);
+  if (hash.indexOf("#key=") !== 0) { return null; }
+  var m = /^#key=([A-Za-z0-9_-]{16,128})$/.exec(hash);
+  return m ? m[1] : "";
+}
 export function api(path, opts) {
   opts = opts || {};
   var headers = { "X-Console-Key": KEY };

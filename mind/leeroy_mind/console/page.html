@@ -62,7 +62,7 @@
             <span id="c-room"></span></div>
           <div class="acts"><button id="c-mute" type="button" aria-pressed="false" disabled>Mute</button>
             <button id="c-deafen" type="button" aria-pressed="false" disabled>Deafen</button></div>
-          <div class="vstatus" aria-label="Voice status">
+          <div class="vstatus" role="group" aria-label="Voice status">
             <span id="v-out" class="seg"></span><span id="v-mic" class="seg"></span>
             <span id="v-stt" class="seg"></span><span id="v-queue" class="seg"></span>
             <span id="v-err" class="seg"></span>
@@ -73,9 +73,28 @@
         <h3 id="feed-title"># guild</h3>
         <p id="feed-hint" class="hint"></p>
         <div id="feed" class="feed" role="log" aria-labelledby="feed-title"></div>
-        <div id="composer"></div>
+        <div id="composer" tabindex="-1"></div>
       </section>
-      <aside id="comms-right" class="side" aria-label="Your room"></aside>
+      <aside id="comms-right" class="panel right" aria-labelledby="here-title">
+        <div class="here">
+          <h3 id="here-title">Not in a voice room</h3>
+          <p class="hint">Click a face for their card.</p>
+          <div id="here-faces" class="faces" role="group" aria-label="Who is in your room"></div>
+        </div>
+        <section id="mcard" class="mcard" aria-labelledby="mcard-name" hidden>
+          <div id="mcard-face" class="cardface"></div>
+          <div><h4 id="mcard-name"></h4><p id="mcard-note" class="note"></p></div>
+          <div id="mcard-facts" class="facts"></div>
+          <div class="vol">
+            <div class="lbl"><label for="mcard-vol">Volume</label><output id="mcard-db" class="mono" for="mcard-vol">0.0 dB</output></div>
+            <div class="volrow"><input id="mcard-vol" type="range" min="-12" max="12" step="0.5" value="0">
+              <button id="mcard-reset" type="button">Reset</button></div>
+          </div>
+          <div class="acts"><button id="mcard-whisper" type="button" class="primary">Whisper</button>
+            <button id="mcard-mute" type="button" aria-pressed="false">Mute</button>
+            <button id="mcard-profile" type="button">Profile</button></div>
+        </section>
+      </aside>
     </div>
   </section>
   <section id="tab-raid" class="tab mindtab" role="tabpanel" aria-labelledby="t-raid" hidden>
@@ -340,13 +359,6 @@
     </div>
   </section>
 </main>
-<div id="menu" role="dialog" aria-label="Member volume" hidden>
-  <div id="menu-name" class="title"></div>
-  <label>Volume <input id="menu-vol" type="range" min="-12" max="12" step="0.5" value="0">
-    <output id="menu-db">0.0 dB</output></label>
-  <label><input id="menu-mute" type="checkbox"> Mute</label>
-  <button id="menu-reset" type="button">Reset</button>
-</div>
 <div id="confirm" class="scrim" hidden>
   <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-text">
     <div id="confirm-text"></div>

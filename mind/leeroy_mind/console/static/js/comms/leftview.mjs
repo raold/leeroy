@@ -1,6 +1,6 @@
 import { $, arr, clear, el, obj, on, own, plural, post, recall, remember, str } from "../core.mjs";
-import { S, hereRoom, name, roomName } from "../state.mjs";
-import { face } from "../faces.mjs";
+import { S, hereRoom, isMuted, name, roomName } from "../state.mjs";
+import { face, faceButton, lightSpeakers } from "../faces.mjs";
 import { FEED, currentView, openView } from "./feedview.mjs";
 import { roomRows, selfPress, selfView } from "./tree.mjs";
 
@@ -8,7 +8,8 @@ import { roomRows, selfPress, selfView } from "./tree.mjs";
 // the view), every voice room (folding groups, greyed empties, locks, n / 3, who sits where; a
 // click joins), the whisper threads, and his controls (the push-to-talk lamp and his room, Mute
 // and Deafen, the voice service's status). Also the toasts (the console's own notes for NOTE_MS,
-// and the invites) and the Comms banner.
+// and the invites) and the Comms banner. A member's row or face opens their card (rightview.mjs);
+// a speaking event only lights the faces already drawn.
 
 var NOTE_MS = 8000;             // how long one of the console's own notes stays up
 var NOTES_SHOWN = 5;
@@ -22,7 +23,7 @@ var collapsed = obj(recall(COLLAPSED_KEY, {}));
 function keepFocus(box, draw) {
   var a = document.activeElement, key = null;
   if (a && a !== box && box.contains(a)) {
-    ["view", "room", "fold", "guid"].forEach(function (k) {
+    ["view", "room", "fold", "guid", "card"].forEach(function (k) {
       if (!key && a.dataset && a.dataset[k] !== undefined) { key = [k, a.dataset[k]]; }
     });
   }
@@ -67,7 +68,7 @@ function renderWhispers() {
     if (!threads.length) { box.appendChild(el("div", "none", "No whispers yet.")); }
     threads.forEach(function (t) {
       var b = viewButton("w:" + t.guid, open);
-      b.appendChild(face(t.guid, t.name, "list"));
+      b.appendChild(faceButton(t.guid, t.name, "list", { inButton: true }));
       b.appendChild(el("span", "nm", t.name));
       badge(b, t.unread);
       box.appendChild(b);
@@ -77,22 +78,39 @@ function renderWhispers() {
 
 // -- the voice rooms -----------------------------------------------------------------------------
 
-function isMuted(guid) { return !!S.voice && S.voice.mutes.indexOf(guid) >= 0; }
+// A row lights (data-speaker) while their voice plays, his own while his key is held; a member's
+// row opens their card (data-card)
 function person(p, depth) {
   var row = el("div", "member d" + depth + (p.you ? " you" : "") + (p.speaking ? " speaking" : "")
                       + (!p.you && isMuted(p.guid) ? " muted" : ""));
   row.dataset.guid = String(p.guid);
-  if (!p.you) { row.tabIndex = 0; }  // the member's volume menu opens from here (comms.mjs)
-  row.appendChild(face(p.guid, p.name, "list", { you: p.you, speaking: p.speaking }));
+  row.dataset.speaker = String(p.guid);
+  if (!p.you) {
+    row.tabIndex = 0;
+    row.setAttribute("role", "button");
+    row.setAttribute("aria-label", p.name);
+    row.dataset.card = String(p.guid);
+    row.dataset.name = p.name;
+  }
+  row.appendChild(face(p.guid, p.name, "list", { you: p.you }));
   row.appendChild(el("span", "mname", p.you ? "You" : p.name));
   return row;
 }
 function crowd(r) {
   var strip = el("div", "room-faces d" + r.depth), more = r.count - r.people.length;
-  r.people.forEach(function (p) { strip.appendChild(face(p.guid, p.name, "list", { you: p.you, speaking: p.speaking })); });
+  r.people.forEach(function (p) {
+    if (!p.you) { strip.appendChild(faceButton(p.guid, p.name, "list", { speaking: p.speaking })); return; }
+    var me = el("span", "facebtn" + (p.speaking ? " speaking" : ""));
+    me.dataset.speaker = String(p.guid);
+    me.appendChild(face(p.guid, p.name, "list", { you: true }));
+    strip.appendChild(me);
+  });
   strip.appendChild(el("span", "av sm more", "+" + more));
-  strip.title = r.people.map(function (p) { return p.you ? "You" : p.name; }).join(", ")
-                + " and " + plural(more, "other");
+  var names = r.people.map(function (p) { return p.you ? "You" : p.name; }).join(", ")
+              + " and " + plural(more, "other");
+  strip.title = names;
+  strip.setAttribute("role", "group");
+  strip.setAttribute("aria-label", names);
   return strip;
 }
 export function renderRooms() {
@@ -244,6 +262,7 @@ export function renderLeft() {
 // -- what he does --------------------------------------------------------------------------------
 
 $("left").addEventListener("click", function (ev) {
+  if (ev.target.closest("[data-card]")) { return; }  // a member's face or row: their card (rightview.mjs)
   var t = ev.target.closest("[data-fold], [data-room], [data-view]");
   if (!t) { return; }
   if (t.dataset.fold) {
@@ -263,8 +282,13 @@ $("c-deafen").addEventListener("click", function () { pressSelf("deafen"); });
 
 var ON_VOICE = {
   state: renderLeft, down: renderLeft,
-  speaking: renderRooms,
-  ptt: function () { renderRooms(); renderControls(); },
+  speaking: function (m) {
+    lightSpeakers($("tree"), m.guid, !!S.voice && S.voice.speaking.indexOf(m.guid) >= 0);
+  },
+  ptt: function () {
+    if (S.voice) { lightSpeakers($("tree"), S.voice.human, S.voice.ptt); }
+    renderControls();
+  },
   moved: function () { renderRooms(); renderControls(); renderToasts(); },
   invite: renderToasts,
   refused: function (m) { note(refusal(str(m.channel), m.reason)); },

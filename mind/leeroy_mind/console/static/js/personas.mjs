@@ -13,7 +13,7 @@ var BY = { seed: "the seeding", owner: "you (an import or a personas command)", 
            night: "the night's looks pass", stance: "a stance move", undo: "an undo of a stance move" };
 var LEDGER_KINDS = { note_added: "note added", note_dropped: "note dropped", note_rolled_back: "note rolled back (drift)",
                      drift_flag: "drift flag", stance_band: "stance move", undo: "undo" };
-var personasTimer = null, personasBusy = false, pick = 0, pickSeq = 0;
+var personasTimer = null, personasBusy = false, pick = 0, pickSeq = 0, reveal = false;
 
 function pname(view, guid) {
   if (!guid) { return "-"; }
@@ -219,6 +219,7 @@ function renderMember(j) {
     box.appendChild(el("div", "r", when(r.ts) + "  " + (LEDGER_KINDS[r.kind] || str(r.kind)) + ": " + str(r.text) + (r.undone ? "  (undone)" : "")));
   });
   if (!arr(j.ledger).length) { box.appendChild(el("div", "muted", j.ledger ? "No ledger rows yet." : "Unavailable in this mind.db.")); }
+  if (reveal) { reveal = false; $("p-detail").scrollIntoView({ block: "start" }); }
 }
 function pollMember() {
   if (!pick || S.tab !== "personas") { return; }
@@ -237,7 +238,7 @@ function choose(guid) {
   pick = guid;
   var rows = $("p-roster").querySelectorAll("tr[data-guid]");
   for (var i = 0; i < rows.length; i++) { rows[i].classList.toggle("sel", Number(rows[i].dataset.guid) === guid); }
-  if (!guid) { $("p-detail").hidden = true; return; }
+  if (!guid) { $("p-detail").hidden = true; reveal = false; return; }
   if (TUNE) { renderDials(guid); }
   pollMember();
 }
@@ -251,10 +252,12 @@ $("p-roster").addEventListener("keydown", function (ev) {
 });
 $("p-close").addEventListener("click", function () { choose(0); });
 
-// Open this tab on one member's card
+// Open this tab on one member's detail (the Profile of their card in Comms), scrolled into view
+// once it is drawn. The tab is shown first, so the member is asked for at once.
 export function openMember(guid) {
-  choose(guid);
   showTab("personas");
+  reveal = true;
+  choose(guid);
 }
 
 // The dials: read from mind.db (/api/tuning); every change and preview goes to the running

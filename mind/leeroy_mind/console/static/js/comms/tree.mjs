@@ -67,6 +67,14 @@ export function roomRows(rooms, voice, collapsed) {
   return out;
 }
 
+// Everyone in his room but him, by name (a crowded room too): the right column's faces
+export function roomMates(voice) {
+  if (!voice) { return []; }
+  var here = hisRoom(voice);
+  return here ? (seated(voice)[here] || []).filter(function (p) { return !p.you; })
+                  .map(function (p) { return { guid: p.guid, name: p.name, speaking: p.speaking }; }) : [];
+}
+
 // His own mute and deafen as the controls show them. The voice service keeps the flags as sent and
 // deafen implies mute, so Mute reads as on while he is deafened.
 export function selfView(voice) {

@@ -16,9 +16,9 @@ from leeroy_mind.console import app as console_app
 from console.rig import http, make_app
 
 STATIC = Path(str(resources.files("leeroy_mind.console").joinpath("static")))
-MODULES = {"core", "state", "tabs", "words", "strip", "main", "comms", "raid", "guild",
+MODULES = {"core", "state", "tabs", "words", "strip", "main", "raid", "guild",
            "personas", "mind", "names", "facecache", "faces", "comms/model", "comms/feedview",
-           "comms/tree", "comms/leftview"}
+           "comms/tree", "comms/leftview", "comms/rightview"}
 IMPORT = re.compile(r'^import\s*(?:\{([^}]*)\}\s*from\s*)?"([^"]+)";', re.M)
 EXPORTED = re.compile(r"^export\s+(?:function|const|let|var|class)\s+([A-Za-z_$][\w$]*)", re.M)
 MARKUP = ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(",
@@ -160,6 +160,25 @@ def test_every_id_the_scripts_ask_for_is_in_the_page():
     asked = {m for f in _scripts() for m in re.findall(r'\$\("([^"]+)"\)', f.read_text("utf-8"))}
     assert "tab-mind" in asked  # the Mind tab's own buttons are bound to it
     assert asked and asked <= ids, sorted(asked - ids)
+
+
+def test_the_old_volume_menu_is_gone():
+    """The member card replaced the right-click menu: no file, no markup, no style is left."""
+    assert not (STATIC / "js" / "comms.mjs").exists()
+    assert 'id="menu' not in _page()
+    assert "#menu" not in (STATIC / "console.css").read_text("utf-8")
+    assert "js/comms.mjs" not in console_app.static_files()
+
+
+def test_the_member_card_is_in_the_right_column():
+    page = _page()
+    right = page[page.index('id="comms-right"'):page.index("</aside>", page.index('id="comms-right"'))]
+    for i in ("here-title", "here-faces", "mcard", "mcard-face", "mcard-name", "mcard-note", "mcard-facts",
+              "mcard-vol", "mcard-db", "mcard-reset", "mcard-whisper", "mcard-mute", "mcard-profile"):
+        assert f'id="{i}"' in right, i
+    assert re.search(r'<input id="mcard-vol" type="range" min="-12" max="12" step="0.5" value="0"', right)
+    assert "Click a face for their card." in right
+    assert re.search(r'<div id="composer"[^>]*tabindex="-1"', page)  # Whisper puts the focus there
 
 
 def test_scripts_build_no_markup_from_text():

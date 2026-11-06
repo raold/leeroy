@@ -33,6 +33,7 @@ export function hereRoom() {
   if (!S.voice) { return ""; }
   return S.voice.room || (S.voice.human && typeof S.voice.where[S.voice.human] === "string" ? S.voice.where[S.voice.human] : "");
 }
+export function isMuted(guid) { return !!S.voice && S.voice.mutes.indexOf(guid) >= 0; }
 export function roomOf(guid) {
   if (!S.voice) { return ""; }
   var r = S.voice.where[String(guid)];

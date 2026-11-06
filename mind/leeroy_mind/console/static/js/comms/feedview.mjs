@@ -1,6 +1,6 @@
 import { $, clear, clock, el, emit, num, on, pad, recall, remember, str } from "../core.mjs";
 import { S, name, roomName } from "../state.mjs";
-import { face } from "../faces.mjs";
+import { face, faceButton } from "../faces.mjs";
 import { registerTab, setBadge } from "../tabs.mjs";
 import { Feed, kpis } from "./model.mjs";
 
@@ -52,9 +52,11 @@ function chip(l) {
 function row(l) {
   var r = el("div", "msg" + (l.you ? " mine" : "")), at = num(l.ts) * 1000;
   r.dataset.id = String(l.id);
-  r.appendChild(face(l.from_guid, str(l.from), "feed", { you: l.you === true }));
+  var who = str(l.from) || "#" + l.from_guid;  // a member's face opens their card (rightview.mjs)
+  r.appendChild(l.you === true || !(num(l.from_guid) > 0) ? face(l.from_guid, str(l.from), "feed", { you: l.you === true })
+                : faceButton(l.from_guid, who, "feed"));
   var m = el("div"), h = el("div", "h");
-  h.appendChild(el("span", "who", l.you ? "You" : str(l.from) || "#" + l.from_guid));
+  h.appendChild(el("span", "who", l.you ? "You" : who));
   var t = el("time", "t", stamp(at));
   t.dateTime = new Date(at).toISOString();
   t.title = new Date(at).toLocaleString();

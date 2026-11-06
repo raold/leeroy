@@ -2,7 +2,11 @@
 // fetched with the console key and shown from a blob URL, since an <img src> could not carry the
 // key. Each photo is decoded once and kept per guid and size: a face drawn again (the feed redraws
 // on every line) is a copy of that decoded image at once, never the circle first, and a member
-// with no photo is asked for again only when the cache's memory of the miss runs out.
+// with no photo is asked for again only when the cache's memory of the miss runs out. Only a 404
+// says there is no photo: a server error, a refused key or no connection keeps the one shown.
+//
+// In Comms a member's face is a button (faceButton) that opens their card: data-card and
+// data-name say whose, data-speaker lets lightSpeakers light it while their voice plays.
 import { api, el } from "./core.mjs";
 import { FaceCache } from "./facecache.mjs";
 import { initials, paletteSlot } from "./names.mjs";
@@ -20,14 +24,18 @@ var PALETTE = ["#2a68a8", "#6956b0", "#1f7a52", "#b06a0c", "#a0446e", "#0d6470",
 function loadFace(key) {
   var i = key.indexOf(":");
   return api("/api/face?guid=" + encodeURIComponent(key.slice(0, i)) + "&size=" + key.slice(i + 1))
-    .then(function (r) { return r.status === 200 ? r.blob() : null; })
+    .then(function (r) {
+      if (r.status === 404) { return null; }
+      if (r.status !== 200) { throw new Error("HTTP " + r.status); }
+      return r.blob();
+    })
     .then(function (b) {
       if (!b) { return null; }
       var url = URL.createObjectURL(b), img = document.createElement("img");
       img.alt = "";
       img.src = url;
       return img.decode().then(function () { return { url: url, img: img }; },
-                               function () { URL.revokeObjectURL(url); return null; });
+                               function (e) { URL.revokeObjectURL(url); throw e; });
     });
 }
 
@@ -55,4 +63,29 @@ export function face(guid, name, kind, opts) {
     if (p && box.parentNode) { box.parentNode.replaceChild(photo(p, cls), box); }
   });
   return box;
+}
+
+// A member's face that opens their card (rightview.mjs listens for data-card in Comms). inButton:
+// a span, for a face inside another button (a whisper thread's). His own face is a plain face.
+export function faceButton(guid, name, kind, opts) {
+  opts = opts || {};
+  var f = face(guid, name, kind, { you: opts.you });
+  if (opts.you) { return f; }
+  var b = el(opts.inButton ? "span" : "button", "facebtn" + (opts.speaking ? " speaking" : ""));
+  if (!opts.inButton) {
+    b.type = "button";
+    b.title = name;
+    b.setAttribute("aria-label", name);
+  }
+  b.dataset.card = String(guid);
+  b.dataset.name = name;
+  b.dataset.speaker = String(guid);
+  b.appendChild(f);
+  return b;
+}
+
+// Light (or put out) one member's faces under box without drawing anything again
+export function lightSpeakers(box, guid, on) {
+  var lit = box.querySelectorAll('[data-speaker="' + Number(guid) + '"]');
+  for (var i = 0; i < lit.length; i++) { lit[i].classList.toggle("speaking", !!on); }
 }

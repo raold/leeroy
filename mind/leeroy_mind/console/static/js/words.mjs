@@ -1,4 +1,4 @@
-import { num, obj, pad, str } from "./core.mjs";
+import { arr, num, obj, pad, str } from "./core.mjs";
 
 // How the page words what mind.db holds. No DOM here: node imports this file.
 
@@ -39,4 +39,23 @@ export function youText(y) {
 export function youTitle(y) {
   return y ? "trust " + Math.round(num(y.trust)) + ", respect " + Math.round(num(y.respect)) + ", familiarity "
              + Math.round(num(y.familiarity)) + (y.label ? ", " + y.label : "") : "";
+}
+
+// The member card in Comms from /api/persona's member view: the name, a note (age and region, then
+// the stance) and three facts. view null: mind.db does not know them (a 404), so only the name the
+// page knows (known) is shown.
+export function cardText(view, known) {
+  if (!view) { return { name: str(known), note: "Not in mind.db.", facts: [] }; }
+  var m = obj(obj(view).member), c = view.card ? obj(view.card) : null, missing = arr(view.missing);
+  var name = str(m.name) || str(known) || "#" + num(m.guid), note = "No persona yet.";
+  if (c) {
+    var id = obj(c.identity), stance = str(m.stance);
+    note = [id.age, id.region].filter(function (x) { return x !== null && x !== undefined && x !== ""; }).join(", ");
+    if (stance) { note = note ? note + " · " + stance : stance; }
+  }
+  var role = [m["class"] ? CLASSES[m["class"]] || "-" : "", str(m.role)].filter(Boolean).join(" · ") || "-";
+  return { name: name, note: note,
+           facts: [{ k: "Role", v: role },
+                   { k: "Mood", v: missing.indexOf("pad_mood") >= 0 ? "unavailable" : moodText(m.mood) },
+                   { k: "Toward you", v: missing.indexOf("relationship") >= 0 ? "unavailable" : youText(m.you) }] };
 }

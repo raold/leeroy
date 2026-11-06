@@ -1,12 +1,14 @@
 // Photos by key, with a memory of "no photo": a photo is answered at once for ttlMs and a miss
-// (a 404 or a failed load) for missMs, at most maxActive loads run together, and one load serves
-// every asker of a key. While a photo is reloaded, peek still answers the old one, which is let
-// go (drop) only once the new answer is in. No DOM.
+// for missMs, at most maxActive loads run together, and one load serves every asker of a key.
+// load answers a photo, or null for none (a 404), and throws when it got no answer (a server
+// error, no connection): a first load that throws is a miss, while a reload that throws keeps the
+// photo it had for another ttlMs. While a photo is reloaded, peek still answers the old one, which
+// is let go (drop) only once a new answer is in. No DOM.
 
 export class FaceCache {
   constructor(o) {
     this.load = o.load;
-    this.now = o.now || Date.now;
+    this.now = o.now || function () { return Date.now(); };
     this.ttlMs = o.ttlMs === undefined ? 60000 : o.ttlMs;
     this.missMs = o.missMs === undefined ? 300000 : o.missMs;
     this.maxActive = o.maxActive === undefined ? 4 : o.maxActive;
@@ -51,11 +53,12 @@ export class FaceCache {
       this.active--;
       if (kept && old && old !== value) { this.drop(old); }
       if (!kept && value) { this.drop(value); }  // forgotten while it loaded (forget let the old go)
-      e.resolve(value);
+      e.resolve(kept ? value : null);  // a dropped photo is never handed out
       this._pump();
     };
     var p;
-    try { p = Promise.resolve(this.load(job.key)); } catch (x) { p = Promise.resolve(null); }
-    p.then(function (v) { done(v === undefined ? null : v); }, function () { done(null); });
+    try { p = Promise.resolve(this.load(job.key)); } catch (x) { p = Promise.reject(x); }
+    var failed = () => { done(this.entries.get(job.key) === job.entry ? job.entry.value : null); };
+    p.then(function (v) { done(v === undefined ? null : v); }, failed);
   }
 }

@@ -95,6 +95,39 @@ test("two askers of one key share one load", async () => {
   assert.equal(t.loads.length, 1);
 });
 
+test("a reload that fails keeps the photo it had; only a miss (a 404) ends it", async () => {
+  var t = rig(function (key, n) {
+    if (n === 1) { return "blob:1"; }
+    if (n === 2) { throw new Error("503"); }
+    return null;
+  });
+  var p = t.cache.get("k"); await t.settle(); await p;
+  t.now = 61000;
+  var q = t.cache.get("k"); await t.settle();
+  assert.equal(await q, "blob:1");
+  assert.equal(t.cache.peek("k"), "blob:1");
+  assert.deepEqual(t.dropped, []);
+  t.now = 120000;  // kept for another 60 s from the failed reload
+  assert.equal(await t.cache.get("k"), "blob:1");
+  assert.equal(t.loads.length, 2);
+  t.now = 122000;
+  var r = t.cache.get("k"); await t.settle();
+  assert.equal(await r, null);
+  assert.equal(t.cache.peek("k"), null);
+  assert.deepEqual(t.dropped, ["blob:1"]);
+});
+
+test("a load that ends after forget gives no photo and lets its photo go", async () => {
+  var t = rig(function (key, n) { return "blob:" + n; });
+  var p = t.cache.get("k");
+  await tick();
+  t.cache.forget();         // a new key: what the old one loaded is not shown
+  await t.settle();
+  assert.equal(await p, null);
+  assert.deepEqual(t.dropped, ["blob:1"]);
+  assert.equal(t.cache.peek("k"), undefined);
+});
+
 test("a failed load is remembered as no photo", async () => {
   var t = rig(function () { throw new Error("x"); });
   var p = t.cache.get("k"); await t.settle();
@@ -117,7 +150,10 @@ class FakeEl {
     this.tagName = tag.toUpperCase(); this.className = ""; this.textContent = ""; this.alt = "";
     this.src = ""; this.children = []; this.parentNode = null; this.dataset = {};
     this.style = { props: {}, setProperty: function (k, v) { this.props[k] = v; } };
+    this.attrs = {};
   }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  getAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k) ? this.attrs[k] : null; }
   appendChild(c) { c.parentNode = this; this.children.push(c); return c; }
   replaceChild(n, o) {
     this.children[this.children.indexOf(o)] = n;
@@ -132,7 +168,7 @@ class FakeEl {
   decode() { return this.src.indexOf("blob:broken") === 0 ? Promise.reject(new Error("bad")) : Promise.resolve(); }
 }
 
-var page = { asked: [], made: 0 };
+var page = { asked: [], made: 0, reloads: 0 };
 async function stage() {
   if (page.face) { return page.face; }
   globalThis.document = { createElement: function (t) { return new FakeEl(t); } };
@@ -141,11 +177,19 @@ async function stage() {
     var guid = /guid=(\d+)/.exec(path)[1];
     if (guid === "2201") { return Promise.resolve({ status: 200, blob: function () { return Promise.resolve({ tag: "ok" }); } }); }
     if (guid === "2203") { return Promise.resolve({ status: 200, blob: function () { return Promise.resolve({ tag: "broken" }); } }); }
+    if (guid === "2204") {  // a photo, then a server error, then no answer at all, then gone
+      var n = ++page.reloads;
+      if (n === 1) { return Promise.resolve({ status: 200, blob: function () { return Promise.resolve({ tag: "ok" }); } }); }
+      if (n === 2) { return Promise.resolve({ status: 503 }); }
+      if (n === 3) { return Promise.reject(new TypeError("Failed to fetch")); }
+      return Promise.resolve({ status: 404 });
+    }
     return Promise.resolve({ status: 404 });
   };
   URL.createObjectURL = function (b) { return "blob:" + b.tag + "/" + (++page.made); };
   URL.revokeObjectURL = function () {};
-  page.face = (await import("../../../leeroy_mind/console/static/js/faces.mjs")).face;
+  page.mod = await import("../../../leeroy_mind/console/static/js/faces.mjs");
+  page.face = page.mod.face;
   return page.face;
 }
 async function settled() { for (var i = 0; i < 10; i++) { await tick(); } }
@@ -189,4 +233,54 @@ test("a photo that does not decode keeps the initials and is not asked for again
   assert.equal(face(2203, "Corwyn", "feed").tagName, "SPAN");
   await settled();
   assert.equal(askedFor(2203), 1);
+});
+
+test("a known photo whose reload fails with a 5xx or no answer is kept; a 404 ends it", async () => {
+  var face = await stage();
+  var row = document.createElement("div");
+  row.appendChild(face(2204, "Dagny", "feed"));
+  await settled();
+  assert.equal(row.children[0].tagName, "IMG");
+  var src = row.children[0].src, real = Date.now, t0 = real();
+  try {
+    Date.now = function () { return t0 + 61000; };
+    assert.equal(face(2204, "Dagny", "feed").tagName, "IMG");  // the old photo while it reloads
+    await settled();
+    var a = face(2204, "Dagny", "feed");                         // the 503: still the photo
+    assert.equal(a.tagName, "IMG");
+    assert.equal(a.src, src);
+    Date.now = function () { return t0 + 122000; };
+    face(2204, "Dagny", "feed");
+    await settled();
+    assert.equal(face(2204, "Dagny", "feed").src, src);          // no answer: still the photo
+    Date.now = function () { return t0 + 183000; };
+    face(2204, "Dagny", "feed");
+    await settled();
+    var gone = face(2204, "Dagny", "feed");                      // the 404 ends it
+    assert.equal(gone.tagName, "SPAN");
+    assert.equal(gone.textContent, "DA");
+  } finally { Date.now = real; }
+  assert.equal(askedFor(2204), 4);
+});
+
+test("a member's face is a button that names them for the card; his own is no button", async () => {
+  await stage();
+  var faceButton = page.mod.faceButton;
+  var b = faceButton(2202, "Bexley", "room");
+  assert.equal(b.tagName, "BUTTON");
+  assert.equal(b.type, "button");
+  assert.equal(b.className, "facebtn");
+  assert.deepEqual([b.dataset.card, b.dataset.name, b.dataset.speaker], ["2202", "Bexley", "2202"]);
+  assert.equal(b.getAttribute("aria-label"), "Bexley");
+  assert.equal(b.children[0].className, "av lg");
+  var lit = faceButton(2202, "Bexley", "room", { speaking: true });
+  assert.equal(lit.className, "facebtn speaking");       // lit on the button, so a toggle keeps it
+  assert.equal(lit.children[0].className, "av lg");
+  var inside = faceButton(2202, "Bexley", "list", { inButton: true });
+  assert.equal(inside.tagName, "SPAN");                   // a face inside another button
+  assert.equal(inside.dataset.card, "2202");
+  var me = faceButton(1000, "Owner", "feed", { you: true });
+  assert.equal(me.tagName, "SPAN");
+  assert.equal(me.textContent, "YOU");
+  assert.equal(me.dataset.card, undefined);
 });
