@@ -841,7 +841,7 @@ class Pipeline:
         tail, two = "", False
         if romance:  # at the explicit band in a whisper: the owner's overlay, read last
             tail = whisper_tail(p, rel_h, dial=dial, channel=turn.channel,
-                                data_dir=self.data_dir)
+                                data_dir=self.data_dir, forms=human.forms)
             # a line or two, unless the turn holds one (her answer to his pushback)
             two = turn.max_lines > 1 and explicit_whisper(p, rel_h, dial=dial,
                                                           channel=turn.channel)

@@ -29,7 +29,7 @@ from leeroy_mind.storage.rows import Relationship
 from leeroy_mind.talk.budget import BurstPlan
 from leeroy_mind.talk.engine import flirt_chance, share_reason_pool
 from leeroy_mind.talk.pipeline import TurnMeta
-from leeroy_mind.talk.romance import INVARIANTS
+from leeroy_mind.talk.romance import DISTANCE, INVARIANTS
 from leeroy_mind.talk.select import ReplyTurn
 from leeroy_mind.talk.turns import Turn, TurnKind
 from leeroy_mind.testing.fake_llm import script_from
@@ -832,7 +832,9 @@ def test_the_whisper_overlay_is_the_last_thing_she_reads(store, clock, tmp_path)
             "WHISPER-OVERLAY\n", encoding="utf-8")
         msgs, _ = await r.engine.compose(whisper_back(102, line))
         user = msgs[1]["content"]
-        assert user.endswith("WHISPER-OVERLAY") and "in a line or two" in user
+        # his overlay, then the distance frame, last (variety B2: the frame follows his overlay)
+        frame = DISTANCE.format(them="him", they="he")
+        assert user.endswith(f"WHISPER-OVERLAY {frame}") and "in a line or two" in user
         assert user.rindex("Answer Zan's last line") < user.rindex("WHISPER-OVERLAY")
         guild = his_line(r, store, "who's up for heroics").id
         msgs, _ = await r.engine.compose(Turn(kind=TurnKind.REPLY_HUMAN, speaker=102,
