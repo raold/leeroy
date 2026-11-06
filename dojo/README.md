@@ -15,9 +15,13 @@ synthetic fixture actors in a training-only arena; exclusive control of those
 actors through a narrow executor that plays the part of a client (plan Task 6);
 and each actor's observation under visibility and a perceptual delay, with
 episodes that reset by tearing the arena and the actors down and building them
-again (plan Task 7). There is no learner and no Torch or Gymnasium dependency,
-and nothing in the worldserver opens an endpoint yet: commands come from the
-console.
+again (plan Task 7); and the worker's loopback protocol endpoint, outcomes and
+rewards decided by the dojo, small controlled baseline policies, the native
+stock playerbots system baseline, recorded episodes that replay without a game
+client and the G1 evidence run (plan Task 8). The endpoint is the realtime
+diagnostic controller's of milestone M1: the world does not pause between
+steps, and nothing advertises a pauseable environment. There is no learner and
+no Torch or Gymnasium dependency, and no learned policy is claimed.
 
 ## Layout
 
@@ -106,9 +110,9 @@ The runtime (`src/Runtime`) reads them once at start and logs one line: `off`
 instance, or scenario keys that are not an absolute path and a 64-digit
 lower-case hash; logged as an error) or `armed` (a training build with its
 training configuration). Off and refused start nothing and control no bot.
-Armed loads the pinned scenario (see below); its fixture actors then move only
-through the console's `dojo` commands, and there is still no endpoint: the
-step driver brings that. A config reload is reported
+Armed loads the pinned scenario (see below); once it is ready the endpoint
+opens (see *The endpoint* below), and the fixture actors move only through it
+and the console's `dojo` commands. A config reload is reported
 and never applied. `src/Lib` stays pure and is compiled into the core as well
 as into the standalone tests. The disabled variant compiles no fixture,
 arena, command or tick code at all.
@@ -505,6 +509,137 @@ On the controller's side `leeroy_dojo.memory.EpisodeMemory` holds every
 actor's history and every policy's memory for one episode, clears them all
 when a reset result arrives and refuses a result from another episode or an
 older generation afterwards.
+
+### Outcomes and rewards
+
+The dojo decides every outcome itself (the arena's stock win check stays off),
+each world tick from both actors (`src/Lib/DojoOutcome.*`,
+`leeroy_dojo.outcome`, shared cases in
+`modules/mod-dojo/tests/fixtures/outcome_cases.json`): a team is alive while
+any member is; no team alive is a simultaneous death, exactly one alive is a
+death won by that team, and otherwise the scenario's 180 s limit is a draw (a
+death on the limit's tick still decides). The episode then ends; an ended
+episode keeps its senses until the next reset, so its terminal observations
+can still be read. The terminal reward is +1 to the winner, -1 to the loser
+and 0 on a draw; the optional shaping is `0.05 * (Phi(next) - Phi(current))`,
+Phi being team 0's mean health fraction minus team 1's with the dead counted
+as 0, and 0 at every terminal state, so it telescopes to nothing over an
+episode. Both are computed from the authoritative state, never shown to an
+actor, and reported separately.
+
+The core's arena scoreboard still counts damage done, deaths and killing
+blows; the episode keeps its own tallies of the same (damage after absorbs as
+the scoreboard counts it, from the `OnDamage` hook; completed untriggered
+casts by spell from the end of `Spell::_cast`) and keeps both, as they were
+when it ended, for reconciliation (`dojo episode score`).
+
+An episode has a mode. `console` is the console's `reset` and `decide`;
+`protocol` is the endpoint's reset and steps, which the console may then
+neither reset nor decide for (it may abort); `stock` is the native system
+baseline: `dojo episode stock` hands both actors of a running console episode
+back to stock playerbots for the rest of it (D25). The dojo still decides its
+outcome, and both actors are owned again when it ends.
+
+## The endpoint
+
+Once the scenario is ready, the worker opens the protocol below on
+`127.0.0.1` with an ephemeral port (`src/Runtime/DojoEndpoint.*`) and writes
+a process receipt next to the worldserver's `PidFile`
+(`<runtime>/run/dojo-endpoint.json`: pid, host, port, scenario and its
+hash). One controller at a time; the transport's io thread only frames and
+decodes lines, and everything else runs on the world thread, once per tick,
+after the episode's own update.
+
+This is milestone M1's realtime diagnostic controller, not a pauseable
+environment, and `hello` says so: `clock` is `{mode: realtime, paced: true,
+pauseable: false, decision_ms: 200, tick_ms, command_delay_ms: 150,
+perceptual_delay_ms: 100, spell_queue_ms: 400, time_limit_ms: 180000}` and
+`rng` promises neither scenario seeds nor combat replay. The schemas are
+named with their hashes (`leeroy-dojo-observation-v1:<sha256>`,
+`leeroy-dojo-actions-v1:<sha256>`), so `hello`'s `expect` checks them
+exactly, and the action names are the catalog's with `/` written as `.`
+(protocol ids allow no `/`).
+
+- **reset** is the episode's own (fresh instance, fresh logins, clean-state
+  checks) and is answered only once the episode is ready, with both actors'
+  delayed observations and masks; a refused or failed one is
+  `aborted`/`reset_failed`.
+- **step** queues both actors' commands through the controller (producer
+  `protocol`, origin `step:<generation>:<decision>`) when the world thread
+  takes the step, under the ordinary command delay. The world keeps running:
+  the step completes on the first tick at least 200 ms of game time later, or
+  at once when the episode ends. `elapsed_ms` and `substeps` are the game time
+  and world ticks that actually passed since the observations the commands
+  answered, controller time included.
+- **events** are the controller's trace records since the last boundary
+  (commands queued, superseded, kept, executed, rejected or dropped, casts
+  started, completed, cancelled or failed, the core's own cancellations, and
+  anything stock), with the protocol's `action_id` and the executor's own id,
+  plus the episode's `damage` (actor, target, amount) and `death` events.
+- An episode the worker aborts (an actor offline or no longer owned,
+  perception stopped, the core ending the arena, a console abort) is a worker
+  fault to the lifecycle (`aborted`, reason `fault`), never a lost game.
+- The authoritative state at every decision boundary (the observer's debug
+  record and both actors' health) is kept apart, never in a result:
+  `dojo endpoint boundaries [from] [max]` serves it to the tooling's separate
+  debug stream.
+
+| Command (console or RA) | Does |
+|---|---|
+| `dojo endpoint status` | listening port, receipt, session, lifecycle state, the protocol episode and counters, as one `dojo-endpoint {json}` line |
+| `dojo endpoint boundaries [from] [max]` | the authoritative state at each decision boundary of the latest protocol episode, `dojo-boundary {json}` lines |
+| `dojo episode stock` | hands a running console episode to stock playerbots as the system baseline |
+| `dojo episode score` | the outcome, the core's scoreboard and the dojo's tallies, live or as they were when the episode ended |
+
+## Diagnostic episodes and G1
+
+`leeroy_dojo.policies` holds the controlled baselines (D25), each a
+deterministic function of its seed, the episode and the observations and
+masks it is given, and never asking for a masked action: `noop`,
+`random_legal` (uniform over the open actions, SplitMix64 seeded by seed and
+episode) and `frost_duelist`, a small authored Frost Mage script that is the
+controlled baseline for later learning (closes in while out of Frostbolt
+range, Frost Novas an enemy within 9 yards, spends Fingers of Frost or a
+frozen enemy on Ice Lance, otherwise Frostbolts facing the enemy, and never
+interrupts its own cast or pending command).
+
+`python -m leeroy_dojo replay <episode dir> [--json]` replays a recording
+without a game client: it verifies the chunks and footer, rebuilds the catalog
+and schema from the header and checks them against the published hashes,
+checks every observation against the schema, every mask (noop open, requested
+action open), every action id, the continuity of each observation into the
+next decision, the terminal rewards and the events' action ids, and rebuilds
+the header's policies to show that each one requests exactly what was
+recorded. An aborted or incomplete episode is reported as excluded.
+
+`python -m leeroy_dojo realm --layout <layout.json> g1 --scenario <json>
+[--quick]` runs the plan's Task 8 on the training realm and writes
+`<data root>/runs/<stamp>-g1/`: frost_duelist against itself three times,
+random_legal against frost_duelist on both sides, both actors idle to the
+limit (a draw), both killed by the harness on one tick (simultaneous death),
+the controller's connection dropped right after a committed step and an
+actor's session ended mid-episode (both aborted and excluded), and two stock
+baselines. Each recorded episode's header carries the scenario manifest,
+catalog kit, schemas, the worker's `hello`, every code version (source, core
+and playerbots commits, the build receipt and the worldserver's hash), the
+policies with their versions and seeds, and the seeds. Each finished episode
+is reconciled with the core: damage and death events against the scoreboard
+and the dojo's tallies, completed casts against the core's completed-cast
+hook, the outcome against the scoreboard's deaths, and the shaping rewards
+against the health at each boundary. The run keeps `g1-report.json` and
+`G1.md` (the gate's checks, citing the latest `reset-acceptance` and
+`control-acceptance` runs), `scenario-description.json` (one complete,
+reproducible description), `episodes/`, `debug/` (boundary state, apart from
+the recordings), `replays/`, `trace.jsonl`, `control-audit.jsonl` (each
+requested command and its final outcome), `reset-results.json` and
+`protocol-results.json` (the plan's evidence files, each naming the gate and
+its input hashes), `outcomes.jsonl`, the RA transcript and the worker's logs.
+
+The stock baseline is a separate system benchmark, not a controlled
+comparison: stock playerbots reads the server's own unit state (no perceptual
+delay, visibility model or masks), reacts on its own timing, uses the whole
+spellbook, talents and pets, and casts through playerbots' own helpers (which
+turn it to face its target); bot cheats stay off.
 
 ## Protocol
 

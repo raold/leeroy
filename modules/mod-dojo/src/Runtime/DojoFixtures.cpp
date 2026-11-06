@@ -674,7 +674,7 @@ bool Director::InspectArena(std::string& report)
         float const ground = map ? map->GetHeight(player->GetPhaseMask(), float(spec.start.x), float(spec.start.y),
             float(spec.start.z) + 2.0f) : INVALID_HEIGHT;
         bool const onGround = ground > INVALID_HEIGHT && std::fabs(ground - float(spec.start.z)) <= kGroundTolerance;
-        Bounds const& b = m.arena.bounds;
+        ArenaBounds const& b = m.arena.bounds;
         bool const inBounds = std::hypot(double(player->GetPositionX()) - b.x, double(player->GetPositionY()) - b.y) <= b.radius
             && player->GetPositionZ() >= b.zMin && player->GetPositionZ() <= b.zMax;
         bool const inArena = player->GetMapId() == m.arena.mapId && player->GetInstanceId() == bg->GetInstanceID()

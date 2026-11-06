@@ -32,6 +32,11 @@ def add_parser(sub) -> None:
     rst.add_argument("--scenario", type=Path, required=True)
     rst.add_argument("--resets", type=int, default=100, help="how many resets (default 100)")
     rst.add_argument("--cases", help="a comma-separated trial list of conditions instead of the schedule")
+    g1 = cmds.add_parser("g1", help="scripted diagnostic episodes through the endpoint, the stock baseline and the G1 report")
+    g1.add_argument("--scenario", type=Path, required=True)
+    g1.add_argument("--quick", action="store_true", help="one episode of each kind instead of the whole plan")
+    g1.add_argument("--reset-run", type=Path, help="the reset-acceptance run to cite (default: the latest)")
+    g1.add_argument("--control-run", type=Path, help="the control-acceptance run to cite (default: the latest)")
     prov = cmds.add_parser("provision", help="stage the dojo build's binaries and write the training configs")
     prov.add_argument("--scenario", type=Path, help="scenario manifest the worldserver loads (pins its hash)")
     prov.add_argument("--configs-only", action="store_true", help="rewrite the configs, keep the staged binaries")
@@ -111,6 +116,21 @@ def run(args: argparse.Namespace) -> int:
                 print(f"{'ok  ' if check['ok'] else 'FAIL'} {check['check']}")
             print(f"summary: {json.dumps(report['summary'])}")
             print(f"reset acceptance: {'ok' if report['ok'] else 'FAILED'} ({report['out']})")
+            return 0 if report["ok"] else 1
+        elif command == "g1":
+            from ..client import DojoError
+            from ..scenario import load_manifest
+            from .control import ControlError
+            from .g1 import G1Error, run as run_g1
+            try:
+                report = run_g1(layout, load_manifest(args.scenario).data, quick=args.quick, reset_run=args.reset_run,
+                                control_run=args.control_run)
+            except (ControlError, G1Error, DojoError) as e:
+                print(f"realm g1: {e}", file=sys.stderr)
+                return 1
+            for check in report["checks"]:
+                print(f"{'ok  ' if check['ok'] else 'FAIL'} {check['check']}")
+            print(f"G1: {'passed' if report['ok'] else 'NOT passed'} ({report['out']})")
             return 0 if report["ok"] else 1
         elif command == "provision":
             manifest = None

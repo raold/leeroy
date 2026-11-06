@@ -10,8 +10,8 @@
 // What a worldserver does with its Dojo.* keys, decided once at start. No AzerothCore includes: the runtime reads the
 // keys and logs StatusLine, and tests/TestSettings.cpp covers every outcome. Off and refused start nothing and control
 // no bot. Armed means a training build accepted its training configuration: it loads the pinned scenario, and its
-// fixture actors log in, enter the training arena and leave only through the console's dojo commands. The endpoint
-// and the external controller arrive with the step driver and the controller hook.
+// fixture actors log in, enter the training arena and leave only through the console's dojo commands and, once the
+// scenario is ready, the loopback endpoint (src/Runtime/DojoEndpoint.h).
 namespace Dojo
 {
 inline constexpr std::string_view kTrainingMarker = "leeroy-dojo-training";   // scripts/dojo/preflight.ps1's marker

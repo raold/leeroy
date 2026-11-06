@@ -76,7 +76,7 @@ struct ActorSpec
     Point start;
 };
 
-struct Bounds
+struct ArenaBounds
 {
     double x = 0, y = 0, radius = 0, zMin = 0, zMax = 0;
 };
@@ -88,7 +88,7 @@ struct ArenaSpec
     std::uint32_t battlegroundTypeId = 0;
     std::string battleground;
     std::uint32_t arenaType = 0;
-    Bounds bounds;
+    ArenaBounds bounds;
 };
 
 struct RulesSpec

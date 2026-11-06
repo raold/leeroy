@@ -113,8 +113,8 @@ DOJO_TEST(Settings_StatusLineSaysNothingStarts)
     Case const cases[] = {
         {off, false, "mod-dojo: off (Dojo.Enable = 0), disabled build; no endpoint, no bot control"},
         {off, true, "mod-dojo: off (Dojo.Enable = 0), training build; no endpoint, no bot control"},
-        {Training(), true, "mod-dojo: armed (training instance dojo-01), training build; no endpoint, fixtures only "
-            "through the dojo console commands"},
+        {Training(), true, "mod-dojo: armed (training instance dojo-01), training build; a loopback endpoint once "
+            "the scenario is ready, fixtures only through it and the dojo console commands"},
     };
     for (Case const& c : cases)
         CHECK_EQ(StatusLine(PlanRuntime(c.settings, c.training), c.training), std::string(c.expected));

@@ -16,6 +16,7 @@
 
 #include "Arena.h"
 #include "Battleground.h"
+#include "BattlegroundScore.h"
 #include "GameTime.h"
 #include "Log.h"
 #include "MotionMaster.h"
@@ -77,6 +78,20 @@ float AngleBetween(float a, float b)
     float const d = std::fmod(std::fabs(a - b), 2.0f * kPi);
     return d > kPi ? 2.0f * kPi - d : d;
 }
+
+constexpr std::size_t kEventLimit = 4096;   // a protocol episode's damage and death events not yet taken by a step
+
+json OutcomeJson(Outcome const& o)
+{
+    if (!o.Over())
+        return nullptr;
+    return {{"reason", OutcomeReasonName(o.reason)}, {"winner", o.winner ? json(*o.winner) : json(nullptr)}};
+}
+}
+
+json OutcomeToJson(Outcome const& outcome)
+{
+    return OutcomeJson(outcome);
 }
 
 Episode& Episode::Instance()
@@ -101,6 +116,17 @@ char const* Episode::PhaseName(Phase phase)
     return "?";
 }
 
+char const* Episode::ModeName(Mode mode)
+{
+    switch (mode)
+    {
+        case Mode::Console: return "console";
+        case Mode::Protocol: return "protocol";
+        case Mode::Stock: return "stock";
+    }
+    return "?";
+}
+
 bool Episode::Busy() const
 {
     return _phase == Phase::Teardown || _phase == Phase::Gates || _phase == Phase::Settle;
@@ -108,6 +134,25 @@ bool Episode::Busy() const
 
 std::string Episode::Reset(std::string const& reason)
 {
+    if (_mode == Mode::Protocol && (Busy() || _phase == Phase::Running))
+        return "dojo episode reset: refused, the endpoint's session owns generation " + std::to_string(_generation)
+            + " (dojo episode abort ends it)";
+    bool started = false;
+    return StartReset(reason, Mode::Console, started);
+}
+
+bool Episode::BeginProtocolReset(std::string const& reason, std::string& error)
+{
+    bool started = false;
+    std::string const out = StartReset(reason, Mode::Protocol, started);
+    if (!started)
+        error = out;
+    return started;
+}
+
+std::string Episode::StartReset(std::string const& reason, Mode mode, bool& started)
+{
+    started = false;
     if (!State().scenarioReady || !Observer::Instance().Ready() || !Control::Instance().Ready())
         return "dojo episode reset: refused, the scenario is not ready (see dojo scenario)";
     if (Busy())
@@ -115,10 +160,22 @@ std::string Episode::Reset(std::string const& reason)
     if (Director::Instance().JobRunning())
         return "dojo episode reset: refused, a director job is still running (dojo status)";
     std::uint64_t const now = Now();
+    // A stock baseline that a reset interrupts gives its actors back to the controller first.
+    if (_mode == Mode::Stock)
+        for (std::size_t i = 0; i < kScenarioActors; ++i)
+            Control::Instance().Own(i);
     // The fence comes first: from here on nothing of the old episode reaches an actor's perception or executes.
     ++_generation;
     _token = ++_tokens;
     _reason = reason.empty() ? "requested" : reason;
+    _mode = mode;
+    _outcome = Outcome{};
+    _alive.fill(true);
+    _tally = {};
+    _events.clear();
+    _eventsDropped = 0;
+    _finalScore = nullptr;
+    _finalTally = nullptr;
     Observer::Instance().Hold("reset to generation " + std::to_string(_generation));
     Control::Instance().BeginGeneration(_generation, "reset to generation " + std::to_string(_generation));
     _resetBeganMs = now;
@@ -138,13 +195,20 @@ std::string Episode::Reset(std::string const& reason)
         Fail(refused);
         return refused;
     }
+    started = true;
     _phase = Phase::Teardown;
     _result = "resetting";
     Control::Instance().Note(0, "episode", "reset", "began", "generation " + std::to_string(_generation) + ", token "
         + std::to_string(_token) + ": " + _reason);
-    LOG_INFO("module.dojo", "mod-dojo: episode reset to generation {} began (token {}): {}", _generation, _token, _reason);
+    LOG_INFO("module.dojo", "mod-dojo: episode reset to generation {} began (token {}, {}): {}", _generation, _token,
+        ModeName(_mode), _reason);
     return "dojo-episode-reset " + CanonicalJson(json{{"generation", _generation}, {"token", _token},
-        {"phase", PhaseName(_phase)}, {"began_ms", now}});
+        {"phase", PhaseName(_phase)}, {"began_ms", now}, {"mode", ModeName(_mode)}});
+}
+
+std::string Episode::AbortFor(std::string const& reason)
+{
+    return Abort(reason);
 }
 
 std::string Episode::Abort(std::string const& reason)
@@ -164,6 +228,7 @@ void Episode::Fail(std::string const& why)
 
 void Episode::Stop(Phase phase, std::string const& why)
 {
+    bool const counted = Counting();
     _phase = phase;
     _result = why;
     _endedMs = Now();
@@ -171,7 +236,21 @@ void Episode::Stop(Phase phase, std::string const& why)
         ++_failures;
     else if (phase == Phase::Aborted)
         ++_aborts;
-    Observer::Instance().Hold(why);
+    else if (phase == Phase::Ended)
+        ++_ended;
+    if (counted && _finalScore.is_null())
+    {
+        _finalScore = ScoreJson();
+        _finalTally = TallyJson();
+    }
+    // An ended episode keeps its senses until the next reset, so its terminal observations can still be read; an
+    // aborted or failed one holds them at once.
+    if (phase != Phase::Ended)
+        Observer::Instance().Hold(why);
+    if (_mode == Mode::Stock)
+        for (std::size_t i = 0; i < kScenarioActors; ++i)
+            Control::Instance().Note(i, "episode", "ownership", "owned again", "the stock baseline ended: "
+                + Control::Instance().Own(i));
     // Same generation, but nothing pending survives: a command queued before this point can no longer execute.
     Control::Instance().BeginGeneration(_generation, "episode " + std::to_string(_generation) + " " + PhaseName(phase));
     Control::Instance().Note(0, "episode", "episode", PhaseName(phase), "generation " + std::to_string(_generation) + ": " + why);
@@ -287,6 +366,7 @@ void Episode::Update(std::uint32_t /*diff*/)
             }
             _readyMs = now;
             _timings["ready_ms"] = now - _resetBeganMs;
+            _alive.fill(true);
             _phase = Phase::Running;
             ++_ready;
             _result = "ready";
@@ -298,25 +378,44 @@ void Episode::Update(std::uint32_t /*diff*/)
         }
         case Phase::Running:
         {
+            // The stock baseline gave its actors back to stock behaviour on purpose; every other episode needs both
+            // owned under the epochs it started with.
+            bool const stock = _mode == Mode::Stock;
             for (std::size_t i = 0; i < kScenarioActors; ++i)
-                if (!control.Actor(i) || !control.Owns(i) || control.Epoch(i) != _epochs[i])
+            {
+                Player* p = control.Actor(i);
+                if (!p || !p->IsInWorld() || (!stock && (!control.Owns(i) || control.Epoch(i) != _epochs[i])))
                 {
                     Stop(Phase::Aborted, "aborted: actor " + std::to_string(i) + " disconnected or lost ownership");
                     return;
                 }
+            }
             Battleground* bg = director.ArenaBattleground();
             if (!bg || bg->GetStatus() != STATUS_IN_PROGRESS)
             {
                 Stop(Phase::Aborted, "aborted: the core ended the arena");
                 break;
             }
-            if (!Observer::Instance().Active())
+            if (!stock && !Observer::Instance().Active())
             {
                 Stop(Phase::Aborted, "aborted: perception stopped (" + Observer::Instance().Fault() + ")");
                 break;
             }
-            if (now - _startMs >= std::uint64_t(m.rules.matchSeconds) * 1000)
-                Stop(Phase::Ended, "time limit");
+            // The dojo decides the outcome from both actors at this tick (DojoOutcome.h): a death, both deaths on one
+            // tick, or the match limit.
+            std::vector<Standing> const standings = Standings();
+            for (std::size_t i = 0; i < kScenarioActors; ++i)
+                if (_alive[i] && !standings[i].alive)
+                {
+                    _alive[i] = false;
+                    ++_tally[i].deaths;
+                    if (_mode == Mode::Protocol)
+                        _events.push_back({{"kind", "death"}, {"actor", i}, {"t_ms", now - _startMs}});
+                    control.Note(i, "episode", "death", "observed", m.actors[i].name + " died");
+                }
+            Outcome const outcome = DecideOutcome(standings, now - _startMs >= std::uint64_t(m.rules.matchSeconds) * 1000);
+            if (outcome.Over())
+                End(outcome, now);
             break;
         }
         default:
@@ -469,6 +568,8 @@ std::string Episode::Decide(std::vector<std::string> const& actions, bool force)
 {
     if (_phase != Phase::Running)
         return "dojo episode decide: refused, the episode is " + std::string(PhaseName(_phase));
+    if (_mode != Mode::Console)
+        return "dojo episode decide: refused, this is a " + std::string(ModeName(_mode)) + " episode";
     Control& control = Control::Instance();
     ActionCatalog const& catalog = control.Catalog();
     if (actions.size() != kScenarioActors)
@@ -541,12 +642,13 @@ std::string Episode::Status() const
     Manifest const* m = State().manifest ? &*State().manifest : nullptr;
     std::uint64_t const limit = m ? std::uint64_t(m->rules.matchSeconds) * 1000 : 0;
     std::uint64_t const elapsed = _phase == Phase::Running && _startMs ? now - _startMs : 0;
-    json doc = {{"phase", PhaseName(_phase)}, {"generation", _generation}, {"token", _token}, {"reason", _reason},
+    json doc = {{"phase", PhaseName(_phase)}, {"mode", ModeName(_mode)}, {"generation", _generation}, {"token", _token},
+        {"reason", _reason}, {"outcome", OutcomeJson(_outcome)},
         {"result", _result}, {"now_ms", now}, {"reset_began_ms", _resetBeganMs}, {"start_ms", _startMs},
         {"ready_ms", _readyMs}, {"ended_ms", _endedMs}, {"elapsed_ms", elapsed},
         {"remaining_ms", limit > elapsed ? limit - elapsed : 0}, {"decision", _decision}, {"timings", _timings},
         {"counts", {{"resets", _resets}, {"ready", _ready}, {"failures", _failures}, {"aborts", _aborts},
-            {"stale_completions", _staleCompletions}}},
+            {"stale_completions", _staleCompletions}, {"ended", _ended}}},
         {"director", {{"running", Director::Instance().JobRunning()}, {"token", Director::Instance().ResetToken()},
             {"result", Director::Instance().LastResult()}, {"arena_instance", Director::Instance().ArenaInstance()}}},
         {"observer", Observer::Instance().StatsJson()}, {"trace_seq", Control::Instance().TraceSeq()},
@@ -559,6 +661,156 @@ std::string Episode::Evidence() const
     return "dojo-reset-evidence " + CanonicalJson(json{{"generation", _generation}, {"token", _token},
         {"phase", PhaseName(_phase)}, {"result", _result}, {"timings", _timings}, {"start_ms", _startMs},
         {"ready_ms", _readyMs}, {"clean", _clean}, {"initial", _initial}});
+}
+
+void Episode::End(Outcome const& outcome, std::uint64_t now)
+{
+    _outcome = outcome;
+    std::string why(OutcomeReasonName(outcome.reason));
+    if (outcome.winner)
+        why += ", team " + std::to_string(*outcome.winner) + " wins";
+    why += " after " + std::to_string(now - _startMs) + " ms";
+    Stop(Phase::Ended, why);
+}
+
+std::vector<Standing> Episode::Standings() const
+{
+    std::vector<Standing> out;
+    Manifest const* m = State().manifest ? &*State().manifest : nullptr;
+    for (std::size_t i = 0; i < kScenarioActors; ++i)
+    {
+        Standing s;
+        s.team = m && m->actors[i].team == "horde" ? 1 : 0;
+        Player* p = Control::Instance().Actor(i);
+        s.alive = p && p->IsAlive();
+        s.health = p && p->GetMaxHealth() ? double(p->GetHealth()) / double(p->GetMaxHealth()) : 0.0;
+        out.push_back(s);
+    }
+    return out;
+}
+
+std::vector<json> Episode::TakeEvents()
+{
+    std::vector<json> out;
+    out.swap(_events);
+    if (_eventsDropped)
+    {
+        out.push_back({{"kind", "events_lost"}, {"count", _eventsDropped}});
+        _eventsDropped = 0;
+    }
+    return out;
+}
+
+std::optional<std::size_t> Episode::SlotOf(Unit const* unit) const
+{
+    if (!unit || !unit->IsPlayer())
+        return std::nullopt;
+    for (std::size_t i = 0; i < kScenarioActors; ++i)
+        if (Player const* p = Control::Instance().Actor(i); p && p == unit)
+            return i;
+    return std::nullopt;
+}
+
+void Episode::OnDamage(Unit* attacker, Unit* victim, std::uint32_t damage)
+{
+    if (!Counting() || !damage)
+        return;
+    // As the core's scoreboard credits it: a pet's or guardian's damage to its owner.
+    Unit const* source = attacker ? attacker->GetCharmerOrOwnerPlayerOrPlayerItself() : nullptr;
+    std::optional<std::size_t> const by = SlotOf(source);
+    std::optional<std::size_t> const to = SlotOf(victim);
+    if (!by && !to)
+        return;
+    if (by)
+    {
+        _tally[*by].damageDone += damage;
+        ++_tally[*by].hits;
+    }
+    if (to)
+        _tally[*to].damageTaken += damage;
+    if (_mode != Mode::Protocol || _phase != Phase::Running)
+        return;
+    if (_events.size() >= kEventLimit)
+    {
+        ++_eventsDropped;
+        return;
+    }
+    std::uint64_t const now = Now();
+    _events.push_back({{"kind", "damage"}, {"actor", by ? json(*by) : json(nullptr)}, {"target", to ? json(*to) : json(nullptr)},
+        {"amount", damage}, {"by_pet", attacker && attacker != source}, {"t_ms", now >= _startMs ? now - _startMs : 0}});
+}
+
+void Episode::OnCast(Unit* caster, SpellInfo const* info, bool triggered)
+{
+    if (!Counting() || !info)
+        return;
+    if (std::optional<std::size_t> const slot = SlotOf(caster))
+        ++(triggered ? _tally[*slot].triggered : _tally[*slot].casts)[info->Id];
+}
+
+json Episode::TallyJson() const
+{
+    json actors = json::array();
+    for (std::size_t i = 0; i < kScenarioActors; ++i)
+    {
+        Tally const& t = _tally[i];
+        json casts = json::object(), triggered = json::object();
+        for (auto const& [spell, n] : t.casts)
+            casts[std::to_string(spell)] = n;
+        for (auto const& [spell, n] : t.triggered)
+            triggered[std::to_string(spell)] = n;
+        actors.push_back({{"actor", i}, {"damage_done", t.damageDone}, {"damage_taken", t.damageTaken}, {"hits", t.hits},
+            {"deaths", t.deaths}, {"casts", casts}, {"triggered", triggered}});
+    }
+    return actors;
+}
+
+json Episode::ScoreJson() const
+{
+    Battleground* bg = Director::Instance().ArenaBattleground();
+    if (!bg)
+        return nullptr;
+    json actors = json::array();
+    for (std::size_t i = 0; i < kScenarioActors; ++i)
+    {
+        Player* p = Control::Instance().Actor(i);
+        BattlegroundScore const* score = nullptr;
+        if (p)
+        {
+            auto const found = bg->GetPlayerScores()->find(p->GetGUID().GetCounter());
+            if (found != bg->GetPlayerScores()->end())
+                score = found->second;
+        }
+        actors.push_back(score ? json{{"actor", i}, {"damage_done", score->GetDamageDone()}, {"deaths", score->GetDeaths()},
+            {"killing_blows", score->GetKillingBlows()}, {"healing_done", score->GetHealingDone()}} : json{{"actor", i}});
+    }
+    return {{"instance", bg->GetInstanceID()}, {"status", int(bg->GetStatus())}, {"actors", actors}};
+}
+
+std::string Episode::Stock()
+{
+    if (_phase != Phase::Running)
+        return "dojo episode stock: refused, the episode is " + std::string(PhaseName(_phase));
+    if (_mode != Mode::Console)
+        return "dojo episode stock: refused, this is a " + std::string(ModeName(_mode)) + " episode";
+    // The native system baseline (D25): stock playerbots fights the rest of this episode with its own information,
+    // reactions and full spellbook; the dojo still decides the outcome, and both actors are owned again at its end.
+    _mode = Mode::Stock;
+    std::string out;
+    for (std::size_t i = 0; i < kScenarioActors; ++i)
+        out += Control::Instance().Release(i) + "\n";
+    Control::Instance().Note(0, "episode", "episode", "stock", "generation " + std::to_string(_generation)
+        + ": the stock playerbots baseline fights the rest of this episode");
+    LOG_INFO("module.dojo", "mod-dojo: episode {} handed to stock playerbots as the system baseline", _generation);
+    return out + "dojo episode stock: generation " + std::to_string(_generation) + " is a stock baseline until it ends";
+}
+
+std::string Episode::Score() const
+{
+    bool const live = Counting();
+    return "dojo-score " + CanonicalJson(json{{"generation", _generation}, {"phase", PhaseName(_phase)},
+        {"mode", ModeName(_mode)}, {"outcome", OutcomeJson(_outcome)}, {"live", live},
+        {"core", live ? ScoreJson() : _finalScore}, {"dojo", live ? TallyJson() : _finalTally}});
 }
 }
 
