@@ -19,7 +19,7 @@ from leeroy_mind.nightly.attraction import set_stance
 from leeroy_mind.nightly.growth import undo
 from leeroy_mind.nightly.store import commit_unit, enqueue_review, ledger_add
 from leeroy_mind.personas.io import load_persona, save_persona
-from leeroy_mind.personas.schema import Appearance
+from leeroy_mind.personas.schema import Appearance, ProfilePhoto
 from leeroy_mind.protocol import Member
 from leeroy_mind.storage.rows import Relationship
 from leeroy_mind.wow import CLASSES, RACES
@@ -82,7 +82,8 @@ def cast(store):
                        eye_colour="green", face=("glasses",), at_the_pc="a grey hoodie")
 
     def looks_pass(st):  # as the night's looks pass commits a persona with its unit
-        _save(st, replace(load_persona(st, 305), appearance=looks), "generated", NOW - DAY + 0.4)
+        _save(st, replace(load_persona(st, 305), appearance=looks,
+                                     photo=ProfilePhoto(**PHOTO)), "generated", NOW - DAY + 0.4)
     commit_unit(store, "2026-10-28", personaview.LOOKS_STAGE, "305", looks_pass, now=NOW - DAY)
     with store.transaction():
         store.conn.execute("INSERT INTO persona_core(guid, json, card, card_tokens, version, "
@@ -150,6 +151,10 @@ def _digest(path: Path) -> str:
                    for p in sorted(path.parent.glob(path.name + "*")))
 
 
+PHOTO = {"kind": "snapshot", "framing": "upper_body", "setting": "on the deck of a small boat",
+         "outfit": "orange rain bib over a grey hoodie", "expression": "squinting into the wind"}
+
+
 def _roster(data):
     view = feed.read(data / "mind.db", personaview.roster_view, now=NOW)
     return view, {m["guid"]: m for m in view["members"]}
@@ -212,6 +217,7 @@ def test_a_member_in_detail_shows_the_card_summary_and_nothing_private(cast, dat
     assert card["big_five"]["extraversion"]["score"] == 7
     assert card["typing"]["case"] == "lower" and card["game"]["motivation"] == "achiever"
     assert card["play"]["raid_role"] == "tank" and card["appearance"] is None
+    assert card["photo"] is None
     assert card["identity"] == {"age": 34, "player_gender": "male", "region": "UK"}
     assert card["romance"] == {"stance": "none", "style": None, "jealousy_mode": None}
     ties = view["member"]["ties"]["top"]
@@ -228,6 +234,8 @@ def test_a_member_in_detail_shows_the_card_summary_and_nothing_private(cast, dat
         assert private not in text
     assert feed.read(data / "mind.db", personaview.member_view, 305,
                      now=NOW)["card"]["appearance"]["build"] == "athletic"
+    assert feed.read(data / "mind.db", personaview.member_view, 305,
+                     now=NOW)["card"]["photo"] == PHOTO
     unreadable = feed.read(data / "mind.db", personaview.member_view, 307, now=NOW)
     assert unreadable["card"] is None and unreadable["member"]["persona"]["readable"] is False
     assert feed.read(data / "mind.db", personaview.member_view, 1, now=NOW) is None  # the owner
@@ -372,3 +380,31 @@ def test_the_page_has_the_personas_tab_and_no_way_to_change_a_persona():
     assert 'id="tab-personas" class="tab mindtab"' in page and 'api("/api/personas")' in page
     panel = page[page.index('id="tab-personas"'):].split('<section id="tab-', 1)[0]
     assert 'post("/api/persona' not in page and "placeholder" not in panel
+
+
+def test_a_photo_kind_write_is_shown_as_the_photo_pass(cast, data):
+    def photo_pass(st):  # as the night's photo-kind pass commits a persona with its unit
+        _save(st, replace(load_persona(st, 301), photo=ProfilePhoto(**PHOTO)), "generated",
+              NOW - 100 + 0.4)
+    commit_unit(cast, "2026-10-29", "photo", "301", photo_pass, now=NOW - 100)
+    _, by = _roster(data)
+    assert by[301]["persona"]["by"] == "photo" and by[305]["persona"]["by"] == "night"
+
+
+def test_the_nearest_pass_before_a_write_is_the_one_that_wrote_it(cast, data):
+    # final review minor 8: the looks pass's last member and the photo pass's first can finish
+    # within LOOKS_S of each other; the write is the later unit's, whatever the row order
+    looks = Appearance(height_cm=170, build="slim", weight_kg=60, hair_colour="black",
+                       hair_length="long", hair_style="loose", skin_tone="olive",
+                       eye_colour="brown", face=(), at_the_pc="a cardigan")
+
+    def looks_pass(st):
+        _save(st, replace(load_persona(st, 301), appearance=looks), "generated", NOW - 130 + 0.4)
+
+    def photo_pass(st):
+        _save(st, replace(load_persona(st, 301), photo=ProfilePhoto(**PHOTO)), "generated",
+              NOW - 100 + 0.4)
+    commit_unit(cast, "2026-10-29", personaview.LOOKS_STAGE, "301", looks_pass, now=NOW - 130)
+    commit_unit(cast, "2026-10-29", "photo", "301", photo_pass, now=NOW - 100)
+    _, by = _roster(data)
+    assert by[301]["persona"]["by"] == "photo"

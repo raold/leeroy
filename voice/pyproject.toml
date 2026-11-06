@@ -64,6 +64,8 @@ include = ["leeroy_voice*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+tmp_path_retention_count = 3
+tmp_path_retention_policy = "failed"
 addopts = ["-m", "not engines and not device and not windows and not gpu and not ollama and not live"]
 markers = [
   "engines: needs the model files under voice-data/models",

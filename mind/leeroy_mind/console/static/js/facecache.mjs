@@ -39,6 +39,13 @@ export class FaceCache {
     this.entries.forEach((e) => { if (e.value) { this.drop(e.value); } });
     this.entries.clear();
   }
+  // forget for one key only: its photo is let go and its next get loads it again
+  forgetKey(key) {
+    var e = this.entries.get(key);
+    if (!e) { return; }
+    if (e.value) { this.drop(e.value); }
+    this.entries.delete(key);
+  }
   _pump() {
     while (this.active < this.maxActive && this.waiting.length) {
       var job = this.waiting.shift();

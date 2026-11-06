@@ -33,6 +33,7 @@ from leeroy_mind.personas.io import PersonaCache, save_persona
 from leeroy_mind.protocol import Cast, Chat, Hello, Member, register_event
 from leeroy_mind.realm.protocol import ChannelChat, register as register_realm_events
 from leeroy_mind.storage.db import EmbeddingMismatch, open_db
+from dbtemplate import open_migrated
 from leeroy_mind.storage.store import Store
 from leeroy_mind.talk.engine import TalkEngine
 from leeroy_mind.talk.raid import RaidState
@@ -110,7 +111,7 @@ def talk_and_extract(model: str, messages: list[dict]) -> str:
 
 
 def seed_db(path: Path, clock) -> None:
-    s = Store(open_db(path), clock=clock)
+    s = Store(open_migrated(path), clock=clock)
     try:
         seed_test_cast(s)
         s.upsert_cast([HUMAN_ROW], 1000.0)
@@ -730,7 +731,7 @@ def crashed(tmp_path: Path, *, quiet_for: timedelta) -> tuple[int, int, float]:
     START, and that line's thread still 'open'. Returns (session, thread, the line's ts)."""
     seed_db(tmp_path / "mind.db", FakeClock(START))
     then = FakeClock(START - quiet_for)
-    s = Store(open_db(tmp_path / "mind.db"), clock=then)
+    s = Store(open_migrated(tmp_path / "mind.db"), clock=then)
     try:
         sid = s.start_session(then.now() - 600)
         line = s.insert_chat_line(Chat(ts=0, channel="guild", from_guid=HUMAN,
@@ -794,7 +795,7 @@ def test_public_channel_chatter_neither_resumes_nor_extends_a_crashed_session(tm
     async def main():
         sid, _, last = crashed(tmp_path, quiet_for=timedelta(hours=2))
         register_realm_events()  # stored as App stores it: type "channel_chat"
-        s = Store(open_db(tmp_path / "mind.db"), clock=FakeClock(START))
+        s = Store(open_migrated(tmp_path / "mind.db"), clock=FakeClock(START))
         try:  # strangers kept talking in a public channel until just before the crash
             s.insert_game_event(ChannelChat(ts=0, channel="world", from_guid=999,
                                             from_name="Stranger", zone=0, text="lfg icc",
@@ -1295,7 +1296,10 @@ def test_doctor_reports_every_check(tmp_path, capsys):
         out = capsys.readouterr().out.splitlines()
         voice_notes = [line for line in out if line.startswith("note voice ")]
         assert voice_notes == ["note voice specs: 0 of 5 cast members", "note voice service: disabled"]
-        assert len(out) == 16 and all(line.startswith("ok") for line in out if line not in voice_notes), out
+        selfie_notes = [line for line in out if line.startswith("note selfies")]
+        assert selfie_notes == ["note selfies: disabled ([selfies] enabled = false)"]
+        assert len(out) == 17 and all(line.startswith("ok") for line in out
+                                      if line not in voice_notes + selfie_notes), out
         assert any("live_fallback" in line and "not pulled" in line for line in out)
         assert any("personas 5" in line for line in out)
         assert any("fit every woman's attitude" in line for line in out)

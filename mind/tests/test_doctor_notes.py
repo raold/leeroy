@@ -14,7 +14,7 @@ from leeroy_mind.human import HumanIdentity
 from leeroy_mind.personas.io import save_persona
 from leeroy_mind.personas.notes import cold_notes, denies
 from leeroy_mind.protocol import Member
-from leeroy_mind.storage.db import open_db
+from dbtemplate import open_migrated
 from leeroy_mind.storage.rows import Relationship
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_clock import FakeClock
@@ -50,7 +50,7 @@ def _cast(store: Store) -> None:
 def _setup(root: Path, port: int, women: bool = True) -> Path:
     (root / "mind.toml").write_text(f'[bridge]\nport = {port}\n\n[human]\nnickname = "Testy"\n'
                                     'pronouns = "he"\n', encoding="utf-8")
-    s = Store(open_db(root / "mind.db"), clock=FakeClock(datetime(2026, 10, 29,
+    s = Store(open_migrated(root / "mind.db"), clock=FakeClock(datetime(2026, 10, 29,
                                                                  tzinfo=timezone.utc)))
     try:
         if women:

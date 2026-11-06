@@ -71,6 +71,7 @@ from leeroy_mind.talk.world import WorldView, looks_like_bot_command
 from leeroy_mind.voice.attach import attach_voice
 from leeroy_mind.training.service import attach_training
 from leeroy_mind.realm.service import attach_realm
+from leeroy_mind.selfies.attach import attach_selfies
 from leeroy_mind.nightly.wiring import attach as attach_nightly
 from leeroy_mind.guild.service import install as install_guild
 from leeroy_mind.voice.heard import is_command
@@ -442,6 +443,7 @@ class MindApp:
         self.voice = attach_voice(self)
         self.guild = install_guild(self)
         self.training = attach_training(self)
+        self.selfies = attach_selfies(self)  # profile photos: the control endpoint's selfie op
         self.tuning = TuningService(self)  # the owner's dials: the control endpoint's tune op
         self.speech = OwnerSpeech(self)  # his own lines from the console: the say op
         self.control = attach_control(self)

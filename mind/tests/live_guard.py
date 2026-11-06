@@ -16,10 +16,11 @@ Routes covered:
 - files and databases under the real mind-data (the package-relative one, the main checkout's
   and the one LEEROY_MIND_DATA named when the run began): open, sqlite3.connect (plain paths
   and file: URIs), mkdir, rename/replace, remove, rmdir, listing, copy and the like;
-- launching the mind service (`leeroy_mind`) or the voice service (`leeroy_voice`) in a subprocess,
-  os.system, spawn or exec, and
+- launching the mind service (`leeroy_mind`), the voice service (`leeroy_voice`) or the selfie
+  worker (`leeroy_selfie`) in a subprocess, os.system, spawn or exec, and
   the `ollama` CLI.
 
+No marker allows launching the selfie worker: its tests use a fake worker script.
 Tests marked `live` may reach the bridge's port and launch the service, but never on the real
 mind-data (not by --data-dir, not by an env= without LEEROY_MIND_DATA); tests marked `ollama`
 may reach Ollama's port and run its CLI. The real mind-data is never allowed. Paths are
@@ -34,6 +35,7 @@ import re
 import socket
 import subprocess
 import sys
+import threading
 import tomllib
 from collections.abc import Mapping
 import urllib.parse
@@ -133,12 +135,15 @@ class Guard:
         self.hits: list[str] = []
         self.data_dir: Path | None = None  # LEEROY_MIND_DATA for the running test
         self.originals: dict[str, object] = {}
+        self.local = threading.local()  # per thread: inside socket.socketpair
 
     def hit(self, what: str) -> None:
         self.hits.append(what)
         raise LiveServiceTouched(what)
 
     def port(self, port, how: str) -> None:
+        if getattr(self.local, "in_socketpair", False):
+            return  # the pair's own listener may sit on any port, this thread only
         need = self.ports.get(port) if isinstance(port, int) else None
         if self.active and need is not None and need not in self.allowed:
             self.hit(f"{how} to port {port} (only tests marked {need!r} may)")
@@ -163,6 +168,8 @@ class Guard:
             self.hit(f"{how} of the ollama CLI: {what!r} (only tests marked 'ollama' may)")
         if "leeroy_voice" in text and "live" not in self.allowed:
             self.hit(f"{how} of the voice service: {what!r}")
+        if "leeroy_selfie" in text:  # no marker allows it: it loads image models on the GPU
+            self.hit(f"{how} of the selfie worker: {what!r}")
         if "leeroy_mind" not in text:
             return
         if "live" not in self.allowed:
@@ -234,6 +241,24 @@ def _patch_create_connection() -> None:
     socket.create_connection = create_connection
 
 
+def _patch_socketpair() -> None:
+    """On Windows socket.socketpair binds a listener on 127.0.0.1 port 0 and connects to it, and
+    the OS can hand out a live service's port. While the original runs, this thread's connects
+    are not port-checked; every other thread and every other connect stays guarded. asyncio's
+    loops call socket.socketpair() through the module, so they pick this up."""
+    GUARD.originals["socket.socketpair"] = socket.socketpair
+
+    def socketpair(*args, **kw):
+        local = GUARD.local
+        outer = getattr(local, "in_socketpair", False)
+        local.in_socketpair = True
+        try:
+            return GUARD.originals["socket.socketpair"](*args, **kw)
+        finally:
+            local.in_socketpair = outer
+    socket.socketpair = socketpair
+
+
 def install() -> None:
     """Once per test session (conftest imports this module): the audit hook cannot be removed,
     and it does nothing while GUARD.active is off."""
@@ -242,4 +267,5 @@ def install() -> None:
     sys.addaudithook(_audit)
     GUARD.originals["audit"] = _audit
     _patch_create_connection()
+    _patch_socketpair()
     _patch_asyncio()

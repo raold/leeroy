@@ -21,7 +21,7 @@ from leeroy_mind.realm.actions import ActionContext
 from leeroy_mind.realm.config import RealmConfig
 from leeroy_mind.realm.direct import DirectLedger
 from leeroy_mind.realm.ports import RealmDisabled
-from leeroy_mind.storage.db import open_db
+from dbtemplate import open_migrated
 from leeroy_mind.storage.rows import Relationship
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_llm import FakeLLM
@@ -181,7 +181,7 @@ def clock():
 
 @pytest.fixture
 def db(tmp_path, clock):
-    store = Store(open_db(tmp_path / "mind.db"), clock=clock)
+    store = Store(open_migrated(tmp_path / "mind.db"), clock=clock)
     yield store
     store.close()
 

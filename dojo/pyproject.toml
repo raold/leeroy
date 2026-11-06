@@ -18,3 +18,5 @@ include = ["leeroy_dojo*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+tmp_path_retention_count = 3
+tmp_path_retention_policy = "failed"

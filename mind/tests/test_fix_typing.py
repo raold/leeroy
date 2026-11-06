@@ -14,7 +14,7 @@ from leeroy_mind.personas.seed import Assignment, Sketch, _table
 from leeroy_mind.personas.typing_fix import (fix_abbreviations, fix_emoticons, is_chat_form,
                                              plan_fix_typing, repair_typing, seed_names)
 from leeroy_mind.protocol import Member
-from leeroy_mind.storage.db import open_db
+from dbtemplate import open_migrated
 from leeroy_mind.storage.store import Store
 
 HUMAN = 1
@@ -178,7 +178,7 @@ def _data_dir(tmp_path):
     (d / "logs").mkdir(parents=True)
     (d / "logs" / "seed-20261030.log").write_text(_log([("Quillo", 101), ("Mirel", 102)]),
                                                   encoding="utf-8")
-    s = Store(open_db(d / "mind.db"), clock=SystemClock())
+    s = Store(open_migrated(d / "mind.db"), clock=SystemClock())
     s.upsert_cast(list(ROSTER.values()), 1000.0)
     personas = [
         _typed(101, "Arkon", abbreviations={"lol": "laughing out loud", "u": "you"},
@@ -223,7 +223,7 @@ def test_cli_saves_new_versions_after_a_snapshot_and_a_rerun_changes_nothing(tmp
     assert "snapshot " in out and "changed 2 personas" in out
     assert len(list((d / "snapshots").glob("mind-pre-fix-typing-*.db"))) == 1
     assert _versions(d) == {101: 2, 102: 2, 103: 1}
-    s = Store(open_db(d / "mind.db"), clock=SystemClock())
+    s = Store(open_migrated(d / "mind.db"), clock=SystemClock())
     try:
         arkon = load_persona(s, 101)
         assert arkon.typing.abbreviations == {"laughing out loud": "lol", "you": "u"}

@@ -30,7 +30,11 @@ function keyLost() {
   lost("This console has restarted, or this page was reloaded or opened without its key: open the URL the console printed when it started.");
 }
 on("key-lost", keyLost);
-var KINDS = { snapshot: 1, status: 1, voice: 1, chat: 1, chat_gone: 1, control: 1, raid: 1, tuning: 1 };
+// A member's photo picked or undone (faces.mjs let the old one go): the room's faces and the
+// card's photo in Comms are drawn again with the new one
+on("selfie", function (d) { if (d.action !== "more") { refreshFaces(); } });
+var KINDS = { snapshot: 1, status: 1, voice: 1, chat: 1, chat_gone: 1, control: 1, raid: 1, tuning: 1,
+              selfie: 1 };
 // One server-sent event block: "event: <kind>" and "data: <json>" lines; ": ping" is a comment
 function dispatch(block) {
   var kind = "", data = "";

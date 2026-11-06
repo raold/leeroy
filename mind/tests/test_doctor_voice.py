@@ -8,7 +8,7 @@ import pytest
 from conftest import seed_test_cast
 from leeroy_mind.__main__ import _doctor_voice_service, main
 from leeroy_mind.config import load_config
-from leeroy_mind.storage.db import open_db
+from dbtemplate import open_migrated
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_llm import FakeLLM
 
@@ -18,7 +18,7 @@ def data(tmp_path, clock, monkeypatch):
     root = tmp_path / "mind-data"
     root.mkdir()
     (root / "mind.toml").write_text("[bridge]\nport = 39001\n", encoding="utf-8")
-    store = Store(open_db(root / "mind.db"), clock=clock)
+    store = Store(open_migrated(root / "mind.db"), clock=clock)
     seed_test_cast(store)
     with store.transaction():
         store.conn.execute("DELETE FROM cast_member WHERE guid IN (104, 105)")
