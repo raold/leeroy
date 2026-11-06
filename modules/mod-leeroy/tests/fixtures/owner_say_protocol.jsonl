@@ -1,0 +1,14 @@
+{"name":"guild_ok","valid":true,"msg":{"v":1,"type":"owner_say","id":"o1","ts":0,"channel":"guild","text":"omw, 5 min","to_guid":0}}
+{"name":"officer_ok","valid":true,"msg":{"v":1,"type":"owner_say","id":"o1","ts":0,"channel":"officer","text":"who has the summon","to_guid":0}}
+{"name":"party_ok","valid":true,"msg":{"v":1,"type":"owner_say","id":"o1","ts":0,"channel":"party","text":"pull in 10","to_guid":0}}
+{"name":"raid_ok","valid":true,"msg":{"v":1,"type":"owner_say","id":"o1","ts":0,"channel":"raid","text":"back in 2","to_guid":0}}
+{"name":"whisper_ok","valid":true,"msg":{"v":1,"type":"owner_say","id":"o1","ts":0,"channel":"whisper","text":"you there?","to_guid":1101}}
+{"name":"whisper_without_target","valid":false,"error":"bad field: to_guid","msg":{"v":1,"type":"owner_say","id":"o1","ts":0,"channel":"whisper","text":"you there?"}}
+{"name":"whisper_target_zero","valid":false,"error":"bad field: to_guid","msg":{"v":1,"type":"owner_say","id":"o1","ts":0,"channel":"whisper","text":"you there?","to_guid":0}}
+{"name":"guild_with_target","valid":false,"error":"bad field: to_guid","msg":{"v":1,"type":"owner_say","id":"o1","ts":0,"channel":"guild","text":"omw, 5 min","to_guid":1101}}
+{"name":"say_refused","valid":false,"error":"bad field: channel","msg":{"v":1,"type":"owner_say","id":"o1","ts":0,"channel":"say","text":"hello","to_guid":0}}
+{"name":"yell_refused","valid":false,"error":"bad field: channel","msg":{"v":1,"type":"owner_say","id":"o1","ts":0,"channel":"yell","text":"hello","to_guid":0}}
+{"name":"raid_warning_refused","valid":false,"error":"bad field: channel","msg":{"v":1,"type":"owner_say","id":"o1","ts":0,"channel":"raid_warning","text":"hello","to_guid":0}}
+{"name":"channel_not_string","valid":false,"error":"bad field: channel","msg":{"v":1,"type":"owner_say","id":"o1","ts":0,"channel":5,"text":"hello","to_guid":0}}
+{"name":"text_missing","valid":false,"error":"bad field: text","msg":{"v":1,"type":"owner_say","id":"o1","ts":0,"channel":"guild","to_guid":0}}
+{"name":"text_not_string","valid":false,"error":"bad field: text","msg":{"v":1,"type":"owner_say","id":"o1","ts":0,"channel":"guild","text":5,"to_guid":0}}

@@ -234,22 +234,10 @@ std::string_view ExecuteHumanSay(Leeroy::Command const& cmd)
         return Leeroy::Err::EmptyText;
     if (Leeroy::StartsWithCommandPrefix(text))
         return Leeroy::Err::CommandPrefix;
-    std::optional<uint32> const type = HumanChatType(cmd.channel);
-    if (!type)
-        return kBadChannel;
-
-    // A client may not speak LANG_UNIVERSAL (ChatHandler.cpp:76); the race's own language always passes the skill
-    // check, hence the original team.
-    uint32 const language = human->GetTeamId(true) == TEAM_HORDE ? LANG_ORCISH : LANG_COMMON;
     // Sanitized too: a NUL inside to_name would end the name early and make the rest the message, unchecked.
     std::string const toName = Leeroy::SanitizeChatText(cmd.toName);
-
-    auto packet = std::make_unique<WorldPacket>(CMSG_MESSAGECHAT, 8 + toName.size() + text.size() + 2);
-    *packet << *type << language;
-    if (cmd.channel == Leeroy::Channel::Whisper)
-        *packet << toName;
-    *packet << text;
-    human->GetSession()->QueuePacket(packet.release());   // the session frees it
+    if (!LeeroyQueueHumanChat(human, cmd.channel, text, toName))
+        return kBadChannel;
     return {};
 }
 
@@ -332,6 +320,25 @@ std::string_view ExecuteAfk(Leeroy::Command const& cmd)
         speaker.bot->ToggleAFK();
     return {};
 }
+}
+
+bool LeeroyQueueHumanChat(Player* human, Leeroy::Channel channel, std::string const& text, std::string const& toName)
+{
+    std::optional<uint32> const type = HumanChatType(channel);
+    if (!type)
+        return false;
+
+    // A client may not speak LANG_UNIVERSAL (ChatHandler.cpp:76); the race's own language always passes the skill
+    // check, hence the original team.
+    uint32 const language = human->GetTeamId(true) == TEAM_HORDE ? LANG_ORCISH : LANG_COMMON;
+
+    auto packet = std::make_unique<WorldPacket>(CMSG_MESSAGECHAT, 8 + toName.size() + text.size() + 2);
+    *packet << *type << language;
+    if (channel == Leeroy::Channel::Whisper)
+        *packet << toName;
+    *packet << text;
+    human->GetSession()->QueuePacket(packet.release());   // the session frees it
+    return true;
 }
 
 std::string LeeroyExecuteCommand(Leeroy::Command const& cmd)
