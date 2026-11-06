@@ -111,7 +111,8 @@ class SelfieWorker:
         self._tree: ProcessTree | None = None
         self._ready = False
         self._sequence = 0
-        self._stopping = asyncio.Lock()
+        self._stopping = asyncio.Lock()  # held while a tree is ended, and while one is spawned
+        self._stops = 0  # stop() calls so far: a start under way sees one arrive
 
     @property
     def running(self) -> bool:
@@ -120,20 +121,39 @@ class SelfieWorker:
 
     async def start(self) -> Ready:
         """Until the worker is ready. WorkerError: its own refusal (cuda, vram, model, ...),
-        timeout, gone or spawn; OSError when the program cannot be started."""
-        await self.stop()
-        self._tree = await ProcessTree.spawn(self._command, env=self._env, limit=MAX_LINE)
-        answer = await self._answer("ready", self._start_s)
+        timeout, gone, spawn, or stopped (stop() was called meanwhile: the worker it was
+        starting is ended before that stop() returns); OSError when the program cannot be
+        started."""
+        stops = self._stops
+        async with self._stopping:  # a stop() arriving now waits for the tree to exist
+            old, self._tree = self._tree, None
+            self._ready = False
+            await _end(old)
+            if self._stops != stops:
+                raise WorkerError("stopped")
+            tree = await ProcessTree.spawn(self._command, env=self._env, limit=MAX_LINE)
+            if self._stops != stops:
+                await _end(tree)
+                raise WorkerError("stopped")
+            self._tree = tree
+        try:
+            answer = await self._answer(tree, "ready", self._start_s)
+        except WorkerError:
+            if self._stops != stops:  # the stop ended it: say so, not "gone"
+                raise WorkerError("stopped") from None
+            raise
         if not answer["ok"]:
-            await self.stop()
+            await self._end_failed(tree)
             raise WorkerError(_reason(answer))
         try:
             ready = Ready(_field(answer, "device", str),
                           float(_field(answer, "free_gib", int, float)),
                           dict(_field(answer, "versions", dict)))
         except _Malformed:
-            await self.stop()
+            await self._end_failed(tree)
             raise WorkerError("gone") from None
+        if self._stops != stops or self._tree is not tree:  # stopped while it loaded
+            raise WorkerError("stopped")
         self._ready = True
         return ready
 
@@ -151,10 +171,12 @@ class SelfieWorker:
             "nsfw_max": req.nsfw_max}).encode("utf-8") + b"\n"
         if len(line) - 1 > MAX_LINE:
             raise WorkerError("bad_request")  # what the worker would answer; it stays up
+        tree = self._tree
         if not self.running:
-            await self.stop()
+            if tree is not None and tree.process.returncode is not None:
+                await self._end_failed(tree)  # a dead launcher may have left its interpreter
             raise WorkerError("gone")
-        answer = await self._answer(rid, self._render_s, line)
+        answer = await self._answer(tree, rid, self._render_s, line)
         if not answer["ok"]:
             raise WorkerError(_reason(answer))
         try:
@@ -164,11 +186,11 @@ class SelfieWorker:
                             float(_field(answer, "seconds", int, float)),
                             float(_field(answer, "peak_gib", int, float)))
         except _Malformed:
-            await self.stop()
+            await self._end_failed(tree)
             raise WorkerError("gone") from None
 
-    async def _answer(self, rid: str, timeout: float, line: bytes | None = None) -> dict:
-        tree = self._tree
+    async def _answer(self, tree: ProcessTree, rid: str, timeout: float,
+                      line: bytes | None = None) -> dict:
         process = tree.process
         try:
             async with asyncio.timeout(timeout):
@@ -177,41 +199,58 @@ class SelfieWorker:
                     await process.stdin.drain()
                 raw = await process.stdout.readline()
         except TimeoutError:
-            await self.stop()
+            await self._end_failed(tree)
             raise WorkerError("timeout") from None
         except asyncio.CancelledError:
-            self._ready = False
+            if self._tree is tree:
+                self._ready = False
             _quietly(tree.kill)
             raise
         except (OSError, ValueError):  # a closed pipe; a line over MAX_LINE
-            await self.stop()
+            await self._end_failed(tree)
             raise WorkerError("gone") from None
         answer = _decode(raw)
         if answer is None or answer["id"] != rid:
-            await self.stop()
+            await self._end_failed(tree)
             raise WorkerError("gone")
         return answer
+
+    async def _end_failed(self, tree: ProcessTree) -> None:
+        """Ends the tree a request failed on, and only that one: after a restart the current
+        tree is a fresh worker that this failure says nothing about. Not a stop(): a start
+        under way carries on."""
+        async with self._stopping:
+            if self._tree is not tree:
+                return  # already taken by a stop() or a start(), which ended it
+            self._ready = False
+            self._tree = None
+            await _end(tree)
 
     async def stop(self) -> None:
         """Quit, the end of stdin, GRACE_S for the worker to leave, then kill the tree and wait
         up to STOP_S for it to be gone (logging selfies_worker_left if it is not). Idempotent;
         never raises (but a cancellation propagates, after the kill)."""
         self._ready = False
+        self._stops += 1
         async with self._stopping:
             tree, self._tree = self._tree, None
-            if tree is None:
-                return
-            try:
-                try:
-                    await _goodbye(tree.process)
-                finally:
-                    _quietly(tree.kill)
-                await _gone(tree)
-            except Exception as e:
-                log("selfies_worker_stop_failed", level=logging.WARNING,
-                    error=type(e).__name__)
-            finally:
-                _quietly(tree.close)
+            await _end(tree)
+
+
+async def _end(tree: ProcessTree | None) -> None:
+    """Ends a tree no longer anyone's current one (the caller holds the stop lock)."""
+    if tree is None:
+        return
+    try:
+        try:
+            await _goodbye(tree.process)
+        finally:
+            _quietly(tree.kill)
+        await _gone(tree)
+    except Exception as e:
+        log("selfies_worker_stop_failed", level=logging.WARNING, error=type(e).__name__)
+    finally:
+        _quietly(tree.close)
 
 
 async def _goodbye(process: asyncio.subprocess.Process) -> None:

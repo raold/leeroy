@@ -29,7 +29,7 @@ JOB_PROCESS_ID_LIST = 3  # JobObjectBasicProcessIdList
 JOB_EXTENDED_LIMITS = 9  # JobObjectExtendedLimitInformation
 ERROR_ACCESS_DENIED = 5
 ERROR_MORE_DATA = 234
-WAIT_TIMEOUT = 0x102
+WAIT_OBJECT_0 = 0
 DISCARD_S = 3.0  # waiting for a process that could not be contained to end
 
 
@@ -191,15 +191,19 @@ class _Job:
 
     def kill(self) -> None:
         api = _win()
-        self._capture()  # before the list empties
-        if not api.kernel.TerminateJobObject(self.handle, 1):
-            raise api.error("TerminateJobObject")
+        try:
+            self._capture()  # before the list empties
+        finally:  # a capture that failed must not spare the tree
+            if not api.kernel.TerminateJobObject(self.handle, 1):
+                raise api.error("TerminateJobObject")
 
     def left(self) -> int:
+        """Exited means signalled (WAIT_OBJECT_0); a wait that failed proves nothing and
+        counts as still running."""
         k = _win().kernel
         self._capture()
         running = sum(1 for h in self.members.values()
-                      if k.WaitForSingleObject(h, 0) == WAIT_TIMEOUT)
+                      if k.WaitForSingleObject(h, 0) != WAIT_OBJECT_0)
         return running + len(self.unopened)
 
     def close(self) -> None:
@@ -286,8 +290,8 @@ class ProcessTree:
 
 
 def pid_alive(pid: int) -> bool:
-    """Whether a process with this pid exists and has not exited (one we may not open counts
-    as alive)."""
+    """Whether a process with this pid exists and has not exited (one we may not open, or
+    whose wait fails, counts as alive)."""
     if os.name != "nt":
         try:
             os.kill(pid, 0)
@@ -301,6 +305,6 @@ def pid_alive(pid: int) -> bool:
     if not handle:
         return ctypes.get_last_error() == ERROR_ACCESS_DENIED
     try:
-        return api.kernel.WaitForSingleObject(handle, 0) == WAIT_TIMEOUT
+        return api.kernel.WaitForSingleObject(handle, 0) != WAIT_OBJECT_0
     finally:
         api.kernel.CloseHandle(handle)

@@ -3,6 +3,7 @@ whole process tree gone afterwards. Against the fake worker only: the live guard
 launching leeroy_selfie, so no real worker or model runs here."""
 import asyncio
 import json
+import logging
 import os
 import sys
 import time
@@ -263,6 +264,134 @@ def test_closing_stdin_ends_the_worker_at_once(tmp_path):
             tree.kill()
             tree.close()
     assert run(go()) < 2.0
+
+
+def test_a_stop_during_a_start_ends_the_worker_it_was_starting(tmp_path, monkeypatch):
+    """Task 10's login path may stop the worker from another task while a start is spawning
+    it: when stop() returns, that worker and its child are dead, and the start says so."""
+    pids = tmp_path / "pids.json"
+    cmd, env = fake_command(tmp_path, FAKE_SELFIE_CHILD="1", FAKE_SELFIE_PIDS=str(pids))
+    real = ProcessTree.spawn
+
+    async def go():
+        spawning = asyncio.Event()
+
+        async def slow_spawn(command, *, env, limit):
+            tree = await real(command, env=env, limit=limit)
+            spawning.set()  # the stop arrives here, before start() has the tree
+            await until(pids.exists)
+            return tree
+        monkeypatch.setattr(ProcessTree, "spawn", slow_spawn)
+        w = SelfieWorker(cmd, env=env)
+        starting = asyncio.create_task(w.start())
+        try:
+            await spawning.wait()
+            await w.stop()
+            await until(pids.exists)  # at once when fixed; a surviving worker writes it later
+            got = json.loads(pids.read_text())
+            alive = pid_alive(got["pid"]), pid_alive(got["child"])
+            with pytest.raises(WorkerError, match="^stopped$"):
+                await starting
+            return alive, w.running
+        finally:
+            await w.stop()
+    assert run(go()) == ((False, False), False)
+
+
+def test_a_stop_while_the_worker_loads_is_a_stopped_start(tmp_path):
+    pid = tmp_path / "pid"
+    cmd = script(tmp_path, "import os, time\n"
+                           f"open({str(pid)!r}, 'w').write(str(os.getpid()))\n"
+                           "time.sleep(60)\n")  # loading, for longer than the test
+
+    async def go():
+        w = SelfieWorker(cmd)
+        starting = asyncio.create_task(w.start())
+        await until(pid.exists)
+        await w.stop()
+        alive = pid_alive(int(pid.read_text()))
+        with pytest.raises(WorkerError, match="^stopped$"):
+            await starting
+        return alive, w.running
+    assert run(go()) == (False, False)
+
+
+def test_a_late_failure_after_a_restart_leaves_the_new_worker_alone(tmp_path):
+    """A render still waiting on the old worker when start() replaces it fails as gone; its
+    cleanup must stop only the tree it failed on, never the fresh one."""
+    pids = tmp_path / "pids.json"
+    cmd, env = fake_command(tmp_path, FAKE_SELFIE_HANG="1", FAKE_SELFIE_PIDS=str(pids))
+
+    async def go():
+        w = SelfieWorker(cmd, env=env)
+        try:
+            await w.start()
+            old = json.loads(pids.read_text())["pid"]
+            busy = asyncio.create_task(w.render(request(tmp_path)))
+            await asyncio.sleep(0.3)  # the render hangs on the old worker
+            await w.start()
+            with pytest.raises(WorkerError, match="^gone$"):
+                await busy
+            await asyncio.sleep(0.3)
+            new = json.loads(pids.read_text())["pid"]
+            return old != new, pid_alive(old), pid_alive(new), w.running
+        finally:
+            await w.stop()
+    assert run(go()) == (True, False, True, True)
+
+
+windows_only = pytest.mark.skipif(os.name != "nt", reason="the job object is Windows only")
+
+
+@windows_only
+def test_a_kill_whose_capture_fails_still_terminates_the_job(tmp_path, monkeypatch):
+    pids = tmp_path / "pids.json"
+    cmd, env = fake_command(tmp_path, FAKE_SELFIE_CHILD="1", FAKE_SELFIE_PIDS=str(pids))
+
+    async def go():
+        tree = await ProcessTree.spawn(cmd, env=env)
+        try:
+            assert json.loads(await tree.process.stdout.readline())["ok"] is True
+            got = json.loads(pids.read_text())
+            everyone = [tree.process.pid, got["pid"], got["child"]]
+
+            def broken():
+                raise OSError("no list")
+            monkeypatch.setattr(tree._contained, "_capture", broken)
+            with pytest.raises(OSError):
+                tree.kill()
+            await until(lambda: not any(pid_alive(p) for p in everyone))
+            return [pid_alive(p) for p in everyone]
+        finally:
+            monkeypatch.undo()
+            tree.kill()
+            tree.close()
+            await asyncio.wait_for(tree.process.wait(), 5)
+    assert run(go()) == [False, False, False]
+
+
+@windows_only
+def test_an_unknown_wait_result_counts_as_alive(tmp_path, monkeypatch, caplog):
+    """WAIT_FAILED says nothing about the process, so stop() keeps waiting and warns rather
+    than call the tree gone."""
+    from leeroy_mind.selfies import worker as worker_module
+    pids = tmp_path / "pids.json"
+    cmd, env = fake_command(tmp_path, FAKE_SELFIE_PIDS=str(pids))
+    kernel = job._win().kernel
+
+    async def go():
+        w = SelfieWorker(cmd, env=env)
+        await w.start()
+        monkeypatch.setattr(worker_module, "STOP_S", 0.3)
+        monkeypatch.setattr(kernel, "WaitForSingleObject", lambda handle, ms: 0xFFFFFFFF)
+        t0 = time.monotonic()
+        with caplog.at_level(logging.WARNING, logger="leeroy_mind"):
+            await w.stop()
+        return time.monotonic() - t0
+    took = run(go())
+    monkeypatch.undo()
+    assert "selfies_worker_left" in caplog.text and took >= 0.3
+    assert not pid_alive(json.loads(pids.read_text())["pid"])
 
 
 def test_a_spawn_that_cannot_contain_the_process_kills_it(tmp_path, monkeypatch):
