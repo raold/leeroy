@@ -137,3 +137,14 @@ test("no status at all is an unclear mind, never not in game", () => {
   assert.equal(s.enabled, false);
   assert.equal(s.reason, "The mind's state is unclear, so nothing can be sent.");
 });
+
+test("a slash command is refused in the box: it would reach WoW as words", () => {
+  ["/w Arkon hi", "  /dance", " | /w Arkon hi", "\t/2 hello", "/"].forEach(function (t) {
+    var s = state(status(), t);
+    assert.equal(s.enabled, false, JSON.stringify(t));
+    assert.equal(s.code, "slash_command", JSON.stringify(t));
+    assert.equal(s.reason, "Slash commands aren't sent from here.");
+  });
+  assert.equal(state(status(), "hi /wave").enabled, true);
+  assert.equal(state(status(), "/" + "a".repeat(300)).reason, "Too long: 301 of 255 bytes.");  // native's order first
+});

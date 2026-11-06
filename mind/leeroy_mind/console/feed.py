@@ -5,8 +5,11 @@ mind.
 The text feed is what the owner could see in WoW: guild and officer lines while he was online
 (in a session), spoken room lines (`voice:<room>`) once they played to him, party and raid
 lines of his own group (his, or from a member the mind counted in
-the line's audience, which for those channels is his group), and whispers to or from him. Say,
-yell and emotes, and whispers between members, are not his to see here."""
+the line's audience, which for those channels is his group), and whispers to or from him. A
+voiced whisper is never typed in WoW: one the voice service dropped because he was deafened or
+had muted the member shows as text marked `unheard` (the owner's ruling, 2026-11-06); one dropped
+for any other reason does not show. Say, yell and emotes, and whispers between members, are not
+his to see here."""
 import json
 import sqlite3
 from contextlib import closing
@@ -14,6 +17,7 @@ from pathlib import Path
 
 FEED_LIMIT = 200
 WHISPER_GRACE_S = 3.0  # a whisper is stored a moment before the voice row that says it was spoken
+UNHEARD = ("deafened", "muted")  # drop reasons that leave a voiced whisper shown as text, unheard
 
 
 def connect(path: Path) -> sqlite3.Connection:
@@ -43,14 +47,17 @@ def open_session(conn) -> dict | None:
 _VOICE_ROWS = {
     True: ("(SELECT max(CASE v.state WHEN 'sent' THEN 1 WHEN 'started' THEN 2 WHEN 'done' THEN 2 "
            "WHEN 'cut' THEN 2 ELSE 0 END) FROM voice_line v WHERE v.line_id = l.id)",
-           "EXISTS (SELECT 1 FROM voice_heard h WHERE h.line_id = l.id)"),
-    False: ("NULL", "0"),
+           "EXISTS (SELECT 1 FROM voice_heard h WHERE h.line_id = l.id)",
+           "(SELECT max(v.reason) FROM voice_line v WHERE v.line_id = l.id "
+           "AND v.state = 'dropped' AND v.reason IN (%s))" % ",".join(f"'{r}'" for r in UNHEARD)),
+    False: ("NULL", "0", "NULL"),
 }
 
 _FEED = """
 WITH base AS (
     SELECT l.id, l.ts, l.channel, l.from_guid, l.from_name, l.to_guid, l.text, l.session_id,
-           l.audience, coalesce(c.name, '') AS to_name, {vrank} AS vrank, {vheard} AS vheard
+           l.audience, coalesce(c.name, '') AS to_name, {vrank} AS vrank, {vheard} AS vheard,
+           {vunheard} AS vunheard
     FROM chat_line l LEFT JOIN cast_member c ON c.guid = l.to_guid
     WHERE l.id > :after AND l.id <= :upto AND l.ts >= :since
       AND (:ids IS NULL OR l.id IN (SELECT value FROM json_each(:ids)))
@@ -71,7 +78,7 @@ WITH base AS (
          OR (audience IS NOT NULL AND json_valid(audience) AND EXISTS (
                 SELECT 1 FROM json_each(audience) a WHERE a.value = from_guid))))
      OR (channel = 'whisper' AND :human != 0 AND (from_guid = :human OR to_guid = :human) AND (
-            coalesce(vrank, 0) > 0 OR vheard
+            coalesce(vrank, 0) > 0 OR vheard OR (to_guid = :human AND vunheard IS NOT NULL)
          OR (vrank IS NULL AND (:grace <= 0 OR :now - ts >= :grace)))))
 ), ranked AS (
     SELECT *, row_number() OVER (PARTITION BY view ORDER BY id DESC) AS rn FROM shown
@@ -103,24 +110,26 @@ def _line(r, human: int) -> dict:
     channel = r["channel"]
     you = bool(human) and r["from_guid"] == human
     vrank, vheard = r["vrank"] or 0, bool(r["vheard"])
-    voice, heard = None, None
+    voice, heard, unheard = None, None, None
     if channel.startswith("voice:"):
         voice = channel[len("voice:"):]
         heard = True if you else vrank == 2
     elif channel == "whisper" and (vrank > 0 or vheard):
         voice = "whisper"
         heard = bool(vheard or vrank == 2)
+    elif channel == "whisper" and not you and r["vunheard"] in UNHEARD:
+        unheard = r["vunheard"]  # shown as text, never as heard
     return {"id": r["id"], "ts": r["ts"], "channel": channel,
             "from": r["from_name"], "from_guid": r["from_guid"],
             "to": r["to_name"], "to_guid": r["to_guid"], "text": r["text"],
-            "you": you, "voice": voice, "heard": heard}
+            "you": you, "voice": voice, "heard": heard, "unheard": unheard}
 
 
 def _query(conn, *, after, upto, since, limit, ids, now=None) -> list[dict]:
     human = human_guid(conn)
     voiced = _has(conn, "voice_line", "voice_heard")
-    vrank, vheard = _VOICE_ROWS[voiced]
-    rows = conn.execute(_FEED.format(vrank=vrank, vheard=vheard), {
+    vrank, vheard, vunheard = _VOICE_ROWS[voiced]
+    rows = conn.execute(_FEED.format(vrank=vrank, vheard=vheard, vunheard=vunheard), {
         "after": int(after), "human": human, "limit": int(limit),
         "upto": (1 << 62) if upto is None else int(upto),
         "since": -1e18 if since is None else float(since),
@@ -135,8 +144,10 @@ def feed(conn, *, after: int = 0, upto: int | None = None, since: float | None =
     """The owner-visible lines with ids after `after` (and up to `upto`), stored at `since` or
     later, oldest first: at most `limit` of each view (guild, officer, group, whispers), the
     newest. A spoken line shows once it has played to him (`heard`) or while it is on its way
-    (`sent`, heard False); one the voice service dropped never does. With `now`, a whisper
-    younger than WHISPER_GRACE_S with no voice row yet is held back (see `waiting`)."""
+    (`sent`, heard False); one the voice service dropped never does, except a whisper dropped
+    because he was deafened or had muted the member (`unheard`: the reason; voice and heard
+    None). With `now`, a whisper younger than WHISPER_GRACE_S with no voice row yet is held back
+    (see `waiting`)."""
     return _query(conn, after=after, upto=upto, since=since, limit=limit, ids=None, now=now)
 
 
@@ -150,7 +161,8 @@ def look(conn, ids: list[int], now: float | None = None) -> list[dict]:
 
 def recheck(conn, ids: list[int]) -> tuple[list[dict], list[int]]:
     """For lines the page shows as still on their way: the ones that are no longer waiting (now
-    heard, or a whisper that turned out typed) and the ids that have gone from the feed."""
+    heard, a whisper that turned out typed, or one he did not hear) and the ids that have gone
+    from the feed."""
     ids = list(ids)
     lines = look(conn, ids)
     found = {line["id"] for line in lines}

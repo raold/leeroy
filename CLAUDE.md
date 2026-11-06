@@ -639,7 +639,7 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   with the folds and read marks, `guild-console-collapsed` and
   `guild-console-read`). It has 13 tabs: Comms, Raid, Guild, Personas and Mind
   are real; Social, Board, Calendar, Bank, Realm, Training, Dojo and Library
-  are placeholders (the Dojo until P3). `GET /api/face?guid=<int>&size=sm|md|lg` serves
+  are placeholders that wait for P3. `GET /api/face?guid=<int>&size=sm|md|lg` serves
   `mind-data/selfies/<guid>/chosen.jpg` (key and Host checked, `image/jpeg`,
   `private, max-age=60`, 404 when absent; the original for every size, the
   browser scales it) and never writes under `selfies/`; faces (initials when
@@ -647,11 +647,18 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   feed of typed lines and the room lines he heard (from mind.db: a line
   appears once it has played to him, a dropped one does not), channels with
   unread counts (a first open or reload marks history read), the 32-room tree
-  (empty rooms greyed, click to join), whispers and the member card. Push-to-talk
-  the voice service recognised but the mind did not match to a line is noted in
-  the feed as not sent. Reply box: `POST /api/say` {channel, text, to}
-  for guild, officer, party or raid (raid when his group is one) and whispers
-  by guid to an online cast member; it needs the key and Origin, the mind's
+  (empty rooms greyed, click to join), whispers and the member card. A voiced
+  whisper is never typed in WoW: one the voice service dropped because he was
+  deafened or had muted that member shows in its thread as text with a "not
+  heard (deafened)" or "not heard (muted)" chip and counts as unread; a whisper
+  dropped for any other reason does not appear. Push-to-talk the voice service
+  recognised but the mind did not match to a line is noted as not sent in a
+  Comms toast (8 s), not in the feed. Reply box: `POST /api/say` {channel,
+  text[, to]} with channel `guild`, `officer`, `group` (the mind sends it to
+  raid when his group is one, else party) or `whisper`, and `to` (a member's
+  guid, online, in the cast, not him) for a whisper only; a line starting with
+  `/` is refused ("Slash commands aren't sent from here.": WoW would post it as
+  words). It needs the key and Origin and the mind's
   control endpoint, and is off with `--no-control`, with the mind or bridge
   down (said as such, not as "not in game") and while he is not in game. One
   line is in flight at a time; the refused text stays in the box. The server
@@ -659,6 +666,8 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   server needs the rebuild that adds console replies." Mute and deafen are
   voice-service flags (the page's `self` message; deafen implies mute; both
   reset at each login): mute stops his push-to-talk, deafen silences the room.
+  After a release they need the voice service restarted: an older voice
+  service ignores `self`.
 - The mind's control endpoint (`leeroy_mind/endpoint.py`) is on by default
   (`[control] enabled = false` turns it off; `[control] port`, default 0, picks
   a free port). It listens on 127.0.0.1 only and writes a new key each start,

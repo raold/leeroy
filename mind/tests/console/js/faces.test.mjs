@@ -284,3 +284,15 @@ test("a member's face is a button that names them for the card; his own is no bu
   assert.equal(me.textContent, "YOU");
   assert.equal(me.dataset.card, undefined);
 });
+
+test("a line with no member (guid 0, below 0 or not a whole number) draws initials and asks for nothing", async () => {
+  var face = await stage();
+  var before = page.asked.length;
+  [0, -3, 1.5, NaN, Infinity, "abc", "", null, undefined].forEach(function (g) {
+    var f = face(g, "Stranger", "feed");
+    assert.equal(f.tagName, "SPAN", String(g));
+    assert.equal(f.textContent, "ST", String(g));
+  });
+  await settled();
+  assert.equal(page.asked.length, before);
+});

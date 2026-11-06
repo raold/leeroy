@@ -18,11 +18,12 @@ export class Heard {
 
   clear() { this._kept = []; }
 
-  // An own line on a voice room clears the entries it can answer: received no later than the line
-  // was made (2 s tolerance; a line without a time counts as made now) and still inside the wait;
-  // an older replayed line, or an entry already overdue, is left alone
+  // An own spoken line (voice set: a voice room's, or a whisper in a private room, which the mind
+  // stores as a whisper) clears the entries it can answer: received no later than the line was
+  // made (2 s tolerance; a line without a time counts as made now) and still inside the wait; an
+  // older replayed line, or an entry already overdue, is left alone
   sawOwnVoiceLine(line, nowMs) {
-    if (!line || line.you !== true || typeof line.channel !== "string" || line.channel.indexOf("voice:") !== 0) { return; }
+    if (!line || line.you !== true || typeof line.voice !== "string" || !line.voice) { return; }
     var made = typeof line.ts === "number" && isFinite(line.ts) ? line.ts * 1000 : nowMs;
     this._kept = this._kept.filter(function (e) {
       return !(made >= e.at - LINE_SLACK_MS && nowMs - e.at <= HEARD_WAIT_MS);

@@ -211,3 +211,48 @@ def test_a_mind_db_without_voice_tables_still_feeds(db):
         store.conn.execute("DROP TABLE voice_line")
         store.conn.execute("DROP TABLE voice_heard")
     assert shown(path) == ["typed"]
+
+
+@pytest.mark.parametrize("reason", ["deafened", "muted"])
+def test_a_voiced_whisper_he_did_not_hear_shows_as_text_marked(db, reason):
+    """The owner's ruling (2026-11-06): a whisper the voice service dropped because he was
+    deafened or had muted the member is never typed in WoW, so the feed shows it as text, marked,
+    and never as heard."""
+    store, path = db
+    voice = VoiceStore(store)
+    line = say(store, "whisper", 101, "while you were away", to=HUMAN)
+    voice.add_line("run.u", line, "whisper", "sent", 1.0)
+    voice.set_line("run.u", "dropped", reason, 2.0)
+    at_once = say(store, "whisper", 102, "dropped before it played", to=HUMAN)
+    voice.add_line("run.v", at_once, "whisper", "dropped", 1.0, reason=reason)
+    say(store, "whisper", 103, "typed one", to=HUMAN)
+    got = by_text(path)
+    for text in ("while you were away", "dropped before it played"):
+        assert got[text]["unheard"] == reason
+        assert got[text]["voice"] is None and got[text]["heard"] is None
+    assert got["typed one"]["unheard"] is None
+    heard, gone = feed.read(path, feed.recheck, [line])  # a page that had it on its way
+    assert [x["id"] for x in heard] == [line] and gone == []
+
+
+@pytest.mark.parametrize("reason", ["expired", "moved", "no_voice", "offline", "cancelled",
+                                    "engine_error", "mind_gone", "no_ack", "voice_down", None])
+def test_a_voiced_whisper_dropped_for_another_reason_stays_out(db, reason):
+    store, path = db
+    line = say(store, "whisper", 101, "gone", to=HUMAN)
+    VoiceStore(store).add_line("run.x", line, "whisper", "dropped", 1.0, reason=reason)
+    assert shown(path) == []
+
+
+def test_only_whispers_are_marked_not_heard(db):
+    """A room line dropped as muted or deafened stays out (Settled 7), and every other line carries
+    unheard None."""
+    store, path = db
+    sid = store.start_session(1.0)
+    voice = VoiceStore(store)
+    room = spoken(store, sid, 101, "room line", "guild_hall", "sent")
+    voice.set_line(store.conn.execute("SELECT speak_id FROM voice_line WHERE line_id = ?",
+                                      (room,)).fetchone()["speak_id"], "dropped", "deafened", 2.0)
+    say(store, "guild", 101, "typed", session=sid)
+    lines = feed.read(path, feed.feed)
+    assert [x["text"] for x in lines] == ["typed"] and lines[0]["unheard"] is None

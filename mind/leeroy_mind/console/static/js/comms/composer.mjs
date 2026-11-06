@@ -14,7 +14,7 @@ import { MAX_BYTES, composerState, targetFor, utf8Bytes } from "./reply.mjs";
 
 var CLOSED = { control_off: 1, mind_down: 1, bridge_down: 1, game_unknown: 1, not_in_game: 1,
                connecting: 1, key_lost: 1, no_target: 1 };
-var TEXT_BAD = { too_long: 1, command_prefix: 1 };
+var TEXT_BAD = { too_long: 1, command_prefix: 1, slash_command: 1 };
 var WHERE = { guild: "#guild", officer: "#officer", group: "your party or raid" };
 var NO_ANSWER = "The console did not answer. Check WoW before sending it again.";
 

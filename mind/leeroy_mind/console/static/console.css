@@ -236,6 +236,7 @@ button.twist:hover { color: var(--ink); background: var(--surface-2); }
   border: 1px solid color-mix(in srgb, var(--c) 32%, transparent); white-space: nowrap; }
 .chip.voice { --c: var(--live); } .chip.whisper { --c: var(--violet); }
 .chip.wow { --c: var(--blue); } .chip.photo { --c: var(--warn); }
+.chip.unheard { --c: var(--warn); }
 
 .av { width: 34px; height: 34px; border-radius: 50%; flex: none; display: inline-flex; align-items: center;
   justify-content: center; font: 700 12px/1 var(--f-body); color: #fff; object-fit: cover;

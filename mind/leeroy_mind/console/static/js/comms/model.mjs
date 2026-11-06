@@ -9,10 +9,15 @@ import { signed } from "../words.mjs";
 // newest line of the feed's first load (its floor), so the history a first open (or a reload)
 // brings is never unread, while a line or a thread that comes after it is. His own lines never
 // count. Each view keeps its own newest KEEP lines, so a busy guild never pushes a whisper out.
+// A whisper the voice service dropped because he was deafened or had muted the member comes as
+// text with `unheard` (the reason): it shows, and counts, like a typed whisper, with its marker.
 
 export var KEEP = 200;
 var VIEW = /^(?:guild|officer|group|w:[1-9]\d{0,9})$/;
 var GROUP = { party: 1, raid: 1, raid_warning: 1 };
+var CHANNELS = { guild: "guild", officer: "officer", party: "party", raid: "raid",
+                 raid_warning: "raid warning", whisper: "whisper" };
+var UNHEARD = { deafened: "not heard (deafened)", muted: "not heard (muted)" };
 
 function mine(line, human) { return line.you === true || (human > 0 && line.from_guid === human); }
 function goodId(id) { return typeof id === "number" && id > 0 && Math.floor(id) === id; }
@@ -29,6 +34,23 @@ export function viewOf(line, human) {
     return goodId(other) ? "w:" + other : "";
   }
   return "";
+}
+
+// A line's chips, as {cls, text}: where it was said (a voice room by room(id), "voice" for a spoken
+// whisper, else the WoW channel), then "not heard (...)" for a whisper he did not hear
+export function lineChips(line, room) {
+  room = room || function (id) { return id; };
+  var out = [];
+  if (line.voice) {
+    out.push({ cls: "chip voice", text: line.voice === "whisper" ? "voice" : room(str(line.voice)) });
+  } else {
+    var ch = str(line.channel);
+    out.push({ cls: "chip wow", text: own(CHANNELS, ch) ? CHANNELS[ch] : ch });
+  }
+  if (typeof line.unheard === "string" && own(UNHEARD, line.unheard)) {
+    out.push({ cls: "chip unheard", text: UNHEARD[line.unheard] });
+  }
+  return out;
 }
 
 export class Feed {

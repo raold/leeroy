@@ -51,9 +51,10 @@ run nothing else.
                        `tuning` event; a preview's answer goes only to the page that asked
     POST /api/say      {"channel": "guild"|"officer"|"group"|"whisper", "text"[, "to"]}: his
                        line, said in game as his: checked and cleaned as the mind checks it (400
-                       with its words), refused 403 with --no-control and 409 while nothing can
-                       be sent (the mind or its bridge down, a start or stop under way, not in
-                       game, nobody can tell), then on to the mind's say op; nothing is
+                       with its words; a slash command too, which WoW would post as words),
+                       refused 403 with --no-control and 409 while nothing can be sent (the mind
+                       or its bridge down, a start or stop of the mind under way, not in game,
+                       nobody can tell), then on to the mind's say op; nothing is
                        broadcast, the line comes back through the feed when the game reports it
 
 The Raid, Guild and Personas tabs read mind.db read-only. Raid actions, dial changes and his
@@ -98,6 +99,7 @@ MIND_DOWN = ("The mind isn't running, so it can't preview or change dials. Start
 SAY_OFF = "Replies are off: this console runs with --no-control."
 SAY_OLD_MIND = "The mind needs the update to send replies."
 SAY_NO_LINK = "Nothing was sent: the console has no link to the mind's control endpoint."
+SAY_SLASH = "Slash commands aren't sent from here."  # the box's words (comms/reply.mjs)
 OLD_OPS = "bad request: op is one of "  # a mind from before the say op names the ops it has
 
 # The page runs only the console's own files: no inline script or style, nothing from elsewhere
@@ -290,13 +292,16 @@ class ConsoleApp:
             return feed.feed(conn, after=after, upto=upto, since=since, now=now), upto
         return feed.read(db, question)
 
-    def _poll(self, after: int, days: float | None = None):
-        """Feed, waiting set and recheck of what is on its way, from one read snapshot."""
+    def _poll(self, after: int, ids: list[int], days: float | None = None):
+        """Worker thread. Feed, waiting set and recheck of `ids` (what is on its way, listed on
+        the loop: _pending and _waiting are the loop's), from one read snapshot."""
         now = self._clock()
         since = now - days * 86400 if days else None
-        ids = list(self._pending) + list(self._waiting)
         return feed.read(self.s.data_dir / "mind.db", feed.poll, after=after, since=since,
                          now=now, ids=ids)
+
+    def _on_way(self) -> list[int]:
+        return list(self._pending) + list(self._waiting)
 
     def _track(self, lines: list[dict]) -> None:
         """Lines a page was given as still on their way are rechecked until they settle."""
@@ -356,7 +361,8 @@ class ConsoleApp:
 
     async def _feed_pass(self) -> None:
         try:
-            lines, upto, late, seen = await asyncio.to_thread(self._poll, self._feed_last)
+            lines, upto, late, seen = await asyncio.to_thread(self._poll, self._feed_last,
+                                                              self._on_way())
             out = {line["id"]: line for line in lines}
             self._track(lines)
             gone = self._settle(late, seen, lines, out)
@@ -422,7 +428,7 @@ class ConsoleApp:
         """`voice` and `strip` were taken as the page registered, with no await between: every
         later voice event is in its queue and none before it is."""
         try:
-            lines, _, late, _ = await asyncio.to_thread(self._poll, 0, FEED_DAYS)
+            lines, _, late, _ = await asyncio.to_thread(self._poll, 0, self._on_way(), FEED_DAYS)
             self._track(lines)
             now = self._monotonic()
             for i in late:
@@ -774,13 +780,15 @@ class ConsoleApp:
 
     def _say_problem(self) -> tuple[int, str] | None:
         """Why his line cannot be sent now, in the reply box's words; None: on to the mind. The
-        raid actions' checks, then the game as the console reads it: a mind or bridge that is
-        down, or a game state nobody can read, is named as what it is, never as his absence."""
+        raid actions' checks (but a start or stop of the voice service, which a typed line
+        never goes near, holds nothing), then the game as the console reads it: a mind or bridge
+        that is down, or a game state nobody can read, is named as what it is, never as his
+        absence."""
         if not self.controls.enabled:
             return 403, SAY_OFF
-        if self.controls.busy is not None:
-            service, action = self.controls.busy
-            return 409, f"A {action} of the {service} is under way, so nothing can be sent."
+        if self.controls.busy is not None and self.controls.busy[0] == "mind":
+            action = self.controls.busy[1]
+            return 409, f"A {action} of the mind is under way, so nothing can be sent."
         if self.view.state != "running":
             return 409, ("The mind's state is unclear, so nothing can be sent."
                          if self.view.state == "unknown"
@@ -800,6 +808,8 @@ class ConsoleApp:
             args = endpoint.say_args(req.json())  # checked and cleaned exactly as the mind will
         except endpoint.BadRequest as e:
             return json_response(400, {"ok": False, "error": str(e)})
+        if args["text"].startswith("/"):  # cleaned: no space, "|" or control character before it
+            return json_response(400, {"ok": False, "error": SAY_SLASH})
         problem = self._say_problem()
         if problem is not None:
             return json_response(problem[0], {"ok": False, "error": problem[1]})

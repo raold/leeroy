@@ -641,9 +641,56 @@ def test_a_dropped_voiced_whisper_never_shows_and_a_pending_one_is_gone(data, st
         app._feed_last = 0
         await app._feed_pass()
         assert _chat_ids(sent) == [(b, False)]
-        voice.set_line("w.2", "dropped", "muted", 2.0)
+        voice.set_line("w.2", "dropped", "expired", 2.0)
         await app._feed_pass()
         assert ("chat_gone", {"ids": [b]}) in sent
+    run(go())
+
+
+@pytest.mark.parametrize("reason", ["deafened", "muted"])
+def test_a_pending_whisper_he_did_not_hear_comes_back_as_text_marked(data, store, reason):
+    """The owner's ruling: a whisper on its way that the voice service drops because he is
+    deafened or has muted the member is sent again as text marked unheard, never gone."""
+    from leeroy_mind.voice.store import VoiceStore
+    whisper = _whisper_setup(store)
+    voice = VoiceStore(store)
+
+    async def go():
+        app = make_app(data, clock=lambda: store.clock.now() + 60)
+        sent = _pass_rig(app)
+        _, app._feed_last = await asyncio.to_thread(app._feed_since, 1 << 62)
+        line = whisper("on its way")
+        voice.add_line("w.1", line, "whisper", "sent", 1.0)
+        await app._feed_pass()
+        assert _chat_ids(sent) == [(line, False)] and line in app._pending
+        voice.set_line("w.1", "dropped", reason, 2.0)
+        sent.clear()
+        await app._feed_pass()
+        lines = [x for kind, p in sent if kind == "chat" for x in p["lines"]]
+        assert [(x["id"], x["voice"], x["heard"], x["unheard"]) for x in lines] == [
+            (line, None, None, reason)]
+        assert "chat_gone" not in [kind for kind, _ in sent] and not app._pending
+    run(go())
+
+
+def test_a_whisper_dropped_deafened_inside_the_grace_shows_marked(data, store):
+    from leeroy_mind.voice.store import VoiceStore
+    whisper = _whisper_setup(store)
+    now = [store.clock.now()]
+
+    async def go():
+        app = make_app(data, clock=lambda: now[0])
+        sent = _pass_rig(app)
+        _, app._feed_last = await asyncio.to_thread(app._feed_since, 1 << 62)
+        line = whisper("not for a deaf ear")
+        await app._feed_pass()
+        assert _chat_ids(sent) == [] and line in app._waiting  # inside the grace: held
+        VoiceStore(store).add_line("w.1", line, "whisper", "dropped", 1.0, reason="deafened")
+        now[0] += 1
+        await app._feed_pass()
+        lines = [x for kind, p in sent if kind == "chat" for x in p["lines"]]
+        assert [(x["id"], x["unheard"]) for x in lines] == [(line, "deafened")]
+        assert not app._waiting
     run(go())
 
 

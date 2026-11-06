@@ -6,10 +6,12 @@ import { obj, str } from "../core.mjs";
 // The console's own checks come first, in the order the page can see them: control off, the mind
 // not running, its bridge down, a game state nobody can read, not in game. A down mind or bridge
 // is named as such, never as his absence. Then one line at a time (sending), then the text in
-// native's order: empty, too long, a command. The length is the raw text's UTF-8 bytes: the mind
-// cleans first (drops "|" and control characters, collapses whitespace), which never makes a line
-// longer, so the box never offers a line the mind refuses for its length. The mind and the game
-// check again and have the last word (POST /api/say answers with their words).
+// native's order: empty, too long, a command; then a slash command, which WoW would post as words
+// on the channel (the console refuses it too; the mind and native do not). The length is the raw
+// text's UTF-8 bytes: the mind cleans first (drops "|" and control characters, collapses
+// whitespace), which never makes a line longer, so the box never offers a line the mind refuses
+// for its length. The mind and the game check again and have the last word (POST /api/say answers
+// with their words).
 
 export var MAX_BYTES = 255;
 var ENCODER = new TextEncoder();
@@ -24,7 +26,8 @@ export var WORDS = {
   not_in_game: "You're not in game.",
   sending: "Sending your line…",
   empty_text: "There's nothing to send.",
-  command_prefix: "Commands can't be sent from the console."
+  command_prefix: "Commands can't be sent from the console.",
+  slash_command: "Slash commands aren't sent from here."
 };
 
 export function utf8Bytes(text) { return ENCODER.encode(str(text)).length; }
@@ -46,7 +49,8 @@ function mindDown(state) {
 
 // {enabled, reason, bytes, code}: code names the first thing in the way ("" when it can be sent),
 // so the box can tell what it shows (control_off, mind_down, bridge_down, game_unknown and
-// not_in_game close it; sending holds it; empty_text, too_long and command_prefix are the text's)
+// not_in_game close it; sending holds it; empty_text, too_long, command_prefix and slash_command
+// are the text's)
 export function composerState(o) {
   o = obj(o);
   var st = obj(o.status), mind = obj(st.mind), game = obj(st.game), text = str(o.text);
@@ -65,5 +69,6 @@ export function composerState(o) {
   if (!rest) { return no("empty_text"); }
   if (bytes > MAX_BYTES) { return no("too_long", "Too long: " + bytes + " of " + MAX_BYTES + " bytes."); }
   if (rest.charAt(0) === "." || rest.charAt(0) === "!") { return no("command_prefix"); }
+  if (rest.charAt(0) === "/") { return no("slash_command"); }
   return { enabled: true, reason: "", bytes: bytes, code: "" };
 }

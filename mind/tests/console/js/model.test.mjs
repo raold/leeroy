@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { Feed, KEEP, kpis, viewOf } from "../../../leeroy_mind/console/static/js/comms/model.mjs";
+import { Feed, KEEP, kpis, lineChips, viewOf } from "../../../leeroy_mind/console/static/js/comms/model.mjs";
 
 // Invented members and lines only. He is 1000; members are 1101 and up.
 var HIM = 1000;
@@ -210,4 +210,34 @@ test("the KPI band without voice, mood or lines", () => {
   assert.deepEqual(kpis(f, alone, { value: -0.25, reasons: [] }, 0).slice(2), [
     { k: "In voice", v: "1", d: "across 1 room" },
     { k: "Guild mood", v: "-0.25", d: "" }]);
+});
+
+test("a whisper he did not hear (deafened, or the member muted) is text with its marker, and unread", () => {
+  var f = new Feed();
+  f.upsert([toHim(1, 1101)]);  // the first load: history is read
+  f.upsert([toHim(2, 1101, { unheard: "deafened" }), toHim(3, 1102, { unheard: "muted" })]);
+  assert.deepEqual(ids(f.lines("w:1101")), [1, 2]);
+  assert.equal(f.unread("w:1101"), 1);
+  assert.equal(f.unread("w:1102"), 1);
+  assert.equal(f.threads().reduce(function (n, t) { return n + t.unread; }, 0), 2);
+  assert.deepEqual(lineChips(f.lines("w:1101")[1]), [{ cls: "chip wow", text: "whisper" },
+                                                       { cls: "chip unheard", text: "not heard (deafened)" }]);
+  assert.deepEqual(lineChips(f.lines("w:1102")[0]), [{ cls: "chip wow", text: "whisper" },
+                                                       { cls: "chip unheard", text: "not heard (muted)" }]);
+  assert.deepEqual(lineChips(f.lines("w:1101")[0]), [{ cls: "chip wow", text: "whisper" }]);
+  assert.deepEqual(lineChips(toHim(4, 1101, { unheard: "expired" })), [{ cls: "chip wow", text: "whisper" }]);
+  // It was not said on voice: the band counts it as a whisper to him, not as spoken
+  assert.deepEqual(kpis(f, null, null, 0).slice(0, 2), [
+    { k: "Said tonight", v: "3", d: "0 on voice" },
+    { k: "Whispers to you", v: "3", d: "2 unanswered" }]);
+});
+
+test("each line's chips say where it was said", () => {
+  var room = function (id) { return id === "kitchen" ? "Kitchen" : id; };
+  assert.deepEqual(lineChips(said(1, 1101, { channel: "voice:kitchen", voice: "kitchen", heard: true }), room),
+                   [{ cls: "chip voice", text: "Kitchen" }]);
+  assert.deepEqual(lineChips(toHim(2, 1101, { voice: "whisper", heard: true }), room),
+                   [{ cls: "chip voice", text: "voice" }]);
+  assert.deepEqual(lineChips(mk(3, { channel: "raid_warning" }), room), [{ cls: "chip wow", text: "raid warning" }]);
+  assert.deepEqual(lineChips(mk(4, { channel: "guild" }), room), [{ cls: "chip wow", text: "guild" }]);
 });

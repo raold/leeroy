@@ -242,3 +242,47 @@ def test_the_minds_refusal_comes_back_409(data, in_game):
                 "The control endpoint did not answer (TimeoutError). Check WoW before sending it "
                 "again.")
     asyncio.run(go())
+
+
+@pytest.mark.parametrize("text", ["/w Arkon hi", "   /dance", "| /2 lfg", "\t/"])
+def test_a_slash_command_is_400_and_never_sent(data, in_game, text):
+    """WoW would post it as words on the channel ("/w Arkon hi" in guild): the console refuses it
+    before anything else, as its box does."""
+    link = FakeLink(SENT)
+
+    async def go():
+        async with served(make_app(data, mind=running(data), tcp=lambda: LINKED, link=link)) as app:
+            r = await say(app, {"channel": "guild", "text": text})
+            assert r.status == 400 and r.json() == {
+                "ok": False, "error": "Slash commands aren't sent from here."}
+            r = await say(app, {"channel": "whisper", "text": text, "to": 1101})
+            assert r.status == 400
+            r = await say(app, {"channel": "guild", "text": "hi /wave"})
+            assert r.status == 200
+        async with served(make_app(data, link=link)) as app:  # the mind down: the text first
+            r = await say(app, {"channel": "guild", "text": text})
+            assert r.status == 400
+    asyncio.run(go())
+    assert link.calls == [((101, 100), "say", {"channel": "guild", "text": "hi /wave"})]
+
+
+def test_a_voice_start_or_stop_does_not_hold_a_reply(data, in_game):
+    """A typed reply never goes near the voice service; the mind's own start or stop still holds
+    it, and the raid actions keep waiting for either."""
+    link = FakeLink(SENT)
+
+    async def go():
+        async with served(make_app(data, mind=running(data), tcp=lambda: LINKED, link=link)) as app:
+            for action in ("start", "stop", "restart"):
+                app.controls.busy = ("voice", action)
+                r = await say(app, {"channel": "guild", "text": "hi"})
+                assert r.status == 200, action
+            app.controls.busy = ("voice", "start")
+            r = await http(app, "POST", "/api/raid", body={"action": "summon"}, origin=True)
+            assert r.status == 409 and "still running" in r.json()["error"]
+            app.controls.busy = ("mind", "start")
+            r = await say(app, {"channel": "guild", "text": "hi"})
+            assert r.status == 409 and r.json()["error"] == (
+                "A start of the mind is under way, so nothing can be sent.")
+    asyncio.run(go())
+    assert [c[1] for c in link.calls] == ["say"] * 3

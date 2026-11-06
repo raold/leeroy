@@ -3,7 +3,9 @@
 // key. Each photo is decoded once and kept per guid and size: a face drawn again (the feed redraws
 // on every line) is a copy of that decoded image at once, never the circle first, and a member
 // with no photo is asked for again only when the cache's memory of the miss runs out. Only a 404
-// says there is no photo: a server error, a refused key or no connection keeps the one shown.
+// says there is no photo: a server error, a refused key or no connection keeps the one shown. A
+// guid that names nobody (0 on a line with no member, below 0, not a whole number) is never asked
+// for: it is the initials.
 //
 // In Comms a member's face is a button (faceButton) that opens their card: data-card and
 // data-name say whose, data-speaker lets lightSpeakers light it while their voice plays.
@@ -56,8 +58,9 @@ export function face(guid, name, kind, opts) {
   var cls = k.cls + (opts.speaking ? " speaking" : "");
   var box = el("span", cls, opts.you ? "YOU" : initials(name));
   box.style.setProperty("--c", opts.you ? "var(--accent)" : PALETTE[paletteSlot(guid)]);
-  if (opts.you) { return box; }
-  var key = guid + ":" + k.size, known = cache.peek(key), asked = cache.get(key);
+  var g = typeof guid === "string" && guid.trim() !== "" ? Number(guid) : guid;
+  if (opts.you || !(typeof g === "number" && Number.isInteger(g) && g > 0)) { return box; }
+  var key = g + ":" + k.size, known = cache.peek(key), asked = cache.get(key);
   if (known) { return photo(known, cls); }  // and a reload, when one is due, serves the next draw
   asked.then(function (p) {
     if (p && box.parentNode) { box.parentNode.replaceChild(photo(p, cls), box); }

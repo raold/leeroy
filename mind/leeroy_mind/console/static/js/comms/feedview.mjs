@@ -2,10 +2,11 @@ import { $, clear, clock, el, emit, num, on, pad, recall, remember, str } from "
 import { S, name, roomName } from "../state.mjs";
 import { face, faceButton } from "../faces.mjs";
 import { registerTab, setBadge } from "../tabs.mjs";
-import { Feed, kpis } from "./model.mjs";
+import { Feed, kpis, lineChips } from "./model.mjs";
 
 // The Comms middle column: the open view of the feed (# guild, # officer, # party / raid or one
-// whisper thread), each line with its face, name, time, a chip for where it was said and its text;
+// whisper thread), each line with its face, name, time, a chip for where it was said (and "not
+// heard" on a whisper he missed while deafened or with the member muted) and its text;
 // the KPI band above the columns; the read marks (this browser's, in guild-console-read) and the
 // Comms tab's count of unread whispers. A "feed" event tells the other columns something changed.
 
@@ -18,8 +19,6 @@ var HINTS = { guild: "Typed in WoW and said in the voice rooms, one feed, each l
               officer: "Officer chat typed in WoW and what was said in the Officers room.",
               group: "Your party or raid, as typed in WoW.",
               whisper: "Your whispers with them, typed in WoW or spoken on voice." };
-var CHANNELS = { guild: "guild", officer: "officer", party: "party", raid: "raid",
-                 raid_warning: "raid warning", whisper: "whisper" };
 
 export var FEED = new Feed();
 FEED.loadRead(recall(READ_KEY, {}));
@@ -46,10 +45,6 @@ function stamp(ms) {
   return (d.toDateString() === new Date().toDateString() ? "" : pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + " ")
          + clock(ms);
 }
-function chip(l) {
-  if (l.voice) { return el("span", "chip voice", l.voice === "whisper" ? "voice" : roomName(str(l.voice))); }
-  return el("span", "chip wow", CHANNELS[l.channel] || str(l.channel));
-}
 function row(l) {
   var r = el("div", "msg" + (l.you ? " mine" : "")), at = num(l.ts) * 1000;
   r.dataset.id = String(l.id);
@@ -62,7 +57,7 @@ function row(l) {
   t.dateTime = new Date(at).toISOString();
   t.title = new Date(at).toLocaleString();
   h.appendChild(t);
-  h.appendChild(chip(l));
+  lineChips(l, roomName).forEach(function (c) { h.appendChild(el("span", c.cls, c.text)); });
   m.appendChild(h);
   m.appendChild(el("div", "body", str(l.text)));
   r.appendChild(m);
