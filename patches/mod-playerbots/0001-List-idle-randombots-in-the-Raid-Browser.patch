@@ -1,4 +1,4 @@
-From b5e9a62bf7ba236ab452222adeab0b5bec231f7a Mon Sep 17 00:00:00 2001
+From bf33a531ac731bfb73ffacc05421cb167d3ab09b Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 11:05:08 -0400
 Subject: [PATCH 1/9] List idle randombots in the Raid Browser
@@ -19,10 +19,10 @@ RandomBotRaidBrowserListings and RandomBotRaidBrowserListTime.
  5 files changed, 171 insertions(+)
 
 diff --git a/conf/playerbots.conf.dist b/conf/playerbots.conf.dist
-index ae09e115..412e539d 100644
+index bfe9155b..fea2f78c 100644
 --- a/conf/playerbots.conf.dist
 +++ b/conf/playerbots.conf.dist
-@@ -762,6 +762,20 @@ Playerbots.RandomBotJoinLfg = 1
+@@ -777,6 +777,20 @@ Playerbots.RandomBotJoinLfg = 1
  # Default: 1 (enabled)
  Playerbots.RandomBotJoinLfgOutleveledExpansion = 1
  
@@ -40,22 +40,22 @@ index ae09e115..412e539d 100644
 +# Default: 1800 (30 minutes)
 +Playerbots.RandomBotRaidBrowserListTime = 1800
 +
- # Enable/Disable periodic online - offline of randombots to mimic the real-world scenario where not all players are online simultaneously
- # When enabled, randombots are randomly selected to go online or offline periodically from a larger set
- # Default: 0 (disabled, the set of online bots remains fixed)
+ # Percentage ratio of Alliance and Horde randombots
+ Playerbots.RandomBotAllianceRatio = 50
+ Playerbots.RandomBotHordeRatio = 50
 diff --git a/src/Bot/RandomPlayerbotMgr.cpp b/src/Bot/RandomPlayerbotMgr.cpp
-index 8f60b4f5..92af453e 100644
+index 4cbf200a..427a032f 100644
 --- a/src/Bot/RandomPlayerbotMgr.cpp
 +++ b/src/Bot/RandomPlayerbotMgr.cpp
-@@ -12,6 +12,7 @@
- #include "Cell.h"
+@@ -13,6 +13,7 @@
  #include "CellImpl.h"
  #include "ChannelMgr.h"
+ #include "Common.h"
 +#include "Containers.h"
  #include "DBCStores.h"
  #include "DBCStructure.h"
  #include "DatabaseEnv.h"
-@@ -41,8 +42,10 @@
+@@ -43,8 +44,10 @@
  #include "TravelMgr.h"
  #include "Unit.h"
  #include "World.h"
@@ -66,7 +66,7 @@ index 8f60b4f5..92af453e 100644
  #include <boost/thread/thread.hpp>
  #include <cstdlib>
  #include <ctime>
-@@ -395,6 +398,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 /*elapsed*/, bool /*minimal*/)
+@@ -445,6 +448,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 /*elapsed*/, bool /*minimal*/)
              sRandomPlayerbotMgr.CheckLfgQueue();
      }
  
@@ -76,7 +76,7 @@ index 8f60b4f5..92af453e 100644
      if (sPlayerbotAIConfig.RandomBotAutologin && sPlayerbotAIConfig.RandomBotPrintStatsInterval &&
          time(nullptr) > (printStatsTimer + sPlayerbotAIConfig.RandomBotPrintStatsInterval))
      {
-@@ -1348,6 +1354,147 @@ void RandomPlayerbotMgr::CheckLfgQueue()
+@@ -1510,6 +1516,147 @@ void RandomPlayerbotMgr::CheckLfgQueue()
      LOG_DEBUG("playerbots", "LFG Queue check finished");
  }
  
@@ -225,7 +225,7 @@ index 8f60b4f5..92af453e 100644
  {
      if (!PlayersCheckTimer || time(nullptr) > (PlayersCheckTimer + 60))
 diff --git a/src/Bot/RandomPlayerbotMgr.h b/src/Bot/RandomPlayerbotMgr.h
-index 5b150c52..6b1b465d 100644
+index 36b88971..bbe32a04 100644
 --- a/src/Bot/RandomPlayerbotMgr.h
 +++ b/src/Bot/RandomPlayerbotMgr.h
 @@ -16,6 +16,7 @@
@@ -244,7 +244,7 @@ index 5b150c52..6b1b465d 100644
      void CheckPlayers();
      void LogBattlegroundInfo();
  
-@@ -265,6 +267,8 @@ private:
+@@ -268,6 +270,8 @@ private:
      std::vector<uint32> GetBgBots(uint32 bracket);
      time_t BgCheckTimer;
      time_t LfgCheckTimer;
@@ -254,10 +254,10 @@ index 5b150c52..6b1b465d 100644
      time_t RealPlayerLastTimeSeen = 0;
      time_t DelayLoginBotsTimer;
 diff --git a/src/PlayerbotAIConfig.cpp b/src/PlayerbotAIConfig.cpp
-index 52578448..81892f45 100644
+index 68a66702..b5eef950 100644
 --- a/src/PlayerbotAIConfig.cpp
 +++ b/src/PlayerbotAIConfig.cpp
-@@ -284,6 +284,9 @@ bool PlayerbotAIConfig::Initialize()
+@@ -294,6 +294,9 @@ bool PlayerbotAIConfig::Initialize()
      RandomBotJoinLfg = sConfigMgr->GetOption<bool>("Playerbots.RandomBotJoinLfg", true);
      RandomBotJoinLfgOutleveledExpansion =
          sConfigMgr->GetOption<bool>("Playerbots.RandomBotJoinLfgOutleveledExpansion", true);
@@ -268,10 +268,10 @@ index 52578448..81892f45 100644
      RestrictHealerDPS = sConfigMgr->GetOption<bool>("Playerbots.HealerDPSMapRestriction", false);
      LoadList<std::vector<uint32>>(
 diff --git a/src/PlayerbotAIConfig.h b/src/PlayerbotAIConfig.h
-index 8c53a7e6..f927dae0 100644
+index 3ba1f905..7b21b072 100644
 --- a/src/PlayerbotAIConfig.h
 +++ b/src/PlayerbotAIConfig.h
-@@ -178,6 +178,9 @@ public:
+@@ -179,6 +179,9 @@ public:
      uint32 DisabledWithoutRealPlayerLoginDelay, DisabledWithoutRealPlayerLogoutDelay;
      bool RandomBotJoinLfg;
      bool RandomBotJoinLfgOutleveledExpansion;

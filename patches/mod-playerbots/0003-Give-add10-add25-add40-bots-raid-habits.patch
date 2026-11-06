@@ -1,4 +1,4 @@
-From 8a6e15fed6af51588515a4aa7b2fc8c5aaf54867 Mon Sep 17 00:00:00 2001
+From 7decec277b0bb5e36dbbbe1f037e6981ec03c996 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 14:34:42 -0400
 Subject: [PATCH 3/9] Give add10/add25/add40 bots raid habits
@@ -11,10 +11,10 @@ tank opens the pull and builds threat first.
  1 file changed, 10 insertions(+)
 
 diff --git a/src/Bot/PlayerbotMgr.cpp b/src/Bot/PlayerbotMgr.cpp
-index 441b5129..4606d426 100644
+index 46039cf1..28e37703 100644
 --- a/src/Bot/PlayerbotMgr.cpp
 +++ b/src/Bot/PlayerbotMgr.cpp
-@@ -671,6 +671,16 @@ void PlayerbotHolder::OnBotLogin(Player* const bot)
+@@ -676,6 +676,16 @@ void PlayerbotHolder::OnBotLogin(Player* const bot)
              factory.InitGlyphs(false);
              factory.InitEquipment(false);
              botAI->ResetStrategies(false);

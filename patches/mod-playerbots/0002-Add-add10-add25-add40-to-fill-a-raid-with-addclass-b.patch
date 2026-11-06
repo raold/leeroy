@@ -1,4 +1,4 @@
-From 010d5ff269f62db0ee33ddb058a8df1c74da6203 Mon Sep 17 00:00:00 2001
+From c26c0d20fcdbdcdb502b8a173bbb44279cfc9e61 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 11:41:58 -0400
 Subject: [PATCH 2/9] Add add10/add25/add40 to fill a raid with addclass bots
@@ -14,7 +14,7 @@ moves into PickAddclassCharacter() so both commands share it.
  2 files changed, 262 insertions(+), 35 deletions(-)
 
 diff --git a/src/Bot/PlayerbotMgr.cpp b/src/Bot/PlayerbotMgr.cpp
-index 0d599cc9..441b5129 100644
+index fa32c22c..46039cf1 100644
 --- a/src/Bot/PlayerbotMgr.cpp
 +++ b/src/Bot/PlayerbotMgr.cpp
 @@ -30,14 +30,17 @@
@@ -43,7 +43,7 @@ index 0d599cc9..441b5129 100644
  
  PlayerbotHolder::PlayerbotHolder() : PlayerbotAIBase(false) {}
  class PlayerbotLoginQueryHolder : public LoginQueryHolder
-@@ -650,6 +654,26 @@ void PlayerbotHolder::OnBotLogin(Player* const bot)
+@@ -655,6 +659,26 @@ void PlayerbotHolder::OnBotLogin(Player* const bot)
          factory.Randomize(false);
      }
  
@@ -70,7 +70,7 @@ index 0d599cc9..441b5129 100644
      // bots join World chat if not solo oriented
      if (bot->GetLevel() >= 10 && sRandomPlayerbotMgr.IsRandomBot(bot) && GET_PLAYERBOT_AI(bot) &&
          GET_PLAYERBOT_AI(bot)->GetGrouperType() != GrouperType::SOLO)
-@@ -943,6 +967,218 @@ bool PlayerbotMgr::HandlePlayerbotMgrCommand(ChatHandler* handler, char const* a
+@@ -948,6 +972,218 @@ bool PlayerbotMgr::HandlePlayerbotMgrCommand(ChatHandler* handler, char const* a
      return true;
  }
  
@@ -289,7 +289,7 @@ index 0d599cc9..441b5129 100644
  std::vector<std::string> PlayerbotHolder::HandlePlayerbotCommand(char const* args, Player* master)
  {
      std::vector<std::string> messages;
-@@ -951,6 +1187,7 @@ std::vector<std::string> PlayerbotHolder::HandlePlayerbotCommand(char const* arg
+@@ -956,6 +1192,7 @@ std::vector<std::string> PlayerbotHolder::HandlePlayerbotCommand(char const* arg
      {
          messages.push_back("usage: list/reload/tweak/self or add/addaccount/init/remove PLAYERNAME\n");
          messages.push_back("usage: addclass CLASSNAME [male|female|0|1]");
@@ -297,7 +297,7 @@ index 0d599cc9..441b5129 100644
          return messages;
      }
  
-@@ -960,7 +1197,9 @@ std::vector<std::string> PlayerbotHolder::HandlePlayerbotCommand(char const* arg
+@@ -965,7 +1202,9 @@ std::vector<std::string> PlayerbotHolder::HandlePlayerbotCommand(char const* arg
  
      if (!cmd)
      {
@@ -308,7 +308,7 @@ index 0d599cc9..441b5129 100644
          return messages;
      }
  
-@@ -1128,6 +1367,21 @@ std::vector<std::string> PlayerbotHolder::HandlePlayerbotCommand(char const* arg
+@@ -1133,6 +1372,21 @@ std::vector<std::string> PlayerbotHolder::HandlePlayerbotCommand(char const* arg
          return messages;
      }
  
@@ -330,7 +330,7 @@ index 0d599cc9..441b5129 100644
      if (!strcmp(cmd, "addclass"))
      {
          if (sPlayerbotAIConfig.AddClassCommand == 0 && !master->CanBeGameMaster())
-@@ -1210,40 +1464,7 @@ std::vector<std::string> PlayerbotHolder::HandlePlayerbotCommand(char const* arg
+@@ -1215,40 +1469,7 @@ std::vector<std::string> PlayerbotHolder::HandlePlayerbotCommand(char const* arg
              messages.push_back("Your level is too low to summon Deathknight");
              return messages;
          }

@@ -1,4 +1,4 @@
-From ea1b7de1351ba5b1c0557ca86a10c5df2657bbc9 Mon Sep 17 00:00:00 2001
+From d464806fec11b49344ff3c760439cbd1c2752d27 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 23:31:06 -0400
 Subject: [PATCH 7/9] Keep pinned bots in place when revived
@@ -10,10 +10,10 @@ FindCorpseAction calls Revive for a masterless ghost after five deaths; Revive r
  2 files changed, 26 insertions(+), 8 deletions(-)
 
 diff --git a/src/Bot/RandomPlayerbotMgr.cpp b/src/Bot/RandomPlayerbotMgr.cpp
-index 1686f89f..b3d15e0f 100644
+index 2ec5e462..009eb506 100644
 --- a/src/Bot/RandomPlayerbotMgr.cpp
 +++ b/src/Bot/RandomPlayerbotMgr.cpp
-@@ -1872,11 +1872,7 @@ bool RandomPlayerbotMgr::ProcessPinnedBot(Player* bot)
+@@ -2026,11 +2026,7 @@ bool RandomPlayerbotMgr::ProcessPinnedBot(Player* bot)
          if (GetEventValue(botId, "revive"))
              return false;
  
@@ -26,7 +26,7 @@ index 1686f89f..b3d15e0f 100644
          return true;
      }
  
-@@ -1897,10 +1893,31 @@ bool RandomPlayerbotMgr::ProcessPinnedBot(Player* bot)
+@@ -2051,10 +2047,31 @@ bool RandomPlayerbotMgr::ProcessPinnedBot(Player* bot)
      return false;
  }
  
@@ -59,7 +59,7 @@ index 1686f89f..b3d15e0f 100644
      SetEventValue(bot, "dead", 0, 0);
      SetEventValue(bot, "revive", 0, 0);
 diff --git a/src/Bot/RandomPlayerbotMgr.h b/src/Bot/RandomPlayerbotMgr.h
-index 67dcc8e3..b39490ed 100644
+index 11041b7e..75830afc 100644
 --- a/src/Bot/RandomPlayerbotMgr.h
 +++ b/src/Bot/RandomPlayerbotMgr.h
 @@ -137,9 +137,9 @@ public:
@@ -75,7 +75,7 @@ index 67dcc8e3..b39490ed 100644
      uint32 SetPinnedBots(std::unordered_set<ObjectGuid::LowType> const& bots, bool keep, bool online);
      bool IsPinned(ObjectGuid::LowType bot) const;  // any thread
      void Randomize(Player* bot);
-@@ -307,6 +307,7 @@ private:
+@@ -313,6 +313,7 @@ private:
      mutable std::mutex _pinnedBotsLock;
      void LoginPinnedBots();
      bool ProcessPinnedBot(Player* bot);

@@ -1,4 +1,4 @@
-From e36fca36f356f2e439312ea39320b941d35261e3 Mon Sep 17 00:00:00 2001
+From 41386b71b6ec92882fffaf06b540c589adc0364f Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Sat, 31 Oct 2026 13:18:19 -0400
 Subject: [PATCH 8/9] Keep pinned bots from whispering canned status lines
@@ -29,10 +29,10 @@ index 0ec911dd..d386be9c 100644
      return true;
  }
 diff --git a/src/Bot/PlayerbotAI.cpp b/src/Bot/PlayerbotAI.cpp
-index 5d320280..d0910fa5 100644
+index 3aabfccb..28fc21c4 100644
 --- a/src/Bot/PlayerbotAI.cpp
 +++ b/src/Bot/PlayerbotAI.cpp
-@@ -530,12 +530,16 @@ void PlayerbotAI::UpdateAIGroupMaster()
+@@ -532,12 +532,16 @@ void PlayerbotAI::UpdateAIGroupMaster()
              {
                  botAI->ChangeStrategy("+follow", BOT_STATE_NON_COMBAT);
  
