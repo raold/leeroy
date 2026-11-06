@@ -142,6 +142,30 @@ def test_a_pick_needs_a_ready_set_of_that_member(store, data):
     assert current(store, 101) is None and picks(store.conn) == []
 
 
+def test_a_pick_from_a_set_already_decided_is_refused_unless_it_holds_the_photo(store, data):
+    """Else undoing that pick would put a set he had passed, or moved on from, back among the
+    waiting ones."""
+    ready(store, data, 101, 1)
+    queue_more(store, 101, now=1.0)  # set 1 passed
+    ready(store, data, 101, 2)
+    with pytest.raises(SelfieError, match="^set 1 is no longer waiting for a choice$"):
+        pick(store, 101, 1, 0, source="console", now=2.0)
+    assert current(store, 101) is None and picks(store.conn) == []
+    pick(store, 101, 2, 0, source="console", now=3.0)
+    queue_more(store, 101, now=4.0)  # set 2 holds the photo: it stays picked
+    ready(store, data, 101, 3)
+    c = pick(store, 101, 3, 1, source="console", now=5.0)
+    with pytest.raises(SelfieError, match="^set 2 is no longer waiting for a choice$"):
+        pick(store, 101, 2, 1, source="console", now=6.0)
+    d = pick(store, 101, 3, 2, source="console", now=7.0)  # another of the photo's own set
+    u = undo(store, d, source="console", now=8.0)
+    assert current(store, 101) == Current(101, 3, 1, u)
+    undo(store, c, source="console", now=9.0)  # set 2's photo again; set 3 waits
+    assert _decided(store, 101) == {1: "passed", 2: "picked", 3: None}
+    assert pick(store, 101, 2, 3, source="console", now=10.0) is not None  # its own set now
+    assert pick(store, 101, 3, 0, source="console", now=11.0) is not None  # and a waiting one
+
+
 def test_pick_undo_and_undo_of_an_undo(store, data):
     ready(store, data, 101, 1)
     a = pick(store, 101, 1, 0, source="console", now=2.0)

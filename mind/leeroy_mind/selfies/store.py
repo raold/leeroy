@@ -10,7 +10,7 @@ photo is in force.
   as the tuning's does, and is itself undoable.
 
 Each writer runs in `store.transaction()`. A refusal is SelfieError, its text the answer. The
-mind writes; the console reads (`picks` takes a plain connection for that)."""
+mind writes; the console reads (`picks` and `counts` take a plain connection for that)."""
 from dataclasses import dataclass
 
 SOURCES = ("console", "cli")
@@ -184,16 +184,35 @@ def current(store, guid: int) -> Current | None:
         return _current(store.conn, guid)
 
 
+def photos(store) -> dict[int, Current]:
+    """Every member's photo in force, by guid."""
+    return {r[0]: Current(*tuple(r)) for r in _read(
+        store, "SELECT guid, set_no, idx, pick FROM selfie_current ORDER BY guid")}
+
+
+def counts(conn) -> dict[str, int]:
+    """Members with a photo in force, members with a set waiting for his choice, and sets
+    queued for the night. Reads any connection, the console's read-only one too."""
+    one = lambda sql: conn.execute(sql).fetchone()[0]  # noqa: E731
+    return {"chosen": one("SELECT count(*) FROM selfie_current"),
+            "waiting": one("SELECT count(DISTINCT guid) FROM selfie_set WHERE status='ready' "
+                           "AND decided IS NULL"),
+            "queued": one("SELECT count(*) FROM selfie_set WHERE status='queued'")}
+
+
 # -- picks and undos ----------------------------------------------------------------------------
 
 def pick(store, guid: int, set_no: int, idx: int, *, source: str, now: float) -> int | None:
     """Candidate `idx` of a ready set becomes the member's photo; the change's id, or None
-    when it already is the photo (nothing written)."""
+    when it already is the photo (nothing written). The set must be waiting for his choice or
+    hold the photo in force: a set he passed, or picked from and moved on, is refused, or an
+    undo of this pick would put it back among the waiting ones."""
     _source(source)
     with store.transaction():
         conn = store.conn
-        if conn.execute("SELECT 1 FROM selfie_set WHERE guid=? AND set_no=? AND status='ready'",
-                        (guid, set_no)).fetchone() is None:
+        row = conn.execute("SELECT decided FROM selfie_set WHERE guid=? AND set_no=? AND "
+                           "status='ready'", (guid, set_no)).fetchone()
+        if row is None:
             raise SelfieError(f"set {set_no} is not ready for this member")
         if conn.execute("SELECT 1 FROM selfie_candidate WHERE guid=? AND set_no=? AND idx=?",
                         (guid, set_no, idx)).fetchone() is None:
@@ -202,6 +221,8 @@ def pick(store, guid: int, set_no: int, idx: int, *, source: str, now: float) ->
         before = None if was is None else (was.set_no, was.idx)
         if before == (set_no, idx):
             return None
+        if row["decided"] is not None and (was is None or was.set_no != set_no):
+            raise SelfieError(f"set {set_no} is no longer waiting for a choice")
         change = conn.execute(
             "INSERT INTO selfie_pick(ts, guid, source, before_set, before_idx, after_set, "
             "after_idx) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -255,6 +276,12 @@ def undo(store, pick_id: int, *, source: str, now: float) -> int:
         if restored is not None:
             _decide(conn, guid, restored[0], "picked")
         return change
+
+
+def member_of(store, change: int) -> int | None:
+    """The member change #`change` was made for; None when there is no such change."""
+    rows = _read(store, "SELECT guid FROM selfie_pick WHERE id=?", (change,))
+    return rows[0][0] if rows else None
 
 
 def picks(conn, guid: int | None = None, limit: int = 30) -> list[dict]:
