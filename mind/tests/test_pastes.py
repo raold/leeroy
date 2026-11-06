@@ -34,3 +34,16 @@ def test_named_and_focus_rows():
     assert focus_row(only, random.Random(1)) is only[0]
     assert PASTE_BURST_S == 60.0 and PASTE_SETTLE_S == 5.0
     assert PasteBurst("guild", 0, 100.0, rows).rows is rows
+
+
+def test_named_strips_realm_suffix_and_trailing_punctuation():
+    names = {101: "Zan", 102: "Testmage"}
+    rows = [row(1, "1. Zan-Quillonrealm: 5000 (1.0, 1%)"), row(2, "2. Testmage, 400 (1.0, 1%)")]
+    assert named(rows, names) == [101, 102]
+
+
+def test_named_reads_rbs_and_flask_rows():
+    names = {101: "Zan", 102: "Testmage", 103: "Quillon"}
+    rows = [row(1, "RBS:: missing flask: Zan"), row(2, "<Flask of the Frost Wyrm> Testmage-Realm,")]
+    assert named(rows, names) == [101, 102]
+    assert named([row(3, "RBS:: missing flask: Nobody")], names) == []

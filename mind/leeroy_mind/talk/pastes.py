@@ -27,16 +27,51 @@ class PasteBurst:
     rows: list[ChatLineRow]
 
 
-def named(rows: Sequence[ChatLineRow], names: dict[int, str]) -> list[int]:
-    """Members named on a numbered row, in row order, each once."""
-    by_name = {n.casefold(): g for g, n in names.items()}
+_RBS_RE = re.compile(r"^\s*RBS::[^:]*:\s*(.+)$", re.I)
+_FLASK_RE = re.compile(r"^\s*<(?:Flask|Food)[^>]*>\s*(.+)$", re.I)
+
+
+def _clean(token: str) -> str:
+    """A captured name without trailing punctuation or a "-Realm" suffix."""
+    return token.strip(":,.;").split("-")[0].strip(":,.;").casefold()
+
+
+def row_members(row: ChatLineRow, by_name: dict[str, int]) -> list[int]:
+    """The members one row names: the name of a numbered row, or the names after an RBS or
+    Flask row's marker."""
+    m = NUMBERED_RE.match(row.text)
+    if m:
+        tokens = [m.group(1)]
+    else:
+        m = _RBS_RE.match(row.text) or _FLASK_RE.match(row.text)
+        tokens = re.split(r"[\s,]+", m.group(1)) if m else []
     out: list[int] = []
-    for r in rows:
-        m = NUMBERED_RE.match(r.text)
-        guid = by_name.get(m.group(1).casefold()) if m else None
+    for t in tokens:
+        guid = by_name.get(_clean(t))
         if guid is not None and guid not in out:
             out.append(guid)
     return out
+
+
+def _by_name(names: dict[int, str]) -> dict[str, int]:
+    return {n.casefold(): g for g, n in names.items()}
+
+
+def named(rows: Sequence[ChatLineRow], names: dict[int, str]) -> list[int]:
+    """Members named on a row, in row order, each once."""
+    by_name = _by_name(names)
+    out: list[int] = []
+    for r in rows:
+        for guid in row_members(r, by_name):
+            if guid not in out:
+                out.append(guid)
+    return out
+
+
+def row_naming(rows: Sequence[ChatLineRow], guid: int, names: dict[int, str]) -> ChatLineRow | None:
+    """The first row that names `guid`."""
+    by_name = _by_name(names)
+    return next((r for r in rows if guid in row_members(r, by_name)), None)
 
 
 def focus_row(rows: Sequence[ChatLineRow], rng: random.Random) -> ChatLineRow:

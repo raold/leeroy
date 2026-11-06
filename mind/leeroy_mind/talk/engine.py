@@ -39,7 +39,9 @@ from leeroy_mind.talk.bits import BitScheduler, birthday_line, is_birthday_bit
 from leeroy_mind.talk.budget import BurstBudget, BurstPlan, DayPhase, day_phase
 from leeroy_mind.talk.channels import choose_channel
 from leeroy_mind.talk.facts import LibraryFacts
+from leeroy_mind.talk import pastes
 from leeroy_mind.talk.guards import Guards
+from leeroy_mind.talk.pastes import PASTE_BURST_S, PASTE_SETTLE_S, PasteBurst, is_addon_row
 from leeroy_mind.talk.filters import holds, word_counts
 from leeroy_mind.talk.pipeline import (FOLLOW_SOURCES, KEEPER, NOBODY, NOBODY_WHO, THEIRS,
                                        TurnMeta, _asks, _names_list, chain_base, log,
@@ -70,6 +72,8 @@ COMMAND_CHANNELS = frozenset({"party", "raid", "raid_warning"})
 # Where a line of his can push back on a member (fix wave G6): every reply channel but /say.
 PUSHBACK_CHANNELS = frozenset({"guild", "officer", "party", "raid", "whisper"})
 REPLY_FIRST_S, REPLY_NEXT_S = (1.0, 4.0), (2.0, 6.0)
+PASTE_TEXT = ("{called} pasted an addon's output in chat. React to this one line of it in your own "
+              "words, in one short line, and leave the rest.")
 OPEN_S, CONTINUE_S = (0.0, 3.0), (4.0, 15.0)
 STATE_STEP_S = 600.0
 HUMAN_ACTIVE_S = 600.0
@@ -147,6 +151,7 @@ class TalkEngine(Reactions):
         self._init_pipeline(now)
         self._init_reactions()
         self._sources: list[TurnSource] = []
+        self._pastes: dict[tuple[str, int], PasteBurst] = {}
         self._session_at = self._states_at = now
         self._late_night = ""  # the night the late-hour whisper trigger last fired
         # (active memories, how many of them hold each word): _rare_words
@@ -231,6 +236,9 @@ class TalkEngine(Reactions):
         if row.channel in COMMAND_CHANNELS and looks_like_bot_command(row.text):
             return
         now = self.clock.now()
+        if is_addon_row(row.text):
+            self._on_paste(row, reply_to, now)
+            return
         if row.from_guid and row.from_guid != self.human.guid:
             self.set_human(row.from_guid)
         hg = self.human.guid
@@ -238,11 +246,7 @@ class TalkEngine(Reactions):
                          from_human=True)
         self._touch_talk(now)
         whisper = reply_to == "whisper"
-        audience = {row.to_guid} if whisper else self.world.audience(
-            reply_to, from_guid=hg, to_guid=row.to_guid, zone=row.zone)
-        cands = [g for g in self._candidates(audience, hearable=False)
-                 if self.raid.allows(g, TurnKind.REPLY_HUMAN, now)
-                 and not (reply_to == "say" and self._is_dead(g, now))]
+        audience, cands = self._reply_candidates(row, reply_to, now)
         if not cands:  # liveops M5: a line nobody answers says why in the log
             log.info("reply_skipped: line=%d reason=no_candidates channel=%s audience=%d "
                      "online=%d", row.id, reply_to, len(audience), len(self.world.online))
@@ -340,6 +344,68 @@ class TalkEngine(Reactions):
         for _, meta in items:
             meta.timing_origin = timing_origin
         self._queue(items)
+
+    def _reply_candidates(self, row: ChatLineRow, reply_to: str, now: float
+                          ) -> tuple[set[int] | list[int], list[int]]:
+        """Who heard his line on `reply_to` (a whisper: only the one it went to) and the members
+        among them who may answer it now."""
+        whisper = reply_to == "whisper"
+        audience = {row.to_guid} if whisper else self.world.audience(
+            reply_to, from_guid=self.human.guid, to_guid=row.to_guid, zone=row.zone)
+        cands = [g for g in self._candidates(audience, hearable=False)
+                 if self.raid.allows(g, TurnKind.REPLY_HUMAN, now)
+                 and not (reply_to == "say" and self._is_dead(g, now))]
+        return audience, cands
+
+    def _on_paste(self, row: ChatLineRow, reply_to: str, now: float) -> None:
+        """An addon paste row: it joins the burst on its channel that began less than
+        PASTE_BURST_S ago and plans nothing, or starts a burst whose one answer is planned
+        after PASTE_SETTLE_S."""
+        key = (reply_to, row.to_guid)
+        burst = self._pastes.get(key)
+        if burst is not None and now - burst.started < PASTE_BURST_S:
+            burst.rows.append(row)
+            return
+        burst = self._pastes[key] = PasteBurst(reply_to, row.to_guid, now, [row])
+        self._spawn(self._answer_paste(burst))
+
+    async def _answer_paste(self, burst: PasteBurst) -> None:
+        """One reply to a whole paste burst, from a member named in it (else anyone who may
+        answer), about the row naming them (else its top or bottom line)."""
+        await self.clock.sleep(PASTE_SETTLE_S)
+        now = self.clock.now()
+        rows = list(burst.rows)
+        first = rows[0]
+        reply_to, whisper = burst.channel, burst.channel == "whisper"
+        _, cands = self._reply_candidates(first, reply_to, now)
+        if not cands:
+            log.info("reply_skipped: line=%d reason=no_candidates channel=%s paste=1", first.id,
+                     reply_to)
+            return
+        names = {g: self.world.members[g].name for g in cands if g in self.world.members}
+        hit = [g for g in pastes.named(rows, names) if g in cands] if not whisper else []
+        pool = hit or cands
+        focus = pastes.focus_row(rows, self.rng)
+        ctx = self._context(now, topic_words([focus.text]))
+        weights, _ = self._weigh(pool, last=self.human.guid, ctx=ctx, reply=True)
+        picked = pick_speakers(weights, 1, self.rng)
+        if not picked:
+            return
+        speaker = picked[0]
+        line = (pastes.row_naming(rows, speaker, names) or focus) if hit else focus
+        channel = choose_channel(TurnKind.REPLY_HUMAN, speaker=speaker, world=self.world,
+                                 raid=self.raid, now=now, rng=self.rng, reply_to=reply_to)
+        if channel is None:
+            log.info("reply_skipped: line=%d reason=no_channel guid=%d", first.id, speaker)
+            return
+        turn = Turn(kind=TurnKind.REPLY_HUMAN, speaker=speaker, channel=channel,
+                    to_guid=first.to_guid, addressee=self.human.guid, trigger_line=line.id,
+                    instruction=PASTE_TEXT.format(called=self.human.called),
+                    delay=self.rng.uniform(*REPLY_FIRST_S) * self._effects(speaker).delay_mult)
+        meta = TurnMeta(f"paste-{first.id}", answers_human=True, whisper_reply=whisper,
+                        why="reply:paste")
+        log.info("paste_burst: channel=%s rows=%d guid=%d", reply_to, len(rows), speaker)
+        self._queue([(turn, meta)])
 
     def _mid_raid(self) -> str | None:
         """His group's channel ("raid" or "party") when he is in a formed raid or leads his
