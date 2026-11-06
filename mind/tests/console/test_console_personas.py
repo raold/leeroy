@@ -380,3 +380,12 @@ def test_the_page_has_the_personas_tab_and_no_way_to_change_a_persona():
     page = resources.files("leeroy_mind.console").joinpath("page.html").read_text("utf-8")
     assert 'id="tab-personas" class="tab mindtab"' in page and 'api("/api/personas")' in page
     assert 'post("/api/persona' not in page and "placeholder" not in page
+
+
+def test_a_photo_kind_write_is_shown_as_the_photo_pass(cast, data):
+    def photo_pass(st):  # as the night's photo-kind pass commits a persona with its unit
+        _save(st, replace(load_persona(st, 301), photo=ProfilePhoto(**PHOTO)), "generated",
+              NOW - 100 + 0.4)
+    commit_unit(cast, "2026-10-29", "photo", "301", photo_pass, now=NOW - 100)
+    _, by = _roster(data)
+    assert by[301]["persona"]["by"] == "photo" and by[305]["persona"]["by"] == "night"

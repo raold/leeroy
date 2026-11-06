@@ -72,6 +72,7 @@ UNIT_CALLS: dict[str, dict[str, float]] = {
     "breaks": {"json": 1},                     # 20 s
     "critic": {"json": 1.1},                   # one call per sampled member (PR23): 22 s
     "enrich": {"think": 1, "json": 1},         # 110 s
+    "photo": {"json": 1},                      # one call, no think pass: 20 s
     # Sundays: 36 probes, about 25 quiz questions and 80 interview asks, then the quiz judge,
     # consistency and distinctiveness: about 2,400 s
     "eval": {"live": 141, "json": 77},
@@ -87,7 +88,7 @@ MEASURE_MIN = 3     # ...once there are 3 of them
 COUNTERS: dict[str, Callable[["NightContext"], int]] = {}
 # Optional extensions must be admitted on the particular runner before budgeting.
 # Core counters may belong to substages, so their historical counting is unchanged.
-EXTENSION_STAGES = frozenset({"coach", "realm"})
+EXTENSION_STAGES = frozenset({"coach", "realm", "photo"})
 
 
 def register_counter(stage: str, fn: Callable[["NightContext"], int]) -> None:

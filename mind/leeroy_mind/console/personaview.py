@@ -33,6 +33,7 @@ from leeroy_mind.nightly.enrich import STAGE as LOOKS_STAGE  # the looks pass's 
 from leeroy_mind.nightly.mood import octant
 from leeroy_mind.nightly.motives import TRAITS
 from leeroy_mind.personas.schema import persona_from_dict, persona_to_dict
+from leeroy_mind.selfies.kind import STAGE as PHOTO_STAGE  # the photo-kind pass's stage
 
 from .feed import human_guid
 from .raidview import people
@@ -63,7 +64,7 @@ def _persona(js):
 
 
 def _writers(conn, have) -> tuple[dict, dict]:
-    """((guid, ts) -> stance or undo, guid -> [its looks pass units' times]): what placed a
+    """((guid, ts) -> stance or undo, guid -> [(its looks or photo pass units' times, stage)]): what placed a
     generated persona write."""
     moves, looks = {}, {}
     if "persona_ledger" in have:
@@ -71,10 +72,10 @@ def _writers(conn, have) -> tuple[dict, dict]:
                               "WHERE kind IN ('stance_band', 'undo')"):
             moves[(r["guid"], r["ts"])] = "stance" if r["kind"] == "stance_band" else "undo"
     if "night_step" in have:
-        for r in conn.execute("SELECT unit, finished FROM night_step WHERE stage = ?",
-                              (LOOKS_STAGE,)):
+        for r in conn.execute("SELECT unit, finished, stage FROM night_step WHERE stage IN (?, ?)",
+                              (LOOKS_STAGE, PHOTO_STAGE)):
             if str(r["unit"]).isdigit():
-                looks.setdefault(int(r["unit"]), []).append(r["finished"])
+                looks.setdefault(int(r["unit"]), []).append((r["finished"], r["stage"]))
     return moves, looks
 
 
@@ -83,8 +84,9 @@ def _by(guid, source, updated, moves, looks) -> str:
         return source  # seed or owner
     if (guid, updated) in moves:
         return moves[(guid, updated)]
-    if any(t <= updated <= t + LOOKS_S for t in looks.get(guid, ())):
-        return "night"
+    for t, stage in looks.get(guid, ()):
+        if t <= updated <= t + LOOKS_S:
+            return PHOTO_STAGE if stage == PHOTO_STAGE else "night"
     return "generator"
 
 
