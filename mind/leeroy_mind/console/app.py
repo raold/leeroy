@@ -31,7 +31,8 @@ run nothing else.
     GET  /api/persona  ?guid=<guid>: one member in detail, its persona card summary, ties,
                        memories by kind and persona ledger (personaview.member_view)
     POST /api/voice    {"type": "join", "channel"} | {"type": "volume", "guid", "db"} |
-                       {"type": "mute", "guid", "on"}: on to the voice service
+                       {"type": "mute", "guid", "on"} | {"type": "self", "mute", "deafen"}: on to the
+                       voice service
     POST /api/control  {"service": "mind"|"voice", "action": "start"|"restart"|"stop",
                        "confirm": bool}: a stop or restart while the owner is in game, or while
                        nobody can tell, is answered 409 with a question until it is confirmed
