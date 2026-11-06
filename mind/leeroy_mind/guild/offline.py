@@ -21,13 +21,15 @@ from .protocol import StartOfflineRaid
 from .raid_night import RaidRun
 from .raids import split_key
 from .session import RaidPlan, RaidSession
-from .store import attendance_counts, bench_streaks, last_run, offline_raid_between
+from .store import attendance_counts, bench_streaks, last_run
 
 
 log = logging.getLogger(__name__)
 HOLDER = "offline_raid"
-MAX_ATTEMPTS = 5
+MAX_ATTEMPTS = 8
 RETRY_S = 60
+BUSY_RETRY_S = 15 * 60
+NO_FRESH_RAID = "setup:starting:no_fresh_encounters"
 CLEANUP_GRACE_S = 60
 INPUT_LIMIT = 256
 OWNED_KEY = "guild:offline:owned"
@@ -59,8 +61,26 @@ def is_due(now: datetime, *, human_online: bool, last_logout: datetime | None,
     return elapsed >= min_away_min * 60
 
 
-def next_raid_key(rotation, last_run: dict[str, float]) -> str:
-    """Never-run first, then oldest; the configured order resolves ties."""
+def retry_after(error: str) -> int | None:
+    """Seconds before a refused start may be sent again today; None when it would be refused again.
+
+    The driver logs in within seconds. A busy runner, or a cast body that is in combat, dead,
+    travelling, in a dungeon or held by the Realm or training, is usually free within minutes.
+    Configuration, map and roster refusals would repeat, so they end the day.
+    """
+    if error == "driver_pending":
+        return RETRY_S
+    if (error in {"busy", "human_online", "training_commands_pending", "training_journal_pending"}
+            or error.startswith(("busy:", "leader_unavailable:", "in_instance:"))):
+        return BUSY_RETRY_S
+    return None
+
+
+def next_raid_key(rotation, last_run: dict[str, float], skip=()) -> str:
+    """Never-run first, then oldest; the configured order resolves ties.
+
+    Raids in `skip` proved today that they have no fresh boss to fight.
+    """
     keys = []
     for key in rotation:
         raid, size, heroic = split_key(key)
@@ -71,6 +91,9 @@ def next_raid_key(rotation, last_run: dict[str, float]) -> str:
             keys.append(canonical)
     if not keys:
         raise ValueError("offline rotation is empty")
+    keys = [key for key in keys if key not in skip]
+    if not keys:
+        raise ValueError("no offline raid left to try today")
 
     def rank(key):
         value = last_run.get(key)
@@ -135,15 +158,16 @@ class OfflineRaids:
         now = self.ports.clock.local()
         begin = now.replace(hour=0, minute=0, second=0, microsecond=0)
         end = begin + timedelta(days=1)
-        # Use the boolean helper for the common one-per-day case, count for the
-        # configurable higher quota; both retain local calendar-day boundaries.
-        if self.cfg.offline_raids_per_day == 1:
-            quota = offline_raid_between(self.ports.conn, begin.timestamp(), end.timestamp())
-        else:
-            quota = self.ports.conn.execute("SELECT COUNT(*) FROM guild_raid WHERE offline=1 AND started>=? AND started<?",
-                                            (begin.timestamp(), end.timestamp())).fetchone()[0] >= self.cfg.offline_raids_per_day
+        # Local calendar-day boundaries. A run whose setup proved its raid had no
+        # fresh boss never fought, so it gives its place to the next raid.
         day = self._day_state()
-        quota = quota or day.get("accepted", 0) >= self.cfg.offline_raids_per_day
+        skipped = day.get("skipped", [])
+        void = [entry["raid_id"] for entry in skipped if type(entry.get("raid_id")) is int]
+        held = self.ports.conn.execute(
+            "SELECT COUNT(*) FROM guild_raid WHERE offline=1 AND started>=? AND started<? "
+            f"AND raid_id NOT IN ({','.join('?' * len(void))})",
+            (begin.timestamp(), end.timestamp(), *void)).fetchone()[0]
+        quota = max(held, day.get("accepted", 0) - len(skipped)) >= self.cfg.offline_raids_per_day
         active = self.ports.conn.execute("SELECT 1 FROM guild_raid WHERE ended IS NULL").fetchone() is not None
         return (not day["blocked"] and day["attempts"] < MAX_ATTEMPTS
                 and self.ports.clock.now() >= day["next_try"]
@@ -153,7 +177,8 @@ class OfflineRaids:
                            min_away_min=self.cfg.offline_min_away_min, raid_active=active))
 
     def _plan(self):
-        raid, size, heroic = split_key(next_raid_key(self.cfg.offline_rotation, last_run(self.ports.conn)))
+        skip = {entry["raid"] for entry in self._day_state().get("skipped", [])}
+        raid, size, heroic = split_key(next_raid_key(self.cfg.offline_rotation, last_run(self.ports.conn), skip))
         cast = {g: m for g, m in self.ports.cast().items() if g != self.ports.human_guid}
         candidates = candidates_from(cast, {g: self.ports.persona(g) for g in cast},
                                      bench_streaks(self.ports.conn, cast),
@@ -383,11 +408,14 @@ class OfflineRaids:
                 await self._release()
             elif ack.ok is not True:
                 self._owned["phase"] = "rejected"
-                retry = ack.error in {"driver_pending", "busy"} and not self._owned["cancelled"]
                 refused = str(ack.error or "")[:REASON_LIMIT]
-                log.info("offline_raid_refused error=%s retry=%s", refused, retry)
-                self._update_day(blocked=not retry or self._day_state(self._owned["day"])["attempts"] >= MAX_ATTEMPTS,
-                                 refused=refused)
+                delay = None if self._owned["cancelled"] else retry_after(str(ack.error or ""))
+                log.info("offline_raid_refused error=%s retry=%s", refused, delay is not None)
+                changes = dict(blocked=delay is None or self._day_state(self._owned["day"])["attempts"] >= MAX_ATTEMPTS,
+                               refused=refused)
+                if delay is not None:
+                    changes["next_try"] = self.ports.clock.now() + delay
+                self._update_day(**changes)
                 await self._release()
             else:
                 self._owned["phase"] = "accepted"
@@ -498,10 +526,26 @@ class OfflineRaids:
                     await self._notify("on_" + kind, ev)
             self._inputs.popleft()
 
+    def _no_fresh_raid(self, terminal):
+        """Setup proved this raid's copy had no fresh boss before any boss was fought."""
+        return (terminal["state"] == "failed" and terminal["reason"] == NO_FRESH_RAID
+                and not self._owned["started"] and not self._owned.get("running_seen")
+                and not terminal["kills"] and not terminal["wipes"])
+
+    def _skip_raid(self, raid_id):
+        day = self._day_state(self._owned["day"])
+        skipped = day.get("skipped", [])
+        if not any(entry["id"] == self._owned["id"] for entry in skipped):
+            plan = RaidPlan(**self._owned["plan"])
+            key = f"{plan.raid_key}{plan.size}{'h' if plan.heroic else ''}"
+            skipped = [*skipped, dict(id=self._owned["id"], raid=key, raid_id=raid_id)]
+        self._update_day(skipped=skipped, next_try=self.ports.clock.now() + RETRY_S)
+
     async def _finish(self):
         terminal = self._owned.get("terminal")
         if terminal is None:
             return
+        no_fresh = self._no_fresh_raid(terminal)
         # A restart may retain the terminal receipt but not the in-memory inbox.
         if self.session is None:
             from .protocol import Job, JobSkip
@@ -541,9 +585,13 @@ class OfflineRaids:
                 await self._notify("on_end", terminal["reason"] or terminal["state"])
         finally:
             await self._release()
-        await self._memories()
-        if terminal["state"] == "failed":
-            self._update_day(blocked=True)
+        if no_fresh:
+            # Nobody fought: no raid memory, and the day's one raid is still to come.
+            self._skip_raid(self.session.raid_id if self.session is not None else None)
+        else:
+            await self._memories()
+            if terminal["state"] == "failed":
+                self._update_day(blocked=True)
         self._owned["phase"] = "complete"
         self._save()
         self.session = self.run = None
