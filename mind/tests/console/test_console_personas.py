@@ -19,7 +19,7 @@ from leeroy_mind.nightly.attraction import set_stance
 from leeroy_mind.nightly.growth import undo
 from leeroy_mind.nightly.store import commit_unit, enqueue_review, ledger_add
 from leeroy_mind.personas.io import load_persona, save_persona
-from leeroy_mind.personas.schema import Appearance
+from leeroy_mind.personas.schema import Appearance, ProfilePhoto
 from leeroy_mind.protocol import Member
 from leeroy_mind.storage.rows import Relationship
 from leeroy_mind.wow import CLASSES, RACES
@@ -82,7 +82,8 @@ def cast(store):
                        eye_colour="green", face=("glasses",), at_the_pc="a grey hoodie")
 
     def looks_pass(st):  # as the night's looks pass commits a persona with its unit
-        _save(st, replace(load_persona(st, 305), appearance=looks), "generated", NOW - DAY + 0.4)
+        _save(st, replace(load_persona(st, 305), appearance=looks,
+                                     photo=ProfilePhoto(**PHOTO)), "generated", NOW - DAY + 0.4)
     commit_unit(store, "2026-10-28", personaview.LOOKS_STAGE, "305", looks_pass, now=NOW - DAY)
     with store.transaction():
         store.conn.execute("INSERT INTO persona_core(guid, json, card, card_tokens, version, "
@@ -150,6 +151,10 @@ def _digest(path: Path) -> str:
                    for p in sorted(path.parent.glob(path.name + "*")))
 
 
+PHOTO = {"kind": "snapshot", "framing": "upper_body", "setting": "on the deck of a small boat",
+         "outfit": "orange rain bib over a grey hoodie", "expression": "squinting into the wind"}
+
+
 def _roster(data):
     view = feed.read(data / "mind.db", personaview.roster_view, now=NOW)
     return view, {m["guid"]: m for m in view["members"]}
@@ -212,6 +217,7 @@ def test_a_member_in_detail_shows_the_card_summary_and_nothing_private(cast, dat
     assert card["big_five"]["extraversion"]["score"] == 7
     assert card["typing"]["case"] == "lower" and card["game"]["motivation"] == "achiever"
     assert card["play"]["raid_role"] == "tank" and card["appearance"] is None
+    assert card["photo"] is None
     assert card["identity"] == {"age": 34, "player_gender": "male", "region": "UK"}
     assert card["romance"] == {"stance": "none", "style": None, "jealousy_mode": None}
     ties = view["member"]["ties"]["top"]
@@ -228,6 +234,8 @@ def test_a_member_in_detail_shows_the_card_summary_and_nothing_private(cast, dat
         assert private not in text
     assert feed.read(data / "mind.db", personaview.member_view, 305,
                      now=NOW)["card"]["appearance"]["build"] == "athletic"
+    assert feed.read(data / "mind.db", personaview.member_view, 305,
+                     now=NOW)["card"]["photo"] == PHOTO
     unreadable = feed.read(data / "mind.db", personaview.member_view, 307, now=NOW)
     assert unreadable["card"] is None and unreadable["member"]["persona"]["readable"] is False
     assert feed.read(data / "mind.db", personaview.member_view, 1, now=NOW) is None  # the owner

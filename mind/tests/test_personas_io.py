@@ -278,3 +278,11 @@ def test_cast_without_persona_names_the_cast_members_nothing_was_generated_for(s
                                                                  108}, 1)] == []
     assert [m.guid for m in cast_without_persona(cast.values(), store.persona_versions(),
                                                  None)] == [1, 106, 108]
+
+
+def test_saving_an_unchanged_persona_keeps_its_version_and_writes_no_photo_key(store):
+    p = make_persona(101, "Arkon")
+    assert save_persona(store, p, source="seed", ts=1.0, race="Orc", class_name="Warrior") == 1
+    assert save_persona(store, p, source="seed", ts=2.0, race="Orc", class_name="Warrior") == 1
+    assert '"photo"' not in store.conn.execute(
+        "SELECT json FROM persona_core WHERE guid = 101").fetchone()["json"]

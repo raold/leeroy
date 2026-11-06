@@ -246,7 +246,7 @@ def _card(p) -> dict:
             "big_five": d["big_five"], "attachment": d["attachment"], "humour": d["humour"],
             "typing": d["typing"], "game": d["game"], "play": d["play"],
             "romance": {k: d["romance"][k] for k in ("stance", "style", "jealousy_mode")},
-            "appearance": d["appearance"]}
+            "appearance": d["appearance"], "photo": d.get("photo")}
 
 
 def member_view(conn, guid: int, *, now: float) -> dict | None:
