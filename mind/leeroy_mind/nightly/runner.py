@@ -16,9 +16,12 @@ NightRunner.run, for one night:
 3. The night's plan (budget.plan_night), or on a resumed run the plan the run stored.
 4. Each stage in order. The arbiter makes room for the model a stage needs when it differs from
    the last one (ensure_model). An "image" stage takes the whole GPU: the arbiter unloads every
-   chat model first and keeps only the embedding model (make_room). Afterwards the stage's
-   night_stage record is written, and the models loaded that the night did not ask for are
-   counted (foreign_models; after an image stage, any chat model), never unloaded.
+   chat model first and keeps only the embedding model (make_room). A live lease refuses it
+   (LiveLeaseHeld), at its start or from inside it. That is logged once (nightly_image_refused)
+   and ends images for the run: the stage stops and later image stages are skipped, without
+   failing the night. Afterwards the stage's night_stage record is written, and the models
+   loaded that the night did not ask for are counted (foreign_models; after an image stage, any
+   chat model), never unloaded.
 5. night_run.error: the failed units per stage as JSON, or NULL when none failed, on every run
    that returns.
 
@@ -40,7 +43,7 @@ from leeroy_mind.llm.scheduler import Priority
 from leeroy_mind.logs import log
 from leeroy_mind.memory.writer import Embedder, MemoryWriter
 from leeroy_mind.nightly.budget import EXTENSION_STAGES, plan_night
-from leeroy_mind.nightly.gpu import GpuArbiter
+from leeroy_mind.nightly.gpu import GpuArbiter, LiveLeaseHeld
 from leeroy_mind.nightly.llm import Reasoner, ReflectionError
 from leeroy_mind.nightly.settings import NightlySettings
 from leeroy_mind.nightly.store import (NightRun, active_away, add_foreign_loads, commit_unit,
@@ -381,6 +384,23 @@ class NightRunner:
     def _model(ctx: NightContext, which: str) -> str:
         return ctx.settings.live_model if which == "live" else ctx.settings.reflection_model
 
+    @staticmethod
+    def _images_refused(ctx: NightContext, stage: Stage, e: LiveLeaseHeld) -> None:
+        log("nightly_image_refused", night=ctx.night, stage=stage.name, holders=sorted(e.holders))
+
+    async def _room_for_images(self, ctx: NightContext, stage: Stage, current: str | None) -> bool:
+        """make_room when the model becomes "image"; between two image stages, only the lease
+        check. False, logged, when a live lease refuses it."""
+        try:
+            if current != "image":
+                await ctx.arbiter.make_room()
+            elif ctx.arbiter.holders:
+                raise LiveLeaseHeld(ctx.arbiter.holders)
+        except LiveLeaseHeld as e:
+            self._images_refused(ctx, stage, e)
+            return False
+        return True
+
     async def _run(self, ctx: NightContext, prior: NightRun | None) -> None:
         active = frozenset(stage.name for stage in self.stages)
         if any(s.model == "reflection" for s in self.stages):
@@ -398,16 +418,27 @@ class NightRunner:
         else:
             await plan_night(ctx, stages=active)
         current = None  # the model the last model stage needed
+        images = True  # until a live lease refuses an image stage: then no more images this run
         for stage in self.stages:
             started = ctx.clock.now()
-            if stage.model is not None and stage.model != current:
-                if stage.model == "image":
-                    await ctx.arbiter.make_room()
-                else:
-                    await ctx.arbiter.ensure_model(self._model(ctx, stage.model))
+            if stage.model == "image":
+                if not images:
+                    continue
+                if not await self._room_for_images(ctx, stage, current):
+                    images = False
+                    continue
+                current = stage.model
+            elif stage.model is not None and stage.model != current:
+                await ctx.arbiter.ensure_model(self._model(ctx, stage.model))
                 current = stage.model
             calls, seconds = ctx.reasoner.calls, ctx.reasoner.seconds
-            await stage.fn(ctx)
+            try:
+                await stage.fn(ctx)
+            except LiveLeaseHeld as e:
+                if stage.model != "image":
+                    raise
+                self._images_refused(ctx, stage, e)
+                images = False
             calls, seconds = ctx.reasoner.calls - calls, ctx.reasoner.seconds - seconds
             stage_record(ctx.store, ctx.night, stage.name, started=started,
                          finished=ctx.clock.now(), calls=calls, call_s=seconds)

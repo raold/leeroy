@@ -21,7 +21,8 @@ own. The lock serializes only the GPU work:
   asked for, and nothing else (the embedding model is never unloaded);
 - make_room: for a stage that takes the whole GPU (an image stage), unloads every model Ollama
   lists but the embedding model. The live model goes like any other, whether the let-go kept it
-  or mod-ollama-chat loaded it at night. It loads nothing and may be called again mid-stage;
+  or mod-ollama-chat loaded it at night. It loads nothing and may be called again mid-stage.
+  While any live lease is held it refuses (LiveLeaseHeld) and unloads nothing more;
 - foreign_models: what else is loaded, for the night's count of loads it did not ask for (with
   None, every loaded model but the embedding model).
 
@@ -53,6 +54,16 @@ def norm(name: str) -> str:
     """`name` with Ollama's default tag: a name without a tag means :latest. The tag follows the
     last colon after the last slash, so a registry port (localhost:5000/m) is not one."""
     return name if ":" in name.rsplit("/", 1)[-1] else name + ":latest"
+
+
+class LiveLeaseHeld(RuntimeError):
+    """make_room refused: a live lease is held (his login, an offline raid, voice, a preview),
+    so nothing that needs the whole GPU may run now. `holders` names the leases."""
+
+    def __init__(self, holders: frozenset[str]):
+        self.holders = frozenset(holders)
+        super().__init__(f"a live lease is held by {', '.join(sorted(self.holders))}: "
+                         "no room for a stage that needs the whole GPU")
 
 
 def _error_body(e: urllib.error.HTTPError) -> str:
@@ -342,24 +353,36 @@ class GpuArbiter:
                         raise RuntimeError("nightly models changed during model admission")
             self._prune_managed(remaining)
 
+    def _refuse_if_held(self) -> None:
+        if self._holders:
+            raise LiveLeaseHeld(frozenset(self._holders))
+
     async def make_room(self) -> None:
         """Make room for a stage that needs the whole GPU: unload every model Ollama lists but
         the embedding model. That is the live and reflection models, current and retired, and
         any other chat model too, since one loaded at night takes the same VRAM. Nothing is
-        loaded. A stage may call it again when something loaded a model meanwhile. A reload
-        (reconfigure) while it waits or works fails it, as ensure_model."""
+        loaded. A stage may call it again when something loaded a model meanwhile.
+
+        It never runs while a live lease is held: LiveLeaseHeld, at the call or as soon as a
+        lease is taken while it waits or works, and nothing more is unloaded. The live model is
+        unloaded last, so a lease taken meanwhile finds it still loaded. A reload (reconfigure)
+        while it waits or works fails it, as ensure_model."""
+        self._refuse_if_held()
         revision = self._revision
         async with self._lock:
+            self._refuse_if_held()
             if revision != self._revision:
                 raise RuntimeError("nightly models changed during model admission")
             listed = await self.admin.loaded_models()
+            self._refuse_if_held()
             if revision != self._revision:
                 raise RuntimeError("nightly models changed during model admission")
             remaining = list(listed)
-            for name in listed:
+            for name in sorted(listed, key=lambda n: norm(n) == norm(self._live)):
                 if norm(name) != norm(self._embedding):
                     await self.admin.unload(name)
                     remaining.remove(name)
+                    self._refuse_if_held()
                     if revision != self._revision:
                         raise RuntimeError("nightly models changed during model admission")
             self._prune_managed(remaining)

@@ -183,6 +183,52 @@ def test_an_image_stage_runs_with_no_chat_model_loaded_and_counts_one_loaded_mea
     assert admin.loaded == [h.EMB, h.LIVE]                              # ... and left for the stage to deal with
 
 
+def test_an_image_stage_refused_by_a_live_lease_stops_without_failing_the_night(h, caplog):
+    admin = FakeAdmin([h.LIVE, h.EMB]); ctx = h.ctx(admin=admin)
+    run_begin(h.store, ctx.night, *ctx.window, now=ctx.window[1])
+    ran = []
+    async def render(c): ran.append("render")
+    async def quiet(c): ran.append("quiet")
+    ctx.arbiter.hold("voice")                       # a lease whose preempt has not reached the run yet
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        run(NightRunner([Stage("selfies", render, "image"), Stage("quiet", quiet, None),
+                         Stage("more", render, "image")], lambda n, w: ctx).run(ctx.night, ctx.window))
+    assert ran == ["quiet"] and admin.calls == [] and admin.loaded == [h.LIVE, h.EMB]
+    assert stage_row(h, ctx.night, "selfies") is None and run_get(h.store, ctx.night).error is None
+    assert caplog.text.count("nightly_image_refused") == 1                # the night is over for images
+    assert 'nightly_image_refused: night=2026-10-29 stage=selfies holders=["voice"]' in caplog.text
+
+
+def test_a_lease_that_refuses_an_image_stage_mid_stage_keeps_its_finished_units(h):
+    admin = FakeAdmin([h.REFL, h.EMB]); ctx = h.ctx(admin=admin)
+    run_begin(h.store, ctx.night, *ctx.window, now=ctx.window[1])
+    ran = []
+    async def render(c):
+        c.skip("selfies", "101")                    # a finished set
+        c.arbiter.hold("human")                     # his login, mid-render
+        await c.arbiter.make_room()                 # the oom retry: refused
+        ran.append("never")
+    async def more(c): ran.append("more")
+    async def quiet(c): ran.append("quiet")
+    run(NightRunner([Stage("selfies", render, "image"), Stage("more", more, "image"),
+                     Stage("quiet", quiet, None)], lambda n, w: ctx).run(ctx.night, ctx.window))
+    assert ran == ["quiet"] and step_done(h.store, ctx.night, "selfies", "101")
+    assert stage_row(h, ctx.night, "selfies") is not None and run_get(h.store, ctx.night).error is None
+    assert admin.calls == [("unload", h.REFL)]
+
+
+def test_a_lease_taken_between_two_image_stages_stops_the_second(h):
+    admin = FakeAdmin([h.EMB]); ctx = h.ctx(admin=admin)
+    ran = []
+    async def first(c):
+        ran.append("first")
+        c.arbiter.hold("preview")                   # no make_room call follows inside this stage
+    async def second(c): ran.append("second")
+    run(NightRunner([Stage("a", first, "image"), Stage("b", second, "image")],
+                    lambda n, w: ctx).run(ctx.night, ctx.window))
+    assert ran == ["first"]
+
+
 def test_snapshot_once_per_night(h):
     ctx = h.ctx(); run(stage_snapshot(ctx)); run(stage_snapshot(ctx))
     assert len(list((h.settings.data_dir / "snapshots").glob("mind-night-*.db"))) == 1     # PR4: the label "night"
