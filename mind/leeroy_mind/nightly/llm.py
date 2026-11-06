@@ -3,6 +3,8 @@ rules every generating prompt ends with, and the Reasoner, which asks in two pas
 the model reason freely, `json` has it answer as a checked JSON object. Presets, timeouts and
 model names come from P1b; nothing here knows a persona."""
 import asyncio
+import json
+import logging
 import math
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,7 +12,9 @@ from types import SimpleNamespace
 from leeroy_mind.human import HumanIdentity
 from leeroy_mind.llm.client import LLMClient, LLMError
 from leeroy_mind.llm.presets import REASON, STRUCTURE, JSONJobFailed, Preset, chat_json
+from leeroy_mind.logs import log
 from leeroy_mind.prompts import load_prompt
+from leeroy_mind.text import estimate_tokens
 
 # The content invariants (adults only, romance aimed only at the owner, nobody leaves, secrets,
 # ordinary looks, no meta). They end every generating prompt, after any owner overlay, and
@@ -30,7 +34,20 @@ INVARIANTS = (
 )
 
 # The reasoning pass: P1b's REASON preset, plus the 27B model's own sampling and a length cap.
-THINK_OPTIONS = REASON.options | {"top_k": 20, "min_p": 0.0, "num_predict": 2048}
+# The model's thinking counts against num_predict. At a flat 2,048 tokens a third of the
+# nights' reasoning passes were cut off, and the few cut before the answer began came back with
+# no answer at all. So a pass gets the room its prompt leaves in num_ctx (think_predict): at most
+# THINK_PREDICT_MAX, and never less than THINK_PREDICT_MIN, the length reflect's evidence cap
+# was sized for (review M16).
+THINK_PREDICT_MIN = 2048
+THINK_PREDICT_MAX = 4096
+THINK_SLACK = 64  # tokens of chat template around the two messages
+THINK_OPTIONS = REASON.options | {"top_k": 20, "min_p": 0.0, "num_predict": THINK_PREDICT_MIN}
+# The answer pass: its room for the JSON answer, and the tokens it keeps free for the suffixes
+# chat_json adds (a retry's too) and the schema's JSON, which runs denser than 4 characters a
+# token.
+JSON_PREDICT = 1024
+CTX_SLACK = 320
 
 _TYPES = {
     "object": lambda v: isinstance(v, dict),
@@ -145,6 +162,24 @@ class ReflectionError(Exception):
         self.fatal = fatal
 
 
+def think_predict(system: str, user: str) -> int:
+    """The reasoning pass's num_predict: the room the two messages leave in num_ctx, at most
+    THINK_PREDICT_MAX and at least THINK_PREDICT_MIN."""
+    room = (THINK_OPTIONS["num_ctx"] - estimate_tokens(system) - estimate_tokens(user)
+            - THINK_SLACK)
+    return max(THINK_PREDICT_MIN, min(THINK_PREDICT_MAX, room))
+
+
+def fit_notes(notes: str, system: str, user: str, schema_: dict) -> str:
+    """The reasoning pass's notes as the answer pass gets them: whole when the call fits num_ctx
+    with JSON_PREDICT tokens of answer and CTX_SLACK to spare, else only their end, where the
+    conclusions are. Past num_ctx Ollama would cut the prompt's head, where the system prompt and
+    INVARIANTS are (review M16)."""
+    fixed = sum(estimate_tokens(t) for t in (system, user, json.dumps(schema_)))
+    room = max(0, (STRUCTURE.options["num_ctx"] - JSON_PREDICT - CTX_SLACK - fixed) * 4)
+    return notes if len(notes) <= room else notes[len(notes) - room:]
+
+
 def _has_model(names, model: str) -> bool:
     """Whether Ollama lists `model`. A name without a tag means its :latest, as in P1b's
     app.has_model, which doctor uses (not imported: that pulls the whole app in here)."""
@@ -182,26 +217,35 @@ class Reasoner:
         return r
 
     async def think(self, system: str, user: str) -> str:
-        """The reasoning pass: the model's thinking, a newline, then its answer."""
+        """The reasoning pass: the model's thinking, a newline, then its answer. A reply that
+        ran out of num_predict is logged by its counts alone (nightly_think_cut); what it
+        thought is still the notes."""
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+        options = THINK_OPTIONS | {"num_predict": think_predict(system, user)}
         async with self._slots:
             try:
-                r = await self._chat(self.model, messages, options=dict(THINK_OPTIONS),
+                r = await self._chat(self.model, messages, options=options,
                                      think=True, timeout=REASON.timeout)
             except LLMError as e:
                 raise ReflectionError(f"reflection request 'think' failed: {e}",
                                       fatal=False) from e
+        d = r.diagnostics
+        if d is not None and d.done_reason == "length":
+            log("nightly_think_cut", level=logging.WARNING, model=self.model,
+                num_predict=options["num_predict"], eval_count=d.eval_count,
+                prompt_eval_count=d.prompt_eval_count, answered=bool(r.text))
         return r.thinking + "\n" + r.text
 
     async def json(self, system: str, user: str, schema: dict, *, notes: str | None = None,
                    temperature: float = 0.2) -> dict:
         """The answer pass: a JSON object that fits `schema`, from P1b's chat_json (one retry
-        when the reply is not valid), with the reasoning pass's `notes` after the question.
-        Two bad replies, or an Ollama error, are a ReflectionError for this unit alone."""
+        when the reply is not valid), with the reasoning pass's `notes` after the question,
+        cut to their end when the call would not fit num_ctx (fit_notes). Two bad replies, or
+        an Ollama error, are a ReflectionError for this unit alone."""
         if notes:
-            user += "\n\nYour notes:\n" + notes
+            user += "\n\nYour notes:\n" + fit_notes(notes, system, user, schema)
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-        options = STRUCTURE.options | {"temperature": temperature, "num_predict": 1024}
+        options = STRUCTURE.options | {"temperature": temperature, "num_predict": JSON_PREDICT}
         preset = Preset(False, options, timeout=STRUCTURE.timeout)
 
         def valid(d: dict) -> dict:

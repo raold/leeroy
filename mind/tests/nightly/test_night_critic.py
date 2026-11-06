@@ -129,6 +129,22 @@ def test_whispers_are_reviewed_only_in_the_owners_audit(h):
     assert not flags(h, 102) and other
 
 
+def test_lines_that_recalled_his_seeded_history_are_scored(h):
+    """His seeded history (memories seed) cites "owner:<moment>", a public root with no table.
+    The provenance reader did not know it, so every sampled member who had recalled the history,
+    directly or through a reflection on it, failed "Incomplete critic provenance" before any
+    model call (26 of 26 on 2026-11-05)."""
+    seeded = h.mem(101, "The night the guild first cleared Naxxramas.", kind="story",
+                   source="owner", evidence=("owner:M17",), key="owner:M17:101")
+    thought = h.mem(101, "I still think about that first clear.", kind="reflection",
+                    source="reflection", evidence=(f"memory:{seeded}",))
+    ids = sent(h, memories=[seeded, thought])
+    ctx = context(h, answer(5, 4))
+    run(critic.critic_member(ctx, 101, rows(h, ids[:2])))
+    assert len(ctx.reasoner.llm.calls) == 1 and h.count("critic_score") == 1
+    assert ctx.done("critic", "101") and not flags(h)
+
+
 def test_three_flags_roll_back_notes_and_undo_restores_them(h):
     sent(h)
     flag(h, h.T - 4 * 86400)
