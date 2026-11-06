@@ -682,7 +682,10 @@ Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
   and the body ledger. Native's `busy:<owner>` is stored as `busy_<owner>`. Acked calendar
   signups and speech lines are pruned 30 days after they settle; other acked rows stay. The
   actor set is resent from memory at each hello; if it ever moves into the ledger, its ref
-  must name the process.
+  must name the process. One fenced body (`busy:raid_owner` for a member in his group, a
+  training or Realm owner, `not_bot`) makes native refuse a whole body move at its ack before
+  reserving anyone: the action journal settles that as refused, holding nobody, and each start
+  reads again a stored unknown whose only evidence is such a refusal.
 - **Rulings.** His raid holds exactly his raid: waiting for the call, called and forming hold
   the roster and his group; assembling and running hold the raid's members and his group;
   everyone else, rival officers included, may move (an unreadable member list holds everyone).

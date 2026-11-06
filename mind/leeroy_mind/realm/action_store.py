@@ -18,8 +18,14 @@ from .action_policy import Classified, classify, decode, document, identity, int
 
 TERMINAL = frozenset({"completed", "not_sent"})
 STATES = frozenset({"prepared", "dispatched", "unknown", "conflict", *TERMINAL})
+# A queued command's body fences (RealmModule::AcceptDomain): its executor's default admission,
+# then MutationReason (RealmPorts.h NativeMutationReason) for each body, all before native
+# reserves anyone. One fenced body refuses the whole command at its ack: nobody was moved.
+BODY_FENCES = frozenset({"not_actor", "not_bot", "busy:realm_owner", "busy:raid_owner",
+                         "busy:body_unavailable", "busy:training_owner", "busy:training_cleanup",
+                         "busy:training_state"})
 REFUSALS = frozenset({"realm_off", "realm_not_started", "unsupported", "busy:queue_full",
-                      "busy:body_identity", "pin_rejected", "bad field: queued_operation"})
+                      "busy:body_identity", "pin_rejected", "bad field: queued_operation", *BODY_FENCES})
 # guild_grow's admission refusals (RealmGuild.cpp GrowAdmission, LeeroyRealmGuild.h): native
 # refused the whole grow at its ack, before reserving or moving anyone. A guid's reason names it.
 GROW_REFUSALS = frozenset({"refused_guild", "guild not found"})
@@ -686,6 +692,14 @@ class ActionStore:
                 elif old.transport_state == "inflight":
                     self._save(replace(old, transport_state="settled", send_error="ProcessRestart",
                          state=old.state if old.state in TERMINAL or old.state == "conflict" else "unknown", updated=now))
+            for root in self.unresolved():
+                # An unknown whose only evidence is native's refusal at its ack is read again under
+                # the current rules: one an older build kept unknown (a fenced body) moved nobody.
+                ev = json.loads(root.evidence)
+                if (root.state == "unknown" and root.result_reason == "unknown" and root.transport_state == "settled"
+                        and not root.send_error and set(ev) <= {"ack", "failed_at"} and ev.get("ack", {}).get("ok") is False):
+                    settled = self._reduce(replace(root, state="dispatched", result_ok=None, result_reason=""), ev, now)
+                    if settled.state == "completed": self._save(settled)
             for root in self.unresolved():
                 if root.policy == "wg": self._save(self._reconcile(root, now))
             return self.unresolved()
