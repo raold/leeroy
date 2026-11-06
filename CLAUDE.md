@@ -553,6 +553,13 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   events the bridge queued for the mind, so never run it while they matter.
 - Do not run `personas generate`/`seed` or a library build while the mind is
   live: they load another large model next to the live one and evict it.
+- Nothing writes a persona while the mind runs. A member who joins the cast
+  later (invited, or levelled to 80) has none and stays silent: the mind voices
+  only stored personas and native mutes every cast member in mod-ollama-chat.
+  The mind logs `cast_without_persona` (their guids) when that set changes and
+  `doctor` notes them. With the mind stopped, `personas generate --dry-run`
+  shows their slots and `personas generate` writes them (the reflection model,
+  a few minutes each); their voice specs are a separate casting step.
 - The night: once the owner has been offline for 10 minutes and no offline
   raid holds the GPU, the mind unloads the live chat model, loads the
   reflection model (`[models] reflection` in `mind.toml`, a 27B that cannot sit

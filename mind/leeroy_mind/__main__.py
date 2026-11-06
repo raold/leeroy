@@ -255,6 +255,7 @@ def _doctor_db(root: Path, latest: int, cfg=None) -> list[tuple[bool | None, str
         personas = _cast_personas(store, human)
         lines.append((bool(personas), f"personas {len(personas)}: "
                       + _mix_line(mix_report(personas)).replace("\n", "; ")))
+        lines += _doctor_unvoiced(store, human)
         lines.append(_doctor_voice_specs(root, personas))
         if human is not None:
             lines += _doctor_notes(store, personas, human, cfg)
@@ -286,6 +287,18 @@ def _doctor_tuning(conn, cfg) -> list[tuple[bool | None, str]]:
                       f"{'' if offsets == 1 else 's'}, {len(t.world)} world override"
                       f"{'' if len(t.world) == 1 else 's'}"))
     return out
+
+
+def _doctor_unvoiced(store, human_guid: int | None) -> list[tuple[bool | None, str]]:
+    """A note naming the cast members with no stored persona (personas.io.cast_without_persona),
+    whom the mind never voices; nothing when every cast member has one."""
+    from .personas.io import cast_without_persona
+    missing = cast_without_persona(store.cast().values(), store.persona_versions(), human_guid)
+    if not missing:
+        return []
+    who = ", ".join(f"{m.name} ({m.guid})" for m in missing)
+    return [(None, f"cast without a persona {len(missing)}: {who}; the mind never voices them "
+                   "until `personas generate` (with the mind stopped) writes theirs")]
 
 
 def _doctor_voice_specs(root: Path, personas) -> tuple[bool | None, str]:

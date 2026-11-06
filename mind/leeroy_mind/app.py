@@ -54,7 +54,7 @@ from leeroy_mind.memory.extract import MAX_BYSTANDERS, Extractor
 from leeroy_mind.memory.recall import Recall
 from leeroy_mind.memory.threads import ClosedThread, ThreadTracker
 from leeroy_mind.memory.writer import Embedder, MemoryWriter
-from leeroy_mind.personas.io import PersonaCache
+from leeroy_mind.personas.io import PersonaCache, cast_without_persona
 from leeroy_mind.tuning.world import merge as merge_world
 from leeroy_mind.tuning.service import TuningService
 from leeroy_mind.protocol import (CORE_EVENT_TYPES, Ack, Achievement, AfkEvent, BgEnd, Boss,
@@ -415,6 +415,7 @@ class MindApp:
         self._session_id: int | None = None
         self._hello_ts: int | None = None  # the server's ms ts of the last hello
         self._spoke_at: dict[int, float] = {}  # anyone's last line, any channel or origin
+        self._unvoiced: list[int] = []  # the cast without a persona, as last logged
         self._extract_queue: asyncio.Queue[ClosedThread] = asyncio.Queue()
         self._memory_queue: asyncio.Queue = asyncio.Queue()
         self._loops: dict[str, asyncio.Task] = {}
@@ -662,6 +663,19 @@ class MindApp:
         return guid in self.world.cast_guids() or (
             guid != self._human and self.personas.get(guid) is not None)
 
+    def _note_unvoiced(self, members) -> None:
+        """A cast snapshot's members with no stored persona (cast_without_persona), logged as a
+        warning whenever they differ from the last ones logged: once per mind start and again
+        when someone new joins the cast, not at every snapshot. An empty snapshot (a bridge
+        that hasn't loaded the guild) changes nothing."""
+        if not members:
+            return
+        missing = [m.guid for m in cast_without_persona(
+            members, self.store.persona_versions(), self._human)]
+        if missing and missing != self._unvoiced:
+            log_event("cast_without_persona", level=logging.WARNING, guids=missing)
+        self._unvoiced = missing
+
     async def _send(self, cmd):
         """Every say and emote the engine sends, say_as's included, leaves here. While the live
         model is away it is refused (Ack ok False, "model_away"), so the guild stays silent,
@@ -830,6 +844,7 @@ class MindApp:
             left = self.store.replace_cast(ev.members, now, keep=(self._human,))
             if left:
                 log_event("cast_left", guids=left)
+            self._note_unvoiced(ev.members)
             self.world.apply(ev, now)
         elif isinstance(ev, Chat):
             return await self._on_chat(ev, now, backlog)
