@@ -9,6 +9,7 @@ from dataclasses import replace
 import pytest
 
 from conftest import TEST_CAST, run
+from leeroy_mind.llm.client import LLMError
 from leeroy_mind.nightly import budget
 from leeroy_mind.nightly.budget import DEGRADE, UNIT_CALLS, plan_night
 from leeroy_mind.nightly.runner import NightRunner, Stage
@@ -124,6 +125,80 @@ def test_a_lease_taken_mid_stage_ends_it_once_without_a_failure_and_keeps_finish
     assert caplog.text.count("nightly_image_refused") == 1 and admin.calls == []
     got = json.loads(pids.read_text())
     assert not pid_alive(got["pid"]) and not pid_alive(got["child"])
+
+
+def test_his_login_during_an_oom_make_room_waits_for_the_stop_before_the_live_preload(h, tmp_path):
+    # Review Focus 1 meets 2: make_room holds the arbiter's lock when he logs in, so the
+    # hand-over queues behind it, then cancels the stage while its finally stops the worker
+    renderable_cast(h.store, 101)
+    pids = tmp_path / "pids.json"; seen, stops, tasks = {}, [], {}
+    class Watched(SelfieWorker):
+        async def stop(self):
+            await super().stop()
+            stops.append("done")
+    class Admin(FakeAdmin):
+        async def unload(self, model):
+            if model == h.LIVE and "hand" not in tasks:       # his login, mid-make_room
+                ctx.arbiter.hold("human")
+                tasks["hand"] = asyncio.create_task(ctx.arbiter.hand_over())
+            await super().unload(model)
+        async def preload(self, model, keep_alive, *, options=None):
+            got = json.loads(pids.read_text())
+            seen["alive"] = (pid_alive(got["pid"]), pid_alive(got["child"]))
+            seen["stops"] = list(stops)
+            await super().preload(model, keep_alive, options=options)
+    ctx = h.ctx(admin=Admin([h.EMB, h.LIVE]))                # Orion came back: the render ooms
+    cmd, env = fake_command(tmp_path, FAKE_SELFIE_OOM="1", FAKE_SELFIE_CHILD="1",
+                            FAKE_SELFIE_PIDS=str(pids))
+    stage = make_stage(SELFIE_CFG, worker=lambda: Watched(cmd, env=env))
+    async def go():
+        task = asyncio.create_task(stage(ctx))
+        async def preempt():
+            task.cancel(); await asyncio.wait({task})
+        ctx.arbiter.set_preempt(preempt)
+        await asyncio.wait({task})
+        await tasks["hand"]
+        return task.cancelled()
+    assert run(go()) is True
+    assert seen["stops"] == ["done"] and seen["alive"] == (False, False)
+    assert ("preload", h.LIVE, -1) in ctx.arbiter.admin.calls
+    assert queued(h) == [(101, 1)] and not ctx.done(STAGE, "101:1") and not ctx.failures
+
+
+def test_a_lease_held_before_a_render_sends_no_render(h, tmp_path, caplog):
+    renderable_cast(h.store, 101, 102)
+    ctx = h.ctx()
+    run_begin(h.store, ctx.night, *ctx.window, now=ctx.window[1])
+    log = tmp_path / "requests.log"
+    cmd, env = fake_command(tmp_path, FAKE_SELFIE_LOG=str(log))
+    class Leased(SelfieWorker):
+        async def render(self, req, *, rid=None):
+            got = await super().render(req, rid=rid)
+            if rid == "101:1:3:0":
+                ctx.arbiter.hold("voice")                     # taken between two renders
+            return got
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        run(NightRunner([Stage(STAGE, make_stage(SELFIE_CFG, worker=lambda: Leased(cmd, env=env)),
+                               "image")], lambda n, w: ctx).run(ctx.night, ctx.window))
+    assert ready_set(h.store, 101, 1) and queued(h) == [(102, 1)]
+    assert not any(rid.startswith("102:") for rid, _ in requests(log))   # never sent
+    assert not ctx.failures and run_get(h.store, ctx.night).error is None
+    assert 'nightly_image_refused: night=2026-10-29 stage=selfies holders=["voice"]' in caplog.text
+
+
+def test_a_make_room_that_keeps_failing_ends_the_stage_as_contention(h, tmp_path, caplog):
+    renderable_cast(h.store, 101, 102, 103)
+    class Down(FakeAdmin):
+        async def loaded_models(self):
+            raise LLMError("/api/ps: timed out")             # Ollama hung
+    ctx = h.ctx(admin=Down([h.EMB]))
+    log = tmp_path / "requests.log"
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        run(make_stage(SELFIE_CFG, worker=fake_worker(tmp_path, FAKE_SELFIE_OOM="99",
+                                                      FAKE_SELFIE_LOG=str(log)))(ctx))
+    assert ctx.failures == {STAGE: CONTENDED} and queued(h) == [(101, 1), (102, 1), (103, 1)]
+    assert not any(rid.startswith("103:") for rid, _ in requests(log))
+    assert "selfies_stopped: night=2026-10-29 reason=room" in caplog.text
 
 
 # -- a night's sets -------------------------------------------------------------------------------

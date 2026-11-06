@@ -15,13 +15,15 @@ same images. A flagged image is never written and the next seed is tried; a slot
 times refuses the set (SetRefused), that unit's failure only. An oom answer (mod-ollama-chat
 loaded Orion meanwhile) makes room and repeats that attempt once; a worker that refuses to load
 for want of VRAM is started once more after making room. CONTENDED worker failures in a row end
-the stage for the night, keeping the sets it finished; a worker that died is started again once.
-A live lease refuses make_room (LiveLeaseHeld): that ends the stage at once and the runner logs
-it, with no unit failed.
+the stage for the night, keeping the sets it finished; a make_room that fails (Ollama down or
+hung) counts as one (RoomFailed), and a worker that died is started again once. No render is
+sent while a live lease is held: that, or a lease refusing make_room (LiveLeaseHeld), ends the
+stage at once and the runner logs it, with no unit failed.
 
-However the stage ends, his login's cancel included, the worker is stopped: its whole process
-tree is gone before the hand-over preloads the live model. The cancel path makes no arbiter
-call. Logs carry ids, counts, scores and timings, never a prompt, persona text or a name."""
+However the stage ends, his login's cancel included, the worker is stopped and the stop runs to
+its end before the cancel goes on (worker.to_the_end): its whole process tree is gone before the
+hand-over preloads the live model. The cancel path makes no arbiter call. Logs carry ids,
+counts, scores and timings, never a prompt, persona text or a name."""
 import hashlib
 import logging
 import os
@@ -41,7 +43,7 @@ from . import files
 from .config import SelfieCfg, worker_command, worker_env
 from .prompt import PromptSpec, build_prompt, renderable
 from .store import Candidate, ensure_first_sets, mark_ready, needing_first, queued_sets
-from .worker import RenderRequest, SelfieWorker, WorkerError
+from .worker import RenderRequest, SelfieWorker, WorkerError, to_the_end
 
 if TYPE_CHECKING:
     from leeroy_mind.nightly.runner import NightContext
@@ -58,6 +60,14 @@ class SetRefused(Exception):
     """Every seed of one slot was flagged by the NSFW check: the set stays queued."""
 
 
+class RoomFailed(WorkerError):
+    """make_room failed after an oom (Ollama down or hung, not a lease's refusal): the GPU is
+    still contended, so it counts as a worker failure."""
+
+    def __init__(self):
+        super().__init__("room")
+
+
 def seed_for(night: str, guid: int, set_no: int, idx: int, attempt: int) -> int:
     """The first 4 bytes, big-endian, of the SHA-256 of "night|guid|set|idx|attempt"."""
     digest = hashlib.sha256(f"{night}|{guid}|{set_no}|{idx}|{attempt}".encode("utf-8")).digest()
@@ -65,22 +75,43 @@ def seed_for(night: str, guid: int, set_no: int, idx: int, attempt: int) -> int:
 
 
 async def render_candidates(worker, spec: PromptSpec, out_dir: Path, *, night: str, guid: int,
-                            set_no: int, cfg: SelfieCfg,
-                            make_room: Callable[[], Awaitable[None]]) -> list[Candidate]:
-    """Slots 0-3 into out_dir/c<idx>.jpg and c<idx>.thumb.jpg, one Candidate each. Raises
-    SetRefused when a slot is flagged TRIES times, WorkerError for a second oom of a slot or any
-    other worker failure, and whatever make_room raises."""
+                            set_no: int, cfg: SelfieCfg, make_room: Callable[[], Awaitable[None]],
+                            leases: Callable[[], frozenset[str]] | None = None
+                            ) -> list[Candidate]:
+    """Slots 0-3 into out_dir/c<idx>.jpg and c<idx>.thumb.jpg, one Candidate each. `leases`
+    (the arbiter's live holders) is asked before each render: while one is held, LiveLeaseHeld
+    and nothing is sent. Raises SetRefused when a slot is flagged TRIES times, RoomFailed when
+    make_room fails other than by LiveLeaseHeld, WorkerError for a second oom of a slot or any
+    other worker failure, and LiveLeaseHeld."""
     out_dir = Path(out_dir).absolute()
     made = []
     for idx in range(SET_SIZE):
         made.append(await _slot(worker, spec, out_dir, idx, night=night, guid=guid,
-                                set_no=set_no, cfg=cfg, make_room=make_room))
+                                set_no=set_no, cfg=cfg, make_room=make_room, leases=leases))
     return made
 
 
+def _unleased(leases: Callable[[], frozenset[str]] | None) -> None:
+    held = leases() if leases is not None else frozenset()
+    if held:
+        raise LiveLeaseHeld(held)
+
+
+async def _room(make_room: Callable[[], Awaitable[None]], *, night: str, guid: int, set_no: int,
+                idx: int) -> None:
+    try:
+        await make_room()
+    except LiveLeaseHeld:
+        raise
+    except Exception as e:
+        log("selfies_room_failed", level=logging.WARNING, night=night, guid=guid, set=set_no,
+            idx=idx, error=type(e).__name__)
+        raise RoomFailed() from e
+
+
 async def _slot(worker, spec: PromptSpec, out_dir: Path, idx: int, *, night: str, guid: int,
-                set_no: int, cfg: SelfieCfg,
-                make_room: Callable[[], Awaitable[None]]) -> Candidate:
+                set_no: int, cfg: SelfieCfg, make_room: Callable[[], Awaitable[None]],
+                leases: Callable[[], frozenset[str]] | None) -> Candidate:
     out, thumb = out_dir / f"c{idx}.jpg", out_dir / f"c{idx}.thumb.jpg"
     roomed = False
     for attempt in range(TRIES):
@@ -88,13 +119,15 @@ async def _slot(worker, spec: PromptSpec, out_dir: Path, idx: int, *, night: str
         req = RenderRequest(spec.phrases, spec.negative, seed, cfg.steps, cfg.guidance, cfg.size,
                             out, thumb, THUMB_PX, cfg.nsfw_max)
         rid = f"{guid}:{set_no}:{idx}:{attempt}"
+        _unleased(leases)
         try:
             got = await worker.render(req, rid=rid)
         except WorkerError as e:
             if e.reason != "oom" or roomed:
                 raise
             roomed = True
-            await make_room()
+            await _room(make_room, night=night, guid=guid, set_no=set_no, idx=idx)
+            _unleased(leases)
             got = await worker.render(req, rid=rid)
         if not got.flagged and got.nsfw < cfg.nsfw_max:
             return Candidate(idx, seed, attempt + 1, got.nsfw, got.prompt)
@@ -199,7 +232,8 @@ async def _render_set(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
     staging = files.staging_dir(data, guid, set_no)
     staging.mkdir(parents=True)
     made = await render_candidates(worker, build_prompt(p), staging, night=ctx.night, guid=guid,
-                                   set_no=set_no, cfg=cfg, make_room=ctx.arbiter.make_room)
+                                   set_no=set_no, cfg=cfg, make_room=ctx.arbiter.make_room,
+                                   leases=lambda: ctx.arbiter.holders)
     os.replace(staging, files.set_dir(data, guid, set_no))
     return made
 
@@ -229,7 +263,7 @@ async def _render(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
             made = await _render_set(ctx, cfg, worker, p, guid, set_no)
         except LiveLeaseHeld:
             raise
-        except WorkerError as e:
+        except WorkerError as e:  # RoomFailed too: contention either way
             _discard(ctx, guid, set_no)
             ctx.fail(STAGE, unit, e)
             tally["failed"] += 1
@@ -281,7 +315,9 @@ def make_stage(cfg: SelfieCfg, *, worker: Callable[[], SelfieWorker] | None = No
         try:
             await _render(ctx, cfg, w, todo)
         finally:
-            await w.stop()  # his login's cancel too: the tree is gone before the hand-over
+            # his login's cancel too, landing here or before: the stop runs to its end, so the
+            # tree is gone before the hand-over's preempt returns and the live model loads
+            await to_the_end(w.stop())
     return stage_selfies
 
 

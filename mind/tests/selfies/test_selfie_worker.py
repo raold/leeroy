@@ -12,6 +12,7 @@ import pytest
 
 from conftest import run
 from leeroy_mind.selfies import job
+from leeroy_mind.selfies import worker as worker_module
 from leeroy_mind.selfies.job import ProcessTree, pid_alive
 from leeroy_mind.selfies.worker import (GRACE_S, STOP_S, Ready, Rendered, SelfieWorker,
                                         WorkerError)
@@ -408,3 +409,85 @@ def test_a_spawn_that_cannot_contain_the_process_kills_it(tmp_path, monkeypatch)
             await ProcessTree.spawn(cmd, env=env)
     run(go())
     assert len(seen) == 1 and not pid_alive(seen[0])
+
+
+# -- a cancel never cuts a tree's ending short (Task 10 fix round 1) -----------------------------
+# A killed tree has not exited, nor released its VRAM, until _gone says so (job.py). So each test
+# cancels the caller while a tree is being ended, then asks whether _gone finished for that tree
+# and whether its processes are dead once stop() returns.
+
+def traced_gone(monkeypatch) -> list[tuple[str, int]]:
+    seen = []
+    real = worker_module._gone
+
+    async def gone(tree):
+        seen.append(("enter", id(tree)))
+        await real(tree)
+        seen.append(("done", id(tree)))
+    monkeypatch.setattr(worker_module, "_gone", gone)
+    return seen
+
+
+def test_a_cancelled_stop_still_waits_for_the_tree_to_be_gone(tmp_path, monkeypatch):
+    pids = tmp_path / "pids.json"
+    cmd, env = fake_command(tmp_path, FAKE_SELFIE_CHILD="1", FAKE_SELFIE_PIDS=str(pids))
+    gone = traced_gone(monkeypatch)
+
+    async def go():
+        w = SelfieWorker(cmd, env=env)
+        await w.start()
+        tree = id(w._tree)
+        stopping = asyncio.create_task(w.stop())
+        await asyncio.sleep(0)               # stop() is ending the tree
+        stopping.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await stopping
+        got = json.loads(pids.read_text())
+        return tree, (pid_alive(got["pid"]), pid_alive(got["child"]))
+    tree, alive = run(go())
+    assert ("done", tree) in gone and alive == (False, False)
+
+
+def test_a_cancel_while_a_failed_render_ends_its_tree_leaves_nothing_alive(tmp_path, monkeypatch):
+    pids = tmp_path / "pids.json"
+    cmd, env = fake_command(tmp_path, FAKE_SELFIE_HANG="1", FAKE_SELFIE_CHILD="1",
+                            FAKE_SELFIE_PIDS=str(pids))
+    gone = traced_gone(monkeypatch)
+
+    class Cancelled(SelfieWorker):
+        async def _end_failed(self, tree):    # the render timed out; his login arrives now
+            asyncio.current_task().cancel()
+            await super()._end_failed(tree)
+
+    async def go():
+        w = Cancelled(cmd, env=env, render_s=0.3)
+        await w.start()
+        tree = id(w._tree)
+        with pytest.raises(asyncio.CancelledError):
+            await w.render(request(tmp_path))
+        await w.stop()
+        got = json.loads(pids.read_text())
+        return tree, (pid_alive(got["pid"]), pid_alive(got["child"]))
+    tree, alive = run(go())
+    assert ("done", tree) in gone and alive == (False, False)
+
+
+def test_a_cancel_while_a_start_ends_the_old_tree_leaves_nothing_alive(tmp_path, monkeypatch):
+    pids = tmp_path / "pids.json"
+    cmd, env = fake_command(tmp_path, FAKE_SELFIE_CHILD="1", FAKE_SELFIE_PIDS=str(pids))
+    gone = traced_gone(monkeypatch)
+
+    async def go():
+        w = SelfieWorker(cmd, env=env)
+        await w.start()
+        old = id(w._tree)
+        got = json.loads(pids.read_text())
+        restart = asyncio.create_task(w.start())
+        await asyncio.sleep(0)               # start() is ending the old tree
+        restart.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await restart
+        await w.stop()
+        return old, (pid_alive(got["pid"]), pid_alive(got["child"])), w.running
+    old, alive, running = run(go())
+    assert ("done", old) in gone and alive == (False, False) and running is False

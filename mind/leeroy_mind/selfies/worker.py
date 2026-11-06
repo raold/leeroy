@@ -7,8 +7,9 @@ A start or render that times out, a closed stdout, a line longer than the protoc
 answer that is not for the request stops the whole process tree and raises WorkerError
 ("timeout" or "gone"); an answer with ok false raises WorkerError(<its error>) and leaves the
 worker running. Cancelling a start or render kills the tree at once (its answer could no
-longer be matched); stop() then waits for it to be gone. Logs carry reasons, counts and
-timings, never a prompt."""
+longer be matched); stop() then waits for it to be gone. A tree being ended is ended to the
+end, a cancel meanwhile included (to_the_end), and stays the current one until it is gone, so
+no stop() can miss it. Logs carry reasons, counts and timings, never a prompt."""
 import asyncio
 import json
 import logging
@@ -21,7 +22,7 @@ from leeroy_mind.logs import log
 from .job import ProcessTree, WorkerError
 
 __all__ = ["GRACE_S", "MAX_LINE", "RENDER_S", "START_S", "STOP_S", "Ready", "RenderRequest",
-           "Rendered", "SelfieWorker", "WorkerError"]
+           "Rendered", "SelfieWorker", "WorkerError", "to_the_end"]
 
 START_S = 180.0  # loading the pipeline and the classifier
 RENDER_S = 90.0  # one image (about 5 s on the 4090)
@@ -98,6 +99,24 @@ def _quietly(action) -> None:
         action()
 
 
+async def to_the_end(aw):
+    """`aw`'s result, awaited as a task of its own through a shield until it is done, however
+    often the caller is cancelled meanwhile; then the caller's cancel goes on. A killed tree has
+    not exited, nor released its VRAM, until _gone says so: its ending is never cut short."""
+    task = asyncio.ensure_future(aw)
+    cancel = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as e:
+            cancel = cancel or e
+    if cancel is not None:
+        if not task.cancelled():
+            task.exception()  # retrieved, so never reported as lost
+        raise cancel
+    return task.result()
+
+
 class SelfieWorker:
     """`command` starts the worker (selfies.config.worker_command); `env` is its environment
     (None: this process's). start() may be called again after a stop: a fresh tree."""
@@ -126,14 +145,13 @@ class SelfieWorker:
         started."""
         stops = self._stops
         async with self._stopping:  # a stop() arriving now waits for the tree to exist
-            old, self._tree = self._tree, None
             self._ready = False
-            await _end(old)
+            await to_the_end(self._end_locked(self._tree))
             if self._stops != stops:
                 raise WorkerError("stopped")
             tree = await ProcessTree.spawn(self._command, env=self._env, limit=MAX_LINE)
             if self._stops != stops:
-                await _end(tree)
+                await to_the_end(_end(tree))
                 raise WorkerError("stopped")
             self._tree = tree
         try:
@@ -218,23 +236,33 @@ class SelfieWorker:
     async def _end_failed(self, tree: ProcessTree) -> None:
         """Ends the tree a request failed on, and only that one: after a restart the current
         tree is a fresh worker that this failure says nothing about. Not a stop(): a start
-        under way carries on."""
-        async with self._stopping:
-            if self._tree is not tree:
-                return  # already taken by a stop() or a start(), which ended it
-            self._ready = False
+        under way carries on. A cancel meanwhile goes on once the tree is gone."""
+        async def end() -> None:
+            async with self._stopping:
+                await self._end_locked(tree)  # nothing, if a stop() or start() took it
+        await to_the_end(end())
+
+    async def _end_locked(self, tree: ProcessTree | None) -> None:
+        """Ends `tree` while it is the current one (the caller holds the stop lock), and lets
+        it go only once it is gone."""
+        if tree is None or self._tree is not tree:
+            return
+        self._ready = False
+        await _end(tree)
+        if self._tree is tree:
             self._tree = None
-            await _end(tree)
 
     async def stop(self) -> None:
         """Quit, the end of stdin, GRACE_S for the worker to leave, then kill the tree and wait
         up to STOP_S for it to be gone (logging selfies_worker_left if it is not). Idempotent;
-        never raises (but a cancellation propagates, after the kill)."""
+        never raises (but a cancellation propagates, once the tree is gone)."""
         self._ready = False
         self._stops += 1
-        async with self._stopping:
-            tree, self._tree = self._tree, None
-            await _end(tree)
+
+        async def end() -> None:
+            async with self._stopping:
+                await self._end_locked(self._tree)
+        await to_the_end(end())
 
 
 async def _end(tree: ProcessTree | None) -> None:
