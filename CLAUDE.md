@@ -638,10 +638,12 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   control endpoint. The Personas tab is read-only too (`console/personaview.py`):
   each member's night mood, stance, row toward the owner, strongest ties, memory
   counts, persona version and who last wrote it (seed, owner, generator, the
-  night's looks pass, a stance move or an undo), open drift flags and the night's
-  trait sample, and per member the persona card summary, ties, memories by kind
-  and ledger; a table an older mind.db lacks shows as unavailable. Its only
-  write is the tuning (`leeroy_mind/tuning/`, console `tuneview.py`): the
+  night's looks pass or photo-kind pass, a stance move or an undo), open drift
+  flags and the night's trait sample, and per member the persona card summary
+  (its looks with the photo kind), ties, memories by kind and ledger; a table
+  an older mind.db lacks shows as unavailable. Its writes are the profile
+  photos (see the selfie worker) and the tuning (`leeroy_mind/tuning/`,
+  console `tuneview.py`): the
   owner's dials, stored in mind.db's `tuning_*` tables as an overlay that never
   rewrites a persona. Member dials: talkative, argumentative, forward/flirty
   (women only), humour amount, theorycrafter, lore nerd, drama, jealousy, party
@@ -896,7 +898,14 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
 - **Picking.** The console reads the sets (`GET /api/selfies`, `/api/selfies/images`,
   `/api/selfies/member`) and sends `POST /api/selfie` (pick, undo, more) to the mind's `selfie`
   op, behind the same key, Origin and `--no-control` gates as raid actions and dial changes.
-  The console page card for it is not built yet; the routes are. `leeroy_mind selfies status`
+  On the page (`static/js/selfies.mjs`, words in `selfiemodel.mjs`) the Personas tab opens with
+  "Choose selfies": the counts, five waiting members a page with their four thumbnails (a click
+  picks one) and "4 more", the mind's answer with an Undo after a pick, and "Recent choices" from
+  the running mind's own list (never the view's) with Undo where the mind says it would be taken.
+  A member's detail has "Profile photo": the photo in force as their face, "4 more" and their
+  history with Undo. With the mind down or control off the buttons are disabled and say why. A
+  pick or undo (the `selfie` event) makes every page ask for that member's face again at once
+  (`FaceCache.forgetKey`) instead of after its 60 s. `leeroy_mind selfies status`
   prints the queue and the latest night's stage records, and `selfies try [--guid N | --limit N]`
   renders a trial set into `scratch\selfies-try` of the data dir with the mind stopped.
 - **Content limits.** Adults only, clothed and non-explicit, no real person's likeness, and no

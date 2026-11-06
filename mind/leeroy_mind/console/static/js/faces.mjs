@@ -9,7 +9,10 @@
 //
 // In Comms a member's face is a button (faceButton) that opens their card: data-card and
 // data-name say whose, data-speaker lets lightSpeakers light it while their voice plays.
-import { api, el } from "./core.mjs";
+//
+// A photo picked or undone (a "selfie" event, from this page or another) is that member's photo
+// no longer: every size of it is asked for again at its next draw.
+import { api, el, on } from "./core.mjs";
 import { FaceCache } from "./facecache.mjs";
 import { initials, paletteSlot } from "./names.mjs";
 
@@ -44,6 +47,11 @@ function loadFace(key) {
 var cache = new FaceCache({ load: loadFace, drop: function (p) { URL.revokeObjectURL(p.url); } });
 
 export function forgetFaces() { cache.forget(); }
+
+on("selfie", function (d) {
+  if (!d || d.action === "more" || !(typeof d.guid === "number" && Number.isInteger(d.guid) && d.guid > 0)) { return; }
+  Object.keys(KINDS).forEach(function (k) { cache.forgetKey(d.guid + ":" + KINDS[k].size); });
+});
 
 function photo(p, cls) {
   var img = p.img.cloneNode(false);

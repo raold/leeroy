@@ -205,9 +205,9 @@ Whisper large-v3-turbo and Chatterbox Turbo models (MIT).
 
 With `[selfies] enabled = true` the mind picks a photo kind for each guild member who has looks
 and, at night only, has the `selfie/` worker render four candidates each. The owner picks one,
-undoes it or asks for four more through the console's routes (`POST /api/selfie`; the page card
-comes later). Rendering stays off by default, never runs while the owner is in game, and every
-image passes a local NSFW check first. See [selfie/README.md](selfie/README.md).
+undoes it or asks for four more in the console's Personas tab ("Choose selfies", through
+`POST /api/selfie`). Rendering stays off by default, never runs while the owner is in game, and
+every image passes a local NSFW check first. See [selfie/README.md](selfie/README.md).
 
 ## License
 

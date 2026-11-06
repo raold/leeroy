@@ -6,12 +6,13 @@ import asyncio
 import base64
 import contextlib
 import hashlib
+from importlib import resources
 from pathlib import Path
 
 import pytest
 
 from conftest import HUMAN, seed_test_cast
-from console.rig import events, http, make_app, running
+from console.rig import events, http, make_app, page_source, running
 from console.test_console_tuning import FakeLink
 from leeroy_mind.console import app as console_app
 from leeroy_mind.console.control import Controls
@@ -298,3 +299,35 @@ def test_a_refused_change_is_not_announced(cast, data):
                 seen = []
             assert all(kind != "selfie" for kind, _ in seen)
     run(go())
+
+
+def _between(text: str, start: str, end: str) -> str:
+    return text[text.index(start):text.index(end, text.index(start))]
+
+
+def test_the_page_has_the_choose_selfies_card():
+    page = resources.files("leeroy_mind.console").joinpath("page.html").read_text("utf-8")
+    personas = _between(page, 'id="tab-personas"', 'id="p-tuning"')
+    card = _between(personas, 'id="p-selfies"', "</article>")
+    assert personas.index('id="p-selfies"') < personas.index("<h3>The cast</h3>")
+    assert "<h3>Choose selfies</h3>" in card and "Recent choices" in card
+    for i in ("sf-counts", "sf-lead", "sf-queue", "sf-status", "sf-recent"):
+        assert f'id="{i}"' in card, i
+    detail = _between(page, 'id="p-detail"', '<section id="tab-')
+    photo = _between(detail, 'id="p-photo"', "</article>")
+    assert "<h3>Profile photo</h3>" in photo and ">4 more</button>" in photo
+    assert 'title="Pass on these and render four new ones tonight"' in photo
+    source = page_source()  # the page and its modules
+    assert 'api("/api/selfies")' in source and '"/api/selfies/images?guid="' in source
+    assert '"/api/selfies/member?guid="' in source and 'post("/api/selfie", ' in source
+    for words in ("Use photo ", " of 4 for ", "Pass on these and render four new ones tonight",
+                  " four photos waiting. Click the one that fits; it becomes their photo everywhere.",
+                  "No photos are waiting. The night renders four for every member without one.",
+                  "No photo yet: a coloured initials circle shows instead.",
+                  "The mind isn't running, so it can't set photos. Start it from the Mind tab.",
+                  "rendering tonight", "no looks yet", "no persona"):
+        assert words in source, words
+    assert console_app.SELFIE_DOWN in source  # the page says what the console says
+    assert "selfie: 1" in source  # the event stream's selfie events reach the page
+    assert "photo: \"the night's photo-kind pass\"" in source  # who wrote a persona (Task 3)
+    assert '"photo kind"' in source  # the member card's photo kind line (Task 2)

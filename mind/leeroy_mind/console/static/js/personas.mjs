@@ -1,16 +1,19 @@
 import { $, api, arr, cell, clear, el, emit, emptyRow, num, obj, on, own, plural, post, refused,
          setText, str } from "./core.mjs";
 import { face } from "./faces.mjs";
+import { pollSelfies, setSelfieNames, showMemberPhoto } from "./selfies.mjs";
 import { S } from "./state.mjs";
 import { registerTab, showTab } from "./tabs.mjs";
-import { CLASSES, moodText, moodTitle, signed, when, youText, youTitle } from "./words.mjs";
+import { CLASSES, moodText, moodTitle, photoKindText, signed, when, youText, youTitle } from "./words.mjs";
 
 // -- the personas tab: mind.db only, and read-only: nothing here can change a persona -----------
+// (its dials are the tuning's overlay, below; its profile photos are selfies.mjs's)
 
 var PERSONAS_MS = 30000;  // as the Guild tab: the live mind writes this database meanwhile
 var TRAITS = ["openness", "conscientiousness", "extraversion", "agreeableness", "neuroticism"];
 var BY = { seed: "the seeding", owner: "you (an import or a personas command)", generator: "the generator",
-           night: "the night's looks pass", stance: "a stance move", undo: "an undo of a stance move" };
+           night: "the night's looks pass", photo: "the night's photo-kind pass", stance: "a stance move",
+           undo: "an undo of a stance move" };
 var LEDGER_KINDS = { note_added: "note added", note_dropped: "note dropped", note_rolled_back: "note rolled back (drift)",
                      drift_flag: "drift flag", stance_band: "stance move", undo: "undo" };
 var personasTimer = null, personasBusy = false, pick = 0, pickSeq = 0, reveal = false;
@@ -73,6 +76,7 @@ function driftTitle(d) {
 
 function renderPersonas(v) {
   $("personas-banner").hidden = true;
+  setSelfieNames(v.names);
   var members = arr(v.members), days = num(v.recent_days) || 7, gm = v.guild_mood, missing = arr(v.missing);
   setText("p-count", plural(members.length, "member") + ", "
           + members.filter(function (m) { return m.persona; }).length + " with a persona");
@@ -133,6 +137,7 @@ function renderMember(j) {
     clear($("p-face"));
     $("p-face").appendChild(face(m.guid, str(m.name), "card"));
   }
+  showMemberPhoto(m.guid, str(m.name));
   setText("p-sub", [m["class"] ? (CLASSES[m["class"]] || "-") + (m.spec ? " " + m.spec : "") : "", str(m.role),
                     m.level ? "level " + m.level : "", typeof m.rank === "number" ? "rank " + m.rank : "",
                     m.in_cast ? (m.online ? "online" : "offline") : "not in the cast"].filter(Boolean).join(" · "));
@@ -181,7 +186,8 @@ function renderMember(j) {
   var a = c && c.appearance ? obj(c.appearance) : null;
   kv($("p-looks"), a ? [["height", a.height_cm + " cm"], ["build", a.build], ["weight", a.weight_kg + " kg"],
                         ["hair", [a.hair_colour, str(a.hair_length).replace(/_/g, " "), a.hair_style].filter(Boolean).join(", ")],
-                        ["skin", a.skin_tone], ["eyes", a.eye_colour], ["face", arr(a.face).join(", ")], ["at the PC", a.at_the_pc]]
+                        ["skin", a.skin_tone], ["eyes", a.eye_colour], ["face", arr(a.face).join(", ")], ["at the PC", a.at_the_pc],
+                        ["photo kind", c.photo ? photoKindText(c.photo) : "none yet: the night's photo-kind pass gives one"]]
                      : [["looks", c ? "none yet: the night's looks pass gives them" : "-"]]);
   var kinds = $("p-kinds"), mem = j.memories;
   setText("p-kindhead", "in " + days + " d");
@@ -508,10 +514,16 @@ on("tuning", function (d) {
   emit("note", "dials: change #" + num(d.change) + " saved");
   if (S.tab === "personas") { pollTuning(); }
 });
+// A photo picked, undone or asked for again, here or on another page: faces.mjs already let the
+// old photo go, so the roster and the open member draw it afresh
+on("selfie", function (d) {
+  if (obj(d).guid === shownFace) { shownFace = null; }
+  if (S.tab === "personas") { pollPersonas(); pollSelfies(); }
+});
 registerTab("personas", {
   show: function () {
-    pollPersonas(); pollTuning();
-    personasTimer = setInterval(function () { pollPersonas(); pollTuning(); }, PERSONAS_MS);
+    pollPersonas(); pollTuning(); pollSelfies();
+    personasTimer = setInterval(function () { pollPersonas(); pollTuning(); pollSelfies(); }, PERSONAS_MS);
   },
   hide: function () { clearInterval(personasTimer); personasTimer = null; }
 });

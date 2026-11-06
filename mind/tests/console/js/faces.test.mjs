@@ -128,6 +128,32 @@ test("a load that ends after forget gives no photo and lets its photo go", async
   assert.equal(t.cache.peek("k"), undefined);
 });
 
+test("forgetting one key loads only that one again and lets only its photo go", async () => {
+  var t = rig(function (key, n) { return "blob:" + key + "/" + n; });
+  var a = t.cache.get("1:sm"); await t.settle(); await a;
+  var b = t.cache.get("2:sm"); await t.settle(); await b;
+  t.cache.forgetKey("1:sm");
+  t.cache.forgetKey("9:sm");  // never asked for: nothing to let go
+  assert.deepEqual(t.dropped, ["blob:1:sm/1"]);
+  assert.equal(t.cache.peek("1:sm"), undefined);
+  assert.equal(t.cache.peek("2:sm"), "blob:2:sm/2");
+  var c = t.cache.get("1:sm"); await t.settle();
+  assert.equal(await c, "blob:1:sm/3");     // within its 60 s, but asked for again
+  assert.equal(await t.cache.get("2:sm"), "blob:2:sm/2");
+  assert.equal(t.loads.length, 3);
+});
+
+test("a load that ends after its key was forgotten gives no photo and lets its photo go", async () => {
+  var t = rig(function (key, n) { return "blob:" + n; });
+  var p = t.cache.get("k");
+  await tick();
+  t.cache.forgetKey("k");
+  await t.settle();
+  assert.equal(await p, null);
+  assert.deepEqual(t.dropped, ["blob:1"]);
+  assert.equal(t.cache.peek("k"), undefined);
+});
+
 test("a failed load is remembered as no photo", async () => {
   var t = rig(function () { throw new Error("x"); });
   var p = t.cache.get("k"); await t.settle();
@@ -295,4 +321,29 @@ test("a line with no member (guid 0, below 0 or not a whole number) draws initia
   });
   await settled();
   assert.equal(page.asked.length, before);
+});
+
+test("a photo picked or undone is asked for again at once; four more leaves the face as it is", async () => {
+  var face = await stage();
+  var core = await import("../../../leeroy_mind/console/static/js/core.mjs");
+  var row = document.createElement("div");
+  row.appendChild(face(2201, "Arkon", "list"));
+  row.appendChild(face(2201, "Arkon", "card"));
+  await settled();
+  var before = askedFor(2201);
+  assert.equal(face(2201, "Arkon", "list").tagName, "IMG");  // decoded and at hand
+  core.emit("selfie", { action: "more", guid: 2201 });
+  assert.equal(face(2201, "Arkon", "list").tagName, "IMG");
+  assert.equal(askedFor(2201), before);
+  core.emit("selfie", { action: "pick", guid: 2201 });
+  var again = face(2201, "Arkon", "list");
+  assert.equal(again.tagName, "SPAN");                       // the old photo is not shown again
+  await settled();
+  assert.equal(askedFor(2201), before + 1);
+  assert.equal(face(2201, "Arkon", "card").tagName, "SPAN");  // every size of that member
+  await settled();
+  core.emit("selfie", { action: "undo", guid: 2201 });
+  assert.equal(face(2201, "Arkon", "list").tagName, "SPAN");
+  core.emit("selfie", { action: "pick", guid: "2201" });     // never a guid that is not a number
+  core.emit("selfie", {});
 });
