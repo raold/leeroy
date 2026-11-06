@@ -119,3 +119,25 @@ def test_try_retries_a_vram_refusal_once_on_the_same_worker(root, capsys, monkey
     out = json.loads(capsys.readouterr().out)
     assert code == 0 and out["sets"] == 1
     assert [n.split()[0] for n in starts.read_text().splitlines()] == ["spawn", "retry"]
+
+
+def test_try_drops_what_loaded_beside_its_worker_once_the_worker_is_gone(root, capsys, monkeypatch):
+    # final review C1: mod-ollama-chat runs while the mind is stopped, so a try can leave Orion
+    # split onto the CPU for the mind it hands back to
+    from leeroy_mind.nightly.gpu import GpuArbiter
+    from leeroy_mind.selfies.worker import SelfieWorker
+    seen, make_room, stop = [], GpuArbiter.make_room, SelfieWorker.stop
+
+    async def room(self):
+        seen.append("room")
+        await make_room(self)
+
+    async def stopped(self):
+        await stop(self)
+        seen.append("stopped")
+    monkeypatch.setattr(GpuArbiter, "make_room", room)
+    monkeypatch.setattr(SelfieWorker, "stop", stopped)
+    code = cli.selfies_main(["--data-dir", str(root), "try", "--guid", "101"],
+                            make_llm=lambda cfg: llm(root))
+    assert code == 0 and json.loads(capsys.readouterr().out)["sets"] == 1
+    assert seen == ["room", "stopped", "room"]

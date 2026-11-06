@@ -134,6 +134,17 @@ async def _kinds(ctx, store, guids: list[int]) -> list[int]:
     return ready
 
 
+async def _room_after(ctx) -> None:
+    """Once the worker is gone: mod-ollama-chat keeps asking while the mind is stopped, so a
+    chat model may have loaded beside the worker partly on the CPU. It is dropped, to load
+    whole on its next request, as the night does after its image stage."""
+    try:
+        await ctx.arbiter.make_room()
+    except Exception as e:
+        print(f"the chat models could not be unloaded after the try ({type(e).__name__}): "
+              "check `ollama ps` before the mind starts", file=sys.stderr)
+
+
 async def _try(root, store, cfg, scfg, clock, args, make_llm) -> int:
     night = _default_night(clock)
     async with _context(root, store, cfg, clock, night, make_llm=make_llm,
@@ -164,6 +175,7 @@ async def _try(root, store, cfg, scfg, clock, args, make_llm) -> int:
                 print(f"worker {e.reason}", file=sys.stderr)
             finally:
                 await to_the_end(worker.worker.stop())
+                await _room_after(ctx)
         _print({"members": tally.members, "sets": tally.sets, "flagged": worker.flagged,
                 "seconds_per_image": round(worker.seconds / worker.images, 2) if worker.images
                 else None, "peak_gib": worker.peak, "path": str(out_root)})

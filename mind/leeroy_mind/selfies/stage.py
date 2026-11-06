@@ -21,9 +21,8 @@ for want of VRAM is asked once more after making room (start_worker), keeping th
 loaded on the CPU, so that check comes within seconds of the unload. CONTENDED worker failures
 in a row end the stage for the night, keeping the sets it finished; a make_room that fails
 (Ollama down or hung) counts as one (RoomFailed), and a worker that died is started again
-once. No render is
-sent while a live lease is held: that, or a lease refusing make_room (LiveLeaseHeld), ends the
-stage at once and the runner logs it, with no unit failed.
+once. No render is sent while a live lease is held: that, or a lease refusing make_room
+(LiveLeaseHeld), ends the stage at once and the runner logs it, with no unit failed.
 
 However the stage ends, his login's cancel included, the worker is stopped and the stop runs to
 its end before the cancel goes on (worker.to_the_end): its whole process tree is gone before the

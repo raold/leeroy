@@ -895,9 +895,10 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
   preload starts only after that tree is gone.
 - **Orion beside the worker.** mod-ollama-chat's night requests can load Orion into the VRAM
   the worker leaves, partly on the CPU, and Ollama reuses that runner for a preload at the same
-  `num_ctx`. So the night makes room once more after the image stage, and after any image
-  stage the next hand-over (his login, voice, an offline raid) unloads a loaded live model
-  before its preload: one cold load (about 10 s) at the first login after a render night. At
+  `num_ctx`. So the night makes room once more after the image stage (and `selfies try` once
+  its worker is gone), and after any image stage the next hand-over (his login, voice, an
+  offline raid) unloads a loaded live model before its preload: one cold load (about 10 s) at
+  the first login after a render night. At
   release, `ollama ps` after a render night and his next login must show Orion at `100% GPU`.
 - **Storage.** Sets and picks are rows in `mind.db` (the selfies migration,
   `migrations/*_selfies.sql`); the images are files
