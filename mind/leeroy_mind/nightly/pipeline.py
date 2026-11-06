@@ -1,6 +1,7 @@
 """The nightly stage order and the adapters for extraction and weekly evaluation."""
 import json
 
+from leeroy_mind.arc.night import stage_arc
 from leeroy_mind.nightly.attraction import stage_attraction
 from leeroy_mind.nightly.confide import stage_confide
 from leeroy_mind.nightly.critic import stage_critic
@@ -92,6 +93,7 @@ STAGES = (
     Stage("encounters", stage_encounters, "reflection"),
     Stage("attraction", stage_attraction, None),
     Stage("romance", stage_romance, None),
+    Stage("arc", stage_arc, "reflection"),
     Stage("jealousy", stage_jealousy, None),
     Stage("human_world", stage_human_world, "reflection"),
     Stage("language", stage_language, "reflection"),

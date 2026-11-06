@@ -15,7 +15,7 @@ from leeroy_mind.nightly.store import run_begin
 def test_stage_order_preserves_dependencies_and_skips_breaks():
     assert [s.name for s in STAGES] == ["snapshot", "threads", "confide", "knows", "nudges", "tier0",
         "enrich", "reflect", "life", "wowlife", "mentors", "encounters", "attraction", "romance",
-        "jealousy", "human_world", "language", "mood", "notes", "stories", "critic", "forget", "regress", "eval"]
+        "arc", "jealousy", "human_world", "language", "mood", "notes", "stories", "critic", "forget", "regress", "eval"]
     assert next(s for s in STAGES if s.name == "eval").model is None
 
 
