@@ -121,7 +121,7 @@ def load(data: Path, *, min_free_gib: float, device: str = "cuda") -> Renderer:
     except Exception as e:
         raise ReadyError("model", fields={"check_ms": _ms(checked - started),
                                           "load_ms": _ms(time.perf_counter() - checked)}) from e
-    labels ={str(v).lower(): int(k) for k, v in classifier.config.id2label.items()}
+    labels = {str(v).lower(): int(k) for k, v in classifier.config.id2label.items()}
     timings = {"check_ms": _ms(checked - started), "load_ms": _ms(time.perf_counter() - checked)}
     if "nsfw" not in labels:
         raise ReadyError("model", fields=timings)
