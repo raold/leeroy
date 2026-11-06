@@ -272,9 +272,18 @@ class ConsoleApp:
 
         def question(conn):
             upto = feed.last_id(conn)
-            since = self._clock() - days * 86400 if days else None
-            return feed.feed(conn, after=after, upto=upto, since=since), upto
+            now = self._clock()
+            since = now - days * 86400 if days else None
+            return feed.feed(conn, after=after, upto=upto, since=since, now=now), upto
         return feed.read(db, question)
+
+    def _poll(self, after: int, days: float | None = None):
+        """Feed, waiting set and recheck of what is on its way, from one read snapshot."""
+        now = self._clock()
+        since = now - days * 86400 if days else None
+        ids = list(self._pending) + list(self._waiting)
+        return feed.read(self.s.data_dir / "mind.db", feed.poll, after=after, since=since,
+                         now=now, ids=ids)
 
     def _track(self, lines: list[dict]) -> None:
         """Lines a page was given as still on their way are rechecked until they settle."""
@@ -284,24 +293,15 @@ class ConsoleApp:
                 self._pending.setdefault(line["id"], now)
                 self._waiting.pop(line["id"], None)
 
-    def _look(self, upto: int | None):
-        ids = list(self._pending) + list(self._waiting)
-        db = self.s.data_dir / "mind.db"
-
-        def question(conn):
-            late = feed.waiting(conn, self._feed_last, upto) if upto is not None else []
-            return late, feed.look(conn, ids + late)
-        return feed.read(db, question)
-
-    async def _settle(self, upto: int | None, out: dict[int, dict]) -> list[int]:
-        """Recheck what is on its way: lines now heard go into `out`; the ids returned are
-        gone, aged out or pushed past the limit."""
-        late, seen = await asyncio.to_thread(self._look, upto)
+    def _settle(self, late: list[int], seen: list[dict], lines: list[dict],
+                out: dict[int, dict]) -> list[int]:
+        """Apply a recheck: lines now heard go into `out`; the ids returned are gone, aged out
+        or pushed past the limit."""
         now = self._monotonic()
         for i in late:
             if i not in self._pending:
                 self._waiting.setdefault(i, now)
-        by_id = {line["id"]: line for line in seen}
+        by_id = {line["id"]: line for line in seen + lines}
         gone = []
         for i in list(self._pending) + list(self._waiting):
             line = by_id.get(i)
@@ -339,19 +339,22 @@ class ConsoleApp:
             await asyncio.sleep(FEED_S)
             if not self._subs:
                 continue
-            try:
-                lines, upto = await asyncio.to_thread(self._feed_since, self._feed_last)
-                out = {line["id"]: line for line in lines}
-                self._track(lines)
-                gone = await self._settle(upto, out)
-            except Exception as e:
-                log.warning("console_feed_unread: error=%s", type(e).__name__)
-                continue
-            self._feed_last = max(self._feed_last, upto)
-            if out:
-                self.broadcast("chat", {"lines": sorted(out.values(), key=lambda x: x["id"])})
-            if gone:
-                self.broadcast("chat_gone", {"ids": gone})
+            await self._feed_pass()
+
+    async def _feed_pass(self) -> None:
+        try:
+            lines, upto, late, seen = await asyncio.to_thread(self._poll, self._feed_last)
+            out = {line["id"]: line for line in lines}
+            self._track(lines)
+            gone = self._settle(late, seen, lines, out)
+        except Exception as e:
+            log.warning("console_feed_unread: error=%s", type(e).__name__)
+            return
+        self._feed_last = max(self._feed_last, upto)
+        if out:
+            self.broadcast("chat", {"lines": sorted(out.values(), key=lambda x: x["id"])})
+        if gone:
+            self.broadcast("chat_gone", {"ids": gone})
 
     # -- voice -------------------------------------------------------------------------------
 
@@ -406,10 +409,14 @@ class ConsoleApp:
         """`voice` and `strip` were taken as the page registered, with no await between: every
         later voice event is in its queue and none before it is."""
         try:
-            lines, _ = await asyncio.to_thread(self._feed_since, 0, days=FEED_DAYS)
+            lines, _, late, _ = await asyncio.to_thread(self._poll, 0, FEED_DAYS)
+            self._track(lines)
+            now = self._monotonic()
+            for i in late:
+                if i not in self._pending:
+                    self._waiting.setdefault(i, now)
         except Exception:
             lines = []
-        self._track(lines)
         yield sse("snapshot", {"status": strip, "voice": voice, "chat": lines,
                                "rooms": self._rooms(), "mood": await self._mood()})
         while not sub.dead:

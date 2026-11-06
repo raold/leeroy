@@ -13,6 +13,7 @@ from contextlib import closing
 from pathlib import Path
 
 FEED_LIMIT = 200
+WHISPER_GRACE_S = 3.0  # a whisper is stored a moment before the voice row that says it was spoken
 
 
 def connect(path: Path) -> sqlite3.Connection:
@@ -69,7 +70,9 @@ WITH base AS (
             from_guid = :human
          OR (audience IS NOT NULL AND json_valid(audience) AND EXISTS (
                 SELECT 1 FROM json_each(audience) a WHERE a.value = from_guid))))
-     OR (channel = 'whisper' AND :human != 0 AND (from_guid = :human OR to_guid = :human)))
+     OR (channel = 'whisper' AND :human != 0 AND (from_guid = :human OR to_guid = :human) AND (
+            coalesce(vrank, 0) > 0 OR vheard
+         OR (vrank IS NULL AND (:grace <= 0 OR :now - ts >= :grace)))))
 ), ranked AS (
     SELECT *, row_number() OVER (PARTITION BY view ORDER BY id DESC) AS rn FROM shown
 )
@@ -78,10 +81,15 @@ SELECT * FROM ranked WHERE rn <= :limit ORDER BY id
 
 _WAITING = """
 SELECT l.id FROM chat_line l
-WHERE l.id > :after AND l.id <= :upto AND l.channel LIKE 'voice:%' AND l.session_id IS NOT NULL
-  AND NOT (CASE WHEN :human != 0 AND l.from_guid = :human
-                THEN EXISTS (SELECT 1 FROM voice_heard h WHERE h.line_id = l.id)
-                ELSE EXISTS (SELECT 1 FROM voice_line v WHERE v.line_id = l.id) END)
+WHERE l.id > :after AND l.id <= :upto AND (
+    (l.channel LIKE 'voice:%' AND l.session_id IS NOT NULL
+     AND NOT (CASE WHEN :human != 0 AND l.from_guid = :human
+                   THEN EXISTS (SELECT 1 FROM voice_heard h WHERE h.line_id = l.id)
+                   ELSE EXISTS (SELECT 1 FROM voice_line v WHERE v.line_id = l.id) END))
+ OR (l.channel = 'whisper' AND :human != 0 AND (l.from_guid = :human OR l.to_guid = :human)
+     AND :grace > 0 AND :now - l.ts < :grace
+     AND NOT EXISTS (SELECT 1 FROM voice_line v WHERE v.line_id = l.id)
+     AND NOT EXISTS (SELECT 1 FROM voice_heard h WHERE h.line_id = l.id)))
 """
 
 
@@ -108,32 +116,36 @@ def _line(r, human: int) -> dict:
             "you": you, "voice": voice, "heard": heard}
 
 
-def _query(conn, *, after, upto, since, limit, ids) -> list[dict]:
+def _query(conn, *, after, upto, since, limit, ids, now=None) -> list[dict]:
     human = human_guid(conn)
-    vrank, vheard = _VOICE_ROWS[_has(conn, "voice_line", "voice_heard")]
+    voiced = _has(conn, "voice_line", "voice_heard")
+    vrank, vheard = _VOICE_ROWS[voiced]
     rows = conn.execute(_FEED.format(vrank=vrank, vheard=vheard), {
         "after": int(after), "human": human, "limit": int(limit),
         "upto": (1 << 62) if upto is None else int(upto),
         "since": -1e18 if since is None else float(since),
+        "now": 0.0 if now is None else float(now),
+        "grace": WHISPER_GRACE_S if voiced and now is not None else 0.0,
         "ids": None if ids is None else json.dumps([int(i) for i in ids])}).fetchall()
     return [_line(r, human) for r in rows]
 
 
 def feed(conn, *, after: int = 0, upto: int | None = None, since: float | None = None,
-         limit: int = FEED_LIMIT) -> list[dict]:
+         limit: int = FEED_LIMIT, now: float | None = None) -> list[dict]:
     """The owner-visible lines with ids after `after` (and up to `upto`), stored at `since` or
     later, oldest first: at most `limit` of each view (guild, officer, group, whispers), the
     newest. A spoken line shows once it has played to him (`heard`) or while it is on its way
-    (`sent`, heard False); one the voice service dropped never does."""
-    return _query(conn, after=after, upto=upto, since=since, limit=limit, ids=None)
+    (`sent`, heard False); one the voice service dropped never does. With `now`, a whisper
+    younger than WHISPER_GRACE_S with no voice row yet is held back (see `waiting`)."""
+    return _query(conn, after=after, upto=upto, since=since, limit=limit, ids=None, now=now)
 
 
-def look(conn, ids: list[int]) -> list[dict]:
+def look(conn, ids: list[int], now: float | None = None) -> list[dict]:
     """The lines among `ids` the feed shows now, oldest first, whatever their state."""
     ids = list(ids)
     if not ids:
         return []
-    return _query(conn, after=0, upto=None, since=None, limit=len(ids), ids=ids)
+    return _query(conn, after=0, upto=None, since=None, limit=len(ids), ids=ids, now=now)
 
 
 def recheck(conn, ids: list[int]) -> tuple[list[dict], list[int]]:
@@ -146,13 +158,30 @@ def recheck(conn, ids: list[int]) -> tuple[list[dict], list[int]]:
             [i for i in ids if i not in found])
 
 
-def waiting(conn, after: int, upto: int) -> list[int]:
+def waiting(conn, after: int, upto: int, now: float | None = None) -> list[int]:
     """Spoken lines in that id range whose voice row is not written yet (the chat line comes
-    first), so a later look can still find them."""
+    first), and with `now` whispers younger than the grace: a later look can still find them."""
     if not _has(conn, "voice_line", "voice_heard"):
         return []
     return [r["id"] for r in conn.execute(_WAITING, {"after": int(after), "upto": int(upto),
-                                                     "human": human_guid(conn)})]
+                                                     "human": human_guid(conn),
+                                                     "now": 0.0 if now is None else float(now),
+                                                     "grace": 0.0 if now is None
+                                                     else WHISPER_GRACE_S})]
+
+
+def poll(conn, *, after: int, since: float | None, now: float, ids: list[int]):
+    """One look from a single read snapshot (so a row committed between the queries cannot be
+    missed by all of them): (lines after `after`, the last id, ids still waiting for a voice
+    row, the current state of `ids` and of those waiting)."""
+    conn.execute("BEGIN")
+    try:
+        upto = last_id(conn)
+        lines = feed(conn, after=after, upto=upto, since=since, now=now)
+        late = waiting(conn, after, upto, now)
+        return lines, upto, late, look(conn, list(ids) + late, now)
+    finally:
+        conn.rollback()
 
 
 def guild_mood(conn) -> dict | None:

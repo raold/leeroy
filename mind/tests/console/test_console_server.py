@@ -536,3 +536,117 @@ def test_a_line_that_never_plays_is_given_up(data, store, monkeypatch):
             _, (kind, data_) = await reader
             assert kind == "chat_gone" and line2 in data_["ids"]
     run(aged())
+
+
+# -- fix round 1: one read snapshot, voiced whispers ---------------------------------------------
+
+def _pass_rig(app):
+    sent = []
+    app.broadcast = lambda kind, payload: sent.append((kind, payload))
+    app._subs.add(object())
+    return sent
+
+
+def _chat_ids(sent):
+    return [(line["id"], line["heard"]) for kind, p in sent if kind == "chat" for line in p["lines"]]
+
+
+@pytest.mark.parametrize("first,then", [("sent", "done"), (None, "done")])
+def test_a_voice_row_landing_mid_poll_is_not_lost(data, store, monkeypatch, first, then):
+    from leeroy_mind.protocol import Chat, Member
+    from leeroy_mind.voice.store import VoiceStore
+    store.set_meta("human_guid", "900")
+    store.upsert_cast([Member(guid=101, name="Arkon", race=1, class_=1, gender=0, level=80,
+                              rank=3, online=True, map=0, zone=0, spec_tab=-1)], 1.0)
+    sid = store.start_session(1.0)
+    voice = VoiceStore(store)
+    real_feed = feed.feed
+    state = {}
+
+    def feed_then_commit(conn, **kw):
+        out = real_feed(conn, **kw)
+        if "line" in state and not state.get("done"):
+            state["done"] = True
+            other = sqlite3.connect(data / "mind.db")  # the mind's commit, from its own connection
+            with other:
+                other.execute("INSERT INTO voice_line(speak_id, line_id, room, state, ts) "
+                              "VALUES ('run.1', ?, 'guild_hall', ?, 1.0)",
+                              (state["line"], first or then))
+            other.close()
+        return out
+    monkeypatch.setattr(feed, "feed", feed_then_commit)
+
+    async def go():
+        app = make_app(data, clock=store.clock.now)
+        sent = _pass_rig(app)
+        _, app._feed_last = await asyncio.to_thread(app._feed_since, 1 << 62)
+        state["line"] = store.insert_chat_line(
+            Chat(ts=0, channel="voice:guild_hall", from_guid=101, from_name="Arkon", to_guid=0,
+                 text="late row", map=0, zone=0), session_id=sid, origin="mind")
+        await app._feed_pass()
+        await app._feed_pass()
+        if first:
+            voice.set_line("run.1", then, None, 2.0)
+            await app._feed_pass()
+        await app._feed_pass()
+        got = _chat_ids(sent)
+        assert got[-1] == (state["line"], True)
+        assert [g for g in got if g[1] is True] == [(state["line"], True)]
+        assert len([g for g in got if g[1] is False]) == (1 if first else 0)
+    run(go())
+
+
+def _whisper_setup(store):
+    from leeroy_mind.protocol import Chat, Member
+    store.set_meta("human_guid", "900")
+    store.upsert_cast([Member(guid=101, name="Arkon", race=1, class_=1, gender=0, level=80,
+                              rank=3, online=True, map=0, zone=0, spec_tab=-1)], 1.0)
+
+    def whisper(text):
+        return store.insert_chat_line(Chat(ts=0, channel="whisper", from_guid=101,
+                                           from_name="Arkon", to_guid=900, text=text, map=0,
+                                           zone=0), session_id=None, origin="mind")
+    return whisper
+
+
+def test_a_dropped_voiced_whisper_never_shows_and_a_pending_one_is_gone(data, store):
+    from leeroy_mind.voice.store import VoiceStore
+    whisper = _whisper_setup(store)
+    voice = VoiceStore(store)
+    a, b = whisper("dropped at once"), whisper("sent then dropped")
+    voice.add_line("w.1", a, "whisper", "dropped", 1.0)
+    voice.add_line("w.2", b, "whisper", "sent", 1.0)
+
+    async def go():
+        app = make_app(data, clock=lambda: store.clock.now() + 60)
+        sent = _pass_rig(app)
+        _, app._feed_last = await asyncio.to_thread(app._feed_since, 1 << 62)
+        app._feed_last = 0
+        await app._feed_pass()
+        assert _chat_ids(sent) == [(b, False)]
+        voice.set_line("w.2", "dropped", "muted", 2.0)
+        await app._feed_pass()
+        assert ("chat_gone", {"ids": [b]}) in sent
+    run(go())
+
+
+def test_a_whisper_whose_voice_row_comes_late_is_never_shown_as_typed(data, store):
+    from leeroy_mind.voice.store import VoiceStore
+    whisper = _whisper_setup(store)
+    now = [store.clock.now()]
+
+    async def go():
+        app = make_app(data, clock=lambda: now[0])
+        sent = _pass_rig(app)
+        _, app._feed_last = await asyncio.to_thread(app._feed_since, 1 << 62)
+        spoken, typed = whisper("said aloud"), whisper("typed")
+        await app._feed_pass()
+        assert _chat_ids(sent) == []  # inside the grace: held
+        now[0] += 1
+        VoiceStore(store).add_line("w.1", spoken, "whisper", "sent", 1.0)
+        await app._feed_pass()
+        assert _chat_ids(sent) == [(spoken, False)]
+        now[0] += 3
+        await app._feed_pass()
+        assert _chat_ids(sent) == [(spoken, False), (typed, None)]
+    run(go())
