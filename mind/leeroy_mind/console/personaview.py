@@ -34,7 +34,7 @@ from leeroy_mind.nightly.mood import octant
 from leeroy_mind.nightly.motives import TRAITS
 from leeroy_mind.personas.schema import persona_from_dict, persona_to_dict
 
-from .feed import human_guid
+from .feed import guild_mood, human_guid
 from .raidview import people
 
 RECENT_DAYS = 7
@@ -121,20 +121,6 @@ def _moods(conn) -> dict[int, dict]:
     return {r["guid"]: {"p": r["p"], "a": r["a"], "d": r["d"],
                         "octant": octant(r["p"], r["a"], r["d"]), "updated": r["updated"]}
             for r in conn.execute("SELECT guid, p, a, d, updated FROM pad_mood")}
-
-
-def _guild_mood(conn) -> dict | None:
-    r = conn.execute("SELECT night, value, reasons FROM guild_mood "
-                     "ORDER BY night DESC LIMIT 1").fetchone()
-    if r is None:
-        return None
-    try:
-        reasons = json.loads(r["reasons"])
-    except (TypeError, ValueError):
-        reasons = []
-    return {"night": r["night"], "value": r["value"],
-            "reasons": [x for x in reasons if isinstance(x, str)] if isinstance(reasons, list)
-            else []}
 
 
 def _memories(conn, since: float) -> dict[int, dict]:
@@ -226,7 +212,7 @@ def _view(conn, *, now: float, guid: int | None = None) -> dict:
             names[str(g)] = p.character_name
     return {"human": human, "members": members, "personas": personas, "names": names,
             "missing": missing, "have": have, "since": since,
-            "guild_mood": _guild_mood(conn) if "guild_mood" in have else None}
+            "guild_mood": guild_mood(conn)}
 
 
 def roster_view(conn, *, now: float) -> dict:

@@ -16,9 +16,10 @@ run nothing else.
     GET  /             the page (static; it carries no key)
     GET  /static/<path> the page's stylesheet and modules (static_files: the package's static/
                        folder, the path looked up exactly as packaged; anything else is 404)
-    GET  /api/state    the strip, the voice mirror, the text feed and the control rules
+    GET  /api/state    the strip, the voice mirror, the text feed, the 32 rooms, the guild mood
+                       and the control rules
     GET  /api/events   the same as a first `snapshot` event, then `status`, `voice`, `chat`
-                       and `control` events (server-sent events, a comment every 15 s)
+                       (a repeated id replaces the line), `chat_gone` and `control` events (server-sent events, a comment every 15 s)
     GET  /api/health   the Mind tab: processes, lock, links, Ollama's resident models, GPU,
                        the night, the latest errors and a content-free log tail
     GET  /api/feed     ?after=<id>: text lines after that id
@@ -68,12 +69,15 @@ from .control import Controls, Refused
 from .httpd import Request, Response, Stream, digits, encode_json, json_response, text
 from .mindlink import RAID_S, LinkError
 from .voicelink import VoiceRelay
+from ..voice.rooms import ROOMS
 
 HOST = "127.0.0.1"
 STATUS_S = 2.0
 SNAPSHOT_S = 15.0  # a settled mind's process list is taken this often (an unclear one's at most)
 VOICE_LOCK_S = 15.0  # how long the Mind tab reuses its reading of voice.lock
 FEED_S = 1.5
+PENDING_S = 120.0  # how long a spoken line may stay "on its way" before the page is told it is gone
+PENDING_MAX = 200  # how many such lines are watched at once
 PING_S = 15.0
 QUEUE = 500  # events a page may fall behind before it is cut off (it reconnects)
 FEED_DAYS = 3.0  # how far back a page's first feed goes
@@ -173,6 +177,8 @@ class ConsoleApp:
         self.game = status.GameView(status.UNKNOWN, "not checked yet")
         self._strip: dict = {}
         self._feed_last = 0
+        self._pending: dict[int, float] = {}  # sent to a page as heard False: id -> first seen
+        self._waiting: dict[int, float] = {}  # spoken, voice row not written yet: id -> first seen
         self._tasks: list[asyncio.Task] = []
         self._server = None
 
@@ -270,6 +276,60 @@ class ConsoleApp:
             return feed.feed(conn, after=after, upto=upto, since=since), upto
         return feed.read(db, question)
 
+    def _track(self, lines: list[dict]) -> None:
+        """Lines a page was given as still on their way are rechecked until they settle."""
+        now = self._monotonic()
+        for line in lines:
+            if line["heard"] is False:
+                self._pending.setdefault(line["id"], now)
+                self._waiting.pop(line["id"], None)
+
+    def _look(self, upto: int | None):
+        ids = list(self._pending) + list(self._waiting)
+        db = self.s.data_dir / "mind.db"
+
+        def question(conn):
+            late = feed.waiting(conn, self._feed_last, upto) if upto is not None else []
+            return late, feed.look(conn, ids + late)
+        return feed.read(db, question)
+
+    async def _settle(self, upto: int | None, out: dict[int, dict]) -> list[int]:
+        """Recheck what is on its way: lines now heard go into `out`; the ids returned are
+        gone, aged out or pushed past the limit."""
+        late, seen = await asyncio.to_thread(self._look, upto)
+        now = self._monotonic()
+        for i in late:
+            if i not in self._pending:
+                self._waiting.setdefault(i, now)
+        by_id = {line["id"]: line for line in seen}
+        gone = []
+        for i in list(self._pending) + list(self._waiting):
+            line = by_id.get(i)
+            if line is None:
+                if i in self._pending:
+                    del self._pending[i]
+                    gone.append(i)
+            elif line["heard"] is not False:
+                out[i] = line
+                self._pending.pop(i, None)
+                self._waiting.pop(i, None)
+            elif i in self._waiting:
+                out[i] = line
+                del self._waiting[i]
+                self._pending[i] = now
+        for table in (self._pending, self._waiting):
+            for i, since in list(table.items()):
+                if now - since >= PENDING_S:
+                    del table[i]
+                    if table is self._pending:
+                        gone.append(i)
+        while len(self._pending) > PENDING_MAX:
+            gone.append(next(iter(self._pending)))
+            del self._pending[gone[-1]]
+        while len(self._waiting) > PENDING_MAX:
+            del self._waiting[next(iter(self._waiting))]
+        return [i for i in dict.fromkeys(gone) if i not in out]
+
     async def _feed_loop(self) -> None:
         try:
             _, self._feed_last = await asyncio.to_thread(self._feed_since, 1 << 62)
@@ -281,12 +341,17 @@ class ConsoleApp:
                 continue
             try:
                 lines, upto = await asyncio.to_thread(self._feed_since, self._feed_last)
+                out = {line["id"]: line for line in lines}
+                self._track(lines)
+                gone = await self._settle(upto, out)
             except Exception as e:
                 log.warning("console_feed_unread: error=%s", type(e).__name__)
                 continue
             self._feed_last = max(self._feed_last, upto)
-            if lines:
-                self.broadcast("chat", {"lines": lines})
+            if out:
+                self.broadcast("chat", {"lines": sorted(out.values(), key=lambda x: x["id"])})
+            if gone:
+                self.broadcast("chat_gone", {"ids": gone})
 
     # -- voice -------------------------------------------------------------------------------
 
@@ -322,7 +387,20 @@ class ConsoleApp:
         except Exception as e:
             log.warning("console_feed_unread: error=%s", type(e).__name__)
             lines = []
-        return {"status": strip, "voice": voice, "chat": lines}
+        return {"status": strip, "voice": voice, "chat": lines, "rooms": self._rooms(),
+                "mood": await self._mood()}
+
+    @staticmethod
+    def _rooms() -> list[dict]:
+        return [{"id": r.id, "name": r.name, "parent": r.parent, "capacity": r.capacity}
+                for r in ROOMS]
+
+    async def _mood(self) -> dict | None:
+        try:
+            return await asyncio.to_thread(feed.read, self.s.data_dir / "mind.db", feed.guild_mood)
+        except Exception as e:
+            log.warning("console_mood_unread: error=%s", type(e).__name__)
+            return None
 
     async def _events(self, sub: _Subscriber, voice, strip):
         """`voice` and `strip` were taken as the page registered, with no await between: every
@@ -331,7 +409,9 @@ class ConsoleApp:
             lines, _ = await asyncio.to_thread(self._feed_since, 0, days=FEED_DAYS)
         except Exception:
             lines = []
-        yield sse("snapshot", {"status": strip, "voice": voice, "chat": lines})
+        self._track(lines)
+        yield sse("snapshot", {"status": strip, "voice": voice, "chat": lines,
+                               "rooms": self._rooms(), "mood": await self._mood()})
         while not sub.dead:
             try:
                 chunk = await asyncio.wait_for(sub.queue.get(), PING_S)

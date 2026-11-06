@@ -60,7 +60,7 @@ def test_whispers_show_only_with_him(db):
     assert lines[0]["you"] is False and lines[0]["from"] == "P101"
 
 
-def test_say_yell_emote_and_voice_channels_never_show(db):
+def test_say_yell_emote_and_a_voice_line_that_never_played_stay_out(db):
     store, path = db
     sid = store.start_session(1.0)
     for channel in ("say", "yell", "emote", "voice:raid"):
@@ -106,3 +106,108 @@ def test_open_session_and_the_night(db):
     store.conn.commit()
     assert feed.read(path, feed.night) == {"night": "2026-11-03", "status": "done",
                                            "started": 3, "finished": 4, "attempts": 1}
+
+
+# -- spoken lines ----------------------------------------------------------------------------------
+
+from leeroy_mind.voice.store import VoiceStore  # noqa: E402
+
+
+def spoken(store, sid, frm, text, room, state, *, channel=None, n=[0]):
+    """A voice-room line (chat_line `voice:<room>`) and the voice_line row for how it played."""
+    line = say(store, channel or f"voice:{room}", frm, text, session=sid)
+    if state is not None:
+        n[0] += 1
+        VoiceStore(store).add_line(f"run.{n[0]}", line, room, state, 1.0)
+    return line
+
+
+def by_text(path, **kw):
+    return {line["text"]: line for line in feed.read(path, feed.feed, **kw)}
+
+
+def test_spoken_lines_join_the_feed_once_they_played_to_him(db):
+    store, path = db
+    sid = store.start_session(1.0)
+    for state in ("done", "started", "cut", "sent", "unheard", "dropped"):
+        spoken(store, sid, 101, f"line {state}", "guild_hall", state)
+    spoken(store, sid, 101, "no voice row yet", "guild_hall", None)
+    spoken(store, sid, 102, "officers talk", "officers", "done")
+    mine = spoken(store, sid, HUMAN, "my spoken line", "guild_hall", None)
+    VoiceStore(store).add_heard(mine, "my spoken line", 0.9, 800, 300)
+    spoken(store, sid, HUMAN, "my unheard line", "guild_hall", None)
+    spoken(store, None, 101, "outside a session", "guild_hall", "done")
+    got = by_text(path)
+    assert set(got) == {"line done", "line started", "line cut", "line sent",
+                        "officers talk", "my spoken line"}
+    assert [got[k]["heard"] for k in ("line done", "line started", "line cut")] == [True] * 3
+    assert got["line sent"]["heard"] is False
+    assert got["my spoken line"]["heard"] is True and got["my spoken line"]["you"] is True
+    assert got["line done"]["voice"] == "guild_hall" and got["officers talk"]["voice"] == "officers"
+    assert got["officers talk"]["channel"] == "voice:officers"
+
+
+def test_a_spoken_whisper_is_marked(db):
+    store, path = db
+    line = say(store, "whisper", 101, "said aloud", to=HUMAN)
+    VoiceStore(store).add_line("run.w", line, "whisper", "started", 1.0)
+    say(store, "whisper", 102, "typed one", to=HUMAN)
+    got = by_text(path)
+    assert got["said aloud"]["voice"] == "whisper" and got["said aloud"]["heard"] is True
+    assert got["typed one"]["voice"] is None and got["typed one"]["heard"] is None
+
+
+def test_each_view_keeps_its_own_newest_lines(db):
+    store, path = db
+    sid = store.start_session(1.0)
+    whispers = [say(store, "whisper", 101, f"w{i}", to=HUMAN) for i in range(3)]
+    for i in range(250):
+        say(store, "guild", 101, f"g{i}", session=sid)
+    say(store, "officer", 102, "an officer line", session=sid)
+    lines = feed.read(path, feed.feed, limit=200)
+    assert [line["id"] for line in lines if line["channel"] == "whisper"] == whispers
+    guild = [line["text"] for line in lines if line["channel"] == "guild"]
+    assert len(guild) == 200 and guild[0] == "g50" and guild[-1] == "g249"
+    assert "an officer line" in [line["text"] for line in lines]
+    assert [line["id"] for line in lines] == sorted(line["id"] for line in lines)
+
+
+def test_recheck_reports_what_played_and_what_went(db):
+    store, path = db
+    sid = store.start_session(1.0)
+    voice = VoiceStore(store)
+    a = spoken(store, sid, 101, "will play", "guild_hall", "sent")
+    b = spoken(store, sid, 101, "will drop", "guild_hall", "sent")
+    c = spoken(store, sid, 101, "still waiting", "guild_hall", "sent")
+    rows = {r["line_id"]: r["speak_id"] for r in store.conn.execute(
+        "SELECT line_id, speak_id FROM voice_line")}
+    voice.set_line(rows[a], "done", None, 2.0)
+    voice.set_line(rows[b], "dropped", "muted", 2.0)
+    heard, gone = feed.read(path, feed.recheck, [a, b, c])
+    assert [line["id"] for line in heard] == [a] and heard[0]["heard"] is True
+    assert gone == [b]
+    assert feed.read(path, feed.recheck, []) == ([], [])
+
+
+def test_the_mood_reads_without_its_table(db, tmp_path):
+    store, path = db
+    assert feed.read(path, feed.guild_mood) is None
+    with store.transaction():
+        store.conn.execute("INSERT INTO guild_mood(night,value,reasons) VALUES (?,?,?)",
+                           ("2026-11-01", 0.5, '["a kill", 7]'))
+    assert feed.read(path, feed.guild_mood) == {"night": "2026-11-01", "value": 0.5,
+                                                "reasons": ["a kill"]}
+    with store.transaction():
+        store.conn.execute("DROP TABLE guild_mood")
+    assert feed.read(path, feed.guild_mood) is None
+
+
+def test_a_mind_db_without_voice_tables_still_feeds(db):
+    store, path = db
+    sid = store.start_session(1.0)
+    say(store, "guild", 101, "typed", session=sid)
+    say(store, "voice:guild_hall", 101, "spoken", session=sid)
+    with store.transaction():
+        store.conn.execute("DROP TABLE voice_line")
+        store.conn.execute("DROP TABLE voice_heard")
+    assert shown(path) == ["typed"]

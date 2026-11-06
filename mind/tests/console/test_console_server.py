@@ -265,7 +265,7 @@ def test_the_stream_starts_with_a_snapshot(data):
         async with served(make_app(data)) as app:
             (kind, snap), = await events(app)
             assert kind == "snapshot"
-            assert set(snap) == {"status", "voice", "chat"}
+            assert set(snap) == {"status", "voice", "chat", "rooms", "mood"}
             assert snap["voice"] is None and snap["chat"] == []
             r = await http(app, "GET", "/api/events", key=False)
             assert r.status == 403
@@ -459,3 +459,80 @@ def test_numbers_are_ascii_digits_of_a_bounded_length(data):
     run(go())
     assert httpd.digits("0", 1) == 0 and httpd.digits("12", 1) is None
     assert httpd.digits(chr(0x661), 5) is None and httpd.digits("", 5) is None
+
+
+# -- the spoken lines of the feed ----------------------------------------------------------------
+
+def _spoken_setup(store, state, speak_id="run.1"):
+    from leeroy_mind.protocol import Chat, Member
+    from leeroy_mind.voice.store import VoiceStore
+    store.set_meta("human_guid", "900")
+    store.upsert_cast([Member(guid=101, name="Arkon", race=1, class_=1, gender=0, level=80,
+                              rank=3, online=True, map=0, zone=0, spec_tab=-1)], 1.0)
+    sid = store.start_session(1.0)
+    line = store.insert_chat_line(Chat(ts=0, channel="voice:guild_hall", from_guid=101,
+                                       from_name="Arkon", to_guid=0, text="hello hall", map=0,
+                                       zone=0), session_id=sid, origin="game", audience=None)
+    VoiceStore(store).add_line(speak_id, line, "guild_hall", state, 1.0)
+    return line, VoiceStore(store)
+
+
+def test_the_snapshot_lists_the_32_rooms_and_the_mood(data, store):
+    from leeroy_mind.voice.rooms import ROOMS
+
+    async def go():
+        async with served(make_app(data)) as app:
+            snap = (await http(app, "GET", "/api/state")).json()
+            assert [r["id"] for r in snap["rooms"]] == [r.id for r in ROOMS]
+            assert len(snap["rooms"]) == 32
+            assert set(snap["rooms"][0]) == {"id", "name", "parent", "capacity"}
+            assert snap["mood"] is None
+    run(go())
+
+
+def test_a_spoken_line_is_sent_again_once_it_plays(data, store, monkeypatch):
+    from leeroy_mind.console import app as console_app
+    monkeypatch.setattr(console_app, "FEED_S", 0.05)
+    line, voice = _spoken_setup(store, "sent")
+
+    async def go():
+        async with served(make_app(data, clock=store.clock.now)) as app:
+            reader = asyncio.create_task(events(app, count=2))
+            for _ in range(200):
+                if line in app._pending:
+                    break
+                await asyncio.sleep(0.02)
+            voice.set_line("run.1", "done", None, 2.0)
+            (_, snap), (kind, data_) = await reader
+            assert snap["chat"][0]["heard"] is False
+            assert kind == "chat" and data_["lines"][0]["id"] == line
+            assert data_["lines"][0]["heard"] is True
+            assert line not in app._pending
+    run(go())
+
+
+def test_a_line_that_never_plays_is_given_up(data, store, monkeypatch):
+    from leeroy_mind.console import app as console_app
+    monkeypatch.setattr(console_app, "FEED_S", 0.05)
+    line, voice = _spoken_setup(store, "sent")
+
+    async def go():
+        async with served(make_app(data, clock=store.clock.now)) as app:
+            reader = asyncio.create_task(events(app, count=2))
+            for _ in range(200):
+                if line in app._pending:
+                    break
+                await asyncio.sleep(0.02)
+            voice.set_line("run.1", "dropped", "muted", 2.0)
+            _, (kind, data_) = await reader
+            assert (kind, data_) == ("chat_gone", {"ids": [line]})
+    run(go())
+    line2, _ = _spoken_setup(store, "sent", "run.2")
+    monkeypatch.setattr(console_app, "PENDING_S", 0.0)
+
+    async def aged():
+        async with served(make_app(data, clock=store.clock.now)) as app:
+            reader = asyncio.create_task(events(app, count=2))
+            _, (kind, data_) = await reader
+            assert kind == "chat_gone" and line2 in data_["ids"]
+    run(aged())
