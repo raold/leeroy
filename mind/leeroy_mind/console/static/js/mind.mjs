@@ -89,7 +89,7 @@ function renderHealth(h) {
   arr(g.gpus).forEach(function (gpu) {
     box.appendChild(el("div", "", str(gpu.name) + ": " + (gpu.free_mb / 1024).toFixed(1) + " GB free of "
                        + (gpu.total_mb / 1024).toFixed(1) + " GB, " + gpu.util + "% busy"));
-    var bar = el("div", "bar"), fill = el("i");
+    var bar = el("div", "meter"), fill = el("i");
     fill.style.width = Math.min(100, Math.round(100 * gpu.used_mb / Math.max(1, gpu.total_mb))) + "%";
     bar.appendChild(fill);
     box.appendChild(bar);

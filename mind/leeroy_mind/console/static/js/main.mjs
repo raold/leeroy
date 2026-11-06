@@ -1,4 +1,4 @@
-import { $, api, emit, on, own, setKey } from "./core.mjs";
+import { $, api, emit, on, own, remember, setKey } from "./core.mjs";
 import { S } from "./state.mjs";
 import { renderStrip } from "./strip.mjs";
 import { renderComms, renderFeed } from "./comms.mjs";
@@ -88,3 +88,13 @@ renderComms();
 renderFeed(false);
 showTab((location.hash || "#comms").slice(1));
 connect();
+
+// The light/dark switch. theme.js applied the stored choice before paint; this flips it and
+// remembers it under the one key (JSON, so a stored value reads "light" or "dark" with quotes)
+var THEME_KEY = "guild-console-theme";
+function currentTheme() { return document.documentElement.dataset.theme === "light" ? "light" : "dark"; }
+$("theme").addEventListener("click", function () {
+  var next = currentTheme() === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  remember(THEME_KEY, next);
+});

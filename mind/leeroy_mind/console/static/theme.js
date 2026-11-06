@@ -1,0 +1,10 @@
+// Applies the remembered theme before the first paint. Dark is the page's own default; this
+// changes it only for a stored "light" or "dark" (written by core's remember as JSON, so with
+// quotes; a bare light or dark is accepted too). Any failure leaves the default.
+(function () {
+  try {
+    var raw = localStorage.getItem("guild-console-theme"), value = raw;
+    try { value = JSON.parse(raw); } catch (e) { value = raw; }
+    if (value === "light" || value === "dark") { document.documentElement.dataset.theme = value; }
+  } catch (e) { /* storage off: keep the default */ }
+})();

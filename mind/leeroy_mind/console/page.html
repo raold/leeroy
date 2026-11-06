@@ -1,24 +1,28 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Guild Console</title>
 <link rel="icon" href="data:,">
+<script src="/static/theme.js"></script>
 <link rel="stylesheet" href="/static/console.css">
 </head>
 <body>
-<header class="strip" aria-label="Status">
-  <span id="s-mind" class="pill"><i class="dot"></i><span class="t">mind</span></span>
-  <span class="links">
-    <span id="s-bridge" class="link"><i class="dot"></i><span class="t">game bridge</span></span>
-    <span id="s-vlink" class="link"><i class="dot"></i><span class="t">voice</span></span>
-  </span>
-  <span id="s-game" class="pill"><span class="t">you: unknown</span></span>
-  <span id="s-room" class="pill room"><span class="t">no room</span></span>
-  <span id="s-ptt" class="ptt"><i class="lamp"></i><span>push-to-talk</span></span>
+<header class="top">
+<div class="top-inner">
+  <div class="brand"><h1>Guild Console</h1></div>
+  <div class="strip" aria-label="Status">
+    <span id="s-game" class="mode"><span class="t">you: unknown</span></span>
+    <span id="s-mind" class="stat"><span class="k">Mind</span><span class="v"><i class="dot"></i><span class="t">mind</span></span></span>
+    <span id="s-bridge" class="stat"><span class="k">Bridge</span><span class="v"><i class="dot"></i><span class="t">game bridge</span></span></span>
+    <span id="s-vlink" class="stat"><span class="k">Voice</span><span class="v"><i class="dot"></i><span class="t">voice</span></span></span>
+    <span id="s-room" class="stat"><span class="k">Room</span><span class="v"><span class="t">no room</span></span></span>
+    <span id="s-ptt" class="ptt"><i class="lamp"></i><span>push-to-talk</span></span>
+    <button id="theme" type="button" class="theme">Light / dark</button>
+  </div>
   <div id="s-lost" class="lost" hidden></div>
-</header>
+</div>
 <nav class="tabs" role="tablist" aria-label="Areas">
   <button role="tab" id="t-comms" data-tab="comms" aria-controls="tab-comms">Comms</button>
   <button role="tab" id="t-raid" data-tab="raid" aria-controls="tab-raid">Raid</button>
@@ -26,6 +30,7 @@
   <button role="tab" id="t-personas" data-tab="personas" aria-controls="tab-personas">Personas</button>
   <button role="tab" id="t-mind" data-tab="mind" aria-controls="tab-mind">Mind</button>
 </nav>
+</header>
 <main>
   <section id="tab-comms" class="tab" role="tabpanel" aria-labelledby="t-comms">
     <div id="comms-banner" class="banner" hidden></div>
@@ -58,10 +63,10 @@
   <section id="tab-raid" class="tab mindtab" role="tabpanel" aria-labelledby="t-raid" hidden>
     <div id="raid-banner" class="banner" hidden></div>
     <div class="cards wide">
-      <article class="card span">
-        <header><h3>Tonight</h3><span id="r-state" class="pill"><i class="dot"></i><span class="t">-</span></span></header>
+      <article class="panel span">
+        <header><h3>Tonight</h3><span id="r-state" class="mode"><i class="dot"></i><span class="t">-</span></span></header>
         <p id="r-summary" class="lead">-</p>
-        <ul id="r-facts" class="facts"></ul>
+        <ul id="r-facts" class="bullets"></ul>
         <div class="acts raidacts">
           <button type="button" data-raid="call">Call the raid</button>
           <button type="button" data-raid="summon">Summon late members</button>
@@ -79,23 +84,23 @@
         </form>
         <p id="r-why" class="why"></p>
       </article>
-      <article class="card span">
+      <article class="panel span">
         <header><h3>The raid</h3><span id="r-count" class="muted"></span></header>
         <div class="scroll"><table><thead><tr><th>member</th><th>role</th><th>class</th><th class="num">level</th>
           <th>online</th><th>room</th><th>arrival</th><th class="num">DKP</th></tr></thead>
           <tbody id="r-members"></tbody></table></div>
         <p id="r-bench" class="why"></p>
       </article>
-      <article class="card">
+      <article class="panel">
         <header><h3>Loot</h3><span id="r-lootn" class="muted"></span></header>
         <div class="scroll"><table><thead><tr><th>item</th><th class="num">price</th><th>state</th><th>to</th><th class="num">paid</th></tr></thead>
           <tbody id="r-loot"></tbody></table></div>
       </article>
-      <article class="card">
+      <article class="panel">
         <header><h3>DKP as it happens</h3></header>
         <div id="r-dkp" class="log"></div>
       </article>
-      <article class="card span">
+      <article class="panel span">
         <header><h3>Recent raids</h3></header>
         <div class="scroll"><table><thead><tr><th>when</th><th>raid</th><th>lead</th><th class="num">kills</th><th class="num">wipes</th>
           <th>ended</th><th class="num">items</th><th>MVP</th></tr></thead><tbody id="r-recent"></tbody></table></div>
@@ -105,33 +110,33 @@
   <section id="tab-guild" class="tab mindtab" role="tabpanel" aria-labelledby="t-guild" hidden>
     <div id="guild-banner" class="banner bad" hidden></div>
     <div class="cards wide">
-      <article class="card span">
+      <article class="panel span">
         <header><h3>The guild</h3><span id="g-count" class="muted"></span></header>
         <p id="g-stats" class="lead">-</p>
       </article>
-      <article class="card span">
+      <article class="panel span">
         <header><h3>Roster</h3></header>
         <div class="scroll"><table><thead><tr><th>name</th><th>class</th><th>spec</th><th>role</th><th class="num">level</th>
           <th class="num">rank</th><th>guild role</th><th>online</th><th>room</th></tr></thead>
           <tbody id="g-roster"></tbody></table></div>
       </article>
-      <article class="card">
+      <article class="panel">
         <header><h3>DKP ladder</h3></header>
         <div class="scroll"><table><thead><tr><th class="num">#</th><th>name</th><th class="num">DKP</th><th class="num">earned</th>
           <th class="num">spent</th><th class="num">decay</th><th class="num">items</th>
           <th class="num">raids</th><th class="num">benched</th></tr></thead>
           <tbody id="g-ladder"></tbody></table></div>
       </article>
-      <article class="card">
+      <article class="panel">
         <header><h3>Loot history</h3></header>
         <div class="scroll"><table><thead><tr><th>when</th><th>item</th><th>to</th><th class="num">paid</th><th>raid</th></tr></thead>
           <tbody id="g-loot"></tbody></table></div>
       </article>
-      <article class="card">
+      <article class="panel">
         <header><h3>Season awards</h3></header>
         <div id="g-awards" class="scroll"></div>
       </article>
-      <article class="card">
+      <article class="panel">
         <header><h3>Chronicle</h3></header>
         <div id="g-chronicle" class="scroll"></div>
       </article>
@@ -140,7 +145,7 @@
   <section id="tab-personas" class="tab mindtab" role="tabpanel" aria-labelledby="t-personas" hidden>
     <div id="personas-banner" class="banner bad" hidden></div>
     <div class="cards wide">
-      <article class="card span">
+      <article class="panel span">
         <header><h3>The cast</h3><span id="p-count" class="muted"></span></header>
         <p id="p-mood" class="lead">-</p>
         <p id="p-missing" class="why" hidden></p>
@@ -152,18 +157,18 @@
       </article>
     </div>
     <div id="p-tuning" class="cards wide">
-      <article class="card span">
+      <article class="panel span">
         <header><h3>Tuning</h3><span id="t-sum" class="muted"></span></header>
         <p id="t-lead" class="lead">-</p>
         <p class="why">Dials are numbers laid over the stored personas; nothing is rewritten. A member's own value wins over
           group and world changes. 5 is as the persona is written (a score dial starts at their own score). Preview first:
           lines for the dials that change how they talk, numbers for the ones that change how often.</p>
       </article>
-      <article class="card">
+      <article class="panel">
         <header><h3>World</h3><span class="muted">over mind.toml, which is never written</span></header>
         <div id="t-world"></div>
       </article>
-      <article class="card">
+      <article class="panel">
         <header><h3>Groups</h3><span class="muted">offsets add up for every group a member is in</span></header>
         <div id="t-groups"></div>
         <h4>A group</h4>
@@ -178,12 +183,12 @@
           <button type="button" id="t-gclear">Clear</button>
         </div>
       </article>
-      <article id="t-pvcard" class="card span" hidden>
+      <article id="t-pvcard" class="panel span" hidden>
         <header><h3>Preview</h3><span id="t-pvwhat" class="muted"></span>
           <button type="button" id="t-pvclose" class="close">Close</button></header>
         <div id="t-preview"></div>
       </article>
-      <article class="card span">
+      <article class="panel span">
         <header><h3>Change log</h3><span class="muted">your dial changes, newest first</span></header>
         <div id="t-history" class="scroll"></div>
         <p class="why">Undo reverses one change and is itself a change (undo it to redo). It is refused when a later change
@@ -192,43 +197,43 @@
       </article>
     </div>
     <div id="p-detail" class="cards wide" hidden>
-      <article class="card span">
+      <article class="panel span">
         <header><h3 id="p-name">-</h3><span id="p-sub" class="muted"></span>
           <button type="button" id="p-close" class="close">Close</button></header>
         <p id="p-lead" class="lead"></p>
         <p id="p-why" class="why"></p>
       </article>
-      <article class="card span">
+      <article class="panel span">
         <header><h3>Dials</h3><span id="p-dialsum" class="muted"></span></header>
         <div id="p-dials"></div>
       </article>
-      <article class="card">
+      <article class="panel">
         <header><h3>Who they are</h3></header>
         <table><thead><tr><th>trait</th><th class="num">persona</th><th class="num" id="p-nighthead">the night</th>
           <th class="num">shift</th><th>how it shows</th></tr></thead><tbody id="p-five"></tbody></table>
         <dl id="p-who" class="kv"></dl>
       </article>
-      <article class="card">
+      <article class="panel">
         <header><h3>How they type and play</h3></header>
         <h4>Typing</h4><dl id="p-typing" class="kv"></dl>
         <h4>In game</h4><dl id="p-game" class="kv"></dl>
       </article>
-      <article class="card">
+      <article class="panel">
         <header><h3>Looks</h3></header>
         <dl id="p-looks" class="kv"></dl>
       </article>
-      <article class="card">
+      <article class="panel">
         <header><h3>Memories</h3><span id="p-memn" class="muted"></span></header>
         <table><thead><tr><th>kind</th><th class="num" id="p-kindhead">recent</th><th class="num">held</th></tr></thead>
           <tbody id="p-kinds"></tbody></table>
       </article>
-      <article class="card span">
+      <article class="panel span">
         <header><h3>Relationships</h3><span id="p-tien" class="muted"></span></header>
         <div class="scroll"><table><thead><tr><th>with</th><th>label</th><th class="num">affinity</th><th class="num">trust</th>
           <th class="num">respect</th><th class="num">attraction</th><th class="num">familiarity</th><th>stage</th>
           <th class="num">talks</th><th>last seen</th><th>notes</th></tr></thead><tbody id="p-ties"></tbody></table></div>
       </article>
-      <article class="card span">
+      <article class="panel span">
         <header><h3>Persona ledger</h3><span class="muted">growth, drift flags, stance moves and undos, newest first</span></header>
         <div id="p-ledger" class="log"></div>
       </article>
@@ -236,8 +241,8 @@
   </section>
   <section id="tab-mind" class="tab mindtab" role="tabpanel" aria-labelledby="t-mind" hidden>
     <div class="cards">
-      <article class="card">
-        <header><h3>Mind</h3><span id="m-state" class="pill"><i class="dot"></i><span class="t"></span></span></header>
+      <article class="panel">
+        <header><h3>Mind</h3><span id="m-state" class="mode"><i class="dot"></i><span class="t"></span></span></header>
         <dl class="kv"><dt>process</dt><dd id="m-proc">-</dd><dt>mind.lock</dt><dd id="m-lock">-</dd>
           <dt>data dir</dt><dd id="m-data">-</dd><dt>a stop</dt><dd id="m-stop">-</dd></dl>
         <div class="acts">
@@ -247,8 +252,8 @@
         </div>
         <p id="m-why" class="why"></p>
       </article>
-      <article class="card">
-        <header><h3>Voice service</h3><span id="w-state" class="pill"><i class="dot"></i><span class="t"></span></span></header>
+      <article class="panel">
+        <header><h3>Voice service</h3><span id="w-state" class="mode"><i class="dot"></i><span class="t"></span></span></header>
         <dl class="kv"><dt>process</dt><dd id="w-proc">-</dd><dt>ports</dt><dd id="w-ports">-</dd>
           <dt>mind link</dt><dd id="w-link">-</dd></dl>
         <div class="acts">
@@ -258,26 +263,26 @@
         </div>
         <p id="w-why" class="why"></p>
       </article>
-      <article class="card">
+      <article class="panel">
         <header><h3>Links and game</h3></header>
         <dl class="kv"><dt>game bridge</dt><dd id="h-bridge">-</dd><dt>voice link</dt><dd id="h-vlink">-</dd>
           <dt>you</dt><dd id="h-game">-</dd><dt>the night</dt><dd id="h-night">-</dd></dl>
         <p id="h-config" class="why bad" hidden></p>
       </article>
-      <article class="card">
+      <article class="panel">
         <header><h3>GPU</h3></header>
         <div id="h-gpu" class="muted">-</div>
       </article>
-      <article class="card span">
+      <article class="panel span">
         <header><h3>Models resident in Ollama</h3><span id="h-ollama" class="muted"></span></header>
         <table><thead><tr><th>model</th><th>role</th><th>size</th><th>in VRAM</th><th>expires</th></tr></thead>
           <tbody id="h-models"></tbody></table>
       </article>
-      <article class="card span">
+      <article class="panel span">
         <header><h3>Latest warnings and errors</h3></header>
         <div id="h-errors" class="log"></div>
       </article>
-      <article class="card span">
+      <article class="panel span">
         <header><h3>mind.log</h3><span class="muted">events and counts only, never what was said</span></header>
         <div id="h-log" class="log"></div>
       </article>
