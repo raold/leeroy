@@ -37,5 +37,7 @@ Leeroy.CastGuard = 0
 Leeroy.Realm.MaxActionsPerTick = 5
 Leeroy.Realm.Announce = 1
 # Strict local CSV whitelists; missing/invalid files leave the respective list empty.
+# A relative path resolves against the module config directory (configs/modules, where
+# this file lives); an absolute path is used as written.
 Leeroy.Realm.PlacesFile = "leeroy_places.csv"
 Leeroy.Realm.ItemsFile = "leeroy_items.csv"

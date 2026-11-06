@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 #include <set>
 #include <utility>
@@ -510,6 +512,32 @@ std::optional<std::vector<ItemRule>> ParseItems(std::string_view csv, std::strin
         if (!CsvInteger(fields[2], out.maxCount, 1, kMaxItemCount)) { why = "invalid max_count"; return false; }
         return true;
     });
+}
+std::string ResolveCsvPath(std::string_view moduleConfigDir, std::string_view configured)
+{
+    if (configured.empty())
+        return {};
+    std::filesystem::path const path(configured);
+    if (path.has_root_path())
+        return std::string(configured);
+    return (std::filesystem::path(moduleConfigDir) / path).string();
+}
+std::optional<std::string> ReadCsvFile(std::string const& path)
+{
+    std::error_code ec;
+    if (path.empty() || !std::filesystem::is_regular_file(path, ec))
+        return std::nullopt;
+    std::ifstream stream(path, std::ios::binary | std::ios::ate);
+    if (!stream)
+        return std::nullopt;
+    auto const size = stream.tellg();
+    if (size < 0 || size > static_cast<std::streamoff>(kMaxCsvBytes))
+        return std::nullopt;
+    std::string text(static_cast<std::size_t>(size), '\0');
+    stream.seekg(0);
+    if (!text.empty() && !stream.read(text.data(), static_cast<std::streamsize>(text.size())))
+        return std::nullopt;
+    return text;
 }
 
 namespace
