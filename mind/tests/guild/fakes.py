@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from leeroy_mind.guild.protocol import Job, register
 from leeroy_mind.human import HumanIdentity
 from leeroy_mind.protocol import Ack, Member, encode_command
-from leeroy_mind.storage.db import open_db
+from dbtemplate import open_migrated
 from leeroy_mind.storage.rows import PersonaStateRow, Relationship
 from leeroy_mind.talk.turns import TurnKind
 
@@ -42,7 +42,7 @@ def job(kind, state, **fields):
 class FakePorts:
     def __init__(self, tmp_path, clock):
         self.clock = clock
-        self.conn = open_db(Path(tmp_path) / "mind.db")
+        self.conn = open_migrated(Path(tmp_path) / "mind.db")
         self.human_guid = 1
         self.ident = HumanIdentity(1, "Testmage", "Testy", "", True, "he")
         self.online = True

@@ -24,6 +24,8 @@ include = ["leeroy_mind*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+tmp_path_retention_count = 3
+tmp_path_retention_policy = "failed"
 addopts = ["-m", "not ollama and not live and not mysql"]
 markers = [
   "ollama: needs a running Ollama with the configured models",

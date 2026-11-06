@@ -12,6 +12,7 @@ from leeroy_mind.app import acquire_instance_lock
 from leeroy_mind.personas.io import load_persona
 from leeroy_mind.protocol import Member
 from leeroy_mind.storage.db import open_db
+from dbtemplate import open_migrated
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_clock import FakeClock
 from leeroy_mind.tuning import changes as C
@@ -22,7 +23,7 @@ CLOCK = datetime(2026, 10, 29, 20, 0, tzinfo=timezone.utc)
 @pytest.fixture
 def root(tmp_path):
     (tmp_path / "mind.toml").write_text("[talk]\nchattiness = 4\n", encoding="utf-8")
-    s = Store(open_db(tmp_path / "mind.db"), clock=FakeClock(CLOCK))
+    s = Store(open_migrated(tmp_path / "mind.db"), clock=FakeClock(CLOCK))
     try:
         seed_test_cast(s)
         s.upsert_cast([Member(guid=HUMAN, name="Testmage", race=5, class_=8, gender=0, level=80,
@@ -59,7 +60,7 @@ def test_undo_and_revert_take_a_snapshot_and_write_one_change(root, capsys):
     assert list((root / "snapshots").glob("mind-tuning-*.db"))
     assert main(["tuning", "--data-dir", str(root), "revert", "0"]) == 0
     capsys.readouterr()
-    s = Store(open_db(root / "mind.db"), clock=FakeClock(CLOCK))
+    s = Store(open_migrated(root / "mind.db"), clock=FakeClock(CLOCK))
     try:
         assert s.conn.execute("SELECT count(*) FROM tuning_value").fetchone()[0] == 0
         assert s.conn.execute("SELECT source FROM tuning_change WHERE id=4").fetchone()[0] == "cli"
@@ -76,7 +77,7 @@ def test_with_the_mind_running_a_write_is_refused(root, capsys):
 
 
 def test_a_refused_undo_says_why(root, capsys):
-    s = Store(open_db(root / "mind.db"), clock=FakeClock(CLOCK))
+    s = Store(open_migrated(root / "mind.db"), clock=FakeClock(CLOCK))
     try:
         pic = C.picture(s, {g: load_persona(s, g) for g in s.persona_versions()})
         C.apply_sets(s, [C.Set("member", "102", "talkative", 9)], pic, source="console", now=4.0)
