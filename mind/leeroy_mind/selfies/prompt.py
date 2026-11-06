@@ -7,7 +7,7 @@ name is ever put in a phrase."""
 import re
 from dataclasses import dataclass
 
-from ..personas.schema import Persona
+from ..personas.schema import MIN_AGE, Persona
 
 NEGATIVE: tuple[tuple[str, int], ...] = (
     ("cartoon, anime, painting, illustration, 3d render, cgi", 0),
@@ -36,9 +36,12 @@ class PromptSpec:
 
 
 def renderable(p: Persona | None) -> str | None:
-    """None when a prompt can be built, else what is missing."""
+    """None when a prompt can be built, else what is missing. Adults only, here too: the
+    schema's MIN_AGE is checked again, not only when the persona was saved."""
     if p is None:
         return "no persona"
+    if p.identity.age < MIN_AGE:
+        return "under age"
     if p.appearance is None:
         return "no looks yet"
     if p.photo is None:

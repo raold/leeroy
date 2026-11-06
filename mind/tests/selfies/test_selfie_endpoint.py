@@ -17,7 +17,7 @@ from leeroy_mind.selfies import files
 from leeroy_mind.selfies.files import candidate, chosen
 from leeroy_mind.selfies.store import queued_sets
 
-from .fakes import mind_app, ready
+from .fakes import mind_app, ready, until
 
 KEY = "K" * 43
 ON = "[selfies]\nenabled = true\n"
@@ -137,8 +137,7 @@ def test_photo_changes_go_one_at_a_time_and_status_answers_meanwhile(tmp_path):
         async with served(app) as ep:
             app.selfies.gate = asyncio.Event()
             first = asyncio.create_task(ask(ep, _pick(101, 1, 0)))
-            while not app.selfies.calls:
-                await asyncio.sleep(0.01)
+            await until(lambda: app.selfies.calls)  # bounded: a hang fails, never waits forever
             for args in (_pick(102, 1, 0), {"action": "undo", "pick": 1},
                          {"action": "more", "guid": 101}):
                 assert await ask(ep, args) == BUSY  # a second page, a double click

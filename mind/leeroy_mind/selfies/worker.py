@@ -10,10 +10,12 @@ the worker running. A ready refusal ends the tree, except one that says `retry: 
 with the pipeline loaded on the CPU): that worker stays up, and the next start() sends it the
 retry line instead of starting another, so a retry after make_room loads nothing again. Each
 start logs selfies_worker_start with its outcome and timings (the worker's check_ms and
-load_ms, the free_gib it read, and ms: from the spawn or the retry to the answer). Cancelling a start or render kills the tree at once (its answer could no
-longer be matched); stop() then waits for it to be gone. A tree being ended is ended to the
-end, a cancel meanwhile included (to_the_end), and stays the current one until it is gone, so
-no stop() can miss it. Logs carry reasons, counts and timings, never a prompt."""
+load_ms, the free_gib it read, and ms: from the spawn or the retry to the answer).
+
+Cancelling a start or render kills the tree at once (its answer could no longer be matched);
+stop() then waits for it to be gone. A tree being ended is ended to the end, a cancel meanwhile
+included (to_the_end), and stays the current one until it is gone, so no stop() can miss it.
+Logs carry reasons, counts and timings, never a prompt."""
 import asyncio
 import json
 import logging

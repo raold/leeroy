@@ -89,7 +89,10 @@ def screen_kind(p: Persona, data: dict, *, ident: HumanIdentity,
         if EXPLICIT_RE.search(text):
             problems.append(f"photo.{field}: explicit: {quoted}")
     try:
-        problems += validate_persona(replace(p, photo=ProfilePhoto(**data)))
+        # the photo's own problems only: another field's message can quote persona text, and an
+        # unrelated old problem must not refuse a photo
+        problems += [m for m in validate_persona(replace(p, photo=ProfilePhoto(**data)))
+                     if m.startswith(("photo.", "photo:"))]
     except TypeError as e:
         problems.append(f"photo: {type(e).__name__}")
     return list(dict.fromkeys(problems))

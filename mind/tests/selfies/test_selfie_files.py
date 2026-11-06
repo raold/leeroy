@@ -197,3 +197,62 @@ def test_ready_writes_four_distinct_jpegs_and_thumbnails(tmp_path, store):
     assert sorted(p.name for p in set_dir(tmp_path, 101, 1).iterdir()) == [
         "c0.jpg", "c0.thumb.jpg", "c1.jpg", "c1.thumb.jpg", "c2.jpg", "c2.thumb.jpg",
         "c3.jpg", "c3.thumb.jpg"]
+
+
+# -- a scanner holding a new JPEG (final review minor 7) -----------------------------------------
+
+def _staged(tmp_path, guid=101, set_no=1):
+    staging_dir(tmp_path, guid, set_no).mkdir(parents=True)
+    for i in range(4):
+        (staging_dir(tmp_path, guid, set_no) / f"c{i}.jpg").write_bytes(JPEG)
+
+
+def test_a_finished_set_is_renamed_into_place_while_a_scanner_holds_a_file(tmp_path, monkeypatch):
+    _staged(tmp_path)
+    calls = {"n": 0}; real = os.replace
+    def held(a, b):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise PermissionError(5, "Access is denied")
+        real(a, b)
+    monkeypatch.setattr(os, "replace", held)
+    monkeypatch.setattr(files.time, "sleep", lambda s: None)
+    files.publish_set(tmp_path, 101, 1)
+    assert calls["n"] == 3 and candidate(tmp_path, 101, 1, 3).read_bytes() == JPEG
+    assert not staging_dir(tmp_path, 101, 1).exists()
+
+
+def test_clear_stale_retries_a_file_a_scanner_holds(tmp_path, monkeypatch):
+    _staged(tmp_path)
+    set_dir(tmp_path, 101, 1).mkdir()
+    candidate(tmp_path, 101, 1, 0).write_bytes(JPEG)
+    calls = {"n": 0}; real = os.unlink
+    def held(path, *a, **kw):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise PermissionError(32, "in use")
+        real(path, *a, **kw)
+    monkeypatch.setattr(os, "unlink", held)
+    monkeypatch.setattr(files.time, "sleep", lambda s: None)
+    clear_stale(tmp_path, 101, 1)
+    assert not set_dir(tmp_path, 101, 1).exists() and not staging_dir(tmp_path, 101, 1).exists()
+    monkeypatch.setattr(os, "unlink", lambda *a, **kw: (_ for _ in ()).throw(OSError(22, "bad")))
+    _staged(tmp_path)
+    with pytest.raises(OSError):
+        clear_stale(tmp_path, 101, 1)                       # anything else still fails the unit
+
+
+@pytest.mark.skipif(os.name != "nt", reason="only Windows refuses to move or remove a held file")
+def test_a_real_reader_of_a_new_jpeg_only_delays_the_rename_and_the_clear(tmp_path):
+    for act in (lambda: files.publish_set(tmp_path, 101, 1), lambda: clear_stale(tmp_path, 101, 1)):
+        _staged(tmp_path)
+        reader = open(staging_dir(tmp_path, 101, 1) / "c2.jpg", "rb")   # Defender, say
+        let_go = threading.Timer(0.3, reader.close)
+        let_go.start()
+        try:
+            act()
+        finally:
+            let_go.join()
+            reader.close()
+        assert not staging_dir(tmp_path, 101, 1).exists()
+        clear_stale(tmp_path, 101, 1)

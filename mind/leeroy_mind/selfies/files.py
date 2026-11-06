@@ -89,12 +89,29 @@ def replace_atomic(src: Path, dst: Path) -> None:
         raise
 
 
+def publish_set(data_dir, guid: int, set_no: int) -> None:
+    """The set's staging folder renamed to its folder, retried while Windows says another
+    process holds a file in it (Defender or the indexer reading the new JPEGs)."""
+    _retrying(os.replace, staging_dir(data_dir, guid, set_no), set_dir(data_dir, guid, set_no))
+
+
+def _held(function, path, exc: BaseException) -> None:
+    """shutil.rmtree's onexc: a file or folder another process holds is removed again as
+    _retrying does; one already gone is fine; anything else is raised."""
+    if isinstance(exc, FileNotFoundError):
+        return
+    if not isinstance(exc, PermissionError) or function not in (os.unlink, os.rmdir):
+        raise exc
+    _retrying(function, path)
+
+
 def clear_stale(data_dir, guid: int, set_no: int) -> None:
     """Remove what a render of this set left without its ready row: the set's folder and its
-    staging folder. Only for a set the database says is still queued."""
+    staging folder, a file someone holds retried as publish_set does. Only for a set the
+    database says is still queued."""
     for d in (set_dir(data_dir, guid, set_no), staging_dir(data_dir, guid, set_no)):
         with suppress(FileNotFoundError):
-            shutil.rmtree(d)
+            shutil.rmtree(d, onexc=_held)
 
 
 def _same(path: Path, data: bytes) -> bool:

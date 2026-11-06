@@ -135,3 +135,12 @@ def test_a_lone_surrogate_never_reaches_the_prompt():
     spec = build_prompt(woman(appearance=replace(APPEARANCE, hair_style="curly\ud800")))
     for t, _ in spec.phrases:
         t.encode("utf-8")
+
+
+def test_no_prompt_is_built_for_anyone_under_eighteen():
+    # final review minor 9: the adults-only rule held here too, not only at the schema's save
+    for age in (17, 12, 0):
+        assert renderable(woman(age=age)) == "under age"
+        with pytest.raises(ValueError, match="under age"):
+            build_prompt(woman(age=age))
+    assert renderable(woman(age=18)) is None and build_prompt(woman(age=18)).phrases

@@ -139,3 +139,14 @@ def test_the_schema_and_looks_line():
     assert list(KIND_SCHEMA["properties"]) == ["kind", "framing", "setting", "outfit", "expression"]
     line = looks_line(APPEARANCE)
     assert "168" in line and "hazel" in line and line.endswith(".") and "\n" not in line
+
+
+def test_an_unrelated_old_problem_in_the_persona_never_refuses_a_photo_or_reaches_the_log(h):
+    # final review minor 10: validate_persona's other messages embed persona text without the
+    # quote _refused strips; only the photo's own problems count
+    p = h.persona(101, appearance=APPEARANCE)
+    odd = replace(p, typing=replace(p.typing, abbreviations={"Quillfeather Lane": "Quillfeather Lane"}))
+    assert screen_kind(odd, KIND, ident=IDENT, member_names=["Testb"]) == []
+    out = screen_kind(odd, {**KIND, "kind": "polaroid"}, ident=IDENT, member_names=["Testb"])
+    assert out and all(m.startswith(("photo.", "photo:")) for m in out)
+    assert "Quillfeather" not in " ".join(out)

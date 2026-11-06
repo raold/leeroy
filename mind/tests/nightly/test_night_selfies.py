@@ -509,6 +509,26 @@ def test_seeds_are_the_nights_and_render_candidates_asks_for_each_slot(h, tmp_pa
         n for i in range(4) for n in (f"c{i}.jpg", f"c{i}.thumb.jpg"))
 
 
+def test_a_render_said_done_without_its_files_never_makes_a_ready_set(h, tmp_path, caplog):
+    # final review (deferred from Task 10): a ready set never points at a missing file
+    renderable_cast(h.store, 101, 102)
+    ctx = h.ctx()
+    cmd, env = fake_command(tmp_path)
+    class Lying(SelfieWorker):
+        async def render(self, req, *, rid=None):
+            got = await super().render(req, rid=rid)
+            if rid == "101:1:1:0":
+                req.thumb.unlink()                # answered ok, one file not there
+            return got
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        run(make_stage(SELFIE_CFG, worker=lambda: Lying(cmd, env=env))(ctx))
+    assert ready_set(h.store, 101, 1) is None and queued(h) == [(101, 1)]
+    assert not set_dir(h.settings.data_dir, 101, 1).exists()
+    assert not staging_dir(h.settings.data_dir, 101, 1).exists()
+    assert ready_set(h.store, 102, 1) and ctx.failures == {STAGE: 1}
+    assert "error=WorkerError message=unwritten" in caplog.text
+
+
 def test_a_second_oom_of_a_slot_propagates_and_three_flags_refuse_the_set(h, tmp_path):
     renderable_cast(h.store, 101)
     spec = build_prompt(load_persona(h.store, 101))

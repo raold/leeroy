@@ -6,19 +6,22 @@ each "4 more" he asked for.
 Units, in order: "queue", a first set queued for each such member (away ones included); then
 "<guid>:<set>" for each queued set, his "4 more" first, at most selfie_per_night a night counting
 the sets done tonight. The runner asks wants_gpu (which queues) before it makes room, so a night
-with nothing to render leaves the chat models loaded. A member who lost his looks or photo kind since his set was queued is
-skipped and his set stays queued. A set renders into its staging folder, which is renamed to the
-set's folder just before the one commit that marks it ready; a folder a crash left without its
-ready row is cleared before the set is rendered again (files.clear_stale).
+with nothing to render leaves the chat models loaded. A member who lost his looks or photo kind
+since his set was queued is skipped and his set stays queued. A set renders into its staging
+folder, which is renamed to the set's folder (files.publish_set) just before the one commit that
+marks it ready, once each candidate's two files are there; a folder a crash left without its
+ready row is cleared before the set is rendered again (files.clear_stale). Both retry a file
+that Defender or the indexer holds.
 
 Each slot tries up to TRIES seeds, the night's own (seed_for), so a resumed night asks for the
 same images. A flagged image is never written and the next seed is tried; a slot flagged TRIES
 times refuses the set (SetRefused), that unit's failure only. An oom answer (mod-ollama-chat
 loaded Orion meanwhile) makes room and repeats that attempt once; a worker that refuses to load
 for want of VRAM is asked once more after making room (start_worker), keeping the pipeline it
-loaded on the CPU, so that check comes within seconds of the unload. CONTENDED worker failures in a row end
-the stage for the night, keeping the sets it finished; a make_room that fails (Ollama down or
-hung) counts as one (RoomFailed), and a worker that died is started again once. No render is
+loaded on the CPU, so that check comes within seconds of the unload. CONTENDED worker failures
+in a row end the stage for the night, keeping the sets it finished; a make_room that fails
+(Ollama down or hung) counts as one (RoomFailed), and a worker that died is started again
+once. No render is
 sent while a live lease is held: that, or a lease refusing make_room (LiveLeaseHeld), ends the
 stage at once and the runner logs it, with no unit failed.
 
@@ -28,7 +31,6 @@ hand-over preloads the live model. The cancel path makes no arbiter call. Logs c
 counts, scores and timings, never a prompt, persona text or a name."""
 import hashlib
 import logging
-import os
 import time
 from collections import Counter
 from contextlib import suppress
@@ -83,8 +85,9 @@ async def render_candidates(worker, spec: PromptSpec, out_dir: Path, *, night: s
     """Slots 0-3 into out_dir/c<idx>.jpg and c<idx>.thumb.jpg, one Candidate each. `leases`
     (the arbiter's live holders) is asked before each render: while one is held, LiveLeaseHeld
     and nothing is sent. Raises SetRefused when a slot is flagged TRIES times, RoomFailed when
-    make_room fails other than by LiveLeaseHeld, WorkerError for a second oom of a slot or any
-    other worker failure, and LiveLeaseHeld."""
+    make_room fails other than by LiveLeaseHeld, WorkerError for a second oom of a slot, an
+    image answered as written whose two files are not both there ("unwritten") or any other
+    worker failure, and LiveLeaseHeld."""
     out_dir = Path(out_dir).absolute()
     made = []
     for idx in range(SET_SIZE):
@@ -132,6 +135,8 @@ async def _slot(worker, spec: PromptSpec, out_dir: Path, idx: int, *, night: str
             _unleased(leases)
             got = await worker.render(req, rid=rid)
         if not got.flagged and got.nsfw < cfg.nsfw_max:
+            if not (out.is_file() and thumb.is_file()):  # a ready set never points at nothing
+                raise WorkerError("unwritten")
             return Candidate(idx, seed, attempt + 1, got.nsfw, got.prompt)
         for path in (out, thumb):  # never kept, whatever a worker wrote
             with suppress(FileNotFoundError):
@@ -243,7 +248,7 @@ async def _render_set(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
     made = await render_candidates(worker, build_prompt(p), staging, night=ctx.night, guid=guid,
                                    set_no=set_no, cfg=cfg, make_room=ctx.arbiter.make_room,
                                    leases=lambda: ctx.arbiter.holders)
-    os.replace(staging, files.set_dir(data, guid, set_no))
+    files.publish_set(data, guid, set_no)
     return made
 
 
