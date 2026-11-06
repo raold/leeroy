@@ -243,6 +243,21 @@ Run from `F:\azerothcore\scripts` in Git Bash.
 ./ac-snapshot.sh             # live configs (masked) + playerbots and ollama-chat patches -> config/, patches/
 ```
 
+`./ac-health.sh [--json] [--toast]` (`python -m leeroy_mind health`) checks the live install
+read-only, one ok/FAIL/note line each, exit 1 on any FAIL: the servers, Server.log's cast line
+since worldserver started (floor `[health] min_cast`, default 100) and no `so no places`, the
+mind and mind.log, the control endpoint's `status` (it reports `bridge_connected`, `cast` and
+`schema_version`), the console and voice (notes when down), Ollama's `/api/ps`, and stuck
+activity (no `tg_pull` in 48 h with telemetry on and the overhead gate passed, a note while the
+gate is in phase `ab`; a realm hold or `unknown` root older than 1 h; cast without personas). It
+never dials the bridge (7878), loads no model, starts nothing and never probes `mind.lock` or
+`voice.lock` (running comes from the process list, `control.json`, `voice.pid` and the TCP
+table). `--toast` shows one toast per new failure and writes only
+`mind-data/health-state.json`; a read-only open can leave SQLite's empty `mind.db-wal` and
+`mind.db-shm` behind while the mind is stopped, as doctor and the console do.
+`ac-health-schedule.ps1 -Install|-Remove|-Status` manages a per-user task that runs it every
+15 minutes while he is logged on (not installed by default).
+
 `db_backup/` holds two kinds of thing: sets `ac-backup.sh` made
 (`<label>_<YYYYmmdd>_<HHMMSS>`) and sets from the older script described below
 (`YYYY-MM-DD_HHMM`), plus a raw MySQL datadir copy. **The prune only ever
@@ -775,7 +790,16 @@ Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
   (`realm_step`), and a plan edited after its approval is refused for good. `realm canon
   history-ok <seed> <canon>` approves the history files; `realm cards [--show]`. A bank step
   that ends `needs_controller` needs a look at the bank in game, then a fresh plan
-  (`plan bank --no-money` or `--first-tab N`).
+  (`plan bank --no-money` or `--first-tab N`). `realm release <root-id> --reason "<text>"`
+  (the mind stopped; it holds `mind.lock` throughout) shows one body move stuck unknown in the
+  action journal (kind, state, what native said, age, members) and asks for its exact id again
+  (`--yes` skips that, never the exact id). It then marks it abandoned (completed, holding
+  nobody) and writes meta `realm:action:abandoned:<id>` with the time, the reason and the row as
+  it was. It refuses any other state (conflict too), a transport not yet settled, a WG, ack or
+  result root and one with children. A released root that native evidence later contradicts goes
+  to conflict and stays held. Native still fences a body it holds. The prune never deletes a
+  grow's row or a released one, and a release receipt also stops a grow, so no grow with a stored
+  outcome is ever sent again.
 - **Exactly once.** A command that moves no body (speech, actor sets, renames, bank money, tabs
   and gift withdrawals, grants, calendar, mail) goes through the direct ledger `realm_direct`
   (prepared, dispatched, acked, refused, unknown, abandoned): an unknown one is never sent
@@ -786,7 +810,14 @@ Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
   must name the process. One fenced body (`busy:raid_owner` for a member in his group, a
   training or Realm owner, `not_bot`) makes native refuse a whole body move at its ack before
   reserving anyone: the action journal settles that as refused, holding nobody, and each start
-  reads again a stored unknown whose only evidence is such a refusal.
+  reads again a stored unknown whose only evidence is such a refusal. The same goes for a
+  rearm, `rpg_status`, `equip` or `set_profession` acked and then failed at one body's step for a
+  fence or a `busy:` reason such as `busy:combat` (`STEP_REFUSALS`): native refused that body
+  before changing it and released them all, so it settles `step_refused` and Recall goes on to
+  the defaults. Any other failed job (`operation_transition_unknown`, a walk, leave, duel or
+  grow) stays unknown. A root that settles unknown or conflict logs a warning in mind.log,
+  `realm_action_unknown` (or `realm_action_conflict`) with its id, kind, reason, native's reason
+  and member count, no names: from then on it holds its manifest.
 - **Rulings.** His raid holds exactly his raid: waiting for the call, called and forming hold
   the roster and his group; assembling and running hold the raid's members and his group;
   everyone else, rival officers included, may move (an unreadable member list holds everyone).

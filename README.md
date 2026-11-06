@@ -54,6 +54,7 @@ trained, on a separate server.
 ./ac-server.sh start|stop|status # the game servers and the mind
 ./ac-voice.sh start|stop|status # voice service; follows LEEROY_VOICE_DATA and voice.toml
 ./ac-snapshot.sh             # copy live configs and module patches into this repo
+./ac-health.sh [--json]      # read-only health check of the live install; never dials the bridge
 ```
 
 They assume this repo is the install root, with the core checked out in

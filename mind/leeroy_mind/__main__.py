@@ -1239,10 +1239,14 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     if argv and argv[0] == "console":
         from .console.cli import main as console_main
         return console_main(argv[1:])
+    if argv and argv[0] == "health":
+        from .health import main as health_main
+        return health_main(argv[1:])
     parser = argparse.ArgumentParser(prog="leeroy_mind")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("training", help="training ledger, gate, reports and spell checks")
-    sub.add_parser("realm", help="read-only realm status and title diagnostics")
+    sub.add_parser("realm", help="realm status and titles, the data steps, and release of a stuck root "
+                   "with the mind stopped")
     sub.add_parser("tuning", help="the owner's persona dials: status, history, and undo or "
                    "revert with the mind stopped")
     sub.add_parser("nightly", help="nightly status, trials, ledger and owner controls")
@@ -1251,6 +1255,9 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
                    "stopped")
     sub.add_parser("console", help="the guild console on http://127.0.0.1:7881/ (comms, the "
                                    "mind's health, start and stop)")
+    sub.add_parser("health", help="a read-only check of the live install: the servers, the "
+                                  "mind, its endpoint, the console, voice and Ollama; one ok, "
+                                  "note or FAIL line each")
     p_init = sub.add_parser("init", help="create the data dir and a default mind.toml")
     _add_data_dir(p_init)
     p_init.set_defaults(func=cmd_init)

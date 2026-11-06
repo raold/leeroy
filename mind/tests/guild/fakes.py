@@ -136,6 +136,7 @@ class FakeArmory:
         self._equipped = {guid: dict(slots) for guid, slots in equipped.items()}
         self.tier = tier
         self.names = {1: "Testmage"}
+        self.binds = {}  # guid -> {(map id, instance id)}
         self.calls = []
 
     def items(self, ids):
@@ -155,3 +156,10 @@ class FakeArmory:
     def name(self, guid):
         self.calls.append(("name", guid))
         return self.names.get(guid)
+
+    def bound_with(self, owner, map_id, guids):
+        guids = tuple(guids)
+        self.calls.append(("bound_with", owner, map_id, guids))
+        his = {instance for bound_map, instance in self.binds.get(owner, ()) if bound_map == map_id}
+        return {guid for guid in guids
+                if any(bound_map == map_id and instance in his for bound_map, instance in self.binds.get(guid, ()))}

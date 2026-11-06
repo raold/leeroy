@@ -12,10 +12,12 @@ from leeroy_mind.bodies import BodyEvidenceUnavailable
 from leeroy_mind.guild.protocol import BotDo
 
 from .actions import ActionRejected
-from .action_store import ActionCapacity
+from .action_store import STEP_REFUSED, ActionCapacity
 from .protocol import LeavePvp, Rearm
 
 log = logging.getLogger(__name__)
+# A rearm's results that settle it holding nobody: refused at its ack, or at one body's step.
+REARM_REFUSED = frozenset({"refused", STEP_REFUSED})
 
 
 @dataclass(slots=True)
@@ -277,9 +279,11 @@ class Recall:
             self._finish(chain)
             return
         chain.index += 1
+        # A rearm native refused holds nobody (one body in combat, say): its defaults still follow.
+        past = REARM_REFUSED if kind == "rearm" else frozenset()
         try:
             self.queue.submit(cmd, owner=chain.owner,
-                              on_done=lambda ok, reason, value: self._advance(chain, ok))
+                              on_done=lambda ok, reason, value: self._advance(chain, ok or reason in past))
             if not self._current(chain):
                 # Queue enrollment has its own rank refresh. If that callback
                 # invalidated us, cancel the stale prepared entry immediately;
