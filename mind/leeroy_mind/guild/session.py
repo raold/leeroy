@@ -22,6 +22,18 @@ from .raids import CATALOG, validate
 from .store import _insert_ledger, balances, bench_streaks
 
 
+NOT_RAIDED = "not-raided"  # meta guild:raid:<id>:not-raided: the run never reached a fight
+
+
+def _record_attendance(ports, cfg, plan, raid_id, now):
+    """Attendance rows and their DKP, inside the caller's transaction."""
+    raided = list(plan.members) + ([ports.human_guid] if plan.human_in_raid else [])
+    bench = list(plan.bench)
+    ports.conn.executemany("INSERT INTO guild_attendance(raid_id,guid,status) VALUES (?,?,?)",
+                           [(raid_id, g, "raided") for g in raided] + [(raid_id, g, "benched") for g in bench])
+    _insert_ledger(ports.conn, attendance_entries(raided, bench, raid_id, now, cfg.dkp))
+
+
 @dataclass(frozen=True, slots=True)
 class RaidPlan:
     raid_key: str
@@ -62,7 +74,9 @@ class RaidSession:
         self.loot = LootMaster(ports, cfg, armory, self.ctx)
 
     @classmethod
-    async def open(cls, ports, cfg, armory, plan):
+    async def open(cls, ports, cfg, armory, plan, *, attend=True):
+        """Open the raid's record. Without `attend`, attendance and its DKP wait for `attend()`,
+        once the run is proved to have started (an offline raid that reached running)."""
         raid = CATALOG.get(plan.raid_key)
         if raid is None or validate(raid, plan.size, plan.heroic, raid.min_tier) is not None:
             raise ValueError("invalid raid plan mode")
@@ -96,14 +110,28 @@ class RaidSession:
                     (now, plan.raid_key, plan.size, int(plan.heroic), int(plan.offline),
                      plan.lead_guid, plan.tank_guid, plan.loot_guid))
                 raid_id = row.lastrowid
-                raided = members + ([ports.human_guid] if plan.human_in_raid else [])
-                ports.conn.executemany("INSERT INTO guild_attendance(raid_id,guid,status) VALUES (?,?,?)",
-                                      [(raid_id, g, "raided") for g in raided] + [(raid_id, g, "benched") for g in bench])
-                _insert_ledger(ports.conn, attendance_entries(raided, bench, raid_id, now, cfg.dkp))
+                if attend:
+                    _record_attendance(ports, cfg, plan, raid_id, now)
                 _put(ports.conn, f"guild:raid:{raid_id}:plan", saved_plan)
         session = cls(ports, cfg, armory, plan, raid_id)
         if decay:
             await ports.say(plan.loot_guid, "guild", template("dkp_decay", pct=f"{cfg.dkp.decay * 100:g}"))
+        if attend:
+            await session._bench_memories(now)
+        ports.set_lead(plan.lead_guid)
+        return session
+
+    async def attend(self):
+        """Record attendance, its DKP and the bench's memories once, after an opening without them."""
+        now = self.ports.clock.now()
+        with self.ports.conn:
+            if self.ports.conn.execute("SELECT 1 FROM guild_attendance WHERE raid_id=? LIMIT 1",
+                                       (self.raid_id,)).fetchone() is None:
+                _record_attendance(self.ports, self.cfg, self.plan, self.raid_id, now)
+        await self._bench_memories(now)
+
+    async def _bench_memories(self, now):
+        ports, plan, raid_id, bench = self.ports, self.plan, self.raid_id, self.plan.bench
         streaks = bench_streaks(ports.conn, bench)
         repeated = []
         for guid in bench:
@@ -114,7 +142,7 @@ class RaidSession:
             label = f"{plan.raid_key.upper()} {plan.size}"
             text = (f"I got benched for {label}." if streak == 1 else
                     f"I got benched for {label} again, {streak} raids in a row.")
-            key = session._prefix + f"bench-memory:{guid}"
+            key = self._prefix + f"bench-memory:{guid}"
             if _get(ports.conn, key) is None:
                 await ports.remember(MemoryCandidate(guid, "event", text, int(now), (guid,),
                                                      min(8, 1 + 2 * streak), -min(0.8, 0.2 * streak),
@@ -123,10 +151,8 @@ class RaidSession:
                     _put(ports.conn, key, True)
             if streak >= 2:
                 repeated.append(member_name(ports, guid))
-        if repeated and _once(ports.conn, session._prefix + "bench-note"):
-            ports.propose(session._speaker, "officer", instruction("bench_note", names=", ".join(repeated)), kind=TurnKind.ASIDE)
-        ports.set_lead(plan.lead_guid)
-        return session
+        if repeated and _once(ports.conn, self._prefix + "bench-note"):
+            ports.propose(self._speaker, "officer", instruction("bench_note", names=", ".join(repeated)), kind=TurnKind.ASIDE)
 
     @property
     def _speaker(self):
@@ -193,7 +219,9 @@ class RaidSession:
         if not self._closing:
             await self.loot.tick()
 
-    async def close(self, outcome):
+    async def close(self, outcome, *, raided=True):
+        """End the record. A run that was never raided keeps its row, marked not raided,
+        without the DKP standings, the wrap-up line or an MVP vote."""
         async with self._lock:
             if self._close_done:
                 return self._vote
@@ -203,8 +231,13 @@ class RaidSession:
                 with self.ports.conn:
                     self.ports.conn.execute("UPDATE guild_raid SET ended=?,outcome=? WHERE raid_id=? AND ended IS NULL",
                                             (self.ports.clock.now(), str(outcome), self.raid_id))
+                    if not raided:
+                        _put(self.ports.conn, self._prefix + NOT_RAIDED, True)
                     row = self.ports.conn.execute("SELECT kills,wipes,outcome,ended FROM guild_raid WHERE raid_id=?", (self.raid_id,)).fetchone()
                 self.kills, self.wipes, outcome, ended = row
+                if not raided:
+                    self._close_done = True
+                    return None
                 if _once(self.ports.conn, self._prefix + "standings"):
                     current = balances(self.ports.conn)
                     ranked = sorted(self.ports.cast(), key=lambda g: (-current.get(g, 0), g))[:5]

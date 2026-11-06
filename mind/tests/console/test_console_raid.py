@@ -171,6 +171,22 @@ def test_the_questions_never_write(guild, data):
     assert _digest(data / "mind.db") == before
 
 
+def test_a_run_that_never_raided_shows_as_not_raided_and_is_not_counted(guild, data):
+    store, old, _ = guild
+    conn = store.conn
+    skipped = new_raid(conn, started=NOW - 7000, raid_key="icc", size=25, heroic=False,
+                       offline=True, lead_guid=201, tank_guid=201, loot_guid=202)
+    with conn:
+        _put(conn, f"guild:raid:{skipped}:not-raided", True)
+    end_raid(conn, skipped, ended=NOW - 6999, kills=0, wipes=0, outcome="setup:starting:no_fresh_encounters")
+    view = feed.read(data / "mind.db", raidview.raid_view, now=NOW)
+    recent = {r["raid_id"]: r for r in view["recent"]}
+    assert recent[skipped]["not_raided"] is True and recent[skipped]["raided"] == 0
+    assert recent[old]["not_raided"] is False
+    stats = feed.read(data / "mind.db", raidview.guild_view)["stats"]
+    assert (stats["raids"], stats["offline"]) == (1, 1)
+
+
 def test_a_quiet_night_and_an_empty_or_older_database(store, data, tmp_path):
     with store.conn:
         _put(store.conn, "guild:raid-night:quiet-night", "2026-10-29")

@@ -176,14 +176,19 @@ class OfflineRaids:
                            window=tuple(time.fromisoformat(t) for t in self.cfg.offline_window),
                            min_away_min=self.cfg.offline_min_away_min, raid_active=active))
 
-    def _plan(self):
+    def _raid_key(self):
         skip = {entry["raid"] for entry in self._day_state().get("skipped", [])}
-        raid, size, heroic = split_key(next_raid_key(self.cfg.offline_rotation, last_run(self.ports.conn), skip))
+        return next_raid_key(self.cfg.offline_rotation, last_run(self.ports.conn), skip)
+
+    def _plan(self, key, saved=frozenset()):
+        """`saved` are members saved to a copy of this raid that he is saved to: native would
+        unbind them from his copy, so they are unavailable, neither raiding nor benched."""
+        raid, size, heroic = split_key(key)
         cast = {g: m for g, m in self.ports.cast().items() if g != self.ports.human_guid}
         candidates = candidates_from(cast, {g: self.ports.persona(g) for g in cast},
                                      bench_streaks(self.ports.conn, cast),
                                      attendance_counts(self.ports.conn, cast, self.ports.clock.now() - 30 * 86400),
-                                     self.ports.away())
+                                     set(self.ports.away()) | set(saved))
         leads = choose_leads(candidates, requested=None, human_leads=False, human_guid=self.ports.human_guid)
         comp = select_comp(size, candidates, must_include=[leads.tank_guid, leads.loot_guid],
                            human_in_raid=False, seed=self.rng.getrandbits(64))
@@ -356,14 +361,33 @@ class OfflineRaids:
     async def on_loot_drop(self, ev):
         self._event("loot_drop", ev)
 
+    def _hold_today(self, **changes):
+        with self.ports.conn:
+            state = self._day_state()
+            state.update(changes)
+            _put(self.ports.conn, DAY_PREFIX + self._day(), state)
+
     async def _start(self):
         try:
-            plan = self._plan()
+            key = self._raid_key()
+            raid, _, _ = split_key(key)
+        except ValueError:
+            self._hold_today(blocked=True)
+            return
+        cast = tuple(g for g in self.ports.cast() if g != self.ports.human_guid)
+        try:
+            saved = await asyncio.to_thread(self.armory.bound_with, self.ports.human_guid, raid.map_id, cast)
+        except Exception as e:
+            # Unproved binds could cost him a lockout: no raid until they can be read.
+            log.warning("offline_raid_binds_unreadable error=%s", type(e).__name__)
+            attempts = self._day_state()["attempts"] + 1
+            self._hold_today(attempts=attempts, next_try=self.ports.clock.now() + BUSY_RETRY_S,
+                             blocked=attempts >= MAX_ATTEMPTS)
+            return
+        try:
+            plan = self._plan(key, saved)
         except (ValueError, NoTankError):
-            with self.ports.conn:
-                state = self._day_state()
-                state["blocked"] = True
-                _put(self.ports.conn, DAY_PREFIX + self._day(), state)
+            self._hold_today(blocked=True)
             return
         now = self.ports.clock.now()
         self._owned = dict(id=uuid4().hex, day=self._day(), phase="acquiring", plan=asdict(plan),
@@ -476,7 +500,7 @@ class OfflineRaids:
         self._save()
         before = {r[0] for r in self.ports.conn.execute("SELECT raid_id FROM guild_raid WHERE ended IS NULL")}
         try:
-            self.session = await RaidSession.open(self.ports, self.cfg, self.armory, actual)
+            self.session = await RaidSession.open(self.ports, self.cfg, self.armory, actual, attend=False)
         except BaseException:
             for row in self.ports.conn.execute("SELECT raid_id FROM guild_raid WHERE ended IS NULL").fetchall():
                 if row[0] not in before and _get(self.ports.conn, f"guild:raid:{row[0]}:plan") == asdict(actual):
@@ -501,6 +525,8 @@ class OfflineRaids:
                 return
             self._owned["instance"] = ev.instance_id
             self._save()
+        if ev.stage == "running" and ev.state == "progress" and self.session is not None:
+            await self.session.attend()  # The run started: now its members raided.
         if (ev.stage == "running" and ev.state == "progress" and self.run is not None
                 and not self._owned["cancelled"] and not self._online and not self.ports.human_online()
                 and self._owned.get("terminal") is None
@@ -529,8 +555,8 @@ class OfflineRaids:
     def _no_fresh_raid(self, terminal):
         """Setup proved this raid's copy had no fresh boss before any boss was fought."""
         return (terminal["state"] == "failed" and terminal["reason"] == NO_FRESH_RAID
-                and not self._owned["started"] and not self._owned.get("running_seen")
-                and not terminal["kills"] and not terminal["wipes"])
+                and not self._owned.get("started") and not self._owned.get("running_seen")
+                and not terminal.get("kills") and not terminal.get("wipes"))
 
     def _skip_raid(self, raid_id):
         day = self._day_state(self._owned["day"])
@@ -545,7 +571,6 @@ class OfflineRaids:
         terminal = self._owned.get("terminal")
         if terminal is None:
             return
-        no_fresh = self._no_fresh_raid(terminal)
         # A restart may retain the terminal receipt but not the in-memory inbox.
         if self.session is None:
             from .protocol import Job, JobSkip
@@ -568,6 +593,10 @@ class OfflineRaids:
                     # receipt and body identity for a later cleanup attempt.
                     await self._release()
                     return
+        no_fresh = self._no_fresh_raid(terminal)
+        # Only a run that reached running, or fought, was raided.
+        raided = bool(self._owned.get("running_seen") or self._owned.get("started")
+                      or terminal.get("kills") or terminal.get("wipes"))
         try:
             if self.session is not None:
                 session = self.session
@@ -576,7 +605,10 @@ class OfflineRaids:
                                             (terminal["kills"], terminal["wipes"], session.raid_id))
                 session.kills = max(session.kills, terminal["kills"])
                 session.wipes = max(session.wipes, terminal["wipes"])
-                vote = await session.close(public_text(self.ports, terminal["reason"] or terminal["state"])[:160])
+                if raided:
+                    await session.attend()
+                vote = await session.close(public_text(self.ports, terminal["reason"] or terminal["state"])[:160],
+                                           raided=raided)
                 if vote is not None and vote not in self._votes:
                     self._votes.append(vote)
             if self._owned["started"] and not self._owned["end_notified"]:
@@ -585,13 +617,13 @@ class OfflineRaids:
                 await self._notify("on_end", terminal["reason"] or terminal["state"])
         finally:
             await self._release()
-        if no_fresh:
-            # Nobody fought: no raid memory, and the day's one raid is still to come.
-            self._skip_raid(self.session.raid_id if self.session is not None else None)
-        else:
+        if raided:
             await self._memories()
-            if terminal["state"] == "failed":
-                self._update_day(blocked=True)
+        if no_fresh:
+            # Nobody fought, and the day's one raid is still to come.
+            self._skip_raid(self.session.raid_id if self.session is not None else None)
+        elif terminal["state"] == "failed":
+            self._update_day(blocked=True)
         self._owned["phase"] = "complete"
         self._save()
         self.session = self.run = None

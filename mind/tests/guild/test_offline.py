@@ -566,3 +566,127 @@ async def test_a_raid_that_started_is_still_the_days_only_raid(setup, reason):
         await advance(ports, 15 * 60)
         await controller.tick()
     assert len(ports.sent) == 1 and raids_today(ports) == 1
+
+
+def attendance(ports, raid_id):
+    rows = ports.conn.execute("SELECT COUNT(*) FROM guild_attendance WHERE raid_id=?", (raid_id,)).fetchone()[0]
+    dkp = ports.conn.execute("SELECT COUNT(*) FROM dkp_ledger WHERE raid_id=? AND reason IN ('attendance','standby')",
+                             (raid_id,)).fetchone()[0]
+    return rows, dkp
+
+
+def closing_lines(ports):
+    return ([text for _, _, text in ports.said if text.startswith("dkp top 5:")],
+            [line for _, _, line, _ in ports.proposed if line.startswith("Wrap up")])
+
+
+def not_raided(ports, raid_id):
+    from leeroy_mind.guild.loot import _get
+    return _get(ports.conn, f"guild:raid:{raid_id}:not-raided") is True
+
+
+@_run_async
+async def test_member_saved_to_the_owners_copy_of_the_planned_map_is_never_chosen(setup):
+    ports, armory, controller = setup
+    armory.binds = {1: {(631, 14)}, 103: {(631, 14)}, 120: {(631, 14)}, 102: {(631, 14)}}
+    await start(setup)
+    command = ports.sent[-1]
+    chosen = {command.leader_guid, command.loot_master_guid, *command.members}
+    assert not chosen & {102, 103, 120}
+    assert not set(controller._owned["plan"]["bench"]) & {102, 103, 120}
+    call = next(c for c in armory.calls if c[0] == "bound_with")
+    assert call[1:3] == (1, 631) and set(call[3]) == set(range(101, 131))
+
+
+@_run_async
+async def test_member_saved_to_a_copy_the_owner_is_not_in_may_still_be_chosen(setup):
+    ports, armory, controller = setup
+    # 120 holds another ICC copy (native unbinds it as before); 108 shares the owner's ToC copy only.
+    armory.binds = {1: {(631, 14), (649, 30)}, 120: {(631, 15)}, 108: {(649, 30)}}
+    await start(setup)
+    command = ports.sent[-1]
+    assert {120, 108} <= {command.leader_guid, *command.members}
+
+
+@_run_async
+async def test_unreadable_binds_hold_the_start_and_retry_later(setup):
+    from leeroy_mind.personas.roster import RosterError
+    ports, armory, controller = setup
+
+    def unreadable(*args):
+        raise RosterError("guild armory unavailable")
+
+    armory.bound_with = unreadable
+    await controller.tick()
+    assert not ports.sent and not ports.gpu and not controller._day_state()["blocked"]
+    del armory.bound_with
+    await advance(ports, 14 * 60)
+    await controller.tick()
+    assert not ports.sent
+    await advance(ports, 60)
+    await controller.tick()
+    assert len(ports.sent) == 1
+
+
+@_run_async
+async def test_skipped_run_awards_no_attendance_and_the_days_real_raid_awards_it_once(setup):
+    ports, _, controller = setup
+    await start(setup)
+    await controller.on_job(event(controller, stage="starting"))
+    await controller.tick()
+    skipped = controller.session.raid_id
+    assert attendance(ports, skipped) == (0, 0)
+    await controller.on_job(event(controller, state="failed", stage="", reason="setup:starting:no_fresh_encounters"))
+    await controller.tick()
+    assert attendance(ports, skipped) == (0, 0) and closing_lines(ports) == ([], [])
+    row = ports.conn.execute("SELECT ended, outcome FROM guild_raid WHERE raid_id=?", (skipped,)).fetchone()
+    assert row[0] is not None and row[1] == "setup:starting:no_fresh_encounters"
+    assert not_raided(ports, skipped)
+    await advance(ports, 60)
+    await controller.tick()
+    await controller.on_job(event(controller, stage="teleporting"))
+    await controller.tick()
+    raided = controller.session.raid_id
+    assert raided != skipped and attendance(ports, raided) == (0, 0)
+    await controller.on_job(event(controller))
+    await controller.tick()
+    plan = controller.session.plan
+    expected = (len(plan.members) + len(plan.bench),) * 2
+    assert attendance(ports, raided) == expected
+    await controller.on_job(event(controller, state="done", stage="", reason="cleared", kills=2))
+    await controller.tick()
+    assert attendance(ports, raided) == expected and attendance(ports, skipped) == (0, 0)
+    standings, wrapups = closing_lines(ports)
+    assert len(standings) == len(wrapups) == 1
+    assert not not_raided(ports, raided)
+
+
+@pytest.mark.parametrize("terminal", [("failed", "setup:teleporting:timeout"),
+                                      ("failed", "setup:starting:group_changed"),
+                                      ("done", "human_login")])
+@_run_async
+async def test_any_run_that_never_reached_running_is_not_raided(setup, terminal):
+    ports, _, controller = setup
+    await start(setup)
+    await controller.on_job(event(controller, stage="teleporting"))
+    await controller.tick()
+    raid_id = controller.session.raid_id
+    state, reason = terminal
+    await controller.on_job(event(controller, state=state, stage="", reason=reason))
+    await controller.tick()
+    assert not controller.active
+    assert attendance(ports, raid_id) == (0, 0) and closing_lines(ports) == ([], [])
+    assert not [m for m in ports.memories if "without" in m.text or "benched" in m.text]
+    assert not_raided(ports, raid_id)
+
+
+@_run_async
+async def test_a_run_that_reached_running_keeps_its_attendance_when_it_fails(setup):
+    ports, _, controller = setup
+    await running(setup)
+    raid_id = controller.session.raid_id
+    plan = controller.session.plan
+    await controller.on_job(event(controller, state="failed", stage="", reason="encounters_changed"))
+    await controller.tick()
+    assert attendance(ports, raid_id)[0] == len(plan.members) + len(plan.bench)
+    assert not not_raided(ports, raid_id)
