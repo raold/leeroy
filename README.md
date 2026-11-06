@@ -39,6 +39,7 @@ trained, on a separate server.
 | `modules/mod-leeroy/` | The guild module: keeps the guild's bots pinned online and their consumables topped up, fills the player's `.playerbots bot addN` groups from the guild, and runs a local bridge (NDJSON over `127.0.0.1:7878`) through which an outside "mind" sees the guild and speaks and acts for its members. Unit tests, and a smoke test in `tools/` |
 | `modules/mod-dojo/` | The dojo's native module, built only into the dojo's isolated core (the CI build compiles its disabled variant) |
 | `mind/` | The mind (`python -m leeroy_mind run`), a Python service that voices the guild through the bridge and a local LLM (Ollama); see [The mind](#the-mind) |
+| `selfie/` | The profile-photo worker (`python -m leeroy_selfie`): RealVisXL renders on the local GPU, started by the mind at night only; separate Python 3.12 process, GPL-3.0-or-later, with its own [LICENSE](selfie/LICENSE) and [README](selfie/README.md) |
 | `voice/` | Local voice comms and push-to-talk (`python -m leeroy_voice`), in a separate Python 3.12 process; GPL-3.0-or-later, with its own [LICENSE](voice/LICENSE) and [README](voice/README.md) |
 | `dojo/` | The dojo (`python -m leeroy_dojo`): an isolated environment for training combat policies against its own worldserver, never the live realm; see [its README](dojo/README.md) |
 | `references.bib` | The research, software and models behind the project, each entry annotated with what it shaped |
@@ -237,7 +238,7 @@ suite, the C++ protocol tests and a fake-worker smoke test. The
 
 ## Research
 
-[references.bib](references.bib) lists the 271 papers, books, software and
+[references.bib](references.bib) lists the 278 papers, books, software and
 models behind the project. Each entry notes what it shaped, or, in the dojo's
 section, what it is planned for. The main threads:
 
@@ -274,7 +275,16 @@ section, what it is planned for. The main threads:
     for the training ground's planned post-fight reflection and growing tactic
     library.
 
+## Profile photos
+
+With `[selfies] enabled = true` the mind picks a photo kind for each guild member who has looks
+and, at night only, has the `selfie/` worker render four candidates each. The owner picks one,
+undoes it or asks for four more in the console's Personas tab ("Choose selfies", through
+`POST /api/selfie`). Rendering stays off by default, never runs while the owner is in game, and
+every image passes a local NSFW check first. See [selfie/README.md](selfie/README.md).
+
 ## License
 
 GPL-2.0, matching AzerothCore and mod-playerbots, except the separate `voice/`
-service, which is GPL-3.0-or-later under [voice/LICENSE](voice/LICENSE).
+service and `selfie/` worker, which are GPL-3.0-or-later under [voice/LICENSE](voice/LICENSE)
+and [selfie/LICENSE](selfie/LICENSE).

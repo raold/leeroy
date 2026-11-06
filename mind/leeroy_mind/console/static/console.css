@@ -332,6 +332,24 @@ select, input[type="text"], input[type="number"] { color: var(--ink); background
 .chg { margin: 0 0 8px; }
 .chg .acts { margin-top: 2px; }
 
+/* the personas tab, its profile photos: a member's four candidates side by side, then "4 more" */
+.sfrow { display: grid; grid-template-columns: minmax(7em, 11em) minmax(0, 552px) auto; justify-content: start;
+  align-items: center; gap: 8px 14px; padding: 10px 0; border-top: 1px solid var(--line); }
+.sfrow:first-child { border-top: 0; }
+.sfrow div.who { min-width: 0; font-weight: 700; }
+.sfrow div.who span { min-width: 0; overflow-wrap: anywhere; }
+.shots { display: grid; grid-template-columns: repeat(4, minmax(0, 132px)); gap: 8px; }
+.shot { display: block; width: 100%; padding: 0; aspect-ratio: 1; overflow: hidden; border-radius: 8px;
+  background: var(--surface-2); line-height: 0; }
+.shot img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.shot:disabled { opacity: 1; }
+.shot:hover:not(:disabled) { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.shot.now { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.pager { align-items: center; }
+#p-selfies h4, #p-photo h4 { margin-top: 14px; }
+.photonow { display: flex; align-items: center; gap: 12px; }
+.photonow .note { margin: 0; }
+
 /* the middle widths: the right column goes under the other two, the room's faces beside the card,
    and the page scrolls down to it */
 @media (max-width: 1100px) {
@@ -350,6 +368,8 @@ select, input[type="text"], input[type="number"] { color: var(--ink); background
   .comms > .panel.right { grid-column: auto; display: flex; align-items: stretch; max-height: none; }
   .panel.right > .mcard { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
   .facts { grid-template-columns: 1fr; }
+  .sfrow { grid-template-columns: minmax(0, 1fr) auto; }
+  .shots { grid-column: 1 / -1; grid-row: 2; }
 }
 
 .tab.placeholder { width: 100%; max-width: 1600px; margin: 0 auto; padding: 24px 16px; gap: 6px; align-content: start; }

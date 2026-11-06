@@ -13,10 +13,10 @@ a crash left behind; the endpoint removes it when it closes. The console reads i
 key only to a listener that the TCP table shows is the running mind's own process.
 
 A request: one connection, one line. A JSON object of at most MAX_LINE bytes ending in a
-newline, sent within READ_S (2 s), with exactly the keys v (1), key, op and, for a raid, tune or
-say action only, args. Anything else (an unknown or missing key, a wrong type, an HTTP request) is
-refused and the connection closed; nothing after the first line is read. One answer line comes
-back, {"ok": true, ...} or {"ok": false, "error": ...}, and the connection closes.
+newline, sent within READ_S (2 s), with exactly the keys v (1), key, op and, for a raid, tune,
+selfie or say action only, args. Anything else (an unknown or missing key, a wrong type, an HTTP
+request) is refused and the connection closed; nothing after the first line is read. One answer
+line comes back, {"ok": true, ...} or {"ok": false, "error": ...}, and the connection closes.
 
     status          the raid night's state and which raid actions can run now, or why not
     stop            the mind's own clean shutdown, the one Ctrl+C runs: answered, then begun
@@ -27,6 +27,9 @@ back, {"ok": true, ...} or {"ok": false, "error": ...}, and the connection close
                     preview {scope, target, dial, value}: the owner's persona dials
                     (leeroy_mind.tuning), written by this mind only, one change at a time,
                     and in force from the next read; a preview's text goes only to the caller
+    selfie {action} status | pick {guid, set, index} | undo {pick} | more {guid}: profile
+                    photos (leeroy_mind.selfies), written by this mind only, one change at a
+                    time until its files are written; status at any time
     say {channel, text[, to]}
                     guild | officer | group | whisper (to: a cast member's guid): the owner's
                     own line, said in game as his through native owner_say
@@ -62,7 +65,7 @@ PREVIEW_S = 40.0  # a preview's two lines, before and after, at background prior
 SAY_S = 10.0  # one line of his, past the bridge's own 5 s ack wait
 MAX_CONNECTIONS = 8
 REPLACE_TRIES = 40  # 2 s of 50 ms tries to move control.json over a file being read
-OPS = ("status", "stop", "raid", "tune", "say")
+OPS = ("status", "stop", "raid", "tune", "selfie", "say")
 RAID_ACTIONS = ("call", "form", "summon", "start", "stop", "end")
 TUNE_ACTIONS = ("status", "set", "undo", "revert", "group", "retire", "preview")
 TUNE_SHAPES = {
@@ -75,6 +78,13 @@ TUNE_SHAPES = {
     "preview": {"action", "scope", "target", "dial", "value"},
 }
 TUNE_SCOPES = ("world", "group", "member")
+SELFIE_ACTIONS = ("status", "pick", "more", "undo")
+SELFIE_SHAPES = {
+    "status": {"action"},
+    "pick": {"action", "guid", "set", "index"},
+    "more": {"action", "guid"},
+    "undo": {"action", "pick"},
+}
 SAY_CHANNELS = ("guild", "officer", "group", "whisper")
 MAX_SAY_CHARS = 1024  # what the console's box may hold; a line the game takes is 255 bytes
 _DIAL_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz_")
@@ -386,6 +396,31 @@ def tune_args(args) -> dict:
                                                      "where"].index)}
 
 
+def selfie_args(args) -> dict:
+    """A photo action's arguments, exactly (SELFIE_SHAPES), in tune_args' style: guid a
+    member's guid (1 below 2**32), set a set's number (1 below 2**31), index a photo of the set
+    (0-3), pick a change's number (from 1); whether they name a cast member's ready set is the
+    mind's selfie service's to say. BadRequest otherwise."""
+    if not isinstance(args, dict) or args.get("action") not in SELFIE_ACTIONS:
+        raise BadRequest("selfie: an action, one of " + ", ".join(SELFIE_ACTIONS))
+    action = args["action"]
+    shape = SELFIE_SHAPES[action]
+    if set(args) != shape:
+        if action == "status":
+            raise BadRequest("selfie status: takes no arguments")
+        raise BadRequest(f"selfie {action}: exactly " + ", ".join(sorted(shape - {"action"})))
+    if "guid" in shape and not _count(args["guid"], 1):
+        raise BadRequest(f"selfie {action}: guid is a member's guid")
+    if action == "pick":
+        if not (type(args["set"]) is int and 1 <= args["set"] < 1 << 31):
+            raise BadRequest("selfie pick: set is a set's number")
+        if not (type(args["index"]) is int and 0 <= args["index"] <= 3):
+            raise BadRequest("selfie pick: index is a photo's place in its set, 0-3")
+    if action == "undo" and not (type(args["pick"]) is int and 1 <= args["pick"] < 1 << 63):
+        raise BadRequest("selfie undo: pick is a change's number")
+    return {k: args[k] for k in ("action", "guid", "set", "index", "pick") if k in shape}
+
+
 def say_args(args) -> dict:
     """A say action's arguments, exactly: {"channel", "text"}, plus "to" (a member's guid) for a
     whisper only; text is at most MAX_SAY_CHARS characters that clean to a line the game takes
@@ -424,8 +459,8 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
         raise BadRequest("bad request: not a JSON line") from None
     if not isinstance(value, dict) or not {"v", "key", "op"} <= set(value) <= {
             "v", "key", "op", "args"}:
-        raise BadRequest("bad request: exactly v, key, op (and args for a raid, tune or say "
-                         "action)")
+        raise BadRequest("bad request: exactly v, key, op (and args for a raid, tune, selfie or "
+                         "say action)")
     given = value["key"]
     if not isinstance(given, str) or not secrets.compare_digest(
             given.encode("utf-8", "surrogatepass"), key.encode("ascii")):
@@ -435,7 +470,8 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     op = value["op"]
     if op not in OPS:
         raise BadRequest("bad request: op is one of " + ", ".join(OPS))
-    parse_args = {"raid": raid_args, "tune": tune_args, "say": say_args}.get(op)
+    parse_args = {"raid": raid_args, "tune": tune_args, "selfie": selfie_args,
+                  "say": say_args}.get(op)
     if parse_args is None:
         if "args" in value:
             raise BadRequest(f"bad request: {op} takes no args")
@@ -494,6 +530,7 @@ class ControlEndpoint:
         self._raid = asyncio.Lock()
         self._tune = asyncio.Lock()  # one tuning change at a time
         self._preview = asyncio.Lock()  # one preview at a time
+        self._selfie = asyncio.Lock()  # one photo change at a time, until its files are written
         self._say = asyncio.Lock()  # one line of his in flight
 
     async def serve(self) -> None:
@@ -580,7 +617,7 @@ class ControlEndpoint:
             log_event("control_request", op=op, channel=args["channel"],
                       outcome="ok" if reply["ok"] else "refused")
             return reply, None
-        reply = await (self.raid(args) if op == "raid" else self.tune(args))
+        reply = await {"raid": self.raid, "tune": self.tune, "selfie": self.selfie}[op](args)
         log_event("control_request", op=op, action=args["action"],
                   outcome="ok" if reply["ok"] else "refused")
         return reply, None
@@ -652,6 +689,23 @@ class ControlEndpoint:
         if self._tune.locked():
             return {"ok": False, "error": "another tuning change is still being written"}
         async with self._tune:
+            return await service.handle(args)
+
+    async def selfie(self, args: dict) -> dict:
+        """Profile photos (leeroy_mind.selfies.service): status at any time; a pick, undo or
+        "4 more" one at a time, the lock held through the whole change, its files written off
+        the loop included, with no timeout (a cancelled wait would free the lock while those
+        files are still being written). Pick, undo and more answers carry the member's guid."""
+        service = getattr(self.app, "selfies", None)
+        if self.app.stopping:
+            return {"ok": False, "error": "the mind is stopping"}
+        if service is None:
+            return {"ok": False, "error": "photos are not running in this mind"}
+        if args["action"] == "status":
+            return await service.handle(args)
+        if self._selfie.locked():
+            return {"ok": False, "error": "another photo change is still being written"}
+        async with self._selfie:
             return await service.handle(args)
 
     async def say(self, args: dict) -> dict:

@@ -41,6 +41,13 @@ export function youTitle(y) {
              + Math.round(num(y.familiarity)) + (y.label ? ", " + y.label : "") : "";
 }
 
+// The photo kind a member chose (the persona card's photo): its kind, framing and setting
+export function photoKindText(p) {
+  if (!p) { return ""; }
+  return [str(p.kind).replace(/_/g, " "), str(p.framing).replace(/_/g, " "), str(p.setting)]
+    .filter(Boolean).join(", ");
+}
+
 // The member card in Comms from /api/persona's member view: the name, a note (age and region, then
 // the stance) and three facts. view null: mind.db does not know them (a 404), so only the name the
 // page knows (known) is shown.

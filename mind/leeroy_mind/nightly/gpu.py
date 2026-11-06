@@ -13,13 +13,24 @@ own. The lock serializes only the GPU work:
 
 - hold / acquire_live: the first holder needs the GPU handed over (hand_over): the preempt
   callback (set_preempt) cancels the night's run, the reflection model is unloaded if it is
-  loaded, and the live model is preloaded and kept loaded, at the num_ctx live requests use;
+  loaded, and the live model is preloaded and kept loaded, at the num_ctx live requests use.
+  After an image stage shared the GPU (make_room, below), a live model it finds loaded is
+  unloaded first, so the preload loads it whole;
 - release_live: drops the holder; when it was the last, a let-go task (under the lock, if nobody
   holds a lease by then) leaves the live model loaded for only RELEASED_KEEP_ALIVE more, instead
   of the pin that kept it until the next night's ensure_model;
 - ensure_model: unloads whichever of the live and reflection models is loaded and is not the one
   asked for, and nothing else (the embedding model is never unloaded);
-- foreign_models: what else is loaded, for the night's count of loads it did not ask for.
+- make_room: for a stage that takes the whole GPU (an image stage), unloads every model Ollama
+  lists but the embedding model. The live model goes like any other, whether the let-go kept it
+  or mod-ollama-chat loaded it at night. It loads nothing and may be called again mid-stage.
+  While any live lease is held it refuses (LiveLeaseHeld) and unloads nothing more. Once it
+  has begun, the GPU counts as shared: a live model Ollama loads while the stage's worker holds
+  its VRAM goes partly onto the CPU, and Ollama would reuse that runner for a preload at the
+  same num_ctx. So the next hand_over unloads a loaded live model before its preload; the mark
+  ends with that preload, or with an ensure_model that unloads the live model;
+- foreign_models: what else is loaded, for the night's count of loads it did not ask for (with
+  None, every loaded model but the embedding model).
 
 A lease counts from the call, so it is held even if the GPU work fails or its caller is
 cancelled. Use `async with arbiter.live(holder)`, or a bare acquire_live inside the try whose
@@ -49,6 +60,16 @@ def norm(name: str) -> str:
     """`name` with Ollama's default tag: a name without a tag means :latest. The tag follows the
     last colon after the last slash, so a registry port (localhost:5000/m) is not one."""
     return name if ":" in name.rsplit("/", 1)[-1] else name + ":latest"
+
+
+class LiveLeaseHeld(RuntimeError):
+    """make_room refused: a live lease is held (his login, an offline raid, voice, a preview),
+    so nothing that needs the whole GPU may run now. `holders` names the leases."""
+
+    def __init__(self, holders: frozenset[str]):
+        self.holders = frozenset(holders)
+        super().__init__(f"a live lease is held by {', '.join(sorted(self.holders))}: "
+                         "no room for a stage that needs the whole GPU")
 
 
 def _error_body(e: urllib.error.HTTPError) -> str:
@@ -152,6 +173,7 @@ class GpuArbiter:
         self._preempt: Callable[[], Awaitable[None]] | None = None
         self._lock = asyncio.Lock()
         self._letting_go: set[asyncio.Task] = set()
+        self._shared_gpu = False  # an image stage began: a loaded live model may be split
 
     def reconfigure(self, settings: NightlySettings) -> bool:
         """Change the swappable names inline, without waiting for a model operation.
@@ -229,8 +251,11 @@ class GpuArbiter:
         """The GPU work of a first lease, under the lock: await the preempt callback, unload the
         reflection model if it is loaded (not when it is the live model too), then preload the
         live model with keep_alive -1 at the num_ctx live requests use, so the first reply after
-        his login finds it loaded. It does nothing if the lease has ended by the time it gets the
-        lock. A failed step raises; the lease stays held."""
+        his login finds it loaded. After an image stage shared the GPU (make_room), a loaded
+        live model is unloaded too, since it may have loaded beside the worker partly on the
+        CPU: the preload then loads it whole, and the mark ends there. It does nothing if the
+        lease has ended by the time it gets the lock. A failed step raises; the lease stays
+        held."""
         async with self._lock:
             if not self._holders:
                 return
@@ -242,8 +267,9 @@ class GpuArbiter:
                     continue
                 remaining = list(listed)
                 for name in listed:
-                    if norm(name) in self._managed and norm(name) not in {
-                            norm(target), norm(self._embedding)}:
+                    split = self._shared_gpu and norm(name) == norm(target)
+                    if split or (norm(name) in self._managed and norm(name) not in {
+                            norm(target), norm(self._embedding)}):
                         await self.admin.unload(name)
                         remaining.remove(name)
                         if revision != self._revision:
@@ -256,6 +282,7 @@ class GpuArbiter:
                 await self.admin.preload(target, -1,
                                          options={"num_ctx": LIVE_PRESET.options["num_ctx"]})
                 if revision == self._revision:
+                    self._shared_gpu = False
                     self._prune_managed([*remaining, target])
                     return
 
@@ -321,7 +348,8 @@ class GpuArbiter:
     async def ensure_model(self, model: str) -> None:
         """Make room for `model`: unload whichever of the live and reflection models is loaded
         and is not `model`. No other model is touched, and `model` itself is left to load on its
-        first request."""
+        first request. A live model it unloads ends the shared-GPU mark (make_room): it can
+        only load whole again."""
         revision = self._revision
         async with self._lock:
             if revision != self._revision:
@@ -332,14 +360,56 @@ class GpuArbiter:
             remaining = list(listed)
             for other in self._swappable():
                 if norm(other) != norm(model):
+                    loaded = any(norm(n) == norm(other) for n in listed)
                     await self._unload(other, listed)
                     remaining = [n for n in remaining if norm(n) != norm(other)]
                     if revision != self._revision:
                         raise RuntimeError("nightly models changed during model admission")
+                    if loaded and norm(other) == norm(self._live):
+                        self._shared_gpu = False
             self._prune_managed(remaining)
 
-    async def foreign_models(self, expected: str) -> list[str]:
+    def _refuse_if_held(self) -> None:
+        if self._holders:
+            raise LiveLeaseHeld(frozenset(self._holders))
+
+    async def make_room(self) -> None:
+        """Make room for a stage that needs the whole GPU: unload every model Ollama lists but
+        the embedding model. That is the live and reflection models, current and retired, and
+        any other chat model too, since one loaded at night takes the same VRAM. Nothing is
+        loaded. A stage may call it again when something loaded a model meanwhile.
+
+        It never runs while a live lease is held: LiveLeaseHeld, at the call or as soon as a
+        lease is taken while it waits or works, and nothing more is unloaded. The live model is
+        unloaded last, so a lease taken meanwhile finds it still loaded. A reload (reconfigure)
+        while it waits or works fails it, as ensure_model. Past the lease check under the lock,
+        it marks the GPU shared, so the next hand_over reloads the live model whole."""
+        self._refuse_if_held()
+        revision = self._revision
+        async with self._lock:
+            self._refuse_if_held()
+            if revision != self._revision:
+                raise RuntimeError("nightly models changed during model admission")
+            self._shared_gpu = True  # a worker may hold VRAM from here on
+            listed = await self.admin.loaded_models()
+            self._refuse_if_held()
+            if revision != self._revision:
+                raise RuntimeError("nightly models changed during model admission")
+            remaining = list(listed)
+            for name in sorted(listed, key=lambda n: norm(n) == norm(self._live)):
+                if norm(name) != norm(self._embedding):
+                    await self.admin.unload(name)
+                    remaining.remove(name)
+                    self._refuse_if_held()
+                    if revision != self._revision:
+                        raise RuntimeError("nightly models changed during model admission")
+            self._prune_managed(remaining)
+
+    async def foreign_models(self, expected: str | None) -> list[str]:
         """The loaded models other than `expected` and the embedding model, as Ollama lists
-        them. It only looks."""
-        keep = {norm(expected), norm(self._embedding)}
+        them; with None (an image stage expects no chat model), every loaded model but the
+        embedding model. It only looks."""
+        keep = {norm(self._embedding)}
+        if expected is not None:
+            keep.add(norm(expected))
         return [n for n in await self.admin.loaded_models() if norm(n) not in keep]
