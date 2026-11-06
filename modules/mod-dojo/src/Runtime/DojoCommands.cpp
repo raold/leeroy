@@ -8,6 +8,7 @@
 
 #include "DojoExecutor.h"
 #include "DojoFixtures.h"
+#include "DojoReset.h"
 #include "DojoRuntime.h"
 
 #include "ArenaScript.h"
@@ -20,6 +21,7 @@
 #include "SpellInfo.h"
 #include "WorldScript.h"
 
+#include <algorithm>
 #include <optional>
 #include <sstream>
 #include <vector>
@@ -74,6 +76,14 @@ std::vector<std::size_t> Slots(std::string const& word)
     return {};
 }
 
+// A plain decimal count, exact beyond float's 24 bits (trace sequence numbers).
+std::optional<std::uint64_t> Count(std::string const& word)
+{
+    if (word.empty() || word.size() > 18 || !std::all_of(word.begin(), word.end(), [](char c) { return c >= '0' && c <= '9'; }))
+        return std::nullopt;
+    return std::stoull(word);
+}
+
 std::optional<float> Number(std::string const& word)
 {
     try
@@ -93,6 +103,25 @@ bool Usage(ChatHandler* handler, char const* usage)
 {
     Print(handler, std::string("usage: ") + usage);
     return true;
+}
+
+// The director's own jobs wait while an episode reset is in flight: that reset is using the director.
+bool RefuseJob(ChatHandler* handler)
+{
+    if (Refuse(handler))
+        return true;
+    if (!Dojo::Episode::Instance().Busy())
+        return false;
+    Print(handler, "dojo: refused, an episode reset is in flight (dojo episode status)");
+    return true;
+}
+
+std::string Rest(std::vector<std::string> const& words)
+{
+    std::string out;
+    for (std::string const& w : words)
+        out += (out.empty() ? "" : " ") + w;
+    return out;
 }
 }
 
@@ -128,6 +157,20 @@ public:
             {"mana", HandleHarnessMana, SEC_CONSOLE, Console::Yes},
             {"restore", HandleHarnessRestore, SEC_CONSOLE, Console::Yes},
             {"los", HandleHarnessLos, SEC_CONSOLE, Console::Yes},
+            {"kill", HandleHarnessKill, SEC_CONSOLE, Console::Yes},
+            {"cooldowns", HandleHarnessCooldowns, SEC_CONSOLE, Console::Yes},
+            {"disconnect", HandleHarnessDisconnect, SEC_CONSOLE, Console::Yes},
+        };
+        static ChatCommandTable episode = {
+            {"reset", HandleEpisodeReset, SEC_CONSOLE, Console::Yes},
+            {"abort", HandleEpisodeAbort, SEC_CONSOLE, Console::Yes},
+            {"status", HandleEpisodeStatus, SEC_CONSOLE, Console::Yes},
+            {"evidence", HandleEpisodeEvidence, SEC_CONSOLE, Console::Yes},
+            {"observe", HandleEpisodeObserve, SEC_CONSOLE, Console::Yes},
+            {"decide", HandleEpisodeDecide, SEC_CONSOLE, Console::Yes},
+            {"schema", HandleEpisodeSchema, SEC_CONSOLE, Console::Yes},
+            {"debug", HandleEpisodeDebug, SEC_CONSOLE, Console::Yes},
+            {"fault", HandleEpisodeFault, SEC_CONSOLE, Console::Yes},
         };
         static ChatCommandTable dojo = {
             {"status", HandleStatus, SEC_CONSOLE, Console::Yes},
@@ -136,6 +179,7 @@ public:
             {"arena", arena},
             {"control", control},
             {"harness", harness},
+            {"episode", episode},
         };
         static ChatCommandTable root = {{"dojo", dojo}};
         return root;
@@ -155,35 +199,35 @@ public:
 
     static bool HandleFixtureCreate(ChatHandler* handler)
     {
-        if (!Refuse(handler))
+        if (!RefuseJob(handler))
             Print(handler, Dojo::Director::Instance().Create());
         return true;
     }
 
     static bool HandleFixtureBuild(ChatHandler* handler)
     {
-        if (!Refuse(handler))
+        if (!RefuseJob(handler))
             Print(handler, Dojo::Director::Instance().StartBuild());
         return true;
     }
 
     static bool HandleFixtureRestore(ChatHandler* handler)
     {
-        if (!Refuse(handler))
+        if (!RefuseJob(handler))
             Print(handler, Dojo::Director::Instance().StartRestore());
         return true;
     }
 
     static bool HandleArenaOpen(ChatHandler* handler)
     {
-        if (!Refuse(handler))
+        if (!RefuseJob(handler))
             Print(handler, Dojo::Director::Instance().StartOpen());
         return true;
     }
 
     static bool HandleArenaClose(ChatHandler* handler)
     {
-        if (!Refuse(handler))
+        if (!RefuseJob(handler))
             Print(handler, Dojo::Director::Instance().StartClose());
         return true;
     }
@@ -266,9 +310,18 @@ public:
         if (RefuseControl(handler))
             return true;
         std::vector<std::string> const words = Words(args);
+        if (!words.empty() && words[0] == "since")
+        {
+            std::optional<std::uint64_t> const seq = words.size() >= 2 ? Count(words[1]) : std::nullopt;
+            std::optional<std::uint64_t> const max = words.size() == 3 ? Count(words[2]) : std::optional<std::uint64_t>(4096);
+            if (!seq || !max || *max < 1 || words.size() > 3)
+                return Usage(handler, "dojo control trace since <seq> [max]");
+            Print(handler, Dojo::Control::Instance().TraceSince(*seq, std::size_t(*max)));
+            return true;
+        }
         std::optional<float> const last = words.size() == 1 ? Number(words[0]) : std::optional<float>(50.0f);
         if (!last || *last < 1)
-            return Usage(handler, "dojo control trace [count]");
+            return Usage(handler, "dojo control trace [count] | since <seq> [max]");
         Print(handler, Dojo::Control::Instance().Trace(std::size_t(*last)));
         return true;
     }
@@ -319,6 +372,126 @@ public:
             return Usage(handler, "dojo harness restore <0|1|all>");
         for (std::size_t slot : slots)
             Print(handler, Dojo::Control::Instance().Restore(slot));
+        return true;
+    }
+
+    static bool HandleHarnessKill(ChatHandler* handler, Tail args)
+    {
+        if (RefuseControl(handler))
+            return true;
+        std::vector<std::string> const words = Words(args);
+        std::vector<std::size_t> const slots = words.size() == 1 ? Slots(words[0]) : std::vector<std::size_t>{};
+        if (slots.empty())
+            return Usage(handler, "dojo harness kill <0|1|all>");
+        for (std::size_t slot : slots)
+            Print(handler, Dojo::Control::Instance().Kill(slot));
+        return true;
+    }
+
+    static bool HandleHarnessCooldowns(ChatHandler* handler, Tail args)
+    {
+        if (RefuseControl(handler))
+            return true;
+        std::vector<std::string> const words = Words(args);
+        std::vector<std::size_t> const slots = words.size() == 1 ? Slots(words[0]) : std::vector<std::size_t>{};
+        if (slots.size() != 1)
+            return Usage(handler, "dojo harness cooldowns <0|1>");
+        Print(handler, Dojo::Control::Instance().ClearCooldowns(slots[0]));
+        return true;
+    }
+
+    static bool HandleHarnessDisconnect(ChatHandler* handler, Tail args)
+    {
+        if (RefuseControl(handler))
+            return true;
+        std::vector<std::string> const words = Words(args);
+        std::vector<std::size_t> const slots = words.size() == 1 ? Slots(words[0]) : std::vector<std::size_t>{};
+        if (slots.size() != 1)
+            return Usage(handler, "dojo harness disconnect <0|1>");
+        Print(handler, Dojo::Director::Instance().Disconnect(slots[0]));
+        return true;
+    }
+
+    static bool HandleEpisodeReset(ChatHandler* handler, Tail args)
+    {
+        if (!RefuseControl(handler))
+            Print(handler, Dojo::Episode::Instance().Reset(Rest(Words(args))));
+        return true;
+    }
+
+    static bool HandleEpisodeAbort(ChatHandler* handler, Tail args)
+    {
+        if (!RefuseControl(handler))
+            Print(handler, Dojo::Episode::Instance().Abort(Rest(Words(args))));
+        return true;
+    }
+
+    static bool HandleEpisodeStatus(ChatHandler* handler)
+    {
+        if (!RefuseControl(handler))
+            Print(handler, Dojo::Episode::Instance().Status());
+        return true;
+    }
+
+    static bool HandleEpisodeEvidence(ChatHandler* handler)
+    {
+        if (!RefuseControl(handler))
+            Print(handler, Dojo::Episode::Instance().Evidence());
+        return true;
+    }
+
+    static bool HandleEpisodeObserve(ChatHandler* handler, Tail args)
+    {
+        if (RefuseControl(handler))
+            return true;
+        std::vector<std::string> const words = Words(args);
+        if (words.size() > 1 || (words.size() == 1 && words[0] != "full"))
+            return Usage(handler, "dojo episode observe [full]");
+        Print(handler, Dojo::Episode::Instance().Observe(words.size() == 1));
+        return true;
+    }
+
+    static bool HandleEpisodeDecide(ChatHandler* handler, Tail args)
+    {
+        if (RefuseControl(handler))
+            return true;
+        std::vector<std::string> words = Words(args);
+        bool const force = !words.empty() && words.back() == "force";
+        if (force)
+            words.pop_back();
+        if (words.size() != 2)
+            return Usage(handler, "dojo episode decide <action for actor 0> <action for actor 1> [force]");
+        Print(handler, Dojo::Episode::Instance().Decide(words, force));
+        return true;
+    }
+
+    static bool HandleEpisodeSchema(ChatHandler* handler)
+    {
+        if (!RefuseControl(handler))
+            Print(handler, Dojo::Episode::Instance().Schema());
+        return true;
+    }
+
+    static bool HandleEpisodeDebug(ChatHandler* handler, Tail args)
+    {
+        if (RefuseControl(handler))
+            return true;
+        std::vector<std::string> const words = Words(args);
+        std::optional<float> const last = words.size() == 1 ? Number(words[0]) : std::optional<float>(1.0f);
+        if (!last || *last < 1 || *last > 600)
+            return Usage(handler, "dojo episode debug [records, at most 600]");
+        Print(handler, Dojo::Episode::Instance().Debug(std::size_t(*last)));
+        return true;
+    }
+
+    static bool HandleEpisodeFault(ChatHandler* handler, Tail args)
+    {
+        if (RefuseControl(handler))
+            return true;
+        std::vector<std::string> const words = Words(args);
+        if (words.size() != 1)
+            return Usage(handler, "dojo episode fault <leave|arena|none>");
+        Print(handler, Dojo::Episode::Instance().Fault(words[0]));
         return true;
     }
 
@@ -394,7 +567,9 @@ public:
 
     void OnUpdate(uint32 diff) override
     {
+        // Ownership and due commands, the director's job, then (after both) the actors' senses and the episode.
         Dojo::Director::Instance().Update(diff);
+        Dojo::Episode::Instance().Update(diff);
     }
 
     void OnShutdownInitiate(ShutdownExitCode /*code*/, ShutdownMask /*mask*/) override

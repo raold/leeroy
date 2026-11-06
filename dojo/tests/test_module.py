@@ -150,7 +150,7 @@ class BoundaryTest(unittest.TestCase):
     def test_commands_are_console_only(self):
         commands = (MODULE / "src" / "Runtime" / "DojoCommands.cpp").read_text(encoding="utf-8")
         entries = re.findall(r'\{"(\w+)", (Handle\w+), (\w+), Console::(\w+)\}', commands)
-        self.assertEqual(len(entries), 19)
+        self.assertEqual(len(entries), 31)
         for name, _, security, console in entries:
             self.assertEqual((security, console), ("SEC_CONSOLE", "Yes"), name)
 
@@ -197,17 +197,66 @@ class ControlTest(unittest.TestCase):
                           "GetCharmInfo", "SetInFront(", "ServerFacade"):
             self.assertNotIn(forbidden, self.executor)
 
-    def test_knowledge_only_reads(self):
-        """Mask queries must not change target, resources, procs or cooldowns: the knowledge read calls nothing that
-        writes, and the modifier lookups pass no spell (so no charge is registered or dropped)."""
-        body = function_body(self.executor, "ActorKnowledge Control::Knowledge(")
+    def test_the_state_read_only_reads(self):
+        """Observations and mask queries must not change target, resources, procs or cooldowns: the per-tick read of
+        an actor's state calls nothing that writes, and the modifier lookups pass no spell (so no charge is registered
+        or dropped)."""
+        observer = (MODULE / "src" / "Runtime" / "DojoObservation.cpp").read_text(encoding="utf-8")
+        body = function_body(observer, "ActorTruth Observer::Read(")
+        allowed = body
+        for word in ("CalcPowerCost", "castQueued", "castRemainingMs", "GetCastTimeRemaining", "castKit", "castTotalMs",
+                     "GetCastTime", "casting", "IsInCombat", "PendingFor"):
+            allowed = allowed.replace(word, "")
         for forbidden in ("Set", "Remove", "Add", "Modify", "Interrupt", "Cast", "Handle", "Stop", "Attack(", "Clear",
-                          "Launch", "Teleport", "Record(", "_queue", "_slots", "const_cast"):
-            self.assertNotIn(forbidden, body.replace("CalcPowerCost", "").replace("castQueued", "")
-                             .replace("castRemainingMs", "").replace("GetCastTimeRemaining", ""), forbidden)
+                          "Launch", "Teleport", "Record(", "_queue", "_slots", "const_cast", "Push(", "Note("):
+            self.assertNotIn(forbidden, allowed, forbidden)
         self.assertIn("self->m_spellModTakingSpell == nullptr", body)
         self.assertIn("CalcPowerCost(self, info->GetSchoolMask(), nullptr)", body)
         self.assertIn("GetMaxRange(false, self, nullptr)", body)
+
+    def test_masks_come_from_the_delayed_observation(self):
+        """Task 7 ruling 2: every mask the executor or the episode computes is made from an observation's knowledge,
+        never from a read of current state."""
+        reset = (MODULE / "src" / "Runtime" / "DojoReset.cpp").read_text(encoding="utf-8")
+        for name, text in (("DojoExecutor.cpp", self.executor), ("DojoReset.cpp", reset)):
+            calls = re.findall(r"ComputeMask\(([^;]+)\);", text)
+            self.assertTrue(calls, name)
+            for call in calls:
+                self.assertRegex(call, r"knowledge", name)
+                self.assertIn("Observer::Instance().Rules()", call, name)
+        self.assertNotIn("Control::Knowledge", self.executor)
+
+    def test_debug_state_and_observations_leave_on_separate_lines(self):
+        """D18: authoritative debug state is stored and printed apart from actor observations."""
+        reset = (MODULE / "src" / "Runtime" / "DojoReset.cpp").read_text(encoding="utf-8")
+        observe = function_body(reset, "json Episode::ObservationJson(")
+        self.assertNotIn("Truth", observe)
+        self.assertNotIn("DebugJson", observe)
+        self.assertIn('"dojo-debug "', reset)
+        self.assertIn('"dojo-observation "', reset)
+        lib = (MODULE / "src" / "Lib" / "DojoPerception.cpp").read_text(encoding="utf-8")
+        view = function_body(lib, "EnemyView ViewOf(")
+        for hidden in ("kit", "gcd", "queued", "pending", "manaRegenBound", "inCombat", "silenced", "fingersOfFrost"):
+            self.assertNotIn(hidden, view, hidden)
+
+    def test_only_lifecycle_records_and_anomalies_reach_the_server_log(self):
+        """Task 7 ruling 5: trace records stay in the buffer the tooling drains; the log keeps the rest."""
+        record = function_body(self.executor, "void Control::Record(")
+        self.assertIn("if (Logged(record))", record)
+        logged = function_body(self.executor, "bool Logged(")
+        for kept in ('"ownership"', '"generation"', '"dropped"', '"refused"', '"stock"'):
+            self.assertIn(kept, logged)
+        self.assertEqual(self.executor.count('"dojo-trace {}"'), 1)
+
+    def test_a_reset_fences_the_old_generation_first(self):
+        """D05: the reset drops the old episode's commands and holds perception before the director touches anything,
+        and an action id from before the generation is refused if it ever reaches execution."""
+        reset = (MODULE / "src" / "Runtime" / "DojoReset.cpp").read_text(encoding="utf-8")
+        body = function_body(reset, "std::string Episode::Reset(")
+        self.assertLess(body.index("Observer::Instance().Hold("), body.index("StartReset("))
+        self.assertLess(body.index("BeginGeneration("), body.index("StartReset("))
+        execute = function_body(self.executor, "void Control::Execute(")
+        self.assertLess(execute.index("command.actionId < _firstActionId"), execute.index("ai->GetExternalControlEpoch()"))
 
     def test_the_catalog_is_the_manifests_kit(self):
         prepare = function_body(self.executor, "std::string Control::Prepare(")

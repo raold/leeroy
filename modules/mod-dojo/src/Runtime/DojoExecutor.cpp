@@ -2,6 +2,7 @@
 
 #include "DojoExecutor.h"
 
+#include "DojoObservation.h"
 #include "DojoRuntime.h"
 #include "DojoSha256.h"
 
@@ -95,9 +96,28 @@ std::string CastResultName(std::uint8_t result)
 
 json ToJson(TraceRecord const& r)
 {
-    return {{"seq", r.seq}, {"at_ms", r.atMs}, {"actor", r.actor}, {"producer", r.producer}, {"kind", r.kind},
-        {"action_id", r.actionId}, {"origin", r.origin}, {"action", r.action}, {"input_ms", r.inputMs},
+    return {{"seq", r.seq}, {"generation", r.generation}, {"at_ms", r.atMs}, {"actor", r.actor}, {"producer", r.producer},
+        {"kind", r.kind}, {"action_id", r.actionId}, {"origin", r.origin}, {"action", r.action}, {"input_ms", r.inputMs},
         {"due_ms", r.dueMs}, {"exec_ms", r.execMs}, {"outcome", r.outcome}, {"detail", r.detail}};
+}
+
+// Ruling 5: the server log keeps lifecycle lines and anomalies; everything else is drained from the buffer into the
+// tooling's run files.
+bool Logged(TraceRecord const& r)
+{
+    return r.kind == "ownership" || r.kind == "neutralize" || r.kind == "generation" || r.outcome == "dropped"
+        || r.outcome == "refused" || r.outcome == "CHANGED" || r.producer.rfind("stock", 0) == 0;
+}
+
+std::optional<EventKind> PerceivedKind(std::uint16_t opcode)
+{
+    switch (opcode)
+    {
+        case SMSG_SPELL_START: return EventKind::CastStarted;
+        case SMSG_SPELL_GO: return EventKind::CastCompleted;
+        case SMSG_SPELL_FAILURE: return EventKind::CastStopped;
+        default: return std::nullopt;
+    }
 }
 
 std::string Join(std::vector<std::string> const& parts, char const* separator)
@@ -192,11 +212,87 @@ bool Control::Visible(Player* self, Player* enemy) const
 void Control::Record(TraceRecord record)
 {
     record.seq = ++_seq;
+    record.generation = _generation;
     record.atMs = Now();
-    LOG_INFO("module.dojo", "dojo-trace {}", CanonicalJson(ToJson(record)));
+    if (Logged(record))
+        LOG_INFO("module.dojo", "dojo-trace {}", CanonicalJson(ToJson(record)));
     _trace.push_back(std::move(record));
     while (_trace.size() > kTraceLimit)
         _trace.pop_front();
+}
+
+void Control::Note(std::size_t actor, std::string const& producer, std::string const& kind, std::string const& outcome,
+    std::string const& detail)
+{
+    Record({0, 0, actor, producer, kind, 0, "", "", 0, 0, 0, outcome, detail});
+}
+
+void Control::BeginGeneration(std::uint64_t generation, std::string const& why)
+{
+    for (std::size_t i = 0; i < kScenarioActors; ++i)
+    {
+        RecordQueue(_queue.Drop(i, why, Now()));
+        _slots[i].casts.clear();
+    }
+    _scope.reset();
+    _stopping.reset();
+    std::uint64_t const previous = _generation;
+    _generation = generation;
+    _firstActionId = _nextActionId;
+    Record({0, 0, 0, "control", "generation", 0, "", "", 0, 0, 0, "began",
+        "generation " + std::to_string(generation) + " after " + std::to_string(previous) + " (" + why
+            + "); action ids from " + std::to_string(_firstActionId)});
+}
+
+std::optional<PendingView> Control::PendingFor(std::size_t slot) const
+{
+    std::optional<QueuedCommand> const pending = _catalog ? _queue.Pending(slot) : std::nullopt;
+    if (!pending || pending->action >= _catalog->entries.size())
+        return std::nullopt;
+    CatalogEntry const& entry = _catalog->entries[pending->action];
+    return PendingView{entry.ability, entry.movement != Movement::Hold, pending->dueMs};
+}
+
+std::uint64_t Control::Enqueue(std::size_t slot, std::size_t action, std::string const& producer, std::string const& origin,
+    std::string& error)
+{
+    if (!_catalog || slot >= kScenarioActors || !_slots[slot].guid || action >= _catalog->entries.size())
+    {
+        error = "no such actor or action";
+        return 0;
+    }
+    if (!_slots[slot].epoch)
+    {
+        error = "actor " + std::to_string(slot) + " is not owned";
+        return 0;
+    }
+    std::uint64_t const actionId = _nextActionId++;
+    ++_slots[slot].counters.commands;
+    RecordQueue(_queue.Submit(slot, action, actionId, producer, origin, Now()));
+    return actionId;
+}
+
+std::string Control::TraceSince(std::uint64_t seq, std::size_t max) const
+{
+    std::string out;
+    std::size_t shown = 0;
+    std::uint64_t first = 0;
+    for (TraceRecord const& r : _trace)
+    {
+        if (r.seq <= seq)
+            continue;
+        if (!first)
+            first = r.seq;
+        if (shown == max)
+            break;
+        out += "dojo-trace " + CanonicalJson(ToJson(r)) + "\n";
+        ++shown;
+    }
+    // A gap between the asked-for sequence number and the first one still held means records were lost from the
+    // bounded buffer; the tooling treats that as missing evidence.
+    bool const lost = first && first > seq + 1;
+    return out + "dojo control trace: " + std::to_string(shown) + " records after " + std::to_string(seq) + ", newest "
+        + std::to_string(_seq) + (lost ? ", LOST " + std::to_string(first - seq - 1) + " records" : "");
 }
 
 void Control::RecordQueue(std::vector<QueueEvent> const& events)
@@ -400,11 +496,15 @@ std::string Control::Submit(std::size_t slot, std::vector<std::string> const& ac
             return "dojo control act: unknown action " + name + " (dojo control actions lists them)";
         indices.push_back(*index);
     }
-    // The mask answers for the state the command was decided in; a masked action is refused unless forced, which
-    // the acceptance uses to show the executor's own validation.
-    MaskResult const mask = ComputeMask(*_catalog, Knowledge(self, Enemy(slot)), Rules());
-    std::string out;
+    // The mask answers for what the actor knew when the command was decided: its delayed observation. A masked action
+    // is refused unless forced, which the acceptance uses to show the executor's own validation.
     std::uint64_t const now = Now();
+    std::string why;
+    std::optional<ActorObservation> const seen = Observer::Instance().Observe(slot, now, why);
+    if (!seen && !force)
+        return "dojo control act: actor " + std::to_string(slot) + " has no observation yet (" + why + "); nothing submitted";
+    MaskResult const mask = ComputeMask(*_catalog, seen ? seen->knowledge : ActorKnowledge{}, Observer::Instance().Rules());
+    std::string out;
     for (std::size_t index : indices)
     {
         std::string const origin = "console:" + std::to_string(_nextOrigin++);
@@ -415,15 +515,16 @@ std::string Control::Submit(std::size_t slot, std::vector<std::string> const& ac
             out += _catalog->entries[index].name + ": refused (masked)\n";
             continue;
         }
-        std::uint64_t const actionId = _nextActionId++;
-        ++_slots[slot].counters.commands;
-        std::vector<QueueEvent> const events = _queue.Submit(slot, index, actionId, force ? "console (forced)" : "console",
-            origin, now);
-        RecordQueue(events);
-        out += _catalog->entries[index].name + ": action " + std::to_string(actionId) + " " + std::string(QueueOutcomeName(events.back().outcome))
-            + (mask.mask[index] ? "" : " (masked, forced)") + "\n";
+        std::string error;
+        std::uint64_t const actionId = Enqueue(slot, index, force ? "console (forced)" : "console", origin, error);
+        if (!actionId)
+            return out + "dojo control act: " + error;
+        std::optional<QueuedCommand> const pending = _queue.Pending(slot);
+        out += _catalog->entries[index].name + ": action " + std::to_string(actionId) + " "
+            + (index == 0 ? (pending ? "kept" : "idle") : "queued") + (mask.mask[index] ? "" : " (masked, forced)") + "\n";
     }
-    return out + "dojo control act: " + std::to_string(indices.size()) + " submitted, command delay " + std::to_string(_queue.CommandDelayMs()) + " ms";
+    return out + "dojo control act: " + std::to_string(indices.size()) + " submitted, command delay " + std::to_string(_queue.CommandDelayMs())
+        + " ms, knowledge " + (seen ? std::to_string(now - seen->perceptMs) + " ms old" : std::string("none (forced)"));
 }
 
 void Control::Execute(QueuedCommand const& command)
@@ -439,6 +540,15 @@ void Control::Execute(QueuedCommand const& command)
     r.dueMs = command.dueMs;
     r.execMs = Now();
     Slot& s = _slots[command.actor];
+    if (command.actionId < _firstActionId)
+    {
+        // BeginGeneration drops these; one that still arrives belongs to an episode that is over.
+        r.outcome = "rejected";
+        r.detail = "from before generation " + std::to_string(_generation);
+        ++s.counters.rejected;
+        Record(std::move(r));
+        return;
+    }
     Player* self = Find(command.actor);
     PlayerbotAI* ai = self ? GET_PLAYERBOT_AI(self) : nullptr;
     if (!s.epoch || !ai || ai->GetExternalControlEpoch() != s.epoch || !self->IsInWorld() || self->IsBeingTeleported())
@@ -728,7 +838,7 @@ void Control::OnPacketSent(WorldSession* session, WorldPacket const& packet)
     if (!player)
         return;
     std::uint16_t const opcode = packet.GetOpcode();
-    if (opcode != SMSG_CAST_FAILED && opcode != SMSG_SPELL_START && opcode != SMSG_SPELL_GO)
+    if (opcode != SMSG_CAST_FAILED && opcode != SMSG_SPELL_START && opcode != SMSG_SPELL_GO && opcode != SMSG_SPELL_FAILURE)
         return;
     std::uint64_t const guid = player->GetGUID().GetRawValue();
     std::size_t slot = kScenarioActors;
@@ -736,6 +846,11 @@ void Control::OnPacketSent(WorldSession* session, WorldPacket const& packet)
         if (_slots[i].guid && _slots[i].guid == guid)
             slot = i;
     if (slot == kScenarioActors)
+        return;
+    // What this actor's client was told is also what it may perceive (the observer filters by sight).
+    if (PerceivedKind(opcode))
+        Perceive(slot, packet);
+    if (opcode == SMSG_SPELL_FAILURE)
         return;
     Slot& s = _slots[slot];
     WorldPacket p(packet);
@@ -796,6 +911,28 @@ void Control::OnPacketSent(WorldSession* session, WorldPacket const& packet)
     }
     Record({0, 0, slot, "executor", "cast", it->actionId, it->origin, "", 0, 0, 0, "completed", "spell " + std::to_string(spellId)});
     s.casts.erase(it);
+}
+
+void Control::Perceive(std::size_t observer, WorldPacket const& packet)
+{
+    std::optional<EventKind> const kind = PerceivedKind(packet.GetOpcode());
+    if (!kind)
+        return;
+    WorldPacket p(packet);
+    p.rpos(0);
+    ObjectGuid caster;
+    std::uint8_t castCount = 0;
+    std::uint32_t spellId = 0;
+    if (*kind == EventKind::CastStopped)
+        p >> caster.ReadAsPacked() >> castCount >> spellId;
+    else
+    {
+        ObjectGuid item;
+        p >> item.ReadAsPacked() >> caster.ReadAsPacked() >> castCount >> spellId;
+    }
+    for (std::size_t source = 0; source < kScenarioActors; ++source)
+        if (_slots[source].guid && _slots[source].guid == caster.GetRawValue())
+            Observer::Instance().OnSessionEvent(observer, source, *kind, spellId, Now());
 }
 
 bool Control::OnSpellCast(Player* player, Spell* spell)
@@ -863,65 +1000,12 @@ void Control::OnShutdownCancel()
     Record({0, 0, 0, "control", "ownership", 0, "", "", 0, 0, 0, "resumed", "shutdown cancelled"});
 }
 
-MaskRules Control::Rules() const
+MaskRules Control::ExecutionRules() const
 {
     MaskRules rules;
     rules.commandDelayMs = _queue.CommandDelayMs();
     rules.queueWindowMs = sWorld->getBoolConfig(CONFIG_SPELL_QUEUE_ENABLED) ? sWorld->getIntConfig(CONFIG_SPELL_QUEUE_WINDOW) : 0;
     return rules;
-}
-
-// Reads only. The spell-modifier owner is checked first: with no spell taking modifiers, the cost and range lookups
-// pass no spell, so ApplySpellMod registers nothing and drops no charge (Player::ApplyModToSpell returns at once).
-ActorKnowledge Control::Knowledge(Player* self, Player* enemy) const
-{
-    ActorKnowledge k;
-    if (!self)
-        return k;
-    k.alive = self->IsAlive();
-    k.mana = self->GetPower(POWER_MANA);
-    float const regen = std::max(self->GetFloatValue(UNIT_FIELD_POWER_REGEN_FLAT_MODIFIER),
-        self->GetFloatValue(UNIT_FIELD_POWER_REGEN_INTERRUPTED_FLAT_MODIFIER));
-    k.manaRegenBound = std::uint32_t(std::ceil(std::max(regen, 0.0f) * 2.0f * sWorld->getRate(RATE_POWER_MANA))) + 1;
-    Spell* current = self->GetCurrentSpell(CURRENT_GENERIC_SPELL);
-    if (current && current->getState() == SPELL_STATE_PREPARING)
-    {
-        k.casting = true;
-        k.castRemainingMs = std::uint32_t(std::max(current->GetCastTimeRemaining(), 0));
-    }
-    else if (Spell* channel = self->GetCurrentSpell(CURRENT_CHANNELED_SPELL))
-    {
-        k.casting = channel->getState() != SPELL_STATE_FINISHED;
-        k.castRemainingMs = UINT32_MAX;
-    }
-    k.castQueued = !self->SpellQueue.empty();
-    bool const modsFree = self->m_spellModTakingSpell == nullptr;
-    for (KitAbility const& ability : _catalog->kit)
-    {
-        KitKnowledge s;
-        SpellInfo const* info = sSpellMgr->GetSpellInfo(ability.spellId);
-        s.known = info && self->HasActiveSpell(ability.spellId);
-        if (info)
-        {
-            s.cooldownMs = self->GetSpellCooldownDelay(ability.spellId);
-            s.gcdMs = self->GetGlobalCooldownMgr().GetGlobalCooldown(info);
-            if (modsFree)
-            {
-                s.costKnown = info->PowerType == POWER_MANA;
-                s.cost = s.costKnown ? std::uint32_t(std::max(info->CalcPowerCost(self, info->GetSchoolMask(), nullptr), 0)) : 0;
-                s.rangeKnown = true;
-                s.maxRange = info->GetMaxRange(false, self, nullptr);
-            }
-        }
-        k.kit.push_back(s);
-    }
-    k.enemyKnown = Visible(self, enemy);
-    if (k.enemyKnown)
-    {
-        k.enemyAlive = enemy->IsAlive();
-        k.enemyDistance = self->GetDistance(enemy);
-    }
-    return k;
 }
 
 std::string Control::Fingerprint(Player* self) const
@@ -956,11 +1040,14 @@ std::string Control::Masks(std::size_t slot, bool all)
 {
     if (!_catalog || slot >= kScenarioActors)
         return "dojo control masks: no catalog or no such actor";
-    Player* self = Find(slot);
-    if (!self || !self->IsInWorld())
-        return "dojo control masks: actor " + std::to_string(slot) + " is not in the world";
-    ActorKnowledge const k = Knowledge(self, Enemy(slot));
-    MaskResult const r = ComputeMask(*_catalog, k, Rules());
+    std::uint64_t const now = Now();
+    std::string why;
+    std::optional<ActorObservation> const seen = Observer::Instance().Observe(slot, now, why);
+    if (!seen)
+        return "dojo control masks: actor " + std::to_string(slot) + " has no observation (" + why + ")";
+    ActorKnowledge const& k = seen->knowledge;
+    MaskRules const rules = Observer::Instance().Rules();
+    MaskResult const r = ComputeMask(*_catalog, seen->knowledge, Observer::Instance().Rules());
     std::size_t const open = std::size_t(std::count(r.mask.begin(), r.mask.end(), std::uint8_t(1)));
     json abilities = json::object();
     for (std::size_t a = 0; a < _catalog->abilities.size(); ++a)
@@ -973,6 +1060,8 @@ std::string Control::Masks(std::size_t slot, bool all)
         kit.push_back({{"known", s.known}, {"cooldown_ms", s.cooldownMs}, {"gcd_ms", s.gcdMs}, {"cost_known", s.costKnown},
             {"cost", s.cost}, {"range_known", s.rangeKnown}, {"max_range", s.maxRange}});
     json doc = {{"actor", slot}, {"open", open}, {"size", r.mask.size()}, {"abilities", abilities}, {"facings", facings},
+        {"decision_ms", seen->decisionMs}, {"percept_ms", seen->perceptMs}, {"generation", seen->generation},
+        {"wait_slack_ms", rules.perceptualDelayMs + rules.commandDelayMs + rules.queueWindowMs},
         {"knowledge", {{"alive", k.alive}, {"mana", k.mana}, {"mana_regen_bound", k.manaRegenBound}, {"casting", k.casting},
             {"cast_remaining_ms", k.castRemainingMs}, {"cast_queued", k.castQueued}, {"kit", kit},
             {"enemy_known", k.enemyKnown}, {"enemy_alive", k.enemyAlive}, {"enemy_distance", k.enemyDistance}}}};
@@ -997,16 +1086,13 @@ std::string Control::MaskCheck(std::size_t slot, std::uint32_t repeats)
     Player* enemy = Enemy(slot);
     std::string const before = Fingerprint(self);
     std::string const enemyBefore = enemy && enemy->IsInWorld() ? Fingerprint(enemy) : "";
-    std::vector<std::uint8_t> first;
-    bool stable = true;
-    for (std::uint32_t i = 0; i < repeats; ++i)
-    {
-        MaskResult const r = ComputeMask(*_catalog, Knowledge(self, enemy), Rules());
-        if (i == 0)
-            first = r.mask;
-        else
-            stable = stable && r.mask == first;
-    }
+    // Each repetition reads both actors' state, makes the actor's percept and computes its mask from a copy of its
+    // perception: the whole path a decision uses.
+    std::vector<std::vector<std::uint8_t>> const masks = Observer::Instance().Probe(slot, Now(), repeats);
+    std::vector<std::uint8_t> const first = masks.empty() ? std::vector<std::uint8_t>{} : masks.front();
+    bool stable = masks.size() == repeats;
+    for (std::vector<std::uint8_t> const& m : masks)
+        stable = stable && m == first;
     std::string const after = Fingerprint(self);
     std::string const enemyAfter = enemy && enemy->IsInWorld() ? Fingerprint(enemy) : "";
     json doc = {{"actor", slot}, {"repeats", repeats}, {"stable", stable}, {"unchanged", before == after},
@@ -1023,7 +1109,8 @@ std::string Control::Status() const
 {
     std::ostringstream out;
     out << "control: catalog " << (_catalog ? std::to_string(_catalog->entries.size()) + " actions, sha256 " + _catalog->sha256 : "none")
-        << "; command delay " << _queue.CommandDelayMs() << " ms; spell queue window " << Rules().queueWindowMs << " ms\n";
+        << "; command delay " << _queue.CommandDelayMs() << " ms; spell queue window " << ExecutionRules().queueWindowMs
+        << " ms; perceptual delay " << Observer::Instance().Config().perceptualDelayMs << " ms\n";
     json actors = json::array();
     for (std::size_t i = 0; i < kScenarioActors; ++i)
     {
@@ -1061,7 +1148,8 @@ std::string Control::Status() const
                 {"pets", c.pets}, {"acquisitions", c.acquisitions}, {"releases", c.releases}, {"losses", c.losses},
                 {"suppressed_progress", c.suppressedProgress}}}});
     }
-    out << "dojo-control " << CanonicalJson(json{{"now_ms", Now()}, {"trace_seq", _seq}, {"actors", actors}});
+    out << "dojo-control " << CanonicalJson(json{{"now_ms", Now()}, {"trace_seq", _seq}, {"generation", _generation},
+        {"first_action_id", _firstActionId}, {"next_action_id", _nextActionId}, {"actors", actors}});
     return out.str();
 }
 
@@ -1093,7 +1181,7 @@ std::string Control::Place(std::size_t slot, float x, float y, float z, float o)
     std::ostringstream detail;
     detail << "near teleport to " << x << " " << y << " " << z << " " << o;
     Record({0, 0, slot, "harness", "place", 0, "", "", 0, 0, 0, "executed", detail.str()});
-    return "dojo harness place: " + detail.str();
+    return "dojo harness place: " + detail.str() + " at " + std::to_string(Now());
 }
 
 std::string Control::SetMana(std::size_t slot, std::uint32_t mana)
@@ -1127,6 +1215,37 @@ std::string Control::Restore(std::size_t slot)
     Record({0, 0, slot, "harness", "restore", 0, "", "", 0, 0, 0, "executed",
         "full health, mana and durability, no cooldowns, " + std::to_string(removed) + " transient auras removed"});
     return "dojo harness restore: actor " + std::to_string(slot) + " restored";
+}
+
+std::string Control::Kill(std::size_t slot)
+{
+    Player* self = Find(slot);
+    if (!self || !self->IsInWorld() || !Owns(slot))
+        return "dojo harness kill: actor " + std::to_string(slot) + " is not owned and in the world";
+    if (!State().manifest || self->GetMapId() != State().manifest->arena.mapId || !self->InBattleground())
+        return "dojo harness kill: actor " + std::to_string(slot) + " is not in the training arena";
+    if (!self->IsAlive())
+        return "dojo harness kill: actor " + std::to_string(slot) + " is already dead";
+    // A death by its own hand: no killer, so no kill credit or honor for anyone; no durability loss.
+    self->KillSelf(false);
+    Record({0, 0, slot, "harness", "kill", 0, "", "", 0, 0, 0, "executed", self->IsAlive() ? "still alive" : "dead"});
+    return std::string("dojo harness kill: actor ") + std::to_string(slot) + (self->IsAlive() ? " is still alive" : " is dead");
+}
+
+std::string Control::ClearCooldowns(std::size_t slot)
+{
+    Player* self = Find(slot);
+    if (!self || !self->IsInWorld() || !Owns(slot))
+        return "dojo harness cooldowns: actor " + std::to_string(slot) + " is not owned and in the world";
+    std::size_t const before = self->GetSpellCooldownMap().size();
+    self->RemoveAllSpellCooldown();
+    for (KitAbility const& ability : _catalog->kit)
+        if (SpellInfo const* info = sSpellMgr->GetSpellInfo(ability.spellId))
+            self->GetGlobalCooldownMgr().CancelGlobalCooldown(info);
+    std::uint64_t const at = Now();
+    Record({0, 0, slot, "harness", "cooldowns", 0, "", "", 0, 0, 0, "executed",
+        std::to_string(before) + " cooldowns and the global cooldown cleared at " + std::to_string(at)});
+    return "dojo-harness " + CanonicalJson(json{{"change", "cooldowns"}, {"actor", slot}, {"at_ms", at}, {"cleared", before}});
 }
 
 std::uint32_t Control::RestoreBaseline(Player* player)

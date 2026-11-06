@@ -27,6 +27,11 @@ def add_parser(sub) -> None:
     ctl = cmds.add_parser("control-acceptance",
                           help="exclusive control and ordinary execution in the training arena, then shutdown while owned")
     ctl.add_argument("--scenario", type=Path, required=True)
+    rst = cmds.add_parser("reset-acceptance",
+                          help="consecutive episode resets from every condition, against a restart-based reference")
+    rst.add_argument("--scenario", type=Path, required=True)
+    rst.add_argument("--resets", type=int, default=100, help="how many resets (default 100)")
+    rst.add_argument("--cases", help="a comma-separated trial list of conditions instead of the schedule")
     prov = cmds.add_parser("provision", help="stage the dojo build's binaries and write the training configs")
     prov.add_argument("--scenario", type=Path, help="scenario manifest the worldserver loads (pins its hash)")
     prov.add_argument("--configs-only", action="store_true", help="rewrite the configs, keep the staged binaries")
@@ -88,6 +93,24 @@ def run(args: argparse.Namespace) -> int:
             for case in report["cases"]:
                 print(f"{'ok  ' if case['ok'] else 'FAIL'} {case['case']}")
             print(f"control acceptance: {'ok' if report['ok'] else 'FAILED'} ({report['out']})")
+            return 0 if report["ok"] else 1
+        elif command == "reset-acceptance":
+            from ..scenario import load_manifest
+            from .control import ControlError
+            from .reset import ResetError, run as run_resets
+            if not 1 <= args.resets <= 1000:
+                print("realm reset-acceptance: --resets must be 1-1000", file=sys.stderr)
+                return 2
+            try:
+                report = run_resets(layout, load_manifest(args.scenario).data, resets=args.resets,
+                                    cases=args.cases.split(",") if args.cases else None)
+            except (ControlError, ResetError) as e:
+                print(f"realm reset-acceptance: {e}", file=sys.stderr)
+                return 1
+            for check in report["checks"]:
+                print(f"{'ok  ' if check['ok'] else 'FAIL'} {check['check']}")
+            print(f"summary: {json.dumps(report['summary'])}")
+            print(f"reset acceptance: {'ok' if report['ok'] else 'FAILED'} ({report['out']})")
             return 0 if report["ok"] else 1
         elif command == "provision":
             manifest = None

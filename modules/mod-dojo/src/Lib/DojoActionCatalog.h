@@ -124,8 +124,8 @@ std::string AbilityName(std::string_view spellName);
 
 nlohmann::json CatalogToJson(ActionCatalog const& catalog);
 
-// What one actor knows of its own state and the enemy slot when it decides. In plan Task 6 the runtime reads it from
-// the current state; observation delays (plan Task 7) only change where it comes from.
+// What one actor knows of its own state and the enemy slot when it decides: since plan Task 7, the newest percept that
+// has matured under the perceptual delay (DojoPerception.h), never the current authoritative state.
 struct KitKnowledge
 {
     bool known = false;                      // in the actor's active spellbook
@@ -153,13 +153,15 @@ struct ActorKnowledge
 
 struct MaskRules
 {
+    std::uint32_t perceptualDelayMs = 0;     // D30: the knowledge is this old when the actor decides (Task 7: 100)
     std::uint32_t commandDelayMs = 150;      // D30: a command executes this long after the decision
     std::uint32_t queueWindowMs = 400;       // the core accepts a cast this close to ready into its spell queue
     float rangeSlackYards = 3.0f;            // both actors may move before the command executes
 };
 
 // D23: only choices that cannot succeed are masked, and the noop never is. A wait (cooldown, global cooldown, a cast
-// in progress) masks only when it outlasts the command delay plus the spell queue window; mana masks only when one
+// in progress) masks only when it outlasts the knowledge's age, the command delay and the spell queue window together
+// (D19: the mask answers for what the actor knew, which is perceptualDelayMs old); mana masks only when one
 // regeneration tick could not cover the cost; range masks beyond the slack; line of sight, facing with keep, roots,
 // stuns and immunity are left to execution, which can reject. Casting a front-facing spell while turning away is the
 // one combination masked for every state.

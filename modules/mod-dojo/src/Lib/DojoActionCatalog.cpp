@@ -190,7 +190,7 @@ std::optional<std::size_t> FindAction(ActionCatalog const& catalog, std::string_
 MaskResult ComputeMask(ActionCatalog const& catalog, ActorKnowledge const& knowledge, MaskRules const& rules)
 {
     MaskResult result;
-    std::uint64_t const wait = std::uint64_t(rules.commandDelayMs) + rules.queueWindowMs;
+    std::uint64_t const wait = std::uint64_t(rules.perceptualDelayMs) + rules.commandDelayMs + rules.queueWindowMs;
     result.abilityReasons.resize(catalog.abilities.size());
     for (std::size_t a = 0; a < catalog.abilities.size(); ++a)
     {

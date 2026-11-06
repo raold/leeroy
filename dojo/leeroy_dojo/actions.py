@@ -130,6 +130,7 @@ class Knowledge:
 
 @dataclass
 class Rules:
+    perceptual_delay_ms: int = 0
     command_delay_ms: int = 150
     queue_window_ms: int = 400
     range_slack_yards: float = 3.0
@@ -144,7 +145,7 @@ class MaskResult:
 
 def compute_mask(catalog: Catalog, knowledge: Knowledge, rules: Rules = Rules()) -> MaskResult:
     """Only choices that cannot succeed are masked, and the noop never is (see DojoActionCatalog.h)."""
-    wait = rules.command_delay_ms + rules.queue_window_ms
+    wait = rules.perceptual_delay_ms + rules.command_delay_ms + rules.queue_window_ms
     reasons = []
     for ability in catalog.abilities:
         why = ""
