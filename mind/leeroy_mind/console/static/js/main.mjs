@@ -1,8 +1,9 @@
 import { $, api, arr, emit, on, own, remember, setKey } from "./core.mjs";
-import { S } from "./state.mjs";
+import { S, adoptVoice, applyVoice } from "./state.mjs";
 import { renderStrip } from "./strip.mjs";
-import { renderComms } from "./comms.mjs";  // before the feed: its listeners fill S.voice first
 import { renderFeed } from "./comms/feedview.mjs";
+import { renderLeft } from "./comms/leftview.mjs";
+import "./comms.mjs";
 import "./raid.mjs";
 import "./guild.mjs";
 import "./personas.mjs";
@@ -43,8 +44,10 @@ function dispatch(block) {
     S.status = d.status || S.status;
     S.rooms = arr(d.rooms);
     S.mood = d.mood && typeof d.mood === "object" ? d.mood : null;
+    adoptVoice(d.voice);
   }
   if (kind === "status") { S.status = d; }
+  if (kind === "voice") { applyVoice(d); }
   emit(kind, d);
 }
 // The event stream is read with fetch, since an EventSource cannot send the key's header
@@ -89,7 +92,7 @@ setKey(m ? m[1] : "");
 if (/^#key=/.test(location.hash)) { history.replaceState(null, "", location.pathname + "#comms"); }
 
 renderStrip();
-renderComms();
+renderLeft();
 renderFeed(false);
 showTab((location.hash || "#comms").slice(1));
 window.addEventListener("hashchange", function () {

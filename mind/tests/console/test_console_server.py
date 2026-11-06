@@ -272,6 +272,23 @@ def test_the_stream_starts_with_a_snapshot(data):
     run(go())
 
 
+def test_a_snapshot_whose_feed_read_failed_says_so(data):
+    """chat: null, never [] (which would set the page's read floor to 0 and make all history
+    unread at the next snapshot that reads)."""
+    def boom(*a, **kw):
+        raise OSError("mind.db unreadable")
+
+    async def go():
+        async with served(make_app(data)) as app:
+            app._feed_since = boom
+            app._poll = boom
+            snap = (await http(app, "GET", "/api/state")).json()
+            assert snap["chat"] is None and len(snap["rooms"]) == 32
+            (kind, first), = await events(app)
+            assert kind == "snapshot" and first["chat"] is None
+    run(go())
+
+
 def test_the_stream_carries_later_events(data):
     async def go():
         async with served(make_app(data)) as app:

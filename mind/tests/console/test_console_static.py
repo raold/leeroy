@@ -17,7 +17,8 @@ from console.rig import http, make_app
 
 STATIC = Path(str(resources.files("leeroy_mind.console").joinpath("static")))
 MODULES = {"core", "state", "tabs", "words", "strip", "main", "comms", "raid", "guild",
-           "personas", "mind", "names", "facecache", "faces", "comms/model", "comms/feedview"}
+           "personas", "mind", "names", "facecache", "faces", "comms/model", "comms/feedview",
+           "comms/tree", "comms/leftview"}
 IMPORT = re.compile(r'^import\s*(?:\{([^}]*)\}\s*from\s*)?"([^"]+)";', re.M)
 EXPORTED = re.compile(r"^export\s+(?:function|const|let|var|class)\s+([A-Za-z_$][\w$]*)", re.M)
 MARKUP = ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(",

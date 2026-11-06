@@ -1,9 +1,9 @@
 import { $, arr, hhmm, on } from "./core.mjs";
 import { S, hereRoom, name, roomName } from "./state.mjs";
+import { selfView } from "./comms/tree.mjs";
 
 // -- the strip ----------------------------------------------------------------------------------
-// Always on, above the tabs. A "status" event redraws it; whoever changes the voice state it
-// shows calls renderStrip.
+// Always on, above the tabs. A "status", "snapshot" or "voice" event redraws it.
 
 var MIND_WORDS = { running: "mind running", starting: "mind starting", stopping: "mind stopping",
                    stopped: "mind stopped", crashed: "mind crashed", unknown: "mind: unclear" };
@@ -53,6 +53,11 @@ export function renderStrip() {
   }
   setPill("s-room", "", roomText, roomText);
   $("s-ptt").classList.toggle("on", !!(S.voice && S.voice.ptt));
+  var me = selfView(S.voice);
+  $("s-self").textContent = me.deafen ? "deafened" : me.mute ? "muted" : "";
+  $("s-self").hidden = !me.mute;
 }
 
 on("status", renderStrip);
+on("snapshot", renderStrip);
+on("voice", renderStrip);

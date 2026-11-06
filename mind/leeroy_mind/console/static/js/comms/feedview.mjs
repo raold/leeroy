@@ -1,4 +1,4 @@
-import { $, arr, clear, clock, el, emit, num, on, pad, recall, remember, str } from "../core.mjs";
+import { $, clear, clock, el, emit, num, on, pad, recall, remember, str } from "../core.mjs";
 import { S, name, roomName } from "../state.mjs";
 import { face } from "../faces.mjs";
 import { registerTab, setBadge } from "../tabs.mjs";
@@ -127,14 +127,9 @@ function changed() {
   emit("feed");
 }
 
-// A snapshot (the first, or one after a reconnect) holds the feed as it is now
-on("snapshot", function (d) {
-  var now = {};
-  arr(d.chat).forEach(function (l) { if (l) { now[l.id] = true; } });
-  FEED.drop(FEED.ids().filter(function (id) { return !now[id]; }));
-  FEED.upsert(d.chat);
-  renderFeed(false);
-});
+// A snapshot (the first, or one after a reconnect) holds the feed as it is now; one whose read
+// failed (chat: null) leaves the lines, the floor and the reader's place as they are
+on("snapshot", function (d) { renderFeed(!FEED.adopt(d.chat)); });
 on("chat", function (d) { FEED.upsert(d.lines); renderFeed(true); });
 on("chat_gone", function (d) { FEED.drop(d.ids); renderFeed(true); });
 on("status", renderKpis);

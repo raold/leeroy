@@ -16,8 +16,8 @@ run nothing else.
     GET  /             the page (static; it carries no key)
     GET  /static/<path> the page's stylesheet and modules (static_files: the package's static/
                        folder, the path looked up exactly as packaged; anything else is 404)
-    GET  /api/state    the strip, the voice mirror, the text feed, the 32 rooms, the guild mood
-                       and the control rules
+    GET  /api/state    the strip, the voice mirror, the text feed (null when mind.db could not be
+                       read for it), the 32 rooms, the guild mood and the control rules
     GET  /api/events   the same as a first `snapshot` event, then `status`, `voice`, `chat`
                        (a repeated id replaces the line), `chat_gone` and `control` events (server-sent events, a comment every 15 s)
     GET  /api/health   the Mind tab: processes, lock, links, Ollama's resident models, GPU,
@@ -390,7 +390,7 @@ class ConsoleApp:
             lines, _ = await asyncio.to_thread(self._feed_since, 0, days=FEED_DAYS)
         except Exception as e:
             log.warning("console_feed_unread: error=%s", type(e).__name__)
-            lines = []
+            lines = None  # not [], which would tell the page the feed is empty
         return {"status": strip, "voice": voice, "chat": lines, "rooms": self._rooms(),
                 "mood": await self._mood()}
 
@@ -416,8 +416,9 @@ class ConsoleApp:
             for i in late:
                 if i not in self._pending:
                     self._waiting.setdefault(i, now)
-        except Exception:
-            lines = []
+        except Exception as e:
+            log.warning("console_feed_unread: error=%s", type(e).__name__)
+            lines = None
         yield sse("snapshot", {"status": strip, "voice": voice, "chat": lines,
                                "rooms": self._rooms(), "mood": await self._mood()})
         while not sub.dead:

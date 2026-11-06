@@ -81,6 +81,24 @@ test("history seen on first open is read", () => {
   assert.equal(f.unread("officer"), 0);
 });
 
+test("a snapshot replaces the feed, and one whose read failed keeps the lines and the floor", () => {
+  var f = new Feed();
+  assert.equal(f.adopt(null), false);  // the first snapshot could not read the feed
+  assert.equal(f.floor, null);
+  assert.equal(f.adopt([mk(1), mk(2), toHim(3, 1101)]), true);  // the next one could
+  assert.equal(f.floor, 3);
+  ["guild", "w:1101"].forEach(function (v) { assert.equal(f.unread(v), 0, v); });
+  assert.equal(f.adopt(null), false);  // a reconnect whose read failed
+  assert.deepEqual(f.ids(), [1, 2, 3]);
+  assert.equal(f.floor, 3);
+  f.adopt([mk(2), mk(3, { channel: "guild" }), mk(4)]);  // one gone, one moved, one new
+  assert.deepEqual(f.ids(), [2, 3, 4]);
+  assert.deepEqual(ids(f.lines("guild")), [2, 3, 4]);
+  assert.equal(f.unread("guild"), 1);
+  f.adopt([]);  // an empty feed is a feed
+  assert.deepEqual(f.ids(), []);
+});
+
 test("his own lines are never unread, and reading moves the mark", () => {
   var f = new Feed();
   f.upsert([said(1, 1101)]);

@@ -62,6 +62,16 @@ export class Feed {
     });
     if (this.floor === null) { this.floor = top; }
   }
+  // A snapshot's lines are the feed as it is now; null (the console could not read it) keeps the
+  // lines and the floor here. True when it was adopted.
+  adopt(chat) {
+    if (!Array.isArray(chat)) { return false; }
+    var now = new Set();
+    chat.forEach(function (l) { if (l && goodId(l.id)) { now.add(l.id); } });
+    this.drop(this.ids().filter(function (id) { return !now.has(id); }));
+    this.upsert(chat);
+    return true;
+  }
   drop(ids) { arr(ids).forEach((id) => { this._remove(id); }); }
   _remove(id) {
     var v = this.where.get(id);

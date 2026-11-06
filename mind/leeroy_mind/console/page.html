@@ -21,7 +21,7 @@
     <span id="s-bridge" class="stat"><span class="k">Game bridge</span><span class="v"><i class="dot"></i><span class="t">game bridge</span></span></span>
     <span id="s-vlink" class="stat"><span class="k">Voice</span><span class="v"><i class="dot"></i><span class="t">voice</span></span></span>
     <span id="s-room" class="stat"><span class="k">Room</span><span class="v"><span class="t">no room</span></span></span>
-    <span id="s-ptt" class="ptt"><i class="lamp"></i><span>push-to-talk</span></span>
+    <span id="s-ptt" class="ptt"><i class="lamp"></i><span>push-to-talk</span><span id="s-self" class="selfmark" hidden></span></span>
     <button id="theme" type="button" class="theme">Light / dark</button>
   </div>
   <div id="s-lost" class="lost" hidden></div>
@@ -48,9 +48,26 @@
     <div id="comms-banner" class="banner" hidden></div>
     <div id="comms-kpis" class="kpis" aria-label="Tonight"></div>
     <div class="comms">
-      <aside class="panel tree">
-        <h2>Channels</h2>
-        <div id="tree" class="list" aria-label="Channels"></div>
+      <aside class="panel left" aria-label="Channels, voice rooms and whispers">
+        <div id="left" class="list">
+          <div class="sec" role="heading" aria-level="2">Text, from WoW</div>
+          <div id="channels"></div>
+          <div class="sec" role="heading" aria-level="2">Voice rooms</div>
+          <div id="tree"></div>
+          <div class="sec" role="heading" aria-level="2">Whispers</div>
+          <div id="whispers"></div>
+        </div>
+        <div class="ctl" role="group" aria-label="Your voice">
+          <div class="now"><span id="c-ptt" class="ptt"><i class="lamp"></i><span>push-to-talk</span></span>
+            <span id="c-room"></span></div>
+          <div class="acts"><button id="c-mute" type="button" aria-pressed="false" disabled>Mute</button>
+            <button id="c-deafen" type="button" aria-pressed="false" disabled>Deafen</button></div>
+          <div class="vstatus" aria-label="Voice status">
+            <span id="v-out" class="seg"></span><span id="v-mic" class="seg"></span>
+            <span id="v-stt" class="seg"></span><span id="v-queue" class="seg"></span>
+            <span id="v-err" class="seg"></span>
+          </div>
+        </div>
       </aside>
       <section class="panel feedpanel" aria-labelledby="feed-title">
         <h3 id="feed-title"># guild</h3>
@@ -60,11 +77,6 @@
       </section>
       <aside id="comms-right" class="side" aria-label="Your room"></aside>
     </div>
-    <footer class="vstatus" aria-label="Voice status">
-      <span id="v-out" class="seg"></span><span id="v-mic" class="seg"></span>
-      <span id="v-stt" class="seg"></span><span id="v-queue" class="seg"></span>
-      <span id="v-err" class="seg"></span>
-    </footer>
   </section>
   <section id="tab-raid" class="tab mindtab" role="tabpanel" aria-labelledby="t-raid" hidden>
     <div id="raid-banner" class="banner" hidden></div>
