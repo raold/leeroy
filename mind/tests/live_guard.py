@@ -16,10 +16,11 @@ Routes covered:
 - files and databases under the real mind-data (the package-relative one, the main checkout's
   and the one LEEROY_MIND_DATA named when the run began): open, sqlite3.connect (plain paths
   and file: URIs), mkdir, rename/replace, remove, rmdir, listing, copy and the like;
-- launching the mind service (`leeroy_mind`) or the voice service (`leeroy_voice`) in a subprocess,
-  os.system, spawn or exec, and
+- launching the mind service (`leeroy_mind`), the voice service (`leeroy_voice`) or the selfie
+  worker (`leeroy_selfie`) in a subprocess, os.system, spawn or exec, and
   the `ollama` CLI.
 
+No marker allows launching the selfie worker: its tests use a fake worker script.
 Tests marked `live` may reach the bridge's port and launch the service, but never on the real
 mind-data (not by --data-dir, not by an env= without LEEROY_MIND_DATA); tests marked `ollama`
 may reach Ollama's port and run its CLI. The real mind-data is never allowed. Paths are
@@ -163,6 +164,8 @@ class Guard:
             self.hit(f"{how} of the ollama CLI: {what!r} (only tests marked 'ollama' may)")
         if "leeroy_voice" in text and "live" not in self.allowed:
             self.hit(f"{how} of the voice service: {what!r}")
+        if "leeroy_selfie" in text:  # no marker allows it: it loads image models on the GPU
+            self.hit(f"{how} of the selfie worker: {what!r}")
         if "leeroy_mind" not in text:
             return
         if "live" not in self.allowed:

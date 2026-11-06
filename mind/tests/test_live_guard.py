@@ -175,6 +175,28 @@ def test_launching_the_mind_service_is_refused(live_guard):
     assert done.stdout.strip() == "fine"
 
 
+def test_launching_the_selfie_worker_is_refused(live_guard, monkeypatch):
+    """No marker allows it: the worker loads image models onto the owner's GPU. Under this
+    interpreter `-m leeroy_selfie` would only fail to import, if the guard ever let it by."""
+    from leeroy_mind.selfies.worker import SelfieWorker
+    with pytest.raises(LiveServiceTouched):
+        subprocess.run([sys.executable, "-I", "-m", "leeroy_selfie", "--help"],
+                       capture_output=True)
+    with pytest.raises(LiveServiceTouched):
+        os.system(f'"{sys.executable}" -I -m leeroy_selfie --help')
+    with pytest.raises(LiveServiceTouched):  # the mind's own route: refused before the launch
+        run(SelfieWorker([sys.executable, "-I", "-m", "leeroy_selfie", "worker"]).start())
+    monkeypatch.setattr(live_guard, "allowed", frozenset({"live", "ollama", "mysql"}))
+    with pytest.raises(LiveServiceTouched):
+        live_guard.launch([sys.executable, ["-m", "leeroy_selfie", "worker"]],
+                          "subprocess.Popen")
+    assert len(live_guard.hits) == 4
+    live_guard.hits.clear()
+    done = subprocess.run([sys.executable, "-c", "print('fine')"], capture_output=True,
+                          text=True)  # positive control: other programs still run
+    assert done.stdout.strip() == "fine"
+
+
 def test_a_hit_the_app_swallows_still_fails_the_test(live_guard, tmp_path, clock, monkeypatch,
                                                      caplog):
     """The LLM scheduler turns a dead job into SchedulerClosed and the writer stores the memory
