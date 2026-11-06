@@ -39,6 +39,7 @@ trained, on a separate server.
 | `modules/mod-leeroy/` | The guild module: keeps the guild's bots pinned online and their consumables topped up, fills the player's `.playerbots bot addN` groups from the guild, and runs a local bridge (NDJSON over `127.0.0.1:7878`) through which an outside "mind" sees the guild and speaks and acts for its members. Unit tests, and a smoke test in `tools/` |
 | `modules/mod-dojo/` | The dojo's native module, built only into the dojo's isolated core (the CI build compiles its disabled variant) |
 | `mind/` | The mind (`python -m leeroy_mind run`), a Python service that voices the guild through the bridge and a local LLM (Ollama); see [The mind](#the-mind) |
+| `selfie/` | The profile-photo worker (`python -m leeroy_selfie`): RealVisXL renders on the local GPU, started by the mind at night only; separate Python 3.12 process, GPL-3.0-or-later, with its own [LICENSE](selfie/LICENSE) and [README](selfie/README.md) |
 | `voice/` | Local voice comms and push-to-talk (`python -m leeroy_voice`), in a separate Python 3.12 process; GPL-3.0-or-later, with its own [LICENSE](voice/LICENSE) and [README](voice/README.md) |
 | `dojo/` | The dojo (`python -m leeroy_dojo`): an isolated environment for training combat policies against its own worldserver, never the live realm; see [its README](dojo/README.md) |
 | `references.bib` | The research, software and models behind the project, each entry annotated with what it shaped |
@@ -199,4 +200,5 @@ Whisper large-v3-turbo and Chatterbox Turbo models (MIT).
 ## License
 
 GPL-2.0, matching AzerothCore and mod-playerbots, except the separate `voice/`
-service, which is GPL-3.0-or-later under [voice/LICENSE](voice/LICENSE).
+service and `selfie/` worker, which are GPL-3.0-or-later under [voice/LICENSE](voice/LICENSE)
+and [selfie/LICENSE](selfie/LICENSE).
