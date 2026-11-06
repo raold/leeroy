@@ -1,7 +1,10 @@
-"""python -m leeroy_selfie where | fetch-models | doctor. The worker itself comes in a later
-task; these commands import nothing heavy."""
+"""python -m leeroy_selfie where | fetch-models | doctor | worker | smoke. Only worker and smoke
+load torch (inside render.load); the rest import nothing heavy."""
 import argparse
+import json
+import os
 import sys
+import time
 from pathlib import Path
 
 from . import models
@@ -59,6 +62,41 @@ def _gpu_lines() -> list[tuple[bool | None, str]]:
                    f"{props.total_memory / 2**30:.1f} GiB")]
 
 
+SMOKE_PHRASES = [["photo of a woman in her thirties", 0], ["short auburn hair", 1],
+                 ["green eyes", 1], ["denim jacket", 2], ["smiling", 2],
+                 ["standing in a sunlit kitchen", 3], ["natural light", 4]]
+SMOKE_NEGATIVE = [["child, teenager", 0], ["blurry", 1], ["deformed hands", 2]]
+
+
+def cmd_worker(args) -> int:
+    from . import render, worker
+    out = worker.claim_stdout()
+    return worker.serve(
+        lambda: render.load(Path(args.data) if args.data else data_dir(),
+                            min_free_gib=args.min_free_gib),
+        stdin=sys.stdin.buffer, out=out, on_eof=lambda: os._exit(0))
+
+
+def cmd_smoke(args) -> int:
+    from . import render
+    from .protocol import Render
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    t0 = time.perf_counter()
+    try:
+        renderer = render.load(data_dir(), min_free_gib=args.min_free_gib)
+    except render.ReadyError as e:
+        return _fail("smoke", e)
+    load_s = time.perf_counter() - t0
+    req = Render("smoke", tuple(map(tuple, SMOKE_PHRASES)), tuple(map(tuple, SMOKE_NEGATIVE)),
+                 1234, 30, 5.0, 1024, str(out_dir.resolve() / "smoke.jpg"),
+                 str(out_dir.resolve() / "smoke-thumb.jpg"), 256, 0.2)
+    r = renderer.render(req)
+    print(json.dumps({"load_s": round(load_s, 1), "seconds": r["seconds"],
+                      "peak_gib": r["peak_gib"], "nsfw": r["nsfw"], "tokens": r["tokens"]}))
+    return 1 if r["flagged"] else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="leeroy_selfie")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -76,6 +114,15 @@ def main(argv: list[str] | None = None) -> int:
                        help="never import torch or hash a file: files, records, revisions")
     p_doc.add_argument("--data", metavar="DIR", help="the data dir to check")
     p_doc.set_defaults(func=cmd_doctor)
+    p_worker = sub.add_parser("worker", help="the night worker: JSON lines on stdin and stdout")
+    p_worker.add_argument("--data", metavar="DIR", help="the data dir with the models")
+    p_worker.add_argument("--min-free-gib", type=float, required=True,
+                          help="refuse to load with less free VRAM")
+    p_worker.set_defaults(func=cmd_worker)
+    p_smoke = sub.add_parser("smoke", help="render one invented person into --out")
+    p_smoke.add_argument("--out", metavar="DIR", required=True)
+    p_smoke.add_argument("--min-free-gib", type=float, default=8.0)
+    p_smoke.set_defaults(func=cmd_smoke)
     args = parser.parse_args(argv)
     return args.func(args)
 
