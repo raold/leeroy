@@ -77,3 +77,8 @@ def plan_summary(plan: dict, region: str) -> str:
     """One line for the night prompts."""
     line = f"Plan on the table: {_thing(plan['kind'], region)}."
     return f"{line} Cover story: {plan['cover']}." if plan.get("cover") else line
+
+
+def plan_planned(plan: dict, region: str) -> str:
+    """One line for a plan that has happened (the weekend writer), without its cover story."""
+    return f"What they had planned: {_thing(plan['kind'], region)}."

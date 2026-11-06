@@ -2,13 +2,14 @@
 import asyncio
 import logging
 import re
+from dataclasses import replace
 from datetime import date, timedelta, timezone
 
 import pytest
 
 from leeroy_mind.arc.night import stage_arc
 from leeroy_mind.arc.plan import PLAN_KINDS
-from leeroy_mind.arc.state import Arc, get_arc, play_days, put_arc
+from leeroy_mind.arc.state import Arc, end_romance, get_arc, play_days, put_arc
 from leeroy_mind.arc.weekend import (AFFAIR, PLAIN_VISIT, PLAIN_WEEKEND, PLAN_MIN_PLAY_DAYS,
                                      REFUSAL_RE, TRAVEL_START_H, VISIT_S, WEEKEND_GAP_S,
                                      WEEKEND_OVERLAY, WEEKEND_PROMPT, WEEKEND_S, WEEKEND_SCHEMA,
@@ -125,11 +126,18 @@ def test_the_refusal_words():
     for said in ("I'm sorry, but I can't write that.", "I cannot continue with this request.",
                  "I can’t help with that", "I'm unable to write this", "Im not able to assist",
                  "I won't create that content", "That is against my guidelines.",
-                 "this breaks the content policy"):
+                 "this breaks the content policy", "I can't fulfill that request",
+                 "I'm not comfortable writing that", "I must decline to write this",
+                 "I won't engage in this", "As an AI, I keep things general",
+                 "I'm sorry, but I won't go on with it"):
         assert REFUSAL_RE.search(said), said
     for said in ("I can't help smiling when I think of it", "I'm sorry I was so nervous",
                  "I won't forget that breakfast", "I cannot believe we missed the train",
-                 "I couldn't stop laughing", *MOMENTS):
+                 "I couldn't stop laughing", "I can't write down how that felt without blushing",
+                 "I cannot continue pretending this is just a game",
+                 "I told him I'm sorry, but I was starving", "I can't help it, I kept grinning",
+                 "I'm not comfortable with crowds, but I didn't mind that one",
+                 "I had to decline the dessert", *MOMENTS):
         assert REFUSAL_RE.search(said) is None, said
 
 
@@ -177,22 +185,39 @@ def test_a_plan_he_never_said_yes_to_never_meets(h):
     assert aways(h) == [] and meetups(h) == []
 
 
-def test_a_two_day_gap_writes_her_weekend_and_she_is_away(h):
+def test_a_fond_woman_with_a_set_plan_does_not_meet(h):
+    ready(h, 101, "fond")                                                # cooled to fond
+    sid, end = played(h)
+    ctx = gap_night(h, end, {})
+    assert not ctx.failures and calls(ctx, "arc_weekend") == []
+    assert aways(h) == [] and meetups(h) == [] and pick_meetup(h.store, ctx, (sid, end)) is None
+    assert get_arc(h.store, 101, 1).plan_state == "set"                  # it waits for her
+
+
+def counts(h):
+    return {t: h.count(t) for t in ("memory", "rel_delta", "away", "arc_meetup", "night_step")}
+
+
+def test_a_two_day_gap_writes_her_weekend_and_she_is_back_before_he_is(h):
     ready(h)
     sid, end = played(h)
-    ctx = gap_night(h, end, {"arc_weekend": [weekend()], "judge": [yes]})
+    ctx = night(h, {"arc_weekend": [weekend()], "judge": [yes]}, at=end + 55 * HOUR)
     now = h.clock.now()
     assert not ctx.failures and ctx.done("arc", "meetup")
     (away,) = aways(h)
     assert away["guid"] == 101 and away["reason"] == "weekend"
-    assert end + 6 * HOUR <= away["left_at"] <= end + 18 * HOUR
-    assert away["returns_at"] == away["left_at"] + WEEKEND_S and away["returned_at"] is None
+    assert end + 6 * HOUR <= away["left_at"] <= now - WEEKEND_S          # after he logged out
+    assert away["returns_at"] == away["left_at"] + WEEKEND_S == away["returned_at"] <= now
     assert meetups(h) == [{"absence": sid, "guid": 101, "away_id": away["id"],
                            "kind": "weekend", "written": now}]
-    assert h.store.get_relationship(101, 1).romance_stage == "weekend"
-    row = h.store.conn.execute("SELECT reason, evidence FROM rel_delta WHERE a = 101 "
-                               "AND dim = 'romance_stage'").fetchone()
-    assert tuple(row) == ("planning->weekend", f'["away:{away["id"]}"]')
+    assert h.store.get_relationship(101, 1).romance_stage == "after"
+    deltas = [tuple(r) for r in h.store.conn.execute(
+        "SELECT reason, evidence FROM rel_delta WHERE a = 101 AND dim = 'romance_stage' "
+        "ORDER BY id")]
+    ev = f'["away:{away["id"]}"]'
+    assert deltas == [("planning->weekend", ev), ("weekend->after", ev)]
+    arc = get_arc(h.store, 101, 1)
+    assert (arc.plan_state, arc.weekends, arc.last_meetup) == ("done", 1, away["returns_at"])
     rows = weekend_rows(h)
     assert [m.text for m in rows] == MOMENTS
     for m in rows:
@@ -200,33 +225,69 @@ def test_a_two_day_gap_writes_her_weekend_and_she_is_away(h):
             "event", 8, (1,), (f"away:{away['id']}",))
         assert away["left_at"] <= m.t_event <= away["returns_at"] and m.embedding is not None
     assert [m.t_event for m in rows] == sorted(m.t_event for m in rows)
-    assert active_away(h.store) == {101}
-    assert 101 not in ctx.members() and 101 in ctx.members(include_away=True)
+    assert active_away(h.store) == set() and 101 in ctx.members()       # nobody away now
     (call,) = calls(ctx, "arc_weekend")
     assert "four to six moments" in call["messages"][0]["content"]
-    again = gap_night(h, end, {})                                       # the night is done
-    assert calls(again, "arc_weekend") == [] and len(aways(h)) == 1
+    before, kept = counts(h), get_arc(h.store, 101, 1)
+    again = night(h, {}, at=now + 60)                                    # the night again
+    later = night(h, {}, at=now + DAY, on="2026-11-01")                  # and the next one
+    assert calls(again, "arc_weekend") == calls(later, "arc_weekend") == []
+    assert not again.failures and not later.failures
+    after = counts(h)
+    assert after == before | {"night_step": after["night_step"]}         # only skipped units
+    assert get_arc(h.store, 101, 1) == kept
 
 
-def test_she_comes_back_and_moves_to_after(h):
-    ready(h)
-    sid, end = played(h)
-    gap_night(h, end, {"arc_weekend": [weekend()], "judge": [yes]})
-    (away,) = aways(h)
-    ctx = night(h, {}, at=away["returns_at"] - 60, on="2026-11-01")     # not back yet
+def older_weekend(h, guid=101, *, returns_at):
+    """A weekend as S5's first build left it: her away still open and her stage "weekend"."""
+    ready(h, guid)
+    h.rel(guid, 1, romance_stage="weekend")
+    with h.store.transaction():
+        aid = h.store.conn.execute(
+            "INSERT INTO away(guid, reason, left_at, returns_at, returned_at) "
+            "VALUES (?, 'weekend', ?, ?, NULL)", (guid, returns_at - WEEKEND_S, returns_at)
+        ).lastrowid
+        h.store.conn.execute("INSERT INTO arc_meetup(absence, guid, away_id, kind, written) "
+                             "VALUES (99, ?, ?, 'weekend', ?)", (guid, aid, returns_at - DAY))
+    return aid
+
+
+def test_she_comes_back_and_moves_to_after(h, caplog):
+    # settle, for a row an older build left open: the safety net
+    aid = older_weekend(h, returns_at=h.T + DAY)
+    ctx = night(h, {}, at=h.T + DAY - 60, on="2026-10-29")              # not back yet
     assert active_away(h.store) == {101} and ctx.done("arc", "settle")
-    ctx = night(h, {}, at=away["returns_at"] + HOUR, on="2026-11-02")
+    assert h.store.get_relationship(101, 1).romance_stage == "weekend"
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        ctx = night(h, {}, at=h.T + DAY + HOUR, on="2026-10-30")
     assert not ctx.failures
-    assert aways(h)[0]["returned_at"] == away["returns_at"] and active_away(h.store) == set()
+    assert aways(h)[0]["returned_at"] == h.T + DAY and active_away(h.store) == set()
     assert h.store.get_relationship(101, 1).romance_stage == "after"
     arc = get_arc(h.store, 101, 1)
-    assert (arc.plan_state, arc.weekends, arc.last_meetup) == ("done", 1, away["returns_at"])
-    reasons = [r[0] for r in h.store.conn.execute(
-        "SELECT reason FROM rel_delta WHERE a = 101 AND dim = 'romance_stage' ORDER BY id")]
-    assert reasons == ["planning->weekend", "weekend->after"]
+    assert (arc.plan_state, arc.weekends, arc.last_meetup) == ("done", 1, h.T + DAY)
+    deltas = [tuple(r) for r in h.store.conn.execute(
+        "SELECT reason, evidence FROM rel_delta WHERE a = 101 AND dim = 'romance_stage'")]
+    assert deltas == [("weekend->after", f'["away:{aid}"]')]
     assert 101 in ctx.members()
-    night(h, {}, at=away["returns_at"] + DAY, on="2026-11-03")          # settled once
+    settled = [r.leeroy_fields for r in caplog.records
+               if getattr(r, "leeroy_event", "") == "arc_settle"]
+    assert settled == [{"night": "2026-10-30", "closed": 1, "guids": [101]}]
+    night(h, {}, at=h.T + 2 * DAY, on="2026-10-31")                      # settled once
     assert get_arc(h.store, 101, 1).weekends == 1
+
+
+def test_settle_leaves_a_woman_whose_romance_ended_while_she_was_away(h):
+    older_weekend(h, returns_at=h.T + DAY)
+    assert end_romance(h.store, 101, 1, by="he_ended", now=h.T)
+    assert aways(h)[0]["returned_at"] == h.T                             # end_romance closed it
+    ctx = night(h, {}, at=h.T + DAY + HOUR, on="2026-10-30")
+    assert not ctx.failures and ctx.done("arc", "settle")
+    assert h.store.get_relationship(101, 1).romance_stage == "ex"
+    arc = get_arc(h.store, 101, 1)
+    assert (arc.plan_state, arc.weekends, arc.last_meetup, arc.ended) == ("none", 0, None,
+                                                                          "he_ended")
+    assert [r[0] for r in h.store.conn.execute(
+        "SELECT reason FROM rel_delta WHERE a = 101 AND dim = 'romance_stage'")] == ["weekend->ex"]
 
 
 def test_a_set_plan_after_the_weekend_makes_a_visit(h):
@@ -242,13 +303,15 @@ def test_a_set_plan_after_the_weekend_makes_a_visit(h):
     (away,) = aways(h)
     assert away["reason"] == "visit" and meetups(h)[0]["kind"] == "visit"
     assert VISIT_S[0] <= away["returns_at"] - away["left_at"] <= VISIT_S[1]
+    assert away["returned_at"] == away["returns_at"] <= h.clock.now()
     assert h.store.get_relationship(101, 1).romance_stage == "after"
     assert [(m.text, m.importance) for m in weekend_rows(h)] == [(t, 7) for t in visit]
     assert "two to four moments" in calls(ctx, "arc_weekend")[0]["messages"][0]["content"]
-    night(h, {}, at=away["returns_at"] + HOUR, on="2026-11-02")
     arc = get_arc(h.store, 101, 1)
     assert (arc.plan_state, arc.weekends, arc.last_meetup) == ("done", 2, away["returns_at"])
-    assert h.store.get_relationship(101, 1).romance_stage == "after"
+    assert h.count("rel_delta") == 0                                     # no stage moved
+    night(h, {}, at=h.clock.now() + DAY, on="2026-11-01")
+    assert get_arc(h.store, 101, 1) == arc
 
 
 def test_two_set_plans_one_meetup_per_absence(h):
@@ -260,16 +323,17 @@ def test_two_set_plans_one_meetup_per_absence(h):
     assert away["guid"] == 101 and [m["guid"] for m in meetups(h)] == [101]
     assert h.store.get_relationship(102, 1).romance_stage == "planning"
     assert get_arc(h.store, 102, 1).plan_state == "set"
-    # she is back and settled, but this absence is spent: nobody else meets in it
-    ctx = night(h, {}, at=away["returns_at"] + HOUR, on="2026-11-02")
+    # she is back, but this absence is spent: nobody else meets in it
+    first = h.clock.now()
+    ctx = night(h, {}, at=first + 12 * HOUR, on="2026-11-01")
     assert calls(ctx, "arc_weekend") == [] and len(meetups(h)) == 1
     assert get_arc(h.store, 102, 1).plan_state == "set"
     # he plays again, then is gone two more days: the next gap takes her
-    sid2, end2 = played(h, 1, last=away["returns_at"] + DAY)
-    gap_night(h, end2, {"arc_weekend": [weekend()], "judge": [yes]}, on="2026-11-06")
+    sid2, end2 = played(h, 1, last=first + DAY)
+    gap_night(h, end2, {"arc_weekend": [weekend()], "judge": [yes]}, on="2026-11-03")
     assert [(m["absence"], m["guid"]) for m in meetups(h)] == [(sid, 101), (sid2, 102)]
-    assert h.store.get_relationship(102, 1).romance_stage == "weekend"
-    assert active_away(h.store) == {102}
+    assert h.store.get_relationship(102, 1).romance_stage == "after"
+    assert [r["guid"] for r in aways(h)] == [101, 102] and active_away(h.store) == set()
 
 
 def test_the_weekend_memory_is_private_to_him(h):
@@ -314,7 +378,7 @@ def test_a_refusal_keeps_a_plain_memory_and_never_fails_the_night(h, caplog, why
     assert (m.importance, m.evidence, m.scope, m.scope_with) == (
         8, (f"away:{away['id']}",), "private", 1)
     assert away["left_at"] <= m.t_event <= away["returns_at"]
-    assert h.store.get_relationship(101, 1).romance_stage == "weekend"
+    assert h.store.get_relationship(101, 1).romance_stage == "after"
     assert len(meetups(h)) == 1
     plain = [r.leeroy_fields for r in caplog.records
              if getattr(r, "leeroy_event", "") == "arc_weekend_plain"]
@@ -330,6 +394,23 @@ def test_a_failed_request_is_tried_again_and_writes_nothing(h):
     assert h.store.get_relationship(101, 1).romance_stage == "planning"
     ctx = gap_night(h, end, {"arc_weekend": [weekend()], "judge": [yes]})
     assert not ctx.failures and len(weekend_rows(h)) == 4
+
+
+def test_a_meetup_that_changed_while_it_was_written_is_not_written(h, caplog):
+    ready(h)
+    sid, end = played(h)
+
+    def moved_on(prompt):                                    # his "not yet" lands mid-write
+        put_arc(h.store, replace(get_arc(h.store, 101, 1), plan_state="talked", plan_at=None))
+        return weekend()
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        ctx = gap_night(h, end, {"arc_weekend": [moved_on], "judge": [yes]})
+    assert ctx.failures["arc"] == 1 and not ctx.done("arc", "meetup")
+    assert aways(h) == [] and meetups(h) == [] and weekend_rows(h) == []
+    assert h.store.get_relationship(101, 1).romance_stage == "planning"
+    (failed,) = [r.leeroy_fields for r in caplog.records
+                 if getattr(r, "leeroy_event", "") == "nightly_unit_failed"]
+    assert (failed["unit"], failed["error"]) == ("meetup", "ValueError")
 
 
 def test_the_weekend_prompt_leaves_details_open_and_never_names_his_city(h):
@@ -354,9 +435,11 @@ def test_the_weekend_prompt_leaves_details_open_and_never_names_his_city(h):
     ctx = gap_night(h, end, {"arc_weekend": [weekend()], "judge": [yes]})
     system = calls(ctx, "arc_weekend")[0]["messages"][0]["content"]
     assert ctx.card(101) in system and "Arkon" in system and "Testy" in system
-    assert "Plan on the table: a quiet weekend somewhere neutral." in system
+    assert "What they had planned: a quiet weekend somewhere neutral." in system
+    assert "Plan on the table" not in system                            # it has happened
     assert "The tone is warm." in system
-    assert "a work trip" in system and "found out" in system and "risk" in system
+    assert system.count("a work trip") == 1                              # the cover story once
+    assert "found out" in system and "risk" in system
     assert "Quillon" not in system
     assert system.rstrip().endswith(INVARIANTS.format(human="Testy"))
 
@@ -400,15 +483,14 @@ def test_meetup_logs_carry_no_text_or_names(h, caplog):
     sid, end = played(h)
     with caplog.at_level(logging.INFO, logger="leeroy_mind"):
         gap_night(h, end, {"arc_weekend": [weekend()], "judge": [yes]})
-        (away,) = aways(h)
-        night(h, {}, at=away["returns_at"] + HOUR, on="2026-11-02")
+    (away,) = aways(h)
     events = [r for r in caplog.records if getattr(r, "leeroy_event", "").startswith("arc")]
-    fields = {r.leeroy_event: r.leeroy_fields for r in events}
-    assert fields["arc_meetup"] == {"night": "2026-10-31", "guid": 101, "kind": "weekend",
-                                    "away": away["id"], "moments": 4, "tone": "warm"}
-    assert fields["arc_settle"] == {"night": "2026-11-02", "closed": 1, "guids": [101]}
+    assert [(r.leeroy_event, r.leeroy_fields) for r in events] == [
+        ("arc_meetup", {"night": "2026-10-31", "guid": 101, "kind": "weekend",
+                        "away": away["id"], "moments": 4, "tone": "warm"})]
     text = " ".join(r.getMessage() for r in events)
-    for word in ("Arkon", "Testy", "hotel", "Dinner", "halfway", "Plan on the table"):
+    for word in ("Arkon", "Testy", "hotel", "Dinner", "halfway", "Plan on the table",
+                 "planned"):
         assert word not in text
 
 

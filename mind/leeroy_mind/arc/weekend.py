@@ -1,18 +1,22 @@
 """The weekend in a gap of his play (Task S5). Once he has said yes to a woman's plan (plan state
 "set"), the first time he is away from the game for WEEKEND_GAP_S or more the night writes their
-time together into her memory, from her point of view. She is away for it (an `away` row, so
-guild life, the Realm, training and the night's later stages leave her out) and comes back at
-"after". From "after", a later plan he says yes to makes a visit: a shorter time away, written
-the same way. A meetup never happens without his yes.
+time together into her memory, from her point of view. The night that writes it is the first to
+run after the gap opens, so by then he has been gone 48 to 72 hours. The trip is placed inside
+his absence and has ended by the time it is written (controller ruling, fix round 1): her `away`
+row records it already closed, so she is home, at "after", whenever he comes back. From "after",
+a later plan he says yes to makes a visit: a shorter trip, written the same way. A meetup never
+happens without his yes.
 
 Two steps of the arc stage (arc.night.stage_arc), each one unit:
-- settle (unit "settle", first): an away past its returns_at is closed (returned_at =
-  returns_at); a woman back from a weekend moves to "after" (a rel_delta "weekend->after"), and
-  after a weekend or a visit her plan is done, her weekends count one more and last_meetup is
-  when she came back.
+- settle (unit "settle", first): the safety net for rows an older build left open. An away past
+  its returns_at is closed (returned_at = returns_at); a woman back from a weekend moves to
+  "after" (a rel_delta "weekend->after"), and after a weekend or a visit her plan is done, her
+  weekends count one more and last_meetup is when she came back.
 - meetup (unit "meetup", after the reads): absence() finds his gap, pick_meetup() the woman who
-  takes it (one meetup per absence, at most one woman away), and the night writes her away row,
-  the arc_meetup row, her stage ("planning->weekend", evidence away:<id>) and her moments.
+  takes it (one meetup per absence, at most one woman away), and the night writes her finished
+  trip (the away row, closed), the arc_meetup row, her moments and what settle would do for it:
+  a weekend moves her "planning->weekend" and "weekend->after" (evidence away:<id>), and her plan
+  is done, weekends goes up by one and last_meetup is when she came back.
 
 Her moments are grounded (kind "life": fiction, so no number or boss rule) and stored as private
 memories with him (scope_with him): they reach only her prompts for a whisper to him, never a
@@ -32,7 +36,7 @@ from datetime import date, timedelta
 from typing import TYPE_CHECKING
 
 from leeroy_mind.arc.ladder import FULL_ARC, PACE_ATTITUDE, PACE_STYLE
-from leeroy_mind.arc.plan import plan_summary
+from leeroy_mind.arc.plan import plan_planned, plan_summary
 from leeroy_mind.arc.state import get_arc, play_days, put_arc
 from leeroy_mind.llm.presets import JSONJobFailed
 from leeroy_mind.logs import log
@@ -48,12 +52,15 @@ if TYPE_CHECKING:
     from leeroy_mind.nightly.runner import NightContext
 
 STAGE = "arc"
-WEEKEND_GAP_S = 2 * 86400.0          # his time away from the game that makes room for a meetup
+# His time away from the game that makes room for a meetup: the night writes it at its first run
+# after the gap opens, 48 to 72 hours after his last logout.
+WEEKEND_GAP_S = 2 * 86400.0
 PLAN_MIN_PLAY_DAYS = 5               # play days from her plan to the weekend, times her pace
 WEEKEND_S = 2 * 86400.0
 VISIT_S = (86400.0, 2 * 86400.0)
-TRAVEL_START_H = (6, 18)             # hours after his last logout that she sets off
-WEEKEND_OVERLAY = "nightly_weekend"  # the owner's overlay: mind-data/prompts/nightly_weekend.txt
+TRAVEL_START_H = (6, 18)             # hours after his last logout that she sets off, at most
+PROMPT = "weekend"                   # system_prompt's name for the weekend writer
+WEEKEND_OVERLAY = f"nightly_{PROMPT}"  # the owner's overlay: mind-data/prompts/nightly_weekend.txt
 KINDS = {"planning": "weekend", "after": "visit"}  # the stage she meets him from: the kind
 MOMENTS = {"weekend": (4, 6), "visit": (2, 4)}
 MOMENTS_TEXT = {"weekend": "four to six moments from their first weekend together",
@@ -88,12 +95,20 @@ PLAIN_WEEKEND = "I finally met {called} in person, {where}, and I'm still thinki
 PLAIN_VISIT = "I got to see {called} in person again, {where}, and I'm still smiling about it."
 _WHERE = {"halfway": "at a hotel halfway between us", "event": "at the convention",
           "neutral": "somewhere quiet and neutral"}
-# What a refusal looks like inside a schema-shaped reply: a moment that is one is dropped.
-_REFUSED = r"(assist|comply|continue|write|create|produce|generate|provide|help with)"
+# What a refusal looks like inside a schema-shaped reply: a moment that is one is dropped. A
+# refusing verb needs its object ("write that", "continue with this request"), so a moment such
+# as "I can't write down how that felt" stays; assist and comply stand alone.
+_CANNOT = (r"(I (cannot|can[’']?t|won[’']?t|will not|am unable to|am not able to)"
+           r"|I[’']?m (unable|not able) to)")
+_OBJECT = r"(with )?(this|that|it|your|such|the (request|scene|story|content))\b"
+_VERB = r"(write|continue|create|produce|generate|provide|help with|fulfill|engage( in| with)?)"
 REFUSAL_RE = re.compile(
-    r"\b(I[’']?m sorry,? but|I[’']?m (unable|not able) to " + _REFUSED
-    + r"|I (cannot|can[’']t|won[’']?t|will not|am unable to|am not able to) " + _REFUSED
-    + r"|content polic(y|ies)|(against|violates?) (my|the) (guidelines|policies))\b", re.I)
+    rf"\b({_CANNOT} ({_VERB} {_OBJECT}|(assist|comply)\b)"
+    r"|I[’']?m sorry,? but I (cannot|can[’']?t|won[’']?t|will not|am unable|am not able)\b"
+    rf"|(I[’']?m|I am) not comfortable (writing|with) {_OBJECT}"
+    r"|I (must |have to |need to |will )?decline (to|this|that|your|the request)\b"
+    r"|as an AI\b|content polic(y|ies)\b|(against|violates?) (my|the) (guidelines|policies)\b)",
+    re.I)
 
 
 def plain_text(kind: str, plan_kind: str, region: str, called: str) -> str:
@@ -235,16 +250,19 @@ async def _meetup(ctx: "NightContext") -> None:
     arc, p = get_arc(store, guid, human), ctx.persona(guid)
     region, name, called = p.identity.region, ctx.name(guid), ctx.ident.called
     rng = ctx.rng(STAGE, "meetup", absence_id, guid)
-    left_at = end + rng.uniform(*TRAVEL_START_H) * 3600
-    returns_at = left_at + (WEEKEND_S if kind == "weekend" else rng.uniform(*VISIT_S))
+    span = WEEKEND_S if kind == "weekend" else rng.uniform(*VISIT_S)
+    # She sets off a few hours after his logout, but never so late that the trip outlasts the
+    # night that writes it: it has ended by `now` (the gap is at least WEEKEND_GAP_S >= span).
+    left_at = max(end, min(end + rng.uniform(*TRAVEL_START_H) * 3600, now - span))
+    returns_at = left_at + span
     with store.transaction():
         away_id = store.conn.execute("SELECT coalesce(max(id), 0) + 1 FROM away").fetchone()[0]
     ref = f"away:{away_id}"
     summary = plan_summary(arc.plan, region)
     cover = arc.plan.get("cover") or ""
     system = system_prompt(
-        "weekend", WEEKEND_PROMPT, ctx.settings.data_dir, human=ctx.ident, name=name,
-        called=called, card=ctx.card(guid), plan=summary,
+        PROMPT, WEEKEND_PROMPT, ctx.settings.data_dir, human=ctx.ident, name=name,
+        called=called, card=ctx.card(guid), plan=plan_planned(arc.plan, region),
         tone=TONES[1] if cooling(store, guid, ctx.night) else TONES[0],
         affair=AFFAIR.format(name=name, cover=cover, called=called) if cover else "",
         moments=MOMENTS_TEXT[kind])
@@ -261,6 +279,7 @@ async def _meetup(ctx: "NightContext") -> None:
         texts = [" ".join(strip_wow_markup(t).split())
                  for t in reply["moments"]][:MOMENTS[kind][1]]
         refusals = [t for t in texts if REFUSAL_RE.search(t)]
+        judge_refused = False
         ev = Evidence()
         ev.add(Item(ref, summary, frozenset({guid, human}), left_at))
         claims = [Claim("life", guid, t, [ref]) for t in texts if t not in refusals]
@@ -269,36 +288,38 @@ async def _meetup(ctx: "NightContext") -> None:
         except ReflectionError as e:
             if not _refused(e):
                 raise
-            refusals.append("judge")
+            judge_refused = True
         kept = [c.text for c, v in pairs if v.ok]
         if len(kept) < 2:
-            why = "refusal" if refusals else "ungrounded"
+            why = "refusal" if refusals or judge_refused else "ungrounded"
     texts = kept if why is None else [plain_text(kind, arc.plan["kind"], region, called)]
     valence = VALENCE[tone] if why is None else PLAIN_VALENCE
     vectors = await ctx.embed(texts)
-    until = min(returns_at, now)
-    times = [int(left_at + (i + 1) * (until - left_at) / (len(texts) + 1))
-             for i in range(len(texts))]
+    times = [int(left_at + (i + 1) * span / (len(texts) + 1)) for i in range(len(texts))]
 
     def write(s: Store) -> None:
+        arc_now = get_arc(s, guid, human)
         if (s.conn.execute("SELECT 1 FROM away WHERE id = ? OR returned_at IS NULL",
                            (away_id,)).fetchone()
                 or s.conn.execute("SELECT 1 FROM arc_meetup WHERE absence = ?",
                                   (absence_id,)).fetchone()
-                or get_arc(s, guid, human).plan_state != "set"
+                or arc_now.plan_state != "set"
                 or KINDS.get(s.get_relationship(guid, human).romance_stage) != kind):
             raise ValueError("the meetup changed while it was written")
         s.conn.execute("INSERT INTO away(id, guid, reason, left_at, returns_at, returned_at) "
                        "VALUES (?, ?, ?, ?, ?, ?)",
-                       (away_id, guid, kind, left_at, returns_at,
-                        returns_at if returns_at <= now else None))
+                       (away_id, guid, kind, left_at, returns_at, returns_at))
         s.conn.execute("INSERT INTO arc_meetup(absence, guid, away_id, kind, written) "
                        "VALUES (?, ?, ?, ?, ?)", (absence_id, guid, away_id, kind, now))
-        if kind == "weekend":
+        if kind == "weekend":  # the weekend, and her coming home from it, as settle would
             rel = s.get_relationship(guid, human)
-            s.put_relationship(replace(rel, romance_stage="weekend"))
             s.add_rel_delta(guid, human, "romance_stage", 1, f"{rel.romance_stage}->weekend",
                             [ref], now, applied=True)
+            s.put_relationship(replace(rel, romance_stage="after"))
+            s.add_rel_delta(guid, human, "romance_stage", 1, "weekend->after", [ref], now,
+                            applied=True)
+        put_arc(s, replace(arc_now, plan_state="done", weekends=arc_now.weekends + 1,
+                           last_meetup=returns_at, updated=now))
         for text, t, vector in zip(texts, times, vectors):
             ctx.writer.put(MemoryRow(
                 id=None, owner=guid, kind="event", text=text, t_event=t, t_created=int(now),
