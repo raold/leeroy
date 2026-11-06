@@ -14,6 +14,7 @@ from typing import Sequence
 from leeroy_mind.personas.screens import OBJECT_WINDOW, ROMANCE_RE
 from leeroy_mind.text import (EMOJI_RE, NAME_PREFIX_RE, NAME_TAG, has_meta, normalize_words,
                               strip_emoji, strip_name_prefix, word_jaccard)
+from leeroy_mind.voice.rooms import ROOMS, RoomDef
 
 ASSISTANT_PHRASES = ("happy to help", "absolutely", "great question", "let me know",
                      "how can i help", "feel free", "i hope this helps", "as an ai",
@@ -63,15 +64,107 @@ _SEMI = re.compile(r"\s*(?<!_);(?![-']?[)(\]\[DPpOo3*/\\|_])\s*")
 # A tag's colon, never the eyes of an emoticon ("zan :) welcome back", "zan: D", "zan :S":
 # fix round 1, review M2); "Zan: Done with the boss" is a tag.
 _TAG_COLON = r"\s*:(?!\s?[-'^]?[)(\]\[DPpOo3*/\\|SsXxCcLl](?![A-Za-z]))"
-# The frame of a prompt chat line the model may copy: "[3m ago]", "(whisper to Zan):", "(raid)",
-# "(on vent):". The channel and whisper tags come in square brackets too ("[Whisper to Zan]:",
-# "[whisper]": seen live), and either one's colon is a tag's colon ("[guild] :) gz").
+# The frame of a prompt chat line the model may copy (prompt.chat_line_text): "[3m ago]",
+# "(whisper to Zan):", "(raid)", "(raid_warning)", "(on vent):". The channel and whisper tags
+# come in square brackets too ("[Whisper to Zan]:", "[whisper]": seen live), and either one's
+# colon is a tag's colon ("[guild] :) gz"). The model also writes the scene its prompt sets
+# as a tag of its own: "(whispering to <his name> in private 1)" on an invite whisper, whose
+# instruction names the room, and "(vent)" on vent (seen live, 2026-11-05), in front of a line
+# or inside it. Every body is read casefolded, its spaces collapsed (_tag).
 _AGE = r"(?:just now|\d{1,3}\s?[smhd] ago)"
-_CHANNEL = r"guild|officer|party|raid(?: warning)?|say|yell|on vent"
-_COPIED_TAG = re.compile(
-    rf"^\s*(?:\[(?:{_AGE}|whisper(?: (?:to|from) [^\]\n]{{1,24}})?|{_CHANNEL})\]"
-    rf"|\((?:{_AGE}|whisper(?: (?:to|from) [^)\n]{{1,24}})?|{_CHANNEL})\))"
-    rf"(?:{_TAG_COLON})?\s*", re.IGNORECASE)
+_CHANNEL = r"(?:guild|officer|party|raid(?:[ _]warning)?|say|yell|emote)"
+
+
+def _room_words(name: str) -> str:
+    """A voice room's name or id as a pattern: "Private 1" also as "private1", "Loot & DKP"
+    also as "loot and dkp", "smoke_room" as "smoke room"; a leading "The" is _AT's."""
+    words = name.casefold().replace("_", " ").replace("&", " & ").split()
+    words = words[1:] if words[0] == "the" and len(words) > 1 else words
+    return r"[\s_]*".join(r"(?:&|and)" if w == "&" else re.escape(w) for w in words)
+
+
+def _rooms(forms: Iterable[str]) -> str:
+    return "|".join(sorted({_room_words(f) for f in forms}, key=len, reverse=True))
+
+
+def _label(r: RoomDef) -> bool:
+    """A room whose name nobody types as an aside: two words or more besides a leading "The",
+    and no class hall. "(Private 1)", "(Guild Hall)" and "(The Smoke Room)" are labels;
+    "(afk)", "(irl)", "(healers)", "(death knights)" and "(the kitchen)" are a member's own
+    words."""
+    words = r.name.casefold().split()
+    return r.parent != "class_halls" and len(words[1:] if words[0] == "the" else words) > 1
+
+
+# Every room by name and by id; a label room by name, or by an id that is no plain word.
+_ROOM = _rooms(f for r in ROOMS for f in (r.name, r.id))
+_LABEL_ROOM = _rooms(f for r in ROOMS if _label(r) for f in (r.name, r.id)
+                     if not f.isalpha())
+_AT = r"(?:(?:in|on|into|to|at)\s+)?(?:the\s+)?"
+_VENT = r"(?:(?:talking|speaking)(?:\s+out\s+loud)?\s+)?(?:(?:on|in|over)\s+)?vent"
+_WHISPERING = r"whisper(?:s|ed|ing)?"
+# Who a whisper is to: one name, never a pronoun ("(whisper to me later)" is an ask).
+_SOMEONE = (r"(?:to|from|with)\s+(?!(?:me|you|u|ya|him|her|them|us|everyone|anyone|someone"
+            r"|myself|yourself|himself|herself|themselves|ourselves)(?![\w'-]))"
+            r"[^\W\d_][\w'-]{0,23}")
+_SCENE_PART = (rf"{_WHISPERING}(?:\s+privately)?(?:\s+{_SOMEONE})?(?:\s+privately)?"
+               rf"|{_VENT}|{_AT}(?:{_ROOM})|{_CHANNEL}|{_AGE}|privately|out\s+loud")
+# A scene: its parts in a row, with commas, slashes or dashes or not ("on vent, raid 2",
+# "whispering to zan in private 1", "on vent - guild hall").
+_SCENE = re.compile(rf"(?:{_SCENE_PART})(?:(?:\s*[,;/]\s*|\s+-\s+|\s+)(?:{_SCENE_PART}))*")
+_VENT_WORD = re.compile(r"(?<![\w'])vent(?![\w'])")
+_WHISPER_WORD = re.compile(rf"(?<![\w']){_WHISPERING}(?![\w'])")
+# What only ever stands in front of a line: an age, a channel, the frame's own whisper tags
+# (to anyone: "(whisper to me later):" too, as before) and a label room ("(in private 1)").
+_FRONT_ONLY = re.compile(rf"{_AGE}|whisper(?:\s+(?:to|from)\s+.{{1,24}})?|{_CHANNEL}"
+                         rf"|{_AT}(?:{_LABEL_ROOM})")
+_BRACKETED = r"\((?P<p>[^()\[\]\n]{1,60})\)|\[(?P<s>[^()\[\]\n]{1,60})\]"
+_FRONT_TAG = re.compile(rf"^\s*(?:{_BRACKETED})(?:{_TAG_COLON})?\s*")
+_ANY_TAG = re.compile(rf"[ \t]*(?:{_BRACKETED})(?P<colon>{_TAG_COLON})?[ \t]*")
+# A capitalised word in front of a tag and its colon: someone's speaker tag ("Arkon (on vent):"),
+# which keeps its colon, so a line written for them is still dialogue (find_tells).
+_SPEAKER = re.compile(r"^\s*\[?[A-Z][a-z]{1,11}\]?$")
+
+
+def _tag(body: str, *, front: bool) -> bool:
+    """A bracket's body is a copied tag: the scene anywhere (vent, or a whisper to someone, in
+    a place or privately: never "(whispers)" alone, a stage direction), and in front of a line
+    also an age, a channel, a whisper tag or a label room."""
+    b = " ".join(body.casefold().split())
+    if _SCENE.fullmatch(b) and (_VENT_WORD.search(b) or (
+            _WHISPER_WORD.search(b) and not _WHISPER_WORD.fullmatch(b))):
+        return True
+    return front and bool(_FRONT_ONLY.fullmatch(b))
+
+
+def _front_tag(text: str) -> re.Match | None:
+    m = _FRONT_TAG.match(text)
+    return m if m and _tag(m.group("p") or m.group("s"), front=True) else None
+
+
+def _drop_tags(line: str) -> str:
+    """The scene tags inside a line, each with its colon and the spaces around it; a word on
+    each side keeps one space between them, punctuation after it none ("i'm here (vent), what's
+    up"). In someone's speaker tag the colon stays."""
+    out, last = [], 0
+    for m in _ANY_TAG.finditer(line):
+        if not _tag(m.group("p") or m.group("s"), front=False):
+            continue
+        out.append(line[last:m.start()])
+        if m.group("colon") and _SPEAKER.match(line, 0, m.start()):
+            join = ": "
+        else:
+            before = "".join(out)
+            after = line[m.end():m.end() + 1]
+            join = (" " if before.strip() and not before[-1].isspace() and after
+                    and after not in ".,!?" else "")
+        out.append(join)
+        last = m.end()
+    if not out:
+        return line
+    return "".join(out) + line[last:]
+
+
 _QUOTES = "\"“”"
 # The reply command the model typed in front of a line ("/r on my way"); never "/roll".
 _REPLY_CMD = re.compile(rf"^\s*/(?:r|reply)(?![\w/])(?:\s*,|{_TAG_COLON})?\s*", re.IGNORECASE)
@@ -112,27 +205,18 @@ def _repeat(text: str, own: str) -> str | None:
     return "near" if word_jaccard(text, own) >= REPEAT_JACCARD else None
 
 
-def strip_copied(text: str, names: Sequence[str] = (), *, him: Sequence[str] = ()) -> str:
-    """What the model copied from how the prompt shows chat ("[3m ago] Belra (whisper to Zan):
-    text"): wrapping quotes, a leading age, a channel or whisper tag ("(whisper to Zan):",
-    "(raid)") and a speaker tag naming one of `names` (the speaker's own character name, their
-    real first name), in any order. With `him` (his names), also what addresses him as a
-    command or a handle would: a leading "/w Zan" (or /whisper, /t, /tell), "@Zan" or "Zan:",
-    and the reply command "/r" for anyone (rehearsal 3, finding 5). A tag naming anyone else
-    is an address ("Arkon: you're up") and stays, and so does his name as a word ("zan,
-    you're late")."""
-    names = [n for n in names if n]
-    at_him = _at_him(him)
-    t = text.strip()
+def _strip_front(line: str, names: Sequence[str], at_him: re.Pattern | None,
+                 own: re.Pattern | None) -> str:
+    """One line's leading frame, in any order, until none is left (strip_copied)."""
+    t = line.strip()
     while True:
         before = t
-        while len(t) >= 2 and t[0] in _QUOTES and t[-1] in _QUOTES:
-            t = t[1:-1].strip()
-        m = _COPIED_TAG.match(t)
-        if m:
+        if m := _front_tag(t):
             t = t[m.end():]
         for name in names:
             t = strip_name_prefix(t, name)
+        if own is not None and (n := own.match(t)) and (m := _front_tag(t[n.end():])):
+            t = t[n.end() + m.end():]  # "Belra (whispering to Zan in Private 1): ok"
         if at_him is not None and (m := at_him.match(t)):
             t = t[m.end():]
         if m := _REPLY_CMD.match(t):
@@ -140,6 +224,43 @@ def strip_copied(text: str, names: Sequence[str] = (), *, him: Sequence[str] = (
         t = t.strip()
         if t == before:
             return t
+
+
+def strip_copied(text: str, names: Sequence[str] = (), *, him: Sequence[str] = ()) -> str:
+    """What the model copied from how the prompt shows chat ("[3m ago] Belra (whisper to Zan):
+    text"): wrapping quotes, a leading age, a channel or whisper tag ("(whisper to Zan):",
+    "(raid)"), the scene as a tag ("(whispering to Zan in private 1)", "(vent)", a label
+    room: _tag) and a speaker tag naming one of `names` (the speaker's own character name,
+    their real first name), in any order, in front of each line. With `him` (his names), also
+    what addresses him as a command or a handle would: a leading "/w Zan" (or /whisper, /t,
+    /tell), "@Zan" or "Zan:", and the reply command "/r" for anyone (rehearsal 3, finding 5).
+    A scene tag goes inside a line too ("you okay? (vent)"); a channel, an age or a room
+    there is the member's own words ("ok (raid) in 5"), and so is an aside ("(lol)", "(afk)",
+    "(in private)"). A tag naming anyone else is an address ("Arkon: you're up") and stays,
+    and so does his name as a word ("zan, you're late")."""
+    names = [n for n in names if n]
+    at_him = _at_him(him)
+    own = (re.compile(rf"^\s*\[?(?:{'|'.join(map(re.escape, names))})\]?\s*(?=[(\[])",
+                      re.IGNORECASE) if names else None)
+    t = text.strip()
+    while True:
+        before = t
+        while len(t) >= 2 and t[0] in _QUOTES and t[-1] in _QUOTES:
+            t = t[1:-1].strip()
+        first, *rest = t.split("\n")
+        t = "\n".join(_drop_tags(line) for line in (
+            _strip_front(first, names, at_him, own), *map(_strip_tags, rest))).strip()
+        if t == before:
+            return t
+
+
+def _strip_tags(line: str) -> str:
+    """A later line's leading frame tags (_front_tag) alone: a name or a handle in front of it
+    is a line written for someone, which find_tells takes as dialogue."""
+    t = line
+    while m := _front_tag(t):
+        t = t[m.end():]
+    return t
 
 
 _YOU = re.compile(r"(?<!\w)(?:you|u|ya|ur|your|yours)(?!\w)", re.IGNORECASE)
