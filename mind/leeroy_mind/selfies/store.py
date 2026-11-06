@@ -1,4 +1,4 @@
-"""Profile photo sets and picks in mind.db (migrations/0018_selfies.sql). The images are files
+"""Profile photo sets and picks in mind.db (migrations/*_selfies.sql). The images are files
 (files.py); these rows say which sets exist, what each candidate was rendered from, and which
 photo is in force.
 

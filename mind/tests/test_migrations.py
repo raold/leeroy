@@ -198,8 +198,8 @@ def test_0004_keeps_old_utterances_and_adds_the_trigger_line_and_model_time(tmp_
 
 
 def test_a_v17_db_gains_the_empty_selfie_tables(tmp_path, monkeypatch):
-    """P2: 0018 adds the profile photo tables to a database the tuning release left, and keeps
-    its rows."""
+    """P2: the selfies migration (migrations/*_selfies.sql, the one after tuning's) adds the
+    profile photo tables to a database the tuning release left, and keeps its rows."""
     path = tmp_path / "mind.db"
     conn = _db_at(path, 17, tmp_path, monkeypatch)
     try:

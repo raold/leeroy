@@ -80,7 +80,8 @@ Do not build, read configs, or read logs from Q: (or anything left on D:).
 `main`). A whitelist `.gitignore` tracks only what is ours: this file, the
 README, `LICENSE`, `references.bib` (the bibliography), `scripts/`, `config/`,
 `patches/`, `modules/` (mod-leeroy, mod-dojo), `mind/` (the mind service), `voice/`
-(the voice service), `dojo/` (the dojo, source only) and `.github/`. The core
+(the voice service), `selfie/` (the selfie worker), `dojo/` (the dojo, source only) and
+`.github/`. The core
 repo, the build tree, the client, boost, DB dumps and the zips stay out, and so
 do the local dev docs (`docs/`, `private/`). `dojo-runtime/` and `dojo-data/`
 beside the install root hold the dojo's environments and recordings and are
@@ -885,11 +886,21 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
   asked for, and renders up to `selfie_per_night` (120) sets.
 - **GPU rules.** The image stage unloads every chat model but the embedding model (the worker
   needs the VRAM) and never renders while a live lease is held (his login, an offline raid, the
-  voice service): it ends without a failure and the sets wait for the next night. An OOM makes
-  room and retries once, then ends the stage. His login cancels the stage, whose last act is to
-  end the worker's whole process tree; the arbiter's live-model preload starts only after that
-  tree is gone.
-- **Storage.** Sets and picks are rows in `mind.db` (migration 0018); the images are files
+  voice service): it ends without a failure and the sets wait for the next night. A night with
+  nothing to render takes no GPU (`wants_gpu`). The worker's start checks the models without
+  hashing them; a VRAM refusal keeps its pipeline on the CPU, and after making room the stage
+  asks it once more (`selfies_worker_start` logs each start's `ms`, `check_ms`, `load_ms` and
+  `free_gib`). An OOM makes room and retries once, then ends the stage. His login cancels the
+  stage, whose last act is to end the worker's whole process tree; the arbiter's live-model
+  preload starts only after that tree is gone.
+- **Orion beside the worker.** mod-ollama-chat's night requests can load Orion into the VRAM
+  the worker leaves, partly on the CPU, and Ollama reuses that runner for a preload at the same
+  `num_ctx`. So the night makes room once more after the image stage, and after any image
+  stage the next hand-over (his login, voice, an offline raid) unloads a loaded live model
+  before its preload: one cold load (about 10 s) at the first login after a render night. At
+  release, `ollama ps` after a render night and his next login must show Orion at `100% GPU`.
+- **Storage.** Sets and picks are rows in `mind.db` (the selfies migration,
+  `migrations/*_selfies.sql`); the images are files
   under `mind-data\selfies\<guid>\`: `sets\<n>\c0.jpg` to `c3.jpg` with `.thumb.jpg`
   beside each (a set renders in `<n>.part` and is renamed when done), `chosen.jpg` (the photo
   in force) and `history\<pick>.jpg`. The database is the truth: the mind makes the files agree

@@ -48,6 +48,7 @@
 !/selfie/
 /selfie/.venv/
 /selfie/.pytest_cache/
+/selfie/.ruff_cache/
 /selfie/*.egg-info/
 /selfie/build/
 /selfie/**/*.safetensors
