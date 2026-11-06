@@ -40,6 +40,16 @@ cannot read an answer or send a preflighted request (the key header needs one).
                        "preview", ...}), checked as the endpoint checks it, then on to the
                        mind's tune op, refused as raid actions are; a change is announced as a
                        `tuning` event; a preview's answer goes only to the page that asked
+    GET  /api/selfies  the Personas tab's photo queue: the sets waiting for his choice, counts
+                       and recent changes from mind.db (selfieview.queue_view), and the
+                       running mind's selfie status (its recent changes with their undoability)
+    GET  /api/selfies/images  ?guid=&set=: a ready set's four thumbnails as data URLs (404
+                       unless that set is ready and the member's)
+    GET  /api/selfies/member  ?guid=: one member's photo in force, sets and change history
+    POST /api/selfie   a selfie action ({"action": "status"|"pick"|"more"|"undo", ...}),
+                       checked as the endpoint checks it, then on to the mind's selfie op,
+                       refused as raid actions are; a pick, undo or "4 more" is announced as a
+                       `selfie` event {"action", "guid"}
 
 The Raid, Guild and Personas tabs read mind.db read-only. Raid actions and dial changes are the
 mind's to take: the console forwards them and shows the mind's answer, which says why when it
@@ -58,7 +68,7 @@ from pathlib import Path
 from typing import Callable
 
 from .. import endpoint
-from . import feed, mindlog, netinfo, personaview, raidview, status, tuneview
+from . import feed, mindlog, netinfo, personaview, raidview, selfieview, status, tuneview
 from .control import Controls, Refused
 from .httpd import Request, Response, Stream, digits, encode_json, json_response, text
 from .mindlink import RAID_S, LinkError
@@ -74,9 +84,17 @@ QUEUE = 500  # events a page may fall behind before it is cut off (it reconnects
 FEED_DAYS = 3.0  # how far back a page's first feed goes
 KEY_HEADER = "x-console-key"
 TUNE_S = 10.0  # a dial change's answer
+SELFIE_S = 10.0  # a photo change's answer; the call waits this plus SELFIE_MARGIN_S
+SELFIE_MARGIN_S = 5.0  # a held chosen.jpg retries for about 2 s inside the op
 PREVIEW_S = endpoint.PREVIEW_S + 5.0  # a preview's two lines per member, at background priority
 MIND_DOWN = ("The mind isn't running, so it can't preview or change dials. Start it from the "
              "Mind tab.")
+
+SELFIE_DOWN = "The mind isn't running, so it can't set photos. Start it from the Mind tab."
+SELFIE_WORDS = {
+    "photos are not running in this mind": "Photos are off in this mind.",
+    "another photo change is still being written":
+        "Another change is still being saved; try again in a moment."}
 
 log = logging.getLogger("leeroy_mind.console")
 
@@ -415,6 +433,10 @@ class ConsoleApp:
                   ("GET", "/api/persona"): self._api_persona,
                   ("GET", "/api/tuning"): self._api_tuning,
                   ("POST", "/api/tune"): self._api_tune,
+                  ("GET", "/api/selfies"): self._api_selfies,
+                  ("GET", "/api/selfies/images"): self._api_selfie_images,
+                  ("GET", "/api/selfies/member"): self._api_selfie_member,
+                  ("POST", "/api/selfie"): self._api_selfie,
                   ("POST", "/api/voice"): self._api_voice,
                   ("POST", "/api/control"): self._api_control,
                   ("POST", "/api/raid"): self._api_raid_action}
@@ -599,6 +621,95 @@ class ConsoleApp:
             self.broadcast("tuning", {"change": reply.get("change"),
                                       "version": reply.get("version")})
         return json_response(200, reply)  # a preview's text: to this page only, never logged
+
+    # -- the personas tab's profile photos ---------------------------------------------------
+
+    @staticmethod
+    def _selfie_words(reply: dict) -> str:
+        said = str(reply.get("error") or "refused")[:300]
+        return SELFIE_WORDS.get(said, said)
+
+    async def _selfie_status(self) -> dict:
+        if self.view.state != "running":
+            return {"ok": False, "error": SELFIE_DOWN}
+        if self.link is None:
+            return {"ok": False, "error": "no control endpoint here"}
+        try:
+            reply = await asyncio.to_thread(self.link.call, self._mind_pids(), "selfie",
+                                            {"action": "status"})
+        except LinkError as e:
+            return {"ok": False, "error": str(e)}
+        if reply.get("ok") is not True:
+            return {"ok": False, "error": self._selfie_words(reply)}
+        recent = reply.get("recent")
+        return {"ok": True, "enabled": reply.get("enabled") is True,
+                "recent": recent if isinstance(recent, list) else []}
+
+    async def _read_selfies(self, name: str, question, *args, **kw):
+        """question on mind.db read-only; (view, None), or (None, a 503 response)."""
+        try:
+            return await asyncio.to_thread(feed.read, self.s.data_dir / "mind.db", question,
+                                           self.s.data_dir, *args, **kw), None
+        except Exception as e:
+            log.warning("console_%s_unread: error=%s", name, type(e).__name__)
+            return None, json_response(503, {"ok": False, "error": f"mind.db could not be read "
+                                                                    f"({type(e).__name__})"})
+
+    async def _api_selfies(self, req: Request):
+        view, failed = await self._read_selfies("selfies", selfieview.queue_view,
+                                                now=self._clock())
+        if failed is not None:
+            return failed
+        return json_response(200, {"view": view, "mind": await self._selfie_status(),
+                                   "control": self.controls.describe()})
+
+    async def _api_selfie_images(self, req: Request):
+        g, n = req.query.get("guid", []), req.query.get("set", [])
+        guid = digits(g[0], 10) if len(g) == 1 else None
+        set_no = digits(n[0], 10) if len(n) == 1 else None
+        if guid is None or set_no is None:
+            return json_response(400, {"ok": False, "error": "guid and set: whole numbers"})
+        view, failed = await self._read_selfies("selfie_images", selfieview.set_images, guid,
+                                                set_no)
+        if failed is not None:
+            return failed
+        if view is None:
+            return json_response(404, {"ok": False, "error": "no such ready set for that member"})
+        return json_response(200, view)
+
+    async def _api_selfie_member(self, req: Request):
+        values = req.query.get("guid", [])
+        guid = digits(values[0], 10) if len(values) == 1 else None
+        if guid is None:
+            return json_response(400, {"ok": False, "error": "guid: one member's guid"})
+        view, failed = await self._read_selfies("selfie_member", selfieview.member_photos, guid)
+        if failed is not None:
+            return failed
+        if view is None:
+            return json_response(404, {"ok": False, "error": f"no photos for member {guid}"})
+        return json_response(200, view)
+
+    async def _api_selfie(self, req: Request):
+        try:
+            args = endpoint.selfie_args(req.json())  # exactly as the mind will check it
+        except endpoint.BadRequest as e:
+            return json_response(400, {"ok": False, "error": str(e)})
+        problem = self._raid_problem()
+        if problem is not None:
+            status_code, words = problem
+            if self.view.state != "running" and status_code == 409 and self.controls.busy is None:
+                words = SELFIE_DOWN
+            return json_response(status_code, {"ok": False, "error": words})
+        try:
+            reply = await asyncio.to_thread(self.link.call, self._mind_pids(), "selfie", args,
+                                            timeout=SELFIE_S + SELFIE_MARGIN_S)
+        except LinkError as e:
+            return json_response(409, {"ok": False, "error": str(e)})
+        if reply.get("ok") is not True:
+            return json_response(409, {"ok": False, "error": self._selfie_words(reply)})
+        if args["action"] != "status":
+            self.broadcast("selfie", {"action": args["action"], "guid": reply.get("guid")})
+        return json_response(200, reply)
 
     def _raid_problem(self) -> tuple[int, str] | None:
         if not self.controls.enabled:

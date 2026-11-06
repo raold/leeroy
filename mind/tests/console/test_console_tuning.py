@@ -220,5 +220,6 @@ def test_the_page_has_the_tuning_and_its_only_write_is_the_tune_route():
     page = resources.files("leeroy_mind.console").joinpath("page.html").read_text("utf-8")
     assert 'id="p-tuning"' in page and 'api("/api/tuning")' in page
     assert 'post("/api/tune"' in page and 'post("/api/persona' not in page
+    assert 'post("/api/selfies' not in page  # the photo pick's one write is post("/api/selfie"
     for later in ("crude", "loot greed", "raid comms", "patience"):
         assert later not in page.casefold()
