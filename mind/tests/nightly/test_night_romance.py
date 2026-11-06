@@ -67,7 +67,7 @@ def test_dial_never_caps_progress_and_ex_never_moves(h):
     ctx.settings = replace(ctx.settings, romance_dial=1)
     run(stage_romance(ctx))
     assert not ctx.failures
-    assert h.store.get_relationship(101, 1).romance_stage == "vulnerable"
+    assert h.store.get_relationship(101, 1).romance_stage == "late_nights"
     assert h.store.get_relationship(102, 1).romance_stage == "ex"
 
 
@@ -242,7 +242,7 @@ def test_jealousy_rollback_and_retry_are_atomic(h, monkeypatch):
 def test_same_run_advancement_after_window_is_known_only_to_witnesses(h, private):
     rivalry(h)
     h.woman(102, "lust", style="earnest")
-    h.rel(102, 1, attraction=99, affinity=99, trust=99, romance_stage="vulnerable")
+    h.rel(102, 1, attraction=99, affinity=99, trust=99, romance_stage="late_nights")
     with h.store.transaction():
         h.store.conn.execute("INSERT INTO disclosure(guid,other,depth,response,ts,ref) "
                              "VALUES (102,1,2,'responsive',?,'chat:1')", (h.T - DAY,))
@@ -256,7 +256,7 @@ def test_same_run_advancement_after_window_is_known_only_to_witnesses(h, private
     ctx = h.ctx()
     h.clock.set(ctx.window[1] + 60)
     run(stage_romance(ctx))
-    assert h.store.get_relationship(102, 1).romance_stage == "invitation"
+    assert h.store.get_relationship(102, 1).romance_stage == "voice"
     assert json.loads(h.store.get_meta("romance_changes:2026-10-29"))
     # A new context represents a process resumed between the two committed stages.
     resumed = h.ctx()
@@ -274,7 +274,7 @@ def test_unseen_private_stage_cannot_cross_threshold_or_create_open_memory(h):
     rivalry(h)
     private = h.say(h.T, 1, "a private invitation", channel="whisper", to=102)
     mem = h.mem(102, "Testy invited me.", actors=(1,), valence=.8, evidence=(f"chat:{private}",))
-    h.store.add_rel_delta(102, 1, "romance_stage", 1, "vulnerable->invitation",
+    h.store.add_rel_delta(102, 1, "romance_stage", 1, "late_nights->voice",
                           [f"memory:{mem}"], h.T, applied=True)
     with h.store.transaction():
         h.store.conn.execute("INSERT INTO jealousy VALUES (101,102,'rivalry',39,?,'[]')", (h.T,))

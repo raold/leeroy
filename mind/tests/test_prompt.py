@@ -211,7 +211,7 @@ def test_his_real_name_needs_the_inner_circle():
     assert INNER_FAMILIARITY == 80
     friend = Relationship(a=101, b=1, affinity=40, trust=40, familiarity=60)
     inner = Relationship(a=101, b=1, affinity=40, trust=40, familiarity=85)
-    lover = Relationship(a=101, b=1, romance_stage="acknowledged", familiarity=70)
+    lover = Relationship(a=101, b=1, romance_stage="confession", familiarity=70)
     assert is_close(friend) and is_close(lover) and is_close(inner)
     assert not knows_real_name(friend) and not knows_real_name(lover)
     assert knows_real_name(inner)

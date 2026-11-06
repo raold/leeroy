@@ -15,7 +15,8 @@ _LABEL_BAD = re.compile(r"[^A-Za-z0-9_-]+")
 # A migration's Python data step, keyed by the name after the file's NNNN_: "module:function",
 # called with the connection after the file's script and before its user_version bump, in the
 # same transaction. It must not commit.
-DATA_STEPS = {"nightly": "leeroy_mind.memory.privacy:backfill_scopes"}
+DATA_STEPS = {"nightly": "leeroy_mind.memory.privacy:backfill_scopes",
+              "romance_arc": "leeroy_mind.arc.ladder:map_stored_stages"}
 
 
 class EmbeddingMismatch(RuntimeError):

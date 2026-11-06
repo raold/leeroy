@@ -14,8 +14,9 @@ REL_RANGES = {
     "attraction": (0.0, 100.0),
     "familiarity": (0.0, 100.0),
 }
-ROMANCE_STAGES = (
-    "none", "notices", "banter", "whispers", "vulnerable", "invitation", "acknowledged", "ex")
+ROMANCE_STAGES = (  # the arc's ladder (arc.ladder); relationship.romance_stage's CHECK lists them
+    "none", "notices", "banter", "whispers", "late_nights", "voice", "picture", "confession",
+    "planning", "weekend", "after", "ex")
 
 
 @dataclass(frozen=True, slots=True)
