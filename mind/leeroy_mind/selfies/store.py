@@ -129,17 +129,15 @@ def ensure_first_sets(store, guids, *, now: float) -> int:
 
 
 def queue_more(store, guid: int, *, now: float) -> SetRow:
-    """His "4 more": a set queued for tonight, and the newest set waiting for his choice
-    passed."""
+    """His "4 more": a set queued for tonight, and every set of his still waiting for his
+    choice passed (after an undo, more than one can wait)."""
     with store.transaction():
         conn = store.conn
         if conn.execute("SELECT 1 FROM selfie_set WHERE guid=? AND status='queued'",
                         (guid,)).fetchone() is not None:
             raise SelfieError("four more are already queued for tonight")
-        waiting = conn.execute("SELECT max(set_no) FROM selfie_set WHERE guid=? "
-                               "AND status='ready' AND decided IS NULL", (guid,)).fetchone()[0]
-        if waiting is not None:
-            _decide(conn, guid, waiting, "passed")
+        conn.execute("UPDATE selfie_set SET decided='passed' WHERE guid=? AND status='ready' "
+                     "AND decided IS NULL", (guid,))
         return _new_set(conn, guid, "more", now)
 
 

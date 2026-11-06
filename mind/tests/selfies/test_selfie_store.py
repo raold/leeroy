@@ -68,14 +68,35 @@ def test_more_requests_come_first(store, data):
         (102, 1, "more"), (104, 2, "more"), (101, 1, "first"), (103, 1, "first")]
 
 
-def test_more_passes_only_the_newest_waiting_set(store, data):
+def test_more_passes_every_waiting_set(store, data):
     ready(store, data, 101, 1)
     n = pick(store, 101, 1, 0, source="console", now=2.0)
     ready(store, data, 101, 2)  # queued as "4 more": set 1 was picked, so nothing was passed
     assert _decided(store, 101) == {1: "picked", 2: None}
     undo(store, n, source="console", now=3.0)  # set 1 waits again beside set 2
+    assert _decided(store, 101) == {1: None, 2: None}
     queue_more(store, 101, now=4.0)
-    assert _decided(store, 101) == {1: None, 2: "passed", 3: None}
+    assert _decided(store, 101) == {1: "passed", 2: "passed", 3: None}
+    ready(store, data, 101, 3)
+    pick(store, 101, 3, 1, source="console", now=5.0)
+    assert _decided(store, 101) == {1: "passed", 2: "passed", 3: "picked"}
+
+
+def test_after_an_undo_and_four_more_no_older_set_is_left_waiting(store, data):
+    """The review's sequence: pick from set 1, "4 more", undo the pick (sets 1 and 2 both
+    wait), "4 more" again, pick from set 3. Nothing may still wait for his choice."""
+    ready(store, data, 101, 1)
+    a = pick(store, 101, 1, 0, source="console", now=1.0)
+    queue_more(store, 101, now=2.0)
+    ready(store, data, 101, 2)
+    undo(store, a, source="console", now=3.0)
+    queue_more(store, 101, now=4.0)
+    ready(store, data, 101, 3)
+    c = pick(store, 101, 3, 1, source="console", now=5.0)
+    assert current(store, 101) == Current(101, 3, 1, c)
+    assert _decided(store, 101) == {1: "passed", 2: "passed", 3: "picked"}
+    assert store.conn.execute("SELECT count(*) FROM selfie_set WHERE guid=101 AND "
+                              "status='ready' AND decided IS NULL").fetchone()[0] == 0
 
 
 def test_mark_ready_keeps_four_candidates_and_the_persona_version(store):
