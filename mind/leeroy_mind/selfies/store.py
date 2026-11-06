@@ -111,6 +111,20 @@ def queued_sets(store) -> list[SetRow]:
         "ORDER BY reason='more' DESC, guid, set_no")]
 
 
+def _needs_first(conn, guid: int) -> bool:
+    """No photo, no queued set and no ready set waiting for his choice."""
+    return conn.execute(
+        "SELECT 1 FROM selfie_current WHERE guid=:g UNION ALL "
+        "SELECT 1 FROM selfie_set WHERE guid=:g AND (status='queued' OR "
+        "(status='ready' AND decided IS NULL)) LIMIT 1", {"g": guid}).fetchone() is None
+
+
+def needing_first(store, guids) -> list[int]:
+    """Those of `guids` that ensure_first_sets would queue a first set for, by guid."""
+    with store.transaction():
+        return [g for g in sorted(set(guids)) if _needs_first(store.conn, g)]
+
+
 def ensure_first_sets(store, guids, *, now: float) -> int:
     """A first set queued for each of `guids` with no photo, no queued set and no ready set
     waiting for his choice; how many were queued."""
@@ -118,11 +132,7 @@ def ensure_first_sets(store, guids, *, now: float) -> int:
     with store.transaction():
         conn = store.conn
         for guid in sorted(set(guids)):
-            busy = conn.execute(
-                "SELECT 1 FROM selfie_current WHERE guid=:g UNION ALL "
-                "SELECT 1 FROM selfie_set WHERE guid=:g AND (status='queued' OR "
-                "(status='ready' AND decided IS NULL)) LIMIT 1", {"g": guid}).fetchone()
-            if busy is None:
+            if _needs_first(conn, guid):
                 _new_set(conn, guid, "first", now)
                 made += 1
     return made

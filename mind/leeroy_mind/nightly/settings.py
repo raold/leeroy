@@ -49,6 +49,7 @@ class NightlySettings:
     confide_per_night: int = 60
     enrich_per_night: int = 10
     photo_per_night: int = 120
+    selfie_per_night: int = 120
     stories_per_night: int = 3
     coach_units: int = 20
     realm_units: int = 24

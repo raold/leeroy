@@ -73,6 +73,9 @@ UNIT_CALLS: dict[str, dict[str, float]] = {
     "critic": {"json": 1.1},                   # one call per sampled member (PR23): 22 s
     "enrich": {"think": 1, "json": 1},         # 110 s
     "photo": {"json": 1},                      # one call, no think pass: 20 s
+    # a set's four images of about 6 s hold the whole card, so both default slots: 48
+    # slot-seconds, in 20 s JSON equivalents
+    "selfies": {"json": 2.4},
     # Sundays: 36 probes, about 25 quiz questions and 80 interview asks, then the quiz judge,
     # consistency and distinctiveness: about 2,400 s
     "eval": {"live": 141, "json": 77},
@@ -88,7 +91,7 @@ MEASURE_MIN = 3     # ...once there are 3 of them
 COUNTERS: dict[str, Callable[["NightContext"], int]] = {}
 # Optional extensions must be admitted on the particular runner before budgeting.
 # Core counters may belong to substages, so their historical counting is unchanged.
-EXTENSION_STAGES = frozenset({"coach", "realm", "photo"})
+EXTENSION_STAGES = frozenset({"coach", "realm", "photo", "selfies"})
 
 
 def register_counter(stage: str, fn: Callable[["NightContext"], int]) -> None:
@@ -202,10 +205,12 @@ class Degrade(NamedTuple):
 # floor. Never cut: the snapshot, threads, confide (the secrets), knows, nudges, tier-0, the looks
 # of newcomers, the reflection itself, attraction, romance, jealousy, follow-ups and absence,
 # mood, forgetting, regression and the weekly evaluation. The realm's units go first, down to
-# none: the realm's own order keeps its meeting longest (realm/night.py).
+# none: the realm's own order keeps its meeting longest (realm/night.py). Profile photo sets
+# follow the coach: a set left queued is rendered the next night.
 DEGRADE = (
     Degrade("realm", (Cut("realm_units", "fit", 0),)),
     Degrade("coach", (Cut("coach_units", "fit", 5),)),
+    Degrade("selfies", (Cut("selfie_per_night", "fit", 10),)),
     Degrade("encounters", (Cut("encounters_per_night", "fit", 20),)),
     Degrade("notes", (Cut("notes_per_night", "fit", 100),)),
     Degrade("wow_lines", (Cut("wow_lines_per_night", "halve", 10),)),
