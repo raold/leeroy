@@ -2,6 +2,7 @@ import { $, arr, clear, el, obj, on, own, plural, post, recall, remember, str } 
 import { S, hereRoom, isMuted, name, roomName } from "../state.mjs";
 import { face, faceButton, lightSpeakers } from "../faces.mjs";
 import { FEED, currentView, openView } from "./feedview.mjs";
+import { Heard } from "./heard.mjs";
 import { roomRows, selfPress, selfView } from "./tree.mjs";
 
 // The Comms left column, top to bottom: the WoW channels with their unread counts (a click opens
@@ -298,7 +299,26 @@ var ON_VOICE = {
 };
 on("snapshot", renderLeft);
 on("status", renderBanner);
+// Push-to-talk the voice service recognised but the mind never matched to a line of his
+var HEARD = new Heard(), HEARD_SHOWN = 160, heardTimer = null;
+function heardNotes() {
+  if (!S.voice) { return; }
+  HEARD.due(Date.now()).forEach(function (e) {
+    var t = e.text.length > HEARD_SHOWN ? e.text.slice(0, HEARD_SHOWN) + "…" : e.text;
+    note("Heard you: \"" + t + "\" (not sent: the mind didn't match it to a line)");
+  });
+}
+function heardWatch() {
+  if (S.voice && !heardTimer) { heardTimer = setInterval(heardNotes, 1000); }
+  if (!S.voice && heardTimer) { clearInterval(heardTimer); heardTimer = null; }
+}
+on("chat", function (d) {
+  arr(d.lines).forEach(function (l) { HEARD.sawOwnVoiceLine(l, Date.now()); });
+});
+on("snapshot", heardWatch);
 on("voice", function (m) {
+  if (m && m.type === "transcript" && m.kind === "you") { HEARD.heardYou({ text: m.text, ts: m.ts }, Date.now()); }
+  heardWatch();
   if (typeof m.type === "string" && own(ON_VOICE, m.type)) { ON_VOICE[m.type](m); }
 });
 on("feed", function () { renderChannels(); renderWhispers(); });
