@@ -2,7 +2,10 @@
 // over the key with setKey), so node can load this file and the modules built on it.
 
 var KEY = "";
+var GEN = 0;               // which key is in use: one more for each key set
+var SENT = new WeakMap();  // an answer -> the generation of the key its request carried
 var LISTENERS = Object.create(null);
+export var KEY_REFUSED = "The console refused this page's key: open the URL it printed when it started.";
 
 export function $(id) { return document.getElementById(id); }
 export function own(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
@@ -42,7 +45,8 @@ export function hhmm(sec) {
 // The key comes in the URL's fragment, which the browser never sends anywhere: it is kept in
 // this page's memory only (not a cookie, which every 127.0.0.1 port would be handed) and goes
 // with each request as a header. A reload loses it: open the printed URL again.
-export function setKey(key) { KEY = key; }
+export function setKey(key) { KEY = key; GEN++; }
+export function keyGen() { return GEN; }
 // The key in a "#key=..." fragment: the key, "" for a malformed one, null for any other fragment
 export function hashKey(hash) {
   hash = str(hash);
@@ -52,18 +56,30 @@ export function hashKey(hash) {
 }
 export function api(path, opts) {
   opts = opts || {};
-  var headers = { "X-Console-Key": KEY };
+  var headers = { "X-Console-Key": KEY }, gen = GEN;
   Object.keys(opts.headers || {}).forEach(function (k) { headers[k] = opts.headers[k]; });
   return fetch(path, { method: opts.method || "GET", headers: headers, body: opts.body,
-                       signal: opts.signal, cache: "no-store", credentials: "omit" });
+                       signal: opts.signal, cache: "no-store", credentials: "omit" })
+    .then(function (r) { SENT.set(r, gen); return r; });
+}
+// A 403: the console refused the key the request carried. Only a refusal of the key in use now
+// says the key is lost ("key-lost"): a request still on its way when a new key was pasted (a
+// tab's poll, the stream's probe) was refused the old one, which says nothing of the new.
+export function refused(r) {
+  if (!r || r.status !== 403) { return false; }
+  if (SENT.get(r) === GEN) { emit("key-lost"); }
+  return true;
 }
 
+// A change: the answer's JSON with its status. An answer that is not JSON is the console's own
+// refusal (its gate: a 403 is the key's) or a failure, worded as such.
 export function post(path, body) {
   return api(path, { method: "POST", headers: { "Content-Type": "application/json" },
                      body: JSON.stringify(body) })
     .then(function (r) {
-      return r.json().catch(function () { return { ok: false, error: "HTTP " + r.status }; })
-        .then(function (j) { j.status = r.status; return j; });
+      return r.json().catch(function () {
+        return { ok: false, error: refused(r) ? KEY_REFUSED : "HTTP " + r.status };
+      }).then(function (j) { j.status = r.status; return j; });
     });
 }
 

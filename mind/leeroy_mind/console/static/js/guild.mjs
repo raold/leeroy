@@ -1,4 +1,4 @@
-import { $, api, arr, cell, clear, el, emit, emptyRow, num, obj, plural, setText, str } from "./core.mjs";
+import { $, api, arr, cell, clear, el, emptyRow, num, obj, plural, refused, setText, str } from "./core.mjs";
 import { S, roomOf } from "./state.mjs";
 import { registerTab } from "./tabs.mjs";
 import { CLASSES, dkp, mode, when, who } from "./words.mjs";
@@ -84,7 +84,7 @@ function pollGuild() {
   if (guildBusy || S.tab !== "guild") { return; }
   guildBusy = true;
   api("/api/guild").then(function (r) {
-    if (r.status === 403) { emit("key-lost"); return null; }
+    if (refused(r)) { return null; }
     return r.json().then(function (j) { return { status: r.status, j: j }; });
   }).then(function (x) {
     if (!x) { return; }

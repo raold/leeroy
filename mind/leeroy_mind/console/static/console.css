@@ -143,6 +143,22 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: 
 .msg .t { font: 500 12px/1 var(--f-mono); color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .msg .body { color: var(--ink); overflow-wrap: anywhere; }
 .feed .empty { padding: 10px 2px; }
+
+/* comms, the reply box under the feed: his line, said in WoW as his */
+.composer { flex: none; display: grid; gap: 6px; margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
+.composer .to { font-size: 12px; color: var(--ink-3); }
+.composer .to b { color: var(--ink); font-weight: 650; }
+.say { display: flex; align-items: center; gap: 8px; min-width: 0; }
+#composer .say input { flex: 1; min-width: 0; padding: 8px 12px; font-size: 14px; color: var(--ink);
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; }
+#composer .say input:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; border-color: var(--accent); }
+#composer .say input::placeholder { color: var(--ink-3); opacity: 1; }
+#composer .say input:disabled { cursor: not-allowed; color: var(--ink-3); }
+#composer .say input[readonly] { color: var(--ink-2); }
+.say .count { flex: none; font-size: 12px; color: var(--ink-3); }
+.say .count.bad { color: var(--bad); font-weight: 600; }
+.say .btn { flex: none; padding: 7px 16px; }
+#composer .why { margin: 0; min-height: 1.5em; }
 .list { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 2px 4px 6px; }
 .who { font-weight: 700; color: var(--accent); }
 

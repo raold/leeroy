@@ -49,10 +49,16 @@ run nothing else.
                        "preview", ...}), checked as the endpoint checks it, then on to the
                        mind's tune op, refused as raid actions are; a change is announced as a
                        `tuning` event; a preview's answer goes only to the page that asked
+    POST /api/say      {"channel": "guild"|"officer"|"group"|"whisper", "text"[, "to"]}: his
+                       line, said in game as his: checked and cleaned as the mind checks it (400
+                       with its words), refused 403 with --no-control and 409 while nothing can
+                       be sent (the mind or its bridge down, a start or stop under way, not in
+                       game, nobody can tell), then on to the mind's say op; nothing is
+                       broadcast, the line comes back through the feed when the game reports it
 
-The Raid, Guild and Personas tabs read mind.db read-only. Raid actions and dial changes are the
-mind's to take: the console forwards them and shows the mind's answer, which says why when it
-refuses. A preview's text is never logged, stored or broadcast."""
+The Raid, Guild and Personas tabs read mind.db read-only. Raid actions, dial changes and his
+lines are the mind's to take: the console forwards them and shows the mind's answer, which says
+why when it refuses. A preview's text and a line's are never logged, stored or broadcast."""
 import asyncio
 import hmac
 import logging
@@ -68,8 +74,9 @@ from .. import endpoint
 from . import faces, feed, mindlog, netinfo, personaview, raidview, status, tuneview
 from .control import Controls, Refused
 from .httpd import Request, Response, Stream, digits, encode_json, json_response, text
-from .mindlink import RAID_S, LinkError
+from .mindlink import RAID_S, SAY_S, LinkError
 from .voicelink import VoiceRelay
+from ..owner_say import BRIDGE_DOWN, NOT_IN_GAME
 from ..voice.rooms import ROOMS
 
 HOST = "127.0.0.1"
@@ -87,6 +94,11 @@ TUNE_S = 10.0  # a dial change's answer
 PREVIEW_S = endpoint.PREVIEW_S + 5.0  # a preview's two lines per member, at background priority
 MIND_DOWN = ("The mind isn't running, so it can't preview or change dials. Start it from the "
              "Mind tab.")
+# The reply box's words (the page's comms/reply.mjs says the same before a line is sent)
+SAY_OFF = "Replies are off: this console runs with --no-control."
+SAY_OLD_MIND = "The mind needs the update to send replies."
+SAY_NO_LINK = "Nothing was sent: the console has no link to the mind's control endpoint."
+OLD_OPS = "bad request: op is one of "  # a mind from before the say op names the ops it has
 
 # The page runs only the console's own files: no inline script or style, nothing from elsewhere
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; "
@@ -524,7 +536,8 @@ class ConsoleApp:
                   ("POST", "/api/tune"): self._api_tune,
                   ("POST", "/api/voice"): self._api_voice,
                   ("POST", "/api/control"): self._api_control,
-                  ("POST", "/api/raid"): self._api_raid_action}
+                  ("POST", "/api/raid"): self._api_raid_action,
+                  ("POST", "/api/say"): self._api_say}
         route = routes.get((req.method, req.path))
         if route is None:
             known = {path for _, path in routes}
@@ -756,6 +769,60 @@ class ConsoleApp:
         message = str(reply.get("message") or "done")[:300]
         self.broadcast("raid", {"action": args["action"], "message": message})
         return json_response(200, {"ok": True, "message": message})
+
+    # -- the reply box -------------------------------------------------------------------------
+
+    def _say_problem(self) -> tuple[int, str] | None:
+        """Why his line cannot be sent now, in the reply box's words; None: on to the mind. The
+        raid actions' checks, then the game as the console reads it: a mind or bridge that is
+        down, or a game state nobody can read, is named as what it is, never as his absence."""
+        if not self.controls.enabled:
+            return 403, SAY_OFF
+        if self.controls.busy is not None:
+            service, action = self.controls.busy
+            return 409, f"A {action} of the {service} is under way, so nothing can be sent."
+        if self.view.state != "running":
+            return 409, ("The mind's state is unclear, so nothing can be sent."
+                         if self.view.state == "unknown"
+                         else f"The mind is {self.view.state}, so nothing can be sent.")
+        if self.link is None:
+            return 409, SAY_NO_LINK
+        if self.bridge is False:
+            return 409, BRIDGE_DOWN
+        if self.game.state == status.NOT_IN_GAME:
+            return 409, NOT_IN_GAME
+        if self.game.state != status.IN_GAME:
+            return 409, f"The console can't tell whether you're in game ({self.game.reason})."
+        return None
+
+    async def _api_say(self, req: Request):
+        try:
+            args = endpoint.say_args(req.json())  # checked and cleaned exactly as the mind will
+        except endpoint.BadRequest as e:
+            return json_response(400, {"ok": False, "error": str(e)})
+        problem = self._say_problem()
+        if problem is not None:
+            return json_response(problem[0], {"ok": False, "error": problem[1]})
+        try:
+            # The cleaned text is at most 255 bytes, so the request stays under the endpoint's
+            # MAX_LINE however much of it is escaped
+            reply = await asyncio.to_thread(self.link.call, self._mind_pids(), "say", args,
+                                            timeout=SAY_S)
+        except LinkError as e:
+            words = str(e)
+            if e.unanswered:  # it may have reached the mind, and the game
+                return json_response(409, {"ok": False, "error": words[:1].upper() + words[1:]
+                                           + ". Check WoW before sending it again."})
+            return json_response(409, {"ok": False, "error": f"Nothing was sent: {words}."})
+        if reply.get("ok") is not True:
+            error = str(reply.get("error") or "")
+            if error.startswith(OLD_OPS):
+                error = SAY_OLD_MIND
+            return json_response(409, {"ok": False,
+                                       "error": error[:300] or "The mind refused it."})
+        # Nothing is broadcast: the line comes back through the feed when the game reports it
+        return json_response(200, {"ok": True,
+                                   "message": str(reply.get("message") or "sent")[:300]})
 
     async def _api_feed(self, req: Request):
         after = digits(req.query.get("after", ["0"])[0], 18)  # an SQLite integer

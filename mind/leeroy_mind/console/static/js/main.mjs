@@ -1,10 +1,11 @@
-import { $, api, arr, emit, hashKey, on, own, remember, setKey } from "./core.mjs";
+import { $, api, arr, emit, hashKey, keyGen, on, own, refused, remember, setKey } from "./core.mjs";
 import { S, adoptVoice, applyVoice } from "./state.mjs";
 import { forgetFaces } from "./faces.mjs";
 import { renderStrip } from "./strip.mjs";
 import { renderFeed } from "./comms/feedview.mjs";
 import { renderLeft } from "./comms/leftview.mjs";
-import { renderRight } from "./comms/rightview.mjs";
+import { refreshFaces, renderRight } from "./comms/rightview.mjs";
+import { renderComposer } from "./comms/composer.mjs";
 import "./raid.mjs";
 import "./guild.mjs";
 import "./personas.mjs";
@@ -56,17 +57,20 @@ function connect() {
   retry = null;
   var ctl = new AbortController();
   es = ctl;
+  // A probe still on its way when a new key is pasted answers for the old key: takeKey has
+  // connected again with the new one, so the probe's 403 or failure is let go
   function again() {
     if (es !== ctl) { return; }
     es = null;
     lost("The console is not reachable: retrying.");
+    var gen = keyGen();
     api("/api/state").then(function (r) {
-      if (r.status === 403) { emit("key-lost"); } else { retry = setTimeout(connect, 2000); }
-    }, function () { retry = setTimeout(connect, 2000); });
+      if (gen === keyGen() && !refused(r)) { retry = setTimeout(connect, 2000); }
+    }, function () { if (gen === keyGen()) { retry = setTimeout(connect, 2000); } });
   }
   api("/api/events", { headers: { "Accept": "text/event-stream" }, signal: ctl.signal })
     .then(function (r) {
-      if (r.status === 403) { if (es === ctl) { es = null; emit("key-lost"); } return null; }
+      if (r.status === 403) { if (es === ctl) { es = null; refused(r); } return null; }
       if (!r.ok || !r.body) { throw new Error("HTTP " + r.status); }
       lost("");
       var reader = r.body.getReader(), text = new TextDecoder(), buf = "";
@@ -102,6 +106,7 @@ function takeKey(key) {
   clearTimeout(retry);
   lost("");
   connect();
+  refreshFaces();  // the room's faces and the card's photo, with the new key
   showTab(S.tab);  // the open tab asks again at once
 }
 
@@ -109,6 +114,7 @@ renderStrip();
 renderLeft();
 renderFeed(false);
 renderRight();
+renderComposer();
 showTab((location.hash || "#comms").slice(1));
 window.addEventListener("hashchange", function () {
   var key = hashKey(location.hash);

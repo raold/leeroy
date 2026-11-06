@@ -1,4 +1,4 @@
-import { $, api, arr, clear, el, emit, hhmm, obj, on, post, setText, str } from "./core.mjs";
+import { $, api, arr, clear, el, emit, hhmm, obj, on, post, refused, setText, str } from "./core.mjs";
 import { S } from "./state.mjs";
 import { gameWords, mindClass, setPill } from "./strip.mjs";
 import { registerTab } from "./tabs.mjs";
@@ -103,7 +103,7 @@ function pollHealth() {
   if (healthBusy || S.tab !== "mind") { return; }
   healthBusy = true;
   api("/api/health").then(function (r) {
-    if (r.status === 403) { emit("key-lost"); return null; }
+    if (refused(r)) { return null; }
     return r.json();
   }).then(function (h) { if (h) { renderHealth(h); } }, function () { /* the strip says it */ })
     .then(function () { healthBusy = false; });

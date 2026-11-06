@@ -73,7 +73,15 @@
         <h3 id="feed-title"># guild</h3>
         <p id="feed-hint" class="hint"></p>
         <div id="feed" class="feed" role="log" aria-labelledby="feed-title"></div>
-        <div id="composer" tabindex="-1"></div>
+        <div id="composer" class="composer" tabindex="-1">
+          <label for="say-text" class="to">to <b id="say-to">#guild</b> as you</label>
+          <div class="say">
+            <input id="say-text" type="text" autocomplete="off" aria-describedby="say-why" disabled>
+            <span id="say-count" class="mono count" title="UTF-8 bytes: a WoW chat line holds 255">0 / 255</span>
+            <button id="say-send" type="button" class="btn primary" disabled>Send</button>
+          </div>
+          <p id="say-why" class="why" role="status"></p>
+        </div>
       </section>
       <aside id="comms-right" class="panel right" aria-labelledby="here-title">
         <div class="here">

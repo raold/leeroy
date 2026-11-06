@@ -15,6 +15,7 @@ from . import netinfo
 STATUS_S = 3.0
 STOP_S = 5.0
 RAID_S = endpoint.RAID_S + 5.0
+SAY_S = endpoint.SAY_S + 5.0  # the mind answers a line within its own SAY_S
 
 
 class LinkError(Exception):

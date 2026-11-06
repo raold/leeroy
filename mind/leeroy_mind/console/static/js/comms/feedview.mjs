@@ -33,7 +33,8 @@ export function openView(view) {
   renderFeed(false);
 }
 
-function title(view) {
+// A view's title: "# guild", "# officer", "# party / raid", or the whisper partner's name
+export function viewTitle(view) {
   if (TITLES[view]) { return TITLES[view]; }
   var guid = Number(view.slice(2)), t = FEED.threads().filter(function (x) { return x.guid === guid; })[0];
   return t ? t.name : name(guid);
@@ -87,18 +88,44 @@ function keep(box, at) {
   }
 }
 
+// The rows drawn, by line id: a row stays in the page while its line is the same object (a line
+// the console sent again replaces it) and its day has not turned, so a redraw on each new line
+// never takes out a face he is clicking or the one that has the focus
+var ROWS = new Map();  // id -> {line, day, node}
+var EMPTY = el("div", "empty muted", "Nothing said here yet.");
+
+// The row (by id) that holds the focus, if any: a row drawn again gets it back
+function focusedRow(box) {
+  var a = document.activeElement, r = a && a !== box && box.contains(a) ? a.closest(".msg") : null;
+  return r ? r.dataset.id : "";
+}
+
 // Redraw the open view. keepPlace: new lines leave the reader where he is unless he is at the
 // bottom, where they keep him
 export function renderFeed(keepPlace) {
   var box = $("feed");
   var bottom = box.scrollHeight - box.scrollTop - box.clientHeight < STICK_PX;
   var at = keepPlace && !bottom ? place(box) : null;
-  $("feed-title").textContent = title(VIEW);
+  $("feed-title").textContent = viewTitle(VIEW);
   $("feed-hint").textContent = HINTS[VIEW.indexOf("w:") === 0 ? "whisper" : VIEW];
-  clear(box);
-  var shown = FEED.lines(VIEW);
-  if (!shown.length) { box.appendChild(el("div", "empty muted", "Nothing said here yet.")); }
-  shown.forEach(function (l) { box.appendChild(row(l)); });
+  var day = new Date().toDateString(), had = focusedRow(box), rows = new Map(), nodes = [];
+  FEED.lines(VIEW).forEach(function (l) {
+    var r = ROWS.get(l.id);
+    if (!r || r.line !== l || r.day !== day) { r = { line: l, day: day, node: row(l) }; }
+    rows.set(l.id, r);
+    nodes.push(r.node);
+  });
+  ROWS = rows;
+  if (!nodes.length) { nodes.push(EMPTY); }
+  // Out first, then the new rows in their places: a row kept is never moved, and the kept rows
+  // are already in id order
+  var keepSet = new Set(nodes);
+  Array.prototype.slice.call(box.children).forEach(function (c) { if (!keepSet.has(c)) { box.removeChild(c); } });
+  nodes.forEach(function (n, i) { if (box.children[i] !== n) { box.insertBefore(n, box.children[i] || null); } });
+  if (had && !box.contains(document.activeElement)) {
+    var f = box.querySelector('.msg[data-id="' + had + '"] [data-card]');
+    if (f) { f.focus({ preventScroll: true }); }
+  }
   if (at) { keep(box, at); } else { box.scrollTop = box.scrollHeight; }
   changed();
 }

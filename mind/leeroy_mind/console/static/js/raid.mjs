@@ -1,5 +1,5 @@
-import { $, api, arr, cell, clear, el, emit, emptyRow, num, obj, on, own, pad, plural, post, setText,
-         str } from "./core.mjs";
+import { $, api, arr, cell, clear, el, emit, emptyRow, num, obj, on, own, pad, plural, post, refused,
+         setText, str } from "./core.mjs";
 import { askConfirm } from "./mind.mjs";
 import { S, roomOf } from "./state.mjs";
 import { setPill } from "./strip.mjs";
@@ -231,7 +231,7 @@ function pollRaid() {
   if (raidBusy || S.tab !== "raid") { return; }
   raidBusy = true;
   api("/api/raid").then(function (r) {
-    if (r.status === 403) { emit("key-lost"); return null; }
+    if (refused(r)) { return null; }
     return r.json();
   }).then(function (j) { if (j) { renderRaid(j); } }, function () { /* the strip says it */ })
     .then(function () { raidBusy = false; });

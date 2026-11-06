@@ -1,4 +1,4 @@
-import { $, api, clear, el, emit, num, obj, on, own, post, str } from "../core.mjs";
+import { $, api, clear, el, emit, num, obj, on, own, post, refused, str } from "../core.mjs";
 import { S, hereRoom, isMuted, roomName } from "../state.mjs";
 import { face, faceButton, lightSpeakers } from "../faces.mjs";
 import { openMember } from "../personas.mjs";
@@ -52,14 +52,17 @@ function renderVoiceControls() {
   });
   $("mcard-mute").setAttribute("aria-pressed", String(isMuted(CARD.guid)));
 }
+// The card's photo, drawn again only for another member or name (CARD.face says which is shown)
+function drawFace(name) {
+  var faceKey = CARD.guid + "|" + name;
+  if (CARD.face === faceKey) { return; }
+  CARD.face = faceKey;
+  clear($("mcard-face"));
+  $("mcard-face").appendChild(face(CARD.guid, name, "card"));
+}
 // t: cardText's words; known: mind.db knows them (Profile has something to open)
 function drawCard(t, known) {
-  var faceKey = CARD.guid + "|" + t.name;
-  if (CARD.face !== faceKey) {
-    CARD.face = faceKey;
-    clear($("mcard-face"));
-    $("mcard-face").appendChild(face(CARD.guid, t.name, "card"));
-  }
+  drawFace(t.name);
   $("mcard-name").textContent = t.name;
   $("mcard-note").textContent = t.note;
   var facts = $("mcard-facts");
@@ -82,6 +85,7 @@ export function openCard(guid, known) {
   if (!(guid > 0) || (S.voice && guid === S.voice.human)) { return; }
   var seq = ++CARD.seq;
   CARD.guid = guid;
+  CARD.face = "";  // opened again: the photo is asked for again (a new one, or one where none was)
   CARD.name = str(known) || (S.voice && str(S.voice.names[guid])) || "#" + guid;
   $("mcard").hidden = false;
   drawCard({ name: CARD.name, note: "", facts: [] }, true);
@@ -90,7 +94,7 @@ export function openCard(guid, known) {
     if (seq === CARD.seq) { drawCard({ name: CARD.name, note: note, facts: [] }, true); }
   }
   api("/api/persona?guid=" + guid).then(function (r) {
-    if (r.status === 403) { emit("key-lost"); return null; }
+    if (refused(r)) { return null; }
     return r.json().then(function (j) { return { status: r.status, j: obj(j) }; },
                          function () { return { status: r.status, j: {} }; });
   }).then(function (x) {
@@ -122,9 +126,9 @@ function setMute(guid, muted) {
   renderVoiceControls();
   renderRooms();  // the tree strikes a muted member through
 }
-// The reply box (Task 12 builds it in #composer): its first control, else the box itself
+// The reply box (#composer, composer.mjs): its line while it takes one, else the box itself
 function focusComposer() {
-  var box = $("composer"), f = box.querySelector("textarea, input, button");
+  var box = $("composer"), f = box.querySelector("input:not(:disabled)");
   (f || box).focus();
 }
 
@@ -159,6 +163,16 @@ $("tab-comms").addEventListener("keydown", function (ev) {
 });
 
 export function renderRight() { renderFaces(); renderVoiceControls(); }
+// After a new key (main.mjs takeKey forgot the photos): the room's faces and the card's photo
+// are drawn again, so they are asked for with it
+export function refreshFaces() {
+  shownFaces = null;
+  renderFaces();
+  if (CARD.guid) {
+    CARD.face = "";
+    drawFace(CARD.name);
+  }
+}
 
 // -- the bus (S.voice is already up to date when a "voice" event comes) --------------------------
 

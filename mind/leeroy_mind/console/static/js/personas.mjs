@@ -1,5 +1,5 @@
-import { $, api, arr, cell, clear, el, emit, emptyRow, num, obj, on, own, plural, post, setText,
-         str } from "./core.mjs";
+import { $, api, arr, cell, clear, el, emit, emptyRow, num, obj, on, own, plural, post, refused,
+         setText, str } from "./core.mjs";
 import { face } from "./faces.mjs";
 import { S } from "./state.mjs";
 import { registerTab, showTab } from "./tabs.mjs";
@@ -112,7 +112,7 @@ function pollPersonas() {
   if (personasBusy || S.tab !== "personas") { return; }
   personasBusy = true;
   api("/api/personas").then(function (r) {
-    if (r.status === 403) { emit("key-lost"); return null; }
+    if (refused(r)) { return null; }
     return r.json().then(function (j) { return { status: r.status, j: j }; });
   }).then(function (x) {
     if (!x) { return; }
@@ -225,7 +225,7 @@ function pollMember() {
   if (!pick || S.tab !== "personas") { return; }
   var seq = ++pickSeq, guid = pick;
   api("/api/persona?guid=" + guid).then(function (r) {
-    if (r.status === 403) { emit("key-lost"); return null; }
+    if (refused(r)) { return null; }
     return r.json().then(function (j) { return { status: r.status, j: j }; });
   }).then(function (x) {
     if (!x || seq !== pickSeq || guid !== pick) { return; }
@@ -493,7 +493,7 @@ function pollTuning() {
   if (tuneBusy || S.tab !== "personas") { return; }
   tuneBusy = true;
   api("/api/tuning").then(function (r) {
-    if (r.status === 403) { emit("key-lost"); return null; }
+    if (refused(r)) { return null; }
     return r.json().then(function (j) { return { status: r.status, j: j }; });
   }).then(function (x) {
     if (!x) { return; }
