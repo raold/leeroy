@@ -74,6 +74,76 @@ def test_his_login_mid_render_kills_the_worker_tree_before_the_live_preload(h, t
     assert queued(h) == [(101, 1)] and not ctx.failures      # it waits for the next night
 
 
+def test_a_live_model_loaded_beside_the_worker_is_reloaded_whole_at_his_login(h, tmp_path):
+    # Final review C1: mod-ollama-chat loads Orion into the VRAM the worker leaves, part of it on
+    # the CPU; a preload at the same num_ctx would reuse that runner for his whole session
+    renderable_cast(h.store, 101)
+    pids, log = tmp_path / "pids.json", tmp_path / "requests.log"; seen = {}
+    class Admin(FakeAdmin):
+        async def preload(self, model, keep_alive, *, options=None):
+            got = json.loads(pids.read_text())
+            seen["alive"] = (pid_alive(got["pid"]), pid_alive(got["child"]))
+            await super().preload(model, keep_alive, options=options)
+    admin = Admin([h.EMB]); ctx = h.ctx(admin=admin)
+    run_begin(h.store, ctx.night, *ctx.window, now=ctx.window[1])
+    cmd, env = fake_command(tmp_path, FAKE_SELFIE_HANG="1", FAKE_SELFIE_CHILD="1",
+                            FAKE_SELFIE_PIDS=str(pids), FAKE_SELFIE_LOG=str(log))
+    class Beside(SelfieWorker):
+        async def render(self, req, *, rid=None):
+            if h.LIVE not in admin.loaded:
+                admin.loaded.append(h.LIVE)       # a chat request, while the worker holds its VRAM
+            return await super().render(req, rid=rid)
+    runner = NightRunner([Stage(STAGE, make_stage(SELFIE_CFG, worker=lambda: Beside(cmd, env=env)),
+                                "image")], lambda n, w: ctx)
+    async def go():
+        task = asyncio.create_task(runner.run(ctx.night, ctx.window))
+        await until(lambda: log.exists() and "101:1" in log.read_text())   # mid-render
+        async def preempt():
+            task.cancel(); await asyncio.wait({task})
+        ctx.arbiter.set_preempt(preempt)
+        ctx.arbiter.hold("human")
+        await ctx.arbiter.hand_over()
+        assert task.cancelled()
+    run(go())
+    assert admin.calls == [("unload", h.LIVE), ("preload", h.LIVE, -1)]   # dropped, then whole
+    assert seen["alive"] == (False, False)
+    assert queued(h) == [(101, 1)] and not ctx.failures
+
+
+def test_a_live_model_loaded_beside_the_worker_is_unloaded_when_the_stage_ends(h, tmp_path):
+    renderable_cast(h.store, 101, 102)
+    admin = FakeAdmin([h.EMB]); ctx = h.ctx(admin=admin)
+    run_begin(h.store, ctx.night, *ctx.window, now=ctx.window[1])
+    cmd, env = fake_command(tmp_path)
+    class Beside(SelfieWorker):
+        async def render(self, req, *, rid=None):
+            if rid == "101:1:2:0":
+                admin.loaded.append(h.LIVE)       # loaded mid-stage; no render runs out of memory
+            return await super().render(req, rid=rid)
+    run(NightRunner([Stage(STAGE, make_stage(SELFIE_CFG, worker=lambda: Beside(cmd, env=env)),
+                           "image")], lambda n, w: ctx).run(ctx.night, ctx.window))
+    assert all(ready_set(h.store, g, 1) for g in (101, 102)) and not ctx.failures
+    assert admin.calls == [("unload", h.LIVE)] and admin.loaded == [h.EMB]
+    assert run_get(h.store, ctx.night).foreign_loads == 1
+
+
+def test_a_night_with_nothing_to_render_leaves_the_gpu_and_the_hand_over_alone(h, tmp_path):
+    from leeroy_mind.selfies.stage import wants_gpu
+    admin = FakeAdmin([h.LIVE, h.EMB]); ctx = h.ctx(admin=admin)   # no member has looks
+    run_begin(h.store, ctx.night, *ctx.window, now=ctx.window[1])
+    log = tmp_path / "requests.log"
+    stage = make_stage(SELFIE_CFG, worker=fake_worker(tmp_path, FAKE_SELFIE_LOG=str(log)))
+    run(NightRunner([Stage(STAGE, stage, "image", wants_gpu)],
+                    lambda n, w: ctx).run(ctx.night, ctx.window))
+    assert admin.calls == [] and not log.exists() and ctx.done(STAGE, "queue")
+    ctx.arbiter.hold("human")
+    run(ctx.arbiter.hand_over())
+    assert admin.calls == [("preload", h.LIVE, -1)]            # the whole model kept, as before
+    renderable_cast(h.store, 101)
+    ctx2 = h.ctx(admin=FakeAdmin([h.LIVE, h.EMB]), night="2026-10-30")
+    assert wants_gpu(ctx2) is True and queued(h) == [(101, 1)]
+
+
 def test_an_oom_makes_room_and_retries_once_and_contention_ends_the_stage(h, tmp_path, caplog):
     renderable_cast(h.store, 101, 102, 103)
     admin = FakeAdmin([h.EMB, h.LIVE])            # Orion came back while the stage ran

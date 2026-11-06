@@ -13,6 +13,7 @@ from conftest import run
 from leeroy_mind.selfies.config import SelfieCfg
 from leeroy_mind.selfies.files import candidate, chosen, history, staging_dir
 from leeroy_mind.selfies.service import SelfieService
+from leeroy_mind.selfies.stage import wants_gpu as stage_wants_gpu
 from leeroy_mind.selfies.store import pick
 
 from .fakes import JPEG, mind_app, ready, tagged_jpeg
@@ -32,6 +33,8 @@ def test_attach_adds_both_stages_only_when_enabled(tmp_path, enabled):
     if enabled:
         assert names[names.index("enrich") + 1] == "photo" and stages["photo"].model == "reflection"
         assert names[names.index("regress") + 1] == "selfies" and stages["selfies"].model == "image"
+        assert stages["selfies"].wants_gpu is stage_wants_gpu   # asked before make_room
+        assert stages["photo"].wants_gpu is None
     else:
         assert "photo" not in stages and "selfies" not in stages
     assert app.selfies is not None

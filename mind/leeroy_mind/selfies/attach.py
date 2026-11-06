@@ -28,7 +28,8 @@ def attach_selfies(app) -> SelfieService:
     if cfg.enabled:
         runner = app.night_runner
         runner.add_stage(kind.STAGE, kind.stage_photo, after="enrich", model="reflection")
-        runner.add_stage(stage.STAGE, stage.make_stage(cfg), after="regress", model="image")
+        runner.add_stage(stage.STAGE, stage.make_stage(cfg), after="regress", model="image",
+                         wants_gpu=stage.wants_gpu)
     try:
         service.sync_all()
     except Exception as e:  # a repair that fails never keeps the mind from starting

@@ -818,6 +818,62 @@ def test_make_room_fails_when_the_models_are_reconfigured_meanwhile(h):
     assert set(arb._managed) == {norm(h.LIVE), "next-reflection:latest"}           # pruned once confirmed
 
 
+# -- after an image stage: a live model that loaded beside the worker is split -----------------
+
+def test_after_make_room_the_hand_over_reloads_the_live_model_whole_once(h):
+    # Final review C1: with the worker's ~10.5 GiB held, a mod-ollama-chat request loads Orion
+    # into what is left, part of it on the CPU, and Ollama reuses that runner for a preload at
+    # the same num_ctx. So once the GPU was shared, the hand-over unloads the live model first
+    admin = FakeAdmin([h.LIVE, h.EMB]); arb = GpuArbiter(admin, h.settings)
+    async def go():
+        await arb.make_room()
+        admin.loaded.append(h.LIVE)                 # loaded beside the worker
+        await arb.acquire_live("human")
+        assert admin.calls == [("unload", h.LIVE), ("unload", h.LIVE), ("preload", h.LIVE, -1)]
+        await arb.release_live("human"); await arb.settled()
+        del admin.calls[:]
+        await arb.acquire_live("human")             # a relog: the whole model is kept
+        assert admin.calls == [("preload", h.LIVE, -1)]
+    run(go())
+
+
+def test_a_hand_over_with_no_image_stage_before_it_keeps_the_live_model(h):
+    admin = FakeAdmin([h.LIVE, h.REFL, h.EMB]); arb = GpuArbiter(admin, h.settings)
+    run(arb.acquire_live("human"))
+    assert admin.calls == [("unload", h.REFL), ("preload", h.LIVE, -1)]
+
+
+def test_the_live_model_unloaded_by_ensure_model_is_whole_again_and_kept(h):
+    admin = FakeAdmin([h.EMB]); arb = GpuArbiter(admin, h.settings)
+    async def go():
+        await arb.make_room()
+        admin.loaded.append(h.LIVE)                 # beside the worker
+        await arb.ensure_model(h.LIVE)              # a live stage keeps it: still split
+        admin.loaded.append(h.REFL)
+        await arb.acquire_live("human")
+        assert admin.calls == [("unload", h.LIVE), ("unload", h.REFL), ("preload", h.LIVE, -1)]
+        await arb.release_live("human"); await arb.settled()
+        await arb.make_room()
+        admin.loaded.append(h.LIVE)
+        await arb.ensure_model(h.REFL)              # the next reflection stage unloads it ...
+        admin.loaded += [h.REFL, h.LIVE]            # ... and it loads whole, as the 27B does
+        del admin.calls[:]
+        await arb.acquire_live("human")
+        assert admin.calls == [("unload", h.REFL), ("preload", h.LIVE, -1)]
+    run(go())
+
+
+def test_a_make_room_refused_by_a_lease_does_not_mark_the_gpu_shared(h):
+    admin = FakeAdmin([h.LIVE, h.EMB]); arb = GpuArbiter(admin, h.settings)
+    async def go():
+        arb.hold("voice")
+        with pytest.raises(gpu.LiveLeaseHeld):
+            await arb.make_room()
+        await arb.hand_over()
+        assert admin.calls == [("preload", h.LIVE, -1)]
+    run(go())
+
+
 def test_null_admin_loads_nothing_and_does_nothing(h):
     admin = NullAdmin(); arb = GpuArbiter(admin, h.settings)
     async def go():

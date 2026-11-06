@@ -5,7 +5,8 @@ each "4 more" he asked for.
 
 Units, in order: "queue", a first set queued for each such member (away ones included); then
 "<guid>:<set>" for each queued set, his "4 more" first, at most selfie_per_night a night counting
-the sets done tonight. A member who lost his looks or photo kind since his set was queued is
+the sets done tonight. The runner asks wants_gpu (which queues) before it makes room, so a night
+with nothing to render leaves the chat models loaded. A member who lost his looks or photo kind since his set was queued is
 skipped and his set stays queued. A set renders into its staging folder, which is renamed to the
 set's folder just before the one commit that marks it ready; a folder a crash left without its
 ready row is cleared before the set is rendered again (files.clear_stale).
@@ -295,6 +296,14 @@ async def _render(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
             tally["failed"] += 1
     log("selfies_done", night=ctx.night, **{k: tally[k] for k in
                                             ("ready", "refused", "failed", "skipped")})
+
+
+def wants_gpu(ctx: "NightContext") -> bool:
+    """The runner asks this before it makes room for the stage: tonight's first sets queued
+    (the "queue" unit), then whether any set is left to render. False leaves the chat models
+    where they are on a night with nothing to render."""
+    _queue(ctx)
+    return bool(_todo(ctx))
 
 
 def make_stage(cfg: SelfieCfg, *, worker: Callable[[], SelfieWorker] | None = None

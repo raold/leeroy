@@ -178,9 +178,70 @@ def test_an_image_stage_runs_with_no_chat_model_loaded_and_counts_one_loaded_mea
         admin.loaded.append(h.LIVE)                     # mod-ollama-chat, mid-render (Review Focus 2)
     run(NightRunner([Stage("reflect", think, "reflection"), Stage("selfies", render, "image")],
                     lambda n, w: ctx).run(ctx.night, ctx.window))
-    assert seen == [[h.EMB]] and admin.calls == [("unload", h.LIVE), ("unload", h.REFL)]
+    assert seen == [[h.EMB]]
     assert run_get(h.store, ctx.night).foreign_loads == 1               # counted ...
-    assert admin.loaded == [h.EMB, h.LIVE]                              # ... and left for the stage to deal with
+    # ... then unloaded once the stage has ended its worker: it loaded beside the worker, split
+    # onto the CPU, and reloads whole on its next request (final review C1)
+    assert admin.calls == [("unload", h.LIVE), ("unload", h.REFL), ("unload", h.LIVE)]
+    assert admin.loaded == [h.EMB]
+
+
+def test_a_lease_that_refuses_the_make_room_after_an_image_stage_is_left_to_the_hand_over(h):
+    admin = FakeAdmin([h.EMB]); ctx = h.ctx(admin=admin)
+    run_begin(h.store, ctx.night, *ctx.window, now=ctx.window[1])
+    ran = []
+    async def render(c):
+        admin.loaded.append(h.LIVE)                 # beside the worker
+        c.arbiter.hold("human")                     # his login, whose preempt has not landed yet
+    async def quiet(c): ran.append("quiet")
+    run(NightRunner([Stage("selfies", render, "image"), Stage("quiet", quiet, None)],
+                    lambda n, w: ctx).run(ctx.night, ctx.window))
+    assert ran == ["quiet"] and run_get(h.store, ctx.night).error is None
+    assert admin.calls == [] and admin.loaded == [h.EMB, h.LIVE]
+    run(ctx.arbiter.hand_over())                    # it reloads the split model whole
+    assert admin.calls == [("unload", h.LIVE), ("preload", h.LIVE, -1)]
+
+
+def test_a_model_none_stage_after_an_image_stage_counts_no_foreign_load(h):
+    # Sunday's eval: its own ensure_model calls leave the reflection model loaded; the worker is
+    # gone by then, so nothing is foreign to an image stage any more (final review minor 5)
+    admin = FakeAdmin([h.EMB]); ctx = h.ctx(admin=admin)
+    run_begin(h.store, ctx.night, *ctx.window, now=ctx.window[1])
+    async def render(c): pass
+    async def evaluate(c):
+        await c.arbiter.ensure_model(h.REFL)
+        admin.loaded.append(h.REFL)
+    run(NightRunner([Stage("selfies", render, "image"), Stage("eval", evaluate, None)],
+                    lambda n, w: ctx).run(ctx.night, ctx.window))
+    assert run_get(h.store, ctx.night).foreign_loads == 0
+
+
+def test_an_image_stage_with_nothing_to_render_takes_no_gpu(h):
+    # final review minor 6: wants_gpu is asked before make_room; with no work the stage still
+    # runs (its record and its log), like a stage that needs no model
+    admin = FakeAdmin([h.LIVE, h.REFL, h.EMB]); ctx = h.ctx(admin=admin)
+    run_begin(h.store, ctx.night, *ctx.window, now=ctx.window[1])
+    asked, ran = [], []
+    def wants(c):
+        asked.append(sorted(admin.loaded))
+        return False
+    async def render(c): ran.append("render")
+    run(NightRunner([Stage("forget", render, "reflection"),
+                     Stage("selfies", render, "image", wants)],
+                    lambda n, w: ctx).run(ctx.night, ctx.window))
+    assert asked == [sorted([h.REFL, h.EMB])] and ran == ["render", "render"]
+    assert admin.calls == [("unload", h.LIVE)]                          # the reflection stage's own
+    assert stage_row(h, ctx.night, "selfies") is not None
+    admin.loaded.append(h.LIVE)                     # mod-ollama-chat, with no worker beside it
+    ctx.arbiter.hold("human")
+    run(ctx.arbiter.hand_over())                    # as before any image work: the whole model is kept
+    assert admin.calls[1:] == [("unload", h.REFL), ("preload", h.LIVE, -1)]
+    with pytest.raises(ValueError, match="twice"):
+        NightRunner([Stage("a", render, None)], lambda n, w: ctx).add_stage(
+            "a", render, after="a", model="image", wants_gpu=wants)
+    runner = NightRunner([Stage("a", render, None)], lambda n, w: ctx)
+    runner.add_stage("b", render, after="a", model="image", wants_gpu=wants)
+    assert runner.stages[1].wants_gpu is wants and runner.stages[0].wants_gpu is None
 
 
 def test_an_image_stage_refused_by_a_live_lease_stops_without_failing_the_night(h, caplog):
@@ -412,7 +473,9 @@ def test_the_runner_takes_image_stages_and_refuses_unknown_models(h):
                          lambda n, w: ctx)
     runner.add_stage("e", nothing, after="d", model="image")
     run(runner.run(ctx.night, ctx.window))
-    assert asked == ["room", h.REFL, "room"] and admin.calls == [("unload", h.LIVE)]
+    # each image stage makes room before it and once more after it (final review C1)
+    assert asked == ["room", "room", "room", "room", h.REFL, "room", "room"]
+    assert admin.calls == [("unload", h.LIVE)]
     for bad in ("embedding", "images", "Image"):
         with pytest.raises(ValueError, match="unknown model"):
             NightRunner([Stage("a", nothing, bad)], lambda n, w: ctx)
