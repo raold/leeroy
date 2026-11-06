@@ -36,6 +36,18 @@ struct GuildAddGate
 // Only the configured human, in game, with mod-leeroy on and a guild cast. Everyone else reaches playerbots.
 bool GuildAddIntercepts(GuildAddGate const& gate);
 
+// The instance copy he stands in: its player cap (0 outside an instance) and whether it is a raid. The core never lets
+// more than the cap in; members already on their way when it fills are sent to their homebinds.
+struct GuildAddPlace
+{
+    std::uint32_t cap = 0;
+    bool raid = false;
+};
+// Empty when a group of size fits where he stands; otherwise the one line he is told, before anything moves.
+std::string GuildAddSizeRefusal(std::uint32_t size, GuildAddPlace const& place);
+// Empty when his group of members fits the copy he has just entered; otherwise why none of them is brought in.
+std::string GuildAddEntryRefusal(std::uint32_t members, GuildAddPlace const& place);
+
 // One cast member's state just before the pick. fence is the first reason the existing ownership fences (Realm,
 // training, offline raids, a body that is not a usable bot) give, empty when none holds the body.
 struct GuildAddBody
