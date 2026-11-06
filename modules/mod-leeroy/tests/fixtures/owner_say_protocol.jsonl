@@ -12,3 +12,7 @@
 {"name":"channel_not_string","valid":false,"error":"bad field: channel","msg":{"v":1,"type":"owner_say","id":"o1","ts":0,"channel":5,"text":"hello","to_guid":0}}
 {"name":"text_missing","valid":false,"error":"bad field: text","msg":{"v":1,"type":"owner_say","id":"o1","ts":0,"channel":"guild","to_guid":0}}
 {"name":"text_not_string","valid":false,"error":"bad field: text","msg":{"v":1,"type":"owner_say","id":"o1","ts":0,"channel":"guild","text":5,"to_guid":0}}
+{"name":"whisper_target_negative","valid":false,"error":"bad field: to_guid","msg":{"v":1,"type":"owner_say","id":"o1","ts":0,"channel":"whisper","text":"you there?","to_guid":-1101}}
+{"name":"whisper_target_float","valid":false,"error":"bad field: to_guid","msg":{"v":1,"type":"owner_say","id":"o1","ts":0,"channel":"whisper","text":"you there?","to_guid":1101.0}}
+{"name":"whisper_target_null","valid":false,"error":"bad field: to_guid","msg":{"v":1,"type":"owner_say","id":"o1","ts":0,"channel":"whisper","text":"you there?","to_guid":null}}
+{"name":"whisper_target_above_uint32","valid":false,"error":"bad field: to_guid","msg":{"v":1,"type":"owner_say","id":"o1","ts":0,"channel":"whisper","text":"you there?","to_guid":4294967296}}

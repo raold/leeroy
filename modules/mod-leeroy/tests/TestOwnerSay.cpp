@@ -84,7 +84,7 @@ LEEROY_TEST(OwnerSay_ParseFollowsTheFixture)
         }
     }
     CHECK_EQ(valid, std::size_t(5));
-    CHECK_EQ(invalid, std::size_t(9));
+    CHECK_EQ(invalid, std::size_t(13));
     CHECK_EQ(kOwnerSayType, std::string_view("owner_say"));
 }
 
@@ -102,7 +102,7 @@ LEEROY_TEST(OwnerSay_TextRules)
         if (verdict == "ok")
             CHECK(row.contains("sent"));
     }
-    CHECK_EQ(rows, std::size_t(15));
+    CHECK_EQ(rows, std::size_t(17));
 }
 
 LEEROY_TEST(OwnerSay_ChannelNeedsHisGuildOrGroup)
