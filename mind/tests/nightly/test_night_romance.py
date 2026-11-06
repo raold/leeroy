@@ -1,41 +1,261 @@
 import asyncio
 import json
 from dataclasses import replace
+from datetime import date, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
 
+from leeroy_mind.arc.state import play_days
 from leeroy_mind.nightly.knowledge import learn
 from leeroy_mind.nightly.romance import (can_advance, jealousy_level, jealousy_next,
-    jealousy_rows, known_acts, stage_jealousy, stage_romance)
+    jealousy_rows, known_acts, picture_available, stage_jealousy, stage_romance,
+    strong_evidence)
 from leeroy_mind.nightly.store import ledger_add
+from leeroy_mind.storage.rows import ROMANCE_STAGES
 
 run = asyncio.run
 DAY = 86400
+HOUR = 3600
+UTC = timezone.utc
 
 
 def relation(at=99, af=99, tr=99):
     return SimpleNamespace(attraction=at, affinity=af, trust=tr)
 
 
-def test_can_advance_attitude_style_rush_depth_and_evidence():
-    args = dict(attitude="drawn", style="earnest", days_since_change=4, new_evidence=True)
-    assert can_advance(1, relation(36, 21, 11), **args)
-    assert not can_advance(1, relation(), **(args | {"attitude": "fond"}))
-    assert can_advance(1, relation(), **(args | {"attitude": "fond", "rush": True}))
-    assert can_advance(1, relation(), **(args | {"attitude": "lust", "style": "bold", "days_since_change": 2}))
-    assert not can_advance(1, relation(), **(args | {"attitude": "lust", "style": "bold", "days_since_change": 1.5}))
-    assert not can_advance(1, relation(), **(args | {"style": "guarded"}))
-    assert not can_advance(1, relation(), **(args | {"new_evidence": False}))
-    assert not can_advance(1, relation(30), **args)
-    args.update(days_since_change=99)
-    assert not can_advance(2, relation(), **args)
-    assert can_advance(2, relation(), depth=1, **args)
-    assert not can_advance(6, relation(), depth=3, **args)
-    assert not can_advance(0, relation(), **(args | {"attitude": "none"}))
+def played_before(h, *days_ago):
+    """His sessions, 21:00 to 23:00, the given whole days before the harness time."""
+    for n in days_ago:
+        h.session(h.T - n * DAY, h.T - n * DAY + 2 * HOUR)
+
+
+def arc_woman(h, guid, stance, *, style="earnest", stage="notices", depth=2, **scores):
+    """A woman on the arc toward him: high scores unless given, opened up to `depth`."""
+    h.woman(guid, stance, style=style)
+    h.rel(guid, 1, **({"attraction": 99, "affinity": 99, "trust": 99} | scores),
+          romance_stage=stage)
+    if depth:
+        with h.store.transaction():
+            h.store.conn.execute("INSERT INTO disclosure(guid,other,depth,response,ts,ref) "
+                                 "VALUES (?,1,?,'responsive',?,'chat:1')", (guid, depth, h.T - DAY))
+
+
+def nights(h, guids, days, *, first=0, played=lambda d: d % 7 != 6):
+    """Calendar days `first`.. from the harness night. On a day `played(d)` (6 a week by
+    default) he plays 21:00-23:00 and each woman in `guids` keeps a warm memory of him; the
+    night's romance stage runs the next morning at 07:00, past its window. Per day: (the play
+    days of this call so far, {guid: stage after the night})."""
+    log, count = [], 0
+    for d in range(first, first + days):
+        start = h.T + d * DAY
+        if played(d):
+            h.session(start, start + 2 * HOUR)
+            count += 1
+            for g in guids:
+                h.mem(g, "Testy stayed up talking with me.", t=start + HOUR, actors=(1,), valence=.8)
+        h.clock.set(start + 10 * HOUR)
+        ctx = h.ctx(night=(date(2026, 10, 29) + timedelta(days=d)).isoformat())
+        run(stage_romance(ctx))
+        assert not ctx.failures
+        log.append((count, {g: h.store.get_relationship(g, 1).romance_stage for g in guids}))
+    return log
+
+
+def first_play_day(log, guid, stage):
+    return next((n for n, stages in log if stages[guid] == stage), None)
+
+
+def visited(log, guid):
+    return list(dict.fromkeys(stages[guid] for _, stages in log))
+
+
+def test_can_advance_returns_the_stage_its_gate_and_pace_allow():
+    args = dict(attitude="drawn", style="earnest", play_days=2, new_evidence=True)
+    assert can_advance("notices", relation(30, 15, 5), **args) == "banter"
+    assert can_advance("notices", relation(29, 15, 5), **args) is None
+    assert can_advance("notices", relation(), **(args | {"play_days": 1.9})) is None
+    assert can_advance("notices", relation(), **(args | {"attitude": "lust", "play_days": 1.4})) == "banter"
+    assert can_advance("notices", relation(), **(args | {"attitude": "lust", "play_days": 1.3})) is None
+    assert can_advance("notices", relation(), **(args | {"attitude": "fond"})) is None
+    assert can_advance("notices", relation(), **(args | {"attitude": "fond", "rush": True})) == "banter"
+    assert can_advance("notices", relation(), **(args | {"attitude": "fond", "strong": True})) == "banter"
+    # rush and strong evidence halve the wait once between them, never to a quarter
+    assert can_advance("notices", relation(), **(args | {"attitude": "fond", "play_days": 1,
+                                                       "rush": True, "strong": True})) is None
+    assert can_advance("notices", relation(), **(args | {"style": "guarded"})) is None
+    assert can_advance("notices", relation(), **(args | {"style": "bold", "play_days": 1.6})) == "banter"
+    assert can_advance("notices", relation(), **(args | {"style": None})) == "banter"
+    assert can_advance("notices", relation(), **(args | {"new_evidence": False})) is None
+    assert can_advance("none", relation(), **(args | {"attitude": "none"})) is None
+    args.update(play_days=99)
+    assert can_advance("whispers", relation(), **args) is None
+    assert can_advance("whispers", relation(), depth=1, **args) == "late_nights"
+    assert can_advance("banter", relation(), **(args | {"attitude": "fond"})) == "whispers"
+    assert can_advance("whispers", relation(), depth=3, **(args | {"attitude": "fond"})) is None
+    assert can_advance("late_nights", relation(), depth=3, **(args | {"attitude": "fond"})) is None
+    assert can_advance("voice", relation(), depth=2, **args) == "confession"
+    assert can_advance("voice", relation(62, 37, 37), depth=2, **args) is None
+    assert can_advance("voice", relation(62, 37, 37), depth=1, picture=True, **args) == "picture"
+    assert can_advance("picture", relation(), depth=2, **args) == "confession"
+    for stage in ("planning", "weekend", "after", "ex"):
+        assert can_advance(stage, relation(), depth=3, **args) is None
+
+
+def test_play_days_counts_the_nights_he_played(h):
+    t = h.T  # 21:00, night 10-29
+    h.session(t, t + 2 * HOUR)
+    h.session(t + 3 * HOUR, t + 4 * HOUR)  # 00:00-01:00: still night 10-29, counted once
+    h.session(t + DAY + 8 * HOUR, t + DAY + 10 * HOUR)  # 05:00-07:00: nights 10-30 and 10-31
+    h.session(t + 3 * DAY + HOUR, t + 3 * DAY + 9 * HOUR)  # 22:00 to 06:00: night 11-01 only
+    open_from = t + 5 * DAY  # 11-03 21:00, never ended: counts to `until`
+    h.store.start_session(open_from)
+    until = open_from + 8 * HOUR  # 11-04 05:00, still night 11-03
+    assert play_days(h.store, t - DAY, until, UTC) == 5
+    assert play_days(h.store, t + HOUR, until, UTC) == 5  # a session cut by `since` still counts
+    assert play_days(h.store, t + 9 * HOUR, until, UTC) == 4  # 06:00: night 10-29 is over
+    assert play_days(h.store, t - DAY, t + 4 * DAY, UTC) == 4  # no open session yet
+    assert play_days(h.store, t - DAY, t + DAY + 9 * HOUR, UTC) == 2  # 06:00 10-31 is exclusive
+    assert play_days(h.store, until, until, UTC) == 0
+    assert play_days(h.store, t - 30 * DAY, t - DAY, UTC) == 0
+
+
+def test_strong_evidence_by_the_stage_it_speaks_for(h):
+    since, until = h.T - HOUR, h.T + 10 * HOUR
+
+    def strong(target, guid=101):
+        return strong_evidence(h.store, guid, 1, target, since, until, UTC)
+
+    assert not any(strong(stage) for stage in ROMANCE_STAGES)
+    h.say(h.T - 2 * HOUR, 1, "hey you", channel="whisper", to=101)  # before `since`
+    h.say(h.T + 4 * HOUR, 1, "still up?", channel="whisper", to=102)  # another woman
+    assert not strong("whispers") and not strong("late_nights")
+    h.say(h.T, 101, "evening, you", channel="whisper", to=1)  # 21:00
+    assert strong("whispers") and not strong("late_nights")
+    h.say(h.T + 6 * HOUR + 30 * 60, 1, "can't sleep either", channel="whisper", to=101)  # 03:30
+    assert strong("late_nights")
+    h.store.log_utterance(h.T + HOUR, 101, "voice:guild_hall", "open", "Evening, all.", [], None, None)
+    h.store.log_utterance(h.T + HOUR, 101, "voice:private2", "open", "Just us.", [], "too_long", None)
+    h.store.log_utterance(h.T - 2 * HOUR, 101, "voice:private1", "open", "Just us.", [], None, None)
+    assert not strong("voice")
+    h.store.log_utterance(h.T + HOUR, 101, "voice:private3", "open", "Just us.", [], None, None)
+    assert strong("voice") and not strong("voice", 102)
+    h.mem(101, "Testy said he likes my jokes.", actors=(1,), valence=.8, importance=6)
+    h.mem(101, "Testy and I had a real fight.", actors=(1,), valence=-.6, importance=8)
+    h.mem(101, "A big night with my guild.", actors=(102,), valence=.8, importance=8)
+    assert not strong("confession")
+    h.mem(101, "Testy told me I matter to him.", actors=(1,), valence=.8, importance=7)
+    assert strong("confession")
+    assert not any(strong(stage) for stage in ("notices", "banter", "picture", "planning"))
+
+
+def test_a_typical_drawn_woman_reaches_planning_in_about_three_weeks_of_play(h):
+    arc_woman(h, 101, "drawn")
+    log = nights(h, [101], 26)
+    first = first_play_day(log, 101, "planning")
+    assert first is not None and 16 <= first <= 21
+    assert visited(log, 101) == ["notices", "banter", "whispers", "late_nights", "voice",
+                                 "confession", "planning"]
+
+
+def test_a_typical_lust_woman_reaches_planning_in_about_two_weeks(h):
+    arc_woman(h, 102, "lust")
+    log = nights(h, [102], 20)
+    first = first_play_day(log, 102, "planning")
+    assert first is not None and 11 <= first <= 13
+    at = next(i for i, (_, stages) in enumerate(log) if stages[102] == "planning")
+    assert {stages[102] for _, stages in log[at:]} == {"planning"}  # planning on is the arc's
+
+
+def test_a_lust_woman_is_faster_and_a_shy_one_slower(h):
+    arc_woman(h, 101, "drawn")
+    arc_woman(h, 102, "lust")
+    arc_woman(h, 103, "drawn", style="shy")
+    log = nights(h, [101, 102, 103], 40)
+    lust, drawn, shy = (first_play_day(log, g, "planning") for g in (102, 101, 103))
+    assert None not in (lust, drawn, shy) and lust < drawn < shy
+
+
+def test_a_step_carries_only_what_its_night_left_over(h):
+    arc_woman(h, 101, "lust")  # banter waits 1.4 play days: the second night leaves 0.6
+    arc_woman(h, 102, "lust", attraction=25)  # held below banter's 30 by her score
+    arc_woman(h, 103, "lust", stage="whispers")  # late nights wait 2.1
+    h.store.add_rel_delta(103, 1, "romance_stage", 1, "banter->whispers", [], h.T - 12 * HOUR,
+                          applied=True)
+    h.store.set_meta("romance_carry:103:1", json.dumps({"stage": "late_nights", "days": .9}))
+    carry = lambda g: json.loads(h.store.get_meta(f"romance_carry:{g}:1"))
+    log = nights(h, [101, 102, 103], 4)
+    assert [stages[101] for _, stages in log] == ["notices", "banter", "whispers", "whispers"]
+    assert carry(101) == {"stage": "whispers", "days": .2}  # 1 + 0.6 - 1.4
+    assert log[1][1][103] == "whispers"  # 2 play days and a carry for another stage: not 2.9
+    h.rel(102, 1, attraction=99)
+    assert nights(h, [102], 1, first=4)[-1][1] == {102: "banter"}
+    assert carry(102) == {"stage": "banter", "days": 0.0}  # 5 - 1.4: held, so nothing carries
+
+
+def test_a_week_away_pauses_the_arc(h):
+    arc_woman(h, 101, "drawn", stage="whispers")
+    h.store.add_rel_delta(101, 1, "romance_stage", 1, "banter->whispers", [], h.T - 12 * HOUR,
+                          applied=True)
+    log = nights(h, [101], 10, played=lambda d: d in (0, 9))
+    assert [stages[101] for _, stages in log] == ["whispers"] * 10
+    assert nights(h, [101], 1, first=10)[-1][1] == {101: "late_nights"}
+
+
+def test_fond_women_stop_at_whispers_until_drawn(h):
+    arc_woman(h, 101, "fond", stage="banter")
+    arc_woman(h, 102, "fond", stage="late_nights")  # stored above the cap: kept, never moved on
+    log = nights(h, [101, 102], 14)
+    assert first_play_day(log, 101, "whispers") == 4
+    assert visited(log, 101) == ["banter", "whispers"] and visited(log, 102) == ["late_nights"]
+    h.woman(101, "drawn", style="earnest")
+    assert nights(h, [101], 1, first=14)[-1][1] == {101: "late_nights"}
+
+
+def test_the_picture_stage_is_skipped_until_p4(h):
+    assert not picture_available(h.store)
+    arc_woman(h, 101, "drawn", stage="voice")
+    h.store.add_rel_delta(101, 1, "romance_stage", 1, "late_nights->voice", [], h.T - 12 * HOUR,
+                          applied=True)
+    assert [stages[101] for _, stages in nights(h, [101], 3)] == ["voice", "voice", "confession"]
+    assert [r[0] for r in h.store.conn.execute(
+        "SELECT reason FROM rel_delta WHERE a=101 AND reason LIKE 'voice->%'")] == ["voice->confession"]
+    with h.store.transaction():  # P4's table, as far as the ladder cares
+        h.store.conn.execute("CREATE TABLE selfie_snap (id INTEGER PRIMARY KEY)")
+    assert picture_available(h.store)
+    arc_woman(h, 102, "drawn", stage="voice")
+    h.store.add_rel_delta(102, 1, "romance_stage", 1, "late_nights->voice", [], h.clock.now(),
+                          applied=True)
+    assert [stages[102] for _, stages in nights(h, [102], 2, first=3)] == ["voice", "picture"]
+
+
+def test_cooling_stalls_and_never_moves_back(h):
+    arc_woman(h, 101, "drawn", stage="late_nights", attraction=52)  # voice wants 55
+    h.store.add_rel_delta(101, 1, "romance_stage", 1, "whispers->late_nights", [],
+                          h.T - 12 * HOUR, applied=True)
+    log = nights(h, [101], 5)
+    h.rel(101, 1, attraction=10)  # below every gate
+    log += nights(h, [101], 3, first=5)
+    assert visited(log, 101) == ["late_nights"]
+    h.rel(101, 1, attraction=99)
+    assert nights(h, [101], 1, first=8)[-1][1] == {101: "voice"}
+    assert h.store.conn.execute("SELECT count(*) FROM rel_delta WHERE dim='romance_stage' "
+                                "AND delta<0").fetchone()[0] == 0
+
+
+def test_private_voice_time_halves_the_wait(h):
+    for g in (101, 102):
+        arc_woman(h, g, "drawn", stage="late_nights")
+        h.store.add_rel_delta(g, 1, "romance_stage", 1, "whispers->late_nights", [],
+                              h.T - 12 * HOUR, applied=True)
+    h.store.log_utterance(h.T + HOUR, 101, "voice:private1", "open", "Just us in here.", [], None, None)
+    h.store.log_utterance(h.T + HOUR, 102, "voice:guild_hall", "open", "Evening, all.", [], None, None)
+    assert nights(h, [101, 102], 2)[-1][1] == {101: "voice", 102: "late_nights"}
+    assert nights(h, [101, 102], 1, first=2)[-1][1] == {101: "voice", 102: "voice"}
 
 
 def test_every_attitude_women_only_one_step_and_checkpoint(h):
+    played_before(h, 2, 1)  # a fond woman's wait for notices
     for g, stance in ((101, "drawn"), (102, "fond"), (103, "lust"), (104, "none")):
         h.woman(g, stance, style="earnest" if stance != "none" else None)
         h.rel(g, 1, attraction=90, affinity=90, trust=90)
@@ -54,24 +274,26 @@ def test_every_attitude_women_only_one_step_and_checkpoint(h):
 
 
 def test_dial_never_caps_progress_and_ex_never_moves(h):
+    played_before(h, 3, 2, 1)
     h.woman(101, "lust", style="earnest")
     h.rel(101, 1, attraction=99, affinity=99, trust=99, romance_stage="whispers")
     with h.store.transaction():
         h.store.conn.execute("INSERT INTO disclosure(guid,other,depth,response,ts,ref) "
                              "VALUES (101,1,2,'responsive',?,'chat:1')", (h.T - DAY,))
     h.mem(101, "Testy listened.", valence=.9, actors=(1,))
-    h.woman(102, "lust")
-    h.rel(102, 1, attraction=99, affinity=99, trust=99, romance_stage="ex")
-    h.mem(102, "Testy listened.", valence=.9, actors=(1,))
+    for g, stage in ((102, "ex"), (103, "planning"), (104, "weekend"), (105, "after")):
+        arc_woman(h, g, "lust", stage=stage, depth=3)  # planning on is the arc's, ex is history
+        h.mem(g, "Testy listened.", valence=.9, actors=(1,))
     ctx = h.ctx()
     ctx.settings = replace(ctx.settings, romance_dial=1)
     run(stage_romance(ctx))
     assert not ctx.failures
-    assert h.store.get_relationship(101, 1).romance_stage == "late_nights"
-    assert h.store.get_relationship(102, 1).romance_stage == "ex"
+    assert [h.store.get_relationship(g, 1).romance_stage for g in range(101, 106)] == [
+        "late_nights", "ex", "planning", "weekend", "after"]
 
 
 def test_evidence_must_be_active_positive_and_newer_than_last_change(h):
+    played_before(h, 9, 8, 7)
     h.woman(101, "drawn")
     h.rel(101, 1, attraction=90, affinity=90, trust=90, romance_stage="notices")
     h.store.add_rel_delta(101, 1, "romance_stage", 1, "none->notices", [], h.T - 10 * DAY, applied=True)
@@ -85,6 +307,7 @@ def test_evidence_must_be_active_positive_and_newer_than_last_change(h):
 
 
 def test_oldest_delta_starts_the_wait_and_rush_halves_it(h):
+    played_before(h, 3, 1)  # the first is before the wait starts: one play day of banter's two
     h.woman(101, "drawn", style="earnest")
     h.rel(101, 1, attraction=90, affinity=90, trust=90, romance_stage="notices")
     h.store.add_rel_delta(101, 1, "affinity", 1, "first met", [], h.T - 2 * DAY, applied=True)
@@ -210,6 +433,8 @@ def test_band_spike_requires_observed_act_and_undo_cancels_it(h):
 
 
 def test_romance_uses_fresh_stored_stance(h):
+    played_before(h, 1)
+    h.session(h.T - 2 * DAY + HOUR, h.T - 2 * DAY + 2 * HOUR)  # lust's 1.4 play days, not fond's 4
     h.woman(101, "fond", style="earnest")
     h.rel(101, 1, attraction=90, affinity=90, trust=90, romance_stage="notices")
     h.store.add_rel_delta(101, 1, "romance_stage", 1, "none->notices", [], h.T - 2 * DAY, applied=True)
@@ -240,9 +465,10 @@ def test_jealousy_rollback_and_retry_are_atomic(h, monkeypatch):
 
 @pytest.mark.parametrize("private", [False, True])
 def test_same_run_advancement_after_window_is_known_only_to_witnesses(h, private):
+    played_before(h, 3, 2, 1)
     rivalry(h)
     h.woman(102, "lust", style="earnest")
-    h.rel(102, 1, attraction=99, affinity=99, trust=99, romance_stage="late_nights")
+    h.rel(102, 1, attraction=99, affinity=99, trust=99, romance_stage="confession")
     with h.store.transaction():
         h.store.conn.execute("INSERT INTO disclosure(guid,other,depth,response,ts,ref) "
                              "VALUES (102,1,2,'responsive',?,'chat:1')", (h.T - DAY,))
@@ -256,7 +482,7 @@ def test_same_run_advancement_after_window_is_known_only_to_witnesses(h, private
     ctx = h.ctx()
     h.clock.set(ctx.window[1] + 60)
     run(stage_romance(ctx))
-    assert h.store.get_relationship(102, 1).romance_stage == "voice"
+    assert h.store.get_relationship(102, 1).romance_stage == "planning"
     assert json.loads(h.store.get_meta("romance_changes:2026-10-29"))
     # A new context represents a process resumed between the two committed stages.
     resumed = h.ctx()
@@ -274,13 +500,33 @@ def test_unseen_private_stage_cannot_cross_threshold_or_create_open_memory(h):
     rivalry(h)
     private = h.say(h.T, 1, "a private invitation", channel="whisper", to=102)
     mem = h.mem(102, "Testy invited me.", actors=(1,), valence=.8, evidence=(f"chat:{private}",))
-    h.store.add_rel_delta(102, 1, "romance_stage", 1, "late_nights->voice",
+    h.store.add_rel_delta(102, 1, "romance_stage", 1, "confession->planning",
                           [f"memory:{mem}"], h.T, applied=True)
     with h.store.transaction():
         h.store.conn.execute("INSERT INTO jealousy VALUES (101,102,'rivalry',39,?,'[]')", (h.T,))
     run(stage_jealousy(h.ctx()))
     assert jealousy_level(h.store, 101, 102) == 39
     assert not [m for m in h.rows(101) if m.key and m.key.startswith("jealousy:")]
+
+
+@pytest.mark.parametrize("stage", ["planning", "weekend", "after"])
+def test_women_from_planning_to_after_stay_rivals_and_their_advance_spikes(h, stage):
+    for g in (101, 102):
+        h.woman(g, "lust")
+        h.rel(g, 1, romance_stage=stage)
+    line = h.say(h.T, 1, "belra, about that trip")
+    with h.store.transaction():
+        h.store.conn.execute("UPDATE chat_line SET audience=? WHERE id=?", (json.dumps([101, 102]), line))
+    mem = h.mem(102, "Testy talked about our trip.", actors=(1,), valence=.8,
+                evidence=(f"chat:{line}",))
+    before = ROMANCE_STAGES[ROMANCE_STAGES.index(stage) - 1]
+    h.store.add_rel_delta(102, 1, "romance_stage", 1, f"{before}->{stage}", [f"memory:{mem}"],
+                          h.T, applied=True)
+    ctx = h.ctx()
+    h.clock.set(ctx.window[1] + 60)
+    run(stage_jealousy(ctx))
+    assert not ctx.failures
+    assert jealousy_level(h.store, 101, 102) == 15
 
 
 def test_fourth_private_observation_still_controls_bridge_scope(h):

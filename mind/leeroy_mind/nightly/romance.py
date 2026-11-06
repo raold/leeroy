@@ -1,57 +1,126 @@
 """Relationship stages and observed rivalry, advanced once per nightly unit.
 
-Stages describe the story, never restrict live dialogue. Jealousy reaches dialogue
-through memories whose privacy is derived from the observations they cite.
+Stages describe the story, never restrict live dialogue. A stage waits on the nights he
+played (arc.state.play_days), never on the calendar, so a week away pauses every arc; the
+gates and pace are arc.ladder's. This stage climbs from none to planning only: the arc moves
+planning on (weekend, after), and ex is history. Jealousy reaches dialogue through memories
+whose privacy is derived from the observations they cite.
 """
 import json
 import re
-from dataclasses import dataclass, replace
-from datetime import date
+from dataclasses import replace
+from datetime import date, datetime
 
+from leeroy_mind.arc import state as arc_state
+from leeroy_mind.arc.ladder import FOND_CAP, FULL_ARC, GATED, GATES, PACE_ATTITUDE, PACE_STYLE
 from leeroy_mind.nightly.attraction import RUSH_S, aimed_at, reflection_row
 from leeroy_mind.nightly.audience import audience_of
 from leeroy_mind.nightly.confide import depth_with
 from leeroy_mind.nightly.knowledge import could_have_seen, roots
 from leeroy_mind.personas.io import load_persona
-from leeroy_mind.tuning.effective import dials_of
 from leeroy_mind.storage.rows import ROMANCE_STAGES
+from leeroy_mind.talk.budget import DayPhase, day_phase
+from leeroy_mind.tuning.effective import dials_of
+from leeroy_mind.voice.rooms import PRIVATE
 
-LADDER = ROMANCE_STAGES[:7]
+LADDER = GATED
 DAY_S = 86400.0
-
-
-@dataclass(frozen=True)
-class Gate:
-    attraction: int
-    affinity: int
-    trust: int
-    min_days: float
-    depth: int
-
-
-GATES = {1: Gate(20, 10, 0, 1, 0), 2: Gate(35, 20, 10, 4, 0),
-         3: Gate(50, 35, 30, 7, 1), 4: Gate(60, 45, 45, 10, 2),
-         5: Gate(70, 55, 55, 14, 2), 6: Gate(80, 65, 65, 21, 3)}
-PACE_ATTITUDE = {"lust": .5, "drawn": 1.0, "fond": 2.0}
-PACE_STYLE = {"bold": .8, "theatrical": .8, "earnest": 1., "competitive": 1.,
-              "shy": 1.5, "guarded": 2.0}
 MODE_MULT = {"good_sport": .5, "sulker": 1.2, "grumbler": 1., "teaser": .8,
              "play_by_play": 1.}
 DECAY = .85
+# A woman from banter to after is in the running for him, a rival to every other one.
+_RIVAL_STAGES = ROMANCE_STAGES[ROMANCE_STAGES.index("banter"):ROMANCE_STAGES.index("after") + 1]
+# The old ladder's invitation and what follows it: an advance into one spikes a rival's jealousy.
+_INVITATION_STAGES = ROMANCE_STAGES[
+    ROMANCE_STAGES.index("planning"):ROMANCE_STAGES.index("after") + 1]
+_PRIVATE_VOICE = tuple(f"voice:{room}" for room in PRIVATE)
+_LATE = (DayPhase.LATE, DayPhase.DEAD)
 _RIVALRY = re.compile(r"\(rivalry, not hurt: chat:(\d+)\)")
 _BAND = re.compile(r"(fond|drawn|lust) -> (fond|drawn|lust):")
 _CHANGES = "romance_changes:"
+# Per woman and him, {"stage": the stage her last step entered, "days": what that step's
+# night left over, under 1}. A step that waited a whole night or more past its wait (her
+# scores, evidence or depth held her) carries nothing.
+_CARRY = "romance_carry:"
 
 
-def can_advance(stage: int, rel, *, attitude, style, days_since_change,
-                new_evidence, rush=False, depth=0) -> bool:
-    gate = GATES.get(stage + 1)
-    if stage < 0 or gate is None or attitude not in PACE_ATTITUDE or not new_evidence:
-        return False
-    wait = gate.min_days * PACE_ATTITUDE[attitude] * PACE_STYLE.get(style, 1.)
-    return (rel.attraction >= gate.attraction and rel.affinity >= gate.affinity
+def next_stage(stage: str, *, picture: bool) -> str | None:
+    """The gated stage after `stage`; None at planning or off the gated ladder. "picture" is
+    skipped while there are no pictures to send (picture_available)."""
+    if stage not in LADDER[:-1]:
+        return None
+    after = LADDER[LADDER.index(stage) + 1]
+    return LADDER[LADDER.index(after) + 1] if after == "picture" and not picture else after
+
+
+def pace_wait(stage: str, attitude: str, style: str | None, *, halved: bool = False) -> float:
+    """The play days entering `stage` takes her: its gate's, by her attitude and style, halved
+    once by a rush or by strong evidence."""
+    wait = GATES[stage].min_play_days * PACE_ATTITUDE[attitude] * PACE_STYLE.get(style, 1.0)
+    return round(wait * (.5 if halved else 1.0), 6)
+
+
+def can_advance(stage: str, rel, *, attitude: str, style: str | None, play_days: float,
+                new_evidence: bool, rush: bool = False, strong: bool = False, depth: int = 0,
+                picture: bool = False) -> str | None:
+    """The stage she enters tonight, or None. A fond woman stops at FOND_CAP. A cooling score
+    only fails the gate, so she stalls where she is and never steps back."""
+    if attitude not in PACE_ATTITUDE or not new_evidence:
+        return None
+    target = next_stage(stage, picture=picture)
+    if target is None or (attitude not in FULL_ARC
+                          and LADDER.index(stage) >= LADDER.index(FOND_CAP)):
+        return None
+    gate = GATES[target]
+    if (rel.attraction >= gate.attraction and rel.affinity >= gate.affinity
             and rel.trust >= gate.trust and depth >= gate.depth
-            and days_since_change >= wait * (.5 if rush else 1.))
+            and play_days >= pace_wait(target, attitude, style, halved=rush or strong)):
+        return target
+    return None
+
+
+def strong_evidence(store, guid: int, human: int, target: str, since: float, until: float,
+                    tz) -> bool:
+    """Whether what passed between them after `since` (up to `until`) speaks loudly for
+    `target`, which halves its wait: a whisper either way for whispers, one sent late at night
+    (DayPhase LATE or DEAD in `tz`) for late nights, a said line of hers in a private voice
+    room for voice (spec call 1: strong evidence, never required) and a warm memory of him of
+    importance 7 or more for the confession. No other stage has any."""
+    if target in ("whispers", "late_nights"):
+        stamps = [r[0] for r in store.conn.execute(
+            "SELECT ts FROM chat_line WHERE channel='whisper' AND ts>? AND ts<=? "
+            "AND ((from_guid=? AND to_guid=?) OR (from_guid=? AND to_guid=?))",
+            (since, until, guid, human, human, guid))]
+        if target == "whispers":
+            return bool(stamps)
+        return any(day_phase(datetime.fromtimestamp(t, tz)) in _LATE for t in stamps)
+    if target == "voice":
+        return store.conn.execute(
+            "SELECT 1 FROM utterance WHERE guid=? AND dropped IS NULL AND ts>? AND ts<=? "
+            f"AND channel IN ({','.join('?' * len(_PRIVATE_VOICE))}) LIMIT 1",
+            (guid, since, until, *_PRIVATE_VOICE)).fetchone() is not None
+    if target == "confession":
+        return store.conn.execute(
+            "SELECT 1 FROM memory m JOIN memory_actor a ON a.memory_id=m.id WHERE m.owner=? "
+            "AND a.guid=? AND m.status='active' AND m.valence>0 AND m.importance>=7 "
+            "AND m.t_event>? AND m.t_event<=? LIMIT 1",
+            (guid, human, since, until)).fetchone() is not None
+    return False
+
+
+def picture_available(store) -> bool:
+    """Whether she has pictures to send: P4's selfie_snap table exists."""
+    return store.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                              "AND name='selfie_snap'").fetchone() is not None
+
+
+def _carried(store, guid: int, human: int, stage: str) -> float:
+    """The part of a play night her last step did not need, while she still stands on the stage
+    it took her to. Play days are whole nights, so without it every wait would round up to a
+    whole night and lust's 0.7 (1.4, 2.1) would wait as long as drawn's 1.0 (2, 3)."""
+    raw = store.get_meta(f"{_CARRY}{guid}:{human}")
+    kept = json.loads(raw) if raw else {}
+    return float(kept["days"]) if kept.get("stage") == stage else 0.0
 
 
 async def stage_romance(ctx) -> None:
@@ -61,10 +130,11 @@ async def stage_romance(ctx) -> None:
 
     def write(store):
         changes = []
+        picture = picture_available(store)
         for guid, stance in ctx.attitudes(fresh=True).items():
             rel = store.get_relationship(guid, ctx.human)
             if rel.romance_stage not in LADDER:
-                continue  # includes the owner's ex state
+                continue  # weekend and after are the arc's; ex is history
             last = store.conn.execute(
                 "SELECT coalesce(max(CASE WHEN dim='romance_stage' THEN ts END), min(ts), 0) "
                 "FROM rel_delta WHERE a=? AND b=? AND ts<=?", (guid, ctx.human, now)).fetchone()[0]
@@ -75,18 +145,26 @@ async def stage_romance(ctx) -> None:
                 (guid, ctx.human, last, now)).fetchone()
             rush = store.conn.execute("SELECT rush_until FROM attraction_state WHERE guid=?", (guid,)).fetchone()
             rushing = bool(rush and ctx.window[0] <= rush[0] - RUSH_S < ctx.window[1])
-            stage = LADDER.index(rel.romance_stage)
-            if not can_advance(stage, rel, attitude=stance, style=ctx.persona(guid).romance.style,
-                               days_since_change=(now - last) / DAY_S,
-                               new_evidence=evidence is not None, rush=rushing,
-                               depth=depth_with(store, guid, ctx.human, now=now)):
+            target = next_stage(rel.romance_stage, picture=picture)
+            strong = (evidence is not None and target is not None
+                      and strong_evidence(store, guid, ctx.human, target, last, now, ctx.tz))
+            style = ctx.persona(guid).romance.style
+            played = round(arc_state.play_days(store, last, now, ctx.tz)
+                           + _carried(store, guid, ctx.human, rel.romance_stage), 6)
+            new = can_advance(rel.romance_stage, rel, attitude=stance, style=style,
+                              play_days=played, new_evidence=evidence is not None, rush=rushing,
+                              strong=strong, depth=depth_with(store, guid, ctx.human, now=now),
+                              picture=picture)
+            if new is None:
                 continue
-            new = LADDER[stage + 1]
             store.put_relationship(replace(rel, romance_stage=new))
             delta = store.add_rel_delta(guid, ctx.human, "romance_stage", 1,
                                 f"{rel.romance_stage}->{new}", [f"memory:{evidence[0]}"],
                                 now, applied=True)
             changes.append(delta)
+            left = round(played - pace_wait(new, stance, style, halved=rushing or strong), 6)
+            store.set_meta(f"{_CARRY}{guid}:{ctx.human}",
+                           json.dumps({"stage": new, "days": left if 0 < left < 1 else 0.0}))
         # The run normally happens AFTER its closed observation window. Keep its
         # exact delta ids with the unit, including across a restart between stages.
         store.set_meta(f"{_CHANGES}{ctx.night}", json.dumps(changes))
@@ -167,7 +245,7 @@ def _invitation_refs(store, guid, human, window, current) -> list[str]:
         "(ts>=? AND ts<? AND NOT EXISTS (SELECT 1 FROM meta m, "
         "json_each(CASE WHEN m.key LIKE ? THEN m.value ELSE '[]' END) j WHERE j.value=d.id)))",
         (guid, human, json.dumps(current), *window, f"{_CHANGES}%"))
-        if r["reason"].split("->")[-1] in LADDER[5:] for ref in json.loads(r["evidence"])]
+        if r["reason"].split("->")[-1] in _INVITATION_STAGES for ref in json.loads(r["evidence"])]
 
 
 def _known_progress(store, holder, refs, end):
@@ -210,7 +288,8 @@ async def stage_jealousy(ctx) -> None:
             if r["guid"] in remaining_rises
             and rank.get(r["stance_after"], -1) > rank.get(r["stance_before"], -1)
             and rank.get(attitudes.get(r["guid"]), -1) > rank.get(r["stance_before"], -1))
-        progressed = {g for g in attitudes if store.get_relationship(g, ctx.human).romance_stage in LADDER[2:]}
+        progressed = {g for g in attitudes
+                      if store.get_relationship(g, ctx.human).romance_stage in _RIVAL_STAGES}
 
         def update(holder, target, kind, evidence, obs, spike, mult=1.):
             tuned = dials_of(ctx.persona(holder)).mult("jealousy")  # the owner's dial (tuning)
