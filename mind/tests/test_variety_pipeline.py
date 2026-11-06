@@ -8,7 +8,8 @@ import logging
 import pytest
 
 from conftest import HUMAN, make_mem, seed_test_cast
-from engine_rig import engine_clock, make_rig, save_member
+from engine_rig import RAID, engine_clock, make_rig, save_member
+from leeroy_mind.protocol import Group
 from leeroy_mind.talk.filters import Tell
 from leeroy_mind.talk.moves import MOVE_PHRASES, MOVES
 from leeroy_mind.talk.pipeline import MOVE_HINT, REGEN_HINT, REPEAT_HINT, SUMMONS_HINT
@@ -86,6 +87,23 @@ def test_a_repeated_summons_is_asked_again_then_dropped(rig):
     assert len(rig.chat_calls()) == 2
     assert SUMMONS_HINT.format(**HE) in rig.last_user()
     assert not rig.sent.says() and _moves(rig.store) == []
+
+
+def test_a_raid_leads_unaddressed_call_to_come_over_is_said(rig):
+    """The summons check is only for her lines to him: a call to the raid is no summons."""
+    rig.sync(rig.event(Group(ts=0, leader_guid=102, raid=True, members=RAID)))
+    assert rig.raid.lead() == 102
+    rig.script("get over here, stack on me")
+    assert rig.speak_turn(Turn(kind=TurnKind.OPEN, speaker=102, channel="raid"))
+    assert len(rig.chat_calls()) == 1 and rig.utterances()[-1]["dropped"] is None
+    assert SUMMONS_HINT.split(":")[0] not in rig.last_user()
+
+
+def test_a_guild_line_asking_another_member_over_is_said(rig):
+    rig.script("come over here and look at this")
+    to_arkon = Turn(kind=TurnKind.CONTINUE, speaker=102, channel="guild", addressee=101)
+    assert rig.speak_turn(to_arkon) == ["come over here and look at this"]
+    assert len(rig.chat_calls()) == 1
 
 
 def test_a_summons_answered_in_game_is_said(rig):

@@ -711,8 +711,9 @@ class Pipeline:
                                  to_guid=turn.to_guid, now=self.clock.now())
 
     def _summons_ok(self, turn: Turn) -> bool:
-        """Whether asking someone over may stand: only in a voice room, where the two are
-        together; everywhere else they only talk through the game."""
+        """Whether asking him over may stand in her line to him (_generate checks only those):
+        only in a voice room, where the two are together; everywhere else they only talk
+        through the game."""
         return turn.channel.startswith("voice:")
 
     def _record_moves(self, turn: Turn, words: str) -> None:
@@ -1443,9 +1444,11 @@ class Pipeline:
             out = _with_hint(c.messages, hint) if hint else c.messages
             return _with_hint(out, SPOKEN_HINT) if spoken else out
         messages, text = asking(), ""
-        # her last moves with this person and whether a summons may stand (filters.find_tells)
+        # her last moves with this person (filters.find_tells), and in her lines to him only,
+        # whether a summons may stand: a call to the raid or a word to a member is no summons
         moves = [(r.clause, r.main) for r in self._recent_moves(turn)]
-        summons_ok = self._summons_ok(turn)
+        hg = self.human.guid
+        summons_ok = self._summons_ok(turn) if hg and self._counterpart(turn) == hg else None
         for attempt in (0, 1):
             if not _scope_valid(meta):
                 return text, "scope_changed"
