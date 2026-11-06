@@ -1,7 +1,11 @@
 import pytest
 
+from leeroy_mind.protocol import CHAT_CHANNELS
+from leeroy_mind.storage.rows import ChatLineRow
 from leeroy_mind.talk.filters import (ASSISTANT_PHRASES, FATAL_PHRASES, SILENT, Tell, echoes,
                                       find_tells, is_silence, repair, strip_copied)
+from leeroy_mind.talk.prompt import chat_line_text
+from leeroy_mind.voice.rooms import BY_ID
 
 
 def fatal(text, **kw):
@@ -249,6 +253,184 @@ def test_an_emoticon_after_a_copied_tag_survives(raw, want):
     """The tag's colon follows the speaker tag's rule (fix round 1, review M2): the eyes of
     an emoticon are no colon, in either bracket."""
     assert strip_copied(raw, ("Belra",), him=("Zan", "Zanthor")) == want
+
+
+# -- the scene in parentheses: whispers, vent and the voice rooms -----------------------------
+
+def _strip(raw: str) -> str:
+    return strip_copied(raw, ("Belra", "Tarvo"), him=("Zan", "Zanthor"))
+
+
+@pytest.mark.parametrize("raw, want", [
+    ("(whispering to Zan in private 1) you okay?", "you okay?"),
+    ("(vent) you lot act like i'm not here", "you lot act like i'm not here"),
+    ("(Vent): that was close", "that was close"), ("[vent] that was close", "that was close"),
+    ("(in vent) ok", "ok"), ("(over vent) ok", "ok"), ("(talking on vent) ok", "ok"),
+    ("(talking out loud on vent) ok", "ok"), ("(on vent, raid 2) ok", "ok"),
+    ("(Whispering to Zan) ok", "ok"), ("(whispers to Zanthor) ok", "ok"),
+    ("(whispered from Zan) ok", "ok"), ("(whispering privately to Zan) ok", "ok"),
+    ("(whispering to Zan privately) ok", "ok"), ("(whispering privately) ok", "ok"),
+    ("(whispering in Private 2) ok", "ok"), ("[Whispering to Zan in Private 3]: ok", "ok"),
+    ("(whisper to Zan, private 1) ok", "ok"), ("(whispering to Zan - private1) ok", "ok"),
+    ("(whispering to Zan on vent in private 1) ok", "ok"),
+    ("(raid_warning): spread", "spread"), ("(raid warning) spread", "spread"),
+    ("(emote) waves", "waves"), ("[3m ago] (vent): on it", "on it"),
+    ("Belra (whispering to Zan in Private 1): ok", "ok"), ("Tarvo (vent) ok", "ok"),
+    ("Belra [Whispering to Zan]: ok", "ok"), ('"(vent) ok"', "ok"),
+    ("(vent) :) gz", ":) gz"), ("(whispering to Zan in private 1)", ""),
+])
+def test_a_scene_tag_in_front_is_stripped(raw, want):
+    """Seen live (2026-11-05): "(whispering to <his name> in private 1)" in front of an invite
+    whisper and "(vent)" in front of a line on vent. The prompt frames chat as "Name (on vent):"
+    and "Name (whisper to Zan):", and its instruction names the private room he is asked into;
+    the model blends them into tags of its own, in either bracket and any case."""
+    assert _strip(raw) == want
+
+
+@pytest.mark.parametrize("raw, want", [
+    ("you okay? (whispering to Zan in private 1)", "you okay?"),
+    ("ok (vent) you there?", "ok you there?"), ("i'm here (vent), what's up", "i'm here, what's up"),
+    ("lol (on vent) same", "lol same"), ("gz (whisper to Zan) nice one", "gz nice one"),
+    ("hey [vent] you there", "hey you there"), ("ok [Whisper to Zan] see you", "ok see you"),
+    ("you there? (vent): hello?", "you there? hello?"), ("ok (vent) :) gz", "ok :) gz"),
+    ("on my way (vent)", "on my way"), ("brb (vent) (whispering to Zan) ok", "brb ok"),
+    ("ok\n(vent) you there", "ok\nyou there"), ("ok\n(guild) gz", "ok\ngz"),
+    ("ok\n[3m ago] (raid): on it", "ok\non it"),
+])
+def test_a_scene_tag_inside_a_line_is_stripped(raw, want):
+    """Seen live inside a line too: a tag that names the scene (vent, or a whisper to someone,
+    in a place or privately) is the prompt's, wherever it stands. At the start of a later line
+    of the reply, every frame tag is."""
+    assert _strip(raw) == want
+
+
+@pytest.mark.parametrize("kept", [
+    "(lol) nice pull", "brb (dinner)", "(brb)", "(lol)", "ok (lol) same", "(afk) back in 5",
+    "ok (afk) 5 min", "(irl) brb", "brb (irl)", "can we talk (in private)", "(in private) ok",
+    "(on my way)", "come to private 1 with me", "hop into private 1 :)",
+    "see you in the smoke room", "meet me in the guild hall later", "(healers) stack up",
+    "(mages) table pls", "need more tanks (death knights)", "(kitchen) brb",
+    "(the kitchen) brb", "(officers) can someone promote me", "i was venting (sorry)",
+    "(venting) ugh", "(ventrilo is down) typing", "(prevent) lol", "(whispers) fine",
+    "[whispers] fine", "(whispering) hey you", "ok (whispers) fine", "ok (whisper) later",
+    "pm me (whisper to me later)", "ok (whisper to you later)", "ok (raid) in 5",
+    "ok [Raid] in 5", "i saw it (just now)", "it dropped (3m ago)", "hop in (Private 1)",
+    "ok (guild hall) in 5", "(on vent later?) maybe", "(talking) ok", "(out loud) ok",
+    "ok (out loud) fine", "(privately) ok", "[Frozen Orb] anyone?", "[Thunderfury]",
+])
+def test_ordinary_parentheses_stay(kept):
+    """A member's own asides ("(lol)", "(brb)", "(afk)", "(irl)", "(in private)"), room words
+    in a sentence, a role or class called out, venting, a bare stage direction, a pronoun
+    after "whisper to", and a channel, age or room label inside a line are no copied tag."""
+    assert _strip(kept) == kept
+
+
+# Every voice room (voice.rooms.ROOMS): a label nobody types as an aside, so a tag on its own
+# in front of a line; the others are a member's own words alone, and a tag only with the scene.
+LABEL_ROOMS = {"guild_hall", "raid2", "class_halls", "loot_dkp", "lore", "pvp", "achievements",
+               "smoke_room", "private1", "private2", "private3", "interview", "penalty_box"}
+WORD_ROOMS = {"raid", "officers", "tanks", "healers", "casters", "melee", "warriors", "paladins",
+              "hunters", "rogues", "priests", "death_knights", "shamans", "mages", "warlocks",
+              "druids", "kitchen", "irl", "afk"}
+
+
+def test_the_room_lists_cover_every_room():
+    assert LABEL_ROOMS | WORD_ROOMS == set(BY_ID) and not LABEL_ROOMS & WORD_ROOMS
+
+
+def _room_forms(room_id: str) -> list[str]:
+    """The room's name in three cases, with "and" for "&", and its id with and without the
+    underscore."""
+    name = BY_ID[room_id].name
+    return sorted({name, name.lower(), name.upper(), room_id, room_id.replace("_", " "),
+                   name.replace("&", "and")})
+
+
+def _the(form: str) -> str:
+    return form if form.lower().startswith("the ") else f"the {form}"
+
+
+@pytest.mark.parametrize("room", sorted(BY_ID))
+def test_every_room_with_the_scene_is_stripped(room):
+    for form in _room_forms(room):
+        for tag in (f"(whispering to Zan in {form})", f"(whisper to Zan in {form})",
+                    f"(on vent in {form})", f"(vent, {form})", f"[On Vent - {form}]",
+                    f"(whispering in {_the(form)})", f"(in {form}, on vent)"):
+            assert _strip(f"{tag} ok") == "ok", tag
+            assert _strip(f"ok {tag} then") == "ok then", tag
+
+
+@pytest.mark.parametrize("room", sorted(LABEL_ROOMS))
+def test_a_room_label_in_front_is_stripped(room):
+    """A label room's name (or an id that is no plain word: "private1", "smoke_room") on its
+    own in front of a line; inside a line it is his invite's words ("hop in (Private 1)")."""
+    for form in (f for f in _room_forms(room) if not f.isalpha()):
+        for tag in (f"({form})", f"[{form}]", f"(in {form})", f"(in {_the(form)}):"):
+            assert _strip(f"{tag} ok") == "ok", tag
+        assert _strip(f"ok ({form}) then") == f"ok ({form}) then", form
+
+
+@pytest.mark.parametrize("room", sorted(WORD_ROOMS - {"raid"}))
+def test_a_room_that_is_a_word_stays_on_its_own(room):
+    """"(afk) back in 5", "(healers) stack up": a member's own words. "(raid)" is a channel
+    tag in front of a line, and stays inside one."""
+    for form in _room_forms(room):
+        for kept in (f"({form}) ok", f"(in {form}) ok", f"ok ({form}) then"):
+            assert _strip(kept) == kept, kept
+
+
+@pytest.mark.parametrize("kept", ["(lore) arthas was a paladin", "(pvp) anyone?",
+                                  "(achievements) 2 to go", "(interview) went well"])
+def test_a_label_rooms_plain_word_id_stays_on_its_own(kept):
+    assert _strip(kept) == kept
+
+
+def test_another_members_framed_line_is_still_dialogue():
+    """A scene tag in another member's speaker tag goes, and the tag stays a speaker tag:
+    on a later line the reply still writes their line ("dialogue"), on the first it is an
+    address."""
+    text = _strip("gz\nArkon (on vent): thanks")
+    assert text == "gz\nArkon: thanks" and "dialogue" in [t.reason for t in find_tells(text)]
+    assert _strip("Arkon (whispering to Zan in Private 1): you're up") == "Arkon: you're up"
+    assert _strip("ok (vent): hey") == "ok hey"
+
+
+def _frame(channel: str, to_guid: int = 0) -> str:
+    """What the prompt shows in front of a line of Belra's on `channel` (prompt.chat_line_text),
+    with its age."""
+    row = ChatLineRow(id=1, ts=0.0, channel=channel, from_guid=102, from_name="Belra",
+                      to_guid=to_guid, text="TEXT", map=0, zone=0, session_id=None,
+                      thread_id=None, origin="mind")
+    line = chat_line_text(row, {1: "Zan", 102: "Belra"}, now=200.0)
+    assert line.endswith(": TEXT")
+    return line.removesuffix("TEXT")
+
+
+@pytest.mark.parametrize("channel, to_guid", [
+    *((c, 0) for c in sorted(CHAT_CHANNELS)), ("whisper", 1),
+    *((f"voice:{r}", 0) for r in sorted(BY_ID))])
+def test_every_frame_the_prompt_shows_is_stripped(channel, to_guid):
+    """Every channel the bridge reports and every voice room, as the prompt's chat frame
+    renders it: the frame copied whole ("[3m ago] Belra (on vent): ..."), without the speaker
+    or without the age, in front of a line or of its second line."""
+    frame = _frame(channel, to_guid)  # "[3m ago] Belra (on vent): "
+    spoken = frame.split("] ", 1)[1]
+    tag = spoken.removeprefix("Belra").strip().removesuffix(":")  # "(on vent)", "" in guild
+    for copied in (frame, spoken, f"{tag}:" if tag else "Belra:", tag or "Belra:"):
+        assert _strip(f"{copied} ok") == "ok", copied
+    if tag:
+        assert _strip(f"gz\n[3m ago] {tag}: ok") == "gz\nok", tag
+        assert _strip(f"gz\n{tag} ok") == "gz\nok", tag
+    # with a name it is a line written for someone, still "dialogue" (find_tells)
+    framed = _strip(f"gz\n{frame}ok")
+    assert "dialogue" in [t.reason for t in find_tells(framed)], framed
+
+
+def test_a_name_or_handle_on_a_later_line_stays():
+    """In front of a later line, a name or a handle is a line written for someone: his reply
+    ("Zan: sure") must stay for find_tells to take as dialogue, not go out as hers."""
+    for raw in ("come hop in?\nZan: sure", "ok\nBelra: more", "ok\n/w Zan hey"):
+        assert _strip(raw) == raw, raw
 
 
 # The rehearsal: he whispered her, and her reply came back as his own line.
