@@ -1295,7 +1295,10 @@ def test_doctor_reports_every_check(tmp_path, capsys):
         out = capsys.readouterr().out.splitlines()
         voice_notes = [line for line in out if line.startswith("note voice ")]
         assert voice_notes == ["note voice specs: 0 of 5 cast members", "note voice service: disabled"]
-        assert len(out) == 16 and all(line.startswith("ok") for line in out if line not in voice_notes), out
+        selfie_notes = [line for line in out if line.startswith("note selfies")]
+        assert selfie_notes == ["note selfies: disabled ([selfies] enabled = false)"]
+        assert len(out) == 17 and all(line.startswith("ok") for line in out
+                                      if line not in voice_notes + selfie_notes), out
         assert any("live_fallback" in line and "not pulled" in line for line in out)
         assert any("personas 5" in line for line in out)
         assert any("fit every woman's attitude" in line for line in out)

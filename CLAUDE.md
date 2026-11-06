@@ -532,6 +532,7 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 .venv/Scripts/python -m leeroy_mind.library --data-dir "$D" stats   # the game library: build, search
 .venv/Scripts/python -m leeroy_mind nightly --data-dir "$D" status  # also run, ledger, undo, enrich, veto
 .venv/Scripts/python -m leeroy_mind eval --data-dir "$D"    # weekly evaluation, on a copied database by default
+.venv/Scripts/python -m leeroy_mind selfies --data-dir "$D" status  # profile photos; also try (mind stopped)
 .venv/Scripts/python -m leeroy_mind console --data-dir "$D" # the guild console; open the URL it prints
 .venv/Scripts/python -m pytest -q                           # the unit tests
 .venv/Scripts/python -m pytest -m ollama                    # optional: also -m live, -m mysql
@@ -636,7 +637,8 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   with its port and pid, to `mind-data/control.json`, readable by the owner's
   user only (a protected one-entry DACL) and removed when the mind stops
   cleanly. One JSON line per connection, exactly `v`, `key`, `op` (and `args`):
-  `status`, `stop` (the mind's own shutdown, the one Ctrl+C runs), `tune`
+  `status`, `stop` (the mind's own shutdown, the one Ctrl+C runs), `selfie`
+  (profile photos: pick, undo, more, status), `tune`
   (the owner's dials: status, set, undo, revert, group, retire, preview) and `raid`
   (`call`, `form` {raid, size, heroic, lead}, `summon`, `start`, `stop`,
   `end`), which enter guild life's raid night where the owner's chat or its
@@ -788,6 +790,57 @@ before using the page, since an older page can remain after a failed run.
 Models load offline after `fetch-models` has fetched and verified the pinned files. Default
 tests deselect real engines, audio devices, Windows, GPU, Ollama and live-service
 checks; those checks need a deliberate isolated setup.
+
+## The selfie worker (`leeroy-selfie`)
+
+`selfie/` renders the guild's profile photos: four candidates a member, RealVisXL V5.0 on the
+local GPU, each checked by a local NSFW classifier before it is written. It is a separate
+GPL-3.0-or-later process with its own `selfie\LICENSE` and `selfie\.venv` on **Python 3.12**
+(never the mind's or the voice service's), and the mind never imports it: it starts the worker
+as a subprocess at night and talks JSON lines over stdin and stdout.
+
+- **Off by default.** `[selfies] enabled = true` in `mind.toml`, read once at the start. Other
+  keys: `python` and `data` (absolute paths; default `selfie\.venv` and `LEEROY_SELFIE_DATA`,
+  else `selfie-data` beside the repo), `nsfw_max` (0.2), `steps` (30), `guidance` (5.0), `size`
+  (768, 896 or 1024), `min_free_gib` (11.5, the worker refuses to load with less VRAM free).
+  An invalid table is logged and means off. With it off the pick service still works for sets
+  an earlier night rendered, and "4 more" is refused.
+- **Worker commands**, from `selfie/`: `.venv/Scripts/python -m leeroy_selfie fetch-models`
+  (pinned revisions into `<data>/models`), `doctor` (`--quick` skips torch and hashing; the
+  mind's doctor runs that), `where`, `smoke --out DIR` (one invented person; needs the GPU),
+  `pytest -q` (no model, GPU or network).
+- **Two night stages, only with `enabled = true`.** `photo` runs after `enrich` on the
+  reflection model: it picks a photo kind, framing, setting, outfit and expression for each
+  member who has looks and no kind yet (stored as a new persona version, screened for the
+  owner's real name, member names, era and explicit wear). `selfies` runs after `regress` as an
+  image stage: it queues a first set for each member with looks and a kind, plus any "4 more"
+  asked for, and renders up to `selfie_per_night` (120) sets.
+- **GPU rules.** The image stage unloads every chat model but the embedding model (the worker
+  needs the VRAM) and never renders while a live lease is held (his login, an offline raid, the
+  voice service): it ends without a failure and the sets wait for the next night. An OOM makes
+  room and retries once, then ends the stage. His login cancels the stage, whose last act is to
+  end the worker's whole process tree; the arbiter's live-model preload starts only after that
+  tree is gone.
+- **Storage.** Sets and picks are rows in `mind.db` (migration 0018); the images are files
+  under `mind-data\selfies\<guid>\`: `sets\<n>\c0.jpg` to `c3.jpg` with `.thumb.jpg`
+  beside each (a set renders in `<n>.part` and is renamed when done), `chosen.jpg` (the photo
+  in force) and `history\<pick>.jpg`. The database is the truth: the mind makes the files agree
+  with it once at start, before any loop runs. `chosen.jpg` is replaced by a rename, so a
+  reader sees the old photo or the new one. Generated images are never committed.
+- **Picking.** The console reads the sets (`GET /api/selfies`, `/api/selfies/images`,
+  `/api/selfies/member`) and sends `POST /api/selfie` (pick, undo, more) to the mind's `selfie`
+  op, behind the same key, Origin and `--no-control` gates as raid actions and dial changes.
+  The console page card for it is not built yet; the routes are. `leeroy_mind selfies status`
+  prints the queue and the latest night's stage records, and `selfies try [--guid N | --limit N]`
+  renders a trial set into `scratch\selfies-try` of the data dir with the mind stopped.
+- **Content limits.** Adults only, clothed and non-explicit, no real person's likeness, and no
+  person's name ever reaches a prompt. Logs hold ids, counts, scores and timings, never a prompt
+  or persona text.
+- **Rehearsal.** `mind/tests/selfies/test_selfies_rehearsal.py` drives a real `MindApp`, its
+  control endpoint and a real console over loopback with the FakeBridge, FakeLLM and a fake
+  worker, through two nights and his login. A rehearsal against a copy of the live database
+  must use the same fakes and its own free ports, and any console it starts takes
+  `--voice-ui-port` of an unused port. The real worker and the GPU are checked at the release.
 
 ## Outstanding
 

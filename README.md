@@ -197,6 +197,14 @@ Kokoro-82M (Apache-2.0), NVIDIA Parakeet TDT 0.6B v2 (CC-BY-4.0),
 Silero VAD (MIT), SpeechBrain ECAPA (Apache-2.0), and the optional
 Whisper large-v3-turbo and Chatterbox Turbo models (MIT).
 
+## Profile photos
+
+With `[selfies] enabled = true` the mind picks a photo kind for each guild member who has looks
+and, at night only, has the `selfie/` worker render four candidates each. The owner picks one,
+undoes it or asks for four more through the console's routes (`POST /api/selfie`; the page card
+comes later). Rendering stays off by default, never runs while the owner is in game, and every
+image passes a local NSFW check first. See [selfie/README.md](selfie/README.md).
+
 ## License
 
 GPL-2.0, matching AzerothCore and mod-playerbots, except the separate `voice/`
