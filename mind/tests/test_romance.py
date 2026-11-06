@@ -598,3 +598,55 @@ def test_her_own_dial_governs_her_whisper_overlay(tmp_path):
     assert not explicit_whisper(lowered, rel(), dial=10, channel="whisper")
     assert tail(lowered, 10) == ""
     assert tail(plain, 9) == "WHISPER-OVERLAY" and tail(plain, 8) == ""
+
+
+def write_overlay(d, name, text):
+    (d / "prompts").mkdir(parents=True, exist_ok=True)
+    (d / "prompts" / f"{name}.txt").write_text(text, encoding="utf-8")
+
+
+def test_an_overlay_with_three_variants_gives_each_in_turn(tmp_path):
+    write_overlay(tmp_path, "romance_explicit", "ONE\n---\nTWO\n---\nTHREE")
+    assert romance.overlay_variants("romance_explicit", tmp_path) == ("ONE", "TWO", "THREE")
+    seen = {romance._band_text("explicit", tmp_path, random.Random(i)) for i in range(30)}
+    assert seen == {"ONE", "TWO", "THREE"}
+    assert romance._band_text("explicit", tmp_path) == "ONE"  # no rng: the first
+
+
+def test_a_single_block_overlay_reads_as_before(tmp_path):
+    write_overlay(tmp_path, "romance_flirty", "Plain synthetic wording.\nTwo lines -- with a dash.\n")
+    assert romance.overlay_variants("romance_flirty", tmp_path) == (
+        "Plain synthetic wording.\nTwo lines -- with a dash.",)
+    for rng in (None, random.Random(3)):
+        assert romance._band_text("flirty", tmp_path, rng) == (
+            "Plain synthetic wording.\nTwo lines -- with a dash.")
+    assert romance.overlay_variants("romance_warm", tmp_path) == ()
+
+
+def test_blank_blocks_are_dropped_and_only_a_bare_separator_splits(tmp_path):
+    write_overlay(tmp_path, "romance_explicit", "---\nONE\n  ---  \n\n---\nTWO ---\n----\nthree\n---\n")
+    assert romance.overlay_variants("romance_explicit", tmp_path) == ("ONE", "TWO ---\n----\nthree")
+
+
+def test_each_variant_is_capped_on_its_own(tmp_path, caplog):
+    long = " ".join(f"word{i}" for i in range(400))
+    write_overlay(tmp_path, "romance_explicit", f"short one\n---\n{long}\n---\nshort two")
+    with caplog.at_level(logging.WARNING, logger="leeroy_mind"):
+        got = romance.overlay_variants("romance_explicit", tmp_path)
+        romance.overlay_variants("romance_explicit", tmp_path)
+    assert got[0] == "short one" and got[2] == "short two"
+    assert "word0 " in got[1] and "word399" not in got[1]
+    capped = [r for r in caplog.records if "overlay" in r.getMessage()]
+    assert len(capped) == 1 and "word" not in capped[0].getMessage()
+
+
+def test_whisper_tail_picks_a_variant(tmp_path):
+    write_overlay(tmp_path, romance.WHISPER_OVERLAY, "ALPHA\n---\nBETA")
+    p = woman(stance="lust")
+    rel = None
+    kw = dict(dial=10, channel="whisper", data_dir=tmp_path)
+    if not romance.explicit_whisper(p, rel, dial=10, channel="whisper"):
+        pytest.skip("setup does not reach the explicit band")
+    assert romance.whisper_tail(p, rel, **kw) == "ALPHA"
+    assert {romance.whisper_tail(p, rel, rng=random.Random(i), **kw)
+            for i in range(30)} == {"ALPHA", "BETA"}

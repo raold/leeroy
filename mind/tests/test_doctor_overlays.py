@@ -143,3 +143,27 @@ def test_no_overlays_no_lines(tmp_path, capsys):
         (tmp_path / "prompts").mkdir()
         code, out = _doctor(tmp_path, capsys)
     assert code == 0 and not [line for line in out if "prompt overlay" in line]
+
+
+def test_doctor_counts_variants_and_knows_the_night_overlays(tmp_path, capsys):
+    with socket.create_server(("127.0.0.1", 0)) as listener:
+        _setup(tmp_path, listener.getsockname()[1])
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        (prompts / "romance_explicit.txt").write_text(
+            f"{SECRET} one\n---\n{SECRET} " + _words(OVERLAY_CAP_TOKENS + 40) + "\n---\nthree",
+            encoding="utf-8")
+        (prompts / "romance_flirty.txt").write_text(f"{SECRET} single", encoding="utf-8")
+        (prompts / "nightly_weekend.txt").write_text(f"{SECRET} night", encoding="utf-8")
+        code, out = _doctor(tmp_path, capsys)
+    assert code == 0, out
+    lines = {line.split("prompt overlay ", 1)[1].split(":", 1)[0]: line
+             for line in out if "prompt overlay" in line}
+    assert SECRET not in "\n".join(out)
+    explicit = lines["romance_explicit"]
+    assert "3 variants, largest " in explicit and f"(cap {OVERLAY_CAP_TOKENS})" in explicit
+    assert "over its cap" in explicit
+    assert "variants" not in lines["romance_flirty"]
+    assert lines["nightly_weekend"].endswith(
+        "read by the night's weekend writer (no cap)")
+    assert "no prompt reads it" not in lines["nightly_weekend"]

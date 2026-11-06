@@ -152,6 +152,7 @@ _AUDIENCE = {"guild": "whole guild", "officer": "officers", "party": "party", "r
              "say": "people standing nearby"}
 _LATE = frozenset({DayPhase.LATE, DayPhase.DEAD})
 
+VARIANT_SEP = "---"  # a line of just this splits an overlay into variants
 _warned: set[str] = set()
 
 
@@ -203,14 +204,13 @@ def explicit_whisper(p: Persona, rel: Relationship | None, *, dial: int, channel
 
 
 def whisper_tail(p: Persona, rel: Relationship | None, *, dial: int, channel: str,
-                 data_dir: Path) -> str:
-    """The owner's whisper overlay (mind-data/prompts/romance_explicit_whisper.txt), capped
-    like the band overlays, for a whisper to him at the explicit band; "" otherwise or when
+                 data_dir: Path, rng: random.Random | None = None) -> str:
+    """The owner's whisper overlay (mind-data/prompts/romance_explicit_whisper.txt; one of its
+    variants, the first without `rng`), capped like the band overlays, for a whisper to him at the explicit band; "" otherwise or when
     there is none (the band as before). The pipeline puts it after the turn's instruction."""
     if not explicit_whisper(p, rel, dial=dial, channel=channel):
         return ""
-    text = load_prompt(WHISPER_OVERLAY, data_dir, "")
-    return _capped(text, WHISPER_OVERLAY, data_dir) if text else ""
+    return _pick(overlay_variants(WHISPER_OVERLAY, data_dir), rng) or ""
 
 
 def stage_text(stance: str, stage: str) -> str:
@@ -237,13 +237,38 @@ def _capped(text: str, name: str, data_dir: Path) -> str:
     return truncate_words(text, OVERLAY_CAP_TOKENS * 4)
 
 
-def _band_text(b: Band, data_dir: Path) -> str:
+def split_variants(text: str) -> tuple[str, ...]:
+    """An overlay's text split on the lines that are exactly `---`; blank blocks dropped."""
+    blocks, cur = [], []
+    for line in text.splitlines():
+        if line.strip() == VARIANT_SEP:
+            blocks.append("\n".join(cur))
+            cur = []
+        else:
+            cur.append(line)
+    blocks.append("\n".join(cur))
+    return tuple(b.strip() for b in blocks if b.strip())
+
+
+def overlay_variants(name: str, data_dir: Path) -> tuple[str, ...]:
+    """mind-data/prompts/<name>.txt as its variants, each capped on its own; () when there is
+    no file or it is blank. One block reads as the whole overlay always did."""
+    text = load_prompt(name, data_dir, "")
+    return tuple(_capped(v, name, data_dir) for v in split_variants(text)) if text else ()
+
+
+def _pick(variants: tuple[str, ...], rng: random.Random | None) -> str | None:
+    if not variants:
+        return None
+    return variants[0] if rng is None or len(variants) == 1 else rng.choice(variants)
+
+
+def _band_text(b: Band, data_dir: Path, rng: random.Random | None = None) -> str:
     if b != "explicit":
-        return _capped(load_prompt(f"romance_{b}", data_dir, BUILTIN_ROMANCE[b]),
-                       f"romance_{b}", data_dir)
-    text = load_prompt("romance_explicit", data_dir, "")
+        return _pick(overlay_variants(f"romance_{b}", data_dir), rng) or BUILTIN_ROMANCE[b]
+    text = _pick(overlay_variants("romance_explicit", data_dir), rng)
     if text:
-        return _capped(text, "romance_explicit", data_dir)
+        return text
     key = str(Path(data_dir).resolve())
     if key not in _warned:
         _warned.add(key)
