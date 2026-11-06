@@ -2,6 +2,7 @@ import io
 import json
 import subprocess
 import sys
+import threading
 
 from leeroy_selfie.fit import PromptTooLong
 from leeroy_selfie.protocol import RenderFailed
@@ -14,16 +15,14 @@ INFO = {"device": "cuda", "free_gib": 13.1, "versions": {"torch": "t", "diffuser
 class Fake:
     info = INFO
 
-    def __init__(self, flagged=False, exc=None):
-        self.flagged, self.exc, self.seen = flagged, exc, []
+    def __init__(self, exc=None):
+        self.exc, self.seen = exc, []
 
     def render(self, req):
         self.seen.append(req.id)
         if self.exc and len(self.seen) == 1:
             raise self.exc
-        if not self.flagged:
-            open(req.out, "wb").write(b"jpg")
-        return {"flagged": self.flagged, "nsfw": 0.004, "prompt": "p", "dropped": [],
+        return {"flagged": False, "nsfw": 0.004, "prompt": "p", "dropped": [],
                 "tokens": 3, "seconds": 0.1, "peak_gib": 1.0}
 
 
@@ -41,18 +40,14 @@ def run(load, data, eofs=None):
     return code, [json.loads(x) for x in out.getvalue().splitlines()]
 
 
-def test_serve_answers_ready_then_each_request_and_writes_nothing_when_flagged(tmp_path):
+def test_serve_answers_ready_then_each_request(tmp_path):
     fake = Fake()
     code, lines = run(lambda: fake, req(tmp_path, "a") + req(tmp_path, "b"))
     assert code == 0
     assert lines[0] == {"id": "ready", "ok": True, "error": "", **INFO}
-    assert [(x["id"], x["ok"], x["flagged"]) for x in lines[1:]] == [("a", True, False),
-                                                                      ("b", True, False)]
-    assert (tmp_path / "a.jpg").exists()
-    flagged = Fake(flagged=True)
-    _, lines = run(lambda: flagged, req(tmp_path, "c"))
-    assert lines[1]["flagged"] is True and lines[1]["ok"] is True
-    assert not (tmp_path / "c.jpg").exists()
+    assert [(x["id"], x["ok"], x["flagged"], x["error"]) for x in lines[1:]] == [
+        ("a", True, False, ""), ("b", True, False, "")]
+    assert fake.seen == ["a", "b"]
 
 
 def test_a_failed_load_answers_ready_false_with_its_reason_only():
@@ -88,13 +83,70 @@ def test_bad_lines_identity_and_quit_are_answered_without_the_renderer(tmp_path)
     assert lines[2]["id"] == "r1"
 
 
-def test_the_end_of_stdin_calls_on_eof_at_once():
+def test_the_end_of_stdin_calls_on_eof():
     eofs = []
     code, lines = run(lambda: Fake(), b"", eofs)
     assert code == 0 and eofs == [1] and len(lines) == 1
 
 
-def test_a_renderer_that_prints_cannot_corrupt_the_protocol(tmp_path):
+def test_eof_is_handled_during_the_load():
+    eof = threading.Event()
+    seen = []
+
+    def load():
+        seen.append(eof.wait(5))  # only the reader can set it, so it runs before load ends
+        return Fake()
+
+    serve(load, stdin=io.BytesIO(b""), out=io.BytesIO(), on_eof=eof.set)
+    assert seen == [True]
+
+
+def test_eof_is_handled_in_the_middle_of_a_render(tmp_path):
+    eof = threading.Event()
+    seen = []
+
+    class Slow(Fake):
+        def render(self, req):
+            seen.append(eof.wait(5))
+            return super().render(req)
+
+    serve(lambda: Slow(), stdin=io.BytesIO(req(tmp_path)), out=io.BytesIO(), on_eof=eof.set)
+    assert seen == [True]
+
+
+def test_a_reader_that_fails_still_ends_the_worker():
+    class Broken(io.BytesIO):
+        def readline(self, *a):
+            raise OSError("pipe broke")
+
+    eofs = []
+    done = []
+    t = threading.Thread(target=lambda: done.append(serve(
+        lambda: Fake(), stdin=Broken(), out=io.BytesIO(), on_eof=lambda: eofs.append(1))))
+    t.start()
+    t.join(10)
+    assert not t.is_alive() and done == [0] and eofs == [1]
+
+
+def test_a_lone_surrogate_id_and_deep_nesting_are_bad_requests_and_the_worker_goes_on(
+        tmp_path):
+    data = b'{"id": "\\ud800", "op": "nope"}\n' + b"[" * 5000 + b"\n" + req(tmp_path, "ok")
+    code, lines = run(lambda: Fake(), data)
+    assert code == 0
+    assert [(x["id"], x["ok"]) for x in lines[1:]] == [("", False), ("", False), ("ok", True)]
+    assert lines[1]["error"] == lines[2]["error"] == "bad_request"
+
+
+def test_an_answer_with_a_lone_surrogate_is_still_sent(tmp_path):
+    class Odd(Fake):
+        def render(self, req):
+            return {**super().render(req), "prompt": "bad \ud800 text"}
+
+    _, lines = run(lambda: Odd(), req(tmp_path))
+    assert lines[1]["ok"] is True and lines[1]["prompt"] == "bad \ud800 text"
+
+
+def test_a_renderer_that_prints_cannot_corrupt_the_protocol():
     script = (
         "import sys, os, io\n"
         "from leeroy_selfie import worker\n"
@@ -105,3 +157,35 @@ def test_a_renderer_that_prints_cannot_corrupt_the_protocol(tmp_path):
     p = subprocess.run([sys.executable, "-c", script], capture_output=True, timeout=60)
     assert p.stdout == b'{"id": "ready"}\n'
     assert b"noise from a library" in p.stderr and b"raw noise" in p.stderr
+
+
+CHILD = (
+    "import sys\n"
+    "from leeroy_selfie import render\n"
+    "class R:\n"
+    "    info = {'device': 'cuda'}\n"
+    "    def render(self, req): return {}\n"
+    "def load(data, *, min_free_gib, device='cuda'):\n"
+    "    if sys.argv[1] == 'fail': raise render.ReadyError('cuda')\n"
+    "    return R()\n"
+    "render.load = load\n"
+    "from leeroy_selfie.__main__ import main\n"
+    "sys.exit(main(['worker', '--min-free-gib', '1', '--data', '.']))\n")
+
+
+def test_a_normal_exit_with_stdin_still_open_is_clean():
+    for mode, answer, code in (("fail", b'"ok": false', 1), ("quit", b'"ok": true', 0)):
+        p = subprocess.Popen([sys.executable, "-c", CHILD, mode], stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            if mode == "quit":
+                p.stdin.write(b'{"id": "q", "op": "quit"}\n')
+                p.stdin.flush()
+            assert answer in p.stdout.readline()
+            assert p.wait(timeout=20) == code  # stdin is still held open here
+            assert b"Fatal Python error" not in p.stderr.read()
+        finally:
+            p.kill()
+            p.stdin.close()
+            p.stdout.close()
+            p.stderr.close()

@@ -44,6 +44,8 @@ class Renderer:
         return float(torch.softmax(logits, dim=-1)[0, self.nsfw_index])
 
     def render(self, req: Render) -> dict:
+        """One image at the requested square `size` (768, 896 or 1024), saved as is to `out`,
+        and a `thumb_size` square to `thumb`; neither when the NSFW score reaches nsfw_max."""
         torch = self.torch
         started = time.perf_counter()
         limit = self.pipe.tokenizer.model_max_length - 2
@@ -71,18 +73,16 @@ class Renderer:
 
 
 def load(data: Path, *, min_free_gib: float, device: str = "cuda") -> Renderer:
-    """A ready Renderer, or ReadyError: cuda (no torch or no CUDA), vram (less than
-    min_free_gib free), model (a file missing or changed, a load that failed, no `nsfw`
-    label)."""
+    """A ready Renderer, or ReadyError: cuda (no torch or no CUDA), model (a file missing or
+    changed, a load that failed, no `nsfw` label), vram (less than min_free_gib free just
+    before the pipeline moves to the GPU, or CUDA out of memory while it does). The weights
+    load to the CPU first, so another process holding VRAM reads as vram, not model."""
     try:
         import torch
     except ImportError as e:
         raise ReadyError("cuda") from e
     if device != "cuda" or not torch.cuda.is_available():
         raise ReadyError("cuda")
-    free_gib = torch.cuda.mem_get_info()[0] / 2**30
-    if free_gib < min_free_gib:
-        raise ReadyError("vram")
     for name in models.MODEL_PINS:
         if any(ok is not True for ok, _ in models.check(data, name)):
             raise ReadyError("model")
@@ -95,8 +95,6 @@ def load(data: Path, *, min_free_gib: float, device: str = "cuda") -> Renderer:
             use_safetensors=True, local_files_only=True)
         pipe.scheduler = DPMSolverMultistepScheduler.from_config(
             pipe.scheduler.config, use_karras_sigmas=True)
-        pipe = pipe.to("cuda")
-        pipe.set_progress_bar_config(disable=True)
         nsfw_dir = models.model_dir(data, "nsfw")
         processor = AutoImageProcessor.from_pretrained(nsfw_dir, local_files_only=True)
         classifier = AutoModelForImageClassification.from_pretrained(
@@ -106,6 +104,16 @@ def load(data: Path, *, min_free_gib: float, device: str = "cuda") -> Renderer:
     labels = {str(v).lower(): int(k) for k, v in classifier.config.id2label.items()}
     if "nsfw" not in labels:
         raise ReadyError("model")
+    free_gib = torch.cuda.mem_get_info()[0] / 2**30
+    if free_gib < min_free_gib:
+        raise ReadyError("vram")
+    try:
+        pipe = pipe.to("cuda")
+        pipe.set_progress_bar_config(disable=True)
+    except torch.cuda.OutOfMemoryError as e:
+        raise ReadyError("vram") from e
+    except Exception as e:
+        raise ReadyError("model") from e
     info = {"device": "cuda", "free_gib": round(free_gib, 1),
             "versions": {"torch": torch.__version__, "diffusers": diffusers.__version__}}
     return Renderer(pipe, processor, classifier, labels["nsfw"], torch, info)

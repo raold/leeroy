@@ -41,6 +41,22 @@ class Quit:
     id: str
 
 
+def _encodable(v) -> None:
+    """Every string in the request must be UTF-8 encodable (JSON allows a lone surrogate)."""
+    if isinstance(v, str):
+        try:
+            v.encode("utf-8")
+        except UnicodeEncodeError as e:
+            raise ValueError("a string is not valid Unicode") from e
+    elif isinstance(v, list):
+        for x in v:
+            _encodable(x)
+    elif isinstance(v, dict):
+        for k, x in v.items():
+            _encodable(k)
+            _encodable(x)
+
+
 def _int(d: dict, key: str, lo: int, hi: int) -> int:
     v = d[key]
     if type(v) is not int or not lo <= v <= hi:
@@ -84,8 +100,9 @@ def parse(line: bytes) -> Render | Quit:
         raise ValueError("line too long")
     try:
         d = json.loads(line.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as e:
         raise ValueError("not UTF-8 JSON") from e
+    _encodable(d)
     if type(d) is not dict:
         raise ValueError("not an object")
     if "identity" in d:

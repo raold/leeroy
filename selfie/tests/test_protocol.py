@@ -47,3 +47,12 @@ def test_a_missing_key_a_bad_quit_and_non_json_are_bad_requests(tmp_path):
 def test_an_identity_reference_is_refused_until_the_adapter_exists(tmp_path):
     with pytest.raises(IdentityUnavailable):
         parse(request(tmp_path, identity="abc"))
+
+
+def test_deep_nesting_and_unencodable_strings_are_value_errors(tmp_path):
+    with pytest.raises(ValueError):
+        parse(b"[" * 5000)
+    with pytest.raises(ValueError):
+        parse(b'{"id": "\ud800", "op": "quit"}')
+    with pytest.raises(ValueError):
+        parse(request(tmp_path, phrases=[["bad \ud800", 0]]))

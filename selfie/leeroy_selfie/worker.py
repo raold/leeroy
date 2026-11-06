@@ -31,32 +31,46 @@ def _log(text: str) -> None:
 
 
 def _send(out: BinaryIO, obj: dict) -> None:
-    out.write(json.dumps(obj, ensure_ascii=False).encode("utf-8") + b"\n")
+    out.write(json.dumps(obj).encode("utf-8") + b"\n")
     out.flush()
 
 
 def _reader(stdin: BinaryIO, lines: queue.Queue, on_eof: Callable[[], None]) -> None:
+    """Feeds `lines`; however it ends (EOF or a read that fails) it calls on_eof and queues
+    _EOF, so the loop never waits on a dead reader."""
     limit = protocol.MAX_LINE
-    while True:
-        line = stdin.readline(limit + 2)
-        if not line:
-            break
-        if len(line.rstrip(b"\r\n")) > limit:
-            while line and not line.endswith(b"\n"):  # drop the rest of the oversize line
-                line = stdin.readline(limit)
-            lines.put(_TOO_LONG)
-            continue
-        lines.put(line.rstrip(b"\r\n"))
-    on_eof()
-    lines.put(_EOF)
+    try:
+        while True:
+            line = stdin.readline(limit + 2)
+            if not line:
+                break
+            if len(line.rstrip(b"\r\n")) > limit:
+                while line and not line.endswith(b"\n"):  # drop the rest of the oversize line
+                    line = stdin.readline(limit)
+                lines.put(_TOO_LONG)
+                continue
+            lines.put(line.rstrip(b"\r\n"))
+    except Exception as e:
+        _log(f"stdin reader failed: {type(e).__name__}")
+    finally:
+        try:
+            on_eof()
+        finally:
+            lines.put(_EOF)
 
 
 def _id_of(line: bytes) -> str:
     try:
         rid = json.loads(line).get("id")
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError, RecursionError):
         return ""
-    return rid if isinstance(rid, str) and 1 <= len(rid) <= 32 else ""
+    if not isinstance(rid, str) or not 1 <= len(rid) <= 32:
+        return ""
+    try:
+        rid.encode("utf-8")
+    except UnicodeEncodeError:
+        return ""
+    return rid
 
 
 def serve(load: Callable[[], Renderer], *, stdin: BinaryIO, out: BinaryIO,
