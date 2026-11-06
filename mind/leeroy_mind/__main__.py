@@ -391,6 +391,8 @@ def _doctor_overlays(root: Path) -> list[tuple[bool, str]]:
     from .talk.romance import OVERLAY_CAPS, split_variants
     from .text import estimate_tokens
     from .tuning.lines import OVERLAY_CAP_TOKENS as TUNING_CAP, OVERLAY_NAMES as TUNING_OVERLAYS
+    from .nightly.llm import night_prompt_names
+    night_names = night_prompt_names()
     caps = dict(OVERLAY_CAPS)
     caps["persona_rules"] = OVERLAY_TOKEN_CAP
     caps.update({name: TUNING_CAP for name in TUNING_OVERLAYS})
@@ -400,8 +402,9 @@ def _doctor_overlays(root: Path) -> list[tuple[bool, str]]:
         cap = caps.get(path.stem)
         stage = path.stem.removeprefix("nightly_")
         if cap is None and stage != path.stem and stage:
-            out.append((True, f"prompt overlay {path.stem}: read by the night's {stage} writer "
-                              "(no cap)"))
+            out.append((True, f"prompt overlay {path.stem}: " + (
+                f"read by the night's {stage} writer (no cap)" if stage in night_names else
+                "no night writer reads it (check the name)")))
             continue
         if cap is None:
             known = ", ".join(f"{name}.txt" for name in sorted(caps))

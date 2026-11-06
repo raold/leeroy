@@ -205,9 +205,10 @@ def explicit_whisper(p: Persona, rel: Relationship | None, *, dial: int, channel
 
 def whisper_tail(p: Persona, rel: Relationship | None, *, dial: int, channel: str,
                  data_dir: Path, rng: random.Random | None = None) -> str:
-    """The owner's whisper overlay (mind-data/prompts/romance_explicit_whisper.txt; one of its
-    variants, the first without `rng`), capped like the band overlays, for a whisper to him at the explicit band; "" otherwise or when
-    there is none (the band as before). The pipeline puts it after the turn's instruction."""
+    """The owner's whisper overlay (mind-data/prompts/romance_explicit_whisper.txt; one of
+    its variants, the first without `rng`), capped like the band overlays, for a whisper to
+    him at the explicit band; "" otherwise or when there is none (the band as before). The
+    pipeline puts it after the turn's instruction."""
     if not explicit_whisper(p, rel, dial=dial, channel=channel):
         return ""
     return _pick(overlay_variants(WHISPER_OVERLAY, data_dir), rng) or ""
