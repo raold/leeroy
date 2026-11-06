@@ -389,3 +389,22 @@ def test_a_photo_kind_write_is_shown_as_the_photo_pass(cast, data):
     commit_unit(cast, "2026-10-29", "photo", "301", photo_pass, now=NOW - 100)
     _, by = _roster(data)
     assert by[301]["persona"]["by"] == "photo" and by[305]["persona"]["by"] == "night"
+
+
+def test_the_nearest_pass_before_a_write_is_the_one_that_wrote_it(cast, data):
+    # final review minor 8: the looks pass's last member and the photo pass's first can finish
+    # within LOOKS_S of each other; the write is the later unit's, whatever the row order
+    looks = Appearance(height_cm=170, build="slim", weight_kg=60, hair_colour="black",
+                       hair_length="long", hair_style="loose", skin_tone="olive",
+                       eye_colour="brown", face=(), at_the_pc="a cardigan")
+
+    def looks_pass(st):
+        _save(st, replace(load_persona(st, 301), appearance=looks), "generated", NOW - 130 + 0.4)
+
+    def photo_pass(st):
+        _save(st, replace(load_persona(st, 301), photo=ProfilePhoto(**PHOTO)), "generated",
+              NOW - 100 + 0.4)
+    commit_unit(cast, "2026-10-29", personaview.LOOKS_STAGE, "301", looks_pass, now=NOW - 130)
+    commit_unit(cast, "2026-10-29", "photo", "301", photo_pass, now=NOW - 100)
+    _, by = _roster(data)
+    assert by[301]["persona"]["by"] == "photo"

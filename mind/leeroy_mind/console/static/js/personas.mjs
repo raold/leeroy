@@ -1,7 +1,7 @@
 import { $, api, arr, cell, clear, el, emit, emptyRow, num, obj, on, own, plural, post, refused,
          setText, str } from "./core.mjs";
 import { face } from "./faces.mjs";
-import { pollSelfies, setSelfieNames, showMemberPhoto } from "./selfies.mjs";
+import { forgetMemberShots, pollSelfies, setSelfieNames, showMemberPhoto } from "./selfies.mjs";
 import { S } from "./state.mjs";
 import { registerTab, showTab } from "./tabs.mjs";
 import { CLASSES, moodText, moodTitle, photoKindText, signed, when, youText, youTitle } from "./words.mjs";
@@ -517,6 +517,7 @@ on("tuning", function (d) {
 // A photo picked, undone or asked for again, here or on another page: faces.mjs already let the
 // old photo go, so the roster and the open member draw it afresh
 on("selfie", function (d) {
+  if (num(obj(d).guid)) { forgetMemberShots(obj(d).guid); }  // its sets' marks are read again
   if (obj(d).guid === shownFace) { shownFace = null; }
   if (S.tab === "personas") { pollPersonas(); pollSelfies(); }
 });

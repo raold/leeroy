@@ -30,14 +30,38 @@ export function leadText(view) {
   return plural(n, "member has", "members have") + " four photos waiting. Click the one that fits; it becomes their photo everywhere.";
 }
 
-// Why a pick, undo or "4 more" cannot be sent now ("" when it can): the mind down (or without
-// photos), else control off
+// Why a pick, undo or "4 more" cannot be sent now ("" when it can): control off first, as the
+// server and the dials card say it (under --no-control nothing could be sent even with the mind
+// up), else the mind down (or without photos)
 export function whyOff(sel) {
   if (!sel) { return "Reading the photos."; }
   var mind = obj(sel.mind), control = obj(sel.control);
-  if (mind.ok !== true) { return str(mind.error) || MIND_DOWN; }
   if (control.enabled === false) { return str(control.reason) || "control is off"; }
+  if (mind.ok !== true) { return str(mind.error) || MIND_DOWN; }
   return "";
+}
+
+// Forget the cached image answers of one member's sets ("guid:set" keys), so their marks are
+// read again after a change
+export function forgetShots(cache, guid) {
+  var prefix = num(guid) + ":";
+  Array.from(cache.keys()).forEach(function (key) {
+    if (String(key).indexOf(prefix) === 0) { cache.delete(key); }
+  });
+}
+
+// Where the keyboard goes once a pick, undo or "4 more" is answered. After a refusal, the button
+// that was clicked, which is still drawn: a selector for it. Otherwise null, and the page focuses
+// the status line's Undo when it has one, else the status line itself (`status` is its id)
+export function refocusSelector(args, refused, status) {
+  var a = obj(args);
+  if (!refused) { return null; }
+  if (status === "p-photostatus") { return a.action === "more" ? "#p-more" : null; }
+  if (!num(a.guid)) { return null; }
+  if (a.action === "more") { return '#sf-queue [data-guid="' + num(a.guid) + '"] [data-more]'; }
+  if (a.action !== "pick") { return null; }
+  return '#sf-queue [data-guid="' + num(a.guid) + '"][data-set="' + num(a.set) + '"] [data-index="'
+    + num(a.index) + '"]';
 }
 
 // One page of the queue (at counts from 0, kept in range) and what it shows of the whole

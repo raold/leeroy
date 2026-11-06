@@ -262,6 +262,22 @@ def test_the_minds_refusals_are_worded_for_the_page(cast, data, said, words):
     run(go())
 
 
+def test_a_mind_older_than_the_selfie_op_is_said_in_words(cast, data):
+    # final review minor 2: such a mind names the ops it has; the page says what to do instead
+    link = FakeLink({"ok": False, "error": "bad request: op is one of status, stop, raid, tune, say"})
+
+    async def go():
+        async with served(make_app(data, mind=running(data), link=link)) as app:
+            r = await http(app, "POST", "/api/selfie", body=PICK, origin=True)
+            assert r.status == 409 and r.json() == {"ok": False,
+                                                    "error": console_app.SELFIE_OLD_MIND}
+            s = (await http(app, "GET", "/api/selfies")).json()["mind"]
+            assert s == {"ok": False, "error": console_app.SELFIE_OLD_MIND}
+    run(go())
+    assert console_app.SELFIE_OLD_MIND == ("The running mind is older than this console and "
+                                           "cannot set photos: restart it from the Mind tab.")
+
+
 def test_a_selfie_change_is_announced_to_other_pages(cast, data):
     replies = {"pick": {"ok": True, "pick": 3, "guid": 101, "message": "Photo set."},
                "undo": {"ok": True, "pick": 4, "guid": 101, "message": "Undone."},
@@ -313,12 +329,17 @@ def test_the_page_has_the_choose_selfies_card():
     assert "<h3>Choose selfies</h3>" in card and "Recent choices" in card
     for i in ("sf-counts", "sf-lead", "sf-queue", "sf-status", "sf-recent"):
         assert f'id="{i}"' in card, i
+    # the keyboard lands on the status line after a change (final review minor 3)
+    assert '<p id="sf-status" class="why" role="status" tabindex="-1">' in card
     detail = _between(page, 'id="p-detail"', '<section id="tab-')
     photo = _between(detail, 'id="p-photo"', "</article>")
     assert "<h3>Profile photo</h3>" in photo and ">4 more</button>" in photo
+    assert '<p id="p-photostatus" class="why" role="status" tabindex="-1">' in photo
     assert 'title="Pass on these and render four new ones tonight"' in photo
     source = page_source()  # the page and its modules
     assert 'api("/api/selfies")' in source and '"/api/selfies/images?guid="' in source
+    assert "refocus(args, refused, status);" in source  # after the redraw a change makes
+    assert "forgetMemberShots(obj(d).guid)" in source   # the selfie event: its sets read again
     assert '"/api/selfies/member?guid="' in source and 'post("/api/selfie", ' in source
     for words in ("Use photo ", " of 4 for ", "Pass on these and render four new ones tonight",
                   " four photos waiting. Click the one that fits; it becomes their photo everywhere.",

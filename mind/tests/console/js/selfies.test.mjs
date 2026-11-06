@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { MIND_DOWN, MORE_TITLE, NO_PHOTO, PAGE, RECENT, countsText, currentText, historyRows, leadText,
-         pageOf, pickLabel, recentRows, whyOff } from "../../../leeroy_mind/console/static/js/selfiemodel.mjs";
+import { MIND_DOWN, MORE_TITLE, NO_PHOTO, PAGE, RECENT, countsText, currentText, forgetShots, historyRows,
+         leadText, pageOf, pickLabel, recentRows, refocusSelector, whyOff } from "../../../leeroy_mind/console/static/js/selfiemodel.mjs";
 import { photoKindText, when } from "../../../leeroy_mind/console/static/js/words.mjs";
 
 // The "Choose selfies" card's words and pages from /api/selfies ({view, mind, control}) and a
@@ -43,14 +43,17 @@ test("an older mind.db says photos are unavailable and how to add them", () => {
                + "`db migrate` with the mind stopped adds them.");
 });
 
-test("changes can be sent only with the mind up and control on; the mind's words come first", () => {
+test("changes can be sent only with control on and the mind up; control's reason comes first", () => {
   assert.equal(whyOff(sel()), "");
   assert.equal(MIND_DOWN, "The mind isn't running, so it can't set photos. Start it from the Mind tab.");
   assert.equal(whyOff(sel({ mind: { ok: false, error: MIND_DOWN } })), MIND_DOWN);
   assert.equal(whyOff(sel({ mind: { ok: false } })), MIND_DOWN);
+  // control off comes first, as the server and the dials card say it (final review minor 1)
   assert.equal(whyOff(sel({ mind: { ok: false, error: MIND_DOWN },
                             control: { enabled: false, reason: "process control is off (--no-control)" } })),
-               MIND_DOWN);
+               "process control is off (--no-control)");
+  assert.equal(whyOff(sel({ mind: { ok: false, error: "no control endpoint here" }, control: { enabled: false } })),
+               "control is off");
   assert.equal(whyOff(sel({ control: { enabled: false, reason: "process control is off (--no-control)" } })),
                "process control is off (--no-control)");
   assert.equal(whyOff(sel({ control: { enabled: false } })), "control is off");
@@ -125,4 +128,25 @@ test("the photo kind line: kind, framing and setting", () => {
   assert.equal(photoKindText({ kind: "mirror_selfie", framing: "head_and_shoulders", setting: "" }),
                "mirror selfie, head and shoulders");
   assert.equal(photoKindText(null), "");
+});
+
+test("a change forgets only that member's cached sets", () => {
+  var cache = new Map([["101:1", 1], ["101:2", 2], ["1011:1", 3], ["102:1", 4]]);
+  forgetShots(cache, 101);
+  assert.deepEqual(Array.from(cache.keys()), ["1011:1", "102:1"]);
+  forgetShots(cache, "x");
+  assert.equal(cache.size, 2);
+});
+
+test("after a refusal the keyboard goes back to the button that was clicked", () => {
+  var pick = { action: "pick", guid: 101, set: 2, index: 3 };
+  assert.equal(refocusSelector(pick, true, "sf-status"),
+               '#sf-queue [data-guid="101"][data-set="2"] [data-index="3"]');
+  assert.equal(refocusSelector({ action: "more", guid: 102 }, true, "sf-status"),
+               '#sf-queue [data-guid="102"] [data-more]');
+  assert.equal(refocusSelector({ action: "more", guid: 102 }, true, "p-photostatus"), "#p-more");
+  // done, or an undo (its row is drawn again): the status line's Undo, else the line itself
+  assert.equal(refocusSelector(pick, false, "sf-status"), null);
+  assert.equal(refocusSelector({ action: "undo", pick: 4 }, true, "sf-status"), null);
+  assert.equal(refocusSelector({ action: "undo", pick: 4 }, true, "p-photostatus"), null);
 });

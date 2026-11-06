@@ -1,7 +1,7 @@
 import { $, api, arr, clear, el, num, obj, post, refused, setText, str } from "./core.mjs";
 import { face } from "./faces.mjs";
-import { MORE_TITLE, countsText, currentText, historyRows, leadText, pageOf, pickLabel, recentRows,
-         whyOff } from "./selfiemodel.mjs";
+import { MORE_TITLE, countsText, currentText, forgetShots, historyRows, leadText, pageOf, pickLabel,
+         recentRows, refocusSelector, whyOff } from "./selfiemodel.mjs";
 import { S } from "./state.mjs";
 
 // -- the Personas tab's profile photos: the "Choose selfies" card and a member's Profile photo ---
@@ -14,13 +14,18 @@ import { S } from "./state.mjs";
 
 var JPEG = "data:image/jpeg;base64,";
 var SEL = null, busy = false, again = false, changing = false, at = 0, drawn = "", names = {};
-var SHOTS = new Map();  // "guid:set" -> its images' answer (a ready set's files never change)
+// "guid:set" -> its images' answer. A ready set's files never change, but which slot is the photo
+// in force does: a change forgets that member's sets (forgetMemberShots)
+var SHOTS = new Map();
 var who = { guid: 0, name: "", seq: 0, view: undefined };
 
 function live() { return !changing && !whyOff(SEL); }
 
 // The roster's names, for the recent choices
 export function setSelfieNames(n) { names = obj(n); }
+
+// A photo picked, undone or asked for again, here or on another page (the "selfie" event)
+export function forgetMemberShots(guid) { forgetShots(SHOTS, guid); }
 
 export function pollSelfies() {
   if (S.tab !== "personas") { return; }
@@ -173,17 +178,37 @@ function change(args, status) {
   drawn = "";
   renderSelfies();
   say(status, DOING[args.action]);
+  var refused = true, guid = num(args.guid);
   post("/api/selfie", args).then(function (r) {
     if (r.ok !== true) { say(status, "Not done: " + (str(r.error) || "refused"), true); return; }
+    refused = false;
+    guid = num(r.guid) || guid;
     say(status, str(r.message) || "Done.", false, args.action === "pick" && typeof r.pick === "number" ? r.pick : 0);
   }, function () { say(status, "Not done: the console could not be reached.", true); })
     .then(function () {
       changing = false;
+      if (!refused && guid) { forgetShots(SHOTS, guid); }
       drawn = "";
       renderSelfies();
+      refocus(args, refused, status);
       pollSelfies();
       if (who.guid && !$("p-detail").hidden) { loadMember(); }
     });
+}
+
+// The queue and the status line were drawn again, so the focused button is gone: back to the
+// button that was clicked after a refusal (a shot once its picture is in), else the status
+// line's Undo, else the status line
+function refocus(args, refused, status) {
+  var line = $(status), sel = refocusSelector(args, refused, status);
+  var b = sel ? document.querySelector(sel) : null;
+  function toLine() { (line.querySelector("button") || line).focus(); }
+  if (!b) { toLine(); return; }
+  if (!b.disabled) { b.focus(); return; }
+  if (args.action !== "pick") { toLine(); return; }
+  loadShots(args.guid, args.set).then(function () {  // after drawQueue's fillShots on it
+    if (b.isConnected && !b.disabled) { b.focus(); } else { toLine(); }
+  });
 }
 
 $("sf-queue").addEventListener("click", function (ev) {

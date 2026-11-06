@@ -124,6 +124,8 @@ STATIC_TYPES = {".css": "text/css; charset=utf-8", ".js": "text/javascript; char
                 ".txt": "text/plain; charset=utf-8"}
 
 SELFIE_DOWN = "The mind isn't running, so it can't set photos. Start it from the Mind tab."
+SELFIE_OLD_MIND = ("The running mind is older than this console and cannot set photos: restart "
+                   "it from the Mind tab.")
 SELFIE_WORDS = {
     "photos are not running in this mind": "Photos are off in this mind.",
     "another photo change is still being written":
@@ -772,6 +774,8 @@ class ConsoleApp:
     @staticmethod
     def _selfie_words(reply: dict) -> str:
         said = str(reply.get("error") or "refused")[:300]
+        if said.startswith(OLD_OPS):  # a mind from before the selfie op names the ops it has
+            return SELFIE_OLD_MIND
         return SELFIE_WORDS.get(said, said)
 
     async def _selfie_status(self) -> dict:

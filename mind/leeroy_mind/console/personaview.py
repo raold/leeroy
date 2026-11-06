@@ -84,9 +84,11 @@ def _by(guid, source, updated, moves, looks) -> str:
         return source  # seed or owner
     if (guid, updated) in moves:
         return moves[(guid, updated)]
-    for t, stage in looks.get(guid, ()):
-        if t <= updated <= t + LOOKS_S:
-            return PHOTO_STAGE if stage == PHOTO_STAGE else "night"
+    # the nearest unit before the write: the looks pass's last member and the photo pass's first
+    # can finish within LOOKS_S of each other, and row order says nothing
+    near = [(t, stage) for t, stage in looks.get(guid, ()) if t <= updated <= t + LOOKS_S]
+    if near:
+        return PHOTO_STAGE if max(near)[1] == PHOTO_STAGE else "night"
     return "generator"
 
 
