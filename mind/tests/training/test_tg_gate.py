@@ -6,7 +6,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from leeroy_mind.guild.config import GuildConfig
+from leeroy_mind.guild.offline import next_raid_key
 from leeroy_mind.guild.raid_night import RaidRun
+from leeroy_mind.guild.raids import split_key
 from leeroy_mind.guild.session import RaidPlan
 from leeroy_mind.protocol import Ack, Boss
 from leeroy_mind.storage.store import Store
@@ -22,15 +25,25 @@ def _run_async(test):
     return run
 
 
-def run_for(fake, ident=1, *, offline=True, instance=100, size=10, heroic=False):
+def run_for(fake, ident=1, *, offline=True, instance=100, size=10, heroic=False, map_id=631):
     plan = RaidPlan("icc", size, heroic, offline, 101, 101, 101, [101, 102], [], not offline)
     session = SimpleNamespace(raid_id=ident, started=fake.clock.now(), _closing=False,
-                              ctx=SimpleNamespace(map_id=631, instance_id=instance))
+                              ctx=SimpleNamespace(map_id=map_id, instance_id=instance))
     return RaidRun(plan, session, not offline, False)
 
 
 def boss(fake, index=0, state="engaged", **kw):
     return replace(Boss(int(fake.clock.now() * 1000), 631, 100, index, "", state, (101, 102)), **kw)
+
+
+async def family_fight(fake, gate, run, index):
+    ctx = run.session.ctx
+    at = dict(map=ctx.map_id, instance_id=ctx.instance_id)
+    await gate.on_muster(run, index)
+    await gate.on_boss(boss(fake, index, **at))
+    await collect(fake, gate, gate.record_flag(run, index))
+    await gate.on_boss(boss(fake, index, "killed", **at))
+    await fake.clock.advance(1, step=1)
 
 
 def stats(fake, record, value=41, **kw):
@@ -73,6 +86,61 @@ async def test_ab_alternates_by_pull_and_starts_on_other_side_each_raid(fake):
     await restarted.on_start(second)
     assert not restarted.record_flag(second, 0)
     assert metadata(fake)["raids"] == 2
+
+
+@_run_async
+async def test_rotating_offline_raids_compare_each_boss_on_both_sides(fake):
+    # Guild life rotates four offline raids, least recently run first, so a
+    # raid's next visit is four raids later. Parity counted over all raids
+    # would keep every boss on one side and the gate could never decide.
+    gate, last = Gate(fake), {}
+    sides = {}
+    for ident in range(1, 9):
+        key = next_raid_key(GuildConfig().offline_rotation, last)
+        raid, size, heroic = split_key(key)
+        run = run_for(fake, ident, size=size, heroic=heroic, map_id=raid.map_id, instance=100 + ident)
+        await gate.on_start(run)
+        for index in range(3):
+            sides.setdefault((key, index), []).append(gate.record_flag(run, index))
+            await family_fight(fake, gate, run, index)
+        last[key] = fake.clock.now()
+    assert all(sorted(seen) == [False, True] for seen in sides.values()) and len(sides) == 12
+    assert gate.verdict() == ("passed", 0.0)
+    assert metadata(fake)["raids"] == 8
+    restarted = Gate(fake)
+    assert restarted.verdict() == ("passed", 0.0)
+
+
+@_run_async
+async def test_family_parity_survives_restart_and_skips_failed_setups(fake):
+    gate = Gate(fake)
+    first = run_for(fake, 1, size=25, instance=201)
+    await gate.on_start(first)
+    other = run_for(fake, 2, size=10, instance=202)
+    await gate.on_start(other)
+    # Raid 3 failed in setup and never started; raid 4 is the family's second visit.
+    second = run_for(fake, 4, size=25, instance=204)
+    restarted = Gate(fake)
+    await restarted.on_start(second)
+    assert [restarted.record_flag(second, i) for i in range(2)] == [False, True]
+    again = Gate(fake)
+    await again.on_start(second)
+    assert [again.record_flag(second, i) for i in range(2)] == [False, True]
+    assert metadata(fake)["raids"] == 3
+
+
+@_run_async
+async def test_corrupt_family_counter_fails_closed_for_that_family(fake):
+    with fake.conn:
+        fake.conn.execute("INSERT INTO meta(key,value) VALUES ('tg_gate:family:631:1','\"x\"')")
+    gate = Gate(fake)
+    run = run_for(fake, 1, size=25)
+    await gate.on_start(run)
+    assert not any(gate.record_flag(run, i) for i in range(4))
+    assert metadata(fake) is None
+    fresh = run_for(fake, 2, size=10)
+    await gate.on_start(fresh)
+    assert [gate.record_flag(fresh, i) for i in range(2)] == [True, False]
 
 
 @_run_async

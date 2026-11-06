@@ -111,20 +111,33 @@ class Gate:
         self._run, self._raid_index, self._boss_index = run, None, None
         self._record, self._last_boss_ms = False, -1
         if self.phase == "ab" and self._offline(run):
-            key = f"tg_gate:raid:{run.session.raid_id}"
-            index = self._read(key)
-            if index is None:
-                index = self._raids
+            # Offline raids rotate between raids, so parity is counted within
+            # one map and difficulty: its next visit starts on the other side.
+            family = self._family(run)
+            key, count_key = f"tg_gate:raid:{run.session.raid_id}", f"tg_gate:family:{family}"
+            saved, count = self._read(key), self._read(count_key)
+            count = 0 if count is None else count
+            if type(count) is not int or count < 0:
+                return
+            if saved is None:
+                saved = dict(family=family, index=count)
                 with self.store.transaction():
-                    self.store.set_meta(key, json.dumps(index))
+                    self.store.set_meta(key, json.dumps(saved))
+                    self.store.set_meta(count_key, json.dumps(count + 1))
                     self._raids += 1
                     self._save()
-            if type(index) is int and 0 <= index < self._raids:
-                self._raid_index = index
+                count += 1
+            if (isinstance(saved, dict) and saved.get("family") == family
+                    and type(saved.get("index")) is int and 0 <= saved["index"] < count):
+                self._raid_index = saved["index"]
 
     @staticmethod
     def _offline(run):
         return run.plan.offline and not run.human_in_raid and not run.plan.human_in_raid
+
+    @staticmethod
+    def _family(run):
+        return f"{run.session.ctx.map_id}:{int(run.plan.size == 25) + 2 * int(run.plan.heroic)}"
 
     def record_flag(self, run, boss_index: int) -> bool:
         if self.phase == "failed" or not self.ports.cfg.telemetry:

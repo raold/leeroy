@@ -36,7 +36,7 @@ def test_mutation_refuses_held_service_lock(fake, tmp_path, args):
 
 def test_reset_clears_experiment_evidence_and_parity_only(fake, tmp_path):
     with fake.conn:
-        for key in ("tg_gate", "tg_gate:raid:1", "tg_gate:perf:gate:1", "keep"):
+        for key in ("tg_gate", "tg_gate:raid:1", "tg_gate:family:631:0", "tg_gate:perf:gate:1", "keep"):
             fake.conn.execute("INSERT INTO meta(key,value) VALUES (?,?)", (key, "{}"))
         for fight in ("gate:1", "future-other"):
             fake.conn.execute("INSERT INTO tg_perf(ts,fight,context,kind,armed,mean_ms) VALUES (0,?,'631:0:0','offline',0,1)", (fight,))

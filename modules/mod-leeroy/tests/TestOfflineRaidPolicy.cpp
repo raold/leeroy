@@ -99,6 +99,19 @@ LEEROY_TEST(OfflineRaid_IsWipe)
     CHECK(!IsWipe(5, 2));
 }
 
+LEEROY_TEST(OfflineRaid_FreshCopyAcceptsBossesWhoseGridsHaveNotLoaded)
+{
+    // NOT_STARTED 0, IN_PROGRESS 1, FAIL 2, DONE 3, SPECIAL 4, TO_BE_DECIDED 5. A new ICC copy entered at
+    // the door reads Marrowgar as 0 and every later boss as 5 until its grid loads.
+    CHECK(FreshEncounters({0, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5}, 0));
+    CHECK(FreshEncounters({5, 5, 5, 5, 5}, 0));
+    CHECK(FreshEncounters({0, 0, 0}, 0));
+    CHECK(!FreshEncounters({0, 3, 5}, 0));
+    CHECK(!FreshEncounters({5, 5, 3}, 0));
+    CHECK(!FreshEncounters({0, 5, 5}, 1u << 2));  // A saved copy's credit counts even before its boss loads.
+    CHECK(!FreshEncounters({}, 0));
+}
+
 LEEROY_TEST(OfflineRaid_TimersSaturateInsteadOfExtendingTheRunAfterOverflow)
 {
     auto const maximum = std::numeric_limits<std::uint32_t>::max();

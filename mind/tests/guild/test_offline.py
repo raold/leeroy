@@ -146,6 +146,21 @@ async def test_nonretryable_ack_failure_ends_day_without_attendance(setup):
     await controller.tick()
     assert len(ports.sent) == 1 and ports.gpu[-1] == "release:offline_raid"
     assert controller.session is None
+    day = controller._day_state()
+    assert day["blocked"] and day["refused"] == "leader_not_tank"
+
+
+@_run_async
+async def test_setup_failure_reason_stays_in_the_day_receipt(setup):
+    ports, armory, controller = setup
+    await start(setup)
+    await controller.on_job(event(controller, stage="starting"))
+    await controller.on_job(event(controller, state="failed", stage="",
+                                  reason="setup:starting:no_fresh_encounters" + "x" * 300))
+    await controller.tick()
+    day = OfflineRaids(ports, controller.cfg, armory, random.Random(7))._day_state()
+    assert day["accepted"] == 1 and day["failed"].startswith("setup:starting:no_fresh_encounters")
+    assert len(day["failed"]) == 200 and "refused" not in day
 
 
 @_run_async

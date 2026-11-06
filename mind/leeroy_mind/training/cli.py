@@ -37,7 +37,7 @@ def reset_gate(conn):
     with conn:
         conn.execute("DELETE FROM tg_perf WHERE fight GLOB 'gate:*'")
         conn.execute("DELETE FROM meta WHERE key='tg_gate' OR key GLOB 'tg_gate:raid:*' "
-                     "OR key GLOB 'tg_gate:perf:*'")
+                     "OR key GLOB 'tg_gate:family:*' OR key GLOB 'tg_gate:perf:*'")
 
 
 def _open(root, *, write):
