@@ -24,11 +24,11 @@ def test_a_new_database_has_the_tuning_tables_and_no_rows(tmp_path):
         conn.close()
 
 
-def test_the_tuning_migration_is_the_latest_and_needs_the_realms(tmp_path):
+def test_the_tuning_migration_is_0017_and_needs_the_realms(tmp_path):
     names = sorted(p.name for p in (open_db.__globals__["MIGRATIONS_DIR"]).iterdir()
                    if p.suffix == ".sql")
     tuning = [n for n in names if n.endswith("_tuning.sql")]
-    assert len(tuning) == 1 and int(tuning[0][:4]) == latest_version()
+    assert len(tuning) == 1 and int(tuning[0][:4]) == 17 <= latest_version()
     assert any(n.startswith("0016_") for n in names)
 
 
