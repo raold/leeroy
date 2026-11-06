@@ -46,25 +46,19 @@
 <main>
   <section id="tab-comms" class="tab" role="tabpanel" aria-labelledby="t-comms">
     <div id="comms-banner" class="banner" hidden></div>
-    <div class="cols">
+    <div id="comms-kpis" class="kpis" aria-label="Tonight"></div>
+    <div class="comms">
       <aside class="panel tree">
         <h2>Channels</h2>
         <div id="tree" class="list" aria-label="Channels"></div>
       </aside>
-      <section class="panel feedpanel">
-        <div class="feedhead">
-          <h2>Voice and chat</h2>
-          <div id="chips" class="chips" role="group" aria-label="Show">
-            <button type="button" data-f="all" aria-pressed="true">All</button>
-            <button type="button" data-f="voice" aria-pressed="false">Voice</button>
-            <button type="button" data-f="guild" aria-pressed="false">Guild</button>
-            <button type="button" data-f="officer" aria-pressed="false">Officer</button>
-            <button type="button" data-f="group" aria-pressed="false">Party and raid</button>
-            <button type="button" data-f="whisper" aria-pressed="false">Whispers</button>
-          </div>
-        </div>
-        <div id="feed" class="list" role="log" aria-label="Voice and chat"></div>
+      <section class="panel feedpanel" aria-labelledby="feed-title">
+        <h3 id="feed-title"># guild</h3>
+        <p id="feed-hint" class="hint"></p>
+        <div id="feed" class="feed" role="log" aria-labelledby="feed-title"></div>
+        <div id="composer"></div>
       </section>
+      <aside id="comms-right" class="side" aria-label="Your room"></aside>
     </div>
     <footer class="vstatus" aria-label="Voice status">
       <span id="v-out" class="seg"></span><span id="v-mic" class="seg"></span>

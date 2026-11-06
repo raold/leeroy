@@ -17,7 +17,7 @@ from console.rig import http, make_app
 
 STATIC = Path(str(resources.files("leeroy_mind.console").joinpath("static")))
 MODULES = {"core", "state", "tabs", "words", "strip", "main", "comms", "raid", "guild",
-           "personas", "mind", "names", "facecache", "faces"}
+           "personas", "mind", "names", "facecache", "faces", "comms/model", "comms/feedview"}
 IMPORT = re.compile(r'^import\s*(?:\{([^}]*)\}\s*from\s*)?"([^"]+)";', re.M)
 EXPORTED = re.compile(r"^export\s+(?:function|const|let|var|class)\s+([A-Za-z_$][\w$]*)", re.M)
 MARKUP = ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(",
@@ -132,7 +132,7 @@ def test_module_imports_resolve():
     for f in _scripts():
         if f.suffix == ".mjs":
             exports[f] = set(EXPORTED.findall(f.read_text("utf-8")))
-    assert MODULES <= {f.stem for f in exports}
+    assert MODULES <= {f.relative_to(STATIC / "js").with_suffix("").as_posix() for f in exports}
     for f in exports:
         text = f.read_text("utf-8")
         statements = IMPORT.findall(text)

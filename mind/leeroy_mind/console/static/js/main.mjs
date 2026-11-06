@@ -1,7 +1,8 @@
-import { $, api, emit, on, own, remember, setKey } from "./core.mjs";
+import { $, api, arr, emit, on, own, remember, setKey } from "./core.mjs";
 import { S } from "./state.mjs";
 import { renderStrip } from "./strip.mjs";
-import { renderComms, renderFeed } from "./comms.mjs";
+import { renderComms } from "./comms.mjs";  // before the feed: its listeners fill S.voice first
+import { renderFeed } from "./comms/feedview.mjs";
 import "./raid.mjs";
 import "./guild.mjs";
 import "./personas.mjs";
@@ -26,7 +27,7 @@ function keyLost() {
   lost("This console has restarted, or this page was reloaded or opened without its key: open the URL the console printed when it started.");
 }
 on("key-lost", keyLost);
-var KINDS = { snapshot: 1, status: 1, voice: 1, chat: 1, control: 1, raid: 1, tuning: 1 };
+var KINDS = { snapshot: 1, status: 1, voice: 1, chat: 1, chat_gone: 1, control: 1, raid: 1, tuning: 1 };
 // One server-sent event block: "event: <kind>" and "data: <json>" lines; ": ping" is a comment
 function dispatch(block) {
   var kind = "", data = "";
@@ -38,7 +39,11 @@ function dispatch(block) {
   var d;
   try { d = JSON.parse(data); } catch (e) { return; }
   if (!d || typeof d !== "object") { return; }
-  if (kind === "snapshot") { S.status = d.status || S.status; }
+  if (kind === "snapshot") {
+    S.status = d.status || S.status;
+    S.rooms = arr(d.rooms);
+    S.mood = d.mood && typeof d.mood === "object" ? d.mood : null;
+  }
   if (kind === "status") { S.status = d; }
   emit(kind, d);
 }

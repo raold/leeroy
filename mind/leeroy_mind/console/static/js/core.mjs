@@ -72,9 +72,10 @@ export function remember(key, value) {
   try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* none */ }
 }
 
-// The bus: "snapshot", "status", "voice", "chat", "control", "raid" and "tuning" carry what the
-// console's event stream sent; "key-lost" says the console refused the key; "note" is a line for
-// the Comms feed. Listeners run in the order they were added.
+// The bus: "snapshot", "status", "voice", "chat", "chat_gone", "control", "raid" and "tuning" carry
+// what the console's event stream sent; "key-lost" says the console refused the key; "note" is
+// one of the console's own notes for the toasts; "feed" says the Comms feed, its read marks or its
+// open view changed. Listeners run in the order they were added.
 export function on(kind, fn) { (LISTENERS[kind] = LISTENERS[kind] || []).push(fn); }
 export function emit(kind, data) {
   (LISTENERS[kind] || []).slice().forEach(function (fn) { fn(data); });

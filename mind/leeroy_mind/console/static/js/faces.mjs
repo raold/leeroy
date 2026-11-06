@@ -1,6 +1,8 @@
-// A member's face: an initials circle at once, swapped for the chosen photo when it arrives.
-// The photo is fetched with the console key and shown from a blob URL, since an <img src> could
-// not carry the key.
+// A member's face: the chosen photo, or an initials circle while there is none. The photo is
+// fetched with the console key and shown from a blob URL, since an <img src> could not carry the
+// key. Each photo is decoded once and kept per guid and size: a face drawn again (the feed redraws
+// on every line) is a copy of that decoded image at once, never the circle first, and a member
+// with no photo is asked for again only when the cache's memory of the miss runs out.
 import { api, el } from "./core.mjs";
 import { FaceCache } from "./facecache.mjs";
 import { initials, paletteSlot } from "./names.mjs";
@@ -14,16 +16,31 @@ var KINDS = {
 
 var PALETTE = ["#2a68a8", "#6956b0", "#1f7a52", "#b06a0c", "#a0446e", "#0d6470", "#7a5c2e", "#4e5f9a"];
 
+// A photo is in the cache only once it decoded: one that does not is a miss like a 404
 function loadFace(key) {
   var i = key.indexOf(":");
   return api("/api/face?guid=" + encodeURIComponent(key.slice(0, i)) + "&size=" + key.slice(i + 1))
     .then(function (r) { return r.status === 200 ? r.blob() : null; })
-    .then(function (b) { return b ? URL.createObjectURL(b) : null; });
+    .then(function (b) {
+      if (!b) { return null; }
+      var url = URL.createObjectURL(b), img = document.createElement("img");
+      img.alt = "";
+      img.src = url;
+      return img.decode().then(function () { return { url: url, img: img }; },
+                               function () { URL.revokeObjectURL(url); return null; });
+    });
 }
 
-var cache = new FaceCache({ load: loadFace, drop: function (url) { URL.revokeObjectURL(url); } });
+var cache = new FaceCache({ load: loadFace, drop: function (p) { URL.revokeObjectURL(p.url); } });
 
 export function forgetFaces() { cache.forget(); }
+
+function photo(p, cls) {
+  var img = p.img.cloneNode(false);
+  img.className = cls;
+  img.alt = "";
+  return img;
+}
 
 export function face(guid, name, kind, opts) {
   opts = opts || {};
@@ -32,14 +49,10 @@ export function face(guid, name, kind, opts) {
   var box = el("span", cls, opts.you ? "YOU" : initials(name));
   box.style.setProperty("--c", opts.you ? "var(--accent)" : PALETTE[paletteSlot(guid)]);
   if (opts.you) { return box; }
-  cache.get(guid + ":" + k.size).then(function (url) {
-    if (!url) { return; }
-    var img = document.createElement("img");
-    img.className = cls;
-    img.alt = "";
-    // a photo that fails to decode never replaces the circle: only a load does
-    img.addEventListener("load", function () { if (box.parentNode) { box.parentNode.replaceChild(img, box); } });
-    img.src = url;
+  var key = guid + ":" + k.size, known = cache.peek(key), asked = cache.get(key);
+  if (known) { return photo(known, cls); }  // and a reload, when one is due, serves the next draw
+  asked.then(function (p) {
+    if (p && box.parentNode) { box.parentNode.replaceChild(photo(p, cls), box); }
   });
   return box;
 }

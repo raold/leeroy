@@ -16,6 +16,6 @@ def test_node_tests_pass():
         pytest.skip("node is not installed")
     files = sorted(p.name for p in TESTS.glob("*.test.mjs"))
     assert files
-    r = subprocess.run([node, "--test", *files], cwd=TESTS, capture_output=True, text=True,
-                       timeout=120)
+    r = subprocess.run([node, "--test", "--test-timeout=30000", *files], cwd=TESTS,
+                       capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stdout + r.stderr

@@ -109,7 +109,7 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: 
 .banner.bad { color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, transparent);
   border-color: color-mix(in srgb, var(--bad) 35%, transparent); }
 .mindtab > .banner { margin: 0; }
-#tab-comms > .banner { width: calc(100% - 32px); max-width: 1568px; margin: 18px auto 0; }
+#tab-comms > .banner, #tab-comms > .kpis { width: calc(100% - 32px); max-width: 1568px; margin: 18px auto 0; }
 
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
   padding: 14px 16px; min-width: 0; }
@@ -127,14 +127,23 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: 
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; }
 .cards.wide { grid-template-columns: repeat(auto-fit, minmax(min(520px, 100%), 1fr)); }
 
-/* comms (its panels keep their own scrolling lists) */
-.cols { flex: 1; min-height: 0; display: flex; gap: 18px; padding: 18px 16px; width: 100%;
-  max-width: 1600px; margin: 0 auto; }
-.panel.tree, .panel.feedpanel { display: flex; flex-direction: column; min-height: 0; padding: 14px 10px; }
-.panel.tree { width: 300px; min-width: 200px; max-width: 60vw; resize: horizontal; overflow: hidden; }
-.panel.feedpanel { flex: 1; }
-.panel.tree > h2, .panel.feedpanel h2 { margin: 0; padding: 0 6px 6px; font-size: 10.5px; font-weight: 600;
+/* comms: three columns under the KPI band, filling the window; each column scrolls on its own */
+.comms { flex: 1; min-height: 0; display: grid; grid-template-columns: 260px minmax(0, 1fr) 320px;
+  grid-template-rows: minmax(0, 1fr); gap: 18px; padding: 18px 16px; width: 100%; max-width: 1600px;
+  margin: 0 auto; }
+.comms > .panel { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.panel.tree { padding: 14px 10px; }
+.panel.tree > h2 { margin: 0; padding: 0 6px 6px; font-size: 10.5px; font-weight: 600;
   letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); font-family: var(--f-body); }
+.feed { flex: 1; min-height: 0; overflow: auto; }
+.msg { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 2px 12px; padding: 10px 2px;
+  border-top: 1px solid var(--line); }
+.msg:first-child { border-top: 0; }
+.msg .h { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.msg .who { font-weight: 700; color: var(--ink); }
+.msg .t { font: 500 12px/1 var(--f-mono); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.msg .body { color: var(--ink); overflow-wrap: anywhere; }
+.feed .empty { padding: 10px 2px; }
 .list { flex: 1; min-height: 0; overflow: auto; padding: 2px 4px 6px; }
 .row { display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 3px 8px; border-radius: 8px;
   white-space: nowrap; cursor: default; }
@@ -161,21 +170,7 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: 
 .member.you { font-weight: 700; }
 .member.muted .mname { color: var(--ink-3); text-decoration: line-through; }
 .tag { font-size: 11px; color: var(--ink-3); }
-.feedhead { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding-right: 8px; }
-.chips { display: flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
-.chips button { padding: 2px 9px; font-size: 12px; border-radius: 99px; color: var(--ink-2); }
-.chips button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent);
-  color: var(--accent-ink); }
-.line { padding: 3px 8px; overflow-wrap: anywhere; border-radius: 6px; }
-.ts { font-family: var(--f-mono); font-size: 12px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
-.chan { font-size: 11px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; }
 .who { font-weight: 700; color: var(--accent); }
-.line.mine .who { color: var(--ink); }
-.c-guild .chan { color: var(--live); } .c-officer .chan { color: var(--blue); }
-.c-party .chan { color: var(--blue); } .c-raid .chan { color: var(--warn); }
-.c-raid_warning .chan { color: var(--bad); } .c-whisper .chan, .c-whisper .msg { color: var(--violet); }
-.c-voice .chan { color: var(--live); }
-.c-system { color: var(--ink-3); font-style: italic; }
 .vstatus { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 16px 14px; width: 100%; max-width: 1600px;
   margin: 0 auto; }
 .seg { padding: 2px 9px; border: 1px solid var(--line); border-radius: 99px; font-size: 12px; color: var(--ink-3); }
@@ -280,8 +275,9 @@ select, input[type="text"], input[type="number"] { color: var(--ink); background
 .chg .acts { margin-top: 2px; }
 
 @media (max-width: 720px) {
-  .cols { flex-direction: column; }
-  .panel.tree { width: auto; max-width: none; resize: none; max-height: 40vh; }
+  .comms { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; }
+  .comms > .panel { max-height: 70vh; }
+  .panel.tree { max-height: 40vh; }
   .facts { grid-template-columns: 1fr; }
 }
 

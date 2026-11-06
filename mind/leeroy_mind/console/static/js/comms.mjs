@@ -1,20 +1,16 @@
-import { $, arr, clear, clock, el, num, obj, on, own, post, recall, remember, str } from "./core.mjs";
+import { $, arr, clear, el, num, obj, on, own, post, recall, remember, str } from "./core.mjs";
 import { S, hereRoom, name, roomName } from "./state.mjs";
 import { renderStrip } from "./strip.mjs";
-import { registerTab } from "./tabs.mjs";
 
-var KEEP = 200;                 // lines kept per source, as the services keep them
+// The parts of Comms the rebuild has not replaced yet: the room tree, the volume menu, the
+// invites and the voice status (the feed is comms/feedview.mjs)
+
 var DB_LIMIT = 12;
+var NOTE_MS = 8000;             // how long one of the console's own notes stays up
+var NOTES_SHOWN = 5;
 var COLLAPSED_KEY = "guild-console-collapsed";
-var CHANNEL_TAGS = { guild: "Guild", officer: "Officer", party: "Party", raid: "Raid",
-                     raid_warning: "Raid warning", whisper: "Whisper", voice: "Voice" };
-var FILTERS = { all: null, voice: ["voice"], guild: ["guild"], officer: ["officer"],
-                group: ["party", "raid", "raid_warning"], whisper: ["whisper"] };
 
-var CHAT = [];                  // the mind's text lines, by id
-var TRANS = [];                 // the voice transcript and the console's own notes
-var seen = {};
-var filter = "all";
+var NOTES = [];
 var collapsed = obj(recall(COLLAPSED_KEY, {}));
 var menuGuid = 0;
 
@@ -34,8 +30,6 @@ function adoptVoice(m) {
   S.voice.speaking = arr(m.speaking); S.voice.ptt = m.ptt === true; S.voice.volumes = obj(m.volumes);
   S.voice.mutes = arr(m.mutes); S.voice.invites = arr(m.invites).filter(function (i) { return i && typeof i.channel === "string"; });
   S.voice.mind = m.mind === true; S.voice.status = obj(m.status);
-  TRANS = TRANS.filter(function (t) { return t.note; });
-  arr(m.transcript).slice(-KEEP).forEach(function (t) { addTranscript(obj(t), true); });
 }
 function isSpeaking(g) { return S.voice && S.voice.speaking.indexOf(g) >= 0; }
 function isMuted(g) { return S.voice && S.voice.mutes.indexOf(g) >= 0; }
@@ -113,80 +107,23 @@ function renderTree() {
   });
 }
 
-// -- comms: one feed of voice and text -----------------------------------------------------------
+// -- comms: the console's own notes, invites, the banner, the voice status ------------------------
 
-function addTranscript(t, quiet) {
-  var kind = own({ say: 1, you: 1, whisper: 1, system: 1 }, t.kind) ? t.kind : "say";
-  TRANS.push({ ms: num(t.ts) || Date.now(), who: str(t.who), text: str(t.text), kind: kind,
-               note: !!t.note });
-  if (TRANS.length > KEEP * 2) { TRANS.splice(0, TRANS.length - KEEP * 2); }
-  if (!quiet) { renderFeed(true); }
+// A note (a refusal, an action's outcome) is a toast for NOTE_MS
+function note(text) {
+  var n = { text: str(text) };
+  NOTES.push(n);
+  if (NOTES.length > NOTES_SHOWN) { NOTES.shift(); }
+  renderToasts();
+  setTimeout(function () {
+    NOTES = NOTES.filter(function (x) { return x !== n; });
+    renderToasts();
+  }, NOTE_MS);
 }
-function note(text) { addTranscript({ who: "", text: text, ts: Date.now(), kind: "system", note: true }); }
-function addChat(lines) {
-  arr(lines).forEach(function (l) {
-    if (!l || typeof l.id !== "number" || seen[l.id]) { return; }
-    seen[l.id] = true;
-    CHAT.push(l);
-  });
-  CHAT.sort(function (a, b) { return a.id - b.id; });
-  if (CHAT.length > KEEP) {
-    CHAT.splice(0, CHAT.length - KEEP).forEach(function (l) { delete seen[l.id]; });
-  }
-}
-function feedItems() {
-  var want = FILTERS[filter], out = [];
-  TRANS.forEach(function (t) {
-    if (t.kind === "system") { out.push({ ms: t.ms, chan: "system", t: t }); return; }
-    if (!want || want.indexOf("voice") >= 0) { out.push({ ms: t.ms, chan: "voice", t: t }); }
-  });
-  CHAT.forEach(function (l) {
-    if (!want || want.indexOf(l.channel) >= 0) { out.push({ ms: num(l.ts) * 1000, chan: l.channel, l: l }); }
-  });
-  out.sort(function (a, b) { return a.ms - b.ms; });
-  return out;
-}
-function itemEl(it) {
-  var row = el("div", "line c-" + it.chan);
-  row.appendChild(el("span", "ts", clock(it.ms) + " "));
-  if (it.chan === "system") {
-    row.appendChild(el("span", "msg", it.t.text));
-    return row;
-  }
-  row.appendChild(el("span", "chan", "[" + (CHANNEL_TAGS[it.chan] || it.chan) + "] "));
-  if (it.t) {
-    var t = it.t;
-    if (t.kind === "you") { row.classList.add("mine"); }
-    if (t.who) { row.appendChild(el("span", "who", t.who + (t.kind === "whisper" ? " whispers: " : ": "))); }
-    row.appendChild(el("span", "msg", t.text));
-    return row;
-  }
-  var l = it.l, who;
-  if (l.you) { row.classList.add("mine"); }
-  if (l.channel === "whisper") {
-    who = l.you ? "To " + (l.to || "#" + l.to_guid) + ": " : (l.from || "#" + l.from_guid) + " whispers: ";
-  } else {
-    who = (l.from || "#" + l.from_guid) + ": ";
-  }
-  row.appendChild(el("span", "who", who));
-  row.appendChild(el("span", "msg", str(l.text)));
-  return row;
-}
-export function renderFeed(keepPlace) {
-  var box = $("feed");
-  var stick = !keepPlace || box.scrollHeight - box.scrollTop - box.clientHeight < 40;
-  clear(box);
-  var items = feedItems();
-  if (!items.length) { box.appendChild(el("div", "line muted", "Nothing said yet.")); }
-  items.forEach(function (it) { box.appendChild(itemEl(it)); });
-  if (stick) { box.scrollTop = box.scrollHeight; }
-}
-
-// -- comms: invites, the banner, the voice status ------------------------------------------------
-
 function renderToasts() {
   var box = $("toasts");
   clear(box);
+  NOTES.forEach(function (n) { box.appendChild(el("div", "toast", n.text)); });
   if (!S.voice) { return; }
   S.voice.invites.forEach(function (inv) {
     var t = el("div", "toast");
@@ -332,19 +269,10 @@ $("tree").addEventListener("keydown", function (ev) {
     openMenu(Number(row.dataset.guid), box.left + 24, box.bottom);
   }
 });
-$("chips").addEventListener("click", function (ev) {
-  var b = ev.target.closest("button");
-  if (!b) { return; }
-  filter = b.dataset.f;
-  var all = $("chips").querySelectorAll("button");
-  for (var i = 0; i < all.length; i++) { all[i].setAttribute("aria-pressed", String(all[i] === b)); }
-  renderFeed(false);
-});
-
 // -- what the voice service sends (through the console) -------------------------------------------
 
 var VOICE = {
-  state: function (m) { adoptVoice(m); renderComms(); renderFeed(false); renderStrip(); },
+  state: function (m) { adoptVoice(m); renderComms(); renderStrip(); },
   down: function () { S.voice = null; renderComms(); renderStrip(); },
   speaking: function (m) {
     if (!S.voice) { return; }
@@ -378,7 +306,6 @@ var VOICE = {
     if (S.voice) { S.voice.invites = S.voice.invites.filter(function (i) { return i.channel !== m.channel; }); }
     renderToasts();
   },
-  transcript: function (m) { addTranscript(m, false); },
   status: function (m) {
     if (!S.voice) { return; }
     var s = {};
@@ -391,12 +318,8 @@ var VOICE = {
 
 on("snapshot", function (d) {
   adoptVoice(d.voice);
-  CHAT = []; seen = {};
-  addChat(d.chat);
-  renderComms(); renderFeed(false); renderStrip();
+  renderComms(); renderStrip();
 });
 on("status", renderBanner);
 on("voice", function (m) { if (typeof m.type === "string" && own(VOICE, m.type)) { VOICE[m.type](m); } });
-on("chat", function (d) { addChat(d.lines); renderFeed(true); });
 on("note", note);
-registerTab("comms", { show: function () { renderFeed(false); } });

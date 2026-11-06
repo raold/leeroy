@@ -2,12 +2,15 @@ import { str } from "./core.mjs";
 
 // What the page knows, shared by its modules: the console's status (the strip: the mind, the
 // bridge, the game, voice and the control rules), the voice service's page state (null while it
-// is down) and the open tab. S.status is replaced before a "status" or "snapshot" event goes out.
+// is down), the voice rooms and the guild's mood from the last snapshot, and the open tab.
+// S.status, S.rooms and S.mood are replaced before a "status" or "snapshot" event goes out.
 export var S = {
   status: { mind: { state: "unknown", detail: "connecting" }, bridge: null,
             game: { state: "unknown", reason: "connecting" },
             voice: { enabled: false, service: false, link: null }, control: { enabled: false } },
   voice: null,
+  rooms: [],
+  mood: null,
   tab: "comms"
 };
 
@@ -17,8 +20,12 @@ export function name(guid) {
   return typeof n === "string" && n ? n : "#" + guid;
 }
 export function roomName(id) {
-  var tree = S.voice ? S.voice.tree : [];
-  for (var i = 0; i < tree.length; i++) { if (tree[i].id === id) { return str(tree[i].name) || id; } }
+  var lists = [S.rooms, S.voice ? S.voice.tree : []];
+  for (var j = 0; j < lists.length; j++) {
+    for (var i = 0; i < lists[j].length; i++) {
+      if (lists[j][i] && lists[j][i].id === id) { return str(lists[j][i].name) || id; }
+    }
+  }
   return id;
 }
 export function hereRoom() {
