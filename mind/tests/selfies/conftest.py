@@ -7,9 +7,7 @@ from leeroy_mind.personas.io import PersonaCache
 from leeroy_mind.protocol import Member
 from nightly.conftest import h  # noqa: F401  (the night's harness, for the selfie stages)
 
-from .fakes import SELFIE_CFG, renderable_cast
-
-OWNER = 100
+from .fakes import OWNER, SELFIE_CFG, renderable_cast
 
 
 @pytest.fixture

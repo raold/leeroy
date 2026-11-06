@@ -1,22 +1,30 @@
 """Test doubles for the selfie worker (P2): the fake worker's command and a factory for it, a
-render request, a ready set with its files, and members the night can render. Every person here
-is invented."""
+render request, a ready set with its files, members the night can render, and a whole mind on a
+scratch data dir. Every person here is invented."""
 import asyncio
 import os
 import sys
 import time
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from conftest import TEST_CAST
+from conftest import TEST_CAST, seed_test_cast
+from leeroy_mind.app import MindApp
+from leeroy_mind.config import load_config
 from leeroy_mind.personas.io import load_persona, save_persona
 from leeroy_mind.personas.schema import ProfilePhoto
 from leeroy_mind.selfies import files
 from leeroy_mind.selfies.config import SelfieCfg
 from leeroy_mind.selfies.store import (Candidate, ensure_first_sets, mark_ready, queue_more,
                                        queued_sets)
+from leeroy_mind.protocol import Member
 from leeroy_mind.selfies.worker import RenderRequest, SelfieWorker
+from leeroy_mind.storage.db import open_db
+from leeroy_mind.storage.store import Store
+from leeroy_mind.testing.fake_clock import FakeClock
+from leeroy_mind.testing.fake_llm import FakeLLM
 from leeroy_mind.wow import CLASSES, RACES
 from nightly.test_night_enrich import APPEARANCE  # Task 6's invented looks
 
@@ -24,6 +32,8 @@ from .fake_worker import JPEG  # the bytes the fake writes; the tests take it fr
 
 FAKE_WORKER = Path(__file__).with_name("fake_worker.py")
 SELFIE_CFG = SelfieCfg(enabled=True)
+OWNER = 100
+CLOCK = datetime(2026, 10, 29, 20, 0, tzinfo=timezone.utc)
 PHOTO = ProfilePhoto(kind="snapshot", framing="upper_body", setting="on the deck of a small boat",
                      outfit="orange rain bib over a grey hoodie",
                      expression="squinting into the wind")
@@ -107,3 +117,25 @@ async def until(condition: Callable[[], bool], timeout: float = 10.0) -> None:
         if time.monotonic() > end:
             raise AssertionError(f"not reached within {timeout} s")
         await asyncio.sleep(0.02)
+
+
+def mind_app(root: Path, *, toml: str = "", prepare: Callable[[Store], None] | None = None
+             ) -> MindApp:
+    """A MindApp on the data dir `root`, built as tests/tuning/test_tuning_endpoint.py builds one
+    (a FakeLLM and a fake clock, no bridge, nothing started): mind.toml holding `toml`; the test
+    cast seeded, 101-103 with looks and a photo kind; the owner (OWNER) on the roster as guild
+    master and named; and `prepare(store)` run on its mind.db before the app opens it. The
+    caller closes app.store."""
+    (root / "mind.toml").write_text(toml, encoding="utf-8")
+    s = Store(open_db(root / "mind.db"), clock=FakeClock(CLOCK))
+    try:
+        seed_test_cast(s)
+        renderable_cast(s, 101, 102, 103)
+        s.upsert_cast([Member(guid=OWNER, name="Ownerly", race=2, class_=1, gender=0, level=83,
+                              rank=0, online=False, map=0, zone=0, spec_tab=-1)], 1.0)
+        s.set_meta("human_guid", str(OWNER))
+        if prepare is not None:
+            prepare(s)
+    finally:
+        s.close()
+    return MindApp(load_config(root / "mind.toml"), root, llm=FakeLLM(), clock=FakeClock(CLOCK))

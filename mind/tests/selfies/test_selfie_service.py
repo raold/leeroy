@@ -237,7 +237,7 @@ def test_a_photo_file_that_stays_held_keeps_the_change_and_says_so(svc, store, d
     n = got["pick"]
     assert got == {"ok": True, "pick": n, "guid": 101,
                    "message": f"Photo set (change #{n}), but the photo file could not be "
-                              "updated yet; the mind tries again at its next start."}
+                              "updated yet; picking that photo again retries now."}
     assert current(store, 101) == Current(101, 1, 2, n)  # the change stands
     assert chosen(data, 101).read_bytes() == old  # never missing or partial
     assert not list(member_dir(data, 101).glob(".chosen.jpg.*"))
@@ -245,6 +245,48 @@ def test_a_photo_file_that_stays_held_keeps_the_change_and_says_so(svc, store, d
     monkeypatch.setattr(os, "replace", real)
     assert run(svc.handle(_pick(101, 1, 2)))["message"] == "That is already their photo."
     assert chosen(data, 101).read_bytes() == candidate(data, 101, 1, 2).read_bytes()  # repaired
+
+
+def test_a_photo_whose_file_is_gone_says_to_pick_another(svc, store, data, caplog):
+    ready(store, data, 101, 1)
+    run(svc.handle(_pick(101, 1, 0)))
+    old = chosen(data, 101).read_bytes()
+    candidate(data, 101, 1, 1).unlink()  # gone by hand, and no history copy of it yet
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        got = run(svc.handle(_pick(101, 1, 1)))
+    n = got["pick"]
+    assert got == {"ok": True, "pick": n, "guid": 101,
+                   "message": f"Photo set (change #{n}), but the photo's file is gone; pick "
+                              "another photo."}
+    assert current(store, 101) == Current(101, 1, 1, n)  # the change stands
+    assert chosen(data, 101).read_bytes() == old  # left as it was, never partial
+    assert _events(caplog, "selfie_sync_failed") == [{"guid": 101, "error": "FileNotFoundError"}]
+    m = run(svc.handle(_pick(101, 1, 2)))
+    assert m["message"] == f"Photo set (change #{m['pick']})."  # another one is written at once
+    assert chosen(data, 101).read_bytes() == candidate(data, 101, 1, 2).read_bytes()
+    back = run(svc.handle({"action": "undo", "pick": m["pick"]}))  # back to the gone one
+    assert back["ok"] and back["message"] == (
+        f"Undone (change #{back['pick']}), but the photo's file is gone; pick another photo.")
+
+
+def test_an_undo_that_cannot_remove_the_photo_file_says_when_it_goes(svc, store, data,
+                                                                      monkeypatch):
+    ready(store, data, 101, 1)
+    n = run(svc.handle(_pick(101, 1, 0)))["pick"]
+    real = files._unlink
+
+    def held(path):
+        raise PermissionError(32, "in use")
+    monkeypatch.setattr(files, "_unlink", held)
+    monkeypatch.setattr(files, "REPLACE_TRIES", 2)
+    back = run(svc.handle({"action": "undo", "pick": n}))
+    u = back["pick"]
+    assert back == {"ok": True, "pick": u, "guid": 101,
+                    "message": f"Undone (change #{u}), but the old photo file could not be "
+                               "removed yet; the mind removes it at its next start."}
+    assert current(store, 101) is None and chosen(data, 101).exists()
+    monkeypatch.setattr(files, "_unlink", real)
+    assert svc.sync_all() == 1 and not chosen(data, 101).exists()  # as it said
 
 
 def test_sync_all_repairs_what_a_crash_left(svc, store, data):

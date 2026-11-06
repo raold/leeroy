@@ -15,8 +15,9 @@ stored persona. Each change commits first, on the loop; then that member's files
 agree with mind.db in a thread (files.sync_chosen, whose rename is retried while the console's
 face endpoint holds chosen.jpg), so the loop never waits on a held file. A file that still cannot
 be written leaves the change in force and the answer says so; the member's next change, the same
-pick again, or the mind's next start (sync_all) writes it. One call at a time: the endpoint's
-lock serializes them.
+pick again, or the mind's next start (sync_all) writes it. A photo whose candidate and history
+copy are both gone cannot be written at all: the answer says to pick another. One change at a
+time: the endpoint's lock serializes them, held until the files are written.
 
 Logs carry the action and its outcome, and for a file that could not be written the member's
 guid and the error's type: never a name or a refusal's text."""
@@ -40,8 +41,11 @@ ACTIONS = ("status", "pick", "undo", "more")
 SOURCE = "console"
 _GUID_DIR = re.compile(r"[1-9][0-9]{0,9}")
 _GUID_MAX = (1 << 32) - 1
-_NOT_WRITTEN = (", but the photo file could not be updated yet; the mind tries again at its next "
-                "start.")
+_GONE = ", but the photo's file is gone; pick another photo."
+_NOT_WRITTEN = (", but the photo file could not be updated yet; picking that photo again retries "
+                "now.")
+_NOT_REMOVED = (", but the old photo file could not be removed yet; the mind removes it at its "
+                "next start.")
 
 
 class SelfieService:
@@ -115,13 +119,18 @@ class SelfieService:
 
     async def _synced(self, guid: int, said: str) -> str:
         """`said`, once the member's files agree with what was just committed (off the loop:
-        the rename's retries sleep); with a word that they do not when they cannot be written."""
+        the rename's retries sleep); when they cannot be written, with what happens next: a
+        photo whose file is gone needs another pick, one that could not be written yet is
+        written by picking it again, and a photo file left after an undo to none goes at the
+        mind's next start."""
         photo = current(self.app.store, guid)
         try:
             await asyncio.to_thread(files.sync_chosen, self.app.data_dir, guid, photo)
         except OSError as e:
             log("selfie_sync_failed", level=logging.WARNING, guid=guid, error=type(e).__name__)
-            return said[:-1] + _NOT_WRITTEN
+            if photo is None:
+                return said[:-1] + _NOT_REMOVED
+            return said[:-1] + (_GONE if isinstance(e, FileNotFoundError) else _NOT_WRITTEN)
         return said
 
     # -- the mind's start ------------------------------------------------------------------------
@@ -131,7 +140,8 @@ class SelfieService:
         or a chosen.jpg gets files that agree with mind.db (a crash between a change's commit and
         its files), after what a crashed render or rename left is removed: sets/<n>.part folders
         and *.tmp files. A member that cannot be repaired is logged and never stops the rest.
-        How many members' photo files it changed."""
+        How many members' photo files it changed. Called once, by attach_selfies in
+        MindApp.__init__: it removes every .part folder, so never while a night may render."""
         began = time.monotonic()
         data = self.app.data_dir
         on_disk = _member_guids(data)
