@@ -10,9 +10,11 @@ import json
 import logging
 import os
 import socket
+import sqlite3
 import stat
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -325,7 +327,8 @@ def test_status_answers_and_a_wrong_key_is_forbidden_without_logging_it(tmp_path
         async with served(tmp_path) as (app, ep):
             reply = await ask(ep, "status")
             assert reply == {"ok": True, "v": 1, "pid": os.getpid(), "stopping": False,
-                             "raid": FakeGuild().console_status()}
+                             "raid": FakeGuild().console_status(), "bridge_connected": None,
+                             "cast": None, "schema_version": None}  # this app cannot tell
             assert await ask(ep, "status", key="x" * 43) == {"ok": False, "error": "forbidden"}
             assert await ask(ep, "stop", key="x" * 43) == {"ok": False, "error": "forbidden"}
             assert app.stops == 0
@@ -333,6 +336,25 @@ def test_status_answers_and_a_wrong_key_is_forbidden_without_logging_it(tmp_path
         run(go())
     assert "control_refused: reason=key" in caplog.text
     assert KEY not in caplog.text and "x" * 43 not in caplog.text
+
+
+def test_status_reports_the_bridge_the_cast_and_the_schema_for_the_health_check(tmp_path):
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            conn = sqlite3.connect(":memory:")
+            conn.execute("PRAGMA user_version = 17")
+            app.bridge = SimpleNamespace(greeted=True)
+            app.world = SimpleNamespace(cast_guids=lambda: {101, 102, 103})
+            app.store = SimpleNamespace(conn=conn)
+            reply = await ask(ep, "status")
+            assert (reply["bridge_connected"], reply["cast"], reply["schema_version"]) == (
+                True, 3, 17)
+            app.bridge = SimpleNamespace(greeted=False)
+            conn.close()  # a closed store: unknown, and status still answers
+            reply = await ask(ep, "status")
+            assert reply["ok"] is True and reply["bridge_connected"] is False
+            assert reply["schema_version"] is None and reply["cast"] == 3
+    run(go())
 
 
 def test_only_one_strict_line_is_read_and_anything_else_is_refused(tmp_path):
@@ -625,6 +647,42 @@ def test_run_returns_0_when_the_endpoint_stops_it(tmp_path):
     run(go())
     with contextlib.closing(reopen(tmp_path)) as c:
         assert c.execute("SELECT count(*) FROM session WHERE ended IS NULL").fetchone()[0] == 0
+
+
+def test_the_running_minds_status_says_its_bridge_cast_and_schema(tmp_path):
+    """The real app over FakeBridge: once the bridge has greeted it and sent the cast, status
+    says so, with mind.db's schema version."""
+    from leeroy_mind.__main__ import serve
+    from leeroy_mind.storage.db import latest_version
+
+    async def go():
+        bridge = FakeBridge([hello(0), CAST])
+        port = await bridge.start()
+        (tmp_path / "mind.toml").write_text(toml(port), encoding="utf-8")
+        seed_db(tmp_path / "mind.db", fake_clock())
+        apps = []
+        task = asyncio.create_task(serve(tmp_path, make_llm=lambda cfg: FakeLLM(reply, models={LIVE}),
+                                         ready=apps.append))
+        try:
+            while not apps or apps[0].control is None or not apps[0].control.listening.is_set():
+                await asyncio.sleep(0.02)
+            record = read_key_file(tmp_path / KEY_FILE)
+            for _ in range(500):
+                status = await asyncio.to_thread(endpoint.request, record["port"],
+                                                 record["key"], "status")
+                if status["bridge_connected"] and status["cast"]:
+                    break
+                await asyncio.sleep(0.02)
+            assert status["bridge_connected"] is True
+            assert status["cast"] == len(apps[0].world.cast_guids()) > 0
+            assert status["schema_version"] == latest_version()
+            await asyncio.to_thread(endpoint.request, record["port"], record["key"], "stop")
+            assert await asyncio.wait_for(task, 30) == 0
+        finally:
+            if not task.done():
+                task.cancel()
+            await bridge.stop()
+    run(go())
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="the Windows descriptor")
