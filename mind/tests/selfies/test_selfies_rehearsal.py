@@ -17,6 +17,7 @@ from leeroy_mind.app import GUILD_ID, MindApp
 from leeroy_mind.clock import night_of
 from leeroy_mind.config import load_config
 from leeroy_mind.console.mindlink import MindLink
+from leeroy_mind.console.netinfo import LISTEN, Conn
 from leeroy_mind.nightly.store import run_get
 from leeroy_mind.personas.io import load_persona, save_persona
 from leeroy_mind.protocol import Member
@@ -139,11 +140,14 @@ def test_profile_photos_end_to_end(tmp_path, monkeypatch):
                 assert files.candidate(data, guid, 1, 3).exists()
                 assert files.candidate(data, guid, 1, 3, thumb=True).exists()
 
-            # the console lists them and picks one through the mind's real endpoint
+            # the console lists them and picks one through the mind's real endpoint; the TCP table
+            # (Windows only, None elsewhere) is given as the endpoint's own listener in this process
             ui_port = free_port()
             found = [SimpleNamespace(pid=os.getpid())]
+            mind_port = json.loads((data / endpoint.KEY_FILE).read_text())["port"]
+            listening = [Conn("127.0.0.1", mind_port, "0.0.0.0", 0, LISTEN, os.getpid())]
             console = make_app(data, mind=FakeMind(data, found=found, held=True),
-                               link=MindLink(data), voice_ui_port=ui_port)
+                               link=MindLink(data, tcp=lambda: listening), voice_ui_port=ui_port)
             await console.start()
             out["ports"] += [console.s.port]
             assert console.s.port not in (ui_port, bridge_port)
