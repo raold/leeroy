@@ -80,3 +80,58 @@ def test_his_ordinary_lines_between_pastes_are_answered_as_before(store, clock, 
         whys = [w for _, w in trigger(r)]
         assert whys.count("reply:paste") == 1 and "reply:named" in whys
     run(main())
+
+
+FLASKS = ["RBS:: missing flask: Foo", "RBS:: missing flask: Bar"]
+
+
+def test_a_logout_during_the_settle_does_not_silence_the_next_paste(store, clock, tmp_path):
+    async def main():
+        r = make_rig(store, clock, tmp_path)
+        await r.session()
+        await paste(r, rows_for(["Foo", "Bar"]))
+        await r.engine.end_session()
+        await r.advance(10, step=2)
+        await r.session()
+        await paste(r, rows_for(["Foo", "Bar"]))
+        await r.advance(60, step=2)
+        assert [w for _, w in trigger(r)] == ["reply:paste"]
+    run(main())
+
+
+def test_a_paste_nobody_can_answer_still_counts_as_talk(store, clock, tmp_path):
+    async def main():
+        r = make_rig(store, clock, tmp_path, online=())
+        r.engine._last_talk_at = -1000.0
+        await paste(r, rows_for(["Foo"]), gap=0.25)
+        assert r.engine._last_talk_at > 0
+        await r.advance(20, step=2)
+        assert r.sent.says() == []
+    run(main())
+
+
+def test_a_meter_then_a_flask_check_get_one_reply_each(store, clock, tmp_path):
+    async def main():
+        r = make_rig(store, clock, tmp_path)
+        await paste(r, rows_for(["Foo", "Bar"]))
+        await r.advance(20, step=2)
+        await paste(r, FLASKS)
+        await r.advance(20, step=2)
+        await paste(r, ["3. Baz 1000 (10.0, 1.0%)"])
+        await r.advance(30, step=2)
+        assert [w for _, w in trigger(r)] == ["reply:paste", "reply:paste"]
+    run(main())
+
+
+def test_a_whisper_burst_is_answered_only_by_the_whispered_member(store, clock, tmp_path):
+    async def main():
+        for seed in range(5):
+            r = make_rig(store, clock, tmp_path, seed=seed)
+            await r.human(rows_for(["Arkon"])[0], channel="whisper", to_guid=104)
+            for t in rows_for(["Arkon", "Belra", "Coros"])[1:]:
+                await r.human(t, channel="whisper", to_guid=104)
+            await r.advance(60, step=2)
+            says = r.sent.says()
+            assert len(says) == 1 and says[0].guid == 104, seed
+            await r.engine.end_session()
+    run(main())

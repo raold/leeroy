@@ -19,6 +19,14 @@ def is_addon_row(text: str) -> bool:
     return bool(ADDON_RE.match(text))
 
 
+_CHECK_RE = re.compile(r"^\s*(RBS::|<Flask|<Food|\[RBS\])", re.I)
+
+
+def paste_kind(text: str) -> str:
+    """"check" for an RBS, flask or food check, else "meter" (damage and healing meters)."""
+    return "check" if _CHECK_RE.match(text) else "meter"
+
+
 @dataclass
 class PasteBurst:
     channel: str

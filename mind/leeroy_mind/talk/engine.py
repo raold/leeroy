@@ -151,7 +151,7 @@ class TalkEngine(Reactions):
         self._init_pipeline(now)
         self._init_reactions()
         self._sources: list[TurnSource] = []
-        self._pastes: dict[tuple[str, int], PasteBurst] = {}
+        self._pastes: dict[tuple[str, int, str], PasteBurst] = {}
         self._session_at = self._states_at = now
         self._late_night = ""  # the night the late-hour whisper trigger last fired
         # (active memories, how many of them hold each word): _rare_words
@@ -207,6 +207,7 @@ class TalkEngine(Reactions):
         and keep the altered states, with the time they were last in effect, for the next
         session."""
         await self._cancel_all()
+        self._pastes.clear()
         self._settle_unacked(self.clock.now(), everything=True)
         self.timing.flush("session_end")
         if self.facts is not None:
@@ -361,7 +362,8 @@ class TalkEngine(Reactions):
         """An addon paste row: it joins the burst on its channel that began less than
         PASTE_BURST_S ago and plans nothing, or starts a burst whose one answer is planned
         after PASTE_SETTLE_S."""
-        key = (reply_to, row.to_guid)
+        self._touch_talk(now)
+        key = (reply_to, row.to_guid, pastes.paste_kind(row.text))
         burst = self._pastes.get(key)
         if burst is not None and now - burst.started < PASTE_BURST_S:
             burst.rows.append(row)
