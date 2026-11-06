@@ -190,10 +190,13 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: 
 
 .av { width: 34px; height: 34px; border-radius: 50%; flex: none; display: inline-flex; align-items: center;
   justify-content: center; font: 700 12px/1 var(--f-body); color: #fff; object-fit: cover;
-  background: var(--muted); }
+  background: var(--c, var(--muted)); }
+img.av { background: var(--surface-2); }
 .av.sm { width: 20px; height: 20px; font-size: 9px; }
 .av.lg { width: 48px; height: 48px; font-size: 15px; }
 .av.xl { width: 100%; height: auto; aspect-ratio: 1; border-radius: 12px; font-size: 40px; }
+.pface { width: 96px; margin-bottom: 8px; }
+div.who { display: flex; align-items: center; gap: 8px; }
 .av.speaking { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--live); }
 
 #toasts { position: absolute; top: 100%; right: 14px; margin-top: 8px; z-index: 10; width: 300px; display: flex;

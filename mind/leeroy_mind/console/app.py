@@ -38,6 +38,8 @@ run nothing else.
                        "raid", "size", "heroic", "lead"}: checked as the endpoint checks it,
                        then on to the mind's control endpoint (mindlink); refused with
                        --no-control, while a start or stop runs, or while the mind is not up
+    GET  /api/face     ?guid=<guid>&size=sm|md|lg: the member's chosen photo (mind-data/selfies/
+                       <guid>/chosen.jpg) as it is, or 404; the browser scales it
     GET  /api/tuning   the Personas tab's dials: world, groups and each member's values, and
                        the change log, from mind.db (tuneview.tuning_view), mind.toml's own
                        world values, and the running mind's tune status
@@ -61,7 +63,7 @@ from pathlib import Path
 from typing import Callable
 
 from .. import endpoint
-from . import feed, mindlog, netinfo, personaview, raidview, status, tuneview
+from . import faces, feed, mindlog, netinfo, personaview, raidview, status, tuneview
 from .control import Controls, Refused
 from .httpd import Request, Response, Stream, digits, encode_json, json_response, text
 from .mindlink import RAID_S, LinkError
@@ -428,6 +430,7 @@ class ConsoleApp:
                   ("GET", "/api/guild"): self._api_guild,
                   ("GET", "/api/personas"): self._api_personas,
                   ("GET", "/api/persona"): self._api_persona,
+                  ("GET", "/api/face"): self._api_face,
                   ("GET", "/api/tuning"): self._api_tuning,
                   ("POST", "/api/tune"): self._api_tune,
                   ("POST", "/api/voice"): self._api_voice,
@@ -557,6 +560,17 @@ class ConsoleApp:
         if view is None:
             return json_response(404, {"ok": False, "error": f"mind.db has no member {guid}"})
         return json_response(200, view)
+
+    async def _api_face(self, req: Request):
+        guids, sizes = req.query.get("guid", []), req.query.get("size", [])
+        guid = digits(guids[0], 10) if len(guids) == 1 else None
+        if guid is None or not 0 < guid < 1 << 32 or len(sizes) != 1 or sizes[0] not in faces.SIZES:
+            return json_response(400, {"ok": False, "error": "guid: one member's guid; size: sm, md or lg"})
+        data = await asyncio.to_thread(faces.read_face, self.s.data_dir, guid)
+        if data is None:
+            return text(404, "no photo")
+        return Response(200, data, "image/jpeg", [("Cache-Control", "private, max-age=60"),
+                                                  ("Cross-Origin-Resource-Policy", "same-origin")])
 
     # -- the personas tab's dials ---------------------------------------------------------------
 

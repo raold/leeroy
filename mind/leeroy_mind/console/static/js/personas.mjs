@@ -1,5 +1,6 @@
 import { $, api, arr, cell, clear, el, emit, emptyRow, num, obj, on, own, plural, post, setText,
          str } from "./core.mjs";
+import { face } from "./faces.mjs";
 import { S } from "./state.mjs";
 import { registerTab, showTab } from "./tabs.mjs";
 import { CLASSES, moodText, moodTitle, signed, when, youText, youTitle } from "./words.mjs";
@@ -89,7 +90,11 @@ function renderPersonas(v) {
     var tr = el("tr", (m.online === false ? "off" : "") + (m.guid === pick ? " sel" : ""));
     tr.tabIndex = 0;
     tr.dataset.guid = String(m.guid);
-    tdT(tr, str(m.name) + (m.in_cast ? "" : " (not in the cast)"));
+    var nameTd = el("td"), who = el("div", "who");
+    who.appendChild(face(m.guid, str(m.name), "list"));
+    who.appendChild(el("span", "", str(m.name) + (m.in_cast ? "" : " (not in the cast)")));
+    nameTd.appendChild(who);
+    tr.appendChild(nameTd);
     tdT(tr, m["class"] ? (CLASSES[m["class"]] || "-") + (m.role ? " · " + m.role : "") : "-", m.role ? "role-" + m.role : "");
     tdT(tr, typeof m.rank === "number" ? String(m.rank) : "-", "num");
     tdT(tr, missing.indexOf("pad_mood") >= 0 ? "unavailable" : moodText(m.mood), "", m.mood ? moodTitle(m.mood) : "");
@@ -117,11 +122,17 @@ function pollPersonas() {
     .then(function () { personasBusy = false; if (pick) { pollMember(); } });
 }
 
+var shownFace = null;
 function renderMember(j) {
   var m = obj(j.member), c = j.card ? obj(j.card) : null, p = m.persona, days = num(j.recent_days) || 7;
   var missing = arr(j.missing), traits = obj(obj(m.drift).traits), values = obj(traits.values);
   $("p-detail").hidden = false;
   setText("p-name", str(m.name));
+  if (shownFace !== m.guid) {
+    shownFace = m.guid;
+    clear($("p-face"));
+    $("p-face").appendChild(face(m.guid, str(m.name), "card"));
+  }
   setText("p-sub", [m["class"] ? (CLASSES[m["class"]] || "-") + (m.spec ? " " + m.spec : "") : "", str(m.role),
                     m.level ? "level " + m.level : "", typeof m.rank === "number" ? "rank " + m.rank : "",
                     m.in_cast ? (m.online ? "online" : "offline") : "not in the cast"].filter(Boolean).join(" · "));
