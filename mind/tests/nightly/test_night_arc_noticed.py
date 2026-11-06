@@ -162,3 +162,57 @@ def test_the_texts_are_generic_and_cover_the_stages():
     assert NOTICED_CONFIDENCE == {"voice": 0.6, "planning": 0.5, "weekend": 1.0, "after": 1.0}
     for text in NOTICED_TEXT.values():
         assert set(re.findall(r"\{(\w+)\}", text)) == {"name", "called"}
+
+
+def test_the_first_run_ignores_a_delta_before_the_window(h):
+    climber(h)
+    ctx = h.ctx(night=NIGHT)
+    late(h, ctx)
+    delta(h, 101, "late_nights->voice", ts=ctx.window[0] - 60)
+    noticed(ctx)
+    assert facts(h) == [] and h.store.get_meta("arc_noticed_mark") is not None
+
+
+def test_a_skipped_night_is_caught_up_once(h):
+    climber(h)
+    n1 = h.ctx(night="2026-10-29")
+    late(h, n1)
+    noticed(n1)
+    assert facts(h) == []
+    delta(h, 101, "late_nights->voice", ts=n1.window[1] + 3 * HOUR)  # after night 1, night 2 skipped
+    n3 = h.ctx(night="2026-10-31")
+    h.clock.set(n3.window[1] + HOUR)
+    noticed(n3)
+    assert [f["root"] for f in facts(h)] == ["arc:101:voice:2026-10-31"]
+    n4 = h.ctx(night="2026-11-01")
+    h.clock.set(n4.window[1] + HOUR)
+    noticed(n4)
+    assert len(facts(h)) == 1
+    assert h.count("knows") == len(n3.members(include_away=True)) - 1
+
+
+def test_a_rerun_or_restart_writes_nothing_twice(h):
+    climber(h)
+    ctx = h.ctx(night=NIGHT)
+    late(h, ctx)
+    delta(h, 101, "late_nights->voice")
+    noticed(ctx)
+    before = (len(facts(h)), h.count("knows"), h.count("night_step"))
+    noticed(ctx)
+    restarted = h.ctx(night=NIGHT)  # a new context, the same night: the unit is already done
+    noticed(restarted)
+    assert (len(facts(h)), h.count("knows"), h.count("night_step")) == before
+    h.store.conn.execute("DELETE FROM night_step WHERE stage = 'arc' AND unit = 'noticed'")
+    h.store.conn.commit()
+    noticed(h.ctx(night=NIGHT))  # the unit lost its receipt: the mark still keeps the facts single
+    assert (len(facts(h)), h.count("knows")) == before[:2]
+
+
+def test_the_owner_never_learns_a_noticed_fact(h):
+    climber(h)
+    ctx = h.ctx(night=NIGHT)
+    late(h, ctx)
+    delta(h, 101, "late_nights->voice")
+    noticed(ctx)
+    assert facts(h) and 1 not in knows(h, facts(h)[0]["root"])
+    assert h.store.conn.execute("SELECT count(*) FROM knows WHERE guid = 1").fetchone()[0] == 0

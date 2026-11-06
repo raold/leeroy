@@ -12,7 +12,7 @@ from dataclasses import replace
 from datetime import date, datetime
 
 from leeroy_mind.arc import state as arc_state
-from leeroy_mind.arc.ladder import (FOND_CAP, FULL_ARC, GATED, GATES, NOTICED, PACE_ATTITUDE,
+from leeroy_mind.arc.ladder import (FOND_CAP, FULL_ARC, GATED, GATES, NOTICED, NOTICED_HANDLED, PACE_ATTITUDE,
                                     PACE_STYLE)
 from leeroy_mind.nightly.attraction import RUSH_S, aimed_at, reflection_row
 from leeroy_mind.nightly.audience import audience_of
@@ -285,7 +285,7 @@ async def stage_jealousy(ctx) -> None:
         men = ctx.men()
         memories = {g: _observations(store, g, ctx.window) for g in set(attitudes) | men}
         current = (json.loads(store.get_meta(f"{_CHANGES}{ctx.night}") or "[]")
-                   + json.loads(store.get_meta(f"arc_noticed:{ctx.night}") or "[]"))
+                   + json.loads(store.get_meta(f"{NOTICED_HANDLED}{ctx.night}") or "[]"))
         advances = {g: _noticed_refs(store, g, ctx.human, ctx.window, current) for g in attitudes}
         rose = {g for g in attitudes if _band_rose(store, g, ctx.window)}
         rank = {"fond": 0, "drawn": 1, "lust": 2}

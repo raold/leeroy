@@ -41,6 +41,7 @@ PACE_STYLE = {"bold": .8, "theatrical": .8, "earnest": 1., "competitive": 1.,
 FULL_ARC = frozenset({"drawn", "lust"})  # a fond woman stops at FOND_CAP
 FOND_CAP = "whispers"
 NOTICED = frozenset({"voice", "planning", "weekend", "after"})  # the guild can tell
+NOTICED_HANDLED = "arc_noticed:"  # meta key prefix: <prefix><night> holds the rel_delta ids it noticed
 # The old ladder's stages that are gone, and where a stored one lands (migration romance_arc).
 LEGACY = {"vulnerable": "late_nights", "invitation": "planning", "acknowledged": "confession"}
 _FLOOR = "whispers"

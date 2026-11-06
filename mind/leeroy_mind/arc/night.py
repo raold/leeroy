@@ -32,7 +32,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from leeroy_mind.arc.after import milestones
-from leeroy_mind.arc.ladder import FULL_ARC, NOTICED
+from leeroy_mind.arc.ladder import FULL_ARC, NOTICED, NOTICED_HANDLED
 from leeroy_mind.arc.plan import plan_summary, propose_plan
 from leeroy_mind.arc.state import Arc, end_romance, get_arc, put_arc
 from leeroy_mind.arc.weekend import due, meetup, settle
@@ -62,7 +62,6 @@ ENDING_RE = re.compile(r"\b(break(ing)? up|it'?s over|we'?re done|end (this|it|u
                        r"|not doing this anymore|see other people)\b", re.IGNORECASE)
 
 MARK = "arc_noticed_mark"
-HANDLED = "arc_noticed:"
 # What the guild can tell, generic: her name and his called name, no word from any whisper.
 NOTICED_TEXT = {
     "voice": "{name} vents to {called} late at night a lot these days.",
@@ -294,7 +293,7 @@ def noticed(ctx: "NightContext") -> None:
             handled.append(row["id"])
         top = store.conn.execute("SELECT max(id) FROM rel_delta").fetchone()[0] or 0
         store.set_meta(MARK, str(max(top, int(mark or 0))))
-        store.set_meta(f"{HANDLED}{night}", json.dumps(handled))
+        store.set_meta(f"{NOTICED_HANDLED}{night}", json.dumps(handled))
     ctx.commit(STAGE, "noticed", write)
 
 
