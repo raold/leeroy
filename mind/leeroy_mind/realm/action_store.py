@@ -33,6 +33,26 @@ GROW_GUID_REFUSALS = frozenset({"cast", "actor", "not_bot", "not_guildless", "le
 LOCAL_CANCELED = frozenset({"stale_context", "stale_identity", "owner_dropped", "queue_closed",
                            "restart_not_sent", "held", "realm_off", "barrier_missing", "backoff",
                            "query_origin_unavailable", "cleanup_proof_unavailable"})
+# A queued step's refusals that end a body move after its positive ack (RealmModule::Tick): the
+# pre-step fence MutationReason (the body fences, ValidateOwnedBody's), the default admission,
+# and Eligible's own (AdmissionReason's busy:<BusyReason>, busy:teleport, busy:duel, not_cast),
+# which each such executor returns as Refuse before it changes anything. Tick's finish then
+# releases every holder of the command. That holds only for a kind whose executor never goes
+# pending, declares no scope, starts no continuation and joins no guild, and never reports one
+# of these reasons as Unknown: the same reason from a pending walk or leave is a retained unknown.
+STEP_REFUSALS = frozenset({*BODY_FENCES, "busy:operation_identity", "busy:body_identity_changed",
+                           "busy:body_scope_changed", "not_cast", "busy:teleport", "busy:duel",
+                           *(f"busy:{r}" for r in ("offline", "dead", "combat", "flight", "raid_group",
+                                                   "human_group", "instance", "battleground", "arena", "lfg"))})
+STEP_REFUSAL_KINDS = frozenset({"rearm", "rpg_status", "equip", "set_profession"})
+STEP_REFUSED = "step_refused"
+
+
+def _step_refused(r, job) -> bool:
+    """Native refused one body of this command before it changed it, and released them all."""
+    return (r.role == "root" and r.policy == "ordinary" and r.kind in STEP_REFUSAL_KINDS
+            and job["state"] == "failed" and job["reason"] in STEP_REFUSALS
+            and job["guid"] in r.reserved_manifest and job["value"] == 0 and job["pvp_owner"] == "")
 
 
 def _grow_refusal(error, manifest) -> bool:
@@ -464,6 +484,8 @@ class ActionStore:
             if not full: return result(False, "incomplete_defaults", "unknown")
             return result(ok, "" if ok else "defaults_failed") if ack else r
         if job:
+            if job["state"] == "failed" and _step_refused(r, job):
+                return result(False, STEP_REFUSED) if ack else r  # admitted: its ack is on its way
             if job["state"] == "failed": return result(False, "job_failed", "unknown")
             if ack: return result(True)
         return r
@@ -693,11 +715,15 @@ class ActionStore:
                     self._save(replace(old, transport_state="settled", send_error="ProcessRestart",
                          state=old.state if old.state in TERMINAL or old.state == "conflict" else "unknown", updated=now))
             for root in self.unresolved():
-                # An unknown whose only evidence is native's refusal at its ack is read again under
-                # the current rules: one an older build kept unknown (a fenced body) moved nobody.
+                # An unknown whose only evidence is native's refusal is read again under the current
+                # rules: at its ack (a fenced body), or a failed job after a positive ack (one body
+                # refused at its step, native released them all). An older build kept them unknown.
                 ev = json.loads(root.evidence)
-                if (root.state == "unknown" and root.result_reason == "unknown" and root.transport_state == "settled"
-                        and not root.send_error and set(ev) <= {"ack", "failed_at"} and ev.get("ack", {}).get("ok") is False):
+                ack = ev.get("ack", {}).get("ok")
+                if (root.state == "unknown" and root.transport_state == "settled" and not root.send_error
+                        and (root.result_reason == "unknown" and set(ev) <= {"ack", "failed_at"} and ack is False
+                             or root.result_reason == "job_failed" and set(ev) <= {"ack", "job", "failed_at"}
+                             and ack is True)):
                     settled = self._reduce(replace(root, state="dispatched", result_ok=None, result_reason=""), ev, now)
                     if settled.state == "completed": self._save(settled)
             for root in self.unresolved():

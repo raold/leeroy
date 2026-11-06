@@ -755,7 +755,12 @@ Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
   must name the process. One fenced body (`busy:raid_owner` for a member in his group, a
   training or Realm owner, `not_bot`) makes native refuse a whole body move at its ack before
   reserving anyone: the action journal settles that as refused, holding nobody, and each start
-  reads again a stored unknown whose only evidence is such a refusal.
+  reads again a stored unknown whose only evidence is such a refusal. The same goes for a
+  rearm, `rpg_status`, `equip` or `set_profession` acked and then failed at one body's step for a
+  fence or a `busy:` reason such as `busy:combat` (`STEP_REFUSALS`): native refused that body
+  before changing it and released them all, so it settles `step_refused` and Recall goes on to
+  the defaults. Any other failed job (`operation_transition_unknown`, a walk, leave, duel or
+  grow) stays unknown.
 - **Rulings.** His raid holds exactly his raid: waiting for the call, called and forming hold
   the roster and his group; assembling and running hold the raid's members and his group;
   everyone else, rival officers included, may move (an unreadable member list holds everyone).
