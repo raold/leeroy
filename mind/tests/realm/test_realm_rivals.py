@@ -894,3 +894,66 @@ def test_a_grow_released_by_hand_is_never_sent_again(tmp_path, store, clock):
     run(pump(realm, clock, rounds=1))
     assert grows(app) == [cmd]
     assert store.conn.execute("SELECT count(*) FROM realm_action WHERE kind='guild_grow'").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("outcome", ["acked", "abandoned"])
+def test_a_grow_with_an_outcome_is_never_sent_again_after_a_prune(tmp_path, store, clock, outcome):
+    """A grow's row is its only memory of the attempt: the prune keeps it, so neither the step nor
+    the week's top-up ever sends the same grow again."""
+    app, realm = live_realm(tmp_path, store, clock)
+    guids = (401, 402, 403)
+
+    async def grow():
+        await connect(app)
+        assert realm.part("rivals")._grow("plan", 8, guids) == "sent"
+        await pump(realm, clock, rounds=1)
+        [cmd] = grows(app)
+        if outcome == "acked":
+            await finish(app, clock, [cmd])
+        else:
+            await app.event(protocol.RealmJob(int(clock.now() * 1000), cmd.id, "guild_grow", "failed",
+                                              "operation_transition_unknown", guids[1], 1))
+        return cmd
+    cmd = run(grow())
+    if outcome == "abandoned":
+        realm.action_store.abandon(cmd.id, reason="checked in game", now=clock.now())
+    for i in range(300):  # far more settled history than the prune keeps
+        command_id = f"money{i}"
+        realm.action_store.prepare(rivals_spec(command_id), now=clock.now())
+        realm.action_store.begin_dispatch(command_id, payload=rivals_spec(command_id).payload,
+                                          process_id="p", connection_epoch=1, now=clock.now())
+        realm.action_store.observe_ack(Ack(0, command_id, True, ""), now=clock.now())
+    assert realm.action_store.prune(keep=0, now=clock.now() + 30 * 86400) == 256  # prepare kept 256
+    assert realm.action_store.get(cmd.id) is not None
+    expected = "acked" if outcome == "acked" else "unknown"
+    assert realm.part("rivals")._grow("plan", 8, guids) == expected
+    run(pump(realm, clock, rounds=1))
+    assert grows(app) == [cmd]
+
+
+def test_a_released_grow_is_never_sent_again_even_without_its_row(tmp_path, store, clock):
+    app, realm = live_realm(tmp_path, store, clock)
+    guids = (401, 402, 403)
+
+    async def grow():
+        await connect(app)
+        realm.part("rivals")._grow("plan", 8, guids)
+        await pump(realm, clock, rounds=1)
+        [cmd] = grows(app)
+        await app.event(protocol.RealmJob(int(clock.now() * 1000), cmd.id, "guild_grow", "failed",
+                                          "operation_transition_unknown", guids[1], 1))
+        return cmd
+    cmd = run(grow())
+    realm.action_store.abandon(cmd.id, reason="checked in game", now=clock.now())
+    with store.conn:  # say someone deleted the row by hand: the meta receipt still remembers it
+        store.conn.execute("DELETE FROM realm_action WHERE command_id=?", (cmd.id,))
+    assert realm.part("rivals")._grow("plan", 8, guids) == "unknown"
+    run(pump(realm, clock, rounds=1))
+    assert grows(app) == [cmd]
+
+
+def rivals_spec(command_id):
+    from leeroy_mind.realm.action_policy import classify
+    from leeroy_mind.realm.action_store import ActionSpec
+    c = classify(protocol.BankMoney(command_id, 1))
+    return ActionSpec(command_id, None, "root", c.policy, "realm_day", 4, c.kind, c.payload, c.reserved_manifest, 21, 1)

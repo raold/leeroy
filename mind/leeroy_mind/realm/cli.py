@@ -242,6 +242,14 @@ def _approve(args, clock, root_of):
     return 0
 
 
+RELEASE_HELP = (
+    "Release one body move stuck unknown in the action journal, with the mind stopped: it shows the "
+    "root, asks for its exact id again and marks it abandoned (completed, holding nobody), with a meta "
+    "receipt realm:action:abandoned:<id>. It refuses every other state, conflict included, a transport "
+    "not yet settled, a WG, ack or result root and one with children. A released root that native "
+    "evidence later contradicts goes to conflict and stays held; it cannot be released again.")
+
+
 def _open_rw(root):
     """mind.db for one write, never created or migrated: the realm journal must already be there."""
     conn = sqlite3.connect((root / "mind.db").resolve().as_uri() + "?mode=rw", uri=True,
@@ -298,7 +306,8 @@ def _release(args, clock, root_of, ask):
                 return 1
             if not args.yes:
                 print("Releasing frees these members in the mind's ledger; native keeps its own fence "
-                      "for any body it still holds.")
+                      "for any body it still holds. If native evidence later contradicts the release, "
+                      "the root goes to conflict and holds them again.")
                 try:
                     typed = ask("Type the root id to release it: ")
                 except (EOFError, KeyboardInterrupt):
@@ -364,7 +373,8 @@ def realm_main(argv=None, *, clock=None, ask=None) -> int:
     canon = subs.add_parser("canon", help="canon approvals, such as history-ok <seed> <canon>")
     canon.add_argument("action")
     canon.add_argument("args", nargs=argparse.REMAINDER)
-    release = subs.add_parser("release", help="release one unknown body move by hand; the mind must be stopped")
+    release = subs.add_parser("release", help="release one unknown body move by hand; the mind must be stopped",
+                              description=RELEASE_HELP)
     release.add_argument("root_id", help="the root's exact command id")
     release.add_argument("--reason", required=True, help="why, kept in its meta receipt")
     release.add_argument("--yes", action="store_true", help="skip typing the id again; it must still be exact")

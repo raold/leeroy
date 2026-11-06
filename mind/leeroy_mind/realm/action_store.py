@@ -8,6 +8,7 @@ the mind stopped (`realm release`), which keeps a meta receipt.
 """
 from dataclasses import asdict, dataclass, replace
 import json
+import logging
 import math
 import re
 import sqlite3
@@ -18,6 +19,7 @@ from leeroy_mind.protocol import Ack
 from . import protocol as p
 from .action_policy import Classified, classify, decode, document, identity, integer, members, text, token, U64
 
+log = logging.getLogger(__name__)
 TERMINAL = frozenset({"completed", "not_sent"})
 STATES = frozenset({"prepared", "dispatched", "unknown", "conflict", *TERMINAL})
 # A queued command's body fences (RealmModule::AcceptDomain): its executor's default admission,
@@ -57,6 +59,12 @@ def _step_refused(r, job) -> bool:
     return (r.role == "root" and r.policy == "ordinary" and r.kind in STEP_REFUSAL_KINDS
             and job["state"] == "failed" and job["reason"] in STEP_REFUSALS
             and job["guid"] in r.reserved_manifest and job["value"] == 0 and job["pvp_owner"] == "")
+
+
+def _durable(r) -> bool:
+    """A settled root the prune keeps for good: a grow's row is rivals._grow's only memory of that
+    attempt (a missing attempt id is sent again), and a release is the operator's own record."""
+    return r.kind == "guild_grow" or r.result_reason == ABANDONED
 
 
 def release_reason(reason) -> bool:
@@ -362,7 +370,7 @@ class ActionStore:
             raise ActionUnavailable("realm action evidence unavailable") from None
 
     def records(self):
-        """Bounded validated history, also used for durable 600s backoff."""
+        """Validated history, also used for durable 600s backoff; bounded but for grows and releases."""
         return self._records()
 
     def unresolved(self, *, limit=128):
@@ -410,6 +418,14 @@ class ActionStore:
             evidence.setdefault("failed_at", r.updated)
             r = replace(r, evidence=document(evidence, limit=32768))
         self._validate(r, stored=True)
+        if r.role == "root" and r.state in {"unknown", "conflict"}:
+            before = self.conn.execute("SELECT state FROM realm_action WHERE seq=?", (r.seq,)).fetchone()
+            if before is not None and before[0] != r.state:
+                # It now holds its manifest until typed evidence or `realm release` ends it.
+                ev = json.loads(r.evidence)
+                native = ev.get("job", {}).get("reason") or ev.get("ack", {}).get("error") or "none"
+                log.warning("realm_action_%s id=%s kind=%s reason=%s native=%s members=%d", r.state, r.command_id,
+                            r.kind, r.result_reason or r.send_error or "none", native, len(r.reserved_manifest))
         values = asdict(r)
         values["reserved_manifest"] = document(list(r.reserved_manifest))
         values["native_manifest"] = None if r.native_manifest is None else document(list(r.native_manifest))
@@ -773,7 +789,7 @@ class ActionStore:
     def abandon(self, command_id, *, reason, now):
         """The operator's release of one unknown body move: completed, result abandoned, holding
         nobody. Only with the mind stopped, under its lock (realm release). The meta receipt keeps
-        the time, his reason and the row as it was; the row itself is pruned like any other."""
+        the time, his reason and the row as it was; the prune never deletes the row."""
         identity(command_id); now = _now(now)
         if not release_reason(reason): raise ValueError("a release needs a reason of 1 to 200 printable characters")
         with self.conn:
@@ -796,7 +812,7 @@ class ActionStore:
             return new
 
     def _prune(self, keep=256, now=None):
-        roots = self._records("role='root' AND state IN ('completed','not_sent')")
+        roots = tuple(r for r in self._records("role='root' AND state IN ('completed','not_sent')") if not _durable(r))
         protected = {r.command_id for r in roots if r.result_ok is False and "failed_at" in json.loads(r.evidence)
                      and (now is None or now < json.loads(r.evidence)["failed_at"] + 600)}
         newest = sorted((r for r in roots if r.command_id not in protected), key=lambda r: (r.updated, r.seq), reverse=True)

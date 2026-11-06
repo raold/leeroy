@@ -433,6 +433,49 @@ def test_abandon_needs_a_printable_reason(journal, reason):
     assert store.get("rearm").state == "unknown"
 
 
+def test_prune_never_deletes_a_grow_or_a_released_root(journal):
+    store = journal
+    for i, (state, reason) in enumerate([("done", ""), ("failed", "operation_transition_unknown")]):
+        dispatch(store, prepare(store, p.GuildGrow(f"grow{i}", 13, (401 + i, 411 + i)), now=0))
+        store.observe_ack(Ack(0, f"grow{i}", True, ""), now=1)
+        store.observe_realm_job(job(f"grow{i}", "guild_grow", state, reason, 0 if state == "done" else 401 + i,
+                                    2 if state == "done" else 0), now=2)
+    dispatch(store, prepare(store, p.GuildGrow("never", 13, (421,)), now=0))
+    store.observe_send_error("never", "NotConnected", now=1)  # never left
+    dispatch(store, prepare(store, p.Rearm("released", (501,)), now=0))
+    store.observe_ack(Ack(0, "released", True, ""), now=1)
+    store.observe_realm_job(job("released", "rearm", "failed", "operation_transition_unknown", 501), now=2)
+    store.abandon("grow1", reason="checked", now=3)
+    store.abandon("released", reason="checked", now=3)
+    dispatch(store, prepare(store, p.Rearm("done", (601,)), now=0))
+    store.observe_ack(Ack(0, "done", True, ""), now=1)
+    store.observe_realm_job(job("done", "rearm", "done", "", 601), now=2)
+    assert store.prune(keep=0, now=10**9) == 1
+    assert [r.command_id for r in store.records()] == ["grow0", "grow1", "never", "released"]
+
+
+def test_a_root_that_settles_unknown_or_conflict_is_logged_once(store, caplog):
+    import logging
+    caplog.set_level(logging.WARNING, logger="leeroy_mind.realm.action_store")
+    def lines(): return [r.getMessage() for r in caplog.records if r.name == "leeroy_mind.realm.action_store"]
+    dispatch(store, prepare(store, p.Rearm("rearm", CAST)))
+    store.observe_ack(Ack(0, "rearm", True, ""), now=2)
+    store.observe_realm_job(job("rearm", "rearm", "failed", "operation_transition_unknown", CAST[27]), now=3)
+    store.recover(process_id="new", now=4)
+    assert lines() == ["realm_action_unknown id=rearm kind=rearm reason=job_failed "
+                       "native=operation_transition_unknown members=106"]
+    store.observe_realm_job(job("rearm", "rearm", "done", "", 0), now=5)
+    assert lines()[1:] == ["realm_action_conflict id=rearm kind=rearm reason=conflict "
+                           "native=operation_transition_unknown members=106"]
+    dispatch(store, prepare(store, p.Rearm("lost", (301,))))
+    store.recover(process_id="again", now=6)  # its process ended with it in flight
+    assert lines()[2:] == ["realm_action_unknown id=lost kind=rearm reason=ProcessRestart native=none members=1"]
+    dispatch(store, prepare(store, p.Rearm("refused", (302,))))
+    store.observe_ack(Ack(0, "refused", True, ""), now=7)
+    store.observe_realm_job(job("refused", "rearm", "failed", "busy:combat", 302), now=8)
+    assert len(lines()) == 3  # a step refusal settles refused, silently
+
+
 def test_step_refusals_are_native_refusals_whose_reservation_is_released():
     policy = (REPO / "modules/mod-leeroy/src/Lib/LeeroyRealmPolicy.cpp").read_text(encoding="utf-8")
     bodies = (REPO / "modules/mod-leeroy/src/Realm/RealmBodies.cpp").read_text(encoding="utf-8")

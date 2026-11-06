@@ -288,3 +288,21 @@ def test_release_needs_a_reason_and_an_unmigrated_db_is_left_alone(tmp_path, clo
     code, asked = release(tmp_path, clock, ROOT_ID, "--reason", "checked", "--yes")
     assert code == 1 and path.read_bytes() == before
     assert "not migrated" in capsys.readouterr().out
+
+
+def test_release_help_says_a_contradicted_release_goes_to_conflict(capsys):
+    with pytest.raises(SystemExit):
+        cli.realm_main(["release", "--help"])
+    text = " ".join(capsys.readouterr().out.split())
+    assert "conflict included" in text
+    assert "native evidence later contradicts goes to conflict and stays held" in text
+
+
+def test_release_refuses_a_conflicted_root(tmp_path, store, clock, capsys):
+    stored_unknown(store)
+    with store.conn:
+        store.conn.execute("UPDATE realm_action SET state='conflict',result_reason='conflict' WHERE command_id=?",
+                           (ROOT_ID,))
+    code, asked = release(tmp_path, clock, ROOT_ID, "--reason", "checked", answer=ROOT_ID)
+    assert code == 1 and not asked
+    assert "only an unknown root can be released; this one is conflict" in capsys.readouterr().out
