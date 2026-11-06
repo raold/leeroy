@@ -3,9 +3,10 @@ no-reproach anti-goal). Gathered from the modules' own constants, never copied: 
 (arc.plan, rendered for every kind, state, region and cover story with his pronoun forms left
 as the fields {he}, {him} and {his}), the read's prompt (arc.night), the weekend writer's prompt
 and plain memories (arc.weekend, the plain ones rendered for every plan kind and region), and
-the milestones, the affair's endings and her separated household (arc.after). The noticed facts
-(S7) and live talk's cooling and partner lines (S8) join here as they are written. Other fields
-({called}, {name}, {like}, ...) stay for the scan to fill."""
+the milestones in both cycles' words, the affair's endings and her separated household
+(arc.after). The noticed facts (S7) and live talk's cooling and partner lines (S8) join here as
+they are written. Other fields ({called}, {name}, {like}, {nth}, ...) stay for the scan to
+fill."""
 import itertools
 
 from leeroy_mind.arc import after, night, plan, weekend
@@ -41,6 +42,7 @@ def arc_texts() -> tuple[str, ...]:
         *_plan_texts(),
         night.READ_PROMPT, night.READ_ASK, night.NO_PLAN,
         *_weekend_texts(),
-        *after.MILESTONE_TEXT.values(), after.LIKE_FALLBACK, *after.FOUND_TEXT.values(),
+        *after.MILESTONE_TEXT.values(), *after.MILESTONE_AGAIN.values(), after.LIKE_FALLBACK,
+        *after.FOUND_TEXT.values(),
         after.HOUSEHOLD_SEPARATED, after.HOUSEHOLD_SEPARATED_KIDS,
     ]))

@@ -13,7 +13,8 @@ from conftest import make_persona
 from leeroy_mind.arc import after
 from leeroy_mind.arc.after import (AFFAIR_RISK_NIGHT, AFFAIR_RISK_TRIP, FOUND_OUT_ENDS_ROMANCE_P,
                                    FOUND_TEXT, HOUSEHOLD_SEPARATED, HOUSEHOLD_SEPARATED_KIDS,
-                                   MILESTONE_GAP, MILESTONE_TEXT, MILESTONES, MONTH_S)
+                                   MILESTONE_AGAIN, MILESTONE_GAP, MILESTONE_IMPORTANCE,
+                                   MILESTONE_TEXT, MILESTONES, MONTH_S, separated_household)
 from leeroy_mind.arc.night import stage_arc
 from leeroy_mind.arc.plan import has_partner, propose_plan
 from leeroy_mind.arc.state import Arc, get_arc, play_days_after, put_arc
@@ -24,7 +25,7 @@ from leeroy_mind.human import THEY_FORMS, _FORMS
 from leeroy_mind.nightly.growth import undo
 from leeroy_mind.nightly.romance import stage_romance
 from leeroy_mind.nightly.settings import night_bounds
-from leeroy_mind.personas.io import load_persona
+from leeroy_mind.personas.io import load_persona, save_persona
 from nightly.conftest import yes
 
 run = asyncio.run
@@ -93,8 +94,22 @@ def offscreen(h, guid=101):
     return [m for m in h.rows(guid) if m.source == "offscreen"]
 
 
-def text_of(name, like="quiet runs", forms=_FORMS["he"]):
-    return MILESTONE_TEXT[name].format(called="Testy", him=forms[1], his=forms[2], like=like)
+def text_of(name, like="quiet runs", forms=_FORMS["he"], nth=None):
+    """Her milestone memory: the first cycle's words, or with `nth` a later cycle's."""
+    template = MILESTONE_TEXT[name] if nth is None else MILESTONE_AGAIN[name]
+    return template.format(called="Testy", him=forms[1], his=forms[2], like=like, nth=nth)
+
+
+def milestone_rows(h, guid=101):
+    return [m for m in offscreen(h, guid) if m.importance == MILESTONE_IMPORTANCE]
+
+
+def daily(h, days):
+    """He plays each day in `days` and each night runs the next morning."""
+    for d in days:
+        plays(h, d)
+        ctx = morning(h, d)
+        assert not ctx.failures
 
 
 def meetups(h):
@@ -104,7 +119,9 @@ def meetups(h):
 def test_the_values():
     assert MILESTONES == ("missing", "inside_joke", "month", "gift", "friends_on_voice",
                           "fight_and_make_up", "next_visit")
-    assert set(MILESTONE_TEXT) == set(MILESTONES)
+    assert set(MILESTONE_TEXT) == set(MILESTONE_AGAIN) == set(MILESTONES)
+    assert all("{nth}" in t for t in MILESTONE_AGAIN.values())
+    assert not any("first" in t for t in MILESTONE_AGAIN.values())
     assert (MILESTONE_GAP, MONTH_S) == ((4, 8), 30 * DAY)
     assert (AFFAIR_RISK_NIGHT, AFFAIR_RISK_TRIP, FOUND_OUT_ENDS_ROMANCE_P) == (0.005, 0.04, 0.5)
     for text in (HOUSEHOLD_SEPARATED, HOUSEHOLD_SEPARATED_KIDS):
@@ -120,8 +137,9 @@ def test_milestones_come_in_order_and_a_month_waits_for_the_calendar(h):
         assert not ctx.failures and get_arc(h.store, 101, 1).ended is None
     arc = get_arc(h.store, 101, 1)
     events = list(arc.events)
-    assert [k for k, _ in events][:9] == [*MILESTONES, "inside_joke", "month"]
+    assert [k for k, _ in events] == list(MILESTONES)    # one cycle, then it waits
     months = [t for k, t in events if k == "month"]
+    assert len(months) == 1
     assert months[0] - back >= MONTH_S                   # the calendar, not his play
     since = back
     for k, t in events:
@@ -142,6 +160,7 @@ def test_milestones_come_in_order_and_a_month_waits_for_the_calendar(h):
     assert (arc.plan_state, arc.planning_since, arc.plan_at) == ("hoped", visit, None)
     assert arc.plan["kind"] != "neutral"                 # the kind is picked again
     assert arc.weekends == 1 and h.store.get_relationship(101, 1).romance_stage == "after"
+    assert arc.milestone == len(MILESTONES)              # the cycle is spent
     before = (len(h.rows(101)), get_arc(h.store, 101, 1))
     assert not morning(h, 79).failures                   # the night again: nothing new
     assert (len(h.rows(101)), get_arc(h.store, 101, 1)) == before
@@ -157,7 +176,7 @@ def test_next_visit_starts_a_new_plan_and_a_later_gap_writes_a_visit(h):
     arc = get_arc(h.store, 101, 1)
     assert not ctx.failures and ctx.reasoner.calls == 0
     assert (arc.plan_state, arc.planning_since, arc.plan_at) == ("hoped", floated, None)
-    assert arc.plan["kind"] != "neutral" and arc.milestone == MILESTONES.index("inside_joke")
+    assert arc.plan["kind"] != "neutral" and arc.milestone == len(MILESTONES)
     assert arc.events[-1] == ("next_visit", floated)
     (m,) = offscreen(h)
     assert (m.text, m.kind, m.scope, m.scope_with) == (text_of("next_visit"), "plan",
@@ -181,22 +200,73 @@ def test_next_visit_starts_a_new_plan_and_a_later_gap_writes_a_visit(h):
                                     ).fetchone()[0]
     arc = get_arc(h.store, 101, 1)
     assert (arc.plan_state, arc.weekends, arc.last_meetup) == ("done", 2, returned)
+    assert (arc.milestone, arc.milestone_at) == (0, None)                # a new cycle armed
     assert h.store.get_relationship(101, 1).romance_stage == "after"
     assert [(m.text, m.importance) for m in offscreen(h)][1:] == [(t, 7) for t in visit]
 
 
-def test_a_next_visit_while_a_plan_is_open_floats_no_second_one(h):
+def test_after_next_visit_nothing_is_written_until_the_next_meetup(h):
+    home_from(h, back=h.T - 40 * DAY, milestone=MILESTONES.index("next_visit"),
+              milestone_at=h.T - 20 * DAY)
+    for d in range(-9, 0):
+        plays(h, d)
+    daily(h, range(120))                                 # his yes never comes: a hope
+    arc = get_arc(h.store, 101, 1)
+    assert [k for k, _ in arc.events] == ["next_visit"]
+    assert [m.text for m in offscreen(h)] == [text_of("next_visit")]
+    assert (arc.plan_state, arc.milestone) == ("hoped", len(MILESTONES))
+
+
+def test_a_second_meetup_arms_a_second_cycle_in_new_words(h):
+    back = h.T - HOUR
+    home_from(h, back=back)
+    daily(h, range(70))                                  # the first cycle, to next_visit
+    assert [m.text for m in milestone_rows(h)] == [text_of(k) for k in MILESTONES]
+    sid, end = plays(h, 70)                              # his yes to the next visit
+    h.his(h.T + 70 * DAY + HOUR, "yes, come out again", channel="whisper", to=101)
+    assert not morning(h, 70, {"arc_read": [{"plan": "yes", "breakup": False}]}).failures
+    assert get_arc(h.store, 101, 1).plan_state == "set"
+    visit = ["Seeing Testy again felt easy from the first minute.",
+             "We got caught in the rain and laughed the whole way back."]
+    h.clock.set(end + WEEKEND_GAP_S + 60)
+    ctx = h.ctx({"arc_weekend": [{"moments": visit, "tone": "warm"}], "judge": [yes]},
+                night=label(72))
+    run(stage_arc(ctx))
+    assert not ctx.failures and get_arc(h.store, 101, 1).weekends == 2
+    second = get_arc(h.store, 101, 1).last_meetup
+    visit_kind = get_arc(h.store, 101, 1).plan["kind"]
+    daily(h, range(73, 150))                             # the second cycle
+    texts = [m.text for m in milestone_rows(h)]
+    assert texts == ([text_of(k) for k in MILESTONES]
+                     + [text_of(k, nth="second") for k in MILESTONES])
+    assert len(set(texts)) == len(texts)                 # never the same words twice
+    assert not any("first" in t for t in texts[len(MILESTONES):])
+    months = [m.t_event for m in milestone_rows(h)
+              if m.text in (text_of("month"), text_of("month", nth="second"))]
+    assert len(months) == 2                              # one month for each meetup
+    assert months[0] - back >= MONTH_S and months[1] - second >= MONTH_S
+    arc = get_arc(h.store, 101, 1)
+    assert (arc.plan_state, arc.milestone) == ("hoped", len(MILESTONES))
+    assert arc.plan["kind"] != visit_kind
+
+
+def test_a_next_visit_while_a_plan_is_open_floats_no_second_one(h, caplog):
     home_from(h, back=h.T - 40 * DAY, milestone=MILESTONES.index("next_visit"),
               milestone_at=h.T - 20 * DAY)
     put_arc(h.store, replace(get_arc(h.store, 101, 1), plan_state="talked"))
     kept = get_arc(h.store, 101, 1).plan
     for d in range(-9, 1):
         plays(h, d)
-    assert not morning(h, 0).failures
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        assert not morning(h, 0).failures
     arc = get_arc(h.store, 101, 1)
     assert (arc.plan_state, arc.plan) == ("talked", kept)              # left as it was
-    assert (arc.milestone, arc.milestone_at) == (MILESTONES.index("inside_joke"), h.clock.now())
+    assert (arc.milestone, arc.milestone_at) == (len(MILESTONES), h.clock.now())
     assert offscreen(h) == [] and arc.events == ()
+    assert [r.leeroy_fields for r in caplog.records
+            if getattr(r, "leeroy_event", "") == "arc_after"] == [
+        {"night": label(0), "guid": 101, "milestone": "next_visit", "found": None,
+         "trip": False, "skipped": "plan_open"}]
 
 
 def test_neglect_never_ends_it(h):
@@ -282,13 +352,14 @@ def test_found_out_ends_the_romance_or_her_marriage(h, monkeypatch, caplog, endi
         (led,) = h.store.conn.execute("SELECT * FROM persona_ledger").fetchall()
         assert (led["guid"], led["kind"]) == (101, "household")
         assert json.loads(led["text"]) == {"household": [MARRIED, HOUSEHOLD_SEPARATED_KIDS],
-                                           "partner": "none"}
+                                           "partner": "none", "cover": "",
+                                           "memory": theirs.id, "event": ["separated", now]}
     for g in (102, 103, 104):
         assert offscreen(h, g) == [] and get_arc(h.store, g, 1) == Arc(g, 1)
     fields = [r.leeroy_fields for r in caplog.records
               if getattr(r, "leeroy_event", "") == "arc_after"]
     assert fields == [{"night": label(0), "guid": 101, "milestone": None, "found": ending,
-                       "trip": False}]
+                       "trip": False, "skipped": None}]
     later = morning(h, 1)                                # found out once: never again
     assert not later.failures and len(offscreen(h)) == 2
 
@@ -311,30 +382,77 @@ def test_the_trip_risk_applies_on_the_night_she_meets_him(h, monkeypatch):
                 night=label(2))
     run(stage_arc(ctx))
     assert not ctx.failures and len(meetups(h)) == 1
+    assert ("card", 101) not in ctx._memo                # the meetup's card is not kept
+    assert ctx.persona(101).real_life.household == HOUSEHOLD_SEPARATED_KIDS
     arc = get_arc(h.store, 101, 1)
     assert (arc.partner, arc.plan["cover"], arc.plan_state) == ("separated", "", "done")
     assert h.store.get_relationship(101, 1).romance_stage == "after"
     assert get_arc(h.store, 102, 1).partner == "none" and offscreen(h, 102) == []
 
 
-def test_the_household_rewrite_is_undone(h, monkeypatch):
+def separate(h, monkeypatch, household="lives with her husband"):
+    """A woman at planning with a talked-about plan and its cover story, whose marriage the
+    affair ends tonight. Returns the night's context."""
     monkeypatch.setattr(after, "AFFAIR_RISK_NIGHT", 1.0)
     monkeypatch.setattr(after, "FOUND_OUT_ENDS_ROMANCE_P", 0.0)
-    h.woman(101, "lust", household="lives with her husband")
-    h.rel(101, 1, attraction=99, affinity=99, trust=99, romance_stage="voice")
+    h.woman(101, "lust", household=household)
+    h.rel(101, 1, attraction=99, affinity=99, trust=99, romance_stage="planning")
+    put_arc(h.store, Arc(101, 1, plan={"kind": "event", "target": h.T + 9 * DAY,
+                                       "worries": ["money"], "cover": "a work trip"},
+                         plan_state="talked", planning_since=h.T - 5 * DAY, updated=h.T))
     ctx = morning(h, 0)
+    assert not ctx.failures
+    return ctx
+
+
+def test_the_household_rewrite_is_undone_whole(h, monkeypatch):
+    ctx = separate(h, monkeypatch)
+    now = h.clock.now()
     assert load_persona(h.store, 101).real_life.household == HOUSEHOLD_SEPARATED
+    arc = get_arc(h.store, 101, 1)
+    assert (arc.partner, arc.plan["cover"], arc.events) == ("separated", "",
+                                                            (("separated", now),))
+    shared, theirs = offscreen(h)
     (led,) = h.store.conn.execute("SELECT id FROM persona_ledger").fetchall()
     ctx.persona(101)                                     # cached
-    assert undo(h.store, led["id"], now=h.clock.now(), personas=ctx.personas)
+    assert undo(h.store, led["id"], now=now + 60, personas=ctx.personas)
     p = load_persona(h.store, 101)
     assert p.real_life.household == "lives with her husband" and has_partner(p)
     assert ctx.persona(101).real_life.household == "lives with her husband"
     arc = get_arc(h.store, 101, 1)
-    assert arc.partner == "none" and has_partner(p, arc.partner)
+    assert (arc.partner, arc.plan["cover"], arc.plan_state) == ("none", "a work trip",
+                                                                "talked")
+    assert arc.events == () and has_partner(p, arc.partner)
+    assert {m.id: m.status for m in h.rows(101)} == {shared.id: "active",
+                                                     theirs.id: "rejected"}
     assert [r["kind"] for r in h.store.conn.execute(
         "SELECT kind FROM persona_ledger ORDER BY id")] == ["household", "undo"]
-    assert not undo(h.store, led["id"], now=h.clock.now())             # once only
+    assert not undo(h.store, led["id"], now=now + 120)                 # once only
+
+
+def test_undo_leaves_a_household_he_edited_by_hand(h, monkeypatch):
+    separate(h, monkeypatch)
+    stored = load_persona(h.store, 101)
+    save_persona(h.store, replace(stored, real_life=replace(
+        stored.real_life, household="lives alone with two cats")), source="owner",
+        ts=h.clock.now(), race="Orc", class_name="Warrior")
+    (led,) = h.store.conn.execute("SELECT id FROM persona_ledger").fetchall()
+    assert undo(h.store, led["id"], now=h.clock.now() + 60)
+    assert load_persona(h.store, 101).real_life.household == "lives alone with two cats"
+    arc = get_arc(h.store, 101, 1)
+    assert (arc.partner, arc.plan["cover"]) == ("none", "a work trip")
+
+
+def test_only_her_own_children_stay_in_her_household():
+    for text in ("married, two kids at home", "lives with her husband and their twins",
+                 "married with a daughter", "two children and a dog", "she's got three kids",
+                 "her son lives with her"):
+        assert separated_household(text) == HOUSEHOLD_SEPARATED_KIDS, text
+    for text in ("married, doesn't have kids", "married, no kids", "wants kids someday",
+                 "kid-free and loving it", "lives with her boyfriend and his son",
+                 "married, child-free by choice", "married, no children",
+                 "lives with her husband; her sister's kids visit"):
+        assert separated_household(text) == HOUSEHOLD_SEPARATED, text
 
 
 def test_has_partner_reads_her_arc_before_her_card():
@@ -359,13 +477,15 @@ def fill(s: str, forms) -> str:
         def __missing__(self, key):
             return ""
     return s.format_map(Fields(called="Testy", name="Arkon", he=forms[0], him=forms[1],
-                               his=forms[2], like="quiet runs", cover="a work trip",
+                               his=forms[2], like="quiet runs", nth="second",
+                               cover="a work trip",
                                where="at a hotel halfway between us"))
 
 
 def test_arc_texts_never_reproach():
     texts = arc_texts()
-    for s in (*MILESTONE_TEXT.values(), *FOUND_TEXT.values(), HOUSEHOLD_SEPARATED,
+    for s in (*MILESTONE_TEXT.values(), *MILESTONE_AGAIN.values(), *FOUND_TEXT.values(),
+              HOUSEHOLD_SEPARATED,
               HOUSEHOLD_SEPARATED_KIDS, PLAIN_WEEKEND, PLAIN_VISIT, AFFAIR, WEEKEND_PROMPT):
         assert s in texts
     assert "It's happening: BlizzCon, about 12 days off." in texts      # the plan lines
@@ -384,7 +504,8 @@ def test_the_after_logs_carry_no_text_or_names(h, caplog):
         morning(h, 0)
     events = [r for r in caplog.records if getattr(r, "leeroy_event", "") == "arc_after"]
     assert [r.leeroy_fields for r in events] == [
-        {"night": label(0), "guid": 101, "milestone": "missing", "found": None, "trip": False}]
+        {"night": label(0), "guid": 101, "milestone": "missing", "found": None, "trip": False,
+         "skipped": None}]
     text = " ".join(r.getMessage() for r in events)
     for word in ("Testy", "Arkon", "quiet runs", "I miss", f"away:{aid}"):
         assert word not in text

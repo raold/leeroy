@@ -11,12 +11,14 @@ Two steps of the arc stage (arc.night.stage_arc), each one unit:
 - settle (unit "settle", first): the safety net for rows an older build left open. An away past
   its returns_at is closed (returned_at = returns_at); a woman back from a weekend moves to
   "after" (a rel_delta "weekend->after"), and after a weekend or a visit her plan is done, her
-  weekends count one more and last_meetup is when she came back.
+  weekends count one more, last_meetup is when she came back and her after-weekend milestones
+  start a new cycle (arc.after).
 - meetup (unit "meetup", after the reads): absence() finds his gap, pick_meetup() the woman who
   takes it (one meetup per absence, at most one woman away), and the night writes her finished
   trip (the away row, closed), the arc_meetup row, her moments and what settle would do for it:
   a weekend moves her "planning->weekend" and "weekend->after" (evidence away:<id>), and her plan
-  is done, weekends goes up by one and last_meetup is when she came back.
+  is done, weekends goes up by one, last_meetup is when she came back and a new milestone cycle
+  starts (milestone 0, arc.after).
 
 Her moments are grounded (kind "life": fiction, so no number or boss rule) and stored as private
 memories with him (scope_with him): they reach only her prompts for a whisper to him, never a
@@ -199,8 +201,9 @@ def settle(ctx: "NightContext") -> None:
     """Unit "settle": aways past their returns_at close (returned_at = returns_at). Each meetup
     whose away is closed and that her arc has not counted (last_meetup before its returns_at)
     settles: a weekend moves her from "weekend" to "after" (rel_delta "weekend->after",
-    evidence away:<id>); after a weekend or a visit her plan is done, weekends goes up by one and
-    last_meetup is returns_at. A woman no longer on that stage (her romance ended) is left."""
+    evidence away:<id>); after a weekend or a visit her plan is done, weekends goes up by one,
+    last_meetup is returns_at and her milestone cycle starts again (milestone 0, arc.after). A
+    woman no longer on that stage (her romance ended) is left."""
     if ctx.done(STAGE, "settle"):
         return
     now, human = ctx.clock.now(), ctx.human
@@ -227,7 +230,8 @@ def settle(ctx: "NightContext") -> None:
                 store.add_rel_delta(guid, human, "romance_stage", 1, "weekend->after",
                                     [f"away:{away_id}"], now, applied=True)
             put_arc(store, replace(arc, plan_state="done", weekends=arc.weekends + 1,
-                                   last_meetup=returns_at, updated=now))
+                                   last_meetup=returns_at, milestone=0, milestone_at=None,
+                                   updated=now))
             back.append(guid)
     if ctx.commit(STAGE, "settle", write) and (closed or back):
         log("arc_settle", night=ctx.night, closed=closed, guids=back)
@@ -322,7 +326,7 @@ async def _meetup(ctx: "NightContext") -> None:
             s.add_rel_delta(guid, human, "romance_stage", 1, "weekend->after", [ref], now,
                             applied=True)
         put_arc(s, replace(arc_now, plan_state="done", weekends=arc_now.weekends + 1,
-                           last_meetup=returns_at, updated=now))
+                           last_meetup=returns_at, milestone=0, milestone_at=None, updated=now))
         for text, t, vector in zip(texts, times, vectors):
             ctx.writer.put(MemoryRow(
                 id=None, owner=guid, kind="event", text=text, t_event=t, t_created=int(now),

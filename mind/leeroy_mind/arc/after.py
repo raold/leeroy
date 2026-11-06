@@ -4,15 +4,18 @@ Step 5 of the arc stage (arc.night.stage_arc): one unit "after:<guid>" for each 
 (stance in FULL_ARC), not away, who is at "after" (her milestones) or who has a partner at home
 and is at late_nights or past (the affair roll). Neither makes a model call.
 
-Milestones: "after" is a sequence, not an open stage. MILESTONES come in order, one every
-MILESTONE_GAP play days of his since the last one (drawn once for each milestone), the first
-counted from her last meetup; "month" also waits for MONTH_S on the calendar since that meetup.
-"next_visit" floats a new plan, a hope (state "hoped", its kind picked again, never the last
-plan's), which he shapes as he did the first (arc.night's read); his yes makes a visit in a
-later gap of his play (arc.weekend). A plan still open by then is left as it is and nothing is
-floated. After next_visit the cycle starts again at "inside_joke". Each milestone writes one
-private memory with him from MILESTONE_TEXT (built-in, non-explicit, filled from her card) and
-an arc event (its name).
+Milestones: "after" is a sequence, not an open stage. Each meetup (the weekend or a visit) arms
+one cycle (arc.weekend sets milestone 0): MILESTONES in order, one every MILESTONE_GAP play days
+of his since the last one (drawn once for each milestone), the first counted from that meetup;
+"month" also waits for MONTH_S on the calendar since it, so it comes once a meetup. "next_visit"
+ends the cycle (milestone CYCLE_DONE): it floats a new plan, a hope (state "hoped", its kind
+picked again, never the last plan's), which he shapes as he did the first (arc.night's read),
+and his yes makes a visit in a later gap of his play (arc.weekend), which arms the next cycle.
+Until then nothing more is written. A plan still open at next_visit is left as it is and nothing
+is floated (logged skipped "plan_open"). Each milestone writes one private memory with him and
+an arc event (its name): the first cycle in MILESTONE_TEXT's words, a later one in
+MILESTONE_AGAIN's with the meetup's ordinal ("our third time together"), so her words never
+repeat (built-in, non-explicit, filled from her card).
 
 The affair: a woman with a partner at home (plan.has_partner, her arc's partner first) at
 late_nights or past is found out at home with AFFAIR_RISK_NIGHT a night, or AFFAIR_RISK_TRIP on
@@ -21,9 +24,10 @@ the night her meetup was written (met_tonight). FOUND_OUT_ENDS_ROMANCE_P then pi
 "found_out") or her marriage (event "separated"; the arc carries on). Her marriage ending
 rewrites her card's household (HOUSEHOLD_SEPARATED, or HOUSEHOLD_SEPARATED_KIDS when it named
 children) as a new persona version with a persona_ledger row of kind "household", sets her
-arc's partner to "separated" and drops her plan's cover story; nightly.growth.undo reverses the
-household and the partner (restore_household), not the cover story. Either ending leaves her an
-open memory that names no one (FOUND_TEXT["open"]) and a private one with him.
+arc's partner to "separated" and drops her plan's cover story; nightly.growth.undo puts back the
+household, the partner and the cover story, and takes back the separation's private memory and
+its arc event (restore_household). Either ending leaves her an open memory that names no one
+(FOUND_TEXT["open"]) and a private one with him.
 
 Nothing else here ends a romance: neglect, a cooling score and a bad weekend never do. Logs
 carry her guid and the kinds, never a text or a name."""
@@ -54,7 +58,7 @@ MILESTONES = ("missing", "inside_joke", "month", "gift", "friends_on_voice",
               "fight_and_make_up", "next_visit")
 MILESTONE_GAP = (4, 8)                   # his play days from one milestone to the next
 MONTH_S = 30 * DAY_S                     # "month" waits this long after her last meetup
-RESTART = MILESTONES.index("inside_joke")  # where the cycle starts again after next_visit
+CYCLE_DONE = len(MILESTONES)             # the cycle is spent: nothing until the next meetup
 AFFAIR_FROM = ROMANCE_STAGES[ROMANCE_STAGES.index("late_nights"):ROMANCE_STAGES.index("ex")]
 AFFAIR_RISK_NIGHT = 0.005                # found out at home, a night (owner, 2026-11-06)
 AFFAIR_RISK_TRIP = 0.04                  # on the night her meetup with him was written
@@ -77,6 +81,24 @@ MILESTONE_TEXT = {
     "next_visit": "I've started daydreaming about seeing {called} in person again, and I've "
                   "floated another trip with {him}.",
 }
+# A later cycle's words ({nth}: the meetup's ordinal, "second", "third", ...), never "first".
+MILESTONE_AGAIN = {
+    "missing": "Seeing {called} for the {nth} time only made me miss {him} more, and I keep "
+               "wanting to tell {him} about {like}.",
+    "inside_joke": "{called} and I came back from our {nth} time together with a new joke "
+                   "nobody else would get.",
+    "month": "It's a month since our {nth} time together, and I still go back over it, smiling.",
+    "gift": "After our {nth} time together I sent {called} another little something by post, "
+            "something to do with {like}.",
+    "friends_on_voice": "My friends had {called} on voice again after our {nth} time together, "
+                        "and by now they ask after {him}.",
+    "fight_and_make_up": "{called} and I squabbled over nothing much after our {nth} time "
+                         "together, and making up came easier than it used to.",
+    "next_visit": "Our {nth} time together only made me want the next one, and I've floated "
+                  "another trip with {him}.",
+}
+_ORDINALS = {2: "second", 3: "third", 4: "fourth", 5: "fifth", 6: "sixth", 7: "seventh",
+             8: "eighth", 9: "ninth", 10: "tenth"}
 LIKE_FALLBACK = "the little things I love"
 MILESTONE_KIND = {"next_visit": "plan"}  # every other milestone is an "event"
 MILESTONE_IMPORTANCE = 6
@@ -101,8 +123,16 @@ HOUSEHOLD_SEPARATED = ("recently separated after things blew up at home, living 
                        "for now")
 HOUSEHOLD_SEPARATED_KIDS = ("recently separated after things blew up at home, sharing the kids "
                             "with her ex")
-_KIDS = re.compile(r"(?<!no )\b(kids?|children|child|sons?|daughters?|bab(y|ies)|toddlers?"
-                   r"|twins|step-?(kids|children))\b", re.IGNORECASE)
+_CHILD = re.compile(r"\b(kids?|children|child|sons?|daughters?|bab(y|ies)|toddlers?|twins"
+                    r"|step-?(kids|children|sons?|daughters?))\b(?![-\u2010]free)", re.IGNORECASE)
+# A child word that is not hers, by what her clause says just before it ("no kids", "doesn't
+# have kids", "wants kids", "his son", "her sister's kids") or just after it ("kids someday").
+_NOT_HERS_BEFORE = re.compile(
+    r"\b(no|without|wants?|wanting|would like|hoping for|hopes? for|his)\b"
+    r"|(n[\u2019']t|\b(not|never|doesnt|dont|didnt))\s+(have|had|got)\b"
+    r"|\b(?!(she|he|it|that|there|who|what|one)[\u2019']s\b)\w+[\u2019']s\b", re.IGNORECASE)
+_NOT_HERS_AFTER = re.compile(r"\s*(someday|some day|one day|eventually|in the future)\b",
+                             re.IGNORECASE)
 _OPEN_PLANS = ("hoped", "talked", "set")
 
 
@@ -115,20 +145,50 @@ class _Memory(NamedTuple):
     evidence: tuple[str, ...]
 
 
+def has_children(household: str) -> bool:
+    """Whether her household names children of her own: a child word whose clause does not say
+    she has none, wants some, or that they are someone else's."""
+    for m in _CHILD.finditer(household):
+        clause = household[:m.start()]
+        for mark in ",;.:":
+            clause = clause.rsplit(mark, 1)[-1]
+        if (_NOT_HERS_BEFORE.search(" ".join(clause.split()[-3:]))
+                or _NOT_HERS_AFTER.match(household, m.end())):
+            continue
+        return True
+    return False
+
+
 def separated_household(household: str) -> str:
     """Her card's household after the affair ends her marriage: her children stay in it."""
-    return HOUSEHOLD_SEPARATED_KIDS if _KIDS.search(household) else HOUSEHOLD_SEPARATED
+    return HOUSEHOLD_SEPARATED_KIDS if has_children(household) else HOUSEHOLD_SEPARATED
 
 
-def _gap(guid: int, index: int, since: float) -> float:
-    """The play days from `since` to milestone `index`, drawn once for that milestone (ctx.rng
-    would draw again each night, so the span would be the first of several draws to fit)."""
-    return random.Random(f"arc|milestone|{guid}|{index}|{since!r}").uniform(*MILESTONE_GAP)
+def ordinal(n: int) -> str:
+    """Her n-th meetup in words (second to tenth), then in figures (11th, 21st, ...)."""
+    if n in _ORDINALS:
+        return _ORDINALS[n]
+    return f"{n}{'th' if 10 <= n % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')}"
+
+
+def milestone_text(name: str, meetups: int, *, called: str, forms, like: str) -> str:
+    """Her memory for milestone `name` of her cycle after meetup number `meetups`: the first
+    cycle's words, or a later cycle's with its ordinal."""
+    template = MILESTONE_TEXT[name] if meetups <= 1 else MILESTONE_AGAIN[name]
+    return template.format(called=called, him=forms[1], his=forms[2], like=like,
+                           nth=ordinal(meetups))
+
+
+def _gap(guid: int, index: int, since: float) -> int:
+    """The whole play days from `since` to milestone `index`, drawn once for that milestone
+    (ctx.rng would draw again each night, so the span would be the first of several draws)."""
+    return random.Random(f"arc|milestone|{guid}|{index}|{since!r}").randint(*MILESTONE_GAP)
 
 
 def due_milestone(store: Store, arc: Arc, *, now: float, tz: "tzinfo") -> str | None:
     """Her next milestone when it is due at `now`: MILESTONE_GAP play days of his since the last
-    one (the first since her last meetup), and for "month" MONTH_S since her last meetup."""
+    one (the first since her last meetup), and for "month" MONTH_S since her last meetup. None
+    once her cycle is spent (CYCLE_DONE) until a meetup arms the next."""
     since = arc.last_meetup if arc.milestone_at is None else arc.milestone_at
     if since is None or not 0 <= arc.milestone < len(MILESTONES):
         return None
@@ -160,16 +220,16 @@ def _last_trip(store: Store, guid: int) -> str | None:
 
 
 def _candidates(ctx: "NightContext") -> list[int]:
-    """The women with an "after" unit tonight: full-arc, not away, at "after" or, with a partner
-    at home, at late_nights or past."""
+    """The women with an "after" unit tonight: full-arc, not away, at "after" with her cycle not
+    spent or, with a partner at home, at late_nights or past."""
     store, human, away = ctx.store, ctx.human, active_away(ctx.store)
     out = []
     for guid, stance in sorted(ctx.attitudes().items()):
         if stance not in FULL_ARC or guid in away:
             continue
-        stage = store.get_relationship(guid, human).romance_stage
-        if stage == "after" or (stage in AFFAIR_FROM and has_partner(
-                ctx.persona(guid), get_arc(store, guid, human).partner)):
+        stage, arc = store.get_relationship(guid, human).romance_stage, get_arc(store, guid, human)
+        if ((stage == "after" and arc.milestone < CYCLE_DONE)
+                or (stage in AFFAIR_FROM and has_partner(ctx.persona(guid), arc.partner))):
             out.append(guid)
     return out
 
@@ -198,7 +258,8 @@ async def _after(ctx: "NightContext", guid: int) -> None:
     if found is None and name is None:
         ctx.skip(STAGE, unit)
         return
-    called, (_, him, his) = ctx.ident.called, ctx.ident.forms
+    called, forms = ctx.ident.called, ctx.ident.forms
+    _, him, his = forms
     partner = "separated" if found == "separated" else arc.partner
     memories: list[_Memory] = []
     if found is not None:
@@ -209,11 +270,12 @@ async def _after(ctx: "NightContext", guid: int) -> None:
             _Memory(FOUND_TEXT[found].format(called=called, him=him, his=his), "event",
                     "private", FOUND_IMPORTANCE[found], FOUND_VALENCE[found], ref)]
     floated, marked = None, False
-    if name is not None and not (name == "next_visit" and arc.plan_state in _OPEN_PLANS):
+    skipped = "plan_open" if name == "next_visit" and arc.plan_state in _OPEN_PLANS else None
+    if name is not None and skipped is None:
         rng = ctx.rng(STAGE, "milestone", guid, name)
         like = rng.choice(p.likes) if p.likes else LIKE_FALLBACK
         memories.append(_Memory(
-            MILESTONE_TEXT[name].format(called=called, him=him, his=his, like=like),
+            milestone_text(name, arc.weekends, called=called, forms=forms, like=like),
             MILESTONE_KIND.get(name, "event"), "private", MILESTONE_IMPORTANCE,
             MILESTONE_VALENCE.get(name, 0.6),
             (_last_trip(store, guid) or f"milestone:{guid}:{ctx.night}",)))
@@ -239,14 +301,14 @@ async def _after(ctx: "NightContext", guid: int) -> None:
             end_romance(s, guid, human, by="found_out", now=now)
             a = get_arc(s, guid, human)
         elif found == "separated":
-            _separate(s, guid, arc.partner, evidence=[f"memory:{ids[0]}"], now=now)
+            _separate(s, guid, arc.partner, cover=a.plan.get("cover") or "", memory=ids[1],
+                      evidence=[f"memory:{i}" for i in ids[:2]], now=now)
             a = replace(a, partner="separated",
                         plan=a.plan | {"cover": ""} if a.plan.get("cover") else a.plan)
         if found is not None:
             a = add_event(a, FOUND_EVENT[found], now)
         if name is not None:
-            a = replace(a, milestone=RESTART if name == "next_visit"
-                        else MILESTONES.index(name) + 1, milestone_at=now)
+            a = replace(a, milestone=MILESTONES.index(name) + 1, milestone_at=now)
             if marked:
                 a = add_event(a, name, now)
             if floated is not None:
@@ -254,16 +316,19 @@ async def _after(ctx: "NightContext", guid: int) -> None:
                             planning_since=now)
         put_arc(s, replace(a, updated=now))
     if ctx.commit(STAGE, unit, write):
-        if found == "separated":
+        if found == "separated":  # the night's later reads see her new household
             ctx.personas.invalidate(guid)
-        log("arc_after", night=ctx.night, guid=guid, milestone=name, found=found, trip=trip)
+            ctx._memo.pop(("card", guid), None)
+        log("arc_after", night=ctx.night, guid=guid, milestone=name, found=found, trip=trip,
+            skipped=skipped)
 
 
-def _separate(store: Store, guid: int, partner: str, *, evidence: list[str],
-              now: float) -> int:
+def _separate(store: Store, guid: int, partner: str, *, cover: str, memory: int,
+              evidence: list[str], now: float) -> int:
     """Her stored card's household rewritten (separated_household) as a new persona version,
     and its "household" ledger row, which holds what restore_household needs: the household
-    before and after, and her arc's partner before. Returns the ledger row's id."""
+    before and after, her arc's partner and plan's cover story before, the separation's private
+    memory and its arc event. Returns the ledger row's id."""
     stored = load_persona(store, guid)
     if stored is None:
         raise LookupError(f"guid {guid} has no stored persona")
@@ -273,7 +338,9 @@ def _separate(store: Store, guid: int, partner: str, *, evidence: list[str],
     save_persona(store, replace(stored, real_life=replace(stored.real_life, household=after)),
                  source="generated", ts=now, race=race, class_name=class_name)
     return ledger_add(store, guid=guid, kind="household",
-                      text=json.dumps({"household": [before, after], "partner": partner},
+                      text=json.dumps({"household": [before, after], "partner": partner,
+                                       "cover": cover, "memory": memory,
+                                       "event": [FOUND_EVENT["separated"], now]},
                                       ensure_ascii=False),
                       evidence=evidence, now=now)
 
@@ -281,14 +348,16 @@ def _separate(store: Store, guid: int, partner: str, *, evidence: list[str],
 def restore_household(store: Store, row, *, now: float) -> bool:
     """nightly.growth.undo of a "household" ledger row, inside its transaction: her card's
     household back to what it was, while it still reads as the row wrote it (a later hand edit
-    stands), and her arc's partner back, while it is still "separated". False when neither is
-    left to reverse."""
+    stands); her arc's partner back while it is still "separated", and with it the cover story
+    on a plan still open that has none; the separation's arc event taken out of her events and
+    its private memory rejected, while it is active. False when nothing is left to reverse."""
     try:
         entry = json.loads(row["text"])
         before, after = entry["household"]
         partner = entry["partner"]
     except (ValueError, KeyError, TypeError):
         return False
+    cover, memory, event = entry.get("cover") or "", entry.get("memory"), entry.get("event")
     guid, done = row["guid"], False
     p = load_persona(store, guid)
     if p is not None and p.real_life.household == after:
@@ -297,7 +366,18 @@ def restore_household(store: Store, row, *, now: float) -> bool:
                      source="generated", ts=now, race=race, class_name=class_name)
         done = True
     arc = get_arc(store, guid, int(store.get_meta("human_guid") or 0))
-    if arc.partner == "separated":
-        put_arc(store, replace(arc, partner=partner, updated=now))
+    back = arc
+    if back.partner == "separated":
+        back = replace(back, partner=partner)
+        if cover and back.plan_state in _OPEN_PLANS and not back.plan.get("cover"):
+            back = replace(back, plan=back.plan | {"cover": cover})
+    if event is not None:
+        back = replace(back, events=tuple(e for e in back.events if list(e) != list(event)))
+    if back != arc:
+        put_arc(store, replace(back, updated=now))
+        done = True
+    if memory is not None and store.conn.execute(
+            "UPDATE memory SET status = 'rejected' WHERE id = ? AND owner = ? "
+            "AND status = 'active'", (memory, guid)).rowcount:
         done = True
     return done

@@ -102,7 +102,7 @@ def test_an_older_database_is_refused(tmp_path, capsys, monkeypatch):
     from leeroy_mind.storage import db
     files = db._migration_files()
     with monkeypatch.context() as patch:
-        patch.setattr(db, "_migration_files", lambda: [(n, p) for n, p in files if n <= 16])
+        patch.setattr(db, "_migration_files", lambda: files[:-1])    # the newest one missing
         open_db(tmp_path / "mind.db").close()
     before = _digest(tmp_path / "mind.db")
     assert _end(tmp_path, 101) == 1
