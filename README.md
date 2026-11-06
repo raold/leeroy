@@ -147,7 +147,9 @@ member say what they could not know.
   undo), the mind's and the voice service's health, and their start, restart
   and stop. It runs apart from the mind, so it can start the mind again; it
   stops the mind cleanly, and sends raid actions and dial changes, through the
-  mind's loopback control endpoint.
+  mind's loopback control endpoint. Away from home the owner opens it over his
+  tailnet (`tailscale serve`, never Funnel) with a bookmarked stable key; a
+  logon task (`scripts/ac-console-schedule.ps1`) keeps it running.
 
 Personas, memories, prompts and logs stay in the ignored `mind-data/`. See
 [the operating notes](CLAUDE.md#the-mind-service-leeroy_mind) for commands.

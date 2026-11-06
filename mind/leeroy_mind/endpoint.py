@@ -187,7 +187,7 @@ def private_sddl() -> str:
     return f"D:P(A;;FA;;;{_user_sid()})"
 
 
-def _create_private(path: Path) -> int:
+def create_private(path: Path) -> int:
     """A new file only this process's user can open (it must not exist), as a writable fd. The
     permissions are set as it is created: there is no moment it is readable by anyone else."""
     if os.name != "nt":
@@ -236,17 +236,23 @@ def _create_private(path: Path) -> int:
 
 
 def write_key_file(path: Path, record: dict) -> None:
-    """record as JSON at path, readable by this user only: written to a private file beside it,
-    then moved over whatever is there (a crash's leftover), so the key is never readable by
-    anyone else, nor half written."""
+    """record as JSON at path, readable by this user only (write_private)."""
+    write_private(path, json.dumps(record, separators=(",", ":"), ensure_ascii=True)
+                  .encode("ascii"))
+
+
+def write_private(path: Path, data: bytes) -> None:
+    """data at path, readable by this user only: written to a private file beside it, then
+    moved over whatever is there (a crash's leftover), so the key is never readable by anyone
+    else, nor half written."""
     path = Path(path)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     with suppress(FileNotFoundError):
         tmp.unlink()
-    fd = _create_private(tmp)
+    fd = create_private(tmp)
     try:
         with os.fdopen(fd, "wb") as f:
-            f.write(json.dumps(record, separators=(",", ":"), ensure_ascii=True).encode("ascii"))
+            f.write(data)
             f.flush()
             os.fsync(f.fileno())
         for attempt in range(REPLACE_TRIES):
@@ -263,6 +269,80 @@ def write_key_file(path: Path, record: dict) -> None:
         with suppress(OSError):
             tmp.unlink()
         raise
+
+
+def private_problem(path: Path) -> str | None:
+    """Why someone other than this process's user may read the file at path, or None when no
+    one can: on Windows, a missing DACL (everyone may) or an entry in it that allows anyone
+    else (deny entries take nothing away from him); elsewhere, another owner or a group or
+    other bit in its mode. OSError when it cannot be read."""
+    if os.name != "nt":
+        st = os.stat(path)
+        if st.st_uid != os.getuid():
+            return "it belongs to another user"
+        if st.st_mode & 0o077:
+            return f"its mode is {oct(st.st_mode & 0o777)}"
+        return None
+    import ctypes
+    from ctypes import wintypes as w
+    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    class AclSize(ctypes.Structure):
+        _fields_ = [("AceCount", w.DWORD), ("AclBytesInUse", w.DWORD),
+                    ("AclBytesFree", w.DWORD)]
+
+    class AceHeader(ctypes.Structure):
+        _fields_ = [("AceType", ctypes.c_ubyte), ("AceFlags", ctypes.c_ubyte),
+                    ("AceSize", w.WORD)]
+    advapi.GetNamedSecurityInfoW.argtypes = [w.LPCWSTR, ctypes.c_int, w.DWORD,
+                                             *([ctypes.POINTER(ctypes.c_void_p)] * 5)]
+    advapi.GetNamedSecurityInfoW.restype = w.DWORD
+    advapi.GetAclInformation.argtypes = [ctypes.c_void_p, ctypes.c_void_p, w.DWORD, ctypes.c_int]
+    advapi.GetAclInformation.restype = w.BOOL
+    advapi.GetAce.argtypes = [ctypes.c_void_p, w.DWORD, ctypes.POINTER(ctypes.c_void_p)]
+    advapi.GetAce.restype = w.BOOL
+    advapi.ConvertStringSidToSidW.argtypes = [w.LPCWSTR, ctypes.POINTER(ctypes.c_void_p)]
+    advapi.ConvertStringSidToSidW.restype = w.BOOL
+    advapi.EqualSid.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    advapi.EqualSid.restype = w.BOOL
+    kernel.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel.LocalFree.restype = ctypes.c_void_p
+    SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, ACL_SIZE_INFORMATION = 1, 4, 2
+    ALLOWED, DENIED, INHERIT_ONLY = 0, 1, 0x08
+    me = ctypes.c_void_p()
+    if not advapi.ConvertStringSidToSidW(_user_sid(), ctypes.byref(me)):
+        raise OSError(f"cannot read this process's user (Windows error {ctypes.get_last_error()})")
+    dacl, descriptor = ctypes.c_void_p(), ctypes.c_void_p()
+    try:
+        err = advapi.GetNamedSecurityInfoW(str(path), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+                                           None, None, ctypes.byref(dacl), None,
+                                           ctypes.byref(descriptor))
+        if err:
+            raise OSError(f"cannot read the access list of {Path(path).name} (Windows error {err})")
+        if not dacl.value:
+            return "it has no access list, so everyone may open it"
+        size = AclSize()
+        if not advapi.GetAclInformation(dacl, ctypes.byref(size), ctypes.sizeof(size),
+                                        ACL_SIZE_INFORMATION):
+            raise OSError(f"cannot read the access list (Windows error {ctypes.get_last_error()})")
+        for i in range(size.AceCount):
+            ace = ctypes.c_void_p()
+            if not advapi.GetAce(dacl, i, ctypes.byref(ace)):
+                raise OSError(f"cannot read an access entry (Windows error "
+                              f"{ctypes.get_last_error()})")
+            header = AceHeader.from_address(ace.value)
+            if header.AceFlags & INHERIT_ONLY or header.AceType == DENIED:
+                continue  # for what is made inside it, or a refusal
+            if header.AceType != ALLOWED:
+                return "its access list has an entry of a kind this check does not read"
+            if not advapi.EqualSid(ace.value + 8, me):  # after the header and the access mask
+                return "its access list lets others open it"
+        return None
+    finally:
+        if descriptor.value:
+            kernel.LocalFree(descriptor)
+        kernel.LocalFree(me)
 
 
 def _key_ok(value) -> bool:

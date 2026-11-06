@@ -38,6 +38,7 @@ class Request:
     query: dict[str, list[str]]
     headers: list[tuple[str, str]]  # names lower-cased, in order
     body: bytes = b""
+    peer: str | None = None  # the TCP peer's address; None when it is not known
 
     def all(self, name: str) -> list[str]:
         return [v for k, v in self.headers if k == name]
@@ -214,6 +215,8 @@ async def _connection(handler: Handler, reader, writer) -> None:
         except (asyncio.TimeoutError, ConnectionError, OSError):
             return
         else:
+            peer = writer.get_extra_info("peername")
+            request.peer = peer[0] if isinstance(peer, tuple) and peer else None
             try:
                 response = await handler(request)
             except BadRequest as e:

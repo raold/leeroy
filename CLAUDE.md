@@ -619,11 +619,37 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   built survives his relogs and mind restarts.
 - The guild console (`leeroy_mind/console/`) is a process of its own on
   `127.0.0.1:7881` (`--port`). It prints `http://127.0.0.1:7881/#key=...`; the
-  key changes at each start, stays in the page's memory (never a cookie, which
-  every 127.0.0.1 port would be sent) and goes with each request as an
-  `X-Console-Key` header, so a reload needs the printed URL again. Every request
+  key (one per start, unless `--key-file`) stays in the page's memory (never a
+  cookie, which every 127.0.0.1 port would be sent) and goes with each request
+  as an `X-Console-Key` header, so a reload needs the URL again. Every request
   needs the console's Host, and its Origin when the browser sends one; a change
-  (POST) always needs both the key and the Origin. A stop or restart asks
+  (POST) always needs both the key and the Origin.
+  Away from home the owner's devices reach it only over the tailnet, at
+  `https://fractal.pug-nessie.ts.net/` through `tailscale serve` on this machine,
+  never Funnel: `tailscale serve --bg --https=443 http://127.0.0.1:7881` (undo
+  with `tailscale serve --https=443 off`; `tailscale serve reset` clears all of
+  serve's config). The console still listens on 127.0.0.1 only.
+  `--allow-host NAME` (repeatable; also `[console] allow_hosts = [...]` in
+  mind.toml) accepts a Host of NAME or NAME:443 with the Origin `https://NAME`.
+  serve keeps the browser's Host (`r.Out.Host = r.In.Host` in tailscale's
+  `ipn/ipnlocal/serve.go`) and adds X-Forwarded-Host, which the console trusts
+  only from a loopback peer and only for an allowed name; the two addresses'
+  Origins never cross and every other Host is refused as before. `--key-file
+  PATH` uses a stable key instead: when PATH is missing it is made private
+  (control.json's one-entry DACL) with `secrets.token_urlsafe(32)`; a file
+  anyone else may read, or that is not a regular file, stops the start.
+  `python -m leeroy_mind console rotate-key --key-file PATH [--allow-host
+  NAME]` writes a new key and prints the URLs to bookmark; a running console
+  keeps the old one until it restarts. The start line adds `  tailnet:
+  https://NAME/#key=...`; the key is printed there and by rotate-key, never
+  logged. `scripts/ac-console-schedule.ps1 -Install|-Remove|-Status` manages
+  the per-user logon task `leeroy-console`: the checkout's mind venv
+  `pythonw.exe` runs the console hidden with `--key-file
+  <mind-data>\console.key --allow-host fractal.pug-nessie.ts.net`, only while
+  he is logged on, Limited, IgnoreNew, no time limit, and starts it again after
+  a failure (RestartCount, plus a trigger every 5 minutes). Its output is not
+  kept, so the bookmark is `https://fractal.pug-nessie.ts.net/#key=` plus the
+  key in console.key. A stop or restart asks
   first while the owner is in game or nobody can tell. It reads mind.db,
   mind.log and mind.toml read-only and talks to the voice service through the
   voice page's own socket. Start, restart and stop use
