@@ -114,13 +114,17 @@ def picture_available(store) -> bool:
                               "AND name='selfie_snap'").fetchone() is not None
 
 
-def _carried(store, guid: int, human: int, stage: str) -> float:
+def _carried(store, guid: int, human: int, stage: str, changed: float | None) -> float:
     """The part of a play night her last step did not need, while she still stands on the stage
     it took her to. Play days are whole nights, so without it every wait would round up to a
-    whole night and lust's 0.7 (1.4, 2.1) would wait as long as drawn's 1.0 (2, 3)."""
+    whole night and lust's 0.7 (1.4, 2.1) would wait as long as drawn's 1.0 (2, 3). The carry
+    names the stage change (`changed`, its ts) it came from: after a reseed or a reset to the
+    same stage there is no such change and it is never reused."""
     raw = store.get_meta(f"{_CARRY}{guid}:{human}")
     kept = json.loads(raw) if raw else {}
-    return float(kept["days"]) if kept.get("stage") == stage else 0.0
+    if changed is None or kept.get("stage") != stage or kept.get("ts") != changed:
+        return 0.0
+    return float(kept["days"])
 
 
 async def stage_romance(ctx) -> None:
@@ -149,8 +153,15 @@ async def stage_romance(ctx) -> None:
             strong = (evidence is not None and target is not None
                       and strong_evidence(store, guid, ctx.human, target, last, now, ctx.tz))
             style = ctx.persona(guid).romance.style
-            played = round(arc_state.play_days(store, last, now, ctx.tz)
-                           + _carried(store, guid, ctx.human, rel.romance_stage), 6)
+            changed = store.conn.execute(
+                "SELECT max(ts) FROM rel_delta WHERE a=? AND b=? AND dim='romance_stage' AND ts<=?",
+                (guid, ctx.human, now)).fetchone()[0]
+            span = (arc_state.play_days_after(store, changed, now, ctx.tz) if changed is not None
+                    else arc_state.play_days(store, last, now, ctx.tz))
+            # A carry funds a step only on a span he played in; the change's own night counts
+            # once, in the span it began in.
+            played = round(span + (_carried(store, guid, ctx.human, rel.romance_stage, changed)
+                                   if span >= 1 else 0.0), 6)
             new = can_advance(rel.romance_stage, rel, attitude=stance, style=style,
                               play_days=played, new_evidence=evidence is not None, rush=rushing,
                               strong=strong, depth=depth_with(store, guid, ctx.human, now=now),
@@ -164,7 +175,8 @@ async def stage_romance(ctx) -> None:
             changes.append(delta)
             left = round(played - pace_wait(new, stance, style, halved=rushing or strong), 6)
             store.set_meta(f"{_CARRY}{guid}:{ctx.human}",
-                           json.dumps({"stage": new, "days": left if 0 < left < 1 else 0.0}))
+                           json.dumps({"stage": new, "ts": now,
+                                       "days": left if 0 < left < 1 else 0.0}))
         # The run normally happens AFTER its closed observation window. Keep its
         # exact delta ids with the unit, including across a restart between stages.
         store.set_meta(f"{_CHANGES}{ctx.night}", json.dumps(changes))

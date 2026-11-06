@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from leeroy_mind.arc.state import play_days
+from leeroy_mind.arc.state import play_days, play_days_after
 from leeroy_mind.nightly.knowledge import learn
 from leeroy_mind.nightly.romance import (can_advance, jealousy_level, jealousy_next,
     jealousy_rows, known_acts, picture_available, stage_jealousy, stage_romance,
@@ -182,15 +182,18 @@ def test_a_step_carries_only_what_its_night_left_over(h):
     arc_woman(h, 103, "lust", stage="whispers")  # late nights wait 2.1
     h.store.add_rel_delta(103, 1, "romance_stage", 1, "banter->whispers", [], h.T - 12 * HOUR,
                           applied=True)
-    h.store.set_meta("romance_carry:103:1", json.dumps({"stage": "late_nights", "days": .9}))
+    h.store.set_meta("romance_carry:103:1", json.dumps({"stage": "late_nights", "days": .9,
+                                                            "ts": h.T - 12 * HOUR}))
     carry = lambda g: json.loads(h.store.get_meta(f"romance_carry:{g}:1"))
     log = nights(h, [101, 102, 103], 4)
     assert [stages[101] for _, stages in log] == ["notices", "banter", "whispers", "whispers"]
-    assert carry(101) == {"stage": "whispers", "days": .2}  # 1 + 0.6 - 1.4
+    assert carry(101) == {"stage": "whispers", "days": .2,
+                          "ts": h.T + 2 * DAY + 10 * HOUR}  # 1 + 0.6 - 1.4, at the change's ts
     assert log[1][1][103] == "whispers"  # 2 play days and a carry for another stage: not 2.9
     h.rel(102, 1, attraction=99)
     assert nights(h, [102], 1, first=4)[-1][1] == {102: "banter"}
-    assert carry(102) == {"stage": "banter", "days": 0.0}  # 5 - 1.4: held, so nothing carries
+    assert carry(102) == {"stage": "banter", "days": 0.0,
+                          "ts": h.T + 4 * DAY + 10 * HOUR}  # 5 - 1.4: held, so nothing carries
 
 
 def test_a_week_away_pauses_the_arc(h):
@@ -542,3 +545,64 @@ def test_fourth_private_observation_still_controls_bridge_scope(h):
     (memory,) = [m for m in h.rows(101) if m.key and m.key.startswith("jealousy:")]
     assert len(memory.evidence) == 3
     assert (memory.scope, memory.scope_with) == ("private", 0)
+
+
+def test_a_play_night_split_by_a_stage_change_counts_once(h):
+    h.session(h.T, h.T + 5 * HOUR)  # 21:00 to 02:00: night 10-29
+    h.session(h.T + DAY, h.T + DAY + 2 * HOUR)  # night 10-30
+    change = h.T + 2 * HOUR  # 23:00, inside the first night
+    before = play_days(h.store, h.T - DAY, change, UTC)
+    after = play_days_after(h.store, change, h.T + 3 * DAY, UTC)
+    assert (before, after) == (1, 1)  # plain play_days would give the span after 2
+    assert play_days(h.store, change, h.T + 3 * DAY, UTC) == 2
+    quiet = h.T - 3 * DAY + 2 * HOUR  # a change in a night he did not play before it
+    h.session(quiet + HOUR, quiet + 2 * HOUR)
+    assert play_days_after(h.store, quiet, h.T - 2 * DAY, UTC) == 1
+
+
+def test_a_carry_belongs_to_one_stage_change(h):
+    for guid in (101, 102, 103):  # late nights wait 2.1 play days: two nights need a carry
+        arc_woman(h, guid, "lust", stage="whispers")
+        h.store.add_rel_delta(guid, 1, "romance_stage", 1, "banter->whispers", [],
+                              h.T - 12 * HOUR, applied=True)
+    carry = lambda g, **kw: h.store.set_meta(f"romance_carry:{g}:1", json.dumps(
+        {"stage": "whispers", "days": .9} | kw))
+    carry(101, ts=h.T - 13 * HOUR)  # from an earlier change to the same stage (a reseed or reset)
+    carry(102)  # no ts at all: the old shape
+    carry(103, ts=h.T - 12 * HOUR)
+    last = nights(h, [101, 102, 103], 2)[-1][1]
+    assert last == {101: "whispers", 102: "whispers", 103: "late_nights"}
+
+
+def test_a_carry_funds_no_step_on_a_span_he_did_not_play(h):
+    arc_woman(h, 101, "lust", style="bold", stage="none")  # notices wait 0.56, a carry is 0.9
+    h.store.add_rel_delta(101, 1, "romance_stage", 1, "x->none", [], h.T - 12 * HOUR,
+                          applied=True)
+    h.store.set_meta("romance_carry:101:1", json.dumps({"stage": "none", "days": .9,
+                                                        "ts": h.T - 12 * HOUR}))
+    h.mem(101, "Testy stayed up talking with me.", t=h.T - 6 * HOUR, actors=(1,), valence=.8)
+    log = nights(h, [101], 2, played=lambda d: False)
+    assert [stages[101] for _, stages in log] == ["none", "none"]
+    assert nights(h, [101], 1, first=2, played=lambda d: True)[-1][1] == {101: "notices"}
+
+
+def test_end_romance_is_history_and_closes_her_away(h):
+    from leeroy_mind.arc.state import Arc, end_romance, get_arc, put_arc
+    arc_woman(h, 101, "drawn", stage="planning")
+    put_arc(h.store, Arc(101, 1, plan={"kind": "event"}, plan_state="set", updated=1.0))
+    h.store.conn.execute("INSERT INTO away(guid, reason, left_at, returns_at) VALUES (101,'x',1,9)")
+    h.store.conn.execute("INSERT INTO away(guid, reason, left_at, returns_at, returned_at) "
+                         "VALUES (102,'x',1,9,5)")
+    assert end_romance(h.store, 101, 1, by="he_ended", now=h.T) is True
+    assert h.store.get_relationship(101, 1).romance_stage == "ex"
+    arc = get_arc(h.store, 101, 1)
+    assert (arc.ended, arc.plan, arc.plan_state, arc.updated) == ("he_ended", {}, "none", h.T)
+    row = h.store.conn.execute(
+        "SELECT reason, delta FROM rel_delta WHERE a=101 AND dim='romance_stage'").fetchone()
+    assert (row[0], row[1]) == ("planning->ex", -1)
+    assert [tuple(r) for r in h.store.conn.execute(
+        "SELECT guid, returned_at FROM away ORDER BY guid")] == [(101, h.T), (102, 5)]
+    assert end_romance(h.store, 101, 1, by="owner", now=h.T + 1) is False
+    assert get_arc(h.store, 101, 1).ended == "he_ended"
+    assert end_romance(h.store, 102, 1, by="found_out", now=h.T) is True  # no arc row yet
+    assert get_arc(h.store, 102, 1).ended == "found_out"
