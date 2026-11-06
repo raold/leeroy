@@ -201,6 +201,80 @@ Kokoro-82M (Apache-2.0), NVIDIA Parakeet TDT 0.6B v2 (CC-BY-4.0),
 Silero VAD (MIT), SpeechBrain ECAPA (Apache-2.0), and the optional
 Whisper large-v3-turbo and Chatterbox Turbo models (MIT).
 
+## The dojo
+
+The dojo is where the bots' combat is to be trained with deep reinforcement
+learning, on a worldserver of its own. It has its own AzerothCore and
+playerbots checkouts, build tree, MySQL instance, loopback ports and synthetic
+fixture characters, and its preflight (`scripts/dojo/preflight.ps1`) refuses
+any layout that overlaps the live install. Nothing in it touches the live
+realm.
+
+What exists is the foundation:
+
+- **Protocol**: an environment protocol written twice, in pure C++
+  (`modules/mod-dojo/src/Lib`, no AzerothCore includes) and in Python
+  (`leeroy_dojo`), with a loopback transport.
+- **Native side**: `mod-dojo`, a module built only into the dojo's core, and
+  one playerbots commit (`patches/dojo/`) that hands chosen actors to an outside
+  controller.
+- **Training realm**: a disposable arena with two fixture actors. The
+  controller has exclusive control of them through a narrow executor that acts
+  like a client, and each actor sees only what is visible to it, after a
+  perceptual delay.
+- **Episodes**: each one resets by tearing the arena down and building it
+  again. The dojo decides the outcomes and rewards, and a checksummed recorder
+  writes episodes that replay without a game client.
+- **Baselines**: `noop`, `random_legal` and `frost_duelist` (an authored Frost
+  Mage script). The stock playerbots AI runs as a separate system benchmark.
+- **The G1 evidence run**: it runs all of the above and checks each episode
+  against the core's own scoreboard.
+
+There is no learner yet, and no learned policy is claimed. PPO and its
+multi-agent form are the planned first baselines (see [Research](#research)).
+The Python package uses only the standard library, on Python 3.12. CI runs its
+suite, the C++ protocol tests and a fake-worker smoke test. The
+[dojo README](dojo/README.md) has the layout, the protocol and the commands.
+
+## Research
+
+[references.bib](references.bib) lists the 278 papers, books, software and
+models behind the project. Each entry notes what it shaped, or, in the dojo's
+section, what it is planned for. The main threads:
+
+- **Generative agents.** Park et al.'s *Generative Agents* (2023) is the
+  Smallville experiment, in which 25 agents lived in a simulated town. It gave
+  the mind its memory stream, the recall score (recency, importance,
+  relevance), nightly reflection and per-pair relationships. Anderson and
+  Schooler (1991) and the FSRS forgetting curve shape how memories fade.
+  MemGPT's self-editing memory was kept off the live path because of its
+  latency.
+- **Theory of mind.** Each member must know only what they could know. LLMs'
+  theory of mind breaks under trivial changes to a task (Ullman 2023), so the
+  mind tracks per member who knows what rather than trusting the model, after
+  FANToM (Kim et al. 2023) and TimeChara (Ahn et al. 2024). The weekly
+  evaluation probes secret-keeping, after Mireshghallah et al. (2024).
+- **Relationships and social life.**
+  - Disclosure is paced by social penetration theory (Altman and Taylor 1973)
+    and Aron et al.'s closeness procedure (1997).
+  - Moods follow ALMA (Gebhard 2005) and emotional contagion (Hatfield et al.
+    1993).
+  - Gossip, nicknames and slang follow the psychology of rumour (Allport and
+    Postman 1947), naming-game dynamics (Baronchelli et al. 2006) and Dunbar et
+    al. on conversation (1997).
+  - Each member's drives are weighted by Yee's motivations for play (2006).
+- **Evaluation.** SOTOPIA (Zhou et al. 2024), PersonaGym (Samuel et al. 2025)
+  and LoCoMo (Maharana et al. 2024) shaped the weekly persona, social and
+  memory checks.
+- **Reinforcement learning for combat.**
+  - PPO (Schulman et al. 2017) and its cooperative multi-agent form, MAPPO (Yu
+    et al. 2022), are the dojo's planned first baselines.
+  - AlphaStar's league (Vinyals et al. 2019) and OpenAI Five (OpenAI 2019) are
+    the references for later self-play.
+  - Reflexion (Shinn et al. 2023) and Voyager (Wang et al. 2024) are the models
+    for the training ground's planned post-fight reflection and growing tactic
+    library.
+
 ## Profile photos
 
 With `[selfies] enabled = true` the mind picks a photo kind for each guild member who has looks
