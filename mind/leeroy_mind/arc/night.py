@@ -3,7 +3,8 @@ to planning; from there the arc floats a plan, reads what he said to her about i
 steps, takes her to the weekend and what comes after.
 
 stage_arc runs six steps in this order; each unit commits through ctx.commit("arc", unit, ...):
-1. settle (unit "settle"): her time away ends (Task S5). A hook, empty for now.
+1. settle (unit "settle"): her time away ends, and a weekend becomes what comes after
+   (arc.weekend.settle).
 2. propose (unit "propose"): each full-arc woman (a woman whose stance is in FULL_ARC) at
    planning with no plan floats one (plan.propose_plan), a hope from now. No model call; a fond
    woman never gets a plan.
@@ -12,7 +13,8 @@ stage_arc runs six steps in this order; each unit commits through ctx.commit("ar
    (moved); a plan he never engages stays a hope for good. A breakup ends her romance
    (state.end_romance, by "he_ended") only when the model reads one and one of his lines says
    so (ENDING_RE).
-4. meetup (unit "meetup"): the weekend in a gap of his play (Task S5). A hook, empty for now.
+4. meetup (unit "meetup"): the weekend, or a later visit, in a gap of his play once he has
+   said yes to her plan (arc.weekend.meetup).
 5. milestones (units "after:<guid>"): milestones after the weekend and the affair roll
    (Task S6). A hook, empty for now.
 6. noticed (unit "noticed"): what the guild can tell (Task S7). A hook, empty for now.
@@ -30,6 +32,7 @@ from typing import TYPE_CHECKING
 from leeroy_mind.arc.ladder import FULL_ARC
 from leeroy_mind.arc.plan import plan_summary, propose_plan
 from leeroy_mind.arc.state import Arc, end_romance, get_arc, put_arc
+from leeroy_mind.arc.weekend import due, meetup, settle
 from leeroy_mind.logs import log
 from leeroy_mind.nightly.budget import register_counter
 from leeroy_mind.nightly.llm import schema, system_prompt
@@ -110,13 +113,6 @@ def _readers(ctx: "NightContext", *, fresh: bool) -> list[int]:
     return [g for g in _women(ctx, fresh=fresh)
             if store.get_relationship(g, human).romance_stage in READ_STAGES
             and _his_lines(store, g, human, ctx.window)]
-
-
-# -- step 1: settle (S5) -----------------------------------------------------------------------
-
-def settle(ctx: "NightContext") -> None:
-    """Unit "settle": her time away ends and a weekend becomes what comes after. A hook that
-    Task S5 fills in; it does nothing yet."""
 
 
 # -- step 2: propose ---------------------------------------------------------------------------
@@ -231,12 +227,7 @@ async def read(ctx: "NightContext") -> None:
                         lambda unit: _read(ctx, int(unit.split(":", 1)[1])))
 
 
-# -- steps 4-6: the meetup (S5), what comes after (S6), what the guild notices (S7) -------------
-
-async def meetup(ctx: "NightContext") -> None:
-    """Unit "meetup": the weekend in a gap of his play. A hook that Task S5 fills in; it does
-    nothing yet."""
-
+# -- steps 5-6: what comes after (S6), what the guild notices (S7) -----------------------------
 
 def milestones(ctx: "NightContext") -> None:
     """Units "after:<guid>": the milestones after the weekend and the affair roll. A hook that
@@ -259,8 +250,8 @@ async def stage_arc(ctx: "NightContext") -> None:
 
 
 def _count(ctx: "NightContext") -> int:
-    """The budget's count: tonight's read units."""
-    return len(_readers(ctx, fresh=False))
+    """The budget's count: tonight's read units, and the meetup when one is due."""
+    return len(_readers(ctx, fresh=False)) + due(ctx)
 
 
 register_counter(STAGE, _count)
