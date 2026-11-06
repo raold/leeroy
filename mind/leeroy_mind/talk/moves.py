@@ -19,9 +19,13 @@ _PATTERNS = {
               r"|\b(i'?m|i've been|been|i am|just sitting here) (wa?it+ing|waitiing|wating)\b"
               r"|\bwaiting (for (you|u)|all day)\b|\bdoor'?s open\b|\byour move\b"
               r"|\bdon'?t be late\b|\bpull up\b|\bfind me\b|\bhurry up\b",
-    "invite_game": r"\b(dalaran|orgrimmar|org|stormwind|shattrath|shatt|duel\w*|inv|invite\w*"
-                   r"|summon\w*|portal\w*|dungeons?|raid\w*|bgs?|battlegrounds?|arenas?"
-                   r"|queue\w*|lfg|quests?|groups?|vent|voice|discord|ts3|mumble)\b",
+    "invite_game": r"\b(in|to|at|into|inside)\s+(the\s+|my\s+|our\s+|a\s+)?(dalaran|orgrimmar|org"
+                   r"|stormwind|shattrath|shatt|ironforge|undercity|vent|voice|discord|ts3|mumble"
+                   r"|dungeon|raid|bg|battleground|arena|queue|group|party|lfg)\b"
+                   r"|\b(duel\w*|inv|invite\w*|quests?)\b"
+                   r"|\b(summon|port|portal)\s+(me|us|you)\b"
+                   r"|\bjoin\b.{0,12}\b(raid|group|bg|party|queue|dungeon|arena|vent|voice)\b"
+                   r"|\bqueu(e|es|ed|eing|ing)\s+(with|up|for)\b|\bwe'?re queu(e|eing|ing)\b",
     "declare": r"\bi (want|need|love|loev|luv) (you|u|ya)\b|\bily\b|\blove (you|u) (too|more)\b"
                r"|\bmissed (you|u) more\b|\bi miss (you|u)\b",
     "compliment": r"\byou (look|looks|are|'re|re) (so |really |very )?(good|great|amazing|cute|"
@@ -36,7 +40,7 @@ _PATTERNS = {
     "complaint": r"\bugh+\b|\bmy boss\b|\bkept me (late|up)\b|\bso (tired|stressed|annoyed)\b"
                  r"|\bhate (my|this|that)\b|\bsuch a (day|week)\b|\bexhausted\b",
     "joke": r"\blol\b|\blmao\b|\bhaha+\b|\bjk\b|\bjust kidding\b|\brofl\b",
-    "later": r"\btonight\b|\bafter (raid|this)\b|\blater\b|\bright now\b",
+    "later": r"\btonight\b|\bafter (raid|this)\b|\blater\b",
     "petname": r"\b(darling|babe|baby|hun|honey|sweetie|sweetheart|cutie|handsome|lover)\b",
     "raid": r"\b(raid|raids|boss|bosses|wipe|wiped|wipes|tank|tanks|heals|healer|healers|dps"
             r"|trash|kill|kills)\b",
@@ -45,7 +49,7 @@ _PATTERNS = {
             r"|\bmailed you\b|\bgift for you\b|\bgot you (a|some) (gift|present)\b",
 }
 _RE = {k: re.compile(v, re.I) for k, v in _PATTERNS.items()}
-_SENTENCE = re.compile(r"[.!?;\n]+")
+_SENTENCE = re.compile(r"[.!?;,\n]+|\s(?:and|but)\s")
 _WORD = re.compile(r"[a-z]{4,}")
 
 GAME_WORDS = frozenset(
@@ -71,8 +75,9 @@ def _fold(text: str) -> str:
 
 
 def classify(text: str) -> frozenset[str]:
-    """The moves a line makes. A sentence that names an in-game place or activity is an
-    in-game invitation (invite_game) and its summons words do not count."""
+    """The moves a line makes. A clause whose destination or activity is in the game is an
+    in-game invitation (invite_game) and its summons words do not count; a game word that is
+    only a time or an aside (after raid, the bg is up) does not hide a summons."""
     t = _fold(text or "")
     found: set[str] = set()
     for sentence in _SENTENCE.split(t):

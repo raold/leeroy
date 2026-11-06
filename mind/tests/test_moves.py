@@ -33,3 +33,22 @@ def test_topics_skip_game_words_names_and_stopwords():
 
 def test_typographic_apostrophes_fold():
     assert "summon" in classify("door’s open")
+
+
+@pytest.mark.parametrize("text", [
+    "come over after raid", "come over after the raid, i'm waiting", "hurry up, the raid starts",
+    "find me after raid", "door's open, the bg is up", "I'm waiting, hurry up, the queue is long",
+    "get over here, i have a group of tanks for you", "come over after this bg and hurry up"])
+def test_a_game_word_as_a_time_or_aside_does_not_hide_a_summons(text):
+    assert "summon" in classify(text) and "invite_game" not in classify(text)
+
+
+@pytest.mark.parametrize("text", ["come to org with me", "join the raid", "inv me",
+                                  "queue with me", "come help me with the quest",
+                                  "meet me at the arena", "come to my group voice chat"])
+def test_destinations_and_activities_are_invitations(text):
+    assert "invite_game" in classify(text) and "summon" not in classify(text)
+
+
+def test_right_now_is_not_a_later():
+    assert "later" not in classify("i want you right now")
