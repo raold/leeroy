@@ -1,3 +1,4 @@
+from dbtemplate import open_migrated
 import dataclasses
 import random
 from collections import Counter
@@ -293,7 +294,7 @@ def _cli_store(tmp_path, cast, *, seed_rows=False):
     from leeroy_mind.clock import SystemClock
     from leeroy_mind.storage.db import open_db
     from leeroy_mind.storage.store import Store
-    s = Store(open_db(tmp_path / "mind.db"), clock=SystemClock())
+    s = Store(open_migrated(tmp_path / "mind.db"), clock=SystemClock())
     s.upsert_cast([_member(1, "Zanthor", rank=0, level=83)]
                   + [_member(p.guid, p.character_name) for p in cast], 1.0)
     for p in cast:
@@ -309,7 +310,7 @@ def _open(tmp_path):
     from leeroy_mind.clock import SystemClock
     from leeroy_mind.storage.db import open_db
     from leeroy_mind.storage.store import Store
-    return Store(open_db(tmp_path / "mind.db"), clock=SystemClock())
+    return Store(open_migrated(tmp_path / "mind.db"), clock=SystemClock())
 
 
 def _shifted():

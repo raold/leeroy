@@ -1,3 +1,4 @@
+from dbtemplate import open_migrated
 import dataclasses
 import itertools
 import json
@@ -181,7 +182,7 @@ def _cli_store(tmp_path, members):
     from leeroy_mind.clock import SystemClock
     from leeroy_mind.storage.db import open_db
     from leeroy_mind.storage.store import Store
-    s = Store(open_db(tmp_path / "mind.db"), clock=SystemClock())
+    s = Store(open_migrated(tmp_path / "mind.db"), clock=SystemClock())
     s.upsert_cast(members, 1.0)
     s.close()
 
@@ -504,7 +505,7 @@ def test_mix_cli_makes_no_model_calls(tmp_path, capsys):
     from leeroy_mind.clock import SystemClock
     from leeroy_mind.storage.db import open_db
     from leeroy_mind.storage.store import Store
-    s = Store(open_db(tmp_path / "mind.db"), clock=SystemClock())
+    s = Store(open_migrated(tmp_path / "mind.db"), clock=SystemClock())
     s.upsert_cast([_member(5, "Aaa")], 1.0)
     save_persona(s, make_persona(5, "Aaa"), source="seed", ts=1.0, race="Orc",
                  class_name="Warrior")
@@ -520,7 +521,7 @@ def test_generate_dry_run_cli_prints_plan_and_needs_no_ollama(tmp_path, capsys):
     from leeroy_mind.clock import SystemClock
     from leeroy_mind.storage.db import open_db
     from leeroy_mind.storage.store import Store
-    s = Store(open_db(tmp_path / "mind.db"), clock=SystemClock())
+    s = Store(open_migrated(tmp_path / "mind.db"), clock=SystemClock())
     s.upsert_cast([_member(HUMAN, "Testmage", 83, 0), _member(5, "Aaa"), _member(6, "Bbb")], 1.0)
     save_persona(s, make_persona(5, "Aaa"), source="seed", ts=1.0, race="Orc",
                  class_name="Warrior")
@@ -886,7 +887,7 @@ def test_mix_counts_cast_personas_only(tmp_path, capsys):
     from leeroy_mind.clock import SystemClock
     from leeroy_mind.storage.db import open_db
     from leeroy_mind.storage.store import Store
-    s = Store(open_db(tmp_path / "mind.db"), clock=SystemClock())
+    s = Store(open_migrated(tmp_path / "mind.db"), clock=SystemClock())
     s.upsert_cast([_member(5, "Aaa"), _member(6, "Low", level=20)], 1.0)
     for g, n in ((5, "Aaa"), (6, "Low")):
         save_persona(s, make_persona(g, n), source="seed", ts=1.0, race="Orc",

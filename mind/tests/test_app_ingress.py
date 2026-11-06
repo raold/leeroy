@@ -13,7 +13,7 @@ from leeroy_mind.app import MindApp
 from leeroy_mind.config import load_config
 from leeroy_mind.ingress import chat_row_binding, game_row_binding
 from leeroy_mind.protocol import Chat, parse_event_with_origin, register_event
-from leeroy_mind.storage.db import open_db
+from dbtemplate import open_migrated
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_llm import FakeLLM
 
@@ -34,7 +34,7 @@ register_event("test_ingress_extra", IngressExtra)
 async def application(tmp_path, clock):
     config = tmp_path / "mind.toml"
     config.write_text("[talk]\nchattiness = 0\n", encoding="utf-8")
-    seed = Store(open_db(tmp_path / "mind.db"), clock=clock)
+    seed = Store(open_migrated(tmp_path / "mind.db"), clock=clock)
     seed_test_cast(seed)
     seed.set_meta("human_guid", str(HUMAN))
     seed.close()
@@ -222,7 +222,7 @@ def test_native_receipt_read_does_not_pin_wal_snapshot_before_another_connection
             assert receipt is not None and receipt.row_id == inserted[0]
             assert receipt.row_kind == row_kind and receipt.wire.transport_epoch == 7
 
-            other = Store(open_db(tmp_path / "mind.db"), clock=clock)
+            other = Store(open_migrated(tmp_path / "mind.db"), clock=clock)
             try:
                 other.set_meta("ingress_other_connection", "committed")
                 # No App Store read or commit is allowed between dispatch and

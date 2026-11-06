@@ -10,6 +10,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import threading
 import urllib.request
 from pathlib import Path
 
@@ -122,6 +123,57 @@ def test_every_connect_route_is_refused_before_it_connects(live_guard, monkeypat
         monkeypatch.setattr(live_guard, "allowed", frozenset({"live"}))  # a test marked live
         socket.create_connection(("127.0.0.1", port), 1).close()  # positive control
         assert not nothing_reached(listener) and live_guard.hits == []
+
+
+class EveryPortLive(dict):
+    """A port table in which every port is a live service's, so a socketpair's own listener is
+    always on a guarded port (what Windows now and then hands out)."""
+
+    def get(self, port, default=None):
+        return "live"
+
+
+def test_a_socketpairs_own_connect_is_not_refused(live_guard, monkeypatch):
+    monkeypatch.setitem(live_guard.originals, "socket.socketpair", socket._fallback_socketpair)
+    monkeypatch.setattr(live_guard, "ports", EveryPortLive())
+    a, b = socket.socketpair()  # binds a listener and connects to it, on a "live" port
+    with a, b:
+        a.sendall(b"x")
+        assert b.recv(1) == b"x"
+    assert live_guard.hits == []
+    loop = asyncio.new_event_loop()  # asyncio's self-pipe goes through socket.socketpair too
+    loop.close()
+    assert live_guard.hits == []
+    with pytest.raises(LiveServiceTouched):  # outside the pair, still refused
+        socket.create_connection(("127.0.0.1", 1), 1)
+    live_guard.hits.clear()
+
+
+def test_a_socketpair_does_not_loosen_the_guard_for_another_thread(live_guard, monkeypatch):
+    inside, release = threading.Event(), threading.Event()
+    real = socket._fallback_socketpair
+
+    def slow_pair(*args, **kw):
+        inside.set()
+        assert release.wait(5)
+        return real(*args, **kw)
+    monkeypatch.setitem(live_guard.originals, "socket.socketpair", slow_pair)
+    monkeypatch.setattr(live_guard, "ports", EveryPortLive())
+    pairs = []
+    t = threading.Thread(target=lambda: pairs.append(socket.socketpair()))
+    t.start()
+    try:
+        assert inside.wait(5)
+        with pytest.raises(LiveServiceTouched):
+            socket.create_connection(("127.0.0.1", 1), 1)
+    finally:
+        release.set()
+        t.join(5)
+        for pair in pairs:
+            for end in pair:
+                end.close()
+    live_guard.hits.clear()
+    assert pairs and not getattr(live_guard.local, "in_socketpair", False)
 
 
 def test_the_live_mind_data_is_refused_before_anything_opens(live_guard, tmp_path,

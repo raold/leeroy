@@ -10,7 +10,7 @@ import live_guard as _live_guard
 from leeroy_mind.personas.io import save_persona
 from leeroy_mind.personas.schema import Persona, persona_from_dict
 from leeroy_mind.protocol import Member
-from leeroy_mind.storage.db import open_db
+from dbtemplate import open_migrated
 from leeroy_mind.storage.rows import MemoryRow
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_clock import FakeClock
@@ -65,7 +65,7 @@ def make_mem(**kw) -> MemoryRow:
 
 @pytest.fixture
 def store(tmp_path, clock):
-    s = Store(open_db(tmp_path / "mind.db"), clock=clock)
+    s = Store(open_migrated(tmp_path / "mind.db"), clock=clock)
     yield s
     s.close()
 

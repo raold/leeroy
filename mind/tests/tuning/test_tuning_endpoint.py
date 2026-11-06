@@ -15,7 +15,7 @@ from leeroy_mind.config import load_config
 from leeroy_mind.endpoint import BadRequest, ControlCfg, ControlEndpoint, parse_request, tune_args
 from leeroy_mind.personas.io import load_persona
 from leeroy_mind.protocol import Member
-from leeroy_mind.storage.db import open_db
+from dbtemplate import open_migrated
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_clock import FakeClock
 from leeroy_mind.testing.fake_llm import FakeLLM
@@ -142,7 +142,7 @@ def test_tune_reaches_the_service_one_change_at_a_time(tmp_path, caplog):
 
 def _app(root):
     (root / "mind.toml").write_text("[talk]\nchattiness = 4\n", encoding="utf-8")
-    s = Store(open_db(root / "mind.db"), clock=FakeClock(CLOCK))
+    s = Store(open_migrated(root / "mind.db"), clock=FakeClock(CLOCK))
     try:
         seed_test_cast(s)
         s.upsert_cast([Member(guid=HUMAN, name="Testmage", race=5, class_=8, gender=0, level=80,
@@ -185,5 +185,5 @@ def test_a_change_is_live_from_the_next_read_and_undo_takes_it_back(tmp_path, ca
         run(go())
     text = caplog.text
     for g in (101, 102, 103):
-        assert load_persona(Store(open_db(tmp_path / "mind.db"), clock=FakeClock(CLOCK)),
+        assert load_persona(Store(open_migrated(tmp_path / "mind.db"), clock=FakeClock(CLOCK)),
                             g).character_name not in text

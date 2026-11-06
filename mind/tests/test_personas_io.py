@@ -1,3 +1,4 @@
+from dbtemplate import open_migrated
 import json
 
 import pytest
@@ -171,7 +172,7 @@ def test_cli_export_import_card(tmp_path, capsys):
     from leeroy_mind.storage.store import Store
     from leeroy_mind.testing.fake_clock import FakeClock
     from datetime import datetime, timezone
-    s = Store(open_db(tmp_path / "mind.db"), clock=FakeClock(datetime(2026, 10, 29, tzinfo=timezone.utc)))
+    s = Store(open_migrated(tmp_path / "mind.db"), clock=FakeClock(datetime(2026, 10, 29, tzinfo=timezone.utc)))
     seed_test_cast(s)
     s.close()
     base = ["personas", "--data-dir", str(tmp_path)]

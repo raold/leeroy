@@ -1,10 +1,11 @@
 from leeroy_mind.storage.db import latest_version, open_db
+from dbtemplate import open_migrated
 from leeroy_mind.storage.store import Store
 from leeroy_mind.voice.store import VoiceStore
 
 
 def make(tmp_path, clock):
-    store = Store(open_db(tmp_path / "mind.db"), clock=clock)
+    store = Store(open_migrated(tmp_path / "mind.db"), clock=clock)
     return store, VoiceStore(store), store.start_session(1000.0)
 
 

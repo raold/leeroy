@@ -45,6 +45,56 @@ trained, on a separate server.
 | `references.bib` | The research, software and models behind the project, each entry annotated with what it shaped |
 | `CLAUDE.md` | Operating notes: paths, build traps, module quirks, what each patch does |
 
+## Scripts
+
+```bash
+./ac-update.sh [--dry-run]   # pull core + git modules, rebasing local patches
+./ac-backup.sh [label]       # mysqldump all four databases
+./ac-build.sh                # preflight checks, configure, build
+./ac-server.sh start|stop|status # the game servers and the mind
+./ac-voice.sh start|stop|status # voice service; follows LEEROY_VOICE_DATA and voice.toml
+./ac-snapshot.sh             # copy live configs and module patches into this repo
+```
+
+They assume this repo is the install root, with the core checked out in
+`azerothcore-wotlk/` and the build in `build/`. See `CLAUDE.md`.
+
+## CI
+
+| Workflow | When | What |
+|---|---|---|
+| `ci` | main pushes and pull requests | shellcheck on `scripts/`, gitleaks over each push's and pull request's commits, the mod-leeroy and mod-dojo unit tests, the mind's Python 3.14 suite, the `voice` job's Python 3.12 suite, the dojo's suite and fake-worker protocol smoke, and a headless cross-service rehearsal in separate environments |
+| `patches` | patch changes, nightly | applies the patches to the newest upstream mod-playerbots, then the dojo's series on top (plus playerbots' codestyle check), and to mod-ollama-chat; a nightly failure opens a `patch-drift` issue |
+| `build` | patch or module changes, weekly | compiles the fork core with the patched playerbots, mod-leeroy and mod-dojo's disabled variant (clang, `-Werror`, ccache) |
+| `release` | `v*` tag | GitHub release with the patches, modules, configs and scripts |
+
+There is no deploy job: the server runs on one PC and is updated with the
+scripts above. A self-hosted runner on a public repo would let any pull request
+run code on that PC.
+
+## Patches
+
+- **Raid Browser listings**: idle randombots list themselves in the Raid
+  Browser, so it is not empty.
+- **`.playerbots bot add5|add10|add25|add40`**: fills your group to a 5-man
+  party or a 10/25/40-man raid with a sensible tank/healer/damage mix at your
+  level, with proper specs and gear.
+- **Raid habits**: those bots follow in arrow formation, and damage dealers
+  hold a few seconds into a pull so the tank gets threat.
+- **Bots past level 80**: bots that take the level of a master above 80 get the
+  level-80 premade talents instead of none.
+- **Pinned random bots** (playerbots): an API other modules use to keep chosen
+  random bots permanent and online, never re-rolled, teleported or pulled out
+  of their group, and never logged out to meet the online bot count. A pinned
+  bot revives in place, and skips playerbots' canned status and hello
+  whispers. mod-leeroy pins the guild with it.
+- **Speaker filter** (mod-ollama-chat): lets another module keep chosen bots
+  out of the LLM chat, so the guild speaks only through its own mind. A queued
+  reply asks the filter again before it is delivered.
+
+Apply them to a checkout of each module with
+`git am /path/to/leeroy/patches/<module>/*.patch`.
+
 ## The mind
 
 Each guild member has a persona card, memories with privacy scopes, moods and
@@ -102,79 +152,6 @@ member say what they could not know.
 Personas, memories, prompts and logs stay in the ignored `mind-data/`. See
 [the operating notes](CLAUDE.md#the-mind-service-leeroy_mind) for commands.
 
-## Patches
-
-- **Raid Browser listings**: idle randombots list themselves in the Raid
-  Browser, so it is not empty.
-- **`.playerbots bot add5|add10|add25|add40`**: fills your group to a 5-man
-  party or a 10/25/40-man raid with a sensible tank/healer/damage mix at your
-  level, with proper specs and gear.
-- **Raid habits**: those bots follow in arrow formation, and damage dealers
-  hold a few seconds into a pull so the tank gets threat.
-- **Bots past level 80**: bots that take the level of a master above 80 get the
-  level-80 premade talents instead of none.
-- **Pinned random bots** (playerbots): an API other modules use to keep chosen
-  random bots permanent and online, never re-rolled, teleported or pulled out
-  of their group, and never logged out to meet the online bot count. A pinned
-  bot revives in place, and skips playerbots' canned status and hello
-  whispers. mod-leeroy pins the guild with it.
-- **Speaker filter** (mod-ollama-chat): lets another module keep chosen bots
-  out of the LLM chat, so the guild speaks only through its own mind. A queued
-  reply asks the filter again before it is delivered.
-
-Apply them to a checkout of each module with
-`git am /path/to/leeroy/patches/<module>/*.patch`.
-
-## Scripts
-
-```bash
-./ac-update.sh [--dry-run]   # pull core + git modules, rebasing local patches
-./ac-backup.sh [label]       # mysqldump all four databases
-./ac-build.sh                # preflight checks, configure, build
-./ac-server.sh start|stop|status # the game servers and the mind
-./ac-voice.sh start|stop|status # voice service; follows LEEROY_VOICE_DATA and voice.toml
-./ac-snapshot.sh             # copy live configs and module patches into this repo
-```
-
-They assume this repo is the install root, with the core checked out in
-`azerothcore-wotlk/` and the build in `build/`. See `CLAUDE.md`.
-
-## Training ground
-
-The optional training ground records completed fights, checks observable mechanics,
-and compares tactics on established farm encounters. Adaptation requires at least
-28 days of eligible received records and a passed overhead gate. Reports separate
-fixed score bases, incomplete coverage, desired setups and verified observations.
-An offline tactic win followed by recorded use in a human raid proves adoption;
-it does not establish a causal improvement in that raid. Requested damage counters
-cannot establish actual boss DPS, and dummy results cannot establish a field
-rotation win. Voice send records do not prove audible playback or complete callouts.
-
-Training is disabled by default. Private records live in the mind data directory's
-`mind.db` (`tg_` tables and scoped receipts). Use `python -m leeroy_mind training
-status`, `training report --week YYYY-Www`, and `training trials` to inspect them;
-the latter commands follow the same module invocation. With the mind stopped,
-`training rollback --context MAP:BOSS:DIFFICULTY` or `training stock --context ...`
-changes the stored card selection under the service lock, while preserving pending
-command journals. Native `Leeroy.Training.Enable = 0` stops additions and requests
-verified cleanup, which may remain pending; `Leeroy.Telemetry.Enable = 0` stops
-recording. See [operating notes](CLAUDE.md#training-ground) and the
-[research references](references.bib). Implementation and passing tests are separate
-from live observation and acceptance.
-
-## CI
-
-| Workflow | When | What |
-|---|---|---|
-| `ci` | main pushes and pull requests | shellcheck on `scripts/`, gitleaks over each push's and pull request's commits, the mod-leeroy and mod-dojo unit tests, the mind's Python 3.14 suite, the `voice` job's Python 3.12 suite, the dojo's suite and fake-worker protocol smoke, and a headless cross-service rehearsal in separate environments |
-| `patches` | patch changes, nightly | applies the patches to the newest upstream mod-playerbots, then the dojo's series on top (plus playerbots' codestyle check), and to mod-ollama-chat; a nightly failure opens a `patch-drift` issue |
-| `build` | patch or module changes, weekly | compiles the fork core with the patched playerbots, mod-leeroy and mod-dojo's disabled variant (clang, `-Werror`, ccache) |
-| `release` | `v*` tag | GitHub release with the patches, modules, configs and scripts |
-
-There is no deploy job: the server runs on one PC and is updated with the
-scripts above. A self-hosted runner on a public repo would let any pull request
-run code on that PC.
-
 ## Voice
 
 The voice service speaks the guild's lines aloud in voice rooms, each member in
@@ -200,6 +177,29 @@ Voice dependencies include pedalboard (GPL-3.0) and
 Kokoro-82M (Apache-2.0), NVIDIA Parakeet TDT 0.6B v2 (CC-BY-4.0),
 Silero VAD (MIT), SpeechBrain ECAPA (Apache-2.0), and the optional
 Whisper large-v3-turbo and Chatterbox Turbo models (MIT).
+
+## Training ground
+
+The optional training ground records completed fights, checks observable mechanics,
+and compares tactics on established farm encounters. Adaptation requires at least
+28 days of eligible received records and a passed overhead gate. Reports separate
+fixed score bases, incomplete coverage, desired setups and verified observations.
+An offline tactic win followed by recorded use in a human raid proves adoption;
+it does not establish a causal improvement in that raid. Requested damage counters
+cannot establish actual boss DPS, and dummy results cannot establish a field
+rotation win. Voice send records do not prove audible playback or complete callouts.
+
+Training is disabled by default. Private records live in the mind data directory's
+`mind.db` (`tg_` tables and scoped receipts). Use `python -m leeroy_mind training
+status`, `training report --week YYYY-Www`, and `training trials` to inspect them;
+the latter commands follow the same module invocation. With the mind stopped,
+`training rollback --context MAP:BOSS:DIFFICULTY` or `training stock --context ...`
+changes the stored card selection under the service lock, while preserving pending
+command journals. Native `Leeroy.Training.Enable = 0` stops additions and requests
+verified cleanup, which may remain pending; `Leeroy.Telemetry.Enable = 0` stops
+recording. See [operating notes](CLAUDE.md#training-ground) and the
+[research references](references.bib). Implementation and passing tests are separate
+from live observation and acceptance.
 
 ## The dojo
 
