@@ -15,6 +15,7 @@ class Armory(Protocol):
     def equipped(self, guids) -> dict[int, dict[int, int]]: ...
     def human_tier(self, guid) -> int: ...
     def name(self, guid) -> str | None: ...
+    def bound_with(self, owner, map_id, guids) -> set[int]: ...
 
 
 def _id(value) -> int:
@@ -164,3 +165,22 @@ class MysqlArmory:
         if len(rows) != 1 or len(rows[0]) != 1:
             raise RosterError("character name result: invalid columns")
         return rows[0][0]
+
+    def bound_with(self, owner, map_id, guids) -> set[int]:
+        """The guids saved, at any difficulty, to a copy of map_id that owner is saved to."""
+        owner, map_id = _id(owner), _id(map_id)
+        wanted = _ids(guids)
+        found = set()
+        for chunk in _chunks(wanted):
+            sql = ("SELECT DISTINCT ci.guid FROM character_instance ci "
+                   "JOIN character_instance his ON his.instance = ci.instance "
+                   f"JOIN instance i ON i.id = ci.instance WHERE his.guid = {owner} AND i.map = {map_id} "
+                   "AND ci.guid IN (" + ",".join(map(str, chunk)) + ")")
+            for number, row in enumerate(run_mysql(self.chars, sql, self.mysql_exe), 1):
+                try:
+                    if len(row) != 1:
+                        raise ValueError("invalid bind row")
+                    found.add(_id(_numeric(row[0])))
+                except (TypeError, ValueError):
+                    raise RosterError(f"bind row {number}: invalid columns") from None
+        return found & set(wanted)

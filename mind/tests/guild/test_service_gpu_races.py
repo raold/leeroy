@@ -34,7 +34,7 @@ def test_disconnect_revokes_offline_request_queued_behind_speech_admission(app):
         service = ready(app)
         app.world.human_online = False
         service.offline._online = False
-        service.offline._plan = lambda: RaidPlan(
+        service.offline._plan = lambda *args: RaidPlan(
             "icc", 10, False, True, 101, 101, 104, list(range(101, 111)), [], False)
         admin = PausingAdmin()
         app.arbiter = arbiter(admin)
@@ -180,7 +180,7 @@ def test_actual_disconnect_revokes_speech_queued_behind_offline_model_admission(
         service = ready(app)
         app.world.human_online = False
         service.offline._online = False
-        service.offline._plan = lambda: RaidPlan(
+        service.offline._plan = lambda *args: RaidPlan(
             "icc", 10, False, True, 101, 101, 104, list(range(101, 111)), [], False)
         admin = PausingAdmin()
         admin.preload = AsyncMock(wraps=admin.preload)

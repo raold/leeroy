@@ -220,7 +220,7 @@ function renderRecent(view) {
     cell(tr, who(view, r.lead));
     cell(tr, String(num(r.kills)) + (r.bosses ? "/" + r.bosses : ""), "num");
     cell(tr, String(num(r.wipes)), "num");
-    cell(tr, str(r.outcome).replace(/_/g, " ") || "-");
+    cell(tr, (r.not_raided ? "not raided: " : "") + (str(r.outcome).replace(/_/g, " ") || "-"));
     cell(tr, String(num(r.items)), "num");
     cell(tr, r.mvp ? who(view, r.mvp.guid) + (r.mvp.votes ? " (" + plural(r.mvp.votes, "vote") + ")" : "") : "-");
     body.appendChild(tr);
