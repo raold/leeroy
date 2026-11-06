@@ -96,7 +96,7 @@ class RaidSession:
         plan = RaidPlan(plan.raid_key, plan.size, plan.heroic, plan.offline, plan.lead_guid,
                         plan.tank_guid, plan.loot_guid, members, bench, plan.human_in_raid)
         now = ports.clock.now()
-        decay = apply_due_decay(ports.conn, ports.clock.local().replace(tzinfo=None), cfg.dkp)
+        decay = apply_due_decay(ports.conn, ports.clock.local().replace(tzinfo=None), cfg.dkp) if attend else 0
         saved_plan = asdict(plan)
         with ports.conn:
             active = ports.conn.execute("SELECT raid_id FROM guild_raid WHERE ended IS NULL ORDER BY raid_id").fetchall()
@@ -115,19 +115,31 @@ class RaidSession:
                 _put(ports.conn, f"guild:raid:{raid_id}:plan", saved_plan)
         session = cls(ports, cfg, armory, plan, raid_id)
         if decay:
-            await ports.say(plan.loot_guid, "guild", template("dkp_decay", pct=f"{cfg.dkp.decay * 100:g}"))
+            await session._say_decay()
         if attend:
             await session._bench_memories(now)
         ports.set_lead(plan.lead_guid)
         return session
 
+    def _attended(self):
+        return self.ports.conn.execute("SELECT 1 FROM guild_attendance WHERE raid_id=? LIMIT 1",
+                                       (self.raid_id,)).fetchone() is not None
+
+    async def _say_decay(self):
+        await self.ports.say(self.plan.loot_guid, "guild", template("dkp_decay", pct=f"{self.cfg.dkp.decay * 100:g}"))
+
     async def attend(self):
-        """Record attendance, its DKP and the bench's memories once, after an opening without them."""
+        """Record attendance, its DKP and the bench's memories once, after an opening without them.
+        The week's due DKP decay comes first, as at an opening with attendance."""
         now = self.ports.clock.now()
-        with self.ports.conn:
-            if self.ports.conn.execute("SELECT 1 FROM guild_attendance WHERE raid_id=? LIMIT 1",
-                                       (self.raid_id,)).fetchone() is None:
-                _record_attendance(self.ports, self.cfg, self.plan, self.raid_id, now)
+        decay = 0
+        if not self._attended():
+            decay = apply_due_decay(self.ports.conn, self.ports.clock.local().replace(tzinfo=None), self.cfg.dkp)
+            with self.ports.conn:
+                if not self._attended():
+                    _record_attendance(self.ports, self.cfg, self.plan, self.raid_id, now)
+        if decay:
+            await self._say_decay()
         await self._bench_memories(now)
 
     async def _bench_memories(self, now):

@@ -76,6 +76,18 @@ def retry_after(error: str) -> int | None:
     return None
 
 
+def setup_retry_after(reason: str) -> int | None:
+    """Seconds before a run whose setup met a busy body may be sent again; None otherwise.
+
+    Native checks the bodies again as it groups and teleports, so a refusal its ack did not
+    see ends setup as setup:<stage>:<refusal>. too_few is the leader or members busy at grouping.
+    """
+    parts = reason.split(":", 2)
+    if len(parts) != 3 or parts[0] != "setup" or parts[1] not in {"grouping", "teleporting", "starting"}:
+        return None
+    return BUSY_RETRY_S if parts[2] == "too_few" or retry_after(parts[2]) is not None else None
+
+
 def next_raid_key(rotation, last_run: dict[str, float], skip=()) -> str:
     """Never-run first, then oldest; the configured order resolves ties.
 
@@ -158,16 +170,16 @@ class OfflineRaids:
         now = self.ports.clock.local()
         begin = now.replace(hour=0, minute=0, second=0, microsecond=0)
         end = begin + timedelta(days=1)
-        # Local calendar-day boundaries. A run whose setup proved its raid had no
-        # fresh boss never fought, so it gives its place to the next raid.
+        # Local calendar-day boundaries. A voided run never fought (no fresh boss, or a
+        # busy body at setup), so it gives its place to the day's next try.
         day = self._day_state()
-        skipped = day.get("skipped", [])
-        void = [entry["raid_id"] for entry in skipped if type(entry.get("raid_id")) is int]
+        voided = day.get("voided", [])
+        void = [entry["raid_id"] for entry in voided if type(entry.get("raid_id")) is int]
         held = self.ports.conn.execute(
             "SELECT COUNT(*) FROM guild_raid WHERE offline=1 AND started>=? AND started<? "
             f"AND raid_id NOT IN ({','.join('?' * len(void))})",
             (begin.timestamp(), end.timestamp(), *void)).fetchone()[0]
-        quota = max(held, day.get("accepted", 0) - len(skipped)) >= self.cfg.offline_raids_per_day
+        quota = max(held, day.get("accepted", 0) - len(voided)) >= self.cfg.offline_raids_per_day
         active = self.ports.conn.execute("SELECT 1 FROM guild_raid WHERE ended IS NULL").fetchone() is not None
         return (not day["blocked"] and day["attempts"] < MAX_ATTEMPTS
                 and self.ports.clock.now() >= day["next_try"]
@@ -177,8 +189,8 @@ class OfflineRaids:
                            min_away_min=self.cfg.offline_min_away_min, raid_active=active))
 
     def _raid_key(self):
-        skip = {entry["raid"] for entry in self._day_state().get("skipped", [])}
-        return next_raid_key(self.cfg.offline_rotation, last_run(self.ports.conn), skip)
+        return next_raid_key(self.cfg.offline_rotation, last_run(self.ports.conn),
+                             set(self._day_state().get("skipped", [])))
 
     def _plan(self, key, saved=frozenset()):
         """`saved` are members saved to a copy of this raid that he is saved to: native would
@@ -387,13 +399,20 @@ class OfflineRaids:
         try:
             plan = self._plan(key, saved)
         except (ValueError, NoTankError):
-            self._hold_today(blocked=True)
+            if saved:
+                # His copy holds members this raid needed: the next raid in the rotation may not.
+                skipped = self._day_state().get("skipped", [])
+                self._hold_today(skipped=skipped if key in skipped else [*skipped, key],
+                                 next_try=self.ports.clock.now() + RETRY_S)
+            else:
+                self._hold_today(blocked=True)
             return
         now = self.ports.clock.now()
         self._owned = dict(id=uuid4().hex, day=self._day(), phase="acquiring", plan=asdict(plan),
                            sent_at=now, deadline=now + self.cfg.offline_timeout_min * 60,
                            cancelled=False, cancel_at=None, accepted=None, instance=None,
-                           raid_id=None, started=False, running_seen=False, terminal=None, end_notified=False)
+                           raid_id=None, started=False, running_seen=False, attended=False,
+                           terminal=None, end_notified=False)
         self._save()
         try:
             self._lease = True
@@ -525,8 +544,9 @@ class OfflineRaids:
                 return
             self._owned["instance"] = ev.instance_id
             self._save()
-        if ev.stage == "running" and ev.state == "progress" and self.session is not None:
-            await self.session.attend()  # The run started: now its members raided.
+        if (ev.stage == "running" and ev.state == "progress" and self.session is not None
+                and not self._owned.get("attended")):
+            await self._attend()  # The run started: now its members raided.
         if (ev.stage == "running" and ev.state == "progress" and self.run is not None
                 and not self._owned["cancelled"] and not self._online and not self.ports.human_online()
                 and self._owned.get("terminal") is None
@@ -558,14 +578,22 @@ class OfflineRaids:
                 and not self._owned.get("started") and not self._owned.get("running_seen")
                 and not terminal.get("kills") and not terminal.get("wipes"))
 
-    def _skip_raid(self, raid_id):
+    async def _attend(self):
+        await self.session.attend()
+        self._owned["attended"] = True
+        self._save()
+
+    def _void_run(self, raid_id, delay, *, skip_raid=False):
+        """The command does not use up the day's raid; with skip_raid its raid is passed over today."""
         day = self._day_state(self._owned["day"])
-        skipped = day.get("skipped", [])
-        if not any(entry["id"] == self._owned["id"] for entry in skipped):
+        voided, skipped = day.get("voided", []), day.get("skipped", [])
+        if not any(entry["id"] == self._owned["id"] for entry in voided):
+            voided = [*voided, dict(id=self._owned["id"], raid_id=raid_id)]
+        if skip_raid:
             plan = RaidPlan(**self._owned["plan"])
             key = f"{plan.raid_key}{plan.size}{'h' if plan.heroic else ''}"
-            skipped = [*skipped, dict(id=self._owned["id"], raid=key, raid_id=raid_id)]
-        self._update_day(skipped=skipped, next_try=self.ports.clock.now() + RETRY_S)
+            skipped = skipped if key in skipped else [*skipped, key]
+        self._update_day(voided=voided, skipped=skipped, next_try=self.ports.clock.now() + delay)
 
     async def _finish(self):
         terminal = self._owned.get("terminal")
@@ -597,6 +625,8 @@ class OfflineRaids:
         # Only a run that reached running, or fought, was raided.
         raided = bool(self._owned.get("running_seen") or self._owned.get("started")
                       or terminal.get("kills") or terminal.get("wipes"))
+        busy = (None if raided or no_fresh or terminal["state"] != "failed"
+                else setup_retry_after(str(terminal.get("reason") or "")))
         try:
             if self.session is not None:
                 session = self.session
@@ -605,8 +635,8 @@ class OfflineRaids:
                                             (terminal["kills"], terminal["wipes"], session.raid_id))
                 session.kills = max(session.kills, terminal["kills"])
                 session.wipes = max(session.wipes, terminal["wipes"])
-                if raided:
-                    await session.attend()
+                if raided and not self._owned.get("attended"):
+                    await self._attend()
                 vote = await session.close(public_text(self.ports, terminal["reason"] or terminal["state"])[:160],
                                            raided=raided)
                 if vote is not None and vote not in self._votes:
@@ -619,9 +649,12 @@ class OfflineRaids:
             await self._release()
         if raided:
             await self._memories()
+        raid_id = self.session.raid_id if self.session is not None else None
         if no_fresh:
             # Nobody fought, and the day's one raid is still to come.
-            self._skip_raid(self.session.raid_id if self.session is not None else None)
+            self._void_run(raid_id, RETRY_S, skip_raid=True)
+        elif busy is not None:
+            self._void_run(raid_id, busy)
         elif terminal["state"] == "failed":
             self._update_day(blocked=True)
         self._owned["phase"] = "complete"
