@@ -19,7 +19,8 @@ include = ["leeroy_mind*"]
 [tool.setuptools.package-data]
 "leeroy_mind.storage" = ["migrations/*.sql"]
 "leeroy_mind.library" = ["migrations/*.sql"]
-"leeroy_mind.console" = ["page.html"]
+"leeroy_mind.console" = ["page.html", "static/*.css", "static/*.js", "static/js/*.mjs",
+                         "static/js/comms/*.mjs", "static/fonts/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,261 +1,117 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Guild Console</title>
 <link rel="icon" href="data:,">
-<style>
-:root {
-  --bg: #1e1f22; --panel: #232428; --raised: #2b2d31; --line: #3a3c42; --hover: #34363c;
-  --text: #dcdde0; --dim: #9a9ca3; --faint: #6d7078; --bright: #ffffff;
-  --ok-bg: #1f5130; --ok: #bfe9c8; --warn-bg: #5a4a12; --warn: #f3e2a3;
-  --bad-bg: #5c1f1f; --bad: #ffc9c2; --off-bg: #3a3c42; --off: #b7b9bf;
-  --accent: #9cc9ff; --here: #2f3f63; --talk: #7ee787; --lamp: #ff5a3c;
-  --guild: #7ee787; --officer: #5fd0b0; --party: #8fb8ff; --raid: #ff9f5a; --rw: #ff6f5a;
-  --whisper: #e59cff; --voice: #ffd479; --system: #9a9ca3;
-}
-* { box-sizing: border-box; }
-html, body { height: 100%; margin: 0; }
-body { display: flex; flex-direction: column; background: var(--bg); color: var(--text);
-  font: 13px/1.4 system-ui, "Segoe UI", sans-serif; }
-[hidden] { display: none !important; }
-button { font: inherit; color: var(--text); background: var(--hover); border: 1px solid var(--line);
-  border-radius: 4px; padding: 3px 12px; cursor: pointer; }
-button:hover:not(:disabled) { background: #3f4249; }
-button:disabled { opacity: 0.45; cursor: default; }
-button.danger:not(:disabled) { border-color: #8a3a32; }
-button:focus-visible, .row:focus-visible, [role="tab"]:focus-visible { outline: 2px solid var(--accent);
-  outline-offset: -2px; }
-
-/* the strip */
-.strip { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 10px;
-  background: var(--raised); border-bottom: 1px solid var(--line); }
-.pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 10px;
-  font-size: 12px; background: var(--off-bg); color: var(--off); white-space: nowrap; }
-.pill.ok { background: var(--ok-bg); color: var(--ok); }
-.pill.warn { background: var(--warn-bg); color: var(--warn); }
-.pill.bad { background: var(--bad-bg); color: var(--bad); }
-.pill.room { background: #2c3340; color: var(--text); max-width: 46vw; overflow: hidden;
-  text-overflow: ellipsis; }
-.links { display: inline-flex; gap: 10px; font-size: 12px; color: var(--dim); }
-.link { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
-.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: none; }
-.ok > .dot, .link.ok > .dot { background: #4fd07a; }
-.warn > .dot, .link.warn > .dot { background: #e8c547; }
-.bad > .dot, .link.bad > .dot { background: #ff6b5c; }
-.ptt { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim);
-  margin-left: auto; }
-.lamp { width: 12px; height: 12px; border-radius: 50%; background: #4a1608; border: 1px solid #2a0c04; }
-.ptt.on .lamp { background: var(--lamp); box-shadow: 0 0 8px var(--lamp); }
-.ptt.on { color: var(--bright); }
-.lost { width: 100%; padding: 3px 8px; border-radius: 4px; background: var(--bad-bg); color: var(--bad);
-  font-weight: 600; text-align: center; }
-
-/* the tabs */
-.tabs { display: flex; gap: 2px; padding: 6px 10px 0; background: #26282c; border-bottom: 1px solid var(--line); }
-[role="tab"] { border: 0; border-radius: 6px 6px 0 0; padding: 6px 16px; background: #303237;
-  color: var(--dim); }
-[role="tab"][aria-selected="true"] { background: var(--bg); color: var(--bright); font-weight: 600; }
-main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.tab { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-
-/* comms */
-.banner { margin: 8px 10px 0; padding: 6px 10px; border-radius: 4px; background: var(--warn-bg);
-  color: var(--warn); }
-.banner.bad { background: var(--bad-bg); color: var(--bad); }
-.cols { flex: 1; min-height: 0; display: flex; gap: 8px; padding: 8px 10px; }
-.panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--panel);
-  border: 1px solid var(--line); border-radius: 6px; }
-.panel.tree { width: 300px; min-width: 200px; max-width: 60vw; resize: horizontal; overflow: hidden; }
-.panel.feedpanel { flex: 1; }
-h2 { margin: 0; padding: 6px 10px; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
-  color: var(--dim); }
-.list { flex: 1; min-height: 0; overflow: auto; padding: 2px 4px 6px; }
-.row { display: flex; align-items: center; gap: 6px; min-height: 22px; padding: 1px 6px; border-radius: 4px;
-  white-space: nowrap; cursor: default; }
-.room { font-weight: 600; color: var(--bright); cursor: pointer; }
-.room:hover { background: var(--hover); }
-.room.here { background: var(--here); }
-.count { font-weight: 400; color: var(--faint); }
-.kids { margin-left: 14px; }
-.twist { width: 12px; flex: none; color: var(--faint); text-align: center; cursor: pointer; }
-.twist.none { visibility: hidden; }
-.padlock { flex: none; font-size: 10px; color: #d9b020; }
-.member { color: #c4c6cc; }
-.member:hover { background: var(--hover); }
-.member .light { width: 8px; height: 8px; border-radius: 50%; background: #2a3b2a; flex: none; }
-.member.speaking { color: var(--talk); }
-.member.speaking .light { background: var(--talk); box-shadow: 0 0 6px var(--talk); }
-.member.you { font-weight: 600; }
-.member.muted .mname { color: var(--faint); text-decoration: line-through; }
-.tag { font-size: 11px; color: var(--faint); }
-.feedhead { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding-right: 8px; }
-.chips { display: flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
-.chips button { padding: 1px 9px; font-size: 12px; border-radius: 10px; }
-.chips button[aria-pressed="true"] { background: #44506a; border-color: #5b6c8f; color: var(--bright); }
-.line { padding: 1px 6px; overflow-wrap: anywhere; }
-.ts { color: var(--faint); font-variant-numeric: tabular-nums; }
-.chan { font-size: 11px; font-weight: 600; }
-.who { font-weight: 600; color: var(--accent); }
-.line.mine .who { color: var(--bright); }
-.c-guild .chan { color: var(--guild); } .c-officer .chan { color: var(--officer); }
-.c-party .chan { color: var(--party); } .c-raid .chan { color: var(--raid); }
-.c-raid_warning .chan { color: var(--rw); } .c-whisper .chan, .c-whisper .msg { color: var(--whisper); }
-.c-voice .chan { color: var(--voice); }
-.c-system { color: var(--system); font-style: italic; }
-.vstatus { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 10px 8px; }
-.seg { padding: 1px 9px; border: 1px solid var(--line); border-radius: 10px; font-size: 12px; color: var(--dim); }
-.seg.bad { color: var(--bad); border-color: #7a3a32; }
-#toasts { position: fixed; top: 64px; right: 14px; z-index: 10; width: 300px; display: flex;
-  flex-direction: column; gap: 6px; }
-.toast, #menu, .dialog { background: var(--raised); border: 1px solid var(--line); border-radius: 6px;
-  padding: 8px 10px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5); }
-.toast .acts, .dialog .acts { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; }
-#menu { position: fixed; z-index: 20; min-width: 240px; }
-#menu .title { font-weight: 600; margin-bottom: 4px; }
-#menu label { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
-#menu input[type="range"] { flex: 1; }
-#menu output { min-width: 58px; text-align: right; font-variant-numeric: tabular-nums; }
-.scrim { position: fixed; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center;
-  background: rgba(0, 0, 0, 0.55); }
-.dialog { max-width: 420px; }
-
-/* the mind tab */
-.mindtab { overflow: auto; padding: 10px; gap: 10px; }
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 10px; }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px;
-  min-width: 0; }
-.card.span { grid-column: 1 / -1; }
-.card h3 { margin: 0; font-size: 14px; color: var(--bright); }
-.card header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.card .acts { display: flex; gap: 6px; margin-top: 8px; }
-.why { margin: 6px 0 0; font-size: 12px; color: var(--dim); }
-.why.bad { color: var(--bad); }
-dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 4px 0 0; font-size: 12px; }
-dl.kv dt { color: var(--dim); }
-dl.kv dd { margin: 0; overflow-wrap: anywhere; }
-table { border-collapse: collapse; width: 100%; font-size: 12px; }
-th { text-align: left; color: var(--dim); font-weight: 400; border-bottom: 1px solid var(--line); padding: 2px 6px 2px 0; }
-td { padding: 2px 6px 2px 0; overflow-wrap: anywhere; }
-.bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; margin: 3px 0 6px; }
-.bar > i { display: block; height: 100%; background: #6ea8fe; }
-.log { font: 12px/1.45 ui-monospace, Consolas, monospace; max-height: 320px; overflow: auto; }
-.log .r { white-space: pre-wrap; overflow-wrap: anywhere; }
-.log .WARNING { color: var(--warn); } .log .ERROR, .log .CRITICAL { color: var(--bad); }
-.muted { color: var(--faint); }
-
-/* the raid and guild tabs */
-.mindtab > .banner { margin: 0 0 10px; }
-.lead { margin: 2px 0 6px; color: var(--bright); }
-.facts { margin: 0; padding-left: 18px; color: var(--dim); font-size: 12px; }
-.formrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 10px;
-  padding-top: 8px; border-top: 1px solid var(--line); font-size: 12px; color: var(--dim); }
-.formrow label { display: inline-flex; align-items: center; gap: 4px; }
-select { font: inherit; color: var(--text); background: var(--raised); border: 1px solid var(--line);
-  border-radius: 4px; padding: 2px 4px; }
-.scroll { max-height: 420px; overflow: auto; }
-.cards.wide { grid-template-columns: repeat(auto-fit, minmax(min(520px, 100%), 1fr)); }
-.wide td { overflow-wrap: normal; }
-.wide td.num, .wide th.num { white-space: nowrap; }
-tr.off td { color: var(--faint); }
-td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
-.role-tank { color: #8fb8ff; } .role-healer { color: #7ee787; } .role-damage { color: #ff9f5a; }
-.entry { margin: 0 0 10px; }
-.entry .meta { font-size: 11px; color: var(--faint); }
-.entry p { margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.season { margin: 0 0 8px; }
-.season h4 { margin: 0 0 2px; font-size: 12px; color: var(--dim); font-weight: 600; }
-
-/* the personas tab */
-.pick tbody tr { cursor: pointer; }
-.pick tbody tr:hover td { background: var(--hover); }
-.pick tbody tr.sel td { background: var(--here); }
-.pick tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.card header .close { margin-left: auto; }
-.card h4 { margin: 10px 0 2px; font-size: 12px; color: var(--dim); font-weight: 600; }
-.card h4:first-of-type { margin-top: 0; }
-/* the dials */
-.dial { display: grid; grid-template-columns: minmax(120px, 13em) 1fr; gap: 2px 10px; padding: 6px 0;
-  border-top: 1px solid var(--line); font-size: 12px; }
-.dial:first-child { border-top: 0; }
-.dial .nm { color: var(--bright); }
-.dial .nm small { display: block; color: var(--faint); font-weight: 400; }
-.dial .ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
-.dial .ctl input[type="range"] { width: 11em; }
-.dial .ctl .v { min-width: 2.5em; font-variant-numeric: tabular-nums; color: var(--bright); }
-.dial .ctl button { padding: 1px 8px; }
-.dial .moves { grid-column: 2; color: var(--dim); }
-.dial.off .nm, .dial.off .moves { color: var(--faint); }
-.pv { margin: 4px 0 0; font-size: 12px; }
-.pv .said { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--bright); }
-.chg { margin: 0 0 8px; }
-.chg .acts { margin-top: 2px; }
-input[type="text"], input[type="number"] { font: inherit; color: var(--text); background: var(--raised);
-  border: 1px solid var(--line); border-radius: 4px; padding: 2px 4px; }
-
-@media (max-width: 720px) {
-  .cols { flex-direction: column; }
-  .panel.tree { width: auto; max-width: none; resize: none; max-height: 40vh; }
-  .ptt { margin-left: 0; }
-}
-</style>
+<script src="/static/theme.js"></script>
+<link rel="stylesheet" href="/static/console.css">
 </head>
 <body>
-<header class="strip" aria-label="Status">
-  <span id="s-mind" class="pill"><i class="dot"></i><span class="t">mind</span></span>
-  <span class="links">
-    <span id="s-bridge" class="link"><i class="dot"></i><span class="t">game bridge</span></span>
-    <span id="s-vlink" class="link"><i class="dot"></i><span class="t">voice</span></span>
-  </span>
-  <span id="s-game" class="pill"><span class="t">you: unknown</span></span>
-  <span id="s-room" class="pill room"><span class="t">no room</span></span>
-  <span id="s-ptt" class="ptt"><i class="lamp"></i><span>push-to-talk</span></span>
+<header class="top">
+<div class="top-inner">
+  <div class="brand">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path d="M13 3 22 7v6c0 5-4 8.5-9 10-5-1.5-9-5-9-10V7Z" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/><path d="M9 12.5h8M9 16h5" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round"/></svg>
+    <div><h1>Guild Console</h1><div class="sub">The guild, the realm and the mind, beside the game</div></div>
+  </div>
+  <div class="strip" aria-label="Status">
+    <span id="s-game" class="mode"><span class="t">Game: unknown</span></span>
+    <span id="s-mind" class="stat"><span class="k">Mind</span><span class="v"><i class="dot"></i><span class="t">mind</span></span></span>
+    <span id="s-bridge" class="stat"><span class="k">Game bridge</span><span class="v"><i class="dot"></i><span class="t">game bridge</span></span></span>
+    <span id="s-vlink" class="stat"><span class="k">Voice</span><span class="v"><i class="dot"></i><span class="t">voice</span></span></span>
+    <span id="s-room" class="stat"><span class="k">Room</span><span class="v"><span class="t">no room</span></span></span>
+    <span id="s-ptt" class="ptt"><i class="lamp"></i><span>push-to-talk</span><span id="s-self" class="selfmark" hidden></span></span>
+    <button id="theme" type="button" class="theme">Light / dark</button>
+  </div>
   <div id="s-lost" class="lost" hidden></div>
-</header>
+</div>
 <nav class="tabs" role="tablist" aria-label="Areas">
   <button role="tab" id="t-comms" data-tab="comms" aria-controls="tab-comms">Comms</button>
   <button role="tab" id="t-raid" data-tab="raid" aria-controls="tab-raid">Raid</button>
   <button role="tab" id="t-guild" data-tab="guild" aria-controls="tab-guild">Guild</button>
+  <button role="tab" id="t-social" data-tab="social" aria-controls="tab-social">Social</button>
   <button role="tab" id="t-personas" data-tab="personas" aria-controls="tab-personas">Personas</button>
+  <button role="tab" id="t-board" data-tab="board" aria-controls="tab-board">Board</button>
+  <button role="tab" id="t-calendar" data-tab="calendar" aria-controls="tab-calendar">Calendar</button>
+  <button role="tab" id="t-bank" data-tab="bank" aria-controls="tab-bank">Bank</button>
+  <button role="tab" id="t-realm" data-tab="realm" aria-controls="tab-realm">Realm</button>
+  <button role="tab" id="t-training" data-tab="training" aria-controls="tab-training">Training</button>
+  <button role="tab" id="t-dojo" data-tab="dojo" aria-controls="tab-dojo">Dojo</button>
+  <button role="tab" id="t-library" data-tab="library" aria-controls="tab-library">Library</button>
   <button role="tab" id="t-mind" data-tab="mind" aria-controls="tab-mind">Mind</button>
 </nav>
+<div id="toasts" role="status"></div>
+</header>
 <main>
   <section id="tab-comms" class="tab" role="tabpanel" aria-labelledby="t-comms">
     <div id="comms-banner" class="banner" hidden></div>
-    <div class="cols">
-      <aside class="panel tree">
-        <h2>Channels</h2>
-        <div id="tree" class="list" aria-label="Channels"></div>
-      </aside>
-      <section class="panel feedpanel">
-        <div class="feedhead">
-          <h2>Voice and chat</h2>
-          <div id="chips" class="chips" role="group" aria-label="Show">
-            <button type="button" data-f="all" aria-pressed="true">All</button>
-            <button type="button" data-f="voice" aria-pressed="false">Voice</button>
-            <button type="button" data-f="guild" aria-pressed="false">Guild</button>
-            <button type="button" data-f="officer" aria-pressed="false">Officer</button>
-            <button type="button" data-f="group" aria-pressed="false">Party and raid</button>
-            <button type="button" data-f="whisper" aria-pressed="false">Whispers</button>
+    <div id="comms-kpis" class="kpis" aria-label="Tonight"></div>
+    <div class="comms">
+      <aside class="panel left" aria-label="Channels, voice rooms and whispers">
+        <div id="left" class="list">
+          <div class="sec" role="heading" aria-level="2">Text, from WoW</div>
+          <div id="channels"></div>
+          <div class="sec" role="heading" aria-level="2">Voice rooms</div>
+          <div id="tree"></div>
+          <div class="sec" role="heading" aria-level="2">Whispers</div>
+          <div id="whispers"></div>
+        </div>
+        <div class="ctl" role="group" aria-label="Your voice">
+          <div class="now"><span id="c-ptt" class="ptt"><i class="lamp"></i><span>push-to-talk</span></span>
+            <span id="c-room"></span></div>
+          <div class="acts"><button id="c-mute" type="button" aria-pressed="false" disabled>Mute</button>
+            <button id="c-deafen" type="button" aria-pressed="false" disabled>Deafen</button></div>
+          <div class="vstatus" role="group" aria-label="Voice status">
+            <span id="v-out" class="seg"></span><span id="v-mic" class="seg"></span>
+            <span id="v-stt" class="seg"></span><span id="v-queue" class="seg"></span>
+            <span id="v-err" class="seg"></span>
           </div>
         </div>
-        <div id="feed" class="list" role="log" aria-label="Voice and chat"></div>
+      </aside>
+      <section class="panel feedpanel" aria-labelledby="feed-title">
+        <h3 id="feed-title"># guild</h3>
+        <p id="feed-hint" class="hint"></p>
+        <div id="feed" class="feed" role="log" aria-labelledby="feed-title"></div>
+        <div id="composer" class="composer" tabindex="-1">
+          <label for="say-text" class="to">to <b id="say-to">#guild</b> as you</label>
+          <div class="say">
+            <input id="say-text" type="text" autocomplete="off" aria-describedby="say-why" disabled>
+            <span id="say-count" class="mono count" title="UTF-8 bytes: a WoW chat line holds 255">0 / 255</span>
+            <button id="say-send" type="button" class="btn primary" disabled>Send</button>
+          </div>
+          <p id="say-why" class="why" role="status"></p>
+        </div>
       </section>
+      <aside id="comms-right" class="panel right" aria-labelledby="here-title">
+        <div class="here">
+          <h3 id="here-title">Not in a voice room</h3>
+          <p class="hint">Click a face for their card.</p>
+          <div id="here-faces" class="faces" role="group" aria-label="Who is in your room"></div>
+        </div>
+        <section id="mcard" class="mcard" aria-labelledby="mcard-name" hidden>
+          <div id="mcard-face" class="cardface"></div>
+          <div><h4 id="mcard-name"></h4><p id="mcard-note" class="note"></p></div>
+          <div id="mcard-facts" class="facts"></div>
+          <div class="vol">
+            <div class="lbl"><label for="mcard-vol">Volume</label><output id="mcard-db" class="mono" for="mcard-vol">0.0 dB</output></div>
+            <div class="volrow"><input id="mcard-vol" type="range" min="-12" max="12" step="0.5" value="0">
+              <button id="mcard-reset" type="button">Reset</button></div>
+          </div>
+          <div class="acts"><button id="mcard-whisper" type="button" class="primary">Whisper</button>
+            <button id="mcard-mute" type="button" aria-pressed="false">Mute</button>
+            <button id="mcard-profile" type="button">Profile</button></div>
+        </section>
+      </aside>
     </div>
-    <footer class="vstatus" aria-label="Voice status">
-      <span id="v-out" class="seg"></span><span id="v-mic" class="seg"></span>
-      <span id="v-stt" class="seg"></span><span id="v-queue" class="seg"></span>
-      <span id="v-err" class="seg"></span>
-    </footer>
   </section>
   <section id="tab-raid" class="tab mindtab" role="tabpanel" aria-labelledby="t-raid" hidden>
     <div id="raid-banner" class="banner" hidden></div>
     <div class="cards wide">
-      <article class="card span">
-        <header><h3>Tonight</h3><span id="r-state" class="pill"><i class="dot"></i><span class="t">-</span></span></header>
+      <article class="panel span">
+        <header><h3>Tonight</h3><span id="r-state" class="mode"><i class="dot"></i><span class="t">-</span></span></header>
         <p id="r-summary" class="lead">-</p>
-        <ul id="r-facts" class="facts"></ul>
+        <ul id="r-facts" class="bullets"></ul>
         <div class="acts raidacts">
           <button type="button" data-raid="call">Call the raid</button>
           <button type="button" data-raid="summon">Summon late members</button>
@@ -273,23 +129,23 @@ input[type="text"], input[type="number"] { font: inherit; color: var(--text); ba
         </form>
         <p id="r-why" class="why"></p>
       </article>
-      <article class="card span">
+      <article class="panel span">
         <header><h3>The raid</h3><span id="r-count" class="muted"></span></header>
         <div class="scroll"><table><thead><tr><th>member</th><th>role</th><th>class</th><th class="num">level</th>
           <th>online</th><th>room</th><th>arrival</th><th class="num">DKP</th></tr></thead>
           <tbody id="r-members"></tbody></table></div>
         <p id="r-bench" class="why"></p>
       </article>
-      <article class="card">
+      <article class="panel">
         <header><h3>Loot</h3><span id="r-lootn" class="muted"></span></header>
         <div class="scroll"><table><thead><tr><th>item</th><th class="num">price</th><th>state</th><th>to</th><th class="num">paid</th></tr></thead>
           <tbody id="r-loot"></tbody></table></div>
       </article>
-      <article class="card">
+      <article class="panel">
         <header><h3>DKP as it happens</h3></header>
         <div id="r-dkp" class="log"></div>
       </article>
-      <article class="card span">
+      <article class="panel span">
         <header><h3>Recent raids</h3></header>
         <div class="scroll"><table><thead><tr><th>when</th><th>raid</th><th>lead</th><th class="num">kills</th><th class="num">wipes</th>
           <th>ended</th><th class="num">items</th><th>MVP</th></tr></thead><tbody id="r-recent"></tbody></table></div>
@@ -299,42 +155,46 @@ input[type="text"], input[type="number"] { font: inherit; color: var(--text); ba
   <section id="tab-guild" class="tab mindtab" role="tabpanel" aria-labelledby="t-guild" hidden>
     <div id="guild-banner" class="banner bad" hidden></div>
     <div class="cards wide">
-      <article class="card span">
+      <article class="panel span">
         <header><h3>The guild</h3><span id="g-count" class="muted"></span></header>
         <p id="g-stats" class="lead">-</p>
       </article>
-      <article class="card span">
+      <article class="panel span">
         <header><h3>Roster</h3></header>
         <div class="scroll"><table><thead><tr><th>name</th><th>class</th><th>spec</th><th>role</th><th class="num">level</th>
           <th class="num">rank</th><th>guild role</th><th>online</th><th>room</th></tr></thead>
           <tbody id="g-roster"></tbody></table></div>
       </article>
-      <article class="card">
+      <article class="panel">
         <header><h3>DKP ladder</h3></header>
         <div class="scroll"><table><thead><tr><th class="num">#</th><th>name</th><th class="num">DKP</th><th class="num">earned</th>
           <th class="num">spent</th><th class="num">decay</th><th class="num">items</th>
           <th class="num">raids</th><th class="num">benched</th></tr></thead>
           <tbody id="g-ladder"></tbody></table></div>
       </article>
-      <article class="card">
+      <article class="panel">
         <header><h3>Loot history</h3></header>
         <div class="scroll"><table><thead><tr><th>when</th><th>item</th><th>to</th><th class="num">paid</th><th>raid</th></tr></thead>
           <tbody id="g-loot"></tbody></table></div>
       </article>
-      <article class="card">
+      <article class="panel">
         <header><h3>Season awards</h3></header>
         <div id="g-awards" class="scroll"></div>
       </article>
-      <article class="card">
+      <article class="panel">
         <header><h3>Chronicle</h3></header>
         <div id="g-chronicle" class="scroll"></div>
       </article>
     </div>
   </section>
+  <section id="tab-social" class="tab placeholder" role="tabpanel" aria-labelledby="t-social" hidden>
+    <h2>Social</h2>
+    <p>The guild's drama at a glance: feuds, jealousy, romances, how each member feels about you, rumours going round and tonight's guild mood. Coming soon.</p>
+  </section>
   <section id="tab-personas" class="tab mindtab" role="tabpanel" aria-labelledby="t-personas" hidden>
     <div id="personas-banner" class="banner bad" hidden></div>
     <div class="cards wide">
-      <article class="card span">
+      <article class="panel span">
         <header><h3>The cast</h3><span id="p-count" class="muted"></span></header>
         <p id="p-mood" class="lead">-</p>
         <p id="p-missing" class="why" hidden></p>
@@ -346,18 +206,18 @@ input[type="text"], input[type="number"] { font: inherit; color: var(--text); ba
       </article>
     </div>
     <div id="p-tuning" class="cards wide">
-      <article class="card span">
+      <article class="panel span">
         <header><h3>Tuning</h3><span id="t-sum" class="muted"></span></header>
         <p id="t-lead" class="lead">-</p>
         <p class="why">Dials are numbers laid over the stored personas; nothing is rewritten. A member's own value wins over
           group and world changes. 5 is as the persona is written (a score dial starts at their own score). Preview first:
           lines for the dials that change how they talk, numbers for the ones that change how often.</p>
       </article>
-      <article class="card">
+      <article class="panel">
         <header><h3>World</h3><span class="muted">over mind.toml, which is never written</span></header>
         <div id="t-world"></div>
       </article>
-      <article class="card">
+      <article class="panel">
         <header><h3>Groups</h3><span class="muted">offsets add up for every group a member is in</span></header>
         <div id="t-groups"></div>
         <h4>A group</h4>
@@ -372,12 +232,12 @@ input[type="text"], input[type="number"] { font: inherit; color: var(--text); ba
           <button type="button" id="t-gclear">Clear</button>
         </div>
       </article>
-      <article id="t-pvcard" class="card span" hidden>
+      <article id="t-pvcard" class="panel span" hidden>
         <header><h3>Preview</h3><span id="t-pvwhat" class="muted"></span>
           <button type="button" id="t-pvclose" class="close">Close</button></header>
         <div id="t-preview"></div>
       </article>
-      <article class="card span">
+      <article class="panel span">
         <header><h3>Change log</h3><span class="muted">your dial changes, newest first</span></header>
         <div id="t-history" class="scroll"></div>
         <p class="why">Undo reverses one change and is itself a change (undo it to redo). It is refused when a later change
@@ -386,52 +246,81 @@ input[type="text"], input[type="number"] { font: inherit; color: var(--text); ba
       </article>
     </div>
     <div id="p-detail" class="cards wide" hidden>
-      <article class="card span">
+      <article class="panel span">
+        <div id="p-face" class="pface"></div>
         <header><h3 id="p-name">-</h3><span id="p-sub" class="muted"></span>
           <button type="button" id="p-close" class="close">Close</button></header>
         <p id="p-lead" class="lead"></p>
         <p id="p-why" class="why"></p>
       </article>
-      <article class="card span">
+      <article class="panel span">
         <header><h3>Dials</h3><span id="p-dialsum" class="muted"></span></header>
         <div id="p-dials"></div>
       </article>
-      <article class="card">
+      <article class="panel">
         <header><h3>Who they are</h3></header>
         <table><thead><tr><th>trait</th><th class="num">persona</th><th class="num" id="p-nighthead">the night</th>
           <th class="num">shift</th><th>how it shows</th></tr></thead><tbody id="p-five"></tbody></table>
         <dl id="p-who" class="kv"></dl>
       </article>
-      <article class="card">
+      <article class="panel">
         <header><h3>How they type and play</h3></header>
         <h4>Typing</h4><dl id="p-typing" class="kv"></dl>
         <h4>In game</h4><dl id="p-game" class="kv"></dl>
       </article>
-      <article class="card">
+      <article class="panel">
         <header><h3>Looks</h3></header>
         <dl id="p-looks" class="kv"></dl>
       </article>
-      <article class="card">
+      <article class="panel">
         <header><h3>Memories</h3><span id="p-memn" class="muted"></span></header>
         <table><thead><tr><th>kind</th><th class="num" id="p-kindhead">recent</th><th class="num">held</th></tr></thead>
           <tbody id="p-kinds"></tbody></table>
       </article>
-      <article class="card span">
+      <article class="panel span">
         <header><h3>Relationships</h3><span id="p-tien" class="muted"></span></header>
         <div class="scroll"><table><thead><tr><th>with</th><th>label</th><th class="num">affinity</th><th class="num">trust</th>
           <th class="num">respect</th><th class="num">attraction</th><th class="num">familiarity</th><th>stage</th>
           <th class="num">talks</th><th>last seen</th><th>notes</th></tr></thead><tbody id="p-ties"></tbody></table></div>
       </article>
-      <article class="card span">
+      <article class="panel span">
         <header><h3>Persona ledger</h3><span class="muted">growth, drift flags, stance moves and undos, newest first</span></header>
         <div id="p-ledger" class="log"></div>
       </article>
     </div>
   </section>
+  <section id="tab-board" class="tab placeholder" role="tabpanel" aria-labelledby="t-board" hidden>
+    <h2>Board</h2>
+    <p>The guild's message board: realm forum posts, the Realm's write-ups and the letters members send you, with your replies. Coming soon.</p>
+  </section>
+  <section id="tab-calendar" class="tab placeholder" role="tabpanel" aria-labelledby="t-calendar" hidden>
+    <h2>Calendar</h2>
+    <p>Upcoming raid nights with sign-ups, Thursday's officer meeting, birthdays a week ahead and the raid nights you missed. Coming soon.</p>
+  </section>
+  <section id="tab-bank" class="tab placeholder" role="tabpanel" aria-labelledby="t-bank" hidden>
+    <h2>Bank</h2>
+    <p>The guild bank as in game: all six tabs, the gold, the money log and what officers stocked or withdrew. Coming soon.</p>
+  </section>
+  <section id="tab-realm" class="tab placeholder" role="tabpanel" aria-labelledby="t-realm" hidden>
+    <h2>Realm</h2>
+    <p>The three rival guilds: their members and progress, the race for first kills, poaching, their Trade-chat lines and canon achievements. Coming soon.</p>
+  </section>
+  <section id="tab-training" class="tab placeholder" role="tabpanel" aria-labelledby="t-training" hidden>
+    <h2>Training</h2>
+    <p>The training ground: fights recorded, days until tactics may adapt, the overhead gate, trials and the tactic cards per boss. Coming soon.</p>
+  </section>
+  <section id="tab-dojo" class="tab placeholder" role="tabpanel" aria-labelledby="t-dojo" hidden>
+    <h2>Dojo</h2>
+    <p>The dojo's training realm: whether it is running, its build, the acceptance gates and their evidence, recorded episodes and replays. Coming soon.</p>
+  </section>
+  <section id="tab-library" class="tab placeholder" role="tabpanel" aria-labelledby="t-library" hidden>
+    <h2>Library</h2>
+    <p>Search the scholar's library: GM commands, teleports, configuration templates, items, quests and spells. Coming soon.</p>
+  </section>
   <section id="tab-mind" class="tab mindtab" role="tabpanel" aria-labelledby="t-mind" hidden>
     <div class="cards">
-      <article class="card">
-        <header><h3>Mind</h3><span id="m-state" class="pill"><i class="dot"></i><span class="t"></span></span></header>
+      <article class="panel">
+        <header><h3>Mind</h3><span id="m-state" class="mode"><i class="dot"></i><span class="t"></span></span></header>
         <dl class="kv"><dt>process</dt><dd id="m-proc">-</dd><dt>mind.lock</dt><dd id="m-lock">-</dd>
           <dt>data dir</dt><dd id="m-data">-</dd><dt>a stop</dt><dd id="m-stop">-</dd></dl>
         <div class="acts">
@@ -441,8 +330,8 @@ input[type="text"], input[type="number"] { font: inherit; color: var(--text); ba
         </div>
         <p id="m-why" class="why"></p>
       </article>
-      <article class="card">
-        <header><h3>Voice service</h3><span id="w-state" class="pill"><i class="dot"></i><span class="t"></span></span></header>
+      <article class="panel">
+        <header><h3>Voice service</h3><span id="w-state" class="mode"><i class="dot"></i><span class="t"></span></span></header>
         <dl class="kv"><dt>process</dt><dd id="w-proc">-</dd><dt>ports</dt><dd id="w-ports">-</dd>
           <dt>mind link</dt><dd id="w-link">-</dd></dl>
         <div class="acts">
@@ -452,40 +341,32 @@ input[type="text"], input[type="number"] { font: inherit; color: var(--text); ba
         </div>
         <p id="w-why" class="why"></p>
       </article>
-      <article class="card">
+      <article class="panel">
         <header><h3>Links and game</h3></header>
         <dl class="kv"><dt>game bridge</dt><dd id="h-bridge">-</dd><dt>voice link</dt><dd id="h-vlink">-</dd>
           <dt>you</dt><dd id="h-game">-</dd><dt>the night</dt><dd id="h-night">-</dd></dl>
         <p id="h-config" class="why bad" hidden></p>
       </article>
-      <article class="card">
+      <article class="panel">
         <header><h3>GPU</h3></header>
         <div id="h-gpu" class="muted">-</div>
       </article>
-      <article class="card span">
+      <article class="panel span">
         <header><h3>Models resident in Ollama</h3><span id="h-ollama" class="muted"></span></header>
         <table><thead><tr><th>model</th><th>role</th><th>size</th><th>in VRAM</th><th>expires</th></tr></thead>
           <tbody id="h-models"></tbody></table>
       </article>
-      <article class="card span">
+      <article class="panel span">
         <header><h3>Latest warnings and errors</h3></header>
         <div id="h-errors" class="log"></div>
       </article>
-      <article class="card span">
+      <article class="panel span">
         <header><h3>mind.log</h3><span class="muted">events and counts only, never what was said</span></header>
         <div id="h-log" class="log"></div>
       </article>
     </div>
   </section>
 </main>
-<div id="toasts" role="status"></div>
-<div id="menu" role="dialog" aria-label="Member volume" hidden>
-  <div id="menu-name" class="title"></div>
-  <label>Volume <input id="menu-vol" type="range" min="-12" max="12" step="0.5" value="0">
-    <output id="menu-db">0.0 dB</output></label>
-  <label><input id="menu-mute" type="checkbox"> Mute</label>
-  <button id="menu-reset" type="button">Reset</button>
-</div>
 <div id="confirm" class="scrim" hidden>
   <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-text">
     <div id="confirm-text"></div>
@@ -493,1678 +374,6 @@ input[type="text"], input[type="number"] { font: inherit; color: var(--text); ba
       <button id="confirm-yes" type="button" class="danger">Yes</button></div>
   </div>
 </div>
-<script>
-(function () {
-  "use strict";
-
-  var KEEP = 200;                 // lines kept per source, as the services keep them
-  var DB_LIMIT = 12;
-  var HEALTH_MS = 5000;
-  var COLLAPSED_KEY = "guild-console-collapsed";
-  var CHANNEL_TAGS = { guild: "Guild", officer: "Officer", party: "Party", raid: "Raid",
-                       raid_warning: "Raid warning", whisper: "Whisper", voice: "Voice" };
-  var FILTERS = { all: null, voice: ["voice"], guild: ["guild"], officer: ["officer"],
-                  group: ["party", "raid", "raid_warning"], whisper: ["whisper"] };
-  var MIND_WORDS = { running: "mind running", starting: "mind starting", stopping: "mind stopping",
-                     stopped: "mind stopped", crashed: "mind crashed", unknown: "mind: unclear" };
-
-  function $(id) { return document.getElementById(id); }
-  function own(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
-  function arr(x) { return Array.isArray(x) ? x : []; }
-  function obj(x) { return x && typeof x === "object" && !Array.isArray(x) ? x : {}; }
-  function str(x) { return typeof x === "string" ? x : ""; }
-  function num(x) { return typeof x === "number" && isFinite(x) ? x : 0; }
-  function pad(n) { return (n < 10 ? "0" : "") + n; }
-  // Everything shown is set as text: nothing here builds markup from what anyone said
-  function el(tag, cls, text) {
-    var e = document.createElement(tag);
-    if (cls) { e.className = cls; }
-    if (text !== undefined) { e.textContent = text; }
-    return e;
-  }
-  function clear(e) { while (e.firstChild) { e.removeChild(e.firstChild); } }
-  function clock(ms) {
-    if (!ms) { return ""; }
-    var d = new Date(ms);
-    return pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
-  }
-  function hhmm(sec) {
-    if (!sec) { return ""; }
-    var d = new Date(sec * 1000);
-    return pad(d.getHours()) + ":" + pad(d.getMinutes());
-  }
-
-  var ST = { mind: { state: "unknown", detail: "connecting" }, bridge: null,
-             game: { state: "unknown", reason: "connecting" },
-             voice: { enabled: false, service: false, link: null }, control: { enabled: false } };
-  var V = null;                   // the voice service's page state; null while it is down
-  var CHAT = [];                  // the mind's text lines, by id
-  var TRANS = [];                 // the voice transcript and the console's own notes
-  var seen = {};
-  var filter = "all";
-  var collapsed = loadCollapsed();
-  var tab = "comms";
-  var es = null, retry = null, healthTimer = null, healthBusy = false, menuGuid = 0;
-  var lastHealth = null;
-
-  function loadCollapsed() {
-    try { return obj(JSON.parse(localStorage.getItem(COLLAPSED_KEY) || "{}")); }
-    catch (e) { return {}; }
-  }
-  function saveCollapsed() {
-    try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify(collapsed)); } catch (e) { /* none */ }
-  }
-
-  // The key comes in the URL's fragment, which the browser never sends anywhere: it is kept in
-  // this page's memory only (not a cookie, which every 127.0.0.1 port would be handed) and goes
-  // with each request as a header. A reload loses it: open the printed URL again.
-  var KEY = "";
-  (function () {
-    var m = /^#key=([A-Za-z0-9_-]{16,128})$/.exec(location.hash);
-    if (m) { KEY = m[1]; }
-    if (/^#key=/.test(location.hash)) { history.replaceState(null, "", location.pathname + "#comms"); }
-  }());
-  function api(path, opts) {
-    opts = opts || {};
-    var headers = { "X-Console-Key": KEY };
-    Object.keys(opts.headers || {}).forEach(function (k) { headers[k] = opts.headers[k]; });
-    return fetch(path, { method: opts.method || "GET", headers: headers, body: opts.body,
-                         signal: opts.signal, cache: "no-store", credentials: "omit" });
-  }
-
-  function post(path, body) {
-    return api(path, { method: "POST", headers: { "Content-Type": "application/json" },
-                       body: JSON.stringify(body) })
-      .then(function (r) {
-        return r.json().catch(function () { return { ok: false, error: "HTTP " + r.status }; })
-          .then(function (j) { j.status = r.status; return j; });
-      });
-  }
-
-  // -- the strip ----------------------------------------------------------------------------------
-
-  function setPill(id, cls, text, title) {
-    var e = $(id);
-    e.className = e.className.replace(/\b(ok|warn|bad)\b/g, "").trim() + (cls ? " " + cls : "");
-    e.querySelector(".t").textContent = text;
-    e.title = title || "";
-  }
-  function mindClass(state) {
-    return state === "running" ? "ok" : state === "crashed" ? "bad"
-         : (state === "starting" || state === "stopping" || state === "unknown") ? "warn" : "";
-  }
-  function name(guid) {
-    var n = V && V.names[guid];
-    return typeof n === "string" && n ? n : "#" + guid;
-  }
-  function roomName(id) {
-    var tree = V ? V.tree : [];
-    for (var i = 0; i < tree.length; i++) { if (tree[i].id === id) { return str(tree[i].name) || id; } }
-    return id;
-  }
-  function hereRoom() {
-    if (!V) { return ""; }
-    return V.room || (V.human && typeof V.where[V.human] === "string" ? V.where[V.human] : "");
-  }
-  function gameWords() {
-    var g = ST.game;
-    if (g.state === "in_game") { return "you: in game" + (g.since ? " since " + hhmm(g.since) : ""); }
-    if (g.state === "not_in_game") { return "you: not in game"; }
-    return "you: unknown";
-  }
-  function renderStrip() {
-    var m = ST.mind;
-    setPill("s-mind", mindClass(m.state), MIND_WORDS[m.state] || ("mind " + m.state),
-            m.detail || (m.pid ? "pid " + m.pid : ""));
-    var bridge = ST.bridge;
-    setPill("s-bridge", m.state !== "running" ? "" : bridge === true ? "ok" : "bad",
-            "game bridge" + (m.state !== "running" ? " -" : bridge === true ? "" : " down"),
-            m.state !== "running" ? "the mind is not running" : "");
-    var v = ST.voice, vtext, vcls;
-    if (!v.enabled) { vtext = "voice off"; vcls = ""; }
-    else if (!v.service) { vtext = "voice service down"; vcls = "bad"; }
-    else if (v.link) { vtext = "voice linked"; vcls = "ok"; }
-    else { vtext = "voice: mind not linked"; vcls = "warn"; }
-    setPill("s-vlink", vcls, vtext, "");
-    setPill("s-game", ST.game.state === "in_game" ? "ok" : ST.game.state === "not_in_game" ? "warn" : "",
-            gameWords(), ST.game.reason || "");
-    var here = hereRoom(), roomText;
-    if (!V) { roomText = "voice not connected"; }
-    else if (!here) { roomText = "not in a room"; }
-    else {
-      var talking = arr(V.speaking).map(function (g) { return name(g); });
-      roomText = roomName(here) + (talking.length ? " · " + talking.join(", ") + " speaking" : "");
-    }
-    setPill("s-room", "", roomText, roomText);
-    $("s-ptt").classList.toggle("on", !!(V && V.ptt));
-    renderBanner();
-    if (tab === "mind") { renderMind(); }
-  }
-
-  // -- comms: the channel tree ---------------------------------------------------------------------
-
-  function blankVoice() {
-    return { tree: [], where: {}, names: {}, room: "", human: 0, speaking: [], ptt: false,
-             volumes: {}, mutes: [], invites: [], transcript: [], mind: false, status: {} };
-  }
-  function adoptVoice(m) {
-    if (!m) { V = null; return; }
-    V = blankVoice();
-    V.tree = arr(m.tree).filter(function (r) { return r && typeof r.id === "string"; });
-    V.where = obj(m.where); V.names = obj(m.names); V.room = str(m.room); V.human = num(m.human);
-    V.speaking = arr(m.speaking); V.ptt = m.ptt === true; V.volumes = obj(m.volumes);
-    V.mutes = arr(m.mutes); V.invites = arr(m.invites).filter(function (i) { return i && typeof i.channel === "string"; });
-    V.mind = m.mind === true; V.status = obj(m.status);
-    TRANS = TRANS.filter(function (t) { return t.note; });
-    arr(m.transcript).slice(-KEEP).forEach(function (t) { addTranscript(obj(t), true); });
-  }
-  function isSpeaking(g) { return V && V.speaking.indexOf(g) >= 0; }
-  function isMuted(g) { return V && V.mutes.indexOf(g) >= 0; }
-
-  function peopleByRoom() {
-    var by = {};
-    function put(room, p) { (by[room] = by[room] || []).push(p); }
-    Object.keys(V.where).forEach(function (g) {
-      var room = V.where[g];
-      if (typeof room !== "string" || !room || Number(g) === V.human) { return; }
-      put(room, { guid: Number(g), you: false, label: name(g) });
-    });
-    var here = hereRoom();
-    if (here) {
-      var n = V.human ? V.names[V.human] : "";
-      put(here, { guid: V.human, you: true, label: (typeof n === "string" && n ? n + " (you)" : "You") });
-    }
-    Object.keys(by).forEach(function (room) {
-      by[room].sort(function (a, b) {
-        if (a.you !== b.you) { return a.you ? -1 : 1; }
-        return a.label.toLowerCase() < b.label.toLowerCase() ? -1 : 1;
-      });
-    });
-    return by;
-  }
-  function renderTree() {
-    var box = $("tree");
-    clear(box);
-    if (!V) { box.appendChild(el("div", "row muted", "The voice service is not connected.")); return; }
-    var here = hereRoom(), known = {}, children = {}, people = peopleByRoom(), drawn = {};
-    V.tree.forEach(function (r) { known[r.id] = true; });
-    V.tree.forEach(function (r) {
-      var parent = r.parent && known[r.parent] && r.parent !== r.id ? r.parent : "";
-      (children[parent] = children[parent] || []).push(r);
-    });
-    function person(p, into) {
-      var talking = p.you ? V.ptt : isSpeaking(p.guid), muted = !p.you && isMuted(p.guid);
-      var row = el("div", "row member" + (p.you ? " you" : "") + (talking ? " speaking" : "") + (muted ? " muted" : ""));
-      row.dataset.guid = String(p.guid);
-      row.tabIndex = 0;
-      row.appendChild(el("span", "light"));
-      row.appendChild(el("span", "mname", p.label));
-      var db = V.volumes[p.guid];
-      if (!p.you && typeof db === "number" && db !== 0) {
-        row.appendChild(el("span", "tag", (db > 0 ? "+" : "") + db.toFixed(1) + " dB"));
-      }
-      if (muted) { row.appendChild(el("span", "tag", "muted")); }
-      into.appendChild(row);
-    }
-    function room(r, into) {
-      if (drawn[r.id]) { return; }
-      drawn[r.id] = true;
-      var inside = people[r.id] || [], subs = children[r.id] || [], open = !collapsed[r.id];
-      var row = el("div", "row room" + (r.id === here ? " here" : ""));
-      row.dataset.room = r.id;
-      row.tabIndex = 0;
-      row.title = r.id === here ? "You are here" : "Join " + (str(r.name) || r.id);
-      row.appendChild(el("span", "twist" + (inside.length || subs.length ? "" : " none"), open ? "▾" : "▸"));
-      if (r.locked === true) { row.appendChild(el("span", "padlock", "▣")); }
-      row.appendChild(el("span", "rname", str(r.name) || r.id));
-      var cap = num(r.capacity);
-      if (inside.length || cap) { row.appendChild(el("span", "count", "(" + inside.length + (cap ? "/" + cap : "") + ")")); }
-      into.appendChild(row);
-      if (open && (inside.length || subs.length)) {
-        var kids = el("div", "kids");
-        inside.forEach(function (p) { person(p, kids); });
-        subs.forEach(function (c) { room(c, kids); });
-        into.appendChild(kids);
-      }
-    }
-    (children[""] || []).forEach(function (r) { room(r, box); });
-    V.tree.forEach(function (r) { room(r, box); });
-    Object.keys(people).filter(function (r) { return !known[r]; }).forEach(function (r) {
-      room({ id: r, name: r, locked: false, capacity: 0 }, box);
-    });
-  }
-
-  // -- comms: one feed of voice and text -----------------------------------------------------------
-
-  function addTranscript(t, quiet) {
-    var kind = own({ say: 1, you: 1, whisper: 1, system: 1 }, t.kind) ? t.kind : "say";
-    TRANS.push({ ms: num(t.ts) || Date.now(), who: str(t.who), text: str(t.text), kind: kind,
-                 note: !!t.note });
-    if (TRANS.length > KEEP * 2) { TRANS.splice(0, TRANS.length - KEEP * 2); }
-    if (!quiet) { renderFeed(true); }
-  }
-  function note(text) { addTranscript({ who: "", text: text, ts: Date.now(), kind: "system", note: true }); }
-  function addChat(lines) {
-    arr(lines).forEach(function (l) {
-      if (!l || typeof l.id !== "number" || seen[l.id]) { return; }
-      seen[l.id] = true;
-      CHAT.push(l);
-    });
-    CHAT.sort(function (a, b) { return a.id - b.id; });
-    if (CHAT.length > KEEP) {
-      CHAT.splice(0, CHAT.length - KEEP).forEach(function (l) { delete seen[l.id]; });
-    }
-  }
-  function feedItems() {
-    var want = FILTERS[filter], out = [];
-    TRANS.forEach(function (t) {
-      if (t.kind === "system") { out.push({ ms: t.ms, chan: "system", t: t }); return; }
-      if (!want || want.indexOf("voice") >= 0) { out.push({ ms: t.ms, chan: "voice", t: t }); }
-    });
-    CHAT.forEach(function (l) {
-      if (!want || want.indexOf(l.channel) >= 0) { out.push({ ms: num(l.ts) * 1000, chan: l.channel, l: l }); }
-    });
-    out.sort(function (a, b) { return a.ms - b.ms; });
-    return out;
-  }
-  function itemEl(it) {
-    var row = el("div", "line c-" + it.chan);
-    row.appendChild(el("span", "ts", clock(it.ms) + " "));
-    if (it.chan === "system") {
-      row.appendChild(el("span", "msg", it.t.text));
-      return row;
-    }
-    row.appendChild(el("span", "chan", "[" + (CHANNEL_TAGS[it.chan] || it.chan) + "] "));
-    if (it.t) {
-      var t = it.t;
-      if (t.kind === "you") { row.classList.add("mine"); }
-      if (t.who) { row.appendChild(el("span", "who", t.who + (t.kind === "whisper" ? " whispers: " : ": "))); }
-      row.appendChild(el("span", "msg", t.text));
-      return row;
-    }
-    var l = it.l, who;
-    if (l.you) { row.classList.add("mine"); }
-    if (l.channel === "whisper") {
-      who = l.you ? "To " + (l.to || "#" + l.to_guid) + ": " : (l.from || "#" + l.from_guid) + " whispers: ";
-    } else {
-      who = (l.from || "#" + l.from_guid) + ": ";
-    }
-    row.appendChild(el("span", "who", who));
-    row.appendChild(el("span", "msg", str(l.text)));
-    return row;
-  }
-  function renderFeed(keepPlace) {
-    var box = $("feed");
-    var stick = !keepPlace || box.scrollHeight - box.scrollTop - box.clientHeight < 40;
-    clear(box);
-    var items = feedItems();
-    if (!items.length) { box.appendChild(el("div", "line muted", "Nothing said yet.")); }
-    items.forEach(function (it) { box.appendChild(itemEl(it)); });
-    if (stick) { box.scrollTop = box.scrollHeight; }
-  }
-
-  // -- comms: invites, the banner, the voice status ------------------------------------------------
-
-  function renderToasts() {
-    var box = $("toasts");
-    clear(box);
-    if (!V) { return; }
-    V.invites.forEach(function (inv) {
-      var t = el("div", "toast");
-      t.appendChild(el("div", "", name(inv.from) + " asks you to join " + roomName(inv.channel) + "."));
-      var acts = el("div", "acts");
-      var ignore = el("button", "", "Ignore");
-      ignore.type = "button";
-      ignore.addEventListener("click", function () { dropInvite(inv); });
-      var join = el("button", "", "Join");
-      join.type = "button";
-      join.addEventListener("click", function () { askJoin(inv.channel); dropInvite(inv); });
-      acts.appendChild(ignore);
-      acts.appendChild(join);
-      t.appendChild(acts);
-      box.appendChild(t);
-    });
-  }
-  function dropInvite(inv) {
-    if (!V) { return; }
-    V.invites = V.invites.filter(function (i) { return i !== inv; });
-    renderToasts();
-  }
-  function renderBanner() {
-    var b = $("comms-banner"), text = "", bad = false;
-    if (!ST.voice.enabled) { text = "Voice is off in mind.toml ([voice] enabled = false)."; }
-    else if (!V) { text = "The voice service is not running. Start it from the Mind tab."; bad = true; }
-    else if (!V.mind) {
-      text = ST.mind.state === "running"
-        ? "The mind is running but not connected to the voice service yet: members stay quiet."
-        : "The mind is " + ST.mind.state + ": members stay quiet and push-to-talk is discarded until it is back.";
-    }
-    b.textContent = text;
-    b.hidden = !text;
-    b.classList.toggle("bad", bad);
-  }
-  function seg(id, text, bad) {
-    var e = $(id);
-    e.textContent = text;
-    e.classList.toggle("bad", !!bad);
-  }
-  function renderVoiceStatus() {
-    var s = V ? V.status : {}, errs = arr(s.errors);
-    seg("v-out", "Output: " + (s.ok === true ? "ok" : s.ok === false ? "down" : "-"), s.ok === false);
-    seg("v-mic", "Mic: " + (str(s.mic) || "-"), s.mic === "missing");
-    seg("v-stt", "Recognition: " + (str(s.stt) || "-"), s.stt === "off");
-    seg("v-queue", "Queue: " + (typeof s.queue === "number" ? s.queue : "-"), false);
-    seg("v-err", errs.length ? errs.length + (errs.length === 1 ? " problem" : " problems") : "No problems", errs.length > 0);
-    $("v-err").title = errs.join(", ");
-  }
-  function renderComms() { renderTree(); renderToasts(); renderVoiceStatus(); renderBanner(); }
-
-  // -- comms: what he does --------------------------------------------------------------------------
-
-  function refusal(room, reason) {
-    var r = roomName(room);
-    if (reason === "offline") {
-      return ST.bridge === false
-        ? "The game bridge is down, so the mind cannot see you in game: " + r + " stays closed."
-        : "You're not in game: rooms open when you log in.";
-    }
-    if (reason === "locked") { return r + " is locked."; }
-    if (reason === "full") { return r + " is full."; }
-    if (reason === "unknown") { return r + " does not exist."; }
-    return r + " cannot be joined.";
-  }
-  function askJoin(room) {
-    post("/api/voice", { type: "join", channel: room }).then(function (j) {
-      if (!j.ok) { note(j.error || "That room cannot be joined now."); }
-    }, function () { note("The console is not reachable."); });
-  }
-  function setVolume(guid, db) {
-    db = Math.max(-DB_LIMIT, Math.min(DB_LIMIT, db));
-    if (V) { if (db === 0) { delete V.volumes[guid]; } else { V.volumes[guid] = db; } }
-    post("/api/voice", { type: "volume", guid: guid, db: db }).then(function (j) {
-      if (!j.ok) { note(j.error || "The volume did not change."); }
-    });
-    renderTree();
-  }
-  function setMute(guid, on) {
-    if (V) {
-      V.mutes = V.mutes.filter(function (g) { return g !== guid; });
-      if (on) { V.mutes.push(guid); }
-    }
-    post("/api/voice", { type: "mute", guid: guid, on: on }).then(function (j) {
-      if (!j.ok) { note(j.error || "Mute did not change."); }
-    });
-    renderTree();
-  }
-  function closeMenu() { $("menu").hidden = true; menuGuid = 0; }
-  function fmtDb(db) { return (db > 0 ? "+" : db < 0 ? "-" : "") + Math.abs(db).toFixed(1) + " dB"; }
-  function openMenu(guid, x, y) {
-    var menu = $("menu"), db = (V && V.volumes[guid]) || 0;
-    menuGuid = guid;
-    $("menu-name").textContent = name(guid);
-    $("menu-vol").value = String(db);
-    $("menu-db").textContent = fmtDb(db);
-    $("menu-mute").checked = isMuted(guid);
-    menu.hidden = false;
-    menu.style.left = Math.max(4, Math.min(x, window.innerWidth - menu.offsetWidth - 4)) + "px";
-    menu.style.top = Math.max(4, Math.min(y, window.innerHeight - menu.offsetHeight - 4)) + "px";
-    $("menu-vol").focus();
-  }
-  $("menu-vol").addEventListener("input", function () { $("menu-db").textContent = fmtDb(Number(this.value)); });
-  $("menu-vol").addEventListener("change", function () { if (menuGuid) { setVolume(menuGuid, Number(this.value)); } });
-  $("menu-mute").addEventListener("change", function () { if (menuGuid) { setMute(menuGuid, this.checked); } });
-  $("menu-reset").addEventListener("click", function () {
-    $("menu-vol").value = "0";
-    $("menu-db").textContent = fmtDb(0);
-    if (menuGuid) { setVolume(menuGuid, 0); }
-  });
-  document.addEventListener("mousedown", function (ev) {
-    if (!$("menu").hidden && !$("menu").contains(ev.target)) { closeMenu(); }
-  });
-  document.addEventListener("keydown", function (ev) { if (ev.key === "Escape") { closeMenu(); closeConfirm(); } });
-  window.addEventListener("resize", closeMenu);
-  $("tree").addEventListener("scroll", closeMenu);
-  $("tree").addEventListener("contextmenu", function (ev) {
-    var row = ev.target.closest(".member");
-    if (!row || row.classList.contains("you")) { closeMenu(); return; }
-    ev.preventDefault();
-    openMenu(Number(row.dataset.guid), ev.clientX, ev.clientY);
-  });
-  $("tree").addEventListener("click", function (ev) {
-    var row = ev.target.closest(".room");
-    if (!row) { return; }
-    var id = row.dataset.room;
-    if (ev.target.closest(".twist")) {
-      if (collapsed[id]) { delete collapsed[id]; } else { collapsed[id] = true; }
-      saveCollapsed();
-      renderTree();
-    } else if (id !== hereRoom()) {
-      askJoin(id);
-    }
-  });
-  $("tree").addEventListener("keydown", function (ev) {
-    var row = ev.target.closest ? ev.target.closest(".row") : null;
-    if (!row || (ev.key !== "Enter" && ev.key !== " ")) { return; }
-    ev.preventDefault();
-    if (row.dataset.room !== undefined) {
-      if (row.dataset.room !== hereRoom()) { askJoin(row.dataset.room); }
-    } else if (!row.classList.contains("you")) {
-      var box = row.getBoundingClientRect();
-      openMenu(Number(row.dataset.guid), box.left + 24, box.bottom);
-    }
-  });
-  $("chips").addEventListener("click", function (ev) {
-    var b = ev.target.closest("button");
-    if (!b) { return; }
-    filter = b.dataset.f;
-    var all = $("chips").querySelectorAll("button");
-    for (var i = 0; i < all.length; i++) { all[i].setAttribute("aria-pressed", String(all[i] === b)); }
-    renderFeed(false);
-  });
-
-  // -- what the voice service sends (through the console) -------------------------------------------
-
-  var VOICE = {
-    state: function (m) { adoptVoice(m); renderComms(); renderFeed(false); renderStrip(); },
-    down: function () { V = null; renderComms(); renderStrip(); },
-    speaking: function (m) {
-      if (!V) { return; }
-      V.speaking = V.speaking.filter(function (g) { return g !== m.guid; });
-      if (m.on === true) { V.speaking.push(m.guid); }
-      renderTree(); renderStrip();
-    },
-    ptt: function (m) { if (V) { V.ptt = m.down === true; renderTree(); renderStrip(); } },
-    moved: function (m) {
-      if (!V) { return; }
-      var g = String(m.guid), room = str(m.channel), before = V.where[g];
-      if (room) { V.where[g] = room; } else { delete V.where[g]; }
-      if (V.human && Number(m.guid) === V.human) {
-        V.room = room;
-        V.invites = V.invites.filter(function (i) { return i.channel !== room; });
-      }
-      V.invites = V.invites.filter(function (i) {
-        return !(String(i.from) === g && before === i.channel && room !== i.channel);
-      });
-      renderTree(); renderToasts(); renderStrip();
-    },
-    invite: function (m) {
-      if (!V || !str(m.channel)) { return; }
-      if (!V.invites.some(function (i) { return i.from === m.from && i.channel === m.channel; })) {
-        V.invites.push({ from: m.from, channel: m.channel });
-      }
-      renderToasts();
-    },
-    refused: function (m) {
-      note(refusal(str(m.channel), m.reason));
-      if (V) { V.invites = V.invites.filter(function (i) { return i.channel !== m.channel; }); }
-      renderToasts();
-    },
-    transcript: function (m) { addTranscript(m, false); },
-    status: function (m) {
-      if (!V) { return; }
-      var s = {};
-      Object.keys(m).forEach(function (k) { if (k !== "type") { s[k] = m[k]; } });
-      V.status = s;
-      renderVoiceStatus();
-    },
-    mind: function (m) { if (V) { V.mind = m.up === true; renderBanner(); } }
-  };
-
-  // -- the mind tab ---------------------------------------------------------------------------------
-
-  function setText(id, text) { $(id).textContent = text; }
-  function bytes(n) {
-    if (typeof n !== "number") { return "-"; }
-    return n >= 1e9 ? (n / 1e9).toFixed(1) + " GB" : (n / 1e6).toFixed(0) + " MB";
-  }
-  function serviceButtons(svc, can) {
-    var buttons = document.querySelectorAll('button[data-svc="' + svc + '"]');
-    for (var i = 0; i < buttons.length; i++) { buttons[i].disabled = !can[buttons[i].dataset.act]; }
-  }
-  function renderMind() {
-    var m = ST.mind, c = obj(ST.control), svc = obj(c.services), busy = c.busy;
-    setPill("m-state", mindClass(m.state), m.state, "");
-    setText("m-proc", m.pid ? "pid " + m.pid + (arr(m.pids).length > 1 ? " (launcher " + m.pids[m.pids.length - 1] + ")" : "") : "none");
-    setText("m-lock", m.lock ? "held" : "free");
-    var why = svc.mind || (busy ? busy[1] + " of the " + busy[0] + " is running" : "") || m.detail || "";
-    var wm = $("m-why");
-    wm.textContent = why;
-    wm.classList.toggle("bad", m.state === "crashed" || m.state === "unknown");
-    var ok = !svc.mind && !busy;
-    serviceButtons("mind", { start: ok && (m.state === "stopped" || m.state === "crashed"),
-                             restart: ok && m.state === "running",
-                             stop: ok && (m.state === "running" || m.state === "starting") });
-    var v = ST.voice, hv = lastHealth ? obj(lastHealth.voice) : {};
-    var up = v.service || hv.lock === true;
-    setPill("w-state", up ? "ok" : "", up ? "running" : "stopped", "");
-    setText("w-proc", hv.pid ? "pid " + hv.pid : up ? "running" : "none");
-    setText("w-ports", hv.ui_port ? "page " + hv.ui_port + ", mind " + hv.mind_port : "-");
-    setText("w-link", !v.service ? "-" : v.link ? "the mind is connected" : "the mind is not connected");
-    var vok = !svc.voice && !busy;
-    $("w-why").textContent = svc.voice || hv.detail || "";
-    serviceButtons("voice", { start: vok && !up, restart: vok && up, stop: vok && up });
-    setText("h-bridge", m.state !== "running" ? "- (the mind is not running)" : ST.bridge === true ? "connected" : ST.bridge === false ? "down" : "unknown");
-    setText("h-vlink", !v.enabled ? "voice off" : !v.service ? "voice service down" : v.link ? "linked" : "not linked");
-    setText("h-game", gameWords().replace(/^you: /, "") + (ST.game.reason ? " (" + ST.game.reason + ")" : ""));
-  }
-  function renderLog(id, records) {
-    var box = $(id);
-    clear(box);
-    if (!records.length) { box.appendChild(el("div", "muted", "None.")); return; }
-    records.forEach(function (r) {
-      var f = obj(r.fields), parts = Object.keys(f).map(function (k) { return k + "=" + f[k]; });
-      var ts = str(r.ts).replace(/^\d{4}-\d\d-\d\dT/, "").replace(/\.\d+([+-].*|Z)?$/, "");
-      var line = el("div", "r " + str(r.level), ts + " " + str(r.level).toLowerCase() + " " + str(r.event)
-                    + (parts.length ? " " + parts.join(" ") : "") + (r.exc ? " (" + r.exc + ")" : ""));
-      box.appendChild(line);
-    });
-    box.scrollTop = box.scrollHeight;
-  }
-  function renderHealth(h) {
-    lastHealth = h;
-    setText("m-data", str(obj(h.mind).data_dir) || "-");
-    var ep = obj(h.endpoint);
-    setText("m-stop", ep.ok ? "clean: the mind's own shutdown, through its control endpoint"
-            : "by force" + (ep.detail ? " (" + str(ep.detail) + ")" : ""));
-    var night = h.night;
-    setText("h-night", night ? night.night + ": " + night.status + (night.finished ? ", finished " + hhmm(night.finished) : "") : "no night run yet");
-    var cfg = $("h-config");
-    cfg.textContent = str(h.config);
-    cfg.hidden = !h.config;
-    var o = obj(h.ollama), rows = $("h-models");
-    clear(rows);
-    setText("h-ollama", o.ok ? arr(o.models).length + " resident at " + str(o.url) : str(o.error));
-    arr(o.models).forEach(function (mdl) {
-      var tr = el("tr");
-      [str(mdl.name), str(mdl.role) || "-", bytes(mdl.size), bytes(mdl.vram),
-       mdl.expires ? (/^0001-/.test(mdl.expires) ? "pinned" : str(mdl.expires).replace("T", " ").slice(0, 16)) : "-"]
-        .forEach(function (cell) { tr.appendChild(el("td", "", cell)); });
-      rows.appendChild(tr);
-    });
-    if (o.ok && !arr(o.models).length) {
-      var tr = el("tr"), td = el("td", "muted", "No model is loaded.");
-      td.colSpan = 5;
-      tr.appendChild(td);
-      rows.appendChild(tr);
-    }
-    var g = obj(h.gpu), box = $("h-gpu");
-    clear(box);
-    box.className = g.ok ? "" : "muted";
-    if (!g.ok) { box.textContent = str(g.error) || "-"; }
-    arr(g.gpus).forEach(function (gpu) {
-      box.appendChild(el("div", "", str(gpu.name) + ": " + (gpu.free_mb / 1024).toFixed(1) + " GB free of "
-                         + (gpu.total_mb / 1024).toFixed(1) + " GB, " + gpu.util + "% busy"));
-      var bar = el("div", "bar"), fill = el("i");
-      fill.style.width = Math.min(100, Math.round(100 * gpu.used_mb / Math.max(1, gpu.total_mb))) + "%";
-      bar.appendChild(fill);
-      box.appendChild(bar);
-    });
-    renderLog("h-errors", arr(h.errors));
-    renderLog("h-log", arr(h.log));
-    if (h.strip) { ST = h.strip; renderStrip(); }
-    renderMind();
-  }
-  function pollHealth() {
-    if (healthBusy || tab !== "mind") { return; }
-    healthBusy = true;
-    api("/api/health").then(function (r) {
-      if (r.status === 403) { keyLost(); return null; }
-      return r.json();
-    }).then(function (h) { if (h) { renderHealth(h); } }, function () { /* the strip says it */ })
-      .then(function () { healthBusy = false; });
-  }
-
-  var pending = null;
-  function closeConfirm() { $("confirm").hidden = true; pending = null; }
-  function askConfirm(text, yes, then) {
-    pending = then;
-    $("confirm-text").textContent = text;
-    $("confirm-yes").textContent = yes;
-    $("confirm").hidden = false;
-    $("confirm-no").focus();
-  }
-  function act(svc, action, confirm) {
-    var why = $(svc === "mind" ? "m-why" : "w-why");
-    why.textContent = action + " requested…";
-    why.classList.remove("bad");
-    serviceButtons(svc, {});
-    post("/api/control", { service: svc, action: action, confirm: !!confirm }).then(function (j) {
-      if (j.confirm) {
-        askConfirm(j.confirm, action.charAt(0).toUpperCase() + action.slice(1),
-                   function () { act(svc, action, true); });
-        why.textContent = "";
-      } else {
-        why.textContent = j.ok ? j.message : (j.error || "it did not work");
-        why.classList.toggle("bad", !j.ok);
-      }
-      renderMind();
-      pollHealth();
-    }, function () { why.textContent = "The console is not reachable."; why.classList.add("bad"); });
-  }
-  document.querySelector(".mindtab").addEventListener("click", function (ev) {
-    var b = ev.target.closest("button[data-svc]");
-    if (b && !b.disabled) { act(b.dataset.svc, b.dataset.act, false); }
-  });
-  $("confirm-no").addEventListener("click", closeConfirm);
-  $("confirm-yes").addEventListener("click", function () {
-    var p = pending;
-    closeConfirm();
-    if (typeof p === "function") { p(); }
-  });
-
-  // -- the raid and guild tabs ----------------------------------------------------------------------
-
-  var RAID_MS = 3000, GUILD_MS = 30000;
-  var CLASSES = { 1: "Warrior", 2: "Paladin", 3: "Hunter", 4: "Rogue", 5: "Priest", 6: "Death Knight",
-                  7: "Shaman", 8: "Mage", 9: "Warlock", 11: "Druid" };
-  var RAID_STATES = { idle: ["no raid night open", ""], waiting_call: ["call pending", "warn"],
-                      called: ["call out", "warn"], forming: ["forming", "warn"],
-                      assembling: ["assembling", "ok"], running: ["under way", "ok"],
-                      ended: ["over for tonight", ""] };
-  var LOOT_STATES = { pending: "open for claims", sending: "being given", acknowledged: "given",
-                      charged: "awarded", unclaimed: "nobody needed it", failed: "could not be given",
-                      uncertain: "uncertain", cancelled: "cancelled" };
-  var ROLE_ORDER = { tank: 0, healer: 1, damage: 2 };
-  var RAID_LABEL = { call: "call the raid", summon: "summon", start: "start the run",
-                     stop: "stop the run", end: "end", form: "form the raid" };
-  var R = null, G = null, raidTimer = null, guildTimer = null, raidBusy = false, guildBusy = false;
-  var formReady = "";
-
-  function plural(n, one, many) { return n + " " + (n === 1 ? one : (many || one + "s")); }
-  function mmss(s) {
-    if (typeof s !== "number") { return ""; }
-    s = Math.max(0, Math.round(s));
-    return Math.floor(s / 60) + ":" + pad(s % 60);
-  }
-  function when(sec) {
-    if (!sec) { return ""; }
-    var d = new Date(sec * 1000), now = new Date();
-    var day = d.toDateString() === now.toDateString() ? "" : pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + " ";
-    return day + pad(d.getHours()) + ":" + pad(d.getMinutes());
-  }
-  function dkp(v) { return typeof v === "number" ? v.toFixed(1) : "-"; }
-  function cell(tr, text, cls) { tr.appendChild(el("td", cls || "", text)); }
-  function emptyRow(body, cols, text) {
-    var tr = el("tr"), td = el("td", "muted", text);
-    td.colSpan = cols;
-    tr.appendChild(td);
-    body.appendChild(tr);
-  }
-  function person(view, guid) {
-    return obj(obj(obj(view).people)[String(guid)]);
-  }
-  function who(view, guid) {
-    if (!guid) { return "-"; }
-    if (view && guid === view.human) { return "you"; }
-    return str(person(view, guid).name) || "#" + guid;
-  }
-  function raidName(view, key) {
-    var c = arr(obj(view).catalog);
-    for (var i = 0; i < c.length; i++) { if (c[i].key === key) { return str(c[i].name); } }
-    return str(key).toUpperCase();
-  }
-  function mode(size, heroic) { return (size ? " " + size : "") + (heroic ? " heroic" : ""); }
-  function roomOf(guid) {
-    if (!V) { return ""; }
-    var r = V.where[String(guid)];
-    return typeof r === "string" && r ? roomName(r) : "";
-  }
-
-  // The Raid tab: mind.db's view always; the live state and the actions while the mind's
-  // control endpoint answers
-  function raidControlsOff(ctl) {
-    if (!obj(ctl).enabled) { return str(ctl.reason) || "control is off"; }
-    if (ctl.busy) { return "a " + ctl.busy[1] + " of the " + ctl.busy[0] + " is running"; }
-    return "";
-  }
-  function fillForm(view) {
-    var key = JSON.stringify([arr(view.catalog).map(function (c) { return c.key; }),
-                              arr(view.officers).map(function (o) { return o.guid; })]);
-    if (key === formReady) { return; }
-    formReady = key;
-    var raid = $("r-raid"), lead = $("r-lead"), keepRaid = raid.value, keepLead = lead.value;
-    clear(raid); clear(lead);
-    arr(view.catalog).forEach(function (c) {
-      var o = el("option", "", str(c.name));
-      o.value = str(c.key);
-      o.dataset.heroic = c.heroic ? "1" : "";
-      raid.appendChild(o);
-    });
-    [["", "as guild life picks"], ["me", "me"], ["rotate", "someone new"]].forEach(function (p) {
-      var o = el("option", "", p[1]);
-      o.value = p[0];
-      lead.appendChild(o);
-    });
-    arr(view.officers).forEach(function (off) {
-      var o = el("option", "", str(off.name));
-      o.value = String(off.guid);
-      lead.appendChild(o);
-    });
-    if (keepRaid) { raid.value = keepRaid; }
-    if (keepLead) { lead.value = keepLead; }
-    heroicAllowed();
-  }
-  function heroicAllowed() {
-    var opt = $("r-raid").selectedOptions[0], ok = !!(opt && opt.dataset.heroic);
-    $("r-heroic").disabled = !ok;
-    if (!ok) { $("r-heroic").checked = false; }
-  }
-  $("r-raid").addEventListener("change", heroicAllowed);
-
-  function raidFacts(view, live, run) {
-    var facts = [];
-    if (live) {
-      if (live.state === "waiting_call" && live.call_in !== null) { facts.push("the raid call goes out in " + mmss(live.call_in)); }
-      if (live.state === "called" && live.pick_left !== null) { facts.push("pick window: " + mmss(live.pick_left) + " left"); }
-      if (live.forming) { facts.push("forming " + raidName(view, live.forming.raid) + mode(live.forming.size, live.forming.heroic)); }
-      if (live.closing) { facts.push("the last raid is still closing (its standings and wrap-up)"); }
-      if (live.offline_raid) { facts.push("an offline raid is running or closing"); }
-      if (live.blocked) { facts.push(str(live.blocked)); }
-      else if (!live.present || !live.online) { facts.push("you're not in game: raid actions wait until you are"); }
-      if (run) {
-        facts.push(run.in_zone ? "you are in " + raidName(view, run.raid) : "you are not in " + raidName(view, run.raid) + " yet");
-        facts.push(plural(arr(run.inside).length, "member") + " summoned inside of " + arr(run.members).length);
-        if (arr(run.late).length) {
-          facts.push(plural(run.late.length, "late member") + " still on the way (next in " + mmss(Math.min.apply(null, run.late.map(function (l) { return num(l[1]); }))) + ")");
-        }
-        if (run.pull) { facts.push("a pull is under way"); }
-        if (run.ready_in !== null) { facts.push("ready check in " + mmss(run.ready_in)); }
-        if (run.dc_in !== null) { facts.push((run.countdown ? "dungeon-clear starts in " : "pull countdown in ") + mmss(run.countdown ? run.dc_in : Math.max(0, run.dc_in - 5))); }
-        facts.push(run.lead_is_human ? "you lead: dungeon-clear does not run"
-                   : run.dc === "on" ? "dungeon-clear is running" : run.dc === "held" ? "dungeon-clear is stopped (Start resumes it)"
-                   : "dungeon-clear has not started");
-      }
-    }
-    if (view && view.quiet_night) { facts.push("tonight is a quiet night (a hangout was called)"); }
-    return facts;
-  }
-  function renderRaid(j) {
-    R = j;
-    var view = obj(j.view), m = obj(j.mind), live = m.ok ? obj(m.raid) : null, ctl = obj(j.control);
-    if (live && !live.state) { live = null; }
-    var run = live ? live.run : null, open = view.open || null;
-    if (j.view) { fillForm(view); }
-    var off = raidControlsOff(ctl), banner = [];
-    if (!j.view) { banner.push("mind.db could not be read just now."); }
-    if (!m.ok) { banner.push("The raid night's live state and its actions are unavailable: " + str(m.error) + "."); }
-    else if (!live) { banner.push("The mind answers but runs no guild life, so it has no raid night."); }
-    if (off && m.ok) { banner.push("Raid actions are off here: " + off + "."); }
-    $("raid-banner").textContent = banner.join(" ");
-    $("raid-banner").hidden = !banner.length;
-    var st = live ? RAID_STATES[live.state] || [live.state, ""] : open ? ["open in mind.db", "warn"] : ["-", ""];
-    setPill("r-state", st[1], st[0], "");
-    var summary = "No raid is open.";
-    var shown = open || (run ? { raid: run.raid, size: run.size, heroic: run.heroic, lead: run.lead,
-                                 tank: run.tank, loot: run.loot, kills: run.kills, wipes: run.wipes } : null);
-    if (shown) {
-      var o = obj(shown);
-      summary = raidName(view, o.raid) + mode(o.size, o.heroic) + (o.offline ? " (offline)" : "")
-        + " · lead " + who(view, o.lead) + " · tank " + who(view, o.tank) + " · loot " + who(view, o.loot)
-        + (o.started ? " · since " + when(o.started) : "")
-        + " · " + plural(num(o.kills), "kill") + (o.bosses ? " of " + o.bosses : "") + ", " + plural(num(o.wipes), "wipe");
-    }
-    setText("r-summary", summary);
-    var facts = $("r-facts");
-    clear(facts);
-    raidFacts(view, live, run).forEach(function (f) { facts.appendChild(el("li", "", f)); });
-    var actions = live ? obj(live.actions) : {};
-    var buttons = document.querySelectorAll("button[data-raid]");
-    for (var i = 0; i < buttons.length; i++) {
-      var a = buttons[i].dataset.raid, why = !live ? str(m.error) || "unavailable" : off || actions[a];
-      buttons[i].disabled = !!why;
-      buttons[i].title = why ? str(why) : "";
-    }
-    var formWhy = !live ? str(m.error) || "unavailable" : off || actions.form;
-    $("r-go").disabled = !!formWhy;
-    $("r-go").title = formWhy ? str(formWhy) : "";
-    renderRaidMembers(view, open, run);
-    renderRaidLoot(view, open);
-    renderRaidDkp(view, open);
-    renderRecent(view);
-  }
-  function renderRaidMembers(view, open, run) {
-    var body = $("r-members"), members = arr(open ? open.members : run ? run.members : []);
-    var inside = {}, late = {};
-    if (run) {
-      arr(run.inside).forEach(function (g) { inside[g] = true; });
-      arr(run.late).forEach(function (l) { late[l[0]] = l[1]; });
-    }
-    clear(body);
-    var rows = members.map(function (g) { return { g: g, p: person(view, g) }; });
-    rows.sort(function (a, b) {
-      var ra = ROLE_ORDER[a.p.role], rb = ROLE_ORDER[b.p.role];
-      if (ra !== rb) { return (ra === undefined ? 9 : ra) - (rb === undefined ? 9 : rb); }
-      return str(a.p.name).toLowerCase() < str(b.p.name).toLowerCase() ? -1 : 1;
-    });
-    rows.forEach(function (r) {
-      var tr = el("tr", r.p.online === false ? "off" : "");
-      var tags = [];
-      if (open && r.g === open.lead) { tags.push("lead"); }
-      if (open && r.g === open.tank) { tags.push("tank"); }
-      if (open && r.g === open.loot) { tags.push("loot"); }
-      cell(tr, who(view, r.g) + (tags.length ? " (" + tags.join(", ") + ")" : ""));
-      cell(tr, str(r.p.role) || "-", "role-" + str(r.p.role));
-      cell(tr, (CLASSES[r.p["class"]] || "-") + (r.p.spec ? " " + r.p.spec : ""));
-      cell(tr, r.p.level ? String(r.p.level) : "-", "num");
-      cell(tr, r.p.online ? "online" : "offline");
-      cell(tr, roomOf(r.g) || "-");
-      cell(tr, !run ? "-" : inside[r.g] ? "inside" : own(late, r.g) ? "late, " + mmss(late[r.g]) : "on the way");
-      cell(tr, dkp(obj(view.balances)[String(r.g)]), "num");
-      body.appendChild(tr);
-    });
-    if (!rows.length) { emptyRow(body, 8, open || run ? "Nobody is listed for this raid." : "No raid is open."); }
-    setText("r-count", members.length ? plural(members.length, "member") + (open && open.human_in_raid ? " and you" : "") : "");
-    var bench = arr(open ? open.bench : run ? run.bench : []);
-    setText("r-bench", bench.length ? "Bench: " + bench.map(function (g) { return who(view, g); }).join(", ") : "");
-  }
-  function renderRaidLoot(view, open) {
-    var body = $("r-loot"), items = arr(open && open.loot_items);
-    clear(body);
-    items.forEach(function (it) {
-      var tr = el("tr");
-      cell(tr, str(it.name) || ("item " + (it.item_id || "?")));
-      cell(tr, typeof it.price === "number" ? String(it.price) : "-", "num");
-      cell(tr, (LOOT_STATES[it.state] || str(it.state)) + (it.claimed ? " (you claimed it)" : ""));
-      cell(tr, it.winner ? who(view, it.winner) : "-");
-      cell(tr, typeof it.paid === "number" ? dkp(it.paid) + (it.close ? " (close)" : "") : "-", "num");
-      body.appendChild(tr);
-    });
-    if (!items.length) { emptyRow(body, 5, open ? "No epic has dropped yet." : "No raid is open."); }
-    setText("r-lootn", items.length ? plural(items.length, "drop") : "");
-  }
-  function renderRaidDkp(view, open) {
-    var box = $("r-dkp"), events = arr(open && open.dkp && open.dkp.events);
-    clear(box);
-    events.slice().reverse().forEach(function (e) {
-      var text, amt = dkp(Math.abs(num(e.each)));
-      if (e.reason === "kill") { text = "+" + amt + " to " + plural(e.n, "member") + " for a kill"; }
-      else if (e.reason === "attendance") { text = "+" + amt + " attendance to " + plural(e.n, "member"); }
-      else if (e.reason === "standby") { text = "+" + amt + " standby to " + plural(e.n, "member"); }
-      else if (e.reason === "item") { text = who(view, e.guid) + " paid " + dkp(-num(e.total)) + (e.item ? " for " + e.item : ""); }
-      else { text = str(e.reason) + " " + dkp(num(e.total)) + (e.guid ? " for " + who(view, e.guid) : ""); }
-      box.appendChild(el("div", "r", when(e.ts) + "  " + text));
-    });
-    if (!events.length) { box.appendChild(el("div", "muted", open ? "No DKP has moved in this raid yet." : "No raid is open.")); }
-    box.scrollTop = box.scrollHeight;
-  }
-  function renderRecent(view) {
-    var body = $("r-recent"), raids = arr(view.recent);
-    clear(body);
-    raids.forEach(function (r) {
-      var tr = el("tr");
-      cell(tr, when(r.started));
-      cell(tr, raidName(view, r.raid) + mode(r.size, r.heroic) + (r.offline ? " (offline)" : ""));
-      cell(tr, who(view, r.lead));
-      cell(tr, String(num(r.kills)) + (r.bosses ? "/" + r.bosses : ""), "num");
-      cell(tr, String(num(r.wipes)), "num");
-      cell(tr, str(r.outcome).replace(/_/g, " ") || "-");
-      cell(tr, String(num(r.items)), "num");
-      cell(tr, r.mvp ? who(view, r.mvp.guid) + (r.mvp.votes ? " (" + plural(r.mvp.votes, "vote") + ")" : "") : "-");
-      body.appendChild(tr);
-    });
-    if (!raids.length) { emptyRow(body, 8, "No raid has ended yet."); }
-  }
-  function pollRaid() {
-    if (raidBusy || tab !== "raid") { return; }
-    raidBusy = true;
-    api("/api/raid").then(function (r) {
-      if (r.status === 403) { keyLost(); return null; }
-      return r.json();
-    }).then(function (j) { if (j) { renderRaid(j); } }, function () { /* the strip says it */ })
-      .then(function () { raidBusy = false; });
-  }
-  function raidAct(action, body) {
-    var why = $("r-why");
-    why.textContent = RAID_LABEL[action] + ": sent to the mind…";
-    why.classList.remove("bad");
-    post("/api/raid", body).then(function (j) {
-      why.textContent = j.ok ? str(j.message) : str(j.error) || "it did not work";
-      why.classList.toggle("bad", !j.ok);
-      pollRaid();
-    }, function () { why.textContent = "The console is not reachable."; why.classList.add("bad"); });
-  }
-  document.querySelector(".raidacts").addEventListener("click", function (ev) {
-    var b = ev.target.closest("button[data-raid]");
-    if (!b || b.disabled) { return; }
-    var action = b.dataset.raid;
-    if (action === "end") {
-      askConfirm(R && R.mind && R.mind.raid && R.mind.raid.state === "called"
-                 ? "Say no raid tonight? The guild is told." : "End tonight's raid? The standings and the wrap-up follow.",
-                 "End", function () { raidAct("end", { action: "end" }); });
-    } else if (action === "stop") {
-      askConfirm("Stop dungeon-clear? The raid goes on, and Start resumes it.", "Stop",
-                 function () { raidAct("stop", { action: "stop" }); });
-    } else {
-      raidAct(action, { action: action });
-    }
-  });
-  $("r-form").addEventListener("submit", function (ev) {
-    ev.preventDefault();
-    if ($("r-go").disabled) { return; }
-    var lead = $("r-lead").value, size = $("r-size").value;
-    raidAct("form", { action: "form", raid: $("r-raid").value, size: size ? Number(size) : null,
-                      heroic: $("r-heroic").checked,
-                      lead: lead === "" ? null : (lead === "me" || lead === "rotate") ? lead : Number(lead) });
-  });
-
-  // The Guild tab: mind.db only
-  function renderGuild(g) {
-    G = g;
-    var view = g, stats = obj(g.stats), roster = arr(g.roster);
-    $("guild-banner").hidden = true;
-    setText("g-count", plural(roster.length, "member") + ", " + roster.filter(function (p) { return p.online; }).length + " online");
-    setText("g-stats", plural(num(stats.raids), "raid") + " done (" + num(stats.offline) + " offline)"
-            + (stats.first ? " since " + when(stats.first) : "") + " · " + plural(num(stats.kills), "kill") + ", "
-            + plural(num(stats.wipes), "wipe") + " · " + plural(num(stats.items), "item") + " awarded · DKP "
-            + dkp(num(stats.awarded)) + " earned, " + dkp(num(stats.spent)) + " spent, " + dkp(num(stats.decayed)) + " decayed");
-    var body = $("g-roster");
-    clear(body);
-    roster.forEach(function (p) {
-      var tr = el("tr", p.online ? "" : "off");
-      cell(tr, str(p.name) + (p.guid === g.human ? " (you)" : ""));
-      cell(tr, CLASSES[p["class"]] || "-");
-      cell(tr, str(p.spec) || "-");
-      cell(tr, str(p.role) || "-", "role-" + str(p.role));
-      cell(tr, String(num(p.level)), "num");
-      cell(tr, String(num(p.rank)), "num");
-      cell(tr, str(p.guild_role) + (p.officer_title ? " (" + p.officer_title + ")" : "") || "-");
-      cell(tr, p.online ? "online" : "offline");
-      cell(tr, roomOf(p.guid) || "-");
-      body.appendChild(tr);
-    });
-    if (!roster.length) { emptyRow(body, 9, "The mind has no roster yet."); }
-    body = $("g-ladder");
-    clear(body);
-    arr(g.ladder).forEach(function (e, i) {
-      var tr = el("tr");
-      cell(tr, String(i + 1), "num");
-      cell(tr, who(view, e.guid));
-      [e.balance, e.earned, e.spent, e.decay].forEach(function (v) { cell(tr, dkp(v), "num"); });
-      [e.items, e.raids, e.benched].forEach(function (v) { cell(tr, String(num(v)), "num"); });
-      body.appendChild(tr);
-    });
-    if (!arr(g.ladder).length) { emptyRow(body, 9, "No DKP has been awarded yet."); }
-    body = $("g-loot");
-    clear(body);
-    arr(g.loot).forEach(function (l) {
-      var tr = el("tr");
-      cell(tr, when(l.ts));
-      cell(tr, str(l.item) || ("item " + (l.item_id || "?")));
-      cell(tr, who(view, l.guid));
-      cell(tr, dkp(l.paid), "num");
-      cell(tr, l.raid ? str(l.raid).toUpperCase() + mode(l.size, l.heroic) : "-");
-      body.appendChild(tr);
-    });
-    if (!arr(g.loot).length) { emptyRow(body, 5, "No item has been awarded yet."); }
-    var box = $("g-awards"), seasons = {}, order = [];
-    clear(box);
-    arr(g.awards).forEach(function (a) {
-      if (!seasons[a.season]) { seasons[a.season] = []; order.push(a.season); }
-      seasons[a.season].push(a);
-    });
-    order.forEach(function (s) {
-      var sec = el("div", "season");
-      sec.appendChild(el("h4", "", "Season " + s));
-      seasons[s].forEach(function (a) {
-        sec.appendChild(el("div", "", str(a.title) + ": " + who(view, a.guid) + " (" + num(a.value) + ")"));
-      });
-      box.appendChild(sec);
-    });
-    if (!order.length) { box.appendChild(el("div", "muted", "No season has ended yet.")); }
-    box = $("g-chronicle");
-    clear(box);
-    arr(g.chronicle).forEach(function (c) {
-      var e = el("div", "entry");
-      e.appendChild(el("div", "meta", str(c.week) + " · " + str(c.era) + " · by " + who(view, c.author)));
-      e.appendChild(el("p", "", str(c.text)));
-      box.appendChild(e);
-    });
-    if (!arr(g.chronicle).length) { box.appendChild(el("div", "muted", "The chronicle is empty.")); }
-  }
-  function pollGuild() {
-    if (guildBusy || tab !== "guild") { return; }
-    guildBusy = true;
-    api("/api/guild").then(function (r) {
-      if (r.status === 403) { keyLost(); return null; }
-      return r.json().then(function (j) { return { status: r.status, j: j }; });
-    }).then(function (x) {
-      if (!x) { return; }
-      if (x.status === 200) { renderGuild(x.j); }
-      else { $("guild-banner").textContent = str(x.j.error) || "mind.db could not be read."; $("guild-banner").hidden = false; }
-    }, function () { /* the strip says it */ })
-      .then(function () { guildBusy = false; });
-  }
-
-  // The Personas tab: mind.db only, and read-only: nothing here can change a persona
-  var PERSONAS_MS = 30000;  // as the Guild tab: the live mind writes this database meanwhile
-  var TRAITS = ["openness", "conscientiousness", "extraversion", "agreeableness", "neuroticism"];
-  var BY = { seed: "the seeding", owner: "you (an import or a personas command)", generator: "the generator",
-             night: "the night's looks pass", stance: "a stance move", undo: "an undo of a stance move" };
-  var LEDGER_KINDS = { note_added: "note added", note_dropped: "note dropped", note_rolled_back: "note rolled back (drift)",
-                       drift_flag: "drift flag", stance_band: "stance move", undo: "undo" };
-  var personasTimer = null, personasBusy = false, pick = 0, pickSeq = 0;
-
-  function signed(v, places) { return typeof v === "number" ? (v > 0 ? "+" : "") + v.toFixed(places) : "-"; }
-  function pname(view, guid) {
-    if (!guid) { return "-"; }
-    if (view && guid === view.human) { return "you"; }
-    return str(obj(obj(view).names)[String(guid)]) || "#" + guid;
-  }
-  function tdT(tr, text, cls, title) {
-    var td = el("td", cls || "", text);
-    if (title) { td.title = title; }
-    tr.appendChild(td);
-  }
-  function kv(dl, pairs) {
-    clear(dl);
-    pairs.forEach(function (p) {
-      if (p[1] === null || p[1] === undefined || p[1] === "") { return; }
-      dl.appendChild(el("dt", "", p[0]));
-      dl.appendChild(el("dd", "", String(p[1])));
-    });
-  }
-  function moodText(m) { return m ? str(m.octant) : "not recorded yet"; }
-  function moodTitle(m) {
-    return m ? "pleasure " + signed(m.p, 2) + ", arousal " + signed(m.a, 2) + ", dominance " + signed(m.d, 2)
-               + ", set by the night's mood stage " + when(m.updated)
-             : "The night's mood stage has not set one yet.";
-  }
-  function youText(y) {
-    if (!y) { return "no row yet"; }
-    var bits = ["affinity " + signed(y.affinity, 0)];
-    if (y.attraction) { bits.push("attraction " + Math.round(y.attraction)); }
-    if (y.romance_stage && y.romance_stage !== "none") { bits.push(y.romance_stage); }
-    return bits.join(", ");
-  }
-  function youTitle(y) {
-    return y ? "trust " + Math.round(num(y.trust)) + ", respect " + Math.round(num(y.respect)) + ", familiarity "
-               + Math.round(num(y.familiarity)) + (y.label ? ", " + y.label : "") : "";
-  }
-  function tiesText(view, t) {
-    if (!t) { return "unavailable"; }
-    if (!arr(t.top).length) { return "none yet"; }
-    return t.top.map(function (r) { return pname(view, r.guid) + " " + signed(r.affinity, 0); }).join(", ")
-      + (t.total > t.top.length ? " (+" + (t.total - t.top.length) + " more)" : "");
-  }
-  function memText(m) {
-    if (!m) { return "unavailable"; }
-    return m.total ? m.recent + " / " + m.total : "none yet";
-  }
-  function personaText(p) {
-    if (!p) { return "no persona"; }
-    return "v" + p.version + " · " + when(p.updated) + " · " + (BY[p.by] || str(p.by)) + (p.readable ? "" : " (unreadable)");
-  }
-  function biggestShift(traits) {
-    var best = null, values = obj(obj(traits).values);
-    TRAITS.forEach(function (t) {
-      var v = values[t];
-      if (v && typeof v.shift === "number" && (!best || Math.abs(v.shift) > Math.abs(best[1]))) { best = [t, v.shift]; }
-    });
-    return best;
-  }
-  function driftText(d) {
-    if (!d) { return "unavailable"; }
-    var bits = [], b = biggestShift(d.traits);
-    if (typeof d.flags === "number") { bits.push(d.flags ? plural(d.flags, "open flag") : "no open flags"); }
-    if (b) { bits.push(b[0] + " " + signed(b[1], 1)); }
-    else if (!d.traits) { bits.push("traits not sampled"); }
-    return bits.join(" · ");
-  }
-  function driftTitle(d) {
-    var t = obj(d).traits;
-    if (!t) { return "Open flags: lines the night's critic found off-persona in the last days, not undone or resolved."; }
-    return "Traits the night sampled for " + str(t.night) + ": " + TRAITS.filter(function (n) { return obj(t.values)[n]; })
-      .map(function (n) { var v = t.values[n]; return n + " " + num(v.sampled).toFixed(1) + (v.base !== null ? " (persona " + v.base + ")" : ""); })
-      .join(", ");
-  }
-
-  function renderPersonas(v) {
-    $("personas-banner").hidden = true;
-    var members = arr(v.members), days = num(v.recent_days) || 7, gm = v.guild_mood, missing = arr(v.missing);
-    setText("p-count", plural(members.length, "member") + ", "
-            + members.filter(function (m) { return m.persona; }).length + " with a persona");
-    setText("p-mood", gm ? "Guild mood, night of " + str(gm.night) + ": " + signed(gm.value, 2)
-            + (arr(gm.reasons).length ? " (" + gm.reasons.join(", ") + ")" : "")
-            : missing.indexOf("guild_mood") >= 0 ? "Guild mood: unavailable in this mind.db."
-            : "Guild mood: not recorded yet (the night's mood stage has not run).");
-    $("p-missing").textContent = missing.length ? "This mind.db is older than some of what this tab reads; "
-      + "unavailable here: " + missing.join(", ") + "." : "";
-    $("p-missing").hidden = !missing.length;
-    setText("p-memhead", "memories (" + days + " d / held)");
-    var body = $("p-roster");
-    clear(body);
-    members.forEach(function (m) {
-      var tr = el("tr", (m.online === false ? "off" : "") + (m.guid === pick ? " sel" : ""));
-      tr.tabIndex = 0;
-      tr.dataset.guid = String(m.guid);
-      tdT(tr, str(m.name) + (m.in_cast ? "" : " (not in the cast)"));
-      tdT(tr, m["class"] ? (CLASSES[m["class"]] || "-") + (m.role ? " · " + m.role : "") : "-", m.role ? "role-" + m.role : "");
-      tdT(tr, typeof m.rank === "number" ? String(m.rank) : "-", "num");
-      tdT(tr, missing.indexOf("pad_mood") >= 0 ? "unavailable" : moodText(m.mood), "", m.mood ? moodTitle(m.mood) : "");
-      tdT(tr, m.stance || "-");
-      tdT(tr, missing.indexOf("relationship") >= 0 ? "unavailable" : youText(m.you), "", youTitle(m.you));
-      tdT(tr, tiesText(v, m.ties));
-      tdT(tr, memText(m.memories), "num");
-      tdT(tr, personaText(m.persona), "", m.persona ? "source " + m.persona.source : "The mind voices only members with a stored persona.");
-      tdT(tr, driftText(m.drift), "", m.drift ? driftTitle(m.drift) : "");
-      body.appendChild(tr);
-    });
-    if (!members.length) { emptyRow(body, 10, "The mind has no cast and no personas yet."); }
-  }
-  function pollPersonas() {
-    if (personasBusy || tab !== "personas") { return; }
-    personasBusy = true;
-    api("/api/personas").then(function (r) {
-      if (r.status === 403) { keyLost(); return null; }
-      return r.json().then(function (j) { return { status: r.status, j: j }; });
-    }).then(function (x) {
-      if (!x) { return; }
-      if (x.status === 200) { renderPersonas(x.j); }
-      else { $("personas-banner").textContent = str(x.j.error) || "mind.db could not be read."; $("personas-banner").hidden = false; }
-    }, function () { /* the strip says it */ })
-      .then(function () { personasBusy = false; if (pick) { pollMember(); } });
-  }
-
-  function renderMember(j) {
-    var m = obj(j.member), c = j.card ? obj(j.card) : null, p = m.persona, days = num(j.recent_days) || 7;
-    var missing = arr(j.missing), traits = obj(obj(m.drift).traits), values = obj(traits.values);
-    $("p-detail").hidden = false;
-    setText("p-name", str(m.name));
-    setText("p-sub", [m["class"] ? (CLASSES[m["class"]] || "-") + (m.spec ? " " + m.spec : "") : "", str(m.role),
-                      m.level ? "level " + m.level : "", typeof m.rank === "number" ? "rank " + m.rank : "",
-                      m.in_cast ? (m.online ? "online" : "offline") : "not in the cast"].filter(Boolean).join(" · "));
-    setText("p-lead", "Mood: " + (missing.indexOf("pad_mood") >= 0 ? "unavailable" : moodText(m.mood))
-            + (m.mood ? " (" + moodTitle(m.mood) + ")" : "") + " · stance: " + (m.stance || "-")
-            + " · toward you: " + (missing.indexOf("relationship") >= 0 ? "unavailable" : youText(m.you)));
-    setText("p-why", p ? "Persona v" + p.version + ", last changed " + when(p.updated) + " by " + (BY[p.by] || str(p.by))
-            + (p.readable ? "." : "; this console cannot read it (a newer persona schema?).")
-            : "No persona is stored for this member yet, so the mind does not voice them.");
-    var five = $("p-five");
-    setText("p-nighthead", traits.night ? "night " + str(traits.night).slice(5) : "the night");
-    clear(five);
-    if (c) {
-      TRAITS.forEach(function (t) {
-        var b = obj(obj(c.big_five)[t]), v = values[t], tr = el("tr");
-        cell(tr, t);
-        cell(tr, String(num(b.score)), "num");
-        cell(tr, v ? num(v.sampled).toFixed(1) : "-", "num");
-        cell(tr, v && typeof v.shift === "number" ? signed(v.shift, 1) : "-", "num");
-        cell(tr, str(b.behaviour));
-        five.appendChild(tr);
-      });
-    } else { emptyRow(five, 5, p ? "This persona could not be read." : "No persona yet."); }
-    var drift = obj(m.drift);
-    if (!c) { kv($("p-who"), []); kv($("p-typing"), []); kv($("p-game"), []); }
-    else {
-      var id = obj(c.identity), ro = obj(c.romance), ty = obj(c.typing), ga = obj(c.game), pl = obj(c.play);
-      kv($("p-who"), [["player", [id.age, id.player_gender, id.region].filter(Boolean).join(", ")],
-                      ["attachment", c.attachment], ["humour", c.humour],
-                      ["romance", ro.stance + (ro.style ? ", " + ro.style : "") + (ro.jealousy_mode ? ", " + ro.jealousy_mode.replace(/_/g, " ") : "")],
-                      ["drift flags", typeof drift.flags === "number" ? (drift.flags ? plural(drift.flags, "open flag") + " in " + days + " days" : "none open") : "unavailable"],
-                      ["the night's traits", traits.night ? "sampled for " + traits.night : missing.indexOf("trait_state") >= 0 ? "unavailable" : "not sampled yet"]]);
-      kv($("p-typing"), [["case", ty["case"]], ["end punctuation", ty.end_punct],
-                         ["emoticons", arr(ty.emoticons).length ? ty.emoticons.join(" ") + " (" + Math.round(num(ty.emoticon_rate) * 100) + "% of lines)" : "none"],
-                         ["abbreviations", Object.keys(obj(ty.abbreviations)).map(function (k) { return k + " > " + ty.abbreviations[k]; }).join(", ") || "none"],
-                         ["typos", Math.round(num(ty.typo_rate) * 100) + "% of words"],
-                         ["words per line", arr(ty.words_per_line).join(" to ")],
-                         ["split lines", Math.round(num(ty.split_rate) * 100) + "%"],
-                         ["typing speed", num(ty.chars_per_sec).toFixed(1) + " chars/s"]]);
-      kv($("p-game"), [["motivation", ga.motivation], ["thinks as", ga.thinks_as], ["wants", arr(ga.wants).join("; ")],
-                       ["outside raids", arr(ga.outside_raids).join(", ").replace(/_/g, " ")], ["favourite spot", ga.favourite_spot],
-                       ["years played", ga.years_played], ["spec", str(pl.main_spec) + (pl.off_spec ? " (off: " + pl.off_spec + ")" : "")],
-                       ["raid role", pl.raid_role], ["skill", pl.skill],
-                       ["guild role", str(pl.guild_role) + (pl.officer_title ? " (" + pl.officer_title + ")" : "")]]);
-    }
-    var a = c && c.appearance ? obj(c.appearance) : null;
-    kv($("p-looks"), a ? [["height", a.height_cm + " cm"], ["build", a.build], ["weight", a.weight_kg + " kg"],
-                          ["hair", [a.hair_colour, str(a.hair_length).replace(/_/g, " "), a.hair_style].filter(Boolean).join(", ")],
-                          ["skin", a.skin_tone], ["eyes", a.eye_colour], ["face", arr(a.face).join(", ")], ["at the PC", a.at_the_pc]]
-                       : [["looks", c ? "none yet: the night's looks pass gives them" : "-"]]);
-    var kinds = $("p-kinds"), mem = j.memories;
-    setText("p-kindhead", "in " + days + " d");
-    clear(kinds);
-    if (mem) {
-      Object.keys(mem).sort().forEach(function (k) {
-        var tr = el("tr");
-        cell(tr, k);
-        cell(tr, String(num(mem[k].recent)), "num");
-        cell(tr, String(num(mem[k].total)), "num");
-        kinds.appendChild(tr);
-      });
-    }
-    if (!mem || !Object.keys(mem).length) { emptyRow(kinds, 3, mem ? "None held yet." : "Unavailable in this mind.db."); }
-    setText("p-memn", m.memories && m.memories.total ? plural(m.memories.total, "memory", "memories") + " held" : "");
-    var ties = $("p-ties"), t = m.ties;
-    clear(ties);
-    arr(t && t.top).forEach(function (r) {
-      var tr = el("tr");
-      cell(tr, pname(j, r.guid));
-      cell(tr, str(r.label) || "-");
-      cell(tr, signed(r.affinity, 0), "num");
-      [r.trust, r.respect, r.attraction, r.familiarity].forEach(function (x) { cell(tr, String(Math.round(num(x))), "num"); });
-      cell(tr, r.romance_stage && r.romance_stage !== "none" ? r.romance_stage : "-");
-      cell(tr, String(num(r.interactions)), "num");
-      cell(tr, r.last_seen ? when(r.last_seen) : "-");
-      cell(tr, str(r.notes) || "-");
-      ties.appendChild(tr);
-    });
-    if (!t || !arr(t.top).length) { emptyRow(ties, 11, t ? "No ties yet." : "Unavailable in this mind.db."); }
-    setText("p-tien", t && t.total ? (t.total > arr(t.top).length ? "the strongest " + t.top.length + " of " + t.total : plural(t.total, "tie")) : "");
-    var box = $("p-ledger");
-    clear(box);
-    arr(j.ledger).forEach(function (r) {
-      box.appendChild(el("div", "r", when(r.ts) + "  " + (LEDGER_KINDS[r.kind] || str(r.kind)) + ": " + str(r.text) + (r.undone ? "  (undone)" : "")));
-    });
-    if (!arr(j.ledger).length) { box.appendChild(el("div", "muted", j.ledger ? "No ledger rows yet." : "Unavailable in this mind.db.")); }
-  }
-  function pollMember() {
-    if (!pick || tab !== "personas") { return; }
-    var seq = ++pickSeq, guid = pick;
-    api("/api/persona?guid=" + guid).then(function (r) {
-      if (r.status === 403) { keyLost(); return null; }
-      return r.json().then(function (j) { return { status: r.status, j: j }; });
-    }).then(function (x) {
-      if (!x || seq !== pickSeq || guid !== pick) { return; }
-      if (x.status === 200) { renderMember(x.j); }
-      else if (x.status === 404) { choose(0); }
-      else { setText("p-why", str(x.j.error) || "mind.db could not be read."); }
-    }, function () { /* the strip says it */ });
-  }
-  function choose(guid) {
-    pick = guid;
-    var rows = $("p-roster").querySelectorAll("tr[data-guid]");
-    for (var i = 0; i < rows.length; i++) { rows[i].classList.toggle("sel", Number(rows[i].dataset.guid) === guid); }
-    if (!guid) { $("p-detail").hidden = true; return; }
-    if (TUNE) { renderDials(guid); }
-    pollMember();
-  }
-  $("p-roster").addEventListener("click", function (ev) {
-    var tr = ev.target.closest("tr[data-guid]");
-    if (tr) { choose(Number(tr.dataset.guid)); }
-  });
-  $("p-roster").addEventListener("keydown", function (ev) {
-    var tr = ev.target.closest("tr[data-guid]");
-    if (tr && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); choose(Number(tr.dataset.guid)); }
-  });
-  $("p-close").addEventListener("click", function () { choose(0); });
-
-  // The dials: read from mind.db (/api/tuning); every change and preview goes to the running
-  // mind's tune op (/api/tune), which checks it again and says why when it refuses. Preview text
-  // is shown here only: never stored, logged or sent anywhere else.
-  var TUNE = null, tuneBusy = false, lastPreview = "", gWhere = {};
-  var WHO = { women: "women only", party: "drinkers and smokers only" };
-  function tuneView() { return obj(obj(TUNE).view); }
-  function tuneLive() { return !!TUNE && obj(TUNE.mind).ok === true && obj(TUNE.control).enabled !== false; }
-  function tuneWhy() {
-    if (!TUNE) { return "reading"; }
-    if (obj(TUNE.control).enabled === false) { return str(obj(TUNE.control).reason) || "control is off"; }
-    return obj(TUNE.mind).ok === true ? "" : str(obj(TUNE.mind).error);
-  }
-  function previewKey(scope, target, dial, value) { return [scope, target, dial, value].join("|"); }
-  function showPreview(what, r) {
-    var box = $("t-preview");
-    clear(box);
-    $("t-pvcard").hidden = false;
-    setText("t-pvwhat", what);
-    if (r.ok !== true) { box.appendChild(el("p", "why bad", str(r.error) || "refused")); return; }
-    arr(r.world).forEach(function (x) { box.appendChild(el("p", "pv", numberText(x))); });
-    if (r.note) { box.appendChild(el("p", "why", str(r.note))); }
-    arr(r.subjects).forEach(function (s) {
-      var d = el("div", "pv");
-      d.appendChild(el("h4", "", str(s.name) || "#" + s.guid));
-      if (s.numbers) { arr(s.numbers).forEach(function (x) { d.appendChild(el("p", "pv", numberText(x))); }); }
-      ["before", "after"].forEach(function (k) {
-        var line = obj(s[k]);
-        if (!s.numbers) {
-          var p = el("p", "pv", k + ": ");
-          p.appendChild(el("span", line.text ? "said" : "muted", line.text ? str(line.text) : str(line.note)));
-          d.appendChild(p);
-        }
-      });
-      box.appendChild(d);
-    });
-    if (typeof r.reach === "number") { box.appendChild(el("p", "why", "It reaches " + plural(r.reach, "member") + " now.")); }
-  }
-  function numberText(x) {
-    function v(y) { return y === true ? "yes" : y === false ? "no" : y === null ? "never" : String(y) + (x.unit ? " " + x.unit : ""); }
-    return str(x.what) + ": " + v(x.before) + " → " + v(x.after);
-  }
-  function tuneAsk(args, what) {
-    if (args.action === "preview") { setText("t-pvwhat", what + ": asking the mind"); $("t-pvcard").hidden = false; }
-    return post("/api/tune", args).then(function (r) {
-      if (r.status === 403 && !r.error) { keyLost(); return r; }
-      if (args.action === "preview") {
-        showPreview(what, r);
-        if (r.ok === true) { lastPreview = previewKey(args.scope, args.target, args.dial, args.value); }
-      } else if (r.ok !== true) { note(what + " refused: " + str(r.error)); }
-      else { note(what + ": " + str(r.message)); pollTuning(); }
-      return r;
-    }, function () { note(what + ": the console could not be reached"); });
-  }
-  function setValue(scope, target, dial, value, what) {
-    return tuneAsk({ action: "set", scope: scope, target: target, dial: dial, value: value,
-                     previewed: lastPreview === previewKey(scope, target, dial, value) }, what);
-  }
-  // One dial: its name and what it moves, a slider, and Preview / Set / Clear
-  function dialRow(box, o) {
-    var row = el("div", "dial" + (o.off ? " off" : ""));
-    var nm = el("div", "nm", o.label);
-    if (o.sub) { nm.appendChild(el("small", "", o.sub)); }
-    row.appendChild(nm);
-    var ctl = el("div", "ctl");
-    if (o.off) { ctl.appendChild(el("span", "muted", o.off)); }
-    else {
-      var range = el("input");
-      range.type = "range"; range.min = o.lo; range.max = o.hi; range.step = 1; range.value = o.start;
-      range.setAttribute("aria-label", o.label);
-      var shown = el("span", "v", String(o.start));
-      range.addEventListener("input", function () { shown.textContent = (o.signed && range.value > 0 ? "+" : "") + range.value; });
-      ctl.appendChild(range); ctl.appendChild(shown);
-      var live = tuneLive();
-      [["Preview", function () { tuneAsk({ action: "preview", scope: o.scope, target: o.target, dial: o.dial,
-                                            value: Number(range.value) }, o.what + " " + range.value); }],
-       ["Set", function () { setValue(o.scope, o.target, o.dial, Number(range.value), o.what + " " + range.value); }],
-       [o.clear || "Clear", function () { setValue(o.scope, o.target, o.dial, null, o.what + ": cleared"); }]]
-        .forEach(function (b, i) {
-          var btn = el("button", "", b[0]);
-          btn.type = "button";
-          btn.disabled = !live || (i === 2 && !o.clearable);
-          if (!live) { btn.title = tuneWhy(); }
-          btn.addEventListener("click", b[1]);
-          ctl.appendChild(btn);
-        });
-      if (o.state) { ctl.appendChild(el("span", "muted", o.state)); }
-    }
-    row.appendChild(ctl);
-    if (o.moves) { row.appendChild(el("div", "moves", o.moves)); }
-    box.appendChild(row);
-  }
-  function dialSpec(name) { return arr(tuneView().dials).filter(function (d) { return d.name === name; })[0] || {}; }
-  function renderTuning() {
-    var v = tuneView(), live = tuneLive();
-    setText("t-sum", v.available ? "version " + num(v.version) : "");
-    if (!v.available) {
-      setText("t-lead", "This mind.db has no tuning tables yet (" + arr(v.missing).join(", ") + "): `db migrate` with the mind stopped adds them.");
-    } else {
-      setText("t-lead", plural(num(v.pinned_members), "member has", "members have") + " values of their own (they win over group and world changes)."
-              + (live ? "" : " Read-only now: " + tuneWhy()));
-    }
-    var world = $("t-world");
-    clear(world);
-    arr(v.world_dials).forEach(function (d) {
-      dialRow(world, { label: d.label, sub: "mind.toml " + (d.file === null || d.file === undefined ? "unread" : d.file)
-                       + (d.override !== null && d.override !== undefined ? ", set here " + d.override : ""),
-                       lo: d.lo, hi: d.hi, start: d.value === null || d.value === undefined ? d.lo : d.value,
-                       scope: "world", target: "", dial: d.name, what: "world " + d.label,
-                       clear: "Back to mind.toml", clearable: d.override !== null && d.override !== undefined,
-                       moves: str(d.moves) + " (" + str(d.when) + ")", off: v.available ? "" : "unavailable" });
-    });
-    var groups = $("t-groups");
-    clear(groups);
-    arr(v.groups).forEach(function (g) {
-      var head = el("h4", "", (g.builtin ? "everyone" : str(g.name)) + " · " + plural(num(g.members), "member")
-                    + (g.builtin ? "" : " · " + str(g.describe)));
-      groups.appendChild(head);
-      if (!g.builtin) {
-        var rt = el("button", "", "Retire");
-        rt.type = "button"; rt.disabled = !live;
-        rt.addEventListener("click", function () { tuneAsk({ action: "retire", id: Number(g.target) }, "retire " + g.name); });
-        head.appendChild(document.createTextNode(" "));
-        head.appendChild(rt);
-      }
-      var offs = obj(g.offsets);
-      arr(v.dials).forEach(function (d) {
-        var set = own(offs, d.name);
-        if (!set && !g.showAll) { return; }
-        dialRow(groups, { label: d.label, sub: set ? "offset " + (offs[d.name] > 0 ? "+" : "") + offs[d.name] : "",
-                          lo: -10, hi: 10, start: set ? offs[d.name] : 0, signed: true,
-                          scope: "group", target: g.target, dial: d.name, what: (g.builtin ? "everyone" : g.name) + " " + d.label,
-                          clearable: set, moves: d.who !== "everyone" ? WHO[d.who] + ": the others are skipped" : "" });
-      });
-      var add = el("select");
-      add.appendChild(el("option", "", "offset another dial"));
-      arr(v.dials).forEach(function (d) { if (!own(offs, d.name)) { var o = el("option", "", d.label); o.value = d.name; add.appendChild(o); } });
-      add.addEventListener("change", function () {
-        if (!add.value) { return; }
-        var d = dialSpec(add.value), box = el("div");
-        add.parentNode.insertBefore(box, add);
-        dialRow(box, { label: d.label, lo: -10, hi: 10, start: 0, signed: true, scope: "group", target: g.target,
-                       dial: d.name, what: (g.builtin ? "everyone" : g.name) + " " + d.label, clearable: false,
-                       moves: d.who !== "everyone" ? WHO[d.who] + ": the others are skipped" : "" });
-        add.remove();
-      });
-      groups.appendChild(add);
-    });
-    var fields = obj(v.fields), fsel = $("t-gfield");
-    if (!fsel.options.length) {
-      Object.keys(fields).forEach(function (k) { var o = el("option", "", k.replace(/_/g, " ")); o.value = k; fsel.appendChild(o); });
-      fillValues();
-    }
-    var hist = $("t-history");
-    clear(hist);
-    arr(v.history).forEach(function (c) {
-      var d = el("div", "chg");
-      d.appendChild(el("div", "", "#" + c.id + " " + when(c.ts) + " · " + str(c.source) + " · " + str(c.label)
-                       + (c.previewed ? " · previewed" : "") + (c.undone_by ? " · undone by #" + c.undone_by : "")));
-      arr(c.rows).forEach(function (r) { d.appendChild(el("div", "muted", "  " + rowText(v, r))); });
-      var acts = el("div", "acts");
-      [["Undo", { action: "undo", change: c.id }, "undo #" + c.id], ["Revert to here", { action: "revert", to: c.id }, "revert to #" + c.id]]
-        .forEach(function (b) {
-          var btn = el("button", "", b[0]);
-          btn.type = "button"; btn.disabled = !live;
-          btn.addEventListener("click", function () { tuneAsk(b[1], b[2]); });
-          acts.appendChild(btn);
-        });
-      d.appendChild(acts);
-      hist.appendChild(d);
-    });
-    if (!arr(v.history).length) { hist.appendChild(el("div", "muted", v.available ? "No dial changes yet." : "Unavailable in this mind.db.")); }
-    if (pick) { renderDials(pick); }
-  }
-  function rowText(v, r) {
-    var who = r.scope === "world" ? "world" : r.scope === "group" ? "group " + groupName(v, r.target) : pname(v, Number(r.target));
-    if (r.dial === "definition") {
-      return who + (r.after ? " saved: " + str(obj(r.after).name) : " retired");
-    }
-    function val(x) { return x === null || x === undefined ? "unset" : String(x); }
-    return who + " " + r.dial + " " + val(r.before) + " → " + val(r.after);
-  }
-  function groupName(v, target) {
-    var g = arr(v.groups).filter(function (x) { return x.target === target; })[0];
-    return g ? str(g.name) : "#" + target;
-  }
-  function renderDials(guid) {
-    var v = tuneView(), box = $("p-dials");
-    clear(box);
-    var m = arr(v.members).filter(function (x) { return x.guid === guid; })[0];
-    if (!m) { setText("p-dialsum", ""); box.appendChild(el("p", "muted", v.available ? "No dials: this member has no readable persona, or is you." : "Unavailable in this mind.db.")); return; }
-    var mine = 0;
-    arr(v.dials).forEach(function (d) {
-      var x = obj(obj(m.dials)[d.name]), owned = x.own !== null && x.own !== undefined;
-      if (owned) { mine += 1; }
-      var state = owned ? "your value " + x.own + (x.stale ? " (their persona changed since you set it)" : "")
-                : x.value !== x.base ? "groups make it " + x.value : "";
-      dialRow(box, { label: d.label, sub: (d.kind === "score" ? "their own score " : "as written ") + x.base
-                     + (x.value !== x.base ? " · now " + x.value : ""),
-                     lo: d.lo, hi: d.hi, start: owned ? x.own : x.value, scope: "member", target: String(guid),
-                     dial: d.name, what: m.name + " " + d.label, clearable: owned, state: state,
-                     moves: str(d.moves) + " (from " + str(d.when) + ")", off: x.applies ? "" : str(x.note) });
-    });
-    setText("p-dialsum", mine ? plural(mine, "value") + " of your own" : "nothing of your own set");
-  }
-  function fillValues() {
-    var vals = arr(obj(tuneView().fields)[$("t-gfield").value]), sel = $("t-gvalues");
-    clear(sel);
-    vals.forEach(function (x, i) { var o = el("option", "", String(x)); o.value = String(i); sel.appendChild(o); });
-  }
-  function whereText() {
-    var parts = Object.keys(gWhere).map(function (k) { return k.replace(/_/g, " ") + ": " + gWhere[k].join(k === "age" ? "-" : " or "); });
-    setText("t-gwhere", parts.length ? parts.join("; ") : "no conditions yet");
-  }
-  $("t-gfield").addEventListener("change", fillValues);
-  $("t-gadd").addEventListener("click", function () {
-    var from = Number($("t-gfrom").value), to = Number($("t-gto").value);
-    if (from && to) { gWhere.age = [from, to]; $("t-gfrom").value = $("t-gto").value = ""; }
-    var field = $("t-gfield").value, all = arr(obj(tuneView().fields)[field]), picked = [];
-    var opts = $("t-gvalues").options;
-    for (var i = 0; i < opts.length; i++) { if (opts[i].selected) { picked.push(all[Number(opts[i].value)]); } }
-    if (picked.length) { gWhere[field] = picked; }
-    whereText();
-  });
-  $("t-gclear").addEventListener("click", function () { gWhere = {}; $("t-gname").value = ""; whereText(); });
-  $("t-gsave").addEventListener("click", function () {
-    tuneAsk({ action: "group", id: null, name: $("t-gname").value, where: gWhere }, "group " + $("t-gname").value)
-      .then(function (r) { if (r && r.ok === true) { gWhere = {}; $("t-gname").value = ""; whereText(); } });
-  });
-  $("t-pvclose").addEventListener("click", function () { $("t-pvcard").hidden = true; });
-  function pollTuning() {
-    if (tuneBusy || tab !== "personas") { return; }
-    tuneBusy = true;
-    api("/api/tuning").then(function (r) {
-      if (r.status === 403) { keyLost(); return null; }
-      return r.json().then(function (j) { return { status: r.status, j: j }; });
-    }).then(function (x) {
-      if (!x) { return; }
-      if (x.status === 200) { TUNE = x.j; renderTuning(); }
-      else { setText("t-lead", str(x.j.error) || "mind.db could not be read."); }
-    }, function () { /* the strip says it */ })
-      .then(function () { tuneBusy = false; });
-  }
-  whereText();
-
-  // -- tabs -----------------------------------------------------------------------------------------
-
-  function showTab(name) {
-    if (!$("tab-" + name)) { name = "comms"; }
-    tab = name;
-    var tabs = document.querySelectorAll('[role="tab"]');
-    for (var i = 0; i < tabs.length; i++) {
-      var on = tabs[i].dataset.tab === name;
-      tabs[i].setAttribute("aria-selected", String(on));
-      tabs[i].tabIndex = on ? 0 : -1;
-      $("tab-" + tabs[i].dataset.tab).hidden = !on;
-    }
-    if (location.hash !== "#" + name) { history.replaceState(null, "", "#" + name); }
-    clearInterval(healthTimer);
-    clearInterval(raidTimer);
-    clearInterval(guildTimer);
-    clearInterval(personasTimer);
-    healthTimer = raidTimer = guildTimer = personasTimer = null;
-    if (name === "mind") { renderMind(); pollHealth(); healthTimer = setInterval(pollHealth, HEALTH_MS); }
-    if (name === "raid") { pollRaid(); raidTimer = setInterval(pollRaid, RAID_MS); }
-    if (name === "guild") { pollGuild(); guildTimer = setInterval(pollGuild, GUILD_MS); }
-    if (name === "personas") {
-      pollPersonas(); pollTuning();
-      personasTimer = setInterval(function () { pollPersonas(); pollTuning(); }, PERSONAS_MS);
-    }
-    if (name === "comms") { renderFeed(false); }
-  }
-  document.querySelector(".tabs").addEventListener("click", function (ev) {
-    var b = ev.target.closest('[role="tab"]');
-    if (b) { showTab(b.dataset.tab); }
-  });
-  document.querySelector(".tabs").addEventListener("keydown", function (ev) {
-    if (ev.key !== "ArrowRight" && ev.key !== "ArrowLeft") { return; }
-    var tabs = Array.prototype.slice.call(document.querySelectorAll('[role="tab"]'));
-    var i = tabs.findIndex(function (t) { return t.dataset.tab === tab; });
-    var next = tabs[(i + (ev.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length];
-    showTab(next.dataset.tab);
-    next.focus();
-  });
-
-  // -- the connection -------------------------------------------------------------------------------
-
-  function lost(text) {
-    var e = $("s-lost");
-    e.textContent = text;
-    e.hidden = !text;
-  }
-  function keyLost() {
-    if (es) { es.abort(); es = null; }
-    clearTimeout(retry);
-    lost("This console has restarted, or this page was reloaded or opened without its key: open the URL the console printed when it started.");
-  }
-  var EVENTS = {
-    snapshot: function (d) {
-      ST = d.status || ST;
-      adoptVoice(d.voice);
-      CHAT = []; seen = {};
-      addChat(d.chat);
-      renderComms(); renderFeed(false); renderStrip();
-    },
-    status: function (d) { ST = d; renderStrip(); },
-    voice: function (m) { if (typeof m.type === "string" && own(VOICE, m.type)) { VOICE[m.type](m); } },
-    chat: function (d) { addChat(d.lines); renderFeed(true); },
-    control: function (d) {
-      var words = d.service + " " + d.action;
-      if (d.phase === "running") { note(words + ": requested"); }
-      else if (d.phase === "done") { note(words + ": " + str(d.message)); }
-      else { note(words + " failed: " + str(d.message)); }
-      if (tab === "mind") { pollHealth(); }
-    },
-    raid: function (d) {
-      note("raid, " + (RAID_LABEL[d.action] || str(d.action)) + ": " + str(d.message));
-      if (tab === "raid") { pollRaid(); }
-    },
-    tuning: function (d) {
-      note("dials: change #" + num(d.change) + " saved");
-      if (tab === "personas") { pollTuning(); }
-    }
-  };
-  // One server-sent event block: "event: <kind>" and "data: <json>" lines; ": ping" is a comment
-  function dispatch(block) {
-    var kind = "", data = "";
-    block.split("\n").forEach(function (line) {
-      if (line.indexOf("event: ") === 0) { kind = line.slice(7); }
-      else if (line.indexOf("data: ") === 0) { data += line.slice(6); }
-    });
-    if (!kind || !own(EVENTS, kind)) { return; }
-    var d;
-    try { d = JSON.parse(data); } catch (e) { return; }
-    if (d && typeof d === "object") { EVENTS[kind](d); }
-  }
-  // The event stream is read with fetch, since an EventSource cannot send the key's header
-  function connect() {
-    retry = null;
-    var ctl = new AbortController();
-    es = ctl;
-    function again() {
-      if (es !== ctl) { return; }
-      es = null;
-      lost("The console is not reachable: retrying.");
-      api("/api/state").then(function (r) {
-        if (r.status === 403) { keyLost(); } else { retry = setTimeout(connect, 2000); }
-      }, function () { retry = setTimeout(connect, 2000); });
-    }
-    api("/api/events", { headers: { "Accept": "text/event-stream" }, signal: ctl.signal })
-      .then(function (r) {
-        if (r.status === 403) { if (es === ctl) { es = null; keyLost(); } return null; }
-        if (!r.ok || !r.body) { throw new Error("HTTP " + r.status); }
-        lost("");
-        var reader = r.body.getReader(), text = new TextDecoder(), buf = "";
-        function pump() {
-          return reader.read().then(function (step) {
-            if (step.done || es !== ctl) { return null; }
-            buf += text.decode(step.value, { stream: true });
-            var at;
-            while ((at = buf.indexOf("\n\n")) >= 0) {
-              dispatch(buf.slice(0, at));
-              buf = buf.slice(at + 2);
-            }
-            return pump();
-          });
-        }
-        return pump().then(again);
-      })
-      .catch(again);
-  }
-
-  renderStrip();
-  renderComms();
-  renderFeed(false);
-  showTab((location.hash || "#comms").slice(1));
-  connect();
-}());
-</script>
+<script type="module" src="/static/js/main.mjs"></script>
 </body>
 </html>

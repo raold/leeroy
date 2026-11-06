@@ -298,7 +298,7 @@ Setting `SOAP.Enabled = 1` would let the script do a real graceful shutdown.
 | `mod-dungeon-clear` | jrad7/mod-dungeon-clear | git clone since 2026-10-29 (was a zip of `60f3d98`). **The autonomous tank lead**: `.dc on` (or `dc on` in party chat) inside an instance makes the group's tank bot route boss to boss over the navmesh, pull (Dynamic/Leeroy/Advanced), run scripted events (all 16 WotLK 5-mans), loot, rest and rez. Raids too: trash flow with a readiness quorum, pre-boss muster, wipe recovery; boss fights are left to the playerbots raid strategies. Companion addon: jrad7/mod-dungeon-clear-addon. It hooks playerbots without patching it (appends to the shared context registries). Ships its own `.cmake`; folder name must stay exact. Reads `PlayerbotAIConfig` members directly, so it breaks when playerbots renames them. AGPL-3.0. |
 | `mod-bg-slaveryvalley` | zip (no git) | Custom battleground, map 801 / BG id 31. Server side complete; **client patch still undistributed** — see below. |
 | `mod-ah-bot-plus` | NathanHandley/mod-ah-bot-plus | Auction house bot (git clone since 2026-10-30). Sells under, and buys player auctions as, the ordinary account `ahbot` (auth id 352): characters Fatiggeritch (3502) and Bonqueefa (3503), set in `AuctionHouseBot.GUIDs` (comma list, no spaces). Never use a playerbot character for it, and never enter the world on those characters. Seller and buyer both on; everything else is the `.dist` default (about 150 listings a minute per house, up to 15000 each). GM commands: `.ahbot reload` (re-reads the conf, GUIDs included, no restart), `.ahbot update`, `.ahbot empty`. Loader `Addmod_ah_bot_plusScripts`, so the folder name must stay exact. No SQL. |
-| `mod-leeroy` | this repo, `modules/mod-leeroy` | The guild bridge. `azerothcore-wotlk/modules/mod-leeroy` is a **junction** to `F:\azerothcore\modules\mod-leeroy`: remove it with `rmdir`, never `rm -rf` (that deletes the source through the link). Pins the cast (guild members at 80+, minus `Leeroy.HumanGuid`) via the playerbots pin API, mutes them in mod-ollama-chat, and serves NDJSON on `Leeroy.Bridge.Host`:`Leeroy.Bridge.Port` (`127.0.0.1:7878`, one mind at a time). Keys: `Leeroy.Enable`, `GuildId`, `HumanGuid`, `KeepCast`, `BringCastOnline`, `ExcludeFromOllamaChat`, `Bridge.*`, `CastGuard` (the kick guard), `Realm.*` (see the Realm) and `Telemetry.Enable`/`Training.Enable` (see Training ground). Start line in `Server.log`: `mod-leeroy: cast N members, pinned N ...`. Smoke test: `python modules/mod-leeroy/tools/bridge_smoke.py --expect-cast N` (0 pass, 1 fail, 2 no server or another mind connected); `--listen S` prints events, `--send` sends raw commands. For the owner it answers `.playerbots bot add5/10/25/40` from his guild (see that patch below). |
+| `mod-leeroy` | this repo, `modules/mod-leeroy` | The guild bridge. `azerothcore-wotlk/modules/mod-leeroy` is a **junction** to `F:\azerothcore\modules\mod-leeroy`: remove it with `rmdir`, never `rm -rf` (that deletes the source through the link). Pins the cast (guild members at 80+, minus `Leeroy.HumanGuid`) via the playerbots pin API, mutes them in mod-ollama-chat, and serves NDJSON on `Leeroy.Bridge.Host`:`Leeroy.Bridge.Port` (`127.0.0.1:7878`, one mind at a time). Keys: `Leeroy.Enable`, `GuildId`, `HumanGuid`, `KeepCast`, `BringCastOnline`, `ExcludeFromOllamaChat`, `Bridge.*`, `CastGuard` (the kick guard), `Realm.*` (see the Realm) and `Telemetry.Enable`/`Training.Enable` (see Training ground). Start line in `Server.log`: `mod-leeroy: cast N members, pinned N ...`. Smoke test: `python modules/mod-leeroy/tools/bridge_smoke.py --expect-cast N` (0 pass, 1 fail, 2 no server or another mind connected); `--listen S` prints events, `--send` sends raw commands. `owner_say` (the console's replies, separate from `human_say`) queues his chat line on his session: guild, officer, party, raid or a whisper to an online cast member; text is sanitized and then refused, not cut, when empty, over 255 UTF-8 bytes or starting with `.` or `!`; at most one line per 1500 ms and 8 per 30 s; he must be in game. For the owner it answers `.playerbots bot add5/10/25/40` from his guild (see that patch below). |
 
 `mod-playerbots`, `mod-ollama-chat`, `mod-dungeon-clear` and `mod-ah-bot-plus` are
 git repos and `mod-leeroy` lives in this one; the rest are zip extractions and
@@ -629,7 +629,7 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   checkout's own mind venv may control the mind (`--root` names another
   checkout); the voice service's pid must be the base interpreter its own venv
   launcher started. `--no-control` turns start, restart and stop off, and raid
-  actions too. The owner's game state is the running mind's open session; while
+  actions and replies too. The owner's game state is the running mind's open session; while
   the mind or its bridge is down, or the session cannot be read, it is shown as
   unknown, never "not in game". Its Raid and Guild tabs read mind.db read-only
   (raids, attendance, the DKP ledger, loot receipts, the roster, season awards,
@@ -652,6 +652,44 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   while the live model is already loaded, never loads one, and its text is never
   logged or stored. `python -m leeroy_mind tuning --data-dir "$D" status|history`
   reads it; `undo N|revert N` work with the mind stopped.
+  The page is split into `console/static/` (CSS, a classic `theme.js`, ES
+  modules, self-hosted OFL fonts with their licence texts) and is served at
+  `/static/` without the key, like the page, since a browser cannot send a
+  header for `<link>`, `<script src>` or `@font-face`; the CSP is `'self'`
+  with no inline style. Dark is the default whatever the system setting; the
+  light/dark switch is remembered in `localStorage` (`guild-console-theme`,
+  with the folds and read marks, `guild-console-collapsed` and
+  `guild-console-read`). It has 13 tabs: Comms, Raid, Guild, Personas and Mind
+  are real; Social, Board, Calendar, Bank, Realm, Training, Dojo and Library
+  are placeholders that wait for P3. `GET /api/face?guid=<int>&size=sm|md|lg` serves
+  `mind-data/selfies/<guid>/chosen.jpg` (key and Host checked, `image/jpeg`,
+  `private, max-age=60`, 404 when absent; the original for every size, the
+  browser scales it) and never writes under `selfies/`; faces (initials when
+  there is no photo) show in Comms and on the Personas roster. Comms is one
+  feed of typed lines and the room lines he heard (from mind.db: a line
+  appears once it has played to him, a dropped one does not), channels with
+  unread counts (a first open or reload marks history read), the 32-room tree
+  (empty rooms greyed, click to join), whispers and the member card. A voiced
+  whisper is never typed in WoW: one the voice service dropped because he was
+  deafened or had muted that member shows in its thread as text with a "not
+  heard (deafened)" or "not heard (muted)" chip and counts as unread; a whisper
+  dropped for any other reason does not appear. Push-to-talk the voice service
+  recognised but the mind did not match to a line is noted as not sent in a
+  Comms toast (8 s), not in the feed. Reply box: `POST /api/say` {channel,
+  text[, to]} with channel `guild`, `officer`, `group` (the mind sends it to
+  raid when his group is one, else party) or `whisper`, and `to` (a member's
+  guid, online, in the cast, not him) for a whisper only; a line starting with
+  `/` is refused ("Slash commands aren't sent from here.": WoW would post it as
+  words). It needs the key and Origin and the mind's
+  control endpoint, and is off with `--no-control`, with the mind or bridge
+  down (said as such, not as "not in game") and while he is not in game. One
+  line is in flight at a time; the refused text stays in the box. The server
+  answers in words; an older worldserver without `owner_say` reads "The game
+  server needs the rebuild that adds console replies." Mute and deafen are
+  voice-service flags (the page's `self` message; deafen implies mute; both
+  reset at each login): mute stops his push-to-talk, deafen silences the room.
+  After a release they need the voice service restarted: an older voice
+  service ignores `self`.
 - The mind's control endpoint (`leeroy_mind/endpoint.py`) is on by default
   (`[control] enabled = false` turns it off; `[control] port`, default 0, picks
   a free port). It listens on 127.0.0.1 only and writes a new key each start,
@@ -662,7 +700,10 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   (the owner's dials: status, set, undo, revert, group, retire, preview) and `raid`
   (`call`, `form` {raid, size, heroic, lead}, `summon`, `start`, `stop`,
   `end`), which enter guild life's raid night where the owner's chat or its
-  timers would, with the same guards, and are refused while he is not in game.
+  timers would, with the same guards, and are refused while he is not in game,
+  and `say` {channel, text, to} (`owner_say.py`: the shared text rule, one line
+  at a time, sent to the bridge as `owner_say`; logs carry op, channel and
+  outcome, never the text).
   `stop`/`start` of a raid switch dungeon-clear off and on again mid-raid. The
   console sends the key only to the listener the TCP table shows is the running
   mind's own pid; its Stop and Restart use the clean stop (asked up to five
@@ -780,6 +821,9 @@ artefacts such as crackling; find and fix the cause.
   expressive engine falls back to the member's Kokoro blend; cached expressive
   callouts can still play. GPU admission requires headroom beside the live chat
   and embedding models, and is measured before changing local settings.
+- The browser page can send `{"type": "self", "mute", "deafen"}` (booleans):
+  mute stops push-to-talk, deafen silences the room and implies mute; both
+  reset at each login. The service reports them in its `self` state.
 - Push-to-talk uses Raw Input and does not swallow the key. A tap under the
   configured hold threshold is ignored. WoW and the listener need compatible
   elevation: a non-elevated listener cannot hear an elevated foreground game.

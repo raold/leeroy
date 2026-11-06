@@ -261,6 +261,8 @@ class VoiceService:
         self._invites: list[dict] = []
         self._transcript: deque[dict] = deque(maxlen=TRANSCRIPT_ENTRIES)
         self._online = False
+        self._self_mute = False
+        self._deafen = False
         self._fresh_mind = False  # the next `channels` starts a new mind's snapshot
         self._roster_stale = True
         self._state_stale = False  # a page's tree or names changed
@@ -566,6 +568,7 @@ class VoiceService:
 
     def _session_on(self, now: float) -> None:
         self._online = True
+        self._set_self(False, False)
         self._expressive_at = 0.0
         self._output_off_at = None
         self._plan(self.scheduler.set_session, True)
@@ -681,6 +684,8 @@ class VoiceService:
     def _refusal(self, msg: Speak) -> str:
         if not self._online:
             return "offline"
+        if self._deafen:
+            return "deafened"
         if msg.guid not in self._specs:
             return "no_voice"
         if msg.guid in self._ui_state.mutes:
@@ -903,7 +908,9 @@ class VoiceService:
 
     def _press(self, now: float) -> None:
         log("ptt_press", foreground=self._foreground_name())
-        if not self.server.connected:
+        if self._self_mute or self._deafen:
+            log("ptt_discarded", reason="muted")
+        elif not self.server.connected:
             log("ptt_discarded", reason="mind")
         elif not self.mic.ok:
             log("ptt_discarded", reason="mic")
@@ -1014,6 +1021,7 @@ class VoiceService:
             "invites": [dict(i) for i in self._invites],
             "transcript": list(self._transcript),
             "mind": self.server.connected,
+            "self": {"mute": self._self_mute, "deafen": self._deafen},
             "expressive_device": self._expressive_device(),
             "status": as_fields(self._status()),
         }
@@ -1031,6 +1039,27 @@ class VoiceService:
         self._set_ui(UiState(state.volumes, mutes))
         if on:
             self._plan(self.scheduler.cancel, guid=guid, reason="muted")
+
+    def self_state(self, mute: bool, deafen: bool) -> None:
+        self._set_self(mute, deafen)
+
+    def _set_self(self, mute: bool, deafen: bool) -> None:
+        """His own mute and deafen. Deafen implies mute; a press under way ends as at logout,
+        and deafening cuts every line playing or waiting."""
+        if (mute, deafen) == (self._self_mute, self._deafen):
+            return
+        was_deaf = self._deafen
+        self._self_mute, self._deafen = mute, deafen
+        log("self_state", mute=mute, deafen=deafen)
+        if mute or deafen:
+            if self.machine.held:
+                self.machine.key(False, self._clock.now())  # its Release goes with the press
+            if self._pressing:
+                self._send(Ptt(False, self._press_channel))
+            self._drop_press()
+        if deafen and not was_deaf:
+            self._plan(self.scheduler.cancel, below=0, reason="deafened")
+        self.ui.broadcast({"type": "self", "mute": mute, "deafen": deafen})
 
     def _set_ui(self, state: UiState) -> None:
         self._ui_state = state

@@ -37,7 +37,7 @@ PHASES = ("none", "trash", "combat", "wipe_silence", "wipe_debrief", "kill")
 REFUSALS = ("locked", "full", "unknown", "offline")
 PLAY_STATES = ("started", "done", "dropped", "cut")
 DROP_REASONS = ("expired", "moved", "not_his_channel", "no_voice", "muted", "empty", "raid",
-                "after_dropped", "offline", "cancelled", "engine_error", "mind_gone")
+                "after_dropped", "offline", "cancelled", "engine_error", "mind_gone", "deafened")
 MIC_STATES = ("ok", "missing", "unset", "closed")
 STT_STATES = ("parakeet", "whisper", "off")
 

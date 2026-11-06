@@ -13,10 +13,10 @@ a crash left behind; the endpoint removes it when it closes. The console reads i
 key only to a listener that the TCP table shows is the running mind's own process.
 
 A request: one connection, one line. A JSON object of at most MAX_LINE bytes ending in a
-newline, sent within READ_S (2 s), with exactly the keys v (1), key, op and, for a raid action
-only, args. Anything else (an unknown or missing key, a wrong type, an HTTP request) is refused and
-the connection closed; nothing after the first line is read. One answer line comes back,
-{"ok": true, ...} or {"ok": false, "error": ...}, and the connection closes.
+newline, sent within READ_S (2 s), with exactly the keys v (1), key, op and, for a raid, tune or
+say action only, args. Anything else (an unknown or missing key, a wrong type, an HTTP request) is
+refused and the connection closed; nothing after the first line is read. One answer line comes
+back, {"ok": true, ...} or {"ok": false, "error": ...}, and the connection closes.
 
     status          the raid night's state and which raid actions can run now, or why not
     stop            the mind's own clean shutdown, the one Ctrl+C runs: answered, then begun
@@ -27,8 +27,16 @@ the connection closed; nothing after the first line is read. One answer line com
                     preview {scope, target, dial, value}: the owner's persona dials
                     (leeroy_mind.tuning), written by this mind only, one change at a time,
                     and in force from the next read; a preview's text goes only to the caller
+    say {channel, text[, to]}
+                    guild | officer | group | whisper (to: a cast member's guid): the owner's
+                    own line, said in game as his through native owner_say
+                    (leeroy_mind.owner_say), one at a time and answered within SAY_S; group is
+                    his raid when his group is one, else his party. say_args refuses a line the
+                    game would (empty, over 255 bytes, a command), and every refusal comes back
+                    as the sentence the console shows
 
-Logs carry the op, the action and the outcome, never the key, a name or a preview's text."""
+Logs carry the op, the action (for say, the channel) and the outcome, never the key, a name, a
+preview's text or a line's."""
 import asyncio
 import json
 import logging
@@ -51,9 +59,10 @@ MAX_REPLY = 65536
 READ_S = 2.0  # the console sends its line at once: a slot is not held longer
 RAID_S = 30.0  # how long one raid action may take before the console is answered anyway
 PREVIEW_S = 40.0  # a preview's two lines, before and after, at background priority
+SAY_S = 10.0  # one line of his, past the bridge's own 5 s ack wait
 MAX_CONNECTIONS = 8
 REPLACE_TRIES = 40  # 2 s of 50 ms tries to move control.json over a file being read
-OPS = ("status", "stop", "raid", "tune")
+OPS = ("status", "stop", "raid", "tune", "say")
 RAID_ACTIONS = ("call", "form", "summon", "start", "stop", "end")
 TUNE_ACTIONS = ("status", "set", "undo", "revert", "group", "retire", "preview")
 TUNE_SHAPES = {
@@ -66,6 +75,8 @@ TUNE_SHAPES = {
     "preview": {"action", "scope", "target", "dial", "value"},
 }
 TUNE_SCOPES = ("world", "group", "member")
+SAY_CHANNELS = ("guild", "officer", "group", "whisper")
+MAX_SAY_CHARS = 1024  # what the console's box may hold; a line the game takes is 255 bytes
 _DIAL_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz_")
 KEY_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
 
@@ -375,6 +386,34 @@ def tune_args(args) -> dict:
                                                      "where"].index)}
 
 
+def say_args(args) -> dict:
+    """A say action's arguments, exactly: {"channel", "text"}, plus "to" (a member's guid) for a
+    whisper only; text is at most MAX_SAY_CHARS characters that clean to a line the game takes
+    (owner_say.text_verdict). The cleaned arguments, or BadRequest with the sentence the console
+    shows."""
+    from leeroy_mind.owner_say import WORDS, text_verdict
+    if not isinstance(args, dict) or args.get("channel") not in SAY_CHANNELS:
+        raise BadRequest("A line goes to guild, officer, group or whisper.")
+    channel = args["channel"]
+    whisper = channel == "whisper"
+    if set(args) != ({"channel", "text", "to"} if whisper else {"channel", "text"}):
+        raise BadRequest("A whisper takes exactly channel, text and to." if whisper
+                         else f"A {channel} line takes exactly channel and text.")
+    text = args["text"]
+    if not isinstance(text, str):
+        raise BadRequest("A line is text.")
+    if len(text) > MAX_SAY_CHARS:
+        raise BadRequest(WORDS["too_long"])
+    verdict, cleaned = text_verdict(text)
+    if verdict != "ok":
+        raise BadRequest(WORDS[verdict])
+    if not whisper:
+        return {"channel": channel, "text": cleaned}
+    if not _count(args["to"], 1):
+        raise BadRequest("A whisper goes to a member's guid.")
+    return {"channel": channel, "text": cleaned, "to": args["to"]}
+
+
 def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     """(op, args) from one request line; Forbidden for a wrong key, BadRequest otherwise."""
     if not line.endswith(b"\n") or len(line) > MAX_LINE:
@@ -385,7 +424,8 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
         raise BadRequest("bad request: not a JSON line") from None
     if not isinstance(value, dict) or not {"v", "key", "op"} <= set(value) <= {
             "v", "key", "op", "args"}:
-        raise BadRequest("bad request: exactly v, key, op (and args for a raid or tune action)")
+        raise BadRequest("bad request: exactly v, key, op (and args for a raid, tune or say "
+                         "action)")
     given = value["key"]
     if not isinstance(given, str) or not secrets.compare_digest(
             given.encode("utf-8", "surrogatepass"), key.encode("ascii")):
@@ -395,13 +435,14 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     op = value["op"]
     if op not in OPS:
         raise BadRequest("bad request: op is one of " + ", ".join(OPS))
-    if op not in ("raid", "tune"):
+    parse_args = {"raid": raid_args, "tune": tune_args, "say": say_args}.get(op)
+    if parse_args is None:
         if "args" in value:
             raise BadRequest(f"bad request: {op} takes no args")
         return op, None
     if "args" not in value:
         raise BadRequest(f"bad request: {op} needs args")
-    return op, (raid_args if op == "raid" else tune_args)(value["args"])
+    return op, parse_args(value["args"])
 
 
 def encode(value) -> bytes:
@@ -442,17 +483,18 @@ class ControlEndpoint:
     cancels it first, which closes the socket and removes control.json."""
 
     def __init__(self, app, cfg: ControlCfg, *, key: str | None = None,
-                 read_s: float = READ_S, raid_s: float = RAID_S):
+                 read_s: float = READ_S, raid_s: float = RAID_S, say_s: float = SAY_S):
         self.app, self.cfg = app, cfg
         self.key = key or secrets.token_urlsafe(32)
         self.path = Path(app.data_dir) / KEY_FILE
-        self.read_s, self.raid_s = read_s, raid_s
+        self.read_s, self.raid_s, self.say_s = read_s, raid_s, say_s
         self.port: int | None = None
         self.listening = asyncio.Event()
         self._connections = 0
         self._raid = asyncio.Lock()
         self._tune = asyncio.Lock()  # one tuning change at a time
         self._preview = asyncio.Lock()  # one preview at a time
+        self._say = asyncio.Lock()  # one line of his in flight
 
     async def serve(self) -> None:
         from leeroy_mind.console.httpd import listen_socket
@@ -533,6 +575,11 @@ class ControlEndpoint:
             already = self.app.stopping
             log_event("control_stop_requested", already=already)
             return {"ok": True, "stopping": True}, (None if already else self.app.request_stop)
+        if op == "say":
+            reply = await self.say(args)
+            log_event("control_request", op=op, channel=args["channel"],
+                      outcome="ok" if reply["ok"] else "refused")
+            return reply, None
         reply = await (self.raid(args) if op == "raid" else self.tune(args))
         log_event("control_request", op=op, action=args["action"],
                   outcome="ok" if reply["ok"] else "refused")
@@ -606,6 +653,35 @@ class ControlEndpoint:
             return {"ok": False, "error": "another tuning change is still being written"}
         async with self._tune:
             return await service.handle(args)
+
+    async def say(self, args: dict) -> dict:
+        """His line (leeroy_mind.owner_say): one at a time, answered within say_s. Never
+        cancelled from here: a line still waiting on the game holds the next off until the
+        game (or the bridge's own ack wait) answers, so two are never in flight."""
+        from leeroy_mind.owner_say import NO_ANSWER, STOPPING
+        speech = getattr(self.app, "speech", None)
+        if self.app.stopping:
+            return {"ok": False, "error": STOPPING}
+        if speech is None:
+            return {"ok": False, "error": "Replies are not running in this mind."}
+        if self._say.locked():
+            return {"ok": False, "error": "Another line is still being sent."}
+        await self._say.acquire()
+        task = asyncio.ensure_future(speech.handle(args))
+
+        def finished(t):
+            self._say.release()
+            if not t.cancelled():
+                t.exception()  # retrieved: an answered caller may no longer be waiting
+        task.add_done_callback(finished)
+        done, _ = await asyncio.wait({task}, timeout=self.say_s)
+        if task not in done:
+            return {"ok": False, "error": NO_ANSWER}
+        try:
+            return task.result()
+        except Exception as e:  # its text can carry the line or a name
+            log_event("control_say_failed", level=logging.WARNING, error=type(e).__name__)
+            return {"ok": False, "error": f"The line could not be sent ({type(e).__name__})."}
 
 
 def attach_control(app) -> ControlEndpoint | None:

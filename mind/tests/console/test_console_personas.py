@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from conftest import make_mem, make_persona
-from console.rig import http, make_app, running
+from console.rig import http, make_app, page_source, running
 from leeroy_mind.console import feed, personaview
 from leeroy_mind.nightly.attraction import set_stance
 from leeroy_mind.nightly.growth import undo
@@ -368,7 +368,7 @@ def test_persona_content_never_reaches_the_log(cast, data, tmp_path, caplog):
 
 
 def test_the_page_has_the_personas_tab_and_no_way_to_change_a_persona():
-    from importlib import resources
-    page = resources.files("leeroy_mind.console").joinpath("page.html").read_text("utf-8")
+    page = page_source()
     assert 'id="tab-personas" class="tab mindtab"' in page and 'api("/api/personas")' in page
-    assert 'post("/api/persona' not in page and "placeholder" not in page
+    panel = page[page.index('id="tab-personas"'):].split('<section id="tab-', 1)[0]
+    assert 'post("/api/persona' not in page and "placeholder" not in panel

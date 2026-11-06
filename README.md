@@ -83,7 +83,10 @@ member say what they could not know.
   documentation snapshots and the server's installed command and teleport
   references, with text and vector search.
 - **Guild console**: `python -m leeroy_mind console` serves one local browser
-  window on `127.0.0.1:7881`: the voice rooms and the guild's chat in one feed,
+  window on `127.0.0.1:7881` (dark by default, with a remembered light/dark
+  switch; 13 tabs): Comms, the voice rooms and the guild's chat in one feed
+  with the members' faces, channels, whispers, mute and deafen, and a reply
+  box that speaks in WoW as the owner,
   the raid night (its call, comp, members, loot and DKP as they happen, recent
   raids, and the raid actions guild life performs: call, form, summon,
   start and stop the dungeon-clear run, end), the guild (roster, DKP ladder,

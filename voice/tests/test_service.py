@@ -879,6 +879,88 @@ def test_a_mute_cuts_what_the_member_is_saying(tmp_path, fake_bank):
     go(tmp_path, fake_bank, body)
 
 
+def test_a_muted_press_reaches_nobody(tmp_path, fake_bank, caplog):
+    async def body(rig):
+        await rig.snapshot()
+        await rig.tick()
+        rig.service.self_state(True, False)
+        rig.keys.key(True)
+        await rig.talk(0.5)
+        rig.keys.key(False)
+        await rig.talk(0.4)
+        assert not rig.got(Ptt) and rig.recognizer.calls == [] and not rig.service.capture.ready
+        assert rig.service.state()["ptt"] is False
+    with caplog.at_level(logging.INFO, logger="leeroy_voice"):
+        go(tmp_path, fake_bank, body)
+    assert "ptt_discarded: reason=muted" in caplog.text
+
+
+def test_muting_mid_press_drops_it(tmp_path, fake_bank):
+    async def body(rig):
+        await rig.snapshot()
+        await rig.tick()
+        rig.keys.key(True)
+        await rig.talk(0.3)
+        assert await rig.next_of(Ptt) == Ptt(True, ROOM)
+        rig.service.self_state(True, False)
+        assert await rig.next_of(Ptt, lambda m: not m.down) == Ptt(False, ROOM)
+        assert rig.service.state()["ptt"] is False
+        rig.keys.key(False)
+        await rig.talk(0.6)
+        assert rig.recognizer.calls == [] and not rig.got(Heard)
+    go(tmp_path, fake_bank, body)
+
+
+def test_deafened_lines_are_dropped_and_playing_ones_cut(tmp_path, fake_bank):
+    async def body(rig):
+        await rig.snapshot()
+        await rig.mind.send(rig.speak("s1"))
+        await rig.sees("s1", "started")
+        rig.service.self_state(False, True)
+        await rig.sees("s1", "cut", "deafened")
+        await rig.mind.send(rig.speak("s2"))
+        await rig.sees("s2", "dropped", "deafened")
+        assert len(rig.service.state()["transcript"]) == 1  # s1's, said before the cut
+        rig.service.self_state(False, False)
+        await rig.mind.send(rig.speak("s3"))
+        await rig.sees("s3", "started")
+    go(tmp_path, fake_bank, body)
+
+
+def test_deafen_mutes_too(tmp_path, fake_bank, caplog):
+    async def body(rig):
+        await rig.snapshot()
+        await rig.tick()
+        rig.service.self_state(False, True)
+        rig.keys.key(True)
+        await rig.talk(0.5)
+        rig.keys.key(False)
+        await rig.talk(0.4)
+        assert not rig.got(Ptt) and rig.recognizer.calls == []
+        assert rig.service.state()["self"] == {"mute": False, "deafen": True}
+    with caplog.at_level(logging.INFO, logger="leeroy_voice"):
+        go(tmp_path, fake_bank, body)
+    assert "ptt_discarded: reason=muted" in caplog.text
+
+
+def test_login_resets_mute_and_deafen(tmp_path, fake_bank):
+    async def body(rig):
+        await rig.snapshot()
+        page = await rig.page()
+        rig.service.self_state(True, True)
+        await eventually(lambda: {"type": "self", "mute": True, "deafen": True} in page.received)
+        await rig.mind.send(Session(False, HUMAN, "orion", "embed"))
+        await eventually(lambda: not rig.service._online)
+        assert rig.service.state()["self"] == {"mute": True, "deafen": True}  # not at logout
+        page.received.clear()
+        await rig.mind.send(Session(True, HUMAN, "orion", "embed"))
+        await eventually(lambda: rig.service._online)
+        assert rig.service.state()["self"] == {"mute": False, "deafen": False}
+        await eventually(lambda: {"type": "self", "mute": False, "deafen": False}
+                         in page.received)
+    go(tmp_path, fake_bank, body)
+
+
 def test_ui_settings_are_kept(tmp_path, fake_bank):
     async def main():
         async with Rig(tmp_path, fake_bank) as rig:
