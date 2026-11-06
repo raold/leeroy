@@ -4,8 +4,9 @@ import pytest
 
 from conftest import make_persona, seed_test_cast
 from leeroy_mind.personas.card import card_race_class
-from leeroy_mind.personas.io import (PersonaCache, export_personas, import_personas,
-                                     load_persona, save_persona)
+from leeroy_mind.personas.io import (PersonaCache, cast_without_persona, export_personas,
+                                     import_personas, load_persona, save_persona)
+from leeroy_mind.protocol import Member
 from leeroy_mind.personas.schema import PersonaError
 
 
@@ -259,3 +260,21 @@ def test_import_keeps_the_birthday_the_owner_wrote(tmp_path, store):
     report = import_personas(store, tmp_path, ts=2000.0)
     assert report.imported == [101] and report.errors == {}
     assert load_persona(store, 101).real_life.birthday == "12-25"
+
+
+def test_cast_without_persona_names_the_cast_members_nothing_was_generated_for(store):
+    """A member invited after `personas generate`, or one levelled to 80 since, has no stored
+    persona; the human never needs one and a member below 80 is not cast."""
+    seed_test_cast(store)
+
+    def member(guid, level=80, rank=4):
+        return Member(guid=guid, name=f"M{guid}", race=2, class_=1, gender=0, level=level,
+                      rank=rank, online=True, map=0, zone=0, spec_tab=-1)
+    store.upsert_cast([member(1, rank=0), member(108), member(106), member(107, level=79)], 2000.0)
+    cast = store.cast()
+    missing = cast_without_persona(cast.values(), store.persona_versions(), 1)
+    assert [m.guid for m in missing] == [106, 108]
+    assert [m.guid for m in cast_without_persona(cast.values(), {101, 102, 103, 104, 105, 106,
+                                                                 108}, 1)] == []
+    assert [m.guid for m in cast_without_persona(cast.values(), store.persona_versions(),
+                                                 None)] == [1, 106, 108]

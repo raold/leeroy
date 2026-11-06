@@ -266,6 +266,35 @@ def test_the_stored_cast_follows_each_cast_snapshot(tmp_path, clock, caplog):
     assert "cast_left: guids=[105]" in caplog.text
 
 
+def test_cast_members_without_a_persona_are_logged_once_per_change(tmp_path, clock, caplog):
+    """Members who joined the cast after `personas generate` (invited later, or levelled to 80
+    since) have no persona and stay silent. The mind names them in its log as a warning: at
+    the first snapshot, not again at a repeat of it, and again when the set changes."""
+    def joiner(guid: int, name: str) -> dict:
+        return {"guid": guid, "name": name, "race": 2, "class": 1, "gender": 0, "level": 80,
+                "rank": 4, "online": True, "map": 0, "zone": 1519, "spec_tab": 0}
+    one = {"type": "cast", "members": [*CAST["members"], joiner(106, "Newby")]}
+    two = {"type": "cast", "members": [*one["members"], joiner(107, "Newer")]}
+
+    async def main():
+        async with running(tmp_path, clock, events=[hello(HUMAN), one]) as h:
+            store = h.app.store
+            await h.wait(lambda: 106 in store.cast())
+            await h.bridge.push(one)
+            await h.bridge.push(two)
+            await h.wait(lambda: 107 in store.cast())
+            await h.bridge.push({"type": "cast", "members": []})
+            await h.wait(lambda: not h.app.world.members)
+            await h.bridge.push(two)
+            await h.wait(lambda: h.app.world.members)
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        run(main())
+    warned = [r for r in caplog.records if "cast_without_persona" in r.getMessage()]
+    assert [r.getMessage() for r in warned] == ["cast_without_persona: guids=[106]",
+                                                "cast_without_persona: guids=[106,107]"]
+    assert all(r.levelno == logging.WARNING for r in warned)
+
+
 def test_human_bot_commands_are_stored_not_threaded(tmp_path, clock):
     async def main():
         group = {"type": "group", "leader_guid": HUMAN, "raid": False,

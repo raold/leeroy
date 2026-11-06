@@ -9,7 +9,7 @@ from ..storage.store import Store
 from ..text import estimate_tokens
 from ..tuning.effective import is_effective
 from ..tuning.state import EMPTY, Tuning
-from ..wow import CLASSES, RACES
+from ..wow import CAST_MIN_LEVEL, CLASSES, RACES
 from .card import card_race_class, render_core_card
 from .schema import (Persona, PersonaError, persona_from_dict, persona_to_dict,
                      validate_persona)
@@ -177,6 +177,16 @@ def import_personas(store: Store, in_dir: Path, *, ts: float, dry_run: bool = Fa
             race, cls = _race_class(store, cast, guid)
             save_persona(store, p, source="owner", ts=ts, race=race, class_name=cls)
     return report
+
+
+def cast_without_persona(members, stored, human_guid: int | None) -> list:
+    """The cast members (level CAST_MIN_LEVEL or more, not the human) whose guid `stored` (the
+    guids persona_core holds: Store.persona_versions()) lacks, by guid. Nothing writes a
+    persona while the mind runs, so a member who joined the cast after `personas generate`
+    (invited later, or levelled to 80 since) stays silent until it runs again: the mind voices
+    only stored personas, and native mutes every cast member in mod-ollama-chat."""
+    return sorted((m for m in members if m.guid != human_guid and m.level >= CAST_MIN_LEVEL
+                   and m.guid not in stored), key=lambda m: m.guid)
 
 
 class PersonaCache:
