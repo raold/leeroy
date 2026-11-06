@@ -3,6 +3,7 @@ handle, fake probes and a tiny HTTP client. Nothing reaches a real process, port
 import asyncio
 import json
 from dataclasses import dataclass, field
+from importlib import resources
 from types import SimpleNamespace
 
 from leeroy_mind.console.app import ConsoleApp, Settings
@@ -10,6 +11,23 @@ from leeroy_mind.console.control import Controls
 from leeroy_mind.console.ws import WsError
 
 KEY = "k" * 32  # a fixed key; the real one is secrets.token_urlsafe(24)
+
+
+def page_source() -> str:
+    """What the page runs, as one text: page.html and every file under static/js."""
+    console = resources.files("leeroy_mind.console")
+    parts = [console.joinpath("page.html").read_text("utf-8")]
+
+    def walk(folder) -> None:
+        for entry in sorted(folder.iterdir(), key=lambda e: e.name):
+            if entry.is_dir():
+                walk(entry)
+            else:
+                parts.append(entry.read_text("utf-8"))
+    scripts = console.joinpath("static", "js")
+    if scripts.is_dir():
+        walk(scripts)
+    return "\n".join(parts)
 
 
 class FakeMind:

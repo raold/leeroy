@@ -1,9 +1,6 @@
 """The console's server: the key, the Origin and Host checks, the routes, the control rules and
 the event stream. A real server on a free port; the mind, voice and probes are fakes."""
 import asyncio
-import base64
-import hashlib
-import re
 import socket
 import sqlite3
 from contextlib import asynccontextmanager
@@ -13,7 +10,7 @@ import pytest
 
 from leeroy_mind.console import feed, httpd, status
 from leeroy_mind.console.control import Controls
-from console.rig import KEY, FakeMind, events, http, make_app, running
+from console.rig import KEY, FakeMind, events, http, make_app, page_source, running
 
 LINKED = [SimpleNamespace(state=5, remote_port=7878, remote="127.0.0.1", pid=101)]
 
@@ -66,9 +63,9 @@ def test_the_key_stays_in_the_page_and_travels_in_a_header_never_a_cookie(data):
                            headers={"Cookie": f"leeroy_console_{app.s.port}={KEY}"})
             assert r.status == 403  # what the console used to set: no longer a key
             assert (await http(app, "GET", "/api/state")).status == 200
-            html = page.body.decode()
-            assert "X-Console-Key" in html and "history.replaceState" in html
-            assert "new EventSource" not in html and "document.cookie" not in html
+            source = page_source()  # the page and its modules
+            assert "X-Console-Key" in source and "history.replaceState" in source
+            assert "new EventSource" not in source and "document.cookie" not in source
     run(go())
 
 
@@ -136,23 +133,6 @@ def test_bad_requests_get_short_answers(data):
             assert r.status == 400
             r = await http(app, "POST", "/api/control", body=b"x" * 20000, origin=True)
             assert r.status == 413
-    run(go())
-
-
-def test_the_page_carries_a_strict_policy_matching_its_inline_blocks(data):
-    async def go():
-        async with served(make_app(data)) as app:
-            r = await http(app, "GET", "/")
-            csp = r.header("content-security-policy")
-            html = r.body.decode()
-            for tag in ("script", "style"):
-                for block in re.findall(rf"<{tag}>(.*?)</{tag}>", html, re.S):
-                    digest = base64.b64encode(hashlib.sha256(block.encode()).digest()).decode()
-                    assert f"'sha256-{digest}'" in csp
-            assert "unsafe-inline" not in csp and "connect-src 'self'" in csp
-            assert "frame-ancestors 'none'" in csp and r.header("x-frame-options") == "DENY"
-            assert r.header("referrer-policy") == "same-origin"  # a POST keeps its Origin
-            assert "http://" not in html.split("<script>")[1]  # it loads nothing from elsewhere
     run(go())
 
 

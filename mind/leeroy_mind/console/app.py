@@ -2,15 +2,20 @@
 
 Every request must carry exactly one Host header, 127.0.0.1:<port> (against DNS rebinding), an
 Origin that is the console's own when it carries one, and a Sec-Fetch-Site of same-origin or none
-when it carries one. Every request but the page's own load must also carry the session key, once,
-in an X-Console-Key header. The printed URL holds the key in its fragment (/#key=...), which a
-browser never sends: the page takes it into memory, drops it from the address bar and sends it
-with each fetch, the event stream included. There is no cookie, so no other program on another
-127.0.0.1 port is ever handed the key. Anything else is 403. A mutating request (POST) must
-also carry the console's Origin and a JSON body; there is no CORS, so another origin's script
-cannot read an answer or send a preflighted request (the key header needs one).
+when it carries one. Every request but the page's own load and its static files must also carry
+the session key, once, in an X-Console-Key header. The printed URL holds the key in its fragment
+(/#key=...), which a browser never sends: the page takes it into memory, drops it from the address
+bar and sends it with each fetch, the event stream included. There is no cookie, so no other
+program on another 127.0.0.1 port is ever handed the key. Anything else is 403. A mutating
+request (POST) must also carry the console's Origin and a JSON body; there is no CORS, so another
+origin's script cannot read an answer or send a preflighted request (the key header needs one).
+The static files need no key because a browser sends no header with a stylesheet or a module
+script; they are the package's own files and carry no data, and the page's policy (CSP) lets it
+run nothing else.
 
     GET  /             the page (static; it carries no key)
+    GET  /static/<path> the page's stylesheet and modules (static_files: the package's static/
+                       folder, the path looked up exactly as packaged; anything else is 404)
     GET  /api/state    the strip, the voice mirror, the text feed and the control rules
     GET  /api/events   the same as a first `snapshot` event, then `status`, `voice`, `chat`
                        and `control` events (server-sent events, a comment every 15 s)
@@ -45,11 +50,9 @@ The Raid, Guild and Personas tabs read mind.db read-only. Raid actions and dial 
 mind's to take: the console forwards them and shows the mind's answer, which says why when it
 refuses. A preview's text is never logged, stored or broadcast."""
 import asyncio
-import base64
-import hashlib
 import hmac
 import logging
-import re
+import os
 import time
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -78,18 +81,31 @@ PREVIEW_S = endpoint.PREVIEW_S + 5.0  # a preview's two lines per member, at bac
 MIND_DOWN = ("The mind isn't running, so it can't preview or change dials. Start it from the "
              "Mind tab.")
 
+# The page runs only the console's own files: no inline script or style, nothing from elsewhere
+CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; "
+       "img-src blob: data:; connect-src 'self'; base-uri 'none'; form-action 'none'; "
+       "frame-ancestors 'none'")
+STATIC_TYPES = {".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8",
+                ".mjs": "text/javascript; charset=utf-8", ".woff2": "font/woff2",
+                ".txt": "text/plain; charset=utf-8"}
+
 log = logging.getLogger("leeroy_mind.console")
 
 
-def _hash_source(block: str) -> str:
-    """A CSP hash source for an inline block, newlines as the browser's parser reads them."""
-    normal = block.replace("\r\n", "\n").replace("\r", "\n")
-    return "'sha256-" + base64.b64encode(hashlib.sha256(normal.encode()).digest()).decode() + "'"
+def static_files() -> dict[str, tuple[bytes, str]]:
+    """The page's own files: each path under /static/ (js/main.mjs) with its bytes and content
+    type, read from the package's static/ folder. A file of a kind not in STATIC_TYPES is left
+    out, so it is never served."""
+    files: dict[str, tuple[bytes, str]] = {}
 
-
-def _sources(html: str, tag: str) -> str:
-    blocks = re.findall(rf"<{tag}>(.*?)</{tag}>", html, re.S)
-    return " ".join(_hash_source(b) for b in blocks) or "'none'"
+    def walk(folder, prefix: str) -> None:
+        for entry in folder.iterdir():
+            if entry.is_dir():
+                walk(entry, f"{prefix}{entry.name}/")
+            elif (kind := STATIC_TYPES.get(os.path.splitext(entry.name)[1])) is not None:
+                files[prefix + entry.name] = (entry.read_bytes(), kind)
+    walk(resources.files(__package__).joinpath("static"), "")
+    return files
 
 
 @dataclass
@@ -139,13 +155,8 @@ class ConsoleApp:
         self.follower = follower or mindlog.LogFollower(self.s.data_dir / "logs" / "mind.log")
         self._clock, self._monotonic = clock, monotonic
         self.origin = f"http://{HOST}:{settings.port}"
-        html = resources.files(__package__).joinpath("page.html").read_bytes()
-        self._page = html
-        page = html.decode("utf-8")
-        self._csp = ("default-src 'none'; "
-                     f"script-src {_sources(page, 'script')}; style-src {_sources(page, 'style')}; "
-                     "connect-src 'self'; img-src data:; base-uri 'none'; form-action 'none'; "
-                     "frame-ancestors 'none'")
+        self._page = resources.files(__package__).joinpath("page.html").read_bytes()
+        self._static = static_files()
         self._subs: set[_Subscriber] = set()
         self._found = None  # the mind's family at the latest process list (None: none taken)
         self._ambiguous: str | None = None
@@ -390,8 +401,8 @@ class ConsoleApp:
                 return text(415, "Send JSON.")
         elif req.method != "GET":
             return text(405, "Method not allowed.", [("Allow", "GET, POST")])
-        if req.path == "/" and req.method == "GET":
-            return None  # the page: static, and its key stays in the browser (the fragment)
+        if req.method == "GET" and (req.path == "/" or req.path.startswith("/static/")):
+            return None  # the page and its files: static, and its key stays in the browser
         if self._key_ok(req.one(KEY_HEADER)):
             return None
         return text(403, "Forbidden: no console key. Open the URL the console printed when "
@@ -405,6 +416,10 @@ class ConsoleApp:
             if req.method != "GET":
                 return text(405, "Method not allowed.", [("Allow", "GET")])
             return self._page_response()
+        if req.path.startswith("/static/"):
+            if req.method != "GET":
+                return text(405, "Method not allowed.", [("Allow", "GET")])
+            return self._static_response(req.path[len("/static/"):])
         routes = {("GET", "/api/state"): self._api_state,
                   ("GET", "/api/events"): self._api_events,
                   ("GET", "/api/health"): self._api_health,
@@ -427,9 +442,16 @@ class ConsoleApp:
 
     def _page_response(self) -> Response:
         return Response(200, self._page, "text/html; charset=utf-8", [
-            ("Content-Security-Policy", self._csp), ("X-Frame-Options", "DENY"),
+            ("Content-Security-Policy", CSP), ("X-Frame-Options", "DENY"),
             ("Referrer-Policy", "same-origin"), ("Cross-Origin-Opener-Policy", "same-origin"),
             ("Cross-Origin-Resource-Policy", "same-origin")])
+
+    def _static_response(self, name: str) -> Response:
+        found = self._static.get(name)  # exactly as packaged: nothing is normalised or joined
+        if found is None:
+            return text(404, "Not found.")
+        body, kind = found
+        return Response(200, body, kind, [("Cross-Origin-Resource-Policy", "same-origin")])
 
     # -- the endpoints -----------------------------------------------------------------------
 
