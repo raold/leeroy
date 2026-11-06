@@ -8,7 +8,7 @@ import pytest
 from conftest import run
 from leeroy_mind.bodies import ALL, BodyHold
 from leeroy_mind.guild.protocol import BotDo, Job, JobSkip
-from leeroy_mind.protocol import Hello
+from leeroy_mind.protocol import Ack, Hello
 from leeroy_mind.realm import protocol as p
 from leeroy_mind.realm.service import attach_realm
 from realm.fakes import RealmApp, enabled
@@ -147,6 +147,39 @@ def test_failed_leave_stops_rearm_and_retains_its_manifest(pipeline):
             await h.cycle(2)
             assert len(h.app.sent) == 1
             assert h.realm.action_store.holds()[0].guids == frozenset({101, 102})
+    run(scenario())
+
+
+def test_leave_native_refuses_for_a_fenced_body_holds_nobody_and_defaults_follow(pipeline):
+    async def scenario():
+        async with pipeline:
+            h = pipeline
+            h.cast(101, 102, 103)
+            send = h.app.send
+
+            async def answer(cmd, *, preserve_id=False):
+                if type(cmd) is not p.LeavePvp:
+                    return await send(cmd, preserve_id=preserve_id)
+                h.app.sent.append(cmd)
+                return Ack(0, cmd.id, False, "busy:raid_owner")  # 102 is in his group
+            h.app.send = answer
+            h.realm.recall.on_login(h.clock.now())
+            await h.cycle()
+            leave, = h.app.sent
+            record = h.realm.action_store.get(leave.id)
+            assert (record.state, record.result_ok, record.result_reason) == ("completed", False, "refused")
+            assert h.realm.action_store.holds() == ()
+            assert h.realm.bodies.movable("realm_day", {101, 102, 103}) == {101, 102, 103}
+            h.realm.recall.tick(h.clock.now())
+            await h.cycle(2)
+            assert h.app.sent == [leave]       # the refused recall chains nothing
+            h.realm.recall.restore_defaults()
+            await h.cycle()
+            rearm = h.app.sent[-1]
+            assert type(rearm) is p.Rearm and rearm.guids == (101, 102, 103)
+            await h.result(rearm)
+            await h.cycle(1.01)
+            assert type(h.app.sent[-1]) is BotDo and h.app.sent[-1].guids == (101, 102, 103)
     run(scenario())
 
 

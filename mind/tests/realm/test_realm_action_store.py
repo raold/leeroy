@@ -2,17 +2,20 @@
 from dataclasses import replace
 import json
 from pathlib import Path
+import re
 import sqlite3
 
 import pytest
 
 from leeroy_mind.guild.protocol import BotDo, Job, JobSkip
 from leeroy_mind.protocol import Ack
-from leeroy_mind.realm import protocol as p
+from leeroy_mind.realm import action_store, protocol as p
 from leeroy_mind.realm.action_policy import classify, decode, document
-from leeroy_mind.realm.action_store import ActionCapacity, ActionSpec, ActionStore, ActionUnavailable, REFUSALS
+from leeroy_mind.realm.action_store import (ActionCapacity, ActionSpec, ActionStore, ActionUnavailable, BODY_FENCES,
+                                            REFUSALS)
 
 TOKEN = "a" * 32 + "-" + "b" * 16
+REPO = Path(__file__).resolve().parents[3]
 
 
 @pytest.fixture
@@ -24,10 +27,10 @@ def store():
     conn.close()
 
 
-def prepare(store, cmd=None, now=0):
+def prepare(store, cmd=None, now=0, owner="realm_day", rank=4):
     cmd = cmd or p.RealmMove("move", 2, "home")
     c = classify(cmd)
-    return store.prepare(ActionSpec(cmd.id, None, "root", c.policy, "realm_day", 4, c.kind,
+    return store.prepare(ActionSpec(cmd.id, None, "root", c.policy, owner, rank, c.kind,
                                   c.payload, c.reserved_manifest, 50, 1), now=now)
 
 
@@ -140,6 +143,63 @@ def test_nonallowlisted_refusal_retains_scope(store, reason):
     store.observe_ack(Ack(0, "move", False, reason), now=2)
     assert store.get("move").state == "unknown"
     assert store.holds()[0].guids == frozenset({2})
+
+
+def test_a_leave_refused_for_one_fenced_body_frees_the_whole_cast(store):
+    cast = tuple(range(101, 207))
+    dispatch(store, prepare(store, p.LeavePvp("leave", cast), owner="raid", rank=0))
+    assert store.holds()[0].guids == frozenset(cast)
+    t = store.observe_ack(Ack(0, "leave", False, "busy:raid_owner"), now=2)
+    assert (t.result_ready, t.result_ok, t.reason) == (True, False, "refused")
+    assert store.get("leave").state == "completed"
+    assert store.holds() == ()
+
+
+def test_recovery_settles_a_body_fence_an_older_build_kept_unknown(store, monkeypatch):
+    monkeypatch.setattr(action_store, "REFUSALS", REFUSALS - BODY_FENCES)  # as the previous build read acks
+    cast = tuple(range(101, 207))
+    dispatch(store, prepare(store, p.LeavePvp("leave", cast), owner="raid", rank=0))
+    store.observe_ack(Ack(0, "leave", False, "busy:raid_owner"), now=2)
+    dispatch(store, prepare(store, p.Rearm("duplicate", (301,))))
+    store.observe_ack(Ack(0, "duplicate", False, "busy:duplicate_operation"), now=3)
+    dispatch(store, prepare(store, p.Rearm("lost", (302,))))
+    store.observe_ack(Ack(0, "lost", False, "busy:raid_owner"), now=4)
+    store.observe_send_error("lost", "TimeoutError", now=5)
+    dispatch(store, prepare(store, p.GuildGrow("grow", 13, (303, 304))))
+    store.observe_ack(Ack(0, "grow", True, ""), now=6)
+    store.observe_realm_job(job("grow", "guild_grow", "failed", "operation_transition_unknown", 0, 1), now=7)
+    assert [r.state for r in store.records()] == ["unknown"] * 4
+    old = store.get("leave")
+    monkeypatch.undo()
+    unresolved = store.recover(process_id="new", now=20)
+    leave = store.get("leave")
+    assert (leave.state, leave.result_ok, leave.result_reason) == ("completed", False, "refused")
+    assert json.loads(leave.evidence) == json.loads(old.evidence)  # the same native ack, read again
+    assert [r.command_id for r in unresolved] == ["duplicate", "lost", "grow"]
+    assert {h.scope_id: h.guids for h in store.holds()} == {
+        "duplicate": frozenset({301}), "lost": frozenset({302}), "grow": frozenset({303, 304})}
+    assert [r.command_id for r in store.recover(process_id="again", now=30)] == ["duplicate", "lost", "grow"]
+    assert store.get("leave") == leave
+
+
+def test_body_fences_are_native_admission_refusals_before_any_reservation():
+    ports = (REPO / "modules/mod-leeroy/src/Realm/RealmPorts.h").read_text(encoding="utf-8")
+    module = (REPO / "modules/mod-leeroy/src/Realm/RealmModule.cpp").read_text(encoding="utf-8")
+
+    def body(text, signature):
+        start = text.index(signature)
+        return text[start:text.index("\n}\n", start)]
+
+    fences = set()
+    for text, signature in ((ports, "inline std::string NativeOwnershipReason("),
+                            (ports, "inline std::string NativeMutationReason("),
+                            (module, "std::string RealmModule::MutationReason("),
+                            (module, "bool RealmModule::RegisterExecutor(")):
+        fences |= set(re.findall(r'"([a-z][a-z_:]*)"', body(text, signature)))
+    assert fences == BODY_FENCES
+    accept = body(module, "bool RealmModule::AcceptDomain(")
+    reserve = accept.index("_state->holders.emplace(")
+    assert accept.index(".admit(entry, guid)") < reserve and accept.index("MutationReason(guid)") < reserve
 
 
 @pytest.mark.parametrize("first", ["ack", "job"])
