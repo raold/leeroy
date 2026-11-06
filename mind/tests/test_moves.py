@@ -92,3 +92,16 @@ def test_every_move_has_a_phrase_and_the_line_stays_short():
     rows = [row(main=m, topics=("table",), t=i) for i, m in enumerate(MOVES) for _ in (0, 1)]
     assert len(moves_line(rows, night_start=0, forms=HE)) <= MOVES_LINE_CHARS
     assert "{" not in moves_line(rows, night_start=0, forms=HE)
+
+
+@pytest.mark.parametrize("text", ["come over and join the raid", "get over here and queue with me",
+                                  "come to dalaran, i'm waiting"])
+def test_an_in_game_invite_clause_beats_a_summon_clause_in_one_sentence(text):
+    assert "invite_game" in classify(text) and not is_summon(text)
+
+
+@pytest.mark.parametrize("text", ["come to my place after raid", "come to my house",
+                                  "come to my flat", "come to my apartment", "come to my room",
+                                  "come to my bed"])
+def test_to_my_place_is_a_real_life_summons(text):
+    assert is_summon(text)

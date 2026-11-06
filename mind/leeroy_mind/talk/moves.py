@@ -22,7 +22,8 @@ _PATTERNS = {
               r"|\bget (your|ur) ass\b|\bover (here|hre|heer)\b"
               r"|\b(i'?m|i've been|been|i am|just sitting here) (wa?it+ing|waitiing|wating)\b"
               r"|\bwaiting (for (you|u)|all day)\b|\bdoor'?s open\b|\byour move\b"
-              r"|\bdon'?t be late\b|\bpull up\b|\bfind me\b|\bhurry up\b",
+              r"|\bdon'?t be late\b|\bpull up\b|\bfind me\b|\bhurry up\b"
+              r"|\bto my (place|house|flat|apartment|room|bed)\b",
     "invite_game": r"\b(in|to|at|into|inside)\s+(the\s+|my\s+|our\s+|a\s+)?(dalaran|orgrimmar|org"
                    r"|stormwind|shattrath|shatt|ironforge|undercity|vent|voice|discord|ts3|mumble"
                    r"|dungeon|raid|bg|battleground|arena|queue|group|party|lfg)\b"
@@ -54,6 +55,7 @@ _PATTERNS = {
 }
 _RE = {k: re.compile(v, re.I) for k, v in _PATTERNS.items()}
 _SENTENCE = re.compile(r"[.!?;,\n]+|\s(?:and|but)\s")
+_COARSE = re.compile(r"[.!?;\n]+")
 _WORD = re.compile(r"[a-z]{4,}")
 
 GAME_WORDS = frozenset(
@@ -84,10 +86,11 @@ def classify(text: str) -> frozenset[str]:
     only a time or an aside (after raid, the bg is up) does not hide a summons."""
     t = _fold(text or "")
     found: set[str] = set()
-    for sentence in _SENTENCE.split(t):
-        if _RE["invite_game"].search(sentence):
+    for coarse in _COARSE.split(t):
+        clauses = _SENTENCE.split(coarse)
+        if any(_RE["invite_game"].search(c) for c in clauses):
             found.add("invite_game")
-        elif _RE["summon"].search(sentence):
+        elif any(_RE["summon"].search(c) for c in clauses):
             found.add("summon")
     for move, rx in _RE.items():
         if move not in ("summon", "invite_game") and rx.search(t):
