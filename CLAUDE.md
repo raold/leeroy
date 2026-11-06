@@ -89,7 +89,7 @@ never committed.
 The checkout at `F:\azerothcore` itself runs the installed release: a local
 branch (now `codex/live-release-20261102`) whose private history is never
 pushed wholesale. Public changes land on `main` from worktrees under
-`F:zerothcore\worktrees\`. GitHub deletes a merged PR's head branch by
+`F:\azerothcore\worktrees\`. GitHub deletes a merged PR's head branch by
 itself (repo setting, 2026-11-06), so do not delete remote branches by hand; the
 local branch and worktree still need `git worktree remove` and `git branch -d`.
 
