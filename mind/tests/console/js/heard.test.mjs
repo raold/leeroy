@@ -54,3 +54,36 @@ test("an entry already due before a later line stays due", () => {
   assert.deepEqual(h.due(7000).map(function (e) { return e.text; }), ["old"]);
   assert.deepEqual(h.due(20000), []);
 });
+
+test("an older own line replayed within the wait does not clear it", () => {
+  var h = new Heard();
+  h.heardYou({ text: "hello there", ts: 10000 }, 10000);
+  h.sawOwnVoiceLine({ you: true, channel: "voice:guild", ts: 5 }, 12000);
+  assert.equal(h.due(20000).length, 1);
+});
+
+test("a line with a time near or after the entry clears it; one without a time uses receipt", () => {
+  var h = new Heard();
+  h.heardYou({ text: "a", ts: 0 }, 10000);
+  h.sawOwnVoiceLine({ you: true, channel: "voice:guild", ts: 9 }, 12000);
+  assert.deepEqual(h.due(20000), []);
+  h.heardYou({ text: "b", ts: 0 }, 30000);
+  h.sawOwnVoiceLine({ you: true, channel: "voice:guild", ts: 31 }, 32000);
+  assert.deepEqual(h.due(40000), []);
+});
+
+test("the voice service's ts, future or past, does not move the due time", () => {
+  var h = new Heard();
+  h.heardYou({ text: "future", ts: 9e12 }, 1000);
+  h.heardYou({ text: "past", ts: 0 }, 100000);
+  assert.deepEqual(h.due(1000 + HEARD_WAIT_MS + 1).map(function (e) { return e.text; }), ["future"]);
+  assert.deepEqual(h.due(100000 + HEARD_WAIT_MS - 1), []);
+  assert.deepEqual(h.due(100000 + HEARD_WAIT_MS + 1).map(function (e) { return e.text; }), ["past"]);
+});
+
+test("clear drops pending entries", () => {
+  var h = new Heard();
+  h.heardYou({ text: "x", ts: 1 }, 1000);
+  h.clear();
+  assert.deepEqual(h.due(20000), []);
+});

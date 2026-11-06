@@ -317,7 +317,8 @@ on("chat", function (d) {
 });
 on("snapshot", heardWatch);
 on("voice", function (m) {
-  if (m && m.type === "transcript" && m.kind === "you") { HEARD.heardYou({ text: m.text, ts: m.ts }, Date.now()); }
+  if (m && m.type === "transcript" && m.kind === "you") { HEARD.heardYou({ text: m.text }, Date.now()); }
+  if (m && m.type === "down") { HEARD.clear(); }
   heardWatch();
   if (typeof m.type === "string" && own(ON_VOICE, m.type)) { ON_VOICE[m.type](m); }
 });
