@@ -44,7 +44,6 @@ from dataclasses import dataclass, field, replace
 from statistics import mean
 from typing import TYPE_CHECKING
 
-from leeroy_mind.llm.presets import STRUCTURE
 from leeroy_mind.logs import log
 from leeroy_mind.memory.writer import clean_memory_text
 from leeroy_mind.nightly import growth
@@ -53,7 +52,7 @@ from leeroy_mind.nightly.evidence import (Evidence, Facts, content_words, load_f
                                           retrieve)
 from leeroy_mind.nightly.ground import Claim, Verdict, ground, log_verdicts, screen_text
 from leeroy_mind.nightly.knowledge import unknown_to
-from leeroy_mind.nightly.llm import schema, system_prompt
+from leeroy_mind.nightly.llm import fit_notes, schema, system_prompt
 from leeroy_mind.nightly.relations import apply_capped, screen_claim
 from leeroy_mind.nightly.runner import ATTITUDE_WORDS
 from leeroy_mind.nightly.settings import NightlySettings, iso_week, week_bounds
@@ -63,7 +62,7 @@ from leeroy_mind.personas.screens import has_word
 from leeroy_mind.storage.rows import MemoryRow
 from leeroy_mind.storage.store import Store, clean
 from leeroy_mind.talk.prompt import relationship_card
-from leeroy_mind.text import estimate_tokens, normalize_words, strip_wow_markup, truncate_words
+from leeroy_mind.text import normalize_words, strip_wow_markup, truncate_words
 
 if TYPE_CHECKING:
     from leeroy_mind.nightly.runner import NightContext
@@ -76,9 +75,6 @@ OUTPUT_KINDS = ("belief", "self_insight", "rel_delta", "plan", "tom", "nickname"
 DIMS = ("affinity", "trust", "respect", "familiarity")
 EMOTIONS_MAX = 3
 EVIDENCE_CHARS = 14000  # the think prompt's evidence, so the call fits num_ctx 8192 (review M16)
-JSON_PREDICT = 1024     # Reasoner.json's num_predict: the JSON pass's room for its answer
-CTX_SLACK = 320         # tokens the JSON pass keeps free: the suffixes chat_json adds (a retry's
-#                         too) and the schema's JSON, which runs denser than 4 characters a token
 PRIVATE_OVERLAP = 2     # content words an open output shares with a shown private item (M7)
 PEOPLE = 6              # digest.people: the most frequent actors
 WHO_KNOWS = 3           # who-knows-what pairs, at most
@@ -360,15 +356,11 @@ def _think_user(ctx: "NightContext", owner: int, ev: Evidence, cards: list[str],
 
 
 def _fit_notes(notes: str, system: str, user: str, schema_: dict) -> str:
-    """The reasoning pass's notes as the JSON pass gets them: whole when the call fits num_ctx
-    with JSON_PREDICT tokens of output and CTX_SLACK to spare, else only their end, where the
-    conclusions are. With the evidence at EVIDENCE_CHARS, six cards, three questions, the output
-    instruction and the schema, a full 2,048 tokens of notes would run about 160 tokens past
-    num_ctx 8192, and Ollama would cut the prompt's head, where the system prompt and INVARIANTS
-    are (review M16)."""
-    fixed = sum(estimate_tokens(t) for t in (system, user, json.dumps(schema_)))
-    room = max(0, (STRUCTURE.options["num_ctx"] - JSON_PREDICT - CTX_SLACK - fixed) * 4)
-    return notes if len(notes) <= room else notes[len(notes) - room:]
+    """The reasoning pass's notes as the JSON pass gets them (nightly.llm.fit_notes, which
+    Reasoner.json applies too; here first, so a cut is logged). With the evidence at
+    EVIDENCE_CHARS, six cards, three questions, the output instruction and the schema, a full
+    2,048 tokens of notes would already run about 160 tokens past num_ctx 8192 (review M16)."""
+    return fit_notes(notes, system, user, schema_)
 
 
 def _overlaps(text: str, private: list[set[str]], facts: Facts) -> bool:

@@ -223,7 +223,14 @@ class OllamaClient:
         # A think block cut off by num_predict must never be spoken.
         content = _OPEN_THINK_RE.sub("", content).strip()
         if not content and thinking:
-            log.warning("chat: empty content but the model thought (%s); is think:false honoured?", model)
+            # Counts only. Thinking counts against num_predict, so a thinking request can
+            # spend all of it before the answer begins.
+            why = ("is think:false sent and honoured?" if not think else
+                   "the thinking used up num_predict" if diagnostics.done_reason == "length"
+                   else "nothing came after the thinking")
+            log.warning("chat: empty content but the model thought (%s; think=%s, done_reason=%s, "
+                        "eval_count=%s, num_predict=%s); %s", model, think, diagnostics.done_reason,
+                        diagnostics.eval_count, body["options"].get("num_predict"), why)
         count = out.get("eval_count")
         return ChatResult(content, thinking, count if isinstance(count, int) else 0, seconds, diagnostics)
 

@@ -2,6 +2,7 @@
 the two-pass Reasoner with its two reasoning slots. Fakes only; no model is loaded."""
 import asyncio
 import json
+import logging
 import re
 
 import pytest
@@ -9,8 +10,11 @@ import pytest
 from conftest import run
 from leeroy_mind.app import has_model
 from leeroy_mind.llm.client import ChatResult, LLMError
-from leeroy_mind.nightly.llm import (INVARIANTS, Reasoner, ReflectionError, check_schema, schema,
-                                     system_prompt)
+from leeroy_mind.llm.diagnostics import capture_response
+from leeroy_mind.nightly.llm import (INVARIANTS, JSON_PREDICT, THINK_PREDICT_MAX,
+                                     THINK_PREDICT_MIN, Reasoner, ReflectionError, check_schema,
+                                     schema, system_prompt, think_predict)
+from leeroy_mind.text import estimate_tokens
 from leeroy_mind.testing.fake_llm import FakeLLM, script_from
 from nightly.conftest import IDENT
 
@@ -174,7 +178,75 @@ def test_think_returns_thinking_then_text():
     assert run(Reasoner(llm, "refl").think("sys", "u")) == "pondering\nanswer"
     c = llm.calls[0]
     assert c["messages"] == [{"role": "system", "content": "sys"}, {"role": "user", "content": "u"}]
-    assert (c["model"], c["options"]["num_predict"], c["format"]) == ("refl", 2048, None)
+    assert (c["model"], c["options"]["num_predict"], c["format"]) == ("refl", THINK_PREDICT_MAX, None)
+
+class CutLLM(FakeLLM):
+    """A reasoning reply that ran out of num_predict: Ollama's done_reason "length", all of
+    num_predict spent, and the answer `text` (empty when the thinking used it all)."""
+
+    def __init__(self, text: str = "", **kw):
+        super().__init__(**kw)
+        self.text = text
+
+    async def chat(self, model, messages, *, options, **kw):
+        await super().chat(model, messages, options=options, **kw)
+        n = options["num_predict"]
+        out = {"message": {"content": self.text, "thinking": "the private thoughts"},
+               "done": True, "done_reason": "length", "eval_count": n, "prompt_eval_count": 1300}
+        return ChatResult(self.text, "the private thoughts", n, 61.0, capture_response(out))
+
+
+def test_the_think_budget_is_the_room_its_prompt_leaves():
+    """Thinking counts against num_predict. At a flat 2,048 a third of the nights' reasoning
+    passes were cut off and some came back with no answer at all, while their prompts left
+    num_ctx 8192 room for more. A pass now gets that room, at most THINK_PREDICT_MAX and never
+    less than the 2,048 reflect's evidence cap was sized for (review M16)."""
+    assert (THINK_PREDICT_MIN, THINK_PREDICT_MAX) == (2048, 4096)
+    assert think_predict("s" * 4000, "u" * 1200) == THINK_PREDICT_MAX     # a 1,300-token prompt
+    system, user = "s" * 8000, "u" * 12000                               # 5,000 tokens
+    n = think_predict(system, user)
+    assert THINK_PREDICT_MIN < n < THINK_PREDICT_MAX
+    assert estimate_tokens(system) + estimate_tokens(user) + n <= 8192
+    assert think_predict("s" * 20000, "u" * 12000) == THINK_PREDICT_MIN  # full: today's length
+    llm = FakeLLM(script=lambda m, msgs: "answer")
+    run(Reasoner(llm, "refl").think(system, user))
+    assert llm.calls[0]["options"]["num_predict"] == n and llm.calls[0]["think"] is True
+
+
+@pytest.mark.parametrize("text,answered", [("", False), ("half an ans", True)])
+def test_a_think_reply_cut_off_is_logged_by_counts_and_still_gives_notes(caplog, text, answered):
+    with caplog.at_level(logging.WARNING, logger="leeroy_mind"):
+        notes = run(Reasoner(CutLLM(text), "refl").think("sys", "u"))
+    assert notes == "the private thoughts\n" + text                     # the thinking is kept
+    (rec,) = [r for r in caplog.records if "nightly_think_cut" in r.getMessage()]
+    assert (f"num_predict={THINK_PREDICT_MAX}" in rec.getMessage()
+            and f"eval_count={THINK_PREDICT_MAX}" in rec.getMessage()
+            and f"answered={str(answered).lower()}" in rec.getMessage())
+    assert "private thoughts" not in caplog.text and "half an ans" not in caplog.text
+
+
+def test_a_finished_think_reply_logs_nothing(caplog):
+    with caplog.at_level(logging.WARNING, logger="leeroy_mind"):
+        assert run(Reasoner(ReportingLLM(script=lambda m, msgs: "a", thinking="t"), "refl")
+                   .think("sys", "u")) == "t\na"
+    assert "nightly_think_cut" not in caplog.text
+
+
+def test_the_json_pass_cuts_long_notes_to_their_end_for_every_caller():
+    """With longer reasoning, notes from enrich, stories, the recap or the coach could run the
+    answer pass past num_ctx, and Ollama would cut the prompt's head, where the system prompt
+    and INVARIANTS are (review M16). Reasoner.json keeps only their end, where the conclusions
+    are; short notes go whole."""
+    long_notes = "I keep thinking it over. " * 2000 + "So: the answer is three."
+    llm = FakeLLM(script=lambda m, msgs: '{"x": 1}')
+    system = "sys " * 300
+    run(Reasoner(llm, "refl").json(system, "u", S, notes=long_notes))
+    sent = llm.calls[0]["messages"]
+    assert "So: the answer is three." in sent[-1]["content"] and long_notes not in sent[-1]["content"]
+    assert estimate_tokens(sent[0]["content"]) + estimate_tokens(sent[-1]["content"]) + JSON_PREDICT <= 8192
+    run(Reasoner(llm, "refl").json(system, "u", S, notes="short, the end"))
+    assert "Your notes:\nshort, the end" in llm.calls[1]["messages"][-1]["content"]
+
 
 def test_json_options_and_notes():
     llm = FakeLLM(script=lambda m, msgs: '{"x": 1}')

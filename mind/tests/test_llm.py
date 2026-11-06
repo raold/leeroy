@@ -493,6 +493,19 @@ def test_empty_content_with_thinking_warns(monkeypatch, caplog):
     assert r.text == "" and r.thinking == "hmm" and "think:false" in caplog.text
 
 
+def test_empty_content_after_thinking_that_used_up_num_predict_says_so(monkeypatch, caplog):
+    """A thinking request (the night's reasoning pass) whose thinking spent all of num_predict
+    has no answer: the warning says so, by its counts alone, instead of blaming think:false."""
+    _patch(monkeypatch, lambda p, b: {"message": {"content": "", "thinking": "a private thought"},
+                                      "done": True, "done_reason": "length", "eval_count": 2048})
+    with caplog.at_level("WARNING", logger="leeroy_mind"):
+        r = run(OllamaClient("http://x:1").chat("m", MSGS, options={"num_predict": 2048}, think=True))
+    assert r.text == "" and r.diagnostics.done_reason == "length"
+    assert "thinking used up num_predict" in caplog.text and "think:false" not in caplog.text
+    assert "think=True" in caplog.text and "eval_count=2048, num_predict=2048" in caplog.text
+    assert "private thought" not in caplog.text
+
+
 def test_thinking_field_kept(monkeypatch):
     _patch(monkeypatch, lambda p, b: {"message": {"content": "hi", "thinking": "hmm"}})
     r = run(OllamaClient("http://x:1").chat("m", MSGS, options={}))
