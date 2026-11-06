@@ -74,6 +74,17 @@ jobs:
           clone mod-dungeon-clear jrad7/mod-dungeon-clear "$DC_SHA"
           clone mod-transmog azerothcore/mod-transmog "$TRANSMOG_SHA"
           git -C core/modules/mod-ollama-chat -c user.name=leeroy-ci -c user.email=ci@invalid             am --3way "$GITHUB_WORKSPACE"/leeroy/patches/mod-ollama-chat/*.patch
+          # -Werror stays on for mod-leeroy and mod-dojo. The one exception is in mod-dungeon-clear's own files,
+          # which all compile into the shared `modules` target, so it is relaxed per source file, not per target:
+          # clang -Wmismatched-tags on `DcApproachState` (declared `class` in Action/DcActionShared.h, defined
+          # `struct` in DcApproachState.h). It is harmless on Linux (it matters only for the Microsoft ABI) and
+          # is upstream's code. Only that one warning, and only for that module's sources.
+          cat >> core/modules/mod-dungeon-clear/mod-dungeon-clear.cmake <<'CMAKE'
+
+          # CI only: see .github/workflows/build.yml
+          file(GLOB_RECURSE LEEROY_CI_DC_SOURCES "${CMAKE_CURRENT_LIST_DIR}/src/*.cpp")
+          set_source_files_properties(${LEEROY_CI_DC_SOURCES} PROPERTIES COMPILE_OPTIONS "-Wno-error=mismatched-tags")
+          CMAKE
 
       # mod-dojo builds its disabled variant here (AC_ENABLE_DOJO stays off); beside mod-leeroy, its configure also
       # checks that the two vendored json.hpp copies are identical.
