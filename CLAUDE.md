@@ -366,14 +366,21 @@ raid night's `RaidHabits` (plus dungeon-clear's entry when he is inside an
 instance) and are teleported beside him. He is told per role how
 many were added and how many slots stayed empty, with a tally of why the
 others were not free. He must lead his group and be alive, out of combat and
-not travelling. Anyone else, `Leeroy.Enable = 0`, no guild or an empty cast:
+not travelling. Inside an instance, a size bigger than its copy's player cap
+(add10/25/40 in a 5-man, add25/40 in a 10-man raid) is refused before anything
+moves, with one line naming what fits there; refusals log `add<N> from the
+guild refused: <line>`. Anyone else, `Leeroy.Enable = 0`, no guild or an empty cast:
 the command reaches playerbots unchanged. Each fill publishes a `guild_group`
 event (reason `built`). Taking that group onto an instance map grants
 dungeon-clear's entry for it (`GrantRaidEntry`, which writes only what a member
 lacks) to its guild members not yet in his copy, brings them in under the same
 fences (his copy only), and publishes another (`entered`, with map, instance id
-and difficulty). Such a group raids for DKP and attendance like a called raid
-night (see the mind's guild life).
+and difficulty). A group bigger than that copy's cap is not brought in, and he
+is told so: the core checks the cap before a teleport but counts arrivals only
+at the door, so it lets the first few in and sends the rest to their homebinds
+(2026-11-05: 20 members of a 25 bounced to Dalaran from Old Hillsbrad). Such a
+group raids for DKP and attendance like a called raid night (see the mind's
+guild life).
 
 ### Local patch: pinned random bots
 

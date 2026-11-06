@@ -35,6 +35,20 @@ std::string Count(std::uint32_t n, char const* one, char const* many)
 {
     return std::to_string(n) + " " + (n == 1 ? one : many);
 }
+
+// "a", "a and b", "a, b and c".
+std::string Join(std::vector<std::string> const& items)
+{
+    std::string list;
+    for (std::size_t i = 0; i < items.size(); ++i)
+        list += (i == 0 ? "" : i + 1 == items.size() ? " and " : ", ") + items[i];
+    return list;
+}
+
+std::string Where(GuildAddPlace const& place)
+{
+    return std::to_string(place.cap) + "-man " + (place.raid ? "raid" : "dungeon");
+}
 }
 
 std::optional<GuildAddCounts> GuildAddComposition(std::uint32_t size)
@@ -66,6 +80,31 @@ std::uint32_t ParseGuildAddCommand(std::vector<std::string> const& completions)
 bool GuildAddIntercepts(GuildAddGate const& gate)
 {
     return !gate.console && gate.enabled && gate.human && gate.invoker == gate.human && gate.guild && gate.cast;
+}
+
+std::string GuildAddSizeRefusal(std::uint32_t size, GuildAddPlace const& place)
+{
+    if (!place.cap || size <= place.cap || !GuildAddComposition(size))
+        return {};
+    std::uint32_t fit = 0;
+    std::vector<std::string> outside;
+    for (std::uint32_t each : {5u, 10u, 25u, 40u})
+        if (each <= place.cap)
+            fit = each;
+        else
+            outside.push_back("add" + std::to_string(each));
+    std::string const here = !fit ? std::string("no add command fits here")
+        : "add" + std::to_string(fit) + (place.raid ? " fits here" : " tops this party up");
+    return "You are in a " + Where(place) + ": " + here + "; " + Join(outside)
+        + (outside.size() == 1 ? " works" : " work") + " outside or in " + (place.raid ? "a bigger raid" : "a raid");
+}
+
+std::string GuildAddEntryRefusal(std::uint32_t members, GuildAddPlace const& place)
+{
+    if (!place.cap || members <= place.cap)
+        return {};
+    return "Your group of " + std::to_string(members) + " does not fit this " + Where(place)
+        + ", so nobody was brought in";
 }
 
 std::string GuildAddSkipReason(GuildAddBody const& body)
@@ -163,10 +202,7 @@ std::vector<std::string> GuildAddMessages(GuildAddPlan const& plan, GuildAddCoun
         if (empty[0]) roles.push_back(Count(empty[0], "tank", "tanks"));
         if (empty[1]) roles.push_back(Count(empty[1], "healer", "healers"));
         if (empty[2]) roles.push_back(Count(empty[2], "damage", "damage"));
-        std::string list = roles.front();
-        for (std::size_t i = 1; i < roles.size(); ++i)
-            list += (i + 1 == roles.size() ? " and " : ", ") + roles[i];
-        messages.push_back(Count(total, "slot", "slots") + " left empty: no free guild member for " + list);
+        messages.push_back(Count(total, "slot", "slots") + " left empty: no free guild member for " + Join(roles));
 
         std::vector<std::pair<std::string, std::uint32_t>> reasons(unavailable.begin(), unavailable.end());
         std::stable_sort(reasons.begin(), reasons.end(),

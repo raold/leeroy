@@ -131,6 +131,57 @@ LEEROY_TEST(Guild_AddLeavesEveryoneButTheOwnerToPlayerbots)
     CHECK(!GuildAddIntercepts(gate));
 }
 
+LEEROY_TEST(Guild_AddRefusesASizeHisCopyCannotHold)
+{
+    // Outside an instance every size goes ahead.
+    for (std::uint32_t size : {5u, 10u, 25u, 40u})
+        CHECK(GuildAddSizeRefusal(size, {}).empty());
+
+    // In a 5-man (normal or heroic) only add5 fits: a raid size is refused before his group changes.
+    GuildAddPlace const dungeon{5, false};
+    CHECK(GuildAddSizeRefusal(5, dungeon).empty());
+    for (std::uint32_t size : {10u, 25u, 40u})
+        CHECK_EQ(GuildAddSizeRefusal(size, dungeon), "You are in a 5-man dungeon: add5 tops this party up; add10, "
+            "add25 and add40 work outside or in a raid");
+
+    // A raid holds its own size: smaller ones go ahead, bigger ones are refused.
+    GuildAddPlace const ten{10, true};
+    CHECK(GuildAddSizeRefusal(5, ten).empty());
+    CHECK(GuildAddSizeRefusal(10, ten).empty());
+    CHECK_EQ(GuildAddSizeRefusal(25, ten), "You are in a 10-man raid: add10 fits here; add25 and add40 work outside "
+        "or in a bigger raid");
+    CHECK_EQ(GuildAddSizeRefusal(40, ten), GuildAddSizeRefusal(25, ten));
+    GuildAddPlace const twentyFive{25, true};
+    CHECK(GuildAddSizeRefusal(25, twentyFive).empty());
+    CHECK_EQ(GuildAddSizeRefusal(40, twentyFive), "You are in a 25-man raid: add25 fits here; add40 works outside or "
+        "in a bigger raid");
+    CHECK_EQ(GuildAddSizeRefusal(25, {20, true}), "You are in a 20-man raid: add10 fits here; add25 and add40 work "
+        "outside or in a bigger raid");
+    for (std::uint32_t size : {5u, 10u, 25u, 40u})
+        CHECK(GuildAddSizeRefusal(size, {40, true}).empty());
+
+    // A copy smaller than any size, and a size the command does not know.
+    CHECK_EQ(GuildAddSizeRefusal(5, {3, false}), "You are in a 3-man dungeon: no add command fits here; add5, add10, "
+        "add25 and add40 work outside or in a raid");
+    CHECK(GuildAddSizeRefusal(6, dungeon).empty());
+}
+
+LEEROY_TEST(Guild_AddBringsNobodyIntoACopyTooSmallForHisGroup)
+{
+    // Outside an instance, and any group that fits its copy, is brought in as before.
+    CHECK(GuildAddEntryRefusal(40, {}).empty());
+    CHECK(GuildAddEntryRefusal(1, {5, false}).empty());
+    CHECK(GuildAddEntryRefusal(5, {5, false}).empty());
+    CHECK(GuildAddEntryRefusal(25, {25, true}).empty());
+    // A group he built bigger than the copy: the core would turn all but a few away and send them home.
+    CHECK_EQ(GuildAddEntryRefusal(25, {5, false}), "Your group of 25 does not fit this 5-man dungeon, so nobody was "
+        "brought in");
+    CHECK_EQ(GuildAddEntryRefusal(6, {5, false}), "Your group of 6 does not fit this 5-man dungeon, so nobody was "
+        "brought in");
+    CHECK_EQ(GuildAddEntryRefusal(24, {10, true}), "Your group of 24 does not fit this 10-man raid, so nobody was "
+        "brought in");
+}
+
 LEEROY_TEST(Guild_AddSkipsEveryBusyOrUnsuitableMember)
 {
     CHECK(GuildAddSkipReason(Free()).empty());
