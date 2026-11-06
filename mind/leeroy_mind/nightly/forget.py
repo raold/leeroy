@@ -22,10 +22,14 @@ CHUNK_MAX = 40
 PROVENANCE_MAX = 200
 PROTECTED_KEYS = ("summary:", "diary:", "jealousy:", "hours:", "hurt:", "tom:",
                   "nick:", "joke:", "lands:", "followup:", "absent:", "recap:",
-                  "chronicle:", "award:", "emotion:", "disclose:", "correct:", "boss:")
+                  "chronicle:", "award:", "emotion:", "disclose:", "correct:", "boss:",
+                  "owner:")  # his own history (memories seed) is never folded away
 SUMMARY_SCHEMA = schema("summary", {"text": {"type": "string", "maxLength": 200}})
 _NUMBERED = re.compile(r"([a-z_]+):([0-9]+)")
 _FACT = re.compile(r"rule:fact:([0-9]+)")
+# The owner's authored history: "owner:<moment>", the moment as memories seed takes it. Only his
+# own seeded memories may cite one (MemoryWriter), and recall treats it as public.
+_OWNER = re.compile(r"owner:[A-Za-z0-9][A-Za-z0-9_-]{0,31}")
 _TABLES = {"chat": "chat_line", "event": "game_event", "session": "session",
            "story": "story", "chronicle": "chronicle", "encounter": "encounter",
            "beat": "life_beat", "life": "life_thread", "away": "away", "feud": "feud",
@@ -73,8 +77,9 @@ def _node(store, ref):
             children = tuple(json.loads(row["evidence"]))
         elif row is not None and kind == "joke":
             children = (row["origin_ref"],)
-    elif ref.startswith("rule:"):
-        # Deterministic rule roots have no backing table; their confidential fact flags do.
+    elif ref.startswith("rule:") or _OWNER.fullmatch(ref):
+        # Deterministic rule roots and his authored history have no backing table; their
+        # confidential fact flags do.
         row, children = (ref,), ()
     else:
         return None

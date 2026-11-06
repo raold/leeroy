@@ -5,7 +5,7 @@ import pytest
 
 from conftest import run
 from nightly.conftest import no_real_name
-from leeroy_mind.nightly import forget, knowledge
+from leeroy_mind.nightly import forget, knowledge, mood
 from leeroy_mind.nightly.settings import iso_week
 from leeroy_mind.nightly.store import insert_story, step_finished_at
 
@@ -293,6 +293,23 @@ def test_incomplete_or_cyclic_ancestry_stays_untouched(h, kind):
     run(forget.stage_forget(ctx))
     assert summaries(h) == [] and ctx.reasoner.llm.calls == []
     assert chunk(h, leaf)[0].status == "active"
+
+
+def test_his_seeded_history_is_an_open_root_and_is_never_folded(h):
+    """"owner:<moment>" (memories seed) is his authored history: a public root with no table,
+    as recall reads it. The provenance reader the critic, mood and the human world share now
+    reads it so; a ref that is not a moment stays unreadable, and the seeded memory itself is
+    never a candidate."""
+    for ref in ("owner:M17", "owner:J3", "owner:moment-1_2", "owner:20"):
+        node = forget._node(h.store, ref)
+        assert node is not None and node[1] == () and node[3] == ("open", 0)
+    for ref in ("owner:", "owner:-x", "owner:a b", "owner:" + "x" * 33, "owners:M1"):
+        assert forget._node(h.store, ref) is None
+    seeded = old(h, kind="observation", source="owner", evidence=("owner:M17",),
+                 key="owner:M17:101")
+    derived = old(h, evidence=(f"memory:{seeded}",))
+    assert mood.evidence_scope(h.store, 101, [f"memory:{derived}"]) == ("open", 0)
+    assert [m.id for m in forget.candidates(h.store, 101, h.T)] == [derived]
 
 
 def test_human_and_shared_memory_never_enter_weekly_plan(h):
