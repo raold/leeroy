@@ -306,7 +306,7 @@ If `ac-update.sh` reports hundreds of "new keys" at once, suspect a rename.
 ### Local patch: randombots in the Raid Browser
 
 Playerbots randombots only copy Dungeon Finder queues that real players are
-in, so the Raid Browser was always empty. Local commit `b5e9a62b` on
+in, so the Raid Browser was always empty. Local commit `bf33a531` on
 `mod-playerbots` `master` ("List idle randombots in the Raid Browser") adds
 `RandomPlayerbotMgr::CheckRaidBrowser()`: once a minute on the world thread it
 keeps `Playerbots.RandomBotRaidBrowserListings` (20) idle bots per faction
@@ -318,7 +318,7 @@ which disabled the raid browser entirely; `lfg options 7` sets it live).
 
 ### Local patch: `.playerbots bot add5|add10|add25|add40`
 
-Local commits `010d5ff2`, `8a6e15fe` and `19248990` (add5) on `mod-playerbots`
+Local commits `c26c0d20`, `7decec27` and `538264f8` (add5) on `mod-playerbots`
 `master`. Tops the player's group up to a 5-man party or a 10/25/40-man raid
 with addclass bots: 1/1/3, 2/3/5, 3/6/16 and 4/10/26
 tank/healer/damage, counting roles already in the group (so re-running it only
@@ -326,14 +326,14 @@ fills gaps). Classes come from fixed rotations in `PlayerbotMgr.cpp`
 (`RAID_TANKS`, `RAID_HEALERS`, `RAID_DAMAGE`) matched to
 `Playerbots.PremadeSpecName` by name; each bot gets that premade spec, glyphs
 and fresh gear in `OnBotLogin`, plus `formation arrow`, and damage bots get
-`co +wait for attack` with a 4 s hold so the tank opens pulls (`8a6e15fe`).
+`co +wait for attack` with a 4 s hold so the tank opens pulls (`7decec27`).
 Limited by `Playerbots.MaxAddedBots` (40).
 Do not run `.playerbots bot init=auto` on such a raid: `Randomize()` re-rolls
 the spec. Use the bots' `autogear` chat command instead.
 Bots take the master's level, and the main character is 83 (GM-levelled past
 `MaxPlayerLevel = 80`). Playerbots' talent code only knew spec links up to 80
 and gave such bots **no talents at all**: no tank strategy, so dungeon-clear
-said "No tank bot found". Local commit `075efcb9` clamps to 80.
+said "No tank bot found". Local commit `8e8b4ae5` clamps to 80.
 Do not pass party/raid leadership to a bot: every bot then runs `reset botAI`
 (`ResetStrategies`), which drops `wait for attack` (formation survives).
 
@@ -367,7 +367,7 @@ night (see the mind's guild life).
 
 ### Local patch: pinned random bots
 
-Local commit `9839dc57` on `mod-playerbots` `master` ("Let other modules pin
+Local commit `ecbfeb6b` on `mod-playerbots` `master` ("Let other modules pin
 random bots"). An API on `RandomPlayerbotMgr` that mod-leeroy uses to keep the
 owner's guild of ~106 level-80 random bots permanent and always online. No
 config key: nothing changes until a caller pins something.
@@ -380,6 +380,11 @@ config key: nothing changes until a caller pins something.
 - `online`: every 30 s `UpdateAIInternal` logs in offline pins (at most
   `RandomBotsPerInterval` per pass) and adds them to `currentBots` regardless of
   `bot_count`; an expired `add` is re-armed instead of logging the bot out.
+  Upstream's count trim (`RemoveRandomBots`, from #2774, pulled 2026-11-06)
+  skips pins in `IsRemovableBot`, so a pin is never logged out to meet the
+  target count. That rebase also moved the pin's `add` and `dead` timers to
+  upstream's `YEAR` and `DAY`, since #2774 removed `PermanentlyInWorldTime`
+  and `MaxRandomBotInWorldTime`.
 - `keep`: a guard in `ProcessBot(Player*)` hands pins to `ProcessPinnedBot`,
   which reschedules `randomize` and `teleport` without running them, never
   leaves the group, leaves revival inside a dungeon or raid to the group, and
@@ -403,7 +408,7 @@ M rejected: not on a random-bot account`, and per bot `Pinned bot #<guid>
 <name>: kept, skipped randomize`, `…: kept, skipped refresh and teleport` and
 `…: revived in place`.
 
-`Revive()` is guarded too (commit `ea1b7de1`): `FindCorpseAction` calls it
+`Revive()` is guarded too (commit `d464806f`): `FindCorpseAction` calls it
 for a masterless ghost at death count >= 5, and for a pin it now only revives
 in place instead of `Refresh` (group leave) + grind teleport. Unpinning logs
 nobody out: the bots keep their armed `add` and carry on as ordinary random
@@ -423,7 +428,7 @@ Food and drink are filled independently so existing food cannot crowd out missin
 water; shifted druids retain drink coverage. Audited factory helpers add potions
 and class consumables.
 
-Local commits `e36fca36` and `7c1e5b49` (built 2026-10-31) keep pins quiet: for a
+Local commits `41386b71` and `a8f5d378` (first built 2026-10-31) keep pins quiet: for a
 pinned bot three `TellMaster` lines are skipped, "AI was reset to defaults"
 (`ResetAiAction`, which playerbots runs on "group set leader") and the
 `hello_follow`/`hello` lines after `FindNewMaster`. The reset and `+follow` still run.

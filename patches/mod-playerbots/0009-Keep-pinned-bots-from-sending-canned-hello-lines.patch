@@ -1,4 +1,4 @@
-From 7c1e5b4989a2603ca75db3c2f4b5641643a3cbc6 Mon Sep 17 00:00:00 2001
+From a8f5d37874ad9972af1e854f06b314708a59c6bf Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Sat, 31 Oct 2026 13:29:03 -0400
 Subject: [PATCH 9/9] Keep pinned bots from sending canned hello lines
@@ -94,10 +94,10 @@ index 9b3c5fbf..c77c2f18 100644
                  if (dCount > 20)
                      context->GetValue<uint32>("death count")->Set(0);
 diff --git a/src/Bot/RandomPlayerbotMgr.cpp b/src/Bot/RandomPlayerbotMgr.cpp
-index b3d15e0f..9d4f7a65 100644
+index 009eb506..b71319da 100644
 --- a/src/Bot/RandomPlayerbotMgr.cpp
 +++ b/src/Bot/RandomPlayerbotMgr.cpp
-@@ -3096,8 +3096,10 @@ void RandomPlayerbotMgr::OnPlayerLogin(Player* player)
+@@ -3231,8 +3231,10 @@ void RandomPlayerbotMgr::OnPlayerLogin(Player* player)
                  {
                      botAI->SetMaster(player);
                      botAI->ResetStrategies();

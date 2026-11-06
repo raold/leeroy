@@ -24,7 +24,8 @@ Icecrown the way you once followed a good raid lead. Much of it exists now:
 tank bot route boss to boss and pull, and the mind's raid nights assemble the
 raid from the guild and give it a raid leader who calls the plan before each
 boss. The boss fights themselves are still played by playerbots' raid
-strategies.
+strategies; the [dojo](dojo/README.md) is where bot combat policies are to be
+trained, on a separate server.
 
 ## Layout
 
@@ -34,9 +35,12 @@ strategies.
 | `config/` | Snapshots of the live server and module configs, secrets masked |
 | `patches/mod-playerbots/` | Local playerbots commits, as `git format-patch` output |
 | `patches/mod-ollama-chat/` | Local mod-ollama-chat commits, same format |
-| `modules/mod-leeroy/` | The guild module: keeps the guild's bots pinned online and their consumables topped up, and runs a local bridge (NDJSON over `127.0.0.1:7878`) through which an outside "mind" sees the guild and speaks and acts for its members. Unit tests, and a smoke test in `tools/` |
+| `patches/dojo/mod-playerbots/` | The dojo's own playerbots commit (an external-controller hook), applied on top of the local commits in the dojo's isolated checkout only |
+| `modules/mod-leeroy/` | The guild module: keeps the guild's bots pinned online and their consumables topped up, fills the player's `.playerbots bot addN` groups from the guild, and runs a local bridge (NDJSON over `127.0.0.1:7878`) through which an outside "mind" sees the guild and speaks and acts for its members. Unit tests, and a smoke test in `tools/` |
+| `modules/mod-dojo/` | The dojo's native module, built only into the dojo's isolated core (the CI build compiles its disabled variant) |
 | `mind/` | The mind (`python -m leeroy_mind run`), a Python service that voices the guild through the bridge and a local LLM (Ollama); see [The mind](#the-mind) |
 | `voice/` | Local voice comms and push-to-talk (`python -m leeroy_voice`), in a separate Python 3.12 process; GPL-3.0-or-later, with its own [LICENSE](voice/LICENSE) and [README](voice/README.md) |
+| `dojo/` | The dojo (`python -m leeroy_dojo`): an isolated environment for training combat policies against its own worldserver, never the live realm; see [its README](dojo/README.md) |
 | `references.bib` | The research, software and models behind the project, each entry annotated with what it shaped |
 | `CLAUDE.md` | Operating notes: paths, build traps, module quirks, what each patch does |
 
@@ -53,8 +57,17 @@ member say what they could not know.
   composition, rotates the raid lead, forms and summons the raid, and runs it
   with mod-dungeon-clear while the leader calls each boss. Loot goes through
   master loot and DKP, and the raid votes an MVP. While the player is away the
-  guild can run a raid of its own, one a day by default. Between raids it keeps
-  ranks, specs and gear current, and raiders keep flask and feast habits.
+  guild can run a raid of its own, one a day by default. A group the player
+  fills with `.playerbots bot add10|add25|add40` comes from the guild, and
+  once the player leads it into a raid it counts for DKP and attendance like
+  a called raid night. Between raids it keeps ranks, specs and gear current,
+  and raiders keep flask and feast habits.
+- **The Realm** (off by default): the world outside the guild. Three rival bot
+  guilds (a progression rival, a drama farm and Alliance gankers) talk in Trade
+  and General and race the guild for first kills. There are also canon
+  achievements, the guild bank, a guild calendar with raid nights and
+  birthdays, mail and gifts to the player, a guard against kicking the cast,
+  and the realm's own night stage of forum posts, letters and write-ups.
 - **Nights**: once the player is offline and the GPU is idle, the mind runs the
   night. It consolidates and forgets old memories, spreads gossip and corrects
   rumours, moves relationships, feuds and mentorships along, lets jokes,
@@ -98,8 +111,9 @@ Personas, memories, prompts and logs stay in the ignored `mind-data/`. See
   level-80 premade talents instead of none.
 - **Pinned random bots** (playerbots): an API other modules use to keep chosen
   random bots permanent and online, never re-rolled, teleported or pulled out
-  of their group. A pinned bot revives in place, and skips playerbots' canned
-  status and hello whispers. mod-leeroy pins the guild with it.
+  of their group, and never logged out to meet the online bot count. A pinned
+  bot revives in place, and skips playerbots' canned status and hello
+  whispers. mod-leeroy pins the guild with it.
 - **Speaker filter** (mod-ollama-chat): lets another module keep chosen bots
   out of the LLM chat, so the guild speaks only through its own mind.
 
@@ -147,9 +161,9 @@ from live observation and acceptance.
 
 | Workflow | When | What |
 |---|---|---|
-| `ci` | main pushes and pull requests | shellcheck on `scripts/`, gitleaks over each push's and pull request's commits, mod-leeroy unit tests, the mind's Python 3.14 suite, the `voice` job's Python 3.12 suite, and a headless cross-service rehearsal in separate environments |
-| `patches` | patch changes, nightly | applies the patches to the newest upstream mod-playerbots (plus its codestyle check) and mod-ollama-chat; a nightly failure opens a `patch-drift` issue |
-| `build` | patch or module changes, weekly | compiles the fork core with the patched playerbots and mod-leeroy (clang, `-Werror`, ccache) |
+| `ci` | main pushes and pull requests | shellcheck on `scripts/`, gitleaks over each push's and pull request's commits, the mod-leeroy and mod-dojo unit tests, the mind's Python 3.14 suite, the `voice` job's Python 3.12 suite, the dojo's suite and fake-worker protocol smoke, and a headless cross-service rehearsal in separate environments |
+| `patches` | patch changes, nightly | applies the patches to the newest upstream mod-playerbots, then the dojo's series on top (plus playerbots' codestyle check), and to mod-ollama-chat; a nightly failure opens a `patch-drift` issue |
+| `build` | patch or module changes, weekly | compiles the fork core with the patched playerbots, mod-leeroy and mod-dojo's disabled variant (clang, `-Werror`, ccache) |
 | `release` | `v*` tag | GitHub release with the patches, modules, configs and scripts |
 
 There is no deploy job: the server runs on one PC and is updated with the
