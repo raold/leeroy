@@ -28,7 +28,10 @@ not clear an outstanding native or Python journal.
 
 Inspection commands use `python -m leeroy_mind training`: `status`, `report
 --week YYYY-Www`, `gate`, `trials`, `cards`, `lessons --context MAP:BOSS:DIFFICULTY`,
-and `voicecheck --night YYYY-MM-DD`. Read-only inspection does not migrate an old
+`voicecheck --night YYYY-MM-DD`, `spells check` (loads the spell book and lists the
+spell ids behind the boss-mechanic names) and `lab` (stored rotations, the last
+nights' lab summaries and the dummy row count, labelled as a requested-damage
+proxy). Read-only inspection does not migrate an old
 database. With the mind stopped, `rollback --context MAP:BOSS:DIFFICULTY` restores
 the prior stored champion and `stock --context ...` selects stock; the service OS
 lock is held throughout. These card changes leave applied-command cleanup
@@ -76,15 +79,19 @@ Do not build, read configs, or read logs from Q: (or anything left on D:).
 `F:\azerothcore` is **github.com/raold/leeroy** (public, GPL-2.0, branch
 `main`). A whitelist `.gitignore` tracks only what is ours: this file, the
 README, `LICENSE`, `references.bib` (the bibliography), `scripts/`, `config/`,
-`patches/`, `modules/` (mod-leeroy), `mind/` (the mind service), `voice/` (the
-voice service) and `.github/`. The core repo, the
-build tree, the client, boost, DB dumps and the zips stay out, and so do the
-local dev docs (`docs/`, `private/`).
+`patches/`, `modules/` (mod-leeroy, mod-dojo), `mind/` (the mind service), `voice/`
+(the voice service), `dojo/` (the dojo, source only) and `.github/`. The core
+repo, the build tree, the client, boost, DB dumps and the zips stay out, and so
+do the local dev docs (`docs/`, `private/`). `dojo-runtime/` and `dojo-data/`
+beside the install root hold the dojo's environments and recordings and are
+never committed.
 
 The checkout at `F:\azerothcore` itself runs the installed release: a local
 branch (now `codex/live-release-20261102`) whose private history is never
 pushed wholesale. Public changes land on `main` from worktrees under
-`F:\azerothcore\worktrees\`.
+`F:zerothcore\worktrees\`. GitHub deletes a merged PR's head branch by
+itself (repo setting, 2026-11-06), so do not delete remote branches by hand; the
+local branch and worktree still need `git worktree remove` and `git branch -d`.
 
 - `config/`, `patches/mod-playerbots/` and `patches/mod-ollama-chat/` are snapshots made by
   `scripts/ac-snapshot.sh`. Never edit them by hand; edit the live configs or
@@ -103,10 +110,13 @@ pushed wholesale. Public changes land on `main` from worktrees under
 - Rewriting playerbots commits changes their hashes; update the hashes cited
   below and re-run `ac-snapshot.sh`.
 - CI (`.github/workflows`, see README): `ci` (shellcheck, gitleaks, the
-  mod-leeroy, mind and voice test suites, and a headless mind-voice rehearsal), `patches`
-  (applies the patches to upstream playerbots nightly; failure opens a
-  `patch-drift` issue, which means rebase before the next `ac-update.sh`),
-  `build` (weekly Linux compile, `-Werror`), `release` (on `v*` tags). No
+  mod-leeroy and mod-dojo unit tests, the mind, voice and dojo suites, and a headless
+  mind-voice rehearsal), `patches` (applies the playerbots patches, then the dojo's
+  series on top, and the mod-ollama-chat patches to upstream; nightly and on patch
+  changes; a nightly failure opens a `patch-drift` issue, which means rebase before
+  the next `ac-update.sh`), `build` (Linux compile with clang, `-Werror`, of the
+  patched fork with mod-leeroy and mod-dojo's disabled variant; weekly and on patch
+  or module changes), `release` (on `v*` tags). No
   deploy job and never a self-hosted runner: the repo is public.
 
 ## Build traps that have each cost real time
@@ -226,7 +236,7 @@ Run from `F:\azerothcore\scripts` in Git Bash.
 ```bash
 ./ac-update.sh [--dry-run]   # pull core + git modules (ff-only, local commits rebased); refuses if dirty
 ./ac-backup.sh [label]       # mysqldump all 4 DBs, keeps newest 5
-./ac-build.sh                # preflight + cmake configure + build
+./ac-build.sh [--no-configure | --preflight]   # preflight + cmake configure + build; --preflight stops after the module checks
 ./ac-server.sh start|stop|status # also starts/stops the mind; stdout: mind-data/logs/mind-stdout.log
 ./ac-voice.sh start|stop|status # voice service; reads its data directory and ports from `where`
 ./ac-snapshot.sh             # live configs (masked) + playerbots and ollama-chat patches -> config/, patches/
@@ -288,7 +298,7 @@ Setting `SOAP.Enabled = 1` would let the script do a real graceful shutdown.
 | `mod-dungeon-clear` | jrad7/mod-dungeon-clear | git clone since 2026-10-29 (was a zip of `60f3d98`). **The autonomous tank lead**: `.dc on` (or `dc on` in party chat) inside an instance makes the group's tank bot route boss to boss over the navmesh, pull (Dynamic/Leeroy/Advanced), run scripted events (all 16 WotLK 5-mans), loot, rest and rez. Raids too: trash flow with a readiness quorum, pre-boss muster, wipe recovery; boss fights are left to the playerbots raid strategies. Companion addon: jrad7/mod-dungeon-clear-addon. It hooks playerbots without patching it (appends to the shared context registries). Ships its own `.cmake`; folder name must stay exact. Reads `PlayerbotAIConfig` members directly, so it breaks when playerbots renames them. AGPL-3.0. |
 | `mod-bg-slaveryvalley` | zip (no git) | Custom battleground, map 801 / BG id 31. Server side complete; **client patch still undistributed** — see below. |
 | `mod-ah-bot-plus` | NathanHandley/mod-ah-bot-plus | Auction house bot (git clone since 2026-10-30). Sells under, and buys player auctions as, the ordinary account `ahbot` (auth id 352): characters Fatiggeritch (3502) and Bonqueefa (3503), set in `AuctionHouseBot.GUIDs` (comma list, no spaces). Never use a playerbot character for it, and never enter the world on those characters. Seller and buyer both on; everything else is the `.dist` default (about 150 listings a minute per house, up to 15000 each). GM commands: `.ahbot reload` (re-reads the conf, GUIDs included, no restart), `.ahbot update`, `.ahbot empty`. Loader `Addmod_ah_bot_plusScripts`, so the folder name must stay exact. No SQL. |
-| `mod-leeroy` | this repo, `modules/mod-leeroy` | The guild bridge. `azerothcore-wotlk/modules/mod-leeroy` is a **junction** to `F:\azerothcore\modules\mod-leeroy`: remove it with `rmdir`, never `rm -rf` (that deletes the source through the link). Pins the cast (guild members at 80+, minus `Leeroy.HumanGuid`) via the playerbots pin API, mutes them in mod-ollama-chat, and serves NDJSON on `Leeroy.Bridge.Host`:`Leeroy.Bridge.Port` (`127.0.0.1:7878`, one mind at a time). Keys: `Leeroy.Enable`, `GuildId`, `HumanGuid`, `KeepCast`, `BringCastOnline`, `ExcludeFromOllamaChat`, `Bridge.*`. Start line in `Server.log`: `mod-leeroy: cast N members, pinned N ...`. Smoke test: `python modules/mod-leeroy/tools/bridge_smoke.py --expect-cast N` (0 pass, 1 fail, 2 no server or another mind connected); `--listen S` prints events, `--send` sends raw commands. For the owner it answers `.playerbots bot add5/10/25/40` from his guild (see that patch below). |
+| `mod-leeroy` | this repo, `modules/mod-leeroy` | The guild bridge. `azerothcore-wotlk/modules/mod-leeroy` is a **junction** to `F:\azerothcore\modules\mod-leeroy`: remove it with `rmdir`, never `rm -rf` (that deletes the source through the link). Pins the cast (guild members at 80+, minus `Leeroy.HumanGuid`) via the playerbots pin API, mutes them in mod-ollama-chat, and serves NDJSON on `Leeroy.Bridge.Host`:`Leeroy.Bridge.Port` (`127.0.0.1:7878`, one mind at a time). Keys: `Leeroy.Enable`, `GuildId`, `HumanGuid`, `KeepCast`, `BringCastOnline`, `ExcludeFromOllamaChat`, `Bridge.*`, `CastGuard` (the kick guard), `Realm.*` (see the Realm) and `Telemetry.Enable`/`Training.Enable` (see Training ground). Start line in `Server.log`: `mod-leeroy: cast N members, pinned N ...`. Smoke test: `python modules/mod-leeroy/tools/bridge_smoke.py --expect-cast N` (0 pass, 1 fail, 2 no server or another mind connected); `--listen S` prints events, `--send` sends raw commands. For the owner it answers `.playerbots bot add5/10/25/40` from his guild (see that patch below). |
 
 `mod-playerbots`, `mod-ollama-chat`, `mod-dungeon-clear` and `mod-ah-bot-plus` are
 git repos and `mod-leeroy` lives in this one; the rest are zip extractions and
@@ -369,7 +379,7 @@ night (see the mind's guild life).
 
 Local commit `ecbfeb6b` on `mod-playerbots` `master` ("Let other modules pin
 random bots"). An API on `RandomPlayerbotMgr` that mod-leeroy uses to keep the
-owner's guild of ~106 level-80 random bots permanent and always online. No
+owner's guild of about 110 level-80 random bots permanent and always online. No
 config key: nothing changes until a caller pins something.
 
 - `uint32 SetPinnedBots(std::unordered_set<ObjectGuid::LowType> const& bots, bool keep, bool online)`,
@@ -442,12 +452,17 @@ the need.
 
 ### Local patch: mod-ollama-chat speaker filter
 
-Local commit `072d13d` on `mod-ollama-chat` `main` ("Let other modules keep
-chosen bots silent"). Adds `OllamaDispatch_SetSpeakerFilter(std::function<bool(uint64_t botGuid)>)`
+Local commits `072d13d` ("Let other modules keep chosen bots silent") and
+`80bd8c9` ("Recheck speaker permission before delivering queued replies") on
+`mod-ollama-chat` `main`. The first adds `OllamaDispatch_SetSpeakerFilter(std::function<bool(uint64_t botGuid)>)`
 to `mod-ollama-chat_dispatch.h`; `OllamaDispatch_Submit` copies the filter under
 a mutex, calls it outside the lock and drops the request (returns `false`) when
 it says `false`. Inert until set. mod-leeroy uses it to keep guild cast members
-silent so only their own mind service voices them. `ac-snapshot.sh` now exports
+silent so only their own mind service voices them. The second makes `Deliver`
+ask the filter again before any routing, history or speech, so a reply queued
+before a bot was muted is dropped; the callback now runs on the world delivery
+thread as well as on submitting threads, and always outside the registry mutex.
+`ac-snapshot.sh` now exports
 the local commits of both `mod-playerbots` and `mod-ollama-chat`, and the
 `patches` workflow checks each against its upstream nightly.
 
@@ -656,7 +671,7 @@ Trade and General and the gankers' emotes, the race for first kills, canon achie
 the guild bank, the guild calendar, mail to him, the kick guard and the realm's night stage.
 Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
 
-- **Off by default, two switches.** `[realm] enabled = true` in `mind.toml` (read again at each
+- **Off by default, two switches; this install runs it on.** `[realm] enabled = true` in `mind.toml` (read again at each
   hello and login) and native `Leeroy.Realm.Enable = 1` in `mod_leeroy.conf` (`.reload config`;
   while it is 0 native refuses every realm command `realm_off`). Other `[realm]` keys:
   `his_birthday`, `guild_anniversary` (MM-DD, local only), `trial_rank`, `member_cap`,
@@ -788,6 +803,23 @@ before using the page, since an older page can remain after a failed run.
 Models load offline after `fetch-models` has fetched and verified the pinned files. Default
 tests deselect real engines, audio devices, Windows, GPU, Ollama and live-service
 checks; those checks need a deliberate isolated setup.
+
+## The dojo
+
+`dojo/` is an isolated environment for training the bots' combat policies with
+reinforcement learning. It runs its own AzerothCore worldserver, MySQL instance,
+ports and fixture characters, never the live realm, and everything in it stays
+apart from this install. Read `dojo/README.md` before touching it.
+
+- Source here: `dojo/` (Python, `leeroy_dojo`), `modules/mod-dojo` (the native
+  module, built only into the dojo's isolated core; the CI build compiles its
+  disabled variant), `patches/dojo/mod-playerbots/` (the dojo's own playerbots
+  commit, applied on top of the local commits in the dojo's checkout only) and
+  `scripts/dojo/` (PowerShell: build, configure, patches, preflight).
+- Environments and recordings live in `dojo-runtime/` and `dojo-data/` beside the
+  install root and are never committed.
+- Never point the dojo at the live install, database or ports. `scripts/dojo/preflight.ps1`
+  refuses a layout that overlaps them.
 
 ## Outstanding
 
