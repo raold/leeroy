@@ -14,7 +14,8 @@ from leeroy_mind.storage.rows import ROMANCE_STAGES, Relationship
 from leeroy_mind.talk.budget import DayPhase
 from leeroy_mind.talk.romance import (ARC_STAGES, BANDS, DEFER, DISTANCE, DISTANCE_PLAN,
                                       HEAT_FROM, HEAT_TEXT, INTO_HIM_ALREADY, LEGACY_STAGE,
-                                      STAGE_DEPTH, STAGE_PASSAGES, WHISPER_OVERLAY,
+                                      PUBLIC_PASSAGES, STAGE_DEPTH, STAGE_PASSAGES,
+                                      WHISPER_OVERLAY,
                                       distance_text, effective_band, heat_step, passage_key,
                                       romance_instruction, stage_text, whisper_tail)
 from leeroy_mind.text import estimate_tokens
@@ -29,6 +30,8 @@ GUILD = dict(WHISPER, channel="guild")
 EXPLICIT_GUILD = dict(GUILD, dial=9)
 EXPLICIT_WHISPER = dict(dial=9, channel="whisper", forms=GM.forms)
 ATTITUDES = ("fond", "drawn", "lust")
+PUBLIC_CHANNELS = ("guild", "officer", "party", "raid", "say", "voice:lounge")
+PRIVATE = ("late_nights", "picture", "confession")
 
 
 def lust(stance="lust"):
@@ -57,6 +60,7 @@ def fields(template: str) -> set[str]:
 
 def passages():
     yield from (v for vs in STAGE_PASSAGES.values() for v in vs if v)
+    yield from (v for vs in PUBLIC_PASSAGES.values() for v in vs)
     yield INTO_HIM_ALREADY
 
 
@@ -166,7 +170,7 @@ def test_the_planning_stage_reads_the_trip_as_the_one_meeting(tmp_path):
     assert distance_text("planning") == DISTANCE_PLAN == distance_text("invitation")
     assert all(distance_text(s) == DISTANCE for s in ARC_STAGES if s != "planning")
     assert "trip" in DISTANCE_PLAN and "come over" in DISTANCE_PLAN  # named to forbid it
-    assert fields(DISTANCE) == fields(DISTANCE_PLAN) == {"them", "they"}
+    assert fields(DISTANCE) == {"them", "they"} and fields(DISTANCE_PLAN) <= {"them", "they"}
     text = romance_instruction(lust(), rel("planning"), data_dir=tmp_path, **WHISPER)
     assert DISTANCE_PLAN.format(**HE) in text and DISTANCE.format(**HE) not in text
 
@@ -203,3 +207,56 @@ def test_the_romance_text_reads_in_the_planned_order(overlay_dir):
         HEAT_TEXT["aching"][0].format(**HE), OVERLAY, "live far apart", "two adults",
         "can read it", "actually happening")]
     assert order == sorted(order)
+
+
+# -- fix round 1 -----------------------------------------------------------------------------
+
+def test_private_stages_stay_out_of_public_talk(tmp_path):
+    """Whisper scope: the late talks, the picture and the confession are said only in a whisper
+    to him. Anywhere else she reads a public passage that keeps them in whispers."""
+    assert set(PUBLIC_PASSAGES) == set(PRIVATE)
+    for stage in (*PRIVATE, "vulnerable", "acknowledged"):
+        key = passage_key(stage)
+        assert 2 <= len(PUBLIC_PASSAGES[key]) <= 3
+        private = [v.format(**HE) for v in STAGE_PASSAGES[key]]
+        for channel in PUBLIC_CHANNELS:
+            for i in range(20):
+                text = romance_instruction(lust(), rel(stage), rng=random.Random(i),
+                                           data_dir=tmp_path, **dict(GUILD, channel=channel))
+                assert not any(v in text for v in private), (stage, channel)
+                assert "picture" not in text and "late talks" not in text, (stage, channel)
+                assert any(v.format(**HE) in text for v in PUBLIC_PASSAGES[key])
+        whispers = {romance_instruction(lust(), rel(stage), rng=random.Random(i),
+                                        data_dir=tmp_path, **WHISPER) for i in range(20)}
+        assert all(any(v in t for v in private) for t in whispers), stage
+        assert stage_text("lust", stage, private=True) == STAGE_PASSAGES[key][0]
+        assert stage_text("lust", stage) == PUBLIC_PASSAGES[key][0]  # public unless asked
+
+
+def test_heat_shows_only_for_a_drawn_or_lust_woman(tmp_path):
+    lines = [v.format(**HE) for vs in HEAT_TEXT.values() for v in vs]
+    for stance, shows in (("fond", False), ("drawn", True), ("lust", True)):
+        for x in (65, 80, 95):
+            text = romance_instruction(lust(stance), rel(attraction=x), data_dir=tmp_path,
+                                       **GUILD)
+            assert any(h in text for h in lines) is shows, (stance, x)
+
+
+def test_the_frame_is_short_and_keeps_its_points():
+    for frame in (DISTANCE, DISTANCE_PLAN):
+        assert estimate_tokens(frame) <= 45 and estimate_tokens(frame.format(**HE)) <= 45
+        assert "live far apart" in frame and "only in game" in frame and "come over" in frame
+        assert "waiting" in frame
+    assert "don't ask" in DISTANCE and "don't say you're waiting" in DISTANCE  # B3's check
+    assert "just said or to what's going on" in DISTANCE  # an opener has nothing from him
+    assert "longing" in DISTANCE and "want" in DISTANCE
+    assert "trip" in DISTANCE_PLAN and "where or when" in DISTANCE_PLAN
+    assert "longing" in DISTANCE_PLAN and "want" in DISTANCE_PLAN
+
+
+def test_no_line_frames_their_chat_as_lacking():
+    """Anti-circling: "typing isn't enough" turns into a repeated "get on Vent" ask. A want is
+    worded as a want."""
+    lacking = ("isn't enough", "feels thin", "rather hear", "chat window can")
+    texts = [*passages(), *(v for vs in HEAT_TEXT.values() for v in vs)]
+    assert [t for t in texts if any(w in t for w in lacking)] == []

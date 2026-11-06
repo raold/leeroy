@@ -146,12 +146,10 @@ STAGE_PASSAGES: dict[str, tuple[str, ...]] = {
         "night.",
     ),
     "voice": (
-        "Typing isn't enough with {name} anymore: you want {their} voice, late, on Vent, just "
-        "the two of you.",
-        "You've gotten a little hooked on hearing {name} on Vent, and text feels thin without "
-        "it.",
-        "You'd rather hear {name} than read {them} lately, and a quiet Vent channel late is your "
-        "favourite place.",
+        "You love hearing {name}'s voice on Vent late at night, just the two of you.",
+        "You've gotten a little hooked on {name}'s voice on Vent, and you hear it when you read "
+        "{their} lines.",
+        "A quiet Vent channel late at night with {name} has become your favourite place to be.",
     ),
     "picture": (
         "You sent {name} a picture of yourself not long ago, just for {them}, and you're still a "
@@ -189,18 +187,35 @@ STAGE_PASSAGES: dict[str, tuple[str, ...]] = {
         "make a fuss about.",
     ),
 }
+# Whisper scope: these stages' passages are said only in a whisper to him (stage_text's
+# `private`). On every other channel she reads one of these, which keeps them there.
+PRIVATE_GUARD = ("What you share in whispers stays there: in public it shows only in how you "
+                 "tease {them}.")
+PUBLIC_PASSAGES: dict[str, tuple[str, ...]] = {
+    "late_nights": (
+        f"You and {{name}} have gotten easy with each other. {PRIVATE_GUARD}",
+        f"You and {{name}} whisper a lot these days. {PRIVATE_GUARD}",
+    ),
+    "picture": (
+        f"There's a new spark in how you flirt with {{name}}. {PRIVATE_GUARD}",
+        f"You've got a private little grin for {{name}} lately. {PRIVATE_GUARD}",
+    ),
+    "confession": (
+        f"{{name}} matters to you more than you'd say in public. {PRIVATE_GUARD}",
+        f"You and {{name}} are closer than you let on. {PRIVATE_GUARD}",
+    ),
+}
 # Drawn and lust women start at "notices" (seed_relationships) but are past just noticing him.
 INTO_HIM_ALREADY = "You've had your eye on {name} for a while."
-# The distance is the frame (spec call 3: it comes after his overlay). The planning stage's
-# frame names the trip as the one real meeting. Both take {them} and {they}.
-DISTANCE = ("You two know each other through the game and live far apart: don't ask {them} to "
-            "come over, find you or hurry up, and don't say you're waiting. React to what {they} "
-            "just said and add something new: what you'd do, what you miss, what you want, a "
-            "tease or a dare.")
-DISTANCE_PLAN = ("You two know each other through the game and live far apart, and a trip to "
-                 "meet in person is the only real meeting. Don't ask {them} to come over or say "
-                 "you're waiting. React to what {they} just said and add something new: the "
-                 "trip's nerves and what-ifs, what you'd wear, what you miss, a tease or a dare.")
+# The distance is the frame (spec call 3: it comes after his overlay), at most 45 estimated
+# tokens each. The planning stage's frame names the trip as the real meeting and leaves where
+# and when to the plan. DISTANCE takes {them} and {they}, DISTANCE_PLAN {them}.
+DISTANCE = ("You two live far apart and meet only in game: don't ask {them} to come over, don't "
+            "say you're waiting. React to what {they} just said or to what's going on: want, "
+            "longing, a tease.")
+DISTANCE_PLAN = ("You two live far apart and meet only in game. A trip is the real meeting: "
+                 "don't ask {them} to come over, say you're waiting or invent where or when. "
+                 "Bring want, longing, nerves.")
 # Her attraction inside the top band (60 to 100 used to read the same): longing, never reproach.
 HEAT_FROM = 60
 HEAT_HEATED, HEAT_ACHING = 75, 90
@@ -210,8 +225,7 @@ HEAT_TEXT: dict[str, tuple[str, ...]] = {
         "You light up a little whenever {name} types something, and you don't mind if it shows.",
     ),
     "heated": (
-        "It's getting hard to keep it light with {name}: you want more than a chat window can "
-        "give.",
+        "It's getting harder to keep it light with {name}, and you've stopped trying very hard.",
         "Wanting {name} from this far away is its own kind of frustrating, and it makes you "
         "bolder.",
     ),
@@ -341,12 +355,18 @@ def passage_key(stage: str) -> str:
     return LEGACY_STAGE.get(stage, stage)
 
 
-def stage_text(stance: str, stage: str, rng: random.Random | None = None) -> str:
+def stage_text(stance: str, stage: str, rng: random.Random | None = None, *,
+               private: bool = False) -> str:
     """The stage's passage for this attitude, one of its variants (the first without `rng`), a
-    template taking {name}, {them} and {their}; "" for none or an unknown stage."""
+    template taking {name}, {them} and {their}; "" for none or an unknown stage. `private`: a
+    whisper to him. Without it a stage whose passage is for whispers only (late nights, the
+    picture, the confession) reads its PUBLIC_PASSAGES one."""
     if stage == "notices" and stance in ("drawn", "lust"):
         return INTO_HIM_ALREADY
-    return _pick(STAGE_PASSAGES.get(passage_key(stage), ("",)), rng) or ""
+    key = passage_key(stage)
+    variants = (PUBLIC_PASSAGES[key] if not private and key in PUBLIC_PASSAGES
+                else STAGE_PASSAGES.get(key, ("",)))
+    return _pick(variants, rng) or ""
 
 
 def distance_text(stage: str) -> str:
@@ -365,11 +385,13 @@ def heat_step(attraction: float) -> str | None:
     return "heated" if attraction < HEAT_ACHING else "aching"
 
 
-def heat_text(stage: str, rel: Relationship | None, rng: random.Random | None = None) -> str:
-    """Her heat step's line (a variant), or "" under the band, without a row, or for an ex:
-    an ex is history, so a high score never reads as pining there."""
+def heat_text(stance: str, stage: str, rel: Relationship | None,
+              rng: random.Random | None = None) -> str:
+    """Her heat step's line (a variant), or "" under the band, without a row, for a stance
+    other than drawn or lust (a fond woman's warmth is her attitude's), or for an ex: an ex is
+    history, so a high score never reads as pining there."""
     step = heat_step(rel.attraction) if rel is not None else None
-    if step is None or passage_key(stage) == "ex":
+    if step is None or stance not in ("drawn", "lust") or passage_key(stage) == "ex":
         return ""
     return _pick(HEAT_TEXT[step], rng) or ""
 
@@ -464,9 +486,10 @@ def romance_instruction(p: Persona, rel: Relationship | None, *, dial: int, chan
     """The romance text for a turn by `p` (rel is p's relationship to the human), or None
     when p is a man, has no attitude toward him or is not talking to him. The human is named
     by human.called with his pronouns from human.forms; his real name never appears here. In
-    order: her attitude, her way, the stage's passage, her heat (rel.attraction), the band's
-    wording, the distance frame, the frame (INVARIANTS), the channel and the hour, and the hook
-    on what's happening last. `rng` picks the variants (the first of each without it);
+    order: her attitude, her way, the stage's passage (a whisper-only stage's public one on any
+    channel but a whisper), her heat (rel.attraction, drawn and lust only), the band's wording,
+    the distance frame, the frame (INVARIANTS), the channel and the hour, and the hook on
+    what's happening last. `rng` picks the variants (the first of each without it);
     `tail_follows`: the whisper tail says the distance frame after his overlay, so it is left
     out here. The pipeline puts it before the turn's own instruction, so the model reads that
     last. `dial` is the owner's; the band follows her own when she has one."""
@@ -481,8 +504,8 @@ def romance_instruction(p: Persona, rel: Relationship | None, *, dial: int, chan
     parts = [
         attitude_text(p),
         style_text(p),
-        stage_text(stance, stage, rng),
-        heat_text(stage, rel, rng),
+        stage_text(stance, stage, rng, private=channel == "whisper"),
+        heat_text(stance, stage, rel, rng),
     ]
     rest = [
         "" if tail_follows else distance_text(stage),
