@@ -4,9 +4,13 @@ local prompt overlays."""
 from __future__ import annotations
 
 import re
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
+from typing import TYPE_CHECKING
 
 from ..memory.recall import _STOPWORDS
+
+if TYPE_CHECKING:
+    from .movelog import MoveRow
 
 MOVES: tuple[str, ...] = ("summon", "invite_game", "declare", "compliment", "tease", "question",
                           "callback", "plan", "complaint", "joke", "later", "petname", "raid",
@@ -117,3 +121,68 @@ def topics(text: str, *, names: Collection[str] = ()) -> tuple[str, ...]:
         if len(out) == 3:
             break
     return tuple(out)
+
+
+MOVE_PHRASES: dict[str, str] = {
+    "summon": "asked {them} over",
+    "invite_game": "invited {them} to something in the game",
+    "declare": "told {them} you want {them}",
+    "compliment": "complimented {them}",
+    "tease": "teased {them}",
+    "question": "asked {them} a question",
+    "callback": "brought up something {they} said before",
+    "plan": "talked about meeting up",
+    "complaint": "complained about your day",
+    "joke": "made a joke",
+    "later": "said you'd see {them} later",
+    "petname": "called {them} a pet name",
+    "raid": "talked raid",
+    "gear": "talked gear",
+    "gift": "sent {them} a gift",
+}
+MOVES_LINE_CHARS = 200
+_TIMES = {1: "", 2: " twice", 3: " three times"}
+
+
+def _times(n: int) -> str:
+    return _TIMES.get(n, f" {n} times")
+
+
+def moves_line(rows: "Sequence[MoveRow]", *, night_start: float,
+               forms: tuple[str, str, str]) -> str:
+    """The "Lately you've..." line from her last turns to one person (oldest first): the newest
+    row's main move and any move seen in 2+ rows (at most two, by count, ties newest first), and
+    one topic seen in 2+ rows. It names moves, never her words. "" when there is nothing."""
+    if not rows:
+        return ""
+    they, them, their = forms
+    count: dict[str, int] = {}
+    newest: dict[str, int] = {}
+    tcount: dict[str, int] = {}
+    for i, r in enumerate(rows):
+        for m in (r.moves | {r.main}) - {""}:
+            if m in MOVE_PHRASES:
+                count[m] = count.get(m, 0) + 1
+                newest[m] = i
+        for t in set(r.topics):
+            tcount[t] = tcount.get(t, 0) + 1
+    last = rows[-1].main
+    names = [m for m in count if m == last or count[m] >= 2]
+    names.sort(key=lambda m: (-count[m], -newest[m]))
+    names = names[:2]
+    if last in count and last not in names:
+        names = [last, names[0]] if names else [last]
+    parts = [MOVE_PHRASES[m].format(they=they, them=them, their=their) + _times(count[m])
+             for m in names]
+    topic = max((t for t in tcount if tcount[t] >= 2), key=lambda t: tcount[t], default="")
+    topic_part = f"brought up the {topic}{_times(tcount[topic])}" if topic else ""
+    when = "Tonight" if all(r.ts >= night_start for r in rows) else "Lately"
+
+    def build(items: list[str]) -> str:
+        body = items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+        return f"{when} you've already {body}: do something else this time."
+
+    for items in ([*parts, topic_part] if topic_part else [], parts, parts[:1]):
+        if items and len(build(items)) <= MOVES_LINE_CHARS:
+            return build(items)
+    return build(parts[:1]) if parts else ""

@@ -915,7 +915,7 @@ def test_own_lines_show_what_was_said(store, clock, tmp_path):
         assert await spoken(r, reply_to_human(102)) == ["run it for the trinket"]
         await r.advance(15)
         assert await spoken(r, reply_to_human(102))
-        mine = r.prompts()[1].split("Your last lines (don't reuse their wording):")[1]
+        mine = r.prompts()[1].split("Your last lines (don't make the same move again):")[1]
         assert "run it for the trinket" in mine and "emblems" not in mine
     run(main())
 
@@ -1942,7 +1942,7 @@ def test_his_whisper_and_her_reply_never_reach_her_guild_prompt(store, clock, tm
         private = text_of(r.chat_calls()[-1]["messages"])
         assert f"(whisper to Arkon): {his.text}" in private  # his line
         assert "(whisper to Zan): mine too, keep it quiet" in private  # hers
-        assert "Your last lines (don't reuse their wording):\nmine too, keep it quiet" in private
+        assert "Your last lines (don't make the same move again):\nmine too, keep it quiet" in private
         assert QUITTING in private
     run(main())
 

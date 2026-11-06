@@ -1,6 +1,15 @@
 import pytest
 
-from leeroy_mind.talk.moves import classify, is_summon, main_move, topics
+from leeroy_mind.talk.movelog import MoveRow
+from leeroy_mind.talk.moves import (MOVE_PHRASES, MOVES, MOVES_LINE_CHARS, classify, is_summon,
+                                    main_move, moves_line, topics)
+
+HE = ("he", "him", "his")
+
+
+def row(main="tease", t=100.0, clause="", topics=(), moves=None):
+    return MoveRow(ts=t, channel="whisper", to_guid=1, moves=frozenset(moves or {main}),
+                   main=main, topics=tuple(topics), clause=clause, angle="")
 
 
 @pytest.mark.parametrize("text,move", [
@@ -52,3 +61,34 @@ def test_destinations_and_activities_are_invitations(text):
 
 def test_right_now_is_not_a_later():
     assert "later" not in classify("i want you right now")
+
+
+def test_lately_line_names_the_last_move_and_any_repeated_one():
+    rows = [row(main="declare", t=100), row(main="declare", t=110), row(main="tease", t=120)]
+    line = moves_line(rows, night_start=50, forms=HE)
+    assert line == ("Tonight you've already told him you want him twice and teased him: "
+                    "do something else this time.")
+
+
+def test_lately_line_reads_lately_across_nights_and_is_empty_without_history():
+    assert moves_line([row(main="tease", t=10)], night_start=50, forms=HE).startswith("Lately")
+    assert moves_line([], night_start=0, forms=HE) == ""
+    assert moves_line([row(main="")], night_start=0, forms=HE) == ""
+
+
+def test_lately_line_never_quotes_her_words():
+    line = moves_line([row(main="summon", clause="get over here")], night_start=0, forms=HE)
+    assert line and "get over here" not in line
+
+
+def test_lately_line_names_a_repeated_topic():
+    rows = [row(main="tease", topics=("table",)), row(main="tease", topics=("table", "dress"))]
+    line = moves_line(rows, night_start=0, forms=("she", "her", "hers"))
+    assert "brought up the table" in line and "dress" not in line and "twice" in line
+
+
+def test_every_move_has_a_phrase_and_the_line_stays_short():
+    assert set(MOVE_PHRASES) == set(MOVES)
+    rows = [row(main=m, topics=("table",), t=i) for i, m in enumerate(MOVES) for _ in (0, 1)]
+    assert len(moves_line(rows, night_start=0, forms=HE)) <= MOVES_LINE_CHARS
+    assert "{" not in moves_line(rows, night_start=0, forms=HE)
