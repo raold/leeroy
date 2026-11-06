@@ -247,9 +247,13 @@ read-only, one ok/FAIL/note line each, exit 1 on any FAIL: the servers, Server.l
 since worldserver started (floor `[health] min_cast`, default 100) and no `so no places`, the
 mind and mind.log, the control endpoint's `status` (it reports `bridge_connected`, `cast` and
 `schema_version`), the console and voice (notes when down), Ollama's `/api/ps`, and stuck
-activity (no `tg_pull` in 48 h with telemetry on, a realm hold or `unknown` root older than 1 h,
-cast without personas). It never dials the bridge (7878), loads no model and starts nothing;
-`--toast` shows one toast per new failure and writes only `mind-data/health-state.json`.
+activity (no `tg_pull` in 48 h with telemetry on and the overhead gate passed, a note while the
+gate is in phase `ab`; a realm hold or `unknown` root older than 1 h; cast without personas). It
+never dials the bridge (7878), loads no model, starts nothing and never probes `mind.lock` or
+`voice.lock` (running comes from the process list, `control.json`, `voice.pid` and the TCP
+table). `--toast` shows one toast per new failure and writes only
+`mind-data/health-state.json`; a read-only open can leave SQLite's empty `mind.db-wal` and
+`mind.db-shm` behind while the mind is stopped, as doctor and the console do.
 `ac-health-schedule.ps1 -Install|-Remove|-Status` manages a per-user task that runs it every
 15 minutes while he is logged on (not installed by default).
 

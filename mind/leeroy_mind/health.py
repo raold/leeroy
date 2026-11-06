@@ -10,18 +10,21 @@ What it looks at:
 - Server.log there, since worldserver started: the `mod-leeroy: cast N members, pinned N` line,
   both N at least [health] min_cast, and no realm places or items file that failed to load
   (`so no places`, `so no items`);
-- the mind, judged by leeroy_mind.lifecycle as `scripts/ac-mind.py status` judges it;
+- the mind: its process family, found by leeroy_mind.lifecycle's rules (those of
+  `scripts/ac-mind.py status`), and control.json's pid;
 - mind.log since the mind started (rotated files included): its bridge came up and did not go
   down again, and nothing was logged at CRITICAL;
 - the mind's control endpoint `status`, through the console's MindLink: control.json's key goes
   only to the listener the TCP table shows is the running mind's own pid;
 - the guild console on 127.0.0.1:7881 (a note when it is not running);
-- the voice service, found as scripts/ac-voice.sh finds it (`where`, `held`), with its ports in
-  the TCP table (a note when it is stopped, as doctor says);
+- the voice service, located by its own `where` (data dir and ports) as scripts/ac-voice.sh
+  locates it: the pid in voice.pid must hold both ports in the TCP table (a note when it is
+  stopped, as doctor says);
 - Ollama's GET /api/ps, which loads nothing, and the models it has resident;
-- activity in mind.db, opened read-only: telemetry on but no tg_pull in 48 h, a realm body hold
-  or an unknown root older than 1 h, cast members without a persona. A table an older mind.db
-  lacks is unavailable, a note.
+- activity in mind.db, opened read-only: telemetry on and the training overhead gate passed but
+  no tg_pull in 48 h (a note while the gate is in its A/B phase, which records only alternate
+  bosses of offline raids, or has failed), a realm body hold or an unknown root older than 1 h,
+  cast members without a persona. A table an older mind.db lacks is unavailable, a note.
 
 [health] in mind.toml: min_cast (default 100), the floor for both counts in the cast line and
 for the endpoint's cast; grace_minutes (default 6), how long after a server or mind start a
@@ -29,13 +32,17 @@ missing start line is a note rather than a FAIL. A missing table means the defau
 
 It never connects to the bridge port (7878, and mind.toml's [bridge] port): the bridge takes one
 mind, and a second connection would knock the live one off. It loads no model, never touches
-the GPU, starts and stops nothing and prints no key. The only file it writes is
-health-state.json in the data dir, and only with --toast: the failing checks it last toasted,
-so a failure gets one toast until it clears. (Like doctor's and the console's, its read-only
-mind.db reader can leave SQLite's empty mind.db-wal and mind.db-shm index files when no mind
-has the database open.)"""
+the GPU, starts and stops nothing and prints no key. It takes no lock either: mind.lock and
+voice.lock are never probed (a probe holds the lock for a moment, and a service starting just
+then would exit "already running"), so "running" comes from the process list, control.json,
+voice.pid and the TCP table. The only file it writes is health-state.json in the data dir, and
+only with --toast: the failing checks it last toasted, so a failure gets one toast until it
+clears. A read-only open of mind.db can leave SQLite's empty mind.db-wal and mind.db-shm
+behind while the mind is stopped, as doctor's and the console's do."""
 import argparse
 import json
+import logging
+import math
 import os
 import re
 import sqlite3
@@ -55,9 +62,11 @@ from typing import Callable
 
 from . import endpoint, lifecycle
 from .config import ConfigError, _build as _config_from, default_data_dir, load_config
+from .logs import log as log_event
 
 CHECKOUT = Path(__file__).resolve().parents[2]  # mind/leeroy_mind/health.py
 STATE_FILE = "health-state.json"
+VOICE_PID_FILE = "voice.pid"  # leeroy_voice.lock.PID_FILE (another venv: not importable here)
 BRIDGE_PORT = 7878  # mod-leeroy's default bridge port: refused whatever mind.toml says
 CONSOLE_PORT = 7881
 OK, FAIL, NOTE = "ok", "fail", "note"
@@ -162,14 +171,13 @@ class Probes:
     now: Callable[[], float]
     servers: Callable[[], list[Server]]  # raises when there is no process list
     processes: object | None  # .snapshot() -> [lifecycle.Process]; None: no process list here
-    locked: Callable[[Path], bool]  # mind.lock held (app.instance_lock_held)
     python: Path  # the install's mind venv python
     base_python: str  # the base interpreter its launcher starts
     tcp: Callable[[], list | None]  # console.netinfo.tcp_table
     request: Callable  # endpoint.request
     http_status: Callable[[str, float], int]  # an HTTP GET's status; OSError when none answers
     fetch_json: Callable[[str, float], object]  # an HTTP GET's JSON
-    voice: object | None  # lifecycle.VoiceControl; None: no voice service here
+    voice: object | None  # lifecycle.VoiceControl, for missing() and where() only; None: none
     open_log: Callable[[Path], object]  # a binary read handle that never blocks a rotation
 
 
@@ -210,14 +218,13 @@ def http_status(url: str, timeout: float) -> int:
 
 
 def real_probes(root: Path) -> Probes:
-    from .app import instance_lock_held
     from .console import netinfo, status
     from .console.mindlog import _open_shared
     windows = os.name == "nt"
     processes = lifecycle.WindowsProcesses() if windows else None
     return Probes(now=time.time, servers=windows_servers if windows else _no_servers,
-                  processes=processes, locked=instance_lock_held,
-                  python=lifecycle.venv_python(root), base_python=base_python(),
+                  processes=processes, python=lifecycle.venv_python(root),
+                  base_python=base_python(),
                   tcp=netinfo.tcp_table, request=endpoint.request, http_status=http_status,
                   fetch_json=status._fetch_json,
                   voice=lifecycle.VoiceControl(root, processes=processes),
@@ -256,18 +263,6 @@ def _refusing(request, forbidden: frozenset[int]):
             raise OSError("the bridge's port is never dialled")
         return request(port, key, op, args, timeout=timeout)
     return call
-
-
-class _Once:
-    """One process list for the whole check: the mind's verdict and its start come from it."""
-
-    def __init__(self, processes):
-        self.processes, self.rows = processes, None
-
-    def snapshot(self):
-        if self.rows is None:
-            self.rows = self.processes.snapshot()
-        return self.rows
 
 
 # -- the checks ------------------------------------------------------------------------------
@@ -346,25 +341,40 @@ def _server_log(root: Path, world: float | None, now: float, cfg: HealthCfg) -> 
     return out
 
 
-def _mind(p: Probes, root: Path, data: Path) -> tuple[Check, MindRun | None]:
+def _mind(p: Probes, data: Path, now: float, cfg: HealthCfg) -> tuple[Check, MindRun | None]:
+    """The mind's process family by lifecycle's identity rules, and control.json's pid. Not the
+    lock probe `ac-mind.py status` adds: it holds mind.lock for a moment, and a mind starting
+    just then would exit "already running"."""
     if p.processes is None:
         return Check("mind", FAIL, "mind: no process list here (Windows only)"), None
-    once = _Once(p.processes)
     try:
-        outcome = lifecycle.mind_action("status", root, data, p.python, p.base_python,
-                                        processes=once, locked=p.locked)
-        found = lifecycle.family(once.rows or [], p.python, p.base_python, data)
+        rows = p.processes.snapshot()
+        found = lifecycle.family(rows, p.python, p.base_python, data)
     except lifecycle.OwnershipError as e:
         return Check("mind", FAIL, f"mind: {e}"), None
     except Exception as e:
         return Check("mind", FAIL, f"mind: the process list is unavailable "
                                    f"({type(e).__name__})"), None
-    if outcome.state == "stopped":
+    record = endpoint.read_key_file(data / endpoint.KEY_FILE)
+    if not found:
+        if record is not None and any(r.pid == record["pid"] for r in rows):
+            return Check("mind", FAIL, f"mind: not running from this checkout, but control.json "
+                                       f"names pid {record['pid']}, another Python process (a "
+                                       "night run or another checkout)"), None
         return Check("mind", FAIL, "mind: stopped"), None
-    if outcome.state != "running" or not found:
-        return Check("mind", NOTE, f"mind: {outcome.message}"), None
     run = MindRun(filetime_epoch(min(x.created for x in found)), tuple(x.pid for x in found))
-    return Check("mind", OK, f"mind: {outcome.message}, started {_when(run.started)}"), run
+    head, since = f"mind: pid {found[0].pid}", f"started {_when(run.started)}"
+    if record is not None and record["pid"] in run.pids:
+        return Check("mind", OK, f"{head} running (control.json names it), {since}"), run
+    try:
+        control = endpoint.load_control_config(data / "mind.toml").enabled
+    except ConfigError:
+        control = True
+    if not control:
+        return Check("mind", OK, f"{head} running (its control endpoint is off), {since}"), run
+    if now - run.started < cfg.grace_minutes * 60:
+        return Check("mind", NOTE, f"{head} starting (no control.json from it yet), {since}"), run
+    return Check("mind", OK, f"{head} running (control.json is not its own), {since}"), run
 
 
 def _log_files(logs: Path, started: float) -> list[Path]:
@@ -508,8 +518,21 @@ def _console(p: Probes) -> Check:
     return Check("console", OK, f"console answers on {url}")
 
 
+def _voice_pid(folder: Path) -> int | None:
+    """voice.pid in the voice service's data dir, as the service writes it at its start and
+    removes at its end (leeroy_voice.lock.read_pid); None when there is none to read."""
+    try:
+        text = (Path(folder) / VOICE_PID_FILE).read_text(encoding="ascii").strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+    return int(text) if text.isdecimal() else None
+
+
 def _voice(p: Probes, data: Path) -> Check:
-    from .console import netinfo
+    """Running is voice.pid's pid listening on both of `where`'s ports. Not `leeroy_voice held`,
+    which ac-voice.sh status asks: it holds voice.lock for a moment, and a service starting just
+    then would exit "already running"."""
+    from .console.netinfo import LISTEN
     from .voice.config import load_voice_config
     try:
         if not load_voice_config(data / "mind.toml").enabled:
@@ -522,27 +545,31 @@ def _voice(p: Probes, data: Path) -> Check:
         return Check("voice", NOTE, f"voice service: {why}")
     try:
         where = v.where()
-        outcome = v.status()
     except lifecycle.OwnershipError as e:
         return Check("voice", NOTE, f"voice service: {e}")
     except (OSError, subprocess.SubprocessError) as e:
         return Check("voice", NOTE, f"voice service: not checked ({type(e).__name__})")
-    if outcome.state == "stopped":
-        return Check("voice", NOTE, f"voice service: stopped (ports {where.mind_port} and "
-                                    f"{where.ui_port})")
-    if outcome.code != 0:
-        return Check("voice", FAIL, f"voice service: {outcome.message}")
+    pid, ports = _voice_pid(where.data_dir), (where.mind_port, where.ui_port)
     conns = p.tcp()
     if conns is None:
-        return Check("voice", OK, f"voice service: {outcome.message}; its ports cannot be "
-                                  "checked here")
-    closed = [str(port) for port in (where.mind_port, where.ui_port)
-              if not netinfo.listening(conns, port)]
-    if closed:
-        return Check("voice", FAIL, f"voice service: {outcome.message}, but port "
-                                    f"{' and '.join(closed)} is not listening")
-    return Check("voice", OK, f"voice service: {outcome.message}, listening on "
-                              f"{where.mind_port} and {where.ui_port}")
+        return Check("voice", NOTE, "voice service: not checked, no TCP table here")
+    owners = {port: {c.pid for c in conns if c.state == LISTEN and c.local_port == port}
+              for port in ports}
+    if not any(owners.values()):
+        left = (f"; voice.pid names pid {pid} (starting, or left by a crash)"
+                if pid is not None else "")
+        return Check("voice", NOTE, f"voice service: stopped (ports {ports[0]} and {ports[1]} "
+                                    f"closed){left}")
+    if pid is None:
+        return Check("voice", FAIL, "voice service: its ports are listening, but there is no "
+                                    "voice.pid in its data dir")
+    wrong = [f"port {port} is held by pid {', '.join(map(str, sorted(owners[port])))}"
+             if owners[port] else f"port {port} is not listening"
+             for port in ports if pid not in owners[port]]
+    if wrong:
+        return Check("voice", FAIL, f"voice service: pid {pid}, but {'; '.join(wrong)}")
+    return Check("voice", OK, f"voice service: pid {pid}, listening on {ports[0]} and "
+                              f"{ports[1]}")
 
 
 def _ollama(p: Probes, cfg, forbidden: frozenset[int]) -> list[Check]:
@@ -594,15 +621,49 @@ def _telemetry(conn, root: Path, data: Path, now: float) -> Check:
     if native is None:
         return Check("telemetry", NOTE, "telemetry: not checked, mod_leeroy.conf cannot be read")
     try:
+        phase, raids = _gate_phase(conn)
         last = conn.execute("SELECT max(received) FROM tg_pull").fetchone()[0]
     except sqlite3.Error as e:
         if _unavailable(e):
             return Check("telemetry", NOTE, "telemetry: unavailable (this mind.db has no tg_pull)")
         return Check("telemetry", FAIL, f"telemetry: tg_pull cannot be read ({type(e).__name__})")
-    if last is None or now - last > PULL_S:
-        return Check("telemetry", FAIL, "telemetry: on, but no tg_pull in 48 h (last "
-                     + (_when(last) if last is not None else "never") + ")")
-    return Check("telemetry", OK, f"telemetry: last tg_pull {_ago(now - last)} ago")
+    seen = _when(last) if last is not None else "never"
+    if last is not None and now - last <= PULL_S:
+        return Check("telemetry", OK, f"telemetry: last tg_pull {_ago(now - last)} ago "
+                                      f"(gate {phase})")
+    if phase == "ab":
+        return Check("telemetry", NOTE, "telemetry: overhead gate in phase ab (A/B, "
+                     f"{raids} offline raid{'s' if raids != 1 else ''} counted): only alternate "
+                     "bosses of offline raids are recorded, so no tg_pull in 48 h is expected "
+                     f"(last {seen})")
+    if phase == "failed":
+        return Check("telemetry", NOTE, "telemetry: overhead gate failed (or its state is "
+                     f"unreadable), so nothing is recorded; no pulls expected (last {seen})")
+    return Check("telemetry", FAIL, f"telemetry: on and the overhead gate passed, but no tg_pull "
+                                    f"in 48 h (last {seen})")
+
+
+def _gate_phase(conn) -> tuple[str, int]:
+    """The training overhead gate's phase (ab, passed or failed) and the offline raids it has
+    counted, from meta tg_gate as `training gate` reads it (training.cli._gate). A value the
+    gate itself would not accept is "failed", as training.gate.Gate reads it: corrupt state never
+    re-arms recording."""
+    from .training.cli import _gate
+    try:
+        saved = _gate(conn)
+    except (ValueError, TypeError):
+        return "failed", 0
+    if not isinstance(saved, dict):
+        return "failed", 0
+    phase, raids, verdict = saved.get("phase"), saved.get("raids"), saved.get("verdict_ms")
+
+    def number(v):
+        return type(v) in (int, float) and math.isfinite(v)
+    if (phase not in ("ab", "passed", "failed") or type(raids) is not int or raids < 0
+            or (verdict is not None and not number(verdict))
+            or (phase == "passed" and not number(verdict))):
+        return "failed", 0
+    return phase, raids
 
 
 def _realm_holds(conn, now: float) -> Check:
@@ -716,7 +777,7 @@ def run_checks(root: Path, data_dir: Path, *, probes: Probes | None = None) -> l
     out += servers
     out.append(_guarded("server-log", _server_log, root, world, now, hcfg))
     try:
-        mind, run = _mind(p, root, data)
+        mind, run = _mind(p, data, now, hcfg)
     except Exception as e:
         mind, run = Check("mind", FAIL, f"mind: the check itself failed ({type(e).__name__})"), None
     out.append(mind)
@@ -783,8 +844,8 @@ def alert(checks: list[Check], data_dir: Path, *, show=show_toast, now=time.time
                                         "at": datetime.fromtimestamp(now()).astimezone()
                                         .isoformat(timespec="seconds")}) + "\n",
                             encoding="ascii")
-        except OSError:
-            pass
+        except OSError as e:  # the same failures toast again next time: say why, once
+            log_event("health_state_unwritten", level=logging.WARNING, error=type(e).__name__)
     return shown
 
 

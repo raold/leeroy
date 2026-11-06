@@ -6,8 +6,10 @@
 # Usage: ac-health.sh [--json] [--toast]
 #
 # Arguments go on to `python -m leeroy_mind health`. It never connects to the bridge (7878),
-# loads no model and starts or stops nothing. --toast shows a Windows toast for a new failure
-# and remembers it in health-state.json in the mind's data dir, the only file it writes.
+# loads no model, starts or stops nothing and takes neither mind.lock nor voice.lock. --toast
+# shows a Windows toast for a new failure and remembers it in health-state.json in the mind's
+# data dir, the only file it writes (a read-only open can leave SQLite's empty mind.db-wal and
+# mind.db-shm behind while the mind is stopped, as doctor and the console do).
 # ac-health-schedule.ps1 installs a task that runs it every 15 minutes with --toast.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"

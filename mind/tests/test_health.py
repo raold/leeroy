@@ -1,11 +1,15 @@
 """The health check (leeroy_mind.health): each check against a scratch install, with fakes for
 the process lists, the TCP table, the control endpoint, HTTP and the voice service; the toast's
-suppression, without a toast; and its rules: it never dials the bridge's port, never prints the
-control key and writes nothing but health-state.json, and only with --toast."""
+suppression, without a toast; and its rules: it never dials the bridge's port, never takes
+mind.lock or voice.lock, never prints the control key and writes nothing but health-state.json,
+and only with --toast."""
+import dataclasses
 import json
+import logging
 import os
 import socket
 import sqlite3
+import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -73,8 +77,11 @@ class Endpoint:
 
 
 class Voice:
-    def __init__(self, state="running", *, code=0, missing=None, where=None):
-        self.state, self.code, self._missing, self._where = state, code, missing, where
+    """VoiceControl's surface the check may use: missing() and where(). Its lock-taking
+    status() and held() refuse."""
+
+    def __init__(self, data_dir, *, missing=None, where=None):
+        self.data_dir, self._missing, self._where = Path(data_dir), missing, where
 
     def missing(self):
         return self._missing
@@ -82,13 +89,13 @@ class Voice:
     def where(self):
         if isinstance(self._where, Exception):
             raise self._where
-        return lifecycle.VoiceWhere(Path("C:/voice-data"), 7879, 7880)
+        return lifecycle.VoiceWhere(self.data_dir, 7879, 7880)
 
     def status(self):
-        if self.state == "stopped":
-            return lifecycle.Outcome(0, "voice stopped", "stopped")
-        return lifecycle.Outcome(self.code, f"voice pid {VOICE_PID} (running)", "running",
-                                 VOICE_PID)
+        raise AssertionError("status() probes voice.lock")
+
+    def held(self):
+        raise AssertionError("held() probes voice.lock")
 
 
 class Rig:
@@ -133,7 +140,6 @@ class Rig:
                                str(self.bin / "authserver.exe")),
                         Server("worldserver.exe", 301, WORLD_START,
                                str(self.bin / "worldserver.exe"))]
-        self.held = True
         self.conns = [Conn("127.0.0.1", CONTROL_PORT, "0.0.0.0", 0, LISTEN, MIND_PID),
                       Conn("127.0.0.1", 7879, "0.0.0.0", 0, LISTEN, VOICE_PID),
                       Conn("127.0.0.1", 7880, "0.0.0.0", 0, LISTEN, VOICE_PID),
@@ -143,9 +149,19 @@ class Rig:
         self.ollama = {"models": [{"name": MODELS.live, "size": 1, "size_vram": 1},
                                   {"name": "other:latest", "size": 1, "size_vram": 1}]}
         self.fetched = []
-        self.voice = Voice()
+        self.voice_data = tmp_path / "voice-data"
+        self.voice_data.mkdir()
+        self.voice_pid(VOICE_PID)
+        self.voice = Voice(self.voice_data)
 
     # -- the files ------------------------------------------------------------------------
+
+    def voice_pid(self, pid) -> None:
+        path = self.voice_data / "voice.pid"
+        if pid is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_text(f"{pid}\n", encoding="ascii")
 
     def write_toml(self, extra: str = "") -> None:
         (self.data / "mind.toml").write_text(self.toml + extra, encoding="utf-8")
@@ -205,7 +221,7 @@ class Rig:
     def probes(self, **over) -> Probes:
         self.processes = Processes(self.mind)
         kw = dict(now=lambda: NOW, servers=self.servers_now, processes=self.processes,
-                  locked=lambda data: self.held, python=self.python, base_python=str(self.base),
+                  python=self.python, base_python=str(self.base),
                   tcp=lambda: self.conns, request=self.endpoint, http_status=self.http_status,
                   fetch_json=self.fetch_json, voice=self.voice,
                   open_log=lambda path: open(path, "rb"))
@@ -233,17 +249,16 @@ def test_a_healthy_install_is_all_ok_with_its_notes(rig):
         "mind-log": OK, "mind-critical": OK, "endpoint": OK, "console": OK, "voice": OK,
         "ollama": OK, "ollama-models": NOTE, "telemetry": OK, "realm-holds": OK, "unvoiced": OK}
     assert checks["server-log"].text == "Server.log: cast 111 members, pinned 111 (floor 100)"
-    assert checks["mind"].text.startswith(f"mind: mind pid {MIND_PID} (running)")
+    assert checks["mind"].text.startswith(f"mind: pid {MIND_PID} running (control.json names it)")
     assert "bridge_hello" in checks["mind-log"].text
     assert checks["endpoint"].text == ("control endpoint: status answered: bridge connected, "
                                        "cast 111, schema v17")
-    assert checks["voice"].text == (f"voice service: voice pid {VOICE_PID} (running), "
-                                    "listening on 7879 and 7880")
+    assert checks["voice"].text == f"voice service: pid {VOICE_PID}, listening on 7879 and 7880"
     assert checks["ollama-models"].text == f"ollama: 2 loaded: {MODELS.live} (live), other:latest"
     # the endpoint got the key once, at the port control.json names, for status
     assert rig.endpoint.calls == [(CONTROL_PORT, KEY, "status", None)]
     assert rig.fetched == ["http://127.0.0.1:11434/api/ps"]  # Ollama: /api/ps only
-    assert rig.processes.snapshots == 1  # one process list for the verdict and the start
+    assert rig.processes.snapshots == 1  # one process list for the family and its start
 
 
 def test_the_command_prints_one_line_each_or_json_and_exits_by_the_fails(rig, capsys):
@@ -349,25 +364,45 @@ def test_a_realm_list_that_did_not_load_since_the_start_fails(rig):
 # -- the mind and mind.log -----------------------------------------------------------------------
 
 def test_a_stopped_mind_fails_and_what_needs_it_is_not_checked(rig):
-    rig.mind, rig.held = [], False
+    rig.mind = []  # control.json left by a crash names a pid that is no Python process now
     checks = rig.run()
     assert checks["mind"].status == FAIL and checks["mind"].text == "mind: stopped"
     for name in ("mind-log", "endpoint"):
         assert checks[name].status == NOTE and "the mind is not running" in checks[name].text
     assert rig.endpoint.calls == []
+    (rig.data / KEY_FILE).unlink()
+    assert rig.run()["mind"].text == "mind: stopped"
 
 
-def test_a_held_lock_without_this_checkouts_mind_fails(rig):
-    rig.mind = []
+def test_control_json_naming_a_mind_of_another_checkout_fails(rig, tmp_path):
+    other = tmp_path / "other" / "mind" / ".venv" / "Scripts" / "python.exe"
+    rig.mind = [lifecycle.Process(MIND_PID, 20, filetime(MIND_START), str(other),
+                                  (str(other), "-m", "leeroy_mind", "run", "--data-dir",
+                                   str(rig.data)))]
     checks = rig.run()
     assert checks["mind"].status == FAIL
-    assert "mind.lock is held but its mind process is unidentified" in checks["mind"].text
+    assert checks["mind"].text.startswith(f"mind: not running from this checkout, but "
+                                          f"control.json names pid {MIND_PID}")
 
 
-def test_a_starting_mind_is_a_note(rig):
-    rig.held = False
+def test_a_mind_without_its_control_json_yet_is_starting_then_running(rig):
+    start = NOW - 20
+    rig.mind = [lifecycle.Process(p.pid, p.parent, filetime(start) + i, p.exe, p.argv)
+                for i, p in enumerate(rig.mind)]
+    (rig.data / KEY_FILE).unlink()
     checks = rig.run()
-    assert checks["mind"].status == NOTE and "starting" in checks["mind"].text
+    assert checks["mind"].status == NOTE
+    assert checks["mind"].text.startswith(f"mind: pid {MIND_PID} starting (no control.json")
+    assert checks["endpoint"].status == NOTE  # still within the grace
+    rig.mind = [lifecycle.Process(p.pid, p.parent, filetime(MIND_START) + i, p.exe, p.argv)
+                for i, p in enumerate(rig.mind)]
+    checks = rig.run()  # long since started: running, and its missing endpoint fails
+    assert checks["mind"].status == OK and "(control.json is not its own)" in checks["mind"].text
+    assert checks["endpoint"].status == FAIL
+    rig.write_toml("\n[control]\nenabled = false\n")
+    checks = rig.run()
+    assert checks["mind"].status == OK and "(its control endpoint is off)" in checks["mind"].text
+    assert checks["endpoint"].status == NOTE
 
 
 def test_the_bridge_must_have_come_up_since_the_minds_start(rig):
@@ -467,19 +502,49 @@ def test_the_console_is_a_note_when_it_is_not_running(rig):
     assert rig.run()["console"].status == FAIL
 
 
-def test_the_voice_service_stopped_or_disabled_is_a_note_and_broken_fails(rig):
-    rig.voice = Voice("stopped")
-    assert rig.run()["voice"].status == NOTE
-    rig.voice = Voice(missing="no voice venv at X")
-    assert rig.run()["voice"].status == NOTE
-    rig.voice = Voice(where=lifecycle.OwnershipError("cannot read the voice config"))
-    assert rig.run()["voice"].status == NOTE
-    rig.voice = Voice()
-    rig.conns = [c for c in rig.conns if c.local_port != 7880]
+def voice_ports(rig, *owners):
+    """The TCP table without the voice ports, then (port, pid) listeners."""
+    rig.conns = [c for c in rig.conns if c.local_port not in (7879, 7880)] + [
+        Conn("127.0.0.1", port, "0.0.0.0", 0, LISTEN, pid) for port, pid in owners]
+
+
+def test_a_stopped_voice_service_is_a_note(rig):
+    rig.voice_pid(None)
+    voice_ports(rig)
     checks = rig.run()
-    assert checks["voice"].status == FAIL and "port 7880 is not listening" in checks["voice"].text
-    rig.voice = Voice(code=1)
+    assert checks["voice"].status == NOTE
+    assert checks["voice"].text == "voice service: stopped (ports 7879 and 7880 closed)"
+    rig.voice_pid(VOICE_PID)  # written at its start, removed at its end: starting, or a crash
+    checks = rig.run()
+    assert checks["voice"].status == NOTE
+    assert checks["voice"].text.endswith(f"voice.pid names pid {VOICE_PID} (starting, or left by "
+                                         "a crash)")
+
+
+def test_a_voice_service_whose_pid_does_not_hold_both_ports_fails(rig):
+    voice_ports(rig, (7879, VOICE_PID))
+    checks = rig.run()
+    assert checks["voice"].status == FAIL
+    assert checks["voice"].text == f"voice service: pid {VOICE_PID}, but port 7880 is not listening"
+    voice_ports(rig, (7879, VOICE_PID), (7880, 9999))
+    assert rig.run()["voice"].text.endswith("port 7880 is held by pid 9999")
+    rig.voice_pid(None)
+    voice_ports(rig, (7879, VOICE_PID), (7880, VOICE_PID))
+    checks = rig.run()
+    assert checks["voice"].status == FAIL and "no voice.pid" in checks["voice"].text
+    rig.voice_pid("not a pid")
     assert rig.run()["voice"].status == FAIL
+
+
+def test_the_voice_service_disabled_missing_or_unreadable_is_a_note(rig):
+    rig.voice = Voice(rig.voice_data, missing="no voice venv at X")
+    assert rig.run()["voice"].status == NOTE
+    rig.voice = Voice(rig.voice_data, where=lifecycle.OwnershipError("cannot read the voice "
+                                                                      "config"))
+    assert rig.run()["voice"].status == NOTE
+    rig.voice = Voice(rig.voice_data)
+    checks = rig.run(tcp=lambda: None)
+    assert checks["voice"].status == NOTE and "no TCP table" in checks["voice"].text
     rig.toml = "[training]\nenabled = true\n"
     rig.write_toml()
     checks = rig.run()
@@ -499,15 +564,53 @@ def test_ollama_unreachable_fails_and_the_loaded_models_are_a_note(rig):
 
 # -- activity in mind.db -------------------------------------------------------------------------
 
-def test_telemetry_on_without_a_pull_in_48_hours_fails(rig):
+def gate(rig, phase="passed", raids=12, verdict_ms=0.4) -> None:
+    """meta tg_gate as training.gate.Gate saves it."""
+    rig.db("INSERT OR REPLACE INTO meta (key, value) VALUES ('tg_gate', ?)",
+           (json.dumps({"phase": phase, "raids": raids, "verdict_ms": verdict_ms}),))
+
+
+def test_once_the_gate_has_passed_no_pull_in_48_hours_fails(rig):
+    gate(rig, "passed")
     rig.db("DELETE FROM tg_pull")
     checks = rig.run()
     assert checks["telemetry"].status == FAIL
-    assert checks["telemetry"].text == "telemetry: on, but no tg_pull in 48 h (last never)"
+    assert checks["telemetry"].text == ("telemetry: on and the overhead gate passed, but no "
+                                        "tg_pull in 48 h (last never)")
     rig.pull(NOW - 49 * 3600)
     assert rig.run()["telemetry"].status == FAIL
     rig.pull(NOW - 47 * 3600)
-    assert rig.run()["telemetry"].status == OK
+    checks = rig.run()
+    assert checks["telemetry"].status == OK and checks["telemetry"].text.endswith("(gate passed)")
+
+
+def test_in_the_gates_ab_phase_no_pull_in_48_hours_is_a_note(rig):
+    rig.db("DELETE FROM tg_pull")
+    checks = rig.run()  # no tg_gate yet: phase ab, as `training gate` reads it
+    assert checks["telemetry"].status == NOTE
+    assert checks["telemetry"].text == (
+        "telemetry: overhead gate in phase ab (A/B, 0 offline raids counted): only alternate "
+        "bosses of offline raids are recorded, so no tg_pull in 48 h is expected (last never)")
+    gate(rig, "ab", raids=3, verdict_ms=None)
+    rig.pull(NOW - 49 * 3600)
+    checks = rig.run()
+    assert checks["telemetry"].status == NOTE and "3 offline raids counted" in checks[
+        "telemetry"].text
+    rig.pull(NOW - 3600)
+    checks = rig.run()
+    assert checks["telemetry"].status == OK and checks["telemetry"].text.endswith("(gate ab)")
+
+
+def test_a_failed_or_unreadable_gate_records_nothing_and_is_a_note(rig):
+    rig.db("DELETE FROM tg_pull")
+    gate(rig, "failed", verdict_ms=3.5)
+    assert rig.run()["telemetry"].status == NOTE
+    for value in ("not json", json.dumps({"phase": "passed", "raids": 12}),  # no verdict
+                  json.dumps({"phase": "won", "raids": 1, "verdict_ms": None}), "[]"):
+        rig.db("INSERT OR REPLACE INTO meta (key, value) VALUES ('tg_gate', ?)", (value,))
+        checks = rig.run()  # as training.gate.Gate reads it: failed, never re-armed
+        assert checks["telemetry"].status == NOTE
+        assert "overhead gate failed (or its state is unreadable)" in checks["telemetry"].text
 
 
 def test_telemetry_off_either_side_is_a_note(rig):
@@ -587,6 +690,37 @@ def test_one_toast_per_new_failure_until_it_clears(tmp_path):
     assert read_state(state) == set() and len(shown) == 2
     assert alert(checks_failing("mind"), tmp_path, show=show) is True  # back: a new toast
     assert shown[-1] == ("Leeroy health: 1 check failing", "mind")
+
+
+def test_a_partial_clear_toasts_again_only_for_what_comes_back(tmp_path):
+    shown = []
+
+    def show(title, body):
+        shown.append(body)
+        return True
+    assert alert(checks_failing("A", "B"), tmp_path, show=show) is True
+    assert shown == ["A, B"]  # one toast for both
+    assert alert(checks_failing("A"), tmp_path, show=show) is False
+    assert shown == ["A, B"]  # B cleared: no toast for A, still failing
+    assert alert(checks_failing("A", "B"), tmp_path, show=show) is True
+    assert shown == ["A, B", "A, B"]  # B is back: a toast for it
+    assert alert(checks_failing("A", "B"), tmp_path, show=show) is False
+    assert len(shown) == 2
+
+
+def test_a_state_file_that_cannot_be_written_logs_one_line(tmp_path, caplog):
+    (tmp_path / health.STATE_FILE).mkdir()  # a folder where the file goes: every write fails
+    shown = []
+    with caplog.at_level(logging.WARNING, logger="leeroy_mind"):
+        for _ in range(2):
+            caplog.clear()
+            alert(checks_failing("worldserver"), tmp_path,
+                  show=lambda t, b: shown.append(b) or True)
+            records = [r for r in caplog.records if r.name == "leeroy_mind"]
+            assert len(records) == 1 and records[0].levelno == logging.WARNING
+            assert records[0].getMessage().startswith("health_state_unwritten: error=")
+            assert "worldserver" not in records[0].getMessage()
+    assert shown == ["worldserver", "worldserver"]  # why the same toast came twice
 
 
 def test_a_toast_that_could_not_be_shown_is_tried_again(tmp_path):
@@ -679,6 +813,44 @@ def test_it_never_dials_the_bridge_port(rig, monkeypatch):
         assert checks["console"].status == NOTE  # refused: dialled, so the patch is in force
         assert port not in dialled and 7878 not in dialled
     assert dialled and set(dialled) == {health.CONSOLE_PORT}
+
+
+def test_it_never_takes_mind_lock_or_voice_lock(rig, monkeypatch):
+    """Every lock-taking probe refuses: the mind's lock probe (app.instance_lock_held, the
+    InstanceLock it acquires, lifecycle.mind_action's status that calls it) and the voice
+    service's (VoiceControl.held and status, which run `leeroy_voice held`). With a real
+    VoiceControl whose only command may be `where`, every state still comes out."""
+    from leeroy_mind import app
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("a lock-taking probe was called")
+    monkeypatch.setattr(app, "instance_lock_held", refuse)
+    monkeypatch.setattr(app.InstanceLock, "acquire", refuse)
+    monkeypatch.setattr(lifecycle, "mind_action", refuse)
+    monkeypatch.setattr(lifecycle.VoiceControl, "held", refuse)
+    monkeypatch.setattr(lifecycle.VoiceControl, "status", refuse)
+    asked = []
+
+    def run(argv, **kwargs):
+        asked.append(tuple(argv[1:]))
+        if tuple(argv[1:]) != ("-m", "leeroy_voice", "where"):
+            raise AssertionError(f"voice command {argv[1:]} may take voice.lock")
+        return subprocess.CompletedProcess(argv, 0, f"data_dir={rig.voice_data}\nmind_port=7879"
+                                                    "\nui_port=7880\n", "")
+    scripts = rig.root / "voice" / ".venv" / "Scripts"
+    scripts.mkdir(parents=True)
+    for exe in ("python.exe", "pythonw.exe"):
+        (scripts / exe).write_bytes(b"")
+    voice = lifecycle.VoiceControl(rig.root, processes=Processes(rig.mind), run=run)
+    assert "locked" not in {f.name for f in dataclasses.fields(Probes)}
+    checks = rig.run(voice=voice)  # all running
+    assert (checks["mind"].status, checks["voice"].status) == (OK, OK)
+    rig.voice_pid(None)
+    voice_ports(rig)
+    rig.mind = []
+    checks = rig.run(voice=voice)  # both stopped
+    assert (checks["mind"].status, checks["voice"].status) == (FAIL, NOTE)
+    assert set(asked) == {("-m", "leeroy_voice", "where")}
 
 
 def test_the_scheduled_interpreter_finds_the_minds_python(monkeypatch, tmp_path):
