@@ -594,7 +594,22 @@ class ControlEndpoint:
             except Exception as e:
                 log_event("control_status_failed", level=logging.WARNING, error=type(e).__name__)
         return {"ok": True, "v": VERSION, "pid": os.getpid(), "stopping": self.app.stopping,
-                "raid": raid}
+                "raid": raid, **self._health()}
+
+    def _health(self) -> dict:
+        """For the health check: bridge_connected (the bridge connection is open and has had
+        its hello), cast (the cast members in the bridge's last snapshot) and schema_version
+        (mind.db's user_version). Each is None when this app cannot tell."""
+        def read(get):
+            try:
+                return get()
+            except Exception:
+                return None
+        app = self.app
+        return {"bridge_connected": read(lambda: bool(app.bridge.greeted)),
+                "cast": read(lambda: len(app.world.cast_guids())),
+                "schema_version": read(lambda: int(app.store.conn.execute(
+                    "PRAGMA user_version").fetchone()[0]))}
 
     async def raid(self, args: dict) -> dict:
         from leeroy_mind.guild.raid_night import ConsoleRefused

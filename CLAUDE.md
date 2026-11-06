@@ -242,6 +242,17 @@ Run from `F:\azerothcore\scripts` in Git Bash.
 ./ac-snapshot.sh             # live configs (masked) + playerbots and ollama-chat patches -> config/, patches/
 ```
 
+`./ac-health.sh [--json] [--toast]` (`python -m leeroy_mind health`) checks the live install
+read-only, one ok/FAIL/note line each, exit 1 on any FAIL: the servers, Server.log's cast line
+since worldserver started (floor `[health] min_cast`, default 100) and no `so no places`, the
+mind and mind.log, the control endpoint's `status` (it reports `bridge_connected`, `cast` and
+`schema_version`), the console and voice (notes when down), Ollama's `/api/ps`, and stuck
+activity (no `tg_pull` in 48 h with telemetry on, a realm hold or `unknown` root older than 1 h,
+cast without personas). It never dials the bridge (7878), loads no model and starts nothing;
+`--toast` shows one toast per new failure and writes only `mind-data/health-state.json`.
+`ac-health-schedule.ps1 -Install|-Remove|-Status` manages a per-user task that runs it every
+15 minutes while he is logged on (not installed by default).
+
 `db_backup/` holds two kinds of thing: sets `ac-backup.sh` made
 (`<label>_<YYYYmmdd>_<HHMMSS>`) and sets from the older script described below
 (`YYYY-MM-DD_HHMM`), plus a raw MySQL datadir copy. **The prune only ever
