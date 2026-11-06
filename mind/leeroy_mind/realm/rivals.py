@@ -56,7 +56,7 @@ from leeroy_mind.text import estimate_tokens
 from leeroy_mind.wow import CLASSES, class_roles, faction_known
 
 from . import protocol
-from .action_store import ActionCapacity, ActionUnavailable
+from .action_store import ABANDONED, ActionCapacity, ActionUnavailable
 from .actions import ActionRejected
 from .armory import GUILD_ID, RealmArmoryUnavailable
 from .ledger import actor_exclusions_in_unit
@@ -574,8 +574,8 @@ class Rivals:
             attempt, record = latest
             if record.state in ("prepared", "dispatched"):
                 return "pending"
-            if record.state in ("unknown", "conflict"):
-                return "unknown"  # It may have reached native: never sent again.
+            if record.state in ("unknown", "conflict") or record.result_reason == ABANDONED:
+                return "unknown"  # It may have reached native: never sent again, even once released.
             if record.state == "completed" and record.result_ok is True:
                 return "acked"
             attempt += 1  # It never left, or native refused it before doing anything.

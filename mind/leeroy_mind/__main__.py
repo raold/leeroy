@@ -1198,7 +1198,8 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     parser = argparse.ArgumentParser(prog="leeroy_mind")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("training", help="training ledger, gate, reports and spell checks")
-    sub.add_parser("realm", help="read-only realm status and title diagnostics")
+    sub.add_parser("realm", help="realm status and titles, the data steps, and release of a stuck root "
+                   "with the mind stopped")
     sub.add_parser("tuning", help="the owner's persona dials: status, history, and undo or "
                    "revert with the mind stopped")
     sub.add_parser("nightly", help="nightly status, trials, ledger and owner controls")

@@ -2,7 +2,9 @@
 
 Call outside Store.transaction(): canonical connections use autocommit=False.
 There is deliberately no generic release API. Typed correlated evidence alone
-can end a dispatched reservation (RealmModule.cpp:595-665,906-1011,827-856).
+can end a dispatched reservation (RealmModule.cpp:595-665,906-1011,827-856),
+apart from abandon(): the operator's release of one unknown body move, with
+the mind stopped (`realm release`), which keeps a meta receipt.
 """
 from dataclasses import asdict, dataclass, replace
 import json
@@ -46,6 +48,8 @@ STEP_REFUSALS = frozenset({*BODY_FENCES, "busy:operation_identity", "busy:body_i
                                                    "human_group", "instance", "battleground", "arena", "lfg"))})
 STEP_REFUSAL_KINDS = frozenset({"rearm", "rpg_status", "equip", "set_profession"})
 STEP_REFUSED = "step_refused"
+ABANDONED = "abandoned"
+ABANDON_RECEIPT = "realm:action:abandoned:"
 
 
 def _step_refused(r, job) -> bool:
@@ -53,6 +57,31 @@ def _step_refused(r, job) -> bool:
     return (r.role == "root" and r.policy == "ordinary" and r.kind in STEP_REFUSAL_KINDS
             and job["state"] == "failed" and job["reason"] in STEP_REFUSALS
             and job["guid"] in r.reserved_manifest and job["value"] == 0 and job["pvp_owner"] == "")
+
+
+def release_reason(reason) -> bool:
+    """The operator's reason for a release: 1 to 200 printable characters."""
+    return (type(reason) is str and bool(reason.strip()) and len(reason) <= 200
+            and all(ch.isprintable() for ch in reason))
+
+
+def abandon_refusal(r, children) -> str:
+    """Why the operator may not release this root, or "" when he may."""
+    if r.role != "root" or r.parent_id is not None:
+        return "only a root command can be released"
+    if r.state != "unknown":
+        return f"only an unknown root can be released; this one is {r.state}"
+    if r.transport_state != "settled":
+        return "its transport is not settled; start and stop the mind once so its recovery settles it"
+    if r.policy not in {"ordinary", "defaults"}:
+        return "only a body move (ordinary or defaults policy) can be released"
+    if children:
+        return "it has child commands"
+    if json.loads(r.evidence).get("conflict"):
+        return "its native evidence conflicts"
+    if not r.reserved_manifest:
+        return "it holds nobody"
+    return ""
 
 
 def _grow_refusal(error, manifest) -> bool:
@@ -223,7 +252,8 @@ class ActionStore:
         ev = json.loads(r.evidence)
         if type(ev) is not dict or document(ev, limit=32768) != r.evidence: raise ValueError("invalid action evidence")
         allowed = {"ack", "job", "bot", "enrollment_job", "origin_failure", "status", "binding", "query_id",
-                   "last_query", "cleanup_id", "cleanup_ids", "cleanup_admitted", "canceled", "dispatch_revision", "conflict", "failed_at"}
+                   "last_query", "cleanup_id", "cleanup_ids", "cleanup_admitted", "canceled", "dispatch_revision", "conflict", "failed_at",
+                   "abandoned"}
         if not set(ev) <= allowed: raise ValueError("invalid action evidence keys")
         if legacy and not set(ev) <= {"ack", "conflict", "failed_at"}:
             raise ValueError("invalid historical announcement evidence")
@@ -244,6 +274,9 @@ class ActionStore:
                 for command_id in ev[key]: identity(command_id)
         if "last_query" in ev: _now(ev["last_query"])
         if "failed_at" in ev: _now(ev["failed_at"])
+        if "abandoned" in ev:
+            _now(ev["abandoned"])
+            if r.role != "root" or r.policy not in {"ordinary", "defaults"}: raise ValueError("invalid abandonment")
         if "dispatch_revision" in ev: integer(ev["dispatch_revision"], 0, U64)
         if "conflict" in ev and ev["conflict"] is not True: raise ValueError("invalid conflict")
         if "binding" in ev:
@@ -453,6 +486,13 @@ class ActionStore:
         return replace(r, state="conflict", evidence=document(ev, limit=32768), result_ok=False, result_reason="conflict", updated=now)
 
     def _reduce(self, r, ev, now):
+        reduced = self._settle(r, ev, now)
+        # The operator's release stands against later native evidence, unless it contradicts itself.
+        if "abandoned" in ev and reduced.state != "conflict":
+            return replace(reduced, state="completed", result_ok=False, result_reason=ABANDONED)
+        return reduced
+
+    def _settle(self, r, ev, now):
         r = replace(r, evidence=document(ev, limit=32768), updated=now)
         if r.state == "not_sent": return self._conflict(r, ev, now)
         if ev.get("conflict") or r.state == "conflict": return self._conflict(r, ev, now)
@@ -729,6 +769,31 @@ class ActionStore:
             for root in self.unresolved():
                 if root.policy == "wg": self._save(self._reconcile(root, now))
             return self.unresolved()
+
+    def abandon(self, command_id, *, reason, now):
+        """The operator's release of one unknown body move: completed, result abandoned, holding
+        nobody. Only with the mind stopped, under its lock (realm release). The meta receipt keeps
+        the time, his reason and the row as it was; the row itself is pruned like any other."""
+        identity(command_id); now = _now(now)
+        if not release_reason(reason): raise ValueError("a release needs a reason of 1 to 200 printable characters")
+        with self.conn:
+            self.holds()  # the whole journal reads before one row of it changes
+            old = self.get(command_id)
+            if old is None: raise ValueError("no such root")
+            refusal = abandon_refusal(old, self._records("parent_id=?", (command_id,)))
+            if refusal: raise ValueError(refusal)
+            key = ABANDON_RECEIPT + command_id
+            if self.conn.execute("SELECT 1 FROM meta WHERE key=?", (key,)).fetchone() is not None:
+                raise ValueError("this root was already released once")
+            ev = json.loads(old.evidence)
+            receipt = {"at": now, "reason": reason, "seq": old.seq, "kind": old.kind, "policy": old.policy,
+                       "owner": old.owner, "state": old.state, "result_reason": old.result_reason,
+                       "created": old.created, "dispatched": old.dispatched,
+                       "members": list(old.reserved_manifest), "evidence": ev}
+            new = self._save(replace(old, state="completed", evidence=document({**ev, "abandoned": now}, limit=32768),
+                                     result_ok=False, result_reason=ABANDONED, updated=now))
+            self.conn.execute("INSERT INTO meta(key, value) VALUES (?, ?)", (key, document(receipt)))
+            return new
 
     def _prune(self, keep=256, now=None):
         roots = self._records("role='root' AND state IN ('completed','not_sent')")

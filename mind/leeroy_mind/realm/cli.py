@@ -5,12 +5,14 @@ status and titles read mind.db read-only. plan dispatches to a step's own plan_c
 MySQL and mind.db read-only and writes only its plan file; approve and cards touch only files
 under mind-data/realm/, never mind.db; canon history-ok dispatches to canon's history_ok_cli. A
 step that uses the live model exits 2 (night_window) while P1c's night holds the GPU (M14).
+release is the one write to mind.db: one unknown body move abandoned by hand, with the mind
+stopped and its lock held throughout.
 """
 
 import argparse
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 import importlib
 import importlib.util
 import json
@@ -240,6 +242,89 @@ def _approve(args, clock, root_of):
     return 0
 
 
+def _open_rw(root):
+    """mind.db for one write, never created or migrated: the realm journal must already be there."""
+    conn = sqlite3.connect((root / "mind.db").resolve().as_uri() + "?mode=rw", uri=True,
+                           autocommit=False, timeout=5.0)
+    try:
+        present = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        conn.commit()
+    except BaseException:
+        conn.close()
+        raise
+    if not {"realm_action", "meta"} <= present:
+        conn.close()
+        raise RealmSchemaUnavailable("realm schema unavailable")
+    return conn
+
+
+def _native_said(evidence):
+    ack, job = evidence.get("ack"), evidence.get("job")
+    parts = [] if ack is None else ["ack ok" if ack["ok"] else f"ack refused {ack['error']}"]
+    if job is not None:
+        parts.append(f"job {job['state']} {job['reason']}".rstrip() + f" at body {job['guid']}")
+    return ", then ".join(parts) or "nothing"
+
+
+def _release(args, clock, root_of, ask):
+    """One unknown body move released by hand: the mind stopped, its lock held throughout."""
+    from leeroy_mind.app import AlreadyRunning, acquire_instance_lock
+    from .action_store import ABANDON_RECEIPT, ActionStore, ActionUnavailable, abandon_refusal, release_reason
+
+    if not release_reason(args.reason):
+        print("realm release refused: --reason needs 1 to 200 printable characters")
+        return 1
+    try:
+        root = root_of(args)
+        (root / "mind.db").open("rb").close()  # never a lock file in a data dir without a mind
+        with acquire_instance_lock(root), closing(_open_rw(root)) as conn:
+            store = ActionStore(conn)
+            record = store.get(args.root_id)
+            children = [r for r in store.records() if r.parent_id == args.root_id]
+            if record is None:  # Never echo what was typed.
+                print("realm release refused: no such root; it takes the exact command id")
+                return 1
+            age = max(0.0, clock.now() - record.created) / 3600
+            created = datetime.fromtimestamp(record.created).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+            print(f"realm release: root {record.command_id} (seq {record.seq})\n"
+                  f"  kind {record.kind}, policy {record.policy}, owner {record.owner}\n"
+                  f"  state {record.state}: {record.result_reason or 'no result'}; "
+                  f"native said {_native_said(json.loads(record.evidence))}\n"
+                  f"  created {created}, {age:.1f} hours ago\n"
+                  f"  {len(record.reserved_manifest)} members held")
+            refusal = abandon_refusal(record, children)
+            if refusal:
+                print(f"realm release refused: {refusal}")
+                return 1
+            if not args.yes:
+                print("Releasing frees these members in the mind's ledger; native keeps its own fence "
+                      "for any body it still holds.")
+                try:
+                    typed = ask("Type the root id to release it: ")
+                except (EOFError, KeyboardInterrupt):
+                    typed = None
+                if typed != record.command_id:
+                    print("realm release: not released; the typed id did not match")
+                    return 1
+            try:
+                store.abandon(record.command_id, reason=args.reason, now=clock.now())
+            except ValueError as error:  # Each message is fixed text; no value is echoed.
+                print(f"realm release refused: {error}")
+                return 1
+            print(f"realm release: released {record.command_id}; {len(record.reserved_manifest)} members free; "
+                  f"receipt in meta {ABANDON_RECEIPT}{record.command_id}")
+            return 0
+    except AlreadyRunning:
+        print("realm release: mind.lock is held; stop the mind before releasing a root")
+    except (FileNotFoundError, RealmSchemaUnavailable):
+        print("realm release: no realm journal in this data dir; database was not migrated")
+    except ActionUnavailable:
+        print("realm release: the action journal is unreadable; nothing changed")
+    except (OSError, sqlite3.Error):
+        print("realm release: command unavailable; nothing changed")
+    return 1
+
+
 def _reject_constant(value):
     raise ValueError("non-finite number")
 
@@ -259,10 +344,11 @@ def _cards(root, show):
     return {"cards": cards, "count": len(files)}
 
 
-def realm_main(argv=None, *, clock=None) -> int:
+def realm_main(argv=None, *, clock=None, ask=None) -> int:
     from leeroy_mind.__main__ import _add_data_dir, _root
 
     clock = SystemClock() if clock is None else clock
+    ask = input if ask is None else ask
     parser = argparse.ArgumentParser(prog="leeroy_mind realm")
     _add_data_dir(parser)
     subs = parser.add_subparsers(dest="command", required=True)
@@ -278,13 +364,19 @@ def realm_main(argv=None, *, clock=None) -> int:
     canon = subs.add_parser("canon", help="canon approvals, such as history-ok <seed> <canon>")
     canon.add_argument("action")
     canon.add_argument("args", nargs=argparse.REMAINDER)
-    for sub in (plan, approve, cards, canon):
+    release = subs.add_parser("release", help="release one unknown body move by hand; the mind must be stopped")
+    release.add_argument("root_id", help="the root's exact command id")
+    release.add_argument("--reason", required=True, help="why, kept in its meta receipt")
+    release.add_argument("--yes", action="store_true", help="skip typing the id again; it must still be exact")
+    for sub in (plan, approve, cards, canon, release):
         _add_data_dir(sub, after_action=True)
     args = parser.parse_args(argv)
     if args.command in ("plan", "canon"):
         return _dispatch(args, clock, _root)
     if args.command == "approve":
         return _approve(args, clock, _root)
+    if args.command == "release":
+        return _release(args, clock, _root, ask)
     try:
         root = _root(args)
         if args.command == "cards":

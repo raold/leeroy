@@ -338,6 +338,101 @@ def test_recovery_leaves_other_stored_failures_alone(store):
     assert len(store.holds()) == 2
 
 
+@pytest.fixture
+def journal(store):
+    with store.conn:
+        store.conn.execute("CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT)")
+    return store
+
+
+def receipt(store, command_id):
+    row = store.conn.execute("SELECT value FROM meta WHERE key=?", ("realm:action:abandoned:" + command_id,)).fetchone()
+    return None if row is None else json.loads(row[0])
+
+
+def test_abandon_releases_one_unknown_root_and_keeps_its_receipt(journal):
+    store = journal
+    raiders = tuple(range(401, 424))
+    _stored_unknown(store, "grow", p.GuildGrow("grow", 13, raiders),
+                    _failed("grow", "guild_grow", "operation_transition_unknown", raiders[1], 1, 1793800000.1))
+    _stored_unknown(store, "rearm", p.Rearm("rearm", (501,)),
+                    _failed("rearm", "rearm", "operation_transition_unknown", 501, 0, 1793900000.1))
+    before = store.get("grow")
+    record = store.abandon("grow", reason="two joined, the rest are guildless", now=1794000000.0)
+    assert (record.state, record.result_ok, record.result_reason) == ("completed", False, "abandoned")
+    assert json.loads(record.evidence) == {**json.loads(before.evidence), "abandoned": 1794000000.0}
+    assert [h.scope_id for h in store.holds()] == ["rearm"]
+    assert receipt(store, "grow") == {
+        "at": 1794000000.0, "reason": "two joined, the rest are guildless", "seq": before.seq, "kind": "guild_grow",
+        "policy": "ordinary", "owner": "realm_day", "state": "unknown", "result_reason": "job_failed",
+        "created": before.created, "dispatched": before.dispatched, "members": list(raiders),
+        "evidence": json.loads(before.evidence)}
+    assert store.get("rearm").state == "unknown" and receipt(store, "rearm") is None
+    assert [r.command_id for r in store.recover(process_id="new", now=1794000100.0)] == ["rearm"]
+    assert store.get("grow") == record
+    store.observe_realm_job(job("grow", "guild_grow", "failed", "operation_transition_unknown", raiders[1], 1), now=5)
+    assert store.get("grow").state == "completed"  # the same receipt again changes nothing
+    store.observe_realm_job(job("grow", "guild_grow", "done", "", 0, 23), now=6)
+    assert store.get("grow").state == "conflict"  # a contradiction from native holds them again
+    assert {h.scope_id for h in store.holds()} == {"grow", "rearm"}
+
+
+def test_abandon_a_defaults_root_that_ended_unknown(journal):
+    store = journal
+    dispatch(store, prepare(store, BotDo("defaults", (2, 3), "nc", "-bg,-lfg")))
+    store.observe_ack(Ack(0, "defaults", True, ""), now=2)
+    store.observe_bot_job(bot(guids=(2,)), now=3)
+    assert store.get("defaults").state == "unknown"
+    assert store.abandon("defaults", reason="checked", now=4).result_reason == "abandoned"
+    assert store.holds() == ()
+
+
+@pytest.mark.parametrize("case", ["missing", "prefix", "completed", "dispatched", "prepared", "inflight",
+                                  "conflict", "wg", "ack", "again"])
+def test_abandon_refuses_what_is_not_an_unknown_body_move_and_changes_nothing(journal, case):
+    store = journal
+    if case == "wg":
+        wg(store)
+        store.observe_realm_job(job("wg", "wg_join", "failed", "ending", 0, 0, TOKEN), now=5)
+        command_id = "wg"
+    elif case == "ack":
+        dispatch(store, prepare(store, p.GuildAdmit("direct", 2)))
+        store.observe_ack(Ack(0, "direct", False, "database_error"), now=2)
+        command_id = "direct"
+    else:
+        command_id = "rearm"
+        record = prepare(store, p.Rearm("rearm", (2, 3)))
+        if case != "prepared": dispatch(store, record)
+        if case in {"missing", "prefix", "conflict", "again"}:
+            store.observe_ack(Ack(0, "rearm", True, ""), now=2)
+            store.observe_realm_job(job("rearm", "rearm", "failed", "operation_transition_unknown", 2), now=3)
+        if case == "inflight":
+            store.observe_realm_job(job("rearm", "rearm", "failed", "operation_transition_unknown", 2), now=3)
+        if case == "completed":
+            store.observe_ack(Ack(0, "rearm", True, ""), now=2)
+            store.observe_realm_job(job("rearm", "rearm", "done", "", 0), now=3)
+        if case == "conflict":
+            store.observe_realm_job(job("rearm", "rearm", "done", "", 0), now=4)
+        if case == "again":
+            store.abandon("rearm", reason="first", now=4)
+        if case == "missing": command_id = "other"
+        if case == "prefix": command_id = "rear"
+    rows, metas = store.records(), store.conn.execute("SELECT * FROM meta").fetchall()
+    with pytest.raises(ValueError):
+        store.abandon(command_id, reason="checked", now=10)
+    assert store.records() == rows and store.conn.execute("SELECT * FROM meta").fetchall() == metas
+
+
+@pytest.mark.parametrize("reason", ["", "   ", "x" * 201, "line\nbreak", 7])
+def test_abandon_needs_a_printable_reason(journal, reason):
+    store = journal
+    _stored_unknown(store, "rearm", p.Rearm("rearm", (501,)),
+                    _failed("rearm", "rearm", "operation_transition_unknown", 501, 0, 5.0))
+    with pytest.raises(ValueError):
+        store.abandon("rearm", reason=reason, now=10)
+    assert store.get("rearm").state == "unknown"
+
+
 def test_step_refusals_are_native_refusals_whose_reservation_is_released():
     policy = (REPO / "modules/mod-leeroy/src/Lib/LeeroyRealmPolicy.cpp").read_text(encoding="utf-8")
     bodies = (REPO / "modules/mod-leeroy/src/Realm/RealmBodies.cpp").read_text(encoding="utf-8")

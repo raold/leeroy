@@ -871,3 +871,26 @@ def test_member_query_parses_and_keeps_random_bots_only(monkeypatch):
         armory.guild_members(7)
     with pytest.raises(ValueError):
         armory.guild_members(0)
+
+
+def test_a_grow_released_by_hand_is_never_sent_again(tmp_path, store, clock):
+    """`realm release` frees an unknown grow's bodies; the same grow is still never retried."""
+    app, realm = live_realm(tmp_path, store, clock)
+    guids = (401, 402, 403)
+
+    async def grow_unknown():
+        await connect(app)
+        assert realm.part("rivals")._grow("plan", 8, guids) == "sent"
+        await pump(realm, clock, rounds=1)
+        [cmd] = grows(app)
+        await app.event(protocol.RealmJob(int(clock.now() * 1000), cmd.id, "guild_grow", "failed",
+                                          "operation_transition_unknown", guids[1], 1))
+        return cmd
+    cmd = run(grow_unknown())
+    assert realm.part("rivals")._grow("plan", 8, guids) == "unknown"
+    realm.action_store.abandon(cmd.id, reason="checked in game", now=clock.now())
+    assert realm.action_store.holds() == ()
+    assert realm.part("rivals")._grow("plan", 8, guids) == "unknown"
+    run(pump(realm, clock, rounds=1))
+    assert grows(app) == [cmd]
+    assert store.conn.execute("SELECT count(*) FROM realm_action WHERE kind='guild_grow'").fetchone()[0] == 1

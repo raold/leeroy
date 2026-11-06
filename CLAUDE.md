@@ -744,7 +744,13 @@ Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
   (`realm_step`), and a plan edited after its approval is refused for good. `realm canon
   history-ok <seed> <canon>` approves the history files; `realm cards [--show]`. A bank step
   that ends `needs_controller` needs a look at the bank in game, then a fresh plan
-  (`plan bank --no-money` or `--first-tab N`).
+  (`plan bank --no-money` or `--first-tab N`). `realm release <root-id> --reason "<text>"`
+  (the mind stopped; it holds `mind.lock` throughout) shows one body move stuck unknown in the
+  action journal (kind, state, what native said, age, members) and asks for its exact id again
+  (`--yes` skips that, never the exact id). It then marks it abandoned (completed, holding
+  nobody) and writes meta `realm:action:abandoned:<id>` with the time, the reason and the row as
+  it was. It refuses any other state, a transport not yet settled, a WG, ack or result root and
+  one with children; an abandoned grow is never sent again. Native still fences a body it holds.
 - **Exactly once.** A command that moves no body (speech, actor sets, renames, bank money, tabs
   and gift withdrawals, grants, calendar, mail) goes through the direct ledger `realm_direct`
   (prepared, dispatched, acked, refused, unknown, abandoned): an unknown one is never sent
