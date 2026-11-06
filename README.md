@@ -31,7 +31,7 @@ trained, on a separate server.
 
 | Path | What |
 |---|---|
-| `scripts/` | Update, backup, build, start/stop, voice and snapshot scripts (Git Bash on Windows) |
+| `scripts/` | Update, backup, build, start/stop, voice and snapshot scripts (Git Bash on Windows), and `scripts/dojo/` (PowerShell, for the dojo's isolated build) |
 | `config/` | Snapshots of the live server and module configs, secrets masked |
 | `patches/mod-playerbots/` | Local playerbots commits, as `git format-patch` output |
 | `patches/mod-ollama-chat/` | Local mod-ollama-chat commits, same format |
@@ -118,7 +118,8 @@ Personas, memories, prompts and logs stay in the ignored `mind-data/`. See
   bot revives in place, and skips playerbots' canned status and hello
   whispers. mod-leeroy pins the guild with it.
 - **Speaker filter** (mod-ollama-chat): lets another module keep chosen bots
-  out of the LLM chat, so the guild speaks only through its own mind.
+  out of the LLM chat, so the guild speaks only through its own mind. A queued
+  reply asks the filter again before it is delivered.
 
 Apply them to a checkout of each module with
 `git am /path/to/leeroy/patches/<module>/*.patch`.
