@@ -13,8 +13,8 @@ from typing import Sequence
 
 from leeroy_mind.personas.screens import OBJECT_WINDOW, ROMANCE_RE
 from leeroy_mind.text import (EMOJI_RE, NAME_PREFIX_RE, NAME_TAG, has_meta, normalize_words,
-from leeroy_mind.talk.moves import classify, is_summon, main_move
                               strip_emoji, strip_name_prefix, word_jaccard)
+from leeroy_mind.talk.moves import classify, is_summon, main_move
 from leeroy_mind.voice.rooms import ROOMS, RoomDef
 
 ASSISTANT_PHRASES = ("happy to help", "absolutely", "great question", "let me know",
