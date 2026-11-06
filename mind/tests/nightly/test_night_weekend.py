@@ -129,7 +129,9 @@ def test_the_refusal_words():
                  "this breaks the content policy", "I can't fulfill that request",
                  "I'm not comfortable writing that", "I must decline to write this",
                  "I won't engage in this", "As an AI, I keep things general",
-                 "I'm sorry, but I won't go on with it"):
+                 "I'm sorry, but I won't go on with it", "I'm sorry, I can't continue",
+                 "I apologize, but I can't", "I apologise, but that's not something I write",
+                 "Sorry, I won't write this one"):
         assert REFUSAL_RE.search(said), said
     for said in ("I can't help smiling when I think of it", "I'm sorry I was so nervous",
                  "I won't forget that breakfast", "I cannot believe we missed the train",
@@ -137,7 +139,8 @@ def test_the_refusal_words():
                  "I cannot continue pretending this is just a game",
                  "I told him I'm sorry, but I was starving", "I can't help it, I kept grinning",
                  "I'm not comfortable with crowds, but I didn't mind that one",
-                 "I had to decline the dessert", *MOMENTS):
+                 "I had to decline the dessert", "I'm not sorry I won that hand of cards",
+                 "I was sorry I couldn't stay longer", *MOMENTS):
         assert REFUSAL_RE.search(said) is None, said
 
 

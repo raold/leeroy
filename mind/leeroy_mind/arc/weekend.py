@@ -97,7 +97,9 @@ _WHERE = {"halfway": "at a hotel halfway between us", "event": "at the conventio
           "neutral": "somewhere quiet and neutral"}
 # What a refusal looks like inside a schema-shaped reply: a moment that is one is dropped. A
 # refusing verb needs its object ("write that", "continue with this request"), so a moment such
-# as "I can't write down how that felt" stays; assist and comply stand alone.
+# as "I can't write down how that felt" stays; assist and comply stand alone. An apology that
+# leads into a refusal ("I apologize, but", "sorry, I can't") counts whatever follows; "sorry,
+# but I was starving" and "not sorry I won" are moments.
 _CANNOT = (r"(I (cannot|can[’']?t|won[’']?t|will not|am unable to|am not able to)"
            r"|I[’']?m (unable|not able) to)")
 _OBJECT = r"(with )?(this|that|it|your|such|the (request|scene|story|content))\b"
@@ -105,6 +107,7 @@ _VERB = r"(write|continue|create|produce|generate|provide|help with|fulfill|enga
 REFUSAL_RE = re.compile(
     rf"\b({_CANNOT} ({_VERB} {_OBJECT}|(assist|comply)\b)"
     r"|I[’']?m sorry,? but I (cannot|can[’']?t|won[’']?t|will not|am unable|am not able)\b"
+    r"|apologi[sz]e,? but\b|sorry,? I (can|won)(no|[’'])?t\b"
     rf"|(I[’']?m|I am) not comfortable (writing|with) {_OBJECT}"
     r"|I (must |have to |need to |will )?decline (to|this|that|your|the request)\b"
     r"|as an AI\b|content polic(y|ies)\b|(against|violates?) (my|the) (guidelines|policies)\b)",

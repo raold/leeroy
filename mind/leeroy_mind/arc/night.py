@@ -1,6 +1,6 @@
 """The night stage `arc`: the romance once she has reached planning. stage_romance climbs her
-to planning; from there the arc floats a plan, reads what he said to her about it and, in later
-steps, takes her to the weekend and what comes after.
+to planning; from there the arc floats a plan, reads what he said to her about it, takes her to
+the weekend and what comes after, and rolls the risk of an affair found out at home.
 
 stage_arc runs six steps in this order; each unit commits through ctx.commit("arc", unit, ...):
 1. settle (unit "settle"): her time away ends, and a weekend becomes what comes after
@@ -15,8 +15,9 @@ stage_arc runs six steps in this order; each unit commits through ctx.commit("ar
    so (ENDING_RE).
 4. meetup (unit "meetup"): the weekend, or a later visit, in a gap of his play once he has
    said yes to her plan (arc.weekend.meetup).
-5. milestones (units "after:<guid>"): milestones after the weekend and the affair roll
-   (Task S6). A hook, empty for now.
+5. milestones (units "after:<guid>"): the milestones after the weekend, her next visit
+   floated as a new plan, and the affair roll for a woman with a partner at home
+   (arc.after.milestones). No model call.
 6. noticed (unit "noticed"): what the guild can tell (Task S7). A hook, empty for now.
 
 His lines are his own lines in the window: his whispers to her and his lines she answered (an
@@ -29,6 +30,7 @@ import re
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
+from leeroy_mind.arc.after import milestones
 from leeroy_mind.arc.ladder import FULL_ARC
 from leeroy_mind.arc.plan import plan_summary, propose_plan
 from leeroy_mind.arc.state import Arc, end_romance, get_arc, put_arc
@@ -133,7 +135,8 @@ def propose(ctx: "NightContext") -> None:
             arc = get_arc(store, guid, ctx.human)
             if arc.plan_state != "none":
                 continue
-            plan = propose_plan(ctx.persona(guid), ctx.rng(STAGE, "propose", guid), now=now)
+            plan = propose_plan(ctx.persona(guid), ctx.rng(STAGE, "propose", guid), now=now,
+                                partner=arc.partner)
             put_arc(store, replace(arc, plan=plan, plan_state="hoped", planning_since=now,
                                    updated=now))
             floated.append(guid)
@@ -161,7 +164,7 @@ def moved(arc: Arc, answer: str, p: Persona, rng: "random.Random", *, now: float
     if answer in PUSH_S:
         plan = arc.plan | {"target": arc.plan["target"] + PUSH_S[answer]}
     elif answer == "elsewhere":
-        plan = propose_plan(p, rng, now=now, exclude=arc.plan["kind"])
+        plan = propose_plan(p, rng, now=now, exclude=arc.plan["kind"], partner=arc.partner)
     else:
         return arc
     return replace(arc, plan=plan, plan_state="talked", plan_at=None, updated=now)
@@ -227,12 +230,7 @@ async def read(ctx: "NightContext") -> None:
                         lambda unit: _read(ctx, int(unit.split(":", 1)[1])))
 
 
-# -- steps 5-6: what comes after (S6), what the guild notices (S7) -----------------------------
-
-def milestones(ctx: "NightContext") -> None:
-    """Units "after:<guid>": the milestones after the weekend and the affair roll. A hook that
-    Task S6 fills in; it does nothing yet."""
-
+# -- step 6: what the guild notices (S7) -------------------------------------------------------
 
 def noticed(ctx: "NightContext") -> None:
     """Unit "noticed": the stages the guild can tell, as facts it learns. A hook that Task S7
@@ -245,7 +243,7 @@ async def stage_arc(ctx: "NightContext") -> None:
     propose(ctx)
     await read(ctx)
     await meetup(ctx)
-    milestones(ctx)
+    await milestones(ctx)
     noticed(ctx)
 
 

@@ -19,7 +19,11 @@ _THINGS = {"halfway": "meeting halfway", "event": "BlizzCon",
            "neutral": "a quiet weekend somewhere neutral"}
 
 
-def has_partner(p: Persona) -> bool:
+def has_partner(p: Persona, partner: str = "none") -> bool:
+    """Whether she has a partner at home: her arc's `partner` once it is set ("together" yes,
+    "separated" no: the affair ended her marriage), else what her card's household says."""
+    if partner != "none":
+        return partner == "together"
     return _PARTNER.search(_NOT_PARTNER.sub("", p.real_life.household)) is not None
 
 
@@ -27,18 +31,20 @@ def _kinds(region: str) -> list[str]:
     return [k for k in PLAN_KINDS if not (region == "UK" and k == "halfway")]
 
 
-def propose_plan(p: Persona, rng: random.Random, *, now: float, exclude: str = "") -> dict:
+def propose_plan(p: Persona, rng: random.Random, *, now: float, exclude: str = "",
+                 partner: str = "none") -> dict:
     """What she floats: a kind (never `exclude`, and never halfway for a UK woman), a target
     10 to 18 days out, what worries her (from her money, job and household) and, when she has
-    a partner at home, a cover story."""
+    a partner at home (has_partner, with her arc's `partner`), a cover story."""
     kinds = [k for k in _kinds(p.identity.region) if k != exclude] or _kinds(p.identity.region)
     kind = rng.choice(kinds)
     target = now + rng.randint(10, 18) * 86400
     rl = p.real_life
-    pool = [w for w, text in zip(_WORRIES, (rl.money, rl.job, "x" if has_partner(p) else ""))
+    home = has_partner(p, partner)
+    pool = [w for w, text in zip(_WORRIES, (rl.money, rl.job, "x" if home else ""))
             if text.strip()]
     worries = rng.sample(pool, min(len(pool), rng.randint(1, 2)))
-    cover = rng.choice(_COVERS) if has_partner(p) else ""
+    cover = rng.choice(_COVERS) if home else ""
     return {"kind": kind, "target": target, "worries": worries, "cover": cover}
 
 

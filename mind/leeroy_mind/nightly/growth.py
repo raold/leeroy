@@ -242,7 +242,9 @@ def undo(store: Store, ledger_id: int, *, now: float, personas=None) -> bool:
       out is ledgered note_dropped), unless it is there already;
     - drift_flag (Task 22): its review_queue row is resolved;
     - stance_band: restore the prior stance and its exact score; first sights and hand moves
-      are not reversed. An undo row is never undone.
+      are not reversed;
+    - household (Task S6): her card's household and her arc's partner as they were before the
+      affair ended her marriage (arc.after.restore_household). An undo row is never undone.
     What was reversed writes an undo row with ref = ledger_id. False when the row is not there,
     was undone already, or nothing is left to reverse; then nothing is written."""
     with store.transaction():
@@ -262,11 +264,14 @@ def undo(store: Store, ledger_id: int, *, now: float, personas=None) -> bool:
         elif kind == "stance_band":
             from leeroy_mind.nightly.attraction import restore_stance
             done = restore_stance(store, row, now=now)
+        elif kind == "household":
+            from leeroy_mind.arc.after import restore_household
+            done = restore_household(store, row, now=now)
         else:
             done = False
         if done:
             ledger_add(store, guid=row["guid"], kind="undo", text=f"undid {kind}: {row['text']}",
                        evidence=json.loads(row["evidence"]), ref=ledger_id, now=now)
-    if done and kind == "stance_band" and personas is not None:
+    if done and kind in ("stance_band", "household") and personas is not None:
         personas.invalidate(row["guid"])
     return done
