@@ -12,6 +12,7 @@ from leeroy_mind.__main__ import main
 from leeroy_mind.personas.io import save_persona
 from leeroy_mind.protocol import Member
 from leeroy_mind.storage.db import latest_version, open_db
+from dbtemplate import open_migrated
 from leeroy_mind.storage.store import Store
 from leeroy_mind.voice import wire
 from leeroy_mind.voice.brief import BRIEF_KEYS, SpecWatch, write_brief
@@ -67,7 +68,7 @@ def test_brief_is_only_the_cast_with_a_persona(store, tmp_path):
 
 
 def build_db(path, clock):
-    s = Store(open_db(path), clock=clock)
+    s = Store(open_migrated(path), clock=clock)
     seeded(s)
     s.close()
 

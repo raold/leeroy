@@ -16,7 +16,7 @@ from conftest import HUMAN, run, seed_test_cast
 from leeroy_mind.app import MindApp, startup_checks
 from leeroy_mind.config import load_config
 from leeroy_mind.protocol import Chat, Hello, Login, Member
-from leeroy_mind.storage.db import open_db
+from dbtemplate import open_migrated
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_bridge import FakeBridge, load_fixture
 from leeroy_mind.testing.fake_clock import FakeClock
@@ -98,7 +98,7 @@ class App:
 
 
 def seed_db(path: Path, clock: FakeClock) -> None:
-    s = Store(open_db(path), clock=clock)
+    s = Store(open_migrated(path), clock=clock)
     try:
         seed_test_cast(s)
         s.upsert_cast([HUMAN_ROW], 1000.0)

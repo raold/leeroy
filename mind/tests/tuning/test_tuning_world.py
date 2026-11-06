@@ -8,7 +8,7 @@ from leeroy_mind.app import MindApp
 from leeroy_mind.config import load_config
 from leeroy_mind.personas.io import load_persona
 from leeroy_mind.protocol import Member
-from leeroy_mind.storage.db import open_db
+from dbtemplate import open_migrated
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_clock import FakeClock
 from leeroy_mind.testing.fake_llm import FakeLLM
@@ -18,7 +18,7 @@ CLOCK = datetime(2026, 10, 29, 20, 0, tzinfo=timezone.utc)
 
 
 def _seed(root, *sets):
-    s = Store(open_db(root / "mind.db"), clock=FakeClock(CLOCK))
+    s = Store(open_migrated(root / "mind.db"), clock=FakeClock(CLOCK))
     try:
         seed_test_cast(s)
         s.upsert_cast([Member(guid=HUMAN, name="Testmage", race=5, class_=8, gender=0, level=80,
