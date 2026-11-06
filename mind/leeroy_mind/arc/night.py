@@ -18,7 +18,8 @@ stage_arc runs six steps in this order; each unit commits through ctx.commit("ar
 5. milestones (units "after:<guid>"): the milestones after the weekend, her next visit
    floated as a new plan, and the affair roll for a woman with a partner at home
    (arc.after.milestones). No model call.
-6. noticed (unit "noticed"): what the guild can tell (Task S7). A hook, empty for now.
+6. noticed (unit "noticed"): the stages the guild can tell, written as shared facts that every
+   other member learns (see noticed).
 
 His lines are his own lines in the window: his whispers to her and his lines she answered (an
 utterance of hers, said, whose trigger_line is the line). Hers are her said whispers to him in
@@ -31,12 +32,13 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from leeroy_mind.arc.after import milestones
-from leeroy_mind.arc.ladder import FULL_ARC
+from leeroy_mind.arc.ladder import FULL_ARC, NOTICED
 from leeroy_mind.arc.plan import plan_summary, propose_plan
 from leeroy_mind.arc.state import Arc, end_romance, get_arc, put_arc
 from leeroy_mind.arc.weekend import due, meetup, settle
 from leeroy_mind.logs import log
 from leeroy_mind.nightly.budget import register_counter
+from leeroy_mind.nightly.knowledge import add_fact, learn
 from leeroy_mind.nightly.llm import schema, system_prompt
 from leeroy_mind.personas.schema import Persona
 from leeroy_mind.personas.screens import redact_real_name
@@ -58,6 +60,17 @@ PUSH_S = {"not_yet": 7 * DAY_S, "later": 14 * DAY_S}  # how far each answer move
 READ_CHARS = 12000
 ENDING_RE = re.compile(r"\b(break(ing)? up|it'?s over|we'?re done|end (this|it|us)"
                        r"|not doing this anymore|see other people)\b", re.IGNORECASE)
+
+MARK = "arc_noticed_mark"
+HANDLED = "arc_noticed:"
+# What the guild can tell, generic: her name and his called name, no word from any whisper.
+NOTICED_TEXT = {
+    "voice": "{name} vents to {called} late at night a lot these days.",
+    "planning": "{name} keeps talking about meeting {called} for real.",
+    "weekend": "{name} went away to meet {called} for a weekend.",
+    "after": "{name} and {called} are together now.",
+}
+NOTICED_CONFIDENCE = {"voice": 0.6, "planning": 0.5, "weekend": 1.0, "after": 1.0}
 
 READ_SCHEMA = schema("arc_read", {
     "plan": {"type": "string", "enum": ["yes", "not_yet", "elsewhere", "later", "none"]},
@@ -233,8 +246,56 @@ async def read(ctx: "NightContext") -> None:
 # -- step 6: what the guild notices (S7) -------------------------------------------------------
 
 def noticed(ctx: "NightContext") -> None:
-    """Unit "noticed": the stages the guild can tell, as facts it learns. A hook that Task S7
-    fills in; it does nothing yet."""
+    """Unit "noticed": a woman who entered a stage in NOTICED tonight is a fact the guild can
+    tell. The source of truth is the stage's own rel_delta (romance_stage, applied, up), so a
+    weekend, which the meetup records as planning->weekend and weekend->after together, writes
+    both its facts here and nowhere else. Each is a shared fact (holder 0, not secret) whose
+    root arc:<guid>:<stage>:<night> is added to the delta's evidence, and every other member
+    learns it as "inferred" with the stage's confidence. The text is NOTICED_TEXT, never a word
+    from a whisper. Women with a full-arc stance only. The ids it handled go to meta
+    arc_noticed:<night> for the jealousy stage, and arc_noticed_mark keeps a later night from
+    reading them again."""
+    if ctx.done(STAGE, "noticed"):
+        return
+    now, human, night = ctx.clock.now(), ctx.human, ctx.night
+    women = set(_women(ctx, fresh=True))
+    cast = ctx.members(include_away=True)
+    called = ctx.ident.called
+    # Ruling S7: the night runs after its window closes, so the clock is past window[1]. The
+    # facts below are written, and learned, with a ts just inside the window, because the
+    # jealousy stage counts a holder's knowledge only when learned < window[1].
+    learned_at = ctx.window[1] - 1.0
+    handled: list[int] = []
+
+    def write(store: Store) -> None:
+        mark = store.get_meta(MARK)
+        rows = store.conn.execute(
+            "SELECT id, a, reason, evidence FROM rel_delta WHERE b = ? AND dim = 'romance_stage' "
+            "AND applied = 1 AND delta > 0 AND " + ("id > ?" if mark is not None else "ts >= ?")
+            + " ORDER BY id", (human, int(mark) if mark is not None else ctx.window[0])).fetchall()
+        for row in rows:
+            stage = row["reason"].split("->")[-1]
+            if stage not in NOTICED or row["a"] not in women:
+                continue
+            guid = row["a"]
+            root = f"arc:{guid}:{stage}:{night}"
+            # The only place noticed facts are written: shared (holder 0), not secret, generic.
+            add_fact(store, kind="noticed", root=root, about=guid,
+                     text=NOTICED_TEXT[stage].format(name=ctx.name(guid), called=called),
+                     secret=False, now=learned_at)
+            for g in cast:
+                if g != guid:
+                    learn(store, root, g, "inferred", ts=learned_at,
+                          confidence=NOTICED_CONFIDENCE[stage])
+            evidence = json.loads(row["evidence"])
+            if root not in evidence:
+                store.conn.execute("UPDATE rel_delta SET evidence = ? WHERE id = ?",
+                                   (json.dumps(evidence + [root]), row["id"]))
+            handled.append(row["id"])
+        top = store.conn.execute("SELECT max(id) FROM rel_delta").fetchone()[0] or 0
+        store.set_meta(MARK, str(max(top, int(mark or 0))))
+        store.set_meta(f"{HANDLED}{night}", json.dumps(handled))
+    ctx.commit(STAGE, "noticed", write)
 
 
 async def stage_arc(ctx: "NightContext") -> None:

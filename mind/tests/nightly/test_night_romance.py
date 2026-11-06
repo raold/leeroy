@@ -631,3 +631,15 @@ def test_a_split_night_counts_once_through_stage_romance(h):
     h.session(h.T + 2 * DAY, h.T + 2 * DAY + 2 * HOUR)
     h.mem(101, "Testy stayed up talking with me.", t=h.T + 2 * DAY + HOUR, actors=(1,), valence=.8)
     assert run_night(h.T + 2 * DAY + 3 * HOUR, "2026-10-31") == "whispers"
+
+
+def test_noticed_refs_reads_the_noticed_stages_only(h):
+    from leeroy_mind.nightly.romance import _noticed_refs
+    h.woman(101, "lust")
+    for change, ref in (("whispers->late_nights", "memory:1"), ("late_nights->voice", "memory:2"),
+                        ("voice->planning", "memory:3"), ("planning->weekend", "away:4"),
+                        ("weekend->after", "arc:101:after:2026-10-29")):
+        h.store.add_rel_delta(101, 1, "romance_stage", 1, change, [ref], h.T, applied=True)
+    window = h.ctx().window
+    assert _noticed_refs(h.store, 101, 1, window, []) == [
+        "memory:2", "memory:3", "away:4", "arc:101:after:2026-10-29"]

@@ -12,7 +12,8 @@ from dataclasses import replace
 from datetime import date, datetime
 
 from leeroy_mind.arc import state as arc_state
-from leeroy_mind.arc.ladder import FOND_CAP, FULL_ARC, GATED, GATES, PACE_ATTITUDE, PACE_STYLE
+from leeroy_mind.arc.ladder import (FOND_CAP, FULL_ARC, GATED, GATES, NOTICED, PACE_ATTITUDE,
+                                    PACE_STYLE)
 from leeroy_mind.nightly.attraction import RUSH_S, aimed_at, reflection_row
 from leeroy_mind.nightly.audience import audience_of
 from leeroy_mind.nightly.confide import depth_with
@@ -30,9 +31,6 @@ MODE_MULT = {"good_sport": .5, "sulker": 1.2, "grumbler": 1., "teaser": .8,
 DECAY = .85
 # A woman from banter to after is in the running for him, a rival to every other one.
 _RIVAL_STAGES = ROMANCE_STAGES[ROMANCE_STAGES.index("banter"):ROMANCE_STAGES.index("after") + 1]
-# The old ladder's invitation and what follows it: an advance into one spikes a rival's jealousy.
-_INVITATION_STAGES = ROMANCE_STAGES[
-    ROMANCE_STAGES.index("planning"):ROMANCE_STAGES.index("after") + 1]
 _PRIVATE_VOICE = tuple(f"voice:{room}" for room in PRIVATE)
 _LATE = (DayPhase.LATE, DayPhase.DEAD)
 _RIVALRY = re.compile(r"\(rivalry, not hurt: chat:(\d+)\)")
@@ -250,14 +248,14 @@ def _observations(store, holder, window):
     return store.get_memories(ids)
 
 
-def _invitation_refs(store, guid, human, window, current) -> list[str]:
+def _noticed_refs(store, guid, human, window, current) -> list[str]:
     return [ref for r in store.conn.execute(
         "SELECT reason,evidence FROM rel_delta d WHERE a=? AND b=? AND dim='romance_stage' "
         "AND applied=1 AND delta>0 AND (id IN (SELECT value FROM json_each(?)) OR "
         "(ts>=? AND ts<? AND NOT EXISTS (SELECT 1 FROM meta m, "
         "json_each(CASE WHEN m.key LIKE ? THEN m.value ELSE '[]' END) j WHERE j.value=d.id)))",
         (guid, human, json.dumps(current), *window, f"{_CHANGES}%"))
-        if r["reason"].split("->")[-1] in _INVITATION_STAGES for ref in json.loads(r["evidence"])]
+        if r["reason"].split("->")[-1] in NOTICED for ref in json.loads(r["evidence"])]
 
 
 def _known_progress(store, holder, refs, end):
@@ -286,8 +284,9 @@ async def stage_jealousy(ctx) -> None:
         attitudes = ctx.attitudes(fresh=True)
         men = ctx.men()
         memories = {g: _observations(store, g, ctx.window) for g in set(attitudes) | men}
-        current = json.loads(store.get_meta(f"{_CHANGES}{ctx.night}") or "[]")
-        advances = {g: _invitation_refs(store, g, ctx.human, ctx.window, current) for g in attitudes}
+        current = (json.loads(store.get_meta(f"{_CHANGES}{ctx.night}") or "[]")
+                   + json.loads(store.get_meta(f"arc_noticed:{ctx.night}") or "[]"))
+        advances = {g: _noticed_refs(store, g, ctx.human, ctx.window, current) for g in attitudes}
         rose = {g for g in attitudes if _band_rose(store, g, ctx.window)}
         rank = {"fond": 0, "drawn": 1, "lust": 2}
         band_ids = store.get_meta(f"attraction_band_changes:{ctx.night}") or "[]"

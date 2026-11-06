@@ -217,8 +217,9 @@ def test_a_two_day_gap_writes_her_weekend_and_she_is_back_before_he_is(h):
     deltas = [tuple(r) for r in h.store.conn.execute(
         "SELECT reason, evidence FROM rel_delta WHERE a = 101 AND dim = 'romance_stage' "
         "ORDER BY id")]
-    ev = f'["away:{away["id"]}"]'
-    assert deltas == [("planning->weekend", ev), ("weekend->after", ev)]
+    ev = f'["away:{away["id"]}"'
+    assert deltas == [("planning->weekend", f'{ev}, "arc:101:weekend:2026-10-31"]'),
+                      ("weekend->after", f'{ev}, "arc:101:after:2026-10-31"]')]
     arc = get_arc(h.store, 101, 1)
     assert (arc.plan_state, arc.weekends, arc.last_meetup) == ("done", 1, away["returns_at"])
     rows = weekend_rows(h)
@@ -270,7 +271,7 @@ def test_she_comes_back_and_moves_to_after(h, caplog):
     assert (arc.plan_state, arc.weekends, arc.last_meetup) == ("done", 1, h.T + DAY)
     deltas = [tuple(r) for r in h.store.conn.execute(
         "SELECT reason, evidence FROM rel_delta WHERE a = 101 AND dim = 'romance_stage'")]
-    assert deltas == [("weekend->after", f'["away:{aid}"]')]
+    assert deltas == [("weekend->after", f'["away:{aid}", "arc:101:after:2026-10-30"]')]
     assert 101 in ctx.members()
     settled = [r.leeroy_fields for r in caplog.records
                if getattr(r, "leeroy_event", "") == "arc_settle"]
