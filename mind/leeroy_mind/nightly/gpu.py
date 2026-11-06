@@ -19,7 +19,11 @@ own. The lock serializes only the GPU work:
   of the pin that kept it until the next night's ensure_model;
 - ensure_model: unloads whichever of the live and reflection models is loaded and is not the one
   asked for, and nothing else (the embedding model is never unloaded);
-- foreign_models: what else is loaded, for the night's count of loads it did not ask for.
+- make_room: for a stage that takes the whole GPU (an image stage), unloads every model Ollama
+  lists but the embedding model. The live model goes like any other, whether the let-go kept it
+  or mod-ollama-chat loaded it at night. It loads nothing and may be called again mid-stage;
+- foreign_models: what else is loaded, for the night's count of loads it did not ask for (with
+  None, every loaded model but the embedding model).
 
 A lease counts from the call, so it is held even if the GPU work fails or its caller is
 cancelled. Use `async with arbiter.live(holder)`, or a bare acquire_live inside the try whose
@@ -338,8 +342,33 @@ class GpuArbiter:
                         raise RuntimeError("nightly models changed during model admission")
             self._prune_managed(remaining)
 
-    async def foreign_models(self, expected: str) -> list[str]:
+    async def make_room(self) -> None:
+        """Make room for a stage that needs the whole GPU: unload every model Ollama lists but
+        the embedding model. That is the live and reflection models, current and retired, and
+        any other chat model too, since one loaded at night takes the same VRAM. Nothing is
+        loaded. A stage may call it again when something loaded a model meanwhile. A reload
+        (reconfigure) while it waits or works fails it, as ensure_model."""
+        revision = self._revision
+        async with self._lock:
+            if revision != self._revision:
+                raise RuntimeError("nightly models changed during model admission")
+            listed = await self.admin.loaded_models()
+            if revision != self._revision:
+                raise RuntimeError("nightly models changed during model admission")
+            remaining = list(listed)
+            for name in listed:
+                if norm(name) != norm(self._embedding):
+                    await self.admin.unload(name)
+                    remaining.remove(name)
+                    if revision != self._revision:
+                        raise RuntimeError("nightly models changed during model admission")
+            self._prune_managed(remaining)
+
+    async def foreign_models(self, expected: str | None) -> list[str]:
         """The loaded models other than `expected` and the embedding model, as Ollama lists
-        them. It only looks."""
-        keep = {norm(expected), norm(self._embedding)}
+        them; with None (an image stage expects no chat model), every loaded model but the
+        embedding model. It only looks."""
+        keep = {norm(self._embedding)}
+        if expected is not None:
+            keep.add(norm(expected))
         return [n for n in await self.admin.loaded_models() if norm(n) not in keep]

@@ -167,6 +167,22 @@ def test_the_live_model_reloaded_mid_stage_is_counted_and_left_alone(h):
     assert run_get(h.store, ctx.night).foreign_loads == 2 and admin.calls == []
 
 
+def test_an_image_stage_runs_with_no_chat_model_loaded_and_counts_one_loaded_meanwhile(h):
+    admin = FakeAdmin([h.LIVE, h.REFL, h.EMB]); ctx = h.ctx(admin=admin)
+    run_begin(h.store, ctx.night, *ctx.window, now=ctx.window[1])
+    seen = []
+    async def think(c): pass
+    async def render(c):
+        seen.append(list(admin.loaded))
+        assert h.LIVE not in admin.loaded and h.REFL not in admin.loaded
+        admin.loaded.append(h.LIVE)                     # mod-ollama-chat, mid-render (Review Focus 2)
+    run(NightRunner([Stage("reflect", think, "reflection"), Stage("selfies", render, "image")],
+                    lambda n, w: ctx).run(ctx.night, ctx.window))
+    assert seen == [[h.EMB]] and admin.calls == [("unload", h.LIVE), ("unload", h.REFL)]
+    assert run_get(h.store, ctx.night).foreign_loads == 1               # counted ...
+    assert admin.loaded == [h.EMB, h.LIVE]                              # ... and left for the stage to deal with
+
+
 def test_snapshot_once_per_night(h):
     ctx = h.ctx(); run(stage_snapshot(ctx)); run(stage_snapshot(ctx))
     assert len(list((h.settings.data_dir / "snapshots").glob("mind-night-*.db"))) == 1     # PR4: the label "night"
@@ -331,6 +347,31 @@ def test_the_model_is_switched_only_when_the_next_stage_needs_another(h):
         NightRunner([Stage("a", nothing, "embedding")], lambda n, w: ctx)
     with pytest.raises(ValueError, match="twice"):
         NightRunner([Stage("a", nothing, None), Stage("a", nothing, "live")], lambda n, w: ctx)
+
+
+def test_the_runner_takes_image_stages_and_refuses_unknown_models(h):
+    admin = FakeAdmin([h.LIVE, h.EMB]); ctx = h.ctx(admin=admin)
+    asked, make_room, ensure = [], ctx.arbiter.make_room, ctx.arbiter.ensure_model
+    async def room():
+        asked.append("room")
+        await make_room()
+    async def spy(model):
+        asked.append(model)
+        await ensure(model)
+    ctx.arbiter.make_room, ctx.arbiter.ensure_model = room, spy
+    async def nothing(c): pass
+    runner = NightRunner([Stage("a", nothing, "image"), Stage("b", nothing, None),
+                          Stage("c", nothing, "image"), Stage("d", nothing, "reflection")],
+                         lambda n, w: ctx)
+    runner.add_stage("e", nothing, after="d", model="image")
+    run(runner.run(ctx.night, ctx.window))
+    assert asked == ["room", h.REFL, "room"] and admin.calls == [("unload", h.LIVE)]
+    for bad in ("embedding", "images", "Image"):
+        with pytest.raises(ValueError, match="unknown model"):
+            NightRunner([Stage("a", nothing, bad)], lambda n, w: ctx)
+        with pytest.raises(ValueError, match="unknown model"):
+            runner.add_stage("f", nothing, after="a", model=bad)
+    assert [s.name for s in runner.stages] == ["a", "b", "c", "d", "e"]
 
 
 def test_a_fatal_reflection_error_ends_the_night(h):

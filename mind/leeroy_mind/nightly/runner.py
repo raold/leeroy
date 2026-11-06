@@ -15,8 +15,10 @@ NightRunner.run, for one night:
 2. The reasoner's preflight, when any stage uses the reflection model.
 3. The night's plan (budget.plan_night), or on a resumed run the plan the run stored.
 4. Each stage in order. The arbiter makes room for the model a stage needs when it differs from
-   the last one (ensure_model). Afterwards the stage's night_stage record is written, and the
-   models loaded that the night did not ask for are counted (foreign_models), never unloaded.
+   the last one (ensure_model). An "image" stage takes the whole GPU: the arbiter unloads every
+   chat model first and keeps only the embedding model (make_room). Afterwards the stage's
+   night_stage record is written, and the models loaded that the night did not ask for are
+   counted (foreign_models; after an image stage, any chat model), never unloaded.
 5. night_run.error: the failed units per stage as JSON, or NULL when none failed, on every run
    that returns.
 
@@ -63,6 +65,7 @@ ATTITUDE_WORDS = {"fond": "{name} is warm toward {human}.",
                   "lust": "{name} openly wants {human}."}
 
 RESUMES_MAX = 3  # stalled resumes since the last committed unit before the night fails
+STAGE_MODELS = (None, "live", "reflection", "image")  # "image": the whole GPU (make_room)
 SNAPSHOT_STAGE, SNAPSHOT_UNIT, SNAPSHOT_LABEL = "snapshot", "db", "night"
 MESSAGE_CHARS = 500  # of a failed unit's message in the log
 
@@ -309,7 +312,7 @@ class NightContext:
 
 
 Stage = NamedTuple("Stage", [("name", str), ("fn", Callable[[NightContext], Awaitable[None]]),
-                             ("model", Literal["live", "reflection"] | None)])
+                             ("model", Literal["live", "reflection", "image"] | None)])
 
 
 async def stage_snapshot(ctx: NightContext) -> None:
@@ -333,20 +336,21 @@ class NightRunner:
         self.make_ctx = make_ctx
         names = [s.name for s in self.stages]
         for s in self.stages:
-            if s.model not in (None, "live", "reflection"):
+            if s.model not in STAGE_MODELS:
                 raise ValueError(f"stage {s.name!r}: unknown model {s.model!r}")
             if names.count(s.name) > 1:
                 raise ValueError(f"stage {s.name!r} is listed twice")
 
     def add_stage(self, name: str, fn: Callable[[NightContext], Awaitable[None]], *,
-                  after: str, model: Literal["live", "reflection"] | None = "reflection") -> None:
+                  after: str,
+                  model: Literal["live", "reflection", "image"] | None = "reflection") -> None:
         """Insert an extension on this runner only; the base pipeline stays immutable."""
         names = [stage.name for stage in self.stages]
         if name in names:
             raise ValueError(f"stage {name!r} is listed twice")
         if after not in names:
             raise ValueError(f"unknown predecessor stage {after!r}")
-        if model not in (None, "live", "reflection"):
+        if model not in STAGE_MODELS:
             raise ValueError(f"stage {name!r}: unknown model {model!r}")
         index = names.index(after) + 1
         self.stages = self.stages[:index] + (Stage(name, fn, model),) + self.stages[index:]
@@ -397,7 +401,10 @@ class NightRunner:
         for stage in self.stages:
             started = ctx.clock.now()
             if stage.model is not None and stage.model != current:
-                await ctx.arbiter.ensure_model(self._model(ctx, stage.model))
+                if stage.model == "image":
+                    await ctx.arbiter.make_room()
+                else:
+                    await ctx.arbiter.ensure_model(self._model(ctx, stage.model))
                 current = stage.model
             calls, seconds = ctx.reasoner.calls, ctx.reasoner.seconds
             await stage.fn(ctx)
@@ -407,7 +414,7 @@ class NightRunner:
             log("nightly_stage", night=ctx.night, stage=stage.name, calls=calls,
                 call_s=round(seconds, 1), failures=ctx.failures[stage.name])
             if current is not None:
-                expected = self._model(ctx, current)
+                expected = None if current == "image" else self._model(ctx, current)
                 foreign = await ctx.arbiter.foreign_models(expected)
                 if foreign:
                     add_foreign_loads(ctx.store, ctx.night, len(foreign))
