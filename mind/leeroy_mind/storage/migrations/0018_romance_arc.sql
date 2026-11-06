@@ -3,8 +3,9 @@
 -- vulnerable, invitation and acknowledged stages land on late_nights, planning and confession
 -- (arc.ladder.LEGACY). Every such row's old stage is stashed in meta romance_arc:legacy first;
 -- migrate's data step (storage.db.DATA_STEPS, arc.ladder.map_stored_stages) then lowers a
--- former invitation to the stage her scores support, records every remapped row in meta
--- romance_arc:mapped and removes the stash, in this same transaction.
+-- former invitation to the stage her scores support, keeps everyone but a drawn or lust woman
+-- at whispers (arc.ladder.FOND_CAP), records every remapped row in meta romance_arc:mapped and
+-- removes the stash, in this same transaction.
 INSERT INTO meta(key, value)
 SELECT 'romance_arc:legacy', json_group_array(json_array(a, b, romance_stage))
 FROM (SELECT a, b, romance_stage FROM relationship

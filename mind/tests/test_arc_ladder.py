@@ -1,36 +1,63 @@
 """The long-distance arc's ladder (Track S1): the stages, their gates, and the romance_arc
 migration that rebuilds relationship for the new stages and maps the stored ones onto them."""
 import json
+import re
 import shutil
 import sqlite3
 from types import SimpleNamespace
 
 import pytest
 
+from conftest import make_persona
+from leeroy_mind.arc import ladder
 from leeroy_mind.arc.ladder import (FOND_CAP, FULL_ARC, GATED, GATES, LEGACY, NOTICED,
                                     PACE_ATTITUDE, PACE_STYLE, Gate, best_stage,
                                     map_stored_stages)
+from leeroy_mind.personas.io import canonical_json
 from leeroy_mind.storage import db as db_mod
 from leeroy_mind.storage.db import migrate, open_db
 from leeroy_mind.storage.rows import ROMANCE_STAGES
 
 NEW_TABLES = ("romance_arc", "arc_meetup")
+OLD_STAGES = ("none", "notices", "banter", "whispers", "vulnerable", "invitation", "acknowledged",
+              "ex")
+OLD_KINDS = ("note_added", "note_dropped", "note_rolled_back", "drift_flag", "stance_band", "undo")
+
+
+def _migrations(stem: str, tmp_path, *, through: bool):
+    """A copy of the migrations below the one named NNNN_<stem>.sql, or up to and including it.
+    Found by its stem, never by number."""
+    (version,) = [v for v, f in db_mod._migration_files() if f.stem.split("_", 1)[1] == stem]
+    out = tmp_path / f"migrations-{'through' if through else 'before'}-{stem}"
+    out.mkdir()
+    for v, f in db_mod._migration_files():
+        if v < version or through and v == version:
+            shutil.copy(f, out / f.name)
+    return out
 
 
 # Local stand-in for the shared stem helper Track A2 adds to tests/test_migrations.py; at the
 # merge this file uses that one instead.
 def db_at_version_before(stem: str, tmp_path) -> sqlite3.Connection:
     """mind.db built by every migration numbered below the one named NNNN_<stem>.sql, as the
-    release before it left the database. Found by its stem, never by number."""
-    (version,) = [v for v, f in db_mod._migration_files() if f.stem.split("_", 1)[1] == stem]
-    old = tmp_path / f"migrations-before-{stem}"
-    old.mkdir()
-    for v, f in db_mod._migration_files():
-        if v < version:
-            shutil.copy(f, old / f.name)
+    release before it left the database."""
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(db_mod, "MIGRATIONS_DIR", old)
+        mp.setattr(db_mod, "MIGRATIONS_DIR", _migrations(stem, tmp_path, through=False))
         return open_db(tmp_path / "mind.db")
+
+
+def migrate_through(conn, stem: str, tmp_path) -> int:
+    """Migrate `conn` up to and including NNNN_<stem>.sql, and no further."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(db_mod, "MIGRATIONS_DIR", _migrations(stem, tmp_path, through=True))
+        return migrate(conn)
+
+
+def persona(conn, guid, stance, gender="female"):
+    """A stored persona with this attitude toward him, as persona_core holds it."""
+    p = make_persona(guid, f"Cast{guid}", stance=stance, player_gender=gender)
+    conn.execute("INSERT INTO persona_core(guid, json, card, card_tokens, version, source, "
+                 "updated) VALUES (?, ?, 'card', 1, 1, 'seed', 1)", (guid, canonical_json(p)))
 
 
 def insert_rel(conn, a, b, stage, *, attraction=0.0, affinity=0.0, trust=0.0, **cols):
@@ -57,6 +84,8 @@ def columns(conn, table) -> list[tuple]:
 def test_stored_stages_map_onto_the_new_ladder(tmp_path):
     conn = db_at_version_before("romance_arc", tmp_path)
     try:
+        for guid, stance in ((102, "lust"), (103, "drawn"), (104, "drawn"), (105, "drawn")):
+            persona(conn, guid, stance)
         insert_rel(conn, 102, 1, "vulnerable")
         insert_rel(conn, 104, 1, "invitation", attraction=100, affinity=47.6, trust=59)
         insert_rel(conn, 105, 1, "invitation", attraction=45, affinity=22, trust=12)
@@ -64,14 +93,113 @@ def test_stored_stages_map_onto_the_new_ladder(tmp_path):
         migrate(conn)
         assert stage(conn, 102) == "late_nights" and stage(conn, 104) == "planning"
         assert stage(conn, 105) == "whispers"
-        assert json.loads(meta(conn, "romance_arc:mapped"))["104"] == ["invitation", "planning"]
+        assert json.loads(meta(conn, "romance_arc:mapped"))["104:1"] == ["invitation", "planning"]
         # Every remapped row is recorded, the vulnerable and acknowledged ones too (preflight
         # ruling S1); only a former invitation is lowered by its scores.
         assert stage(conn, 103) == "confession"
         assert json.loads(meta(conn, "romance_arc:mapped")) == {
-            "102": ["vulnerable", "late_nights"], "103": ["acknowledged", "confession"],
-            "104": ["invitation", "planning"], "105": ["invitation", "whispers"]}
+            "102:1": ["vulnerable", "late_nights"], "103:1": ["acknowledged", "confession"],
+            "104:1": ["invitation", "planning"], "105:1": ["invitation", "whispers"]}
     finally:
+        conn.close()
+
+
+def test_a_woman_off_the_full_arc_stays_at_whispers(tmp_path):
+    """Controller ruling (S1 fix 1): only a drawn or lust woman goes past FOND_CAP. Her stance
+    and gender come from her stored persona; a row with no persona, a man and a fond or
+    none woman land on whispers whatever their old stage or scores."""
+    conn = db_at_version_before("romance_arc", tmp_path)
+    try:
+        persona(conn, 101, "fond")
+        persona(conn, 102, "drawn")
+        persona(conn, 103, "lust", gender="male")
+        persona(conn, 104, "none")
+        persona(conn, 105, "fond")
+        high = dict(attraction=99, affinity=99, trust=99)
+        insert_rel(conn, 101, 1, "acknowledged", **high)
+        insert_rel(conn, 102, 1, "invitation", **high)
+        insert_rel(conn, 103, 1, "acknowledged", **high)
+        insert_rel(conn, 104, 1, "vulnerable", **high)
+        insert_rel(conn, 105, 1, "invitation", attraction=10, affinity=5, trust=0)
+        insert_rel(conn, 106, 1, "vulnerable", **high)  # no persona
+        insert_rel(conn, 107, 1, "banter", **high)  # not an old stage: never touched
+        persona(conn, 107, "fond")
+        migrate(conn)
+        assert {g: stage(conn, g) for g in range(101, 108)} == {
+            101: "whispers", 102: "planning", 103: "whispers", 104: "whispers",
+            105: "whispers", 106: "whispers", 107: "banter"}
+        assert json.loads(meta(conn, "romance_arc:mapped")) == {
+            "101:1": ["acknowledged", "whispers"], "102:1": ["invitation", "planning"],
+            "103:1": ["acknowledged", "whispers"], "104:1": ["vulnerable", "whispers"],
+            "105:1": ["invitation", "whispers"], "106:1": ["vulnerable", "whispers"]}
+    finally:
+        conn.close()
+
+
+def test_the_cap_never_raises_a_stage(tmp_path, monkeypatch):
+    """FOND_CAP only ever lowers: an old stage whose new one sits below whispers keeps it."""
+    monkeypatch.setitem(ladder.LEGACY, "vulnerable", "banter")
+    conn = db_at_version_before("romance_arc", tmp_path)
+    try:
+        persona(conn, 101, "fond")
+        insert_rel(conn, 101, 1, "vulnerable")
+        insert_rel(conn, 102, 1, "acknowledged")  # no persona: capped
+        migrate(conn)
+        assert (stage(conn, 101), stage(conn, 102)) == ("banter", "whispers")
+    finally:
+        conn.close()
+
+
+def test_the_mapped_record_keys_each_row_by_both_guids(tmp_path):
+    """One member's rows toward two people (his guid changed once) are both recorded."""
+    conn = db_at_version_before("romance_arc", tmp_path)
+    try:
+        persona(conn, 104, "drawn")
+        insert_rel(conn, 104, 1, "invitation", attraction=99, affinity=99, trust=99)
+        insert_rel(conn, 104, 2, "invitation", attraction=45, affinity=22, trust=12)
+        migrate(conn)
+        assert (stage(conn, 104, 1), stage(conn, 104, 2)) == ("planning", "whispers")
+        assert json.loads(meta(conn, "romance_arc:mapped")) == {
+            "104:1": ["invitation", "planning"], "104:2": ["invitation", "whispers"]}
+    finally:
+        conn.close()
+
+
+def test_a_stashed_row_the_step_cannot_place_rolls_the_migration_back(tmp_path, monkeypatch):
+    conn = db_at_version_before("romance_arc", tmp_path)
+    try:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        persona(conn, 103, "drawn")
+        insert_rel(conn, 103, 1, "acknowledged", attraction=99, affinity=99, trust=99)
+        insert_rel(conn, 104, 1, "invitation", attraction=99, affinity=99, trust=99)
+        conn.commit()
+        monkeypatch.delitem(ladder.LEGACY, "acknowledged")  # an old stage it has no place for
+        with pytest.raises(RuntimeError, match="103:1"):
+            migrate(conn)
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == version
+        assert (stage(conn, 103), stage(conn, 104)) == ("acknowledged", "invitation")
+        assert conn.execute(
+            "SELECT count(*) FROM meta WHERE key LIKE 'romance_arc:%'").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM sqlite_master WHERE name IN "
+                            "('romance_arc', 'arc_meetup', 'relationship_new')").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("stash", [None, [[999, 1, "invitation"]], [[105, 1, "flirting"]]])
+def test_the_data_step_refuses_what_cannot_happen(tmp_path, stash):
+    """No stash, a stashed row that is gone, or an old stage with no place: it raises, so the
+    migration's transaction rolls back with the stash and the old stages."""
+    conn = open_db(tmp_path / "mind.db")
+    try:
+        insert_rel(conn, 105, 1, "planning", attraction=45, affinity=22, trust=12)
+        if stash is not None:
+            conn.execute("INSERT INTO meta(key, value) VALUES ('romance_arc:legacy', ?)",
+                         (json.dumps(stash),))
+        with pytest.raises(RuntimeError):
+            map_stored_stages(conn)
+    finally:
+        conn.rollback()
         conn.close()
 
 
@@ -85,6 +213,7 @@ def test_the_rebuild_keeps_every_column_and_every_other_row(tmp_path):
         insert_rel(conn, 102, 1, "ex", attraction=90, affinity=-20, trust=3)
         insert_rel(conn, 103, 104, "none", affinity=55)
         insert_rel(conn, 105, 1, "invitation", attraction=99, affinity=99, trust=99, **kept)
+        persona(conn, 105, "lust")
         conn.execute("INSERT INTO meta(key, value) VALUES ('human_guid', '1')")
         snapshot = {r[0]: tuple(r) for r in conn.execute(
             "SELECT a, b, affinity, trust, respect, attraction, familiarity, label, notes, "
@@ -96,7 +225,7 @@ def test_the_rebuild_keeps_every_column_and_every_other_row(tmp_path):
             "pinned, last_seen, interactions FROM relationship")} == snapshot
         assert [stage(conn, 101), stage(conn, 102), stage(conn, 103, 104), stage(conn, 105)] == [
             "banter", "ex", "none", "planning"]
-        assert json.loads(meta(conn, "romance_arc:mapped")) == {"105": ["invitation", "planning"]}
+        assert json.loads(meta(conn, "romance_arc:mapped")) == {"105:1": ["invitation", "planning"]}
         # No rel_delta: her pace clock is unchanged. The data step's own stash is gone.
         assert conn.execute("SELECT count(*) FROM rel_delta").fetchone()[0] == 0
         assert [r[0] for r in conn.execute(
@@ -134,16 +263,72 @@ def test_the_new_check_refuses_an_old_stage(tmp_path):
         conn.close()
 
 
+def ledger_of_every_kind(conn):
+    """A ledger row of each kind the v17 CHECK allows; the undo refers to the stance move."""
+    rows = [(1, 101, 3.0, "note_added", "likes the night shift", '["chat:1"]', None, None),
+            (2, 101, 4.0, "note_dropped", "likes the night shift", "[]", None, None),
+            (3, 102, 5.0, "note_rolled_back", "hums in raids", "[]", None, None),
+            (4, 102, 6.5, "drift_flag", "talks shorter", '["memory:7"]', 11, None),
+            (5, 101, 10.5, "stance_band", "fond -> drawn: x", '["chat:1"]', None, 41.5),
+            (9, 101, 11.0, "undo", "undid stance_band", "[]", 5, None)]
+    assert sorted({r[3] for r in rows}) == sorted(OLD_KINDS)
+    conn.executemany("INSERT INTO persona_ledger(id, guid, ts, kind, text, evidence, ref, "
+                     "score_before) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
+
+
+def _norm(sql):
+    """CREATE text with its layout folded, and a renamed table's quotes dropped."""
+    if sql is None:
+        return None
+    sql = re.sub(r"\s*([(),])\s*", r"\1", re.sub(r"\s+", " ", sql)).strip()
+    return re.sub(r'^CREATE TABLE "(\w+)"', r"CREATE TABLE \1", sql)
+
+
+def _in(values):
+    return "IN(" + ",".join(f"'{v}'" for v in values) + ")"
+
+
+def _schema(conn) -> dict:
+    return {(r[0], r[1]): (r[2], _norm(r[3])) for r in conn.execute(
+        "SELECT type, name, tbl_name, sql FROM sqlite_master")}
+
+
+def test_the_rebuild_changes_only_the_two_checks_in_the_schema(tmp_path):
+    """sqlite_master before and after the migration, CHECKs and indexes included: relationship
+    and persona_ledger read the same but for their stage and kind lists, nothing else changes
+    and only the arc's two tables are new."""
+    conn = db_at_version_before("romance_arc", tmp_path)
+    try:
+        ledger_of_every_kind(conn)
+        insert_rel(conn, 101, 1, "banter")
+        rows = [tuple(r) for r in conn.execute("SELECT * FROM persona_ledger ORDER BY id")]
+        before = _schema(conn)
+        migrate_through(conn, "romance_arc", tmp_path)
+        after = _schema(conn)
+        assert set(after) - set(before) == {("table", t) for t in NEW_TABLES}
+        assert set(before) <= set(after)
+        assert ("index", "sqlite_autoindex_relationship_1") in after
+        expected = dict(before)
+        rel = before[("table", "relationship")]
+        assert _in(OLD_STAGES) in rel[1]
+        expected[("table", "relationship")] = (rel[0], rel[1].replace(_in(OLD_STAGES),
+                                                                      _in(ROMANCE_STAGES)))
+        led = before[("table", "persona_ledger")]
+        assert _in(OLD_KINDS) in led[1]
+        expected[("table", "persona_ledger")] = (led[0], led[1].replace(
+            _in(OLD_KINDS), _in(OLD_KINDS + ("household",))))
+        assert {k: v for k, v in after.items() if k in before} == expected
+        assert [tuple(r) for r in conn.execute("SELECT * FROM persona_ledger ORDER BY id")] == rows
+    finally:
+        conn.close()
+
+
 def test_the_persona_ledger_takes_a_household_row_and_keeps_its_history(tmp_path):
     """S6's household rewrite needs a ledger kind of its own; this migration rebuilds the
     ledger's kind CHECK for it and keeps every row, its id and its undo references."""
     conn = db_at_version_before("romance_arc", tmp_path)
     try:
-        conn.execute("INSERT INTO persona_ledger(id, guid, ts, kind, text, evidence, ref, "
-                     "score_before) VALUES (5, 101, 10.5, 'stance_band', 'fond -> drawn: x', "
-                     "'[\"chat:1\"]', NULL, 41.5)")
-        conn.execute("INSERT INTO persona_ledger(id, guid, ts, kind, text, evidence, ref) "
-                     "VALUES (9, 101, 11, 'undo', 'undid stance_band', '[]', 5)")
+        ledger_of_every_kind(conn)
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute("INSERT INTO persona_ledger(guid, ts, kind, text) "
                          "VALUES (101, 12, 'household', 'separated')")

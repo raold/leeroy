@@ -67,26 +67,40 @@ def map_stored_stages(conn: sqlite3.Connection) -> None:
     """The romance_arc migration's data step (storage.db.DATA_STEPS). The migration's script has
     rebuilt relationship, mapping each old stage by LEGACY, and stashed every such row's old
     stage in meta romance_arc:legacy ([[a, b, old], ...]). A former invitation is lowered to
-    the stage her scores support (best_stage, up to planning); every remapped row is recorded
-    in meta romance_arc:mapped as {"<a>": [old, new]}, and the stash is removed. No rel_delta
-    is written, so her pace clock is unchanged. It runs inside the migration's transaction
-    and never commits."""
+    the stage her scores support (best_stage, up to planning). Only a drawn or lust woman goes
+    past FOND_CAP (controller ruling): her stance and gender are read from her stored persona,
+    and a man, a fond or none woman, or a row with no readable persona lands on FOND_CAP if
+    above it (never raised). Every remapped row is recorded in meta romance_arc:mapped as
+    {"<a>:<b>": [old, new]}, and the stash is removed. No rel_delta is written, so her pace
+    clock is unchanged. A stash it cannot place (none, a row that is gone, an old stage with
+    no place) raises, so the migration rolls back with the old stages. It runs inside the
+    migration's transaction and never commits."""
     row = conn.execute("SELECT value FROM meta WHERE key = ?", (_STASH,)).fetchone()
-    stashed = json.loads(row[0]) if row else []
+    if row is None:
+        raise RuntimeError(f"romance_arc: no {_STASH} stash to map")
     mapped, lowered = {}, 0
-    for a, b, old in stashed:
-        scores = conn.execute("SELECT attraction, affinity, trust FROM relationship "
-                              "WHERE a = ? AND b = ?", (a, b)).fetchone()
-        if scores is None or old not in LEGACY:
-            continue
+    for a, b, old in json.loads(row[0]):
+        found = conn.execute(
+            "SELECT r.attraction, r.affinity, r.trust, "
+            "CASE WHEN json_valid(p.json) THEN json_extract(p.json, '$.romance.stance') END, "
+            "CASE WHEN json_valid(p.json) "
+            "THEN json_extract(p.json, '$.identity.player_gender') END "
+            "FROM relationship r LEFT JOIN persona_core p ON p.guid = r.a "
+            "WHERE r.a = ? AND r.b = ?", (a, b)).fetchone()
+        if found is None or old not in LEGACY:
+            raise RuntimeError(f"romance_arc: cannot map {a}:{b} from {old!r}")
+        attraction, affinity, trust, stance, gender = found
         new = LEGACY[old]
         if old == "invitation":
-            new = best_stage(Relationship(a=a, b=b, attraction=scores[0], affinity=scores[1],
-                                          trust=scores[2]), ceiling=new)
-            lowered += new != LEGACY[old]
+            new = best_stage(Relationship(a=a, b=b, attraction=attraction, affinity=affinity,
+                                          trust=trust), ceiling=new)
+        full_arc = gender == "female" and stance in FULL_ARC
+        if not full_arc and ROMANCE_STAGES.index(new) > ROMANCE_STAGES.index(FOND_CAP):
+            new = FOND_CAP
+        lowered += new != LEGACY[old]
         conn.execute("UPDATE relationship SET romance_stage = ? WHERE a = ? AND b = ?",
                      (new, a, b))
-        mapped[str(a)] = [old, new]
+        mapped[f"{a}:{b}"] = [old, new]
     if mapped:
         conn.execute("INSERT INTO meta(key, value) VALUES (?, ?) "
                      "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
