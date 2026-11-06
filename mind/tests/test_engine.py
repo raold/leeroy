@@ -820,8 +820,10 @@ def test_the_whisper_overlay_is_the_last_thing_she_reads(store, clock, tmp_path)
         _women(store)
         save_member(store, 102, player_gender="female", stance="lust", split_rate=0.0,
                     typo_rate=0.0, emoticon_rate=0.0, abbreviations={}, words_per_line=[3, 12])
+        # an invitation in the game: "come and find me" alone is a summons, asked again and
+        # dropped (conversation variety A5)
         reply = ("you better be serious. i'm wearing the red one and nothing under the cloak "
-                 "tonight, so come and find me")
+                 "tonight, so find me at the inn in dalaran")
         r = make_rig(store, clock, tmp_path, reply=reply)
         line = his_line(r, store, "meet me at the inn after raid, just us", channel="whisper",
                         to_guid=102).id
@@ -2568,9 +2570,10 @@ def test_a_silent_answer_to_his_whisper_is_asked_once_more(store, clock, tmp_pat
 
     async def main():
         _women(store)
-        r = make_rig(store, clock, tmp_path, script=script_from(["(nothing)", "come here then"]))
+        # "right here": "come here" would be a summons (conversation variety A5)
+        r = make_rig(store, clock, tmp_path, script=script_from(["(nothing)", "right here then"]))
         line = his_line(r, store, "you around?", channel="whisper", to_guid=102).id
-        assert await spoken(r, whisper_back(102, line)) == ["come here then"]
+        assert await spoken(r, whisper_back(102, line)) == ["right here then"]
         assert len(r.chat_calls()) == 2 and two in r.prompts()[1] and two not in r.prompts()[0]
         r = make_rig(store, clock, tmp_path, script=script_from(["(nothing)", "/w Zan"]))
         line = his_line(r, store, "still there?", channel="whisper", to_guid=103).id
@@ -2616,13 +2619,14 @@ def test_a_command_or_a_handle_at_him_never_reaches_chat(store, clock, tmp_path)
             save_member(store, g, player_gender="female", stance=stance, typo_rate=0.0,
                         split_rate=0.0, abbreviations={}, emoticon_rate=0.0)
         r = make_rig(store, clock, tmp_path, script=script_from([
-            "/w Testmage that kill was something", "@Zan come sit with me then",
+            # sitting with her in the game: "come sit with me" alone is a summons (A5)
+            "/w Testmage that kill was something", "@Zan come sit with me in dalaran then",
             "Zan: you're late", "/w Zan", "/invite arkon"]))
         whisper = Turn(kind=TurnKind.WHISPER, speaker=102, channel="whisper", to_guid=HUMAN,
                        addressee=HUMAN)
         assert await spoken(r, whisper) == ["that kill was something"]
         flirt = Turn(kind=TurnKind.FLIRT, speaker=103, channel="guild", addressee=HUMAN)
-        assert await spoken(r, flirt, seconds=70) == ["come sit with me then"]
+        assert await spoken(r, flirt, seconds=70) == ["come sit with me in dalaran then"]
         line = his_line(r, store, "where were you").id
         assert await spoken(r, Turn(kind=TurnKind.REPLY_HUMAN, speaker=104, channel="guild",
                                     addressee=HUMAN, trigger_line=line)) == ["you're late"]

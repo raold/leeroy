@@ -51,12 +51,15 @@ class MoveLog:
                  main_move(moves), json.dumps(list(topics(text))), _final_clause(text), angle))
 
     def recent(self, guid: int, counterpart: int, *, turn_channel: str, to_guid: int,
-               n: int = MOVES_SHOWN) -> list[MoveRow]:
+               now: float, n: int = MOVES_SHOWN) -> list[MoveRow]:
+        """Her last turns to `counterpart` within MOVES_KEEP_S of `now` that a turn on
+        `turn_channel` to `to_guid` may see (whisper_ok), oldest first: a mind that runs for
+        days never shows a row the next start would prune."""
         with self._store.transaction():
             rows = self._store.conn.execute(
                 "SELECT ts, channel, to_guid, moves, main, topics, clause, angle FROM talk_move "
-                "WHERE guid = ? AND counterpart = ? ORDER BY ts DESC, id DESC LIMIT ?",
-                (guid, counterpart, _FETCH)).fetchall()
+                "WHERE guid = ? AND counterpart = ? AND ts >= ? ORDER BY ts DESC, id DESC "
+                "LIMIT ?", (guid, counterpart, now - MOVES_KEEP_S, _FETCH)).fetchall()
         out: list[MoveRow] = []
         for r in rows:
             if not whisper_ok(r["channel"], guid, r["to_guid"], speaker=guid,
@@ -89,12 +92,15 @@ class PairNotes:
             conn.execute("INSERT INTO pair_note(ts, guid, other, kind, text, channel, to_guid) "
                          "VALUES (?,?,?,?,?,?,?)", (ts, guid, other, kind, text, channel, to_guid))
 
-    def recent(self, guid: int, other: int, *, turn_channel: str, to_guid: int,
+    def recent(self, guid: int, other: int, *, turn_channel: str, to_guid: int, now: float,
                n: int = SCENE_SHOWN) -> list[str]:
+        """Her newest notes about `other` within NOTES_KEEP_S of `now` that the turn may see
+        (whisper_ok), oldest first."""
         with self._store.transaction():
             rows = self._store.conn.execute(
                 "SELECT text, channel, to_guid FROM pair_note WHERE guid = ? AND other = ? "
-                "ORDER BY ts DESC, id DESC LIMIT ?", (guid, other, _FETCH)).fetchall()
+                "AND ts >= ? ORDER BY ts DESC, id DESC LIMIT ?",
+                (guid, other, now - NOTES_KEEP_S, _FETCH)).fetchall()
         out = [r["text"] for r in rows
                if whisper_ok(r["channel"], guid, r["to_guid"], speaker=guid,
                              turn_channel=turn_channel, to_guid=to_guid)]

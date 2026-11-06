@@ -222,6 +222,23 @@ def test_the_clean_line(vrig):
     assert list(v.engine._own[101]) == [("voice:guild_hall", 0, out[0])]
 
 
+def test_a_voiced_reply_records_its_moves_and_may_ask_him_over(vrig):
+    """Conversation variety A5: a voiced line's moves are stored as a typed line's are, and in
+    a voice room, where the two are together, asking him over is no summons to drop."""
+    v = vrig
+    v.says("get over here, the hall is way more fun")
+    hall(v, 101)
+    v.world.online &= {101}
+
+    async def go():
+        await v.human("arkon how is it going", channel="voice:guild_hall")
+        await v.advance(45)
+    run(go())
+    assert [s.guid for s in v.speaks()] == [101] and len(v.chat_calls()) == 1  # no retry
+    (row,) = v.rows("SELECT guid, counterpart, channel, main FROM talk_move")
+    assert tuple(row) == (101, HUMAN, "voice:guild_hall", "summon")
+
+
 def test_voice_lines_take_no_typing_time(vrig):
     v = vrig
     v.says("Okay, that pull was all you, and I mean every single bit of it.")
