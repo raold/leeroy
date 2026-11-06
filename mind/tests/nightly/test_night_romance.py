@@ -606,3 +606,28 @@ def test_end_romance_is_history_and_closes_her_away(h):
     assert get_arc(h.store, 101, 1).ended == "he_ended"
     assert end_romance(h.store, 102, 1, by="found_out", now=h.T) is True  # no arc row yet
     assert get_arc(h.store, 102, 1).ended == "found_out"
+
+
+def test_a_split_night_counts_once_through_stage_romance(h):
+    arc_woman(h, 101, "lust")  # notices -> banter and banter -> whispers each wait 1.4
+    h.store.add_rel_delta(101, 1, "romance_stage", 1, "x->notices", [], h.T - 3 * DAY,
+                          applied=True)
+    played_before(h, 2, 1)
+    h.session(h.T, h.T + 5 * HOUR)  # 21:00 to 02:00: night 10-29
+    h.mem(101, "Testy stayed up talking with me.", t=h.T + HOUR, actors=(1,), valence=.8)
+
+    def run_night(at, night):
+        h.clock.set(at)
+        ctx = h.ctx(night=night)
+        run(stage_romance(ctx))
+        assert not ctx.failures
+        return h.store.get_relationship(101, 1).romance_stage
+
+    assert run_night(h.T + 2 * HOUR, "2026-10-29") == "banter"  # 23:00, inside the play night
+    h.session(h.T + DAY, h.T + DAY + 2 * HOUR)  # the next night
+    h.mem(101, "Testy stayed up talking with me.", t=h.T + DAY + HOUR, actors=(1,), valence=.8)
+    # Only the next night counts (1 < 1.4); counted in both spans it would be 2.
+    assert run_night(h.T + DAY + 3 * HOUR, "2026-10-30") == "banter"
+    h.session(h.T + 2 * DAY, h.T + 2 * DAY + 2 * HOUR)
+    h.mem(101, "Testy stayed up talking with me.", t=h.T + 2 * DAY + HOUR, actors=(1,), valence=.8)
+    assert run_night(h.T + 2 * DAY + 3 * HOUR, "2026-10-31") == "whispers"

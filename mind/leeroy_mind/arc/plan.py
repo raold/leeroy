@@ -7,8 +7,11 @@ import re
 from leeroy_mind.personas.schema import Persona
 
 PLAN_KINDS = ("halfway", "she_travels", "event", "neutral")
-_PARTNER = re.compile(r"\b(husband|wife|partner|boyfriend|girlfriend|fianc[eé]e?|married)\b",
-                      re.IGNORECASE)
+_PARTNER = re.compile(
+    r"(?<!not )(?<!never )(?<!business )"
+    r"\b(husband|wife|partner|boyfriend|girlfriend|fianc[eé]e?|married)\b", re.IGNORECASE)
+# Past or non-partners, removed before the scan ("ex-husband", "divorced", "widowed").
+_NOT_PARTNER = re.compile(r"\b(?:ex-\w+|divorced|widowed)\b", re.IGNORECASE)
 _COVERS = ("a work trip", "a weekend away with friends", "a course she has to go on",
            "a visit to an old friend")
 _WORRIES = ("money", "time off", "the home front")
@@ -17,7 +20,7 @@ _THINGS = {"halfway": "meeting halfway", "event": "BlizzCon",
 
 
 def has_partner(p: Persona) -> bool:
-    return _PARTNER.search(p.real_life.household) is not None
+    return _PARTNER.search(_NOT_PARTNER.sub("", p.real_life.household)) is not None
 
 
 def _kinds(region: str) -> list[str]:
@@ -32,7 +35,8 @@ def propose_plan(p: Persona, rng: random.Random, *, now: float, exclude: str = "
     kind = rng.choice(kinds)
     target = now + rng.randint(10, 18) * 86400
     rl = p.real_life
-    pool = [w for w, text in zip(_WORRIES, (rl.money, rl.job, rl.household)) if text.strip()]
+    pool = [w for w, text in zip(_WORRIES, (rl.money, rl.job, "x" if has_partner(p) else ""))
+            if text.strip()]
     worries = rng.sample(pool, min(len(pool), rng.randint(1, 2)))
     cover = rng.choice(_COVERS) if has_partner(p) else ""
     return {"kind": kind, "target": target, "worries": worries, "cover": cover}
@@ -56,7 +60,8 @@ def plan_lines(plan: dict, state: str, *, now: float, forms, region: str) -> lis
         lines = [f"You two have talked about {thing}, but nothing is settled."]
     elif state == "set":
         days = math.ceil((plan["target"] - now) / 86400)
-        when = "any weekend now" if days <= 0 else f"about {days} days off"
+        when = ("any weekend now" if days <= 0
+                else f"about {days} day{'' if days == 1 else 's'} off")
         on_mind = ", ".join([*plan.get("worries", []), "nerves", "what you'll wear"])
         second = f"On your mind: {on_mind}"
         second += f"; the cover story is {cover}." if cover else "."

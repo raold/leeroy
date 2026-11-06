@@ -116,3 +116,30 @@ def test_the_arc_row_round_trips_and_keeps_twelve_events(store):
     assert get_arc(store, 101, 1) == arc
     put_arc(store, Arc(101, 1, weekends=3, updated=NOW))
     assert get_arc(store, 101, 1).weekends == 3
+
+
+def test_has_partner_ignores_exes_and_non_partners():
+    for text in ("Lives with her ex-husband's old dog.", "Her ex-wife visits.", "An ex-boyfriend nearby.",
+                 "Ex-girlfriend next door.", "Her ex-partner has the house.", "Not married.",
+                 "Never married, lives alone.", "Divorced, lives alone.", "Widowed, two cats.",
+                 "Runs the shop with a business partner."):
+        assert not has_partner(woman(household=text)), text
+    assert has_partner(woman(household="Divorced once, now lives with her husband."))
+    assert has_partner(woman(household="Married to her boyfriend of ten years."))
+
+
+def test_a_woman_living_alone_never_worries_about_the_home_front():
+    for household, front in (("Lives alone with a cat.", False), ("Lives with her husband.", True)):
+        seen = set()
+        rng = random.Random(7)
+        for _ in range(200):
+            seen |= set(propose_plan(woman(household=household), rng, now=NOW)["worries"])
+        assert ("the home front" in seen) is front
+        assert {"money", "time off"} <= seen
+
+
+def test_the_countdown_is_singular_for_one_day():
+    plan = {"kind": "event", "target": NOW + DAY, "worries": [], "cover": ""}
+    got = lambda now: plan_lines(plan, "set", now=now, forms=_FORMS["he"], region="US")[0]
+    assert got(NOW) == "It's happening: BlizzCon, about 1 day off."
+    assert got(NOW - DAY) == "It's happening: BlizzCon, about 2 days off."
