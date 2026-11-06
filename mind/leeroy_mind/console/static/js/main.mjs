@@ -87,6 +87,10 @@ renderStrip();
 renderComms();
 renderFeed(false);
 showTab((location.hash || "#comms").slice(1));
+window.addEventListener("hashchange", function () {
+  var want = location.hash.slice(1);
+  if (want !== S.tab) { showTab(want); }
+});
 connect();
 
 // The light/dark switch. theme.js applied the stored choice before paint; this flips it and

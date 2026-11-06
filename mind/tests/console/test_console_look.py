@@ -128,3 +128,83 @@ def test_the_stored_theme_is_read_in_both_forms():
     assert r.returncode == 0, r.stderr
     import json
     assert json.loads(r.stdout) == ["light", "light", "dark", "dark", "dark", "dark", "dark", "dark"]
+
+
+TABS = ["comms", "raid", "guild", "social", "personas", "board", "calendar", "bank", "realm",
+        "training", "dojo", "library", "mind"]
+LABELS = ["Comms", "Raid", "Guild", "Social", "Personas", "Board", "Calendar", "Bank", "Realm",
+          "Training", "Dojo", "Library", "Mind"]
+COMING = {
+    "social": "The guild's drama at a glance: feuds, jealousy, romances, how each member feels about you, "
+              "rumours going round and tonight's guild mood. Coming soon.",
+    "board": "The guild's message board: realm forum posts, the Realm's write-ups and the letters members "
+             "send you, with your replies. Coming soon.",
+    "calendar": "Upcoming raid nights with sign-ups, Thursday's officer meeting, birthdays a week ahead and "
+                "the raid nights you missed. Coming soon.",
+    "bank": "The guild bank as in game: all six tabs, the gold, the money log and what officers stocked or "
+            "withdrew. Coming soon.",
+    "realm": "The three rival guilds: their members and progress, the race for first kills, poaching, their "
+             "Trade-chat lines and canon achievements. Coming soon.",
+    "training": "The training ground: fights recorded, days until tactics may adapt, the overhead gate, "
+                "trials and the tactic cards per boss. Coming soon.",
+    "dojo": "The dojo's training realm: whether it is running, its build, the acceptance gates and their "
+            "evidence, recorded episodes and replays. Coming soon.",
+    "library": "Search the scholar's library: GM commands, teleports, configuration templates, items, quests "
+               "and spells. Coming soon.",
+}
+
+
+def _page() -> str:
+    return resources.files("leeroy_mind.console").joinpath("page.html").read_text("utf-8")
+
+
+def test_the_thirteen_tabs_in_order():
+    page = _page()
+    nav = page[page.index('<nav class="tabs"'):page.index("</nav>")]
+    assert re.findall(r'data-tab="([\w-]+)"', nav) == TABS
+    assert re.findall(r'<button[^>]*>([^<]+)(?:<|$)', nav) == LABELS
+    for t in TABS:
+        assert f'id="t-{t}"' in nav and f'id="tab-{t}"' in page
+
+
+def test_the_new_tabs_say_what_is_coming():
+    page = _page()
+    for t, copy in COMING.items():
+        m = re.search(rf'<section id="tab-{t}"([^>]*)>(.*?)</section>', page, re.S)
+        assert m, t
+        assert re.search(r'class="(?:[^"]* )?placeholder(?: [^"]*)?"', m.group(1)), t
+        assert f"<h2>{LABELS[TABS.index(t)]}</h2>" in m.group(2), t
+        assert f"<p>{copy}</p>" in m.group(2), t
+    for t in ("comms", "raid", "guild", "personas", "mind"):
+        assert not re.search(rf'<section id="tab-{t}"[^>]*placeholder', page), t
+
+
+def test_the_strip_names_the_mode_and_the_brand():
+    page = _page()
+    assert re.search(r'<div class="brand">.*?<h1>Guild Console</h1>', page, re.S)
+    assert "The guild, the realm and the mind, beside the game" in page
+    assert re.search(r'<span id="s-game" class="mode"', page)
+    assert 'id="theme"' in page
+    for i in ("s-mind", "s-bridge", "s-vlink", "s-game", "s-room", "s-ptt", "s-lost"):
+        assert f'id="{i}"' in page
+    strip = (STATIC / "js" / "strip.mjs").read_text("utf-8")
+    for w in ('"In game"', '"Not in game"', '"Game: unknown"'):
+        assert w in strip
+
+
+def test_the_header_is_sticky_and_toasts_sit_below_it():
+    css = _css()
+    assert re.search(r"position:\s*sticky", _block(css, "\n.top"))
+    page = _page()
+    assert page.index('id="toasts"') < page.index("</header>")
+    assert re.search(r"top:\s*100%", _block(css, "#toasts"))
+
+
+def test_each_banner_aligns_with_its_own_panels():
+    css = _css()
+    assert ".tab > .banner" not in css and "#tab-comms > .banner" in css
+
+
+def test_the_address_bar_hash_opens_a_tab():
+    main = (STATIC / "js" / "main.mjs").read_text("utf-8")
+    assert 'addEventListener("hashchange"' in main

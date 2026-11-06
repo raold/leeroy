@@ -24,6 +24,10 @@ export function gameWords() {
   if (g.state === "not_in_game") { return "you: not in game"; }
   return "you: unknown";
 }
+export function gamePill() {
+  var st = S.status.game.state;
+  return st === "in_game" ? "In game" : st === "not_in_game" ? "Not in game" : "Game: unknown";
+}
 export function renderStrip() {
   var m = S.status.mind;
   setPill("s-mind", mindClass(m.state), MIND_WORDS[m.state] || ("mind " + m.state),
@@ -39,7 +43,7 @@ export function renderStrip() {
   else { vtext = "voice: mind not linked"; vcls = "warn"; }
   setPill("s-vlink", vcls, vtext, "");
   setPill("s-game", S.status.game.state === "in_game" ? "ok" : S.status.game.state === "not_in_game" ? "warn" : "",
-          gameWords(), S.status.game.reason || "");
+          gamePill(), S.status.game.reason || "");
   var here = hereRoom(), roomText;
   if (!S.voice) { roomText = "voice not connected"; }
   else if (!here) { roomText = "not in a room"; }

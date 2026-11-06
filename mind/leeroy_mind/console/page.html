@@ -11,11 +11,14 @@
 <body>
 <header class="top">
 <div class="top-inner">
-  <div class="brand"><h1>Guild Console</h1></div>
+  <div class="brand">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path d="M13 3 22 7v6c0 5-4 8.5-9 10-5-1.5-9-5-9-10V7Z" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/><path d="M9 12.5h8M9 16h5" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round"/></svg>
+    <div><h1>Guild Console</h1><div class="sub">The guild, the realm and the mind, beside the game</div></div>
+  </div>
   <div class="strip" aria-label="Status">
-    <span id="s-game" class="mode"><span class="t">you: unknown</span></span>
+    <span id="s-game" class="mode"><span class="t">Game: unknown</span></span>
     <span id="s-mind" class="stat"><span class="k">Mind</span><span class="v"><i class="dot"></i><span class="t">mind</span></span></span>
-    <span id="s-bridge" class="stat"><span class="k">Bridge</span><span class="v"><i class="dot"></i><span class="t">game bridge</span></span></span>
+    <span id="s-bridge" class="stat"><span class="k">Game bridge</span><span class="v"><i class="dot"></i><span class="t">game bridge</span></span></span>
     <span id="s-vlink" class="stat"><span class="k">Voice</span><span class="v"><i class="dot"></i><span class="t">voice</span></span></span>
     <span id="s-room" class="stat"><span class="k">Room</span><span class="v"><span class="t">no room</span></span></span>
     <span id="s-ptt" class="ptt"><i class="lamp"></i><span>push-to-talk</span></span>
@@ -27,9 +30,18 @@
   <button role="tab" id="t-comms" data-tab="comms" aria-controls="tab-comms">Comms</button>
   <button role="tab" id="t-raid" data-tab="raid" aria-controls="tab-raid">Raid</button>
   <button role="tab" id="t-guild" data-tab="guild" aria-controls="tab-guild">Guild</button>
+  <button role="tab" id="t-social" data-tab="social" aria-controls="tab-social">Social</button>
   <button role="tab" id="t-personas" data-tab="personas" aria-controls="tab-personas">Personas</button>
+  <button role="tab" id="t-board" data-tab="board" aria-controls="tab-board">Board</button>
+  <button role="tab" id="t-calendar" data-tab="calendar" aria-controls="tab-calendar">Calendar</button>
+  <button role="tab" id="t-bank" data-tab="bank" aria-controls="tab-bank">Bank</button>
+  <button role="tab" id="t-realm" data-tab="realm" aria-controls="tab-realm">Realm</button>
+  <button role="tab" id="t-training" data-tab="training" aria-controls="tab-training">Training</button>
+  <button role="tab" id="t-dojo" data-tab="dojo" aria-controls="tab-dojo">Dojo</button>
+  <button role="tab" id="t-library" data-tab="library" aria-controls="tab-library">Library</button>
   <button role="tab" id="t-mind" data-tab="mind" aria-controls="tab-mind">Mind</button>
 </nav>
+<div id="toasts" role="status"></div>
 </header>
 <main>
   <section id="tab-comms" class="tab" role="tabpanel" aria-labelledby="t-comms">
@@ -142,6 +154,10 @@
       </article>
     </div>
   </section>
+  <section id="tab-social" class="tab placeholder" role="tabpanel" aria-labelledby="t-social" hidden>
+    <h2>Social</h2>
+    <p>The guild's drama at a glance: feuds, jealousy, romances, how each member feels about you, rumours going round and tonight's guild mood. Coming soon.</p>
+  </section>
   <section id="tab-personas" class="tab mindtab" role="tabpanel" aria-labelledby="t-personas" hidden>
     <div id="personas-banner" class="banner bad" hidden></div>
     <div class="cards wide">
@@ -239,6 +255,34 @@
       </article>
     </div>
   </section>
+  <section id="tab-board" class="tab placeholder" role="tabpanel" aria-labelledby="t-board" hidden>
+    <h2>Board</h2>
+    <p>The guild's message board: realm forum posts, the Realm's write-ups and the letters members send you, with your replies. Coming soon.</p>
+  </section>
+  <section id="tab-calendar" class="tab placeholder" role="tabpanel" aria-labelledby="t-calendar" hidden>
+    <h2>Calendar</h2>
+    <p>Upcoming raid nights with sign-ups, Thursday's officer meeting, birthdays a week ahead and the raid nights you missed. Coming soon.</p>
+  </section>
+  <section id="tab-bank" class="tab placeholder" role="tabpanel" aria-labelledby="t-bank" hidden>
+    <h2>Bank</h2>
+    <p>The guild bank as in game: all six tabs, the gold, the money log and what officers stocked or withdrew. Coming soon.</p>
+  </section>
+  <section id="tab-realm" class="tab placeholder" role="tabpanel" aria-labelledby="t-realm" hidden>
+    <h2>Realm</h2>
+    <p>The three rival guilds: their members and progress, the race for first kills, poaching, their Trade-chat lines and canon achievements. Coming soon.</p>
+  </section>
+  <section id="tab-training" class="tab placeholder" role="tabpanel" aria-labelledby="t-training" hidden>
+    <h2>Training</h2>
+    <p>The training ground: fights recorded, days until tactics may adapt, the overhead gate, trials and the tactic cards per boss. Coming soon.</p>
+  </section>
+  <section id="tab-dojo" class="tab placeholder" role="tabpanel" aria-labelledby="t-dojo" hidden>
+    <h2>Dojo</h2>
+    <p>The dojo's training realm: whether it is running, its build, the acceptance gates and their evidence, recorded episodes and replays. Coming soon.</p>
+  </section>
+  <section id="tab-library" class="tab placeholder" role="tabpanel" aria-labelledby="t-library" hidden>
+    <h2>Library</h2>
+    <p>Search the scholar's library: GM commands, teleports, configuration templates, items, quests and spells. Coming soon.</p>
+  </section>
   <section id="tab-mind" class="tab mindtab" role="tabpanel" aria-labelledby="t-mind" hidden>
     <div class="cards">
       <article class="panel">
@@ -289,7 +333,6 @@
     </div>
   </section>
 </main>
-<div id="toasts" role="status"></div>
 <div id="menu" role="dialog" aria-label="Member volume" hidden>
   <div id="menu-name" class="title"></div>
   <label>Volume <input id="menu-vol" type="range" min="-12" max="12" step="0.5" value="0">
