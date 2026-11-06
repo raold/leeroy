@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from leeroy_selfie.protocol import IdentityUnavailable, Quit, Render, parse
+from leeroy_selfie.protocol import IdentityUnavailable, Quit, Render, Retry, parse
 
 
 def request(tmp_path, **over):
@@ -53,6 +53,13 @@ def test_deep_nesting_and_unencodable_strings_are_value_errors(tmp_path):
     with pytest.raises(ValueError):
         parse(b"[" * 5000)
     with pytest.raises(ValueError):
-        parse(b'{"id": "\ud800", "op": "quit"}')
+        parse(rb'{"id": "\ud800", "op": "quit"}')
     with pytest.raises(ValueError):
         parse(request(tmp_path, phrases=[["bad \ud800", 0]]))
+
+
+def test_a_retry_after_a_vram_refusal_parses_in_its_one_strict_form():
+    assert parse(b'{"id": "ready", "op": "retry"}') == Retry("ready")
+    for line in (b'{"id": "ready", "op": "retry", "x": 1}', b'{"op": "retry"}'):
+        with pytest.raises(ValueError):
+            parse(line)

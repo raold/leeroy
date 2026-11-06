@@ -107,3 +107,15 @@ def test_try_refuses_a_guid_without_looks(root, capsys):
     code = cli.selfies_main(["--data-dir", str(root), "try", "--guid", "104"],
                             make_llm=lambda cfg: llm(root))
     assert code == 1 and "104" in capsys.readouterr().err
+
+
+def test_try_retries_a_vram_refusal_once_on_the_same_worker(root, capsys, monkeypatch, tmp_path):
+    starts = tmp_path / "starts.log"
+    cmd, env = fake_command(tmp_path, FAKE_SELFIE_VRAM="1", FAKE_SELFIE_STARTS=str(starts))
+    monkeypatch.setattr(cli, "worker_command", lambda cfg: cmd)
+    monkeypatch.setattr(cli, "worker_env", lambda cfg: env)
+    code = cli.selfies_main(["--data-dir", str(root), "try", "--guid", "101"],
+                            make_llm=lambda cfg: llm(root))
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0 and out["sets"] == 1
+    assert [n.split()[0] for n in starts.read_text().splitlines()] == ["spawn", "retry"]

@@ -189,3 +189,53 @@ def test_a_normal_exit_with_stdin_still_open_is_clean():
             p.stdin.close()
             p.stdout.close()
             p.stderr.close()
+
+
+# -- a vram refusal at the start waits for the mind's retry (final review I2) -------------------
+
+RETRY = b'{"id": "ready", "op": "retry"}\n'
+
+
+def retrying(times: int, fields=None):
+    """A load refused for VRAM `times` times; each retry is counted in `tries`."""
+    tries = []
+
+    def attempt():
+        tries.append(1)
+        if len(tries) <= times:
+            raise ReadyError("vram", retry=attempt, fields=fields or {})
+        return Fake()
+
+    return attempt, tries
+
+
+def test_a_vram_refusal_waits_for_a_retry_and_then_serves(tmp_path):
+    load, tries = retrying(2, {"check_ms": 5, "load_ms": 7, "free_gib": 9.5})
+    code, lines = run(load, RETRY + RETRY + req(tmp_path, "a"))
+    assert code == 0 and len(tries) == 3
+    refused = {"id": "ready", "ok": False, "error": "vram", "retry": True, "check_ms": 5,
+               "load_ms": 7, "free_gib": 9.5}
+    assert lines[:2] == [refused, refused]
+    assert lines[2] == {"id": "ready", "ok": True, "error": "", **INFO}
+    assert lines[3]["id"] == "a" and lines[3]["ok"] is True
+
+
+def test_while_it_waits_a_quit_or_the_end_of_stdin_ends_it_and_other_lines_are_bad(tmp_path):
+    load, tries = retrying(1)
+    code, lines = run(load, req(tmp_path, "early") + b"nonsense\n" + b'{"id": "q", "op": "quit"}\n'
+                      + RETRY)
+    assert code == 1 and len(tries) == 1
+    assert [(x["id"], x.get("error")) for x in lines[1:]] == [("early", "bad_request"),
+                                                               ("", "bad_request")]
+    load, tries = retrying(1)
+    eofs = []
+    assert run(load, b"", eofs)[0] == 1 and eofs == [1] and len(tries) == 1
+
+
+def test_a_final_refusal_says_no_retry_and_a_retry_once_serving_is_bad(tmp_path):
+    def final():
+        raise ReadyError("model", fields={"check_ms": 3, "load_ms": 0})
+    assert run(final, RETRY) == (1, [{"id": "ready", "ok": False, "error": "model",
+                                      "check_ms": 3, "load_ms": 0}])
+    code, lines = run(lambda: Fake(), RETRY)
+    assert code == 0 and lines[1] == {"id": "ready", "ok": False, "error": "bad_request"}

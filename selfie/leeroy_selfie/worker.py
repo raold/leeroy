@@ -1,5 +1,8 @@
 """The worker's loop: a ready line, then one answer per request line until quit or the end of
-stdin. Logs (stderr) carry ids, counts, scores and timings, never a prompt."""
+stdin. A ready refusal that says `retry: true` (vram, the pipeline loaded on the CPU) waits for
+the mind's retry line and answers ready again, loading nothing twice. Every ready line carries
+the start's check_ms and load_ms once it got that far. Logs (stderr) carry ids, counts, scores
+and timings, never a prompt."""
 import json
 import os
 import queue
@@ -10,7 +13,7 @@ from typing import BinaryIO
 
 from . import protocol
 from .fit import PromptTooLong
-from .protocol import IdentityUnavailable, Quit, Render, RenderFailed
+from .protocol import IdentityUnavailable, Quit, Render, RenderFailed, Retry
 from .render import ReadyError, Renderer
 
 _EOF = object()
@@ -77,16 +80,11 @@ def serve(load: Callable[[], Renderer], *, stdin: BinaryIO, out: BinaryIO,
           on_eof: Callable[[], None]) -> int:
     """0 after a quit or the end of stdin, 1 when the renderer could not be loaded. The reader
     runs from the start, so the end of stdin calls on_eof (the worker's: os._exit) at once,
-    during the load or a render too."""
+    during the load, a wait for a retry or a render too."""
     lines: queue.Queue = queue.Queue()
     threading.Thread(target=_reader, args=(stdin, lines, on_eof), daemon=True).start()
-    try:
-        renderer = load()
-    except ReadyError as e:
-        _send(out, {"id": "ready", "ok": False, "error": e.reason})
-        return 1
-    except Exception as e:
-        _send(out, {"id": "ready", "ok": False, "error": type(e).__name__})
+    renderer = _ready(load, lines, out)
+    if renderer is None:
         return 1
     _send(out, {"id": "ready", "ok": True, **renderer.info, "error": ""})
     while True:
@@ -106,7 +104,50 @@ def serve(load: Callable[[], Renderer], *, stdin: BinaryIO, out: BinaryIO,
             continue
         if isinstance(req, Quit):
             return 0
+        if isinstance(req, Retry):  # it is ready: nothing to try again
+            _send(out, {"id": req.id, "ok": False, "error": "bad_request"})
+            continue
         _send(out, _answer(renderer, req))
+
+
+def _ready(load: Callable[[], Renderer], lines: queue.Queue, out: BinaryIO) -> Renderer | None:
+    """The renderer, or None once a refusal is sent that is final (or the mind quit or closed
+    stdin while a retryable one waited)."""
+    attempt = load
+    while True:
+        try:
+            return attempt()
+        except ReadyError as e:
+            _send(out, {"id": "ready", "ok": False, "error": e.reason, **e.fields,
+                        **({"retry": True} if e.retry is not None else {})})
+            if e.retry is None or not _retry_asked(lines, out):
+                return None
+            attempt = e.retry
+        except Exception as e:
+            _send(out, {"id": "ready", "ok": False, "error": type(e).__name__})
+            return None
+
+
+def _retry_asked(lines: queue.Queue, out: BinaryIO) -> bool:
+    """The mind's next line after a retryable refusal: True for a retry, False for a quit or the
+    end of stdin; anything else is a bad request, answered, and the wait goes on."""
+    while True:
+        line = lines.get()
+        if line is _EOF:
+            return False
+        if line is _TOO_LONG:
+            _send(out, {"id": "", "ok": False, "error": "bad_request"})
+            continue
+        try:
+            req = protocol.parse(line)
+        except ValueError:
+            _send(out, {"id": _id_of(line), "ok": False, "error": "bad_request"})
+            continue
+        if isinstance(req, Retry):
+            return True
+        if isinstance(req, Quit):
+            return False
+        _send(out, {"id": req.id, "ok": False, "error": "bad_request"})
 
 
 def _answer(renderer: Renderer, req: Render) -> dict:

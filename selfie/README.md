@@ -35,8 +35,12 @@ the GPU; the default run deselects both.
 
 `python -m leeroy_selfie worker --data DIR --min-free-gib N` is the night worker, started by the
 mind and never by hand: JSON lines on stdin and stdout, one render at a time, `ready` first
-(`ok: false` with an error when it refuses, for example with too little free VRAM). The end of
-stdin ends it at once, mid-render too. The mind's `[selfies]` table in `mind.toml` turns
+(`ok: false` with an error when it refuses, for example with too little free VRAM). Its start
+checks the models' download records and revisions without hashing them (`doctor` and
+`fetch-models` hash them) and reports `check_ms` and `load_ms`. A VRAM refusal says `retry:
+true` and keeps the pipeline loaded on the CPU: the mind makes room and sends `{"id": "ready",
+"op": "retry"}`, and the worker checks the free VRAM again (waiting up to 10 s for an unload to
+free it) without loading anything twice. The end of stdin ends it at once, mid-render too. The mind's `[selfies]` table in `mind.toml` turns
 rendering on (off by default) and sets the classifier limit, steps, guidance, size and the
 VRAM floor; the mind's stages, GPU rules and file layout are in `../CLAUDE.md`.
 

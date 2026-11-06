@@ -432,6 +432,26 @@ def test_a_worker_refused_for_vram_makes_room_and_is_started_once_more(h, tmp_pa
     assert ctx.failures == {STAGE: 1} and "selfies_unavailable: night=2026-10-29 reason=vram" in caplog.text
 
 
+@pytest.mark.parametrize("refusals", [1, 2])
+def test_a_vram_retry_keeps_the_loaded_worker_and_is_tried_once(h, tmp_path, caplog, refusals):
+    # final review I2: the retry after make_room asks the same worker, its pipeline on the CPU,
+    # so it reaches the GPU within seconds of the unload instead of loading ~7 GB again
+    renderable_cast(h.store, 101)
+    admin = FakeAdmin([h.EMB, h.LIVE]); ctx = h.ctx(admin=admin)
+    starts = tmp_path / "starts.log"
+    worker = fake_worker(tmp_path, FAKE_SELFIE_VRAM=str(refusals), FAKE_SELFIE_STARTS=str(starts))
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        run(make_stage(SELFIE_CFG, worker=worker)(ctx))
+    notes = starts.read_text().splitlines()
+    assert [n.split()[0] for n in notes] == ["spawn", "retry"]       # one load, one retry
+    assert admin.calls == [("unload", h.LIVE)]
+    if refusals == 1:
+        assert not ctx.failures and ready_set(h.store, 101, 1)
+    else:
+        assert ctx.failures == {STAGE: 1} and queued(h) == [(101, 1)]
+        assert "selfies_unavailable: night=2026-10-29 reason=vram" in caplog.text
+
+
 def test_a_stop_during_the_start_is_his_login_not_an_unavailable_worker(h, tmp_path, caplog):
     renderable_cast(h.store, 101)
     ctx = h.ctx()

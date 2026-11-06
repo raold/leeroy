@@ -91,6 +91,73 @@ def test_a_ready_refusal_is_its_reason(tmp_path):
     assert not pid_alive(json.loads(pids.read_text())["pid"])
 
 
+def test_a_vram_refusal_keeps_the_worker_loaded_and_the_next_start_retries_it(tmp_path):
+    # final review I2: the pipeline stays on the CPU, so a retry after make_room is seconds,
+    # not another load of ~7 GB
+    pids, starts = tmp_path / "pids.json", tmp_path / "starts.log"
+    cmd, env = fake_command(tmp_path, FAKE_SELFIE_VRAM="2", FAKE_SELFIE_PIDS=str(pids),
+                            FAKE_SELFIE_STARTS=str(starts))
+
+    async def go():
+        w = SelfieWorker(cmd, env=env)
+        try:
+            with pytest.raises(WorkerError, match="^vram$"):
+                await w.start()
+            pid = json.loads(pids.read_text())["pid"]
+            waiting = (w.running, pid_alive(pid))
+            with pytest.raises(WorkerError, match="^vram$"):
+                await w.start()                     # retried, refused again: still waiting
+            ready = await w.start()
+            got = await w.render(request(tmp_path))
+            return waiting, ready, got.flagged, pid
+        finally:
+            await w.stop()
+    waiting, ready, flagged, pid = run(go())
+    assert waiting == (False, True) and ready.device == "cuda" and flagged is False
+    assert starts.read_text().splitlines() == [f"spawn {pid}", "retry", "retry"]
+    assert not pid_alive(pid)
+
+
+def test_a_stop_ends_a_worker_waiting_for_its_retry_and_the_next_start_spawns(tmp_path):
+    starts = tmp_path / "starts.log"
+    cmd, env = fake_command(tmp_path, FAKE_SELFIE_VRAM="1", FAKE_SELFIE_STARTS=str(starts))
+
+    async def go():
+        w = SelfieWorker(cmd, env=env)
+        with pytest.raises(WorkerError, match="^vram$"):
+            await w.start()
+        await w.stop()
+        try:
+            with pytest.raises(WorkerError, match="^vram$"):
+                await w.start()                     # a fresh worker, refused at its own check
+        finally:
+            await w.stop()
+    run(go())
+    assert [x.split()[0] for x in starts.read_text().splitlines()] == ["spawn", "spawn"]
+
+
+def test_each_start_logs_its_timings_and_nothing_else(tmp_path, caplog):
+    cmd, env = fake_command(tmp_path, FAKE_SELFIE_VRAM="1")
+
+    async def go():
+        w = SelfieWorker(cmd, env=env)
+        try:
+            with pytest.raises(WorkerError):
+                await w.start()
+            await w.start()
+        finally:
+            await w.stop()
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        run(go())
+    got = [r.leeroy_fields for r in caplog.records
+           if getattr(r, "leeroy_event", None) == "selfies_worker_start"]
+    assert [{k: v for k, v in g.items() if k != "ms"} for g in got] == [
+        {"ok": False, "reason": "vram", "retried": False, "check_ms": 12, "load_ms": 345,
+         "free_gib": 9.5},
+        {"ok": True, "reason": "", "retried": True, "check_ms": 0, "load_ms": 0, "free_gib": 20.0}]
+    assert all(type(g["ms"]) is int and g["ms"] >= 0 for g in got)
+
+
 def test_a_worker_that_dies_mid_request_is_gone(tmp_path):
     pids = tmp_path / "pids.json"
     cmd, env = fake_command(tmp_path, FAKE_SELFIE_DIE="1", FAKE_SELFIE_PIDS=str(pids))

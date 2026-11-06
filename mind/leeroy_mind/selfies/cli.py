@@ -23,7 +23,7 @@ from .config import load_selfie_config, worker_command, worker_env
 from .kind import STAGE as KIND_STAGE
 from .kind import _saver, kind_one
 from .prompt import build_prompt, renderable
-from .stage import STAGE, render_candidates
+from .stage import STAGE, render_candidates, start_worker
 from .worker import SelfieWorker, WorkerError, to_the_end
 
 DEFAULT_LIMIT = 2
@@ -146,7 +146,7 @@ async def _try(root, store, cfg, scfg, clock, args, make_llm) -> int:
         if ready:
             try:
                 await ctx.arbiter.make_room()
-                await worker.worker.start()
+                await start_worker(worker.worker, ctx.arbiter.make_room)
                 for guid in ready:
                     folder = out_root / str(guid)
                     folder.mkdir(parents=True, exist_ok=True)

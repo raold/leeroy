@@ -15,7 +15,8 @@ Each slot tries up to TRIES seeds, the night's own (seed_for), so a resumed nigh
 same images. A flagged image is never written and the next seed is tried; a slot flagged TRIES
 times refuses the set (SetRefused), that unit's failure only. An oom answer (mod-ollama-chat
 loaded Orion meanwhile) makes room and repeats that attempt once; a worker that refuses to load
-for want of VRAM is started once more after making room. CONTENDED worker failures in a row end
+for want of VRAM is asked once more after making room (start_worker), keeping the pipeline it
+loaded on the CPU, so that check comes within seconds of the unload. CONTENDED worker failures in a row end
 the stage for the night, keeping the sets it finished; a make_room that fails (Ollama down or
 hung) counts as one (RoomFailed), and a worker that died is started again once. No render is
 sent while a live lease is held: that, or a lease refusing make_room (LiveLeaseHeld), ends the
@@ -195,17 +196,24 @@ def _unavailable(ctx: "NightContext", err: BaseException, reason: str) -> None:
     log("selfies_unavailable", level=logging.WARNING, night=ctx.night, reason=reason)
 
 
-async def _start(ctx: "NightContext", worker: SelfieWorker) -> bool:
-    """The worker started and ready. A refusal for VRAM makes room and starts it once more. A
-    stop that arrived meanwhile is his login, not a broken worker: logged as such, no failure."""
+async def start_worker(worker: SelfieWorker, make_room: Callable[[], Awaitable[None]]) -> None:
+    """worker.start(); a refusal for VRAM (a chat model loaded since the room was made) makes
+    room and asks once more. The worker keeps what it loaded on the CPU and waits for that
+    retry, so the VRAM check comes within seconds of the unload. Raises what either raises."""
     try:
-        try:
-            await worker.start()
-        except WorkerError as e:
-            if e.reason != "vram":
-                raise
-            await ctx.arbiter.make_room()  # a chat model loaded since the runner made room
-            await worker.start()
+        await worker.start()
+    except WorkerError as e:
+        if e.reason != "vram":
+            raise
+        await make_room()
+        await worker.start()
+
+
+async def _start(ctx: "NightContext", worker: SelfieWorker) -> bool:
+    """The worker started and ready (start_worker). A stop that arrived meanwhile is his login,
+    not a broken worker: logged as such, no failure."""
+    try:
+        await start_worker(worker, ctx.arbiter.make_room)
     except LiveLeaseHeld:
         raise
     except WorkerError as e:

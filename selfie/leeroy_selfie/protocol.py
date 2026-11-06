@@ -41,6 +41,13 @@ class Quit:
     id: str
 
 
+@dataclass(frozen=True)
+class Retry:
+    """After a ready refusal that says `retry: true` (vram, the pipeline still on the CPU): try
+    the GPU again. Any other time it is a bad request."""
+    id: str
+
+
 def _encodable(v) -> None:
     """Every string in the request must be UTF-8 encodable (JSON allows a lone surrogate)."""
     if isinstance(v, str):
@@ -92,9 +99,9 @@ def _jpg(d: dict, key: str) -> str:
     return v
 
 
-def parse(line: bytes) -> Render | Quit:
-    """A request line as a Render or a Quit; ValueError for anything else (a line too long,
-    not JSON, an unknown or missing key, a wrong type or range), IdentityUnavailable
+def parse(line: bytes) -> Render | Quit | Retry:
+    """A request line as a Render, a Quit or a Retry; ValueError for anything else (a line too
+    long, not JSON, an unknown or missing key, a wrong type or range), IdentityUnavailable
     (a ValueError) for the reserved `identity` key."""
     if len(line) > MAX_LINE:
         raise ValueError("line too long")
@@ -110,10 +117,10 @@ def parse(line: bytes) -> Render | Quit:
     rid = d.get("id")
     if type(rid) is not str or not 1 <= len(rid) <= 32:
         raise ValueError("id is not 1-32 characters")
-    if d.get("op") == "quit":
+    if d.get("op") in ("quit", "retry"):
         if set(d) != {"id", "op"}:
-            raise ValueError("quit takes only id and op")
-        return Quit(rid)
+            raise ValueError(f"{d['op']} takes only id and op")
+        return Quit(rid) if d["op"] == "quit" else Retry(rid)
     if d.get("op") != "render":
         raise ValueError("unknown op")
     if set(d) != RENDER_KEYS:

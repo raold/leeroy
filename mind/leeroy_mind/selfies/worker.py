@@ -5,8 +5,12 @@ images itself.
 
 A start or render that times out, a closed stdout, a line longer than the protocol allows or an
 answer that is not for the request stops the whole process tree and raises WorkerError
-("timeout" or "gone"); an answer with ok false raises WorkerError(<its error>) and leaves the
-worker running. Cancelling a start or render kills the tree at once (its answer could no
+("timeout" or "gone"); a render answer with ok false raises WorkerError(<its error>) and leaves
+the worker running. A ready refusal ends the tree, except one that says `retry: true` (vram,
+with the pipeline loaded on the CPU): that worker stays up, and the next start() sends it the
+retry line instead of starting another, so a retry after make_room loads nothing again. Each
+start logs selfies_worker_start with its outcome and timings (the worker's check_ms and
+load_ms, the free_gib it read, and ms: from the spawn or the retry to the answer). Cancelling a start or render kills the tree at once (its answer could no
 longer be matched); stop() then waits for it to be gone. A tree being ended is ended to the
 end, a cancel meanwhile included (to_the_end), and stays the current one until it is gone, so
 no stop() can miss it. Logs carry reasons, counts and timings, never a prompt."""
@@ -31,6 +35,8 @@ GRACE_S = 0.5  # after quit and the end of stdin, before the kill
 MAX_LINE = 65536  # the protocol's longest line
 POLL_S = 0.02
 QUIT = b'{"id": "quit", "op": "quit"}\n'
+RETRY = b'{"id": "ready", "op": "retry"}\n'
+_NUMBERS = ("check_ms", "load_ms", "free_gib")  # what a start's log takes from its answer
 
 
 @dataclass(frozen=True)
@@ -99,6 +105,14 @@ def _quietly(action) -> None:
         action()
 
 
+def _logged_start(answer: dict, began: float, retried: bool) -> None:
+    numbers = {k: v for k in _NUMBERS
+               if type(v := answer.get(k)) in (int, float) and v == v and abs(v) < 1e9}
+    log("selfies_worker_start", ok=answer["ok"], reason="" if answer["ok"] else _reason(answer),
+        retried=retried, ms=max(0, round((asyncio.get_running_loop().time() - began) * 1000)),
+        **numbers)
+
+
 async def to_the_end(aw):
     """`aw`'s result, awaited as a task of its own through a shield until it is done, however
     often the caller is cancelled meanwhile; then the caller's cancel goes on. A killed tree has
@@ -132,6 +146,7 @@ class SelfieWorker:
         self._sequence = 0
         self._stopping = asyncio.Lock()  # held while a tree is ended, and while one is spawned
         self._stops = 0  # stop() calls so far: a start under way sees one arrive
+        self._waiting = False  # the current tree refused for VRAM and waits for a retry
 
     @property
     def running(self) -> bool:
@@ -142,25 +157,37 @@ class SelfieWorker:
         """Until the worker is ready. WorkerError: its own refusal (cuda, vram, model, ...),
         timeout, gone, spawn, or stopped (stop() was called meanwhile: the worker it was
         starting is ended before that stop() returns); OSError when the program cannot be
-        started."""
+        started. After a vram refusal the worker can retry, it is kept, and this asks it to try
+        the GPU again rather than starting another."""
         stops = self._stops
         async with self._stopping:  # a stop() arriving now waits for the tree to exist
             self._ready = False
-            await to_the_end(self._end_locked(self._tree))
+            tree = self._tree
+            retried = self._waiting and tree is not None and tree.process.returncode is None
+            self._waiting = False
+            if not retried:
+                await to_the_end(self._end_locked(tree))
             if self._stops != stops:
                 raise WorkerError("stopped")
-            tree = await ProcessTree.spawn(self._command, env=self._env, limit=MAX_LINE)
-            if self._stops != stops:
-                await to_the_end(_end(tree))
-                raise WorkerError("stopped")
-            self._tree = tree
+            if not retried:
+                tree = await ProcessTree.spawn(self._command, env=self._env, limit=MAX_LINE)
+                if self._stops != stops:
+                    await to_the_end(_end(tree))
+                    raise WorkerError("stopped")
+                self._tree = tree
+        began = asyncio.get_running_loop().time()
         try:
-            answer = await self._answer(tree, "ready", self._start_s)
+            answer = await self._answer(tree, "ready", self._start_s, RETRY if retried else None)
         except WorkerError:
             if self._stops != stops:  # the stop ended it: say so, not "gone"
                 raise WorkerError("stopped") from None
             raise
+        _logged_start(answer, began, retried)
         if not answer["ok"]:
+            if (answer.get("retry") is True and _reason(answer) == "vram"
+                    and self._stops == stops and self._tree is tree):
+                self._waiting = True  # up, its pipeline on the CPU: the next start retries it
+                raise WorkerError("vram")
             await self._end_failed(tree)
             raise WorkerError(_reason(answer))
         try:
@@ -248,6 +275,7 @@ class SelfieWorker:
         if tree is None or self._tree is not tree:
             return
         self._ready = False
+        self._waiting = False
         await _end(tree)
         if self._tree is tree:
             self._tree = None

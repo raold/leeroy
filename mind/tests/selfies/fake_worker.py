@@ -3,6 +3,10 @@ the same JSON lines without torch or a model. Run as a script under `python -I`,
 only the standard library. Its behaviour comes from the environment:
 
 FAKE_SELFIE_READY_ERROR  refuse ready with this error and exit 1
+FAKE_SELFIE_VRAM         how many ready answers refuse for vram with retry true; each waits for
+                         the mind's retry line (the real worker keeps its pipeline on the CPU)
+FAKE_SELFIE_STARTS       a file it appends "spawn <pid>" to when it starts and "retry" to for
+                         each retry line
 FAKE_SELFIE_FLAG_SEEDS   a comma list of seeds whose renders come back flagged (nothing written)
 FAKE_SELFIE_OOM          how many renders answer `oom` before the rest succeed
 FAKE_SELFIE_HANG         renders never answer
@@ -37,7 +41,9 @@ JPEG = bytes.fromhex(  # an 8 x 8 JPEG, the smallest file every decoder reads
     "c7c8c9cad2d3d4d5d6d7d8d9dae2e3e4e5e6e7e8e9eaf2f3f4f5f6f7f8f9faffda000c03010002110311003f"
     "00dda28a2bcc3d93ffd9")
 READY = {"id": "ready", "ok": True, "device": "cuda", "free_gib": 20.0,
-         "versions": {"fake": "1"}, "error": ""}
+         "versions": {"fake": "1"}, "error": "", "check_ms": 12, "load_ms": 345}
+VRAM = {"id": "ready", "ok": False, "error": "vram", "retry": True, "check_ms": 12,
+        "load_ms": 345, "free_gib": 9.5}
 
 
 def _send(obj: dict) -> None:
@@ -66,8 +72,15 @@ def _reader(lines: queue.Queue) -> None:
     os._exit(0)
 
 
+def _note(text: str) -> None:
+    if os.environ.get("FAKE_SELFIE_STARTS"):
+        with open(os.environ["FAKE_SELFIE_STARTS"], "a", encoding="utf-8") as f:
+            f.write(text + "\n")
+
+
 def main() -> None:
     env = os.environ
+    _note(f"spawn {os.getpid()}")
     child = _child() if env.get("FAKE_SELFIE_CHILD") else None
     if env.get("FAKE_SELFIE_PIDS"):
         _write(env["FAKE_SELFIE_PIDS"], json.dumps({"pid": os.getpid(), "child": child}).encode())
@@ -76,7 +89,14 @@ def main() -> None:
         os._exit(1)
     lines: queue.Queue = queue.Queue()
     threading.Thread(target=_reader, args=(lines,), daemon=True).start()
-    _send(READY)
+    for _ in range(int(env.get("FAKE_SELFIE_VRAM") or 0)):
+        _send(VRAM)
+        req = json.loads(lines.get())
+        if req.get("op") != "retry":
+            os._exit(1)
+        _note("retry")
+    _send(READY if env.get("FAKE_SELFIE_VRAM") is None else
+          {**READY, "check_ms": 0, "load_ms": 0})
     flagged = {int(s) for s in env.get("FAKE_SELFIE_FLAG_SEEDS", "").split(",") if s.strip()}
     oom = int(env.get("FAKE_SELFIE_OOM") or 0)
     while True:
