@@ -9,8 +9,16 @@
 #include <string>
 #include <nlohmann/json.hpp>
 
+class Player;
+
 // World thread; returns the reply line (a pong, a cast or an ack).
 std::string LeeroyExecuteCommand(Leeroy::Command const& cmd);
+
+// World thread. Queues CMSG_MESSAGECHAT on the human's own session, which handles it on its next update as a line he
+// typed, in his original team's language. text (and toName, for a whisper) go as given: the caller has sanitized and
+// checked them. false, sending nothing, for a channel without a chat type (raid warning, emote). Used by human_say
+// and owner_say.
+bool LeeroyQueueHumanChat(Player* human, Leeroy::Channel channel, std::string const& text, std::string const& toName);
 
 // Extension commands (P1d registers its nine here). The bridge has already checked v, id and type; the handler gets
 // the whole message, checks its own fields, runs on the world thread and returns the ack's result.

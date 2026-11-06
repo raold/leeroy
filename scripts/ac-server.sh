@@ -8,14 +8,31 @@
 # (Ra.Enable = 0, SOAP.Enabled = 0), so nothing can ask it to shut down from a
 # script. "stop" therefore terminates it.
 #
-# The only clean shutdown is to type this into the worldserver console window:
+# The only clean shutdown is to type this into the worldserver console (its tab):
 #     server shutdown 30
 # which saves players, then closes. Do that first if characters are online.
 # Setting SOAP.Enabled = 1 would let this script do it properly.
+#
+# "start" opens each server in a new tab of the most recently used Windows
+# Terminal window (a new window if none is open). Without Windows Terminal, or
+# with AC_SERVER_WINDOW=1, each gets its own console window as before.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 running() { tasklist //FI "IMAGENAME eq $1" 2>/dev/null | grep -qi "$1"; }
+
+# The server runs under cmd so that a stopped one (taskkill exits it nonzero) still
+# closes its tab: cmd itself exits 0 afterwards.
+launch() {
+    local p="$1" wt
+    wt=$(command -v wt.exe || true)
+    if [ -n "$wt" ] && [ "${AC_SERVER_WINDOW:-0}" != 1 ]; then
+        "$wt" -w 0 new-tab --title "$p" --suppressApplicationTitle -d "$(cygpath -w "$AC_BIN")" \
+            cmd //c "$p.exe & exit 0"
+    else
+        ( cd "$AC_BIN" && cmd //c start "$p" "$p.exe" )
+    fi
+}
 
 mind() {
     local action="$1" python="$AC_ROOT/mind/.venv/Scripts/python.exe"
@@ -46,7 +63,7 @@ start)
             warn "$p already running"
         else
             log "starting $p"
-            ( cd "$AC_BIN" && cmd //c start "$p" "$p.exe" )
+            launch "$p"
         fi
     done
     for _ in 1 2 3 4 5 6 7 8 9 10; do

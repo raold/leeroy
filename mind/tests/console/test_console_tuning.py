@@ -15,7 +15,7 @@ from leeroy_mind.console.mindlink import LinkError
 from leeroy_mind.personas.io import load_persona, save_persona
 from leeroy_mind.protocol import Member
 from leeroy_mind.tuning import changes as C
-from console.rig import events, http, make_app, running
+from console.rig import events, http, make_app, page_source, running
 
 
 class FakeLink:
@@ -216,8 +216,7 @@ def test_a_preview_goes_only_to_the_page_that_asked(cast, data, caplog):
 
 
 def test_the_page_has_the_tuning_and_its_only_write_is_the_tune_route():
-    from importlib import resources
-    page = resources.files("leeroy_mind.console").joinpath("page.html").read_text("utf-8")
+    page = page_source()
     assert 'id="p-tuning"' in page and 'api("/api/tuning")' in page
     assert 'post("/api/tune"' in page and 'post("/api/persona' not in page
     assert 'post("/api/selfies' not in page  # the photo pick's one write is post("/api/selfie"

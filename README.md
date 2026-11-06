@@ -31,7 +31,7 @@ trained, on a separate server.
 
 | Path | What |
 |---|---|
-| `scripts/` | Update, backup, build, start/stop, voice and snapshot scripts (Git Bash on Windows) |
+| `scripts/` | Update, backup, build, start/stop, voice and snapshot scripts (Git Bash on Windows), and `scripts/dojo/` (PowerShell, for the dojo's isolated build) |
 | `config/` | Snapshots of the live server and module configs, secrets masked |
 | `patches/mod-playerbots/` | Local playerbots commits, as `git format-patch` output |
 | `patches/mod-ollama-chat/` | Local mod-ollama-chat commits, same format |
@@ -84,7 +84,10 @@ member say what they could not know.
   documentation snapshots and the server's installed command and teleport
   references, with text and vector search.
 - **Guild console**: `python -m leeroy_mind console` serves one local browser
-  window on `127.0.0.1:7881`: the voice rooms and the guild's chat in one feed,
+  window on `127.0.0.1:7881` (dark by default, with a remembered light/dark
+  switch; 13 tabs): Comms, the voice rooms and the guild's chat in one feed
+  with the members' faces, channels, whispers, mute and deafen, and a reply
+  box that speaks in WoW as the owner,
   the raid night (its call, comp, members, loot and DKP as they happen, recent
   raids, and the raid actions guild life performs: call, form, summon,
   start and stop the dungeon-clear run, end), the guild (roster, DKP ladder,
@@ -116,7 +119,8 @@ Personas, memories, prompts and logs stay in the ignored `mind-data/`. See
   bot revives in place, and skips playerbots' canned status and hello
   whispers. mod-leeroy pins the guild with it.
 - **Speaker filter** (mod-ollama-chat): lets another module keep chosen bots
-  out of the LLM chat, so the guild speaks only through its own mind.
+  out of the LLM chat, so the guild speaks only through its own mind. A queued
+  reply asks the filter again before it is delivered.
 
 Apply them to a checkout of each module with
 `git am /path/to/leeroy/patches/<module>/*.patch`.

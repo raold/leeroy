@@ -83,6 +83,13 @@ std::string HumanRefusal(Player* human)
     return {};
 }
 
+// The instance copy he stands in, for the size fences: none outside an instance.
+GuildAddPlace PlaceOf(Map* map)
+{
+    InstanceMap* instance = map ? map->ToInstanceMap() : nullptr;
+    return instance ? GuildAddPlace{instance->GetMaxPlayers(), instance->IsRaid()} : GuildAddPlace{};
+}
+
 // hisGroup: a member of the group he leads, whom only the add command's other fences can keep out.
 GuildAddBody BodyOf(uint32 guid, Player* bot, Player* human, uint32 guildId, bool hisGroup = false)
 {
@@ -185,8 +192,15 @@ void PublishGuildGroup(std::string reason, Player* human, Group* group,
 
 std::vector<std::string> Fill(Player* human, uint32 size)
 {
-    if (auto why = HumanRefusal(human); !why.empty())
+    std::string why = HumanRefusal(human);
+    // A size his copy cannot hold: refused before his group changes, since the core would turn the rest away.
+    if (why.empty())
+        why = GuildAddSizeRefusal(size, PlaceOf(human->GetMap()));
+    if (!why.empty())
+    {
+        LOG_INFO("module.leeroy", "mod-leeroy: add{} from the guild refused: {}", size, why);
         return {why};
+    }
 
     Group* group = human->GetGroup();
     std::vector<GuildAddMember> connected;
@@ -312,7 +326,11 @@ public:
         Map* map = player->GetMap();
         if (group && group->GetGUID() == builtGroup && group->IsLeader(player->GetGUID()) && map && map->IsDungeon())
         {
-            BringIn(player, group);
+            // A group bigger than this copy is not brought in: the core would send all but the first few home.
+            if (auto why = GuildAddEntryRefusal(group->GetMembersCount(), PlaceOf(map)); !why.empty())
+                ChatHandler(player->GetSession()).PSendSysMessage("{}", why);
+            else
+                BringIn(player, group);
             PublishGuildGroup("entered", player, group, {});
         }
     }

@@ -23,8 +23,8 @@ def parser() -> argparse.ArgumentParser:
                    help="the checkout whose mind and voice venvs it controls and recognises "
                         "(default: this code's checkout)")
     p.add_argument("--no-control", action="store_true",
-                   help="show status only: never start, restart or stop anything, and send "
-                        "no raid action")
+                   help="show status only: never start, restart or stop anything, send no "
+                        "raid action, and turn the reply box off (no line is said in game)")
     p.add_argument("--voice-ui-port", type=int, default=None,
                    help="the voice service's page port (default: what `leeroy_voice where` "
                         f"says, else {VOICE_UI_PORT})")

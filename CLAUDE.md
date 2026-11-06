@@ -28,7 +28,10 @@ not clear an outstanding native or Python journal.
 
 Inspection commands use `python -m leeroy_mind training`: `status`, `report
 --week YYYY-Www`, `gate`, `trials`, `cards`, `lessons --context MAP:BOSS:DIFFICULTY`,
-and `voicecheck --night YYYY-MM-DD`. Read-only inspection does not migrate an old
+`voicecheck --night YYYY-MM-DD`, `spells check` (loads the spell book and lists the
+spell ids behind the boss-mechanic names) and `lab` (stored rotations, the last
+nights' lab summaries and the dummy row count, labelled as a requested-damage
+proxy). Read-only inspection does not migrate an old
 database. With the mind stopped, `rollback --context MAP:BOSS:DIFFICULTY` restores
 the prior stored champion and `stock --context ...` selects stock; the service OS
 lock is held throughout. These card changes leave applied-command cleanup
@@ -76,15 +79,19 @@ Do not build, read configs, or read logs from Q: (or anything left on D:).
 `F:\azerothcore` is **github.com/raold/leeroy** (public, GPL-2.0, branch
 `main`). A whitelist `.gitignore` tracks only what is ours: this file, the
 README, `LICENSE`, `references.bib` (the bibliography), `scripts/`, `config/`,
-`patches/`, `modules/` (mod-leeroy), `mind/` (the mind service), `voice/` (the
-voice service) and `.github/`. The core repo, the
-build tree, the client, boost, DB dumps and the zips stay out, and so do the
-local dev docs (`docs/`, `private/`).
+`patches/`, `modules/` (mod-leeroy, mod-dojo), `mind/` (the mind service), `voice/`
+(the voice service), `dojo/` (the dojo, source only) and `.github/`. The core
+repo, the build tree, the client, boost, DB dumps and the zips stay out, and so
+do the local dev docs (`docs/`, `private/`). `dojo-runtime/` and `dojo-data/`
+beside the install root hold the dojo's environments and recordings and are
+never committed.
 
 The checkout at `F:\azerothcore` itself runs the installed release: a local
 branch (now `codex/live-release-20261102`) whose private history is never
 pushed wholesale. Public changes land on `main` from worktrees under
-`F:\azerothcore\worktrees\`.
+`F:\azerothcore\worktrees\`. GitHub deletes a merged PR's head branch by
+itself (repo setting, 2026-11-06), so do not delete remote branches by hand; the
+local branch and worktree still need `git worktree remove` and `git branch -d`.
 
 - `config/`, `patches/mod-playerbots/` and `patches/mod-ollama-chat/` are snapshots made by
   `scripts/ac-snapshot.sh`. Never edit them by hand; edit the live configs or
@@ -103,10 +110,13 @@ pushed wholesale. Public changes land on `main` from worktrees under
 - Rewriting playerbots commits changes their hashes; update the hashes cited
   below and re-run `ac-snapshot.sh`.
 - CI (`.github/workflows`, see README): `ci` (shellcheck, gitleaks, the
-  mod-leeroy, mind and voice test suites, and a headless mind-voice rehearsal), `patches`
-  (applies the patches to upstream playerbots nightly; failure opens a
-  `patch-drift` issue, which means rebase before the next `ac-update.sh`),
-  `build` (weekly Linux compile, `-Werror`), `release` (on `v*` tags). No
+  mod-leeroy and mod-dojo unit tests, the mind, voice and dojo suites, and a headless
+  mind-voice rehearsal), `patches` (applies the playerbots patches, then the dojo's
+  series on top, and the mod-ollama-chat patches to upstream; nightly and on patch
+  changes; a nightly failure opens a `patch-drift` issue, which means rebase before
+  the next `ac-update.sh`), `build` (Linux compile with clang, `-Werror`, of the
+  patched fork with mod-leeroy and mod-dojo's disabled variant; weekly and on patch
+  or module changes), `release` (on `v*` tags). No
   deploy job and never a self-hosted runner: the repo is public.
 
 ## Build traps that have each cost real time
@@ -226,7 +236,7 @@ Run from `F:\azerothcore\scripts` in Git Bash.
 ```bash
 ./ac-update.sh [--dry-run]   # pull core + git modules (ff-only, local commits rebased); refuses if dirty
 ./ac-backup.sh [label]       # mysqldump all 4 DBs, keeps newest 5
-./ac-build.sh                # preflight + cmake configure + build
+./ac-build.sh [--no-configure | --preflight]   # preflight + cmake configure + build; --preflight stops after the module checks
 ./ac-server.sh start|stop|status # also starts/stops the mind; stdout: mind-data/logs/mind-stdout.log
 ./ac-voice.sh start|stop|status # voice service; reads its data directory and ports from `where`
 ./ac-snapshot.sh             # live configs (masked) + playerbots and ollama-chat patches -> config/, patches/
@@ -288,7 +298,7 @@ Setting `SOAP.Enabled = 1` would let the script do a real graceful shutdown.
 | `mod-dungeon-clear` | jrad7/mod-dungeon-clear | git clone since 2026-10-29 (was a zip of `60f3d98`). **The autonomous tank lead**: `.dc on` (or `dc on` in party chat) inside an instance makes the group's tank bot route boss to boss over the navmesh, pull (Dynamic/Leeroy/Advanced), run scripted events (all 16 WotLK 5-mans), loot, rest and rez. Raids too: trash flow with a readiness quorum, pre-boss muster, wipe recovery; boss fights are left to the playerbots raid strategies. Companion addon: jrad7/mod-dungeon-clear-addon. It hooks playerbots without patching it (appends to the shared context registries). Ships its own `.cmake`; folder name must stay exact. Reads `PlayerbotAIConfig` members directly, so it breaks when playerbots renames them. AGPL-3.0. |
 | `mod-bg-slaveryvalley` | zip (no git) | Custom battleground, map 801 / BG id 31. Server side complete; **client patch still undistributed** — see below. |
 | `mod-ah-bot-plus` | NathanHandley/mod-ah-bot-plus | Auction house bot (git clone since 2026-10-30). Sells under, and buys player auctions as, the ordinary account `ahbot` (auth id 352): characters Fatiggeritch (3502) and Bonqueefa (3503), set in `AuctionHouseBot.GUIDs` (comma list, no spaces). Never use a playerbot character for it, and never enter the world on those characters. Seller and buyer both on; everything else is the `.dist` default (about 150 listings a minute per house, up to 15000 each). GM commands: `.ahbot reload` (re-reads the conf, GUIDs included, no restart), `.ahbot update`, `.ahbot empty`. Loader `Addmod_ah_bot_plusScripts`, so the folder name must stay exact. No SQL. |
-| `mod-leeroy` | this repo, `modules/mod-leeroy` | The guild bridge. `azerothcore-wotlk/modules/mod-leeroy` is a **junction** to `F:\azerothcore\modules\mod-leeroy`: remove it with `rmdir`, never `rm -rf` (that deletes the source through the link). Pins the cast (guild members at 80+, minus `Leeroy.HumanGuid`) via the playerbots pin API, mutes them in mod-ollama-chat, and serves NDJSON on `Leeroy.Bridge.Host`:`Leeroy.Bridge.Port` (`127.0.0.1:7878`, one mind at a time). Keys: `Leeroy.Enable`, `GuildId`, `HumanGuid`, `KeepCast`, `BringCastOnline`, `ExcludeFromOllamaChat`, `Bridge.*`. Start line in `Server.log`: `mod-leeroy: cast N members, pinned N ...`. Smoke test: `python modules/mod-leeroy/tools/bridge_smoke.py --expect-cast N` (0 pass, 1 fail, 2 no server or another mind connected); `--listen S` prints events, `--send` sends raw commands. For the owner it answers `.playerbots bot add5/10/25/40` from his guild (see that patch below). |
+| `mod-leeroy` | this repo, `modules/mod-leeroy` | The guild bridge. `azerothcore-wotlk/modules/mod-leeroy` is a **junction** to `F:\azerothcore\modules\mod-leeroy`: remove it with `rmdir`, never `rm -rf` (that deletes the source through the link). Pins the cast (guild members at 80+, minus `Leeroy.HumanGuid`) via the playerbots pin API, mutes them in mod-ollama-chat, and serves NDJSON on `Leeroy.Bridge.Host`:`Leeroy.Bridge.Port` (`127.0.0.1:7878`, one mind at a time). Keys: `Leeroy.Enable`, `GuildId`, `HumanGuid`, `KeepCast`, `BringCastOnline`, `ExcludeFromOllamaChat`, `Bridge.*`, `CastGuard` (the kick guard), `Realm.*` (see the Realm) and `Telemetry.Enable`/`Training.Enable` (see Training ground). Start line in `Server.log`: `mod-leeroy: cast N members, pinned N ...`. Smoke test: `python modules/mod-leeroy/tools/bridge_smoke.py --expect-cast N` (0 pass, 1 fail, 2 no server or another mind connected); `--listen S` prints events, `--send` sends raw commands. `owner_say` (the console's replies, separate from `human_say`) queues his chat line on his session: guild, officer, party, raid or a whisper to an online cast member; text is sanitized and then refused, not cut, when empty, over 255 UTF-8 bytes or starting with `.` or `!`; at most one line per 1500 ms and 8 per 30 s; he must be in game. For the owner it answers `.playerbots bot add5/10/25/40` from his guild (see that patch below). |
 
 `mod-playerbots`, `mod-ollama-chat`, `mod-dungeon-clear` and `mod-ah-bot-plus` are
 git repos and `mod-leeroy` lives in this one; the rest are zip extractions and
@@ -356,20 +366,27 @@ raid night's `RaidHabits` (plus dungeon-clear's entry when he is inside an
 instance) and are teleported beside him. He is told per role how
 many were added and how many slots stayed empty, with a tally of why the
 others were not free. He must lead his group and be alive, out of combat and
-not travelling. Anyone else, `Leeroy.Enable = 0`, no guild or an empty cast:
+not travelling. Inside an instance, a size bigger than its copy's player cap
+(add10/25/40 in a 5-man, add25/40 in a 10-man raid) is refused before anything
+moves, with one line naming what fits there; refusals log `add<N> from the
+guild refused: <line>`. Anyone else, `Leeroy.Enable = 0`, no guild or an empty cast:
 the command reaches playerbots unchanged. Each fill publishes a `guild_group`
 event (reason `built`). Taking that group onto an instance map grants
 dungeon-clear's entry for it (`GrantRaidEntry`, which writes only what a member
 lacks) to its guild members not yet in his copy, brings them in under the same
 fences (his copy only), and publishes another (`entered`, with map, instance id
-and difficulty). Such a group raids for DKP and attendance like a called raid
-night (see the mind's guild life).
+and difficulty). A group bigger than that copy's cap is not brought in, and he
+is told so: the core checks the cap before a teleport but counts arrivals only
+at the door, so it lets the first few in and sends the rest to their homebinds
+(2026-11-05: 20 members of a 25 bounced to Dalaran from Old Hillsbrad). Such a
+group raids for DKP and attendance like a called raid night (see the mind's
+guild life).
 
 ### Local patch: pinned random bots
 
 Local commit `ecbfeb6b` on `mod-playerbots` `master` ("Let other modules pin
 random bots"). An API on `RandomPlayerbotMgr` that mod-leeroy uses to keep the
-owner's guild of ~106 level-80 random bots permanent and always online. No
+owner's guild of about 110 level-80 random bots permanent and always online. No
 config key: nothing changes until a caller pins something.
 
 - `uint32 SetPinnedBots(std::unordered_set<ObjectGuid::LowType> const& bots, bool keep, bool online)`,
@@ -442,12 +459,17 @@ the need.
 
 ### Local patch: mod-ollama-chat speaker filter
 
-Local commit `072d13d` on `mod-ollama-chat` `main` ("Let other modules keep
-chosen bots silent"). Adds `OllamaDispatch_SetSpeakerFilter(std::function<bool(uint64_t botGuid)>)`
+Local commits `072d13d` ("Let other modules keep chosen bots silent") and
+`80bd8c9` ("Recheck speaker permission before delivering queued replies") on
+`mod-ollama-chat` `main`. The first adds `OllamaDispatch_SetSpeakerFilter(std::function<bool(uint64_t botGuid)>)`
 to `mod-ollama-chat_dispatch.h`; `OllamaDispatch_Submit` copies the filter under
 a mutex, calls it outside the lock and drops the request (returns `false`) when
 it says `false`. Inert until set. mod-leeroy uses it to keep guild cast members
-silent so only their own mind service voices them. `ac-snapshot.sh` now exports
+silent so only their own mind service voices them. The second makes `Deliver`
+ask the filter again before any routing, history or speech, so a reply queued
+before a bot was muted is dropped; the callback now runs on the world delivery
+thread as well as on submitting threads, and always outside the registry mutex.
+`ac-snapshot.sh` now exports
 the local commits of both `mod-playerbots` and `mod-ollama-chat`, and the
 `patches` workflow checks each against its upstream nightly.
 
@@ -608,7 +630,7 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   checkout's own mind venv may control the mind (`--root` names another
   checkout); the voice service's pid must be the base interpreter its own venv
   launcher started. `--no-control` turns start, restart and stop off, and raid
-  actions too. The owner's game state is the running mind's open session; while
+  actions and replies too. The owner's game state is the running mind's open session; while
   the mind or its bridge is down, or the session cannot be read, it is shown as
   unknown, never "not in game". Its Raid and Guild tabs read mind.db read-only
   (raids, attendance, the DKP ledger, loot receipts, the roster, season awards,
@@ -631,6 +653,44 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   while the live model is already loaded, never loads one, and its text is never
   logged or stored. `python -m leeroy_mind tuning --data-dir "$D" status|history`
   reads it; `undo N|revert N` work with the mind stopped.
+  The page is split into `console/static/` (CSS, a classic `theme.js`, ES
+  modules, self-hosted OFL fonts with their licence texts) and is served at
+  `/static/` without the key, like the page, since a browser cannot send a
+  header for `<link>`, `<script src>` or `@font-face`; the CSP is `'self'`
+  with no inline style. Dark is the default whatever the system setting; the
+  light/dark switch is remembered in `localStorage` (`guild-console-theme`,
+  with the folds and read marks, `guild-console-collapsed` and
+  `guild-console-read`). It has 13 tabs: Comms, Raid, Guild, Personas and Mind
+  are real; Social, Board, Calendar, Bank, Realm, Training, Dojo and Library
+  are placeholders that wait for P3. `GET /api/face?guid=<int>&size=sm|md|lg` serves
+  `mind-data/selfies/<guid>/chosen.jpg` (key and Host checked, `image/jpeg`,
+  `private, max-age=60`, 404 when absent; the original for every size, the
+  browser scales it) and never writes under `selfies/`; faces (initials when
+  there is no photo) show in Comms and on the Personas roster. Comms is one
+  feed of typed lines and the room lines he heard (from mind.db: a line
+  appears once it has played to him, a dropped one does not), channels with
+  unread counts (a first open or reload marks history read), the 32-room tree
+  (empty rooms greyed, click to join), whispers and the member card. A voiced
+  whisper is never typed in WoW: one the voice service dropped because he was
+  deafened or had muted that member shows in its thread as text with a "not
+  heard (deafened)" or "not heard (muted)" chip and counts as unread; a whisper
+  dropped for any other reason does not appear. Push-to-talk the voice service
+  recognised but the mind did not match to a line is noted as not sent in a
+  Comms toast (8 s), not in the feed. Reply box: `POST /api/say` {channel,
+  text[, to]} with channel `guild`, `officer`, `group` (the mind sends it to
+  raid when his group is one, else party) or `whisper`, and `to` (a member's
+  guid, online, in the cast, not him) for a whisper only; a line starting with
+  `/` is refused ("Slash commands aren't sent from here.": WoW would post it as
+  words). It needs the key and Origin and the mind's
+  control endpoint, and is off with `--no-control`, with the mind or bridge
+  down (said as such, not as "not in game") and while he is not in game. One
+  line is in flight at a time; the refused text stays in the box. The server
+  answers in words; an older worldserver without `owner_say` reads "The game
+  server needs the rebuild that adds console replies." Mute and deafen are
+  voice-service flags (the page's `self` message; deafen implies mute; both
+  reset at each login): mute stops his push-to-talk, deafen silences the room.
+  After a release they need the voice service restarted: an older voice
+  service ignores `self`.
 - The mind's control endpoint (`leeroy_mind/endpoint.py`) is on by default
   (`[control] enabled = false` turns it off; `[control] port`, default 0, picks
   a free port). It listens on 127.0.0.1 only and writes a new key each start,
@@ -642,7 +702,10 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   (the owner's dials: status, set, undo, revert, group, retire, preview) and `raid`
   (`call`, `form` {raid, size, heroic, lead}, `summon`, `start`, `stop`,
   `end`), which enter guild life's raid night where the owner's chat or its
-  timers would, with the same guards, and are refused while he is not in game.
+  timers would, with the same guards, and are refused while he is not in game,
+  and `say` {channel, text, to} (`owner_say.py`: the shared text rule, one line
+  at a time, sent to the bridge as `owner_say`; logs carry op, channel and
+  outcome, never the text).
   `stop`/`start` of a raid switch dungeon-clear off and on again mid-raid. The
   console sends the key only to the listener the TCP table shows is the running
   mind's own pid; its Stop and Restart use the clean stop (asked up to five
@@ -658,7 +721,7 @@ Trade and General and the gankers' emotes, the race for first kills, canon achie
 the guild bank, the guild calendar, mail to him, the kick guard and the realm's night stage.
 Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
 
-- **Off by default, two switches.** `[realm] enabled = true` in `mind.toml` (read again at each
+- **Off by default, two switches; this install runs it on.** `[realm] enabled = true` in `mind.toml` (read again at each
   hello and login) and native `Leeroy.Realm.Enable = 1` in `mod_leeroy.conf` (`.reload config`;
   while it is 0 native refuses every realm command `realm_off`). Other `[realm]` keys:
   `his_birthday`, `guild_anniversary` (MM-DD, local only), `trial_rank`, `member_cap`,
@@ -760,6 +823,9 @@ artefacts such as crackling; find and fix the cause.
   expressive engine falls back to the member's Kokoro blend; cached expressive
   callouts can still play. GPU admission requires headroom beside the live chat
   and embedding models, and is measured before changing local settings.
+- The browser page can send `{"type": "self", "mute", "deafen"}` (booleans):
+  mute stops push-to-talk, deafen silences the room and implies mute; both
+  reset at each login. The service reports them in its `self` state.
 - Push-to-talk uses Raw Input and does not swallow the key. A tap under the
   configured hold threshold is ignored. WoW and the listener need compatible
   elevation: a non-elevated listener cannot hear an elevated foreground game.
@@ -841,6 +907,23 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
   worker, through two nights and his login. A rehearsal against a copy of the live database
   must use the same fakes and its own free ports, and any console it starts takes
   `--voice-ui-port` of an unused port. The real worker and the GPU are checked at the release.
+
+## The dojo
+
+`dojo/` is an isolated environment for training the bots' combat policies with
+reinforcement learning. It runs its own AzerothCore worldserver, MySQL instance,
+ports and fixture characters, never the live realm, and everything in it stays
+apart from this install. Read `dojo/README.md` before touching it.
+
+- Source here: `dojo/` (Python, `leeroy_dojo`), `modules/mod-dojo` (the native
+  module, built only into the dojo's isolated core; the CI build compiles its
+  disabled variant), `patches/dojo/mod-playerbots/` (the dojo's own playerbots
+  commit, applied on top of the local commits in the dojo's checkout only) and
+  `scripts/dojo/` (PowerShell: build, configure, patches, preflight).
+- Environments and recordings live in `dojo-runtime/` and `dojo-data/` beside the
+  install root and are never committed.
+- Never point the dojo at the live install, database or ports. `scripts/dojo/preflight.ps1`
+  refuses a layout that overlaps them.
 
 ## Outstanding
 

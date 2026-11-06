@@ -420,7 +420,7 @@ def ui_sample_state() -> dict:
 
 class RecordingHooks:
     """UiHooks for tests. state() hands out a copy of `data` (what the test gave, or what it
-    sets later; UiServer fills in what is missing); join, volume and mute are recorded in
+    sets later; UiServer fills in what is missing); join, volume, mute and self_state are recorded in
     `calls` as (name, *arguments) tuples. A hook named in `raises` records its call and then
     raises that exception."""
 
@@ -450,6 +450,10 @@ class RecordingHooks:
     def mute(self, guid: int, on: bool) -> None:
         self.calls.append(("mute", guid, on))
         self._fail("mute")
+
+    def self_state(self, mute: bool, deafen: bool) -> None:
+        self.calls.append(("self", mute, deafen))
+        self._fail("self")
 
 
 class FakePage:

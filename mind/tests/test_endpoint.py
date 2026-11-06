@@ -143,6 +143,20 @@ def test_the_three_ops_in_their_one_strict_form():
         "raid", {"action": "end"})
 
 
+def test_the_say_op_in_its_one_strict_form():
+    assert parse_request(line(v=1, key=KEY, op="say", args={"channel": "guild", "text": " omw "}),
+                         KEY) == ("say", {"channel": "guild", "text": "omw"})
+    assert parse_request(line(v=1, key=KEY, op="say",
+                              args={"channel": "whisper", "text": "hi", "to": 1101}), KEY) == (
+        "say", {"channel": "whisper", "text": "hi", "to": 1101})
+    with pytest.raises(BadRequest, match="say needs args"):
+        parse_request(line(v=1, key=KEY, op="say"), KEY)
+    with pytest.raises(BadRequest, match="^There's nothing to send.$"):  # say_args' own words
+        parse_request(line(v=1, key=KEY, op="say", args={"channel": "guild", "text": "  "}), KEY)
+    with pytest.raises(BadRequest, match="^A whisper takes exactly channel, text and to.$"):
+        parse_request(line(v=1, key=KEY, op="say", args={"channel": "whisper", "text": "hi"}), KEY)
+
+
 @pytest.mark.parametrize("raw, words", [
     (b'{"v":1,"key":"%s","op":"status"}' % KEY.encode(), "bad request"),  # no newline
     (b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n", "not a JSON line"),
@@ -226,12 +240,24 @@ class FakeGuild:
         return f"did {args['action']}"
 
 
+class FakeSpeech:
+    def __init__(self):
+        self.lines, self.gate = [], None
+
+    async def handle(self, args):
+        self.lines.append(args)
+        if self.gate is not None:
+            await self.gate.wait()
+        return {"ok": True, "message": "sent"}
+
+
 class FakeApp:
     def __init__(self, data_dir):
         self.data_dir = data_dir
         self.stopping = False
         self.stops = 0
         self.guild = FakeGuild()
+        self.speech = FakeSpeech()
 
     def request_stop(self):
         self.stops += 1
@@ -403,6 +429,72 @@ def test_a_slow_raid_action_is_answered_in_time_but_never_cancelled(tmp_path):
             assert await ask(ep, "raid", {"action": "end"}) == {"ok": True, "message": "did end"}
             assert [a["action"] for a in app.guild.actions] == ["stop", "end"]
     run(go())
+
+
+def test_a_second_line_while_one_is_sending_is_refused(tmp_path, caplog):
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            app.speech.gate = asyncio.Event()
+            first = asyncio.create_task(ask(ep, "say", {"channel": "guild", "text": "omw"}))
+            for _ in range(500):
+                if app.speech.lines or first.done():
+                    break
+                await asyncio.sleep(0.01)
+            assert app.speech.lines, await first
+            for _ in range(2):  # a double-clicked Send, Enter held down
+                assert await ask(ep, "say", {"channel": "guild", "text": "again"}) == {
+                    "ok": False, "error": "Another line is still being sent."}
+            app.speech.gate.set()
+            assert await first == {"ok": True, "message": "sent"}
+            assert app.speech.lines == [{"channel": "guild", "text": "omw"}]  # never reached it
+            app.speech.gate = None
+            assert await ask(ep, "say", {"channel": "guild", "text": "again"}) == {
+                "ok": True, "message": "sent"}
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        run(go())
+    assert caplog.text.count("control_request: op=say channel=guild outcome=refused") == 2
+    assert caplog.text.count("control_request: op=say channel=guild outcome=ok") == 2
+    assert "omw" not in caplog.text and "again" not in caplog.text
+
+
+def test_a_slow_line_is_answered_in_time_and_holds_the_next_off(tmp_path):
+    assert endpoint.SAY_S == 10.0
+    assert endpoint.SAY_CHANNELS == ("guild", "officer", "group", "whisper")
+
+    async def go():
+        async with served(tmp_path, say_s=0.2) as (app, ep):
+            app.speech.gate = asyncio.Event()
+            assert await ask(ep, "say", {"channel": "guild", "text": "omw"}) == {
+                "ok": False,
+                "error": "The game didn't answer in time. Check WoW before sending it again."}
+            assert await ask(ep, "say", {"channel": "guild", "text": "omw"}) == {
+                "ok": False, "error": "Another line is still being sent."}
+            app.speech.gate.set()  # it was never cancelled: it ends, and lets the next one go
+            await asyncio.sleep(0.05)
+            app.speech.gate = None
+            assert (await ask(ep, "say", {"channel": "guild", "text": "omw"}))["ok"] is True
+            assert len(app.speech.lines) == 2
+            app.stopping = True
+            assert await ask(ep, "say", {"channel": "guild", "text": "omw"}) == {
+                "ok": False, "error": "The mind is stopping."}
+            app.stopping, app.speech = False, None
+            assert await ask(ep, "say", {"channel": "guild", "text": "omw"}) == {
+                "ok": False, "error": "Replies are not running in this mind."}
+    run(go())
+
+
+def test_a_line_that_fails_shows_only_its_class(tmp_path, caplog):
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            async def broken(args):
+                raise RuntimeError("private game text")
+            app.speech.handle = broken
+            assert await ask(ep, "say", {"channel": "guild", "text": "omw"}) == {
+                "ok": False, "error": "The line could not be sent (RuntimeError)."}
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        run(go())
+    assert "private game text" not in caplog.text and "omw" not in caplog.text
+    assert "control_say_failed: error=RuntimeError" in caplog.text
 
 
 def test_a_raid_action_that_fails_shows_only_its_class(tmp_path, caplog):
