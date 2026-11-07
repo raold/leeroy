@@ -4,7 +4,7 @@ import { face } from "./faces.mjs";
 import { forgetMemberShots, pollSelfies, setSelfieNames, showMemberPhoto } from "./selfies.mjs";
 import { S } from "./state.mjs";
 import { registerTab, showTab } from "./tabs.mjs";
-import { CLASSES, moodText, moodTitle, photoKindText, signed, when, youText, youTitle } from "./words.mjs";
+import { CLASSES, moodText, moodTitle, photoKindText, signed, tileState, when, youText, youTitle } from "./words.mjs";
 
 // -- the personas tab: mind.db only, and read-only: nothing here can change a persona -----------
 // (its dials are the tuning's overlay, below; its profile photos are selfies.mjs's)
@@ -134,14 +134,14 @@ function renderWall(v) {
   var members = arr(v.members), missing = arr(v.missing), box = $("p-wall");
   clear(box);
   members.forEach(function (m) {
-    var t = el("button", "tile" + (m.online === false ? " off" : "") + (m.guid === pick ? " sel" : ""));
+    var st = tileState(m), t = el("button", "tile" + (st.off ? " off" : "") + (m.guid === pick ? " sel" : ""));
     t.type = "button";
     t.dataset.guid = String(m.guid);
     t.appendChild(face(m.guid, str(m.name), "wall"));
-    t.appendChild(el("span", "tname", str(m.name) + (m.in_cast ? "" : " (not in the cast)")));
-    t.appendChild(el("span", "tsub", m["class"] ? (CLASSES[m["class"]] || "-") + (m.role ? " · " + m.role : "") : "-"));
+    t.appendChild(el("span", "tname", st.label));
+    t.appendChild(el("span", "tsub", st.sub));
     t.appendChild(el("span", "tsub", missing.indexOf("pad_mood") >= 0 ? "unavailable" : moodText(m.mood)));
-    if (!m.persona) { t.appendChild(el("span", "chip", "no persona")); }
+    if (st.chip) { t.appendChild(el("span", "chip", st.chip)); }
     box.appendChild(t);
   });
   if (!members.length) { box.appendChild(el("p", "why", "The mind has no cast and no personas yet.")); }
