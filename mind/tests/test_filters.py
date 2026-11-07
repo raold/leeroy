@@ -1022,3 +1022,50 @@ def test_flex_for_showing_off_is_a_soft_tell(line):
     "we run a flex spec in 25", "flex hours at work"])
 def test_flexible_the_emote_and_the_games_own_words_are_no_slang(line):
     assert not slang(line)
+
+
+def reasons(text, **kw):
+    return {t.reason for t in find_tells(text, **kw)}
+
+
+def test_a_clause_repeat_the_whole_turn_filter_missed():
+    tells = find_tells("then just get over here. i want you",
+                       recent_moves=[("then just get over here", "summon")], summons_ok=False)
+    assert {t.reason for t in tells} >= {"move repeat: summon", "summons"}
+    assert all(not t.fatal for t in tells if t.reason in ("summons", "move repeat: summon"))
+
+
+def test_summons_ok_keeps_a_planned_summons_and_game_invites_never_tell():
+    assert "summons" not in reasons("get over here", summons_ok=True)
+    assert "summons" in reasons("get over here", summons_ok=False)
+    assert "summons" not in reasons("meet me in dalaran", summons_ok=False)
+
+
+@pytest.mark.parametrize("text", ["come over and join the raid", "get over here and queue with me",
+                                  "come to dalaran, i'm waiting"])
+def test_an_in_game_invite_clause_wins_over_a_summon_clause(text):
+    assert "summons" not in reasons(text, summons_ok=False)
+
+
+def test_to_my_place_is_a_summons():
+    assert "summons" in reasons("come to my place after raid", summons_ok=False)
+
+
+def test_a_declaration_two_turns_back_repeats_but_five_back_does_not():
+    two = [("i want you", "declare"), ("so what about the raid tonight", "plan"),
+           ("how was your day", "question")]
+    five = [("i want you", "declare")] + [(f"line number {i} here ok", "question") for i in range(4)]
+    assert "move repeat: declare" in reasons("honestly i need you", recent_moves=two[:2])
+    assert "move repeat: declare" not in reasons("honestly i need you", recent_moves=five)
+
+
+def test_a_whole_clause_repeat_is_caught_by_jaccard():
+    r = reasons("i am tired of this long day", recent_moves=[("i am so tired of this long day", "x")])
+    assert "move repeat: clause" in r
+
+
+def test_plain_find_tells_has_no_move_or_summons_tell():
+    for text in ("get over here", "come to my place after raid", "i want you. i want you",
+                 "then just get over here", "that was a fine pull tonight"):
+        assert not {r for r in reasons(text) if r.startswith("move repeat") or r == "summons"}
+        assert reasons(text) == reasons(text, recent_moves=(), summons_ok=None)
