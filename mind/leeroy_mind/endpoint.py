@@ -639,12 +639,13 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
 
 
 def world_status(app) -> dict | None:
-    """The game server as the last hello and the world view tell it; None before a hello."""
+    """The game server as the last hello and the world view tell it; None before a hello and
+    while the bridge is down (the world view is then stale: his game state is unknown)."""
     hello = getattr(app, "hello", None)
-    if hello is None:
+    if hello is None or not app.bridge.connected:
         return None
     world = app.world
-    return {"connected": bool(app.bridge.connected), "server": hello.server,
+    return {"connected": True, "server": hello.server,
             "version": hello.version, "hello_at": hello.ts / 1000,
             "cast": len(world.cast_guids()), "cast_online": len(world.online),
             "human_online": bool(world.human_online)}

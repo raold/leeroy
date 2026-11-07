@@ -747,7 +747,7 @@ def test_health_carries_the_game_server(data):
             return (await http(app, "GET", "/api/health")).json()
     h = asyncio.run(go())
     assert h["server"] == {"world": True, "auth": False, "bridge": True, "game": WORLD,
-                           "why": None}
+                           "why": None, "ports": {"world": 8085, "auth": 3724, "bridge": 7878}}
     assert link.calls == ["status"]
 
     async def down():
@@ -756,7 +756,8 @@ def test_health_carries_the_game_server(data):
             return (await http(app, "GET", "/api/health")).json()
     h = asyncio.run(down())
     assert h["server"] == {"world": None, "auth": None, "bridge": None, "game": None,
-                           "why": "The mind is stopped, so the cast count is unknown."}
+                           "why": "The mind is stopped, so the cast count is unknown.",
+                           "ports": {"world": 8085, "auth": 3724, "bridge": 7878}}
 
     async def broken():
         app = make_app(data, mind=running(data), link=WorldLink(error="the endpoint is busy"),

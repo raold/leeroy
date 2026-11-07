@@ -405,6 +405,9 @@ def test_status_carries_the_world(tmp_path):
             assert world == {"connected": True, "server": "Acme", "version": "3.3.5",
                              "hello_at": 1793304000.0, "cast": 5, "cast_online": 3,
                              "human_online": True}
+            app.bridge = SimpleNamespace(connected=False, greeted=False)  # stale view: unknown
+            assert (await ask(ep, "status"))["world"] is None
+            app.bridge = SimpleNamespace(connected=True, greeted=True)
             app.world = SimpleNamespace()  # unreadable: status still answers, world unknown
             reply = await ask(ep, "status")
             assert reply["ok"] is True and reply["world"] is None

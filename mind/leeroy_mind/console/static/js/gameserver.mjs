@@ -9,14 +9,19 @@ function clock(sec) {
 export function serverRows(server) {
   var s = server && typeof server === "object" ? server : {};
   var g = s.game && typeof s.game === "object" ? s.game : null;
-  var hello = g ? g.server + " " + g.version + ", hello at " + clock(g.hello_at) : "unknown";
+  var hello = g && g.connected !== false ? g.server + " " + g.version + ", hello at " + clock(g.hello_at) : "unknown";
+  var p = s.ports && typeof s.ports === "object" ? s.ports : {};
   var players = "unknown";
-  if (g) {
+  if (g && g.connected === false) {
+    players = "unknown (bridge down)";
+  } else if (!g) {
+    players = s.why ? "unknown" : "unknown (no hello from the game yet)";
+  } else {
     players = (g.human_online ? "You're in game" : "You're not in game") + " · " + g.cast_online
       + " of " + g.cast + " cast online";
   }
   return {
-    world: listen(s.world, 8085), auth: listen(s.auth, 3724), bridge: listen(s.bridge, 7878),
+    world: listen(s.world, p.world), auth: listen(s.auth, p.auth), bridge: listen(s.bridge, p.bridge),
     server: hello, players: players, why: typeof s.why === "string" ? s.why : "",
   };
 }

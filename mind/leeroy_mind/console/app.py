@@ -691,7 +691,9 @@ class ConsoleApp:
             f"The mind is {self.view.state}, so the cast count is unknown."
             if self.view.state != "running" else mind["error"])
         health["server"] = {**status.server_view(self._conns, bridge_port=self.s.bridge_port),
-                            "game": game, "why": why}
+                            "game": game, "why": why,
+                            "ports": {"world": status.WORLD_PORT, "auth": status.AUTH_PORT,
+                                      "bridge": self.s.bridge_port}}
         return json_response(200, health)
 
     # -- the mind's control endpoint ---------------------------------------------------------
