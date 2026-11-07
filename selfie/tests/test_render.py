@@ -440,6 +440,17 @@ def test_an_unreadable_reference_answers_missing_ref(tmp_path, monkeypatch):
     assert sorted(p.name for p in tmp_path.iterdir()) == ["bad.jpg"]
 
 
+def test_a_cfg_1_identity_render_passes_embeds_without_the_negative_and_caches_them_apart(
+        tmp_path, fake_renderer, ref):
+    # diffusers turns CFG off at guidance 1.0; CFG embeds there would fold the negative in
+    for cfg, name in ((1.0, "a"), (5.0, "b"), (1.0, "c"), (5.0, "d")):
+        fake_renderer.render(portrait(ref, out=tmp_path / f"{name}.jpg", cfg=cfg))
+    pipe = fake_renderer.pipe
+    assert [kw["do_classifier_free_guidance"] for kw in pipe.embedded] == [False, True]
+    assert [(c["guidance_scale"], c["ip_adapter_image_embeds"]) for c in pipe.calls] == [
+        (1.0, ["embeds-1"]), (5.0, ["embeds-2"]), (1.0, ["embeds-1"]), (5.0, ["embeds-2"])]
+
+
 def test_the_scale_is_set_per_request(tmp_path, fake_renderer, ref):
     fake_renderer.render(portrait(ref, out=tmp_path / "a.jpg", scale=0.6))
     fake_renderer.render(portrait(ref, out=tmp_path / "b.jpg", scale=0.45))

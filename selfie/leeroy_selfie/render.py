@@ -56,7 +56,7 @@ class Renderer:
         self.torch = torch
         self.info = info
         self.identity = identity
-        self._refs: OrderedDict = OrderedDict()  # (ref, st_mtime_ns, crop) -> embeds
+        self._refs: OrderedDict = OrderedDict()  # (ref, st_mtime_ns, crop, cfg) -> embeds
 
     def _count(self, text: str) -> int:
         return max(len(tok(text, add_special_tokens=False).input_ids)
@@ -87,8 +87,8 @@ class Renderer:
         torch.cuda.reset_peak_memory_stats()
         try:  # the reference is encoded inside, so its VRAM counts in peak_gib
             adapter_kw = {}
-            if req.identity is not None:
-                adapter_kw["ip_adapter_image_embeds"] = self._embeds(req.identity)
+            if req.identity is not None:  # diffusers turns CFG off at cfg 1.0 (guidance > 1)
+                adapter_kw["ip_adapter_image_embeds"] = self._embeds(req.identity, req.cfg > 1)
                 self.pipe.set_ip_adapter_scale(req.identity.scale)
             generator = torch.Generator("cuda").manual_seed(req.seed)
             image = self.pipe(prompt=prompt, negative_prompt=negative,
@@ -110,12 +110,14 @@ class Renderer:
                 "peak_gib": round(torch.cuda.max_memory_allocated() / 2**30, 2),
                 "width": width, "height": height}
 
-    def _embeds(self, identity: Identity):
-        """The adapter's embeds of the reference's crop, computed once per file version and
-        crop (the newest REF_CACHE kept). Gradients stay off, so a cached entry holds no
+    def _embeds(self, identity: Identity, cfg: bool):
+        """The adapter's embeds of the reference's crop, computed once per file version, crop
+        and `cfg` (the newest REF_CACHE kept). `cfg` must be the pipeline's own choice: CFG
+        embeds hold the negative too, and with CFG off diffusers folds that second half into
+        the face's tokens without an error. Gradients stay off, so a cached entry holds no
         encoder activations."""
         try:
-            key = (identity.ref, os.stat(identity.ref).st_mtime_ns, identity.crop)
+            key = (identity.ref, os.stat(identity.ref).st_mtime_ns, identity.crop, cfg)
         except OSError as e:
             raise RenderFailed("missing_ref") from e
         if key in self._refs:
@@ -129,7 +131,7 @@ class Renderer:
         with self.torch.no_grad():
             embeds = self.pipe.prepare_ip_adapter_image_embeds(
                 ip_adapter_image=crop, ip_adapter_image_embeds=None, device="cuda",
-                num_images_per_prompt=1, do_classifier_free_guidance=True)
+                num_images_per_prompt=1, do_classifier_free_guidance=cfg)
         self._refs[key] = embeds
         while len(self._refs) > REF_CACHE:
             self._refs.popitem(last=False)
