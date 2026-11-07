@@ -38,6 +38,7 @@ from leeroy_mind.llm.client import LLMError
 from leeroy_mind.llm.presets import LIVE, LIVE_BIT
 from leeroy_mind.llm.scheduler import Expired, LLMScheduler, Priority, SchedulerError
 from leeroy_mind.memory.recall import Recall, whisper_ok
+from leeroy_mind.nightly.settings import night_bounds
 from leeroy_mind.personas.card import card_race_class, render_prompt_card
 from leeroy_mind.personas.io import PersonaCache
 from leeroy_mind.personas.schema import Persona
@@ -53,6 +54,8 @@ from leeroy_mind.talk.filters import (Tell, aimed_off_him, find_tells, flirty, i
 from leeroy_mind.talk.guards import Guards
 from leeroy_mind.talk.facts import LibraryFacts
 from leeroy_mind.talk.items import defuse, fold
+from leeroy_mind.talk.movelog import MoveLog, MoveRow, PairNotes
+from leeroy_mind.talk.moves import MOVE_PHRASES, moves_line
 from leeroy_mind.talk.prompt import (PromptParts, chat_line_text, comms_rules, facts_head,
                                      knows_real_name, mood_line, quest_help, real_name_line,
                                      redact_for, relationship_card, render_instruction,
@@ -121,10 +124,18 @@ SLANG_HINT = "Say it the way people typed in 2009."
 # whispers get their answer. A second silence stands. At the explicit band a line or two
 # (fix round 1, review M5).
 SILENT_WHISPER_HINT = "Answer {human}'s whisper in {length}, in your own voice."
+# A move she just made with this person, made again (filters.move_repeat: "move repeat:
+# <move>"; "clause", her final clause again, takes REPEAT_HINT): the phrase carries the
+# pronoun (moves.MOVE_PHRASES). A summons out of the game (filters "summons").
+MOVE_REPEAT = "move repeat: "
+MOVE_HINT = "You just {move}: say something new instead."
+SUMMONS_HINT = ("You two only talk through the game: don't ask {them} over or say you're "
+                "waiting; answer what {they} said.")
 _HINTED = frozenset({"echo", "repeat", "near repeat", "long", "member flirt", "sample",
-                     "history", "copy", "slang"})
-# Soft tells a retry may not keep: a claim of shared history still there is dropped.
-DROP_ON_RETRY = frozenset({"history"})
+                     "history", "copy", "slang", "summons"})
+# Soft tells a retry may not keep: a claim of shared history still there is dropped, and so is
+# a summons.
+DROP_ON_RETRY = frozenset({"history", "summons"})
 # A reply this far over the words its lines hold is asked again shorter (prompts C1).
 LONG_SLACK = 1.25
 # The second and third answers to his line see the ones before them (prompts I8), and so do
@@ -444,6 +455,9 @@ class Pipeline:
         self._words: dict[int, str] = {}  # a said line's id -> its words before styling
         self._turn_lines: dict[str, int] = {}  # a turn id -> the lines it said
         self._compose_rng = random.Random("compose")  # compose() never draws from self.rng
+        # what each member did with each counterpart, kept in mind.db across restarts
+        self.moves = MoveLog(self.store)
+        self.notes = PairNotes(self.store)
 
     def add_instruction_hook(self, fn: Callable[[Turn, TurnMeta, str], str]) -> None:
         """Extend live, generated instructions immediately before composition."""
@@ -693,6 +707,41 @@ class Pipeline:
                 if whisper_ok(channel, turn.speaker, to, speaker=turn.speaker,
                               turn_channel=turn.channel, to_guid=turn.to_guid)]
 
+    def _counterpart(self, turn: Turn) -> int:
+        """Whom the turn is with: the one a whisper goes to, else the member or him it is
+        addressed to; 0 for a turn to nobody in particular."""
+        return turn.to_guid if turn.channel == "whisper" else turn.addressee or 0
+
+    def _forms_of(self, guid: int) -> tuple[str, str, str]:
+        """The pronouns for `guid`: his own, and "they" for anyone else."""
+        return self.human.forms if guid and guid == self.human.guid else THEY_FORMS
+
+    def _recent_moves(self, turn: Turn) -> list[MoveRow]:
+        """Her last turns to this turn's counterpart that this turn may see (a whisper's only
+        in a whisper between the same two), oldest first; none for a turn to nobody."""
+        other = self._counterpart(turn)
+        if not other:
+            return []
+        return self.moves.recent(turn.speaker, other, turn_channel=turn.channel,
+                                 to_guid=turn.to_guid, now=self.clock.now())
+
+    def _summons_ok(self, turn: Turn) -> bool:
+        """Whether asking him over may stand in her line to him (_generate checks only those):
+        only in a voice room, where the two are together; everywhere else they only talk
+        through the game."""
+        return turn.channel.startswith("voice:")
+
+    def _record_moves(self, turn: Turn, words: str) -> None:
+        """Her said turn's moves (MoveLog), for the next prompts to the same person. A failing
+        write is logged, never with the words, and never raised."""
+        try:
+            self.moves.record(guid=turn.speaker, counterpart=self._counterpart(turn),
+                              channel=turn.channel, to_guid=turn.to_guid, text=words,
+                              ts=self.clock.now())
+        except Exception as e:
+            log.warning("move_record_failed: guid=%d channel=%s reason=%s", turn.speaker,
+                        turn.channel, type(e).__name__)
+
     def _human_in_talk(self, turn: Turn, recent: list[ChatLineRow]) -> bool:
         hg = self.human.guid
         return bool(hg) and (turn.addressee == hg or any(r.from_guid == hg for r in recent[-3:]))
@@ -877,12 +926,18 @@ class Pipeline:
         kept = next((i for i, r in enumerate(recent) if r.id == meta.pushback_line), None
                     ) if meta.pushback_line else None
 
+        # what she already did with this person lately ("Tonight you've already..."): after
+        # the instruction's extra, never cut
+        after = moves_line(self._recent_moves(turn),
+                           night_start=night_bounds(night_of(local), local.tzinfo)[0],
+                           forms=self._forms_of(self._counterpart(turn)))
         instruction = render_instruction(
             turn.kind, addressee=names.get(turn.addressee, "") if turn.addressee else "",
             topic=meta.topic, lead=romance or "",
             extra=" ".join(x for x in (turn.instruction, follow, seen, story, lore, quest,
                                        *ends) if x),
-            forms=human.forms if to_human else THEY_FORMS, tail=tail, long=two, quiet=quiet)
+            forms=human.forms if to_human else THEY_FORMS, after=after, tail=tail, long=two,
+            quiet=quiet)
         parts = PromptParts(
             card=self._card(p), samples=samples,
             rules=comms_rules(human, p, data_dir=self.data_dir), rel_cards=cards,
@@ -1150,8 +1205,9 @@ class Pipeline:
             # line that went out as the turn was cancelled included
             said = lines[:meta.said]
             if said and turn.template is None:
-                self._own_of(turn.speaker).append(
-                    (turn.channel, turn.to_guid, " ".join(s.plain for s in said)))
+                words = " ".join(s.plain for s in said)
+                self._own_of(turn.speaker).append((turn.channel, turn.to_guid, words))
+                self._record_moves(turn, words)
         if sent:  # a cancelled turn's follow-ups never start: a fight began or the session ends
             await self._send_emotes(turn, meta, emotes)
             self._after_sent(turn, meta, p, " ".join(s.line for s in sent))
@@ -1219,6 +1275,7 @@ class Pipeline:
             self._comms_says("log_line", None, turn, meta, line_id)
         if turn.template is None:
             self._own_of(turn.speaker).append((turn.channel, turn.to_guid, text))
+            self._record_moves(turn, text)
         self._after_sent(turn, meta, p, text)
         return [text]
 
@@ -1406,6 +1463,11 @@ class Pipeline:
             out = _with_hint(c.messages, hint) if hint else c.messages
             return _with_hint(out, SPOKEN_HINT) if spoken else out
         messages, text = asking(), ""
+        # her last moves with this person (filters.find_tells), and in her lines to him only,
+        # whether a summons may stand: a call to the raid or a word to a member is no summons
+        moves = [(r.clause, r.main) for r in self._recent_moves(turn)]
+        hg = self.human.guid
+        summons_ok = self._summons_ok(turn) if hg and self._counterpart(turn) == hg else None
         for attempt in (0, 1):
             if not _scope_valid(meta):
                 return text, "scope_changed"
@@ -1438,7 +1500,8 @@ class Pipeline:
                 tells = find_tells(text, recent_own=self._own_lines(turn), speaker=name,
                                    answers=c.answers, others=c.others, samples=c.samples,
                                    support=c.support, people=list(self._protect()),
-                                   window=c.window, held=c.held, tonight=meta.again_tonight)
+                                   window=c.window, held=c.held, tonight=meta.again_tonight,
+                                   recent_moves=moves, summons_ok=summons_ok)
                 if len(text.split()) > LONG_SLACK * self._word_budget(turn, p, meta.two_lines):
                     tells.append(Tell("long", False, True))
                 if self._flirts_at_a_member(turn, text):
@@ -1504,7 +1567,11 @@ class Pipeline:
 
     def _retry_hint(self, tells: list[Tell], p: Persona, turn: Turn | None = None) -> str:
         reasons = {t.reason for t in tells if t.fatal or t.soft}
-        hints = [REGEN_HINT.format(name=p.character_name)] if reasons - _HINTED else []
+        repeated = {r.removeprefix(MOVE_REPEAT) for r in reasons if r.startswith(MOVE_REPEAT)}
+        unhinted = {r for r in reasons - _HINTED if not r.startswith(MOVE_REPEAT)}
+        hints = [REGEN_HINT.format(name=p.character_name)] if unhinted else []
+        forms = dict(zip(("they", "them", "their"), THEY_FORMS if turn is None
+                         else self._forms_of(self._counterpart(turn))))
         if "member flirt" in reasons:  # a turn of his is told the line is his
             them = self.human.forms[1]
             hints.append(AT_HIM_HINT.format(human=self.human.called, them=them)
@@ -1516,8 +1583,12 @@ class Pipeline:
             hints.append(ECHO_HIM_HINT.format(their=self.human.forms[2]) if his else ECHO_HINT)
         if "copy" in reasons:
             hints.append(COPY_HINT)
-        if reasons & {"repeat", "near repeat"}:
+        if reasons & {"repeat", "near repeat"} or "clause" in repeated:
             hints.append(REPEAT_HINT)
+        for move in sorted(repeated - {"clause"}):
+            hints.append(MOVE_HINT.format(move=MOVE_PHRASES[move].format(**forms)))
+        if "summons" in reasons:
+            hints.append(SUMMONS_HINT.format(**forms))
         if "sample" in reasons:
             hints.append(SAMPLE_HINT)
         if "history" in reasons:

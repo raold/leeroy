@@ -252,11 +252,12 @@ MORE_LINES = "in a line or two, more than your usual one line"
 
 def render_instruction(kind: TurnKind, *, addressee: str = "", topic: str = "",
                        extra: str = "", forms: tuple[str, str, str] = THEY_FORMS,
-                       lead: str = "", tail: str = "", long: bool = False,
+                       lead: str = "", after: str = "", tail: str = "", long: bool = False,
                        quiet: bool = True) -> str:
     """The TurnKind template on one line. `lead` (her romance text) comes before it, so the
     turn's own instruction is what the model reads last (prompts I5); `extra` (a bit, an aside,
     a fact) goes after it, cut to EXTRA_CAP_TOKENS, and a cut is logged without the text.
+    `after` (the "Lately you've..." line) goes after that and is never cut.
     `tail` (the owner's whisper overlay, capped by its own rule) goes after everything, the
     last thing she reads; `long` lets the line run to "a line or two". An opener says "Chat
     has gone quiet." only when `quiet` (rehearsal 2: it said so under lines from just now).
@@ -277,7 +278,7 @@ def render_instruction(kind: TurnKind, *, addressee: str = "", topic: str = "",
     text = tmpl.format(addressee=addressee, topic=topic or _TOPIC.get(kind, "what just happened"),
                        extra=extra, they=they, them=them, their=their,
                        quiet="Chat has gone quiet. " if quiet else "")
-    return " ".join(f"{lead} {text} {tail}".split())
+    return " ".join(f"{lead} {text} {after} {tail}".split())
 
 
 def select_samples(p: Persona, n: int = 5) -> list[str]:
@@ -534,7 +535,7 @@ def render_messages(p: PromptParts) -> list[dict]:
         _section("Right now:", [p.mood]),
         _section("Chat:", p.chat),
         _section(p.facts_head or facts_head("them"), p.facts),
-        _section("Your last lines (don't reuse their wording):", p.own_recent),
+        _section("Your last lines (don't make the same move again):", p.own_recent),
         p.instruction.strip()) if x)
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 

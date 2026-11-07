@@ -150,6 +150,7 @@ def test_scheduler_queue_readiness_and_client_call_use_independent_monotonic_clo
             await busy.wait()
 
         engine = Pipeline()
+        engine.store = None  # the move log's collaborator (_init_pipeline); unused here
         engine.clock = wall
         engine.cfg = SimpleNamespace(models=SimpleNamespace(live="synthetic"))
         engine._init_pipeline(wall.now())
@@ -199,6 +200,7 @@ def test_cancelled_model_wait_keeps_partial_stage(phase):
             return SimpleNamespace(text="synthetic")
 
         engine = Pipeline()
+        engine.store = None  # the move log's collaborator (_init_pipeline); unused here
         engine.clock = wall
         engine.cfg = SimpleNamespace(models=SimpleNamespace(live="synthetic"))
         engine._init_pipeline(wall.now())
@@ -238,6 +240,7 @@ def test_expiry_before_scheduler_closure_records_queue_without_inventing_call():
     async def go():
         wall, timer, events = engine_clock(), Timer(), []
         engine = Pipeline()
+        engine.store = None  # the move log's collaborator (_init_pipeline); unused here
         engine.clock = wall
         engine.cfg = SimpleNamespace(models=SimpleNamespace(live="synthetic"))
         engine._init_pipeline(wall.now())
