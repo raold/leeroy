@@ -1,7 +1,9 @@
 """--key-file: a stable console key the owner bookmarks once. Made when missing (private to
-this user, as control.json is), refused when anyone else may read it or it is not a plain
-file, replaced by `console rotate-key`, and never logged. Without it each start makes its own
-key, as before. Every file here is a scratch one; the keys are fakes or made by the test."""
+this user, as control.json is), by default under %LOCALAPPDATA%, refused when he does not own
+it, anyone else may read it, it is not a plain file or it holds a weak key, replaced by
+`console rotate-key`, and never logged. Without it each start makes its own key, as before.
+Every file here is a scratch one (LOCALAPPDATA is a tmp dir); the keys are fakes or made by the
+test, and the tailnet name is a made-up one."""
 import asyncio
 import logging
 import os
@@ -18,13 +20,27 @@ from leeroy_mind import endpoint
 from leeroy_mind.console import cli, keyfile
 from console.rig import http
 
-FAKE = "fake-console-key-for-tests-only-0123456789"  # 42 URL-safe characters: not a real key
-NAME = "fractal.pug-nessie.ts.net"
+FAKE = "fake-console-key-for-tests-only-0123456789ab"  # 44 URL-safe characters: not a real key
+NAME = "pc.example-tailnet.ts.net"
 KEYISH = re.compile(r"^[A-Za-z0-9_-]{43,}$")
 
 
+def problem(path) -> str | None:
+    """endpoint.private_problem for the file at path, read from the open file as keyfile does."""
+    with open(path, "rb") as f:
+        return endpoint.private_problem(f.fileno())
+
+
 def private(path) -> bool:
-    return endpoint.private_problem(path) is None
+    return problem(path) is None
+
+
+@pytest.fixture(autouse=True)
+def appdata(tmp_path_factory, monkeypatch):
+    """LOCALAPPDATA is a scratch dir of its own: the default key file is never the owner's."""
+    folder = tmp_path_factory.mktemp("appdata")
+    monkeypatch.setenv("LOCALAPPDATA", str(folder))
+    return folder
 
 
 def loosen(path) -> None:
@@ -109,7 +125,7 @@ def test_what_is_not_a_regular_file_is_refused(tmp_path):
 def test_a_file_that_holds_no_key_is_refused_without_showing_it(tmp_path):
     path = tmp_path / "console.key"
     for bad in ("", "\n", "short", FAKE + " extra", "secret value with spaces " + FAKE,
-                "é" * 40, FAKE[:31], "x" * 200):
+                "é" * 40, FAKE[:31], FAKE[:42], "x" * 200):
         endpoint.write_private(path, bad.encode("utf-8"))
         with pytest.raises(keyfile.KeyFileError) as e:
             keyfile.load(path)
@@ -166,9 +182,7 @@ def test_the_rotate_key_command_writes_a_new_key_and_prints_the_bookmarks(tmp_pa
     assert f"  http://127.0.0.1:17881/#key={key}" in out and not any("tailnet" in o for o in out)
 
 
-def test_rotate_key_needs_a_key_file_and_refuses_a_folder(tmp_path, capsys):
-    with pytest.raises(SystemExit):
-        cli.main(["rotate-key"])
+def test_rotate_key_refuses_a_folder(tmp_path, capsys):
     (tmp_path / "dir.key").mkdir()
     assert cli.main(["rotate-key", "--key-file", str(tmp_path / "dir.key")]) == 1
     err = capsys.readouterr().err
@@ -270,7 +284,50 @@ def test_the_key_is_never_logged(data, tmp_path, caplog, capsys):
 def test_the_windows_check_reads_the_access_list(tmp_path):
     path = tmp_path / "console.key"
     write_private(path, FAKE)
-    assert endpoint.private_problem(path) is None
+    assert problem(path) is None
     plain = tmp_path / "plain.key"
     plain.write_text(FAKE, encoding="ascii")  # inherits SYSTEM's and the Administrators' entries
-    assert "others" in endpoint.private_problem(plain)
+    assert "others" in problem(plain)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="the Windows owner")
+def test_a_file_another_user_owns_is_refused(tmp_path, monkeypatch):
+    path = tmp_path / "console.key"
+    write_private(path, FAKE)
+    # As another user would see it: the file's owner (this user) is not the one reading it
+    monkeypatch.setattr(endpoint, "_user_sid", lambda: "S-1-5-18")
+    assert problem(path) == "it belongs to another user"
+    with pytest.raises(keyfile.KeyFileError, match="readable by others .it belongs to another"):
+        keyfile.load(path)
+
+
+def test_the_check_reads_the_open_file_not_its_name(tmp_path, monkeypatch):
+    path = tmp_path / "console.key"
+    write_private(path, FAKE)
+    seen = []
+    real = endpoint.private_problem
+
+    def check(fd):
+        seen.append(fd)
+        assert isinstance(fd, int)
+        return real(fd)
+    monkeypatch.setattr(endpoint, "private_problem", check)
+    assert keyfile.load(path) == FAKE and len(seen) == 1
+
+
+# -- the default location ------------------------------------------------------------------------
+
+def test_the_default_key_file_is_under_localappdata(appdata, capsys):
+    path = keyfile.default_path()
+    assert path == appdata / "leeroy" / "console.key" and path.parent.is_dir()
+    assert cli.main(["rotate-key", "--allow-host", NAME]) == 0
+    key = keyfile.load(path)
+    assert private(path) and f"  tailnet: https://{NAME}/#key={key}" in capsys.readouterr().out
+    assert cli.main(["rotate-key", "--key-file"]) == 0 and keyfile.load(path) != key
+
+
+def test_without_localappdata_a_key_file_must_be_named(monkeypatch, capsys):
+    monkeypatch.delenv("LOCALAPPDATA")
+    with pytest.raises(keyfile.KeyFileError, match="LOCALAPPDATA"):
+        keyfile.default_path()
+    assert cli.main(["rotate-key"]) == 1 and "LOCALAPPDATA" in capsys.readouterr().err

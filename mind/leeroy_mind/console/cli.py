@@ -3,9 +3,9 @@ Ctrl+C. `python -m leeroy_mind console rotate-key --key-file PATH` writes a new 
 
 --allow-host NAME (repeatable, with [console] allow_hosts in mind.toml) also serves the console
 at https://NAME/ through `tailscale serve` on this machine (app.py's gate); the console still
-listens on 127.0.0.1 only. --key-file PATH uses the stable key in PATH (keyfile.py) instead of
-a new one at each start. The key is printed in the start line's URLs (and rotate-key's) and
-nowhere else."""
+listens on 127.0.0.1 only. --key-file [PATH] uses the stable key in PATH (keyfile.py; by default
+%LOCALAPPDATA%\\leeroy\\console.key) instead of a new one at each start. The key is printed in
+the start line's URLs (and rotate-key's) and nowhere else."""
 import argparse
 import asyncio
 import os
@@ -34,16 +34,18 @@ def host_name(value) -> str | None:
     return name
 
 
-def _absolute(path: Path) -> Path:
-    """path made absolute without following a link, so the key file's own checks see it."""
-    return Path(os.path.abspath(path))
+def key_path(value: str) -> Path:
+    """--key-file's file: the default for no value, else the path made absolute without
+    following a link, so the key file's own checks see it. KeyFileError for no default."""
+    from .keyfile import default_path
+    return default_path() if value == "" else Path(os.path.abspath(value))
 
 
 def _allow_host(value: str) -> str:
     name = host_name(value)
     if name is None:
         raise argparse.ArgumentTypeError(
-            f"{value!r} is not a host name (a tailnet name such as fractal.example.ts.net, "
+            f"{value!r} is not a host name (a tailnet name such as pc.example.ts.net, "
             "with no scheme, port or path)")
     return name
 
@@ -93,9 +95,10 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--allow-host", action="append", default=[], type=_allow_host, metavar="NAME",
                    help="also serve it at https://NAME/ through `tailscale serve` on this "
                         "machine (repeatable; adds to [console] allow_hosts in mind.toml)")
-    p.add_argument("--key-file", type=Path, default=None, metavar="PATH",
-                   help="use the stable key in PATH, made private when missing, instead of a "
-                        "new key at each start (`console rotate-key --key-file PATH` replaces it)")
+    p.add_argument("--key-file", nargs="?", const="", default=None, metavar="PATH",
+                   help="use the stable key in PATH (default %%LOCALAPPDATA%%\\leeroy\\"
+                        "console.key), made private when missing, instead of a new key at each "
+                        "start (`console rotate-key` replaces it)")
     return p
 
 
@@ -104,7 +107,8 @@ def rotate_parser() -> argparse.ArgumentParser:
                                 description="write a new stable console key to --key-file and "
                                             "print the URLs to bookmark; a running console keeps "
                                             "its key until it restarts")
-    p.add_argument("--key-file", type=Path, required=True, metavar="PATH")
+    p.add_argument("--key-file", nargs="?", const="", default="", metavar="PATH",
+                   help="the key file (default %%LOCALAPPDATA%%\\leeroy\\console.key)")
     p.add_argument("--port", type=int, default=DEFAULT_PORT,
                    help=f"the console's port, for the printed URL (default {DEFAULT_PORT})")
     p.add_argument("--allow-host", action="append", default=[], type=_allow_host, metavar="NAME",
@@ -144,14 +148,29 @@ def settings_from(data: Path, root: Path, port: int, key: str, voice_where=None,
     return s
 
 
+def mind_handle(root: Path, data: Path, *, processes, link):
+    """The console's handle on this checkout's mind. Its base interpreter comes from the mind
+    venv's pyvenv.cfg, never from this process: under the logon task's pythonw.exe,
+    sys._base_executable is pythonw.exe while the mind runs python.exe."""
+    from .. import lifecycle
+    from ..app import instance_lock_held
+    from .control import MindHandle
+    try:
+        base, problem = str(lifecycle.mind_base_python(root)), ""
+    except lifecycle.OwnershipError as e:
+        base, problem = None, str(e)
+    return MindHandle(root, data, python=lifecycle.venv_python(root), base_python=base,
+                      base_problem=problem, processes=processes, locked=instance_lock_held,
+                      link=link)
+
+
 def build(args, *, platform: str = sys.platform):
     """The app for parsed args: (ConsoleApp, problems), or (None, refusal)."""
     from .. import lifecycle
     from ..__main__ import _data_dir_problem
-    from ..app import instance_lock_held
     from ..config import default_data_dir
     from .app import ConsoleApp
-    from .control import Controls, MindHandle, VoiceHandle, control_problems
+    from .control import Controls, VoiceHandle, control_problems
     from .mindlink import MindLink
     data = (Path(args.data_dir) if args.data_dir else default_data_dir()).resolve()
     root = (args.root or CHECKOUT).resolve()
@@ -165,13 +184,15 @@ def build(args, *, platform: str = sys.platform):
     if args.key_file is not None:
         from .keyfile import KeyFileError, load
         try:
-            key = load(_absolute(args.key_file))
+            key = load(key_path(args.key_file))
         except KeyFileError as e:
             return None, str(e)
     else:
         key = secrets.token_urlsafe(24)
     windows = platform == "win32"
     processes = lifecycle.WindowsProcesses() if windows else None
+    link = MindLink(data)
+    mind = mind_handle(root, data, processes=processes, link=link)
     voice = lifecycle.VoiceControl(root, processes=processes)
     where = None
     if voice.missing() is None:
@@ -181,11 +202,9 @@ def build(args, *, platform: str = sys.platform):
             where = None
     settings = settings_from(data, root, args.port, key, where, args.voice_ui_port,
                              allow_hosts=args.allow_host, stable_key=args.key_file is not None)
-    link = MindLink(data)
-    mind = MindHandle(root, data, python=lifecycle.venv_python(root),
-                      base_python=getattr(sys, "_base_executable", sys.executable),
-                      processes=processes, locked=instance_lock_held, link=link)
     problems = control_problems(root, platform=platform)
+    if mind.base_python is None and problems["mind"] is None:
+        problems["mind"] = mind.base_problem
     controls = Controls(enabled=not args.no_control,
                         reason="process control is off (--no-control)" if args.no_control else "",
                         mind=mind, voice=VoiceHandle(voice), problems=problems)
@@ -220,8 +239,8 @@ def rotate_main(argv: list[str]) -> int:
     if not 0 < args.port < 65536:
         print("console: ports are 1-65535", file=sys.stderr)
         return 1
-    path = _absolute(args.key_file)
     try:
+        path = key_path(args.key_file)
         key = rotate(path)
     except KeyFileError as e:
         print(f"console: {e}", file=sys.stderr)

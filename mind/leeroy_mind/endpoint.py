@@ -271,19 +271,22 @@ def write_private(path: Path, data: bytes) -> None:
         raise
 
 
-def private_problem(path: Path) -> str | None:
-    """Why someone other than this process's user may read the file at path, or None when no
-    one can: on Windows, a missing DACL (everyone may) or an entry in it that allows anyone
-    else (deny entries take nothing away from him); elsewhere, another owner or a group or
-    other bit in its mode. OSError when it cannot be read."""
+def private_problem(fd: int) -> str | None:
+    """Why someone other than this process's user may read the open file `fd`, or None when no
+    one can. It is read from the open file, so it is the file that will be read: on Windows an
+    owner that is not this user (an owner may change the DACL), a missing DACL (everyone may
+    open it) or an entry in it that allows anyone else (deny entries take nothing away from
+    him); elsewhere, another owner or a group or other bit in its mode. OSError when it cannot
+    be read."""
     if os.name != "nt":
-        st = os.stat(path)
+        st = os.fstat(fd)
         if st.st_uid != os.getuid():
             return "it belongs to another user"
         if st.st_mode & 0o077:
             return f"its mode is {oct(st.st_mode & 0o777)}"
         return None
     import ctypes
+    import msvcrt
     from ctypes import wintypes as w
     advapi = ctypes.WinDLL("advapi32", use_last_error=True)
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -295,9 +298,9 @@ def private_problem(path: Path) -> str | None:
     class AceHeader(ctypes.Structure):
         _fields_ = [("AceType", ctypes.c_ubyte), ("AceFlags", ctypes.c_ubyte),
                     ("AceSize", w.WORD)]
-    advapi.GetNamedSecurityInfoW.argtypes = [w.LPCWSTR, ctypes.c_int, w.DWORD,
-                                             *([ctypes.POINTER(ctypes.c_void_p)] * 5)]
-    advapi.GetNamedSecurityInfoW.restype = w.DWORD
+    advapi.GetSecurityInfo.argtypes = [w.HANDLE, ctypes.c_int, w.DWORD,
+                                       *([ctypes.POINTER(ctypes.c_void_p)] * 5)]
+    advapi.GetSecurityInfo.restype = w.DWORD
     advapi.GetAclInformation.argtypes = [ctypes.c_void_p, ctypes.c_void_p, w.DWORD, ctypes.c_int]
     advapi.GetAclInformation.restype = w.BOOL
     advapi.GetAce.argtypes = [ctypes.c_void_p, w.DWORD, ctypes.POINTER(ctypes.c_void_p)]
@@ -308,18 +311,20 @@ def private_problem(path: Path) -> str | None:
     advapi.EqualSid.restype = w.BOOL
     kernel.LocalFree.argtypes = [ctypes.c_void_p]
     kernel.LocalFree.restype = ctypes.c_void_p
-    SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, ACL_SIZE_INFORMATION = 1, 4, 2
+    SE_FILE_OBJECT, OWNER, DACL, ACL_SIZE_INFORMATION = 1, 1, 4, 2
     ALLOWED, DENIED, INHERIT_ONLY = 0, 1, 0x08
+    handle = msvcrt.get_osfhandle(fd)
     me = ctypes.c_void_p()
     if not advapi.ConvertStringSidToSidW(_user_sid(), ctypes.byref(me)):
         raise OSError(f"cannot read this process's user (Windows error {ctypes.get_last_error()})")
-    dacl, descriptor = ctypes.c_void_p(), ctypes.c_void_p()
+    owner, dacl, descriptor = ctypes.c_void_p(), ctypes.c_void_p(), ctypes.c_void_p()
     try:
-        err = advapi.GetNamedSecurityInfoW(str(path), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
-                                           None, None, ctypes.byref(dacl), None,
-                                           ctypes.byref(descriptor))
+        err = advapi.GetSecurityInfo(handle, SE_FILE_OBJECT, OWNER | DACL, ctypes.byref(owner),
+                                     None, ctypes.byref(dacl), None, ctypes.byref(descriptor))
         if err:
-            raise OSError(f"cannot read the access list of {Path(path).name} (Windows error {err})")
+            raise OSError(f"cannot read the file's owner and access list (Windows error {err})")
+        if not owner.value or not advapi.EqualSid(owner, me):
+            return "it belongs to another user"
         if not dacl.value:
             return "it has no access list, so everyone may open it"
         size = AclSize()

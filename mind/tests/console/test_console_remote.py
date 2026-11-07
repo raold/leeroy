@@ -1,7 +1,7 @@
-"""The console behind `tailscale serve`: an allowed tailnet name (--allow-host, [console]
-allow_hosts) as Host, with its https Origin, and X-Forwarded-Host trusted only from a loopback
-peer and only for an allowed name. Everything else is refused as before, and without an allowed
-name nothing changes. A real server on a free port; the mind, voice and probes are fakes."""
+"""The console behind `tailscale serve`, which keeps the browser's Host: an allowed tailnet name
+(--allow-host, [console] allow_hosts) as Host, with its https Origin. X-Forwarded-Host never
+counts. Everything else is refused as before, and without an allowed name nothing changes. A
+real server on a free port; the mind, voice and probes are fakes. The name is a made-up one."""
 import asyncio
 import logging
 import socket
@@ -15,7 +15,7 @@ from leeroy_mind.console import cli
 from leeroy_mind.console.httpd import Request
 from console.rig import KEY, http, make_app, running
 
-NAME = "fractal.pug-nessie.ts.net"
+NAME = "pc.example-tailnet.ts.net"
 TAILNET = f"https://{NAME}"
 
 
@@ -50,8 +50,7 @@ def free_port() -> str:
         return str(s.getsockname()[1])
 
 
-def request(app, *, host, origin=None, forwarded=None, peer="127.0.0.1", method="GET",
-            path="/api/state"):
+def request(app, *, host, origin=None, forwarded=None, method="GET", path="/api/state"):
     headers = [("host", host), ("x-console-key", KEY)]
     if origin is not None:
         headers.append(("origin", origin))
@@ -59,7 +58,7 @@ def request(app, *, host, origin=None, forwarded=None, peer="127.0.0.1", method=
         headers.append(("x-forwarded-host", value))
     if method == "POST":
         headers.append(("content-type", "application/json"))
-    return Request(method, path, path, {}, headers, b"{}", peer=peer)
+    return Request(method, path, path, {}, headers, b"{}")
 
 
 # -- the allowed name as Host --------------------------------------------------------------------
@@ -109,7 +108,8 @@ def test_a_change_from_the_tailnet_needs_its_https_origin_and_the_key(data):
 def test_spoofed_hosts_are_refused(data):
     async def go():
         async with served(remote(data)) as app:
-            for host in ("evil.example", f"{NAME}.evil.example", f"x{NAME}", "pug-nessie.ts.net",
+            for host in ("evil.example", f"{NAME}.evil.example", f"x{NAME}",
+                         "example-tailnet.ts.net",
                          f"{NAME}:8445", f"{NAME}:80", f"{NAME}:", f"{NAME}.", f"evil.example:443",
                          f"{NAME}:443:443", f"{NAME},127.0.0.1:{app.s.port}",
                          f"localhost:{app.s.port}", f"127.0.0.1:{app.s.port + 1}"):
@@ -157,71 +157,43 @@ def test_the_refusal_names_both_addresses(data):
 
 # -- X-Forwarded-Host ----------------------------------------------------------------------------
 
-def test_a_forwarded_allowed_name_from_loopback_is_the_tailnet(data):
+def test_a_forwarded_host_never_makes_the_tailnet(data):
+    """serve keeps the Host, so X-Forwarded-Host has no use here: whatever it names, the request
+    is what its Host says."""
     mind = running(data)
 
     async def go():
         async with served(remote(data, mind=mind)) as app:
-            for forwarded in (NAME, f"{NAME}:443"):
+            for forwarded in (NAME, f"{NAME}:443", "evil.example", f"{NAME}, evil.example", ""):
                 r = await http(app, "GET", "/api/state", origin=TAILNET,
                                headers={"X-Forwarded-Host": forwarded})
-                assert r.status == 200, forwarded
-            r = await http(app, "POST", "/api/control", origin=TAILNET,
-                           headers={"X-Forwarded-Host": NAME},
-                           body={"service": "mind", "action": "restart", "confirm": True})
-            assert r.status == 200 and mind.acts == ["restart"]
-            # forwarded from the tailnet, the console's own origin is another origin
-            r = await http(app, "GET", "/api/state", origin=True,
-                           headers={"X-Forwarded-Host": NAME})
-            assert r.status == 403
-    run(go())
-
-
-def test_a_forwarded_host_not_on_the_list_is_not_trusted(data):
-    async def go():
-        async with served(remote(data)) as app:
-            for forwarded in ("evil.example", f"{NAME}.evil.example", f"{NAME}:8445",
-                              f"{NAME}, evil.example", f"evil.example, {NAME}", ""):
-                r = await http(app, "GET", "/api/state", origin=f"https://{forwarded}",
-                               headers={"X-Forwarded-Host": forwarded})
+                assert r.status == 403 and b"another origin" in r.body, forwarded
+                r = await http(app, "POST", "/api/control", origin=TAILNET,
+                               headers={"X-Forwarded-Host": forwarded},
+                               body={"service": "mind", "action": "restart", "confirm": True})
                 assert r.status == 403, forwarded
-                r = await http(app, "GET", "/api/state", origin=TAILNET,
-                               headers={"X-Forwarded-Host": forwarded})
-                assert r.status == 403, forwarded
-                # ignored: the request is the console's own, as it always was
                 r = await http(app, "GET", "/api/state", origin=True,
                                headers={"X-Forwarded-Host": forwarded})
-                assert r.status == 200, forwarded
+                assert r.status == 200, forwarded  # ignored, as it always was
+                r = await http(app, "GET", "/api/state", host="evil.example", origin=TAILNET,
+                               headers={"X-Forwarded-Host": forwarded})
+                assert r.status == 403, forwarded
+            assert mind.acts == []
     run(go())
 
 
-def test_a_forwarded_host_is_trusted_only_from_a_loopback_peer(data):
+def test_the_gate_reads_the_host_and_nothing_else(data):
     app = remote(data)
     local = f"127.0.0.1:{app.s.port}"
-    assert app.gate(request(app, host=local, origin=TAILNET, forwarded=NAME)) is None
-    assert app.gate(request(app, host=local, origin=TAILNET, forwarded=NAME,
-                            peer="127.0.0.2")) is None
-    for peer in ("100.101.102.103", "192.168.1.20", None, "not an address"):
-        refused = app.gate(request(app, host=local, origin=TAILNET, forwarded=NAME, peer=peer))
-        assert refused is not None and refused.status == 403, peer
-        refused = app.gate(request(app, host=local, origin=TAILNET, forwarded=NAME, peer=peer,
+    assert app.gate(request(app, host=NAME, origin=TAILNET, forwarded="evil.example")) is None
+    assert app.gate(request(app, host=local, forwarded=NAME)) is None  # its own, as before
+    for host, origin, forwarded in ((local, TAILNET, NAME), (local, TAILNET, [NAME, NAME]),
+                                    (NAME, "https://evil.example", "evil.example")):
+        refused = app.gate(request(app, host=host, origin=origin, forwarded=forwarded))
+        assert refused is not None and refused.status == 403, (host, forwarded)
+        refused = app.gate(request(app, host=host, origin=origin, forwarded=forwarded,
                                    method="POST", path="/api/control"))
-        assert refused is not None and refused.status == 403, peer
-
-
-def test_a_repeated_forwarded_host_is_not_trusted(data):
-    app = remote(data)
-    local = f"127.0.0.1:{app.s.port}"
-    refused = app.gate(request(app, host=local, origin=TAILNET, forwarded=[NAME, NAME]))
-    assert refused is not None and refused.status == 403
-
-
-def test_the_tailnet_host_with_any_forwarded_host_stays_the_tailnet(data):
-    app = remote(data)
-    assert app.gate(request(app, host=NAME, origin=TAILNET, forwarded=NAME)) is None
-    refused = app.gate(request(app, host=NAME, origin=f"https://evil.example",
-                               forwarded="evil.example"))
-    assert refused is not None and refused.status == 403
+        assert refused is not None and refused.status == 403, (host, forwarded)
 
 
 # -- without an allowed name -------------------------------------------------------------------
@@ -266,7 +238,7 @@ def test_allow_host_is_repeatable_and_checked():
     assert a.allow_host == [NAME, "other.example.ts.net"]
     for bad in ("", "evil", "127.0.0.1", "[::1]", f"{NAME}:443", f"https://{NAME}", f"{NAME}/",
                 f"-{NAME}", "a..b.net", "*.ts.net", f"{NAME}.", "x" * 64 + ".ts.net",
-                "fractal.pug-nessie.ts.n\u212aet", "fractal\u00e9.ts.net"):
+                "pc.example-tailnet.ts.n\u212aet", "pc\u00e9.example.ts.net"):
         with pytest.raises(SystemExit):
             args("--allow-host", bad)
 
@@ -284,7 +256,7 @@ def test_build_takes_allowed_names_from_the_options_and_mind_toml(data, tmp_path
 
 
 def test_a_bad_console_table_allows_no_name_from_it_and_says_so(data, tmp_path, caplog):
-    for bad in ('allow_hosts = "fractal.pug-nessie.ts.net"', 'allow_hosts = ["127.0.0.1"]',
+    for bad in (f'allow_hosts = "{NAME}"', 'allow_hosts = ["127.0.0.1"]',
                 'allow_hosts = ["evil/"]', "allow_hosts = [1]",
                 f'allow_hosts = ["{NAME}", "{NAME}:443"]'):
         (data / "mind.toml").write_text(f"[bridge]\nport = 17878\n[console]\n{bad}\n",

@@ -640,31 +640,42 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   needs the console's Host, and its Origin when the browser sends one; a change
   (POST) always needs both the key and the Origin.
   Away from home the owner's devices reach it only over the tailnet, at
-  `https://fractal.pug-nessie.ts.net/` through `tailscale serve` on this machine,
-  never Funnel: `tailscale serve --bg --https=443 http://127.0.0.1:7881` (undo
-  with `tailscale serve --https=443 off`; `tailscale serve reset` clears all of
-  serve's config). The console still listens on 127.0.0.1 only.
-  `--allow-host NAME` (repeatable; also `[console] allow_hosts = [...]` in
-  mind.toml) accepts a Host of NAME or NAME:443 with the Origin `https://NAME`.
-  serve keeps the browser's Host (`r.Out.Host = r.In.Host` in tailscale's
-  `ipn/ipnlocal/serve.go`) and adds X-Forwarded-Host, which the console trusts
-  only from a loopback peer and only for an allowed name; the two addresses'
-  Origins never cross and every other Host is refused as before. `--key-file
-  PATH` uses a stable key instead: when PATH is missing it is made private
-  (control.json's one-entry DACL) with `secrets.token_urlsafe(32)`; a file
-  anyone else may read, or that is not a regular file, stops the start.
-  `python -m leeroy_mind console rotate-key --key-file PATH [--allow-host
-  NAME]` writes a new key and prints the URLs to bookmark; a running console
-  keeps the old one until it restarts. The start line adds `  tailnet:
-  https://NAME/#key=...`; the key is printed there and by rotate-key, never
-  logged. `scripts/ac-console-schedule.ps1 -Install|-Remove|-Status` manages
-  the per-user logon task `leeroy-console`: the checkout's mind venv
-  `pythonw.exe` runs the console hidden with `--key-file
-  <mind-data>\console.key --allow-host fractal.pug-nessie.ts.net`, only while
-  he is logged on, Limited, IgnoreNew, no time limit, and starts it again after
-  a failure (RestartCount, plus a trigger every 5 minutes). Its output is not
-  kept, so the bookmark is `https://fractal.pug-nessie.ts.net/#key=` plus the
-  key in console.key. A stop or restart asks
+  `https://<pc>.<tailnet>.ts.net/` (this PC's MagicDNS name) through `tailscale
+  serve` on this machine, never Funnel: `tailscale serve --bg --https=443
+  http://127.0.0.1:7881` (undo with `tailscale serve --https=443 off`;
+  `tailscale serve reset` clears all of serve's config). The console still
+  listens on 127.0.0.1 only. `--allow-host NAME` (repeatable; also `[console]
+  allow_hosts = [...]` in mind.toml) accepts a Host of NAME or NAME:443 with the
+  Origin `https://NAME`: serve keeps the browser's Host (`r.Out.Host =
+  r.In.Host` in tailscale's `ipn/ipnlocal/serve.go`), and X-Forwarded-Host is
+  ignored. The two addresses' Origins never cross; every other Host is refused
+  as before. `--key-file [PATH]` uses a stable key instead, by default in
+  `%LOCALAPPDATA%\leeroy\console.key` (his profile, not mind-data): a missing
+  file is made private (control.json's one-entry DACL) with
+  `secrets.token_urlsafe(32)`; a file he does not own, that anyone else may
+  read (owner and DACL read from the opened file), that is not a regular file
+  or that holds fewer than 43 URL-safe characters stops the start. `python -m
+  leeroy_mind console rotate-key [--key-file PATH] [--allow-host NAME]` writes a
+  new key and prints the URLs to bookmark; a running console keeps the old one
+  until it restarts. The start line adds `  tailnet: https://NAME/#key=...`;
+  the key is printed there and by rotate-key, never logged. A bookmarked URL's
+  fragment syncs with the browser's account like the rest of the bookmark, so
+  if a device is lost, run rotate-key. `scripts/ac-console-schedule.ps1
+  -Install -AllowHost <pc>.<tailnet>.ts.net` (also `-Show`, which prints the
+  task without registering it, `-Remove` and `-Status`) manages the per-user
+  logon task `leeroy-console`: the checkout's mind venv `pythonw.exe` runs the
+  console hidden with `--key-file <KeyFile> --allow-host <AllowHost>`, only while
+  he is logged on, Limited, priority 4 (normal; a task's default 7 is below
+  normal), IgnoreNew, no time limit, and starts it again after a failure
+  (RestartCount, plus a trigger every 5 minutes). Its output is not kept, so the
+  bookmark is `https://<AllowHost>/#key=` plus the key in the key file. Under
+  that pythonw.exe the console takes the mind's base interpreter from the mind
+  venv's `pyvenv.cfg` (`<home>\python.exe`, `lifecycle.mind_base_python`, as
+  `ac-mind.py` does), and the venv's pythonw.exe may control the mind as its
+  python.exe may. The mind and the voice service start outside the starting
+  process's job (`CREATE_BREAKAWAY_FROM_JOB`; a job that forbids it starts them
+  inside, with one `<service>_breakaway_refused` log line) at normal priority, so
+  ending the task does not end a mind its console started. A stop or restart asks
   first while the owner is in game or nobody can tell. It reads mind.db,
   mind.log and mind.toml read-only and talks to the voice service through the
   voice page's own socket. Start, restart and stop use

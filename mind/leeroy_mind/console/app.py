@@ -3,19 +3,17 @@
 Every request must carry exactly one Host header, 127.0.0.1:<port> (against DNS rebinding), an
 Origin that is the console's own when it carries one, and a Sec-Fetch-Site of same-origin or none
 when it carries one. A tailnet name the console was given (--allow-host, [console] allow_hosts)
-is a second address for it, behind `tailscale serve` on this machine: a Host of NAME or NAME:443,
-whose own Origin is https://NAME. A request whose Host is the console's own comes from that
-address too when its one X-Forwarded-Host is an allowed name (with or without :443) and its TCP
-peer is a loopback address (a proxy on this machine; the console listens on 127.0.0.1 only);
-otherwise X-Forwarded-Host is ignored, as it always was. The two addresses' Origins never
-cross. Every request but the page's own load and its static files must also carry the session
-key (made at each start, or the stable one in --key-file: keyfile.py), once, in an X-Console-Key
-header. The printed URL holds the key in its fragment (/#key=...), which a browser never sends:
-the page takes it into memory, drops it from the address bar and sends it with each fetch, the
-event stream included. There is no cookie, so no other program on another 127.0.0.1 port is ever
-handed the key. Anything else is 403. A mutating
-request (POST) must also carry the console's Origin and a JSON body; there is no CORS, so another
-origin's script cannot read an answer or send a preflighted request (the key header needs one).
+is a second address for it, behind `tailscale serve` on this machine (which keeps the browser's
+Host): a Host of NAME or NAME:443, whose own Origin is https://NAME. The two addresses' Origins
+never cross, and X-Forwarded-Host is ignored, as it always was. Every request but the page's
+own load and its static files must also carry the session key (made at each start, or the
+stable one in --key-file: keyfile.py), once, in an X-Console-Key header. The printed URL holds
+the key in its fragment (/#key=...), which a browser never sends: the page takes it into
+memory, drops it from the address bar and sends it with each fetch, the event stream included.
+There is no cookie, so no other program on another 127.0.0.1 port is ever handed the key.
+Anything else is 403. A mutating request (POST) must also carry the console's Origin and a JSON
+body; there is no CORS, so another origin's script cannot read an answer or send a preflighted
+request (the key header needs one).
 The static files need no key because a browser sends no header with a stylesheet or a module
 script; they are the package's own files and carry no data, and the page's policy (CSP) lets it
 run nothing else.
@@ -79,7 +77,6 @@ lines are the mind's to take: the console forwards them and shows the mind's ans
 why when it refuses. A preview's text and a line's are never logged, stored or broadcast."""
 import asyncio
 import hmac
-import ipaddress
 import logging
 import os
 import time
@@ -523,36 +520,18 @@ class ConsoleApp:
     def _key_ok(self, value: str | None) -> bool:
         return isinstance(value, str) and hmac.compare_digest(value.encode(), self.s.key.encode())
 
-    def _allowed(self, host: str) -> str | None:
-        """The allowed tailnet name a Host or X-Forwarded-Host value names, or None."""
-        name = host.lower()
-        if name.endswith(":443"):
-            name = name[:-4]
-        return name if name in self.s.allow_hosts else None
-
-    def _forwarded(self, req: Request) -> str | None:
-        """The allowed name in X-Forwarded-Host, when a proxy on this machine sent it."""
-        if not self.s.allow_hosts:
-            return None
-        try:
-            if not ipaddress.ip_address(req.peer or "").is_loopback:
-                return None
-        except ValueError:
-            return None
-        values = req.all("x-forwarded-host")
-        return self._allowed(values[0]) if len(values) == 1 else None
-
     def _site(self, req: Request) -> str | None:
         """The origin the request was sent to: the console's own, https://NAME for an allowed
-        tailnet name, or None for any other Host."""
+        tailnet name (a Host of NAME or NAME:443), or None for any other Host."""
         hosts = req.all("host")
         if len(hosts) != 1:
             return None
         if hosts[0] == f"{HOST}:{self.s.port}":
-            name = self._forwarded(req)
-            return self.origin if name is None else f"https://{name}"
-        name = self._allowed(hosts[0])
-        return None if name is None else f"https://{name}"
+            return self.origin
+        name = hosts[0].lower()
+        if name.endswith(":443"):
+            name = name[:-4]
+        return f"https://{name}" if name in self.s.allow_hosts else None
 
     def gate(self, req: Request) -> Response | None:
         """None when the request may go on; the refusal otherwise."""
