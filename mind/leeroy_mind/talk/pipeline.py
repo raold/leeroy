@@ -26,10 +26,12 @@ emoji tell), and its up to three typed lines become one message, stored as a dis
 (transport.store_line) where a typed line would go to the bridge as a Say. The line is recorded
 as said like any other, under its Discord channel, while the game's own chat state (the world's
 history, the quiet clock, the say chains, a member's last line) never sees it. The game's rules
-for whispers to him and for /say (he must be online, a dead member can't talk) are for those
-channels only; every other guard holds, but an answer to his DM, like one to his whisper, is
-never held back by the guild's pace and its first silence is asked again. A Discord turn's
-deadline is DISCORD_DEADLINE_S, and an emoji-only line is a message there, not silence."""
+for whispers to him and for /say (he must be online, a dead member can't talk) and for the
+speaker's body (online in the game) are for those channels only; every other guard holds, but
+an answer to his DM, like one to his whisper, is never held back by the guild's pace and its
+first silence is asked again. A Discord turn's deadline is DISCORD_DEADLINE_S, an emoji-only line
+is a message there, not silence, and with no trigger line its recall looks for
+TurnMeta.recall_query (his post)."""
 import asyncio
 import itertools
 import logging
@@ -334,6 +336,9 @@ class TurnMeta:
     # a Discord turn's message: the one it replies to and its thread (discord.transport); a
     # Discord turn is known by its channel, never by this
     discord: DiscordTarget | None = None
+    # what recall looks for when the turn has no trigger line: for an answer to his Discord post,
+    # its words and its thread's last lines (discord.talk, ruling R13); "" for every other turn
+    recall_query: str = ""
 
 
 class _ScopeChanged(SchedulerError):
@@ -990,6 +995,8 @@ class Pipeline:
         elif turn.trigger_line:
             rows = self.store.chat_lines([turn.trigger_line])
             query = trigger = rows[0].text if rows and self._may_carry(turn, rows[0]) else ""
+        elif meta.recall_query:  # his Discord post, which no chat line holds (discord.talk)
+            query = meta.recall_query
         elif turn.kind is TurnKind.OPEN and meta.topic:
             query = meta.topic  # what she will bring up, not what the chat said
         else:
@@ -1493,7 +1500,7 @@ class Pipeline:
             return "elsewhere_changed"
         if meta.why == "hotmic" and not self._comms_says("hotmic_valid", False, turn):
             return "hotmic_changed"
-        if g not in w.online:
+        if g not in w.online and not is_discord(turn.channel):  # Discord needs no body (R14)
             return "offline"
         if g in w.afk:
             return "afk"

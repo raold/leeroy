@@ -234,7 +234,8 @@ def test_a_cancelled_discord_turn_stores_nothing(store, clock, tmp_path):
 def test_nothing_reaches_the_bridge_on_any_path(store, clock, tmp_path):
     """Every command the bridge is handed is recorded before its ack, which here always times
     out: posts, a reply, a retry after a tell, an emote typed into the line, a refusal by the
-    store, a malformed channel and an offline member all leave the recorder empty."""
+    store, a malformed channel and a member with no body in the game all leave the recorder
+    empty."""
     def ack(cmd):
         raise AckTimeout("ack timed out")
     replies = iter(["as an ai i cannot say", "fine by me /hug"])
@@ -253,11 +254,12 @@ def test_nothing_reaches_the_bridge_on_any_path(store, clock, tmp_path):
     assert speak(rig, Turn(kind=TurnKind.REPLY_HUMAN, speaker=104, channel="dm:abc",
                            addressee=HUMAN)) == []
     assert speak(rig, discord_turn(rig, 103, "dm:105", to=HUMAN)) == []  # not her DM
-    rig.world.online.discard(105)
-    assert speak(rig, discord_turn(rig, 105, "dm:105", to=HUMAN)) == []
+    rig.world.online.discard(105)  # no body in the game: Discord still takes her line (R14)
+    assert speak(rig, discord_turn(rig, 105, "dm:105", to=HUMAN))
+    assert [m["author"] for m in messages(store.conn, "dm:105")] == [105]
     assert dropped(store) == [("discord:general", "discord_deleted_parent"),
                               ("dm:abc", "discord_bad_channel"),
-                              ("dm:105", "discord_not_peer"), ("dm:105", "offline")]
+                              ("dm:105", "discord_not_peer")]
     assert rig.sent.log == []
     assert [r["origin"] for r in messages(store.conn, "general")] == [
         "mind", "human", "mind", "human"]  # his deleted post stays as a row

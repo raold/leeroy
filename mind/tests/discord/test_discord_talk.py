@@ -10,9 +10,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from conftest import HUMAN, OFFICERS, TEST_CAST, seed_test_cast
+from conftest import HUMAN, OFFICERS, TEST_CAST, make_mem, seed_test_cast
 from engine_rig import NICK, engine_clock, make_rig, numbered, save_member
 from leeroy_mind.discord import store as dstore
+from leeroy_mind.bridge import ConnectionLost
 from leeroy_mind.discord.desk import DiscordDesk
 from leeroy_mind.discord.store import messages
 from leeroy_mind.discord.talk import LEASE, LEASE_IDLE_S, DiscordTalk, answer_delay
@@ -242,10 +243,10 @@ def test_offline_members_do_not_answer_a_channel_post(store, clock, tmp_path):
     talk = talk_for(rig)
     mid = post(rig, "general", "anyone awake?")
     assert {g for s in speakers(talk, mid, 40) for g in s} == {105}
-    rig.world.online.discard(105)  # online in Discord, but the game has no body for him
-    assert speakers(talk, mid, 10) == [[]] * 10
+    rig.world.online.discard(105)  # no body in the game: his Discord presence decides (R14)
+    assert {g for s in speakers(talk, mid, 10) for g in s} == {105}
     answer(rig, talk, mid)
-    assert answers(rig, "general", mid) == []
+    assert {m["author"] for m in answers(rig, "general", mid)} == {105}
     rig.close()
 
 
@@ -546,4 +547,76 @@ def test_his_dm_is_answered_whatever_the_guild_s_pace(store, clock, tmp_path):
     assert answers(rig, "general", named) == []
     assert [r["dropped"] for r in store.conn.execute(
         "SELECT dropped FROM utterance WHERE dropped IS NOT NULL")] == ["guards"]
+    rig.close()
+
+
+def remember(store, clock, owner: int, text: str) -> int:
+    """A memory of `owner`'s with no one in it, so only recall's query can bring it up."""
+    t = int(clock.now()) - 30 * 86400
+    return store.insert_memory(make_mem(owner=owner, text=text, actors=(), t_event=t,
+                                        t_created=t, t_accessed=t, source="owner"))
+
+
+def test_recall_follows_his_words(store, clock, tmp_path):
+    """R13: an answer's memories are looked for with his post's words, so the one about what
+    he asked comes up and an unrelated one does not."""
+    rig = rig_for(store, clock, tmp_path, reply="same as last time then")
+    talk = talk_for(rig)
+    remember(store, clock, 101, "We cleared the spider wing in glimmerwick time last month.")
+    remember(store, clock, 101, "Caught a quorbel fish down at the harbour.")
+    mid = post(rig, "general", "@Arkon spider wing tonight?")
+    [(_, meta)] = talk.plan(mid)
+    assert meta.recall_query == "@Arkon spider wing tonight?"
+    answer(rig, talk, mid)
+    assert answers(rig, "general", mid)
+    prompt = rig.prompts()[-1]
+    assert "glimmerwick" in prompt and "quorbel" not in prompt
+    rig.close()
+
+
+def test_recall_in_a_thread_also_follows_its_last_lines(store, clock, tmp_path):
+    """R13: in a thread (or replying to a message) his few words take the thread's last lines
+    and the message he replied to with them."""
+    rig = rig_for(store, clock, tmp_path, reply="count me in")
+    talk = talk_for(rig)
+    remember(store, clock, 104, "Our first spider wing clear took glimmerwick hours.")
+    remember(store, clock, 104, "Caught a quorbel fish down at the harbour.")
+    parent = post(rig, "raid-planning", "sunday")
+    thread = dstore.open_thread(store, parent, name="sunday", now=clock.now())
+    member_post(rig, 101, "raid-planning", "too early for me", thread=thread)
+    member_post(rig, 103, "raid-planning", "the spider wing again?\nor plague", thread=thread)
+    hers = member_post(rig, 102, "raid-planning", "bring flasks", thread=thread)
+    mid = post(rig, "raid-planning", "@Dunna you in?", thread=thread, reply_to=hers)
+    assert talk.recall_query(mid) == (
+        "bring flasks too early for me the spider wing again? / or plague @Dunna you in?")
+    gone = member_post(rig, 105, "raid-planning", "deleted line", thread=thread)
+    dstore.delete(store, gone, author=105, now=clock.now())
+    assert "deleted" not in talk.recall_query(post(rig, "raid-planning", "ok", thread=thread))
+    answer(rig, talk, mid)
+    assert answers(rig, "raid-planning", mid, thread=thread)
+    prompt = rig.prompts()[-1]
+    assert "glimmerwick" in prompt and "quorbel" not in prompt
+    rig.close()
+
+
+def test_a_dm_is_answered_with_the_game_down(store, clock, tmp_path):
+    """R14: the guild's Discord lives beside the game. With the worldserver and the bridge down
+    no member has a body online, yet his DM is answered and stored in Discord, a channel post
+    is answered by presence, and nothing is sent anywhere."""
+    def down(cmd):
+        raise ConnectionLost("bridge down")
+    rig = rig_for(store, clock, tmp_path, script=numbered("still here {n}"), ack=down)
+    rig.world.online.clear()
+    talk = talk_for(rig)
+    mid = post(rig, "dm:103", "server crashed, you there?")
+    answer(rig, talk, mid)
+    [m] = answers(rig, "dm:103", mid)
+    assert m["author"] == 103
+    chan = post(rig, "general", "anyone around while the server is down?")
+    assert all(s for s in speakers(talk, chan, 5))
+    answer(rig, talk, chan)
+    assert answers(rig, "general", chan)
+    assert rig.sent.log == []
+    assert [r["dropped"] for r in store.conn.execute(
+        "SELECT dropped FROM utterance WHERE dropped IS NOT NULL")] == []
     rig.close()
