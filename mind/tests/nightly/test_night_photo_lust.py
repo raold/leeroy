@@ -176,6 +176,13 @@ def test_the_suggestive_style_is_a_lust_woman_of_21_or_more(h):
 
 # -- the template and the schema -----------------------------------------------------------
 
+def test_the_doctor_knows_both_photo_prompt_names():
+    # controller ruling R15: the doctor's overlay check reads names from the call sites
+    from leeroy_mind.nightly.llm import night_prompt_names
+    assert {STAGE, LUST_PROMPT} == {"photo", "photo_lust"}
+    assert {"photo", "photo_lust"} <= night_prompt_names()
+
+
 def test_a_lust_woman_gets_the_lust_template_and_schema_and_everyone_else_todays(h):
     assert KIND_PROMPT == TODAY_KIND_PROMPT and LUST_PROMPT == "photo_lust"
     h.persona(101, appearance=APPEARANCE)
