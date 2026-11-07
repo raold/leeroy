@@ -375,3 +375,9 @@ select, input[type="text"], input[type="number"] { color: var(--ink); background
 .tab.placeholder { width: 100%; max-width: 1600px; margin: 0 auto; padding: 24px 16px; gap: 6px; align-content: start; }
 .tab.placeholder h2 { margin: 0; font: 750 26px/1.1 var(--f-display); font-stretch: 108%; }
 .tab.placeholder p { margin: 0; max-width: 62ch; color: var(--ink-2); }
+
+/* faces in the Raid and Guild tables, and the DKP stats panel */
+td > div.who { color: var(--ink); font-weight: 600; }
+.dkpface { display: inline-flex; vertical-align: middle; margin-right: 6px; }
+#g-due { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chip.warn { --c: var(--warn); }

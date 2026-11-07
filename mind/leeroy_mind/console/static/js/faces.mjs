@@ -95,6 +95,23 @@ export function faceButton(guid, name, kind, opts) {
   return b;
 }
 
+// A table cell holding a member's face and name (.who). opts go to face; opts.text is the words
+// shown when they are not the bare name (tags, "(you)"). Nobody (guid 0 or none) is a plain "-".
+export function nameCell(tr, guid, name, opts) {
+  opts = opts || {};
+  var td = el("td");
+  if (!guid) {
+    td.textContent = opts.text || name || "-";
+  } else {
+    var box = el("div", "who");
+    box.appendChild(face(guid, name, "list", opts));
+    box.appendChild(el("span", "", opts.text || name));
+    td.appendChild(box);
+  }
+  tr.appendChild(td);
+  return td;
+}
+
 // Light (or put out) one member's faces under box without drawing anything again
 export function lightSpeakers(box, guid, on) {
   var lit = box.querySelectorAll('[data-speaker="' + Number(guid) + '"]');
