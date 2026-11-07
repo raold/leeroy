@@ -1,5 +1,5 @@
 """Which channel a turn goes to. Never `yell`; `say` is chosen by the caller, only to answer
-the human's own /say."""
+the human's own /say or his text emote (an EMOTE_REACT: its target stands within emote range)."""
 from leeroy_mind.talk.raid import RaidPhase, RaidState
 from leeroy_mind.talk.turns import TurnKind
 from leeroy_mind.talk.world import WorldView
@@ -11,18 +11,24 @@ _NOT_SOCIAL = frozenset({TurnKind.REPLY_HUMAN, TurnKind.CALLOUT, TurnKind.URGENT
 _GROUP_TALK = frozenset({TurnKind.OPEN, TurnKind.BIT, TurnKind.ASIDE,
                          TurnKind.FLIRT})
 _RAID_EVENT = frozenset({TurnKind.KILL, TurnKind.WIPE_REACT, TurnKind.CALLOUT, TurnKind.URGENT})
+# Where a reaction to his emote may go (talk/emotes.py): /say or a whisper (a romantic one) to
+# answer his emote at her, his group's chat or /say for one who joined in his.
+EMOTE_CHANNELS = frozenset({"say", "whisper", "party", "raid"})
 
 
 def choose_channel(kind: TurnKind, *, speaker: int, world: WorldView, raid: RaidState,
                    now: float, rng, reply_to: str | None = None,
                    opener_channel: str | None = None) -> str | None:
     """None means the turn must not be spoken. A REPLY_HUMAN goes where the caller says
-    (reply_to) and a CONTINUE stays on its opener's channel; without those, None."""
+    (reply_to), an EMOTE_REACT too when it is one of EMOTE_CHANNELS, and a CONTINUE stays on
+    its opener's channel; without those, None."""
     phase = raid.phase(now)
     if phase in _FIGHT_PHASES and kind not in _NOT_SOCIAL:
         return None
     if kind is TurnKind.REPLY_HUMAN:
         return reply_to
+    if kind is TurnKind.EMOTE_REACT:
+        return reply_to if reply_to in EMOTE_CHANNELS else None
     if kind is TurnKind.CONTINUE:
         return opener_channel
     if kind is TurnKind.WHISPER:

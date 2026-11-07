@@ -3,6 +3,7 @@ sends what they say over the bridge.
 
 - on_human_chat plans the guild's answers to the human (replies, goodnights);
 - on_event reacts to the game (reactions.py: greetings, gz, kills, wipes, the combat cancel);
+- on_text_emote answers his text emotes (emotes.py: an emote back, sometimes a line);
 - tick runs the social bursts the budget allows, moves the altered states on, fires the whisper
   triggers once per event and polls the registered TurnSources (P1d and phase 3);
 - every turn goes through the line pipeline (pipeline.py), which composes the prompt, asks the
@@ -38,6 +39,7 @@ from leeroy_mind.storage.store import Store
 from leeroy_mind.talk.bits import BitScheduler, birthday_line, is_birthday_bit
 from leeroy_mind.talk.budget import BurstBudget, BurstPlan, DayPhase, day_phase
 from leeroy_mind.talk.channels import choose_channel
+from leeroy_mind.talk.emotes import EmoteReactions
 from leeroy_mind.talk.facts import LibraryFacts
 from leeroy_mind.talk import pastes
 from leeroy_mind.talk.guards import Guards
@@ -51,7 +53,7 @@ from leeroy_mind.talk.prompt import pushback_help
 from leeroy_mind.talk.questions import FIT_TIERS, fit_tier, game_question, is_plan
 from leeroy_mind.talk.raid import RaidPhase, RaidState
 from leeroy_mind.talk.reactions import (EVENING_S, GZ_TEMPLATES, LEAD_CALL, LEAD_GROUP_CALL,
-                                        LOGIN_QUIET_S, MID_GROUP, MID_RAID, Reactions)
+                                        LOGIN_QUIET_S, MID_GROUP, MID_RAID)
 from leeroy_mind.talk.romance import JealousyAsides, WhisperPlanner, flirt_chance
 from leeroy_mind.talk.select import (PUSHBACK_WINDOW_S, WHISPER_REPLY_P, Pushback, ReplyTurn,
                                      aimed_at_one, asks_the_past, classify_human_line,
@@ -114,11 +116,12 @@ class TurnSource(Protocol):
     async def propose(self, now: float) -> list[Turn]: ...
 
 
-class TalkEngine(Reactions):
+class TalkEngine(EmoteReactions):
     """The guild's voice. The app feeds it the human's lines (on_human_chat), game events
-    (on_event), a tick and the session's start and end; P1c reads prompts through compose, P1d
-    speaks through say_as and register_source. The pipeline (speak) and the reactions live in
-    pipeline.py and reactions.py."""
+    (on_event), his text emotes (on_text_emote), a tick and the session's start and end; P1c
+    reads prompts through compose, P1d speaks through say_as and register_source. The pipeline
+    (speak), the reactions and the answers to his emotes live in pipeline.py, reactions.py and
+    emotes.py."""
 
     def __init__(self, *, store: Store, world: WorldView, raid: RaidState, recall: Recall,
                  scheduler: LLMScheduler, personas: PersonaCache, cfg: MindConfig,
@@ -153,6 +156,7 @@ class TalkEngine(Reactions):
         now = clock.now()
         self._init_pipeline(now)
         self._init_reactions()
+        self._init_emotes()
         self._sources: list[TurnSource] = []
         self._pastes: dict[tuple[str, int, str], PasteBurst] = {}
         self._session_at = self._states_at = now
