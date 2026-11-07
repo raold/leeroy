@@ -108,6 +108,31 @@ def test_the_race_puts_the_guilds_kill_first(db):
     assert len(v["race"]) == 2
 
 
+def test_a_canon_day_is_the_guilds_first_kill(db):
+    """The race's rule (realm/race.py): the canon day in realm_canon_kill is the guild's first
+    kill of a canon boss, so a rival's canon kill is not shown as a first."""
+    canon, day = (631, 2, 1), "2026-09-01"
+    db.execute("INSERT INTO realm_canon_kill(map,boss_id,difficulty,moment,day) VALUES(?,?,?,'m',?)",
+               (*canon, day))
+    db.execute("INSERT INTO realm_canon_kill(map,boss_id,difficulty,moment,day) VALUES(?,?,?,'m',?)",
+               (*BOSS, "2026-01-01"))  # earlier than his live kill: the earlier day is kept
+    _progress(db, 1, canon, "killed", 0, NOW - 3 * DAY, source="canon")
+    db.commit()
+    at = race.Race._canon(db)
+    v = realmview.realm_view(db, now=NOW)
+    row = next(r for r in v["race"] if (r["map"], r["boss"], r["difficulty"]) == canon)
+    assert row["guild_at"] == at[canon] and row["rivals"]["1"]["state"] == "killed"
+    first = next(r for r in v["race"] if (r["map"], r["boss"], r["difficulty"]) == BOSS)
+    assert first["guild_at"] == at[BOSS] < NOW - 10 * DAY
+    assert all(r["guild_at"] is not None for r in v["race"] if r["rivals"].get("1", {}).get("state") == "killed")
+
+
+def test_the_race_reads_without_the_canon_table(db):
+    db.execute("DROP TABLE realm_canon_kill")
+    v = realmview.realm_view(db, now=NOW)
+    assert v["race"][0]["guild_at"] == NOW - 10 * DAY
+
+
 def test_only_sent_rival_lines_are_shown(db):
     _line(db, 1, NOW - 100, 201, 1, "older")
     _line(db, 2, NOW - 50, 201, 1, "newer")

@@ -14,13 +14,14 @@ key only to a listener that the TCP table shows is the running mind's own proces
 
 A request: one connection, one line. A JSON object of at most MAX_LINE bytes ending in a
 newline, sent within READ_S (2 s), with exactly the keys v (1), key, op and, for a raid, tune,
-selfie, say or board action only, args. Anything else (an unknown or missing key, a wrong type,
-an HTTP request) is refused and the connection closed; nothing after the first line is read. One
-answer line comes back, {"ok": true, ...} or {"ok": false, "error": ...}, and the connection
-closes.
+selfie, say, board or library action only, args. Anything else (an unknown or missing key, a
+wrong type, an HTTP request) is refused and the connection closed; nothing after the first line
+is read. One answer line comes back, {"ok": true, ...} or {"ok": false, "error": ...}, and the
+connection closes.
 
     status          the raid night's state and which raid actions can run now, or why not,
-                    and `world`: the game server's last hello and who is online (null before one)
+                    and `world`: the game server's last hello and who is online (null before one,
+                    {"connected": false} while the bridge is down after one)
     stop            the mind's own clean shutdown, the one Ctrl+C runs: answered, then begun
     raid {action}   call | form {raid, size, heroic, lead} | summon | start | stop | end:
                     guild life's own transitions, on the mind's event loop, with its guards
@@ -617,7 +618,7 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     if not isinstance(value, dict) or not {"v", "key", "op"} <= set(value) <= {
             "v", "key", "op", "args"}:
         raise BadRequest("bad request: exactly v, key, op (and args for a raid, tune, selfie, "
-                         "say or board action)")
+                         "say, board or library action)")
     given = value["key"]
     if not isinstance(given, str) or not secrets.compare_digest(
             given.encode("utf-8", "surrogatepass"), key.encode("ascii")):
@@ -639,11 +640,14 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
 
 
 def world_status(app) -> dict | None:
-    """The game server as the last hello and the world view tell it; None before a hello and
-    while the bridge is down (the world view is then stale: his game state is unknown)."""
+    """The game server as the last hello and the world view tell it; None before a hello, and
+    {"connected": False} while the bridge is down after one (the world view is then stale: his
+    game state is unknown)."""
     hello = getattr(app, "hello", None)
-    if hello is None or not app.bridge.connected:
+    if hello is None:
         return None
+    if not app.bridge.connected:
+        return {"connected": False}
     world = app.world
     return {"connected": True, "server": hello.server,
             "version": hello.version, "hello_at": hello.ts / 1000,

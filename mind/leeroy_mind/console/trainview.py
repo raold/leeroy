@@ -48,7 +48,7 @@ def training_view(conn, *, now: float) -> dict:
     left = max(0, math.ceil(BASELINE_SECONDS / DAY - observed)) if observed is not None else None
     gate = section["gate"] if isinstance(section["gate"], dict) else inspect.gate_state(conn)
     verdict = gate.get("verdict_ms")
-    passed = bool(gate.get("phase") == "passed" and type(verdict) in (int, float) and verdict <= 1.0)
+    passed = gate.get("phase") == "passed"  # the gate's own verdict, against its configured limit
 
     monday = datetime.fromisocalendar(int(week[:4]), int(week[6:]), 1).replace(tzinfo=timezone.utc).timestamp()
     by_kind = {r[0]: r[1] for r in conn.execute("SELECT kind, count(*) FROM tg_pull GROUP BY kind")}
@@ -57,8 +57,9 @@ def training_view(conn, *, now: float) -> dict:
         (int(monday * 1000), int((monday + 7 * DAY) * 1000)))}
 
     all_trials = inspect.trials_view(conn, None)["trials"]
-    trials = [{"id": t["id"], "scope": t["scope"], "lever": t["lever"], "status": t["status"],
-               "opened": t["opened"], "closed": t["closed"], "verdict": t["verdict"],
+    trials = [{"id": t["id"], "scope": t["scope"], **_scope(t["scope"]), "lever": t["lever"],
+               "status": t["status"], "opened": t["opened"], "closed": t["closed"],
+               "verdict": t["verdict"],
                "arms": len(t["arms"]), "observations": sum(a["observations"] for a in t["arms"])}
               for t in all_trials[:TRIALS]]
 

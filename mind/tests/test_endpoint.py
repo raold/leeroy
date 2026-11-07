@@ -201,6 +201,20 @@ def test_anything_else_is_a_bad_request(raw, words):
     assert not isinstance(refused.value, Forbidden)
 
 
+def test_the_shape_refusal_names_every_op_that_takes_args():
+    takes = []
+    for op in endpoint.OPS:
+        try:
+            parse_request(line(v=1, key=KEY, op=op), KEY)
+        except BadRequest as e:
+            assert str(e) == f"bad request: {op} needs args"
+            takes.append(op)
+    assert "library" in takes
+    with pytest.raises(BadRequest) as refused:
+        parse_request(line(key=KEY, op="status"), KEY)
+    assert all(op in str(refused.value) for op in takes), (takes, str(refused.value))
+
+
 @pytest.mark.parametrize("key", ["", "k" * 43, KEY[:-1], KEY + "K", 42, None, ["K"]])
 def test_a_wrong_key_is_forbidden_before_anything_else_is_said(key):
     with pytest.raises(Forbidden):
@@ -406,11 +420,29 @@ def test_status_carries_the_world(tmp_path):
                              "hello_at": 1793304000.0, "cast": 5, "cast_online": 3,
                              "human_online": True}
             app.bridge = SimpleNamespace(connected=False, greeted=False)  # stale view: unknown
-            assert (await ask(ep, "status"))["world"] is None
+            assert (await ask(ep, "status"))["world"] == {"connected": False}
             app.bridge = SimpleNamespace(connected=True, greeted=True)
             app.world = SimpleNamespace()  # unreadable: status still answers, world unknown
             reply = await ask(ep, "status")
             assert reply["ok"] is True and reply["world"] is None
+    run(go())
+
+
+def test_a_bridge_down_after_a_hello_says_so(tmp_path):
+    """The Mind tab's "unknown (bridge down)": after a hello, a bridge that is down is said as
+    such, and the stale world view is never read."""
+    from leeroy_mind.protocol import Hello
+
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            app.hello = Hello(ts=1793304000000, server="Acme", version="3.3.5", guild_id=1,
+                              human_guid=9)
+            app.bridge = SimpleNamespace(connected=False, greeted=False)
+            app.world = SimpleNamespace()  # stale and unreadable: not asked
+            reply = await ask(ep, "status")
+            assert reply["ok"] is True and reply["world"] == {"connected": False}
+            app.hello = None
+            assert (await ask(ep, "status"))["world"] is None  # before any hello: unknown
     run(go())
 
 

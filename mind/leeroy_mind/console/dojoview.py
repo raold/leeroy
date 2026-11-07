@@ -52,7 +52,8 @@ def run_git(path, *args) -> str | None:
     try:
         r = subprocess.run([exe, "-c", "core.fsmonitor=false", "-C", str(path), *args],
                            capture_output=True, text=True, timeout=GIT_S, env=env,
-                           stdin=subprocess.DEVNULL)
+                           stdin=subprocess.DEVNULL,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except (OSError, subprocess.SubprocessError, ValueError):
         return None
     return r.stdout.strip() if r.returncode == 0 else None

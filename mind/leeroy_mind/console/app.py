@@ -688,7 +688,7 @@ class ConsoleApp:
         mind = await self._mind_status()
         game = mind.get("world") if mind["ok"] else None
         why = None if mind["ok"] else (
-            f"The mind is {self.view.state}, so the cast count is unknown."
+            f"The cast count is read through the mind, {mind_words(self.view.state)}."
             if self.view.state != "running" else mind["error"])
         health["server"] = {**status.server_view(self._conns, bridge_port=self.s.bridge_port),
                             "game": game, "why": why,
@@ -782,7 +782,7 @@ class ConsoleApp:
     async def _bank_snapshot(self) -> tuple[dict | None, str | None]:
         """(the mind's bank, None) or (None, why): the bank is read through the mind."""
         if self.view.state != "running":
-            return None, f"The bank is read through the mind, which is {self.view.state}."
+            return None, f"The bank is read through the mind, {mind_words(self.view.state)}."
         if self.link is None:
             return None, "The bank is read through the mind, and the console has no link to its control endpoint."
         try:
@@ -790,7 +790,7 @@ class ConsoleApp:
                                             timeout=BANK_S)
         except LinkError as e:
             words = str(e)
-            return None, words[:1].upper() + words[1:] + "."
+            return None, words[:1].upper() + words[1:] + ("" if words.endswith(".") else ".")
         if reply.get("ok") is not True:
             error = str(reply.get("error") or "")
             if error.startswith(OLD_OPS):

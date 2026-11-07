@@ -63,7 +63,7 @@ function renderRealm(v) {
   var now = Date.now() / 1000, rivals = arr(v.rivals), box = $("realm-rivals");
   renderKpis($("realm-kpis"), [
     { k: "Rival guilds", v: String(rivals.length), d: "" },
-    { k: "Their first kills", v: String(firstKills(v.race)), d: "bosses" },
+    { k: "Their first kills", v: String(firstKills(v.race)), d: "bosses the guild hasn't killed" },
     { k: "Trade lines (7 d)", v: String(tradeCount(v.lines, now)), d: "" },
     { k: "Canon grants", v: String(arr(v.canon).length), d: "" }]);
   var lines = $("realm-lines"), canon = $("realm-canon"), poach = $("realm-poach"), race = $("realm-race");

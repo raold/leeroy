@@ -78,6 +78,8 @@ async def served(app):
 
 def test_the_bank_tab_merges_the_minds_snapshot_with_names_and_the_ledger(db, data):
     link = FakeLink(SNAPSHOT)
+    db.execute("INSERT INTO meta(key,value) VALUES('human_guid','1102')")  # his own money log row
+    db.commit()
 
     async def go():
         async with served(make_app(data, mind=running(data), link=link)) as app:
@@ -90,7 +92,7 @@ def test_the_bank_tab_merges_the_minds_snapshot_with_names_and_the_ledger(db, da
     assert v["why"] is None and v["missing"] == []
     assert v["bank"]["money"] == 1234567 and v["bank"]["tabs"][0]["name"] == "Potions"
     assert v["bank"]["read_at"] == 1793304000.5 and v["bank"]["guild"] == 21
-    assert v["names"]["1101"] == "Member1101"
+    assert v["names"]["1101"] == "Member1101" and v["human"] == 1102  # the page says "You"
     assert v["items"]["2589"] == {"name": "Linen Cloth", "quality": 1}
     assert v["items"]["4306"]["name"] == "Silk Cloth" and "555" not in v["items"]
     assert "777777" not in v["items"]  # not in the library: the page says "Item #777777"
@@ -106,7 +108,7 @@ def test_the_bank_tab_says_why_with_the_mind_down(db, data):
         async with served(make_app(data, link=link)) as app:
             return (await http(app, "GET", "/api/bank")).json()
     v = asyncio.run(go())
-    assert v["bank"] is None and v["why"].startswith("The bank is read through the mind, which is ")
+    assert v["bank"] is None and v["why"] == "The bank is read through the mind, which isn't running."
     assert link.calls == [] and len(v["ledger"]) == bankview.LEDGER_MAX  # the ledger shows anyway
 
 
@@ -129,6 +131,8 @@ def test_the_minds_words_and_a_broken_link_come_through(db, data):
     assert v["why"] == "The game database didn't answer (QueryError)." and v["bank"] is None
     v = asyncio.run(ask(FakeLink(error="the mind is not listening where control.json says")))
     assert v["why"] == "The mind is not listening where control.json says." and v["bank"] is None
+    v = asyncio.run(ask(FakeLink(error="the endpoint is busy.")))
+    assert v["why"] == "The endpoint is busy." and v["bank"] is None  # never a second period
     v = asyncio.run(ask(None))
     assert v["bank"] is None and "no link" in v["why"]
 

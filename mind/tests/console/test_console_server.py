@@ -756,7 +756,7 @@ def test_health_carries_the_game_server(data):
             return (await http(app, "GET", "/api/health")).json()
     h = asyncio.run(down())
     assert h["server"] == {"world": None, "auth": None, "bridge": None, "game": None,
-                           "why": "The mind is stopped, so the cast count is unknown.",
+                           "why": "The cast count is read through the mind, which isn't running.",
                            "ports": {"world": 8085, "auth": 3724, "bridge": 7878}}
 
     async def broken():

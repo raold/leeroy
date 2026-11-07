@@ -38,8 +38,9 @@ export function tradeCount(lines, now) {
   return arr(lines).filter(function (l) { return num(l.ts) >= now - WEEK_S; }).length;
 }
 
+// The bosses a rival has killed and the guild has not (a guild kill, canon day included, came first)
 export function firstKills(race) {
   return arr(race).filter(function (r) {
-    return Object.keys(obj(r.rivals)).some(function (g) { return obj(r.rivals[g]).state === "killed"; });
+    return !obj(r).guild_at && Object.keys(obj(r.rivals)).some(function (g) { return obj(r.rivals[g]).state === "killed"; });
   }).length;
 }

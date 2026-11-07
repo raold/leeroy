@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { COLUMNS, ROWS, gridRows, money, slotMap, slotsUsed, quality, itemName, logWords, tabButtons } from "../../../leeroy_mind/console/static/js/bankgrid.mjs";
+import { COLUMNS, ROWS, gridRows, money, slotMap, slotsUsed, quality, itemName, logWords, tabButtons, who } from "../../../leeroy_mind/console/static/js/bankgrid.mjs";
 
 test("the grid lays slots out as the game's bank frame does", () => {
   const g = gridRows();
@@ -35,6 +35,14 @@ test("quality is clamped to q0..q5 and a name falls back to the id", () => {
   assert.equal(quality({ "5": { name: "A", quality: 3 } }, 5), "q3");
   assert.equal(itemName({ "5": { name: "Linen Cloth", quality: 1 } }, 5), "Linen Cloth");
   assert.equal(itemName({}, 777777), "Item #777777");
+});
+test("his own rows say You, others their name or #guid", () => {
+  const v = { human: 9, names: { "9": "Hisname", "1101": "Member1101" } };
+  assert.equal(who(v, 9), "You");
+  assert.equal(who(v, 1101), "Member1101");
+  assert.equal(who(v, 5), "#5");
+  assert.equal(who({ human: 0, names: {} }, 0), "#0");
+  assert.equal(who({ names: { "9": "Hisname" } }, 9), "Hisname");
 });
 test("log rows read in words", () => {
   assert.equal(logWords(4), "deposit");

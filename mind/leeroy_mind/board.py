@@ -3,7 +3,9 @@ in his mailbox. The console's one write: POST /api/board, then the control endpo
 (endpoint.board_args checks and cleans its arguments), then BoardDesk.handle, which stores the
 reply in mind.db's board_reply `waiting`. The Realm night takes waiting replies up (waiting) and
 settles each (settle): an answer, his post standing unanswered, a refusal by its screen, or
-nothing when he withdrew it first.
+nothing when he withdrew it first. A night whose answer fails (the screen refuses it, or the model
+gives none) leaves it waiting; answer_failed counts those nights, and on the ANSWER_NIGHTS-th the
+night settles it refused, reason NO_ANSWER.
 
 The text rule, which the page's boardmodel.mjs applies too (the shared fixture
 tests/fixtures/board_reply_text.jsonl): the box holds at most RAW_MAX characters; cleaning drops
@@ -12,6 +14,7 @@ nothing left, or more than POST_MAX (a forum post) or LETTER_MAX (a letter) char
 never cut. A string that does not encode as UTF-8 (a lone surrogate) cannot be stored.
 
 Logs carry the kind and the outcome only: never the text, a post, a letter or a name."""
+import json
 import sqlite3
 
 from leeroy_mind.logs import log as log_event
@@ -22,6 +25,8 @@ LETTER_MAX = 400
 RAW_MAX = 1024  # what the console's box may hold before it is cleaned
 KINDS = ("post", "letter")
 SETTLED = ("answered", "posted", "refused", "withdrawn")
+ANSWER_NIGHTS = 3  # nights a reply's answer may fail before it is settled refused, NO_ANSWER
+NO_ANSWER = "no_answer"
 
 STOPPING = "The mind is stopping."
 NO_TABLE = "This mind.db predates Board replies: stop the mind and run db migrate."
@@ -175,16 +180,42 @@ def waiting(conn, kind: str, limit: int) -> list[sqlite3.Row]:
                         "ORDER BY ts, id LIMIT ?", (kind, max(0, int(limit)))).fetchall()
 
 
+def _failed_key(reply_id: int) -> str:
+    return f"board:reply:{reply_id}:failed"
+
+
+def answer_failed(conn, reply_id: int, night: str) -> int:
+    """Count `night` once among the nights this reply's answer failed (meta
+    board:reply:<id>:failed, the nights as a JSON list; an unreadable one starts again) and
+    return how many there are. Inside the caller's unit; it never commits."""
+    key = _failed_key(reply_id)
+    row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    try:
+        nights = json.loads(row[0]) if row is not None else []
+    except (TypeError, ValueError):
+        nights = []
+    if not (isinstance(nights, list) and all(isinstance(n, str) for n in nights)):
+        nights = []
+    if night not in nights:
+        nights.append(night)
+        conn.execute("INSERT INTO meta(key, value) VALUES (?, ?) "
+                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, json.dumps(nights)))
+    return len(nights)
+
+
 def settle(conn, reply_id: int, *, state: str, night: str | None, now: float,
            reason: str | None = None, fact: int | None = None, answer_post: int | None = None,
            answer_mail: int | None = None) -> bool:
-    """Settle one waiting reply: True when it was waiting and is now `state`, False when it was
-    not (taken up already, withdrawn, or no such reply), which changes nothing. Inside the
-    caller's unit; it never commits."""
+    """Settle one waiting reply: True when it was waiting and is now `state` (the nights its
+    answer failed are forgotten), False when it was not (taken up already, withdrawn, or no such
+    reply), which changes nothing. Inside the caller's unit; it never commits."""
     if state not in SETTLED:
         raise ValueError(f"state is one of {', '.join(SETTLED)}")
     cur = conn.execute(
         "UPDATE board_reply SET state = ?, night = ?, settled = ?, reason = ?, fact = ?, "
         "answer_post = ?, answer_mail = ? WHERE id = ? AND state = 'waiting'",
         (state, night, now, reason, fact, answer_post, answer_mail, reply_id))
-    return cur.rowcount == 1
+    if cur.rowcount != 1:
+        return False
+    conn.execute("DELETE FROM meta WHERE key = ?", (_failed_key(reply_id),))
+    return True

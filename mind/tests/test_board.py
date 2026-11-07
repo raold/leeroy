@@ -260,6 +260,30 @@ def test_settle_and_waiting_for_the_night(seeded):
         board.settle(seeded.conn, ids[1], state="waiting", night="x", now=NOW)
 
 
+def test_the_nights_an_answer_failed_are_counted_once_each_and_settling_clears_them(seeded):
+    """At most ANSWER_NIGHTS nights without an answer (meta board:reply:<id>:failed); settle
+    forgets them, whatever the outcome."""
+    assert (board.ANSWER_NIGHTS, board.NO_ANSWER) == (3, "no_answer")
+    desk = board.BoardDesk(App(seeded))
+    one = ask(desk, reply(to=7, text="post 7"))["id"]
+    two = ask(desk, reply(to=8, text="post 8"))["id"]
+    with seeded.transaction():
+        assert board.answer_failed(seeded.conn, one, "2026-11-07") == 1
+        assert board.answer_failed(seeded.conn, one, "2026-11-07") == 1  # the same night once
+        assert board.answer_failed(seeded.conn, one, "2026-11-08") == 2
+        assert board.answer_failed(seeded.conn, two, "2026-11-08") == 1
+    key = f"board:reply:{one}:failed"
+    assert json.loads(seeded.get_meta(key)) == ["2026-11-07", "2026-11-08"]
+    with seeded.transaction():
+        seeded.conn.execute("UPDATE meta SET value = 'not json' WHERE key = ?", (key,))
+        assert board.answer_failed(seeded.conn, one, "2026-11-09") == 1  # unreadable: counted anew
+        assert board.settle(seeded.conn, one, state="refused", night="2026-11-09", now=NOW,
+                            reason=board.NO_ANSWER) is True
+        assert board.settle(seeded.conn, two, state="answered", night="2026-11-09", now=NOW) is True
+    assert seeded.get_meta(key) is None and seeded.get_meta(f"board:reply:{two}:failed") is None
+    assert (_row(seeded, one)["state"], _row(seeded, one)["reason"]) == ("refused", "no_answer")
+
+
 def test_a_reply_survives_a_mind_restart(seeded, clock):
     path = Path(seeded.conn.execute("PRAGMA database_list").fetchone()["file"])
     saved = ask(board.BoardDesk(App(seeded)), reply(text="before the restart"))

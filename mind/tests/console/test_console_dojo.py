@@ -3,6 +3,7 @@ layouts and files under tmp_path only; the live dojo-data and dojo-runtime are n
 import asyncio
 import json
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -319,6 +320,20 @@ def test_nothing_is_written_under_the_roots(tmp_path):
 def test_no_git_installed_means_none(tmp_path, monkeypatch):
     monkeypatch.setattr(dojoview.shutil, "which", lambda name: None)
     assert dojoview.run_git(tmp_path, "rev-parse", "--verify", "HEAD") is None
+
+
+def test_git_runs_without_a_console_window(tmp_path, monkeypatch):
+    """The logon task's pythonw console must never flash a git window (as status.py and
+    health.py run their tools)."""
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen.update(kw)
+        return SimpleNamespace(returncode=0, stdout="abc\n")
+    monkeypatch.setattr(dojoview.shutil, "which", lambda name: "git")
+    monkeypatch.setattr(dojoview.subprocess, "run", fake_run)
+    assert dojoview.run_git(tmp_path, "rev-parse", "HEAD") == "abc"
+    assert seen["creationflags"] == getattr(dojoview.subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def test_the_route_reads_the_layout_and_the_console_tcp_table(tmp_path):

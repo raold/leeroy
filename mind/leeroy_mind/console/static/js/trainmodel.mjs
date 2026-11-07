@@ -14,11 +14,15 @@ export function adaptText(v) {
   return { v: Math.max(0, Math.round(num(v.days_observed))) + " of " + FOUR_WEEKS + " days", d: plural(num(v.days_left), "day") + " to go" };
 }
 
-// The overhead gate: {v, d, ok}
+var GATE_PHASES = { ab: "Measuring", passed: "Passed", failed: "Failed" };
+
+// The overhead gate: {v, d, ok}. Its phase is the gate's own verdict against its configured limit
 export function gateText(g) {
   g = obj(g);
-  var ms = typeof g.verdict_ms === "number" ? g.verdict_ms.toFixed(2) + " ms" : "no verdict";
-  return { v: g.passed ? "Passed" : str(g.phase) || "-", d: ms + (g.passed ? "" : " (needs a pass at 1 ms or less)"), ok: g.passed === true };
+  var ms = typeof g.verdict_ms === "number" ? g.verdict_ms.toFixed(2) + " ms" : "";
+  var d = g.phase === "ab" ? "no verdict yet (" + plural(num(g.raids), "raid") + " measured)"
+        : g.phase === "failed" ? (ms ? ms + ", " : "") + "over the gate's limit" : ms || "no verdict";
+  return { v: GATE_PHASES[g.phase] || str(g.phase) || "-", d: d, ok: g.passed === true };
 }
 
 // A boss's change against its baseline, as words
@@ -56,6 +60,12 @@ export function evidenceNotes(e) {
     out.push("voice: audible delivery " + voice.audible_delivery + ", facts " + voice.fact_delivery + ", cast coverage " + voice.cast_coverage);
   }
   return out;
+}
+
+// A trial's or a card group's scope as its boss and mode (trainview's _scope); the raw scope without them
+export function scopeText(x) {
+  x = obj(x);
+  return (str(x.boss) || str(x.scope)) + (x.mode ? " · " + str(x.mode) : "");
 }
 
 export function trialText(t) {

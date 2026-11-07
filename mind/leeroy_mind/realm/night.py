@@ -32,8 +32,10 @@ nothing awaited inside the commit (NightContext.commit):
   (_author), and nobody leaves it posted. It writes the way back in as a post does. A letter reply that passes the letter screen becomes the member's private memory
   with him (key board-reply:<id>) and her answer, a realm_mail 'reply' row ready for the post
   office. His text refused is settled 'refused' with its reason and never asked again; an answer
-  refused fails the unit and his reply waits. A reply that stopped waiting before the commit
-  (withdrawn, or settled) is left alone (board.settle).
+  refused (by its screen, and a forum answer by its fact's own too, before the commit) or not
+  given (the model's error) fails the unit and his reply waits, for at most board.ANSWER_NIGHTS nights
+  (board.answer_failed counts each once): on the last it is settled 'refused', no_answer. A reply
+  that stopped waiting before the commit (withdrawn, or settled) is left alone (board.settle).
 A unit whose output the screen refuses fails, writes nothing and waits for a later night. The
 public units (beats, posts, write-ups) wait while the screen is not ready (no blocklist, or his
 guild's name unknown); letters are private and do not.
@@ -56,7 +58,7 @@ from leeroy_mind.llm.scheduler import SchedulerError
 from leeroy_mind.logs import log
 from leeroy_mind.nightly.budget import register_counter
 from leeroy_mind.nightly.ground import LEAVES_RE
-from leeroy_mind.nightly.llm import schema, system_prompt
+from leeroy_mind.nightly.llm import ReflectionError, schema, system_prompt
 from leeroy_mind.nightly.runner import NightContext
 from leeroy_mind.personas.screens import names_real_name
 from leeroy_mind.storage.rows import MemoryRow
@@ -323,7 +325,12 @@ class _Night:
         if kind in PUBLIC and not self.public_ready:
             return  # The screen went away mid-night: the unit waits.
         if kind in ("post", "letter") and key.startswith("reply:"):
-            await (self._post_reply if kind == "post" else self._letter_reply)(int(key[6:]), unit)
+            reply_id = int(key[6:])
+            try:
+                await (self._post_reply if kind == "post" else self._letter_reply)(reply_id, unit)
+            except (_Refused, ReflectionError) as e:  # His reply's answer failed tonight.
+                if getattr(e, "fatal", False) or not self._no_answer(unit, reply_id):
+                    raise
             return
         await {"beat": self._beat, "post": self._post, "letter": self._letter,
                "writeup": self._writeup}[kind](key, unit)
@@ -543,6 +550,22 @@ class _Night:
         if self._commit(unit, write):
             log("realm_night_reply", night=ctx.night, unit=unit, outcome="refused", reason=reason)
 
+    def _no_answer(self, unit: str, reply_id: int) -> bool:
+        """His reply's answer failed tonight: the night is counted once (board.answer_failed). On
+        the board.ANSWER_NIGHTS-th it is settled refused, no_answer, and the unit is done: True.
+        Before that, with the Realm off, or once it stopped waiting, False: it waits."""
+        ctx = self.ctx
+        if not self.live():
+            return False
+        with self.store.transaction():
+            if not _waiting(self.store, reply_id):
+                return False
+            nights = board.answer_failed(self.store.conn, reply_id, ctx.night)
+        if nights < board.ANSWER_NIGHTS:
+            return False
+        self._refuse_reply(unit, reply_id, board.NO_ANSWER)
+        return True
+
     def _thread_back_in(self, thread: str):
         """Ledger.back_in's plans for a thread about an event fact; none for a rumor's."""
         subject, _, ident = thread.partition(":")
@@ -581,6 +604,8 @@ class _Night:
             got = await ctx.reasoner.json(system, user, POST_SCHEMA)
             answer = " ".join(repair(got["text"], speaker=name).split())
             reason = self._public(answer, "member" if author_kind == "member" else "officer", POST_MAX)
+            if reason is None and type(screened := screen_rule_text(answer, human=ctx.ident)) is Rejected:
+                reason = screened.reason  # Its forum fact would refuse it.
             if reason is not None:
                 raise _Refused("post", reason)  # His reply waits for another night.
         prepared = await self._prepare(self._thread_back_in(parent["thread"]))

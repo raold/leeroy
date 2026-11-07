@@ -90,6 +90,7 @@ test("the box's words and what each reply's state shows", () => {
   assert.deepEqual(replyShows({ state: "waiting" }), { chip: "waiting for tonight", note: "", bad: false, withdraw: true });
   assert.deepEqual(replyShows({ state: "refused", reason: "screen_name" }),
                    { chip: "", note: "Not posted: screen name", bad: true, withdraw: false });
+  assert.equal(replyShows({ state: "refused", reason: "no_answer" }).note, "Not posted: no answer");  // 3 nights unanswered
   assert.deepEqual(replyShows({ state: "posted" }), { chip: "", note: "Nobody answered", bad: false, withdraw: false });
   assert.deepEqual(replyShows({ state: "withdrawn" }), { chip: "withdrawn", note: "", bad: false, withdraw: false });
   assert.deepEqual(replyShows({ state: "answered" }), { chip: "answered", note: "", bad: false, withdraw: false });

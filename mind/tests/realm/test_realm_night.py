@@ -710,6 +710,57 @@ def test_a_refused_answer_waits_for_another_night(rig):
     assert set(units) <= set(night.plan_units(rig.ctx(night_="2026-10-30")))
 
 
+REFUSED_ANSWER = {"text": f"{GUILD_NAME} should stay out of it."}  # the forum screen refuses it
+BROKEN_ANSWER = {"subject": "", "body": ""}  # does not fit the schema: the model gave no answer
+
+
+def test_an_answer_that_fails_three_nights_settles_his_reply_unanswered(rig):
+    rid = rig.reply("post", rig.post("rumor:901", author=101), 101, "Agreed, that pull was clean.")
+    lid = rig.reply("letter", rig.delivered(sender=103), 103, "Back on Thursday.")
+    units = [f"post:reply:{rid}", f"letter:reply:{lid}"]
+    settings = replace(rig.settings, realm_units=0)
+
+    def bad_night(night_):
+        ctx = rig.ctx({"realm_post": [REFUSED_ANSWER], "realm_letter": [BROKEN_ANSWER] * 2},
+                      night_=night_, settings=settings)
+        run(night.run_units(ctx, units))
+        return ctx
+    for night_ in ("2026-10-29", "2026-10-30"):
+        for _ in range(2):  # a night resumed after his login counts once
+            ctx = bad_night(night_)
+            assert ctx.failures[night.STAGE] == 2 and not any(ctx.done(night.STAGE, u) for u in units)
+        assert rig.replied(rid)["state"] == rig.replied(lid)["state"] == "waiting"
+    ctx = bad_night("2026-10-31")
+    assert not ctx.failures and all(ctx.done(night.STAGE, u) for u in units)
+    assert [(r["state"], r["reason"], r["night"]) for r in map(rig.replied, (rid, lid))] == [
+        ("refused", "no_answer", "2026-10-31")] * 2
+    assert (rig.count("realm_post"), rig.count("realm_rule_origin"), rig.count("memory"),
+            rig.count("realm_mail", "kind='reply'")) == (1, 0, 0, 0)
+    assert rig.count("meta", "key GLOB 'board:reply:*'") == 0
+    assert not set(units) & set(night.plan_units(rig.ctx(night_="2026-11-01")))
+
+
+def test_an_answer_after_a_failed_night_forgets_it(rig):
+    rid = rig.reply("post", rig.post("rumor:901", author=101), 101, "Agreed, that pull was clean.")
+    settings = replace(rig.settings, realm_units=0)
+    one(rig.ctx({"realm_post": [REFUSED_ANSWER]}, settings=settings), f"post:reply:{rid}")
+    assert rig.count("meta", "key GLOB 'board:reply:*'") == 1
+    ctx = rig.ctx(night_="2026-10-30", settings=settings)
+    one(ctx, f"post:reply:{rid}")
+    assert not ctx.failures and rig.replied(rid)["state"] == "answered"
+    assert rig.count("meta", "key GLOB 'board:reply:*'") == 0
+
+
+def test_an_answer_its_forum_fact_would_refuse_is_a_failed_night(rig):
+    rid = rig.reply("post", rig.post("rumor:901", author=101), 101, "Agreed, that pull was clean.")
+    ctx = rig.ctx({"realm_post": [{"text": "|cff00ff00|r"}]}, settings=replace(rig.settings, realm_units=0))
+    assert night._Night(ctx)._public("|cff00ff00|r", "member", night.POST_MAX) is None  # The forum screen passes it.
+    one(ctx, f"post:reply:{rid}")
+    assert ctx.failures[night.STAGE] == 1 and rig.replied(rid)["state"] == "waiting"
+    assert (rig.count("realm_post"), rig.count("realm_rule_origin")) == (1, 0)
+    assert json.loads(rig.store.get_meta(f"board:reply:{rid}:failed")) == [NIGHT]
+
+
 def test_a_reply_withdrawn_before_the_commit_is_left_alone(rig):
     rid = rig.reply("post", rig.post("rumor:901", author=101), 101, "Agreed, that pull was clean.")
     lid = rig.reply("letter", rig.delivered(sender=103), 103, "Back on Thursday.")

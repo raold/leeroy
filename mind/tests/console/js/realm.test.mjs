@@ -28,6 +28,8 @@ test("the poaching offer, or none", () => {
 test("trade lines of the last seven days are counted", () => {
   assert.equal(tradeCount([{ ts: 100 }, { ts: 100 - 8 * 86400 }], 100), 1);
 });
-test("first kills count bosses a rival killed", () => {
+test("first kills count bosses a rival killed that the guild has not", () => {
   assert.equal(firstKills([{ rivals: { 1: { state: "killed" } } }, { rivals: { 1: { state: "progressing" } } }, {}]), 1);
+  assert.equal(firstKills([{ guild_at: 1788235200, rivals: { 1: { state: "killed" } } },
+                           { guild_at: null, rivals: { 2: { state: "killed" } } }]), 1);
 });

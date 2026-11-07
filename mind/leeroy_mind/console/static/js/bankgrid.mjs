@@ -47,6 +47,13 @@ export function quality(items, id) {
 }
 export function itemName(items, id) { return str(obj(obj(items)[String(id)]).name) || "Item #" + id; }
 
+// Who a money log or ledger row names: "You" for him, else the member's name, else #guid
+export function who(v, g) {
+  v = obj(v);
+  if (num(v.human) && g === v.human) { return "You"; }
+  return str(obj(v.names)[String(g)]) || "#" + g;
+}
+
 export function logWords(type) { return MONEY_WORDS[type] || "event " + num(type); }
 
 // The six tab buttons: {tab, text, bought}

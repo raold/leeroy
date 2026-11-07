@@ -2,11 +2,11 @@
 sees a database credential) merged with member names, item names from library.db (opened read-only;
 absent or unreadable means no names) and the ledger of what officers stocked or withdrew
 (mind.db `realm_bank`, shown whatever the mind's state)."""
-import sqlite3
-from contextlib import closing
 from pathlib import Path
 
+from . import items as library_items
 from . import views
+from .feed import human_guid
 
 LEDGER_MAX = 100
 
@@ -36,24 +36,6 @@ def clean_snapshot(reply: dict) -> dict | None:
             "guild": guild if _int(guild) else 0}
 
 
-def item_names(path: Path, ids) -> dict[str, dict]:
-    """{str(id): {"name", "quality"}} for the ids library.db knows; {} when it can't say."""
-    ids = sorted(set(ids))
-    if not ids or not Path(path).is_file():
-        return {}
-    out: dict[str, dict] = {}
-    try:
-        with closing(sqlite3.connect(f"{Path(path).resolve().as_uri()}?mode=ro", uri=True)) as c:
-            for i in range(0, len(ids), 500):
-                chunk = ids[i:i + 500]
-                for r in c.execute("SELECT id, name, quality FROM item WHERE id IN (%s)"
-                                   % ",".join("?" * len(chunk)), chunk):
-                    out[str(r[0])] = {"name": str(r[1]), "quality": int(r[2])}
-    except (sqlite3.Error, ValueError):
-        return {}
-    return out
-
-
 def bank_view(conn, *, snapshot: dict | None, why: str | None, data_dir: Path) -> dict:
     missing = [t for t in ("realm_bank",) if t not in views.tables(conn)]
     if not (Path(data_dir) / "library.db").is_file():
@@ -66,6 +48,8 @@ def bank_view(conn, *, snapshot: dict | None, why: str | None, data_dir: Path) -
     ids = {row["item_id"] for row in ledger}
     if snapshot:
         ids |= {s[1] for t in snapshot["tabs"] for s in t["slots"]}
-    return {"names": {str(g): n for g, n in views.names(conn).items()}, "missing": missing,
+    known = library_items.item_names(Path(data_dir) / "library.db", ids)
+    return {"human": human_guid(conn),
+            "names": {str(g): n for g, n in views.names(conn).items()}, "missing": missing,
             "bank": snapshot, "why": why,
-            "items": item_names(Path(data_dir) / "library.db", ids), "ledger": ledger}
+            "items": {str(k): v for k, v in known.items()}, "ledger": ledger}

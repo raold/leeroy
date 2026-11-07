@@ -66,7 +66,9 @@ def test_days_until_tactics_may_adapt(db):
 def test_the_gate_and_cards_per_boss(db):
     v = trainview.training_view(db, now=NOW)
     assert v["gate"] == {"phase": "passed", "raids": 2, "verdict_ms": 0.7, "passed": True}
-    _gate(db, "passed", 1.2)
+    _gate(db, "passed", 1.2)  # the gate's own limit is configurable: its phase is the verdict
+    assert trainview.training_view(db, now=NOW)["gate"]["passed"] is True
+    _gate(db, "failed", 0.9)
     assert trainview.training_view(db, now=NOW)["gate"]["passed"] is False
     _gate(db, "ab", 0.1)
     assert trainview.training_view(db, now=NOW)["gate"]["passed"] is False
@@ -84,6 +86,7 @@ def test_trials_pulls_and_checklist(db):
     assert [t["id"] for t in v["trials"]] == [1, 2]
     t = v["trials"][0]
     assert t["scope"] == "631:0:1" and t["status"] == "open" and t["arms"] == 2 and t["observations"] == 0
+    assert (t["boss"], t["mode"]) == ("Lord Marrowgar", "25-man")  # named as the cards are
     assert v["trials_open"] == 1
     assert len(v["checklist"]) == 6 and v["checklist"][3]["done"] is True and v["checklist"][0]["done"] is False
     assert v["evidence"]["schema"] == "available" and v["week"].startswith("2026-W")

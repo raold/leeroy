@@ -7,8 +7,8 @@
 -- at most 200 characters for the forum, 400 for a letter.
 -- state: 'waiting' until the night or he settles it, then 'answered' (the answer is answer_post
 -- or answer_mail), 'posted' (his forum reply stands, nobody answered), 'refused' (its text did
--- not pass the night's screen; reason says why, and it is never retried) or 'withdrawn' (he took
--- it back while it waited). night is the night that took it, settled when it stopped waiting;
+-- not pass the night's screen, or no answer came in board.ANSWER_NIGHTS nights: reason no_answer;
+-- reason says why, and it is never retried) or 'withdrawn' (he took it back while it waited). night is the night that took it, settled when it stopped waiting;
 -- fact is his own forum fact. At most one waiting reply per post or letter.
 CREATE TABLE board_reply (
   id INTEGER PRIMARY KEY CHECK(id >= 1),

@@ -963,8 +963,10 @@ Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
   for a thread about an event fact, none for a rumour's). A letter reply that passes the letter
   screen becomes that member's private memory with him (key `board-reply:<id>`) and an answer
   letter (`realm_mail` kind `reply`, `ready`) the post office delivers under its usual limits.
-  His text refused is settled `refused` with its reason and never retried; an answer refused
-  leaves his reply waiting for another night; one he withdrew before the commit is left alone.
+  His text refused is settled `refused` with its reason and never retried; an answer refused or
+  not given (the model's error) leaves his reply waiting for another night, at most 3 such nights
+  (meta `board:reply:<id>:failed`), then it is settled `refused`, `no_answer`; one he withdrew
+  before the commit is left alone.
   While the screen is not ready his forum replies wait; letter replies do not.
 - **Calendar and mail.** The desk posts raid nights (from his logins), Thursday's officer
   meeting and the members' card birthdays a week ahead, signs members up and notes the raid

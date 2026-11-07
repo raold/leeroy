@@ -1,6 +1,6 @@
 import { $, arr, clear, el, num, obj, plural, str } from "./core.mjs";
 import { notSetUp, pollTab, renderKpis } from "./tabkit.mjs";
-import { adaptText, changeText, coverageText, deathsText, evidenceNotes, gateText, trialText } from "./trainmodel.mjs";
+import { adaptText, changeText, coverageText, deathsText, evidenceNotes, gateText, scopeText, trialText } from "./trainmodel.mjs";
 import { when } from "./words.mjs";
 
 // -- the training tab: mind.db only, read-only -----------------------------------------------------
@@ -46,7 +46,7 @@ function renderTraining(v) {
   clear(trials);
   arr(v.trials).forEach(function (t) {
     var r = row();
-    r.appendChild(el("strong", "", str(t.scope)));
+    r.appendChild(el("strong", "", scopeText(t)));
     r.appendChild(el("span", "chip", str(t.status)));
     r.appendChild(el("span", "muted", "opened " + when(t.opened)));
     r.appendChild(el("span", "", trialText(t)));
@@ -58,7 +58,7 @@ function renderTraining(v) {
   clear(cards);
   Object.keys(tree).forEach(function (ctx) {
     var g = obj(tree[ctx]);
-    cards.appendChild(el("h4", "", str(g.boss) + (g.mode ? " · " + str(g.mode) : "")));
+    cards.appendChild(el("h4", "", scopeText(g)));
     arr(g.cards).forEach(function (c) {
       var r = row();
       r.appendChild(el("span", "", "v" + num(c.version)));

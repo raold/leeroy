@@ -23,13 +23,22 @@ def _own(conn) -> dict | None:
     return None
 
 
-def _guild_kills(conn, now: float) -> dict:
+def _guarded(read) -> dict:
     try:
-        return race.Race._live_kills(conn, int(now * 1000))
+        return read()
     except sqlite3.OperationalError as e:
         if str(e).startswith(("no such table", "no such column")):
             return {}
         raise
+
+
+def _guild_kills(conn, now: float) -> dict:
+    """The guild's first kill of each mode, as the race counts it: the canon day of a canon boss
+    (realm/race.py) or its first live kill, the earlier of the two."""
+    kills = _guarded(lambda: race.Race._live_kills(conn, int(now * 1000)))
+    for key, day in _guarded(lambda: race.Race._canon(conn)).items():
+        kills[key] = min(kills.get(key, day), day)
+    return kills
 
 
 def realm_view(conn, *, now: float) -> dict:
