@@ -657,12 +657,12 @@ def _telemetry(conn, root: Path, data: Path, now: float) -> Check:
 
 def _gate_phase(conn) -> tuple[str, int]:
     """The training overhead gate's phase (ab, passed or failed) and the offline raids it has
-    counted, from meta tg_gate as `training gate` reads it (training.cli._gate). A value the
-    gate itself would not accept is "failed", as training.gate.Gate reads it: corrupt state never
-    re-arms recording."""
-    from .training.cli import _gate
+    counted, from meta tg_gate as `training gate` reads it (training.inspect.gate_state). A
+    value the gate itself would not accept is "failed", as training.gate.Gate reads it:
+    corrupt state never re-arms recording."""
+    from .training.inspect import gate_state
     try:
-        saved = _gate(conn)
+        saved = gate_state(conn)
     except (ValueError, TypeError):
         return "failed", 0
     if not isinstance(saved, dict):

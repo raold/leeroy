@@ -24,6 +24,18 @@ nothing awaited inside the commit (NightContext.commit):
   memory; the sender's memory of it is the post office's, once it is sent.
 - writeup:<id>: at most 2 scored or ended realm_event rows of the last week without one: the
   write-up goes into the event's result.
+- post:reply:<id> and letter:reply:<id>: his Board replies (board.waiting), taken before the
+  night's own posts and letters, oldest first, inside the same caps. A forum reply that passes the
+  forum screen and the fact's own (screen_rule_text, checked before any model call) becomes his
+  own public forum_post_v1 fact (key reply:<id>), which every realm guild knows by `forum`; the
+  post's author answers it in the thread while they can still write, else the night's author pool
+  (_author), and nobody leaves it posted. It writes the way back in as a post does. A letter reply that passes the letter screen becomes the member's private memory
+  with him (key board-reply:<id>) and her answer, a realm_mail 'reply' row ready for the post
+  office. His text refused is settled 'refused' with its reason and never asked again; an answer
+  refused (by its screen, and a forum answer by its fact's own too, before the commit) or not
+  given (the model's error) fails the unit and his reply waits, for at most board.ANSWER_NIGHTS nights
+  (board.answer_failed counts each once): on the last it is settled 'refused', no_answer. A reply
+  that stopped waiting before the commit (withdrawn, or settled) is left alone (board.settle).
 A unit whose output the screen refuses fails, writes nothing and waits for a later night. The
 public units (beats, posts, write-ups) wait while the screen is not ready (no blocklist, or his
 guild's name unknown); letters are private and do not.
@@ -39,16 +51,19 @@ import hashlib
 import json
 from typing import Awaitable, Callable, Sequence
 
+from leeroy_mind import board
 from leeroy_mind.config import ConfigError
 from leeroy_mind.llm.client import LLMError
 from leeroy_mind.llm.scheduler import SchedulerError
 from leeroy_mind.logs import log
 from leeroy_mind.nightly.budget import register_counter
 from leeroy_mind.nightly.ground import LEAVES_RE
-from leeroy_mind.nightly.llm import schema, system_prompt
+from leeroy_mind.nightly.llm import ReflectionError, schema, system_prompt
 from leeroy_mind.nightly.runner import NightContext
 from leeroy_mind.personas.screens import names_real_name
+from leeroy_mind.storage.rows import MemoryRow
 from leeroy_mind.talk.filters import find_tells, is_silence, repair
+from leeroy_mind.text import truncate_words
 from leeroy_mind.wow import boss_name
 
 from . import mail
@@ -58,7 +73,7 @@ from .ledger import Ledger, put_notable_in_unit
 from .ports import GUILD_NAME_KEY
 from .provenance import public_fact_in_unit
 from .records import FactRow, PreparedBackIn, Rejected
-from .rule_facts import put_rule_fact_in_unit, rule_fact_in_unit
+from .rule_facts import put_rule_fact_in_unit, rule_fact_in_unit, screen_rule_text
 from .screen import Screen, insults_a_group
 
 STAGE = "realm"
@@ -70,6 +85,7 @@ FRESH_S = LIMITS.week_s       # how new a fact or an event must be for the night
 POST_MAX = 200                # a post is its forum_post_v1 fact's text
 LETTER_MAX, SUBJECT_MAX = 400, 40
 WRITEUP_MAX = 400
+MEMORY_MAX = 200              # a memory's text
 _U32 = 0xFFFFFFFF
 
 # Tasks 27 and 28: kind -> (units(ctx) -> unit names, run(ctx, unit)), each run committing its
@@ -105,6 +121,14 @@ LETTER_DEFAULT = """{sender} is writing an in-game letter to {called}. {occasion
 {sender} would type it, warm and in their own voice: a subject of at most 40 characters and a
 body of at most 400 characters. Never use anyone's real name and never say anyone is leaving
 the guild."""
+REPLY_POST_DEFAULT = """{author} wrote a post on the realm's forum and {called} replied to it. Write
+{author}'s answer to the reply, in their own voice, at most 200 characters, as a player would type
+it. Never name a guild, never use anyone's real name, never insult a group of people, never flirt
+and never tell anyone to leave their guild."""
+REPLY_LETTER_DEFAULT = """{sender} sent {called} an in-game letter and {called} wrote back. Write
+{sender}'s answer as {sender} would type it, warm and in their own voice: a subject of at most 40
+characters and a body of at most 400 characters. Never use anyone's real name and never say anyone
+is leaving the guild."""
 WRITEUP_DEFAULT = """Write a short write-up of a guild event that ran while {called} was away,
 for the guild's records: what happened, who did well and one light detail. Use only the details
 below. At most 400 characters. Never use anyone's real name, never flirt and never say anyone
@@ -254,8 +278,15 @@ class _Night:
         return [c for c in self.ledger.forum_candidates(limit=min(20, need + len(posted)))
                 if f"rumor:{c.rumor_id}" not in posted][:need]
 
+    def _replies(self, kind: str, need: int) -> list[str]:
+        """His waiting Board replies of this kind, oldest first."""
+        with self.store.transaction():
+            rows = board.waiting(self.store.conn, kind, need)
+        return [f"{kind}:reply:{row['id']}" for row in rows]
+
     def candidates(self, kind: str, need: int) -> list[str]:
-        """Up to `need` units of `kind` the night could take up now."""
+        """Up to `need` units of `kind` the night could take up now: for posts and letters, his
+        waiting Board replies first."""
         if need <= 0 or (kind in PUBLIC and not self.public_ready):
             return []
         if kind in HEAVY:
@@ -263,12 +294,16 @@ class _Night:
         if kind == "beat":
             return [f"beat:{row['id']}" for row in self._rivals()][:need]
         if kind == "post":
-            facts = [f"post:fact:{f.id}" for f in self._fresh_facts(need)]
-            return (facts + [f"post:rumor:{c.rumor_id}" for c in self._fresh_rumors(need - len(facts))])
+            replies = self._replies("post", need)
+            facts = [f"post:fact:{f.id}" for f in self._fresh_facts(need - len(replies))]
+            return (replies + facts + [f"post:rumor:{c.rumor_id}"
+                                       for c in self._fresh_rumors(need - len(replies) - len(facts))])
         if kind == "letter":
+            replies = self._replies("letter", need)
             with self.store.transaction():
-                wanted = mail.texts_wanted(self.store.conn, limit=need)
-            return [f"letter:{want.id}" for want in wanted if self.ctx.personas.get(want.sender) is not None]
+                wanted = mail.texts_wanted(self.store.conn, limit=need - len(replies))
+            return replies + [f"letter:{want.id}" for want in wanted
+                              if self.ctx.personas.get(want.sender) is not None]
         if kind == "writeup":
             return [f"writeup:{row['id']}" for row in self._events()][:need]
         return []
@@ -289,6 +324,14 @@ class _Night:
             return
         if kind in PUBLIC and not self.public_ready:
             return  # The screen went away mid-night: the unit waits.
+        if kind in ("post", "letter") and key.startswith("reply:"):
+            reply_id = int(key[6:])
+            try:
+                await (self._post_reply if kind == "post" else self._letter_reply)(reply_id, unit)
+            except (_Refused, ReflectionError) as e:  # His reply's answer failed tonight.
+                if getattr(e, "fatal", False) or not self._no_answer(unit, reply_id):
+                    raise
+            return
         await {"beat": self._beat, "post": self._post, "letter": self._letter,
                "writeup": self._writeup}[kind](key, unit)
 
@@ -375,6 +418,18 @@ class _Night:
                     and ("competitor" in (p.game.motivation, p.game.thinks_as)
                          or p.big_five.neuroticism.score >= 7)):
                 pool.append(("member", guid))
+        actors = self._actors(about)
+        pool += [("actor", guid) for guid in actors]
+        if not pool:
+            return None
+        kind, guid = ctx.rng(STAGE, key).choice(pool)
+        if kind == "member":
+            return self._as_member(guid)
+        return self._as_actor(actors[guid])
+
+    def _actors(self, about: int = 0) -> dict:
+        """The officers who may write on the forum, by guid: active, of an active rival guild,
+        never excluded, not in the cast, and neither `about` nor him."""
         excluded = self.ledger.actor_exclusions()
         with self.store.transaction():
             roster = {row[0] for row in self.store.conn.execute("SELECT guid FROM cast_member")}
@@ -382,18 +437,31 @@ class _Night:
                 "SELECT a.guid, a.name, g.name AS guild, g.role FROM realm_actor a JOIN realm_guild g "
                 "ON g.id=a.guild WHERE a.role='officer' AND a.status='active' AND g.status='active' "
                 "AND g.id!=? ORDER BY a.guid", (self.guild,)).fetchall()
-        actors = {row["guid"]: row for row in officers
-                  if row["guid"] not in excluded and row["guid"] not in roster
-                  and row["guid"] not in (about, ctx.human)}
-        pool += [("actor", guid) for guid in actors]
-        if not pool:
-            return None
-        kind, guid = ctx.rng(STAGE, key).choice(pool)
-        if kind == "member":
-            return guid, kind, ctx.name(guid), {"who": "a member of the guild", "card": ctx.card(guid)}
-        row = actors[guid]
-        return guid, kind, row["name"], {
+        return {row["guid"]: row for row in officers
+                if row["guid"] not in excluded and row["guid"] not in roster
+                and row["guid"] not in (about, self.ctx.human)}
+
+    def _as_member(self, guid: int):
+        return guid, "member", self.ctx.name(guid), {"who": "a member of the guild",
+                                                     "card": self.ctx.card(guid)}
+
+    @staticmethod
+    def _as_actor(row):
+        return row["guid"], "actor", row["name"], {
             "who": f"an officer of {row['guild']}, {_ROLES.get(row['role'], 'a guild')}"}
+
+    def _still_writes(self, guid: int, author_kind: str):
+        """A post's own author as _author gives one, while they can still write: a member of
+        tonight's cast, never a former one, with a persona; or an officer _actors allows. Else
+        None."""
+        ctx = self.ctx
+        if author_kind == "member":
+            if (guid in ctx.members() and guid not in self.ledger.former_members()
+                    and ctx.personas.get(guid) is not None):
+                return self._as_member(guid)
+            return None
+        row = self._actors().get(guid) if author_kind == "actor" else None
+        return None if row is None else self._as_actor(row)
 
     async def _prepare(self, plans) -> tuple[PreparedBackIn, ...]:
         """The way back in's one vector, embedded before the commit; without one the memories
@@ -452,12 +520,130 @@ class _Night:
             store.conn.execute(
                 "INSERT INTO realm_post(ts, author, author_kind, thread, text, fact) VALUES (?,?,?,?,?,?)",
                 (now, guid, author_kind, key, post.text, post.id))
-            for item in prepared:
-                result = put_notable_in_unit(store, ctx.writer, item, human=ctx.ident, now=now)
-                if type(result) is Rejected:
-                    log("realm_night_notable_refused", night=ctx.night, unit=unit,
-                        owner=item.plan.owner, reason=result.reason)
+            self._notables(store, unit, prepared, now)
         self._commit(unit, write)
+
+    def _notables(self, store, unit: str, prepared, now: float) -> None:
+        """A post's way back in, inside its commit."""
+        ctx = self.ctx
+        for item in prepared:
+            result = put_notable_in_unit(store, ctx.writer, item, human=ctx.ident, now=now)
+            if type(result) is Rejected:
+                log("realm_night_notable_refused", night=ctx.night, unit=unit,
+                    owner=item.plan.owner, reason=result.reason)
+
+    # -- his Board replies ---------------------------------------------------------------------
+
+    def _waiting_reply(self, reply_id: int, kind: str):
+        with self.store.transaction():
+            return self.store.conn.execute(
+                "SELECT id, ts, parent, to_guid, text FROM board_reply WHERE id=? AND kind=? "
+                "AND state='waiting'", (reply_id, kind)).fetchone()
+
+    def _refuse_reply(self, unit: str, reply_id: int, reason: str) -> None:
+        """His text refused: settled with the reason, never asked again; no model call."""
+        ctx = self.ctx
+
+        def write(store):
+            board.settle(store.conn, reply_id, state="refused", night=ctx.night, now=ctx.clock.now(),
+                         reason=reason)
+        if self._commit(unit, write):
+            log("realm_night_reply", night=ctx.night, unit=unit, outcome="refused", reason=reason)
+
+    def _no_answer(self, unit: str, reply_id: int) -> bool:
+        """His reply's answer failed tonight: the night is counted once (board.answer_failed). On
+        the board.ANSWER_NIGHTS-th it is settled refused, no_answer, and the unit is done: True.
+        Before that, with the Realm off, or once it stopped waiting, False: it waits."""
+        ctx = self.ctx
+        if not self.live():
+            return False
+        with self.store.transaction():
+            if not _waiting(self.store, reply_id):
+                return False
+            nights = board.answer_failed(self.store.conn, reply_id, ctx.night)
+        if nights < board.ANSWER_NIGHTS:
+            return False
+        self._refuse_reply(unit, reply_id, board.NO_ANSWER)
+        return True
+
+    def _thread_back_in(self, thread: str):
+        """Ledger.back_in's plans for a thread about an event fact; none for a rumor's."""
+        subject, _, ident = thread.partition(":")
+        if subject != "fact" or not (ident.isascii() and ident.isdigit()) or int(ident) < 1:
+            return ()
+        return self.ledger.back_in(int(ident), forum=True)
+
+    async def _post_reply(self, reply_id: int, unit: str) -> None:
+        ctx = self.ctx
+        reply = self._waiting_reply(reply_id, "post")
+        if reply is None:
+            ctx.skip(STAGE, unit)  # Withdrawn or settled since planning.
+            return
+        with self.store.transaction():
+            parent = self.store.conn.execute(
+                "SELECT author, author_kind, thread, text FROM realm_post WHERE id=?",
+                (reply["parent"],)).fetchone()
+        text = reply["text"]
+        reason = "post_gone" if parent is None else self._public(text, "member", POST_MAX)
+        if reason == "not_ready":
+            return  # The screen went away mid-night: it waits.
+        if reason is None and type(screened := screen_rule_text(text, human=ctx.ident)) is Rejected:
+            reason = screened.reason  # His forum fact would refuse it: no answer is asked for.
+        if reason is not None:
+            self._refuse_reply(unit, reply_id, reason)
+            return
+        key = f"reply:{reply_id}"
+        author = self._still_writes(parent["author"], parent["author_kind"]) or self._author(key, 0)
+        answer = None
+        if author is not None:
+            guid, author_kind, name, who = author
+            system = self._system("realm_reply_post", REPLY_POST_DEFAULT, author=name,
+                                  called=ctx.ident.called)
+            user = json.dumps({"author": name, **who, "post": parent["text"], "reply": text},
+                              ensure_ascii=False)
+            got = await ctx.reasoner.json(system, user, POST_SCHEMA)
+            answer = " ".join(repair(got["text"], speaker=name).split())
+            reason = self._public(answer, "member" if author_kind == "member" else "officer", POST_MAX)
+            if reason is None and type(screened := screen_rule_text(answer, human=ctx.ident)) is Rejected:
+                reason = screened.reason  # Its forum fact would refuse it.
+            if reason is not None:
+                raise _Refused("post", reason)  # His reply waits for another night.
+        prepared = await self._prepare(self._thread_back_in(parent["thread"]))
+        knowers = [[g, "forum"] for g in sorted({self.guild} | {row["id"] for row in self._rivals()})]
+        inputs = {"night": ctx.night, "reply": reply_id, "to": reply["parent"]}
+        now, outcome = ctx.clock.now(), {}
+
+        def write(store):
+            if not _waiting(store, reply_id):
+                return  # He withdrew it meanwhile: left alone.
+            his = put_rule_fact_in_unit(
+                store, policy="forum_post_v1", key=key, kind="forum_post", text=text, public=True,
+                known_by=knowers, inputs=inputs | {"author": ctx.human, "author_kind": "owner"},
+                ts=now, human=ctx.ident)
+            if type(his) is Rejected:  # His own text cannot be a forum fact: never asked again.
+                board.settle(store.conn, reply_id, state="refused", night=ctx.night, now=now,
+                             reason=his.reason)
+                outcome.update(outcome="refused", reason=his.reason)
+                return
+            post_id = None
+            if answer is not None:
+                fact = put_rule_fact_in_unit(
+                    store, policy="forum_post_v1", key=f"{key}:answer", kind="forum_post", text=answer,
+                    public=True, known_by=knowers,
+                    inputs=inputs | {"author": guid, "author_kind": author_kind}, ts=now, human=ctx.ident)
+                if type(fact) is Rejected:
+                    raise _Refused("post", fact.reason)
+                post_id = store.conn.execute(
+                    "INSERT INTO realm_post(ts, author, author_kind, thread, text, fact) VALUES (?,?,?,?,?,?)",
+                    (now, guid, author_kind, parent["thread"], fact.text, fact.id)).lastrowid
+            state = "posted" if post_id is None else "answered"
+            if not board.settle(store.conn, reply_id, state=state, night=ctx.night, now=now,
+                                fact=his.id, answer_post=post_id):
+                raise RuntimeError("board reply changed inside its commit")
+            self._notables(store, unit, prepared, now)
+            outcome.update(outcome=state)
+        if self._commit(unit, write) and outcome:
+            log("realm_night_reply", night=ctx.night, unit=unit, **outcome)
 
     async def _letter(self, key: str, unit: str) -> None:
         ctx, mail_id = self.ctx, int(key)
@@ -493,6 +679,58 @@ class _Night:
             mail.write_text(store, mail_id, subject=subject, body=body, human=ctx.ident)
         self._commit(unit, write)
 
+    async def _letter_reply(self, reply_id: int, unit: str) -> None:
+        ctx = self.ctx
+        reply = self._waiting_reply(reply_id, "letter")
+        if reply is None:
+            ctx.skip(STAGE, unit)  # Withdrawn or settled since planning.
+            return
+        member, text = reply["to_guid"], reply["text"]
+        with self.store.transaction():
+            theirs = self.store.conn.execute("SELECT subject, body FROM realm_mail WHERE id=?",
+                                             (reply["parent"],)).fetchone()
+        p = ctx.personas.get(member)
+        reason = ("letter_gone" if theirs is None else "no_persona" if p is None
+                  else self._private(text))
+        if reason is not None:
+            self._refuse_reply(unit, reply_id, reason)
+            return
+        called = ctx.ident.called
+        system = self._system("realm_reply_letter", REPLY_LETTER_DEFAULT, sender=p.character_name,
+                              called=called)
+        user = json.dumps({"from": p.character_name, "card": ctx.card(member),
+                           "their_letter": {"subject": theirs["subject"], "body": theirs["body"]},
+                           "reply": text}, ensure_ascii=False)
+        got = await ctx.reasoner.json(system, user, LETTER_SCHEMA)
+        body = repair(got["body"], speaker=p.character_name)
+        subject = " ".join(repair(got["subject"], speaker=p.character_name).split())
+        reason = self._private(body) or self._private(subject)
+        if reason is None and not mail.text_ok(subject, body, ctx.ident):
+            reason = "too_long"  # Native's bounds are bytes: subject 1-64, body 0-512.
+        if reason is not None:
+            raise _Refused("letter", reason)  # His reply waits for another night.
+        now = ctx.clock.now()
+        memory = MemoryRow(
+            id=None, owner=member, kind="event", text=_wrote_back(called, text),
+            t_event=int(reply["ts"]), t_created=int(now), t_accessed=int(now), access_n=0,
+            actors=(ctx.human,), place=None, boss_id=None, raid_id=None, importance=5, valence=0.4,
+            source="game", evidence=(f"board-reply:{reply_id}",), key=f"board-reply:{reply_id}",
+            scope="private", scope_with=ctx.human)
+        answered = []
+
+        def write(store):
+            if not _waiting(store, reply_id):
+                return  # He withdrew it meanwhile: left alone.
+            ctx.writer.put(memory)
+            mail_id = mail.insert_mail(store.conn, now, member, "reply", subject=subject, body=body,
+                                       state="ready")
+            if not board.settle(store.conn, reply_id, state="answered", night=ctx.night, now=now,
+                                answer_mail=mail_id):
+                raise RuntimeError("board reply changed inside its commit")
+            answered.append(mail_id)
+        if self._commit(unit, write) and answered:
+            log("realm_night_reply", night=ctx.night, unit=unit, outcome="answered")
+
     async def _writeup(self, key: str, unit: str) -> None:
         ctx, event = self.ctx, int(key)
         with self.store.transaction():
@@ -523,6 +761,18 @@ class _Night:
             store.conn.execute("UPDATE realm_event SET result=? WHERE id=?", (json.dumps(
                 result | {"writeup": text}, ensure_ascii=False, sort_keys=True), event))
         self._commit(unit, write)
+
+
+def _waiting(store, reply_id: int) -> bool:
+    """His reply, read again inside the commit, still waits."""
+    return store.conn.execute("SELECT 1 FROM board_reply WHERE id=? AND state='waiting'",
+                              (reply_id,)).fetchone() is not None
+
+
+def _wrote_back(called: str, text: str) -> str:
+    """The member's memory of his letter, cut to a memory's length with its quote kept."""
+    head = f'{called} wrote back to my letter: "'
+    return head + truncate_words(text, max(0, MEMORY_MAX - len(head) - 1)) + '"'
 
 
 def _writeup_due(raw) -> bool:

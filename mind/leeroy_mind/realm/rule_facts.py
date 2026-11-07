@@ -187,6 +187,16 @@ def rule_fact_in_unit(store, fact_id, *, human) -> FactRow | Rejected:
         return Rejected(error.reason)
 
 
+def screen_rule_text(text, *, human) -> str | Rejected:
+    """A text as put_rule_fact_in_unit would store it, or why it would refuse it. Reads and
+    writes nothing, so it needs no Store unit."""
+    try:
+        _human(human)
+        return _screen(text, human)
+    except _Refused as error:
+        return Rejected(error.reason)
+
+
 def put_rule_fact_in_unit(store, *, policy, key, kind, text, public, known_by, inputs, ts,
                           human) -> FactRow | Rejected:
     """Write a rule's fact once under `rule:<policy>:<key>`, with who knows it and how.

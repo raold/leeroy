@@ -91,6 +91,9 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--voice-ui-port", type=int, default=None,
                    help="the voice service's page port (default: what `leeroy_voice where` "
                         f"says, else {VOICE_UI_PORT})")
+    p.add_argument("--dojo-layout", type=Path, default=None, metavar="PATH",
+                   help="the dojo's layout.json for the Dojo tab (default: "
+                        "<root>/dojo-runtime/instances/dojo-01/layout.json)")
     p.add_argument("--open", action="store_true", help="open the console in the browser")
     p.add_argument("--allow-host", action="append", default=[], type=_allow_host, metavar="NAME",
                    help="also serve it at https://NAME/ through `tailscale serve` on this "
@@ -202,6 +205,8 @@ def build(args, *, platform: str = sys.platform):
             where = None
     settings = settings_from(data, root, args.port, key, where, args.voice_ui_port,
                              allow_hosts=args.allow_host, stable_key=args.key_file is not None)
+    settings.dojo_layout = (args.dojo_layout if args.dojo_layout is not None else
+                            root / "dojo-runtime" / "instances" / "dojo-01" / "layout.json")
     problems = control_problems(root, platform=platform)
     if mind.base_python is None and problems["mind"] is None:
         problems["mind"] = mind.base_problem

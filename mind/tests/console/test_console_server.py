@@ -714,3 +714,55 @@ def test_a_whisper_whose_voice_row_comes_late_is_never_shown_as_typed(data, stor
         await app._feed_pass()
         assert _chat_ids(sent) == [(spoken, False), (typed, None)]
     run(go())
+
+
+class WorldLink:
+    def __init__(self, reply=None, error=None):
+        self.reply, self.error, self.calls = reply, error, []
+
+    def locate(self, pids):
+        return {"pid": 101, "port": 1, "key": "x"}
+
+    def call(self, pids, op, args=None, *, timeout=3.0):
+        self.calls.append(op)
+        if self.error:
+            from leeroy_mind.console.mindlink import LinkError
+            raise LinkError(self.error)
+        return self.reply
+
+
+WORLD = {"connected": True, "server": "Acme", "version": "3.3.5", "hello_at": 1793304000.0,
+         "cast": 5, "cast_online": 3, "human_online": False}
+
+
+def test_health_carries_the_game_server(data):
+    listen = lambda port: SimpleNamespace(state=2, local_port=port, remote_port=0, remote="0.0.0.0",
+                                          pid=7)
+    link = WorldLink({"ok": True, "stopping": False, "raid": None, "world": WORLD})
+
+    async def go():
+        app = make_app(data, mind=running(data), link=link,
+                       tcp=lambda: [listen(8085), listen(7878)])
+        async with served(app):
+            return (await http(app, "GET", "/api/health")).json()
+    h = asyncio.run(go())
+    assert h["server"] == {"world": True, "auth": False, "bridge": True, "game": WORLD,
+                           "why": None, "ports": {"world": 8085, "auth": 3724, "bridge": 7878}}
+    assert link.calls == ["status"]
+
+    async def down():
+        app = make_app(data, tcp=lambda: None)  # the mind is stopped; no TCP table
+        async with served(app):
+            return (await http(app, "GET", "/api/health")).json()
+    h = asyncio.run(down())
+    assert h["server"] == {"world": None, "auth": None, "bridge": None, "game": None,
+                           "why": "The cast count is read through the mind, which isn't running.",
+                           "ports": {"world": 8085, "auth": 3724, "bridge": 7878}}
+
+    async def broken():
+        app = make_app(data, mind=running(data), link=WorldLink(error="the endpoint is busy"),
+                       tcp=lambda: [])
+        async with served(app):
+            return (await http(app, "GET", "/api/health")).json()
+    h = asyncio.run(broken())
+    assert h["server"]["game"] is None and h["server"]["why"] == "the endpoint is busy"

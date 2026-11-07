@@ -313,7 +313,7 @@ def test_the_tabs_need_the_key_and_show_mind_db(guild, data):
             assert r.status == 200
             body = r.json()
             assert body["view"]["open"]["name"] == "Icecrown Citadel"
-            assert body["mind"] == {"ok": True, "stopping": False, "raid": STATUS["raid"]}
+            assert body["mind"] == {"ok": True, "stopping": False, "raid": STATUS["raid"], "world": None}
             assert app.link.calls == [((101, 100), "status", None)]
             g = await http(app, "GET", "/api/guild")
             assert g.status == 200 and g.json()["stats"]["raids"] == 1

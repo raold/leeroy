@@ -135,6 +135,22 @@ def result_text(raid_key, kills, wipes, failed) -> str:
     return text + (", called off" if failed else "")
 
 
+def night_text(conn, at) -> str | None:
+    """What a raid night he did not come to turned into, or None (he came, or the day's
+    offline raid is still running)."""
+    if conn.execute("SELECT 1 FROM session WHERE started<=? AND (ended IS NULL OR ended>=?) LIMIT 1",
+                    (at + CAME_AFTER_S, at - CAME_BEFORE_S)).fetchone() is not None:
+        return None
+    raid = conn.execute("SELECT raid_key,kills,wipes,ended FROM guild_raid WHERE offline=1 AND started>=? "
+                        "AND started<? ORDER BY started DESC LIMIT 1", (at - DAY_S, at + DAY_S)).fetchone()
+    if raid is None:
+        return "no raid"
+    if raid["ended"] is None:
+        return None
+    name = CATALOG[raid["raid_key"]].name if raid["raid_key"] in CATALOG else "a raid"
+    return f"night off: {name} offline, {result_text(raid['raid_key'], raid['kills'], raid['wipes'], False)}"
+
+
 def signup_plan(kind, event_id, guid, conscientiousness, posted_at, at) -> tuple[float, str] | None:
     """When (Unix seconds) and how one member signs up for one posted event: the same every
     time, seeded by the event and the member. None when it is too late to sign up at all."""
@@ -546,22 +562,6 @@ class CalendarDesk:
         tries, _ = self._tries.get(ref, (0, 0.0))
         self._tries[ref] = (tries + 1, now + RETRY_S)
 
-    def _night_text(self, at):
-        """What a raid night he did not come to turned into, or None (he came, or the day's
-        offline raid is still running)."""
-        conn = self._store.conn
-        if conn.execute("SELECT 1 FROM session WHERE started<=? AND (ended IS NULL OR ended>=?) LIMIT 1",
-                        (at + CAME_AFTER_S, at - CAME_BEFORE_S)).fetchone() is not None:
-            return None
-        raid = conn.execute("SELECT raid_key,kills,wipes,ended FROM guild_raid WHERE offline=1 AND started>=? "
-                            "AND started<? ORDER BY started DESC LIMIT 1", (at - DAY_S, at + DAY_S)).fetchone()
-        if raid is None:
-            return "no raid"
-        if raid["ended"] is None:
-            return None
-        name = CATALOG[raid["raid_key"]].name if raid["raid_key"] in CATALOG else "a raid"
-        return f"night off: {name} offline, {result_text(raid['raid_key'], raid['kills'], raid['wipes'], False)}"
-
     def _updates(self, now, context, out):
         ledger = self._ledger()
         rows = self._store.conn.execute(
@@ -576,7 +576,7 @@ class CalendarDesk:
                 result = self._offline_result(row["ref"][len("offline:"):])
                 text = result_text(*result) if result is not None else None
             else:
-                text = self._night_text(row["at"]) if now >= row["at"] + MISSED_AFTER_S else None
+                text = night_text(self._store.conn, row["at"]) if now >= row["at"] + MISSED_AFTER_S else None
             if not text:
                 continue
             cmd = CalendarUpdate(uuid.uuid4().hex, row["event_id"], description=_clip(text, 255))

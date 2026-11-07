@@ -408,3 +408,15 @@ def test_the_nearest_pass_before_a_write_is_the_one_that_wrote_it(cast, data):
     commit_unit(cast, "2026-10-29", "photo", "301", photo_pass, now=NOW - 100)
     _, by = _roster(data)
     assert by[301]["persona"]["by"] == "photo"
+
+
+def test_the_cast_opens_as_a_wall():
+    src = page_source()
+    assert 'id="p-wall"' in src and 'id="p-view"' in src
+    assert 'data-view="wall"' in src and 'data-view="table"' in src
+    js = (Path(__file__).resolve().parents[2] / "leeroy_mind/console/static/js/personas.mjs").read_text("utf-8")
+    assert js.count("guild-console-personas-view") == 1
+    assert 'recall(VIEW_KEY, "wall")' in js and "remember(VIEW_KEY" in js
+    assert "localStorage" not in js
+    faces = (Path(__file__).resolve().parents[2] / "leeroy_mind/console/static/js/faces.mjs").read_text("utf-8")
+    assert "wall: " in faces

@@ -21,6 +21,7 @@ var KINDS = {
   feed: { cls: "av", size: "sm" },
   room: { cls: "av lg", size: "md" },
   card: { cls: "av xl", size: "lg" },
+  wall: { cls: "av wall", size: "md" },
 };
 
 var PALETTE = ["#2a68a8", "#6956b0", "#1f7a52", "#b06a0c", "#a0446e", "#0d6470", "#7a5c2e", "#4e5f9a"];
@@ -93,6 +94,23 @@ export function faceButton(guid, name, kind, opts) {
   b.dataset.speaker = String(guid);
   b.appendChild(f);
   return b;
+}
+
+// A table cell holding a member's face and name (.who). opts go to face; opts.text is the words
+// shown when they are not the bare name (tags, "(you)"). Nobody (guid 0 or none) is a plain "-".
+export function nameCell(tr, guid, name, opts) {
+  opts = opts || {};
+  var td = el("td");
+  if (!guid) {
+    td.textContent = opts.text || name || "-";
+  } else {
+    var box = el("div", "who");
+    box.appendChild(face(guid, name, "list", opts));
+    box.appendChild(el("span", "", opts.text || name));
+    td.appendChild(box);
+  }
+  tr.appendChild(td);
+  return td;
 }
 
 // Light (or put out) one member's faces under box without drawing anything again

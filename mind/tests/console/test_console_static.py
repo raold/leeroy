@@ -212,3 +212,11 @@ def test_the_shared_modules_load_without_a_page():
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout) == ["2 raids", "07", "+1.5", "", "not recorded yet",
                                     "Death Knight", "comms", None]
+
+
+def test_the_state_chips_have_their_colours():
+    """ok, warn and bad chips (the Dojo's gates, runs and replays among them) each take their
+    colour; a failed one never reads like a grey "not yet"."""
+    css = (STATIC / "console.css").read_text("utf-8")
+    for state in ("ok", "warn", "bad"):
+        assert re.search(r"\.chip\.%s\s*\{\s*--c:\s*var\(--%s\);\s*\}" % (state, state), css), state

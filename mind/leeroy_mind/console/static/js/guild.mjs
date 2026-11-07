@@ -1,4 +1,5 @@
 import { $, api, arr, cell, clear, el, emptyRow, num, obj, plural, refused, setText, str } from "./core.mjs";
+import { nameCell } from "./faces.mjs";
 import { S, roomOf } from "./state.mjs";
 import { registerTab } from "./tabs.mjs";
 import { CLASSES, dkp, mode, when, who } from "./words.mjs";
@@ -20,7 +21,7 @@ function renderGuild(g) {
   clear(body);
   roster.forEach(function (p) {
     var tr = el("tr", p.online ? "" : "off");
-    cell(tr, str(p.name) + (p.guid === g.human ? " (you)" : ""));
+    nameCell(tr, p.guid, str(p.name), { you: p.guid === g.human, text: str(p.name) + (p.guid === g.human ? " (you)" : "") });
     cell(tr, CLASSES[p["class"]] || "-");
     cell(tr, str(p.spec) || "-");
     cell(tr, str(p.role) || "-", "role-" + str(p.role));
@@ -37,7 +38,7 @@ function renderGuild(g) {
   arr(g.ladder).forEach(function (e, i) {
     var tr = el("tr");
     cell(tr, String(i + 1), "num");
-    cell(tr, who(view, e.guid));
+    nameCell(tr, e.guid, who(view, e.guid), { you: e.guid === g.human });
     [e.balance, e.earned, e.spent, e.decay].forEach(function (v) { cell(tr, dkp(v), "num"); });
     [e.items, e.raids, e.benched].forEach(function (v) { cell(tr, String(num(v)), "num"); });
     body.appendChild(tr);
@@ -49,12 +50,13 @@ function renderGuild(g) {
     var tr = el("tr");
     cell(tr, when(l.ts));
     cell(tr, str(l.item) || ("item " + (l.item_id || "?")));
-    cell(tr, who(view, l.guid));
+    nameCell(tr, l.guid, who(view, l.guid), { you: l.guid === g.human });
     cell(tr, dkp(l.paid), "num");
     cell(tr, l.raid ? str(l.raid).toUpperCase() + mode(l.size, l.heroic) : "-");
     body.appendChild(tr);
   });
   if (!arr(g.loot).length) { emptyRow(body, 5, "No item has been awarded yet."); }
+  renderDkpStats(g, view);
   var box = $("g-awards"), seasons = {}, order = [];
   clear(box);
   arr(g.awards).forEach(function (a) {
@@ -79,6 +81,46 @@ function renderGuild(g) {
     box.appendChild(e);
   });
   if (!arr(g.chronicle).length) { box.appendChild(el("div", "muted", "The chronicle is empty.")); }
+}
+function renderDkpStats(g, view) {
+  var s = obj(g.dkp_stats), members = arr(s.members), raids = arr(s.raids), due = arr(s.due);
+  var line = $("g-due");
+  clear(line);
+  if (!due.length) { line.appendChild(el("span", "muted", "Nobody is due.")); }
+  else {
+    line.appendChild(el("span", "muted", "Due an item: "));
+    due.forEach(function (guid) { line.appendChild(el("span", "chip", who(view, guid))); line.appendChild(document.createTextNode(" ")); });
+  }
+  var body = $("g-dkp");
+  clear(body);
+  members.slice().sort(function (a, b) { return (b.attendance === null ? -1 : b.attendance) - (a.attendance === null ? -1 : a.attendance) || a.guid - b.guid; })
+    .forEach(function (m) {
+      var tr = el("tr");
+      nameCell(tr, m.guid, who(view, m.guid), { you: m.guid === g.human });
+      cell(tr, m.attendance === null ? "-" : m.attendance + "%", "num");
+      [m.earned, m.spent].forEach(function (v) { cell(tr, dkp(v), "num"); });
+      cell(tr, String(num(m.items)), "num");
+      cell(tr, String(num(m.since_item)), "num");
+      var td = el("td");
+      if (m.due) { td.appendChild(el("span", "chip warn", "due")); }
+      tr.appendChild(td);
+      body.appendChild(tr);
+    });
+  if (!members.length) { emptyRow(body, 7, "No raid has ended yet."); }
+  body = $("g-raids");
+  clear(body);
+  raids.forEach(function (r) {
+    var tr = el("tr");
+    cell(tr, when(r.started));
+    cell(tr, str(r.raid).toUpperCase() + mode(r.size, r.heroic) + (r.offline ? " (offline)" : ""));
+    cell(tr, String(num(r.kills)), "num");
+    cell(tr, dkp(r.awarded), "num");
+    cell(tr, dkp(r.spent), "num");
+    cell(tr, String(num(r.items)), "num");
+    cell(tr, String(num(r.paid)), "num");
+    body.appendChild(tr);
+  });
+  if (!raids.length) { emptyRow(body, 7, "No raid has ended yet."); }
 }
 function pollGuild() {
   if (guildBusy || S.tab !== "guild") { return; }
