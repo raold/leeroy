@@ -8,7 +8,7 @@ from leeroy_mind.nightly import motives
 from leeroy_mind.nightly.motives import (DEFICIT_RATE, TRAITS, WANT, YEE, met, motive_weights,
                                        sample_traits, step_motives, trait_today, wants)
 from leeroy_mind.nightly.places import PLACES, place_kind
-from leeroy_mind.storage.db import open_db
+from dbtemplate import open_migrated
 from leeroy_mind.storage.store import Store
 
 
@@ -354,7 +354,7 @@ def test_public_reads_release_snapshot_and_preserve_callers_transaction(h, reade
             "traits": lambda: trait_today(h.store, h.night, 101, p)["openness"]}[reader]
     initial = {"met": set(), "wants": [], "traits": 5}[reader]
     changed = {"met": {"escapism"}, "wants": ["competition"], "traits": 6}[reader]
-    other = Store(open_db(path), clock=h.clock)
+    other = Store(open_migrated(path), clock=h.clock)
     try:
         assert read() == initial
         with other.transaction():

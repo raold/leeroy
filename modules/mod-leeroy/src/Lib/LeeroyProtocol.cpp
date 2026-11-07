@@ -352,6 +352,9 @@ std::string EncodeHello(std::int64_t ts, std::uint32_t guildId, std::uint32_t hu
     j["version"] = kModuleVersion;
     j["guild_id"] = guildId;
     j["human_guid"] = humanGuid;
+    j["features"] = json::array();
+    for (std::string_view feature : kFeatures)
+        j["features"].push_back(std::string(feature));
     return DumpLine(j);
 }
 

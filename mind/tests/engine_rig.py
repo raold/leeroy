@@ -1,12 +1,13 @@
 """A test rig for the talk engine: the five-member test cast online, the human (guid 1,
 "Testmage", called Zan, he/him, the guild master, with an invented real name), a FakeLLM that
 answers like the live model (OrionLLM) behind a real LLMScheduler and Recall, and a recording
-`send`. Tests drive time with the FakeClock."""
+`send`. Tests drive time with the FakeClock, from a coroutine or through the Rig's sync helpers."""
+import asyncio
 import itertools
 import random
 import re
 import sqlite3
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 
 from conftest import HUMAN, OFFICERS, TEST_CAST, make_persona, seed_test_cast
@@ -107,6 +108,10 @@ class OrionLLM(FakeLLM):
         result = await super().chat(model, messages, options=options, think=think, **kw)
         return result if think is False else replace(result, text="")
 
+    def set_script(self, script) -> None:
+        """What the model answers from now on: a script(model, messages)."""
+        self._script = script
+
 
 def engine_clock() -> FakeClock:
     """The conftest clock's start, settling each step by yielding: the engine's tasks do no
@@ -148,6 +153,7 @@ class Rig:
     sent: Sent
     clock: object
     cfg: object
+    _runner: asyncio.Runner | None = field(default=None, repr=False)
 
     async def advance(self, seconds: float, step: float = 1.0) -> None:
         await self.clock.advance(seconds, step)
@@ -193,6 +199,55 @@ class Rig:
     def sent_kinds(self) -> list[tuple[int, str]]:
         return [(u["guid"], u["kind"]) for u in self.utterances() if u["dropped"] is None]
 
+    # -- the sync driver: one event loop for the rig's whole life, so the engine's tasks, locks
+    # and scheduler carry over from one step to the next; close() ends it and cancels what is
+    # left. For sync tests; a test inside its own coroutine uses the async methods above.
+
+    def sync(self, coro):
+        """Run `coro` to its end on the rig's own event loop."""
+        if self._runner is None:
+            self._runner = asyncio.Runner()
+        return self._runner.run(coro)
+
+    def script(self, *replies: str) -> None:
+        """The model's next replies, in order; the last one repeats once the others are used."""
+        left = list(replies)
+
+        def answer(model, messages):
+            return left.pop(0) if len(left) > 1 else left[0]
+        self.llm.set_script(answer)
+
+    def line_from_him(self, text: str, channel: str = "guild", to_guid: int = 0):
+        """His line, as the app hands it to the engine (Rig.human); the engine's answers wait
+        for run()."""
+        return self.sync(self.human(text, channel=channel, to_guid=to_guid))
+
+    def whisper_from_him(self, guid: int, text: str):
+        """His whisper to member `guid`."""
+        return self.line_from_him(text, channel="whisper", to_guid=guid)
+
+    def run(self, seconds: float = 40.0, step: float = 1.0) -> None:
+        """Let `seconds` of FakeClock time pass, so the turns waiting in it are said."""
+        self.sync(self.advance(seconds, step))
+
+    def speak_turn(self, turn, seconds: float = 40.0) -> list[str]:
+        """One turn through the whole pipeline (TalkEngine.speak): the lines sent."""
+        async def go():
+            task = asyncio.create_task(self.engine.speak(turn))
+            await self.advance(seconds)
+            assert task.done()
+            return task.result()
+        return self.sync(go())
+
+    def last_user(self) -> str:
+        """The user message of the latest live prompt."""
+        return self.chat_calls()[-1]["messages"][-1]["content"]
+
+    def close(self) -> None:
+        if self._runner is not None:
+            self._runner.close()
+            self._runner = None
+
 
 def numbered(template: str = "line {n} from me"):
     """A FakeLLM script whose replies differ (no repeat tells when one member talks a lot)."""
@@ -215,11 +270,12 @@ def save_member(store, guid: int, **over) -> None:
 def make_rig(store, clock, data_dir, *, reply: str = "fair enough", script=None, seed: int = 1,
              ack=None, gate=None, online=tuple(TEST_CAST), chattiness: int = 4,
              jealousy: int = 5, real_name: str = REAL, send=None, library=None,
-             dial: int = ROMANCE_DIAL) -> Rig:
+             dial: int = ROMANCE_DIAL, items=None) -> Rig:
     """A fresh engine over `store` (the test cast is seeded if the store has no personas).
     The FakeLLM answers `reply` unless a `script` is given; `send` replaces the recording
     send; `library` (a FakeLibrary) gives the engine the library's facts; `dial` is the
-    owner's romance dial (ROMANCE_DIAL unless a test says otherwise)."""
+    owner's romance dial (ROMANCE_DIAL unless a test says otherwise); `items` its item
+    links (an ItemLinker)."""
     if not store.persona_versions():
         seed_test_cast(store)
     store.upsert_cast([Member(guid=HUMAN, name=HUMAN_NAME, race=1, class_=8, gender=0, level=80,
@@ -248,5 +304,5 @@ def make_rig(store, clock, data_dir, *, reply: str = "fair enough", script=None,
     engine = TalkEngine(store=store, world=world, raid=raid, recall=recall, scheduler=scheduler,
                         personas=personas, cfg=cfg, data_dir=data_dir, clock=clock,
                         rng=random.Random(seed), send=send or sent, human_guid=HUMAN,
-                        library=library)
+                        library=library, items=items)
     return Rig(engine, store, world, raid, llm, sent, clock, cfg)

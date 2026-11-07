@@ -17,7 +17,7 @@ from leeroy_mind.realm import protocol as p
 from leeroy_mind.realm.action_policy import classify
 from leeroy_mind.realm.action_store import ActionSpec
 from leeroy_mind.realm.actions import ActionRejected
-from leeroy_mind.storage.db import open_db
+from dbtemplate import open_migrated
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_bridge import FakeBridge
 from leeroy_mind.testing.fake_llm import FakeLLM
@@ -34,7 +34,7 @@ async def until(predicate):
 async def application(tmp_path, clock, *, confirmed=7):
     path = tmp_path / "mind.toml"
     path.write_text("[realm]\nenabled = true\n", encoding="utf-8")
-    seed = Store(open_db(tmp_path / "mind.db"), clock=clock)
+    seed = Store(open_migrated(tmp_path / "mind.db"), clock=clock)
     seed.upsert_cast([Member(7, "Rook", 1, 1, 0, 80, 0, False, 0, 0, 2)], clock.now())
     if confirmed is not None:
         seed.set_meta("human_guid", str(confirmed))

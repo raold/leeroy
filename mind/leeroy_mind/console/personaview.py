@@ -33,8 +33,9 @@ from leeroy_mind.nightly.enrich import STAGE as LOOKS_STAGE  # the looks pass's 
 from leeroy_mind.nightly.mood import octant
 from leeroy_mind.nightly.motives import TRAITS
 from leeroy_mind.personas.schema import persona_from_dict, persona_to_dict
+from leeroy_mind.selfies.kind import STAGE as PHOTO_STAGE  # the photo-kind pass's stage
 
-from .feed import human_guid
+from .feed import guild_mood, human_guid
 from .raidview import people
 
 RECENT_DAYS = 7
@@ -63,7 +64,7 @@ def _persona(js):
 
 
 def _writers(conn, have) -> tuple[dict, dict]:
-    """((guid, ts) -> stance or undo, guid -> [its looks pass units' times]): what placed a
+    """((guid, ts) -> stance or undo, guid -> [(its looks or photo pass units' times, stage)]): what placed a
     generated persona write."""
     moves, looks = {}, {}
     if "persona_ledger" in have:
@@ -71,10 +72,10 @@ def _writers(conn, have) -> tuple[dict, dict]:
                               "WHERE kind IN ('stance_band', 'undo')"):
             moves[(r["guid"], r["ts"])] = "stance" if r["kind"] == "stance_band" else "undo"
     if "night_step" in have:
-        for r in conn.execute("SELECT unit, finished FROM night_step WHERE stage = ?",
-                              (LOOKS_STAGE,)):
+        for r in conn.execute("SELECT unit, finished, stage FROM night_step WHERE stage IN (?, ?)",
+                              (LOOKS_STAGE, PHOTO_STAGE)):
             if str(r["unit"]).isdigit():
-                looks.setdefault(int(r["unit"]), []).append(r["finished"])
+                looks.setdefault(int(r["unit"]), []).append((r["finished"], r["stage"]))
     return moves, looks
 
 
@@ -83,8 +84,11 @@ def _by(guid, source, updated, moves, looks) -> str:
         return source  # seed or owner
     if (guid, updated) in moves:
         return moves[(guid, updated)]
-    if any(t <= updated <= t + LOOKS_S for t in looks.get(guid, ())):
-        return "night"
+    # the nearest unit before the write: the looks pass's last member and the photo pass's first
+    # can finish within LOOKS_S of each other, and row order says nothing
+    near = [(t, stage) for t, stage in looks.get(guid, ()) if t <= updated <= t + LOOKS_S]
+    if near:
+        return PHOTO_STAGE if max(near)[1] == PHOTO_STAGE else "night"
     return "generator"
 
 
@@ -121,20 +125,6 @@ def _moods(conn) -> dict[int, dict]:
     return {r["guid"]: {"p": r["p"], "a": r["a"], "d": r["d"],
                         "octant": octant(r["p"], r["a"], r["d"]), "updated": r["updated"]}
             for r in conn.execute("SELECT guid, p, a, d, updated FROM pad_mood")}
-
-
-def _guild_mood(conn) -> dict | None:
-    r = conn.execute("SELECT night, value, reasons FROM guild_mood "
-                     "ORDER BY night DESC LIMIT 1").fetchone()
-    if r is None:
-        return None
-    try:
-        reasons = json.loads(r["reasons"])
-    except (TypeError, ValueError):
-        reasons = []
-    return {"night": r["night"], "value": r["value"],
-            "reasons": [x for x in reasons if isinstance(x, str)] if isinstance(reasons, list)
-            else []}
 
 
 def _memories(conn, since: float) -> dict[int, dict]:
@@ -226,7 +216,7 @@ def _view(conn, *, now: float, guid: int | None = None) -> dict:
             names[str(g)] = p.character_name
     return {"human": human, "members": members, "personas": personas, "names": names,
             "missing": missing, "have": have, "since": since,
-            "guild_mood": _guild_mood(conn) if "guild_mood" in have else None}
+            "guild_mood": guild_mood(conn)}
 
 
 def roster_view(conn, *, now: float) -> dict:
@@ -246,7 +236,7 @@ def _card(p) -> dict:
             "big_five": d["big_five"], "attachment": d["attachment"], "humour": d["humour"],
             "typing": d["typing"], "game": d["game"], "play": d["play"],
             "romance": {k: d["romance"][k] for k in ("stance", "style", "jealousy_mode")},
-            "appearance": d["appearance"]}
+            "appearance": d["appearance"], "photo": d.get("photo")}
 
 
 def member_view(conn, guid: int, *, now: float) -> dict | None:

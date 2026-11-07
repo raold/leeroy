@@ -56,7 +56,7 @@ from leeroy_mind.text import estimate_tokens
 from leeroy_mind.wow import CLASSES, class_roles, faction_known
 
 from . import protocol
-from .action_store import ActionCapacity, ActionUnavailable
+from .action_store import ABANDON_RECEIPT, ABANDONED, ActionCapacity, ActionUnavailable
 from .actions import ActionRejected
 from .armory import GUILD_ID, RealmArmoryUnavailable
 from .ledger import actor_exclusions_in_unit
@@ -563,10 +563,14 @@ class Rivals:
 
     def _grow(self, key, guild_id, guids) -> str:
         """One guild_grow of (key, guild), as its journal tells it: acked, unknown, gave_up or
-        none; pending (in flight), waiting (not enrolled) or sent (enrolled now)."""
+        none; pending (in flight), waiting (not enrolled) or sent (enrolled now). The prune keeps
+        every grow row; a released one's meta receipt answers even without its row."""
         realm, latest = self.realm, None
         for attempt in range(GROW_ATTEMPTS):
-            record = realm.action_store.get(grow_id(key, guild_id, attempt))
+            command_id = grow_id(key, guild_id, attempt)
+            if realm.app.store.get_meta(ABANDON_RECEIPT + command_id) is not None:
+                return "unknown"
+            record = realm.action_store.get(command_id)
             if record is not None:
                 latest = attempt, record
         attempt = 0
@@ -574,8 +578,8 @@ class Rivals:
             attempt, record = latest
             if record.state in ("prepared", "dispatched"):
                 return "pending"
-            if record.state in ("unknown", "conflict"):
-                return "unknown"  # It may have reached native: never sent again.
+            if record.state in ("unknown", "conflict") or record.result_reason == ABANDONED:
+                return "unknown"  # It may have reached native: never sent again, even once released.
             if record.state == "completed" and record.result_ok is True:
                 return "acked"
             attempt += 1  # It never left, or native refused it before doing anything.

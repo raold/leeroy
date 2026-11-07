@@ -3513,3 +3513,73 @@
   url = {https://arxiv.org/abs/1711.09846},
   annote = {Inspiration for exploit-and-explore setup planning within comparable groups; storing a desired plan does not establish live adoption.}
 }
+
+% ---- Images and profile photos ----
+
+@misc{podell2023sdxl,
+  author = {Podell, Dustin and English, Zion and Lacey, Kyle and Blattmann, Andreas and Dockhorn, Tim and M{\"u}ller, Jonas and Penna, Joe and Rombach, Robin},
+  title = {{SDXL}: Improving Latent Diffusion Models for High-Resolution Image Synthesis}, year = {2023},
+  eprint = {2307.01952}, archivePrefix = {arXiv}, primaryClass = {cs.CV},
+  url = {https://arxiv.org/abs/2307.01952},
+  keywords = {images},
+  annote = {Shaped: the base architecture of the photo model, with its two text encoders, each reading a 77-token window}
+}
+
+@inproceedings{radford2021clip,
+  author = {Radford, Alec and Kim, Jong Wook and Hallacy, Chris and Ramesh, Aditya and Goh, Gabriel and Agarwal, Sandhini and Sastry, Girish and Askell, Amanda and Mishkin, Pamela and Clark, Jack and Krueger, Gretchen and Sutskever, Ilya},
+  title = {Learning Transferable Visual Models From Natural Language Supervision},
+  booktitle = {Proceedings of the 38th International Conference on Machine Learning},
+  series = {Proceedings of Machine Learning Research}, volume = {139},
+  pages = {8748--8763}, year = {2021}, eprint = {2103.00020}, archivePrefix = {arXiv},
+  url = {https://arxiv.org/abs/2103.00020},
+  keywords = {images},
+  annote = {Shaped: the CLIP text encoders' token limit, which the prompt fitting keeps}
+}
+
+@misc{lu2022dpmsolverpp,
+  author = {Lu, Cheng and Zhou, Yuhao and Bao, Fan and Chen, Jianfei and Li, Chongxuan and Zhu, Jun},
+  title = {{DPM-Solver++}: Fast Solver for Guided Sampling of Diffusion Probabilistic Models}, year = {2022},
+  eprint = {2211.01095}, archivePrefix = {arXiv}, primaryClass = {cs.LG},
+  url = {https://arxiv.org/abs/2211.01095},
+  keywords = {images},
+  annote = {Shaped: the multistep solver that renders a photo in 30 steps}
+}
+
+@inproceedings{karras2022elucidating,
+  author = {Karras, Tero and Aittala, Miika and Aila, Timo and Laine, Samuli},
+  title = {Elucidating the Design Space of Diffusion-Based Generative Models},
+  booktitle = {Advances in Neural Information Processing Systems 35}, year = {2022},
+  eprint = {2206.00364}, archivePrefix = {arXiv}, primaryClass = {cs.CV},
+  url = {https://arxiv.org/abs/2206.00364},
+  keywords = {images},
+  annote = {Shaped: the noise schedule (Karras sigmas) the 30-step sampler uses}
+}
+
+@misc{huggingface2022diffusers,
+  author = {{Hugging Face}},
+  title = {Diffusers: State-of-the-art diffusion models}, year = {2022},
+  howpublished = {GitHub repository, Apache-2.0},
+  url = {https://github.com/huggingface/diffusers},
+  keywords = {images},
+  annote = {Shaped: the library that runs the pipeline and scheduler in the photo worker}
+}
+
+@misc{realvisxl2024,
+  author = {{SG161222}},
+  title = {{RealVisXL} V5.0}, year = {2024},
+  howpublished = {Hugging Face model card},
+  url = {https://huggingface.co/SG161222/RealVisXL_V5.0},
+  note = {License openrail++; pinned at revision ac93e0dda1f6d448cae19bbfab8c5e720a5e48bc, fp16 files},
+  keywords = {images},
+  annote = {Shaped: the model that renders the members' profile photos locally}
+}
+
+@misc{falconsai2023nsfw,
+  author = {{Falconsai}},
+  title = {{NSFW} Image Detection (fine-tuned {ViT})}, year = {2023},
+  howpublished = {Hugging Face model card},
+  url = {https://huggingface.co/Falconsai/nsfw_image_detection},
+  note = {License Apache-2.0; pinned at revision 96cb0d0342c7afb80cab76ecc58b265fa44da256},
+  keywords = {images},
+  annote = {Shaped: the local check every photo passes before it is written; flagged images are dropped}
+}

@@ -167,6 +167,129 @@ def test_the_live_model_reloaded_mid_stage_is_counted_and_left_alone(h):
     assert run_get(h.store, ctx.night).foreign_loads == 2 and admin.calls == []
 
 
+def test_an_image_stage_runs_with_no_chat_model_loaded_and_counts_one_loaded_meanwhile(h):
+    admin = FakeAdmin([h.LIVE, h.REFL, h.EMB]); ctx = h.ctx(admin=admin)
+    run_begin(h.store, ctx.night, *ctx.window, now=ctx.window[1])
+    seen = []
+    async def think(c): pass
+    async def render(c):
+        seen.append(list(admin.loaded))
+        assert h.LIVE not in admin.loaded and h.REFL not in admin.loaded
+        admin.loaded.append(h.LIVE)                     # mod-ollama-chat, mid-render (Review Focus 2)
+    run(NightRunner([Stage("reflect", think, "reflection"), Stage("selfies", render, "image")],
+                    lambda n, w: ctx).run(ctx.night, ctx.window))
+    assert seen == [[h.EMB]]
+    assert run_get(h.store, ctx.night).foreign_loads == 1               # counted ...
+    # ... then unloaded once the stage has ended its worker: it loaded beside the worker, split
+    # onto the CPU, and reloads whole on its next request (final review C1)
+    assert admin.calls == [("unload", h.LIVE), ("unload", h.REFL), ("unload", h.LIVE)]
+    assert admin.loaded == [h.EMB]
+
+
+def test_a_lease_that_refuses_the_make_room_after_an_image_stage_is_left_to_the_hand_over(h):
+    admin = FakeAdmin([h.EMB]); ctx = h.ctx(admin=admin)
+    run_begin(h.store, ctx.night, *ctx.window, now=ctx.window[1])
+    ran = []
+    async def render(c):
+        admin.loaded.append(h.LIVE)                 # beside the worker
+        c.arbiter.hold("human")                     # his login, whose preempt has not landed yet
+    async def quiet(c): ran.append("quiet")
+    run(NightRunner([Stage("selfies", render, "image"), Stage("quiet", quiet, None)],
+                    lambda n, w: ctx).run(ctx.night, ctx.window))
+    assert ran == ["quiet"] and run_get(h.store, ctx.night).error is None
+    assert admin.calls == [] and admin.loaded == [h.EMB, h.LIVE]
+    run(ctx.arbiter.hand_over())                    # it reloads the split model whole
+    assert admin.calls == [("unload", h.LIVE), ("preload", h.LIVE, -1)]
+
+
+def test_a_model_none_stage_after_an_image_stage_counts_no_foreign_load(h):
+    # Sunday's eval: its own ensure_model calls leave the reflection model loaded; the worker is
+    # gone by then, so nothing is foreign to an image stage any more (final review minor 5)
+    admin = FakeAdmin([h.EMB]); ctx = h.ctx(admin=admin)
+    run_begin(h.store, ctx.night, *ctx.window, now=ctx.window[1])
+    async def render(c): pass
+    async def evaluate(c):
+        await c.arbiter.ensure_model(h.REFL)
+        admin.loaded.append(h.REFL)
+    run(NightRunner([Stage("selfies", render, "image"), Stage("eval", evaluate, None)],
+                    lambda n, w: ctx).run(ctx.night, ctx.window))
+    assert run_get(h.store, ctx.night).foreign_loads == 0
+
+
+def test_an_image_stage_with_nothing_to_render_takes_no_gpu(h):
+    # final review minor 6: wants_gpu is asked before make_room; with no work the stage still
+    # runs (its record and its log), like a stage that needs no model
+    admin = FakeAdmin([h.LIVE, h.REFL, h.EMB]); ctx = h.ctx(admin=admin)
+    run_begin(h.store, ctx.night, *ctx.window, now=ctx.window[1])
+    asked, ran = [], []
+    def wants(c):
+        asked.append(sorted(admin.loaded))
+        return False
+    async def render(c): ran.append("render")
+    run(NightRunner([Stage("forget", render, "reflection"),
+                     Stage("selfies", render, "image", wants)],
+                    lambda n, w: ctx).run(ctx.night, ctx.window))
+    assert asked == [sorted([h.REFL, h.EMB])] and ran == ["render", "render"]
+    assert admin.calls == [("unload", h.LIVE)]                          # the reflection stage's own
+    assert stage_row(h, ctx.night, "selfies") is not None
+    admin.loaded.append(h.LIVE)                     # mod-ollama-chat, with no worker beside it
+    ctx.arbiter.hold("human")
+    run(ctx.arbiter.hand_over())                    # as before any image work: the whole model is kept
+    assert admin.calls[1:] == [("unload", h.REFL), ("preload", h.LIVE, -1)]
+    with pytest.raises(ValueError, match="twice"):
+        NightRunner([Stage("a", render, None)], lambda n, w: ctx).add_stage(
+            "a", render, after="a", model="image", wants_gpu=wants)
+    runner = NightRunner([Stage("a", render, None)], lambda n, w: ctx)
+    runner.add_stage("b", render, after="a", model="image", wants_gpu=wants)
+    assert runner.stages[1].wants_gpu is wants and runner.stages[0].wants_gpu is None
+
+
+def test_an_image_stage_refused_by_a_live_lease_stops_without_failing_the_night(h, caplog):
+    admin = FakeAdmin([h.LIVE, h.EMB]); ctx = h.ctx(admin=admin)
+    run_begin(h.store, ctx.night, *ctx.window, now=ctx.window[1])
+    ran = []
+    async def render(c): ran.append("render")
+    async def quiet(c): ran.append("quiet")
+    ctx.arbiter.hold("voice")                       # a lease whose preempt has not reached the run yet
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        run(NightRunner([Stage("selfies", render, "image"), Stage("quiet", quiet, None),
+                         Stage("more", render, "image")], lambda n, w: ctx).run(ctx.night, ctx.window))
+    assert ran == ["quiet"] and admin.calls == [] and admin.loaded == [h.LIVE, h.EMB]
+    assert stage_row(h, ctx.night, "selfies") is None and run_get(h.store, ctx.night).error is None
+    assert caplog.text.count("nightly_image_refused") == 1                # the night is over for images
+    assert 'nightly_image_refused: night=2026-10-29 stage=selfies holders=["voice"]' in caplog.text
+
+
+def test_a_lease_that_refuses_an_image_stage_mid_stage_keeps_its_finished_units(h):
+    admin = FakeAdmin([h.REFL, h.EMB]); ctx = h.ctx(admin=admin)
+    run_begin(h.store, ctx.night, *ctx.window, now=ctx.window[1])
+    ran = []
+    async def render(c):
+        c.skip("selfies", "101")                    # a finished set
+        c.arbiter.hold("human")                     # his login, mid-render
+        await c.arbiter.make_room()                 # the oom retry: refused
+        ran.append("never")
+    async def more(c): ran.append("more")
+    async def quiet(c): ran.append("quiet")
+    run(NightRunner([Stage("selfies", render, "image"), Stage("more", more, "image"),
+                     Stage("quiet", quiet, None)], lambda n, w: ctx).run(ctx.night, ctx.window))
+    assert ran == ["quiet"] and step_done(h.store, ctx.night, "selfies", "101")
+    assert stage_row(h, ctx.night, "selfies") is not None and run_get(h.store, ctx.night).error is None
+    assert admin.calls == [("unload", h.REFL)]
+
+
+def test_a_lease_taken_between_two_image_stages_stops_the_second(h):
+    admin = FakeAdmin([h.EMB]); ctx = h.ctx(admin=admin)
+    ran = []
+    async def first(c):
+        ran.append("first")
+        c.arbiter.hold("preview")                   # no make_room call follows inside this stage
+    async def second(c): ran.append("second")
+    run(NightRunner([Stage("a", first, "image"), Stage("b", second, "image")],
+                    lambda n, w: ctx).run(ctx.night, ctx.window))
+    assert ran == ["first"]
+
+
 def test_snapshot_once_per_night(h):
     ctx = h.ctx(); run(stage_snapshot(ctx)); run(stage_snapshot(ctx))
     assert len(list((h.settings.data_dir / "snapshots").glob("mind-night-*.db"))) == 1     # PR4: the label "night"
@@ -249,9 +372,10 @@ def test_plan_scales_with_the_window_and_degrades_in_order(h, task5_counters, mo
         plan = run(plan_night(ctx))
     assert plan["budget_s"] == 2 * 2 * 3600
     assert plan["steps"] == [step.name for step in DEGRADE] == [
-        "realm", "coach", "encounters", "notes", "wow_lines", "extras", "critic", "questions"]
+        "realm", "coach", "selfies", "encounters", "notes", "wow_lines", "extras", "critic",
+        "questions"]
     assert plan["settings"] == {
-        "realm_units": 0, "coach_units": 5,
+        "realm_units": 0, "coach_units": 5, "selfie_per_night": 10,
         "encounters_per_night": 20, "notes_per_night": 100, "wow_lines_per_night": 10,
         "stories_per_night": 1, "lexicon_candidates": 0, "profile_per_night": 0, "critic_lines": 0,
         "questions_min_new": 6}
@@ -331,6 +455,33 @@ def test_the_model_is_switched_only_when_the_next_stage_needs_another(h):
         NightRunner([Stage("a", nothing, "embedding")], lambda n, w: ctx)
     with pytest.raises(ValueError, match="twice"):
         NightRunner([Stage("a", nothing, None), Stage("a", nothing, "live")], lambda n, w: ctx)
+
+
+def test_the_runner_takes_image_stages_and_refuses_unknown_models(h):
+    admin = FakeAdmin([h.LIVE, h.EMB]); ctx = h.ctx(admin=admin)
+    asked, make_room, ensure = [], ctx.arbiter.make_room, ctx.arbiter.ensure_model
+    async def room():
+        asked.append("room")
+        await make_room()
+    async def spy(model):
+        asked.append(model)
+        await ensure(model)
+    ctx.arbiter.make_room, ctx.arbiter.ensure_model = room, spy
+    async def nothing(c): pass
+    runner = NightRunner([Stage("a", nothing, "image"), Stage("b", nothing, None),
+                          Stage("c", nothing, "image"), Stage("d", nothing, "reflection")],
+                         lambda n, w: ctx)
+    runner.add_stage("e", nothing, after="d", model="image")
+    run(runner.run(ctx.night, ctx.window))
+    # each image stage makes room before it and once more after it (final review C1)
+    assert asked == ["room", "room", "room", "room", h.REFL, "room", "room"]
+    assert admin.calls == [("unload", h.LIVE)]
+    for bad in ("embedding", "images", "Image"):
+        with pytest.raises(ValueError, match="unknown model"):
+            NightRunner([Stage("a", nothing, bad)], lambda n, w: ctx)
+        with pytest.raises(ValueError, match="unknown model"):
+            runner.add_stage("f", nothing, after="a", model=bad)
+    assert [s.name for s in runner.stages] == ["a", "b", "c", "d", "e"]
 
 
 def test_a_fatal_reflection_error_ends_the_night(h):
@@ -540,7 +691,7 @@ def test_planning_costs_and_the_budget(h):
         "coach": 130, "realm": 20,
         "reflect": 150, "reflect_small": 130, "notes": 40, "encounters": 40, "confide": 22, "arc": 30,
         "life": 40, "wowlife": 40, "follow": 40, "lexicon": 20, "profile": 40, "stories": 130,
-        "recap": 130, "chronicle": 40, "forget": 20, "breaks": 20, "critic": 22, "enrich": 110, "eval": 2386,
+        "recap": 130, "chronicle": 40, "forget": 20, "breaks": 20, "critic": 22, "enrich": 110, "photo": 20, "selfies": 48, "eval": 2386,
         "supersede": 40,                                                # a reflect unit's 2 decide calls (Task 10, K2)
         "core_judge": 10})                                              # half a core-judge call (Task 11, I1)
     assert estimate({"reflect": 2, "notes": 0}, measured={"reflect": 10.0}) == {"reflect": 80.0, "notes": 0.0}
@@ -598,18 +749,21 @@ def test_a_step_cuts_only_what_the_budget_needs(h, task5_counters, monkeypatch):
     h.clock.set(end - 3600)                                             # the floor: 14,400 slot-seconds
     monkeypatch.setitem(budget.COUNTERS, "confide", lambda ctx: 500)    # 11,000 s, plus 1,190 s of lines and stories
     plan = run(plan_night(h.ctx()))
-    # The realm and the coach have no counter in this fixture; their cuts still reach their floors.
-    assert plan["steps"] == ["realm", "coach", "encounters"] and plan["settings"] == {
-        "realm_units": 0, "coach_units": 5, "encounters_per_night": 55}  # 56 is 30 s over
+    # The realm, the coach and the photos have no counter in this fixture; their cuts still reach
+    # their floors.
+    assert plan["steps"] == ["realm", "coach", "selfies", "encounters"] and plan["settings"] == {
+        "realm_units": 0, "coach_units": 5, "selfie_per_night": 10,
+        "encounters_per_night": 55}  # 56 is 30 s over
     monkeypatch.setitem(budget.COUNTERS, "confide", lambda ctx: 582)    # 12,804 s
     plan = run(plan_night(h.ctx()))
-    assert plan["steps"] == ["realm", "coach", "encounters", "notes", "wow_lines"]  # notes cannot help, and still go to 100
-    assert plan["settings"] == {"realm_units": 0, "coach_units": 5, "encounters_per_night": 20, "notes_per_night": 100,
-                                "wow_lines_per_night": 20}               # halved once: 400 s of lines fit
+    assert plan["steps"] == ["realm", "coach", "selfies", "encounters", "notes", "wow_lines"]  # notes cannot help, and still go to 100
+    assert plan["settings"] == {"realm_units": 0, "coach_units": 5, "selfie_per_night": 10, "encounters_per_night": 20,
+                                "notes_per_night": 100, "wow_lines_per_night": 20}  # halved once: 400 s of lines fit
     monkeypatch.setitem(budget.COUNTERS, "confide", lambda ctx: 605)
     plan = run(plan_night(h.ctx(window=(end - 2 * 3600, end))))         # 12 scenes, already below the floor
-    assert plan["steps"] == ["realm", "coach", "notes", "wow_lines"] and plan["settings"] == {
-        "realm_units": 0, "coach_units": 5, "encounters_per_night": 12, "notes_per_night": 100, "wow_lines_per_night": 10}
+    assert plan["steps"] == ["realm", "coach", "selfies", "notes", "wow_lines"] and plan["settings"] == {
+        "realm_units": 0, "coach_units": 5, "selfie_per_night": 10, "encounters_per_night": 12, "notes_per_night": 100,
+        "wow_lines_per_night": 10}
 
 
 def test_a_counter_that_fails_counts_zero_and_is_logged_once(h, task5_counters, monkeypatch, caplog):

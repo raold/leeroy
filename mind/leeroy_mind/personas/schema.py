@@ -199,6 +199,15 @@ class Disclosure:
     text: str = _f(max_len=160)
 
 
+@dataclass(frozen=True)
+class ProfilePhoto:
+    kind: Literal["selfie", "mirror_selfie", "headshot", "snapshot"]
+    framing: Literal["face", "head_and_shoulders", "upper_body"]
+    setting: str = _f(max_len=80)
+    outfit: str = _f(max_len=80)
+    expression: str = _f(max_len=40)
+
+
 DEPTHS = get_args(get_type_hints(Disclosure)["depth"])  # the order the layers open in
 
 
@@ -231,6 +240,7 @@ class Persona:
     mock_interview: str = _f(max_len=4000, default="")
     appearance: Appearance | None = _f(default=None, enrichment=True)
     disclosures: tuple[Disclosure, ...] = _f(max_items=4, default=(), enrichment=True)
+    photo: ProfilePhoto | None = _f(default=None, enrichment=True)
 
 
 # -- type helpers ---------------------------------------------------------------------------
@@ -429,7 +439,10 @@ def _dump(v):
 
 
 def persona_to_dict(p: Persona) -> dict:
-    return {"schema": SCHEMA_VERSION, **_dump(p)}
+    d = {"schema": SCHEMA_VERSION, **_dump(p)}
+    if p.photo is None:
+        del d["photo"]  # a persona without one stays as the previous release wrote it
+    return d
 
 
 # -- validation -----------------------------------------------------------------------------

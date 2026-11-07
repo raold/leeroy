@@ -185,6 +185,7 @@ async def doctor(root: Path, *, make_llm=None, ollama_conf: Path | None = None
                              "bridge")]
         return out
     out += _doctor_voice_service(root)
+    out += _doctor_selfies(root)
     llm = (make_llm or _default_llm)(cfg)
     try:
         names = await llm.list_models()
@@ -313,6 +314,46 @@ def _doctor_voice_specs(root: Path, personas) -> tuple[bool | None, str]:
             f"voice specs: {count} of {len(guids)} cast members")
 
 
+_QUICK_MARKS = {"ok": True, "FAIL": False, "note": None}
+
+
+def _quick_doctor(python: Path, data: Path) -> list[tuple[bool | None, str]]:
+    """The worker venv's own `doctor --quick` (no torch, no hashing), relayed line by line."""
+    import subprocess
+    try:
+        done = subprocess.run([str(python), "-I", "-m", "leeroy_selfie", "doctor", "--quick",
+                               "--data", str(data)], capture_output=True, text=True,
+                              timeout=30, stdin=subprocess.DEVNULL,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError) as e:
+        return [(False, f"quick check did not run ({type(e).__name__})")]
+    lines = []
+    for raw in done.stdout.splitlines():
+        mark, _, text = raw.partition(" ")
+        if mark in _QUICK_MARKS and text:
+            lines.append((_QUICK_MARKS[mark], text))
+    if not lines or (done.returncode and all(ok is not False for ok, _ in lines)):
+        lines.append((False, f"quick check exited {done.returncode}"))
+    return lines
+
+
+def _doctor_selfies(root: Path) -> list[tuple[bool | None, str]]:
+    """The profile photo worker: a note when off, a FAIL when on without its venv, else the
+    worker's own quick check. Never loads a model."""
+    from .config import ConfigError
+    from .selfies.config import load_selfie_config, worker_data, worker_python
+    try:
+        cfg = load_selfie_config(root / "mind.toml")
+    except ConfigError as e:
+        return [(False, f"selfies: {e}")]
+    if not cfg.enabled:
+        return [(None, "selfies: disabled ([selfies] enabled = false)")]
+    python = worker_python(cfg)
+    if not python.is_file():
+        return [(False, f"selfies: no worker venv at {python} (see selfie/README.md)")]
+    return [(ok, f"selfies: {text}") for ok, text in _quick_doctor(python, worker_data(cfg))]
+
+
 def _doctor_voice_service(root: Path) -> list[tuple[bool | None, str]]:
     """Probe without a protocol greeting, autostart or model loading. Voice is optional.
 
@@ -388,16 +429,27 @@ def _doctor_overlays(root: Path) -> list[tuple[bool, str]]:
     cannot be read fails. Names and sizes only, never the text; no files, no lines."""
     from .personas.generate import OVERLAY_TOKEN_CAP
     from .prompts import read_overlay
-    from .talk.romance import OVERLAY_CAPS
+    from .talk.emotes import TEMPLATES as EMOTE_TEMPLATES
+    from .talk.prompt import EXTRA_CAP_TOKENS
+    from .talk.romance import OVERLAY_CAPS, split_variants
     from .text import estimate_tokens
     from .tuning.lines import OVERLAY_CAP_TOKENS as TUNING_CAP, OVERLAY_NAMES as TUNING_OVERLAYS
+    from .nightly.llm import night_prompt_names
+    night_names = night_prompt_names()
     caps = dict(OVERLAY_CAPS)
     caps["persona_rules"] = OVERLAY_TOKEN_CAP
     caps.update({name: TUNING_CAP for name in TUNING_OVERLAYS})
+    caps.update({name: EXTRA_CAP_TOKENS for name in EMOTE_TEMPLATES})  # the instruction's extra
     folder = root / "prompts"
     out = []
     for path in sorted(folder.glob("*.txt")) if folder.is_dir() else ():
         cap = caps.get(path.stem)
+        stage = path.stem.removeprefix("nightly_")
+        if cap is None and stage != path.stem and stage:
+            out.append((True, f"prompt overlay {path.stem}: " + (
+                f"read by the night's {stage} writer (no cap)" if stage in night_names else
+                "no night writer reads it (check the name)")))
+            continue
         if cap is None:
             known = ", ".join(f"{name}.txt" for name in sorted(caps))
             out.append((True, f"prompt overlay {path.name}: no prompt reads it ({known})"))
@@ -408,9 +460,16 @@ def _doctor_overlays(root: Path) -> list[tuple[bool, str]]:
             out.append((False, f"prompt overlay {path.stem}: cannot be read ({e})"))
             continue
         tokens = estimate_tokens(found.text) if found is not None else 0
-        size = ("blank: not used" if not tokens else
-                f"{tokens} tokens, over its cap of {cap}: the end is cut" if tokens > cap else
-                f"{tokens} tokens (cap {cap})")
+        parts = split_variants(found.text) if found is not None else ()
+        if len(parts) > 1:
+            sizes = [estimate_tokens(v) for v in parts]
+            over = sum(t > cap for t in sizes)
+            size = (f"{len(parts)} variants, largest {max(sizes)} tokens (cap {cap})"
+                    + (f"; {over} over its cap: the end is cut" if over else ""))
+        else:
+            size = ("blank: not used" if not tokens else
+                    f"{tokens} tokens, over its cap of {cap}: the end is cut" if tokens > cap else
+                    f"{tokens} tokens (cap {cap})")
         how = []
         if found is not None and found.encoding != "utf-8":
             how.append(f"read as {found.encoding.upper()}")
@@ -1192,19 +1251,31 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
         from .nightly.cli import eval_main, nightly_main
         command = nightly_main if argv[0] == "nightly" else eval_main
         return command(argv[1:], make_llm=make_llm)
+    if argv and argv[0] == "selfies":
+        from .selfies.cli import selfies_main
+        return selfies_main(argv[1:], make_llm=make_llm)
     if argv and argv[0] == "console":
         from .console.cli import main as console_main
         return console_main(argv[1:])
+    if argv and argv[0] == "health":
+        from .health import main as health_main
+        return health_main(argv[1:])
     parser = argparse.ArgumentParser(prog="leeroy_mind")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("training", help="training ledger, gate, reports and spell checks")
-    sub.add_parser("realm", help="read-only realm status and title diagnostics")
+    sub.add_parser("realm", help="realm status and titles, the data steps, and release of a stuck root "
+                   "with the mind stopped")
     sub.add_parser("tuning", help="the owner's persona dials: status, history, and undo or "
                    "revert with the mind stopped")
     sub.add_parser("nightly", help="nightly status, trials, ledger and owner controls")
     sub.add_parser("eval", help="weekly evaluation on a copied database by default")
+    sub.add_parser("selfies", help="profile photos: status, and a trial render with the mind "
+                   "stopped")
     sub.add_parser("console", help="the guild console on http://127.0.0.1:7881/ (comms, the "
                                    "mind's health, start and stop)")
+    sub.add_parser("health", help="a read-only check of the live install: the servers, the "
+                                  "mind, its endpoint, the console, voice and Ollama; one ok, "
+                                  "note or FAIL line each")
     p_init = sub.add_parser("init", help="create the data dir and a default mind.toml")
     _add_data_dir(p_init)
     p_init.set_defaults(func=cmd_init)

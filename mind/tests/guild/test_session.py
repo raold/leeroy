@@ -590,3 +590,19 @@ def test_wants_item_is_case_insensitive_substring_either_way_without_empty_match
     assert wants_item(["TESTBLADE OF TESTS"], "Testblade")
     assert not wants_item(["", "   "], "Testblade")
     assert not wants_item(["Testblade"], "")
+
+
+@pytest.mark.parametrize("attend", [True, False])
+@_run_async
+async def test_due_decay_runs_with_attendance_at_open_or_at_attend(setup, attend):
+    fake, cfg, armory, plan = setup
+    with fake.conn:
+        fake.conn.execute("INSERT INTO meta(key,value) VALUES ('dkp_last_decay','2026-10-01T04:00:00')")
+    session = await RaidSession.open(fake, cfg, armory, plan, attend=attend)
+    opened = [text for _, _, text in fake.said if text.startswith("dkp updated")]
+    assert len(opened) == int(attend)
+    await session.attend()
+    await session.attend()
+    assert len([text for _, _, text in fake.said if text.startswith("dkp updated")]) == 1
+    assert fake.conn.execute("SELECT COUNT(*) FROM guild_attendance WHERE raid_id=?",
+                             (session.raid_id,)).fetchone()[0] == len(plan.members) + 1 + len(plan.bench)

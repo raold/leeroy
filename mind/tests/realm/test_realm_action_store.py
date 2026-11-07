@@ -225,6 +225,295 @@ def test_failed_job_with_positive_ack_remains_unknown_and_conflicting_jobs_hold(
     assert store.holds()
 
 
+CAST = tuple(range(101, 207))
+
+
+@pytest.mark.parametrize("reason", ["busy:combat", "busy:dead", "busy:offline", "busy:teleport", "busy:duel",
+                                    "busy:raid_owner", "busy:body_identity_changed", "not_actor"])
+@pytest.mark.parametrize("job_first", [False, True])
+def test_a_rearm_native_refused_at_one_step_settles_refused_and_holds_nobody(store, reason, job_first):
+    dispatch(store, prepare(store, p.Rearm("rearm", CAST)))
+    handlers = [lambda: store.observe_ack(Ack(0, "rearm", True, ""), now=2),
+                lambda: store.observe_realm_job(job("rearm", "rearm", "failed", reason, CAST[27]), now=3)]
+    if job_first: handlers.reverse()
+    assert not handlers[0]().result_ready
+    t = handlers[1]()
+    assert (t.result_ready, t.result_ok, t.reason) == (True, False, "step_refused")
+    record = store.get("rearm")
+    assert (record.state, record.result_ok, record.result_reason) == ("completed", False, "step_refused")
+    assert "failed_at" in json.loads(record.evidence)  # the usual back-off before the same rearm again
+    assert store.holds() == ()
+
+
+@pytest.mark.parametrize("cmd,reason,guid,value", [
+    (p.Rearm("rearm", CAST), "operation_transition_unknown", CAST[27], 0),  # the post-step check failed
+    (p.Rearm("rearm", CAST), "operation_outcome_unknown", CAST[27], 0),
+    (p.Rearm("rearm", CAST), "recorded_weapon_unavailable", CAST[27], 0),  # Refuse or, after a swap, Unknown
+    (p.Rearm("rearm", CAST), "equipment_changed", CAST[27], 0),
+    (p.Rearm("rearm", CAST), "realm_off", CAST[27], 0),
+    (p.Rearm("rearm", CAST), "busy:combat", 999, 0),  # not a body of this rearm
+    (p.Rearm("rearm", CAST), "busy:combat", CAST[27], 1),  # a count native never sends with a refusal
+    (p.RealmMove("rearm", 2, "home"), "busy:combat", 2, 0),  # a pending walk's recheck is Unproved
+    (p.LeavePvp("rearm", CAST), "busy:combat", CAST[27], 0),  # cleanup_mutated makes it Unknown
+    (p.GuildGrow("rearm", 13, (303, 304)), "busy:combat", 304, 1),  # a grow retains past a join
+    (p.Duel("rearm", 2, 3), "busy:combat", 2, 0),
+])
+def test_a_failed_job_native_may_still_hold_stays_unknown(store, cmd, reason, guid, value):
+    c = classify(cmd)
+    dispatch(store, prepare(store, cmd))
+    store.observe_ack(Ack(0, "rearm", True, ""), now=2)
+    t = store.observe_realm_job(job("rearm", c.kind, "failed", reason, guid, value), now=3)
+    assert (t.result_ready, t.result_ok, t.reason) == (True, False, "job_failed")
+    assert store.get("rearm").state == "unknown"
+    assert store.holds()[0].guids == frozenset(c.reserved_manifest)
+
+
+def test_a_step_refusal_without_its_ack_waits_and_a_negative_ack_stays_unknown(store):
+    dispatch(store, prepare(store, p.Rearm("rearm", CAST)))
+    assert not store.observe_realm_job(job("rearm", "rearm", "failed", "busy:combat", CAST[0]), now=2).result_ready
+    assert store.get("rearm").state == "dispatched" and store.holds()
+    store.recover(process_id="new", now=3)  # its ack never came: lost, so it may have run
+    assert store.get("rearm").state == "unknown"
+    dispatch(store, prepare(store, p.Rearm("other", (301,))))
+    store.observe_ack(Ack(0, "other", False, "busy:combat"), now=3)
+    store.observe_realm_job(job("other", "rearm", "failed", "busy:combat", 301), now=4)
+    assert store.get("other").state == "unknown"
+    assert {h.scope_id for h in store.holds()} == {"rearm", "other"}
+
+
+def _stored_unknown(store, command_id, cmd, ev, *, reason="job_failed", seq_time=1793900000.0):
+    """A row exactly as an earlier build left it: unknown, settled, its native ack and job kept."""
+    c = classify(cmd)
+    values = dict(command_id=command_id, parent_id=None, role="root", policy=c.policy, owner="realm_day", rank=4,
+                  kind=c.kind, payload=c.payload, reserved_manifest=document(list(c.reserved_manifest)),
+                  native_manifest=None, guild=21, human=1, state="unknown", transport_state="settled",
+                  process_id="a80968d4", connection_epoch="1", send_error="", evidence=document(ev),
+                  result_ok=0, result_reason=reason, created=seq_time, updated=seq_time + 0.1,
+                  dispatched=seq_time + 0.01)
+    with store.conn:
+        store.conn.execute("INSERT INTO realm_action(" + ",".join(values) + ") VALUES("
+                           + ",".join("?" for _ in values) + ")", tuple(values.values()))
+
+
+def _failed(command_id, kind, reason, guid, value, at):
+    return {"ack": {"error": "", "ok": True}, "failed_at": at,
+            "job": {"guid": guid, "kind": kind, "pvp_owner": "", "reason": reason, "state": "failed", "value": value}}
+
+
+def test_recovery_settles_stored_rearms_native_refused_at_a_step_and_keeps_a_real_unknown(store):
+    raiders = tuple(range(401, 424))
+    late = (501, 502, 503, 504, 505)
+    _stored_unknown(store, "grow", p.GuildGrow("grow", 13, raiders),
+                    _failed("grow", "guild_grow", "operation_transition_unknown", raiders[1], 1, 1793800000.1))
+    _stored_unknown(store, "rearm", p.Rearm("rearm", CAST),
+                    _failed("rearm", "rearm", "busy:combat", CAST[27], 0, 1793900000.1))
+    _stored_unknown(store, "late", p.Rearm("late", late),
+                    _failed("late", "rearm", "busy:combat", late[4], 0, 1793901000.1))
+    _stored_unknown(store, "walk", p.RealmMove("walk", 601, "home"),
+                    _failed("walk", "realm_move", "busy:combat", 601, 0, 1793902000.1))
+    before = {r.command_id: r for r in store.records()}
+    assert sum(len(h.guids) for h in store.holds()) == 23 + 106 + 5 + 1
+    unresolved = store.recover(process_id="new", now=1794000000.0)
+    assert [r.command_id for r in unresolved] == ["grow", "walk"]
+    for command_id in ("rearm", "late"):
+        record = store.get(command_id)
+        assert (record.state, record.result_ok, record.result_reason) == ("completed", False, "step_refused")
+        assert json.loads(record.evidence) == json.loads(before[command_id].evidence)  # the same receipts, read again
+    assert {h.scope_id: h.guids for h in store.holds()} == {"grow": frozenset(raiders), "walk": frozenset({601})}
+    assert store.get("grow") == before["grow"] and store.get("walk") == before["walk"]
+    again = {r.command_id: r for r in store.records()}
+    assert [r.command_id for r in store.recover(process_id="again", now=1794000100.0)] == ["grow", "walk"]
+    assert {r.command_id: r for r in store.records()} == again
+
+
+def test_recovery_leaves_other_stored_failures_alone(store):
+    _stored_unknown(store, "lost", p.Rearm("lost", (301,)),
+                    {"ack": {"error": "", "ok": True}, "failed_at": 5.0,
+                     "job": {"guid": 301, "kind": "rearm", "pvp_owner": "", "reason": "busy:combat",
+                             "state": "failed", "value": 0}})
+    with store.conn:
+        store.conn.execute("UPDATE realm_action SET send_error='TimeoutError' WHERE command_id='lost'")
+    _stored_unknown(store, "transport", p.Rearm("transport", (302,)), {"failed_at": 5.0}, reason="transport_unknown")
+    assert [r.command_id for r in store.recover(process_id="new", now=20)] == ["lost", "transport"]
+    assert len(store.holds()) == 2
+
+
+@pytest.fixture
+def journal(store):
+    with store.conn:
+        store.conn.execute("CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT)")
+    return store
+
+
+def receipt(store, command_id):
+    row = store.conn.execute("SELECT value FROM meta WHERE key=?", ("realm:action:abandoned:" + command_id,)).fetchone()
+    return None if row is None else json.loads(row[0])
+
+
+def test_abandon_releases_one_unknown_root_and_keeps_its_receipt(journal):
+    store = journal
+    raiders = tuple(range(401, 424))
+    _stored_unknown(store, "grow", p.GuildGrow("grow", 13, raiders),
+                    _failed("grow", "guild_grow", "operation_transition_unknown", raiders[1], 1, 1793800000.1))
+    _stored_unknown(store, "rearm", p.Rearm("rearm", (501,)),
+                    _failed("rearm", "rearm", "operation_transition_unknown", 501, 0, 1793900000.1))
+    before = store.get("grow")
+    record = store.abandon("grow", reason="two joined, the rest are guildless", now=1794000000.0)
+    assert (record.state, record.result_ok, record.result_reason) == ("completed", False, "abandoned")
+    assert json.loads(record.evidence) == {**json.loads(before.evidence), "abandoned": 1794000000.0}
+    assert [h.scope_id for h in store.holds()] == ["rearm"]
+    assert receipt(store, "grow") == {
+        "at": 1794000000.0, "reason": "two joined, the rest are guildless", "seq": before.seq, "kind": "guild_grow",
+        "policy": "ordinary", "owner": "realm_day", "state": "unknown", "result_reason": "job_failed",
+        "created": before.created, "dispatched": before.dispatched, "members": list(raiders),
+        "evidence": json.loads(before.evidence)}
+    assert store.get("rearm").state == "unknown" and receipt(store, "rearm") is None
+    assert [r.command_id for r in store.recover(process_id="new", now=1794000100.0)] == ["rearm"]
+    assert store.get("grow") == record
+    store.observe_realm_job(job("grow", "guild_grow", "failed", "operation_transition_unknown", raiders[1], 1), now=5)
+    assert store.get("grow").state == "completed"  # the same receipt again changes nothing
+    store.observe_realm_job(job("grow", "guild_grow", "done", "", 0, 23), now=6)
+    assert store.get("grow").state == "conflict"  # a contradiction from native holds them again
+    assert {h.scope_id for h in store.holds()} == {"grow", "rearm"}
+
+
+def test_abandon_a_defaults_root_that_ended_unknown(journal):
+    store = journal
+    dispatch(store, prepare(store, BotDo("defaults", (2, 3), "nc", "-bg,-lfg")))
+    store.observe_ack(Ack(0, "defaults", True, ""), now=2)
+    store.observe_bot_job(bot(guids=(2,)), now=3)
+    assert store.get("defaults").state == "unknown"
+    assert store.abandon("defaults", reason="checked", now=4).result_reason == "abandoned"
+    assert store.holds() == ()
+
+
+@pytest.mark.parametrize("case", ["missing", "prefix", "completed", "dispatched", "prepared", "inflight",
+                                  "conflict", "wg", "ack", "again"])
+def test_abandon_refuses_what_is_not_an_unknown_body_move_and_changes_nothing(journal, case):
+    store = journal
+    if case == "wg":
+        wg(store)
+        store.observe_realm_job(job("wg", "wg_join", "failed", "ending", 0, 0, TOKEN), now=5)
+        command_id = "wg"
+    elif case == "ack":
+        dispatch(store, prepare(store, p.GuildAdmit("direct", 2)))
+        store.observe_ack(Ack(0, "direct", False, "database_error"), now=2)
+        command_id = "direct"
+    else:
+        command_id = "rearm"
+        record = prepare(store, p.Rearm("rearm", (2, 3)))
+        if case != "prepared": dispatch(store, record)
+        if case in {"missing", "prefix", "conflict", "again"}:
+            store.observe_ack(Ack(0, "rearm", True, ""), now=2)
+            store.observe_realm_job(job("rearm", "rearm", "failed", "operation_transition_unknown", 2), now=3)
+        if case == "inflight":
+            store.observe_realm_job(job("rearm", "rearm", "failed", "operation_transition_unknown", 2), now=3)
+        if case == "completed":
+            store.observe_ack(Ack(0, "rearm", True, ""), now=2)
+            store.observe_realm_job(job("rearm", "rearm", "done", "", 0), now=3)
+        if case == "conflict":
+            store.observe_realm_job(job("rearm", "rearm", "done", "", 0), now=4)
+        if case == "again":
+            store.abandon("rearm", reason="first", now=4)
+        if case == "missing": command_id = "other"
+        if case == "prefix": command_id = "rear"
+    rows, metas = store.records(), store.conn.execute("SELECT * FROM meta").fetchall()
+    with pytest.raises(ValueError):
+        store.abandon(command_id, reason="checked", now=10)
+    assert store.records() == rows and store.conn.execute("SELECT * FROM meta").fetchall() == metas
+
+
+@pytest.mark.parametrize("reason", ["", "   ", "x" * 201, "line\nbreak", 7])
+def test_abandon_needs_a_printable_reason(journal, reason):
+    store = journal
+    _stored_unknown(store, "rearm", p.Rearm("rearm", (501,)),
+                    _failed("rearm", "rearm", "operation_transition_unknown", 501, 0, 5.0))
+    with pytest.raises(ValueError):
+        store.abandon("rearm", reason=reason, now=10)
+    assert store.get("rearm").state == "unknown"
+
+
+def test_prune_never_deletes_a_grow_or_a_released_root(journal):
+    store = journal
+    for i, (state, reason) in enumerate([("done", ""), ("failed", "operation_transition_unknown")]):
+        dispatch(store, prepare(store, p.GuildGrow(f"grow{i}", 13, (401 + i, 411 + i)), now=0))
+        store.observe_ack(Ack(0, f"grow{i}", True, ""), now=1)
+        store.observe_realm_job(job(f"grow{i}", "guild_grow", state, reason, 0 if state == "done" else 401 + i,
+                                    2 if state == "done" else 0), now=2)
+    dispatch(store, prepare(store, p.GuildGrow("never", 13, (421,)), now=0))
+    store.observe_send_error("never", "NotConnected", now=1)  # never left
+    dispatch(store, prepare(store, p.Rearm("released", (501,)), now=0))
+    store.observe_ack(Ack(0, "released", True, ""), now=1)
+    store.observe_realm_job(job("released", "rearm", "failed", "operation_transition_unknown", 501), now=2)
+    store.abandon("grow1", reason="checked", now=3)
+    store.abandon("released", reason="checked", now=3)
+    dispatch(store, prepare(store, p.Rearm("done", (601,)), now=0))
+    store.observe_ack(Ack(0, "done", True, ""), now=1)
+    store.observe_realm_job(job("done", "rearm", "done", "", 601), now=2)
+    assert store.prune(keep=0, now=10**9) == 1
+    assert [r.command_id for r in store.records()] == ["grow0", "grow1", "never", "released"]
+
+
+def test_a_root_that_settles_unknown_or_conflict_is_logged_once(store, caplog):
+    import logging
+    caplog.set_level(logging.WARNING, logger="leeroy_mind.realm.action_store")
+    def lines(): return [r.getMessage() for r in caplog.records if r.name == "leeroy_mind.realm.action_store"]
+    dispatch(store, prepare(store, p.Rearm("rearm", CAST)))
+    store.observe_ack(Ack(0, "rearm", True, ""), now=2)
+    store.observe_realm_job(job("rearm", "rearm", "failed", "operation_transition_unknown", CAST[27]), now=3)
+    store.recover(process_id="new", now=4)
+    assert lines() == ["realm_action_unknown id=rearm kind=rearm reason=job_failed "
+                       "native=operation_transition_unknown members=106"]
+    store.observe_realm_job(job("rearm", "rearm", "done", "", 0), now=5)
+    assert lines()[1:] == ["realm_action_conflict id=rearm kind=rearm reason=conflict "
+                           "native=operation_transition_unknown members=106"]
+    dispatch(store, prepare(store, p.Rearm("lost", (301,))))
+    store.recover(process_id="again", now=6)  # its process ended with it in flight
+    assert lines()[2:] == ["realm_action_unknown id=lost kind=rearm reason=ProcessRestart native=none members=1"]
+    dispatch(store, prepare(store, p.Rearm("refused", (302,))))
+    store.observe_ack(Ack(0, "refused", True, ""), now=7)
+    store.observe_realm_job(job("refused", "rearm", "failed", "busy:combat", 302), now=8)
+    assert len(lines()) == 3  # a step refusal settles refused, silently
+
+
+def test_step_refusals_are_native_refusals_whose_reservation_is_released():
+    policy = (REPO / "modules/mod-leeroy/src/Lib/LeeroyRealmPolicy.cpp").read_text(encoding="utf-8")
+    bodies = (REPO / "modules/mod-leeroy/src/Realm/RealmBodies.cpp").read_text(encoding="utf-8")
+    module = (REPO / "modules/mod-leeroy/src/Realm/RealmModule.cpp").read_text(encoding="utf-8")
+
+    def body(text, signature):
+        start = text.index(signature)
+        return text[start:text.index("\n}\n", start)]
+
+    busy = {"busy:" + r for r in re.findall(r'return "([a-z_]+)";', body(policy, "std::string BusyReason("))}
+    eligible = set(re.findall(r'return "([a-z_:]+)";', body(bodies, "std::string Eligible(")))
+    owned = set(re.findall(r'return "([a-z_:]+)";', body(module, "std::string RealmModule::ValidateOwnedBody(")))
+    assert action_store.STEP_REFUSALS == BODY_FENCES | busy | eligible | owned
+    # Each such kind takes one step per body: Eligible's refusal is a Refuse before anything changes,
+    # and it never goes pending, declares a scope, starts a continuation or reports one as Unknown.
+    executors = {"rearm": "RealmStep Rearm(", "rpg_status": "RealmStep Rpg(", "equip": "RealmStep Equip(",
+                 "set_profession": "RealmStep Profession("}
+    assert set(executors) == action_store.STEP_REFUSAL_KINDS
+    registry = body(bodies, "void RegisterRealmBodyHandlers(")
+    for kind, signature in executors.items():
+        step = body(bodies, signature)
+        assert re.search(r"if \(auto why = Eligible\(entry, guid, Purpose::\w+(, true)?\); !why\.empty\(\)\) "
+                         r"return Refuse\(why\);", step.split("\n")[2])
+        assert step.count("Eligible(") == 1
+        for forbidden in ("Pending", "Unproved", "Unknown(why", "Declare", "Charge", "continuation", "MutationReason"):
+            assert forbidden not in step
+        assert not set(re.findall(r'Unknown\("([a-z_:]+)"\)', step)) & action_store.STEP_REFUSALS
+        handler = re.search(r'QueueHandler\("' + kind + r'",.*?\}, (\w+)\);\n', registry, re.S)
+        assert handler and handler.group(1) == signature.split()[1].rstrip("(")  # the default admission only
+    # Tick: a fence before the step and a Refused step both release every holder of the command,
+    # unless its body is pending, it declared a scope, joined a guild or holds a continuation.
+    tick = body(module, "void RealmModule::Tick(")
+    assert "if (!reason.empty()) return finish(reason, pending);" in tick
+    assert 'return finish(result.reason.empty() ? "refused" : result.reason, false, true);' in tick
+    assert "if (retain) reservation.retained = true;\n            else _state->Release(entry.id);" in tick
+    assert "if (reservation.guildJoinAttempts.empty()) return true;" in tick
+
+
 def test_unsolicited_mismatched_kind_guid_and_token_are_not_enrolled(store):
     dispatch(store, prepare(store))
     for ev in (job("other"), job(kind="craft"), job(guid=3), job(token=TOKEN)):

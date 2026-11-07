@@ -4,6 +4,7 @@
 #include "LeeroyCastModel.h"
 #include "LeeroyEmotes.h"
 #include "LeeroyEvents.h"
+#include "LeeroyItemLinks.h"
 #include "LeeroyModule.h"
 #include "LeeroyText.h"
 
@@ -13,6 +14,7 @@
 #include "GuildMgr.h"
 #include "Log.h"
 #include "ObjectAccessor.h"
+#include "ObjectMgr.h"
 #include "Opcodes.h"
 #include "Player.h"
 #include "Playerbots.h"
@@ -107,7 +109,7 @@ std::string_view ExecuteSay(Leeroy::Command const& cmd)
     Speaker const speaker = FindSpeaker(cmd.guid);
     if (!speaker.error.empty())
         return speaker.error;
-    std::string const text = Leeroy::SanitizeChatText(cmd.text);
+    std::string const text = LeeroyBotChatText(speaker.bot, cmd.text);
     if (text.empty())
         return Leeroy::Err::EmptyText;
 
@@ -234,22 +236,10 @@ std::string_view ExecuteHumanSay(Leeroy::Command const& cmd)
         return Leeroy::Err::EmptyText;
     if (Leeroy::StartsWithCommandPrefix(text))
         return Leeroy::Err::CommandPrefix;
-    std::optional<uint32> const type = HumanChatType(cmd.channel);
-    if (!type)
-        return kBadChannel;
-
-    // A client may not speak LANG_UNIVERSAL (ChatHandler.cpp:76); the race's own language always passes the skill
-    // check, hence the original team.
-    uint32 const language = human->GetTeamId(true) == TEAM_HORDE ? LANG_ORCISH : LANG_COMMON;
     // Sanitized too: a NUL inside to_name would end the name early and make the rest the message, unchecked.
     std::string const toName = Leeroy::SanitizeChatText(cmd.toName);
-
-    auto packet = std::make_unique<WorldPacket>(CMSG_MESSAGECHAT, 8 + toName.size() + text.size() + 2);
-    *packet << *type << language;
-    if (cmd.channel == Leeroy::Channel::Whisper)
-        *packet << toName;
-    *packet << text;
-    human->GetSession()->QueuePacket(packet.release());   // the session frees it
+    if (!LeeroyQueueHumanChat(human, cmd.channel, text, toName))
+        return kBadChannel;
     return {};
 }
 
@@ -334,6 +324,25 @@ std::string_view ExecuteAfk(Leeroy::Command const& cmd)
 }
 }
 
+bool LeeroyQueueHumanChat(Player* human, Leeroy::Channel channel, std::string const& text, std::string const& toName)
+{
+    std::optional<uint32> const type = HumanChatType(channel);
+    if (!type)
+        return false;
+
+    // A client may not speak LANG_UNIVERSAL (ChatHandler.cpp:76); the race's own language always passes the skill
+    // check, hence the original team.
+    uint32 const language = human->GetTeamId(true) == TEAM_HORDE ? LANG_ORCISH : LANG_COMMON;
+
+    auto packet = std::make_unique<WorldPacket>(CMSG_MESSAGECHAT, 8 + toName.size() + text.size() + 2);
+    *packet << *type << language;
+    if (channel == Leeroy::Channel::Whisper)
+        *packet << toName;
+    *packet << text;
+    human->GetSession()->QueuePacket(packet.release());   // the session frees it
+    return true;
+}
+
 std::string LeeroyExecuteCommand(Leeroy::Command const& cmd)
 {
     LeeroyModule& module = LeeroyModule::Instance();
@@ -376,6 +385,18 @@ std::string LeeroyExecuteCommand(Leeroy::Command const& cmd)
             break;
     }
     return Leeroy::EncodeAck(now, cmd.id, error.empty(), error);
+}
+
+std::string LeeroyBotChatText(Player const* speaker, std::string_view text, std::size_t maxLinks)
+{
+    Leeroy::ItemLookup const items = [](std::uint32_t id) -> std::optional<Leeroy::ItemLinkInfo> {
+        ItemTemplate const* item = sObjectMgr->GetItemTemplate(id);
+        if (!item)
+            return std::nullopt;
+        return Leeroy::ItemLinkInfo{item->Name1, item->Quality};
+    };
+    return Leeroy::SanitizeChatTextWithItemLinks(text, items, speaker ? speaker->GetLevel() : 0, Leeroy::kMaxChatBytes,
+        maxLinks);
 }
 
 bool LeeroyRegisterCommand(std::string const& type, LeeroyCommandHandler handler)

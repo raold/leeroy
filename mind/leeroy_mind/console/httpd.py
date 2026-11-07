@@ -68,8 +68,9 @@ class Response:
     def encode(self) -> bytes:
         reason = HTTPStatus(self.status).phrase
         lines = [f"HTTP/1.1 {self.status} {reason}", "Connection: close",
-                 f"Content-Length: {len(self.body)}", "Cache-Control: no-store",
-                 "X-Content-Type-Options: nosniff"]
+                 f"Content-Length: {len(self.body)}", "X-Content-Type-Options: nosniff"]
+        if not any(k.lower() == "cache-control" for k, _ in self.headers):
+            lines.append("Cache-Control: no-store")
         if self.body or self.status != 204:
             lines.append(f"Content-Type: {self.content_type}")
         lines += [f"{k}: {v}" for k, v in self.headers]

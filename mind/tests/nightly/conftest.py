@@ -20,7 +20,7 @@ from leeroy_mind.personas.schema import Appearance, Disclosure, Persona
 from leeroy_mind.personas.screens import names_real_name
 from leeroy_mind.protocol import (BgEnd, Boss, Chat, Group, Hello, Login, Logout, LootWon,
                                   Member, TextEmote)
-from leeroy_mind.storage.db import open_db
+from dbtemplate import open_migrated
 from leeroy_mind.storage.rows import MemoryRow, pack_vec
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_llm import FakeLLM, fake_embed
@@ -384,7 +384,7 @@ def h(tmp_path):
     # Imported here, not at the top: a test file that needs no nightly module still collects
     # (and fails on its own imports) while one is missing.
     from leeroy_mind.nightly.settings import load_settings
-    store = Store(open_db(tmp_path / "mind.db"), clock=StepClock(START))
+    store = Store(open_migrated(tmp_path / "mind.db"), clock=StepClock(START))
     seed_test_cast(store)
     store.upsert_cast([Member(guid=1, name="Testmage", race=10, class_=8, gender=0, level=83,
                               rank=0, online=False, map=0, zone=0, spec_tab=-1)],

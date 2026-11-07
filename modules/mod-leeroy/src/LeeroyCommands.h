@@ -3,14 +3,32 @@
 #ifndef MOD_LEEROY_LEEROY_COMMANDS_H
 #define MOD_LEEROY_LEEROY_COMMANDS_H
 
+#include "LeeroyItemLinks.h"
 #include "LeeroyProtocol.h"
 
+#include <cstddef>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <nlohmann/json.hpp>
+
+class Player;
 
 // World thread; returns the reply line (a pong, a cast or an ack).
 std::string LeeroyExecuteCommand(Leeroy::Command const& cmd);
+
+// World thread. Queues CMSG_MESSAGECHAT on the human's own session, which handles it on its next update as a line he
+// typed, in his original team's language. text (and toName, for a whisper) go as given: the caller has sanitized and
+// checked them. false, sending nothing, for a channel without a chat type (raid warning, emote). Used by human_say
+// and owner_say.
+bool LeeroyQueueHumanChat(Player* human, Leeroy::Channel channel, std::string const& text, std::string const& toName);
+
+// World thread. What a cast member's line says: SanitizeChatText, with the mind's {{item:<id>}} placeholders as item
+// links (Leeroy::SanitizeChatTextWithItemLinks: the item template's name and quality at the speaker's level, at most
+// maxLinks, within 255 bytes). Every other '|' is gone, as before. maxLinks 0 gives the line's plain form, each
+// placeholder as "[Name]".
+std::string LeeroyBotChatText(Player const* speaker, std::string_view text,
+    std::size_t maxLinks = Leeroy::kMaxItemLinks);
 
 // Extension commands (P1d registers its nine here). The bridge has already checked v, id and type; the handler gets
 // the whole message, checks its own fields, runs on the world thread and returns the ack's result.

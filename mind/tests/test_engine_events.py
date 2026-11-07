@@ -1,5 +1,6 @@
 """The talk engine's reactions to game events, its bursts, romance follow-ups and turn sources
 (Task 16). The rig is in engine_rig.py."""
+from dbtemplate import open_migrated
 import asyncio
 import json
 from dataclasses import replace
@@ -154,7 +155,7 @@ def test_thirty_logins_on_thin_memories_greet_him_and_invent_nothing(clock, tmp_
 
     async def main():
         for seed in range(30):
-            store = Store(open_db(tmp_path / f"mind{seed}.db"), clock=clock)
+            store = Store(open_migrated(tmp_path / f"mind{seed}.db"), clock=clock)
             seed_test_cast(store)
             save_member(store, 102, player_gender="female", stance="lust", style="bold")
             save_member(store, 104, player_gender="female", stance="drawn")
@@ -1140,8 +1141,9 @@ def test_burst_turns_flirt_only_for_drawn_and_lust_women(store, clock, tmp_path)
                               clock.now())
             await r.engine.tick(clock.now())
         await r.engine.end_session()
-        return [x["kind"] for x in store.conn.execute(
-            "SELECT kind FROM utterance WHERE id > ? AND dropped IS NULL", (first,))]
+        return [x["kind"] for x in store.conn.execute(  # the bursts' turns, not her whispers
+            "SELECT kind FROM utterance WHERE id > ? AND dropped IS NULL AND why LIKE 'burst:%'",
+            (first,))]
 
     async def main():
         seed_test_cast(store)

@@ -12,7 +12,7 @@ from leeroy_mind.__main__ import main
 from leeroy_mind.app import acquire_instance_lock
 from leeroy_mind.clock import SystemClock
 from leeroy_mind.protocol import Member
-from leeroy_mind.storage.db import open_db
+from dbtemplate import open_migrated
 from leeroy_mind.storage.store import Store
 
 DATED = {"guid": 101, "character": "Arkon", "moment": "M3", "kind": "moment", "importance": 8,
@@ -31,7 +31,7 @@ def data_dir(tmp_path: Path) -> Path:
     root.mkdir()
     (root / "mind.toml").write_text('[human]\nnickname = "Testy"\nreal_name = "Bill"\n'
                                     'pronouns = "he"\n', encoding="utf-8")
-    s = Store(open_db(root / "mind.db"), clock=SystemClock())
+    s = Store(open_migrated(root / "mind.db"), clock=SystemClock())
     try:
         seed_test_cast(s)
         s.upsert_cast([Member(guid=HUMAN, name="Testmage", race=10, class_=8, gender=0,

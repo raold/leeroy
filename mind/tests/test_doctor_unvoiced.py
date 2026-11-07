@@ -8,7 +8,7 @@ from conftest import seed_test_cast
 from leeroy_mind.__main__ import main
 from leeroy_mind.config import load_config
 from leeroy_mind.protocol import Member
-from leeroy_mind.storage.db import open_db
+from dbtemplate import open_migrated
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_llm import FakeLLM
 
@@ -23,7 +23,7 @@ def root(tmp_path, clock, monkeypatch):
     root = tmp_path / "mind-data"
     root.mkdir()
     (root / "mind.toml").write_text("[bridge]\nport = 39001\n", encoding="utf-8")
-    store = Store(open_db(root / "mind.db"), clock=clock)
+    store = Store(open_migrated(root / "mind.db"), clock=clock)
     seed_test_cast(store)
     store.upsert_cast([member(1, "Testmage", rank=0)], 1000.0)
     store.close()
@@ -50,7 +50,7 @@ def doctor(root, capsys):
 
 
 def add_cast(root, clock, *members):
-    store = Store(open_db(root / "mind.db"), clock=clock)
+    store = Store(open_migrated(root / "mind.db"), clock=clock)
     store.upsert_cast(list(members), 2000.0)
     store.close()
 
