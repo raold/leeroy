@@ -33,6 +33,7 @@ STAGE = "scenes"
 GUILD_MIN = 3
 GUILD_MAX = 16
 GUILD_GAP_S = 604800.0
+DECLINED = "declined"  # ask_scene's only code for a member who chose no photo
 RAID_GRACE_S = 43200.0  # a raid that ended up to 12 hours before the night began still counts
 
 
@@ -147,6 +148,31 @@ def _guild_members(ctx: "NightContext", raid_id: int) -> list[tuple[int, int]]:
     return [(g, have[g]) for g in (first + rest)[:GUILD_MAX]]
 
 
+async def ask_scene(ctx: "NightContext", guid: int, *, about: str):
+    """One scene for `guid` from the reflection model, screened: (the Scene, []) or (None, the
+    refusal codes). [DECLINED] when the member chose no photo, ["model"] for a non-fatal model
+    failure. Writes nothing; a fatal ReflectionError is raised."""
+    p, name = ctx.base(guid), ctx.name(guid)
+    system = scene_system(p, ctx.settings.data_dir, human=ctx.ident, name=name,
+                          card=ctx.base_card(guid), facts=_facts(p),
+                          looks=looks_line(p.appearance), about=about)
+    try:
+        data = await ctx.reasoner.json(system, SCENE_ASK.format(name=name), scene_schema(p),
+                                       temperature=0.8)
+    except ReflectionError as e:
+        if e.fatal:
+            raise
+        return None, ["model"]
+    if data.get("photo") is False:
+        return None, [DECLINED]
+    names = [ctx.name(g) for g in ctx.members(include_away=True) if g != guid]
+    codes = screen_scene(p, data, ident=ctx.ident, member_names=names)
+    s = None if codes else scene_from(data)
+    if s is not None and scene_renderable(p, s):
+        codes = ["unrenderable"]
+    return (None, codes) if codes else (s, [])
+
+
 async def _sweep(ctx: "NightContext") -> None:
     async def one(unit: str) -> None:
         now = ctx.clock.now()
@@ -212,34 +238,19 @@ def make_scenes_stage(cfg: SelfieCfg, *, dial: Callable[[], int]
             nonlocal planned, declined
             guid = int(unit)
             source, ref = picks[guid]
-            p, name = ctx.base(guid), ctx.name(guid)
+            p = ctx.base(guid)
             cur = current(ctx.store, guid)
             if cur is None:
                 ctx.skip(STAGE, unit)
                 return
             about = (ABOUT["life"].format(beat=beats[guid][1]) if source == "life"
                      else ABOUT[source])
-            system = scene_system(p, ctx.settings.data_dir, human=ctx.ident, name=name,
-                                  card=ctx.base_card(guid), facts=_facts(p),
-                                  looks=looks_line(p.appearance), about=about)
-            try:
-                data = await ctx.reasoner.json(system, SCENE_ASK.format(name=name),
-                                               scene_schema(p), temperature=0.8)
-            except ReflectionError as e:
-                if e.fatal:
-                    raise
-                refuse(guid, unit, ["model"])
-                return
-            if data.get("photo") is False:
+            s, codes = await ask_scene(ctx, guid, about=about)
+            if codes == [DECLINED]:
                 declined += 1
                 log("selfies_scene_declined", night=ctx.night, guid=guid)
                 ctx.skip(STAGE, unit)
                 return
-            names = [ctx.name(g) for g in ctx.members(include_away=True) if g != guid]
-            codes = screen_scene(p, data, ident=ctx.ident, member_names=names)
-            s = None if codes else scene_from(data)
-            if s is not None and scene_renderable(p, s):
-                codes = ["unrenderable"]
             if codes:
                 refuse(guid, unit, codes)
                 return

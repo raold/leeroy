@@ -191,7 +191,7 @@ async def _start(ctx: "NightContext", worker: SelfieWorker) -> bool:
     return True
 
 
-class _Renderer:
+class SnapRenderer:
     """One image at a time through render_slot, each asked only while no live lease is held."""
 
     def __init__(self, ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker):
@@ -240,7 +240,7 @@ def _expiry(ctx: "NightContext", row: SnapRow, why: str) -> bool:
     return True
 
 
-async def _situation(ctx: "NightContext", r: _Renderer, row: SnapRow, began: float) -> str:
+async def _situation(ctx: "NightContext", r: SnapRenderer, row: SnapRow, began: float) -> str:
     data = ctx.settings.data_dir
     p = ctx.base(row.guid)
     out = files.snap(data, row.guid, row.id).absolute()
@@ -278,7 +278,7 @@ def _clear(path: Path) -> None:
         shutil.rmtree(path, onexc=files._held)
 
 
-async def _guild(ctx: "NightContext", r: _Renderer, row: SnapRow, members, began: float) -> str:
+async def _guild(ctx: "NightContext", r: SnapRenderer, row: SnapRow, members, began: float) -> str:
     data = ctx.settings.data_dir
     part = files.guild_tiles(data, row.id).absolute()
     _clear(part)  # what an earlier, unfinished render of this photo left
@@ -336,7 +336,7 @@ async def _guild(ctx: "NightContext", r: _Renderer, row: SnapRow, members, began
 
 async def _render(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
                   todo: list[SnapRow]) -> None:
-    r = _Renderer(ctx, cfg, worker)
+    r = SnapRenderer(ctx, cfg, worker)
     tally = Counter()
     started = restarted = False
     contended = 0

@@ -17,22 +17,20 @@ from leeroy_mind.app import AlreadyRunning
 from leeroy_mind.clock import SystemClock
 from leeroy_mind.config import load_config
 from leeroy_mind.console.selfieview import queue_view
-from leeroy_mind.nightly.enrich import _facts
-from leeroy_mind.nightly.llm import ReflectionError
 from leeroy_mind.nightly.cli import (_child, _context, _data_arg, _default_night, _exclusive,
                                      _positive, _print, _read_store, _root, _working_store)
 
 from . import files
 from .config import load_selfie_config, worker_command, worker_env
 from .kind import STAGE as KIND_STAGE
-from .kind import _saver, chosen_style, kind_one, looks_line
+from .kind import _saver, chosen_style, kind_one
 from .prompt import build_prompt, renderable
-from .scene import (ABOUT, SCENE_ASK, build_scene_prompt, build_tile_prompt, scene_from,
-                    scene_renderable, scene_schema, scene_system, screen_scene)
+from .scene import ABOUT, build_scene_prompt, build_tile_prompt
 from .scenes import STAGE as SCENES_STAGE
+from .scenes import ask_scene
 from .slot import SetRefused
 from .snaps import counts
-from .snapstage import GUILD_THUMB_PX, GUTTER_PX, SNAP_THUMB_PX, TILE_PX, _Renderer
+from .snapstage import GUILD_THUMB_PX, GUTTER_PX, SNAP_THUMB_PX, TILE_PX, SnapRenderer
 from .snapstage import STAGE as SNAPS_STAGE
 from .stage import STAGE, render_candidates, start_worker
 from .store import current
@@ -205,30 +203,6 @@ async def _try(root, store, cfg, scfg, clock, args, make_llm) -> int:
         return int(tally.sets != tally.members)
 
 
-async def _scene(ctx, guid: int):
-    """(the scene, None) or (None, why) for `guid`: one everyday scene from the reflection model,
-    screened as the night's scenes stage screens it. Nothing is stored."""
-    p, name = ctx.base(guid), ctx.name(guid)
-    system = scene_system(p, ctx.settings.data_dir, human=ctx.ident, name=name,
-                          card=ctx.base_card(guid), facts=_facts(p),
-                          looks=looks_line(p.appearance), about=ABOUT["everyday"])
-    try:
-        data = await ctx.reasoner.json(system, SCENE_ASK.format(name=name), scene_schema(p),
-                                       temperature=0.8)
-    except ReflectionError as e:
-        if e.fatal:
-            raise
-        return None, "model"
-    if data.get("photo") is False:
-        return None, "declined"
-    names = [ctx.name(g) for g in ctx.members(include_away=True) if g != guid]
-    codes = screen_scene(p, data, ident=ctx.ident, member_names=names)
-    s = None if codes else scene_from(data)
-    if s is not None and scene_renderable(p, s):
-        codes = ["unrenderable"]
-    return (None, ",".join(codes)) if codes else (s, None)
-
-
 async def _guild_grid(ctx, r, worker, members, out_root) -> list:
     """Each of `members` alone at a square tile, then one grid at snaps/guild.jpg; the tiles that
     were made, [] when the grid was not."""
@@ -273,9 +247,9 @@ async def _try_snaps(root, store, cfg, scfg, clock, args, make_llm) -> int:
             await ctx.reasoner.preflight()
             await ctx.arbiter.ensure_model(ctx.settings.reflection_model)
         for guid in guids:
-            scene, why = await _scene(ctx, guid)
+            scene, codes = await ask_scene(ctx, guid, about=ABOUT["everyday"])
             if scene is None:
-                print(f"guid {guid}: no scene ({why})", file=sys.stderr)
+                print(f"guid {guid}: no scene ({','.join(codes)})", file=sys.stderr)
                 continue
             ref = files.history(ctx.settings.data_dir, guid, picked[guid].pick)
             if not ref.is_file():
@@ -283,7 +257,7 @@ async def _try_snaps(root, store, cfg, scfg, clock, args, make_llm) -> int:
                 continue
             scenes[guid] = (scene, ref)
         if scenes:
-            r = _Renderer(ctx, scfg, worker)
+            r = SnapRenderer(ctx, scfg, worker)
             try:
                 await ctx.arbiter.make_room()
                 await start_worker(worker.worker, ctx.arbiter.make_room)
