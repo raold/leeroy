@@ -22,12 +22,13 @@ from leeroy_mind.protocol import (Achievement, BgEnd, Boss, Death, Emote, Group,
                                   LootDrop, LootWon, Logout, Resurrect, Zone)
 from leeroy_mind.talk.prompt import open_topics
 from leeroy_mind.talk.bits import BitScheduler
+from leeroy_mind.talk.budget import AFTER_BURST_S
 from leeroy_mind.talk.channels import choose_channel
 from leeroy_mind.talk.filters import names_any
 from leeroy_mind.talk.pipeline import Pipeline, TurnMeta, log, picked_why
-from leeroy_mind.talk.raid import WIPE_SILENCE_S, RaidPhase
-from leeroy_mind.talk.romance import (JealousyAsides, WhisperPlanner, forward, rivalry_reply,
-                                      rivalry_text)
+from leeroy_mind.talk.raid import MAX_FIGHT_S, WIPE_SILENCE_S, RaidPhase
+from leeroy_mind.talk.romance import (START, JealousyAsides, WhisperPlanner, forward,
+                                      rivalry_reply, rivalry_text, romance_lift, whisper_kind)
 from leeroy_mind.talk.seasons import holiday_topics
 from leeroy_mind.talk.select import pick_speakers
 from leeroy_mind.talk.states import substance_of
@@ -76,7 +77,18 @@ FIGHT_PHASES = frozenset({RaidPhase.COMBAT, RaidPhase.WIPE_SILENCE, RaidPhase.WI
 LOOT_CHEER = {"lust": 3.0, "drawn": 2.0}
 WHISPER_WHY = {"after_kill": "The raid just killed {about}.",
                "idle": "Chat has been quiet for a while.", "late": "It's getting late.",
-               "evening": "{about}"}
+               "evening": "{about}", START: ""}
+# Every unprompted whisper says it starts the conversation, and what to bring up by what the
+# member feels for him (romance.whisper_kind), so the model has something to say (2026-11-07:
+# 5 of 8 came back "(nothing)" with only the reason above to go on).
+START_WHISPER = "You're the one starting this conversation with {them}."
+START_WHAT = {
+    "romantic": "Tell {them} what's on your mind about {them}, or bring up {topic}.",
+    "casual": "Something casual: bring up {topic}, or ask how {their} night is going.",
+}
+# A whisper either way between him and a member this recent is a conversation going on: she is
+# not the one to start one (controller ruling, 2026-11-07).
+WHISPER_THREAD_S = 600.0
 EVENING_S = (1800.0, 2700.0)  # the evening whisper, 30-45 minutes into his session
 # Seconds: greetings, gz, the kill, the debrief, emotes, asides and whispers.
 GREET_FIRST_S, GREET_NEXT_S = (5.0, 12.0), (5.0, 14.0)
@@ -88,7 +100,7 @@ EMOTE_S = (2.0, 15.0)
 ASIDE_S = (3.0, 10.0)
 RIVAL_S = (4.0, 12.0)
 WHISPER_S = {"after_kill": (20.0, 45.0), "idle": (2.0, 10.0), "late": (2.0, 10.0),
-             "evening": (20.0, 60.0)}
+             "evening": (20.0, 60.0), START: (5.0, 20.0)}
 
 
 class Reactions(Pipeline):
@@ -112,6 +124,8 @@ class Reactions(Pipeline):
         self._raid_fought = False
         # the evening whisper trigger: when it is due this session, and the night it fired
         self._evening_at, self._evening_done, self._evening_night = math.inf, False, ""
+        # boss fights he is in outside his raid's (a 5-man's): (map, instance, boss) -> start
+        self._group_fights: dict[tuple[int, int, int], float] = {}
 
     def set_human(self, guid: int) -> None:
         super().set_human(guid)
@@ -120,7 +134,7 @@ class Reactions(Pipeline):
     async def on_event(self, ev, now: float) -> None:
         """React to a game event the app has already applied to the world and the raid state.
         Chat, emotes and anything unknown trigger nothing here (the human's lines go to
-        on_human_chat; emotes never trigger talk)."""
+        on_human_chat; emotes at members are answered by talk/emotes.py)."""
         self._note_lately(ev, now)
         if isinstance(ev, (LootDrop, LootWon)) and getattr(self, "items", None) is not None:
             # the copy that dropped is the one a shared item name links to (talk/items.py)
@@ -141,6 +155,7 @@ class Reactions(Pipeline):
         elif isinstance(ev, Achievement):
             self._gz_achievement(ev, now)
         elif isinstance(ev, Boss):
+            self._note_fight(ev, now)
             self._on_boss(ev, now)
         elif isinstance(ev, LootWon):
             self._gz_loot(ev, now)
@@ -523,20 +538,101 @@ class Reactions(Pipeline):
 
     # -- whispers ------------------------------------------------------------------------------
 
+    def _note_fight(self, ev: Boss, now: float) -> None:
+        """A boss fight he is in (a 5-man's included: the bridge reports every instance's),
+        from its engage to its kill or wipe, at the event's own time when it has one."""
+        hg = self.human.guid
+        if not hg or hg not in ev.members:
+            return
+        key = (ev.map, ev.instance_id, ev.boss_id)
+        if ev.state == "engaged":
+            self._group_fights[key] = ev.ts / 1000 if ev.ts > 0 else now
+        elif ev.state in ("killed", "wiped"):
+            self._group_fights.pop(key, None)
+
+    def _in_boss_fight(self, now: float) -> bool:
+        """He is in a boss fight (_note_fight) that began less than MAX_FIGHT_S ago."""
+        self._group_fights = {k: at for k, at in self._group_fights.items()
+                              if now - at < MAX_FIGHT_S}
+        return bool(self._group_fights)
+
+    def _his_talk_at(self) -> float:
+        """When he last said a line or a member last said one to him: the talk the clocks
+        that start conversations with him wait out (budget.AFTER_BURST_S)."""
+        hg = self.human.guid
+        return max([self.world.last_spoke.get(hg, -math.inf),
+                    *self._answered_at.values()]) if hg else -math.inf
+
+    def _initiation_held(self, now: float) -> bool:
+        """Nothing starts a conversation with him now: his raid's fight, its wipe or debrief,
+        a boss fight of his group, his AFK."""
+        return (self.raid.phase(now) in FIGHT_PHASES or self._in_boss_fight(now)
+                or self.world.human_afk)
+
+    def _whisper_threads(self, now: float) -> set[int]:
+        """The members with a whisper to or from him in the last WHISPER_THREAD_S."""
+        hg, out = self.human.guid, set()
+        for seen in reversed(self.world.history):
+            row = seen.row
+            if now - row.ts >= WHISPER_THREAD_S:
+                break
+            if row.channel == "whisper" and hg in (row.from_guid, row.to_guid):
+                out.add(row.to_guid if row.from_guid == hg else row.from_guid)
+        return out
+
+    def _may_whisper(self, now: float) -> bool:
+        """He can be whispered first: online, past his login's quiet and nothing holding it
+        (_initiation_held)."""
+        return (bool(self.human.guid) and self.world.human_online
+                and not self._login_quiet(now) and not self._initiation_held(now))
+
+    def _whisper_cands(self, now: float) -> dict:
+        """Who could whisper him now, with their relationship to him; a whisper reaches him
+        anywhere. A member already in a whisper with him (_whisper_threads) is not one to
+        start one."""
+        hg, busy = self.human.guid, self._whisper_threads(now)
+        return {g: (self.personas.get(g), self.store.get_relationship(g, hg))
+                for g in self._candidates(hearable=False) if g not in busy}
+
     def _maybe_whisper(self, trigger: str, now: float, *, about: str = "") -> None:
         """One WhisperPlanner draw for one event (a kill, a quiet stretch, the late hour)."""
-        hg = self.human.guid
-        if not hg or not self.world.human_online or self._login_quiet(now):
+        if not self._may_whisper(now):
             return
-        cands = {g: (self.personas.get(g), self.store.get_relationship(g, hg))
-                 for g in self._candidates(hearable=False)}  # a whisper reaches him anywhere
-        g = self.whispers.maybe(now, trigger, cands)
-        if g is None:
+        g = self.whispers.maybe(now, trigger, self._whisper_cands(now))
+        if g is not None:
+            self._queue_whisper(g, trigger, now, about=about)
+
+    def _start_whisper(self, now: float) -> None:
+        """The WhisperPlanner's own clock (tick): when its next whisper is due, a draw with no
+        roll. It holds (_initiation_held) and waits AFTER_BURST_S after his own line or an
+        answer to him, so it never talks over him."""
+        held = (self._initiation_held(now)
+                or now - self._his_talk_at() < AFTER_BURST_S)
+        if not self.whispers.due(now, hold=held) or not self._may_whisper(now):
             return
+        g = self.whispers.start(now, self._whisper_cands(now),
+                                lift=romance_lift(self.cfg.romance.dial))
+        if g is None:  # the hour's ceiling or the spacing, else nobody who may
+            log.info("whisper_skipped: trigger=start reason=%s",
+                     self.whispers.refusal(now) or "no_candidates")
+            return
+        self._queue_whisper(g, START, now)
+
+    def _queue_whisper(self, g: int, trigger: str, now: float, *, about: str = "") -> None:
+        """Her whisper to him: what set it off, that she starts the conversation and what she
+        brings up (START_WHAT by romance.whisper_kind, a topic of her own: _open_topic). A
+        casual one (everyone but a drawn or lust woman) carries no romance."""
+        hg, p = self.human.guid, self.personas.get(g)
+        kind = whisper_kind(p)
+        they, them, their = self.human.forms
+        what = START_WHAT[kind].format(topic=self._open_topic(p, now), they=they, them=them,
+                                       their=their)
+        told = " ".join(x for x in (WHISPER_WHY[trigger].format(about=about),
+                                    START_WHISPER.format(them=them), what) if x)
         turn = Turn(kind=TurnKind.WHISPER, speaker=g, channel="whisper", to_guid=hg,
-                    addressee=hg, instruction=WHISPER_WHY[trigger].format(about=about),
-                    delay=self.rng.uniform(*WHISPER_S[trigger]))
-        self._queue([(turn, TurnMeta(self._new_id(), why=f"whisper:{trigger}"))])
+                    addressee=hg, instruction=told, delay=self.rng.uniform(*WHISPER_S[trigger]))
+        self._queue([(turn, TurnMeta(self._new_id(), why=f"whisper:{trigger}",
+                                     initiates=True, casual=kind == "casual"))])
 
     # -- after a line is said ------------------------------------------------------------------
 

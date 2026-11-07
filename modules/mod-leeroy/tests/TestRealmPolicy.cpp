@@ -235,6 +235,19 @@ LEEROY_TEST(RealmPolicy_RearmNeverOverwritesOccupiedRealWeapons)
     CHECK(PlanRearm(record, {9001, 9002, 9003, false}, bags).empty());
 }
 
+LEEROY_TEST(RealmPolicy_RearmRecordTakenAtTheRearmPutsNothingBack)
+{
+    // Rearm records an armed body that has no record yet (a worldserver start empties them), as
+    // the 60 s poll would, then plans from that record: whatever its bags hold, nothing moves.
+    std::set<std::uint32_t> const bags{9001, 9002, 9003, 9004, 9005};
+    for (WeaponNow const now : {WeaponNow{9001, 0, 0, false}, WeaponNow{9001, 9002, 0, false},
+                                WeaponNow{9001, 0, 9003, false}, WeaponNow{9001, 9002, 9003, false}})
+    {
+        CHECK(ShouldRecord(now));
+        CHECK(PlanRearm({now.mainHand, now.offHand, now.ranged}, now, bags).empty());
+    }
+}
+
 LEEROY_TEST(RealmPolicy_RearmNeverCreatesMissingOrZeroItems)
 {
     WeaponRecord const record{9001, 9002, 9003};

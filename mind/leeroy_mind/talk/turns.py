@@ -21,6 +21,7 @@ class TurnKind(StrEnum):
     FLIRT = "flirt"
     WHISPER = "whisper"
     GOODNIGHT = "goodnight"
+    EMOTE_REACT = "emote_react"  # a member's line after his text emote (talk/emotes.py)
 
 
 @dataclass(slots=True)

@@ -429,16 +429,27 @@ def _doctor_overlays(root: Path) -> list[tuple[bool, str]]:
     cannot be read fails. Names and sizes only, never the text; no files, no lines."""
     from .personas.generate import OVERLAY_TOKEN_CAP
     from .prompts import read_overlay
-    from .talk.romance import OVERLAY_CAPS
+    from .talk.emotes import TEMPLATES as EMOTE_TEMPLATES
+    from .talk.prompt import EXTRA_CAP_TOKENS
+    from .talk.romance import OVERLAY_CAPS, split_variants
     from .text import estimate_tokens
     from .tuning.lines import OVERLAY_CAP_TOKENS as TUNING_CAP, OVERLAY_NAMES as TUNING_OVERLAYS
+    from .nightly.llm import night_prompt_names
+    night_names = night_prompt_names()
     caps = dict(OVERLAY_CAPS)
     caps["persona_rules"] = OVERLAY_TOKEN_CAP
     caps.update({name: TUNING_CAP for name in TUNING_OVERLAYS})
+    caps.update({name: EXTRA_CAP_TOKENS for name in EMOTE_TEMPLATES})  # the instruction's extra
     folder = root / "prompts"
     out = []
     for path in sorted(folder.glob("*.txt")) if folder.is_dir() else ():
         cap = caps.get(path.stem)
+        stage = path.stem.removeprefix("nightly_")
+        if cap is None and stage != path.stem and stage:
+            out.append((True, f"prompt overlay {path.stem}: " + (
+                f"read by the night's {stage} writer (no cap)" if stage in night_names else
+                "no night writer reads it (check the name)")))
+            continue
         if cap is None:
             known = ", ".join(f"{name}.txt" for name in sorted(caps))
             out.append((True, f"prompt overlay {path.name}: no prompt reads it ({known})"))
@@ -449,9 +460,16 @@ def _doctor_overlays(root: Path) -> list[tuple[bool, str]]:
             out.append((False, f"prompt overlay {path.stem}: cannot be read ({e})"))
             continue
         tokens = estimate_tokens(found.text) if found is not None else 0
-        size = ("blank: not used" if not tokens else
-                f"{tokens} tokens, over its cap of {cap}: the end is cut" if tokens > cap else
-                f"{tokens} tokens (cap {cap})")
+        parts = split_variants(found.text) if found is not None else ()
+        if len(parts) > 1:
+            sizes = [estimate_tokens(v) for v in parts]
+            over = sum(t > cap for t in sizes)
+            size = (f"{len(parts)} variants, largest {max(sizes)} tokens (cap {cap})"
+                    + (f"; {over} over its cap: the end is cut" if over else ""))
+        else:
+            size = ("blank: not used" if not tokens else
+                    f"{tokens} tokens, over its cap of {cap}: the end is cut" if tokens > cap else
+                    f"{tokens} tokens (cap {cap})")
         how = []
         if found is not None and found.encoding != "utf-8":
             how.append(f"read as {found.encoding.upper()}")

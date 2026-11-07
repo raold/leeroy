@@ -1141,8 +1141,9 @@ def test_burst_turns_flirt_only_for_drawn_and_lust_women(store, clock, tmp_path)
                               clock.now())
             await r.engine.tick(clock.now())
         await r.engine.end_session()
-        return [x["kind"] for x in store.conn.execute(
-            "SELECT kind FROM utterance WHERE id > ? AND dropped IS NULL", (first,))]
+        return [x["kind"] for x in store.conn.execute(  # the bursts' turns, not her whispers
+            "SELECT kind FROM utterance WHERE id > ? AND dropped IS NULL AND why LIKE 'burst:%'",
+            (first,))]
 
     async def main():
         seed_test_cast(store)

@@ -49,6 +49,11 @@ STEP_REFUSALS = frozenset({*BODY_FENCES, "busy:operation_identity", "busy:body_i
                            *(f"busy:{r}" for r in ("offline", "dead", "combat", "flight", "raid_group",
                                                    "human_group", "instance", "battleground", "arena", "lfg"))})
 STEP_REFUSAL_KINDS = frozenset({"rearm", "rpg_status", "equip", "set_profession"})
+# A refusal only one such executor makes, and only as a Refuse before it changes the body. Rearm
+# (RealmBodies.cpp) has no weapon record for it, a record kept only in memory: a worldserver start
+# empties them until the 60 s poll finds the body online and free. After a swap it says
+# weapon_record_unproved instead, which stays unknown.
+KIND_STEP_REFUSALS = {"rearm": frozenset({"weapon_record_unavailable"})}
 STEP_REFUSED = "step_refused"
 ABANDONED = "abandoned"
 ABANDON_RECEIPT = "realm:action:abandoned:"
@@ -57,7 +62,8 @@ ABANDON_RECEIPT = "realm:action:abandoned:"
 def _step_refused(r, job) -> bool:
     """Native refused one body of this command before it changed it, and released them all."""
     return (r.role == "root" and r.policy == "ordinary" and r.kind in STEP_REFUSAL_KINDS
-            and job["state"] == "failed" and job["reason"] in STEP_REFUSALS
+            and job["state"] == "failed"
+            and (job["reason"] in STEP_REFUSALS or job["reason"] in KIND_STEP_REFUSALS.get(r.kind, ()))
             and job["guid"] in r.reserved_manifest and job["value"] == 0 and job["pvp_owner"] == "")
 
 

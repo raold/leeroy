@@ -19,6 +19,8 @@ embedding = "qwen3-embedding:0.6b"
 [talk]
 chattiness = 4                # 0-10, social chat outside raids
 raid_rule = "leaders_and_urgent"
+whispers_per_hour = 4         # members whispering him first, per hour of his play, at chattiness 4
+openers_per_hour = 6          # members starting a line to him in party or guild, per hour, likewise
 
 [romance]
 dial = 3                      # 1 milquetoast .. 10 filth
@@ -47,6 +49,7 @@ max_inflight = 3              # 1-4 of Ollama's 4 slots
 '''
 
 RAID_RULES = frozenset({"leaders_and_urgent"})
+MAX_PER_HOUR = 60  # [talk] whispers_per_hour and openers_per_hour
 EXTENSION_SECTIONS = frozenset({"console", "guild", "dkp", "life", "voice", "training", "realm",
                                 "control", "selfies", "health"})
 _HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
@@ -68,6 +71,8 @@ class ModelsCfg:
 class TalkCfg:
     chattiness: int
     raid_rule: str
+    whispers_per_hour: float = 4
+    openers_per_hour: float = 6
 
 
 @dataclass(frozen=True)
@@ -163,6 +168,8 @@ _RULES = {
     "talk": {
         "chattiness": (lambda v: _int_in(v, 0, 10), "an integer 0-10"),
         "raid_rule": (lambda v: v in RAID_RULES, f"one of {sorted(RAID_RULES)}"),
+        **{k: (lambda v: _num_in(v, 0, MAX_PER_HOUR), f"a number 0-{MAX_PER_HOUR}")
+           for k in ("whispers_per_hour", "openers_per_hour")},
     },
     "romance": {
         "dial": (lambda v: _int_in(v, 1, 10), "an integer 1-10"),
