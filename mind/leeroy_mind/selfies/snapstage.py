@@ -70,15 +70,26 @@ def _done_units(ctx: "NightContext") -> int:
             (ctx.night, STAGE)).fetchone()[0]
 
 
+def _rendered_tonight(ctx: "NightContext") -> int:
+    """The units done tonight that rendered a photo (ready, or sent since); a held or expired
+    one is done but made nothing, so it takes no room."""
+    with ctx.store.transaction():
+        return ctx.store.conn.execute(
+            "SELECT count(*) FROM night_step n JOIN selfie_snap s ON n.unit = 'snap:' || s.id "
+            "WHERE n.night=? AND n.stage=? AND s.status IN ('ready','sent')",
+            (ctx.night, STAGE)).fetchone()[0]
+
+
 def _todo(ctx: "NightContext") -> list[SnapRow]:
-    """The planned photos not done tonight, within what snaps_per_night leaves after the units
-    done tonight (a resumed night does not start the count again). A photo done tonight but
-    still planned (held) is among the first snaps_per_night planned, so the room is filled."""
+    """The planned photos not done tonight, within what snaps_per_night leaves after the photos
+    rendered tonight (a resumed night does not start the count again). Held photos are done
+    tonight but still planned, so the list is read past them."""
     cap = ctx.settings.snaps_per_night
-    room = max(0, cap - _done_units(ctx))
+    room = max(0, cap - _rendered_tonight(ctx))
     if room == 0:
         return []
-    return [r for r in planned(ctx.store, cap) if not ctx.done(STAGE, _unit(r))][:room]
+    return [r for r in planned(ctx.store, cap + _done_units(ctx))
+            if not ctx.done(STAGE, _unit(r))][:room]
 
 
 def _stored(ctx: "NightContext", guid: int) -> Persona | None:
@@ -292,6 +303,8 @@ async def _guild(ctx: "NightContext", r: _Renderer, row: SnapRow, members, began
         return "expired" if _expiry(ctx, row, "flagged" if refused else "photo_changed") \
             else "failed"
     r._leases()
+    # A grid on disk never makes a photo ready: only mark_rendered does, so a held guild photo
+    # (planned, grid left by a crash or a moved face) stays planned and unsent.
     out = files.guild_photo(data, row.id).absolute()
     thumb = files.guild_photo(data, row.id, thumb=True).absolute()
     gridded = await r.worker.grid([m[2] for m in made], tile=TILE_PX, gutter=GUTTER_PX, out=out,

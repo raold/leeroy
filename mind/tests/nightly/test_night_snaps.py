@@ -440,6 +440,42 @@ def test_the_night_caps_its_snaps_across_a_resume(h, tmp_path):
     assert [snap_row(h.store, s).status for s in snaps] == ["ready", "ready", "planned"]
 
 
+def test_held_snaps_do_not_eat_the_nights_room(h, tmp_path):
+    cast(h, 101, 102, 103)
+    held = situation(h, 101, scene={**SCENE, "style": "lust"})   # waits: she lacks the lust style
+    snaps = [situation(h, g) for g in (102, 103)]
+    for _ in range(2):
+        ctx = h.ctx()
+        ctx.settings = replace(ctx.settings, snaps_per_night=2)
+        run(stage(tmp_path)(ctx))
+    assert [snap_row(h.store, s).status for s in (held, *snaps)] == ["planned", "ready", "ready"]
+
+
+def test_a_resumed_night_renders_no_more_than_the_cap(h, tmp_path):
+    cast(h, 101, 102, 103)
+    snaps = [situation(h, g) for g in (101, 102, 103)]
+    ctx = h.ctx()
+    ctx.settings = replace(ctx.settings, snaps_per_night=2)
+    run(stage(tmp_path)(ctx))
+    ctx = h.ctx()
+    ctx.settings = replace(ctx.settings, snaps_per_night=2)
+    run(stage(tmp_path)(ctx))
+    assert sum(snap_row(h.store, s).status == "ready" for s in snaps) == 2
+
+
+def test_a_grid_file_left_for_a_still_planned_guild_photo_is_never_ready(h, tmp_path):
+    cast(h, 101, 102, 103)
+    g = guild(h, 101, 102, 103)
+    out = guild_photo(h.settings.data_dir, g)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(JPEG)                                  # a crash left the grid, not the row
+    ctx = h.ctx()
+    ready_rows = _read(h.store, f"SELECT {_COLS} FROM selfie_snap WHERE status='ready'")
+    assert ready_rows == [] and snap_row(h.store, g).status == "planned"
+    from leeroy_mind.selfies.snaps import ready_guild
+    assert ready_guild(h.store, now=ctx.clock.now(), phase="evening") is None
+
+
 def test_logs_carry_no_prompt(h, tmp_path, caplog):
     cast(h, 101, 102, 103)
     s = situation(h, 101); g = guild(h, 101, 102, 103)

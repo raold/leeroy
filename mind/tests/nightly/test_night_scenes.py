@@ -135,6 +135,23 @@ def test_the_scene_cap_limits_the_night(h):
     assert len(candidates(ctx, 10)) == 2
 
 
+def test_a_resumed_night_never_plans_more_scenes_than_the_cap(h):
+    cast(h, 101, 102, 103)
+    for _ in range(2):  # a restart: the same night again, the units done are kept
+        ctx = h.ctx({"scene": [SCENE_REPLY] * 4})
+        ctx.settings = replace(ctx.settings, scenes_per_night=2)
+        run(stage(10)(ctx))
+    assert len(planned(h.store, 10)) == 2
+
+
+def test_the_cap_counts_what_tonight_already_planned(h):
+    cast(h, 101, 102, 103)
+    stocked(h, 101, night=h.night)
+    ctx = h.ctx({})
+    ctx.settings = replace(ctx.settings, scenes_per_night=2)
+    assert len(candidates(ctx, 10)) == 1
+
+
 def test_a_declined_or_refused_scene_is_stored_nowhere_and_not_asked_again_tonight(h, caplog):
     cast(h, 101, 102, 103)
     refused = {**SCENE_REPLY, "activity": "stripping off her clothes"}

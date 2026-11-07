@@ -35,8 +35,6 @@ GUILD_MAX = 16
 GUILD_GAP_S = 604800.0
 RAID_GRACE_S = 43200.0  # a raid that ended up to 12 hours before the night began still counts
 
-_dial: Callable[[], int] | None = None  # the installed stage's, for the budget counter
-
 
 def _pick_of(ctx: "NightContext", guid: int) -> int | None:
     cur = current(ctx.store, guid)
@@ -80,10 +78,18 @@ def _beats(ctx: "NightContext") -> dict[int, tuple[int, str]]:
     return {r[0]: (r[1], r[2]) for r in rows}
 
 
+def _planned_tonight(ctx: "NightContext") -> int:
+    with ctx.store.transaction():
+        return ctx.store.conn.execute(
+            "SELECT count(*) FROM selfie_snap WHERE kind='situation' AND night=?",
+            (ctx.night,)).fetchone()[0]
+
+
 def candidates(ctx: "NightContext", dial: int) -> list[tuple[int, str, str]]:
     """(guid, source, ref) for the members to ask tonight, in order, at most the stock the dial
     wants beyond what is planned and scenes_per_night."""
-    want = min(stock_target(dial) - open_stock(ctx.store), ctx.settings.scenes_per_night)
+    room = ctx.settings.scenes_per_night - _planned_tonight(ctx)  # a resumed night's units count
+    want = min(stock_target(dial) - open_stock(ctx.store), room)
     if want <= 0:
         return []
     now = ctx.clock.now()
@@ -182,8 +188,9 @@ async def _guild(ctx: "NightContext") -> int:
 
 def make_scenes_stage(cfg: SelfieCfg, *, dial: Callable[[], int]
                       ) -> Callable[["NightContext"], Awaitable[None]]:
-    global _dial
-    _dial = dial
+    def count(ctx: "NightContext") -> int:
+        return len(candidates(ctx, dial()))
+    register_counter(STAGE, count)  # replaces an earlier stage's entry
 
     async def stage_scenes(ctx: "NightContext") -> None:
         await _sweep(ctx)
@@ -251,10 +258,3 @@ def make_scenes_stage(cfg: SelfieCfg, *, dial: Callable[[], int]
         log("selfies_scenes", night=ctx.night, planned=planned, declined=declined,
             refused=refused, guild=guild)
     return stage_scenes
-
-
-def _count(ctx: "NightContext") -> int:
-    return 0 if _dial is None else len(candidates(ctx, _dial()))
-
-
-register_counter(STAGE, _count)
