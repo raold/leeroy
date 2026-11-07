@@ -27,7 +27,9 @@ emoji tell), and its up to three typed lines become one message, stored as a dis
 as said like any other, under its Discord channel, while the game's own chat state (the world's
 history, the quiet clock, the say chains, a member's last line) never sees it. The game's rules
 for whispers to him and for /say (he must be online, a dead member can't talk) are for those
-channels only; every other guard holds."""
+channels only; every other guard holds, but an answer to his DM, like one to his whisper, is
+never held back by the guild's pace and its first silence is asked again. A Discord turn's
+deadline is DISCORD_DEADLINE_S, and an emoji-only line is a message there, not silence."""
 import asyncio
 import itertools
 import logging
@@ -89,7 +91,7 @@ from leeroy_mind.talk.style import (ROMANCE_EMOTES, Styled, command_only, emote_
 from leeroy_mind.talk.turns import Turn, TurnKind
 from leeroy_mind.talk.timing import TurnTiming
 from leeroy_mind.talk.world import WorldView
-from leeroy_mind.text import strip_wow_markup
+from leeroy_mind.text import EMOJI_RE, strip_wow_markup
 from leeroy_mind.voice.comms import SPOKEN_HINT, typed
 from leeroy_mind.wow import CAST_MIN_LEVEL, CLASSES, RACES
 
@@ -98,6 +100,9 @@ log = logging.getLogger("leeroy_mind.talk")
 # Answers to the human. With a reply to his whisper they get Priority.REPLY_HUMAN.
 REPLY_KINDS = frozenset({TurnKind.REPLY_HUMAN, TurnKind.GREET, TurnKind.GOODNIGHT})
 DEADLINE_S = {Priority.REPLY_HUMAN: 30.0}
+# An answer to him in the guild's Discord (discord.talk): his post may have to wait for the GPU
+# the night holds, and nobody is standing in the game for it (ruling R9).
+DISCORD_DEADLINE_S = 120.0
 OTHER_DEADLINE_S = 20.0  # social talk and the raid lead; counted after the turn's delay
 # The deadline governs the model's answer; the first line's typing is capped to land this far
 # inside it, and never shorter than MIN_TYPING_S.
@@ -141,6 +146,8 @@ SILENT_WHISPER_HINT = "Answer {human}'s whisper in {length}, in your own voice."
 # The same for a turn that starts a conversation with him (TurnMeta.initiates, 2026-11-07: 5
 # of 8 unprompted whispers were lost to a first "(nothing)").
 SILENT_START_HINT = "Start the conversation with {human} in {length}, in your own voice."
+# And for her answer to his Discord DM (ruling R9).
+SILENT_DM_HINT = "Answer {human}'s message in {length}, in your own voice."
 # A move she just made with this person, made again (filters.move_repeat: "move repeat:
 # <move>"; "clause", her final clause again, takes REPEAT_HINT): the phrase carries the
 # pronoun (moves.MOVE_PHRASES). A summons out of the game (filters "summons").
@@ -351,6 +358,11 @@ def _transport_admitted(meta: TurnMeta) -> bool:
     except Exception:
         log.warning("say_barrier_failed")
         return False
+
+
+def _emoji_only(text: str) -> bool:
+    """Emoji and nothing else that speaks: no letter or digit."""
+    return EMOJI_RE.search(text) is not None and not any(c.isalnum() for c in text)
 
 
 def _secs(s: float | None) -> str:
@@ -1236,7 +1248,8 @@ class Pipeline:
         rule = self._rule_priority(turn, meta)
         turn.priority = rule if meta.elsewhere else min(turn.priority, rule)
         if turn.deadline <= 0:
-            turn.deadline = now + DEADLINE_S.get(turn.priority, OTHER_DEADLINE_S)
+            turn.deadline = now + (DISCORD_DEADLINE_S if is_discord(turn.channel)
+                                   else DEADLINE_S.get(turn.priority, OTHER_DEADLINE_S))
         if not turn.channel:
             turn.channel = choose_channel(turn.kind, speaker=turn.speaker, world=self.world,
                                           raid=self.raid, now=now, rng=self.rng) or ""
@@ -1504,9 +1517,11 @@ class Pipeline:
         if not self.raid.allows(g, turn.kind, now):
             return "raid"
         guards = meta.guards or self.guards
-        # a whisper to him that starts a conversation is, like an answer to his, read by no one
-        # else: the guild's pace and her lines elsewhere never hold it back
-        unread = meta.whisper_reply or (meta.initiates and turn.channel == "whisper")
+        # a whisper to him that starts a conversation is, like an answer to his whisper or to
+        # his Discord DM, read by no one else: the guild's pace and her lines elsewhere never
+        # hold it back
+        unread = (meta.whisper_reply or (meta.initiates and turn.channel == "whisper")
+                  or self._answers_his_dm(turn, meta))
         if not guards.allow(g, turn.kind, now, continuation=not first,
                             reply=unread, pushback=bool(meta.pushback)):
             return "guards"
@@ -1612,7 +1627,8 @@ class Pipeline:
         again after it and after every repair. A fatal or soft tell (an echo of the line it
         answers, a reply far over the speaker's length included) asks once more, with a hint
         that says what was wrong; the retry is taken unless a tell is still fatal. Silence is
-        an answer, but in answer to his whisper it is asked once more (_answers_his_whisper).
+        an answer, but in answer to his whisper or his Discord DM it is asked once more
+        (_answers_his_whisper, _answers_his_dm); a Discord line of emoji alone is no silence.
         A speaker outside his inner circle has his real name taken out of the words before
         anything else, while it is still capitalised. A `spoken` line is asked for as speech
         (SPOKEN_HINT, M6), last of all, so a retry's hint never pushes it up."""
@@ -1629,6 +1645,9 @@ class Pipeline:
         hg = self.human.guid
         summons_ok = self._summons_ok(turn) if hg and self._counterpart(turn) == hg else None
         emoji = is_discord(turn.channel)  # Discord keeps emoji as text: no tell, no repair
+
+        def quiet(t: str) -> bool:  # an emoji-only line is a Discord message (ruling R9)
+            return is_silence(t) and not (emoji and _emoji_only(t))
         for attempt in (0, 1):
             if not _scope_valid(meta):
                 return text, "scope_changed"
@@ -1650,13 +1669,13 @@ class Pipeline:
             self.timing.deadline_check(meta.timing_trace, "mind_after_generation", expired=expired)
             if expired:
                 return raw, "expired"
-            silent, tells = is_silence(raw), []
+            silent, tells = quiet(raw), []
             if not silent:
                 text = raw if c.close else redact_real_name(raw, self.human, self.human.called)
                 text = strip_copied(text, (name, *own), him=his)
                 if meta.pushback:  # the answer to his pushback is one line: the model's first
                     text = text.split("\n", 1)[0].rstrip()
-                silent = is_silence(text)  # a line that was only a command at him included
+                silent = quiet(text)  # a line that was only a command at him included
             if not silent:
                 tells = find_tells(text, recent_own=self._own_lines(turn), speaker=name,
                                    answers=c.answers, others=c.others, samples=c.samples,
@@ -1671,13 +1690,15 @@ class Pipeline:
                 if not any(t.fatal or (t.soft and (attempt == 0 or t.reason in DROP_ON_RETRY))
                            for t in tells):
                     text = repair(text, speaker=name, aliases=own, him=his, keep_emoji=emoji)
-                    if not is_silence(text):
+                    if not quiet(text):
                         return text, None
                     silent = True
             if silent:
-                if attempt == 0 and (meta.initiates or self._answers_his_whisper(turn)):
+                dm = self._answers_his_dm(turn, meta)
+                if attempt == 0 and (meta.initiates or self._answers_his_whisper(turn) or dm):
                     log.info("say_silent: guid=%d kind=%s asked again", turn.speaker, turn.kind)
-                    hint = SILENT_START_HINT if meta.initiates else SILENT_WHISPER_HINT
+                    hint = (SILENT_START_HINT if meta.initiates else SILENT_DM_HINT if dm
+                            else SILENT_WHISPER_HINT)
                     messages = asking(hint.format(
                         human=self.human.called,
                         length="a line or two" if meta.two_lines else "a line"))
@@ -1694,6 +1715,13 @@ class Pipeline:
         hg = self.human.guid
         return (bool(hg) and turn.channel == "whisper" and turn.to_guid == hg
                 and turn.kind in REPLY_KINDS and bool(turn.trigger_line))
+
+    def _answers_his_dm(self, turn: Turn, meta: TurnMeta) -> bool:
+        """The turn answers his message in a Discord DM (discord.talk): like an answer to his
+        whisper, its first silence is asked again (SILENT_DM_HINT) and the guards' pace never
+        holds it back."""
+        return (bool(self.human.guid) and turn.channel.startswith(DM_PREFIX)
+                and turn.kind in REPLY_KINDS and meta.answers_human)
 
     def _flirts_at_a_member(self, turn: Turn, text: str) -> bool:
         """The output screen for the content invariant (prompts I10), on every turn, his

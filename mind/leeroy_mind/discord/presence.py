@@ -10,6 +10,7 @@ from typing import Literal
 from ..personas.schema import Persona
 
 UK_AHEAD_HOURS = 5
+RNG_SEED = 0  # the seed the mind and the console both pass, so they agree on dnd days
 
 
 @dataclass(frozen=True, slots=True)

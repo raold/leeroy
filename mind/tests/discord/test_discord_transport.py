@@ -203,7 +203,8 @@ def test_spoken_channel_rules_do_not_apply(store, clock, tmp_path):
 
 def test_three_lines_become_one_message(store, clock, tmp_path):
     rig = make_rig(store, clock, tmp_path, reply=THREE)
-    [said] = rig.speak_turn(discord_turn(rig, 101, "raid-planning"))
+    # typed as one message: its typing runs within the 120 s answer deadline (ruling R9)
+    [said] = rig.speak_turn(discord_turn(rig, 101, "raid-planning"), seconds=150)
     [m] = messages(store.conn, "raid-planning")
     assert m["text"] == said and said.count("\n") == 2
     assert len(chat_rows(store, "discord:raid-planning")) == 1

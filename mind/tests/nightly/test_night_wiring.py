@@ -201,7 +201,7 @@ def test_bot_presence_cannot_reload_models_during_a_night(h, monkeypatch):
     run(scenario())
 
 
-@pytest.mark.parametrize("owner", ["human", "voice"])
+@pytest.mark.parametrize("owner", ["human", "voice", "discord"])
 @pytest.mark.parametrize("expired", [False, True])
 def test_live_generation_waits_for_both_handback_owners_and_rechecks_deadline(h, owner, expired):
     async def scenario():
@@ -211,7 +211,8 @@ def test_live_generation_waits_for_both_handback_owners_and_rechecks_deadline(h,
             entered.set()
             await release.wait()
         task = asyncio.create_task(handback())
-        owners = app.nightly._handbacks if owner == "human" else app.voice._gpu_handbacks
+        owners = {"human": app.nightly._handbacks, "voice": app.voice._gpu_handbacks,
+                  "discord": app.discord_talk._handbacks}[owner]
         owners.add(task)
         task.add_done_callback(owners.discard)
         turn = Turn(kind=TurnKind.REPLY_HUMAN, speaker=101, channel="guild", deadline=h.T + 10)

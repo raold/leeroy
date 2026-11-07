@@ -42,6 +42,7 @@ from typing import Awaitable, Callable, Literal
 from leeroy_mind.board import BoardDesk
 from leeroy_mind.discord.channels import is_discord
 from leeroy_mind.discord.desk import DiscordDesk
+from leeroy_mind.discord.talk import DiscordTalk
 from leeroy_mind.bridge import BridgeClient
 from leeroy_mind.clock import Clock, SystemClock
 from leeroy_mind.config import ConfigError, MindConfig, load_config
@@ -340,13 +341,6 @@ async def _cancel_wait(tasks) -> None:
             log.warning("task_ignored_cancel: task=%s", t.get_name())
 
 
-class NoDiscordTalk:
-    """Stands in for the Discord talk until it exists: his post is stored and nobody answers."""
-
-    def on_his_post(self, message_id: int) -> None:
-        pass
-
-
 class MindApp:
     """The running mind. __init__ builds everything and starts nothing; run() serves until
     stop() or a cancel (Ctrl+C under asyncio.run).
@@ -467,7 +461,8 @@ class MindApp:
         self.speech = OwnerSpeech(self)  # his own lines from the console: the say op
         self.board = BoardDesk(self)  # his Board replies from the console: the board op
         self.discord = DiscordDesk(self)  # his Discord actions from the console: the discord op
-        self.discord_talk = NoDiscordTalk()  # the members' answers to his posts (D1 task 5)
+        # the members' answers to his posts, and his `discord` lease on the GPU
+        self.discord_talk = DiscordTalk(self)
         self.control = attach_control(self)
         self.realm = attach_realm(self)  # Last: tests/realm/test_realm_wiring.py
 

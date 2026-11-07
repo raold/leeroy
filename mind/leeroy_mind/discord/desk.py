@@ -80,8 +80,9 @@ class DiscordDesk:
             return {"ok": True, "id": mid}
         message = args["message"]
         if action == "thread":
-            return {"ok": True, "id": dstore.open_thread(store, message, name=args["name"],
-                                                         now=now)}
+            thread = dstore.open_thread(store, message, name=args["name"], now=now)
+            self._his_action()
+            return {"ok": True, "id": thread}
         if action == "react":
             dstore.react(store, message, member=me, emoji=args["emoji"], now=now)
         elif action == "unreact":
@@ -94,7 +95,14 @@ class DiscordDesk:
             dstore.pin(store, message, now=now)
         else:
             dstore.unpin(store, message)
+        self._his_action()
         return {"ok": True}
+
+    def _his_action(self) -> None:
+        """An action of his other than a post keeps his Discord lease (discord.talk)."""
+        touch = getattr(getattr(self.app, "discord_talk", None), "on_his_action", None)
+        if touch is not None:
+            touch()
 
     def _check_dm(self, channel: str, me: int) -> None:
         peer = layout.dm_peer(channel)
