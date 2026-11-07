@@ -34,7 +34,7 @@ from typing import Literal, Sequence
 from leeroy_mind.human import HumanIdentity
 from leeroy_mind.personas.schema import Persona
 from leeroy_mind.prompts import load_prompt
-from leeroy_mind.storage.rows import Relationship
+from leeroy_mind.storage.rows import ROMANCE_STAGES, Relationship
 from leeroy_mind.talk.budget import GAP_SPREAD, HOLD_PUSH_S, DayPhase
 from leeroy_mind.talk.moves import classify
 from leeroy_mind.talk.raid import RaidPhase
@@ -83,11 +83,10 @@ NO_BRAKES_DIAL = 9
 # in everything she reads and does toward him. At this one every turn of hers to him carries her
 # romance (pipeline._romance) and a lust woman reads as the boldest (attitude_text).
 FULL_DIAL = 10
-# The long-distance arc. S1 puts the same tuple in storage/rows.ROMANCE_STAGES; until S8 makes
-# this that one, a row still at a stage of the old ladder (before S's migration has run) reads
-# its new stage's passage, by S1's own mapping (an invitation is planning).
-ARC_STAGES = ("none", "notices", "banter", "whispers", "late_nights", "voice", "picture",
-              "confession", "planning", "weekend", "after", "ex")
+# The long-distance arc: the stored ladder itself. A stage of the old ladder (a row the
+# romance_arc migration has not mapped yet) reads its new stage's passage, by the migration's own
+# mapping (an invitation is planning).
+ARC_STAGES = ROMANCE_STAGES
 LEGACY_STAGE = {"vulnerable": "late_nights", "invitation": "planning",
                 "acknowledged": "confession"}
 STAGE_DEPTH = {"none": 0, "notices": 0, "ex": 0, "banter": 1, "whispers": 1,

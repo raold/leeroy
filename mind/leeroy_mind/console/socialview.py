@@ -2,14 +2,14 @@
 wrote it (feuds, jealousy, romances, how members feel about the owner, live rumours, the guild
 mood). A table an older mind.db lacks is named in `missing` and reads as empty."""
 from leeroy_mind.nightly.mood import octant
+from leeroy_mind.storage.rows import ROMANCE_STAGES
 
 from . import views
 from .feed import guild_mood, human_guid
 
 SOCIAL_TABLES = ("relationship", "attraction_state", "feud", "jealousy", "rumor", "rumor_state",
                  "knows", "guild_mood", "pad_mood")
-ROMANCE_ORDER = ("none", "notices", "banter", "whispers", "vulnerable", "invitation",
-                 "acknowledged", "ex")
+ROMANCE_ORDER = ROMANCE_STAGES  # the stored ladder, furthest last
 JEALOUSY_MAX = 30
 RUMOURS_MAX = 20
 

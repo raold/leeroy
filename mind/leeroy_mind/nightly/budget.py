@@ -60,6 +60,7 @@ UNIT_CALLS: dict[str, dict[str, float]] = {
     "notes": {"json": 2.0},                    # the call and its own judge batch of one: 40 s
     "encounters": {"json": 2},                # scene generation and one judge batch
     "confide": {"json": 1.1},
+    "arc": {"json": 1.5},                     # a read of what he said to her (arc/night.py)
     "life": {"json": 2},                      # generation and its invariant judge
     "wowlife": {"json": 2},                   # generation and its invariant judge
     "follow": {"json": 2},                    # follow-up generation and its grounding judge
