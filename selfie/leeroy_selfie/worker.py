@@ -11,9 +11,9 @@ import threading
 from collections.abc import Callable
 from typing import BinaryIO
 
-from . import protocol
+from . import grid, protocol
 from .fit import PromptTooLong
-from .protocol import IdentityUnavailable, Quit, Render, RenderFailed, Retry
+from .protocol import Grid, Quit, Render, RenderFailed, Retry
 from .render import ReadyError, Renderer
 
 _EOF = object()
@@ -77,8 +77,10 @@ def _id_of(line: bytes) -> str:
 
 
 def serve(load: Callable[[], Renderer], *, stdin: BinaryIO, out: BinaryIO,
-          on_eof: Callable[[], None]) -> int:
-    """0 after a quit or the end of stdin, 1 when the renderer could not be loaded. The reader
+          on_eof: Callable[[], None], identity: bool = False) -> int:
+    """0 after a quit or the end of stdin, 1 when the renderer could not be loaded. `identity`
+    says the worker has the adapter: it then refuses a render without an identity reference
+    (bad_request), and without it a render with one (identity_unavailable). The reader
     runs from the start, so the end of stdin calls on_eof (the worker's: os._exit) at once,
     during the load, a wait for a retry or a render too."""
     lines: queue.Queue = queue.Queue()
@@ -86,7 +88,7 @@ def serve(load: Callable[[], Renderer], *, stdin: BinaryIO, out: BinaryIO,
     renderer = _ready(load, lines, out)
     if renderer is None:
         return 1
-    _send(out, {"id": "ready", "ok": True, **renderer.info, "error": ""})
+    _send(out, {"id": "ready", "ok": True, **renderer.info, "identity": identity, "error": ""})
     while True:
         line = lines.get()
         if line is _EOF:
@@ -96,9 +98,6 @@ def serve(load: Callable[[], Renderer], *, stdin: BinaryIO, out: BinaryIO,
             continue
         try:
             req = protocol.parse(line)
-        except IdentityUnavailable:
-            _send(out, {"id": _id_of(line), "ok": False, "error": "identity_unavailable"})
-            continue
         except ValueError:
             _send(out, {"id": _id_of(line), "ok": False, "error": "bad_request"})
             continue
@@ -107,7 +106,27 @@ def serve(load: Callable[[], Renderer], *, stdin: BinaryIO, out: BinaryIO,
         if isinstance(req, Retry):  # it is ready: nothing to try again
             _send(out, {"id": req.id, "ok": False, "error": "bad_request"})
             continue
+        if isinstance(req, Grid):
+            _send(out, _grid_answer(req))
+            continue
+        if (req.identity is not None) != identity:
+            error = "bad_request" if identity else "identity_unavailable"
+            _send(out, {"id": req.id, "ok": False, "error": error})
+            continue
         _send(out, _answer(renderer, req))
+
+
+def _grid_answer(req: Grid) -> dict:
+    if not all(os.path.isfile(t) for t in req.tiles):
+        _log(f"{req.id} failed missing_tile")
+        return {"id": req.id, "ok": False, "error": "missing_tile"}
+    try:
+        fields = grid.compose(req)
+    except Exception as e:
+        _log(f"{req.id} failed {type(e).__name__}")
+        return {"id": req.id, "ok": False, "error": type(e).__name__}
+    _log(f"{req.id} ok tiles={len(req.tiles)} seconds={fields.get('seconds')}")
+    return {"id": req.id, "ok": True, **fields, "error": ""}
 
 
 def _ready(load: Callable[[], Renderer], lines: queue.Queue, out: BinaryIO) -> Renderer | None:

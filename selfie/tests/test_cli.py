@@ -23,6 +23,11 @@ def test_quick_doctor_never_imports_torch(capsys):
     assert "note realvisxl: not fetched" in out and "note nsfw: not fetched" in out
 
 
+def test_quick_doctor_notes_an_identity_adapter_not_fetched(capsys):
+    assert main(["doctor", "--quick"]) == 0
+    assert "note ipadapter: not fetched" in capsys.readouterr().out
+
+
 def test_doctor_exits_1_on_a_failed_check(selfie_data, capsys):
     d = models.model_dir(selfie_data, "nsfw")
     d.mkdir(parents=True)

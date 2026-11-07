@@ -32,8 +32,20 @@ def test_each_pin_names_a_full_commit_a_licence_and_its_files():
     assert all(".fp16." in f for f in MODEL_PINS["realvisxl"].files if f.endswith(".safetensors"))
 
 
+def test_the_ipadapter_pin_names_its_commit_licence_and_three_files():
+    pin = MODEL_PINS["ipadapter"]
+    assert (pin.repo, pin.revision, pin.licence) == (
+        "h94/IP-Adapter", "018e402774aeeddd60609b4ecdb7e298259dc729", "Apache-2.0")
+    assert pin.title == "IP-Adapter Plus Face (SDXL) with its ViT-H image encoder"
+    assert pin.files == ("models/image_encoder/config.json",
+                         "models/image_encoder/model.safetensors",
+                         "sdxl_models/ip-adapter-plus-face_sdxl_vit-h.safetensors")
+
+
 def test_the_pins_name_the_files_the_loaders_read():
-    assert set(MODEL_PINS) == {"realvisxl", "nsfw"}
+    assert set(MODEL_PINS) == {"realvisxl", "nsfw", "ipadapter"}
+    assert models.BASE_PINS == ("realvisxl", "nsfw")
+    assert models.IDENTITY_PINS == ("ipadapter",)
     assert MODEL_PINS["nsfw"].files == ("config.json", "model.safetensors",
                                         "preprocessor_config.json")
     assert len(MODEL_PINS["realvisxl"].files) == 19

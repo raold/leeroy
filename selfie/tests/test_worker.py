@@ -44,7 +44,7 @@ def test_serve_answers_ready_then_each_request(tmp_path):
     fake = Fake()
     code, lines = run(lambda: fake, req(tmp_path, "a") + req(tmp_path, "b"))
     assert code == 0
-    assert lines[0] == {"id": "ready", "ok": True, "error": "", **INFO}
+    assert lines[0] == {"id": "ready", "ok": True, "error": "", "identity": False, **INFO}
     assert [(x["id"], x["ok"], x["flagged"], x["error"]) for x in lines[1:]] == [
         ("a", True, False, ""), ("b", True, False, "")]
     assert fake.seen == ["a", "b"]
@@ -70,17 +70,60 @@ def test_a_render_exception_answers_its_type_and_the_worker_goes_on(tmp_path):
         assert lines[2]["ok"] is True and lines[2]["id"] == "b"
 
 
-def test_bad_lines_identity_and_quit_are_answered_without_the_renderer(tmp_path):
-    ident = json.loads(req(tmp_path))
-    ident["identity"] = "x"
-    data = (b"nonsense\n" + json.dumps(ident).encode() + b"\n" + b"x" * 70000 + b"\n" +
+def test_bad_lines_and_quit_are_answered_without_the_renderer(tmp_path):
+    data = (b"nonsense\n" + b"x" * 70000 + b"\n" +
             b'{"id": "q", "op": "quit"}\n' + req(tmp_path, "late"))
     fake = Fake()
     code, lines = run(lambda: fake, data)
     assert code == 0 and fake.seen == []
-    assert [x.get("error") for x in lines[1:]] == ["bad_request", "identity_unavailable",
-                                                   "bad_request"]
-    assert lines[2]["id"] == "r1"
+    assert [x.get("error") for x in lines[1:]] == ["bad_request", "bad_request"]
+
+
+def with_identity(tmp_path, rid="r1"):
+    d = json.loads(req(tmp_path, rid))
+    d["identity"] = {"ref": str(tmp_path / "ref.jpg"), "crop": [0, 0, 1, 1], "scale": 0.6}
+    return json.dumps(d).encode() + b"\n"
+
+
+def run_identity(load, data):
+    out = io.BytesIO()
+    serve(load, stdin=io.BytesIO(data), out=out, on_eof=lambda: None, identity=True)
+    return [json.loads(x) for x in out.getvalue().splitlines()]
+
+
+def test_a_plain_worker_refuses_an_identity_reference(tmp_path):
+    fake = Fake()
+    code, lines = run(lambda: fake, with_identity(tmp_path, "a") + req(tmp_path, "b"))
+    assert code == 0 and fake.seen == ["b"]
+    assert lines[1] == {"id": "a", "ok": False, "error": "identity_unavailable"}
+    assert lines[2]["ok"] is True
+
+
+def test_an_identity_worker_refuses_a_render_without_one(tmp_path):
+    fake = Fake()
+    lines = run_identity(lambda: fake, req(tmp_path, "a") + with_identity(tmp_path, "b"))
+    assert lines[1] == {"id": "a", "ok": False, "error": "bad_request"}
+    assert lines[2]["ok"] is True and fake.seen == ["b"]
+
+
+def test_ready_says_whether_the_worker_has_the_adapter():
+    assert run(lambda: Fake(), b"")[1][0]["identity"] is False
+    assert run_identity(lambda: Fake(), b"")[0]["identity"] is True
+
+
+def test_a_grid_answers_missing_tile_or_its_compositor_result(tmp_path, monkeypatch):
+    from leeroy_selfie import grid
+    (tmp_path / "t.jpg").write_bytes(b"jpg")
+
+    def line(name, rid):
+        return json.dumps({"id": rid, "op": "grid", "tiles": [str(tmp_path / name)],
+                           "tile": 256, "gutter": 0, "out": str(tmp_path / "g.jpg"),
+                           "thumb": str(tmp_path / "gt.jpg"), "thumb_size": 128}).encode() + b"\n"
+    monkeypatch.setattr(grid, "compose", lambda r: {"width": 256, "height": 256, "seconds": 0.1})
+    _, lines = run(lambda: Fake(), line("nope.jpg", "a") + line("t.jpg", "b"))
+    assert lines[1] == {"id": "a", "ok": False, "error": "missing_tile"}
+    assert lines[2] == {"id": "b", "ok": True, "width": 256, "height": 256, "seconds": 0.1,
+                        "error": ""}
 
 
 def test_the_end_of_stdin_calls_on_eof():
@@ -216,7 +259,7 @@ def test_a_vram_refusal_waits_for_a_retry_and_then_serves(tmp_path):
     refused = {"id": "ready", "ok": False, "error": "vram", "retry": True, "check_ms": 5,
                "load_ms": 7, "free_gib": 9.5}
     assert lines[:2] == [refused, refused]
-    assert lines[2] == {"id": "ready", "ok": True, "error": "", **INFO}
+    assert lines[2] == {"id": "ready", "ok": True, "error": "", "identity": False, **INFO}
     assert lines[3]["id"] == "a" and lines[3]["ok"] is True
 
 

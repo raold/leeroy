@@ -40,7 +40,9 @@ def cmd_doctor(args) -> int:
     if sys.version_info[:2] != (3, 12):
         lines.append((False, f"python {sys.version_info.major}.{sys.version_info.minor}, "
                              "not the 3.12 this package needs"))
-    for name in models.MODEL_PINS:
+    for name in models.BASE_PINS:
+        lines += models.check(root, name, quick=args.quick)
+    for name in models.IDENTITY_PINS:  # only an --identity worker needs these: not fetched is a note
         lines += models.check(root, name, quick=args.quick)
     if not args.quick:
         lines += _gpu_lines()
@@ -74,7 +76,7 @@ def cmd_worker(args) -> int:
     code = worker.serve(
         lambda: render.load(Path(args.data) if args.data else data_dir(),
                             min_free_gib=args.min_free_gib),
-        stdin=sys.stdin.buffer, out=out, on_eof=lambda: os._exit(0))
+        stdin=sys.stdin.buffer, out=out, on_eof=lambda: os._exit(0), identity=args.identity)
     # the reader thread still holds stdin's lock; a normal return would crash in finalization
     out.flush()
     sys.stderr.flush()
@@ -122,6 +124,8 @@ def main(argv: list[str] | None = None) -> int:
     p_worker.add_argument("--data", metavar="DIR", help="the data dir with the models")
     p_worker.add_argument("--min-free-gib", type=float, required=True,
                           help="refuse to load with less free VRAM")
+    p_worker.add_argument("--identity", action="store_true",
+                          help="load the identity adapter and serve renders that carry one")
     p_worker.set_defaults(func=cmd_worker)
     p_smoke = sub.add_parser("smoke", help="render one invented person into --out")
     p_smoke.add_argument("--out", metavar="DIR", required=True)

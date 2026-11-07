@@ -100,7 +100,7 @@ def load(data: Path, *, min_free_gib: float, device: str = "cuda") -> Renderer:
     if device != "cuda" or not torch.cuda.is_available():
         raise ReadyError("cuda")
     started = time.perf_counter()
-    for name in models.MODEL_PINS:
+    for name in models.BASE_PINS:
         if any(ok is not True for ok, _ in models.check(data, name, quick=True)):
             raise ReadyError("model", fields={"check_ms": _ms(time.perf_counter() - started),
                                               "load_ms": 0})
