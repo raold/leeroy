@@ -1032,6 +1032,33 @@ def test_echoed_emotes_are_not_stored_and_errors_are_only_logged(tmp_path, clock
         run(main())
 
 
+def test_his_emote_at_a_member_is_answered_with_an_emote(tmp_path, clock):
+    """talk/emotes.py: his live text emote reaches the engine once it is stored; a member's own
+    emote, and one replayed from before the hello, are only stored."""
+    async def main():
+        old = {"ts": 1_000}  # long before the hello: replayed on connect
+        events = [hello(HUMAN), CAST,
+                  {"type": "text_emote", "guid": HUMAN, "emote": "hug", "target_guid": 103,
+                   **old}]
+        async with running(tmp_path, clock, events=events) as h:
+            await h.wait(lambda: h.count("game_event") == 1)
+            await h.advance(20)
+            backs = lambda: [c for c in h.bridge.commands if c["type"] == "emote"]  # noqa: E731
+            assert backs() == []  # the replayed one
+            await h.bridge.push({"type": "text_emote", "guid": 101, "emote": "hug",
+                                 "target_guid": 102})
+            await h.wait(lambda: h.count("game_event") == 2)
+            await h.advance(20)
+            assert backs() == []  # a member's own
+            await h.bridge.push({"type": "text_emote", "guid": HUMAN, "emote": "hug",
+                                 "target_guid": 102})
+            await h.wait(lambda: h.count("game_event") == 3)
+            await h.until(lambda: backs())
+            back, = backs()
+            assert (back["guid"], back["emote"], back["target_guid"]) == (102, "hug", HUMAN)
+    run(main())
+
+
 def test_every_chat_line_stores_who_could_see_it(tmp_path, clock):
     async def main():
         async with running(tmp_path, clock, events=load_fixture(FIXTURE)) as h:

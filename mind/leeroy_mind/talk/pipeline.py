@@ -218,6 +218,8 @@ class TurnMeta:
       weighted_draw;
     - aside:<trigger> (public_flirt or loot_cheer), rival:flirt and whisper:<trigger> (idle,
       late, evening or after_kill): the second part names what set it off, not a draw;
+    - emote:<his emote> (her line after his emote at her) and emote_join:<his emote> (one who
+      joined his social emote; talk/emotes.py): the second part is his emote;
     - source:<TurnSource class>, say_as and speak: turns from outside the engine's planning."""
     turn_id: str
     topic: str = ""

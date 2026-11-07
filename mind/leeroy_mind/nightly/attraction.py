@@ -2,6 +2,9 @@
 
 No model output can subtract attraction. Offline time is not neglect. Persona changes use
 the stored version, and callers invalidate their cache only after the transaction commits.
+The night also counts his text emotes at a woman with an attitude (his_emotes): each romantic
+one (talk/emotes.py ROMANTIC_EMOTES) is a flirt act, with its gain, cap and her taste, and each
+rude one (RUDE_EMOTES) a hurt.
 """
 import hashlib
 import json
@@ -23,6 +26,7 @@ from leeroy_mind.personas.io import load_persona, save_persona
 from leeroy_mind.personas.screens import has_word
 from leeroy_mind.personas.stances import is_woman
 from leeroy_mind.storage.rows import MemoryRow
+from leeroy_mind.talk.emotes import ROMANTIC_EMOTES, RUDE_EMOTES
 from leeroy_mind.wow import BOSS_NAMES, CAST_MIN_LEVEL, CLASSES, RACES, is_raid_fight
 
 UP = (("lust", 60.0), ("drawn", 40.0))
@@ -185,6 +189,45 @@ def mark_hurt(store, *, guid, ref, ts, live):
                        (max(row["hurt_until"], ts + HURT_DAYS * DAY_S), int(held or deep(p, "hurt")), ts, guid))
 
 
+def act_used(store, guid, act, ref) -> bool:
+    return store.conn.execute("SELECT 1 FROM attraction_act WHERE guid=? AND act=? AND ref=? LIMIT 1",
+                              (guid, act, ref)).fetchone() is not None
+
+
+def his_emotes(store, window, human) -> list[tuple[int, float, int, str]]:
+    """His text emotes at someone else in the window, oldest first: (event id, ts, target,
+    emote). The mind's own emotes are never stored (their echoes are dropped)."""
+    out = []
+    for row in store.conn.execute(
+            "SELECT id, ts, payload FROM game_event WHERE type='text_emote' AND guid=? "
+            "AND ts>=? AND ts<? ORDER BY ts, id", (human, *window)):
+        payload = json.loads(row["payload"])
+        target = payload.get("target_guid")
+        if type(target) is int and target and target != human:
+            out.append((row["id"], row["ts"], target,
+                        str(payload.get("emote") or "").strip().casefold()))
+    return out
+
+
+def count_emotes(store, *, human, attitudes, window, now, changed) -> None:
+    """His emotes at a woman with an attitude, one act each: a romantic one a flirt (its gain,
+    the cap and her taste; the live moment's multipliers are not known at night) and a rude
+    one a hurt. `attitudes` and `changed` follow a band the flirt moves."""
+    for event_id, ts, guid, emote in his_emotes(store, window, human):
+        if guid not in attitudes:
+            continue
+        ref = f"event:{event_id}"
+        if emote in ROMANTIC_EMOTES and not act_used(store, guid, "flirt", ref):
+            amount, mult = gain("flirt", load_persona(store, guid), science=1.0)
+            moved = apply_act(store, human=human, guid=guid, act="flirt", amount=amount, mult=mult,
+                              ref=ref, ts=ts, live=False, stance=attitudes[guid], now=now)
+            if moved:
+                attitudes[guid] = moved
+                changed.add(guid)
+        elif emote in RUDE_EMOTES and not act_used(store, guid, "hurt", ref):
+            mark_hurt(store, guid=guid, ref=ref, ts=ts, live=False)
+
+
 def restore_stance(store, ledger_row, *, now) -> bool:
     row = ledger_row
     match = re.fullmatch(r"(fond|drawn|lust) -> (fond|drawn|lust): .+", row["text"])
@@ -248,8 +291,7 @@ class LiveAttraction:
             self._women = None
 
     def _used(self, guid, act, ref):
-        return self.store.conn.execute("SELECT 1 FROM attraction_act WHERE guid=? AND act=? AND ref=? LIMIT 1",
-                                       (guid, act, ref)).fetchone() is not None
+        return act_used(self.store, guid, act, ref)
 
     def _remembered(self, row, p, now):
         query = fts_query(row["text"])
@@ -573,6 +615,8 @@ async def stage_attraction(ctx):
                 reason += f" (rivalry, not hurt: {rival})"
             store.conn.execute("UPDATE rel_delta SET applied=1,delta=?,reason=? WHERE id=?",
                                (amount, reason, row["id"]))
+        count_emotes(store, human=human, attitudes=attitudes, window=ctx.window, now=now,
+                     changed=changed)
         names = {g: m.name for g, m in store.cast().items()}
         names[human] = ctx.ident.called
         rs = reactions(store, ctx.window, human, names)

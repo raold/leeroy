@@ -621,6 +621,13 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 - Guild life (raid nights, DKP and loot, offline raids, rank, spec and gear
   upkeep) runs with built-in defaults; `[guild]` and `[dkp]` tables in
   `mind.toml` override them.
+- His text emotes (`talk/emotes.py`): one at an online cast member gets her emote back after
+  2-6 s, by his emote and her stance (men and stance none never romantic), and sometimes a line
+  (a romantic emote by whisper, half the time; others by /say, a quarter); a social one at
+  nobody brings 0-2 of his group, or else his zone, joining in. 45 s per member, 6 a minute,
+  never in a fight or the login quiet; the night counts his romantic emotes at a woman with an
+  attitude as a flirt and rude ones as a hurt, and overlays `emote_at_you`/`emote_joined` in
+  `mind-data/prompts` reword the line.
 - A group he built with `.playerbots bot addN` (native `guild_group` events)
   raids like a called raid night once he leads it into a raid instance in
   `guild/raids.py`: size and heroic from the instance difficulty, his group's
