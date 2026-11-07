@@ -241,3 +241,28 @@ def test_try_snaps_refuses_while_the_mind_holds_its_lock(snaproot, capsys):
                                 make_llm=lambda cfg: snap_llm(snaproot))
     assert code == 1 and "mind service is running" in capsys.readouterr().out
     assert not (snaproot / "scratch" / "selfies-try").exists()
+
+
+def test_try_snaps_skips_and_counts_a_member_with_a_pick_but_no_photo_kind(snaproot, capsys):
+    from leeroy_mind.storage.db import open_db
+    from leeroy_mind.storage.store import Store
+    from leeroy_mind.testing.fake_clock import FakeClock
+    from selfies.fakes import CLOCK
+    store = Store(open_db(snaproot / "mind.db"), clock=FakeClock(CLOCK))
+    try:
+        p = load_persona(store, 102)
+        save_persona(store, replace(p, photo=None), source="seed", ts=1000.0,
+                     race=RACES[1], class_name=CLASSES[1])
+    finally:
+        store.close()
+    code = cli.selfies_main(["--data-dir", str(snaproot), "try", "--snaps"],
+                            make_llm=lambda cfg: snap_llm(snaproot))
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0 and out["members"] == 1 and out["rendered"] == 1
+    assert out["no_kind"] == 1 and out["no_photo"] == 1
+    base = snaproot / "scratch" / "selfies-try" / "snaps"
+    assert (base / "101" / "snap.jpg").is_file() and not (base / "102").exists()
+    code = cli.selfies_main(["--data-dir", str(snaproot), "try", "--snaps", "--guid", "102"],
+                            make_llm=lambda cfg: snap_llm(snaproot))
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1 and out["members"] == 0 and out["no_kind"] == 1

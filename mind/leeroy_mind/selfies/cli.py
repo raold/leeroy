@@ -237,8 +237,10 @@ async def _try_snaps(root, store, cfg, scfg, clock, args, make_llm) -> int:
         looks = _chosen(ctx, argparse.Namespace(guid=args.guid, limit=10 ** 6))
         picked = {g: current(store, g) for g in looks}
         withs = [g for g in looks if picked[g] is not None]
-        guids = withs if args.guid is not None else withs[:args.limit]
+        kinded = [g for g in withs if ctx.base(g).photo is not None]
+        guids = kinded if args.guid is not None else kinded[:args.limit]
         no_photo = len(looks) - len(withs) if args.guid is None else int(not withs)
+        no_kind = len(withs) - len(kinded)
         out_root = _child(_child(_child(root, "scratch"), TRY_DIR), "snaps")
         worker = _Measured(SelfieWorker(worker_command(scfg, identity=True),
                                         env=worker_env(scfg)))
@@ -285,7 +287,7 @@ async def _try_snaps(root, store, cfg, scfg, clock, args, make_llm) -> int:
             finally:
                 await to_the_end(worker.worker.stop())
                 await _room_after(ctx)
-        _print({"members": len(guids), "no_photo": no_photo, "rendered": rendered,
+        _print({"members": len(guids), "no_photo": no_photo, "no_kind": no_kind, "rendered": rendered,
                 "flagged": worker.flagged,
                 "seconds_per_image": round(worker.seconds / worker.images, 2) if worker.images
                 else None, "peak_gib": worker.peak, "path": str(out_root)})

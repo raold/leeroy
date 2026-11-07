@@ -297,6 +297,10 @@ and, at night only, has the `selfie/` worker render four candidates each. The ow
 undoes it or asks for four more in the console's Personas tab ("Choose selfies", through
 `POST /api/selfie`). Rendering stays off by default, never runs while the owner is in game, and
 every image passes a local NSFW check first. See [selfie/README.md](selfie/README.md).
+With `snaps = true` as well, the night also plans and renders situational photos from members'
+days and one guild video-call photo after a raid night, each keeping the member's face through an
+IP-Adapter. They are made and stocked only; sending them comes with the guild Discord's photo
+phase.
 
 ## License
 
