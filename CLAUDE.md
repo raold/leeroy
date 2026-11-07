@@ -982,7 +982,9 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
   longer has the lust style (she left lust, or her looks now code young): `renderable` holds
   her set (log `selfies_set_held`, guid only) until the pass has chosen her kind again under
   the plain rules, so its text is never rendered plainly. Everyone else
-  writes a free-text kind under the plain rules (`KIND_PROMPT`, `EXPLICIT_RE`), and every
+  writes a free-text kind under the plain rules (`KIND_PROMPT`, `EXPLICIT_RE`, plus `WEAR_RE`
+  for underwear, sleepwear and see-through words such as bralette, camisole, pajamas, mesh,
+  fishnet and translucent), and every
   free-text kind, whoever it is for, also meets the age guard (`selfies/style.py` `AGE_RE`:
   school, schoolgirl, schoolboy, schoolkid, high-schooler, school or student uniform, teen,
   teenage, teenaged, teenager, teeny, teenybopper, preteen, tween, youthful, childlike,

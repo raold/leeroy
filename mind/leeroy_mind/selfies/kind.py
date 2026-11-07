@@ -152,6 +152,12 @@ ERA_RE = re.compile(
 EXPLICIT_RE = re.compile(
     r"\b(nude|naked|topless|shirtless|braless|lingerie|underwear|bra|panties|bikini|swimsuit|"
     r"swimwear|see-through|sheer|sexy|sexual|seductive|nsfw|cleavage)\b", re.I)
+# Underwear, sleepwear and see-through wear EXPLICIT_RE does not name, refused beside it in every
+# free-text kind (controller ruling, safety): a teddy bear is not clothing and stays allowed.
+WEAR_RE = re.compile(
+    r"\b(bralettes?|bralets?|bustiers?|babydolls?|baby-dolls?|teddy(?![- ]bears?)|teddies|"
+    r"body ?stockings?|neglig[eé]es?|nightgowns?|nightdress(?:es)?|nighties?|chemises?|"
+    r"camisoles?|pajamas?|pyjamas?|pjs|sleepwear|nightwear|mesh|fishnets?|translucent)\b", re.I)
 
 
 def looks_line(a: Appearance) -> str:
@@ -245,7 +251,8 @@ def screen_kind(p: Persona, data: dict, *, ident: HumanIdentity,
     """The problems with a free-text reply (KIND_SCHEMA's shape, the plain style's) for `p`, as
     `photo.<field>: <kind>: "<text>"` with his real name redacted from the text; it never fixes
     text. Per field, in order: meta, his real name, a likeness, a member's name (any case), an
-    era, explicit wear (EXPLICIT_RE), anything that codes a person as young (AGE_RE); then
+    era, explicit wear (EXPLICIT_RE, and WEAR_RE beside it), anything that codes a person as
+    young (AGE_RE); then
     whatever validate_persona says of `p` with that photo. The lust style writes no free text:
     screen_lust checks its picks."""
     names = [n for n in member_names if n]
@@ -263,7 +270,7 @@ def screen_kind(p: Persona, data: dict, *, ident: HumanIdentity,
             problems.append(f"photo.{field}: names a member: {quoted}")
         if ERA_RE.search(text):
             problems.append(f"photo.{field}: era: {quoted}")
-        if EXPLICIT_RE.search(text):
+        if EXPLICIT_RE.search(text) or WEAR_RE.search(text):
             problems.append(f"photo.{field}: explicit: {quoted}")
         if AGE_RE.search(text):
             problems.append(f"photo.{field}: age: {quoted}")

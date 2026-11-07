@@ -425,6 +425,37 @@ def test_the_plain_path_is_unchanged_but_for_the_age_guard(h):
         assert [m.split(': "')[0] for m in out] == ["photo.outfit: explicit"]
 
 
+WEAR_WORDS = ["a lace bralette", "bralettes", "a bralet", "bralets", "a satin bustier",
+              "a babydoll dress", "a baby-doll top", "a teddy", "teddies", "a bodystocking",
+              "a body stocking", "a negligee", "a negligée", "a nightgown", "a nightdress",
+              "a nightie", "a silk chemise", "a lace camisole", "pajamas", "a pajama top",
+              "pyjamas", "pjs", "sleepwear", "nightwear", "a mesh top", "fishnet tights",
+              "fishnets", "a translucent blouse"]
+
+
+@pytest.mark.parametrize("text", WEAR_WORDS)
+def test_the_plain_screen_refuses_underwear_sleepwear_and_see_through_words(h, text):
+    assert kind.EXPLICIT_RE.pattern == TODAY_EXPLICIT          # a pure addition beside it
+    assert kind.WEAR_RE.search(text) and not kind.EXPLICIT_RE.search(text)
+    for p in (h.woman(103, "fond", appearance=APPEARANCE), h.persona(101, appearance=APPEARANCE)):
+        for field in ("setting", "outfit", "expression"):
+            out = screen_kind(p, {**PLAIN_KIND, field: text}, ident=IDENT,
+                              member_names=["Testb"])
+            assert any(m.startswith(f"photo.{field}: explicit") for m in out), (p.guid, field)
+
+
+@pytest.mark.parametrize("reply", [
+    {"outfit": "a navy blazer", "setting": "at her office desk"},
+    {"outfit": "a hoodie", "setting": "at her kitchen table"},
+    {"outfit": "a navy blazer at her office desk"},
+    {"outfit": "a grey hoodie", "setting": "holding a teddy bear on the sofa"},
+    {"outfit": "a knitted jumper", "setting": "a cafe by the river",
+     "expression": "a warm smile"}])
+def test_ordinary_plain_kinds_still_pass(h, reply):
+    for p in (h.woman(103, "fond", appearance=APPEARANCE), h.persona(101, appearance=APPEARANCE)):
+        assert screen_kind(p, {**PLAIN_KIND, **reply}, ident=IDENT, member_names=["Testb"]) == []
+
+
 @pytest.mark.parametrize("who", ["fond", "drawn", "young", "man", "lust"])
 @pytest.mark.parametrize("text", ["a low-cut top that shows some cleavage", "a sexy black dress",
                                   "a red bikini", "a sheer blouse"])
