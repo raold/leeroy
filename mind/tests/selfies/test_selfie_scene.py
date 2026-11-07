@@ -683,3 +683,52 @@ def test_the_age_number_rule(text, young):
 def test_the_lust_template_keeps_her_place_out_of_her_free_text():
     assert "never what she wears or where she is" in SCENE_PROMPT_LUST
     assert OLD_REFUSED.search(SCENE_PROMPT_LUST) is None    # still non-explicit (round 1 test)
+
+
+# -- final fix wave (controller ruling R22) --------------------------------------------------
+
+@pytest.mark.parametrize("pc", ["a lacy camisole and sleep shorts", "her old school hoodie",
+                                "a vintage 90s band tee"])
+def test_the_tile_leaves_out_an_unscreened_at_the_pc_phrase(pc):
+    p = woman()
+    p = replace(p, appearance=replace(p.appearance, at_the_pc=pc))
+    spec = build_tile_prompt(p)
+    assert all(pc not in text for text, _ in spec.phrases)
+    assert ("at their desk at home at night, wearing a headset, lit by the monitor", 1) \
+        in spec.phrases
+
+
+def test_the_tile_keeps_a_clean_at_the_pc_phrase():
+    p = woman()
+    p = replace(p, appearance=replace(p.appearance, at_the_pc="a grey hoodie"))
+    assert ("a grey hoodie", 2) in build_tile_prompt(p).phrases
+
+
+I2_REFUSED = [("wearing only an apron", "undress"), ("only socks", "undress"),
+              ("twerking on the dance floor", "explicit"), ("giving a lap dance", "explicit"),
+              ("pole dancing", "explicit"), ("grinding on the dance floor", "explicit"),
+              ("eating a banana suggestively", "explicit"), ("in a cheerleading top", "age"),
+              ("a short silk slip", "undress")]
+
+
+@pytest.mark.parametrize("text,code", I2_REFUSED, ids=[t for t, _ in I2_REFUSED])
+def test_the_final_review_gaps_are_refused_for_both_styles_in_every_field(text, code):
+    checks = [(lusty(), LUST_SCENE, f) for f in ("activity", "shows")]
+    checks += [(woman(), SCENE, f) for f in PLAIN_FIELDS]
+    for p, data, field in checks:
+        codes = screen_scene(p, {**data, field: text}, ident=IDENT, member_names=[])
+        assert f"scene.{field}: {code}" in codes, (field, codes)
+
+
+@pytest.mark.parametrize("text", ["a slip dress", "slipping on her shoes",
+                                  "grinding coffee beans", "only a little tired"])
+def test_the_final_review_allowances_still_pass(text):
+    # "grinding" is told apart from the dance floor only by a food word after it (coffee, beans,
+    # pepper, spices, salt, herbs, flour, seeds); anything else after it is refused (R20)
+    for p, data in ((lusty(), LUST_SCENE), (woman(), SCENE)):
+        for field in ("activity", "shows"):
+            assert screen_scene(p, {**data, field: text}, ident=IDENT, member_names=[]) == []
+
+
+def test_a_cheerleading_look_is_age_coded_for_a_profile_photo_too():
+    assert AGE_RE.search("in a cheerleading top") and AGE_RE.search("cheerleader")

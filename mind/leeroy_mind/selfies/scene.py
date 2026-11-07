@@ -17,7 +17,7 @@ SCENE_PROMPT_LUST, overlay prompts/nightly_scene_lust.txt; the built-in text sta
 kind.screen_lust checks the pairings (swimwear only by the water and framed upper body, the gym
 outfit only at the gym, the hot tub only in swimwear) and kind.compose_lust puts the colour into
 the outfit. Her free text (activity, shows) meets the same screen as everyone's (controller
-rulings R12 to R20: undressing, bathing, sexual poses, swimwear named, minors, an age under 21,
+rulings R12 to R20: undressing, bathing, sexual poses, swimwear named, minors, an age under SUGGESTIVE_MIN_AGE,
 other people, likenesses, looks changes, eras), and beside a swimwear or gym pick it never
 takes her indoors or into a bed. Her
 outfit and setting render as one priority-0 phrase, prompt.lust_phrase, so the worker's fit
@@ -141,8 +141,11 @@ UNDRESS_RE = re.compile(
     r"pasties|body[- ]?paint(?:ed)?|unbutton\w*|unzip\w*|wet|soaked|dripping|oiled|"
     r"nothing (?:but|else|underneath|on|at all)|wearing nothing|not wearing anything|"
     r"birthday suit|au naturel|(?:no|without) (?:a )?(?:top|bra|pants|shirt|clothes|clothing)|"
-    r"(?:just|only) (?:a|an|her|his|my) (?:[\w'-]+ ){0,2}(?:(?:t-?)?shirt|hoodie|sweater|"
-    r"jersey)s?|barely (?:dressed|there|covered|clothed|anything)|scantily|skimpy|"
+    r"(?:wearing |in )?(?:just|only|nothing but) (?:a|an|her|his|my|some)\b"
+    r"(?! (?:little|bit|few|couple|touch|tad|moment|minute|second|while|slight)\b)|"
+    r"(?:just|only|nothing but) (?:[\w'-]+ ){0,2}(?:socks?|stockings|tights|heels|boots|"
+    r"shoes|apron|scarf|tie|gloves|ribbons?|bows?|jewell?ery|necklace)|"
+    r"slip\b(?![\s-]*(?:dress|on|s on|ped|ping))|barely (?:dressed|there|covered|clothed|anything)|scantily|skimpy|"
     r"half[- ]dressed|partially dressed|covering (?:her|his|my) (?:chest|body)|"
     r"bare[- ]?(?:chested|breast\w*)|breasts?|\w*boob\w*|areolas?|lingerie|underwear|undies|"
     r"bra|bras|bralettes?|bralets?|brassieres?|bustiers?|panties|knickers|thong|g-string|"
@@ -168,7 +171,8 @@ UNDRESS_RE = re.compile(
     r"chang(?:e|es|ed|ing) (?:into|out of)|(?:get|gets|getting|got) changed|"
     r"(?:get|gets|getting|got) dressed(?! up)|dressing (?:for|in|into|herself|himself)|"
     r"(?:put|puts|putting|pull|pulls|pulled|pulling|slip|slips|slipped|slipping|try|tries|"
-    r"tried|trying) on|"
+    r"tried|trying) on(?! (?:(?:her|his|their|my|the|a|an|some) )?(?:\w+ )?(?:shoes|boots|"
+    r"sandals|trainers|sneakers|slippers|socks|coat|jacket|hat|gloves|scarf|heels)\b)|"
     # undressing: clothes off, on the floor, out of them, let fall, flashing, bare skin
     rf"{_CLOTHES} off|{_CLOTHES} (?:\w+ ){{0,2}}(?:on|to) the floor|"
     rf"out of (?:her|his|their|my|your|the) (?:\w+ )?{_CLOTHES}|"
@@ -198,6 +202,9 @@ SEXUAL_RE = re.compile(
     r"front)|bit(?:e|es|ing) (?:her|his|their|my) (?:lower )?lip|boudoir|erotic\w*|lewd\w*|"
     r"sultr\w*|steamy|racy|provocativ\w*|naughty|risqu[eé]|spicy (?:pics?|photos?|"
     r"selfies?|shots?|snaps?|pictures?|content)|bedroom eyes|come[\s-]*hither|"
+    r"twerk\w*|lap[\s-]*danc\w*|pole[\s-]*danc\w*|suggestiv\w*|"
+    r"grind(?:s|ed|ing)?(?! (?:the |some |fresh )?(?:coffee|beans?|pepper|spices?|salt|herbs?|"
+    r"flour|seeds?)\b)|"
     r"thirst[\s-]*traps?|horny|kinky|teas(?:e|es|ed|ing)|sexy|sensual\w*|seductiv\w*|"
     r"cover(?:s|ed|ing)? (?:her|his|their|my) (?:chest|body|breasts?|bust)|"
     r"covering (?:her|him|them|my)sel(?:f|ves)|implied|censor\w*)\b", re.I)
@@ -394,6 +401,10 @@ def _text_codes(field: str, text: str, *, ident: HumanIdentity, names: list[str]
     return [f"scene.{field}: {code}" for code, hit in found if hit]
 
 
+_NOBODY = HumanIdentity(guid=0, character_name="", nickname="", real_name="",
+                        is_guild_master=False)
+
+
 def screen_scene(p: Persona, data: dict, *, ident: HumanIdentity,
                  member_names) -> list[str]:
     """The problems with a scene reply for `p`, as codes `scene.<field>: <code>` only, never the
@@ -401,7 +412,7 @@ def screen_scene(p: Persona, data: dict, *, ident: HumanIdentity,
     (real_name), a likeness (a name after the first word too, _named), another member's name
     (member_name, any case), an era, explicit wear, swimwear or a sexual pose or tone
     (explicit), a minor, a looks change, anything that codes a person as young or an age under
-    21 (age), undressing or bathing (undress) and another person (other_person; a pet is fine).
+    SUGGESTIVE_MIN_AGE (age), undressing or bathing (undress) and another person (other_person; a pet is fine).
     A clothed bed or bedroom scene is fine. The reply must be p's style's shape (OTHER_STYLE
     otherwise). A lust reply's free text is its activity and shows; beside a swimwear or gym
     pick it never names a bed or the indoors (INDOOR_RE, reported as that pick's pairing); its
@@ -497,7 +508,8 @@ def build_tile_prompt(p: Persona) -> PromptSpec:
     add(*subject_phrase(p))
     add("at their desk at home at night, wearing a headset, lit by the monitor", 1)
     out += looks_phrases(p, name_re)
-    add(p.appearance.at_the_pc, 2, True)
+    if not _text_codes("outfit", p.appearance.at_the_pc or "", ident=_NOBODY, names=[]):
+        add(p.appearance.at_the_pc, 2, True)  # the scene screen's free-text checks (R22)
     add("looking at the screen, smiling", 3)
     add(_HEADSHOT_TAIL, 1)
     return PromptSpec(tuple(out), SNAP_NEGATIVE)
