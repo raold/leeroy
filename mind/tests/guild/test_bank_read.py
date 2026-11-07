@@ -1,6 +1,5 @@
 """The guild bank read: four read-only SELECTs, the strict parse, and LazyArmory.bank. No MySQL:
 run_mysql is patched; the rows are synthetic."""
-import json
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -27,6 +26,8 @@ def test_the_bank_sql_is_four_read_only_selects_for_one_guild():
         library_mysql.check_select(sql)
         assert "21" in sql
     assert "TabId=100" in sqls[3] and "LIMIT 50" in sqls[3]
+    assert "ORDER BY TimeStamp DESC, LogGuid DESC" in sqls[3]
+    assert "ORDER BY b.TabId, b.SlotId" in sqls[2]
     for bad in ("21", 0, 2 ** 32, True, -1, 1.0):
         with pytest.raises(ValueError):
             bankread.bank_sql(bad)
@@ -95,9 +96,8 @@ def test_lazy_armory_bank_runs_the_four_queries_and_parses(monkeypatch):
     assert len(seen) == 4 and b["money"] == 1234567 and b["tabs"][0]["slots"][0] == [0, 2589, 20]
 
 
-def test_a_mysql_failure_names_no_secret(monkeypatch):
+def test_a_query_failure_reaches_the_caller(monkeypatch):
     def run(db, sql, exe):
-        raise library_mysql.QueryError("access denied for hunter2")
+        raise library_mysql.QueryError("refused")
     with pytest.raises(library_mysql.QueryError):
         _armory(monkeypatch, run).bank(21)
-    assert "hunter2" not in json.dumps(bankread.bank_sql(21))

@@ -851,6 +851,17 @@ def test_a_mysql_failure_names_no_secret(tmp_path, caplog, monkeypatch):
     assert "op=bank outcome=refused" in caplog.text
 
 
+def test_a_missing_mysql_exe_gets_the_unreadable_words(tmp_path):
+    from leeroy_mind.personas.roster import RosterError
+
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            _bank_app(app, FakeArmory(fail=RosterError("mysql did not run: FileNotFoundError")))
+            return await ask(ep, "bank")
+    assert run(go()) == {"ok": False, "error": "The mind can't read the game database "
+                                               "(worldserver.conf or mysql.exe not found)."}
+
+
 def test_a_stopping_mind_reads_nothing(tmp_path):
     async def go():
         async with served(tmp_path) as (app, ep):

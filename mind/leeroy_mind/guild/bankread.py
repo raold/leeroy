@@ -26,7 +26,7 @@ def bank_sql(guild_id: int) -> tuple[str, str, str, str]:
         "ORDER BY b.TabId, b.SlotId",
         "SELECT TimeStamp, EventType, PlayerGuid, ItemOrMoney FROM guild_bank_eventlog "
         f"WHERE guildid={g} AND TabId={MONEY_TAB} AND EventType IN ({kinds}) "
-        f"ORDER BY LogGuid DESC LIMIT {LOG_MAX}")
+        f"ORDER BY TimeStamp DESC, LogGuid DESC LIMIT {LOG_MAX}")  # the core's own order: LogGuid is a ring index
 
 
 def _int(field, what: str) -> int:

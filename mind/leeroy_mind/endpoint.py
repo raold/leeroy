@@ -859,7 +859,9 @@ class ControlEndpoint:
             bank = await asyncio.to_thread(armory.bank, guild_id)
         except Exception as e:  # its text can carry credentials or game data: the class only
             log_event("control_bank_failed", level=logging.WARNING, error=type(e).__name__)
-            if not getattr(armory, "available", True):
+            if not getattr(armory, "available", True) or (
+                    type(e).__name__ == "RosterError"
+                    and str(e).startswith(("mysql did not run", "guild armory unavailable"))):
                 return {"ok": False, "error": "The mind can't read the game database "
                                               "(worldserver.conf or mysql.exe not found)."}
             return {"ok": False, "error": f"The game database didn't answer ({type(e).__name__})."}

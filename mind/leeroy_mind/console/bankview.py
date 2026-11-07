@@ -56,6 +56,8 @@ def item_names(path: Path, ids) -> dict[str, dict]:
 
 def bank_view(conn, *, snapshot: dict | None, why: str | None, data_dir: Path) -> dict:
     missing = [t for t in ("realm_bank",) if t not in views.tables(conn)]
+    if not (Path(data_dir) / "library.db").is_file():
+        missing.append("library.db")  # item names fall back to "Item #id"
     ledger = [{"ts": r["ts"], "dir": r["dir"], "reason": r["reason"], "guid": r["guid"],
                "item_id": r["item_id"], "count": r["count"], "money": r["money"]}
               for r in views.rows(conn, "SELECT ts, dir, reason, guid, item_id, count, money "

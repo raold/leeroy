@@ -164,7 +164,7 @@ def test_bank_on_an_older_mind_db_says_not_set_up(tmp_path):
         async with served(make_app(tmp_path, mind=running(tmp_path), link=FakeLink(SNAPSHOT))) as app:
             return (await http(app, "GET", "/api/bank")).json()
     v = asyncio.run(go())
-    assert v["missing"] == ["realm_bank"] and v["ledger"] == []
+    assert v["missing"] == ["realm_bank", "library.db"] and v["ledger"] == []
     assert v["bank"]["money"] == 1234567 and v["items"] == {}  # no library.db: no names
 
 
