@@ -310,9 +310,67 @@ def test_the_lust_free_text_meets_the_scene_screen_and_the_age_and_wear_guards()
     assert "scene.activity: real_name" in codes("activity", "toasting Quillon")
     assert "scene.shows: meta" in codes("shows", "As an AI I cannot say.")
     assert all(AGE_RE.search(c) is None for c in codes("activity", "in two pigtails"))
-    # the plain style is as written: its screen has no age or wear guard of its own
-    assert screen_scene(woman(), {**SCENE, "activity": "lounging in her pyjamas"}, ident=IDENT,
-                        member_names=["Testb"]) == []
+
+
+@pytest.mark.parametrize("field", ["setting", "activity", "outfit", "expression", "shows"])
+@pytest.mark.parametrize("text,code", [
+    ("lounging in her pyjamas", "explicit"), ("a lace camisole", "explicit"),     # WEAR_RE
+    ("in fishnets", "explicit"), ("with her hair in two pigtails", "age"),        # AGE_RE
+    ("dressed as a cheerleader", "age"), ("a youthful grin", "age")])
+def test_a_plain_scene_meets_the_age_and_wear_guards_as_a_profile_kind_does(field, text, code):
+    # controller ruling R13: every free-text field, as kind.screen_kind reads a plain kind
+    for p in plain_members():
+        assert f"scene.{field}: {code}" in screen_scene(
+            p, {**SCENE, field: text}, ident=IDENT, member_names=["Testb"])
+
+
+UNDRESSED = ["just out of the shower", "undressing for the pool", "wrapped in a towel",
+             "towelling off after a swim", "showering after the gym", "in a bubble bath",
+             "relaxing in the bath", "soaking in the bathtub", "bathing in the lake",
+             "half undressed after a long day", "changing clothes after work",
+             "changing her clothes", "getting changed at the beach", "getting dressed",
+             "naked under a blanket", "nude", "topless on the deck", "in her bra",
+             "in her underwear", "lingerie", "tangled in the sheets", "under the bedsheets",
+             "in a robe", "in her fluffy bathrobe", "two bathrobes on the hook"]
+DRESSED = ["a robin on the feeder", "sorting her wardrobe", "a cobra pose at yoga",
+           "getting dressed up for a party", "a bathroom mirror selfie", "sunbathing on a lawn",
+           "reading in the bedroom", "stretching out in bed", "lying back on the sofa"]
+
+
+@pytest.mark.parametrize("field", ["activity", "shows"])
+@pytest.mark.parametrize("text", UNDRESSED)
+def test_undressing_and_bathing_are_refused_for_every_style(field, text):
+    # controller ruling R12
+    for p, data in ((lusty(), LUST_SCENE), *((m, SCENE) for m in plain_members())):
+        assert f"scene.{field}: undress" in screen_scene(
+            p, {**data, field: text}, ident=IDENT, member_names=[]), (p.romance.stance, text)
+
+
+@pytest.mark.parametrize("field", ["activity", "shows"])
+@pytest.mark.parametrize("text", DRESSED)
+def test_whole_words_only_and_a_clothed_bed_scene_passes_for_every_style(field, text):
+    # R12 as the owner amended it: a clothed bed or bedroom scene is fine for both styles
+    for p, data in ((lusty(), LUST_SCENE), *((m, SCENE) for m in plain_members())):
+        assert screen_scene(p, {**data, field: text}, ident=IDENT, member_names=[]) == [], text
+
+
+def test_a_plain_scenes_other_free_text_is_screened_for_undressing_too():
+    # a plain outfit and setting are free text as well: "a towel" is no outfit
+    for field, text in (("outfit", "a fluffy bathrobe"), ("outfit", "just a towel"),
+                        ("setting", "in the bath"), ("expression", "fresh out of the shower")):
+        assert f"scene.{field}: undress" in screen_scene(woman(), {**SCENE, field: text},
+                                                         ident=IDENT, member_names=[])
+
+
+def test_the_probes_of_the_first_round():
+    def codes(p, data, text):
+        return screen_scene(p, {**data, "activity": text}, ident=IDENT, member_names=[])
+    for text in ("just out of the shower", "undressing for the pool"):
+        assert codes(lusty(), LUST_SCENE, text) == ["scene.activity: undress"]
+        assert codes(woman(), SCENE, text) == ["scene.activity: undress"]
+    assert codes(lusty(), LUST_SCENE, "stretching out in bed") == []       # owner: clothed is fine
+    assert codes(woman(), SCENE, "stretching out in bed") == []
+    assert codes(lusty(), LUST_SCENE, "posing on the bed") == []
 
 
 def test_a_reply_for_the_other_style_is_refused():

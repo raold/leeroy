@@ -350,10 +350,11 @@ async def kind_one(ctx: "NightContext", guid: int) -> tuple[ProfilePhoto | None,
     p = ctx.base(guid)
     name = ctx.name(guid)
     lust = suggestive(p)
-    prompt, template = (LUST_PROMPT, KIND_PROMPT_LUST) if lust else (STAGE, KIND_PROMPT)
-    system = system_prompt(
-        prompt, template, ctx.settings.data_dir, human=ctx.ident, name=name,
-        card=ctx.base_card(guid), facts=_facts(p), looks=looks_line(p.appearance))
+    fields = dict(human=ctx.ident, name=name, card=ctx.base_card(guid), facts=_facts(p),
+                  looks=looks_line(p.appearance))
+    # each name a module constant at its own call, so night_prompt_names (the doctor) sees both
+    system = (system_prompt(LUST_PROMPT, KIND_PROMPT_LUST, ctx.settings.data_dir, **fields)
+              if lust else system_prompt(STAGE, KIND_PROMPT, ctx.settings.data_dir, **fields))
     ask = KIND_ASK.format(name=name)
     for again in (False, True):
         try:

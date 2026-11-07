@@ -16,10 +16,11 @@ outfit, colour and expression from the profile photo's vetted lists in kind.py (
 SCENE_PROMPT_LUST, overlay prompts/nightly_scene_lust.txt; the built-in text stays non-explicit):
 kind.screen_lust checks the pairings (swimwear only by the water and framed upper body, the gym
 outfit only at the gym, the hot tub only in swimwear) and kind.compose_lust puts the colour into
-the outfit. Her free text meets the plain screen plus the age guard (AGE_RE) and the wear guard
-(WEAR_RE). Her outfit and setting render as one priority-0 phrase, prompt.lust_phrase, so the
-worker's fit keeps both or neither, with the lust negative plus SNAP_NEGATIVE's "another
-person"; a lust scene renders only while she still has the lust style (scene_renderable)."""
+the outfit. Her free text (activity, shows) meets the same screen as everyone's, with the age
+guard (AGE_RE), the wear guard (WEAR_RE) and UNDRESS_RE (controller rulings R12, R13). Her
+outfit and setting render as one priority-0 phrase, prompt.lust_phrase, so the worker's fit
+keeps both or neither, with the lust negative plus SNAP_NEGATIVE's "another person"; a lust
+scene renders only while she still has the lust style (scene_renderable)."""
 import re
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
@@ -118,6 +119,17 @@ MINOR_RE = re.compile(
     r"girls?|teens?|teenagers?|nieces?|nephews?|grand(?:child|children|son|daughter)s?|"
     r"schoolkids?|pupils?)\b", re.I)
 
+# Undressing and bathing (controller ruling R12): a towel, a shower or a bath, changing clothes,
+# being undressed, underwear, sheets or a robe, in any scene's free text whatever the style.
+# Whole words only, so a robin and a wardrobe are not a robe; "getting dressed up" is dressed.
+UNDRESS_RE = re.compile(
+    r"\b(towel(?:s|ing|ling|ed|led)?|shower(?:s|ing|ed)?|bath(?:s|ing|ed)?|bathes|"
+    r"bathtubs?|bubble[\s-]*baths?|undress(?:es|ing|ed)?|"
+    r"chang(?:e|es|ed|ing)(?: (?:her|his|their|my|your))? clothes|"
+    r"(?:get|gets|getting|got) changed|(?:get|gets|getting|got) dressed(?! up)|"
+    r"naked|nudes?|topless|bras?|underwear|lingerie|sheets|bed[\s-]*sheets?|robes?|"
+    r"bath[\s-]*robes?)\b", re.I)  # a clothed scene in bed or a bedroom is fine (owner, R12)
+
 _TEXT_FIELDS = ("setting", "activity", "outfit", "expression", "shows")
 _LUST_TEXT_FIELDS = ("activity", "shows")  # the rest are her picks
 _ENUMS = {"kind": KINDS, "framing": FRAMINGS, "when": WHENS, "audience": AUDIENCES}
@@ -194,17 +206,17 @@ def scene_system(p: Persona | None, data_dir: Path, *, human: HumanIdentity, nam
                          facts=facts, looks=looks, about=about)
 
 
-def _text_codes(field: str, text: str, *, ident: HumanIdentity, names: list[str],
-                lust: bool) -> list[str]:
+def _text_codes(field: str, text: str, *, ident: HumanIdentity, names: list[str]) -> list[str]:
     found = [("meta", has_meta(text)), ("real_name", names_real_name(text, ident)),
              ("likeness", LIKENESS_RE.search(text) is not None),
              ("member_name", any(has_word(text, n) for n in names)),
              ("era", ERA_RE.search(text) is not None),
              ("explicit", EXPLICIT_RE.search(text) is not None
-              or (lust and WEAR_RE.search(text) is not None)),
+              or WEAR_RE.search(text) is not None),
              ("minor", MINOR_RE.search(text) is not None),
              ("looks", LOOKS_RE.search(text) is not None),
-             ("age", lust and AGE_RE.search(text) is not None)]
+             ("age", AGE_RE.search(text) is not None),
+             ("undress", UNDRESS_RE.search(text) is not None)]
     return [f"scene.{field}: {code}" for code, hit in found if hit]
 
 
@@ -212,11 +224,12 @@ def screen_scene(p: Persona, data: dict, *, ident: HumanIdentity,
                  member_names) -> list[str]:
     """The problems with a scene reply for `p`, as codes `scene.<field>: <code>` only, never the
     text. Per free-text field, in order: meta, his real name (real_name), a likeness, another
-    member's name (member_name, any case), an era, explicit wear, a minor, a looks change. The
-    reply must be p's style's shape (OTHER_STYLE otherwise). A lust reply's free text (activity,
-    shows) also meets WEAR_RE (explicit) and AGE_RE (age), and its picks kind.screen_lust: on
-    its list, the pairings, her name in a part, the age guard (its `photo.` codes reported as
-    `scene.`)."""
+    member's name (member_name, any case), an era, explicit wear (EXPLICIT_RE and WEAR_RE, as
+    kind.screen_kind), a minor, a looks change, anything that codes a person as young (AGE_RE,
+    age) and undressing or bathing (UNDRESS_RE, undress); a clothed bed or bedroom scene is
+    fine. The reply must be p's style's shape (OTHER_STYLE otherwise). A lust reply's
+    free text is its activity and shows; its picks meet kind.screen_lust: on its list, the
+    pairings, her name in a part, the age guard (its `photo.` codes reported as `scene.`)."""
     lust = style_of(p) == LUST
     if lust != ("colour" in data):
         return [OTHER_STYLE]
@@ -224,7 +237,7 @@ def screen_scene(p: Persona, data: dict, *, ident: HumanIdentity,
     codes = [f"scene.{f}: not on its list" for f, values in _ENUMS.items()
              if data.get(f) not in values]
     for field in _LUST_TEXT_FIELDS if lust else _TEXT_FIELDS:
-        codes += _text_codes(field, data.get(field) or "", ident=ident, names=names, lust=lust)
+        codes += _text_codes(field, data.get(field) or "", ident=ident, names=names)
     if lust:
         if data.get("setting") not in SCENE_LUST_SETTINGS:
             codes.append("scene.setting: not on its list")
