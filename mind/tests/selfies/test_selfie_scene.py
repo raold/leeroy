@@ -732,3 +732,35 @@ def test_the_final_review_allowances_still_pass(text):
 
 def test_a_cheerleading_look_is_age_coded_for_a_profile_photo_too():
     assert AGE_RE.search("in a cheerleading top") and AGE_RE.search("cheerleader")
+
+
+R23_REFUSED = [
+    ("only wearing a shirt", "undress"), ("wearing his shirt only", "undress"),
+    ("only perfume", "undress"), ("just perfume", "undress"), ("bottomless", "undress"),
+    ("commando", "undress"), ("in the buff", "undress"), ("clothing optional", "undress"),
+    ("bare skinned", "undress"), ("wearing a smile", "undress"),
+    ("gyrating on the dance floor", "explicit"), ("ground against him", "explicit"),
+    ("body rolls", "explicit"), ("booty shaking", "explicit"), ("shaking her hips", "explicit"),
+    ("pole fitness", "explicit"), ("bend over", "explicit"), ("spread eagle", "explicit"),
+    ("arched back", "explicit"), ("jiggling", "explicit"), ("teasingly", "explicit"),
+    ("tantalising", "explicit"), ("flirtatiously", "explicit"),
+    ("slipping into something comfortable", "undress"),
+]
+
+
+@pytest.mark.parametrize("text,code", R23_REFUSED, ids=[t for t, _ in R23_REFUSED])
+def test_the_last_review_variants_are_refused_for_both_styles_in_every_field(text, code):
+    checks = [(lusty(), LUST_SCENE, f) for f in ("activity", "shows")]
+    checks += [(woman(), SCENE, f) for f in PLAIN_FIELDS]
+    for p, data, field in checks:
+        codes = screen_scene(p, {**data, field: text}, ident=IDENT, member_names=[])
+        assert f"scene.{field}: {code}" in codes, (field, codes)
+
+
+@pytest.mark.parametrize("text", ["shaking off the rain", "bending down to pet the dog",
+                                  "only a little tired", "grinding coffee beans",
+                                  "a slip dress", "slipping on her shoes"])
+def test_the_last_review_allowances_pass(text):
+    for p, data in ((lusty(), LUST_SCENE), (woman(), SCENE)):
+        for field in ("activity", "shows"):
+            assert screen_scene(p, {**data, field: text}, ident=IDENT, member_names=[]) == []

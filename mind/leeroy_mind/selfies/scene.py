@@ -180,6 +180,10 @@ UNDRESS_RE = re.compile(
     rf"(?:loosen|lift|rais|hitch|hik|tug|lower|pull|undo|undid)\w* (?:her|his|their|my|your) "
     rf"(?:\w+ )?{_CLOTHES}|unhook\w*|unfasten\w*|unlac\w*|disrob\w*|"
     r"flash(?:es|ed|ing)|revealing|exposed|exposing|"
+    # R23: only or just wearing, a clothing word then only, bare tokens, a euphemism
+    rf"(?:only|just) wearing|{_CLOTHES} only|(?:only|just) (?:[\w'-]+ ){{0,2}}perfume|"
+    r"bottomless|commando|in the buff|clothing[\s-]*optional|bare[\s-]*skinned|"
+    r"wearing a smile|slip(?:s|ped|ping)? into something|"
     r"bare[\s-]*(?:shoulders?|backs?|skin|legs?|midriff|body|bottom|bum))\b", re.I)
 # A verb within 3 words of off, down, out of or up (R16), and a strap near a verb: undress.
 _PEEL = (r"(?:slip\w*|slid(?:e|es|ing)?|pull\w*|peel\w*|strip(?!e)\w*|lower\w*|shrug\w*|"
@@ -203,6 +207,10 @@ SEXUAL_RE = re.compile(
     r"sultr\w*|steamy|racy|provocativ\w*|naughty|risqu[eé]|spicy (?:pics?|photos?|"
     r"selfies?|shots?|snaps?|pictures?|content)|bedroom eyes|come[\s-]*hither|"
     r"twerk\w*|lap[\s-]*danc\w*|pole[\s-]*danc\w*|suggestiv\w*|"
+    r"gyrat\w*|ground (?:against|into)|body[\s-]*rolls?|booty[\s-]*shak\w*|"
+    r"shak(?:e|es|ing) (?:her|his|their|my) (?:hips?|booty|bum|butt)|pole[\s-]*fitness|"
+    r"bends? over|spread[\s-]*eagle\w*|arched back|jiggl\w*|teasingly|tantali[sz]\w*|"
+    r"flirtatious\w*|"
     r"grind(?:s|ed|ing)?(?! (?:the |some |fresh )?(?:coffee|beans?|pepper|spices?|salt|herbs?|"
     r"flour|seeds?)\b)|"
     r"thirst[\s-]*traps?|horny|kinky|teas(?:e|es|ed|ing)|sexy|sensual\w*|seductiv\w*|"

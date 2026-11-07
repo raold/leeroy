@@ -86,7 +86,8 @@ def _todo(ctx: "NightContext") -> list[SnapRow]:
         if ctx.done(STAGE, _unit(r)):
             continue
         out.append(r)
-        if not _on_hold(ctx, r):  # a held one is passed over and takes none of the room
+        # a held one is passed over, and one that will expire renders nothing: no room taken
+        if not (_on_hold(ctx, r) or _passed(ctx, r) or _unreadable(r)):
             room -= 1
             if room == 0:
                 break

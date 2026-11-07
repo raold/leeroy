@@ -535,3 +535,14 @@ def test_held_rows_do_not_use_up_the_room_of_a_single_pass(h, tmp_path):
     ctx.settings = replace(ctx.settings, snaps_per_night=2)
     run(stage(tmp_path)(ctx))
     assert [snap_row(h.store, s).status for s in (held, *snaps)] == ["planned", "ready", "ready"]
+
+
+def test_rows_that_will_expire_do_not_crowd_out_a_good_row_under_a_small_cap(h):
+    from leeroy_mind.selfies.snapstage import _todo
+    cast(h, 101, 102, 103)
+    ctx = h.ctx()
+    ctx.settings = replace(ctx.settings, snaps_per_night=1)
+    late = situation(h, 101, expires=ctx.window[1] - 1.0)
+    bad = situation(h, 102, scene={"shows": "an invented scene"})
+    good = situation(h, 103)
+    assert [r.id for r in _todo(ctx)] == [late, bad, good]  # the two expire, the good one renders
