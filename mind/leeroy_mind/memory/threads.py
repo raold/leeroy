@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from typing import Literal
 
+from leeroy_mind.discord.layout import is_dm
+from leeroy_mind.discord.transport import channel_id, is_discord
 from leeroy_mind.protocol import Chat
 from leeroy_mind.storage.rows import ChatLineRow
 from leeroy_mind.storage.store import Store
@@ -14,7 +16,7 @@ def thread_key(ev: Chat) -> str:
     if ch == "whisper":
         lo, hi = sorted((ev.from_guid, ev.to_guid))
         return f"whisper:{lo}:{hi}"
-    if ch in ("guild", "officer") or ch.startswith("voice:"):
+    if ch in ("guild", "officer") or ch.startswith("voice:") or is_discord(ch):
         return ch
     if ch in ("party", "raid", "raid_warning"):
         return "group"
@@ -39,7 +41,9 @@ class _Open:
 class ThreadTracker:
     """Groups chat lines into threads by channel. A thread closes after `silence_s` of quiet or
     `max_lines` lines and is left with status 'pending' for the extractor. Times are mind-clock
-    seconds. Whispers count only when a persona-bearing member is on one side."""
+    seconds. Whispers count only when a persona-bearing member is on one side. A Discord
+    channel is a thread key of its own; a Discord DM is never threaded, so never extracted:
+    the night's privacy reads every channel but `whisper` as public, and a DM is not."""
 
     def __init__(self, store: Store, *, silence_s: float = 90, max_lines: int = 12):
         self._store = store
@@ -79,6 +83,8 @@ class ThreadTracker:
         return self._add(line_id, chat, ts)
 
     def _add(self, line_id: int, ev: Chat, ts: float) -> ClosedThread | None:
+        if is_discord(ev.channel) and is_dm(channel_id(ev.channel)):
+            return None
         if ev.channel == "whisper" and not (self._is_cast(ev.from_guid) or self._is_cast(ev.to_guid)):
             return None
         key = thread_key(ev)

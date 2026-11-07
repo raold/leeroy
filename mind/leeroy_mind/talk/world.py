@@ -4,6 +4,8 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Callable
 
+from leeroy_mind.discord import layout
+from leeroy_mind.discord.transport import channel_id, is_discord
 from leeroy_mind.protocol import (AfkEvent, Cast, Chat, Event, Group, Hello, Login, Logout,
                                   Member, Zone)
 from leeroy_mind.storage.rows import ChatLineRow
@@ -171,8 +173,14 @@ class WorldView:
 
     def audience(self, channel: str, *, from_guid: int, to_guid: int = 0,
                  zone: int = 0) -> frozenset[int]:
-        """Cast guids that can see a line on this channel right now."""
+        """Cast guids that can see a line on this channel right now. A Discord channel's
+        (discord.layout.audience): the whole cast, online or not, its officers only in an
+        officers' channel, the two of a DM, and him in each."""
         cast = self.cast_guids()
+        if is_discord(channel):
+            return layout.audience(channel_id(channel), cast=cast,
+                                   officers={g for g in cast if self.is_officer(g)},
+                                   human=self.human_guid)
         online = self.online & cast
         if channel.startswith("voice:"):
             return self.room_audience(channel) & online if self.room_audience else frozenset()

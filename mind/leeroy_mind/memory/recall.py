@@ -6,6 +6,7 @@ from datetime import date, datetime, tzinfo
 from typing import Sequence
 
 from leeroy_mind.clock import Clock, night_of
+from leeroy_mind.discord.transport import is_discord
 from leeroy_mind.llm.client import LLMError
 from leeroy_mind.llm.scheduler import Priority, SchedulerError
 from leeroy_mind.memory.writer import Embedder
@@ -62,7 +63,11 @@ def whisper_ok(channel: str, frm: int, to: int, *, speaker: int, turn_channel: s
     going to `to_guid`): a line on any channel but whisper may reach every turn's prompt, a
     whisper only a whisper between the same two. Memories are kept to it through their scope
     (scope_ok), and their evidence still goes through it under the scope as a second check
-    (Recall._shareable; controller ruling B1)."""
+    (Recall._shareable; controller ruling B1). The guild's Discord and the game keep apart: a
+    line on a Discord channel (a DM is one, `dm:<guid>`) reaches only a turn on that same
+    channel, and a game line no Discord turn."""
+    if is_discord(channel) or is_discord(turn_channel):
+        return channel == turn_channel
     return channel != "whisper" or (turn_channel == "whisper"
                                     and {frm, to} == {speaker, to_guid})
 

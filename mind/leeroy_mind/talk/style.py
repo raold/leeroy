@@ -12,9 +12,10 @@ at a sentence end. Only a first clause with no break at all is cut between words
 on a little word ("the", "is"). A text that fits on one line is split in two (split_rate)
 only at a sentence end or a comma, semicolon or colon.
 
-Every outgoing line is plain ASCII: emoji and other symbols go, accents and typographic marks
-are folded. Abbreviations only ever shorten: a map written the wrong way round ("lol" ->
-"laughing out loud") is ignored. Item links ("[Shadowmourne]") are kept as written and never
+Every line for the game is plain ASCII: emoji and other symbols go, accents and typographic
+marks are folded. A Discord line (style_lines' `game` off) keeps them, with no byte cut and no
+chat-line cleaning (the Discord store cleans its text); its typing is the same. Abbreviations
+only ever shorten: a map written the wrong way round ("lol" -> "laughing out loud") is ignored. Item links ("[Shadowmourne]") are kept as written and never
 cut or split through."""
 import itertools
 import random
@@ -25,6 +26,7 @@ from dataclasses import dataclass
 from leeroy_mind.personas.schema import Typing
 from leeroy_mind.protocol import MAX_TEXT_BYTES, sanitize_say_text
 from leeroy_mind.talk.filters import strip_copied
+from leeroy_mind.text import EMOJI_RE
 from leeroy_mind.personas.schema import is_mark
 from leeroy_mind.talk.states import EFFECTS, RAID_CALLS, Altered, Effects
 from leeroy_mind.talk.turns import TurnKind
@@ -151,11 +153,12 @@ def _strip_quotes(text: str) -> str:
     return t
 
 
-def _clean(text: str, names: tuple[str, ...]) -> str:
-    """Step 1: plain ASCII, wrapping quotes and what the model copied from the prompt's chat
-    frame (filters.strip_copied: an age, a channel tag, a tag with one of `names`, the
-    speaker's own)."""
-    return " ".join(_strip_quotes(strip_copied(to_ascii(text), names)).split())
+def _clean(text: str, names: tuple[str, ...], *, fold: bool = True) -> str:
+    """Step 1: plain ASCII (unless not `fold`), wrapping quotes and what the model copied from
+    the prompt's chat frame (filters.strip_copied: an age, a channel tag, a tag with one of
+    `names`, the speaker's own)."""
+    return " ".join(_strip_quotes(strip_copied(to_ascii(text) if fold else text,
+                                               names)).split())
 
 
 def _outside_links(text: str, fn) -> str:
@@ -407,11 +410,14 @@ _ENDINGS = _INTERJECTIONS | frozenset({"aww", "aw", "gg", "brb", "ily", "o7", "t
 
 
 def _ends_marked(line: str) -> bool:
+    """The line ends in a mark, an ending such as "lol", or an emoji (only a Discord line keeps
+    one)."""
     words = line.split()
     if not words:
         return False
     last = words[-1].rstrip(".,!?")
-    return bool(_EMOTICON.fullmatch(last)) or _bare(words[-1]) in _ENDINGS
+    return (bool(_EMOTICON.fullmatch(last)) or _bare(words[-1]) in _ENDINGS
+            or EMOJI_RE.search(last) is not None)
 
 
 def line_cap(t: Typing, eff: Effects, length_mult: float = 1.0) -> int:
@@ -430,23 +436,27 @@ def style_lines(text: str, t: Typing, eff: Effects, rng: random.Random, *,
                 speaker: str = "", kind: TurnKind | None = None,
                 keep_case: frozenset[str] = frozenset(), max_lines: int = 2,
                 aliases: tuple[str, ...] = (), force_lines: bool = False,
-                no_emoticon: bool = False, wink_ok: bool = True) -> list[Styled]:
+                no_emoticon: bool = False, wink_ok: bool = True,
+                game: bool = True) -> list[Styled]:
     """apply_style's lines with their plain words (Styled). `force_lines`: the turn may take
     all of max_lines whatever the persona's split_rate (a whisper to him at the explicit band
     runs to a line or two). `no_emoticon`: no mark is added (a line that carried her romance
     text, a wipe line: rehearsal 2's "dream of me ;) lmao", "great aww"). Without `wink_ok`
     (a line to or naming a member) no wink, kiss or heart is added, a smile still may be (fix
-    round 1, review I2: ";)" went onto a line the member screen had passed)."""
+    round 1, review I2: ";)" went onto a line the member screen had passed). Without `game` (a
+    Discord line) nothing is folded to ASCII and no line is cut to the bridge's bytes or
+    cleaned as a chat line: the Discord store cleans and limits its text."""
     if kind in RAID_CALLS:
         eff = EFFECTS[Altered.SOBER]
-    body = _clean(text, tuple(x for x in (speaker, *aliases) if x))
+    asc = to_ascii if game else str
+    body = _clean(text, tuple(x for x in (speaker, *aliases) if x), fold=game)
     if not body:
         return []
-    keep = frozenset(to_ascii(w) for w in keep_case)
+    keep = frozenset(asc(w) for w in keep_case)
     body = _keep_case(_case(body, t.case), keep, body)
     drop_some = t.end_punct == "some" and rng.random() < SOME_DROP_P
     # only marks are added (a stored word among them is a word: schema.is_mark)
-    emoticons = [e for e in (to_ascii(x).strip() for x in t.emoticons) if e and is_mark(e)
+    emoticons = [e for e in (asc(x).strip() for x in t.emoticons) if e and is_mark(e)
                  and (wink_ok or not _WINKY.fullmatch(e))]
     emoticon = ""
     if emoticons and not no_emoticon and rng.random() < t.emoticon_rate:
@@ -457,7 +467,7 @@ def style_lines(text: str, t: Typing, eff: Effects, rng: random.Random, *,
     laid = _fit(_TOKEN.findall(body), line_cap(t, eff, length_mult), lines)
     if split and lines > 1 and len(laid) == 1:
         laid = _split_one(laid[0], t.words_per_line[0]) or laid
-    protected = frozenset(to_ascii(w) for w in protect) | keep
+    protected = frozenset(asc(w) for w in protect) | keep
     out: list[Styled] = []
     for i, units in enumerate(laid):
         ws = [w for clause, _ in units for w in clause]
@@ -472,12 +482,12 @@ def style_lines(text: str, t: Typing, eff: Effects, rng: random.Random, *,
                        protected)
         tail = (f" {emoticon}" if emoticon and i == len(laid) - 1 and not _ends_marked(typed)
                 else "")
-        while len((typed + tail).encode("utf-8")) > MAX_TEXT_BYTES:
+        while game and len((typed + tail).encode("utf-8")) > MAX_TEXT_BYTES:
             tokens = _TOKEN.findall(typed)
             if len(tokens) <= 1:
                 break
             typed = _end_punct(" ".join(tokens[:-1]).rstrip(",;:"), t.end_punct, drop_some)
-        line = sanitize_say_text(typed + tail)
+        line = sanitize_say_text(typed + tail) if game else (typed + tail).strip()
         if line:
             out.append(Styled(line, plain))
     return out

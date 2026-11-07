@@ -17,7 +17,17 @@ With voice on (Pipeline.comms, set by the voice extension), a turn is placed onc
 is known: a member on comms speaks in their room, on a `voice:<room>` channel that never
 reaches the bridge. A voiced turn skips the typing: the model's words or the template's go to
 the voice service as one line. With voice off, down or failing, every turn takes the typed path
-above, unchanged: a line that can't be spoken is typed, and a fault there is logged by name."""
+above, unchanged: a line that can't be spoken is typed, and a fault there is logged by name.
+
+A turn on the guild's Discord (discord.transport: a `discord:<id>` or `dm:<guid>` channel) is
+composed and typed as any other, his dots included, but it never reaches the game: it is never
+placed in a room or voiced, sends no emote, keeps its emoji and its letters (no ASCII fold, no
+emoji tell), and its up to three typed lines become one message, stored as a discord_message row
+(transport.store_line) where a typed line would go to the bridge as a Say. The line is recorded
+as said like any other, under its Discord channel, while the game's own chat state (the world's
+history, the quiet clock, the say chains, a member's last line) never sees it. The game's rules
+for whispers to him and for /say (he must be online, a dead member can't talk) are for those
+channels only; every other guard holds."""
 import asyncio
 import itertools
 import logging
@@ -34,6 +44,9 @@ from leeroy_mind.arc.live import AWAY_CACHE_S, ArcView, arc_view, away_now
 from leeroy_mind.bridge import AckTimeout, BridgeError, ConnectionLost
 from leeroy_mind.clock import Clock, night_of
 from leeroy_mind.config import MindConfig
+from leeroy_mind.discord.store import DiscordRefused
+from leeroy_mind.discord.transport import LINES as DISCORD_LINES
+from leeroy_mind.discord.transport import DiscordTarget, is_discord, store_line
 from leeroy_mind.human import THEY_FORMS, HumanIdentity, human_identity
 from leeroy_mind.llm.client import LLMError
 from leeroy_mind.llm.presets import LIVE, LIVE_BIT
@@ -311,6 +324,9 @@ class TurnMeta:
     # the console's tuning preview (Pipeline.preview_line): the Ollama seed both of its
     # requests carry, so before and after differ by the dial and not the sampler
     seed: int | None = None
+    # a Discord turn's message: the one it replies to and its thread (discord.transport); a
+    # Discord turn is known by its channel, never by this
+    discord: DiscordTarget | None = None
 
 
 class _ScopeChanged(SchedulerError):
@@ -390,7 +406,7 @@ def chain_base(channel: str, a: int, b: int, zone: int) -> str:
     if channel == "whisper":
         lo, hi = sorted((a, b))
         return f"whisper:{lo}:{hi}"
-    if channel in ("guild", "officer") or channel.startswith("voice:"):
+    if channel in ("guild", "officer") or channel.startswith("voice:") or is_discord(channel):
         return channel
     if channel in ("party", "raid", "raid_warning"):
         return "group"
@@ -675,15 +691,20 @@ class Pipeline:
         Comms shows its line, oldest first, as {"guid", "name", "channel", "to", "since", "age"}
         (`to`: a whisper's target, him; else None; `age`: seconds in its phase, read now, so a
         page judges staleness without comparing clocks; `since` is for matching the line when it
-        lands). Ids, names and times only, never text; none while he is offline."""
+        lands). Ids, names and times only, never text; the game's places none while he is
+        offline, a Discord turn's (channel as given, `to` him in a DM to him) always."""
         w, hg = self.world, self.human.guid
-        if not hg or not w.human_online:
+        if not hg:
             return []
         now = self.clock.now()
         out = []
         for turn, _, since in self._phases.values():
             channel, to = turn.channel, None
-            if channel == "whisper" and turn.to_guid == hg:
+            if is_discord(channel):
+                to = hg if turn.to_guid == hg else None
+            elif not w.human_online:
+                continue
+            elif channel == "whisper" and turn.to_guid == hg:
                 to = hg
             elif not (channel in COMMS_CHANNELS
                       or (channel in GROUP_CHANNELS and w.in_group(turn.speaker))):
@@ -1221,6 +1242,9 @@ class Pipeline:
                                           raid=self.raid, now=now, rng=self.rng) or ""
             if not turn.channel:
                 return self._drop(turn, meta, "no_channel")
+        discord = is_discord(turn.channel)
+        if discord:  # one message of up to three typed lines
+            turn.max_lines = DISCORD_LINES
         p = self.personas.get(turn.speaker)
         if p is None:
             return self._drop(turn, meta, "no_persona")
@@ -1273,7 +1297,9 @@ class Pipeline:
             hg = self.human.guid
             close = bool(hg) and knows_real_name(self.store.get_relationship(turn.speaker, hg))
         text = self._link_items(turn, meta, text)
-        if turn.channel == "whisper":  # an emote is public: a whisper keeps its words (NB6)
+        # an emote is public: a whisper keeps its words (NB6), and so does a Discord line,
+        # which has no game to emote in
+        if turn.channel == "whisper" or discord:
             text, emotes = emote_words(text), []
         else:
             text, emotes = split_emotes(text, {m.name.casefold(): g
@@ -1353,7 +1379,7 @@ class Pipeline:
         """Where the turn goes now its channel is known (Comms.place, which also fills in
         whom it is to), and the one decision on whether it is spoken, for the model's turns
         and templates alike (C1). Voice off, down or failing, it is typed as in phase 1."""
-        if self.comms is None or meta.before_transport is not None:
+        if self.comms is None or meta.before_transport is not None or is_discord(turn.channel):
             return False
         if meta.typed_on is None and not turn.channel.startswith("voice:"):
             meta.typed_on = turn.channel, turn.to_guid
@@ -1412,8 +1438,9 @@ class Pipeline:
         member named after the command or the turn's own target. A romantic one (kiss, wink,
         cuddle, blush) only ever goes to him or to nobody, and the turn's own target takes
         only a friendly one (fix round 1, review I2). A whisper sends none: an emote is
-        public. A refused one is logged."""
-        if turn.channel == "whisper" or meta.elsewhere or meta.why == "hotmic":
+        public; nor does a Discord line. A refused one is logged."""
+        if (turn.channel == "whisper" or is_discord(turn.channel) or meta.elsewhere
+                or meta.why == "hotmic"):
             return
         hg = self.human.guid
         for emote, target in emotes[:MAX_EMOTES]:
@@ -1600,6 +1627,7 @@ class Pipeline:
         moves = [(r.clause, r.main) for r in c.moves]
         hg = self.human.guid
         summons_ok = self._summons_ok(turn) if hg and self._counterpart(turn) == hg else None
+        emoji = is_discord(turn.channel)  # Discord keeps emoji as text: no tell, no repair
         for attempt in (0, 1):
             if not _scope_valid(meta):
                 return text, "scope_changed"
@@ -1633,14 +1661,15 @@ class Pipeline:
                                    answers=c.answers, others=c.others, samples=c.samples,
                                    support=c.support, people=list(self._protect()),
                                    window=c.window, held=c.held, tonight=meta.again_tonight,
-                                   recent_moves=moves, summons_ok=summons_ok)
+                                   recent_moves=moves, summons_ok=summons_ok,
+                                   keep_emoji=emoji)
                 if len(text.split()) > LONG_SLACK * self._word_budget(turn, p, meta.two_lines):
                     tells.append(Tell("long", False, True))
                 if self._flirts_at_a_member(turn, text):
                     tells.append(Tell("member flirt", True))
                 if not any(t.fatal or (t.soft and (attempt == 0 or t.reason in DROP_ON_RETRY))
                            for t in tells):
-                    text = repair(text, speaker=name, aliases=own, him=his)
+                    text = repair(text, speaker=name, aliases=own, him=his, keep_emoji=emoji)
                     if not is_silence(text):
                         return text, None
                     silent = True
@@ -1780,7 +1809,9 @@ class Pipeline:
         """The member's typing over the words: at most turn.max_lines lines (style_lines). A
         bit of several lines keeps the lines the model wrote, one each; any other turn is
         styled as one text. A member of his inner circle keeps his real name capitalised
-        through it where it was written so (_real_name_spelling)."""
+        through it where it was written so (_real_name_spelling). A Discord turn keeps its
+        letters and emoji (no ASCII fold) and its lines become one message, joined by "\n"."""
+        discord = is_discord(turn.channel)
         phase = day_phase(self.clock.local())
         keep = self._real_name_spelling() if close else frozenset()
         pieces = ([x for x in text.split("\n") if x.strip()]
@@ -1795,8 +1826,11 @@ class Pipeline:
                                no_emoticon=romance or turn.kind in NO_MARK_KINDS,
                                wink_ok=not (self._to_member(turn) or names_any(
                                    piece, [m.name for g, m in self.world.members.items()
-                                           if g != self.human.guid])))
-        return out[:max(1, turn.max_lines)]
+                                           if g != self.human.guid])), game=not discord)
+        out = out[:max(1, turn.max_lines)]
+        if discord and out:
+            return [Styled("\n".join(s.line for s in out), " ".join(s.plain for s in out))]
+        return out
 
     def _real_name_spelling(self) -> frozenset[str]:
         """His real name spelt as a name, in a form the redaction catches: as configured when
@@ -1851,6 +1885,8 @@ class Pipeline:
             return "voice_channel"
         if not _transport_admitted(meta):
             return "transport_refused"
+        if is_discord(turn.channel):  # never a Say: its message is stored, then recorded
+            return self._deliver_discord(turn, meta, p, text, memory_ids)
         try:
             self.timing.typed_send(meta.timing_trace)
             with self.timing.span(meta.timing_trace, "bridge_ack"):
@@ -1881,14 +1917,41 @@ class Pipeline:
             return "record_error"
         return None
 
+    def _deliver_discord(self, turn: Turn, meta: TurnMeta, p: Persona, text: str,
+                         memory_ids: list[int]) -> str | None:
+        """A Discord line: stored as its message (transport.store_line), then recorded with that
+        message's id; nothing goes to the bridge, so there is no ack and no echo to wait for.
+        None, or why it wasn't said: discord_<code> for what the store refused."""
+        try:
+            message = store_line(self.store, turn, meta, text, self.clock.now())
+        except DiscordRefused as e:
+            log.info("discord_line_refused: guid=%d channel=%s code=%s", turn.speaker,
+                     turn.channel, e.code)
+            return f"discord_{e.code}"
+        except Exception:
+            log.exception("discord_store_failed: guid=%d channel=%s", turn.speaker, turn.channel)
+            return "store_error"
+        try:
+            self._record(turn, meta, p, text, memory_ids, discord_id=message)
+        except Exception:
+            log.exception("say_record_failed: guid=%d channel=%s", turn.speaker, turn.channel)
+            return "record_error"
+        return None
+
     def _record(self, turn: Turn, meta: TurnMeta, p: Persona, text: str,
-                memory_ids: list[int], *, ack: Ack | None = None) -> int:
+                memory_ids: list[int], *, ack: Ack | None = None,
+                discord_id: int | None = None) -> int:
         """A line was said: the chat log (origin "mind", with who could see it), the world, the
         thread hook, the guards, the chain and the utterance log (with why and the bit). Its
         line id. A line he had no way of hearing (Comms.unheard: I8, N3) moves neither the
-        quiet clock nor the open thread with him; every typed line still does."""
+        quiet clock nor the open thread with him; every typed line still does. A Discord line
+        (`discord_id`, its message) keeps its channel in the logs and counts as said, but stays
+        out of the game's chat state: the world's history, the quiet clock and the last line a
+        member said there."""
         now = self.clock.now()
-        heard = self.comms is None or not self._comms_says("unheard", False, turn.channel, meta)
+        discord = is_discord(turn.channel)
+        heard = discord or self.comms is None or not self._comms_says(
+            "unheard", False, turn.channel, meta)
         m = self.world.members.get(turn.speaker)
         zone, map_id = (m.zone, m.map) if m is not None else (0, 0)
         sid = self._session_id
@@ -1899,11 +1962,12 @@ class Pipeline:
                                        to_guid=turn.to_guid, zone=zone)
         line_id = self.store.insert_chat_line(chat, session_id=sid, origin="mind",
                                               audience=audience)
-        self.world.add_line(ChatLineRow(
-            id=line_id, ts=now, channel=turn.channel, from_guid=turn.speaker,
-            from_name=p.character_name, to_guid=turn.to_guid, text=text, map=map_id, zone=zone,
-            session_id=sid, thread_id=None, origin="mind"), now)
-        self._last_line_id[turn.speaker] = line_id
+        if not discord:
+            self.world.add_line(ChatLineRow(
+                id=line_id, ts=now, channel=turn.channel, from_guid=turn.speaker,
+                from_name=p.character_name, to_guid=turn.to_guid, text=text, map=map_id,
+                zone=zone, session_id=sid, thread_id=None, origin="mind"), now)
+            self._last_line_id[turn.speaker] = line_id
         if meta.words:
             self._words[line_id] = meta.words
             while len(self._words) > WORDS_KEPT:
@@ -1928,16 +1992,22 @@ class Pipeline:
             self._first_line_said(turn, meta)
         self._chain_line(chain_base(turn.channel, turn.speaker, turn.to_guid, zone), now,
                          from_human=False, guards=meta.guards)
-        if heard and turn.channel != "whisper":
+        if heard and turn.channel != "whisper" and not discord:
             self._touch_talk(now)
         self.store.log_utterance(now, turn.speaker, turn.channel, turn.kind.value, text,
                                  memory_ids, None, sid, bit=_bit_id(turn), why=meta.why or None,
                                  trigger_line=turn.trigger_line, llm_s=meta.llm_s,
                                  to_guid=turn.to_guid, turn_id=meta.turn_id)
         self._record_notes(turn, meta, p, meta.words or text, now)
-        log.info("say_sent: guid=%d kind=%s channel=%s line=%d trigger=%s why=%s bit=%r "
-                 "llm_s=%s", turn.speaker, turn.kind, turn.channel, line_id,
-                 turn.trigger_line or "-", meta.why or "-", _bit_id(turn), _secs(meta.llm_s))
+        if discord_id is None:
+            log.info("say_sent: guid=%d kind=%s channel=%s line=%d trigger=%s why=%s bit=%r "
+                     "llm_s=%s", turn.speaker, turn.kind, turn.channel, line_id,
+                     turn.trigger_line or "-", meta.why or "-", _bit_id(turn), _secs(meta.llm_s))
+        else:
+            log.info("say_sent: guid=%d kind=%s channel=%s line=%d message=%d trigger=%s why=%s "
+                     "bit=%r llm_s=%s", turn.speaker, turn.kind, turn.channel, line_id,
+                     discord_id, turn.trigger_line or "-", meta.why or "-", _bit_id(turn),
+                     _secs(meta.llm_s))
         if self.on_line_sent is not None:
             try:
                 self.on_line_sent(line_id, chat)
