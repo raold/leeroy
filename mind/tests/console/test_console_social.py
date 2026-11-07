@@ -90,11 +90,14 @@ def test_toward_you_lists_only_members_with_a_feeling(db):
 
 
 def test_romances_go_furthest_stage_first(db):
-    _rel(db, 1103, 1104, "invitation")
+    _rel(db, 1103, 1104, "planning")
     _rel(db, 1104, 1103, "none")
     _rel(db, 1106, 1107, "notices")
     ab = [(r["a"], r["b"]) for r in socialview.social_view(db, now=NOW)["romances"]]
     assert ab == [(1103, 1104), (1101, 1102), (1106, 1107)]
+    _rel(db, 1105, 1106, "late_nights")  # the arc's ladder, between whispers and planning
+    ab = [(r["a"], r["b"]) for r in socialview.social_view(db, now=NOW)["romances"]]
+    assert ab == [(1103, 1104), (1105, 1106), (1101, 1102), (1106, 1107)]
 
 
 def test_jealousy_is_highest_first_and_capped(db):
