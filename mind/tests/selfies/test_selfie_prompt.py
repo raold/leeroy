@@ -285,5 +285,5 @@ def test_the_lust_prompt_stays_when_her_looks_are_adult():
 def test_every_build_is_said_as_a_figure_at_priority_one():
     curvy = woman()
     vol = replace(curvy, appearance=replace(curvy.appearance, build="voluptuous"))
-    assert ("voluptuous hourglass figure, full bust, wide hips, slim waist", 1) in build_prompt(vol).phrases
+    assert ("voluptuous full-figured body, large full bust, wide hips, soft curves", 1) in build_prompt(vol).phrases
     assert (BUILD_WORDS[curvy.appearance.build], 1) in build_prompt(curvy).phrases

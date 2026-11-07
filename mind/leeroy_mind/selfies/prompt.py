@@ -107,7 +107,7 @@ def _clean(text: str) -> str:
 # build" at priority 3 left every body the same). Voluptuous is an hourglass fuller than curvy.
 BUILD_WORDS = {"slim": "slim figure", "athletic": "athletic toned figure", "average": "average build",
                "curvy": "curvy hourglass figure",
-               "voluptuous": "voluptuous hourglass figure, full bust, wide hips, slim waist",
+               "voluptuous": "voluptuous full-figured body, large full bust, wide hips, soft curves",
                "stocky": "stocky sturdy build", "heavy": "plus-size full figure"}
 
 
