@@ -8,6 +8,7 @@ photo a week, no model call; then str(guid) for each member candidates() picks: 
 tomorrow, then tonight's life beat, then everyone else by a weighted draw, until the stock the
 dial allows is planned. One JSON call asks for each scene; a declined or refused scene is stored
 nowhere and not asked again tonight. Logs carry ids, counts and codes, never a scene."""
+from contextlib import suppress
 from datetime import date, timedelta
 from typing import TYPE_CHECKING, Awaitable, Callable
 
@@ -86,10 +87,18 @@ def _planned_tonight(ctx: "NightContext") -> int:
             (ctx.night,)).fetchone()[0]
 
 
+def _asked_tonight(ctx: "NightContext") -> int:
+    """The members' units done tonight: planned, declined or refused, each used a call."""
+    with ctx.store.transaction():
+        return ctx.store.conn.execute(
+            "SELECT count(*) FROM night_step WHERE night=? AND stage=? AND unit GLOB '[0-9]*' "
+            "AND unit NOT GLOB '*[^0-9]*'", (ctx.night, STAGE)).fetchone()[0]
+
+
 def candidates(ctx: "NightContext", dial: int) -> list[tuple[int, str, str]]:
     """(guid, source, ref) for the members to ask tonight, in order, at most the stock the dial
     wants beyond what is planned and scenes_per_night."""
-    room = ctx.settings.scenes_per_night - _planned_tonight(ctx)  # a resumed night's units count
+    room = ctx.settings.scenes_per_night - max(_planned_tonight(ctx), _asked_tonight(ctx))
     want = min(stock_target(dial) - open_stock(ctx.store), room)
     if want <= 0:
         return []
@@ -165,7 +174,12 @@ async def ask_scene(ctx: "NightContext", guid: int, *, about: str):
         return None, ["model"]
     if data.get("photo") is False:
         return None, [DECLINED]
-    names = [ctx.name(g) for g in ctx.members(include_away=True) if g != guid]
+    others = [g for g in ctx.members(include_away=True) if g != guid]
+    names = [ctx.name(g) for g in others]
+    for g in others:  # their real names too (any case, whole words)
+        with suppress(KeyError):
+            names.append(ctx.base(g).identity.real_name)
+    names += [ctx.ident.nickname, ctx.ident.character_name]
     codes = screen_scene(p, data, ident=ctx.ident, member_names=names)
     s = None if codes else scene_from(data)
     if s is not None and scene_renderable(p, s):

@@ -165,9 +165,9 @@ def _world_numbers(dial: str, before: int, after: int) -> list[dict]:
                  "before": gap(before), "after": gap(after), "unit": "min"}]
     if dial == "selfies":
         from leeroy_mind.selfies.ration import per_day, per_week
-        return [{"what": "photos a week across the guild, at most", "before": per_week(before),
+        return [{"what": "photos made and stocked a week across the guild, at most", "before": per_week(before),
                  "after": per_week(after), "unit": ""},
-                {"what": "photos a day, at most", "before": per_day(before),
+                {"what": "photos made and stocked a day, at most", "before": per_day(before),
                  "after": per_day(after), "unit": ""}]
     if dial == "jealousy":
         return [{"what": "envy asides an hour, at most", "before": round(2 * before / 5),

@@ -754,7 +754,7 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   rewrites a persona. Member dials: talkative, argumentative, forward/flirty
   (women only), humour amount, theorycrafter, lore nerd, drama, jealousy, party
   (drinking and smoking habits), opening up, reliability; world dials
-  chattiness, romance and jealousy override mind.toml without writing it. A
+  chattiness, romance, jealousy and selfies override mind.toml without writing it. A
   member's own value wins over group offsets, which add up. With nothing set,
   every prompt and weight is what it was (`tests/tuning/golden_prompts.json`).
   Writes and previews go through the mind's `tune` op; a preview runs only
@@ -1091,7 +1091,7 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
   owner's real name, member names, era and explicit wear). `selfies` runs after `regress` as an
   image stage: it queues a first set for each member with looks and a kind, plus any "4 more"
   asked for, and renders up to `selfie_per_night` (120) sets.
-  A woman whose stance toward the owner is lust, aged 21 or more, whose looks (hair colour and
+  A woman whose stance toward the owner is lust, aged 25 or more, whose looks (hair colour and
   style, skin, eyes, build, face details) use no word of the age guard (`selfies/style.py`
   `suggestive`), gets the lust style, and her kind is picked, not written: the request's schema
   (`LUST_SCHEMA` in `selfies/kind.py`) allows only values from fixed lists (21 settings, 28
@@ -1196,8 +1196,8 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
     woman's scene reuses the profile photo's enum picks. `snaps` (image model, after `selfies`,
     `wants_gpu`) renders what is planned, each with the identity reference, under P2's GPU
     rules (live lease ends it with no failure; his login ends the worker's whole process tree
-    before the live model's preload). Caps per night: `scenes_per_night` and `snaps_per_night`,
-    both counting tonight's units on a resumed night.
+    before the live model's preload). Caps per night: `scenes_per_night` (24) and `snaps_per_night`
+    (40), both counting tonight's units on a resumed night.
   - *Stock and ration.* The `selfies` world dial (0-10, `[talk] selfies`, default 3; console
     Tuning) sets photos a week across the guild at most: 0, 1, 2, 3, 5, 7, 10, 14, 20, 28, 40.
     The stock the night keeps is twice that (at most 40), at most 2 a member; a member without a
@@ -1208,10 +1208,11 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
     photo or looks change (`photo_changed`, `looks_changed`) or its reference is missing. Expiry
     only changes the row (`ended`): **no photo file is ever deleted** (owner, 2026-11-07), so old
     photos stay on disk, unserved.
-  - *Guild photo.* The night after a raid he led with at least one kill, at most one a week, up
-    to 16 of that raid's members with a chosen photo (at least 3) are each rendered alone at
-    their desk as a video-call tile, composited 2 x 2 up to 4 x 4 (512 px tiles, 8 px gutters),
-    1024 square. He is never in it.
+  - *Guild photo.* The night after the newest online raid with a kill (it ended within 12 hours
+    before the night began), at most one a week, up to 16 of that raid's members with a chosen
+    photo (at least 3) are each rendered alone at their desk as a video-call tile (1024 px),
+    then composited at 512 px with 8 px gutters in a grid by tile count: 1 is 1x1, 2 is 2x1, up to 4 is
+    2x2, up to 6 is 3x2, up to 9 is 3x3, up to 12 is 4x3, up to 16 is 4x4. He is never in it.
   - *Storage.* Rows in `selfie_snap` (migration 0022). Files: `selfies/<guid>/snaps/<id>.jpg`
     with `.thumb.jpg`; `selfies/guild/<id>.jpg` and `.thumb.jpg`, tiles in `selfies/guild/<id>.part/`
     while it renders. Nothing here writes `chosen.jpg`, `history/` or `sets/`.

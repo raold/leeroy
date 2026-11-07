@@ -181,15 +181,6 @@ def snap_file(data_dir, row, *, thumb: bool = False) -> Path:
     return snap(data_dir, row.guid, row.id, thumb=thumb)
 
 
-def remove_snap_files(data_dir, row) -> None:
-    """The photo, its thumbnail and (a guild photo) its tiles folder, whichever exist."""
-    for thumb in (False, True):
-        _retrying(_unlink, snap_file(data_dir, row, thumb=thumb))
-    if row.kind == "guild":
-        with suppress(FileNotFoundError):
-            shutil.rmtree(guild_tiles(data_dir, row.id), onexc=_held)
-
-
 def sync_snaps(store, data_dir, *, now: float) -> int:
     """Make the photo files agree with the rows: a ready row whose file is missing ends
     `missing`; every `*.part` folder and `*.tmp` file under snaps/ and guild/ is removed (a

@@ -226,3 +226,28 @@ def test_logs_carry_no_scene_text(h, caplog):
         run(stage(3)(ctx))
     for text in (*(v for v in SCENE_REPLY.values() if isinstance(v, str)), "hidden tale"):
         assert text not in caplog.text
+
+
+def test_the_cap_counts_the_members_already_asked_tonight_even_when_nothing_was_planned(h):
+    # controller ruling R22 (M7): a declined or refused ask used a unit of the night's cap
+    cast(h, 101, 102, 103)
+    ctx = h.ctx({"scene": [{**SCENE_REPLY, "photo": False}] * 2})
+    ctx.settings = replace(ctx.settings, scenes_per_night=2)
+    run(stage(10)(ctx))
+    assert planned(h.store, 10) == []
+    ctx = h.ctx({})
+    ctx.settings = replace(ctx.settings, scenes_per_night=2)
+    assert candidates(ctx, 10) == []
+
+
+@pytest.mark.parametrize("who", ["nickname", "character_name", "member_real_name"])
+def test_the_screen_knows_his_nickname_his_character_and_the_members_real_names(h, who):
+    # controller ruling R22 (M6), matched in any case
+    from leeroy_mind.selfies.scenes import ask_scene
+    cast(h, 101, 102)
+    ctx = h.ctx({})
+    name = {"nickname": ctx.ident.nickname, "character_name": ctx.ident.character_name,
+            "member_real_name": ctx.base(102).identity.real_name}[who]
+    ctx = h.ctx({"scene": [{**SCENE_REPLY, "activity": f"toasting {name.lower()}"}]})
+    s, codes = run(ask_scene(ctx, 101, about="an ordinary day"))
+    assert s is None and "scene.activity: member_name" in codes
