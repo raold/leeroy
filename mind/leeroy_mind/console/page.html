@@ -403,9 +403,20 @@
       <article class="panel span"><header><h3>Not built yet</h3></header><div id="dojo-later"></div></article>
     </div>
   </section>
-  <section id="tab-library" class="tab placeholder" role="tabpanel" aria-labelledby="t-library" hidden>
-    <h2>Library</h2>
-    <p>Search the scholar's library: GM commands, teleports, configuration templates, items, quests and spells. Coming soon.</p>
+  <section id="tab-library" class="tab mindtab" role="tabpanel" aria-labelledby="t-library" hidden>
+    <div id="library-banner" class="banner bad" hidden></div>
+    <div class="view-head"><div><h2>Library</h2><p>Search the scholar's library: GM commands, teleports, configuration templates, items, quests and spells.</p></div></div>
+    <form id="library-form" class="libform">
+      <label for="library-q">Search the library</label>
+      <input id="library-q" type="text" maxlength="200" autocomplete="off" spellcheck="false">
+      <label for="library-kind">Kind</label>
+      <select id="library-kind"></select>
+      <button id="library-go" class="btn primary" type="submit">Search</button>
+    </form>
+    <p id="library-stats" class="hint"></p>
+    <p id="library-status" class="note" role="status"></p>
+    <div id="library-hits"></div>
+    <div><button id="library-deeper" class="btn" type="button" hidden>Search deeper</button></div>
   </section>
   <section id="tab-mind" class="tab mindtab" role="tabpanel" aria-labelledby="t-mind" hidden>
     <div class="cards">

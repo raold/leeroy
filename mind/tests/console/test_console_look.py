@@ -134,10 +134,6 @@ TABS = ["comms", "raid", "guild", "social", "personas", "board", "calendar", "ba
         "training", "dojo", "library", "mind"]
 LABELS = ["Comms", "Raid", "Guild", "Social", "Personas", "Board", "Calendar", "Bank", "Realm",
           "Training", "Dojo", "Library", "Mind"]
-COMING = {
-    "library": "Search the scholar's library: GM commands, teleports, configuration templates, items, quests "
-               "and spells. Coming soon.",
-}
 
 
 def _page() -> str:
@@ -153,16 +149,13 @@ def test_the_thirteen_tabs_in_order():
         assert f'id="t-{t}"' in nav and f'id="tab-{t}"' in page
 
 
-def test_the_new_tabs_say_what_is_coming():
+def test_no_tab_is_a_placeholder():
     page = _page()
-    for t, copy in COMING.items():
-        m = re.search(rf'<section id="tab-{t}"([^>]*)>(.*?)</section>', page, re.S)
-        assert m, t
-        assert re.search(r'class="(?:[^"]* )?placeholder(?: [^"]*)?"', m.group(1)), t
-        assert f"<h2>{LABELS[TABS.index(t)]}</h2>" in m.group(2), t
-        assert f"<p>{copy}</p>" in m.group(2), t
-    for t in ("comms", "raid", "guild", "social", "board", "calendar", "bank", "realm", "personas", "training", "dojo", "mind"):
-        assert not re.search(rf'<section id="tab-{t}"[^>]*placeholder', page), t
+    for t in TABS:
+        m = re.search(rf'<section id="tab-{t}"([^>]*)>', page)
+        assert m and "placeholder" not in m.group(1), t
+    assert not re.search(r'class="(?:[^"]* )?placeholder(?: [^"]*)?"', page)
+    assert "Coming soon." not in page
 
 
 def test_the_strip_names_the_mode_and_the_brand():

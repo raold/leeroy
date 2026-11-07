@@ -69,6 +69,9 @@ run nothing else.
     GET  /api/bank     the Bank tab: the mind's bank snapshot (control op `bank`, read-only
                        SELECTs made by the mind) with names, item names from library.db and
                        the realm_bank ledger from mind.db; `why` says when there is no snapshot
+    GET  /api/library  the Library tab: ?q=&kind= a BM25 search of library.db read-only (no q:
+                       its stats), or with deeper=1 the mind's own semantic search (control
+                       op `library`, a read: it works with --no-control); the query is never logged
     GET  /api/training the Training tab: what `training status`, `gate`, `trials` and `cards`
                        print, from mind.db (`setup` false when it has no training tables)
     GET  /api/dojo     the Dojo tab: the dojo's own files (its layout's data and runtime roots,
@@ -111,11 +114,12 @@ from pathlib import Path
 from typing import Callable
 
 from .. import endpoint
-from . import (bankview, boardview, calendarview, dojoview, faces, feed, mindlog, netinfo,
-               personaview, raidview, realmview, selfieview, socialview, status, trainview, tuneview)
+from . import (bankview, boardview, calendarview, dojoview, faces, feed, libraryview, mindlog,
+               netinfo, personaview, raidview, realmview, selfieview, socialview, status, trainview,
+               tuneview)
 from .control import Controls, Refused
 from .httpd import Request, Response, Stream, digits, encode_json, json_response, text
-from .mindlink import BANK_S, BOARD_S, RAID_S, SAY_S, LinkError
+from .mindlink import BANK_S, BOARD_S, LIBRARY_S, RAID_S, SAY_S, LinkError
 from .voicelink import VoiceRelay
 from ..owner_say import BRIDGE_DOWN, NOT_IN_GAME
 from ..voice.rooms import ROOMS
@@ -144,6 +148,7 @@ SAY_NO_LINK = "Nothing was sent: the console has no link to the mind's control e
 SAY_SLASH = "Slash commands aren't sent from here."  # the box's words (comms/reply.mjs)
 BANK_OLD_MIND = "The running mind predates the Bank tab: restart it after the update."
 BOARD_OLD_MIND = "The running mind predates Board replies: restart it after the update."
+LIBRARY_OLD_MIND = "The running mind predates the deeper search: restart it after the update."
 OLD_OPS = "bad request: op is one of "  # a mind from before the say op names the ops it has
 
 # The page runs only the console's own files: no inline script or style, nothing from elsewhere
@@ -615,6 +620,7 @@ class ConsoleApp:
                   ("GET", "/api/bank"): self._api_bank,
                   ("GET", "/api/training"): self._api_training,
                   ("GET", "/api/dojo"): self._api_dojo,
+                  ("GET", "/api/library"): self._api_library,
                   ("GET", "/api/personas"): self._api_personas,
                   ("GET", "/api/persona"): self._api_persona,
                   ("GET", "/api/face"): self._api_face,
@@ -777,6 +783,59 @@ class ConsoleApp:
         snapshot, why = await self._bank_snapshot()
         return await self._db_view("bank", bankview.bank_view, snapshot=snapshot, why=why,
                                    data_dir=self.s.data_dir)
+
+    async def _library_deeper(self, query: str, kind: str | None) -> dict:
+        """The mind's semantic search as a library answer: hits, or deeper_why in words."""
+        out = {"setup": True, "why": None, "stats": None, "hits": [], "deeper": True,
+               "deeper_why": None}
+        if self.view.state != "running":
+            out["deeper_why"] = f"Deeper search is done by the mind, which is {self.view.state}."
+            return out
+        if self.link is None:
+            out["deeper_why"] = "Deeper search is done by the mind, and the console has no link to its control endpoint."
+            return out
+        try:
+            reply = await asyncio.to_thread(self.link.call, self._mind_pids(), "library",
+                                            {"query": query, "k": libraryview.K}, timeout=LIBRARY_S)
+        except LinkError as e:
+            words = str(e)
+            out["deeper_why"] = words[:1].upper() + words[1:] + "."
+            return out
+        if reply.get("ok") is not True:
+            error = str(reply.get("error") or "")
+            out["deeper_why"] = (LIBRARY_OLD_MIND if error.startswith(OLD_OPS)
+                                 else error[:300] or "The mind refused it.")
+            return out
+        out["hits"] = libraryview.clean_hits(reply.get("hits"), kind)
+        return out
+
+    async def _api_library(self, req: Request):
+        qs, kinds, deeper = (req.query.get(k, []) for k in ("q", "kind", "deeper"))
+        query = libraryview.clean_query(qs[0]) if len(qs) == 1 else None
+        bad = None
+        if len(qs) > 1 or (qs and query is None):
+            bad = "q: one question of 1 to %d characters" % libraryview.QUERY_MAX
+        elif len(kinds) > 1 or (kinds and kinds[0] not in libraryview.KINDS):
+            bad = "kind: one of " + ", ".join(libraryview.KINDS)
+        elif len(deeper) > 1 or (deeper and deeper[0] != "1"):
+            bad = "deeper: 1"
+        elif (kinds or deeper) and query is None:
+            bad = "q: the question to ask"
+        if bad:
+            return json_response(400, {"ok": False, "error": bad})
+        kind = kinds[0] if kinds else None
+        if deeper:
+            return json_response(200, await self._library_deeper(query, kind))
+        try:
+            view = await asyncio.to_thread(libraryview.library_view,
+                                           self.s.data_dir / "library.db", query, kind,
+                                           clock=self._clock)
+        except Exception as e:
+            log.warning("console_library_unread: error=%s", type(e).__name__)
+            return json_response(503, {"ok": False, "error": f"library.db could not be read "
+                                                             f"({type(e).__name__})"})
+        return json_response(200, view)
+
     async def _api_training(self, req: Request):
         return await self._db_view("training", trainview.training_view, now=self._clock())
 

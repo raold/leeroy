@@ -47,6 +47,13 @@ closes.
                     mind.db waiting for the Realm night, or a waiting one taken back; one at a
                     time. board_args refuses a text the store would (empty, too long for its
                     kind, not UTF-8), in the words the console shows
+    library {query[, k]}
+                    the mind's own semantic search over library.db (read-only): one embedding call
+                    on the embedding model Ollama already holds (never a chat model, never a
+                    load), refused in words while the mind is stopping, the embedder is not
+                    loaded or the library has no vectors, or another library call is running;
+                    answers up to k (1-12) hits in the console's hit shape. The query is never
+                    logged
 
 Logs carry the op, the action (for say, the channel) and the outcome, never the key, a name, a
 preview's text, a line's or a reply's."""
@@ -74,10 +81,11 @@ RAID_S = 30.0  # how long one raid action may take before the console is answere
 PREVIEW_S = 40.0  # a preview's two lines, before and after, at background priority
 SAY_S = 10.0  # one line of his, past the bridge's own 5 s ack wait
 BANK_READ_S = 15.0  # the four bank queries, before the console is answered anyway
+LIBRARY_READ_S = 15.0  # the query embedding and the ranking, before the console is answered anyway
 BANK_CACHE_S = 30.0  # a bank snapshot younger than this is answered as it is
 MAX_CONNECTIONS = 8
 REPLACE_TRIES = 40  # 2 s of 50 ms tries to move control.json over a file being read
-OPS = ("status", "stop", "raid", "tune", "selfie", "say", "bank", "board")
+OPS = ("status", "stop", "raid", "tune", "selfie", "say", "bank", "board", "library")
 RAID_ACTIONS = ("call", "form", "summon", "start", "stop", "end")
 TUNE_ACTIONS = ("status", "set", "undo", "revert", "group", "retire", "preview")
 TUNE_SHAPES = {
@@ -582,6 +590,21 @@ def board_args(args) -> dict:
     return {"action": "reply", "kind": kind, "to": to, "text": cleaned}
 
 
+def library_args(args) -> dict:
+    """A library call's arguments: {"query"} or {"query", "k"}; the query 1-200 characters once
+    its whitespace is collapsed, k 1-12 (12 when absent). The cleaned arguments."""
+    from leeroy_mind.console.libraryview import K, QUERY_MAX, clean_query
+    if not isinstance(args, dict) or "query" not in args or not set(args) <= {"query", "k"}:
+        raise BadRequest("A library search takes query, and optionally k.")
+    query = clean_query(args["query"])
+    if query is None:
+        raise BadRequest(f"A library question is 1 to {QUERY_MAX} characters.")
+    k = args.get("k", K)
+    if type(k) is not int or not 1 <= k <= K:
+        raise BadRequest(f"k is 1 to {K}.")
+    return {"query": query, "k": k}
+
+
 def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     """(op, args) from one request line; Forbidden for a wrong key, BadRequest otherwise."""
     if not line.endswith(b"\n") or len(line) > MAX_LINE:
@@ -604,7 +627,7 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     if op not in OPS:
         raise BadRequest("bad request: op is one of " + ", ".join(OPS))
     parse_args = {"raid": raid_args, "tune": tune_args, "selfie": selfie_args,
-                  "say": say_args, "board": board_args}.get(op)
+                  "say": say_args, "board": board_args, "library": library_args}.get(op)
     if parse_args is None:
         if "args" in value:
             raise BadRequest(f"bad request: {op} takes no args")
@@ -653,7 +676,7 @@ class ControlEndpoint:
 
     def __init__(self, app, cfg: ControlCfg, *, key: str | None = None,
                  read_s: float = READ_S, raid_s: float = RAID_S, say_s: float = SAY_S,
-                 bank_s: float = BANK_READ_S, clock=time.monotonic):
+                 bank_s: float = BANK_READ_S, library_s: float = LIBRARY_READ_S, clock=time.monotonic):
         self.app, self.cfg = app, cfg
         self.key = key or secrets.token_urlsafe(32)
         self.path = Path(app.data_dir) / KEY_FILE
@@ -667,7 +690,9 @@ class ControlEndpoint:
         self._selfie = asyncio.Lock()  # one photo change at a time, until its files are written
         self._say = asyncio.Lock()  # one line of his in flight
         self._board = asyncio.Lock()  # one Board reply or withdrawal at a time
+        self._library = asyncio.Lock()  # one library search in flight
         self.bank_s, self._clock = bank_s, clock
+        self.library_s = library_s
         self._bank_task: asyncio.Future | None = None  # the read in flight, shared by askers
         self._bank_cache: tuple[float, dict] | None = None
 
@@ -757,6 +782,10 @@ class ControlEndpoint:
             return reply, None
         if op == "bank":
             reply = await self.bank()
+            log_event("control_request", op=op, outcome="ok" if reply["ok"] else "refused")
+            return reply, None
+        if op == "library":
+            reply = await self.library(args)
             log_event("control_request", op=op, outcome="ok" if reply["ok"] else "refused")
             return reply, None
         reply = await {"raid": self.raid, "tune": self.tune, "selfie": self.selfie,
@@ -911,6 +940,58 @@ class ControlEndpoint:
             return {"ok": False, "error": f"The game database didn't answer ({type(e).__name__})."}
         reply = {"ok": True, "read_at": round(time.time(), 3), "guild": guild_id, **bank}
         self._bank_cache = (self._clock(), reply)
+        return reply
+
+    async def library(self, args: dict) -> dict:
+        """The mind's semantic search over library.db. Read-only and cheap, but it uses the
+        embedding model, so it only asks for one Ollama already holds (GET /api/ps): it never
+        loads a model, and uses no chat model. Errors are words; the query is never logged."""
+        from leeroy_mind.console.libraryview import hit
+        from leeroy_mind.library.search_worker import SearchBusy, SearchClosed
+        from leeroy_mind.llm.client import LLMError
+        from leeroy_mind.nightly.gpu import norm
+        if self.app.stopping:
+            return {"ok": False, "error": "the mind is stopping"}
+        worker = getattr(self.app, "library_search", None)
+        library = getattr(self.app, "library", None)
+        if worker is None or library is None:
+            return {"ok": False, "error": "The mind has no library open (library.db is missing "
+                                          "or unreadable)."}
+        if self._library.locked():
+            return {"ok": False, "error": "Another library search is running."}
+        async with self._library:
+            model = self.app.cfg.models.embedding
+            arbiter = getattr(self.app, "arbiter", None)
+            if arbiter is None:
+                return {"ok": False, "error": "The mind can't tell whether the embedding model "
+                                              "is loaded."}
+            try:
+                loaded = {norm(n) for n in await arbiter.admin.loaded_models()}
+            except (LLMError, OSError):
+                return {"ok": False, "error": "Ollama didn't say which models are loaded."}
+            if norm(model) not in loaded:
+                return {"ok": False, "error": "The embedding model is not loaded right now, so "
+                                              "the mind can't search deeper."}
+            if not library._has_vectors() or library.get_meta("embed_model") not in (None, model):
+                return {"ok": False, "error": "The library has no embeddings for this model "
+                                              "yet, so there is no deeper search."}
+            try:
+                chunks = await worker.search(args["query"], args["k"], llm=self.app.scheduler,
+                                             timeout=self.library_s)
+            except TimeoutError:
+                return {"ok": False, "error": "The embedding model is slow to answer. Try again "
+                                              "in a moment."}
+            except SearchBusy:
+                return {"ok": False, "error": "Another library search is running."}
+            except SearchClosed:
+                return {"ok": False, "error": "The library is closing."}
+            except Exception as e:  # never its text: it could carry the question
+                log_event("control_library_failed", level=logging.WARNING, error=type(e).__name__)
+                return {"ok": False, "error": f"The library search failed ({type(e).__name__})."}
+        hits = [hit(c) for c in chunks]
+        reply = {"ok": True, "hits": hits}
+        while hits and len(encode(reply)) > MAX_REPLY - 1024:  # ascii escapes can swell a reply
+            hits.pop()
         return reply
 
     async def say(self, args: dict) -> dict:

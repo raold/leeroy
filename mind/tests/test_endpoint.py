@@ -995,3 +995,149 @@ def test_a_stopping_mind_reads_nothing(tmp_path):
             assert (await ask(ep, "bank"))["error"] == "the mind is stopping"
             assert armory.calls == []
     run(go())
+
+
+# -- the library op ------------------------------------------------------------------------------
+
+LIB_SECRET = "xyzzyplugh"
+
+
+class FakeAdmin:
+    def __init__(self, loaded):
+        self.loaded, self.calls = loaded, []
+
+    async def loaded_models(self):
+        self.calls.append("ps")
+        return list(self.loaded)
+
+    async def preload(self, *a, **kw):
+        self.calls.append("preload")
+
+    async def unload(self, *a, **kw):
+        self.calls.append("unload")
+
+
+async def _library_app(app, tmp_path, *, loaded=("qwen3-embedding:0.6b",), gate=None, vectors=True):
+    from leeroy_mind.library.chunks import ChunkDraft
+    from leeroy_mind.library.core import DEFAULT_EMBED_MODEL, Library
+    from leeroy_mind.library.search_worker import LibrarySearchWorker
+    from test_library_core import ListSource
+    path = tmp_path / "library.db"
+    llm = FakeLLM(gate=gate)
+    lib = Library(path, clock=SimpleNamespace(now=lambda: 1.0))
+    lib.build([ListSource("world", [
+        ChunkDraft("c:1", "command", ".setskill", ".setskill #skill #level\nSets a weapon skill."),
+        ChunkDraft("t:1", "teleport", "Hyjal", "Mount Hyjal: .tele hyjal"),
+        ChunkDraft("i:1", "item", "Rune of Fate", "Rune of Fate: epic trinket.")])])
+    if vectors:
+        await lib.embed_pending(FakeLLM())
+    lib.close()
+    app.library = Library(path, clock=SimpleNamespace(now=lambda: 1.0), readonly=True)
+    app.library_search = LibrarySearchWorker(path, embed_model=DEFAULT_EMBED_MODEL)
+    app.scheduler = llm
+    app.cfg = SimpleNamespace(models=SimpleNamespace(embedding=DEFAULT_EMBED_MODEL))
+    app.arbiter = SimpleNamespace(admin=FakeAdmin(loaded))
+    return llm
+
+
+def test_the_library_op_takes_a_query_and_k():
+    assert parse_request(line(v=1, key=KEY, op="library", args={"query": " a  b ", "k": 3}),
+                         KEY) == ("library", {"query": "a b", "k": 3})
+    assert parse_request(line(v=1, key=KEY, op="library", args={"query": "a"}),
+                         KEY)[1] == {"query": "a", "k": 12}
+    for bad in ({"query": ""}, {"query": "a" * 201}, {"query": "a", "k": 0},
+                {"query": "a", "k": 13}, {"query": "a", "k": True}, {"query": 5},
+                {"query": "a", "extra": 1}, {}, [], None):
+        with pytest.raises(BadRequest):
+            parse_request(line(v=1, key=KEY, op="library", args=bad), KEY)
+    with pytest.raises(BadRequest):
+        parse_request(line(v=1, key=KEY, op="library"), KEY)
+
+
+def test_the_library_op_embeds_once_and_never_loads_a_model(tmp_path):
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            llm = await _library_app(app, tmp_path)
+            try:
+                llm.calls.clear()
+                reply = await ask(ep, "library", {"query": "weapon skill", "k": 5})
+                assert reply["ok"] is True and 1 <= len(reply["hits"]) <= 5
+                assert reply["hits"][0]["kind"] in ("command", "teleport", "item")
+                assert set(reply["hits"][0]) == {"id", "kind", "title", "section", "text",
+                                                 "source", "cite", "score"}
+                assert len(llm.calls) == 1 and "input" in llm.calls[0]  # one embed, no chat
+                assert app.arbiter.admin.calls == ["ps"]  # looked, never loaded or unloaded
+            finally:
+                await app.library_search.aclose()
+                app.library.close()
+    run(go())
+
+
+def test_the_library_op_says_why_it_cannot(tmp_path):
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            assert (await ask(ep, "library", {"query": "x"}))["ok"] is False  # no library at all
+            llm = await _library_app(app, tmp_path, loaded=("some-chat:latest",))
+            try:
+                llm.calls.clear()
+                r = await ask(ep, "library", {"query": "x"})
+                assert r["ok"] is False and "embedding model" in r["error"] and llm.calls == []
+                assert app.arbiter.admin.calls == ["ps"]
+                app.arbiter.admin.loaded = ["qwen3-embedding:0.6b"]
+                app.arbiter = None  # cannot tell
+                r = await ask(ep, "library", {"query": "x"})
+                assert r["ok"] is False and llm.calls == []
+                app.stopping = True
+                assert (await ask(ep, "library", {"query": "x"}))["error"] == "the mind is stopping"
+            finally:
+                await app.library_search.aclose()
+                app.library.close()
+    run(go())
+
+
+def test_the_library_op_without_vectors_says_so(tmp_path):
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            llm = await _library_app(app, tmp_path, vectors=False)
+            try:
+                r = await ask(ep, "library", {"query": "x"})
+                assert r["ok"] is False and "embeddings" in r["error"] and llm.calls == []
+            finally:
+                await app.library_search.aclose()
+                app.library.close()
+    run(go())
+
+
+def test_the_library_op_runs_one_call_at_a_time(tmp_path):
+    async def go():
+        gate = asyncio.Event()
+        async with served(tmp_path) as (app, ep):
+            await _library_app(app, tmp_path, gate=gate)
+            try:
+                first = asyncio.create_task(ask(ep, "library", {"query": "weapon"}))
+                await asyncio.sleep(0.3)
+                busy = await ask(ep, "library", {"query": "weapon"})
+                assert busy == {"ok": False, "error": "Another library search is running."}
+                gate.set()
+                assert (await first)["ok"] is True
+            finally:
+                gate.set()
+                await app.library_search.aclose()
+                app.library.close()
+    run(go())
+
+
+def test_the_library_op_never_logs_the_query(tmp_path, caplog):
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            llm = await _library_app(app, tmp_path)
+            try:
+                await ask(ep, "library", {"query": LIB_SECRET})
+                llm.fail_next(1)
+                await ask(ep, "library", {"query": LIB_SECRET})
+            finally:
+                await app.library_search.aclose()
+                app.library.close()
+    with caplog.at_level(logging.DEBUG):
+        run(go())
+    assert "control_request: op=library" in caplog.text and LIB_SECRET not in caplog.text
