@@ -427,6 +427,11 @@ class Library:
                 f"SELECT * FROM item WHERE id IN ({marks})", part)})
         return out
 
+    def item_rows(self) -> list[sqlite3.Row]:
+        """Every row of the item table (id, name, quality, ilvl, req_level), for the item links'
+        names (talk/items.py); [] before a world build."""
+        return self._all("SELECT id, name, quality, ilvl, req_level FROM item")
+
     def reference_matches(self, query: str, kinds=None, k: int = 8) -> list[Chunk]:
         """Exact installed command paths, destination names, or explicit teleport IDs.
 

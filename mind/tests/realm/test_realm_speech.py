@@ -817,3 +817,39 @@ def test_gankers_never_call_model(sapp):
         assert sapp.speech.emote_for(protocol.PvpKill(4000, 999, 1, 571, 4197)) is None
         await sapp.realm.close()
     run(go())
+
+
+# -- item links ----------------------------------------------------------------------------------
+
+def test_a_rival_line_links_its_items_and_keeps_the_plain_form(tmp_path, store, clock, monkeypatch):
+    from leeroy_mind.talk.items import ItemLinker
+    s = make_app(tmp_path, store, clock, monkeypatch,
+                 llm=FakeLLM("wts [frozen orb] x4, also {{item:6948}} cheap"))
+    s.app.engine.items = ItemLinker(lambda: [dict(id=43102, name="Frozen Orb", quality=3, ilvl=80,
+                                                  req_level=0)], clock.now)
+    place(s.store, VEX, "uc_bank")
+
+    async def go():
+        await start(s)
+        assert await speak(s) == "trade"
+        await pump(s)
+        [line] = says(s, "trade")
+        assert line.text == "wts {{item:43102}} x4, also {item:6948}} cheap"
+        [row] = lines(s.store)
+        assert row["text"] == "wts [Frozen Orb] x4, also {item:6948}} cheap"
+        await s.realm.close()
+    run(go())
+
+
+def test_a_rival_line_without_item_data_is_defused(tmp_path, store, clock, monkeypatch):
+    s = make_app(tmp_path, store, clock, monkeypatch, llm=FakeLLM("wts {{item:6948}} [frozen orb]"))
+    place(s.store, VEX, "uc_bank")
+
+    async def go():
+        await start(s)
+        assert await speak(s) == "trade"
+        await pump(s)
+        [line] = says(s, "trade")
+        assert line.text == "wts {item:6948}} [frozen orb]" == lines(s.store)[0]["text"]
+        await s.realm.close()
+    run(go())

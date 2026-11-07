@@ -7,6 +7,7 @@
 
 #include <functional>
 #include <string>
+#include <string_view>
 #include <nlohmann/json.hpp>
 
 class Player;
@@ -19,6 +20,11 @@ std::string LeeroyExecuteCommand(Leeroy::Command const& cmd);
 // checked them. false, sending nothing, for a channel without a chat type (raid warning, emote). Used by human_say
 // and owner_say.
 bool LeeroyQueueHumanChat(Player* human, Leeroy::Channel channel, std::string const& text, std::string const& toName);
+
+// World thread. What a cast member's line says: SanitizeChatText, with the mind's {{item:<id>}} placeholders as item
+// links (Leeroy::SanitizeChatTextWithItemLinks: the item template's name and quality at the speaker's level, at most
+// two, within 255 bytes). Every other '|' is gone, as before.
+std::string LeeroyBotChatText(Player const* speaker, std::string_view text);
 
 // Extension commands (P1d registers its nine here). The bridge has already checked v, id and type; the handler gets
 // the whole message, checks its own fields, runs on the world thread and returns the ack's result.

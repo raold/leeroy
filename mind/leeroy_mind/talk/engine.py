@@ -41,6 +41,7 @@ from leeroy_mind.talk.channels import choose_channel
 from leeroy_mind.talk.facts import LibraryFacts
 from leeroy_mind.talk import pastes
 from leeroy_mind.talk.guards import Guards
+from leeroy_mind.talk.items import ItemLinker
 from leeroy_mind.talk.pastes import PASTE_BURST_S, PASTE_SETTLE_S, PasteBurst, is_addon_row
 from leeroy_mind.talk.filters import holds, word_counts
 from leeroy_mind.talk.pipeline import (FOLLOW_SOURCES, KEEPER, NOBODY, NOBODY_WHO, THEIRS,
@@ -124,7 +125,8 @@ class TalkEngine(Reactions):
                  data_dir: Path, clock: Clock, rng, send: Callable[[Command], Awaitable[Ack]],
                  human_guid: int = 0,
                  on_line_sent: Callable[[int, Chat], object] | None = None, library=None,
-                 library_search=None, facts: LibraryFacts | None = None):
+                 library_search=None, facts: LibraryFacts | None = None,
+                 items: ItemLinker | None = None):
         """send is BridgeClient.send. on_line_sent(line_id, chat) is told about every line the
         mind says once it is acknowledged and stored: the app wires it to
         ThreadTracker.on_line_sent, the only way the mind's own lines reach the threads.
@@ -138,6 +140,7 @@ class TalkEngine(Reactions):
         self.scheduler, self.personas, self.cfg = scheduler, personas, cfg
         self.data_dir, self.clock, self.rng, self.send = Path(data_dir), clock, rng, send
         self.on_line_sent = on_line_sent
+        self.items = items  # the item links (talk/items.py); None: lines link nothing
         self.facts = facts if facts is not None else (
             LibraryFacts(library, scheduler, faction=lambda: faction_known(self.human.race),
                          search=library_search) if library is not None else None)

@@ -217,7 +217,7 @@ LeeroyCommandResult Say(nlohmann::json const& message)
     if (cmd->channel != "whisper" && bot->HasAura(1852)) return {false, "muted"};
     if ((cmd->channel == "say" || cmd->channel == "yell") && bot->IsSpectator())
         return {false, "spectator"};
-    std::string text = Leeroy::SanitizeChatText(cmd->text);
+    std::string text = LeeroyBotChatText(bot, cmd->text);
     if (text.empty()) return {false, "empty text"};
     if (Leeroy::StartsWithCommandPrefix(text)) return {false, "command prefix"};
     LeeroyBridgeSpeech bridge;
@@ -245,9 +245,11 @@ LeeroyCommandResult Say(nlohmann::json const& message)
         auto* channel = manager ? manager->GetJoinChannel(name, id) : nullptr;
         if (!channel || channel->GetChannelId() != id) return {false, "not_in_channel"};
         DeferChannelEvent defer(cmd->guid);
+        std::string const offered = text;
         if (!sScriptMgr->OnPlayerCanUseChat(bot, CHAT_MSG_CHANNEL, LANG_UNIVERSAL, text, channel))
             return {false, "chat refused"};
-        text = Leeroy::SanitizeChatText(text);
+        // A hook's rewrite is sanitized again, links and all: only the line's own item links keep their pipes.
+        if (text != offered) text = Leeroy::SanitizeChatText(text);
         if (text.empty()) return {false, "empty text"};
         if (Leeroy::StartsWithCommandPrefix(text)) return {false, "command prefix"};
         // Reentrant script hooks cannot grant a now-stale actor permission.

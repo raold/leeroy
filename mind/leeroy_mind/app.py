@@ -65,6 +65,7 @@ from leeroy_mind.storage.db import VEC_DIM, check_embedding_meta, checkpoint, op
 from leeroy_mind.storage.store import Store
 from leeroy_mind.talk.engine import COMMAND_CHANNELS, TalkEngine
 from leeroy_mind.talk.facts import LibraryFacts
+from leeroy_mind.talk.items import ItemLinker
 from leeroy_mind.talk.raid import RaidState
 from leeroy_mind.talk.turns import TurnKind
 from leeroy_mind.talk.world import WorldView, looks_like_bot_command
@@ -398,7 +399,8 @@ class MindApp:
             store=self.store, world=self.world, raid=self.raid, recall=self.recall,
             scheduler=self.scheduler, personas=self.personas, cfg=cfg, data_dir=self.data_dir,
             clock=self.clock, rng=self.rng, send=self._send, human_guid=self._human,
-            on_line_sent=self._on_line_sent, facts=self.facts)
+            on_line_sent=self._on_line_sent, facts=self.facts,
+            items=ItemLinker.for_library(self.library, self.clock.now))
         self.bridge = BridgeClient(cfg.bridge.host, cfg.bridge.port, self.handle,
                                    clock=self.clock, on_connection=self._on_connection)
         self._row_delivery: _RowDelivery | None = None

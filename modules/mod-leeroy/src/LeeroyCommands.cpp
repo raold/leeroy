@@ -4,6 +4,7 @@
 #include "LeeroyCastModel.h"
 #include "LeeroyEmotes.h"
 #include "LeeroyEvents.h"
+#include "LeeroyItemLinks.h"
 #include "LeeroyModule.h"
 #include "LeeroyText.h"
 
@@ -13,6 +14,7 @@
 #include "GuildMgr.h"
 #include "Log.h"
 #include "ObjectAccessor.h"
+#include "ObjectMgr.h"
 #include "Opcodes.h"
 #include "Player.h"
 #include "Playerbots.h"
@@ -107,7 +109,7 @@ std::string_view ExecuteSay(Leeroy::Command const& cmd)
     Speaker const speaker = FindSpeaker(cmd.guid);
     if (!speaker.error.empty())
         return speaker.error;
-    std::string const text = Leeroy::SanitizeChatText(cmd.text);
+    std::string const text = LeeroyBotChatText(speaker.bot, cmd.text);
     if (text.empty())
         return Leeroy::Err::EmptyText;
 
@@ -383,6 +385,17 @@ std::string LeeroyExecuteCommand(Leeroy::Command const& cmd)
             break;
     }
     return Leeroy::EncodeAck(now, cmd.id, error.empty(), error);
+}
+
+std::string LeeroyBotChatText(Player const* speaker, std::string_view text)
+{
+    Leeroy::ItemLookup const items = [](std::uint32_t id) -> std::optional<Leeroy::ItemLinkInfo> {
+        ItemTemplate const* item = sObjectMgr->GetItemTemplate(id);
+        if (!item)
+            return std::nullopt;
+        return Leeroy::ItemLinkInfo{item->Name1, item->Quality};
+    };
+    return Leeroy::SanitizeChatTextWithItemLinks(text, items, speaker ? speaker->GetLevel() : 0);
 }
 
 bool LeeroyRegisterCommand(std::string const& type, LeeroyCommandHandler handler)
