@@ -119,7 +119,8 @@ member say what they could not know.
   and General and race the guild for first kills. There are also canon
   achievements, the guild bank, a guild calendar with raid nights and
   birthdays, mail and gifts to the player, a guard against kicking the cast,
-  and the realm's own night stage of forum posts, letters and write-ups.
+  and the realm's own night stage of forum posts, letters and write-ups,
+  which answers the player's Board replies first.
 - **Nights**: once the player is offline and the GPU is idle, the mind runs the
   night. It consolidates and forgets old memories, spreads gossip and corrects
   rumours, moves relationships, feuds and mentorships along, lets jokes,
@@ -141,14 +142,24 @@ member say what they could not know.
   box that speaks in WoW as the owner,
   the raid night (its call, comp, members, loot and DKP as they happen, recent
   raids, and the raid actions guild life performs: call, form, summon,
-  start and stop the dungeon-clear run, end), the guild (roster, DKP ladder,
-  loot history, season awards, chronicle), the cast's personas (mood, stance,
-  ties, memory counts, persona versions and drift) with their tuning dials at
-  world, group and member level (a sample-line preview, and a change log with
-  undo), the mind's and the voice service's health, and their start, restart
-  and stop. It runs apart from the mind, so it can start the mind again; it
-  stops the mind cleanly, and sends raid actions and dial changes, through the
-  mind's loopback control endpoint. Away from home the owner opens it over his
+  start and stop the dungeon-clear run, end), the guild (roster, DKP ladder and
+  stats: attendance, who is due an item, what each raid handed out; loot
+  history, season awards, chronicle), the cast's personas as a wall of faces
+  or a table (mood, stance, ties, memory counts, persona versions and drift)
+  with their tuning dials at world, group and member level (a sample-line
+  preview, and a change log with undo), the guild's drama (feuds, jealousy,
+  romances, rumours, mood), the Board (the Realm's forum, the letters in the
+  owner's mailbox and event write-ups, where he can reply to a post or a letter
+  and the guild answers that night), the guild calendar, the guild bank (read
+  for the console by the mind, so the database password stays with the mind),
+  the Realm (rival guilds, the race for first kills, poaching, Trade lines), the
+  training ground's fights, gate, trials and cards, the dojo (read from its own
+  files), a search of the game library (text first, the mind's semantic search
+  as a fallback), the game server and who is online, the mind's and the voice
+  service's health, and their start, restart and stop. It runs apart from the
+  mind, so it can start the mind again; it stops the mind cleanly, and sends
+  raid actions, dial changes and Board replies, through the mind's loopback
+  control endpoint. Away from home the owner opens it over his
   tailnet (`tailscale serve` to `https://<pc>.<tailnet>.ts.net`, never Funnel)
   with a bookmarked stable key, rotated with `console rotate-key` if a device
   is lost; a logon task (`scripts/ac-console-schedule.ps1`) keeps it running.
