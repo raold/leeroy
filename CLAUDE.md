@@ -868,10 +868,15 @@ Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
   reserving anyone: the action journal settles that as refused, holding nobody, and each start
   reads again a stored unknown whose only evidence is such a refusal. The same goes for a
   rearm, `rpg_status`, `equip` or `set_profession` acked and then failed at one body's step for a
-  fence or a `busy:` reason such as `busy:combat` (`STEP_REFUSALS`): native refused that body
+  fence or a `busy:` reason such as `busy:combat` (`STEP_REFUSALS`), or a rearm for
+  `weapon_record_unavailable` (`KIND_STEP_REFUSALS`): native refused that body
   before changing it and released them all, so it settles `step_refused` and Recall goes on to
-  the defaults. Any other failed job (`operation_transition_unknown`, a walk, leave, duel or
-  grow) stays unknown. A root that settles unknown or conflict logs a warning in mind.log,
+  the defaults. Native keeps the weapon records in memory, so a worldserver start empties them
+  until the 60 s poll finds each body online and free; a rearm now records an armed body that
+  has none, as that poll would. Any other failed job (`operation_transition_unknown`, a walk,
+  leave, duel or grow) stays unknown: a leave's `wg_private_state_unavailable` (a member in
+  Wintergrasp) is a Refuse only until that leave has changed a body, and its job does not say
+  which. A root that settles unknown or conflict logs a warning in mind.log,
   `realm_action_unknown` (or `realm_action_conflict`) with its id, kind, reason, native's reason
   and member count, no names: from then on it holds its manifest.
 - **Rulings.** His raid holds exactly his raid: waiting for the call, called and forming hold
