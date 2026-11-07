@@ -9,7 +9,7 @@ import pytest
 from leeroy_mind.arc.state import play_days, play_days_after
 from leeroy_mind.nightly.knowledge import learn
 from leeroy_mind.nightly.romance import (can_advance, jealousy_level, jealousy_next,
-    jealousy_rows, known_acts, picture_available, stage_jealousy, stage_romance,
+    jealousy_rows, known_acts, picture_available, set_pictures_available, stage_jealousy, stage_romance,
     strong_evidence)
 from leeroy_mind.nightly.store import ledger_add
 from leeroy_mind.storage.rows import ROMANCE_STAGES
@@ -223,8 +223,7 @@ def test_the_picture_stage_is_skipped_until_p4(h):
     assert [stages[101] for _, stages in nights(h, [101], 3)] == ["voice", "voice", "confession"]
     assert [r[0] for r in h.store.conn.execute(
         "SELECT reason FROM rel_delta WHERE a=101 AND reason LIKE 'voice->%'")] == ["voice->confession"]
-    with h.store.transaction():  # P4's table, as far as the ladder cares
-        h.store.conn.execute("CREATE TABLE selfie_snap (id INTEGER PRIMARY KEY)")
+    set_pictures_available(True)  # the photo sender attached
     assert picture_available(h.store)
     arc_woman(h, 102, "drawn", stage="voice")
     h.store.add_rel_delta(102, 1, "romance_stage", 1, "late_nights->voice", [], h.clock.now(),
@@ -643,3 +642,11 @@ def test_noticed_refs_reads_the_noticed_stages_only(h):
     window = h.ctx().window
     assert _noticed_refs(h.store, 101, 1, window, []) == [
         "memory:2", "memory:3", "away:4", "arc:101:after:2026-10-29"]
+
+
+def test_with_the_photo_sender_attached_the_ladder_visits_picture(h):
+    set_pictures_available(True)
+    arc_woman(h, 101, "drawn")
+    log = nights(h, [101], 26)
+    assert visited(log, 101) == ["notices", "banter", "whispers", "late_nights", "voice",
+                                 "picture", "confession", "planning"]

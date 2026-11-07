@@ -632,6 +632,9 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   10 minutes (`RELEASED_KEEP_ALIVE` in `nightly/gpu.py`), so a relog finds it
   loaded and an idle evening frees its 16 GB. The embedding model (1 GB) stays
   pinned: the mind embeds through the night.
+- Situational photos (`[selfies] snaps`, the `selfies` world dial) are made and stocked at night
+  from members' days and the raid nights (see the selfie worker); sending them waits for the
+  guild Discord's photo phase, so the talk is unchanged.
 - Guild life (raid nights, DKP and loot, offline raids, rank, spec and gear
   upkeep) runs with built-in defaults; `[guild]` and `[dkp]` tables in
   `mind.toml` override them.
@@ -751,7 +754,7 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   rewrites a persona. Member dials: talkative, argumentative, forward/flirty
   (women only), humour amount, theorycrafter, lore nerd, drama, jealousy, party
   (drinking and smoking habits), opening up, reliability; world dials
-  chattiness, romance and jealousy override mind.toml without writing it. A
+  chattiness, romance, jealousy and selfies override mind.toml without writing it. A
   member's own value wins over group offsets, which add up. With nothing set,
   every prompt and weight is what it was (`tests/tuning/golden_prompts.json`).
   Writes and previews go through the mind's `tune` op; a preview runs only
@@ -1088,7 +1091,7 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
   owner's real name, member names, era and explicit wear). `selfies` runs after `regress` as an
   image stage: it queues a first set for each member with looks and a kind, plus any "4 more"
   asked for, and renders up to `selfie_per_night` (120) sets.
-  A woman whose stance toward the owner is lust, aged 21 or more, whose looks (hair colour and
+  A woman whose stance toward the owner is lust, aged 25 or more, whose looks (hair colour and
   style, skin, eyes, build, face details) use no word of the age guard (`selfies/style.py`
   `suggestive`), gets the lust style, and her kind is picked, not written: the request's schema
   (`LUST_SCHEMA` in `selfies/kind.py`) allows only values from fixed lists (21 settings, 28
@@ -1170,9 +1173,64 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
   (`FaceCache.forgetKey`) instead of after its 60 s. `leeroy_mind selfies status`
   prints the queue and the latest night's stage records, and `selfies try [--guid N | --limit N]`
   renders a trial set into `scratch\selfies-try` of the data dir with the mind stopped.
+- **Situational photos and the guild photo (P4, night side only).** Off by default: they need
+  `[selfies] enabled = true` and `snaps = true` (also `identity_scale`, 0.6, and
+  `identity_min_free_gib`, 13.5, the identity worker's VRAM floor), else no stage is added
+  (`selfies_snaps_on|off|need_enabled` logs). **Photos are made and stocked; SENDING them
+  arrives with the guild Discord's photo phase (D3).** Nothing in WoW, the console or the
+  members' talk changes, and the romance "picture" stage stays off until a sender exists.
+  - *Identity adapter.* The worker keeps a member's face in a new scene with IP-Adapter Plus Face
+    for SDXL (`h94/IP-Adapter` at revision `018e402774aeeddd60609b4ecdb7e298259dc729`, Apache-2.0,
+    with the OpenCLIP ViT-H/14 laion2B image encoder, MIT; about 3.4 GB), pinned as
+    `MODEL_PINS["ipadapter"]`. The reference is a square crop of her chosen photo
+    (`history/<pick>.jpg`, never `chosen.jpg`) cut by her photo kind's framing. The worker runs
+    with `--identity` (the mind passes it for the snaps stage and `selfies try --snaps`); it is
+    fetched only by `fetch-models` (`--only ipadapter`), and `smoke --identity --ref FILE`
+    measures its VRAM before `identity_min_free_gib` is trusted. Doctor notes it as not
+    fetched with snaps off and FAILs with snaps on. Situational photos are 832 x 1216 portraits
+    (thumbnail 384 px); the NSFW gate and three seeds per slot are P2's.
+  - *Stages.* `scenes` (reflection model, after `life`) plans: the reflection model writes a
+    scene for a member from tonight's life beat, her card birthday tomorrow or an ordinary day,
+    and may decline; the screen (`selfies/scene.py`) refuses looks changes, other people,
+    names, likeness, era, minors, explicit wear and undressing or bathing contexts, and a lust
+    woman's scene reuses the profile photo's enum picks. `snaps` (image model, after `selfies`,
+    `wants_gpu`) renders what is planned, each with the identity reference, under P2's GPU
+    rules (live lease ends it with no failure; his login ends the worker's whole process tree
+    before the live model's preload). Caps per night: `scenes_per_night` (24) and `snaps_per_night`
+    (40), both counting tonight's units on a resumed night.
+  - *Stock and ration.* The `selfies` world dial (0-10, `[talk] selfies`, default 3; console
+    Tuning) sets photos a week across the guild at most: 0, 1, 2, 3, 5, 7, 10, 14, 20, 28, 40.
+    The stock the night keeps is twice that (at most 40), at most 2 a member; a member without a
+    chosen profile photo gets none; birthdays first, then tonight's beats, then a draw by send
+    weight. Dial 0 plans nothing.
+  - *Expiry.* A photo is wanted from 06:00 after its night for 3 days (life, guild), 5
+    (everyday) or 18 hours (birthday), in its time-of-day phases. It also expires when her chosen
+    photo or looks change (`photo_changed`, `looks_changed`) or its reference is missing. Expiry
+    only changes the row (`ended`): **no photo file is ever deleted** (owner, 2026-11-07), so old
+    photos stay on disk, unserved.
+  - *Guild photo.* The night after the newest online raid with a kill (it ended within 12 hours
+    before the night began), at most one a week, up to 16 of that raid's members with a chosen
+    photo (at least 3) are each rendered alone at their desk as a video-call tile (1024 px),
+    then composited at 512 px with 8 px gutters in a grid by tile count: 1 is 1x1, 2 is 2x1, up to 4 is
+    2x2, up to 6 is 3x2, up to 9 is 3x3, up to 12 is 4x3, up to 16 is 4x4. He is never in it.
+  - *Storage.* Rows in `selfie_snap` (migration 0022). Files: `selfies/<guid>/snaps/<id>.jpg`
+    with `.thumb.jpg`; `selfies/guild/<id>.jpg` and `.thumb.jpg`, tiles in `selfies/guild/<id>.part/`
+    while it renders. Nothing here writes `chosen.jpg`, `history/` or `sets/`.
+  - *Commands.* `selfies status` also prints the snap counts (planned, ready, sent_week,
+    expired_week) and the `scenes`/`snaps` stage records. `selfies try --snaps [--guid N |
+    --limit N] [--guild]` (mind stopped) renders one situational photo each with the member's
+    face, and with `--guild` one grid, into `scratch\selfies-try\snaps\`; members with no
+    chosen photo (`no_photo`) or no photo kind (`no_kind`) are skipped and counted. The mind's
+    doctor reports the identity adapter's state beside the worker's checks.
 - **Content limits.** Adults only, clothed and non-explicit, no real person's likeness, and no
   person's name ever reaches a prompt. Logs hold ids, counts, scores and timings, never a prompt
   or persona text.
+- **Snaps rehearsal.** `mind/tests/selfies/test_snaps_rehearsal.py` drives a real `MindApp` with
+  snaps on and the fake worker in identity mode through a night (three situational photos and one
+  guild photo with files on disk, `selfies status` counts), then a second night whose worker
+  hangs: his login leaves the worker's pids dead before the preload and no partial photo, a
+  planned photo of a replaced profile photo expires unrendered, and stopping the app removes
+  `control.json` and closes its ports.
 - **Rehearsal.** `mind/tests/selfies/test_selfies_rehearsal.py` drives a real `MindApp`, its
   control endpoint and a real console over loopback with the FakeBridge, FakeLLM and a fake
   worker, through two nights and his login. A rehearsal against a copy of the live database

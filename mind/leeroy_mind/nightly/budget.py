@@ -77,6 +77,9 @@ UNIT_CALLS: dict[str, dict[str, float]] = {
     # a set's four images of about 6 s hold the whole card, so both default slots: 48
     # slot-seconds, in 20 s JSON equivalents
     "selfies": {"json": 2.4},
+    "scenes": {"json": 1},                     # one scene call a situational photo: 20 s
+    # one image of about 6 s holds both slots: 12 s, in 20 s JSON equivalents
+    "snaps": {"json": 0.6},
     # Sundays: 36 probes, about 25 quiz questions and 80 interview asks, then the quiz judge,
     # consistency and distinctiveness: about 2,400 s
     "eval": {"live": 141, "json": 77},
@@ -92,7 +95,7 @@ MEASURE_MIN = 3     # ...once there are 3 of them
 COUNTERS: dict[str, Callable[["NightContext"], int]] = {}
 # Optional extensions must be admitted on the particular runner before budgeting.
 # Core counters may belong to substages, so their historical counting is unchanged.
-EXTENSION_STAGES = frozenset({"coach", "realm", "photo", "selfies"})
+EXTENSION_STAGES = frozenset({"coach", "realm", "photo", "selfies", "scenes", "snaps"})
 
 
 def register_counter(stage: str, fn: Callable[["NightContext"], int]) -> None:
@@ -210,6 +213,8 @@ class Degrade(NamedTuple):
 # follow the coach: a set left queued is rendered the next night.
 DEGRADE = (
     Degrade("realm", (Cut("realm_units", "fit", 0),)),
+    Degrade("scenes", (Cut("scenes_per_night", "fit", 0),)),
+    Degrade("snaps", (Cut("snaps_per_night", "fit", 0),)),
     Degrade("coach", (Cut("coach_units", "fit", 5),)),
     Degrade("selfies", (Cut("selfie_per_night", "fit", 10),)),
     Degrade("encounters", (Cut("encounters_per_night", "fit", 20),)),

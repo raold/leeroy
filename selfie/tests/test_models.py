@@ -32,8 +32,20 @@ def test_each_pin_names_a_full_commit_a_licence_and_its_files():
     assert all(".fp16." in f for f in MODEL_PINS["realvisxl"].files if f.endswith(".safetensors"))
 
 
+def test_the_ipadapter_pin_names_its_commit_licence_and_three_files():
+    pin = MODEL_PINS["ipadapter"]
+    assert (pin.repo, pin.revision, pin.licence) == (
+        "h94/IP-Adapter", "018e402774aeeddd60609b4ecdb7e298259dc729", "Apache-2.0")
+    assert pin.title == "IP-Adapter Plus Face (SDXL) with its ViT-H image encoder"
+    assert pin.files == ("models/image_encoder/config.json",
+                         "models/image_encoder/model.safetensors",
+                         "sdxl_models/ip-adapter-plus-face_sdxl_vit-h.safetensors")
+
+
 def test_the_pins_name_the_files_the_loaders_read():
-    assert set(MODEL_PINS) == {"realvisxl", "nsfw"}
+    assert set(MODEL_PINS) == {"realvisxl", "nsfw", "ipadapter"}
+    assert models.BASE_PINS == ("realvisxl", "nsfw")
+    assert models.IDENTITY_PINS == ("ipadapter",)
     assert MODEL_PINS["nsfw"].files == ("config.json", "model.safetensors",
                                         "preprocessor_config.json")
     assert len(MODEL_PINS["realvisxl"].files) == 19
@@ -86,6 +98,26 @@ def test_fetch_downloads_the_pinned_files_only_and_checks_them(tmp_path, monkeyp
     assert repo == pin.repo and kw["revision"] == pin.revision and kw["token"] is False
     assert kw["allow_patterns"] == list(pin.files)
     assert lines[0][0] is True and said
+
+
+def test_fetch_with_no_names_fetches_every_pin_the_adapter_too(tmp_path, monkeypatch):
+    monkeypatch.setenv("HF_HOME", "unset")  # fetch_models sets it; this restores it after
+    by_repo = {pin.repo: name for name, pin in MODEL_PINS.items()}
+    fetched = []
+
+    def fake(repo, **kw):
+        fetched.append(by_repo[repo])
+        put(tmp_path, by_repo[repo])
+    monkeypatch.setattr(models, "_snapshot_download", fake)
+    fetch_models(tmp_path, None, say=lambda text: None)
+    assert fetched == ["realvisxl", "nsfw", "ipadapter"]
+
+
+def test_the_cli_fetch_without_only_asks_for_every_pin(monkeypatch):
+    asked = []
+    monkeypatch.setattr(models, "fetch_models", lambda data, only: asked.append(only) or [])
+    from leeroy_selfie.__main__ import main
+    assert main(["fetch-models"]) == 0 and asked == [None]  # None: every pin, as above
 
 
 def test_fetch_raises_when_what_arrived_is_wrong(tmp_path, monkeypatch):

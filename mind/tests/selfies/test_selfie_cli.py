@@ -9,11 +9,14 @@ import pytest
 from leeroy_mind.app import acquire_instance_lock
 from leeroy_mind.config import load_config
 from leeroy_mind.personas.io import load_persona, save_persona
-from leeroy_mind.selfies import cli
+from leeroy_mind.selfies import cli, files
 from leeroy_mind.testing.fake_llm import FakeLLM
 from leeroy_mind.wow import CLASSES, RACES
+from leeroy_mind.selfies.store import pick as pick_photo
 from nightly.conftest import scripted
-from selfies.fakes import PHOTO, fake_command, mind_app
+from nightly.test_night_scenes import SCENE_REPLY
+from selfies.fakes import (PHOTO, fake_command, mind_app, planned_snap, ready, ready_snap,
+                         tagged_jpeg)
 
 
 @pytest.fixture
@@ -141,3 +144,125 @@ def test_try_drops_what_loaded_beside_its_worker_once_the_worker_is_gone(root, c
                             make_llm=lambda cfg: llm(root))
     assert code == 0 and json.loads(capsys.readouterr().out)["sets"] == 1
     assert seen == ["room", "stopped", "room"]
+
+
+def snap_llm(root, scenes=None):
+    cfg = load_config(root / "mind.toml")
+    return FakeLLM(script=scripted({"scene": scenes if scenes is not None else [SCENE_REPLY] * 4}),
+                   models={cfg.models.live, cfg.models.embedding, cfg.models.reflection})
+
+
+@pytest.fixture
+def calls():
+    return []
+
+
+@pytest.fixture
+def snaproot(tmp_path, monkeypatch, calls):
+    """101 and 102 with a chosen photo (a planned and a ready snap among them), 103 without; the
+    fake worker in identity mode."""
+    root = tmp_path / "mind-data"
+    root.mkdir()
+
+    def prepare(store):
+        for guid in (101, 102):
+            ready(store, root, guid, 1, now=1.0)
+            pick = pick_photo(store, guid, 1, 0, source="console", now=2.0)
+            hist = files.history(root, guid, pick)
+            hist.parent.mkdir(parents=True, exist_ok=True)
+            hist.write_bytes(tagged_jpeg(f"history/{guid}"))
+        planned_snap(store, 101)
+        ready_snap(store, root, 102)
+    mind_app(root, prepare=prepare).store.close()
+    cmd, env = fake_command(tmp_path, FAKE_SELFIE_IDENTITY="1",
+                            FAKE_SELFIE_LOG=str(tmp_path / "log"))
+    monkeypatch.setattr(cli, "worker_command",
+                        lambda cfg, identity=False: calls.append(identity) or cmd)
+    monkeypatch.setattr(cli, "worker_env", lambda cfg: env)
+    return root
+
+
+def test_status_counts_snaps_without_migrating(snaproot, capsys):
+    before = (snaproot / "mind.db").read_bytes()
+    assert cli.selfies_main(["--data-dir", str(snaproot), "status"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["snaps"] == {"planned": 1, "ready": 1, "sent_week": 0, "expired_week": 0}
+    assert (snaproot / "mind.db").read_bytes() == before
+
+
+def test_try_snaps_renders_beside_the_reference_into_scratch_and_writes_nothing_live(
+        snaproot, capsys, tmp_path, calls):
+    live = (snaproot / "mind.db").read_bytes()
+    picks = {101: 1, 102: 2}
+    hist = {g: files.history(snaproot, g, picks[g]).read_bytes() for g in (101, 102)}
+    code = cli.selfies_main(["--data-dir", str(snaproot), "try", "--snaps"],
+                            make_llm=lambda cfg: snap_llm(snaproot))
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0 and out["rendered"] == 2 and out["members"] == 2
+    assert out["no_photo"] == 1 and out["flagged"] == 0 and out["seconds_per_image"] > 0
+    base = snaproot / "scratch" / "selfies-try" / "snaps"
+    assert out["path"] == str(base)
+    for guid in (101, 102):
+        assert (base / str(guid) / "snap.jpg").is_file()
+        assert (base / str(guid) / "ref.jpg").read_bytes() == hist[guid]
+        assert files.history(snaproot, guid, picks[guid]).read_bytes() == hist[guid]
+    assert not (base / "guild.jpg").exists()
+    assert calls == [True]
+    assert " identity " in (tmp_path / "log").read_text()
+    assert (snaproot / "mind.db").read_bytes() == live
+    assert not list((snaproot / "selfies" / "101").glob("snaps*"))
+
+
+def test_try_snaps_guild_makes_one_grid(snaproot, capsys):
+    code = cli.selfies_main(["--data-dir", str(snaproot), "try", "--snaps", "--guild"],
+                            make_llm=lambda cfg: snap_llm(snaproot))
+    assert code == 0 and json.loads(capsys.readouterr().out)["rendered"] == 2
+    assert (snaproot / "scratch" / "selfies-try" / "snaps" / "guild.jpg").is_file()
+
+
+def test_try_snaps_skips_members_without_a_chosen_photo(snaproot, capsys):
+    code = cli.selfies_main(["--data-dir", str(snaproot), "try", "--snaps", "--guid", "103"],
+                            make_llm=lambda cfg: snap_llm(snaproot))
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1 and out["members"] == 0 and out["no_photo"] == 1 and out["rendered"] == 0
+    assert not list((snaproot / "scratch" / "selfies-try" / "snaps").glob("*/snap.jpg"))
+
+
+def test_try_snaps_exits_1_when_a_scene_is_declined(snaproot, capsys):
+    code = cli.selfies_main(["--data-dir", str(snaproot), "try", "--snaps"],
+                            make_llm=lambda cfg: snap_llm(snaproot, [{**SCENE_REPLY, "photo": False}] * 2))
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1 and out["rendered"] == 0 and out["members"] == 2
+
+
+def test_try_snaps_refuses_while_the_mind_holds_its_lock(snaproot, capsys):
+    with acquire_instance_lock(snaproot):
+        code = cli.selfies_main(["--data-dir", str(snaproot), "try", "--snaps"],
+                                make_llm=lambda cfg: snap_llm(snaproot))
+    assert code == 1 and "mind service is running" in capsys.readouterr().out
+    assert not (snaproot / "scratch" / "selfies-try").exists()
+
+
+def test_try_snaps_skips_and_counts_a_member_with_a_pick_but_no_photo_kind(snaproot, capsys):
+    from leeroy_mind.storage.db import open_db
+    from leeroy_mind.storage.store import Store
+    from leeroy_mind.testing.fake_clock import FakeClock
+    from selfies.fakes import CLOCK
+    store = Store(open_db(snaproot / "mind.db"), clock=FakeClock(CLOCK))
+    try:
+        p = load_persona(store, 102)
+        save_persona(store, replace(p, photo=None), source="seed", ts=1000.0,
+                     race=RACES[1], class_name=CLASSES[1])
+    finally:
+        store.close()
+    code = cli.selfies_main(["--data-dir", str(snaproot), "try", "--snaps"],
+                            make_llm=lambda cfg: snap_llm(snaproot))
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0 and out["members"] == 1 and out["rendered"] == 1
+    assert out["no_kind"] == 1 and out["no_photo"] == 1
+    base = snaproot / "scratch" / "selfies-try" / "snaps"
+    assert (base / "101" / "snap.jpg").is_file() and not (base / "102").exists()
+    code = cli.selfies_main(["--data-dir", str(snaproot), "try", "--snaps", "--guid", "102"],
+                            make_llm=lambda cfg: snap_llm(snaproot))
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1 and out["members"] == 0 and out["no_kind"] == 1

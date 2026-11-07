@@ -46,6 +46,7 @@ from . import files
 from .config import SelfieCfg, worker_command, worker_env
 from .kind import chosen_style
 from .style import PLAIN
+from .slot import SetRefused, TRIES, render_slot
 from .prompt import HELD, LUST_HELD, PromptSpec, build_prompt, renderable
 from .store import Candidate, ensure_first_sets, mark_ready, needing_first, queued_sets
 from .worker import RenderRequest, SelfieWorker, WorkerError, to_the_end
@@ -55,14 +56,9 @@ if TYPE_CHECKING:
 
 STAGE = "selfies"
 SET_SIZE = 4
-TRIES = 3  # seeds a slot, before a flagged slot refuses the set
 THUMB_PX = 512
 CONTENDED = 2  # worker failures in a row that end the stage for the night
 QUEUE = "queue"
-
-
-class SetRefused(Exception):
-    """Every seed of one slot was flagged by the NSFW check: the set stays queued."""
 
 
 class RoomFailed(WorkerError):
@@ -119,32 +115,26 @@ async def _slot(worker, spec: PromptSpec, out_dir: Path, idx: int, *, night: str
                 set_no: int, cfg: SelfieCfg, make_room: Callable[[], Awaitable[None]],
                 leases: Callable[[], frozenset[str]] | None) -> Candidate:
     out, thumb = out_dir / f"c{idx}.jpg", out_dir / f"c{idx}.thumb.jpg"
-    roomed = False
-    for attempt in range(TRIES):
-        seed = seed_for(night, guid, set_no, idx, attempt)
-        req = RenderRequest(spec.phrases, spec.negative, seed, cfg.steps, cfg.guidance, cfg.size,
-                            out, thumb, THUMB_PX, cfg.nsfw_max)
-        rid = f"{guid}:{set_no}:{idx}:{attempt}"
+
+    def request(attempt: int) -> RenderRequest:
         _unleased(leases)
-        try:
-            got = await worker.render(req, rid=rid)
-        except WorkerError as e:
-            if e.reason != "oom" or roomed:
-                raise
-            roomed = True
-            await _room(make_room, night=night, guid=guid, set_no=set_no, idx=idx)
-            _unleased(leases)
-            got = await worker.render(req, rid=rid)
-        if not got.flagged and got.nsfw < cfg.nsfw_max:
-            if not (out.is_file() and thumb.is_file()):  # a ready set never points at nothing
-                raise WorkerError("unwritten")
-            return Candidate(idx, seed, attempt + 1, got.nsfw, got.prompt)
-        for path in (out, thumb):  # never kept, whatever a worker wrote
-            with suppress(FileNotFoundError):
-                path.unlink()
-        log("selfies_flagged", night=night, guid=guid, set=set_no, idx=idx, attempt=attempt,
-            nsfw=round(got.nsfw, 3))
-    raise SetRefused(f"slot {idx}: {TRIES} seeds flagged")
+        return RenderRequest(spec.phrases, spec.negative,
+                             seed_for(night, guid, set_no, idx, attempt), cfg.steps, cfg.guidance,
+                             cfg.size, out, thumb, THUMB_PX, cfg.nsfw_max)
+
+    async def room() -> None:
+        await _room(make_room, night=night, guid=guid, set_no=set_no, idx=idx)
+        _unleased(leases)
+    try:
+        got, attempts = await render_slot(
+            worker, request, rid=lambda attempt: f"{guid}:{set_no}:{idx}:{attempt}",
+            make_room=room)
+    except SetRefused:
+        raise SetRefused(f"slot {idx}: {TRIES} seeds flagged") from None
+    if not (out.is_file() and thumb.is_file()):  # a ready set never points at nothing
+        raise WorkerError("unwritten")
+    return Candidate(idx, seed_for(night, guid, set_no, idx, attempts - 1), attempts, got.nsfw,
+                     got.prompt)
 
 
 def _stored(ctx: "NightContext", guid: int) -> Persona | None:

@@ -40,7 +40,9 @@ def cmd_doctor(args) -> int:
     if sys.version_info[:2] != (3, 12):
         lines.append((False, f"python {sys.version_info.major}.{sys.version_info.minor}, "
                              "not the 3.12 this package needs"))
-    for name in models.MODEL_PINS:
+    for name in models.BASE_PINS:
+        lines += models.check(root, name, quick=args.quick)
+    for name in models.IDENTITY_PINS:  # only an --identity worker needs these: not fetched is a note
         lines += models.check(root, name, quick=args.quick)
     if not args.quick:
         lines += _gpu_lines()
@@ -66,6 +68,7 @@ SMOKE_PHRASES = [["photo of a woman in her thirties", 0], ["short auburn hair", 
                  ["green eyes", 1], ["denim jacket", 2], ["smiling", 2],
                  ["standing in a sunlit kitchen", 3], ["natural light", 4]]
 SMOKE_NEGATIVE = [["child, teenager", 0], ["blurry", 1], ["deformed hands", 2]]
+SMOKE_SCALE = 0.6  # the mind's identity_scale default
 
 
 def cmd_worker(args) -> int:
@@ -74,8 +77,8 @@ def cmd_worker(args) -> int:
     stdin = worker.claim_stdin()
     code = worker.serve(
         lambda: render.load(Path(args.data) if args.data else data_dir(),
-                            min_free_gib=args.min_free_gib),
-        stdin=stdin, out=out, on_eof=lambda: os._exit(0))
+                            min_free_gib=args.min_free_gib, identity=args.identity),
+        stdin=stdin, out=out, on_eof=lambda: os._exit(0), identity=args.identity)
     # the reader thread still holds stdin's lock; a normal return would crash in finalization
     out.flush()
     sys.stderr.flush()
@@ -83,20 +86,29 @@ def cmd_worker(args) -> int:
 
 
 def cmd_smoke(args) -> int:
+    """One invented person; with --identity a portrait conditioned on --ref's whole image, so
+    the release can measure the identity worker's VRAM (peak_gib)."""
     from . import render
-    from .protocol import Render
+    from .protocol import Identity, Render, RenderFailed
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     t0 = time.perf_counter()
     try:
-        renderer = render.load(data_dir(), min_free_gib=args.min_free_gib)
+        renderer = render.load(data_dir(), min_free_gib=args.min_free_gib,
+                               identity=args.identity)
     except render.ReadyError as e:
         return _fail("smoke", e)
     load_s = time.perf_counter() - t0
+    identity = (Identity(str(Path(args.ref).resolve()), (0.0, 0.0, 1.0, 1.0), SMOKE_SCALE)
+                if args.identity else None)
     req = Render("smoke", tuple(map(tuple, SMOKE_PHRASES)), tuple(map(tuple, SMOKE_NEGATIVE)),
                  1234, 30, 5.0, 1024, str(out_dir.resolve() / "smoke.jpg"),
-                 str(out_dir.resolve() / "smoke-thumb.jpg"), 256, 0.2)
-    r = renderer.render(req)
+                 str(out_dir.resolve() / "smoke-thumb.jpg"), 256, 0.2, identity,
+                 "portrait" if identity else "square")
+    try:
+        r = renderer.render(req)
+    except RenderFailed as e:
+        return _fail("smoke", e)
     print(json.dumps({"load_s": round(load_s, 1), "seconds": r["seconds"],
                       "peak_gib": r["peak_gib"], "nsfw": r["nsfw"], "tokens": r["tokens"]}))
     return 1 if r["flagged"] else 0
@@ -123,12 +135,19 @@ def main(argv: list[str] | None = None) -> int:
     p_worker.add_argument("--data", metavar="DIR", help="the data dir with the models")
     p_worker.add_argument("--min-free-gib", type=float, required=True,
                           help="refuse to load with less free VRAM")
+    p_worker.add_argument("--identity", action="store_true",
+                          help="load the identity adapter and serve renders that carry one")
     p_worker.set_defaults(func=cmd_worker)
     p_smoke = sub.add_parser("smoke", help="render one invented person into --out")
     p_smoke.add_argument("--out", metavar="DIR", required=True)
     p_smoke.add_argument("--min-free-gib", type=float, default=8.0)
+    p_smoke.add_argument("--identity", action="store_true",
+                         help="load the identity adapter and render a portrait with --ref's face")
+    p_smoke.add_argument("--ref", metavar="FILE", help="the reference .jpg for --identity")
     p_smoke.set_defaults(func=cmd_smoke)
     args = parser.parse_args(argv)
+    if args.cmd == "smoke" and args.identity != (args.ref is not None):
+        p_smoke.error("--identity and --ref go together")
     return args.func(args)
 
 

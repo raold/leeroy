@@ -10,10 +10,17 @@ FAKE_SELFIE_STARTS       a file it appends "spawn <pid>" to when it starts and "
 FAKE_SELFIE_FLAG_SEEDS   a comma list of seeds whose renders come back flagged (nothing written)
 FAKE_SELFIE_OOM          how many renders answer `oom` before the rest succeed
 FAKE_SELFIE_HANG         renders never answer
+FAKE_SELFIE_HANG_AFTER   renders after the first n never answer
 FAKE_SELFIE_DIE          the worker exits (3) when a render arrives, without an answer
 FAKE_SELFIE_CHILD        start a sleeping child process before ready
 FAKE_SELFIE_PIDS         a file it writes {"pid", "child"} to before ready
-FAKE_SELFIE_LOG          a file it appends "<id> <seed>" to for each render request
+FAKE_SELFIE_LOG          a file it appends "<id> <seed>" (plus " identity <ref>" for an identity render) to for each
+                         render request and "<id> grid <tile count>" for each grid
+FAKE_SELFIE_IDENTITY     ready says identity true, and a render without an identity answers
+                         bad_request (a plain worker answers identity_unavailable to one with)
+
+A grid writes JPEG to `out` and `thumb` and answers the canvas size from the real worker's layout
+(selfie/leeroy_selfie/grid.py); a tile that is not a file answers missing_tile.
 
 A render it answers writes JPEG to `out` and `thumb`. Like the real worker, the end of stdin
 ends it at once, mid-render too, and quit ends it with 0."""
@@ -44,6 +51,28 @@ READY = {"id": "ready", "ok": True, "device": "cuda", "free_gib": 20.0,
          "versions": {"fake": "1"}, "error": "", "check_ms": 12, "load_ms": 345}
 VRAM = {"id": "ready", "ok": False, "error": "vram", "retry": True, "check_ms": 12,
         "load_ms": 345, "free_gib": 9.5}
+
+
+LAYOUTS = ((1, 1, 1), (2, 2, 1), (4, 2, 2), (6, 3, 2), (9, 3, 3), (12, 4, 3), (16, 4, 4))
+
+
+def _canvas(n: int, tile: int, gutter: int) -> tuple[int, int]:
+    cols, rows = next((c, r) for most, c, r in LAYOUTS if n <= most)
+    return gutter + cols * (tile + gutter), gutter + rows * (tile + gutter)
+
+
+def _grid(req: dict) -> None:
+    if os.environ.get("FAKE_SELFIE_LOG"):
+        with open(os.environ["FAKE_SELFIE_LOG"], "a", encoding="utf-8") as f:
+            f.write(f"{req['id']} grid {len(req['tiles'])}\n")
+    if not all(os.path.isfile(t) for t in req["tiles"]):
+        _send({"id": req["id"], "ok": False, "error": "missing_tile"})
+        return
+    width, height = _canvas(len(req["tiles"]), req["tile"], req["gutter"])
+    _write(req["out"], JPEG)
+    _write(req["thumb"], JPEG)
+    _send({"id": req["id"], "ok": True, "error": "", "width": width, "height": height,
+           "seconds": 0.01})
 
 
 def _send(obj: dict) -> None:
@@ -95,21 +124,33 @@ def main() -> None:
         if req.get("op") != "retry":
             os._exit(1)
         _note("retry")
-    _send(READY if env.get("FAKE_SELFIE_VRAM") is None else
-          {**READY, "check_ms": 0, "load_ms": 0})
+    identity = bool(env.get("FAKE_SELFIE_IDENTITY"))
+    _send({**(READY if env.get("FAKE_SELFIE_VRAM") is None else
+              {**READY, "check_ms": 0, "load_ms": 0}), **({"identity": True} if identity else {})})
     flagged = {int(s) for s in env.get("FAKE_SELFIE_FLAG_SEEDS", "").split(",") if s.strip()}
     oom = int(env.get("FAKE_SELFIE_OOM") or 0)
+    hang_after = int(env["FAKE_SELFIE_HANG_AFTER"]) if env.get("FAKE_SELFIE_HANG_AFTER") else None
+    renders = 0
     while True:
         req = json.loads(lines.get())
         if req.get("op") == "quit":
             os._exit(0)
+        if req.get("op") == "grid":
+            _grid(req)
+            continue
         if env.get("FAKE_SELFIE_LOG"):
+            ref = (req.get("identity") or {}).get("ref")
             with open(env["FAKE_SELFIE_LOG"], "a", encoding="utf-8") as f:
-                f.write(f"{req['id']} {req['seed']}\n")
-        if env.get("FAKE_SELFIE_HANG"):
+                f.write(f"{req['id']} {req['seed']}" + (f" identity {ref}" if ref else "") + "\n")
+        renders += 1
+        if env.get("FAKE_SELFIE_HANG") or (hang_after is not None and renders > hang_after):
             threading.Event().wait()
         if env.get("FAKE_SELFIE_DIE"):
             os._exit(3)
+        if (req.get("identity") is not None) != identity:
+            _send({"id": req["id"], "ok": False,
+                   "error": "bad_request" if identity else "identity_unavailable"})
+            continue
         if oom > 0:
             oom -= 1
             _send({"id": req["id"], "ok": False, "error": "oom"})
@@ -119,7 +160,9 @@ def main() -> None:
         if not bad:
             _write(req["out"], JPEG)
             _write(req["thumb"], JPEG)
+        width, height = (832, 1216) if req.get("shape") == "portrait" else (req["size"],) * 2
         _send({"id": req["id"], "ok": True, "error": "", "flagged": bad,
+               "width": width, "height": height,
                "nsfw": 0.95 if bad else 0.01, "prompt": prompt, "dropped": [],
                "tokens": len(prompt.split()), "seconds": 0.01, "peak_gib": 10.5})
 

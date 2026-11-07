@@ -29,7 +29,7 @@ _AGE_TERMS = (  # a space stands for any run of spaces and hyphens, or none: "pi
     "young looking", "younger looking", "looks? young", "young faced?", "fresh faced",
     "barely legal", "barely (?:18|eighteen)", "just turned (?:18|eighteen)", "lolita", "loli",
     "under aged?", "adolescents?", "adolescence", "jail bait", "baby faced?", "babyish",
-    "brace face", "little girls?", "cheerleaders?", "cheerleader uniforms?", "pig tails?",
+    "brace face", "little girls?", "cheerlead[a-z]*", "cheerleader uniforms?", "pig tails?",
     "braces", "in bunches")
 AGE_RE = re.compile(r"\b(" + "|".join(t.replace(" ", r"[\s-]*") for t in _AGE_TERMS) + r")\b",
                     re.I)

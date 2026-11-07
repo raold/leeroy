@@ -278,6 +278,28 @@ def test_a_lease_that_refuses_an_image_stage_mid_stage_keeps_its_finished_units(
     assert admin.calls == [("unload", h.REFL)]
 
 
+def test_each_image_stage_makes_room_even_after_another(h):
+    # P4: snaps follows selfies; a chat model loaded between the two (mod-ollama-chat, after the
+    # first stage's room once more) is unloaded before the second stage renders
+    admin = FakeAdmin([h.LIVE, h.EMB]); ctx = h.ctx(admin=admin)
+    run_begin(h.store, ctx.night, *ctx.window, now=ctx.window[1])
+    seen, rooms, make_room = [], [], ctx.arbiter.make_room
+    async def room():
+        rooms.append(len(seen))
+        await make_room()
+    ctx.arbiter.make_room = room
+    def loaded_meanwhile(c):
+        admin.loaded.append(h.LIVE)
+        return True
+    async def render(c): seen.append(list(admin.loaded))
+    run(NightRunner([Stage("selfies", render, "image"),
+                     Stage("snaps", render, "image", loaded_meanwhile)],
+                    lambda n, w: ctx).run(ctx.night, ctx.window))
+    assert seen == [[h.EMB], [h.EMB]]
+    assert rooms == [0, 1, 1, 2]                   # before and after each image stage
+    assert admin.calls == [("unload", h.LIVE), ("unload", h.LIVE)]
+
+
 def test_a_lease_taken_between_two_image_stages_stops_the_second(h):
     admin = FakeAdmin([h.EMB]); ctx = h.ctx(admin=admin)
     ran = []
@@ -372,11 +394,11 @@ def test_plan_scales_with_the_window_and_degrades_in_order(h, task5_counters, mo
         plan = run(plan_night(ctx))
     assert plan["budget_s"] == 2 * 2 * 3600
     assert plan["steps"] == [step.name for step in DEGRADE] == [
-        "realm", "coach", "selfies", "encounters", "notes", "wow_lines", "extras", "critic",
-        "questions"]
+        "realm", "scenes", "snaps", "coach", "selfies", "encounters", "notes", "wow_lines",
+        "extras", "critic", "questions"]
     assert plan["settings"] == {
-        "realm_units": 0, "coach_units": 5, "selfie_per_night": 10,
-        "encounters_per_night": 20, "notes_per_night": 100, "wow_lines_per_night": 10,
+        "realm_units": 0, "scenes_per_night": 0, "snaps_per_night": 0, "coach_units": 5,
+        "selfie_per_night": 10, "encounters_per_night": 20, "notes_per_night": 100, "wow_lines_per_night": 10,
         "stories_per_night": 1, "lexicon_candidates": 0, "profile_per_night": 0, "critic_lines": 0,
         "questions_min_new": 6}
     assert {k: getattr(ctx.settings, k) for k in plan["settings"]} == plan["settings"]
@@ -691,7 +713,7 @@ def test_planning_costs_and_the_budget(h):
         "coach": 130, "realm": 20,
         "reflect": 150, "reflect_small": 130, "notes": 40, "encounters": 40, "confide": 22, "arc": 30,
         "life": 40, "wowlife": 40, "follow": 40, "lexicon": 20, "profile": 40, "stories": 130,
-        "recap": 130, "chronicle": 40, "forget": 20, "breaks": 20, "critic": 22, "enrich": 110, "photo": 20, "selfies": 48, "eval": 2386,
+        "recap": 130, "chronicle": 40, "forget": 20, "breaks": 20, "critic": 22, "enrich": 110, "photo": 20, "selfies": 48, "scenes": 20, "snaps": 12, "eval": 2386,
         "supersede": 40,                                                # a reflect unit's 2 decide calls (Task 10, K2)
         "core_judge": 10})                                              # half a core-judge call (Task 11, I1)
     assert estimate({"reflect": 2, "notes": 0}, measured={"reflect": 10.0}) == {"reflect": 80.0, "notes": 0.0}
@@ -751,18 +773,18 @@ def test_a_step_cuts_only_what_the_budget_needs(h, task5_counters, monkeypatch):
     plan = run(plan_night(h.ctx()))
     # The realm, the coach and the photos have no counter in this fixture; their cuts still reach
     # their floors.
-    assert plan["steps"] == ["realm", "coach", "selfies", "encounters"] and plan["settings"] == {
-        "realm_units": 0, "coach_units": 5, "selfie_per_night": 10,
+    assert plan["steps"] == ["realm", "scenes", "snaps", "coach", "selfies", "encounters"] and plan["settings"] == {
+        "realm_units": 0, "scenes_per_night": 0, "snaps_per_night": 0, "coach_units": 5, "selfie_per_night": 10,
         "encounters_per_night": 55}  # 56 is 30 s over
     monkeypatch.setitem(budget.COUNTERS, "confide", lambda ctx: 582)    # 12,804 s
     plan = run(plan_night(h.ctx()))
-    assert plan["steps"] == ["realm", "coach", "selfies", "encounters", "notes", "wow_lines"]  # notes cannot help, and still go to 100
-    assert plan["settings"] == {"realm_units": 0, "coach_units": 5, "selfie_per_night": 10, "encounters_per_night": 20,
+    assert plan["steps"] == ["realm", "scenes", "snaps", "coach", "selfies", "encounters", "notes", "wow_lines"]  # notes cannot help, and still go to 100
+    assert plan["settings"] == {"realm_units": 0, "scenes_per_night": 0, "snaps_per_night": 0, "coach_units": 5, "selfie_per_night": 10, "encounters_per_night": 20,
                                 "notes_per_night": 100, "wow_lines_per_night": 20}  # halved once: 400 s of lines fit
     monkeypatch.setitem(budget.COUNTERS, "confide", lambda ctx: 605)
     plan = run(plan_night(h.ctx(window=(end - 2 * 3600, end))))         # 12 scenes, already below the floor
-    assert plan["steps"] == ["realm", "coach", "selfies", "notes", "wow_lines"] and plan["settings"] == {
-        "realm_units": 0, "coach_units": 5, "selfie_per_night": 10, "encounters_per_night": 12, "notes_per_night": 100,
+    assert plan["steps"] == ["realm", "scenes", "snaps", "coach", "selfies", "notes", "wow_lines"] and plan["settings"] == {
+        "realm_units": 0, "scenes_per_night": 0, "snaps_per_night": 0, "coach_units": 5, "selfie_per_night": 10, "encounters_per_night": 12, "notes_per_night": 100,
         "wow_lines_per_night": 10}
 
 

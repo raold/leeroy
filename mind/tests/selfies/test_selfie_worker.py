@@ -51,7 +51,7 @@ def test_a_worker_starts_renders_and_stops(tmp_path):
     assert up is True and running is False
     assert got == Rendered(flagged=False, nsfw=0.01, prompt="photo of a woman in her thirties, "
                            "short auburn hair, standing in a sunlit kitchen", tokens=15,
-                           seconds=0.01, peak_gib=10.5)
+                           seconds=0.01, peak_gib=10.5, width=1024, height=1024)
     assert (tmp_path / "c0.jpg").read_bytes() == JPEG
     assert (tmp_path / "c0.thumb.jpg").read_bytes() == JPEG
 

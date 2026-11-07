@@ -104,6 +104,20 @@ def test_frequency_dials_show_numbers_and_ask_no_model(tmp_path):
     run(go())
 
 
+def test_the_preview_counts_photos(tmp_path):
+    async def go():
+        app = _app(tmp_path)
+        try:
+            r = await app.tuning.handle(_args("world", "", "selfies", 10))
+            week, day = r["world"]
+            assert (week["before"], week["after"]) == (3, 40)
+            assert (day["before"], day["after"]) == (1, 14)
+            assert app.llm.calls == []
+        finally:
+            app.store.close()
+    run(go())
+
+
 def test_a_wording_dial_shows_a_line_before_and_after_with_one_seed(tmp_path, caplog):
     async def go():
         app = _app(tmp_path)

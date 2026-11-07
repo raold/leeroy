@@ -315,7 +315,7 @@ def test_a_flagged_image_is_replaced_with_a_new_seed_and_three_flags_fail_only_t
     assert not set_dir(data, 102, 1).exists() and not staging_dir(data, 102, 1).exists()
     assert ctx.failures[STAGE] == 1 and not ctx.done(STAGE, "102:1")
     assert caplog.text.count("selfies_flagged") == 1 + TRIES
-    assert "selfies_flagged: night=2026-10-29 guid=101 set=1 idx=2 attempt=0 nsfw=0.95" in caplog.text
+    assert "selfies_flagged: rid=101:1:2:0 attempt=0 nsfw=0.95" in caplog.text
     assert "nightly_unit_failed: night=2026-10-29 stage=selfies unit=102:1 error=SetRefused" in caplog.text
 
 
@@ -557,7 +557,7 @@ def test_an_image_scored_at_the_limit_is_flagged_whatever_the_worker_says(h, tmp
     class Lax:                                              # a worker that wrote it anyway
         async def render(self, req, *, rid=None):
             req.out.write_bytes(JPEG); req.thumb.write_bytes(JPEG)
-            return Rendered(False, SELFIE_CFG.nsfw_max, "unused", 1, 0.01, 10.5)
+            return Rendered(False, SELFIE_CFG.nsfw_max, "unused", 1, 0.01, 10.5, 1024, 1024)
     async def room(): pass
     with pytest.raises(SetRefused):
         run(render_candidates(Lax(), spec, out, night=h.night, guid=101, set_no=1,

@@ -12,7 +12,10 @@ holds it until the photo pass has chosen her kind again, so its text is never re
 Her outfit and setting go in as one priority-0 phrase, so the worker's fit to the tokenizers
 never keeps one without the other, and the negative lets cleavage and swimwear through and names
 what stays out instead. Every other render gets the phrases and NEGATIVE as they were. The
-worker's NSFW gate is the same for both."""
+worker's NSFW gate is the same for both.
+
+The subject (subject_phrase) and the face (looks_phrases: hair_skin, then eyes_face) are shared
+with the situational photos' prompts (scene.py)."""
 import re
 from dataclasses import dataclass
 
@@ -108,34 +111,30 @@ BUILD_WORDS = {"slim": "slim figure", "athletic": "athletic toned figure", "aver
                "stocky": "stocky sturdy build", "heavy": "plus-size full figure"}
 
 
-def build_prompt(p: Persona, *, kind_style: str = PLAIN) -> PromptSpec:
-    """The prompt for p's photo kind. `kind_style` is the style whose rules chose the kind
-    (kind.chosen_style; PLAIN for a kind set by hand or with no record): the lust prompt for a
-    kind the lust rules chose. ValueError when renderable says why not."""
-    missing = renderable(p, kind_style)
-    if missing:
-        raise ValueError(missing)
-    a, ph, ident = p.appearance, p.photo, p.identity
-    lust = kind_style == LUST  # renderable has checked she still has the lust style
-    name_re = names_re(p)
-
-    out: list[tuple[str, int]] = []
-
+def phrase_adder(out: list[tuple[str, int]], name_re: re.Pattern | None):
+    """add(text, priority, free=False): `text` cleaned onto `out`, nothing when it is blank or,
+    for free text, when it holds one of the persona's names (name_re)."""
     def add(text: str, priority: int, free: bool = False) -> None:
         text = _clean(text)
         if not text or (free and name_re and name_re.search(text)):
             return
         out.append((text, priority))
+    return add
 
-    headshot = ph.kind == "headshot"
+
+def subject_phrase(p: Persona) -> tuple[str, int]:
+    """Who is in the photo, at priority 0: age (called an adult under 25), nation and sex."""
+    ident = p.identity
     adult = "adult " if ident.age < 25 else ""
     nation = "British" if ident.region == "UK" else "American"
     sex = "woman" if ident.player_gender == "female" else "man"
-    add(_KINDS[ph.kind], 0)
-    add(_FRAMINGS[ph.framing], 0)
-    add(f"{ident.age}-year-old {adult}{nation} {sex}", 0)
-    if ph.kind != "snapshot":
-        add("looking at the camera", 2)
+    return _clean(f"{ident.age}-year-old {adult}{nation} {sex}"), 0
+
+
+def hair_skin(p: Persona, name_re: re.Pattern | None) -> list[tuple[str, int]]:
+    """Hair and skin from the looks, at priority 1."""
+    a, out = p.appearance, []
+    add = phrase_adder(out, name_re)
     if a.hair_length == "shaved":
         add("shaved head", 1)
     else:
@@ -144,10 +143,47 @@ def build_prompt(p: Persona, *, kind_style: str = PLAIN) -> PromptSpec:
         add(f"{hair}, {style}" if style else hair, 1, True)
     if _clean(a.skin_tone):
         add(f"{_clean(a.skin_tone)} skin", 1, True)
+    return out
+
+
+def eyes_face(p: Persona, name_re: re.Pattern | None) -> list[tuple[str, int]]:
+    """Eyes and face details from the looks, at priority 2."""
+    a, out = p.appearance, []
+    add = phrase_adder(out, name_re)
     if _clean(a.eye_colour):
         add(f"{_clean(a.eye_colour)} eyes", 2, True)
     for detail in a.face:
         add(detail, 2, True)
+    return out
+
+
+def looks_phrases(p: Persona, name_re: re.Pattern | None) -> list[tuple[str, int]]:
+    """The face as the looks describe it: hair and skin (1), then eyes and face details (2).
+    Free text holding a name in name_re is left out."""
+    return hair_skin(p, name_re) + eyes_face(p, name_re)
+
+
+def build_prompt(p: Persona, *, kind_style: str = PLAIN) -> PromptSpec:
+    """The prompt for p's photo kind. `kind_style` is the style whose rules chose the kind
+    (kind.chosen_style; PLAIN for a kind set by hand or with no record): the lust prompt for a
+    kind the lust rules chose. ValueError when renderable says why not."""
+    missing = renderable(p, kind_style)
+    if missing:
+        raise ValueError(missing)
+    a, ph = p.appearance, p.photo
+    lust = kind_style == LUST  # renderable has checked she still has the lust style
+    name_re = names_re(p)
+
+    out: list[tuple[str, int]] = []
+    add = phrase_adder(out, name_re)
+
+    headshot = ph.kind == "headshot"
+    add(_KINDS[ph.kind], 0)
+    add(_FRAMINGS[ph.framing], 0)
+    add(*subject_phrase(p))
+    if ph.kind != "snapshot":
+        add("looking at the camera", 2)
+    out += looks_phrases(p, name_re)
     add(BUILD_WORDS.get(a.build, f"{a.build} build"), 1)
     if lust:  # one phrase: the fit keeps both or neither, and priority 0 keeps both
         add(lust_phrase(ph), 0, True)  # renderable has checked no name filter drops it

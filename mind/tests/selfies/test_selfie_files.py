@@ -256,3 +256,41 @@ def test_a_real_reader_of_a_new_jpeg_only_delays_the_rename_and_the_clear(tmp_pa
             reader.close()
         assert not staging_dir(tmp_path, 101, 1).exists()
         clear_stale(tmp_path, 101, 1)
+
+
+def test_snap_paths_are_built_from_integers_only(tmp_path):
+    d = tmp_path / "selfies"
+    assert files.snap(tmp_path, 101, 5) == d / "101" / "snaps" / "5.jpg"
+    assert files.snap(tmp_path, 101, 5, thumb=True) == d / "101" / "snaps" / "5.thumb.jpg"
+    assert files.guild_photo(tmp_path, 5) == d / "guild" / "5.jpg"
+    assert files.guild_photo(tmp_path, 5, thumb=True) == d / "guild" / "5.thumb.jpg"
+    assert files.guild_tiles(tmp_path, 5) == d / "guild" / "5.part"
+    for bad in ("5", "../5", 5.0, True, None):
+        for build in (lambda: files.snap(tmp_path, 101, bad), lambda: files.snap(tmp_path, bad, 5),
+                      lambda: files.guild_photo(tmp_path, bad),
+                      lambda: files.guild_tiles(tmp_path, bad)):
+            with pytest.raises(TypeError):
+                build()
+    with pytest.raises(ValueError):
+        files.snap(tmp_path, 101, 0)
+
+
+def test_sync_snaps_expires_a_ready_photo_whose_file_is_gone_and_clears_leftovers(tmp_path, store):
+    from .fakes import ready_snap
+    keep = ready_snap(store, tmp_path, 101)
+    lost = ready_snap(store, tmp_path, 101)
+    g = ready_snap(store, tmp_path, 0, kind="guild", source="raid", ref="raid:1",
+                   members=[(101, 1)], pick=None, looks=None)
+    files.snap(tmp_path, 101, lost).unlink()
+    files.guild_tiles(tmp_path, 9).mkdir(parents=True)
+    (files.guild_tiles(tmp_path, 9) / "t0.jpg").write_bytes(JPEG)
+    folder = files.snap(tmp_path, 101, keep).parent
+    (folder / "7.part").mkdir()
+    (folder / ".8.jpg.1.tmp").write_bytes(b"x")
+    assert files.sync_snaps(store, tmp_path, now=9.0) == 1
+    ends = dict(store.conn.execute("SELECT id, ended FROM selfie_snap").fetchall())
+    assert ends == {keep: None, lost: "missing", g: None}
+    assert sorted(p.name for p in folder.iterdir()) == sorted(
+        [f"{keep}.jpg", f"{keep}.thumb.jpg", f"{lost}.thumb.jpg"])
+    assert not files.guild_tiles(tmp_path, 9).exists() and files.guild_photo(tmp_path, g).exists()
+    assert files.sync_snaps(store, tmp_path, now=10.0) == 0

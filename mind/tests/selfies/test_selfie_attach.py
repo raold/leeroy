@@ -50,7 +50,7 @@ def test_the_attach_repairs_then_logs_whether_photos_render(tmp_path, caplog, to
         assert app.selfies.cfg == cfg
         events = [r.leeroy_event for r in caplog.records
                   if getattr(r, "leeroy_event", "").startswith("selfies_")]
-        assert events == ["selfies_synced", said]
+        assert events == ["selfies_synced", said, "selfies_snaps_off"]
     finally:
         app.store.close()
 
@@ -157,3 +157,35 @@ def test_sync_all_runs_once_at_attach_before_the_mind_runs_and_from_nowhere_else
     assert attach_src.count(".sync_all()") == 1
     service_src = (root / "selfies" / "service.py").read_text(encoding="utf-8")
     assert ".sync_all(" not in service_src  # defined there, called only by the attach
+
+
+SNAPS = "[selfies]\nenabled = true\nsnaps = true\n"
+
+
+def test_attach_adds_scenes_and_snaps_only_with_both_on(tmp_path, caplog):
+    from leeroy_mind.selfies.snapstage import wants_gpu as snaps_wants_gpu
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        app = mind_app(tmp_path, toml=SNAPS)
+    try:
+        stages = {s.name: s for s in app.night_runner.stages}
+        names = [s.name for s in app.night_runner.stages]
+        assert names[names.index("life") + 1] == "scenes" and stages["scenes"].model == "reflection"
+        assert names[names.index("selfies") + 1] == "snaps" and stages["snaps"].model == "image"
+        assert stages["snaps"].wants_gpu is snaps_wants_gpu
+        assert _events(caplog, "selfies_snaps_on") == [{}]
+    finally:
+        app.store.close()
+
+
+@pytest.mark.parametrize("toml,said", [(ON, "selfies_snaps_off"),
+                                        ("[selfies]\nsnaps = true\n", "selfies_snaps_need_enabled")],
+                         ids=["snaps_off", "need_enabled"])
+def test_attach_adds_neither_scenes_nor_snaps_otherwise(tmp_path, caplog, toml, said):
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        app = mind_app(tmp_path, toml=toml)
+    try:
+        names = [s.name for s in app.night_runner.stages]
+        assert "scenes" not in names and "snaps" not in names
+        assert _events(caplog, said) == [{}] and not _events(caplog, "selfies_snaps_on")
+    finally:
+        app.store.close()

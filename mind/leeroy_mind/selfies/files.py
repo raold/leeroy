@@ -5,6 +5,10 @@
     sets/<n>.part/                  a set the night is rendering (renamed to sets/<n> when done)
     chosen.jpg                      the photo in force; absent until a pick
     history/<pick>.jpg              the photo each change put in force
+    snaps/<id>.jpg, <id>.thumb.jpg  a situational photo (P4)
+
+and selfies/guild/<id>.jpg, <id>.thumb.jpg, with <id>.part/ holding a guild photo's tiles while
+it renders.
 
 chosen.jpg is only ever replaced by writing a temporary file beside it and renaming it over,
 so a reader sees the old photo or the new one, never part of one. Windows refuses to replace a
@@ -17,6 +21,7 @@ import shutil
 import time
 from contextlib import suppress
 from pathlib import Path
+from types import SimpleNamespace
 
 REPLACE_TRIES = 40  # 2 s of 50 ms tries, as endpoint.write_key_file moves control.json
 REPLACE_WAIT_S = 0.05
@@ -150,3 +155,54 @@ def sync_chosen(data_dir, guid: int, current) -> bool:
 def _unlink(path: Path) -> None:
     with suppress(FileNotFoundError):
         path.unlink()
+
+
+def snap(data_dir, guid: int, snap_id: int, *, thumb: bool = False) -> Path:
+    n = _int("snap_id", snap_id, 1, _ROWID_MAX)
+    return member_dir(data_dir, guid) / "snaps" / (f"{n}.thumb.jpg" if thumb else f"{n}.jpg")
+
+
+def _guild_dir(data_dir) -> Path:
+    return Path(data_dir) / "selfies" / "guild"
+
+
+def guild_photo(data_dir, snap_id: int, *, thumb: bool = False) -> Path:
+    n = _int("snap_id", snap_id, 1, _ROWID_MAX)
+    return _guild_dir(data_dir) / (f"{n}.thumb.jpg" if thumb else f"{n}.jpg")
+
+
+def guild_tiles(data_dir, snap_id: int) -> Path:
+    return _guild_dir(data_dir) / f"{_int('snap_id', snap_id, 1, _ROWID_MAX)}.part"
+
+
+def snap_file(data_dir, row, *, thumb: bool = False) -> Path:
+    if row.kind == "guild":
+        return guild_photo(data_dir, row.id, thumb=thumb)
+    return snap(data_dir, row.guid, row.id, thumb=thumb)
+
+
+def sync_snaps(store, data_dir, *, now: float) -> int:
+    """Make the photo files agree with the rows: a ready row whose file is missing ends
+    `missing`; every `*.part` folder and `*.tmp` file under snaps/ and guild/ is removed (a
+    render's leftovers). Returns the rows changed."""
+    from .snaps import SnapError, expire
+    with store.transaction():
+        ready = store.conn.execute(
+            "SELECT id, kind, guid FROM selfie_snap WHERE status='ready' ORDER BY id").fetchall()
+    changed = 0
+    for r in ready:
+        row = SimpleNamespace(id=r[0], kind=r[1], guid=r[2])
+        if not snap_file(data_dir, row).exists():
+            with suppress(SnapError):
+                expire(store, row.id, "missing", now=now)
+                changed += 1
+    root = Path(data_dir) / "selfies"
+    for d in [_guild_dir(data_dir), *sorted(root.glob("[0-9]*/snaps"))]:
+        if not d.is_dir():
+            continue
+        for leftover in d.iterdir():
+            if leftover.is_dir() and leftover.name.endswith(".part"):
+                shutil.rmtree(leftover, onexc=_held)
+            elif leftover.is_file() and leftover.name.endswith(".tmp"):
+                _retrying(_unlink, leftover)
+    return changed

@@ -208,3 +208,12 @@ OFFICERS = {102, 104}
 def mem(guid, *, online=True, zone=10, level=80, rank=3):
     return Member(guid=guid, name=f"M{guid}", race=1, class_=1, gender=0, level=level, rank=rank,
                   online=online, map=0, zone=zone, spec_tab=-1)
+
+
+@pytest.fixture(autouse=True)
+def _pictures_off():
+    """The romance ladder skips "picture" unless a test attaches the photo sender."""
+    from leeroy_mind.nightly.romance import set_pictures_available
+    set_pictures_available(False)
+    yield
+    set_pictures_available(False)

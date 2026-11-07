@@ -3583,3 +3583,42 @@
   keywords = {images},
   annote = {Shaped: the local check every photo passes before it is written; flagged images are dropped}
 }
+
+@misc{ye2023ipadapter,
+  author = {Ye, Hu and Zhang, Jun and Liu, Sibo and Han, Xiao and Yang, Wei},
+  title = {{IP-Adapter}: Text Compatible Image Prompt Adapter for Text-to-Image Diffusion Models}, year = {2023},
+  eprint = {2308.06721}, archivePrefix = {arXiv}, primaryClass = {cs.CV},
+  url = {https://arxiv.org/abs/2308.06721},
+  keywords = {images},
+  annote = {Shaped: the image-prompt adapter that holds a member's face in a situational photo, from the profile photo they were given}
+}
+
+@misc{h94ipadapter2023,
+  author = {Ye, Hu},
+  title = {{IP-Adapter} model card ({h94/IP-Adapter})}, year = {2023},
+  howpublished = {Hugging Face model card},
+  url = {https://huggingface.co/h94/IP-Adapter},
+  note = {License Apache-2.0; pinned at revision 018e402774aeeddd60609b4ecdb7e298259dc729; the SDXL Plus Face weights and the image encoder},
+  keywords = {images},
+  annote = {Shaped: the pinned identity weights (ip-adapter-plus-face_sdxl_vit-h) the photo worker loads for situational photos}
+}
+
+@misc{laion2023openclipvith,
+  author = {{LAION}},
+  title = {{CLIP-ViT-H-14-laion2B-s32B-b79K} model card ({OpenCLIP} {ViT-H/14})}, year = {2023},
+  howpublished = {Hugging Face model card},
+  url = {https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K},
+  note = {License MIT; the image encoder the IP-Adapter Plus Face weights expect},
+  keywords = {images},
+  annote = {Shaped: the image encoder that reads the reference face before the adapter uses it}
+}
+
+@inproceedings{cherti2023scaling,
+  author = {Cherti, Mehdi and Beaumont, Romain and Wightman, Ross and Wortsman, Mitchell and Ilharco, Gabriel and Gordon, Cade and Schuhmann, Christoph and Schmidt, Ludwig and Jitsev, Jenia},
+  title = {Reproducible Scaling Laws for Contrastive Language-Image Learning},
+  booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition}, year = {2023},
+  eprint = {2212.07143}, archivePrefix = {arXiv}, primaryClass = {cs.LG},
+  url = {https://arxiv.org/abs/2212.07143},
+  keywords = {images},
+  annote = {Shaped: the paper behind the OpenCLIP ViT-H/14 laion2B encoder, cited for the image encoder choice}
+}

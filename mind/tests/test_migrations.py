@@ -249,7 +249,8 @@ def test_a_v17_db_gains_the_empty_selfie_tables(tmp_path, monkeypatch):
     try:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == latest_version() >= 18
         names = {r[0]: r[1] for r in conn.execute(
-            "SELECT name, type FROM sqlite_master WHERE name LIKE 'selfie_%'")}
+            "SELECT name, type FROM sqlite_master WHERE name LIKE 'selfie_%' "
+            "AND name NOT LIKE 'selfie_snap%'")}
         assert names == {"selfie_set": "table", "selfie_candidate": "table",
                          "selfie_pick": "table", "selfie_current": "table",
                          "selfie_set_one_queued": "index"}
@@ -303,5 +304,30 @@ def test_the_board_reply_migration_adds_board_reply(tmp_path, monkeypatch):
                 add(**bad)
         add(kind="letter", parent=7, text="a" * 400, state="answered", settled=5, answer_mail=3)
         add(state="refused", settled=5, reason="screen_name_2", night="2026-11-07")
+    finally:
+        conn.close()
+
+
+def test_the_snaps_migration_adds_selfie_snap(tmp_path, monkeypatch):
+    """P4: the snaps migration (found by its name, so a renumbering at merge changes nothing)
+    adds the situational photo table to an older database and keeps its rows."""
+    number = next(v for v, p in db_mod._migration_files() if p.stem.endswith("_selfie_snaps"))
+    path = tmp_path / "mind.db"
+    conn = _db_at(path, number - 1, tmp_path, monkeypatch)
+    try:
+        assert not conn.execute("SELECT name FROM sqlite_master WHERE name='selfie_snap'").fetchall()
+        conn.execute("INSERT INTO tuning_change(id,ts,source,label) VALUES (1,1000,'console','')")
+        conn.commit()
+    finally:
+        conn.close()
+    conn = open_db(path)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == latest_version() >= number
+        names = {r[0]: r[1] for r in conn.execute(
+            "SELECT name, type FROM sqlite_master WHERE name LIKE 'selfie_snap%'")}
+        assert names == {"selfie_snap": "table", "selfie_snap_open": "index",
+                         "selfie_snap_sent": "index"}
+        assert conn.execute("SELECT count(*) FROM selfie_snap").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM tuning_change").fetchone()[0] == 1
     finally:
         conn.close()
