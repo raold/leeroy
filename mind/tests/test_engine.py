@@ -29,7 +29,7 @@ from leeroy_mind.storage.rows import Relationship
 from leeroy_mind.talk.budget import BurstPlan
 from leeroy_mind.talk.engine import flirt_chance, share_reason_pool
 from leeroy_mind.talk.pipeline import TurnMeta
-from leeroy_mind.talk.romance import INVARIANTS
+from leeroy_mind.talk.romance import DISTANCE, INVARIANTS
 from leeroy_mind.talk.select import ReplyTurn
 from leeroy_mind.talk.turns import Turn, TurnKind
 from leeroy_mind.testing.fake_llm import script_from
@@ -820,8 +820,10 @@ def test_the_whisper_overlay_is_the_last_thing_she_reads(store, clock, tmp_path)
         _women(store)
         save_member(store, 102, player_gender="female", stance="lust", split_rate=0.0,
                     typo_rate=0.0, emoticon_rate=0.0, abbreviations={}, words_per_line=[3, 12])
+        # an invitation in the game: "come and find me" alone is a summons, asked again and
+        # dropped (conversation variety A5)
         reply = ("you better be serious. i'm wearing the red one and nothing under the cloak "
-                 "tonight, so come and find me")
+                 "tonight, so find me at the inn in dalaran")
         r = make_rig(store, clock, tmp_path, reply=reply)
         line = his_line(r, store, "meet me at the inn after raid, just us", channel="whisper",
                         to_guid=102).id
@@ -832,7 +834,9 @@ def test_the_whisper_overlay_is_the_last_thing_she_reads(store, clock, tmp_path)
             "WHISPER-OVERLAY\n", encoding="utf-8")
         msgs, _ = await r.engine.compose(whisper_back(102, line))
         user = msgs[1]["content"]
-        assert user.endswith("WHISPER-OVERLAY") and "in a line or two" in user
+        # his overlay, then the distance frame, last (variety B2: the frame follows his overlay)
+        frame = DISTANCE.format(them="him", they="he")
+        assert user.endswith(f"WHISPER-OVERLAY {frame}") and "in a line or two" in user
         assert user.rindex("Answer Zan's last line") < user.rindex("WHISPER-OVERLAY")
         guild = his_line(r, store, "who's up for heroics").id
         msgs, _ = await r.engine.compose(Turn(kind=TurnKind.REPLY_HUMAN, speaker=102,
@@ -915,7 +919,7 @@ def test_own_lines_show_what_was_said(store, clock, tmp_path):
         assert await spoken(r, reply_to_human(102)) == ["run it for the trinket"]
         await r.advance(15)
         assert await spoken(r, reply_to_human(102))
-        mine = r.prompts()[1].split("Your last lines (don't reuse their wording):")[1]
+        mine = r.prompts()[1].split("Your last lines (don't make the same move again):")[1]
         assert "run it for the trinket" in mine and "emblems" not in mine
     run(main())
 
@@ -1942,7 +1946,7 @@ def test_his_whisper_and_her_reply_never_reach_her_guild_prompt(store, clock, tm
         private = text_of(r.chat_calls()[-1]["messages"])
         assert f"(whisper to Arkon): {his.text}" in private  # his line
         assert "(whisper to Zan): mine too, keep it quiet" in private  # hers
-        assert "Your last lines (don't reuse their wording):\nmine too, keep it quiet" in private
+        assert "Your last lines (don't make the same move again):\nmine too, keep it quiet" in private
         assert QUITTING in private
     run(main())
 
@@ -2568,9 +2572,10 @@ def test_a_silent_answer_to_his_whisper_is_asked_once_more(store, clock, tmp_pat
 
     async def main():
         _women(store)
-        r = make_rig(store, clock, tmp_path, script=script_from(["(nothing)", "come here then"]))
+        # "right here": "come here" would be a summons (conversation variety A5)
+        r = make_rig(store, clock, tmp_path, script=script_from(["(nothing)", "right here then"]))
         line = his_line(r, store, "you around?", channel="whisper", to_guid=102).id
-        assert await spoken(r, whisper_back(102, line)) == ["come here then"]
+        assert await spoken(r, whisper_back(102, line)) == ["right here then"]
         assert len(r.chat_calls()) == 2 and two in r.prompts()[1] and two not in r.prompts()[0]
         r = make_rig(store, clock, tmp_path, script=script_from(["(nothing)", "/w Zan"]))
         line = his_line(r, store, "still there?", channel="whisper", to_guid=103).id
@@ -2616,13 +2621,14 @@ def test_a_command_or_a_handle_at_him_never_reaches_chat(store, clock, tmp_path)
             save_member(store, g, player_gender="female", stance=stance, typo_rate=0.0,
                         split_rate=0.0, abbreviations={}, emoticon_rate=0.0)
         r = make_rig(store, clock, tmp_path, script=script_from([
-            "/w Testmage that kill was something", "@Zan come sit with me then",
+            # sitting with her in the game: "come sit with me" alone is a summons (A5)
+            "/w Testmage that kill was something", "@Zan come sit with me in dalaran then",
             "Zan: you're late", "/w Zan", "/invite arkon"]))
         whisper = Turn(kind=TurnKind.WHISPER, speaker=102, channel="whisper", to_guid=HUMAN,
                        addressee=HUMAN)
         assert await spoken(r, whisper) == ["that kill was something"]
         flirt = Turn(kind=TurnKind.FLIRT, speaker=103, channel="guild", addressee=HUMAN)
-        assert await spoken(r, flirt, seconds=70) == ["come sit with me then"]
+        assert await spoken(r, flirt, seconds=70) == ["come sit with me in dalaran then"]
         line = his_line(r, store, "where were you").id
         assert await spoken(r, Turn(kind=TurnKind.REPLY_HUMAN, speaker=104, channel="guild",
                                     addressee=HUMAN, trigger_line=line)) == ["you're late"]

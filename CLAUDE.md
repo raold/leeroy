@@ -376,9 +376,23 @@ online, alive, out of combat, his faction, in no group, not in a battleground,
 arena or queue (a raid browser listing is fine), not teleporting or flying,
 not in another instance or saved to another copy of his, and clear of
 `RealmModule::MutationReason` (Realm leases, training, offline raids, pending
-bot jobs). Within a role, the classes his group has fewest of come first,
-lowest guid on ties. They join directly (`AddMember`; his group is made only
-once someone can join, and becomes a raid only when a party is full), take the
+bot jobs). Within a role the pick weighs each member's spec (talent tree with
+most points; `GuildAddSpecFacts` holds the WotLK raid buffs and debuffs it
+brings, counting a debuff only where playerbots' default strategies for that
+tree cast it, melee or ranged, healer kind) and average item level: tanks
+prefer a tank class not yet tanking within 10 item levels of the best-geared
+tank left, then gear; healers fill a size template (5: Holy paladin or
+Discipline; 10: Holy paladin, Discipline, a raid healer; 25: two, one and
+three raid healers mixing shaman, druid and Holy priest; 40: three, two and
+five), a kind nobody free has going to the best gear left; damage goes
+greedily to the most weight of buffs his group and the earlier picks lack
+(Bloodlust and Replenishment 100, a second Replenishment in a 25 or 40, the %
+buffs and debuffs 10, the rest 1), then gear, the melee/ranged split nearest
+even, the class his group has fewest of and the lowest guid. When someone
+joined, a last line names what his group still lacks: Bloodlust and
+Replenishment for add5, those and the % buffs and debuffs for a raid. They
+join directly (`AddMember`; his group is made only once someone can join, and
+becomes a raid only when a party is full), take the
 raid night's `RaidHabits` (plus dungeon-clear's entry when he is inside an
 instance) and are teleported beside him. He is told per role how
 many were added and how many slots stayed empty, with a tally of why the
@@ -621,6 +635,29 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 - Guild life (raid nights, DKP and loot, offline raids, rank, spec and gear
   upkeep) runs with built-in defaults; `[guild]` and `[dkp]` tables in
   `mind.toml` override them.
+- Members start conversations with him on two clocks (2026-11-07), per hour of
+  his play at chattiness 4 and scaled with it (0 stops every unprompted whisper):
+  `[talk] whispers_per_hour` (4, at most 8 an hour and 2 minutes apart;
+  `whisper:start`, romantic from drawn and lust women, casual from everyone else,
+  a fond woman at a quarter of a lust one, lifted by the romance dial) and
+  `openers_per_hour` (6, at most 12; `burst:to_him`, a casual line naming him,
+  from a group-mate in party when his group is five or fewer, else guild), the
+  talkative and forward dials moving the rate. Neither runs in his raid's fight,
+  wipe silence or debrief, a 5-man boss fight, while he is AFK, in his login's
+  quiet or within a minute of his own line, of his emote at a member or social
+  emote (and theirs back) or of an answer to him (an emote's line too); a member
+  in a whisper with him (10 minutes) starts none, openers never take the guard
+  slot of an answer (an emote's line included), and a first `(nothing)` is
+  asked again once.
+- His text emotes (`talk/emotes.py`): every one at an online cast member but the utility and
+  combat ones (`talk/emote_names.py`) gets her emote back after 2-6 s, by his emote and her
+  stance (men, stance none and a forward dial at 0 never romantic), and sometimes a line (a
+  romantic emote by whisper, half the time; others by /say, a quarter; none while she is
+  answering him); a social one at nobody brings 0-2 of his group, or else his zone, joining
+  in. 45 s per member, 6 a minute, never in a fight or the login quiet. The night counts the
+  ones she answered (meta `emote_answered:<event id>`): romantic ones at a woman with an
+  attitude as a flirt, two a night at most, rude ones as a hurt. Overlays
+  `emote_at_you`/`emote_joined` in `mind-data/prompts` reword the line.
 - A group he built with `.playerbots bot addN` (native `guild_group` events)
   raids like a called raid night once he leads it into a raid instance in
   `guild/raids.py`: size and heroic from the instance difficulty, his group's
@@ -831,10 +868,15 @@ Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
   reserving anyone: the action journal settles that as refused, holding nobody, and each start
   reads again a stored unknown whose only evidence is such a refusal. The same goes for a
   rearm, `rpg_status`, `equip` or `set_profession` acked and then failed at one body's step for a
-  fence or a `busy:` reason such as `busy:combat` (`STEP_REFUSALS`): native refused that body
+  fence or a `busy:` reason such as `busy:combat` (`STEP_REFUSALS`), or a rearm for
+  `weapon_record_unavailable` (`KIND_STEP_REFUSALS`): native refused that body
   before changing it and released them all, so it settles `step_refused` and Recall goes on to
-  the defaults. Any other failed job (`operation_transition_unknown`, a walk, leave, duel or
-  grow) stays unknown. A root that settles unknown or conflict logs a warning in mind.log,
+  the defaults. Native keeps the weapon records in memory, so a worldserver start empties them
+  until the 60 s poll finds each body online and free; a rearm now records an armed body that
+  has none, as that poll would. Any other failed job (`operation_transition_unknown`, a walk,
+  leave, duel or grow) stays unknown: a leave's `wg_private_state_unavailable` (a member in
+  Wintergrasp) is a Refuse only until that leave has changed a body, and its job does not say
+  which. A root that settles unknown or conflict logs a warning in mind.log,
   `realm_action_unknown` (or `realm_action_conflict`) with its id, kind, reason, native's reason
   and member count, no names: from then on it holds its manifest.
 - **Rulings.** His raid holds exactly his raid: waiting for the call, called and forming hold

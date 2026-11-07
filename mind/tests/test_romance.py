@@ -13,11 +13,12 @@ from leeroy_mind.storage.rows import ROMANCE_STAGES, Relationship
 from leeroy_mind.talk import romance
 from leeroy_mind.talk.budget import DayPhase
 from leeroy_mind.talk.raid import RaidPhase
-from leeroy_mind.talk.romance import (ASIDE_INSTRUCTIONS, ATTITUDE_TEXT, BANDS,
-                                      BUILTIN_ROMANCE, FULL_DIAL, STYLE_TEXT, TRIGGER_TEXT,
-                                      AsidePlan, JealousyAsides, WhisperPlanner, band,
-                                      dial_for, effective_band, rivalry_reply, rivalry_text,
-                                      romance_instruction, stage_text)
+from leeroy_mind.talk.romance import (ARC_STAGES, ASIDE_INSTRUCTIONS, ATTITUDE_TEXT, BANDS,
+                                      BUILTIN_ROMANCE, DISTANCE, FULL_DIAL, LEGACY_STAGE,
+                                      STYLE_TEXT, TRIGGER_TEXT, AsidePlan, JealousyAsides,
+                                      WhisperPlanner, band, dial_for, effective_band,
+                                      rivalry_reply, rivalry_text, romance_instruction,
+                                      stage_text)
 from leeroy_mind.talk.turns import TurnKind
 
 # Invented identity: the real name lives only in the owner's local mind.toml.
@@ -109,16 +110,23 @@ def test_stage_colours_but_never_caps(tmp_path):
             for stage in ROMANCE_STAGES:
                 got = BANDS.index(effective_band(stance, stage, dial))
                 assert floor <= got <= BANDS.index(band(dial))
+            for stage in ARC_STAGES:
+                got = BANDS.index(effective_band(stance, stage, dial))
+                assert floor <= got <= BANDS.index(band(dial))
     # a deeper stage brings more intimacy
     assert effective_band("drawn", "acknowledged", 9) == "explicit"
+    assert effective_band("drawn", "confession", 9) == "explicit"
     assert effective_band("fond", "vulnerable", 9) == "suggestive"
+    assert effective_band("fond", "late_nights", 9) == "suggestive"
     p = woman(stance="drawn")
-    texts = {stage: ri(p, tmp_path, rel(stage)) for stage in ROMANCE_STAGES}
-    assert len(set(texts.values())) == len(ROMANCE_STAGES)  # every stage reads differently
-    for stage in ROMANCE_STAGES:
+    texts = {stage: ri(p, tmp_path, rel(stage)) for stage in ARC_STAGES}
+    assert len(set(texts.values())) == len(ARC_STAGES)  # every stage reads differently
+    for stage in (*ARC_STAGES, *ROMANCE_STAGES):
         if stage_text("drawn", stage):
             assert stage_text("drawn", stage).format(name="Zan", them="him",
-                                                     their="his") in texts[stage]
+                                                     their="his") in ri(p, tmp_path, rel(stage))
+    for old, new in LEGACY_STAGE.items():  # a stored old stage reads its new passage
+        assert ri(p, tmp_path, rel(old)) == texts[new]
 
 
 def test_the_opening_stage_reads_by_attitude(tmp_path):
@@ -223,11 +231,16 @@ def test_not_every_lust_woman_is_the_most_forward(tmp_path):
 
 def test_the_romance_block_reads_in_order(tmp_path):
     """Prompts I5: her attitude first, the hook on what's happening last, and the line about
-    two adults in the middle, where it reads as a frame and not as a line to say back."""
-    text = ri(woman(stance="lust", style="bold"), tmp_path)
+    two adults in the middle, where it reads as a frame and not as a line to say back. The
+    stage and the band's wording come before the distance frame (variety B2), which comes
+    before the two adults."""
+    text = ri(woman(stance="lust", style="bold"), tmp_path, rel("banter"))
     assert text.startswith("You want Zan")
     adults = text.index("two adults")
-    assert text.index("Your way") < adults < text.index("actually happening")
+    stage = text.index(stage_text("lust", "banter").format(name="Zan", them="him", their="his"))
+    distance = text.index(DISTANCE.format(them="him", they="he"))
+    assert text.index("Your way") < stage < text.index(BUILTIN_ROMANCE["suggestive"]) < distance
+    assert distance < adults < text.index("actually happening")
     assert text.rstrip().endswith("never a canned line.")
 
 
@@ -523,14 +536,18 @@ def test_the_whisper_overlay_is_read_only_at_the_explicit_band_in_a_whisper(tmp_
     lust, drawn, fond = (woman(stance=s) for s in ("lust", "drawn", "fond"))
 
     def tail(p, *, dial=9, channel="whisper", r=None):
-        return whisper_tail(p, r or rel(), dial=dial, channel=channel, data_dir=tmp_path)
-    assert tail(lust) == "WHISPER-OVERLAY"
+        return whisper_tail(p, r or rel(), dial=dial, channel=channel, data_dir=tmp_path,
+                            forms=GM.forms)
+    # the overlay, then the distance frame (variety B2: the frame comes after his overlay)
+    said = f"WHISPER-OVERLAY {DISTANCE.format(them='him', they='he')}"
+    assert tail(lust) == said
     assert tail(lust, channel="guild") == "" and tail(lust, dial=8) == ""
-    assert tail(drawn) == "" and tail(drawn, r=rel("banter")) == "WHISPER-OVERLAY"
+    assert tail(drawn) == "" and tail(drawn, r=rel("banter")) == said
     assert tail(fond) == ""
     bare = tmp_path / "bare"
     bare.mkdir()
-    assert whisper_tail(lust, rel(), dial=9, channel="whisper", data_dir=bare) == ""
+    assert whisper_tail(lust, rel(), dial=9, channel="whisper", data_dir=bare,
+                        forms=GM.forms) == ""
     assert OVERLAY_CAPS[WHISPER_OVERLAY] == romance.OVERLAY_CAP_TOKENS
     assert {f"romance_{b}" for b in BANDS} < set(OVERLAY_CAPS)
 
@@ -591,10 +608,64 @@ def test_her_own_dial_governs_her_whisper_overlay(tmp_path):
                                                                encoding="utf-8")
 
     def tail(p, dial):
-        return whisper_tail(p, rel(), dial=dial, channel="whisper", data_dir=tmp_path)
+        return whisper_tail(p, rel(), dial=dial, channel="whisper", data_dir=tmp_path,
+                            forms=GM.forms)
     raised, lowered, plain = (woman(stance="lust", dial=d) for d in (9, 8, None))
     assert explicit_whisper(raised, rel(), dial=1, channel="whisper")
-    assert tail(raised, 1) == "WHISPER-OVERLAY"
+    assert tail(raised, 1).startswith("WHISPER-OVERLAY ")
     assert not explicit_whisper(lowered, rel(), dial=10, channel="whisper")
     assert tail(lowered, 10) == ""
-    assert tail(plain, 9) == "WHISPER-OVERLAY" and tail(plain, 8) == ""
+    assert tail(plain, 9).startswith("WHISPER-OVERLAY ") and tail(plain, 8) == ""
+
+
+def write_overlay(d, name, text):
+    (d / "prompts").mkdir(parents=True, exist_ok=True)
+    (d / "prompts" / f"{name}.txt").write_text(text, encoding="utf-8")
+
+
+def test_an_overlay_with_three_variants_gives_each_in_turn(tmp_path):
+    write_overlay(tmp_path, "romance_explicit", "ONE\n---\nTWO\n---\nTHREE")
+    assert romance.overlay_variants("romance_explicit", tmp_path) == ("ONE", "TWO", "THREE")
+    seen = {romance._band_text("explicit", tmp_path, random.Random(i)) for i in range(30)}
+    assert seen == {"ONE", "TWO", "THREE"}
+    assert romance._band_text("explicit", tmp_path) == "ONE"  # no rng: the first
+
+
+def test_a_single_block_overlay_reads_as_before(tmp_path):
+    write_overlay(tmp_path, "romance_flirty", "Plain synthetic wording.\nTwo lines -- with a dash.\n")
+    assert romance.overlay_variants("romance_flirty", tmp_path) == (
+        "Plain synthetic wording.\nTwo lines -- with a dash.",)
+    for rng in (None, random.Random(3)):
+        assert romance._band_text("flirty", tmp_path, rng) == (
+            "Plain synthetic wording.\nTwo lines -- with a dash.")
+    assert romance.overlay_variants("romance_warm", tmp_path) == ()
+
+
+def test_blank_blocks_are_dropped_and_only_a_bare_separator_splits(tmp_path):
+    write_overlay(tmp_path, "romance_explicit", "---\nONE\n  ---  \n\n---\nTWO ---\n----\nthree\n---\n")
+    assert romance.overlay_variants("romance_explicit", tmp_path) == ("ONE", "TWO ---\n----\nthree")
+
+
+def test_each_variant_is_capped_on_its_own(tmp_path, caplog):
+    long = " ".join(f"word{i}" for i in range(400))
+    write_overlay(tmp_path, "romance_explicit", f"short one\n---\n{long}\n---\nshort two")
+    with caplog.at_level(logging.WARNING, logger="leeroy_mind"):
+        got = romance.overlay_variants("romance_explicit", tmp_path)
+        romance.overlay_variants("romance_explicit", tmp_path)
+    assert got[0] == "short one" and got[2] == "short two"
+    assert "word0 " in got[1] and "word399" not in got[1]
+    capped = [r for r in caplog.records if "overlay" in r.getMessage()]
+    assert len(capped) == 1 and "word" not in capped[0].getMessage()
+
+
+def test_whisper_tail_picks_a_variant(tmp_path):
+    write_overlay(tmp_path, romance.WHISPER_OVERLAY, "ALPHA\n---\nBETA")
+    p = woman(stance="lust")
+    rel = None
+    kw = dict(dial=10, channel="whisper", data_dir=tmp_path, forms=GM.forms)
+    if not romance.explicit_whisper(p, rel, dial=10, channel="whisper"):
+        pytest.skip("setup does not reach the explicit band")
+    frame = DISTANCE.format(them="him", they="he")
+    assert romance.whisper_tail(p, rel, **kw) == f"ALPHA {frame}"
+    assert {romance.whisper_tail(p, rel, rng=random.Random(i), **kw)
+            for i in range(30)} == {f"ALPHA {frame}", f"BETA {frame}"}

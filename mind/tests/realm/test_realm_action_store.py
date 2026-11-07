@@ -229,7 +229,8 @@ CAST = tuple(range(101, 207))
 
 
 @pytest.mark.parametrize("reason", ["busy:combat", "busy:dead", "busy:offline", "busy:teleport", "busy:duel",
-                                    "busy:raid_owner", "busy:body_identity_changed", "not_actor"])
+                                    "busy:raid_owner", "busy:body_identity_changed", "not_actor",
+                                    "weapon_record_unavailable"])
 @pytest.mark.parametrize("job_first", [False, True])
 def test_a_rearm_native_refused_at_one_step_settles_refused_and_holds_nobody(store, reason, job_first):
     dispatch(store, prepare(store, p.Rearm("rearm", CAST)))
@@ -250,6 +251,12 @@ def test_a_rearm_native_refused_at_one_step_settles_refused_and_holds_nobody(sto
     (p.Rearm("rearm", CAST), "operation_outcome_unknown", CAST[27], 0),
     (p.Rearm("rearm", CAST), "recorded_weapon_unavailable", CAST[27], 0),  # Refuse or, after a swap, Unknown
     (p.Rearm("rearm", CAST), "equipment_changed", CAST[27], 0),
+    (p.Rearm("rearm", CAST), "weapon_record_unproved", CAST[27], 0),  # the record failed after a swap
+    (p.Rearm("rearm", CAST), "weapon_record_unavailable", 999, 0),  # not a body of this rearm
+    (p.RpgStatus("rearm", 2, "do quest", 1), "weapon_record_unavailable", 2, 0),  # only a rearm says it
+    (p.Equip("rearm", 2, 5976), "weapon_record_unavailable", 2, 0),
+    # Refuse, or Unproved once this leave changed a body (a queue or battleground left first)
+    (p.LeavePvp("rearm", CAST), "wg_private_state_unavailable", CAST[0], 0),
     (p.Rearm("rearm", CAST), "realm_off", CAST[27], 0),
     (p.Rearm("rearm", CAST), "busy:combat", 999, 0),  # not a body of this rearm
     (p.Rearm("rearm", CAST), "busy:combat", CAST[27], 1),  # a count native never sends with a refusal
@@ -324,6 +331,26 @@ def test_recovery_settles_stored_rearms_native_refused_at_a_step_and_keeps_a_rea
     again = {r.command_id: r for r in store.records()}
     assert [r.command_id for r in store.recover(process_id="again", now=1794000100.0)] == ["grow", "walk"]
     assert {r.command_id: r for r in store.records()} == again
+
+
+def test_recovery_settles_a_rearm_with_no_weapon_record_and_keeps_a_leave_from_wintergrasp(store):
+    # As the live journal kept them on 2026-11-07: a rearm sent at hello just after a worldserver
+    # start, refused at its first body for want of a weapon record, and a leave of three new members.
+    cast = tuple(range(301, 413))
+    new = (1985, 2025, 2655)
+    _stored_unknown(store, "rearm", p.Rearm("rearm", cast),
+                    _failed("rearm", "rearm", "weapon_record_unavailable", cast[0], 0, 1794056651.7),
+                    seq_time=1794056651.5)
+    _stored_unknown(store, "leave", p.LeavePvp("leave", new),
+                    _failed("leave", "leave_pvp", "wg_private_state_unavailable", new[0], 0, 1794058969.2),
+                    seq_time=1794058966.0)
+    before = store.get("leave")
+    assert sum(len(h.guids) for h in store.holds()) == 112 + 3
+    assert [r.command_id for r in store.recover(process_id="new", now=1794070000.0)] == ["leave"]
+    record = store.get("rearm")
+    assert (record.state, record.result_ok, record.result_reason) == ("completed", False, "step_refused")
+    assert store.get("leave") == before
+    assert {h.scope_id: h.guids for h in store.holds()} == {"leave": frozenset(new)}
 
 
 def test_recovery_leaves_other_stored_failures_alone(store):
@@ -512,6 +539,44 @@ def test_step_refusals_are_native_refusals_whose_reservation_is_released():
     assert 'return finish(result.reason.empty() ? "refused" : result.reason, false, true);' in tick
     assert "if (retain) reservation.retained = true;\n            else _state->Release(entry.id);" in tick
     assert "if (reservation.guildJoinAttempts.empty()) return true;" in tick
+
+
+def test_a_kind_step_refusal_is_said_only_by_its_executor_and_only_as_a_refuse_before_any_swap():
+    src = REPO / "modules/mod-leeroy/src"
+    bodies = (src / "Realm/RealmBodies.cpp").read_text(encoding="utf-8")
+
+    def body(text, signature):
+        start = text.index(signature)
+        return text[start:text.index("\n}\n", start)]
+
+    executors = {"rearm": "RealmStep Rearm("}
+    assert set(action_store.KIND_STEP_REFUSALS) == set(executors) <= action_store.STEP_REFUSAL_KINDS
+    for kind, reasons in action_store.KIND_STEP_REFUSALS.items():
+        step = body(bodies, executors[kind])
+        # One swap per planned weapon, each counted: a Refuse after the first swap needs changed == 0.
+        assert step.count("SwapItem(") == 1 and step.count("++changed;") == 1
+        first_swap = step.index("SwapItem(")
+        for reason in sorted(reasons):
+            quoted = f'"{reason}"'
+            # Nowhere else in native says it, so no other kind's failure can carry it.
+            assert [f.name for f in src.rglob("*") if f.is_file() and quoted in f.read_text(encoding="utf-8")] \
+                == ["RealmBodies.cpp"]
+            assert bodies.count(quoted) == step.count(quoted) >= 1
+            assert f"Unknown({quoted})" not in step
+            at = 0
+            while (at := step.find(quoted, at + 1)) != -1:
+                line = step[step.rfind("\n", 0, at) + 1:step.find("\n", at)].strip()
+                assert f"Refuse({quoted})" in line
+                assert at < first_swap or re.fullmatch(
+                    r'return changed \? Unknown\("(?!' + reason + r'")[a-z_]+"\) : Refuse\(' + quoted + r'\);', line)
+    # Before refusing, a rearm records an armed body with no record (a worldserver start empties
+    # them): that writes native's record alone, never the body, so the Refuse still precedes any change.
+    rearm = body(bodies, "RealmStep Rearm(")
+    assert rearm.index("RealmModule::Instance().RecordWeapons(guid, entry.id)) record =") \
+        < rearm.index('if (!record) return Refuse("weapon_record_unavailable");') < rearm.index("SwapItem(")
+    record = body((src / "Realm/RealmModule.cpp").read_text(encoding="utf-8"), "bool RealmModule::RecordWeapons(")
+    assert "_state->weapons[guid] = {now.mainHand, now.offHand, now.ranged};" in record
+    assert not re.search(r"Swap|Equip|Store|Destroy|Remove|Teleport|->Set", record)
 
 
 def test_unsolicited_mismatched_kind_guid_and_token_are_not_enrolled(store):

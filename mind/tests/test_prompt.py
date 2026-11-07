@@ -73,7 +73,7 @@ def test_message_layout_in_order():
         "How you type (examples of your style; don't repeat them):") \
         < sys_.index("ok pulling in 5") < sys_.index("lol no") < sys_.index(p.rules)
     heads = ["People here:", "You remember:", "Right now:", "Chat:",
-             "Your last lines (don't reuse their wording):"]
+             "Your last lines (don't make the same move again):"]
     at = [user.index(h) for h in heads]
     assert at == sorted(at)
     assert user.index("Zan (the guild master)") < at[1] < user.index("Marrowgar") < at[2]
@@ -625,3 +625,15 @@ def test_real_name_line_follows_his_pronouns():
     assert "know his real name" in line(dataclasses.replace(GM, pronouns="he"))
     assert "know her real name" in line(dataclasses.replace(GM, pronouns="she"))
     assert "know their real name" in line(GM)
+
+
+def test_after_goes_between_the_instruction_and_the_tail_and_is_never_capped():
+    out = render_instruction(TurnKind.WHISPER, addressee="Zan", extra="x " * 2000,
+                             after="AFTER", tail="TAIL")
+    assert out.endswith("AFTER TAIL")
+
+
+def test_the_last_lines_heading_is_about_moves():
+    user = build_messages(parts())[1]["content"]
+    assert "Your last lines (don't make the same move again):" in user
+    assert "reuse their wording" not in user

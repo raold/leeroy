@@ -13,7 +13,9 @@ engine, extraction and event memories run in their own workers.
 - chat: an echo of the mind's own line is dropped; anything else is stored with its origin
   and audience, and his lines (not his bot commands) go to the world, the threads and the
   engine.
-- afk, text_emote: stored and applied to the world, never talked about.
+- afk, text_emote: stored and applied to the world. His own live text emote also goes to the
+  engine while he is online (talk/emotes.py: members emote back, sometimes with a line); a
+  member's emote, the mind's echoes and replayed emotes are never answered.
 - error: logged only. A type an extension registered: stored only.
 - everything else: stored, the world, the raid state, the event memories, the engine.
 
@@ -867,6 +869,9 @@ class MindApp:
                                                        ts=self._event_at(ev, now, backlog))
                 self._capture_row(ev, "game_event", event_id, backlog)
                 self.world.apply(ev, now)
+                if isinstance(ev, TextEmote) and not backlog and self.world.human_online:
+                    # only his own get an answer; the row id is the night's receipt key
+                    await self.engine.on_text_emote(ev, now, event_id=event_id)
         elif isinstance(ev, Error):
             log.warning("bridge_error: message=%r", ev.message)
         elif name not in CORE_EVENT_TYPES:

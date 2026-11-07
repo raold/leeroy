@@ -137,9 +137,67 @@ def test_doctor_knows_the_whisper_overlay(tmp_path, capsys):
     assert f"over its cap of {OVERLAY_CAP_TOKENS}" in line
 
 
+def test_doctor_knows_the_emote_overlays(tmp_path, capsys):
+    """talk/emotes.py: the words of a member's line after his emote are two named templates,
+    cut to the instruction's extra cap."""
+    from leeroy_mind.talk.prompt import EXTRA_CAP_TOKENS
+    with socket.create_server(("127.0.0.1", 0)) as listener:
+        _setup(tmp_path, listener.getsockname()[1])
+        (tmp_path / "prompts").mkdir()
+        for name in ("emote_at_you", "emote_joined"):
+            (tmp_path / "prompts" / f"{name}.txt").write_text(f"{SECRET} " + _words(20),
+                                                              encoding="utf-8")
+        code, out = _doctor(tmp_path, capsys)
+    lines = [x for x in out if "prompt overlay" in x]
+    assert code == 0 and len(lines) == 2 and SECRET not in "\n".join(out)
+    assert all("no prompt reads it" not in x and f"(cap {EXTRA_CAP_TOKENS})" in x for x in lines)
+
+
 def test_no_overlays_no_lines(tmp_path, capsys):
     with socket.create_server(("127.0.0.1", 0)) as listener:
         _setup(tmp_path, listener.getsockname()[1])
         (tmp_path / "prompts").mkdir()
         code, out = _doctor(tmp_path, capsys)
     assert code == 0 and not [line for line in out if "prompt overlay" in line]
+
+
+def test_doctor_counts_variants_and_knows_the_night_overlays(tmp_path, capsys):
+    with socket.create_server(("127.0.0.1", 0)) as listener:
+        _setup(tmp_path, listener.getsockname()[1])
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        (prompts / "romance_explicit.txt").write_text(
+            f"{SECRET} one\n---\n{SECRET} " + _words(OVERLAY_CAP_TOKENS + 40) + "\n---\nthree",
+            encoding="utf-8")
+        (prompts / "romance_flirty.txt").write_text(f"{SECRET} single", encoding="utf-8")
+        (prompts / "nightly_reflect.txt").write_text(f"{SECRET} night", encoding="utf-8")
+        code, out = _doctor(tmp_path, capsys)
+    assert code == 0, out
+    lines = {line.split("prompt overlay ", 1)[1].split(":", 1)[0]: line
+             for line in out if "prompt overlay" in line}
+    assert SECRET not in "\n".join(out)
+    explicit = lines["romance_explicit"]
+    assert "3 variants, largest " in explicit and f"(cap {OVERLAY_CAP_TOKENS})" in explicit
+    assert "over its cap" in explicit
+    assert "variants" not in lines["romance_flirty"]
+    assert lines["nightly_reflect"].endswith(
+        "read by the night's reflect writer (no cap)")
+    assert "no prompt reads it" not in lines["nightly_reflect"]
+
+
+def test_a_night_overlay_with_no_writer_is_flagged(tmp_path, capsys):
+    with socket.create_server(("127.0.0.1", 0)) as listener:
+        _setup(tmp_path, listener.getsockname()[1])
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        for name in ("nightly_reflect", "nightly_core_judge", "nightly_realm_post",
+                     "nightly_reflekt"):
+            (prompts / f"{name}.txt").write_text(f"{SECRET} night", encoding="utf-8")
+        code, out = _doctor(tmp_path, capsys)
+    assert code == 0, out
+    lines = {line.split("prompt overlay ", 1)[1].split(":", 1)[0]: line
+             for line in out if "prompt overlay" in line}
+    for known in ("nightly_reflect", "nightly_core_judge", "nightly_realm_post"):
+        assert "read by the night's" in lines[known] and "no night writer" not in lines[known]
+    assert "no night writer reads it (check the name)" in lines["nightly_reflekt"]
+    assert lines["nightly_reflekt"].startswith("ok")  # a note, never a FAIL

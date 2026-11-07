@@ -2,6 +2,7 @@
 rules every generating prompt ends with, and the Reasoner, which asks in two passes: `think` lets
 the model reason freely, `json` has it answer as a checked JSON object. Presets, timeouts and
 model names come from P1b; nothing here knows a persona."""
+import ast
 import asyncio
 import json
 import logging
@@ -125,6 +126,42 @@ def schema(title: str, properties: dict, required: list[str] | None = None) -> d
     return {"title": title, "type": "object", "properties": properties,
             "required": list(properties) if required is None else list(required),
             "additionalProperties": False}
+
+
+def night_prompt_names() -> frozenset[str]:
+    """The names a night writer asks system_prompt for (the owner's overlay for each is
+    prompts/nightly_<name>.txt), read from the call sites in this package: the first argument
+    of every `system_prompt(...)` / `_system(...)` call, a string or a module-level string
+    constant. Nothing is listed twice, so a new writer is known as soon as it is written."""
+    names: set[str] = set()
+    for path in Path(__file__).resolve().parents[1].rglob("*.py"):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError, UnicodeDecodeError):
+            continue
+        consts: dict[str, str] = {}
+        for node in tree.body:
+            if isinstance(node, ast.Assign):
+                pairs = ([(node.targets[0], node.value)] if not isinstance(node.targets[0], ast.Tuple)
+                         or not isinstance(node.value, ast.Tuple)
+                         else list(zip(node.targets[0].elts, node.value.elts)))
+                for target, value in pairs:
+                    if (isinstance(target, ast.Name) and isinstance(value, ast.Constant)
+                            and isinstance(value.value, str)):
+                        consts[target.id] = value.value
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and node.args):
+                continue
+            f = node.func
+            if (f.id if isinstance(f, ast.Name) else getattr(f, "attr", None)) not in (
+                    "system_prompt", "_system"):
+                continue
+            a = node.args[0]
+            if isinstance(a, ast.Constant) and isinstance(a.value, str):
+                names.add(a.value)
+            elif isinstance(a, ast.Name) and a.id in consts:
+                names.add(consts[a.id])
+    return frozenset(names)
 
 
 def system_prompt(name: str, default: str, data_dir: Path, /, *, human: HumanIdentity,

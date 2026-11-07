@@ -21,8 +21,8 @@ from leeroy_mind.logs import log as log_event
 from leeroy_mind.nightly.gpu import norm
 from leeroy_mind.talk.budget import GAP_REFERENCE_CHATTINESS, PHASE_MODS, DayPhase
 from leeroy_mind.talk.prompt import pushback_help
-from leeroy_mind.talk.romance import (MODE_WEIGHTS, RIVALRY_P, WHISPER_WEIGHT, band,
-                                      flirt_chance, forward)
+from leeroy_mind.talk.romance import (MODE_WEIGHTS, RIVALRY_P, band, flirt_chance, forward,
+                                      whisper_weight)
 from leeroy_mind.talk.select import SpeakerContext, speaker_weight
 from leeroy_mind.talk.turns import Turn, TurnKind
 
@@ -116,8 +116,7 @@ def _member_numbers(app, pic, dial: str, before, after, guid: int, cast) -> list
         row("chance a social turn becomes a flirt", round(100 * flirt_chance(b, 1.0), 1),
             round(100 * flirt_chance(a, 1.0), 1), "%")
         row("weight to whisper you unprompted",
-            round(WHISPER_WEIGHT.get(b.romance.stance, 0.0) * forward(b), 2),
-            round(WHISPER_WEIGHT.get(a.romance.stance, 0.0) * forward(a), 2))
+            round(whisper_weight(b, None), 2), round(whisper_weight(a, None), 2))
         row("how often her turns to you carry her romance (x as written)",
             round(forward(b), 2), round(forward(a), 2), "x")
     elif dial == "jealousy":

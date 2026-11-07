@@ -1,7 +1,10 @@
 """A fixed talk scenario over a synthetic cast, recorded as every prompt the engine composed,
 every line it sent and the speaker weights it drew from. The first invariant of tuning ("no
 settings means identical prompts") compares a run of it against golden_prompts.json, which was
-written by this same scenario with the code from before tuning existed."""
+written by this same scenario with the code from before tuning existed. Re-recorded since for
+members starting conversations (2026-11-07): its one evening whisper says she starts it and
+what she brings up, and it no longer comes from Belra, whom he had whispered a minute before
+(a member in a whisper with him starts none), so the draws after it moved too."""
 import asyncio
 import json
 import random
@@ -35,6 +38,10 @@ def cast(store) -> None:
 
 async def _run(store, clock, data_dir) -> dict:
     r = make_rig(store, clock, data_dir, script=numbered("ok so line {n} then"), seed=7)
+    # the initiation clocks came later and have their own tests (test_initiate.py): off here,
+    # so the scenario's draws stay the ones the golden recorded
+    r.engine.whispers.set_rate(0.0)
+    r.engine.budget.set_to_him_rate(0.0)
     await r.session()
     await r.event(Login(ts=0, guid=HUMAN, human=True))
     await r.advance(90, step=2)

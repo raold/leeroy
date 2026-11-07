@@ -494,6 +494,16 @@ class Store:
         """Every active memory's text: how rare a word is across the guild's memories."""
         return [r["text"] for r in self._all("SELECT text FROM memory WHERE status = 'active'")]
 
+    def next_calendar_event(self, since: float, until: float,
+                            kinds: tuple[str, ...]) -> tuple[str, float] | None:
+        """The first posted guild calendar event (realm_calendar) of one of `kinds` between
+        `since` and `until`: its title and when; None when there is none."""
+        r = self._one(
+            f"SELECT title, at FROM realm_calendar WHERE state = 'posted' AND at >= ? AND at < ? "
+            f"AND kind IN ({','.join('?' for _ in kinds)}) ORDER BY at, id LIMIT 1",
+            (since, until, *kinds))
+        return (r["title"], float(r["at"])) if r is not None else None
+
     def get_memories(self, ids) -> list[MemoryRow]:
         ids = list(ids)
         if not ids:
