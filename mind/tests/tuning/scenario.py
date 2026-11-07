@@ -1,9 +1,10 @@
 """A fixed talk scenario over a synthetic cast, recorded as every prompt the engine composed,
 every line it sent and the speaker weights it drew from. The first invariant of tuning ("no
 settings means identical prompts") compares a run of it against golden_prompts.json, which was
-written by this same scenario with the code from before tuning existed. Re-recorded once since
-(2026-11-07, members starting conversations): its one evening whisper now says she starts it
-and what she brings up; nothing else moved."""
+written by this same scenario with the code from before tuning existed. Re-recorded since for
+members starting conversations (2026-11-07): its one evening whisper says she starts it and
+what she brings up, and it no longer comes from Belra, whom he had whispered a minute before
+(a member in a whisper with him starts none), so the draws after it moved too."""
 import asyncio
 import json
 import random

@@ -622,13 +622,17 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   upkeep) runs with built-in defaults; `[guild]` and `[dkp]` tables in
   `mind.toml` override them.
 - Members start conversations with him on two clocks (2026-11-07), per hour of
-  his play at chattiness 4 and scaled with it: `[talk] whispers_per_hour` (4;
-  `whisper:start`, drawn and lust women most, fond rarely, men only casually,
-  lifted by the romance dial) and `openers_per_hour` (6; `burst:to_him`, a
-  casual line naming him in party when he is grouped with them, five or fewer,
-  else guild, never romance), with the talkative and forward dials moving the
-  rate; never in his raid's fight, wipe silence or debrief, while he is AFK or
-  in his login's quiet, and a first `(nothing)` is asked again once.
+  his play at chattiness 4 and scaled with it (0 stops every unprompted whisper):
+  `[talk] whispers_per_hour` (4, at most 8 an hour and 2 minutes apart;
+  `whisper:start`, romantic from drawn and lust women, casual from everyone else,
+  a fond woman at a quarter of a lust one, lifted by the romance dial) and
+  `openers_per_hour` (6, at most 12; `burst:to_him`, a casual line naming him,
+  from a group-mate in party when his group is five or fewer, else guild), the
+  talkative and forward dials moving the rate. Neither runs in his raid's fight,
+  wipe silence or debrief, a 5-man boss fight, while he is AFK, in his login's
+  quiet or within a minute of his own line or an answer to him; a member in a
+  whisper with him (10 minutes) starts none, openers never take an answer's
+  guard slot, and a first `(nothing)` is asked again once.
 - A group he built with `.playerbots bot addN` (native `guild_group` events)
   raids like a called raid night once he leads it into a raid instance in
   `guild/raids.py`: size and heroic from the instance difficulty, his group's

@@ -1716,7 +1716,8 @@ class Pipeline:
         hg = self.human.guid
         if heard and hg and (meta.answers_human or turn.addressee == hg or turn.to_guid == hg):
             self._answered_at[turn.speaker] = now  # a thread with him is open
-        (meta.guards or self.guards).record(meta.turn_id, turn.speaker, now, turn.kind)
+        (meta.guards or self.guards).record(meta.turn_id, turn.speaker, now, turn.kind,
+                                            initiated=meta.initiates)
         meta.said += 1
         self._turn_lines[meta.turn_id] = meta.said
         while len(self._turn_lines) > TURNS_KEPT:

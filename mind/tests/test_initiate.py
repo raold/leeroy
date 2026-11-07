@@ -7,18 +7,26 @@ import random
 import re
 from collections import Counter
 
+from dataclasses import replace
+
 import pytest
 
-from conftest import HUMAN, make_persona, run, seed_test_cast
+from conftest import HUMAN, TEST_CAST, make_persona, run, seed_test_cast
 from engine_rig import engine_clock, make_rig, numbered, save_member
 from leeroy_mind.config import ConfigError, load_config
-from leeroy_mind.protocol import Boss, Group, Login, Zone
+from leeroy_mind.personas.io import save_persona
+from leeroy_mind.protocol import AfkEvent, Boss, Cast, Group, Login, LootWon, Member, Zone
 from leeroy_mind.storage.rows import Relationship
-from leeroy_mind.talk.budget import BurstBudget, DayPhase
+from leeroy_mind.talk import budget as budget_mod
+from leeroy_mind.talk import romance as romance_mod
+from leeroy_mind.talk.budget import (AFTER_BURST_S, TO_HIM_HOUR_MAX, BurstBudget, DayPhase)
+from leeroy_mind.talk.guards import Guards
 from leeroy_mind.talk.raid import RaidPhase
 from leeroy_mind.talk.reactions import LOGIN_QUIET_S
-from leeroy_mind.talk.romance import (INVARIANTS, WhisperPlanner, romance_lift,
+from leeroy_mind.talk.romance import (FOND_SHARE, INVARIANTS, WHISPERS_APART_S,
+                                      WHISPERS_HOUR_MAX, WhisperPlanner, romance_lift,
                                       whisper_kind, whisper_weight)
+from leeroy_mind.talk.turns import TurnKind
 from leeroy_mind.tuning.state import Tuning
 
 R = random.Random
@@ -76,11 +84,14 @@ def test_lust_and_drawn_women_whisper_most_fond_rarely_men_only_casually():
     fond, none = woman(203, "Ebba", "fond"), woman(204, "Fira", "none")
     friend = man(301, "Coros")
     w = {p.guid: whisper_weight(p, rel(p.guid)) for p in (lust, drawn, fond, none, friend)}
-    assert w[201] > w[202] > w[203] > 0 and w[203] <= w[201] / 4  # fond: rarely
+    assert w[201] > w[202] > w[203] > 0
     assert w[204] == 0 and w[301] == 0  # no attitude and no warmth: no reason to whisper
+    for affinity in (0.0, 20.0, 60.0):  # fond rarely: a quarter of lust at equal affinity
+        assert whisper_weight(fond, rel(203, affinity)) == pytest.approx(
+            FOND_SHARE * whisper_weight(lust, rel(201, affinity)))
     assert 0 < whisper_weight(friend, rel(301, 50.0)) <= w[203] * 2  # a friend, now and then
     assert [whisper_kind(p) for p in (lust, drawn, fond, none, friend)] == [
-        "romantic", "romantic", "personal", "casual", "casual"]
+        "romantic", "romantic", "casual", "casual", "casual"]  # fond: never romantic
     assert whisper_kind(make_persona(302, "Arkon", stance="fond")) == "casual"  # a man: a friend
 
 
@@ -150,14 +161,14 @@ def test_an_event_whisper_takes_the_clocks_place_and_a_hold_waits():
 
 def test_the_opener_to_him_has_its_own_instruction_only_when_asked_for():
     from leeroy_mind.talk.prompt import render_instruction
-    from leeroy_mind.talk.turns import TurnKind
     text = render_instruction(TurnKind.OPEN, addressee="Zan", topic="ask him how his day went",
                               forms=("he", "him", "his"), to_him=True)
     assert text.startswith(TO_HIM) and "say his name and ask him how his day went" in text
     assert "{" not in text and "(nothing)" not in text
     plain = render_instruction(TurnKind.OPEN, addressee="Zan")  # any other OPEN, as before
     assert TO_HIM not in plain and "(nothing)" in plain
-    assert render_instruction(TurnKind.CONTINUE, addressee="Zan", to_him=True) ==         render_instruction(TurnKind.CONTINUE, addressee="Zan")
+    assert (render_instruction(TurnKind.CONTINUE, addressee="Zan", to_him=True)
+            == render_instruction(TurnKind.CONTINUE, addressee="Zan"))
 
 
 def openers(chattiness, *, hours=30, raid=P.NONE, quiet_until=None, seed=5, per_hour=6.0):
@@ -261,9 +272,8 @@ def test_romance_goes_by_whisper_and_the_openers_to_him_stay_casual(store, clock
         cast_for_initiation(store)
         r = make_rig(store, clock, tmp_path, script=numbered("thought {n} here"))
         r.engine.bits.p_fire = 0.0
-        r.engine.whispers.set_rate(8.0)  # more draws, under the members' own pacing
-        await r.session()
-        await play(r, 4 * 3600, step=6.0)
+        await r.session()  # at the default rate, so the members' own pacing rarely binds
+        await play(r, 6 * 3600, step=6.0)
         await r.engine.end_session()
         by = Counter(g for _, g, ch, _ in started(r) if ch == "whisper")
         # Belra (lust) and Dunna (drawn) most, Coros (fond) rarely, Arkon (a friend) now and
@@ -330,14 +340,35 @@ def test_nothing_is_started_in_a_fight_the_wipe_or_its_debrief(store, clock, tmp
     run(main())
 
 
-def test_chattiness_zero_starts_nothing(store, clock, tmp_path):
+def test_chattiness_zero_stops_every_unprompted_whisper_and_opener(store, clock, tmp_path):
+    """The clock's whispers and openers, and the event draws too: a quiet stretch, the
+    evening (his loot), the late hour and the voice service's private-room invite (which
+    draws from the same planner)."""
     async def main():
         cast_for_initiation(store)
         r = make_rig(store, clock, tmp_path, chattiness=0, script=numbered("thought {n} here"))
+        drawn = []
+        maybe = r.engine.whispers.maybe
+
+        def spy(now, trigger, candidates):
+            drawn.append(trigger)
+            return maybe(now, trigger, candidates)
+        r.engine.whispers.maybe = spy
         await r.session()
-        await play(r, 3600)
+        await r.event(Login(ts=0, guid=HUMAN, human=True))
+        await play(r, 900, step=10.0)
+        await r.event(LootWon(ts=0, guid=HUMAN, item_id=50415, name="Bryntroll", method="need"))
+        await play(r, 3600, step=20.0)
+        for trigger in ("late", "after_kill"):  # the evening's draw took the late hour's
+            for _ in range(20):
+                r.engine._maybe_whisper(trigger, clock.now(), about="Lord Marrowgar")
+                await play(r, 700, step=20.0)
+        assert {"idle", "evening", "late", "after_kill"} <= set(drawn)  # tried, none landed
+        assert started(r) == []
+        cands = r.engine._whisper_cands(clock.now())
+        assert cands and all(r.engine.whispers.maybe(clock.now() + i * 700, "idle", cands) is None
+                             for i in range(200))  # the voice invite path's draw
         await r.engine.end_session()
-        assert [x for x in started(r) if x[3] in ("whisper:start", "burst:to_him")] == []
     run(main())
 
 
@@ -361,4 +392,305 @@ def test_a_silent_start_is_asked_again_once(store, clock, tmp_path):
         await r.engine.end_session()
         assert asked and asked.count(True) == asked.count(False)  # every silence asked once
         assert len(started(r)) >= asked.count(True) > 0
+    run(main())
+
+
+# -- fix round 1 (controller review of c0a7ed7) -----------------------------------------------
+
+def big_guild(store, n=100):
+    """The test cast plus `n` invented members, a third of them women who want him."""
+    cast_for_initiation(store)
+    for g in range(201, 201 + n):
+        over = {"player_gender": "female", "stance": "lust"} if g % 3 == 0 else {}
+        save_persona(store, make_persona(g, f"Mem{g}", **over), source="seed", ts=1000.0,
+                     race="Orc", class_name="Warrior")
+    return list(range(201, 201 + n))
+
+
+def online_all(r, extra):
+    members = [Member(guid=g, name=n, race=rc, class_=c, gender=0, level=80, rank=3,
+                      online=True, map=0, zone=10, spec_tab=-1)
+               for g, (n, rc, c) in TEST_CAST.items()]
+    members += [Member(guid=g, name=f"Mem{g}", race=2, class_=1, gender=0, level=80, rank=3,
+                       online=True, map=0, zone=10, spec_tab=-1) for g in extra]
+    r.world.apply(Cast(ts=0, members=tuple(members)), r.clock.now())
+
+
+def his_lines(r, since=0.0):
+    return [u["ts"] for u in r.store.conn.execute(
+        "SELECT ts FROM chat_line WHERE origin = 'human' AND ts >= ? ORDER BY id", (since,))]
+
+
+def test_party_openers_come_from_his_group_mates_in_a_big_guild(store, clock, tmp_path):
+    """Ruling 1: "it can be in party" means the people he plays with. About 100 online, 4 in
+    his party: the openers to him come from those 4, in party; anyone else's go to guild."""
+    async def main():
+        extra = big_guild(store)
+        r = make_rig(store, clock, tmp_path, script=numbered("thought {n} here"))
+        r.engine.bits.p_fire = 0.0
+        online_all(r, extra)
+        mates = (101, 102, 103, 104)
+        await r.event(Group(ts=0, leader_guid=HUMAN, raid=False, members=(HUMAN, *mates)))
+        await r.session()
+        await play(r, 3600)
+        await r.engine.end_session()
+        to_him = [(g, ch) for _, g, ch, why in started(r) if why == "burst:to_him"]
+        assert len(to_him) >= 4
+        assert all(ch == ("party" if g in mates else "guild") for g, ch in to_him)
+        assert sum(g in mates for g, _ in to_him) >= 0.8 * len(to_him)
+    run(main())
+
+
+def test_him_chatting_through_the_hour_still_gets_every_reply(store, clock, tmp_path):
+    """Ruling 2: nothing starts a conversation with him within AFTER_BURST_S of his own line
+    or an answer to him, and the lines that do start one never take the guild's minute from
+    an answer. Bursts are off, so only the two clocks compete with the replies."""
+    async def main():
+        cast_for_initiation(store)
+        r = make_rig(store, clock, tmp_path, script=numbered("thought {n} here"))
+        r.engine.bits.p_fire = 0.0
+        r.engine.budget = BurstBudget(4, r.engine.rng, gap_s=(1e9, 1e9), to_him_per_hour=60.0)
+        r.engine.whispers.set_rate(60.0)
+        await r.session()
+        t0 = clock.now()
+        for n in range(24):  # a line of his every 150 s for an hour
+            await r.human(f"so what is everyone up to {n}")
+            await play(r, 150)
+        await r.engine.end_session()
+        replies = r.store.conn.execute(
+            "SELECT dropped FROM utterance WHERE kind = 'reply_human'").fetchall()
+        assert replies and all(u["dropped"] is None for u in replies)
+        answered = [u["ts"] for u in r.store.conn.execute(
+            "SELECT ts FROM utterance WHERE kind = 'reply_human' AND dropped IS NULL")]
+        talk = his_lines(r, t0) + answered
+        lines = started(r, t0)
+        assert lines, "the clocks still start something in his pauses"
+        # planned at least AFTER_BURST_S after his talk, so never 10-60 s after a line of it
+        assert not [x for x in lines if any(10 <= x[0] - t < AFTER_BURST_S for t in talk)]
+    run(main())
+
+
+def test_afk_holds_both_clocks_and_no_two_whispers_come_within_two_minutes(store, clock,
+                                                                           tmp_path):
+    async def main():
+        cast_for_initiation(store)
+        r = make_rig(store, clock, tmp_path, script=numbered("thought {n} here"))
+        r.engine.bits.p_fire = 0.0
+        r.engine.whispers.set_rate(60.0)
+        r.engine.budget.set_to_him_rate(60.0)
+        await r.session()
+        await play(r, 1200)
+        assert started(r)
+        away = clock.now()
+        await r.event(AfkEvent(ts=0, guid=HUMAN, on=True))
+        await play(r, 1800)
+        back = clock.now()
+        await r.event(AfkEvent(ts=0, guid=HUMAN, on=False))
+        await play(r, 1200)
+        await r.engine.end_session()
+        lines = started(r)
+        assert not [x for x in lines if away + 30 < x[0] < back]  # what was under way aside
+        assert [x for x in lines if x[0] > back]
+        clocks = [x for x in lines if x[3] in ("whisper:start", "burst:to_him")]
+        assert not [x for x in clocks if back <= x[0] < back + 30]  # not the moment he's back
+        whispers = [ts for ts, _, ch, _ in lines if ch == "whisper"]
+        assert all(b - a >= WHISPERS_APART_S - 30 for a, b in zip(whispers, whispers[1:]))
+    run(main())
+
+
+def test_no_two_unprompted_whispers_within_two_minutes_whatever_draws_them():
+    cands = {g: (woman(g, f"W{g}", "lust"), rel(g)) for g in (201, 202, 203)}
+    w = WhisperPlanner(R(1), per_hour=4.0)
+    w.due(0.0)
+    t = 10.0
+    while w.maybe(t, "idle", cands) is None:
+        t += 1.0
+    assert all(w.maybe(t + s, "late", cands) is None for s in range(0, int(WHISPERS_APART_S)))
+    assert w.start(t + 30.0, cands) is None  # the clock's own draw is refused too
+    assert any(w.maybe(t + WHISPERS_APART_S + s, "late", cands) for s in range(0, 600))
+
+
+def test_a_member_in_a_whisper_with_him_does_not_start_one(store, clock, tmp_path):
+    """Ruling 5: a whisper either way in the last 10 minutes is a conversation going on."""
+    async def main():
+        cast_for_initiation(store)
+        r = make_rig(store, clock, tmp_path, online=(102, 104),
+                     script=numbered("thought {n} here"))
+        r.engine.bits.p_fire = 0.0
+        r.engine.whispers.set_rate(60.0)
+        r.engine.budget.set_to_him_rate(60.0)
+        await r.session()
+        for n in range(15):  # he whispers Belra every four minutes
+            await r.human(f"hey you {n}", channel="whisper", to_guid=102)
+            await play(r, 240)
+        await r.engine.end_session()
+        by = Counter(g for _, g, _, _ in started(r))
+        assert by[102] == 0 and by[104] > 0
+    run(main())
+
+
+def test_the_openers_clock_starts_over_each_session(store, clock, tmp_path):
+    b = BurstBudget(4, R(3), to_him_per_hour=6.0)
+    b.to_him(0.0, raid=P.NONE)
+    assert b.to_him_next is not None
+    b.reset_to_him()
+    assert b.to_him_next is None
+    b.to_him(100.0, raid=P.NONE)
+    assert b.to_him_next >= 100.0 + 0.6 * 600
+
+    async def main():
+        cast_for_initiation(store)
+        r = make_rig(store, clock, tmp_path, script=numbered("thought {n} here"))
+        await r.session()
+        await play(r, 60)
+        assert r.engine.budget.to_him_next is not None
+        await r.engine.end_session()
+        await r.session()
+        assert r.engine.budget.to_him_next is None and r.engine.whispers.next_at is None
+        await r.engine.end_session()
+    run(main())
+
+
+def test_whatever_the_dials_at_most_8_whispers_and_12_openers_an_hour():
+    bold = {g: (tune(woman(g, f"W{g}", "lust"), forward=10, talkative=10), rel(g, 80.0))
+            for g in range(201, 221)}
+    w = WhisperPlanner(R(2), per_hour=60.0)
+    times = []
+    now = 0.0
+    while now < 6 * 3600:
+        if w.due(now) and w.start(now, bold, lift=romance_lift(10)) is not None:
+            times.append(now)
+        if w.maybe(now, "idle", bold) is not None:
+            times.append(now)
+        now += 5.0
+    assert times
+    assert max(sum(1 for t in times if a <= t < a + 3600) for a in times) <= WHISPERS_HOUR_MAX
+    assert WHISPERS_HOUR_MAX == 8 and TO_HIM_HOUR_MAX == 12
+    b = BurstBudget(10, R(4), to_him_per_hour=60.0)
+    planned, now = [], 0.0
+    while now < 6 * 3600:
+        if b.to_him(now, raid=P.NONE) is not None:
+            planned.append(now)
+            b.to_him_done(now + 5.0, mult=2.0)
+        now += 5.0
+    assert max(sum(1 for t in planned if a <= t < a + 3600) for a in planned) <= TO_HIM_HOUR_MAX
+
+
+def test_an_answer_to_him_never_waits_for_a_line_that_started_a_conversation():
+    g = Guards(rng=R(1))
+    for n in range(6):
+        g.record(f"t{n}", 201 + n, 100.0, TurnKind.OPEN, initiated=True)
+    assert g.allow(301, TurnKind.REPLY_HUMAN, 101.0)  # the openers left his answers their minute
+    assert not g.allow(302, TurnKind.OPEN, 101.0)  # but the guild's social pace counts them
+    for n in range(6):
+        g.record(f"r{n}", 401 + n, 100.0, TurnKind.REPLY_HUMAN)
+    assert not g.allow(303, TurnKind.REPLY_HUMAN, 101.0)
+    own = Guards(rng=R(1))  # nor does her own opener hold back her answer to him
+    own.record("o", 201, 100.0, TurnKind.OPEN, initiated=True)
+    assert own.allow(201, TurnKind.REPLY_HUMAN, 103.0)
+    assert not own.allow(201, TurnKind.OPEN, 103.0)
+    own.record("r", 201, 104.0, TurnKind.REPLY_HUMAN)
+    assert not own.allow(201, TurnKind.REPLY_HUMAN, 106.0)  # her answer's own interval stands
+
+
+def test_the_guild_calendar_is_an_opener_topic_within_a_day(store, clock, tmp_path):
+    async def main():
+        cast_for_initiation(store)
+        r = make_rig(store, clock, tmp_path)
+        now = clock.now()
+        store.conn.execute(
+            "INSERT INTO realm_calendar(kind, creator, at, title, ref, updated, event_id, state) "
+            "VALUES ('raid', 102, ?, 'Raid night', 'raid:test', ?, 7, 'posted')",
+            (now + 3 * 3600, now))
+        store.conn.execute(
+            "INSERT INTO realm_calendar(kind, creator, at, title, ref, updated, event_id, state) "
+            "VALUES ('meeting', 102, ?, 'Officer meeting', 'meeting:test', ?, 8, 'posted')",
+            (now + 3 * 86400, now))
+        store.conn.commit()
+        assert r.engine._guild_event(now) == "Raid night tonight at 23:00"
+        p = r.engine.personas.get(103)
+        topics = {r.engine._to_him_topic(p, now) for _ in range(8)}
+        assert "bring up what's on the guild calendar: Raid night tonight at 23:00" in topics
+        assert not any("Officer meeting" in t for t in topics)  # three days off
+        assert r.engine._guild_event(now + 4 * 3600) == ""
+    run(main())
+
+
+def test_a_5man_boss_fight_holds_both_clocks(store, clock, tmp_path):
+    async def main():
+        cast_for_initiation(store)
+        r = make_rig(store, clock, tmp_path, script=numbered("thought {n} here"))
+        r.engine.bits.p_fire = 0.0
+        r.engine.whispers.set_rate(60.0)
+        r.engine.budget.set_to_him_rate(60.0)
+        party = (HUMAN, 102, 103, 104)
+        await r.event(Group(ts=0, leader_guid=HUMAN, raid=False, members=party))
+        await r.session()
+        await play(r, 900)
+        assert started(r)
+        engaged = clock.now()
+        await r.event(Boss(ts=0, map=574, instance_id=9, boss_id=0, boss_name="",
+                           state="engaged", members=party))
+        assert r.raid.phase(clock.now()) is P.NONE  # not a raid fight: RaidState ignores it
+        await play(r, 600)
+        killed = clock.now()
+        await r.event(Boss(ts=0, map=574, instance_id=9, boss_id=0, boss_name="",
+                           state="killed", members=party))
+        await play(r, 900)
+        await r.engine.end_session()
+        lines = started(r)
+        assert not [x for x in lines if engaged + 30 < x[0] < killed]
+        assert [x for x in lines if x[0] > killed]
+    run(main())
+
+
+def test_a_live_rescale_through_apply_config(store, clock, tmp_path):
+    async def main():
+        cast_for_initiation(store)
+        r = make_rig(store, clock, tmp_path, script=numbered("thought {n} here"))
+        r.engine.bits.p_fire = 0.0
+        await r.session()
+        await r.engine.tick(clock.now())
+        await r.engine.tick(clock.now())
+        now = clock.now()
+        w_left = r.engine.whispers.next_at - now
+        o_left = r.engine.budget.to_him_next - now
+        cfg = r.cfg
+        r.engine.apply_config(replace(cfg, talk=replace(cfg.talk, chattiness=8)))
+        assert r.engine.whispers.next_at - now == pytest.approx(w_left / 2)
+        assert r.engine.budget.to_him_next - now == pytest.approx(o_left / 2)
+        r.engine.apply_config(replace(cfg, talk=replace(cfg.talk, whispers_per_hour=2,
+                                                        openers_per_hour=3)))
+        assert r.engine.whispers.next_at - now == pytest.approx(w_left * 2)
+        assert r.engine.budget.to_him_next - now == pytest.approx(o_left * 2)
+        r.engine.apply_config(replace(cfg, talk=replace(cfg.talk, chattiness=0)))
+        assert r.engine.whispers.next_at is None and not r.engine.whispers.events
+        await r.engine.tick(clock.now())
+        assert r.engine.budget.to_him_next is None
+        await r.engine.end_session()
+    run(main())
+
+
+def test_nothing_starts_in_his_login_quiet_even_when_the_clocks_are_due(store, clock, tmp_path,
+                                                                        monkeypatch):
+    """With gaps of seconds both clocks would be due inside the quiet: the assertion fails
+    if either ignored it."""
+    monkeypatch.setattr(budget_mod, "GAP_SPREAD", (0.02, 0.03))
+    monkeypatch.setattr(romance_mod, "GAP_SPREAD", (0.02, 0.03))
+
+    async def main():
+        cast_for_initiation(store)
+        r = make_rig(store, clock, tmp_path, script=numbered("thought {n} here"))
+        r.engine.bits.p_fire = 0.0
+        r.engine.whispers.set_rate(60.0)
+        r.engine.budget.set_to_him_rate(60.0)
+        await r.session()
+        t0 = clock.now()
+        await r.engine.tick(t0)  # both clocks drawn before his login
+        await r.event(Login(ts=0, guid=HUMAN, human=True))
+        await play(r, 600)
+        await r.engine.end_session()
+        lines = started(r, t0)
+        assert not [x for x in lines if x[0] < t0 + LOGIN_QUIET_S]
+        assert [x for x in lines if x[0] < t0 + LOGIN_QUIET_S + 240]
     run(main())
