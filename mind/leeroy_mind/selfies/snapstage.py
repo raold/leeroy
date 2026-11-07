@@ -63,13 +63,6 @@ def _unit(row: SnapRow) -> str:
     return f"snap:{row.id}"
 
 
-def _done_units(ctx: "NightContext") -> int:
-    with ctx.store.transaction():
-        return ctx.store.conn.execute(
-            "SELECT count(*) FROM night_step WHERE night=? AND stage=?",
-            (ctx.night, STAGE)).fetchone()[0]
-
-
 def _rendered_tonight(ctx: "NightContext") -> int:
     """The units done tonight that rendered a photo (ready, or sent since); a held or expired
     one is done but made nothing, so it takes no room."""
@@ -88,8 +81,38 @@ def _todo(ctx: "NightContext") -> list[SnapRow]:
     room = max(0, cap - _rendered_tonight(ctx))
     if room == 0:
         return []
-    return [r for r in planned(ctx.store, cap + _done_units(ctx))
-            if not ctx.done(STAGE, _unit(r))][:room]
+    out = []
+    for r in planned(ctx.store, 100000):  # held and done ones are read past
+        if ctx.done(STAGE, _unit(r)):
+            continue
+        out.append(r)
+        if not _on_hold(ctx, r):  # a held one is passed over and takes none of the room
+            room -= 1
+            if room == 0:
+                break
+    return out
+
+
+def _on_hold(ctx: "NightContext", row: SnapRow) -> bool:
+    """A situation that waits (a lust scene while she lacks the style): it renders nothing, so
+    it takes none of the night's room. A row it cannot read is not held; the stage expires it."""
+    if row.kind == "guild":
+        return False
+    try:
+        return _held(ctx.base(row.guid), row) is not None
+    except Exception:
+        return False
+
+
+def _unreadable(row: SnapRow) -> bool:
+    """A situation whose stored scene cannot be made into a Scene."""
+    if row.kind == "guild":
+        return False
+    try:
+        scene_from(row.scene)
+    except (KeyError, ValueError, TypeError):
+        return True
+    return False
 
 
 def _stored(ctx: "NightContext", guid: int) -> Persona | None:
@@ -148,7 +171,14 @@ def _members(ctx: "NightContext", row: SnapRow) -> list[tuple[int, int, int, Per
     return out
 
 
+def _passed(ctx: "NightContext", row: SnapRow) -> bool:
+    """Its window closes before the day the night makes it for."""
+    return row.expires <= ctx.window[1]
+
+
 def _renders(ctx: "NightContext", row: SnapRow) -> bool:
+    if _passed(ctx, row) or _unreadable(row):
+        return False
     if row.kind == "guild":
         return len(_members(ctx, row)) >= GUILD_MIN
     return _ended(ctx, row) is None and _held(ctx.base(row.guid), row) is None
@@ -343,6 +373,9 @@ async def _render(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
     for n, row in enumerate(todo):
         unit = _unit(row)
         try:
+            if _passed(ctx, row):
+                tally["expired" if _expiry(ctx, row, "passed") else "failed"] += 1
+                continue
             if row.kind == "guild":
                 members = _members(ctx, row)
                 if len(members) < GUILD_MIN:
@@ -350,6 +383,8 @@ async def _render(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
                     continue
             else:
                 why = _ended(ctx, row)
+                if why is None and _unreadable(row):
+                    why = "missing"
                 if why is not None:
                     tally["expired" if _expiry(ctx, row, why) else "failed"] += 1
                     continue

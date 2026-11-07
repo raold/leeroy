@@ -494,3 +494,44 @@ def test_logs_carry_no_prompt(h, tmp_path, caplog):
             for phrase, _ in spec.phrases + spec.negative:
                 assert phrase not in text
         assert p.character_name not in text and p.identity.real_name not in text
+
+
+# -- final fix wave (controller ruling R22) --------------------------------------------------
+
+def test_a_row_whose_scene_cannot_be_read_expires_missing_and_the_good_one_renders(h, tmp_path):
+    cast(h, 101, 102)
+    bad = situation(h, 101, scene={"shows": "an invented scene"})
+    good = situation(h, 102)
+    ctx = h.ctx()
+    run(stage(tmp_path)(ctx))
+    assert (snap_row(h.store, bad).status, snap_row(h.store, bad).ended) == ("expired", "missing")
+    assert snap_row(h.store, good).status == "ready"
+    assert ctx.done(STAGE, f"snap:{bad}") and not ctx.failures
+
+
+def test_a_night_with_only_an_unreadable_row_wants_no_gpu(h, tmp_path):
+    cast(h, 101)
+    situation(h, 101, scene={"shows": "an invented scene"})
+    assert wants_gpu(h.ctx()) is False
+
+
+def test_a_row_whose_window_closed_before_the_day_is_expired_passed_not_rendered(h, tmp_path):
+    cast(h, 101, 102)
+    ctx = h.ctx()
+    late = situation(h, 101, expires=ctx.window[1] - 1.0)
+    good = situation(h, 102)
+    log = tmp_path / "requests.log"
+    run(stage(tmp_path, FAKE_SELFIE_LOG=str(log))(ctx))
+    assert (snap_row(h.store, late).status, snap_row(h.store, late).ended) == ("expired", "passed")
+    assert snap_row(h.store, good).status == "ready"
+    assert len(renders(log)) == 1 and not ctx.failures
+
+
+def test_held_rows_do_not_use_up_the_room_of_a_single_pass(h, tmp_path):
+    cast(h, 101, 102, 103)
+    held = situation(h, 101, scene={**SCENE, "style": "lust"})
+    snaps = [situation(h, g) for g in (102, 103)]
+    ctx = h.ctx()
+    ctx.settings = replace(ctx.settings, snaps_per_night=2)
+    run(stage(tmp_path)(ctx))
+    assert [snap_row(h.store, s).status for s in (held, *snaps)] == ["planned", "ready", "ready"]
