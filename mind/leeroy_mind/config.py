@@ -21,6 +21,7 @@ chattiness = 4                # 0-10, social chat outside raids
 raid_rule = "leaders_and_urgent"
 whispers_per_hour = 4         # members whispering him first, per hour of his play, at chattiness 4
 openers_per_hour = 6          # members starting a line to him in party or guild, per hour, likewise
+selfies = 3                    # 0-10, photos the guild sends you (rendered at night)
 
 [romance]
 dial = 3                      # 1 milquetoast .. 10 filth
@@ -73,6 +74,7 @@ class TalkCfg:
     raid_rule: str
     whispers_per_hour: float = 4
     openers_per_hour: float = 6
+    selfies: int = 3
 
 
 @dataclass(frozen=True)
@@ -168,6 +170,7 @@ _RULES = {
     "talk": {
         "chattiness": (lambda v: _int_in(v, 0, 10), "an integer 0-10"),
         "raid_rule": (lambda v: v in RAID_RULES, f"one of {sorted(RAID_RULES)}"),
+        "selfies": (lambda v: _int_in(v, 0, 10), "an integer 0-10"),
         **{k: (lambda v: _num_in(v, 0, MAX_PER_HOUR), f"a number 0-{MAX_PER_HOUR}")
            for k in ("whispers_per_hour", "openers_per_hour")},
     },

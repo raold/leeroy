@@ -48,10 +48,10 @@ def t(store) -> Tuning:
 
 # -- the registry -------------------------------------------------------------------------------
 
-def test_the_eleven_built_dials_and_three_world_dials_and_none_of_the_later_ones():
+def test_the_eleven_built_dials_and_four_world_dials_and_none_of_the_later_ones():
     assert set(MEMBER_DIALS) == {"talkative", "argumentative", "forward", "humour", "theorycraft",
                                  "lore", "drama", "jealousy", "party", "openup", "reliability"}
-    assert set(WORLD_DIALS) == {"chattiness", "romance", "jealousy"}
+    assert set(WORLD_DIALS) == {"chattiness", "romance", "jealousy", "selfies"}
     assert not set(LATER) & (set(MEMBER_DIALS) | set(WORLD_DIALS))
 
 
@@ -213,3 +213,9 @@ def test_world_overrides_replace_mind_toml_values_without_writing_it(tmp_path):
         8, 2, cfg.romance.jealousy)
     assert shadowed(cfg, tn) == [("chattiness", 4, 8), ("romance", 3, 2)]
     assert not path.exists()
+
+
+def test_a_selfies_world_override_reaches_the_config(tmp_path):
+    cfg = load_config(tmp_path / "mind.toml")
+    out = merge(cfg, Tuning().with_value("world", "", "selfies", 8))
+    assert out.talk.selfies == 8 and cfg.talk.selfies == 3

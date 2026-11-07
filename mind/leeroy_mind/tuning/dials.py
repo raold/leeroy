@@ -92,6 +92,8 @@ WORLD_DIALS: dict[str, WorldDial] = {d.name: d for d in (
               "how far the women's wording goes (a woman's own dial still wins for her)"),
     WorldDial("jealousy", "jealousy", 0, 10, "romance", "jealousy", "at once",
               "how many envy asides an hour, the women's rivalry and the night's jealousy"),
+    WorldDial("selfies", "selfies", 0, 10, "talk", "selfies", "at once",
+              "how many photos members send you a week: made at night, sent while you play"),
 )}
 
 

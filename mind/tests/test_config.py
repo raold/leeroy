@@ -117,3 +117,13 @@ def test_loopback_ollama_urls_pass(tmp_path, url):
     p = tmp_path / "m.toml"
     p.write_text(f'[ollama]\nurl = "{url}"\n', encoding="utf-8")
     assert load_config(p).ollama.url == url
+
+
+def test_talk_selfies_defaults_to_three_and_refuses_eleven(tmp_path):
+    assert load_config(tmp_path / "missing.toml").talk.selfies == 3
+    assert re.search(r"^selfies = 3 +# 0-10, photos the guild sends you \(rendered at night\)$",
+                     DEFAULT_TOML, re.MULTILINE)
+    p = tmp_path / "bad.toml"
+    p.write_text("[talk]\nselfies = 11\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="talk.selfies:"):
+        load_config(p)

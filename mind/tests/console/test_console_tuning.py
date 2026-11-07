@@ -78,6 +78,7 @@ def test_the_tuning_view_shows_dials_groups_values_and_history_without_writing(c
             world = {d["name"]: d for d in v["world_dials"]}
             assert (world["chattiness"]["file"], world["chattiness"]["override"],
                     world["chattiness"]["value"]) == (4, 7, 7)
+            assert world["selfies"]["file"] == 3 and world["selfies"]["value"] == 3
             groups = {g["target"]: g for g in v["groups"]}
             assert groups["everyone"]["builtin"] and groups["everyone"]["members"] == 5
             assert groups["1"]["name"] == "women" and groups["1"]["members"] == 1
