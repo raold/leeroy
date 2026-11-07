@@ -12,7 +12,7 @@ import pytest
 from conftest import make_persona
 from leeroy_mind.personas.schema import Appearance, ProfilePhoto
 from leeroy_mind.selfies.prompt import (LUST_HELD, LUST_NEGATIVE, NEGATIVE, PromptSpec,
-                                        build_prompt, renderable)
+                                        BUILD_WORDS, build_prompt, renderable)
 from leeroy_mind.selfies.style import LUST, PLAIN, suggestive
 from nightly.test_night_enrich import APPEARANCE
 
@@ -66,7 +66,7 @@ def test_hair_skin_eyes_and_face_details_come_from_the_looks():
     assert ("light olive skin", 1) in ph
     assert ("hazel eyes", 2) in ph
     assert ("freckles", 2) in ph and ("thin glasses", 2) in ph
-    assert ("average build", 3) in ph
+    assert ("average build", 1) in ph
     assert ("orange rain bib over a grey hoodie", 2) in ph
     assert ("on the deck of a small boat", 2) in ph
     assert ("squinting into the wind", 3) in ph
@@ -190,7 +190,7 @@ def test_the_longest_lust_kind_keeps_outfit_and_setting_through_the_workers_fit(
     big = replace(APPEARANCE, hair_style="h" * 40, face=("f" * 40,) * 4)
     for kind_, framing in (("snapshot", "head_and_shoulders"), ("mirror_selfie", "upper_body")):
         photo = ProfilePhoto(kind_, framing, setting, outfit, "an over-the-shoulder glance")
-        spec = build_prompt(woman(stance="lust", age=24, appearance=big, photo=photo),
+        spec = build_prompt(woman(stance="lust", age=25, appearance=big, photo=photo),
                             kind_style=LUST)
         kept, dropped = fit(spec.phrases, _tokens, 75)
         assert f"wearing {outfit}, {setting}" in kept and outfit not in " ".join(dropped)
@@ -280,3 +280,10 @@ def test_the_lust_prompt_stays_when_her_looks_are_adult():
     hot = woman(stance="lust", photo=LUST_PHOTO)
     assert renderable(hot, LUST) is None
     assert build_prompt(hot, kind_style=LUST).negative == LUST_NEGATIVE
+
+
+def test_every_build_is_said_as_a_figure_at_priority_one():
+    curvy = woman()
+    vol = replace(curvy, appearance=replace(curvy.appearance, build="voluptuous"))
+    assert ("voluptuous hourglass figure, full bust, wide hips, slim waist", 1) in build_prompt(vol).phrases
+    assert (BUILD_WORDS[curvy.appearance.build], 1) in build_prompt(curvy).phrases

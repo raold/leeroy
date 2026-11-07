@@ -182,7 +182,7 @@ class Relationship:
 @dataclass(frozen=True)
 class Appearance:
     height_cm: int = _f(lo=140, hi=210)
-    build: Literal["slim", "athletic", "average", "curvy", "stocky", "heavy"]
+    build: Literal["slim", "athletic", "average", "curvy", "voluptuous", "stocky", "heavy"]
     weight_kg: int = _f(lo=40, hi=180)
     hair_colour: str = _f(max_len=30)
     hair_length: Literal["shaved", "short", "chin", "shoulder", "long", "very_long"]

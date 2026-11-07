@@ -781,7 +781,12 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   feed of typed lines and the room lines he heard (from mind.db: a line
   appears once it has played to him, a dropped one does not), channels with
   unread counts (a first open or reload marks history read), the 32-room tree
-  (empty rooms greyed, click to join), whispers and the member card. A voiced
+  (empty rooms greyed, click to join), whispers and the member card. While a
+  member's line is being composed or typed, "<Name> is typing" with three dots
+  shows under the open view's feed (two names, then "Several people"; the dots hold
+  still under reduced motion), a member writing him a whisper gets the dots beside their
+  name in the whisper list, and the dots go when the line lands or after 30 s
+  (`comms/typing.mjs`, `typingview.mjs`; voice-room turns show none). A voiced
   whisper is never typed in WoW: one the voice service dropped because he was
   deafened or had muted that member shows in its thread as text with a "not
   heard (deafened)" or "not heard (muted)" chip and counts as unread; a whisper
@@ -873,7 +878,10 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   never a chat model, refused in words otherwise; up to 12 hits; the query is never
   logged). `status` also carries `world`, the last hello's server and version with
   the cast count, how many are online and whether he is, or null before a hello and
-  while the bridge is down.
+  while the bridge is down. It also carries `typing` (`Pipeline.typing_now`: guid, name,
+  channel, to, since, age of each model turn being composed or typed where Comms shows
+  the line, never text), which the console asks for on its 2 s strip pass only while a
+  page listens and he is in game.
   `stop`/`start` of a raid switch dungeon-clear off and on again mid-raid. The
   console sends the key only to the listener the TCP table shows is the running
   mind's own pid; its Stop and Restart use the clean stop (asked up to five

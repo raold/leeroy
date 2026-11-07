@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Guild Console</title>
-<link rel="icon" href="data:,">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='7'%20fill='%230e141a'/%3E%3Cpath%20d='M16%204.5%2026%209v7c0%206-4.6%2010-10%2011.5C10.6%2026%206%2022%206%2016V9Z'%20fill='none'%20stroke='%234fb2bd'%20stroke-width='2.6'%20stroke-linejoin='round'/%3E%3Cpath%20d='M11.2%2015h9.6M11.2%2019.4h6'%20stroke='%234fb2bd'%20stroke-width='2.3'%20stroke-linecap='round'/%3E%3C/svg%3E">
 <script src="/static/theme.js"></script>
 <link rel="stylesheet" href="/static/console.css">
 </head>
@@ -73,6 +73,7 @@
         <h3 id="feed-title"># guild</h3>
         <p id="feed-hint" class="hint"></p>
         <div id="feed" class="feed" role="log" aria-labelledby="feed-title"></div>
+        <div id="typing" class="typing" aria-live="polite"></div>
         <div id="composer" class="composer" tabindex="-1">
           <label for="say-text" class="to">to <b id="say-to">#guild</b> as you</label>
           <div class="say">

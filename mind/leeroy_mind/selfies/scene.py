@@ -37,7 +37,7 @@ from leeroy_mind.text import has_meta
 from .kind import (ERA_RE, EXPLICIT_RE, GYM_OUTFITS, LUST_COLOURS, LUST_EXPRESSIONS,
                    LUST_OUTFITS, LUST_SETTINGS, PAIRINGS, SWIM_OUTFITS, WEAR_RE, _enum,
                    compose_lust, screen_lust)
-from .prompt import (_FRAMINGS, _HEADSHOT_TAIL, _KINDS, _PHONE_TAIL, LUST_HELD, LUST_NAMED,
+from .prompt import (BUILD_WORDS, _FRAMINGS, _HEADSHOT_TAIL, _KINDS, _PHONE_TAIL, LUST_HELD, LUST_NAMED,
                      LUST_NEGATIVE, NEGATIVE, PromptSpec, eyes_face, hair_skin, looks_phrases,
                      lust_phrase, names_re, phrase_adder, renderable, subject_phrase)
 from .style import AGE_RE, LUST, PLAIN, STYLES, SUGGESTIVE_MIN_AGE, style_of, suggestive
@@ -449,7 +449,7 @@ def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
     """The prompt for scene s with p's face, in this order: kind, framing, subject (0), the
     activity (1), the setting (1), hair and skin (1), looking at the camera (3, not a snapshot),
     eyes and face details (2), the outfit (2), the light of its time of day (2), the expression
-    (3), the build (3) and the phone look (1, without natural light late at night). A lust
+    (3), the build as a figure (1, prompt.BUILD_WORDS) and the phone look (1, without natural light late at night). A lust
     scene's outfit and setting go in as one priority-0 phrase where the setting stands, with
     SNAP_NEGATIVE_LUST. Free text holding the persona's names is dropped. ValueError when
     scene_renderable says why not."""
@@ -477,7 +477,7 @@ def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
     if _LIGHT[s.when]:
         add(_LIGHT[s.when], 2)
     add(s.expression, 3, True)
-    add(f"{p.appearance.build} build", 3)
+    add(BUILD_WORDS.get(p.appearance.build, f"{p.appearance.build} build"), 1)
     add(_LATE_TAIL if s.when == "late" else _PHONE_TAIL, 1)
     return PromptSpec(tuple(out), SNAP_NEGATIVE_LUST if lust else SNAP_NEGATIVE)
 

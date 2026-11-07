@@ -7,7 +7,7 @@ name is ever put in a phrase.
 
 The lust prompt is built for a kind the lust rules chose (the caller passes that style,
 kind.chosen_style), and such a kind renders only while she still has the lust style
-(style.suggestive: lust, 21 or more, looks that code nobody as young); otherwise renderable
+(style.suggestive: lust, 25 or more, looks that code nobody as young); otherwise renderable
 holds it until the photo pass has chosen her kind again, so its text is never rendered plainly.
 Her outfit and setting go in as one priority-0 phrase, so the worker's fit to the tokenizers
 never keeps one without the other, and the negative lets cleavage and swimwear through and names
@@ -43,7 +43,7 @@ LUST_NEGATIVE: tuple[tuple[str, int], ...] = tuple(
 _KINDS = {"selfie": "phone selfie", "mirror_selfie": "mirror selfie",
           "headshot": "professional headshot", "snapshot": "candid photo taken by a friend"}
 _FRAMINGS = {"face": "close-up of the face", "head_and_shoulders": "head and shoulders",
-             "upper_body": "upper body"}
+             "upper_body": "waist-up shot, upper body"}  # the waist in frame, so the figure shows
 _LENGTHS = {"short": "short", "chin": "chin-length", "shoulder": "shoulder-length",
             "long": "long", "very_long": "very long"}
 _HEADSHOT_TAIL = "recent photo, natural skin texture, unretouched"
@@ -101,6 +101,14 @@ def names_re(p: Persona) -> re.Pattern | None:
 def _clean(text: str) -> str:
     text = text.encode("utf-8", "ignore").decode("utf-8")
     return " ".join(text.split())
+
+
+# The build said as a figure, at priority 1, so the model shapes it (owner 2026-11-07: a plain "<build>
+# build" at priority 3 left every body the same). Voluptuous is an hourglass fuller than curvy.
+BUILD_WORDS = {"slim": "slim figure", "athletic": "athletic toned figure", "average": "average build",
+               "curvy": "curvy hourglass figure",
+               "voluptuous": "voluptuous hourglass figure, full bust, wide hips, slim waist",
+               "stocky": "stocky sturdy build", "heavy": "plus-size full figure"}
 
 
 def phrase_adder(out: list[tuple[str, int]], name_re: re.Pattern | None):
@@ -176,7 +184,7 @@ def build_prompt(p: Persona, *, kind_style: str = PLAIN) -> PromptSpec:
     if ph.kind != "snapshot":
         add("looking at the camera", 2)
     out += looks_phrases(p, name_re)
-    add(f"{a.build} build", 3)
+    add(BUILD_WORDS.get(a.build, f"{a.build} build"), 1)
     if lust:  # one phrase: the fit keeps both or neither, and priority 0 keeps both
         add(lust_phrase(ph), 0, True)  # renderable has checked no name filter drops it
     else:

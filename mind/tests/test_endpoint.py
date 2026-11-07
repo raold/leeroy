@@ -374,7 +374,7 @@ def test_status_answers_and_a_wrong_key_is_forbidden_without_logging_it(tmp_path
             assert reply == {"ok": True, "v": 1, "pid": os.getpid(), "stopping": False,
                              "raid": FakeGuild().console_status(), "bridge_connected": None,
                              "cast": None, "schema_version": None,  # this app cannot tell
-                             "world": None}
+                             "world": None, "typing": []}
             assert await ask(ep, "status", key="x" * 43) == {"ok": False, "error": "forbidden"}
             assert await ask(ep, "stop", key="x" * 43) == {"ok": False, "error": "forbidden"}
             assert app.stops == 0
@@ -425,6 +425,30 @@ def test_status_carries_the_world(tmp_path):
             app.world = SimpleNamespace()  # unreadable: status still answers, world unknown
             reply = await ask(ep, "status")
             assert reply["ok"] is True and reply["world"] is None
+    run(go())
+
+
+def test_status_carries_who_is_typing_and_never_their_text(tmp_path):
+    """Comms' dots: the talk engine's turns being composed or typed, as it gives them (ids, the
+    place and when); none without an engine, while the mind stops or when the engine fails."""
+    entry = {"guid": 101, "name": "Arkon", "channel": "whisper", "to": 9, "since": 1793304000.5}
+
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            app.engine = SimpleNamespace(typing_now=lambda: [entry])
+            reply = await ask(ep, "status")
+            assert reply["typing"] == [entry]
+            app.stopping = True
+            assert (await ask(ep, "status"))["typing"] == []
+            app.stopping = False
+
+            def broken():
+                raise RuntimeError("Arkon: secret words")
+            app.engine = SimpleNamespace(typing_now=broken)
+            reply = await ask(ep, "status")
+            assert reply["ok"] is True and reply["typing"] == []
+            del app.engine
+            assert (await ask(ep, "status"))["typing"] == []
     run(go())
 
 

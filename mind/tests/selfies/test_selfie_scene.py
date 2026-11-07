@@ -76,7 +76,7 @@ def test_the_screen_refuses_looks_changes_minors_era_explicit_and_likeness(field
 
 def test_the_scene_prompt_keeps_the_face_and_puts_the_scene_first():
     spec = build_scene_prompt(woman(age=34, region="UK"), Scene(**{**SCENE, "kind": "selfie", "when": "late"}))
-    assert spec.phrases[:3] == (("phone selfie", 0), ("upper body", 0), ("34-year-old British woman", 0))
+    assert spec.phrases[:3] == (("phone selfie", 0), ("waist-up shot, upper body", 0), ("34-year-old British woman", 0))
     assert spec.phrases[3] == (SCENE["activity"], 1) and spec.phrases[-1] == ("recent smartphone photo, natural skin texture, unretouched", 1)
     assert ("at night, lit by a lamp or a screen", 2) in spec.phrases and spec.negative == SNAP_NEGATIVE
 
@@ -84,12 +84,12 @@ def test_the_scene_prompt_keeps_the_face_and_puts_the_scene_first():
 def test_the_scene_prompt_runs_in_the_briefs_order():
     spec = build_scene_prompt(woman(), Scene(**{**SCENE, "kind": "mirror_selfie", "when": "morning"}))
     assert spec.phrases == (
-        ("mirror selfie", 0), ("upper body", 0), ("34-year-old British woman", 0),
+        ("mirror selfie", 0), ("waist-up shot, upper body", 0), ("34-year-old British woman", 0),
         (SCENE["activity"], 1), (SCENE["setting"], 1),
         ("shoulder-length dark brown hair, tucked behind one ear", 1), ("light olive skin", 1),
         ("looking at the camera", 3), ("hazel eyes", 2), ("freckles", 2), ("thin glasses", 2),
         (SCENE["outfit"], 2), ("soft morning light", 2), (SCENE["expression"], 3),
-        ("average build", 3),
+        ("average build", 1),
         ("recent smartphone photo, natural light, natural skin texture, unretouched", 1))
     assert SNAP_NEGATIVE == NEGATIVE + (("another person, crowd, group of people", 1),)
 
@@ -216,13 +216,13 @@ def test_build_prompt_is_unchanged():
     # the profile photo's prompt, pinned before subject_phrase and looks_phrases were factored out
     hair = ("shoulder-length dark brown hair, tucked behind one ear", 1)
     looks = (hair, ("light olive skin", 1), ("hazel eyes", 2), ("freckles", 2),
-             ("thin glasses", 2), ("average build", 3))
+             ("thin glasses", 2), ("average build", 1))
     kind_ = (("orange rain bib over a grey hoodie", 2), ("on the deck of a small boat", 2),
              ("squinting into the wind", 3))
     phone = ("recent smartphone photo, natural light, natural skin texture, unretouched", 1)
     subject = ("34-year-old British woman", 0)
     assert build_prompt(woman()).phrases == (
-        ("candid photo taken by a friend", 0), ("upper body", 0), subject, *looks, *kind_, phone)
+        ("candid photo taken by a friend", 0), ("waist-up shot, upper body", 0), subject, *looks, *kind_, phone)
     assert build_prompt(woman(age=22, photo={**PHOTO, "kind": "selfie",
                                              "framing": "head_and_shoulders"})).phrases == (
         ("phone selfie", 0), ("head and shoulders", 0), ("22-year-old adult British woman", 0),
@@ -230,14 +230,14 @@ def test_build_prompt_is_unchanged():
     shaved = man(appearance=replace(APPEARANCE, hair_length="shaved", skin_tone=""),
                  photo={**PHOTO, "kind": "mirror_selfie"})
     assert build_prompt(shaved).phrases == (
-        ("mirror selfie", 0), ("upper body", 0), ("34-year-old British man", 0),
+        ("mirror selfie", 0), ("waist-up shot, upper body", 0), ("34-year-old British man", 0),
         ("looking at the camera", 2), ("shaved head", 1), *looks[2:], *kind_, phone)
     assert build_prompt(woman(photo={**PHOTO, "kind": "headshot", "framing": "face"})).phrases == (
         ("professional headshot", 0), ("close-up of the face", 0), subject,
         ("looking at the camera", 2), *looks, *kind_,
         ("recent photo, natural skin texture, unretouched", 1))
     assert build_prompt(lusty(photo=LUST_PHOTO), kind_style=LUST).phrases == (
-        ("candid photo taken by a friend", 0), ("upper body", 0), subject, *looks,
+        ("candid photo taken by a friend", 0), ("waist-up shot, upper body", 0), subject, *looks,
         ("wearing a red string bikini, the beach at sunset", 0), ("a teasing grin", 3), phone)
     assert subject_phrase(woman()) == subject and looks_phrases(woman(), None) == list(looks[:5])
 
@@ -385,7 +385,7 @@ def test_the_lust_prompt_joins_outfit_and_setting_at_priority_0():
     p = lusty()
     hot = build_scene_prompt(p, scene_from(LUST_SCENE))
     joined = ("wearing a low-cut emerald cocktail dress, a rooftop bar at night", 0)
-    assert hot.phrases[:5] == (("mirror selfie", 0), ("upper body", 0), subject_phrase(p),
+    assert hot.phrases[:5] == (("mirror selfie", 0), ("waist-up shot, upper body", 0), subject_phrase(p),
                                (LUST_SCENE["activity"], 1), joined)
     flat = Scene(**{k: v for k, v in scene_json(scene_from(LUST_SCENE)).items() if k != "style"})
     plain = build_scene_prompt(p, flat)                      # the same scene, written plainly
@@ -408,7 +408,7 @@ def test_the_lust_prompts_joined_phrase_keeps_both_parts_within_the_token_fit():
     for kind_, framing in (("snapshot", "head_and_shoulders"), ("mirror_selfie", "upper_body")):
         s = replace(scene_from(LUST_SCENE), kind=kind_, framing=framing, setting=setting,
                     outfit=outfit, activity="a" * 80, expression="an over-the-shoulder glance")
-        spec = build_scene_prompt(lusty(age=22, region="US", appearance=big), s)
+        spec = build_scene_prompt(lusty(age=25, region="US", appearance=big), s)
         kept, dropped = fit(spec.phrases, _tokens, 75)
         assert f"wearing {outfit}, {setting}" in kept
         assert outfit not in " ".join(dropped) and setting not in " ".join(dropped)
@@ -674,7 +674,7 @@ def test_a_name_after_the_first_word_is_a_likeness_and_a_place_in_the_setting_ma
     ("her 16th birthday", True), ("a 17 year old", True), ("turning 17 tomorrow", True),
     ("aged twelve", True), ("a ten-year-old", True), ("barely nineteen", True),
     ("her 34th birthday", False), ("a 40-year-old", False), ("turning 30", False),
-    ("about 5 minutes from home", False), ("two years old", True), ("aged 21", False)])
+    ("about 5 minutes from home", False), ("two years old", True), ("aged 21", True), ("aged 25", False)])  # 25 is the floor since #178
 def test_the_age_number_rule(text, young):
     codes = screen_scene(woman(), {**SCENE, "activity": text}, ident=IDENT, member_names=[])
     assert ("scene.activity: age" in codes) == young, codes

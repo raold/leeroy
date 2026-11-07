@@ -22,7 +22,8 @@ run nothing else.
     GET  /static/<path> the page's stylesheet and modules (static_files: the package's static/
                        folder, the path looked up exactly as packaged; anything else is 404)
     GET  /api/state    the strip, the voice mirror, the text feed (null when mind.db could not be
-                       read for it), the 32 rooms, the guild mood and the control rules
+                       read for it), the 32 rooms, the guild mood and the control rules; the
+                       strip's `typing` is who is typing, from the mind's status (Comms' dots)
     GET  /api/events   the same as a first `snapshot` event, then `status`, `voice`, `chat`
                        (a repeated id replaces the line), `chat_gone` and `control` events (server-sent events, a comment every 15 s)
     GET  /api/health   the Mind tab: processes, lock, links, Ollama's resident models, GPU,
@@ -105,6 +106,7 @@ logged, stored or broadcast by the console."""
 import asyncio
 import hmac
 import logging
+import math
 import os
 import time
 from contextlib import suppress
@@ -126,6 +128,9 @@ from ..voice.rooms import ROOMS
 
 HOST = "127.0.0.1"
 STATUS_S = 2.0
+TYPING_S = 1.0  # the mind's status, asked for who is typing on each strip pass, answers in this
+TYPING_MAX = 40  # entries kept from it
+TYPING_STALE_S = 30.0  # an entry older than this (its `age`) is dropped; the page's own STALE_S
 SNAPSHOT_S = 15.0  # a settled mind's process list is taken this often (an unclear one's at most)
 VOICE_LOCK_S = 15.0  # how long the Mind tab reuses its reading of voice.lock
 FEED_S = 1.5
@@ -149,6 +154,32 @@ SAY_SLASH = "Slash commands aren't sent from here."  # the box's words (comms/re
 BANK_OLD_MIND = "The running mind predates the Bank tab: restart it after the update."
 BOARD_OLD_MIND = "The running mind predates Board replies: restart it after the update."
 LIBRARY_OLD_MIND = "The running mind predates the deeper search: restart it after the update."
+
+
+def _number(x) -> bool:
+    return type(x) in (int, float) and math.isfinite(x)
+
+
+def typing_entries(value) -> list[dict]:
+    """The mind's status `typing` (Pipeline.typing_now) as the strip carries it: the well-formed
+    entries no older than TYPING_STALE_S, each with only its own keys, {"guid", "name",
+    "channel", "to", "since", "age"}. `age` (seconds, read by the mind as it answered) is what
+    staleness goes by; `since` is the mind's clock, for matching the line when it lands."""
+    if not isinstance(value, list):
+        return []
+    out = []
+    for e in value[:TYPING_MAX]:
+        if not isinstance(e, dict):
+            continue
+        guid, channel, to, since, age, name = (e.get(k) for k in ("guid", "channel", "to",
+                                                                  "since", "age", "name"))
+        if (type(guid) is not int or guid <= 0 or not isinstance(channel, str)
+                or not _number(since) or not _number(age) or not 0 <= age <= TYPING_STALE_S
+                or (to is not None and (type(to) is not int or to <= 0))):
+            continue
+        out.append({"guid": guid, "name": name if isinstance(name, str) else "",
+                    "channel": channel, "to": to, "since": since, "age": age})
+    return out
 
 
 def mind_words(state: str) -> str:
@@ -262,6 +293,7 @@ class ConsoleApp:
         self.bridge: bool | None = None
         self.game = status.GameView(status.UNKNOWN, "not checked yet")
         self._strip: dict = {}
+        self._typing: list[dict] = []  # who is typing, from the mind's status (_read_typing)
         self._feed_last = 0
         self._pending: dict[int, float] = {}  # sent to a page as heard False: id -> first seen
         self._waiting: dict[int, float] = {}  # spoken, voice row not written yet: id -> first seen
@@ -277,7 +309,7 @@ class ConsoleApp:
                 "game": {"state": self.game.state, "reason": self.game.reason,
                          "since": self.game.since},
                 "voice": {"enabled": self.s.voice_enabled, "service": voice_up, "link": link},
-                "control": self.controls.describe()}
+                "control": self.controls.describe(), "typing": self._typing}
 
     def _probe(self, force: bool) -> None:
         """Worker thread. A probe of a free mind.lock takes it for a moment, and a mind starting
@@ -335,12 +367,31 @@ class ConsoleApp:
         session, unread = await asyncio.to_thread(self._session) if (
             self.view.state == "running" and self.bridge is True) else (None, None)
         self.game = status.game_view(self.view.state, self.bridge, session, unread=unread)
+        self._typing = await self._read_typing()
         self._publish_status()
 
+    async def _read_typing(self) -> list[dict]:
+        """Who is typing (Comms' dots), from the mind's status: asked on this pass only while a
+        page listens and he is in game, within TYPING_S. Otherwise, or with no answer: none."""
+        if not self._subs or self.game.state != status.IN_GAME or self.link is None:
+            return []
+        try:
+            reply = await asyncio.to_thread(self.link.call, self._mind_pids(), "status",
+                                            timeout=TYPING_S)
+        except LinkError:
+            return []
+        if not isinstance(reply, dict) or reply.get("ok") is not True:
+            return []
+        return typing_entries(reply.get("typing"))
+
     def _publish_status(self) -> None:
+        """A changed strip goes out; an age that moved alone is no news (the page counts on from
+        the age it was given)."""
         strip = self.strip()
-        if strip != self._strip:
-            self._strip = strip
+        news = {**strip, "typing": [{k: v for k, v in e.items() if k != "age"}
+                                    for e in strip["typing"]]}
+        if news != self._strip:
+            self._strip = news
             self.broadcast("status", strip)
 
     async def _status_loop(self) -> None:

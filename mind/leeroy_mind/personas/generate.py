@@ -22,7 +22,7 @@ from ..text import estimate_tokens, truncate_words
 from ..wow import CAST_MIN_LEVEL, CLASSES, RACES, class_roles
 from .birthdays import draw_birthday
 from .io import load_persona, save_persona
-from .schema import (JEALOUSY_MODES, MIN_AGE, TYPING_RULE, Persona, persona_from_dict,
+from .schema import (JEALOUSY_MODES, TYPING_RULE, Persona, persona_from_dict,
                      persona_json_schema, persona_to_dict, validate_persona)
 from .screens import (NAME_FIELDS, check_no_real_name, check_romance, human_aliases,
                       name_keys, refers_to_human, touches_real_name)
@@ -37,7 +37,8 @@ RAIDER_SHARE = 0.7
 DRINKER_SHARE = 0.45
 JEALOUSY_CYCLE = JEALOUSY_MODES
 THINKS_AS = ("theorycrafter", "lore", "social", "collector", "competitor")
-AGE_BANDS = ((21, 25), (26, 32), (33, 40), (41, 55))
+GEN_MIN_AGE = 25  # owner 2026-11-07: "everyone is 25 yo minimum" (the schema still accepts 18)
+AGE_BANDS = ((25, 28), (26, 32), (33, 40), (41, 55))
 AGE_WEIGHTS = (2, 4, 3, 1)
 TANK_SHARE = 0.10
 HEALER_SHARE = 0.24
@@ -437,7 +438,7 @@ def _build(data: dict, slot: GenSlot, character: Member, ctx: "_Ctx") -> Persona
     data["mock_interview"] = ""
     ident = _obj(data, "identity")
     age = ident.get("age")
-    low, high = max(lo, MIN_AGE), max(hi, MIN_AGE)
+    low, high = max(lo, GEN_MIN_AGE), max(hi, GEN_MIN_AGE)
     ident["age"] = (min(max(age, low), high) if isinstance(age, int) and not isinstance(age, bool)
                     else (low + high) // 2)
     ident.update(player_gender=slot.player_gender, region=slot.region,
@@ -628,8 +629,8 @@ async def generate_persona(llm: LLMClient, model: str, slot: GenSlot, character:
     names a relationship may point at. A record that still collides after one informed retry
     is renamed (one call for candidate names, the first free one that passes the screens);
     NameCollision only when no candidate does."""
-    if slot.age_band[0] < MIN_AGE:
-        raise ValueError(f"age band {slot.age_band} includes someone under {MIN_AGE}")
+    if slot.age_band[0] < GEN_MIN_AGE:
+        raise ValueError(f"age band {slot.age_band} includes someone under {GEN_MIN_AGE}")
     human = human or HumanIdentity(0, "", "", "", False)
     notes = notes if notes is not None else GenNotes()
     profile = await _write_profile(llm, model, rules,
