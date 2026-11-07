@@ -280,6 +280,8 @@ class EmoteReactions(Reactions):
             return "offline"
         if guid in w.afk:
             return "afk"
+        if guid in self._away_now():
+            return "away"
         if self.personas.get(guid) is None:
             return "no_persona"
         if self._is_dead(guid, now):

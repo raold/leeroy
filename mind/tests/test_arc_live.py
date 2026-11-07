@@ -551,3 +551,21 @@ def test_the_live_view_logs_nothing(store, clock, caplog):
 
 def test_the_arc_imports_nothing_from_the_pipeline():
     assert "talk.pipeline" not in open(live.__file__, encoding="utf-8").read()
+
+
+def test_his_emote_at_an_away_woman_gets_nothing_back(rig, caplog):
+    """An away woman sends no emote back either (talk.emotes._emote_blocked)."""
+    from leeroy_mind.protocol import Emote, TextEmote
+    now = rig.clock.now()
+    _away(rig.store, 102, left=now - 3600, back=now + DAY)
+
+    async def main():
+        for target in (102, 104):
+            ev = TextEmote(ts=0, guid=HUMAN, emote="wave", target_guid=target, via_bridge=False)
+            rig.world.apply(ev, rig.clock.now())
+            await rig.engine.on_text_emote(ev, rig.clock.now())
+        await rig.advance(12, 0.25)
+    with caplog.at_level("INFO", logger="leeroy_mind"):
+        rig.sync(main())
+    assert [c.guid for _, c in rig.sent.log if isinstance(c, Emote)] == [104]
+    assert "emote_skipped: emote=wave guid=102 reason=away" in caplog.text
