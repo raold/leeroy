@@ -65,7 +65,7 @@ from leeroy_mind.storage.db import VEC_DIM, check_embedding_meta, checkpoint, op
 from leeroy_mind.storage.store import Store
 from leeroy_mind.talk.engine import COMMAND_CHANNELS, TalkEngine
 from leeroy_mind.talk.facts import LibraryFacts
-from leeroy_mind.talk.items import ItemLinker
+from leeroy_mind.talk.items import NATIVE_FEATURE, ItemLinker
 from leeroy_mind.talk.raid import RaidState
 from leeroy_mind.talk.turns import TurnKind
 from leeroy_mind.talk.world import WorldView, looks_like_bot_command
@@ -741,6 +741,8 @@ class MindApp:
             # must not keep scheduling live talk after the bridge is gone; hello
             # restores presence without closing/reopening the persisted session.
             self.world.human_online = False
+            if self.engine.items is not None:  # the next worldserver says again what it has
+                self.engine.items.native = False
         await self._call_hooks("connection", self._connection_hooks, up)
 
     # -- the dispatch ------------------------------------------------------------------------
@@ -890,8 +892,10 @@ class MindApp:
         self.store.set_meta("guild_id", str(ev.guild_id))
         self._note_human(ev.human_guid)
         self.world.apply(ev, now)
+        if self.engine.items is not None:  # native expands item placeholders: talk/items.py
+            self.engine.items.native = NATIVE_FEATURE in ev.features
         log_event("bridge_hello", server=ev.server, version=ev.version,
-                  human_online=bool(ev.human_guid))
+                  human_online=bool(ev.human_guid), features=",".join(ev.features) or "-")
         if ev.human_guid:
             if self._session_id is None:
                 left = self.store.open_session()  # a crash or restart left it open
@@ -1093,12 +1097,19 @@ class MindApp:
         died = None
         try:
             if not self._stopping:
+                self._warm_items()
                 self._start_loops()
                 died = await self._serve()
         finally:
             await self._finish_stop()
         if died is not None:
             raise RuntimeError(f"the mind's {died} loop stopped")
+
+    def _warm_items(self) -> None:
+        """The item names (talk/items.py) read from the library on the loop before the bridge
+        connects, so no line waits for them; a failure there is logged and links nothing."""
+        if self.engine.items is not None:
+            self.engine.items.ready()
 
     def _start_loops(self) -> None:
         loop = asyncio.get_running_loop()

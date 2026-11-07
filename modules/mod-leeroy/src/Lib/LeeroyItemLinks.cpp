@@ -62,11 +62,20 @@ std::uint32_t ParseToken(std::string_view text, std::size_t at, std::size_t& len
     return static_cast<std::uint32_t>(value);
 }
 
+// A piece of the line: words, a link, or a name standing in for one ("[Name]", "[unknown item]"), which a cut drops
+// whole rather than leave "[Sha".
+enum class Kind
+{
+    Text,
+    Link,
+    Name
+};
+
 struct Segment
 {
     std::string text;
-    std::string plain;   // a link's "[Name]"; unused for text
-    bool link = false;
+    std::string plain;   // a link's "[Name]"
+    Kind kind = Kind::Text;
 };
 }
 
@@ -90,7 +99,8 @@ std::string BuildItemLink(std::uint32_t itemId, ItemLinkInfo const& info, std::u
 std::string SanitizeChatTextWithItemLinks(std::string_view text, ItemLookup const& lookup, std::uint32_t level,
     std::size_t maxBytes, std::size_t maxLinks)
 {
-    std::string const clean = SanitizeChatText(text, std::numeric_limits<std::size_t>::max());
+    std::vector<std::size_t> from;
+    std::string const clean = SanitizeChatTextMapped(text, from);
 
     std::vector<Segment> segments;
     std::size_t links = 0;
@@ -100,15 +110,23 @@ std::string SanitizeChatTextWithItemLinks(std::string_view text, ItemLookup cons
         if (!run.empty())
         {
             total += run.size();
-            segments.push_back({std::move(run), {}, false});
+            segments.push_back({std::move(run), {}, Kind::Text});
             run.clear();
         }
+    };
+    auto const push = [&](std::string piece, std::string plain, Kind kind) {
+        flush();
+        total += piece.size();
+        segments.push_back({std::move(piece), std::move(plain), kind});
     };
 
     for (std::size_t i = 0; i < clean.size();)
     {
         std::size_t length = 0;
-        std::uint32_t const id = ParseToken(clean, i, length);
+        std::uint32_t id = ParseToken(clean, i, length);
+        // Only a placeholder written whole: one the sanitizer joined across stripped bytes is text.
+        if (id && from[i + length - 1] - from[i] != length - 1)
+            id = 0;
         if (!id)
         {
             run += clean[i++];
@@ -119,31 +137,29 @@ std::string SanitizeChatTextWithItemLinks(std::string_view text, ItemLookup cons
         std::string const name = info ? LinkName(info->name) : std::string();
         if (name.empty())
         {
-            run += kUnknownItemText;
+            push(std::string(kUnknownItemText), {}, Kind::Name);
             continue;
         }
         std::string plain = "[" + name + "]";
         std::string link = links < maxLinks ? BuildItemLink(id, *info, level) : std::string();
         if (link.empty())
         {
-            run += plain;
+            push(std::move(plain), {}, Kind::Name);
             continue;
         }
-        flush();
         ++links;
-        total += link.size();
-        segments.push_back({std::move(link), std::move(plain), true});
+        push(std::move(link), std::move(plain), Kind::Link);
     }
     flush();
 
     // Over the limit, links become their plain names, the last first.
     for (auto it = segments.rbegin(); total > maxBytes && it != segments.rend(); ++it)
     {
-        if (!it->link)
+        if (it->kind != Kind::Link)
             continue;
         total = total - it->text.size() + it->plain.size();
         it->text = std::move(it->plain);
-        it->link = false;
+        it->kind = Kind::Name;
     }
 
     std::string out;
@@ -155,7 +171,7 @@ std::string SanitizeChatTextWithItemLinks(std::string_view text, ItemLookup cons
             out += segment.text;
             continue;
         }
-        if (!segment.link)
+        if (segment.kind == Kind::Text)
         {
             std::size_t cut = maxBytes - out.size();
             while (cut > 0 && IsCont(static_cast<unsigned char>(segment.text[cut])))
@@ -167,5 +183,10 @@ std::string SanitizeChatTextWithItemLinks(std::string_view text, ItemLookup cons
     while (!out.empty() && out.back() == ' ')
         out.pop_back();
     return out;
+}
+
+std::string ChatTextAfterHook(std::string const& linked, std::string const& plain, std::string const& hooked)
+{
+    return hooked == plain ? linked : SanitizeChatText(hooked);
 }
 }

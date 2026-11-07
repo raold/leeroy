@@ -57,7 +57,7 @@ import uuid
 from leeroy_mind.prompts import load_prompt
 from leeroy_mind.protocol import event_type
 from leeroy_mind.talk.filters import repair
-from leeroy_mind.talk.items import defuse
+from leeroy_mind.talk.items import defuse, fold
 from leeroy_mind.text import truncate_words
 from leeroy_mind.wow import CAST_MIN_LEVEL
 
@@ -214,11 +214,13 @@ def _line_state(ledger, ack):
 
 def _item_links(app, text):
     """A screened line as realm_line keeps it and as RealmSay sends it: the guild's item links
-    (talk/items.py; rival officers link at level 80), or only defused with no item table."""
+    (talk/items.py; rival officers link at level 80). RealmSay is not cleaned on the way out,
+    so its text is folded as native will clean it (items.fold) and only then gets placeholders,
+    and those only once native has them (ItemLinker.wire)."""
     items = getattr(getattr(app, "engine", None), "items", None)
     if items is None:
         text = defuse(text)
-        return text, text
+        return text, fold(text)
     text = items.canonical(text, CAST_MIN_LEVEL)
     return text, items.wire(text, CAST_MIN_LEVEL)
 

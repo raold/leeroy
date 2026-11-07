@@ -3,8 +3,10 @@
 #ifndef MOD_LEEROY_LEEROY_COMMANDS_H
 #define MOD_LEEROY_LEEROY_COMMANDS_H
 
+#include "LeeroyItemLinks.h"
 #include "LeeroyProtocol.h"
 
+#include <cstddef>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -23,8 +25,10 @@ bool LeeroyQueueHumanChat(Player* human, Leeroy::Channel channel, std::string co
 
 // World thread. What a cast member's line says: SanitizeChatText, with the mind's {{item:<id>}} placeholders as item
 // links (Leeroy::SanitizeChatTextWithItemLinks: the item template's name and quality at the speaker's level, at most
-// two, within 255 bytes). Every other '|' is gone, as before.
-std::string LeeroyBotChatText(Player const* speaker, std::string_view text);
+// maxLinks, within 255 bytes). Every other '|' is gone, as before. maxLinks 0 gives the line's plain form, each
+// placeholder as "[Name]".
+std::string LeeroyBotChatText(Player const* speaker, std::string_view text,
+    std::size_t maxLinks = Leeroy::kMaxItemLinks);
 
 // Extension commands (P1d registers its nine here). The bridge has already checked v, id and type; the handler gets
 // the whole message, checks its own fields, runs on the world thread and returns the ack's result.

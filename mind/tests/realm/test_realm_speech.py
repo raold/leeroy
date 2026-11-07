@@ -821,35 +821,60 @@ def test_gankers_never_call_model(sapp):
 
 # -- item links ----------------------------------------------------------------------------------
 
-def test_a_rival_line_links_its_items_and_keeps_the_plain_form(tmp_path, store, clock, monkeypatch):
-    from leeroy_mind.talk.items import ItemLinker
-    s = make_app(tmp_path, store, clock, monkeypatch,
-                 llm=FakeLLM("wts [frozen orb] x4, also {{item:6948}} cheap"))
-    s.app.engine.items = ItemLinker(lambda: [dict(id=43102, name="Frozen Orb", quality=3, ilvl=80,
-                                                  req_level=0)], clock.now)
-    place(s.store, VEX, "uc_bank")
+# Model text that reads as a placeholder only once something between its "{"s is dropped or
+# folded: by native's sanitizer (RealmSay is not cleaned in the mind), or a fold further on.
+SMUGGLED = ("{|{item:6948}}", "{\x01{item:6948}}", "\uff5b\uff5bitem:6948\uff5d\uff5d",
+            "{\u200b{item:6948}}", "{\u4e2d{item:6948}}", "{{item:6948}}", "{\x7f{item:6948}}")
 
-    async def go():
-        await start(s)
-        assert await speak(s) == "trade"
-        await pump(s)
-        [line] = says(s, "trade")
-        assert line.text == "wts {{item:43102}} x4, also {item:6948}} cheap"
-        [row] = lines(s.store)
-        assert row["text"] == "wts [Frozen Orb] x4, also {item:6948}} cheap"
-        await s.realm.close()
-    run(go())
+
+def native_view(text):
+    """What native's sanitizer leaves of a line: no pipe, no control character."""
+    return "".join(c for c in text if c != "|" and ord(c) >= 0x20 and ord(c) != 0x7F)
+
+
+def item_app(tmp_path, store, clock, monkeypatch, line, *, native=True, items=True):
+    from leeroy_mind.talk.items import ItemLinker
+    s = make_app(tmp_path, store, clock, monkeypatch, llm=FakeLLM(line))
+    if items:
+        s.app.engine.items = ItemLinker(lambda: [dict(id=43102, name="Frozen Orb", quality=3,
+                                                      ilvl=80, req_level=0)], clock.now)
+        s.app.engine.items.native = native
+    place(s.store, VEX, "uc_bank")
+    return s
+
+
+async def one_trade_line(s):
+    await start(s)
+    assert await speak(s) == "trade"
+    await pump(s)
+    [line] = says(s, "trade")
+    [row] = lines(s.store)
+    await s.realm.close()
+    return line.text, row["text"]
+
+
+def test_a_rival_line_links_its_items_and_keeps_the_plain_form(tmp_path, store, clock, monkeypatch):
+    s = item_app(tmp_path, store, clock, monkeypatch, "wts [frozen orb] x4, also {{item:6948}} cheap")
+    sent, kept = run(one_trade_line(s))
+    assert sent == "wts {{item:43102}} x4, also {item:6948}} cheap"
+    assert kept == "wts [Frozen Orb] x4, also {item:6948}} cheap"
+
+
+def test_a_rival_line_to_an_older_native_sends_the_plain_name(tmp_path, store, clock, monkeypatch):
+    s = item_app(tmp_path, store, clock, monkeypatch, "wts [frozen orb] x4", native=False)
+    sent, kept = run(one_trade_line(s))
+    assert sent == kept == "wts [Frozen Orb] x4"
 
 
 def test_a_rival_line_without_item_data_is_defused(tmp_path, store, clock, monkeypatch):
-    s = make_app(tmp_path, store, clock, monkeypatch, llm=FakeLLM("wts {{item:6948}} [frozen orb]"))
-    place(s.store, VEX, "uc_bank")
+    s = item_app(tmp_path, store, clock, monkeypatch, "wts {{item:6948}} [frozen orb]", items=False)
+    sent, kept = run(one_trade_line(s))
+    assert sent == "wts {item:6948}} [frozen orb]" == kept
 
-    async def go():
-        await start(s)
-        assert await speak(s) == "trade"
-        await pump(s)
-        [line] = says(s, "trade")
-        assert line.text == "wts {item:6948}} [frozen orb]" == lines(s.store)[0]["text"]
-        await s.realm.close()
-    run(go())
+
+@pytest.mark.parametrize("items", [True, False])
+@pytest.mark.parametrize("form", SMUGGLED)
+def test_a_rival_line_never_smuggles_a_placeholder(tmp_path, store, clock, monkeypatch, form, items):
+    s = item_app(tmp_path, store, clock, monkeypatch, f"wts {form} cheap", items=items)
+    sent, kept = run(one_trade_line(s))
+    assert "{{item:" not in native_view(sent) and "{{item:" not in kept

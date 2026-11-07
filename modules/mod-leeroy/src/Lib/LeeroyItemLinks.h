@@ -38,11 +38,18 @@ std::string BuildItemLink(std::uint32_t itemId, ItemLinkInfo const& info, std::u
 
 // A line from the mind with its {{item:<id>}} placeholders. SanitizeChatText runs first, uncapped, so no '|' the text
 // carried survives; then each placeholder becomes its item's link, at most maxLinks of them, and the line is cut to
-// maxBytes. A placeholder past maxLinks is "[Name]", and so is one whose link would carry the line over maxBytes (the
-// last first); an id the lookup does not know is "[unknown item]". A cut never falls inside a link. Text without a
-// placeholder comes out exactly as SanitizeChatText(text, maxBytes).
+// maxBytes. Only a placeholder whose bytes stand together in `text` counts: one the sanitizer joins across stripped
+// bytes ("{{it|em:1}}", "{\x01{item:1}}") stays text. A placeholder past maxLinks is "[Name]", and so is one whose link
+// would carry the line over maxBytes (the last first); an id the lookup does not know is "[unknown item]". A cut never
+// falls inside a link or a name: one that does not fit is dropped whole. Text without a placeholder comes out exactly
+// as SanitizeChatText(text, maxBytes).
 std::string SanitizeChatTextWithItemLinks(std::string_view text, ItemLookup const& lookup, std::uint32_t level,
     std::size_t maxBytes = kMaxChatBytes, std::size_t maxLinks = kMaxItemLinks);
+
+// A chat hook (OnPlayerCanUseChat) is shown the line's `plain` form, its links as "[Name]" (maxLinks 0): unchanged,
+// the `linked` line goes out; rewritten, the hook's words go out sanitized, without links, never link codes
+// sanitized into junk.
+std::string ChatTextAfterHook(std::string const& linked, std::string const& plain, std::string const& hooked);
 }
 
 #endif

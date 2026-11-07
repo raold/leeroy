@@ -11,10 +11,12 @@ from engine_rig import make_rig
 from leeroy_mind.library.chunks import ItemRow, SourceResult
 from leeroy_mind.library.core import Library
 from leeroy_mind.personas.schema import Typing
-from leeroy_mind.protocol import Chat, LootDrop, LootItem, MAX_TEXT_BYTES
+from leeroy_mind.protocol import (Chat, Hello, LootDrop, LootItem, MAX_TEXT_BYTES,
+                                  parse_event, sanitize_say_text)
 from leeroy_mind.bridge import AckTimeout
 from leeroy_mind.talk.filters import strip_copied
-from leeroy_mind.talk.items import ItemLinker, defuse, free_name, key, link_bytes
+from leeroy_mind.library.chunks import ChunkDraft
+from leeroy_mind.talk.items import ItemLinker, defuse, fold, free_name, key, link_bytes
 from leeroy_mind.talk.states import EFFECTS, Altered
 from leeroy_mind.talk.style import style_lines
 from leeroy_mind.talk.turns import Turn, TurnKind
@@ -45,6 +47,8 @@ ITEMS = [
     (43102, "Frozen Orb", 3, 80, 0),
     (90013, "Heavy Boots", 1, 10, 5),
     (90014, "Dark Desire", 1, 1, 0),
+    (90015, "Fast Test 1H Axe", 2, 60, 0),
+    (90016, "1500 Test sword 63 blue", 3, 63, 0),
 ]
 
 
@@ -52,8 +56,11 @@ def rows(items=ITEMS):
     return [dict(id=i, name=n, quality=q, ilvl=il, req_level=rl) for i, n, q, il, rl in items]
 
 
-def linker(items=ITEMS, now=lambda: 1000.0):
-    return ItemLinker(lambda: rows(items), now)
+def linker(items=ITEMS, now=lambda: 1000.0, *, native=True, places=None):
+    """A linker over ITEMS; `native`: the bridge's hello listed item_links (the new native)."""
+    lk = ItemLinker(lambda: rows(items), now, (lambda: places) if places is not None else None)
+    lk.native = native
+    return lk
 
 
 # -- finding mentions ---------------------------------------------------------------------------
@@ -104,6 +111,8 @@ def test_junk_boss_and_place_names_are_never_items():
     assert lk.canonical("the black knight hits hard, [Lord Marrowgar] too",
                         80) == "the black knight hits hard, Lord Marrowgar too"
     assert lk.resolve("The Black Knight", 80) is None and lk.resolve("Shadowmourne", 80).id == 49623
+    assert lk.canonical("[Fast Test 1H Axe] or 1500 test sword 63 blue",
+                        80) == "Fast Test 1H Axe or 1500 test sword 63 blue"
 
 
 def test_brackets_that_name_no_item_lose_them():
@@ -216,7 +225,9 @@ def test_the_library_gives_its_item_rows(tmp_path, clock):
     try:
         lib.build([World()])
         lk = ItemLinker.for_library(lib, clock.now)
-        assert lk is not None and lk.wire(lk.canonical("[shadowmourne]", 80), 80) == "{{item:49623}}"
+        assert lk is not None and lk.wire(lk.canonical("[shadowmourne]", 80), 80) == "[Shadowmourne]"
+        lk.native = True  # a hello listed item_links
+        assert lk.wire(lk.canonical("[shadowmourne]", 80), 80) == "{{item:49623}}"
     finally:
         lib.close()
 
@@ -312,3 +323,193 @@ def test_a_transport_barrier_line_is_sent_exactly_but_defused(store, clock, tmp_
         assert task.result()
         assert r.sent.says()[-1].text == "[shadowmourne] {item:6948}}"
     run(main())
+
+
+# -- round 1: the feature check ------------------------------------------------------------------
+
+def test_wire_sends_the_plain_name_until_native_lists_the_feature():
+    lk = linker(native=False)
+    assert lk.wire("gz on [Shadowmourne]", 80) == "gz on [Shadowmourne]"
+    lk.native = True
+    assert lk.wire("gz on [Shadowmourne]", 80) == "gz on {{item:49623}}"
+
+
+def test_hello_features_default_to_none_for_an_older_native():
+    old = b'{"v":1,"type":"hello","ts":1,"server":"mod-leeroy","version":"0.1.0","guild_id":21,' \
+          b'"human_guid":0}'
+    assert parse_event(old).features == ()
+    new = old[:-1] + b',"features":["item_links"]}'
+    assert parse_event(new).features == ("item_links",)
+
+
+def test_the_app_turns_links_on_only_for_a_hello_that_lists_them(tmp_path, clock):
+    from leeroy_mind.app import MindApp
+    from leeroy_mind.config import load_config
+    from leeroy_mind.testing.fake_llm import FakeLLM
+
+    async def main():
+        item_library(tmp_path / "library.db", clock)
+        app = MindApp(load_config(tmp_path / "mind.toml"), tmp_path, llm=FakeLLM(), clock=clock)
+        try:
+            items = app.engine.items
+            assert items is not None and items.native is False
+            await app.handle(Hello(ts=1, server="mod-leeroy", version="0.1.0", guild_id=21,
+                                   human_guid=0, features=("item_links",)))
+            assert items.native is True
+            await app._on_connection(False)
+            assert items.native is False
+            await app.handle(Hello(ts=2, server="mod-leeroy", version="0.1.0", guild_id=21,
+                                   human_guid=0))
+            assert items.native is False
+        finally:
+            await app.stop()
+    run(main())
+
+
+def test_the_app_reads_the_item_names_before_the_bridge_connects(tmp_path, clock):
+    from leeroy_mind.app import MindApp
+    from leeroy_mind.config import load_config
+    from leeroy_mind.testing.fake_llm import FakeLLM
+
+    async def main():
+        item_library(tmp_path / "library.db", clock)
+        app = MindApp(load_config(tmp_path / "mind.toml"), tmp_path, llm=FakeLLM(), clock=clock)
+        warm = []
+
+        async def bridge_run():
+            warm.append(app.engine.items._names is not None)
+            await asyncio.Event().wait()
+        app.bridge.run = bridge_run
+        task = asyncio.create_task(app.run())
+        for _ in range(50):
+            await asyncio.sleep(0)
+            if warm:
+                break
+        await app.stop()
+        await asyncio.wait({task}, timeout=5.0)
+        assert warm == [True]
+    run(main())
+
+
+# -- round 1: places and NPCs ---------------------------------------------------------------------
+
+def test_a_place_npc_or_holiday_name_links_only_in_brackets():
+    items = ITEMS + [(90020, "Feast of Winter Veil", 1, 1, 0), (90021, "Lancer Grounds Map", 1, 1, 0)]
+    lk = linker(items, places=["The Feast of Winter Veil", "Lancer Grounds Map", "Frozen Orb"])
+    assert lk.canonical("the feast of winter veil is on", 80) == "the feast of winter veil is on"
+    assert lk.canonical("got a lancer grounds map", 80) == "got a lancer grounds map"
+    assert lk.canonical("need a frozen orb", 80) == "need a frozen orb"
+    assert lk.canonical("need a [frozen orb]", 80) == "need a [Frozen Orb]"
+    assert "Frozen Orb" not in lk.free_names() and "Deathbringer's Will" in lk.free_names()
+
+
+def test_the_library_names_its_places_npcs_and_holidays(tmp_path, clock):
+    class World:
+        name = "world"
+
+        def load(self, library):
+            return SourceResult("world", [
+                ChunkDraft("instance:631", "zone", "Icecrown Citadel", "A raid."),
+                ChunkDraft("loot:npc:36612:0", "loot", "Lord Marrowgar", "Loot."),
+                ChunkDraft("event:1", "event", "Brewfest", "A holiday.")],
+                items=[ItemRow(1, "Brewfest", 1, 1, 0, "")], log=[])
+    lib = Library(tmp_path / "library.db", clock=clock)
+    try:
+        lib.build([World()])
+        assert set(lib.not_item_names()) >= {"Icecrown Citadel", "Lord Marrowgar", "Brewfest"}
+    finally:
+        lib.close()
+
+
+# -- round 1: no smuggled placeholder, on any path ----------------------------------------------
+
+# Words that read as a placeholder only once something between the "{"s is dropped or folded:
+# a pipe or a control (encode_command, native), fullwidth braces, a zero-width space or a
+# CJK letter (the typing's ASCII fold).
+SMUGGLED = ("{|{item:49623}}", "{\x01{item:49623}}", "\uff5b\uff5bitem:49623\uff5d\uff5d",
+            "{\u200b{item:49623}}", "{\u4e2d{item:49623}}", "{{item:49623}}", "{\x7f{item:49623}}",
+            "{\ufe5b{item:49623}}")
+
+
+def native_view(text: str) -> str:
+    """What native's sanitizer leaves of the text it gets: no pipe, no control character."""
+    return "".join(c for c in text if c != "|" and ord(c) >= 0x20 and ord(c) != 0x7F)
+
+
+def wire_view(text: str) -> str:
+    """A say command's text as native gets it: encode_command's clean, then native's."""
+    return native_view(sanitize_say_text(text))
+
+
+@pytest.mark.parametrize("form", SMUGGLED)
+def test_fold_and_wire_never_leave_a_placeholder_of_the_words(form):
+    lk = linker()
+    for text in (fold(f"wts {form} cheap"), lk.wire(f"wts {form} cheap", 80),
+                 lk.wire(lk.canonical(f"wts {form} cheap", 80), 80)):
+        assert "{{item:" not in native_view(text), text
+
+
+async def say_through(r, clock, text, **kw):
+    task = asyncio.create_task(r.engine.say_as(101, "guild", text, kind=TurnKind.CALLOUT, **kw))
+    await r.advance(30)
+    return task.result()
+
+
+def assert_clean(store, r):
+    for c in r.sent.says():
+        assert "{{item:" not in wire_view(c.text), c.text
+    for row in store.conn.execute("SELECT text FROM chat_line"):
+        assert "{{item:" not in row["text"], row["text"]
+    for u in r.utterances():
+        assert "{{item:" not in u["text"], u["text"]
+
+
+@pytest.mark.parametrize("path", ["model", "model_no_library", "template", "barrier"])
+@pytest.mark.parametrize("form", SMUGGLED)
+def test_no_smuggled_placeholder_reaches_the_bridge_or_the_log(store, clock, tmp_path, form, path):
+    async def main():
+        items = None if path == "model_no_library" else linker(now=clock.now)
+        r = make_rig(store, clock, tmp_path, items=items, reply=f"wts {form} cheap")
+        if path.startswith("model"):
+            await spoken(r, reply_to_human(101))
+        else:
+            await say_through(r, clock, f"wts {form} cheap",
+                              **({"before_transport": lambda: True} if path == "barrier" else {}))
+        assert r.sent.says()
+        assert_clean(store, r)
+    run(main())
+
+
+def test_the_linked_line_still_matches_its_echo_after_the_fold(store, clock, tmp_path):
+    def ack(cmd):
+        raise AckTimeout("slow")
+
+    async def main():
+        r = plain_rig(store, clock, tmp_path, ack=ack,
+                      reply="gz on [shadowmourne] \uff5b\uff5bnot a token")
+        assert await spoken(r, reply_to_human(101), seconds=15) == []
+        sent = r.sent.says()[0].text
+        link = "|cffff8000|Hitem:49623:0:0:0:0:0:0:0:80|h[Shadowmourne]|h|r"
+        echo = Chat(ts=0, channel="guild", from_guid=101, from_name="Arkon", to_guid=0,
+                    text=sent.replace("{{item:49623}}", link), map=0, zone=10, via_bridge=True)
+        before = store.conn.execute("SELECT count(*) FROM chat_line").fetchone()[0]
+        assert r.engine.is_echo(echo, clock.now())
+        assert store.conn.execute("SELECT count(*) FROM chat_line").fetchone()[0] == before + 1
+        assert sent == "gz on {{item:49623}} {not a token"  # the fold's "{{" broken, ours kept
+        for row in store.conn.execute("SELECT text FROM chat_line"):
+            assert "{{" not in row["text"]
+    run(main())
+
+
+def item_library(path, clock):
+    class World:
+        name = "world"
+
+        def load(self, library):
+            return SourceResult("world", [], items=[ItemRow(49623, "Shadowmourne", 5, 284, 80, "")],
+                                log=[])
+    lib = Library(path, clock=clock)
+    try:
+        lib.build([World()])
+    finally:
+        lib.close()

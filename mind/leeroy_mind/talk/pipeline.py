@@ -52,7 +52,7 @@ from leeroy_mind.talk.filters import (Tell, aimed_off_him, find_tells, flirty, i
                                       strip_copied, supported)
 from leeroy_mind.talk.guards import Guards
 from leeroy_mind.talk.facts import LibraryFacts
-from leeroy_mind.talk.items import defuse
+from leeroy_mind.talk.items import defuse, fold
 from leeroy_mind.talk.prompt import (PromptParts, chat_line_text, comms_rules, facts_head,
                                      knows_real_name, mood_line, quest_help, real_name_line,
                                      redact_for, relationship_card, render_instruction,
@@ -1110,6 +1110,9 @@ class Pipeline:
         else:
             lines = [] if only else self._style(turn, p, text, close=close,
                                                 two_lines=meta.two_lines, romance=meta.romance)
+        # The typing's ASCII fold can join two "{" (fullwidth braces, a zero-width space between):
+        # each line is defused once more as it is kept and sent (talk/items.py).
+        lines = [Styled(defuse(s.line), defuse(s.plain)) for s in lines]
         if not lines:
             if emotes:  # a line that was only an emote: the emote goes out (review minor 8)
                 await self._send_emotes(turn, meta, emotes)
@@ -1536,11 +1539,12 @@ class Pipeline:
         return items.canonical(text, self._link_level(turn.speaker))
 
     def _wire_items(self, turn: Turn, meta: TurnMeta, text: str) -> str:
-        """The say command's text: the line's "[Name]"s as native's {{item:<id>}} placeholders
-        (ItemLinker.wire). Only the bridge sees it; the line is recorded as `text`."""
+        """The say command's text: the line folded as the wire carries it (items.fold), and its
+        "[Name]"s as native's {{item:<id>}} placeholders when native has them (ItemLinker.wire).
+        Only the bridge sees it; the line is recorded as `text`."""
         items = getattr(self, "items", None)
         if items is None or meta.before_transport is not None:
-            return text
+            return fold(text)
         return items.wire(text, self._link_level(turn.speaker))
 
     def _spell_real_name(self, text: str, *, close: bool, offered: bool) -> str:

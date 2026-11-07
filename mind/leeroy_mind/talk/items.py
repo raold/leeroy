@@ -8,24 +8,33 @@ utterance log, the voice service and every later prompt see. Only the say comman
 carries a mention as {{item:<id>}} (wire), and native turns that into the client's link from its
 own item template: its name and quality colour, at most two a line, within 255 bytes
 (modules/mod-leeroy/src/Lib/LeeroyItemLinks.h). Its echo comes back as that link, which
-strip_wow_markup reads as the same [Name].
+strip_wow_markup reads as the same [Name]. wire() places a placeholder only once the bridge's
+hello listed the feature (NATIVE_FEATURE, `native`); until then, and from an older worldserver,
+the line goes out with its plain [Name]s.
 
 A mention is a bracketed name ("[shadowmourne]", any case), or unbracketed the exact whole name
 of an item of two words or more besides little words ("the", "of"), at least one of them no
 everyday word (COMMON_WORDS, CHAT_WORDS), and at least MIN_FREE_CHARS long: "deathbringer's
 will" and "frozen orb" link; "the key", "gold bar", "mana potion", "heavy boots", "dark desire"
-and a one-word name such as "hearthstone" only in brackets. Bracketed mentions take the MAX_LINKS slots first, then unbracketed ones, left to
-right. A bracketed span that names no item, or one past the slots, loses its brackets: in WoW
-chat a bracket reads as a link, and a dead one would mislead. A junk name (Deprecated, Monster -,
-[PH]: the library's own rule), a boss's, a raid's or a dungeon's name, a class or a race is no
-item here, bracketed or not.
+and a one-word name such as "hearthstone" only in brackets. A name the library also gives a
+place, an NPC or a holiday ("the black knight", "feast of winter veil": Library.not_item_names)
+is never one unbracketed. Bracketed mentions take the MAX_LINKS slots first, then unbracketed
+ones, left to right. A bracketed span that names no item, or one past the slots, loses its
+brackets: in WoW chat a bracket reads as a link, and a dead one would mislead. A junk name
+(Deprecated, Monster -, [PH]: the library's own rule; a test item), a boss's, a raid's or a dungeon's name, a
+class or a race is no item here, bracketed or not.
 
 Several items of one name (a heroic copy, a quest copy): one that dropped or was won within
 SEEN_S (seen(), from the engine's loot events: the copy the raid is talking about) wins, else
 one the speaker's level can use, then the highest item level, then the highest quality, then
 the lowest id. With no item table (no library.db, or no world build in it) nothing is linked
-and the words keep their brackets. An id is only ever one the item table holds. {{ the words
-carried themselves is defused (defuse), so no placeholder ever comes from the model.
+and the words keep their brackets. An id is only ever one the item table holds.
+
+No placeholder ever comes from the words themselves. Every line is folded (fold) the way the
+wire carries it, clean_say_text as encode_command applies it, and defused after that, every run
+of "{" made one: whatever the cleaning would join ("{|{", "{", a control, "{"; after the
+typing's ASCII fold also a zero-width space or fullwidth braces) is broken after the join, not
+before it. Native also takes only a placeholder written whole in the text it receives.
 """
 from __future__ import annotations
 
@@ -36,7 +45,7 @@ from dataclasses import dataclass
 from typing import Callable, Iterable
 
 from leeroy_mind.library.world import _JUNK_NAME
-from leeroy_mind.protocol import MAX_TEXT_BYTES
+from leeroy_mind.protocol import MAX_TEXT_BYTES, clean_say_text
 from leeroy_mind.talk.words import COMMON_WORDS
 from leeroy_mind.wow import (BOSS_NAMES, CLASSES, DUNGEON_BOSS_NAMES, DUNGEONS, ENCOUNTER_MEMBERS,
                              RACES, RAID_INSTANCES)
@@ -44,6 +53,7 @@ from leeroy_mind.wow import (BOSS_NAMES, CLASSES, DUNGEON_BOSS_NAMES, DUNGEONS, 
 log = logging.getLogger(__name__)
 
 MAX_LINKS = 2  # native's kMaxItemLinks
+NATIVE_FEATURE = "item_links"  # in the bridge hello's features: native expands the placeholders
 SEEN_S = 6 * 3600.0
 SEEN_KEPT = 256
 MIN_FREE_CHARS = 8
@@ -54,6 +64,8 @@ LINK_OVERHEAD = 40
 _BRACKET = re.compile(r"\[([^\[\]\n]{1,100})\]")
 _WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9'’-]*")
 _OPEN = re.compile(r"\{\{+")
+# The developers' test items the junk rule misses ("1500 Test sword 63 blue", "Fast Test Ammo").
+_TEST_ITEM = re.compile(r"(?<![\w'])test(?![\w'])", re.IGNORECASE)
 _LITTLE = frozenset("a an the of and or to in on at for with from by".split())
 # Words players type as words that also make item names: the game's own ("arena points",
 # "heroic armor"), gear and its stuff ("heavy boots", "leather gloves"), and the plain and
@@ -95,6 +107,16 @@ def defuse(text: str) -> str:
     return _OPEN.sub("{", text)
 
 
+def fold(text: str) -> str:
+    """`text` as the say command carries it (clean_say_text, as encode_command cleans it),
+    defused after the cleaning, so nothing the cleaning drops can join two "{"."""
+    return defuse(clean_say_text(text))
+
+
+def _bare(k: str) -> str:
+    return k[4:] if k.startswith("the ") else k
+
+
 @dataclass(frozen=True, slots=True)
 class ItemRef:
     id: int
@@ -122,16 +144,22 @@ class ItemLinker:
     """The item table's names, read once on first use from `load` (rows with id, name, quality,
     ilvl and req_level, as Library.item_rows gives them). `now` is the engine's clock."""
 
-    def __init__(self, load: Callable[[], Iterable], now: Callable[[], float]):
-        self._load, self._now = load, now
+    def __init__(self, load: Callable[[], Iterable], now: Callable[[], float],
+                 not_items: Callable[[], Iterable[str]] | None = None):
+        self._load, self._now, self._not_items = load, now, not_items
         self._names: dict[str, list[ItemRef]] | None = None
         self._free: dict[str, tuple[int, ...]] = {}  # a free name's first word -> its word counts
+        self._places: frozenset[str] = frozenset()  # bare keys of the library's places and NPCs
         self._seen: dict[int, float] = {}
+        # The bridge's hello listed NATIVE_FEATURE (the app sets it at each hello and clears it
+        # when the bridge goes): only then does wire() place a placeholder.
+        self.native = False
 
     @classmethod
     def for_library(cls, library, now: Callable[[], float]) -> ItemLinker | None:
         rows = getattr(library, "item_rows", None)
-        return cls(rows, now) if callable(rows) else None
+        others = getattr(library, "not_item_names", None)
+        return cls(rows, now, others if callable(others) else None) if callable(rows) else None
 
     # -- the names -------------------------------------------------------------------------------
 
@@ -147,22 +175,39 @@ class ItemLinker:
         for r in rows:
             name = " ".join(str(r["name"]).split())
             k = key(name)
-            if not k or "[" in k or "]" in k or "|" in k or k in _NOT_ITEMS or _JUNK_NAME.search(name):
+            if (not k or "[" in k or "]" in k or "|" in k or k in _NOT_ITEMS
+                    or _JUNK_NAME.search(name) or _TEST_ITEM.search(name)):
                 continue
             names.setdefault(k, []).append(ItemRef(int(r["id"]), name, int(r["quality"]),
                                                    int(r["ilvl"]), int(r["req_level"])))
+        try:
+            places = frozenset(_bare(key(n)) for n in (self._not_items() if self._not_items
+                                                       else ()) if n)
+        except Exception as e:
+            log.warning("item_links_places_unavailable: %s", type(e).__name__)
+            places = frozenset()
         free: dict[str, set[int]] = {}
         for k in names:
-            if free_name(k):
+            if self._free_ok(k, places):
                 words = _WORD.findall(k)
                 free.setdefault(words[0], set()).add(len(words))
-        self._names = names
+        self._names, self._places = names, places
         self._free = {w: tuple(sorted(n, reverse=True)) for w, n in free.items()}
         log.info("item_links_ready: names=%d free=%d", len(names), sum(map(len, free.values())))
         return names
 
+    @staticmethod
+    def _free_ok(k: str, places: frozenset[str]) -> bool:
+        return free_name(k) and _bare(k) not in places
+
     def ready(self) -> bool:
         return bool(self._index())
+
+    def free_names(self) -> list[str]:
+        """Every item name that links unbracketed, as the item table spells it, sorted: what
+        the owner can skim (the one-off dump)."""
+        return sorted({refs[0].name for k, refs in self._index().items()
+                       if self._free_ok(k, self._places)}, key=str.casefold)
 
     def seen(self, item_ids: Iterable[int], now: float | None = None) -> None:
         """Items that just dropped or were won: their copy of a shared name wins for SEEN_S."""
@@ -226,7 +271,7 @@ class ItemLinker:
                 if any(a < y and x < b for x, y in taken):
                     continue
                 k = key(text[a:b])
-                if free_name(k) and (ref := self.resolve(k, level)) is not None:
+                if self._free_ok(k, self._places) and (ref := self.resolve(k, level)) is not None:
                     found.append((a, b, f"[{ref.name}]"))
                     i = j
                     break
@@ -234,11 +279,11 @@ class ItemLinker:
         return found
 
     def wire(self, line: str, level: int) -> str:
-        """The say command's text: each bracketed item name as {{item:<id>}}, at most MAX_LINKS,
-        and only as many as native's links leave the line within MAX_TEXT_BYTES; any other
-        bracket stays as it is."""
-        line = defuse(line)
-        if not self.ready():
+        """The say command's text: the line folded (fold), then, once native has the feature,
+        each bracketed item name as {{item:<id>}}, at most MAX_LINKS, and only as many as
+        native's links leave the line within MAX_TEXT_BYTES; any other bracket stays as it is."""
+        line = fold(line)
+        if not self.native or not self.ready():
             return line
         chosen: list[tuple[re.Match, ItemRef]] = []
         for m in _BRACKET.finditer(line):

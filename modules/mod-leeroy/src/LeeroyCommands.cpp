@@ -387,7 +387,7 @@ std::string LeeroyExecuteCommand(Leeroy::Command const& cmd)
     return Leeroy::EncodeAck(now, cmd.id, error.empty(), error);
 }
 
-std::string LeeroyBotChatText(Player const* speaker, std::string_view text)
+std::string LeeroyBotChatText(Player const* speaker, std::string_view text, std::size_t maxLinks)
 {
     Leeroy::ItemLookup const items = [](std::uint32_t id) -> std::optional<Leeroy::ItemLinkInfo> {
         ItemTemplate const* item = sObjectMgr->GetItemTemplate(id);
@@ -395,7 +395,8 @@ std::string LeeroyBotChatText(Player const* speaker, std::string_view text)
             return std::nullopt;
         return Leeroy::ItemLinkInfo{item->Name1, item->Quality};
     };
-    return Leeroy::SanitizeChatTextWithItemLinks(text, items, speaker ? speaker->GetLevel() : 0);
+    return Leeroy::SanitizeChatTextWithItemLinks(text, items, speaker ? speaker->GetLevel() : 0, Leeroy::kMaxChatBytes,
+        maxLinks);
 }
 
 bool LeeroyRegisterCommand(std::string const& type, LeeroyCommandHandler handler)

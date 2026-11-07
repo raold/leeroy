@@ -121,9 +121,9 @@ LEEROY_TEST(ItemLinks_EveryOtherPipeIsStripped)
     // A link the model wrote itself is text, never a link.
     CHECK_EQ(SanitizeChatTextWithItemLinks("|cff1eff00|Hitem:1|h[x]|h|r", items, 80),
         std::string("cff1eff00Hitem:1h[x]hr"));
-    // Pipes around or inside a placeholder go before it is read.
+    // Pipes around a placeholder go; one inside it leaves text, never a link.
     CHECK_EQ(SanitizeChatTextWithItemLinks("|{{item:49623}}|", items, 80), kShadowmourne);
-    CHECK_EQ(SanitizeChatTextWithItemLinks("{{it|em:49623}}", items, 80), kShadowmourne);
+    CHECK_EQ(SanitizeChatTextWithItemLinks("{{it|em:49623}}", items, 80), std::string("{{item:49623}}"));
     // An item name with a pipe loses it, in the link and as plain text.
     std::string const out = SanitizeChatTextWithItemLinks("{{item:1}}", items, 80);
     CHECK_EQ(out, std::string("|cff1eff00|Hitem:1:0:0:0:0:0:0:0:80|h[PipeName]|h|r"));
@@ -157,11 +157,18 @@ LEEROY_TEST(ItemLinks_ByteLimitDropsLinksNotHalves)
     std::string const two = SanitizeChatTextWithItemLinks(mid + " {{item:49623}} {{item:50363}}", items, 80);
     CHECK_EQ(two, mid + " " + kShadowmourne + " [Deathbringer's Will]");
     CHECK(two.size() <= kMaxChatBytes);
-    // A plain name past the limit is cut like any text; never a link.
+    // A plain name past the limit is dropped whole, never cut to "[Sha"; never a link.
     std::string const full(250, 'c');
     std::string const cut = SanitizeChatTextWithItemLinks(full + " {{item:49623}}", items, 80);
-    CHECK_EQ(cut, full + " [Sha");
+    CHECK_EQ(cut, full);
     CHECK_EQ(Count(cut, "|"), 0u);
+    std::string const near(245, 'c');
+    CHECK_EQ(SanitizeChatTextWithItemLinks(near + " {{item:99999}} tail", items, 80), near);
+    CHECK_EQ(SanitizeChatTextWithItemLinks(near + " {{item:49623}} x", items, 80, 255, 0), near);
+    // Words after a name that fits are still cut like any text.
+    std::string const words(230, 'c');
+    CHECK_EQ(SanitizeChatTextWithItemLinks(words + " {{item:49623}} and more words here", items, 80),
+        words + " [Shadowmourne] and more");
     // Exactly at the limit, the link stays.
     std::string const exact(255 - 1 - kShadowmourne.size(), 'd');
     CHECK_EQ(SanitizeChatTextWithItemLinks(exact + " {{item:49623}}", items, 80), exact + " " + kShadowmourne);
@@ -173,6 +180,48 @@ LEEROY_TEST(ItemLinks_ByteLimitDropsLinksNotHalves)
         CHECK_EQ(Count(s, "|c"), Count(s, "|r"));
         CHECK_EQ(Count(s, "|H"), Count(s, "|c"));
     }
+}
+
+LEEROY_TEST(ItemLinks_NoPlaceholderIsJoinedAcrossStrippedBytes)
+{
+    auto const items = Armory();
+    // Each of these reads "{{item:49623}}" only once something between its bytes is gone or folded: never a link.
+    std::string const forms[] = {
+        "{|{item:49623}}",
+        std::string("{\x01{item:49623}}"),
+        std::string("{\x7f{item:49623}}"),
+        std::string("{\xff{item:49623}}"),
+        std::string("{\xc3{item:49623}}"),
+        "{{item:4|9623}}",
+        "{{item:49623}|}",
+        "{{item:49623|}}",
+        std::string("\xef\xbd\x9b\xef\xbd\x9bitem:49623\xef\xbd\x9d\xef\xbd\x9d"),   // fullwidth braces
+        std::string("{\xe2\x80\x8b{item:49623}}"),                                   // a zero-width space
+        std::string("{\xe4\xb8\xad{item:49623}}"),                                   // a CJK letter
+        "{\n{item:49623}}",
+        "{ {item:49623}}",
+    };
+    for (std::string const& form : forms)
+    {
+        std::string const out = SanitizeChatTextWithItemLinks("wts " + form + " cheap", items, 80);
+        CHECK_EQ(Count(out, "|"), 0u);
+        CHECK(out.rfind("wts ", 0) == 0);
+    }
+    // Written whole, it is one, even beside stripped bytes.
+    CHECK_EQ(SanitizeChatTextWithItemLinks(std::string("\x01{{item:49623}}\x01"), items, 80), kShadowmourne);
+}
+
+LEEROY_TEST(ItemLinks_HookRewriteGoesOutAsWords)
+{
+    auto const items = Armory();
+    std::string const raw = "selling {{item:49623}} cheap";
+    std::string const linked = SanitizeChatTextWithItemLinks(raw, items, 80);
+    std::string const plain = SanitizeChatTextWithItemLinks(raw, items, 80, kMaxChatBytes, 0);
+    CHECK_EQ(plain, std::string("selling [Shadowmourne] cheap"));
+    CHECK_EQ(ChatTextAfterHook(linked, plain, plain), linked);
+    CHECK_EQ(ChatTextAfterHook(linked, plain, "selling [Shadowmourne] ch**p"),
+        std::string("selling [Shadowmourne] ch**p"));
+    CHECK_EQ(ChatTextAfterHook(linked, plain, "x|cffff8000|Hitem:1|h[a]|h|r"), std::string("xcffff8000Hitem:1h[a]hr"));
 }
 
 LEEROY_TEST(ItemLinks_EmptyAndNoLookup)

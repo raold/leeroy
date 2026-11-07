@@ -432,6 +432,14 @@ class Library:
         names (talk/items.py); [] before a world build."""
         return self._all("SELECT id, name, quality, ilvl, req_level FROM item")
 
+    def not_item_names(self) -> list[str]:
+        """The places, NPCs and holidays the library names: zone and loot titles (a loot title
+        is its boss's, chest's or vendor's name), event titles and the quests' zones. An item
+        of one of these names never links unbracketed (talk/items.py)."""
+        return [r["name"] for r in self._all(
+            "SELECT DISTINCT title AS name FROM chunks WHERE kind IN ('zone', 'loot', 'event') "
+            "UNION SELECT DISTINCT zone FROM quest WHERE zone != ''")]
+
     def reference_matches(self, query: str, kinds=None, k: int = 8) -> list[Chunk]:
         """Exact installed command paths, destination names, or explicit teleport IDs.
 

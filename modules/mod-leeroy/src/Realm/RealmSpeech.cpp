@@ -245,11 +245,12 @@ LeeroyCommandResult Say(nlohmann::json const& message)
         auto* channel = manager ? manager->GetJoinChannel(name, id) : nullptr;
         if (!channel || channel->GetChannelId() != id) return {false, "not_in_channel"};
         DeferChannelEvent defer(cmd->guid);
-        std::string const offered = text;
-        if (!sScriptMgr->OnPlayerCanUseChat(bot, CHAT_MSG_CHANNEL, LANG_UNIVERSAL, text, channel))
+        // The hooks read the line's words, its links as "[Name]"; a rewrite goes out as words, without links.
+        std::string const plain = LeeroyBotChatText(bot, cmd->text, 0);
+        std::string hooked = plain;
+        if (!sScriptMgr->OnPlayerCanUseChat(bot, CHAT_MSG_CHANNEL, LANG_UNIVERSAL, hooked, channel))
             return {false, "chat refused"};
-        // A hook's rewrite is sanitized again, links and all: only the line's own item links keep their pipes.
-        if (text != offered) text = Leeroy::SanitizeChatText(text);
+        text = Leeroy::ChatTextAfterHook(text, plain, hooked);
         if (text.empty()) return {false, "empty text"};
         if (Leeroy::StartsWithCommandPrefix(text)) return {false, "command prefix"};
         // Reentrant script hooks cannot grant a now-stale actor permission.
