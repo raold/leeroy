@@ -16,8 +16,10 @@ outfit, colour and expression from the profile photo's vetted lists in kind.py (
 SCENE_PROMPT_LUST, overlay prompts/nightly_scene_lust.txt; the built-in text stays non-explicit):
 kind.screen_lust checks the pairings (swimwear only by the water and framed upper body, the gym
 outfit only at the gym, the hot tub only in swimwear) and kind.compose_lust puts the colour into
-the outfit. Her free text (activity, shows) meets the same screen as everyone's, with the age
-guard (AGE_RE), the wear guard (WEAR_RE) and UNDRESS_RE (controller rulings R12, R13). Her
+the outfit. Her free text (activity, shows) meets the same screen as everyone's (controller
+rulings R12 to R20: undressing, bathing, sexual poses, swimwear named, minors, an age under 21,
+other people, likenesses, looks changes, eras), and beside a swimwear or gym pick it never
+takes her indoors or into a bed. Her
 outfit and setting render as one priority-0 phrase, prompt.lust_phrase, so the worker's fit
 keeps both or neither, with the lust negative plus SNAP_NEGATIVE's "another person"; a lust
 scene renders only while she still has the lust style (scene_renderable)."""
@@ -32,12 +34,13 @@ from leeroy_mind.personas.schema import Persona
 from leeroy_mind.personas.screens import has_word, names_real_name
 from leeroy_mind.text import has_meta
 
-from .kind import (ERA_RE, EXPLICIT_RE, LUST_COLOURS, LUST_EXPRESSIONS, LUST_OUTFITS,
-                   LUST_SETTINGS, WEAR_RE, _enum, compose_lust, screen_lust)
+from .kind import (ERA_RE, EXPLICIT_RE, GYM_OUTFITS, LUST_COLOURS, LUST_EXPRESSIONS,
+                   LUST_OUTFITS, LUST_SETTINGS, PAIRINGS, SWIM_OUTFITS, WEAR_RE, _enum,
+                   compose_lust, screen_lust)
 from .prompt import (_FRAMINGS, _HEADSHOT_TAIL, _KINDS, _PHONE_TAIL, LUST_HELD, LUST_NAMED,
                      LUST_NEGATIVE, NEGATIVE, PromptSpec, eyes_face, hair_skin, looks_phrases,
                      lust_phrase, names_re, phrase_adder, renderable, subject_phrase)
-from .style import AGE_RE, LUST, PLAIN, STYLES, style_of, suggestive
+from .style import AGE_RE, LUST, PLAIN, STYLES, SUGGESTIVE_MIN_AGE, style_of, suggestive
 
 SCENE_NAME = "scene"             # its overlay: prompts/nightly_scene.txt
 SCENE_LUST_NAME = "scene_lust"   # its overlay: prompts/nightly_scene_lust.txt
@@ -89,8 +92,9 @@ SCENE_PROMPT_LUST = (
     "and likes to show it a little: a flattering, flirtatious, confident photo that fits who "
     "she is and what is going on. Pick the kind of photo, the framing, where it is, what she is "
     "wearing and its colour, and her expression from the choices the answer allows. Then say "
-    "in a few words what she is doing in it, never what she wears; the time of day it belongs "
-    "to (morning, day, evening, late night, or any); whether it is only for the friend she "
+    "in a few words what she is doing in it, never what she wears or where she is; the time of "
+    "day it belongs to (morning, day, evening, late night, or any); whether it is only for the "
+    "friend she "
     "sends it to or fine for the whole guild; and in one plain sentence what the photo shows, "
     "again without what she wears. She is the only person in it; a pet is fine. Her looks stay "
     "exactly as described: no new haircut or hair colour, no glasses she doesn't wear, no "
@@ -119,16 +123,181 @@ MINOR_RE = re.compile(
     r"girls?|teens?|teenagers?|nieces?|nephews?|grand(?:child|children|son|daughter)s?|"
     r"schoolkids?|pupils?)\b", re.I)
 
-# Undressing and bathing (controller ruling R12): a towel, a shower or a bath, changing clothes,
-# being undressed, underwear, sheets or a robe, in any scene's free text whatever the style.
-# Whole words only, so a robin and a wardrobe are not a robe; "getting dressed up" is dressed.
+# The rest of the screen (controller rulings R12 to R20) reads every free-text field, whatever
+# the style, with its whitespace folded. Whole words only, so a robin and a wardrobe are not a
+# robe and a bathroom mirror is not a bath. A clothed scene in bed or a bedroom is fine (R12a),
+# except beside a swimwear or gym pick (INDOOR_RE). Accepted over-refusals (R20): taking off a
+# coat, kicking off shoes, old-school, a beach towel, a sports bra at the gym, a bathing suit.
+
+# Undressing and bathing (R12, R16), code `undress`: #174's free-text lust screen (the
+# yardstick OLD_REFUSED in tests/nightly/test_night_photo_lust.py) without its bed, bedroom and
+# bathroom, and with the hot tub, since free text never names her place; then the bath, shower,
+# bedding, robe, underwear and changing phrasings.
+_CLOTHES = (r"(?:clothes|clothing|dress|dresses|top|tops|shirt|blouse|skirt|jeans|trousers|"
+            r"pants|leggings|shorts|bikini|swimsuit|outfit|uniform|jumper|sweater|hoodie|"
+            r"bra|underwear|robe|towel|corset)")
 UNDRESS_RE = re.compile(
-    r"\b(towel(?:s|ing|ling|ed|led)?|shower(?:s|ing|ed)?|bath(?:s|ing|ed)?|bathes|"
-    r"bathtubs?|bubble[\s-]*baths?|undress(?:es|ing|ed)?|"
-    r"chang(?:e|es|ed|ing)(?: (?:her|his|their|my|your))? clothes|"
-    r"(?:get|gets|getting|got) changed|(?:get|gets|getting|got) dressed(?! up)|"
-    r"naked|nudes?|topless|bras?|underwear|lingerie|sheets|bed[\s-]*sheets?|robes?|"
-    r"bath[\s-]*robes?)\b", re.I)  # a clothed scene in bed or a bedroom is fine (owner, R12)
+    r"\b(nude|nudes|naked|nudity|topless|shirtless|braless|undress\w*|unclothed|nipples?|"
+    r"pasties|body[- ]?paint(?:ed)?|unbutton\w*|unzip\w*|wet|soaked|dripping|oiled|"
+    r"nothing (?:but|else|underneath|on|at all)|wearing nothing|not wearing anything|"
+    r"birthday suit|au naturel|(?:no|without) (?:a )?(?:top|bra|pants|shirt|clothes|clothing)|"
+    r"(?:just|only) (?:a|an|her|his|my) (?:[\w'-]+ ){0,2}(?:(?:t-?)?shirt|hoodie|sweater|"
+    r"jersey)s?|barely (?:dressed|there|covered|clothed|anything)|scantily|skimpy|"
+    r"half[- ]dressed|partially dressed|covering (?:her|his|my) (?:chest|body)|"
+    r"bare[- ]?(?:chested|breast\w*)|breasts?|\w*boob\w*|areolas?|lingerie|underwear|undies|"
+    r"bra|bras|bralettes?|bralets?|brassieres?|bustiers?|panties|knickers|thong|g-string|"
+    r"boyshorts|negligee|nightie|nightgown|nightdress|nightwear|sleepwear|pajamas?|pyjamas?|"
+    r"pjs|chemise|camisole|bodysuit|babydolls?|baby-doll|teddy(?![- ]bears?)|teddies|corset|"
+    r"garters?|body ?stockings?|stockings|suspenders|bandeau|catsuit|latex|harness|fishnets?|"
+    r"mesh|robes?|bathrobes?|monokini|micro[- ]?bikini|see[- ]?thr(?:ough|u)|sheer|"
+    r"transparent|shower\w*|baths?|bathtubs?|bubble bath|tubs?|sheets?|covers|blankets?|"
+    r"duvets?|sauna|steam room|locker room|changing room|fitting room|nsfw|sex|sexual|"
+    r"sexually|sexuali[sz]ed|seductive|erotic|erotica|explicit|porn\w*|fetish|boudoir|horny|"
+    r"aroused|kinky|lewd|xxx|onlyfans|on all fours|bent over|straddl\w*|legs spread|"
+    r"spread legs|nudist|naturist|clothing-optional|strip(?!e)\w*|spa|stage|jacuzzi|"
+    # bath and shower
+    r"towe?l\w*|bath(?:ing|ed|es)|bathe|bubble[\s-]*baths?|hot[\s-]*tubs?|hot[\s-]*springs?|"
+    r"onsens?|skinny[\s-]*dip\w*|soak\w*|rins\w*|"
+    r"wash(?:es|ed|ing)? (?:her|his|their|my) (?:hair|face|body)|glisten\w*|"
+    # bedding, robes and underwear
+    r"bed[\s-]*sheets?|quilts?|ready for bed|bed[\s-]*time|dressing[\s-]*gowns?|"
+    r"house[\s-]*coats?|kimonos?|peignoirs?|boxers|briefs|leotards?|booty[\s-]*shorts|"
+    r"hot[\s-]*pants|night[\s-]*shirts?|sleep[\s-]*shirts?|"
+    # changing
+    r"chang(?:e|es|ed|ing) (?:(?:her|his|their|my|your) )?(?:\w+ )?(?:clothes|outfits?)|"
+    r"chang(?:e|es|ed|ing) (?:into|out of)|(?:get|gets|getting|got) changed|"
+    r"(?:get|gets|getting|got) dressed(?! up)|dressing (?:for|in|into|herself|himself)|"
+    r"(?:put|puts|putting|pull|pulls|pulled|pulling|slip|slips|slipped|slipping|try|tries|"
+    r"tried|trying) on|"
+    # undressing: clothes off, on the floor, out of them, let fall, flashing, bare skin
+    rf"{_CLOTHES} off|{_CLOTHES} (?:\w+ ){{0,2}}(?:on|to) the floor|"
+    rf"out of (?:her|his|their|my|your|the) (?:\w+ )?{_CLOTHES}|"
+    r"let(?:s|ting)? (?:her|his|their|my|the) (?:\w+ )?(?:fall|drop|slip|slide)|"
+    rf"(?:loosen|lift|rais|hitch|hik|tug|lower|pull|undo|undid)\w* (?:her|his|their|my|your) "
+    rf"(?:\w+ )?{_CLOTHES}|unhook\w*|unfasten\w*|unlac\w*|disrob\w*|"
+    r"flash(?:es|ed|ing)|revealing|exposed|exposing|"
+    r"bare[\s-]*(?:shoulders?|backs?|skin|legs?|midriff|body|bottom|bum))\b", re.I)
+# A verb within 3 words of off, down, out of or up (R16), and a strap near a verb: undress.
+_PEEL = (r"(?:slip\w*|slid(?:e|es|ing)?|pull\w*|peel\w*|strip(?!e)\w*|lower\w*|shrug\w*|"
+         r"wriggl\w*|wiggl\w*|shimm(?:y|ies|ied|ying)|tug\w*|yank\w*|lift\w*|hitch\w*|zip\w*|"
+         r"kick\w*|rip(?:s|ped|ping)?|fall(?:s|ing|en)?|fell|loosen\w*)")
+_POSS = r"(?:her|his|their|my|your)"
+UNDRESS_VERB_RE = re.compile(
+    rf"\b(?:{_PEEL}\W+(?:\w+\W+){{0,3}}?(?:off|down|out of|up)\b|"
+    rf"(?:take|takes|taking|took|taken) (?:off|down) (?:{_POSS}|the|a|an|one|it|everything)\b|"
+    rf"(?:take|takes|taking|took|taken) (?:{_POSS}|it|them|everything) "
+    rf"(?!(?:day|days|night|nights|week|weekend|time|break|holiday|hair)\b)(?:\w+ ){{0,2}}"
+    rf"(?:off|down)\b|"
+    rf"(?:{_PEEL}|let\w*|drop\w*|push\w*|undo\w*|undid)\W+(?:\w+\W+){{0,3}}?straps?\b|"
+    rf"\bstraps?\W+(?:\w+\W+){{0,3}}?(?:{_PEEL}|drop\w*|undone))", re.I)
+# Sexual poses and tone (R16), code `explicit`. A bed is fine; these are not, in it or out.
+SEXUAL_RE = re.compile(
+    r"\b(on all fours|bent over|bending over|straddl\w*|legs (?:spread|apart|open|up|wide|"
+    r"in the air)|spread(?:ing|s)? (?:her |his |their |my )?legs|"
+    r"arch(?:es|ed|ing)? (?:her|his|their|my) back|on (?:her|his|their|my) (?:stomach|belly|"
+    r"front)|bit(?:e|es|ing) (?:her|his|their|my) (?:lower )?lip|boudoir|erotic\w*|lewd\w*|"
+    r"sultr\w*|steamy|racy|provocativ\w*|naughty|risqu[eé]|spicy (?:pics?|photos?|"
+    r"selfies?|shots?|snaps?|pictures?|content)|bedroom eyes|come[\s-]*hither|"
+    r"thirst[\s-]*traps?|horny|kinky|teas(?:e|es|ed|ing)|sexy|sensual\w*|seductiv\w*|"
+    r"cover(?:s|ed|ing)? (?:her|his|their|my) (?:chest|body|breasts?|bust)|"
+    r"covering (?:her|him|them|my)sel(?:f|ves)|implied|censor\w*)\b", re.I)
+# Swimwear named in free text (R19), code `explicit`: her swimwear is only ever her pick, and
+# a plain scene never wears it (as EXPLICIT_RE intends).
+SWIM_RE = re.compile(
+    r"\b(one[\s-]*pieces?|tankinis?|monokinis?|(?:swim(?:ming)?[\s-]*)?trunks|"
+    r"swim(?:suit|wear|ming[\s-]*costume|ming[\s-]*suit|[\s-]*shorts)s?|bikinis?|"
+    r"bathing[\s-]*suits?|board[\s-]*shorts)\b", re.I)
+# Beside a swimwear or gym pick (R19), her free text never takes her indoors or into a bed:
+# reported as that pick's pairing.
+INDOOR_RE = re.compile(
+    r"\b(beds?|bedrooms?|pillows?|mattress(?:es)?|sofas?|couch(?:es)?|duvets?|covers|"
+    r"blankets?)\b", re.I)
+# Another person in the photo (R18), code `other_person`; a pet is fine. A friend who took the
+# snapshot is not in it.
+OTHER_PERSON_RE = re.compile(
+    r"\b(boy[\s-]*friends?|girl[\s-]*friends?|husbands?|wife|wives|spouses?|fianc[eé]e?s?|"
+    r"partners?|(?:her|his|their|my|a|on a|dinner|first) dates?|mums?|moms?|mothers?|mam|"
+    r"dads?|fathers?|parents?|sisters?|brothers?|siblings?|aunts?|aunties|uncles?|cousins?|"
+    r"grand(?:ma|pa|mother|father|parent|mum|dad)s?|gran|nan|nana|in[\s-]*laws?|"
+    r"famil(?:y|ies)|"
+    r"(?<!by a )(?<!by my )(?<!by her )(?<!by his )(?<!by their )friends?"
+    r"(?! (?:took|takes|snapped|shot|caught))|best[\s-]*friends?|bff|besties?|mates?|"
+    r"co[\s-]*workers?|colleagues?|work[\s-]*mates?|room[\s-]*mates?|flat[\s-]*mates?|"
+    r"house[\s-]*mates?|team[\s-]*mates?|(?:the|her|his|their|my|a) team|squad|crew|gang|"
+    r"couples?|strangers?|crowds?|people|guests?|someone|somebody|"
+    r"another (?:person|man|woman|guy|girl|lady)|(?:two|three|four|five|both|all) of "
+    r"(?:them|us)|(?:man|woman|guy|lady|bloke|person) (?:beside|behind|next to|near|with)|"
+    r"together with|concerts?)\b", re.I)
+_WITH_NAME = re.compile(r"\b[Ww]ith [A-Z][a-z]+")  # with Sarah: someone named is in it
+# A likeness beyond LIKENESS_RE (R18), code `likeness`; plus a name (_named).
+LIKENESS_MORE_RE = re.compile(
+    r"\b(dress(?:ed|es|ing)? (?:up )?as|cosplay\w*|channell?(?:ing|ed)|impressions? of|"
+    r"impersonat\w*|doing (?:her|his|their|my|a|an) best|dead[\s-]*ringer|"
+    r"like an? (?:[\w-]+ )?(?:star|supermodel|model|celebrity|actress|actor|singer|popstar|"
+    r"idol|princess|influencer|icon)|influencers?|barbie|in the style of)\b", re.I)
+# Minors beyond MINOR_RE (R17), code `minor`.
+MINOR_MORE_RE = re.compile(
+    r"\b(step[\s-]*(?:sons?|daughters?|kids?|child(?:ren)?)|grand[\s-]*kids?|kiddos|kiddies|"
+    r"little ones?|twins|youngsters?|newborns?|tots?|tykes?|bairns?|"
+    r"god[\s-]*(?:sons?|daughters?|child(?:ren)?|kids?)|playgrounds?|play[\s-]*dates?|"
+    r"day[\s-]*cares?|creches?|nurser(?:y|ies)|kindergartens?|pre[\s-]*schools?|minors?|"
+    r"juveniles?|\w+[\s-]graders?|cub[\s-]*scouts?|boy[\s-]*scouts?|girl[\s-]*scouts?|"
+    r"girl[\s-]*guides?|school[\s-]*child(?:ren)?|little (?:boys?|girls?|kids?)|"
+    r"pregnan(?:t|cy))\b", re.I)
+# Coding a person as young beyond AGE_RE (R17), code `age`, beside the age-number rule.
+AGE_MORE_RE = re.compile(
+    r"\b(girly|girlie|girlish|pleated[\s-]*skirts?|plaid[\s-]*skirts?|"
+    r"knee[\s-]*(?:high[\s-]*)?socks|thigh[\s-]*high[\s-]*socks|proms?|sweet[\s-]*sixteen|"
+    r"innocent|doe[\s-]*eye[sd]|lollipops?|lollies|retainers?|freshm[ae]n|sophomores?|dorms?|"
+    r"dormitor(?:y|ies)|petite|kawaii|doll[\s-]*like|dolly|baby[\s-]*doll)\b", re.I)
+_TEEN_WORD = re.compile(r"\b(?:thir|four|fif|six|seven|eigh|nine)teen\b", re.I)
+_NUMBER_WORDS = ("zero one two three four five six seven eight nine ten eleven twelve thirteen "
+                 "fourteen fifteen sixteen seventeen eighteen nineteen twenty").split()
+_AGE_NUMBER = re.compile(
+    r"\b(\d{1,2}|" + "|".join(_NUMBER_WORDS) + r")(?:[\s-]*(?:years?|yrs?)[\s-]*old|"
+    r"\s*(?:yo|y/o)\b|(?:st|nd|rd|th)[\s-]*birthday)|"
+    r"\b(?:turning|turned|turns|aged|age) (\d{1,2}|" + "|".join(_NUMBER_WORDS) + r")\b", re.I)
+# Looks changes beyond LOOKS_RE (R17), code `looks`.
+LOOKS_MORE_RE = re.compile(
+    r"\b((?:sun)?glasses|specs|shav(?:e|es|ed|ing) (?:her|his|their|my) (?:head|beard|hair)|"
+    r"pixie[\s-]*cut|bob[\s-]*cut|bobs?|crew[\s-]*cut|undercut|mohawk|mullet|"
+    r"cut (?:her|his|their|my) hair|chop(?:s|ped|ping)? (?:off )?(?:her|his|their|my) hair|"
+    r"colou?r(?:s|ed|ing)? (?:her|his|their|my) hair|(?:went|gone|going) (?:blonde?|brunette|"
+    r"red|ginger|grey|gray|platinum|pink|blue|purple|bald|silver|dark)|"
+    r"new (?:\w+ ){0,2}(?:hair|hairstyle|haircut|hairdo|cut|bob|look|fringe|colou?r|"
+    r"nose ring|lip ring|piercing|tattoo|glasses|specs)|clean[\s-]*shaven|"
+    r"(?:fresh|new|spray|fake|deep|golden) tan|tanned|tanning|pregnan(?:t|cy)|"
+    r"nose[\s-]*rings?|lip[\s-]*rings?|septum|"
+    r"gr(?:ew|ow|ows|owing|own) (?:out )?(?:her|his|their|my) hair|fillers?|botox|"
+    r"hair (?:dyed|coloured|colored|bleached))\b", re.I)
+# Era beyond ERA_RE (R17), code `era`.
+ERA_MORE = re.compile(
+    r"\b(fifties|sixties|seventies|eighties|nineties|noughties|y2k|throwbacks?|"
+    r"old[\s-]*school|discos?|vhs|cassettes?|walkman|boombox)\b", re.I)
+_WORD = re.compile(r"[A-Za-z][A-Za-z'-]*")
+_CAPITAL = re.compile(r"[A-Z][a-z]")
+
+
+def _young_number(text: str) -> bool:
+    """An age under SUGGESTIVE_MIN_AGE (R17): a teen number word anywhere, or a number with
+    years old, a birthday, turning or aged."""
+    if _TEEN_WORD.search(text):
+        return True
+    for m in _AGE_NUMBER.finditer(text):
+        n = m.group(1) or m.group(2)
+        value = int(n) if n.isdigit() else _NUMBER_WORDS.index(n.lower())
+        if value < SUGGESTIVE_MIN_AGE:
+            return True
+    return False
+
+
+def _named(field: str, text: str) -> bool:
+    """A capitalised name after the first word (R18): any in activity, outfit and expression;
+    in setting and shows, which may name a place, two in a row (a full name)."""
+    caps = [_CAPITAL.match(w) is not None for w in _WORD.findall(text)[1:]]
+    if field in ("activity", "outfit", "expression"):
+        return any(caps)
+    return any(a and b for a, b in zip(caps, caps[1:]))
 
 _TEXT_FIELDS = ("setting", "activity", "outfit", "expression", "shows")
 _LUST_TEXT_FIELDS = ("activity", "shows")  # the rest are her picks
@@ -206,30 +375,38 @@ def scene_system(p: Persona | None, data_dir: Path, *, human: HumanIdentity, nam
                          facts=facts, looks=looks, about=about)
 
 
+def _any(text: str, *patterns: re.Pattern) -> bool:
+    return any(p.search(text) is not None for p in patterns)
+
+
 def _text_codes(field: str, text: str, *, ident: HumanIdentity, names: list[str]) -> list[str]:
+    text = " ".join(text.split())  # R16: a run of spaces, tabs or newlines is one space
     found = [("meta", has_meta(text)), ("real_name", names_real_name(text, ident)),
-             ("likeness", LIKENESS_RE.search(text) is not None),
+             ("likeness", _any(text, LIKENESS_RE, LIKENESS_MORE_RE) or _named(field, text)),
              ("member_name", any(has_word(text, n) for n in names)),
-             ("era", ERA_RE.search(text) is not None),
-             ("explicit", EXPLICIT_RE.search(text) is not None
-              or WEAR_RE.search(text) is not None),
-             ("minor", MINOR_RE.search(text) is not None),
-             ("looks", LOOKS_RE.search(text) is not None),
-             ("age", AGE_RE.search(text) is not None),
-             ("undress", UNDRESS_RE.search(text) is not None)]
+             ("era", _any(text, ERA_RE, ERA_MORE)),
+             ("explicit", _any(text, EXPLICIT_RE, WEAR_RE, SWIM_RE, SEXUAL_RE)),
+             ("minor", _any(text, MINOR_RE, MINOR_MORE_RE)),
+             ("looks", _any(text, LOOKS_RE, LOOKS_MORE_RE)),
+             ("age", _any(text, AGE_RE, AGE_MORE_RE) or _young_number(text)),
+             ("undress", _any(text, UNDRESS_RE, UNDRESS_VERB_RE)),
+             ("other_person", _any(text, OTHER_PERSON_RE, _WITH_NAME))]
     return [f"scene.{field}: {code}" for code, hit in found if hit]
 
 
 def screen_scene(p: Persona, data: dict, *, ident: HumanIdentity,
                  member_names) -> list[str]:
     """The problems with a scene reply for `p`, as codes `scene.<field>: <code>` only, never the
-    text. Per free-text field, in order: meta, his real name (real_name), a likeness, another
-    member's name (member_name, any case), an era, explicit wear (EXPLICIT_RE and WEAR_RE, as
-    kind.screen_kind), a minor, a looks change, anything that codes a person as young (AGE_RE,
-    age) and undressing or bathing (UNDRESS_RE, undress); a clothed bed or bedroom scene is
-    fine. The reply must be p's style's shape (OTHER_STYLE otherwise). A lust reply's
-    free text is its activity and shows; its picks meet kind.screen_lust: on its list, the
-    pairings, her name in a part, the age guard (its `photo.` codes reported as `scene.`)."""
+    text. Per free-text field, its whitespace folded, in order: meta, his real name
+    (real_name), a likeness (a name after the first word too, _named), another member's name
+    (member_name, any case), an era, explicit wear, swimwear or a sexual pose or tone
+    (explicit), a minor, a looks change, anything that codes a person as young or an age under
+    21 (age), undressing or bathing (undress) and another person (other_person; a pet is fine).
+    A clothed bed or bedroom scene is fine. The reply must be p's style's shape (OTHER_STYLE
+    otherwise). A lust reply's free text is its activity and shows; beside a swimwear or gym
+    pick it never names a bed or the indoors (INDOOR_RE, reported as that pick's pairing); its
+    picks meet kind.screen_lust: on its list, the pairings, her name in a part, the age guard
+    (its `photo.` codes reported as `scene.`)."""
     lust = style_of(p) == LUST
     if lust != ("colour" in data):
         return [OTHER_STYLE]
@@ -239,6 +416,11 @@ def screen_scene(p: Persona, data: dict, *, ident: HumanIdentity,
     for field in _LUST_TEXT_FIELDS if lust else _TEXT_FIELDS:
         codes += _text_codes(field, data.get(field) or "", ident=ident, names=names)
     if lust:
+        pairing = (PAIRINGS[0] if data.get("outfit") in SWIM_OUTFITS else
+                   PAIRINGS[1] if data.get("outfit") in GYM_OUTFITS else None)
+        if pairing and any(INDOOR_RE.search(" ".join((data.get(f) or "").split()))
+                           for f in _LUST_TEXT_FIELDS):
+            codes.append("scene" + pairing[len("photo"):])
         if data.get("setting") not in SCENE_LUST_SETTINGS:
             codes.append("scene.setting: not on its list")
         picks = {f: data.get(f) for f in ("kind", "framing", "setting", "outfit", "colour",

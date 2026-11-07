@@ -480,3 +480,206 @@ def test_a_plain_members_scene_never_uses_the_lust_lists():
         # a lust pick written as free text meets the plain screen, which refuses swimwear
         swim = {**SCENE, "setting": "a hotel pool deck", "outfit": "a coral halter bikini"}
         assert "scene.outfit: explicit" in screen_scene(p, swim, ident=IDENT, member_names=[])
+
+
+# -- fix round 2 (controller rulings R16 to R20) ---------------------------------------------
+
+# The review's phrase vectors (t6-refuse-groups1.json and t6-refuse-groups2.json, copied),
+# each group with the codes any one of which refuses its phrases.
+REFUSE = {
+    'undress verbs (known finding)': (('undress', 'explicit'), [
+        'slipping off a strap', 'slipping a strap off her shoulder',
+        'a strap sliding off her shoulder', 'her dress strap falling down', 'lowering one strap',
+        'pulling down a strap', 'pulling her top down', 'taking off her top',
+        'taking her shirt off', 'took off her dress', 'unzipping her dress',
+        'her dress half unzipped', 'unbuttoning her blouse', 'her shirt unbuttoned',
+        'peeling off her leggings', 'peeling off her wet top', 'stripping off', 'stripped down',
+        'strip tease', 'disrobing', 'slipping out of her dress', 'wriggling out of her jeans',
+        'stepping out of her dress', 'shrugging off her dress', 'letting her dress fall',
+        'dropping her dress to the floor', 'unhooking her top', 'unfastening her dress',
+        'unlacing her corset', 'loosening her top', 'lifting her top', 'pulling up her shirt',
+        'flashing the camera', 'clothes off', 'her clothes on the floor', 'out of her clothes',
+        'with her top off', 'shirt off', 'no shirt', 'without a top', 'nothing on',
+        'wearing nothing', 'nothing but a smile', 'half-dressed', 'partially dressed',
+        'barely dressed', 'barely covered', 'scantily clad', 'skimpy', 'a revealing outfit',
+        'bare shoulders', 'her bare back to the mirror', 'bare-chested', 'exposed skin',
+    ]),
+    'bath and shower variants': (('undress', 'explicit'), [
+        'fresh from the tub', 'soaking in the tub', 'relaxing in the hot tub', 'in the jacuzzi',
+        'in the sauna', 'a steam room', 'at the spa', 'an onsen', 'a hot spring', 'skinny dipping',
+        'a long soak', 'hair still wet', 'dripping wet', 'soaking wet',
+        'wet hair and a fogged-up mirror', 'a steamy bathroom', 'rinsing off', 'washing her hair',
+        'post-swim rinse', 'oiled up', 'glistening with oil', 'towlling off', 'bath-robe',
+        'bath robe', 'bubblebath', 'a showery morning',
+    ]),
+    'bedding and robe variants': (('undress', 'explicit'), [
+        'wrapped in a sheet', 'a white sheet around her', 'under the covers', 'under the duvet',
+        'wrapped in a blanket', 'wrapped in a duvet', 'under a quilt', 'a dressing gown',
+        'a silk kimono', 'a housecoat', 'a peignoir', 'an oversized shirt and nothing else',
+        'only his shirt', 'just a t-shirt', 'boxers', 'briefs', 'a thong', 'knickers', 'undies',
+        'a corset', 'stockings and garters', 'a bodysuit', 'a leotard', 'booty shorts',
+        'a nightshirt', 'a sleep shirt', 'getting ready for bed', 'ready for bed',
+    ]),
+    'changing variants': (('undress',), [
+        'changing into something comfy', 'changing out of her work clothes', 'changing outfits',
+        'in the changing room', 'in the fitting room', 'in the locker room', 'trying on dresses',
+        'putting on her dress', 'pulling on her jeans', 'zipping up her dress',
+        'getting dressed for work', 'got dressed', 'dressing for the day',
+        'half way through getting dressed',
+    ]),
+    'sexual poses and tone (bed allowed by R12a)': (('explicit', 'undress'), [
+        'on all fours on the bed', 'bent over the bed', 'straddling a pillow',
+        'legs spread on the bed', 'arching her back on the bed', 'lying on her stomach, legs up',
+        'biting her lip in bed', 'a boudoir shoot', 'an erotic pose', 'a lewd pose',
+        'a sultry pose', 'steamy', 'racy', 'provocative', 'naughty', 'risque', 'spicy pic',
+        'bedroom eyes', 'come-hither look', 'a thirst trap', 'horny', 'kinky',
+        'teasing the camera with her neckline', 'a sexy pout', 'covering her chest with her arm',
+        'hands covering herself', 'implied nude', 'censored',
+    ]),
+    'another person in the photo': (('other_person',), [
+        'with her boyfriend', 'kissing her girlfriend', 'hugging her husband', 'with her mum',
+        'with a friend', 'with friends at the bar', 'with her coworkers', "a couple's selfie",
+        'cuddling her date', 'a stranger behind her', 'with the team', 'with her sister',
+        "her partner's arm around her", 'two of them on the sofa', 'with Sarah',
+        'a man beside her',
+    ]),
+    'minors beyond MINOR_RE': (('minor', 'age'), [
+        'with her stepson', 'with her stepdaughter', 'the grandkids', 'her kiddos',
+        'the little ones', 'her little one', 'the twins', 'youngsters', "a toddler's toy",
+        'a newborn', 'a tot', 'the bairns', 'her godson', 'at the playground', 'at daycare',
+        'the nursery', 'the school run', 'minors', 'a juvenile', 'her class of first-graders',
+        'the cub scouts', 'a pregnant belly',
+    ]),
+    'age coding on plain scenes': (('age',), [
+        'a plaid pleated skirt and knee socks', 'a prom dress', 'at her prom',
+        'a sweet sixteen party', 'her 16th birthday', 'turning 17 tomorrow',
+        'looking about fifteen', 'girly', 'girlish giggle', 'dressed like a little girl',
+        'innocent doe eyes', 'sucking a lollipop', 'a retainer', 'freshman year',
+        'in her dorm room', 'barely nineteen', 'just turned nineteen', 'petite and tiny',
+        'a school-style uniform', 'a schoolgirl outfit', 'a student uniform', 'teeny bikini',
+        'high-school reunion', 'a kawaii outfit', 'doll-like', 'knee-high socks and a short skirt',
+        'a 17 year old', 'seventeen',
+    ]),
+    'likeness and real names': (('likeness',), [
+        'dressed as Marilyn Monroe', 'doing her best Audrey Hepburn', 'at a Taylor Swift concert',
+        'channelling Beyonce', 'in a Barbie outfit', 'Wonder Woman cosplay',
+        'her Kim Kardashian pose', 'a lookalike contest', 'a dead ringer for an actress',
+        'styled like a movie star', 'her influencer pose', 'like a supermodel',
+    ]),
+    'looks changes beyond LOOKS_RE': (('looks',), [
+        'in her glasses', 'with glasses on', 'putting on her glasses', 'wearing sunglasses',
+        'reading glasses', 'shaved her head', 'a pixie cut', 'cut her hair short',
+        'chopped her hair', 'colored her hair', 'went blonde', 'her new red hair',
+        'clean-shaven now', 'a fresh tan', 'pregnant', 'a new nose ring', 'her new bob',
+        'grew out his hair', 'a crew cut', 'with a new mohawk', 'a lip filler', 'botox',
+        'her hair dyed pink',
+    ]),
+    'era beyond ERA_RE': (('era',), [
+        'a nineties party', 'the eighties', 'Y2K style', 'a throwback look', 'old-school',
+        'a disco', 'a flip phone', 'a 70s outfit', '1999', 'a polaroid',
+    ]),
+}
+PLAIN_FIELDS = ("setting", "activity", "outfit", "expression", "shows")
+CASES = [(label, family, text) for label, (family, texts) in REFUSE.items() for text in texts]
+
+
+@pytest.mark.parametrize("label,family,text", CASES, ids=[c[2] for c in CASES])
+def test_every_phrase_of_the_review_is_refused_for_both_styles_in_every_field(label, family,
+                                                                              text):
+    # R16: lust free text (activity, shows) beside a dress pick, and every plain field
+    checks = [(lusty(), LUST_SCENE, f) for f in ("activity", "shows")]
+    checks += [(woman(), SCENE, f) for f in PLAIN_FIELDS]
+    for p, data, field in checks:
+        codes = screen_scene(p, {**data, field: text}, ident=IDENT, member_names=["Testb"])
+        assert any(f"scene.{field}: {code}" in codes for code in family), (field, codes)
+
+
+def test_the_allowances_pass_and_the_accepted_over_refusals_are_refused():
+    def codes(p, data, field, text):
+        return screen_scene(p, {**data, field: text}, ident=IDENT, member_names=["Testb"])
+    for field in ("activity", "shows"):
+        for text in ("stretching out in bed", "a robin on the feeder", "a bathroom mirror selfie"):
+            assert codes(lusty(), LUST_SCENE, field, text) == [], (field, text)   # a dress pick
+    for field in PLAIN_FIELDS:
+        for text in ("stretching out in bed", "a robin on the feeder", "a bathroom mirror selfie"):
+            assert codes(woman(), SCENE, field, text) == [], (field, text)
+    # R20: accepted over-refusals stay refused
+    for text in ("taking off her coat", "kicking off her shoes", "old-school", "a beach towel",
+                 "a sports bra at the gym", "a bathing suit"):
+        assert codes(lusty(), LUST_SCENE, "activity", text), text
+        assert codes(woman(), SCENE, "activity", text), text
+    assert "scene.activity: undress" in codes(woman(), SCENE, "activity", "taking off her coat")
+
+
+@pytest.mark.parametrize("text", ["stretching out in bed", "curled up on the sofa",
+                                  "on the couch", "propped on pillows", "under a blanket",
+                                  "on a mattress", "in her bedroom", "under the duvet"])
+def test_free_text_never_takes_a_swimwear_or_gym_pick_indoors_or_into_bed(text):
+    # the review's critical finding: "stretching out in bed" with a bikini at the pool deck
+    for data, pairing in ((SWIM_SCENE, PAIRINGS[0]), (GYM_SCENE, PAIRINGS[1])):
+        for field in ("activity", "shows"):
+            codes = screen_scene(lusty(), {**data, field: text}, ident=IDENT, member_names=[])
+            assert scode(pairing) in codes, (field, codes)
+    assert scode(PAIRINGS[0]) == "scene.outfit: swimwear away from the water"
+    if text == "stretching out in bed":                       # with a dress pick it is fine
+        assert screen_scene(lusty(), {**LUST_SCENE, "activity": text}, ident=IDENT,
+                            member_names=[]) == []
+
+
+@pytest.mark.parametrize("text", ["in her one-piece", "a tankini", "a monokini", "swim trunks",
+                                  "her swimsuit", "a red bikini", "in his trunks",
+                                  "a one piece by the pool"])
+def test_swimwear_is_never_named_in_free_text(text):
+    # R19: hers is only ever her pick; a plain scene never wears it
+    for field in ("activity", "shows"):
+        assert f"scene.{field}: explicit" in screen_scene(
+            lusty(), {**SWIM_SCENE, field: text}, ident=IDENT, member_names=[])
+    for p in plain_members():
+        for field in PLAIN_FIELDS:
+            assert f"scene.{field}: explicit" in screen_scene(
+                p, {**SCENE, field: text}, ident=IDENT, member_names=[])
+
+
+@pytest.mark.parametrize("text,code", [
+    ("half\tundressed", "undress"), ("bubble \n bath", "undress"), ("pig   tails", "age"),
+    ("on  all\nfours", "explicit"), ("with   her   boyfriend", "other_person"),
+    ("dressed\u00a0as a star", "likeness")])
+def test_the_screen_reads_text_with_its_whitespace_folded(text, code):
+    for p, data in ((lusty(), LUST_SCENE), (woman(), SCENE)):
+        assert f"scene.activity: {code}" in screen_scene(
+            p, {**data, "activity": text}, ident=IDENT, member_names=[])
+
+
+def test_a_pet_is_fine_and_a_friend_behind_the_camera_is_not_in_it():
+    for text in ("walking her dog", "the cat on her lap", "a snapshot a friend took",
+                 "taken by a friend on the pier"):
+        for p, data in ((lusty(), LUST_SCENE), (woman(), SCENE)):
+            assert screen_scene(p, {**data, "shows": text}, ident=IDENT,
+                                member_names=[]) == [], text
+    assert "scene.shows: other_person" in screen_scene(
+        woman(), {**SCENE, "shows": "Her with a friend on the pier."}, ident=IDENT,
+        member_names=[])
+
+
+def test_a_name_after_the_first_word_is_a_likeness_and_a_place_in_the_setting_may_be_one():
+    def codes(field, text):
+        return screen_scene(woman(), {**SCENE, field: text}, ident=IDENT, member_names=[])
+    for field in ("activity", "outfit", "expression"):
+        assert f"scene.{field}: likeness" in codes(field, "smiling like Mona")
+    assert codes("setting", "a pub in Leeds") == [] and codes("shows", "Them in Leeds.") == []
+    assert "scene.setting: likeness" in codes("setting", "a gig by Taylor Swift")
+
+
+@pytest.mark.parametrize("text,young", [
+    ("her 16th birthday", True), ("a 17 year old", True), ("turning 17 tomorrow", True),
+    ("aged twelve", True), ("a ten-year-old", True), ("barely nineteen", True),
+    ("her 34th birthday", False), ("a 40-year-old", False), ("turning 30", False),
+    ("about 5 minutes from home", False), ("two years old", True), ("aged 21", False)])
+def test_the_age_number_rule(text, young):
+    codes = screen_scene(woman(), {**SCENE, "activity": text}, ident=IDENT, member_names=[])
+    assert ("scene.activity: age" in codes) == young, codes
+
+
+def test_the_lust_template_keeps_her_place_out_of_her_free_text():
+    assert "never what she wears or where she is" in SCENE_PROMPT_LUST
+    assert OLD_REFUSED.search(SCENE_PROMPT_LUST) is None    # still non-explicit (round 1 test)
