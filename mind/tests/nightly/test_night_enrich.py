@@ -231,7 +231,8 @@ def test_the_prompt_and_the_two_calls(h):
     assert s["title"] == "enrich" and s["required"] == ["appearance", "drawn_to", "turned_off_by", "disclosures"]
     looks = s["properties"]["appearance"]
     assert looks["properties"]["height_cm"] == {"type": "integer", "minimum": 140, "maximum": 210}
-    assert looks["properties"]["build"] == {"enum": ["slim", "athletic", "average", "curvy", "stocky", "heavy"]}
+    assert looks["properties"]["build"] == {"enum": ["slim", "athletic", "average", "curvy", "voluptuous", "stocky",
+                                                    "heavy"]}
     assert looks["properties"]["face"] == {"type": "array", "items": {"type": "string", "maxLength": 40}, "maxItems": 4}
     assert looks["required"] == list(LOOKS) and looks["additionalProperties"] is False
     assert s["properties"]["turned_off_by"] == {"type": "array", "items": {"type": "string", "maxLength": 80}, "maxItems": 6}
