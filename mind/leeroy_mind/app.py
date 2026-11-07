@@ -37,6 +37,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Awaitable, Callable, Literal
 
+from leeroy_mind.board import BoardDesk
 from leeroy_mind.bridge import BridgeClient
 from leeroy_mind.clock import Clock, SystemClock
 from leeroy_mind.config import ConfigError, MindConfig, load_config
@@ -448,6 +449,7 @@ class MindApp:
         self.selfies = attach_selfies(self)  # profile photos: the control endpoint's selfie op
         self.tuning = TuningService(self)  # the owner's dials: the control endpoint's tune op
         self.speech = OwnerSpeech(self)  # his own lines from the console: the say op
+        self.board = BoardDesk(self)  # his Board replies from the console: the board op
         self.control = attach_control(self)
         self.realm = attach_realm(self)  # Last: tests/realm/test_realm_wiring.py
 

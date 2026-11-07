@@ -17,6 +17,7 @@ STOP_S = 5.0
 RAID_S = endpoint.RAID_S + 5.0
 SAY_S = endpoint.SAY_S + 5.0  # the mind answers a line within its own SAY_S
 BANK_S = endpoint.BANK_READ_S + 5.0  # the mind answers a bank read within its own BANK_READ_S
+BOARD_S = 10.0  # a Board reply is one row in mind.db
 
 
 class LinkError(Exception):

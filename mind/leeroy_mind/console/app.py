@@ -64,7 +64,8 @@ run nothing else.
     GET  /api/calendar the Calendar tab: upcoming events with their signups and the raid nights
                        he missed, from mind.db (a missing table is listed in `missing`)
     GET  /api/board    the Board tab: realm forum threads, delivered letters and write-ups from
-                       mind.db (a missing table is listed in `missing`; `realm_on` from mind.toml)
+                       mind.db with his replies under them (a missing table is listed in
+                       `missing`; `realm_on` from mind.toml, `replies_on` from mind.db)
     GET  /api/bank     the Bank tab: the mind's bank snapshot (control op `bank`, read-only
                        SELECTs made by the mind) with names, item names from library.db and
                        the realm_bank ledger from mind.db; `why` says when there is no snapshot
@@ -86,10 +87,18 @@ run nothing else.
                        or its bridge down, a start or stop of the mind under way, not in game,
                        nobody can tell), then on to the mind's say op; nothing is
                        broadcast, the line comes back through the feed when the game reports it
+    POST /api/board    {"action": "reply", "kind": "post"|"letter", "to", "text"} or {"action":
+                       "withdraw", "id"}: his reply on the Board, checked and cleaned as the mind
+                       checks it (400 with its words), refused 403 with --no-control and 409 while
+                       nothing can be saved (the mind not running, a start or stop of it under
+                       way, no link), then on to the mind's board op, which stores it for the
+                       Realm night; a saved or withdrawn reply is announced as a `board` event
+                       {"action", "id"}
 
 The Raid, Guild and Personas tabs read mind.db read-only. Raid actions, dial changes and his
-lines are the mind's to take: the console forwards them and shows the mind's answer, which says
-why when it refuses. A preview's text and a line's are never logged, stored or broadcast."""
+lines and Board replies are the mind's to take: the console forwards them and shows the mind's
+answer, which says why when it refuses. A preview's text, a line's and a reply's are never
+logged, stored or broadcast by the console."""
 import asyncio
 import hmac
 import logging
@@ -106,7 +115,7 @@ from . import (bankview, boardview, calendarview, dojoview, faces, feed, mindlog
                personaview, raidview, realmview, selfieview, socialview, status, trainview, tuneview)
 from .control import Controls, Refused
 from .httpd import Request, Response, Stream, digits, encode_json, json_response, text
-from .mindlink import BANK_S, RAID_S, SAY_S, LinkError
+from .mindlink import BANK_S, BOARD_S, RAID_S, SAY_S, LinkError
 from .voicelink import VoiceRelay
 from ..owner_say import BRIDGE_DOWN, NOT_IN_GAME
 from ..voice.rooms import ROOMS
@@ -134,6 +143,7 @@ SAY_OLD_MIND = "The mind needs the update to send replies."
 SAY_NO_LINK = "Nothing was sent: the console has no link to the mind's control endpoint."
 SAY_SLASH = "Slash commands aren't sent from here."  # the box's words (comms/reply.mjs)
 BANK_OLD_MIND = "The running mind predates the Bank tab: restart it after the update."
+BOARD_OLD_MIND = "The running mind predates Board replies: restart it after the update."
 OLD_OPS = "bad request: op is one of "  # a mind from before the say op names the ops it has
 
 # The page runs only the console's own files: no inline script or style, nothing from elsewhere
@@ -617,7 +627,8 @@ class ConsoleApp:
                   ("POST", "/api/voice"): self._api_voice,
                   ("POST", "/api/control"): self._api_control,
                   ("POST", "/api/raid"): self._api_raid_action,
-                  ("POST", "/api/say"): self._api_say}
+                  ("POST", "/api/say"): self._api_say,
+                  ("POST", "/api/board"): self._api_board_reply}
         route = routes.get((req.method, req.path))
         if route is None:
             known = {path for _, path in routes}
@@ -1056,6 +1067,50 @@ class ConsoleApp:
         # Nothing is broadcast: the line comes back through the feed when the game reports it
         return json_response(200, {"ok": True,
                                    "message": str(reply.get("message") or "sent")[:300]})
+
+    # -- his Board replies ----------------------------------------------------------------------
+
+    def _board_problem(self) -> tuple[int, str] | None:
+        """Why his reply cannot be saved now; None: on to the mind. As for his lines, a start or
+        stop of the voice service holds nothing; the game's state is the mind's, not needed."""
+        if not self.controls.enabled:
+            return 403, SAY_OFF
+        if self.controls.busy is not None and self.controls.busy[0] == "mind":
+            return 409, f"A {self.controls.busy[1]} of the mind is under way, so nothing can be saved."
+        if self.view.state != "running":
+            return 409, ("The mind's state is unclear, so nothing can be saved."
+                         if self.view.state == "unknown"
+                         else f"The mind is {self.view.state}, so nothing can be saved.")
+        if self.link is None:
+            return 409, "Nothing was saved: the console has no link to the mind's control endpoint."
+        return None
+
+    async def _api_board_reply(self, req: Request):
+        try:
+            args = endpoint.board_args(req.json())  # checked and cleaned exactly as the mind will
+        except endpoint.BadRequest as e:
+            return json_response(400, {"ok": False, "error": str(e)})
+        problem = self._board_problem()
+        if problem is not None:
+            return json_response(problem[0], {"ok": False, "error": problem[1]})
+        try:
+            reply = await asyncio.to_thread(self.link.call, self._mind_pids(), "board", args,
+                                            timeout=BOARD_S)
+        except LinkError as e:
+            words = str(e)
+            if e.unanswered:  # it may have reached the mind and been saved
+                return json_response(409, {"ok": False, "error": words[:1].upper() + words[1:]
+                                           + ". Look at the Board before sending it again."})
+            return json_response(409, {"ok": False, "error": f"Nothing was saved: {words}."})
+        if reply.get("ok") is not True:
+            error = str(reply.get("error") or "")
+            if error.startswith(OLD_OPS):
+                error = BOARD_OLD_MIND
+            return json_response(409, {"ok": False, "error": error[:300] or "The mind refused it."})
+        reply_id = reply.get("id") if type(reply.get("id")) is int else None
+        self.broadcast("board", {"action": args["action"], "id": reply_id})
+        return json_response(200, {"ok": True, "message": str(reply.get("message") or "Saved.")[:300],
+                                   "id": reply_id})
 
     async def _api_feed(self, req: Request):
         after = digits(req.query.get("after", ["0"])[0], 18)  # an SQLite integer

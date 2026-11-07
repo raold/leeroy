@@ -159,6 +159,25 @@ def test_the_say_op_in_its_one_strict_form():
         parse_request(line(v=1, key=KEY, op="say", args={"channel": "whisper", "text": "hi"}), KEY)
 
 
+def test_the_board_op_in_its_one_strict_form():
+    assert endpoint.BOARD_ACTIONS == ("reply", "withdraw")
+    assert endpoint.BOARD_SHAPES == {"reply": {"action", "kind", "to", "text"},
+                                     "withdraw": {"action", "id"}}
+    assert "board" in endpoint.OPS
+    assert parse_request(line(v=1, key=KEY, op="board", args={
+        "action": "reply", "kind": "post", "to": 7, "text": "  see  you "}), KEY) == (
+        "board", {"action": "reply", "kind": "post", "to": 7, "text": "see you"})
+    assert parse_request(line(v=1, key=KEY, op="board", args={"action": "withdraw", "id": 3}),
+                         KEY) == ("board", {"action": "withdraw", "id": 3})
+    with pytest.raises(BadRequest, match="board needs args"):
+        parse_request(line(v=1, key=KEY, op="board"), KEY)
+    with pytest.raises(BadRequest, match="^There's nothing to send.$"):  # board_args' own words
+        parse_request(line(v=1, key=KEY, op="board", args={
+            "action": "reply", "kind": "letter", "to": 7, "text": " | "}), KEY)
+    with pytest.raises(BadRequest):
+        parse_request(line(v=1, key=KEY, op="board", args={"action": "withdraw", "id": "3"}), KEY)
+
+
 @pytest.mark.parametrize("raw, words", [
     (b'{"v":1,"key":"%s","op":"status"}' % KEY.encode(), "bad request"),  # no newline
     (b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n", "not a JSON line"),
@@ -253,6 +272,17 @@ class FakeSpeech:
         return {"ok": True, "message": "sent"}
 
 
+class FakeBoard:
+    def __init__(self):
+        self.asks, self.gate = [], None
+
+    async def handle(self, args):
+        self.asks.append(args)
+        if self.gate is not None:
+            await self.gate.wait()
+        return {"ok": True, "message": "Saved. The guild answers tonight.", "id": len(self.asks)}
+
+
 class FakeApp:
     def __init__(self, data_dir):
         self.data_dir = data_dir
@@ -260,6 +290,7 @@ class FakeApp:
         self.stops = 0
         self.guild = FakeGuild()
         self.speech = FakeSpeech()
+        self.board = FakeBoard()
 
     def request_stop(self):
         self.stops += 1
@@ -479,6 +510,63 @@ def test_a_second_line_while_one_is_sending_is_refused(tmp_path, caplog):
     assert "omw" not in caplog.text and "again" not in caplog.text
 
 
+REPLY = {"action": "reply", "kind": "post", "to": 7, "text": "see you thursday"}
+
+
+def test_a_second_reply_while_one_is_saving_is_refused(tmp_path, caplog):
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            app.board.gate = asyncio.Event()
+            first = asyncio.create_task(ask(ep, "board", REPLY))
+            for _ in range(500):
+                if app.board.asks or first.done():
+                    break
+                await asyncio.sleep(0.01)
+            assert app.board.asks, await first
+            for args in (REPLY, {"action": "withdraw", "id": 1}):  # a double click, a withdraw
+                assert await ask(ep, "board", args) == {
+                    "ok": False, "error": "Another reply is still being saved."}
+            app.board.gate.set()
+            assert await first == {"ok": True, "message": "Saved. The guild answers tonight.",
+                                   "id": 1}
+            assert app.board.asks == [REPLY]  # the refused ones never reached the desk
+            app.board.gate = None
+            assert (await ask(ep, "board", {"action": "withdraw", "id": 1}))["ok"] is True
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        run(go())
+    assert caplog.text.count("control_request: op=board action=reply outcome=refused") == 1
+    assert caplog.text.count("control_request: op=board action=withdraw outcome=refused") == 1
+    assert caplog.text.count("control_request: op=board action=reply outcome=ok") == 1
+    assert "thursday" not in caplog.text
+
+
+def test_the_board_ops_words_and_a_long_letter_fits_one_line(tmp_path, caplog):
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            # 400 astral characters, each sent as two escapes: the longest reply there is
+            letter = {"action": "reply", "kind": "letter", "to": (1 << 63) - 1,
+                      "text": "\U0001F389" * 400}
+            assert len(endpoint.encode({"v": 1, "key": KEY, "op": "board", "args": letter})) > 4096
+            assert (await ask(ep, "board", letter))["ok"] is True
+            assert app.board.asks == [letter]
+            app.stopping = True
+            assert await ask(ep, "board", REPLY) == {"ok": False, "error": "The mind is stopping."}
+            app.stopping, app.board = False, None
+            assert await ask(ep, "board", REPLY) == {
+                "ok": False, "error": "Board replies are not running in this mind."}
+
+            async def broken(args):
+                raise RuntimeError("private reply text")
+            app.board = FakeBoard()
+            app.board.handle = broken
+            assert await ask(ep, "board", REPLY) == {
+                "ok": False, "error": "The reply could not be saved (RuntimeError)."}
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        run(go())
+    assert "private reply text" not in caplog.text and "thursday" not in caplog.text
+    assert "control_board_failed: error=RuntimeError" in caplog.text
+
+
 def test_a_slow_line_is_answered_in_time_and_holds_the_next_off(tmp_path):
     assert endpoint.SAY_S == 10.0
     assert endpoint.SAY_CHANNELS == ("guild", "officer", "group", "whisper")
@@ -676,6 +764,43 @@ def test_the_running_minds_status_says_its_bridge_cast_and_schema(tmp_path):
             assert status["bridge_connected"] is True
             assert status["cast"] == len(apps[0].world.cast_guids()) > 0
             assert status["schema_version"] == latest_version()
+            await asyncio.to_thread(endpoint.request, record["port"], record["key"], "stop")
+            assert await asyncio.wait_for(task, 30) == 0
+        finally:
+            if not task.done():
+                task.cancel()
+            await bridge.stop()
+    run(go())
+
+
+def test_the_running_minds_board_op_answers_from_its_store(tmp_path):
+    """The real app over FakeBridge: its board desk is wired to the endpoint and to mind.db (the
+    Realm is off in this mind.toml, so a reply is refused in its words and nothing is stored)."""
+    from leeroy_mind.__main__ import serve
+
+    async def go():
+        bridge = FakeBridge([hello(0), CAST])
+        port = await bridge.start()
+        (tmp_path / "mind.toml").write_text(toml(port), encoding="utf-8")
+        seed_db(tmp_path / "mind.db", fake_clock())
+        apps = []
+        task = asyncio.create_task(serve(tmp_path, make_llm=lambda cfg: FakeLLM(reply, models={LIVE}),
+                                         ready=apps.append))
+        try:
+            while not apps or apps[0].control is None or not apps[0].control.listening.is_set():
+                await asyncio.sleep(0.02)
+            record = read_key_file(tmp_path / KEY_FILE)
+
+            def board(args):
+                return endpoint.request(record["port"], record["key"], "board", args)
+            assert await asyncio.to_thread(board, {"action": "withdraw", "id": 1}) == {
+                "ok": False, "error": "There is no such reply."}
+            refused = await asyncio.to_thread(board, {"action": "reply", "kind": "post", "to": 7,
+                                                      "text": "hi"})
+            assert refused["ok"] is False and refused["error"].startswith("The Realm is off")
+            count = apps[0].store.conn.execute("SELECT count(*) FROM board_reply").fetchone()[0]
+            apps[0].store.conn.commit()
+            assert count == 0
             await asyncio.to_thread(endpoint.request, record["port"], record["key"], "stop")
             assert await asyncio.wait_for(task, 30) == 0
         finally:

@@ -1,6 +1,8 @@
 """The Board tab's read-only question to mind.db: the Realm's forum threads, the letters that have
-reached his mailbox and the write-ups of its events. A table an older mind.db lacks is named in
-`missing` and reads as empty. Item names come from the mail, else library.db."""
+reached his mailbox and the write-ups of its events, with his replies (board_reply) under the post
+or letter each answers, oldest first, and each answer post marked with the reply it answers. A
+table an older mind.db lacks is named in `missing` and reads as empty; without board_reply,
+`replies_on` is false. Item names come from the mail, else library.db."""
 import json
 from pathlib import Path
 
@@ -38,6 +40,20 @@ def _mail_items(raw) -> list[dict]:
     return out
 
 
+REPLY_KEYS = ("id", "ts", "text", "state", "reason", "answer_post", "answer_mail")
+
+
+def _replies(conn, kind: str, parents: list[int]) -> dict[int, list[dict]]:
+    """parent -> his replies to it, oldest first."""
+    out: dict[int, list[dict]] = {}
+    for r in views.rows(conn, "SELECT id, ts, parent, text, state, reason, answer_post, answer_mail "
+                              "FROM board_reply WHERE kind = ? AND parent IN "
+                              "(SELECT value FROM json_each(?)) ORDER BY ts, id",
+                        (kind, json.dumps(parents))):
+        out.setdefault(r["parent"], []).append({k: r[k] for k in REPLY_KEYS})
+    return out
+
+
 def board_view(conn, *, now: float, data_dir: Path) -> dict:
     have = views.tables(conn)
     missing = [t for t in BOARD_TABLES if t not in have]
@@ -70,6 +86,19 @@ def board_view(conn, *, now: float, data_dir: Path) -> dict:
         letters.append({"id": m["id"], "ts": m["ts"], "sender": m["sender"], "kind": m["kind"],
                         "subject": m["subject"], "body": m["body"], "items": its,
                         "state": m["state"], "taken": m["taken"]})
+    post_replies = _replies(conn, "post", [p["id"] for t in forum for p in t["posts"]])
+    answers = {r["answer_post"]: r["id"] for r in views.rows(
+        conn, "SELECT id, answer_post FROM board_reply WHERE kind = 'post' "
+              "AND answer_post IS NOT NULL ORDER BY id")}
+    for t in forum:
+        for p in t["posts"]:
+            p["replies"] = post_replies.get(p["id"], [])
+            p["answers"] = answers.get(p["id"])
+    letter_replies = _replies(conn, "letter", [m["id"] for m in letters])
+    for m in letters:
+        m["replies"] = letter_replies.get(m["id"], [])
+    waiting = views.rows(conn, "SELECT count(*) FROM board_reply WHERE state = 'waiting'")
+
     known = library_items.item_names(Path(data_dir) / "library.db", ids) if ids else {}
     for m in letters:
         for i in m["items"]:
@@ -93,4 +122,5 @@ def board_view(conn, *, now: float, data_dir: Path) -> dict:
 
     return {"human": human_guid(conn), "names": {str(g): n for g, n in names.items()},
             "missing": missing, "realm_on": _realm_on(data_dir),
+            "replies_on": "board_reply" in have, "waiting": waiting[0][0] if waiting else 0,
             "forum": forum, "letters": letters, "writeups": writeups}

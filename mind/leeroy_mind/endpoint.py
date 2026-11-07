@@ -14,9 +14,10 @@ key only to a listener that the TCP table shows is the running mind's own proces
 
 A request: one connection, one line. A JSON object of at most MAX_LINE bytes ending in a
 newline, sent within READ_S (2 s), with exactly the keys v (1), key, op and, for a raid, tune,
-selfie or say action only, args. Anything else (an unknown or missing key, a wrong type, an HTTP
-request) is refused and the connection closed; nothing after the first line is read. One answer
-line comes back, {"ok": true, ...} or {"ok": false, "error": ...}, and the connection closes.
+selfie, say or board action only, args. Anything else (an unknown or missing key, a wrong type,
+an HTTP request) is refused and the connection closed; nothing after the first line is read. One
+answer line comes back, {"ok": true, ...} or {"ok": false, "error": ...}, and the connection
+closes.
 
     status          the raid night's state and which raid actions can run now, or why not
     stop            the mind's own clean shutdown, the one Ctrl+C runs: answered, then begun
@@ -41,9 +42,14 @@ line comes back, {"ok": true, ...} or {"ok": false, "error": ...}, and the conne
                     money log, read by four read-only SELECTs through guild life's armory (the
                     database credentials never leave this process), one read at a time, within
                     BANK_READ_S, and an answer younger than BANK_CACHE_S given again as it is
+    board {action}  reply {kind, to, text} | withdraw {id}: his reply on the Board to a Realm
+                    forum post or a letter in his mailbox (leeroy_mind.board), stored in
+                    mind.db waiting for the Realm night, or a waiting one taken back; one at a
+                    time. board_args refuses a text the store would (empty, too long for its
+                    kind, not UTF-8), in the words the console shows
 
 Logs carry the op, the action (for say, the channel) and the outcome, never the key, a name, a
-preview's text or a line's."""
+preview's text, a line's or a reply's."""
 import asyncio
 import json
 import logging
@@ -61,7 +67,7 @@ from leeroy_mind.logs import log as log_event
 
 VERSION = 1
 KEY_FILE = "control.json"
-MAX_LINE = 4096
+MAX_LINE = 8192  # a 400-character letter reply escaped (12 bytes an astral character) fits
 MAX_REPLY = 65536
 READ_S = 2.0  # the console sends its line at once: a slot is not held longer
 RAID_S = 30.0  # how long one raid action may take before the console is answered anyway
@@ -71,7 +77,7 @@ BANK_READ_S = 15.0  # the four bank queries, before the console is answered anyw
 BANK_CACHE_S = 30.0  # a bank snapshot younger than this is answered as it is
 MAX_CONNECTIONS = 8
 REPLACE_TRIES = 40  # 2 s of 50 ms tries to move control.json over a file being read
-OPS = ("status", "stop", "raid", "tune", "selfie", "say", "bank")
+OPS = ("status", "stop", "raid", "tune", "selfie", "say", "bank", "board")
 RAID_ACTIONS = ("call", "form", "summon", "start", "stop", "end")
 TUNE_ACTIONS = ("status", "set", "undo", "revert", "group", "retire", "preview")
 TUNE_SHAPES = {
@@ -93,6 +99,8 @@ SELFIE_SHAPES = {
 }
 SAY_CHANNELS = ("guild", "officer", "group", "whisper")
 MAX_SAY_CHARS = 1024  # what the console's box may hold; a line the game takes is 255 bytes
+BOARD_ACTIONS = ("reply", "withdraw")
+BOARD_SHAPES = {"reply": {"action", "kind", "to", "text"}, "withdraw": {"action", "id"}}
 _DIAL_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz_")
 KEY_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
 
@@ -540,6 +548,40 @@ def say_args(args) -> dict:
     return {"channel": channel, "text": cleaned, "to": args["to"]}
 
 
+def _row_id(v) -> bool:
+    return type(v) is int and 1 <= v < 1 << 63
+
+
+def board_args(args) -> dict:
+    """A board action's arguments, exactly (BOARD_SHAPES): kind "post" or "letter", to (the post
+    or letter he answers) and id (a reply) row numbers from 1 below 2**63, never a boolean; text
+    a string of at most board.RAW_MAX characters that encodes as UTF-8 and cleans to a reply its
+    kind may hold (board.text_problem). The arguments with the cleaned text, or BadRequest with
+    the sentence the console shows."""
+    from leeroy_mind.board import KINDS, text_problem
+    if not isinstance(args, dict) or args.get("action") not in BOARD_ACTIONS:
+        raise BadRequest("board: an action, one of " + ", ".join(BOARD_ACTIONS))
+    action = args["action"]
+    shape = BOARD_SHAPES[action]
+    if set(args) != shape:
+        raise BadRequest(f"board {action}: exactly " + ", ".join(sorted(shape - {"action"})))
+    if action == "withdraw":
+        if not _row_id(args["id"]):
+            raise BadRequest("board withdraw: id is a reply's number")
+        return {"action": "withdraw", "id": args["id"]}
+    kind, to, text = args["kind"], args["to"], args["text"]
+    if not isinstance(kind, str) or kind not in KINDS:
+        raise BadRequest("board reply: kind is post or letter")
+    if not _row_id(to):
+        raise BadRequest(f"board reply: to is the {kind}'s number")
+    if not isinstance(text, str):
+        raise BadRequest("board reply: text is text")
+    problem, cleaned = text_problem(kind, text)
+    if problem is not None:
+        raise BadRequest(problem)
+    return {"action": "reply", "kind": kind, "to": to, "text": cleaned}
+
+
 def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     """(op, args) from one request line; Forbidden for a wrong key, BadRequest otherwise."""
     if not line.endswith(b"\n") or len(line) > MAX_LINE:
@@ -550,8 +592,8 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
         raise BadRequest("bad request: not a JSON line") from None
     if not isinstance(value, dict) or not {"v", "key", "op"} <= set(value) <= {
             "v", "key", "op", "args"}:
-        raise BadRequest("bad request: exactly v, key, op (and args for a raid, tune, selfie or "
-                         "say action)")
+        raise BadRequest("bad request: exactly v, key, op (and args for a raid, tune, selfie, "
+                         "say or board action)")
     given = value["key"]
     if not isinstance(given, str) or not secrets.compare_digest(
             given.encode("utf-8", "surrogatepass"), key.encode("ascii")):
@@ -562,7 +604,7 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     if op not in OPS:
         raise BadRequest("bad request: op is one of " + ", ".join(OPS))
     parse_args = {"raid": raid_args, "tune": tune_args, "selfie": selfie_args,
-                  "say": say_args}.get(op)
+                  "say": say_args, "board": board_args}.get(op)
     if parse_args is None:
         if "args" in value:
             raise BadRequest(f"bad request: {op} takes no args")
@@ -624,6 +666,7 @@ class ControlEndpoint:
         self._preview = asyncio.Lock()  # one preview at a time
         self._selfie = asyncio.Lock()  # one photo change at a time, until its files are written
         self._say = asyncio.Lock()  # one line of his in flight
+        self._board = asyncio.Lock()  # one Board reply or withdrawal at a time
         self.bank_s, self._clock = bank_s, clock
         self._bank_task: asyncio.Future | None = None  # the read in flight, shared by askers
         self._bank_cache: tuple[float, dict] | None = None
@@ -716,7 +759,8 @@ class ControlEndpoint:
             reply = await self.bank()
             log_event("control_request", op=op, outcome="ok" if reply["ok"] else "refused")
             return reply, None
-        reply = await {"raid": self.raid, "tune": self.tune, "selfie": self.selfie}[op](args)
+        reply = await {"raid": self.raid, "tune": self.tune, "selfie": self.selfie,
+                       "board": self.board}[op](args)
         log_event("control_request", op=op, action=args["action"],
                   outcome="ok" if reply["ok"] else "refused")
         return reply, None
@@ -897,6 +941,24 @@ class ControlEndpoint:
         except Exception as e:  # its text can carry the line or a name
             log_event("control_say_failed", level=logging.WARNING, error=type(e).__name__)
             return {"ok": False, "error": f"The line could not be sent ({type(e).__name__})."}
+
+    async def board(self, args: dict) -> dict:
+        """His Board reply or withdrawal (leeroy_mind.board.BoardDesk), one at a time: a second
+        while one is being saved is refused, never queued."""
+        desk = getattr(self.app, "board", None)
+        if self.app.stopping:
+            return {"ok": False, "error": "The mind is stopping."}
+        if desk is None:
+            return {"ok": False, "error": "Board replies are not running in this mind."}
+        if self._board.locked():
+            return {"ok": False, "error": "Another reply is still being saved."}
+        async with self._board:
+            try:
+                return await desk.handle(args)
+            except Exception as e:  # its text can carry the reply or a name
+                log_event("control_board_failed", level=logging.WARNING, error=type(e).__name__)
+                return {"ok": False,
+                        "error": f"The reply could not be saved ({type(e).__name__})."}
 
 
 def attach_control(app) -> ControlEndpoint | None:
