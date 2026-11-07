@@ -962,13 +962,16 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
   asked for, and renders up to `selfie_per_night` (120) sets.
   A woman whose stance toward the owner is lust, aged 21 or more (`selfies/style.py`
   `suggestive`), gets the lust style: a flattering, flirtatious kind from its own template (the
-  owner's overlay `prompts/nightly_photo_lust.txt` replaces it) and screen (swimwear only by
-  the water and never indoors; nudity, underwear, sleepwear, see-through wear, the places people
-  undress in and anything sexual still refused), and her renders drop `cleavage` and
-  `swimwear` from the negative and add `topless`, `underwear`, `see-through` and `sheer`, while
-  everyone else keeps the plain rules; when her style changes the pass chooses her kind once
-  more (meta `selfies:photo-style:<guid>` records which rules chose each kind; a hand-set kind
-  is never redone). The NSFW gate (`nsfw_max`) is unchanged for every image of both styles.
+  owner's overlay `prompts/nightly_photo_lust.txt` replaces it) and its own word screen in
+  `selfies/kind.py`: the outfit must name a garment from an allowed list (`GARMENT_RE`), a
+  reply that uses a word on the refused list (`LUST_EXPLICIT_RE`, or a bed in the setting or
+  outfit) is refused, and swimwear passes only when the setting names a beach, pool, lake or
+  hot tub, no room or other indoor place, and nothing like "anywhere but". What the lists do
+  not name passes the screen. Her renders drop `cleavage` and `swimwear` from the negative and
+  add `topless`, `underwear`, `see-through` and `sheer`, while everyone else keeps the plain
+  rules; when her style changes the pass chooses her kind once more (meta
+  `selfies:photo-style:<guid>` records which rules chose each kind; a hand-set kind is never
+  redone). The NSFW gate (`nsfw_max`) is unchanged for every image of both styles.
 - **GPU rules.** The image stage unloads every chat model but the embedding model (the worker
   needs the VRAM) and never renders while a live lease is held (his login, an offline raid, the
   voice service): it ends without a failure and the sets wait for the next night. A night with

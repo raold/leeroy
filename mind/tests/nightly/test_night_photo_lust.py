@@ -250,6 +250,96 @@ def test_a_swimwear_word_in_the_setting_itself_follows_the_same_rule(h):
                        ident=IDENT, member_names=["Testb"]) == []
 
 
+# fix round 2: the reviewer's phrasings that crossed the line, refused in setting, outfit (beside
+# a garment, so the deny-list and not the allow-list refuses it) and expression
+CROSSING = [
+    "just a big shirt", "barely dressed", "wrapped in a sheet", "after a shower", "wearing nothing",
+    "nothing on", "nothing at all", "not wearing anything", "unclothed", "in her birthday suit",
+    "au naturel", "half-dressed", "partially dressed", "undressing", "getting undressed",
+    "unbuttoning her blouse", "an open shirt, no bra underneath", "an oversized hoodie, no pants",
+    "no top", "without a top", "bare-chested", "hands covering her chest", "wrapped in a blanket",
+    "wrapped in the duvet", "under the duvet", "bed sheet pulled up", "just her boyfriend's shirt",
+    "a shirt and no pants", "scantily clad", "skimpy outfit", "barely there dress", "underboob",
+    "sideboob", "areola", "bare breasts", "pajamas", "pyjamas", "silk pajama top", "pjs",
+    "sleepwear", "nightwear", "nightgown", "nightdress", "a silk chemise", "a lace camisole",
+    "a bralet", "a brassiere", "a bandeau", "a lace bodysuit", "stockings and suspenders",
+    "thigh-high stockings", "boyshorts", "a latex catsuit", "a leather harness", "in the tub",
+    "soaking in the tub", "showering", "in the sauna", "a steam room", "the locker room",
+    "a changing room", "a fitting room mirror", "glistening oiled skin", "horny", "aroused",
+    "kinky", "lewd", "erotica", "sexualized", "sexualised", "on all fours", "bent over a chair",
+    "straddling a chair", "legs spread", "OnlyFans style", "XXX", "soaked", "dripping"]
+BEDS = ["in her bed", "on her bed", "lying on the bed", "on the bed in her bedroom"]
+
+
+def _refused(p, field, text):
+    data = {**LUST_KIND, field: f"a black top, {text}" if field == "outfit" else text}
+    out = screen_kind(p, data, ident=IDENT, member_names=["Testb"])
+    return any(m.startswith(f"photo.{field}: explicit") for m in out)
+
+
+@pytest.mark.parametrize("text", CROSSING)
+def test_the_reviewers_crossing_phrases_are_refused_in_every_field(h, text):
+    p = lust(h)
+    for field in ("setting", "outfit", "expression"):
+        assert _refused(p, field, text), (field, text)
+
+
+@pytest.mark.parametrize("text", BEDS)
+def test_a_bed_is_refused_in_the_setting_and_the_outfit(h, text):
+    p = lust(h)
+    for field in ("setting", "outfit"):
+        assert _refused(p, field, text), (field, text)
+
+
+@pytest.mark.parametrize("outfit", ["something cute", "bubbles", "her best look",
+                                    "a little black number", "nothing much"])
+def test_a_lust_outfit_must_name_a_garment(h, outfit):
+    out = screen_kind(lust(h), {**LUST_KIND, "outfit": outfit}, ident=IDENT,
+                      member_names=["Testb"])
+    assert any(m.startswith("photo.outfit: names no garment") for m in out), outfit
+
+
+@pytest.mark.parametrize("outfit", [
+    "a satin slip dress", "a fitted sundress", "a bodycon mini dress", "a cropped tank top",
+    "an off-the-shoulder top and jeans", "a denim miniskirt and a t-shirt", "yoga pants",
+    "a red one-piece", "a sarong over a swimsuit", "a cocktail gown", "a leather jacket",
+    "a cosy cardigan", "a romper", "a jumpsuit", "high-waisted shorts", "a white blouse"])
+def test_garments_from_the_allowed_list_pass(h, outfit):
+    data = {**LUST_KIND, "setting": "on the beach at sunset", "outfit": outfit}
+    assert screen_kind(lust(h), data, ident=IDENT, member_names=["Testb"]) == [], outfit
+
+
+@pytest.mark.parametrize("reply", [
+    {"setting": "a rooftop bar", "outfit": "a satin slip dress", "expression": "sultry"},
+    {"setting": "on the beach at sunset", "outfit": "a string bikini", "expression": "sultry"},
+    {"setting": "a cafe terrace", "outfit": "a fitted low-cut black top",
+     "expression": "biting her lip"},
+    {"setting": "by the pool", "outfit": "a red swimsuit and damp hair",
+     "expression": "a playful grin"},
+    {"setting": "in a hot tub at a ski lodge", "outfit": "a black bikini",
+     "expression": "a confident smile"}])
+def test_the_fine_ones_still_pass(h, reply):
+    assert screen_kind(lust(h), {**LUST_KIND, **reply}, ident=IDENT,
+                       member_names=["Testb"]) == [], reply
+
+
+@pytest.mark.parametrize("setting", [
+    "the living-room by the pool", "her hotel room by the beach", "anywhere but the beach",
+    "not the beach, a cafe", "nowhere near the lake", "a car pool lane", "the dining room by the lake"])
+def test_swimwear_is_refused_for_the_setting_leftovers(h, setting):
+    out = screen_kind(lust(h), {**LUST_KIND, "setting": setting, "outfit": "a red bikini"},
+                      ident=IDENT, member_names=["Testb"])
+    assert any(m.startswith("photo.outfit: swimwear") for m in out), setting
+
+
+def test_the_plain_screen_has_no_garment_rule(h):
+    p = h.woman(103, "fond", appearance=APPEARANCE)
+    assert screen_kind(p, {**LUST_KIND, "outfit": "something cute"}, ident=IDENT,
+                       member_names=["Testb"]) == []
+    assert screen_kind(p, {**LUST_KIND, "setting": "on her bed"}, ident=IDENT,
+                       member_names=["Testb"]) == []
+
+
 def test_the_lust_screen_keeps_the_other_checks(h):
     p = lust(h)
     for field, text, problem in [("setting", "a 2009 house party", "era"),
