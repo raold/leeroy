@@ -76,14 +76,16 @@ GuildAddBuffs ClassBuffs(std::uint8_t cls)
         case kPriest: return Bits({B::Fortitude});                      // Power Word: Fortitude
         case kShaman: return Bits({B::Bloodlust});                      // Bloodlust / Heroism
         case kMage: return Bits({B::ArcaneIntellect});                  // Arcane Intellect
-        case kWarlock: return Bits({B::SpellDamageTaken});              // Curse of the Elements
         case kDruid: return Bits({B::MarkOfTheWild, B::BattleRes});     // Mark of the Wild, Rebirth
-        // Hunters and death knights bring theirs by tree; Raise Ally raises a ghoul in 3.3.5, not the member.
+        // Hunters, death knights and warlocks bring theirs by tree; Raise Ally raises a ghoul in 3.3.5, not the
+        // member.
         default: return 0;
     }
 }
 
-// What a talent tree (the client's order) adds to its class's buffs in 3.3.5, after the talent that gives each.
+// What a talent tree (the client's order) adds to its class's buffs in 3.3.5, after the talent that gives each. A
+// debuff counts only where playerbots' default strategies for that tree cast it and the premade pve talents
+// (Playerbots.PremadeSpecLink, which the mind's spec upkeep applies) take its talent.
 struct Tree
 {
     std::uint8_t cls;
@@ -107,10 +109,16 @@ constexpr Tree kTrees[] = {
     // Elemental: Elemental Oath; Totem of Wrath's spell power and its 3% crit taken.
     {kShaman, 0, Bits({B::SpellCrit, B::CritTaken, B::SpellPower})},
     {kShaman, 1, Bits({B::MeleeHaste, B::AttackPower})},                 // Enhancement: Imp. Windfury, Unleashed Rage
+    {kShaman, 2, Bits({B::SpellPower})},                                 // Restoration: its Flametongue Totem
     {kMage, 0, Bits({B::Damage})},                                       // Arcane: Arcane Empowerment
-    {kMage, 2, Bits({B::Replenishment})},                                // Frost: Enduring Winter
-    {kWarlock, 1, Bits({B::SpellPower})},                                // Demonology: Demonic Pact
-    {kWarlock, 2, Bits({B::Replenishment})},                             // Destruction: Improved Soul Leech
+    {kMage, 1, Bits({B::SpellCritTaken})},                               // Fire: Improved Scorch
+    {kMage, 2, Bits({B::Replenishment, B::SpellCritTaken})},             // Frost: Enduring Winter, Winter's Chill
+    // Affliction and Demonology premades take Improved Shadow Bolt and fill with Shadow Bolt; Destruction's skips it
+    // and casts Incinerate.
+    {kWarlock, 0, Bits({B::SpellCritTaken})},                            // Affliction: Improved Shadow Bolt
+    {kWarlock, 1, Bits({B::SpellPower, B::SpellCritTaken})},             // Demonology: Demonic Pact, Imp. Shadow Bolt
+    // Destruction: Improved Soul Leech; Curse of the Elements, its default curse (the others cast Curse of Agony).
+    {kWarlock, 2, Bits({B::Replenishment, B::SpellDamageTaken})},
     // Balance: Moonkin Aura, Earth and Moon, Improved Faerie Fire.
     {kDruid, 0, Bits({B::SpellCrit, B::SpellDamageTaken, B::SpellHit})},
     {kDruid, 1, Bits({B::PhysicalCrit, B::BleedDamage})},                // Feral: Leader of the Pack, Mangle
@@ -148,20 +156,44 @@ bool IsRaidHealer(GuildAddHealer kind)
         || kind == GuildAddHealer::RaidPriest;
 }
 
-// What the missing line names, in GuildAddBuff order: Bloodlust, Replenishment and the % buffs and debuffs.
+// What the missing line names, in GuildAddBuff order: Bloodlust, Replenishment and the % buffs and debuffs. A 5-man
+// line names only the first two.
 constexpr char const* kNamed[] = {"Bloodlust/Heroism", "Replenishment", "20% melee haste", "5% spell crit",
     "10% attack power", "3% damage", "5% physical crit", "13% spell damage taken", "30% bleed damage",
-    "4% physical damage taken", "3% spell hit", "3% crit taken"};
-static_assert(std::size(kNamed) == static_cast<std::size_t>(GuildAddBuff::CritTaken) + 1);
+    "4% physical damage taken", "3% spell hit", "3% crit taken", "5% spell crit taken"};
+static_assert(std::size(kNamed) == static_cast<std::size_t>(GuildAddBuff::SpellCritTaken) + 1);
+constexpr std::size_t kNamedInParty = 2;
 
-std::int64_t Coverage(GuildAddBuffs buffs)
+// How many sources of a buff a raid of this size wants: Replenishment reaches 10 members.
+std::uint32_t Wanted(GuildAddBuff buff, std::uint32_t size)
+{
+    return buff == GuildAddBuff::Replenishment && size >= 25 ? 2 : 1;
+}
+
+using BuffCounts = std::array<std::uint32_t, kGuildAddBuffs>;
+
+void Tally(BuffCounts& have, GuildAddBuffs buffs)
+{
+    for (std::size_t i = 0; i < kGuildAddBuffs; ++i)
+        if (buffs & GuildAddBuffBit(static_cast<GuildAddBuff>(i)))
+            ++have[i];
+}
+
+// The weight of what buffs add to what the raid has, counting each buff only while it wants another source.
+std::int64_t Coverage(GuildAddBuffs buffs, BuffCounts const& have, std::uint32_t size)
 {
     std::int64_t weight = 0;
     for (std::size_t i = 0; i < kGuildAddBuffs; ++i)
-        if (buffs & GuildAddBuffBit(static_cast<GuildAddBuff>(i)))
-            weight += GuildAddBuffWeight(static_cast<GuildAddBuff>(i));
+    {
+        auto const buff = static_cast<GuildAddBuff>(i);
+        if ((buffs & GuildAddBuffBit(buff)) && have[i] < Wanted(buff, size))
+            weight += GuildAddBuffWeight(buff);
+    }
     return weight;
 }
+
+// Tanks this many item levels below the best-geared one left still count for a different tank class.
+constexpr std::uint32_t kTankGearWindow = 10;
 
 // A healer template's slot: which kinds of healer it wants.
 enum class Slot : std::uint8_t { TankOrAbsorb, Tank, Absorb, Raid };
@@ -201,7 +233,7 @@ std::uint32_t GuildAddBuffWeight(GuildAddBuff buff)
 {
     if (buff <= GuildAddBuff::Replenishment)
         return 100;
-    return buff <= GuildAddBuff::CritTaken ? 10 : 1;
+    return buff <= GuildAddBuff::SpellCritTaken ? 10 : 1;
 }
 
 GuildAddSpec GuildAddSpecFacts(std::uint8_t cls, std::int8_t tab, GuildAddRole role)
@@ -217,10 +249,13 @@ GuildAddSpec GuildAddSpecFacts(std::uint8_t cls, std::int8_t tab, GuildAddRole r
     return spec;
 }
 
-std::string GuildAddMissingLine(GuildAddBuffs covered)
+std::string GuildAddMissingLine(GuildAddPlan const& plan, GuildAddCounts const& added, GuildAddBuffs covered)
 {
+    if (plan.full || !(added[0] + added[1] + added[2]))
+        return {};
+    std::size_t const named = plan.size <= 5 ? kNamedInParty : std::size(kNamed);
     std::vector<std::string> missing;
-    for (std::size_t i = 0; i < std::size(kNamed); ++i)
+    for (std::size_t i = 0; i < named; ++i)
         if (!(covered & GuildAddBuffBit(static_cast<GuildAddBuff>(i))))
             missing.push_back(kNamed[i]);
     return missing.empty() ? std::string() : "Still missing: " + Join(missing);
@@ -316,6 +351,7 @@ GuildAddPlan PlanGuildAdd(std::uint32_t size, std::uint32_t members, std::vector
     std::array<std::uint32_t, static_cast<std::size_t>(GuildAddHealer::RaidPriest) + 1> healers{};
     std::vector<GuildAddHealer> hisHealers;
     std::int64_t melee = 0, ranged = 0;
+    BuffCounts have{};
     for (auto const& member : connected)
     {
         auto& slots = needed[Index(member.role)];
@@ -324,6 +360,7 @@ GuildAddPlan PlanGuildAdd(std::uint32_t size, std::uint32_t members, std::vector
         ++classes[member.cls];
         auto const spec = GuildAddSpecFacts(member.cls, member.tab, member.role);
         plan.covered |= spec.buffs;
+        Tally(have, spec.buffs);
         if (member.role == GuildAddRole::Tank)
             ++tankClasses[member.cls];
         else if (member.role == GuildAddRole::Healer)
@@ -355,7 +392,6 @@ GuildAddPlan PlanGuildAdd(std::uint32_t size, std::uint32_t members, std::vector
     for (auto const& candidate : candidates)
         specs.push_back(GuildAddSpecFacts(candidate.cls, candidate.tab, candidate.role));
     std::vector<bool> taken(candidates.size());
-    GuildAddBuffs covered = plan.covered;
 
     std::size_t const none = candidates.size();
     // The free candidate of a role that ranks lowest; guid ends every rank, so there is one answer.
@@ -382,7 +418,7 @@ GuildAddPlan PlanGuildAdd(std::uint32_t size, std::uint32_t members, std::vector
         auto const& spec = specs[i];
         taken[i] = true;
         ++classes[candidate.cls];
-        covered |= spec.buffs;
+        Tally(have, spec.buffs);
         if (candidate.role == GuildAddRole::Tank)
             ++tankClasses[candidate.cls];
         else if (candidate.role == GuildAddRole::Healer)
@@ -396,13 +432,16 @@ GuildAddPlan PlanGuildAdd(std::uint32_t size, std::uint32_t members, std::vector
     auto guid = [&](std::size_t i) { return static_cast<std::int64_t>(candidates[i].guid); };
     auto cls = [&](std::size_t i) { return static_cast<std::int64_t>(classes[candidates[i].cls]); };
 
-    // Tanks: a tank class not yet tanking, then gear.
+    // Tanks: a tank class not yet tanking, then gear, among those close to the best-geared tank left.
     for (std::uint32_t slot = 0; slot < plan.open[Index(GuildAddRole::Tank)]; ++slot)
     {
-        auto const i = best(GuildAddRole::Tank, any, [&](std::size_t c)
-            { return Rank{tankClasses[candidates[c].cls], gear(c), cls(c), guid(c), 0}; });
-        if (i == none)
+        auto const top = best(GuildAddRole::Tank, any, [&](std::size_t c) { return Rank{gear(c), guid(c), 0, 0, 0}; });
+        if (top == none)
             break;
+        std::uint32_t const topGear = candidates[top].gear;
+        std::uint32_t const lowest = topGear > kTankGearWindow ? topGear - kTankGearWindow : 0;
+        auto const i = best(GuildAddRole::Tank, [&](std::size_t c) { return candidates[c].gear >= lowest; },
+            [&](std::size_t c) { return Rank{tankClasses[candidates[c].cls], gear(c), cls(c), guid(c), 0}; });
         take(i);
     }
 
@@ -440,13 +479,14 @@ GuildAddPlan PlanGuildAdd(std::uint32_t size, std::uint32_t members, std::vector
             take(i);
         }
 
-    // Damage: the most weight of buffs nobody brings yet, then gear, then the melee/ranged split nearest even.
+    // Damage: the most weight of buffs the raid still wants (a second Replenishment in a 25 or 40), then gear, then the
+    // melee/ranged split nearest even.
     for (std::uint32_t slot = 0; slot < plan.open[Index(GuildAddRole::Damage)]; ++slot)
     {
         auto const i = best(GuildAddRole::Damage, any, [&](std::size_t c)
             {
                 std::int64_t const split = specs[c].melee ? melee + 1 - ranged : melee - ranged - 1;
-                return Rank{-Coverage(specs[c].buffs & ~covered), gear(c), std::abs(split), cls(c), guid(c)};
+                return Rank{-Coverage(specs[c].buffs, have, size), gear(c), std::abs(split), cls(c), guid(c)};
             });
         if (i == none)
             break;

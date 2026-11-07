@@ -297,7 +297,7 @@ std::vector<std::string> Fill(Player* human, uint32 size)
     LOG_INFO("module.leeroy", "mod-leeroy: add{} from the guild: {} tanks, {} healers, {} damage joined, {} not brought",
         size, added[0], added[1], added[2], notBrought);
     auto messages = GuildAddMessages(plan, added, notBrought, unavailable);
-    if (auto missing = GuildAddMissingLine(covered); !missing.empty())
+    if (auto missing = GuildAddMissingLine(plan, added, covered); !missing.empty())
         messages.push_back(std::move(missing));
     return messages;
 }

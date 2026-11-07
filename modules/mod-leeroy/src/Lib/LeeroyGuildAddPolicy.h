@@ -60,16 +60,17 @@ struct GuildAddBody
 // Empty when the member is free to join his group.
 std::string GuildAddSkipReason(GuildAddBody const& body);
 
-// The raid buffs and debuffs a member brings in WotLK 3.3.5, one bit each. Same-kind effects do not stack, so one
-// source covers the raid.
+// The raid buffs and debuffs a member's bot applies in WotLK 3.3.5 (talents, and what playerbots' default strategies
+// for that tree cast), one bit each. Same-kind effects do not stack, so one source covers the raid; Replenishment
+// reaches 10 members, so a 25 or 40 wants two sources.
 enum class GuildAddBuff : std::uint8_t
 {
     Bloodlust, Replenishment,
     MeleeHaste, SpellCrit, AttackPower, Damage, PhysicalCrit,
-    SpellDamageTaken, BleedDamage, PhysicalDamageTaken, SpellHit, CritTaken,
+    SpellDamageTaken, BleedDamage, PhysicalDamageTaken, SpellHit, CritTaken, SpellCritTaken,
     ArmorReduction, SpellPower, Kings, Fortitude, MarkOfTheWild, ArcaneIntellect, BattleRes,
 };
-inline constexpr std::size_t kGuildAddBuffs = 19;
+inline constexpr std::size_t kGuildAddBuffs = 20;
 using GuildAddBuffs = std::uint32_t;
 constexpr GuildAddBuffs GuildAddBuffBit(GuildAddBuff buff) { return GuildAddBuffs(1) << static_cast<unsigned>(buff); }
 // 100 for Bloodlust and Replenishment, 10 for the % buffs and debuffs, 1 for the rest: one higher kind outweighs any
@@ -121,12 +122,13 @@ struct GuildAddPlan
 // members counts every slot of his group (him and offline members included); connected are the members whose role
 // is known, him included. Each counts toward its own role while that role still has room, so a re-run fills only
 // the gaps. When members outnumber their roles, damage loses its open slots first, then healers.
-// Tanks: the tank class his tanks have fewest of, then the highest gear. Healers fill the size's template (5: a Holy
-// paladin or Discipline priest; 10: Holy paladin, Discipline, a raid healer; 25: two Holy paladins, one Discipline,
-// three raid healers mixing shaman, druid and Holy priest; 40: three, two and five), minus healers already there; a
-// kind nobody free has goes to the best-geared healer left. Damage: the member adding the most weight of buffs his
-// group and the picks so far lack, then gear, then the melee/ranged split nearest even. The last ties go to the class
-// his group has fewest of, then the lowest guid.
+// Tanks: among those within 10 item levels of the best-geared tank left, the tank class his tanks have fewest of,
+// then gear. Healers fill the size's template (5: a Holy paladin or Discipline priest; 10: Holy paladin, Discipline,
+// a raid healer; 25: two Holy paladins, one Discipline, three raid healers mixing shaman, druid and Holy priest; 40:
+// three, two and five), minus healers already there and cut to the open slots; a kind nobody free has goes to the
+// best-geared healer left. Damage: the member adding the most weight of buffs his group and the picks so far lack,
+// then gear, then the melee/ranged split nearest even. The last ties go to the class his group has fewest of, then
+// the lowest guid.
 GuildAddPlan PlanGuildAdd(std::uint32_t size, std::uint32_t members, std::vector<GuildAddMember> const& connected,
     std::vector<GuildAddCandidate> candidates);
 
@@ -135,8 +137,10 @@ GuildAddPlan PlanGuildAdd(std::uint32_t size, std::uint32_t members, std::vector
 std::vector<std::string> GuildAddMessages(GuildAddPlan const& plan, GuildAddCounts const& added,
     std::uint32_t notBrought, std::map<std::string, std::uint32_t> const& unavailable);
 
-// The Bloodlust, Replenishment and % buffs and debuffs his group still lacks, in one chat line; empty when none is.
-std::string GuildAddMissingLine(GuildAddBuffs covered);
+// covered is what his group brings once the fill is done. One chat line naming what it still lacks: Bloodlust and
+// Replenishment for a 5-man, those and the % buffs and debuffs for a raid. Empty when none is missing, and when the
+// fill added nobody (his group was full, or nobody was free).
+std::string GuildAddMissingLine(GuildAddPlan const& plan, GuildAddCounts const& added, GuildAddBuffs covered);
 }
 
 #endif
