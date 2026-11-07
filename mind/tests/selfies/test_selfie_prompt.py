@@ -190,7 +190,7 @@ def test_the_longest_lust_kind_keeps_outfit_and_setting_through_the_workers_fit(
     big = replace(APPEARANCE, hair_style="h" * 40, face=("f" * 40,) * 4)
     for kind_, framing in (("snapshot", "head_and_shoulders"), ("mirror_selfie", "upper_body")):
         photo = ProfilePhoto(kind_, framing, setting, outfit, "an over-the-shoulder glance")
-        spec = build_prompt(woman(stance="lust", age=24, appearance=big, photo=photo),
+        spec = build_prompt(woman(stance="lust", age=25, appearance=big, photo=photo),
                             kind_style=LUST)
         kept, dropped = fit(spec.phrases, _tokens, 75)
         assert f"wearing {outfit}, {setting}" in kept and outfit not in " ".join(dropped)

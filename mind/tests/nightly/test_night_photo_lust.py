@@ -160,11 +160,11 @@ def _reply(outfit, colour="black", setting=None, expression="a wink"):
 
 # -- who ----------------------------------------------------------------------------------------
 
-def test_the_suggestive_style_is_a_lust_woman_of_21_or_more(h):
-    assert SUGGESTIVE_MIN_AGE == 21
+def test_the_suggestive_style_is_a_lust_woman_of_25_or_more(h):
+    assert SUGGESTIVE_MIN_AGE == 25
     assert suggestive(lust(h)) and style_of(lust(h)) == LUST
-    assert suggestive(lust(h, age=21))
-    assert not suggestive(lust(h, age=20)) and style_of(lust(h, age=20)) == PLAIN
+    assert suggestive(lust(h, age=25))
+    assert not suggestive(lust(h, age=24)) and style_of(lust(h, age=24)) == PLAIN
     assert not suggestive(h.woman(103, "drawn", appearance=APPEARANCE))
     assert not suggestive(h.woman(104, "fond")) and not suggestive(h.woman(105, "none"))
     assert not suggestive(h.persona(101, appearance=APPEARANCE))
