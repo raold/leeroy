@@ -9,9 +9,9 @@ so a hand setting made while the pass ran wins.
 
 The member's style (style.py) picks the rules: a woman of the lust style gets KIND_PROMPT_LUST
 (the owner's overlay prompts/nightly_photo_lust.txt replaces it) and the lust screen: her outfit
-must name a garment of GARMENT_RE, a reply using a word of LUST_EXPLICIT_RE (or a bed in the
-setting or outfit) is refused, and swimwear passes only by the water (see the screen's
-comment); everyone else gets KIND_PROMPT and EXPLICIT_RE as they were.
+must name a garment of GARMENT_RE, a reply using a word of LUST_EXPLICIT_RE in any field is
+refused, and swimwear passes only by the water (see the screen's comment); everyone else gets
+KIND_PROMPT and EXPLICIT_RE as they were.
 
 Over time: each kind the pass saves gets a record in meta (STYLE_KEY: the style that chose it
 and a digest of the kind as saved). When a member's style no longer matches her kind's record
@@ -87,7 +87,7 @@ EXPLICIT_RE = re.compile(
     r"\b(nude|naked|topless|shirtless|braless|lingerie|underwear|bra|panties|bikini|swimsuit|"
     r"swimwear|see-through|sheer|sexy|sexual|seductive|nsfw|cleavage)\b", re.I)
 # The lust style's screen. A reply is refused when any field uses a word of _LUST_REFUSED (a
-# bed also in the setting or the outfit: LUST_BED_RE), when the outfit names no garment of
+# bed included), when the outfit names no garment of
 # GARMENT_RE, or when swimwear appears without a beach, pool, lake or hot tub in a setting that
 # names no room or other indoor place and does not point away from the water. Cleavage,
 # low-cut, fitted, sexy, flirty and sultry are not refused. It is a word screen: what it does
@@ -110,15 +110,13 @@ _LUST_REFUSED = (
     r"harness|fishnets?|mesh|towels?|robes?|bathrobes?|monokini|micro[- ]?bikini|"
     r"see[- ]?thr(?:ough|u)|sheer|transparent|"
     # where people undress
-    r"shower\w*|baths?|bathtubs?|bubble bath|(?<!hot )(?<!hot-)tubs?|in bed|sheets?|covers|"
+    r"shower\w*|baths?|bathtubs?|bubble bath|(?<!hot )(?<!hot-)tubs?|beds?|sheets?|covers|"
     r"blankets?|duvets?|sauna|steam room|locker room|changing room|fitting room|"
     # anything sexual
     r"nsfw|sex|sexual|sexually|sexuali[sz]ed|seductive|erotic|erotica|explicit|porn\w*|fetish|"
     r"boudoir|horny|aroused|kinky|lewd|xxx|onlyfans|on all fours|bent over|straddl\w*|"
     r"legs spread|spread legs")
 LUST_EXPLICIT_RE = re.compile(rf"\b(?:{_LUST_REFUSED})\b", re.I)
-LUST_BED_RE = re.compile(r"\bbeds?\b", re.I)  # in the setting and the outfit
-_BED_FIELDS = ("setting", "outfit")
 GARMENT_RE = re.compile(  # a lust outfit names at least one of these
     r"\b(?:dress(?:es)?|sundress(?:es)?|minidress(?:es)?|gowns?|tops?|blouses?|shirts?|"
     r"t-shirts?|tees?|sweaters?|jumpers?|cardigans?|jackets?|blazers?|coats?|hoodies?|"
@@ -227,8 +225,8 @@ def screen_kind(p: Persona, data: dict, *, ident: HumanIdentity,
     """The problems with a reply (KIND_SCHEMA's shape) for `p`, as `photo.<field>: <kind>:
     "<text>"` with his real name redacted from the text; it never fixes text. Per field, in
     order: meta, his real name, a likeness, a member's name (any case), an era, explicit wear
-    (EXPLICIT_RE; for the lust style LUST_EXPLICIT_RE, a bed in the setting or outfit,
-    swimwear away from the water, and an outfit that names no garment); then whatever
+    (EXPLICIT_RE; for the lust style LUST_EXPLICIT_RE, swimwear away from the water, and an
+    outfit that names no garment); then whatever
     validate_persona says of `p` with that photo."""
     names = [n for n in member_names if n]
     lust = suggestive(p)
@@ -250,7 +248,7 @@ def screen_kind(p: Persona, data: dict, *, ident: HumanIdentity,
             problems.append(f"photo.{field}: names a member: {quoted}")
         if ERA_RE.search(text):
             problems.append(f"photo.{field}: era: {quoted}")
-        if explicit.search(text) or (lust and field in _BED_FIELDS and LUST_BED_RE.search(text)):
+        if explicit.search(text):
             problems.append(f"photo.{field}: explicit: {quoted}")
         if lust and not by_water and SWIMWEAR_RE.search(text):
             problems.append(f"photo.{field}: swimwear away from the water: {quoted}")

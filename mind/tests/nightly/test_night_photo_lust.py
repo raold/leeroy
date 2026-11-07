@@ -285,10 +285,11 @@ def test_the_reviewers_crossing_phrases_are_refused_in_every_field(h, text):
 
 
 @pytest.mark.parametrize("text", BEDS)
-def test_a_bed_is_refused_in_the_setting_and_the_outfit(h, text):
+def test_a_bed_is_refused_in_every_field(h, text):
     p = lust(h)
-    for field in ("setting", "outfit"):
+    for field in ("kind", "framing", "setting", "outfit", "expression"):
         assert _refused(p, field, text), (field, text)
+    assert _refused(p, "expression", "bed hair and a sleepy smile")
 
 
 @pytest.mark.parametrize("outfit", ["something cute", "bubbles", "her best look",
