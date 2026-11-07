@@ -102,6 +102,22 @@ run nothing else.
                        way, no link), then on to the mind's board op, which stores it for the
                        Realm night; a saved or withdrawn reply is announced as a `board` event
                        {"action", "id"}
+    GET  /api/discord  the Discord tab: ?channel=<id>&after=<id>&thread=<id>, all optional. The
+                       server (categories with their channels and last ids, DMs, members with
+                       class, role and presence as the mind computes it, his guid and name) and,
+                       with a channel, its latest 100 messages with reactions, its threads and
+                       pins; every channel is his, an officers' one carries `officers_only` as a
+                       display flag (discordview.discord_view; `missing` lists absent tables)
+    POST /api/discord  a discord action ({"action": "post"|"react"|"unreact"|"edit"|"delete"|
+                       "pin"|"unpin"|"thread", ...}), checked as the endpoint checks it (400
+                       with its words), refused 403 with --no-control and 409 while the mind is
+                       not running or there is no link, then on to the mind's discord op; the
+                       mind's refusal is a 409 with its words; a done one is announced as a
+                       `discord` event {"channel", "id"}. The feed pass also sends `discord`
+                       {"channels": [ids]} when a channel got a message or a loaded window
+                       changed (an edit, delete, pin, unpin, reaction or unreaction); the page
+                       then fetches those channels again. While a page has asked for Discord
+                       (60 s), the strip's `typing` is asked of the mind in game or not
 
 The Raid, Guild and Personas tabs read mind.db read-only. Raid actions, dial changes and his
 lines and Board replies are the mind's to take: the console forwards them and shows the mind's
@@ -109,23 +125,28 @@ answer, which says why when it refuses. A preview's text, a line's and a reply's
 logged, stored or broadcast by the console."""
 import asyncio
 import hmac
+import json
 import logging
 import math
 import os
+import sqlite3
 import time
 from contextlib import suppress
 from dataclasses import dataclass, field
+from datetime import datetime
 from importlib import resources
 from pathlib import Path
 from typing import Callable
 
 from .. import endpoint
-from . import (bankview, boardview, calendarview, dojoview, faces, feed, libraryview, mindlog,
+from ..discord import layout as discord_layout, store as discord_store
+from ..realm.config import ConfigError, RealmConfig, load_realm_config
+from . import (bankview, boardview, calendarview, discordview, dojoview, faces, feed, libraryview, mindlog,
                galleryview, netinfo, personaview, raidview, realmview, selfieview, socialview, status, trainview,
-               tuneview)
+               tuneview, views)
 from .control import Controls, Refused
 from .httpd import Request, Response, Stream, digits, encode_json, json_response, text
-from .mindlink import BANK_S, BOARD_S, LIBRARY_S, RAID_S, SAY_S, LinkError
+from .mindlink import BANK_S, BOARD_S, DISCORD_S, LIBRARY_S, RAID_S, SAY_S, LinkError
 from .voicelink import VoiceRelay
 from ..owner_say import BRIDGE_DOWN, NOT_IN_GAME
 from ..voice.rooms import ROOMS
@@ -143,6 +164,9 @@ PENDING_MAX = 200  # how many such lines are watched at once
 PING_S = 15.0
 QUEUE = 500  # events a page may fall behind before it is cut off (it reconnects)
 MAX_STREAMS = 8  # leave HTTP slots available for ordinary requests
+DISCORD_LISTEN_S = 60.0  # a Discord request keeps the typing question going this long
+DISCORD_WINDOWS = 60  # loaded channel windows kept for the feed pass to diff
+DISCORD_OLD_MIND = "The running mind predates the Discord: restart it after the update."
 FEED_DAYS = 3.0  # how far back a page's first feed goes
 KEY_HEADER = "x-console-key"
 TUNE_S = 10.0  # a dial change's answer
@@ -302,6 +326,10 @@ class ConsoleApp:
         self._strip: dict = {}
         self._typing: list[dict] = []  # who is typing, from the mind's status (_read_typing)
         self._feed_last = 0
+        self._discord_last: int | None = None  # newest Discord message id the pass has seen
+        self._discord_ts = 0.0  # when the pass last looked, for changed_since's hint
+        self._discord_windows: dict[str, str] = {}  # channel -> its loaded window, as last read
+        self._discord_seen = float("-inf")  # when a page last asked for Discord (monotonic)
         self._pending: dict[int, float] = {}  # sent to a page as heard False: id -> first seen
         self._waiting: dict[int, float] = {}  # spoken, voice row not written yet: id -> first seen
         self._tasks: list[asyncio.Task] = []
@@ -379,8 +407,11 @@ class ConsoleApp:
 
     async def _read_typing(self) -> list[dict]:
         """Who is typing (Comms' dots), from the mind's status: asked on this pass only while a
-        page listens and he is in game, within TYPING_S. Otherwise, or with no answer: none."""
-        if not self._subs or self.game.state != status.IN_GAME or self.link is None:
+        page listens and he is in game, or a page has asked for Discord lately (its answers come
+        at any time), within TYPING_S. Otherwise, or with no answer: none."""
+        discord = self._monotonic() - self._discord_seen < DISCORD_LISTEN_S
+        if (not self._subs or self.link is None
+                or (self.game.state != status.IN_GAME and not discord)):
             return []
         try:
             reply = await asyncio.to_thread(self.link.call, self._mind_pids(), "status",
@@ -477,11 +508,62 @@ class ConsoleApp:
             del self._waiting[next(iter(self._waiting))]
         return [i for i in dict.fromkeys(gone) if i not in out]
 
+    def _discord_read(self, last: int, since: float, channels: list[str]):
+        """Worker thread. (the newest message id, the channels that moved, the loaded windows as
+        they are now) from one read snapshot: channels with a message past `last`, channels of
+        what changed_since hints at, and each loaded window re-read for the caller to compare."""
+        def question(conn):
+            if not set(discordview.DISCORD_TABLES) <= views.tables(conn):
+                return last, set(), {}
+            upto = discord_store.last_id(conn)
+            moved = {r[0] for r in conn.execute(
+                "SELECT DISTINCT channel FROM discord_message WHERE id > ? AND id <= ?",
+                (last, upto))}
+            hint = discord_store.changed_since(conn, since)
+            if hint:
+                moved |= {r[0] for r in conn.execute(
+                    "SELECT DISTINCT channel FROM discord_message WHERE id IN "
+                    "(SELECT value FROM json_each(?))", (json.dumps(hint),))}
+            prints = {ch: discordview.fingerprint(discordview.window(conn, ch))
+                      for ch in channels}
+            return upto, moved, prints
+        return feed.read(self.s.data_dir / "mind.db", question)
+
+    async def _discord_baseline(self) -> None:
+        """Where the Discord pass starts: the newest message now, so only later ones are news."""
+        try:
+            self._discord_ts = self._clock()
+            self._discord_last, _, _ = await asyncio.to_thread(self._discord_read, 1 << 62,
+                                                               1e18, [])
+        except Exception:
+            self._discord_last = 0
+
+    async def _discord_pass(self) -> None:
+        if self._discord_last is None:
+            await self._discord_baseline()
+            return
+        started = self._clock()
+        try:
+            upto, moved, prints = await asyncio.to_thread(
+                self._discord_read, self._discord_last, self._discord_ts,
+                list(self._discord_windows))
+        except sqlite3.Error as e:
+            log.warning("console_discord_unread: error=%s", type(e).__name__)
+            return
+        self._discord_last, self._discord_ts = max(self._discord_last, upto), started
+        for ch, fp in prints.items():
+            if ch in self._discord_windows and self._discord_windows[ch] != fp:
+                moved.add(ch)
+                self._discord_windows[ch] = fp
+        if moved:
+            self.broadcast("discord", {"channels": sorted(moved)})
+
     async def _feed_loop(self) -> None:
         try:
             _, self._feed_last = await asyncio.to_thread(self._feed_since, 1 << 62)
         except Exception:
             self._feed_last = 0
+        await self._discord_baseline()
         while True:
             await asyncio.sleep(FEED_S)
             if not self._subs:
@@ -503,6 +585,10 @@ class ConsoleApp:
             self.broadcast("chat", {"lines": sorted(out.values(), key=lambda x: x["id"])})
         if gone:
             self.broadcast("chat_gone", {"ids": gone})
+        try:
+            await self._discord_pass()
+        except Exception as e:
+            log.warning("console_discord_failed: error=%s", type(e).__name__)
 
     # -- voice -------------------------------------------------------------------------------
 
@@ -686,6 +772,8 @@ class ConsoleApp:
                   ("GET", "/api/realm"): self._api_realm,
                   ("GET", "/api/calendar"): self._api_calendar,
                   ("GET", "/api/board"): self._api_board,
+                  ("GET", "/api/discord"): self._api_discord,
+                  ("POST", "/api/discord"): self._api_discord_action,
                   ("GET", "/api/bank"): self._api_bank,
                   ("GET", "/api/training"): self._api_training,
                   ("GET", "/api/dojo"): self._api_dojo,
@@ -1288,6 +1376,91 @@ class ConsoleApp:
         self.broadcast("board", {"action": args["action"], "id": reply_id})
         return json_response(200, {"ok": True, "message": str(reply.get("message") or "Saved.")[:300],
                                    "id": reply_id})
+
+    # -- the guild's Discord --------------------------------------------------------------------
+
+    def _trial_rank(self) -> int:
+        """[realm] trial_rank from mind.toml (read only), the Realm's default when unreadable."""
+        try:
+            return load_realm_config(self.s.data_dir / "mind.toml").trial_rank
+        except (ConfigError, OSError):
+            return RealmConfig().trial_rank
+
+    def _discord_question(self, conn, channel, after, thread):
+        view = discordview.discord_view(
+            conn, owner_now=datetime.fromtimestamp(self._clock()).astimezone(),
+            trial_rank=self._trial_rank(), channel=channel, after=after, thread=thread)
+        fp = None
+        if channel is not None and not view["missing"]:
+            fp = discordview.fingerprint(discordview.window(conn, channel))
+        return view, fp
+
+    async def _api_discord(self, req: Request):
+        self._discord_seen = self._monotonic()
+        channel = req.query.get("channel", [None])[0]
+        if channel is not None and (discord_layout.channel(channel) is None
+                                    and discord_layout.dm_peer(channel) is None):
+            return text(400, "channel: a Discord channel")
+        after = digits(req.query.get("after", ["0"])[0], 18)
+        thread = req.query.get("thread", [None])[0]
+        if thread is not None:
+            thread = digits(thread, 18)
+        if after is None or (req.query.get("thread", [None])[0] is not None and thread is None):
+            return text(400, "after and thread: row ids")
+        try:
+            view, fp = await asyncio.to_thread(feed.read, self.s.data_dir / "mind.db",
+                                               self._discord_question, channel, after, thread)
+        except Exception as e:
+            log.warning("console_discord_unread: error=%s", type(e).__name__)
+            return json_response(503, {"ok": False, "error": f"mind.db could not be read "
+                                                             f"({type(e).__name__})"})
+        if fp is not None:  # the page has this window: the feed pass tells it when it changes
+            self._discord_windows.pop(channel, None)
+            self._discord_windows[channel] = fp
+            while len(self._discord_windows) > DISCORD_WINDOWS:
+                del self._discord_windows[next(iter(self._discord_windows))]
+        return json_response(200, view)
+
+    def _discord_problem(self) -> tuple[int, str] | None:
+        """Why his Discord action cannot be saved now; None: on to the mind (as for a Board reply)."""
+        if not self.controls.enabled:
+            return 403, "Discord is read-only: this console runs with --no-control."
+        if self.controls.busy is not None and self.controls.busy[0] == "mind":
+            return 409, f"A {self.controls.busy[1]} of the mind is under way, so nothing can be saved."
+        if self.view.state != "running":
+            return 409, ("The mind's state is unclear, so nothing can be saved."
+                         if self.view.state == "unknown"
+                         else f"The mind is {self.view.state}, so nothing can be saved.")
+        if self.link is None:
+            return 409, "Nothing was saved: the console has no link to the mind's control endpoint."
+        return None
+
+    async def _api_discord_action(self, req: Request):
+        self._discord_seen = self._monotonic()
+        try:
+            args = endpoint.discord_args(req.json())  # checked and cleaned exactly as the mind will
+        except endpoint.BadRequest as e:
+            return json_response(400, {"ok": False, "error": str(e)})
+        problem = self._discord_problem()
+        if problem is not None:
+            return json_response(problem[0], {"ok": False, "error": problem[1]})
+        try:
+            reply = await asyncio.to_thread(self.link.call, self._mind_pids(), "discord", args,
+                                            timeout=DISCORD_S)
+        except LinkError as e:
+            words = str(e)
+            if e.unanswered:  # it may have reached the mind and been saved
+                return json_response(409, {"ok": False, "error": words[:1].upper() + words[1:]
+                                           + ". Look at the Discord before sending it again."})
+            return json_response(409, {"ok": False, "error": f"Nothing was saved: {words}."})
+        if reply.get("ok") is not True:
+            error = str(reply.get("error") or "")
+            if error.startswith(OLD_OPS):
+                error = DISCORD_OLD_MIND
+            return json_response(409, {"ok": False, "error": error[:300] or "The mind refused it."})
+        reply_id = reply.get("id") if type(reply.get("id")) is int else None
+        self.broadcast("discord", {"channel": args.get("channel"), "id": reply_id})
+        return json_response(200, {"ok": True, "id": reply_id})
 
     async def _api_feed(self, req: Request):
         after = digits(req.query.get("after", ["0"])[0], 18)  # an SQLite integer
