@@ -57,6 +57,9 @@ run nothing else.
     GET  /api/selfies  the Personas tab's photo queue: the sets waiting for his choice, counts
                        and recent changes from mind.db (selfieview.queue_view), and the
                        running mind's selfie status (its recent changes with their undoability)
+    GET  /api/social   the Social tab: feuds, jealousy, romances, feelings toward him, live
+                       rumours and the guild mood, from mind.db (a missing table is listed in
+                       `missing`, not an error)
     GET  /api/selfies/images  ?guid=&set=: a ready set's four thumbnails as data URLs (404
                        unless that set is ready and the member's)
     GET  /api/selfies/member  ?guid=: one member's photo in force, sets and change history
@@ -87,8 +90,8 @@ from pathlib import Path
 from typing import Callable
 
 from .. import endpoint
-from . import (faces, feed, mindlog, netinfo, personaview, raidview, selfieview, status,
-               tuneview)
+from . import (faces, feed, mindlog, netinfo, personaview, raidview, selfieview, socialview,
+               status, tuneview)
 from .control import Controls, Refused
 from .httpd import Request, Response, Stream, digits, encode_json, json_response, text
 from .mindlink import RAID_S, SAY_S, LinkError
@@ -581,6 +584,7 @@ class ConsoleApp:
                   ("GET", "/api/feed"): self._api_feed,
                   ("GET", "/api/raid"): self._api_raid,
                   ("GET", "/api/guild"): self._api_guild,
+                  ("GET", "/api/social"): self._api_social,
                   ("GET", "/api/personas"): self._api_personas,
                   ("GET", "/api/persona"): self._api_persona,
                   ("GET", "/api/face"): self._api_face,
@@ -690,6 +694,21 @@ class ConsoleApp:
             return json_response(503, {"ok": False, "error": f"mind.db could not be read "
                                                              f"({type(e).__name__})"})
         return json_response(200, view)
+
+    async def _db_view(self, label: str, question, *args, **kw) -> Response:
+        """question(conn, ...) on mind.db read-only as a 200; any read failure is a 503 that
+        names the exception class only, which is also all that is logged."""
+        try:
+            view = await asyncio.to_thread(feed.read, self.s.data_dir / "mind.db", question,
+                                           *args, **kw)
+        except Exception as e:
+            log.warning("console_%s_unread: error=%s", label, type(e).__name__)
+            return json_response(503, {"ok": False, "error": f"mind.db could not be read "
+                                                             f"({type(e).__name__})"})
+        return json_response(200, view)
+
+    async def _api_social(self, req: Request):
+        return await self._db_view("social", socialview.social_view, now=self._clock())
 
     # -- the personas tab (read-only) ----------------------------------------------------------
 

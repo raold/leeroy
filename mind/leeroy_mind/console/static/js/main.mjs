@@ -8,6 +8,7 @@ import { refreshFaces, renderRight } from "./comms/rightview.mjs";
 import { renderComposer } from "./comms/composer.mjs";
 import "./raid.mjs";
 import "./guild.mjs";
+import "./social.mjs";
 import "./personas.mjs";
 import "./mind.mjs";
 import { showTab } from "./tabs.mjs";

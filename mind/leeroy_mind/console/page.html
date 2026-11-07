@@ -197,9 +197,17 @@
       </article>
     </div>
   </section>
-  <section id="tab-social" class="tab placeholder" role="tabpanel" aria-labelledby="t-social" hidden>
-    <h2>Social</h2>
-    <p>The guild's drama at a glance: feuds, jealousy, romances, how each member feels about you, rumours going round and tonight's guild mood. Coming soon.</p>
+  <section id="tab-social" class="tab mindtab" role="tabpanel" aria-labelledby="t-social" hidden>
+    <div id="social-banner" class="banner bad" hidden></div>
+    <div class="view-head"><div><h2>Social</h2><p>The guild's drama: feuds, jealousy, romances, how members feel about you and the rumours going round.</p></div></div>
+    <div id="social-kpis" class="kpis" aria-label="The guild's mood"></div>
+    <div class="cards wide">
+      <article class="panel"><header><h3>Toward you</h3></header><div id="social-you"></div></article>
+      <article class="panel"><header><h3>Feuds</h3></header><div id="social-feuds"></div></article>
+      <article class="panel"><header><h3>Jealousy</h3></header><div id="social-jealousy"></div></article>
+      <article class="panel"><header><h3>Romances</h3></header><div id="social-romances"></div></article>
+      <article class="panel span"><header><h3>Rumours going round</h3></header><div id="social-rumours"></div></article>
+    </div>
   </section>
   <section id="tab-personas" class="tab mindtab" role="tabpanel" aria-labelledby="t-personas" hidden>
     <div id="personas-banner" class="banner bad" hidden></div>
