@@ -278,6 +278,28 @@ def test_a_lease_that_refuses_an_image_stage_mid_stage_keeps_its_finished_units(
     assert admin.calls == [("unload", h.REFL)]
 
 
+def test_each_image_stage_makes_room_even_after_another(h):
+    # P4: snaps follows selfies; a chat model loaded between the two (mod-ollama-chat, after the
+    # first stage's room once more) is unloaded before the second stage renders
+    admin = FakeAdmin([h.LIVE, h.EMB]); ctx = h.ctx(admin=admin)
+    run_begin(h.store, ctx.night, *ctx.window, now=ctx.window[1])
+    seen, rooms, make_room = [], [], ctx.arbiter.make_room
+    async def room():
+        rooms.append(len(seen))
+        await make_room()
+    ctx.arbiter.make_room = room
+    def loaded_meanwhile(c):
+        admin.loaded.append(h.LIVE)
+        return True
+    async def render(c): seen.append(list(admin.loaded))
+    run(NightRunner([Stage("selfies", render, "image"),
+                     Stage("snaps", render, "image", loaded_meanwhile)],
+                    lambda n, w: ctx).run(ctx.night, ctx.window))
+    assert seen == [[h.EMB], [h.EMB]]
+    assert rooms == [0, 1, 1, 2]                   # before and after each image stage
+    assert admin.calls == [("unload", h.LIVE), ("unload", h.LIVE)]
+
+
 def test_a_lease_taken_between_two_image_stages_stops_the_second(h):
     admin = FakeAdmin([h.EMB]); ctx = h.ctx(admin=admin)
     ran = []

@@ -10,6 +10,7 @@ FAKE_SELFIE_STARTS       a file it appends "spawn <pid>" to when it starts and "
 FAKE_SELFIE_FLAG_SEEDS   a comma list of seeds whose renders come back flagged (nothing written)
 FAKE_SELFIE_OOM          how many renders answer `oom` before the rest succeed
 FAKE_SELFIE_HANG         renders never answer
+FAKE_SELFIE_HANG_AFTER   renders after the first n never answer
 FAKE_SELFIE_DIE          the worker exits (3) when a render arrives, without an answer
 FAKE_SELFIE_CHILD        start a sleeping child process before ready
 FAKE_SELFIE_PIDS         a file it writes {"pid", "child"} to before ready
@@ -128,6 +129,8 @@ def main() -> None:
               {**READY, "check_ms": 0, "load_ms": 0}), **({"identity": True} if identity else {})})
     flagged = {int(s) for s in env.get("FAKE_SELFIE_FLAG_SEEDS", "").split(",") if s.strip()}
     oom = int(env.get("FAKE_SELFIE_OOM") or 0)
+    hang_after = int(env["FAKE_SELFIE_HANG_AFTER"]) if env.get("FAKE_SELFIE_HANG_AFTER") else None
+    renders = 0
     while True:
         req = json.loads(lines.get())
         if req.get("op") == "quit":
@@ -139,7 +142,8 @@ def main() -> None:
             ref = (req.get("identity") or {}).get("ref")
             with open(env["FAKE_SELFIE_LOG"], "a", encoding="utf-8") as f:
                 f.write(f"{req['id']} {req['seed']}" + (f" identity {ref}" if ref else "") + "\n")
-        if env.get("FAKE_SELFIE_HANG"):
+        renders += 1
+        if env.get("FAKE_SELFIE_HANG") or (hang_after is not None and renders > hang_after):
             threading.Event().wait()
         if env.get("FAKE_SELFIE_DIE"):
             os._exit(3)
