@@ -244,6 +244,15 @@ button.twist:hover { color: var(--ink); background: var(--surface-2); }
 img.av { background: var(--surface-2); }
 .av.sm { width: 20px; height: 20px; font-size: 9px; }
 .av.lg { width: 48px; height: 48px; font-size: 15px; }
+.av.wall { width: 112px; height: 112px; border-radius: 12px; font-size: 34px; }
+#p-wall { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 10px; }
+#p-wall[hidden], #p-table[hidden] { display: none; }
+.tile { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 8px; text-align: center;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px; color: var(--ink); cursor: pointer; min-width: 0; }
+.tile:hover, .tile.sel { border-color: var(--accent); }
+.tile.off { opacity: .6; }
+.tile .tname { font-weight: 700; overflow-wrap: anywhere; }
+.tile .tsub { font-size: 12px; color: var(--ink-3); overflow-wrap: anywhere; }
 .av.xl { width: 100%; height: auto; aspect-ratio: 1; border-radius: 12px; font-size: 40px; }
 .pface { width: 96px; margin-bottom: 8px; }
 div.who { display: flex; align-items: center; gap: 8px; }
@@ -279,6 +288,12 @@ span.facebtn { cursor: inherit; }
 .fact .k { font-size: 10.5px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--ink-3); }
 .fact .v { font-weight: 700; font-size: 14px; }
 .bullets { margin: 0; padding-left: 18px; color: var(--ink-2); font-size: 13px; }
+.srow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 7px 0; border-top: 1px solid var(--line); }
+.srow:first-child { border-top: 0; }
+.srow .meter { flex: 1 1 80px; min-width: 80px; margin: 0; }
+.srow.rumour { display: block; }
+.srow.rumour p { margin: 4px 0 6px; }
+.srow .who { display: inline-flex; align-items: center; gap: 6px; }
 .meter { height: 6px; border-radius: 99px; background: var(--surface-2); border: 1px solid var(--line);
   overflow: hidden; margin: 3px 0 6px; }
 .meter > i { display: block; height: 100%; background: var(--accent); border-radius: 99px; }
@@ -375,3 +390,55 @@ select, input[type="text"], input[type="number"] { color: var(--ink); background
 .tab.placeholder { width: 100%; max-width: 1600px; margin: 0 auto; padding: 24px 16px; gap: 6px; align-content: start; }
 .tab.placeholder h2 { margin: 0; font: 750 26px/1.1 var(--f-display); font-stretch: 108%; }
 .tab.placeholder p { margin: 0; max-width: 62ch; color: var(--ink-2); }
+
+/* faces in the Raid and Guild tables, and the DKP stats panel */
+td > div.who { color: var(--ink); font-weight: 600; }
+.dkpface { display: inline-flex; vertical-align: middle; margin-right: 6px; }
+#g-due { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chip.warn { --c: var(--warn); }
+.calday h4 { margin: 12px 0 2px; font-size: 13px; color: var(--muted); }
+.calday:first-child h4 { margin-top: 0; }
+
+.bankgrid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; margin-top: 10px; }
+.slot { position: relative; min-height: 52px; min-width: 0; overflow: hidden; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--surface-2); padding: 3px 5px; display: flex; flex-direction: column; justify-content: flex-end; }
+.slot .n { position: absolute; top: 2px; right: 4px; font-size: 11px; color: var(--ink); }
+.slot .w { font-size: 10.5px; line-height: 1.15; max-height: 2.3em; overflow: hidden; color: var(--ink-2); overflow-wrap: anywhere; }
+.slot.q0 { border-color: var(--muted); } .slot.q1 { border-color: var(--ink-2); } .slot.q2 { border-color: var(--ok); }
+.slot.q3 { border-color: var(--blue); } .slot.q4 { border-color: var(--violet); } .slot.q5 { border-color: var(--warn); }
+.chip.item.q2 { --c: var(--ok); } .chip.item.q3 { --c: var(--blue); } .chip.item.q4 { --c: var(--violet); } .chip.item.q5 { --c: var(--warn); }
+.chip.ok { --c: var(--ok); } .chip.bad { --c: var(--bad); }
+#bank-tabs .btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+#tab-board .srow p.text { flex: 1 1 100%; margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+#tab-board .thread h4 { margin: 12px 0 2px; font-size: 13px; color: var(--muted); }
+#tab-board .thread:first-child h4 { margin-top: 0; }
+#tab-board #board-panels { display: grid; gap: 18px; }
+#tab-board .replies { flex: 1 1 100%; display: grid; gap: 6px; justify-items: start; }
+#tab-board .reply { justify-self: stretch; margin-left: 24px; padding: 4px 0 4px 12px; border-left: 2px solid var(--line); }
+#tab-board .reply .rhead { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+#tab-board .reply .you { font-weight: 700; color: var(--accent); }
+#tab-board .reply p.text { margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+#tab-board .reply .note, #tab-board .reply .why { margin: 4px 0 0; }
+#tab-board .answer { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 6px 0 0 12px;
+  padding-left: 12px; border-left: 2px solid var(--accent); }
+#tab-board .answer p.text { flex: 1 1 100%; }
+#tab-board .replybox { justify-self: stretch; display: grid; gap: 6px; margin-left: 24px; max-width: 80ch; }
+#tab-board .replybox .to { font-size: 12px; color: var(--ink-3); }
+#tab-board .replybox textarea { width: 100%; box-sizing: border-box; resize: vertical; padding: 8px 12px;
+  font: inherit; font-size: 14px; color: var(--ink); background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: 8px; }
+#tab-board .replybox textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; border-color: var(--accent); }
+#tab-board .replybox textarea[readonly] { color: var(--ink-2); }
+#tab-board .replybox .rfoot { display: flex; align-items: center; gap: 8px; }
+#tab-board .replybox .count { margin-right: auto; font-size: 12px; color: var(--ink-3); }
+#tab-board .replybox .count.bad { color: var(--bad); font-weight: 600; }
+#tab-board .replybox .why { margin: 0; min-height: 1.5em; }
+#tab-dojo .dojo-pre { max-height: 360px; overflow: auto; white-space: pre-wrap; margin: 8px 0 0; font-size: 12px; line-height: 1.45; }
+#tab-dojo .dojo-run > summary { cursor: pointer; }
+#tab-dojo .mono, #tab-dojo .kv.mono dd { font-family: monospace; font-size: 12px; overflow-wrap: anywhere; }
+
+#tab-library .libform { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+#tab-library .libform label { font-size: 12.5px; color: var(--ink-3); }
+#tab-library .libform input { flex: 1 1 22em; min-width: 0; }
+#tab-library .lib-hit .lib-text { margin: 8px 0; max-width: 100ch; overflow-wrap: anywhere; white-space: pre-wrap; }
+#tab-library .lib-hit pre.lib-text { font: 12.5px/1.45 monospace; overflow-x: auto; white-space: pre; }

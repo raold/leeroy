@@ -57,6 +57,25 @@ run nothing else.
     GET  /api/selfies  the Personas tab's photo queue: the sets waiting for his choice, counts
                        and recent changes from mind.db (selfieview.queue_view), and the
                        running mind's selfie status (its recent changes with their undoability)
+    GET  /api/realm    the Realm tab: rival guilds, the race for first kills, poaching, Trade lines, canon
+    GET  /api/social   the Social tab: feuds, jealousy, romances, feelings toward him, live
+                       rumours and the guild mood, from mind.db (a missing table is listed in
+                       `missing`, not an error)
+    GET  /api/calendar the Calendar tab: upcoming events with their signups and the raid nights
+                       he missed, from mind.db (a missing table is listed in `missing`)
+    GET  /api/board    the Board tab: realm forum threads, delivered letters and write-ups from
+                       mind.db with his replies under them (a missing table is listed in
+                       `missing`; `realm_on` from mind.toml, `replies_on` from mind.db)
+    GET  /api/bank     the Bank tab: the mind's bank snapshot (control op `bank`, read-only
+                       SELECTs made by the mind) with names, item names from library.db and
+                       the realm_bank ledger from mind.db; `why` says when there is no snapshot
+    GET  /api/library  the Library tab: ?q=&kind= a BM25 search of library.db read-only (no q:
+                       its stats), or with deeper=1 the mind's own semantic search (control
+                       op `library`, a read: it works with --no-control); the query is never logged
+    GET  /api/training the Training tab: what `training status`, `gate`, `trials` and `cards`
+                       print, from mind.db (`setup` false when it has no training tables)
+    GET  /api/dojo     the Dojo tab: the dojo's own files (its layout's data and runtime roots,
+                       read-only) and whether its worldserver listens, from the console's TCP table
     GET  /api/selfies/images  ?guid=&set=: a ready set's four thumbnails as data URLs (404
                        unless that set is ready and the member's)
     GET  /api/selfies/member  ?guid=: one member's photo in force, sets and change history
@@ -71,10 +90,18 @@ run nothing else.
                        or its bridge down, a start or stop of the mind under way, not in game,
                        nobody can tell), then on to the mind's say op; nothing is
                        broadcast, the line comes back through the feed when the game reports it
+    POST /api/board    {"action": "reply", "kind": "post"|"letter", "to", "text"} or {"action":
+                       "withdraw", "id"}: his reply on the Board, checked and cleaned as the mind
+                       checks it (400 with its words), refused 403 with --no-control and 409 while
+                       nothing can be saved (the mind not running, a start or stop of it under
+                       way, no link), then on to the mind's board op, which stores it for the
+                       Realm night; a saved or withdrawn reply is announced as a `board` event
+                       {"action", "id"}
 
 The Raid, Guild and Personas tabs read mind.db read-only. Raid actions, dial changes and his
-lines are the mind's to take: the console forwards them and shows the mind's answer, which says
-why when it refuses. A preview's text and a line's are never logged, stored or broadcast."""
+lines and Board replies are the mind's to take: the console forwards them and shows the mind's
+answer, which says why when it refuses. A preview's text, a line's and a reply's are never
+logged, stored or broadcast by the console."""
 import asyncio
 import hmac
 import logging
@@ -87,11 +114,12 @@ from pathlib import Path
 from typing import Callable
 
 from .. import endpoint
-from . import (faces, feed, mindlog, netinfo, personaview, raidview, selfieview, status,
+from . import (bankview, boardview, calendarview, dojoview, faces, feed, libraryview, mindlog,
+               netinfo, personaview, raidview, realmview, selfieview, socialview, status, trainview,
                tuneview)
 from .control import Controls, Refused
 from .httpd import Request, Response, Stream, digits, encode_json, json_response, text
-from .mindlink import RAID_S, SAY_S, LinkError
+from .mindlink import BANK_S, BOARD_S, LIBRARY_S, RAID_S, SAY_S, LinkError
 from .voicelink import VoiceRelay
 from ..owner_say import BRIDGE_DOWN, NOT_IN_GAME
 from ..voice.rooms import ROOMS
@@ -118,6 +146,20 @@ SAY_OFF = "Replies are off: this console runs with --no-control."
 SAY_OLD_MIND = "The mind needs the update to send replies."
 SAY_NO_LINK = "Nothing was sent: the console has no link to the mind's control endpoint."
 SAY_SLASH = "Slash commands aren't sent from here."  # the box's words (comms/reply.mjs)
+BANK_OLD_MIND = "The running mind predates the Bank tab: restart it after the update."
+BOARD_OLD_MIND = "The running mind predates Board replies: restart it after the update."
+LIBRARY_OLD_MIND = "The running mind predates the deeper search: restart it after the update."
+
+
+def mind_words(state: str) -> str:
+    """The mind's state as a clause that follows "the mind"."""
+    if state in ("stopped", "crashed"):
+        return "which isn't running"
+    if state == "unknown":
+        return "whose state is unknown"
+    return f"which is {state}"
+
+
 OLD_OPS = "bad request: op is one of "  # a mind from before the say op names the ops it has
 
 # The page runs only the console's own files: no inline script or style, nothing from elsewhere
@@ -172,6 +214,7 @@ class Settings:
     config_problem: str | None = None
     allow_hosts: tuple[str, ...] = ()  # tailnet names (lower case) served at https://NAME too
     stable_key: bool = False  # the key is --key-file's, not this start's
+    dojo_layout: Path | None = None  # the dojo's layout.json (the Dojo tab reads its files only)
 
 
 class _Subscriber:
@@ -581,6 +624,14 @@ class ConsoleApp:
                   ("GET", "/api/feed"): self._api_feed,
                   ("GET", "/api/raid"): self._api_raid,
                   ("GET", "/api/guild"): self._api_guild,
+                  ("GET", "/api/social"): self._api_social,
+                  ("GET", "/api/realm"): self._api_realm,
+                  ("GET", "/api/calendar"): self._api_calendar,
+                  ("GET", "/api/board"): self._api_board,
+                  ("GET", "/api/bank"): self._api_bank,
+                  ("GET", "/api/training"): self._api_training,
+                  ("GET", "/api/dojo"): self._api_dojo,
+                  ("GET", "/api/library"): self._api_library,
                   ("GET", "/api/personas"): self._api_personas,
                   ("GET", "/api/persona"): self._api_persona,
                   ("GET", "/api/face"): self._api_face,
@@ -593,7 +644,8 @@ class ConsoleApp:
                   ("POST", "/api/voice"): self._api_voice,
                   ("POST", "/api/control"): self._api_control,
                   ("POST", "/api/raid"): self._api_raid_action,
-                  ("POST", "/api/say"): self._api_say}
+                  ("POST", "/api/say"): self._api_say,
+                  ("POST", "/api/board"): self._api_board_reply}
         route = routes.get((req.method, req.path))
         if route is None:
             known = {path for _, path in routes}
@@ -633,6 +685,15 @@ class ConsoleApp:
         health = await asyncio.to_thread(self._health, tail, errors)
         health["endpoint"] = await asyncio.to_thread(self._endpoint_found)
         health["strip"] = self.strip()
+        mind = await self._mind_status()
+        game = mind.get("world") if mind["ok"] else None
+        why = None if mind["ok"] else (
+            f"The cast count is read through the mind, {mind_words(self.view.state)}."
+            if self.view.state != "running" else mind["error"])
+        health["server"] = {**status.server_view(self._conns, bridge_port=self.s.bridge_port),
+                            "game": game, "why": why,
+                            "ports": {"world": status.WORLD_PORT, "auth": status.AUTH_PORT,
+                                      "bridge": self.s.bridge_port}}
         return json_response(200, health)
 
     # -- the mind's control endpoint ---------------------------------------------------------
@@ -666,8 +727,10 @@ class ConsoleApp:
         if reply.get("ok") is not True:
             return {"ok": False, "error": str(reply.get("error") or "refused")[:200]}
         raid = reply.get("raid")
+        world = reply.get("world")
         return {"ok": True, "stopping": reply.get("stopping") is True,
-                "raid": raid if isinstance(raid, dict) else None}
+                "raid": raid if isinstance(raid, dict) else None,
+                "world": world if isinstance(world, dict) else None}
 
     # -- the raid and guild tabs ---------------------------------------------------------------
 
@@ -689,6 +752,117 @@ class ConsoleApp:
             log.warning("console_guild_unread: error=%s", type(e).__name__)
             return json_response(503, {"ok": False, "error": f"mind.db could not be read "
                                                              f"({type(e).__name__})"})
+        return json_response(200, view)
+
+    async def _db_view(self, label: str, question, *args, **kw) -> Response:
+        """question(conn, ...) on mind.db read-only as a 200; any read failure is a 503 that
+        names the exception class only, which is also all that is logged."""
+        try:
+            view = await asyncio.to_thread(feed.read, self.s.data_dir / "mind.db", question,
+                                           *args, **kw)
+        except Exception as e:
+            log.warning("console_%s_unread: error=%s", label, type(e).__name__)
+            return json_response(503, {"ok": False, "error": f"mind.db could not be read "
+                                                             f"({type(e).__name__})"})
+        return json_response(200, view)
+
+    async def _api_social(self, req: Request):
+        return await self._db_view("social", socialview.social_view, now=self._clock())
+
+    async def _api_realm(self, req: Request):
+        return await self._db_view("realm", realmview.realm_view, now=self._clock())
+
+    async def _api_calendar(self, req: Request):
+        return await self._db_view("calendar", calendarview.calendar_view, now=self._clock())
+
+    async def _api_board(self, req: Request):
+        return await self._db_view("board", boardview.board_view, now=self._clock(),
+                                   data_dir=self.s.data_dir)
+
+    async def _bank_snapshot(self) -> tuple[dict | None, str | None]:
+        """(the mind's bank, None) or (None, why): the bank is read through the mind."""
+        if self.view.state != "running":
+            return None, f"The bank is read through the mind, {mind_words(self.view.state)}."
+        if self.link is None:
+            return None, "The bank is read through the mind, and the console has no link to its control endpoint."
+        try:
+            reply = await asyncio.to_thread(self.link.call, self._mind_pids(), "bank",
+                                            timeout=BANK_S)
+        except LinkError as e:
+            words = str(e)
+            return None, words[:1].upper() + words[1:] + ("" if words.endswith(".") else ".")
+        if reply.get("ok") is not True:
+            error = str(reply.get("error") or "")
+            if error.startswith(OLD_OPS):
+                return None, BANK_OLD_MIND
+            return None, error[:300] or "The mind refused it."
+        snapshot = bankview.clean_snapshot(reply)
+        if snapshot is None:
+            return None, "The mind's bank answer could not be read."
+        return snapshot, None
+
+    async def _api_bank(self, req: Request):
+        snapshot, why = await self._bank_snapshot()
+        return await self._db_view("bank", bankview.bank_view, snapshot=snapshot, why=why,
+                                   data_dir=self.s.data_dir)
+
+    async def _library_deeper(self, query: str, kind: str | None) -> dict:
+        """The mind's semantic search as a library answer: hits, or deeper_why in words."""
+        out = {"setup": True, "why": None, "stats": None, "hits": [], "deeper": True,
+               "deeper_why": None}
+        if self.view.state != "running":
+            out["deeper_why"] = f"Deeper search is done by the mind, {mind_words(self.view.state)}."
+            return out
+        if self.link is None:
+            out["deeper_why"] = "Deeper search is done by the mind, and the console has no link to its control endpoint."
+            return out
+        try:
+            reply = await asyncio.to_thread(self.link.call, self._mind_pids(), "library",
+                                            {"query": query, "k": libraryview.K}, timeout=LIBRARY_S)
+        except LinkError as e:
+            words = str(e)
+            out["deeper_why"] = words[:1].upper() + words[1:] + ("" if words.endswith(".") else ".")
+            return out
+        if reply.get("ok") is not True:
+            error = str(reply.get("error") or "")
+            out["deeper_why"] = (LIBRARY_OLD_MIND if error.startswith(OLD_OPS)
+                                 else error[:300] or "The mind refused it.")
+            return out
+        out["hits"] = libraryview.clean_hits(reply.get("hits"), kind)
+        return out
+
+    async def _api_library(self, req: Request):
+        qs, kinds, deeper = (req.query.get(k, []) for k in ("q", "kind", "deeper"))
+        query = libraryview.clean_query(qs[0]) if len(qs) == 1 else None
+        bad = None
+        if len(qs) > 1 or (qs and query is None):
+            bad = "q: one question of 1 to %d characters" % libraryview.QUERY_MAX
+        elif len(kinds) > 1 or (kinds and kinds[0] not in libraryview.KINDS):
+            bad = "kind: one of " + ", ".join(libraryview.KINDS)
+        elif len(deeper) > 1 or (deeper and deeper[0] != "1"):
+            bad = "deeper: 1"
+        elif (kinds or deeper) and query is None:
+            bad = "q: the question to ask"
+        if bad:
+            return json_response(400, {"ok": False, "error": bad})
+        kind = kinds[0] if kinds else None
+        if deeper:
+            return json_response(200, await self._library_deeper(query, kind))
+        try:
+            view = await asyncio.to_thread(libraryview.library_view,
+                                           self.s.data_dir / "library.db", query, kind,
+                                           clock=self._clock)
+        except Exception as e:
+            log.warning("console_library_unread: error=%s", type(e).__name__)
+            return json_response(503, {"ok": False, "error": f"library.db could not be read "
+                                                             f"({type(e).__name__})"})
+        return json_response(200, view)
+
+    async def _api_training(self, req: Request):
+        return await self._db_view("training", trainview.training_view, now=self._clock())
+
+    async def _api_dojo(self, req: Request):
+        view = await asyncio.to_thread(dojoview.dojo_view, self.s.dojo_layout, conns=self._conns)
         return json_response(200, view)
 
     # -- the personas tab (read-only) ----------------------------------------------------------
@@ -974,6 +1148,50 @@ class ConsoleApp:
         # Nothing is broadcast: the line comes back through the feed when the game reports it
         return json_response(200, {"ok": True,
                                    "message": str(reply.get("message") or "sent")[:300]})
+
+    # -- his Board replies ----------------------------------------------------------------------
+
+    def _board_problem(self) -> tuple[int, str] | None:
+        """Why his reply cannot be saved now; None: on to the mind. As for his lines, a start or
+        stop of the voice service holds nothing; the game's state is the mind's, not needed."""
+        if not self.controls.enabled:
+            return 403, SAY_OFF
+        if self.controls.busy is not None and self.controls.busy[0] == "mind":
+            return 409, f"A {self.controls.busy[1]} of the mind is under way, so nothing can be saved."
+        if self.view.state != "running":
+            return 409, ("The mind's state is unclear, so nothing can be saved."
+                         if self.view.state == "unknown"
+                         else f"The mind is {self.view.state}, so nothing can be saved.")
+        if self.link is None:
+            return 409, "Nothing was saved: the console has no link to the mind's control endpoint."
+        return None
+
+    async def _api_board_reply(self, req: Request):
+        try:
+            args = endpoint.board_args(req.json())  # checked and cleaned exactly as the mind will
+        except endpoint.BadRequest as e:
+            return json_response(400, {"ok": False, "error": str(e)})
+        problem = self._board_problem()
+        if problem is not None:
+            return json_response(problem[0], {"ok": False, "error": problem[1]})
+        try:
+            reply = await asyncio.to_thread(self.link.call, self._mind_pids(), "board", args,
+                                            timeout=BOARD_S)
+        except LinkError as e:
+            words = str(e)
+            if e.unanswered:  # it may have reached the mind and been saved
+                return json_response(409, {"ok": False, "error": words[:1].upper() + words[1:]
+                                           + ". Look at the Board before sending it again."})
+            return json_response(409, {"ok": False, "error": f"Nothing was saved: {words}."})
+        if reply.get("ok") is not True:
+            error = str(reply.get("error") or "")
+            if error.startswith(OLD_OPS):
+                error = BOARD_OLD_MIND
+            return json_response(409, {"ok": False, "error": error[:300] or "The mind refused it."})
+        reply_id = reply.get("id") if type(reply.get("id")) is int else None
+        self.broadcast("board", {"action": args["action"], "id": reply_id})
+        return json_response(200, {"ok": True, "message": str(reply.get("message") or "Saved.")[:300],
+                                   "id": reply_id})
 
     async def _api_feed(self, req: Request):
         after = digits(req.query.get("after", ["0"])[0], 18)  # an SQLite integer

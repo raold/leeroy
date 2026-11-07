@@ -26,7 +26,9 @@ What arrives:
   - holiday gifts when Love is in the Air or Hallow's End starts, once a year each;
   - birthday gifts when [realm] his_birthday is set: up to 3, decided the day before and due on
     the day (a dated row's ts is the moment it may go);
-  - whatever another part posts (PostOffice.post): minutes, crafted goods, prizes.
+  - whatever another part posts (PostOffice.post): minutes, crafted goods, prizes;
+  - a member's answer to his Board reply to her letter, which the night writes ready
+    (realm.night, kind "reply").
 
 The sender's memory of a mail and her memory of his taking it are private with him (keys
 realm-mail:<id> and realm-mail-taken:<id>). No text, name or subject is ever logged.
@@ -151,6 +153,14 @@ def texts_wanted(conn, *, limit: int = LIMITS.mail_texts_per_day) -> list[MailNe
     return out
 
 
+def insert_mail(conn, ts, sender, kind, *, items=(), subject="", body="", state="awaiting_text") -> int:
+    """One realm_mail row, its id: the post office's own, and the night's answer to his letter.
+    Inside the caller's transaction; it never commits."""
+    return conn.execute(
+        "INSERT INTO realm_mail(ts,sender,kind,subject,body,items,state) VALUES (?,?,?,?,?,?,?)",
+        (float(ts), sender, kind, subject, body, json.dumps(list(items), sort_keys=True), state)).lastrowid
+
+
 def write_text(store, mail_id: int, *, subject: str, body: str, human=None) -> bool:
     """The night's text for one mail waiting for it, which becomes ready; joins the caller's Store
     unit when inside one. False (nothing written) when the text is out of native's bounds or names
@@ -203,9 +213,7 @@ class PostOffice:
         self._store.set_meta(_META + key, json.dumps(value, sort_keys=True))
 
     def _insert(self, ts, sender, kind, items=(), subject="", body="", state="awaiting_text") -> int:
-        return self._conn.execute(
-            "INSERT INTO realm_mail(ts,sender,kind,subject,body,items,state) VALUES (?,?,?,?,?,?,?)",
-            (float(ts), sender, kind, subject, body, json.dumps(list(items), sort_keys=True), state)).lastrowid
+        return insert_mail(self._conn, ts, sender, kind, items=items, subject=subject, body=body, state=state)
 
     # -- the part ---------------------------------------------------------------------------
 

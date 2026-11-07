@@ -172,6 +172,16 @@
           <th class="num">raids</th><th class="num">benched</th></tr></thead>
           <tbody id="g-ladder"></tbody></table></div>
       </article>
+      <article class="panel span">
+        <header><h3>DKP stats</h3></header>
+        <p id="g-due" class="lead"></p>
+        <div class="scroll"><table><thead><tr><th>name</th><th class="num">attendance</th><th class="num">earned</th>
+          <th class="num">spent</th><th class="num">items</th><th class="num">raids since item</th><th></th></tr></thead>
+          <tbody id="g-dkp"></tbody></table></div>
+        <div class="scroll"><table><thead><tr><th>when</th><th>raid</th><th class="num">kills</th><th class="num">awarded</th>
+          <th class="num">spent</th><th class="num">items</th><th class="num">paid</th></tr></thead>
+          <tbody id="g-raids"></tbody></table></div>
+      </article>
       <article class="panel">
         <header><h3>Loot history</h3></header>
         <div class="scroll"><table><thead><tr><th>when</th><th>item</th><th>to</th><th class="num">paid</th><th>raid</th></tr></thead>
@@ -187,9 +197,17 @@
       </article>
     </div>
   </section>
-  <section id="tab-social" class="tab placeholder" role="tabpanel" aria-labelledby="t-social" hidden>
-    <h2>Social</h2>
-    <p>The guild's drama at a glance: feuds, jealousy, romances, how each member feels about you, rumours going round and tonight's guild mood. Coming soon.</p>
+  <section id="tab-social" class="tab mindtab" role="tabpanel" aria-labelledby="t-social" hidden>
+    <div id="social-banner" class="banner bad" hidden></div>
+    <div class="view-head"><div><h2>Social</h2><p>The guild's drama: feuds, jealousy, romances, how members feel about you and the rumours going round.</p></div></div>
+    <div id="social-kpis" class="kpis" aria-label="The guild's mood"></div>
+    <div class="cards wide">
+      <article class="panel"><header><h3>Toward you</h3></header><div id="social-you"></div></article>
+      <article class="panel"><header><h3>Feuds</h3></header><div id="social-feuds"></div></article>
+      <article class="panel"><header><h3>Jealousy</h3></header><div id="social-jealousy"></div></article>
+      <article class="panel"><header><h3>Romances</h3></header><div id="social-romances"></div></article>
+      <article class="panel span"><header><h3>Rumours going round</h3></header><div id="social-rumours"></div></article>
+    </div>
   </section>
   <section id="tab-personas" class="tab mindtab" role="tabpanel" aria-labelledby="t-personas" hidden>
     <div id="personas-banner" class="banner bad" hidden></div>
@@ -208,10 +226,13 @@
         <div id="sf-recent"></div>
       </article>
       <article class="panel span">
-        <header><h3>The cast</h3><span id="p-count" class="muted"></span></header>
+        <header><h3>The cast</h3><span id="p-count" class="muted"></span>
+          <span id="p-view" class="acts"><button type="button" class="btn" data-view="wall" aria-pressed="true">Wall</button>
+            <button type="button" class="btn" data-view="table" aria-pressed="false">Table</button></span></header>
         <p id="p-mood" class="lead">-</p>
         <p id="p-missing" class="why" hidden></p>
-        <div class="scroll"><table class="pick"><thead><tr><th>name</th><th>class and role</th><th class="num">rank</th>
+        <div id="p-wall"></div>
+        <div id="p-table" class="scroll"><table class="pick"><thead><tr><th>name</th><th>class and role</th><th class="num">rank</th>
           <th>mood</th><th>stance</th><th>toward you</th><th>closest ties</th><th class="num" id="p-memhead">memories</th>
           <th>persona</th><th>drift</th></tr></thead>
           <tbody id="p-roster"></tbody></table></div>
@@ -311,33 +332,91 @@
       </article>
     </div>
   </section>
-  <section id="tab-board" class="tab placeholder" role="tabpanel" aria-labelledby="t-board" hidden>
-    <h2>Board</h2>
-    <p>The guild's message board: realm forum posts, the Realm's write-ups and the letters members send you, with your replies. Coming soon.</p>
+  <section id="tab-board" class="tab mindtab" role="tabpanel" aria-labelledby="t-board" hidden>
+    <div id="board-banner" class="banner bad" hidden></div>
+    <div class="view-head"><div><h2>Board</h2><p>The guild's message board: realm forum posts, the Realm's write-ups and the letters members send you.</p></div></div>
+    <div id="board-kpis" class="kpis" aria-label="The board at a glance"></div>
+    <p id="board-note" class="note" hidden></p>
+    <div id="board-empty" hidden></div>
+    <div id="board-panels">
+      <article class="panel"><header><h3>Realm forum</h3></header><div id="board-forum"></div></article>
+      <article class="panel"><header><h3>Letters to you</h3></header><div id="board-letters"></div></article>
+      <article class="panel"><header><h3>Write-ups</h3></header><div id="board-writeups"></div></article>
+    </div>
   </section>
-  <section id="tab-calendar" class="tab placeholder" role="tabpanel" aria-labelledby="t-calendar" hidden>
-    <h2>Calendar</h2>
-    <p>Upcoming raid nights with sign-ups, Thursday's officer meeting, birthdays a week ahead and the raid nights you missed. Coming soon.</p>
+  <section id="tab-calendar" class="tab mindtab" role="tabpanel" aria-labelledby="t-calendar" hidden>
+    <div id="calendar-banner" class="banner bad" hidden></div>
+    <div class="view-head"><div><h2>Calendar</h2><p>What the Realm's calendar desk has posted: raid nights with their sign-ups, the officer meeting, birthdays and the raid nights you missed.</p></div></div>
+    <div id="calendar-kpis" class="kpis" aria-label="The calendar at a glance"></div>
+    <article class="panel"><header><h3>Coming up</h3></header><div id="calendar-upcoming"></div></article>
+    <article id="calendar-missed" class="panel"><header><h3>Raid nights you missed</h3></header><div id="calendar-missed-list"></div></article>
   </section>
-  <section id="tab-bank" class="tab placeholder" role="tabpanel" aria-labelledby="t-bank" hidden>
-    <h2>Bank</h2>
-    <p>The guild bank as in game: all six tabs, the gold, the money log and what officers stocked or withdrew. Coming soon.</p>
+  <section id="tab-bank" class="tab mindtab" role="tabpanel" aria-labelledby="t-bank" hidden>
+    <div id="bank-banner" class="banner bad" hidden></div>
+    <div class="view-head"><div><h2>Bank</h2><p>The guild bank as in game: all six tabs, the gold, the money log and what officers stocked or withdrew.</p></div></div>
+    <p id="bank-why" class="why bad" hidden></p>
+    <div id="bank-kpis" class="kpis" aria-label="The guild bank"></div>
+    <div class="cards wide">
+      <article id="bank-main" class="panel span" hidden>
+        <header><h3>Tabs</h3></header>
+        <div id="bank-tabs" class="acts"></div>
+        <div id="bank-grid" class="bankgrid"></div>
+      </article>
+      <article class="panel"><header><h3>Money log</h3></header><div id="bank-log"></div></article>
+      <article class="panel"><header><h3>What officers stocked or withdrew</h3></header><div id="bank-ledger"></div></article>
+    </div>
   </section>
-  <section id="tab-realm" class="tab placeholder" role="tabpanel" aria-labelledby="t-realm" hidden>
-    <h2>Realm</h2>
-    <p>The three rival guilds: their members and progress, the race for first kills, poaching, their Trade-chat lines and canon achievements. Coming soon.</p>
+  <section id="tab-realm" class="tab mindtab" role="tabpanel" aria-labelledby="t-realm" hidden>
+    <div id="realm-banner" class="banner bad" hidden></div>
+    <div class="view-head"><div><h2>Realm</h2><p>The three rival guilds: their members and progress, the race for first kills, poaching, their Trade-chat lines and canon achievements.</p></div></div>
+    <div id="realm-kpis" class="kpis" aria-label="The realm at a glance"></div>
+    <div id="realm-rivals" class="cards wide"></div>
+    <article class="panel"><header><h3>The race for first kills</h3></header><div id="realm-race"></div></article>
+    <article class="panel"><header><h3>Poaching this week</h3></header><div id="realm-poach"></div></article>
+    <article class="panel"><header><h3>Trade chat</h3></header><div id="realm-lines"></div></article>
+    <article class="panel"><header><h3>Canon achievements</h3></header><div id="realm-canon"></div></article>
   </section>
-  <section id="tab-training" class="tab placeholder" role="tabpanel" aria-labelledby="t-training" hidden>
-    <h2>Training</h2>
-    <p>The training ground: fights recorded, days until tactics may adapt, the overhead gate, trials and the tactic cards per boss. Coming soon.</p>
+  <section id="tab-training" class="tab mindtab" role="tabpanel" aria-labelledby="t-training" hidden>
+    <div id="training-banner" class="banner bad" hidden></div>
+    <div class="view-head"><div><h2>Training</h2><p>The training ground: fights recorded, days until tactics may adapt, the overhead gate, trials and the tactic cards per boss.</p></div></div>
+    <div id="training-kpis" class="kpis" aria-label="The training ground"></div>
+    <div class="cards wide">
+      <article class="panel span"><header><h3>This week</h3></header><div id="training-week"></div></article>
+      <article class="panel"><header><h3>Trials</h3></header><div id="training-trials"></div></article>
+      <article class="panel"><header><h3>What would count as done</h3></header><div id="training-done"></div></article>
+      <article class="panel span"><header><h3>Tactic cards</h3></header><div id="training-cards"></div></article>
+      <article class="panel span"><header><h3>What the numbers do not prove</h3></header><div id="training-evidence"></div></article>
+    </div>
   </section>
-  <section id="tab-dojo" class="tab placeholder" role="tabpanel" aria-labelledby="t-dojo" hidden>
-    <h2>Dojo</h2>
-    <p>The dojo's training realm: whether it is running, its build, the acceptance gates and their evidence, recorded episodes and replays. Coming soon.</p>
+  <section id="tab-dojo" class="tab mindtab" role="tabpanel" aria-labelledby="t-dojo" hidden>
+    <div id="dojo-banner" class="banner bad" hidden></div>
+    <div class="view-head"><div><h2 id="dojo-title">Dojo</h2><p>The dojo's training realm: whether it is running, its build, the acceptance gates and their evidence, recorded episodes and replays.</p></div></div>
+    <div id="dojo-kpis" class="kpis" aria-label="The dojo"></div>
+    <div class="cards">
+      <article class="panel"><header><h3>The training realm</h3></header><div id="dojo-realm"></div></article>
+      <article class="panel"><header><h3>Build</h3></header><div id="dojo-build"></div></article>
+      <article class="panel span"><header><h3>Baselines</h3></header><div id="dojo-baselines"></div></article>
+      <article class="panel span"><header><h3>Acceptance gates</h3></header><div id="dojo-gates"></div></article>
+      <article class="panel span"><header><h3>Runs</h3></header><div id="dojo-runs"></div></article>
+      <article class="panel"><header><h3>Scenario</h3></header><div id="dojo-scenario"></div></article>
+      <article class="panel"><header><h3>G1.md</h3></header><div id="dojo-g1md"></div></article>
+      <article class="panel span"><header><h3>Not built yet</h3></header><div id="dojo-later"></div></article>
+    </div>
   </section>
-  <section id="tab-library" class="tab placeholder" role="tabpanel" aria-labelledby="t-library" hidden>
-    <h2>Library</h2>
-    <p>Search the scholar's library: GM commands, teleports, configuration templates, items, quests and spells. Coming soon.</p>
+  <section id="tab-library" class="tab mindtab" role="tabpanel" aria-labelledby="t-library" hidden>
+    <div id="library-banner" class="banner bad" hidden></div>
+    <div class="view-head"><div><h2>Library</h2><p>Search the scholar's library: GM commands, teleports, configuration templates, items, quests and spells.</p></div></div>
+    <form id="library-form" class="libform">
+      <label for="library-q">Search the library</label>
+      <input id="library-q" type="text" maxlength="200" autocomplete="off" spellcheck="false">
+      <label for="library-kind">Kind</label>
+      <select id="library-kind"></select>
+      <button id="library-go" class="btn primary" type="submit">Search</button>
+    </form>
+    <p id="library-stats" class="hint"></p>
+    <p id="library-status" class="note" role="status"></p>
+    <div id="library-hits"></div>
+    <div><button id="library-deeper" class="btn" type="button" hidden>Search deeper</button></div>
   </section>
   <section id="tab-mind" class="tab mindtab" role="tabpanel" aria-labelledby="t-mind" hidden>
     <div class="cards">
@@ -368,6 +447,14 @@
         <dl class="kv"><dt>game bridge</dt><dd id="h-bridge">-</dd><dt>voice link</dt><dd id="h-vlink">-</dd>
           <dt>you</dt><dd id="h-game">-</dd><dt>the night</dt><dd id="h-night">-</dd></dl>
         <p id="h-config" class="why bad" hidden></p>
+      </article>
+      <article class="panel" id="gs-panel">
+        <header><h3>Game server</h3></header>
+        <dl class="kv"><dt>worldserver</dt><dd><i id="gs-world-dot" class="dot"></i> <span id="gs-world">-</span></dd>
+          <dt>authserver</dt><dd><i id="gs-auth-dot" class="dot"></i> <span id="gs-auth">-</span></dd>
+          <dt>mod-leeroy bridge</dt><dd><i id="gs-bridge-dot" class="dot"></i> <span id="gs-bridge">-</span></dd>
+          <dt>server</dt><dd id="gs-server">-</dd><dt>players online</dt><dd id="gs-players">-</dd></dl>
+        <p id="gs-why" class="why"></p>
       </article>
       <article class="panel">
         <header><h3>GPU</h3></header>

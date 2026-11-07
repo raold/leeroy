@@ -258,3 +258,50 @@ def test_a_v17_db_gains_the_empty_selfie_tables(tmp_path, monkeypatch):
         assert conn.execute("SELECT count(*) FROM tuning_change").fetchone()[0] == 1
     finally:
         conn.close()
+
+
+def test_the_board_reply_migration_adds_board_reply(tmp_path, monkeypatch):
+    """P3: the Board replies migration (migrations/*_board_reply.sql, found by its name so a
+    renumbering at merge changes nothing here) adds his replies' table and its one-waiting index
+    to a database the release before it left, and keeps that database's rows."""
+    number = next(v for v, p in db_mod._migration_files() if p.stem.endswith("_board_reply"))
+    path = tmp_path / "mind.db"
+    conn = _db_at(path, number - 1, tmp_path, monkeypatch)
+    try:
+        assert not conn.execute("SELECT name FROM sqlite_master WHERE name LIKE 'board_%'").fetchall()
+        conn.execute("INSERT INTO realm_post(id,ts,author,author_kind,thread,text) "
+                     "VALUES (7,1000,1101,'member','alpha','an invented post')")
+        conn.commit()
+    finally:
+        conn.close()
+    conn = open_db(path)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == latest_version() >= number
+        names = {r[0]: r[1] for r in conn.execute(
+            "SELECT name, type FROM sqlite_master WHERE name LIKE 'board_%'")}
+        assert names == {"board_reply": "table", "board_reply_one_waiting": "index"}
+        assert conn.execute("SELECT count(*) FROM board_reply").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM realm_post").fetchone()[0] == 1
+
+        def add(**kw):
+            row = {"ts": 1, "kind": "post", "parent": 7, "to_guid": 1101, "text": "hi",
+                   "state": "waiting", **kw}
+            conn.execute(f"INSERT INTO board_reply({','.join(row)}) "
+                         f"VALUES ({','.join('?' * len(row))})", tuple(row.values()))
+        add()
+        for bad in ({"kind": "say"}, {"parent": 0}, {"parent": "7"}, {"to_guid": 0},
+                    {"to_guid": 1 << 32}, {"text": ""}, {"text": "a" * 201},
+                    {"kind": "letter", "text": "a" * 401}, {"state": "lost"},
+                    {"state": "posted"},  # settled without a time
+                    {"state": "waiting", "settled": 5, "parent": 8},
+                    {"state": "refused", "settled": 5, "parent": 8},  # refused without a reason
+                    {"state": "refused", "settled": 5, "reason": "Bad Reason", "parent": 8},
+                    {"kind": "letter", "fact": 1}, {"kind": "letter", "answer_post": 1},
+                    {"kind": "post", "answer_mail": 1, "parent": 8},
+                    {"parent": 7}):  # a second waiting reply to post 7
+            with pytest.raises(sqlite3.IntegrityError):
+                add(**bad)
+        add(kind="letter", parent=7, text="a" * 400, state="answered", settled=5, answer_mail=3)
+        add(state="refused", settled=5, reason="screen_name_2", night="2026-11-07")
+    finally:
+        conn.close()

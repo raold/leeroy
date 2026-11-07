@@ -202,3 +202,20 @@ def test_a_running_minds_kept_config_warning_is_not_a_failure():
     assert mindlog.scan([rec("mind_started"), rec("shutdown_complete"),
                          rec("config_invalid", "WARNING")]).run_failed  # between runs
     assert mindlog.scan([rec("mind_started"), rec("loop_stopped", "WARNING")]).run_failed
+
+
+# -- the game server -----------------------------------------------------------------------------
+
+def _listen(port, pid=7):
+    return netinfo.Conn("0.0.0.0", port, "0.0.0.0", 0, netinfo.LISTEN, pid)
+
+
+def test_server_view_from_the_tcp_table():
+    assert (status.WORLD_PORT, status.AUTH_PORT) == (8085, 3724)
+    conns = [_listen(8085), _listen(7878), _listen(9999)]
+    assert status.server_view(conns, bridge_port=7878) == {
+        "world": True, "auth": False, "bridge": True}
+    assert status.server_view([], bridge_port=7878) == {
+        "world": False, "auth": False, "bridge": False}
+    assert status.server_view(None, bridge_port=7878) == {
+        "world": None, "auth": None, "bridge": None}

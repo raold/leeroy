@@ -73,3 +73,13 @@ def test_a_bad_mind_toml_leaves_defaults_and_says_so(data, tmp_path):
 def test_bad_ports_are_refused(data):
     app, problem = cli.build(args("--data-dir", str(data), "--port", "70000"), platform="linux")
     assert app is None and "1-65535" in problem
+
+
+def test_the_dojo_layout_defaults_under_the_root(data, tmp_path):
+    root = tmp_path / "checkout"
+    assert args().dojo_layout is None
+    app, _ = cli.build(args("--no-control", "--data-dir", str(data), "--root", str(root)), platform="linux")
+    assert app.s.dojo_layout == root / "dojo-runtime" / "instances" / "dojo-01" / "layout.json"
+    app, _ = cli.build(args("--no-control", "--data-dir", str(data), "--root", str(root),
+                            "--dojo-layout", str(tmp_path / "l.json")), platform="linux")
+    assert app.s.dojo_layout == tmp_path / "l.json"

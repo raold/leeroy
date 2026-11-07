@@ -29,6 +29,9 @@ RECENT = 12
 LOOT_HISTORY = 100
 CHRONICLE = 20
 DKP_EVENTS = 60
+DUE_RAIDS = 4
+DUE_MAX = 10
+DKP_RAIDS = 20
 _PLAY_KEYS = ("guild_role", "officer_title", "raid_role")
 
 
@@ -195,6 +198,62 @@ def raid_view(conn, *, now: float, tz=None) -> dict:
                                 if p["guild_role"] == "officer"), key=lambda o: o["name"].lower())}
 
 
+def dkp_stats(conn) -> dict:
+    """Attendance and DKP per member over the finished raids, who is due an item (DUE_RAIDS
+    finished raids attended since their last item, or ever, and DKP left) and what each of the
+    last DKP_RAIDS raids handed out."""
+    raids = _rows(conn, "SELECT raid_id, started, raid_key, size, heroic, offline, kills "
+                        "FROM guild_raid WHERE ended IS NOT NULL ORDER BY started, raid_id")
+    started = {r["raid_id"]: r["started"] for r in raids}
+    attended: dict[int, dict[int, str]] = {}
+    for r in _rows(conn, "SELECT a.raid_id, a.guid, a.status FROM guild_attendance a "
+                         "JOIN guild_raid g ON g.raid_id = a.raid_id WHERE g.ended IS NOT NULL"):
+        attended.setdefault(r["guid"], {})[r["raid_id"]] = r["status"]
+    ledger = {r["guid"]: r for r in _rows(
+        conn, "SELECT guid, sum(delta) AS balance, "
+              "sum(CASE WHEN reason IN ('kill', 'attendance', 'standby') THEN delta END) AS earned, "
+              "-sum(CASE WHEN reason = 'item' THEN delta END) AS spent, "
+              "sum(reason = 'item') AS items FROM dkp_ledger GROUP BY guid")}
+    last_item = {}
+    for r in _rows(conn, "SELECT l.guid, l.ts, g.started FROM dkp_ledger l "
+                         "LEFT JOIN guild_raid g ON g.raid_id = l.raid_id "
+                         "WHERE l.reason = 'item' ORDER BY l.ts, l.id"):
+        last_item[r["guid"]] = r["started"] if r["started"] is not None else r["ts"]
+    members = []
+    for guid, seen in sorted(attended.items()):
+        first = min(started[i] for i in seen)
+        possible = sum(1 for t in started.values() if t >= first)
+        raided = sum(1 for v in seen.values() if v == "raided")
+        benched = len(seen) - raided
+        since = sum(1 for i in seen if i in started and started[i] > last_item.get(guid, float("-inf")))
+        row = ledger.get(guid)
+        balance = round((row["balance"] if row else 0) or 0, 1)
+        members.append({"guid": guid, "raids": raided, "benched": benched, "possible": possible,
+                        "attendance": round(100 * (raided + benched) / possible) if possible else None,
+                        "earned": round((row["earned"] if row else 0) or 0, 1),
+                        "spent": round((row["spent"] if row else 0) or 0, 1),
+                        "items": (row["items"] if row else 0) or 0, "since_item": since,
+                        "due": since >= DUE_RAIDS and balance > 0, "balance": balance})
+    due = sorted((m for m in members if m["due"]), key=lambda m: (-m["balance"], m["guid"]))[:DUE_MAX]
+    for m in members:
+        del m["balance"]
+    handed = {r["raid_id"]: r for r in _rows(
+        conn, "SELECT raid_id, "
+              "sum(CASE WHEN reason IN ('kill', 'attendance', 'standby') AND delta > 0 THEN delta END) AS awarded, "
+              "-sum(CASE WHEN reason = 'item' THEN delta END) AS spent, sum(reason = 'item') AS items, "
+              "count(DISTINCT CASE WHEN delta > 0 THEN guid END) AS paid "
+              "FROM dkp_ledger WHERE raid_id IS NOT NULL GROUP BY raid_id")}
+    out = []
+    for r in reversed(raids[-DKP_RAIDS:]):
+        h = handed.get(r["raid_id"])
+        out.append({"raid_id": r["raid_id"], "started": r["started"], "raid": r["raid_key"],
+                    "size": r["size"], "heroic": bool(r["heroic"]), "offline": bool(r["offline"]),
+                    "kills": r["kills"], "awarded": round((h["awarded"] if h else 0) or 0, 1),
+                    "spent": round((h["spent"] if h else 0) or 0, 1),
+                    "items": (h["items"] if h else 0) or 0, "paid": (h["paid"] if h else 0) or 0})
+    return {"members": members, "raids": out, "due": [m["guid"] for m in due]}
+
+
 def guild_view(conn) -> dict:
     """The Guild tab: the roster, the DKP ladder and its totals, loot history, season awards
     and the chronicle."""
@@ -256,4 +315,4 @@ def guild_view(conn) -> dict:
     return {"human": human_guid(conn), "people": {str(g): p for g, p in cast.items()},
             "roster": sorted(cast.values(), key=lambda p: (p["rank"], p["name"].lower())),
             "ladder": ranked, "stats": stats, "loot": loot, "awards": awards,
-            "chronicle": chronicle}
+            "chronicle": chronicle, "dkp_stats": dkp_stats(conn)}
