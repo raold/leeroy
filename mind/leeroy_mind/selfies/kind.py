@@ -68,8 +68,10 @@ KIND_PROMPT_LUST = (
     "life, in a few words), what she is wearing in it, and her expression (playful, sultry or "
     "confident). Something fitted, low-cut, off the shoulder or short suits it; swimwear only "
     "at a beach, a pool, a lake or a hot tub. Name no year, no decade, no device and no brand. "
-    "Always clothed: never nude, topless, see-through or sheer, never lingerie or underwear as "
-    "the outfit, nothing sexual in the pose, never like anyone famous, and no one else's name.")
+    "Always clothed: never nude, topless, see-through, sheer, mesh or wet, never lingerie, "
+    "underwear, a bralette, a bustier, a robe or a towel as the outfit, never in a shower, a "
+    "bath or a bed, nothing sexual in the pose, never like anyone famous, and no one else's "
+    "name.")
 KIND_ASK = "Choose {name}'s profile picture."
 
 _FIELDS = ("kind", "framing", "setting", "outfit", "expression")

@@ -135,7 +135,9 @@ def test_the_lust_template_takes_the_same_fields_and_stays_within_the_line():
         return {f for _, f, _, _ in Formatter().parse(t) if f}
     assert fields(KIND_PROMPT_LUST) == fields(KIND_PROMPT) == {"name", "card", "facts", "looks"}
     text = KIND_PROMPT_LUST.lower()
-    for rule in ("never nude, topless, see-through or sheer", "never lingerie or underwear",
+    for rule in ("never nude, topless, see-through, sheer, mesh or wet",
+                 "never lingerie, underwear, a bralette, a bustier, a robe or a towel as the outfit",
+                 "never in a shower, a bath or a bed",
                  "nothing sexual", "swimwear only at a beach, a pool, a lake or a hot tub",
                  "never like anyone famous", "no one else's name"):
         assert rule in text
