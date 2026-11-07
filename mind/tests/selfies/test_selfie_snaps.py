@@ -87,6 +87,9 @@ def test_mark_rendered_and_expire_need_the_right_state(store):
     mark_rendered(store, s, width=1, height=2, seed=3, tries=1, nsfw=0.1, prompt="p", now=2.0)
     with pytest.raises(SnapError):
         mark_rendered(store, s, width=1, height=2, seed=3, tries=1, nsfw=0.1, prompt="p", now=2.0)
+    t = planned_snap(store, 102)
+    with pytest.raises(SnapError):
+        mark_rendered(store, t, width=1, height=2, seed=3, tries=1, nsfw=None, prompt="p", now=2.0)
     expire(store, s, "flagged", now=3.0)
     with pytest.raises(SnapError):
         expire(store, s, "passed", now=3.0)

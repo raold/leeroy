@@ -109,6 +109,8 @@ def mark_rendered(store, snap_id: int, *, width, height, seed, tries, nsfw, prom
                   members=None) -> None:
     """A planned photo rendered: its size, seed, tries, NSFW score and prompt; a guild photo may
     pass the tiles it ended up with."""
+    if nsfw is None:
+        raise SnapError("a rendered photo needs its NSFW score")
     with store.transaction():
         moved = store.conn.execute(
             "UPDATE selfie_snap SET status='ready', rendered=?, width=?, height=?, seed=?, "

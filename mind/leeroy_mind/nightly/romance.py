@@ -106,10 +106,19 @@ def strong_evidence(store, guid: int, human: int, target: str, since: float, unt
     return False
 
 
+_PICTURES = False
+
+
+def set_pictures_available(on: bool) -> None:
+    """The photo sender sets this when it is attached (`[selfies] enabled` and `snaps`); until
+    then the ladder skips "picture"."""
+    global _PICTURES
+    _PICTURES = bool(on)
+
+
 def picture_available(store) -> bool:
-    """Whether she has pictures to send: P4's selfie_snap table exists."""
-    return store.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
-                              "AND name='selfie_snap'").fetchone() is not None
+    """Whether she has pictures to send: the photo sender is attached (set_pictures_available)."""
+    return _PICTURES
 
 
 def _carried(store, guid: int, human: int, stage: str, changed: float | None) -> float:
