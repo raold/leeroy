@@ -84,11 +84,14 @@ GYM_REPLY = {"kind": "mirror_selfie", "framing": "upper_body", "setting": "the g
              "expression": "a confident smirk"}
 GYM_AWAY = {**GYM_REPLY, "setting": "a wine bar"}
 HAND = ProfilePhoto("headshot", "face", "an office", "a blazer", "a calm smile")
+YOUNG_LOOKS = ({"face": ("a youthful face",)}, {"hair_style": "two pigtails"},
+               {"face": ("braces on her teeth", "freckles")}, {"hair_style": "pig tails"},
+               {"face": ("a babyface",)}, {"skin_tone": "teenage-clear"})
 NIGHTS = ("2026-10-29", "2026-10-30", "2026-10-31", "2026-11-01")
 
 
-def lust(h, guid=102, **over):
-    return h.woman(guid, "lust", appearance=APPEARANCE, **over)
+def lust(h, guid=102, appearance=APPEARANCE, **over):
+    return h.woman(guid, "lust", appearance=appearance, **over)
 
 
 def calls(ctx) -> list[tuple[str, str, dict]]:
@@ -166,6 +169,9 @@ def test_the_suggestive_style_is_a_lust_woman_of_21_or_more(h):
     assert not suggestive(h.woman(104, "fond")) and not suggestive(h.woman(105, "none"))
     assert not suggestive(h.persona(101, appearance=APPEARANCE))
     assert not suggestive(None) and style_of(None) == PLAIN
+    for looks in YOUNG_LOOKS:                            # looks that code young: never lust
+        p = lust(h, 103, appearance=replace(APPEARANCE, **looks))
+        assert not suggestive(p) and style_of(p) == PLAIN, looks
 
 
 # -- the template and the schema -----------------------------------------------------------
@@ -391,7 +397,10 @@ AGE_WORDS = ["school", "her old school", "a schoolgirl look", "a school uniform"
              "lolita", "a little girl", "a cheerleader uniform", "teenaged", "a preteen",
              "pre-teen", "a tween", "youthful", "a young girl", "loli", "underage", "under-age",
              "an adolescent", "adolescence", "jailbait", "baby-faced", "baby faced",
-             "a cheerleader", "pigtails", "a pigtail", "braces"]
+             "a cheerleader", "pigtails", "a pigtail", "braces", "underaged", "pig tails",
+             "jail bait", "baby face", "babyface", "brace-face", "braceface", "a schoolboy",
+             "a schoolkid", "a high-schooler", "a highschooler", "childish", "kiddie",
+             "kiddies", "teeny", "a teenybopper"]
 
 
 @pytest.mark.parametrize("text", AGE_WORDS)
@@ -675,14 +684,16 @@ def test_the_render_follows_the_kinds_style_and_her_stance_at_render_time(h, tmp
 
     for g in (102, 103, 105):
         lust(h, g)
-    young = replace(APPEARANCE, face=("a youthful face", "freckles"))
-    _save(h, 105, replace(load_persona(h.store, 105), appearance=young), "generated")
     lust(h, 104)
     by_hand(h, 104, ProfilePhoto(**PLAIN_KIND))          # a kind the lust rules did not compose
     night(h, 0, lusty=[LUST_REPLY] * 3)
     assert {g: style(h, g) for g in (102, 103, 104, 105)} == {102: LUST, 103: LUST, 104: None,
                                                               105: LUST}
+    from leeroy_mind.selfies.store import ensure_first_sets
+    ensure_first_sets(h.store, [102, 103, 104, 105], now=h.T)    # queued while all could render
     restance(h, 103, "drawn")                            # she left lust before the render
+    young = replace(APPEARANCE, face=("a youthful face", "freckles"))
+    _save(h, 105, replace(load_persona(h.store, 105), appearance=young), "generated")
     seen: dict[str, set] = {}
     cmd, env = fake_command(tmp_path)
 
@@ -693,10 +704,96 @@ def test_the_render_follows_the_kinds_style_and_her_stance_at_render_time(h, tmp
     with caplog.at_level(logging.INFO):
         run(make_stage(SELFIE_CFG, worker=lambda: Seen(cmd, env=env))(h.ctx(night=NIGHTS[1])))
     negatives = {g: {n for n, _ in v} for g, v in seen.items()}
-    assert negatives == {"102": {LUST_NEGATIVE}, "103": {NEGATIVE}, "104": {NEGATIVE},
-                         "105": {NEGATIVE}}
+    assert negatives == {"102": {LUST_NEGATIVE}, "104": {NEGATIVE}}   # 103 and 105 wait
     joined = ("wearing a fitted little black dress, the mirror in her hallway", 0)
     assert all(joined in ph for _, ph in seen["102"])
-    assert not any(joined in ph for g in ("103", "104", "105") for _, ph in seen[g])
-    assert "selfies_prompt_plain: guid=105 reason=age" in caplog.text
-    assert "youthful" not in caplog.text
+    assert not any(joined in ph for _, ph in seen["104"])
+    for g in (103, 105):
+        assert queued(h, g) == [(1, "first")]            # their sets wait for the re-choice
+        assert f"selfies_set_held: night=2026-10-30 guid={g} set=1 reason=restyle" in caplog.text
+    assert "youthful" not in caplog.text and "fitted little" not in caplog.text
+
+
+@pytest.mark.parametrize("looks", YOUNG_LOOKS)
+def test_a_lust_woman_whose_looks_code_young_gets_a_plain_kind(h, looks):
+    lust(h, 102, appearance=replace(APPEARANCE, **looks))
+    ctx = ctx_for(h, 0, plain=[PLAIN_KIND])
+    want = expected(ctx, 102, STAGE, TODAY_KIND_PROMPT)
+    seen = calls(ctx)
+    run(stage_photo(ctx))
+    assert [(s, sc) for s, _, sc in seen] == [(want, kind.KIND_SCHEMA)]
+    assert photo(h, 102) == ProfilePhoto(**PLAIN_KIND) and style(h, 102) == PLAIN
+
+
+def test_a_lust_kind_whose_looks_turn_young_is_held_then_chosen_again_plain(h):
+    from leeroy_mind.selfies.prompt import LUST_HELD, renderable
+    lust(h, 102)
+    night(h, 0, lusty=[LUST_REPLY])
+    assert style(h, 102) == LUST
+    young = replace(APPEARANCE, hair_style="two pigtails")
+    _save(h, 102, replace(load_persona(h.store, 102), appearance=young), "generated")
+    p = load_persona(h.store, 102)
+    assert renderable(p, chosen_style(h.store, p)) == LUST_HELD and needs_rechoice(h.store, p)
+    ctx = ctx_for(h, 1, plain=[PLAIN_KIND])
+    seen = calls(ctx)
+    run(stage_photo(ctx))
+    assert [sc for _, _, sc in seen] == [kind.KIND_SCHEMA]     # the plain rules, screened
+    p = load_persona(h.store, 102)
+    assert p.photo == ProfilePhoto(**PLAIN_KIND) and style(h, 102) == PLAIN
+    assert renderable(p, chosen_style(h.store, p)) is None and queued(h, 102) == []
+
+
+def test_a_lust_kind_waits_after_she_left_lust_until_her_rechoice_lands(h):
+    from leeroy_mind.selfies.prompt import LUST_HELD, renderable
+    lust(h, 102)
+    night(h, 0, lusty=[LUST_REPLY])
+    restance(h, 102, "fond")
+    p = load_persona(h.store, 102)
+    assert renderable(p, chosen_style(h.store, p)) == LUST_HELD
+    night(h, 1, plain=[{**PLAIN_KIND, "outfit": "lace lingerie"}])     # refused: still waits
+    p = load_persona(h.store, 102)
+    assert renderable(p, chosen_style(h.store, p)) == LUST_HELD
+    night(h, 2, plain=[PLAIN_KIND])
+    p = load_persona(h.store, 102)
+    assert renderable(p, chosen_style(h.store, p)) is None and p.photo == ProfilePhoto(**PLAIN_KIND)
+
+
+# -- names ------------------------------------------------------------------------------------
+
+def test_a_composed_part_that_holds_her_name_is_refused_and_asked_again(h):
+    summer = lust(h, 102, real_name="Summer")
+    park = {**LUST_REPLY, "setting": "a park in summer"}
+    assert screen_lust(summer, park) == ["photo.setting: shares her name"]
+    olive = lust(h, 103, real_name="Olive")
+    assert screen_lust(olive, {**LUST_REPLY, "colour": "olive"}) == \
+        ["photo.outfit: shares her name"]
+    assert screen_lust(olive, LUST_REPLY) == [] and screen_lust(summer, LUST_REPLY) == []
+    ctx = ctx_for(h, 0, lusty=[park, LUST_REPLY, {**LUST_REPLY, "colour": "olive"}, LUST_REPLY])
+    seen = calls(ctx)
+    ctx.settings = replace(ctx.settings, parallel=1)
+    run(stage_photo(ctx))
+    assert ctx.reasoner.calls == 4 and sum(u.endswith(LUST_ASK_AGAIN) for _, u, _ in seen) == 2
+    assert photo(h, 102) == LUST_PHOTO and photo(h, 103) == LUST_PHOTO
+
+
+def test_a_name_clash_twice_is_refused(h):
+    lust(h, 102, real_name="Summer")
+    park = {**LUST_REPLY, "setting": "a park in summer"}
+    ctx = night(h, 0, lusty=[park, park])
+    assert ctx.reasoner.calls == 2 and photo(h, 102) is None
+
+
+def test_no_composed_lust_kind_loses_its_joined_phrase_to_the_name_filter(h):
+    from leeroy_mind.selfies.prompt import build_prompt
+    for name in ("Summer", "Olive", "Coral", "Gold", "Teal", "Plum", "Pink"):
+        p = lust(h, 102, real_name=name)
+        for o in LUST_OUTFITS:
+            for c in LUST_COLOURS:
+                r = _reply(o, c, setting=("a park in summer" if o not in SWIM_OUTFITS
+                                          and o not in GYM_OUTFITS else None))
+                if screen_lust(p, r):
+                    continue                             # refused: never composed
+                made = replace(p, photo=compose_lust(r))
+                spec = build_prompt(made, kind_style=LUST)
+                assert sum(1 for t, pr in spec.phrases if pr == 0 and t.startswith("wearing ")) \
+                    == 1, (name, o, c)

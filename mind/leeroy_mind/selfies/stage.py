@@ -45,7 +45,8 @@ from leeroy_mind.wow import CAST_MIN_LEVEL
 from . import files
 from .config import SelfieCfg, worker_command, worker_env
 from .kind import chosen_style
-from .prompt import PromptSpec, build_prompt, renderable
+from .style import PLAIN
+from .prompt import LUST_HELD, PromptSpec, build_prompt, renderable
 from .store import Candidate, ensure_first_sets, mark_ready, needing_first, queued_sets
 from .worker import RenderRequest, SelfieWorker, WorkerError, to_the_end
 
@@ -153,6 +154,12 @@ def _stored(ctx: "NightContext", guid: int) -> Persona | None:
         return None
 
 
+def _held(ctx: "NightContext", p: Persona | None) -> str | None:
+    """renderable() under the style that chose p's kind (a lust kind waits while she lacks the
+    lust style)."""
+    return renderable(p, chosen_style(ctx.store, p) if p is not None else PLAIN)
+
+
 def _without_persona(ctx: "NightContext") -> int:
     """Roster members of the cast's level with no stored persona, so not in ctx.members."""
     stored = ctx.store.persona_versions()
@@ -165,7 +172,7 @@ def _queue(ctx: "NightContext") -> None:
         return
     members, missing = [], Counter()
     for guid in ctx.members(include_away=True):
-        why = renderable(_stored(ctx, guid))
+        why = _held(ctx, _stored(ctx, guid))
         if why is None:
             members.append(guid)
         else:
@@ -269,7 +276,10 @@ async def _render(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
     for n, unit in enumerate(todo):
         guid, set_no = (int(x) for x in unit.split(":"))
         p = _stored(ctx, guid)
-        if renderable(p) is not None:
+        why = _held(ctx, p)
+        if why is not None:
+            if why == LUST_HELD:  # her kind's text is never rendered plainly
+                log("selfies_set_held", night=ctx.night, guid=guid, set=set_no, reason="restyle")
             if ctx.skip(STAGE, unit):
                 tally["skipped"] += 1
             continue
@@ -346,7 +356,7 @@ def make_stage(cfg: SelfieCfg, *, worker: Callable[[], SelfieWorker] | None = No
 
 def _count(ctx: "NightContext") -> int:
     """The sets the stage would render tonight: those queued and the first ones it would queue."""
-    members = [g for g in ctx.members(include_away=True) if renderable(_stored(ctx, g)) is None]
+    members = [g for g in ctx.members(include_away=True) if _held(ctx, _stored(ctx, g)) is None]
     return min(ctx.settings.selfie_per_night,
                len(queued_sets(ctx.store)) + len(needing_first(ctx.store, members)))
 

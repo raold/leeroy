@@ -127,7 +127,7 @@ async def _kinds(ctx, store, guids: list[int]) -> list[int]:
             with store.transaction():
                 _saver(ctx, guid, photo)(store)
             ctx.personas.invalidate(guid)
-        if renderable(ctx.base(guid)) is not None:
+        if renderable(ctx.base(guid), chosen_style(store, ctx.base(guid))) is not None:
             print(f"guid {guid}: cannot be rendered", file=sys.stderr)
             continue
         ready.append(guid)

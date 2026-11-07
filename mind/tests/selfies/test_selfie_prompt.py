@@ -11,8 +11,8 @@ import pytest
 
 from conftest import make_persona
 from leeroy_mind.personas.schema import Appearance, ProfilePhoto
-from leeroy_mind.selfies.prompt import (LUST_NEGATIVE, NEGATIVE, PromptSpec, build_prompt,
-                                        renderable)
+from leeroy_mind.selfies.prompt import (LUST_HELD, LUST_NEGATIVE, NEGATIVE, PromptSpec,
+                                        build_prompt, renderable)
 from leeroy_mind.selfies.style import LUST, PLAIN, suggestive
 from nightly.test_night_enrich import APPEARANCE
 
@@ -130,9 +130,14 @@ def test_a_lust_womans_negative_drops_only_cleavage_and_swimwear():
 @pytest.mark.parametrize("chosen", [PLAIN, LUST])
 def test_everyone_else_keeps_todays_negative(p, chosen):
     # a lust woman whose kind the lust rules did not compose (by hand, plain, none recorded)
-    # renders with the plain negative too
+    # renders with the plain negative too; a lust-composed kind on anyone else waits
     person = p()
     if suggestive(person) and chosen == LUST:
+        return
+    if chosen == LUST:
+        assert renderable(person, LUST) == LUST_HELD
+        with pytest.raises(ValueError, match="re-choice"):
+            build_prompt(person, kind_style=LUST)
         return
     assert NEGATIVE == TODAY_NEGATIVE
     spec = build_prompt(person, kind_style=chosen)
@@ -249,22 +254,29 @@ def test_no_prompt_is_built_for_anyone_under_eighteen():
 
 
 @pytest.mark.parametrize("looks", [
-    {"hair_style": "in two pigtails"}, {"face": ("a youthful face",)},
-    {"face": ("braces on her teeth",)}, {"face": ("baby-faced", "freckles")},
-    {"skin_tone": "teenage-clear"}])
-def test_the_lust_prompt_falls_back_to_plain_when_her_looks_code_young(looks, caplog):
-    young = replace(APPEARANCE, **looks)
-    plain = build_prompt(woman(stance="fond", appearance=young, photo=LUST_PHOTO))
-    with caplog.at_level(logging.INFO):
-        hot = build_prompt(woman(stance="lust", appearance=young, photo=LUST_PHOTO),
-                           kind_style=LUST)
-    assert hot == plain and hot.negative == NEGATIVE
-    assert "selfies_prompt_plain: guid=101 reason=age" in caplog.text
-    for text in (*looks.values(), LUST_PHOTO.outfit):
-        assert str(text) not in caplog.text
+    {"hair_style": "in two pigtails"}, {"hair_style": "pig tails"},
+    {"face": ("a youthful face",)}, {"face": ("braces on her teeth",)},
+    {"face": ("baby-faced", "freckles")}, {"face": ("a babyface",)},
+    {"skin_tone": "teenage-clear"}, {"hair_colour": "schoolgirl blonde"}])
+def test_a_lust_kind_is_never_rendered_when_her_looks_code_young(looks):
+    young = woman(stance="lust", appearance=replace(APPEARANCE, **looks), photo=LUST_PHOTO)
+    assert not suggestive(young)                          # no lust style for her at all
+    assert renderable(young, LUST) == LUST_HELD
+    with pytest.raises(ValueError, match="re-choice"):
+        build_prompt(young, kind_style=LUST)             # its text is never rendered plainly
+    assert renderable(young) is None and build_prompt(young).negative == NEGATIVE
 
 
-def test_the_lust_prompt_stays_when_her_looks_are_adult(caplog):
-    with caplog.at_level(logging.INFO):
-        hot = build_prompt(woman(stance="lust", photo=LUST_PHOTO), kind_style=LUST)
-    assert hot.negative == LUST_NEGATIVE and "selfies_prompt_plain" not in caplog.text
+def test_a_lust_kind_is_never_rendered_once_she_left_lust():
+    for stance in ("drawn", "fond", "none"):
+        left = woman(stance=stance, photo=LUST_PHOTO)
+        assert renderable(left, LUST) == LUST_HELD
+        with pytest.raises(ValueError, match="re-choice"):
+            build_prompt(left, kind_style=LUST)
+    assert renderable(woman(stance="lust", age=20, photo=LUST_PHOTO), LUST) == LUST_HELD
+
+
+def test_the_lust_prompt_stays_when_her_looks_are_adult():
+    hot = woman(stance="lust", photo=LUST_PHOTO)
+    assert renderable(hot, LUST) is None
+    assert build_prompt(hot, kind_style=LUST).negative == LUST_NEGATIVE

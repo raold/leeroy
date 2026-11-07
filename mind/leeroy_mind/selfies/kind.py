@@ -42,6 +42,7 @@ from leeroy_mind.personas.screens import has_word, names_real_name
 from leeroy_mind.storage.store import Store
 from leeroy_mind.text import has_meta
 
+from .prompt import names_re
 from .store import queue_restyled
 from .style import AGE_RE, LUST, PLAIN, STYLES, style_of, suggestive
 
@@ -77,7 +78,7 @@ KIND_ASK = "Choose {name}'s profile picture."
 LUST_ASK_AGAIN = (" Pick again: swimwear only at the beach, the pool deck, the lakeside dock, "
                   "the hot tub, the boat or the beach bar, framed upper body and never as a "
                   "headshot; the hot tub only in swimwear; the sports top and leggings only at "
-                  "the gym.")
+                  "the gym; no part that shares a word with her name.")
 
 _FIELDS = ("kind", "framing", "setting", "outfit", "expression")
 _PROPS = persona_json_schema(enrichment=True)["properties"]["photo"]["anyOf"][0]["properties"]
@@ -131,6 +132,9 @@ PAIRINGS = ("photo.outfit: swimwear away from the water",
             "photo.setting: only swimwear in the hot tub",
             "photo.framing: swimwear only framed upper body",
             "photo.kind: no swimwear in a headshot")
+# a composed part that holds her character or real name (a colour or a season can be one): the
+# prompt's name filter would drop the whole joined phrase, so the pick is asked once more
+NAME_CLASHES = tuple(f"photo.{f}: shares her name" for f in ("setting", "outfit", "expression"))
 
 
 def _enum(values) -> dict:
@@ -290,7 +294,8 @@ def screen_lust(p: Persona, data: dict) -> list[str]:
     lists, so nothing to quote): a value off its list (the schema refuses that first), then the
     PAIRINGS: swimwear away from WATER_SETTINGS, gym wear away from GYM_SETTINGS, anything but
     swimwear in SWIM_ONLY_SETTINGS, swimwear framed other than upper body or in a headshot;
-    then the age guard and validate_persona on the kind it composes."""
+    then, on the kind it composes, her name in a part (NAME_CLASHES), the age guard and
+    validate_persona."""
     problems = [f"photo.{field}: not on its list" for field, values in (
         ("setting", LUST_SETTINGS), ("outfit", LUST_OUTFITS), ("colour", LUST_COLOURS),
         ("expression", LUST_EXPRESSIONS)) if data.get(field) not in values]
@@ -310,7 +315,10 @@ def screen_lust(p: Persona, data: dict) -> list[str]:
     if problems:
         return problems
     photo = compose_lust(data)
-    problems = [f"photo.{f}: age" for f in _FIELDS if AGE_RE.search(getattr(photo, f))]
+    named = names_re(p)
+    problems = [f"photo.{f}: shares her name" for f in ("setting", "outfit", "expression")
+                if named is not None and named.search(getattr(photo, f))]
+    problems += [f"photo.{f}: age" for f in _FIELDS if AGE_RE.search(getattr(photo, f))]
     return problems + _photo_problems(p, {f: getattr(photo, f) for f in _FIELDS})
 
 
@@ -326,7 +334,8 @@ async def kind_one(ctx: "NightContext", guid: int) -> tuple[ProfilePhoto | None,
     """One JSON call (no think pass) on the stored persona, under the rules of its style: the
     photo kind and no problems, or (None, problems). The plain style writes a free-text kind
     (KIND_SCHEMA, screen_kind); the lust style picks from lists (LUST_SCHEMA, screen_lust) and
-    is asked once more when only a pairing failed. A fatal ReflectionError is raised."""
+    is asked once more when only a pairing or a name clash failed. A fatal ReflectionError is
+    raised."""
     p = ctx.base(guid)
     name = ctx.name(guid)
     lust = suggestive(p)
@@ -352,7 +361,7 @@ async def kind_one(ctx: "NightContext", guid: int) -> tuple[ProfilePhoto | None,
         problems = screen_lust(p, data)
         if not problems:
             return compose_lust(data), []
-        if again or not set(problems) <= set(PAIRINGS):
+        if again or not set(problems) <= set(PAIRINGS) | set(NAME_CLASHES):
             return _refused(ctx, guid, problems)
         log("selfies_kind_asked_again", night=ctx.night, guid=guid, problems=problems)
     raise AssertionError("unreachable")

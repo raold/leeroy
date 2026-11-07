@@ -5,19 +5,21 @@ is always kept). The shape maps one to one onto the worker's render request (`ph
 `negative`: lists of [text, priority 0-9]). Adults only, clothed, present-day phone look; no
 name is ever put in a phrase.
 
-The lust prompt is built only for a kind the lust rules chose (the caller passes that style,
-kind.chosen_style) while she is still of the lust style (style.suggestive), at each render: her
-outfit and setting go in as one priority-0 phrase, so the worker's fit to the tokenizers never
-keeps one without the other, and the negative lets cleavage and swimwear through and names what
-stays out instead. When her looks use a word of the age guard (style.AGE_RE) the render falls
-back to the plain prompt, logged by guid only. Every other render gets the phrases and NEGATIVE
-as they were. The worker's NSFW gate is the same for both."""
+The lust prompt is built for a kind the lust rules chose (the caller passes that style,
+kind.chosen_style), and such a kind renders only while she still has the lust style
+(style.suggestive: lust, 21 or more, looks that code nobody as young); otherwise renderable
+holds it until the photo pass has chosen her kind again, so its text is never rendered plainly.
+Her outfit and setting go in as one priority-0 phrase, so the worker's fit to the tokenizers
+never keeps one without the other, and the negative lets cleavage and swimwear through and names
+what stays out instead. Every other render gets the phrases and NEGATIVE as they were. The
+worker's NSFW gate is the same for both."""
 import re
 from dataclasses import dataclass
 
-from ..logs import log
 from ..personas.schema import MIN_AGE, Persona
-from .style import AGE_RE, LUST, PLAIN, suggestive
+from .style import LUST, PLAIN, suggestive
+
+LUST_HELD = "lust kind awaits a re-choice"
 
 NEGATIVE: tuple[tuple[str, int], ...] = (
     ("cartoon, anime, painting, illustration, 3d render, cgi", 0),
@@ -49,9 +51,11 @@ class PromptSpec:
     negative: tuple[tuple[str, int], ...]
 
 
-def renderable(p: Persona | None) -> str | None:
+def renderable(p: Persona | None, kind_style: str = PLAIN) -> str | None:
     """None when a prompt can be built, else what is missing. Adults only, here too: the
-    schema's MIN_AGE is checked again, not only when the persona was saved."""
+    schema's MIN_AGE is checked again, not only when the persona was saved. `kind_style` is the
+    style whose rules chose the kind (kind.chosen_style): a kind the lust rules composed waits
+    (LUST_HELD) while she does not have the lust style, until the pass chooses again."""
     if p is None:
         return "no persona"
     if p.identity.age < MIN_AGE:
@@ -60,7 +64,17 @@ def renderable(p: Persona | None) -> str | None:
         return "no looks yet"
     if p.photo is None:
         return "no photo kind yet"
+    if kind_style == LUST and not suggestive(p):
+        return LUST_HELD
     return None
+
+
+def names_re(p: Persona) -> re.Pattern | None:
+    """Her character and real names, whole and in any case: no phrase holding one reaches a
+    prompt (build_prompt drops it), and no lust kind is composed with one (kind.screen_lust)."""
+    names = [n for n in (p.character_name, p.identity.real_name) if n and n.strip()]
+    return re.compile(r"\b(?:" + "|".join(re.escape(n.strip()) for n in names) + r")\b",
+                      re.IGNORECASE) if names else None
 
 
 def _clean(text: str) -> str:
@@ -70,21 +84,14 @@ def _clean(text: str) -> str:
 
 def build_prompt(p: Persona, *, kind_style: str = PLAIN) -> PromptSpec:
     """The prompt for p's photo kind. `kind_style` is the style whose rules chose the kind
-    (kind.chosen_style; PLAIN for a kind set by hand or with no record): the lust prompt only
-    for a kind the lust rules chose, while she is of the lust style and her looks code nobody
-    as young."""
-    missing = renderable(p)
+    (kind.chosen_style; PLAIN for a kind set by hand or with no record): the lust prompt for a
+    kind the lust rules chose. ValueError when renderable says why not."""
+    missing = renderable(p, kind_style)
     if missing:
         raise ValueError(missing)
     a, ph, ident = p.appearance, p.photo, p.identity
-    lust = kind_style == LUST and suggestive(p)
-    if lust and any(AGE_RE.search(_clean(t)) for t in (
-            a.hair_colour, a.hair_style, a.skin_tone, a.eye_colour, a.build, *a.face)):
-        log("selfies_prompt_plain", guid=p.guid, reason="age")
-        lust = False
-    names = [n for n in (p.character_name, ident.real_name) if n and n.strip()]
-    name_re = re.compile(r"\b(?:" + "|".join(re.escape(n.strip()) for n in names) + r")\b",
-                         re.IGNORECASE) if names else None
+    lust = kind_style == LUST  # renderable has checked she still has the lust style
+    name_re = names_re(p)
 
     out: list[tuple[str, int]] = []
 
