@@ -71,10 +71,11 @@ SMOKE_NEGATIVE = [["child, teenager", 0], ["blurry", 1], ["deformed hands", 2]]
 def cmd_worker(args) -> int:
     from . import render, worker
     out = worker.claim_stdout()
+    stdin = worker.claim_stdin()
     code = worker.serve(
         lambda: render.load(Path(args.data) if args.data else data_dir(),
                             min_free_gib=args.min_free_gib),
-        stdin=sys.stdin.buffer, out=out, on_eof=lambda: os._exit(0))
+        stdin=stdin, out=out, on_eof=lambda: os._exit(0))
     # the reader thread still holds stdin's lock; a normal return would crash in finalization
     out.flush()
     sys.stderr.flush()
