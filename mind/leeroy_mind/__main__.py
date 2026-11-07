@@ -1260,6 +1260,9 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     if argv and argv[0] == "selfies":
         from .selfies.cli import selfies_main
         return selfies_main(argv[1:], make_llm=make_llm)
+    if argv and argv[0] == "claims":
+        from .claims.cli import claims_main
+        return claims_main(argv[1:], make_llm=make_llm)
     if argv and argv[0] == "console":
         from .console.cli import main as console_main
         return console_main(argv[1:])
@@ -1275,6 +1278,7 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
                    "revert with the mind stopped")
     sub.add_parser("nightly", help="nightly status, trials, ledger and owner controls")
     sub.add_parser("eval", help="weekly evaluation on a copied database by default")
+    sub.add_parser("claims", help="member claims: status, list, check and scratch evaluation")
     sub.add_parser("selfies", help="profile photos: status, and a trial render with the mind "
                    "stopped")
     sub.add_parser("console", help="the guild console on http://127.0.0.1:7881/ (comms, the "

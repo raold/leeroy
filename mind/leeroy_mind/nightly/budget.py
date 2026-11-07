@@ -58,6 +58,7 @@ UNIT_CALLS: dict[str, dict[str, float]] = {
     "supersede": {"json": SUPERSEDE_CALLS},
     CORE_JUDGE: {"json": CORE_JUDGE_CALLS},    # a reflecting member's core judgements: 10 s
     "notes": {"json": 2.0},                    # the call and its own judge batch of one: 40 s
+    "claims": {"json": 1},                    # one extraction, no thinking or judge pass
     "encounters": {"json": 2},                # scene generation and one judge batch
     "confide": {"json": 1.1},
     "arc": {"json": 1.5},                     # a read of what he said to her (arc/night.py)
@@ -95,7 +96,7 @@ MEASURE_MIN = 3     # ...once there are 3 of them
 COUNTERS: dict[str, Callable[["NightContext"], int]] = {}
 # Optional extensions must be admitted on the particular runner before budgeting.
 # Core counters may belong to substages, so their historical counting is unchanged.
-EXTENSION_STAGES = frozenset({"coach", "realm", "photo", "selfies", "scenes", "snaps"})
+EXTENSION_STAGES = frozenset({"coach", "realm", "photo", "selfies", "scenes", "snaps", "claims"})
 
 
 def register_counter(stage: str, fn: Callable[["NightContext"], int]) -> None:
@@ -217,6 +218,7 @@ DEGRADE = (
     Degrade("snaps", (Cut("snaps_per_night", "fit", 0),)),
     Degrade("coach", (Cut("coach_units", "fit", 5),)),
     Degrade("selfies", (Cut("selfie_per_night", "fit", 10),)),
+    Degrade("claims", (Cut("claims_per_night", "fit", 0),)),  # unread lines wait for another night
     Degrade("encounters", (Cut("encounters_per_night", "fit", 20),)),
     Degrade("notes", (Cut("notes_per_night", "fit", 100),)),
     Degrade("wow_lines", (Cut("wow_lines_per_night", "halve", 10),)),

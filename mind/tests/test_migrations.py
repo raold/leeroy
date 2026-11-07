@@ -45,6 +45,24 @@ def db_before(stem: str, path, tmp_path, monkeypatch) -> sqlite3.Connection:
     return _db_at(path, migration_number(stem) - 1, tmp_path, monkeypatch)
 
 
+def test_claims_upgrades_an_old_db_and_preserves_rows(tmp_path, monkeypatch):
+    path = tmp_path / 'mind.db'
+    conn = db_before('claims', path, tmp_path, monkeypatch)
+    conn.execute("INSERT INTO meta(key,value) VALUES ('claims-test','preserved')")
+    conn.commit()
+    conn.close()
+    conn = open_db(path)
+    try:
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == latest_version()
+        assert conn.execute("SELECT value FROM meta WHERE key='claims-test'").fetchone()[0] == 'preserved'
+        names = {r[0] for r in conn.execute('SELECT name FROM sqlite_master')}
+        assert {'member_claim', 'member_claim_vec', 'member_claim_cursor'} <= names
+        assert conn.execute('SELECT count(*) FROM member_claim').fetchone()[0] == 0
+        assert db_mod.migrate(conn) == latest_version()
+    finally:
+        conn.close()
+
+
 # The memory columns of schemas v1-v4, before the nightly scope.
 _OLD_MEMORY_COLS = ("owner, kind, text, t_event, t_created, t_accessed, access_n, actors, place, "
                     "boss_id, raid_id, importance, valence, source, evidence, confidence, status, "
