@@ -419,6 +419,7 @@ class MindApp:
         self._shutdown_receipts: dict[str, list[Callable[[Event], None]]] = {}
         self._session_id: int | None = None
         self._hello_ts: int | None = None  # the server's ms ts of the last hello
+        self.hello: Hello | None = None  # the last hello itself (the control endpoint's `world`)
         self._spoke_at: dict[int, float] = {}  # anyone's last line, any channel or origin
         self._unvoiced: list[int] = []  # the cast without a persona, as last logged
         self._extract_queue: asyncio.Queue[ClosedThread] = asyncio.Queue()
@@ -889,6 +890,7 @@ class MindApp:
 
     async def _on_hello(self, ev: Hello, now: float) -> None:
         self._hello_ts = ev.ts
+        self.hello = ev
         if ev.guild_id != GUILD_ID:
             log.warning("guild_id_unexpected: guild_id=%d expected=%d", ev.guild_id, GUILD_ID)
         self.store.set_meta("guild_id", str(ev.guild_id))

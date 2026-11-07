@@ -19,7 +19,8 @@ an HTTP request) is refused and the connection closed; nothing after the first l
 answer line comes back, {"ok": true, ...} or {"ok": false, "error": ...}, and the connection
 closes.
 
-    status          the raid night's state and which raid actions can run now, or why not
+    status          the raid night's state and which raid actions can run now, or why not,
+                    and `world`: the game server's last hello and who is online (null before one)
     stop            the mind's own clean shutdown, the one Ctrl+C runs: answered, then begun
     raid {action}   call | form {raid, size, heroic, lead} | summon | start | stop | end:
                     guild life's own transitions, on the mind's event loop, with its guards
@@ -637,6 +638,18 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     return op, parse_args(value["args"])
 
 
+def world_status(app) -> dict | None:
+    """The game server as the last hello and the world view tell it; None before a hello."""
+    hello = getattr(app, "hello", None)
+    if hello is None:
+        return None
+    world = app.world
+    return {"connected": bool(app.bridge.connected), "server": hello.server,
+            "version": hello.version, "hello_at": hello.ts / 1000,
+            "cast": len(world.cast_guids()), "cast_online": len(world.online),
+            "human_online": bool(world.human_online)}
+
+
 def encode(value) -> bytes:
     return (json.dumps(value, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
             + "\n").encode("ascii")
@@ -802,8 +815,13 @@ class ControlEndpoint:
                 raid = guild.console_status()
             except Exception as e:
                 log_event("control_status_failed", level=logging.WARNING, error=type(e).__name__)
+        try:
+            world = world_status(self.app)
+        except Exception as e:
+            log_event("control_status_failed", level=logging.WARNING, error=type(e).__name__)
+            world = None
         return {"ok": True, "v": VERSION, "pid": os.getpid(), "stopping": self.app.stopping,
-                "raid": raid, **self._health()}
+                "raid": raid, **self._health(), "world": world}
 
     def _health(self) -> dict:
         """For the health check: bridge_connected (the bridge connection is open and has had

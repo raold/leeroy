@@ -21,7 +21,10 @@ import subprocess
 import urllib.request
 from dataclasses import asdict, dataclass
 
+from . import netinfo
+
 IN_GAME, NOT_IN_GAME, UNKNOWN = "in_game", "not_in_game", "unknown"
+WORLD_PORT, AUTH_PORT = 8085, 3724  # the live confs' worldserver and authserver ports
 OLLAMA_S = 3.0
 GPU_S = 5.0
 CRASH_STATUS = 0xC0000000  # an NTSTATUS error code as an exit code: an access violation, ...
@@ -156,3 +159,11 @@ def gpu_headroom(*, which=shutil.which, run=subprocess.run) -> dict:
         gpus.append({"name": parts[0][:64], "total_mb": total, "used_mb": used,
                      "free_mb": free, "util": util})
     return {"ok": bool(gpus), "gpus": gpus, **({} if gpus else {"error": "no GPU listed"})}
+
+
+def server_view(conns, *, bridge_port: int) -> dict:
+    """Whether the game's worldserver, authserver and mod-leeroy's bridge listen, from the
+    machine's TCP table; None for each when the table could not be read."""
+    return {"world": netinfo.listening(conns, WORLD_PORT),
+            "auth": netinfo.listening(conns, AUTH_PORT),
+            "bridge": netinfo.listening(conns, bridge_port)}

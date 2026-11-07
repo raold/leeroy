@@ -359,7 +359,8 @@ def test_status_answers_and_a_wrong_key_is_forbidden_without_logging_it(tmp_path
             reply = await ask(ep, "status")
             assert reply == {"ok": True, "v": 1, "pid": os.getpid(), "stopping": False,
                              "raid": FakeGuild().console_status(), "bridge_connected": None,
-                             "cast": None, "schema_version": None}  # this app cannot tell
+                             "cast": None, "schema_version": None,  # this app cannot tell
+                             "world": None}
             assert await ask(ep, "status", key="x" * 43) == {"ok": False, "error": "forbidden"}
             assert await ask(ep, "stop", key="x" * 43) == {"ok": False, "error": "forbidden"}
             assert app.stops == 0
@@ -385,6 +386,28 @@ def test_status_reports_the_bridge_the_cast_and_the_schema_for_the_health_check(
             reply = await ask(ep, "status")
             assert reply["ok"] is True and reply["bridge_connected"] is False
             assert reply["schema_version"] is None and reply["cast"] == 3
+    run(go())
+
+
+def test_status_carries_the_world(tmp_path):
+    from leeroy_mind.protocol import Hello
+
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            assert (await ask(ep, "status"))["world"] is None  # no hello yet
+            app.hello = Hello(ts=1793304000000, server="Acme", version="3.3.5", guild_id=1,
+                              human_guid=9)
+            app.bridge = SimpleNamespace(connected=True, greeted=True)
+            app.world = SimpleNamespace(members={i: object() for i in range(1, 6)},
+                                        online={1, 2, 3}, human_online=True,
+                                        cast_guids=lambda: {1, 2, 3, 4, 5})
+            world = (await ask(ep, "status"))["world"]
+            assert world == {"connected": True, "server": "Acme", "version": "3.3.5",
+                             "hello_at": 1793304000.0, "cast": 5, "cast_online": 3,
+                             "human_online": True}
+            app.world = SimpleNamespace()  # unreadable: status still answers, world unknown
+            reply = await ask(ep, "status")
+            assert reply["ok"] is True and reply["world"] is None
     run(go())
 
 

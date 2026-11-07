@@ -685,6 +685,13 @@ class ConsoleApp:
         health = await asyncio.to_thread(self._health, tail, errors)
         health["endpoint"] = await asyncio.to_thread(self._endpoint_found)
         health["strip"] = self.strip()
+        mind = await self._mind_status()
+        game = mind.get("world") if mind["ok"] else None
+        why = None if mind["ok"] else (
+            f"The mind is {self.view.state}, so the cast count is unknown."
+            if self.view.state != "running" else mind["error"])
+        health["server"] = {**status.server_view(self._conns, bridge_port=self.s.bridge_port),
+                            "game": game, "why": why}
         return json_response(200, health)
 
     # -- the mind's control endpoint ---------------------------------------------------------
@@ -718,8 +725,10 @@ class ConsoleApp:
         if reply.get("ok") is not True:
             return {"ok": False, "error": str(reply.get("error") or "refused")[:200]}
         raid = reply.get("raid")
+        world = reply.get("world")
         return {"ok": True, "stopping": reply.get("stopping") is True,
-                "raid": raid if isinstance(raid, dict) else None}
+                "raid": raid if isinstance(raid, dict) else None,
+                "world": world if isinstance(world, dict) else None}
 
     # -- the raid and guild tabs ---------------------------------------------------------------
 

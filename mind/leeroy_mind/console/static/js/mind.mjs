@@ -2,6 +2,7 @@ import { $, api, arr, clear, el, emit, hhmm, obj, on, post, refused, setText, st
 import { S } from "./state.mjs";
 import { gameWords, mindClass, setPill } from "./strip.mjs";
 import { registerTab } from "./tabs.mjs";
+import { serverRows } from "./gameserver.mjs";
 
 // -- the mind tab ---------------------------------------------------------------------------------
 
@@ -55,6 +56,16 @@ function renderLog(id, records) {
   });
   box.scrollTop = box.scrollHeight;
 }
+function renderServer(sv) {
+  var r = serverRows(sv);
+  ["world", "auth", "bridge"].forEach(function (k) {
+    setText("gs-" + k, r[k]);
+    $("gs-" + k + "-dot").className = "dot" + (sv[k] === true ? " ok" : sv[k] === false ? " bad" : "");
+  });
+  setText("gs-server", r.server);
+  setText("gs-players", r.players);
+  setText("gs-why", r.why);
+}
 function renderHealth(h) {
   lastHealth = h;
   setText("m-data", str(obj(h.mind).data_dir) || "-");
@@ -63,6 +74,7 @@ function renderHealth(h) {
           : "by force" + (ep.detail ? " (" + str(ep.detail) + ")" : ""));
   var night = h.night;
   setText("h-night", night ? night.night + ": " + night.status + (night.finished ? ", finished " + hhmm(night.finished) : "") : "no night run yet");
+  renderServer(obj(h.server));
   var cfg = $("h-config");
   cfg.textContent = str(h.config);
   cfg.hidden = !h.config;
