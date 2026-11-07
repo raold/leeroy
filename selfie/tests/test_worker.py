@@ -4,6 +4,8 @@ import subprocess
 import sys
 import threading
 
+import pytest
+
 from leeroy_selfie.fit import PromptTooLong
 from leeroy_selfie.protocol import RenderFailed
 from leeroy_selfie.render import ReadyError
@@ -157,6 +159,41 @@ def test_a_renderer_that_prints_cannot_corrupt_the_protocol():
     p = subprocess.run([sys.executable, "-c", script], capture_output=True, timeout=60)
     assert p.stdout == b'{"id": "ready"}\n'
     assert b"noise from a library" in p.stderr and b"raw noise" in p.stderr
+
+
+def test_the_claimed_stdin_reads_the_pipe_and_fd_0_is_the_null_device():
+    script = (
+        "import os, stat\n"
+        "from leeroy_selfie import worker\n"
+        "inp = worker.claim_stdin()\n"
+        "print(stat.S_ISCHR(os.fstat(0).st_mode), inp.readline().decode().strip(), flush=True)\n")
+    p = subprocess.run([sys.executable, "-c", script], input=b"hello\n", capture_output=True,
+                       timeout=60)
+    assert p.stdout.split() == [b"True", b"hello"], p.stderr
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="the pipe waits only on Windows")
+def test_numpy_imports_while_the_reader_waits_on_the_pipe():
+    pytest.importorskip("numpy")
+    script = (
+        "import os, threading, time\n"
+        "from leeroy_selfie import worker\n"
+        "inp = worker.claim_stdin()\n"
+        "threading.Thread(target=inp.readline, daemon=True).start()\n"
+        "time.sleep(0.5)\n"
+        "import numpy\n"
+        "print('imported', flush=True)\n"
+        "os._exit(0)\n")
+    p = subprocess.Popen([sys.executable, "-c", script], stdin=subprocess.PIPE,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        assert p.wait(timeout=60) == 0  # the pipe stays open: the reader is still waiting
+        assert p.stdout.read().strip() == b"imported"
+    finally:
+        p.kill()
+        p.stdin.close()
+        p.stdout.close()
+        p.stderr.close()
 
 
 CHILD = (
