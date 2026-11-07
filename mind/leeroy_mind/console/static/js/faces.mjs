@@ -21,6 +21,7 @@ var KINDS = {
   feed: { cls: "av", size: "sm" },
   room: { cls: "av lg", size: "md" },
   card: { cls: "av xl", size: "lg" },
+  wall: { cls: "av wall", size: "md" },
 };
 
 var PALETTE = ["#2a68a8", "#6956b0", "#1f7a52", "#b06a0c", "#a0446e", "#0d6470", "#7a5c2e", "#4e5f9a"];

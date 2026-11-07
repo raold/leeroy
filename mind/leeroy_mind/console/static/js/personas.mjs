@@ -1,5 +1,5 @@
-import { $, api, arr, cell, clear, el, emit, emptyRow, num, obj, on, own, plural, post, refused,
-         setText, str } from "./core.mjs";
+import { $, api, arr, cell, clear, el, emit, emptyRow, num, obj, on, own, plural, post, recall, refused,
+         remember, setText, str } from "./core.mjs";
 import { face } from "./faces.mjs";
 import { forgetMemberShots, pollSelfies, setSelfieNames, showMemberPhoto } from "./selfies.mjs";
 import { S } from "./state.mjs";
@@ -111,6 +111,40 @@ function renderPersonas(v) {
     body.appendChild(tr);
   });
   if (!members.length) { emptyRow(body, 10, "The mind has no cast and no personas yet."); }
+  renderWall(v);
+}
+var VIEW_KEY = "guild-console-personas-view";
+var view = recall(VIEW_KEY, "wall") === "table" ? "table" : "wall";
+function applyView() {
+  $("p-wall").hidden = view !== "wall";
+  $("p-table").hidden = view !== "table";
+  var bs = $("p-view").querySelectorAll("button[data-view]");
+  for (var i = 0; i < bs.length; i++) { bs[i].setAttribute("aria-pressed", String(bs[i].dataset.view === view)); }
+}
+$("p-view").addEventListener("click", function (ev) {
+  var b = ev.target.closest("button[data-view]");
+  if (!b) { return; }
+  view = b.dataset.view === "table" ? "table" : "wall";
+  remember(VIEW_KEY, view);
+  applyView();
+});
+applyView();
+
+function renderWall(v) {
+  var members = arr(v.members), missing = arr(v.missing), box = $("p-wall");
+  clear(box);
+  members.forEach(function (m) {
+    var t = el("button", "tile" + (m.online === false ? " off" : "") + (m.guid === pick ? " sel" : ""));
+    t.type = "button";
+    t.dataset.guid = String(m.guid);
+    t.appendChild(face(m.guid, str(m.name), "wall"));
+    t.appendChild(el("span", "tname", str(m.name) + (m.in_cast ? "" : " (not in the cast)")));
+    t.appendChild(el("span", "tsub", m["class"] ? (CLASSES[m["class"]] || "-") + (m.role ? " · " + m.role : "") : "-"));
+    t.appendChild(el("span", "tsub", missing.indexOf("pad_mood") >= 0 ? "unavailable" : moodText(m.mood)));
+    if (!m.persona) { t.appendChild(el("span", "chip", "no persona")); }
+    box.appendChild(t);
+  });
+  if (!members.length) { box.appendChild(el("p", "why", "The mind has no cast and no personas yet.")); }
 }
 function pollPersonas() {
   if (personasBusy || S.tab !== "personas") { return; }
@@ -244,6 +278,8 @@ function choose(guid) {
   pick = guid;
   var rows = $("p-roster").querySelectorAll("tr[data-guid]");
   for (var i = 0; i < rows.length; i++) { rows[i].classList.toggle("sel", Number(rows[i].dataset.guid) === guid); }
+  var tiles = $("p-wall").querySelectorAll("button[data-guid]");
+  for (var j = 0; j < tiles.length; j++) { tiles[j].classList.toggle("sel", Number(tiles[j].dataset.guid) === guid); }
   if (!guid) { $("p-detail").hidden = true; reveal = false; return; }
   if (TUNE) { renderDials(guid); }
   pollMember();
@@ -255,6 +291,10 @@ $("p-roster").addEventListener("click", function (ev) {
 $("p-roster").addEventListener("keydown", function (ev) {
   var tr = ev.target.closest("tr[data-guid]");
   if (tr && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); choose(Number(tr.dataset.guid)); }
+});
+$("p-wall").addEventListener("click", function (ev) {
+  var t = ev.target.closest("button[data-guid]");
+  if (t) { choose(Number(t.dataset.guid)); }
 });
 $("p-close").addEventListener("click", function () { choose(0); });
 

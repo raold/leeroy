@@ -218,10 +218,13 @@
         <div id="sf-recent"></div>
       </article>
       <article class="panel span">
-        <header><h3>The cast</h3><span id="p-count" class="muted"></span></header>
+        <header><h3>The cast</h3><span id="p-count" class="muted"></span>
+          <span id="p-view" class="acts"><button type="button" class="btn" data-view="wall" aria-pressed="true">Wall</button>
+            <button type="button" class="btn" data-view="table" aria-pressed="false">Table</button></span></header>
         <p id="p-mood" class="lead">-</p>
         <p id="p-missing" class="why" hidden></p>
-        <div class="scroll"><table class="pick"><thead><tr><th>name</th><th>class and role</th><th class="num">rank</th>
+        <div id="p-wall"></div>
+        <div id="p-table" class="scroll"><table class="pick"><thead><tr><th>name</th><th>class and role</th><th class="num">rank</th>
           <th>mood</th><th>stance</th><th>toward you</th><th>closest ties</th><th class="num" id="p-memhead">memories</th>
           <th>persona</th><th>drift</th></tr></thead>
           <tbody id="p-roster"></tbody></table></div>
