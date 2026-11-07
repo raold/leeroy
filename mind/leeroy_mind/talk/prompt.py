@@ -230,6 +230,9 @@ INSTRUCTIONS: dict[TurnKind, str] = {
         "You're whispering {addressee} privately. One short line, the way you'd really "
         "whisper {them}. {extra}"),
     TurnKind.GOODNIGHT: "{addressee} is logging off. Say goodnight your way, in a few words. {extra}",
+    # the whole instruction is the named template talk/emotes.py fills (the owner's overlay
+    # replaces it), so it comes as the extra
+    TurnKind.EMOTE_REACT: "{extra}",
 }
 
 _TOPIC = {
