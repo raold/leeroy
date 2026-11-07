@@ -1,9 +1,13 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 
 #include "LeeroyGuildAddPolicy.h"
+#include "LeeroyText.h"
 #include "TestHarness.h"
 
+#include <algorithm>
+#include <initializer_list>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -29,6 +33,87 @@ std::vector<std::uint32_t> Guids(GuildAddPlan const& plan)
     for (auto const& pick : plan.picks)
         guids.push_back(pick.guid);
     return guids;
+}
+
+std::vector<std::uint32_t> Guids(GuildAddPlan const& plan, GuildAddRole role)
+{
+    std::vector<std::uint32_t> guids;
+    for (auto const& pick : plan.picks)
+        if (pick.role == role)
+            guids.push_back(pick.guid);
+    return guids;
+}
+
+// "1 2 3", so a failed check shows the order it got.
+std::string List(std::vector<std::uint32_t> const& guids)
+{
+    std::string list;
+    for (auto guid : guids)
+        list += (list.empty() ? "" : " ") + std::to_string(guid);
+    return list;
+}
+
+using B = GuildAddBuff;
+GuildAddBuffs Bits(std::initializer_list<GuildAddBuff> buffs)
+{
+    GuildAddBuffs bits = 0;
+    for (auto buff : buffs)
+        bits |= GuildAddBuffBit(buff);
+    return bits;
+}
+
+// What his group brings once every pick has joined.
+GuildAddBuffs After(GuildAddPlan const& plan)
+{
+    GuildAddBuffs covered = plan.covered;
+    for (auto const& pick : plan.picks)
+        covered |= pick.buffs;
+    return covered;
+}
+
+constexpr std::uint8_t DeathKnight = 6;
+// Talent trees in the client's order, per class.
+constexpr std::int8_t Arms = 0, Fury = 1, ProtWarrior = 2;
+constexpr std::int8_t HolyPaladin = 0, ProtPaladin = 1, Ret = 2;
+constexpr std::int8_t BeastMastery = 0, Marksmanship = 1, Survival = 2;
+constexpr std::int8_t Assassination = 0, Combat = 1, Subtlety = 2;
+constexpr std::int8_t Discipline = 0, HolyPriest = 1, Shadow = 2;
+constexpr std::int8_t Blood = 0, FrostDk = 1, Unholy = 2;
+constexpr std::int8_t Elemental = 0, Enhancement = 1, RestoShaman = 2;
+constexpr std::int8_t Arcane = 0, Fire = 1, FrostMage = 2;
+constexpr std::int8_t Affliction = 0, Demonology = 1, Destruction = 2;
+constexpr std::int8_t Balance = 0, Feral = 1, RestoDruid = 2;
+constexpr std::uint8_t Classes[] = {Warrior, Paladin, Hunter, Rogue, Priest, DeathKnight, Shaman, Mage, Warlock, Druid};
+
+// Healers of every kind, gear spread so each kind's best is clear: guid 200+ Holy paladins, 210+ Discipline, 220+
+// Holy priests, 230+ Restoration shamans, 240+ Restoration druids.
+std::vector<GuildAddCandidate> Healers(bool tankHealers = true, bool absorbs = true)
+{
+    std::vector<GuildAddCandidate> healers;
+    if (tankHealers)
+        healers.insert(healers.end(), {{200, Healer, Paladin, HolyPaladin, 240},
+            {201, Healer, Paladin, HolyPaladin, 230}, {202, Healer, Paladin, HolyPaladin, 220}});
+    if (absorbs)
+        healers.insert(healers.end(), {{210, Healer, Priest, Discipline, 235}, {211, Healer, Priest, Discipline, 225}});
+    healers.insert(healers.end(), {{220, Healer, Priest, HolyPriest, 250}, {221, Healer, Priest, HolyPriest, 215},
+        {230, Healer, Shaman, RestoShaman, 245}, {231, Healer, Shaman, RestoShaman, 212},
+        {240, Healer, Druid, RestoDruid, 248}, {241, Healer, Druid, RestoDruid, 210}});
+    return healers;
+}
+
+// A 25-man pool: four tanks, six healers with no shaman among them, and damage whose best gear brings neither
+// Bloodlust nor Replenishment.
+std::vector<GuildAddCandidate> RaidPool()
+{
+    return {{100, Tank, Warrior, ProtWarrior, 245}, {101, Tank, Paladin, ProtPaladin, 240},
+        {102, Tank, DeathKnight, Blood, 235}, {103, Tank, Warrior, ProtWarrior, 250},
+        {200, Healer, Paladin, HolyPaladin, 240}, {201, Healer, Paladin, HolyPaladin, 235},
+        {202, Healer, Priest, Discipline, 238}, {203, Healer, Priest, HolyPriest, 230},
+        {204, Healer, Druid, RestoDruid, 232}, {205, Healer, Druid, RestoDruid, 228},
+        {300, Damage, Mage, Arcane, 250}, {301, Damage, Mage, Fire, 249}, {302, Damage, Hunter, BeastMastery, 248},
+        {303, Damage, Hunter, Marksmanship, 247}, {304, Damage, Warlock, Affliction, 246},
+        {305, Damage, Rogue, Assassination, 245}, {306, Damage, Shaman, Elemental, 200},
+        {307, Damage, Priest, Shadow, 201}};
 }
 
 // A deep bench: guid 100+ tanks, 200+ healers, 300+ damage, each role cycling through its classes.
@@ -306,21 +391,23 @@ LEEROY_TEST(Guild_AddReportsEmptySlotsPerRole)
         "4 slots left empty: no free guild member for 1 tank, 1 healer and 2 damage"}));
 }
 
-LEEROY_TEST(Guild_AddSpreadsClassesWithinARole)
+LEEROY_TEST(Guild_AddSpreadsClassesWhenNothingElseDecides)
 {
-    // He is a mage: other classes come first, then a second mage, lowest guid first on ties.
+    // Coverage, gear and the melee/ranged split all tie (he is a mage, so Arcane Intellect is his already): other
+    // classes come first, then a second mage, lowest guid first on ties.
     std::vector<GuildAddCandidate> const bench{{301, Damage, Mage}, {302, Damage, Mage}, {303, Damage, Hunter},
-        {304, Damage, Hunter}, {305, Damage, Warlock}};
+        {304, Damage, Hunter}};
     auto const plan = PlanGuildAdd(5, 2, {{Damage, Mage}, {Tank, Warrior}}, bench);
     CHECK(plan.open == GuildAddCounts({0, 1, 2}));
-    CHECK(Guids(plan) == std::vector<std::uint32_t>({303, 305}));
+    CHECK_EQ(List(Guids(plan)), "303 301");
     auto const more = PlanGuildAdd(10, 2, {{Damage, Mage}, {Tank, Warrior}}, bench);
-    CHECK(Guids(more) == std::vector<std::uint32_t>({303, 305, 301, 304}));
+    CHECK_EQ(List(Guids(more)), "303 301 304 302");
 
-    // Classes picked for one role count for the next: a paladin tank makes a paladin healer the last choice.
+    // Classes picked for one role count for the next: a paladin tank makes a paladin healer the last choice. The mage
+    // comes before the hunter for the Arcane Intellect nobody brings yet.
     auto const crossed = PlanGuildAdd(5, 1, {{Damage, Rogue}}, {{100, Tank, Paladin}, {200, Healer, Paladin},
         {201, Healer, Druid}, {300, Damage, Hunter}, {301, Damage, Mage}});
-    CHECK(Guids(crossed) == std::vector<std::uint32_t>({100, 201, 300, 301}));
+    CHECK_EQ(List(Guids(crossed)), "100 201 301 300");
 }
 
 LEEROY_TEST(Guild_AddIsDeterministicAndIgnoresBadCandidates)
@@ -332,4 +419,342 @@ LEEROY_TEST(Guild_AddIsDeterministicAndIgnoresBadCandidates)
     std::vector<GuildAddCandidate> reversed(bench.rbegin(), bench.rend());
     CHECK(Guids(PlanGuildAdd(5, 2, {{Tank, Warrior}, {Healer, Priest}}, reversed)) == Guids(plan));
     CHECK(PlanGuildAdd(6, 1, {{Damage, Mage}}, bench).picks.empty());
+}
+
+LEEROY_TEST(Guild_AddSpecFactsFollowWotlkTalents)
+{
+    // Exact facts for the specs the picks lean on.
+    std::vector<std::tuple<std::uint8_t, std::int8_t, GuildAddBuffs, bool>> const specs{
+        {Warrior, Arms, Bits({B::BleedDamage, B::PhysicalDamageTaken, B::ArmorReduction}), true},
+        {Warrior, Fury, Bits({B::PhysicalCrit, B::ArmorReduction}), true},
+        {Warrior, ProtWarrior, Bits({B::ArmorReduction}), true},
+        {Paladin, ProtPaladin, Bits({B::Kings}), true},
+        {Paladin, Ret, Bits({B::Replenishment, B::Damage, B::CritTaken, B::Kings}), true},
+        {Hunter, BeastMastery, Bits({B::Damage}), false},
+        {Hunter, Marksmanship, Bits({B::AttackPower}), false},
+        {Hunter, Survival, Bits({B::Replenishment}), false},
+        {Rogue, Assassination, Bits({B::CritTaken, B::ArmorReduction}), true},
+        {Rogue, Combat, Bits({B::PhysicalDamageTaken, B::ArmorReduction}), true},
+        {Rogue, Subtlety, Bits({B::ArmorReduction}), true},
+        {Priest, Shadow, Bits({B::Replenishment, B::SpellHit, B::Fortitude}), false},
+        {DeathKnight, Blood, Bits({B::AttackPower}), true},
+        {DeathKnight, FrostDk, Bits({B::MeleeHaste}), true},
+        {DeathKnight, Unholy, Bits({B::SpellDamageTaken}), true},
+        {Shaman, Elemental, Bits({B::Bloodlust, B::SpellCrit, B::CritTaken, B::SpellPower}), false},
+        {Shaman, Enhancement, Bits({B::Bloodlust, B::MeleeHaste, B::AttackPower}), true},
+        {Mage, Arcane, Bits({B::Damage, B::ArcaneIntellect}), false},
+        {Mage, Fire, Bits({B::SpellCritTaken, B::ArcaneIntellect}), false},
+        {Mage, FrostMage, Bits({B::Replenishment, B::SpellCritTaken, B::ArcaneIntellect}), false},
+        {Warlock, Affliction, Bits({B::SpellCritTaken}), false},
+        {Warlock, Demonology, Bits({B::SpellCritTaken, B::SpellPower}), false},
+        {Warlock, Destruction, Bits({B::Replenishment, B::SpellDamageTaken}), false},
+        {Druid, Balance, Bits({B::SpellCrit, B::SpellDamageTaken, B::SpellHit, B::MarkOfTheWild, B::BattleRes}), false},
+        {Druid, Feral, Bits({B::PhysicalCrit, B::BleedDamage, B::MarkOfTheWild, B::BattleRes}), true}};
+    for (auto const& [cls, tab, buffs, melee] : specs)
+    {
+        auto const facts = GuildAddSpecFacts(cls, tab, Damage);
+        CHECK_EQ(facts.buffs, buffs);
+        CHECK_EQ(facts.melee, melee);
+        CHECK(facts.healer == GuildAddHealer::None);
+    }
+
+    // An unknown tree brings only what the whole class brings.
+    std::vector<std::pair<std::uint8_t, GuildAddBuffs>> const classWide{{Warrior, Bits({B::ArmorReduction})},
+        {Paladin, Bits({B::Kings})}, {Hunter, 0}, {Rogue, Bits({B::ArmorReduction})}, {Priest, Bits({B::Fortitude})},
+        {DeathKnight, 0}, {Shaman, Bits({B::Bloodlust})}, {Mage, Bits({B::ArcaneIntellect})},
+        {Warlock, 0}, {Druid, Bits({B::MarkOfTheWild, B::BattleRes})}};
+    for (auto const& [cls, buffs] : classWide)
+    {
+        CHECK_EQ(GuildAddSpecFacts(cls, -1, Damage).buffs, buffs);
+        CHECK_EQ(GuildAddSpecFacts(cls, 3, Damage).buffs, buffs);
+    }
+
+    // Healers: what each healing tree is for, and they stand at range; a tree that cannot heal is no healer kind.
+    std::vector<std::tuple<std::uint8_t, std::int8_t, GuildAddHealer, GuildAddBuffs>> const healers{
+        {Paladin, HolyPaladin, GuildAddHealer::Tank, Bits({B::Kings})},
+        {Priest, Discipline, GuildAddHealer::Absorb, Bits({B::Fortitude})},
+        {Priest, HolyPriest, GuildAddHealer::RaidPriest, Bits({B::Fortitude})},
+        {Shaman, RestoShaman, GuildAddHealer::RaidShaman, Bits({B::Bloodlust, B::SpellPower})},
+        {Druid, RestoDruid, GuildAddHealer::RaidDruid, Bits({B::MarkOfTheWild, B::BattleRes})},
+        {Priest, Shadow, GuildAddHealer::None, Bits({B::Replenishment, B::SpellHit, B::Fortitude})},
+        {Druid, -1, GuildAddHealer::None, Bits({B::MarkOfTheWild, B::BattleRes})}};
+    for (auto const& [cls, tab, kind, buffs] : healers)
+    {
+        auto const facts = GuildAddSpecFacts(cls, tab, Healer);
+        CHECK(facts.healer == kind);
+        CHECK_EQ(facts.buffs, buffs);
+        CHECK(!facts.melee);
+    }
+    CHECK(GuildAddSpecFacts(Paladin, HolyPaladin, Damage).healer == GuildAddHealer::None);
+
+    // Tanks stand in melee whatever their tree; a bear and a frost death knight keep their tree's buffs.
+    CHECK(GuildAddSpecFacts(Druid, Feral, Tank).melee);
+    CHECK_EQ(GuildAddSpecFacts(Druid, Feral, Tank).buffs, GuildAddSpecFacts(Druid, Feral, Damage).buffs);
+    CHECK_EQ(GuildAddSpecFacts(DeathKnight, FrostDk, Tank).buffs, Bits({B::MeleeHaste}));
+
+    // Every buff has a source. Replenishment comes from exactly its five talents; a battle res only from druids (a
+    // death knight's Raise Ally raises a ghoul in 3.3.5, not the member). Curse of the Elements only from Destruction,
+    // the one tree whose default strategies cast it. The 5% spell crit debuff from what the bots apply: Improved
+    // Scorch (Fire), Winter's Chill (Frost), and Improved Shadow Bolt from the Affliction and Demonology premades,
+    // whose filler is Shadow Bolt (Destruction's premade skips it and casts Incinerate).
+    GuildAddBuffs all = 0;
+    std::vector<std::pair<std::uint8_t, std::int8_t>> replenishment, battleRes, spellDamage, spellCritTaken;
+    for (std::uint8_t cls : Classes)
+        for (std::int8_t tab = 0; tab < 3; ++tab)
+        {
+            auto const buffs = GuildAddSpecFacts(cls, tab, Damage).buffs;
+            all |= buffs;
+            if (buffs & GuildAddBuffBit(B::Replenishment))
+                replenishment.emplace_back(cls, tab);
+            if (buffs & GuildAddBuffBit(B::BattleRes))
+                battleRes.emplace_back(cls, tab);
+            if (buffs & GuildAddBuffBit(B::SpellDamageTaken))
+                spellDamage.emplace_back(cls, tab);
+            if (buffs & GuildAddBuffBit(B::SpellCritTaken))
+                spellCritTaken.emplace_back(cls, tab);
+        }
+    using Trees = std::vector<std::pair<std::uint8_t, std::int8_t>>;
+    CHECK_EQ(all, (GuildAddBuffs(1) << kGuildAddBuffs) - 1);
+    CHECK(replenishment == (Trees{{Paladin, Ret}, {Hunter, Survival}, {Priest, Shadow}, {Mage, FrostMage},
+        {Warlock, Destruction}}));
+    CHECK(battleRes == (Trees{{Druid, Balance}, {Druid, Feral}, {Druid, RestoDruid}}));
+    CHECK(spellDamage == (Trees{{DeathKnight, Unholy}, {Warlock, Destruction}, {Druid, Balance}}));
+    CHECK(spellCritTaken == (Trees{{Mage, Fire}, {Mage, FrostMage}, {Warlock, Affliction}, {Warlock, Demonology}}));
+
+    // Bloodlust and Replenishment weigh most, then the % buffs and debuffs, then the rest.
+    for (std::size_t i = 0; i < kGuildAddBuffs; ++i)
+    {
+        auto const buff = static_cast<GuildAddBuff>(i);
+        std::uint32_t const weight = i < 2 ? 100 : i < 13 ? 10 : 1;
+        CHECK_EQ(GuildAddBuffWeight(buff), weight);
+    }
+}
+
+LEEROY_TEST(Guild_Add25PicksBloodlustAndReplenishmentFirst)
+{
+    auto const plan = PlanGuildAdd(25, 1, {{Damage, Rogue, Combat}}, RaidPool());
+    CHECK(plan.open == GuildAddCounts({3, 6, 15}));
+    CHECK_EQ(plan.covered, Bits({B::PhysicalDamageTaken, B::ArmorReduction}));
+    // The lowest-geared damage come first: the shaman's Bloodlust, then the shadow priest's Replenishment. Then the
+    // % buffs nobody has (the Arcane mage's 3% damage, the Fire mage's Improved Scorch before the warlock's equal
+    // Improved Shadow Bolt on gear), then gear: the assassin's 3% crit taken came with the shaman's Totem of Wrath,
+    // the hunter's Trueshot Aura with the tank's Abomination's Might.
+    CHECK_EQ(List(Guids(plan, Damage)), "306 307 300 301 302 303 304 305");
+    CHECK_EQ(plan.picks.size(), std::size_t(3 + 6 + 8));
+    for (auto const& pick : plan.picks)
+        if (pick.guid == 306)
+            CHECK_EQ(pick.buffs, GuildAddSpecFacts(Shaman, Elemental, Damage).buffs);
+}
+
+LEEROY_TEST(Guild_AddTanksPreferGearThenADifferentClass)
+{
+    // The first tank is the best geared; the next is of a tank class not yet tanking, before a better warrior, while
+    // it is within 10 item levels of the best-geared tank left.
+    auto const plan = PlanGuildAdd(25, 1, {{Damage, Rogue, Combat}}, RaidPool());
+    CHECK_EQ(List(Guids(plan, Tank)), "103 101 102");
+    std::vector<GuildAddCandidate> tanks{{100, Tank, Warrior, ProtWarrior, 230},
+        {101, Tank, Warrior, ProtWarrior, 250}, {102, Tank, Paladin, ProtPaladin, 220}};
+    CHECK_EQ(List(Guids(PlanGuildAdd(10, 1, {{Damage, Rogue}}, tanks))), "101 102");
+    // Eleven levels below the warrior left: gear wins.
+    tanks.back().gear = 219;
+    CHECK_EQ(List(Guids(PlanGuildAdd(10, 1, {{Damage, Rogue}}, tanks))), "101 100");
+    // His warrior tank counts: a death knight before the better-geared warrior, within 10 levels only.
+    std::vector<GuildAddMember> const his{{Damage, Rogue}, {Tank, Warrior, ProtWarrior}};
+    CHECK_EQ(List(Guids(PlanGuildAdd(10, 2, his, {{100, Tank, Warrior, ProtWarrior, 260},
+        {101, Tank, DeathKnight, Blood, 250}}))), "101");
+    CHECK_EQ(List(Guids(PlanGuildAdd(10, 2, his, {{100, Tank, Warrior, ProtWarrior, 260},
+        {101, Tank, DeathKnight, Blood, 249}}))), "100");
+}
+
+LEEROY_TEST(Guild_AddHealersFollowTheSizeTemplate)
+{
+    std::vector<GuildAddMember> const him{{Damage, Rogue, Combat}};
+    // 5: a Holy paladin or a Discipline priest, by gear, before the better-geared raid healers.
+    CHECK_EQ(List(Guids(PlanGuildAdd(5, 1, him, Healers()), Healer)), "200");
+    // 10: Holy paladin, Discipline priest, then the best-geared raid healer.
+    CHECK_EQ(List(Guids(PlanGuildAdd(10, 1, him, Healers()), Healer)), "200 210 220");
+    // 25: two Holy paladins, one Discipline priest, and one raid healer of each kind.
+    CHECK_EQ(List(Guids(PlanGuildAdd(25, 1, him, Healers()), Healer)), "200 210 220 201 240 230");
+    // 40: three Holy paladins, two Discipline priests, five raid healers kept mixed.
+    CHECK_EQ(List(Guids(PlanGuildAdd(40, 1, him, Healers()), Healer)), "200 210 220 201 240 211 230 202 221 231");
+}
+
+LEEROY_TEST(Guild_AddHealersFallBackByGear)
+{
+    std::vector<GuildAddMember> const him{{Damage, Rogue, Combat}};
+    // No Holy paladin: its slot goes to the best-geared healer left, here a second druid.
+    std::vector<GuildAddCandidate> const noPaladin{{210, Healer, Priest, Discipline, 230},
+        {240, Healer, Druid, RestoDruid, 245}, {241, Healer, Druid, RestoDruid, 210},
+        {230, Healer, Shaman, RestoShaman, 200}};
+    CHECK_EQ(List(Guids(PlanGuildAdd(10, 1, him, noPaladin), Healer)), "210 240 241");
+    // Raid healers only: the three raid slots mix, the Holy paladin and Discipline slots take the rest by gear.
+    CHECK_EQ(List(Guids(PlanGuildAdd(25, 1, him, Healers(false, false)), Healer)), "220 240 230 221 231 241");
+    // A 5-man with neither preferred kind free takes the best-geared healer.
+    CHECK_EQ(List(Guids(PlanGuildAdd(5, 1, him, Healers(false, false)), Healer)), "220");
+    // Only a Discipline priest of the preferred kinds: it comes before better gear.
+    CHECK_EQ(List(Guids(PlanGuildAdd(5, 1, him, Healers(false, true)), Healer)), "210");
+}
+
+LEEROY_TEST(Guild_AddGearBreaksTies)
+{
+    // Two Arcane mages bring the same: the better geared first.
+    std::vector<GuildAddCandidate> const mages{{300, Damage, Mage, Arcane, 220}, {301, Damage, Mage, Arcane, 240}};
+    CHECK_EQ(List(Guids(PlanGuildAdd(5, 1, {{Damage, Rogue, Combat}}, mages))), "301 300");
+    // Two Holy paladins: the better geared.
+    std::vector<GuildAddCandidate> const paladins{{200, Healer, Paladin, HolyPaladin, 210},
+        {201, Healer, Paladin, HolyPaladin, 230}};
+    CHECK_EQ(List(Guids(PlanGuildAdd(5, 1, {{Damage, Rogue, Combat}}, paladins))), "201");
+}
+
+LEEROY_TEST(Guild_AddBalancesMeleeAndRangedOnTies)
+{
+    // He is a hunter. Nobody brings anything and gear ties: a melee first to even the split, then the classes his
+    // group has fewest of and the lowest guid.
+    std::vector<GuildAddCandidate> const bench{{300, Damage, Hunter, -1, 200}, {301, Damage, DeathKnight, -1, 200},
+        {302, Damage, DeathKnight, -1, 200}};
+    CHECK_EQ(List(Guids(PlanGuildAdd(10, 1, {{Damage, Hunter}}, bench))), "301 300 302");
+    // Gear comes before the split.
+    std::vector<GuildAddCandidate> const geared{{300, Damage, Hunter, -1, 201}, {301, Damage, DeathKnight, -1, 200}};
+    CHECK_EQ(List(Guids(PlanGuildAdd(10, 1, {{Damage, Hunter}}, geared))), "300 301");
+}
+
+LEEROY_TEST(Guild_AddDoesNotChaseBuffsTwice)
+{
+    // His group has a shaman: the enhancement shaman's Bloodlust counts for nothing, so Replenishment wins.
+    std::vector<GuildAddCandidate> const bench{{300, Damage, Shaman, Enhancement, 250},
+        {301, Damage, Hunter, Survival, 190}};
+    auto const plan = PlanGuildAdd(5, 2, {{Damage, Rogue, Combat}, {Damage, Shaman, Elemental}}, bench);
+    CHECK(plan.open == GuildAddCounts({1, 1, 1}));
+    CHECK_EQ(List(Guids(plan)), "301");
+    // Without his shaman the enhancement shaman's Bloodlust outweighs it.
+    CHECK_EQ(List(Guids(PlanGuildAdd(5, 2, {{Damage, Rogue, Combat}, {Damage, Mage, Fire}}, bench))), "300");
+
+    // A second elemental shaman adds nothing once the first is picked: it goes last.
+    std::vector<GuildAddCandidate> const shamans{{300, Damage, Shaman, Elemental, 200},
+        {301, Damage, Shaman, Elemental, 199}, {302, Damage, Mage, Fire, 250},
+        {303, Damage, Hunter, BeastMastery, 240}};
+    CHECK_EQ(List(Guids(PlanGuildAdd(10, 1, {{Damage, Rogue, Combat}}, shamans))), "300 302 303 301");
+}
+
+LEEROY_TEST(Guild_AddGapFillCountsWhatHisGroupHas)
+{
+    // His group has a Holy paladin healing and a warrior tanking: the healers are the Discipline priest and a raid
+    // healer, not the best-geared Holy paladin; the tank is not a second warrior.
+    std::vector<GuildAddCandidate> const bench{{100, Tank, Warrior, ProtWarrior, 260},
+        {101, Tank, DeathKnight, Blood, 252}, {200, Healer, Paladin, HolyPaladin, 250},
+        {210, Healer, Priest, Discipline, 230}, {230, Healer, Shaman, RestoShaman, 220}};
+    auto const plan = PlanGuildAdd(10, 3, {{Damage, Rogue, Combat}, {Healer, Paladin, HolyPaladin},
+        {Tank, Warrior, ProtWarrior}}, bench);
+    CHECK(plan.open == GuildAddCounts({1, 2, 4}));
+    CHECK_EQ(List(Guids(plan)), "101 210 230");
+    CHECK_EQ(plan.covered, Bits({B::PhysicalDamageTaken, B::ArmorReduction, B::Kings}));
+
+    // A raid healer of his: the Holy paladin and Discipline slots are what is left.
+    CHECK_EQ(List(Guids(PlanGuildAdd(10, 2, {{Damage, Rogue, Combat}, {Healer, Druid, RestoDruid}}, bench),
+        Healer)), "200 210");
+    // Two Holy paladins of his: the second has no slot of its kind and takes the last one.
+    CHECK_EQ(List(Guids(PlanGuildAdd(10, 3, {{Damage, Rogue, Combat}, {Healer, Paladin, HolyPaladin},
+        {Healer, Paladin, HolyPaladin}}, bench), Healer)), "210");
+    // A 5-man whose healer slot he filled himself takes no healer.
+    CHECK(Guids(PlanGuildAdd(5, 1, {{Healer, Druid, RestoDruid}}, bench), Healer).empty());
+}
+
+LEEROY_TEST(Guild_AddMissingLineListsExactlyWhatIsMissing)
+{
+    GuildAddBuffs const every = (GuildAddBuffs(1) << kGuildAddBuffs) - 1;
+    std::vector<GuildAddMember> const him{{Damage, Rogue, Combat}};
+    for (std::uint32_t size : {10u, 25u, 40u})
+    {
+        auto const plan = PlanGuildAdd(size, 1, him, RaidPool());
+        auto const added = Picked(plan);
+        CHECK(GuildAddMissingLine(plan, added, every).empty());
+        // Only the important ones are named: the rest missing is no line.
+        CHECK(GuildAddMissingLine(plan, added,
+            every & ~Bits({B::Kings, B::BattleRes, B::ArmorReduction, B::SpellPower})).empty());
+        CHECK_EQ(GuildAddMissingLine(plan, added, every & ~Bits({B::Bloodlust, B::SpellHit, B::Kings})),
+            "Still missing: Bloodlust/Heroism and 3% spell hit");
+        CHECK_EQ(GuildAddMissingLine(plan, added, every & ~Bits({B::Replenishment})), "Still missing: Replenishment");
+        // All of them still fits one chat line.
+        auto const none = GuildAddMissingLine(plan, added, 0);
+        CHECK_EQ(none, "Still missing: Bloodlust/Heroism, Replenishment, 20% melee haste, 5% spell crit, 10% attack "
+            "power, 3% damage, 5% physical crit, 13% spell damage taken, 30% bleed damage, 4% physical damage taken, "
+            "3% spell hit, 3% crit taken and 5% spell crit taken");
+        CHECK(none.size() <= Leeroy::kMaxChatBytes);
+    }
+
+    // A 5-man names only Bloodlust and Replenishment.
+    auto const party = PlanGuildAdd(5, 1, him, RaidPool());
+    auto const partyAdded = Picked(party);
+    CHECK_EQ(GuildAddMissingLine(party, partyAdded, 0), "Still missing: Bloodlust/Heroism and Replenishment");
+    CHECK_EQ(GuildAddMissingLine(party, partyAdded, every & ~Bits({B::Bloodlust, B::SpellHit})),
+        "Still missing: Bloodlust/Heroism");
+    CHECK(GuildAddMissingLine(party, partyAdded, every & ~Bits({B::SpellHit, B::MeleeHaste, B::Kings})).empty());
+
+    // Nothing was filled: his group was full, or nobody joined.
+    auto const full = PlanGuildAdd(5, 5, him, RaidPool());
+    CHECK(full.full);
+    CHECK(GuildAddMissingLine(full, {}, 0).empty());
+    CHECK(GuildAddMissingLine(PlanGuildAdd(25, 1, him, RaidPool()), {}, 0).empty());
+    CHECK(GuildAddMissingLine(PlanGuildAdd(25, 1, him, {}), {}, 0).empty());
+
+    // After the 25-man fill: nobody brings Windfury or Icy Talons, Leader of the Pack or Rampage, Curse of the
+    // Elements, Earth and Moon or Ebon Plaguebringer, Mangle or Trauma.
+    auto const plan = PlanGuildAdd(25, 1, him, RaidPool());
+    CHECK_EQ(GuildAddMissingLine(plan, Picked(plan), After(plan)),
+        "Still missing: 20% melee haste, 5% physical crit, 13% spell damage taken and 30% bleed damage");
+}
+
+LEEROY_TEST(Guild_AddChasesASecondReplenishmentInBigRaids)
+{
+    // Replenishment reaches 10 members: a 25 or 40 takes a second source before the % buffs, a 10 does not.
+    std::vector<GuildAddMember> const him{{Damage, Rogue, Combat}};
+    std::vector<GuildAddCandidate> pool{{301, Damage, Paladin, Ret, 199}, {302, Damage, Mage, Arcane, 250},
+        {303, Damage, Rogue, Assassination, 249}, {304, Damage, Hunter, Survival, 198},
+        {305, Damage, Warrior, Fury, 240}};
+    CHECK_EQ(List(Guids(PlanGuildAdd(25, 1, him, pool))), "301 304 305 302 303");
+    CHECK_EQ(List(Guids(PlanGuildAdd(40, 1, him, pool))), "301 304 305 302 303");
+    CHECK_EQ(List(Guids(PlanGuildAdd(10, 1, him, pool))), "301 305 302 303");
+    // A third source is not chased: the hunter goes last once the warlock is the second.
+    pool.push_back({306, Damage, Warlock, Destruction, 197});
+    CHECK_EQ(List(Guids(PlanGuildAdd(25, 1, him, pool))), "301 306 305 302 303 304");
+}
+
+LEEROY_TEST(Guild_AddCutsTheHealerTemplateToTheOpenSlots)
+{
+    // His group has more damage than the raid wants, so the budget leaves fewer healer slots than the template has:
+    // they are the template's first, so a Holy paladin and a Discipline priest, never two of a kind.
+    auto pool = Healers();
+    pool.insert(pool.end(), {{100, Tank, Warrior, ProtWarrior, 250}, {101, Tank, Paladin, ProtPaladin, 245},
+        {102, Tank, DeathKnight, Blood, 240}});
+    std::vector<GuildAddMember> const twenty(20, GuildAddMember{Damage, Rogue, Combat});
+    auto const plan = PlanGuildAdd(25, 20, twenty, pool);
+    CHECK(plan.open == GuildAddCounts({3, 2, 0}));
+    CHECK_EQ(List(Guids(plan, Healer)), "200 210");
+    std::vector<GuildAddMember> const twentyOne(21, GuildAddMember{Damage, Rogue, Combat});
+    auto const one = PlanGuildAdd(25, 21, twentyOne, pool);
+    CHECK(one.open == GuildAddCounts({3, 1, 0}));
+    CHECK_EQ(List(Guids(one, Healer)), "200");
+    // A 40 with three healer slots left takes the template's first three.
+    std::vector<GuildAddMember> const thirtyThree(33, GuildAddMember{Damage, Rogue, Combat});
+    auto const forty = PlanGuildAdd(40, 33, thirtyThree, pool);
+    CHECK(forty.open == GuildAddCounts({4, 3, 0}));
+    CHECK_EQ(List(Guids(forty, Healer)), "200 210 220");
+}
+
+LEEROY_TEST(Guild_AddIsDeterministicForAFixedPool)
+{
+    auto pool = RaidPool();
+    auto const healers = Healers();
+    pool.insert(pool.end(), healers.begin() + 3, healers.end());
+    std::vector<GuildAddMember> const group{{Damage, Rogue, Combat}, {Tank, Warrior, ProtWarrior}};
+    auto const plan = PlanGuildAdd(25, 2, group, pool);
+    CHECK_EQ(plan.picks.size(), std::size_t(2 + 6 + 8));
+    for (std::size_t shift = 1; shift < pool.size(); shift += 5)
+    {
+        auto rotated = pool;
+        std::rotate(rotated.begin(), rotated.begin() + static_cast<std::ptrdiff_t>(shift), rotated.end());
+        CHECK_EQ(List(Guids(PlanGuildAdd(25, 2, group, rotated))), List(Guids(plan)));
+    }
+    std::vector<GuildAddCandidate> const reversed(pool.rbegin(), pool.rend());
+    CHECK_EQ(List(Guids(PlanGuildAdd(25, 2, group, reversed))), List(Guids(plan)));
 }

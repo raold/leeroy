@@ -14,6 +14,7 @@ from typing import Sequence
 from leeroy_mind.personas.screens import OBJECT_WINDOW, ROMANCE_RE
 from leeroy_mind.text import (EMOJI_RE, NAME_PREFIX_RE, NAME_TAG, has_meta, normalize_words,
                               strip_emoji, strip_name_prefix, word_jaccard)
+from leeroy_mind.talk.moves import classify, is_summon, main_move
 from leeroy_mind.voice.rooms import ROOMS, RoomDef
 
 ASSISTANT_PHRASES = ("happy to help", "absolutely", "great question", "let me know",
@@ -745,11 +746,40 @@ def supported(text: str, support: Sequence[str]) -> bool:
     return any(len(words & _content_words(s)) >= need for s in support)
 
 
+CLAUSE_JACCARD = 0.6
+MIN_CLAUSE_WORDS = 3
+MOVE_REPEAT_LAST = 2
+_ONCE_MOVES = ("summon", "declare", "plan", "later", "callback")
+
+
+def move_repeat(text: str, recent: Sequence[tuple[str, str]]) -> str | None:
+    """The main move this line repeats from her recent turns to this person (`recent` is
+    (final clause, main move), newest last), "clause" when her final clause is a near copy of
+    a recent one, else None. A once-per-stretch move counts only against her last
+    MOVE_REPEAT_LAST turns."""
+    if not recent:
+        return None
+    move = main_move(classify(text))
+    if move:
+        window = recent[-MOVE_REPEAT_LAST:] if move in _ONCE_MOVES else recent
+        if any(m == move for _, m in window):
+            return move
+    clause = _final_clause(text)
+    if len(normalize_words(clause).split()) >= MIN_CLAUSE_WORDS:
+        for c, _ in recent:
+            if (len(normalize_words(c).split()) >= MIN_CLAUSE_WORDS
+                    and word_jaccard(clause, c) >= CLAUSE_JACCARD):
+                return "clause"
+    return None
+
+
 def find_tells(text: str, *, recent_own: Sequence[str] = (), speaker: str = "",
                answers: Sequence[str] = (), others: Sequence[str] = (),
                samples: Sequence[str] = (), support: Sequence[str] | None = None,
                people: Sequence[str] = (), window: Sequence[str] = (),
-               held: Sequence[str] = (), tonight: bool = False) -> list[Tell]:
+               held: Sequence[str] = (), tonight: bool = False,
+               recent_moves: Sequence[tuple[str, str]] = (),
+               summons_ok: bool | None = None) -> list[Tell]:
     """Every tell in the text.
     Fatal: FATAL_PHRASES; meta talk (text.META_RE's unambiguous terms only); 2+ list lines;
     dialogue for other people ("\\nName:"); an *action* over 3 words; an exact repeat of one
@@ -806,6 +836,11 @@ def find_tells(text: str, *, recent_own: Sequence[str] = (), speaker: str = "",
         out.append(Tell("opener: absolutely", False, True))
     clause = _final_clause(text)
     out += [Tell(f"closer: {name}", False, True) for name, rx in _CLOSERS if rx.search(clause)]
+    repeated = move_repeat(text, recent_moves)
+    if repeated:
+        out.append(Tell(f"move repeat: {repeated}", False, True))
+    if summons_ok is False and is_summon(text):
+        out.append(Tell("summons", False, True))
     if EMOJI_RE.search(text):
         out.append(Tell("emoji", False))
     if _DASH.search(text):
