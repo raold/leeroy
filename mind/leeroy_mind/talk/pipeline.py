@@ -52,6 +52,7 @@ from leeroy_mind.talk.filters import (Tell, aimed_off_him, find_tells, flirty, i
                                       strip_copied, supported)
 from leeroy_mind.talk.guards import Guards
 from leeroy_mind.talk.facts import LibraryFacts
+from leeroy_mind.talk.items import defuse, fold
 from leeroy_mind.talk.prompt import (PromptParts, chat_line_text, comms_rules, facts_head,
                                      knows_real_name, mood_line, quest_help, real_name_line,
                                      redact_for, relationship_card, render_instruction,
@@ -71,8 +72,9 @@ from leeroy_mind.talk.style import (ROMANCE_EMOTES, Styled, command_only, emote_
 from leeroy_mind.talk.turns import Turn, TurnKind
 from leeroy_mind.talk.timing import TurnTiming
 from leeroy_mind.talk.world import WorldView
+from leeroy_mind.text import strip_wow_markup
 from leeroy_mind.voice.comms import SPOKEN_HINT, typed
-from leeroy_mind.wow import CLASSES, RACES
+from leeroy_mind.wow import CAST_MIN_LEVEL, CLASSES, RACES
 
 log = logging.getLogger("leeroy_mind.talk")
 
@@ -1087,6 +1089,7 @@ class Pipeline:
         else:
             hg = self.human.guid
             close = bool(hg) and knows_real_name(self.store.get_relationship(turn.speaker, hg))
+        text = self._link_items(turn, meta, text)
         if turn.channel == "whisper":  # an emote is public: a whisper keeps its words (NB6)
             text, emotes = emote_words(text), []
         else:
@@ -1107,6 +1110,9 @@ class Pipeline:
         else:
             lines = [] if only else self._style(turn, p, text, close=close,
                                                 two_lines=meta.two_lines, romance=meta.romance)
+        # The typing's ASCII fold can join two "{" (fullwidth braces, a zero-width space between):
+        # each line is defused once more as it is kept and sent (talk/items.py).
+        lines = [Styled(defuse(s.line), defuse(s.plain)) for s in lines]
         if not lines:
             if emotes:  # a line that was only an emote: the emote goes out (review minor 8)
                 await self._send_emotes(turn, meta, emotes)
@@ -1518,6 +1524,29 @@ class Pipeline:
                  else turn_lines(p.typing, turn.max_lines))
         return cap * max(1, lines)
 
+    def _link_level(self, guid: int) -> int:
+        m = self.world.members.get(guid)
+        return m.level if m is not None and m.level > 0 else CAST_MIN_LEVEL
+
+    def _link_items(self, turn: Turn, meta: TurnMeta, text: str) -> str:
+        """The turn's words with its item mentions as "[Name]" (ItemLinker.canonical), before the
+        typing styles them: the form every record keeps. A sender's transport barrier vouches for
+        its exact words, which are only defused, as every line is: no {{ reaches the bridge but
+        the placeholders _wire_items makes."""
+        items = getattr(self, "items", None)
+        if items is None or meta.before_transport is not None:
+            return defuse(text)
+        return items.canonical(text, self._link_level(turn.speaker))
+
+    def _wire_items(self, turn: Turn, meta: TurnMeta, text: str) -> str:
+        """The say command's text: the line folded as the wire carries it (items.fold), and its
+        "[Name]"s as native's {{item:<id>}} placeholders when native has them (ItemLinker.wire).
+        Only the bridge sees it; the line is recorded as `text`."""
+        items = getattr(self, "items", None)
+        if items is None or meta.before_transport is not None:
+            return fold(text)
+        return items.wire(text, self._link_level(turn.speaker))
+
     def _spell_real_name(self, text: str, *, close: bool, offered: bool) -> str:
         """The guard every line passes before it is stored or sent, voiced or typed: on the
         turn offered his real name, every use by a member of his inner circle is the name,
@@ -1608,7 +1637,8 @@ class Pipeline:
         try:
             self.timing.typed_send(meta.timing_trace)
             with self.timing.span(meta.timing_trace, "bridge_ack"):
-                ack = await self.send(Say(id="", guid=turn.speaker, channel=turn.channel, text=text,
+                ack = await self.send(Say(id="", guid=turn.speaker, channel=turn.channel,
+                                          text=self._wire_items(turn, meta, text),
                                           to_guid=turn.to_guid))
         except (AckTimeout, ConnectionLost) as e:
             # The bridge may still have said it: its echo can confirm it (is_echo).
@@ -1759,17 +1789,19 @@ class Pipeline:
     def is_echo(self, ev: Chat, now: float) -> bool:
         """The bridge's report of a line a `say` produced (via_bridge). The mind stored its own
         line on the ack; an echo of a line whose ack timed out records it now, and that is the
-        line's only row."""
+        line's only row. The echo carries native's item links, which read as the "[Name]" the
+        line was sent as (strip_wow_markup): that plain line is what is matched and recorded."""
         if not ev.via_bridge:
             return False
         self._settle_unacked(now)
-        late = self._unacked.pop((ev.from_guid, ev.channel, ev.text), None)
+        text = strip_wow_markup(ev.text)
+        late = self._unacked.pop((ev.from_guid, ev.channel, text), None)
         if late is None:
             log.debug("say_confirmed: guid=%d channel=%s", ev.from_guid, ev.channel)
             return True
         _, turn, meta, p, memory_ids, _ = late
         try:
-            self._record(turn, meta, p, ev.text, memory_ids)
+            self._record(turn, meta, p, text, memory_ids)
         except Exception:  # the app's dispatcher must never see it
             log.exception("say_record_failed: guid=%d channel=%s", ev.from_guid, ev.channel)
         else:

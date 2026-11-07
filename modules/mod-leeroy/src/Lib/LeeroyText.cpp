@@ -46,13 +46,27 @@ std::size_t SequenceLength(std::string_view text, std::size_t i)
     }
     return 0;
 }
-}
 
-std::string SanitizeChatText(std::string_view text, std::size_t maxBytes)
+// The sanitizer's one pass. `from`, when given, gets each output byte's index in `text`.
+std::string Sanitize(std::string_view text, std::vector<std::size_t>* from)
 {
     std::string out;
     out.reserve(text.size());
     bool pendingSpace = false;
+    std::size_t spaceAt = 0;
+    auto const put = [&](std::size_t at, std::size_t len) {
+        if (pendingSpace)
+        {
+            out += ' ';
+            if (from)
+                from->push_back(spaceAt);
+        }
+        pendingSpace = false;
+        out.append(text.substr(at, len));
+        if (from)
+            for (std::size_t k = 0; k < len; ++k)
+                from->push_back(at + k);
+    };
 
     for (std::size_t i = 0; i < text.size();)
     {
@@ -66,27 +80,34 @@ std::string SanitizeChatText(std::string_view text, std::size_t maxBytes)
         if (len == 1)
         {
             unsigned char const c = static_cast<unsigned char>(text[i]);
-            ++i;
             if (c == ' ' || c == '\r' || c == '\n' || c == '\t')
-                pendingSpace = !out.empty();
-            else if (c == '|' || c < 0x20 || c == 0x7F)
-                continue;
-            else
             {
-                if (pendingSpace)
-                    out += ' ';
-                pendingSpace = false;
-                out += static_cast<char>(c);
+                if (!pendingSpace)
+                    spaceAt = i;
+                pendingSpace = !out.empty();
             }
+            else if (c != '|' && c >= 0x20 && c != 0x7F)
+                put(i, 1);
+            ++i;
             continue;
         }
 
-        if (pendingSpace)
-            out += ' ';
-        pendingSpace = false;
-        out.append(text.substr(i, len));
+        put(i, len);
         i += len;
     }
+    return out;
+}
+}
+
+std::string SanitizeChatTextMapped(std::string_view text, std::vector<std::size_t>& from)
+{
+    from.clear();
+    return Sanitize(text, &from);
+}
+
+std::string SanitizeChatText(std::string_view text, std::size_t maxBytes)
+{
+    std::string out = Sanitize(text, nullptr);
 
     if (out.size() > maxBytes)
     {

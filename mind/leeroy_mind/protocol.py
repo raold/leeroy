@@ -59,6 +59,8 @@ class Hello:
     version: str
     guild_id: int
     human_guid: int
+    # What native understands beyond the base protocol ("item_links"); an older one sends none.
+    features: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
