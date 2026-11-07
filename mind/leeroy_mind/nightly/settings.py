@@ -56,6 +56,7 @@ class NightlySettings:
     coach_units: int = 20
     realm_units: int = 24
     notes_per_night: int = 300
+    claims_per_night: int = 40
     wow_lines_per_night: int = 40
     notice_night_hours: float = 6.0
     notice_week_hours: float = 30.0

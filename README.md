@@ -288,6 +288,14 @@ section, what it is planned for. The main threads:
     for the training ground's planned post-fight reflection and growing tactic
     library.
 
+## Member claims
+
+With `[claims] enabled = true`, an optional night stage remembers each member's own
+facts, opinions and plans. It supplies a model-free contradiction check and a
+scratch-history evaluation CLI; live chat does not use the check yet. See
+[the claims guide](mind/leeroy_mind/claims/README.md) for thresholds, limits and
+`python -m leeroy_mind claims eval --fake`.
+
 ## Profile photos
 
 With `[selfies] enabled = true` the mind picks a photo kind for each guild member who has looks
