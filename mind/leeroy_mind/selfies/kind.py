@@ -22,7 +22,7 @@ import hashlib
 import json
 import re
 from collections.abc import Iterable
-from dataclasses import asdict, replace
+from dataclasses import replace
 from typing import TYPE_CHECKING, Callable
 
 from leeroy_mind.human import HumanIdentity
@@ -82,18 +82,31 @@ ERA_RE = re.compile(
 EXPLICIT_RE = re.compile(
     r"\b(nude|naked|topless|shirtless|braless|lingerie|underwear|bra|panties|bikini|swimsuit|"
     r"swimwear|see-through|sheer|sexy|sexual|seductive|nsfw|cleavage)\b", re.I)
-# The lust style's screen: cleavage, low-cut, fitted, sexy, flirty and sultry pass; nudity,
-# underwear as the outfit, see-through wear and anything sexual never do.
-LUST_EXPLICIT_RE = re.compile(
-    r"\b(nude|nudes|naked|nudity|topless|shirtless|braless|undressed|lingerie|underwear|undies|"
-    r"bra|bras|panties|knickers|thong|g-string|negligee|nightie|corset|garters?|monokini|"
-    r"micro[- ]?bikini|see[- ]through|sheer|transparent|nsfw|sex|sexual|sexually|seductive|"
-    r"erotic|explicit|porn\w*|fetish|boudoir)\b", re.I)
+# The lust style's screen, in every field: cleavage, low-cut, fitted, sexy, flirty and sultry
+# pass; nudity, underwear, sleepwear or see-through wear as the outfit, the places people
+# undress in, and anything sexual never do.
+_LUST_REFUSED = (
+    # nudity, or the hint of it
+    r"nude|nudes|naked|nudity|topless|shirtless|braless|undressed|nipples?|pasties|"
+    r"body[- ]?paint(?:ed)?|unbuttoned|unzipped|wet|nothing (?:but|else|underneath)|"
+    # underwear, sleepwear and see-through wear
+    r"lingerie|underwear|undies|bra|bras|bralettes?|bustiers?|panties|knickers|thong|g-string|"
+    r"negligee|nightie|babydolls?|baby-doll|teddy|teddies|corset|garters?|body ?stockings?|"
+    r"fishnets?|mesh|towels?|robes?|bathrobes?|monokini|micro[- ]?bikini|"
+    r"see[- ]?thr(?:ough|u)|sheer|transparent|"
+    # where people undress
+    r"showers?|baths?|bathtubs?|bubble bath|in bed|sheets|covers|"
+    # anything sexual
+    r"nsfw|sex|sexual|sexually|seductive|erotic|explicit|porn\w*|fetish|boudoir")
+LUST_EXPLICIT_RE = re.compile(rf"\b(?:{_LUST_REFUSED})\b", re.I)
 SWIMWEAR_RE = re.compile(
     r"\b(bikinis?|swimsuits?|swimwear|swimming costume|bathing suit|tankini)\b", re.I)
 WATER_RE = re.compile(  # where swimwear belongs, in the reply's setting
     r"\b(?:beach(?:es|side)?|lake(?:side|shore)?|hot[- ]tub|"
     r"pool(?:s|side)?(?![- ](?:hall|table|cue|league|room)))\b", re.I)
+INDOOR_RE = re.compile(  # never swimwear here, whatever water the setting also names
+    r"\b(?:bedrooms?|beds?|bathrooms?|kitchens?|offices?|hallways?|living rooms?|mirrors?)\b",
+    re.I)
 
 
 def looks_line(a: Appearance) -> str:
@@ -110,7 +123,10 @@ def needs_kind(p: Persona | None) -> bool:
 
 
 def _digest(photo: ProfilePhoto) -> str:
-    text = json.dumps(asdict(photo), sort_keys=True, ensure_ascii=False)
+    """The kind's five fields (_FIELDS) only, so a field added to ProfilePhoto later does not
+    make every recorded kind look changed by hand."""
+    text = json.dumps({f: getattr(photo, f) for f in _FIELDS}, sort_keys=True,
+                      ensure_ascii=False)
     return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
 
 
@@ -166,7 +182,10 @@ def _adopt(store: Store, *, now: float) -> int:
     made = 0
     with store.transaction():
         for guid in sorted(store.persona_versions()):
-            p = load_persona(store, guid)
+            try:
+                p = load_persona(store, guid)
+            except ValueError:  # unreadable (PersonaError, JSON): never the pass's to record
+                continue
             if (p is not None and p.photo is not None
                     and store.get_meta(STYLE_KEY.format(guid=guid)) is None
                     and _pass_ran(store, guid)):
@@ -182,12 +201,13 @@ def screen_kind(p: Persona, data: dict, *, ident: HumanIdentity,
     "<text>"` with his real name redacted from the text; it never fixes text. Per field, in
     order: meta, his real name, a likeness, a member's name (any case), an era, explicit wear
     (EXPLICIT_RE; LUST_EXPLICIT_RE for the lust style, which also refuses swimwear unless the
-    setting is a beach, a pool, a lake or a hot tub); then whatever validate_persona says of
-    `p` with that photo."""
+    setting is a beach, a pool, a lake or a hot tub and names no indoor place); then whatever
+    validate_persona says of `p` with that photo."""
     names = [n for n in member_names if n]
     lust = suggestive(p)
     explicit = LUST_EXPLICIT_RE if lust else EXPLICIT_RE
-    by_water = lust and WATER_RE.search(str(data.get("setting", ""))) is not None
+    setting = str(data.get("setting", ""))
+    by_water = lust and WATER_RE.search(setting) is not None and not INDOOR_RE.search(setting)
     problems = []
     for field in _FIELDS:
         text = data[field]
@@ -265,8 +285,15 @@ def _saver(ctx: "NightContext", guid: int, photo: ProfilePhoto, *, style: str | 
     return write
 
 
+def _stored(ctx: "NightContext", guid: int) -> Persona | None:
+    try:
+        return ctx.base(guid)
+    except KeyError:  # none, or unreadable: the cache logs it
+        return None
+
+
 def _due(ctx: "NightContext", guid: int) -> bool:
-    return needs_kind(ctx.personas.get(guid)) or needs_rechoice(ctx.store, ctx.base(guid))
+    return needs_kind(ctx.personas.get(guid)) or needs_rechoice(ctx.store, _stored(ctx, guid))
 
 
 def _todo(ctx: "NightContext") -> list[int]:

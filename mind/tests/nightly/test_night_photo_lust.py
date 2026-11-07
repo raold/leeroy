@@ -4,7 +4,7 @@ template and screen, and a kind chosen under the other rules is chosen again onc
 stance moves. Everyone else keeps the plain rules exactly. Fakes only; every person here is
 invented."""
 import logging
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from string import Formatter
 
 import pytest
@@ -159,13 +159,47 @@ def test_the_overlay_nightly_photo_lust_replaces_the_lust_template_only(h):
 
 # -- the screen ------------------------------------------------------------------------------
 
+@pytest.mark.parametrize("field", ["setting", "outfit", "expression"])
 @pytest.mark.parametrize("word", ["nude", "naked", "topless", "shirtless", "braless", "lingerie",
                                   "underwear", "bra", "panties", "see-through", "sheer", "nsfw",
                                   "sexual"])
-def test_the_lust_screen_still_refuses_what_is_never_allowed(h, word):
-    out = screen_kind(lust(h), {**LUST_KIND, "outfit": f"a {word} top"}, ident=IDENT,
+def test_the_lust_screen_still_refuses_what_is_never_allowed(h, field, word):
+    out = screen_kind(lust(h), {**LUST_KIND, field: f"a {word} look"}, ident=IDENT,
                       member_names=["Testb"])
-    assert any(m.startswith("photo.outfit: explicit") for m in out), word
+    assert any(m.startswith(f"photo.{field}: explicit") for m in out), (field, word)
+
+
+# the other words for undressed, underwear, sleepwear and the places people undress in
+UNDRESSED = ["a towel", "two towels", "a robe", "a fluffy bathrobe", "a lace bralette",
+             "a bustier", "a babydoll dress", "a teddy", "a bodystocking", "fishnet tights",
+             "fishnets", "a mesh top", "pasties", "a nipple", "nipples", "body paint",
+             "body-paint", "wet hair", "an unbuttoned shirt", "an unzipped hoodie",
+             "nothing but a smile", "nothing else", "nothing underneath", "a seethrough top",
+             "the shower", "a bath", "the bathtub", "a bubble bath", "lying in bed",
+             "the sheets", "under the covers"]
+
+
+@pytest.mark.parametrize("field", ["setting", "outfit", "expression"])
+@pytest.mark.parametrize("text", UNDRESSED)
+def test_the_lust_screen_refuses_the_other_words_for_undressed_in_every_field(h, field, text):
+    out = screen_kind(lust(h), {**LUST_KIND, field: text}, ident=IDENT, member_names=["Testb"])
+    assert any(m.startswith(f"photo.{field}: explicit") for m in out), (field, text)
+
+
+@pytest.mark.parametrize("field", ["kind", "framing"])
+@pytest.mark.parametrize("text", ["towel selfie", "in bed", "nude", "wet look"])
+def test_the_lust_screen_reads_the_kind_and_framing_too(h, field, text):
+    out = screen_kind(lust(h), {**LUST_KIND, field: text}, ident=IDENT, member_names=["Testb"])
+    assert any(m.startswith(f"photo.{field}: explicit") for m in out), (field, text)
+
+
+def test_a_hot_tub_is_still_by_the_water(h):
+    p = lust(h)
+    for setting in ("in the hot tub", "in a hot-tub on the deck"):
+        assert screen_kind(p, {**LUST_KIND, "setting": setting}, ident=IDENT,
+                           member_names=["Testb"]) == []
+        assert screen_kind(p, {**LUST_KIND, "setting": setting, "outfit": "a red bikini"},
+                           ident=IDENT, member_names=["Testb"]) == []
 
 
 @pytest.mark.parametrize("field,text", [
@@ -190,6 +224,28 @@ def test_swimwear_only_where_it_belongs(h, setting, ok):
             assert out == [], (setting, outfit)
         else:
             assert any(m.startswith("photo.outfit: swimwear") for m in out), (setting, outfit)
+
+
+@pytest.mark.parametrize("setting", [
+    "her bedroom mirror, back from the beach", "the bathroom by the pool",
+    "her kitchen at the lake house", "the office by the beach", "the hotel hallway by the pool",
+    "the living room of a lake cabin", "a bed by the pool", "the mirror at the poolside gym"])
+def test_swimwear_is_never_indoors_whatever_water_the_setting_names(h, setting):
+    out = screen_kind(lust(h), {**LUST_KIND, "setting": setting, "outfit": "a red bikini"},
+                      ident=IDENT, member_names=["Testb"])
+    assert any(m.startswith("photo.outfit: swimwear") for m in out), setting
+
+
+def test_a_swimwear_word_in_the_setting_itself_follows_the_same_rule(h):
+    p = lust(h)
+    out = screen_kind(p, {**LUST_KIND, "setting": "a bikini shop at the mall"}, ident=IDENT,
+                      member_names=["Testb"])
+    assert any(m.startswith("photo.setting: swimwear") for m in out)
+    out = screen_kind(p, {**LUST_KIND, "setting": "a swimsuit shop in her bedroom by the lake"},
+                      ident=IDENT, member_names=["Testb"])
+    assert any(m.startswith("photo.setting: swimwear") for m in out)
+    assert screen_kind(p, {**LUST_KIND, "setting": "a bikini contest on the beach"},
+                       ident=IDENT, member_names=["Testb"]) == []
 
 
 def test_the_lust_screen_keeps_the_other_checks(h):
@@ -377,6 +433,36 @@ def test_the_log_names_a_rechoice_that_landed_by_id_only(h, caplog):
     assert "guid=103 style" not in caplog.text and "rechosen=1" in caplog.text
     for s in (*LUST_KIND.values(), "Belra", "Coros"):
         assert s not in caplog.text
+
+
+def test_the_record_ignores_a_field_added_to_the_photo_later(h):
+    @dataclass(frozen=True)
+    class Later(ProfilePhoto):  # a ProfilePhoto with one more field, as a later schema may add
+        lighting: str = "golden hour"
+    lust(h, 102)
+    night(h, 0, [LUST_KIND])
+    assert kind._digest(Later(**LUST_KIND, lighting="soft window light")) == \
+        kind._digest(ProfilePhoto(**LUST_KIND))
+    later = replace(load_persona(h.store, 102), photo=Later(**LUST_KIND))
+    assert chosen_style(h.store, later) == LUST and not needs_rechoice(h.store, later)
+    changed = replace(later, photo=Later(**{**LUST_KIND, "outfit": "a green sweater"}))
+    assert chosen_style(h.store, changed) is None
+
+
+def test_an_unreadable_persona_is_skipped_and_the_others_get_their_kinds(h):
+    lust(h, 102)
+    h.woman(103, "fond", appearance=APPEARANCE)
+    _legacy(h, 103, ran=True)
+    with h.store.transaction():
+        h.store.conn.execute("UPDATE persona_core SET json = ? WHERE guid = ?",
+                             ('{"schema": 1}', 103))
+    ctx = h.ctx({"photo": [LUST_KIND]})
+    assert 103 in ctx.members(include_away=True)
+    others = frozenset({"coach", "realm"})
+    assert budget._counts(ctx, set(), others | {"photo"})["photo"] == 1
+    run(stage_photo(ctx))
+    assert ctx.reasoner.calls == 1 and photo(h, 102) == ProfilePhoto(**LUST_KIND)
+    assert h.store.get_meta("selfies:photo-style:103") is None
 
 
 def test_the_counter_counts_the_rechoices(h):
