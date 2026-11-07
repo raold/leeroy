@@ -396,3 +396,5 @@ td > div.who { color: var(--ink); font-weight: 600; }
 .dkpface { display: inline-flex; vertical-align: middle; margin-right: 6px; }
 #g-due { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .chip.warn { --c: var(--warn); }
+.calday h4 { margin: 12px 0 2px; font-size: 13px; color: var(--muted); }
+.calday:first-child h4 { margin-top: 0; }

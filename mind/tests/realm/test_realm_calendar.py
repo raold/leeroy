@@ -754,3 +754,18 @@ def test_attach_is_a_part_without_io(rig):
     part, events = calendar.attach(rig.realm)
     assert type(part) is CalendarDesk and set(events) == {"realm_job", "job", "calendar_rsvp"}
     assert rig.store.conn.total_changes == changes and rig.realm.tasks == []
+
+
+# -- night_text (the desk's rule, shared with the console) ----------------------------------------
+
+def test_night_text_is_the_desks_rule(store):
+    c = store.conn
+    at = 1_793_304_000.0
+    assert calendar.night_text(c, at) == "no raid"
+    c.execute("INSERT INTO guild_raid(started,ended,raid_key,size,heroic,offline,lead_guid,tank_guid,loot_guid,"
+              "kills,wipes) VALUES (?,?,'icc',10,0,1,1,1,1,5,3)", (at + 3600, None))
+    assert calendar.night_text(c, at) is None  # Still running.
+    c.execute("UPDATE guild_raid SET ended = ?", (at + 4 * 3600,))
+    assert calendar.night_text(c, at) == "night off: Icecrown Citadel offline, 5 of 12 bosses, 3 wipes"
+    c.execute("INSERT INTO session(started,ended) VALUES (?,?)", (at - 600, at + 600))
+    assert calendar.night_text(c, at) is None  # He came.

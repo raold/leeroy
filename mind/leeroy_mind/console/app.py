@@ -60,6 +60,8 @@ run nothing else.
     GET  /api/social   the Social tab: feuds, jealousy, romances, feelings toward him, live
                        rumours and the guild mood, from mind.db (a missing table is listed in
                        `missing`, not an error)
+    GET  /api/calendar the Calendar tab: upcoming events with their signups and the raid nights
+                       he missed, from mind.db (a missing table is listed in `missing`)
     GET  /api/selfies/images  ?guid=&set=: a ready set's four thumbnails as data URLs (404
                        unless that set is ready and the member's)
     GET  /api/selfies/member  ?guid=: one member's photo in force, sets and change history
@@ -90,7 +92,7 @@ from pathlib import Path
 from typing import Callable
 
 from .. import endpoint
-from . import (faces, feed, mindlog, netinfo, personaview, raidview, selfieview, socialview,
+from . import (calendarview, faces, feed, mindlog, netinfo, personaview, raidview, selfieview, socialview,
                status, tuneview)
 from .control import Controls, Refused
 from .httpd import Request, Response, Stream, digits, encode_json, json_response, text
@@ -585,6 +587,7 @@ class ConsoleApp:
                   ("GET", "/api/raid"): self._api_raid,
                   ("GET", "/api/guild"): self._api_guild,
                   ("GET", "/api/social"): self._api_social,
+                  ("GET", "/api/calendar"): self._api_calendar,
                   ("GET", "/api/personas"): self._api_personas,
                   ("GET", "/api/persona"): self._api_persona,
                   ("GET", "/api/face"): self._api_face,
@@ -709,6 +712,9 @@ class ConsoleApp:
 
     async def _api_social(self, req: Request):
         return await self._db_view("social", socialview.social_view, now=self._clock())
+
+    async def _api_calendar(self, req: Request):
+        return await self._db_view("calendar", calendarview.calendar_view, now=self._clock())
 
     # -- the personas tab (read-only) ----------------------------------------------------------
 

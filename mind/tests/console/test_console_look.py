@@ -137,8 +137,6 @@ LABELS = ["Comms", "Raid", "Guild", "Social", "Personas", "Board", "Calendar", "
 COMING = {
     "board": "The guild's message board: realm forum posts, the Realm's write-ups and the letters members "
              "send you, with your replies. Coming soon.",
-    "calendar": "Upcoming raid nights with sign-ups, Thursday's officer meeting, birthdays a week ahead and "
-                "the raid nights you missed. Coming soon.",
     "bank": "The guild bank as in game: all six tabs, the gold, the money log and what officers stocked or "
             "withdrew. Coming soon.",
     "realm": "The three rival guilds: their members and progress, the race for first kills, poaching, their "
@@ -173,7 +171,7 @@ def test_the_new_tabs_say_what_is_coming():
         assert re.search(r'class="(?:[^"]* )?placeholder(?: [^"]*)?"', m.group(1)), t
         assert f"<h2>{LABELS[TABS.index(t)]}</h2>" in m.group(2), t
         assert f"<p>{copy}</p>" in m.group(2), t
-    for t in ("comms", "raid", "guild", "social", "personas", "mind"):
+    for t in ("comms", "raid", "guild", "social", "calendar", "personas", "mind"):
         assert not re.search(rf'<section id="tab-{t}"[^>]*placeholder', page), t
 
 

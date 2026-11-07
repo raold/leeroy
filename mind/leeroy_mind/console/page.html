@@ -336,9 +336,12 @@
     <h2>Board</h2>
     <p>The guild's message board: realm forum posts, the Realm's write-ups and the letters members send you, with your replies. Coming soon.</p>
   </section>
-  <section id="tab-calendar" class="tab placeholder" role="tabpanel" aria-labelledby="t-calendar" hidden>
-    <h2>Calendar</h2>
-    <p>Upcoming raid nights with sign-ups, Thursday's officer meeting, birthdays a week ahead and the raid nights you missed. Coming soon.</p>
+  <section id="tab-calendar" class="tab mindtab" role="tabpanel" aria-labelledby="t-calendar" hidden>
+    <div id="calendar-banner" class="banner bad" hidden></div>
+    <div class="view-head"><div><h2>Calendar</h2><p>What the Realm's calendar desk has posted: raid nights with their sign-ups, the officer meeting, birthdays and the raid nights you missed.</p></div></div>
+    <div id="calendar-kpis" class="kpis" aria-label="The calendar at a glance"></div>
+    <article class="panel"><header><h3>Coming up</h3></header><div id="calendar-upcoming"></div></article>
+    <article id="calendar-missed" class="panel"><header><h3>Raid nights you missed</h3></header><div id="calendar-missed-list"></div></article>
   </section>
   <section id="tab-bank" class="tab placeholder" role="tabpanel" aria-labelledby="t-bank" hidden>
     <h2>Bank</h2>
