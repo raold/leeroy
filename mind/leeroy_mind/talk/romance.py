@@ -11,6 +11,12 @@ moves, is narrative: it adds history and, deeper in, more intimacy, and never ca
 anything. The loop guards (guards.py) still brake the volume of every line; they are not
 romance rules.
 
+The distance is the frame (variety plan, Track B): she and he know each other through the game
+and live far apart, so desire reads as longing, frustration she can't act on, specific wants and
+teasing that builds on what he said, never a summons or "I'm waiting". Each stage of the
+long-distance arc has a passage with variants, one picked per turn, and above HEAT_FROM her
+attraction shows in three steps (warm, heated, aching). None of it reproaches him.
+
 Built-in text is non-explicit at every setting. Explicit wording comes only from the owner's
 local overlays (mind-data/prompts/romance_<band>.txt) through prompts.load_prompt; a missing
 romance_explicit overlay falls back to the suggestive built-in and is warned about once per
@@ -19,16 +25,18 @@ import itertools
 import logging
 import math
 import random
+import re
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Sequence
 
 from leeroy_mind.human import HumanIdentity
 from leeroy_mind.personas.schema import Persona
 from leeroy_mind.prompts import load_prompt
 from leeroy_mind.storage.rows import Relationship
 from leeroy_mind.talk.budget import GAP_SPREAD, HOLD_PUSH_S, DayPhase
+from leeroy_mind.talk.moves import classify
 from leeroy_mind.talk.raid import RaidPhase
 from leeroy_mind.talk.select import pick_speakers
 from leeroy_mind.talk.turns import TurnKind
@@ -75,8 +83,16 @@ NO_BRAKES_DIAL = 9
 # in everything she reads and does toward him. At this one every turn of hers to him carries her
 # romance (pipeline._romance) and a lust woman reads as the boldest (attitude_text).
 FULL_DIAL = 10
+# The long-distance arc. S1 puts the same tuple in storage/rows.ROMANCE_STAGES; until S8 makes
+# this that one, a row still at a stage of the old ladder (before S's migration has run) reads
+# its new stage's passage, by S1's own mapping (an invitation is planning).
+ARC_STAGES = ("none", "notices", "banter", "whispers", "late_nights", "voice", "picture",
+              "confession", "planning", "weekend", "after", "ex")
+LEGACY_STAGE = {"vulnerable": "late_nights", "invitation": "planning",
+                "acknowledged": "confession"}
 STAGE_DEPTH = {"none": 0, "notices": 0, "ex": 0, "banter": 1, "whispers": 1,
-               "vulnerable": 2, "invitation": 2, "acknowledged": 2}
+               "late_nights": 2, "voice": 2, "picture": 2, "confession": 2, "planning": 2,
+               "weekend": 2, "after": 2, "vulnerable": 2, "invitation": 2, "acknowledged": 2}
 
 # Templates take {name} (HumanIdentity.called) and {them}/{their} (HumanIdentity.forms).
 # How forward she is within her attitude follows her extraversion (attitude_text): fifteen
@@ -98,18 +114,164 @@ ATTITUDE_TEXT = {
         "quiet": "You want {name} more than you let on, and it slips out around {them}.",
     },
 }
-STAGE_TEXT = {
-    "none": "",
-    "notices": "Lately you've caught yourself noticing {name} more than you let on.",
-    "banter": "You and {name} have a running back-and-forth going.",
-    "whispers": "You and {name} whisper each other privately now and then.",
-    "vulnerable": "You've told {name} things you don't tell the guild.",
-    "invitation": "Something more has been offered between you two, and it's still in the air.",
-    "acknowledged": "You and {name} are a thing now, and the guild knows it.",
-    "ex": "You and {name} had something once and it ended. There's history.",
+# What the meeting was like is left open, so she never contradicts what he says about it.
+DEFER = "If {name} remembers something about the weekend differently, go with {their} version."
+# One passage per stage, a variant picked per turn (stage_text), so the same text never opens
+# every whisper. Each takes only {name}, {them} and {their} and is at most 40 estimated tokens.
+# They say what has happened between them, never that she waits or that he should come.
+STAGE_PASSAGES: dict[str, tuple[str, ...]] = {
+    "none": ("",),
+    "notices": (
+        "Lately you've caught yourself noticing {name} more than you let on.",
+        "You've started reading {name}'s lines in guild chat a little more closely than anyone "
+        "else's.",
+        "You perk up a little when {name} logs on, and you haven't told anyone why.",
+    ),
+    "banter": (
+        "You and {name} have a running back-and-forth going in guild chat, and you like showing "
+        "off for {them}.",
+        "You and {name} tease each other in front of everyone, and you both play to the "
+        "audience.",
+        "Flirting with {name} in guild chat has become a habit, and you play it up when the "
+        "guild is watching.",
+    ),
+    "whispers": (
+        "You and {name} whisper each other privately now and then, things you'd never type in "
+        "guild.",
+        "Your whispers with {name} have their own tone, looser and more honest than guild chat.",
+        "A lot of what you say to {name} goes by whisper now, where nobody else is reading.",
+    ),
+    "late_nights": (
+        "You and {name} have started staying up after raids, talking about life outside the "
+        "game.",
+        "You've told {name} things you don't tell the guild, on late nights after the raid ends.",
+        "Your late talks with {name} have gone past the game: work, home, what keeps you up at "
+        "night.",
+    ),
+    "voice": (
+        "You love hearing {name}'s voice on Vent late at night, just the two of you.",
+        "You've gotten a little hooked on {name}'s voice on Vent, and you hear it when you read "
+        "{their} lines.",
+        "A quiet Vent channel late at night with {name} has become your favourite place to be.",
+    ),
+    "picture": (
+        "You sent {name} a picture of yourself not long ago, just for {them}, and you're still a "
+        "little giddy about it.",
+        "Now {name} knows what you look like: you sent {them} a picture, and you liked sending "
+        "it.",
+    ),
+    "confession": (
+        "You've told {name} what this is for you, more than a guild flirt, and you meant every "
+        "word.",
+        "It's out now: {name} knows you have real feelings for {them}, and saying it was a "
+        "relief.",
+        "You've stopped pretending with {name}: this is real for you, and you've said so.",
+    ),
+    "planning": (
+        "Meeting {name} for real has stopped being a joke to you: the money, the time off, the "
+        "nerves.",
+        "You keep daydreaming about meeting {name} in person: what you'd wear, what you'd say "
+        "first.",
+        "A real trip to meet {name} is on your mind, half excited and half nervous, full of "
+        "what-ifs.",
+    ),
+    "weekend": (
+        f"You're just back from meeting {{name}} in person and keep replaying it. {DEFER}",
+        f"The weekend with {{name}} really happened, and you're still floating. {DEFER}",
+    ),
+    "after": (
+        f"You've met {{name}} in person now, and you miss {{them}} more than before. {DEFER}",
+        f"That weekend left you and {{name}} with inside jokes nobody else gets. {DEFER}",
+        f"You and {{name}} are together now, and the guild knows it. {DEFER}",
+    ),
+    "ex": (
+        "You and {name} had something once and it ended. There's history, and no hard feelings.",
+        "What you and {name} had is over now. You keep it friendly, with a soft spot you don't "
+        "make a fuss about.",
+    ),
+}
+# Whisper scope: these stages' passages are said only in a whisper to him (stage_text's
+# `private`). On every other channel she reads one of these, which keeps them there.
+PRIVATE_GUARD = ("What you share in whispers stays there: in public it shows only in how you "
+                 "tease {them}.")
+PUBLIC_PASSAGES: dict[str, tuple[str, ...]] = {
+    "late_nights": (
+        f"You and {{name}} have gotten easy with each other. {PRIVATE_GUARD}",
+        f"You and {{name}} have a lot going on these days. {PRIVATE_GUARD}",
+    ),
+    "picture": (
+        f"There's a new spark in how you flirt with {{name}}. {PRIVATE_GUARD}",
+        f"You've got a little grin saved up for {{name}} lately. {PRIVATE_GUARD}",
+    ),
+    "confession": (
+        f"{{name}} matters to you more than you'd say in public. {PRIVATE_GUARD}",
+        f"You and {{name}} are closer than you let on. {PRIVATE_GUARD}",
+    ),
 }
 # Drawn and lust women start at "notices" (seed_relationships) but are past just noticing him.
 INTO_HIM_ALREADY = "You've had your eye on {name} for a while."
+# The distance is the frame (spec call 3: it comes after his overlay), at most 45 estimated
+# tokens each. The planning stage's frame names the trip as the real meeting and leaves where
+# and when to the plan. Both take {them}. What he just said is the turn's own instruction's
+# to say, and what is happening SPECIFIC's, so the frame says neither.
+DISTANCE = ("You two live far apart and meet only in game: don't ask {them} to come over, don't "
+            "say you're waiting. Bring want, longing, a tease.")
+DISTANCE_PLAN = ("You two live far apart and meet only in game. A trip is the real meeting: "
+                 "don't ask {them} to come over, don't say you're waiting or invent where or when. "
+                 "Bring want, longing.")
+# What you two did lately, for a whisper to him only (romance_instruction's `scene`, a few
+# notes, newest first). Second person; {they}/{them}/{their} are his forms. Keys are
+# his_<move> and her_<move> for A1's move names; a summons has no note, so it is never said back.
+# His moves come from his_moves: "need you to" asks for something, so it is no declaration there.
+SCENE_HEAD = "Between you two lately:"
+SCENE_MAX = 3
+NOTE_TEXT: dict[str, str] = {
+    "his_question": "{they} asked about you",
+    "his_declare": "{they} said {they} wanted you",
+    "his_compliment": "{they} complimented you",
+    "his_gift": "{they} sent you something",
+    "his_petname": "{they} gave you a pet name",
+    "her_declare": "you told {them} how you feel",
+    "her_tease": "you teased {them}",
+    "her_question": "you asked {them} something personal",
+    "her_callback": "you brought back something {they} said before",
+    "her_compliment": "you complimented {them}",
+    "her_plan": "you talked about meeting someday",
+}
+# Longing that has gone quiet, wistful or a little hurt, never nagging; time offline is never
+# held against him. For a whisper to him only.
+COOLING_TEXT: tuple[str, ...] = (
+    "Things between you and {name} have gone a little quiet lately; it makes you wistful, "
+    "and you keep it light.",
+    "The spark with {name} has cooled a bit, and it stings softly; you're easy about it and "
+    "glad for any line from {them}.",
+    "You miss how easy it was with {name}, and you don't make a thing of it.",
+)
+# A scan over every built-in romance string keeps reproach and summons out of them.
+REPROACH_RE = re.compile(
+    r"\b(you never|you always|where (were|are) you|why (didn'?t|don'?t|won'?t) you|you forgot"
+    r"|ignor(e|es|ing) me|you don'?t care|left me|stood me up|i'?m (still )?waiting"
+    r"|waiting for you|come over|get over here|hurry( up)?|find me)\b", re.IGNORECASE)
+# Her attraction inside the top band (60 to 100 used to read the same): longing, never reproach.
+HEAT_FROM = 60
+HEAT_HEATED, HEAT_ACHING = 75, 90
+HEAT_TEXT: dict[str, tuple[str, ...]] = {
+    "warm": (
+        "{name} has been on your mind a lot lately, and it shows in how you answer {them}.",
+        "You light up a little whenever {name} types something, and you don't mind if it shows.",
+    ),
+    "heated": (
+        "It's getting harder to keep it light with {name}, and you've stopped trying very hard.",
+        "Wanting {name} from this far away is its own kind of frustrating, and it makes you "
+        "bolder.",
+    ),
+    "aching": (
+        "You're aching for {name} now: every line from {them} lands hard, and the miles between "
+        "you feel long.",
+        "You miss {name} like it's a physical thing, and you'd give a lot just to be in the same "
+        "room as {them}.",
+    ),
+}
 STYLE_TEXT = {
     "bold": "Your way: you make the first move and say what you mean.",
     "shy": "Your way: it slips out sideways, then you laugh it off or change the subject.",
@@ -145,14 +307,15 @@ BUILTIN_ROMANCE: dict[str, str] = {
                    "like, nothing graphic."),
 }
 BUILTIN_ROMANCE["explicit"] = BUILTIN_ROMANCE["suggestive"]  # the real thing is an overlay
-SPECIFIC = ("Hook it on what's actually happening (what {name} just said, the pull, the loot, "
-            "the hour), never a canned line.")
+SPECIFIC = ("Hook it on what's actually happening (the pull, the loot, the hour), never a "
+            "canned line.")
 # The frame, worded as one and read mid-block, not as a line to say back (prompts I5).
 INVARIANTS = "It's only ever with {name}, two adults, and only what you both want."
 _AUDIENCE = {"guild": "whole guild", "officer": "officers", "party": "party", "raid": "raid",
              "say": "people standing nearby"}
 _LATE = frozenset({DayPhase.LATE, DayPhase.DEAD})
 
+VARIANT_SEP = "---"  # a line of just this splits an overlay into variants
 _warned: set[str] = set()
 
 
@@ -204,21 +367,99 @@ def explicit_whisper(p: Persona, rel: Relationship | None, *, dial: int, channel
 
 
 def whisper_tail(p: Persona, rel: Relationship | None, *, dial: int, channel: str,
-                 data_dir: Path) -> str:
-    """The owner's whisper overlay (mind-data/prompts/romance_explicit_whisper.txt), capped
-    like the band overlays, for a whisper to him at the explicit band; "" otherwise or when
-    there is none (the band as before). The pipeline puts it after the turn's instruction."""
+                 data_dir: Path, forms: tuple[str, str, str],
+                 rng: random.Random | None = None) -> str:
+    """The owner's whisper overlay (mind-data/prompts/romance_explicit_whisper.txt; one of
+    its variants, the first without `rng`), capped like the band overlays, then the stage's
+    distance frame filled with his `forms` (HumanIdentity.forms), for a whisper to him at the
+    explicit band; "" otherwise or when there is no overlay (the band as before). The pipeline
+    puts it after the turn's instruction; romance_instruction then leaves the frame out
+    (`tail_follows`), so it is said once, after his overlay."""
     if not explicit_whisper(p, rel, dial=dial, channel=channel):
         return ""
-    text = load_prompt(WHISPER_OVERLAY, data_dir, "")
-    return _capped(text, WHISPER_OVERLAY, data_dir) if text else ""
+    variant = _pick(overlay_variants(WHISPER_OVERLAY, data_dir), rng)
+    if not variant:
+        return ""
+    they, them, their = forms
+    stage = rel.romance_stage if rel is not None else "none"
+    return f"{variant} {distance_text(stage).format(they=they, them=them, their=their)}"
 
 
-def stage_text(stance: str, stage: str) -> str:
-    """The stage's line for this attitude (a template taking {name})."""
+def passage_key(stage: str) -> str:
+    """The arc stage whose passage a stored stage reads: an old ladder's name maps to its new
+    one (LEGACY_STAGE), any other is itself."""
+    return LEGACY_STAGE.get(stage, stage)
+
+
+def stage_text(stance: str, stage: str, rng: random.Random | None = None, *,
+               private: bool = False) -> str:
+    """The stage's passage for this attitude, one of its variants (the first without `rng`), a
+    template taking {name}, {them} and {their}; "" for none or an unknown stage. `private`: a
+    whisper to him. Without it a stage whose passage is for whispers only (late nights, the
+    picture, the confession) reads its PUBLIC_PASSAGES one."""
     if stage == "notices" and stance in ("drawn", "lust"):
         return INTO_HIM_ALREADY
-    return STAGE_TEXT.get(stage, "")
+    key = passage_key(stage)
+    variants = (PUBLIC_PASSAGES[key] if not private and key in PUBLIC_PASSAGES
+                else STAGE_PASSAGES.get(key, ("",)))
+    return _pick(variants, rng) or ""
+
+
+def distance_text(stage: str) -> str:
+    """The distance frame for this stage (a template taking {them}): the planning stage's frame
+    names the trip as the one real meeting."""
+    return DISTANCE_PLAN if passage_key(stage) == "planning" else DISTANCE
+
+
+def heat_step(attraction: float) -> str | None:
+    """How her attraction shows inside the top band: None under HEAT_FROM, then warm, heated
+    and aching."""
+    if attraction < HEAT_FROM:
+        return None
+    if attraction < HEAT_HEATED:
+        return "warm"
+    return "heated" if attraction < HEAT_ACHING else "aching"
+
+
+def heat_text(stance: str, stage: str, rel: Relationship | None,
+              rng: random.Random | None = None) -> str:
+    """Her heat step's line (a variant), or "" under the band, without a row, for a stance
+    other than drawn or lust (a fond woman's warmth is her attitude's), or for an ex: an ex is
+    history, so a high score never reads as pining there."""
+    step = heat_step(rel.attraction) if rel is not None else None
+    if step is None or stance not in ("drawn", "lust") or passage_key(stage) == "ex":
+        return ""
+    return _pick(HEAT_TEXT[step], rng) or ""
+
+
+def scene_notes(her: frozenset[str], his: frozenset[str]) -> list[tuple[str, str]]:
+    """(kind, note) for the moves of the lately line: his moves, then hers, in NOTE_TEXT's
+    order; a move without a note (a summons) gives none. The note is a template over
+    {they}/{them}/{their}."""
+    return [(k, t) for k, t in NOTE_TEXT.items()
+            if (k[4:] in his if k.startswith("his_") else k[4:] in her)]
+
+
+# An ask, not a declaration ("i need you to heal"): his_moves reads no declaration into it.
+ASK_RE = re.compile(r"\bneed (you|u) to\b", re.IGNORECASE)
+
+
+def his_moves(text: str) -> frozenset[str]:
+    """His moves in a line of his, for her scene notes (talk.moves.classify, left as it is for
+    its other users): a declaration counts only from the line without its asks (ASK_RE)."""
+    moves = classify(text)
+    if "declare" in moves and ASK_RE.search(text) and "declare" not in classify(
+            ASK_RE.sub(" ", text)):
+        moves -= {"declare"}
+    return moves
+
+
+def rival_text(rival: str, forms: tuple[str, str, str]) -> str:
+    """The rival line (another guild member, a woman): it stings and aims at her, never at him.
+    A template over {name}; the rival's own name is escaped for format()."""
+    her_name = rival.replace("{", "{{").replace("}", "}}")
+    return (f"{her_name} has been getting closer to {{name}}, and it stings: you'd like to "
+            f"outshine her. It's her you're up against, never {forms[1]}.")
 
 
 def _is_woman(p: Persona) -> bool:
@@ -238,13 +479,38 @@ def _capped(text: str, name: str, data_dir: Path) -> str:
     return truncate_words(text, OVERLAY_CAP_TOKENS * 4)
 
 
-def _band_text(b: Band, data_dir: Path) -> str:
+def split_variants(text: str) -> tuple[str, ...]:
+    """An overlay's text split on the lines that are exactly `---`; blank blocks dropped."""
+    blocks, cur = [], []
+    for line in text.splitlines():
+        if line.strip() == VARIANT_SEP:
+            blocks.append("\n".join(cur))
+            cur = []
+        else:
+            cur.append(line)
+    blocks.append("\n".join(cur))
+    return tuple(b.strip() for b in blocks if b.strip())
+
+
+def overlay_variants(name: str, data_dir: Path) -> tuple[str, ...]:
+    """mind-data/prompts/<name>.txt as its variants, each capped on its own; () when there is
+    no file or it is blank. One block reads as the whole overlay always did."""
+    text = load_prompt(name, data_dir, "")
+    return tuple(_capped(v, name, data_dir) for v in split_variants(text)) if text else ()
+
+
+def _pick(variants: tuple[str, ...], rng: random.Random | None) -> str | None:
+    if not variants:
+        return None
+    return variants[0] if rng is None or len(variants) == 1 else rng.choice(variants)
+
+
+def _band_text(b: Band, data_dir: Path, rng: random.Random | None = None) -> str:
     if b != "explicit":
-        return _capped(load_prompt(f"romance_{b}", data_dir, BUILTIN_ROMANCE[b]),
-                       f"romance_{b}", data_dir)
-    text = load_prompt("romance_explicit", data_dir, "")
+        return _pick(overlay_variants(f"romance_{b}", data_dir), rng) or BUILTIN_ROMANCE[b]
+    text = _pick(overlay_variants("romance_explicit", data_dir), rng)
     if text:
-        return _capped(text, "romance_explicit", data_dir)
+        return text
     key = str(Path(data_dir).resolve())
     if key not in _warned:
         _warned.add(key)
@@ -279,30 +545,63 @@ def style_text(p: Persona) -> str:
     return HUMOUR_STYLE.get(p.humour, "")
 
 
+def _fill(template: str, fill: dict[str, str]) -> str:
+    """A stored note or arc line with only its pronoun and name slots filled, so a brace in
+    someone's words never breaks the format."""
+    for k, v in fill.items():
+        template = template.replace("{" + k + "}", v)
+    return template
+
+
+def _slots(scene: Sequence[str], arc_lines: Sequence[str], rival: str, cooling: bool,
+           fill: dict[str, str], human: HumanIdentity, rng: random.Random | None) -> list[str]:
+    out = []
+    notes = [_fill(n, fill) for n in scene if n][:SCENE_MAX]
+    if notes:
+        out.append(f"{SCENE_HEAD} {'; '.join(notes)}.")
+    out += [_fill(a, fill) for a in arc_lines if a]
+    if rival:
+        out.append(rival_text(rival, human.forms).format(**fill))
+    if cooling:
+        out.append(_pick(COOLING_TEXT, rng).format(**fill))
+    return out
+
+
 def romance_instruction(p: Persona, rel: Relationship | None, *, dial: int, channel: str,
                         addressee_is_human: bool, phase: DayPhase, human: HumanIdentity,
-                        data_dir: Path) -> str | None:
+                        data_dir: Path, rng: random.Random | None = None,
+                        tail_follows: bool = False, scene: Sequence[str] = (),
+                        arc_lines: Sequence[str] = (), rival: str = "",
+                        cooling: bool = False) -> str | None:
     """The romance text for a turn by `p` (rel is p's relationship to the human), or None
     when p is a man, has no attitude toward him or is not talking to him. The human is named
     by human.called with his pronouns from human.forms; his real name never appears here. In
-    order: her attitude, her way, the stage, the band's wording, the frame (INVARIANTS), the
-    channel and the hour, and the hook on what's happening last. The pipeline puts it before
-    the turn's own instruction, so the model reads that last. `dial` is the owner's; the band
+    order: her attitude, her way, the stage's passage (a whisper-only stage's public one on any
+    channel but a whisper), her heat (rel.attraction, drawn and lust only), the band's wording,
+    the distance frame, the frame (INVARIANTS), the channel and the hour, and the hook on
+    what's happening last. `rng` picks the variants (the first of each without it);
+    `tail_follows`: the whisper tail says the distance frame after his overlay, so it is left
+    out here. The pipeline puts it before the turn's own instruction, so the model reads that
+    last. After the heat line, for a whisper to him only (whisper scope; any other channel
+    leaves them out even if passed): SCENE_HEAD and at most SCENE_MAX `scene` notes, the
+    `arc_lines`, the rival's line and a cooling variant. `dial` is the owner's; the band
     follows her own when she has one."""
     stance = p.romance.stance
     if not addressee_is_human or stance not in ATTITUDE_REACH or not _is_woman(p):
         return None
     dial = dial_for(p, dial)
     stage = rel.romance_stage if rel is not None else "none"
-    _, them, their = human.forms
-    fill = dict(name=human.called, them=them, their=their)
+    they, them, their = human.forms
+    fill = dict(name=human.called, they=they, them=them, their=their)
     audience = _AUDIENCE.get(channel, "everyone around")
     parts = [
         attitude_text(p),
         style_text(p),
-        stage_text(stance, stage),
+        stage_text(stance, stage, rng, private=channel == "whisper"),
+        heat_text(stance, stage, rel, rng),
     ]
     rest = [
+        "" if tail_follows else distance_text(stage),
         INVARIANTS,
         ("It's a private whisper, just the two of you." if channel == "whisper"
          else "The people in the room can hear you, so play to the room."
@@ -312,8 +611,11 @@ def romance_instruction(p: Persona, rel: Relationship | None, *, dial: int, chan
         SPECIFIC,
     ]
     head = " ".join(x.format(**fill) for x in parts if x)
+    if channel == "whisper":
+        head = " ".join(x for x in (head, *_slots(scene, arc_lines, rival, cooling, fill, human,
+                                                   rng)) if x)
     tail = " ".join(x.format(**fill) for x in rest if x)
-    return f"{head} {_band_text(effective_band(stance, stage, dial), data_dir)} {tail}"
+    return f"{head} {_band_text(effective_band(stance, stage, dial), data_dir, rng)} {tail}"
 
 
 # -- the men's jealousy asides ---------------------------------------------------------------

@@ -10,10 +10,12 @@ import pytest
 from conftest import HUMAN, make_mem, seed_test_cast
 from engine_rig import RAID, engine_clock, make_rig, save_member
 from leeroy_mind.protocol import Group
+from leeroy_mind.storage.rows import Relationship
 from leeroy_mind.talk.filters import Tell
 from leeroy_mind.talk.moves import MOVE_PHRASES, MOVES
 from leeroy_mind.talk.pipeline import MOVE_HINT, REGEN_HINT, REPEAT_HINT, SUMMONS_HINT
-from leeroy_mind.talk.romance import OVERLAY_CAP_TOKENS
+from leeroy_mind.talk.prompt import LIVE_BUDGET
+from leeroy_mind.talk.romance import NOTE_TEXT, OVERLAY_CAP_TOKENS, SCENE_HEAD, STAGE_PASSAGES
 from leeroy_mind.talk.turns import Turn, TurnKind
 from leeroy_mind.text import estimate_tokens
 
@@ -87,6 +89,66 @@ def test_a_repeated_summons_is_asked_again_then_dropped(rig):
     assert len(rig.chat_calls()) == 2
     assert SUMMONS_HINT.format(**HE) in rig.last_user()
     assert not rig.sent.says() and _moves(rig.store) == []
+
+
+def test_a_summons_in_a_typed_guild_reply_to_him_is_asked_again_then_dropped(rig):
+    """A guild line addressed to him is a line to him: the summons check applies there too."""
+    rig.script("get over here", "come over already")
+    to_him = Turn(kind=TurnKind.REPLY_HUMAN, speaker=102, channel="guild", addressee=HUMAN)
+    assert rig.speak_turn(to_him) == []
+    assert rig.utterances()[-1]["dropped"] == "tells" and len(rig.chat_calls()) == 2
+    assert SUMMONS_HINT.format(**HE) in rig.last_user()
+    assert not rig.sent.says() and _moves(rig.store) == []
+
+
+def test_a_refused_send_records_no_move(store, clock, tmp_path):
+    """Only a line the server took is a move: a refused one leaves no row and no note."""
+    _cast(store)
+    r = make_rig(store, clock, tmp_path, ack=lambda cmd: (False, "refused"))
+    try:
+        r.script("bet you can't keep up")
+        r.whisper_from_him(102, "how was your day?")
+        r.run()
+        assert r.sent.says() and r.utterances()[-1]["dropped"] == "refused"
+        assert _moves(store) == []
+        assert store.conn.execute("SELECT COUNT(*) FROM pair_note").fetchone()[0] == 0
+    finally:
+        r.close()
+
+
+def test_a_whisper_to_another_member_stays_in_that_whisper(rig):
+    """Her whisper to Arkon names itself neither in her guild line to him nor in her turns
+    with Zan."""
+    to_arkon = Turn(kind=TurnKind.WHISPER, speaker=102, channel="whisper", to_guid=101,
+                    addressee=101)
+    rig.script("bet you can't keep up", "fair enough")
+    assert rig.speak_turn(to_arkon)
+    assert _moves(rig.store) == [(102, 101, "whisper", 101, "tease")]
+    rig.run(60)
+    assert rig.speak_turn(to_arkon)  # the same whisper sees it
+    assert "Tonight you've already teased them" in rig.last_user()
+    rig.run(60)
+    assert rig.speak_turn(Turn(kind=TurnKind.CONTINUE, speaker=102, channel="guild",
+                               addressee=101))
+    assert "you've already" not in rig.last_user()
+    rig.whisper_from_him(102, "what's up")
+    rig.run()
+    assert "teased" not in rig.last_user()
+
+
+def test_a_turn_reads_her_moves_once(rig, monkeypatch):
+    """The prompt's Lately line and the repeat check use the same rows (Composed.moves)."""
+    calls = []
+    recent = rig.engine.moves.recent
+
+    def counted(*a, **kw):
+        calls.append(a)
+        return recent(*a, **kw)
+    monkeypatch.setattr(rig.engine.moves, "recent", counted)
+    rig.script("bet you can't keep up", "fair enough")
+    rig.whisper_from_him(102, "hey")
+    rig.run()
+    assert len(calls) == 1
 
 
 def test_a_raid_leads_unaddressed_call_to_come_over_is_said(rig):
@@ -173,10 +235,12 @@ def test_a_member_turn_names_her_moves_with_that_member(rig):
 def test_moves_survive_a_restart(store, clock, tmp_path):
     _cast(store)
     first = make_rig(store, clock, tmp_path)
-    first.script("lol true")
-    first.whisper_from_him(102, "hey")
-    first.run()
-    first.close()
+    try:
+        first.script("lol true")
+        first.whisper_from_him(102, "hey")
+        first.run()
+    finally:
+        first.close()
     again = make_rig(store, clock, tmp_path)
     try:
         again.script("fair enough")
@@ -209,9 +273,14 @@ def _overlays_at_cap(data_dir) -> str:
     return text
 
 
-def _worst_case(store, clock) -> None:
-    """A lust woman (the explicit band in a whisper to him) with 5 memories of him."""
+def _worst_case(store, clock, *, hot: bool = False) -> None:
+    """A lust woman (the explicit band in a whisper to him) with 5 memories of him. `hot`: also
+    at the stage with the longest whisper passage she can be stored at (banter) and at the top
+    heat step."""
     _cast(store, stance="lust")
+    if hot:
+        store.put_relationship(Relationship(a=102, b=HUMAN, affinity=40.0, trust=30.0,
+                                            attraction=95.0, romance_stage="banter"))
     t = int(clock.now()) - 3 * 86400
     for i, text in enumerate(("Zan carried me through the whole heroic run last week.",
                               "Zan stayed up until four talking about his new job with me.",
@@ -222,35 +291,68 @@ def _worst_case(store, clock) -> None:
                                      t_created=t + i, t_accessed=t + i, source="chat"))
 
 
+def _worst_whisper(r, clock, caplog) -> tuple[str, list[str], int]:
+    """8 lines of whisper chat shown, her own 5 last lines, 10 move rows and her 3 longest
+    scene notes, then his whisper: her prompt's user message, the notes and the prompt's
+    estimated tokens."""
+    replies = ["bet you can't keep up", "how was work?", "ugh my boss is the worst",
+               "lol true", "ok handsome"]
+    for i, reply in enumerate(replies):  # 10 lines of whisper chat (8 shown), her own 5
+        r.script(reply)
+        r.whisper_from_him(102, f"so what happened next with the thing number {i}")
+        r.run()
+    assert len(r.sent.says()) == len(replies)
+    for i, text in enumerate(("you look great", "see you after raid", "lol true",
+                              "need better gear honestly", "how was work?")):  # 10 rows
+        r.engine.moves.record(guid=102, counterpart=HUMAN, channel="whisper",
+                              to_guid=HUMAN, text=text, ts=clock.now() - 100 + i)
+    longest = sorted((t.format(**HE) for t in NOTE_TEXT.values()), key=len)[-3:]
+    for i, note in enumerate(longest):  # the newest three
+        r.engine.notes.add(102, HUMAN, f"note{i}", note, channel="whisper", to_guid=HUMAN,
+                           ts=clock.now() + i / 1000)
+    r.script("fair enough")
+    with caplog.at_level(logging.WARNING, logger="leeroy_mind.talk"):
+        r.whisper_from_him(102, "so how was the rest of your evening")
+        r.run()
+    tokens = sum(estimate_tokens(m["content"]) for m in r.chat_calls()[-1]["messages"])
+    return r.last_user(), longest, tokens
+
+
 def test_worst_case_whisper_keeps_the_lately_line_without_a_last_resort_trim(
         store, clock, tmp_path, caplog):
-    """Both overlays at their cap, 8 lines of whisper chat, 5 memories, her own 5 last lines
-    and 10 move rows: the Lately line is there and nothing is cut."""
+    """Both overlays at their cap, 8 lines of whisper chat, 5 memories, her own 5 last lines,
+    10 move rows and 3 scene notes (the longest): the Lately line and the scene are there, the
+    distance frame is said once, and nothing is cut."""
     _worst_case(store, clock)
     r = make_rig(store, clock, tmp_path)
     overlay = _overlays_at_cap(tmp_path)
     try:
-        replies = ["bet you can't keep up", "how was work?", "ugh my boss is the worst",
-                   "lol true", "ok handsome"]
-        for i, reply in enumerate(replies):  # 10 lines of whisper chat (8 shown), her own 5
-            r.script(reply)
-            r.whisper_from_him(102, f"so what happened next with the thing number {i}")
-            r.run()
-        assert len(r.sent.says()) == len(replies)
-        for i, text in enumerate(("you look great", "see you after raid", "lol true",
-                                  "need better gear honestly", "how was work?")):  # 10 rows
-            r.engine.moves.record(guid=102, counterpart=HUMAN, channel="whisper",
-                                  to_guid=HUMAN, text=text, ts=clock.now() - 100 + i)
-        r.script("fair enough")
-        with caplog.at_level(logging.WARNING, logger="leeroy_mind.talk"):
-            r.whisper_from_him(102, "so how was the rest of your evening")
-            r.run()
-        user = r.last_user()
+        user, longest, tokens = _worst_whisper(r, clock, caplog)
         assert "Tonight you've already" in user
+        assert f"{SCENE_HEAD} {'; '.join(longest)}." in user
+        assert user.count("live far apart") == 1
+        assert tokens <= LIVE_BUDGET
         assert user.count(overlay) == 2  # both overlays, whole
         assert user.count("three days ago: Zan") == 5  # every memory
         assert user.split("Chat:\n")[1].split("\n\n")[0].count("\n") == 7  # 8 chat lines
         assert user.split("(don't make the same move again):\n")[1].count("\n") >= 5
+        assert "last-resort trim" not in caplog.text
+    finally:
+        r.close()
+
+
+def test_a_hot_worst_case_whisper_keeps_the_lately_line_without_a_last_resort_trim(
+        store, clock, tmp_path, caplog):
+    """The same with her stage passage (banter) and her heat at "aching": the Lately line is
+    kept with no last-resort trim. The usual trims may take memories, chat and her own lines
+    down to their floors."""
+    _worst_case(store, clock, hot=True)
+    r = make_rig(store, clock, tmp_path)
+    _overlays_at_cap(tmp_path)
+    try:
+        user, _, _ = _worst_whisper(r, clock, caplog)
+        assert "Tonight you've already" in user
+        assert any(v.format(name="Zan", **HE) in user for v in STAGE_PASSAGES["banter"])
         assert "last-resort trim" not in caplog.text
     finally:
         r.close()
