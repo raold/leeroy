@@ -1,17 +1,20 @@
 """Members react to the human's text emotes (owner, 2026-11-07). The app hands the engine his
-live text emotes while he is online (on_text_emote); a member's own, another player's, the
-mind's echoes and replayed ones never come here.
+live text emotes while he is online (on_text_emote, with the stored game_event row's id); a
+member's own, another player's, the mind's echoes and replayed ones never come here.
 
 - His emote at an online cast member with a persona: after EMOTE_BACK_S she emotes back at him,
-  from a small table keyed by his emote and her stance toward him (emote_back): a woman's lust,
+  from a table keyed by his emote and her stance toward him (emote_back): a woman's lust,
   drawn, fond or none, and "man". Men read as friends, so they get friendly or awkward emotes,
-  never a romantic one, and so does a woman with no attitude toward him. His rudeness
-  (RUDE_EMOTES) is answered by her temper: a glare, anger or tears. An emote the table does not
-  know gets nothing. Once her emote is out she sometimes says one short line (wants_line:
-  LINE_P_ROMANTIC for a romantic emote, else LINE_P), an EMOTE_REACT turn through the ordinary
-  pipeline that is told exactly what he did (the template EMOTE_AT_YOU): a romantic one is
-  answered by whisper, any other by /say, since his emote's target is always within emote range
-  (channels.EMOTE_CHANNELS).
+  never a romantic one, and so does a woman with no attitude toward him; a woman whose forward
+  dial is at 0 (she flirts with nobody: romance.flirt_chance) answers from her fond row. Every
+  emote is answered but the utility and combat ones (emote_names.UTILITY_EMOTES): those the
+  table does not name get a friendly or awkward FALLBACK, and his rudeness (RUDE_EMOTES) her
+  temper (a glare, anger or tears). Once her emote is out she sometimes says one short line
+  (wants_line: LINE_P_ROMANTIC for a romantic emote, else LINE_P), an EMOTE_REACT turn through
+  the ordinary pipeline that is told exactly what he did (the template EMOTE_AT_YOU): a romantic
+  one is answered by whisper, any other by /say, since his emote's target is always within emote
+  range (channels.EMOTE_CHANNELS). No line is drawn, or queued, while she has an answer to him
+  (a REPLY_HUMAN) planned or said one in the last guards.REPLY_S: her emote still goes.
 - His social emote at nobody (JOIN_EMOTES; also one at someone outside the cast, an NPC or a
   stranger): 0-2 members in his group, or with nobody free there those in his zone, join in with
   a fitting emote of their own, at nobody. At most one of them adds a line (EMOTE_JOINED), on his
@@ -19,20 +22,23 @@ mind's echoes and replayed ones never come here.
 - Limits: COOLDOWN_S per member and PER_MINUTE reactions guild-wide, counted when a reaction is
   planned (EmoteLimits). Nothing in a fight (COMBAT, WIPE_SILENCE, WIPE_DEBRIEF), in the login
   quiet, nor from a member existing talk would refuse (offline, AFK, no persona, dead, the raid
-  rules). The emote back checks again after its delay, and her line is queued only once her
-  emote went out. Emotes and lines leave through the engine's send, so the silent latch holds
+  rules). The emote back checks again after its delay, and her line is made and queued only once
+  her emote went out. Emotes and lines leave through the engine's send, so the silent latch holds
   them too.
 
-The night's attraction pass counts his romantic emotes at a woman with an attitude as a flirt and
-his rude ones as a hurt (nightly/attraction.py reads ROMANTIC_EMOTES and RUDE_EMOTES); her line
-is an ordinary sent line, remembered like any other. The words are two named prompt templates:
-the owner's overlay mind-data/prompts/<name>.txt replaces one, with {name} (what he is called)
-and {emote} filled in and anything else, braces too, used as written. Built-in words stay
-non-explicit. Logs carry guids, emote names and outcomes, never chat text."""
+Once her emote back at his emote went out, the live side writes a receipt (meta
+emote_names.answered_key(event id) = her guid): the night's attraction pass counts only those,
+his romantic emotes at a woman with an attitude as a flirt (at most two a night) and his rude
+ones as a hurt (nightly/attraction.py). Her line is an ordinary sent line, remembered like any
+other. The words are two named prompt templates, read when the line is made: the owner's overlay
+mind-data/prompts/<name>.txt replaces one, with {name} (what he is called) and {emote} filled in
+and anything else, braces too, used as written; one that cannot be read gives the built-in words.
+Built-in words stay non-explicit. Logs carry guids, emote names and outcomes, never chat text."""
 import math
 import re
 from collections import deque
 from pathlib import Path
+from typing import NamedTuple
 
 from leeroy_mind.bridge import BridgeError
 from leeroy_mind.llm.scheduler import Priority
@@ -40,8 +46,12 @@ from leeroy_mind.personas.schema import Persona
 from leeroy_mind.prompts import load_prompt
 from leeroy_mind.protocol import Emote, TextEmote
 from leeroy_mind.talk.channels import choose_channel
+from leeroy_mind.talk.emote_names import (FRIENDLY_EMOTES, ROMANTIC_EMOTES, RUDE_EMOTES,
+                                          UTILITY_EMOTES, answered_key)
+from leeroy_mind.talk.guards import REPLY_S
 from leeroy_mind.talk.pipeline import TurnMeta, log
 from leeroy_mind.talk.reactions import FIGHT_PHASES, Reactions
+from leeroy_mind.talk.romance import flirt_chance
 from leeroy_mind.talk.turns import Turn, TurnKind
 
 EMOTE_BACK_S = (2.0, 6.0)  # her emote back, after his
@@ -51,13 +61,6 @@ PER_MINUTE = 6  # reactions guild-wide in a minute, at most
 MINUTE_S = 60.0
 LINE_P_ROMANTIC, LINE_P = 0.5, 0.25  # how often a reaction adds a line
 JOINERS = (0, 2)  # members joining his social emote
-
-# His emotes a line answers by whisper and the night counts as a flirt at her.
-ROMANTIC_EMOTES = frozenset({"kiss", "love", "flirt", "cuddle", "hug", "wink", "sexy",
-                             "holdhand", "charm"})
-# His emotes answered by her temper and counted as a hurt at night.
-RUDE_EMOTES = frozenset({"rude", "slap", "spit", "insult", "mock", "smack", "punch", "threaten",
-                         "snub", "shoo"})
 PRICKLY, TOUCHY = 3, 7  # agreeableness at or below: angry; neuroticism at or above: tears
 _NAME = re.compile(r"[a-z0-9_]{1,32}")  # an emote name as native sends one (LeeroyEmotes.cpp)
 
@@ -67,18 +70,25 @@ _AFFECTION = {"lust": ("kiss", "blush"), "drawn": ("blush", "giggle"), "fond": (
               "none": ("shy", "giggle"), "man": ("blink", "laugh", "shrug")}
 _WINK = {"lust": ("wink", "kiss"), "drawn": ("blush", "giggle"), "fond": ("smile", "giggle"),
          "none": ("smile", "shy"), "man": ("grin", "nod")}
+_FRIENDLY = {"lust": ("hug", "smile"), "drawn": ("smile", "hug"), "fond": ("hug", "smile"),
+             "none": ("smile", "pat"), "man": ("nod", "pat")}
 _PLAYFUL = {"man": ("laugh", "shrug"), ANY: ("giggle", "laugh")}
+# Any other emote of his at her, but the utility ones: friendly or awkward.
+FALLBACK = {"lust": ("smile", "giggle"), "drawn": ("smile", "shy"), "fond": ("smile", "wave"),
+            "none": ("smile", "blink", "shrug"), "man": ("shrug", "nod", "confused")}
 
 
 def _same(*answers: str) -> dict[str, tuple[str, ...]]:
     return {ANY: answers}
 
 
-# His emote at her -> her emote back, by her stance (emote_back). RUDE_EMOTES go by her temper.
+# His emote at her -> her emote back, by her stance (emote_back). RUDE_EMOTES go by her temper,
+# UTILITY_EMOTES get nothing and anything else FALLBACK.
 EMOTE_BACK: dict[str, dict[str, tuple[str, ...]]] = {
-    **dict.fromkeys(("kiss", "love", "flirt", "sexy", "charm", "cuddle", "holdhand"), _AFFECTION),
+    **dict.fromkeys(sorted(ROMANTIC_EMOTES - {"hug", "wink"}), _AFFECTION),
     **dict.fromkeys(("wink", "blush"), _WINK),
     "hug": _same("hug"),
+    **dict.fromkeys(sorted(FRIENDLY_EMOTES), _FRIENDLY),
     **dict.fromkeys(("tickle", "poke", "pinch", "pat", "pet", "ruffle", "tease", "bonk"),
                     _PLAYFUL),
     **dict.fromkeys(("cry", "sad"), _same("comfort")),
@@ -119,9 +129,23 @@ TEMPLATES = {
 }
 
 
+class _Line(NamedTuple):
+    """A line drawn for a reaction, made into a turn once her emote is out."""
+    channel: str
+    template: str
+    emote: str
+    why: str
+
+
 def stance_key(p: Persona) -> str:
-    """Her stance toward him, or "man": a man's stance is never an attitude toward him."""
-    return p.romance.stance if p.identity.player_gender == "female" else "man"
+    """Her stance toward him, or "man": a man's stance is never an attitude toward him. A lust
+    or drawn woman who flirts with nobody (her forward dial at 0) answers as a fond one."""
+    if p.identity.player_gender != "female":
+        return "man"
+    stance = p.romance.stance
+    if stance in ("lust", "drawn") and flirt_chance(p, 1.0) <= 0:
+        return "fond"
+    return stance
 
 
 def temper(p: Persona) -> str:
@@ -135,13 +159,14 @@ def temper(p: Persona) -> str:
 
 
 def emote_back(emote: str, p: Persona, rng) -> str | None:
-    """Her emote back at his `emote`, or None when the table does not answer it."""
+    """Her emote back at his `emote`; None for a utility or combat one, or a name native never
+    sends."""
     emote = emote.strip().casefold()
+    if emote in UTILITY_EMOTES or not _NAME.fullmatch(emote):
+        return None
     if emote in RUDE_EMOTES:
         return temper(p)
-    table = EMOTE_BACK.get(emote)
-    if table is None:
-        return None
+    table = EMOTE_BACK.get(emote, FALLBACK)
     options = table.get(stance_key(p)) or table.get(ANY)
     return rng.choice(options) if options else None
 
@@ -161,9 +186,14 @@ def reply_channel(emote: str) -> str:
 
 
 def emote_instruction(name: str, data_dir: Path, *, called: str, emote: str) -> str:
-    """The named template (the owner's overlay when there is one) with {name} and {emote}
-    filled in; anything else in it is used as written."""
-    text = load_prompt(name, data_dir, TEMPLATES[name])
+    """The named template (the owner's overlay when there is one; the built-in words when it
+    cannot be read, an editor holding it say) with {name} and {emote} filled in; anything else
+    in it is used as written."""
+    try:
+        text = load_prompt(name, data_dir, TEMPLATES[name])
+    except OSError as e:
+        log.warning("emote_overlay_unreadable: name=%s reason=%s", name, type(e).__name__)
+        text = TEMPLATES[name]
     return text.replace("{name}", called).replace("{emote}", emote)
 
 
@@ -195,10 +225,11 @@ class EmoteReactions(Reactions):
 
     def _init_emotes(self) -> None:
         self.emote_limits = EmoteLimits()
+        self._replied_at: dict[int, float] = {}  # a member's last REPLY_HUMAN line, said
 
-    async def on_text_emote(self, ev: TextEmote, now: float) -> None:
-        """His text emote, which the app has stored and applied to the world. Plans and spawns
-        the reactions; nothing here waits."""
+    async def on_text_emote(self, ev: TextEmote, now: float, *, event_id: int = 0) -> None:
+        """His text emote, which the app has stored (as game_event `event_id`, 0: none) and
+        applied to the world. Plans and spawns the reactions; nothing here waits."""
         hg = self.human.guid
         if not hg or ev.guid != hg or ev.via_bridge or not self.world.human_online:
             return
@@ -212,9 +243,22 @@ class EmoteReactions(Reactions):
                      "login_quiet" if quiet else "fight")
             return
         if target:
-            self._answer_emote(target, emote, now)
+            self._answer_emote(target, emote, now, event_id)
         else:
             self._join_emote(emote, now)
+
+    def _first_line_said(self, turn: Turn, meta: TurnMeta) -> None:
+        super()._first_line_said(turn, meta)
+        if turn.kind is TurnKind.REPLY_HUMAN:
+            self._replied_at[turn.speaker] = self.clock.now()
+
+    def _replying(self, guid: int, now: float) -> bool:
+        """She has an answer to him planned, or said one in the last REPLY_S: a line after her
+        emote would take its place."""
+        if now - self._replied_at.get(guid, -math.inf) < REPLY_S:
+            return True
+        return any(t.speaker == guid and t.kind is TurnKind.REPLY_HUMAN
+                   for t in self.planned_turns())
 
     def _emote_blocked(self, guid: int, now: float) -> str | None:
         """Why a member can't react now as existing talk would refuse her, or None."""
@@ -231,7 +275,7 @@ class EmoteReactions(Reactions):
             return "raid"
         return None
 
-    def _answer_emote(self, guid: int, emote: str, now: float) -> None:
+    def _answer_emote(self, guid: int, emote: str, now: float, event_id: int) -> None:
         """His emote at her: her emote back, and maybe a line after it."""
         why = self._emote_blocked(guid, now) or self.emote_limits.refusal(guid, now)
         back = None if why else emote_back(emote, self.personas.get(guid), self.rng)
@@ -240,13 +284,13 @@ class EmoteReactions(Reactions):
                      why or "not_answered")
             return
         self.emote_limits.take(guid, now)
-        line = (self._emote_line(guid, reply_channel(emote), EMOTE_AT_YOU, emote, now,
-                                 why=f"emote:{emote}")
-                if wants_line(emote, self.rng) else None)
+        replying = self._replying(guid, now)
+        line = (_Line(reply_channel(emote), EMOTE_AT_YOU, emote, f"emote:{emote}")
+                if not replying and wants_line(emote, self.rng) else None)
         log.info("emote_planned: emote=%s guid=%d back=%s line=%s", emote, guid, back,
-                 line[0].channel if line else "-")
+                 line.channel if line else "replying" if replying else "-")
         self._spawn(self._emote_back(guid, back, self.human.guid,
-                                     self.rng.uniform(*EMOTE_BACK_S), line))
+                                     self.rng.uniform(*EMOTE_BACK_S), line, event_id))
 
     def _join_emote(self, emote: str, now: float) -> None:
         """His social emote at nobody: 0-2 members in his group, or else in his zone, join in;
@@ -267,39 +311,39 @@ class EmoteReactions(Reactions):
                 self.emote_limits.take(g, now)
                 joined.append(g)
         line = None
-        if joined and wants_line(emote, self.rng):
+        if joined and not self._replying(joined[0], now) and wants_line(emote, self.rng):
             g = joined[0]
             group = w.group if grouped and w.in_group(g) else None
             channel = "say" if group is None else "raid" if group.raid else "party"
-            line = self._emote_line(g, channel, EMOTE_JOINED, emote, now,
-                                    why=f"emote_join:{emote}")
+            line = _Line(channel, EMOTE_JOINED, emote, f"emote_join:{emote}")
         log.info("emote_join: emote=%s pool=%d joined=%d line=%s", emote, len(pool), len(joined),
-                 line[0].channel if line else "-")
+                 line.channel if line else "-")
         for i, g in enumerate(joined):
             self._spawn(self._emote_back(g, self.rng.choice(options), 0,
                                          self.rng.uniform(*EMOTE_BACK_S),
                                          line if i == 0 else None))
 
-    def _emote_line(self, guid: int, channel: str, template: str, emote: str, now: float, *,
-                    why: str) -> tuple[Turn, TurnMeta] | None:
+    def _emote_turn(self, guid: int, line: _Line, now: float) -> tuple[Turn, TurnMeta] | None:
         """Her one short line after her emote, an EMOTE_REACT turn to him; None when
         choose_channel refuses it."""
         channel = choose_channel(TurnKind.EMOTE_REACT, speaker=guid, world=self.world,
-                                 raid=self.raid, now=now, rng=self.rng, reply_to=channel)
+                                 raid=self.raid, now=now, rng=self.rng, reply_to=line.channel)
         if channel is None:
             return None
         hg = self.human.guid
-        text = emote_instruction(template, self.data_dir, called=self.human.called, emote=emote)
+        text = emote_instruction(line.template, self.data_dir, called=self.human.called,
+                                 emote=line.emote)
         delay = self.rng.uniform(*LINE_AFTER_S) * self._effects(guid).delay_mult
         turn = Turn(kind=TurnKind.EMOTE_REACT, speaker=guid, channel=channel,
                     to_guid=hg if channel == "whisper" else 0, addressee=hg, instruction=text,
                     priority=Priority.REPLY_HUMAN, max_lines=1, delay=delay)
-        return turn, TurnMeta(self._new_id(), answers_human=True, why=why)
+        return turn, TurnMeta(self._new_id(), answers_human=True, why=line.why)
 
     async def _emote_back(self, guid: int, emote: str, target: int, delay: float,
-                          line: tuple[Turn, TurnMeta] | None) -> None:
-        """After `delay`, her emote (at `target`, 0 for nobody) if she still may, then her
-        line, if one was drawn, once the emote went out."""
+                          line: _Line | None, event_id: int = 0) -> None:
+        """After `delay`, her emote (at `target`, 0 for nobody) if she still may; once it is out,
+        the receipt for his emote `event_id` (when it was aimed at her) and her line, if one was
+        drawn and she has no answer to him under way."""
         await self.clock.sleep(delay)
         now = self.clock.now()
         why = self._emote_blocked(guid, now) or (
@@ -315,5 +359,16 @@ class EmoteReactions(Reactions):
             log.info("emote_dropped: guid=%d emote=%s reason=%s", guid, emote, why)
             return
         log.info("emote_sent: guid=%d emote=%s target=%d", guid, emote, target)
-        if line is not None:
-            self._queue([line])
+        if event_id and target:
+            try:
+                self.store.set_meta(answered_key(event_id), str(guid))
+            except Exception:  # the receipt only feeds the night: never the reaction
+                log.warning("emote_receipt_failed: event=%d guid=%d", event_id, guid)
+        if line is None:
+            return
+        if self._replying(guid, now):
+            log.info("emote_line_skipped: guid=%d reason=replying", guid)
+            return
+        turn = self._emote_turn(guid, line, now)
+        if turn is not None:
+            self._queue([turn])

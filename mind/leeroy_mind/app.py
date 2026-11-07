@@ -867,7 +867,8 @@ class MindApp:
                 self._capture_row(ev, "game_event", event_id, backlog)
                 self.world.apply(ev, now)
                 if isinstance(ev, TextEmote) and not backlog and self.world.human_online:
-                    await self.engine.on_text_emote(ev, now)  # only his own get an answer
+                    # only his own get an answer; the row id is the night's receipt key
+                    await self.engine.on_text_emote(ev, now, event_id=event_id)
         elif isinstance(ev, Error):
             log.warning("bridge_error: message=%r", ev.message)
         elif name not in CORE_EVENT_TYPES:

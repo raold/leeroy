@@ -35,6 +35,7 @@ from leeroy_mind.realm.protocol import ChannelChat, register as register_realm_e
 from leeroy_mind.storage.db import EmbeddingMismatch, open_db
 from dbtemplate import open_migrated
 from leeroy_mind.storage.store import Store
+from leeroy_mind.talk.emote_names import answered_key
 from leeroy_mind.talk.engine import TalkEngine
 from leeroy_mind.talk.raid import RaidState
 from leeroy_mind.talk.turns import TurnKind
@@ -1056,6 +1057,10 @@ def test_his_emote_at_a_member_is_answered_with_an_emote(tmp_path, clock):
             await h.until(lambda: backs())
             back, = backs()
             assert (back["guid"], back["emote"], back["target_guid"]) == (102, "hug", HUMAN)
+            # the night's receipt, on the stored row's id; none for the two it never answered
+            ids = [r["id"] for r in h.rows("SELECT id FROM game_event ORDER BY id")]
+            await h.wait(lambda: h.app.store.get_meta(answered_key(ids[-1])) is not None)
+            assert [h.app.store.get_meta(answered_key(i)) for i in ids] == [None, None, "102"]
     run(main())
 
 
