@@ -4,12 +4,13 @@ no-reproach anti-goal). Gathered from the modules' own constants, never copied: 
 as the fields {he}, {him} and {his}), the read's prompt (arc.night), the weekend writer's prompt
 and plain memories (arc.weekend, the plain ones rendered for every plan kind and region), and
 the milestones in both cycles' words, the affair's endings and her separated household
-(arc.after). The noticed facts (S7) and live talk's cooling and partner lines (S8) join here as
-they are written. Other fields ({called}, {name}, {like}, {nth}, ...) stay for the scan to
-fill."""
+(arc.after), the noticed facts (arc.night), and live talk's partner and event lines (arc.live)
+with the cooling variants her whisper reads (talk.romance.COOLING_TEXT). Other fields
+({called}, {name}, {like}, {nth}, {them}, ...) stay for the scan to fill."""
 import itertools
 
-from leeroy_mind.arc import after, night, plan, weekend
+from leeroy_mind.arc import after, live, night, plan, weekend
+from leeroy_mind.talk.romance import COOLING_TEXT
 
 FORMS = ("{he}", "{him}", "{his}")       # his pronoun forms, left for the scan to fill
 _NOW = 0.0
@@ -45,4 +46,6 @@ def arc_texts() -> tuple[str, ...]:
         *after.MILESTONE_TEXT.values(), *after.MILESTONE_AGAIN.values(), after.LIKE_FALLBACK,
         *after.FOUND_TEXT.values(),
         after.HOUSEHOLD_SEPARATED, after.HOUSEHOLD_SEPARATED_KIDS,
+        *night.NOTICED_TEXT.values(),
+        *live.PARTNER_TEXT.values(), *live.EVENT_TEXT.values(), *COOLING_TEXT,
     ]))

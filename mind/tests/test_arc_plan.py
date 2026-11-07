@@ -7,16 +7,11 @@ from conftest import make_persona
 from leeroy_mind.arc.plan import PLAN_KINDS, has_partner, plan_lines, plan_summary, propose_plan
 from leeroy_mind.arc.state import Arc, add_event, get_arc, put_arc
 from leeroy_mind.human import THEY_FORMS, _FORMS
+from leeroy_mind.talk.romance import REPROACH_RE
 
 NOW = 1_800_000_000.0
 DAY = 86400
 FORMS = [_FORMS["he"], _FORMS["she"], THEY_FORMS]
-# The romance reproach scan: REPROACH_RE in talk/romance.py on track B (B3). Copied here so S3
-# stands alone; keep the two in step at merge.
-REPROACH_RE = re.compile(
-    r"\b(you never|you always|where (were|are) you|why (didn'?t|don'?t|won'?t) you|you forgot"
-    r"|ignor(e|es|ing) me|you don'?t care|left me|stood me up|i'?m (still )?waiting"
-    r"|waiting for you|come over|get over here|hurry( up)?|find me)\b", re.IGNORECASE)
 
 
 def woman(region="US", household="Lives alone with a cat.", **over):
@@ -72,7 +67,12 @@ def test_plan_lines_by_state_and_the_countdown():
     assert lines("set")[0] == "It's happening: BlizzCon, about 12 days off."
     assert lines("set", now=NOW + 12 * DAY)[0] == "It's happening: BlizzCon, any weekend now."
     assert lines("set", now=NOW + 30 * DAY)[0].endswith("any weekend now.")
-    assert lines("set")[1] == "On your mind: money, nerves, what you'll wear."
+    assert lines("set")[1] == "On your mind: money."
+    plan.update(worries=[], cover="a work trip")
+    assert lines("set")[1] == "The cover story is a work trip."
+    plan.update(cover="")
+    assert lines("set") == ["It's happening: BlizzCon, about 12 days off."]
+    plan.update(worries=["money"])
     assert lines("none") == lines("done") == []
     assert len(lines("set")) <= 2
 

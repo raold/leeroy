@@ -20,6 +20,7 @@ from leeroy_mind.memory.writer import Embedder
 from leeroy_mind.nightly import budget
 from leeroy_mind.nightly.llm import INVARIANTS
 from leeroy_mind.nightly.store import active_away
+from leeroy_mind.talk.romance import REPROACH_RE
 from leeroy_mind.testing.fake_llm import FakeLLM
 from nightly.conftest import yes
 
@@ -27,12 +28,6 @@ run = asyncio.run
 UTC = timezone.utc
 DAY = 86400
 HOUR = 3600
-# The romance reproach scan (REPROACH_RE in talk/romance.py on track B), as tests/test_arc_plan.py
-# copies it; keep the copies in step at merge.
-REPROACH_RE = re.compile(
-    r"\b(you never|you always|where (were|are) you|why (didn'?t|don'?t|won'?t) you|you forgot"
-    r"|ignor(e|es|ing) me|you don'?t care|left me|stood me up|i'?m (still )?waiting"
-    r"|waiting for you|come over|get over here|hurry( up)?|find me)\b", re.IGNORECASE)
 
 MOMENTS = ["We met at a hotel halfway and I spotted Testy before he spotted me.",
            "Dinner went on for hours; we kept talking over each other.",

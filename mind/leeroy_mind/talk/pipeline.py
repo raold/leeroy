@@ -30,6 +30,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Awaitable, Callable
 
+from leeroy_mind.arc.live import AWAY_CACHE_S, ArcView, arc_view, away_now
 from leeroy_mind.bridge import AckTimeout, BridgeError, ConnectionLost
 from leeroy_mind.clock import Clock, night_of
 from leeroy_mind.config import MindConfig
@@ -55,7 +56,7 @@ from leeroy_mind.talk.guards import Guards
 from leeroy_mind.talk.facts import LibraryFacts
 from leeroy_mind.talk.items import defuse, fold
 from leeroy_mind.talk.movelog import MoveLog, MoveRow, PairNotes
-from leeroy_mind.talk.moves import MOVE_PHRASES, classify, moves_line
+from leeroy_mind.talk.moves import MOVE_PHRASES, classify, is_summon, moves_line
 from leeroy_mind.talk.prompt import (PromptParts, chat_line_text, comms_rules, facts_head,
                                      knows_real_name, mood_line, quest_help, real_name_line,
                                      redact_for, relationship_card, render_instruction,
@@ -433,6 +434,8 @@ class Pipeline:
     human: HumanIdentity
     facts: LibraryFacts | None  # the library's facts, None without a library.db
     comms = None  # the voice extension's Comms; None: voice off, and nothing here changes
+    # when the members away were read, and who they were (_away_now)
+    _away_cache: tuple[float, frozenset[int]] = (-math.inf, frozenset())
 
     def _init_pipeline(self, now: float) -> None:
         self.timing = TurnTiming()
@@ -528,13 +531,24 @@ class Pipeline:
         died = self._dead.get(guid)
         return died is not None and now - died < DEAD_FORGET_S
 
+    def _away_now(self) -> frozenset[int]:
+        """The members away (arc.live.away_now), read at most once every AWAY_CACHE_S."""
+        now = self.clock.now()
+        at, away = self._away_cache
+        if not 0 <= now - at < AWAY_CACHE_S:
+            away = away_now(self.store, now)
+            self._away_cache = now, away
+        return away
+
     def _candidates(self, audience=None, *, exclude=(), hearable=True) -> list[int]:
-        """Online cast members with a persona who are not AFK, in `audience` when given, and
-        with voice on, unless `hearable` is off, only those he can hear where they sit."""
+        """Online cast members with a persona who are not AFK or away (_away_now), in
+        `audience` when given, and with voice on, unless `hearable` is off, only those he can
+        hear where they sit."""
         w = self.world
         pool = w.online if audience is None else w.online & set(audience)
+        away = self._away_now()
         out = [g for g in sorted(pool) if g not in w.afk and g not in exclude
-               and self.personas.get(g) is not None]
+               and g not in away and self.personas.get(g) is not None]
         if hearable and self.comms is not None:
             out = [g for g in out if self._comms_says("hearable", True, g)]
         return out
@@ -741,9 +755,22 @@ class Pipeline:
 
     def _summons_ok(self, turn: Turn) -> bool:
         """Whether asking him over may stand in her line to him (_generate checks only those):
-        only in a voice room, where the two are together; everywhere else they only talk
+        in a voice room, where the two are together; and in her whisper to him inside a plan he
+        has talked about or said yes to (arc.live's summons_ok). Everywhere else they only talk
         through the game."""
-        return turn.channel.startswith("voice:")
+        if turn.channel.startswith("voice:"):
+            return True
+        p = self.personas.get(turn.speaker)
+        return (p is not None and turn.channel == "whisper" and turn.to_guid == self.human.guid
+                and self._arc_view(turn, p, self.clock.now()).summons_ok)
+
+    def _arc_view(self, turn: Turn, p: Persona, now: float,
+                  rng: random.Random | None = None) -> ArcView:
+        """Her arc as this turn may show it (arc.live.arc_view: its private part only in a
+        whisper to him; `rng` draws which of its lines fit this turn)."""
+        return arc_view(self.store, p, self.human.guid, now=now, channel=turn.channel,
+                        to_guid=turn.to_guid, forms=self.human.forms, names=self._names(),
+                        rng=rng)
 
     def _record_moves(self, turn: Turn, words: str) -> None:
         """Her said turn's moves (MoveLog), for the next prompts to the same person. A failing
@@ -773,8 +800,10 @@ class Pipeline:
         the share and `vary` (`rng` without it) picks the variants (stage passage, heat, band
         overlay); `tail_follows`: the whisper tail says the distance frame. Her scene notes
         about him go in as the turn may see them
-        (PairNotes.recent: a whisper's only in a whisper between the two); the romance text
-        shows them only in a whisper."""
+        (PairNotes.recent: a whisper's only in a whisper between the two), then her arc's
+        recent events, and with them her arc's lines, rival and cooling (arc.live.arc_view,
+        all of them for a whisper to him only); the romance text shows them only in a
+        whisper."""
         hg = self.human.guid
         if (not hg or turn.addressee != hg or p.identity.player_gender != "female"
                 or p.romance.stance not in ROMANCE_SHARE or meta.casual):
@@ -799,12 +828,14 @@ class Pipeline:
                 share = min(1.0, share * f)
             if rng.random() >= share:
                 return None
-        scene = self.notes.recent(p.guid, hg, turn_channel=turn.channel, to_guid=turn.to_guid,
-                                  now=now)
+        arc = self._arc_view(turn, p, now, vary or rng)
+        scene = [*self.notes.recent(p.guid, hg, turn_channel=turn.channel, to_guid=turn.to_guid,
+                                    now=now), *arc.scene]
         return romance_instruction(p, rel_h, dial=dial, channel=turn.channel,
                                    addressee_is_human=True, phase=phase, human=self.human,
                                    data_dir=self.data_dir, rng=vary or rng,
-                                   tail_follows=tail_follows, scene=scene)
+                                   tail_follows=tail_follows, scene=scene,
+                                   arc_lines=arc.arc_lines, rival=arc.rival, cooling=arc.cooling)
 
     async def _compose(self, turn: Turn, meta: TurnMeta, *, live: bool,
                        persona: Persona | None = None, window: list | None = None,
@@ -1208,6 +1239,8 @@ class Pipeline:
                     await self._send_emotes(turn, meta, emotes)
                 return spoken
             turn.channel, turn.to_guid, turn.addressee = typed(turn, meta)  # it never got there
+            if self._summons_typed_to_him(turn, text):
+                return self._drop(turn, meta, "summons", memory_ids, text=text)
         if meta.before_transport is not None:  # its sender's barrier vouches for exactly this text
             lines = [] if only or not text.strip() else [Styled(text, text)]
         else:
@@ -1247,6 +1280,13 @@ class Pipeline:
             await self._send_emotes(turn, meta, emotes)
             self._after_sent(turn, meta, p, " ".join(s.line for s in sent))
         return [s.line for s in sent]
+
+    def _summons_typed_to_him(self, turn: Turn, text: str) -> bool:
+        """A voiced line that falls back to typed chat with him: a summons could stand in the
+        room, typed it is checked again (_summons_ok of where it now goes)."""
+        hg = self.human.guid
+        return (turn.template is None and bool(hg) and self._counterpart(turn) == hg
+                and not self._summons_ok(turn) and is_summon(text))
 
     def _comms_says(self, question: str, default, *args):
         """Comms' answer, or `default`, phase 1's, when the voice side fails: a fault there
@@ -1364,6 +1404,8 @@ class Pipeline:
             return "offline"
         if g in w.afk:
             return "afk"
+        if g in self._away_now():
+            return "away"
         if turn.channel in SPOKEN_CHANNELS and self._is_dead(g, now):
             return "dead"
         if turn.channel == "whisper" and not meta.whisper_reply and not w.human_online:

@@ -3,7 +3,6 @@ affair found out at home) and the arc's built-in texts."""
 import asyncio
 import json
 import logging
-import re
 from dataclasses import replace
 from datetime import date, timedelta, timezone
 
@@ -18,10 +17,9 @@ from leeroy_mind.arc.after import (AFFAIR_RISK_NIGHT, AFFAIR_RISK_TRIP, FOUND_OU
 from leeroy_mind.arc.night import stage_arc
 from leeroy_mind.arc.plan import has_partner, propose_plan
 from leeroy_mind.arc.state import Arc, get_arc, play_days_after, put_arc
-from leeroy_mind.arc.texts import arc_texts
 from leeroy_mind.arc.weekend import (AFFAIR, PLAIN_VISIT, PLAIN_WEEKEND, WEEKEND_GAP_S,
                                      WEEKEND_PROMPT, WEEKEND_S)
-from leeroy_mind.human import THEY_FORMS, _FORMS
+from leeroy_mind.human import _FORMS
 from leeroy_mind.nightly.growth import undo
 from leeroy_mind.nightly.romance import stage_romance
 from leeroy_mind.nightly.settings import night_bounds
@@ -32,12 +30,6 @@ run = asyncio.run
 UTC = timezone.utc
 DAY = 86400
 HOUR = 3600
-# The romance reproach scan: REPROACH_RE in talk/romance.py on track B (B3). Copied here, as
-# tests/test_arc_plan.py and tests/nightly/test_night_weekend.py copy it; keep them in step.
-REPROACH_RE = re.compile(
-    r"\b(you never|you always|where (were|are) you|why (didn'?t|don'?t|won'?t) you|you forgot"
-    r"|ignor(e|es|ing) me|you don'?t care|left me|stood me up|i'?m (still )?waiting"
-    r"|waiting for you|come over|get over here|hurry( up)?|find me)\b", re.IGNORECASE)
 MARRIED = "married, two kids at home"
 
 
@@ -468,32 +460,6 @@ def test_has_partner_reads_her_arc_before_her_card():
     assert all(propose_plan(married, rng, now=0.0, partner="separated")["cover"] == ""
                for _ in range(20))
     assert all(propose_plan(married, rng, now=0.0)["cover"] for _ in range(20))
-
-
-def fill(s: str, forms) -> str:
-    """A built-in arc string with its fields filled: his called name and pronoun forms, her
-    name, a like from her card; every other field empty."""
-    class Fields(dict):
-        def __missing__(self, key):
-            return ""
-    return s.format_map(Fields(called="Testy", name="Arkon", he=forms[0], him=forms[1],
-                               his=forms[2], like="quiet runs", nth="second",
-                               cover="a work trip",
-                               where="at a hotel halfway between us"))
-
-
-def test_arc_texts_never_reproach():
-    texts = arc_texts()
-    for s in (*MILESTONE_TEXT.values(), *MILESTONE_AGAIN.values(), *FOUND_TEXT.values(),
-              HOUSEHOLD_SEPARATED,
-              HOUSEHOLD_SEPARATED_KIDS, PLAIN_WEEKEND, PLAIN_VISIT, AFFAIR, WEEKEND_PROMPT):
-        assert s in texts
-    assert "It's happening: BlizzCon, about 12 days off." in texts      # the plan lines
-    assert any("you leave it with {him}" in s for s in texts)
-    hits = [(s, f) for f in (_FORMS["he"], _FORMS["she"], THEY_FORMS) for s in texts
-            if REPROACH_RE.search(fill(s, f))]
-    assert hits == []
-    assert len(texts) == len(set(texts))
 
 
 def test_the_after_logs_carry_no_text_or_names(h, caplog):

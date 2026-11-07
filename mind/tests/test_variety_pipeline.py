@@ -9,13 +9,16 @@ import pytest
 
 from conftest import HUMAN, make_mem, seed_test_cast
 from engine_rig import RAID, engine_clock, make_rig, save_member
+from leeroy_mind.arc.live import ARC_CAP_TOKENS, PARTNER_TEXT
+from leeroy_mind.arc.state import Arc, put_arc
 from leeroy_mind.protocol import Group
 from leeroy_mind.storage.rows import Relationship
 from leeroy_mind.talk.filters import Tell
 from leeroy_mind.talk.moves import MOVE_PHRASES, MOVES
 from leeroy_mind.talk.pipeline import MOVE_HINT, REGEN_HINT, REPEAT_HINT, SUMMONS_HINT
 from leeroy_mind.talk.prompt import LIVE_BUDGET
-from leeroy_mind.talk.romance import NOTE_TEXT, OVERLAY_CAP_TOKENS, SCENE_HEAD, STAGE_PASSAGES
+from leeroy_mind.talk.romance import (COOLING_TEXT, NOTE_TEXT, OVERLAY_CAP_TOKENS, SCENE_HEAD,
+                                      STAGE_PASSAGES, rival_text)
 from leeroy_mind.talk.turns import Turn, TurnKind
 from leeroy_mind.text import estimate_tokens
 
@@ -273,14 +276,33 @@ def _overlays_at_cap(data_dir) -> str:
     return text
 
 
-def _worst_case(store, clock, *, hot: bool = False) -> None:
+def _worst_case(store, clock, *, hot: bool = False, arc: bool = False) -> None:
     """A lust woman (the explicit band in a whisper to him) with 5 memories of him. `hot`: also
     at the stage with the longest whisper passage she can be stored at (banter) and at the top
-    heat step."""
-    _cast(store, stance="lust")
-    if hot:
+    heat step. `arc`: at the top heat step at "planning" (its longer distance frame) with the
+    longest plan lines (a set plan: the longest kind, two worries, the longest cover story), a
+    partner at home, a rival at a noticed stage and her spark cooling: more than ARC_CAP_TOKENS
+    of arc lines to place."""
+    _cast(store, stance="lust", **({"household": "married, two kids at home"} if arc else {}))
+    if hot or arc:
         store.put_relationship(Relationship(a=102, b=HUMAN, affinity=40.0, trust=30.0,
-                                            attraction=95.0, romance_stage="banter"))
+                                            attraction=95.0,
+                                            romance_stage="planning" if arc else "banter"))
+    if arc:
+        now = clock.now()
+        plan = {"kind": "neutral", "target": now + 12 * 86400, "cover": "a weekend away with "
+                "friends", "worries": ["time off", "the home front"]}
+        put_arc(store, Arc(102, HUMAN, plan=plan, plan_state="set", plan_at=now - 86400,
+                           planning_since=now - 20 * 86400, updated=now))
+        save_member(store, 104, player_gender="female", stance="drawn")
+        store.put_relationship(Relationship(a=104, b=HUMAN, romance_stage="voice"))
+        with store.transaction():
+            store.conn.execute("INSERT INTO jealousy(holder, target, kind, level, updated, "
+                               "evidence) VALUES (102, 104, 'rivalry', 80, 0, '[]')")
+            store.conn.execute(
+                "INSERT INTO attraction_log(night, guid, gained, decayed, neglected, hurt, "
+                "half_life, before, after, stance_before, stance_after) "
+                "VALUES ('2026-10-28', 102, 0, 5, 1, 0, 30, 95, 95, 'lust', 'lust')")
     t = int(clock.now()) - 3 * 86400
     for i, text in enumerate(("Zan carried me through the whole heroic run last week.",
                               "Zan stayed up until four talking about his new job with me.",
@@ -353,6 +375,37 @@ def test_a_hot_worst_case_whisper_keeps_the_lately_line_without_a_last_resort_tr
         user, _, _ = _worst_whisper(r, clock, caplog)
         assert "Tonight you've already" in user
         assert any(v.format(name="Zan", **HE) in user for v in STAGE_PASSAGES["banter"])
+        assert "last-resort trim" not in caplog.text
+    finally:
+        r.close()
+
+
+@pytest.mark.parametrize("seed", [1, 7, 10])  # 7 and 10 draw the longest arc lines
+def test_an_arc_worst_case_whisper_keeps_the_lately_line_without_a_last_resort_trim(
+        store, clock, tmp_path, caplog, seed):
+    """The hot worst case with everything the arc has for her whisper (S8): her set plan's two
+    lines, the partner line, the rival line and cooling, more than ARC_CAP_TOKENS. Where her
+    plan stands and the Lately line are kept, the arc's lines stay within their cap, and there
+    is no last-resort trim; the usual trims may take memories, chat and her own lines down to
+    their floors."""
+    _worst_case(store, clock, arc=True)
+    r = make_rig(store, clock, tmp_path, seed=seed)
+    _overlays_at_cap(tmp_path)
+    try:
+        user, _, tokens = _worst_whisper(r, clock, caplog)
+        fill = dict(name="Zan", **HE)
+        assert "Tonight you've already" in user
+        assert "It's happening: a quiet weekend somewhere neutral, about 12 days off." in user
+        second = ("On your mind: time off, the home front; the cover story is a weekend away "
+                  "with friends.")
+        cooling = [v.format(**fill) for v in COOLING_TEXT if v.format(**fill) in user]
+        shown = [x for x in (second, PARTNER_TEXT["together"].format(**fill),
+                             rival_text("Dunna", ("he", "him", "his")).format(**fill), *cooling)
+                 if x in user]
+        assert shown  # beside her plan's first line, what fit this turn
+        assert sum(estimate_tokens(x) for x in shown) + 18 <= ARC_CAP_TOKENS
+        assert user.count("live far apart") == 1
+        assert tokens <= LIVE_BUDGET
         assert "last-resort trim" not in caplog.text
     finally:
         r.close()

@@ -55,8 +55,9 @@ def _thing(kind: str, region: str) -> str:
 
 
 def plan_lines(plan: dict, state: str, *, now: float, forms, region: str) -> list[str]:
-    """What the plan means to her tonight, at most two sentences, addressed to her. `forms` are
-    his pronoun forms (subject, object, possessive)."""
+    """What the plan means to her tonight, at most two sentences, addressed to her: the first
+    says where it stands, the second (when there is one) her worries or the cover story. `forms`
+    are his pronoun forms (subject, object, possessive)."""
     thing = _thing(plan["kind"], region)
     cover = plan.get("cover") or ""
     if state == "hoped":
@@ -68,10 +69,13 @@ def plan_lines(plan: dict, state: str, *, now: float, forms, region: str) -> lis
         days = math.ceil((plan["target"] - now) / 86400)
         when = ("any weekend now" if days <= 0
                 else f"about {days} day{'' if days == 1 else 's'} off")
-        on_mind = ", ".join([*plan.get("worries", []), "nerves", "what you'll wear"])
-        second = f"On your mind: {on_mind}"
-        second += f"; the cover story is {cover}." if cover else "."
-        return [f"It's happening: {thing}, {when}.", second]
+        # her own worries only: the planning stage's passage already speaks of the nerves and
+        # what she'd wear
+        on_mind = ", ".join(plan.get("worries", []))
+        second = (f"On your mind: {on_mind}; the cover story is {cover}." if on_mind and cover
+                  else f"On your mind: {on_mind}." if on_mind
+                  else f"The cover story is {cover}." if cover else "")
+        return [f"It's happening: {thing}, {when}.", *([second] if second else [])]
     else:
         return []
     if cover:
