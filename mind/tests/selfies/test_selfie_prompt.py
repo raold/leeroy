@@ -8,7 +8,8 @@ import pytest
 
 from conftest import make_persona
 from leeroy_mind.personas.schema import Appearance, ProfilePhoto
-from leeroy_mind.selfies.prompt import NEGATIVE, PromptSpec, build_prompt, renderable
+from leeroy_mind.selfies.prompt import (LUST_NEGATIVE, NEGATIVE, PromptSpec, build_prompt,
+                                        renderable)
 from nightly.test_night_enrich import APPEARANCE
 
 PHOTO = {"kind": "snapshot", "framing": "upper_body", "setting": "on the deck of a small boat",
@@ -89,6 +90,46 @@ def test_the_negative_prompt_keeps_minors_nudity_likeness_and_period_looks_out()
         assert word in zero
     assert ("vintage, retro, film grain, sepia, old photo", 1) in NEGATIVE
     assert ("watermark, text, logo", 2) in NEGATIVE
+
+
+TODAY_NEGATIVE = (
+    ("cartoon, anime, painting, illustration, 3d render, cgi", 0),
+    ("nsfw, nude, cleavage, lingerie, swimwear", 0),
+    ("child, teenager", 0),
+    ("celebrity, famous person", 0),
+    ("plastic skin, airbrushed, doll, deformed face, extra fingers, bad hands", 1),
+    ("vintage, retro, film grain, sepia, old photo", 1),
+    ("watermark, text, logo", 2),
+)
+
+
+def test_a_lust_womans_negative_drops_only_cleavage_and_swimwear():
+    neg = build_prompt(woman(stance="lust")).negative
+    assert neg == LUST_NEGATIVE
+    words = [w.strip() for t, _ in neg for w in t.split(",")]
+    assert "cleavage" not in words and "swimwear" not in words
+    zero = [w.strip() for t, pr in neg if pr == 0 for w in t.split(",")]
+    for word in ("nsfw", "nude", "lingerie", "child", "teenager", "topless", "underwear",
+                 "see-through", "sheer", "celebrity", "cartoon"):
+        assert word in zero, word
+    others = [x for x in TODAY_NEGATIVE if x[0] != "nsfw, nude, cleavage, lingerie, swimwear"]
+    assert [x for x in neg if x in others] == others and len(neg) == len(TODAY_NEGATIVE)
+    # the worker keeps every priority-0 phrase inside 75 tokens; words and marks bound them here
+    marks = re.findall(r"\w+|[^\w\s]", ", ".join(t for t, pr in neg if pr == 0))
+    assert len(marks) <= 60
+
+
+@pytest.mark.parametrize("p", [
+    lambda: woman(), lambda: woman(stance="fond"), lambda: woman(stance="drawn"),
+    lambda: woman(stance="lust", age=20), lambda: man(), lambda: man(age=40)])
+def test_everyone_else_keeps_todays_negative(p):
+    assert NEGATIVE == TODAY_NEGATIVE
+    assert build_prompt(p()).negative == TODAY_NEGATIVE
+
+
+def test_the_lust_style_changes_only_the_negative():
+    plain, hot = build_prompt(woman(stance="fond")), build_prompt(woman(stance="lust"))
+    assert plain.phrases == hot.phrases
 
 
 def test_required_phrases_stay_short():

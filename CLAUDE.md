@@ -960,6 +960,14 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
   owner's real name, member names, era and explicit wear). `selfies` runs after `regress` as an
   image stage: it queues a first set for each member with looks and a kind, plus any "4 more"
   asked for, and renders up to `selfie_per_night` (120) sets.
+  A woman whose stance toward the owner is lust, aged 21 or more (`selfies/style.py`
+  `suggestive`), gets the lust style: a flattering, flirtatious kind from its own template (the
+  owner's overlay `prompts/nightly_photo_lust.txt` replaces it) and screen (swimwear only by
+  the water; nudity, underwear, see-through wear and anything sexual still refused), and her
+  renders drop `cleavage` and `swimwear` from the negative, while everyone else keeps the plain
+  rules; when her style changes the pass chooses her kind once more (meta
+  `selfies:photo-style:<guid>` records which rules chose each kind; a hand-set kind is never
+  redone). The NSFW gate (`nsfw_max`) is unchanged for every image of both styles.
 - **GPU rules.** The image stage unloads every chat model but the embedding model (the worker
   needs the VRAM) and never renders while a live lease is held (his login, an offline raid, the
   voice service): it ends without a failure and the sets wait for the next night. A night with

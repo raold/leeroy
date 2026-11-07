@@ -3,11 +3,16 @@
 The selfie worker drops the lowest priorities until the prompt fits the tokenizers (priority 0
 is always kept). The shape maps one to one onto the worker's render request (`phrases` and
 `negative`: lists of [text, priority 0-9]). Adults only, clothed, present-day phone look; no
-name is ever put in a phrase."""
+name is ever put in a phrase.
+
+The negative follows the member's style when the prompt is built, so at each render: the lust
+style (style.suggestive) lets cleavage and swimwear through and names what stays out instead;
+every other member gets NEGATIVE as it was. The worker's NSFW gate is the same for both."""
 import re
 from dataclasses import dataclass
 
 from ..personas.schema import MIN_AGE, Persona
+from .style import suggestive
 
 NEGATIVE: tuple[tuple[str, int], ...] = (
     ("cartoon, anime, painting, illustration, 3d render, cgi", 0),
@@ -18,6 +23,10 @@ NEGATIVE: tuple[tuple[str, int], ...] = (
     ("vintage, retro, film grain, sepia, old photo", 1),
     ("watermark, text, logo", 2),
 )
+_COVERED = "nsfw, nude, cleavage, lingerie, swimwear"
+_COVERED_LUST = "nsfw, nude, topless, lingerie, underwear, see-through, sheer"
+LUST_NEGATIVE: tuple[tuple[str, int], ...] = tuple(
+    (_COVERED_LUST, pr) if text == _COVERED else (text, pr) for text, pr in NEGATIVE)
 
 _KINDS = {"selfie": "phone selfie", "mirror_selfie": "mirror selfie",
           "headshot": "professional headshot", "snapshot": "candid photo taken by a friend"}
@@ -97,4 +106,4 @@ def build_prompt(p: Persona) -> PromptSpec:
     add(ph.setting, 2, True)
     add(ph.expression, 3, True)
     add(_HEADSHOT_TAIL if headshot else _PHONE_TAIL, 1)
-    return PromptSpec(tuple(out), NEGATIVE)
+    return PromptSpec(tuple(out), LUST_NEGATIVE if suggestive(p) else NEGATIVE)
