@@ -224,7 +224,7 @@ def test_plan_other_mixes():
     assert sum(s.drinker for s in slots) == round(0.45 * n)
     assert {s.thinks_as for s in slots} == {"theorycrafter", "lore", "social", "collector",
                                             "competitor"}
-    assert {s.age_band for s in slots} <= {(21, 25), (26, 32), (33, 40), (41, 55),
+    assert {s.age_band for s in slots} <= {(25, 28), (26, 32), (33, 40), (41, 55),
                                          (41, NONE_FIT_AGE - 1)}  # a lust slot's
 
 
@@ -379,14 +379,14 @@ def test_generate_drops_a_dial_the_model_writes():
 
 def test_generate_extravert_drinker_and_drawn_slot():
     slot = _slot(introvert=False, drinker=True, player_gender="female", jealousy_mode=None,
-                 romance_stance="drawn", region="US", age_band=(21, 25))
+                 romance_stance="drawn", region="US", age_band=(25, 28))
     d = json.loads(_persona_json())
     d["big_five"]["extraversion"]["score"] = 2
     llm = FakeLLM(script_from(["profile", json.dumps(d)]))
     p = run(generate_persona(llm, "m", slot, _member_char(), "", GENERATION_RULES))
     assert p.big_five.extraversion.score >= 6 and p.identity.accent == "en-us"
     assert p.romance.stance == "drawn" and p.romance.style and p.romance.jealousy_mode is None
-    assert 21 <= p.identity.age <= 25
+    assert 25 <= p.identity.age <= 28
     assert len(p.habits) == 1  # a drinker keeps what the model wrote
 
 

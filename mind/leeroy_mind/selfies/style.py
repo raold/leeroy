@@ -14,7 +14,7 @@ from ..personas.stances import is_woman
 PLAIN = "plain"
 LUST = "lust"
 STYLES = (PLAIN, LUST)
-SUGGESTIVE_MIN_AGE = 21  # adults only stays; the suggestive style also never looks under 21
+SUGGESTIVE_MIN_AGE = 25  # adults only stays; the suggestive style also never looks under 25
 # Adults only, for both styles (controller rulings, rounds 3 to 5): nothing that codes a person
 # as young. The kind pass refuses it in every free-text field (kind.screen_kind) and on a
 # composed lust kind, and looks that use it keep a woman out of the lust style (suggestive), so

@@ -7,7 +7,7 @@ name is ever put in a phrase.
 
 The lust prompt is built for a kind the lust rules chose (the caller passes that style,
 kind.chosen_style), and such a kind renders only while she still has the lust style
-(style.suggestive: lust, 21 or more, looks that code nobody as young); otherwise renderable
+(style.suggestive: lust, 25 or more, looks that code nobody as young); otherwise renderable
 holds it until the photo pass has chosen her kind again, so its text is never rendered plainly.
 Her outfit and setting go in as one priority-0 phrase, so the worker's fit to the tokenizers
 never keeps one without the other, and the negative lets cleavage and swimwear through and names
