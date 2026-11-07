@@ -826,7 +826,19 @@ class ControlEndpoint:
             log_event("control_status_failed", level=logging.WARNING, error=type(e).__name__)
             world = None
         return {"ok": True, "v": VERSION, "pid": os.getpid(), "stopping": self.app.stopping,
-                "raid": raid, **self._health(), "world": world}
+                "raid": raid, **self._health(), "world": world, "typing": self._typing()}
+
+    def _typing(self) -> list:
+        """Who is typing, for Comms' dots: the talk engine's turns being composed or typed
+        (Pipeline.typing_now: ids, names, the place and when, never text); [] without one."""
+        engine = getattr(self.app, "engine", None)
+        if engine is None or self.app.stopping:
+            return []
+        try:
+            return engine.typing_now()
+        except Exception as e:
+            log_event("control_status_failed", level=logging.WARNING, error=type(e).__name__)
+            return []
 
     def _health(self) -> dict:
         """For the health check: bridge_connected (the bridge connection is open and has had

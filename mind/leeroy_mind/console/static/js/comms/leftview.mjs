@@ -4,10 +4,12 @@ import { face, faceButton, lightSpeakers } from "../faces.mjs";
 import { FEED, currentView, openView } from "./feedview.mjs";
 import { Heard } from "./heard.mjs";
 import { roomRows, selfPress, selfView } from "./tree.mjs";
+import { typingDots, typingWhispers } from "./typingview.mjs";
 
 // The Comms left column, top to bottom: the WoW channels with their unread counts (a click opens
 // the view), every voice room (folding groups, greyed empties, locks, n / 3, who sits where; a
-// click joins), the whisper threads, and his controls (the push-to-talk lamp and his room, Mute
+// click joins), the whisper threads (dots beside a member writing to him, whose thread comes
+// first when it is new), and his controls (the push-to-talk lamp and his room, Mute
 // and Deafen, the voice service's status). Also the toasts (the console's own notes for NOTE_MS,
 // and the invites) and the Comms banner. A member's row or face opens their card (rightview.mjs);
 // a speaking event only lights the faces already drawn.
@@ -63,7 +65,11 @@ function renderChannels() {
   });
 }
 function renderWhispers() {
-  var box = $("whispers"), open = currentView(), threads = FEED.threads();
+  var box = $("whispers"), open = currentView(), threads = FEED.threads(), writing = typingWhispers();
+  var known = new Set(threads.map(function (t) { return t.guid; }));
+  threads = writing.filter(function (w) { return !known.has(w.guid); })
+    .map(function (w) { return { guid: w.guid, name: w.name, unread: 0, fresh: true }; }).concat(threads);
+  var typing = new Set(writing.map(function (w) { return w.guid; }));
   keepFocus(box, function () {
     clear(box);
     if (!threads.length) { box.appendChild(el("div", "none", "No whispers yet.")); }
@@ -71,6 +77,8 @@ function renderWhispers() {
       var b = viewButton("w:" + t.guid, open);
       b.appendChild(faceButton(t.guid, t.name, "list", { inButton: true }));
       b.appendChild(el("span", "nm", t.name));
+      if (typing.has(t.guid)) { b.appendChild(typingDots(t.name + " is typing")); }
+      if (t.fresh) { b.dataset.who = t.name; }  // opened, it stays a thread (FEED.openThread)
       badge(b, t.unread);
       box.appendChild(b);
     });
@@ -273,6 +281,7 @@ $("left").addEventListener("click", function (ev) {
   } else if (t.dataset.room) {
     if (t.dataset.room !== hereRoom()) { askJoin(t.dataset.room); }
   } else {
+    if (t.dataset.who) { FEED.openThread(Number(t.dataset.view.slice(2)), t.dataset.who); }
     openView(t.dataset.view);
   }
 });
@@ -323,4 +332,5 @@ on("voice", function (m) {
   if (typeof m.type === "string" && own(ON_VOICE, m.type)) { ON_VOICE[m.type](m); }
 });
 on("feed", function () { renderChannels(); renderWhispers(); });
+on("typing", renderWhispers);
 on("note", note);
