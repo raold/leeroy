@@ -429,12 +429,15 @@ def _doctor_overlays(root: Path) -> list[tuple[bool, str]]:
     cannot be read fails. Names and sizes only, never the text; no files, no lines."""
     from .personas.generate import OVERLAY_TOKEN_CAP
     from .prompts import read_overlay
+    from .talk.emotes import TEMPLATES as EMOTE_TEMPLATES
+    from .talk.prompt import EXTRA_CAP_TOKENS
     from .talk.romance import OVERLAY_CAPS
     from .text import estimate_tokens
     from .tuning.lines import OVERLAY_CAP_TOKENS as TUNING_CAP, OVERLAY_NAMES as TUNING_OVERLAYS
     caps = dict(OVERLAY_CAPS)
     caps["persona_rules"] = OVERLAY_TOKEN_CAP
     caps.update({name: TUNING_CAP for name in TUNING_OVERLAYS})
+    caps.update({name: EXTRA_CAP_TOKENS for name in EMOTE_TEMPLATES})  # the instruction's extra
     folder = root / "prompts"
     out = []
     for path in sorted(folder.glob("*.txt")) if folder.is_dir() else ():

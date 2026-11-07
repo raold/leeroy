@@ -120,7 +120,7 @@ class Reactions(Pipeline):
     async def on_event(self, ev, now: float) -> None:
         """React to a game event the app has already applied to the world and the raid state.
         Chat, emotes and anything unknown trigger nothing here (the human's lines go to
-        on_human_chat; emotes never trigger talk)."""
+        on_human_chat; emotes at members are answered by talk/emotes.py)."""
         self._note_lately(ev, now)
         if isinstance(ev, (LootDrop, LootWon)) and getattr(self, "items", None) is not None:
             # the copy that dropped is the one a shared item name links to (talk/items.py)

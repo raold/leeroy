@@ -229,6 +229,8 @@ class TurnMeta:
       weighted_draw;
     - aside:<trigger> (public_flirt or loot_cheer), rival:flirt and whisper:<trigger> (idle,
       late, evening or after_kill): the second part names what set it off, not a draw;
+    - emote:<his emote> (her line after his emote at her) and emote_join:<his emote> (one who
+      joined his social emote; talk/emotes.py): the second part is his emote;
     - source:<TurnSource class>, say_as and speak: turns from outside the engine's planning."""
     turn_id: str
     topic: str = ""
@@ -429,6 +431,7 @@ class Pipeline:
         self._ids = itertools.count(1)
         self._tasks: set[asyncio.Task] = set()
         self._current: dict[asyncio.Task, Turn] = {}  # the turn each job is on
+        self._behind: dict[asyncio.Task, list[Turn]] = {}  # the turns a job has not begun yet
         self._cancelling: dict[asyncio.Task, Turn] = {}  # a job's one turn being cancelled
         self._delivering: set[asyncio.Task] = set()
         self._send_lock = asyncio.Lock()
@@ -575,7 +578,9 @@ class Pipeline:
         cancelled on its own (_cancel_refused) is dropped and the job goes on; the turns behind
         it are checked as usual. Any other cancel ends the job."""
         task = asyncio.current_task()
-        for turn, meta in items:
+        for i, (turn, meta) in enumerate(items):
+            if task in self._behind:
+                self._behind[task] = [t for t, _ in items[i + 1:]]
             try:
                 await self._speak(turn, meta)
             except asyncio.CancelledError:
@@ -591,9 +596,11 @@ class Pipeline:
             tokens = tuple(meta.timing_trace for _, meta in items)
             run = self._run(items)
             task = self._spawn(run)
+            self._behind[task] = [t for t, _ in items]
             # A task cancelled before its first step never enters _run or _speak.
             def done(t):
                 run.close()  # release an unawaited chain if the wrapper never started
+                self._behind.pop(t, None)
                 self.timing.queued_done(tokens, cancelled=t.cancelled())
             task.add_done_callback(done)
 
@@ -613,6 +620,12 @@ class Pipeline:
     def pending_turns(self) -> list[Turn]:
         """The turn each of the engine's running jobs is on (waiting, composing or typing)."""
         return [t for task, t in self._current.items() if task in self._tasks]
+
+    def planned_turns(self) -> list[Turn]:
+        """Every turn the engine's jobs have yet to finish: the one each is on and the queued
+        ones behind it."""
+        return self.pending_turns() + [t for task, behind in self._behind.items()
+                                       if task in self._tasks for t in behind]
 
     def _cancel_refused(self, now: float) -> None:
         """A fight just started: cancel each pending turn the raid rules now refuse (that turn,

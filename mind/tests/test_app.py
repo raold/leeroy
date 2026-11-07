@@ -35,6 +35,7 @@ from leeroy_mind.realm.protocol import ChannelChat, register as register_realm_e
 from leeroy_mind.storage.db import EmbeddingMismatch, open_db
 from dbtemplate import open_migrated
 from leeroy_mind.storage.store import Store
+from leeroy_mind.talk.emote_names import answered_key
 from leeroy_mind.talk.engine import TalkEngine
 from leeroy_mind.talk.raid import RaidState
 from leeroy_mind.talk.turns import TurnKind
@@ -1030,6 +1031,37 @@ def test_echoed_emotes_are_not_stored_and_errors_are_only_logged(tmp_path, clock
             assert "bridge_error" in caplog.text and h.says() == []
     with caplog.at_level(logging.WARNING, logger="leeroy_mind"):
         run(main())
+
+
+def test_his_emote_at_a_member_is_answered_with_an_emote(tmp_path, clock):
+    """talk/emotes.py: his live text emote reaches the engine once it is stored; a member's own
+    emote, and one replayed from before the hello, are only stored."""
+    async def main():
+        old = {"ts": 1_000}  # long before the hello: replayed on connect
+        events = [hello(HUMAN), CAST,
+                  {"type": "text_emote", "guid": HUMAN, "emote": "hug", "target_guid": 103,
+                   **old}]
+        async with running(tmp_path, clock, events=events) as h:
+            await h.wait(lambda: h.count("game_event") == 1)
+            await h.advance(20)
+            backs = lambda: [c for c in h.bridge.commands if c["type"] == "emote"]  # noqa: E731
+            assert backs() == []  # the replayed one
+            await h.bridge.push({"type": "text_emote", "guid": 101, "emote": "hug",
+                                 "target_guid": 102})
+            await h.wait(lambda: h.count("game_event") == 2)
+            await h.advance(20)
+            assert backs() == []  # a member's own
+            await h.bridge.push({"type": "text_emote", "guid": HUMAN, "emote": "hug",
+                                 "target_guid": 102})
+            await h.wait(lambda: h.count("game_event") == 3)
+            await h.until(lambda: backs())
+            back, = backs()
+            assert (back["guid"], back["emote"], back["target_guid"]) == (102, "hug", HUMAN)
+            # the night's receipt, on the stored row's id; none for the two it never answered
+            ids = [r["id"] for r in h.rows("SELECT id FROM game_event ORDER BY id")]
+            await h.wait(lambda: h.app.store.get_meta(answered_key(ids[-1])) is not None)
+            assert [h.app.store.get_meta(answered_key(i)) for i in ids] == [None, None, "102"]
+    run(main())
 
 
 def test_every_chat_line_stores_who_could_see_it(tmp_path, clock):

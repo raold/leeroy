@@ -2,6 +2,10 @@
 
 No model output can subtract attraction. Offline time is not neglect. Persona changes use
 the stored version, and callers invalidate their cache only after the transaction commits.
+The night also counts his text emotes at a woman with an attitude that she answered live (the
+receipt talk/emotes.py writes): each romantic one (talk/emote_names.py ROMANTIC_EMOTES) is a flirt
+act, with its gain, cap and her taste, at most EMOTE_FLIRTS_PER_NIGHT a night, and each rude one
+(RUDE_EMOTES) a hurt.
 """
 import hashlib
 import json
@@ -23,6 +27,7 @@ from leeroy_mind.personas.io import load_persona, save_persona
 from leeroy_mind.personas.screens import has_word
 from leeroy_mind.personas.stances import is_woman
 from leeroy_mind.storage.rows import MemoryRow
+from leeroy_mind.talk.emote_names import ROMANTIC_EMOTES, RUDE_EMOTES, answered_key
 from leeroy_mind.wow import BOSS_NAMES, CAST_MIN_LEVEL, CLASSES, RACES, is_raid_fight
 
 UP = (("lust", 60.0), ("drawn", 40.0))
@@ -34,6 +39,7 @@ ACT_GAIN = {"flirt": 20.0, "public_compliment": 5.0, "remembered": 5.0,
             "answered": 3.0, "quest_together": 2.0}
 TASTE, MULT_CAP = 2.0, 2.0
 ANSWER_S, ANSWERED_PER_DAY, REMEMBER_MIN_WORDS = 60.0, 3, 2
+EMOTE_FLIRTS_PER_NIGHT = 2  # his romantic emotes at one woman a night that count
 RUSH, RUSH_S, RUSH_WIPES = 1.5, 1800.0, 3
 SIMILARITY_BOOST, SOCIAL_PROOF, SCARCITY, SCIENCE_CAP = .25, 1.2, 1.2, 1.5
 TOGETHER_MIN_S, TOGETHER_BLOCK_S = 600.0, 1800.0
@@ -185,6 +191,56 @@ def mark_hurt(store, *, guid, ref, ts, live):
                        (max(row["hurt_until"], ts + HURT_DAYS * DAY_S), int(held or deep(p, "hurt")), ts, guid))
 
 
+def act_used(store, guid, act, ref) -> bool:
+    return store.conn.execute("SELECT 1 FROM attraction_act WHERE guid=? AND act=? AND ref=? LIMIT 1",
+                              (guid, act, ref)).fetchone() is not None
+
+
+def his_emotes(store, window, human) -> list[tuple[int, float, int, str]]:
+    """His text emotes at someone else in the window, oldest first: (event id, ts, target,
+    emote). The mind's own emotes are never stored (their echoes are dropped)."""
+    out = []
+    for row in store.conn.execute(
+            "SELECT id, ts, payload FROM game_event WHERE type='text_emote' AND guid=? "
+            "AND ts>=? AND ts<? ORDER BY ts, id", (human, *window)):
+        payload = json.loads(row["payload"])
+        target = payload.get("target_guid")
+        if type(target) is int and target and target != human:
+            out.append((row["id"], row["ts"], target,
+                        str(payload.get("emote") or "").strip().casefold()))
+    return out
+
+
+def count_emotes(store, *, human, attitudes, window, tz, now, changed) -> None:
+    """His emotes at a woman with an attitude that she answered live (answered_key), one act
+    each: a romantic one a flirt (its gain, the cap and her taste; the live moment's multipliers
+    are not known at night), at most EMOTE_FLIRTS_PER_NIGHT a night, and a rude one a hurt.
+    `attitudes` and `changed` follow a band the flirt moves."""
+    flirts: dict[tuple[int, str], int] = {}  # (her, night) -> emote flirts counted
+    for event_id, ts, guid, emote in his_emotes(store, window, human):
+        if guid not in attitudes or store.get_meta(answered_key(event_id)) != str(guid):
+            continue  # not her, or nothing she answered (a cooldown, a fight, AFK)
+        ref = f"event:{event_id}"
+        if emote in ROMANTIC_EMOTES and not act_used(store, guid, "flirt", ref):
+            key = (guid, night_of_ts(ts, tz))
+            if key not in flirts:
+                start, end = night_bounds(key[1], tz)
+                flirts[key] = store.conn.execute(
+                    "SELECT count(*) FROM attraction_act WHERE guid=? AND act='flirt' "
+                    "AND ref LIKE 'event:%' AND ts>=? AND ts<?", (guid, start, end)).fetchone()[0]
+            if flirts[key] >= EMOTE_FLIRTS_PER_NIGHT:
+                continue
+            flirts[key] += 1
+            amount, mult = gain("flirt", load_persona(store, guid), science=1.0)
+            moved = apply_act(store, human=human, guid=guid, act="flirt", amount=amount, mult=mult,
+                              ref=ref, ts=ts, live=False, stance=attitudes[guid], now=now)
+            if moved:
+                attitudes[guid] = moved
+                changed.add(guid)
+        elif emote in RUDE_EMOTES and not act_used(store, guid, "hurt", ref):
+            mark_hurt(store, guid=guid, ref=ref, ts=ts, live=False)
+
+
 def restore_stance(store, ledger_row, *, now) -> bool:
     row = ledger_row
     match = re.fullmatch(r"(fond|drawn|lust) -> (fond|drawn|lust): .+", row["text"])
@@ -248,8 +304,7 @@ class LiveAttraction:
             self._women = None
 
     def _used(self, guid, act, ref):
-        return self.store.conn.execute("SELECT 1 FROM attraction_act WHERE guid=? AND act=? AND ref=? LIMIT 1",
-                                       (guid, act, ref)).fetchone() is not None
+        return act_used(self.store, guid, act, ref)
 
     def _remembered(self, row, p, now):
         query = fts_query(row["text"])
@@ -573,6 +628,8 @@ async def stage_attraction(ctx):
                 reason += f" (rivalry, not hurt: {rival})"
             store.conn.execute("UPDATE rel_delta SET applied=1,delta=?,reason=? WHERE id=?",
                                (amount, reason, row["id"]))
+        count_emotes(store, human=human, attitudes=attitudes, window=ctx.window, tz=ctx.tz,
+                     now=now, changed=changed)
         names = {g: m.name for g, m in store.cast().items()}
         names[human] = ctx.ident.called
         rs = reactions(store, ctx.window, human, names)

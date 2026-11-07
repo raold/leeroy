@@ -85,6 +85,25 @@ def test_yell_and_say_are_never_chosen(clock):
             assert pick(k, g, w, r, rng=rng, opener_channel="guild") not in ("say", "yell")
 
 
+def test_a_reaction_to_his_emote_may_use_say(clock):
+    """talk/emotes.py: his emote's target stands within emote range, so her answer is /say (a
+    romantic one a whisper), and a join-in goes to his group's chat or /say. Nowhere else, and
+    never in a fight."""
+    w, r = setup(clock)
+    assert pick(K.EMOTE_REACT, 101, w, r) is None  # the caller must say where
+    for channel in ("say", "whisper", "party", "raid"):
+        assert pick(K.EMOTE_REACT, 101, w, r, reply_to=channel) == channel
+    assert pick(K.EMOTE_REACT, 101, w, r, reply_to="guild") is None
+    assert pick(K.EMOTE_REACT, 101, w, r, reply_to="yell") is None
+    r.on_group(Group(ts=0, leader_guid=HUMAN, raid=True, members=(HUMAN, 101, 102)))
+    r.on_boss(boss("engaged"), 1000.0)
+    assert pick(K.EMOTE_REACT, 101, w, r, now=1001.0, reply_to="say") is None
+    r.on_boss(boss("wiped"), 1010.0)
+    assert pick(K.EMOTE_REACT, 101, w, r, now=1015.0, reply_to="say") is None  # silence
+    assert pick(K.EMOTE_REACT, 101, w, r, now=1040.0, reply_to="say") is None  # debrief
+    assert pick(K.EMOTE_REACT, 101, w, r, now=1100.0, reply_to="say") == "say"
+
+
 def test_reply_and_continue_take_the_channel_they_are_given(clock):
     w, r = setup(clock)
     assert pick(K.REPLY_HUMAN, 101, w, r) is None  # the caller must say where

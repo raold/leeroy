@@ -137,6 +137,22 @@ def test_doctor_knows_the_whisper_overlay(tmp_path, capsys):
     assert f"over its cap of {OVERLAY_CAP_TOKENS}" in line
 
 
+def test_doctor_knows_the_emote_overlays(tmp_path, capsys):
+    """talk/emotes.py: the words of a member's line after his emote are two named templates,
+    cut to the instruction's extra cap."""
+    from leeroy_mind.talk.prompt import EXTRA_CAP_TOKENS
+    with socket.create_server(("127.0.0.1", 0)) as listener:
+        _setup(tmp_path, listener.getsockname()[1])
+        (tmp_path / "prompts").mkdir()
+        for name in ("emote_at_you", "emote_joined"):
+            (tmp_path / "prompts" / f"{name}.txt").write_text(f"{SECRET} " + _words(20),
+                                                              encoding="utf-8")
+        code, out = _doctor(tmp_path, capsys)
+    lines = [x for x in out if "prompt overlay" in x]
+    assert code == 0 and len(lines) == 2 and SECRET not in "\n".join(out)
+    assert all("no prompt reads it" not in x and f"(cap {EXTRA_CAP_TOKENS})" in x for x in lines)
+
+
 def test_no_overlays_no_lines(tmp_path, capsys):
     with socket.create_server(("127.0.0.1", 0)) as listener:
         _setup(tmp_path, listener.getsockname()[1])
