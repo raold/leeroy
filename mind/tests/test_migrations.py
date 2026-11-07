@@ -349,3 +349,28 @@ def test_the_snaps_migration_adds_selfie_snap(tmp_path, monkeypatch):
         assert conn.execute("SELECT count(*) FROM tuning_change").fetchone()[0] == 1
     finally:
         conn.close()
+
+
+def test_an_older_db_gains_the_discord_tables_and_keeps_its_rows(tmp_path, monkeypatch):
+    path = tmp_path / "mind.db"
+    conn = db_before("discord", path, tmp_path, monkeypatch)
+    conn.execute("INSERT INTO meta(key, value) VALUES ('keep', 'me')")
+    conn.commit()
+    conn.close()
+    number = migration_number("discord")
+    conn = open_db(path)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == latest_version() >= number
+        names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE name LIKE 'discord_%'")}
+        assert {"discord_message", "discord_thread", "discord_reaction"} <= names
+        assert conn.execute("SELECT value FROM meta WHERE key = 'keep'").fetchone()[0] == "me"
+        assert conn.execute("SELECT count(*) FROM discord_message").fetchone()[0] == 0
+        for bad in ("origin='bot'", "text=''", "author=0"):
+            row = {"origin": "human", "text": "x", "author": 1}
+            k, v = bad.split("=")
+            row[k] = eval(v)
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute("INSERT INTO discord_message(channel, author, origin, text, ts) "
+                             "VALUES ('g', ?, ?, ?, 1)", (row["author"], row["origin"], row["text"]))
+    finally:
+        conn.close()
