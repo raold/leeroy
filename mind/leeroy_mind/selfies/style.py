@@ -20,20 +20,26 @@ SUGGESTIVE_MIN_AGE = 21  # adults only stays; the suggestive style also never lo
 # composed lust kind, and looks that use it keep a woman out of the lust style (suggestive), so
 # a lust kind is never composed or rendered for her. A rare over-refusal (a teacher's school,
 # braces for trousers) is the accepted cost.
-AGE_RE = re.compile(
-    r"\b(schools?|schoolgirls?|schoolboys?|schoolkids?|high-?schoolers?|school uniforms?|"
-    r"student uniforms?|teens?|teenage|teenaged|teenagers?|teeny|teenyboppers?|pre-?teens?|"
-    r"tweens?|youthful|childlike|childish|child|children|kids?|kiddies?|young girls?|"
-    r"young[- ]looking|barely legal|lolita|loli|under-?aged?|adolescents?|adolescence|"
-    r"jail ?bait|baby[- ]?faced?|babyface|brace-?face|little girls?|cheerleaders?|"
-    r"cheerleader uniforms?|pig ?tails?|braces)\b", re.I)
+_AGE_TERMS = (  # a space stands for any run of spaces and hyphens, or none: "pig tails" also
+    # matches "pigtails", "pig-tails" and "pig  tails"
+    "schools?", "school girls?", "school girlish", "school boys?", "school kids?",
+    "high schoolers?", "school uniforms?", "student uniforms?", "teens?", "teenage", "teenaged",
+    "teenagers?", "teeny", "teenie", "teeny boppers?", "pre teens?", "tweens?", "youthful",
+    "childlike", "childish", "child", "children", "kids?", "kiddies?", "young girls?",
+    "young looking", "younger looking", "looks? young", "young faced?", "fresh faced",
+    "barely legal", "barely (?:18|eighteen)", "just turned (?:18|eighteen)", "lolita", "loli",
+    "under aged?", "adolescents?", "adolescence", "jail bait", "baby faced?", "babyish",
+    "brace face", "little girls?", "cheerleaders?", "cheerleader uniforms?", "pig tails?",
+    "braces", "in bunches")
+AGE_RE = re.compile(r"\b(" + "|".join(t.replace(" ", r"[\s-]*") for t in _AGE_TERMS) + r")\b",
+                    re.I)
 
 
 def looks_age_coded(p: Persona | None) -> bool:
-    """Her looks' free text (hair colour and style, skin, eyes, build, face details) uses a word
-    of AGE_RE."""
+    """Her looks' free text (hair colour and style, skin, eyes, build, face details), its
+    whitespace folded as the prompt folds it, uses a word of AGE_RE."""
     a = p.appearance if p is not None else None
-    return a is not None and any(AGE_RE.search(t or "") for t in (
+    return a is not None and any(AGE_RE.search(" ".join((t or "").split())) for t in (
         a.hair_colour, a.hair_style, a.skin_tone, a.eye_colour, a.build, *a.face))
 
 

@@ -42,7 +42,7 @@ from leeroy_mind.personas.screens import has_word, names_real_name
 from leeroy_mind.storage.store import Store
 from leeroy_mind.text import has_meta
 
-from .prompt import names_re
+from .prompt import lust_named, lust_phrase, names_re
 from .store import queue_restyled
 from .style import AGE_RE, LUST, PLAIN, STYLES, style_of, suggestive
 
@@ -222,6 +222,8 @@ def needs_rechoice(store: Store, p: Persona | None) -> bool:
     if p is None or p.appearance is None:
         return False
     chosen = chosen_style(store, p)
+    if chosen == LUST and style_of(p) == LUST and lust_named(p):
+        return True  # renamed since: her name filter would drop the joined phrase
     return chosen is not None and chosen != style_of(p)
 
 
@@ -325,6 +327,8 @@ def screen_lust(p: Persona, data: dict) -> list[str]:
     named = names_re(p)
     problems = [f"photo.{f}: shares her name" for f in ("setting", "outfit", "expression")
                 if named is not None and named.search(getattr(photo, f))]
+    if named is not None and not problems and named.search(lust_phrase(photo)):
+        problems.append(NAME_CLASHES[1])  # the joined phrase itself, "wearing" and all
     problems += [f"photo.{f}: age" for f in _FIELDS if AGE_RE.search(getattr(photo, f))]
     return problems + _photo_problems(p, {f: getattr(photo, f) for f in _FIELDS})
 

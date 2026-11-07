@@ -20,6 +20,8 @@ from ..personas.schema import MIN_AGE, Persona
 from .style import LUST, PLAIN, suggestive
 
 LUST_HELD = "lust kind awaits a re-choice"
+LUST_NAMED = "lust kind shares her name"  # her name in its joined phrase: held, chosen again
+HELD = (LUST_HELD, LUST_NAMED)
 
 NEGATIVE: tuple[tuple[str, int], ...] = (
     ("cartoon, anime, painting, illustration, 3d render, cgi", 0),
@@ -55,7 +57,8 @@ def renderable(p: Persona | None, kind_style: str = PLAIN) -> str | None:
     """None when a prompt can be built, else what is missing. Adults only, here too: the
     schema's MIN_AGE is checked again, not only when the persona was saved. `kind_style` is the
     style whose rules chose the kind (kind.chosen_style): a kind the lust rules composed waits
-    (LUST_HELD) while she does not have the lust style, until the pass chooses again."""
+    (LUST_HELD) while she does not have the lust style, and (LUST_NAMED) while her name filter
+    would drop its joined phrase, until the pass chooses again."""
     if p is None:
         return "no persona"
     if p.identity.age < MIN_AGE:
@@ -66,7 +69,22 @@ def renderable(p: Persona | None, kind_style: str = PLAIN) -> str | None:
         return "no photo kind yet"
     if kind_style == LUST and not suggestive(p):
         return LUST_HELD
+    if kind_style == LUST and lust_named(p):
+        return LUST_NAMED
     return None
+
+
+def lust_phrase(photo) -> str:
+    """The one priority-0 phrase a lust kind renders as."""
+    return f"wearing {_clean(photo.outfit)}, {_clean(photo.setting)}"
+
+
+def lust_named(p: Persona) -> bool:
+    """Her name filter would drop her lust kind's joined phrase (a rename since it was composed,
+    or a name such as Wearing), so it must not render without it."""
+    named = names_re(p)
+    return p.photo is not None and named is not None and named.search(lust_phrase(p.photo)) \
+        is not None
 
 
 def names_re(p: Persona) -> re.Pattern | None:
@@ -124,7 +142,7 @@ def build_prompt(p: Persona, *, kind_style: str = PLAIN) -> PromptSpec:
         add(detail, 2, True)
     add(f"{a.build} build", 3)
     if lust:  # one phrase: the fit keeps both or neither, and priority 0 keeps both
-        add(f"wearing {_clean(ph.outfit)}, {_clean(ph.setting)}", 0, True)
+        add(lust_phrase(ph), 0, True)  # renderable has checked no name filter drops it
     else:
         add(ph.outfit, 2, True)
         add(ph.setting, 2, True)

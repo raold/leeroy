@@ -400,7 +400,11 @@ AGE_WORDS = ["school", "her old school", "a schoolgirl look", "a school uniform"
              "a cheerleader", "pigtails", "a pigtail", "braces", "underaged", "pig tails",
              "jail bait", "baby face", "babyface", "brace-face", "braceface", "a schoolboy",
              "a schoolkid", "a high-schooler", "a highschooler", "childish", "kiddie",
-             "kiddies", "teeny", "a teenybopper"]
+             "kiddies", "teeny", "a teenybopper", "pig-tails", "jail-bait", "brace face",
+             "under age", "barely 18", "barely eighteen", "just turned 18", "fresh-faced",
+             "a young face", "looks young", "younger-looking", "babyish", "schoolgirlish",
+             "teenie", "hair in bunches", "pig\u00a0tails", "barely  legal", "young\tgirl",
+             "baby - faced", "little-girl", "student\u00a0uniform"]
 
 
 @pytest.mark.parametrize("text", AGE_WORDS)
@@ -828,3 +832,78 @@ def test_no_composed_lust_kind_loses_its_joined_phrase_to_the_name_filter(h):
                 spec = build_prompt(made, kind_style=LUST)
                 assert sum(1 for t, pr in spec.phrases if pr == 0 and t.startswith("wearing ")) \
                     == 1, (name, o, c)
+
+
+# -- round 6: spacing, new variants, a name that would drop the joined phrase ---------------------
+
+SPACED_LOOKS = ({"hair_style": "pig\u00a0tails"}, {"hair_style": "pig  tails"},
+                {"hair_style": "pig\ttails"}, {"hair_style": "pig-tails"},
+                {"face": ("baby\u00a0faced",)}, {"face": ("a  young\tface",)},
+                {"face": ("fresh-faced",)}, {"hair_style": "in bunches"},
+                {"skin_tone": "babyish"}, {"eye_colour": "looks young"},
+                {"face": ("barely 18",)}, {"face": ("just turned eighteen",)},
+                {"face": ("younger-looking",)}, {"face": ("schoolgirlish",)},
+                {"face": ("jail-bait",)}, {"face": ("brace face",)}, {"face": ("under age",)},
+                {"face": ("teenie",)})
+
+
+@pytest.mark.parametrize("looks", SPACED_LOOKS)
+def test_young_coded_looks_count_whatever_their_spacing(h, looks):
+    from leeroy_mind.selfies.style import looks_age_coded
+    p = replace(lust(h, 103), appearance=replace(APPEARANCE, **looks))
+    assert looks_age_coded(p) and not suggestive(p) and style_of(p) == PLAIN, looks
+
+
+def test_adult_looks_with_odd_spacing_keep_the_lust_style(h):
+    from leeroy_mind.selfies.style import looks_age_coded
+    p = replace(lust(h, 103), appearance=replace(APPEARANCE, hair_style="loose\u00a0 waves",
+                                                 face=("a  beauty\tmark",)))
+    assert not looks_age_coded(p) and suggestive(p)
+
+
+def test_a_lust_kind_whose_name_filter_would_drop_its_phrase_is_held_and_chosen_again(h, caplog):
+    from leeroy_mind.selfies.prompt import LUST_NAMED, build_prompt, lust_phrase, renderable
+    from leeroy_mind.selfies.stage import wants_gpu
+    from leeroy_mind.selfies.store import ensure_first_sets
+    lust(h, 102)
+    night(h, 0, lusty=[LUST_REPLY])
+    assert photo(h, 102) == LUST_PHOTO
+    _save(h, 102, replace(load_persona(h.store, 102), identity=replace(
+        load_persona(h.store, 102).identity, real_name="Mirror")), "owner")   # renamed since
+    p = load_persona(h.store, 102)
+    assert "mirror" in lust_phrase(p.photo) and renderable(p, LUST) == LUST_NAMED
+    with pytest.raises(ValueError, match="shares her name"):
+        build_prompt(p, kind_style=LUST)
+    ensure_first_sets(h.store, [102], now=h.T)
+    assert not wants_gpu(ctx_for(h, 1))                 # a held set takes no GPU
+    assert needs_rechoice(h.store, p) and style(h, 102) == LUST
+    wine = {**LUST_REPLY, "setting": "a wine bar"}
+    ctx = ctx_for(h, 1, lusty=[LUST_REPLY, wine])       # the mirror clashes: asked once more
+    seen = calls(ctx)
+    run(stage_photo(ctx))
+    assert len(seen) == 2 and seen[1][1].endswith(LUST_ASK_AGAIN)
+    p = load_persona(h.store, 102)
+    assert p.photo == compose_lust(wine) and renderable(p, LUST) is None
+    assert wants_gpu(ctx_for(h, 2))
+    assert "Mirror" not in caplog.text
+
+
+def test_a_name_such_as_wearing_refuses_every_lust_kind(h):
+    p = lust(h, 102, real_name="Wearing")
+    for r in (LUST_REPLY, SWIM_REPLY, GYM_REPLY):
+        assert screen_lust(p, r) == ["photo.outfit: shares her name"]
+
+
+def test_the_stage_logs_a_name_hold_by_guid_only(h, tmp_path, caplog):
+    from leeroy_mind.selfies.stage import make_stage
+    from leeroy_mind.selfies.store import ensure_first_sets
+    from selfies.fakes import SELFIE_CFG, fake_worker
+    lust(h, 102)
+    night(h, 0, lusty=[LUST_REPLY])
+    ensure_first_sets(h.store, [102], now=h.T)
+    _save(h, 102, replace(load_persona(h.store, 102), identity=replace(
+        load_persona(h.store, 102).identity, real_name="Hallway")), "owner")
+    with caplog.at_level(logging.INFO):
+        run(make_stage(SELFIE_CFG, worker=fake_worker(tmp_path))(h.ctx(night=NIGHTS[1])))
+    assert "selfies_set_held: night=2026-10-30 guid=102 set=1 reason=name" in caplog.text
+    assert queued(h, 102) == [(1, "first")] and "Hallway" not in caplog.text

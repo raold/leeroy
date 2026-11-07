@@ -1023,7 +1023,10 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
   phrases and `NEGATIVE`. A kind the lust rules composed is never rendered for a woman who no
   longer has the lust style (she left lust, or her looks now code young): `renderable` holds
   her set (log `selfies_set_held`, guid only) until the pass has chosen her kind again under
-  the plain rules, so its text is never rendered plainly. Everyone else
+  the plain rules, so its text is never rendered plainly; one whose joined phrase her name filter
+  would drop (renamed since it was composed) is held the same way (`reason=name`) and chosen
+  again under the lust rules. A held set takes no GPU (`wants_gpu`), and "4 more" for her says
+  it waits. Everyone else
   writes a free-text kind under the plain rules (`KIND_PROMPT`, `EXPLICIT_RE`, plus `WEAR_RE`
   for underwear, sleepwear and see-through words such as bralette, camisole, pajamas, mesh,
   fishnet and translucent), and every
@@ -1032,7 +1035,10 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
   teenage, teenaged, teenager, teeny, teenybopper, preteen, tween, youthful, childlike,
   childish, child, children, kid, kiddie, young girl, young-looking, barely legal, lolita, loli,
   underage, underaged, adolescent, jailbait or jail bait, baby face, baby-faced, babyface,
-  brace-face, little girl, cheerleader, pigtails or pig tails, braces). When her style changes
+  brace-face, little girl, cheerleader, pigtails or pig tails, braces, and fresh-faced, a
+  young face, looks young, younger-looking, babyish, schoolgirlish, teenie, barely 18, just
+  turned 18, in bunches; a multi-word one matches with spaces, hyphens or nothing between its
+  words, and looks are read with their whitespace folded). When her style changes
   the pass chooses her kind once more (meta
   `selfies:photo-style:<guid>` records which rules chose each kind). A kind set by hand is never
   redone, with one exception: a kind from before the records counts as the pass's plain kind

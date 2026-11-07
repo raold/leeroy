@@ -46,7 +46,7 @@ from . import files
 from .config import SelfieCfg, worker_command, worker_env
 from .kind import chosen_style
 from .style import PLAIN
-from .prompt import LUST_HELD, PromptSpec, build_prompt, renderable
+from .prompt import HELD, LUST_HELD, PromptSpec, build_prompt, renderable
 from .store import Candidate, ensure_first_sets, mark_ready, needing_first, queued_sets
 from .worker import RenderRequest, SelfieWorker, WorkerError, to_the_end
 
@@ -278,8 +278,9 @@ async def _render(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
         p = _stored(ctx, guid)
         why = _held(ctx, p)
         if why is not None:
-            if why == LUST_HELD:  # her kind's text is never rendered plainly
-                log("selfies_set_held", night=ctx.night, guid=guid, set=set_no, reason="restyle")
+            if why in HELD:  # her kind's text is never rendered plainly, nor without its phrase
+                log("selfies_set_held", night=ctx.night, guid=guid, set=set_no,
+                    reason="restyle" if why == LUST_HELD else "name")
             if ctx.skip(STAGE, unit):
                 tally["skipped"] += 1
             continue
@@ -324,10 +325,10 @@ async def _render(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
 
 def wants_gpu(ctx: "NightContext") -> bool:
     """The runner asks this before it makes room for the stage: tonight's first sets queued
-    (the "queue" unit), then whether any set is left to render. False leaves the chat models
-    where they are on a night with nothing to render."""
+    (the "queue" unit), then whether any set is left that can render now (a held set waits).
+    False leaves the chat models where they are on a night with nothing to render."""
     _queue(ctx)
-    return bool(_todo(ctx))
+    return any(_held(ctx, _stored(ctx, int(unit.split(":")[0]))) is None for unit in _todo(ctx))
 
 
 def make_stage(cfg: SelfieCfg, *, worker: Callable[[], SelfieWorker] | None = None

@@ -357,3 +357,24 @@ def test_logs_carry_the_action_and_outcome_only(svc, store, data, caplog):
     for name in [p.character_name for p in personas] + [p.identity.real_name for p in personas]:
         assert name not in caplog.text
     assert "no such member" not in caplog.text and "no change" not in caplog.text
+
+
+def test_more_for_a_held_lust_kind_queues_and_says_it_waits(svc, store, data):
+    from leeroy_mind.personas.schema import ProfilePhoto
+    from leeroy_mind.selfies import kind
+    from leeroy_mind.selfies.style import LUST
+    p = load_persona(store, 102)
+    lust_kind = ProfilePhoto("selfie", "upper_body", "a wine bar", "a fitted little black dress",
+                             "a wink")
+    held = replace(p, photo=lust_kind, identity=replace(p.identity, player_gender="female"),
+                   romance=replace(p.romance, stance="fond"))   # she has left lust since
+    _, race, cls = TEST_CAST[102]
+    save_persona(store, held, source="generated", ts=1000.0, race=RACES[race],
+                 class_name=CLASSES[cls])
+    kind._record(store, 102, LUST, load_persona(store, 102).photo)
+    got = run(svc.handle({"action": "more", "guid": 102}))
+    assert got["ok"] and got["message"] == ("Four more are queued; they wait until her photo kind "
+                                            "is chosen again for her photo style.")
+    assert [(s.guid, s.reason) for s in queued_sets(store)] == [(102, "more")]
+    assert run(svc.handle({"action": "more", "guid": 101}))["message"] == \
+        "Four more will be rendered tonight."           # a plain kind: as before
