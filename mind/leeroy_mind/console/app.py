@@ -65,6 +65,8 @@ run nothing else.
     GET  /api/bank     the Bank tab: the mind's bank snapshot (control op `bank`, read-only
                        SELECTs made by the mind) with names, item names from library.db and
                        the realm_bank ledger from mind.db; `why` says when there is no snapshot
+    GET  /api/training the Training tab: what `training status`, `gate`, `trials` and `cards`
+                       print, from mind.db (`setup` false when it has no training tables)
     GET  /api/selfies/images  ?guid=&set=: a ready set's four thumbnails as data URLs (404
                        unless that set is ready and the member's)
     GET  /api/selfies/member  ?guid=: one member's photo in force, sets and change history
@@ -96,7 +98,7 @@ from typing import Callable
 
 from .. import endpoint
 from . import (bankview, calendarview, faces, feed, mindlog, netinfo, personaview, raidview, selfieview, socialview,
-               status, tuneview)
+               status, trainview, tuneview)
 from .control import Controls, Refused
 from .httpd import Request, Response, Stream, digits, encode_json, json_response, text
 from .mindlink import BANK_S, RAID_S, SAY_S, LinkError
@@ -593,6 +595,7 @@ class ConsoleApp:
                   ("GET", "/api/social"): self._api_social,
                   ("GET", "/api/calendar"): self._api_calendar,
                   ("GET", "/api/bank"): self._api_bank,
+                  ("GET", "/api/training"): self._api_training,
                   ("GET", "/api/personas"): self._api_personas,
                   ("GET", "/api/persona"): self._api_persona,
                   ("GET", "/api/face"): self._api_face,
@@ -720,6 +723,7 @@ class ConsoleApp:
 
     async def _api_calendar(self, req: Request):
         return await self._db_view("calendar", calendarview.calendar_view, now=self._clock())
+
     async def _bank_snapshot(self) -> tuple[dict | None, str | None]:
         """(the mind's bank, None) or (None, why): the bank is read through the mind."""
         if self.view.state != "running":
@@ -746,6 +750,8 @@ class ConsoleApp:
         snapshot, why = await self._bank_snapshot()
         return await self._db_view("bank", bankview.bank_view, snapshot=snapshot, why=why,
                                    data_dir=self.s.data_dir)
+    async def _api_training(self, req: Request):
+        return await self._db_view("training", trainview.training_view, now=self._clock())
 
     # -- the personas tab (read-only) ----------------------------------------------------------
 

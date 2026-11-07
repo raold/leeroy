@@ -362,9 +362,17 @@
     <h2>Realm</h2>
     <p>The three rival guilds: their members and progress, the race for first kills, poaching, their Trade-chat lines and canon achievements. Coming soon.</p>
   </section>
-  <section id="tab-training" class="tab placeholder" role="tabpanel" aria-labelledby="t-training" hidden>
-    <h2>Training</h2>
-    <p>The training ground: fights recorded, days until tactics may adapt, the overhead gate, trials and the tactic cards per boss. Coming soon.</p>
+  <section id="tab-training" class="tab mindtab" role="tabpanel" aria-labelledby="t-training" hidden>
+    <div id="training-banner" class="banner bad" hidden></div>
+    <div class="view-head"><div><h2>Training</h2><p>The training ground: fights recorded, days until tactics may adapt, the overhead gate, trials and the tactic cards per boss.</p></div></div>
+    <div id="training-kpis" class="kpis" aria-label="The training ground"></div>
+    <div class="cards wide">
+      <article class="panel span"><header><h3>This week</h3></header><div id="training-week"></div></article>
+      <article class="panel"><header><h3>Trials</h3></header><div id="training-trials"></div></article>
+      <article class="panel"><header><h3>What would count as done</h3></header><div id="training-done"></div></article>
+      <article class="panel span"><header><h3>Tactic cards</h3></header><div id="training-cards"></div></article>
+      <article class="panel span"><header><h3>What the numbers do not prove</h3></header><div id="training-evidence"></div></article>
+    </div>
   </section>
   <section id="tab-dojo" class="tab placeholder" role="tabpanel" aria-labelledby="t-dojo" hidden>
     <h2>Dojo</h2>

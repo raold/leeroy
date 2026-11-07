@@ -11,6 +11,7 @@ import "./guild.mjs";
 import "./social.mjs";
 import "./calendar.mjs";
 import "./bank.mjs";
+import "./training.mjs";
 import "./personas.mjs";
 import "./mind.mjs";
 import { showTab } from "./tabs.mjs";

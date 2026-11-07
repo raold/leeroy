@@ -139,8 +139,6 @@ COMING = {
              "send you, with your replies. Coming soon.",
     "realm": "The three rival guilds: their members and progress, the race for first kills, poaching, their "
              "Trade-chat lines and canon achievements. Coming soon.",
-    "training": "The training ground: fights recorded, days until tactics may adapt, the overhead gate, "
-                "trials and the tactic cards per boss. Coming soon.",
     "dojo": "The dojo's training realm: whether it is running, its build, the acceptance gates and their "
             "evidence, recorded episodes and replays. Coming soon.",
     "library": "Search the scholar's library: GM commands, teleports, configuration templates, items, quests "
@@ -169,7 +167,7 @@ def test_the_new_tabs_say_what_is_coming():
         assert re.search(r'class="(?:[^"]* )?placeholder(?: [^"]*)?"', m.group(1)), t
         assert f"<h2>{LABELS[TABS.index(t)]}</h2>" in m.group(2), t
         assert f"<p>{copy}</p>" in m.group(2), t
-    for t in ("comms", "raid", "guild", "social", "calendar", "bank", "personas", "mind"):
+    for t in ("comms", "raid", "guild", "social", "calendar", "bank", "personas", "training", "mind"):
         assert not re.search(rf'<section id="tab-{t}"[^>]*placeholder', page), t
 
 

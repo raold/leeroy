@@ -16,6 +16,7 @@ from leeroy_mind.wow import BOSS_NAMES, is_raid_fight
 
 from .config import load_training_config
 from .experiments import Experimenter
+from .inspect import cards_view, checklist, gate_state, trials_view
 from .mechanics import BOSS_MECHANICS
 from .report import training_section
 from .service import load_book, rescore_stored
@@ -25,11 +26,6 @@ from . import store
 def _week():
     year, week, _ = datetime.now(timezone.utc).isocalendar()
     return f"{year}-W{week:02d}"
-
-
-def _gate(conn):
-    row = conn.execute("SELECT value FROM meta WHERE key='tg_gate'").fetchone()
-    return json.loads(row[0]) if row else {"phase": "ab", "raids": 0, "verdict_ms": None}
 
 
 def reset_gate(conn):
@@ -63,33 +59,6 @@ def _context(value):
             or boss != "*" and ((map_id, int(boss)) not in BOSS_NAMES or not is_raid_fight(map_id, int(boss)))):
         raise ValueError("unsupported training context")
     return value
-
-
-def _meta(conn, key):
-    row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
-    return json.loads(row[0]) if row else None
-
-
-def _trials(conn, context):
-    rows = conn.execute("SELECT * FROM tg_trial" + (" WHERE scope=?" if context else "")
-        + " ORDER BY opened DESC,id DESC LIMIT 200", (context,) if context else ()).fetchall()
-    result = {"trials": [], "refusals": _meta(conn, "tg:experiment_refusals"),
-              "metrics": {"raid": "fixed per-trial score basis",
-                          "spec": {"available": False, "reason": Experimenter.SPEC_UNAVAILABLE}}}
-    for row in rows:
-        trial = dict(row)
-        trial["provenance"] = _meta(conn, f"tg:trial:{row['id']}")
-        trial["invalidation"] = _meta(conn, f"tg:trial_invalidated:{row['id']}")
-        trial["arms"] = []
-        for arm in conn.execute("SELECT a.*,c.lineage,c.origin,c.evidence,"
-                "(SELECT count(*) FROM tg_obs o WHERE o.arm=a.id) AS observations "
-                "FROM tg_arm a LEFT JOIN tg_card c ON c.id=a.card WHERE a.trial=? ORDER BY a.id",
-                (row["id"],)).fetchall():
-            entry = dict(arm)
-            entry["evidence"] = json.loads(entry["evidence"]) if entry["evidence"] else []
-            trial["arms"].append(entry)
-        result["trials"].append(trial)
-    return result
 
 
 async def _rescore(conn, root):
@@ -129,14 +98,14 @@ def training_main(argv=None):
                 if args.command == "gate":
                     if args.reset:
                         reset_gate(conn)
-                    result = _gate(conn)
+                    result = gate_state(conn)
                 elif args.command == "rescore":
                     result = {"rescored": asyncio.run(_rescore(conn, root))}
                 elif args.command == "voicecheck":
                     from .voice_lead import voicecheck
                     result = voicecheck(conn, args.night)
                 elif args.command == "trials":
-                    result = _trials(conn, _context(args.context) if args.context else None)
+                    result = trials_view(conn, _context(args.context) if args.context else None)
                 elif args.command == "lab":
                     rotations = [dict(r) for r in conn.execute(
                         "SELECT id,name,class,spec_tab,status,origin,created FROM tg_rotation ORDER BY id DESC LIMIT 200")]
@@ -160,14 +129,7 @@ def training_main(argv=None):
                               "applied_commands_unchanged": True,
                               "pending_cleanup": conn.execute("SELECT count(*) FROM tg_applied WHERE undone IS NULL").fetchone()[0]}
                 elif args.command == "cards":
-                    fields = "id,context,version,lineage,status,origin,directives,call,assignment,reason,evidence,vetoes,prev_champion,created,changed"
-                    rows = conn.execute("SELECT " + fields + " FROM tg_card"
-                        + (" WHERE context=?" if args.context else "") + " ORDER BY context,version,id LIMIT 200",
-                        (args.context,) if args.context else ()).fetchall()
-                    result = {"cards": [dict(row) for row in rows]}
-                    for row in result["cards"]:
-                        for field in ("directives", "assignment", "evidence", "vetoes"):
-                            row[field] = json.loads(row[field])
+                    result = cards_view(conn, args.context)
                 elif args.command == "lessons":
                     result = {"context": args.context, "lessons": [dict(row) for row in store.lessons(conn, args.context)]}
                     for row in result["lessons"]:
@@ -183,20 +145,10 @@ def training_main(argv=None):
                     week = args.week if args.command == "report" else _week()
                     result = training_section(conn, week, now=SystemClock().now(), names=lambda guid: str(guid))
                     if args.command == "status":
-                        labels = {
-                            "four_weeks": "28 days of eligible observations",
-                            "won_tactic": "Offline-validated tactic adopted in a human raid",
-                            "won_rotation": "Field-validated rotation",
-                            "gate_within_1ms": "Measured telemetry overhead within 1 ms",
-                            "voice_run": "Voice delivery accepted in a live raid",
-                            "cast_callouts": "Cast callouts accepted in a live raid",
-                        }
-                        completed = result["done_when"]
                         result["checklist"] = [
-                            f"[{'x' if completed.get(key) is True else ' '}] {label}"
-                            + (" (waiting for recording)" if key in {"voice_run", "cast_callouts"}
-                               and completed.get(key) is not True and completed.get("gate_within_1ms") is not True else "")
-                            for key, label in labels.items()]
+                            f"[{'x' if item['done'] else ' '}] {item['label']}"
+                            + (" (waiting for recording)" if item["waiting"] else "")
+                            for item in checklist(result["done_when"])]
                         monday = datetime.fromisocalendar(int(week[:4]), int(week[6:]), 1).replace(tzinfo=timezone.utc).timestamp()
                         result["week"] = week
                         result["pulls_by_kind"] = {row[0]: row[1] for row in conn.execute(
