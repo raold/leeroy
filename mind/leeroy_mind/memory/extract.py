@@ -8,6 +8,7 @@ from datetime import date, datetime, tzinfo
 from typing import Callable
 
 from leeroy_mind.clock import night_of
+from leeroy_mind.discord.channels import is_private, is_public
 from leeroy_mind.human import HumanIdentity
 from leeroy_mind.llm.client import LLMClient, LLMError
 from leeroy_mind.llm.presets import EXTRACT, JSONJobFailed, chat_json
@@ -300,7 +301,7 @@ def _with(speaker: int, cited: list[ChatLineRow], lines: list[ChatLineRow], text
         if ln.from_guid != speaker:
             add(ln.from_guid)
             continue
-        if ln.channel == "whisper":
+        if is_private(ln.channel):
             add(ln.to_guid)
         if people.names_him(ln.text):
             add(people.human_guid)
@@ -430,7 +431,7 @@ def _took_part(cited: list[ChatLineRow], human_guid: int) -> bool:
     """He took part in what a memory rests on: a line of his, or a whisper between him and a
     member, is among its cited lines. Being named in a member's own line is not taking part."""
     return any(ln.from_guid == human_guid
-               or (ln.channel == "whisper" and human_guid in (ln.from_guid, ln.to_guid))
+               or (is_private(ln.channel) and human_guid in (ln.from_guid, ln.to_guid))
                for ln in cited)
 
 
@@ -472,7 +473,7 @@ def validate_extraction(data, lines: list[ChatLineRow], names: dict[int, str], h
     by_name.update({a: human_guid for a in human_aliases(human) if a not in by_name})
     by_id = {ln.id: ln for ln in lines}
     speakers_ok = {ln.from_guid for ln in lines} | {
-        ln.to_guid for ln in lines if ln.channel == "whisper"}
+        ln.to_guid for ln in lines if is_private(ln.channel)}
     valid = set(by_id)
     member_names = [n for g, n in names.items() if g != human_guid]
     known = {n.casefold() for n in names.values()} | set(human_aliases(human))
@@ -701,7 +702,7 @@ class Extractor:
         people = _People(names, human_guid, human)
         members: list[int] = []
         for ln in lines:
-            for g in (ln.from_guid, ln.to_guid if ln.channel == "whisper" else 0,
+            for g in (ln.from_guid, ln.to_guid if is_private(ln.channel) else 0,
                       *people.named(ln.text)):
                 if g in names and g != human_guid and g not in members:
                     members.append(g)
@@ -757,13 +758,14 @@ class Extractor:
         return out
 
     def _public(self, rows) -> set[int]:
-        """The ids of the memories among rows that rest on no whisper: what the guild may know.
-        A whisper's memory stays with its two people (recall's rule), and out of this prompt
-        even for their own thread, whose overheard line goes to bystanders."""
+        """The ids of the memories among rows that rest on no private line (a whisper or a DM)
+        and none on a restricted Discord channel: what the guild may know. A whisper's memory
+        stays with its two people (recall's rule), and out of this prompt even for their own
+        thread, whose overheard line goes to bystanders."""
         refs = {m.id: chat_ids(m.evidence) for m in rows}
         lines = self._store.chat_line_parties(i for ids in refs.values() for i in ids)
         return {m.id for m in rows
-                if all(lines[i][0] != "whisper" for i in refs[m.id] if i in lines)}
+                if all(is_public(lines[i][0]) for i in refs[m.id] if i in lines)}
 
     async def extract(self, t: ClosedThread) -> ExtractReport:
         lock, users = self._thread_locks.get(t.thread_id, (asyncio.Lock(), 0))

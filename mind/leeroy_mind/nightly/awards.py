@@ -3,6 +3,7 @@ from collections import Counter
 from datetime import datetime
 import json
 
+from leeroy_mind.discord.channels import is_private
 from leeroy_mind.nightly.reactions import LAUGH_RE, REPLY_S, WHISPER_BACK_S, first_after, reactions
 from leeroy_mind.nightly.settings import is_season_end, season_bounds, season_of
 from leeroy_mind.nightly.store import step_finished_at
@@ -48,8 +49,8 @@ def _laughed_before_end(store, reaction, end, human, names):
             (human, end, row["ts"], row["ts"], row["id"], row["ts"] + WHISPER_BACK_S)):
         if not LAUGH_RE.search(answer["text"]):
             continue
-        whisper = answer["channel"] == "whisper" and answer["to_guid"] == reaction.speaker
-        same = (answer["channel"] == row["channel"] and answer["channel"] != "whisper"
+        whisper = is_private(answer["channel"]) and answer["to_guid"] == reaction.speaker
+        same = (answer["channel"] == row["channel"] and not is_private(answer["channel"])
                 and answer["ts"] <= row["ts"] + REPLY_S)
         if whisper or (same and (has_word(answer["text"], names[reaction.speaker]) or (
                 not any(has_word(answer["text"], name) for guid, name in names.items()

@@ -4,6 +4,7 @@ from dataclasses import dataclass, replace
 from typing import Callable, Iterable, Literal
 
 from leeroy_mind.clock import Clock
+from leeroy_mind.discord.channels import is_private, is_restricted
 from leeroy_mind.human import HumanIdentity
 from leeroy_mind.llm.client import LLMClient, LLMError
 from leeroy_mind.llm.scheduler import LLMScheduler, Priority, SchedulerError
@@ -332,9 +333,14 @@ def _chat_ids(evidence) -> list[int]:
 
 
 def _privacy_class(evidence, parties: dict[int, tuple[str, int, int]]):
-    """"public" when the evidence cites no stored chat line or any line that is not a whisper,
-    else the whisper pairs it cites: the classes recall's interim whisper rule tells apart."""
+    """"public" when the evidence cites no stored chat line or any line that is not private (a
+    whisper or a DM), else the private pairs it cites: the classes recall's interim whisper rule
+    tells apart. Evidence on a restricted Discord channel (an officers' one) is a class of its
+    own, by channel, so it never merges into a public memory."""
     cited = [parties[i] for i in _chat_ids(evidence) if i in parties]
-    if not cited or any(ch != "whisper" for ch, _, _ in cited):
+    if not cited:
         return "public"
+    if any(not is_private(ch) for ch, _, _ in cited):
+        restricted = frozenset(ch for ch, _, _ in cited if is_restricted(ch))
+        return ("restricted", restricted) if restricted else "public"
     return frozenset(frozenset((a, b)) for _, a, b in cited)

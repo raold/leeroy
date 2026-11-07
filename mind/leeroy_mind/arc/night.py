@@ -36,6 +36,7 @@ from leeroy_mind.arc.ladder import FULL_ARC, NOTICED, NOTICED_HANDLED
 from leeroy_mind.arc.plan import plan_summary, propose_plan
 from leeroy_mind.arc.state import Arc, end_romance, get_arc, put_arc
 from leeroy_mind.arc.weekend import due, meetup, settle
+from leeroy_mind.discord.channels import private_sql
 from leeroy_mind.logs import log
 from leeroy_mind.nightly.budget import register_counter
 from leeroy_mind.nightly.knowledge import add_fact, learn
@@ -104,7 +105,7 @@ def _his_lines(store: Store, guid: int, human: int,
     with store.transaction():
         return [(r["ts"], r["id"], r["text"]) for r in store.conn.execute(
             "SELECT id, ts, text FROM chat_line c WHERE from_guid = ? AND origin = 'human' "
-            "AND ts >= ? AND ts < ? AND ((channel = 'whisper' AND to_guid = ?) OR EXISTS ("
+            f"AND ts >= ? AND ts < ? AND (({private_sql()} AND to_guid = ?) OR EXISTS ("
             "SELECT 1 FROM utterance u WHERE u.trigger_line = c.id AND u.guid = ? "
             "AND u.dropped IS NULL)) ORDER BY ts, id", (human, *window, guid, guid))]
 
@@ -116,7 +117,7 @@ def _her_lines(store: Store, guid: int, human: int, window: tuple[float, float],
     with store.transaction():
         return [(r["ts"], r["id"], r["text"]) for r in store.conn.execute(
             "SELECT id, ts, text FROM utterance WHERE guid = ? AND dropped IS NULL AND ("
-            "(channel = 'whisper' AND to_guid = ? AND ts >= ? AND ts < ?) "
+            f"({private_sql()} AND to_guid = ? AND ts >= ? AND ts < ?) "
             "OR trigger_line IN (SELECT value FROM json_each(?))) ORDER BY ts, id",
             (guid, human, *window, json.dumps(his)))]
 

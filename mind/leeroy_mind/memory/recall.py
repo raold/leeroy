@@ -6,7 +6,7 @@ from datetime import date, datetime, tzinfo
 from typing import Sequence
 
 from leeroy_mind.clock import Clock, night_of
-from leeroy_mind.discord.transport import is_discord
+from leeroy_mind.discord.channels import is_discord, is_private, is_restricted
 from leeroy_mind.llm.client import LLMError
 from leeroy_mind.llm.scheduler import Priority, SchedulerError
 from leeroy_mind.memory.writer import Embedder
@@ -75,11 +75,10 @@ def whisper_ok(channel: str, frm: int, to: int, *, speaker: int, turn_channel: s
 def scope_ok(m: MemoryRow, *, turn_channel: str, to_guid: int) -> bool:
     """Whether a memory's scope lets it into a turn's prompt (controller rulings N4 and B1). An
     open memory reaches every turn. A private or secret one counts as a whisper between its
-    owner and its partner, so it reaches only a whisper from her to that partner, and one with
-    no partner (scope_with 0) reaches none."""
-    return m.scope == "open" or (m.scope_with != 0 and whisper_ok(
-        "whisper", m.owner, m.scope_with, speaker=m.owner, turn_channel=turn_channel,
-        to_guid=to_guid))
+    owner and its partner, so it reaches only a private turn (a whisper, or a Discord DM) from
+    her to that partner, and one with no partner (scope_with 0) reaches none."""
+    return m.scope == "open" or (m.scope_with != 0 and is_private(turn_channel)
+                                 and {m.owner, m.scope_with} == {m.owner, to_guid})
 
 
 def recency(t_accessed: float, now: float, tau_days: float) -> float:
@@ -197,20 +196,24 @@ class Recall:
     def _shareable(self, rows: list[MemoryRow], owner: int, channel: str,
                    to_guid: int) -> list[MemoryRow]:
         """P1b's interim whisper rule, kept under the memory scope as a second check
-        (controller ruling B1). A memory whose stored chat lines are all whispers stays out of
-        a turn on any other channel, and out of a whisper unless every one of them was between
-        `owner` and `to_guid`. A memory with a public line, an owner-authored ref (OWNER_REF:
-        public, non-chat evidence) or no stored chat line (a game event) stays. One store query
-        for all of `rows`."""
+        (controller ruling B1). A memory whose stored chat lines are all private (whispers or
+        Discord DMs) stays out of a turn on any other channel, and out of a private turn unless
+        every one of them may reach it (whisper_ok: between `owner` and `to_guid`, a DM's only
+        in that DM). A memory citing a line on a restricted Discord channel (an officers' one)
+        comes up only in a turn on that channel, owner refs or not (ruling R7). A memory with a
+        public line, an owner-authored ref (OWNER_REF: public, non-chat evidence) or no stored
+        chat line (a game event) stays. One store query for all of `rows`."""
         refs = {m.id: chat_ids(m.evidence) for m in rows}
         lines = self._store.chat_line_parties(i for ids in refs.values() for i in ids)
         keep = []
         for m in rows:
+            cited = [lines[i] for i in refs[m.id] if i in lines]
+            if any(is_restricted(ch) and ch != channel for ch, _, _ in cited):
+                continue
             if any(isinstance(e, str) and e.startswith(OWNER_REF) for e in m.evidence):
                 keep.append(m)
                 continue
-            cited = [lines[i] for i in refs[m.id] if i in lines]
-            if cited and all(ch == "whisper" for ch, _, _ in cited) and not all(
+            if cited and all(is_private(ch) for ch, _, _ in cited) and not all(
                     whisper_ok(ch, a, b, speaker=owner, turn_channel=channel, to_guid=to_guid)
                     for ch, a, b in cited):
                 continue

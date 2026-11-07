@@ -11,6 +11,7 @@ from collections import defaultdict
 from dataclasses import asdict, replace
 from datetime import datetime
 
+from leeroy_mind.discord.channels import is_private
 from leeroy_mind.memory.privacy import stricter
 from leeroy_mind.memory.writer import clean_memory_text
 from leeroy_mind.nightly.attraction import reflection_row
@@ -154,7 +155,7 @@ def arm_of(store, utterance, persona, human, *, called=""):
     if row is None or row["dropped"] is not None or row["guid"] != persona.guid:
         return None
     kind = row["kind"]
-    if row["channel"] == "whisper" or kind in ARM_EXCLUDED or kind not in {k.value for k in TurnKind}:
+    if is_private(row["channel"]) or kind in ARM_EXCLUDED or kind not in {k.value for k in TurnKind}:
         return None
     names = _names(store, human)
     why = reason_of(store, row) or ""
@@ -215,13 +216,13 @@ def _reaction_refs(ctx, reaction, line):
     answers = ctx.store.conn.execute("SELECT * FROM chat_line WHERE origin='human' AND from_guid=? "
         "AND (ts>? OR (ts=? AND id>?)) AND ts<=? ORDER BY ts,id",
         (ctx.human, line["ts"], line["ts"], line["id"], line["ts"] + WHISPER_BACK_S)).fetchall()
-    direct = [a for a in answers if (a["channel"] == "whisper" and a["to_guid"] == reaction.speaker) or (
-        a["channel"] == line["channel"] and a["channel"] != "whisper" and a["ts"] <= line["ts"] + REPLY_S
+    direct = [a for a in answers if (is_private(a["channel"]) and a["to_guid"] == reaction.speaker) or (
+        a["channel"] == line["channel"] and not is_private(a["channel"]) and a["ts"] <= line["ts"] + REPLY_S
         and (has_word(a["text"], names[reaction.speaker]) or (
             not any(has_word(a["text"], n) for g, n in names.items() if g not in (reaction.speaker, ctx.human))
             and first_after(ctx.store, line, a))))]
     chosen = {"laugh": lambda a: LAUGH_RE.search(a["text"]), "rebuff": lambda a: NO_RE.search(a["text"]),
-              "whisper": lambda a: a["channel"] == "whisper", "reply": lambda a: True}
+              "whisper": lambda a: is_private(a["channel"]), "reply": lambda a: True}
     refs = [f"chat:{line['id']}"]
     if reaction.reaction in chosen:
         refs += [f"chat:{a['id']}" for a in direct if chosen[reaction.reaction](a)][:1]
@@ -339,7 +340,7 @@ def _authorized(store, guid, nodes):
             return False
         if ref.startswith("chat:"):
             line = store.conn.execute("SELECT * FROM chat_line WHERE id=?", (int(ref[5:]),)).fetchone()
-            if line["channel"] == "whisper":
+            if is_private(line["channel"]):
                 if guid not in (line["from_guid"], line["to_guid"]):
                     return False
             elif guid not in audience_of(store, line["id"]) and guid != line["from_guid"]:
@@ -356,7 +357,7 @@ def _follow_state(ctx, fact):
     if nodes is None or fact["root"] not in _human_roots(ctx.store, memory, ctx.human):
         return None
     line = ctx.store.conn.execute("SELECT * FROM chat_line WHERE id=?", (int(fact["root"][5:]),)).fetchone()
-    heard = {line["to_guid"]} if line["channel"] == "whisper" else audience_of(ctx.store, line["id"])
+    heard = {line["to_guid"]} if is_private(line["channel"]) else audience_of(ctx.store, line["id"])
     key = "followup:" + fact["root"]
     candidates = []
     for guid in _close(ctx, len(_eligible(ctx))):

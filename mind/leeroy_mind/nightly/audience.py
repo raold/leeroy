@@ -10,6 +10,7 @@ import json
 import logging
 import sqlite3
 
+from leeroy_mind.discord.channels import is_private
 from leeroy_mind.logs import log
 from leeroy_mind.storage.store import Store
 from leeroy_mind.wow import CAST_MIN_LEVEL
@@ -59,9 +60,9 @@ def cast_names(store: Store) -> dict[int, str]:
 
 def audience_of(store: Store, line_id: int) -> frozenset[int]:
     """The cast members who could see the line: the cast guids in its audience column when the
-    column exists and holds a value. Otherwise the fallback: a whisper's two ends, or for any
-    other channel the cast members who sent a line on any channel within 15 minutes of it, plus
-    its speaker. Empty for an unknown line."""
+    column exists and holds a value. Otherwise the fallback: a whisper's or a DM's two ends, or
+    for any other channel the cast members who sent a line on any channel within 15 minutes of
+    it, plus its speaker. Empty for an unknown line."""
     cast = cast_names(store)
     column = has_line_audience(store)
     seen = f", {AUDIENCE_COLUMN} AS seen" if column else ""
@@ -73,7 +74,7 @@ def audience_of(store: Store, line_id: int) -> frozenset[int]:
     if column and line["seen"] is not None:
         return frozenset(g for g in json.loads(line["seen"]) if g in cast)
     _warn_once("audience_fallback", reason="null_value" if column else "no_column")
-    if line["channel"] == "whisper":
+    if is_private(line["channel"]):
         return frozenset(g for g in (line["from_guid"], line["to_guid"]) if g in cast)
     near = {r[0] for r in _rows(store, "SELECT DISTINCT from_guid FROM chat_line "
                                        "WHERE ts BETWEEN ? AND ?",

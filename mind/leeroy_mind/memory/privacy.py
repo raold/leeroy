@@ -4,12 +4,13 @@ person it may come up with (0 for nobody: it then reaches no prompt).
 
 The scope comes from the evidence. A whisper among it makes the memory private to the whisper's
 two people, and secret when its thread asked for secrecy (DONT_TELL_RE), or an earlier thread of
-the same two did that night (fix I1). A scoped memory it cites passes its scope on. The strictest
-wins. A caller may raise a scope, never lower it, and what was said on a public channel is never
-secret, whatever it says.
+the same two did that night (fix I1). A Discord DM is a whisper here (ruling R7: the private
+channels are discord.channels.is_private). A scoped memory it cites passes its scope on. The
+strictest wins. A caller may raise a scope, never lower it, and what was said on a public channel
+is never secret, whatever it says.
 
-Standard library and leeroy_mind.clock (which imports nothing of the mind) only, so storage.store
-and storage.db can use it without an import cycle."""
+Standard library, leeroy_mind.clock and leeroy_mind.discord.channels (neither imports anything
+of the mind at load) only, so storage.store and storage.db can use it without an import cycle."""
 import json
 import logging
 import re
@@ -19,6 +20,7 @@ from datetime import datetime
 from typing import Iterable
 
 from leeroy_mind.clock import night_of
+from leeroy_mind.discord.channels import is_private, private_sql
 
 log = logging.getLogger("leeroy_mind")
 
@@ -34,7 +36,8 @@ _NIGHT_S = 25 * 3600  # the longest night: 24 hours, 25 when the clocks go back
 @dataclass(frozen=True)
 class Scope:
     """`scope_with` is the one person a non-open memory may be spoken of with (0: nobody).
-    `public`: the evidence cites a chat line on a channel other than whisper."""
+    `public`: the evidence cites a chat line on a channel that is not private (a whisper or a
+    DM)."""
     scope: str = "open"
     scope_with: int = 0
     public: bool = False
@@ -98,11 +101,11 @@ def _secret_threads(conn: sqlite3.Connection, lines: dict[int, _Line]) -> set[in
     pair. Plain SELECTs: the threads' own lines, their keys and openings, then the asks of the
     night before each opening (_spans, on the chat_line ts index)."""
     threads = {ln.thread_id for ln in lines.values()
-               if ln.channel == "whisper" and ln.thread_id is not None}
+               if is_private(ln.channel) and ln.thread_id is not None}
     if not threads:
         return set()
     secret = {r[0] for r in conn.execute(
-        "SELECT thread_id, text FROM chat_line WHERE channel = 'whisper' "
+        f"SELECT thread_id, text FROM chat_line WHERE {private_sql()} "
         "AND thread_id IN (SELECT value FROM json_each(?))", (json.dumps(sorted(threads)),))
         if DONT_TELL_RE.search(r[1])}
     rest = {r[0]: (r[1], r[2]) for r in conn.execute(
@@ -115,7 +118,7 @@ def _secret_threads(conn: sqlite3.Connection, lines: dict[int, _Line]) -> set[in
     for lo, hi in _spans(opened for _, opened in rest.values()):
         for r in conn.execute(
                 "SELECT l.ts, l.text, t.key FROM chat_line l JOIN chat_thread t "
-                "ON t.id = l.thread_id WHERE l.channel = 'whisper' AND l.ts BETWEEN ? AND ? "
+                f"ON t.id = l.thread_id WHERE {private_sql('l.channel')} AND l.ts BETWEEN ? AND ? "
                 "AND t.key IN (SELECT value FROM json_each(?))", (lo, hi, keys)):
             if DONT_TELL_RE.search(r[1]):
                 asks.setdefault(r[2], []).append((r[0], _night(r[0])))
@@ -127,11 +130,11 @@ def _secret_threads(conn: sqlite3.Connection, lines: dict[int, _Line]) -> set[in
 
 
 def _asked_secrecy(ln: _Line, secret_threads: set[int]) -> bool:
-    """A whisper line told in confidence: it matches DONT_TELL_RE, or its thread asked for
+    """A whisper or DM line told in confidence: it matches DONT_TELL_RE, or its thread asked for
     secrecy (_secret_threads, an earlier thread of the same two that night included). A line on
     any other channel never is (controller ruling B2)."""
-    return ln.channel == "whisper" and (DONT_TELL_RE.search(ln.text) is not None
-                                        or ln.thread_id in secret_threads)
+    return is_private(ln.channel) and (DONT_TELL_RE.search(ln.text) is not None
+                                       or ln.thread_id in secret_threads)
 
 
 def secret_lines(conn: sqlite3.Connection, ids: Iterable[int]) -> set[int]:
@@ -164,7 +167,7 @@ def _derive(owner: int, evidence: list, shown: list, lines: dict[int, _Line],
             ln = lines.get(int(m.group(2)))
             if ln is None:
                 continue
-            if ln.channel != "whisper":
+            if not is_private(ln.channel):
                 public = public or cited
                 continue
             here = "secret" if _asked_secrecy(ln, secret_threads) else "private"

@@ -293,12 +293,16 @@ def test_discord_lines_keep_out_of_the_game_s_threads(store, clock, tmp_path):
         return Chat(ts=0, channel=channel, from_guid=frm, from_name="x", to_guid=to,
                     text="invented", map=0, zone=10)
     assert thread_key(chat("discord:general")) == "discord:general"
+    assert thread_key(chat("dm:102", 102, HUMAN)) == "dm:102"
     assert thread_key(chat("say")) == "say:10"
     tracker = ThreadTracker(store)
-    ev = chat("dm:102", 102, HUMAN)
-    line = store.insert_chat_line(ev, session_id=None, origin="mind")
-    assert tracker.on_line_sent(line, ev) is None
-    assert store.chat_lines([line])[0].thread_id is None  # a DM is never threaded
+    ids = []
+    for channel in ("discord:general", "say"):
+        ev = chat(channel)
+        ids.append(store.insert_chat_line(ev, session_id=None, origin="mind"))
+        tracker.on_line_sent(ids[-1], ev)
+    a, b = store.chat_lines(ids)
+    assert a.thread_id != b.thread_id  # a Discord line never joins the zone's /say thread
 
 
 async def until(r, test, *, seconds: float = 40.0, step: float = 0.25) -> None:
@@ -311,3 +315,44 @@ async def until(r, test, *, seconds: float = 40.0, step: float = 0.25) -> None:
 
 def run(coro):
     return asyncio.run(coro)
+
+
+def test_a_speaker_outside_the_channel_s_audience_is_refused(store, clock, tmp_path):
+    """R8: the store refuses what the member choice should never ask for: a non-officer in an
+    officers' channel, anyone but the DM's own member in a DM. The turn is dropped, nothing is
+    stored and nothing reaches the bridge."""
+    rig = make_rig(store, clock, tmp_path, reply="noted, thanks")
+    assert rig.speak_turn(discord_turn(rig, 101, "officer-chat")) == []
+    assert rig.speak_turn(discord_turn(rig, 103, "dm:102", to=HUMAN)) == []
+    assert dropped(store) == [("discord:officer-chat", "discord_officers_only"),
+                              ("dm:102", "discord_not_peer")]
+    assert messages(store.conn, "officer-chat") == [] and messages(store.conn, "dm:102") == []
+    assert rig.speak_turn(discord_turn(rig, 102, "officer-chat"))  # an officer may
+    assert [m["author"] for m in messages(store.conn, "officer-chat")] == [102]
+    assert rig.sent.log == []
+    rig.close()
+
+
+def test_his_dm_and_an_officers_line_reach_no_one_else_s_prompt(store, clock, tmp_path):
+    rig = make_rig(store, clock, tmp_path)
+    rig.script("glorbish plans for the officers", "fair enough")
+    assert rig.speak_turn(discord_turn(rig, 102, "officer-chat"))
+    ev = Chat(ts=0, channel="dm:102", from_guid=HUMAN, from_name="Testmage", to_guid=102,
+              text="vexmarrow is my secret plan", map=0, zone=10)
+    line = store.insert_chat_line(ev, session_id=None, origin="human",
+                                  audience=rig.world.audience("dm:102", from_guid=HUMAN,
+                                                              to_guid=102))
+    rig.world.add_line(store.chat_lines([line])[0], clock.now())
+    rig.run(120)
+    for guid, channel in ((103, "guild"), (103, "general"), (101, "general"), (102, "guild"),
+                          (104, "general")):
+        turn = (Turn(kind=TurnKind.REPLY_HUMAN, speaker=guid, channel=channel, addressee=HUMAN)
+                if channel == "guild" else discord_turn(rig, guid, channel))
+        rig.speak_turn(turn)
+        prompt = rig.prompts()[-1]
+        assert "vexmarrow" not in prompt and "glorbish" not in prompt, (guid, channel)
+    rig.run(120)
+    assert rig.speak_turn(discord_turn(rig, 102, "dm:102", to=HUMAN))
+    assert "vexmarrow" in rig.prompts()[-1]  # the DM itself still shows him his own line
+    assert {c.channel for c in rig.sent.says()} == {"guild"}  # only the game turns
+    rig.close()

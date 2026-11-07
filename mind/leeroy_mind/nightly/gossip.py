@@ -77,6 +77,8 @@ def _disclosable(ctx, memory, teller, *, state=None, historical=False) -> bool:
         return False
     if any(scope == "secret" for _, scope, _ in scopes):
         return False
+    if any(knowledge.is_restricted(ctx.store, root) for root in roots):
+        return False  # an officers' Discord line: its audience knows it, nobody passes it on
     # A fresh witnessed memory may precede stage_knows. Only an actual prohibition
     # blocks it; an absent ledger row is not a prohibition.
     if any(ctx.store.conn.execute("SELECT 1 FROM knows WHERE root=? AND guid=? AND may_tell=0",

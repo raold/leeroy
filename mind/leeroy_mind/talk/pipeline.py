@@ -1923,7 +1923,9 @@ class Pipeline:
         message's id; nothing goes to the bridge, so there is no ack and no echo to wait for.
         None, or why it wasn't said: discord_<code> for what the store refused."""
         try:
-            message = store_line(self.store, turn, meta, text, self.clock.now())
+            message = store_line(self.store, turn, meta, text, self.clock.now(),
+                                 audience=self.world.audience(
+                                     turn.channel, from_guid=turn.speaker, to_guid=turn.to_guid))
         except DiscordRefused as e:
             log.info("discord_line_refused: guid=%d channel=%s code=%s", turn.speaker,
                      turn.channel, e.code)
