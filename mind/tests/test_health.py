@@ -327,6 +327,26 @@ def test_a_fresh_worldserver_without_its_cast_line_yet_is_a_note(rig):
                                          "ago")
 
 
+def test_a_server_log_reopened_by_a_config_reload_is_a_note(rig):
+    # `.reload config` rebuilds the appenders, and Server.log's `w` mode starts it empty
+    rig.server_log([(WORLD_START + 1800, "mod-leeroy: realm on, cast guard on, places 19, items 49, "
+                                         "max actions/tick 5")])
+    checks = rig.run()
+    assert checks["server-log"].status == NOTE
+    assert checks["server-log"].text == (
+        f"Server.log: reopened at {health._when(WORLD_START + 1800)}, after worldserver started "
+        f"at {health._when(WORLD_START)} (a `.reload config` starts it empty), so the cast line "
+        "is gone; the control endpoint's cast stands in")
+    assert checks["realm-lists"].status == OK
+
+
+def test_a_log_that_starts_with_worldserver_still_needs_its_cast_line(rig):
+    rig.server_log([(WORLD_START + 1, "AzerothCore rev. test (worldserver-daemon)"),
+                    (WORLD_START + 1800, "mod-leeroy: realm on, cast guard on, places 19, items 49, "
+                                         "max actions/tick 5")])
+    assert rig.run()["server-log"].status == FAIL
+
+
 def test_the_cast_floor_comes_from_health_with_a_default(rig):
     rig.server_log([(WORLD_START + 60, "mod-leeroy: cast 111 members, pinned 3 (keep=1)")])
     checks = rig.run()
