@@ -102,10 +102,8 @@ from pathlib import Path
 from typing import Callable
 
 from .. import endpoint
-from . import (bankview, calendarview, faces, feed, mindlog, netinfo, personaview, raidview, realmview, selfieview, socialview,
-from . import (bankview, boardview, calendarview, faces, feed, mindlog, netinfo, personaview, raidview, selfieview, socialview,
-from . import (bankview, calendarview, dojoview, faces, feed, mindlog, netinfo, personaview, raidview, selfieview, socialview,
-               status, trainview, tuneview)
+from . import (bankview, boardview, calendarview, dojoview, faces, feed, mindlog, netinfo,
+               personaview, raidview, realmview, selfieview, socialview, status, trainview, tuneview)
 from .control import Controls, Refused
 from .httpd import Request, Response, Stream, digits, encode_json, json_response, text
 from .mindlink import BANK_S, RAID_S, SAY_S, LinkError
