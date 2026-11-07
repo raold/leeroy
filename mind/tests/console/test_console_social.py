@@ -196,3 +196,9 @@ def test_nothing_from_the_drama_reaches_the_log(db, data, caplog):
             await app.close()
     asyncio.run(go())
     assert SECRET not in caplog.text
+
+
+def test_rows_reads_a_missing_table_as_empty_but_raises_other_errors(db, monkeypatch):
+    assert views.rows(db, "SELECT nonesuch FROM cast_member") == []
+    with pytest.raises(sqlite3.OperationalError):
+        views.rows(db, "SELEC bad")

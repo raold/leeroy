@@ -13,8 +13,10 @@ def tables(conn) -> set[str]:
 def rows(conn, sql: str, params=()) -> list[sqlite3.Row]:
     try:
         return conn.execute(sql, params).fetchall()
-    except sqlite3.OperationalError:
-        return []
+    except sqlite3.OperationalError as e:
+        if str(e).startswith(("no such table", "no such column")):
+            return []
+        raise
 
 
 def meta_json(conn, key: str):

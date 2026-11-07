@@ -44,10 +44,14 @@ export function pollTab(name, opts) {
                             function () { return { status: r.status, j: {} }; });
     }).then(function (x) {
       if (!x) { return; }
-      if (x.status === 200) { banner(name, null); opts.render(x.j); }
+      if (x.status === 200) {
+        banner(name, null);
+        try { opts.render(x.j); }
+        catch (e) { banner(name, "This tab could not be drawn just now."); }
+      }
       else if (x.status === 503) { banner(name, str(x.j.error) || "mind.db could not be read just now."); }
       else { banner(name, "HTTP " + x.status); }
-    }, function () { /* the strip says it */ })
+    }).catch(function () { /* no connection: the strip says it */ })
       .then(function () { busy = false; });
   }
   function stop() { clearInterval(timer); timer = null; }
