@@ -961,17 +961,24 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
   image stage: it queues a first set for each member with looks and a kind, plus any "4 more"
   asked for, and renders up to `selfie_per_night` (120) sets.
   A woman whose stance toward the owner is lust, aged 21 or more (`selfies/style.py`
-  `suggestive`), gets the lust style: a flattering, flirtatious kind from its own template (the
-  owner's overlay `prompts/nightly_photo_lust.txt` replaces it) and its own word screen in
-  `selfies/kind.py`: the outfit must name a garment from an allowed list (`GARMENT_RE`), a
-  reply that uses a word on the refused list (`LUST_EXPLICIT_RE`, beds included) in any field
-  is refused, and swimwear passes only when the setting names a beach, pool, lake or
-  hot tub, no room or other indoor place, and nothing like "anywhere but". What the lists do
-  not name passes the screen. Her renders drop `cleavage` and `swimwear` from the negative and
-  add `topless`, `underwear`, `see-through` and `sheer`, while everyone else keeps the plain
-  rules; when her style changes the pass chooses her kind once more (meta
-  `selfies:photo-style:<guid>` records which rules chose each kind; a hand-set kind is never
-  redone). The NSFW gate (`nsfw_max`) is unchanged for every image of both styles.
+  `suggestive`), gets the lust style, and her kind is picked, not written: the request's schema
+  (`LUST_SCHEMA` in `selfies/kind.py`) allows only values from fixed lists (21 settings, 28
+  outfits, 12 colours, 8 expressions; kind and framing keep their enums), so a reply off the
+  lists fails the schema, and the code builds the stored kind from the picks (`compose_lust`,
+  the colour put into the outfit). Swimwear outfits go only with the six water settings and
+  the sports top and leggings only with the gym (`screen_lust`); a reply that breaks only a
+  pairing is asked once more, then refused. Her template (`KIND_PROMPT_LUST`; the owner's
+  overlay `prompts/nightly_photo_lust.txt` replaces it) only flavours the pick. Her renders drop
+  `cleavage` and `swimwear` from the negative and add `topless`, `underwear`, `see-through` and
+  `sheer`. Everyone else writes a free-text kind under the plain rules (`KIND_PROMPT`,
+  `EXPLICIT_RE`), and every free-text kind, whoever it is for, also meets the age guard
+  (`AGE_RE`: school, schoolgirl, school or student uniform, teen, teenage, teenager, childlike,
+  child, children, kid, young-looking, barely legal, lolita, little girl, cheerleader uniform).
+  When her style changes the pass chooses her kind once more (meta `selfies:photo-style:<guid>`
+  records which rules chose each kind; a hand-set kind is never redone), and a re-choice into
+  the lust style queues a fresh set for her (a first set if she never had one, else a "4 more"
+  one; sets waiting for his choice stay waiting). The NSFW gate (`nsfw_max`) is unchanged for
+  every image of both styles.
 - **GPU rules.** The image stage unloads every chat model but the embedding model (the worker
   needs the VRAM) and never renders while a live lease is held (his login, an offline raid, the
   voice service): it ends without a failure and the sets wait for the next night. A night with

@@ -1,9 +1,12 @@
-"""The lust style of the profile photos (owner, 2026-11-07): a woman whose romance stance toward
-the owner is lust gets a flattering, flirtatious photo kind, still SFW, chosen with its own
-template and screen, and a kind chosen under the other rules is chosen again once when her
-stance moves. Everyone else keeps the plain rules exactly. Fakes only; every person here is
-invented."""
+"""The lust style of the profile photos (owner, 2026-11-07; controller round 3): a woman whose
+romance stance toward the owner is lust picks her photo kind from fixed, vetted lists (setting,
+outfit, colour, expression) and writes no text of her own; the code builds the kind. Swimwear
+goes only with the water settings and the gym outfit only with the gym. A kind chosen under the
+other rules is chosen again once when her stance moves, and a re-choice into the lust style
+queues a fresh set. Everyone else keeps the plain rules, plus the age guard every free-text kind
+now meets. Fakes only; every person here is invented."""
 import logging
+import re
 from dataclasses import asdict, dataclass, replace
 from string import Formatter
 
@@ -11,14 +14,19 @@ import pytest
 
 from conftest import TEST_CAST, run
 from leeroy_mind.nightly import budget
-from leeroy_mind.nightly.enrich import _facts
-from leeroy_mind.nightly.llm import system_prompt
+from leeroy_mind.nightly.enrich import LIKENESS_RE, _facts
+from leeroy_mind.nightly.llm import check_schema, system_prompt
 from leeroy_mind.personas.io import load_persona, save_persona
 from leeroy_mind.personas.schema import ProfilePhoto
 from leeroy_mind.selfies import kind
-from leeroy_mind.selfies.kind import (KIND_PROMPT, KIND_PROMPT_LUST, LUST_PROMPT, STAGE,
-                                      chosen_style, looks_line, needs_rechoice, screen_kind,
-                                      stage_photo)
+from leeroy_mind.selfies.kind import (AGE_RE, ERA_RE, GYM_OUTFITS, GYM_SETTINGS, KIND_PROMPT,
+                                      KIND_PROMPT_LUST, LUST_ASK_AGAIN, LUST_COLOURS,
+                                      LUST_EXPRESSIONS, LUST_OUTFITS, LUST_PROMPT, LUST_SCHEMA,
+                                      LUST_SETTINGS, PAIRINGS, STAGE, SWIM_OUTFITS,
+                                      WATER_SETTINGS, chosen_style, compose_lust, looks_line,
+                                      needs_rechoice, screen_kind, screen_lust, stage_photo)
+from leeroy_mind.selfies.prompt import build_prompt
+from leeroy_mind.selfies.store import queued_sets
 from leeroy_mind.selfies.style import LUST, PLAIN, SUGGESTIVE_MIN_AGE, style_of, suggestive
 from leeroy_mind.wow import CLASSES, RACES
 from nightly.conftest import IDENT
@@ -37,13 +45,43 @@ TODAY_KIND_PROMPT = (
 TODAY_EXPLICIT = (
     r"\b(nude|naked|topless|shirtless|braless|lingerie|underwear|bra|panties|bikini|swimsuit|"
     r"swimwear|see-through|sheer|sexy|sexual|seductive|nsfw|cleavage)\b")
+# The free-text lust screen of rounds 1 and 2, kept here as a yardstick only: no value of the
+# lists, and no prompt phrase built from them, may use one of its words.
+OLD_REFUSED = re.compile(
+    r"\b(?:nude|nudes|naked|nudity|topless|shirtless|braless|undress\w*|unclothed|nipples?|"
+    r"pasties|body[- ]?paint(?:ed)?|unbutton\w*|unzipped|wet|soaked|dripping|oiled|"
+    r"nothing (?:but|else|underneath|on|at all)|wearing nothing|not wearing anything|"
+    r"birthday suit|au naturel|(?:no|without) (?:a )?(?:top|bra|pants|shirt|clothes|clothing)|"
+    r"(?:just|only) (?:a|an|her|his|my) (?:[\w'-]+ ){0,2}(?:shirt|hoodie|sweater|jersey)s?|"
+    r"barely (?:dressed|there)|scantily|skimpy|half[- ]dressed|partially dressed|"
+    r"covering (?:her|his|my) (?:chest|body)|bare[- ]?(?:chested|breast\w*)|breasts?|"
+    r"\w*boob\w*|areolas?|lingerie|underwear|undies|bra|bras|bralettes?|bralets?|brassieres?|"
+    r"bustiers?|panties|knickers|thong|g-string|boyshorts|negligee|nightie|nightgown|"
+    r"nightdress|nightwear|sleepwear|pajamas?|pyjamas?|pjs|chemise|camisole|bodysuit|"
+    r"babydolls?|baby-doll|teddy|teddies|corset|garters?|body ?stockings?|stockings|suspenders|"
+    r"bandeau|catsuit|latex|harness|fishnets?|mesh|towels?|robes?|bathrobes?|monokini|"
+    r"micro[- ]?bikini|see[- ]?thr(?:ough|u)|sheer|transparent|shower\w*|baths?|bathtubs?|"
+    r"bubble bath|(?<!hot )(?<!hot-)tubs?|beds?|sheets?|covers|blankets?|duvets?|sauna|"
+    r"steam room|locker room|changing room|fitting room|nsfw|sex|sexual|sexually|"
+    r"sexuali[sz]ed|seductive|erotic|erotica|explicit|porn\w*|fetish|boudoir|horny|aroused|"
+    r"kinky|lewd|xxx|onlyfans|on all fours|bent over|straddl\w*|legs spread|spread legs|"
+    r"nudist|naturist|clothing-optional|strip\w*|bedroom|bathroom|spa|stage|jacuzzi)\b", re.I)
 
 PLAIN_KIND = {"kind": "snapshot", "framing": "upper_body", "setting": "on the deck of a small boat",
               "outfit": "orange rain bib over a grey hoodie",
               "expression": "squinting into the wind"}
-LUST_KIND = {"kind": "mirror_selfie", "framing": "upper_body",
-             "setting": "the hallway mirror at home", "outfit": "a fitted low-cut black top",
-             "expression": "a playful half-smile"}
+LUST_REPLY = {"kind": "mirror_selfie", "framing": "upper_body",
+              "setting": "the mirror in her hallway", "outfit": "fitted little dress",
+              "colour": "black", "expression": "a playful smile"}
+LUST_PHOTO = ProfilePhoto("mirror_selfie", "upper_body", "the mirror in her hallway",
+                          "a fitted little black dress", "a playful smile")
+SWIM_REPLY = {"kind": "snapshot", "framing": "upper_body", "setting": "the beach at sunset",
+              "outfit": "string bikini", "colour": "red", "expression": "a teasing grin"}
+SWIM_AWAY = {**SWIM_REPLY, "setting": "a cafe terrace"}
+GYM_REPLY = {"kind": "mirror_selfie", "framing": "upper_body", "setting": "the gym",
+             "outfit": "sports top and leggings", "colour": "teal",
+             "expression": "a confident smirk"}
+GYM_AWAY = {**GYM_REPLY, "setting": "a wine bar"}
 HAND = ProfilePhoto("headshot", "face", "an office", "a blazer", "a calm smile")
 NIGHTS = ("2026-10-29", "2026-10-30", "2026-10-31", "2026-11-01")
 
@@ -52,12 +90,12 @@ def lust(h, guid=102, **over):
     return h.woman(guid, "lust", appearance=APPEARANCE, **over)
 
 
-def systems(ctx) -> list[str]:
-    """The system prompts the photo pass sends, in order."""
+def calls(ctx) -> list[tuple[str, str, dict]]:
+    """(system, user, schema) of each request the photo pass sends, in order."""
     seen, real = [], ctx.reasoner.json
 
     async def json_(system, user, schema, **kw):
-        seen.append(system)
+        seen.append((system, user, schema))
         return await real(system, user, schema, **kw)
     ctx.reasoner.json = json_
     return seen
@@ -86,8 +124,12 @@ def by_hand(h, guid, photo: ProfilePhoto):
     _save(h, guid, replace(load_persona(h.store, guid), photo=photo), "owner")
 
 
-def night(h, n, replies=()):
-    ctx = h.ctx({"photo": list(replies)}, night=NIGHTS[n])
+def ctx_for(h, n, plain=(), lusty=(), **kw):
+    return h.ctx({"photo": list(plain), "photo_lust": list(lusty)}, night=NIGHTS[n], **kw)
+
+
+def night(h, n, plain=(), lusty=()):
+    ctx = ctx_for(h, n, plain, lusty)
     run(stage_photo(ctx))
     return ctx
 
@@ -98,6 +140,18 @@ def photo(h, guid):
 
 def style(h, guid):
     return chosen_style(h.store, load_persona(h.store, guid))
+
+
+def queued(h, guid):
+    return [(s.set_no, s.reason) for s in queued_sets(h.store) if s.guid == guid]
+
+
+def _reply(outfit, colour="black", setting=None, expression="a wink"):
+    if setting is None:
+        setting = (WATER_SETTINGS[0] if outfit in SWIM_OUTFITS else
+                   GYM_SETTINGS[0] if outfit in GYM_OUTFITS else "a rooftop bar at night")
+    return {"kind": "selfie", "framing": "upper_body", "setting": setting, "outfit": outfit,
+            "colour": colour, "expression": expression}
 
 
 # -- who ----------------------------------------------------------------------------------------
@@ -113,253 +167,218 @@ def test_the_suggestive_style_is_a_lust_woman_of_21_or_more(h):
     assert not suggestive(None) and style_of(None) == PLAIN
 
 
-# -- the template ---------------------------------------------------------------------------
+# -- the template and the schema -----------------------------------------------------------
 
-def test_a_lust_woman_gets_the_lust_template_and_everyone_else_todays(h):
+def test_a_lust_woman_gets_the_lust_template_and_schema_and_everyone_else_todays(h):
     assert KIND_PROMPT == TODAY_KIND_PROMPT and LUST_PROMPT == "photo_lust"
     h.persona(101, appearance=APPEARANCE)
     lust(h, 102)
     h.woman(103, "fond", appearance=APPEARANCE)
     lust(h, 104, age=20)
-    ctx = h.ctx({"photo": [PLAIN_KIND, LUST_KIND, PLAIN_KIND, PLAIN_KIND]})
+    ctx = h.ctx({"photo": [PLAIN_KIND] * 3, "photo_lust": [LUST_REPLY]})
     want = {102: expected(ctx, 102, LUST_PROMPT, KIND_PROMPT_LUST),
             **{g: expected(ctx, g, STAGE, TODAY_KIND_PROMPT) for g in (101, 103, 104)}}
-    seen = systems(ctx)
+    seen = calls(ctx)
     run(stage_photo(ctx))
-    assert sorted(seen) == sorted(want.values())
-    assert want[102] != want[103]
+    assert sorted(s for s, _, _ in seen) == sorted(want.values())
+    assert [sc for s, _, sc in seen if s == want[102]] == [LUST_SCHEMA]
+    assert all(sc == kind.KIND_SCHEMA for s, _, sc in seen if s != want[102])
+    assert photo(h, 102) == LUST_PHOTO
+    for g in (101, 103, 104):
+        assert photo(h, g) == ProfilePhoto(**PLAIN_KIND)
 
 
-def test_the_lust_template_takes_the_same_fields_and_stays_within_the_line():
+def test_the_lust_template_takes_the_same_fields_and_asks_only_for_picks():
     def fields(t):
         return {f for _, f, _, _ in Formatter().parse(t) if f}
     assert fields(KIND_PROMPT_LUST) == fields(KIND_PROMPT) == {"name", "card", "facts", "looks"}
     text = KIND_PROMPT_LUST.lower()
-    for rule in ("never nude, topless, see-through, sheer, mesh or wet",
-                 "never lingerie, underwear, a bralette, a bustier, a robe or a towel as the outfit",
-                 "never in a shower, a bath or a bed",
-                 "nothing sexual", "swimwear only at a beach, a pool, a lake or a hot tub",
-                 "never like anyone famous", "no one else's name"):
+    for rule in ("pick each part from the choices the answer allows",
+                 "swimwear only at the beach, the pool deck, the lakeside dock, the hot tub, the "
+                 "boat or the beach bar", "sports top and leggings only at the gym"):
         assert rule in text
+    assert OLD_REFUSED.search(KIND_PROMPT_LUST) is None and AGE_RE.search(KIND_PROMPT_LUST) is None
 
 
-def test_the_overlay_nightly_photo_lust_replaces_the_lust_template_only(h):
+def test_the_schema_offers_only_the_lists_and_nothing_else():
+    props = LUST_SCHEMA["properties"]
+    assert LUST_SCHEMA["title"] == "photo_lust" and LUST_SCHEMA["additionalProperties"] is False
+    assert set(LUST_SCHEMA["required"]) == set(props) == {"kind", "framing", "setting", "outfit",
+                                                          "colour", "expression"}
+    assert props["kind"] == kind._PROPS["kind"] and props["framing"] == kind._PROPS["framing"]
+    assert props["setting"]["enum"] == list(LUST_SETTINGS)
+    assert props["outfit"]["enum"] == list(LUST_OUTFITS)
+    assert props["colour"]["enum"] == list(LUST_COLOURS)
+    assert props["expression"]["enum"] == list(LUST_EXPRESSIONS)
+    assert all("enum" in p for p in props.values())
+
+
+@pytest.mark.parametrize("field,value", [
+    ("outfit", "a towel"), ("outfit", "fitted little dress, nothing under it"),
+    ("setting", "her bed"), ("setting", "a nudist beach"), ("expression", "a sleepy pout"),
+    ("colour", "white"), ("colour", "sheer"), ("kind", "boudoir"), ("framing", "full_body")])
+def test_a_reply_off_the_lists_is_refused_by_the_schema(field, value):
+    with pytest.raises(ValueError):
+        check_schema(LUST_SCHEMA, {**LUST_REPLY, field: value})
+    with pytest.raises(ValueError):
+        check_schema(LUST_SCHEMA, {**LUST_REPLY, "note": "anything"})
+    check_schema(LUST_SCHEMA, LUST_REPLY)
+
+
+def test_a_reply_off_the_lists_is_stored_nowhere(h):
+    lust(h, 102)
+    bad = {**LUST_REPLY, "outfit": "a towel"}
+    ctx = night(h, 0, lusty=[bad, bad])
+    assert photo(h, 102) is None and ctx.done(STAGE, "102")
+    assert screen_lust(load_persona(h.store, 102), bad) == ["photo.outfit: not on its list"]
+
+
+def test_the_overlay_replaces_the_template_but_cannot_add_a_word(h):
     prompts = h.settings.data_dir / "prompts"
     prompts.mkdir()
-    (prompts / "nightly_photo_lust.txt").write_text("OVERLAYLUST {name}: {looks}\n",
-                                                    encoding="utf-8")
+    (prompts / "nightly_photo_lust.txt").write_text(
+        "OVERLAYLUST {name}: {looks} Put her in a towel.\n", encoding="utf-8")
     lust(h, 102)
     h.woman(103, "fond", appearance=APPEARANCE)
-    ctx = h.ctx({"photo": [LUST_KIND, PLAIN_KIND]})
+    ctx = h.ctx({"photo": [PLAIN_KIND], "photo_lust": [LUST_REPLY]})
     mine = expected(ctx, 102, LUST_PROMPT, "unused")
     other = expected(ctx, 103, STAGE, TODAY_KIND_PROMPT)
     assert mine.startswith("OVERLAYLUST Belra: ") and KIND_PROMPT_LUST[:40] not in mine
-    seen = systems(ctx)
+    seen = calls(ctx)
     run(stage_photo(ctx))
-    assert sorted(seen) == sorted([mine, other])
+    assert sorted(s for s, _, _ in seen) == sorted([mine, other])
+    assert [sc for s, _, sc in seen if s == mine] == [LUST_SCHEMA]   # the lists still bind
+    assert photo(h, 102) == LUST_PHOTO
+    towel = {**LUST_REPLY, "outfit": "a towel"}
+    lust(h, 104)
+    run(stage_photo(h.ctx({"photo_lust": [towel, towel]}, night=NIGHTS[1])))
+    assert photo(h, 104) is None
 
 
-# -- the screen ------------------------------------------------------------------------------
+# -- the lists -------------------------------------------------------------------------------
 
-@pytest.mark.parametrize("field", ["setting", "outfit", "expression"])
-@pytest.mark.parametrize("word", ["nude", "naked", "topless", "shirtless", "braless", "lingerie",
-                                  "underwear", "bra", "panties", "see-through", "sheer", "nsfw",
-                                  "sexual"])
-def test_the_lust_screen_still_refuses_what_is_never_allowed(h, field, word):
-    out = screen_kind(lust(h), {**LUST_KIND, field: f"a {word} look"}, ident=IDENT,
-                      member_names=["Testb"])
-    assert any(m.startswith(f"photo.{field}: explicit") for m in out), (field, word)
-
-
-# the other words for undressed, underwear, sleepwear and the places people undress in
-UNDRESSED = ["a towel", "two towels", "a robe", "a fluffy bathrobe", "a lace bralette",
-             "a bustier", "a babydoll dress", "a teddy", "a bodystocking", "fishnet tights",
-             "fishnets", "a mesh top", "pasties", "a nipple", "nipples", "body paint",
-             "body-paint", "wet hair", "an unbuttoned shirt", "an unzipped hoodie",
-             "nothing but a smile", "nothing else", "nothing underneath", "a seethrough top",
-             "the shower", "a bath", "the bathtub", "a bubble bath", "lying in bed",
-             "the sheets", "under the covers"]
-
-
-@pytest.mark.parametrize("field", ["setting", "outfit", "expression"])
-@pytest.mark.parametrize("text", UNDRESSED)
-def test_the_lust_screen_refuses_the_other_words_for_undressed_in_every_field(h, field, text):
-    out = screen_kind(lust(h), {**LUST_KIND, field: text}, ident=IDENT, member_names=["Testb"])
-    assert any(m.startswith(f"photo.{field}: explicit") for m in out), (field, text)
-
-
-@pytest.mark.parametrize("field", ["kind", "framing"])
-@pytest.mark.parametrize("text", ["towel selfie", "in bed", "nude", "wet look"])
-def test_the_lust_screen_reads_the_kind_and_framing_too(h, field, text):
-    out = screen_kind(lust(h), {**LUST_KIND, field: text}, ident=IDENT, member_names=["Testb"])
-    assert any(m.startswith(f"photo.{field}: explicit") for m in out), (field, text)
-
-
-def test_a_hot_tub_is_still_by_the_water(h):
+def test_every_choice_composes_a_kind_within_the_line(h):
     p = lust(h)
-    for setting in ("in the hot tub", "in a hot-tub on the deck"):
-        assert screen_kind(p, {**LUST_KIND, "setting": setting}, ident=IDENT,
-                           member_names=["Testb"]) == []
-        assert screen_kind(p, {**LUST_KIND, "setting": setting, "outfit": "a red bikini"},
-                           ident=IDENT, member_names=["Testb"]) == []
+    lengths = {"setting": 80, "outfit": 80, "expression": 40}
+    replies = ([_reply(o, c) for o in LUST_OUTFITS for c in LUST_COLOURS]
+               + [_reply("fitted little dress", setting=s) for s in LUST_SETTINGS
+                  if s not in GYM_SETTINGS]
+               + [_reply("fitted little dress", expression=e) for e in LUST_EXPRESSIONS])
+    for r in replies:
+        assert screen_lust(p, r) == [], r
+        made = compose_lust(r)
+        for field in kind._FIELDS:
+            text = getattr(made, field)
+            assert not OLD_REFUSED.search(text), (field, text)
+            for guard in (AGE_RE, ERA_RE, LIKENESS_RE):
+                assert not guard.search(text), (field, text)
+            assert field not in lengths or len(text) <= lengths[field], (field, text)
+        for phrase, _ in build_prompt(replace(p, photo=made)).phrases:
+            assert not OLD_REFUSED.search(phrase) and not AGE_RE.search(phrase), phrase
+    assert len(replies) == len(LUST_OUTFITS) * len(LUST_COLOURS) + len(LUST_SETTINGS) - 1 + \
+        len(LUST_EXPRESSIONS)
 
 
-@pytest.mark.parametrize("field,text", [
-    ("outfit", "a fitted low-cut top that shows some cleavage"),
-    ("outfit", "a sexy little black dress"), ("outfit", "an off-the-shoulder flirty sundress"),
-    ("expression", "a sultry half-smile"), ("expression", "a flirty wink")])
-def test_the_lust_screen_allows_a_flattering_flirtatious_photo(h, field, text):
-    assert screen_kind(lust(h), {**LUST_KIND, field: text}, ident=IDENT,
-                       member_names=["Testb"]) == []
+def test_the_lists_hold_no_bedroom_bath_or_stage():
+    places = " | ".join(LUST_SETTINGS).lower()
+    for word in ("bedroom", "bathroom", "bed", "shower", "bath", "sauna", "spa", "stage",
+                 "club stage", "changing", "locker", "nudist", "naturist"):
+        assert not re.search(rf"\b{word}\b", places), word
+    assert "corset" not in " ".join(LUST_OUTFITS)
+    assert set(SWIM_OUTFITS) < set(LUST_OUTFITS) and set(GYM_OUTFITS) < set(LUST_OUTFITS)
+    assert set(WATER_SETTINGS) < set(LUST_SETTINGS) and set(GYM_SETTINGS) < set(LUST_SETTINGS)
 
 
-@pytest.mark.parametrize("setting,ok", [
-    ("a small office", False), ("her kitchen", False), ("a pool hall downtown", False),
-    ("on the beach at sunset", True), ("by the hotel pool", True), ("poolside", True),
-    ("on a dock at the lake", True), ("in a hot tub at a ski lodge", True)])
-def test_swimwear_only_where_it_belongs(h, setting, ok):
+def test_the_outfit_takes_its_colour_and_an_article():
+    assert compose_lust(LUST_REPLY).outfit == "a fitted little black dress"
+    assert compose_lust({**LUST_REPLY, "outfit": "satin slip dress", "colour": "emerald"}
+                        ).outfit == "an emerald satin slip dress"
+    assert compose_lust({**LUST_REPLY, "outfit": "off-the-shoulder top and jeans",
+                         "colour": "red"}).outfit == "an off-the-shoulder red top and jeans"
+    assert compose_lust(SWIM_REPLY) == ProfilePhoto("snapshot", "upper_body",
+                                                    "the beach at sunset", "a red string bikini",
+                                                    "a teasing grin")
+
+
+# -- the pairings ------------------------------------------------------------------------------
+
+def test_swimwear_goes_only_with_the_water_settings(h):
     p = lust(h)
-    for outfit in ("a red bikini", "a black swimsuit"):
-        out = screen_kind(p, {**LUST_KIND, "setting": setting, "outfit": outfit}, ident=IDENT,
+    for outfit in SWIM_OUTFITS:
+        for setting in LUST_SETTINGS:
+            out = screen_lust(p, _reply(outfit, setting=setting))
+            assert out == ([] if setting in WATER_SETTINGS else [PAIRINGS[0]]), (outfit, setting)
+
+
+def test_the_gym_outfit_goes_only_with_the_gym(h):
+    p = lust(h)
+    for outfit in GYM_OUTFITS:
+        for setting in LUST_SETTINGS:
+            out = screen_lust(p, _reply(outfit, setting=setting))
+            assert out == ([] if setting in GYM_SETTINGS else [PAIRINGS[1]]), (outfit, setting)
+    for setting in WATER_SETTINGS + GYM_SETTINGS:  # dressed outfits go anywhere
+        assert screen_lust(p, _reply("backless summer dress", setting=setting)) == []
+
+
+def test_a_pairing_that_fails_is_asked_once_more(h, caplog):
+    lust(h, 102)
+    ctx = ctx_for(h, 0, lusty=[SWIM_AWAY, SWIM_REPLY])
+    seen = calls(ctx)
+    with caplog.at_level(logging.DEBUG):
+        run(stage_photo(ctx))
+    assert len(seen) == 2 and seen[1][1].endswith(LUST_ASK_AGAIN)
+    assert not seen[0][1].endswith(LUST_ASK_AGAIN)
+    assert photo(h, 102) == compose_lust(SWIM_REPLY)
+    assert "selfies_kind_asked_again: night=2026-10-29 guid=102" in caplog.text
+
+
+def test_a_pairing_that_fails_twice_is_refused(h):
+    lust(h, 102)
+    ctx = night(h, 0, lusty=[SWIM_AWAY, GYM_AWAY])
+    assert ctx.reasoner.calls == 2 and photo(h, 102) is None and ctx.done(STAGE, "102")
+
+
+# -- the age guard -----------------------------------------------------------------------------
+
+AGE_WORDS = ["school", "her old school", "a schoolgirl look", "a school uniform",
+             "a student uniform", "teen", "teens", "teenage", "a teenager", "childlike", "child",
+             "children", "kid", "kids", "young-looking", "young looking", "barely legal",
+             "lolita", "a little girl", "a cheerleader uniform"]
+
+
+@pytest.mark.parametrize("text", AGE_WORDS)
+def test_the_age_guard_refuses_young_coding_in_every_free_text_field(h, text):
+    people = [h.woman(103, "fond", appearance=APPEARANCE), h.persona(101, appearance=APPEARANCE),
+              lust(h, 104, age=20), lust(h, 102)]
+    for p in people:
+        for field in ("setting", "outfit", "expression"):
+            out = screen_kind(p, {**PLAIN_KIND, field: text}, ident=IDENT,
+                              member_names=["Testb"])
+            assert any(m.startswith(f"photo.{field}: age") for m in out), (p.guid, field, text)
+    assert AGE_RE.search(text)
+
+
+def test_the_plain_path_is_unchanged_but_for_the_age_guard(h):
+    assert kind.EXPLICIT_RE.pattern == TODAY_EXPLICIT and KIND_PROMPT == TODAY_KIND_PROMPT
+    assert kind.KIND_SCHEMA["title"] == "photo"
+    for p in (h.woman(103, "fond", appearance=APPEARANCE), h.persona(101, appearance=APPEARANCE)):
+        assert screen_kind(p, PLAIN_KIND, ident=IDENT, member_names=["Testb"]) == []
+        out = screen_kind(p, {**PLAIN_KIND, "outfit": "a sexy black dress"}, ident=IDENT,
                           member_names=["Testb"])
-        if ok:
-            assert out == [], (setting, outfit)
-        else:
-            assert any(m.startswith("photo.outfit: swimwear") for m in out), (setting, outfit)
+        assert [m.split(': "')[0] for m in out] == ["photo.outfit: explicit"]
 
 
-@pytest.mark.parametrize("setting", [
-    "her bedroom mirror, back from the beach", "the bathroom by the pool",
-    "her kitchen at the lake house", "the office by the beach", "the hotel hallway by the pool",
-    "the living room of a lake cabin", "a bed by the pool", "the mirror at the poolside gym"])
-def test_swimwear_is_never_indoors_whatever_water_the_setting_names(h, setting):
-    out = screen_kind(lust(h), {**LUST_KIND, "setting": setting, "outfit": "a red bikini"},
-                      ident=IDENT, member_names=["Testb"])
-    assert any(m.startswith("photo.outfit: swimwear") for m in out), setting
-
-
-def test_a_swimwear_word_in_the_setting_itself_follows_the_same_rule(h):
-    p = lust(h)
-    out = screen_kind(p, {**LUST_KIND, "setting": "a bikini shop at the mall"}, ident=IDENT,
-                      member_names=["Testb"])
-    assert any(m.startswith("photo.setting: swimwear") for m in out)
-    out = screen_kind(p, {**LUST_KIND, "setting": "a swimsuit shop in her bedroom by the lake"},
-                      ident=IDENT, member_names=["Testb"])
-    assert any(m.startswith("photo.setting: swimwear") for m in out)
-    assert screen_kind(p, {**LUST_KIND, "setting": "a bikini contest on the beach"},
-                       ident=IDENT, member_names=["Testb"]) == []
-
-
-# fix round 2: the reviewer's phrasings that crossed the line, refused in setting, outfit (beside
-# a garment, so the deny-list and not the allow-list refuses it) and expression
-CROSSING = [
-    "just a big shirt", "barely dressed", "wrapped in a sheet", "after a shower", "wearing nothing",
-    "nothing on", "nothing at all", "not wearing anything", "unclothed", "in her birthday suit",
-    "au naturel", "half-dressed", "partially dressed", "undressing", "getting undressed",
-    "unbuttoning her blouse", "an open shirt, no bra underneath", "an oversized hoodie, no pants",
-    "no top", "without a top", "bare-chested", "hands covering her chest", "wrapped in a blanket",
-    "wrapped in the duvet", "under the duvet", "bed sheet pulled up", "just her boyfriend's shirt",
-    "a shirt and no pants", "scantily clad", "skimpy outfit", "barely there dress", "underboob",
-    "sideboob", "areola", "bare breasts", "pajamas", "pyjamas", "silk pajama top", "pjs",
-    "sleepwear", "nightwear", "nightgown", "nightdress", "a silk chemise", "a lace camisole",
-    "a bralet", "a brassiere", "a bandeau", "a lace bodysuit", "stockings and suspenders",
-    "thigh-high stockings", "boyshorts", "a latex catsuit", "a leather harness", "in the tub",
-    "soaking in the tub", "showering", "in the sauna", "a steam room", "the locker room",
-    "a changing room", "a fitting room mirror", "glistening oiled skin", "horny", "aroused",
-    "kinky", "lewd", "erotica", "sexualized", "sexualised", "on all fours", "bent over a chair",
-    "straddling a chair", "legs spread", "OnlyFans style", "XXX", "soaked", "dripping"]
-BEDS = ["in her bed", "on her bed", "lying on the bed", "on the bed in her bedroom"]
-
-
-def _refused(p, field, text):
-    data = {**LUST_KIND, field: f"a black top, {text}" if field == "outfit" else text}
-    out = screen_kind(p, data, ident=IDENT, member_names=["Testb"])
-    return any(m.startswith(f"photo.{field}: explicit") for m in out)
-
-
-@pytest.mark.parametrize("text", CROSSING)
-def test_the_reviewers_crossing_phrases_are_refused_in_every_field(h, text):
-    p = lust(h)
-    for field in ("setting", "outfit", "expression"):
-        assert _refused(p, field, text), (field, text)
-
-
-@pytest.mark.parametrize("text", BEDS)
-def test_a_bed_is_refused_in_every_field(h, text):
-    p = lust(h)
-    for field in ("kind", "framing", "setting", "outfit", "expression"):
-        assert _refused(p, field, text), (field, text)
-    assert _refused(p, "expression", "bed hair and a sleepy smile")
-
-
-@pytest.mark.parametrize("outfit", ["something cute", "bubbles", "her best look",
-                                    "a little black number", "nothing much"])
-def test_a_lust_outfit_must_name_a_garment(h, outfit):
-    out = screen_kind(lust(h), {**LUST_KIND, "outfit": outfit}, ident=IDENT,
-                      member_names=["Testb"])
-    assert any(m.startswith("photo.outfit: names no garment") for m in out), outfit
-
-
-@pytest.mark.parametrize("outfit", [
-    "a satin slip dress", "a fitted sundress", "a bodycon mini dress", "a cropped tank top",
-    "an off-the-shoulder top and jeans", "a denim miniskirt and a t-shirt", "yoga pants",
-    "a red one-piece", "a sarong over a swimsuit", "a cocktail gown", "a leather jacket",
-    "a cosy cardigan", "a romper", "a jumpsuit", "high-waisted shorts", "a white blouse"])
-def test_garments_from_the_allowed_list_pass(h, outfit):
-    data = {**LUST_KIND, "setting": "on the beach at sunset", "outfit": outfit}
-    assert screen_kind(lust(h), data, ident=IDENT, member_names=["Testb"]) == [], outfit
-
-
-@pytest.mark.parametrize("reply", [
-    {"setting": "a rooftop bar", "outfit": "a satin slip dress", "expression": "sultry"},
-    {"setting": "on the beach at sunset", "outfit": "a string bikini", "expression": "sultry"},
-    {"setting": "a cafe terrace", "outfit": "a fitted low-cut black top",
-     "expression": "biting her lip"},
-    {"setting": "by the pool", "outfit": "a red swimsuit and damp hair",
-     "expression": "a playful grin"},
-    {"setting": "in a hot tub at a ski lodge", "outfit": "a black bikini",
-     "expression": "a confident smile"}])
-def test_the_fine_ones_still_pass(h, reply):
-    assert screen_kind(lust(h), {**LUST_KIND, **reply}, ident=IDENT,
-                       member_names=["Testb"]) == [], reply
-
-
-@pytest.mark.parametrize("setting", [
-    "the living-room by the pool", "her hotel room by the beach", "anywhere but the beach",
-    "not the beach, a cafe", "nowhere near the lake", "a car pool lane", "the dining room by the lake"])
-def test_swimwear_is_refused_for_the_setting_leftovers(h, setting):
-    out = screen_kind(lust(h), {**LUST_KIND, "setting": setting, "outfit": "a red bikini"},
-                      ident=IDENT, member_names=["Testb"])
-    assert any(m.startswith("photo.outfit: swimwear") for m in out), setting
-
-
-def test_the_plain_screen_has_no_garment_rule(h):
-    p = h.woman(103, "fond", appearance=APPEARANCE)
-    assert screen_kind(p, {**LUST_KIND, "outfit": "something cute"}, ident=IDENT,
-                       member_names=["Testb"]) == []
-    assert screen_kind(p, {**LUST_KIND, "setting": "on her bed"}, ident=IDENT,
-                       member_names=["Testb"]) == []
-
-
-def test_the_lust_screen_keeps_the_other_checks(h):
-    p = lust(h)
-    for field, text, problem in [("setting", "a 2009 house party", "era"),
-                                 ("setting", "a pier with testb", "names a member"),
-                                 ("expression", "looks like a famous actress", "likeness")]:
-        out = screen_kind(p, {**LUST_KIND, field: text}, ident=IDENT, member_names=["Testb"])
-        assert any(m.startswith(f"photo.{field}: {problem}") for m in out), text
-
-
-@pytest.mark.parametrize("who", ["fond", "drawn", "young", "man"])
+@pytest.mark.parametrize("who", ["fond", "drawn", "young", "man", "lust"])
 @pytest.mark.parametrize("text", ["a low-cut top that shows some cleavage", "a sexy black dress",
                                   "a red bikini", "a sheer blouse"])
-def test_everyone_else_keeps_todays_screen(h, who, text):
-    assert kind.EXPLICIT_RE.pattern == TODAY_EXPLICIT
+def test_free_text_always_meets_todays_screen(h, who, text):
+    # the lust style writes no free text; free text, whoever it is for, is never screened softer
     p = {"fond": lambda: h.woman(103, "fond", appearance=APPEARANCE),
          "drawn": lambda: h.woman(103, "drawn", appearance=APPEARANCE),
          "young": lambda: lust(h, 103, age=20),
-         "man": lambda: h.persona(101, appearance=APPEARANCE)}[who]()
-    data = {**LUST_KIND, "setting": "on the beach at sunset", "outfit": text}
+         "man": lambda: h.persona(101, appearance=APPEARANCE),
+         "lust": lambda: lust(h, 103)}[who]()
+    data = {**PLAIN_KIND, "setting": "on the beach at sunset", "outfit": text}
     out = screen_kind(p, data, ident=IDENT, member_names=["Testb"])
     assert any(m.startswith("photo.outfit: explicit") for m in out)
 
@@ -368,40 +387,69 @@ def test_everyone_else_keeps_todays_screen(h, who, text):
 
 def test_a_woman_who_became_lust_gets_one_new_kind_under_the_lust_rules(h):
     h.woman(102, "fond", appearance=APPEARANCE)
-    night(h, 0, [PLAIN_KIND])
+    night(h, 0, plain=[PLAIN_KIND])
     assert photo(h, 102) == ProfilePhoto(**PLAIN_KIND) and style(h, 102) == PLAIN
     restance(h, 102, "lust")
     assert needs_rechoice(h.store, load_persona(h.store, 102))
-    ctx = h.ctx({"photo": [LUST_KIND]}, night=NIGHTS[1])
+    ctx = ctx_for(h, 1, lusty=[LUST_REPLY])
     want = expected(ctx, 102, LUST_PROMPT, KIND_PROMPT_LUST)
-    seen = systems(ctx)
+    seen = calls(ctx)
     run(stage_photo(ctx))
-    assert seen == [want]
-    assert photo(h, 102) == ProfilePhoto(**LUST_KIND) and style(h, 102) == LUST
+    assert [(s, sc) for s, _, sc in seen] == [(want, LUST_SCHEMA)]
+    assert photo(h, 102) == LUST_PHOTO and style(h, 102) == LUST
     assert not needs_rechoice(h.store, load_persona(h.store, 102))
-    assert night(h, 2, [LUST_KIND]).reasoner.calls == 0                  # never twice
-    assert photo(h, 102) == ProfilePhoto(**LUST_KIND)
+    assert night(h, 2, lusty=[LUST_REPLY]).reasoner.calls == 0                  # never twice
+    assert photo(h, 102) == LUST_PHOTO
+
+
+def test_a_rechoice_into_lust_queues_a_fresh_set_and_leaves_his_waiting_one(h):
+    from selfies.fakes import ready
+    h.woman(102, "fond", appearance=APPEARANCE)
+    h.woman(103, "fond", appearance=APPEARANCE)
+    night(h, 0, plain=[PLAIN_KIND, PLAIN_KIND])
+    ready(h.store, h.settings.data_dir, 102, 1)          # plain candidates wait for his choice
+    restance(h, 102, "lust")
+    restance(h, 103, "lust")                             # never had a set
+    night(h, 1, lusty=[LUST_REPLY, LUST_REPLY])
+    assert queued(h, 102) == [(2, "more")] and queued(h, 103) == [(1, "first")]
+    waiting = h.store.conn.execute("SELECT decided FROM selfie_set WHERE guid=102 AND set_no=1"
+                                   ).fetchone()[0]
+    assert waiting is None                               # still his to choose from
+
+
+def test_only_a_rechoice_into_lust_queues_a_set(h):
+    lust(h, 102)                                         # a first lust kind: the stage queues it
+    h.woman(103, "fond", appearance=APPEARANCE)
+    night(h, 0, plain=[PLAIN_KIND], lusty=[LUST_REPLY])
+    assert queued(h, 102) == [] and queued(h, 103) == []
+    restance(h, 102, "drawn")                            # out of lust: a plain re-choice
+    night(h, 1, plain=[PLAIN_KIND])
+    assert photo(h, 102) == ProfilePhoto(**PLAIN_KIND) and queued(h, 102) == []
+    restance(h, 103, "lust")
+    from leeroy_mind.selfies.store import ensure_first_sets
+    ensure_first_sets(h.store, [103], now=h.T)           # one already queued: no second
+    night(h, 2, lusty=[LUST_REPLY])
+    assert queued(h, 103) == [(1, "first")]
 
 
 def test_the_owners_rebalance_into_lust_counts_too(h):
     h.woman(102, "drawn", appearance=APPEARANCE)
-    night(h, 0, [PLAIN_KIND])
+    night(h, 0, plain=[PLAIN_KIND])
     restance(h, 102, "lust", source="owner")  # rebalance-stances saves as the owner
-    assert night(h, 1, [LUST_KIND]).reasoner.calls == 1
-    assert photo(h, 102) == ProfilePhoto(**LUST_KIND)
+    assert night(h, 1, lusty=[LUST_REPLY]).reasoner.calls == 1
+    assert photo(h, 102) == LUST_PHOTO
 
 
 def test_a_refused_rechoice_keeps_her_kind_and_is_asked_again_the_next_night(h):
     h.woman(102, "fond", appearance=APPEARANCE)
-    night(h, 0, [PLAIN_KIND])
+    night(h, 0, plain=[PLAIN_KIND])
     restance(h, 102, "lust")
-    bad = {**LUST_KIND, "outfit": "lace lingerie"}
-    first = night(h, 1, [bad, bad])
+    first = night(h, 1, lusty=[SWIM_AWAY, GYM_AWAY])
     run(stage_photo(first))
-    assert first.reasoner.calls == 1 and photo(h, 102) == ProfilePhoto(**PLAIN_KIND)
-    assert style(h, 102) == PLAIN
-    assert night(h, 2, [LUST_KIND]).reasoner.calls == 1
-    assert photo(h, 102) == ProfilePhoto(**LUST_KIND)
+    assert first.reasoner.calls == 2 and photo(h, 102) == ProfilePhoto(**PLAIN_KIND)
+    assert style(h, 102) == PLAIN and queued(h, 102) == []
+    assert night(h, 2, lusty=[LUST_REPLY]).reasoner.calls == 1
+    assert photo(h, 102) == LUST_PHOTO
 
 
 def test_a_kind_set_by_hand_is_never_chosen_again(h):
@@ -409,32 +457,33 @@ def test_a_kind_set_by_hand_is_never_chosen_again(h):
     by_hand(h, 102, HAND)
     assert style(h, 102) is None
     for n in range(2):
-        assert night(h, n, [LUST_KIND]).reasoner.calls == 0
-    assert photo(h, 102) == HAND
+        assert night(h, n, lusty=[LUST_REPLY]).reasoner.calls == 0
+    assert photo(h, 102) == HAND and queued(h, 102) == []
 
 
 def test_a_pass_kind_the_owner_changed_by_hand_is_never_chosen_again(h):
     h.woman(102, "fond", appearance=APPEARANCE)
-    night(h, 0, [PLAIN_KIND])
+    night(h, 0, plain=[PLAIN_KIND])
     by_hand(h, 102, HAND)
     restance(h, 102, "lust")
     assert style(h, 102) is None
-    assert night(h, 1, [LUST_KIND]).reasoner.calls == 0
+    assert night(h, 1, lusty=[LUST_REPLY]).reasoner.calls == 0
     assert photo(h, 102) == HAND
 
 
 def test_a_kind_set_by_hand_while_the_rechoice_ran_is_kept(h):
     h.woman(102, "fond", appearance=APPEARANCE)
-    night(h, 0, [PLAIN_KIND])
+    night(h, 0, plain=[PLAIN_KIND])
     restance(h, 102, "lust")
 
     def meanwhile(text):
         by_hand(h, 102, HAND)
-        return LUST_KIND
+        return LUST_REPLY
     ctx = h.ctx(default=meanwhile, night=NIGHTS[1])
     run(stage_photo(ctx))
     assert ctx.reasoner.calls == 1 and photo(h, 102) == HAND and style(h, 102) is None
-    assert night(h, 2, [LUST_KIND]).reasoner.calls == 0
+    assert queued(h, 102) == []
+    assert night(h, 2, lusty=[LUST_REPLY]).reasoner.calls == 0
 
 
 def _legacy(h, guid, *, ran: bool):
@@ -454,10 +503,10 @@ def test_a_kind_from_before_the_records_is_the_pass_plain_one_when_the_pass_hand
     lust(h, 103)
     _legacy(h, 103, ran=False)                               # never the pass's: by hand
     assert style(h, 102) == PLAIN and style(h, 103) is None
-    assert night(h, 0, [LUST_KIND, LUST_KIND]).reasoner.calls == 1
-    assert photo(h, 102) == ProfilePhoto(**LUST_KIND) and style(h, 102) == LUST
+    assert night(h, 0, lusty=[LUST_REPLY, LUST_REPLY]).reasoner.calls == 1
+    assert photo(h, 102) == LUST_PHOTO and style(h, 102) == LUST
     assert photo(h, 103) == ProfilePhoto(**PLAIN_KIND) and style(h, 103) is None
-    assert night(h, 1, [LUST_KIND]).reasoner.calls == 0
+    assert night(h, 1, lusty=[LUST_REPLY]).reasoner.calls == 0
 
 
 def test_the_first_night_records_the_old_kinds_so_a_later_hand_change_is_kept(h):
@@ -470,22 +519,22 @@ def test_the_first_night_records_the_old_kinds_so_a_later_hand_change_is_kept(h)
     by_hand(h, 102, HAND)
     restance(h, 102, "lust")
     assert style(h, 102) is None
-    assert night(h, 1, [LUST_KIND]).reasoner.calls == 0
+    assert night(h, 1, lusty=[LUST_REPLY]).reasoner.calls == 0
     assert photo(h, 102) == HAND
 
 
 def test_a_woman_who_left_lust_gets_one_kind_under_the_plain_rules_again(h):
     lust(h, 102)
-    night(h, 0, [LUST_KIND])
+    night(h, 0, lusty=[LUST_REPLY])
     assert style(h, 102) == LUST
     restance(h, 102, "drawn")
-    ctx = h.ctx({"photo": [PLAIN_KIND]}, night=NIGHTS[1])
+    ctx = ctx_for(h, 1, plain=[PLAIN_KIND])
     want = expected(ctx, 102, STAGE, TODAY_KIND_PROMPT)
-    seen = systems(ctx)
+    seen = calls(ctx)
     run(stage_photo(ctx))
-    assert seen == [want]
+    assert [s for s, _, _ in seen] == [want]
     assert photo(h, 102) == ProfilePhoto(**PLAIN_KIND) and style(h, 102) == PLAIN
-    assert night(h, 2, [PLAIN_KIND]).reasoner.calls == 0
+    assert night(h, 2, plain=[PLAIN_KIND]).reasoner.calls == 0
 
 
 def test_men_and_women_who_stay_out_of_lust_are_never_asked_again(h):
@@ -493,38 +542,38 @@ def test_men_and_women_who_stay_out_of_lust_are_never_asked_again(h):
     h.woman(102, "fond", appearance=APPEARANCE)
     h.woman(103, "drawn", appearance=APPEARANCE)
     lust(h, 104, age=20)
-    assert night(h, 0, [PLAIN_KIND] * 4).reasoner.calls == 4
+    assert night(h, 0, plain=[PLAIN_KIND] * 4).reasoner.calls == 4
     for n in (1, 2):
-        assert night(h, n, [PLAIN_KIND] * 4).reasoner.calls == 0
+        assert night(h, n, plain=[PLAIN_KIND] * 4).reasoner.calls == 0
     for g in (101, 102, 103, 104):
         assert photo(h, g) == ProfilePhoto(**PLAIN_KIND) and style(h, g) == PLAIN
 
 
 def test_the_record_holds_the_style_and_the_kind_as_saved_and_no_name(h):
     lust(h, 102)
-    night(h, 0, [LUST_KIND])
+    night(h, 0, lusty=[LUST_REPLY])
     raw = h.store.get_meta("selfies:photo-style:102")
     assert raw is not None and '"lust"' in raw
-    assert "Belra" not in raw and IDENT.real_name not in raw
-    assert asdict(photo(h, 102)) == LUST_KIND
+    assert "Belra" not in raw and IDENT.real_name not in raw and "dress" not in raw
+    assert asdict(photo(h, 102)) == asdict(LUST_PHOTO)
 
 
 def test_the_log_names_a_rechoice_that_landed_by_id_only(h, caplog):
     h.woman(102, "fond", appearance=APPEARANCE)
     h.woman(103, "fond", appearance=APPEARANCE)
-    night(h, 0, [PLAIN_KIND, PLAIN_KIND])
+    night(h, 0, plain=[PLAIN_KIND, PLAIN_KIND])
     restance(h, 102, "lust")
     restance(h, 103, "lust")
 
     def reply(text):
         if "Coros" in text:
             by_hand(h, 103, HAND)                    # his hand wins: no re-choice landed
-        return LUST_KIND
+        return LUST_REPLY
     with caplog.at_level(logging.DEBUG):
         run(stage_photo(h.ctx(default=reply, night=NIGHTS[1])))
     assert "selfies_kind_rechosen: night=2026-10-30 guid=102 style=lust" in caplog.text
     assert "guid=103 style" not in caplog.text and "rechosen=1" in caplog.text
-    for s in (*LUST_KIND.values(), "Belra", "Coros"):
+    for s in (LUST_PHOTO.outfit, LUST_PHOTO.setting, "Belra", "Coros"):
         assert s not in caplog.text
 
 
@@ -533,12 +582,12 @@ def test_the_record_ignores_a_field_added_to_the_photo_later(h):
     class Later(ProfilePhoto):  # a ProfilePhoto with one more field, as a later schema may add
         lighting: str = "golden hour"
     lust(h, 102)
-    night(h, 0, [LUST_KIND])
-    assert kind._digest(Later(**LUST_KIND, lighting="soft window light")) == \
-        kind._digest(ProfilePhoto(**LUST_KIND))
-    later = replace(load_persona(h.store, 102), photo=Later(**LUST_KIND))
+    night(h, 0, lusty=[LUST_REPLY])
+    fields = asdict(LUST_PHOTO)
+    assert kind._digest(Later(**fields, lighting="soft window light")) == kind._digest(LUST_PHOTO)
+    later = replace(load_persona(h.store, 102), photo=Later(**fields))
     assert chosen_style(h.store, later) == LUST and not needs_rechoice(h.store, later)
-    changed = replace(later, photo=Later(**{**LUST_KIND, "outfit": "a green sweater"}))
+    changed = replace(later, photo=Later(**{**fields, "outfit": "a green sweater"}))
     assert chosen_style(h.store, changed) is None
 
 
@@ -549,19 +598,19 @@ def test_an_unreadable_persona_is_skipped_and_the_others_get_their_kinds(h):
     with h.store.transaction():
         h.store.conn.execute("UPDATE persona_core SET json = ? WHERE guid = ?",
                              ('{"schema": 1}', 103))
-    ctx = h.ctx({"photo": [LUST_KIND]})
+    ctx = ctx_for(h, 0, lusty=[LUST_REPLY])
     assert 103 in ctx.members(include_away=True)
     others = frozenset({"coach", "realm"})
     assert budget._counts(ctx, set(), others | {"photo"})["photo"] == 1
     run(stage_photo(ctx))
-    assert ctx.reasoner.calls == 1 and photo(h, 102) == ProfilePhoto(**LUST_KIND)
+    assert ctx.reasoner.calls == 1 and photo(h, 102) == LUST_PHOTO
     assert h.store.get_meta("selfies:photo-style:103") is None
 
 
 def test_the_counter_counts_the_rechoices(h):
     h.woman(102, "fond", appearance=APPEARANCE)
     h.woman(103, "fond", appearance=APPEARANCE)
-    night(h, 0, [PLAIN_KIND, PLAIN_KIND])
+    night(h, 0, plain=[PLAIN_KIND, PLAIN_KIND])
     restance(h, 102, "lust")
     others = frozenset({"coach", "realm"})
     assert budget._counts(h.ctx(night=NIGHTS[1]), set(), others | {"photo"})["photo"] == 1

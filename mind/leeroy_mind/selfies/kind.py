@@ -7,11 +7,13 @@ reply's text), stored nowhere, and not asked again the same night. A save re-rea
 persona and fills `photo` only while it is still what the pass read (empty, for a first kind),
 so a hand setting made while the pass ran wins.
 
-The member's style (style.py) picks the rules: a woman of the lust style gets KIND_PROMPT_LUST
-(the owner's overlay prompts/nightly_photo_lust.txt replaces it) and the lust screen: her outfit
-must name a garment of GARMENT_RE, a reply using a word of LUST_EXPLICIT_RE in any field is
-refused, and swimwear passes only by the water (see the screen's comment); everyone else gets
-KIND_PROMPT and EXPLICIT_RE as they were.
+The member's style (style.py) picks the rules. Everyone but a lust woman writes a free-text
+kind from KIND_PROMPT, screened by screen_kind (EXPLICIT_RE as before, and the age guard AGE_RE
+for everyone). A woman of the lust style writes no text: KIND_PROMPT_LUST (the owner's overlay
+prompts/nightly_photo_lust.txt replaces it) asks her to pick each part from fixed, vetted lists
+(LUST_SCHEMA: setting, outfit, colour, expression; kind and framing keep their enums), the code
+builds the kind from the picks (compose_lust), swimwear goes only with the water settings and
+the gym outfit only with the gym (screen_lust; a pairing that fails is asked once more).
 
 Over time: each kind the pass saves gets a record in meta (STYLE_KEY: the style that chose it
 and a digest of the kind as saved). When a member's style no longer matches her kind's record
@@ -39,7 +41,8 @@ from leeroy_mind.personas.screens import has_word, names_real_name
 from leeroy_mind.storage.store import Store
 from leeroy_mind.text import has_meta
 
-from .style import PLAIN, STYLES, style_of, suggestive
+from .store import queue_restyled
+from .style import LUST, PLAIN, STYLES, style_of, suggestive
 
 if TYPE_CHECKING:
     from leeroy_mind.nightly.runner import NightContext
@@ -62,23 +65,75 @@ KIND_PROMPT_LUST = (
     "Choose the profile picture the real person who plays {name} would put on her own social "
     "profile, the photo she posts when she wants to be noticed.\n{card}\n{facts}\n"
     "How she looks: {looks}\n"
-    "She knows she looks good and likes to show it a little: choose a flattering, flirtatious, "
-    "confident photo that still fits who she is, her work, age, region, habits and personality. "
-    "Choose the kind of photo (a phone selfie, a mirror selfie, or a snapshot a friend took), "
-    "the framing (head and shoulders, or upper body), where it was taken (a place in her own "
-    "life, in a few words), what she is wearing in it (name each piece of clothing), and her "
-    "expression (playful, sultry or "
-    "confident). Something fitted, low-cut, off the shoulder or short suits it; swimwear only "
-    "at a beach, a pool, a lake or a hot tub. Name no year, no decade, no device and no brand. "
-    "Always clothed: never nude, topless, see-through, sheer, mesh or wet, never lingerie, "
-    "underwear, a bralette, a bustier, a robe or a towel as the outfit, never in a shower, a "
-    "bath or a bed, nothing sexual in the pose, never like anyone famous, and no one else's "
-    "name.")
+    "She knows she looks good and likes to show it a little: pick a flattering, flirtatious, "
+    "confident photo that fits who she is, her age, region, habits and personality. Pick each "
+    "part from the choices the answer allows: the kind of photo, the framing, where it was "
+    "taken, what she is wearing and its colour, and her expression. Swimwear only at the "
+    "beach, the pool deck, the lakeside dock, the hot tub, the boat or the beach bar, and the "
+    "sports top and leggings only at the gym.")
 KIND_ASK = "Choose {name}'s profile picture."
+LUST_ASK_AGAIN = (" Pick again: swimwear only at the beach, the pool deck, the lakeside dock, "
+                  "the hot tub, the boat or the beach bar; the sports top and leggings only at "
+                  "the gym.")
 
 _FIELDS = ("kind", "framing", "setting", "outfit", "expression")
 _PROPS = persona_json_schema(enrichment=True)["properties"]["photo"]["anyOf"][0]["properties"]
 KIND_SCHEMA = schema("photo", {k: _PROPS[k] for k in _FIELDS})
+
+# The lust style's choices (owner, 2026-11-07, controller round 3). The model picks one value
+# of each list and writes no text of its own; the code builds the stored kind from them, so the
+# template, or the owner's overlay of it, can flavour the choice but never add a word. Every
+# value was vetted to stay within the line: clothed, nothing see-through, no underwear or
+# sleepwear, no bed, bath, shower or changing room, nothing sexual, nothing young-looking.
+LUST_COLOURS = ("black", "red", "navy", "emerald", "burgundy", "cobalt blue", "teal", "coral",
+                "plum", "olive", "pink", "gold")
+_SWIM = ("{colour} string bikini", "{colour} halter bikini", "{colour} one-piece swimsuit",
+         "{colour} high-cut one-piece swimsuit", "{colour} sarong over a bikini")
+_GYM = ("{colour} sports top and leggings",)
+_DRESSED = (
+    "fitted little {colour} dress", "low-cut {colour} cocktail dress",
+    "off-the-shoulder {colour} top and jeans", "{colour} crop top and high-waisted shorts",
+    "{colour} bodycon mini dress", "{colour} halter top and a miniskirt",
+    "{colour} satin slip dress", "{colour} tank top and denim shorts",
+    "backless {colour} summer dress", "plunging {colour} wrap dress",
+    "fitted {colour} blazer dress", "{colour} one-shoulder top and leather trousers",
+    "{colour} sweetheart-neckline sundress", "{colour} midi dress with a high slit",
+    "cropped {colour} cardigan and a miniskirt", "{colour} sequin party dress",
+    "{colour} off-the-shoulder sweater dress", "{colour} cut-out dress",
+    "{colour} ribbed tank dress", "{colour} leather jacket over a crop top",
+    "{colour} square-neck top and a pencil skirt", "{colour} silk blouse and a leather miniskirt")
+
+
+def _choice(template: str) -> str:
+    return template.replace("{colour} ", "")
+
+
+# the outfit the model picks -> how its colour goes in
+LUST_OUTFITS: dict[str, str] = {_choice(t): t for t in _DRESSED + _SWIM + _GYM}
+SWIM_OUTFITS = frozenset(_choice(t) for t in _SWIM)
+GYM_OUTFITS = frozenset(_choice(t) for t in _GYM)
+WATER_SETTINGS = ("the beach at sunset", "a hotel pool deck", "a lakeside dock",
+                  "a hot tub on a wooden deck", "the deck of a sailing boat", "a beach bar")
+GYM_SETTINGS = ("the gym",)
+LUST_SETTINGS = WATER_SETTINGS + GYM_SETTINGS + (
+    "a rooftop bar at night", "a city street at night", "a cafe terrace", "a park in summer",
+    "a hotel balcony at dusk", "a nightclub", "her living room couch",
+    "the mirror in her hallway", "the front seat of her car", "a concert crowd", "a wine bar",
+    "a dance floor", "a garden party", "a ski lodge terrace")
+LUST_EXPRESSIONS = ("a playful smile", "a sultry look", "a confident smirk", "a teasing grin",
+                    "an over-the-shoulder glance", "a wink", "biting her lip", "laughing")
+PAIRINGS = ("photo.outfit: swimwear away from the water",
+            "photo.outfit: gym wear away from the gym")
+
+
+def _enum(values) -> dict:
+    return {"type": "string", "enum": list(values)}
+
+
+LUST_SCHEMA = schema(LUST_PROMPT, {
+    "kind": _PROPS["kind"], "framing": _PROPS["framing"], "setting": _enum(LUST_SETTINGS),
+    "outfit": _enum(LUST_OUTFITS), "colour": _enum(LUST_COLOURS),
+    "expression": _enum(LUST_EXPRESSIONS)})
 
 ERA_RE = re.compile(
     r"\b(1[89]\d\d|20\d\d|'?\d0s|retro|vintage|old[- ]fashioned|antique|flip[- ]?phone|webcam|"
@@ -86,52 +141,12 @@ ERA_RE = re.compile(
 EXPLICIT_RE = re.compile(
     r"\b(nude|naked|topless|shirtless|braless|lingerie|underwear|bra|panties|bikini|swimsuit|"
     r"swimwear|see-through|sheer|sexy|sexual|seductive|nsfw|cleavage)\b", re.I)
-# The lust style's screen. A reply is refused when any field uses a word of _LUST_REFUSED (a
-# bed included), when the outfit names no garment of
-# GARMENT_RE, or when swimwear appears without a beach, pool, lake or hot tub in a setting that
-# names no room or other indoor place and does not point away from the water. Cleavage,
-# low-cut, fitted, sexy, flirty and sultry are not refused. It is a word screen: what it does
-# not list passes it, and the NSFW gate still checks every image.
-_LUST_REFUSED = (
-    # nudity, or the hint of it
-    r"nude|nudes|naked|nudity|topless|shirtless|braless|undress\w*|unclothed|nipples?|pasties|"
-    r"body[- ]?paint(?:ed)?|unbutton\w*|unzipped|wet|soaked|dripping|oiled|"
-    r"nothing (?:but|else|underneath|on|at all)|wearing nothing|not wearing anything|"
-    r"birthday suit|au naturel|(?:no|without) (?:a )?(?:top|bra|pants|shirt|clothes|clothing)|"
-    r"(?:just|only) (?:a|an|her|his|my) (?:[\w'-]+ ){0,2}(?:shirt|hoodie|sweater|jersey)s?|"
-    r"barely (?:dressed|there)|scantily|skimpy|half[- ]dressed|partially dressed|"
-    r"covering (?:her|his|my) (?:chest|body)|bare[- ]?(?:chested|breast\w*)|breasts?|"
-    r"\w*boob\w*|areolas?|"
-    # underwear, sleepwear and see-through wear
-    r"lingerie|underwear|undies|bra|bras|bralettes?|bralets?|brassieres?|bustiers?|panties|"
-    r"knickers|thong|g-string|boyshorts|negligee|nightie|nightgown|nightdress|nightwear|"
-    r"sleepwear|pajamas?|pyjamas?|pjs|chemise|camisole|bodysuit|babydolls?|baby-doll|teddy|"
-    r"teddies|corset|garters?|body ?stockings?|stockings|suspenders|bandeau|catsuit|latex|"
-    r"harness|fishnets?|mesh|towels?|robes?|bathrobes?|monokini|micro[- ]?bikini|"
-    r"see[- ]?thr(?:ough|u)|sheer|transparent|"
-    # where people undress
-    r"shower\w*|baths?|bathtubs?|bubble bath|(?<!hot )(?<!hot-)tubs?|beds?|sheets?|covers|"
-    r"blankets?|duvets?|sauna|steam room|locker room|changing room|fitting room|"
-    # anything sexual
-    r"nsfw|sex|sexual|sexually|sexuali[sz]ed|seductive|erotic|erotica|explicit|porn\w*|fetish|"
-    r"boudoir|horny|aroused|kinky|lewd|xxx|onlyfans|on all fours|bent over|straddl\w*|"
-    r"legs spread|spread legs")
-LUST_EXPLICIT_RE = re.compile(rf"\b(?:{_LUST_REFUSED})\b", re.I)
-GARMENT_RE = re.compile(  # a lust outfit names at least one of these
-    r"\b(?:dress(?:es)?|sundress(?:es)?|minidress(?:es)?|gowns?|tops?|blouses?|shirts?|"
-    r"t-shirts?|tees?|sweaters?|jumpers?|cardigans?|jackets?|blazers?|coats?|hoodies?|"
-    r"sweatshirts?|jerseys?|jeans|shorts|skirts?|miniskirts?|leggings|yoga pants|trousers|"
-    r"jumpsuits?|rompers?|playsuits?|bikinis?|swimsuits?|one-pieces?|sarongs?|cover-ups?|"
-    r"kaftans?|overalls|dungarees|scrubs|uniforms?|turtlenecks?)\b", re.I)
-SWIMWEAR_RE = re.compile(
-    r"\b(bikinis?|swimsuits?|swimwear|swimming costume|bathing suit|tankini)\b", re.I)
-WATER_RE = re.compile(  # where swimwear belongs, in the reply's setting
-    r"\b(?:beach(?:es|side)?|lake(?:side|shore)?|hot[- ]tub|"
-    r"(?<!car )(?<!car-)pool(?:s|side)?(?![- ](?:hall|table|cue|league|room)))\b", re.I)
-INDOOR_RE = re.compile(  # never swimwear here, whatever water the setting also names
-    r"\b(?:bedrooms?|beds?|bathrooms?|kitchens?|offices?|hallways?|rooms?|mirrors?)\b", re.I)
-AWAY_RE = re.compile(  # a setting that points away from the water
-    r"\b(?:anywhere but|not (?:at |on |by |in )?the|nowhere near|far from|away from)\b", re.I)
+# Adults only, for both styles (controller ruling): nothing that codes a person as young, in
+# any field of any kind. A rare over-refusal (a teacher's school) is the accepted cost.
+AGE_RE = re.compile(
+    r"\b(schools?|schoolgirls?|school uniforms?|student uniforms?|teens?|teenage|teenagers?|"
+    r"childlike|child|children|kids?|young[- ]looking|barely legal|lolita|little girls?|"
+    r"cheerleader uniforms?)\b", re.I)
 
 
 def looks_line(a: Appearance) -> str:
@@ -222,18 +237,13 @@ def _adopt(store: Store, *, now: float) -> int:
 
 def screen_kind(p: Persona, data: dict, *, ident: HumanIdentity,
                 member_names: Iterable[str]) -> list[str]:
-    """The problems with a reply (KIND_SCHEMA's shape) for `p`, as `photo.<field>: <kind>:
-    "<text>"` with his real name redacted from the text; it never fixes text. Per field, in
-    order: meta, his real name, a likeness, a member's name (any case), an era, explicit wear
-    (EXPLICIT_RE; for the lust style LUST_EXPLICIT_RE, swimwear away from the water, and an
-    outfit that names no garment); then whatever
-    validate_persona says of `p` with that photo."""
+    """The problems with a free-text reply (KIND_SCHEMA's shape, the plain style's) for `p`, as
+    `photo.<field>: <kind>: "<text>"` with his real name redacted from the text; it never fixes
+    text. Per field, in order: meta, his real name, a likeness, a member's name (any case), an
+    era, explicit wear (EXPLICIT_RE), anything that codes a person as young (AGE_RE); then
+    whatever validate_persona says of `p` with that photo. The lust style writes no free text:
+    screen_lust checks its picks."""
     names = [n for n in member_names if n]
-    lust = suggestive(p)
-    explicit = LUST_EXPLICIT_RE if lust else EXPLICIT_RE
-    setting = str(data.get("setting", ""))
-    by_water = (lust and WATER_RE.search(setting) is not None
-                and not INDOOR_RE.search(setting) and not AWAY_RE.search(setting))
     problems = []
     for field in _FIELDS:
         text = data[field]
@@ -248,20 +258,51 @@ def screen_kind(p: Persona, data: dict, *, ident: HumanIdentity,
             problems.append(f"photo.{field}: names a member: {quoted}")
         if ERA_RE.search(text):
             problems.append(f"photo.{field}: era: {quoted}")
-        if explicit.search(text):
+        if EXPLICIT_RE.search(text):
             problems.append(f"photo.{field}: explicit: {quoted}")
-        if lust and not by_water and SWIMWEAR_RE.search(text):
-            problems.append(f"photo.{field}: swimwear away from the water: {quoted}")
-        if lust and field == "outfit" and not GARMENT_RE.search(text):
-            problems.append(f"photo.outfit: names no garment: {quoted}")
+        if AGE_RE.search(text):
+            problems.append(f"photo.{field}: age: {quoted}")
+    return list(dict.fromkeys(problems + _photo_problems(p, data)))
+
+
+def _photo_problems(p: Persona, data: dict) -> list[str]:
     try:
         # the photo's own problems only: another field's message can quote persona text, and an
         # unrelated old problem must not refuse a photo
-        problems += [m for m in validate_persona(replace(p, photo=ProfilePhoto(**data)))
-                     if m.startswith(("photo.", "photo:"))]
+        return [m for m in validate_persona(replace(p, photo=ProfilePhoto(**data)))
+                if m.startswith(("photo.", "photo:"))]
     except TypeError as e:
-        problems.append(f"photo: {type(e).__name__}")
-    return list(dict.fromkeys(problems))
+        return [f"photo: {type(e).__name__}"]
+
+
+def compose_lust(data: dict) -> ProfilePhoto:
+    """The kind a lust reply (LUST_SCHEMA's shape) stands for: its picks as they are, and the
+    outfit with its colour put in and an article in front."""
+    phrase = LUST_OUTFITS[data["outfit"]].format(colour=data["colour"])
+    article = "an" if phrase[0].lower() in "aeiou" else "a"
+    return ProfilePhoto(kind=data["kind"], framing=data["framing"], setting=data["setting"],
+                        outfit=f"{article} {phrase}", expression=data["expression"])
+
+
+def screen_lust(p: Persona, data: dict) -> list[str]:
+    """The problems with a lust reply, as `photo.<field>: <kind>` (every value is from the
+    lists, so nothing to quote): a value off its list (the schema refuses that first), swimwear
+    away from WATER_SETTINGS, gym wear away from GYM_SETTINGS (PAIRINGS); then the age guard
+    and validate_persona on the kind it composes."""
+    problems = [f"photo.{field}: not on its list" for field, values in (
+        ("setting", LUST_SETTINGS), ("outfit", LUST_OUTFITS), ("colour", LUST_COLOURS),
+        ("expression", LUST_EXPRESSIONS)) if data.get(field) not in values]
+    if problems:
+        return problems
+    if data["outfit"] in SWIM_OUTFITS and data["setting"] not in WATER_SETTINGS:
+        problems.append(PAIRINGS[0])
+    if data["outfit"] in GYM_OUTFITS and data["setting"] not in GYM_SETTINGS:
+        problems.append(PAIRINGS[1])
+    if problems:
+        return problems
+    photo = compose_lust(data)
+    problems = [f"photo.{f}: age" for f in _FIELDS if AGE_RE.search(getattr(photo, f))]
+    return problems + _photo_problems(p, {f: getattr(photo, f) for f in _FIELDS})
 
 
 def _refused(ctx: "NightContext", guid: int, problems: list[str]) -> tuple[None, list[str]]:
@@ -274,31 +315,46 @@ def _refused(ctx: "NightContext", guid: int, problems: list[str]) -> tuple[None,
 
 async def kind_one(ctx: "NightContext", guid: int) -> tuple[ProfilePhoto | None, list[str]]:
     """One JSON call (no think pass) on the stored persona, under the rules of its style: the
-    photo kind and no problems, or (None, problems). A fatal ReflectionError is raised."""
+    photo kind and no problems, or (None, problems). The plain style writes a free-text kind
+    (KIND_SCHEMA, screen_kind); the lust style picks from lists (LUST_SCHEMA, screen_lust) and
+    is asked once more when only a pairing failed. A fatal ReflectionError is raised."""
     p = ctx.base(guid)
     name = ctx.name(guid)
-    prompt, template = (LUST_PROMPT, KIND_PROMPT_LUST) if suggestive(p) else (STAGE, KIND_PROMPT)
+    lust = suggestive(p)
+    prompt, template = (LUST_PROMPT, KIND_PROMPT_LUST) if lust else (STAGE, KIND_PROMPT)
     system = system_prompt(
         prompt, template, ctx.settings.data_dir, human=ctx.ident, name=name,
         card=ctx.base_card(guid), facts=_facts(p), looks=looks_line(p.appearance))
-    try:
-        data = await ctx.reasoner.json(system, KIND_ASK.format(name=name), KIND_SCHEMA,
-                                       temperature=0.7)
-    except ReflectionError as e:
-        if e.fatal:
-            raise
-        return _refused(ctx, guid, [f"model: {type(e).__name__}"])
-    members = [ctx.name(g) for g in ctx.members(include_away=True) if g != guid]
-    problems = screen_kind(p, data, ident=ctx.ident, member_names=members)
-    if problems:
-        return _refused(ctx, guid, problems)
-    return ProfilePhoto(**data), []
+    ask = KIND_ASK.format(name=name)
+    for again in (False, True):
+        try:
+            data = await ctx.reasoner.json(system, ask + (LUST_ASK_AGAIN if again else ""),
+                                           LUST_SCHEMA if lust else KIND_SCHEMA, temperature=0.7)
+        except ReflectionError as e:
+            if e.fatal:
+                raise
+            return _refused(ctx, guid, [f"model: {type(e).__name__}"])
+        if not lust:
+            members = [ctx.name(g) for g in ctx.members(include_away=True) if g != guid]
+            problems = screen_kind(p, data, ident=ctx.ident, member_names=members)
+            if problems:
+                return _refused(ctx, guid, problems)
+            return ProfilePhoto(**data), []
+        problems = screen_lust(p, data)
+        if not problems:
+            return compose_lust(data), []
+        if again or not set(problems) <= set(PAIRINGS):
+            return _refused(ctx, guid, problems)
+        log("selfies_kind_asked_again", night=ctx.night, guid=guid, problems=problems)
+    raise AssertionError("unreachable")
 
 
 def _saver(ctx: "NightContext", guid: int, photo: ProfilePhoto, *, style: str | None = None,
            replacing: ProfilePhoto | None = None) -> Callable[[Store], None]:
     """Save `photo` and its record (`style`, by default the stored persona's) while the stored
-    kind is still `replacing`, the one the pass read (None: a first kind)."""
+    kind is still `replacing`, the one the pass read (None: a first kind). A kind chosen again
+    into the lust style also queues a fresh set for her (queue_restyled), so new candidates come
+    without his "4 more"."""
     def write(store: Store) -> None:
         stored = load_persona(store, guid)
         if stored is None:
@@ -308,8 +364,10 @@ def _saver(ctx: "NightContext", guid: int, photo: ProfilePhoto, *, style: str | 
         race, class_name = _race_class(store, guid)
         save_persona(store, replace(stored, photo=photo), source="generated",
                      ts=ctx.clock.now(), race=race, class_name=class_name)
-        _record(store, guid, style_of(stored) if style is None else style,
-                load_persona(store, guid).photo)  # the kind as stored
+        chose = style_of(stored) if style is None else style
+        _record(store, guid, chose, load_persona(store, guid).photo)  # the kind as stored
+        if replacing is not None and chose == LUST:
+            queue_restyled(store, guid, now=ctx.clock.now())
     return write
 
 
