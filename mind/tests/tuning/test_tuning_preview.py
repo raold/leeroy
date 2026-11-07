@@ -11,7 +11,7 @@ from leeroy_mind.app import MindApp
 from leeroy_mind.config import load_config
 from leeroy_mind.personas.io import save_persona
 from leeroy_mind.protocol import Member
-from leeroy_mind.storage.db import open_db
+from dbtemplate import open_migrated
 from leeroy_mind.storage.rows import Relationship
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_clock import FakeClock
@@ -41,7 +41,7 @@ class Admin:
 
 def _app(root, *, loaded=True, lines=None):
     (root / "mind.toml").write_text(TOML, encoding="utf-8")
-    s = Store(open_db(root / "mind.db"), clock=FakeClock(CLOCK))
+    s = Store(open_migrated(root / "mind.db"), clock=FakeClock(CLOCK))
     try:
         seed_test_cast(s)
         s.upsert_cast([Member(guid=HUMAN, name="Testmage", race=5, class_=8, gender=0, level=80,

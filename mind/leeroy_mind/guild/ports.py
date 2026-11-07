@@ -119,6 +119,9 @@ class LazyArmory:
     def name(self, guid):
         return self._call("name", guid)
 
+    def bound_with(self, owner, map_id, guids):
+        return self._call("bound_with", owner, map_id, guids)
+
     def roster(self, guild_id):
         from leeroy_mind.personas.roster import query_roster
         with self._lock:

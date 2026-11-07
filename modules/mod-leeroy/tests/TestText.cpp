@@ -49,3 +49,14 @@ LEEROY_TEST(Text_LoopbackHosts)
     CHECK(!IsLoopbackHost("127.0.0.256"));
     CHECK(!IsLoopbackHost("127.0.0"));
 }
+
+LEEROY_TEST(Text_MappedSanitizerKeepsEachBytesSource)
+{
+    std::vector<std::size_t> from;
+    CHECK_EQ(SanitizeChatTextMapped("  a|b \n c\xC3\xA9", from), SanitizeChatText("  a|b \n c\xC3\xA9"));
+    // "a b c" + e-acute: a at 2, b at 4, the space from the run at 5, c at 8, the two bytes at 9 and 10.
+    std::vector<std::size_t> const expected = {2, 4, 5, 8, 9, 10};
+    CHECK(from == expected);
+    CHECK_EQ(SanitizeChatTextMapped(std::string(300, 'x'), from).size(), 300u);
+    CHECK_EQ(from.size(), 300u);
+}

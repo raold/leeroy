@@ -1,12 +1,13 @@
 import dataclasses
+from dataclasses import replace
 import json
 
 import pytest
 
 from conftest import make_persona
 from leeroy_mind.personas.card import card_race_class, render_core_card
-from leeroy_mind.personas.schema import (PersonaError, persona_from_dict, persona_json_schema,
-                                         persona_to_dict, validate_persona)
+from leeroy_mind.personas.schema import (PersonaError, ProfilePhoto, persona_from_dict,
+                                         persona_json_schema, persona_to_dict, validate_persona)
 from leeroy_mind.text import estimate_tokens
 from leeroy_mind.wow import CLASSES, RACES, faction_of
 
@@ -310,3 +311,27 @@ def test_a_word_with_its_punctuation_is_no_mark():
         assert not is_mark(word), word
     for mark in (":)", "xD!", ";)", "<3", "o7"):
         assert is_mark(mark), mark
+
+
+PHOTO = {"kind": "snapshot", "framing": "upper_body", "setting": "on the deck of a small boat",
+         "outfit": "orange rain bib over a grey hoodie", "expression": "squinting into the wind"}
+
+
+def test_a_persona_without_a_photo_kind_dumps_as_the_previous_release_wrote_it():
+    assert "photo" not in persona_to_dict(make_persona(101, "Testa"))
+
+
+def test_a_photo_kind_round_trips_and_is_bounded():
+    d = {**persona_to_dict(make_persona(101, "Testa")), "photo": PHOTO}
+    p = persona_from_dict(d)
+    assert p.photo == ProfilePhoto(**PHOTO) and persona_to_dict(p)["photo"] == PHOTO
+    assert "photo.setting: must be at most 80 characters" in validate_persona(
+        replace(p, photo=replace(p.photo, setting="x" * 81)))
+    with pytest.raises(PersonaError, match="photo.kind: must be one of"):
+        persona_from_dict({**d, "photo": {**PHOTO, "kind": "polaroid"}})
+
+
+def test_only_the_enrichment_schema_carries_the_photo_kind():
+    assert "photo" not in persona_json_schema()["properties"]
+    inner = persona_json_schema(enrichment=True)["properties"]["photo"]["anyOf"][0]
+    assert inner["required"] == ["kind", "framing", "setting", "outfit", "expression"]

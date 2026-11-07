@@ -10,9 +10,11 @@ import json
 import logging
 import os
 import socket
+import sqlite3
 import stat
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -143,6 +145,20 @@ def test_the_three_ops_in_their_one_strict_form():
         "raid", {"action": "end"})
 
 
+def test_the_say_op_in_its_one_strict_form():
+    assert parse_request(line(v=1, key=KEY, op="say", args={"channel": "guild", "text": " omw "}),
+                         KEY) == ("say", {"channel": "guild", "text": "omw"})
+    assert parse_request(line(v=1, key=KEY, op="say",
+                              args={"channel": "whisper", "text": "hi", "to": 1101}), KEY) == (
+        "say", {"channel": "whisper", "text": "hi", "to": 1101})
+    with pytest.raises(BadRequest, match="say needs args"):
+        parse_request(line(v=1, key=KEY, op="say"), KEY)
+    with pytest.raises(BadRequest, match="^There's nothing to send.$"):  # say_args' own words
+        parse_request(line(v=1, key=KEY, op="say", args={"channel": "guild", "text": "  "}), KEY)
+    with pytest.raises(BadRequest, match="^A whisper takes exactly channel, text and to.$"):
+        parse_request(line(v=1, key=KEY, op="say", args={"channel": "whisper", "text": "hi"}), KEY)
+
+
 @pytest.mark.parametrize("raw, words", [
     (b'{"v":1,"key":"%s","op":"status"}' % KEY.encode(), "bad request"),  # no newline
     (b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n", "not a JSON line"),
@@ -226,12 +242,24 @@ class FakeGuild:
         return f"did {args['action']}"
 
 
+class FakeSpeech:
+    def __init__(self):
+        self.lines, self.gate = [], None
+
+    async def handle(self, args):
+        self.lines.append(args)
+        if self.gate is not None:
+            await self.gate.wait()
+        return {"ok": True, "message": "sent"}
+
+
 class FakeApp:
     def __init__(self, data_dir):
         self.data_dir = data_dir
         self.stopping = False
         self.stops = 0
         self.guild = FakeGuild()
+        self.speech = FakeSpeech()
 
     def request_stop(self):
         self.stops += 1
@@ -299,7 +327,8 @@ def test_status_answers_and_a_wrong_key_is_forbidden_without_logging_it(tmp_path
         async with served(tmp_path) as (app, ep):
             reply = await ask(ep, "status")
             assert reply == {"ok": True, "v": 1, "pid": os.getpid(), "stopping": False,
-                             "raid": FakeGuild().console_status()}
+                             "raid": FakeGuild().console_status(), "bridge_connected": None,
+                             "cast": None, "schema_version": None}  # this app cannot tell
             assert await ask(ep, "status", key="x" * 43) == {"ok": False, "error": "forbidden"}
             assert await ask(ep, "stop", key="x" * 43) == {"ok": False, "error": "forbidden"}
             assert app.stops == 0
@@ -307,6 +336,25 @@ def test_status_answers_and_a_wrong_key_is_forbidden_without_logging_it(tmp_path
         run(go())
     assert "control_refused: reason=key" in caplog.text
     assert KEY not in caplog.text and "x" * 43 not in caplog.text
+
+
+def test_status_reports_the_bridge_the_cast_and_the_schema_for_the_health_check(tmp_path):
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            conn = sqlite3.connect(":memory:")
+            conn.execute("PRAGMA user_version = 17")
+            app.bridge = SimpleNamespace(greeted=True)
+            app.world = SimpleNamespace(cast_guids=lambda: {101, 102, 103})
+            app.store = SimpleNamespace(conn=conn)
+            reply = await ask(ep, "status")
+            assert (reply["bridge_connected"], reply["cast"], reply["schema_version"]) == (
+                True, 3, 17)
+            app.bridge = SimpleNamespace(greeted=False)
+            conn.close()  # a closed store: unknown, and status still answers
+            reply = await ask(ep, "status")
+            assert reply["ok"] is True and reply["bridge_connected"] is False
+            assert reply["schema_version"] is None and reply["cast"] == 3
+    run(go())
 
 
 def test_only_one_strict_line_is_read_and_anything_else_is_refused(tmp_path):
@@ -403,6 +451,72 @@ def test_a_slow_raid_action_is_answered_in_time_but_never_cancelled(tmp_path):
             assert await ask(ep, "raid", {"action": "end"}) == {"ok": True, "message": "did end"}
             assert [a["action"] for a in app.guild.actions] == ["stop", "end"]
     run(go())
+
+
+def test_a_second_line_while_one_is_sending_is_refused(tmp_path, caplog):
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            app.speech.gate = asyncio.Event()
+            first = asyncio.create_task(ask(ep, "say", {"channel": "guild", "text": "omw"}))
+            for _ in range(500):
+                if app.speech.lines or first.done():
+                    break
+                await asyncio.sleep(0.01)
+            assert app.speech.lines, await first
+            for _ in range(2):  # a double-clicked Send, Enter held down
+                assert await ask(ep, "say", {"channel": "guild", "text": "again"}) == {
+                    "ok": False, "error": "Another line is still being sent."}
+            app.speech.gate.set()
+            assert await first == {"ok": True, "message": "sent"}
+            assert app.speech.lines == [{"channel": "guild", "text": "omw"}]  # never reached it
+            app.speech.gate = None
+            assert await ask(ep, "say", {"channel": "guild", "text": "again"}) == {
+                "ok": True, "message": "sent"}
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        run(go())
+    assert caplog.text.count("control_request: op=say channel=guild outcome=refused") == 2
+    assert caplog.text.count("control_request: op=say channel=guild outcome=ok") == 2
+    assert "omw" not in caplog.text and "again" not in caplog.text
+
+
+def test_a_slow_line_is_answered_in_time_and_holds_the_next_off(tmp_path):
+    assert endpoint.SAY_S == 10.0
+    assert endpoint.SAY_CHANNELS == ("guild", "officer", "group", "whisper")
+
+    async def go():
+        async with served(tmp_path, say_s=0.2) as (app, ep):
+            app.speech.gate = asyncio.Event()
+            assert await ask(ep, "say", {"channel": "guild", "text": "omw"}) == {
+                "ok": False,
+                "error": "The game didn't answer in time. Check WoW before sending it again."}
+            assert await ask(ep, "say", {"channel": "guild", "text": "omw"}) == {
+                "ok": False, "error": "Another line is still being sent."}
+            app.speech.gate.set()  # it was never cancelled: it ends, and lets the next one go
+            await asyncio.sleep(0.05)
+            app.speech.gate = None
+            assert (await ask(ep, "say", {"channel": "guild", "text": "omw"}))["ok"] is True
+            assert len(app.speech.lines) == 2
+            app.stopping = True
+            assert await ask(ep, "say", {"channel": "guild", "text": "omw"}) == {
+                "ok": False, "error": "The mind is stopping."}
+            app.stopping, app.speech = False, None
+            assert await ask(ep, "say", {"channel": "guild", "text": "omw"}) == {
+                "ok": False, "error": "Replies are not running in this mind."}
+    run(go())
+
+
+def test_a_line_that_fails_shows_only_its_class(tmp_path, caplog):
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            async def broken(args):
+                raise RuntimeError("private game text")
+            app.speech.handle = broken
+            assert await ask(ep, "say", {"channel": "guild", "text": "omw"}) == {
+                "ok": False, "error": "The line could not be sent (RuntimeError)."}
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        run(go())
+    assert "private game text" not in caplog.text and "omw" not in caplog.text
+    assert "control_say_failed: error=RuntimeError" in caplog.text
 
 
 def test_a_raid_action_that_fails_shows_only_its_class(tmp_path, caplog):
@@ -533,6 +647,42 @@ def test_run_returns_0_when_the_endpoint_stops_it(tmp_path):
     run(go())
     with contextlib.closing(reopen(tmp_path)) as c:
         assert c.execute("SELECT count(*) FROM session WHERE ended IS NULL").fetchone()[0] == 0
+
+
+def test_the_running_minds_status_says_its_bridge_cast_and_schema(tmp_path):
+    """The real app over FakeBridge: once the bridge has greeted it and sent the cast, status
+    says so, with mind.db's schema version."""
+    from leeroy_mind.__main__ import serve
+    from leeroy_mind.storage.db import latest_version
+
+    async def go():
+        bridge = FakeBridge([hello(0), CAST])
+        port = await bridge.start()
+        (tmp_path / "mind.toml").write_text(toml(port), encoding="utf-8")
+        seed_db(tmp_path / "mind.db", fake_clock())
+        apps = []
+        task = asyncio.create_task(serve(tmp_path, make_llm=lambda cfg: FakeLLM(reply, models={LIVE}),
+                                         ready=apps.append))
+        try:
+            while not apps or apps[0].control is None or not apps[0].control.listening.is_set():
+                await asyncio.sleep(0.02)
+            record = read_key_file(tmp_path / KEY_FILE)
+            for _ in range(500):
+                status = await asyncio.to_thread(endpoint.request, record["port"],
+                                                 record["key"], "status")
+                if status["bridge_connected"] and status["cast"]:
+                    break
+                await asyncio.sleep(0.02)
+            assert status["bridge_connected"] is True
+            assert status["cast"] == len(apps[0].world.cast_guids()) > 0
+            assert status["schema_version"] == latest_version()
+            await asyncio.to_thread(endpoint.request, record["port"], record["key"], "stop")
+            assert await asyncio.wait_for(task, 30) == 0
+        finally:
+            if not task.done():
+                task.cancel()
+            await bridge.stop()
+    run(go())
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="the Windows descriptor")

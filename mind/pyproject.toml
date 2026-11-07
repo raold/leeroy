@@ -19,10 +19,13 @@ include = ["leeroy_mind*"]
 [tool.setuptools.package-data]
 "leeroy_mind.storage" = ["migrations/*.sql"]
 "leeroy_mind.library" = ["migrations/*.sql"]
-"leeroy_mind.console" = ["page.html"]
+"leeroy_mind.console" = ["page.html", "static/*.css", "static/*.js", "static/js/*.mjs",
+                         "static/js/comms/*.mjs", "static/fonts/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+tmp_path_retention_count = 3
+tmp_path_retention_policy = "failed"
 addopts = ["-m", "not ollama and not live and not mysql"]
 markers = [
   "ollama: needs a running Ollama with the configured models",

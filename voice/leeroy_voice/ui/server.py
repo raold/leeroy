@@ -30,19 +30,20 @@ written in the same step the page is registered for broadcasts, so every later e
      "transcript": [{"who", "text", "ts" (unix ms), "kind"}],  # the last 200, oldest first;
                                                   # kind: say, you, whisper or system
      "mind":       bool,              # the mind is connected
+     "self":       {"mute", "deafen"},  # his own mute and deafen (deafen implies mute)
      "status":     {"ok", "mic", "gpu", "stt", "ui", "queue", "errors"}}   # the wire's status
 
 A key the hooks leave out is sent empty (`mind` false), one they add is passed on, and sets
 become sorted lists. Then the service's events, through broadcast(): `speaking {guid, on}`,
 `ptt {down}`, `moved {guid, channel}` ("" is off comms), `invite {from, channel}`,
 `refused {channel, reason}`, `transcript {who, text, ts, kind}`, `status {ok, mic, ...}` and
-`mind {up}`; a fresh `state` replaces everything.
+`mind {up}` and `self {mute, deafen}` (on every change); a fresh `state` replaces everything.
 
 Page to service: `{"type": "join", "channel"}` (an invite's accept is a join; ignoring one stays
-in the page), `{"type": "volume", "guid", "db"}` and `{"type": "mute", "guid", "on"}`. A message
+in the page), `{"type": "volume", "guid", "db"}` `{"type": "mute", "guid", "on"}` and `{"type": "self", "mute", "deafen"}`. A message
 that is not one of these with good arguments is ignored and the page stays: a channel is 1-64
 printable characters, a guid an integer 1 to 2^32-1, a dB a finite number (clamped to +-12),
-`on` a boolean. A message over 4 KiB closes the page."""
+`on`, `mute` and `deafen` booleans. A message over 4 KiB closes the page."""
 import asyncio
 import base64
 import email.utils
@@ -76,7 +77,8 @@ MAX_PAGE_BUFFER = 1 << 20  # broadcast() cannot wait: a page this far behind is 
 
 EMPTY_STATE = {  # what a state carries for a key the hooks leave out
     "tree": [], "where": {}, "names": {}, "room": "", "human": 0, "speaking": [], "ptt": False,
-    "volumes": {}, "mutes": [], "invites": [], "transcript": [], "mind": False, "status": {}}
+    "volumes": {}, "mutes": [], "invites": [], "transcript": [], "mind": False, "status": {},
+    "self": {"mute": False, "deafen": False}}
 
 _LOGGER = logging.getLogger("leeroy_voice.ui.websockets")  # the library's records join ours
 
@@ -95,6 +97,10 @@ class UiHooks(Protocol):
         ...
 
     def mute(self, guid: int, on: bool) -> None: ...
+
+    def self_state(self, mute: bool, deafen: bool) -> None:
+        """His own mute and deafen; both booleans."""
+        ...
 
 
 def _json_default(o):
@@ -330,6 +336,12 @@ class UiServer:
                 self._ignored("bad field")
             else:
                 self._call("mute", self._hooks.mute, guid, on)
+        elif kind == "self":
+            mute, deafen = msg.get("mute"), msg.get("deafen")
+            if type(mute) is not bool or type(deafen) is not bool:
+                self._ignored("bad field")
+            else:
+                self._call("self", self._hooks.self_state, mute, deafen)
         else:
             self._ignored("unknown type")
 

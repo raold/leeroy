@@ -33,6 +33,18 @@ def _db_at(path, version: int, tmp_path, monkeypatch) -> sqlite3.Connection:
         monkeypatch.undo()
 
 
+def migration_number(stem: str) -> int:
+    """The number of the migration named `stem` (the part after NNNN_); tests find a migration by
+    name because a branch's number is renamed at merge."""
+    [n] = [v for v, f in db_mod._migration_files() if f.stem.split("_", 1)[1] == stem]
+    return n
+
+
+def db_before(stem: str, path, tmp_path, monkeypatch) -> sqlite3.Connection:
+    """mind.db as the release before migration `stem` left it."""
+    return _db_at(path, migration_number(stem) - 1, tmp_path, monkeypatch)
+
+
 # The memory columns of schemas v1-v4, before the nightly scope.
 _OLD_MEMORY_COLS = ("owner, kind, text, t_event, t_created, t_accessed, access_n, actors, place, "
                     "boss_id, raid_id, importance, valence, source, evidence, confidence, status, "
@@ -193,5 +205,56 @@ def test_0004_keeps_old_utterances_and_adds_the_trigger_line_and_model_time(tmp_
         row = conn.execute("SELECT text, why, trigger_line, llm_s, to_guid, turn_id "
                            "FROM utterance").fetchone()
         assert tuple(row) == ("o/", "greet:reason_pool", None, None, 0, None)
+    finally:
+        conn.close()
+
+
+def test_talk_moves_migrates_a_db_from_before_it_and_adds_both_tables(tmp_path, monkeypatch):
+    path = tmp_path / "mind.db"
+    conn = db_before("talk_moves", path, tmp_path, monkeypatch)
+    try:
+        names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master")}
+        assert "talk_move" not in names and "pair_note" not in names
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == migration_number("talk_moves") - 1
+    finally:
+        conn.close()
+    conn = open_db(path)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == latest_version()
+        names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master")}
+        assert {"talk_move", "pair_note", "talk_move_pair", "pair_note_pair"} <= names
+        conn.execute("INSERT INTO talk_move(ts, guid, counterpart, channel) VALUES (1, 101, 1, 'guild')")
+        assert tuple(conn.execute("SELECT to_guid, moves, main, topics, clause, angle "
+                                  "FROM talk_move").fetchone()) == (0, "[]", "", "[]", "", "")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("INSERT INTO pair_note(ts, guid, other, kind, text, channel) "
+                         "VALUES (1, 101, 1, 'k', ?, 'guild')", ("x" * 81,))
+    finally:
+        conn.close()
+
+
+def test_a_v17_db_gains_the_empty_selfie_tables(tmp_path, monkeypatch):
+    """P2: the selfies migration (migrations/*_selfies.sql, the one after tuning's) adds the
+    profile photo tables to a database the tuning release left, and keeps its rows."""
+    path = tmp_path / "mind.db"
+    conn = _db_at(path, 17, tmp_path, monkeypatch)
+    try:
+        assert not {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE name LIKE 'selfie_%'")}
+        conn.execute("INSERT INTO tuning_change(id,ts,source,label) VALUES (1,1000,'console','')")
+        conn.commit()
+    finally:
+        conn.close()
+    conn = open_db(path)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == latest_version() >= 18
+        names = {r[0]: r[1] for r in conn.execute(
+            "SELECT name, type FROM sqlite_master WHERE name LIKE 'selfie_%'")}
+        assert names == {"selfie_set": "table", "selfie_candidate": "table",
+                         "selfie_pick": "table", "selfie_current": "table",
+                         "selfie_set_one_queued": "index"}
+        for t in ("selfie_set", "selfie_candidate", "selfie_pick", "selfie_current"):
+            assert conn.execute(f"SELECT count(*) FROM {t}").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM tuning_change").fetchone()[0] == 1
     finally:
         conn.close()

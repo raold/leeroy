@@ -21,7 +21,7 @@ from leeroy_mind.protocol import parse_event
 from leeroy_mind.realm import fact_store
 from leeroy_mind.realm.kill_retention import PrivateKillRecord
 from leeroy_mind.realm.records import FactRow, RealmObservation, Rejected
-from leeroy_mind.storage.db import open_db
+from dbtemplate import open_migrated
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_llm import FakeLLM
 from test_realm_live_proof import EXPECTED, PAYLOADS, TYPES, insert
@@ -141,7 +141,7 @@ async def application(tmp_path, clock, monkeypatch, *, enabled=True, confirmed=T
     path = tmp_path / 'mind.toml'
     path.write_text('[talk]\nchattiness = 0\n[realm]\nenabled = '
                     + str(enabled).lower() + '\n', encoding='utf-8')
-    seed = Store(open_db(tmp_path / 'mind.db'), clock=clock)
+    seed = Store(open_migrated(tmp_path / 'mind.db'), clock=clock)
     seed_test_cast(seed)
     with seed.transaction():
         insert(seed, 'cast_member', guid=10, name='Testmaster', race=2, **{'class': 1},

@@ -143,7 +143,8 @@ def test_degrade_cuts_coach_after_the_realm_to_five(h, monkeypatch):
                                            "encounters": lambda c: c.settings.encounters_per_night})
     monkeypatch.setattr(budget, "night_budget_s", lambda *args: 100)
     plan = asyncio.run(budget.plan_night(ctx))
-    assert plan["steps"][:3] == ["realm", "coach", "encounters"]  # The realm's units go first.
+    # The realm's units go first; the photos come between the coach and the people.
+    assert plan["steps"][:4] == ["realm", "coach", "selfies", "encounters"]
     assert ctx.settings.coach_units == 5
 
 

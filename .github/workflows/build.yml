@@ -1,10 +1,15 @@
 name: build
 
 # Compiles the mod-playerbots fork of AzerothCore with the patched playerbots
-# module, using the warning flags upstream playerbots CI uses. PCH is off so
-# ccache can carry most of the work between runs.
+# module, using the warning flags upstream playerbots CI uses, and the module set
+# the live server runs: mod-leeroy with all three integrations on (patched
+# mod-ollama-chat, mod-dungeon-clear, mod-transmog) and mod-dojo's disabled
+# variant. PCH is off so ccache can carry most of the work between runs.
+# Not a required check: it is path-filtered and a cold build takes over an hour.
 
 on:
+  pull_request:
+    paths: ['patches/**', 'modules/**', '.github/workflows/build.yml']
   push:
     branches: [main]
     paths: ['patches/**', 'modules/**', '.github/workflows/build.yml']
@@ -48,12 +53,49 @@ jobs:
 
       # mod-dojo builds its disabled variant here (AC_ENABLE_DOJO stays off); beside mod-leeroy, its configure also
       # checks that the two vendored json.hpp copies are identical.
+      # Pinned SHAs, so the build does not move under us. Bump them on purpose.
+      # Directory names must be exactly the module names (CLAUDE.md, build trap 1).
+      - name: Clone mod-ollama-chat, mod-dungeon-clear and mod-transmog
+        env:
+          # 906eb2a: upstream main tip that the two patches in patches/mod-ollama-chat apply to (the live
+          # checkout's merge-base, the same tip the `patches` workflow clones).
+          OLLAMA_SHA: 906eb2a45f5b3b815a281977005371193517eb32
+          # 0dfe558: the commit the live server builds (jrad7/mod-dungeon-clear, 2026-11-04).
+          DC_SHA: 0dfe558d6370d8b8bd94bba2ad75374975f2a833
+          # d309745: upstream azerothcore/mod-transmog master tip when this was written. Live uses a zip
+          # extraction of an older snapshot, so CI builds upstream, not the identical files.
+          TRANSMOG_SHA: d309745c9151ff2ea4202204c1efa991848414bf
+        run: |
+          clone() {  # name repo sha
+            git clone --filter=blob:none "https://github.com/$2.git" "core/modules/$1"
+            git -C "core/modules/$1" checkout --detach "$3"
+          }
+          clone mod-ollama-chat DustinHendrickson/mod-ollama-chat "$OLLAMA_SHA"
+          clone mod-dungeon-clear jrad7/mod-dungeon-clear "$DC_SHA"
+          clone mod-transmog azerothcore/mod-transmog "$TRANSMOG_SHA"
+          git -C core/modules/mod-ollama-chat -c user.name=leeroy-ci -c user.email=ci@invalid             am --3way "$GITHUB_WORKSPACE"/leeroy/patches/mod-ollama-chat/*.patch
+          # -Werror stays on for mod-leeroy and mod-dojo. The one exception is in mod-dungeon-clear's own files,
+          # which all compile into the shared `modules` target, so it is relaxed per source file, not per target:
+          # clang -Wmismatched-tags on `DcApproachState` (declared `class` in Action/DcActionShared.h, defined
+          # `struct` in DcApproachState.h). It is harmless on Linux (it matters only for the Microsoft ABI) and
+          # is upstream's code. Only that one warning, and only for that module's sources.
+          cat >> core/modules/mod-dungeon-clear/mod-dungeon-clear.cmake <<'CMAKE'
+
+          # CI only: see .github/workflows/build.yml
+          file(GLOB_RECURSE LEEROY_CI_DC_SOURCES "${CMAKE_CURRENT_LIST_DIR}/src/*.cpp")
+          set_source_files_properties(${LEEROY_CI_DC_SOURCES} PROPERTIES COMPILE_OPTIONS "-Wno-error=mismatched-tags")
+          CMAKE
+
+      # mod-dojo builds its disabled variant here (AC_ENABLE_DOJO stays off); beside mod-leeroy, its configure also
+      # checks that the two vendored json.hpp copies are identical.
       - name: Add mod-leeroy and mod-dojo
         run: |
           cp -r "$GITHUB_WORKSPACE/leeroy/modules/mod-leeroy" core/modules/mod-leeroy
           cp -r "$GITHUB_WORKSPACE/leeroy/modules/mod-dojo" core/modules/mod-dojo
 
-      - uses: actions/cache@v4
+      # Pull requests only restore the cache; only push, schedule and manual runs save it, so a PR cannot poison main's.
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
         with:
           path: ccache
           key: ccache-${{ github.sha }}
@@ -66,12 +108,21 @@ jobs:
             libreadline-dev libncurses-dev mysql-server libboost-all-dev
 
       - name: Configure
+        shell: bash
         run: >
           cmake -S core -B build
           -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
           -DCMAKE_BUILD_TYPE=Release
           -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-          -DUSE_COREPCH=0 -DUSE_SCRIPTPCH=0
+          -DUSE_COREPCH=0 -DUSE_SCRIPTPCH=0 2>&1 | tee configure.log
+
+      - name: Require all three mod-leeroy integrations ON
+        run: |
+          grep -F '[mod-leeroy] ollama filter: ON, dungeon-clear: ON, transmog: ON' configure.log || {
+            echo '::error::a mod-leeroy integration is OFF, so its LEEROY_HAS_* blocks were not compiled'
+            grep -F '[mod-leeroy]' configure.log || true
+            exit 1
+          }
 
       - name: Build
         run: cmake --build build -j "$(nproc)" -- -k
@@ -79,3 +130,10 @@ jobs:
       - name: ccache stats
         if: always()
         run: ccache --show-stats
+
+      - name: Save ccache
+        if: always() && github.event_name != 'pull_request'
+        uses: actions/cache/save@v4
+        with:
+          path: ccache
+          key: ccache-${{ github.sha }}

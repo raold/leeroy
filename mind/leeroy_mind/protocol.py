@@ -59,6 +59,8 @@ class Hello:
     version: str
     guild_id: int
     human_guid: int
+    # What native understands beyond the base protocol ("item_links"); an older one sends none.
+    features: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -415,7 +417,9 @@ def parse_event_with_origin(line: bytes | str, *, received_at: float,
     return ev, _wire_origin(line, received_at=received_at, transport_epoch=transport_epoch)
 
 
-def sanitize_say_text(text: str) -> str:
+def clean_say_text(text: str) -> str:
+    """The chat-line rule without a length cut: `|` and control characters dropped, whitespace
+    collapsed to single spaces, none at either end."""
     out = []
     for c in text:
         if c == "|":
@@ -428,8 +432,12 @@ def sanitize_say_text(text: str) -> str:
             out.append(" ")
         else:
             out.append(c)
-    collapsed = " ".join("".join(out).split())
-    return collapsed.encode("utf-8")[:MAX_TEXT_BYTES].decode("utf-8", "ignore").rstrip()
+    return " ".join("".join(out).split())
+
+
+def sanitize_say_text(text: str) -> str:
+    """clean_say_text, cut to MAX_TEXT_BYTES of UTF-8 on a character boundary."""
+    return clean_say_text(text).encode("utf-8")[:MAX_TEXT_BYTES].decode("utf-8", "ignore").rstrip()
 
 
 def _jsonable(value):

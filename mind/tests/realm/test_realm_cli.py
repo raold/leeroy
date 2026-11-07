@@ -170,3 +170,139 @@ def test_cli_errors_do_not_echo_local_values(tmp_path, store, capsys):
     assert cli.realm_main(["titles", "--data-dir", str(tmp_path)]) == 1
     output = capsys.readouterr().out
     assert "private-name" not in output and str(tmp_path) not in output
+
+
+ROOT_ID = "b0" * 16
+
+
+def stored_unknown(store, command_id=ROOT_ID, guids=tuple(range(101, 207)), reason="busy:body_identity",
+                   kind="rearm", created=1793900000.0):
+    """An unknown rearm as an older build left it: acked, then its job failed."""
+    from leeroy_mind.realm import protocol
+    from leeroy_mind.realm.action_policy import classify, document
+    c = classify(protocol.Rearm(command_id, guids))
+    ev = {"ack": {"error": "", "ok": True}, "failed_at": created + 0.1,
+          "job": {"guid": guids[27 % len(guids)], "kind": kind, "pvp_owner": "", "reason": reason,
+                  "state": "failed", "value": 0}}
+    with store.conn:
+        store.conn.execute(
+            "INSERT INTO realm_action(command_id,parent_id,role,policy,owner,rank,kind,payload,reserved_manifest,"
+            "native_manifest,guild,human,state,transport_state,process_id,connection_epoch,send_error,evidence,"
+            "result_ok,result_reason,created,updated,dispatched) VALUES (?,NULL,'root','ordinary','realm_day',4,?,?,?,"
+            "NULL,21,1,'unknown','settled','old','1','',?,0,'job_failed',?,?,?)",
+            (command_id, c.kind, c.payload, document(list(c.reserved_manifest)), document(ev),
+             created, created + 0.1, created + 0.01))
+
+
+def fresh(tmp_path):
+    conn = sqlite3.connect((tmp_path / "mind.db").resolve().as_uri() + "?mode=ro", uri=True)
+    try:
+        state = conn.execute("SELECT state,result_reason,evidence FROM realm_action WHERE command_id=?",
+                             (ROOT_ID,)).fetchone()
+        meta = conn.execute("SELECT value FROM meta WHERE key=?", ("realm:action:abandoned:" + ROOT_ID,)).fetchone()
+        return state, None if meta is None else json.loads(meta[0])
+    finally:
+        conn.close()
+
+
+def release(tmp_path, clock, *extra, answer=None):
+    asked = []
+    def ask(prompt):
+        asked.append(prompt)
+        return answer
+    code = cli.realm_main(["release", *extra, "--data-dir", str(tmp_path)], clock=clock, ask=ask)
+    return code, asked
+
+
+def test_release_shows_the_root_and_releases_it_on_its_typed_id(tmp_path, store, clock, capsys):
+    stored_unknown(store, created=clock.now() - 9 * 3600)
+    code, asked = release(tmp_path, clock, ROOT_ID, "--reason", "native restarted; nothing holds them",
+                          answer=ROOT_ID)
+    assert code == 0 and len(asked) == 1
+    output = capsys.readouterr().out
+    for shown in ("rearm", "unknown", "job_failed", "busy:body_identity", "106 members", "9.0 hours"):
+        assert shown in output
+    (state, result, evidence), receipt = fresh(tmp_path)
+    assert (state, result) == ("completed", "abandoned")
+    assert json.loads(evidence)["abandoned"] == clock.now()
+    assert receipt["reason"] == "native restarted; nothing holds them" and receipt["at"] == clock.now()
+    assert receipt["members"] == list(range(101, 207)) and receipt["state"] == "unknown"
+    from leeroy_mind.realm.action_store import ActionStore
+    assert ActionStore(store.conn).holds() == ()
+
+
+@pytest.mark.parametrize("answer", ["", "no", ROOT_ID[:-1], ROOT_ID + " ", None])
+def test_release_without_the_exact_typed_id_changes_nothing(tmp_path, store, clock, capsys, answer):
+    stored_unknown(store)
+    before = fresh(tmp_path)
+    code, asked = release(tmp_path, clock, ROOT_ID, "--reason", "checked", answer=answer)
+    assert code == 1 and asked
+    assert "not released" in capsys.readouterr().out
+    assert fresh(tmp_path) == before
+
+
+def test_release_yes_only_with_the_exact_id(tmp_path, store, clock, capsys):
+    stored_unknown(store)
+    before = fresh(tmp_path)
+    for wrong in (ROOT_ID[:8], ROOT_ID.upper(), "1"):
+        code, asked = release(tmp_path, clock, wrong, "--reason", "checked", "--yes")
+        assert code == 1 and not asked
+        output = capsys.readouterr().out
+        assert "no such root" in output and wrong not in output
+    assert fresh(tmp_path) == before
+    code, asked = release(tmp_path, clock, ROOT_ID, "--reason", "checked", "--yes")
+    assert code == 0 and not asked
+    assert fresh(tmp_path)[0][:2] == ("completed", "abandoned")
+
+
+def test_release_needs_the_mind_stopped(tmp_path, store, clock, capsys):
+    from leeroy_mind.app import acquire_instance_lock
+    stored_unknown(store)
+    before = fresh(tmp_path)
+    with acquire_instance_lock(tmp_path):
+        code, asked = release(tmp_path, clock, ROOT_ID, "--reason", "checked", "--yes")
+    assert code == 1 and not asked
+    assert "mind.lock is held" in capsys.readouterr().out
+    assert fresh(tmp_path) == before
+
+
+def test_release_refuses_a_root_that_is_not_unknown(tmp_path, store, clock, capsys):
+    stored_unknown(store)
+    with store.conn:
+        store.conn.execute("UPDATE realm_action SET state='dispatched',result_ok=NULL,result_reason='',"
+                           "transport_state='inflight' WHERE command_id=?", (ROOT_ID,))
+    before = fresh(tmp_path)
+    code, asked = release(tmp_path, clock, ROOT_ID, "--reason", "checked", answer=ROOT_ID)
+    assert code == 1 and not asked
+    assert "only an unknown root can be released; this one is dispatched" in capsys.readouterr().out
+    assert fresh(tmp_path) == before
+
+
+def test_release_needs_a_reason_and_an_unmigrated_db_is_left_alone(tmp_path, clock, capsys):
+    with pytest.raises(SystemExit):
+        cli.realm_main(["release", ROOT_ID, "--data-dir", str(tmp_path)], clock=clock, ask=lambda p: ROOT_ID)
+    path = tmp_path / "mind.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE old_data(id INTEGER)")
+    before = path.read_bytes()
+    code, asked = release(tmp_path, clock, ROOT_ID, "--reason", "checked", "--yes")
+    assert code == 1 and path.read_bytes() == before
+    assert "not migrated" in capsys.readouterr().out
+
+
+def test_release_help_says_a_contradicted_release_goes_to_conflict(capsys):
+    with pytest.raises(SystemExit):
+        cli.realm_main(["release", "--help"])
+    text = " ".join(capsys.readouterr().out.split())
+    assert "conflict included" in text
+    assert "native evidence later contradicts goes to conflict and stays held" in text
+
+
+def test_release_refuses_a_conflicted_root(tmp_path, store, clock, capsys):
+    stored_unknown(store)
+    with store.conn:
+        store.conn.execute("UPDATE realm_action SET state='conflict',result_reason='conflict' WHERE command_id=?",
+                           (ROOT_ID,))
+    code, asked = release(tmp_path, clock, ROOT_ID, "--reason", "checked", answer=ROOT_ID)
+    assert code == 1 and not asked
+    assert "only an unknown root can be released; this one is conflict" in capsys.readouterr().out

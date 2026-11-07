@@ -7,6 +7,7 @@
 #include "TopUpJob.h"
 #include "BotCommands.h"
 #include "OfflineRaidJob.h"
+#include "OwnerSay.h"
 #include "ScriptMgr.h"
 
 class LeeroyGuildWorldScript : public WorldScript
@@ -23,6 +24,7 @@ public:
         Leeroy::Guild::RegisterSocialCommands();
         Leeroy::Guild::RegisterBotCommandHandlers();
         Leeroy::Guild::RegisterOfflineRaidHandler();
+        Leeroy::Guild::RegisterOwnerSayHandler();
     }
 
     void OnUpdate(uint32 diff) override

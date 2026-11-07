@@ -1,0 +1,24 @@
+From 3826b2f4db0c1086c51c97443749e0975b7fd788 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 07:57:49 -0500
+Subject: [PATCH 10/10] Keep pinned bots out of random bot arena teams
+
+---
+ src/Bot/Factory/RandomPlayerbotFactory.cpp | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/src/Bot/Factory/RandomPlayerbotFactory.cpp b/src/Bot/Factory/RandomPlayerbotFactory.cpp
+index 45ea8d29..b75cfbf9 100644
+--- a/src/Bot/Factory/RandomPlayerbotFactory.cpp
++++ b/src/Bot/Factory/RandomPlayerbotFactory.cpp
+@@ -924,6 +924,10 @@ bool RandomPlayerbotFactory::IsEligibleForBotArenaTeam(Player* bot)
+     if (sRandomPlayerbotMgr.IsAddClassAccount(accountId))
+         return false;
+ 
++    // Pinned bots belong to another module, which keeps them where it wants them.
++    if (sRandomPlayerbotMgr.IsPinned(bot->GetGUID().GetCounter()))
++        return false;
++
+     if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+     {
+         if (botAI->HasGameClientMaster())

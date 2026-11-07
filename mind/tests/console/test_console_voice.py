@@ -183,6 +183,32 @@ def test_page_messages_are_checked_as_the_voice_service_checks_them():
         assert page_message(bad) is None
 
 
+def test_self_is_relayed_and_mirrored():
+    assert page_message({"type": "self", "mute": True, "deafen": False}) == {
+        "type": "self", "mute": True, "deafen": False}
+    for bad in ({"type": "self"}, {"type": "self", "mute": True},
+                {"type": "self", "mute": 1, "deafen": False},
+                {"type": "self", "mute": False, "deafen": None}):
+        assert page_message(bad) is None
+    assert Mirror().state["self"] == {"mute": False, "deafen": False}
+    m = Mirror()
+    m.apply(STATE)
+    assert m.state["self"] == {"mute": False, "deafen": False}
+    m.apply({"type": "self", "mute": True, "deafen": True})
+    assert m.state["self"] == {"mute": True, "deafen": True}
+
+    async def go():
+        async with voice_service() as fake:
+            relay = VoiceRelay(lambda: fake.port, lambda msg: None, retry_s=0.05)
+            task = asyncio.create_task(relay.run())
+            await until(lambda: relay.connected)
+            assert await relay.send({"type": "self", "mute": True, "deafen": False}) is None
+            await until(lambda: {"type": "self", "mute": True, "deafen": False} in fake.received)
+            await relay.close()
+            task.cancel()
+    asyncio.run(go())
+
+
 def test_the_mirror_follows_the_pages_events():
     m = Mirror()
     m.apply(STATE)

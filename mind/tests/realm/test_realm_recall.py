@@ -183,6 +183,92 @@ def test_leave_native_refuses_for_a_fenced_body_holds_nobody_and_defaults_follow
     run(scenario())
 
 
+@pytest.mark.parametrize("refusal", ["step", "ack"])
+def test_a_rearm_native_refused_holds_nobody_and_its_defaults_follow(pipeline, refusal):
+    async def scenario():
+        async with pipeline:
+            h = pipeline
+            h.cast(101, 102, 103)
+            send = h.app.send
+
+            async def answer(cmd, *, preserve_id=False):
+                if type(cmd) is not p.Rearm or refusal != "ack":
+                    return await send(cmd, preserve_id=preserve_id)
+                h.app.sent.append(cmd)
+                return Ack(0, cmd.id, False, "busy:raid_owner")
+            h.app.send = answer
+            h.realm.recall.restore_defaults()
+            await h.cycle()
+            rearm, = h.app.sent
+            assert type(rearm) is p.Rearm and rearm.guids == (101, 102, 103)
+            if refusal == "step":  # 102 is in combat: native refuses its step and releases all three
+                await h.app.event(p.RealmJob(0, rearm.id, "rearm", "failed", "busy:combat", 102, 0))
+            record = h.realm.action_store.get(rearm.id)
+            assert (record.state, record.result_ok) == ("completed", False)
+            assert h.realm.action_store.holds() == ()
+            await h.cycle(1.01)
+            defaults = h.app.sent[-1]
+            assert type(defaults) is BotDo and defaults.guids == (101, 102, 103)
+            await h.result(defaults)
+            for _ in range(3):
+                h.realm.bodies.poll()
+                h.realm.recall.tick(h.clock.now())
+                await h.cycle(1.01)
+            assert h.app.sent == [rearm, defaults]
+            assert h.realm.action_store.holds() == ()
+    run(scenario())
+
+
+def test_a_start_settles_rearms_an_older_build_kept_unknown_and_recall_proceeds(pipeline, store, clock):
+    from leeroy_mind.realm.action_policy import classify, document
+
+    def stored(command_id, cmd, reason, guid, value):
+        c, at = classify(cmd), clock.now() - 9 * 3600
+        ev = {"ack": {"error": "", "ok": True}, "failed_at": at + 0.1,
+              "job": {"guid": guid, "kind": c.kind, "pvp_owner": "", "reason": reason, "state": "failed",
+                      "value": value}}
+        with store.conn:
+            store.conn.execute(
+                "INSERT INTO realm_action(command_id,parent_id,role,policy,owner,rank,kind,payload,"
+                "reserved_manifest,native_manifest,guild,human,state,transport_state,process_id,connection_epoch,"
+                "send_error,evidence,result_ok,result_reason,created,updated,dispatched) VALUES "
+                "(?,NULL,'root','ordinary','realm_day',4,?,?,?,NULL,21,1,'unknown','settled','old','1','',?,0,"
+                "'job_failed',?,?,?)",
+                (command_id, c.kind, c.payload, document(list(c.reserved_manifest)), document(ev), at, at + 0.1,
+                 at + 0.01))
+    stored("first", p.Rearm("first", (101, 102)), "busy:combat", 102, 0)
+    stored("late", p.Rearm("late", (103,)), "busy:combat", 103, 0)
+    stored("grow", p.GuildGrow("grow", 13, (401, 402, 403)), "operation_transition_unknown", 402, 1)
+
+    async def scenario():
+        async with pipeline:
+            h = pipeline
+            assert {hold.scope_id for hold in h.realm.action_store.holds()} == {"grow"}
+            h.cast(101, 102, 103)
+            assert h.realm.bodies.movable("realm_day", {101, 102, 103}) == {101, 102, 103}
+            h.realm.recall.restore_defaults()
+            await h.cycle()
+            rearm = h.app.sent[-1]
+            assert type(rearm) is p.Rearm and rearm.guids == (101, 102, 103)
+    run(scenario())
+
+
+def test_a_rearm_that_ended_unknown_stops_its_chain_and_holds_its_manifest(pipeline):
+    async def scenario():
+        async with pipeline:
+            h = pipeline
+            h.cast(101, 102, 103)
+            h.realm.recall.restore_defaults()
+            await h.cycle()
+            rearm, = h.app.sent
+            await h.app.event(p.RealmJob(0, rearm.id, "rearm", "failed", "operation_transition_unknown", 102, 0))
+            h.realm.recall.tick(h.clock.now())
+            await h.cycle(2)
+            assert h.app.sent == [rearm]
+            assert h.realm.action_store.holds()[0].guids == frozenset({101, 102, 103})
+    run(scenario())
+
+
 def test_partial_defaults_stop_later_chunks_and_do_not_restore_on_own_release(pipeline):
     async def scenario():
         async with pipeline:

@@ -1,3 +1,4 @@
 # Known false positives, by gitleaks fingerprint (commit:file:rule:line).
 # A fixed test key for the guild console's tests (not a secret; replaced in the next commit).
 993301d78b092d51d2f9e6cc526f559a4c15a572:mind/tests/console/rig.py:generic-api-key:12
+d3d1da1ced6cd466551145973e35d587dd021444:mind/tests/console/js/key.test.mjs:generic-api-key:7

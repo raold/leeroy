@@ -38,6 +38,7 @@ from leeroy_mind.llm.client import LLMError
 from leeroy_mind.llm.presets import LIVE, LIVE_BIT
 from leeroy_mind.llm.scheduler import Expired, LLMScheduler, Priority, SchedulerError
 from leeroy_mind.memory.recall import Recall, whisper_ok
+from leeroy_mind.nightly.settings import night_bounds
 from leeroy_mind.personas.card import card_race_class, render_prompt_card
 from leeroy_mind.personas.io import PersonaCache
 from leeroy_mind.personas.schema import Persona
@@ -52,6 +53,9 @@ from leeroy_mind.talk.filters import (Tell, aimed_off_him, find_tells, flirty, i
                                       strip_copied, supported)
 from leeroy_mind.talk.guards import Guards
 from leeroy_mind.talk.facts import LibraryFacts
+from leeroy_mind.talk.items import defuse, fold
+from leeroy_mind.talk.movelog import MoveLog, MoveRow, PairNotes
+from leeroy_mind.talk.moves import MOVE_PHRASES, moves_line
 from leeroy_mind.talk.prompt import (PromptParts, chat_line_text, comms_rules, facts_head,
                                      knows_real_name, mood_line, quest_help, real_name_line,
                                      redact_for, relationship_card, render_instruction,
@@ -71,8 +75,9 @@ from leeroy_mind.talk.style import (ROMANCE_EMOTES, Styled, command_only, emote_
 from leeroy_mind.talk.turns import Turn, TurnKind
 from leeroy_mind.talk.timing import TurnTiming
 from leeroy_mind.talk.world import WorldView
+from leeroy_mind.text import strip_wow_markup
 from leeroy_mind.voice.comms import SPOKEN_HINT, typed
-from leeroy_mind.wow import CLASSES, RACES
+from leeroy_mind.wow import CAST_MIN_LEVEL, CLASSES, RACES
 
 log = logging.getLogger("leeroy_mind.talk")
 
@@ -119,10 +124,18 @@ SLANG_HINT = "Say it the way people typed in 2009."
 # whispers get their answer. A second silence stands. At the explicit band a line or two
 # (fix round 1, review M5).
 SILENT_WHISPER_HINT = "Answer {human}'s whisper in {length}, in your own voice."
+# A move she just made with this person, made again (filters.move_repeat: "move repeat:
+# <move>"; "clause", her final clause again, takes REPEAT_HINT): the phrase carries the
+# pronoun (moves.MOVE_PHRASES). A summons out of the game (filters "summons").
+MOVE_REPEAT = "move repeat: "
+MOVE_HINT = "You just {move}: say something new instead."
+SUMMONS_HINT = ("You two only talk through the game: don't ask {them} over or say you're "
+                "waiting; answer what {they} said.")
 _HINTED = frozenset({"echo", "repeat", "near repeat", "long", "member flirt", "sample",
-                     "history", "copy", "slang"})
-# Soft tells a retry may not keep: a claim of shared history still there is dropped.
-DROP_ON_RETRY = frozenset({"history"})
+                     "history", "copy", "slang", "summons"})
+# Soft tells a retry may not keep: a claim of shared history still there is dropped, and so is
+# a summons.
+DROP_ON_RETRY = frozenset({"history", "summons"})
 # A reply this far over the words its lines hold is asked again shorter (prompts C1).
 LONG_SLACK = 1.25
 # The second and third answers to his line see the ones before them (prompts I8), and so do
@@ -439,6 +452,9 @@ class Pipeline:
         self._words: dict[int, str] = {}  # a said line's id -> its words before styling
         self._turn_lines: dict[str, int] = {}  # a turn id -> the lines it said
         self._compose_rng = random.Random("compose")  # compose() never draws from self.rng
+        # what each member did with each counterpart, kept in mind.db across restarts
+        self.moves = MoveLog(self.store)
+        self.notes = PairNotes(self.store)
 
     def add_instruction_hook(self, fn: Callable[[Turn, TurnMeta, str], str]) -> None:
         """Extend live, generated instructions immediately before composition."""
@@ -678,6 +694,41 @@ class Pipeline:
                 if whisper_ok(channel, turn.speaker, to, speaker=turn.speaker,
                               turn_channel=turn.channel, to_guid=turn.to_guid)]
 
+    def _counterpart(self, turn: Turn) -> int:
+        """Whom the turn is with: the one a whisper goes to, else the member or him it is
+        addressed to; 0 for a turn to nobody in particular."""
+        return turn.to_guid if turn.channel == "whisper" else turn.addressee or 0
+
+    def _forms_of(self, guid: int) -> tuple[str, str, str]:
+        """The pronouns for `guid`: his own, and "they" for anyone else."""
+        return self.human.forms if guid and guid == self.human.guid else THEY_FORMS
+
+    def _recent_moves(self, turn: Turn) -> list[MoveRow]:
+        """Her last turns to this turn's counterpart that this turn may see (a whisper's only
+        in a whisper between the same two), oldest first; none for a turn to nobody."""
+        other = self._counterpart(turn)
+        if not other:
+            return []
+        return self.moves.recent(turn.speaker, other, turn_channel=turn.channel,
+                                 to_guid=turn.to_guid, now=self.clock.now())
+
+    def _summons_ok(self, turn: Turn) -> bool:
+        """Whether asking him over may stand in her line to him (_generate checks only those):
+        only in a voice room, where the two are together; everywhere else they only talk
+        through the game."""
+        return turn.channel.startswith("voice:")
+
+    def _record_moves(self, turn: Turn, words: str) -> None:
+        """Her said turn's moves (MoveLog), for the next prompts to the same person. A failing
+        write is logged, never with the words, and never raised."""
+        try:
+            self.moves.record(guid=turn.speaker, counterpart=self._counterpart(turn),
+                              channel=turn.channel, to_guid=turn.to_guid, text=words,
+                              ts=self.clock.now())
+        except Exception as e:
+            log.warning("move_record_failed: guid=%d channel=%s reason=%s", turn.speaker,
+                        turn.channel, type(e).__name__)
+
     def _human_in_talk(self, turn: Turn, recent: list[ChatLineRow]) -> bool:
         hg = self.human.guid
         return bool(hg) and (turn.addressee == hg or any(r.from_guid == hg for r in recent[-3:]))
@@ -862,12 +913,18 @@ class Pipeline:
         kept = next((i for i, r in enumerate(recent) if r.id == meta.pushback_line), None
                     ) if meta.pushback_line else None
 
+        # what she already did with this person lately ("Tonight you've already..."): after
+        # the instruction's extra, never cut
+        after = moves_line(self._recent_moves(turn),
+                           night_start=night_bounds(night_of(local), local.tzinfo)[0],
+                           forms=self._forms_of(self._counterpart(turn)))
         instruction = render_instruction(
             turn.kind, addressee=names.get(turn.addressee, "") if turn.addressee else "",
             topic=meta.topic, lead=romance or "",
             extra=" ".join(x for x in (turn.instruction, follow, seen, story, lore, quest,
                                        *ends) if x),
-            forms=human.forms if to_human else THEY_FORMS, tail=tail, long=two, quiet=quiet)
+            forms=human.forms if to_human else THEY_FORMS, after=after, tail=tail, long=two,
+            quiet=quiet)
         parts = PromptParts(
             card=self._card(p), samples=samples,
             rules=comms_rules(human, p, data_dir=self.data_dir), rel_cards=cards,
@@ -1087,6 +1144,7 @@ class Pipeline:
         else:
             hg = self.human.guid
             close = bool(hg) and knows_real_name(self.store.get_relationship(turn.speaker, hg))
+        text = self._link_items(turn, meta, text)
         if turn.channel == "whisper":  # an emote is public: a whisper keeps its words (NB6)
             text, emotes = emote_words(text), []
         else:
@@ -1107,6 +1165,9 @@ class Pipeline:
         else:
             lines = [] if only else self._style(turn, p, text, close=close,
                                                 two_lines=meta.two_lines, romance=meta.romance)
+        # The typing's ASCII fold can join two "{" (fullwidth braces, a zero-width space between):
+        # each line is defused once more as it is kept and sent (talk/items.py).
+        lines = [Styled(defuse(s.line), defuse(s.plain)) for s in lines]
         if not lines:
             if emotes:  # a line that was only an emote: the emote goes out (review minor 8)
                 await self._send_emotes(turn, meta, emotes)
@@ -1131,8 +1192,9 @@ class Pipeline:
             # line that went out as the turn was cancelled included
             said = lines[:meta.said]
             if said and turn.template is None:
-                self._own_of(turn.speaker).append(
-                    (turn.channel, turn.to_guid, " ".join(s.plain for s in said)))
+                words = " ".join(s.plain for s in said)
+                self._own_of(turn.speaker).append((turn.channel, turn.to_guid, words))
+                self._record_moves(turn, words)
         if sent:  # a cancelled turn's follow-ups never start: a fight began or the session ends
             await self._send_emotes(turn, meta, emotes)
             self._after_sent(turn, meta, p, " ".join(s.line for s in sent))
@@ -1200,6 +1262,7 @@ class Pipeline:
             self._comms_says("log_line", None, turn, meta, line_id)
         if turn.template is None:
             self._own_of(turn.speaker).append((turn.channel, turn.to_guid, text))
+            self._record_moves(turn, text)
         self._after_sent(turn, meta, p, text)
         return [text]
 
@@ -1387,6 +1450,11 @@ class Pipeline:
             out = _with_hint(c.messages, hint) if hint else c.messages
             return _with_hint(out, SPOKEN_HINT) if spoken else out
         messages, text = asking(), ""
+        # her last moves with this person (filters.find_tells), and in her lines to him only,
+        # whether a summons may stand: a call to the raid or a word to a member is no summons
+        moves = [(r.clause, r.main) for r in self._recent_moves(turn)]
+        hg = self.human.guid
+        summons_ok = self._summons_ok(turn) if hg and self._counterpart(turn) == hg else None
         for attempt in (0, 1):
             if not _scope_valid(meta):
                 return text, "scope_changed"
@@ -1419,7 +1487,8 @@ class Pipeline:
                 tells = find_tells(text, recent_own=self._own_lines(turn), speaker=name,
                                    answers=c.answers, others=c.others, samples=c.samples,
                                    support=c.support, people=list(self._protect()),
-                                   window=c.window, held=c.held, tonight=meta.again_tonight)
+                                   window=c.window, held=c.held, tonight=meta.again_tonight,
+                                   recent_moves=moves, summons_ok=summons_ok)
                 if len(text.split()) > LONG_SLACK * self._word_budget(turn, p, meta.two_lines):
                     tells.append(Tell("long", False, True))
                 if self._flirts_at_a_member(turn, text):
@@ -1485,7 +1554,11 @@ class Pipeline:
 
     def _retry_hint(self, tells: list[Tell], p: Persona, turn: Turn | None = None) -> str:
         reasons = {t.reason for t in tells if t.fatal or t.soft}
-        hints = [REGEN_HINT.format(name=p.character_name)] if reasons - _HINTED else []
+        repeated = {r.removeprefix(MOVE_REPEAT) for r in reasons if r.startswith(MOVE_REPEAT)}
+        unhinted = {r for r in reasons - _HINTED if not r.startswith(MOVE_REPEAT)}
+        hints = [REGEN_HINT.format(name=p.character_name)] if unhinted else []
+        forms = dict(zip(("they", "them", "their"), THEY_FORMS if turn is None
+                         else self._forms_of(self._counterpart(turn))))
         if "member flirt" in reasons:  # a turn of his is told the line is his
             them = self.human.forms[1]
             hints.append(AT_HIM_HINT.format(human=self.human.called, them=them)
@@ -1497,8 +1570,12 @@ class Pipeline:
             hints.append(ECHO_HIM_HINT.format(their=self.human.forms[2]) if his else ECHO_HINT)
         if "copy" in reasons:
             hints.append(COPY_HINT)
-        if reasons & {"repeat", "near repeat"}:
+        if reasons & {"repeat", "near repeat"} or "clause" in repeated:
             hints.append(REPEAT_HINT)
+        for move in sorted(repeated - {"clause"}):
+            hints.append(MOVE_HINT.format(move=MOVE_PHRASES[move].format(**forms)))
+        if "summons" in reasons:
+            hints.append(SUMMONS_HINT.format(**forms))
         if "sample" in reasons:
             hints.append(SAMPLE_HINT)
         if "history" in reasons:
@@ -1517,6 +1594,29 @@ class Pipeline:
         lines = (turn.max_lines if turn.kind is TurnKind.BIT or two_lines
                  else turn_lines(p.typing, turn.max_lines))
         return cap * max(1, lines)
+
+    def _link_level(self, guid: int) -> int:
+        m = self.world.members.get(guid)
+        return m.level if m is not None and m.level > 0 else CAST_MIN_LEVEL
+
+    def _link_items(self, turn: Turn, meta: TurnMeta, text: str) -> str:
+        """The turn's words with its item mentions as "[Name]" (ItemLinker.canonical), before the
+        typing styles them: the form every record keeps. A sender's transport barrier vouches for
+        its exact words, which are only defused, as every line is: no {{ reaches the bridge but
+        the placeholders _wire_items makes."""
+        items = getattr(self, "items", None)
+        if items is None or meta.before_transport is not None:
+            return defuse(text)
+        return items.canonical(text, self._link_level(turn.speaker))
+
+    def _wire_items(self, turn: Turn, meta: TurnMeta, text: str) -> str:
+        """The say command's text: the line folded as the wire carries it (items.fold), and its
+        "[Name]"s as native's {{item:<id>}} placeholders when native has them (ItemLinker.wire).
+        Only the bridge sees it; the line is recorded as `text`."""
+        items = getattr(self, "items", None)
+        if items is None or meta.before_transport is not None:
+            return fold(text)
+        return items.wire(text, self._link_level(turn.speaker))
 
     def _spell_real_name(self, text: str, *, close: bool, offered: bool) -> str:
         """The guard every line passes before it is stored or sent, voiced or typed: on the
@@ -1608,7 +1708,8 @@ class Pipeline:
         try:
             self.timing.typed_send(meta.timing_trace)
             with self.timing.span(meta.timing_trace, "bridge_ack"):
-                ack = await self.send(Say(id="", guid=turn.speaker, channel=turn.channel, text=text,
+                ack = await self.send(Say(id="", guid=turn.speaker, channel=turn.channel,
+                                          text=self._wire_items(turn, meta, text),
                                           to_guid=turn.to_guid))
         except (AckTimeout, ConnectionLost) as e:
             # The bridge may still have said it: its echo can confirm it (is_echo).
@@ -1759,17 +1860,19 @@ class Pipeline:
     def is_echo(self, ev: Chat, now: float) -> bool:
         """The bridge's report of a line a `say` produced (via_bridge). The mind stored its own
         line on the ack; an echo of a line whose ack timed out records it now, and that is the
-        line's only row."""
+        line's only row. The echo carries native's item links, which read as the "[Name]" the
+        line was sent as (strip_wow_markup): that plain line is what is matched and recorded."""
         if not ev.via_bridge:
             return False
         self._settle_unacked(now)
-        late = self._unacked.pop((ev.from_guid, ev.channel, ev.text), None)
+        text = strip_wow_markup(ev.text)
+        late = self._unacked.pop((ev.from_guid, ev.channel, text), None)
         if late is None:
             log.debug("say_confirmed: guid=%d channel=%s", ev.from_guid, ev.channel)
             return True
         _, turn, meta, p, memory_ids, _ = late
         try:
-            self._record(turn, meta, p, ev.text, memory_ids)
+            self._record(turn, meta, p, text, memory_ids)
         except Exception:  # the app's dispatcher must never see it
             log.exception("say_record_failed: guid=%d channel=%s", ev.from_guid, ev.channel)
         else:
