@@ -245,7 +245,8 @@ Run from `F:\azerothcore\scripts` in Git Bash.
 
 `./ac-health.sh [--json] [--toast]` (`python -m leeroy_mind health`) checks the live install
 read-only, one ok/FAIL/note line each, exit 1 on any FAIL: the servers, Server.log's cast line
-since worldserver started (floor `[health] min_cast`, default 100) and no `so no places`, the
+since worldserver started (floor `[health] min_cast`, default 100; a note when the log begins
+later, since `.reload config` reopens Server.log empty in its `w` mode) and no `so no places`, the
 mind and mind.log, the control endpoint's `status` (it reports `bridge_connected`, `cast` and
 `schema_version`), the console and voice (notes when down), Ollama's `/api/ps`, and stuck
 activity (no `tg_pull` in 48 h with telemetry on and the overhead gate passed, a note while the

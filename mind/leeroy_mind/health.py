@@ -8,8 +8,9 @@ What it looks at:
 - authserver.exe and worldserver.exe, running from the install's build/bin/RelWithDebInfo
   (AC_BIN in scripts/common.sh);
 - Server.log there, since worldserver started: the `mod-leeroy: cast N members, pinned N` line,
-  both N at least [health] min_cast, and no realm places or items file that failed to load
-  (`so no places`, `so no items`);
+  both N at least [health] min_cast (a note instead when the log begins after the start: a
+  `.reload config` reopens it empty, and the endpoint's cast stands in), and no realm places or
+  items file that failed to load (`so no places`, `so no items`);
 - the mind: its process family, found by leeroy_mind.lifecycle's rules (those of
   `scripts/ac-mind.py status`), and control.json's pid;
 - mind.log since the mind started (rotated files included): its bridge came up and did not go
@@ -76,6 +77,10 @@ HOLD_S = 3600  # a realm body hold or unknown root older than this is stuck
 HTTP_S = 3.0
 STATUS_S = 3.0
 SLACK_S = 2.0  # Server.log's whole seconds against a process's exact start
+# worldserver's start writes its first Server.log line within seconds; a log that begins later
+# was reopened since: `.reload config` rebuilds the appenders, and Server.log's `w` mode starts
+# it empty, taking the cast line with it
+REOPENED_S = 60.0
 FILETIME_EPOCH = 11644473600  # seconds from 1601-01-01 to 1970-01-01
 _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _STAMP = re.compile(rb"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) ")
@@ -306,10 +311,11 @@ def _server_log(root: Path, world: float | None, now: float, cfg: HealthCfg) -> 
         return [Check("server-log", FAIL, f"Server.log cannot be read at {path} "
                                           f"({type(e).__name__})")]
     since = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(world - SLACK_S)).encode()
-    cast, failed, fresh = None, set(), False
+    cast, failed, fresh, first = None, set(), False, None
     for line in data.splitlines():
         m = _STAMP.match(line)
         if m:
+            first = first or m.group(1)
             fresh = m.group(1) >= since  # the same format sorts by time
         if not fresh:
             continue
@@ -324,6 +330,12 @@ def _server_log(root: Path, world: float | None, now: float, cfg: HealthCfg) -> 
                 + (f", below the floor of {cfg.min_cast} ([health] min_cast)" if low
                    else f" (floor {cfg.min_cast})"))
         out = [Check("server-log", FAIL if low else OK, line)]
+    elif first is not None and first > time.strftime(
+            "%Y-%m-%d %H:%M:%S", time.localtime(world + REOPENED_S)).encode():
+        out = [Check("server-log", NOTE, f"Server.log: reopened at {first.decode()}, after "
+                                         f"worldserver started at {_when(world)} (a `.reload "
+                                         "config` starts it empty), so the cast line is gone; "
+                                         "the control endpoint's cast stands in")]
     elif now - world < cfg.grace_minutes * 60:
         out = [Check("server-log", NOTE, f"Server.log: no cast line yet; worldserver started "
                                          f"{_ago(now - world)} ago")]
