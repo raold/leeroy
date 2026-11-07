@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from leeroy_mind.bridge import BridgeError
+from leeroy_mind.discord.channels import is_discord
 from leeroy_mind.llm.scheduler import Priority
 from leeroy_mind.personas.schema import Persona
 from leeroy_mind.prompts import load_prompt
@@ -262,16 +263,16 @@ class EmoteReactions(Reactions):
 
     def _first_line_said(self, turn: Turn, meta: TurnMeta) -> None:
         super()._first_line_said(turn, meta)
-        if turn.kind is TurnKind.REPLY_HUMAN:
+        if turn.kind is TurnKind.REPLY_HUMAN and not is_discord(turn.channel):
             self._replied_at[turn.speaker] = self.clock.now()
 
     def _replying(self, guid: int, now: float) -> bool:
         """She has an answer to him planned, or said one in the last REPLY_S: a line after her
-        emote would take its place."""
+        emote would take its place. Her answers in Discord are another place's (ruling R11)."""
         if now - self._replied_at.get(guid, -math.inf) < REPLY_S:
             return True
         return any(t.speaker == guid and t.kind is TurnKind.REPLY_HUMAN
-                   for t in self.planned_turns())
+                   and not is_discord(t.channel) for t in self.planned_turns())
 
     def _emote_blocked(self, guid: int, now: float) -> str | None:
         """Why a member can't react now as existing talk would refuse her, or None."""

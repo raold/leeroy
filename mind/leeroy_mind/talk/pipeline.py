@@ -46,7 +46,7 @@ from leeroy_mind.clock import Clock, night_of
 from leeroy_mind.config import MindConfig
 from leeroy_mind.discord.store import DiscordRefused
 from leeroy_mind.discord.transport import LINES as DISCORD_LINES
-from leeroy_mind.discord.transport import DiscordTarget, is_discord, store_line
+from leeroy_mind.discord.transport import DM_PREFIX, DiscordTarget, is_discord, store_line
 from leeroy_mind.human import THEY_FORMS, HumanIdentity, human_identity
 from leeroy_mind.llm.client import LLMError
 from leeroy_mind.llm.presets import LIVE, LIVE_BIT
@@ -1243,8 +1243,9 @@ class Pipeline:
             if not turn.channel:
                 return self._drop(turn, meta, "no_channel")
         discord = is_discord(turn.channel)
-        if discord:  # one message of up to three typed lines
+        if discord:  # one message of up to three typed lines; a DM is always to him
             turn.max_lines = DISCORD_LINES
+            self._dm_to_him(turn)
         p = self.personas.get(turn.speaker)
         if p is None:
             return self._drop(turn, meta, "no_persona")
@@ -1917,11 +1918,17 @@ class Pipeline:
             return "record_error"
         return None
 
+    def _dm_to_him(self, turn: Turn) -> None:
+        """A dm:<guid> turn is a line to him, whatever its turn said (ruling R12)."""
+        if turn.channel.startswith(DM_PREFIX) and self.human.guid:
+            turn.to_guid = self.human.guid
+
     def _deliver_discord(self, turn: Turn, meta: TurnMeta, p: Persona, text: str,
                          memory_ids: list[int]) -> str | None:
         """A Discord line: stored as its message (transport.store_line), then recorded with that
         message's id; nothing goes to the bridge, so there is no ack and no echo to wait for.
         None, or why it wasn't said: discord_<code> for what the store refused."""
+        self._dm_to_him(turn)
         try:
             message = store_line(self.store, turn, meta, text, self.clock.now(),
                                  audience=self.world.audience(
@@ -1948,8 +1955,8 @@ class Pipeline:
         line id. A line he had no way of hearing (Comms.unheard: I8, N3) moves neither the
         quiet clock nor the open thread with him; every typed line still does. A Discord line
         (`discord_id`, its message) keeps its channel in the logs and counts as said, but stays
-        out of the game's chat state: the world's history, the quiet clock and the last line a
-        member said there."""
+        out of the game's chat state and clocks: the world's history, the quiet clock, the last
+        line a member said there and the open thread with him (rulings R11)."""
         now = self.clock.now()
         discord = is_discord(turn.channel)
         heard = discord or self.comms is None or not self._comms_says(
@@ -1981,8 +1988,9 @@ class Pipeline:
             while len(self._answer_lines) > ANSWERED_LINES:
                 del self._answer_lines[next(iter(self._answer_lines))]
         hg = self.human.guid
-        if heard and hg and (meta.answers_human or turn.addressee == hg or turn.to_guid == hg):
-            self._answered_at[turn.speaker] = now  # a thread with him is open
+        if (heard and hg and not discord
+                and (meta.answers_human or turn.addressee == hg or turn.to_guid == hg)):
+            self._answered_at[turn.speaker] = now  # a thread with him is open, in the game
         (meta.guards or self.guards).record(meta.turn_id, turn.speaker, now, turn.kind,
                                             initiated=meta.initiates)
         meta.said += 1

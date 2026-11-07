@@ -84,11 +84,16 @@ def dm_peer(id: str) -> int | None:
 
 def audience(channel_id: str, *, cast: Iterable[int], officers: set[int],
              human: int) -> frozenset[int]:
+    """Who reads a channel: a DM its member and him, an officers' channel the officers and him,
+    any other the whole cast and him, and a channel the layout lacks nobody (fail closed, as
+    channels.is_restricted)."""
     peer = dm_peer(channel_id)
     if peer is not None:
         return frozenset({peer, human})
     ch = channel(channel_id)
-    if ch is not None and ch.officers_only:
+    if ch is None:
+        return frozenset()
+    if ch.officers_only:
         return frozenset(officers) | {human}
     return frozenset(cast) | {human}
 

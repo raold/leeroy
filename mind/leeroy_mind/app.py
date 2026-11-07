@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Awaitable, Callable, Literal
 
 from leeroy_mind.board import BoardDesk
+from leeroy_mind.discord.channels import is_discord
 from leeroy_mind.discord.desk import DiscordDesk
 from leeroy_mind.bridge import BridgeClient
 from leeroy_mind.clock import Clock, SystemClock
@@ -738,8 +739,10 @@ class MindApp:
             self._extract_queue.put_nowait(closed)
 
     def _on_line_sent(self, line_id: int, chat: Chat) -> None:
-        """The engine's hook for every line the mind said: the only way they reach threads."""
-        self._spoke_at[chat.from_guid] = self.clock.now()
+        """The engine's hook for every line the mind said: the only way they reach threads. A
+        Discord line is no line in the game, so it is no bystander's last line (ruling R11)."""
+        if not is_discord(chat.channel):
+            self._spoke_at[chat.from_guid] = self.clock.now()
         self._queue_closed(self.threads.on_line_sent(line_id, chat))
 
     async def _call_hooks(self, kind: str, hooks: list, *args) -> None:

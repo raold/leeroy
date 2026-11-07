@@ -9,9 +9,12 @@ about, so storage and memory can import this without an import cycle.
   channel), or on a `discord:` channel the layout does not have: only its audience knows it,
   nobody passes it on, and it never counts as public.
 - Every other line is public, as before."""
+import re
+
 CHANNEL_PREFIX = "discord:"
 DM_PREFIX = "dm:"
 WHISPER = "whisper"
+_COLUMN = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*")
 
 
 def is_discord(channel) -> bool:
@@ -44,5 +47,8 @@ def is_public(channel) -> bool:
 
 
 def private_sql(column: str = "channel") -> str:
-    """is_private as an SQL condition on `column` (a fixed column name, never input)."""
+    """is_private as an SQL condition on `column`, a fixed column name (never input): anything
+    else is refused (ValueError)."""
+    if not _COLUMN.fullmatch(column):
+        raise ValueError(f"not a column name: {column!r}")
     return f"({column} = '{WHISPER}' OR substr({column}, 1, {len(DM_PREFIX)}) = '{DM_PREFIX}')"

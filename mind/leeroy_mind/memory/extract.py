@@ -14,6 +14,7 @@ from leeroy_mind.llm.client import LLMClient, LLMError
 from leeroy_mind.llm.presets import EXTRACT, JSONJobFailed, chat_json
 from leeroy_mind.llm.scheduler import LLMScheduler, Priority, SchedulerError
 from leeroy_mind.logs import log as log_event
+from leeroy_mind.memory.privacy import restricted_channels
 from leeroy_mind.memory.recall import chat_ids, fts_query
 from leeroy_mind.memory.threads import ClosedThread, worth_extracting
 from leeroy_mind.memory.writer import MAX_TEXT, MemoryCandidate, MemoryWriter
@@ -758,14 +759,18 @@ class Extractor:
         return out
 
     def _public(self, rows) -> set[int]:
-        """The ids of the memories among rows that rest on no private line (a whisper or a DM)
-        and none on a restricted Discord channel: what the guild may know. A whisper's memory
-        stays with its two people (recall's rule), and out of this prompt even for their own
-        thread, whose overheard line goes to bystanders."""
+        """The ids of the open memories among rows that rest on no private line (a whisper or
+        a DM) and none on a restricted Discord channel at any depth (privacy.restricted_channels;
+        ruling R10): what the guild may know. A whisper's memory stays with its two people
+        (recall's rule), and out of this prompt even for their own thread, whose overheard line
+        goes to bystanders."""
+        rows = [m for m in rows if m.scope == "open"]
         refs = {m.id: chat_ids(m.evidence) for m in rows}
         lines = self._store.chat_line_parties(i for ids in refs.values() for i in ids)
-        return {m.id for m in rows
-                if all(is_public(lines[i][0]) for i in refs[m.id] if i in lines)}
+        with self._store.transaction():
+            hidden = restricted_channels(self._store.conn, {m.id: m.evidence for m in rows})
+        return {m.id for m in rows if m.id not in hidden
+                and all(is_public(lines[i][0]) for i in refs[m.id] if i in lines)}
 
     async def extract(self, t: ClosedThread) -> ExtractReport:
         lock, users = self._thread_locks.get(t.thread_id, (asyncio.Lock(), 0))

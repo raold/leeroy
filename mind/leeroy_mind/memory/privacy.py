@@ -5,12 +5,15 @@ person it may come up with (0 for nobody: it then reaches no prompt).
 The scope comes from the evidence. A whisper among it makes the memory private to the whisper's
 two people, and secret when its thread asked for secrecy (DONT_TELL_RE), or an earlier thread of
 the same two did that night (fix I1). A Discord DM is a whisper here (ruling R7: the private
-channels are discord.channels.is_private). A scoped memory it cites passes its scope on. The
-strictest wins. A caller may raise a scope, never lower it, and what was said on a public channel
-is never secret, whatever it says.
+channels are discord.channels.is_private). A memory resting on a line of a restricted Discord
+channel (an officers' one), directly or through memory: refs, is private to nobody (ruling R10:
+restricted_channels), so no open-only reader ever takes it. A scoped memory it cites passes its
+scope on. The strictest wins. A caller may raise a scope, never lower it, and what was said on a
+public channel is never secret, whatever it says.
 
-Standard library, leeroy_mind.clock and leeroy_mind.discord.channels (neither imports anything
-of the mind at load) only, so storage.store and storage.db can use it without an import cycle."""
+Standard library, leeroy_mind.clock and leeroy_mind.discord.channels (which reads the layout only
+when asked about a Discord channel) only, so storage.store and storage.db can use it without an
+import cycle."""
 import json
 import logging
 import re
@@ -20,7 +23,7 @@ from datetime import datetime
 from typing import Iterable
 
 from leeroy_mind.clock import night_of
-from leeroy_mind.discord.channels import is_private, private_sql
+from leeroy_mind.discord.channels import CHANNEL_PREFIX, is_private, is_restricted, private_sql
 
 log = logging.getLogger("leeroy_mind")
 
@@ -31,6 +34,7 @@ DONT_TELL_RE = re.compile(
 SCOPES = ("open", "private", "secret")  # in order of strictness
 _REF = re.compile(r"(chat|memory):([0-9]+)")
 _NIGHT_S = 25 * 3600  # the longest night: 24 hours, 25 when the clocks go back
+WALK_DEPTH = 8  # how many memory: levels restricted_channels follows
 
 
 @dataclass(frozen=True)
@@ -186,6 +190,41 @@ def _derive(owner: int, evidence: list, shown: list, lines: dict[int, _Line],
     return Scope(cls, partners.pop() if len(partners) == 1 else 0, public)
 
 
+def restricted_channels(conn: sqlite3.Connection, refs: dict) -> dict:
+    """For each key of `refs` (key -> refs) whose refs rest on a line of a restricted Discord
+    channel (discord.channels.is_restricted), directly or through memory:<id> refs followed up
+    to WALK_DEPTH levels (each memory's evidence, of any status), the set of those channels
+    (ruling R10). Keys that rest on none are left out. A few batched SELECTs per level, no
+    commit."""
+    out: dict = {}
+    frontier = {k: list(v) for k, v in refs.items()}
+    walked: dict = {k: set() for k in refs}
+    for _ in range(WALK_DEPTH + 1):
+        chats = {k: _ids(v, "chat") for k, v in frontier.items()}
+        wanted = set().union(*chats.values()) if chats else set()
+        hidden = {r[0]: r[1] for r in conn.execute(
+            "SELECT id, channel FROM chat_line WHERE id IN (SELECT value FROM json_each(?)) "
+            f"AND substr(channel, 1, {len(CHANNEL_PREFIX)}) = '{CHANNEL_PREFIX}'",
+            (json.dumps(sorted(wanted)),)) if is_restricted(r[1])} if wanted else {}
+        for k, ids in chats.items():
+            found = {hidden[i] for i in ids if i in hidden}
+            if found:
+                out[k] = out.get(k, frozenset()) | found
+        nxt = {k: _ids(v, "memory") - walked[k] for k, v in frontier.items()}
+        nxt = {k: ids for k, ids in nxt.items() if ids}
+        if not nxt:
+            break
+        mids = set().union(*nxt.values())
+        evidence = {r[0]: json.loads(r[1]) for r in conn.execute(
+            "SELECT id, evidence FROM memory WHERE id IN (SELECT value FROM json_each(?))",
+            (json.dumps(sorted(mids)),))}
+        frontier = {}
+        for k, ids in nxt.items():
+            walked[k] |= ids
+            frontier[k] = [e for i in ids for e in evidence.get(i, ())]
+    return out
+
+
 def derive_scope(conn: sqlite3.Connection, owner: int, evidence: Iterable[str], *,
                  shown: Iterable[str] = ()) -> Scope:
     """The least scope a memory of `owner` citing `evidence` may have; `shown` is what its
@@ -200,13 +239,18 @@ def derive_scope(conn: sqlite3.Connection, owner: int, evidence: Iterable[str], 
       it is `owner`'s own memory, else its owner, the member who shared it;
     - any other ref, or an id with no row: open, and no claim.
     The scope is the strictest class; scope_with is the guid every claim names when that is
-    one non-zero guid, else 0 (two partners, a claim of nobody). Plain SELECTs on `conn` and no
-    commit, so it can run inside the caller's transaction."""
+    one non-zero guid, else 0 (two partners, a claim of nobody). On top of that, refs that rest
+    on a restricted Discord line, at any depth (restricted_channels), make it at least private,
+    with nobody (ruling R10). Plain SELECTs on `conn` and no commit, so it can run inside the
+    caller's transaction."""
     evidence, shown = list(evidence), list(shown)
     refs = evidence + shown
     lines = _lines(conn, _ids(refs, "chat"))
-    return _derive(owner, evidence, shown, lines, _secret_threads(conn, lines),
-                   _memories(conn, _ids(refs, "memory")))
+    derived = _derive(owner, evidence, shown, lines, _secret_threads(conn, lines),
+                      _memories(conn, _ids(refs, "memory")))
+    if restricted_channels(conn, {0: refs}):
+        return Scope(max(derived.scope, "private", key=SCOPES.index), 0, derived.public)
+    return derived
 
 
 def with_request(derived: Scope, scope: str, scope_with: int) -> tuple[str, int]:

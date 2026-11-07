@@ -9,6 +9,7 @@ from leeroy_mind.clock import Clock, night_of
 from leeroy_mind.discord.channels import is_discord, is_private, is_restricted
 from leeroy_mind.llm.client import LLMError
 from leeroy_mind.llm.scheduler import Priority, SchedulerError
+from leeroy_mind.memory.privacy import restricted_channels
 from leeroy_mind.memory.writer import Embedder
 from leeroy_mind.retrieval import mmr, vector_or_word_similarity  # mmr remains a public import
 from leeroy_mind.storage.rows import MemoryRow, cosine, unpack_vec
@@ -199,16 +200,27 @@ class Recall:
         (controller ruling B1). A memory whose stored chat lines are all private (whispers or
         Discord DMs) stays out of a turn on any other channel, and out of a private turn unless
         every one of them may reach it (whisper_ok: between `owner` and `to_guid`, a DM's only
-        in that DM). A memory citing a line on a restricted Discord channel (an officers' one)
-        comes up only in a turn on that channel, owner refs or not (ruling R7). A memory with a
+        in that DM). A memory resting on a line of a restricted Discord channel (an officers'
+        one), directly or through memory: refs (privacy.restricted_channels), comes up only in a
+        turn on that channel, owner refs or not (rulings R7, R10). A memory with a
         public line, an owner-authored ref (OWNER_REF: public, non-chat evidence) or no stored
-        chat line (a game event) stays. One store query for all of `rows`."""
+        chat line (a game event) stays. One store query for all of `rows`, and one walk more
+        only for rows that cite other memories."""
         refs = {m.id: chat_ids(m.evidence) for m in rows}
         lines = self._store.chat_line_parties(i for ids in refs.values() for i in ids)
+        hidden = {m.id: frozenset(ch for i in refs[m.id] if i in lines
+                                  and is_restricted(ch := lines[i][0])) for m in rows}
+        nested = {m.id: [e for e in m.evidence if isinstance(e, str) and e.startswith("memory:")]
+                  for m in rows}
+        if nested := {k: v for k, v in nested.items() if v}:  # only these need the walk
+            with self._store.transaction():
+                for k, found in restricted_channels(self._store.conn, nested).items():
+                    hidden[k] |= found
+        hidden = {k: v for k, v in hidden.items() if v}
         keep = []
         for m in rows:
             cited = [lines[i] for i in refs[m.id] if i in lines]
-            if any(is_restricted(ch) and ch != channel for ch, _, _ in cited):
+            if m.id in hidden and hidden[m.id] != {channel}:
                 continue
             if any(isinstance(e, str) and e.startswith(OWNER_REF) for e in m.evidence):
                 keep.append(m)

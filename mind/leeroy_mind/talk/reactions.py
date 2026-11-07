@@ -17,6 +17,7 @@ import random
 
 from leeroy_mind.bridge import BridgeError
 from leeroy_mind.clock import night_of
+from leeroy_mind.discord.channels import is_private
 from leeroy_mind.personas.schema import Persona
 from leeroy_mind.protocol import (Achievement, BgEnd, Boss, Death, Emote, Group, Login,
                                   LootDrop, LootWon, Logout, Resurrect, Zone)
@@ -648,8 +649,8 @@ class Reactions(Pipeline):
         what was sent (rehearsal 2, judge C 6-8: only FLIRT turns counted, and a flirt that
         landed on a member did). A line that doesn't name him sets off nothing."""
         now = self.clock.now()
-        if turn.channel == "whisper" or not meta.romance or not self._names_him(said):
-            return
+        if is_private(turn.channel) or not meta.romance or not self._names_him(said):
+            return  # a whisper or a DM is seen by nobody else
         if meta.loot_cheer:
             self._jealous("loot_cheer", p, turn.channel, now)
             return

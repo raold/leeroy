@@ -2,13 +2,16 @@
 composed and typed as usual, its line is stored as a discord_message row and recorded as said,
 and nothing of it ever reaches the bridge (no Say, no emote), on any path. Invented text only."""
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
 from conftest import HUMAN, TEST_CAST
 from engine_rig import engine_clock, make_rig
+from leeroy_mind.app import MindApp
 from leeroy_mind.bridge import AckTimeout
 from leeroy_mind.discord import store as dstore
+from leeroy_mind.discord.layout import audience as layout_audience
 from leeroy_mind.discord.store import messages
 from leeroy_mind.discord.transport import DiscordTarget, channel_id, is_discord
 from leeroy_mind.memory.threads import ThreadTracker, thread_key
@@ -355,4 +358,64 @@ def test_his_dm_and_an_officers_line_reach_no_one_else_s_prompt(store, clock, tm
     assert rig.speak_turn(discord_turn(rig, 102, "dm:102", to=HUMAN))
     assert "vexmarrow" in rig.prompts()[-1]  # the DM itself still shows him his own line
     assert {c.channel for c in rig.sent.says()} == {"guild"}  # only the game turns
+    rig.close()
+
+
+def test_a_discord_exchange_moves_no_in_game_clock(store, clock, tmp_path):
+    """R11: his talk with members in Discord never holds back the game's openers and whispers
+    (Pipeline._answered_at, his-talk time, the emote reply hold) nor counts as a member having
+    spoken for the game's bystander pick (MindApp._spoke_at)."""
+    rig = make_rig(store, clock, tmp_path, reply="sure thing")
+    e = rig.engine
+    before = e._his_talk_at()
+    for turn in (discord_turn(rig, 102, "dm:102", to=HUMAN), discord_turn(rig, 101, "general")):
+        meta = TurnMeta(e._new_id(), answers_human=True, why="discord:reply")
+        assert speak(rig, turn, meta)
+    assert e._answered_at == {} and e._his_talk_at() == before
+    assert 101 not in e._replied_at and 102 not in e._replied_at
+    assert not e._replying(101, clock.now())
+    # the game's own answer still moves them (the control)
+    meta = TurnMeta(e._new_id(), answers_human=True, why="reply:named")
+    assert speak(rig, Turn(kind=TurnKind.REPLY_HUMAN, speaker=103, channel="guild",
+                           addressee=HUMAN), meta)
+    assert set(e._answered_at) == {103} and e._his_talk_at() > before
+    # the app's bystander clock
+    app = SimpleNamespace(_spoke_at={}, clock=clock, threads=ThreadTracker(store),
+                          _queue_closed=lambda closed: None)
+    for channel, guid in (("dm:102", 102), ("discord:general", 101), ("guild", 103)):
+        ev = Chat(ts=0, channel=channel, from_guid=guid, from_name="x", to_guid=0,
+                  text="invented", map=0, zone=10)
+        MindApp._on_line_sent(app, store.insert_chat_line(ev, session_id=None, origin="mind"), ev)
+    assert set(app._spoke_at) == {103}
+    rig.close()
+
+
+def test_a_dm_turn_is_to_him_and_an_unknown_channel_has_no_audience(store, clock, tmp_path):
+    """R12: a dm: turn goes to him even when its turn says nobody; a discord: channel the layout
+    lacks reads by nobody, so it fails closed as is_restricted does."""
+    rig = make_rig(store, clock, tmp_path, reply="hey you")
+    assert rig.speak_turn(discord_turn(rig, 102, "dm:102"))  # to_guid left at 0
+    [row] = chat_rows(store, "dm:102")
+    assert row["to_guid"] == HUMAN
+    [u] = store.conn.execute("SELECT to_guid FROM utterance WHERE channel = 'dm:102'").fetchall()
+    assert u["to_guid"] == HUMAN
+    assert rig.world.audience("discord:no-such-channel", from_guid=101) == frozenset()
+    assert layout_audience("no-such-channel", cast={101}, officers=set(),
+                           human=HUMAN) == frozenset()
+    rig.close()
+
+
+def test_a_dm_line_sets_off_no_aside(store, clock, tmp_path):
+    """R12: reactions' _after_sent reads a DM as the private line it is, as a whisper."""
+    rig = make_rig(store, clock, tmp_path)
+    e, seen = rig.engine, []
+    e._jealous = lambda trigger, woman, channel, now: seen.append(channel)
+    e._rival = lambda turn, woman, now: seen.append("rival")
+    p = e.personas.get(102)
+    for channel in ("whisper", "dm:102", "discord:general"):
+        turn = Turn(kind=TurnKind.REPLY_HUMAN, speaker=102, channel=channel, to_guid=HUMAN,
+                    addressee=HUMAN)
+        meta = TurnMeta(e._new_id(), romance=True)
+        e._after_sent(turn, meta, p, "miss you zan")
+    assert seen == ["discord:general", "rival"]
     rig.close()

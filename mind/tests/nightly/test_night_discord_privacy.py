@@ -4,7 +4,7 @@ alone, never passed on and never public. Invented text only."""
 import sqlite3
 from types import SimpleNamespace
 
-from conftest import run
+from conftest import make_mem, run
 from leeroy_mind.discord.channels import (is_discord, is_private, is_public, is_restricted,
                                           private_sql)
 from leeroy_mind.llm.scheduler import LLMScheduler
@@ -13,11 +13,12 @@ from leeroy_mind.memory.privacy import Scope, derive_scope
 from leeroy_mind.memory.recall import Recall
 from leeroy_mind.memory.threads import ThreadTracker
 from leeroy_mind.memory.writer import Embedder, MemoryCandidate, MemoryWriter
-from leeroy_mind.nightly import gossip, knowledge, lexicon, stories, vocab
+from leeroy_mind.nightly import gossip, knowledge, lexicon, relations, stories, vocab
 from leeroy_mind.nightly.audience import audience_of
 from leeroy_mind.nightly.knowledge import _learn_audiences
 from leeroy_mind.protocol import Chat
-from leeroy_mind.testing.fake_llm import FakeLLM
+from leeroy_mind.storage.rows import pack_vec
+from leeroy_mind.testing.fake_llm import FakeLLM, fake_embed
 from nightly.conftest import IDENT
 
 DM = "dm:102"
@@ -213,3 +214,68 @@ def test_a_public_discord_line_is_public(h):
     root = f"chat:{line}"
     assert not knowledge.is_private(h.store, root) and not knowledge.is_restricted(h.store, root)
     assert audience_of(h.store, line) == {101, 102, 103, 104, 105}
+
+
+def _row(h, owner, text, evidence, **kw):
+    return make_mem(owner=owner, text=text, evidence=tuple(evidence), t_event=int(h.T),
+                    t_created=int(h.T), t_accessed=int(h.T), source="extract",
+                    kind="conversation", embedding=pack_vec(fake_embed(text)), **kw)
+
+
+def test_the_restriction_is_transitive_and_recorded_at_write_time(h):
+    """R10: a memory resting on an officers' line through memory: refs is as restricted as one
+    citing it, and the writer stores both so (private to nobody), so every open-only reader
+    leaves them out. Rows stored open by any other path are left out by their roots too."""
+    line = put(h, h.T, 102, "we should demote arkon next week", OFFICERS,
+               audience=OFFICER_AUDIENCE)
+    w = writer(h)
+    direct = w.put(_row(h, 102, "I think Arkon should be demoted.", [f"chat:{line}"],
+                        actors=(102, 101)))
+    derived = w.put(_row(h, 102, "I worry Arkon will be demoted soon.", [f"memory:{direct}"],
+                         actors=(102, 101)))
+    deeper = w.put(_row(h, 102, "Arkon seems tense lately.", [f"memory:{derived}"],
+                        actors=(102, 101)))
+    assert [(m.scope, m.scope_with) for m in h.store.get_memories([direct, derived, deeper])] == [
+        ("private", 0)] * 3
+    # rows stored open by another path (the reviewer's probe): the roots still tell
+    open_direct = h.mem(102, "I said Arkon should be demoted.", actors=(102, 101),
+                        evidence=(f"chat:{line}",))
+    open_derived = h.mem(102, "I fear Arkon gets demoted.", actors=(102, 101),
+                         evidence=(f"memory:{open_direct}",), kind="reflection",
+                         source="reflection")
+    assert derive_scope(h.store.conn, 102, [f"memory:{open_derived}"]) == Scope("private", 0)
+    control = h.mem(102, "Arkon tanked the drake well.", actors=(102, 101))
+    every = [direct, derived, deeper, open_direct, open_derived]
+    r = recall(h)
+
+    def got(channel):
+        return {m.id for m in run(r.recall(102, "arkon demoted tense", present=[101],
+                                           addressee=101, channel=channel, to_guid=0))}
+    for channel in ("guild", GENERAL, "officer", "whisper", "discord:applications"):
+        assert not got(channel) & set(every), channel
+    assert control in got("guild")
+    rows = h.store.get_memories([*every, control])
+    assert Extractor._public(SimpleNamespace(_store=h.store), rows) == {control}
+    for sql in (relations._NEWEST_OPEN, relations._WEIGHTIEST_OPEN):  # the notes and the pins
+        assert relations._open_ids(h.store, sql, 102, 101, 12) == [control]
+
+
+def test_extraction_shows_only_open_memories(h):
+    """R10: Extractor._public needs scope 'open' as well as public lines."""
+    private = h.mem(102, "Testy is moving house soon.", actors=(102, 1), scope="private",
+                    scope_with=1)
+    nobody = h.mem(102, "Arkon and Coros fell out.", actors=(102,), scope="private",
+                   scope_with=0)
+    open_one = h.mem(102, "We cleared the drake tonight.", actors=(102,))
+    rows = h.store.get_memories([private, nobody, open_one])
+    assert Extractor._public(SimpleNamespace(_store=h.store), rows) == {open_one}
+
+
+def test_private_sql_takes_a_column_name_only():
+    assert private_sql("l.channel").startswith("(l.channel = 'whisper'")
+    for bad in ("channel; DROP TABLE x", "1channel", "channel)", ""):
+        try:
+            private_sql(bad)
+        except ValueError:
+            continue
+        raise AssertionError(bad)
