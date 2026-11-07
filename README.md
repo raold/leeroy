@@ -17,9 +17,7 @@ This repo is the customization layer on top of the
 the guild module and its mind, the voice service, maintenance scripts, the tuned
 configs, and local patches. It contains no Blizzard data and no core source.
 
-The goal it is named for: a bot raid leader. A tank that knows the route,
-calls the pulls, and runs the encounter, so a lone mage can follow it through
-Icecrown the way you once followed a good raid lead. Much of it exists now:
+The goal it is named for: a bot raid leader. Much of it exists now:
 [mod-dungeon-clear](https://github.com/jrad7/mod-dungeon-clear) has the group's
 tank bot route boss to boss and pull, and the mind's raid nights assemble the
 raid from the guild and give it a raid leader who calls the plan before each
