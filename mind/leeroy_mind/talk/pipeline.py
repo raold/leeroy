@@ -55,7 +55,7 @@ from leeroy_mind.talk.guards import Guards
 from leeroy_mind.talk.facts import LibraryFacts
 from leeroy_mind.talk.items import defuse, fold
 from leeroy_mind.talk.movelog import MoveLog, MoveRow, PairNotes
-from leeroy_mind.talk.moves import MOVE_PHRASES, moves_line
+from leeroy_mind.talk.moves import MOVE_PHRASES, classify, moves_line
 from leeroy_mind.talk.prompt import (PromptParts, chat_line_text, comms_rules, facts_head,
                                      knows_real_name, mood_line, quest_help, real_name_line,
                                      redact_for, relationship_card, render_instruction,
@@ -65,7 +65,7 @@ from leeroy_mind.talk.questions import game_question
 from leeroy_mind.talk.raid import RaidState
 from leeroy_mind.talk.romance import (FULL_DIAL, NO_BRAKES_DIAL, dial_for, explicit_whisper,
                                       flirt_chance, forward, own_dial,
-                                      romance_instruction, whisper_tail)
+                                      romance_instruction, scene_notes, whisper_tail)
 from leeroy_mind.talk.select import (OPEN_THREAD_S, SpeakerContext, has_reason, is_quest_talk,
                                      mentioned, quest_helper, speaker_weight, typing_delay)
 from leeroy_mind.talk.states import EFFECTS, Altered, Effects, effects_for, substance_of
@@ -348,6 +348,9 @@ class Composed:
     window: list[str] = field(default_factory=list)
     # the memories and facts it showed: their words in his question are no echo
     held: list[str] = field(default_factory=list)
+    # her last moves with this turn's counterpart, as its Lately line read them: the repeat
+    # check uses the same rows
+    moves: list[MoveRow] = field(default_factory=list)
 
 
 def aliases(p: Persona) -> tuple[str, ...]:
@@ -735,13 +738,17 @@ class Pipeline:
 
     def _romance(self, turn: Turn, meta: TurnMeta, p: Persona, rel_h, phase: DayPhase,
                  now: float, rng: random.Random, trigger: str = "",
-                 dial: int | None = None) -> str | None:
+                 dial: int | None = None, tail_follows: bool = False) -> str | None:
         """Her romance text on this turn, or None: only on turns to the human; every FLIRT,
         WHISPER, loot cheer, reply on the whisper channel to him and reply to a flirty line of
         his (`trigger`); otherwise on a share of turns (ROMANCE_SHARE; a drawn woman's
         DRAWN_TALKED_TO_SHARE when he talks to her, from NO_BRAKES_DIAL), halved within
         ROMANCE_COOL_S of a line of hers that carried it. The dial is hers when he has set one
-        for her (romance.dial_for); at her own FULL_DIAL it is every turn to him."""
+        for her (romance.dial_for); at her own FULL_DIAL it is every turn to him. `rng` picks
+        the variants (stage passage, heat, band overlay); `tail_follows`: the whisper tail says
+        the distance frame. Her scene notes about him go in as the turn may see them
+        (PairNotes.recent: a whisper's only in a whisper between the two); the romance text
+        shows them only in a whisper."""
         hg = self.human.guid
         if (not hg or turn.addressee != hg or p.identity.player_gender != "female"
                 or p.romance.stance not in ROMANCE_SHARE):
@@ -766,9 +773,12 @@ class Pipeline:
                 share = min(1.0, share * f)
             if rng.random() >= share:
                 return None
+        scene = self.notes.recent(p.guid, hg, turn_channel=turn.channel, to_guid=turn.to_guid,
+                                  now=now)
         return romance_instruction(p, rel_h, dial=dial, channel=turn.channel,
                                    addressee_is_human=True, phase=phase, human=self.human,
-                                   data_dir=self.data_dir)
+                                   data_dir=self.data_dir, rng=rng, tail_follows=tail_follows,
+                                   scene=scene)
 
     async def _compose(self, turn: Turn, meta: TurnMeta, *, live: bool,
                        persona: Persona | None = None, window: list | None = None,
@@ -789,7 +799,10 @@ class Pipeline:
         The console's tuning preview (preview_line) composes with `persona` (a candidate
         effective persona), `window` (the chat it shows: a line of his given as text, never a
         stored one), `trigger_text` (that line) and `dial` (a candidate romance dial): no
-        memories are recalled, and his real name is never offered."""
+        memories are recalled, and his real name is never offered. Its romance draws (the
+        share, the variants of the passage, heat and overlays) come from generators seeded by
+        the preview's seed, new for each composition, so before and after pick alike and
+        differ by the dial."""
         preview = window is not None
         p = persona if persona is not None else self.personas.get(turn.speaker)
         if p is None:
@@ -888,12 +901,18 @@ class Pipeline:
             ends.append(FEELINGS.format(them=them))
         if greet and any(r.from_guid not in (hg, turn.speaker) for r in recent):
             ends.append(TALK_TO.format(name=human.called))
-        romance = self._romance(turn, meta, p, rel_h, phase, now, rng, trigger, dial)
-        tail, two = "", False
-        if romance:  # at the explicit band in a whisper: the owner's overlay, read last
-            tail = whisper_tail(p, rel_h, dial=dial, channel=turn.channel,
-                                data_dir=self.data_dir, forms=human.forms)
-            # a line or two, unless the turn holds one (her answer to his pushback)
+        def picks() -> random.Random:  # the romance's draws (a preview's: its seed's)
+            return random.Random(meta.seed) if preview and meta.seed is not None else rng
+        # at the explicit band in a whisper to him: the owner's overlay, read last, then the
+        # distance frame, which her romance text then leaves out, so it is said once
+        tail_text = (whisper_tail(p, rel_h, dial=dial, channel=turn.channel,
+                                  data_dir=self.data_dir, forms=human.forms, rng=picks())
+                     if hg and turn.to_guid == hg else "")
+        romance = self._romance(turn, meta, p, rel_h, phase, now, picks(), trigger, dial,
+                                tail_follows=bool(tail_text))
+        tail = tail_text if romance else ""
+        two = False
+        if romance:  # a line or two, unless the turn holds one (her answer to his pushback)
             two = turn.max_lines > 1 and explicit_whisper(p, rel_h, dial=dial,
                                                           channel=turn.channel)
         meta.two_lines = two
@@ -915,7 +934,8 @@ class Pipeline:
 
         # what she already did with this person lately ("Tonight you've already..."): after
         # the instruction's extra, never cut
-        after = moves_line(self._recent_moves(turn),
+        recent_moves = self._recent_moves(turn)
+        after = moves_line(recent_moves,
                            night_start=night_bounds(night_of(local), local.tzinfo)[0],
                            forms=self._forms_of(self._counterpart(turn)))
         instruction = render_instruction(
@@ -963,7 +983,7 @@ class Pipeline:
                         [m.id for m in memories[:len(trimmed.memories)]], p, close,
                         [trigger] if trigger else [], [r.text for r in earlier], samples,
                         support, [r.text for r in recent if r.id != turn.trigger_line],
-                        [*trimmed.memories, *trimmed.facts])
+                        [*trimmed.memories, *trimmed.facts], moves=recent_moves)
 
     def _their_story(self, turn: Turn, meta: TurnMeta, line: str, memories) -> str:
         """For a member answering his public question to other members (it opens on a
@@ -1452,7 +1472,7 @@ class Pipeline:
         messages, text = asking(), ""
         # her last moves with this person (filters.find_tells), and in her lines to him only,
         # whether a summons may stand: a call to the raid or a word to a member is no summons
-        moves = [(r.clause, r.main) for r in self._recent_moves(turn)]
+        moves = [(r.clause, r.main) for r in c.moves]
         hg = self.human.guid
         summons_ok = self._summons_ok(turn) if hg and self._counterpart(turn) == hg else None
         for attempt in (0, 1):
@@ -1787,6 +1807,7 @@ class Pipeline:
                                  memory_ids, None, sid, bit=_bit_id(turn), why=meta.why or None,
                                  trigger_line=turn.trigger_line, llm_s=meta.llm_s,
                                  to_guid=turn.to_guid, turn_id=meta.turn_id)
+        self._record_notes(turn, meta, p, meta.words or text, now)
         log.info("say_sent: guid=%d kind=%s channel=%s line=%d trigger=%s why=%s bit=%r "
                  "llm_s=%s", turn.speaker, turn.kind, turn.channel, line_id,
                  turn.trigger_line or "-", meta.why or "-", _bit_id(turn), _secs(meta.llm_s))
@@ -1801,6 +1822,34 @@ class Pipeline:
             except Exception:
                 log.warning("say_recorded_hook_failed: guid=%d line=%d", turn.speaker, line_id)
         return line_id
+
+    def _record_notes(self, turn: Turn, meta: TurnMeta, p: Persona, words: str,
+                      now: float) -> None:
+        """A said line's scene notes about him (romance.scene_notes, PairNotes), for a woman with
+        an attitude toward him on a turn to him that is her own (not a template): the moves in
+        her line, and on the turn's first line his in the line it answers, when that line is his
+        and this turn may see it (whisper_ok). Each is filled with his pronouns, so the stored
+        note is what a prompt shows, and kept under the turn's channel, so the whisper rule
+        applies on reading. A failing write is logged, never with the words, and never
+        raised."""
+        hg = self.human.guid
+        if (not hg or turn.template is not None or self._counterpart(turn) != hg
+                or p.identity.player_gender != "female"
+                or p.romance.stance not in ROMANCE_SHARE):
+            return
+        try:
+            his: frozenset[str] = frozenset()
+            if meta.said == 1 and turn.trigger_line:
+                rows = self.store.chat_lines([turn.trigger_line])
+                if rows and rows[0].from_guid == hg and self._may_carry(turn, rows[0]):
+                    his = classify(rows[0].text)
+            they, them, their = self.human.forms
+            for kind, note in scene_notes(classify(words), his):
+                self.notes.add(p.guid, hg, kind, note.format(they=they, them=them, their=their),
+                               channel=turn.channel, to_guid=turn.to_guid, ts=now)
+        except Exception as e:
+            log.warning("note_record_failed: guid=%d channel=%s reason=%s", turn.speaker,
+                        turn.channel, type(e).__name__)
 
     def said_words(self, line_id: int) -> str | None:
         """The words before styling (Styled.plain: no typos, abbreviations or emoticon) of a

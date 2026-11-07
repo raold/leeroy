@@ -567,7 +567,8 @@ def romance_instruction(p: Persona, rel: Relationship | None, *, dial: int, chan
     out here. The pipeline puts it before the turn's own instruction, so the model reads that
     last. After the heat line, for a whisper to him only (whisper scope; any other channel
     leaves them out even if passed): SCENE_HEAD and at most SCENE_MAX `scene` notes, the
-    `arc_lines`, the rival's line and a cooling variant. `dial` is the owner's; the band follows her own when she has one."""
+    `arc_lines`, the rival's line and a cooling variant. `dial` is the owner's; the band
+    follows her own when she has one."""
     stance = p.romance.stance
     if not addressee_is_human or stance not in ATTITUDE_REACH or not _is_woman(p):
         return None

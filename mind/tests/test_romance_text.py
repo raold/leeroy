@@ -12,14 +12,15 @@ from leeroy_mind.human import HumanIdentity
 from leeroy_mind.personas.schema import persona_from_dict
 from leeroy_mind.storage.rows import ROMANCE_STAGES, Relationship
 from leeroy_mind.talk.budget import DayPhase
-from leeroy_mind.talk.romance import (ARC_STAGES, ATTITUDE_TEXT, BANDS, COOLING_TEXT, DEFER, DISTANCE, DISTANCE_PLAN,
-                                      HEAT_FROM, HEAT_TEXT, INTO_HIM_ALREADY, LEGACY_STAGE,
-                                      NOTE_TEXT, REPROACH_RE, SCENE_HEAD, rival_text,
-                                      scene_notes,
-                                      PRIVATE_GUARD, PUBLIC_PASSAGES, STAGE_DEPTH, STAGE_PASSAGES,
-                                      WHISPER_OVERLAY,
+from leeroy_mind.talk.romance import (ARC_STAGES, ATTITUDE_TEXT, BANDS, BUILTIN_ROMANCE,
+                                      COOLING_TEXT, DEFER, DISTANCE, DISTANCE_PLAN, HEAT_FROM,
+                                      HEAT_TEXT, HUMOUR_STYLE, INTO_HIM_ALREADY, INVARIANTS,
+                                      LEGACY_STAGE, NOTE_TEXT, PRIVATE_GUARD, PUBLIC_PASSAGES,
+                                      REPROACH_RE, SCENE_HEAD, SPECIFIC, STAGE_DEPTH,
+                                      STAGE_PASSAGES, STYLE_TEXT, WHISPER_OVERLAY,
                                       distance_text, effective_band, heat_step, passage_key,
-                                      romance_instruction, stage_text, whisper_tail)
+                                      rival_text, romance_instruction, scene_notes, stage_text,
+                                      whisper_tail)
 from leeroy_mind.text import estimate_tokens
 
 GM = HumanIdentity(1, "Zanthor", "Zan", "Quillon", True, pronouns="he")
@@ -278,6 +279,12 @@ def builtin_strings():
     yield rival_text("Belra", GM.forms)
     yield INTO_HIM_ALREADY
     yield DEFER
+    yield from STYLE_TEXT.values()
+    yield from HUMOUR_STYLE.values()
+    yield from BUILTIN_ROMANCE.values()
+    yield SPECIFIC
+    yield INVARIANTS
+    yield PRIVATE_GUARD
 
 
 def test_no_builtin_romance_text_reproaches_or_summons():
