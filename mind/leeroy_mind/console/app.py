@@ -70,6 +70,8 @@ run nothing else.
                        the realm_bank ledger from mind.db; `why` says when there is no snapshot
     GET  /api/training the Training tab: what `training status`, `gate`, `trials` and `cards`
                        print, from mind.db (`setup` false when it has no training tables)
+    GET  /api/dojo     the Dojo tab: the dojo's own files (its layout's data and runtime roots,
+                       read-only) and whether its worldserver listens, from the console's TCP table
     GET  /api/selfies/images  ?guid=&set=: a ready set's four thumbnails as data URLs (404
                        unless that set is ready and the member's)
     GET  /api/selfies/member  ?guid=: one member's photo in force, sets and change history
@@ -102,6 +104,7 @@ from typing import Callable
 from .. import endpoint
 from . import (bankview, calendarview, faces, feed, mindlog, netinfo, personaview, raidview, realmview, selfieview, socialview,
 from . import (bankview, boardview, calendarview, faces, feed, mindlog, netinfo, personaview, raidview, selfieview, socialview,
+from . import (bankview, calendarview, dojoview, faces, feed, mindlog, netinfo, personaview, raidview, selfieview, socialview,
                status, trainview, tuneview)
 from .control import Controls, Refused
 from .httpd import Request, Response, Stream, digits, encode_json, json_response, text
@@ -187,6 +190,7 @@ class Settings:
     config_problem: str | None = None
     allow_hosts: tuple[str, ...] = ()  # tailnet names (lower case) served at https://NAME too
     stable_key: bool = False  # the key is --key-file's, not this start's
+    dojo_layout: Path | None = None  # the dojo's layout.json (the Dojo tab reads its files only)
 
 
 class _Subscriber:
@@ -602,6 +606,7 @@ class ConsoleApp:
                   ("GET", "/api/board"): self._api_board,
                   ("GET", "/api/bank"): self._api_bank,
                   ("GET", "/api/training"): self._api_training,
+                  ("GET", "/api/dojo"): self._api_dojo,
                   ("GET", "/api/personas"): self._api_personas,
                   ("GET", "/api/persona"): self._api_persona,
                   ("GET", "/api/face"): self._api_face,
@@ -765,6 +770,10 @@ class ConsoleApp:
                                    data_dir=self.s.data_dir)
     async def _api_training(self, req: Request):
         return await self._db_view("training", trainview.training_view, now=self._clock())
+
+    async def _api_dojo(self, req: Request):
+        view = await asyncio.to_thread(dojoview.dojo_view, self.s.dojo_layout, conns=self._conns)
+        return json_response(200, view)
 
     # -- the personas tab (read-only) ----------------------------------------------------------
 

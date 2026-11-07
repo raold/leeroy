@@ -413,3 +413,6 @@ td > div.who { color: var(--ink); font-weight: 600; }
 #tab-board .thread h4 { margin: 12px 0 2px; font-size: 13px; color: var(--muted); }
 #tab-board .thread:first-child h4 { margin-top: 0; }
 #tab-board #board-panels { display: grid; gap: 18px; }
+#tab-dojo .dojo-pre { max-height: 360px; overflow: auto; white-space: pre-wrap; margin: 8px 0 0; font-size: 12px; line-height: 1.45; }
+#tab-dojo .dojo-run > summary { cursor: pointer; }
+#tab-dojo .mono, #tab-dojo .kv.mono dd { font-family: monospace; font-size: 12px; overflow-wrap: anywhere; }

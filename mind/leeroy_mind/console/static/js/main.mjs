@@ -14,6 +14,7 @@ import "./calendar.mjs";
 import "./realm.mjs";
 import "./bank.mjs";
 import "./training.mjs";
+import "./dojo.mjs";
 import "./personas.mjs";
 import "./mind.mjs";
 import { showTab } from "./tabs.mjs";
