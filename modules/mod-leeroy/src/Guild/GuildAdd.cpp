@@ -8,6 +8,7 @@
 #include "Realm/RealmPorts.h"
 #include "LeeroyGuildAddPolicy.h"
 
+#include "AiFactory.h"
 #include "Chat.h"
 #include "ChatCommand.h"
 #include "Group.h"
@@ -20,6 +21,7 @@
 #include "Playerbots.h"
 #include "ScriptMgr.h"
 
+#include <cmath>
 #include <map>
 #include <string>
 #include <string_view>
@@ -42,6 +44,17 @@ GuildAddRole RoleOf(Player* player)
     if (PlayerbotAI::IsHeal(player, true))
         return GuildAddRole::Healer;
     return GuildAddRole::Damage;
+}
+
+// The talent tree with most points, and the average item level in whole levels, as the pick weighs them.
+std::int8_t TabOf(Player* player)
+{
+    return static_cast<std::int8_t>(AiFactory::GetPlayerSpecTab(player));
+}
+
+std::uint32_t GearOf(Player* player)
+{
+    return static_cast<std::uint32_t>(std::lround(player->GetAverageItemLevel()));
 }
 
 char const* RoleName(GuildAddRole role)
@@ -210,10 +223,10 @@ std::vector<std::string> Fill(Player* human, uint32 size)
         members = group->GetMembersCount();
         for (auto const& slot : group->GetMemberSlots())
             if (Player* member = ObjectAccessor::FindConnectedPlayer(slot.guid))
-                connected.push_back({RoleOf(member), member->getClass()});
+                connected.push_back({RoleOf(member), member->getClass(), TabOf(member)});
     }
     else
-        connected.push_back({RoleOf(human), human->getClass()});
+        connected.push_back({RoleOf(human), human->getClass(), TabOf(human)});
 
     uint32 const guildId = LeeroyModule::Instance().GuildId();
     std::vector<GuildAddCandidate> candidates;
@@ -228,11 +241,12 @@ std::vector<std::string> Fill(Player* human, uint32 size)
             ++unavailable[reason];
             continue;
         }
-        candidates.push_back({guid, RoleOf(bot), bot->getClass()});
+        candidates.push_back({guid, RoleOf(bot), bot->getClass(), TabOf(bot), GearOf(bot)});
     }
 
     auto const plan = PlanGuildAdd(size, members, connected, std::move(candidates));
     GuildAddCounts added{};
+    GuildAddBuffs covered = plan.covered;
     std::uint32_t notBrought = 0;
     std::vector<std::pair<std::uint32_t, std::string>> joined;
     if (!plan.full && !plan.picks.empty())
@@ -259,6 +273,7 @@ std::vector<std::string> Fill(Player* human, uint32 size)
             if (map->IsDungeon())
                 GrantRaidEntry(bot, map->GetId(), map->GetDifficulty());
             ++added[static_cast<std::size_t>(pick.role)];
+            covered |= pick.buffs;
             joined.emplace_back(pick.guid, RoleName(pick.role));
             arrivals.push_back(bot);
         }
@@ -281,7 +296,10 @@ std::vector<std::string> Fill(Player* human, uint32 size)
     }
     LOG_INFO("module.leeroy", "mod-leeroy: add{} from the guild: {} tanks, {} healers, {} damage joined, {} not brought",
         size, added[0], added[1], added[2], notBrought);
-    return GuildAddMessages(plan, added, notBrought, unavailable);
+    auto messages = GuildAddMessages(plan, added, notBrought, unavailable);
+    if (auto missing = GuildAddMissingLine(covered); !missing.empty())
+        messages.push_back(std::move(missing));
+    return messages;
 }
 
 class GuildAddCommandScript : public AllCommandScript

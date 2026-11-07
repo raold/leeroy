@@ -376,9 +376,20 @@ online, alive, out of combat, his faction, in no group, not in a battleground,
 arena or queue (a raid browser listing is fine), not teleporting or flying,
 not in another instance or saved to another copy of his, and clear of
 `RealmModule::MutationReason` (Realm leases, training, offline raids, pending
-bot jobs). Within a role, the classes his group has fewest of come first,
-lowest guid on ties. They join directly (`AddMember`; his group is made only
-once someone can join, and becomes a raid only when a party is full), take the
+bot jobs). Within a role the pick weighs each member's spec (talent tree with
+most points; `GuildAddSpecFacts` holds the WotLK raid buffs and debuffs it
+brings, melee or ranged, healer kind) and average item level: tanks prefer a
+tank class not yet tanking, then gear; healers fill a size template (5: Holy
+paladin or Discipline; 10: Holy paladin, Discipline, a raid healer; 25: two,
+one and three raid healers mixing shaman, druid and Holy priest; 40: three,
+two and five), a kind nobody free has going to the best gear left; damage
+goes greedily to the most weight of buffs his group and the earlier picks
+lack (Bloodlust and Replenishment 100, the % buffs and debuffs 10, the rest
+1), then gear, the melee/ranged split nearest even, the class his group has
+fewest of and the lowest guid. A last line names the Bloodlust, Replenishment
+and % buffs and debuffs his group still lacks. They join directly
+(`AddMember`; his group is made only once someone can join, and becomes a raid
+only when a party is full), take the
 raid night's `RaidHabits` (plus dungeon-clear's entry when he is inside an
 instance) and are teleported beside him. He is told per role how
 many were added and how many slots stayed empty, with a tally of why the
