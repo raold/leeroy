@@ -26,10 +26,10 @@ nothing awaited inside the commit (NightContext.commit):
   write-up goes into the event's result.
 - post:reply:<id> and letter:reply:<id>: his Board replies (board.waiting), taken before the
   night's own posts and letters, oldest first, inside the same caps. A forum reply that passes the
-  forum screen becomes his own public forum_post_v1 fact (key reply:<id>), which every realm guild
-  knows by `forum`; the post's author answers it in the thread while they can still write, else
-  the night's author pool (_author), and nobody leaves it posted. It writes the way back in as a
-  post does. A letter reply that passes the letter screen becomes the member's private memory
+  forum screen and the fact's own (screen_rule_text, checked before any model call) becomes his
+  own public forum_post_v1 fact (key reply:<id>), which every realm guild knows by `forum`; the
+  post's author answers it in the thread while they can still write, else the night's author pool
+  (_author), and nobody leaves it posted. It writes the way back in as a post does. A letter reply that passes the letter screen becomes the member's private memory
   with him (key board-reply:<id>) and her answer, a realm_mail 'reply' row ready for the post
   office. His text refused is settled 'refused' with its reason and never asked again; an answer
   refused fails the unit and his reply waits. A reply that stopped waiting before the commit
@@ -71,7 +71,7 @@ from .ledger import Ledger, put_notable_in_unit
 from .ports import GUILD_NAME_KEY
 from .provenance import public_fact_in_unit
 from .records import FactRow, PreparedBackIn, Rejected
-from .rule_facts import put_rule_fact_in_unit, rule_fact_in_unit
+from .rule_facts import put_rule_fact_in_unit, rule_fact_in_unit, screen_rule_text
 from .screen import Screen, insults_a_group
 
 STAGE = "realm"
@@ -564,6 +564,8 @@ class _Night:
         reason = "post_gone" if parent is None else self._public(text, "member", POST_MAX)
         if reason == "not_ready":
             return  # The screen went away mid-night: it waits.
+        if reason is None and type(screened := screen_rule_text(text, human=ctx.ident)) is Rejected:
+            reason = screened.reason  # His forum fact would refuse it: no answer is asked for.
         if reason is not None:
             self._refuse_reply(unit, reply_id, reason)
             return

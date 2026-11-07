@@ -684,6 +684,16 @@ def test_a_refused_reply_is_marked_and_not_retried(rig):
     assert not set(units) & set(night.plan_units(rig.ctx(night_="2026-10-30")))
 
 
+def test_a_reply_his_forum_fact_would_refuse_is_refused_before_the_model(rig):
+    marks = rig.reply("post", rig.post("rumor:901", author=101), 101, "|cff00ff00|r")  # Markup only.
+    ctx = rig.ctx(settings=replace(rig.settings, realm_units=0))
+    assert night._Night(ctx)._public("|cff00ff00|r", "member", night.POST_MAX) is None  # The forum screen passes it.
+    one(ctx, f"post:reply:{marks}")
+    assert not ctx.failures and ctx.reasoner.calls == 0 and ctx.done(night.STAGE, f"post:reply:{marks}")
+    assert (rig.replied(marks)["state"], rig.replied(marks)["reason"]) == ("refused", "unsupported_text")
+    assert (rig.count("realm_post"), rig.count("realm_rule_origin"), rig.count("realm_fact")) == (1, 0, 0)
+
+
 def test_a_refused_answer_waits_for_another_night(rig):
     rid = rig.reply("post", rig.post("rumor:901", author=101), 101, "Agreed, that pull was clean.")
     lid = rig.reply("letter", rig.delivered(sender=103), 103, "Back on Thursday.")
