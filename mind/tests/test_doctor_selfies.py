@@ -47,3 +47,18 @@ def test_quick_doctor_parses_the_worker_lines_and_survives_a_timeout(tmp_path, m
         raise subprocess.TimeoutExpired("x", 30)
     monkeypatch.setattr(subprocess, "run", boom)
     assert m._quick_doctor(tmp_path / "p", tmp_path)[0][0] is False
+
+
+def test_doctor_notes_the_adapter_until_snaps_are_on(tmp_path, monkeypatch):
+    python = tmp_path / "python.exe"
+    python.write_bytes(b"")
+    monkeypatch.setattr(m, "_quick_doctor", lambda py, data: [
+        (True, "data dir x"), (None, "ipadapter: not fetched (fetch-models --only ipadapter)")])
+    head = f'[selfies]\nenabled = true\npython = "{python.as_posix()}"\n'
+    note = "selfies: identity adapter not fetched (fetch-models --only ipadapter)"
+    assert m._doctor_selfies(toml(tmp_path, head)) == [(True, "selfies: data dir x"), (None, note)]
+    assert m._doctor_selfies(toml(tmp_path, head + "snaps = true\n")) == [
+        (True, "selfies: data dir x"), (False, note)]
+    monkeypatch.setattr(m, "_quick_doctor", lambda py, data: [(True, "ipadapter: 3 files ok")])
+    assert m._doctor_selfies(toml(tmp_path, head + "snaps = true\n")) == [
+        (True, "selfies: ipadapter: 3 files ok")]

@@ -351,7 +351,13 @@ def _doctor_selfies(root: Path) -> list[tuple[bool | None, str]]:
     python = worker_python(cfg)
     if not python.is_file():
         return [(False, f"selfies: no worker venv at {python} (see selfie/README.md)")]
-    return [(ok, f"selfies: {text}") for ok, text in _quick_doctor(python, worker_data(cfg))]
+    lines = []
+    for ok, text in _quick_doctor(python, worker_data(cfg)):
+        if text.startswith("ipadapter: not fetched"):  # only the identity worker needs it
+            ok = False if cfg.snaps else None
+            text = "identity adapter not fetched (fetch-models --only ipadapter)"
+        lines.append((ok, f"selfies: {text}"))
+    return lines
 
 
 def _doctor_voice_service(root: Path) -> list[tuple[bool | None, str]]:

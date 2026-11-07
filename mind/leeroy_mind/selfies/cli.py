@@ -8,6 +8,7 @@ member into <data>/scratch/selfies-try/<guid>/. Nothing is written to the live d
 carries counts, guids, timings and paths; never a prompt, persona text or a name."""
 import argparse
 import asyncio
+import shutil
 import sqlite3
 import sys
 from dataclasses import dataclass
@@ -16,18 +17,30 @@ from leeroy_mind.app import AlreadyRunning
 from leeroy_mind.clock import SystemClock
 from leeroy_mind.config import load_config
 from leeroy_mind.console.selfieview import queue_view
+from leeroy_mind.nightly.enrich import _facts
+from leeroy_mind.nightly.llm import ReflectionError
 from leeroy_mind.nightly.cli import (_child, _context, _data_arg, _default_night, _exclusive,
                                      _positive, _print, _read_store, _root, _working_store)
 
+from . import files
 from .config import load_selfie_config, worker_command, worker_env
 from .kind import STAGE as KIND_STAGE
-from .kind import _saver, chosen_style, kind_one
+from .kind import _saver, chosen_style, kind_one, looks_line
 from .prompt import build_prompt, renderable
+from .scene import (ABOUT, SCENE_ASK, build_scene_prompt, build_tile_prompt, scene_from,
+                    scene_renderable, scene_schema, scene_system, screen_scene)
+from .scenes import STAGE as SCENES_STAGE
+from .slot import SetRefused
+from .snaps import counts
+from .snapstage import GUILD_THUMB_PX, GUTTER_PX, SNAP_THUMB_PX, TILE_PX, _Renderer
+from .snapstage import STAGE as SNAPS_STAGE
 from .stage import STAGE, render_candidates, start_worker
+from .store import current
 from .worker import SelfieWorker, WorkerError, to_the_end
 
 DEFAULT_LIMIT = 2
 TRY_DIR = "selfies-try"
+GUILD_TILES = 4
 
 
 def _parser():
@@ -40,6 +53,11 @@ def _parser():
     pick = sub.add_mutually_exclusive_group()
     pick.add_argument("--guid", type=_positive)
     pick.add_argument("--limit", type=_positive, default=DEFAULT_LIMIT)
+    sub.add_argument("--snaps", action="store_true",
+                     help="one situational photo each with the member's own face, into "
+                     "scratch/selfies-try/snaps/")
+    sub.add_argument("--guild", action="store_true",
+                     help="with --snaps: also one grid of up to 4 of them")
     for sub in subs.choices.values():
         _data_arg(sub, child=True)
     return parser
@@ -48,7 +66,7 @@ def _parser():
 def _stages(conn) -> dict:
     """The latest night that has a selfies or photo stage record: the records and their unit
     counts. Empty when the tables are not there (an older database)."""
-    names = (STAGE, KIND_STAGE)
+    names = (STAGE, KIND_STAGE, SCENES_STAGE, SNAPS_STAGE)
     marks = ",".join("?" * len(names))
     try:
         row = conn.execute(f"SELECT max(night) FROM night_stage WHERE stage IN ({marks})",
@@ -73,7 +91,11 @@ def _status(store, clock) -> dict:
     view = queue_view(store.conn, None, now=clock.now())
     for key in ("queue", "recent"):
         view[key] = [{k: v for k, v in item.items() if k != "name"} for item in view[key]]
-    return {"queue": view, "stages": _stages(store.conn)}
+    try:
+        snaps = counts(store.conn, now=clock.now())
+    except sqlite3.Error:  # an older database has no selfie_snap
+        snaps = {}
+    return {"queue": view, "snaps": snaps, "stages": _stages(store.conn)}
 
 
 class _Measured:
@@ -183,6 +205,119 @@ async def _try(root, store, cfg, scfg, clock, args, make_llm) -> int:
         return int(tally.sets != tally.members)
 
 
+async def _scene(ctx, guid: int):
+    """(the scene, None) or (None, why) for `guid`: one everyday scene from the reflection model,
+    screened as the night's scenes stage screens it. Nothing is stored."""
+    p, name = ctx.base(guid), ctx.name(guid)
+    system = scene_system(p, ctx.settings.data_dir, human=ctx.ident, name=name,
+                          card=ctx.base_card(guid), facts=_facts(p),
+                          looks=looks_line(p.appearance), about=ABOUT["everyday"])
+    try:
+        data = await ctx.reasoner.json(system, SCENE_ASK.format(name=name), scene_schema(p),
+                                       temperature=0.8)
+    except ReflectionError as e:
+        if e.fatal:
+            raise
+        return None, "model"
+    if data.get("photo") is False:
+        return None, "declined"
+    names = [ctx.name(g) for g in ctx.members(include_away=True) if g != guid]
+    codes = screen_scene(p, data, ident=ctx.ident, member_names=names)
+    s = None if codes else scene_from(data)
+    if s is not None and scene_renderable(p, s):
+        codes = ["unrenderable"]
+    return (None, ",".join(codes)) if codes else (s, None)
+
+
+async def _guild_grid(ctx, r, worker, members, out_root) -> list:
+    """Each of `members` alone at a square tile, then one grid at snaps/guild.jpg; the tiles that
+    were made, [] when the grid was not."""
+    made = []
+    for n, (guid, (_, ref)) in enumerate(members):
+        p = ctx.base(guid)
+        tile = out_root / str(guid) / "tile.jpg"
+        try:
+            await r.image(snap_id=0, guid=guid, idx=1, spec=build_tile_prompt(p), ref=ref,
+                          framing=p.photo.framing, out=tile,
+                          thumb=tile.with_name("tile.thumb.jpg"), thumb_size=128,
+                          shape="square", rid=f"g{n}")
+            made.append(tile)
+        except (SetRefused, WorkerError) as e:
+            print(f"guid {guid}: no tile ({getattr(e, 'reason', 'flagged')})", file=sys.stderr)
+    if not made:
+        return []
+    try:
+        await worker.worker.grid(made, tile=TILE_PX, gutter=GUTTER_PX, out=out_root / "guild.jpg",
+                                 thumb=out_root / "guild.thumb.jpg", thumb_size=GUILD_THUMB_PX,
+                                 rid="grid")
+    except WorkerError as e:
+        print(f"grid {e.reason}", file=sys.stderr)
+        return []
+    return made
+
+
+async def _try_snaps(root, store, cfg, scfg, clock, args, make_llm) -> int:
+    night = _default_night(clock)
+    async with _context(root, store, cfg, clock, night, make_llm=make_llm,
+                        live_locked=True) as ctx:
+        looks = _chosen(ctx, argparse.Namespace(guid=args.guid, limit=10 ** 6))
+        picked = {g: current(store, g) for g in looks}
+        withs = [g for g in looks if picked[g] is not None]
+        guids = withs if args.guid is not None else withs[:args.limit]
+        no_photo = len(looks) - len(withs) if args.guid is None else int(not withs)
+        out_root = _child(_child(_child(root, "scratch"), TRY_DIR), "snaps")
+        worker = _Measured(SelfieWorker(worker_command(scfg, identity=True),
+                                        env=worker_env(scfg)))
+        scenes, rendered, tiles = {}, 0, []
+        if guids:
+            await ctx.reasoner.preflight()
+            await ctx.arbiter.ensure_model(ctx.settings.reflection_model)
+        for guid in guids:
+            scene, why = await _scene(ctx, guid)
+            if scene is None:
+                print(f"guid {guid}: no scene ({why})", file=sys.stderr)
+                continue
+            ref = files.history(ctx.settings.data_dir, guid, picked[guid].pick)
+            if not ref.is_file():
+                print(f"guid {guid}: the photo in force has no history file", file=sys.stderr)
+                continue
+            scenes[guid] = (scene, ref)
+        if scenes:
+            r = _Renderer(ctx, scfg, worker)
+            try:
+                await ctx.arbiter.make_room()
+                await start_worker(worker.worker, ctx.arbiter.make_room)
+                for n, (guid, (scene, ref)) in enumerate(scenes.items()):
+                    folder = out_root / str(guid)
+                    folder.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(ref, folder / "ref.jpg")
+                    p = ctx.base(guid)
+                    try:
+                        await r.image(snap_id=0, guid=guid, idx=0,
+                                      spec=build_scene_prompt(p, scene), ref=ref,
+                                      framing=p.photo.framing, out=folder / "snap.jpg",
+                                      thumb=folder / "snap.thumb.jpg", thumb_size=SNAP_THUMB_PX,
+                                      shape="portrait", rid=f"t{n}")
+                        rendered += 1
+                    except SetRefused:
+                        print(f"guid {guid}: flagged on every seed", file=sys.stderr)
+                    except WorkerError as e:
+                        print(f"guid {guid}: worker {e.reason}", file=sys.stderr)
+                if args.guild:
+                    tiles = await _guild_grid(ctx, r, worker, list(scenes.items())[:GUILD_TILES],
+                                              out_root)
+            except WorkerError as e:
+                print(f"worker {e.reason}", file=sys.stderr)
+            finally:
+                await to_the_end(worker.worker.stop())
+                await _room_after(ctx)
+        _print({"members": len(guids), "no_photo": no_photo, "rendered": rendered,
+                "flagged": worker.flagged,
+                "seconds_per_image": round(worker.seconds / worker.images, 2) if worker.images
+                else None, "peak_gib": worker.peak, "path": str(out_root)})
+        return int(not guids or rendered != len(guids) or (args.guild and not tiles))
+
+
 def selfies_main(argv=None, *, make_llm=None) -> int:
     args = _parser().parse_args(argv)
     clock = SystemClock()
@@ -192,11 +327,15 @@ def selfies_main(argv=None, *, make_llm=None) -> int:
             with _read_store(root / "mind.db", clock) as store:
                 _print(_status(store, clock))
             return 0
+        if args.guild and not args.snaps:
+            print("selfies try: --guild goes with --snaps", file=sys.stderr)
+            return 2
         cfg = load_config(root / "mind.toml")
         scfg = load_selfie_config(root / "mind.toml")
         with _exclusive(root, gpu=True):
             with _working_store(root, clock, live=False, label="selfies-try") as (store, _):
-                return asyncio.run(_try(root, store, cfg, scfg, clock, args, make_llm))
+                run = _try_snaps if args.snaps else _try
+                return asyncio.run(run(root, store, cfg, scfg, clock, args, make_llm))
     except AlreadyRunning as exc:
         print(f"{exc}; selfies try would share its GPU and could unload its live model")
         return 1
