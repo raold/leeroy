@@ -18,9 +18,9 @@ from leeroy_mind.talk.romance import (ARC_STAGES, ATTITUDE_TEXT, BANDS, BUILTIN_
                                       LEGACY_STAGE, NOTE_TEXT, PRIVATE_GUARD, PUBLIC_PASSAGES,
                                       REPROACH_RE, SCENE_HEAD, SPECIFIC, STAGE_DEPTH,
                                       STAGE_PASSAGES, STYLE_TEXT, WHISPER_OVERLAY,
-                                      distance_text, effective_band, heat_step, passage_key,
-                                      rival_text, romance_instruction, scene_notes, stage_text,
-                                      whisper_tail)
+                                      distance_text, effective_band, heat_step, his_moves,
+                                      passage_key, rival_text, romance_instruction, scene_notes,
+                                      stage_text, whisper_tail)
 from leeroy_mind.text import estimate_tokens
 
 GM = HumanIdentity(1, "Zanthor", "Zan", "Quillon", True, pronouns="he")
@@ -173,7 +173,7 @@ def test_the_planning_stage_reads_the_trip_as_the_one_meeting(tmp_path):
     assert distance_text("planning") == DISTANCE_PLAN == distance_text("invitation")
     assert all(distance_text(s) == DISTANCE for s in ARC_STAGES if s != "planning")
     assert "trip" in DISTANCE_PLAN and "come over" in DISTANCE_PLAN  # named to forbid it
-    assert fields(DISTANCE) == {"them", "they"} and fields(DISTANCE_PLAN) <= {"them", "they"}
+    assert fields(DISTANCE) == {"them"} and fields(DISTANCE_PLAN) == {"them"}
     text = romance_instruction(lust(), rel("planning"), data_dir=tmp_path, **WHISPER)
     assert DISTANCE_PLAN.format(**HE) in text and DISTANCE.format(**HE) not in text
 
@@ -251,10 +251,25 @@ def test_the_frame_is_short_and_keeps_its_points():
         assert "live far apart" in frame and "only in game" in frame and "come over" in frame
         assert "waiting" in frame
     assert "don't ask" in DISTANCE and "don't say you're waiting" in DISTANCE  # B3's check
-    assert "just said or to what's going on" in DISTANCE  # an opener has nothing from him
+    # what he just said is the turn's own instruction's to say, what is happening SPECIFIC's
+    assert all("just said" not in s for s in (DISTANCE, DISTANCE_PLAN, SPECIFIC))
+    assert "what's actually happening" in SPECIFIC
     assert "longing" in DISTANCE and "want" in DISTANCE
     assert "trip" in DISTANCE_PLAN and "where or when" in DISTANCE_PLAN
     assert "longing" in DISTANCE_PLAN and "want" in DISTANCE_PLAN
+
+
+@pytest.mark.parametrize("line", ["i need you to heal me tonight", "i need u to tank",
+                                  "need you to grab the flasks"])
+def test_his_ask_is_no_declaration_in_her_notes(line):
+    assert "declare" not in his_moves(line)
+    assert all(k != "his_declare" for k, _ in scene_notes(frozenset(), his_moves(line)))
+
+
+@pytest.mark.parametrize("line", ["i need you", "i want you, i need you to stay",
+                                  "i need you to know i want you"])
+def test_his_declaration_beside_an_ask_still_counts(line):
+    assert "declare" in his_moves(line)
 
 
 def test_no_line_frames_their_chat_as_lacking():

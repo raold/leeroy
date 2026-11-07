@@ -35,6 +35,7 @@ from leeroy_mind.personas.schema import Persona
 from leeroy_mind.prompts import load_prompt
 from leeroy_mind.storage.rows import Relationship
 from leeroy_mind.talk.budget import DayPhase
+from leeroy_mind.talk.moves import classify
 from leeroy_mind.talk.raid import RaidPhase
 from leeroy_mind.talk.select import pick_speakers
 from leeroy_mind.talk.turns import TurnKind
@@ -210,16 +211,17 @@ PUBLIC_PASSAGES: dict[str, tuple[str, ...]] = {
 INTO_HIM_ALREADY = "You've had your eye on {name} for a while."
 # The distance is the frame (spec call 3: it comes after his overlay), at most 45 estimated
 # tokens each. The planning stage's frame names the trip as the real meeting and leaves where
-# and when to the plan. DISTANCE takes {them} and {they}, DISTANCE_PLAN {them}.
+# and when to the plan. Both take {them}. What he just said is the turn's own instruction's
+# to say, and what is happening SPECIFIC's, so the frame says neither.
 DISTANCE = ("You two live far apart and meet only in game: don't ask {them} to come over, don't "
-            "say you're waiting. React to what {they} just said or to what's going on: want, "
-            "longing, a tease.")
+            "say you're waiting. Bring want, longing, a tease.")
 DISTANCE_PLAN = ("You two live far apart and meet only in game. A trip is the real meeting: "
                  "don't ask {them} to come over, don't say you're waiting or invent where or when. "
                  "Bring want, longing.")
 # What you two did lately, for a whisper to him only (romance_instruction's `scene`, a few
 # notes, newest first). Second person; {they}/{them}/{their} are his forms. Keys are
 # his_<move> and her_<move> for A1's move names; a summons has no note, so it is never said back.
+# His moves come from his_moves: "need you to" asks for something, so it is no declaration there.
 SCENE_HEAD = "Between you two lately:"
 SCENE_MAX = 3
 NOTE_TEXT: dict[str, str] = {
@@ -304,8 +306,8 @@ BUILTIN_ROMANCE: dict[str, str] = {
                    "like, nothing graphic."),
 }
 BUILTIN_ROMANCE["explicit"] = BUILTIN_ROMANCE["suggestive"]  # the real thing is an overlay
-SPECIFIC = ("Hook it on what's actually happening (what {name} just said, the pull, the loot, "
-            "the hour), never a canned line.")
+SPECIFIC = ("Hook it on what's actually happening (the pull, the loot, the hour), never a "
+            "canned line.")
 # The frame, worded as one and read mid-block, not as a line to say back (prompts I5).
 INVARIANTS = "It's only ever with {name}, two adults, and only what you both want."
 _AUDIENCE = {"guild": "whole guild", "officer": "officers", "party": "party", "raid": "raid",
@@ -403,8 +405,8 @@ def stage_text(stance: str, stage: str, rng: random.Random | None = None, *,
 
 
 def distance_text(stage: str) -> str:
-    """The distance frame for this stage (a template taking {them} and {they}): the planning
-    stage's frame names the trip as the one real meeting."""
+    """The distance frame for this stage (a template taking {them}): the planning stage's frame
+    names the trip as the one real meeting."""
     return DISTANCE_PLAN if passage_key(stage) == "planning" else DISTANCE
 
 
@@ -435,6 +437,20 @@ def scene_notes(her: frozenset[str], his: frozenset[str]) -> list[tuple[str, str
     {they}/{them}/{their}."""
     return [(k, t) for k, t in NOTE_TEXT.items()
             if (k[4:] in his if k.startswith("his_") else k[4:] in her)]
+
+
+# An ask, not a declaration ("i need you to heal"): his_moves reads no declaration into it.
+ASK_RE = re.compile(r"\bneed (you|u) to\b", re.IGNORECASE)
+
+
+def his_moves(text: str) -> frozenset[str]:
+    """His moves in a line of his, for her scene notes (talk.moves.classify, left as it is for
+    its other users): a declaration counts only from the line without its asks (ASK_RE)."""
+    moves = classify(text)
+    if "declare" in moves and ASK_RE.search(text) and "declare" not in classify(
+            ASK_RE.sub(" ", text)):
+        moves -= {"declare"}
+    return moves
 
 
 def rival_text(rival: str, forms: tuple[str, str, str]) -> str:

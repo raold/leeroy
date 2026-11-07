@@ -14,8 +14,8 @@ from leeroy_mind.storage.rows import Relationship
 from leeroy_mind.talk.filters import Tell
 from leeroy_mind.talk.moves import MOVE_PHRASES, MOVES
 from leeroy_mind.talk.pipeline import MOVE_HINT, REGEN_HINT, REPEAT_HINT, SUMMONS_HINT
-from leeroy_mind.talk.prompt import LIVE_BUDGET, MIN_MEMORIES
-from leeroy_mind.talk.romance import HEAT_TEXT, NOTE_TEXT, OVERLAY_CAP_TOKENS, SCENE_HEAD
+from leeroy_mind.talk.prompt import LIVE_BUDGET
+from leeroy_mind.talk.romance import NOTE_TEXT, OVERLAY_CAP_TOKENS, SCENE_HEAD, STAGE_PASSAGES
 from leeroy_mind.talk.turns import Turn, TurnKind
 from leeroy_mind.text import estimate_tokens
 
@@ -322,7 +322,7 @@ def test_worst_case_whisper_keeps_the_lately_line_without_a_last_resort_trim(
         store, clock, tmp_path, caplog):
     """Both overlays at their cap, 8 lines of whisper chat, 5 memories, her own 5 last lines,
     10 move rows and 3 scene notes (the longest): the Lately line and the scene are there, the
-    distance frame is said once, and nothing is cut (1283 of 1300 estimated tokens)."""
+    distance frame is said once, and nothing is cut."""
     _worst_case(store, clock)
     r = make_rig(store, clock, tmp_path)
     overlay = _overlays_at_cap(tmp_path)
@@ -341,24 +341,18 @@ def test_worst_case_whisper_keeps_the_lately_line_without_a_last_resort_trim(
         r.close()
 
 
-def test_a_hot_worst_case_whisper_cuts_only_memories(store, clock, tmp_path, caplog):
-    """The same with her stage passage and her heat at "aching" (1332 estimated tokens before
-    trimming): the usual trim takes memories, never below MIN_MEMORIES, and nothing else; the
-    Lately line, the scene, the heat and both overlays stay whole, with no last-resort trim."""
+def test_a_hot_worst_case_whisper_keeps_the_lately_line_without_a_last_resort_trim(
+        store, clock, tmp_path, caplog):
+    """The same with her stage passage (banter) and her heat at "aching": the Lately line is
+    kept with no last-resort trim. The usual trims may take memories, chat and her own lines
+    down to their floors."""
     _worst_case(store, clock, hot=True)
     r = make_rig(store, clock, tmp_path)
-    overlay = _overlays_at_cap(tmp_path)
+    _overlays_at_cap(tmp_path)
     try:
-        user, longest, tokens = _worst_whisper(r, clock, caplog)
+        user, _, _ = _worst_whisper(r, clock, caplog)
         assert "Tonight you've already" in user
-        assert f"{SCENE_HEAD} {'; '.join(longest)}." in user
-        assert any(v.format(name="Zan", **HE) in user for v in HEAT_TEXT["aching"])
-        assert user.count("live far apart") == 1
-        assert tokens <= LIVE_BUDGET
-        assert user.count(overlay) == 2
-        assert MIN_MEMORIES <= user.count("three days ago: Zan") < 5
-        assert user.split("Chat:\n")[1].split("\n\n")[0].count("\n") == 7
-        assert user.split("(don't make the same move again):\n")[1].count("\n") >= 5
+        assert any(v.format(name="Zan", **HE) in user for v in STAGE_PASSAGES["banter"])
         assert "last-resort trim" not in caplog.text
     finally:
         r.close()

@@ -4,6 +4,7 @@ a stage passage and an overlay variant picked per turn, her heat, the distance f
 whisper rule: a whisper's note is shown only in a whisper between the same two. The test cast
 and invented lines only."""
 import asyncio
+import dataclasses
 import logging
 
 import pytest
@@ -13,8 +14,8 @@ from engine_rig import HUMAN_NAME, OVERLAY, engine_clock, make_rig, save_member
 from leeroy_mind.llm.scheduler import Priority
 from leeroy_mind.protocol import Chat
 from leeroy_mind.storage.rows import Relationship
-from leeroy_mind.talk.romance import (ATTITUDE_TEXT, HEAT_TEXT, NOTE_TEXT, SCENE_HEAD,
-                                      STAGE_PASSAGES)
+from leeroy_mind.talk.romance import (ATTITUDE_TEXT, FULL_DIAL, HEAT_TEXT, NOTE_TEXT,
+                                      SCENE_HEAD, STAGE_PASSAGES)
 from leeroy_mind.talk.turns import Turn, TurnKind
 
 HE = dict(name="Zan", they="he", them="him", their="his")
@@ -194,6 +195,33 @@ def test_his_guild_line_is_noted_on_her_guild_reply(rig):
     assert (102, HUMAN, "his_compliment", "he complimented you", "guild", 0) in _notes(rig.store)
 
 
+@pytest.mark.parametrize("his", ["anyone up for heroics?", "arkon you look great"])
+def test_his_public_line_to_someone_else_is_no_note_on_her(rig, his):
+    """A line to the guild or to Arkon was not to her: her reply notes only her own move."""
+    line = _his_line_unanswered(rig, his)
+    rig.script("bet you can't keep up")
+    assert rig.speak_turn(Turn(kind=TurnKind.REPLY_HUMAN, speaker=102, channel="guild",
+                               addressee=HUMAN, trigger_line=line))
+    assert _notes(rig.store) == [(102, HUMAN, "her_tease", "you teased him", "guild", 0)]
+
+
+def test_his_public_line_to_her_reaches_her_next_whisper(rig):
+    line = _his_line_unanswered(rig, "belra you look great")
+    rig.script("bet you can't keep up", "fair enough")
+    assert rig.speak_turn(Turn(kind=TurnKind.REPLY_HUMAN, speaker=102, channel="guild",
+                               addressee=HUMAN, trigger_line=line))
+    rig.whisper_from_him(102, "anyway")
+    rig.run()
+    assert f"{SCENE_HEAD} he complimented you; you teased him." in rig.last_user()
+
+
+def test_his_ask_in_a_whisper_is_no_declaration_note(rig):
+    rig.script("bet you can't keep up")
+    rig.whisper_from_him(102, "i need you to heal me tonight")
+    rig.run()
+    assert [n[2] for n in _notes(rig.store)] == ["her_tease"]
+
+
 def test_only_her_turns_to_him_leave_notes(rig):
     """A turn to another member, a man's whisper to him and a template leave none."""
     rig.script("bet you can't keep up")
@@ -231,19 +259,31 @@ def test_every_note_kind_fits_the_column_once_filled():
     assert all(len(t.format(**HE)) <= 80 for t in NOTE_TEXT.values())
 
 
+def _preview_user(rig, p, seed: int) -> str:
+    """Her guild reply to him through the console's preview: its prompt's user message."""
+    turn = Turn(kind=TurnKind.REPLY_HUMAN, speaker=102, channel="guild", addressee=HUMAN,
+                priority=Priority.BACKGROUND, deadline=rig.clock.now() + 15.0)
+    rig.script("fair enough")
+    assert rig.sync(rig.engine.preview_line(turn, p, trigger="hey you", seed=seed)) == (
+        "fair enough", None)
+    return rig.last_user()
+
+
 def test_a_preview_picks_the_same_variants_before_and_after(lust_rig):
-    """The console's dial preview composes twice with one seed: the variants (stage passage,
-    heat, overlays) match, so only the dial differs."""
+    """The console's dial preview composes before and after with one seed. Her own dial at
+    FULL_DIAL makes every turn to him carry her romance, so the share is rolled only before:
+    where the roll carried it, the variants (stage passage, heat) still match, and only the
+    dial differs."""
     _rel(lust_rig.store, stage="whispers", attraction=95.0)
     p = lust_rig.engine.personas.get(102)
-    users = []
-    for _ in range(4):
-        turn = Turn(kind=TurnKind.REPLY_HUMAN, speaker=102, channel="whisper", to_guid=HUMAN,
-                    addressee=HUMAN, priority=Priority.BACKGROUND,
-                    deadline=lust_rig.clock.now() + 15.0)
-        lust_rig.script("fair enough")
-        assert lust_rig.sync(lust_rig.engine.preview_line(turn, p, trigger="hey you",
-                                                          seed=7)) == ("fair enough", None)
-        users.append(lust_rig.last_user())
-    assert len(set(users)) == 1
-    assert any(v in users[0] for v in _filled(STAGE_PASSAGES["whispers"]))
+    full = dataclasses.replace(p, romance=dataclasses.replace(p.romance, dial=FULL_DIAL))
+    picks = [*_filled(STAGE_PASSAGES["whispers"]), *_filled(HEAT_TEXT["aching"])]
+    compared = 0
+    for seed in range(1, 9):
+        before, after = _preview_user(lust_rig, p, seed), _preview_user(lust_rig, full, seed)
+        after_picks = [v for v in picks if v in after]
+        assert len(after_picks) == 2  # one passage, one heat line
+        if any(v in before for v in _filled(ATTITUDE_TEXT["lust"].values())):  # rolled in
+            assert [v for v in picks if v in before] == after_picks, seed
+            compared += 1
+    assert compared >= 2

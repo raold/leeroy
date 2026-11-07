@@ -64,7 +64,7 @@ from leeroy_mind.talk.prompt import (PromptParts, chat_line_text, comms_rules, f
 from leeroy_mind.talk.questions import game_question
 from leeroy_mind.talk.raid import RaidState
 from leeroy_mind.talk.romance import (FULL_DIAL, NO_BRAKES_DIAL, dial_for, explicit_whisper,
-                                      flirt_chance, forward, own_dial,
+                                      flirt_chance, forward, his_moves, own_dial,
                                       romance_instruction, scene_notes, whisper_tail)
 from leeroy_mind.talk.select import (OPEN_THREAD_S, SpeakerContext, has_reason, is_quest_talk,
                                      mentioned, quest_helper, speaker_weight, typing_delay)
@@ -751,15 +751,17 @@ class Pipeline:
 
     def _romance(self, turn: Turn, meta: TurnMeta, p: Persona, rel_h, phase: DayPhase,
                  now: float, rng: random.Random, trigger: str = "",
-                 dial: int | None = None, tail_follows: bool = False) -> str | None:
+                 dial: int | None = None, tail_follows: bool = False,
+                 vary: random.Random | None = None) -> str | None:
         """Her romance text on this turn, or None: only on turns to the human; every FLIRT,
         WHISPER, loot cheer, reply on the whisper channel to him and reply to a flirty line of
         his (`trigger`); otherwise on a share of turns (ROMANCE_SHARE; a drawn woman's
         DRAWN_TALKED_TO_SHARE when he talks to her, from NO_BRAKES_DIAL), halved within
         ROMANCE_COOL_S of a line of hers that carried it. The dial is hers when he has set one
-        for her (romance.dial_for); at her own FULL_DIAL it is every turn to him. `rng` picks
-        the variants (stage passage, heat, band overlay); `tail_follows`: the whisper tail says
-        the distance frame. Her scene notes about him go in as the turn may see them
+        for her (romance.dial_for); at her own FULL_DIAL it is every turn to him. `rng` rolls
+        the share and `vary` (`rng` without it) picks the variants (stage passage, heat, band
+        overlay); `tail_follows`: the whisper tail says the distance frame. Her scene notes
+        about him go in as the turn may see them
         (PairNotes.recent: a whisper's only in a whisper between the two); the romance text
         shows them only in a whisper."""
         hg = self.human.guid
@@ -790,8 +792,8 @@ class Pipeline:
                                   now=now)
         return romance_instruction(p, rel_h, dial=dial, channel=turn.channel,
                                    addressee_is_human=True, phase=phase, human=self.human,
-                                   data_dir=self.data_dir, rng=rng, tail_follows=tail_follows,
-                                   scene=scene)
+                                   data_dir=self.data_dir, rng=vary or rng,
+                                   tail_follows=tail_follows, scene=scene)
 
     async def _compose(self, turn: Turn, meta: TurnMeta, *, live: bool,
                        persona: Persona | None = None, window: list | None = None,
@@ -812,10 +814,11 @@ class Pipeline:
         The console's tuning preview (preview_line) composes with `persona` (a candidate
         effective persona), `window` (the chat it shows: a line of his given as text, never a
         stored one), `trigger_text` (that line) and `dial` (a candidate romance dial): no
-        memories are recalled, and his real name is never offered. Its romance draws (the
-        share, the variants of the passage, heat and overlays) come from generators seeded by
-        the preview's seed, new for each composition, so before and after pick alike and
-        differ by the dial."""
+        memories are recalled, and his real name is never offered. Its romance draws come from
+        generators seeded by the preview's seed, new for each composition and one each for the
+        share's roll, the variants (passage, heat, band overlay) and his whisper overlay, so
+        before and after pick alike and differ by the dial, even one that decides whether the
+        share is rolled at all."""
         preview = window is not None
         p = persona if persona is not None else self.personas.get(turn.speaker)
         if p is None:
@@ -914,15 +917,16 @@ class Pipeline:
             ends.append(FEELINGS.format(them=them))
         if greet and any(r.from_guid not in (hg, turn.speaker) for r in recent):
             ends.append(TALK_TO.format(name=human.called))
-        def picks() -> random.Random:  # the romance's draws (a preview's: its seed's)
-            return random.Random(meta.seed) if preview and meta.seed is not None else rng
+        def draws(what: str) -> random.Random:  # the romance's draws (a preview's: its seed's)
+            return (random.Random(f"{meta.seed}:{what}") if preview and meta.seed is not None
+                    else rng)
         # at the explicit band in a whisper to him: the owner's overlay, read last, then the
         # distance frame, which her romance text then leaves out, so it is said once
         tail_text = (whisper_tail(p, rel_h, dial=dial, channel=turn.channel,
-                                  data_dir=self.data_dir, forms=human.forms, rng=picks())
+                                  data_dir=self.data_dir, forms=human.forms, rng=draws("tail"))
                      if hg and turn.to_guid == hg else "")
-        romance = self._romance(turn, meta, p, rel_h, phase, now, picks(), trigger, dial,
-                                tail_follows=bool(tail_text))
+        romance = self._romance(turn, meta, p, rel_h, phase, now, draws("roll"), trigger, dial,
+                                tail_follows=bool(tail_text), vary=draws("vary"))
         tail = tail_text if romance else ""
         two = False
         if romance:  # a line or two, unless the turn holds one (her answer to his pushback)
@@ -1840,11 +1844,12 @@ class Pipeline:
                       now: float) -> None:
         """A said line's scene notes about him (romance.scene_notes, PairNotes), for a woman with
         an attitude toward him on a turn to him that is her own (not a template): the moves in
-        her line, and on the turn's first line his in the line it answers, when that line is his
-        and this turn may see it (whisper_ok). Each is filled with his pronouns, so the stored
-        note is what a prompt shows, and kept under the turn's channel, so the whisper rule
-        applies on reading. A failing write is logged, never with the words, and never
-        raised."""
+        her line, and on the turn's first line his in the line it answers (romance.his_moves),
+        when that line is his, was to her (his whisper to her, or a public line that speaks to
+        her by name: filters.line_addressee) and this turn may see it (whisper_ok). Each is
+        filled with his pronouns, so the stored note is what a prompt shows, and kept under the
+        turn's channel, so the whisper rule applies on reading. A failing write is logged,
+        never with the words, and never raised."""
         hg = self.human.guid
         if (not hg or turn.template is not None or self._counterpart(turn) != hg
                 or p.identity.player_gender != "female"
@@ -1854,8 +1859,12 @@ class Pipeline:
             his: frozenset[str] = frozenset()
             if meta.said == 1 and turn.trigger_line:
                 rows = self.store.chat_lines([turn.trigger_line])
-                if rows and rows[0].from_guid == hg and self._may_carry(turn, rows[0]):
-                    his = classify(rows[0].text)
+                row = rows[0] if rows else None
+                if (row is not None and row.from_guid == hg and self._may_carry(turn, row)
+                        and (row.to_guid == p.guid if row.channel == "whisper" else
+                             line_addressee(row.text, (p.character_name, *aliases(p)))
+                             is not None)):
+                    his = his_moves(row.text)
             they, them, their = self.human.forms
             for kind, note in scene_notes(classify(words), his):
                 self.notes.add(p.guid, hg, kind, note.format(they=they, them=them, their=their),
