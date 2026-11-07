@@ -19,12 +19,20 @@ cd selfie
 uv venv --python 3.12 .venv
 uv pip install --python .venv/Scripts/python.exe -e ".[gpu,test]" \
   --extra-index-url https://download.pytorch.org/whl/cu128
-.venv/Scripts/python -m leeroy_selfie fetch-models      # --only realvisxl,nsfw
+.venv/Scripts/python -m leeroy_selfie fetch-models      # --only realvisxl,nsfw,ipadapter
 .venv/Scripts/python -m leeroy_selfie doctor            # --quick: no torch import, no hashing
 .venv/Scripts/python -m leeroy_selfie where
 .venv/Scripts/python -m leeroy_selfie smoke --out DIR   # one invented person; needs the GPU
+.venv/Scripts/python -m leeroy_selfie smoke --out DIR --identity --ref FILE  # the same, with a face
 .venv/Scripts/python -m pytest -q                       # no model, GPU or network
 ```
+
+`fetch-models` with no `--only` also fetches `ipadapter` (IP-Adapter Plus Face for SDXL and its
+ViT-H image encoder, about 3.4 GB); only an `--identity` worker needs it, so `doctor` notes it
+as not fetched without failing. `smoke --identity --ref FILE` renders the same invented person
+as an 832 x 1216 portrait conditioned on the whole of FILE (a JPEG) at scale 0.6, and prints
+the same fields, `peak_gib` among them: the release measures the identity worker's VRAM with
+it before trusting the mind's `identity_min_free_gib`.
 
 `LEEROY_SELFIE_DATA` overrides the data directory (default `selfie-data` beside the repo, never
 committed); models land in `<data>/models/<name>` at the revisions pinned in
@@ -40,9 +48,20 @@ checks the models' download records and revisions without hashing them (`doctor`
 `fetch-models` hash them) and reports `check_ms` and `load_ms`. A VRAM refusal says `retry:
 true` and keeps the pipeline loaded on the CPU: the mind makes room and sends `{"id": "ready",
 "op": "retry"}`, and the worker checks the free VRAM again (waiting up to 10 s for an unload to
-free it) without loading anything twice. The end of stdin ends it at once, mid-render too. The mind's `[selfies]` table in `mind.toml` turns
+free it) without loading anything twice. The end of stdin ends it at once, mid-render too.
+`worker --identity` also loads the adapter (a missing adapter file refuses ready with `model`)
+and says `identity: true` in its ready line; it then renders only requests that carry an
+`identity` reference (a square crop of a JPEG and a scale; the embeds of the last 8 references,
+each a file version and crop, are kept), and a worker without it answers `identity_unavailable`
+to one.
+`shape: "portrait"` renders 832 x 1216, its thumbnail keeping the aspect. Either worker
+answers a `grid` request (1-16 JPEG tiles) by compositing the guild photo with Pillow, no GPU:
+each tile resized to `tile`, set on a dark `#0e141a` ground with `gutter` pixels around and
+between, 2 x 2 up to 4 x 4; a tile that is missing or not a JPEG answers `missing_tile` and
+writes nothing. The mind's `[selfies]` table in `mind.toml` turns
 rendering on (off by default) and sets the classifier limit, steps, guidance, size and the
 VRAM floor; the mind's stages, GPU rules and file layout are in `../CLAUDE.md`.
 
 Licences: this package is GPL-3.0-or-later (see `LICENSE`); RealVisXL is openrail++, the
-classifier Apache-2.0, diffusers Apache-2.0. Pins and sources are in `../references.bib`.
+classifier Apache-2.0, diffusers Apache-2.0, IP-Adapter Apache-2.0 (its image encoder, OpenCLIP
+ViT-H/14, MIT). Pins and sources are in `../references.bib`.

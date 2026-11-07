@@ -50,7 +50,14 @@ MODEL_PINS: dict[str, ModelPin] = {
         "nsfw", "Falconsai NSFW image classifier (ViT)", "Apache-2.0",
         "Falconsai/nsfw_image_detection", "96cb0d0342c7afb80cab76ecc58b265fa44da256",
         ("config.json", "model.safetensors", "preprocessor_config.json")),
+    "ipadapter": ModelPin(
+        "ipadapter", "IP-Adapter Plus Face (SDXL) with its ViT-H image encoder", "Apache-2.0",
+        "h94/IP-Adapter", "018e402774aeeddd60609b4ecdb7e298259dc729",
+        ("models/image_encoder/config.json", "models/image_encoder/model.safetensors",
+         "sdxl_models/ip-adapter-plus-face_sdxl_vit-h.safetensors")),
 }
+BASE_PINS = ("realvisxl", "nsfw")  # what every worker needs
+IDENTITY_PINS = ("ipadapter",)  # what only an --identity worker needs
 
 
 def model_dir(data_dir: Path, name: str) -> Path:
