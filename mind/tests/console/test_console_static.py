@@ -220,3 +220,11 @@ def test_the_state_chips_have_their_colours():
     css = (STATIC / "console.css").read_text("utf-8")
     for state in ("ok", "warn", "bad"):
         assert re.search(r"\.chip\.%s\s*\{\s*--c:\s*var\(--%s\);\s*\}" % (state, state), css), state
+
+
+def test_the_page_has_an_inline_svg_favicon():
+    # a data: URI, so no route serves it and the CSP's img-src (blob: data:) already admits it
+    page = (Path(console_app.__file__).parent / "page.html").read_text(encoding="utf-8")
+    links = re.findall(r'<link rel="icon" type="image/svg\+xml" href="data:image/svg\+xml,([^"]+)">', page)
+    assert len(links) == 1 and "%3Csvg" in links[0] and "%3C/svg%3E" in links[0]
+    assert "data:" in console_app.CSP.split("img-src", 1)[1].split(";", 1)[0]
