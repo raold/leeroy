@@ -508,14 +508,16 @@ class ConsoleApp:
             del self._waiting[next(iter(self._waiting))]
         return [i for i in dict.fromkeys(gone) if i not in out]
 
-    def _discord_read(self, last: int, since: float, channels: list[str]):
+    def _discord_read(self, last: int | None, since: float, channels: list[str]):
         """Worker thread. (the newest message id, the channels that moved, the loaded windows as
         they are now) from one read snapshot: channels with a message past `last`, channels of
         what changed_since hints at, and each loaded window re-read for the caller to compare."""
         def question(conn):
             if not set(discordview.DISCORD_TABLES) <= views.tables(conn):
-                return last, set(), {}
+                return (0 if last is None else last), set(), {}
             upto = discord_store.last_id(conn)
+            if last is None:  # the baseline: where the store stands now
+                return upto, set(), {}
             moved = {r[0] for r in conn.execute(
                 "SELECT DISTINCT channel FROM discord_message WHERE id > ? AND id <= ?",
                 (last, upto))}
@@ -533,10 +535,16 @@ class ConsoleApp:
         """Where the Discord pass starts: the newest message now, so only later ones are news."""
         try:
             self._discord_ts = self._clock()
-            self._discord_last, _, _ = await asyncio.to_thread(self._discord_read, 1 << 62,
+            self._discord_last, _, _ = await asyncio.to_thread(self._discord_read, None,
                                                                1e18, [])
         except Exception:
-            self._discord_last = 0
+            # a transient failure must not announce the whole history: start from where the
+            # store stands if that can be read, else from 0
+            try:
+                self._discord_last = await asyncio.to_thread(
+                    feed.read, self.s.data_dir / "mind.db", discord_store.last_id)
+            except Exception:
+                self._discord_last = 0
 
     async def _discord_pass(self) -> None:
         if self._discord_last is None:
@@ -1414,7 +1422,8 @@ class ConsoleApp:
             log.warning("console_discord_unread: error=%s", type(e).__name__)
             return json_response(503, {"ok": False, "error": f"mind.db could not be read "
                                                              f"({type(e).__name__})"})
-        if fp is not None:  # the page has this window: the feed pass tells it when it changes
+        if fp is not None:  # the fingerprint is always of the latest-100 window, whatever
+            # `after` or `thread` asked for; the page has this window: the feed pass tells it when it changes
             self._discord_windows.pop(channel, None)
             self._discord_windows[channel] = fp
             while len(self._discord_windows) > DISCORD_WINDOWS:

@@ -362,3 +362,28 @@ def test_typing_is_asked_for_while_a_discord_page_listens_even_out_of_game(data,
     typing = asyncio.run(go())
     assert [e["channel"] for e in typing] == ["discord:general"]
     assert all(t <= 1.0 for t in link.timeouts)
+
+
+def test_tables_that_appear_after_the_baseline_are_announced(data, cast):
+    """A console started against a mind.db without the Discord tables, and a mind that migrates
+    later: the cursor stays at 0, so the first message is news."""
+    schema = [r[0] for r in cast.conn.execute(
+        "SELECT sql FROM sqlite_master WHERE name LIKE 'discord%' AND sql IS NOT NULL "
+        "ORDER BY CASE name WHEN 'discord_thread' THEN 0 WHEN 'discord_message' THEN 1 "
+        "WHEN 'discord_reaction' THEN 2 ELSE 3 END")]
+    for t in ("discord_reaction", "discord_message", "discord_thread"):
+        cast.conn.execute(f"DROP TABLE {t}")
+    cast.conn.commit()
+
+    async def go():
+        async with served(build(data)) as app:
+            seen = collect(app)
+            await settled(app)
+            assert app._discord_last == 0
+            for sql in schema:
+                cast.conn.execute(sql)
+            dstore.post(cast, channel="general", author=101, origin="mind", text="hi", now=NOW)
+            cast.conn.commit()
+            await app._feed_pass()
+            return [d for k, d in seen if k == "discord"]
+    assert asyncio.run(go()) == [{"channels": ["general"]}]
