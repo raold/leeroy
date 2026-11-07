@@ -155,7 +155,7 @@ def test_a_typical_drawn_woman_reaches_planning_in_about_three_weeks_of_play(h):
     first = first_play_day(log, 101, "planning")
     assert first is not None and 16 <= first <= 21
     assert visited(log, 101) == ["notices", "banter", "whispers", "late_nights", "voice",
-                                 "confession", "planning"]
+                                 "picture", "confession", "planning"]  # the snaps table exists
 
 
 def test_a_typical_lust_woman_reaches_planning_in_about_two_weeks(h):
@@ -216,6 +216,8 @@ def test_fond_women_stop_at_whispers_until_drawn(h):
 
 
 def test_the_picture_stage_is_skipped_until_p4(h):
+    with h.store.transaction():  # a database from before P4's migration
+        h.store.conn.execute("DROP TABLE selfie_snap")
     assert not picture_available(h.store)
     arc_woman(h, 101, "drawn", stage="voice")
     h.store.add_rel_delta(101, 1, "romance_stage", 1, "late_nights->voice", [], h.T - 12 * HOUR,

@@ -139,3 +139,53 @@ def mind_app(root: Path, *, toml: str = "", prepare: Callable[[Store], None] | N
     finally:
         s.close()
     return MindApp(load_config(root / "mind.toml"), root, llm=FakeLLM(), clock=FakeClock(CLOCK))
+
+
+LOOKS = "0" * 64  # an invented looks hash
+
+
+def planned_snap(store, guid: int, **over) -> int:
+    """A situational photo planned for `guid` (pick 1, looks LOOKS, all five phases, a window from
+    0 to far ahead); `over` replaces any plan_snap argument. The ref is unique per call."""
+    from leeroy_mind.selfies.snaps import plan_snap
+    n = store.conn.execute("SELECT count(*) FROM selfie_snap").fetchone()[0]
+    args = dict(kind="situation", guid=guid, source="life", ref=f"beat:{n + 1}",
+                night="2026-10-29", scene={"shows": "an invented scene"}, audience="anyone",
+                phases=("morning", "day", "evening", "late", "dead"), not_before=0.0,
+                expires=1e12, now=1.0, pick=1, looks=LOOKS)
+    args.update(over)
+    sid = plan_snap(store, **args)
+    assert sid is not None
+    return sid
+
+
+def ready_snap(store, data_dir, guid: int, **over) -> int:
+    """planned_snap, then rendered, with its photo and thumbnail files (two JPEGs)."""
+    from leeroy_mind.selfies.snaps import mark_rendered
+    sid = planned_snap(store, guid, **over)
+    guild = over.get("kind") == "guild"
+    mark_rendered(store, sid, width=832, height=1216, seed=7, tries=1, nsfw=0.01,
+                  prompt="an invented prompt", now=2.0)
+    for thumb in (False, True):
+        path = (files.guild_photo(data_dir, sid, thumb=thumb) if guild
+                else files.snap(data_dir, guid, sid, thumb=thumb))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(JPEG)
+    return sid
+
+
+def sent_snap(store, data_dir, guid: int, *, line_id: int | None = None, **over) -> int:
+    """ready_snap, then sent by `guid` in a whisper."""
+    from leeroy_mind.selfies.snaps import mark_sent
+    sid = ready_snap(store, data_dir, guid, **over)
+    assert mark_sent(store, sid, sender=guid, channel="whisper",
+                     line_id=line_id if line_id is not None else 1000 + sid, now=3.0)
+    return sid
+
+
+def expired_snap(store, data_dir, guid: int, ended: str = "passed", **over) -> int:
+    """ready_snap, then expired for `ended`."""
+    from leeroy_mind.selfies.snaps import expire
+    sid = ready_snap(store, data_dir, guid, **over)
+    expire(store, sid, ended, now=4.0)
+    return sid
