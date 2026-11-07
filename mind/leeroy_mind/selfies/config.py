@@ -23,6 +23,9 @@ class SelfieCfg:
     guidance: float = 5.0  # the CFG scale (the protocol's cfg)
     size: int = 1024
     min_free_gib: float = 11.5  # the worker refuses to load with less VRAM free
+    snaps: bool = False  # situational photos and the guild photo (the identity worker)
+    identity_scale: float = 0.6  # how strongly the adapter holds the reference face
+    identity_min_free_gib: float = 13.5  # the identity worker loads the adapter too
 
 
 def _bool(v) -> bool:
@@ -52,8 +55,11 @@ _RULES = {
     "guidance": (_num(1, 12), "a number 1-12"),
     "size": (lambda v: type(v) is int and v in SIZES, "768, 896 or 1024"),
     "min_free_gib": (_num(4, 23), "a number 4-23"),
+    "snaps": (_bool, "true or false"),
+    "identity_scale": (_num(0.3, 0.9), "a number 0.3-0.9"),
+    "identity_min_free_gib": (_num(4, 23), "a number 4-23"),
 }
-_FLOATS = {"nsfw_max", "guidance", "min_free_gib"}
+_FLOATS = {"nsfw_max", "guidance", "min_free_gib", "identity_scale", "identity_min_free_gib"}
 _PATHS = {"python", "data"}
 
 
@@ -100,10 +106,13 @@ def worker_data(cfg: SelfieCfg) -> Path:
     return Path(env) if env else CHECKOUT / "selfie-data"
 
 
-def worker_command(cfg: SelfieCfg) -> list[str]:
-    """The night worker, isolated (-I: no PYTHON* variables, no user site, no script dir)."""
+def worker_command(cfg: SelfieCfg, *, identity: bool = False) -> list[str]:
+    """The night worker, isolated (-I: no PYTHON* variables, no user site, no script dir). With
+    `identity` it loads the identity adapter too and asks for identity_min_free_gib."""
+    free = cfg.identity_min_free_gib if identity else cfg.min_free_gib
     return [str(worker_python(cfg)), "-I", "-X", "utf8", "-m", "leeroy_selfie", "worker",
-            "--data", str(worker_data(cfg)), "--min-free-gib", f"{cfg.min_free_gib:g}"]
+            *(["--identity"] if identity else []),
+            "--data", str(worker_data(cfg)), "--min-free-gib", f"{free:g}"]
 
 
 def worker_env(cfg: SelfieCfg) -> dict[str, str]:

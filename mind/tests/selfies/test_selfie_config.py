@@ -93,3 +93,26 @@ def test_the_worker_env_is_this_one_offline(tmp_path, monkeypatch):
         "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1", "HF_HUB_DISABLE_TELEMETRY": "1",
         "LEEROY_SELFIE_DATA": str(tmp_path / "sd")}
     assert dict(os.environ) == before  # a copy: the mind's own environment is untouched
+
+
+def test_the_identity_command_starts_the_adapter_with_its_own_headroom(tmp_path):
+    cfg = SelfieCfg(python=tmp_path / "python.exe", data=tmp_path / "sd")
+    cmd = worker_command(cfg, identity=True)
+    assert cmd[6:8] == ["worker", "--identity"]
+    assert cmd[-2:] == ["--min-free-gib", "13.5"]
+    assert "--identity" not in worker_command(cfg)
+
+
+def test_snaps_are_off_by_default_and_a_bad_scale_names_the_key(tmp_path):
+    cfg = SelfieCfg()
+    assert (cfg.snaps, cfg.identity_scale, cfg.identity_min_free_gib) == (False, 0.6, 13.5)
+    path = tmp_path / "mind.toml"
+    path.write_text("[selfies]\nsnaps = true\nidentity_scale = 0.5\n")
+    got = load_selfie_config(path)
+    assert got.snaps is True and got.identity_scale == 0.5
+    path.write_text("[selfies]\nidentity_scale = 1.5\n")
+    with pytest.raises(ConfigError, match="^selfies.identity_scale:"):
+        load_selfie_config(path)
+    path.write_text("[selfies]\nidentity_min_free_gib = 30\n")
+    with pytest.raises(ConfigError, match="^selfies.identity_min_free_gib:"):
+        load_selfie_config(path)

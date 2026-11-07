@@ -22,13 +22,14 @@ import logging
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Sequence
 
 from leeroy_mind.logs import log
 
 from .job import ProcessTree, WorkerError
 
-__all__ = ["GRACE_S", "MAX_LINE", "RENDER_S", "START_S", "STOP_S", "Ready", "RenderRequest",
-           "Rendered", "SelfieWorker", "WorkerError", "to_the_end"]
+__all__ = ["GRACE_S", "MAX_LINE", "RENDER_S", "START_S", "STOP_S", "Gridded", "Identity", "Ready",
+           "RenderRequest", "Rendered", "SelfieWorker", "WorkerError", "to_the_end"]
 
 START_S = 180.0  # loading the pipeline and the classifier
 RENDER_S = 90.0  # one image (about 5 s on the 4090)
@@ -46,6 +47,16 @@ class Ready:
     device: str
     free_gib: float
     versions: dict
+    identity: bool = False  # the worker holds the identity adapter (worker --identity)
+
+
+@dataclass(frozen=True)
+class Identity:
+    """The reference face of an identity render: `crop` is a square (l, t, r, b) in fractions
+    of the image at `ref`."""
+    ref: Path
+    crop: tuple[float, float, float, float]
+    scale: float
 
 
 @dataclass(frozen=True)
@@ -60,6 +71,8 @@ class RenderRequest:
     thumb: Path
     thumb_size: int
     nsfw_max: float
+    identity: Identity | None = None  # an identity worker needs it, a plain one refuses it
+    shape: str = "square"  # or "portrait" (832 x 1216, needs size 1024)
 
 
 @dataclass(frozen=True)
@@ -70,6 +83,15 @@ class Rendered:
     tokens: int
     seconds: float
     peak_gib: float
+    width: int
+    height: int
+
+
+@dataclass(frozen=True)
+class Gridded:
+    width: int
+    height: int
+    seconds: float
 
 
 class _Malformed(ValueError):
@@ -195,7 +217,8 @@ class SelfieWorker:
         try:
             ready = Ready(_field(answer, "device", str),
                           float(_field(answer, "free_gib", int, float)),
-                          dict(_field(answer, "versions", dict)))
+                          dict(_field(answer, "versions", dict)),
+                          answer.get("identity") is True)
         except _Malformed:
             await self._end_failed(tree)
             raise WorkerError("gone") from None
@@ -210,12 +233,18 @@ class SelfieWorker:
         rid = f"r{self._sequence}" if rid is None else rid
         if type(rid) is not str or not 1 <= len(rid) <= 32:
             raise ValueError("a request id is 1-32 characters")
-        line = json.dumps({
+        body = {
             "id": rid, "op": "render", "phrases": [[t, p] for t, p in req.phrases],
             "negative": [[t, p] for t, p in req.negative], "seed": req.seed,
             "steps": req.steps, "cfg": req.cfg, "size": req.size, "out": str(req.out),
             "thumb": str(req.thumb), "thumb_size": req.thumb_size,
-            "nsfw_max": req.nsfw_max}).encode("utf-8") + b"\n"
+            "nsfw_max": req.nsfw_max}
+        if req.identity is not None:
+            body["identity"] = {"ref": str(req.identity.ref), "crop": list(req.identity.crop),
+                                "scale": req.identity.scale}
+        if req.shape != "square":
+            body["shape"] = req.shape
+        line = json.dumps(body).encode("utf-8") + b"\n"
         if len(line) - 1 > MAX_LINE:
             raise WorkerError("bad_request")  # what the worker would answer; it stays up
         tree = self._tree
@@ -231,7 +260,38 @@ class SelfieWorker:
                             float(_field(answer, "nsfw", int, float)),
                             _field(answer, "prompt", str), _field(answer, "tokens", int),
                             float(_field(answer, "seconds", int, float)),
-                            float(_field(answer, "peak_gib", int, float)))
+                            float(_field(answer, "peak_gib", int, float)),
+                            _field(answer, "width", int), _field(answer, "height", int))
+        except _Malformed:
+            await self._end_failed(tree)
+            raise WorkerError("gone") from None
+
+    async def grid(self, tiles: Sequence[Path], *, tile: int, gutter: int, out: Path,
+                   thumb: Path, thumb_size: int, rid: str | None = None) -> Gridded:
+        """The tiles composed into one image at `out` (and `thumb`). An ok false answer
+        (missing_tile, bad_request, ...) raises WorkerError(<error>) and leaves the worker
+        running."""
+        self._sequence += 1
+        rid = f"r{self._sequence}" if rid is None else rid
+        if type(rid) is not str or not 1 <= len(rid) <= 32:
+            raise ValueError("a request id is 1-32 characters")
+        line = json.dumps({
+            "id": rid, "op": "grid", "tiles": [str(t) for t in tiles], "tile": tile,
+            "gutter": gutter, "out": str(out), "thumb": str(thumb),
+            "thumb_size": thumb_size}).encode("utf-8") + b"\n"
+        if len(line) - 1 > MAX_LINE:
+            raise WorkerError("bad_request")
+        tree = self._tree
+        if not self.running:
+            if tree is not None and tree.process.returncode is not None:
+                await self._end_failed(tree)
+            raise WorkerError("gone")
+        answer = await self._answer(tree, rid, self._render_s, line)
+        if not answer["ok"]:
+            raise WorkerError(_reason(answer))
+        try:
+            return Gridded(_field(answer, "width", int), _field(answer, "height", int),
+                           float(_field(answer, "seconds", int, float)))
         except _Malformed:
             await self._end_failed(tree)
             raise WorkerError("gone") from None
