@@ -29,6 +29,21 @@ def claim_stdout() -> BinaryIO:
     return out
 
 
+def claim_stdin() -> BinaryIO:
+    """The protocol's input: a private copy of fd 0, with fd 0 itself pointed at the null device.
+    On Windows, while the reader waits in a read on the mind's pipe, importing numpy (torch's
+    first import) waits for that read to end whenever the standard input still names the pipe,
+    and only the mind can end it: the worker hung before its ready line. With fd 0 on the null
+    device the reader's copy is the pipe's only handle, and the load goes on."""
+    pipe = os.dup(0)
+    null = os.open(os.devnull, os.O_RDONLY)
+    try:
+        os.dup2(null, 0)
+    finally:
+        os.close(null)
+    return os.fdopen(pipe, "rb")
+
+
 def _log(text: str) -> None:
     print(f"selfie-worker: {text}", file=sys.stderr, flush=True)
 
