@@ -332,9 +332,17 @@
       </article>
     </div>
   </section>
-  <section id="tab-board" class="tab placeholder" role="tabpanel" aria-labelledby="t-board" hidden>
-    <h2>Board</h2>
-    <p>The guild's message board: realm forum posts, the Realm's write-ups and the letters members send you, with your replies. Coming soon.</p>
+  <section id="tab-board" class="tab mindtab" role="tabpanel" aria-labelledby="t-board" hidden>
+    <div id="board-banner" class="banner bad" hidden></div>
+    <div class="view-head"><div><h2>Board</h2><p>The guild's message board: realm forum posts, the Realm's write-ups and the letters members send you.</p></div></div>
+    <div id="board-kpis" class="kpis" aria-label="The board at a glance"></div>
+    <p id="board-note" class="note" hidden></p>
+    <div id="board-empty" hidden></div>
+    <div id="board-panels">
+      <article class="panel"><header><h3>Realm forum</h3></header><div id="board-forum"></div></article>
+      <article class="panel"><header><h3>Letters to you</h3></header><div id="board-letters"></div></article>
+      <article class="panel"><header><h3>Write-ups</h3></header><div id="board-writeups"></div></article>
+    </div>
   </section>
   <section id="tab-calendar" class="tab mindtab" role="tabpanel" aria-labelledby="t-calendar" hidden>
     <div id="calendar-banner" class="banner bad" hidden></div>

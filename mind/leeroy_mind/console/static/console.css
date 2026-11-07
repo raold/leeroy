@@ -409,3 +409,7 @@ td > div.who { color: var(--ink); font-weight: 600; }
 .chip.item.q2 { --c: var(--ok); } .chip.item.q3 { --c: var(--blue); } .chip.item.q4 { --c: var(--violet); } .chip.item.q5 { --c: var(--warn); }
 .chip.ok { --c: var(--ok); }
 #bank-tabs .btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+#tab-board .srow p.text { flex: 1 1 100%; margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+#tab-board .thread h4 { margin: 12px 0 2px; font-size: 13px; color: var(--muted); }
+#tab-board .thread:first-child h4 { margin-top: 0; }
+#tab-board #board-panels { display: grid; gap: 18px; }

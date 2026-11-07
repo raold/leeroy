@@ -63,6 +63,8 @@ run nothing else.
                        `missing`, not an error)
     GET  /api/calendar the Calendar tab: upcoming events with their signups and the raid nights
                        he missed, from mind.db (a missing table is listed in `missing`)
+    GET  /api/board    the Board tab: realm forum threads, delivered letters and write-ups from
+                       mind.db (a missing table is listed in `missing`; `realm_on` from mind.toml)
     GET  /api/bank     the Bank tab: the mind's bank snapshot (control op `bank`, read-only
                        SELECTs made by the mind) with names, item names from library.db and
                        the realm_bank ledger from mind.db; `why` says when there is no snapshot
@@ -99,6 +101,7 @@ from typing import Callable
 
 from .. import endpoint
 from . import (bankview, calendarview, faces, feed, mindlog, netinfo, personaview, raidview, realmview, selfieview, socialview,
+from . import (bankview, boardview, calendarview, faces, feed, mindlog, netinfo, personaview, raidview, selfieview, socialview,
                status, trainview, tuneview)
 from .control import Controls, Refused
 from .httpd import Request, Response, Stream, digits, encode_json, json_response, text
@@ -596,6 +599,7 @@ class ConsoleApp:
                   ("GET", "/api/social"): self._api_social,
                   ("GET", "/api/realm"): self._api_realm,
                   ("GET", "/api/calendar"): self._api_calendar,
+                  ("GET", "/api/board"): self._api_board,
                   ("GET", "/api/bank"): self._api_bank,
                   ("GET", "/api/training"): self._api_training,
                   ("GET", "/api/personas"): self._api_personas,
@@ -728,6 +732,10 @@ class ConsoleApp:
 
     async def _api_calendar(self, req: Request):
         return await self._db_view("calendar", calendarview.calendar_view, now=self._clock())
+
+    async def _api_board(self, req: Request):
+        return await self._db_view("board", boardview.board_view, now=self._clock(),
+                                   data_dir=self.s.data_dir)
 
     async def _bank_snapshot(self) -> tuple[dict | None, str | None]:
         """(the mind's bank, None) or (None, why): the bank is read through the mind."""

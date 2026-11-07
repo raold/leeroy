@@ -9,6 +9,7 @@ import { renderComposer } from "./comms/composer.mjs";
 import "./raid.mjs";
 import "./guild.mjs";
 import "./social.mjs";
+import "./board.mjs";
 import "./calendar.mjs";
 import "./realm.mjs";
 import "./bank.mjs";
