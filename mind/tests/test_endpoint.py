@@ -722,3 +722,140 @@ def test_an_unexpected_failure_answers_with_its_class_only(tmp_path, caplog):
     with caplog.at_level(logging.INFO, logger="leeroy_mind"):
         run(go())
     assert "control_failed: error=RuntimeError" in caplog.text and "private text" not in caplog.text
+
+
+# -- the bank op ---------------------------------------------------------------------------------
+
+BANK = {"money": 1234567, "tabs": [{"tab": 0, "name": "Food", "slots": [[0, 2589, 20]]}],
+        "log": [[1793304000, 4, 1101, 50000]]}
+
+
+class FakeArmory:
+    def __init__(self, *, fail=None, available=True, delay=0.0):
+        self.calls, self.fail, self.available, self.delay = [], fail, available, delay
+
+    def bank(self, guild_id):
+        self.calls.append(guild_id)
+        if self.delay:
+            import time
+            time.sleep(self.delay)
+        if self.fail:
+            raise self.fail
+        return json.loads(json.dumps(BANK))
+
+
+class Clock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+def _bank_app(app, armory, guild_id="21"):
+    app.guild = SimpleNamespace(armory=armory)
+    app.store = SimpleNamespace(get_meta=lambda k: guild_id if k == "guild_id" else None)
+    return armory
+
+
+def test_the_bank_op_takes_no_args():
+    assert parse_request(line(v=1, key=KEY, op="bank"), KEY) == ("bank", None)
+    with pytest.raises(BadRequest, match="bank takes no args"):
+        parse_request(line(v=1, key=KEY, op="bank", args={}), KEY)
+    assert "bank" in endpoint.OPS
+
+
+def test_the_bank_op_answers_a_snapshot(tmp_path):
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            armory = _bank_app(app, FakeArmory())
+            reply = await ask(ep, "bank")
+            assert reply["ok"] is True and reply["guild"] == 21
+            assert {k: reply[k] for k in BANK} == BANK and isinstance(reply["read_at"], float)
+            assert armory.calls == [21]
+    run(go())
+
+
+def test_the_bank_is_read_once_per_thirty_seconds(tmp_path):
+    clock = Clock()
+
+    async def go():
+        async with served(tmp_path, clock=clock) as (app, ep):
+            armory = _bank_app(app, FakeArmory())
+            first = await ask(ep, "bank")
+            clock.now += 10
+            assert await ask(ep, "bank") == first and len(armory.calls) == 1
+            clock.now += 21
+            await ask(ep, "bank")
+            assert len(armory.calls) == 2
+    run(go())
+
+
+def test_two_asks_at_once_share_one_read(tmp_path):
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            armory = _bank_app(app, FakeArmory(delay=0.3))
+            a, b = await asyncio.gather(ask(ep, "bank"), ask(ep, "bank"))
+            assert a["ok"] and a == b and len(armory.calls) == 1
+    run(go())
+
+
+def test_the_banks_words(tmp_path):
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            app.guild = None
+            assert (await ask(ep, "bank"))["error"] == "Guild life is not running in this mind."
+            _bank_app(app, FakeArmory(), guild_id="0")
+            assert (await ask(ep, "bank"))["error"] == (
+                "The mind doesn't know the guild yet (no game hello since it started).")
+            _bank_app(app, FakeArmory(available=False))
+            assert (await ask(ep, "bank"))["error"] == (
+                "The mind can't read the game database (worldserver.conf or mysql.exe not found).")
+            _bank_app(app, FakeArmory(fail=ValueError("slot twice")))
+            assert (await ask(ep, "bank"))["error"] == "The game database didn't answer (ValueError)."
+    run(go())
+
+
+def test_a_slow_database_is_named_and_the_read_goes_on(tmp_path):
+    async def go():
+        async with served(tmp_path, bank_s=0.1) as (app, ep):
+            armory = _bank_app(app, FakeArmory(delay=0.5))
+            reply = await ask(ep, "bank")
+            assert reply == {"ok": False, "error":
+                             "The game database is slow to answer. Try again in a moment."}
+            await asyncio.sleep(0.6)
+            assert (await ask(ep, "bank"))["ok"] is True and len(armory.calls) == 1
+    run(go())
+
+
+def test_a_mysql_failure_names_no_secret(tmp_path, caplog, monkeypatch):
+    from leeroy_mind.guild.config import GuildConfig
+    from leeroy_mind.guild.ports import LazyArmory
+    from leeroy_mind.library.mysql import QueryError
+    from leeroy_mind.personas import roster
+
+    def boom(db, sql, exe):
+        raise QueryError("access denied for hunter2")
+    monkeypatch.setattr(roster, "run_mysql", boom)
+    armory = LazyArmory(GuildConfig(worldserver_conf=Path(__file__)))
+    armory._backend = SimpleNamespace(chars="db")
+
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            _bank_app(app, armory)
+            return await ask(ep, "bank")
+    with caplog.at_level(logging.DEBUG):
+        reply = run(go())
+    assert reply == {"ok": False, "error": "The game database didn't answer (QueryError)."}
+    assert "hunter2" not in json.dumps(reply) + caplog.text
+    assert "op=bank outcome=refused" in caplog.text
+
+
+def test_a_stopping_mind_reads_nothing(tmp_path):
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            armory = _bank_app(app, FakeArmory())
+            app.stopping = True
+            assert (await ask(ep, "bank"))["error"] == "the mind is stopping"
+            assert armory.calls == []
+    run(go())

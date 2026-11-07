@@ -62,6 +62,9 @@ run nothing else.
                        `missing`, not an error)
     GET  /api/calendar the Calendar tab: upcoming events with their signups and the raid nights
                        he missed, from mind.db (a missing table is listed in `missing`)
+    GET  /api/bank     the Bank tab: the mind's bank snapshot (control op `bank`, read-only
+                       SELECTs made by the mind) with names, item names from library.db and
+                       the realm_bank ledger from mind.db; `why` says when there is no snapshot
     GET  /api/selfies/images  ?guid=&set=: a ready set's four thumbnails as data URLs (404
                        unless that set is ready and the member's)
     GET  /api/selfies/member  ?guid=: one member's photo in force, sets and change history
@@ -92,11 +95,11 @@ from pathlib import Path
 from typing import Callable
 
 from .. import endpoint
-from . import (calendarview, faces, feed, mindlog, netinfo, personaview, raidview, selfieview, socialview,
+from . import (bankview, calendarview, faces, feed, mindlog, netinfo, personaview, raidview, selfieview, socialview,
                status, tuneview)
 from .control import Controls, Refused
 from .httpd import Request, Response, Stream, digits, encode_json, json_response, text
-from .mindlink import RAID_S, SAY_S, LinkError
+from .mindlink import BANK_S, RAID_S, SAY_S, LinkError
 from .voicelink import VoiceRelay
 from ..owner_say import BRIDGE_DOWN, NOT_IN_GAME
 from ..voice.rooms import ROOMS
@@ -123,6 +126,7 @@ SAY_OFF = "Replies are off: this console runs with --no-control."
 SAY_OLD_MIND = "The mind needs the update to send replies."
 SAY_NO_LINK = "Nothing was sent: the console has no link to the mind's control endpoint."
 SAY_SLASH = "Slash commands aren't sent from here."  # the box's words (comms/reply.mjs)
+BANK_OLD_MIND = "The running mind predates the Bank tab: restart it after the update."
 OLD_OPS = "bad request: op is one of "  # a mind from before the say op names the ops it has
 
 # The page runs only the console's own files: no inline script or style, nothing from elsewhere
@@ -588,6 +592,7 @@ class ConsoleApp:
                   ("GET", "/api/guild"): self._api_guild,
                   ("GET", "/api/social"): self._api_social,
                   ("GET", "/api/calendar"): self._api_calendar,
+                  ("GET", "/api/bank"): self._api_bank,
                   ("GET", "/api/personas"): self._api_personas,
                   ("GET", "/api/persona"): self._api_persona,
                   ("GET", "/api/face"): self._api_face,
@@ -715,6 +720,32 @@ class ConsoleApp:
 
     async def _api_calendar(self, req: Request):
         return await self._db_view("calendar", calendarview.calendar_view, now=self._clock())
+    async def _bank_snapshot(self) -> tuple[dict | None, str | None]:
+        """(the mind's bank, None) or (None, why): the bank is read through the mind."""
+        if self.view.state != "running":
+            return None, f"The bank is read through the mind, which is {self.view.state}."
+        if self.link is None:
+            return None, "The bank is read through the mind, and the console has no link to its control endpoint."
+        try:
+            reply = await asyncio.to_thread(self.link.call, self._mind_pids(), "bank",
+                                            timeout=BANK_S)
+        except LinkError as e:
+            words = str(e)
+            return None, words[:1].upper() + words[1:] + "."
+        if reply.get("ok") is not True:
+            error = str(reply.get("error") or "")
+            if error.startswith(OLD_OPS):
+                return None, BANK_OLD_MIND
+            return None, error[:300] or "The mind refused it."
+        snapshot = bankview.clean_snapshot(reply)
+        if snapshot is None:
+            return None, "The mind's bank answer could not be read."
+        return snapshot, None
+
+    async def _api_bank(self, req: Request):
+        snapshot, why = await self._bank_snapshot()
+        return await self._db_view("bank", bankview.bank_view, snapshot=snapshot, why=why,
+                                   data_dir=self.s.data_dir)
 
     # -- the personas tab (read-only) ----------------------------------------------------------
 

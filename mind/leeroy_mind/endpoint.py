@@ -37,6 +37,10 @@ line comes back, {"ok": true, ...} or {"ok": false, "error": ...}, and the conne
                     his raid when his group is one, else his party. say_args refuses a line the
                     game would (empty, over 255 bytes, a command), and every refusal comes back
                     as the sentence the console shows
+    bank            the guild bank (leeroy_mind.guild.bankread): money, the six tabs' slots and the
+                    money log, read by four read-only SELECTs through guild life's armory (the
+                    database credentials never leave this process), one read at a time, within
+                    BANK_READ_S, and an answer younger than BANK_CACHE_S given again as it is
 
 Logs carry the op, the action (for say, the channel) and the outcome, never the key, a name, a
 preview's text or a line's."""
@@ -63,9 +67,11 @@ READ_S = 2.0  # the console sends its line at once: a slot is not held longer
 RAID_S = 30.0  # how long one raid action may take before the console is answered anyway
 PREVIEW_S = 40.0  # a preview's two lines, before and after, at background priority
 SAY_S = 10.0  # one line of his, past the bridge's own 5 s ack wait
+BANK_READ_S = 15.0  # the four bank queries, before the console is answered anyway
+BANK_CACHE_S = 30.0  # a bank snapshot younger than this is answered as it is
 MAX_CONNECTIONS = 8
 REPLACE_TRIES = 40  # 2 s of 50 ms tries to move control.json over a file being read
-OPS = ("status", "stop", "raid", "tune", "selfie", "say")
+OPS = ("status", "stop", "raid", "tune", "selfie", "say", "bank")
 RAID_ACTIONS = ("call", "form", "summon", "start", "stop", "end")
 TUNE_ACTIONS = ("status", "set", "undo", "revert", "group", "retire", "preview")
 TUNE_SHAPES = {
@@ -604,7 +610,8 @@ class ControlEndpoint:
     cancels it first, which closes the socket and removes control.json."""
 
     def __init__(self, app, cfg: ControlCfg, *, key: str | None = None,
-                 read_s: float = READ_S, raid_s: float = RAID_S, say_s: float = SAY_S):
+                 read_s: float = READ_S, raid_s: float = RAID_S, say_s: float = SAY_S,
+                 bank_s: float = BANK_READ_S, clock=time.monotonic):
         self.app, self.cfg = app, cfg
         self.key = key or secrets.token_urlsafe(32)
         self.path = Path(app.data_dir) / KEY_FILE
@@ -617,6 +624,9 @@ class ControlEndpoint:
         self._preview = asyncio.Lock()  # one preview at a time
         self._selfie = asyncio.Lock()  # one photo change at a time, until its files are written
         self._say = asyncio.Lock()  # one line of his in flight
+        self.bank_s, self._clock = bank_s, clock
+        self._bank_task: asyncio.Future | None = None  # the read in flight, shared by askers
+        self._bank_cache: tuple[float, dict] | None = None
 
     async def serve(self) -> None:
         from leeroy_mind.console.httpd import listen_socket
@@ -701,6 +711,10 @@ class ControlEndpoint:
             reply = await self.say(args)
             log_event("control_request", op=op, channel=args["channel"],
                       outcome="ok" if reply["ok"] else "refused")
+            return reply, None
+        if op == "bank":
+            reply = await self.bank()
+            log_event("control_request", op=op, outcome="ok" if reply["ok"] else "refused")
             return reply, None
         reply = await {"raid": self.raid, "tune": self.tune, "selfie": self.selfie}[op](args)
         log_event("control_request", op=op, action=args["action"],
@@ -807,6 +821,51 @@ class ControlEndpoint:
             return {"ok": False, "error": "another photo change is still being written"}
         async with self._selfie:
             return await service.handle(args)
+
+    async def bank(self) -> dict:
+        """The guild bank, read through guild life's armory in a worker thread. Askers share
+        the read in flight; one that runs past bank_s is answered, and the read goes on and
+        fills the cache. Errors are words, never the database's text (it can hold a secret)."""
+        guild = getattr(self.app, "guild", None)
+        if self.app.stopping:
+            return {"ok": False, "error": "the mind is stopping"}
+        if guild is None:
+            return {"ok": False, "error": "Guild life is not running in this mind."}
+        cached = self._bank_cache
+        if cached is not None and self._clock() - cached[0] < BANK_CACHE_S:
+            return cached[1]
+        task = self._bank_task
+        if task is None or task.done():
+            try:
+                guild_id = int(self.app.store.get_meta("guild_id") or 0)
+            except (TypeError, ValueError):
+                guild_id = 0
+            if not 0 < guild_id <= 0xFFFFFFFF:
+                return {"ok": False, "error": "The mind doesn't know the guild yet "
+                                              "(no game hello since it started)."}
+            armory = getattr(guild, "armory", None)
+            if armory is None or not getattr(armory, "available", True):
+                return {"ok": False, "error": "The mind can't read the game database "
+                                              "(worldserver.conf or mysql.exe not found)."}
+            task = self._bank_task = asyncio.ensure_future(self._read_bank(armory, guild_id))
+        done, _ = await asyncio.wait({task}, timeout=self.bank_s)
+        if task not in done:
+            return {"ok": False, "error": "The game database is slow to answer. "
+                                          "Try again in a moment."}
+        return task.result()
+
+    async def _read_bank(self, armory, guild_id: int) -> dict:
+        try:
+            bank = await asyncio.to_thread(armory.bank, guild_id)
+        except Exception as e:  # its text can carry credentials or game data: the class only
+            log_event("control_bank_failed", level=logging.WARNING, error=type(e).__name__)
+            if not getattr(armory, "available", True):
+                return {"ok": False, "error": "The mind can't read the game database "
+                                              "(worldserver.conf or mysql.exe not found)."}
+            return {"ok": False, "error": f"The game database didn't answer ({type(e).__name__})."}
+        reply = {"ok": True, "read_at": round(time.time(), 3), "guild": guild_id, **bank}
+        self._bank_cache = (self._clock(), reply)
+        return reply
 
     async def say(self, args: dict) -> dict:
         """His line (leeroy_mind.owner_say): one at a time, answered within say_s. Never

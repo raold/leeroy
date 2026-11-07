@@ -343,9 +343,20 @@
     <article class="panel"><header><h3>Coming up</h3></header><div id="calendar-upcoming"></div></article>
     <article id="calendar-missed" class="panel"><header><h3>Raid nights you missed</h3></header><div id="calendar-missed-list"></div></article>
   </section>
-  <section id="tab-bank" class="tab placeholder" role="tabpanel" aria-labelledby="t-bank" hidden>
-    <h2>Bank</h2>
-    <p>The guild bank as in game: all six tabs, the gold, the money log and what officers stocked or withdrew. Coming soon.</p>
+  <section id="tab-bank" class="tab mindtab" role="tabpanel" aria-labelledby="t-bank" hidden>
+    <div id="bank-banner" class="banner bad" hidden></div>
+    <div class="view-head"><div><h2>Bank</h2><p>The guild bank as in game: all six tabs, the gold, the money log and what officers stocked or withdrew.</p></div></div>
+    <p id="bank-why" class="why bad" hidden></p>
+    <div id="bank-kpis" class="kpis" aria-label="The guild bank"></div>
+    <div class="cards wide">
+      <article id="bank-main" class="panel span" hidden>
+        <header><h3>Tabs</h3></header>
+        <div id="bank-tabs" class="acts"></div>
+        <div id="bank-grid" class="bankgrid"></div>
+      </article>
+      <article class="panel"><header><h3>Money log</h3></header><div id="bank-log"></div></article>
+      <article class="panel"><header><h3>What officers stocked or withdrew</h3></header><div id="bank-ledger"></div></article>
+    </div>
   </section>
   <section id="tab-realm" class="tab placeholder" role="tabpanel" aria-labelledby="t-realm" hidden>
     <h2>Realm</h2>
