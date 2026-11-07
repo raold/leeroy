@@ -1,7 +1,7 @@
 From ecbfeb6b8b1013e303fc056e8a2bfcbcede03112 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 23:14:14 -0400
-Subject: [PATCH 6/9] Let other modules pin random bots
+Subject: [PATCH 06/10] Let other modules pin random bots
 
 SetPinnedBots keeps chosen random bots online regardless of bot_count and skips randomize, refresh, teleport and revive-teleport for them. Inert until called.
 ---
