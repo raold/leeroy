@@ -100,6 +100,26 @@ def test_fetch_downloads_the_pinned_files_only_and_checks_them(tmp_path, monkeyp
     assert lines[0][0] is True and said
 
 
+def test_fetch_with_no_names_fetches_every_pin_the_adapter_too(tmp_path, monkeypatch):
+    monkeypatch.setenv("HF_HOME", "unset")  # fetch_models sets it; this restores it after
+    by_repo = {pin.repo: name for name, pin in MODEL_PINS.items()}
+    fetched = []
+
+    def fake(repo, **kw):
+        fetched.append(by_repo[repo])
+        put(tmp_path, by_repo[repo])
+    monkeypatch.setattr(models, "_snapshot_download", fake)
+    fetch_models(tmp_path, None, say=lambda text: None)
+    assert fetched == ["realvisxl", "nsfw", "ipadapter"]
+
+
+def test_the_cli_fetch_without_only_asks_for_every_pin(monkeypatch):
+    asked = []
+    monkeypatch.setattr(models, "fetch_models", lambda data, only: asked.append(only) or [])
+    from leeroy_selfie.__main__ import main
+    assert main(["fetch-models"]) == 0 and asked == [None]  # None: every pin, as above
+
+
 def test_fetch_raises_when_what_arrived_is_wrong(tmp_path, monkeypatch):
     monkeypatch.setattr(models, "_snapshot_download", lambda repo, **kw: None)
     with pytest.raises(ModelError, match="not fetched"):

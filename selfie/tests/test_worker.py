@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -15,15 +16,23 @@ INFO = {"device": "cuda", "free_gib": 13.1, "versions": {"torch": "t", "diffuser
 class Fake:
     info = INFO
 
-    def __init__(self, exc=None):
-        self.exc, self.seen = exc, []
+    def __init__(self, exc=None, identity=False):
+        self.exc, self.seen, self.identity = exc, [], identity
 
     def render(self, req):
         self.seen.append(req.id)
         if self.exc and len(self.seen) == 1:
             raise self.exc
         return {"flagged": False, "nsfw": 0.004, "prompt": "p", "dropped": [],
-                "tokens": 3, "seconds": 0.1, "peak_gib": 1.0}
+                "tokens": 3, "seconds": 0.1, "peak_gib": 1.0, "width": 768, "height": 768}
+
+    def grid(self, req):
+        self.seen.append(req.id)
+        if self.exc and len(self.seen) == 1:
+            raise self.exc
+        if not all(os.path.isfile(t) for t in req.tiles):
+            return {"ok": False, "error": "missing_tile"}
+        return {"ok": True, "width": 256, "height": 256, "seconds": 0.1, "error": ""}
 
 
 def req(tmp_path, rid="r1"):
@@ -87,8 +96,8 @@ def with_identity(tmp_path, rid="r1"):
 
 def run_identity(load, data):
     out = io.BytesIO()
-    serve(load, stdin=io.BytesIO(data), out=out, on_eof=lambda: None, identity=True)
-    return [json.loads(x) for x in out.getvalue().splitlines()]
+    code = serve(load, stdin=io.BytesIO(data), out=out, on_eof=lambda: None, identity=True)
+    return code, [json.loads(x) for x in out.getvalue().splitlines()]
 
 
 def test_a_plain_worker_refuses_an_identity_reference(tmp_path):
@@ -100,30 +109,47 @@ def test_a_plain_worker_refuses_an_identity_reference(tmp_path):
 
 
 def test_an_identity_worker_refuses_a_render_without_one(tmp_path):
-    fake = Fake()
-    lines = run_identity(lambda: fake, req(tmp_path, "a") + with_identity(tmp_path, "b"))
+    fake = Fake(identity=True)
+    _, lines = run_identity(lambda: fake, req(tmp_path, "a") + with_identity(tmp_path, "b"))
     assert lines[1] == {"id": "a", "ok": False, "error": "bad_request"}
     assert lines[2]["ok"] is True and fake.seen == ["b"]
 
 
-def test_ready_says_whether_the_worker_has_the_adapter():
+def test_ready_says_identity_only_for_a_renderer_that_loaded_the_adapter(tmp_path):
     assert run(lambda: Fake(), b"")[1][0]["identity"] is False
-    assert run_identity(lambda: Fake(), b"")[0]["identity"] is True
+    assert run_identity(lambda: Fake(identity=True), b"")[1][0]["identity"] is True
+    # an --identity start whose renderer has no adapter is never ready, so nothing is ignored
+    fake = Fake()
+    code, lines = run_identity(lambda: fake, with_identity(tmp_path, "a"))
+    assert code == 1 and fake.seen == []
+    assert lines == [{"id": "ready", "ok": False, "error": "model"}]
 
 
-def test_a_grid_answers_missing_tile_or_its_compositor_result(tmp_path, monkeypatch):
-    from leeroy_selfie import grid
+def grid_line(tmp_path, name, rid):
+    return json.dumps({"id": rid, "op": "grid", "tiles": [str(tmp_path / name)],
+                       "tile": 256, "gutter": 0, "out": str(tmp_path / "g.jpg"),
+                       "thumb": str(tmp_path / "gt.jpg"), "thumb_size": 128}).encode() + b"\n"
+
+
+def test_a_grid_answers_missing_tile_or_its_compositor_result(tmp_path):
     (tmp_path / "t.jpg").write_bytes(b"jpg")
+    data = grid_line(tmp_path, "nope.jpg", "a") + grid_line(tmp_path, "t.jpg", "b")
+    for identity in (False, True):  # either worker composites
+        fake = Fake(identity=identity)
+        lines = (run_identity if identity else run)(lambda: fake, data)[1]
+        assert fake.seen == ["a", "b"]
+        assert lines[1] == {"id": "a", "ok": False, "error": "missing_tile"}
+        assert lines[2] == {"id": "b", "ok": True, "width": 256, "height": 256, "seconds": 0.1,
+                            "error": ""}
 
-    def line(name, rid):
-        return json.dumps({"id": rid, "op": "grid", "tiles": [str(tmp_path / name)],
-                           "tile": 256, "gutter": 0, "out": str(tmp_path / "g.jpg"),
-                           "thumb": str(tmp_path / "gt.jpg"), "thumb_size": 128}).encode() + b"\n"
-    monkeypatch.setattr(grid, "compose", lambda r: {"width": 256, "height": 256, "seconds": 0.1})
-    _, lines = run(lambda: Fake(), line("nope.jpg", "a") + line("t.jpg", "b"))
-    assert lines[1] == {"id": "a", "ok": False, "error": "missing_tile"}
-    assert lines[2] == {"id": "b", "ok": True, "width": 256, "height": 256, "seconds": 0.1,
-                        "error": ""}
+
+def test_a_grid_exception_answers_its_type_and_the_worker_goes_on(tmp_path):
+    (tmp_path / "t.jpg").write_bytes(b"jpg")
+    fake = Fake(exc=MemoryError("big"))
+    data = grid_line(tmp_path, "t.jpg", "a") + grid_line(tmp_path, "t.jpg", "b")
+    _, lines = run(lambda: fake, data)
+    assert lines[1] == {"id": "a", "ok": False, "error": "MemoryError"}
+    assert lines[2]["ok"] is True and lines[2]["id"] == "b"
 
 
 def test_the_end_of_stdin_calls_on_eof():
@@ -202,18 +228,45 @@ def test_a_renderer_that_prints_cannot_corrupt_the_protocol():
     assert b"noise from a library" in p.stderr and b"raw noise" in p.stderr
 
 
-CHILD = (
+CHILD = (  # argv: mode (fail, quit or plain: a load that ignores identity), then worker flags
     "import sys\n"
     "from leeroy_selfie import render\n"
     "class R:\n"
     "    info = {'device': 'cuda'}\n"
+    "    def __init__(self, identity): self.identity = identity\n"
     "    def render(self, req): return {}\n"
-    "def load(data, *, min_free_gib, device='cuda'):\n"
+    "def load(data, *, min_free_gib, device='cuda', identity=False):\n"
     "    if sys.argv[1] == 'fail': raise render.ReadyError('cuda')\n"
-    "    return R()\n"
+    "    return R(identity and sys.argv[1] != 'plain')\n"
     "render.load = load\n"
     "from leeroy_selfie.__main__ import main\n"
-    "sys.exit(main(['worker', '--min-free-gib', '1', '--data', '.']))\n")
+    "sys.exit(main(['worker', '--min-free-gib', '1', '--data', '.', *sys.argv[2:]]))\n")
+
+
+def first_line_and_exit(mode, *flags):
+    """The child's ready line and exit code, stdin held open (its end would exit 0 at once)."""
+    p = subprocess.Popen([sys.executable, "-c", CHILD, mode, *flags], stdin=subprocess.PIPE,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        line = p.stdout.readline()
+        if b'"ok": true' in line:
+            p.stdin.write(b'{"id": "q", "op": "quit"}\n')
+            p.stdin.flush()
+        return json.loads(line), p.wait(timeout=20)
+    finally:
+        p.kill()
+        p.stdin.close()
+        p.stdout.close()
+        p.stderr.close()
+
+
+def test_worker_identity_loads_the_adapter_and_ready_says_so_only_when_it_did():
+    ready, code = first_line_and_exit("quit", "--identity")
+    assert ready["ok"] is True and ready["identity"] is True and code == 0
+    ready, code = first_line_and_exit("plain", "--identity")  # a load that left it out
+    assert ready == {"id": "ready", "ok": False, "error": "model"} and code == 1
+    ready, code = first_line_and_exit("quit")
+    assert ready["ok"] is True and ready["identity"] is False and code == 0
 
 
 def test_a_normal_exit_with_stdin_still_open_is_clean():

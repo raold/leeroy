@@ -65,10 +65,30 @@ def test_an_identity_render_parses_with_a_square_crop_and_a_portrait_shape(tmp_p
     {"ref": ABS_JPG, "crop": [0, 0, 1], "scale": 0.6},
     {"ref": ABS_JPG, "crop": [0, 0, 1, 1.5], "scale": 0.6},
     {"ref": ABS_JPG, "crop": [0, 0, 1, 1], "scale": 0.2},
-    "abc"])
+    {"ref": ABS_JPG, "crop": [float("nan"), 0, 1, 1], "scale": 0.6},
+    {"ref": ABS_JPG, "crop": [0, 0, float("inf"), 1], "scale": 0.6},
+    {"ref": ABS_JPG, "crop": [False, False, True, True], "scale": 0.6},
+    {"ref": ABS_JPG, "crop": [None, 0, 1, 1], "scale": 0.6},
+    {"ref": ABS_JPG, "crop": None, "scale": 0.6},
+    {"ref": ABS_JPG, "crop": [0, 0, 1, 1], "scale": float("nan")},
+    {"ref": ABS_JPG, "crop": [0, 0, 1, 1], "scale": True},
+    {"ref": None, "crop": [0, 0, 1, 1], "scale": 0.6},
+    "abc", None])
 def test_a_bad_identity_is_a_bad_request(tmp_path, bad):
     with pytest.raises(ValueError):
         parse(request(tmp_path, identity=bad))
+
+
+def test_nan_and_null_in_the_raw_json_are_bad_requests(tmp_path):
+    good = request(tmp_path, identity={"ref": ABS_JPG, "crop": [0, 0, 1, 1], "scale": 0.6})
+    assert parse(good).identity is not None
+    for old, new in ((b"[0, 0, 1, 1]", b"[NaN, 0, 1, 1]"), (b"[0, 0, 1, 1]", b"[0, 0, 1, null]"),
+                     (b'"scale": 0.6', b'"scale": NaN')):
+        assert old in good
+        with pytest.raises(ValueError):
+            parse(good.replace(old, new))
+    with pytest.raises(ValueError):
+        parse(request(tmp_path, shape=None))
 
 
 def test_portrait_needs_size_1024(tmp_path):
