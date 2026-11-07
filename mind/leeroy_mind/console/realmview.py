@@ -79,11 +79,14 @@ def realm_view(conn, *, now: float) -> dict:
                                 "killed_at": p["killed_at"], "source": p["source"]}
                        for g, p in row.items() if g in shown}})
 
-    marker = views.meta_json(conn, "realm:poach:week")
-    poach = {k: marker.get(k) for k in POACH_KEYS} if isinstance(marker, dict) else None
-
     guilds = {r["id"]: r["name"] for r in q("SELECT id, name FROM realm_guild")}
     actors = {r["guid"]: r["name"] for r in q("SELECT guid, name FROM realm_actor")}
+    marker = views.meta_json(conn, "realm:poach:week")
+    poach = None
+    if isinstance(marker, dict):
+        poach = {k: marker.get(k) for k in POACH_KEYS}
+        poach["officer_name"] = actors.get(marker.get("officer"))
+        poach["guild_name"] = guilds.get(marker.get("guild"))
     lines = [{"ts": r["ts"], "guid": r["guid"], "name": actors.get(r["guid"]) or "#%d" % r["guid"],
               "guild": guilds.get(r["guild"], ""), "channel": r["channel"], "text": r["text"]}
              for r in q("SELECT ts, guid, guild, channel, text FROM realm_line "

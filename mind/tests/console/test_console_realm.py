@@ -135,7 +135,8 @@ def test_canon_and_the_weeks_poach(db):
     v = realmview.realm_view(db, now=NOW)
     assert [(c["achievement"], c["name"], c["guid"]) for c in v["canon"]] == [
         (2186, "achievement 2186", 1101), (4576, "Fall of the Lich King", 1100)]
-    assert v["poach"] == {"period": "2026-W45", "guild": 1, "officer": 201, "member": 1101, "ts": 5.0}
+    assert v["poach"] == {"period": "2026-W45", "guild": 1, "officer": 201, "member": 1101, "ts": 5.0,
+                          "officer_name": "Offa", "guild_name": "Rival One"}
     assert SECRET not in json.dumps(v)
 
 

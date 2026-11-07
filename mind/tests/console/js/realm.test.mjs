@@ -21,7 +21,9 @@ test("a standing is a date, a percentage with a bar, or nothing", () => {
 test("the poaching offer, or none", () => {
   const n = g => "N" + g;
   assert.equal(poachText(null, n), "No offer this week.");
-  assert.match(poachText({ officer: 1, member: 2, guild: 3 }, n), /^N1 has offered N2/);
+  assert.match(poachText({ officer: 1, member: 2, guild: 3 }, n), /^N1 has offered N2 a place in guild #3\.$/);
+  assert.equal(poachText({ officer: 1, member: 2, guild: 3, officer_name: "Offa", guild_name: "Rival One" }, n),
+    "Offa has offered N2 a place in Rival One.");
 });
 test("trade lines of the last seven days are counted", () => {
   assert.equal(tradeCount([{ ts: 100 }, { ts: 100 - 8 * 86400 }], 100), 1);

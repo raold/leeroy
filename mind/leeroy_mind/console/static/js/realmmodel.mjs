@@ -30,7 +30,8 @@ export function standing(p, dateText) {
 export function poachText(p, nameOf) {
   p = obj(p);
   if (!p.officer || !p.member) { return "No offer this week."; }
-  return nameOf(p.officer) + " has offered " + nameOf(p.member) + " a place in guild #" + num(p.guild) + ".";
+  var guild = str(p.guild_name) || "guild #" + num(p.guild);
+  return (str(p.officer_name) || nameOf(p.officer)) + " has offered " + nameOf(p.member) + " a place in " + guild + ".";
 }
 
 export function tradeCount(lines, now) {
