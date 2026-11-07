@@ -22,8 +22,9 @@ from leeroy_mind.selfies import kind
 from leeroy_mind.selfies.kind import (AGE_RE, ERA_RE, GYM_OUTFITS, GYM_SETTINGS, KIND_PROMPT,
                                       KIND_PROMPT_LUST, LUST_ASK_AGAIN, LUST_COLOURS,
                                       LUST_EXPRESSIONS, LUST_OUTFITS, LUST_PROMPT, LUST_SCHEMA,
-                                      LUST_SETTINGS, PAIRINGS, STAGE, SWIM_OUTFITS,
-                                      WATER_SETTINGS, chosen_style, compose_lust, looks_line,
+                                      LUST_SETTINGS, PAIRINGS, STAGE, SWIM_ONLY_SETTINGS,
+                                      SWIM_OUTFITS, WATER_SETTINGS, chosen_style, compose_lust,
+                                      looks_line,
                                       needs_rechoice, screen_kind, screen_lust, stage_photo)
 from leeroy_mind.selfies.prompt import build_prompt
 from leeroy_mind.selfies.store import queued_sets
@@ -195,7 +196,8 @@ def test_the_lust_template_takes_the_same_fields_and_asks_only_for_picks():
     text = KIND_PROMPT_LUST.lower()
     for rule in ("pick each part from the choices the answer allows",
                  "swimwear only at the beach, the pool deck, the lakeside dock, the hot tub, the "
-                 "boat or the beach bar", "sports top and leggings only at the gym"):
+                 "boat or the beach bar, framed upper body and never as a headshot",
+                 "the hot tub only in swimwear", "sports top and leggings only at the gym"):
         assert rule in text
     assert OLD_REFUSED.search(KIND_PROMPT_LUST) is None and AGE_RE.search(KIND_PROMPT_LUST) is None
 
@@ -261,8 +263,8 @@ def test_every_choice_composes_a_kind_within_the_line(h):
     p = lust(h)
     lengths = {"setting": 80, "outfit": 80, "expression": 40}
     replies = ([_reply(o, c) for o in LUST_OUTFITS for c in LUST_COLOURS]
-               + [_reply("fitted little dress", setting=s) for s in LUST_SETTINGS
-                  if s not in GYM_SETTINGS]
+               + [_reply("string bikini" if s in SWIM_ONLY_SETTINGS else "fitted little dress",
+                         setting=s) for s in LUST_SETTINGS]
                + [_reply("fitted little dress", expression=e) for e in LUST_EXPRESSIONS])
     for r in replies:
         assert screen_lust(p, r) == [], r
@@ -275,7 +277,7 @@ def test_every_choice_composes_a_kind_within_the_line(h):
             assert field not in lengths or len(text) <= lengths[field], (field, text)
         for phrase, _ in build_prompt(replace(p, photo=made)).phrases:
             assert not OLD_REFUSED.search(phrase) and not AGE_RE.search(phrase), phrase
-    assert len(replies) == len(LUST_OUTFITS) * len(LUST_COLOURS) + len(LUST_SETTINGS) - 1 + \
+    assert len(replies) == len(LUST_OUTFITS) * len(LUST_COLOURS) + len(LUST_SETTINGS) + \
         len(LUST_EXPRESSIONS)
 
 
@@ -285,14 +287,18 @@ def test_the_lists_hold_no_bedroom_bath_or_stage():
                  "club stage", "changing", "locker", "nudist", "naturist"):
         assert not re.search(rf"\b{word}\b", places), word
     assert "corset" not in " ".join(LUST_OUTFITS)
+    assert "satin slip dress" not in LUST_OUTFITS and "satin midi dress" in LUST_OUTFITS
+    assert "cropped cardigan and wide-leg trousers" in LUST_OUTFITS
+    assert "cropped cardigan and a miniskirt" not in LUST_OUTFITS
+    assert set(SWIM_ONLY_SETTINGS) <= set(WATER_SETTINGS)
     assert set(SWIM_OUTFITS) < set(LUST_OUTFITS) and set(GYM_OUTFITS) < set(LUST_OUTFITS)
     assert set(WATER_SETTINGS) < set(LUST_SETTINGS) and set(GYM_SETTINGS) < set(LUST_SETTINGS)
 
 
 def test_the_outfit_takes_its_colour_and_an_article():
     assert compose_lust(LUST_REPLY).outfit == "a fitted little black dress"
-    assert compose_lust({**LUST_REPLY, "outfit": "satin slip dress", "colour": "emerald"}
-                        ).outfit == "an emerald satin slip dress"
+    assert compose_lust({**LUST_REPLY, "outfit": "satin midi dress", "colour": "emerald"}
+                        ).outfit == "an emerald satin midi dress"
     assert compose_lust({**LUST_REPLY, "outfit": "off-the-shoulder top and jeans",
                          "colour": "red"}).outfit == "an off-the-shoulder red top and jeans"
     assert compose_lust(SWIM_REPLY) == ProfilePhoto("snapshot", "upper_body",
@@ -315,9 +321,48 @@ def test_the_gym_outfit_goes_only_with_the_gym(h):
     for outfit in GYM_OUTFITS:
         for setting in LUST_SETTINGS:
             out = screen_lust(p, _reply(outfit, setting=setting))
-            assert out == ([] if setting in GYM_SETTINGS else [PAIRINGS[1]]), (outfit, setting)
-    for setting in WATER_SETTINGS + GYM_SETTINGS:  # dressed outfits go anywhere
-        assert screen_lust(p, _reply("backless summer dress", setting=setting)) == []
+            want = [] if setting in GYM_SETTINGS else [PAIRINGS[1]]
+            if setting in SWIM_ONLY_SETTINGS:
+                want.append(PAIRINGS[2])
+            assert out == want, (outfit, setting)
+    for setting in LUST_SETTINGS:  # dressed outfits go anywhere but the hot tub
+        out = screen_lust(p, _reply("backless summer dress", setting=setting))
+        assert out == ([PAIRINGS[2]] if setting in SWIM_ONLY_SETTINGS else []), setting
+
+
+def test_the_hot_tub_takes_swimwear_only(h):
+    p = lust(h)
+    assert SWIM_ONLY_SETTINGS == ("a hot tub on a wooden deck",)
+    for outfit in LUST_OUTFITS:
+        out = screen_lust(p, _reply(outfit, setting="a hot tub on a wooden deck"))
+        if outfit in SWIM_OUTFITS:
+            assert out == [], outfit
+        elif outfit in GYM_OUTFITS:
+            assert out == [PAIRINGS[1], PAIRINGS[2]], outfit
+        else:
+            assert out == [PAIRINGS[2]], outfit
+
+
+@pytest.mark.parametrize("kind_,framing,problems", [
+    ("selfie", "upper_body", []), ("mirror_selfie", "upper_body", []),
+    ("snapshot", "upper_body", []), ("selfie", "face", [3]),
+    ("snapshot", "head_and_shoulders", [3]), ("headshot", "upper_body", [4]),
+    ("headshot", "face", [3, 4])])
+def test_swimwear_goes_only_framed_upper_body_and_never_as_a_headshot(h, kind_, framing,
+                                                                        problems):
+    p = lust(h)
+    for outfit in SWIM_OUTFITS:
+        out = screen_lust(p, {**_reply(outfit), "kind": kind_, "framing": framing})
+        assert out == [PAIRINGS[i] for i in problems], (outfit, kind_, framing)
+    dressed = {**_reply("bodycon mini dress"), "kind": kind_, "framing": framing}
+    assert screen_lust(p, dressed) == []                # a dressed kind may be any framing
+
+
+def test_a_swimwear_framing_that_fails_is_asked_once_more(h):
+    lust(h, 102)
+    ctx = ctx_for(h, 0, lusty=[{**SWIM_REPLY, "framing": "head_and_shoulders"}, SWIM_REPLY])
+    run(stage_photo(ctx))
+    assert ctx.reasoner.calls == 2 and photo(h, 102) == compose_lust(SWIM_REPLY)
 
 
 def test_a_pairing_that_fails_is_asked_once_more(h, caplog):
@@ -343,7 +388,10 @@ def test_a_pairing_that_fails_twice_is_refused(h):
 AGE_WORDS = ["school", "her old school", "a schoolgirl look", "a school uniform",
              "a student uniform", "teen", "teens", "teenage", "a teenager", "childlike", "child",
              "children", "kid", "kids", "young-looking", "young looking", "barely legal",
-             "lolita", "a little girl", "a cheerleader uniform"]
+             "lolita", "a little girl", "a cheerleader uniform", "teenaged", "a preteen",
+             "pre-teen", "a tween", "youthful", "a young girl", "loli", "underage", "under-age",
+             "an adolescent", "adolescence", "jailbait", "baby-faced", "baby faced",
+             "a cheerleader", "pigtails", "a pigtail", "braces"]
 
 
 @pytest.mark.parametrize("text", AGE_WORDS)
@@ -618,24 +666,37 @@ def test_the_counter_counts_the_rechoices(h):
 
 # -- at render time --------------------------------------------------------------------------
 
-def test_the_render_reads_her_stance_when_it_renders(h, tmp_path):
+def test_the_render_follows_the_kinds_style_and_her_stance_at_render_time(h, tmp_path,
+                                                                         caplog):
     from leeroy_mind.selfies.prompt import LUST_NEGATIVE, NEGATIVE
     from leeroy_mind.selfies.stage import make_stage
-    from leeroy_mind.selfies.store import ensure_first_sets
     from leeroy_mind.selfies.worker import SelfieWorker
     from selfies.fakes import SELFIE_CFG, fake_command
 
-    for g in (102, 103):
-        h.woman(g, "fond", appearance=APPEARANCE)
-        by_hand(h, g, ProfilePhoto(**PLAIN_KIND))
-    ensure_first_sets(h.store, [102, 103], now=h.T)
-    restance(h, 102, "lust")                             # after her set was queued
+    for g in (102, 103, 105):
+        lust(h, g)
+    young = replace(APPEARANCE, face=("a youthful face", "freckles"))
+    _save(h, 105, replace(load_persona(h.store, 105), appearance=young), "generated")
+    lust(h, 104)
+    by_hand(h, 104, ProfilePhoto(**PLAIN_KIND))          # a kind the lust rules did not compose
+    night(h, 0, lusty=[LUST_REPLY] * 3)
+    assert {g: style(h, g) for g in (102, 103, 104, 105)} == {102: LUST, 103: LUST, 104: None,
+                                                              105: LUST}
+    restance(h, 103, "drawn")                            # she left lust before the render
     seen: dict[str, set] = {}
     cmd, env = fake_command(tmp_path)
 
     class Seen(SelfieWorker):
         async def render(self, req, *, rid=None):
-            seen.setdefault(rid.split(":")[0], set()).add(req.negative)
+            seen.setdefault(rid.split(":")[0], set()).add((req.negative, req.phrases))
             return await super().render(req, rid=rid)
-    run(make_stage(SELFIE_CFG, worker=lambda: Seen(cmd, env=env))(h.ctx()))
-    assert seen == {"102": {LUST_NEGATIVE}, "103": {NEGATIVE}}
+    with caplog.at_level(logging.INFO):
+        run(make_stage(SELFIE_CFG, worker=lambda: Seen(cmd, env=env))(h.ctx(night=NIGHTS[1])))
+    negatives = {g: {n for n, _ in v} for g, v in seen.items()}
+    assert negatives == {"102": {LUST_NEGATIVE}, "103": {NEGATIVE}, "104": {NEGATIVE},
+                         "105": {NEGATIVE}}
+    joined = ("wearing a fitted little black dress, the mirror in her hallway", 0)
+    assert all(joined in ph for _, ph in seen["102"])
+    assert not any(joined in ph for g in ("103", "104", "105") for _, ph in seen[g])
+    assert "selfies_prompt_plain: guid=105 reason=age" in caplog.text
+    assert "youthful" not in caplog.text

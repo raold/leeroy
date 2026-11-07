@@ -44,6 +44,7 @@ from leeroy_mind.wow import CAST_MIN_LEVEL
 
 from . import files
 from .config import SelfieCfg, worker_command, worker_env
+from .kind import chosen_style
 from .prompt import PromptSpec, build_prompt, renderable
 from .store import Candidate, ensure_first_sets, mark_ready, needing_first, queued_sets
 from .worker import RenderRequest, SelfieWorker, WorkerError, to_the_end
@@ -244,7 +245,8 @@ async def _render_set(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
     files.clear_stale(data, guid, set_no)
     staging = files.staging_dir(data, guid, set_no)
     staging.mkdir(parents=True)
-    made = await render_candidates(worker, build_prompt(p), staging, night=ctx.night, guid=guid,
+    spec = build_prompt(p, kind_style=chosen_style(ctx.store, p))  # her stance at render time
+    made = await render_candidates(worker, spec, staging, night=ctx.night, guid=guid,
                                    set_no=set_no, cfg=cfg, make_room=ctx.arbiter.make_room,
                                    leases=lambda: ctx.arbiter.holders)
     files.publish_set(data, guid, set_no)

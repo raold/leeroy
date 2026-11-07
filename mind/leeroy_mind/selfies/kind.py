@@ -13,7 +13,8 @@ for everyone). A woman of the lust style writes no text: KIND_PROMPT_LUST (the o
 prompts/nightly_photo_lust.txt replaces it) asks her to pick each part from fixed, vetted lists
 (LUST_SCHEMA: setting, outfit, colour, expression; kind and framing keep their enums), the code
 builds the kind from the picks (compose_lust), swimwear goes only with the water settings and
-the gym outfit only with the gym (screen_lust; a pairing that fails is asked once more).
+the gym outfit only with the gym, the hot tub only in swimwear, swimwear only framed upper body
+and never as a headshot (screen_lust; a pairing that fails is asked once more).
 
 Over time: each kind the pass saves gets a record in meta (STYLE_KEY: the style that chose it
 and a digest of the kind as saved). When a member's style no longer matches her kind's record
@@ -42,7 +43,7 @@ from leeroy_mind.storage.store import Store
 from leeroy_mind.text import has_meta
 
 from .store import queue_restyled
-from .style import LUST, PLAIN, STYLES, style_of, suggestive
+from .style import AGE_RE, LUST, PLAIN, STYLES, style_of, suggestive
 
 if TYPE_CHECKING:
     from leeroy_mind.nightly.runner import NightContext
@@ -69,11 +70,13 @@ KIND_PROMPT_LUST = (
     "confident photo that fits who she is, her age, region, habits and personality. Pick each "
     "part from the choices the answer allows: the kind of photo, the framing, where it was "
     "taken, what she is wearing and its colour, and her expression. Swimwear only at the "
-    "beach, the pool deck, the lakeside dock, the hot tub, the boat or the beach bar, and the "
-    "sports top and leggings only at the gym.")
+    "beach, the pool deck, the lakeside dock, the hot tub, the boat or the beach bar, framed "
+    "upper body and never as a headshot; the hot tub only in swimwear; the sports top and "
+    "leggings only at the gym.")
 KIND_ASK = "Choose {name}'s profile picture."
 LUST_ASK_AGAIN = (" Pick again: swimwear only at the beach, the pool deck, the lakeside dock, "
-                  "the hot tub, the boat or the beach bar; the sports top and leggings only at "
+                  "the hot tub, the boat or the beach bar, framed upper body and never as a "
+                  "headshot; the hot tub only in swimwear; the sports top and leggings only at "
                   "the gym.")
 
 _FIELDS = ("kind", "framing", "setting", "outfit", "expression")
@@ -94,11 +97,11 @@ _DRESSED = (
     "fitted little {colour} dress", "low-cut {colour} cocktail dress",
     "off-the-shoulder {colour} top and jeans", "{colour} crop top and high-waisted shorts",
     "{colour} bodycon mini dress", "{colour} halter top and a miniskirt",
-    "{colour} satin slip dress", "{colour} tank top and denim shorts",
+    "{colour} satin midi dress", "{colour} tank top and denim shorts",
     "backless {colour} summer dress", "plunging {colour} wrap dress",
     "fitted {colour} blazer dress", "{colour} one-shoulder top and leather trousers",
     "{colour} sweetheart-neckline sundress", "{colour} midi dress with a high slit",
-    "cropped {colour} cardigan and a miniskirt", "{colour} sequin party dress",
+    "cropped {colour} cardigan and wide-leg trousers", "{colour} sequin party dress",
     "{colour} off-the-shoulder sweater dress", "{colour} cut-out dress",
     "{colour} ribbed tank dress", "{colour} leather jacket over a crop top",
     "{colour} square-neck top and a pencil skirt", "{colour} silk blouse and a leather miniskirt")
@@ -115,6 +118,7 @@ GYM_OUTFITS = frozenset(_choice(t) for t in _GYM)
 WATER_SETTINGS = ("the beach at sunset", "a hotel pool deck", "a lakeside dock",
                   "a hot tub on a wooden deck", "the deck of a sailing boat", "a beach bar")
 GYM_SETTINGS = ("the gym",)
+SWIM_ONLY_SETTINGS = ("a hot tub on a wooden deck",)  # nothing but swimwear there
 LUST_SETTINGS = WATER_SETTINGS + GYM_SETTINGS + (
     "a rooftop bar at night", "a city street at night", "a cafe terrace", "a park in summer",
     "a hotel balcony at dusk", "a nightclub", "her living room couch",
@@ -123,7 +127,10 @@ LUST_SETTINGS = WATER_SETTINGS + GYM_SETTINGS + (
 LUST_EXPRESSIONS = ("a playful smile", "a sultry look", "a confident smirk", "a teasing grin",
                     "an over-the-shoulder glance", "a wink", "biting her lip", "laughing")
 PAIRINGS = ("photo.outfit: swimwear away from the water",
-            "photo.outfit: gym wear away from the gym")
+            "photo.outfit: gym wear away from the gym",
+            "photo.setting: only swimwear in the hot tub",
+            "photo.framing: swimwear only framed upper body",
+            "photo.kind: no swimwear in a headshot")
 
 
 def _enum(values) -> dict:
@@ -141,12 +148,6 @@ ERA_RE = re.compile(
 EXPLICIT_RE = re.compile(
     r"\b(nude|naked|topless|shirtless|braless|lingerie|underwear|bra|panties|bikini|swimsuit|"
     r"swimwear|see-through|sheer|sexy|sexual|seductive|nsfw|cleavage)\b", re.I)
-# Adults only, for both styles (controller ruling): nothing that codes a person as young, in
-# any field of any kind. A rare over-refusal (a teacher's school) is the accepted cost.
-AGE_RE = re.compile(
-    r"\b(schools?|schoolgirls?|school uniforms?|student uniforms?|teens?|teenage|teenagers?|"
-    r"childlike|child|children|kids?|young[- ]looking|barely legal|lolita|little girls?|"
-    r"cheerleader uniforms?)\b", re.I)
 
 
 def looks_line(a: Appearance) -> str:
@@ -286,18 +287,26 @@ def compose_lust(data: dict) -> ProfilePhoto:
 
 def screen_lust(p: Persona, data: dict) -> list[str]:
     """The problems with a lust reply, as `photo.<field>: <kind>` (every value is from the
-    lists, so nothing to quote): a value off its list (the schema refuses that first), swimwear
-    away from WATER_SETTINGS, gym wear away from GYM_SETTINGS (PAIRINGS); then the age guard
-    and validate_persona on the kind it composes."""
+    lists, so nothing to quote): a value off its list (the schema refuses that first), then the
+    PAIRINGS: swimwear away from WATER_SETTINGS, gym wear away from GYM_SETTINGS, anything but
+    swimwear in SWIM_ONLY_SETTINGS, swimwear framed other than upper body or in a headshot;
+    then the age guard and validate_persona on the kind it composes."""
     problems = [f"photo.{field}: not on its list" for field, values in (
         ("setting", LUST_SETTINGS), ("outfit", LUST_OUTFITS), ("colour", LUST_COLOURS),
         ("expression", LUST_EXPRESSIONS)) if data.get(field) not in values]
     if problems:
         return problems
-    if data["outfit"] in SWIM_OUTFITS and data["setting"] not in WATER_SETTINGS:
+    swim = data["outfit"] in SWIM_OUTFITS
+    if swim and data["setting"] not in WATER_SETTINGS:
         problems.append(PAIRINGS[0])
     if data["outfit"] in GYM_OUTFITS and data["setting"] not in GYM_SETTINGS:
         problems.append(PAIRINGS[1])
+    if data["setting"] in SWIM_ONLY_SETTINGS and not swim:
+        problems.append(PAIRINGS[2])
+    if swim and data.get("framing") != "upper_body":
+        problems.append(PAIRINGS[3])
+    if swim and data.get("kind") == "headshot":
+        problems.append(PAIRINGS[4])
     if problems:
         return problems
     photo = compose_lust(data)

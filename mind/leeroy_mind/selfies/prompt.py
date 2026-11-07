@@ -5,14 +5,19 @@ is always kept). The shape maps one to one onto the worker's render request (`ph
 `negative`: lists of [text, priority 0-9]). Adults only, clothed, present-day phone look; no
 name is ever put in a phrase.
 
-The negative follows the member's style when the prompt is built, so at each render: the lust
-style (style.suggestive) lets cleavage and swimwear through and names what stays out instead;
-every other member gets NEGATIVE as it was. The worker's NSFW gate is the same for both."""
+The lust prompt is built only for a kind the lust rules chose (the caller passes that style,
+kind.chosen_style) while she is still of the lust style (style.suggestive), at each render: her
+outfit and setting go in as one priority-0 phrase, so the worker's fit to the tokenizers never
+keeps one without the other, and the negative lets cleavage and swimwear through and names what
+stays out instead. When her looks use a word of the age guard (style.AGE_RE) the render falls
+back to the plain prompt, logged by guid only. Every other render gets the phrases and NEGATIVE
+as they were. The worker's NSFW gate is the same for both."""
 import re
 from dataclasses import dataclass
 
+from ..logs import log
 from ..personas.schema import MIN_AGE, Persona
-from .style import suggestive
+from .style import AGE_RE, LUST, PLAIN, suggestive
 
 NEGATIVE: tuple[tuple[str, int], ...] = (
     ("cartoon, anime, painting, illustration, 3d render, cgi", 0),
@@ -63,11 +68,20 @@ def _clean(text: str) -> str:
     return " ".join(text.split())
 
 
-def build_prompt(p: Persona) -> PromptSpec:
+def build_prompt(p: Persona, *, kind_style: str = PLAIN) -> PromptSpec:
+    """The prompt for p's photo kind. `kind_style` is the style whose rules chose the kind
+    (kind.chosen_style; PLAIN for a kind set by hand or with no record): the lust prompt only
+    for a kind the lust rules chose, while she is of the lust style and her looks code nobody
+    as young."""
     missing = renderable(p)
     if missing:
         raise ValueError(missing)
     a, ph, ident = p.appearance, p.photo, p.identity
+    lust = kind_style == LUST and suggestive(p)
+    if lust and any(AGE_RE.search(_clean(t)) for t in (
+            a.hair_colour, a.hair_style, a.skin_tone, a.eye_colour, a.build, *a.face)):
+        log("selfies_prompt_plain", guid=p.guid, reason="age")
+        lust = False
     names = [n for n in (p.character_name, ident.real_name) if n and n.strip()]
     name_re = re.compile(r"\b(?:" + "|".join(re.escape(n.strip()) for n in names) + r")\b",
                          re.IGNORECASE) if names else None
@@ -102,8 +116,11 @@ def build_prompt(p: Persona) -> PromptSpec:
     for detail in a.face:
         add(detail, 2, True)
     add(f"{a.build} build", 3)
-    add(ph.outfit, 2, True)
-    add(ph.setting, 2, True)
+    if lust:  # one phrase: the fit keeps both or neither, and priority 0 keeps both
+        add(f"wearing {_clean(ph.outfit)}, {_clean(ph.setting)}", 0, True)
+    else:
+        add(ph.outfit, 2, True)
+        add(ph.setting, 2, True)
     add(ph.expression, 3, True)
     add(_HEADSHOT_TAIL if headshot else _PHONE_TAIL, 1)
-    return PromptSpec(tuple(out), LUST_NEGATIVE if suggestive(p) else NEGATIVE)
+    return PromptSpec(tuple(out), LUST_NEGATIVE if lust else NEGATIVE)
