@@ -9,6 +9,7 @@ from leeroy_mind.library.chunks import KINDS
 from leeroy_mind.library.core import Library
 
 K = 12
+EXACT_KINDS = ("command", "teleport")
 TEXT_MAX = 1200
 QUERY_MAX = 200
 NO_LIBRARY = "there is no library.db yet: build it with the library CLI while the mind is stopped."
@@ -66,14 +67,22 @@ def _stats(lib: Library) -> dict:
     return {"total": sum(kinds.values()), "kinds": kinds, "embedded": s["embedded"]}
 
 
-def _search(lib: Library, query: str, kind: str | None):
+def _ask(lib: Library, query: str, kind: str | None) -> list:
+    """The exact command and teleport records for the question first (only when no kind is
+    chosen: a chosen kind already gets them from search_text), then the BM25 hits."""
     kinds = [kind] if kind else None
+    exact = lib.reference_matches(query, list(EXACT_KINDS), K) if kind is None else []
+    seen = {c.id for c in exact}
+    return exact + [c for c in lib.search_text(query, K, kinds) if c.id not in seen][:K - len(exact)]
+
+
+def _search(lib: Library, query: str, kind: str | None):
     try:
-        return lib.search_text(query, K, kinds)
+        return _ask(lib, query, kind)
     except sqlite3.OperationalError:
         lib.conn.rollback()
         words = " ".join(re.findall(r"\w+", query))
-        return lib.search_text(words, K, kinds) if words else []
+        return _ask(lib, words, kind) if words else []
 
 
 def library_view(path: Path, query: str | None, kind: str | None, *, clock) -> dict:
@@ -86,9 +95,11 @@ def library_view(path: Path, query: str | None, kind: str | None, *, clock) -> d
     except RuntimeError:
         return {**out, "why": OTHER_VERSION}
     try:
-        out = {"setup": True, "why": None, "stats": _stats(lib), "hits": []}
+        out = {"setup": True, "why": None, "stats": None, "hits": []}
         if query:
             out["hits"] = [hit(c) for c in _search(lib, query, kind)]
+        else:
+            out["stats"] = _stats(lib)
         return out
     finally:
         lib.close()

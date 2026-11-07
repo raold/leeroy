@@ -29,6 +29,11 @@ class SearchBusy(Exception):
     """The bounded reader has no admission slot; do not fall back inline."""
 
 
+class EmbedFailed(Exception):
+    """A search asked to use a query vector could not: the embed call failed, or the library
+    has no vectors to compare it with."""
+
+
 class SearchClosed(Exception):
     """The reader is closing, closed, or failed to open."""
 
@@ -134,7 +139,8 @@ class LibrarySearchWorker:
 
     async def search(self, query: str, k: int = 5, kinds=None, *, llm=None,
                      priority: Priority = Priority.SOCIAL,
-                     timeout: float | None = None) -> list[Chunk]:
+                     timeout: float | None = None,
+                     require_vector: bool = False) -> list[Chunk]:
         """Library.search on the owned reader. `timeout` bounds what a wait_for bounded on the
         inline search, whose only await was its embed call: the time until the query vector
         is in hand. Past it the search ends with TimeoutError before or during the embed.
@@ -167,6 +173,8 @@ class LibrarySearchWorker:
                     raise
                 finally:
                     request.embedding = None
+            if require_vector and not plan.complete and qvec is None:
+                raise EmbedFailed()
             return await self._submit(request, Library._finish_search, plan,
                                       tuple(qvec) if qvec is not None else None)
         except asyncio.CancelledError:

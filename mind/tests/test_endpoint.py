@@ -1141,3 +1141,18 @@ def test_the_library_op_never_logs_the_query(tmp_path, caplog):
     with caplog.at_level(logging.DEBUG):
         run(go())
     assert "control_request: op=library" in caplog.text and LIB_SECRET not in caplog.text
+
+
+def test_a_failed_embed_is_not_answered_as_a_deeper_search(tmp_path):
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            llm = await _library_app(app, tmp_path)
+            try:
+                llm.fail_next(1)
+                r = await ask(ep, "library", {"query": "weapon skill"})
+                assert r == {"ok": False, "error": "The mind couldn't run a deeper search just now."}
+                assert (await ask(ep, "library", {"query": "weapon skill"}))["ok"] is True
+            finally:
+                await app.library_search.aclose()
+                app.library.close()
+    run(go())

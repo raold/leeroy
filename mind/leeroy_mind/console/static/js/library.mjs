@@ -28,23 +28,26 @@ function drawHits(hits) {
   });
 }
 
-function show(view, deeper) {
+function show(view, deeper, automatic) {
   if (view.stats) { $("library-stats").textContent = statsLine(view.stats); }
   drawHits(view.hits);
-  var note = answerNote(view, deeper);
+  var note = answerNote(view, deeper, automatic);
   say(note.text, note.bad);
   $("library-deeper").hidden = view.setup !== true || !asked;
 }
 
 function ask(q, kind, deeper) {
   return api(searchPath(q, kind, deeper)).then(function (r) {
-    if (refused(r)) { return null; }
+    if (refused(r)) { say("", false); return null; }
     return r.json().then(function (j) { return { status: r.status, j: j }; },
                          function () { return { status: r.status, j: {} }; });
   }).then(function (x) {
     if (!x) { return null; }
     if (x.status === 200) { banner("library", null); return x.j; }
-    if (x.status === 503) { banner("library", str(x.j.error) || "library.db could not be read just now."); }
+    if (x.status === 503) {
+      say("", false);
+      banner("library", str(x.j.error) || "library.db could not be read just now.");
+    }
     else { say(str(x.j.error) || "HTTP " + x.status, true); }
     return null;
   });
@@ -67,7 +70,7 @@ function run(deeper) {
       say("Nothing in the text. Asking the mind...", false);
       return ask(q, kind, true).then(function (v2) {
         if (!v2) { return; }
-        if (arr(v2.hits).length || v2.deeper_why) { show(v2, true); }
+        if (arr(v2.hits).length || v2.deeper_why) { show(v2, true, true); }
         else { show(view, false); }
       });
     }

@@ -45,11 +45,15 @@ export function wantsDeeper(view, wasDeeper) {
   return !wasDeeper && !!view && view.setup === true && arr(view.hits).length === 0;
 }
 
-// What to say under an answer: {text, bad}
-export function answerNote(view, deeper) {
+// What to say under an answer: {text, bad}. An automatic deeper search that could not run is not
+// an error: the text found nothing, and the note says why the mind could not look further.
+export function answerNote(view, deeper, automatic) {
   var v = obj(view);
   if (v.setup === false) { return { text: "Not set up yet: " + str(v.why), bad: false }; }
-  if (deeper && v.deeper_why) { return { text: str(v.deeper_why), bad: true }; }
+  if (deeper && v.deeper_why) {
+    if (automatic) { return { text: NOTHING + " " + str(v.deeper_why), bad: false }; }
+    return { text: str(v.deeper_why), bad: true };
+  }
   if (!arr(v.hits).length) { return { text: NOTHING, bad: false }; }
   return { text: "", bad: false };
 }

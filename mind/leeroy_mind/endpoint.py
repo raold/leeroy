@@ -947,7 +947,7 @@ class ControlEndpoint:
         embedding model, so it only asks for one Ollama already holds (GET /api/ps): it never
         loads a model, and uses no chat model. Errors are words; the query is never logged."""
         from leeroy_mind.console.libraryview import hit
-        from leeroy_mind.library.search_worker import SearchBusy, SearchClosed
+        from leeroy_mind.library.search_worker import EmbedFailed, SearchBusy, SearchClosed
         from leeroy_mind.llm.client import LLMError
         from leeroy_mind.nightly.gpu import norm
         if self.app.stopping:
@@ -977,12 +977,14 @@ class ControlEndpoint:
                                               "yet, so there is no deeper search."}
             try:
                 chunks = await worker.search(args["query"], args["k"], llm=self.app.scheduler,
-                                             timeout=self.library_s)
+                                             timeout=self.library_s, require_vector=True)
             except TimeoutError:
                 return {"ok": False, "error": "The embedding model is slow to answer. Try again "
                                               "in a moment."}
             except SearchBusy:
                 return {"ok": False, "error": "Another library search is running."}
+            except EmbedFailed:  # no vector was used: these would be text hits, not a deeper search
+                return {"ok": False, "error": "The mind couldn't run a deeper search just now."}
             except SearchClosed:
                 return {"ok": False, "error": "The library is closing."}
             except Exception as e:  # never its text: it could carry the question

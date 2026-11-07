@@ -149,6 +149,17 @@ SAY_SLASH = "Slash commands aren't sent from here."  # the box's words (comms/re
 BANK_OLD_MIND = "The running mind predates the Bank tab: restart it after the update."
 BOARD_OLD_MIND = "The running mind predates Board replies: restart it after the update."
 LIBRARY_OLD_MIND = "The running mind predates the deeper search: restart it after the update."
+
+
+def mind_words(state: str) -> str:
+    """The mind's state as a clause that follows "the mind"."""
+    if state in ("stopped", "crashed"):
+        return "which isn't running"
+    if state == "unknown":
+        return "whose state is unknown"
+    return f"which is {state}"
+
+
 OLD_OPS = "bad request: op is one of "  # a mind from before the say op names the ops it has
 
 # The page runs only the console's own files: no inline script or style, nothing from elsewhere
@@ -789,7 +800,7 @@ class ConsoleApp:
         out = {"setup": True, "why": None, "stats": None, "hits": [], "deeper": True,
                "deeper_why": None}
         if self.view.state != "running":
-            out["deeper_why"] = f"Deeper search is done by the mind, which is {self.view.state}."
+            out["deeper_why"] = f"Deeper search is done by the mind, {mind_words(self.view.state)}."
             return out
         if self.link is None:
             out["deeper_why"] = "Deeper search is done by the mind, and the console has no link to its control endpoint."
@@ -799,7 +810,7 @@ class ConsoleApp:
                                             {"query": query, "k": libraryview.K}, timeout=LIBRARY_S)
         except LinkError as e:
             words = str(e)
-            out["deeper_why"] = words[:1].upper() + words[1:] + "."
+            out["deeper_why"] = words[:1].upper() + words[1:] + ("" if words.endswith(".") else ".")
             return out
         if reply.get("ok") is not True:
             error = str(reply.get("error") or "")

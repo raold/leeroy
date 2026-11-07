@@ -41,3 +41,10 @@ test("what is said under an answer", () => {
   assert.deepEqual(answerNote({ setup: true, hits: [], deeper: true, deeper_why: "The mind is down." }, true),
                    { text: "The mind is down.", bad: true });
 });
+test("an automatic deeper search that could not run is not an error", () => {
+  const v = { setup: true, hits: [], deeper: true, deeper_why: "Deeper search is done by the mind, which isn't running." };
+  assert.deepEqual(answerNote(v, true, true),
+                   { text: "Nothing in the library matches that. Deeper search is done by the mind, which isn't running.", bad: false });
+  assert.deepEqual(answerNote(v, true, false),
+                   { text: "Deeper search is done by the mind, which isn't running.", bad: true });
+});

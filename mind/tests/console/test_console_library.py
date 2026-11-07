@@ -9,13 +9,15 @@ from urllib.parse import quote
 
 import pytest
 
-from console.rig import http, make_app, running
+from console.rig import FakeMind, http, make_app, running
 from leeroy_mind import endpoint
 from leeroy_mind.console import libraryview, mindlink
 from leeroy_mind.console.control import Controls
 from leeroy_mind.console.mindlink import LinkError
 from leeroy_mind.library.chunks import KINDS, ChunkDraft
 from leeroy_mind.library.core import Library
+from leeroy_mind.library.serverref import ServerRefSource
+from library_snapshot_helpers import command, server_snapshot, teleport
 from test_library_core import ListSource
 
 LONG = "\n".join(f"line {i:02d} of a long reference page about wands and staves" for i in range(40))
@@ -24,15 +26,10 @@ SECRET = "xyzzyplugh"
 
 def chunks():
     return [
-        ChunkDraft("cmd:setskill", "command", ".setskill",
-                   ".setskill #skill #level [#max]\nSets a weapon skill of the selected player "
-                   "to the level.", section="character"),
         ChunkDraft("cmd:learn", "command", ".learn", ".learn #spell\nTeaches the selected "
                    "player a spell."),
         ChunkDraft("item:1", "item", "Rune of Fate", "Rune of Fate: epic trinket. Drops from "
                    "the weapon vendor.", ref_ids=("item:1",)),
-        ChunkDraft("tele:1", "teleport", "Hyjal", "Mount Hyjal: .tele hyjal\nmap 1 x 4600.0 "
-                   "y -3800.5 z 900.1", section="teleport"),
         ChunkDraft("doc:long", "documentation", "Long page", LONG, section="Wands",
                    url="https://example.invalid/doc", license="GPL-2.0"),
     ]
@@ -43,7 +40,11 @@ def data(tmp_path):
     d = tmp_path / "mind-data"
     d.mkdir()
     lib = Library(d / "library.db", clock=SimpleNamespace(now=lambda: 1.0))
-    lib.build([ListSource("world", chunks())])
+    snap = d / "snapshot"
+    server_snapshot(snap, commands=[command(name="setskill", syntax=".setskill #skill #level [#max]",
+                                            help="Sets a weapon skill of the selected player.")],
+                    teleports=[teleport(id=7, name="Hyjal")])
+    lib.build([ListSource("world", chunks()), ServerRefSource(snap)])
     lib.close()
     return d
 
@@ -84,8 +85,8 @@ def test_a_search_finds_the_command(data):
     first = v["hits"][0]
     assert first["kind"] == "command" and ".setskill" in first["text"]
     assert set(first) == {"id", "kind", "title", "section", "text", "source", "cite", "score"}
-    assert first["title"] == ".setskill" and first["section"] == "character"
-    assert first["source"] == "world" and first["cite"]
+    assert first["title"] == ".setskill"
+    assert first["source"] == "serverref" and first["cite"]
     assert len(v["hits"]) <= libraryview.K
 
 
@@ -95,6 +96,28 @@ def test_without_a_question_the_answer_is_the_stats_only(data):
     assert r.status == 200 and v["setup"] is True and v["hits"] == []
     assert v["stats"]["total"] == 5 and v["stats"]["kinds"]["command"] == 2
     assert set(v["stats"]["kinds"]) <= set(KINDS)
+
+
+def test_exact_commands_and_teleports_come_first_without_a_kind(data):
+    _, v = ask(data, "setskill")
+    assert v["hits"][0]["title"] == ".setskill" and v["hits"][0]["kind"] == "command"
+    _, v = ask(data, "wands staves lines .setskill")  # BM25 alone would put the long page first
+    assert v["hits"][0]["title"] == ".setskill"
+    _, v = ask(data, "Hyjal")
+    assert v["hits"][0]["kind"] == "teleport" and v["hits"][0]["title"] == "Hyjal"
+    assert len({h["id"] for h in v["hits"]}) == len(v["hits"])
+    _, v = ask(data, "Hyjal", kind="item")  # a chosen kind is only that kind
+    assert all(h["kind"] == "item" for h in v["hits"])
+
+
+def test_stats_are_computed_only_without_a_question(data, monkeypatch):
+    calls = []
+    real = Library.stats
+    monkeypatch.setattr(Library, "stats", lambda self: calls.append(1) or real(self))
+    _, v = ask(data, "weapon skill")
+    assert v["stats"] is None and calls == []
+    r = asyncio.run(get(data, "/api/library"))
+    assert r.json()["stats"]["total"] == 5 and calls == [1]
 
 
 def test_the_kind_filter(data):
@@ -199,7 +222,12 @@ def test_deeper_asks_the_mind_and_says_when_it_cannot(data):
     link = FakeLink({"ok": True, "hits": []})
     r = asyncio.run(get(data, "/api/library?q=x&deeper=1", link=link))
     v = r.json()
-    assert r.status == 200 and v["hits"] == [] and "mind" in v["deeper_why"] and link.calls == []
+    assert r.status == 200 and v["hits"] == [] and link.calls == []
+    assert v["deeper_why"] == "Deeper search is done by the mind, which isn't running."
+    # the mind's state is unclear
+    link = FakeLink({"ok": True, "hits": []})
+    r = asyncio.run(get(data, "/api/library?q=x&deeper=1", mind=FakeMind(data, error="no list"), link=link))
+    assert r.json()["deeper_why"] == "Deeper search is done by the mind, whose state is unknown."
     # busy or refused: the mind's words
     link = FakeLink({"ok": False, "error": "Another library search is running."})
     r = asyncio.run(get(data, "/api/library?q=x&deeper=1", mind=running(data), link=link))
@@ -208,6 +236,10 @@ def test_deeper_asks_the_mind_and_says_when_it_cannot(data):
     link = FakeLink(error="the control endpoint did not answer (TimeoutError)")
     r = asyncio.run(get(data, "/api/library?q=x&deeper=1", mind=running(data), link=link))
     assert r.json()["deeper_why"].startswith("The control endpoint did not answer")
+    # a message that already ends in a period gets no second one
+    link = FakeLink(error="the mind said so.")
+    r = asyncio.run(get(data, "/api/library?q=x&deeper=1", mind=running(data), link=link))
+    assert r.json()["deeper_why"] == "The mind said so."
     # an older mind without the op
     link = FakeLink({"ok": False, "error": "bad request: op is one of status, stop"})
     r = asyncio.run(get(data, "/api/library?q=x&deeper=1", mind=running(data), link=link))
