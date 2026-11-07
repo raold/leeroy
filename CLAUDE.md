@@ -635,6 +635,20 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 - Guild life (raid nights, DKP and loot, offline raids, rank, spec and gear
   upkeep) runs with built-in defaults; `[guild]` and `[dkp]` tables in
   `mind.toml` override them.
+- Members start conversations with him on two clocks (2026-11-07), per hour of
+  his play at chattiness 4 and scaled with it (0 stops every unprompted whisper):
+  `[talk] whispers_per_hour` (4, at most 8 an hour and 2 minutes apart;
+  `whisper:start`, romantic from drawn and lust women, casual from everyone else,
+  a fond woman at a quarter of a lust one, lifted by the romance dial) and
+  `openers_per_hour` (6, at most 12; `burst:to_him`, a casual line naming him,
+  from a group-mate in party when his group is five or fewer, else guild), the
+  talkative and forward dials moving the rate. Neither runs in his raid's fight,
+  wipe silence or debrief, a 5-man boss fight, while he is AFK, in his login's
+  quiet or within a minute of his own line, of his emote at a member or social
+  emote (and theirs back) or of an answer to him (an emote's line too); a member
+  in a whisper with him (10 minutes) starts none, openers never take the guard
+  slot of an answer (an emote's line included), and a first `(nothing)` is
+  asked again once.
 - His text emotes (`talk/emotes.py`): every one at an online cast member but the utility and
   combat ones (`talk/emote_names.py`) gets her emote back after 2-6 s, by his emote and her
   stance (men, stance none and a forward dial at 0 never romantic), and sometimes a line (a

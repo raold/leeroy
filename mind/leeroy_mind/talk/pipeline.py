@@ -124,6 +124,9 @@ SLANG_HINT = "Say it the way people typed in 2009."
 # whispers get their answer. A second silence stands. At the explicit band a line or two
 # (fix round 1, review M5).
 SILENT_WHISPER_HINT = "Answer {human}'s whisper in {length}, in your own voice."
+# The same for a turn that starts a conversation with him (TurnMeta.initiates, 2026-11-07: 5
+# of 8 unprompted whispers were lost to a first "(nothing)").
+SILENT_START_HINT = "Start the conversation with {human} in {length}, in your own voice."
 # A move she just made with this person, made again (filters.move_repeat: "move repeat:
 # <move>"; "clause", her final clause again, takes REPEAT_HINT): the phrase carries the
 # pronoun (moves.MOVE_PHRASES). A summons out of the game (filters "summons").
@@ -227,8 +230,10 @@ class TurnMeta:
     - kill:<how> and wipe:<how>: lead (the raid lead) or weighted_draw;
     - burst:<how>, social talk: an opener is weighted_draw, a follow-on reason_pool or
       weighted_draw;
+    - burst:to_him, an opener addressed to him on its own clock (engine._open_to_him);
     - aside:<trigger> (public_flirt or loot_cheer), rival:flirt and whisper:<trigger> (idle,
-      late, evening or after_kill): the second part names what set it off, not a draw;
+      late, evening or after_kill, or start: the WhisperPlanner's own clock): the second part
+      names what set it off, not a draw;
     - emote:<his emote> (her line after his emote at her) and emote_join:<his emote> (one who
       joined his social emote; talk/emotes.py): the second part is his emote;
     - source:<TurnSource class>, say_as and speak: turns from outside the engine's planning."""
@@ -281,6 +286,12 @@ class TurnMeta:
     fight_end_ms: int = 0
     # An optional owner fence; omitted by ordinary engine callers.
     still_valid: Callable[[], bool] | None = None
+    # initiates: the turn starts a conversation with him unprompted (whisper:<trigger>,
+    # burst:to_him): its silence is asked again once (SILENT_START_HINT), and a chain never
+    # stops it, since its own clock paces it. casual: an opener to him in party or guild,
+    # which never carries her romance (that goes by whisper).
+    initiates: bool = False
+    casual: bool = False
     # Optional exact transport hooks of a say_as sender; ordinary turns leave both None, and
     # then nothing below changes. before_transport() runs synchronously right before the
     # line's Say is written and may refuse it (a turn with one is typed, one line, never
@@ -757,7 +768,7 @@ class Pipeline:
         for her (romance.dial_for); at her own FULL_DIAL it is every turn to him."""
         hg = self.human.guid
         if (not hg or turn.addressee != hg or p.identity.player_gender != "female"
-                or p.romance.stance not in ROMANCE_SHARE):
+                or p.romance.stance not in ROMANCE_SHARE or meta.casual):
             return None
         dial = self.cfg.romance.dial if dial is None else dial
         talked_to = turn.kind in (TurnKind.REPLY_HUMAN, TurnKind.GOODNIGHT) and bool(
@@ -937,7 +948,7 @@ class Pipeline:
             extra=" ".join(x for x in (turn.instruction, follow, seen, story, lore, quest,
                                        *ends) if x),
             forms=human.forms if to_human else THEY_FORMS, after=after, tail=tail, long=two,
-            quiet=quiet)
+            quiet=quiet, to_him=to_human and turn.kind is TurnKind.OPEN)
         parts = PromptParts(
             card=self._card(p), samples=samples,
             rules=comms_rules(human, p, data_dir=self.data_dir), rel_cards=cards,
@@ -1347,11 +1358,14 @@ class Pipeline:
         if not self.raid.allows(g, turn.kind, now):
             return "raid"
         guards = meta.guards or self.guards
+        # a whisper to him that starts a conversation is, like an answer to his, read by no one
+        # else: the guild's pace and her lines elsewhere never hold it back
+        unread = meta.whisper_reply or (meta.initiates and turn.channel == "whisper")
         if not guards.allow(g, turn.kind, now, continuation=not first,
-                            reply=meta.whisper_reply, pushback=bool(meta.pushback)):
+                            reply=unread, pushback=bool(meta.pushback)):
             return "guards"
-        if turn.kind in CHAINED and not meta.answers_human and not guards.chain_open(
-                self._chain_key(self._turn_base(turn), now)):
+        if (turn.kind in CHAINED and not (meta.answers_human or meta.initiates)
+                and not guards.chain_open(self._chain_key(self._turn_base(turn), now))):
             return "chain"
         return None
 
@@ -1513,9 +1527,10 @@ class Pipeline:
                         return text, None
                     silent = True
             if silent:
-                if attempt == 0 and self._answers_his_whisper(turn):
+                if attempt == 0 and (meta.initiates or self._answers_his_whisper(turn)):
                     log.info("say_silent: guid=%d kind=%s asked again", turn.speaker, turn.kind)
-                    messages = asking(SILENT_WHISPER_HINT.format(
+                    hint = SILENT_START_HINT if meta.initiates else SILENT_WHISPER_HINT
+                    messages = asking(hint.format(
                         human=self.human.called,
                         length="a line or two" if meta.two_lines else "a line"))
                     continue
@@ -1784,7 +1799,8 @@ class Pipeline:
         hg = self.human.guid
         if heard and hg and (meta.answers_human or turn.addressee == hg or turn.to_guid == hg):
             self._answered_at[turn.speaker] = now  # a thread with him is open
-        (meta.guards or self.guards).record(meta.turn_id, turn.speaker, now, turn.kind)
+        (meta.guards or self.guards).record(meta.turn_id, turn.speaker, now, turn.kind,
+                                            initiated=meta.initiates)
         meta.said += 1
         self._turn_lines[meta.turn_id] = meta.said
         while len(self._turn_lines) > TURNS_KEPT:

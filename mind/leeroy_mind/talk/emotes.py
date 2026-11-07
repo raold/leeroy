@@ -25,6 +25,11 @@ member's own, another player's, the mind's echoes and replayed ones never come h
   rules). The emote back checks again after its delay, and her line is made and queued only once
   her emote went out. Emotes and lines leave through the engine's send, so the silent latch holds
   them too.
+- The clocks that start conversations with him (engine._open_to_him, reactions._start_whisper)
+  wait out his emote exchanges as they wait out his lines: his emote at a member or social one,
+  and every emote back, count as his talk (_his_talk_at), and her line, an answer to him, does
+  too (Pipeline._answered_at). A line that started a conversation with him never takes the
+  guards' minute from her line, nor holds it back when it was her own (guards._ANSWERS).
 
 Once her emote back at his emote went out, the live side writes a receipt (meta
 emote_names.answered_key(event id) = her guid): the night's attraction pass counts only those,
@@ -226,6 +231,7 @@ class EmoteReactions(Reactions):
     def _init_emotes(self) -> None:
         self.emote_limits = EmoteLimits()
         self._replied_at: dict[int, float] = {}  # a member's last REPLY_HUMAN line, said
+        self._emoted_at = -math.inf  # his last emote a member answers or joins, or theirs back
 
     async def on_text_emote(self, ev: TextEmote, now: float, *, event_id: int = 0) -> None:
         """His text emote, which the app has stored (as game_event `event_id`, 0: none) and
@@ -237,6 +243,8 @@ class EmoteReactions(Reactions):
         if not _NAME.fullmatch(emote):
             return  # not a name native sends: nothing to answer
         target = ev.target_guid if ev.target_guid in self.world.cast_guids() else 0
+        if emote not in UTILITY_EMOTES and (target or emote in JOIN_EMOTES):
+            self._emoted_at = now  # an exchange with the guild: nothing starts talk over it
         quiet = self._login_quiet(now)
         if quiet or self.raid.phase(now) in FIGHT_PHASES:
             log.info("emote_skipped: emote=%s guid=%d reason=%s", emote, target,
@@ -246,6 +254,11 @@ class EmoteReactions(Reactions):
             self._answer_emote(target, emote, now, event_id)
         else:
             self._join_emote(emote, now)
+
+    def _his_talk_at(self) -> float:
+        """His last line or an answer to him (Reactions._his_talk_at), or his last emote
+        exchange with members: his emote at one or his social one, or an emote back."""
+        return max(super()._his_talk_at(), self._emoted_at)
 
     def _first_line_said(self, turn: Turn, meta: TurnMeta) -> None:
         super()._first_line_said(turn, meta)
@@ -359,6 +372,7 @@ class EmoteReactions(Reactions):
             log.info("emote_dropped: guid=%d emote=%s reason=%s", guid, emote, why)
             return
         log.info("emote_sent: guid=%d emote=%s target=%d", guid, emote, target)
+        self._emoted_at = max(self._emoted_at, self.clock.now())
         if event_id and target:
             try:
                 self.store.set_meta(answered_key(event_id), str(guid))
