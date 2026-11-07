@@ -644,9 +644,11 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   from a group-mate in party when his group is five or fewer, else guild), the
   talkative and forward dials moving the rate. Neither runs in his raid's fight,
   wipe silence or debrief, a 5-man boss fight, while he is AFK, in his login's
-  quiet or within a minute of his own line or an answer to him; a member in a
-  whisper with him (10 minutes) starts none, openers never take an answer's
-  guard slot, and a first `(nothing)` is asked again once.
+  quiet or within a minute of his own line, of his emote at a member or social
+  emote (and theirs back) or of an answer to him (an emote's line too); a member
+  in a whisper with him (10 minutes) starts none, openers never take the guard
+  slot of an answer (an emote's line included), and a first `(nothing)` is
+  asked again once.
 - His text emotes (`talk/emotes.py`): every one at an online cast member but the utility and
   combat ones (`talk/emote_names.py`) gets her emote back after 2-6 s, by his emote and her
   stance (men, stance none and a forward dial at 0 never romantic), and sometimes a line (a

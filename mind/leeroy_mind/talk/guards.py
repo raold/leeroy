@@ -15,9 +15,11 @@ _MAX_CHAINS = 512
 _NO_PERSON_LIMIT = frozenset({TurnKind.URGENT, TurnKind.CALLOUT})
 _FULL_WINDOW = frozenset({TurnKind.REPLY_HUMAN, TurnKind.GREET, TurnKind.GOODNIGHT,
                           TurnKind.WHISPER})
-# The turns that answer him: a line that started a conversation with him (record's
-# `initiated`) never takes the guild's minute from them (controller ruling, 2026-11-07).
-_ANSWERS = frozenset({TurnKind.REPLY_HUMAN, TurnKind.GREET, TurnKind.GOODNIGHT})
+# The turns that answer him, her line after his text emote too (talk/emotes.py): a line that
+# started a conversation with him (record's `initiated`) never takes the guild's minute from
+# them, and her own never holds back her answer (controller ruling, 2026-11-07).
+_ANSWERS = frozenset({TurnKind.REPLY_HUMAN, TurnKind.GREET, TurnKind.GOODNIGHT,
+                      TurnKind.EMOTE_REACT})
 
 
 class Guards:
@@ -53,7 +55,7 @@ class Guards:
         "are you drunk?" comes seconds after their line; the guild's pace still does."""
         if continuation or reply:
             return True
-        n = self._in_window(now)
+        n = self._in_window(now, answers=kind in _ANSWERS)
         if kind not in _NO_PERSON_LIMIT and not pushback:
             interval = REPLY_S if kind is TurnKind.REPLY_HUMAN else self.per_person_s
             last = self._last.get(guid)
@@ -61,8 +63,6 @@ class Guards:
             opened = kind in _ANSWERS and last is not None and self._started.get(guid) == last
             if last is not None and now - last < interval and not opened:
                 return False
-        if kind in _ANSWERS:
-            return self._in_window(now, answers=True) < self.guild_per_min
         if kind in _NO_PERSON_LIMIT or kind in _FULL_WINDOW:
             return n < self.guild_per_min
         return n < min(self.social_ceiling, self.guild_per_min)

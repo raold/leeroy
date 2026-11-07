@@ -589,13 +589,21 @@ class WhisperPlanner:
             return False
         return now >= self._next_at
 
-    def _room(self, now: float) -> bool:
-        """Whether one more unprompted whisper fits: under WHISPERS_HOUR_MAX in the last hour
-        and WHISPERS_APART_S after the last one."""
+    def refusal(self, now: float) -> str | None:
+        """Why one more unprompted whisper does not fit now: "ceiling" (WHISPERS_HOUR_MAX in
+        the last hour) or "spacing" (within WHISPERS_APART_S of the last one); None when it
+        fits."""
         while self._said and now - self._said[0] >= HOUR_S:
             self._said.popleft()
-        return (len(self._said) < WHISPERS_HOUR_MAX
-                and (not self._said or now - self._said[-1] >= WHISPERS_APART_S))
+        if len(self._said) >= WHISPERS_HOUR_MAX:
+            return "ceiling"
+        if self._said and now - self._said[-1] < WHISPERS_APART_S:
+            return "spacing"
+        return None
+
+    def _room(self, now: float) -> bool:
+        """Whether one more unprompted whisper fits (refusal)."""
+        return self.refusal(now) is None
 
     def _pool(self, now: float, candidates: dict[int, tuple[Persona, Relationship]],
               lift: float) -> dict[int, float]:

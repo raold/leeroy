@@ -3,6 +3,7 @@ actually initiate"): the WhisperPlanner's own clock (romantic and personal opene
 and the burst budget's clock of openers addressed to him in party or guild, at mind.toml's
 [talk] whispers_per_hour and openers_per_hour, scaled by the world and member dials, and never
 in a fight, the wipe's silence, its debrief or his login's quiet."""
+import logging
 import random
 import re
 from collections import Counter
@@ -15,15 +16,17 @@ from conftest import HUMAN, TEST_CAST, make_persona, run, seed_test_cast
 from engine_rig import engine_clock, make_rig, numbered, save_member
 from leeroy_mind.config import ConfigError, load_config
 from leeroy_mind.personas.io import save_persona
-from leeroy_mind.protocol import AfkEvent, Boss, Cast, Group, Login, LootWon, Member, Zone
+from leeroy_mind.protocol import (AfkEvent, Boss, Cast, Emote, Group, Login, LootWon, Member,
+                                  TextEmote, Zone)
 from leeroy_mind.storage.rows import Relationship
 from leeroy_mind.talk import budget as budget_mod
+from leeroy_mind.talk import emotes as emotes_mod
 from leeroy_mind.talk import romance as romance_mod
 from leeroy_mind.talk.budget import (AFTER_BURST_S, TO_HIM_HOUR_MAX, BurstBudget, DayPhase)
 from leeroy_mind.talk.guards import Guards
 from leeroy_mind.talk.raid import RaidPhase
 from leeroy_mind.talk.reactions import LOGIN_QUIET_S
-from leeroy_mind.talk.romance import (FOND_SHARE, INVARIANTS, WHISPERS_APART_S,
+from leeroy_mind.talk.romance import (FOND_SHARE, HOUR_S, INVARIANTS, WHISPERS_APART_S,
                                       WHISPERS_HOUR_MAX, WhisperPlanner, romance_lift,
                                       whisper_kind, whisper_weight)
 from leeroy_mind.talk.turns import TurnKind
@@ -510,6 +513,49 @@ def test_no_two_unprompted_whispers_within_two_minutes_whatever_draws_them():
     assert any(w.maybe(t + WHISPERS_APART_S + s, "late", cands) for s in range(0, 600))
 
 
+def test_the_planner_says_why_a_whisper_does_not_fit():
+    cands = {g: (woman(g, f"W{g}", "lust"), rel(g)) for g in range(201, 211)}
+    w = WhisperPlanner(R(1), per_hour=4.0)
+    assert w.refusal(0.0) is None
+    said, t = [], 0.0
+    while len(said) < WHISPERS_HOUR_MAX:
+        if w.maybe(t, "idle", cands) is not None:
+            said.append(t)
+            full = len(said) == WHISPERS_HOUR_MAX
+            assert w.refusal(t + 1.0) == ("ceiling" if full else "spacing")
+            t += WHISPERS_APART_S
+        t += 1.0
+    assert w.refusal(t) == "ceiling"
+    assert w.refusal(said[0] + HOUR_S) is None
+
+
+def test_a_due_whisper_the_spacing_refuses_is_logged_as_spacing(store, clock, tmp_path,
+                                                                monkeypatch, caplog):
+    """Review minor: the clock's slot passing for the spacing or the hour's ceiling says so,
+    not no_candidates."""
+    monkeypatch.setattr(romance_mod, "GAP_SPREAD", (0.02, 0.03))
+
+    async def main():
+        cast_for_initiation(store)
+        r = make_rig(store, clock, tmp_path, script=numbered("thought {n} here"))
+        r.engine.bits.p_fire = 0.0
+        w = r.engine.whispers
+        w.set_rate(60.0)
+        await r.session()
+        await r.engine.tick(clock.now())  # the clock's first gap
+        now = clock.now()
+        while w.maybe(now, "idle", r.engine._whisper_cands(now)) is None:
+            pass  # an event's whisper drawn just now: the clock's next is seconds away
+        await r.advance(20)
+        assert w.next_at <= clock.now()
+        with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+            await r.engine.tick(clock.now())
+        await r.engine.end_session()
+        assert "whisper_skipped: trigger=start reason=spacing" in caplog.text
+        assert "reason=no_candidates" not in caplog.text
+    run(main())
+
+
 def test_a_member_in_a_whisper_with_him_does_not_start_one(store, clock, tmp_path):
     """Ruling 5: a whisper either way in the last 10 minutes is a conversation going on."""
     async def main():
@@ -591,6 +637,22 @@ def test_an_answer_to_him_never_waits_for_a_line_that_started_a_conversation():
     assert not own.allow(201, TurnKind.OPEN, 103.0)
     own.record("r", 201, 104.0, TurnKind.REPLY_HUMAN)
     assert not own.allow(201, TurnKind.REPLY_HUMAN, 106.0)  # her answer's own interval stands
+
+
+def test_her_line_after_his_emote_is_an_answer_the_openers_never_crowd_out():
+    g = Guards(rng=R(1))
+    for n in range(4):
+        g.record(f"t{n}", 201 + n, 100.0, TurnKind.OPEN, initiated=True)
+    assert g.allow(301, TurnKind.EMOTE_REACT, 101.0)
+    assert not g.allow(302, TurnKind.OPEN, 101.0)
+    for n in range(4):
+        g.record(f"e{n}", 401 + n, 100.0, TurnKind.EMOTE_REACT)
+    assert not g.allow(303, TurnKind.EMOTE_REACT, 101.0)  # its own social pace still holds
+    own = Guards(rng=R(1))  # her whisper that started it never holds back her line either
+    own.record("o", 201, 100.0, TurnKind.WHISPER, initiated=True)
+    assert own.allow(201, TurnKind.EMOTE_REACT, 103.0)
+    own.record("e", 201, 104.0, TurnKind.EMOTE_REACT)
+    assert not own.allow(201, TurnKind.EMOTE_REACT, 110.0)
 
 
 def test_the_guild_calendar_is_an_opener_topic_within_a_day(store, clock, tmp_path):
@@ -693,4 +755,38 @@ def test_nothing_starts_in_his_login_quiet_even_when_the_clocks_are_due(store, c
         lines = started(r, t0)
         assert not [x for x in lines if x[0] < t0 + LOGIN_QUIET_S]
         assert [x for x in lines if x[0] < t0 + LOGIN_QUIET_S + 240]
+    run(main())
+
+
+def test_an_opener_due_as_he_emotes_at_a_member_waits_out_the_exchange(store, clock, tmp_path,
+                                                                       monkeypatch):
+    """His emote exchange is his talk: an opener to him due a second after his /wave at Coros
+    waits AFTER_BURST_S after her wave back. No line follows her emote, so the emote alone
+    holds it."""
+    monkeypatch.setattr(emotes_mod, "LINE_P", 0.0)
+    monkeypatch.setattr(emotes_mod, "LINE_P_ROMANTIC", 0.0)
+
+    async def main():
+        cast_for_initiation(store)
+        r = make_rig(store, clock, tmp_path, script=numbered("thought {n} here"))
+        r.engine.bits.p_fire = 0.0
+        r.engine.whispers.set_rate(0.0)
+        r.engine.whispers.events = False
+        r.engine.budget = BurstBudget(4, r.engine.rng, gap_s=(1e9, 1e9), to_him_per_hour=6.0)
+        await r.session()
+        await r.engine.tick(clock.now())  # the openers' first gap
+        due = r.engine.budget.to_him_next
+        await r.advance(due - clock.now() - 1.0)
+        emoted = clock.now()
+        ev = TextEmote(ts=0, guid=HUMAN, emote="wave", target_guid=103)
+        r.world.apply(ev, emoted)
+        await r.engine.on_text_emote(ev, emoted)
+        await play(r, 600)
+        await r.engine.end_session()
+        (back_at, back), = [(t, c) for t, c in r.sent.log if isinstance(c, Emote)]
+        assert back.guid == 103 and back.target_guid == HUMAN
+        assert due <= back_at  # the opener was due before her emote back went out
+        to_him = [x for x in started(r) if x[3] == "burst:to_him"]
+        assert to_him and to_him[0][0] >= back_at + AFTER_BURST_S
+        assert to_him[0][0] < back_at + AFTER_BURST_S + 120  # and went once the minute was out
     run(main())

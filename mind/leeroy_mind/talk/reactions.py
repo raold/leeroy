@@ -612,8 +612,9 @@ class Reactions(Pipeline):
             return
         g = self.whispers.start(now, self._whisper_cands(now),
                                 lift=romance_lift(self.cfg.romance.dial))
-        if g is None:
-            log.info("whisper_skipped: trigger=start reason=no_candidates")
+        if g is None:  # the hour's ceiling or the spacing, else nobody who may
+            log.info("whisper_skipped: trigger=start reason=%s",
+                     self.whispers.refusal(now) or "no_candidates")
             return
         self._queue_whisper(g, START, now)
 
