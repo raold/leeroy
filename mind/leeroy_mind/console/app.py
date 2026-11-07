@@ -57,6 +57,7 @@ run nothing else.
     GET  /api/selfies  the Personas tab's photo queue: the sets waiting for his choice, counts
                        and recent changes from mind.db (selfieview.queue_view), and the
                        running mind's selfie status (its recent changes with their undoability)
+    GET  /api/realm    the Realm tab: rival guilds, the race for first kills, poaching, Trade lines, canon
     GET  /api/social   the Social tab: feuds, jealousy, romances, feelings toward him, live
                        rumours and the guild mood, from mind.db (a missing table is listed in
                        `missing`, not an error)
@@ -97,7 +98,7 @@ from pathlib import Path
 from typing import Callable
 
 from .. import endpoint
-from . import (bankview, calendarview, faces, feed, mindlog, netinfo, personaview, raidview, selfieview, socialview,
+from . import (bankview, calendarview, faces, feed, mindlog, netinfo, personaview, raidview, realmview, selfieview, socialview,
                status, trainview, tuneview)
 from .control import Controls, Refused
 from .httpd import Request, Response, Stream, digits, encode_json, json_response, text
@@ -593,6 +594,7 @@ class ConsoleApp:
                   ("GET", "/api/raid"): self._api_raid,
                   ("GET", "/api/guild"): self._api_guild,
                   ("GET", "/api/social"): self._api_social,
+                  ("GET", "/api/realm"): self._api_realm,
                   ("GET", "/api/calendar"): self._api_calendar,
                   ("GET", "/api/bank"): self._api_bank,
                   ("GET", "/api/training"): self._api_training,
@@ -720,6 +722,9 @@ class ConsoleApp:
 
     async def _api_social(self, req: Request):
         return await self._db_view("social", socialview.social_view, now=self._clock())
+
+    async def _api_realm(self, req: Request):
+        return await self._db_view("realm", realmview.realm_view, now=self._clock())
 
     async def _api_calendar(self, req: Request):
         return await self._db_view("calendar", calendarview.calendar_view, now=self._clock())

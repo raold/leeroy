@@ -10,6 +10,7 @@ import "./raid.mjs";
 import "./guild.mjs";
 import "./social.mjs";
 import "./calendar.mjs";
+import "./realm.mjs";
 import "./bank.mjs";
 import "./training.mjs";
 import "./personas.mjs";
