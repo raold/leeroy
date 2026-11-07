@@ -130,6 +130,7 @@ HOST = "127.0.0.1"
 STATUS_S = 2.0
 TYPING_S = 1.0  # the mind's status, asked for who is typing on each strip pass, answers in this
 TYPING_MAX = 40  # entries kept from it
+TYPING_STALE_S = 30.0  # an entry older than this (its `age`) is dropped; the page's own STALE_S
 SNAPSHOT_S = 15.0  # a settled mind's process list is taken this often (an unclear one's at most)
 VOICE_LOCK_S = 15.0  # how long the Mind tab reuses its reading of voice.lock
 FEED_S = 1.5
@@ -155,23 +156,29 @@ BOARD_OLD_MIND = "The running mind predates Board replies: restart it after the 
 LIBRARY_OLD_MIND = "The running mind predates the deeper search: restart it after the update."
 
 
+def _number(x) -> bool:
+    return type(x) in (int, float) and math.isfinite(x)
+
+
 def typing_entries(value) -> list[dict]:
     """The mind's status `typing` (Pipeline.typing_now) as the strip carries it: the well-formed
-    entries, each with only its own keys, {"guid", "name", "channel", "to", "since"}."""
+    entries no older than TYPING_STALE_S, each with only its own keys, {"guid", "name",
+    "channel", "to", "since", "age"}. `age` (seconds, read by the mind as it answered) is what
+    staleness goes by; `since` is the mind's clock, for matching the line when it lands."""
     if not isinstance(value, list):
         return []
     out = []
     for e in value[:TYPING_MAX]:
         if not isinstance(e, dict):
             continue
-        guid, channel, to, since, name = (e.get(k) for k in ("guid", "channel", "to", "since",
-                                                             "name"))
+        guid, channel, to, since, age, name = (e.get(k) for k in ("guid", "channel", "to",
+                                                                  "since", "age", "name"))
         if (type(guid) is not int or guid <= 0 or not isinstance(channel, str)
-                or type(since) not in (int, float) or not math.isfinite(since)
+                or not _number(since) or not _number(age) or not 0 <= age <= TYPING_STALE_S
                 or (to is not None and (type(to) is not int or to <= 0))):
             continue
         out.append({"guid": guid, "name": name if isinstance(name, str) else "",
-                    "channel": channel, "to": to, "since": since})
+                    "channel": channel, "to": to, "since": since, "age": age})
     return out
 
 
@@ -378,9 +385,13 @@ class ConsoleApp:
         return typing_entries(reply.get("typing"))
 
     def _publish_status(self) -> None:
+        """A changed strip goes out; an age that moved alone is no news (the page counts on from
+        the age it was given)."""
         strip = self.strip()
-        if strip != self._strip:
-            self._strip = strip
+        news = {**strip, "typing": [{k: v for k, v in e.items() if k != "age"}
+                                    for e in strip["typing"]]}
+        if news != self._strip:
+            self._strip = news
             self.broadcast("status", strip)
 
     async def _status_loop(self) -> None:

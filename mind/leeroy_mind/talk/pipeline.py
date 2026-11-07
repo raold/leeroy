@@ -672,12 +672,14 @@ class Pipeline:
 
     def typing_now(self) -> list[dict]:
         """The control endpoint's status `typing`: each model turn being composed or typed where
-        Comms shows its line, oldest first, as {"guid", "name", "channel", "to", "since"} (`to`:
-        a whisper's target, him; else None). Ids, names and times only, never text; none while he
-        is offline."""
+        Comms shows its line, oldest first, as {"guid", "name", "channel", "to", "since", "age"}
+        (`to`: a whisper's target, him; else None; `age`: seconds in its phase, read now, so a
+        page judges staleness without comparing clocks; `since` is for matching the line when it
+        lands). Ids, names and times only, never text; none while he is offline."""
         w, hg = self.world, self.human.guid
         if not hg or not w.human_online:
             return []
+        now = self.clock.now()
         out = []
         for turn, _, since in self._phases.values():
             channel, to = turn.channel, None
@@ -688,7 +690,8 @@ class Pipeline:
                 continue
             m = w.members.get(turn.speaker)
             out.append({"guid": turn.speaker, "name": m.name if m is not None else "",
-                        "channel": channel, "to": to, "since": since})
+                        "channel": channel, "to": to, "since": since,
+                        "age": max(0.0, now - since)})
         return sorted(out, key=lambda e: (e["since"], e["guid"]))
 
     def planned_turns(self) -> list[Turn]:

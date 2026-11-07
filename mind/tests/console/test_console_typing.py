@@ -1,7 +1,9 @@
 """Who is typing in Comms: the console takes the mind's status `typing` (its turns being composed
 or typed) into the strip it already sends, only while a page listens and he is in game, and passes
-it through unchanged, keeping only well-formed entries. An absent mind, a bridge down or an older
-mind without it: none. The page's own files: the dots' place, their CSS and reduced motion."""
+it through unchanged, keeping only well-formed entries younger than the page's 30 s (`age`, read
+by the mind at status time). An age that moved alone sends no new status. An absent mind, a bridge
+down or an older mind without it: none. The page's own files: the dots' place, their CSS and
+reduced motion."""
 import asyncio
 import re
 from contextlib import asynccontextmanager, suppress
@@ -17,8 +19,10 @@ from console.rig import events, http, make_app, running
 
 LINKED = [SimpleNamespace(state=5, remote_port=7878, remote="127.0.0.1", pid=101)]
 STATIC = Path(str(resources.files("leeroy_mind.console").joinpath("static")))
-ENTRY = {"guid": 101, "name": "Arkon", "channel": "guild", "to": None, "since": 1793304000.25}
-WHISPER = {"guid": 102, "name": "Belra", "channel": "whisper", "to": 1, "since": 1793304001.0}
+ENTRY = {"guid": 101, "name": "Arkon", "channel": "guild", "to": None, "since": 1793304000.25,
+         "age": 2.5}
+WHISPER = {"guid": 102, "name": "Belra", "channel": "whisper", "to": 1, "since": 1793304001.0,
+           "age": 1.75}
 
 
 @pytest.fixture
@@ -104,20 +108,55 @@ def test_a_listening_page_gets_the_minds_typing_unchanged(data, in_game):
 
 
 def test_only_well_formed_entries_pass_and_nothing_else_of_theirs(data, in_game):
-    bad = [None, "x", 7, {"guid": "101", "channel": "guild", "since": 1.0},
-           {"guid": 101, "channel": 5, "since": 1.0}, {"guid": 101, "channel": "guild"},
-           {"guid": 101, "channel": "guild", "since": float("inf")},
-           {"guid": 0, "channel": "guild", "since": 1.0}, {"guid": True, "channel": "guild", "since": 1.0},
-           {"guid": 101, "channel": "whisper", "to": "1", "since": 1.0}]
+    ok = {"since": 1.0, "age": 1.0}
+    bad = [None, "x", 7, {"guid": "101", "channel": "guild", **ok},
+           {"guid": 101, "channel": 5, **ok}, {"guid": 101, "channel": "guild", "age": 1.0},
+           {"guid": 101, "channel": "guild", "since": float("inf"), "age": 1.0},
+           {"guid": 0, "channel": "guild", **ok}, {"guid": True, "channel": "guild", **ok},
+           {"guid": 101, "channel": "whisper", "to": "1", **ok},
+           {"guid": 104, "channel": "guild", "since": 1.0},  # no age: an older mind's entry
+           {"guid": 104, "channel": "guild", "since": 1.0, "age": -0.5},
+           {"guid": 104, "channel": "guild", "since": 1.0, "age": "2"},
+           {"guid": 104, "channel": "guild", "since": 1.0, "age": float("nan")},
+           {"guid": 104, "channel": "guild", "since": 1.0, "age": True},
+           {"guid": 105, "channel": "guild", "since": 1.0, "age": 30.5}]  # stale
     extra = {**ENTRY, "text": "words the member is typing", "prompt": "the prompt"}
-    link = FakeLink(status([*bad, extra, {"guid": 103, "channel": "officer", "since": 5}]))
+    link = FakeLink(status([*bad, extra, {"guid": 103, "channel": "officer", "since": 5,
+                                          "age": 30}]))
 
     async def go():
         async with served(make_app(data, mind=running(data), tcp=lambda: LINKED,
                                    link=link)) as app:
             return await typing_seen(app)
     assert asyncio.run(go()) == [ENTRY, {"guid": 103, "name": "", "channel": "officer",
-                                         "to": None, "since": 5}]
+                                         "to": None, "since": 5, "age": 30}]
+
+
+def test_an_age_that_moved_alone_sends_no_new_status(data, in_game):
+    """The mind's age grows on every pass: only a change of who, where or since is news. A
+    snapshot or /api/state still carries the age as last read."""
+    link = FakeLink(status([]))
+
+    async def go():
+        async with served(make_app(data, mind=running(data), tcp=lambda: LINKED,
+                                   link=link)) as app:
+            async with listening(app):
+                sent = []
+                real = app.broadcast
+                app.broadcast = lambda kind, d: (sent.append((kind, d)), real(kind, d))
+                strips = lambda: [d["typing"] for k, d in sent if k == "status"]  # noqa: E731
+                link.reply = status([ENTRY])
+                await app.refresh()
+                assert strips() == [[ENTRY]]
+                link.reply = status([{**ENTRY, "age": 4.5}])
+                await app.refresh()
+                assert strips() == [[ENTRY]]  # nothing new to say
+                assert app.strip()["typing"] == [{**ENTRY, "age": 4.5}]
+                later = {**ENTRY, "since": ENTRY["since"] + 3, "age": 0.5}  # his next line
+                link.reply = status([later])
+                await app.refresh()
+                assert strips() == [[ENTRY], [later]]
+    asyncio.run(go())
 
 
 @pytest.mark.parametrize("reply", [status(), status("typing"), {"ok": False, "error": "busy"}],
@@ -230,3 +269,13 @@ def test_the_whisper_list_marks_a_member_writing_to_him():
     left = (STATIC / "js" / "comms" / "leftview.mjs").read_text("utf-8")
     assert "whisperTypers" in left or "typingWhispers" in left
     assert re.search(r'on\("typing",\s*renderWhispers\)', left)
+
+
+def test_the_page_never_holds_the_minds_clock_against_its_own():
+    """Staleness is the mind's age plus the time since the strip came, on a monotonic clock: a
+    device whose clock is off shows the same dots."""
+    view = (STATIC / "js" / "comms" / "typingview.mjs").read_text("utf-8")
+    model = (STATIC / "js" / "comms" / "typing.mjs").read_text("utf-8")
+    assert "Date.now" not in view and "Date.now" not in model
+    assert "performance.now()" in view
+    assert not re.search(r"now\s*-\s*since|since\s*[-+<>]\s*now", model + view)
