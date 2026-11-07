@@ -14,10 +14,15 @@ pid must also be this checkout's voice service (the base interpreter its venv la
 running `-m leeroy_voice run` under that launcher) before it is asked to close (WM_CLOSE, so
 WoW's volume is restored) and, after five seconds, terminated.
 
+Both are started outside the starting process's job (CREATE_BREAKAWAY_FROM_JOB, where the job
+allows it) at normal priority, so a service the logon task's console starts outlives that task
+and never takes its priority.
+
 Nothing here prints: an action returns an Outcome, whose message the script prints. Errors are
 OwnershipError with a message that never carries a raw process command line."""
 import ctypes
 import json
+import logging
 import os
 import re
 import subprocess
@@ -25,6 +30,17 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+
+
+# Windows process creation flags, by value: subprocess names only some of them, and only on Windows
+DETACHED_PROCESS = 0x00000008
+NORMAL_PRIORITY_CLASS = 0x00000020
+CREATE_NEW_PROCESS_GROUP = 0x00000200
+CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+CREATE_NO_WINDOW = 0x08000000
+ERROR_ACCESS_DENIED = 5
+
+log = logging.getLogger(__name__)
 
 
 class OwnershipError(RuntimeError):
@@ -56,6 +72,43 @@ def canonical(path):
 
 def venv_python(root) -> Path:
     return Path(root) / "mind" / ".venv" / "Scripts" / "python.exe"
+
+
+def venv_home(python, what: str) -> Path:
+    """The base Python folder of the venv whose interpreter is `python`: its pyvenv.cfg's one
+    absolute `home`. OwnershipError otherwise."""
+    try:
+        text = (Path(python).parent.parent / "pyvenv.cfg").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        text = ""
+    homes = [value.strip() for key, sep, value in (line.partition("=")
+             for line in text.splitlines()) if sep and key.strip().lower() == "home"]
+    if len(homes) != 1 or not Path(homes[0]).is_absolute():
+        raise OwnershipError(f"cannot read the {what} venv's base interpreter from its "
+                             "pyvenv.cfg; no action taken")
+    return Path(homes[0])
+
+
+def mind_base_python(root) -> Path:
+    """The base interpreter this checkout's mind venv launcher starts for the mind:
+    <pyvenv.cfg home>\\python.exe, since the mind is always launched with the venv's python.exe.
+    Not sys._base_executable, which is pythonw.exe under the logon task's console."""
+    return venv_home(venv_python(root), "mind") / "python.exe"
+
+
+def popen_outside_job(popen, args, *, what: str, creationflags: int, **kw):
+    """popen(args, ...) at normal priority and outside this process's job. A job that forbids
+    breakaway makes the launch fail with ERROR_ACCESS_DENIED: it is then launched inside the
+    job, and one line says so. Outside any job the breakaway flag changes nothing."""
+    flags = creationflags | NORMAL_PRIORITY_CLASS
+    try:
+        return popen(args, creationflags=flags | CREATE_BREAKAWAY_FROM_JOB, **kw)
+    except OSError as e:
+        if getattr(e, "winerror", None) != ERROR_ACCESS_DENIED:
+            raise
+    log.warning("%s_breakaway_refused: this process's job forbids breakaway, so the %s runs "
+                "inside it and ends with it", what, what)
+    return popen(args, creationflags=flags, **kw)
 
 
 # -- the mind ----------------------------------------------------------------------------------
@@ -186,7 +239,7 @@ ConvertTo-Json -Compress"""
         self.kernel.CloseHandle(handle)
 
 
-def spawn_mind(root, data, python):
+def spawn_mind(root, data, python, *, popen=subprocess.Popen):
     logs = data / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
@@ -194,10 +247,11 @@ def spawn_mind(root, data, python):
     env.update(PYTHONPATH=str(root / "mind"), PYTHONNOUSERSITE="1", PYTHONUNBUFFERED="1",
                LEEROY_MIND_DATA=str(data))
     with (logs / "mind-stdout.log").open("ab") as output:
-        return subprocess.Popen([str(python), "-m", "leeroy_mind", "run", "--data-dir", str(data)],
+        return popen_outside_job(
+            popen, [str(python), "-m", "leeroy_mind", "run", "--data-dir", str(data)],
+            what="mind", creationflags=CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP,
             cwd=root / "mind", env=env, stdin=subprocess.DEVNULL, stdout=output,
-            stderr=subprocess.STDOUT, close_fds=True,
-            creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP)
+            stderr=subprocess.STDOUT, close_fds=True)
 
 
 def launch_problem(launch, reason):
@@ -380,16 +434,7 @@ class VoiceControl:
     def _bases(self) -> dict[str, str]:
         """{venv interpreter: the base interpreter its launcher starts}, from the venv's
         pyvenv.cfg `home` (python.exe starts python.exe, pythonw.exe starts pythonw.exe)."""
-        try:
-            text = (self.python.parent.parent / "pyvenv.cfg").read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            text = ""
-        homes = [value.strip() for key, sep, value in (line.partition("=")
-                 for line in text.splitlines()) if sep and key.strip().lower() == "home"]
-        if len(homes) != 1 or not Path(homes[0]).is_absolute():
-            raise OwnershipError("cannot read the voice venv's base interpreter from its "
-                                 "pyvenv.cfg; no action taken")
-        home = Path(homes[0])
+        home = venv_home(self.python, "voice")
         return {canonical(self.python): canonical(home / "python.exe"),
                 canonical(self.pythonw): canonical(home / "pythonw.exe")}
 
@@ -438,12 +483,11 @@ class VoiceControl:
         logs = where.data_dir / "logs"
         logs.mkdir(parents=True, exist_ok=True)
         with open(logs / "voice-stdout.log", "wb") as out:
-            launch = self._popen(
-                [str(self.pythonw), "-m", "leeroy_voice", "run"], cwd=str(self.root / "voice"),
-                env=_voice_env(), stdin=subprocess.DEVNULL, stdout=out,
-                stderr=subprocess.STDOUT, close_fds=True,
-                creationflags=(getattr(subprocess, "DETACHED_PROCESS", 0)
-                               | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)))
+            launch = popen_outside_job(
+                self._popen, [str(self.pythonw), "-m", "leeroy_voice", "run"], what="voice",
+                creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+                cwd=str(self.root / "voice"), env=_voice_env(), stdin=subprocess.DEVNULL,
+                stdout=out, stderr=subprocess.STDOUT, close_fds=True)
         deadline = self._monotonic() + self.start_s
         while self._monotonic() < deadline:
             if {where.mind_port, where.ui_port} <= self._listening():

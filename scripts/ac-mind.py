@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "mind"))
 try:
     from leeroy_mind.lifecycle import (  # this checkout's own module
         OwnershipError, Outcome, Process, WindowsProcesses, canonical, family, launch_problem,
-        matches, mind_action, run_action, spawn_mind)
+        matches, mind_action, mind_base_python, run_action, spawn_mind)
 except Exception as exc:  # main() reports it in one line, as it reports every other failure
     _UNLOADED = exc
 else:
@@ -47,7 +47,7 @@ def main(argv=None):
     sys.path.insert(0, str(root / "mind"))
     try:
         from leeroy_mind.app import instance_lock_held
-        return run_action(args.action, root, data, python, sys._base_executable,
+        return run_action(args.action, root, data, python, mind_base_python(root),
                           processes=WindowsProcesses(), locked=instance_lock_held)
     except OwnershipError as exc:
         print(f"mind: {exc}", file=sys.stderr)

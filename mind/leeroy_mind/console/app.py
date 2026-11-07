@@ -2,13 +2,18 @@
 
 Every request must carry exactly one Host header, 127.0.0.1:<port> (against DNS rebinding), an
 Origin that is the console's own when it carries one, and a Sec-Fetch-Site of same-origin or none
-when it carries one. Every request but the page's own load and its static files must also carry
-the session key, once, in an X-Console-Key header. The printed URL holds the key in its fragment
-(/#key=...), which a browser never sends: the page takes it into memory, drops it from the address
-bar and sends it with each fetch, the event stream included. There is no cookie, so no other
-program on another 127.0.0.1 port is ever handed the key. Anything else is 403. A mutating
-request (POST) must also carry the console's Origin and a JSON body; there is no CORS, so another
-origin's script cannot read an answer or send a preflighted request (the key header needs one).
+when it carries one. A tailnet name the console was given (--allow-host, [console] allow_hosts)
+is a second address for it, behind `tailscale serve` on this machine (which keeps the browser's
+Host): a Host of NAME or NAME:443, whose own Origin is https://NAME. The two addresses' Origins
+never cross, and X-Forwarded-Host is ignored, as it always was. Every request but the page's
+own load and its static files must also carry the session key (made at each start, or the
+stable one in --key-file: keyfile.py), once, in an X-Console-Key header. The printed URL holds
+the key in its fragment (/#key=...), which a browser never sends: the page takes it into
+memory, drops it from the address bar and sends it with each fetch, the event stream included.
+There is no cookie, so no other program on another 127.0.0.1 port is ever handed the key.
+Anything else is 403. A mutating request (POST) must also carry the console's Origin and a JSON
+body; there is no CORS, so another origin's script cannot read an answer or send a preflighted
+request (the key header needs one).
 The static files need no key because a browser sends no header with a stylesheet or a module
 script; they are the package's own files and carry no data, and the page's policy (CSP) lets it
 run nothing else.
@@ -165,6 +170,8 @@ class Settings:
     voice_mind_port: int = 7879
     voice_data_dir: Path | None = None
     config_problem: str | None = None
+    allow_hosts: tuple[str, ...] = ()  # tailnet names (lower case) served at https://NAME too
+    stable_key: bool = False  # the key is --key-file's, not this start's
 
 
 class _Subscriber:
@@ -513,18 +520,33 @@ class ConsoleApp:
     def _key_ok(self, value: str | None) -> bool:
         return isinstance(value, str) and hmac.compare_digest(value.encode(), self.s.key.encode())
 
+    def _site(self, req: Request) -> str | None:
+        """The origin the request was sent to: the console's own, https://NAME for an allowed
+        tailnet name (a Host of NAME or NAME:443), or None for any other Host."""
+        hosts = req.all("host")
+        if len(hosts) != 1:
+            return None
+        if hosts[0] == f"{HOST}:{self.s.port}":
+            return self.origin
+        name = hosts[0].lower()
+        if name.endswith(":443"):
+            name = name[:-4]
+        return f"https://{name}" if name in self.s.allow_hosts else None
+
     def gate(self, req: Request) -> Response | None:
         """None when the request may go on; the refusal otherwise."""
-        if req.all("host") != [f"{HOST}:{self.s.port}"]:
-            return text(403, f"Forbidden. The console is served at {self.origin}/ only.")
+        site = self._site(req)
+        if site is None:
+            where = [f"{self.origin}/"] + [f"https://{n}/" for n in self.s.allow_hosts]
+            return text(403, f"Forbidden. The console is served at {' and '.join(where)} only.")
         origins = req.all("origin")
-        if len(origins) > 1 or (origins and origins[0] != self.origin):
+        if len(origins) > 1 or (origins and origins[0] != site):
             return text(403, "Forbidden: another origin.")
         sites = req.all("sec-fetch-site")
         if len(sites) > 1 or (sites and sites[0] not in ("same-origin", "none")):
             return text(403, "Forbidden: not from the console's own page.")
         if req.method == "POST":
-            if origins != [self.origin]:
+            if origins != [site]:
                 return text(403, "Forbidden: a change needs the console's own Origin.")
             kind = (req.one("content-type") or "").split(";")[0].strip().lower()
             if kind != "application/json":
@@ -535,6 +557,9 @@ class ConsoleApp:
             return None  # the page and its files: static, and its key stays in the browser
         if self._key_ok(req.one(KEY_HEADER)):
             return None
+        if self.s.stable_key:
+            return text(403, "Forbidden: no console key. Open the console's URL with its key "
+                             "(your bookmark, or the URL it printed when it started).")
         return text(403, "Forbidden: no console key. Open the URL the console printed when "
                          "it started (the key changes each time it starts).")
 
@@ -1033,6 +1058,10 @@ class ConsoleApp:
     @property
     def url(self) -> str:
         return f"{self.origin}/#key={self.s.key}"
+
+    @property
+    def tailnet_urls(self) -> list[str]:
+        return [f"https://{name}/#key={self.s.key}" for name in self.s.allow_hosts]
 
     async def close(self) -> None:
         for task in self._tasks:
