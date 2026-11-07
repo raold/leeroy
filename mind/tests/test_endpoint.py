@@ -159,6 +159,25 @@ def test_the_say_op_in_its_one_strict_form():
         parse_request(line(v=1, key=KEY, op="say", args={"channel": "whisper", "text": "hi"}), KEY)
 
 
+def test_the_board_op_in_its_one_strict_form():
+    assert endpoint.BOARD_ACTIONS == ("reply", "withdraw")
+    assert endpoint.BOARD_SHAPES == {"reply": {"action", "kind", "to", "text"},
+                                     "withdraw": {"action", "id"}}
+    assert "board" in endpoint.OPS
+    assert parse_request(line(v=1, key=KEY, op="board", args={
+        "action": "reply", "kind": "post", "to": 7, "text": "  see  you "}), KEY) == (
+        "board", {"action": "reply", "kind": "post", "to": 7, "text": "see you"})
+    assert parse_request(line(v=1, key=KEY, op="board", args={"action": "withdraw", "id": 3}),
+                         KEY) == ("board", {"action": "withdraw", "id": 3})
+    with pytest.raises(BadRequest, match="board needs args"):
+        parse_request(line(v=1, key=KEY, op="board"), KEY)
+    with pytest.raises(BadRequest, match="^There's nothing to send.$"):  # board_args' own words
+        parse_request(line(v=1, key=KEY, op="board", args={
+            "action": "reply", "kind": "letter", "to": 7, "text": " | "}), KEY)
+    with pytest.raises(BadRequest):
+        parse_request(line(v=1, key=KEY, op="board", args={"action": "withdraw", "id": "3"}), KEY)
+
+
 @pytest.mark.parametrize("raw, words", [
     (b'{"v":1,"key":"%s","op":"status"}' % KEY.encode(), "bad request"),  # no newline
     (b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n", "not a JSON line"),
@@ -180,6 +199,20 @@ def test_anything_else_is_a_bad_request(raw, words):
     with pytest.raises(BadRequest, match=words) as refused:
         parse_request(raw, KEY)
     assert not isinstance(refused.value, Forbidden)
+
+
+def test_the_shape_refusal_names_every_op_that_takes_args():
+    takes = []
+    for op in endpoint.OPS:
+        try:
+            parse_request(line(v=1, key=KEY, op=op), KEY)
+        except BadRequest as e:
+            assert str(e) == f"bad request: {op} needs args"
+            takes.append(op)
+    assert "library" in takes
+    with pytest.raises(BadRequest) as refused:
+        parse_request(line(key=KEY, op="status"), KEY)
+    assert all(op in str(refused.value) for op in takes), (takes, str(refused.value))
 
 
 @pytest.mark.parametrize("key", ["", "k" * 43, KEY[:-1], KEY + "K", 42, None, ["K"]])
@@ -253,6 +286,17 @@ class FakeSpeech:
         return {"ok": True, "message": "sent"}
 
 
+class FakeBoard:
+    def __init__(self):
+        self.asks, self.gate = [], None
+
+    async def handle(self, args):
+        self.asks.append(args)
+        if self.gate is not None:
+            await self.gate.wait()
+        return {"ok": True, "message": "Saved. The guild answers tonight.", "id": len(self.asks)}
+
+
 class FakeApp:
     def __init__(self, data_dir):
         self.data_dir = data_dir
@@ -260,6 +304,7 @@ class FakeApp:
         self.stops = 0
         self.guild = FakeGuild()
         self.speech = FakeSpeech()
+        self.board = FakeBoard()
 
     def request_stop(self):
         self.stops += 1
@@ -328,7 +373,8 @@ def test_status_answers_and_a_wrong_key_is_forbidden_without_logging_it(tmp_path
             reply = await ask(ep, "status")
             assert reply == {"ok": True, "v": 1, "pid": os.getpid(), "stopping": False,
                              "raid": FakeGuild().console_status(), "bridge_connected": None,
-                             "cast": None, "schema_version": None}  # this app cannot tell
+                             "cast": None, "schema_version": None,  # this app cannot tell
+                             "world": None}
             assert await ask(ep, "status", key="x" * 43) == {"ok": False, "error": "forbidden"}
             assert await ask(ep, "stop", key="x" * 43) == {"ok": False, "error": "forbidden"}
             assert app.stops == 0
@@ -354,6 +400,49 @@ def test_status_reports_the_bridge_the_cast_and_the_schema_for_the_health_check(
             reply = await ask(ep, "status")
             assert reply["ok"] is True and reply["bridge_connected"] is False
             assert reply["schema_version"] is None and reply["cast"] == 3
+    run(go())
+
+
+def test_status_carries_the_world(tmp_path):
+    from leeroy_mind.protocol import Hello
+
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            assert (await ask(ep, "status"))["world"] is None  # no hello yet
+            app.hello = Hello(ts=1793304000000, server="Acme", version="3.3.5", guild_id=1,
+                              human_guid=9)
+            app.bridge = SimpleNamespace(connected=True, greeted=True)
+            app.world = SimpleNamespace(members={i: object() for i in range(1, 6)},
+                                        online={1, 2, 3}, human_online=True,
+                                        cast_guids=lambda: {1, 2, 3, 4, 5})
+            world = (await ask(ep, "status"))["world"]
+            assert world == {"connected": True, "server": "Acme", "version": "3.3.5",
+                             "hello_at": 1793304000.0, "cast": 5, "cast_online": 3,
+                             "human_online": True}
+            app.bridge = SimpleNamespace(connected=False, greeted=False)  # stale view: unknown
+            assert (await ask(ep, "status"))["world"] == {"connected": False}
+            app.bridge = SimpleNamespace(connected=True, greeted=True)
+            app.world = SimpleNamespace()  # unreadable: status still answers, world unknown
+            reply = await ask(ep, "status")
+            assert reply["ok"] is True and reply["world"] is None
+    run(go())
+
+
+def test_a_bridge_down_after_a_hello_says_so(tmp_path):
+    """The Mind tab's "unknown (bridge down)": after a hello, a bridge that is down is said as
+    such, and the stale world view is never read."""
+    from leeroy_mind.protocol import Hello
+
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            app.hello = Hello(ts=1793304000000, server="Acme", version="3.3.5", guild_id=1,
+                              human_guid=9)
+            app.bridge = SimpleNamespace(connected=False, greeted=False)
+            app.world = SimpleNamespace()  # stale and unreadable: not asked
+            reply = await ask(ep, "status")
+            assert reply["ok"] is True and reply["world"] == {"connected": False}
+            app.hello = None
+            assert (await ask(ep, "status"))["world"] is None  # before any hello: unknown
     run(go())
 
 
@@ -477,6 +566,63 @@ def test_a_second_line_while_one_is_sending_is_refused(tmp_path, caplog):
     assert caplog.text.count("control_request: op=say channel=guild outcome=refused") == 2
     assert caplog.text.count("control_request: op=say channel=guild outcome=ok") == 2
     assert "omw" not in caplog.text and "again" not in caplog.text
+
+
+REPLY = {"action": "reply", "kind": "post", "to": 7, "text": "see you thursday"}
+
+
+def test_a_second_reply_while_one_is_saving_is_refused(tmp_path, caplog):
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            app.board.gate = asyncio.Event()
+            first = asyncio.create_task(ask(ep, "board", REPLY))
+            for _ in range(500):
+                if app.board.asks or first.done():
+                    break
+                await asyncio.sleep(0.01)
+            assert app.board.asks, await first
+            for args in (REPLY, {"action": "withdraw", "id": 1}):  # a double click, a withdraw
+                assert await ask(ep, "board", args) == {
+                    "ok": False, "error": "Another reply is still being saved."}
+            app.board.gate.set()
+            assert await first == {"ok": True, "message": "Saved. The guild answers tonight.",
+                                   "id": 1}
+            assert app.board.asks == [REPLY]  # the refused ones never reached the desk
+            app.board.gate = None
+            assert (await ask(ep, "board", {"action": "withdraw", "id": 1}))["ok"] is True
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        run(go())
+    assert caplog.text.count("control_request: op=board action=reply outcome=refused") == 1
+    assert caplog.text.count("control_request: op=board action=withdraw outcome=refused") == 1
+    assert caplog.text.count("control_request: op=board action=reply outcome=ok") == 1
+    assert "thursday" not in caplog.text
+
+
+def test_the_board_ops_words_and_a_long_letter_fits_one_line(tmp_path, caplog):
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            # 400 astral characters, each sent as two escapes: the longest reply there is
+            letter = {"action": "reply", "kind": "letter", "to": (1 << 63) - 1,
+                      "text": "\U0001F389" * 400}
+            assert len(endpoint.encode({"v": 1, "key": KEY, "op": "board", "args": letter})) > 4096
+            assert (await ask(ep, "board", letter))["ok"] is True
+            assert app.board.asks == [letter]
+            app.stopping = True
+            assert await ask(ep, "board", REPLY) == {"ok": False, "error": "The mind is stopping."}
+            app.stopping, app.board = False, None
+            assert await ask(ep, "board", REPLY) == {
+                "ok": False, "error": "Board replies are not running in this mind."}
+
+            async def broken(args):
+                raise RuntimeError("private reply text")
+            app.board = FakeBoard()
+            app.board.handle = broken
+            assert await ask(ep, "board", REPLY) == {
+                "ok": False, "error": "The reply could not be saved (RuntimeError)."}
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        run(go())
+    assert "private reply text" not in caplog.text and "thursday" not in caplog.text
+    assert "control_board_failed: error=RuntimeError" in caplog.text
 
 
 def test_a_slow_line_is_answered_in_time_and_holds_the_next_off(tmp_path):
@@ -685,6 +831,43 @@ def test_the_running_minds_status_says_its_bridge_cast_and_schema(tmp_path):
     run(go())
 
 
+def test_the_running_minds_board_op_answers_from_its_store(tmp_path):
+    """The real app over FakeBridge: its board desk is wired to the endpoint and to mind.db (the
+    Realm is off in this mind.toml, so a reply is refused in its words and nothing is stored)."""
+    from leeroy_mind.__main__ import serve
+
+    async def go():
+        bridge = FakeBridge([hello(0), CAST])
+        port = await bridge.start()
+        (tmp_path / "mind.toml").write_text(toml(port), encoding="utf-8")
+        seed_db(tmp_path / "mind.db", fake_clock())
+        apps = []
+        task = asyncio.create_task(serve(tmp_path, make_llm=lambda cfg: FakeLLM(reply, models={LIVE}),
+                                         ready=apps.append))
+        try:
+            while not apps or apps[0].control is None or not apps[0].control.listening.is_set():
+                await asyncio.sleep(0.02)
+            record = read_key_file(tmp_path / KEY_FILE)
+
+            def board(args):
+                return endpoint.request(record["port"], record["key"], "board", args)
+            assert await asyncio.to_thread(board, {"action": "withdraw", "id": 1}) == {
+                "ok": False, "error": "There is no such reply."}
+            refused = await asyncio.to_thread(board, {"action": "reply", "kind": "post", "to": 7,
+                                                      "text": "hi"})
+            assert refused["ok"] is False and refused["error"].startswith("The Realm is off")
+            count = apps[0].store.conn.execute("SELECT count(*) FROM board_reply").fetchone()[0]
+            apps[0].store.conn.commit()
+            assert count == 0
+            await asyncio.to_thread(endpoint.request, record["port"], record["key"], "stop")
+            assert await asyncio.wait_for(task, 30) == 0
+        finally:
+            if not task.done():
+                task.cancel()
+            await bridge.stop()
+    run(go())
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="the Windows descriptor")
 def test_the_private_descriptor_names_only_this_user():
     sddl = endpoint.private_sddl()
@@ -722,3 +905,312 @@ def test_an_unexpected_failure_answers_with_its_class_only(tmp_path, caplog):
     with caplog.at_level(logging.INFO, logger="leeroy_mind"):
         run(go())
     assert "control_failed: error=RuntimeError" in caplog.text and "private text" not in caplog.text
+
+
+# -- the bank op ---------------------------------------------------------------------------------
+
+BANK = {"money": 1234567, "tabs": [{"tab": 0, "name": "Food", "slots": [[0, 2589, 20]]}],
+        "log": [[1793304000, 4, 1101, 50000]]}
+
+
+class FakeArmory:
+    def __init__(self, *, fail=None, available=True, delay=0.0):
+        self.calls, self.fail, self.available, self.delay = [], fail, available, delay
+
+    def bank(self, guild_id):
+        self.calls.append(guild_id)
+        if self.delay:
+            import time
+            time.sleep(self.delay)
+        if self.fail:
+            raise self.fail
+        return json.loads(json.dumps(BANK))
+
+
+class Clock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+def _bank_app(app, armory, guild_id="21"):
+    app.guild = SimpleNamespace(armory=armory)
+    app.store = SimpleNamespace(get_meta=lambda k: guild_id if k == "guild_id" else None)
+    return armory
+
+
+def test_the_bank_op_takes_no_args():
+    assert parse_request(line(v=1, key=KEY, op="bank"), KEY) == ("bank", None)
+    with pytest.raises(BadRequest, match="bank takes no args"):
+        parse_request(line(v=1, key=KEY, op="bank", args={}), KEY)
+    assert "bank" in endpoint.OPS
+
+
+def test_the_bank_op_answers_a_snapshot(tmp_path):
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            armory = _bank_app(app, FakeArmory())
+            reply = await ask(ep, "bank")
+            assert reply["ok"] is True and reply["guild"] == 21
+            assert {k: reply[k] for k in BANK} == BANK and isinstance(reply["read_at"], float)
+            assert armory.calls == [21]
+    run(go())
+
+
+def test_the_bank_is_read_once_per_thirty_seconds(tmp_path):
+    clock = Clock()
+
+    async def go():
+        async with served(tmp_path, clock=clock) as (app, ep):
+            armory = _bank_app(app, FakeArmory())
+            first = await ask(ep, "bank")
+            clock.now += 10
+            assert await ask(ep, "bank") == first and len(armory.calls) == 1
+            clock.now += 21
+            await ask(ep, "bank")
+            assert len(armory.calls) == 2
+    run(go())
+
+
+def test_two_asks_at_once_share_one_read(tmp_path):
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            armory = _bank_app(app, FakeArmory(delay=0.3))
+            a, b = await asyncio.gather(ask(ep, "bank"), ask(ep, "bank"))
+            assert a["ok"] and a == b and len(armory.calls) == 1
+    run(go())
+
+
+def test_the_banks_words(tmp_path):
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            app.guild = None
+            assert (await ask(ep, "bank"))["error"] == "Guild life is not running in this mind."
+            _bank_app(app, FakeArmory(), guild_id="0")
+            assert (await ask(ep, "bank"))["error"] == (
+                "The mind doesn't know the guild yet (no game hello since it started).")
+            _bank_app(app, FakeArmory(available=False))
+            assert (await ask(ep, "bank"))["error"] == (
+                "The mind can't read the game database (worldserver.conf or mysql.exe not found).")
+            _bank_app(app, FakeArmory(fail=ValueError("slot twice")))
+            assert (await ask(ep, "bank"))["error"] == "The game database didn't answer (ValueError)."
+    run(go())
+
+
+def test_a_slow_database_is_named_and_the_read_goes_on(tmp_path):
+    async def go():
+        async with served(tmp_path, bank_s=0.1) as (app, ep):
+            armory = _bank_app(app, FakeArmory(delay=0.5))
+            reply = await ask(ep, "bank")
+            assert reply == {"ok": False, "error":
+                             "The game database is slow to answer. Try again in a moment."}
+            await asyncio.sleep(0.6)
+            assert (await ask(ep, "bank"))["ok"] is True and len(armory.calls) == 1
+    run(go())
+
+
+def test_a_mysql_failure_names_no_secret(tmp_path, caplog, monkeypatch):
+    from leeroy_mind.guild.config import GuildConfig
+    from leeroy_mind.guild.ports import LazyArmory
+    from leeroy_mind.library.mysql import QueryError
+    from leeroy_mind.personas import roster
+
+    def boom(db, sql, exe):
+        raise QueryError("access denied for hunter2")
+    monkeypatch.setattr(roster, "run_mysql", boom)
+    armory = LazyArmory(GuildConfig(worldserver_conf=Path(__file__)))
+    armory._backend = SimpleNamespace(chars="db")
+
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            _bank_app(app, armory)
+            return await ask(ep, "bank")
+    with caplog.at_level(logging.DEBUG):
+        reply = run(go())
+    assert reply == {"ok": False, "error": "The game database didn't answer (QueryError)."}
+    assert "hunter2" not in json.dumps(reply) + caplog.text
+    assert "op=bank outcome=refused" in caplog.text
+
+
+def test_a_missing_mysql_exe_gets_the_unreadable_words(tmp_path):
+    from leeroy_mind.personas.roster import RosterError
+
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            _bank_app(app, FakeArmory(fail=RosterError("mysql did not run: FileNotFoundError")))
+            return await ask(ep, "bank")
+    assert run(go()) == {"ok": False, "error": "The mind can't read the game database "
+                                               "(worldserver.conf or mysql.exe not found)."}
+
+
+def test_a_stopping_mind_reads_nothing(tmp_path):
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            armory = _bank_app(app, FakeArmory())
+            app.stopping = True
+            assert (await ask(ep, "bank"))["error"] == "the mind is stopping"
+            assert armory.calls == []
+    run(go())
+
+
+# -- the library op ------------------------------------------------------------------------------
+
+LIB_SECRET = "xyzzyplugh"
+
+
+class FakeAdmin:
+    def __init__(self, loaded):
+        self.loaded, self.calls = loaded, []
+
+    async def loaded_models(self):
+        self.calls.append("ps")
+        return list(self.loaded)
+
+    async def preload(self, *a, **kw):
+        self.calls.append("preload")
+
+    async def unload(self, *a, **kw):
+        self.calls.append("unload")
+
+
+async def _library_app(app, tmp_path, *, loaded=("qwen3-embedding:0.6b",), gate=None, vectors=True):
+    from leeroy_mind.library.chunks import ChunkDraft
+    from leeroy_mind.library.core import DEFAULT_EMBED_MODEL, Library
+    from leeroy_mind.library.search_worker import LibrarySearchWorker
+    from test_library_core import ListSource
+    path = tmp_path / "library.db"
+    llm = FakeLLM(gate=gate)
+    lib = Library(path, clock=SimpleNamespace(now=lambda: 1.0))
+    lib.build([ListSource("world", [
+        ChunkDraft("c:1", "command", ".setskill", ".setskill #skill #level\nSets a weapon skill."),
+        ChunkDraft("t:1", "teleport", "Hyjal", "Mount Hyjal: .tele hyjal"),
+        ChunkDraft("i:1", "item", "Rune of Fate", "Rune of Fate: epic trinket.")])])
+    if vectors:
+        await lib.embed_pending(FakeLLM())
+    lib.close()
+    app.library = Library(path, clock=SimpleNamespace(now=lambda: 1.0), readonly=True)
+    app.library_search = LibrarySearchWorker(path, embed_model=DEFAULT_EMBED_MODEL)
+    app.scheduler = llm
+    app.cfg = SimpleNamespace(models=SimpleNamespace(embedding=DEFAULT_EMBED_MODEL))
+    app.arbiter = SimpleNamespace(admin=FakeAdmin(loaded))
+    return llm
+
+
+def test_the_library_op_takes_a_query_and_k():
+    assert parse_request(line(v=1, key=KEY, op="library", args={"query": " a  b ", "k": 3}),
+                         KEY) == ("library", {"query": "a b", "k": 3})
+    assert parse_request(line(v=1, key=KEY, op="library", args={"query": "a"}),
+                         KEY)[1] == {"query": "a", "k": 12}
+    for bad in ({"query": ""}, {"query": "a" * 201}, {"query": "a", "k": 0},
+                {"query": "a", "k": 13}, {"query": "a", "k": True}, {"query": 5},
+                {"query": "a", "extra": 1}, {}, [], None):
+        with pytest.raises(BadRequest):
+            parse_request(line(v=1, key=KEY, op="library", args=bad), KEY)
+    with pytest.raises(BadRequest):
+        parse_request(line(v=1, key=KEY, op="library"), KEY)
+
+
+def test_the_library_op_embeds_once_and_never_loads_a_model(tmp_path):
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            llm = await _library_app(app, tmp_path)
+            try:
+                llm.calls.clear()
+                reply = await ask(ep, "library", {"query": "weapon skill", "k": 5})
+                assert reply["ok"] is True and 1 <= len(reply["hits"]) <= 5
+                assert reply["hits"][0]["kind"] in ("command", "teleport", "item")
+                assert set(reply["hits"][0]) == {"id", "kind", "title", "section", "text",
+                                                 "source", "cite", "score"}
+                assert len(llm.calls) == 1 and "input" in llm.calls[0]  # one embed, no chat
+                assert app.arbiter.admin.calls == ["ps"]  # looked, never loaded or unloaded
+            finally:
+                await app.library_search.aclose()
+                app.library.close()
+    run(go())
+
+
+def test_the_library_op_says_why_it_cannot(tmp_path):
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            assert (await ask(ep, "library", {"query": "x"}))["ok"] is False  # no library at all
+            llm = await _library_app(app, tmp_path, loaded=("some-chat:latest",))
+            try:
+                llm.calls.clear()
+                r = await ask(ep, "library", {"query": "x"})
+                assert r["ok"] is False and "embedding model" in r["error"] and llm.calls == []
+                assert app.arbiter.admin.calls == ["ps"]
+                app.arbiter.admin.loaded = ["qwen3-embedding:0.6b"]
+                app.arbiter = None  # cannot tell
+                r = await ask(ep, "library", {"query": "x"})
+                assert r["ok"] is False and llm.calls == []
+                app.stopping = True
+                assert (await ask(ep, "library", {"query": "x"}))["error"] == "the mind is stopping"
+            finally:
+                await app.library_search.aclose()
+                app.library.close()
+    run(go())
+
+
+def test_the_library_op_without_vectors_says_so(tmp_path):
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            llm = await _library_app(app, tmp_path, vectors=False)
+            try:
+                r = await ask(ep, "library", {"query": "x"})
+                assert r["ok"] is False and "embeddings" in r["error"] and llm.calls == []
+            finally:
+                await app.library_search.aclose()
+                app.library.close()
+    run(go())
+
+
+def test_the_library_op_runs_one_call_at_a_time(tmp_path):
+    async def go():
+        gate = asyncio.Event()
+        async with served(tmp_path) as (app, ep):
+            await _library_app(app, tmp_path, gate=gate)
+            try:
+                first = asyncio.create_task(ask(ep, "library", {"query": "weapon"}))
+                await asyncio.sleep(0.3)
+                busy = await ask(ep, "library", {"query": "weapon"})
+                assert busy == {"ok": False, "error": "Another library search is running."}
+                gate.set()
+                assert (await first)["ok"] is True
+            finally:
+                gate.set()
+                await app.library_search.aclose()
+                app.library.close()
+    run(go())
+
+
+def test_the_library_op_never_logs_the_query(tmp_path, caplog):
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            llm = await _library_app(app, tmp_path)
+            try:
+                await ask(ep, "library", {"query": LIB_SECRET})
+                llm.fail_next(1)
+                await ask(ep, "library", {"query": LIB_SECRET})
+            finally:
+                await app.library_search.aclose()
+                app.library.close()
+    with caplog.at_level(logging.DEBUG):
+        run(go())
+    assert "control_request: op=library" in caplog.text and LIB_SECRET not in caplog.text
+
+
+def test_a_failed_embed_is_not_answered_as_a_deeper_search(tmp_path):
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            llm = await _library_app(app, tmp_path)
+            try:
+                llm.fail_next(1)
+                r = await ask(ep, "library", {"query": "weapon skill"})
+                assert r == {"ok": False, "error": "The mind couldn't run a deeper search just now."}
+                assert (await ask(ep, "library", {"query": "weapon skill"}))["ok"] is True
+            finally:
+                await app.library_search.aclose()
+                app.library.close()
+    run(go())

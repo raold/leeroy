@@ -1,5 +1,6 @@
 import { $, api, arr, cell, clear, el, emit, emptyRow, num, obj, on, own, pad, plural, post, refused,
          setText, str } from "./core.mjs";
+import { face, nameCell } from "./faces.mjs";
 import { askConfirm } from "./mind.mjs";
 import { S, roomOf } from "./state.mjs";
 import { setPill } from "./strip.mjs";
@@ -165,7 +166,8 @@ function renderRaidMembers(view, open, run) {
     if (open && r.g === open.lead) { tags.push("lead"); }
     if (open && r.g === open.tank) { tags.push("tank"); }
     if (open && r.g === open.loot) { tags.push("loot"); }
-    cell(tr, who(view, r.g) + (tags.length ? " (" + tags.join(", ") + ")" : ""));
+    nameCell(tr, r.g, who(view, r.g), { you: r.g === view.human,
+                                       text: who(view, r.g) + (tags.length ? " (" + tags.join(", ") + ")" : "") });
     cell(tr, str(r.p.role) || "-", "role-" + str(r.p.role));
     cell(tr, (CLASSES[r.p["class"]] || "-") + (r.p.spec ? " " + r.p.spec : ""));
     cell(tr, r.p.level ? String(r.p.level) : "-", "num");
@@ -188,7 +190,7 @@ function renderRaidLoot(view, open) {
     cell(tr, str(it.name) || ("item " + (it.item_id || "?")));
     cell(tr, typeof it.price === "number" ? String(it.price) : "-", "num");
     cell(tr, (LOOT_STATES[it.state] || str(it.state)) + (it.claimed ? " (you claimed it)" : ""));
-    cell(tr, it.winner ? who(view, it.winner) : "-");
+    nameCell(tr, it.winner, it.winner ? who(view, it.winner) : "-", { you: it.winner === view.human });
     cell(tr, typeof it.paid === "number" ? dkp(it.paid) + (it.close ? " (close)" : "") : "-", "num");
     body.appendChild(tr);
   });
@@ -205,7 +207,14 @@ function renderRaidDkp(view, open) {
     else if (e.reason === "standby") { text = "+" + amt + " standby to " + plural(e.n, "member"); }
     else if (e.reason === "item") { text = who(view, e.guid) + " paid " + dkp(-num(e.total)) + (e.item ? " for " + e.item : ""); }
     else { text = str(e.reason) + " " + dkp(num(e.total)) + (e.guid ? " for " + who(view, e.guid) : ""); }
-    box.appendChild(el("div", "r", when(e.ts) + "  " + text));
+    var line = el("div", "r");
+    if (e.guid) {
+      var wrap = el("span", "dkpface");
+      wrap.appendChild(face(e.guid, who(view, e.guid), "list", { you: e.guid === view.human }));
+      line.appendChild(wrap);
+    }
+    line.appendChild(document.createTextNode(when(e.ts) + "  " + text));
+    box.appendChild(line);
   });
   if (!events.length) { box.appendChild(el("div", "muted", open ? "No DKP has moved in this raid yet." : "No raid is open.")); }
   box.scrollTop = box.scrollHeight;
@@ -217,7 +226,7 @@ function renderRecent(view) {
     var tr = el("tr");
     cell(tr, when(r.started));
     cell(tr, raidName(view, r.raid) + mode(r.size, r.heroic) + (r.offline ? " (offline)" : ""));
-    cell(tr, who(view, r.lead));
+    nameCell(tr, r.lead, who(view, r.lead), { you: r.lead === view.human });
     cell(tr, String(num(r.kills)) + (r.bosses ? "/" + r.bosses : ""), "num");
     cell(tr, String(num(r.wipes)), "num");
     cell(tr, (r.not_raided ? "not raided: " : "") + (str(r.outcome).replace(/_/g, " ") || "-"));

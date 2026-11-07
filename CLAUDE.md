@@ -732,15 +732,20 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   the mind or its bridge is down, or the session cannot be read, it is shown as
   unknown, never "not in game". Its Raid and Guild tabs read mind.db read-only
   (raids, attendance, the DKP ledger, loot receipts, the roster, season awards,
-  the chronicle); the Raid tab's live state and buttons come from the mind's
-  control endpoint. The Personas tab is read-only too (`console/personaview.py`):
+  the chronicle, and the Guild tab's DKP stats from `raidview.dkp_stats`: each
+  member's attendance over the finished raids since their first, who is due an
+  item (4 such raids since their last, DKP above 0, at most 10) and what each of
+  the last 20 raids awarded and spent); the Raid tab's live state and buttons come
+  from the mind's control endpoint. The Personas tab is read-only too (`console/personaview.py`;
+  it opens on a wall of the cast's faces below "Choose selfies", with a Wall / Table
+  switch remembered in `guild-console-personas-view`):
   each member's night mood, stance, row toward the owner, strongest ties, memory
   counts, persona version and who last wrote it (seed, owner, generator, the
   night's looks pass or photo-kind pass, a stance move or an undo), open drift
   flags and the night's trait sample, and per member the persona card summary
   (its looks with the photo kind), ties, memories by kind and ledger; a table
   an older mind.db lacks shows as unavailable. Its writes are the profile
-  photos (see the selfie worker) and the tuning (`leeroy_mind/tuning/`,
+  photos (see the selfie worker), his Board replies (below) and the tuning (`leeroy_mind/tuning/`,
   console `tuneview.py`): the
   owner's dials, stored in mind.db's `tuning_*` tables as an overlay that never
   rewrites a persona. Member dials: talkative, argumentative, forward/flirty
@@ -760,13 +765,16 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   with no inline style. Dark is the default whatever the system setting; the
   light/dark switch is remembered in `localStorage` (`guild-console-theme`,
   with the folds and read marks, `guild-console-collapsed` and
-  `guild-console-read`). It has 13 tabs: Comms, Raid, Guild, Personas and Mind
-  are real; Social, Board, Calendar, Bank, Realm, Training, Dojo and Library
-  are placeholders that wait for P3. `GET /api/face?guid=<int>&size=sm|md|lg` serves
+  `guild-console-read`). It has 13 tabs (Comms, Raid, Guild, Personas, Social,
+  Board, Calendar, Bank, Realm, Training, Dojo, Library, Mind); each polls only
+  while it is open and the page is visible, one request at a time. A source that is
+  not there yet answers 200 and reads "Not set up yet: <why>"; only a file that
+  exists but cannot be read is a 503. `GET /api/face?guid=<int>&size=sm|md|lg` serves
   `mind-data/selfies/<guid>/chosen.jpg` (key and Host checked, `image/jpeg`,
   `private, max-age=60`, 404 when absent; the original for every size, the
   browser scales it) and never writes under `selfies/`; faces (initials when
-  there is no photo) show in Comms and on the Personas roster. Comms is one
+  there is no photo) show in Comms, Raid, Guild, Social, Board, Calendar, Bank and
+  Realm and on the Personas wall and roster. Comms is one
   feed of typed lines and the room lines he heard (from mind.db: a line
   appears once it has played to him, a dropped one does not), channels with
   unread counts (a first open or reload marks history read), the 32-room tree
@@ -791,6 +799,53 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   reset at each login): mute stops his push-to-talk, deafen silences the room.
   After a release they need the voice service restarted: an older voice
   service ignores `self`.
+  The other tabs read, each through one `GET /api/<tab>` and one view module
+  (`console/<tab>view.py`; a table an older mind.db lacks is listed in `missing`
+  and reads as empty). Social: the guild's drama as the night wrote it (feuds,
+  jealousy, romances, how members feel about him, live rumours, the guild mood).
+  Calendar: what the Realm's calendar desk posted (raid nights, Thursday's officer
+  meeting, birthdays) with who signed up, and the raid nights he missed, by the
+  desk's own rule (`realm.calendar.night_text`). Realm: the rival guilds with their
+  people and progress, the race for first kills, the week's poaching offer, the
+  rivals' Trade lines and the canon grants. Bank: the guild bank's gold, six tabs
+  as grids and money log from the mind's `bank` op (the mind runs the SELECTs, so
+  the database password never reaches the console; item names from library.db),
+  with the officers' stock and withdrawal ledger (`realm_bank`) from mind.db, and in
+  words why there is no snapshot while the mind is down. Training: what `training
+  status`, `gate`, `trials` and `cards` print (`training/inspect.py`, shared with
+  the CLI): fights, the 28-day count, the gate, trials and cards. Dojo: only the
+  dojo's own files, through `--dojo-layout PATH` (default
+  `<root>/dojo-runtime/instances/dojo-01/layout.json`; from the layout only
+  `format`, `marker`, `instance`, `roots.data`, `roots.runtime`, `provenance` and
+  `ports.world`, never its database, secrets, configs or logs; files capped in
+  size and only under those roots; a read-only `git` for whether the checkouts
+  moved): whether its worldserver runs (pid file and the TCP table), the newest
+  build, baselines, G0-G5 with their evidence, runs, episodes and replays, the
+  scenario and its hash, "not yet" for later work, and "No dojo set up" without
+  a layout. Library: a BM25 search of library.db, opened read-only per search
+  (`?q=&kind=`, no Ollama, so it works with the mind down); when it finds nothing,
+  or on "Search deeper", it asks the mind's `library` op (`deeper=1`), which works
+  with `--no-control`. Mind adds the game server (`/api/health`'s `server`):
+  worldserver, authserver and the bridge are up when the console's TCP table shows
+  a listener on 8085, 3724 and 7878 (it never reads worldserver.conf), and
+  `status`'s `world` says whether he is in game and how many of the cast are
+  online, unknown while the mind or its bridge is down. Board: the Realm's forum
+  threads, the letters delivered to his mailbox (`sent` or `taken`; one not yet
+  delivered stays hidden) and the event write-ups, with his replies under the post
+  or letter each answers. His one write there is `POST /api/board`
+  {`action`: `reply`, `kind`: `post`|`letter`, `to`, `text`} or {`action`:
+  `withdraw`, `id`}, checked and cleaned as the mind checks it
+  (`endpoint.board_args`, the rule of `board.py` and `boardmodel.mjs`: `|` and
+  control characters dropped, whitespace collapsed, then an empty text or one over
+  200 characters for a forum post or 400 for a letter refused, never cut; 400 with
+  its words), 403 with `--no-control` and 409 while the mind is not running or
+  there is no link. The mind's `board` op then stores it in mind.db's
+  `board_reply` (migration 0020) `waiting`, only while the Realm is on, one
+  waiting reply per post or letter (a second is refused in words) and only to a
+  post still on the forum or a letter in his mailbox from a member with a persona;
+  a waiting reply can be withdrawn. The page says "waiting for tonight" until the
+  Realm night takes it (see the Realm's Night). Logs carry the kind and outcome,
+  never the text.
 - The mind's control endpoint (`leeroy_mind/endpoint.py`) is on by default
   (`[control] enabled = false` turns it off; `[control] port`, default 0, picks
   a free port). It listens on 127.0.0.1 only and writes a new key each start,
@@ -805,7 +860,17 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   timers would, with the same guards, and are refused while he is not in game,
   and `say` {channel, text, to} (`owner_say.py`: the shared text rule, one line
   at a time, sent to the bridge as `owner_say`; logs carry op, channel and
-  outcome, never the text).
+  outcome, never the text), `board` {action: reply {kind, to, text} | withdraw
+  {id}} (his Board replies, `board.py`, one at a time), and two reads: `bank`
+  (`guild/bankread.py`: money, the six tabs' slots and the money log by four
+  read-only SELECTs through guild life's armory, one read at a time within 15 s,
+  an answer younger than 30 s given again; errors are words, never the database's
+  text) and `library` {query[, k]} (the mind's semantic search over library.db:
+  one embedding call on the embedding model Ollama already holds, never a load and
+  never a chat model, refused in words otherwise; up to 12 hits; the query is never
+  logged). `status` also carries `world`, the last hello's server and version with
+  the cast count, how many are online and whether he is, or null before a hello and
+  while the bridge is down.
   `stop`/`start` of a raid switch dungeon-clear off and on again mid-raid. The
   console sends the key only to the listener the TCP table shows is the running
   mind's own pid; its Stop and Restart use the clean stop (asked up to five
@@ -868,10 +933,15 @@ Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
   reserving anyone: the action journal settles that as refused, holding nobody, and each start
   reads again a stored unknown whose only evidence is such a refusal. The same goes for a
   rearm, `rpg_status`, `equip` or `set_profession` acked and then failed at one body's step for a
-  fence or a `busy:` reason such as `busy:combat` (`STEP_REFUSALS`): native refused that body
+  fence or a `busy:` reason such as `busy:combat` (`STEP_REFUSALS`), or a rearm for
+  `weapon_record_unavailable` (`KIND_STEP_REFUSALS`): native refused that body
   before changing it and released them all, so it settles `step_refused` and Recall goes on to
-  the defaults. Any other failed job (`operation_transition_unknown`, a walk, leave, duel or
-  grow) stays unknown. A root that settles unknown or conflict logs a warning in mind.log,
+  the defaults. Native keeps the weapon records in memory, so a worldserver start empties them
+  until the 60 s poll finds each body online and free; a rearm now records an armed body that
+  has none, as that poll would. Any other failed job (`operation_transition_unknown`, a walk,
+  leave, duel or grow) stays unknown: a leave's `wg_private_state_unavailable` (a member in
+  Wintergrasp) is a Refuse only until that leave has changed a body, and its job does not say
+  which. A root that settles unknown or conflict logs a warning in mind.log,
   `realm_action_unknown` (or `realm_action_conflict`) with its id, kind, reason, native's reason
   and member count, no names: from then on it holds its manifest.
 - **Rulings.** His raid holds exactly his raid: waiting for the call, called and forming hold
@@ -884,7 +954,20 @@ Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
 - **Night.** With the Realm on at the mind's start, stage `realm` runs after `stories` on the
   reflection model: 0-2 Trade beats per rival guild (said the next day, screened again), up to
   3 forum posts, 3 letters (written through the post office) and 2 write-ups. It counts 0 and
-  writes nothing while `[realm] enabled` is false.
+  writes nothing while `[realm] enabled` is false. His Board replies (`board_reply`, migration
+  0020) go first, oldest first, inside those caps of 3 posts and 3 letters. A forum reply that
+  passes the forum screen and the forum fact's own (checked before any model call) becomes his
+  public `forum_post_v1` fact, known by every realm guild by `forum`, and the post's author
+  answers it in the same thread while they can still write (else the night's author pool;
+  nobody leaves it `posted`, unanswered), with memories as other posts get them (the way back in
+  for a thread about an event fact, none for a rumour's). A letter reply that passes the letter
+  screen becomes that member's private memory with him (key `board-reply:<id>`) and an answer
+  letter (`realm_mail` kind `reply`, `ready`) the post office delivers under its usual limits.
+  His text refused is settled `refused` with its reason and never retried; an answer refused or
+  not given (the model's error) leaves his reply waiting for another night, at most 3 such nights
+  (meta `board:reply:<id>:failed`), then it is settled `refused`, `no_answer`; one he withdrew
+  before the commit is left alone.
+  While the screen is not ready his forum replies wait; letter replies do not.
 - **Calendar and mail.** The desk posts raid nights (from his logins), Thursday's officer
   meeting and the members' card birthdays a week ahead, signs members up and notes the raid
   nights he missed; native keeps 100 guild events. Mail: a letter once per absence, a week

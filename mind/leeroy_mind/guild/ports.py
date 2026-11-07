@@ -128,6 +128,16 @@ class LazyArmory:
             backend = self._get()
             return {m.guid: m for m in query_roster(backend.chars, guild_id, self.cfg.mysql_exe)}
 
+    def bank(self, guild_id):
+        """The guild bank (bankread.parse_bank's dict): four read-only SELECTs on the character
+        database, the credentials never leaving this process."""
+        from leeroy_mind.personas.roster import run_mysql
+        from .bankread import bank_sql, parse_bank
+        queries = bank_sql(guild_id)
+        with self._lock:
+            backend = self._get()
+            return parse_bank(*(run_mysql(backend.chars, q, self.cfg.mysql_exe) for q in queries))
+
     def friends(self, human):
         from leeroy_mind.personas.roster import run_mysql, RosterError
         if type(human) is not int or not 0 < human <= 0xFFFFFFFF:

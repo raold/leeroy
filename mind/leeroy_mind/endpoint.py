@@ -14,11 +14,14 @@ key only to a listener that the TCP table shows is the running mind's own proces
 
 A request: one connection, one line. A JSON object of at most MAX_LINE bytes ending in a
 newline, sent within READ_S (2 s), with exactly the keys v (1), key, op and, for a raid, tune,
-selfie or say action only, args. Anything else (an unknown or missing key, a wrong type, an HTTP
-request) is refused and the connection closed; nothing after the first line is read. One answer
-line comes back, {"ok": true, ...} or {"ok": false, "error": ...}, and the connection closes.
+selfie, say, board or library action only, args. Anything else (an unknown or missing key, a
+wrong type, an HTTP request) is refused and the connection closed; nothing after the first line
+is read. One answer line comes back, {"ok": true, ...} or {"ok": false, "error": ...}, and the
+connection closes.
 
-    status          the raid night's state and which raid actions can run now, or why not
+    status          the raid night's state and which raid actions can run now, or why not,
+                    and `world`: the game server's last hello and who is online (null before one,
+                    {"connected": false} while the bridge is down after one)
     stop            the mind's own clean shutdown, the one Ctrl+C runs: answered, then begun
     raid {action}   call | form {raid, size, heroic, lead} | summon | start | stop | end:
                     guild life's own transitions, on the mind's event loop, with its guards
@@ -37,9 +40,25 @@ line comes back, {"ok": true, ...} or {"ok": false, "error": ...}, and the conne
                     his raid when his group is one, else his party. say_args refuses a line the
                     game would (empty, over 255 bytes, a command), and every refusal comes back
                     as the sentence the console shows
+    bank            the guild bank (leeroy_mind.guild.bankread): money, the six tabs' slots and the
+                    money log, read by four read-only SELECTs through guild life's armory (the
+                    database credentials never leave this process), one read at a time, within
+                    BANK_READ_S, and an answer younger than BANK_CACHE_S given again as it is
+    board {action}  reply {kind, to, text} | withdraw {id}: his reply on the Board to a Realm
+                    forum post or a letter in his mailbox (leeroy_mind.board), stored in
+                    mind.db waiting for the Realm night, or a waiting one taken back; one at a
+                    time. board_args refuses a text the store would (empty, too long for its
+                    kind, not UTF-8), in the words the console shows
+    library {query[, k]}
+                    the mind's own semantic search over library.db (read-only): one embedding call
+                    on the embedding model Ollama already holds (never a chat model, never a
+                    load), refused in words while the mind is stopping, the embedder is not
+                    loaded or the library has no vectors, or another library call is running;
+                    answers up to k (1-12) hits in the console's hit shape. The query is never
+                    logged
 
 Logs carry the op, the action (for say, the channel) and the outcome, never the key, a name, a
-preview's text or a line's."""
+preview's text, a line's or a reply's."""
 import asyncio
 import json
 import logging
@@ -57,15 +76,18 @@ from leeroy_mind.logs import log as log_event
 
 VERSION = 1
 KEY_FILE = "control.json"
-MAX_LINE = 4096
+MAX_LINE = 8192  # a 400-character letter reply escaped (12 bytes an astral character) fits
 MAX_REPLY = 65536
 READ_S = 2.0  # the console sends its line at once: a slot is not held longer
 RAID_S = 30.0  # how long one raid action may take before the console is answered anyway
 PREVIEW_S = 40.0  # a preview's two lines, before and after, at background priority
 SAY_S = 10.0  # one line of his, past the bridge's own 5 s ack wait
+BANK_READ_S = 15.0  # the four bank queries, before the console is answered anyway
+LIBRARY_READ_S = 15.0  # the query embedding and the ranking, before the console is answered anyway
+BANK_CACHE_S = 30.0  # a bank snapshot younger than this is answered as it is
 MAX_CONNECTIONS = 8
 REPLACE_TRIES = 40  # 2 s of 50 ms tries to move control.json over a file being read
-OPS = ("status", "stop", "raid", "tune", "selfie", "say")
+OPS = ("status", "stop", "raid", "tune", "selfie", "say", "bank", "board", "library")
 RAID_ACTIONS = ("call", "form", "summon", "start", "stop", "end")
 TUNE_ACTIONS = ("status", "set", "undo", "revert", "group", "retire", "preview")
 TUNE_SHAPES = {
@@ -87,6 +109,8 @@ SELFIE_SHAPES = {
 }
 SAY_CHANNELS = ("guild", "officer", "group", "whisper")
 MAX_SAY_CHARS = 1024  # what the console's box may hold; a line the game takes is 255 bytes
+BOARD_ACTIONS = ("reply", "withdraw")
+BOARD_SHAPES = {"reply": {"action", "kind", "to", "text"}, "withdraw": {"action", "id"}}
 _DIAL_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz_")
 KEY_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
 
@@ -534,6 +558,55 @@ def say_args(args) -> dict:
     return {"channel": channel, "text": cleaned, "to": args["to"]}
 
 
+def _row_id(v) -> bool:
+    return type(v) is int and 1 <= v < 1 << 63
+
+
+def board_args(args) -> dict:
+    """A board action's arguments, exactly (BOARD_SHAPES): kind "post" or "letter", to (the post
+    or letter he answers) and id (a reply) row numbers from 1 below 2**63, never a boolean; text
+    a string of at most board.RAW_MAX characters that encodes as UTF-8 and cleans to a reply its
+    kind may hold (board.text_problem). The arguments with the cleaned text, or BadRequest with
+    the sentence the console shows."""
+    from leeroy_mind.board import KINDS, text_problem
+    if not isinstance(args, dict) or args.get("action") not in BOARD_ACTIONS:
+        raise BadRequest("board: an action, one of " + ", ".join(BOARD_ACTIONS))
+    action = args["action"]
+    shape = BOARD_SHAPES[action]
+    if set(args) != shape:
+        raise BadRequest(f"board {action}: exactly " + ", ".join(sorted(shape - {"action"})))
+    if action == "withdraw":
+        if not _row_id(args["id"]):
+            raise BadRequest("board withdraw: id is a reply's number")
+        return {"action": "withdraw", "id": args["id"]}
+    kind, to, text = args["kind"], args["to"], args["text"]
+    if not isinstance(kind, str) or kind not in KINDS:
+        raise BadRequest("board reply: kind is post or letter")
+    if not _row_id(to):
+        raise BadRequest(f"board reply: to is the {kind}'s number")
+    if not isinstance(text, str):
+        raise BadRequest("board reply: text is text")
+    problem, cleaned = text_problem(kind, text)
+    if problem is not None:
+        raise BadRequest(problem)
+    return {"action": "reply", "kind": kind, "to": to, "text": cleaned}
+
+
+def library_args(args) -> dict:
+    """A library call's arguments: {"query"} or {"query", "k"}; the query 1-200 characters once
+    its whitespace is collapsed, k 1-12 (12 when absent). The cleaned arguments."""
+    from leeroy_mind.console.libraryview import K, QUERY_MAX, clean_query
+    if not isinstance(args, dict) or "query" not in args or not set(args) <= {"query", "k"}:
+        raise BadRequest("A library search takes query, and optionally k.")
+    query = clean_query(args["query"])
+    if query is None:
+        raise BadRequest(f"A library question is 1 to {QUERY_MAX} characters.")
+    k = args.get("k", K)
+    if type(k) is not int or not 1 <= k <= K:
+        raise BadRequest(f"k is 1 to {K}.")
+    return {"query": query, "k": k}
+
+
 def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     """(op, args) from one request line; Forbidden for a wrong key, BadRequest otherwise."""
     if not line.endswith(b"\n") or len(line) > MAX_LINE:
@@ -544,8 +617,8 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
         raise BadRequest("bad request: not a JSON line") from None
     if not isinstance(value, dict) or not {"v", "key", "op"} <= set(value) <= {
             "v", "key", "op", "args"}:
-        raise BadRequest("bad request: exactly v, key, op (and args for a raid, tune, selfie or "
-                         "say action)")
+        raise BadRequest("bad request: exactly v, key, op (and args for a raid, tune, selfie, "
+                         "say, board or library action)")
     given = value["key"]
     if not isinstance(given, str) or not secrets.compare_digest(
             given.encode("utf-8", "surrogatepass"), key.encode("ascii")):
@@ -556,7 +629,7 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     if op not in OPS:
         raise BadRequest("bad request: op is one of " + ", ".join(OPS))
     parse_args = {"raid": raid_args, "tune": tune_args, "selfie": selfie_args,
-                  "say": say_args}.get(op)
+                  "say": say_args, "board": board_args, "library": library_args}.get(op)
     if parse_args is None:
         if "args" in value:
             raise BadRequest(f"bad request: {op} takes no args")
@@ -564,6 +637,22 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     if "args" not in value:
         raise BadRequest(f"bad request: {op} needs args")
     return op, parse_args(value["args"])
+
+
+def world_status(app) -> dict | None:
+    """The game server as the last hello and the world view tell it; None before a hello, and
+    {"connected": False} while the bridge is down after one (the world view is then stale: his
+    game state is unknown)."""
+    hello = getattr(app, "hello", None)
+    if hello is None:
+        return None
+    if not app.bridge.connected:
+        return {"connected": False}
+    world = app.world
+    return {"connected": True, "server": hello.server,
+            "version": hello.version, "hello_at": hello.ts / 1000,
+            "cast": len(world.cast_guids()), "cast_online": len(world.online),
+            "human_online": bool(world.human_online)}
 
 
 def encode(value) -> bytes:
@@ -604,7 +693,8 @@ class ControlEndpoint:
     cancels it first, which closes the socket and removes control.json."""
 
     def __init__(self, app, cfg: ControlCfg, *, key: str | None = None,
-                 read_s: float = READ_S, raid_s: float = RAID_S, say_s: float = SAY_S):
+                 read_s: float = READ_S, raid_s: float = RAID_S, say_s: float = SAY_S,
+                 bank_s: float = BANK_READ_S, library_s: float = LIBRARY_READ_S, clock=time.monotonic):
         self.app, self.cfg = app, cfg
         self.key = key or secrets.token_urlsafe(32)
         self.path = Path(app.data_dir) / KEY_FILE
@@ -617,6 +707,12 @@ class ControlEndpoint:
         self._preview = asyncio.Lock()  # one preview at a time
         self._selfie = asyncio.Lock()  # one photo change at a time, until its files are written
         self._say = asyncio.Lock()  # one line of his in flight
+        self._board = asyncio.Lock()  # one Board reply or withdrawal at a time
+        self._library = asyncio.Lock()  # one library search in flight
+        self.bank_s, self._clock = bank_s, clock
+        self.library_s = library_s
+        self._bank_task: asyncio.Future | None = None  # the read in flight, shared by askers
+        self._bank_cache: tuple[float, dict] | None = None
 
     async def serve(self) -> None:
         from leeroy_mind.console.httpd import listen_socket
@@ -702,7 +798,16 @@ class ControlEndpoint:
             log_event("control_request", op=op, channel=args["channel"],
                       outcome="ok" if reply["ok"] else "refused")
             return reply, None
-        reply = await {"raid": self.raid, "tune": self.tune, "selfie": self.selfie}[op](args)
+        if op == "bank":
+            reply = await self.bank()
+            log_event("control_request", op=op, outcome="ok" if reply["ok"] else "refused")
+            return reply, None
+        if op == "library":
+            reply = await self.library(args)
+            log_event("control_request", op=op, outcome="ok" if reply["ok"] else "refused")
+            return reply, None
+        reply = await {"raid": self.raid, "tune": self.tune, "selfie": self.selfie,
+                       "board": self.board}[op](args)
         log_event("control_request", op=op, action=args["action"],
                   outcome="ok" if reply["ok"] else "refused")
         return reply, None
@@ -715,8 +820,13 @@ class ControlEndpoint:
                 raid = guild.console_status()
             except Exception as e:
                 log_event("control_status_failed", level=logging.WARNING, error=type(e).__name__)
+        try:
+            world = world_status(self.app)
+        except Exception as e:
+            log_event("control_status_failed", level=logging.WARNING, error=type(e).__name__)
+            world = None
         return {"ok": True, "v": VERSION, "pid": os.getpid(), "stopping": self.app.stopping,
-                "raid": raid, **self._health()}
+                "raid": raid, **self._health(), "world": world}
 
     def _health(self) -> dict:
         """For the health check: bridge_connected (the bridge connection is open and has had
@@ -808,6 +918,107 @@ class ControlEndpoint:
         async with self._selfie:
             return await service.handle(args)
 
+    async def bank(self) -> dict:
+        """The guild bank, read through guild life's armory in a worker thread. Askers share
+        the read in flight; one that runs past bank_s is answered, and the read goes on and
+        fills the cache. Errors are words, never the database's text (it can hold a secret)."""
+        guild = getattr(self.app, "guild", None)
+        if self.app.stopping:
+            return {"ok": False, "error": "the mind is stopping"}
+        if guild is None:
+            return {"ok": False, "error": "Guild life is not running in this mind."}
+        cached = self._bank_cache
+        if cached is not None and self._clock() - cached[0] < BANK_CACHE_S:
+            return cached[1]
+        task = self._bank_task
+        if task is None or task.done():
+            try:
+                guild_id = int(self.app.store.get_meta("guild_id") or 0)
+            except (TypeError, ValueError):
+                guild_id = 0
+            if not 0 < guild_id <= 0xFFFFFFFF:
+                return {"ok": False, "error": "The mind doesn't know the guild yet "
+                                              "(no game hello since it started)."}
+            armory = getattr(guild, "armory", None)
+            if armory is None or not getattr(armory, "available", True):
+                return {"ok": False, "error": "The mind can't read the game database "
+                                              "(worldserver.conf or mysql.exe not found)."}
+            task = self._bank_task = asyncio.ensure_future(self._read_bank(armory, guild_id))
+        done, _ = await asyncio.wait({task}, timeout=self.bank_s)
+        if task not in done:
+            return {"ok": False, "error": "The game database is slow to answer. "
+                                          "Try again in a moment."}
+        return task.result()
+
+    async def _read_bank(self, armory, guild_id: int) -> dict:
+        try:
+            bank = await asyncio.to_thread(armory.bank, guild_id)
+        except Exception as e:  # its text can carry credentials or game data: the class only
+            log_event("control_bank_failed", level=logging.WARNING, error=type(e).__name__)
+            if not getattr(armory, "available", True) or (
+                    type(e).__name__ == "RosterError"
+                    and str(e).startswith(("mysql did not run", "guild armory unavailable"))):
+                return {"ok": False, "error": "The mind can't read the game database "
+                                              "(worldserver.conf or mysql.exe not found)."}
+            return {"ok": False, "error": f"The game database didn't answer ({type(e).__name__})."}
+        reply = {"ok": True, "read_at": round(time.time(), 3), "guild": guild_id, **bank}
+        self._bank_cache = (self._clock(), reply)
+        return reply
+
+    async def library(self, args: dict) -> dict:
+        """The mind's semantic search over library.db. Read-only and cheap, but it uses the
+        embedding model, so it only asks for one Ollama already holds (GET /api/ps): it never
+        loads a model, and uses no chat model. Errors are words; the query is never logged."""
+        from leeroy_mind.console.libraryview import hit
+        from leeroy_mind.library.search_worker import EmbedFailed, SearchBusy, SearchClosed
+        from leeroy_mind.llm.client import LLMError
+        from leeroy_mind.nightly.gpu import norm
+        if self.app.stopping:
+            return {"ok": False, "error": "the mind is stopping"}
+        worker = getattr(self.app, "library_search", None)
+        library = getattr(self.app, "library", None)
+        if worker is None or library is None:
+            return {"ok": False, "error": "The mind has no library open (library.db is missing "
+                                          "or unreadable)."}
+        if self._library.locked():
+            return {"ok": False, "error": "Another library search is running."}
+        async with self._library:
+            model = self.app.cfg.models.embedding
+            arbiter = getattr(self.app, "arbiter", None)
+            if arbiter is None:
+                return {"ok": False, "error": "The mind can't tell whether the embedding model "
+                                              "is loaded."}
+            try:
+                loaded = {norm(n) for n in await arbiter.admin.loaded_models()}
+            except (LLMError, OSError):
+                return {"ok": False, "error": "Ollama didn't say which models are loaded."}
+            if norm(model) not in loaded:
+                return {"ok": False, "error": "The embedding model is not loaded right now, so "
+                                              "the mind can't search deeper."}
+            if not library._has_vectors() or library.get_meta("embed_model") not in (None, model):
+                return {"ok": False, "error": "The library has no embeddings for this model "
+                                              "yet, so there is no deeper search."}
+            try:
+                chunks = await worker.search(args["query"], args["k"], llm=self.app.scheduler,
+                                             timeout=self.library_s, require_vector=True)
+            except TimeoutError:
+                return {"ok": False, "error": "The embedding model is slow to answer. Try again "
+                                              "in a moment."}
+            except SearchBusy:
+                return {"ok": False, "error": "Another library search is running."}
+            except EmbedFailed:  # no vector was used: these would be text hits, not a deeper search
+                return {"ok": False, "error": "The mind couldn't run a deeper search just now."}
+            except SearchClosed:
+                return {"ok": False, "error": "The library is closing."}
+            except Exception as e:  # never its text: it could carry the question
+                log_event("control_library_failed", level=logging.WARNING, error=type(e).__name__)
+                return {"ok": False, "error": f"The library search failed ({type(e).__name__})."}
+        hits = [hit(c) for c in chunks]
+        reply = {"ok": True, "hits": hits}
+        while hits and len(encode(reply)) > MAX_REPLY - 1024:  # ascii escapes can swell a reply
+            hits.pop()
+        return reply
+
     async def say(self, args: dict) -> dict:
         """His line (leeroy_mind.owner_say): one at a time, answered within say_s. Never
         cancelled from here: a line still waiting on the game holds the next off until the
@@ -836,6 +1047,24 @@ class ControlEndpoint:
         except Exception as e:  # its text can carry the line or a name
             log_event("control_say_failed", level=logging.WARNING, error=type(e).__name__)
             return {"ok": False, "error": f"The line could not be sent ({type(e).__name__})."}
+
+    async def board(self, args: dict) -> dict:
+        """His Board reply or withdrawal (leeroy_mind.board.BoardDesk), one at a time: a second
+        while one is being saved is refused, never queued."""
+        desk = getattr(self.app, "board", None)
+        if self.app.stopping:
+            return {"ok": False, "error": "The mind is stopping."}
+        if desk is None:
+            return {"ok": False, "error": "Board replies are not running in this mind."}
+        if self._board.locked():
+            return {"ok": False, "error": "Another reply is still being saved."}
+        async with self._board:
+            try:
+                return await desk.handle(args)
+            except Exception as e:  # its text can carry the reply or a name
+                log_event("control_board_failed", level=logging.WARNING, error=type(e).__name__)
+                return {"ok": False,
+                        "error": f"The reply could not be saved ({type(e).__name__})."}
 
 
 def attach_control(app) -> ControlEndpoint | None:

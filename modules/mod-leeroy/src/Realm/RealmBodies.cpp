@@ -278,6 +278,9 @@ RealmStep Rearm(Queued& entry, std::uint32_t guid)
     if (auto why = Eligible(entry, guid, Purpose::Rearm); !why.empty()) return Refuse(why);
     auto* bot = FindOnline(guid);
     auto const* record = RealmModule::Instance().Weapons(guid);
+    // Records live in memory: a worldserver start empties them until the 60 s poll finds the body
+    // online and free. Record an armed body now, as that poll would; it then has nothing to put back.
+    if (!record && RealmModule::Instance().RecordWeapons(guid, entry.id)) record = RealmModule::Instance().Weapons(guid);
     if (!record) return Refuse("weapon_record_unavailable");
     auto const saved = *record;
     std::set<std::uint32_t> inventory;

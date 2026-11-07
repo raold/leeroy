@@ -66,3 +66,11 @@ export function cardText(view, known) {
                    { k: "Mood", v: missing.indexOf("pad_mood") >= 0 ? "unavailable" : moodText(m.mood) },
                    { k: "Toward you", v: missing.indexOf("relationship") >= 0 ? "unavailable" : youText(m.you) }] };
 }
+
+// A selfie-wall tile in words: dimmed only for a member out of the cast, "no persona" when none is stored
+export function tileState(m) {
+  m = obj(m);
+  return { off: !m.in_cast, chip: m.persona ? "" : "no persona",
+           label: str(m.name) + (m.in_cast ? "" : " (not in the cast)"),
+           sub: m["class"] ? (CLASSES[m["class"]] || "-") + (m.role ? " · " + m.role : "") : "-" };
+}
