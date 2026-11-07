@@ -467,6 +467,13 @@ pinned bot three `TellMaster` lines are skipped, "AI was reset to defaults"
 (`ResetAiAction`, which playerbots runs on "group set leader") and the
 `hello_follow`/`hello` lines after `FindNewMaster`. The reset and `+follow` still run.
 
+Local commit `3826b2f4` (built 2026-11-07) keeps pins out of random bot arena teams:
+`IsEligibleForBotArenaTeam` refuses a pinned bot. Playerbots assigns teams at every bot
+login, filling teams below `Playerbots.RandomBotArenaTeam2v2Count`/`3v3Count`/`5v5Count`
+(live 30/30/20, raised from 10/10/5 with `Arena.MaxRatingDifference = 0` so the owner meets
+the strong bot teams), and without it the cast would join them for good. Teams he made
+himself are untouched.
+
 Commits here never carry a `Co-Authored-By` or other attribution trailer.
 
 Both local patches: `ac-update.sh` now rebases repos that are ahead of
