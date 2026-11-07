@@ -14,7 +14,7 @@ key only to a listener that the TCP table shows is the running mind's own proces
 
 A request: one connection, one line. A JSON object of at most MAX_LINE bytes ending in a
 newline, sent within READ_S (2 s), with exactly the keys v (1), key, op and, for a raid, tune,
-selfie, say, board or library action only, args. Anything else (an unknown or missing key, a
+selfie, say, board, discord or library action only, args. Anything else (an unknown or missing key, a
 wrong type, an HTTP request) is refused and the connection closed; nothing after the first line
 is read. One answer line comes back, {"ok": true, ...} or {"ok": false, "error": ...}, and the
 connection closes.
@@ -49,6 +49,12 @@ connection closes.
                     mind.db waiting for the Realm night, or a waiting one taken back; one at a
                     time. board_args refuses a text the store would (empty, too long for its
                     kind, not UTF-8), in the words the console shows
+    discord {action}  post {channel, text[, reply_to][, thread]} | react | unreact {message, emoji}
+                    | edit {message, text} | delete | pin | unpin {message} | thread {message, name}:
+                    his actions in the guild's Discord (leeroy_mind.discord.desk), written as him
+                    and needing no game session; one at a time. discord_args checks the shape, the
+                    channel (a layout id or dm:<guid>), the text and the emoji, in the console's
+                    words
     library {query[, k]}
                     the mind's own semantic search over library.db (read-only): one embedding call
                     on the embedding model Ollama already holds (never a chat model, never a
@@ -90,7 +96,7 @@ BANK_CACHE_S = 30.0  # a bank snapshot younger than this is answered as it is
 MAX_CONNECTIONS = 8
 REFUSAL_LOG_S = 30.0
 REPLACE_TRIES = 40  # 2 s of 50 ms tries to move control.json over a file being read
-OPS = ("status", "stop", "raid", "tune", "selfie", "say", "bank", "board", "library")
+OPS = ("status", "stop", "raid", "tune", "selfie", "say", "bank", "board", "discord", "library")
 RAID_ACTIONS = ("call", "form", "summon", "start", "stop", "end")
 TUNE_ACTIONS = ("status", "set", "undo", "revert", "group", "retire", "preview")
 TUNE_SHAPES = {
@@ -112,6 +118,11 @@ SELFIE_SHAPES = {
 }
 SAY_CHANNELS = ("guild", "officer", "group", "whisper")
 MAX_SAY_CHARS = 1024  # what the console's box may hold; a line the game takes is 255 bytes
+DISCORD_SHAPES = {
+    "post": {"action", "channel", "text"}, "react": {"action", "message", "emoji"},
+    "unreact": {"action", "message", "emoji"}, "edit": {"action", "message", "text"},
+    "delete": {"action", "message"}, "pin": {"action", "message"},
+    "unpin": {"action", "message"}, "thread": {"action", "message", "name"}}
 BOARD_ACTIONS = ("reply", "withdraw")
 BOARD_SHAPES = {"reply": {"action", "kind", "to", "text"}, "withdraw": {"action", "id"}}
 _DIAL_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz_")
@@ -603,6 +614,54 @@ def board_args(args) -> dict:
     return {"action": "reply", "kind": kind, "to": to, "text": cleaned}
 
 
+def discord_args(args) -> dict:
+    """A discord action's arguments, exactly (DISCORD_SHAPES; a post may add reply_to and
+    thread): channel a layout id or dm:<guid>, message, reply_to and thread row numbers, text a
+    string that cleans to a message (discord.text.clean_text), emoji one emoji, name a thread
+    name of 1 to 60 characters. The arguments with the cleaned text, or BadRequest with the
+    sentence the console shows."""
+    from leeroy_mind.discord import layout
+    from leeroy_mind.discord.desk import WORDS
+    from leeroy_mind.discord.text import MAX_THREAD_NAME, TextRefused, clean_text, is_one_emoji
+    if not isinstance(args, dict) or args.get("action") not in DISCORD_SHAPES:
+        raise BadRequest("discord: an action, one of " + ", ".join(DISCORD_SHAPES))
+    action = args["action"]
+    shape = DISCORD_SHAPES[action]
+    extra = {"reply_to", "thread"} if action == "post" else set()
+    if not shape <= set(args) <= shape | extra:
+        raise BadRequest(f"discord {action}: exactly " + ", ".join(sorted(shape - {"action"})))
+    out = {"action": action}
+    if "channel" in shape:
+        ch = args["channel"]
+        if not isinstance(ch, str) or (layout.channel(ch) is None and layout.dm_peer(ch) is None):
+            raise BadRequest(WORDS["bad_channel"])
+        out["channel"] = ch
+    for key in ("message", "reply_to", "thread"):
+        if key in args:
+            if not _row_id(args[key]):
+                raise BadRequest(f"discord {action}: {key} is a number")
+            out[key] = args[key]
+    if "text" in shape:
+        if not isinstance(args["text"], str):
+            raise BadRequest(f"discord {action}: text is text")
+        try:
+            out["text"] = clean_text(args["text"])
+        except TextRefused as e:
+            raise BadRequest(WORDS[e.code]) from None
+    if "emoji" in shape:
+        emoji = args["emoji"]
+        if not isinstance(emoji, str) or not is_one_emoji(emoji) or len(emoji) > 16:
+            raise BadRequest(WORDS["not_emoji"])
+        out["emoji"] = emoji
+    if "name" in shape:
+        name = args["name"]
+        name = " ".join(name.split()) if isinstance(name, str) else ""
+        if not 1 <= len(name) <= MAX_THREAD_NAME:
+            raise BadRequest(WORDS["bad_name"])
+        out["name"] = name
+    return out
+
+
 def library_args(args) -> dict:
     """A library call's arguments: {"query"} or {"query", "k"}; the query 1-200 characters once
     its whitespace is collapsed, k 1-12 (12 when absent). The cleaned arguments."""
@@ -629,7 +688,7 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     if not isinstance(value, dict) or not {"v", "key", "op"} <= set(value) <= {
             "v", "key", "op", "args"}:
         raise BadRequest("bad request: exactly v, key, op (and args for a raid, tune, selfie, "
-                         "say, board or library action)")
+                         "say, board, discord or library action)")
     given = value["key"]
     if not isinstance(given, str) or not secrets.compare_digest(
             given.encode("utf-8", "surrogatepass"), key.encode("ascii")):
@@ -640,7 +699,8 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     if op not in OPS:
         raise BadRequest("bad request: op is one of " + ", ".join(OPS))
     parse_args = {"raid": raid_args, "tune": tune_args, "selfie": selfie_args,
-                  "say": say_args, "board": board_args, "library": library_args}.get(op)
+                  "say": say_args, "board": board_args, "discord": discord_args,
+                  "library": library_args}.get(op)
     if parse_args is None:
         if "args" in value:
             raise BadRequest(f"bad request: {op} takes no args")
@@ -719,6 +779,7 @@ class ControlEndpoint:
         self._selfie = asyncio.Lock()  # one photo change at a time, until its files are written
         self._say = asyncio.Lock()  # one line of his in flight
         self._board = asyncio.Lock()  # one Board reply or withdrawal at a time
+        self._discord = asyncio.Lock()  # one Discord action of his at a time
         self._library = asyncio.Lock()  # one library search in flight
         self.bank_s, self._clock = bank_s, clock
         self.library_s = library_s
@@ -819,7 +880,7 @@ class ControlEndpoint:
             log_event("control_request", op=op, outcome="ok" if reply["ok"] else "refused")
             return reply, None
         reply = await {"raid": self.raid, "tune": self.tune, "selfie": self.selfie,
-                       "board": self.board}[op](args)
+                       "board": self.board, "discord": self.discord}[op](args)
         log_event("control_request", op=op, action=args["action"],
                   outcome="ok" if reply["ok"] else "refused")
         return reply, None
@@ -1099,6 +1160,23 @@ class ControlEndpoint:
                 log_event("control_board_failed", level=logging.WARNING, error=type(e).__name__)
                 return {"ok": False,
                         "error": f"The reply could not be saved ({type(e).__name__})."}
+
+    async def discord(self, args: dict) -> dict:
+        """His Discord action (leeroy_mind.discord.desk.DiscordDesk), one at a time: a second
+        while one is being written is refused, never queued."""
+        desk = getattr(self.app, "discord", None)
+        if self.app.stopping:
+            return {"ok": False, "error": "The mind is stopping."}
+        if desk is None:
+            return {"ok": False, "error": "Discord is not running in this mind."}
+        if self._discord.locked():
+            return {"ok": False, "error": "Another Discord action is still being saved."}
+        async with self._discord:
+            try:
+                return await desk.handle(args)
+            except Exception as e:  # its text can carry a message or a name
+                log_event("control_discord_failed", level=logging.WARNING, error=type(e).__name__)
+                return {"ok": False, "error": f"That could not be saved ({type(e).__name__})."}
 
 
 def attach_control(app) -> ControlEndpoint | None:
