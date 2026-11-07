@@ -7,6 +7,7 @@ from dataclasses import replace
 import pytest
 
 from conftest import run
+from leeroy_mind import board
 from leeroy_mind.config import load_config
 from leeroy_mind.memory.writer import MemoryWriter
 from leeroy_mind.nightly import budget
@@ -96,6 +97,31 @@ class Rig:
             return [insert(self.store, "realm_event", kind="fishing", organiser=101, start=now - 3600,
                            end=now - 600, place="dal_fountain", result='{"winner":102}', state="scored")
                     for _ in range(n)]
+
+    # -- his Board replies ---------------------------------------------------------------------
+
+    def post(self, thread, author=101, kind="member", text="That pull was a mess, still got it."):
+        """A forum post already on the board."""
+        with self.store.transaction():
+            return insert(self.store, "realm_post", ts=self.store.clock.now() - 7200, author=author,
+                          author_kind=kind, thread=thread, text=text, fact=None)
+
+    def delivered(self, sender=103, subject="Miss you", body="The guild is quiet without you."):
+        """A letter in his mailbox."""
+        with self.store.transaction():
+            return insert(self.store, "realm_mail", ts=self.store.clock.now() - 86400, sender=sender,
+                          kind="absence", subject=subject, body=body, state="sent")
+
+    def reply(self, kind, parent, to, text, ts=None):
+        """His reply from the console, waiting for the night."""
+        with self.store.transaction():
+            return insert(self.store, "board_reply", ts=ts or self.store.clock.now() - 3600, kind=kind,
+                          parent=parent, to_guid=to, text=text, state="waiting")
+
+    def replied(self, reply_id):
+        (row,) = self.rows("SELECT state, reason, night, fact, answer_post, answer_mail FROM board_reply "
+                           "WHERE id=?", (reply_id,))
+        return row
 
 
 @pytest.fixture
@@ -502,3 +528,228 @@ def test_whole_night_through_the_runner(rig, monkeypatch):
     prompts = json.dumps([c["messages"] for c in ctx.reasoner.llm.calls if "messages" in c])
     assert HUMAN.real_name not in prompts and GUILD_NAME not in prompts
     assert rig.store.conn.execute("SELECT count(*) FROM night_stage WHERE stage='realm'").fetchone()[0] == 1
+
+
+# -- his Board replies ---------------------------------------------------------------------
+
+def test_his_replies_come_first_inside_the_caps(rig):
+    parents = [rig.post(f"rumor:{900 + i}") for i in range(4)]
+    stamps = (1003.0, 1001.0, 1000.0, 1002.0)  # Oldest first: the 3rd, the 2nd, then the 4th.
+    replies = [rig.reply("post", parent, 101, f"Fair point number {i}.", ts=stamps[i])
+               for i, parent in enumerate(parents)]
+    facts = rig.facts(2)
+    letter_reply = rig.reply("letter", rig.delivered(), 103, "Thanks, see you soon.")
+    letters = rig.letters(3)
+    ctx = rig.ctx()
+    units = by_kind(night.plan_units(ctx))
+    assert units["post"] == [f"post:reply:{replies[i]}" for i in (2, 1, 3)]
+    assert units["letter"] == [f"letter:reply:{letter_reply}", f"letter:{letters[0]}", f"letter:{letters[1]}"]
+    assert night.count_units(ctx) == 3 + 3 + 3  # Beats, posts and letters: each weighs 1.
+    with rig.store.transaction():  # Withdrawn: tonight's own candidates fill the rest.
+        for i in (1, 2, 3):
+            board.settle(rig.store.conn, replies[i], state="withdrawn", night=None, now=1.0)
+    assert by_kind(night.plan_units(rig.ctx()))["post"] == [
+        f"post:reply:{replies[0]}", *(f"post:fact:{f.id}" for f in facts)]
+
+
+def _fact(rig, key):
+    (row,) = rig.rows("SELECT f.id, f.kind, f.text, f.public, o.inputs_json FROM realm_rule_origin o "
+                      "JOIN realm_fact f ON f.id=o.fact WHERE o.producer_key=?", (f"rule:forum_post_v1:{key}",))
+    knowers = rig.rows("SELECT guild, how FROM realm_knows WHERE fact=? ORDER BY guild", (row["id"],))
+    return row | {"inputs": json.loads(row.pop("inputs_json")), "knows": knowers}
+
+
+def _asked(ctx):
+    """The one model call's system prompt and its question."""
+    (call,) = [c for c in ctx.reasoner.llm.calls if "messages" in c]
+    system, user = (m["content"] for m in call["messages"])
+    assert HUMAN.real_name not in json.dumps(call)
+    return system, json.loads(user.split("\n\nReply with only a JSON object", 1)[0])
+
+
+def test_a_forum_reply_becomes_a_forum_fact_and_its_author_answers(rig):
+    parent = rig.post("rumor:901", author=101)
+    rid = rig.reply("post", parent, 101, "Agreed, that pull was clean.")
+    ctx = rig.ctx(settings=replace(rig.settings, realm_units=0))
+    one(ctx, f"post:reply:{rid}")
+    assert not ctx.failures and ctx.done(night.STAGE, f"post:reply:{rid}") and ctx.reasoner.calls == 1
+    everyone = [{"guild": g, "how": "forum"} for g in (50, 60, 80, 90)]
+    his = _fact(rig, f"reply:{rid}")
+    assert (his["kind"], his["text"], his["public"], his["knows"]) == (
+        "forum_post", "Agreed, that pull was clean.", 1, everyone)
+    assert his["inputs"] == {"night": NIGHT, "reply": rid, "to": parent, "author": HUMAN.guid,
+                             "author_kind": "owner"}
+    answer = _fact(rig, f"reply:{rid}:answer")
+    assert (answer["kind"], answer["text"], answer["public"], answer["knows"]) == (
+        "forum_post", ANSWERS["realm_post"]["text"], 1, everyone)
+    (post,) = rig.rows("SELECT id, author, author_kind, thread, text, fact FROM realm_post WHERE id!=?", (parent,))
+    assert post == {"id": post["id"], "author": 101, "author_kind": "member", "thread": "rumor:901",
+                    "text": ANSWERS["realm_post"]["text"], "fact": answer["id"]}
+    assert rig.replied(rid) == {"state": "answered", "reason": None, "night": NIGHT, "fact": his["id"],
+                                "answer_post": post["id"], "answer_mail": None}
+    assert rig.count("memory") == 0  # A rumor's thread: no way back in.
+    system, asked = _asked(ctx)
+    assert "replied to it" in system and "Arkon" in system
+    assert asked["author"] == "Arkon" and asked["reply"] == "Agreed, that pull was clean."
+    assert asked["post"] == "That pull was a mess, still got it." and "card" in asked
+
+
+def test_a_reply_in_an_event_thread_writes_memories_as_posts_do(rig):
+    for guid in (101, 102):
+        persona(rig.store, guid, "Arkon" if guid == 101 else "Belra", motivation="competitor")
+    (fact,) = rig.facts(1)
+    parent = rig.post(f"fact:{fact.id}", author=201, kind="actor")
+    rid = rig.reply("post", parent, 201, "We had it on the second pull.")
+    embed = Embed()
+    ctx = rig.ctx(settings=replace(rig.settings, realm_units=0), embed=embed)
+    one(ctx, f"post:reply:{rid}")
+    assert not ctx.failures
+    (post,) = rig.rows("SELECT author, author_kind, thread FROM realm_post WHERE id!=?", (parent,))
+    assert post == {"author": 201, "author_kind": "actor", "thread": f"fact:{fact.id}"}  # The parent's author.
+    assert embed.calls == [(fact.text,)]  # Embedded once, before the commit.
+    memories = rig.rows("SELECT owner, text, evidence, scope FROM memory ORDER BY id")
+    assert [(m["owner"], m["text"], json.loads(m["evidence"]), m["scope"]) for m in memories] == [
+        (guid, fact.text, [f"realm:fact:{fact.id}"], "open") for guid in (101, 102)]
+    assert rig.count("realm_notable") == 2 and rig.replied(rid)["state"] == "answered"
+
+
+def test_an_author_who_cannot_write_is_answered_from_the_pool(rig):
+    parent = rig.post("rumor:901", author=202, kind="actor")  # A retired officer can no longer write.
+    rid = rig.reply("post", parent, 202, "Nobody is reading this anyway.")
+    ctx = rig.ctx(settings=replace(rig.settings, realm_units=0))
+    one(ctx, f"post:reply:{rid}")
+    assert not ctx.failures and ctx.reasoner.calls == 1
+    (post,) = rig.rows("SELECT author, author_kind, thread FROM realm_post WHERE id!=?", (parent,))
+    assert post == {"author": 201, "author_kind": "actor", "thread": "rumor:901"}  # The only one in the pool.
+    assert rig.replied(rid)["state"] == "answered"
+
+
+def test_nobody_to_answer_leaves_his_post_unanswered(rig):
+    parent = rig.post("rumor:901", author=202, kind="actor")  # A retired officer can no longer write.
+    with rig.store.transaction():
+        rig.store.conn.execute("UPDATE realm_actor SET status='retired' WHERE guid=201")
+    rid = rig.reply("post", parent, 202, "Nobody is reading this anyway.")
+    ctx = rig.ctx(settings=replace(rig.settings, realm_units=0))
+    one(ctx, f"post:reply:{rid}")
+    assert not ctx.failures and ctx.reasoner.calls == 0
+    his = _fact(rig, f"reply:{rid}")
+    assert his["text"] == "Nobody is reading this anyway." and len(his["knows"]) == 4
+    assert rig.replied(rid) == {"state": "posted", "reason": None, "night": NIGHT, "fact": his["id"],
+                                "answer_post": None, "answer_mail": None}
+    assert rig.count("realm_post") == 1 and rig.count("realm_rule_origin") == 1
+
+
+def test_a_letter_reply_is_remembered_privately_and_answered_by_letter(rig):
+    rid = rig.reply("letter", rig.delivered(sender=103), 103, "Back on Thursday, save me a spot.")
+    ctx = rig.ctx(settings=replace(rig.settings, realm_units=0))
+    one(ctx, f"letter:reply:{rid}")
+    assert not ctx.failures and ctx.reasoner.calls == 1
+    (memory,) = rig.rows("SELECT owner, kind, text, key, evidence, scope, scope_with, importance, valence, "
+                         "actors FROM memory")
+    assert memory == {"owner": 103, "kind": "event",
+                      "text": f'{HUMAN.called} wrote back to my letter: "Back on Thursday, save me a spot."',
+                      "key": f"board-reply:{rid}", "evidence": json.dumps([f"board-reply:{rid}"]),
+                      "scope": "private", "scope_with": HUMAN.guid, "importance": 5, "valence": 0.4,
+                      "actors": json.dumps([HUMAN.guid])}
+    (answer,) = rig.rows("SELECT id, sender, kind, subject, body, items, state FROM realm_mail WHERE kind='reply'")
+    assert answer == {"id": answer["id"], "sender": 103, "kind": "reply", "subject": "Long time",
+                      "body": ANSWERS["realm_letter"]["body"], "items": "[]", "state": "ready"}
+    assert rig.replied(rid) == {"state": "answered", "reason": None, "night": NIGHT, "fact": None,
+                                "answer_post": None, "answer_mail": answer["id"]}
+    assert (rig.count("realm_fact"), rig.count("realm_post"), rig.count("realm_knows")) == (0, 0, 0)
+    system, asked = _asked(ctx)
+    assert "wrote back" in system and "Coros" in system
+    assert asked["their_letter"] == {"subject": "Miss you", "body": "The guild is quiet without you."}
+    assert asked["reply"] == "Back on Thursday, save me a spot." and asked["from"] == "Coros"
+    # A long reply is cut to fit a memory, its closing quote kept.
+    long = rig.reply("letter", rig.delivered(sender=104), 104, " ".join(["Thursday works for me."] * 17))
+    one(ctx, f"letter:reply:{long}")
+    (text,) = [r["text"] for r in rig.rows("SELECT text FROM memory WHERE owner=104")]
+    assert len(text) <= 200 and text.endswith('"') and "Thursday works for me." in text
+
+
+def test_a_refused_reply_is_marked_and_not_retried(rig):
+    named = rig.reply("post", rig.post("rumor:901"), 101, f"{GUILD_NAME} wiped again lol")
+    real = rig.reply("letter", rig.delivered(sender=103), 103, f"It is {HUMAN.real_name}, back soon.")
+    nobody = rig.reply("letter", rig.delivered(sender=106), 106, "See you around.")  # No persona.
+    ctx = rig.ctx(settings=replace(rig.settings, realm_units=0))
+    units = [f"post:reply:{named}", f"letter:reply:{real}", f"letter:reply:{nobody}"]
+    run(night.run_units(ctx, units))
+    assert not ctx.failures and ctx.reasoner.calls == 0 and all(ctx.done(night.STAGE, u) for u in units)
+    assert [(r["state"], r["reason"]) for r in map(rig.replied, (named, real, nobody))] == [
+        ("refused", "guild_name"), ("refused", "real_name"), ("refused", "no_persona")]
+    assert (rig.count("realm_rule_origin"), rig.count("memory"), rig.count("realm_mail", "kind='reply'")) == (0, 0, 0)
+    with rig.store.transaction():
+        assert board.waiting(rig.store.conn, "post", 9) == [] == board.waiting(rig.store.conn, "letter", 9)
+    assert not set(units) & set(night.plan_units(rig.ctx(night_="2026-10-30")))
+
+
+def test_a_refused_answer_waits_for_another_night(rig):
+    rid = rig.reply("post", rig.post("rumor:901", author=101), 101, "Agreed, that pull was clean.")
+    lid = rig.reply("letter", rig.delivered(sender=103), 103, "Back on Thursday.")
+    bad = {"realm_post": [{"text": f"{GUILD_NAME} should stay out of it."}],
+           "realm_letter": [{"subject": "hey", "body": f"Good to hear, {HUMAN.real_name}."}]}
+    ctx = rig.ctx(bad, settings=replace(rig.settings, realm_units=0))
+    units = [f"post:reply:{rid}", f"letter:reply:{lid}"]
+    run(night.run_units(ctx, units))
+    assert ctx.failures[night.STAGE] == 2 and ctx.reasoner.calls == 2
+    assert not any(ctx.done(night.STAGE, u) for u in units)
+    assert rig.replied(rid)["state"] == rig.replied(lid)["state"] == "waiting"
+    assert (rig.count("realm_post"), rig.count("realm_rule_origin"), rig.count("memory"),
+            rig.count("realm_mail", "kind='reply'")) == (1, 0, 0, 0)
+    assert set(units) <= set(night.plan_units(rig.ctx(night_="2026-10-30")))
+
+
+def test_a_reply_withdrawn_before_the_commit_is_left_alone(rig):
+    rid = rig.reply("post", rig.post("rumor:901", author=101), 101, "Agreed, that pull was clean.")
+    lid = rig.reply("letter", rig.delivered(sender=103), 103, "Back on Thursday.")
+
+    def withdraw(reply_id, title):
+        def answer_(prompt):  # He withdraws it from the console while the model writes.
+            with rig.store.transaction():
+                assert board.settle(rig.store.conn, reply_id, state="withdrawn", night=None, now=5.0)
+            return dict(ANSWERS[title])
+        return answer_
+    ctx = rig.ctx({"realm_post": [withdraw(rid, "realm_post")], "realm_letter": [withdraw(lid, "realm_letter")]},
+                  settings=replace(rig.settings, realm_units=0))
+    run(night.run_units(ctx, [f"post:reply:{rid}", f"letter:reply:{lid}"]))
+    assert not ctx.failures and ctx.reasoner.calls == 2
+    assert rig.replied(rid) == {"state": "withdrawn", "reason": None, "night": None, "fact": None,
+                                "answer_post": None, "answer_mail": None}
+    assert rig.replied(lid)["state"] == "withdrawn"
+    assert (rig.count("realm_post"), rig.count("realm_rule_origin"), rig.count("realm_knows"),
+            rig.count("memory"), rig.count("realm_mail", "kind='reply'")) == (1, 0, 0, 0, 0)
+
+
+def test_the_same_reply_is_never_answered_twice(rig):
+    rid = rig.reply("post", rig.post("rumor:901", author=101), 101, "Agreed, that pull was clean.")
+    lid = rig.reply("letter", rig.delivered(sender=103), 103, "Back on Thursday.")
+    units = [f"post:reply:{rid}", f"letter:reply:{lid}"]
+    ctx = rig.ctx(settings=replace(rig.settings, realm_units=0))
+    for _ in range(2):
+        run(night.run_units(ctx, units))
+    again = rig.ctx(night_="2026-10-30", settings=replace(rig.settings, realm_units=0))
+    run(night.run_units(again, units))  # Asked again on another night: already settled.
+    assert not ctx.failures and not again.failures
+    assert ctx.reasoner.calls == 2 and again.reasoner.calls == 0
+    assert all(again.done(night.STAGE, u) for u in units)
+    assert (rig.count("realm_post"), rig.count("realm_rule_origin"), rig.count("memory"),
+            rig.count("realm_mail", "kind='reply'")) == (2, 2, 1, 1)
+    assert rig.replied(rid)["night"] == rig.replied(lid)["night"] == NIGHT
+
+
+def test_replies_wait_while_the_realm_is_off(rig):
+    rid = rig.reply("post", rig.post("rumor:901", author=101), 101, "Agreed, that pull was clean.")
+    lid = rig.reply("letter", rig.delivered(sender=103), 103, "Back on Thursday.")
+    enabled(rig.root, False)
+    ctx = rig.ctx()
+    assert night.count_units(ctx) == 0
+    stage(ctx)
+    enabled(rig.root, True)
+    run(night.stage_realm(off := rig.ctx(), live=lambda: False))  # Its own switch off counts too.
+    assert ctx.reasoner.calls == 0 == off.reasoner.calls
+    assert rig.replied(rid)["state"] == rig.replied(lid)["state"] == "waiting"
+    (rig.root / "realm" / "blocklist.txt").unlink()  # The screen not ready: his forum reply waits.
+    stage(ctx := rig.ctx())
+    assert rig.replied(rid)["state"] == "waiting" and rig.replied(lid)["state"] == "answered"
+    assert f"post:reply:{rid}" not in night.plan_units(ctx)
