@@ -40,7 +40,7 @@ LUST_NEGATIVE: tuple[tuple[str, int], ...] = tuple(
 _KINDS = {"selfie": "phone selfie", "mirror_selfie": "mirror selfie",
           "headshot": "professional headshot", "snapshot": "candid photo taken by a friend"}
 _FRAMINGS = {"face": "close-up of the face", "head_and_shoulders": "head and shoulders",
-             "upper_body": "upper body"}
+             "upper_body": "waist-up shot, upper body"}  # the waist in frame, so the figure shows
 _LENGTHS = {"short": "short", "chin": "chin-length", "shoulder": "shoulder-length",
             "long": "long", "very_long": "very long"}
 _HEADSHOT_TAIL = "recent photo, natural skin texture, unretouched"
@@ -100,6 +100,14 @@ def _clean(text: str) -> str:
     return " ".join(text.split())
 
 
+# The build said as a figure, at priority 1, so the model shapes it (owner 2026-11-07: a plain "<build>
+# build" at priority 3 left every body the same). Voluptuous is an hourglass fuller than curvy.
+BUILD_WORDS = {"slim": "slim figure", "athletic": "athletic toned figure", "average": "average build",
+               "curvy": "curvy hourglass figure",
+               "voluptuous": "voluptuous hourglass figure, full bust, wide hips, slim waist",
+               "stocky": "stocky sturdy build", "heavy": "plus-size full figure"}
+
+
 def build_prompt(p: Persona, *, kind_style: str = PLAIN) -> PromptSpec:
     """The prompt for p's photo kind. `kind_style` is the style whose rules chose the kind
     (kind.chosen_style; PLAIN for a kind set by hand or with no record): the lust prompt for a
@@ -140,7 +148,7 @@ def build_prompt(p: Persona, *, kind_style: str = PLAIN) -> PromptSpec:
         add(f"{_clean(a.eye_colour)} eyes", 2, True)
     for detail in a.face:
         add(detail, 2, True)
-    add(f"{a.build} build", 3)
+    add(BUILD_WORDS.get(a.build, f"{a.build} build"), 1)
     if lust:  # one phrase: the fit keeps both or neither, and priority 0 keeps both
         add(lust_phrase(ph), 0, True)  # renderable has checked no name filter drops it
     else:
