@@ -57,7 +57,9 @@ import uuid
 from leeroy_mind.prompts import load_prompt
 from leeroy_mind.protocol import event_type
 from leeroy_mind.talk.filters import repair
+from leeroy_mind.talk.items import defuse, fold
 from leeroy_mind.text import truncate_words
+from leeroy_mind.wow import CAST_MIN_LEVEL
 
 from . import protocol, store as realm_store
 from .action_policy import decode
@@ -208,6 +210,19 @@ def _line_state(ledger, ack):
     if state == "refused" and ack is not None and ack.ok is False:
         return "refused", _reason(ack.error, "native_refused")
     return "refused", _reason(reason, "unsent")
+
+
+def _item_links(app, text):
+    """A screened line as realm_line keeps it and as RealmSay sends it: the guild's item links
+    (talk/items.py; rival officers link at level 80). RealmSay is not cleaned on the way out,
+    so its text is folded as native will clean it (items.fold) and only then gets placeholders,
+    and those only once native has them (ItemLinker.wire)."""
+    items = getattr(getattr(app, "engine", None), "items", None)
+    if items is None:
+        text = defuse(text)
+        return text, fold(text)
+    text = items.canonical(text, CAST_MIN_LEVEL)
+    return text, items.wire(text, CAST_MIN_LEVEL)
 
 
 def _one_line(text):
@@ -757,11 +772,12 @@ class Speech:
 
     async def _send(self, spec, text):
         realm, store = self.realm, self._store()
+        text, wire = _item_links(realm.app, text)
         direct, context = realm.part("direct"), self._live()
         if direct is None or context is None or not self._open():
             self._insert(spec, text, state="dropped", reason="silenced")
             return
-        cmd = protocol.RealmSay(uuid.uuid4().hex, spec.guid, spec.channel, text, spec.to_guid)
+        cmd = protocol.RealmSay(uuid.uuid4().hex, spec.guid, spec.channel, wire, spec.to_guid)
         with store.transaction():
             line_id = self._insert(spec, text, state="prepared", command_id=cmd.id)
             prepared = direct.prepare(cmd, owner=OWNER, ref=f"line:{line_id}", context=context,

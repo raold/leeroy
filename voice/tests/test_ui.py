@@ -22,7 +22,7 @@ from leeroy_voice.ui.server import UiServer
 # the keys of a state message: the brief's twelve, and `human` (his guid, which tells the page
 # which `moved` is his)
 BRIEF_KEYS = ("tree", "where", "names", "room", "speaking", "ptt", "volumes", "mutes", "invites",
-              "transcript", "mind", "status")
+              "transcript", "mind", "status", "self")
 STATE_KEYS = {"type", *BRIEF_KEYS, "human"}
 ACCENT, SMILE = chr(0xE9), chr(0x1F600)  # text beyond ASCII, built so no tool rewrites an escape
 
@@ -162,7 +162,8 @@ def test_state_first():
             first = await page.next()
             assert first["type"] == "state"
             assert set(first) == STATE_KEYS
-            assert first == {"type": "state", **wire(ui_sample_state())}
+            assert first == {"type": "state", **wire(ui_sample_state()),
+                             "self": {"mute": False, "deafen": False}}
             assert first["volumes"] == {"101": -3.0} and first["names"]["101"] == "Arkon"
             assert rig.hooks.state_calls == 1
             await eventually(lambda: rig.ui.clients == 1)
@@ -178,7 +179,7 @@ def test_state_fills_what_the_hooks_leave_out():
             assert first == {"type": "state", "tree": [], "where": {}, "names": {}, "room": "",
                              "human": 0, "speaking": [], "ptt": False, "volumes": {},
                              "mutes": [], "invites": [], "transcript": [], "mind": False,
-                             "status": {}}
+                             "status": {}, "self": {"mute": False, "deafen": False}}
             rig.hooks.data = {"mind": True, "room": "raid", "extra": [1]}
             second = await (await rig.page()).next()
             assert second["mind"] is True and second["room"] == "raid" and second["tree"] == []
@@ -236,6 +237,28 @@ def test_join_volume_mute():
     run(go())
 
 
+def test_self_reaches_its_hook_with_two_booleans(caplog):
+    async def go():
+        async with Rig() as rig:
+            page = await rig.page()
+            await page.send({"type": "self", "mute": True, "deafen": False})
+            await page.send({"type": "self", "mute": 1, "deafen": False})
+            await page.send({"type": "self", "mute": False, "deafen": True})
+            assert await rig.settled(page) == [("self", True, False), ("self", False, True)]
+    with caplog.at_level(logging.INFO):
+        run(go())
+    assert ui_records(caplog, "ui_message_ignored: reason=\"bad field\"")
+
+
+def test_state_carries_self():
+    async def go():
+        async with Rig() as rig:
+            rig.hooks.data = {"self": {"mute": True, "deafen": True}}
+            first = await (await rig.page()).next()
+            assert first["self"] == {"mute": True, "deafen": True}
+    run(go())
+
+
 FRAMES = [json.dumps(m) for m in (
     {"type": "nope"}, {"type": "state"}, {"type": "ptt", "down": True},
     {"type": "speaking", "guid": 101, "on": True}, {"type": "JOIN", "channel": "raid"},
@@ -278,6 +301,9 @@ def test_unknown_message_ignored():
     {"type": "mute", "guid": 101, "on": "true"}, {"type": "mute", "guid": 101, "on": 1},
     {"type": "mute", "guid": 101, "on": 0}, {"type": "mute", "guid": 101, "on": None},
     {"type": "mute", "guid": True, "on": True},
+    {"type": "self"}, {"type": "self", "mute": True}, {"type": "self", "deafen": True},
+    {"type": "self", "mute": 1, "deafen": False}, {"type": "self", "mute": False, "deafen": 0},
+    {"type": "self", "mute": None, "deafen": False}, {"type": "self", "mute": "true", "deafen": True},
 ], ids=lambda m: json.dumps(m)[:60])
 def test_a_bad_argument_is_ignored(message):
     async def go():

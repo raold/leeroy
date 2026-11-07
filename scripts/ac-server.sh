@@ -22,16 +22,22 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 running() { tasklist //FI "IMAGENAME eq $1" 2>/dev/null | grep -qi "$1"; }
 
 # The server runs under cmd so that a stopped one (taskkill exits it nonzero) still
-# closes its tab: cmd itself exits 0 afterwards.
+# closes its tab: cmd itself exits 0 afterwards. A tab asked for from a background job can
+# open nowhere while wt.exe still exits 0 (2026-11-06), so a server that is not running
+# 15 s later gets its own console window instead.
 launch() {
     local p="$1" wt
     wt=$(command -v wt.exe || true)
     if [ -n "$wt" ] && [ "${AC_SERVER_WINDOW:-0}" != 1 ]; then
         "$wt" -w 0 new-tab --title "$p" --suppressApplicationTitle -d "$(cygpath -w "$AC_BIN")" \
-            cmd //c "$p.exe & exit 0"
-    else
-        ( cd "$AC_BIN" && cmd //c start "$p" "$p.exe" )
+            cmd //c "$p.exe & exit 0" || true
+        for _ in $(seq 1 15); do
+            running "$p.exe" && return 0
+            sleep 1
+        done
+        warn "Windows Terminal did not start $p; opening it in its own window"
     fi
+    ( cd "$AC_BIN" && cmd //c start "$p" "$p.exe" )
 }
 
 mind() {

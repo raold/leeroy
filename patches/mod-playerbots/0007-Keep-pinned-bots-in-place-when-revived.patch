@@ -1,7 +1,7 @@
 From d464806fec11b49344ff3c760439cbd1c2752d27 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 23:31:06 -0400
-Subject: [PATCH 7/9] Keep pinned bots in place when revived
+Subject: [PATCH 07/10] Keep pinned bots in place when revived
 
 FindCorpseAction calls Revive for a masterless ghost after five deaths; Revive runs Refresh, which leaves the group, and a grind teleport. For a pinned bot it now only revives in place.
 ---

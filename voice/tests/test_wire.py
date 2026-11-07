@@ -37,7 +37,7 @@ def test_the_protocol_table():
     assert TIERS == ("p0", "p1", "p2", "p3", "p4") and ANOTHER_MIND == "another mind is connected"
     assert DROP_REASONS == ("expired", "moved", "not_his_channel", "no_voice", "muted", "empty",
                             "raid", "after_dropped", "offline", "cancelled", "engine_error",
-                            "mind_gone")
+                            "mind_gone", "deafened")
     assert type_name(wire.VoiceDef(101, "Arkon", {})) == "voice"  # the class is not "Voice"
 
 

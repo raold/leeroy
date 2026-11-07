@@ -5,7 +5,7 @@ keeps a mirror of the page state, and hands every event on to the console's page
 The voice page refuses any Origin but its own, and a page served by the console has another, so
 a browser cannot open that socket from here: the console, a local program, connects instead and
 names the page's own origin. The console's pages reach it only through the console's gated
-endpoints, and only with the three page messages (join, volume, mute), checked as the voice
+endpoints, and only with the four page messages (join, volume, mute, self), checked as the voice
 service checks them."""
 import asyncio
 import json
@@ -29,7 +29,7 @@ log = logging.getLogger("leeroy_mind.console")
 
 EMPTY = {"tree": [], "where": {}, "names": {}, "room": "", "human": 0, "speaking": [],
          "ptt": False, "volumes": {}, "mutes": [], "invites": [], "transcript": [],
-         "mind": False, "status": {}}
+         "mind": False, "status": {}, "self": {"mute": False, "deafen": False}}
 
 
 def _channel(v) -> str | None:
@@ -47,7 +47,7 @@ def _db(v) -> float | None:
 
 
 def page_message(msg: dict) -> dict | None:
-    """The message to send for one of the page's three, its arguments checked; None when it is
+    """The message to send for one of the page's four, its arguments checked; None when it is
     not one of them with good arguments."""
     kind = msg.get("type")
     if kind == "join":
@@ -60,6 +60,11 @@ def page_message(msg: dict) -> dict | None:
         guid, on = _guid(msg.get("guid")), msg.get("on")
         return None if guid is None or type(on) is not bool else {"type": "mute", "guid": guid,
                                                                   "on": on}
+    if kind == "self":
+        mute, deafen = msg.get("mute"), msg.get("deafen")
+        if type(mute) is not bool or type(deafen) is not bool:
+            return None
+        return {"type": "self", "mute": mute, "deafen": deafen}
     return None
 
 
@@ -107,6 +112,8 @@ class Mirror:
             s["status"] = {k: v for k, v in msg.items() if k != "type"}
         elif kind == "mind":
             s["mind"] = msg.get("up") is True
+        elif kind == "self":
+            s["self"] = {"mute": msg.get("mute") is True, "deafen": msg.get("deafen") is True}
         elif kind == "volume":  # the console's own message, echoed into the mirror
             volumes = dict(s.get("volumes") or {})
             key = str(msg["guid"])
@@ -225,7 +232,7 @@ class VoiceRelay:
         """Send one page message; the reason when it cannot go (None: sent)."""
         checked = page_message(msg)
         if checked is None:
-            return "not a join, volume or mute with good arguments"
+            return "not a join, volume, mute or self with good arguments"
         ws = self._ws
         if ws is None or not self.connected:
             return "the voice service is not running"

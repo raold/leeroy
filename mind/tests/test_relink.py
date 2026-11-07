@@ -17,7 +17,7 @@ from leeroy_mind.personas.schema import persona_from_dict
 from leeroy_mind.personas.seed import human_seed
 from leeroy_mind.personas.stances import apply_reseeds, plan_rebalance, plan_reseeds
 from leeroy_mind.protocol import Member
-from leeroy_mind.storage.db import open_db
+from dbtemplate import open_migrated
 from leeroy_mind.storage.rows import Relationship
 from leeroy_mind.storage.store import Store
 from leeroy_mind.talk.prompt import is_close
@@ -148,7 +148,7 @@ def _data_dir(tmp_path, *, toml=True):
     if toml:
         (d / "mind.toml").write_text('[human]\nnickname = "Testy"\npronouns = "he"\n',
                                      encoding="utf-8")
-    s = Store(open_db(d / "mind.db"), clock=SystemClock())
+    s = Store(open_migrated(d / "mind.db"), clock=SystemClock())
     _seeded(s)
     s.close()
     return d
@@ -211,7 +211,7 @@ def test_cli_needs_the_data_dir_to_hold_a_mind(tmp_path, capsys):
 
 def test_cli_reports_a_persona_it_cannot_read_and_carries_on(tmp_path, capsys):
     d = _data_dir(tmp_path)
-    s = Store(open_db(d / "mind.db"), clock=SystemClock())
+    s = Store(open_migrated(d / "mind.db"), clock=SystemClock())
     bad = json.loads(s.get_persona_json(106))
     bad["romance"]["stance"] = "smitten"
     s.conn.execute("UPDATE persona_core SET json = ? WHERE guid = 106", (json.dumps(bad),))

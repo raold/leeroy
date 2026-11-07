@@ -80,7 +80,8 @@ Do not build, read configs, or read logs from Q: (or anything left on D:).
 `main`). A whitelist `.gitignore` tracks only what is ours: this file, the
 README, `LICENSE`, `references.bib` (the bibliography), `scripts/`, `config/`,
 `patches/`, `modules/` (mod-leeroy, mod-dojo), `mind/` (the mind service), `voice/`
-(the voice service), `dojo/` (the dojo, source only) and `.github/`. The core
+(the voice service), `selfie/` (the selfie worker), `dojo/` (the dojo, source only) and
+`.github/`. The core
 repo, the build tree, the client, boost, DB dumps and the zips stay out, and so
 do the local dev docs (`docs/`, `private/`). `dojo-runtime/` and `dojo-data/`
 beside the install root hold the dojo's environments and recordings and are
@@ -242,6 +243,22 @@ Run from `F:\azerothcore\scripts` in Git Bash.
 ./ac-snapshot.sh             # live configs (masked) + playerbots and ollama-chat patches -> config/, patches/
 ```
 
+`./ac-health.sh [--json] [--toast]` (`python -m leeroy_mind health`) checks the live install
+read-only, one ok/FAIL/note line each, exit 1 on any FAIL: the servers, Server.log's cast line
+since worldserver started (floor `[health] min_cast`, default 100; a note when the log begins
+later, since `.reload config` reopens Server.log empty in its `w` mode) and no `so no places`, the
+mind and mind.log, the control endpoint's `status` (it reports `bridge_connected`, `cast` and
+`schema_version`), the console and voice (notes when down), Ollama's `/api/ps`, and stuck
+activity (no `tg_pull` in 48 h with telemetry on and the overhead gate passed, a note while the
+gate is in phase `ab`; a realm hold or `unknown` root older than 1 h; cast without personas). It
+never dials the bridge (7878), loads no model, starts nothing and never probes `mind.lock` or
+`voice.lock` (running comes from the process list, `control.json`, `voice.pid` and the TCP
+table). `--toast` shows one toast per new failure and writes only
+`mind-data/health-state.json`; a read-only open can leave SQLite's empty `mind.db-wal` and
+`mind.db-shm` behind while the mind is stopped, as doctor and the console do.
+`ac-health-schedule.ps1 -Install|-Remove|-Status` manages a per-user task that runs it every
+15 minutes while he is logged on (not installed by default).
+
 `db_backup/` holds two kinds of thing: sets `ac-backup.sh` made
 (`<label>_<YYYYmmdd>_<HHMMSS>`) and sets from the older script described below
 (`YYYY-MM-DD_HHMM`), plus a raw MySQL datadir copy. **The prune only ever
@@ -298,7 +315,7 @@ Setting `SOAP.Enabled = 1` would let the script do a real graceful shutdown.
 | `mod-dungeon-clear` | jrad7/mod-dungeon-clear | git clone since 2026-10-29 (was a zip of `60f3d98`). **The autonomous tank lead**: `.dc on` (or `dc on` in party chat) inside an instance makes the group's tank bot route boss to boss over the navmesh, pull (Dynamic/Leeroy/Advanced), run scripted events (all 16 WotLK 5-mans), loot, rest and rez. Raids too: trash flow with a readiness quorum, pre-boss muster, wipe recovery; boss fights are left to the playerbots raid strategies. Companion addon: jrad7/mod-dungeon-clear-addon. It hooks playerbots without patching it (appends to the shared context registries). Ships its own `.cmake`; folder name must stay exact. Reads `PlayerbotAIConfig` members directly, so it breaks when playerbots renames them. AGPL-3.0. |
 | `mod-bg-slaveryvalley` | zip (no git) | Custom battleground, map 801 / BG id 31. Server side complete; **client patch still undistributed** — see below. |
 | `mod-ah-bot-plus` | NathanHandley/mod-ah-bot-plus | Auction house bot (git clone since 2026-10-30). Sells under, and buys player auctions as, the ordinary account `ahbot` (auth id 352): characters Fatiggeritch (3502) and Bonqueefa (3503), set in `AuctionHouseBot.GUIDs` (comma list, no spaces). Never use a playerbot character for it, and never enter the world on those characters. Seller and buyer both on; everything else is the `.dist` default (about 150 listings a minute per house, up to 15000 each). GM commands: `.ahbot reload` (re-reads the conf, GUIDs included, no restart), `.ahbot update`, `.ahbot empty`. Loader `Addmod_ah_bot_plusScripts`, so the folder name must stay exact. No SQL. |
-| `mod-leeroy` | this repo, `modules/mod-leeroy` | The guild bridge. `azerothcore-wotlk/modules/mod-leeroy` is a **junction** to `F:\azerothcore\modules\mod-leeroy`: remove it with `rmdir`, never `rm -rf` (that deletes the source through the link). Pins the cast (guild members at 80+, minus `Leeroy.HumanGuid`) via the playerbots pin API, mutes them in mod-ollama-chat, and serves NDJSON on `Leeroy.Bridge.Host`:`Leeroy.Bridge.Port` (`127.0.0.1:7878`, one mind at a time). Keys: `Leeroy.Enable`, `GuildId`, `HumanGuid`, `KeepCast`, `BringCastOnline`, `ExcludeFromOllamaChat`, `Bridge.*`, `CastGuard` (the kick guard), `Realm.*` (see the Realm) and `Telemetry.Enable`/`Training.Enable` (see Training ground). Start line in `Server.log`: `mod-leeroy: cast N members, pinned N ...`. Smoke test: `python modules/mod-leeroy/tools/bridge_smoke.py --expect-cast N` (0 pass, 1 fail, 2 no server or another mind connected); `--listen S` prints events, `--send` sends raw commands. For the owner it answers `.playerbots bot add5/10/25/40` from his guild (see that patch below). |
+| `mod-leeroy` | this repo, `modules/mod-leeroy` | The guild bridge. `azerothcore-wotlk/modules/mod-leeroy` is a **junction** to `F:\azerothcore\modules\mod-leeroy`: remove it with `rmdir`, never `rm -rf` (that deletes the source through the link). Pins the cast (guild members at 80+, minus `Leeroy.HumanGuid`) via the playerbots pin API, mutes them in mod-ollama-chat, and serves NDJSON on `Leeroy.Bridge.Host`:`Leeroy.Bridge.Port` (`127.0.0.1:7878`, one mind at a time). Keys: `Leeroy.Enable`, `GuildId`, `HumanGuid`, `KeepCast`, `BringCastOnline`, `ExcludeFromOllamaChat`, `Bridge.*`, `CastGuard` (the kick guard), `Realm.*` (see the Realm) and `Telemetry.Enable`/`Training.Enable` (see Training ground). Start line in `Server.log`: `mod-leeroy: cast N members, pinned N ...`. Smoke test: `python modules/mod-leeroy/tools/bridge_smoke.py --expect-cast N` (0 pass, 1 fail, 2 no server or another mind connected); `--listen S` prints events, `--send` sends raw commands. `owner_say` (the console's replies, separate from `human_say`) queues his chat line on his session: guild, officer, party, raid or a whisper to an online cast member; text is sanitized and then refused, not cut, when empty, over 255 UTF-8 bytes or starting with `.` or `!`; at most one line per 1500 ms and 8 per 30 s; he must be in game. Item links: hello lists `features: ["item_links"]`, and only then does the mind put `{{item:<id>}}` placeholders in a cast line (`say`, `realm_say`; `mind/leeroy_mind/talk/items.py`: bracketed or exact multi-word item names from library.db, never a place, NPC or test item unbracketed, kept as `[Name]` in every record, every line folded and defused after the wire's cleaning). Native sanitizes first and expands only a placeholder written whole in the raw text into the client's link from the item template, at most two a line within 255 bytes (`src/Lib/LeeroyItemLinks.*`), so no other `|` survives; a Realm channel hook sees the `[Name]` form, and its rewrite goes out without links. For the owner it answers `.playerbots bot add5/10/25/40` from his guild (see that patch below). |
 
 `mod-playerbots`, `mod-ollama-chat`, `mod-dungeon-clear` and `mod-ah-bot-plus` are
 git repos and `mod-leeroy` lives in this one; the rest are zip extractions and
@@ -366,14 +383,21 @@ raid night's `RaidHabits` (plus dungeon-clear's entry when he is inside an
 instance) and are teleported beside him. He is told per role how
 many were added and how many slots stayed empty, with a tally of why the
 others were not free. He must lead his group and be alive, out of combat and
-not travelling. Anyone else, `Leeroy.Enable = 0`, no guild or an empty cast:
+not travelling. Inside an instance, a size bigger than its copy's player cap
+(add10/25/40 in a 5-man, add25/40 in a 10-man raid) is refused before anything
+moves, with one line naming what fits there; refusals log `add<N> from the
+guild refused: <line>`. Anyone else, `Leeroy.Enable = 0`, no guild or an empty cast:
 the command reaches playerbots unchanged. Each fill publishes a `guild_group`
 event (reason `built`). Taking that group onto an instance map grants
 dungeon-clear's entry for it (`GrantRaidEntry`, which writes only what a member
 lacks) to its guild members not yet in his copy, brings them in under the same
 fences (his copy only), and publishes another (`entered`, with map, instance id
-and difficulty). Such a group raids for DKP and attendance like a called raid
-night (see the mind's guild life).
+and difficulty). A group bigger than that copy's cap is not brought in, and he
+is told so: the core checks the cap before a teleport but counts arrivals only
+at the door, so it lets the first few in and sends the rest to their homebinds
+(2026-11-05: 20 members of a 25 bounced to Dalaran from Old Hillsbrad). Such a
+group raids for DKP and attendance like a called raid night (see the mind's
+guild life).
 
 ### Local patch: pinned random bots
 
@@ -442,6 +466,13 @@ Local commits `41386b71` and `a8f5d378` (first built 2026-10-31) keep pins quiet
 pinned bot three `TellMaster` lines are skipped, "AI was reset to defaults"
 (`ResetAiAction`, which playerbots runs on "group set leader") and the
 `hello_follow`/`hello` lines after `FindNewMaster`. The reset and `+follow` still run.
+
+Local commit `3826b2f4` (built 2026-11-07) keeps pins out of random bot arena teams:
+`IsEligibleForBotArenaTeam` refuses a pinned bot. Playerbots assigns teams at every bot
+login, filling teams below `Playerbots.RandomBotArenaTeam2v2Count`/`3v3Count`/`5v5Count`
+(live 30/30/20, raised from 10/10/5 with `Arena.MaxRatingDifference = 0` so the owner meets
+the strong bot teams), and without it the cast would join them for good. Teams he made
+himself are untouched.
 
 Commits here never carry a `Co-Authored-By` or other attribution trailer.
 
@@ -547,6 +578,7 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 .venv/Scripts/python -m leeroy_mind.library --data-dir "$D" stats   # the game library: build, search
 .venv/Scripts/python -m leeroy_mind nightly --data-dir "$D" status  # also run, ledger, undo, enrich, veto
 .venv/Scripts/python -m leeroy_mind eval --data-dir "$D"    # weekly evaluation, on a copied database by default
+.venv/Scripts/python -m leeroy_mind selfies --data-dir "$D" status  # profile photos; also try (mind stopped)
 .venv/Scripts/python -m leeroy_mind console --data-dir "$D" # the guild console; open the URL it prints
 .venv/Scripts/python -m pytest -q                           # the unit tests
 .venv/Scripts/python -m pytest -m ollama                    # optional: also -m live, -m mysql
@@ -610,11 +642,48 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   built survives his relogs and mind restarts.
 - The guild console (`leeroy_mind/console/`) is a process of its own on
   `127.0.0.1:7881` (`--port`). It prints `http://127.0.0.1:7881/#key=...`; the
-  key changes at each start, stays in the page's memory (never a cookie, which
-  every 127.0.0.1 port would be sent) and goes with each request as an
-  `X-Console-Key` header, so a reload needs the printed URL again. Every request
+  key (one per start, unless `--key-file`) stays in the page's memory (never a
+  cookie, which every 127.0.0.1 port would be sent) and goes with each request
+  as an `X-Console-Key` header, so a reload needs the URL again. Every request
   needs the console's Host, and its Origin when the browser sends one; a change
-  (POST) always needs both the key and the Origin. A stop or restart asks
+  (POST) always needs both the key and the Origin.
+  Away from home the owner's devices reach it only over the tailnet, at
+  `https://<pc>.<tailnet>.ts.net/` (this PC's MagicDNS name) through `tailscale
+  serve` on this machine, never Funnel: `tailscale serve --bg --https=443
+  http://127.0.0.1:7881` (undo with `tailscale serve --https=443 off`;
+  `tailscale serve reset` clears all of serve's config). The console still
+  listens on 127.0.0.1 only. `--allow-host NAME` (repeatable; also `[console]
+  allow_hosts = [...]` in mind.toml) accepts a Host of NAME or NAME:443 with the
+  Origin `https://NAME`: serve keeps the browser's Host (`r.Out.Host =
+  r.In.Host` in tailscale's `ipn/ipnlocal/serve.go`), and X-Forwarded-Host is
+  ignored. The two addresses' Origins never cross; every other Host is refused
+  as before. `--key-file [PATH]` uses a stable key instead, by default in
+  `%LOCALAPPDATA%\leeroy\console.key` (his profile, not mind-data): a missing
+  file is made private (control.json's one-entry DACL) with
+  `secrets.token_urlsafe(32)`; a file he does not own, that anyone else may
+  read (owner and DACL read from the opened file), that is not a regular file
+  or that holds fewer than 43 URL-safe characters stops the start. `python -m
+  leeroy_mind console rotate-key [--key-file PATH] [--allow-host NAME]` writes a
+  new key and prints the URLs to bookmark; a running console keeps the old one
+  until it restarts. The start line adds `  tailnet: https://NAME/#key=...`;
+  the key is printed there and by rotate-key, never logged. A bookmarked URL's
+  fragment syncs with the browser's account like the rest of the bookmark, so
+  if a device is lost, run rotate-key. `scripts/ac-console-schedule.ps1
+  -Install -AllowHost <pc>.<tailnet>.ts.net` (also `-Show`, which prints the
+  task without registering it, `-Remove` and `-Status`) manages the per-user
+  logon task `leeroy-console`: the checkout's mind venv `pythonw.exe` runs the
+  console hidden with `--key-file <KeyFile> --allow-host <AllowHost>`, only while
+  he is logged on, Limited, priority 4 (normal; a task's default 7 is below
+  normal), IgnoreNew, no time limit, and starts it again after a failure
+  (RestartCount, plus a trigger every 5 minutes). Its output is not kept, so the
+  bookmark is `https://<AllowHost>/#key=` plus the key in the key file. Under
+  that pythonw.exe the console takes the mind's base interpreter from the mind
+  venv's `pyvenv.cfg` (`<home>\python.exe`, `lifecycle.mind_base_python`, as
+  `ac-mind.py` does), and the venv's pythonw.exe may control the mind as its
+  python.exe may. The mind and the voice service start outside the starting
+  process's job (`CREATE_BREAKAWAY_FROM_JOB`; a job that forbids it starts them
+  inside, with one `<service>_breakaway_refused` log line) at normal priority, so
+  ending the task does not end a mind its console started. A stop or restart asks
   first while the owner is in game or nobody can tell. It reads mind.db,
   mind.log and mind.toml read-only and talks to the voice service through the
   voice page's own socket. Start, restart and stop use
@@ -622,7 +691,7 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   checkout's own mind venv may control the mind (`--root` names another
   checkout); the voice service's pid must be the base interpreter its own venv
   launcher started. `--no-control` turns start, restart and stop off, and raid
-  actions too. The owner's game state is the running mind's open session; while
+  actions and replies too. The owner's game state is the running mind's open session; while
   the mind or its bridge is down, or the session cannot be read, it is shown as
   unknown, never "not in game". Its Raid and Guild tabs read mind.db read-only
   (raids, attendance, the DKP ledger, loot receipts, the roster, season awards,
@@ -630,10 +699,12 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   control endpoint. The Personas tab is read-only too (`console/personaview.py`):
   each member's night mood, stance, row toward the owner, strongest ties, memory
   counts, persona version and who last wrote it (seed, owner, generator, the
-  night's looks pass, a stance move or an undo), open drift flags and the night's
-  trait sample, and per member the persona card summary, ties, memories by kind
-  and ledger; a table an older mind.db lacks shows as unavailable. Its only
-  write is the tuning (`leeroy_mind/tuning/`, console `tuneview.py`): the
+  night's looks pass or photo-kind pass, a stance move or an undo), open drift
+  flags and the night's trait sample, and per member the persona card summary
+  (its looks with the photo kind), ties, memories by kind and ledger; a table
+  an older mind.db lacks shows as unavailable. Its writes are the profile
+  photos (see the selfie worker) and the tuning (`leeroy_mind/tuning/`,
+  console `tuneview.py`): the
   owner's dials, stored in mind.db's `tuning_*` tables as an overlay that never
   rewrites a persona. Member dials: talkative, argumentative, forward/flirty
   (women only), humour amount, theorycrafter, lore nerd, drama, jealousy, party
@@ -645,17 +716,59 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   while the live model is already loaded, never loads one, and its text is never
   logged or stored. `python -m leeroy_mind tuning --data-dir "$D" status|history`
   reads it; `undo N|revert N` work with the mind stopped.
+  The page is split into `console/static/` (CSS, a classic `theme.js`, ES
+  modules, self-hosted OFL fonts with their licence texts) and is served at
+  `/static/` without the key, like the page, since a browser cannot send a
+  header for `<link>`, `<script src>` or `@font-face`; the CSP is `'self'`
+  with no inline style. Dark is the default whatever the system setting; the
+  light/dark switch is remembered in `localStorage` (`guild-console-theme`,
+  with the folds and read marks, `guild-console-collapsed` and
+  `guild-console-read`). It has 13 tabs: Comms, Raid, Guild, Personas and Mind
+  are real; Social, Board, Calendar, Bank, Realm, Training, Dojo and Library
+  are placeholders that wait for P3. `GET /api/face?guid=<int>&size=sm|md|lg` serves
+  `mind-data/selfies/<guid>/chosen.jpg` (key and Host checked, `image/jpeg`,
+  `private, max-age=60`, 404 when absent; the original for every size, the
+  browser scales it) and never writes under `selfies/`; faces (initials when
+  there is no photo) show in Comms and on the Personas roster. Comms is one
+  feed of typed lines and the room lines he heard (from mind.db: a line
+  appears once it has played to him, a dropped one does not), channels with
+  unread counts (a first open or reload marks history read), the 32-room tree
+  (empty rooms greyed, click to join), whispers and the member card. A voiced
+  whisper is never typed in WoW: one the voice service dropped because he was
+  deafened or had muted that member shows in its thread as text with a "not
+  heard (deafened)" or "not heard (muted)" chip and counts as unread; a whisper
+  dropped for any other reason does not appear. Push-to-talk the voice service
+  recognised but the mind did not match to a line is noted as not sent in a
+  Comms toast (8 s), not in the feed. Reply box: `POST /api/say` {channel,
+  text[, to]} with channel `guild`, `officer`, `group` (the mind sends it to
+  raid when his group is one, else party) or `whisper`, and `to` (a member's
+  guid, online, in the cast, not him) for a whisper only; a line starting with
+  `/` is refused ("Slash commands aren't sent from here.": WoW would post it as
+  words). It needs the key and Origin and the mind's
+  control endpoint, and is off with `--no-control`, with the mind or bridge
+  down (said as such, not as "not in game") and while he is not in game. One
+  line is in flight at a time; the refused text stays in the box. The server
+  answers in words; an older worldserver without `owner_say` reads "The game
+  server needs the rebuild that adds console replies." Mute and deafen are
+  voice-service flags (the page's `self` message; deafen implies mute; both
+  reset at each login): mute stops his push-to-talk, deafen silences the room.
+  After a release they need the voice service restarted: an older voice
+  service ignores `self`.
 - The mind's control endpoint (`leeroy_mind/endpoint.py`) is on by default
   (`[control] enabled = false` turns it off; `[control] port`, default 0, picks
   a free port). It listens on 127.0.0.1 only and writes a new key each start,
   with its port and pid, to `mind-data/control.json`, readable by the owner's
   user only (a protected one-entry DACL) and removed when the mind stops
   cleanly. One JSON line per connection, exactly `v`, `key`, `op` (and `args`):
-  `status`, `stop` (the mind's own shutdown, the one Ctrl+C runs), `tune`
+  `status`, `stop` (the mind's own shutdown, the one Ctrl+C runs), `selfie`
+  (profile photos: pick, undo, more, status), `tune`
   (the owner's dials: status, set, undo, revert, group, retire, preview) and `raid`
   (`call`, `form` {raid, size, heroic, lead}, `summon`, `start`, `stop`,
   `end`), which enter guild life's raid night where the owner's chat or its
-  timers would, with the same guards, and are refused while he is not in game.
+  timers would, with the same guards, and are refused while he is not in game,
+  and `say` {channel, text, to} (`owner_say.py`: the shared text rule, one line
+  at a time, sent to the bridge as `owner_say`; logs carry op, channel and
+  outcome, never the text).
   `stop`/`start` of a raid switch dungeon-clear off and on again mid-raid. The
   console sends the key only to the listener the TCP table shows is the running
   mind's own pid; its Stop and Restart use the clean stop (asked up to five
@@ -696,7 +809,16 @@ Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
   (`realm_step`), and a plan edited after its approval is refused for good. `realm canon
   history-ok <seed> <canon>` approves the history files; `realm cards [--show]`. A bank step
   that ends `needs_controller` needs a look at the bank in game, then a fresh plan
-  (`plan bank --no-money` or `--first-tab N`).
+  (`plan bank --no-money` or `--first-tab N`). `realm release <root-id> --reason "<text>"`
+  (the mind stopped; it holds `mind.lock` throughout) shows one body move stuck unknown in the
+  action journal (kind, state, what native said, age, members) and asks for its exact id again
+  (`--yes` skips that, never the exact id). It then marks it abandoned (completed, holding
+  nobody) and writes meta `realm:action:abandoned:<id>` with the time, the reason and the row as
+  it was. It refuses any other state (conflict too), a transport not yet settled, a WG, ack or
+  result root and one with children. A released root that native evidence later contradicts goes
+  to conflict and stays held. Native still fences a body it holds. The prune never deletes a
+  grow's row or a released one, and a release receipt also stops a grow, so no grow with a stored
+  outcome is ever sent again.
 - **Exactly once.** A command that moves no body (speech, actor sets, renames, bank money, tabs
   and gift withdrawals, grants, calendar, mail) goes through the direct ledger `realm_direct`
   (prepared, dispatched, acked, refused, unknown, abandoned): an unknown one is never sent
@@ -707,7 +829,14 @@ Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
   must name the process. One fenced body (`busy:raid_owner` for a member in his group, a
   training or Realm owner, `not_bot`) makes native refuse a whole body move at its ack before
   reserving anyone: the action journal settles that as refused, holding nobody, and each start
-  reads again a stored unknown whose only evidence is such a refusal.
+  reads again a stored unknown whose only evidence is such a refusal. The same goes for a
+  rearm, `rpg_status`, `equip` or `set_profession` acked and then failed at one body's step for a
+  fence or a `busy:` reason such as `busy:combat` (`STEP_REFUSALS`): native refused that body
+  before changing it and released them all, so it settles `step_refused` and Recall goes on to
+  the defaults. Any other failed job (`operation_transition_unknown`, a walk, leave, duel or
+  grow) stays unknown. A root that settles unknown or conflict logs a warning in mind.log,
+  `realm_action_unknown` (or `realm_action_conflict`) with its id, kind, reason, native's reason
+  and member count, no names: from then on it holds its manifest.
 - **Rulings.** His raid holds exactly his raid: waiting for the call, called and forming hold
   the roster and his group; assembling and running hold the raid's members and his group;
   everyone else, rival officers included, may move (an unreadable member list holds everyone).
@@ -773,6 +902,9 @@ artefacts such as crackling; find and fix the cause.
   expressive engine falls back to the member's Kokoro blend; cached expressive
   callouts can still play. GPU admission requires headroom beside the live chat
   and embedding models, and is measured before changing local settings.
+- The browser page can send `{"type": "self", "mute", "deafen"}` (booleans):
+  mute stops push-to-talk, deafen silences the room and implies mute; both
+  reset at each login. The service reports them in its `self` state.
 - Push-to-talk uses Raw Input and does not swallow the key. A tap under the
   configured hold threshold is ignored. WoW and the listener need compatible
   elevation: a non-elevated listener cannot hear an elevated foreground game.
@@ -803,6 +935,75 @@ before using the page, since an older page can remain after a failed run.
 Models load offline after `fetch-models` has fetched and verified the pinned files. Default
 tests deselect real engines, audio devices, Windows, GPU, Ollama and live-service
 checks; those checks need a deliberate isolated setup.
+
+## The selfie worker (`leeroy-selfie`)
+
+`selfie/` renders the guild's profile photos: four candidates a member, RealVisXL V5.0 on the
+local GPU, each checked by a local NSFW classifier before it is written. It is a separate
+GPL-3.0-or-later process with its own `selfie\LICENSE` and `selfie\.venv` on **Python 3.12**
+(never the mind's or the voice service's), and the mind never imports it: it starts the worker
+as a subprocess at night and talks JSON lines over stdin and stdout.
+
+- **Off by default.** `[selfies] enabled = true` in `mind.toml`, read once at the start. Other
+  keys: `python` and `data` (absolute paths; default `selfie\.venv` and `LEEROY_SELFIE_DATA`,
+  else `selfie-data` beside the repo), `nsfw_max` (0.2), `steps` (30), `guidance` (5.0), `size`
+  (768, 896 or 1024), `min_free_gib` (11.5, the worker refuses to load with less VRAM free).
+  An invalid table is logged and means off. With it off the pick service still works for sets
+  an earlier night rendered, and "4 more" is refused.
+- **Worker commands**, from `selfie/`: `.venv/Scripts/python -m leeroy_selfie fetch-models`
+  (pinned revisions into `<data>/models`), `doctor` (`--quick` skips torch and hashing; the
+  mind's doctor runs that), `where`, `smoke --out DIR` (one invented person; needs the GPU),
+  `pytest -q` (no model, GPU or network).
+- **Two night stages, only with `enabled = true`.** `photo` runs after `enrich` on the
+  reflection model: it picks a photo kind, framing, setting, outfit and expression for each
+  member who has looks and no kind yet (stored as a new persona version, screened for the
+  owner's real name, member names, era and explicit wear). `selfies` runs after `regress` as an
+  image stage: it queues a first set for each member with looks and a kind, plus any "4 more"
+  asked for, and renders up to `selfie_per_night` (120) sets.
+- **GPU rules.** The image stage unloads every chat model but the embedding model (the worker
+  needs the VRAM) and never renders while a live lease is held (his login, an offline raid, the
+  voice service): it ends without a failure and the sets wait for the next night. A night with
+  nothing to render takes no GPU (`wants_gpu`). The worker's start checks the models without
+  hashing them; a VRAM refusal keeps its pipeline on the CPU, and after making room the stage
+  asks it once more (`selfies_worker_start` logs each start's `ms`, `check_ms`, `load_ms` and
+  `free_gib`). An OOM makes room and retries once, then ends the stage. His login cancels the
+  stage, whose last act is to end the worker's whole process tree; the arbiter's live-model
+  preload starts only after that tree is gone.
+- **Orion beside the worker.** mod-ollama-chat's night requests can load Orion into the VRAM
+  the worker leaves, partly on the CPU, and Ollama reuses that runner for a preload at the same
+  `num_ctx`. So the night makes room once more after the image stage (and `selfies try` once
+  its worker is gone), and after any image stage the next hand-over (his login, voice, an
+  offline raid) unloads a loaded live model before its preload: one cold load (about 10 s) at
+  the first login after a render night. At
+  release, `ollama ps` after a render night and his next login must show Orion at `100% GPU`.
+- **Storage.** Sets and picks are rows in `mind.db` (the selfies migration,
+  `migrations/*_selfies.sql`); the images are files
+  under `mind-data\selfies\<guid>\`: `sets\<n>\c0.jpg` to `c3.jpg` with `.thumb.jpg`
+  beside each (a set renders in `<n>.part` and is renamed when done), `chosen.jpg` (the photo
+  in force) and `history\<pick>.jpg`. The database is the truth: the mind makes the files agree
+  with it once at start, before any loop runs. `chosen.jpg` is replaced by a rename, so a
+  reader sees the old photo or the new one. Generated images are never committed.
+- **Picking.** The console reads the sets (`GET /api/selfies`, `/api/selfies/images`,
+  `/api/selfies/member`) and sends `POST /api/selfie` (pick, undo, more) to the mind's `selfie`
+  op, behind the same key, Origin and `--no-control` gates as raid actions and dial changes.
+  On the page (`static/js/selfies.mjs`, words in `selfiemodel.mjs`) the Personas tab opens with
+  "Choose selfies": the counts, five waiting members a page with their four thumbnails (a click
+  picks one) and "4 more", the mind's answer with an Undo after a pick, and "Recent choices" from
+  the running mind's own list (never the view's) with Undo where the mind says it would be taken.
+  A member's detail has "Profile photo": the photo in force as their face, "4 more" and their
+  history with Undo. With the mind down or control off the buttons are disabled and say why. A
+  pick or undo (the `selfie` event) makes every page ask for that member's face again at once
+  (`FaceCache.forgetKey`) instead of after its 60 s. `leeroy_mind selfies status`
+  prints the queue and the latest night's stage records, and `selfies try [--guid N | --limit N]`
+  renders a trial set into `scratch\selfies-try` of the data dir with the mind stopped.
+- **Content limits.** Adults only, clothed and non-explicit, no real person's likeness, and no
+  person's name ever reaches a prompt. Logs hold ids, counts, scores and timings, never a prompt
+  or persona text.
+- **Rehearsal.** `mind/tests/selfies/test_selfies_rehearsal.py` drives a real `MindApp`, its
+  control endpoint and a real console over loopback with the FakeBridge, FakeLLM and a fake
+  worker, through two nights and his login. A rehearsal against a copy of the live database
+  must use the same fakes and its own free ports, and any console it starts takes
+  `--voice-ui-port` of an unused port. The real worker and the GPU are checked at the release.
 
 ## The dojo
 

@@ -204,3 +204,26 @@ def test_live_armory():
     assert armory.human_tier(1) >= 16
     assert armory.equipped([1])[1]
     assert isinstance(armory.name(1), str) and armory.name(1)
+
+
+def test_bound_with_reads_only_the_owners_copies_of_that_map(monkeypatch):
+    chars, world = databases()
+    seen = []
+
+    def query(db, sql, exe):
+        seen.append((db, sql))
+        return [["1101"], ["1103"], ["9999"]]
+
+    monkeypatch.setattr(module, "run_mysql", query)
+    armory = MysqlArmory(chars, world, Path("mysql.exe"))
+    assert armory.bound_with(1, 631, []) == set() and seen == []
+    assert armory.bound_with(1, 631, [1103, 1101, 1102]) == {1101, 1103}
+    [(db, sql)] = seen
+    assert db is chars and sql.startswith("SELECT DISTINCT ci.guid FROM character_instance ci ")
+    assert "his.guid = 1 AND i.map = 631" in sql and sql.endswith("ci.guid IN (1101,1102,1103)")
+    monkeypatch.setattr(module, "run_mysql", lambda *a: [["x"]])
+    with pytest.raises(RosterError, match="bind row 1"):
+        armory.bound_with(1, 631, [1101])
+    for args in (("1", 631, [1101]), (1, 0, [1101]), (1, 631, [True])):
+        with pytest.raises(ValueError, match="uint32"):
+            armory.bound_with(*args)

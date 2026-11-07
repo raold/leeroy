@@ -45,6 +45,17 @@
 /voice/**/*.pth
 /voice/**/*.ckpt
 /voice/.ruff_cache/
+!/selfie/
+/selfie/.venv/
+/selfie/.pytest_cache/
+/selfie/.ruff_cache/
+/selfie/*.egg-info/
+/selfie/build/
+/selfie/**/*.safetensors
+/selfie/**/*.jpg
+/selfie/**/*.jpeg
+/selfie/**/*.png
+/selfie/**/*.webp
 # The dojo: source only. Environments, recordings, checkpoints, models, local
 # manifests and runtime configuration stay on this machine (dojo-runtime/ and
 # dojo-data/ live next to the install root, outside this allowance).

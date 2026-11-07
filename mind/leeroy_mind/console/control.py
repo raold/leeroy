@@ -35,14 +35,17 @@ class Refused(Exception):
 
 class MindHandle:
     """This checkout's mind on one data dir. The console's own launch is kept, so an exit it
-    did not ask for can be told from a stop."""
+    did not ask for can be told from a stop. `base_python` is the base interpreter the venv's
+    launcher starts (lifecycle.mind_base_python); None when it could not be read, and then
+    `base_problem` says why and the mind is never identified, started or stopped."""
 
-    def __init__(self, root: Path, data: Path, *, python: Path, base_python: str,
+    def __init__(self, root: Path, data: Path, *, python: Path, base_python: str | None,
                  processes, locked, spawn=lifecycle.spawn_mind, sleep=time.sleep,
                  monotonic=time.monotonic, timeout: float = 30, link=None,
-                 graceful_s: float = GRACEFUL_S):
+                 graceful_s: float = GRACEFUL_S, base_problem: str = ""):
         self.root, self.data = Path(root), Path(data)
         self.python, self.base_python = Path(python), base_python
+        self.base_problem = base_problem or "the mind venv's base interpreter is unknown"
         self.processes, self.locked = processes, locked
         self._spawn, self._sleep, self._monotonic = spawn, sleep, monotonic
         self.timeout = timeout
@@ -64,6 +67,8 @@ class MindHandle:
         held = self.held()
         if self.processes is None:
             return None, held, None
+        if self.base_python is None:
+            return None, held, self.base_problem
         try:
             found = lifecycle.family(self.processes.snapshot(), self.python, self.base_python,
                                      self.data)
@@ -86,15 +91,20 @@ class MindHandle:
         self.launch = self._spawn(root, data, python)
         return self.launch
 
+    def _base(self) -> str:
+        if self.base_python is None:
+            raise OwnershipError(self.base_problem)
+        return self.base_python
+
     def _run(self, action: str) -> Outcome:
+        self._base()
         return lifecycle.mind_action(
             action, self.root, self.data, self.python, self.base_python,
             processes=self.processes, locked=self.held, spawn=self._spawned,
             sleep=self._sleep, monotonic=self._monotonic, timeout=self.timeout)
 
     def _family(self):
-        return lifecycle.family(self.processes.snapshot(), self.python, self.base_python,
-                                self.data)
+        return lifecycle.family(self.processes.snapshot(), self.python, self._base(), self.data)
 
     def _clean_stop(self) -> tuple[Outcome | None, str]:
         """(the outcome, "") when the mind ran its own shutdown and ended; (None, why) when the
@@ -215,12 +225,14 @@ class Controls:
 def control_problems(root: Path, *, platform: str = sys.platform,
                      executable: str = sys.executable) -> dict[str, str | None]:
     """Why each service cannot be controlled from this process (None: it can). The mind's
-    rule is the script's: only this checkout's own mind venv may launch or stop it."""
+    rule is the script's: only this checkout's own mind venv may launch or stop it, through
+    its python.exe or (the logon task's console) its pythonw.exe."""
     out: dict[str, str | None] = {"mind": None, "voice": None}
     if platform != "win32":
         return {s: "process control is supported only on Windows" for s in SERVICES}
     python = lifecycle.venv_python(root)
-    if lifecycle.canonical(executable) != lifecycle.canonical(python):
+    own = {lifecycle.canonical(python), lifecycle.canonical(python.with_name("pythonw.exe"))}
+    if lifecycle.canonical(executable) not in own:
         out["mind"] = (f"the console is not running in this checkout's mind venv ({python}); "
                        "only that venv may start or stop the mind")
     voice = lifecycle.VoiceControl(root)

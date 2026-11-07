@@ -231,3 +231,30 @@ def test_talk_moves_migrates_a_db_from_before_it_and_adds_both_tables(tmp_path, 
                          "VALUES (1, 101, 1, 'k', ?, 'guild')", ("x" * 81,))
     finally:
         conn.close()
+
+
+def test_a_v17_db_gains_the_empty_selfie_tables(tmp_path, monkeypatch):
+    """P2: the selfies migration (migrations/*_selfies.sql, the one after tuning's) adds the
+    profile photo tables to a database the tuning release left, and keeps its rows."""
+    path = tmp_path / "mind.db"
+    conn = _db_at(path, 17, tmp_path, monkeypatch)
+    try:
+        assert not {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE name LIKE 'selfie_%'")}
+        conn.execute("INSERT INTO tuning_change(id,ts,source,label) VALUES (1,1000,'console','')")
+        conn.commit()
+    finally:
+        conn.close()
+    conn = open_db(path)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == latest_version() >= 18
+        names = {r[0]: r[1] for r in conn.execute(
+            "SELECT name, type FROM sqlite_master WHERE name LIKE 'selfie_%'")}
+        assert names == {"selfie_set": "table", "selfie_candidate": "table",
+                         "selfie_pick": "table", "selfie_current": "table",
+                         "selfie_set_one_queued": "index"}
+        for t in ("selfie_set", "selfie_candidate", "selfie_pick", "selfie_current"):
+            assert conn.execute(f"SELECT count(*) FROM {t}").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM tuning_change").fetchone()[0] == 1
+    finally:
+        conn.close()

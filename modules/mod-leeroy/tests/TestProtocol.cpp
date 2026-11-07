@@ -13,6 +13,8 @@ LEEROY_TEST(Protocol_HelloShape)
     CHECK_EQ(j["v"], 1); CHECK_EQ(j["type"], "hello"); CHECK_EQ(j["ts"], 1700000000000);
     CHECK_EQ(j["server"], "mod-leeroy"); CHECK_EQ(j["version"], "0.1.0");
     CHECK_EQ(j["guild_id"], 21); CHECK_EQ(j["human_guid"], 0);
+    CHECK(j["features"].is_array());
+    CHECK(j["features"] == json::array({"item_links"}));
 }
 
 LEEROY_TEST(Protocol_ChatShapeAndOneLine)

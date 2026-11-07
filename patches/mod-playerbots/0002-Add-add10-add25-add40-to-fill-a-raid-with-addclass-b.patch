@@ -1,7 +1,7 @@
 From c26c0d20fcdbdcdb502b8a173bbb44279cfc9e61 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 11:41:58 -0400
-Subject: [PATCH 2/9] Add add10/add25/add40 to fill a raid with addclass bots
+Subject: [PATCH 02/10] Add add10/add25/add40 to fill a raid with addclass bots
 
 Tops the master's group up to a 10, 25 or 40-man raid with a tank/healer/damage
 mix (2/3/5, 3/6/16, 4/10/26), counting the roles already in the group. Classes

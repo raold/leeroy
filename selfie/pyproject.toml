@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "leeroy-selfie"
+version = "0.1.0"
+description = "The guild's profile photos: a local image worker the mind starts at night"
+requires-python = ">=3.12,<3.13"
+license = "GPL-3.0-or-later"
+dependencies = []
+
+[project.optional-dependencies]
+# torch comes from the cu128 index (see the README); the rest from PyPI
+gpu = [
+  "torch==2.11.0",
+  "diffusers==0.42.1",
+  "transformers==5.22.1",
+  "accelerate==1.15.0",
+  "safetensors==0.8.0",
+  "tokenizers==0.23.3",
+  "huggingface_hub==2.4.0",
+  "pillow==13.0.0",
+  "numpy==2.5.4",
+]
+test = ["pytest>=9.1,<10"]
+
+[tool.setuptools.packages.find]
+include = ["leeroy_selfie*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-m", "not engines and not gpu"]
+markers = [
+  "engines: needs the model files under selfie-data/models",
+  "gpu: needs the GPU (nvidia-smi, CUDA)",
+]

@@ -108,12 +108,12 @@ async def test_start_has_expected_comp_lease_and_no_unproved_attendance(setup):
     assert controller.session is not None and controller.session.ctx.instance_id is None
 
 
-@pytest.mark.parametrize("reason", ["driver_pending", "busy"])
 @_run_async
-async def test_retryable_errors_have_five_attempts_with_lease_release(setup, reason):
+async def test_driver_pending_retries_each_minute_up_to_the_attempt_bound_with_lease_release(setup):
+    from leeroy_mind.guild.offline import MAX_ATTEMPTS
     ports, _, controller = setup
-    ports.acks["start_offline_raid"].extend([(False, reason)] * 7)
-    for count in range(5):
+    ports.acks["start_offline_raid"].extend([(False, "driver_pending")] * (MAX_ATTEMPTS + 2))
+    for count in range(MAX_ATTEMPTS):
         await controller.tick()
         assert len(ports.sent) == count + 1
         await advance(ports, 59)
@@ -121,8 +121,8 @@ async def test_retryable_errors_have_five_attempts_with_lease_release(setup, rea
         assert len(ports.sent) == count + 1
         await advance(ports, 1)
     await controller.tick()
-    assert len(ports.sent) == 5
-    assert ports.gpu == [item for _ in range(5) for item in ("acquire:offline_raid", "release:offline_raid")]
+    assert len(ports.sent) == MAX_ATTEMPTS
+    assert ports.gpu == [item for _ in range(MAX_ATTEMPTS) for item in ("acquire:offline_raid", "release:offline_raid")]
 
 
 @_run_async
@@ -431,3 +431,387 @@ async def test_restart_reuses_exact_owned_session_and_terminal_receipts(setup):
     await recreated.on_job(event(recreated, state="done", stage="", reason="cleared", kills=1))
     await recreated.tick()
     assert ports.gpu == ["acquire:offline_raid", "release:offline_raid"]
+
+
+class Heard:
+    def __init__(self):
+        self.events = []
+
+    async def on_start(self, run):
+        self.events.append(("start", run.plan.raid_key, run.plan.size))
+
+    async def on_end(self, reason, run=None):
+        self.events.append(("end", reason))
+
+
+def raids_today(ports):
+    midnight = ports.clock.local().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    return ports.conn.execute("SELECT COUNT(*) FROM guild_raid WHERE offline=1 AND started>=?", (midnight,)).fetchone()[0]
+
+
+def test_next_raid_key_skips_raids_proved_unusable_today():
+    assert next_raid_key(("icc25", "icc10", "toc25"), {}, skip={"icc25"}) == "icc10"
+    assert next_raid_key(("icc25", "toc25"), {"toc25": 50}, skip={"icc25"}) == "toc25"
+    with pytest.raises(ValueError):
+        next_raid_key(("icc25",), {}, skip={"icc25"})
+
+
+@pytest.mark.parametrize("reason", ["leader_unavailable:in_combat", "leader_unavailable:dead",
+                                    "busy", "busy:realm_owner:113", "in_instance:113",
+                                    "training_commands_pending"])
+@_run_async
+async def test_busy_refusal_is_retried_later_that_day_and_the_raid_starts(setup, reason):
+    ports, _, controller = setup
+    heard = Heard()
+    controller.add_listener(heard)
+    ports.acks["start_offline_raid"].append((False, reason))
+    today = ports.clock.local().date()
+    await controller.tick()
+    assert len(ports.sent) == 1
+    day = controller._day_state()
+    assert not day["blocked"] and day["refused"] == reason
+    await advance(ports, 14 * 60)
+    await controller.tick()
+    assert len(ports.sent) == 1  # Not a 60 s hammer: the body is busy for a while.
+    await advance(ports, 60)
+    await controller.tick()
+    assert len(ports.sent) == 2 and ports.sent[1].id != ports.sent[0].id
+    assert ports.clock.local().date() == today
+    await controller.on_job(event(controller))
+    await controller.tick()
+    assert heard.events == [("start", "icc", 25)]
+    assert controller.session.ctx.instance_id == 77
+    assert ports.gpu == ["acquire:offline_raid", "release:offline_raid", "acquire:offline_raid"]
+
+
+@_run_async
+async def test_busy_refusals_are_bounded_and_then_end_the_day(setup):
+    from leeroy_mind.guild.offline import MAX_ATTEMPTS
+    ports, _, controller = setup
+    ports.acks["start_offline_raid"].extend([(False, "leader_unavailable:in_combat")] * (MAX_ATTEMPTS + 2))
+    for _ in range(MAX_ATTEMPTS + 2):
+        await controller.tick()
+        await advance(ports, 15 * 60)
+    assert len(ports.sent) == MAX_ATTEMPTS > 5
+    assert controller._day_state()["blocked"]
+    await advance(ports, 3600)
+    await controller.tick()
+    assert len(ports.sent) == MAX_ATTEMPTS
+
+
+@_run_async
+async def test_raid_without_fresh_encounters_falls_through_to_one_that_has_them(setup):
+    ports, _, controller = setup
+    heard = Heard()
+    controller.add_listener(heard)
+    await start(setup)
+    assert (ports.sent[-1].map_id, ports.sent[-1].size) == (631, 25)
+    await controller.on_job(event(controller, stage="starting"))
+    await controller.on_job(event(controller, state="failed", stage="", reason="setup:starting:no_fresh_encounters"))
+    await controller.tick()
+    assert not controller.active and not controller._day_state()["blocked"]
+    assert not [m for m in ports.memories if "without" in m.text]  # Nobody raided: no raid memory.
+    await advance(ports, 60)
+    await controller.tick()
+    assert len(ports.sent) == 2 and (ports.sent[-1].map_id, ports.sent[-1].size) == (631, 10)
+    await controller.on_job(event(controller))
+    await controller.tick()
+    assert heard.events == [("start", "icc", 10)]
+    await controller.on_job(event(controller, state="done", stage="", reason="cleared", kills=3))
+    await controller.tick()
+    assert ("end", "cleared") in heard.events
+    await advance(ports, 2 * 3600)
+    await controller.tick()
+    assert len(ports.sent) == 2  # The started raid is the day's one raid.
+
+
+@_run_async
+async def test_fall_through_survives_a_restart(setup):
+    ports, armory, controller = setup
+    await start(setup)
+    await controller.on_job(event(controller, stage="starting"))
+    await controller.on_job(event(controller, state="failed", stage="", reason="setup:starting:no_fresh_encounters"))
+    await controller.tick()
+    recreated = OfflineRaids(ports, controller.cfg, armory, random.Random(3))
+    await advance(ports, 60)
+    await recreated.tick()
+    assert len(ports.sent) == 2 and ports.sent[-1].size == 10
+
+
+@_run_async
+async def test_rotation_with_no_fresh_raid_left_waits_for_tomorrow(setup):
+    ports, _, controller = setup
+    controller.cfg = replace(controller.cfg, offline_rotation=("icc25",))
+    await start(setup)
+    await controller.on_job(event(controller, stage="starting"))
+    await controller.on_job(event(controller, state="failed", stage="", reason="setup:starting:no_fresh_encounters"))
+    await controller.tick()
+    await advance(ports, 3600)
+    await controller.tick()
+    assert len(ports.sent) == 1 and controller._day_state()["blocked"]
+    await advance(ports, 23 * 3600)
+    await controller.tick()
+    assert len(ports.sent) == 2 and ports.sent[-1].size == 25
+
+
+@pytest.mark.parametrize("reason", ["setup:restarting:timeout", "encounters_changed",
+                                    "setup:starting:no_fresh_encounters", "setup:teleporting:in_instance:113"])
+@_run_async
+async def test_a_raid_that_started_is_still_the_days_only_raid(setup, reason):
+    ports, _, controller = setup
+    await running(setup)
+    await controller.on_job(event(controller, state="failed", stage="", reason=reason))
+    await controller.tick()
+    for _ in range(4):
+        await advance(ports, 15 * 60)
+        await controller.tick()
+    assert len(ports.sent) == 1 and raids_today(ports) == 1
+
+
+def attendance(ports, raid_id):
+    rows = ports.conn.execute("SELECT COUNT(*) FROM guild_attendance WHERE raid_id=?", (raid_id,)).fetchone()[0]
+    dkp = ports.conn.execute("SELECT COUNT(*) FROM dkp_ledger WHERE raid_id=? AND reason IN ('attendance','standby')",
+                             (raid_id,)).fetchone()[0]
+    return rows, dkp
+
+
+def closing_lines(ports):
+    return ([text for _, _, text in ports.said if text.startswith("dkp top 5:")],
+            [line for _, _, line, _ in ports.proposed if line.startswith("Wrap up")])
+
+
+def not_raided(ports, raid_id):
+    from leeroy_mind.guild.loot import _get
+    return _get(ports.conn, f"guild:raid:{raid_id}:not-raided") is True
+
+
+@_run_async
+async def test_member_saved_to_the_owners_copy_of_the_planned_map_is_never_chosen(setup):
+    ports, armory, controller = setup
+    armory.binds = {1: {(631, 14)}, 103: {(631, 14)}, 120: {(631, 14)}, 102: {(631, 14)}}
+    await start(setup)
+    command = ports.sent[-1]
+    chosen = {command.leader_guid, command.loot_master_guid, *command.members}
+    assert not chosen & {102, 103, 120}
+    assert not set(controller._owned["plan"]["bench"]) & {102, 103, 120}
+    call = next(c for c in armory.calls if c[0] == "bound_with")
+    assert call[1:3] == (1, 631) and set(call[3]) == set(range(101, 131))
+
+
+@_run_async
+async def test_member_saved_to_a_copy_the_owner_is_not_in_may_still_be_chosen(setup):
+    ports, armory, controller = setup
+    # 120 holds another ICC copy (native unbinds it as before); 108 shares the owner's ToC copy only.
+    armory.binds = {1: {(631, 14), (649, 30)}, 120: {(631, 15)}, 108: {(649, 30)}}
+    await start(setup)
+    command = ports.sent[-1]
+    assert {120, 108} <= {command.leader_guid, *command.members}
+
+
+@_run_async
+async def test_unreadable_binds_hold_the_start_and_retry_later(setup):
+    from leeroy_mind.personas.roster import RosterError
+    ports, armory, controller = setup
+
+    def unreadable(*args):
+        raise RosterError("guild armory unavailable")
+
+    armory.bound_with = unreadable
+    await controller.tick()
+    assert not ports.sent and not ports.gpu and not controller._day_state()["blocked"]
+    del armory.bound_with
+    await advance(ports, 14 * 60)
+    await controller.tick()
+    assert not ports.sent
+    await advance(ports, 60)
+    await controller.tick()
+    assert len(ports.sent) == 1
+
+
+@_run_async
+async def test_skipped_run_awards_no_attendance_and_the_days_real_raid_awards_it_once(setup):
+    ports, _, controller = setup
+    await start(setup)
+    await controller.on_job(event(controller, stage="starting"))
+    await controller.tick()
+    skipped = controller.session.raid_id
+    assert attendance(ports, skipped) == (0, 0)
+    await controller.on_job(event(controller, state="failed", stage="", reason="setup:starting:no_fresh_encounters"))
+    await controller.tick()
+    assert attendance(ports, skipped) == (0, 0) and closing_lines(ports) == ([], [])
+    row = ports.conn.execute("SELECT ended, outcome FROM guild_raid WHERE raid_id=?", (skipped,)).fetchone()
+    assert row[0] is not None and row[1] == "setup:starting:no_fresh_encounters"
+    assert not_raided(ports, skipped)
+    await advance(ports, 60)
+    await controller.tick()
+    await controller.on_job(event(controller, stage="teleporting"))
+    await controller.tick()
+    raided = controller.session.raid_id
+    assert raided != skipped and attendance(ports, raided) == (0, 0)
+    await controller.on_job(event(controller))
+    await controller.tick()
+    plan = controller.session.plan
+    expected = (len(plan.members) + len(plan.bench),) * 2
+    assert attendance(ports, raided) == expected
+    await controller.on_job(event(controller, state="done", stage="", reason="cleared", kills=2))
+    await controller.tick()
+    assert attendance(ports, raided) == expected and attendance(ports, skipped) == (0, 0)
+    standings, wrapups = closing_lines(ports)
+    assert len(standings) == len(wrapups) == 1
+    assert not not_raided(ports, raided)
+
+
+@pytest.mark.parametrize("terminal", [("failed", "setup:teleporting:timeout"),
+                                      ("failed", "setup:starting:group_changed"),
+                                      ("done", "human_login")])
+@_run_async
+async def test_any_run_that_never_reached_running_is_not_raided(setup, terminal):
+    ports, _, controller = setup
+    await start(setup)
+    await controller.on_job(event(controller, stage="teleporting"))
+    await controller.tick()
+    raid_id = controller.session.raid_id
+    state, reason = terminal
+    await controller.on_job(event(controller, state=state, stage="", reason=reason))
+    await controller.tick()
+    assert not controller.active
+    assert attendance(ports, raid_id) == (0, 0) and closing_lines(ports) == ([], [])
+    assert not [m for m in ports.memories if "without" in m.text or "benched" in m.text]
+    assert not_raided(ports, raid_id)
+
+
+@_run_async
+async def test_a_run_that_reached_running_keeps_its_attendance_when_it_fails(setup):
+    ports, _, controller = setup
+    await running(setup)
+    raid_id = controller.session.raid_id
+    plan = controller.session.plan
+    await controller.on_job(event(controller, state="failed", stage="", reason="encounters_changed"))
+    await controller.tick()
+    assert attendance(ports, raid_id)[0] == len(plan.members) + len(plan.bench)
+    assert not not_raided(ports, raid_id)
+
+
+OLD_DECAY = "2026-10-01T04:00:00"
+
+
+def decay_receipt(ports):
+    row = ports.conn.execute("SELECT value FROM meta WHERE key='dkp_last_decay'").fetchone()
+    return row[0] if row else None
+
+
+def decay_lines(ports):
+    return [text for _, _, text in ports.said if text.startswith("dkp updated")]
+
+
+@_run_async
+async def test_owner_copy_fence_that_leaves_too_few_skips_to_the_next_raid_that_day(setup):
+    ports, armory, controller = setup
+    controller.cfg = replace(controller.cfg, offline_rotation=("icc25", "toc25"))
+    armory.binds = {guid: {(631, 14)} for guid in (1, *range(101, 123))}  # his copy holds 22 of 30
+    await controller.tick()
+    assert not ports.sent and not ports.gpu
+    day = controller._day_state()
+    assert not day["blocked"] and day["skipped"] == ["icc25"]
+    await advance(ports, 59)
+    await controller.tick()
+    assert not ports.sent
+    await advance(ports, 1)
+    await controller.tick()
+    assert len(ports.sent) == 1 and (ports.sent[0].map_id, ports.sent[0].size) == (649, 25)
+    assert [c[2] for c in armory.calls if c[0] == "bound_with"] == [631, 649]
+    assert not controller._day_state()["blocked"]
+
+
+@_run_async
+async def test_a_plan_failure_without_a_fence_still_ends_the_day(setup):
+    ports, armory, controller = setup
+    ports.away_set = set(range(105, 131))
+    await controller.tick()
+    day = controller._day_state()
+    assert day["blocked"] and not day.get("skipped")
+    await advance(ports, 2 * 3600)
+    await controller.tick()
+    assert not ports.sent
+
+
+@pytest.mark.parametrize("reason", ["setup:grouping:too_few", "setup:grouping:in_instance:113",
+                                    "setup:grouping:busy:realm_owner:113", "setup:grouping:busy:realm_owner",
+                                    "setup:teleporting:in_instance:113"])
+@_run_async
+async def test_a_setup_that_met_a_busy_body_is_tried_again_later_that_day(setup, reason):
+    ports, _, controller = setup
+    heard = Heard()
+    controller.add_listener(heard)
+    await start(setup)
+    teleporting = reason.startswith("setup:teleporting:")
+    if teleporting:
+        await controller.on_job(event(controller, stage="teleporting"))
+        await controller.tick()
+    await controller.on_job(event(controller, state="failed", stage="", reason=reason,
+                                  instance=77 if teleporting else 0))
+    await controller.tick()
+    assert not controller.active and not controller._day_state()["blocked"]
+    await advance(ports, 14 * 60)
+    await controller.tick()
+    assert len(ports.sent) == 1
+    await advance(ports, 60)
+    await controller.tick()
+    assert len(ports.sent) == 2
+    await controller.on_job(event(controller))
+    await controller.tick()
+    # A teleporting failure has a closed record, so the rotation may move on to the next raid.
+    assert [kind for kind, *_ in heard.events] == ["start"]
+
+
+@_run_async
+async def test_a_not_raided_offline_run_applies_no_decay_and_posts_nothing(setup):
+    ports, _, controller = setup
+    with ports.conn:
+        ports.conn.execute("INSERT INTO meta(key,value) VALUES ('dkp_last_decay',?)", (OLD_DECAY,))
+    await start(setup)
+    await controller.on_job(event(controller, stage="teleporting"))
+    await controller.tick()
+    await controller.on_job(event(controller, state="failed", stage="", reason="setup:teleporting:timeout"))
+    await controller.tick()
+    assert decay_receipt(ports) == OLD_DECAY and not decay_lines(ports) and not ports.said
+    assert ports.conn.execute("SELECT COUNT(*) FROM dkp_ledger WHERE reason='decay'").fetchone()[0] == 0
+
+
+@_run_async
+async def test_an_offline_run_that_reached_running_applies_the_due_decay_once(setup):
+    ports, _, controller = setup
+    with ports.conn:
+        ports.conn.execute("INSERT INTO meta(key,value) VALUES ('dkp_last_decay',?)", (OLD_DECAY,))
+    await start(setup)
+    await controller.on_job(event(controller, stage="teleporting"))
+    await controller.tick()
+    assert decay_receipt(ports) == OLD_DECAY and not decay_lines(ports)
+    await controller.on_job(event(controller))
+    await controller.tick()
+    assert decay_receipt(ports) != OLD_DECAY and len(decay_lines(ports)) == 1
+
+
+@_run_async
+async def test_attendance_runs_once_and_the_attended_flag_survives_a_restart(setup):
+    ports, armory, controller = setup
+    await running(setup)
+    assert controller._owned["attended"] is True
+    calls = []
+
+    async def counted():
+        calls.append(1)
+
+    controller.session.attend = counted
+    await controller.on_job(event(controller, stage="running"))
+    await controller.tick()
+    assert calls == []
+    await controller._release()
+    recreated = OfflineRaids(ports, controller.cfg, armory, random.Random(2))
+    assert recreated._owned["attended"] is True
+    recreated.session.attend = counted
+    await recreated.on_job(event(recreated))
+    await recreated.tick()
+    await recreated.on_job(event(recreated, state="done", stage="", reason="cleared", kills=1))
+    await recreated.tick()
+    assert calls == [] and not recreated.active

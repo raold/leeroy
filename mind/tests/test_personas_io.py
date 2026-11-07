@@ -1,3 +1,4 @@
+from dbtemplate import open_migrated
 import json
 
 import pytest
@@ -171,7 +172,7 @@ def test_cli_export_import_card(tmp_path, capsys):
     from leeroy_mind.storage.store import Store
     from leeroy_mind.testing.fake_clock import FakeClock
     from datetime import datetime, timezone
-    s = Store(open_db(tmp_path / "mind.db"), clock=FakeClock(datetime(2026, 10, 29, tzinfo=timezone.utc)))
+    s = Store(open_migrated(tmp_path / "mind.db"), clock=FakeClock(datetime(2026, 10, 29, tzinfo=timezone.utc)))
     seed_test_cast(s)
     s.close()
     base = ["personas", "--data-dir", str(tmp_path)]
@@ -278,3 +279,11 @@ def test_cast_without_persona_names_the_cast_members_nothing_was_generated_for(s
                                                                  108}, 1)] == []
     assert [m.guid for m in cast_without_persona(cast.values(), store.persona_versions(),
                                                  None)] == [1, 106, 108]
+
+
+def test_saving_an_unchanged_persona_keeps_its_version_and_writes_no_photo_key(store):
+    p = make_persona(101, "Arkon")
+    assert save_persona(store, p, source="seed", ts=1.0, race="Orc", class_name="Warrior") == 1
+    assert save_persona(store, p, source="seed", ts=2.0, race="Orc", class_name="Warrior") == 1
+    assert '"photo"' not in store.conn.execute(
+        "SELECT json FROM persona_core WHERE guid = 101").fetchone()["json"]

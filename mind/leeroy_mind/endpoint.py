@@ -13,10 +13,10 @@ a crash left behind; the endpoint removes it when it closes. The console reads i
 key only to a listener that the TCP table shows is the running mind's own process.
 
 A request: one connection, one line. A JSON object of at most MAX_LINE bytes ending in a
-newline, sent within READ_S (2 s), with exactly the keys v (1), key, op and, for a raid action
-only, args. Anything else (an unknown or missing key, a wrong type, an HTTP request) is refused and
-the connection closed; nothing after the first line is read. One answer line comes back,
-{"ok": true, ...} or {"ok": false, "error": ...}, and the connection closes.
+newline, sent within READ_S (2 s), with exactly the keys v (1), key, op and, for a raid, tune,
+selfie or say action only, args. Anything else (an unknown or missing key, a wrong type, an HTTP
+request) is refused and the connection closed; nothing after the first line is read. One answer
+line comes back, {"ok": true, ...} or {"ok": false, "error": ...}, and the connection closes.
 
     status          the raid night's state and which raid actions can run now, or why not
     stop            the mind's own clean shutdown, the one Ctrl+C runs: answered, then begun
@@ -27,8 +27,19 @@ the connection closed; nothing after the first line is read. One answer line com
                     preview {scope, target, dial, value}: the owner's persona dials
                     (leeroy_mind.tuning), written by this mind only, one change at a time,
                     and in force from the next read; a preview's text goes only to the caller
+    selfie {action} status | pick {guid, set, index} | undo {pick} | more {guid}: profile
+                    photos (leeroy_mind.selfies), written by this mind only, one change at a
+                    time until its files are written; status at any time
+    say {channel, text[, to]}
+                    guild | officer | group | whisper (to: a cast member's guid): the owner's
+                    own line, said in game as his through native owner_say
+                    (leeroy_mind.owner_say), one at a time and answered within SAY_S; group is
+                    his raid when his group is one, else his party. say_args refuses a line the
+                    game would (empty, over 255 bytes, a command), and every refusal comes back
+                    as the sentence the console shows
 
-Logs carry the op, the action and the outcome, never the key, a name or a preview's text."""
+Logs carry the op, the action (for say, the channel) and the outcome, never the key, a name, a
+preview's text or a line's."""
 import asyncio
 import json
 import logging
@@ -51,9 +62,10 @@ MAX_REPLY = 65536
 READ_S = 2.0  # the console sends its line at once: a slot is not held longer
 RAID_S = 30.0  # how long one raid action may take before the console is answered anyway
 PREVIEW_S = 40.0  # a preview's two lines, before and after, at background priority
+SAY_S = 10.0  # one line of his, past the bridge's own 5 s ack wait
 MAX_CONNECTIONS = 8
 REPLACE_TRIES = 40  # 2 s of 50 ms tries to move control.json over a file being read
-OPS = ("status", "stop", "raid", "tune")
+OPS = ("status", "stop", "raid", "tune", "selfie", "say")
 RAID_ACTIONS = ("call", "form", "summon", "start", "stop", "end")
 TUNE_ACTIONS = ("status", "set", "undo", "revert", "group", "retire", "preview")
 TUNE_SHAPES = {
@@ -66,6 +78,15 @@ TUNE_SHAPES = {
     "preview": {"action", "scope", "target", "dial", "value"},
 }
 TUNE_SCOPES = ("world", "group", "member")
+SELFIE_ACTIONS = ("status", "pick", "more", "undo")
+SELFIE_SHAPES = {
+    "status": {"action"},
+    "pick": {"action", "guid", "set", "index"},
+    "more": {"action", "guid"},
+    "undo": {"action", "pick"},
+}
+SAY_CHANNELS = ("guild", "officer", "group", "whisper")
+MAX_SAY_CHARS = 1024  # what the console's box may hold; a line the game takes is 255 bytes
 _DIAL_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz_")
 KEY_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
 
@@ -166,7 +187,7 @@ def private_sddl() -> str:
     return f"D:P(A;;FA;;;{_user_sid()})"
 
 
-def _create_private(path: Path) -> int:
+def create_private(path: Path) -> int:
     """A new file only this process's user can open (it must not exist), as a writable fd. The
     permissions are set as it is created: there is no moment it is readable by anyone else."""
     if os.name != "nt":
@@ -215,17 +236,23 @@ def _create_private(path: Path) -> int:
 
 
 def write_key_file(path: Path, record: dict) -> None:
-    """record as JSON at path, readable by this user only: written to a private file beside it,
-    then moved over whatever is there (a crash's leftover), so the key is never readable by
-    anyone else, nor half written."""
+    """record as JSON at path, readable by this user only (write_private)."""
+    write_private(path, json.dumps(record, separators=(",", ":"), ensure_ascii=True)
+                  .encode("ascii"))
+
+
+def write_private(path: Path, data: bytes) -> None:
+    """data at path, readable by this user only: written to a private file beside it, then
+    moved over whatever is there (a crash's leftover), so the key is never readable by anyone
+    else, nor half written."""
     path = Path(path)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     with suppress(FileNotFoundError):
         tmp.unlink()
-    fd = _create_private(tmp)
+    fd = create_private(tmp)
     try:
         with os.fdopen(fd, "wb") as f:
-            f.write(json.dumps(record, separators=(",", ":"), ensure_ascii=True).encode("ascii"))
+            f.write(data)
             f.flush()
             os.fsync(f.fileno())
         for attempt in range(REPLACE_TRIES):
@@ -242,6 +269,85 @@ def write_key_file(path: Path, record: dict) -> None:
         with suppress(OSError):
             tmp.unlink()
         raise
+
+
+def private_problem(fd: int) -> str | None:
+    """Why someone other than this process's user may read the open file `fd`, or None when no
+    one can. It is read from the open file, so it is the file that will be read: on Windows an
+    owner that is not this user (an owner may change the DACL), a missing DACL (everyone may
+    open it) or an entry in it that allows anyone else (deny entries take nothing away from
+    him); elsewhere, another owner or a group or other bit in its mode. OSError when it cannot
+    be read."""
+    if os.name != "nt":
+        st = os.fstat(fd)
+        if st.st_uid != os.getuid():
+            return "it belongs to another user"
+        if st.st_mode & 0o077:
+            return f"its mode is {oct(st.st_mode & 0o777)}"
+        return None
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes as w
+    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    class AclSize(ctypes.Structure):
+        _fields_ = [("AceCount", w.DWORD), ("AclBytesInUse", w.DWORD),
+                    ("AclBytesFree", w.DWORD)]
+
+    class AceHeader(ctypes.Structure):
+        _fields_ = [("AceType", ctypes.c_ubyte), ("AceFlags", ctypes.c_ubyte),
+                    ("AceSize", w.WORD)]
+    advapi.GetSecurityInfo.argtypes = [w.HANDLE, ctypes.c_int, w.DWORD,
+                                       *([ctypes.POINTER(ctypes.c_void_p)] * 5)]
+    advapi.GetSecurityInfo.restype = w.DWORD
+    advapi.GetAclInformation.argtypes = [ctypes.c_void_p, ctypes.c_void_p, w.DWORD, ctypes.c_int]
+    advapi.GetAclInformation.restype = w.BOOL
+    advapi.GetAce.argtypes = [ctypes.c_void_p, w.DWORD, ctypes.POINTER(ctypes.c_void_p)]
+    advapi.GetAce.restype = w.BOOL
+    advapi.ConvertStringSidToSidW.argtypes = [w.LPCWSTR, ctypes.POINTER(ctypes.c_void_p)]
+    advapi.ConvertStringSidToSidW.restype = w.BOOL
+    advapi.EqualSid.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    advapi.EqualSid.restype = w.BOOL
+    kernel.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel.LocalFree.restype = ctypes.c_void_p
+    SE_FILE_OBJECT, OWNER, DACL, ACL_SIZE_INFORMATION = 1, 1, 4, 2
+    ALLOWED, DENIED, INHERIT_ONLY = 0, 1, 0x08
+    handle = msvcrt.get_osfhandle(fd)
+    me = ctypes.c_void_p()
+    if not advapi.ConvertStringSidToSidW(_user_sid(), ctypes.byref(me)):
+        raise OSError(f"cannot read this process's user (Windows error {ctypes.get_last_error()})")
+    owner, dacl, descriptor = ctypes.c_void_p(), ctypes.c_void_p(), ctypes.c_void_p()
+    try:
+        err = advapi.GetSecurityInfo(handle, SE_FILE_OBJECT, OWNER | DACL, ctypes.byref(owner),
+                                     None, ctypes.byref(dacl), None, ctypes.byref(descriptor))
+        if err:
+            raise OSError(f"cannot read the file's owner and access list (Windows error {err})")
+        if not owner.value or not advapi.EqualSid(owner, me):
+            return "it belongs to another user"
+        if not dacl.value:
+            return "it has no access list, so everyone may open it"
+        size = AclSize()
+        if not advapi.GetAclInformation(dacl, ctypes.byref(size), ctypes.sizeof(size),
+                                        ACL_SIZE_INFORMATION):
+            raise OSError(f"cannot read the access list (Windows error {ctypes.get_last_error()})")
+        for i in range(size.AceCount):
+            ace = ctypes.c_void_p()
+            if not advapi.GetAce(dacl, i, ctypes.byref(ace)):
+                raise OSError(f"cannot read an access entry (Windows error "
+                              f"{ctypes.get_last_error()})")
+            header = AceHeader.from_address(ace.value)
+            if header.AceFlags & INHERIT_ONLY or header.AceType == DENIED:
+                continue  # for what is made inside it, or a refusal
+            if header.AceType != ALLOWED:
+                return "its access list has an entry of a kind this check does not read"
+            if not advapi.EqualSid(ace.value + 8, me):  # after the header and the access mask
+                return "its access list lets others open it"
+        return None
+    finally:
+        if descriptor.value:
+            kernel.LocalFree(descriptor)
+        kernel.LocalFree(me)
 
 
 def _key_ok(value) -> bool:
@@ -375,6 +481,59 @@ def tune_args(args) -> dict:
                                                      "where"].index)}
 
 
+def selfie_args(args) -> dict:
+    """A photo action's arguments, exactly (SELFIE_SHAPES), in tune_args' style: guid a
+    member's guid (1 below 2**32), set a set's number (1 below 2**31), index a photo of the set
+    (0-3), pick a change's number (from 1); whether they name a cast member's ready set is the
+    mind's selfie service's to say. BadRequest otherwise."""
+    if not isinstance(args, dict) or args.get("action") not in SELFIE_ACTIONS:
+        raise BadRequest("selfie: an action, one of " + ", ".join(SELFIE_ACTIONS))
+    action = args["action"]
+    shape = SELFIE_SHAPES[action]
+    if set(args) != shape:
+        if action == "status":
+            raise BadRequest("selfie status: takes no arguments")
+        raise BadRequest(f"selfie {action}: exactly " + ", ".join(sorted(shape - {"action"})))
+    if "guid" in shape and not _count(args["guid"], 1):
+        raise BadRequest(f"selfie {action}: guid is a member's guid")
+    if action == "pick":
+        if not (type(args["set"]) is int and 1 <= args["set"] < 1 << 31):
+            raise BadRequest("selfie pick: set is a set's number")
+        if not (type(args["index"]) is int and 0 <= args["index"] <= 3):
+            raise BadRequest("selfie pick: index is a photo's place in its set, 0-3")
+    if action == "undo" and not (type(args["pick"]) is int and 1 <= args["pick"] < 1 << 63):
+        raise BadRequest("selfie undo: pick is a change's number")
+    return {k: args[k] for k in ("action", "guid", "set", "index", "pick") if k in shape}
+
+
+def say_args(args) -> dict:
+    """A say action's arguments, exactly: {"channel", "text"}, plus "to" (a member's guid) for a
+    whisper only; text is at most MAX_SAY_CHARS characters that clean to a line the game takes
+    (owner_say.text_verdict). The cleaned arguments, or BadRequest with the sentence the console
+    shows."""
+    from leeroy_mind.owner_say import WORDS, text_verdict
+    if not isinstance(args, dict) or args.get("channel") not in SAY_CHANNELS:
+        raise BadRequest("A line goes to guild, officer, group or whisper.")
+    channel = args["channel"]
+    whisper = channel == "whisper"
+    if set(args) != ({"channel", "text", "to"} if whisper else {"channel", "text"}):
+        raise BadRequest("A whisper takes exactly channel, text and to." if whisper
+                         else f"A {channel} line takes exactly channel and text.")
+    text = args["text"]
+    if not isinstance(text, str):
+        raise BadRequest("A line is text.")
+    if len(text) > MAX_SAY_CHARS:
+        raise BadRequest(WORDS["too_long"])
+    verdict, cleaned = text_verdict(text)
+    if verdict != "ok":
+        raise BadRequest(WORDS[verdict])
+    if not whisper:
+        return {"channel": channel, "text": cleaned}
+    if not _count(args["to"], 1):
+        raise BadRequest("A whisper goes to a member's guid.")
+    return {"channel": channel, "text": cleaned, "to": args["to"]}
+
+
 def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     """(op, args) from one request line; Forbidden for a wrong key, BadRequest otherwise."""
     if not line.endswith(b"\n") or len(line) > MAX_LINE:
@@ -385,7 +544,8 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
         raise BadRequest("bad request: not a JSON line") from None
     if not isinstance(value, dict) or not {"v", "key", "op"} <= set(value) <= {
             "v", "key", "op", "args"}:
-        raise BadRequest("bad request: exactly v, key, op (and args for a raid or tune action)")
+        raise BadRequest("bad request: exactly v, key, op (and args for a raid, tune, selfie or "
+                         "say action)")
     given = value["key"]
     if not isinstance(given, str) or not secrets.compare_digest(
             given.encode("utf-8", "surrogatepass"), key.encode("ascii")):
@@ -395,13 +555,15 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     op = value["op"]
     if op not in OPS:
         raise BadRequest("bad request: op is one of " + ", ".join(OPS))
-    if op not in ("raid", "tune"):
+    parse_args = {"raid": raid_args, "tune": tune_args, "selfie": selfie_args,
+                  "say": say_args}.get(op)
+    if parse_args is None:
         if "args" in value:
             raise BadRequest(f"bad request: {op} takes no args")
         return op, None
     if "args" not in value:
         raise BadRequest(f"bad request: {op} needs args")
-    return op, (raid_args if op == "raid" else tune_args)(value["args"])
+    return op, parse_args(value["args"])
 
 
 def encode(value) -> bytes:
@@ -442,17 +604,19 @@ class ControlEndpoint:
     cancels it first, which closes the socket and removes control.json."""
 
     def __init__(self, app, cfg: ControlCfg, *, key: str | None = None,
-                 read_s: float = READ_S, raid_s: float = RAID_S):
+                 read_s: float = READ_S, raid_s: float = RAID_S, say_s: float = SAY_S):
         self.app, self.cfg = app, cfg
         self.key = key or secrets.token_urlsafe(32)
         self.path = Path(app.data_dir) / KEY_FILE
-        self.read_s, self.raid_s = read_s, raid_s
+        self.read_s, self.raid_s, self.say_s = read_s, raid_s, say_s
         self.port: int | None = None
         self.listening = asyncio.Event()
         self._connections = 0
         self._raid = asyncio.Lock()
         self._tune = asyncio.Lock()  # one tuning change at a time
         self._preview = asyncio.Lock()  # one preview at a time
+        self._selfie = asyncio.Lock()  # one photo change at a time, until its files are written
+        self._say = asyncio.Lock()  # one line of his in flight
 
     async def serve(self) -> None:
         from leeroy_mind.console.httpd import listen_socket
@@ -533,7 +697,12 @@ class ControlEndpoint:
             already = self.app.stopping
             log_event("control_stop_requested", already=already)
             return {"ok": True, "stopping": True}, (None if already else self.app.request_stop)
-        reply = await (self.raid(args) if op == "raid" else self.tune(args))
+        if op == "say":
+            reply = await self.say(args)
+            log_event("control_request", op=op, channel=args["channel"],
+                      outcome="ok" if reply["ok"] else "refused")
+            return reply, None
+        reply = await {"raid": self.raid, "tune": self.tune, "selfie": self.selfie}[op](args)
         log_event("control_request", op=op, action=args["action"],
                   outcome="ok" if reply["ok"] else "refused")
         return reply, None
@@ -547,7 +716,22 @@ class ControlEndpoint:
             except Exception as e:
                 log_event("control_status_failed", level=logging.WARNING, error=type(e).__name__)
         return {"ok": True, "v": VERSION, "pid": os.getpid(), "stopping": self.app.stopping,
-                "raid": raid}
+                "raid": raid, **self._health()}
+
+    def _health(self) -> dict:
+        """For the health check: bridge_connected (the bridge connection is open and has had
+        its hello), cast (the cast members in the bridge's last snapshot) and schema_version
+        (mind.db's user_version). Each is None when this app cannot tell."""
+        def read(get):
+            try:
+                return get()
+            except Exception:
+                return None
+        app = self.app
+        return {"bridge_connected": read(lambda: bool(app.bridge.greeted)),
+                "cast": read(lambda: len(app.world.cast_guids())),
+                "schema_version": read(lambda: int(app.store.conn.execute(
+                    "PRAGMA user_version").fetchone()[0]))}
 
     async def raid(self, args: dict) -> dict:
         from leeroy_mind.guild.raid_night import ConsoleRefused
@@ -606,6 +790,52 @@ class ControlEndpoint:
             return {"ok": False, "error": "another tuning change is still being written"}
         async with self._tune:
             return await service.handle(args)
+
+    async def selfie(self, args: dict) -> dict:
+        """Profile photos (leeroy_mind.selfies.service): status at any time; a pick, undo or
+        "4 more" one at a time, the lock held through the whole change, its files written off
+        the loop included, with no timeout (a cancelled wait would free the lock while those
+        files are still being written). Pick, undo and more answers carry the member's guid."""
+        service = getattr(self.app, "selfies", None)
+        if self.app.stopping:
+            return {"ok": False, "error": "the mind is stopping"}
+        if service is None:
+            return {"ok": False, "error": "photos are not running in this mind"}
+        if args["action"] == "status":
+            return await service.handle(args)
+        if self._selfie.locked():
+            return {"ok": False, "error": "another photo change is still being written"}
+        async with self._selfie:
+            return await service.handle(args)
+
+    async def say(self, args: dict) -> dict:
+        """His line (leeroy_mind.owner_say): one at a time, answered within say_s. Never
+        cancelled from here: a line still waiting on the game holds the next off until the
+        game (or the bridge's own ack wait) answers, so two are never in flight."""
+        from leeroy_mind.owner_say import NO_ANSWER, STOPPING
+        speech = getattr(self.app, "speech", None)
+        if self.app.stopping:
+            return {"ok": False, "error": STOPPING}
+        if speech is None:
+            return {"ok": False, "error": "Replies are not running in this mind."}
+        if self._say.locked():
+            return {"ok": False, "error": "Another line is still being sent."}
+        await self._say.acquire()
+        task = asyncio.ensure_future(speech.handle(args))
+
+        def finished(t):
+            self._say.release()
+            if not t.cancelled():
+                t.exception()  # retrieved: an answered caller may no longer be waiting
+        task.add_done_callback(finished)
+        done, _ = await asyncio.wait({task}, timeout=self.say_s)
+        if task not in done:
+            return {"ok": False, "error": NO_ANSWER}
+        try:
+            return task.result()
+        except Exception as e:  # its text can carry the line or a name
+            log_event("control_say_failed", level=logging.WARNING, error=type(e).__name__)
+            return {"ok": False, "error": f"The line could not be sent ({type(e).__name__})."}
 
 
 def attach_control(app) -> ControlEndpoint | None:

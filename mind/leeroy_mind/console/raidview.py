@@ -5,7 +5,8 @@ reads them:
 - guild_raid (a raid: started, ended, raid key, size, heroic, offline, lead, tank, loot officer,
   kills, wipes, outcome) and guild_attendance (raided or benched);
 - meta guild:raid:<id>:plan (its members and bench), guild:raid:<id>:instance (bound to an
-  instance), guild:raid:<id>:mvp (the MVP vote and its result), guild:loot:<id>:<slot> (each
+  instance), guild:raid:<id>:not-raided (an offline run that never reached a fight: a record,
+  without attendance or DKP), guild:raid:<id>:mvp (the MVP vote and its result), guild:loot:<id>:<slot> (each
   epic drop: its name, price, state and award) and guild:raid-night:quiet-night;
 - dkp_ledger (every award and charge: kill, attendance, standby, item, decay, adjust);
 - cast_member (the roster) and persona_core's play section (guild role, officer title, raid
@@ -147,7 +148,8 @@ def _raid(conn, row, *, detail: bool) -> dict:
            "size": row["size"], "heroic": bool(row["heroic"]), "offline": bool(row["offline"]),
            "started": row["started"], "ended": row["ended"], "outcome": row["outcome"],
            "kills": row["kills"], "wipes": row["wipes"], "bosses": raid.bosses if raid else None,
-           "lead": row["lead_guid"], "tank": row["tank_guid"], "loot": row["loot_guid"]}
+           "lead": row["lead_guid"], "tank": row["tank_guid"], "loot": row["loot_guid"],
+           "not_raided": _meta(conn, f"guild:raid:{raid_id}:not-raided") is True}
     attendance = {"raided": [], "benched": []}
     for r in _rows(conn, "SELECT guid, status FROM guild_attendance WHERE raid_id=? ORDER BY guid",
                    (raid_id,)):
@@ -217,8 +219,9 @@ def guild_view(conn) -> dict:
         entry["raids"], entry["benched"] = r["raids"] or 0, r["benched"] or 0
     ranked = sorted(ladder.values(), key=lambda e: (-e["balance"], e["guid"]))
     totals = _rows(conn, "SELECT count(*) AS raids, sum(offline) AS offline, sum(kills) AS kills, "
-                         "sum(wipes) AS wipes, min(started) AS first FROM guild_raid "
-                         "WHERE ended IS NOT NULL")
+                         "sum(wipes) AS wipes, min(started) AS first FROM guild_raid g "
+                         "WHERE ended IS NOT NULL AND NOT EXISTS (SELECT 1 FROM meta m "
+                         "WHERE m.key = 'guild:raid:' || g.raid_id || ':not-raided' AND m.value = 'true')")
     dkp = _rows(conn, "SELECT sum(CASE WHEN delta > 0 THEN delta END) AS awarded, "
                       "-sum(CASE WHEN reason = 'item' THEN delta END) AS spent, "
                       "sum(reason = 'item') AS items, "

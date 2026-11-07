@@ -24,7 +24,7 @@ from leeroy_mind.realm.direct import DirectLedger
 from leeroy_mind.realm.guard import KickGuard
 from leeroy_mind.realm.ports import RealmDisabled, _title_matches
 from leeroy_mind.realm.service import attach_realm
-from leeroy_mind.storage.db import open_db
+from dbtemplate import open_migrated
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_clock import FakeClock
 from realm.fakes import RealmApp, enabled
@@ -105,7 +105,7 @@ class Rig:
     def __init__(self, root, *, start=TUESDAY, auto_job=True):
         self.root = root
         self.clock = FakeClock(start)
-        self.store = Store(open_db(root / "mind.db"), clock=self.clock)
+        self.store = Store(open_migrated(root / "mind.db"), clock=self.clock)
         self.ledger = DirectLedger(self.store, process_id=PROCESS, clock=self.clock)
         self.personas, self.away, self.sent = {}, set(), []
         self.auto_job, self.next_event, self.answer = auto_job, 4000, None
@@ -648,7 +648,7 @@ def test_a_post_that_never_left_is_closed_and_retried(rig):
 
 def test_posts_not_held_by_raid(tmp_path, monkeypatch):
     clock = FakeClock(datetime(2026, 11, 3, 12, 0, tzinfo=timezone.utc))  # Tuesday, after the reset.
-    store = Store(open_db(tmp_path / "mind.db"), clock=clock)
+    store = Store(open_migrated(tmp_path / "mind.db"), clock=clock)
     app = RealmApp(tmp_path, store, clock)
     store.upsert_cast([Member(LEAD, "Belra", 4, 11, 0, 80, 1, True, 0, 0, -1)], 1000.0)
     app.personas = {LEAD: make_persona(LEAD, "Belra", officer_title="Raid Lead", guild_role="officer")}

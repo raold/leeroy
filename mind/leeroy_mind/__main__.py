@@ -185,6 +185,7 @@ async def doctor(root: Path, *, make_llm=None, ollama_conf: Path | None = None
                              "bridge")]
         return out
     out += _doctor_voice_service(root)
+    out += _doctor_selfies(root)
     llm = (make_llm or _default_llm)(cfg)
     try:
         names = await llm.list_models()
@@ -311,6 +312,46 @@ def _doctor_voice_specs(root: Path, personas) -> tuple[bool | None, str]:
         return None, f"voice specs: not read ({type(e).__name__})"
     return (True if guids and count == len(guids) else None,
             f"voice specs: {count} of {len(guids)} cast members")
+
+
+_QUICK_MARKS = {"ok": True, "FAIL": False, "note": None}
+
+
+def _quick_doctor(python: Path, data: Path) -> list[tuple[bool | None, str]]:
+    """The worker venv's own `doctor --quick` (no torch, no hashing), relayed line by line."""
+    import subprocess
+    try:
+        done = subprocess.run([str(python), "-I", "-m", "leeroy_selfie", "doctor", "--quick",
+                               "--data", str(data)], capture_output=True, text=True,
+                              timeout=30, stdin=subprocess.DEVNULL,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError) as e:
+        return [(False, f"quick check did not run ({type(e).__name__})")]
+    lines = []
+    for raw in done.stdout.splitlines():
+        mark, _, text = raw.partition(" ")
+        if mark in _QUICK_MARKS and text:
+            lines.append((_QUICK_MARKS[mark], text))
+    if not lines or (done.returncode and all(ok is not False for ok, _ in lines)):
+        lines.append((False, f"quick check exited {done.returncode}"))
+    return lines
+
+
+def _doctor_selfies(root: Path) -> list[tuple[bool | None, str]]:
+    """The profile photo worker: a note when off, a FAIL when on without its venv, else the
+    worker's own quick check. Never loads a model."""
+    from .config import ConfigError
+    from .selfies.config import load_selfie_config, worker_data, worker_python
+    try:
+        cfg = load_selfie_config(root / "mind.toml")
+    except ConfigError as e:
+        return [(False, f"selfies: {e}")]
+    if not cfg.enabled:
+        return [(None, "selfies: disabled ([selfies] enabled = false)")]
+    python = worker_python(cfg)
+    if not python.is_file():
+        return [(False, f"selfies: no worker venv at {python} (see selfie/README.md)")]
+    return [(ok, f"selfies: {text}") for ok, text in _quick_doctor(python, worker_data(cfg))]
 
 
 def _doctor_voice_service(root: Path) -> list[tuple[bool | None, str]]:
@@ -1192,19 +1233,31 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
         from .nightly.cli import eval_main, nightly_main
         command = nightly_main if argv[0] == "nightly" else eval_main
         return command(argv[1:], make_llm=make_llm)
+    if argv and argv[0] == "selfies":
+        from .selfies.cli import selfies_main
+        return selfies_main(argv[1:], make_llm=make_llm)
     if argv and argv[0] == "console":
         from .console.cli import main as console_main
         return console_main(argv[1:])
+    if argv and argv[0] == "health":
+        from .health import main as health_main
+        return health_main(argv[1:])
     parser = argparse.ArgumentParser(prog="leeroy_mind")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("training", help="training ledger, gate, reports and spell checks")
-    sub.add_parser("realm", help="read-only realm status and title diagnostics")
+    sub.add_parser("realm", help="realm status and titles, the data steps, and release of a stuck root "
+                   "with the mind stopped")
     sub.add_parser("tuning", help="the owner's persona dials: status, history, and undo or "
                    "revert with the mind stopped")
     sub.add_parser("nightly", help="nightly status, trials, ledger and owner controls")
     sub.add_parser("eval", help="weekly evaluation on a copied database by default")
+    sub.add_parser("selfies", help="profile photos: status, and a trial render with the mind "
+                   "stopped")
     sub.add_parser("console", help="the guild console on http://127.0.0.1:7881/ (comms, the "
                                    "mind's health, start and stop)")
+    sub.add_parser("health", help="a read-only check of the live install: the servers, the "
+                                  "mind, its endpoint, the console, voice and Ollama; one ok, "
+                                  "note or FAIL line each")
     p_init = sub.add_parser("init", help="create the data dir and a default mind.toml")
     _add_data_dir(p_init)
     p_init.set_defaults(func=cmd_init)

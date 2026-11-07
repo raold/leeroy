@@ -270,11 +270,12 @@ def save_member(store, guid: int, **over) -> None:
 def make_rig(store, clock, data_dir, *, reply: str = "fair enough", script=None, seed: int = 1,
              ack=None, gate=None, online=tuple(TEST_CAST), chattiness: int = 4,
              jealousy: int = 5, real_name: str = REAL, send=None, library=None,
-             dial: int = ROMANCE_DIAL) -> Rig:
+             dial: int = ROMANCE_DIAL, items=None) -> Rig:
     """A fresh engine over `store` (the test cast is seeded if the store has no personas).
     The FakeLLM answers `reply` unless a `script` is given; `send` replaces the recording
     send; `library` (a FakeLibrary) gives the engine the library's facts; `dial` is the
-    owner's romance dial (ROMANCE_DIAL unless a test says otherwise)."""
+    owner's romance dial (ROMANCE_DIAL unless a test says otherwise); `items` its item
+    links (an ItemLinker)."""
     if not store.persona_versions():
         seed_test_cast(store)
     store.upsert_cast([Member(guid=HUMAN, name=HUMAN_NAME, race=1, class_=8, gender=0, level=80,
@@ -303,5 +304,5 @@ def make_rig(store, clock, data_dir, *, reply: str = "fair enough", script=None,
     engine = TalkEngine(store=store, world=world, raid=raid, recall=recall, scheduler=scheduler,
                         personas=personas, cfg=cfg, data_dir=data_dir, clock=clock,
                         rng=random.Random(seed), send=send or sent, human_guid=HUMAN,
-                        library=library)
+                        library=library, items=items)
     return Rig(engine, store, world, raid, llm, sent, clock, cfg)

@@ -15,8 +15,17 @@ NightRunner.run, for one night:
 2. The reasoner's preflight, when any stage uses the reflection model.
 3. The night's plan (budget.plan_night), or on a resumed run the plan the run stored.
 4. Each stage in order. The arbiter makes room for the model a stage needs when it differs from
-   the last one (ensure_model). Afterwards the stage's night_stage record is written, and the
-   models loaded that the night did not ask for are counted (foreign_models), never unloaded.
+   the last one (ensure_model). An "image" stage takes the whole GPU: the arbiter unloads every
+   chat model first and keeps only the embedding model (make_room), unless the stage's
+   wants_gpu says there is nothing to render tonight (it then runs as a stage that needs no
+   model). A live lease refuses it (LiveLeaseHeld), at its start or from inside it. That is
+   logged once (nightly_image_refused) and ends images for the run: the stage stops and later
+   image stages are skipped, without failing the night. Afterwards the stage's night_stage
+   record is written, and the models loaded that the night did not ask for are counted
+   (foreign_models; after an image stage, any chat model). Only an image stage unloads them,
+   with make_room once more after its worker is gone (a lease refusing it is left to the
+   hand-over): a chat model that loaded beside the worker sits partly on the CPU and must load
+   whole again. After it no model is expected until the next model stage.
 5. night_run.error: the failed units per stage as JSON, or NULL when none failed, on every run
    that returns.
 
@@ -25,6 +34,7 @@ arbiter awaits the run's end while it holds its lock. It writes one row at most:
 stop takes back the resume that brought the run, so his logins never count toward the guard.
 It returns at once, well within P1b's 5 s stop budget."""
 import asyncio
+import contextlib
 import json
 import logging
 import random
@@ -38,7 +48,7 @@ from leeroy_mind.llm.scheduler import Priority
 from leeroy_mind.logs import log
 from leeroy_mind.memory.writer import Embedder, MemoryWriter
 from leeroy_mind.nightly.budget import EXTENSION_STAGES, plan_night
-from leeroy_mind.nightly.gpu import GpuArbiter
+from leeroy_mind.nightly.gpu import GpuArbiter, LiveLeaseHeld
 from leeroy_mind.nightly.llm import Reasoner, ReflectionError
 from leeroy_mind.nightly.settings import NightlySettings
 from leeroy_mind.nightly.store import (NightRun, active_away, add_foreign_loads, commit_unit,
@@ -63,6 +73,7 @@ ATTITUDE_WORDS = {"fond": "{name} is warm toward {human}.",
                   "lust": "{name} openly wants {human}."}
 
 RESUMES_MAX = 3  # stalled resumes since the last committed unit before the night fails
+STAGE_MODELS = (None, "live", "reflection", "image")  # "image": the whole GPU (make_room)
 SNAPSHOT_STAGE, SNAPSHOT_UNIT, SNAPSHOT_LABEL = "snapshot", "db", "night"
 MESSAGE_CHARS = 500  # of a failed unit's message in the log
 
@@ -308,8 +319,14 @@ class NightContext:
         return self._genders()[1]
 
 
-Stage = NamedTuple("Stage", [("name", str), ("fn", Callable[[NightContext], Awaitable[None]]),
-                             ("model", Literal["live", "reflection"] | None)])
+class Stage(NamedTuple):
+    """One stage of the night. `wants_gpu` (image stages only) is asked before make_room: False
+    when there is nothing to render tonight, and the stage then runs without taking the GPU, as
+    a stage that needs no model."""
+    name: str
+    fn: Callable[[NightContext], Awaitable[None]]
+    model: Literal["live", "reflection", "image"] | None
+    wants_gpu: Callable[[NightContext], bool] | None = None
 
 
 async def stage_snapshot(ctx: NightContext) -> None:
@@ -333,23 +350,26 @@ class NightRunner:
         self.make_ctx = make_ctx
         names = [s.name for s in self.stages]
         for s in self.stages:
-            if s.model not in (None, "live", "reflection"):
+            if s.model not in STAGE_MODELS:
                 raise ValueError(f"stage {s.name!r}: unknown model {s.model!r}")
             if names.count(s.name) > 1:
                 raise ValueError(f"stage {s.name!r} is listed twice")
 
     def add_stage(self, name: str, fn: Callable[[NightContext], Awaitable[None]], *,
-                  after: str, model: Literal["live", "reflection"] | None = "reflection") -> None:
+                  after: str,
+                  model: Literal["live", "reflection", "image"] | None = "reflection",
+                  wants_gpu: Callable[[NightContext], bool] | None = None) -> None:
         """Insert an extension on this runner only; the base pipeline stays immutable."""
         names = [stage.name for stage in self.stages]
         if name in names:
             raise ValueError(f"stage {name!r} is listed twice")
         if after not in names:
             raise ValueError(f"unknown predecessor stage {after!r}")
-        if model not in (None, "live", "reflection"):
+        if model not in STAGE_MODELS:
             raise ValueError(f"stage {name!r}: unknown model {model!r}")
         index = names.index(after) + 1
-        self.stages = self.stages[:index] + (Stage(name, fn, model),) + self.stages[index:]
+        self.stages = (self.stages[:index] + (Stage(name, fn, model, wants_gpu),)
+                       + self.stages[index:])
 
     async def run(self, night: str, window: tuple[float, float]) -> None:
         ctx = self.make_ctx(night, window)
@@ -377,6 +397,35 @@ class NightRunner:
     def _model(ctx: NightContext, which: str) -> str:
         return ctx.settings.live_model if which == "live" else ctx.settings.reflection_model
 
+    @staticmethod
+    def _images_refused(ctx: NightContext, stage: Stage, e: LiveLeaseHeld) -> None:
+        log("nightly_image_refused", night=ctx.night, stage=stage.name, holders=sorted(e.holders))
+
+    async def _room_for_images(self, ctx: NightContext, stage: Stage) -> bool:
+        """make_room for an image stage. False, logged, when a live lease refuses it."""
+        try:
+            await ctx.arbiter.make_room()
+        except LiveLeaseHeld as e:
+            self._images_refused(ctx, stage, e)
+            return False
+        return True
+
+    @staticmethod
+    async def _room_after_images(ctx: NightContext) -> None:
+        """make_room once more after an image stage, whose worker is gone by then: a chat model
+        that loaded beside the worker sits partly on the CPU, and is dropped to load whole on
+        its next request. A lease that refuses it leaves that to the hand-over, which reloads
+        the live model whole after any image stage."""
+        with contextlib.suppress(LiveLeaseHeld):
+            await ctx.arbiter.make_room()
+
+    async def _count_foreign(self, ctx: NightContext, stage: Stage, expected: str | None) -> None:
+        foreign = await ctx.arbiter.foreign_models(expected)
+        if foreign:
+            add_foreign_loads(ctx.store, ctx.night, len(foreign))
+            log("nightly_foreign_model", night=ctx.night, stage=stage.name, expected=expected,
+                models=foreign)
+
     async def _run(self, ctx: NightContext, prior: NightRun | None) -> None:
         active = frozenset(stage.name for stage in self.stages)
         if any(s.model == "reflection" for s in self.stages):
@@ -394,24 +443,39 @@ class NightRunner:
         else:
             await plan_night(ctx, stages=active)
         current = None  # the model the last model stage needed
+        images = True  # until a live lease refuses an image stage: then no more images this run
         for stage in self.stages:
             started = ctx.clock.now()
-            if stage.model is not None and stage.model != current:
+            whole = False  # this stage took the whole GPU (make_room)
+            if stage.model == "image":
+                if not images:
+                    continue
+                if stage.wants_gpu is None or stage.wants_gpu(ctx):
+                    if not await self._room_for_images(ctx, stage):
+                        images = False
+                        continue
+                    whole = True
+            elif stage.model is not None and stage.model != current:
                 await ctx.arbiter.ensure_model(self._model(ctx, stage.model))
                 current = stage.model
             calls, seconds = ctx.reasoner.calls, ctx.reasoner.seconds
-            await stage.fn(ctx)
+            try:
+                await stage.fn(ctx)
+            except LiveLeaseHeld as e:
+                if stage.model != "image":
+                    raise
+                self._images_refused(ctx, stage, e)
+                images = False
             calls, seconds = ctx.reasoner.calls - calls, ctx.reasoner.seconds - seconds
             stage_record(ctx.store, ctx.night, stage.name, started=started,
                          finished=ctx.clock.now(), calls=calls, call_s=seconds)
             log("nightly_stage", night=ctx.night, stage=stage.name, calls=calls,
                 call_s=round(seconds, 1), failures=ctx.failures[stage.name])
-            if current is not None:
-                expected = self._model(ctx, current)
-                foreign = await ctx.arbiter.foreign_models(expected)
-                if foreign:
-                    add_foreign_loads(ctx.store, ctx.night, len(foreign))
-                    log("nightly_foreign_model", night=ctx.night, stage=stage.name,
-                        expected=expected, models=foreign)
+            if whole:
+                await self._count_foreign(ctx, stage, None)  # any chat model, beside the worker
+                await self._room_after_images(ctx)
+                current = None  # the worker is gone: no model is expected now
+            elif current is not None:
+                await self._count_foreign(ctx, stage, self._model(ctx, current))
         failures = dict(sorted(ctx.failures.items()))
         set_run_error(ctx.store, ctx.night, json.dumps(failures) if failures else None)
