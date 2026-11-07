@@ -144,7 +144,7 @@ def test_degrade_cuts_coach_after_the_realm_to_five(h, monkeypatch):
     monkeypatch.setattr(budget, "night_budget_s", lambda *args: 100)
     plan = asyncio.run(budget.plan_night(ctx))
     # The realm's units go first; the photos come between the coach and the people.
-    assert plan["steps"][:4] == ["realm", "coach", "selfies", "encounters"]
+    assert plan["steps"][:6] == ["realm", "scenes", "snaps", "coach", "selfies", "encounters"]
     assert ctx.settings.coach_units == 5
 
 
@@ -286,8 +286,9 @@ def test_real_coach_units_are_priced_and_cut_before_people(h, monkeypatch):
     monkeypatch.setattr(budget, "night_budget_s", lambda *args: 6650)
     ctx = h.ctx()
     tight = asyncio.run(budget.plan_night(ctx))
-    assert tight["steps"] == ["realm", "coach"]  # The realm has no counter here: its floor, 0.
-    assert tight["settings"] == {"realm_units": 0, "coach_units": 5}
+    assert tight["steps"] == ["realm", "scenes", "snaps", "coach"]  # No counter here: the floor, 0.
+    assert tight["settings"] == {"realm_units": 0, "scenes_per_night": 0, "snaps_per_night": 0,
+                                 "coach_units": 5}
     assert tight["units"] == {"coach": 5, "encounters": 150}
     assert tight["estimate_s"] == tight["budget_s"] == 6650
     assert ctx.settings.encounters_per_night == h.settings.encounters_per_night
