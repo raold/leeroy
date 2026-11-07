@@ -232,6 +232,13 @@ INSTRUCTIONS: dict[TurnKind, str] = {
     TurnKind.GOODNIGHT: "{addressee} is logging off. Say goodnight your way, in a few words. {extra}",
 }
 
+# An opener addressed to him (engine._open_to_him, owner 2026-11-07: nobody ever started a
+# conversation with him): a casual line in party or guild that names him; the topic says what
+# it brings up (TalkEngine._to_him_topic). It never carries her romance, which goes by whisper.
+OPEN_TO_HIM = ("Start a conversation with {addressee} in one short line, the way you'd type it: "
+               "say {their} name and {topic}. It's your line to start: nothing in chat is "
+               "addressed to you. {extra}")
+
 _TOPIC = {
     TurnKind.OPEN: "something from your own evening so far",
     TurnKind.GZ: "an achievement",
@@ -250,7 +257,7 @@ MORE_LINES = "in a line or two, more than your usual one line"
 def render_instruction(kind: TurnKind, *, addressee: str = "", topic: str = "",
                        extra: str = "", forms: tuple[str, str, str] = THEY_FORMS,
                        lead: str = "", tail: str = "", long: bool = False,
-                       quiet: bool = True) -> str:
+                       quiet: bool = True, to_him: bool = False) -> str:
     """The TurnKind template on one line. `lead` (her romance text) comes before it, so the
     turn's own instruction is what the model reads last (prompts I5); `extra` (a bit, an aside,
     a fact) goes after it, cut to EXTRA_CAP_TOKENS, and a cut is logged without the text.
@@ -258,8 +265,8 @@ def render_instruction(kind: TurnKind, *, addressee: str = "", topic: str = "",
     last thing she reads; `long` lets the line run to "a line or two". An opener says "Chat
     has gone quiet." only when `quiet` (rehearsal 2: it said so under lines from just now).
     `forms` are the addressee's pronouns (HumanIdentity.forms when it is the human); nothing
-    is assumed without them."""
-    tmpl = INSTRUCTIONS[kind]
+    is assumed without them. `to_him` on an OPEN: the opener addressed to him (OPEN_TO_HIM)."""
+    tmpl = OPEN_TO_HIM if to_him and kind is TurnKind.OPEN else INSTRUCTIONS[kind]
     if long:
         tmpl = tmpl.replace("in one short line", MORE_LINES).replace(
             "One short line", MORE_LINES[3:].capitalize())

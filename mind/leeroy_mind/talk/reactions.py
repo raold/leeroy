@@ -26,8 +26,8 @@ from leeroy_mind.talk.channels import choose_channel
 from leeroy_mind.talk.filters import names_any
 from leeroy_mind.talk.pipeline import Pipeline, TurnMeta, log, picked_why
 from leeroy_mind.talk.raid import WIPE_SILENCE_S, RaidPhase
-from leeroy_mind.talk.romance import (JealousyAsides, WhisperPlanner, forward, rivalry_reply,
-                                      rivalry_text)
+from leeroy_mind.talk.romance import (START, JealousyAsides, WhisperPlanner, forward,
+                                      rivalry_reply, rivalry_text, romance_lift, whisper_kind)
 from leeroy_mind.talk.seasons import holiday_topics
 from leeroy_mind.talk.select import pick_speakers
 from leeroy_mind.talk.states import substance_of
@@ -76,7 +76,16 @@ FIGHT_PHASES = frozenset({RaidPhase.COMBAT, RaidPhase.WIPE_SILENCE, RaidPhase.WI
 LOOT_CHEER = {"lust": 3.0, "drawn": 2.0}
 WHISPER_WHY = {"after_kill": "The raid just killed {about}.",
                "idle": "Chat has been quiet for a while.", "late": "It's getting late.",
-               "evening": "{about}"}
+               "evening": "{about}", START: ""}
+# Every unprompted whisper says it starts the conversation, and what to bring up by what the
+# member feels for him (romance.whisper_kind), so the model has something to say (2026-11-07:
+# 5 of 8 came back "(nothing)" with only the reason above to go on).
+START_WHISPER = "You're the one starting this conversation with {them}."
+START_WHAT = {
+    "romantic": "Tell {them} what's on your mind about {them}, or bring up {topic}.",
+    "personal": "Something personal: bring up {topic}, or ask how {their} night is going.",
+    "casual": "Something casual: bring up {topic}, or ask {them} something about the game.",
+}
 EVENING_S = (1800.0, 2700.0)  # the evening whisper, 30-45 minutes into his session
 # Seconds: greetings, gz, the kill, the debrief, emotes, asides and whispers.
 GREET_FIRST_S, GREET_NEXT_S = (5.0, 12.0), (5.0, 14.0)
@@ -88,7 +97,7 @@ EMOTE_S = (2.0, 15.0)
 ASIDE_S = (3.0, 10.0)
 RIVAL_S = (4.0, 12.0)
 WHISPER_S = {"after_kill": (20.0, 45.0), "idle": (2.0, 10.0), "late": (2.0, 10.0),
-             "evening": (20.0, 60.0)}
+             "evening": (20.0, 60.0), START: (5.0, 20.0)}
 
 
 class Reactions(Pipeline):
@@ -523,20 +532,53 @@ class Reactions(Pipeline):
 
     # -- whispers ------------------------------------------------------------------------------
 
+    def _may_whisper(self, now: float) -> bool:
+        """He can be whispered first: online, past his login's quiet, his raid not in a
+        fight, its wipe or its debrief."""
+        return (bool(self.human.guid) and self.world.human_online
+                and not self._login_quiet(now) and self.raid.phase(now) not in FIGHT_PHASES)
+
+    def _whisper_cands(self) -> dict:
+        """Who could whisper him now, with their relationship to him; a whisper reaches him
+        anywhere."""
+        hg = self.human.guid
+        return {g: (self.personas.get(g), self.store.get_relationship(g, hg))
+                for g in self._candidates(hearable=False)}
+
     def _maybe_whisper(self, trigger: str, now: float, *, about: str = "") -> None:
         """One WhisperPlanner draw for one event (a kill, a quiet stretch, the late hour)."""
-        hg = self.human.guid
-        if not hg or not self.world.human_online or self._login_quiet(now):
+        if not self._may_whisper(now):
             return
-        cands = {g: (self.personas.get(g), self.store.get_relationship(g, hg))
-                 for g in self._candidates(hearable=False)}  # a whisper reaches him anywhere
-        g = self.whispers.maybe(now, trigger, cands)
+        g = self.whispers.maybe(now, trigger, self._whisper_cands())
+        if g is not None:
+            self._queue_whisper(g, trigger, now, about=about)
+
+    def _start_whisper(self, now: float) -> None:
+        """The WhisperPlanner's own clock (tick): when its next whisper is due, a draw with no
+        roll, held through his raid's fight, wipe and debrief (FIGHT_PHASES)."""
+        held = self.raid.phase(now) in FIGHT_PHASES
+        if not self.whispers.due(now, hold=held) or not self._may_whisper(now):
+            return
+        g = self.whispers.start(now, self._whisper_cands(),
+                                lift=romance_lift(self.cfg.romance.dial))
         if g is None:
+            log.info("whisper_skipped: trigger=start reason=no_candidates")
             return
+        self._queue_whisper(g, START, now)
+
+    def _queue_whisper(self, g: int, trigger: str, now: float, *, about: str = "") -> None:
+        """Her whisper to him: what set it off, that she starts the conversation and what she
+        brings up (START_WHAT by romance.whisper_kind, a topic of her own: _open_topic)."""
+        hg, p = self.human.guid, self.personas.get(g)
+        they, them, their = self.human.forms
+        what = START_WHAT[whisper_kind(p)].format(topic=self._open_topic(p, now), they=they,
+                                                  them=them, their=their)
+        told = " ".join(x for x in (WHISPER_WHY[trigger].format(about=about),
+                                    START_WHISPER.format(them=them), what) if x)
         turn = Turn(kind=TurnKind.WHISPER, speaker=g, channel="whisper", to_guid=hg,
-                    addressee=hg, instruction=WHISPER_WHY[trigger].format(about=about),
-                    delay=self.rng.uniform(*WHISPER_S[trigger]))
-        self._queue([(turn, TurnMeta(self._new_id(), why=f"whisper:{trigger}"))])
+                    addressee=hg, instruction=told, delay=self.rng.uniform(*WHISPER_S[trigger]))
+        self._queue([(turn, TurnMeta(self._new_id(), why=f"whisper:{trigger}",
+                                     initiates=True))])
 
     # -- after a line is said ------------------------------------------------------------------
 

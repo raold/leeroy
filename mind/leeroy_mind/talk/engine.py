@@ -5,6 +5,12 @@ sends what they say over the bridge.
 - on_event reacts to the game (reactions.py: greetings, gz, kills, wipes, the combat cancel);
 - tick runs the social bursts the budget allows, moves the altered states on, fires the whisper
   triggers once per event and polls the registered TurnSources (P1d and phase 3);
+- members start conversations with him on two clocks (owner, 2026-11-07: "they only respond,
+  never actually initiate"): the WhisperPlanner's whispers (romantic and personal, by whisper)
+  and the budget's openers addressed to him (casual, party when he is grouped with them, else
+  guild), at mind.toml's [talk] whispers_per_hour and openers_per_hour, both scaled with
+  chattiness (whisper_rate) and the member dials, never in a fight, the wipe's silence, its
+  debrief or his login's quiet;
 - every turn goes through the line pipeline (pipeline.py), which composes the prompt, asks the
   model, filters assistant tells, styles the words as the member types and sends each line.
 
@@ -20,6 +26,7 @@ Silence is valid: a reply count can be 0, the model can answer (nothing), and ev
 rule and chain cap drops a turn rather than delaying it. Nothing here waits on a turn: on_event,
 on_human_chat and tick spawn them and return."""
 import dataclasses
+import math
 import random
 from collections import Counter
 from pathlib import Path
@@ -36,7 +43,8 @@ from leeroy_mind.protocol import Ack, Chat, Command
 from leeroy_mind.storage.rows import ChatLineRow, MemoryRow
 from leeroy_mind.storage.store import Store
 from leeroy_mind.talk.bits import BitScheduler, birthday_line, is_birthday_bit
-from leeroy_mind.talk.budget import BurstBudget, BurstPlan, DayPhase, day_phase
+from leeroy_mind.talk.budget import (GAP_REFERENCE_CHATTINESS, BurstBudget, BurstPlan,
+                                     DayPhase, day_phase)
 from leeroy_mind.talk.channels import choose_channel
 from leeroy_mind.talk.facts import LibraryFacts
 from leeroy_mind.talk import pastes
@@ -62,6 +70,7 @@ from leeroy_mind.talk.states import (Altered, advance_state, capped_states, roll
                                      state_cap)
 from leeroy_mind.talk.turns import Turn, TurnKind
 from leeroy_mind.talk.world import WorldView, looks_like_bot_command
+from leeroy_mind.tuning.effective import dials_of
 from leeroy_mind.wow import faction_known
 
 __all__ = ["GZ_TEMPLATES", "TalkEngine", "TurnSource", "flirt_chance", "share_reason_pool"]
@@ -88,6 +97,25 @@ LOOT_S = 120.0  # bit context: loot
 # review C1, measured on the rehearsal's 448 memories).
 RARE_MIN = 8
 RARE_SHARE = 0.02
+# One member's openers to him are at least this far apart (engine._open_to_him).
+TO_HIM_GAP_S = 1200.0
+# What an opener to him brings up, as OPEN_TO_HIM's {topic} (prompt.py), rotated per member and
+# night: something of their own (prompt.open_topics), a question for him, a memory with him
+# and, when they have one, tonight's events.
+TO_HIM_TOPICS = ("tell {them} about {own}", "ask {them} what {they}'re up to tonight",
+                 "ask {them} how {their} day went",
+                 "bring up something you remember doing with {them}, if one of your memories "
+                 "holds it, else ask what {they}'re up to")
+TO_HIM_TONIGHT = "bring up what happened tonight ({lately})"
+GROUP_PARTY_MAX = 5  # an opener to him goes to party when his group is this small
+
+
+def whisper_rate(cfg: MindConfig) -> float:
+    """The WhisperPlanner's rate: [talk] whispers_per_hour, scaled with chattiness as the
+    bursts are (4 is the reference: 0 starts nothing)."""
+    return cfg.talk.whispers_per_hour * cfg.talk.chattiness / GAP_REFERENCE_CHATTINESS
+
+
 def share_reason_pool(planned: list[ReplyTurn], pool: set[int], weights: dict[int, float],
                       called: list[int], rng) -> list[ReplyTurn]:
     """When every drawn reply came from a reason pool no bigger than the number of replies,
@@ -145,9 +173,11 @@ class TalkEngine(Reactions):
             LibraryFacts(library, scheduler, faction=lambda: faction_known(self.human.race),
                          search=library_search) if library is not None else None)
         self.guards = Guards(rng=rng)
-        self.budget = BurstBudget(cfg.talk.chattiness, rng)
+        self.budget = BurstBudget(cfg.talk.chattiness, rng,
+                                  to_him_per_hour=cfg.talk.openers_per_hour)
         self.bits = BitScheduler(store, clock, rng)
-        self.whispers = WhisperPlanner(rng)
+        self.whispers = WhisperPlanner(rng, per_hour=whisper_rate(cfg))
+        self._to_him_at: dict[int, float] = {}  # a member's last opener to him (TO_HIM_GAP_S)
         self.human = human_identity(cfg, store, human_guid)
         self.asides = JealousyAsides(rng, jealousy=cfg.romance.jealousy, human=self.human)
         now = clock.now()
@@ -163,10 +193,13 @@ class TalkEngine(Reactions):
     # -- configuration and sessions ------------------------------------------------------------
 
     def apply_config(self, cfg: MindConfig) -> None:
-        """A reloaded mind.toml: chattiness, jealousy, the romance dial, the live model, the
-        memory depth and the human's names take effect from the next turn."""
+        """A reloaded mind.toml: chattiness, the initiation rates, jealousy, the romance dial,
+        the live model, the memory depth and the human's names take effect from the next
+        turn."""
         self.cfg = cfg
         self.budget.set_chattiness(cfg.talk.chattiness)
+        self.budget.set_to_him_rate(cfg.talk.openers_per_hour)
+        self.whispers.set_rate(whisper_rate(cfg))
         self.recall.set_tau(cfg.memory.depth_days)
         self.asides.set_jealousy(cfg.romance.jealousy)
         self.set_human(self.human.guid)
@@ -608,8 +641,8 @@ class TalkEngine(Reactions):
         """About once a second (the app's ticker): a social burst when the budget allows one,
         the altered states every 10 minutes, the whisper triggers once per event, the end of
         any "offline" mark that has run out (world.refresh) and the registered TurnSources.
-        In the quiet after his login (reactions.LOGIN_QUIET_S) there are no bursts and no
-        whisper triggers; a trigger due then fires after it."""
+        In the quiet after his login (reactions.LOGIN_QUIET_S) there are no bursts, openers
+        to him or whisper triggers; a trigger due then fires after it."""
         if self._session_id is not None and now - self._states_at >= STATE_STEP_S:
             self._advance_states(now)
         self.world.refresh(now)
@@ -618,10 +651,14 @@ class TalkEngine(Reactions):
         self._gz_after_fight(now)
         if self.world.human_online:
             quiet = self._login_quiet(now)
+            quiet_until = self._login_at + LOGIN_QUIET_S if quiet else None
             plan = self.budget.tick(now, phase=day_phase(self.clock.local()),
                                     human_idle=self.world.human_idle(now),
-                                    raid=self.raid.phase(now),
-                                    quiet_until=self._login_at + LOGIN_QUIET_S if quiet else None)
+                                    raid=self.raid.phase(now), quiet_until=quiet_until)
+            if plan is not None:
+                self._spawn(self._run_burst(plan))
+            plan = self.budget.to_him(now, raid=self.raid.phase(now), quiet_until=quiet_until,
+                                      away=self.world.human_afk)
             if plan is not None:
                 self._spawn(self._run_burst(plan))
             if not quiet:
@@ -660,11 +697,13 @@ class TalkEngine(Reactions):
                         updated=int(now)))
 
     def _whisper_triggers(self, now: float) -> None:
-        """Each trigger is one WhisperPlanner draw: a quiet stretch of guild chat (re-armed by
-        the next line), the evening (once a session, reactions._evening_whisper) and entering
-        the late hour (once a night, unless the evening's draw was made that night)."""
+        """The WhisperPlanner's own clock (reactions._start_whisper), then each trigger as one
+        draw: a quiet stretch of guild chat (re-armed by the next line), the evening (once a
+        session, reactions._evening_whisper) and entering the late hour (once a night, unless
+        the evening's draw was made that night)."""
         if self.world.human_afk:
             return
+        self._start_whisper(now)
         if not self._quiet_fired and now - self._last_talk_at >= WHISPER_QUIET_S:
             self._quiet_fired = True
             self._maybe_whisper("idle", now)
@@ -679,11 +718,79 @@ class TalkEngine(Reactions):
     # -- bursts --------------------------------------------------------------------------------
 
     async def _run_burst(self, plan: BurstPlan) -> None:
+        mult = None
         try:
-            await self._burst(plan)
+            if plan.to_him:
+                mult = await self._open_to_him()
+            else:
+                await self._burst(plan)
         finally:
-            if plan.channel_hint is None:  # raid-cadence plans keep the budget's own clock
+            if plan.to_him:
+                self.budget.to_him_done(self.clock.now(), mult)
+            elif plan.channel_hint is None:  # raid-cadence plans keep the budget's own clock
                 self.budget.burst_done(self.clock.now())
+
+    async def _open_to_him(self) -> float | None:
+        """One opener addressed to him (the budget's to_him plan): a member who may speak now
+        and has not opened to him for TO_HIM_GAP_S, drawn as an answer to him is (_weigh with
+        him as the last speaker: closeness, the talkative dial, nobody who just spoke), says
+        his name and brings something up (_to_him_topic), on party or guild
+        (_to_him_channel), never carrying romance (TurnMeta.casual). Its silence is asked
+        again once, and a chain never stops it (TurnMeta.initiates). The talkative dials'
+        pull on the clock (their mean over who may speak), or None with nobody. Nobody may
+        speak in his raid's fight, its wipe or its debrief (RaidState.allows), and a fight that
+        begins before the line goes out drops it (Pipeline._blocked)."""
+        now, hg = self.clock.now(), self.human.guid
+        if not hg or not self.world.human_online:
+            return None
+        every = [g for g in self._candidates() if self.raid.allows(g, TurnKind.OPEN, now)]
+        if not every:
+            log.info("open_to_him_skipped: reason=no_candidates")
+            return None
+        mult = sum(dials_of(self.personas.get(g)).mult("talkative") for g in every) / len(every)
+        cands = [g for g in every if now - self._to_him_at.get(g, -math.inf) >= TO_HIM_GAP_S]
+        weights, _ = self._weigh(cands, last=hg, ctx=self._context(now, opener=True),
+                                 reply=False)
+        picked = pick_speakers(weights, 1, self.rng)
+        if not picked:
+            log.info("open_to_him_skipped: reason=nobody_free candidates=%d", len(every))
+            return mult
+        g = picked[0]
+        self._to_him_at[g] = now
+        turn = Turn(kind=TurnKind.OPEN, speaker=g, channel=self._to_him_channel(g), addressee=hg,
+                    max_lines=1,
+                    delay=self.rng.uniform(*OPEN_S) * self._effects(g).delay_mult)
+        meta = TurnMeta(self._new_id(), topic=self._to_him_topic(self.personas.get(g), now),
+                        why="burst:to_him", initiates=True, casual=True)
+        await self._speak(turn, meta)
+        return mult
+
+    def _to_him_channel(self, speaker: int) -> str:
+        """Party when he and the speaker are in one group of GROUP_PARTY_MAX or fewer (not a
+        raid), else guild."""
+        g, hg = self.world.group, self.human.guid
+        if (g is not None and not g.raid and len(g.members) <= GROUP_PARTY_MAX
+                and self.world.in_group(hg) and self.world.in_group(speaker)):
+            return "party"
+        return "guild"
+
+    def _to_him_topic(self, p: Persona, now: float) -> str:
+        """What this member's next opener to him brings up (TO_HIM_TOPICS, and TO_HIM_TONIGHT
+        when they did something tonight), in an order fixed per member and night, so their
+        openers go round it instead of asking the same thing."""
+        night = night_of(self.clock.local())
+        key = (p.guid, f"{night}:to_him")
+        n = self._opens.get(key, 0)
+        self._opens[key] = n + 1
+        options = list(TO_HIM_TOPICS)
+        lately = self._lately_line(p.guid, now)
+        if lately:
+            options.append(TO_HIM_TONIGHT)
+        random.Random(f"{p.guid}:{night}:to_him").shuffle(options)
+        pick = options[n % len(options)]
+        own = self._open_topic(p, now) if "{own}" in pick else ""
+        they, them, their = self.human.forms
+        return pick.format(own=own, lately=lately, they=they, them=them, their=their)
 
     async def _burst(self, plan: BurstPlan) -> None:
         """One OPEN, then CONTINUE turns answering the line before: plan.size lines or fewer

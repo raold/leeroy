@@ -36,8 +36,9 @@ class Guards:
 
     def allow(self, guid: int, kind: TurnKind, now: float, *, continuation: bool = False,
               reply: bool = False, pushback: bool = False) -> bool:
-        """`reply` marks an answer to the human's whisper: it always may go out (rehearsal 3,
-        check 4: her reply to his whisper was dropped 4 s after a guild bit of hers). Her lines
+        """`reply` marks an answer to the human's whisper, or a whisper to him that starts a
+        conversation (TurnMeta.initiates): it always may go out (rehearsal 3, check 4: her
+        reply to his whisper was dropped 4 s after a guild bit of hers). Her lines
         elsewhere and the guild's pace hold back only what the guild reads; it still counts
         toward them once said (record). `pushback` marks the answer of the member his
         pushback is aimed at (fix wave G6): their own interval never holds it back, since his

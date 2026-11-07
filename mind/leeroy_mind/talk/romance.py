@@ -27,7 +27,7 @@ from leeroy_mind.human import HumanIdentity
 from leeroy_mind.personas.schema import Persona
 from leeroy_mind.prompts import load_prompt
 from leeroy_mind.storage.rows import Relationship
-from leeroy_mind.talk.budget import DayPhase
+from leeroy_mind.talk.budget import GAP_SPREAD, HOLD_PUSH_S, DayPhase
 from leeroy_mind.talk.raid import RaidPhase
 from leeroy_mind.talk.select import pick_speakers
 from leeroy_mind.talk.turns import TurnKind
@@ -459,47 +459,158 @@ def rivalry_text(flirter: Persona, human: HumanIdentity) -> str:
 
 WhisperTrigger = Literal["after_kill", "idle", "late", "evening"]
 WHISPER_TRIGGERS = frozenset({"after_kill", "idle", "late", "evening"})
+# The planner's own clock (owner, 2026-11-07: "they only respond, never actually initiate"):
+# its whispers are why "whisper:start". The event triggers above still draw with WHISPER_P.
+START = "start"
 WHISPER_P = 0.3
 WHISPER_GAP_S = 600.0
-WHISPER_WEIGHT = {"lust": 3.0, "drawn": 2.0, "fond": 1.0}
+# Lust and drawn women whisper him most, fond ones rarely; men and women with no attitude only
+# from warmth (affinity / 50), and then casually.
+WHISPER_WEIGHT = {"lust": 3.0, "drawn": 2.0, "fond": 0.5}
+ROMANTIC_STANCES = frozenset({"drawn", "lust"})
 WHISPER_AFFINITY_SCALE = 50.0
+# How far the member dials can move the clock's rate (forward, talkative, the romance lift).
+RATE_MULT_MAX = 2.0
+WhisperKind = Literal["romantic", "personal", "casual"]
+
+
+def romance_lift(dial: int) -> float:
+    """The owner's romance dial (the world's, mind.toml or its override) on the whisper weight
+    of the women who want him (drawn, lust): 1.0 at 5, 0.6 at 1, 1.5 at 10. Nobody else's."""
+    return 0.5 + dial / 10
+
+
+def whisper_weight(p: Persona, r: Relationship | None, *, lift: float = 1.0,
+                   neutral: bool = False) -> float:
+    """How strongly a member is drawn to whisper him first: a woman's attitude (WHISPER_WEIGHT)
+    times her forward dial (and `lift` for drawn and lust), plus anyone's warmth toward him
+    (affinity / WHISPER_AFFINITY_SCALE), times the talkative dial. 0: no reason to whisper him.
+    `neutral`: as written, with no dial and no lift (WhisperPlanner's rate scale)."""
+    attitude = WHISPER_WEIGHT.get(p.romance.stance, 0.0) if _is_woman(p) else 0.0
+    if attitude and not neutral:
+        attitude *= forward(p) * (lift if p.romance.stance in ROMANTIC_STANCES else 1.0)
+    affinity = r.affinity if r is not None else 0.0
+    w = attitude + max(0.0, affinity) / WHISPER_AFFINITY_SCALE
+    return w if neutral else w * dials_of(p).mult("talkative")
+
+
+def whisper_kind(p: Persona) -> WhisperKind:
+    """What a member's whisper to him starts: romantic from a drawn or lust woman, personal
+    from a fond one, casual from everyone else (men are friends, a man marked fond included)."""
+    if _is_woman(p) and p.romance.stance in ROMANTIC_STANCES:
+        return "romantic"
+    if _is_woman(p) and p.romance.stance == "fond":
+        return "personal"
+    return "casual"
 
 
 class WhisperPlanner:
-    """Who whispers the human unprompted. The only rule is pacing: one member's unprompted
-    whispers are at least WHISPER_GAP_S apart, across sessions too, so a relog never resets
-    it. There is no per-session cap and no stage or affinity threshold: a woman's attitude
-    (WHISPER_WEIGHT) or anyone's warmth toward him (affinity / 50) gives weight, and someone
-    with neither has no reason to whisper him. Replies to his own whispers never come
-    through here and are never paced (select.plan_replies). Call maybe() once per event (a
-    kill, an idle stretch, the late hour), not on every tick."""
+    """Who whispers the human unprompted, and when. Two ways in:
+    - its own clock (due, start): about `per_hour` whispers an hour of his play (mind.toml's
+      [talk] whispers_per_hour, which TalkEngine scales with chattiness), each gap GAP_SPREAD
+      of the mean, scaled by the member dials of those who could whisper (forward, talkative
+      and the romance lift, against the same members as written; at most RATE_MULT_MAX).
+      Every due slot draws a whisperer by whisper_weight;
+    - an event (maybe: a kill, an idle stretch, the late hour, the evening), which draws with
+      p WHISPER_P and, when it lands, takes the clock's slot (the next one is a whole gap
+      later), so events never add a second rate on top.
+    One member's unprompted whispers are at least WHISPER_GAP_S apart, across sessions too,
+    so a relog never resets it. There is no per-session cap and no stage or affinity
+    threshold; someone with neither an attitude nor warmth has no reason to whisper him.
+    Replies to his own whispers never come through here and are never paced
+    (select.plan_replies). Call maybe() once per event, not on every tick; due() every tick."""
 
-    def __init__(self, rng: random.Random):
+    def __init__(self, rng: random.Random, *, per_hour: float = 0.0):
         self._rng = rng
         self._last: dict[int, float] = {}
+        self._per_hour = max(0.0, per_hour)
+        self._mult = 1.0  # the member dials' pull on the rate, from the last draw
+        self._next_at: float | None = None
+        self._seen = 0.0  # the last due() time, for a rescale
 
     def start_session(self) -> None:
-        """A new session keeps the pacing (a relog is not a reason to whisper again)."""
+        """A new session keeps the pacing (a relog is not a reason to whisper again); its
+        clock starts over at the first due()."""
+        self._next_at = None
 
-    def maybe(self, now: float, trigger: WhisperTrigger,
-              candidates: dict[int, tuple[Persona, Relationship]]) -> int | None:
-        """candidates: the members who could whisper now (online, not AFK), with their
-        relationship to the human. Fires with p WHISPER_P; returns the whisperer's guid and
-        starts her pacing."""
-        if trigger not in WHISPER_TRIGGERS:
-            raise ValueError(f"unknown whisper trigger {trigger!r}")
+    def set_rate(self, per_hour: float) -> None:
+        """A new rate (a reloaded mind.toml or world dial): the pending gap is rescaled, as
+        BurstBudget.set_chattiness does; 0 stops the clock."""
+        old, self._per_hour = self._per_hour, max(0.0, per_hour)
+        if self._per_hour <= 0:
+            self._next_at = None
+        elif self._next_at is not None and old > 0 and old != self._per_hour:
+            left = max(0.0, self._next_at - self._seen)
+            self._next_at = self._seen + left * old / self._per_hour
+
+    def _gap(self) -> float | None:
+        """A gap of the clock; a pull of 0 (nobody would whisper) keeps the written rate,
+        whose draws then find nobody, so a later dial change is still read."""
+        rate = self._per_hour * (self._mult or 1.0)
+        return 3600.0 / rate * self._rng.uniform(*GAP_SPREAD) if rate > 0 else None
+
+    def _reschedule(self, now: float) -> None:
+        gap = self._gap()
+        self._next_at = None if gap is None else now + gap
+
+    def due(self, now: float, *, hold: bool = False) -> bool:
+        """Whether the clock's next whisper is due now. The first call (each session) draws
+        the first gap; while `hold` (his raid's fight, its wipe or debrief) a due whisper
+        waits, until HOLD_PUSH_S after it ends at the soonest."""
+        self._seen = now
+        if self._per_hour <= 0:
+            self._next_at = None
+            return False
+        if self._next_at is None:
+            self._reschedule(now)
+            return False
+        if hold:
+            self._next_at = max(self._next_at, now + HOLD_PUSH_S)
+            return False
+        return now >= self._next_at
+
+    def _pool(self, now: float, candidates: dict[int, tuple[Persona, Relationship]],
+              lift: float) -> dict[int, float]:
         pool = {}
         for g, (p, r) in sorted(candidates.items()):
             if now - self._last.get(g, -math.inf) < WHISPER_GAP_S:
                 continue
-            affinity = r.affinity if r is not None else 0.0
-            attitude = (WHISPER_WEIGHT.get(p.romance.stance, 0.0) * forward(p) if _is_woman(p)
-                        else 0.0)
-            w = attitude + max(0.0, affinity) / WHISPER_AFFINITY_SCALE
+            w = whisper_weight(p, r, lift=lift)
             if w > 0:
                 pool[g] = w
+        return pool
+
+    def start(self, now: float, candidates: dict[int, tuple[Persona, Relationship]], *,
+              lift: float = 1.0) -> int | None:
+        """The due whisper's whisperer (no WHISPER_P roll), drawn by whisper_weight over
+        `candidates` (who could whisper now, with their relationship to him); `lift` is
+        romance_lift of the world's dial. The member dials' pull on the rate is read from the
+        same candidates and the next gap drawn. None when nobody may whisper now: the slot
+        passes."""
+        live = sum(whisper_weight(p, r, lift=lift) for p, r in candidates.values())
+        written = sum(whisper_weight(p, r, neutral=True) for p, r in candidates.values())
+        if written > 0:
+            self._mult = min(RATE_MULT_MAX, live / written)
+        self._reschedule(now)
+        pool = self._pool(now, candidates, lift)
+        if not pool:
+            return None
+        g = pick_speakers(pool, 1, self._rng)[0]
+        self._last[g] = now
+        return g
+
+    def maybe(self, now: float, trigger: WhisperTrigger,
+              candidates: dict[int, tuple[Persona, Relationship]]) -> int | None:
+        """An event's draw. candidates: the members who could whisper now (online, not AFK),
+        with their relationship to the human. Fires with p WHISPER_P; returns the whisperer's
+        guid, starts her pacing and, with the clock running, takes its slot."""
+        if trigger not in WHISPER_TRIGGERS:
+            raise ValueError(f"unknown whisper trigger {trigger!r}")
+        pool = self._pool(now, candidates, 1.0)
         if not pool or self._rng.random() >= WHISPER_P:
             return None
         g = pick_speakers(pool, 1, self._rng)[0]
         self._last[g] = now
+        if self._per_hour > 0:
+            self._reschedule(now)
         return g
