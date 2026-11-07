@@ -12,8 +12,8 @@ from dataclasses import replace
 from datetime import date, datetime
 
 from leeroy_mind.arc import state as arc_state
-from leeroy_mind.arc.ladder import (FOND_CAP, FULL_ARC, GATED, GATES, NOTICED, NOTICED_HANDLED, PACE_ATTITUDE,
-                                    PACE_STYLE)
+from leeroy_mind.arc.ladder import (FOND_CAP, FULL_ARC, GATED, GATES, NOTICED, NOTICED_HANDLED,
+                                    PACE_ATTITUDE, PACE_STYLE)
 from leeroy_mind.nightly.attraction import RUSH_S, aimed_at, reflection_row
 from leeroy_mind.nightly.audience import audience_of
 from leeroy_mind.nightly.confide import depth_with
