@@ -44,7 +44,9 @@ from leeroy_mind.wow import CAST_MIN_LEVEL
 
 from . import files
 from .config import SelfieCfg, worker_command, worker_env
-from .prompt import PromptSpec, build_prompt, renderable
+from .kind import chosen_style
+from .style import PLAIN
+from .prompt import HELD, LUST_HELD, PromptSpec, build_prompt, renderable
 from .store import Candidate, ensure_first_sets, mark_ready, needing_first, queued_sets
 from .worker import RenderRequest, SelfieWorker, WorkerError, to_the_end
 
@@ -152,6 +154,12 @@ def _stored(ctx: "NightContext", guid: int) -> Persona | None:
         return None
 
 
+def _held(ctx: "NightContext", p: Persona | None) -> str | None:
+    """renderable() under the style that chose p's kind (a lust kind waits while she lacks the
+    lust style)."""
+    return renderable(p, chosen_style(ctx.store, p) if p is not None else PLAIN)
+
+
 def _without_persona(ctx: "NightContext") -> int:
     """Roster members of the cast's level with no stored persona, so not in ctx.members."""
     stored = ctx.store.persona_versions()
@@ -164,7 +172,7 @@ def _queue(ctx: "NightContext") -> None:
         return
     members, missing = [], Counter()
     for guid in ctx.members(include_away=True):
-        why = renderable(_stored(ctx, guid))
+        why = _held(ctx, _stored(ctx, guid))
         if why is None:
             members.append(guid)
         else:
@@ -244,7 +252,8 @@ async def _render_set(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
     files.clear_stale(data, guid, set_no)
     staging = files.staging_dir(data, guid, set_no)
     staging.mkdir(parents=True)
-    made = await render_candidates(worker, build_prompt(p), staging, night=ctx.night, guid=guid,
+    spec = build_prompt(p, kind_style=chosen_style(ctx.store, p))  # her stance at render time
+    made = await render_candidates(worker, spec, staging, night=ctx.night, guid=guid,
                                    set_no=set_no, cfg=cfg, make_room=ctx.arbiter.make_room,
                                    leases=lambda: ctx.arbiter.holders)
     files.publish_set(data, guid, set_no)
@@ -267,7 +276,11 @@ async def _render(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
     for n, unit in enumerate(todo):
         guid, set_no = (int(x) for x in unit.split(":"))
         p = _stored(ctx, guid)
-        if renderable(p) is not None:
+        why = _held(ctx, p)
+        if why is not None:
+            if why in HELD:  # her kind's text is never rendered plainly, nor without its phrase
+                log("selfies_set_held", night=ctx.night, guid=guid, set=set_no,
+                    reason="restyle" if why == LUST_HELD else "name")
             if ctx.skip(STAGE, unit):
                 tally["skipped"] += 1
             continue
@@ -312,10 +325,10 @@ async def _render(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
 
 def wants_gpu(ctx: "NightContext") -> bool:
     """The runner asks this before it makes room for the stage: tonight's first sets queued
-    (the "queue" unit), then whether any set is left to render. False leaves the chat models
-    where they are on a night with nothing to render."""
+    (the "queue" unit), then whether any set is left that can render now (a held set waits).
+    False leaves the chat models where they are on a night with nothing to render."""
     _queue(ctx)
-    return bool(_todo(ctx))
+    return any(_held(ctx, _stored(ctx, int(unit.split(":")[0]))) is None for unit in _todo(ctx))
 
 
 def make_stage(cfg: SelfieCfg, *, worker: Callable[[], SelfieWorker] | None = None
@@ -344,7 +357,7 @@ def make_stage(cfg: SelfieCfg, *, worker: Callable[[], SelfieWorker] | None = No
 
 def _count(ctx: "NightContext") -> int:
     """The sets the stage would render tonight: those queued and the first ones it would queue."""
-    members = [g for g in ctx.members(include_away=True) if renderable(_stored(ctx, g)) is None]
+    members = [g for g in ctx.members(include_away=True) if _held(ctx, _stored(ctx, g)) is None]
     return min(ctx.settings.selfie_per_night,
                len(queued_sets(ctx.store)) + len(needing_first(ctx.store, members)))
 

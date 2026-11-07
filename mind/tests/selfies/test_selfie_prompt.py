@@ -1,14 +1,19 @@
 """The mind's profile-photo prompt (P2 Task 6): persona -> prioritised phrases and negative.
 Every person here is invented."""
+import importlib.util
 import json
+import logging
 import re
+from pathlib import Path
 from dataclasses import replace
 
 import pytest
 
 from conftest import make_persona
 from leeroy_mind.personas.schema import Appearance, ProfilePhoto
-from leeroy_mind.selfies.prompt import NEGATIVE, PromptSpec, build_prompt, renderable
+from leeroy_mind.selfies.prompt import (LUST_HELD, LUST_NEGATIVE, NEGATIVE, PromptSpec,
+                                        build_prompt, renderable)
+from leeroy_mind.selfies.style import LUST, PLAIN, suggestive
 from nightly.test_night_enrich import APPEARANCE
 
 PHOTO = {"kind": "snapshot", "framing": "upper_body", "setting": "on the deck of a small boat",
@@ -91,6 +96,108 @@ def test_the_negative_prompt_keeps_minors_nudity_likeness_and_period_looks_out()
     assert ("watermark, text, logo", 2) in NEGATIVE
 
 
+TODAY_NEGATIVE = (
+    ("cartoon, anime, painting, illustration, 3d render, cgi", 0),
+    ("nsfw, nude, cleavage, lingerie, swimwear", 0),
+    ("child, teenager", 0),
+    ("celebrity, famous person", 0),
+    ("plastic skin, airbrushed, doll, deformed face, extra fingers, bad hands", 1),
+    ("vintage, retro, film grain, sepia, old photo", 1),
+    ("watermark, text, logo", 2),
+)
+
+
+def test_a_lust_womans_negative_drops_only_cleavage_and_swimwear():
+    neg = build_prompt(woman(stance="lust"), kind_style=LUST).negative
+    assert neg == LUST_NEGATIVE
+    words = [w.strip() for t, _ in neg for w in t.split(",")]
+    assert "cleavage" not in words and "swimwear" not in words
+    zero = [w.strip() for t, pr in neg if pr == 0 for w in t.split(",")]
+    for word in ("nsfw", "nude", "lingerie", "child", "teenager", "topless", "underwear",
+                 "see-through", "sheer", "celebrity", "cartoon"):
+        assert word in zero, word
+    others = [x for x in TODAY_NEGATIVE if x[0] != "nsfw, nude, cleavage, lingerie, swimwear"]
+    assert [x for x in neg if x in others] == others and len(neg) == len(TODAY_NEGATIVE)
+    # the worker keeps every priority-0 phrase inside 75 tokens; words and marks bound them here
+    marks = re.findall(r"\w+|[^\w\s]", ", ".join(t for t, pr in neg if pr == 0))
+    assert len(marks) <= 60
+
+
+@pytest.mark.parametrize("p", [
+    lambda: woman(), lambda: woman(stance="fond"), lambda: woman(stance="drawn"),
+    lambda: woman(stance="lust", age=20), lambda: man(), lambda: man(age=40),
+    lambda: woman(stance="lust")])
+@pytest.mark.parametrize("chosen", [PLAIN, LUST])
+def test_everyone_else_keeps_todays_negative(p, chosen):
+    # a lust woman whose kind the lust rules did not compose (by hand, plain, none recorded)
+    # renders with the plain negative too; a lust-composed kind on anyone else waits
+    person = p()
+    if suggestive(person) and chosen == LUST:
+        return
+    if chosen == LUST:
+        assert renderable(person, LUST) == LUST_HELD
+        with pytest.raises(ValueError, match="re-choice"):
+            build_prompt(person, kind_style=LUST)
+        return
+    assert NEGATIVE == TODAY_NEGATIVE
+    spec = build_prompt(person, kind_style=chosen)
+    assert spec.negative == TODAY_NEGATIVE
+    assert (person.photo.outfit, 2) in spec.phrases and (person.photo.setting, 2) in spec.phrases
+
+
+LUST_PHOTO = ProfilePhoto("snapshot", "upper_body", "the beach at sunset", "a red string bikini",
+                          "a teasing grin")
+
+
+def test_the_lust_prompt_puts_outfit_and_setting_in_one_phrase_at_priority_0():
+    plain = build_prompt(woman(stance="fond", photo=LUST_PHOTO))
+    hot = build_prompt(woman(stance="lust", photo=LUST_PHOTO), kind_style=LUST)
+    joined = ("wearing a red string bikini, the beach at sunset", 0)
+    assert joined in hot.phrases and joined not in plain.phrases
+    assert ("a red string bikini", 2) in plain.phrases and ("the beach at sunset", 2) in plain.phrases
+    assert not any(t in ("a red string bikini", "the beach at sunset") for t, _ in hot.phrases)
+    rest = [x for x in plain.phrases if x not in (("a red string bikini", 2),
+                                                  ("the beach at sunset", 2))]
+    assert [x for x in hot.phrases if x != joined] == rest
+    assert hot.negative == LUST_NEGATIVE and plain.negative == NEGATIVE
+    assert build_prompt(woman(stance="lust", photo=LUST_PHOTO)).phrases == plain.phrases
+
+
+def _worker_fit():
+    """The selfie worker's own fit (selfie/leeroy_selfie/fit.py: no dependencies), loaded by
+    path: the mind never imports the worker's package."""
+    path = Path(__file__).resolve().parents[3] / "selfie" / "leeroy_selfie" / "fit.py"
+    spec = importlib.util.spec_from_file_location("_selfie_fit_for_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.fit
+
+
+def _tokens(text: str) -> int:
+    """More than CLIP counts: a token per mark and per started run of four letters."""
+    return sum(max(1, -(-len(w) // 4))
+               for w in re.findall(r"[A-Za-z]+|\d+|[^\sA-Za-z\d]", text))
+
+
+def test_the_longest_lust_kind_keeps_outfit_and_setting_through_the_workers_fit():
+    from leeroy_mind.selfies.kind import LUST_COLOURS, LUST_OUTFITS, LUST_SETTINGS, compose_lust
+    fit = _worker_fit()
+    outfit = max((compose_lust({"kind": "snapshot", "framing": "head_and_shoulders",
+                                "setting": "a cafe terrace", "outfit": o, "colour": c,
+                                "expression": "a wink"}).outfit
+                  for o in LUST_OUTFITS for c in LUST_COLOURS), key=len)
+    setting = max(LUST_SETTINGS, key=len)
+    big = replace(APPEARANCE, hair_style="h" * 40, face=("f" * 40,) * 4)
+    for kind_, framing in (("snapshot", "head_and_shoulders"), ("mirror_selfie", "upper_body")):
+        photo = ProfilePhoto(kind_, framing, setting, outfit, "an over-the-shoulder glance")
+        spec = build_prompt(woman(stance="lust", age=24, appearance=big, photo=photo),
+                            kind_style=LUST)
+        kept, dropped = fit(spec.phrases, _tokens, 75)
+        assert f"wearing {outfit}, {setting}" in kept and outfit not in " ".join(dropped)
+        assert setting not in " ".join(dropped)
+        assert any("f" * 40 == d for d in dropped)        # the long looks went, not the kind
+
+
 def test_required_phrases_stay_short():
     longest = replace(APPEARANCE, hair_colour="x" * 30, hair_style="y" * 40, skin_tone="z" * 30)
     spec = build_prompt(woman(age=99, region="UK", appearance=longest,
@@ -144,3 +251,32 @@ def test_no_prompt_is_built_for_anyone_under_eighteen():
         with pytest.raises(ValueError, match="under age"):
             build_prompt(woman(age=age))
     assert renderable(woman(age=18)) is None and build_prompt(woman(age=18)).phrases
+
+
+@pytest.mark.parametrize("looks", [
+    {"hair_style": "in two pigtails"}, {"hair_style": "pig tails"},
+    {"face": ("a youthful face",)}, {"face": ("braces on her teeth",)},
+    {"face": ("baby-faced", "freckles")}, {"face": ("a babyface",)},
+    {"skin_tone": "teenage-clear"}, {"hair_colour": "schoolgirl blonde"}])
+def test_a_lust_kind_is_never_rendered_when_her_looks_code_young(looks):
+    young = woman(stance="lust", appearance=replace(APPEARANCE, **looks), photo=LUST_PHOTO)
+    assert not suggestive(young)                          # no lust style for her at all
+    assert renderable(young, LUST) == LUST_HELD
+    with pytest.raises(ValueError, match="re-choice"):
+        build_prompt(young, kind_style=LUST)             # its text is never rendered plainly
+    assert renderable(young) is None and build_prompt(young).negative == NEGATIVE
+
+
+def test_a_lust_kind_is_never_rendered_once_she_left_lust():
+    for stance in ("drawn", "fond", "none"):
+        left = woman(stance=stance, photo=LUST_PHOTO)
+        assert renderable(left, LUST) == LUST_HELD
+        with pytest.raises(ValueError, match="re-choice"):
+            build_prompt(left, kind_style=LUST)
+    assert renderable(woman(stance="lust", age=20, photo=LUST_PHOTO), LUST) == LUST_HELD
+
+
+def test_the_lust_prompt_stays_when_her_looks_are_adult():
+    hot = woman(stance="lust", photo=LUST_PHOTO)
+    assert renderable(hot, LUST) is None
+    assert build_prompt(hot, kind_style=LUST).negative == LUST_NEGATIVE

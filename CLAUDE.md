@@ -1080,6 +1080,52 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
   owner's real name, member names, era and explicit wear). `selfies` runs after `regress` as an
   image stage: it queues a first set for each member with looks and a kind, plus any "4 more"
   asked for, and renders up to `selfie_per_night` (120) sets.
+  A woman whose stance toward the owner is lust, aged 21 or more, whose looks (hair colour and
+  style, skin, eyes, build, face details) use no word of the age guard (`selfies/style.py`
+  `suggestive`), gets the lust style, and her kind is picked, not written: the request's schema
+  (`LUST_SCHEMA` in `selfies/kind.py`) allows only values from fixed lists (21 settings, 28
+  outfits, 12 colours, 8 expressions; kind and framing keep their enums), so a reply off the
+  lists fails the schema, and the code builds the stored kind from the picks (`compose_lust`,
+  the colour put into the outfit). Pairings (`screen_lust`): swimwear only with the six water
+  settings, only framed upper body and never as a headshot; the hot tub only in swimwear; the
+  sports top and leggings only at the gym. A composed part that holds her character or real
+  name (a colour or a season can be one) is refused too, so the prompt's name filter never drops
+  the joined phrase below. A reply that breaks only these is asked once more, then refused. Her
+  template (`KIND_PROMPT_LUST`; the owner's overlay
+  `prompts/nightly_photo_lust.txt` replaces it) only flavours the pick. At render time
+  (`prompt.build_prompt`, given the kind's recorded style) the lust prompt is used only for a
+  kind the lust rules composed while she is still of the lust style: her outfit and setting go
+  in as one priority-0 phrase, `wearing <outfit>, <setting>`, so the worker's 75-token fit keeps
+  both, and the negative drops `cleavage` and `swimwear` and adds `topless`, `underwear`,
+  `see-through` and `sheer`. A plain or hand-set kind on a lust woman renders with the plain
+  phrases and `NEGATIVE`. A kind the lust rules composed is never rendered for a woman who no
+  longer has the lust style (she left lust, or her looks now code young): `renderable` holds
+  her set (log `selfies_set_held`, guid only) until the pass has chosen her kind again under
+  the plain rules, so its text is never rendered plainly; one whose joined phrase her name filter
+  would drop (renamed since it was composed) is held the same way (`reason=name`) and chosen
+  again under the lust rules. A held set takes no GPU (`wants_gpu`), and "4 more" for her says
+  it waits. Everyone else
+  writes a free-text kind under the plain rules (`KIND_PROMPT`, `EXPLICIT_RE`, plus `WEAR_RE`
+  for underwear, sleepwear and see-through words such as bralette, camisole, pajamas, mesh,
+  fishnet and translucent), and every
+  free-text kind, whoever it is for, also meets the age guard (`selfies/style.py` `AGE_RE`:
+  school, schoolgirl, schoolboy, schoolkid, high-schooler, school or student uniform, teen,
+  teenage, teenaged, teenager, teeny, teenybopper, preteen, tween, youthful, childlike,
+  childish, child, children, kid, kiddie, young girl, young-looking, barely legal, lolita, loli,
+  underage, underaged, adolescent, jailbait or jail bait, baby face, baby-faced, babyface,
+  brace-face, little girl, cheerleader, pigtails or pig tails, braces, and fresh-faced, a
+  young face, looks young, younger-looking, babyish, schoolgirlish, teenie, barely 18, just
+  turned 18, in bunches; a multi-word one matches with spaces, hyphens or nothing between its
+  words, and looks are read with their whitespace folded). When her style changes
+  the pass chooses her kind once more (meta
+  `selfies:photo-style:<guid>` records which rules chose each kind). A kind set by hand is never
+  redone, with one exception: a kind from before the records counts as the pass's plain kind
+  when the pass once had a unit for her, so one the owner set by hand before the first photo
+  night after this release cannot be told apart and may be redone once; from that night on
+  (meta `selfies:photo-style:adopted`) every hand change is detected. A re-choice into the lust
+  style queues a fresh set for her (a first set if she never had one, else a "4 more" one; sets
+  waiting for his choice stay waiting). The NSFW gate (`nsfw_max`) is unchanged for every image
+  of both styles.
 - **GPU rules.** The image stage unloads every chat model but the embedding model (the worker
   needs the VRAM) and never renders while a live lease is held (his login, an offline raid, the
   voice service): it ends without a failure and the sets wait for the next night. A night with

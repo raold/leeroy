@@ -21,7 +21,7 @@ from leeroy_mind.nightly.cli import (_child, _context, _data_arg, _default_night
 
 from .config import load_selfie_config, worker_command, worker_env
 from .kind import STAGE as KIND_STAGE
-from .kind import _saver, kind_one
+from .kind import _saver, chosen_style, kind_one
 from .prompt import build_prompt, renderable
 from .stage import STAGE, render_candidates, start_worker
 from .worker import SelfieWorker, WorkerError, to_the_end
@@ -127,7 +127,7 @@ async def _kinds(ctx, store, guids: list[int]) -> list[int]:
             with store.transaction():
                 _saver(ctx, guid, photo)(store)
             ctx.personas.invalidate(guid)
-        if renderable(ctx.base(guid)) is not None:
+        if renderable(ctx.base(guid), chosen_style(store, ctx.base(guid))) is not None:
             print(f"guid {guid}: cannot be rendered", file=sys.stderr)
             continue
         ready.append(guid)
@@ -163,7 +163,8 @@ async def _try(root, store, cfg, scfg, clock, args, make_llm) -> int:
                     folder.mkdir(parents=True, exist_ok=True)
                     try:
                         await render_candidates(
-                            worker, build_prompt(ctx.base(guid)), folder, night=night,
+                            worker, build_prompt(ctx.base(guid), kind_style=chosen_style(
+                                store, ctx.base(guid))), folder, night=night,
                             guid=guid, set_no=1, cfg=scfg, make_room=ctx.arbiter.make_room,
                             leases=lambda: ctx.arbiter.holders)
                         tally.sets += 1

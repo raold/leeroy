@@ -151,6 +151,20 @@ def queue_more(store, guid: int, *, now: float) -> SetRow:
         return _new_set(conn, guid, "more", now)
 
 
+def queue_restyled(store, guid: int, *, now: float) -> SetRow | None:
+    """A set queued for a member whose photo kind was chosen again in another style (into the
+    lust style), so new candidates come without his "4 more": none when one is already queued,
+    a first set when she never had one, else a "more" one. Sets waiting for his choice stay
+    waiting. Joins the caller's transaction."""
+    with store.transaction():
+        conn = store.conn
+        if conn.execute("SELECT 1 FROM selfie_set WHERE guid=? AND status='queued'",
+                        (guid,)).fetchone() is not None:
+            return None
+        had = conn.execute("SELECT 1 FROM selfie_set WHERE guid=? LIMIT 1", (guid,)).fetchone()
+        return _new_set(conn, guid, "more" if had else "first", now)
+
+
 def mark_ready(store, guid: int, set_no: int, candidates, *, now: float, night: str,
                persona_version: int | None) -> None:
     """A queued set rendered: its four candidates, one a slot, and the night and persona

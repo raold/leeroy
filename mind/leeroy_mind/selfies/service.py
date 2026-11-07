@@ -33,7 +33,8 @@ from leeroy_mind.wow import CAST_MIN_LEVEL
 
 from . import files
 from .config import SelfieCfg
-from .prompt import renderable
+from .kind import chosen_style
+from .prompt import HELD, renderable
 from .store import (SelfieError, counts, current, member_of, photos, pick, picks, queue_more,
                     undo)
 
@@ -109,13 +110,15 @@ class SelfieService:
         self._cast_member(guid)
         if not self.cfg.enabled:
             raise SelfieError("rendering is off in mind.toml ([selfies] enabled = false)")
-        why = renderable(self.app.personas.base(guid))
-        if why is not None:
+        p = self.app.personas.base(guid)
+        why = renderable(p, chosen_style(self.app.store, p) if p is not None else "plain")
+        if why is not None and why not in HELD:
             raise SelfieError(f"{why}: the night renders photos once the looks and photo kind "
                               "are in")
         queued = queue_more(self.app.store, guid, now=self.app.clock.now())
-        return {"ok": True, "set": queued.set_no, "guid": guid,
-                "message": "Four more will be rendered tonight."}
+        said = ("Four more are queued; they wait until her photo kind is chosen again for her "
+                "photo style." if why in HELD else "Four more will be rendered tonight.")
+        return {"ok": True, "set": queued.set_no, "guid": guid, "message": said}
 
     async def _synced(self, guid: int, said: str) -> str:
         """`said`, once the member's files agree with what was just committed (off the loop:
