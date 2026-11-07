@@ -144,6 +144,23 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: 
 .msg .body { color: var(--ink); overflow-wrap: anywhere; }
 .feed .empty { padding: 10px 2px; }
 
+/* comms, who is typing: under the feed, where their line will appear, on a line that keeps its
+   height; the same dots mark a member writing him a whisper in the list */
+.typing { flex: none; display: flex; align-items: center; gap: 6px; min-width: 0; min-height: 22px;
+  padding: 4px 2px 0; font-size: 12.5px; color: var(--ink-3); }
+.typing .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dots { display: inline-flex; align-items: center; gap: 3px; flex: none; }
+.dots i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; opacity: 0.3;
+  animation: typing-dot 1.2s ease-in-out infinite; }
+.dots i:nth-child(2) { animation-delay: 0.15s; }
+.dots i:nth-child(3) { animation-delay: 0.3s; }
+.ch .dots { color: var(--accent); }
+@keyframes typing-dot { 0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-2px); } }
+@media (prefers-reduced-motion: reduce) {
+  .dots i { animation: none; opacity: 0.7; }
+}
+
 /* comms, the reply box under the feed: his line, said in WoW as his */
 .composer { flex: none; display: grid; gap: 6px; margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
 .composer .to { font-size: 12px; color: var(--ink-3); }

@@ -198,6 +198,13 @@ SPOKEN_CHANNELS = frozenset({"say", "yell"})
 # its row waits for the echo (the bridge keeps events across a reconnect).
 AWAIT_ECHO = frozenset({"ack_timeout", "connection_lost"})
 _LATE = frozenset({DayPhase.LATE, DayPhase.DEAD})
+# Who is typing (the console's Comms dots, Pipeline.typing_now): a model turn is composing from
+# its compose call until its text exists, and typing over the typing delay before each line is
+# sent. Only where Comms shows the line: guild and officer, his group's party and raid, and a
+# whisper to him (typed or voiced); a voice room, say and yell, and templates show nothing.
+COMPOSING, TYPING = "composing", "typing"
+COMMS_CHANNELS = frozenset({"guild", "officer"})
+GROUP_CHANNELS = frozenset({"party", "raid", "raid_warning"})
 _CAMEL = re.compile(r"(?<!^)(?=[A-Z])")
 
 
@@ -450,6 +457,8 @@ class Pipeline:
         self._current: dict[asyncio.Task, Turn] = {}  # the turn each job is on
         self._behind: dict[asyncio.Task, list[Turn]] = {}  # the turns a job has not begun yet
         self._cancelling: dict[asyncio.Task, Turn] = {}  # a job's one turn being cancelled
+        # a model turn composing or typing, and since when (turn_phases); cleared at its end
+        self._phases: dict[asyncio.Task, tuple[Turn, str, float]] = {}
         self._delivering: set[asyncio.Task] = set()
         self._send_lock = asyncio.Lock()
         self._unacked: dict[tuple[int, str, str], tuple] = {}  # ack timed out, echo awaited
@@ -649,6 +658,42 @@ class Pipeline:
         """The turn each of the engine's running jobs is on (waiting, composing or typing)."""
         return [t for task, t in self._current.items() if task in self._tasks]
 
+    def _phase(self, turn: Turn, phase: str | None) -> None:
+        """The current job's turn is now composing or typing (since now), or neither (None)."""
+        task = asyncio.current_task()
+        if phase is not None:
+            self._phases[task] = (turn, phase, self.clock.now())
+        elif task in self._phases and self._phases[task][0] is turn:
+            del self._phases[task]
+
+    def turn_phases(self) -> list[tuple[Turn, str, float]]:
+        """(turn, COMPOSING or TYPING, since) for each model turn being composed or typed."""
+        return list(self._phases.values())
+
+    def typing_now(self) -> list[dict]:
+        """The control endpoint's status `typing`: each model turn being composed or typed where
+        Comms shows its line, oldest first, as {"guid", "name", "channel", "to", "since", "age"}
+        (`to`: a whisper's target, him; else None; `age`: seconds in its phase, read now, so a
+        page judges staleness without comparing clocks; `since` is for matching the line when it
+        lands). Ids, names and times only, never text; none while he is offline."""
+        w, hg = self.world, self.human.guid
+        if not hg or not w.human_online:
+            return []
+        now = self.clock.now()
+        out = []
+        for turn, _, since in self._phases.values():
+            channel, to = turn.channel, None
+            if channel == "whisper" and turn.to_guid == hg:
+                to = hg
+            elif not (channel in COMMS_CHANNELS
+                      or (channel in GROUP_CHANNELS and w.in_group(turn.speaker))):
+                continue
+            m = w.members.get(turn.speaker)
+            out.append({"guid": turn.speaker, "name": m.name if m is not None else "",
+                        "channel": channel, "to": to, "since": since,
+                        "age": max(0.0, now - since)})
+        return sorted(out, key=lambda e: (e["since"], e["guid"]))
+
     def planned_turns(self) -> list[Turn]:
         """Every turn the engine's jobs have yet to finish: the one each is on and the queued
         ones behind it."""
@@ -664,6 +709,7 @@ class Pipeline:
                 self._cancelling[task] = turn
                 task.cancel()
                 del self._current[task]  # not pending any more, even before it unwinds
+                self._phases.pop(task, None)
 
     async def _cancel_all(self) -> None:
         """Cancel every job, then wait for the lines already handed to the bridge (bounded by
@@ -1154,6 +1200,7 @@ class Pipeline:
             self.timing.pipeline_done(meta.timing_trace, outcome)
             if self._current.get(task) is turn:
                 del self._current[task]
+            self._phase(turn, None)  # sent, dropped, cancelled or raised: nobody is typing
             if self._real_name_hold == meta.turn_id:  # ended without its line: free the slot
                 self._real_name_hold = None
 
@@ -1190,6 +1237,7 @@ class Pipeline:
         text = turn.template
         if text is None:
             original_instruction = turn.instruction
+            self._phase(turn, COMPOSING)
             try:
                 with self.timing.span(meta.timing_trace, "compose"):
                     for hook in tuple(self._instruction_hooks):
@@ -1214,6 +1262,7 @@ class Pipeline:
                 return self._drop(turn, meta, "scope_changed", c.memory_ids)
             memory_ids, close = c.memory_ids, c.close
             text, why = await self._generate(turn, meta, c, spoken=voiced)
+            self._phase(turn, None)  # its text exists
             if not _scope_valid(meta):
                 return self._drop(turn, meta, "scope_changed", memory_ids, text=text)
             if why:
@@ -1259,10 +1308,13 @@ class Pipeline:
         try:
             for i, s in enumerate(lines):
                 typing = typing_delay(s.line, p.typing.chars_per_sec, delay_mult, self.rng)
+                if turn.template is None:
+                    self._phase(turn, TYPING)
                 with self.timing.span(meta.timing_trace, "typing"):
                     await self.clock.sleep(self._first_typing(turn, typing) if i == 0 else typing)
                 meta.words = s.plain
                 why = await self._send_line(turn, meta, p, s.line, memory_ids, first=i == 0)
+                self._phase(turn, None)  # sent, or refused
                 if why:
                     if why not in AWAIT_ECHO:  # that row waits for the echo (_settle_unacked)
                         self._drop(turn, meta, why, memory_ids, text=s.line)
