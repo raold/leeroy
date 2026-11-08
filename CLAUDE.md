@@ -311,6 +311,129 @@ table). `--toast` shows one toast per new failure and writes only
 `ac-health-schedule.ps1 -Install|-Remove|-Status` manages a per-user task that runs it every
 15 minutes while he is logged on (not installed by default).
 
+### Off-machine guild backups
+
+`./ac-guild-backup.sh [--with-db]` backs up the guild to an already mounted destination.
+Create `%LOCALAPPDATA%\leeroy\backup.toml` locally, outside git (TOML single quotes
+keep Windows backslashes literal):
+
+```toml
+destination = '\\nas\private-backups\leeroy'
+keep_daily = 7
+keep_weekly = 8
+# staging_dir = 'D:\leeroy-staging'   # optional, absolute, local
+```
+
+Use a destination on another machine; a second folder on F: does not protect against
+drive failure. The script uses the logged-on user's existing share access and stores no
+credentials. The backup contains private guild data: restrict the share to its owner.
+It creates its own marked `leeroy-guild-backups-v1` directory under the destination,
+which must already exist. It refuses source/destination overlap, symlinks and Windows
+reparse points. It never mounts a share, starts a service, or contacts a model.
+
+- **Contents.** Both `mind.db` and `library.db` are required. It includes the rest of
+  `mind-data`: personas and versions, memories/history, prompts/overlays, voice specs
+  and reference clips, Realm plans/blocklist, and selfie sets, picks and history. From
+  `voice-data` it includes only `voice.toml`, `decision.toml`, `lexicon.toml`,
+  `attitudes.toml` (when present). `--with-db` adds the newest timestamp-named
+  `ac-backup.sh` set's four nonempty SQL dumps, rejecting incomplete/error sets.
+  Run `ac-backup.sh` first if a fresh game snapshot is wanted; these older dumps are
+  not synchronized with the mind snapshot.
+- **Exclusions.** At any depth it omits `logs/`, `scratch/`, `snapshots/`, `models/`,
+  `cache/`, `caches/`, `__pycache__/`, unfinished `.part` files/directories,
+  `control.json`, `console.key`, runtime lock/PID files, files the services rewrite
+  continuously (`health-state.json`, `wow-volume.json`, `ui-state.json`,
+  `dojo-endpoint.json`, `worldserver.pid`; regenerated on start and they would fail the
+  stability scan) and SQLite `-wal`, `-shm`, `-journal` files. Logs/scratch/snapshots are disposable local history; models and
+  caches can be fetched again. Worker `selfie-data`, voice engines/cache/UI state,
+  the console key in the owner profile and everything outside the listed data roots
+  are never selected. Runtime control credentials must never be restored.
+- **Consistency.** A local temporary capture uses SQLite's online `backup()` API in one
+  step per database (`pages=-1`): a single read transaction, a consistent snapshot in WAL
+  mode that never blocks the mind's writers. A stepped copy restarts whenever another
+  connection writes between steps and, measured on a 20 MB database with a continuous
+  writer, needed about 59,000 steps and 116 s; the single step has no deadline and is
+  bounded by the database size. Then `PRAGMA integrity_check` for each copied database. The ordinary file inventory
+  and SHA-256 contents must match on both sides of the database copies. File changes
+  retry the capture up to three times; persistent changes fail without publication or
+  pruning. SQLite can keep writing throughout (no service lock is taken). Each database
+  has its own transaction; there is no global transaction across both databases and
+  the filesystem. For a strictly simultaneous snapshot, stop the mind, console,
+  voice and any other data writers first. Online backups establish stable file
+  contents around the database snapshots; they cannot make an in-flight application
+  operation atomic. Restore startup reconciles selfie files with the database.
+- **Transfer and verification.** A dated set is a checksummed `manifest.json` plus
+  an ownership marker. Every payload file has a size and SHA-256. Shared objects are
+  addressed by that digest, so unchanged JPEGs are not uploaded again; there are no
+  hard links, filesystem-specific deduplication calls, or external Python packages.
+  This trades local hashing and destination verification reads for less upload space
+  and traffic. A failed upload resumes its verified byte prefix on the next run; an
+  existing object is trusted by its digest name and size (it was verified before it was
+  renamed into place) and is not read back; every newly written object is verified. Every
+  referenced object is re-read in full when the last full verification (recorded in
+  `.verify-state.json` in the store) is over 7 days old, so a daily task verifies
+  weekly, or on demand with `--verify-all`. A set becomes visible through a same-directory
+  rename only after all destination objects verify. The destination must support normal
+  file locks and same-directory renames (ordinary SMB shares do). Concurrent runs refuse
+  the store lock; it is automatically released when a process exits.
+- **Retention.** Keep the newest set from each of the last 7 represented UTC days and
+  8 represented ISO weeks (their union). Settings can be zero individually, never both.
+  Pruning runs only after a successful capture/publication. Only correctly named,
+  checksum-valid sets with this store's marker and exactly its two metadata files are
+  removed. No recursive deletion is used. Shared objects are deleted only when a
+  pruned owned manifest named them and no retained set uses them. Foreign or corrupt
+  set directories are preserved and disable object collection. A `sets/.pending-*`
+  directory left by a crashed publish that holds only this script's own manifest and
+  marker (checksums match) and is over 24 hours old is removed and is not foreign; a
+  younger one, or one with any other content, counts as foreign. Object `.part` files
+  over 7 days old and stale `.staging/leeroy-guild-capture-*` directories are removed.
+  Unpublished complete orphan objects are retained. Never edit manifests or delete objects
+  manually: multiple sets share them. Copy the whole store when relocating it.
+
+`./ac-guild-backup.sh --restore-test` reconstructs the newest completed set into a
+temporary directory, checks every file against its manifest, reruns both SQLite integrity
+checks and removes only that temporary reconstruction. A corrupt newest set fails rather
+than silently choosing an older one. `--restore-to F:/guild-restore` performs the same
+checks but keeps the verified output in that **new, initially nonexistent** directory;
+it refuses live data roots and existing output. A failure leaves the live data untouched.
+The capture/restore requires temporary free space for the complete payload. Capture
+stages in `staging_dir` from the config when set; otherwise in `.staging` inside the
+store when the destination is on a local fixed disk, else the system temp directory
+(normally C:). It must be outside the store and the source data directories.
+`--config`, `--root`, `--mind-data`, `--voice-data` and `--db-backup-dir` allow explicit
+isolated paths; normal source defaults follow this checkout and `LEEROY_MIND_DATA` /
+`LEEROY_VOICE_DATA`. The Git Bash wrapper uses the mind venv (or an explicit
+`AC_GUILD_BACKUP_PYTHON`); the engine needs Python 3.11+ and only its standard library.
+
+`ac-guild-backup-schedule.ps1 -Show [-At '03:00'] [-WithDb]` previews the per-user
+`leeroy-guild-backup` task. `-Install` creates/replaces it, `-Remove` removes it, and
+`-Status` reports the last result (0 means verified). It runs daily at the selected
+local time, only while the owner is logged on, with Limited privileges and no stored
+password, so his share access is available. A missed run starts when available; concurrent
+runs are ignored. `pythonw.exe` runs the same backup engine without opening a window.
+It is **not installed by default**; configure the destination, run a manual backup and
+restore test successfully, then have the operator install it. Check `-Status` regularly;
+there is no automatic failure notification. An unavailable share fails without pruning.
+
+**How to restore.** Run `--restore-test`, then `--restore-to` a new staging directory.
+Stop the mind and all other writers (console, voice and selfie activity), and keep a
+separate local copy of the current `mind-data`/voice configuration for rollback. Replace
+the mind data with the verified staged `mind-data` as a directory; do not overlay it onto
+old database WAL/SHM files or stale photos. Copy the four staged voice TOMLs that are
+present into `voice-data`, preserving its refetchable engines/caches. Keep the owner's
+existing console key outside these directories. If anything fails, leave services stopped
+and restore the saved pre-restore directories/configs. With the installed mind's Python,
+from `mind/`, run `db --data-dir F:/azerothcore/mind-data migrate`, then
+`doctor --data-dir F:/azerothcore/mind-data`; only restart after checks pass. Importing the
+optional game SQL dumps is a separate operator recovery step with MySQL stopped from
+serving the game; this script never imports them or overwrites live data.
+
+`bash scripts/tests/ac-guild-backup.sh` exercises synthetic data only, including a live
+SQLite writer, verified restore, corrupt/interrupted copies, ownership-confined pruning,
+foreign directories, stale pending/`.part` cleanup, a large database snapshot under
+continuous writes, and junction/symlink refusal. The schedule self-test mocks task
+cmdlets and never registers a task. Both run in CI; never use live data for these tests.
+
 `db_backup/` holds two kinds of thing: sets `ac-backup.sh` made
 (`<label>_<YYYYmmdd>_<HHMMSS>`) and sets from the older script described below
 (`YYYY-MM-DD_HHMM`), plus a raw MySQL datadir copy. **The prune only ever
