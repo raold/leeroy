@@ -31,12 +31,16 @@ export function lines(name, value) {
     out.push(str(p.night) + " · " + str(p.saved_state) + " · " + (p.running === true ? "running (observed)" : p.running === false ? "not running" : "current activity unknown"));
     out.push("Started " + at(p.started) + " · finished " + at(p.finished));
     out.push("Budget " + n(obj(p.budget).budget_s) + " slot-seconds · estimate " + n(obj(p.budget).estimate_s));
-    arr(p.stages).forEach(s => out.push(str(s.stage) + ": " + n(s.units) + " units · " + n(s.failures) + " failures · " + str(s.error_code || "no error code retained") + " · " + at(s.started) + " → " + at(s.finished)));
+    arr(p.stages).forEach(s => out.push(str(s.stage) + ": " + n(s.units) + " units · planned " + n(s.planned_units) + " · " + n(s.failures) + " failures · " + str(s.error_code || "no error code retained") + " · " + at(s.started) + " → " + at(s.finished)));
+    if (p.error_code) { out.push("Night error " + str(p.error_code)); }
+    out.push("Failure counts: " + str(p.failure_source) + (p.failures_complete ? " (complete)" : " (incomplete; observed counts are lower bounds)"));
     out.push("Earliest gap boundary " + at(p.next_after), str(p.next_rule), str(p.running_basis));
   } else if (name === "realm") {
+    if (p.enabled) { out.push("Realm configuration: " + str(p.enabled) + "; retained records below."); }
     out.push(n(p.held_members) + " held members · " + arr(p.roots).length + " roots");
     arr(p.roots).forEach(r => out.push(str(r.id) + " · " + str(r.kind) + " · " + str(r.state) + " · " + n(Math.round(r.age_s)) + " seconds old · " + n(r.members) + " members · native " + str(r.native_reason)));
     arr(p.direct_unknowns).forEach(r => out.push("Direct unknown " + str(r.id) + " · " + str(r.kind) + " · " + str(r.reason) + " · " + at(r.at)));
+    out.push(n(p.direct_unknown_total) + " direct unknowns in total; showing at most 128.");
     if (!p.direct_available) { out.push("Not set up yet: the direct ledger is absent."); }
     out.push("Calendar last operation " + at(obj(p.desks).calendar), "Mail last operation " + at(obj(p.desks).mail), str(p.desks_basis), str(p.release_note));
   } else if (name === "raids") {
@@ -50,6 +54,7 @@ export function lines(name, value) {
       out.push(r.progress ? "Progress " + (progress.stale ? "stale" : "recent") + " · observed " + at(progress.observed) + " · " + n(progress.members_in_instance) + " inside · last progress " + at(typeof progress.last_progress_ts === "number" ? progress.last_progress_ts / 1000 : null) + " · boss engaged " + (typeof progress.boss_engaged === "boolean" ? progress.boss_engaged : "unknown") : "Progress not recorded.");
     });
   } else if (name === "selfies") {
+    if (p.enabled) { out.push("Selfie configuration: " + str(p.enabled) + "; retained records below."); }
     const c = obj(p.counts);
     out.push(n(c.queued) + " queued sets · " + n(c.waiting) + " waiting for a choice · " + n(c.chosen) + " chosen · " + arr(p.held).length + " held sets");
     arr(p.queue).forEach(r => out.push("Queued #" + n(r.guid) + " set " + n(r.set) + " · " + at(r.requested)));
@@ -61,6 +66,7 @@ export function lines(name, value) {
   } else if (name === "backups") {
     const s = obj(p.snapshots);
     out.push(n(s.count) + " mind snapshots · " + n(s.bytes) + " bytes");
+    if (!s.count) { out.push("Not set up yet: no mind snapshots recorded."); }
     Object.entries(obj(s.labels)).forEach(([label, r]) => out.push(label + " · " + at(r.at) + " · " + n(r.bytes) + " bytes"));
     out.push(p.game ? "Game dump " + str(p.game.name) + " · " + at(p.game.at) : "Not set up yet: no game dump set recorded.");
     const off = obj(p.offmachine);

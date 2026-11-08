@@ -78,6 +78,22 @@ def test_saved_running_is_not_proof_of_current_task(store, data):
     assert ops.night_view(store.conn, data, NOW, deadline(), {"mind": "stopped"})["running"] is False
 
 
+def test_missing_failure_summary_does_not_imply_clean_night(store, data):
+    add_night(store.conn)
+    store.conn.execute("UPDATE night_run SET error=NULL")
+    got = ops.night_view(store.conn, data, NOW, deadline(), {})
+    assert got["failures_complete"] is False and got["failure_source"] == "logs"
+    assert got["stages"][0]["failures"] is None
+
+
+def test_failed_stage_without_finished_stage_receipt_is_shown(store, data):
+    add_night(store.conn)
+    store.conn.execute("DELETE FROM night_stage")
+    got = ops.night_view(store.conn, data, NOW, deadline(), {})
+    assert got["stages"][0]["stage"] == "reflect"
+    assert got["stages"][0]["failures"] == 2 and got["stages"][0]["finished"] is None
+
+
 def test_realm_holds_unique_members_and_copy_text_only(store):
     add_hold(store.conn)
     add_hold(store.conn, "b"*32, (12, 13), "conflict")
@@ -212,6 +228,21 @@ def test_health_reuses_checks_but_suppresses_private_diagnostics(tmp_path):
     assert SECRET not in json.dumps(got)
 
 
+def test_health_includes_merged_stuck_checks_with_real_checks_and_fake_io(tmp_path):
+    from test_health import Rig
+    from leeroy_mind import health
+    rig = Rig(tmp_path)
+    before = (rig.data / "mind.db").stat().st_mtime_ns
+    got = ops.health_view(rig.root, rig.data,
+        lambda root, data: health.run_checks(root, data, probes=rig.probes()))
+    names = {c["name"] for c in got["checks"]}
+    assert {"offline-raid", "guild-raids", "night-failures", "evidence-cycles", "selfie-queue"} <= names
+    assert (rig.data / "mind.db").stat().st_mtime_ns == before
+    assert all(call[2] == "status" and call[0] != 7878 for call in rig.endpoint.calls)
+    assert SECRET not in json.dumps(got)
+    assert not (rig.data / "health-state.json").exists()
+
+
 @pytest.mark.parametrize("name", ops.PANELS)
 def test_every_panel_failure_is_contained_without_exception_text(tmp_path, name):
     def fail():
@@ -295,6 +326,25 @@ def test_database_is_read_only_and_interrupts_long_queries(store, data):
     with ops.database(data, time.monotonic()-.1) as conn:
         with pytest.raises(sqlite3.OperationalError, match="interrupted"):
             conn.execute("WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<1000000) SELECT sum(x) FROM n").fetchone()
+
+
+def test_query_deadline_is_reported_as_skipped(tmp_path):
+    def interrupted():
+        raise sqlite3.OperationalError("interrupted")
+    view = ops.OpsView(tmp_path, tmp_path, sources={p: interrupted for p in ops.PANELS})
+    got = asyncio.run(view.snapshot())
+    assert all(p["skipped"] == "budget" for p in got["panels"].values())
+
+
+def test_disabled_empty_subsystems_are_missing_but_old_holds_remain_visible(store, data):
+    store.conn.commit()
+    view = ops.OpsView(data.parent, data)
+    assert view._source("realm", deadline(), {})["status"] == "missing"
+    assert view._source("selfies", deadline(), {})["status"] == "missing"
+    add_hold(store.conn)
+    store.conn.commit()
+    got = view._source("realm", deadline(), {})
+    assert got["status"] == "ok" and got["enabled"] == "off" and got["held_members"] == 2
 
 
 def test_api_read_only_key_host_origin_and_no_control_gates(tmp_path):

@@ -139,7 +139,7 @@ def log_records(data, deadline):
         r = object_json(line.decode("utf-8", "replace"))
         try:
             ts = datetime.fromisoformat(r.get("ts", "")).timestamp()
-        except (ValueError, TypeError, OverflowError):
+        except (ValueError, TypeError, OverflowError, OSError):
             continue
         if number(ts) is not None:
             r["_time"] = ts
@@ -147,24 +147,31 @@ def log_records(data, deadline):
     return out
 
 
-def stages(conn, night, failure_counts=None, errors=None):
-    failure_counts, errors = failure_counts or {}, errors or {}
+def stages(conn, night, failure_counts=None, errors=None, planned=None, complete=True):
+    errors, planned = errors or {}, planned or {}
     unit = {r[0]: r[1] for r in views.rows(conn, "SELECT stage,count(*) FROM night_step "
             "WHERE night=? GROUP BY stage LIMIT 128", (night,))}
     out = []
-    for r in views.rows(conn, "SELECT stage,started,finished,calls,call_s FROM night_stage "
-                             "WHERE night=? ORDER BY started,stage LIMIT 128", (night,)):
+    rows = [dict(r) for r in views.rows(conn, "SELECT stage,started,finished,calls,call_s FROM night_stage "
+                              "WHERE night=? ORDER BY started,stage LIMIT 128", (night,))]
+    recorded = {r["stage"] for r in rows}
+    for name in sorted((set(unit) | set(failure_counts or {})) - recorded):
+        rows.append({"stage": name, "started": None, "finished": None, "calls": None, "call_s": None})
+    for r in rows[:ROWS]:
         out.append({"stage": code(r["stage"]), "started": number(r["started"]),
                     "finished": number(r["finished"]), "units": unit.get(r["stage"], 0),
                     "calls": number(r["calls"]), "seconds": number(r["call_s"]),
-                    "failures": number(failure_counts.get(r["stage"], 0)),
+                    "planned_units": number(planned.get(r["stage"])),
+                    "failures": number(failure_counts.get(r["stage"], 0 if complete else None)) if failure_counts is not None else None,
                     "error_code": errors.get(r["stage"])})
     return out
 
 
 def night_view(conn, data, now, deadline, runtime):
     require(conn, "night_run", "night_stage", "night_step")
-    r = conn.execute("SELECT night,status,started,finished,attempts,error,plan FROM night_run "
+    r = conn.execute("SELECT night,status,started,finished,attempts,"
+                     "CASE WHEN length(error)<=65536 THEN error WHEN error IS NULL THEN NULL ELSE 'unavailable' END AS error,"
+                     "CASE WHEN length(plan)<=2097152 THEN plan ELSE '{}' END AS plan FROM night_run "
                      "ORDER BY night DESC LIMIT 1").fetchone()
     if r is None:
         raise Missing("no night has run yet.")
@@ -174,7 +181,9 @@ def night_view(conn, data, now, deadline, runtime):
         if event.get("night") != r["night"] or event["_time"] < r["started"]:
             continue
         if event.get("event") == "nightly_unit_failed":
-            errors[code(event.get("stage"))] = code(event.get("error"))
+            value = event.get("error")
+            if isinstance(value, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}(?:Error|Exception)", value):
+                errors[code(event.get("stage"))] = value
         if event.get("event") in {"nightly_started", "nightly_paused", "nightly_done", "nightly_failed"}:
             observed = event["event"]
     state = code(r["status"])
@@ -187,10 +196,24 @@ def night_view(conn, data, now, deadline, runtime):
         running = False
     last = conn.execute("SELECT max(finished) FROM night_run WHERE status='done'").fetchone()[0]
     plan = object_json(r["plan"])
+    stored = object_json(r["error"])
+    failures = {k: n for k, n in stored.items() if code(k, None) is not None and type(n) is int and n >= 0}
+    complete = len(failures) == len(stored)
+    source = "stored"
+    if not failures and r["error"] != "{}":
+        # NULL on older nights does not prove zero failed units. Reuse health's bounded,
+        # rotation-aware coverage check; incomplete observations remain lower bounds.
+        logged, _, partial, seen, covered = health._night_log_counts(
+            data, r["night"], r["started"], r["finished"] or now, mindlog._open_shared)
+        failures, complete, source = dict(logged), seen and covered and not partial, "logs"
+    fatal = re.match(r"([A-Za-z][A-Za-z0-9_]*(?:Error|Exception))\(", r["error"] or "")
     return panel(night=r["night"] if isinstance(r["night"], str) and _DAY.fullmatch(r["night"]) else None,
                  saved_state=state, started=number(r["started"]), finished=number(r["finished"]),
                  running=running, running_basis="Saved running rows can be paused. Without a current scheduler heartbeat, active work is unknown.",
-                 stages=stages(conn, r["night"], object_json(r["error"]), errors),
+                 stages=stages(conn, r["night"], failures, errors,
+                               plan.get("units") if isinstance(plan.get("units"), dict) else {}, complete),
+                 failures_complete=complete, failure_source=source,
+                 error_code=fatal[1] if fatal else None,
                  budget={k: number(plan.get(k)) for k in ("budget_s", "estimate_s")},
                  next_after=last + NightlySettings.min_gap_hours * 3600 if number(last) is not None else None,
                  next_rule=f"At least {NightlySettings.min_gap_hours:g} hours after the last completed night, "
@@ -203,7 +226,9 @@ def night_view(conn, data, now, deadline, runtime):
 
 def realm_view(conn, now):
     require(conn, "realm_action")
-    rows = conn.execute("SELECT command_id,kind,state,transport_state,reserved_manifest,created,evidence,"
+    rows = conn.execute("SELECT command_id,kind,state,transport_state,"
+                        "CASE WHEN length(reserved_manifest)<=65536 THEN reserved_manifest END AS reserved_manifest,"
+                        "created,substr(evidence,1,65537) AS evidence,"
                         "result_reason FROM realm_action WHERE role='root' "
                         "AND state NOT IN ('completed','not_sent') ORDER BY created LIMIT 129").fetchall()
     if len(rows) > ROWS:
@@ -346,6 +371,18 @@ def _entries(path, deadline):
     return out
 
 
+def feature_state(data, section):
+    try:
+        value = tomllib.loads(_read(data / "mind.toml", 65536).decode("utf-8-sig")).get(section, {})
+    except FileNotFoundError:
+        return "off"
+    except (OSError, ValueError, Budget):
+        return "unknown"
+    if not isinstance(value, dict) or type(value.get("enabled", False)) is not bool:
+        return "unknown"
+    return "on" if value.get("enabled", False) else "off"
+
+
 def backups_view(root, data, deadline, config=None):
     labels, total, count = {}, 0, 0
     for path in _entries(data / "snapshots", deadline):
@@ -447,14 +484,17 @@ def drift_view(root, deadline):
         main = git("rev-parse", "refs/remotes/origin/main").strip()
     except OSError:
         raise Missing("origin/main is not cached; fetch it outside this read-only panel.") from None
-    # First-parent diffs make a merge cherry-picked with -m 1 comparable too. No fetch.
+    base = git("merge-base", "HEAD", "origin/main").strip()
+    # Compare only divergent history. First-parent diffs make a merge cherry-picked with
+    # -m 1 comparable too. Disable external/textconv drivers; nothing executes a repo filter.
     def patches(ref):
-        raw = git("log", "--first-parent", "-m", "-p", "--binary", "--format=%H", "-n", "200", ref)
+        raw = git("log", "--first-parent", "-m", "-p", "--binary", "--no-ext-diff", "--no-textconv",
+                  "--format=%H", "-n", "200", f"{base}..{ref}")
         return {parts[1]: parts[0] for line in git("patch-id", "--stable", input=raw.encode()).splitlines()
                 if len(parts := line.split()) == 2}
     live_patches, main_patches = patches("HEAD"), patches("origin/main")
     live_values = set(live_patches.values())
-    titles = git("log", "--first-parent", "--format=%H%x00%s%x00%b%x1e", "-n", "200", "origin/main")
+    titles = git("log", "--first-parent", "--format=%H%x00%s%x00%b%x1e", "-n", "200", f"{base}..origin/main")
     prs = []
     for record in titles.split("\x1e"):
         parts = record.strip().split("\x00", 2)
@@ -468,14 +508,15 @@ def drift_view(root, deadline):
             prs.append({"number": int(match[1]), "title": title[:200]})
     return panel(branch=branch[:100], head=head if _HASH.fullmatch(head) else None,
                  main=main if _HASH.fullmatch(main) else None, prs=prs,
-                 note="Cached origin/main; never fetched here. Compares first-parent patches in the last 200 commits "
+                 note="Cached origin/main; never fetched here. Compares first-parent patches in at most 200 divergent commits "
                       "on each branch, including merge cherry-picks. Older or edited patches need operator review.")
 
 
 SCHEDULE_PS = """$ErrorActionPreference='Stop';
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false);
+$tasks=@(Get-ScheduledTask -TaskPath '\\' -ErrorAction Stop);
 @('leeroy-console','leeroy-health','leeroy-guild-backup') | ForEach-Object {
-  $name=$_; $t=Get-ScheduledTask -TaskName $name -TaskPath '\\' -ErrorAction SilentlyContinue;
+  $name=$_; $t=$tasks | Where-Object TaskName -EQ $name;
   if ($null -eq $t) { [pscustomobject]@{name=$name;installed=$false} }
   else { $i=$t | Get-ScheduledTaskInfo; [pscustomobject]@{name=$name;installed=$true;
     state=[string]$t.State;last_run=$i.LastRunTime.ToUniversalTime().ToString('o');result=$i.LastTaskResult} }
@@ -504,6 +545,8 @@ def health_view(root, data, run_checks=health.run_checks):
         if (name in private or (name in {"endpoint", "mind"} and state == "fail")
                 or name == "telemetry" and "not checked" in text):
             text = f"{name}: {health.MARK[state].strip()} (details available in the local health CLI)."
+        for path, word in ((data, "<mind-data>"), (root, "<install>")):
+            text = text.replace(str(path), word).replace(path.as_posix(), word)
         out.append({"name": name, "status": state, "text": text[:1600]})
     if len(out) == 1 and out[0]["name"] == "data-dir":
         return panel("missing", "health needs mind.toml, mind.db and seeded personas.", checks=[], fails=0)
@@ -532,10 +575,21 @@ class OpsView:
                 if name == "night":
                     return night_view(conn, self.data, now, deadline, runtime)
                 if name == "realm":
-                    return realm_view(conn, now)
+                    result = realm_view(conn, now)
+                    state = feature_state(self.data, "realm")
+                    result["enabled"] = state
+                    if state == "off" and not (result["roots"] or result["direct_unknowns"] or any(result["desks"].values())):
+                        result.update(status="missing", why="the Realm is off and has no retained operations.")
+                    return result
                 if name == "raids":
                     return raids_view(conn, now)
-                return selfies_view(conn, now)
+                result = selfies_view(conn, now)
+                state = feature_state(self.data, "selfies")
+                result["enabled"] = state
+                if state == "off" and not (any(result["counts"].values()) or result["booth"] or result["stages"]
+                                            or any((result["snaps"] or {}).values())):
+                    result.update(status="missing", why="selfies are off and no retained photo work exists.")
+                return result
         if name == "backups":
             return backups_view(self.root, self.data, deadline)
         if name == "drift":
@@ -550,7 +604,8 @@ class OpsView:
         except (Budget, subprocess.TimeoutExpired):
             result = panel("error", "Skipped: this source exceeded its time or read budget.", skipped="budget")
         except sqlite3.OperationalError as e:
-            result = (panel("missing", "this mind.db predates the panel's columns.")
+            result = (panel("error", "Skipped: this source exceeded its query time budget.", skipped="budget")
+                      if str(e) == "interrupted" else panel("missing", "this mind.db predates the panel's columns.")
                       if str(e).startswith(("no such table", "no such column")) else
                       panel("error", "This database source could not be read."))
         except Exception:
@@ -568,6 +623,7 @@ class OpsView:
                 return self._cache[name]
             if name not in self._workers:
                 self._started[name] = start
+                self._cache.pop(name, None)
                 worker = threading.Thread(target=self._work, args=(name, time.monotonic()+self.budgets[name], runtime),
                                           daemon=True, name=f"console-ops-{name}")
                 self._workers[name] = worker
