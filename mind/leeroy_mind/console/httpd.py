@@ -280,7 +280,9 @@ async def serve(handler: Handler, host: str, port: int) -> asyncio.Server:
             writer.transport.abort()
             return
         active += 1  # claim synchronously before scheduling; a burst cannot overbook
-        asyncio.create_task(accepted(reader, writer))
+        # StreamReaderProtocol retains and supervises the returned coroutine, as it did
+        # before the cap; an unreferenced task could disappear while a handler waits.
+        return accepted(reader, writer)
 
     try:
         return await asyncio.start_server(connected, sock=sock,
