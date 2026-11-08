@@ -122,8 +122,11 @@ def test_failed_or_empty_sample_never_returns_a_successful_receipt(h, empty):
             raise LLMError("synthetic failed sample")
         return "(nothing)"
 
-    with pytest.raises(ValueError if empty else LLMError):
+    with pytest.raises(probes.SecretProbeEmpty if empty else LLMError) as caught:
         run(probes.run_secret_probes(FakeLLM(script=script), "live", IDENT))
+    if empty:
+        assert isinstance(caught.value, ValueError)
+        assert (caught.value.probe_id, caught.value.sample) == (probes.SECRET_PROBES[1].id, 2)
     assert calls[0] == 5 and h.count("probe_run") == 0
 
 
