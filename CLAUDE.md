@@ -237,6 +237,8 @@ Run from `F:\azerothcore\scripts` in Git Bash.
 ```bash
 ./ac-update.sh [--dry-run]   # pull core + git modules (ff-only, local commits rebased); refuses if dirty
 ./ac-backup.sh [label]       # mysqldump all 4 DBs, keeps newest 5
+./ac-release.sh [--dry-run] <commit>... # deploy merged main commits onto the live release branch
+./ac-release.sh --native [--dry-run] <commit>... # also stop servers and build with AC_JOBS=4
 ./ac-build.sh [--no-configure | --preflight]   # preflight + cmake configure + build; --preflight stops after the module checks
 ./ac-server.sh start|stop|status # also starts/stops the mind; stdout: mind-data/logs/mind-stdout.log
 ./ac-voice.sh start|stop|status # voice service; reads its data directory and ports from `where`
@@ -248,6 +250,25 @@ template no longer has (even as a comment), for core and module configs, plus su
 renames (at least 20 additions and 20 removals); values are never printed, and an unreadable
 file is reported without stopping the update. `--dry-run`
 reports the checked-out templates and still fetches metadata, but never merges or rebases.
+
+`ac-release.sh` refuses an online/unknown owner, open guild or owned offline raids,
+a dirty tree, a branch outside `release/*` or `codex/live-release-*`, a native build
+lock, or a commit not present on the local `origin/main` (fetch before releasing).
+`--allow-raid ID` explicitly excludes a known orphan; repeat it for multiple IDs.
+Each exception is printed with the rollback instructions. Mind releases allow only
+`mind/`, `selfie/`, `voice/`, `CLAUDE.md`, `README.md` and `references.bib`; native
+releases additionally allow `modules/`, `config/` and `patches/`. Dry-run checks
+and prints the plan without cherry-picking, stopping services or taking snapshots.
+After cherry-picking it stops the mind, takes an SQLite online backup in
+`mind-data/snapshots/pre-release-*.db`, migrates with the new code, restarts services
+and the optional `leeroy-console` task, then prints health. Native releases save
+the old EXE/DLL files alongside the snapshot before building; a failed build
+restores those files and the original checkout before restarting the old servers.
+Failures before the completed restart attempt rollback; a health failure leaves
+the running release in place and prints recovery instructions. Every exit prints
+the reset target, snapshot and native rebuild command. Exit codes: 0 success,
+1 refused before changes, 2 failure after changes. Test only with
+`bash scripts/tests/ac-release.sh`; it uses temporary repositories and stub services.
 
 `./ac-health.sh [--json] [--toast]` (`python -m leeroy_mind health`) checks the live install
 read-only, one ok/FAIL/note line each, exit 1 on any FAIL: the servers, Server.log's cast line

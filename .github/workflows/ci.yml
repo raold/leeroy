@@ -18,6 +18,8 @@ jobs:
         run: shellcheck --severity=warning --external-sources --source-path=scripts scripts/*.sh scripts/tests/*.sh
       - name: config key report self-test
         run: bash scripts/tests/ac-update-keys.sh
+      - name: release self-test (temporary repositories and stub services)
+        run: bash scripts/tests/ac-release.sh
 
   secrets:
     runs-on: ubuntu-latest
