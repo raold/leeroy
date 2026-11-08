@@ -5,6 +5,8 @@ import pytest
 
 from leeroy_mind.guild.offline import OfflineRaids
 from leeroy_mind.guild.protocol import StopOfflineRaid
+from leeroy_mind.guild.offline import CLEANUP_GRACE_S, LOST_TERMINAL_S
+from leeroy_mind.guild.ports import JobWaiter, LivePorts
 from leeroy_mind.protocol import Boss
 from leeroy_mind.bridge import AckTimeout
 from .test_offline import setup, start, event
@@ -46,24 +48,6 @@ async def test_stall_waits_for_native_terminal_and_finishes_once(setup):
     await controller.tick()
     assert len(ports.memories) == memories and len(stops(ports)) == 1
     assert ports.gpu.count('release:offline_raid') == 1
-
-
-@_run_async
-async def test_scattered_requires_continuous_ten_minutes_and_finishes_as_scattered(setup):
-    ports, _, controller = setup
-    await start(setup)
-    await heartbeat(setup, inside=12)
-    raid_id = controller.session.raid_id
-    for _ in range(9):
-        await advance(ports, 60)
-        await heartbeat(setup, inside=12)
-    assert not stops(ports)
-    await advance(ports, 60)
-    await heartbeat(setup, inside=12)
-    assert len(stops(ports)) == 1
-    await controller.on_job(event(controller, state='done', stage='', reason='stopped'))
-    await controller.tick()
-    assert ports.conn.execute('SELECT outcome FROM guild_raid WHERE raid_id=?', (raid_id,)).fetchone()[0] == 'scattered'
 
 
 @pytest.mark.parametrize('kind', ['progress', 'engaged', 'stale', 'future', 'malformed', 'replayed'])
@@ -163,24 +147,6 @@ async def test_lost_ack_keeps_target_and_terminal_survives_restart(setup):
 
 
 @_run_async
-async def test_scatter_resets_after_a_gap_or_members_return(setup):
-    ports, _, controller = setup
-    await start(setup)
-    await heartbeat(setup, inside=0)
-    await advance(ports, 600)
-    await heartbeat(setup, inside=0)
-    assert not stops(ports)
-    for _ in range(8):
-        await advance(ports, 60)
-        await heartbeat(setup, inside=0)
-    await advance(ports, 60)
-    await heartbeat(setup, inside=13)
-    await advance(ports, 60)
-    await heartbeat(setup, inside=0)
-    assert not stops(ports)
-
-
-@_run_async
 async def test_terminal_failure_keeps_native_cleanup_reason(setup):
     ports, _, controller = setup
     await start(setup)
@@ -256,3 +222,95 @@ async def test_finished_refusal_does_not_discard_uncertain_stop_reason(setup):
     await controller.on_job(event(controller, state='done', stage='', reason='stopped'))
     await controller.tick()
     assert ports.conn.execute('SELECT outcome FROM guild_raid WHERE raid_id=?', (raid_id,)).fetchone()[0] == 'stalled'
+
+
+@pytest.mark.parametrize('error', [RuntimeError('guild transport unavailable'), ConnectionError('gone'), ValueError('x')])
+@_run_async
+async def test_send_failure_during_due_stop_does_not_raise_and_retries(setup, error):
+    ports, _, controller = setup
+    await start(setup)
+    await heartbeat(setup)
+    original = ports.send
+    calls = []
+
+    async def broken(cmd):
+        calls.append(cmd)
+        raise error
+
+    ports.send = broken
+    await advance(ports, 1800)
+    await heartbeat(setup, age=1800)  # tick() must not raise
+    assert len(calls) == 1 and controller.active and not controller._owned['cancelled']
+    assert not controller._owned['stop']['accepted']
+    ports.send = original
+    await advance(ports, 60)
+    await heartbeat(setup, age=1860)
+    assert len(stops(ports)) == 1 and controller._owned['stop']['accepted']
+    assert stops(ports)[0].id != calls[0].id
+
+
+@_run_async
+async def test_stop_retries_do_not_grow_the_job_mailbox():
+    class App:
+        class bridge:
+            @staticmethod
+            async def send(cmd, preserve_id=False):
+                return None
+    app = type('A', (), dict(clock=None, store=type('S', (), dict(conn=None))(), bridge=App.bridge))()
+    ports = LivePorts(app, jobs=JobWaiter(capacity=4))
+    for i in range(50):
+        await ports.send(StopOfflineRaid(f's{i}', 'raid1'))
+    assert not ports.jobs._jobs
+
+
+@_run_async
+async def test_accepted_stop_with_slow_teardown_does_not_block_the_day(setup):
+    ports, _, controller = setup
+    await start(setup)
+    await heartbeat(setup)
+    await advance(ports, 1800)
+    await heartbeat(setup, age=1800)
+    assert controller._owned['stop']['accepted']
+    await advance(ports, CLEANUP_GRACE_S + 1)
+    await controller.tick()
+    assert 'release:offline_raid' in ports.gpu
+    assert not controller._day_state(controller._owned['day'])['blocked']
+    await controller.on_job(event(controller, state='done', stage='', reason='stopped'))
+    await controller.tick()
+    assert not controller.active
+    assert not controller._day_state()['blocked']
+
+
+@_run_async
+async def test_kill_after_restart_defers_the_stop(setup):
+    ports, armory, controller = setup
+    await start(setup)
+    await heartbeat(setup)
+    restored = OfflineRaids(ports, controller.cfg, armory, random.Random(7))
+    s2 = (ports, armory, restored)
+    await advance(ports, 1795)
+    await heartbeat(s2, age=1795)
+    assert restored._owned['cancelled'] and not stops(ports)
+    await restored.on_boss(Boss(int(ports.clock.now() * 1000), 631, 77, 1, 'Invented boss', 'killed', (101, 104)))
+    await advance(ports, 10)
+    await restored.tick()
+    assert not stops(ports)
+
+
+@_run_async
+async def test_lost_terminal_after_accepted_stop_fires_from_the_stop_time(setup):
+    ports, _, controller = setup
+    await start(setup)
+    await heartbeat(setup)
+    raid_id = controller.session.raid_id
+    await advance(ports, 1800)
+    await heartbeat(setup, age=1800)
+    assert controller._owned['stop']['accepted']
+    await advance(ports, LOST_TERMINAL_S - 1)
+    await controller.tick()
+    assert controller.active
+    await advance(ports, 2)
+    await controller.tick()
+    assert not controller.active
+    assert controller._owned['terminal']['reason'] == 'terminal_lost'
+    assert ports.conn.execute('SELECT outcome FROM guild_raid WHERE raid_id=?', (raid_id,)).fetchone()[0] == 'terminal_lost'

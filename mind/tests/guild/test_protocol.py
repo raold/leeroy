@@ -199,3 +199,11 @@ def test_messages_are_frozen_and_slotted():
     with pytest.raises(dataclasses.FrozenInstanceError):
         skip.reason = "dead"
     assert not hasattr(skip, "__dict__")
+
+
+def test_offline_raid_heartbeat_fixture_parses_with_progress_fields():
+    register()
+    row = next(r for r in lines(kind="event") if r["name"] == "job_offline_raid_progress")
+    ev = bridge.parse_event(json.dumps(row["msg"]))
+    assert (ev.kind, ev.state, ev.stage, ev.kills, ev.instance_id) == ("offline_raid", "progress", "running", 1, 77)
+    assert (ev.members_in_instance, ev.last_progress_ts, ev.boss_engaged) == (2, 1700000000000, False)

@@ -12,7 +12,6 @@ import logging
 import math
 from uuid import uuid4
 
-from leeroy_mind.bridge import BridgeError
 from leeroy_mind.memory.writer import MemoryCandidate
 
 from .comp import NoTankError, candidates_from, choose_leads, select_comp
@@ -42,7 +41,6 @@ DAY_PREFIX = "guild:offline:day:"
 LOGOUT_KEY = "guild:offline:last-logout"
 REASON_LIMIT = 200
 PROGRESS_FRESH_S = 120
-SCATTER_S = 10 * 60
 
 
 def is_due(now: datetime, *, human_online: bool, last_logout: datetime | None,
@@ -354,13 +352,10 @@ class OfflineRaids:
             return
         if previous and ev.ts <= previous["ts"]:
             return
-        continuous = previous and 0 <= now - previous["received"] <= PROGRESS_FRESH_S
-        scattered = ev.members_in_instance * 2 < len(ev.guids)
+        # Members leaving the instance is native's own stop (too_few, checked before a heartbeat is
+        # sent); the mind has no scatter rule of its own.
         self._progress = dict(ts=ev.ts, received=now, last=ev.last_progress_ts / 1000,
-                              engaged=ev.boss_engaged, inside=ev.members_in_instance,
-                              scatter_since=(previous["scatter_since"] if continuous
-                                             and previous["scatter_since"] is not None else now)
-                              if scattered else None)
+                              engaged=ev.boss_engaged, inside=ev.members_in_instance)
 
     async def _watchdog(self):
         now = self.ports.clock.now()
@@ -374,9 +369,7 @@ class OfflineRaids:
         stop = self._owned.get("stop")
         if stop and (stop.get("accepted") or stop.get("await_terminal")):
             return
-        reason = ("scattered" if progress["scatter_since"] is not None
-                  and now - progress["scatter_since"] >= SCATTER_S else
-                  "stalled" if now - progress["last"] >= self.cfg.offline_stall_minutes * 60 else None)
+        reason = "stalled" if now - progress["last"] >= self.cfg.offline_stall_minutes * 60 else None
         if reason is None or stop and stop["reason"] != reason:
             return  # New progress cancels retries of an uncertain stop; still watch for its terminal.
         if not stop:
@@ -390,12 +383,16 @@ class OfflineRaids:
         self._save()
         try:
             ack = await self.ports.send(StopOfflineRaid(stop["id"], self._owned["id"]))
-        except (BridgeError, TimeoutError, ConnectionError, OSError):
+        except Exception as e:
+            # Disconnected, timed out or transport off: the stop is uncertain, a later tick retries.
+            log.info("offline_raid_stop_send_failed raid_id=%s error=%s",
+                     self._owned.get("raid_id"), type(e).__name__)
             return
         if ack is None or ack.id != stop["id"]:
             return
         if ack.ok is True:
             stop["accepted"] = True
+            stop["accepted_at"] = now
             self._cancel()
         elif ack.ok is False:
             if ack.error in {"unknown type: offline_raid_stop", "dungeon_clear_unavailable"}:
@@ -422,8 +419,7 @@ class OfflineRaids:
         self._inputs.append(item)
 
     def _event(self, name, ev):
-        if (not self.active or self._owned["cancelled"] or self._owned.get("terminal") is not None
-                or not self._owned.get("running_seen")):
+        if not self.active or self._owned.get("terminal") is not None:
             return
         plan = self.session.plan if self.session else RaidPlan(**self._owned["plan"])
         members = set(self._owned["accepted"] or ())
@@ -447,6 +443,10 @@ class OfflineRaids:
             if ev.state == "engaged":
                 self._progress["engaged"] = True
             # Only a new native snapshot proves that every boss is now disengaged.
+        # After a restart or a login the run is cancelled and its session gone, but the watchdog
+        # still watches it, so the evidence above counts; only the guild-life input is dropped.
+        if self._owned["cancelled"] or not self._owned.get("running_seen"):
+            return
         self._enqueue(name, ev)
 
     async def on_boss(self, ev):
@@ -828,13 +828,19 @@ class OfflineRaids:
                         deadline = self._owned["deadline"]
                         if self._owned.get("cancel_at") is not None:
                             deadline = min(deadline, self._owned["cancel_at"])
-                        if self.ports.clock.now() >= self._owned["deadline"] + LOST_TERMINAL_S:
+                        stop = self._owned.get("stop") or {}
+                        accepted_at = stop.get("accepted_at") if stop.get("accepted") else None
+                        lost_at = (accepted_at if accepted_at is not None
+                                   else self._owned["deadline"]) + LOST_TERMINAL_S
+                        if self.ports.clock.now() >= lost_at:
                             self._lose_terminal()
                             await self._finish()
                         elif self.ports.clock.now() >= deadline + CLEANUP_GRACE_S:
                             self._cancel()
                             await self._release()
-                            self._update_day(blocked=True)
+                            if accepted_at is None:
+                                # An accepted stop is native teardown in progress, not a lost run.
+                                self._update_day(blocked=True)
                             # Keep the old command identity until a terminal is
                             # received; elapsed time is not remote cleanup proof.
                         elif self.session is not None and not self._owned["cancelled"]:

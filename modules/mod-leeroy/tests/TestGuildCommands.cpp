@@ -187,6 +187,9 @@ LEEROY_TEST(Guild_MakeJobEventMatchesFixture)
     CHECK_EQ(json::parse(Leeroy::EncodeEvent(0, MakeJobEvent(event))), full);
     event = {"t11", "bot_do", "done", "", "", {1101}, {{1102, "offline"}}, 0, 0, 0, 0, 0, 0};
     CHECK_EQ(json::parse(Leeroy::EncodeEvent(0, MakeJobEvent(event))), Message("job_bot_do_done"));
+    event = {"t12", "offline_raid", "progress", "", "running", {1101, 1102}, {}, 1, 0, 77, 0, 0, 0};
+    event.membersInInstance = 2; event.lastProgressTs = 1700000000000; event.bossEngaged = false;
+    CHECK_EQ(json::parse(Leeroy::EncodeEvent(0, MakeJobEvent(event))), Message("job_offline_raid_progress"));
     event = {"job", "gear_up", "progress", "", "", {}, {}, 2, 3, 7, 1101, 80, 264};
     auto progress = MakeJobEvent(event);
     CHECK(progress.at("guids").is_array() && progress.at("guids").empty());

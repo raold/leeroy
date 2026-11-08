@@ -26,10 +26,10 @@ wipes, the participant manifest and instance id remain the existing fields.
 Unknown encounter state omits `boss_engaged`; it never means disengaged.
 
 The mind defaults to 30 minutes without progress (`[guild] offline_stall_minutes`,
-1-360) or 10 minutes with fewer than half the admitted members inside. Scatter
-evidence resets after a heartbeat gap over 120 seconds or members return. Stale,
+10-360). Members leaving the instance is native's own too_few stop, which fires
+before a heartbeat is sent, so the mind has no scatter rule. Stale,
 malformed or engaged observations never authorize a stop. The run closes through
-the existing terminal path as `stalled`/`scattered`; native cleanup errors keep
+the existing terminal path as `stalled`; native cleanup errors keep
 their reason. Raid history already displays this outcome. Native's earlier
 leader/member loss, wipe limits and timeouts keep their existing priority.
 
