@@ -15,7 +15,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: shellcheck
-        run: shellcheck --severity=warning --external-sources --source-path=scripts scripts/*.sh
+        run: shellcheck --severity=warning --external-sources --source-path=scripts scripts/*.sh scripts/tests/*.sh
+      - name: config key report self-test
+        run: bash scripts/tests/ac-update-keys.sh
 
   secrets:
     runs-on: ubuntu-latest
