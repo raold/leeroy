@@ -15,6 +15,7 @@ from leeroy_mind.logs import log
 
 from . import kind, snapstage, stage
 from .config import SelfieCfg, load_selfie_config
+from .booth import PhotoBooth
 from .scenes import make_scenes_stage
 from .service import SelfieService
 from .snapstage import make_snaps_stage
@@ -46,4 +47,7 @@ def attach_selfies(app) -> SelfieService:
         log("selfies_snaps_need_enabled")
     else:
         log("selfies_snaps_on" if cfg.snaps else "selfies_snaps_off")
+    if cfg.enabled and cfg.booth:
+        app.selfie_booth = PhotoBooth(app, cfg)
+        app.register_background(app.selfie_booth.run_forever)
     return service
