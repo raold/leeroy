@@ -155,6 +155,44 @@ def test_a_leave_refused_for_one_fenced_body_frees_the_whole_cast(store):
     assert store.holds() == ()
 
 
+def test_a_leave_refused_at_its_ack_naming_wintergrasp_members_frees_the_whole_cast(store):
+    cast = tuple(range(101, 245))
+    dispatch(store, prepare(store, p.LeavePvp("leave", cast), owner="raid", rank=0))
+    assert store.holds()[0].guids == frozenset(cast)
+    t = store.observe_ack(Ack(0, "leave", False, "wg_private_state_unavailable:102,140"), now=2)
+    assert (t.result_ready, t.result_ok, t.reason) == (True, False, "wg_private_state_unavailable:102,140")
+    assert store.get("leave").state == "completed"
+    assert store.holds() == ()
+
+
+@pytest.mark.parametrize("error", ["wg_private_state_unavailable", "wg_private_state_unavailable:",
+                                   "wg_private_state_unavailable:999", "wg_private_state_unavailable:101,999",
+                                   "wg_private_state_unavailable:101,101", "wg_private_state_unavailable:1x"])
+def test_a_wintergrasp_ack_refusal_that_names_nobody_in_the_manifest_stays_unknown(store, error):
+    dispatch(store, prepare(store, p.LeavePvp("leave", (101, 102)), owner="raid", rank=0))
+    store.observe_ack(Ack(0, "leave", False, error), now=2)
+    assert store.get("leave").state == "unknown"
+    assert store.holds()[0].guids == frozenset({101, 102})
+
+
+def test_the_wintergrasp_ack_refusal_is_an_ordinary_leaves_alone(store):
+    dispatch(store, prepare(store, p.Rearm("rearm", CAST)))
+    store.observe_ack(Ack(0, "rearm", False, f"wg_private_state_unavailable:{CAST[0]}"), now=2)
+    assert store.get("rearm").state == "unknown"
+    assert store.holds()[0].guids == frozenset(CAST)
+
+
+def test_recovery_settles_a_stored_ack_only_wintergrasp_leave_refusal(store):
+    cast = (101, 102, 103)
+    _stored_unknown(store, "leave", p.LeavePvp("leave", cast),
+                    {"ack": {"error": "wg_private_state_unavailable:102", "ok": False}, "failed_at": 5.0},
+                    reason="unknown")
+    assert store.get("leave").state == "unknown" and store.holds()
+    store.recover(process_id="new", now=20)
+    assert (store.get("leave").state, store.get("leave").result_reason) == ("completed", "wg_private_state_unavailable:102")
+    assert store.holds() == ()
+
+
 def test_recovery_settles_a_body_fence_an_older_build_kept_unknown(store, monkeypatch):
     monkeypatch.setattr(action_store, "REFUSALS", REFUSALS - BODY_FENCES)  # as the previous build read acks
     cast = tuple(range(101, 207))

@@ -193,3 +193,45 @@ LEEROY_TEST(RealmCleanup_RecursiveQueueReadbackChecksRowsSlotsInvitationsAndOthe
         CHECK(!ReadQueueCleanup({301, 302, 303}, {Removed(301), Removed(302), member}));
     }
 }
+
+LEEROY_TEST(RealmCleanup_AnyWintergraspStateRefusesTheLeaveWhole)
+{
+    CHECK_EQ(WintergraspPrivateReason({}), std::string{});
+    char const* const reason = "wg_private_state_unavailable";
+    for (int field = 0; field < 6; ++field)
+    {
+        WintergraspMemberFacts facts;
+        bool* flags[] = {&facts.foreignHistory, &facts.inZone, &facts.inBattlefieldGroup,
+            &facts.queued, &facts.invited, &facts.inWar};
+        *flags[field] = true;
+        CHECK_EQ(WintergraspPrivateReason(facts), std::string(reason));
+    }
+}
+
+LEEROY_TEST(RealmCleanup_LeavePvpAckNamesTheWintergraspMembers)
+{
+    WintergraspMemberFacts clean, tainted;
+    tainted.foreignHistory = true;
+    CHECK(LeavePvpAckError({}).empty());
+    CHECK(LeavePvpAckError({{301, clean}, {302, clean}}).empty());
+    CHECK_EQ(LeavePvpAckError({{301, clean}, {302, tainted}, {303, clean}, {304, tainted}}),
+        std::string("wg_private_state_unavailable:302,304"));
+    std::vector<std::pair<std::uint32_t, WintergraspMemberFacts>> many;
+    for (std::uint32_t guid = 1000; guid < 1100; ++guid) many.emplace_back(guid, tainted);
+    auto const error = LeavePvpAckError(many);
+    CHECK(error.size() <= 256 && error.size() > 200);
+    CHECK(error.rfind("wg_private_state_unavailable:1000,1001,", 0) == 0);
+    // Ten-digit guids: still at most 256 characters, and never fewer than one name.
+    many.clear();
+    for (std::uint32_t guid = 4000000000u; guid < 4000000100u; ++guid) many.emplace_back(guid, tainted);
+    auto const wide = LeavePvpAckError(many);
+    CHECK(wide.size() <= 256 && wide.rfind("wg_private_state_unavailable:4000000000,4000000001,", 0) == 0);
+    CHECK(wide.back() != ',');
+}
+
+LEEROY_TEST(RealmCleanup_OnlyAnOrdinaryLeaveIsFencedAtItsAck)
+{
+    CHECK(FencesLeavePvpAck("leave_pvp", ""));
+    CHECK(!FencesLeavePvpAck("leave_pvp", "token"));
+    CHECK(!FencesLeavePvpAck("rearm", ""));
+}

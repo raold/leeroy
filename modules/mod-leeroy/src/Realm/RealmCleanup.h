@@ -9,6 +9,8 @@ RealmStep LeaveNativeQueue(Queued& entry, std::uint32_t guid, std::uint32_t slot
 RealmStep LeaveOnlineLfgGroup(Queued& entry, std::uint32_t guid);
 RealmStep LeaveObservedLfgApplicants(Queued& entry, std::uint32_t guid);
 std::string OrdinaryCleanupReason(Queued const& entry);
+// A leave with a member in a Wintergrasp state it cannot prove restored is refused whole at its ack.
+std::string LeavePvpAckReason(Queued const& entry);
 std::string PrepareOrdinaryCleanupMutation(Queued& entry, std::uint32_t guid, std::vector<BodyScope> scopes);
 // Recheck every earlier shared native mutation before releasing the operation.
 // A nonempty result retains the admitted manifest through Unknown.

@@ -3,6 +3,31 @@
 
 namespace Leeroy::Realm
 {
+bool FencesLeavePvpAck(std::string const& kind, std::string const& pvpOwner)
+{
+    return kind == "leave_pvp" && pvpOwner.empty();
+}
+std::string LeavePvpAckError(std::vector<std::pair<std::uint32_t, WintergraspMemberFacts>> const& members)
+{
+    // The whole error stays within the mind's 256 characters, with at least one name.
+    constexpr std::size_t MaxLength = 256;
+    std::string const prefix = "wg_private_state_unavailable:";
+    std::string named;
+    bool any = false;
+    for (auto const& [guid, facts] : members)
+    {
+        if (WintergraspPrivateReason(facts).empty()) continue;
+        auto const next = (named.empty() ? "" : ",") + std::to_string(guid);
+        if (any && prefix.size() + named.size() + next.size() > MaxLength) break;
+        named += next; any = true;
+    }
+    return any ? prefix + named : "";
+}
+std::string WintergraspPrivateReason(WintergraspMemberFacts const& facts)
+{
+    return facts.foreignHistory || facts.inZone || facts.inBattlefieldGroup || facts.queued || facts.invited
+        || facts.inWar ? "wg_private_state_unavailable" : "";
+}
 std::string ValidateCleanupClosure(std::vector<std::uint32_t> const& actual,
     std::vector<std::uint32_t> const& admitted,
     std::function<std::string(std::uint32_t)> const& validate)

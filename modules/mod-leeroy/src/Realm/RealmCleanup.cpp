@@ -16,6 +16,22 @@ namespace Leeroy::Realm
 namespace
 {
 using Json = nlohmann::json;
+WintergraspMemberFacts WintergraspFacts(Player* player, Battlefield* field)
+{
+    WintergraspMemberFacts facts;
+    facts.foreignHistory = RealmPvpForeignWintergraspHistory(player->GetGUID().GetCounter(),
+        reinterpret_cast<std::uintptr_t>(player->GetSession()));
+    facts.inZone = player->GetZoneId() == 4197;
+    facts.inBattlefieldGroup = player->GetGroup() && player->GetGroup()->isBFGroup();
+    if (field)
+        for (auto team : {TEAM_ALLIANCE, TEAM_HORDE})
+        {
+            facts.queued = facts.queued || field->GetPlayersQueueSet(team).contains(player->GetGUID());
+            facts.invited = facts.invited || field->GetInvitedPlayersMap(team).contains(player->GetGUID());
+            facts.inWar = facts.inWar || field->GetPlayersInWarSet(team).contains(player->GetGUID());
+        }
+    return facts;
+}
 constexpr std::uint32_t ExitRestoreMask = DELAYED_BG_MOUNT_RESTORE | DELAYED_BG_TAXI_RESTORE | DELAYED_BG_GROUP_RESTORE;
 struct ExitPoint
 {
@@ -190,6 +206,16 @@ CleanupReadback ReadLeftMembers(Queued const& entry, Json const& receipt)
 }
 }
 
+std::string LeavePvpAckReason(Queued const& entry)
+{
+    auto* field = sBattlefieldMgr->GetBattlefieldToZoneId(4197);
+    std::vector<std::pair<std::uint32_t, WintergraspMemberFacts>> members;
+    for (auto guid : entry.guids)
+        if (auto* player = ObjectAccessor::FindConnectedPlayer(PlayerGuid(guid)); player && player->GetSession())
+            members.emplace_back(guid, WintergraspFacts(player, field));
+    return LeavePvpAckError(members);
+}
+
 std::string OrdinaryCleanupReason(Queued const& entry)
 {
     auto& module = RealmModule::Instance();
@@ -212,15 +238,7 @@ std::string OrdinaryCleanupReason(Queued const& entry)
             if (!receipt) return "shared_lfg_participants_unavailable";
             if (auto why = ValidateMembers(entry, LfgReceiptGuids(*receipt)); !why.empty()) return why;
         }
-        if (RealmPvpForeignWintergraspHistory(guid, reinterpret_cast<std::uintptr_t>(player->GetSession()))
-            || player->GetZoneId() == 4197 || (player->GetGroup() && player->GetGroup()->isBFGroup()))
-            return "wg_private_state_unavailable";
-        if (field)
-            for (auto team : {TEAM_ALLIANCE, TEAM_HORDE})
-                if (field->GetPlayersQueueSet(team).contains(player->GetGUID())
-                    || field->GetInvitedPlayersMap(team).contains(player->GetGUID())
-                    || field->GetPlayersInWarSet(team).contains(player->GetGUID()))
-                    return "wg_private_state_unavailable";
+        if (auto why = WintergraspPrivateReason(WintergraspFacts(player, field)); !why.empty()) return why;
     }
     return "";
 }

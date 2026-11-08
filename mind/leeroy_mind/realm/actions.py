@@ -14,7 +14,7 @@ import math
 import uuid
 
 from .action_policy import classify, integer, members, text, U64
-from .action_store import ActionCapacity, ActionSpec, TERMINAL
+from .action_store import ActionCapacity, ActionSpec, TERMINAL, wg_refusal_guids
 from .protocol import GetRealmPvp, LeavePvp, Rearm, RealmActors
 
 log = logging.getLogger(__name__)
@@ -111,11 +111,26 @@ class ActionQueue:
         if not scope: return False
         for old in self.store.records():
             failed_at = json.loads(old.evidence).get("failed_at")
+            # A leave native refused whole for some members' Wintergrasp state changed nobody:
+            # only the members it names are backed off.
+            failed = set(wg_refusal_guids(old.result_reason) or old.reserved_manifest)
             if (old.role == "root" and old.owner == owner and old.kind == kind
                     and old.result_ok is False and failed_at is not None and now < failed_at + 600
-                    and set(old.reserved_manifest) & set(scope)):
+                    and failed & set(scope)):
                 return True
         return False
+
+    def wg_backed_off(self, owner):
+        """The members a recent Wintergrasp ack refusal of this owner's leaves named: a leave naming
+        any of them is rejected for 600 s, so the recall leaves them out and sends the rest."""
+        now = self.clock.now()
+        named = set()
+        for old in self.store.records():
+            failed_at = json.loads(old.evidence).get("failed_at")
+            if (old.role == "root" and old.owner == owner and old.kind == "leave_pvp" and old.result_ok is False
+                    and failed_at is not None and now < failed_at + 600):
+                named |= set(wg_refusal_guids(old.result_reason) or ())
+        return named
 
     def submit(self, cmd, *, owner, guids=(), on_done=None, freeing=False):
         classified = classify(cmd)  # Reject malformed business fields before journaling.

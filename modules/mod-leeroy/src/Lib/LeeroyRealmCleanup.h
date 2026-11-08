@@ -24,6 +24,25 @@ std::string PrepareCleanupMutation(std::vector<std::uint32_t> const& actual,
     std::function<std::string(std::uint32_t)> const& validate,
     std::function<std::string(std::vector<std::uint32_t> const&)> const& charge);
 
+// What a leave_pvp can tell about a member's Wintergrasp state before it changes anything.
+// Wintergrasp keeps private queue, invitation and war state that no cleanup here can prove it
+// restored, so a member with any of it is refused. The same answer is given at the command's ack
+// (the whole leave is refused before any body is reserved or moved, so the mind releases the
+// manifest) and at each step.
+struct WintergraspMemberFacts
+{
+    bool foreignHistory = false, inZone = false, inBattlefieldGroup = false;
+    bool queued = false, invited = false, inWar = false;
+};
+std::string WintergraspPrivateReason(WintergraspMemberFacts const& facts);
+// Only an ordinary leave_pvp (no token cleanup) is fenced at its ack.
+bool FencesLeavePvpAck(std::string const& kind, std::string const& pvpOwner);
+// The ack error for a leave whose members include some in a Wintergrasp state: the reason and
+// the first offending guids that fit (the whole error stays within the mind's 256 characters), as
+// "wg_private_state_unavailable:301,302". Empty when no member is. The mind accepts it as a
+// refusal only when every named guid is in the command's manifest.
+std::string LeavePvpAckError(std::vector<std::pair<std::uint32_t, WintergraspMemberFacts>> const& members);
+
 struct GroupCleanupPlan
 {
     std::vector<std::uint32_t> affected, remaining;
