@@ -784,6 +784,7 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 .venv/Scripts/python -m leeroy_mind console --data-dir "$D" # the guild console; open the URL it prints
 .venv/Scripts/python -m pytest -q                           # the unit tests
 .venv/Scripts/python -m pytest -q -n auto tests             # fast run; up to 8 isolated workers
+.venv/Scripts/python -m pip install -r tests/console/e2e/requirements.txt; .venv/Scripts/python -m playwright install chromium; .venv/Scripts/python -m pytest tests/console/e2e -q  # isolated browser rehearsal
 .venv/Scripts/python -m pytest -m ollama                    # optional: also -m live, -m mysql
 ```
 
