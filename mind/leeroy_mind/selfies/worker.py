@@ -19,6 +19,7 @@ Logs carry reasons, counts and timings, never a prompt."""
 import asyncio
 import json
 import logging
+import math
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -92,6 +93,7 @@ class Gridded:
     width: int
     height: int
     seconds: float
+    similarity: dict | None = None  # optional, for older/fake workers; scores only
 
 
 class _Malformed(ValueError):
@@ -103,6 +105,30 @@ def _field(answer: dict, key: str, *types):
     if type(v) not in types:
         raise _Malformed(key)
     return v
+
+
+def _similarity(value, tiles: int) -> dict:
+    """Copy only bounded scores/codes; never trust extra worker text for readiness output."""
+    if value is None:
+        return {"code": "worker_unsupported"}
+    if type(value) is not dict:
+        raise _Malformed("similarity")
+    code = value.get("code")
+    if code in ("too_few_tiles", "encoder_unavailable", "encoder_failed"):
+        return {"code": code}
+    if code != "ok":
+        raise _Malformed("similarity.code")
+    pair, count = value.get("pair"), value.get("pairs")
+    if (type(pair) is not list or len(pair) != 2
+            or any(type(n) is not int or not 0 <= n < tiles for n in pair)
+            or pair[0] >= pair[1] or type(count) is not int
+            or count != tiles * (tiles - 1) // 2):
+        raise _Malformed("similarity.pair")
+    scores = {key: value.get(key) for key in ("max", "mean")}
+    if any(type(n) not in (float, int) or not math.isfinite(n) or not -1 <= n <= 1
+           for n in scores.values()) or scores["mean"] > scores["max"]:
+        raise _Malformed("similarity.score")
+    return {"code": code, "pairs": count, "pair": list(pair), **scores}
 
 
 def _decode(raw: bytes) -> dict | None:
@@ -290,11 +316,16 @@ class SelfieWorker:
         if not answer["ok"]:
             raise WorkerError(_reason(answer))
         try:
-            return Gridded(_field(answer, "width", int), _field(answer, "height", int),
-                           float(_field(answer, "seconds", int, float)))
+            width, height = _field(answer, "width", int), _field(answer, "height", int)
+            seconds = float(_field(answer, "seconds", int, float))
         except _Malformed:
             await self._end_failed(tree)
             raise WorkerError("gone") from None
+        try:
+            similarity = _similarity(answer.get("similarity"), len(tiles))
+        except _Malformed:
+            similarity = None  # a best-effort diagnostic never fails a good grid
+        return Gridded(width, height, seconds, similarity)
 
     async def _answer(self, tree: ProcessTree, rid: str, timeout: float,
                       line: bytes | None = None) -> dict:

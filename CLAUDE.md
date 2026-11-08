@@ -237,6 +237,8 @@ Run from `F:\azerothcore\scripts` in Git Bash.
 ```bash
 ./ac-update.sh [--dry-run]   # pull core + git modules (ff-only, local commits rebased); refuses if dirty
 ./ac-backup.sh [label]       # mysqldump all 4 DBs, keeps newest 5
+./ac-release.sh [--dry-run] <commit>... # deploy merged main commits onto the live release branch
+./ac-release.sh --native [--dry-run] <commit>... # also stop servers and build with AC_JOBS=4
 ./ac-build.sh [--no-configure | --preflight]   # preflight + cmake configure + build; --preflight stops after the module checks
 ./ac-server.sh start|stop|status # also starts/stops the mind; stdout: mind-data/logs/mind-stdout.log
 ./ac-voice.sh start|stop|status # voice service; reads its data directory and ports from `where`
@@ -248,6 +250,36 @@ template no longer has (even as a comment), for core and module configs, plus su
 renames (at least 20 additions and 20 removals); values are never printed, and an unreadable
 file is reported without stopping the update. `--dry-run`
 reports the checked-out templates and still fetches metadata, but never merges or rebases.
+
+`ac-release.sh` refuses an online/unknown owner, open guild or owned offline raids,
+a dirty tree, a branch outside `release/*` or `codex/live-release-*`, a native build
+lock, or a commit not present on the local `origin/main` (fetch before releasing).
+`--allow-raid ID` explicitly excludes a known orphan; repeat it for multiple IDs.
+Each exception is printed with the rollback instructions. Mind releases allow only
+`mind/`, `selfie/`, `voice/`, `CLAUDE.md`, `README.md` and `references.bib`; native
+releases additionally allow `modules/`, `config/` and `patches/`. Dry-run checks
+and prints the plan without cherry-picking, stopping services or taking snapshots.
+Voice-file releases require the separately managed voice service to be stopped
+first (its OS lock is probed without loading models); this tool does not enable
+or restart voice. Real releases hold the checkout lock before capturing the
+rollback target and running preflight, so a delayed invocation cannot undo a
+release that finished while it was checking the database.
+After cherry-picking it stops the mind, takes an SQLite online backup in
+`mind-data/snapshots/pre-release-*.db`, migrates with the new code, restarts services
+and the optional `leeroy-console` task, then prints health. Native releases save
+the old EXE/DLL files alongside the snapshot before building; a failed build
+restores those files and the original checkout before restarting the old servers.
+Native stop is confirmed separately from the best-effort server wrapper: both
+server processes must be absent from a successful, well-formed process listing.
+Unavailable status or a surviving process prevents build/restore writes; the
+printed native rollback command applies the same check before resetting files.
+Failures before the completed restart attempt rollback; a health failure leaves
+the running release in place and prints recovery instructions. Every exit prints
+the reset target, snapshot and native rebuild command.
+The printed rollback also restarts the optional console task after restoring the
+checkout and database, so it reloads the matching code.
+Exit codes: 0 success, 1 refused before changes, 2 failure after changes. Test only with
+`bash scripts/tests/ac-release.sh`; it uses temporary repositories and stub services.
 
 `./ac-health.sh [--json] [--toast]` (`python -m leeroy_mind health`) checks the live install
 read-only, one ok/FAIL/note line each, exit 1 on any FAIL: the servers, Server.log's cast line
@@ -1409,9 +1441,18 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
     measures its VRAM before `identity_min_free_gib` is trusted. Doctor notes it as not
     fetched with snaps off and FAILs with snaps on. Situational photos are 832 x 1216 portraits
     (thumbnail 384 px); the NSFW gate and three seeds per slot are P2's.
-  - *Stages.* `scenes` (reflection model, after `life`) plans: the reflection model writes a
-    scene for a member from tonight's life beat, her card birthday tomorrow or an ordinary day,
-    and may decline; the screen (`selfies/scene.py`) refuses looks changes, other people,
+  - *Stages.* `scenes` (reflection model, after `life`) plans: the reflection model chooses
+    enums for a member from tonight's life beat, her card birthday tomorrow or an ordinary day,
+    and may decline. `scene_choices.py` composes 30 activities, 20 places, time, framing,
+    expression, clothed outfit and a prop (including `none`). Activity/place and prop/activity
+    pairings refuse incoherent picks. Off-list replies get one schema retry, then no scene.
+    Lust settings/outfits/colours/expressions reuse the profile lists and their pairings;
+    situational settings exclude the hot tub, crowd and hallway mirror. New stored scenes carry
+    `recipe: 1`. Pre-enum pending scenes (or an unknown recipe) stay planned with the held code
+    `legacy_scene_schema`, use no render/GPU slot, and expire normally; their rows and files are
+    preserved. No free-prose fallback approves them. Already rendered photos are unchanged.
+    The screen (`selfies/scene.py`) remains a second defence against
+    looks changes, other people,
     names, likeness, era, minors, explicit wear and undressing or bathing contexts, and a lust
     woman's scene reuses the profile photo's enum picks. `snaps` (image model, after `selfies`,
     `wants_gpu`) renders what is planned, each with the identity reference, under P2's GPU
@@ -1430,7 +1471,11 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
     photos stay on disk, unserved.
   - *Guild photo.* The night after the newest online raid with a kill (it ended within 12 hours
     before the night began), at most one a week, up to 16 of that raid's members with a chosen
-    photo (at least 3) are each rendered alone at their desk as a video-call tile (1024 px),
+    photo (at least 3) are each rendered alone at their desk in a candid tile (1024 px),
+    with a monitor displaying a landscape game map. Own looks and monitor content stay at
+    priority 0, with required negatives for duplicate faces and faces on screens. Each tile
+    already has its own GUID/slot/attempt seed and immutable reference; crop and adapter scale
+    are unchanged pending GPU evidence. Overlong required identity text refuses the render.
     then composited at 512 px with 8 px gutters in a grid by tile count: 1 is 1x1, 2 is 2x1, up to 4 is
     2x2, up to 6 is 3x2, up to 9 is 3x3, up to 12 is 4x3, up to 16 is 4x4. He is never in it.
   - *Storage.* Rows in `selfie_snap` (migration 0022). Files: `selfies/<guid>/snaps/<id>.jpg`
@@ -1440,7 +1485,14 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
     expired_week) and the `scenes`/`snaps` stage records. `selfies try --snaps [--guid N |
     --limit N] [--guild]` (mind stopped) renders one situational photo each with the member's
     face, and with `--guild` one grid, into `scratch\selfies-try\snaps\`; members with no
-    chosen photo (`no_photo`) or no photo kind (`no_kind`) are skipped and counted. The mind's
+    chosen photo (`no_photo`) or no photo kind (`no_kind`) are skipped and counted. Readiness
+    prints per-GUID declined/refused/rendered status, refusal codes, and NSFW score (unavailable
+    before rendering; the last score after all seeds are flagged), also in JSON `results`.
+    `guild_similarity` reports an uncalibrated head-crop embedding cosine maximum, mean and
+    closest GUID pair. The worker reuses its loaded IP-Adapter image encoder, never downloads
+    a model; missing/failed encoders produce a skip code. This is a comparative tile diagnostic,
+    not a face detector, calibrated threshold or identity proof. The operator checks distinct
+    likenesses and single faces on actual GPU images before enabling snaps. The mind's
     doctor reports the identity adapter's state beside the worker's checks.
 - **Content limits.** Adults only, clothed and non-explicit, no real person's likeness, and no
   person's name ever reaches a prompt. Logs hold ids, counts, scores and timings, never a prompt

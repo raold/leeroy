@@ -22,6 +22,8 @@ jobs:
         run: bash scripts/tests/ac-guild-backup.sh
       - name: guild backup schedule self-test (no task registration)
         run: pwsh -NoProfile -File scripts/tests/ac-guild-backup-schedule.ps1
+      - name: release self-test (temporary repositories and stub services)
+        run: bash scripts/tests/ac-release.sh
 
   secrets:
     runs-on: ubuntu-latest

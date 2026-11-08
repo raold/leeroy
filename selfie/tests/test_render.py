@@ -539,7 +539,8 @@ def test_a_grid_pastes_each_tile_resized_at_its_box_on_the_ground(tmp_path, monk
                                        thumb_size=200))
     width, height = grids.canvas(5, 256, 8)
     assert (width, height) == (800, 536)
-    assert set(answer) == {"ok", "width", "height", "seconds", "error"}
+    assert set(answer) == {"ok", "width", "height", "seconds", "error", "similarity"}
+    assert answer["similarity"] == {"code": "encoder_unavailable"}
     assert answer["ok"] is True and answer["error"] == "" and type(answer["seconds"]) is float
     assert (answer["width"], answer["height"]) == (width, height)
     (canvas,) = image.made
@@ -553,3 +554,18 @@ def test_a_grid_pastes_each_tile_resized_at_its_box_on_the_ground(tmp_path, monk
     assert thumb.saved == [(str(tmp_path / "g.thumb.jpg.tmp"), "JPEG", 85)]
     assert (tmp_path / "g.jpg").read_bytes() == (tmp_path / "g.thumb.jpg").read_bytes() == b"jpg"
     assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_a_failing_similarity_diagnostic_never_fails_the_grid(tmp_path, monkeypatch):
+    stub_pil(monkeypatch)
+    tiles = []
+    for i in range(2):
+        tiles.append(tmp_path / f"t{i}.jpg")
+        tiles[-1].write_bytes(JPEG)
+
+    def boom(*a, **k):
+        raise RuntimeError("private")
+    monkeypatch.setattr(render.similarity, "measure", boom)
+    answer = make_renderer().grid(grid(tiles=tiles, out=tmp_path / "g.jpg", tile=256, gutter=8,
+                                       thumb_size=200))
+    assert answer["ok"] is True and answer["similarity"] == {"code": "encoder_failed"}

@@ -31,11 +31,11 @@ from nightly.test_night_enrich import APPEARANCE
 from selfies.fakes import JPEG, fake_command, fake_worker, planned_snap, ready, renderable_cast, until
 
 SNAPS_CFG = SelfieCfg(enabled=True, snaps=True)
-SCENE = {"kind": "snapshot", "framing": "upper_body", "setting": "on a wooden pier by the harbour",
-         "activity": "throwing a ball for a scruffy terrier",
-         "outfit": "a yellow raincoat over a grey jumper", "expression": "laughing",
-         "when": "day", "audience": "anyone",
-         "shows": "Them on a wooden pier throwing a ball for their dog."}
+from leeroy_mind.selfies.scene import scene_json
+from leeroy_mind.selfies.scene_choices import compose_choices
+from selfies.test_scene_choices import PICKS
+SCENE = scene_json(scene_from(compose_choices(PICKS)))
+
 IDENTITY = {"FAKE_SELFIE_IDENTITY": "1"}
 
 
@@ -216,6 +216,7 @@ def test_a_guild_photo_renders_each_member_alone_then_one_grid(h, tmp_path):
     ctx = h.ctx()
     run(make_snaps_stage(SNAPS_CFG, worker=watching(tmp_path, seen, FAKE_SELFIE_LOG=str(log)))(ctx))
     picks = {m: current(h.store, m).pick for m in (101, 102, 103)}
+    assert len({req.seed for req in seen}) == 3  # actual per-tile requests, not only the helper
     assert lines(log)[-1] == f"g{g}:grid grid 3"                      # n tiles, then one grid
     assert renders(log) == [(f"g{g}:{i}:0", seed_for(ctx.night, m, g, i, 0), str(history(data, m, picks[m])))
                             for i, m in enumerate((101, 102, 103))]
@@ -496,6 +497,33 @@ def test_logs_carry_no_prompt(h, tmp_path, caplog):
         assert p.character_name not in text and p.identity.real_name not in text
 
 
+def test_a_tile_whose_prompt_is_too_long_is_skipped_and_the_grid_goes_on(h, tmp_path, caplog):
+    cast(h, 101, 102, 103, 104); g = guild(h, 101, 102, 103, 104)
+    log = tmp_path / "requests.log"
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        ctx = h.ctx()
+        run(stage(tmp_path, FAKE_SELFIE_LOG=str(log), FAKE_SELFIE_TOO_LONG=f"g{g}:1:")(ctx))
+    row = snap_row(h.store, g)
+    assert row.status == "ready" and [m for m, _ in row.members] == [101, 103, 104]
+    assert lines(log)[-1] == f"g{g}:grid grid 3" and not ctx.failures
+    assert f"selfies_tile_skipped: night=2026-10-29 snap={g} guid=102 code=prompt_too_long" in caplog.text
+
+
+def test_too_few_tiles_after_too_long_prompts_skips_the_guild_photo_cleanly(h, tmp_path):
+    cast(h, 101, 102, 103); g = guild(h, 101, 102, 103)
+    ctx = h.ctx()
+    run(stage(tmp_path, FAKE_SELFIE_TOO_LONG=f"g{g}:0:,g{g}:2:")(ctx))
+    row = snap_row(h.store, g)
+    assert (row.status, row.ended) == ("expired", "missing") and not ctx.failures
+
+
+def test_a_malformed_similarity_diagnostic_never_fails_the_grid(h, tmp_path):
+    cast(h, 101, 102, 103); g = guild(h, 101, 102, 103)
+    ctx = h.ctx()
+    run(stage(tmp_path, FAKE_SELFIE_BAD_SIMILARITY="1")(ctx))
+    assert snap_row(h.store, g).status == "ready" and not ctx.failures
+
+
 # -- final fix wave (controller ruling R22) --------------------------------------------------
 
 def test_a_row_whose_scene_cannot_be_read_expires_missing_and_the_good_one_renders(h, tmp_path):
@@ -546,3 +574,27 @@ def test_rows_that_will_expire_do_not_crowd_out_a_good_row_under_a_small_cap(h):
     bad = situation(h, 102, scene={"shows": "an invented scene"})
     good = situation(h, 103)
     assert [r.id for r in _todo(ctx)] == [late, bad, good]  # the two expire, the good one renders
+
+
+@pytest.mark.parametrize("recipe", [None, 0, 2, True])
+@pytest.mark.parametrize("raw_picks", [False, True])
+def test_pre_enum_or_unknown_scene_stays_held_without_rendering_or_deleting(
+        h, tmp_path, caplog, recipe, raw_picks):
+    cast(h, 101)
+    old = {k: v for k, v in SCENE.items() if k != "recipe"}
+    if raw_picks:
+        old.update(PICKS)  # a reader must never compose these and silently grant recipe 1
+    if recipe is not None:
+        old["recipe"] = recipe
+    sid = situation(h, 101, scene=old)
+    target = snap(h.settings.data_dir, 101, sid)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(JPEG)
+    ctx = h.ctx()
+    assert wants_gpu(ctx) is False
+    seen = []
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        run(make_snaps_stage(SNAPS_CFG, worker=watching(tmp_path, seen))(ctx))
+    assert seen == [] and not ctx.failures
+    assert snap_row(h.store, sid).status == "planned" and snap_row(h.store, sid).scene == old
+    assert target.read_bytes() == JPEG and "reason=legacy_scene_schema" in caplog.text
