@@ -17,6 +17,7 @@ from .types import Draft, GuardStores, HistoryLine, Reference, Score, Verdict
 
 OWN_LINES = 128
 GUILD_LINES = 256
+GUILD_SECONDS = 12 * 3600
 CONTEXT_LINES = 16
 MAX_TEXT = 4000
 REACTIONS = ('👍', '😄')
@@ -131,7 +132,7 @@ def _history(reader, stores, draft, now, officer):
         (draft.guid, now-stores.config.repeat_seconds, now, cutoff, OWN_LINES)),
         reader.rows('history_unavailable', f'SELECT {columns} FROM chat_line '
         "WHERE channel='guild' AND origin='mind' AND ts BETWEEN ? AND ? AND id<? ORDER BY ts DESC,id DESC LIMIT ?",
-        (now-12*3600, now, cutoff, GUILD_LINES))]
+        (now-GUILD_SECONDS, now, cutoff, GUILD_LINES))]
     if ids and draft.channel not in {'discord', 'dm'}:
         groups.append(reader.rows('context_unavailable', f'SELECT {columns} FROM chat_line '
             'WHERE id IN (SELECT value FROM json_each(?)) AND ts BETWEEN ? AND ? AND id<?',
@@ -139,7 +140,9 @@ def _history(reader, stores, draft, now, officer):
     found = {('db', row['id']): _line(row, stores.vectors) for rows in groups for row in rows}
     for line in stores.history[-(OWN_LINES+GUILD_LINES+CONTEXT_LINES):]:
         found[(line.channel, line.room, line.id)] = line
-    return sorted((line for line in found.values() if now-stores.config.repeat_seconds <= line.ts <= now
+    # Keep source windows independent. Each consumer below applies its own lower
+    # bound; a short own-repeat window must not erase valid parent/evening evidence.
+    return sorted((line for line in found.values() if line.ts <= now
                    and (draft.line_id is None or line.id < draft.line_id)
                    and len(line.text) <= MAX_TEXT and _visible(line, draft, officer)), key=lambda x: (x.ts, x.id))
 
@@ -278,7 +281,8 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
     history = _history(reader, stores, draft, now, officer)
     parent, thread = _context(history, draft, now)
     scores, refs, rewrite, drop = [], [], [], []
-    own = [line for line in history if line.guid == draft.guid and line.origin == 'mind'][-OWN_LINES:]
+    own = [line for line in history if line.guid == draft.guid and line.origin == 'mind'
+           and now-line.ts <= cfg.repeat_seconds][-OWN_LINES:]
     repeats = _pairs(draft.text, draft.embedding, own, cfg)
     if repeats:
         previous, score = repeats[0]
@@ -289,7 +293,8 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
     bucket = evening(now)
     if draft.channel in {'guild', 'discord'} and bucket is not None:
         for line in history:
-            if _same_room(line, draft) and line.origin == 'mind' and evening(line.ts) == bucket:
+            if _same_room(line, draft) and line.origin == 'mind' and now-line.ts <= GUILD_SECONDS \
+                    and evening(line.ts) == bucket:
                 for phrase in repetition.phrase_keys(words(line.text)):
                     shared[phrase].add(line.guid)
         if repetition.shared_by_others(words(draft.text), draft.guid, shared):

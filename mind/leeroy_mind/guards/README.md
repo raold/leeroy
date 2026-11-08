@@ -72,6 +72,8 @@ lexicon gags. External history is limited to its last 400 entries. Old schemas
 omit unavailable sources and expose a numeric `missing_sources` score; they do
 not gain tables. Coverage is therefore bounded, not exhaustive. Pass `line_id`
 only for historical replay to exclude the stored candidate and later row IDs.
+Own-repeat, five-minute parent/thread and 12-hour evening-history windows are
+independent; shortening `repeat_seconds` does not disable the other checks.
 
 ## Engine contract
 

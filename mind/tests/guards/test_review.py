@@ -93,6 +93,31 @@ def test_repeat_window_and_future_rows(store):
     assert review(sources(store),draft(text,now=NOW-11)).action=='send'
 
 
+@pytest.mark.parametrize('kind', ['filler','relevance','nothing_new','evening_phrase'])
+def test_short_own_repeat_window_preserves_other_guard_windows(store,kind):
+    cfg=GuardsCfg(enabled=True,semantic_enabled=True,repeat_seconds=10)
+    if kind=='filler':
+        line(store,'Where is the ferry?',guid=1,ts=NOW-20)
+        d=draft('lol',parent_id=1)
+        expected='filler_after_question'
+    elif kind=='relevance':
+        line(store,'Where is the ferry?',guid=1,ts=NOW-20)
+        d=draft('Purple planets orbit silent stars',parent_id=1,embedding=pack_vec(unit(1)))
+        expected='low_parent_and_thread_relevance'
+    elif kind=='nothing_new':
+        text='The copper lantern hangs above the doorway'
+        line(store,text,guid=102,ts=NOW-20)
+        d=draft(text,thread_ids=(1,))
+        expected='nothing_new'
+    else:
+        line(store,'Keep your muddy boots outside the doorway',guid=102,ts=NOW-20)
+        line(store,'Keep your muddy boots outside the bedroom',key=2,guid=103,ts=NOW-19)
+        d=draft('Keep your muddy boots outside the kitchen')
+        expected='guild_evening_phrase'
+    result=review(sources(store,config=cfg,vectors={1:pack_vec(unit(0))}),d)
+    assert expected in result.codes
+
+
 def test_semantic_repeat_needs_separate_opt_in_and_honors_threshold_boundary(store):
     line(store,'The small vessel arrived at the harbour')
     vec=pack_vec(unit(0))
