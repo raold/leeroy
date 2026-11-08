@@ -14,6 +14,7 @@ from leeroy_mind.nightly.llm import schema, system_prompt
 from leeroy_mind.nightly.settings import iso_week
 from leeroy_mind.nightly.store import step_finished_at
 from leeroy_mind.storage.rows import MemoryRow
+from leeroy_mind.storage.provenance import ProvenanceError, edges
 from leeroy_mind.text import strip_wow_markup
 
 STAGE = "forget"
@@ -53,6 +54,10 @@ def candidates(store, owner, now):
 
 def _node(store, ref):
     """Snapshot one persisted provenance node, including privacy outside its own row."""
+    try:
+        children = edges(store.conn, ref, recalls=False).children
+    except ProvenanceError:
+        return None
     fact = _FACT.fullmatch(ref)
     match = _NUMBERED.fullmatch(ref)
     if match and match.group(1) == "memory":
@@ -65,18 +70,12 @@ def _node(store, ref):
         value = (m.id, m.owner, m.kind, m.text, m.t_event, m.t_created, m.actors,
                  m.place, m.boss_id, m.raid_id, m.importance, m.valence, m.source,
                  m.evidence, m.confidence, m.status, m.key, m.scope, m.scope_with)
-        return value, m.evidence, m.owner, (m.scope, m.scope_with), frozenset()
+        return value, children, m.owner, (m.scope, m.scope_with), frozenset()
     if fact:
         row = store.conn.execute("SELECT * FROM fact WHERE id=?", (int(fact.group(1)),)).fetchone()
-        children = (row["root"],) if row else ()
     elif match and match.group(1) in _TABLES:
         kind, ident = match.group(1), int(match.group(2))
         row = store.conn.execute(f"SELECT * FROM {_TABLES[kind]} WHERE id=?", (ident,)).fetchone()
-        children = ()
-        if row is not None and kind in {"story", "chronicle", "feud"}:
-            children = tuple(json.loads(row["evidence"]))
-        elif row is not None and kind == "joke":
-            children = (row["origin_ref"],)
     elif ref.startswith("rule:") or _OWNER.fullmatch(ref):
         # Deterministic rule roots and his authored history have no backing table; their
         # confidential fact flags do.

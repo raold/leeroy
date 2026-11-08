@@ -194,6 +194,8 @@ def test_line_receipt_freezes_attribution_across_edit_and_overlap(h):
 
 
 def test_mutation_from_recalled_copy_updates_holders_without_provenance_cycle(h):
+    from leeroy_mind.nightly.critic import _provenance
+    from leeroy_mind.storage.repair_provenance import Counts, Graph
     ident = term(h)
     before = memory(h, ident).id
     line = spoken(h, "Our boots are applying for a desk job", recalls=(before,))
@@ -203,8 +205,13 @@ def test_mutation_from_recalled_copy_updates_holders_without_provenance_cycle(h)
     assert memory(h, ident).id == before
     assert all(memory(h, ident, g).text == "Running joke: Our boots are applying for a desk job" for g in (101, 102))
     assert lexicon.source_snapshot(h.store, [f"memory:{before}"]) is not None
-    assert f"chat:{line}" in dict(lexicon.source_snapshot(h.store, [f"joke:{ident}"]))
+    # Retaining this emitted line would close joke -> chat -> recalled copy -> joke.
+    # It stays in chat history; the joke keeps its older roots and every holder its tag.
+    assert f"chat:{line}" not in dict(lexicon.source_snapshot(h.store, [f"joke:{ident}"]))
     assert f"memory:{before}" not in json.loads(h.store.get_meta(f"nightly:lexicon-sources:{ident}"))
+    assert all(f"joke:{ident}" in memory(h, ident, g).evidence for g in (101, 102))
+    assert _provenance(h.store, [f"memory:{before}"])
+    assert Graph(h.store.conn).counts() == Counts(0, 0)
 
 
 @pytest.mark.parametrize("variant", ["|TQuillon|tOur boots need a desk job", "|Tlanguage model|tOur boots need a desk job", "Our boots are goated"])
