@@ -181,6 +181,24 @@ def test_backup_inventory_never_reads_dump_or_snapshot_contents(tmp_path):
     assert SECRET not in json.dumps(got)
 
 
+def test_snapshot_labels_preserve_numeric_suffixes_and_long_valid_names(tmp_path):
+    snapshots = tmp_path / "snapshots"
+    snapshots.mkdir()
+    long_label = "pre-migrate-" + "x" * 90
+    labels = ["pre-migrate", "pre-migrate-17", "pre-migrate-2", long_label]
+    for label in labels:
+        (snapshots / f"mind-{label}-20261108-120000.db").write_text(SECRET)
+    (snapshots / "mind-pre-migrate-17-20261109-120000.db").write_text(SECRET)
+    got = ops.backups_view(tmp_path, tmp_path, deadline())
+    assert got["snapshots"]["count"] == 5
+    assert got["snapshots"]["bytes"] == 5 * len(SECRET.encode())
+    assert set(got["snapshots"]["labels"]) == set(labels)
+    assert got["snapshots"]["labels"]["pre-migrate-17"]["stamp"] == "20261109-120000"
+    assert got["snapshots"]["labels"]["pre-migrate"]["stamp"] == "20261108-120000"
+    assert "same-second copy counter" in got["note"]
+    assert SECRET not in json.dumps(got)
+
+
 def make_backup(tmp_path):
     name = "guild-20261108T120000000000Z-abcdef12"
     store = tmp_path / "dest" / "leeroy-guild-backups-v1"

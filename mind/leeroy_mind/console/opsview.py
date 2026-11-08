@@ -396,12 +396,14 @@ def feature_state(data, section):
 def backups_view(root, data, deadline, config=None):
     labels, total, count = {}, 0, 0
     for path in _entries(data / "snapshots", deadline):
-        match = re.fullmatch(r"mind-([A-Za-z0-9_-]{1,80})-(\d{8}-\d{6})\.db", path.name)
+        match = re.fullmatch(r"mind-([A-Za-z0-9_-]{1,231})-(\d{8}-\d{6})\.db", path.name)
         if match and path.is_file():
             info = path.stat()
             count += 1
             total += info.st_size
-            label = re.sub(r"-\d+$", "", match[1])
+            # A numeric suffix may be part of the caller's label, or a same-second
+            # collision counter. Filenames alone cannot distinguish the two.
+            label = match[1]
             if label not in labels or match[2] > labels[label]["stamp"]:
                 labels[label] = {"stamp": match[2], "at": info.st_mtime, "bytes": info.st_size}
     game = []
@@ -416,7 +418,9 @@ def backups_view(root, data, deadline, config=None):
         else:
             off = offmachine_view(config or Path(os.environ["LOCALAPPDATA"]) / "leeroy" / "backup.toml", deadline)
     return panel(snapshots={"count": count, "bytes": total, "labels": labels},
-                 game=max(game, key=lambda r: r["stamp"]) if game else None, offmachine=off)
+                 game=max(game, key=lambda r: r["stamp"]) if game else None, offmachine=off,
+                 note="Snapshot labels come from filenames. Numeric suffixes are preserved: "
+                      "they may be part of the label or a same-second copy counter.")
 
 
 def offmachine_view(config, deadline):
