@@ -215,6 +215,43 @@ def test_a_leave_native_refused_for_a_wintergrasp_member_recalls_the_others(pipe
     run(scenario())
 
 
+def test_a_second_pass_within_the_backoff_recalls_everyone_but_the_named_member(pipeline):
+    async def scenario():
+        async with pipeline:
+            h = pipeline
+            h.cast(101, 102, 103)
+            send = h.app.send
+
+            async def answer(cmd, *, preserve_id=False):
+                if type(cmd) is not p.LeavePvp or 102 not in cmd.guids:
+                    return await send(cmd, preserve_id=preserve_id)
+                h.app.sent.append(cmd)
+                return Ack(0, cmd.id, False, "wg_private_state_unavailable:102")
+            h.app.send = answer
+            start = h.clock.now()
+            h.realm.recall.on_login(start)
+            seen = set()
+            for _ in range(60):
+                await h.cycle()
+                fresh = [c for c in h.app.sent if c.id not in seen]
+                if not fresh:
+                    await h.cycle(1.01)
+                    fresh = [c for c in h.app.sent if c.id not in seen]
+                if not fresh:
+                    break
+                for c in fresh:
+                    seen.add(c.id)
+                    if not (type(c) is p.LeavePvp and 102 in c.guids):
+                        await h.result(c)
+                await h.cycle(1.01)
+            await h.clock.advance(start + 45 - h.clock.now(), step=45)
+            h.realm.recall.tick(h.clock.now())
+            await h.cycle()
+            leaves = [c for c in h.app.sent if type(c) is p.LeavePvp]
+            assert len(leaves) == 3 and leaves[2].guids == (101, 103)
+    run(scenario())
+
+
 @pytest.mark.parametrize("refusal", ["step", "ack"])
 def test_a_rearm_native_refused_holds_nobody_and_its_defaults_follow(pipeline, refusal):
     async def scenario():
@@ -330,7 +367,20 @@ def test_second_pass_once_and_recall_cooldown(pipeline):
             h.cast(101)
             start = h.clock.now()
             h.realm.recall.on_login(start)
-            await h.finish()
+            seen = set()
+            for _ in range(60):
+                await h.cycle()
+                fresh = [c for c in h.app.sent if c.id not in seen]
+                if not fresh:
+                    await h.cycle(1.01)
+                    fresh = [c for c in h.app.sent if c.id not in seen]
+                if not fresh:
+                    break
+                for c in fresh:
+                    seen.add(c.id)
+                    if not (type(c) is p.LeavePvp and 102 in c.guids):
+                        await h.result(c)
+                await h.cycle(1.01)
             await h.clock.advance(start + 45 - h.clock.now(), step=45)
             h.realm.recall.tick(h.clock.now())
             await h.cycle()

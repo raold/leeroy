@@ -65,7 +65,7 @@ def wg_refusal_guids(error, manifest=None):
     """The guids a Wintergrasp ack refusal names, or None when it is not one (or names a guid
     outside the manifest, when one is given)."""
     reason, _, rest = error.partition(":")
-    if reason != WG_REFUSAL or re.fullmatch(r"[0-9]{1,10}(,[0-9]{1,10}){0,23}", rest) is None: return None
+    if reason != WG_REFUSAL or re.fullmatch(r"[0-9]{1,10}(,[0-9]{1,10}){0,127}", rest) is None: return None
     named = tuple(int(g) for g in rest.split(","))
     if len(set(named)) != len(named) or manifest is not None and not set(named) <= set(manifest): return None
     return named

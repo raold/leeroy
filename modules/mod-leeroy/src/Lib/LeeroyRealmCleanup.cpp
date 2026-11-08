@@ -9,15 +9,19 @@ bool FencesLeavePvpAck(std::string const& kind, std::string const& pvpOwner)
 }
 std::string LeavePvpAckError(std::vector<std::pair<std::uint32_t, WintergraspMemberFacts>> const& members)
 {
-    constexpr std::size_t MaxNamed = 24;
+    // The whole error stays within the mind's 256 characters, with at least one name.
+    constexpr std::size_t MaxLength = 256;
+    std::string const prefix = "wg_private_state_unavailable:";
     std::string named;
-    std::size_t count = 0;
+    bool any = false;
     for (auto const& [guid, facts] : members)
     {
         if (WintergraspPrivateReason(facts).empty()) continue;
-        if (count++ < MaxNamed) named += (named.empty() ? "" : ",") + std::to_string(guid);
+        auto const next = (named.empty() ? "" : ",") + std::to_string(guid);
+        if (any && prefix.size() + named.size() + next.size() > MaxLength) break;
+        named += next; any = true;
     }
-    return count ? "wg_private_state_unavailable:" + named : "";
+    return any ? prefix + named : "";
 }
 std::string WintergraspPrivateReason(WintergraspMemberFacts const& facts)
 {

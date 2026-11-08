@@ -219,9 +219,14 @@ LEEROY_TEST(RealmCleanup_LeavePvpAckNamesTheWintergraspMembers)
     std::vector<std::pair<std::uint32_t, WintergraspMemberFacts>> many;
     for (std::uint32_t guid = 1000; guid < 1100; ++guid) many.emplace_back(guid, tainted);
     auto const error = LeavePvpAckError(many);
-    CHECK(error.size() < 256);
+    CHECK(error.size() <= 256 && error.size() > 200);
     CHECK(error.rfind("wg_private_state_unavailable:1000,1001,", 0) == 0);
-    CHECK(error.find("1023") != std::string::npos && error.find("1024") == std::string::npos);
+    // Ten-digit guids: still at most 256 characters, and never fewer than one name.
+    many.clear();
+    for (std::uint32_t guid = 4000000000u; guid < 4000000100u; ++guid) many.emplace_back(guid, tainted);
+    auto const wide = LeavePvpAckError(many);
+    CHECK(wide.size() <= 256 && wide.rfind("wg_private_state_unavailable:4000000000,4000000001,", 0) == 0);
+    CHECK(wide.back() != ',');
 }
 
 LEEROY_TEST(RealmCleanup_OnlyAnOrdinaryLeaveIsFencedAtItsAck)

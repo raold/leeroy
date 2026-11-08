@@ -952,7 +952,7 @@ Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
   has none, as that poll would. Any other failed job (`operation_transition_unknown`, a walk,
   leave, duel or grow) stays unknown: a leave's `wg_private_state_unavailable` (a member in
   Wintergrasp) is refused whole at its ack, before any body is reserved or moved
-  (`LeavePvpAckError` names up to 24 members as `wg_private_state_unavailable:<guid,...>`; the mind
+  (`LeavePvpAckError` names as many members as fit in 256 characters, at least one, as `wg_private_state_unavailable:<guid,...>`; the mind
   accepts it only when every named guid is in the root's manifest, settles it refused and holds nobody,
   and recall leaves the named members for a later pass and recalls the rest as a new command). The same reason from the job
   is a Refuse only until that leave has changed a body, and its job does not say which. A root that settles unknown or conflict logs a warning in mind.log,

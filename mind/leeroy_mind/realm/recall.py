@@ -314,6 +314,13 @@ class Recall:
     def _start(self, members, mode):
         members = tuple(members)
         owner = "raid" if mode in {"recall", "second"} else "realm_day"
+        if mode in {"recall", "second"}:
+            # Members a recent Wintergrasp refusal named are backed off; a leave naming one is
+            # rejected whole, so they wait for a later pass and the rest go.
+            blocked = self.queue.wg_backed_off(owner)
+            members = tuple(g for g in members if g not in blocked)
+            if not members:
+                return
         steps = []
         if mode in {"recall", "second"}:
             steps.append(("leave", members))

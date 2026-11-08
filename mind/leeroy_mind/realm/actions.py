@@ -120,6 +120,18 @@ class ActionQueue:
                 return True
         return False
 
+    def wg_backed_off(self, owner):
+        """The members a recent Wintergrasp ack refusal of this owner's leaves named: a leave naming
+        any of them is rejected for 600 s, so the recall leaves them out and sends the rest."""
+        now = self.clock.now()
+        named = set()
+        for old in self.store.records():
+            failed_at = json.loads(old.evidence).get("failed_at")
+            if (old.role == "root" and old.owner == owner and old.kind == "leave_pvp" and old.result_ok is False
+                    and failed_at is not None and now < failed_at + 600):
+                named |= set(wg_refusal_guids(old.result_reason) or ())
+        return named
+
     def submit(self, cmd, *, owner, guids=(), on_done=None, freeing=False):
         classified = classify(cmd)  # Reject malformed business fields before journaling.
         supplied = members(guids, 0)
