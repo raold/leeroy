@@ -216,6 +216,11 @@ class NightContext:
     def _roster(self) -> dict[int, Member]:
         return self._cached("roster", self.store.cast)
 
+    def persona_added(self, guid: int) -> None:
+        """Budgeting may have cached membership before an early writer added a persona."""
+        self.personas.invalidate(guid)
+        self._memo.clear()
+
     def members(self, include_away: bool = False) -> list[int]:
         """The cast, sorted: guids with a stored persona, in the stored roster at level
         CAST_MIN_LEVEL or more, and not the human (pre-flight rulings C26 and C27); without the
@@ -447,6 +452,9 @@ class NightRunner:
         for stage in self.stages:
             started = ctx.clock.now()
             whole = False  # this stage took the whole GPU (make_room)
+            if (stage.model in ("live", "reflection") and stage.wants_gpu is not None
+                    and not stage.wants_gpu(ctx)):
+                continue  # no newcomer work: do not swap models before the threads stage
             if stage.model == "image":
                 if not images:
                     continue

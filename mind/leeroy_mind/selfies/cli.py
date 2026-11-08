@@ -121,6 +121,7 @@ class _Measured:
 
     def __init__(self, worker: SelfieWorker):
         self.worker, self.images, self.flagged, self.seconds, self.peak = worker, 0, 0, 0.0, 0.0
+        self.last_nsfw = None
 
     @property
     def running(self):
@@ -128,6 +129,7 @@ class _Measured:
 
     async def render(self, req, *, rid=None):
         got = await self.worker.render(req, rid=rid)
+        self.last_nsfw = got.nsfw
         self.images += 1
         self.flagged += bool(got.flagged)
         self.seconds += got.seconds
@@ -223,27 +225,47 @@ async def _try(root, store, cfg, scfg, clock, args, make_llm) -> int:
         return int(tally.sets != tally.members)
 
 
-async def _guild_grid(ctx, r, worker, members, out_root) -> list:
+def _snap_result(results, guid, status, *, codes=(), nsfw=None, kind="situation"):
+    results.append({"guid": guid, "kind": kind, "status": status,
+                    "codes": list(codes), "nsfw": nsfw})
+    score = "unavailable" if nsfw is None else f"{nsfw:.4f}"
+    print(f"guid {guid}: {kind} {status} ({','.join(codes)}) nsfw={score}", file=sys.stderr)
+
+
+async def _guild_grid(ctx, r, worker, members, out_root, results, diagnostic) -> list:
     """Each of `members` alone at a square tile, then one grid at snaps/guild.jpg; the tiles that
     were made, [] when the grid was not."""
     made = []
+    made_guids = []
     for n, (guid, (_, ref)) in enumerate(members):
         p = ctx.base(guid)
         tile = out_root / str(guid) / "tile.jpg"
+        worker.last_nsfw = None
         try:
-            await r.image(snap_id=0, guid=guid, idx=1, spec=build_tile_prompt(p), ref=ref,
+            got, _, _ = await r.image(snap_id=0, guid=guid, idx=1, spec=build_tile_prompt(p), ref=ref,
                           framing=p.photo.framing, out=tile,
                           thumb=tile.with_name("tile.thumb.jpg"), thumb_size=128,
                           shape="square", rid=f"g{n}")
             made.append(tile)
+            made_guids.append(guid)
+            _snap_result(results, guid, "rendered", nsfw=got.nsfw, kind="tile")
         except (SetRefused, WorkerError) as e:
-            print(f"guid {guid}: no tile ({getattr(e, 'reason', 'flagged')})", file=sys.stderr)
+            _snap_result(results, guid, "refused", codes=[getattr(e, "reason", "flagged")],
+                         nsfw=worker.last_nsfw, kind="tile")
     if not made:
         return []
     try:
-        await worker.worker.grid(made, tile=TILE_PX, gutter=GUTTER_PX, out=out_root / "guild.jpg",
+        grid = await worker.worker.grid(made, tile=TILE_PX, gutter=GUTTER_PX, out=out_root / "guild.jpg",
                                  thumb=out_root / "guild.thumb.jpg", thumb_size=GUILD_THUMB_PX,
                                  rid="grid")
+        diagnostic.update(grid.similarity or {"code": "worker_unsupported"})
+        diagnostic["metric"] = "uncalibrated_head_crop_cosine"
+        if diagnostic["code"] == "ok":
+            diagnostic["guids"] = [made_guids[i] for i in diagnostic.pop("pair")]
+            print(f"guild faces alike (uncalibrated): max={diagnostic['max']:.4f} "
+                  f"mean={diagnostic['mean']:.4f}", file=sys.stderr)
+        else:
+            print(f"guild faces alike: skipped ({diagnostic['code']})", file=sys.stderr)
     except WorkerError as e:
         print(f"grid {e.reason}", file=sys.stderr)
         return []
@@ -265,17 +287,24 @@ async def _try_snaps(root, store, cfg, scfg, clock, args, make_llm) -> int:
         worker = _Measured(SelfieWorker(worker_command(scfg, identity=True),
                                         env=worker_env(scfg)))
         scenes, rendered, tiles = {}, 0, []
+        results, diagnostic = [], {"code": "not_rendered" if args.guild else "not_requested"}
+        for guid in looks:
+            if guid not in withs:
+                _snap_result(results, guid, "refused", codes=["no_photo"])
+            elif guid not in kinded:
+                _snap_result(results, guid, "refused", codes=["no_kind"])
         if guids:
             await ctx.reasoner.preflight()
             await ctx.arbiter.ensure_model(ctx.settings.reflection_model)
         for guid in guids:
             scene, codes = await ask_scene(ctx, guid, about=ABOUT["everyday"])
             if scene is None:
-                print(f"guid {guid}: no scene ({','.join(codes)})", file=sys.stderr)
+                _snap_result(results, guid, "declined" if codes == ["declined"] else "refused",
+                             codes=codes)
                 continue
             ref = files.history(ctx.settings.data_dir, guid, picked[guid].pick)
             if not ref.is_file():
-                print(f"guid {guid}: the photo in force has no history file", file=sys.stderr)
+                _snap_result(results, guid, "refused", codes=["missing_ref"])
                 continue
             scenes[guid] = (scene, ref)
         if scenes:
@@ -288,27 +317,34 @@ async def _try_snaps(root, store, cfg, scfg, clock, args, make_llm) -> int:
                     folder.mkdir(parents=True, exist_ok=True)
                     shutil.copyfile(ref, folder / "ref.jpg")
                     p = ctx.base(guid)
+                    worker.last_nsfw = None
                     try:
-                        await r.image(snap_id=0, guid=guid, idx=0,
+                        got, _, _ = await r.image(snap_id=0, guid=guid, idx=0,
                                       spec=build_scene_prompt(p, scene), ref=ref,
                                       framing=p.photo.framing, out=folder / "snap.jpg",
                                       thumb=folder / "snap.thumb.jpg", thumb_size=SNAP_THUMB_PX,
                                       shape="portrait", rid=f"t{n}")
                         rendered += 1
+                        _snap_result(results, guid, "rendered", nsfw=got.nsfw)
                     except SetRefused:
-                        print(f"guid {guid}: flagged on every seed", file=sys.stderr)
+                        _snap_result(results, guid, "refused", codes=["flagged"],
+                                     nsfw=worker.last_nsfw)
                     except WorkerError as e:
-                        print(f"guid {guid}: worker {e.reason}", file=sys.stderr)
+                        _snap_result(results, guid, "refused", codes=[e.reason],
+                                     nsfw=worker.last_nsfw)
                 if args.guild:
                     tiles = await _guild_grid(ctx, r, worker, list(scenes.items())[:GUILD_TILES],
-                                              out_root)
+                                              out_root, results, diagnostic)
             except WorkerError as e:
                 print(f"worker {e.reason}", file=sys.stderr)
+                recorded = {row["guid"] for row in results if row["kind"] == "situation"}
+                for guid in scenes.keys() - recorded:
+                    _snap_result(results, guid, "refused", codes=[e.reason])
             finally:
                 await to_the_end(worker.worker.stop())
                 await _room_after(ctx)
         _print({"members": len(guids), "no_photo": no_photo, "no_kind": no_kind, "rendered": rendered,
-                "flagged": worker.flagged,
+                "flagged": worker.flagged, "results": results, "guild_similarity": diagnostic,
                 "seconds_per_image": round(worker.seconds / worker.images, 2) if worker.images
                 else None, "peak_gib": worker.peak, "path": str(out_root)})
         return int(not guids or rendered != len(guids) or (args.guild and not tiles))

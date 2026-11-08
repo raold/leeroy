@@ -132,7 +132,11 @@ RealmStep Result(Queued const& entry, StepState disposition, std::string why = "
 RealmStep Failure(Queued const& entry, std::string why)
 {
     bool const changed = entry.payload.at("step").value("changed", false) || entry.payload.value("cleanup_mutated", false);
-    return Result(entry, changed ? StepState::Unknown : StepState::Refused, std::move(why));
+    auto result = Result(entry, changed ? StepState::Unknown : StepState::Refused, std::move(why));
+    // Every producer marks both flags before mutation. Tick also requires all earlier
+    // members and pending steps to be unchanged before publishing changed:false.
+    result.unchanged = !changed;
+    return result;
 }
 std::string ValidateMembers(Queued const& entry, std::vector<std::uint32_t> const& members)
 {
@@ -174,6 +178,17 @@ bool DungeonState(lfg::LfgState state)
 {
     return state == lfg::LFG_STATE_DUNGEON || state == lfg::LFG_STATE_FINISHED_DUNGEON;
 }
+std::vector<std::uint32_t> QueueMembers(std::uint32_t guid, GroupQueueInfo const& info)
+{
+    if (!info.IsRated || info.IsInvitedToBGInstanceGUID) return {guid};
+    std::vector<std::uint32_t> members;
+    for (auto member : info.Players)
+    {
+        if (!member.IsPlayer()) return {};
+        members.push_back(member.GetCounter());
+    }
+    return members;
+}
 std::vector<std::uint32_t> ReceiptGuids(Json const& receipt, bool remainingOnly = false)
 {
     std::vector<std::uint32_t> members;
@@ -209,10 +224,38 @@ CleanupReadback ReadLeftMembers(Queued const& entry, Json const& receipt)
 std::string LeavePvpAckReason(Queued const& entry)
 {
     auto* field = sBattlefieldMgr->GetBattlefieldToZoneId(4197);
-    std::vector<std::pair<std::uint32_t, WintergraspMemberFacts>> members;
+    std::vector<LeavePvpMemberFacts> members;
     for (auto guid : entry.guids)
+    {
+        LeavePvpMemberFacts member{guid, {}, {guid}};
         if (auto* player = ObjectAccessor::FindConnectedPlayer(PlayerGuid(guid)); player && player->GetSession())
-            members.emplace_back(guid, WintergraspFacts(player, field));
+        {
+            member.wintergrasp = WintergraspFacts(player, field);
+            auto add = [&](auto const& closure)
+            { member.cleanupMembers.insert(member.cleanupMembers.end(), closure.begin(), closure.end()); };
+            for (uint32 slot = 0; slot < PLAYER_MAX_BATTLEGROUND_QUEUES; ++slot)
+            {
+                auto const type = player->GetBattlegroundQueueTypeId(slot);
+                if (type == BATTLEGROUND_QUEUE_NONE) continue;
+                if (auto* bg = player->GetBattleground(); player->InBattleground() && bg
+                    && type == BattlegroundMgr::BGQueueTypeId(bg->GetBgTypeID(), bg->GetArenaType())) continue;
+                GroupQueueInfo info;
+                if (sBattlegroundMgr->GetBattlegroundQueue(type).GetPlayerGroupInfoData(player->GetGUID(), &info))
+                    add(QueueMembers(guid, info));
+            }
+            auto const lfgGroup = sLFGMgr->GetGroup(player->GetGUID());
+            auto const phase = lfgGroup ? sLFGMgr->GetState(lfgGroup) : lfg::LFG_STATE_NONE;
+            if (phase == lfg::LFG_STATE_ROLECHECK || phase == lfg::LFG_STATE_QUEUED)
+                if (auto receipt = ReadLfgApplicants(lfgGroup.GetRawValue(), phase == lfg::LFG_STATE_QUEUED))
+                    add(LfgReceiptGuids(*receipt));
+            if (auto* group = player->GetGroup(); group && group->isLFGGroup()
+                && DungeonState(sLFGMgr->GetState(group->GetGUID()))) add(Roster(group));
+            // Ordinary/BG group departures reject shared side effects in GroupDepartureReason;
+            // their permitted mutation touches only this member. Unreadable receipts still
+            // fail conservatively at the step; an absent roster is never an invented closure.
+        }
+        members.push_back(std::move(member));
+    }
     return LeavePvpAckError(members);
 }
 
@@ -263,16 +306,7 @@ RealmStep LeaveNativeQueue(Queued& entry, std::uint32_t guid, std::uint32_t slot
     if (!queue.GetPlayerGroupInfoData(bot->GetGUID(), &info)) return Failure(entry, "queue_receipt_unavailable");
     if (BattlegroundMgr::BGQueueTypeId(info.BgTypeId, info.ArenaType) != type)
         return Failure(entry, "queue_type_changed");
-    std::vector<std::uint32_t> affected{guid};
-    if (info.IsRated && !info.IsInvitedToBGInstanceGUID)
-    {
-        affected.clear();
-        for (auto member : info.Players)
-        {
-            if (!member.IsPlayer()) return Failure(entry, "queue_manifest_unavailable");
-            affected.push_back(member.GetCounter());
-        }
-    }
+    auto const affected = QueueMembers(guid, info);
     if (std::find(affected.begin(), affected.end(), guid) == affected.end()) return Failure(entry, "queue_manifest_unavailable");
     if (auto why = ValidateMembers(entry, affected); !why.empty()) return Failure(entry, why);
     auto* templateBg = sBattlegroundMgr->GetBattlegroundTemplate(info.BgTypeId);

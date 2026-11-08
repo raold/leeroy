@@ -17,6 +17,8 @@ from leeroy_mind.nightly.store import run_get
 from leeroy_mind.protocol import Member
 from leeroy_mind.selfies import cli, files, snapstage, stage
 from leeroy_mind.selfies.job import pid_alive
+from leeroy_mind.selfies.scene import scene_from, scene_json
+from leeroy_mind.selfies.scene_choices import compose_choices
 from leeroy_mind.selfies.snaps import looks_hash
 from leeroy_mind.selfies.store import current
 from leeroy_mind.selfies.store import pick as pick_photo
@@ -152,9 +154,10 @@ def test_situational_photos_are_made_at_night_and_a_login_ends_the_worker(
             # one planned for a profile photo he then replaces, which must expire unrendered
             live = Store(open_db(data / "mind.db"), clock=clock)
             try:
-                good = planned_snap(live, 102, ref="rehearsal:good", scene=SCENE_REPLY,
+                stored_scene = scene_json(scene_from(compose_choices(SCENE_REPLY)))
+                good = planned_snap(live, 102, ref="rehearsal:good", scene=stored_scene,
                                     pick=current(live, 102).pick, looks=looks_hash(APPEARANCE))
-                stale = planned_snap(live, 103, ref="rehearsal:stale", scene=SCENE_REPLY,
+                stale = planned_snap(live, 103, ref="rehearsal:stale", scene=stored_scene,
                                      pick=current(live, 103).pick, looks=looks_hash(APPEARANCE))
                 ready(live, data, 103, 2, now=3.0)
                 pick_photo(live, 103, 2, 0, source="console", now=4.0)

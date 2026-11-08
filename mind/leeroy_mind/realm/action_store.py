@@ -54,18 +54,19 @@ STEP_REFUSAL_KINDS = frozenset({"rearm", "rpg_status", "equip", "set_profession"
 # empties them until the 60 s poll finds the body online and free. After a swap it says
 # weapon_record_unproved instead, which stays unknown.
 KIND_STEP_REFUSALS = {"rearm": frozenset({"weapon_record_unavailable"})}
-# A leave_pvp with members in a Wintergrasp state native cannot prove restored is refused whole at
+# A leave_pvp with private Wintergrasp state or cleanup outside its manifest is refused whole at
 # its ack (LeavePvpAckError), before any body is reserved or moved, and the error names them:
 # "wg_private_state_unavailable:301,302". It is accepted only when every named guid is in the root's
 # manifest. The same reason from its job, after earlier members may have changed, stays unknown.
 WG_REFUSAL = "wg_private_state_unavailable"
+LEAVE_REFUSALS = frozenset({WG_REFUSAL, "cleanup_member_not_admitted"})
 
 
-def wg_refusal_guids(error, manifest=None):
-    """The guids a Wintergrasp ack refusal names, or None when it is not one (or names a guid
+def leave_refusal_guids(error, manifest=None):
+    """The guids an ordinary leave ack refusal names, or None when it is not one (or names a guid
     outside the manifest, when one is given)."""
     reason, _, rest = error.partition(":")
-    if reason != WG_REFUSAL or re.fullmatch(r"[0-9]{1,10}(,[0-9]{1,10}){0,127}", rest) is None: return None
+    if reason not in LEAVE_REFUSALS or re.fullmatch(r"[0-9]{1,10}(,[0-9]{1,10}){0,127}", rest) is None: return None
     named = tuple(int(g) for g in rest.split(","))
     if len(set(named)) != len(named) or manifest is not None and not set(named) <= set(manifest): return None
     return named
@@ -451,17 +452,17 @@ class ActionStore:
                 native = ev.get("job", {}).get("reason") or ev.get("ack", {}).get("error") or "none"
                 log.warning("realm_action_%s id=%s kind=%s reason=%s native=%s members=%d", r.state, r.command_id,
                             r.kind, r.result_reason or r.send_error or "none", native, len(r.reserved_manifest))
-        if r.role == "root" and r.kind == "leave_pvp" and r.result_reason.startswith(WG_REFUSAL + ":"):
+        if r.role == "root" and r.kind == "leave_pvp" and leave_refusal_guids(r.result_reason, r.reserved_manifest):
             before = self.conn.execute("SELECT state FROM realm_action WHERE seq=?", (r.seq,)).fetchone()
             if before is not None and before[0] != r.state:
-                log.warning("realm_leave_wg_refused id=%s kind=%s reason=%s named=%d members=%d", r.command_id, r.kind,
-                            WG_REFUSAL, len(wg_refusal_guids(r.result_reason) or ()), len(r.reserved_manifest))
+                log.warning("realm_leave_refused id=%s kind=%s reason=%s named=%d members=%d", r.command_id, r.kind,
+                            r.result_reason.partition(":")[0], len(leave_refusal_guids(r.result_reason)), len(r.reserved_manifest))
         if r.role == "root" and r.state == "completed" and r.result_reason == STEP_REFUSED:
             before = self.conn.execute("SELECT state FROM realm_action WHERE seq=?", (r.seq,)).fetchone()
             if before is not None and before[0] != r.state:
                 native = json.loads(r.evidence).get("job", {}).get("reason", "")
                 # A wire reason is untrusted text, even when it looks like a code.
-                code = native if (native == WG_REFUSAL or native in STEP_REFUSALS
+                code = native if (native in LEAVE_REFUSALS or native in STEP_REFUSALS
                                   or native in KIND_STEP_REFUSALS.get(r.kind, ())) else "native_refusal"
                 log.info("realm_action_step_refused id=%s kind=%s reason=%s members=%d",
                          r.command_id, r.kind, code, len(r.reserved_manifest))
@@ -561,14 +562,14 @@ class ActionStore:
             if positive: return self._conflict(r, ev, now)
             error = ack["error"]
             refused = (r.policy in {"ordinary", "wg"} and error in REFUSALS
-                       or r.policy == "ordinary" and r.kind == "leave_pvp" and wg_refusal_guids(error, r.reserved_manifest)
+                       or r.policy == "ordinary" and r.kind == "leave_pvp" and leave_refusal_guids(error, r.reserved_manifest)
                        or r.kind == "guild_grow" and _grow_refusal(error, r.reserved_manifest)
                        or r.policy == "wg" and error in {"no_wintergrasp", "no_online_members"}
                        or r.policy == "defaults" and (error in {"disabled", "busy", "busy:realm_owner"}
                            or error in {f"not_cast:{g}" for g in r.reserved_manifest})
                        or r.policy in {"ack", "result"} and error == "realm_off")
             if "bot" in ev or job or "origin_failure" in ev: refused = False
-            if refused and r.kind == "leave_pvp" and error.startswith(WG_REFUSAL):
+            if refused and r.kind == "leave_pvp" and leave_refusal_guids(error, r.reserved_manifest):
                 return result(False, error, "completed")  # the named members, for the recall to leave out
             return result(False, "refused" if refused else "unknown", "completed" if refused else "unknown")
         if r.policy == "ack" and ack: return result(True)

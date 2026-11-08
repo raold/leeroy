@@ -253,6 +253,13 @@ class Reasoner:
         self.seconds += r.seconds
         return r
 
+    async def chat(self, model, messages, **kw):
+        """Meter an existing generator's own presets under the reflection slot limit."""
+        if model != self.model:
+            raise ValueError("generator_model_mismatch")
+        async with self._slots:
+            return await self._chat(model, messages, **kw)
+
     async def think(self, system: str, user: str) -> str:
         """The reasoning pass: the model's thinking, a newline, then its answer. A reply that
         ran out of num_predict is logged by its counts alone (nightly_think_cut); what it

@@ -183,7 +183,8 @@ def test_leave_native_refuses_for_a_fenced_body_holds_nobody_and_defaults_follow
     run(scenario())
 
 
-def test_a_leave_native_refused_for_a_wintergrasp_member_recalls_the_others(pipeline):
+@pytest.mark.parametrize("reason", ["wg_private_state_unavailable", "cleanup_member_not_admitted"])
+def test_a_leave_native_refused_for_a_named_member_recalls_the_others(pipeline, reason):
     async def scenario():
         async with pipeline:
             h = pipeline
@@ -196,7 +197,7 @@ def test_a_leave_native_refused_for_a_wintergrasp_member_recalls_the_others(pipe
                     return await send(cmd, preserve_id=preserve_id)
                 h.app.sent.append(cmd)
                 refused.append(cmd)
-                return Ack(0, cmd.id, False, "wg_private_state_unavailable:102")  # 102 flew through Wintergrasp
+                return Ack(0, cmd.id, False, f"{reason}:102")
             h.app.send = answer
             h.realm.recall.on_login(h.clock.now())
             await h.cycle()
@@ -215,7 +216,8 @@ def test_a_leave_native_refused_for_a_wintergrasp_member_recalls_the_others(pipe
     run(scenario())
 
 
-def test_a_second_pass_within_the_backoff_recalls_everyone_but_the_named_member(pipeline):
+@pytest.mark.parametrize("reason", ["wg_private_state_unavailable", "cleanup_member_not_admitted"])
+def test_a_second_pass_within_the_backoff_recalls_everyone_but_the_named_member(pipeline, reason):
     async def scenario():
         async with pipeline:
             h = pipeline
@@ -226,7 +228,7 @@ def test_a_second_pass_within_the_backoff_recalls_everyone_but_the_named_member(
                 if type(cmd) is not p.LeavePvp or 102 not in cmd.guids:
                     return await send(cmd, preserve_id=preserve_id)
                 h.app.sent.append(cmd)
-                return Ack(0, cmd.id, False, "wg_private_state_unavailable:102")
+                return Ack(0, cmd.id, False, f"{reason}:102")
             h.app.send = answer
             start = h.clock.now()
             h.realm.recall.on_login(start)
@@ -249,6 +251,92 @@ def test_a_second_pass_within_the_backoff_recalls_everyone_but_the_named_member(
             await h.cycle()
             leaves = [c for c in h.app.sent if type(c) is p.LeavePvp]
             assert len(leaves) == 3 and leaves[2].guids == (101, 103)
+    run(scenario())
+
+
+def test_recall_shrinks_145_through_wintergrasp_then_closure_refusals(pipeline, caplog):
+    async def scenario():
+        async with pipeline:
+            h = pipeline
+            h.cast(*range(101, 246))
+            send = h.app.send
+            refused = set()
+            wg = set(range(101, 116))
+            closure = {116, 117, 118}
+            caplog.set_level("INFO", logger="leeroy_mind.realm")
+
+            async def answer(cmd, *, preserve_id=False):
+                if type(cmd) is p.LeavePvp:
+                    named, reason = ((wg, "wg_private_state_unavailable") if wg & set(cmd.guids)
+                                     else (closure, "cleanup_member_not_admitted"))
+                    if named & set(cmd.guids):
+                        h.app.sent.append(cmd)
+                        refused.add(cmd.id)
+                        return Ack(0, cmd.id, False, reason + ":" + ",".join(map(str, sorted(named))))
+                return await send(cmd, preserve_id=preserve_id)
+            h.app.send = answer
+            h.realm.recall.on_login(h.clock.now())
+            seen = set()
+            for _ in range(20):
+                await h.cycle(1.01)
+                for cmd in h.app.sent[:]:
+                    if cmd.id not in seen:
+                        seen.add(cmd.id)
+                        if cmd.id not in refused:
+                            await h.result(cmd)
+            leaves = [cmd for cmd in h.app.sent if type(cmd) is p.LeavePvp]
+            assert [len(cmd.guids) for cmd in leaves] == [145, 130, 127]
+            assert len({cmd.id for cmd in leaves}) == 3
+            assert all(set(b.guids) < set(a.guids) for a, b in zip(leaves, leaves[1:]))
+            rest = set(range(119, 246))
+            assert [set(cmd.guids) for cmd in h.app.sent if type(cmd) is p.Rearm] == [rest]
+            assert set().union(*(set(cmd.guids) for cmd in h.app.sent if type(cmd) is BotDo)) == rest
+            assert h.realm.action_store.holds() == ()
+            assert h.realm.queue.leave_backed_off("raid") == wg | closure
+            assert [message for message in caplog.messages if message.startswith("realm_recall_left_out")] == [
+                "realm_recall_left_out reason=wg_private_state_unavailable named=15 rest=130",
+                "realm_recall_left_out reason=cleanup_member_not_admitted named=3 rest=127"]
+    run(scenario())
+
+
+def test_repeated_closure_refusals_exhaust_manifest_without_looping(pipeline):
+    async def scenario():
+        async with pipeline:
+            h = pipeline
+            h.cast(101, 102, 103, 104)
+
+            async def answer(cmd, *, preserve_id=False):
+                assert type(cmd) is p.LeavePvp
+                h.app.sent.append(cmd)
+                return Ack(0, cmd.id, False, f"cleanup_member_not_admitted:{cmd.guids[0]}")
+            h.app.send = answer
+            h.realm.recall.on_login(h.clock.now())
+            for _ in range(10):
+                await h.cycle(1.01)
+                h.realm.recall.tick(h.clock.now())
+            assert [cmd.guids for cmd in h.app.sent] == [(101, 102, 103, 104), (102, 103, 104), (103, 104), (104,)]
+            assert h.realm.action_store.holds() == ()
+    run(scenario())
+
+
+@pytest.mark.parametrize("error", ["cleanup_member_not_admitted:", "cleanup_member_not_admitted:999",
+                                   "cleanup_member_not_admitted:101,101"])
+def test_invalid_closure_refusal_holds_and_never_retries(pipeline, error):
+    async def scenario():
+        async with pipeline:
+            h = pipeline
+            h.cast(101, 102)
+
+            async def answer(cmd, *, preserve_id=False):
+                h.app.sent.append(cmd)
+                return Ack(0, cmd.id, False, error)
+            h.app.send = answer
+            h.realm.recall.on_login(h.clock.now())
+            for _ in range(4):
+                await h.cycle(1.01)
+                h.realm.recall.tick(h.clock.now())
+            assert len(h.app.sent) == 1
+            assert h.realm.action_store.holds()[0].guids == frozenset({101, 102})
     run(scenario())
 
 
