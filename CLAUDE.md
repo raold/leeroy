@@ -1156,6 +1156,25 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
   style queues a fresh set for her (a first set if she never had one, else a "4 more" one; sets
   waiting for his choice stay waiting). The NSFW gate (`nsfw_max`) is unchanged for every image
   of both styles.
+- **Offline photo booth.** `[selfies] booth = true` additionally renders profile sets between
+  nights. It defaults to false and is read only at startup; an invalid selfies table means
+  rendering off. Its background loop checks once a minute, outside chat/control handling.
+  Both `enabled` and `booth` must be true, the owner's nightly Presence must have counted at
+  least 10 minutes offline, no live lease may be held, and no night may be running or due.
+  Requests must be at least `booth_wait_minutes` old (default 10, range 1-60); a newly available
+  first set is queued and timestamped at the loop's first eligible observation. Every request
+  still passes the shared renderer in `selfies/render.py`, including held-kind and NSFW rules.
+  `booth_sets_per_day` (default 6, range 1-120) caps completed attempts per local calendar day:
+  ready, refused and failed sets consume that allowance, survive restart and are not retried
+  by the booth that day. Held sets take no allowance. The night's `selfie_per_night` cap and
+  its ability to render remaining/refused booth sets are unchanged. A set crossing midnight
+  remains queued and is rendered under the new day's allowance at a later eligible check.
+  A due night cancels the booth and waits for the whole worker tree to exit; one shared lock
+  covers each run and its cleanup. Every live lease preempts both through the same arbiter.
+  Normal completion makes room before rendering and again after worker exit; cancellation
+  makes no arbiter call before hand-over. `selfies status` includes separate `booth` daily
+  stage totals and the last pass (sets, attempts, seconds, outcome); `selfies_booth_done`
+  logs sets, seconds and outcome. No night schedule, photo choice, or content rule changes.
 - **GPU rules.** The image stage unloads every chat model but the embedding model (the worker
   needs the VRAM) and never renders while a live lease is held (his login, an offline raid, the
   voice service): it ends without a failure and the sets wait for the next night. A night with

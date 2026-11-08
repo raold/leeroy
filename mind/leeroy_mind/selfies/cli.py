@@ -7,6 +7,7 @@ unload the live model in his session), copies the database, and renders one set 
 member into <data>/scratch/selfies-try/<guid>/. Nothing is written to the live data. Output
 carries counts, guids, timings and paths; never a prompt, persona text or a name."""
 import argparse
+import json
 import asyncio
 import shutil
 import sqlite3
@@ -93,7 +94,25 @@ def _status(store, clock) -> dict:
         snaps = counts(store.conn, now=clock.now())
     except sqlite3.Error:  # an older database has no selfie_snap
         snaps = {}
-    return {"queue": view, "snaps": snaps, "stages": _stages(store.conn)}
+    return {"queue": view, "snaps": snaps, "stages": _stages(store.conn),
+            "booth": _booth_status(store)}
+
+
+def _booth_status(store) -> dict:
+    """The booth's latest pass and separate daily records, including on a day with no night."""
+    from .booth import LAST, STAGE as BOOTH
+    try:
+        row = store.conn.execute("SELECT * FROM night_stage WHERE stage=? "
+                                 "ORDER BY night DESC LIMIT 1", (BOOTH,)).fetchone()
+        if row is None:
+            return {}
+        rec = dict(row)
+        rec["units"] = store.conn.execute("SELECT count(*) FROM night_step WHERE night=? "
+            "AND stage=? AND unit<>'queue'", (rec["night"], BOOTH)).fetchone()[0]
+        rec["last"] = json.loads(store.get_meta(LAST) or "{}")
+        return rec
+    except (sqlite3.Error, ValueError, TypeError):
+        return {}
 
 
 class _Measured:

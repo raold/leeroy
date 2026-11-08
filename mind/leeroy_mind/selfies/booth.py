@@ -1,0 +1,155 @@
+"""An opt-in, once-a-minute offline profile-photo pass, separate from the night's budget.
+
+The scheduler keeps its own due times. A due night takes priority, cancels a booth already in
+flight and waits for its worker tree to end. One lock covers both runs, including cleanup.
+Every live lease uses the arbiter's preempt to stop both; cancellation cleanup never calls
+the arbiter, whose hand-over owns its lock while awaiting us.
+"""
+import asyncio
+import json
+import logging
+import time
+from contextlib import suppress
+from collections import Counter
+
+from leeroy_mind.logs import log
+from leeroy_mind.nightly.gpu import LiveLeaseHeld
+
+from .config import worker_command, worker_env
+from .render import RenderPolicy, done_sets, queue, render, todo
+from .worker import SelfieWorker, to_the_end
+
+STAGE = "selfies_booth"
+LAST = "selfies:booth:last"
+OFFLINE_SECONDS = 600
+TICK_SECONDS = 60
+
+
+class PhotoBooth:
+    def __init__(self, app, cfg, *, worker=None):
+        self.app, self.cfg = app, cfg
+        self.scheduler, self.arbiter = app.night_scheduler, app.arbiter
+        self.worker = worker or (lambda: SelfieWorker(worker_command(cfg), env=worker_env(cfg)))
+        self._night = self.scheduler.run_night
+        self._exclusive = asyncio.Lock()
+        self._task = None
+        self._stopping = False
+        self.scheduler.run_night = self.run_night
+        self.arbiter.set_preempt(self.preempt)
+
+    @property
+    def running(self):
+        return self._task is not None and not self._task.done()
+
+    async def cancel(self):
+        if self.running:
+            if not self._stopping:
+                self._stopping = True
+                self._task.cancel()
+            # A cancelled hand-over must not cancel or abandon the worker's cleanup.
+            await asyncio.wait({self._task})
+
+    async def preempt(self):
+        await self.scheduler.cancel_run()
+        await self.cancel()
+
+    async def run_night(self, night, window):
+        await self.cancel()
+        async with self._exclusive:
+            await self._night(night, window)
+
+    def _eligible(self):
+        return (self.cfg.enabled and self.cfg.booth and not self.arbiter.holders
+                and self.scheduler.presence.offline_seconds() >= OFFLINE_SECONDS
+                and self.scheduler.running is None and not self._exclusive.locked()
+                and self.scheduler.due() is None)
+
+    def _context(self):
+        now = self.app.clock.now()
+        day = self.app.clock.local().date().isoformat()
+        ctx = self.app.night_runner.make_ctx(day, (now, now))
+        policy = RenderPolicy(stage=STAGE, cap=self.cfg.booth_sets_per_day,
+                              requested_before=now - self.cfg.booth_wait_minutes * 60,
+                              day=day, record_failures=True)
+        return ctx, policy
+
+    async def tick(self):
+        if self.running or not self._eligible():
+            return
+        ctx, policy = self._context()
+        queue(ctx, policy)  # timestamps first sets without touching the night's receipts
+        if not todo(ctx, policy):
+            return
+        self._stopping = False
+        self._task = asyncio.create_task(self._run(ctx, policy), name="selfies-booth")
+        self._task.add_done_callback(self._finished)
+
+    @staticmethod
+    def _finished(task):
+        if not task.cancelled() and (error := task.exception()) is not None:
+            log("selfies_booth_failed", level=logging.WARNING, error=type(error).__name__)
+
+    async def _run(self, ctx, policy):
+        # A night or a lease may have arrived between tick and this task's first instruction.
+        if not self._eligible():
+            return
+        async with self._exclusive:
+            started, began = ctx.clock.now(), time.monotonic()
+            before = done_sets(ctx, policy)
+            outcome, calls = "failed", 0
+            tally = Counter()
+            w = self.worker()
+            original_render = w.render
+
+            async def counted(*args, **kwargs):
+                nonlocal calls
+                calls += 1
+                return await original_render(*args, **kwargs)
+
+            w.render = counted
+            try:
+                try:
+                    await self.arbiter.make_room()
+                    await render(ctx, self.cfg, w, policy, tally=tally)
+                    outcome = "partial" if ctx.failures else "done"
+                finally:
+                    await to_the_end(w.stop())
+                # Normal completion only. A live lease now owns the next cold preload.
+                with suppress(LiveLeaseHeld):
+                    await self.arbiter.make_room()
+            except asyncio.CancelledError:
+                outcome = "preempted"
+                raise
+            except LiveLeaseHeld:
+                outcome = "preempted"
+            except Exception as e:
+                log("selfies_booth_failed", level=logging.WARNING, error=type(e).__name__)
+            finally:
+                seconds = round(time.monotonic() - began, 3)
+                attempts = done_sets(ctx, policy) - before
+                # A cancelled pass may have already published some sets before its return.
+                sets = tally["ready"]
+                with ctx.store.transaction():
+                    # Unlike a resumed night, every booth pass (even one stopped before its
+                    # first request) advances its record. Calls are actual render attempts.
+                    ctx.store.conn.execute("INSERT INTO night_stage(night,stage,started,finished,"
+                        "calls,call_s) VALUES(?,?,?,?,?,?) ON CONFLICT(night,stage) DO UPDATE SET "
+                        "started=min(started,excluded.started),finished=max(finished,excluded.finished),"
+                        "calls=calls+excluded.calls,call_s=call_s+excluded.call_s",
+                        (ctx.night, STAGE, started, ctx.clock.now(), calls, seconds))
+                    ctx.store.set_meta(LAST, json.dumps(dict(day=ctx.night, started=started,
+                        finished=ctx.clock.now(), sets=sets, attempts=attempts, seconds=seconds,
+                        outcome=outcome)))
+                log("selfies_booth_done", sets=sets, seconds=seconds, outcome=outcome)
+
+    async def run_forever(self):
+        try:
+            while True:
+                try:
+                    await self.tick()
+                except Exception as e:
+                    log("selfies_booth_tick_failed", level=logging.WARNING,
+                        error=type(e).__name__)
+                await self.app.clock.sleep(TICK_SECONDS)
+        finally:
+            await self.cancel()
