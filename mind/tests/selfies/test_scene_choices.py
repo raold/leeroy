@@ -125,3 +125,13 @@ def test_similarity_only_copies_known_codes_and_numeric_fields():
     assert _similarity({"code": "ok", "pairs": 1, "pair": [0, 1], "max": .5,
                         "mean": .5, "prompt": "private"}, 2) == {
         "code": "ok", "pairs": 1, "pair": [0, 1], "max": .5, "mean": .5}
+
+
+def test_new_composed_scene_persists_its_recipe_but_old_prose_never_gains_one():
+    new = scene.scene_from(PICKS)
+    stored = scene.scene_json(new)
+    assert new.recipe == stored["recipe"] == choices.RECIPE
+    assert scene.scene_from(stored) == new
+    old = {k: v for k, v in stored.items() if k != "recipe"}
+    assert scene.scene_from(old).recipe == 0
+    assert "recipe" not in scene.scene_json(scene.scene_from(old))

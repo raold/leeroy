@@ -31,11 +31,10 @@ from nightly.test_night_enrich import APPEARANCE
 from selfies.fakes import JPEG, fake_command, fake_worker, planned_snap, ready, renderable_cast, until
 
 SNAPS_CFG = SelfieCfg(enabled=True, snaps=True)
-SCENE = {"kind": "snapshot", "framing": "upper_body", "setting": "on a wooden pier by the harbour",
-         "activity": "throwing a ball for a scruffy terrier",
-         "outfit": "a yellow raincoat over a grey jumper", "expression": "laughing",
-         "when": "day", "audience": "anyone",
-         "shows": "Them on a wooden pier throwing a ball for their dog."}
+from leeroy_mind.selfies.scene import scene_json
+from selfies.test_scene_choices import PICKS
+SCENE = scene_json(scene_from(PICKS))
+
 IDENTITY = {"FAKE_SELFIE_IDENTITY": "1"}
 
 
@@ -547,3 +546,23 @@ def test_rows_that_will_expire_do_not_crowd_out_a_good_row_under_a_small_cap(h):
     bad = situation(h, 102, scene={"shows": "an invented scene"})
     good = situation(h, 103)
     assert [r.id for r in _todo(ctx)] == [late, bad, good]  # the two expire, the good one renders
+
+
+@pytest.mark.parametrize("recipe", [None, 0, 2, True])
+def test_pre_enum_or_unknown_scene_stays_held_without_rendering_or_deleting(h, tmp_path, caplog, recipe):
+    cast(h, 101)
+    old = {k: v for k, v in SCENE.items() if k != "recipe"}
+    if recipe is not None:
+        old["recipe"] = recipe
+    sid = situation(h, 101, scene=old)
+    target = snap(h.settings.data_dir, 101, sid)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(JPEG)
+    ctx = h.ctx()
+    assert wants_gpu(ctx) is False
+    seen = []
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        run(make_snaps_stage(SNAPS_CFG, worker=watching(tmp_path, seen))(ctx))
+    assert seen == [] and not ctx.failures
+    assert snap_row(h.store, sid).status == "planned" and snap_row(h.store, sid).scene == old
+    assert target.read_bytes() == JPEG and "reason=legacy_scene_schema" in caplog.text

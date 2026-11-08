@@ -1225,8 +1225,11 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
     expression, clothed outfit and a prop (including `none`). Activity/place and prop/activity
     pairings refuse incoherent picks. Off-list replies get one schema retry, then no scene.
     Lust settings/outfits/colours/expressions reuse the profile lists and their pairings;
-    situational settings exclude the hot tub, crowd and hallway mirror. Older planned bathing
-    settings are held too. The screen (`selfies/scene.py`) remains a second defence against
+    situational settings exclude the hot tub, crowd and hallway mirror. New stored scenes carry
+    `recipe: 1`. Pre-enum pending scenes (or an unknown recipe) stay planned with the held code
+    `legacy_scene_schema`, use no render/GPU slot, and expire normally; their rows and files are
+    preserved. No free-prose fallback approves them. Already rendered photos are unchanged.
+    The screen (`selfies/scene.py`) remains a second defence against
     looks changes, other people,
     names, likeness, era, minors, explicit wear and undressing or bathing contexts, and a lust
     woman's scene reuses the profile photo's enum picks. `snaps` (image model, after `selfies`,

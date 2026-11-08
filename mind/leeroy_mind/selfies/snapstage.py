@@ -39,6 +39,7 @@ from . import files
 from .config import SelfieCfg, worker_command, worker_env
 from .prompt import LUST_HELD, LUST_NAMED, renderable
 from .scene import build_scene_prompt, build_tile_prompt, ref_crop, scene_from, scene_renderable
+from .scene_choices import RECIPE
 from .scenes import GUILD_MIN
 from .slot import SetRefused, render_slot
 from .snaps import SnapRow, expire, looks_hash, mark_rendered, planned
@@ -155,7 +156,10 @@ def _ended(ctx: "NightContext", row: SnapRow) -> str | None:
 
 
 def _held(p: Persona, row: SnapRow) -> str | None:
-    why = scene_renderable(p, scene_from(row.scene))
+    scene = scene_from(row.scene)
+    if type(scene.recipe) is not int or scene.recipe != RECIPE:
+        return "legacy_scene_schema"  # preserve the row and files; never render old free prose
+    why = scene_renderable(p, scene)
     return None if why is None else _HELD.get(why, why)
 
 

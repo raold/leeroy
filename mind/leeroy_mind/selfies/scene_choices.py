@@ -5,6 +5,7 @@ Lust outfits/colours/expressions still come from kind.py and meet screen_lust un
 """
 from .kind import LUST_SETTINGS
 
+RECIPE = 1  # persisted with composed text; older pending prose is held, never grandfathered
 GAME_MONITOR = "monitor displaying a landscape game map"
 SHEET_MONITOR = "monitor displaying a spreadsheet"
 TILE_FRAMING = "solo candid portrait, head and shoulders"
@@ -113,5 +114,5 @@ def compose_choices(data: dict) -> dict:
     if "colour" not in data:
         out.update(setting=PLACES[data["setting"]], outfit=OUTFITS[data["outfit"]],
                    expression=EXPRESSIONS[data["expression"]])
-    out.update(activity=activity, shows=f"{activity}, {out['setting']}.")
+    out.update(activity=activity, shows=f"{activity}, {out['setting']}.", recipe=RECIPE)
     return out

@@ -313,6 +313,7 @@ class Scene:
     audience: str
     shows: str
     style: str = PLAIN  # LUST: setting, outfit and expression were her picks (R2)
+    recipe: int = 0  # missing on pre-enum rows; snapstage holds them instead of rendering prose
 
 
 def scene_from(data: dict) -> Scene:
@@ -329,7 +330,8 @@ def scene_from(data: dict) -> Scene:
     if style not in STYLES:
         raise ValueError("scene: unknown style")
     return Scene(**{f.name: data[f.name] for f in fields(Scene)
-                    if f.name not in ("outfit", "style")}, outfit=outfit, style=style)
+                    if f.name not in ("outfit", "style", "recipe")}, outfit=outfit, style=style,
+                 recipe=data.get("recipe", 0))
 
 
 def scene_json(s: Scene) -> dict:
@@ -338,6 +340,8 @@ def scene_json(s: Scene) -> dict:
     out = asdict(s)
     if s.style == PLAIN:
         del out["style"]
+    if not s.recipe:
+        del out["recipe"]
     return out
 
 
