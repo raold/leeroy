@@ -388,7 +388,7 @@ class MindApp:
                                    lambda: self.cfg.models.live, human_guid=self._human_guid,
                                    bystanders=self.bystanders, human=self._identity,
                                    said=lambda line_id: self.engine.said_words(line_id))
-        self.world = WorldView(is_officer=self._is_officer)
+        self.world = WorldView(is_officer=self._is_officer, discord_roster=self.store.cast)
         self.world.human_guid = self._human
         self.raid = RaidState(world=self.world, personas=self.personas.get, clock=self.clock)
         self.recall = Recall(self.store, self.embedder, self.clock, tau_days=cfg.memory.depth_days)

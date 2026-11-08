@@ -199,7 +199,8 @@ class DiscordTalk:
         """The members he addressed: the author of the message he replied to, then those he
         @mentioned, in the channel's audience, with a persona, up to MAX_NAMED."""
         hg, personas = self.app.human_guid, self.app.personas
-        names = {m.name.casefold(): g for g, m in self.app.world.members.items() if g != hg}
+        names = {m.name.casefold(): g for g, m in self.app.world.discord_members().items()
+                 if g != hg}
         out = [] if replied is None else [replied]
         out += [g for m in _MENTION.finditer(text)
                 if (g := names.get(m.group(1).casefold())) is not None]
@@ -226,7 +227,7 @@ class DiscordTalk:
 
     def _fit(self, ch: layout.Channel, g: int, p) -> float:
         world = self.app.world
-        m = world.members.get(g)
+        m = world.discord_members().get(g)
         fit = 1.0
         if m is not None and layout.CLASS_CHANNEL.get(m.class_) == ch.id:
             fit *= CLASS_FIT
@@ -237,7 +238,7 @@ class DiscordTalk:
 
     def _presence(self, g: int, p, local) -> Presence:
         world = self.app.world
-        m = world.members.get(g)
+        m = world.discord_members().get(g)
         return presence_of(p, local=local_time(local, p.identity.region),
                            body_online=g in world.online, body_zone=m.zone if m else 0,
                            rng_seed=RNG_SEED,
@@ -273,7 +274,7 @@ class DiscordTalk:
         app = self.app
         if g == app.human_guid:
             return app.engine.human.called
-        m = app.world.members.get(g)
+        m = app.world.discord_members().get(g)
         if m is not None:
             return m.name
         p = app.personas.get(g)

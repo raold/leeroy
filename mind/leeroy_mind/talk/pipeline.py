@@ -533,15 +533,18 @@ class Pipeline:
     def _new_id(self) -> str:
         return f"t{next(self._ids)}"
 
-    def _names(self) -> dict[int, str]:
-        out = {g: m.name for g, m in self.world.members.items()}
+    def _members_for(self, channel: str):
+        return self.world.discord_members() if is_discord(channel) else self.world.members
+
+    def _names(self, channel: str = "") -> dict[int, str]:
+        out = {g: m.name for g, m in self._members_for(channel).items()}
         if self.human.guid:
             out[self.human.guid] = self.human.called
         return out
 
-    def _protect(self) -> frozenset[str]:
+    def _protect(self, channel: str = "") -> frozenset[str]:
         h = self.human
-        return frozenset({m.name for m in self.world.members.values()}
+        return frozenset({m.name for m in self._members_for(channel).values()}
                          | {x for x in (h.nickname, h.character_name, h.real_name) if x})
 
     def _zone_of(self, guid: int) -> int:
@@ -854,7 +857,7 @@ class Pipeline:
         """Her arc as this turn may show it (arc.live.arc_view: its private part only in a
         whisper to him; `rng` draws which of its lines fit this turn)."""
         return arc_view(self.store, p, self.human.guid, now=now, channel=turn.channel,
-                        to_guid=turn.to_guid, forms=self.human.forms, names=self._names(),
+                        to_guid=turn.to_guid, forms=self.human.forms, names=self._names(turn.channel),
                         rng=rng)
 
     def _record_moves(self, turn: Turn, words: str) -> None:
@@ -954,7 +957,7 @@ class Pipeline:
         rng = self.rng if live else self._compose_rng
         now = self.clock.now()
         human, hg = self.human, self.human.guid
-        names = self._names()
+        names = self._names(turn.channel)
         rel_h = self.store.get_relationship(turn.speaker, hg) if hg else None
         close = knows_real_name(rel_h)  # his inner circle: his real name is theirs to use
         recent = list(window) if preview else self.world.recent_visible(
@@ -1687,7 +1690,7 @@ class Pipeline:
             if not silent:
                 tells = find_tells(text, recent_own=self._own_lines(turn), speaker=name,
                                    answers=c.answers, others=c.others, samples=c.samples,
-                                   support=c.support, people=list(self._protect()),
+                                   support=c.support, people=list(self._protect(turn.channel)),
                                    window=c.window, held=c.held, tonight=meta.again_tonight,
                                    recent_moves=moves, summons_ok=summons_ok,
                                    keep_emoji=emoji)
@@ -1741,7 +1744,7 @@ class Pipeline:
         either (filters.aimed_off_him: "happy birthday dunna! if i was there i'd make you a
         cake"). Either is asked again with a hint, then dropped, and so sets off no aside."""
         hg = self.human.guid
-        members = [m.name for g, m in self.world.members.items() if g != hg]
+        members = [m.name for g, m in self._members_for(turn.channel).items() if g != hg]
         his = self._his_names()
         p = self.personas.get(turn.speaker)
         if member_flirt(text, members, to_member=self._to_member(turn), human=his,
@@ -1757,7 +1760,7 @@ class Pipeline:
     def _to_member(self, turn: Turn) -> bool:
         hg = self.human.guid
         return (turn.addressee is not None and turn.addressee != hg
-                and turn.addressee in self.world.members)
+                and turn.addressee in self._members_for(turn.channel))
 
     def _aimed_at_him(self, turn: Turn) -> bool:
         """The turn is his: addressed to him, a whisper to him, or a FLIRT (only ever at him)."""
@@ -1857,13 +1860,14 @@ class Pipeline:
         out: list[Styled] = []
         for piece in pieces:
             out += style_lines(piece, p.typing, self._effects(turn.speaker), self.rng,
-                               length_mult=PHASE_MODS[phase].length_mult, protect=self._protect(),
+                               length_mult=PHASE_MODS[phase].length_mult,
+                               protect=self._protect(turn.channel),
                                speaker=p.character_name, kind=turn.kind, keep_case=keep,
                                max_lines=turn.max_lines if len(pieces) == 1 else 1,
                                aliases=aliases(p), force_lines=two_lines,
                                no_emoticon=romance or turn.kind in NO_MARK_KINDS,
                                wink_ok=not (self._to_member(turn) or names_any(
-                                   piece, [m.name for g, m in self.world.members.items()
+                                   piece, [m.name for g, m in self._members_for(turn.channel).items()
                                            if g != self.human.guid])), game=not discord)
         out = out[:max(1, turn.max_lines)]
         if discord and out:

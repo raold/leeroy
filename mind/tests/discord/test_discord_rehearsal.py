@@ -8,6 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from conftest import HUMAN, TEST_CAST, seed_test_cast
 from console.rig import FakeMind, http, make_app
 from engine_rig import save_member
@@ -46,15 +48,24 @@ async def until(check):
             await asyncio.sleep(0.01)
 
 
-def test_discord_out_of_game_end_to_end(tmp_path):
+@pytest.mark.parametrize("cold", [False, True], ids=["after-logout", "before-first-bridge-cast"])
+def test_discord_out_of_game_end_to_end(tmp_path, cold):
     data = tmp_path / "data"
     data.mkdir()
     ports = []
 
     async def go():
         clock = FakeClock(datetime(2026, 11, 5, 20, tzinfo=ZoneInfo("America/New_York")), yields=64)
-        bridge = FakeBridge([{"type": "hello", "server": "mod-leeroy", "version": "0.1.0",
-                              "guild_id": GUILD_ID, "human_guid": HUMAN}, CAST])
+        greeting = asyncio.Event()
+
+        class DelayedBridge(FakeBridge):
+            async def _write(self, writer, ev):
+                if cold and ev["type"] == "hello":
+                    await greeting.wait()
+                await super()._write(writer, ev)
+
+        bridge = DelayedBridge([{"type": "hello", "server": "mod-leeroy", "version": "0.1.0",
+                                "guild_id": GUILD_ID, "human_guid": 0 if cold else HUMAN}, CAST])
         ports.append(await bridge.start())
         (data / "mind.toml").write_text(
             f"[bridge]\nport = {ports[0]}\n[talk]\nchattiness = 0\n"
@@ -63,7 +74,7 @@ def test_discord_out_of_game_end_to_end(tmp_path):
         try:
             seed_test_cast(store)
             for guid in TEST_CAST:
-                save_member(store, guid, region="US")
+                save_member(store, guid, region="US", guild_role="officer" if guid == 102 else "raider")
             store.set_meta("human_guid", str(HUMAN))
             store.set_meta("human_name", "Testmage")
             store.upsert_cast([Member(guid=HUMAN, name="Testmage", race=10, class_=8,
@@ -78,9 +89,14 @@ def test_discord_out_of_game_end_to_end(tmp_path):
         task = asyncio.create_task(app.run())
         console = None
         try:
-            await until(lambda: app.world.human_online and (data / endpoint.KEY_FILE).exists())
-            await bridge.push({"type": "logout", "guid": HUMAN, "human": True})
-            await until(lambda: not app.world.human_online)
+            if cold:
+                await until(lambda: app.running and bridge.connections and
+                            (data / endpoint.KEY_FILE).exists())
+                assert not app.world.members and not app.world.online
+            else:
+                await until(lambda: app.world.human_online and (data / endpoint.KEY_FILE).exists())
+                await bridge.push({"type": "logout", "guid": HUMAN, "human": True})
+                await until(lambda: not app.world.human_online)
             port = json.loads((data / endpoint.KEY_FILE).read_text())["port"]
             ports.append(port)
             found = [SimpleNamespace(pid=os.getpid())]
@@ -114,6 +130,11 @@ def test_discord_out_of_game_end_to_end(tmp_path):
             dm = await post(action="post", channel="dm:102", text="hello there")
             private = await answer_to("dm:102", dm["id"])
             assert private["author"] == 102 and private["channel"] == "dm:102"
+            named = await post(action="post", channel="general", text="@Arkon are you around?")
+            assert (await answer_to("general", named["id"]))["author"] == 101
+            officer = await post(action="post", channel="officer-chat", text="@Arkon @Belra hello")
+            assert (await answer_to("officer-chat", officer["id"]))["author"] == 102
+            assert [t.speaker for t, _ in app.discord_talk.plan(officer["id"])] == [102]
             assert not [command for command in bridge.commands if command["type"] == "say"]
             view = (await http(console, "GET", "/api/discord?channel=food")).json()
             rows = {m["id"]: m for m in view["messages"]}
@@ -122,6 +143,14 @@ def test_discord_out_of_game_end_to_end(tmp_path):
             assert rows[member["id"]]["reactions"] == [{"emoji": "😂", "members": [HUMAN], "count": 1}]
             assert view["human"] == {"guid": HUMAN, "name": "Testmage"}
             assert not app.world.human_online
+            if cold:
+                assert not app.world.members and not app.world.online
+                greeting.set()
+                await until(lambda: bool(app.world.members))
+                await bridge.push({"type": "cast", "members": []})
+                await until(lambda: not app.world.members)
+                assert not app.world.discord_members() and not app.world.online
+                assert app.world.audience("discord:general", from_guid=HUMAN) == {HUMAN}
         finally:
             if console:
                 await console.close()

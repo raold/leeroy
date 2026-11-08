@@ -1141,6 +1141,11 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   flags do not block a Discord answer; an away record still does. A direct answer's
   first silence is retried once. `DiscordTarget` keeps its reply and thread ids.
   Nothing reaches WoW, and these messages do not advance the game's talk clocks.
+- Before the first bridge cast, Discord uses the saved guild roster for channel
+  audiences, addressed members, presence and name protection. This never marks a
+  game body online. The first bridge cast permanently takes over, even when empty;
+  removed members cannot return from the saved roster. A roster read failure leaves
+  no fallback members and logs only the exception class.
 - DMs have whisper privacy. Officer-only and unknown channels are restricted;
   restricted evidence stays restricted through derived memories, notes and recall.
   Unknown audiences fail closed, and the storage transport checks its speaker's
@@ -1151,7 +1156,8 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   game-login lease independent. Shutdown drains the final release. The default
   rehearsal (`tests/discord/test_discord_rehearsal.py`) runs a real mind, control
   endpoint and console on ephemeral ports with the invented cast and fake bridge,
-  LLM and model admin: channel answer, reaction and DM, no game `say`, clean shutdown.
+  LLM and model admin: channel answer, named and officer-only replies, reaction and
+  DM, both after logout and before the first bridge cast; no game `say`, clean shutdown.
 - D1 is owner-triggered conversation. Autonomous chatter, pre-send guard wiring,
   member reactions, topics, photos, decisions and culture remain later phases.
 
