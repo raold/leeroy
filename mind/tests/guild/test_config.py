@@ -60,6 +60,8 @@ prices = {other = 20}
     ("offline_rotation", "[]"), ("offline_rotation", '"icc25"'),
     ("offline_max_wipes", "21"), ("offline_max_wipes_per_boss", "0"),
     ("offline_timeout_min", "361"), ("level_to", "81"), ("ranks", "{officer=0}"),
+    ("offline_stall_minutes", "0"), ("offline_stall_minutes", "361"),
+    ("offline_stall_minutes", "true"), ("offline_stall_minutes", "1.5"),
     ("ranks", "{raider=true}"), ("ranks", "{social=10}"), ("ranks", "{typo=3}"),
     ("raid_call_delay_s", "-1"), ("assemble_timeout_min", "0"),
     ("worldserver_conf", '""'), ("mysql_exe", "false"), ("unknown", "1"),

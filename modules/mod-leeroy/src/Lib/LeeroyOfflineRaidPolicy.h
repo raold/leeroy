@@ -3,6 +3,7 @@
 #define MOD_LEEROY_OFFLINE_RAID_POLICY_H
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -32,6 +33,11 @@ std::uint32_t AdvanceElapsed(std::uint32_t elapsed, std::uint32_t diff);
 // A new copy keeps each boss at TO_BE_DECIDED (5) until that boss's own script loads with its grid, so
 // unloaded bosses are fresh. Only a recorded kill (DONE, 3) or a completed-encounter credit marks a used copy.
 bool FreshEncounters(std::vector<std::uint8_t> const& bossStates, std::uint32_t completedEncounterMask);
+
+// Empty error admits. Repeated stops during our teardown are no-ops; a finished or foreign job is refused.
+std::string OfflineStopError(bool connected, bool owned, bool finished, bool tearingDown,
+    bool stopped, std::optional<bool> bossEngaged);
+bool BossProgress(std::uint8_t before, std::uint8_t after);
 
 // Configuration may release the cast pins while a job is running. These checks also apply during setup/restarts,
 // before the running-only policy can meaningfully count members or inspect encounter state.

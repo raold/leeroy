@@ -42,6 +42,7 @@ bool Parse(std::string_view type, json const& j, std::string& error)
     if (type == "set_loot_master") return ParseSetLootMaster(j, error).has_value();
     if (type == "give_loot") return ParseGiveLoot(j, error).has_value();
     if (type == "start_offline_raid") return ParseOfflineRaid(j, error).has_value();
+    if (type == "offline_raid_stop") return ParseOfflineRaidStop(j, error).has_value();
     if (type == "gear_up") return ParseGearUp(j, error).has_value();
     if (type == "raid_control") return ParseRaidControl(j, error).has_value();
     if (type == "remove_friend") return ParseRemoveFriend(j, error).has_value();

@@ -55,8 +55,9 @@ def test_all_job_fixtures_round_trip_typed_nested_fields():
         assert type(ev) is Job
         assert type(ev.guids) is tuple and type(ev.skipped) is tuple
         assert all(type(skip) is JobSkip for skip in ev.skipped)
-        assert json.loads(json.dumps(dataclasses.asdict(ev))) == {
-            key: value for key, value in msg.items() if key not in ("v", "type")}
+        expected = dict(members_in_instance=None, last_progress_ts=None, boss_engaged=None)
+        expected.update({key: value for key, value in msg.items() if key not in ("v", "type")})
+        assert json.loads(json.dumps(dataclasses.asdict(ev))) == expected
 
 
 def test_guild_group_fixtures_parse_as_the_server_writes_them():
@@ -167,6 +168,26 @@ def test_older_job_producer_has_no_native_training_scope():
     msg = lines(kind="event")[0]["msg"]
     msg.pop("training_run")
     assert bridge.parse_event(json.dumps(msg)).training_run == ""
+
+
+def test_job_progress_optional_fields_round_trip_and_old_native_defaults():
+    register()
+    msg = lines(kind="event")[0]["msg"]
+    old = bridge.parse_event(json.dumps(msg))
+    assert old.members_in_instance is old.last_progress_ts is old.boss_engaged is None
+    msg.update(members_in_instance=0, last_progress_ts=123, boss_engaged=False)
+    ev = bridge.parse_event(json.dumps(msg))
+    assert (ev.members_in_instance, ev.last_progress_ts, ev.boss_engaged) == (0, 123, False)
+
+
+@pytest.mark.parametrize(('field', 'value'), [('members_in_instance', True),
+    ('last_progress_ts', 1.5), ('boss_engaged', 0)])
+def test_job_progress_fields_are_strictly_typed(field, value):
+    register()
+    msg = lines(kind="event")[0]["msg"]
+    msg[field] = value
+    with pytest.raises(bridge.ProtocolError, match=field):
+        bridge.parse_event(json.dumps(msg))
 
 
 def test_messages_are_frozen_and_slotted():

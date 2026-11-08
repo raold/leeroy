@@ -6,6 +6,23 @@
 
 namespace Leeroy::Guild
 {
+std::string OfflineStopError(bool connected, bool owned, bool finished, bool tearingDown,
+    bool stopped, std::optional<bool> bossEngaged)
+{
+    if (!connected) return "mind_disconnected";
+    if (finished) return "raid_finished";
+    if (!owned) return "unknown_raid";
+    if (tearingDown) return stopped ? "" : "raid_finishing";
+    if (!bossEngaged.has_value()) return "encounters_unavailable";
+    if (*bossEngaged) return "boss_engaged";
+    return {};
+}
+
+bool BossProgress(std::uint8_t before, std::uint8_t after)
+{
+    return before != after && (after == 1 || after == 3 || IsWipe(before, after));
+}
+
 Decision Decide(OfflineRaidState const& state, OfflineRaidLimits const& limits)
 {
     if (state.humanOnline)

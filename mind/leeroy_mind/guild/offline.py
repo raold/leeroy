@@ -12,12 +12,13 @@ import logging
 import math
 from uuid import uuid4
 
+from leeroy_mind.bridge import BridgeError
 from leeroy_mind.memory.writer import MemoryCandidate
 
 from .comp import NoTankError, candidates_from, choose_leads, select_comp
 from .lines import public_text
 from .loot import _get, _put
-from .protocol import StartOfflineRaid
+from .protocol import StartOfflineRaid, StopOfflineRaid
 from .raid_night import RaidRun
 from .raids import split_key
 from .session import RaidPlan, RaidSession
@@ -40,6 +41,8 @@ OWNED_KEY = "guild:offline:owned"
 DAY_PREFIX = "guild:offline:day:"
 LOGOUT_KEY = "guild:offline:last-logout"
 REASON_LIMIT = 200
+PROGRESS_FRESH_S = 120
+SCATTER_S = 10 * 60
 
 
 def is_due(now: datetime, *, human_online: bool, last_logout: datetime | None,
@@ -133,6 +136,8 @@ class OfflineRaids:
         self._online = ports.human_online()
         self._lease = False
         self._owned = _get(ports.conn, OWNED_KEY)
+        # A restart must see a new native heartbeat before using any saved observation.
+        self._progress = None
         if self.active:
             if self._owned["phase"] == "acquiring":
                 # Dispatch was never reached. A new process owns no previous
@@ -309,6 +314,9 @@ class OfflineRaids:
             self._owned["instance"] = ev.instance_id
         if ev.stage == "running" and ev.state == "progress":
             self._owned["running_seen"] = True
+            self._observe_progress(ev)
+        elif ev.state == "progress":
+            self._progress = None
         if ev.state in {"done", "failed"}:
             self._owned["terminal"] = asdict(ev)
             self._invalidate()
@@ -323,6 +331,79 @@ class OfflineRaids:
                     self._update_day(failed=str(ev.reason)[:REASON_LIMIT])
             except Exception:
                 log.warning("offline raid failure reason was not stored")
+
+    def _unsupported_stop(self):
+        if not self._owned.get("stop_unsupported"):
+            self._owned["stop_unsupported"] = True
+            log.info("offline_raid_stop_unsupported raid_id=%s", self._owned.get("raid_id"))
+
+    def _observe_progress(self, ev):
+        now = self.ports.clock.now()
+        if all(v is None for v in (ev.members_in_instance, ev.last_progress_ts, ev.boss_engaged)):
+            self._unsupported_stop()
+            self._progress = None
+            return
+        previous = self._progress
+        # Wire times are milliseconds, on the same host. Require recent, ordered, complete evidence.
+        if (type(ev.ts) is not int or not 0 <= now - ev.ts / 1000 <= PROGRESS_FRESH_S
+                or type(ev.last_progress_ts) is not int
+                or not self._owned["sent_at"] * 1000 - 5000 <= ev.last_progress_ts <= ev.ts
+                or type(ev.members_in_instance) is not int or not 0 <= ev.members_in_instance <= len(ev.guids)
+                or type(ev.boss_engaged) is not bool):
+            self._progress = None
+            return
+        if previous and ev.ts <= previous["ts"]:
+            return
+        continuous = previous and 0 <= now - previous["received"] <= PROGRESS_FRESH_S
+        scattered = ev.members_in_instance * 2 < len(ev.guids)
+        self._progress = dict(ts=ev.ts, received=now, last=ev.last_progress_ts / 1000,
+                              engaged=ev.boss_engaged, inside=ev.members_in_instance,
+                              scatter_since=(previous["scatter_since"] if continuous
+                                             and previous["scatter_since"] is not None else now)
+                              if scattered else None)
+
+    async def _watchdog(self):
+        now = self.ports.clock.now()
+        progress = self._progress
+        if (self._online or self.ports.human_online() or now >= self._owned["deadline"]
+                or self._owned.get("stop_unsupported") or self._owned.get("terminal") is not None
+                or not progress or not 0 <= now - progress["received"] <= PROGRESS_FRESH_S
+                or not 0 <= now - progress["ts"] / 1000 <= PROGRESS_FRESH_S
+                or progress["engaged"] or now < self._owned.get("stop_retry_at", 0)):
+            return
+        stop = self._owned.get("stop")
+        if stop and (stop.get("accepted") or stop.get("await_terminal")):
+            return
+        reason = ("scattered" if progress["scatter_since"] is not None
+                  and now - progress["scatter_since"] >= SCATTER_S else
+                  "stalled" if now - progress["last"] >= self.cfg.offline_stall_minutes * 60 else None)
+        if reason is None or stop and stop["reason"] != reason:
+            return  # New progress cancels retries of an uncertain stop; still watch for its terminal.
+        if not stop:
+            stop = self._owned["stop"] = dict(reason=reason, accepted=False)
+            log.info("offline_raid_stop raid_id=%s reason=%s inside=%d members=%d",
+                     self._owned.get("raid_id"), reason, progress["inside"], len(self._owned["accepted"]))
+        self._owned["stop_retry_at"] = now + RETRY_S
+        # The transport forbids reissuing a command id. Native stop is idempotent by raid_id,
+        # so a retry gets a new envelope id while its target and recorded reason stay fixed.
+        stop["id"] = uuid4().hex
+        self._save()
+        try:
+            ack = await self.ports.send(StopOfflineRaid(stop["id"], self._owned["id"]))
+        except (BridgeError, TimeoutError, ConnectionError, OSError):
+            return
+        if ack is None or ack.id != stop["id"]:
+            return
+        if ack.ok is True:
+            stop["accepted"] = True
+            self._cancel()
+        elif ack.ok is False:
+            if ack.error in {"unknown type: offline_raid_stop", "dungeon_clear_unavailable"}:
+                self._unsupported_stop()
+            if ack.error in {"raid_finished", "raid_finishing", "unknown_raid"}:
+                stop["await_terminal"] = True
+            # Keep the uncertain attempt's reason: its terminal may arrive after this refusal.
+        self._save()
 
     def _enqueue(self, kind, ev):
         item = (kind, ev)
@@ -360,6 +441,12 @@ class OfflineRaids:
             return
         elif name == "dc_status" and ev.tank_guid != plan.tank_guid:
             return
+        if name == "boss" and self._progress is not None:
+            # Correlated boss evidence can arrive between heartbeats. Do not stop using an older idle sample.
+            self._progress["last"] = max(self._progress["last"], self.ports.clock.now())
+            if ev.state == "engaged":
+                self._progress["engaged"] = True
+            # Only a new native snapshot proves that every boss is now disengaged.
         self._enqueue(name, ev)
 
     async def on_boss(self, ev):
@@ -412,6 +499,7 @@ class OfflineRaids:
                 self._hold_today(blocked=True)
             return
         now = self.ports.clock.now()
+        self._progress = None
         self._owned = dict(id=uuid4().hex, day=self._day(), phase="acquiring", plan=asdict(plan),
                            sent_at=now, deadline=now + self.cfg.offline_timeout_min * 60,
                            cancelled=False, cancel_at=None, accepted=None, instance=None,
@@ -621,6 +709,9 @@ class OfflineRaids:
         terminal = self._owned.get("terminal")
         if terminal is None:
             return
+        outcome = terminal["reason"] or terminal["state"]
+        if outcome == "stopped" and self._owned.get("stop"):
+            outcome = self._owned["stop"]["reason"]
         # A restart may retain the terminal receipt but not the in-memory inbox.
         if self.session is None:
             from .protocol import Job, JobSkip
@@ -634,7 +725,7 @@ class OfflineRaids:
                     continue
                 try:
                     async with asyncio.timeout(20):
-                        ready = await hook(self.run, terminal["reason"] or terminal["state"])
+                        ready = await hook(self.run, outcome)
                 except Exception:
                     ready = False
                     log.warning("offline raid cleanup remains pending")
@@ -659,14 +750,14 @@ class OfflineRaids:
                 session.wipes = max(session.wipes, terminal["wipes"])
                 if raided and not self._owned.get("attended"):
                     await self._attend()
-                vote = await session.close(public_text(self.ports, terminal["reason"] or terminal["state"])[:160],
+                vote = await session.close(public_text(self.ports, outcome)[:160],
                                            raided=raided)
                 if vote is not None and vote not in self._votes:
                     self._votes.append(vote)
             if self._owned["started"] and not self._owned["end_notified"]:
                 self._owned["end_notified"] = True
                 self._save()
-                await self._notify("on_end", terminal["reason"] or terminal["state"])
+                await self._notify("on_end", outcome)
         finally:
             await self._release()
         if raided:
@@ -730,6 +821,7 @@ class OfflineRaids:
                             or self.ports.clock.now() >= self._owned["deadline"]):
                         self._cancel()
                     await self._drain()
+                    await self._watchdog()
                     if self._owned.get("terminal") is not None:
                         await self._finish()
                     else:
