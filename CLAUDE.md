@@ -630,8 +630,10 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   bounded overlay, birthdays and relationship seeds, with source `generated` (the
   existing source allowed by `persona_core`). `newcomers_per_night` defaults to 6 in
   NightlySettings; the budget may defer them. A saved nightly selection and unit
-  receipts keep that cap across resumes. A refusal retries on at most three distinct
-  nights, then logs `newcomer_gave_up` with the guid; manual generation remains
+  receipts keep that cap across resumes. Generation refusals and recoverable save
+  failures retry on at most three distinct nights, then log `newcomer_gave_up` with
+  the guid. A save failure rolls back the persona/relationships before recording
+  the failed night when the database remains writable; manual generation remains
   available. Login cancellation consumes no failed night. The owner and non-cast
   members are excluded. Later night stages see new personas immediately, and the
   existing login reload makes them available to live text talk without a restart.

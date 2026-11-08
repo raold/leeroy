@@ -64,6 +64,24 @@ def count(ctx):
     return sum(g in eligible and not ctx.done(STAGE, str(g)) for g in _selection(ctx))
 
 
+def _failed_night(ctx, guid, *, reported=False):
+    """Record one failed night after the failed generation/write transaction has ended."""
+    gave_up = False
+
+    def failed(store):
+        nonlocal gave_up
+        n, last = _failures(store, guid)
+        if last != ctx.night:
+            n = min(FAILED_NIGHTS, n + 1)
+        store.set_meta(f"{STATE}{guid}", json.dumps(
+            {"failed_nights": n, "last_night": ctx.night}))
+        gave_up = n == FAILED_NIGHTS
+    if ctx.commit(STAGE, str(guid), failed):
+        if not reported:
+            ctx.fail(STAGE, str(guid), NewcomerRefused("generation_refused"))
+        log("newcomer_gave_up" if gave_up else "newcomer_refused", guid=guid)
+
+
 def make_stage(cast_config):
     async def stage_newcomers(ctx):
         # Unlike model-parallel stages, name allocation is sequential: each accepted
@@ -99,19 +117,7 @@ def make_stage(cast_config):
             except Exception:
                 # CancelledError is a BaseException: a login/cancellation consumes no
                 # failed night, and the same selected unit may resume later tonight.
-                gave_up = False
-
-                def failed(store):
-                    nonlocal gave_up
-                    n, last = _failures(store, guid)
-                    if last != ctx.night:
-                        n = min(FAILED_NIGHTS, n + 1)
-                    store.set_meta(f"{STATE}{guid}", json.dumps(
-                        {"failed_nights": n, "last_night": ctx.night}))
-                    gave_up = n == FAILED_NIGHTS
-                if ctx.commit(STAGE, unit, failed):
-                    ctx.fail(STAGE, unit, NewcomerRefused("generation_refused"))
-                    log("newcomer_gave_up" if gave_up else "newcomer_refused", guid=guid)
+                _failed_night(ctx, guid)
                 continue
 
             saved = False
@@ -131,9 +137,14 @@ def make_stage(cast_config):
                     saved = True
                 except Exception:
                     raise NewcomerRefused("persist_failed") from None
-            if ctx.commit(STAGE, unit, write) and saved:
-                ctx.persona_added(guid)
-                log("newcomer_created", guid=guid)
+            if ctx.commit(STAGE, unit, write):
+                if saved:
+                    ctx.persona_added(guid)
+                    log("newcomer_created", guid=guid)
+            else:
+                # A bad persistence hook must not regenerate indefinitely on every resume.
+                # The failed write has rolled back; charge this night if the store can write.
+                _failed_night(ctx, guid, reported=True)
         log("newcomers_finished", selected=len(selected))
     return stage_newcomers
 

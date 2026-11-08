@@ -192,16 +192,28 @@ def test_shared_name_collision_retry_logs_only_guid(h, caplog):
     assert not any(text in caplog.text for text in (clash, NAMES[0], "Arkon"))
 
 
-def test_persona_relationship_and_unit_writes_are_atomic(h, monkeypatch, caplog):
+def test_persona_write_rolls_back_but_failure_receipt_prevents_unbounded_retry(h, monkeypatch, caplog):
     missing(h, 101)
-    ctx = context(h)
 
     def failed(*_, **__):
         raise ValueError("PRIVATE_REPLY")
     monkeypatch.setattr(N, "seed_relationships", failed)
     with caplog.at_level(logging.INFO):
-        run(generate(ctx))
-    assert load_persona(h.store, 101) is None and not ctx.done(N.STAGE, "101")
+        for day in (29, 30, 31):
+            ctx = context(h, night=f"2026-10-{day}")
+            before = h.store.conn.execute("SELECT count(*) FROM relationship").fetchone()[0]
+            run(generate(ctx))
+            assert load_persona(h.store, 101) is None and ctx.done(N.STAGE, "101")
+            assert ctx.failures[N.STAGE] == 1
+            assert h.store.conn.execute("SELECT count(*) FROM relationship").fetchone()[0] == before
+            assert json.loads(h.store.get_meta(N.STATE + "101"))["failed_nights"] == day - 28
+            resumed = context(h, night=ctx.night)
+            run(generate(resumed))
+            assert resumed.reasoner.calls == 0
+        later = context(h, night="2026-11-01")
+        run(generate(later))
+        assert later.reasoner.calls == 0 and N.count(later) == 0
+    assert caplog.text.count("newcomer_gave_up") == 1
     assert "persist_failed" in caplog.text and "PRIVATE_REPLY" not in caplog.text
 
 
