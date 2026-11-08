@@ -1,5 +1,6 @@
 """The nightly stage order and the adapters for extraction and weekly evaluation."""
 import json
+from datetime import date, timedelta
 
 from leeroy_mind.arc.night import stage_arc
 from leeroy_mind.nightly.attraction import stage_attraction
@@ -24,7 +25,7 @@ from leeroy_mind.nightly.wowlife import stage_wowlife
 
 
 class WeeklyEvaluationIncomplete(RuntimeError):
-    """Preserve completed measurements and use the scheduler's bounded retry/backoff."""
+    """A partial weekly evaluation: recorded as a failed unit, never a failed night."""
 
 
 async def stage_threads(ctx):
@@ -46,11 +47,12 @@ async def stage_eval(ctx):
 
     The report may legitimately describe a partial run. Only its explicit completion
     receipt completes the week, so missing answers cannot be mistaken for success.
+    A partial or failed evaluation is recorded as a failed unit (ctx.fail) but never
+    stops the night: the other stages still run. The week has no completion receipt, so
+    the next night of the following week tries it again (see _eval_week).
     """
-    if not is_sunday(ctx.night):
-        return
-    week = iso_week(ctx.night)
-    if ctx.done("eval", week):
+    week = _eval_week(ctx)
+    if week is None or ctx.done("eval", week):
         return
     from leeroy_mind.eval import run_weekly
 
@@ -64,17 +66,37 @@ async def stage_eval(ctx):
                 raise RuntimeError("weekly scratch asker was unavailable")
             ctx.asker = owned
         await run_weekly(ctx, week, use_llm=requested)
-        result = json.loads(ctx.store.get_meta(f"nightly:eval-result:{week}") or "{}")
+        result = _eval_result(ctx, week)
         if result.get("complete") is True and result.get("requested_llm") is requested:
             ctx.skip("eval", week)
         else:
-            error = WeeklyEvaluationIncomplete("weekly evaluation is incomplete")
-            ctx.fail("eval", week, error)
-            raise error
+            ctx.fail("eval", week, WeeklyEvaluationIncomplete("weekly evaluation is incomplete"))
+    except Exception as error:
+        ctx.fail("eval", week, error)
     finally:
         ctx.asker = original
         if owned is not None:
             await owned.aclose()
+
+
+def _eval_result(ctx, week):
+    try:
+        result = json.loads(ctx.store.get_meta(f"nightly:eval-result:{week}") or "{}")
+    except ValueError:
+        return {}
+    return result if isinstance(result, dict) else {}
+
+
+def _eval_week(ctx):
+    """The week to evaluate tonight: this one on its Sunday; on any other night, the
+    week that just ended when its evaluation ran but did not complete (a retry)."""
+    if is_sunday(ctx.night):
+        week = iso_week(ctx.night)
+        return None if _eval_result(ctx, week).get("complete") is True else week
+    last_sunday = date.fromisoformat(ctx.night) - timedelta(days=date.fromisoformat(ctx.night).isoweekday())
+    week = iso_week(last_sunday.isoformat())
+    result = _eval_result(ctx, week)
+    return week if result and result.get("complete") is not True else None
 
 
 # Task14 (nightly breaks) was explicitly skipped by the owner.

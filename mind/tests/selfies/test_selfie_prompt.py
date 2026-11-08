@@ -286,7 +286,8 @@ def test_every_chosen_build_is_said_as_a_figure_at_priority_zero():
     curvy = woman()
     vol = replace(curvy, appearance=replace(curvy.appearance, build="voluptuous"))
     assert ("voluptuous full-figured body, large full bust, wide hips, soft curves", 0) in build_prompt(vol).phrases
-    assert (BUILD_WORDS[curvy.appearance.build], 1)  # woman() is average: optional in build_prompt(curvy).phrases
+    # woman() is average: optional, after her looks
+    assert (BUILD_WORDS[curvy.appearance.build], 1) in build_prompt(curvy).phrases
 
 
 def test_an_average_build_stays_optional_and_a_chosen_one_is_required():
@@ -298,3 +299,15 @@ def test_an_average_build_stays_optional_and_a_chosen_one_is_required():
     assert (BUILD_WORDS["average"], 1) in build_prompt(avg).phrases
     assert (BUILD_WORDS["voluptuous"], 0) in build_prompt(vol).phrases
     assert (BUILD_WORDS["voluptuous"], 1) not in build_prompt(vol).phrases
+
+
+def test_a_chosen_build_comes_right_after_who_she_is():
+    """The text encoders weigh early phrases more: a chosen build follows the age and nationality
+    phrase, before her hair and skin; average stays after her looks."""
+    base = woman()
+    vol = replace(base, appearance=replace(base.appearance, build="voluptuous"))
+    texts = [t for t, _ in build_prompt(vol).phrases]
+    i = texts.index(BUILD_WORDS["voluptuous"])
+    assert "year-old" in texts[i - 1] or "looking at the camera" in texts[i - 1]
+    assert all("hair" not in t for t in texts[:i])
+    assert "wide hips" in BUILD_WORDS["curvy"]

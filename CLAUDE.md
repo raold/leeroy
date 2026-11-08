@@ -257,6 +257,20 @@ mind and mind.log, the control endpoint's `status` (it reports `bridge_connected
 `schema_version`), the console and voice (notes when down), Ollama's `/api/ps`, and stuck
 activity (no `tg_pull` in 48 h with telemetry on and the overhead gate passed, a note while the
 gate is in phase `ab`; a realm hold or `unknown` root older than 1 h; cast without personas). It
+also fails an owned offline raid more than 30 minutes past its deadline or any guild raid
+open longer than 6 hours. Before native progress creates a local raid, a valid owned receipt
+is identified by its command ID and keeps the same deadline check. The latest finished night's
+failed units are grouped by stage
+(note for 1-9, FAIL at 10), using stored counts with a bounded log fallback and an exception
+code when available. Log-only counts require historical coverage spanning the night and each
+intervening day; newer, missing or truncated logs are an incomplete observation, never proof
+of a clean night. Evidence cycles use the critic's shared persisted edges: the count is
+memories whose ancestry reaches a cycle, not edges (note at 1, FAIL at 50). Its scan stops
+at 100,000 rows/nodes or 0.8 seconds and labels incomplete results. Queued selfie sets older
+than 30 hours are a note. Stale Realm roots include kind, member count and the exact
+`realm release <id> --reason reviewed_stale_hold` command to inspect with the mind stopped;
+the release command still enforces its own eligibility checks. Missing newer tables are
+reported as not set up. These checks only report state and never repair it. Health
 never dials the bridge (7878), loads no model, starts nothing and never probes `mind.lock` or
 `voice.lock` (running comes from the process list, `control.json`, `voice.pid` and the TCP
 table). `--toast` shows one toast per new failure and writes only
@@ -603,6 +617,7 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 .venv/Scripts/python -m leeroy_mind selfies --data-dir "$D" status  # profile photos; also try (mind stopped)
 .venv/Scripts/python -m leeroy_mind console --data-dir "$D" # the guild console; open the URL it prints
 .venv/Scripts/python -m pytest -q                           # the unit tests
+.venv/Scripts/python -m pytest -q -n auto tests             # fast run; up to 8 isolated workers
 .venv/Scripts/python -m pytest -m ollama                    # optional: also -m live, -m mysql
 ```
 
@@ -728,6 +743,12 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   as an `X-Console-Key` header, so a reload needs the URL again. Every request
   needs the console's Host, and its Origin when the browser sends one; a change
   (POST) always needs both the key and the Origin.
+  HTTP accepts one request per connection, at most 64 connections and 8 event streams,
+  with a 16 KiB head/body cap and 10 s request/drain deadlines. Malformed framing is refused;
+  console and control JSON reject duplicate fields, nonfinite numbers and nesting beyond
+  32 levels. Static package links are not served, and photo reads reject symlinks or junctions
+  anywhere from the selfies root through the file, check the opened file's identity, and
+  accept bounded JPEG bytes only (legacy thumbnails use the same checks).
   Away from home the owner's devices reach it only over the tailnet, at
   `https://<pc>.<tailnet>.ts.net/` (this PC's MagicDNS name) through `tailscale
   serve` on this machine, never Funnel: `tailscale serve --bg --https=443
@@ -992,14 +1013,20 @@ Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
   until the 60 s poll finds each body online and free; a rearm now records an armed body that
   has none, as that poll would. Any other failed job (`operation_transition_unknown`, a walk,
   leave, duel or grow) stays unknown unless its event carries `changed: false` (below; any ordinary
-  kind can carry it, and a grow refused that way goes on to its next attempt): a leave's `wg_private_state_unavailable` (a member in
-  Wintergrasp) is refused whole at its ack, before any body is reserved or moved
-  (`LeavePvpAckError` names as many members as fit in 256 characters, at least one, as `wg_private_state_unavailable:<guid,...>`; the mind
-  accepts it only when every named guid is in the root's manifest, settles it refused and holds nobody,
-  and recall leaves the named members for a later pass and recalls the rest as a new command). The same reason from the job
+  kind can carry it, and a grow refused that way goes on to its next attempt): an ordinary leave's
+  `wg_private_state_unavailable` (a member in Wintergrasp), or `cleanup_member_not_admitted`
+  (a member's cleanup roster reaches outside the manifest), is refused whole at its ack, before
+  any body is reserved or moved. Wintergrasp takes precedence. `LeavePvpAckError` names as many
+  manifest members as fit in 256 characters, at least one, as `<reason>:<guid,...>`; cleanup names
+  the members whose rosters reach outside, not the outsiders, using the step's roster readers.
+  The mind accepts either only for an ordinary leave when the names are distinct manifest members,
+  settles it refused and holds nobody. Recall backs off those members for 600 s and recalls the rest
+  as a new command; every such retry strictly shrinks its manifest. The same reason from the job
   is a Refuse only until that leave has changed a body. A failed `realm_job` may now carry
   `changed: false`: native proved the entire job changed no body or cleanup state and released
-  it, including all earlier members and pending steps. With a positive ack, an ordinary root
+  it, including all earlier members and pending steps. A cleanup-closure refusal before any
+  mutation carries that proof; earlier changed or unproved steps still prevent it.
+  With a positive ack, an ordinary root
   without children settles `step_refused` and holds nobody; startup rechecks an uncontested
   stored unknown with that proof. Missing/true flags keep the old rules; WG, ack and result
   roots do too, and contradictory evidence still becomes conflict. The settlement logs

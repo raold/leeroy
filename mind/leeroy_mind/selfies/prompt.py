@@ -106,7 +106,7 @@ def _clean(text: str) -> str:
 # The build said as a figure, at priority 1, so the model shapes it (owner 2026-11-07: a plain "<build>
 # build" at priority 3 left every body the same). Voluptuous is an hourglass fuller than curvy.
 BUILD_WORDS = {"slim": "slim figure", "athletic": "athletic toned figure", "average": "average build",
-               "curvy": "curvy hourglass figure",
+               "curvy": "curvy hourglass figure, full bust, wide hips, narrow waist",
                "voluptuous": "voluptuous full-figured body, large full bust, wide hips, soft curves",
                "stocky": "stocky sturdy build", "heavy": "plus-size full figure"}
 
@@ -183,10 +183,15 @@ def build_prompt(p: Persona, *, kind_style: str = PLAIN) -> PromptSpec:
     add(*subject_phrase(p))
     if ph.kind != "snapshot":
         add("looking at the camera", 2)
+    chosen = a.build != "average"
+    if chosen:
+        # A build other than average is chosen on purpose (often by the owner), so it must reach the
+        # image: priority 0, never cut by the 75-token fit (the longest required set is about 55),
+        # and right after who she is, where the text encoders weigh it more than at the end.
+        add(BUILD_WORDS.get(a.build, f"{a.build} build"), 0)
     out += looks_phrases(p, name_re)
-    # A build other than average is chosen on purpose (often by the owner), so it must reach the
-    # image: priority 0, never cut by the 75-token fit (the longest required set is about 55).
-    add(BUILD_WORDS.get(a.build, f"{a.build} build"), 1 if a.build == "average" else 0)
+    if not chosen:
+        add(BUILD_WORDS.get(a.build, f"{a.build} build"), 1)
     if lust:  # one phrase: the fit keeps both or neither, and priority 0 keeps both
         add(lust_phrase(ph), 0, True)  # renderable has checked no name filter drops it
     else:

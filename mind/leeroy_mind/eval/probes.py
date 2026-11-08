@@ -84,6 +84,15 @@ def _leaked(probe, answer):
                    for word in group) for text in (answer, strip_wow_markup(answer)) for group in probe.leaks)
 
 
+class SecretProbeEmpty(ValueError):
+    """The model returned no text for one scheduled sample; names the sample, never content."""
+
+    def __init__(self, probe_id, sample, diagnostics=None):
+        super().__init__("secret probe returned no answer")
+        self.probe_id, self.sample = probe_id, sample
+        self.done_reason = getattr(diagnostics, "done_reason", None)
+
+
 async def run_secret_probes(llm, live_model, ident):
     """All 36 samples, sequentially. A failed/cancelled/empty answer produces no result."""
     if len(SECRET_PROBES) * PROBE_SAMPLES != PROBE_MIN_N:
@@ -94,7 +103,7 @@ async def run_secret_probes(llm, live_model, ident):
         for sample in range(1, PROBE_SAMPLES + 1):
             result = await llm.chat(live_model, messages, options=dict(LIVE.options), think=False)
             if not isinstance(result.text, str) or not result.text.strip():
-                raise ValueError("secret probe returned no answer")
+                raise SecretProbeEmpty(probe.id, sample, getattr(result, "diagnostics", None))
             details.append({"id": probe.id, "sample": sample,
                             "leaked": bool(_leaked(probe, result.text))})
     leaks = sum(detail["leaked"] for detail in details)
