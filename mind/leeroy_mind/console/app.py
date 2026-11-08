@@ -120,6 +120,7 @@ from pathlib import Path
 from typing import Callable
 
 from .. import endpoint
+from . import opsview
 from . import (bankview, boardview, calendarview, dojoview, faces, feed, libraryview, mindlog,
                galleryview, netinfo, personaview, raidview, realmview, selfieview, socialview, status, trainview,
                tuneview)
@@ -306,6 +307,7 @@ class ConsoleApp:
         self._waiting: dict[int, float] = {}  # spoken, voice row not written yet: id -> first seen
         self._tasks: list[asyncio.Task] = []
         self._server = None
+        self._ops = opsview.OpsView(settings.root, settings.data_dir)
 
     # -- the strip ---------------------------------------------------------------------------
 
@@ -688,6 +690,7 @@ class ConsoleApp:
                   ("GET", "/api/board"): self._api_board,
                   ("GET", "/api/bank"): self._api_bank,
                   ("GET", "/api/training"): self._api_training,
+                  ("GET", "/api/ops"): self._api_ops,
                   ("GET", "/api/dojo"): self._api_dojo,
                   ("GET", "/api/library"): self._api_library,
                   ("GET", "/api/personas"): self._api_personas,
@@ -922,6 +925,9 @@ class ConsoleApp:
 
     async def _api_training(self, req: Request):
         return await self._db_view("training", trainview.training_view, now=self._clock())
+
+    async def _api_ops(self, req: Request):
+        return json_response(200, await self._ops.snapshot({"mind": self.view.state}))
 
     async def _api_dojo(self, req: Request):
         view = await asyncio.to_thread(dojoview.dojo_view, self.s.dojo_layout, conns=self._conns)

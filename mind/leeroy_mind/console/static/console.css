@@ -547,3 +547,15 @@ td > div.who { color: var(--ink); font-weight: 600; }
   .mindtab .formrow label:has(select) { flex: 1 1 100%; justify-content: space-between; }
   .mindtab .formrow select { min-width: 44px; max-width: calc(100% - 4em); }
 }
+
+/* Ops: independent read-only panels, including narrow screens in either theme. */
+#tab-ops .ops-panel { min-width: 0; }
+#tab-ops .ops-line, #tab-ops .ops-error { margin: 8px 0; overflow-wrap: anywhere; }
+#tab-ops .ops-error { color: var(--bad); }
+#tab-ops .ops-command { display: grid; gap: 6px; margin-top: 12px; font-size: 12px; }
+#tab-ops .ops-command input { width: 100%; min-width: 0; box-sizing: border-box; font: 12px/1.5 monospace; }
+@media (max-width: 600px) {
+  #tab-ops .cards { grid-template-columns: minmax(0, 1fr); }
+  #tab-ops .panel { padding: 12px; }
+  #t-ops .badge { white-space: normal; }
+}
