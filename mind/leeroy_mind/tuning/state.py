@@ -6,6 +6,7 @@ offsets of every group the member is in, "everyone" included, clamped to the dia
 World values override mind.toml's knobs. The owner's own character and anyone off the cast are
 never tuned."""
 import json
+import time
 import sqlite3
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
@@ -51,7 +52,7 @@ class Tuning:
     # -- reading -------------------------------------------------------------------------------
 
     @classmethod
-    def load(cls, conn: sqlite3.Connection) -> "Tuning":
+    def load(cls, conn: sqlite3.Connection, now: float | None = None) -> "Tuning":
         """The values in force; an empty Tuning for a database without the tables (an older
         mind.db opened read-only) or with none set."""
         have = {r[0] for r in conn.execute(
@@ -83,7 +84,7 @@ class Tuning:
         return cls(version=int(row[0] or 0), world=_frozen(world), groups=_frozen(groups),
                    offsets=_frozen({t: _frozen(d) for t, d in offsets.items()}),
                    pins=_frozen({g: _frozen(d) for g, d in pins.items()}),
-                   pin_versions=_frozen(versions), human=human, nudges=N.load(conn))
+                   pin_versions=_frozen(versions), human=human, nudges=N.load(conn, time.time() if now is None else now))
 
     # -- folding -------------------------------------------------------------------------------
 

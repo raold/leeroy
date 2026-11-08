@@ -74,6 +74,11 @@ anything is remembered; no memory is forced. Scoped nudges are excluded so a
 private/channel-limited intention cannot escape its scope through later recall.
 An invalid tuning table disables these hints. Set false to omit all such hints.
 
+Be plain about the effect: with `nudge_memories` true, an ended "everywhere" nudge can be
+paraphrased by the night's reflection into her memories, so a temporary mood may outlast
+its nudge. To prevent that, set `nudge_memories = false` in `[tuning]` of `mind.toml`
+(read at the mind's start) before the nudge ends.
+
 ## Isolated validation
 
 ```sh

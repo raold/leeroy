@@ -132,7 +132,7 @@ class TuningService:
         mind.toml for the talk engine when they moved."""
         app = self.app
         before = app.personas.tuning
-        t = load_tuning(app.store)
+        t = load_tuning(app.store, app.clock.now())
         app.personas.set_tuning(t)
         if dict(t.world) != dict(before.world):
             from .world import merge

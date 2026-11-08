@@ -20,7 +20,8 @@ ARGS = dict(action="nudge", verb="set", target_kind="member", target="102", text
 
 
 @pytest.fixture
-def tuned(store):
+def tuned(store, monkeypatch):
+    monkeypatch.setattr("leeroy_mind.tuning.state.time.time", lambda: 2000.0)
     seed_test_cast(store)
     store.set_meta("human_guid", "1")
     store.conn.commit()
@@ -169,3 +170,28 @@ def test_invalid_memory_settings_disable_hints(tmp_path, toml):
     from leeroy_mind.tuning.nudge_memories import enabled
     (tmp_path / "mind.toml").write_text(toml)
     assert not enabled(tmp_path)
+
+
+def test_game_scope_covers_every_pipeline_game_channel(tuned):
+    from leeroy_mind.talk.pipeline import COMMS_CHANNELS, GROUP_CHANNELS
+    assert (COMMS_CHANNELS | GROUP_CHANNELS | {"say", "yell", "whisper"}) <= N.GAME_CHANNELS
+    add(tuned, scope="game")
+    for channel in sorted(N.GAME_CHANNELS) + ["voice:room"]:
+        assert TEXT in prompt(tuned, channel=channel), channel
+    assert TEXT not in prompt(tuned, channel="discord:general")
+
+
+def test_ended_nudges_are_not_loaded(tuned):
+    assert Tuning.load(tuned.conn, 2000).empty
+    add(tuned)
+    assert not Tuning.load(tuned.conn, 2000).empty
+    assert not Tuning.load(tuned.conn, 5599).empty
+    assert Tuning.load(tuned.conn, 5600).empty  # expired, never retired
+    assert N.values(tuned.conn)  # the receipts and state stay for history and revert
+
+
+def test_no_nudge_prompt_is_pinned(tuned):
+    import hashlib
+    out = comms_rules(HUMAN, PersonaCache(tuned).get(102), now=2000, channel="guild")
+    assert out == comms_rules(HUMAN, load_persona(tuned, 102))
+    assert hashlib.sha256(out.encode()).hexdigest() == "bf74a0a20994db64212bfe0ba6ce2d801039abf22579c2702079169ad6a55994"

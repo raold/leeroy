@@ -21,7 +21,10 @@ SCOPES = ("everywhere", "game", "discord", "whispers")
 MIN_SECONDS, MAX_SECONDS = 3600, 14 * 86400
 MAX_ACTIVE = 64
 PROMPT_TOKENS = 200
-GAME_CHANNELS = frozenset({"say", "yell", "party", "raid", "guild", "officer", "whisper"})
+# Every in-game channel; voice:<room> turns are spoken in game rooms, so they count too.
+# A test holds this to the pipeline's own COMMS_CHANNELS and GROUP_CHANNELS.
+GAME_CHANNELS = frozenset({"say", "yell", "party", "raid", "raid_warning", "guild", "officer",
+                           "whisper"})
 
 
 def parse_args(args):
@@ -87,8 +90,11 @@ def values(conn):
         "SELECT key,value FROM meta WHERE key GLOB ?", (CURRENT + "[0-9]*",))}
 
 
-def load(conn):
-    return tuple(Nudge(**v) for v in values(conn).values() if v["retired"] is None)
+def load(conn, now=None):
+    # Ended nudges (retired, or past their end) stay in the receipts, not in the live state,
+    # so an expired one never keeps Tuning non-empty.
+    return tuple(n for n in (Nudge(**v) for v in values(conn).values())
+                 if n.retired is None and (now is None or n.ends > now))
 
 
 def receipt(conn, change):
@@ -193,7 +199,7 @@ def for_member(nudges, p, member, groups, human):
 
 def in_scope(n, channel, recipient, human):
     discord = channel.startswith(("discord:", "dm:"))
-    return (n.scope == "everywhere" or n.scope == "game" and channel in GAME_CHANNELS
+    return (n.scope == "everywhere" or n.scope == "game" and (channel in GAME_CHANNELS or channel.startswith("voice:"))
             or n.scope == "discord" and discord
             or n.scope == "whispers" and (channel == "whisper" or channel.startswith("dm:"))
             and human > 0 and recipient == human)
