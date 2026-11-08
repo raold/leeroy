@@ -83,7 +83,7 @@ def test_discord_out_of_game_end_to_end(tmp_path, cold):
             store.close()
         cfg = load_config(data / "mind.toml")
         llm = FakeLLM(lambda *_: "🍕", models={cfg.models.live, cfg.models.reflection, cfg.models.embedding})
-        app = MindApp(cfg, data, llm=llm, clock=clock)
+        app = MindApp(cfg, data, llm=llm, clock=clock, rng_seed=1)
         admin = FakeAdmin([cfg.models.embedding])
         app.arbiter.admin = admin
         task = asyncio.create_task(app.run())
@@ -130,8 +130,12 @@ def test_discord_out_of_game_end_to_end(tmp_path, cold):
             dm = await post(action="post", channel="dm:102", text="hello there")
             private = await answer_to("dm:102", dm["id"])
             assert private["author"] == 102 and private["channel"] == "dm:102"
+            # A drawn post may still have a second answer queued. Let it finish and let
+            # the normal per-person reply interval pass before the next public request.
+            await clock.advance(60, 1)
             named = await post(action="post", channel="general", text="@Arkon are you around?")
             assert (await answer_to("general", named["id"]))["author"] == 101
+            await clock.advance(60, 1)
             officer = await post(action="post", channel="officer-chat", text="@Arkon @Belra hello")
             assert (await answer_to("officer-chat", officer["id"]))["author"] == 102
             assert [t.speaker for t, _ in app.discord_talk.plan(officer["id"])] == [102]

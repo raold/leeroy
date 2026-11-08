@@ -1143,7 +1143,8 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   Nothing reaches WoW, and these messages do not advance the game's talk clocks.
 - Before the first bridge cast, Discord uses the saved guild roster for channel
   audiences, addressed members, presence and name protection. This never marks a
-  game body online. The first bridge cast permanently takes over, even when empty;
+  game body online. The saved roster is read once and cached; failed reads remain
+  retryable. The first bridge cast drops this cache and takes over, even when empty;
   removed members cannot return from the saved roster. A roster read failure leaves
   no fallback members and logs only the exception class.
 - DMs have whisper privacy. Officer-only and unknown channels are restricted;

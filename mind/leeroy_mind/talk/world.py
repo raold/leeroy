@@ -59,6 +59,7 @@ class WorldView:
                  discord_roster: Callable[[], dict[int, Member]] | None = None):
         self.is_officer = is_officer
         self._discord_roster = discord_roster
+        self._saved_discord_members: dict[int, Member] | None = None
         self._cast_seen = False
         self.human_guid = 0
         self.members: dict[int, Member] = {}
@@ -80,16 +81,18 @@ class WorldView:
                 if g != self.human_guid and m.level >= CAST_MIN_LEVEL}
 
     def discord_members(self) -> dict[int, Member]:
-        """Before the first bridge cast, Discord can use the saved guild roster. This view
-        never gives anyone a game body. Every cast, even empty, supersedes it permanently."""
+        """Before the first bridge cast, Discord can use a saved guild roster snapshot. It
+        is read once, never gives anyone a game body, and every cast permanently replaces it."""
         if self._cast_seen or self._discord_roster is None:
             return self.members
-        try:
-            return {g: dataclasses.replace(m, online=False)
-                    for g, m in self._discord_roster().items()}
-        except Exception as exc:
-            log.warning("discord_roster_failed: kind=%s", type(exc).__name__)
-            return {}
+        if self._saved_discord_members is None:
+            try:
+                self._saved_discord_members = {g: dataclasses.replace(m, online=False)
+                                              for g, m in self._discord_roster().items()}
+            except Exception as exc:
+                log.warning("discord_roster_failed: kind=%s", type(exc).__name__)
+                return {}
+        return self._saved_discord_members
 
     def _touch_member(self, guid: int, **changes) -> None:
         m = self.members.get(guid)
@@ -135,6 +138,7 @@ class WorldView:
             return
         if isinstance(ev, Cast):
             self._cast_seen = True
+            self._saved_discord_members = None
             self.members = {m.guid: m for m in ev.members}
             cast = self.cast_guids()
             self.online = {g for g in cast if self.members[g].online}

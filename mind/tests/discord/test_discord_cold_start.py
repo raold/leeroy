@@ -50,19 +50,24 @@ def test_first_authoritative_cast_permanently_replaces_saved_members(store, rema
 
 
 def test_roster_source_failure_is_closed_and_logs_only_its_class(caplog):
+    calls = []
+
     def broken():
+        calls.append(1)
         raise RuntimeError("invented private roster detail")
 
     world = WorldView(is_officer=lambda _: True, discord_roster=broken)
     world.human_guid = HUMAN
     assert world.audience("discord:general", from_guid=HUMAN) == {HUMAN}
     assert world.audience("discord:officer-chat", from_guid=HUMAN) == {HUMAN}
+    assert len(calls) == 2  # failed reads remain retryable rather than caching emptiness
     assert "RuntimeError" in caplog.text
     assert "invented private roster detail" not in caplog.text
     world.apply(Cast(ts=0, members=()), 0)
     caplog.clear()
     assert world.discord_members() == {}
     assert not caplog.records  # never consult the fallback after an authoritative cast
+    assert len(calls) == 2
 
 
 def test_cold_named_answer_keeps_name_protection_and_member_romance_screen(store, clock, tmp_path):
@@ -78,3 +83,33 @@ def test_cold_named_answer_keeps_name_protection_and_member_romance_screen(store
     assert not answers(rig, "general", mid)
     assert not rig.sent.log and not rig.world.online
     rig.close()
+
+
+def test_cold_channel_planning_reads_the_saved_roster_once(store, clock, tmp_path):
+    rig = rig_for(store, clock, tmp_path)
+    calls = []
+
+    def roster():
+        calls.append(1)
+        return store.cast()
+
+    world = WorldView(is_officer=lambda g: g in OFFICERS, discord_roster=roster)
+    world.human_guid = HUMAN
+    rig.world = rig.engine.world = rig.engine.raid.world = world
+    talk = talk_for(rig)
+    mid = post(rig, "general", "anyone around?")
+    queries = []
+    store.conn.set_trace_callback(queries.append)
+    try:
+        assert talk.plan(mid)
+        assert len(calls) == 1
+        assert sum("FROM cast_member" in q for q in queries) == 1
+        assert talk.plan(mid)
+        assert rig.engine._names("discord:general")[102] == "Belra"
+        assert len(calls) == 1
+        world.apply(Cast(ts=0, members=()), 0)
+        assert not talk.plan(mid) and not world.discord_members()
+        assert len(calls) == 1
+    finally:
+        store.conn.set_trace_callback(None)
+        rig.close()
