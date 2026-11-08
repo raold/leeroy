@@ -164,7 +164,8 @@ def test_changed_is_a_strict_boolean_on_the_wire(bad):
     with pytest.raises(ProtocolError): parse_event(json.dumps(raw))
 
 
-def test_new_and_old_wire_shapes_and_no_text_logs(actions, caplog):
+@pytest.mark.parametrize("private", ["invented private words", "InventedName", "inventedname"])
+def test_new_and_old_wire_shapes_and_no_text_logs(actions, caplog, private):
     p.register()
     raw = dict(v=1, ts=0, type="realm_job", id="leave", kind="leave_pvp", state="failed",
                reason="wg_private_state_unavailable", guid=101, value=0)
@@ -173,5 +174,5 @@ def test_new_and_old_wire_shapes_and_no_text_logs(actions, caplog):
     start(actions)
     caplog.set_level("INFO", logger="leeroy_mind.realm.action_store")
     actions.observe_ack(Ack(0, "leave", True, ""), now=3)
-    actions.observe_realm_job(failure(reason="invented private words"), now=4)
+    actions.observe_realm_job(failure(reason=private), now=4)
     assert caplog.messages == ["realm_action_step_refused id=leave kind=leave_pvp reason=native_refusal members=144"]

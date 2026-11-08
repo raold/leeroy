@@ -460,10 +460,11 @@ class ActionStore:
             before = self.conn.execute("SELECT state FROM realm_action WHERE seq=?", (r.seq,)).fetchone()
             if before is not None and before[0] != r.state:
                 native = json.loads(r.evidence).get("job", {}).get("reason", "")
-                # A wire reason is untrusted text. Log only its code, never arbitrary words.
-                code = native if re.fullmatch(r"[a-z_]+(?::[a-z_]+)?", native) else "native_refusal"
+                # A wire reason is untrusted text, even when it looks like a code.
+                code = native if (native == WG_REFUSAL or native in STEP_REFUSALS
+                                  or native in KIND_STEP_REFUSALS.get(r.kind, ())) else "native_refusal"
                 log.info("realm_action_step_refused id=%s kind=%s reason=%s members=%d",
-                         r.command_id, r.kind, code or "none", len(r.reserved_manifest))
+                         r.command_id, r.kind, code, len(r.reserved_manifest))
         values = asdict(r)
         values["reserved_manifest"] = document(list(r.reserved_manifest))
         values["native_manifest"] = None if r.native_manifest is None else document(list(r.native_manifest))
