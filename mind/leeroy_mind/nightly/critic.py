@@ -8,6 +8,7 @@ import re
 from collections import defaultdict
 from datetime import date, timedelta
 
+from leeroy_mind.logs import log
 from leeroy_mind.nightly.forget import _node
 from leeroy_mind.nightly.ground import screen_text
 from leeroy_mind.nightly.growth import rollback_week
@@ -22,6 +23,12 @@ from leeroy_mind.wow import CAST_MIN_LEVEL, CLASSES, RACES
 
 STAGE = "critic"
 PROVENANCE_MAX = 5000
+
+
+class ProvenanceError(ValueError):
+    """A sent line whose sources cannot be traced completely (stored data, not this run)."""
+
+
 CRITIC_SCHEMA = schema("critic", {"scores": {"type": "array", "items": {
     "type": "object", "properties": {
         "i": {"type": "integer"}, "score": {"type": "integer", "minimum": 1, "maximum": 5},
@@ -72,7 +79,7 @@ def _safe(text, ident):
 def _ids(raw):
     values = json.loads(raw)
     if not isinstance(values, list) or any(type(i) is not int or i <= 0 for i in values):
-        raise ValueError("Invalid critic source memory IDs")
+        raise ProvenanceError("Invalid critic source memory IDs")
     return values
 
 
@@ -98,14 +105,14 @@ def _provenance(store, refs):
             finished.add(ref)
             continue
         if ref in visiting:
-            raise ValueError("Cyclic critic provenance")
+            raise ProvenanceError("Cyclic critic provenance")
         if ref in finished:
             continue
         if not isinstance(ref, str) or len(saved) >= PROVENANCE_MAX:
-            raise ValueError("Invalid critic provenance")
+            raise ProvenanceError("Invalid critic provenance")
         node = _node(store, ref)
         if node is None:
-            raise ValueError("Incomplete critic provenance")
+            raise ProvenanceError("Incomplete critic provenance")
         value, children, holder, scope, parties = node
         extras = ()
         if ref.startswith("chat:"):
@@ -114,7 +121,7 @@ def _provenance(store, refs):
             if line["origin"] == "mind":
                 pair = _paired(store, line)
                 if pair is None or pair["dropped"] is not None:
-                    raise ValueError("Unpaired critic source output")
+                    raise ProvenanceError("Unpaired critic source output")
                 children = (*children, *(f"memory:{i}" for i in _ids(pair["memory_ids"])))
                 extras = (tuple(line), tuple(pair))
             else:
@@ -123,11 +130,11 @@ def _provenance(store, refs):
             retained = store.get_meta(f"nightly:lexicon-sources:{ref.split(':', 1)[1]}") or "[]"
             origins = json.loads(retained)
             if not isinstance(origins, list) or any(not isinstance(r, str) for r in origins):
-                raise ValueError("Invalid critic term provenance")
+                raise ProvenanceError("Invalid critic term provenance")
             children = (*children, *origins)
             extras = (retained,)
         if any(not isinstance(child, str) for child in children):
-            raise ValueError("Invalid critic source references")
+            raise ProvenanceError("Invalid critic source references")
         saved[ref] = (value, tuple(children), holder, scope, tuple(sorted(parties)), extras)
         visiting.add(ref)
         stack.append((ref, True))
@@ -144,7 +151,7 @@ def _line(store, row):
     if echo is not None:
         pair = _paired(store, echo)
         if pair is None or pair["id"] != row["id"] or pair["dropped"] is not None:
-            raise ValueError("Mismatched critic emitted source")
+            raise ProvenanceError("Mismatched critic emitted source")
         refs = (f"chat:{echo['id']}", *refs)
     # Sent utterance rows are authoritative even when their bridge echo was not retained.
     return tuple(row), _provenance(store, refs), (f"utterance:{row['id']}", *refs)
@@ -173,8 +180,18 @@ def _current(ctx, guid, ids):
     identity = (store.get_persona_json(guid), store.persona_versions()[guid], member.name,
                 member.race, member.class_, member.level, store.get_meta("human_guid"))
     state = json.dumps(store.get_state(guid).self_notes, sort_keys=True)
-    sources = tuple(_line(store, row) for row in rows)
-    return (identity, card, state, sources), rows, card, member.name
+    sources, usable = [], []
+    for row in rows:
+        try:
+            sources.append(_line(store, row))
+        except ProvenanceError as err:
+            # An untraceable line is left out of the sample; it must not fail the whole member.
+            log("critic_line_untraceable", guid=guid, line=row["id"], code=str(err))
+            continue
+        usable.append(row)
+    if not usable:
+        return None
+    return (identity, card, state, tuple(sources)), usable, card, member.name
 
 
 def _tuning_version(ctx, guid) -> int:

@@ -457,6 +457,9 @@ class Store:
         from leeroy_mind.realm.memory_lineage import _freeze, attach_realm_dependencies_in_unit, realm_dependencies_in_unit
         evidence, shown = _freeze(evidence, shown)
         with self.transaction():
+            # A duplicate may cite the memory it merges into, or one that already cites it;
+            # keeping that reference would make the memory its own ancestor.
+            evidence = tuple(e for e in evidence if not self._cites_memory(e, id))
             facts = realm_dependencies_in_unit(self, evidence=evidence, shown=shown,
                                                existing_memory=id)
             r = self._one("SELECT evidence, importance FROM memory WHERE id = ?", (id,))
@@ -468,6 +471,25 @@ class Store:
                 "UPDATE memory SET evidence = ?, importance = ?, merged_n = merged_n + 1 "
                 "WHERE id = ?", (_j(ev), max(r["importance"], importance), id))
             attach_realm_dependencies_in_unit(self, id, facts)
+
+    def _cites_memory(self, ref, target: int, limit: int = 5000) -> bool:
+        """Whether `ref` is memory `target` or has it among its memory ancestors."""
+        seen, todo = set(), [ref]
+        while todo and len(seen) < limit:
+            cur = todo.pop()
+            if cur in seen or not isinstance(cur, str) or not cur.startswith("memory:"):
+                continue
+            seen.add(cur)
+            try:
+                ident = int(cur[7:])
+            except ValueError:
+                continue
+            if ident == target:
+                return True
+            r = self._one("SELECT evidence FROM memory WHERE id = ?", (ident,))
+            if r is not None:
+                todo.extend(json.loads(r["evidence"]))
+        return False
 
     def set_embedding(self, id: int, vec: bytes) -> None:
         with self.transaction():
