@@ -251,6 +251,7 @@ button.twist:hover { color: var(--ink); background: var(--surface-2); }
   overflow-wrap: anywhere; }
 .mcard .note { margin: 3px 0 0; }
 .cardface { width: 100%; max-width: 288px; }
+.cardface .facebtn { display: block; width: 100%; border-radius: inherit; cursor: zoom-in; }
 .mcard .facts { grid-template-columns: minmax(0, 1fr); }
 .mcard .fact { grid-template-columns: 6.5em minmax(0, 1fr); align-items: baseline; gap: 8px; border-left: 0;
   border-top: 1px solid var(--line); }
