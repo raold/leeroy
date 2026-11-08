@@ -255,11 +255,13 @@ def _now_def(conn, target: str):
 
 
 def undo(store, change: int, pic: Picture, *, source: str, now: float) -> Result:
+    from . import nudges
     with store.transaction():
         conn = store.conn
         if conn.execute("SELECT 1 FROM tuning_change WHERE id=?", (change,)).fetchone() is None:
             raise TuneError(f"there is no change #{change}")
         rows = _rows(conn, change)
+        nudge_moves = nudges.undo_moves(conn, change)
         moved = []
         for r in rows:
             scope, target, dial = r[0], r[1], r[2]
@@ -286,8 +288,9 @@ def undo(store, change: int, pic: Picture, *, source: str, now: float) -> Result
                 if r[3] is not None and scope == "member":
                     check_set(Set(scope, target, dial, r[3]), pic, live_groups(conn))
                 _write_value(conn, new, scope, target, dial, r[4], r[3], r[7])
+        nudges.write_moves(conn, new, nudge_moves)
         _stamp(conn, new)
-        return Result(new, len(rows))
+        return Result(new, len(rows) + len(nudge_moves))
 
 
 def state_after(conn, change: int) -> tuple[dict, dict]:
@@ -305,6 +308,7 @@ def state_after(conn, change: int) -> tuple[dict, dict]:
 def revert_to(store, change: int, pic: Picture, *, source: str, now: float) -> Result:
     """Every value and group back to how they stood right after `change` (0: before any), as
     one change; nothing when they already are."""
+    from . import nudges
     with store.transaction():
         conn = store.conn
         if change and conn.execute("SELECT 1 FROM tuning_change WHERE id=?",
@@ -319,7 +323,8 @@ def revert_to(store, change: int, pic: Picture, *, source: str, now: float) -> R
                      if _now_def(conn, t) != then_defs.get(t)]
         keys = sorted(set(then) | set(current))
         moves = [(k, current.get(k), then.get(k)) for k in keys if current.get(k) != then.get(k)]
-        if not moves and not def_moves:
+        nudge_moves = nudges.revert_moves(conn, change)
+        if not moves and not def_moves and not nudge_moves:
             return Result(None)
         new = _new_change(conn, now, source, f"revert to #{change}")
         for target, before, after in def_moves:  # groups first: their offsets need them
@@ -329,8 +334,9 @@ def revert_to(store, change: int, pic: Picture, *, source: str, now: float) -> R
         for (scope, target, dial), before, after in moves:
             version = pic.versions.get(int(target)) if scope == "member" else None
             _write_value(conn, new, scope, target, dial, before, after, version)
+        nudges.write_moves(conn, new, nudge_moves)
         _stamp(conn, new)
-        return Result(new, len(moves) + len(def_moves))
+        return Result(new, len(moves) + len(def_moves) + len(nudge_moves))
 
 
 # -- reading the log ----------------------------------------------------------------------------

@@ -28,6 +28,8 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="the values in force, read-only")
     h = sub.add_parser("history", help="the change log, newest first, read-only")
     h.add_argument("--limit", type=int, default=30)
+    n = sub.add_parser("nudges", help="active private nudges and their history, read-only")
+    n.add_argument("--limit", type=int, default=30)
     u = sub.add_parser("undo", help="reverse one change (the mind must be stopped)")
     u.add_argument("change", type=int)
     r = sub.add_parser("revert", help="every value back to right after a change (0: none)")
@@ -167,6 +169,19 @@ def tuning_main(argv=None) -> int:
             return 0
         if args.action == "status":
             _status(conn, cfg)
+        elif args.action == "nudges":
+            from .nudges import view
+            data = view(conn, now=SystemClock().now(), limit=max(1, min(200, args.limit)))
+            for n in data["active"]:
+                print(f"#{n['id']} {n['target_kind']} {n['target']} {n['strength']} "
+                      f"{n['scope']} until {_when(n['ends'])}: {n['text']}")
+            if not data["active"]:
+                print("No active nudges.")
+            for c in data["history"]:
+                print(f"change #{c['change']} {_when(c['ts'])} {c['label']}")
+                for m in c["moves"]:
+                    n = m["after"] or m["before"]
+                    print(f"  nudge #{m['id']} {n['target_kind']} {n['target']}: {n['text']}")
         else:
             _history(conn, args.limit)
     return 0

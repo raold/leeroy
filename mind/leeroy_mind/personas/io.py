@@ -57,10 +57,10 @@ def load_persona(store: Store, guid: int) -> Persona | None:
     return None if js is None else persona_from_dict(json.loads(js))
 
 
-def load_tuning(store: Store) -> Tuning:
+def load_tuning(store: Store, now: float | None = None) -> Tuning:
     """The tuning in force, read in a unit of its own so it pins no WAL snapshot."""
     with store.transaction():
-        return Tuning.load(store.conn)
+        return Tuning.load(store.conn, now)
 
 
 def load_effective(store: Store, guid: int, *, tuning: Tuning | None = None) -> Persona | None:
@@ -243,7 +243,7 @@ class PersonaCache:
         if p is None:
             return None
         t = self.tuning
-        if t.pins or t.offsets:
+        if t.pins or t.offsets or t.nudges:
             if t.needs_cast and self._cast is None:
                 self._cast = self._store.cast()
             p = t.apply(p, (self._cast or {}).get(guid))

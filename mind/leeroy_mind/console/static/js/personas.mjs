@@ -2,6 +2,7 @@ import { $, api, arr, cell, clear, el, emit, emptyRow, num, obj, on, own, plural
          remember, setText, str } from "./core.mjs";
 import { face } from "./faces.mjs";
 import { photoButton } from "./gallery.mjs";
+import { nudgeBadges, nudgeFocus, nudgePanel } from "./nudges.mjs";
 import { forgetMemberShots, pollSelfies, setSelfieNames, showMemberPhoto } from "./selfies.mjs";
 import { S } from "./state.mjs";
 import { registerTab, showTab } from "./tabs.mjs";
@@ -149,6 +150,7 @@ function renderWall(v) {
     box.appendChild(t);
   });
   if (!members.length) { box.appendChild(el("p", "why", "The mind has no cast and no personas yet.")); }
+  nudgeBadges(tuneView());
 }
 function pollPersonas() {
   if (personasBusy || S.tab !== "personas") { return; }
@@ -353,10 +355,11 @@ function numberText(x) {
   return str(x.what) + ": " + v(x.before) + " → " + v(x.after);
 }
 function tuneAsk(args, what) {
-  if (args.action === "preview") { setText("t-pvwhat", what + ": asking the mind"); $("t-pvcard").hidden = false; }
+  var preview = args.action === "preview" || (args.action === "nudge" && args.verb === "preview");
+  if (preview) { setText("t-pvwhat", what + ": asking the mind"); $("t-pvcard").hidden = false; }
   return post("/api/tune", args).then(function (r) {
     if (r.status === 403 && !r.error) { emit("key-lost"); return r; }
-    if (args.action === "preview") {
+    if (preview) {
       showPreview(what, r);
       if (r.ok === true) { lastPreview = previewKey(args.scope, args.target, args.dial, args.value); }
     } else if (r.ok !== true) { emit("note", what + " refused: " + str(r.error)); }
@@ -423,6 +426,7 @@ function renderTuning() {
                      moves: str(d.moves) + " (" + str(d.when) + ")", off: v.available ? "" : "unavailable" });
   });
   var groups = $("t-groups");
+  var restoreGroupFocus = nudgeFocus(groups);
   clear(groups);
   arr(v.groups).forEach(function (g) {
     var head = el("h4", "", (g.builtin ? "everyone" : str(g.name)) + " · " + plural(num(g.members), "member")
@@ -457,6 +461,7 @@ function renderTuning() {
       add.remove();
     });
     groups.appendChild(add);
+    nudgePanel(groups, v, "group", g.target, live, tuneWhy(), tuneAsk);
   });
   var fields = obj(v.fields), fsel = $("t-gfield");
   if (!fsel.options.length) {
@@ -483,6 +488,8 @@ function renderTuning() {
   });
   if (!arr(v.history).length) { hist.appendChild(el("div", "muted", v.available ? "No dial changes yet." : "Unavailable in this mind.db.")); }
   if (pick) { renderDials(pick); }
+  nudgeBadges(v);
+  restoreGroupFocus();
 }
 function rowText(v, r) {
   var who = r.scope === "world" ? "world" : r.scope === "group" ? "group " + groupName(v, r.target) : pname(v, Number(r.target));
@@ -498,6 +505,7 @@ function groupName(v, target) {
 }
 function renderDials(guid) {
   var v = tuneView(), box = $("p-dials");
+  var restoreFocus = nudgeFocus(box);
   clear(box);
   var m = arr(v.members).filter(function (x) { return x.guid === guid; })[0];
   if (!m) { setText("p-dialsum", ""); box.appendChild(el("p", "muted", v.available ? "No dials: this member has no readable persona, or is you." : "Unavailable in this mind.db.")); return; }
@@ -514,6 +522,8 @@ function renderDials(guid) {
                    moves: str(d.moves) + " (from " + str(d.when) + ")", off: x.applies ? "" : str(x.note) });
   });
   setText("p-dialsum", mine ? plural(mine, "value") + " of your own" : "nothing of your own set");
+  nudgePanel(box, v, "member", String(guid), tuneLive(), tuneWhy(), tuneAsk);
+  restoreFocus();
 }
 function fillValues() {
   var vals = arr(obj(tuneView().fields)[$("t-gfield").value]), sel = $("t-gvalues");

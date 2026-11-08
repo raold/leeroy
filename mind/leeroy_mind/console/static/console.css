@@ -547,6 +547,12 @@ td > div.who { color: var(--ink); font-weight: 600; }
   .mindtab .formrow label:has(select) { flex: 1 1 100%; justify-content: space-between; }
   .mindtab .formrow select { min-width: 44px; max-width: calc(100% - 4em); }
 }
+/* Task 25: temporary nudges, within the tuning panel. */
+.nudges { margin-block: 1rem; padding-block: .75rem; border-top: 1px solid var(--line); min-width: 0; }
+.nudge-field { display: flex; flex-direction: column; gap: .35rem; margin-block: .6rem; }
+.nudge-field textarea, .nudge-field input, .nudge-field select { box-sizing: border-box; width: 100%; max-width: 100%; min-width: 0; }
+.nudge-row { margin-block: .7rem; overflow-wrap: anywhere; }
+.nudges > button, .nudge-row > button { margin: .25rem .5rem .25rem 0; }
 
 /* Ops: independent read-only panels, including narrow screens in either theme. */
 #tab-ops .ops-panel { min-width: 0; }

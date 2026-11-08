@@ -1031,6 +1031,14 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   while the live model is already loaded, never loads one, and its text is never
   logged or stored. `python -m leeroy_mind tuning --data-dir "$D" status|history`
   reads it; `undo N|revert N` work with the mind stopped.
+  Temporary nudges share that history and its undo/revert. They are private
+  owner overlays, never persona edits or log text; 1–200 cleaned characters,
+  1 hour to 14 days, with channel/recipient scope and a 200-token prompt budget.
+  The `tune` op accepts `nudge` set/retire/list/preview; preview keeps the loaded
+  model gate. `tuning nudges` reads active entries and history. Optional
+  `[tuning] nudge_memories` (default true) offers ended everywhere intentions to
+  reflection as past moods, never factual evidence; scoped ones are excluded.
+  Details and storage keys: `mind/leeroy_mind/tuning/README.md`. No migration.
   The page is split into `console/static/` (CSS, a classic `theme.js`, ES
   modules, self-hosted OFL fonts with their licence texts) and is served at
   `/static/` without the key, like the page, since a browser cannot send a

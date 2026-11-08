@@ -17,6 +17,7 @@ from leeroy_mind.personas.schema import persona_from_dict
 from leeroy_mind.protocol import Member
 from leeroy_mind.tuning import changes as C
 from leeroy_mind.tuning import groups as G
+from leeroy_mind.tuning import nudges as N
 from leeroy_mind.tuning.dials import (MEMBER_DIALS, WORLD_DIALS, applies, base_value, bounds,
                                       not_applicable)
 from leeroy_mind.tuning.state import TABLES, Tuning
@@ -63,7 +64,7 @@ def tuning_view(conn, *, file_values: dict | None = None, now: float = 0.0) -> d
     fields = {k: list(v[0]) for k, v in G.FIELDS.items()}
     out = {"available": not missing, "missing": missing, "dials": dials, "fields": fields,
            "version": 0, "pinned_members": 0, "world_dials": [], "groups": [], "members": [],
-           "history": []}
+           "history": [], "nudges": {"active": [], "history": []}}
     t = Tuning.load(conn) if not missing else Tuning(human=human_guid(conn) or 0)
     files = file_values or {}
     out["world_dials"] = [{"name": d.name, "label": d.label, "lo": d.lo, "hi": d.hi,
@@ -95,10 +96,13 @@ def tuning_view(conn, *, file_values: dict | None = None, now: float = 0.0) -> d
                          "applies": applies(name, p), "note": not_applicable(name, p),
                          "stale": own is not None and set_at is not None and set_at != version}
         out["members"].append({"guid": g, "name": cast[g].name, "core": p.core,
-                               "gender": p.identity.player_gender, "dials": row})
+                               "gender": p.identity.player_gender, "dials": row,
+                               "nudges": [n.id for n in N.for_member(
+                                   t.nudges, p, cast.get(g), t.groups, human) if n.active(now)]})
     out["version"] = t.version
     out["pinned_members"] = len([g for g in t.pins if g in cast_members])
     if not missing:
         out["history"] = C.history(conn, HISTORY)
+        out["nudges"] = N.view(conn, now=now)
     out["names"] = {str(g): cast[g].name for g in cast_members}
     return out

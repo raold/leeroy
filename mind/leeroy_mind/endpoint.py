@@ -92,7 +92,7 @@ REFUSAL_LOG_S = 30.0
 REPLACE_TRIES = 40  # 2 s of 50 ms tries to move control.json over a file being read
 OPS = ("status", "stop", "raid", "tune", "selfie", "say", "bank", "board", "library")
 RAID_ACTIONS = ("call", "form", "summon", "start", "stop", "end")
-TUNE_ACTIONS = ("status", "set", "undo", "revert", "group", "retire", "preview")
+TUNE_ACTIONS = ("status", "set", "undo", "revert", "group", "retire", "preview", "nudge")
 TUNE_SHAPES = {
     "status": {"action"},
     "set": {"action", "scope", "target", "dial", "value", "previewed"},
@@ -478,6 +478,12 @@ def tune_args(args) -> dict:
     if not isinstance(args, dict) or args.get("action") not in TUNE_ACTIONS:
         raise BadRequest("tune: an action, one of " + ", ".join(TUNE_ACTIONS))
     action = args["action"]
+    if action == "nudge":
+        from leeroy_mind.tuning.nudges import parse_args
+        try:
+            return parse_args(args)
+        except ValueError as exc:
+            raise BadRequest(str(exc)) from None
     shape = TUNE_SHAPES[action]
     if set(args) != shape:
         if action == "status":
@@ -919,9 +925,9 @@ class ControlEndpoint:
         if service is None:
             return {"ok": False, "error": "tuning is not running in this mind"}
         action = args["action"]
-        if action == "status":
+        if action == "status" or (action == "nudge" and args["verb"] == "list"):
             return await service.handle(args)
-        if action == "preview":
+        if action == "preview" or (action == "nudge" and args["verb"] == "preview"):
             if self._preview.locked():
                 return {"ok": False, "error": "another preview is still running"}
             async with self._preview:
