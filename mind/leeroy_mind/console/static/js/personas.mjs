@@ -2,7 +2,7 @@ import { $, api, arr, cell, clear, el, emit, emptyRow, num, obj, on, own, plural
          remember, setText, str } from "./core.mjs";
 import { face } from "./faces.mjs";
 import { photoButton } from "./gallery.mjs";
-import { nudgeBadges, nudgePanel } from "./nudges.mjs";
+import { nudgeBadges, nudgeFocus, nudgePanel } from "./nudges.mjs";
 import { forgetMemberShots, pollSelfies, setSelfieNames, showMemberPhoto } from "./selfies.mjs";
 import { S } from "./state.mjs";
 import { registerTab, showTab } from "./tabs.mjs";
@@ -426,6 +426,7 @@ function renderTuning() {
                      moves: str(d.moves) + " (" + str(d.when) + ")", off: v.available ? "" : "unavailable" });
   });
   var groups = $("t-groups");
+  var restoreGroupFocus = nudgeFocus(groups);
   clear(groups);
   arr(v.groups).forEach(function (g) {
     var head = el("h4", "", (g.builtin ? "everyone" : str(g.name)) + " · " + plural(num(g.members), "member")
@@ -488,6 +489,7 @@ function renderTuning() {
   if (!arr(v.history).length) { hist.appendChild(el("div", "muted", v.available ? "No dial changes yet." : "Unavailable in this mind.db.")); }
   if (pick) { renderDials(pick); }
   nudgeBadges(v);
+  restoreGroupFocus();
 }
 function rowText(v, r) {
   var who = r.scope === "world" ? "world" : r.scope === "group" ? "group " + groupName(v, r.target) : pname(v, Number(r.target));
@@ -503,6 +505,7 @@ function groupName(v, target) {
 }
 function renderDials(guid) {
   var v = tuneView(), box = $("p-dials");
+  var restoreFocus = nudgeFocus(box);
   clear(box);
   var m = arr(v.members).filter(function (x) { return x.guid === guid; })[0];
   if (!m) { setText("p-dialsum", ""); box.appendChild(el("p", "muted", v.available ? "No dials: this member has no readable persona, or is you." : "Unavailable in this mind.db.")); return; }
@@ -520,6 +523,7 @@ function renderDials(guid) {
   });
   setText("p-dialsum", mine ? plural(mine, "value") + " of your own" : "nothing of your own set");
   nudgePanel(box, v, "member", String(guid), tuneLive(), tuneWhy(), tuneAsk);
+  restoreFocus();
 }
 function fillValues() {
   var vals = arr(obj(tuneView().fields)[$("t-gfield").value]), sel = $("t-gvalues");

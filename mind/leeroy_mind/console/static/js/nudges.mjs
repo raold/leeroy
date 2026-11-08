@@ -3,10 +3,27 @@ import { activeFor, nudgeArgs, SCOPES, timeLeft } from "./nudgemodel.mjs";
 
 // Drafts stay only in this page's memory, across polling. Never localStorage or logs.
 const drafts = new Map();
+// A poll replaces the panel. Keep the editing position as well as its in-memory draft.
+export function nudgeFocus(box) {
+  const input = document.activeElement;
+  const panel = input?.closest?.('.nudges');
+  if (!panel || !box.contains(input) || !input.dataset.nudgeField) return () => {};
+  const key = panel.dataset.nudgeKey, field = input.dataset.nudgeField;
+  const start = input.selectionStart, end = input.selectionEnd, direction = input.selectionDirection;
+  return () => {
+    const next = Array.from(box.querySelectorAll('.nudges')).find(p => p.dataset.nudgeKey === key)
+      ?.querySelector(`[data-nudge-field="${field}"]`);
+    if (!next || next.disabled) return;
+    next.focus({ preventScroll: true });
+    if (typeof start === 'number' && typeof next.setSelectionRange === 'function')
+      next.setSelectionRange(start, end, direction);
+  };
+}
 export function nudgePanel(box, view, kind, target, live, why, ask) {
   const key = `${kind}:${target}`;
   const draft = drafts.get(key) || { text: "", strength: "light", scope: "everywhere", hours: 24 };
   const section = el("section", "nudges");
+  section.dataset.nudgeKey = key;
   section.appendChild(el("h4", "", "Temporary nudges"));
   section.appendChild(el("p", "muted", "A temporary state of mind, in their own words. It expires automatically; safety and privacy rules still apply."));
   const status = el("p", "why"); status.setAttribute("role", "status");
@@ -36,19 +53,19 @@ export function nudgePanel(box, view, kind, target, live, why, ask) {
     section.appendChild(row);
   });
   if (!active.length) section.appendChild(el("p", "muted", "No active nudges."));
-  function field(label, input) {
+  function field(label, input, name) {
     const wrap = el("label", "nudge-field", label); wrap.appendChild(input); section.appendChild(wrap);
-    input.disabled = !live; return input;
+    input.dataset.nudgeField = name; input.disabled = !live; return input;
   }
-  const text = field("Nudge (1–200 characters)", el("textarea"));
+  const text = field("Nudge (1–200 characters)", el("textarea"), "text");
   text.maxLength = 1024; text.rows = 3; text.value = draft.text;
-  function select(label, values, chosen) {
+  function select(label, values, chosen, name) {
     const s = el("select"); Object.entries(values).forEach(([value, label]) => { const o = el("option", "", label); o.value = value; s.appendChild(o); });
-    s.value = chosen; return field(label, s);
+    s.value = chosen; return field(label, s, name);
   }
-  const strength = select("Strength", { light: "Light", firm: "Firm" }, draft.strength);
-  const scope = select("Where it applies", SCOPES, draft.scope);
-  const hours = field("Duration in hours (1–336)", el("input"));
+  const strength = select("Strength", { light: "Light", firm: "Firm" }, draft.strength, "strength");
+  const scope = select("Where it applies", SCOPES, draft.scope, "scope");
+  const hours = field("Duration in hours (1–336)", el("input"), "hours");
   hours.type = "number"; hours.min = 1; hours.max = 336; hours.step = 1; hours.value = draft.hours;
   function fields() { return { text: text.value, strength: strength.value, scope: scope.value, hours: Number(hours.value) }; }
   [text, strength, scope, hours].forEach(e => e.addEventListener("input", () => drafts.set(key, fields())));

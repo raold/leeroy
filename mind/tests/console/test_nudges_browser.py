@@ -50,6 +50,19 @@ def test_nudge_controls_at_phone_width(tmp_path, theme):
                 await panel.get_by_label("Nudge (1–200 characters)").fill("Think about tonight")
                 await panel.get_by_role("button", name="Preview a line", exact=True).click()
                 await pw.expect(page.locator("#t-preview")).to_contain_text("isn't loaded")
+                # A real tuning event triggers the same redraw as the thirty-second poll.
+                # Preserve the draft, focused control and backwards selection in both forms.
+                for root in ('#p-dials', '#t-groups'):
+                    form = page.locator(root + ' .nudges').first
+                    line = form.get_by_label('Nudge (1–200 characters)')
+                    await line.fill('Keep typing through the refresh')
+                    await line.evaluate("e => { e.setSelectionRange(3, 12, 'backward'); e.dataset.focusOriginal = 'yes'; }")
+                    async with page.expect_response('**/api/tuning'):
+                        await page.evaluate("async () => { const core = await import('/static/js/core.mjs'); core.emit('tuning', {change: 0}); }")
+                    await pw.expect(form.locator('[data-focus-original]')).to_have_count(0)
+                    await pw.expect(line).to_be_focused()
+                    assert await line.input_value() == 'Keep typing through the refresh'
+                    assert await line.evaluate('e => [e.selectionStart, e.selectionEnd, e.selectionDirection]') == [3, 12, 'backward']
                 assert await panel.evaluate("e => e.scrollWidth <= e.clientWidth + 1")
                 assert not errors
                 assert not mind.arbiter.admin.calls
