@@ -4,9 +4,11 @@ suppression, without a toast; and its rules: it never dials the bridge's port, n
 mind.lock or voice.lock, never prints the control key and writes nothing but health-state.json,
 and only with --toast."""
 import dataclasses
+from contextlib import closing
 import json
 import logging
 import os
+import random
 import socket
 import sqlite3
 import subprocess
@@ -247,7 +249,9 @@ def test_a_healthy_install_is_all_ok_with_its_notes(rig):
     assert {n: c.status for n, c in checks.items()} == {
         "authserver": OK, "worldserver": OK, "server-log": OK, "realm-lists": OK, "mind": OK,
         "mind-log": OK, "mind-critical": OK, "endpoint": OK, "console": OK, "voice": OK,
-        "ollama": OK, "ollama-models": NOTE, "telemetry": OK, "realm-holds": OK, "unvoiced": OK}
+        "ollama": OK, "ollama-models": NOTE, "telemetry": OK, "realm-holds": OK, "unvoiced": OK,
+        "offline-raid": OK, "guild-raids": OK, "night-failures": NOTE,
+        "evidence-cycles": OK, "selfie-queue": OK}
     assert checks["server-log"].text == "Server.log: cast 111 members, pinned 111 (floor 100)"
     assert checks["mind"].text.startswith(f"mind: pid {MIND_PID} running (control.json names it)")
     assert "bridge_hello" in checks["mind-log"].text
@@ -265,11 +269,11 @@ def test_the_command_prints_one_line_each_or_json_and_exits_by_the_fails(rig, ca
     argv = ["--root", str(rig.root), "--data-dir", str(rig.data)]
     assert health.main(argv, probes=rig.probes()) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert len(lines) == 15 and lines[0].startswith("ok   authserver.exe running")
+    assert len(lines) == 20 and lines[0].startswith("ok   authserver.exe running")
     assert all(line[:5] in ("ok   ", "note ") for line in lines)
     assert health.main(argv + ["--json"], probes=rig.probes()) == 0
     out = json.loads(capsys.readouterr().out)
-    assert out["ok"] is True and len(out["checks"]) == 15
+    assert out["ok"] is True and len(out["checks"]) == 20
     assert out["checks"][0] == {"name": "authserver", "status": "ok",
                                 "text": out["checks"][0]["text"]}
     rig.servers = [s for s in rig.servers if s.image != "authserver.exe"]
@@ -655,9 +659,11 @@ def test_a_realm_hold_or_unknown_root_older_than_an_hour_fails(rig):
     rig.action("guild_grow", "unknown", "settled", [], NOW - 5000)
     checks = rig.run()
     assert checks["realm-holds"].status == FAIL
-    assert checks["realm-holds"].text == (
+    assert checks["realm-holds"].text.startswith(
         f"realm: 1 body hold (3 members) and 2 unknown roots older than 1 h, since "
         f"{health._when(NOW - 7200)}: guild_grow 1, leave_pvp 1")
+    assert f"kind=leave_pvp members=3: realm release leave_pvp-{NOW - 7200}" in checks["realm-holds"].text
+    assert "with the mind stopped" in checks["realm-holds"].text
 
 
 def test_cast_without_a_persona_is_a_note(rig):
@@ -678,6 +684,203 @@ def test_a_mind_db_without_the_newer_tables_is_unavailable_not_failed(rig):
     checks = rig.run()
     assert checks["telemetry"].status == NOTE and "unavailable" in checks["telemetry"].text
     assert checks["realm-holds"].status == NOTE and "unavailable" in checks["realm-holds"].text
+
+
+def readonly_check(rig, function, *args, **kwargs):
+    path = rig.data / "mind.db"
+    before = path.stat().st_mtime_ns
+    with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
+        conn.row_factory = sqlite3.Row
+        result = function(conn, *args, **kwargs)
+    assert path.stat().st_mtime_ns == before
+    assert "PRIVATE_SENTINEL" not in result.text
+    return result
+
+
+@pytest.mark.parametrize("phase,overdue,status", [
+    ("accepted", 1800, OK), ("running", 1801, FAIL), ("accepted", -30, OK),
+    ("complete", 99999, OK), ("rejected", 99999, OK),
+])
+def test_offline_raid_deadline_and_terminal_states(rig, phase, overdue, status):
+    receipt = {"raid_id": 42, "phase": phase, "deadline": NOW - overdue}
+    rig.db("INSERT INTO meta(key,value) VALUES ('guild:offline:owned',?)", (json.dumps(receipt),))
+    result = readonly_check(rig, health._offline_raid, NOW)
+    assert result.status == status
+    if status == FAIL:
+        assert "42" in result.text and "deadline" in result.text and "inspect" in result.text
+
+
+@pytest.mark.parametrize("receipt", ['PRIVATE_SENTINEL', '[]', '{"phase":"running"}',
+                                      '{"phase":"accepted","raid_id":42,"deadline":NaN}'])
+def test_invalid_offline_raid_receipt_is_reported_without_contents(rig, receipt):
+    rig.db("INSERT INTO meta(key,value) VALUES ('guild:offline:owned',?)", (receipt,))
+    assert readonly_check(rig, health._offline_raid, NOW).status == FAIL
+
+
+def test_guild_raid_open_six_hour_boundary_and_ended_runs(rig):
+    sql = ("INSERT INTO guild_raid(raid_id,started,ended,raid_key,size,heroic,offline,lead_guid,"
+           "tank_guid,loot_guid) VALUES (?,?,?,?,10,0,1,101,102,103)")
+    rig.db(sql, (41, NOW - 6 * 3600, None, "synthetic"))
+    rig.db(sql, (42, NOW - 9 * 3600, NOW - 7 * 3600, "synthetic"))
+    assert readonly_check(rig, health._guild_raids, NOW).status == OK
+    rig.db(sql, (43, NOW - 6 * 3600 - 1, None, "synthetic"))
+    result = readonly_check(rig, health._guild_raids, NOW)
+    assert result.status == FAIL and "43 open 6 h" in result.text
+    assert "42 open" not in result.text
+
+
+def finished_night(rig, error, *, night="2026-11-05", started=NOW - 1000, finished=NOW - 100):
+    rig.db("INSERT INTO night_run(night,window_start,window_end,status,started,finished,error) "
+           "VALUES (?,?,?,'done',?,?,?)", (night, started, finished, started, finished, error))
+
+
+@pytest.mark.parametrize("counts,status", [({}, OK), ({"critic": 1}, NOTE),
+                                          ({"critic": 9}, NOTE), ({"critic": 9, "gossip": 1}, FAIL)])
+def test_stored_night_failures_thresholds_and_error_code_only(rig, counts, status):
+    finished_night(rig, json.dumps(counts))
+    rig.mind_log([record(NOW - 500, "nightly_unit_failed", night="2026-11-05", stage="critic",
+                         error="ValueError", message="PRIVATE_SENTINEL", unit="PRIVATE_SENTINEL")])
+    result = readonly_check(rig, health._night_failures, rig.data, lambda p: open(p, "rb"))
+    assert result.status == status and f"{sum(counts.values())} failed units (stored)" in result.text
+    if counts:
+        assert "top error=ValueError" in result.text and "critic=" in result.text
+
+
+def test_latest_finished_night_and_log_fallback_include_rotation(rig):
+    finished_night(rig, '{"critic":50}', night="2026-11-04", finished=NOW - 5000)
+    finished_night(rig, None)
+    rig.mind_log([record(NOW - 400, "nightly_unit_failed", night="2026-11-05", stage="gossip",
+                         error="ProvenanceError", message="PRIVATE_SENTINEL"),
+                  record(NOW - 99, "nightly_unit_failed", night="2026-11-05", stage="gossip"),
+                  record(NOW - 400, "nightly_unit_failed", night="other", stage="gossip")])
+    rotated = rig.data / "logs" / ("mind.log." + time.strftime("%Y-%m-%d", time.localtime(NOW - 1000)))
+    rotated.write_text(record(NOW - 500, "nightly_unit_failed", night="2026-11-05",
+                              stage="critic", error="ProvenanceError") + "\n", encoding="utf-8")
+    result = readonly_check(rig, health._night_failures, rig.data, lambda p: open(p, "rb"))
+    assert result.status == NOTE and "2 failed units (logs)" in result.text
+    assert "critic=1, gossip=1" in result.text and "ProvenanceError (2 logged)" in result.text
+
+
+def test_log_budget_is_an_incomplete_observation(rig, monkeypatch):
+    finished_night(rig, None)
+    monkeypatch.setattr(health, "NIGHT_LOG_BYTES", 10)
+    result = readonly_check(rig, health._night_failures, rig.data, lambda p: open(p, "rb"))
+    assert result.status == NOTE and "incomplete" in result.text
+
+
+def insert_health_memory(rig, ident, refs):
+    rig.db("INSERT INTO memory(id,owner,kind,text,t_event,t_created,t_accessed,importance,valence,"
+           "source,evidence) VALUES (?,101,'event','PRIVATE_SENTINEL',1,1,1,5,0,'game',?)",
+           (ident, json.dumps(refs)))
+
+
+@pytest.mark.parametrize("count,status", [(0, OK), (1, NOTE), (49, NOTE), (50, FAIL)])
+def test_evidence_cycle_thresholds_count_memories(rig, count, status):
+    for ident in range(1, count + 1):
+        insert_health_memory(rig, ident, [f"memory:{ident}"])
+    result = readonly_check(rig, health._evidence_cycles)
+    assert result.status == status and f"{count} cyclic memories" in result.text
+
+
+def test_long_cycle_shared_tail_and_acyclic_diamond(rig):
+    for ident, refs in {1: ["memory:2"], 2: ["memory:3"], 3: ["memory:0002"],
+                        4: ["memory:2"], 5: ["memory:6", "memory:7"],
+                        6: ["memory:8"], 7: ["memory:8"], 8: ["owner:synthetic"]}.items():
+        insert_health_memory(rig, ident, refs)
+    result = readonly_check(rig, health._evidence_cycles)
+    assert result.status == NOTE and "4 cyclic memories among 8 checked" in result.text
+
+
+def test_cycle_uses_shared_chat_recall_edges(rig):
+    insert_health_memory(rig, 1, ["chat:1"])
+    rig.db("INSERT INTO chat_line(id,ts,channel,from_guid,from_name,to_guid,text,origin) "
+           "VALUES (1,1000,'guild',101,'Synthetic',0,'PRIVATE_SENTINEL','mind')")
+    rig.db("INSERT INTO utterance(ts,guid,channel,kind,text,memory_ids,to_guid) "
+           "VALUES (1000,101,'guild','open','PRIVATE_SENTINEL','[1]',0)")
+    result = readonly_check(rig, health._evidence_cycles)
+    assert result.status == NOTE and "1 cyclic memories" in result.text
+
+
+def test_cycle_budget_or_invalid_evidence_never_claims_complete(rig):
+    insert_health_memory(rig, 1, ["memory:2"])
+    insert_health_memory(rig, 2, ["memory:1"])
+    for options in ({"row_budget": 1}, {"seconds": 0}):
+        result = readonly_check(rig, health._evidence_cycles, **options)
+        assert result.status == NOTE and "incomplete (budget" in result.text
+    rig.db("UPDATE memory SET evidence='PRIVATE_SENTINEL' WHERE id=2")
+    result = readonly_check(rig, health._evidence_cycles)
+    assert result.status == NOTE and "invalid provenance" in result.text
+
+
+def test_cycle_counts_match_independent_transitive_closure():
+    rng = random.Random(8042)
+    for _ in range(40):
+        size = 12
+        graph = [{j for j in range(size) if rng.random() < 0.13} for _ in range(size)]
+        reach = [set(children) for children in graph]
+        for via in range(size):
+            for root in range(size):
+                if via in reach[root]:
+                    reach[root].update(reach[via])
+        cycle_nodes = {i for i in range(size) if i in reach[i]}
+        expected = sum(bool(children & cycle_nodes) for children in reach)
+        with closing(sqlite3.connect(":memory:")) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute("CREATE TABLE memory(id INTEGER PRIMARY KEY,evidence TEXT)")
+            conn.executemany("INSERT INTO memory VALUES (?,?)", [
+                (i + 1, json.dumps([f"memory:{j + 1}" for j in children]))
+                for i, children in enumerate(graph)])
+            conn.execute("PRAGMA query_only=ON")
+            result = health._evidence_cycles(conn)
+            assert f"{expected} cyclic memories among {size} checked" in result.text
+
+
+def test_cycle_walk_handles_a_deep_chain_without_recursion():
+    with closing(sqlite3.connect(":memory:")) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute("CREATE TABLE memory(id INTEGER PRIMARY KEY,evidence TEXT)")
+        conn.executemany("INSERT INTO memory VALUES (?,?)", [
+            (i, json.dumps([f"memory:{i + 1}" if i < 1500 else "memory:1499"]))
+            for i in range(1, 1501)])
+        result = health._evidence_cycles(conn)
+        assert result.status == FAIL and "1500 cyclic memories among 1500 checked" in result.text
+
+
+def test_selfie_queued_age_and_ready_sets(rig):
+    rig.db("INSERT INTO selfie_set(guid,set_no,reason,status,requested) VALUES (101,1,'first','queued',?)",
+           (NOW - 30 * 3600,))
+    assert readonly_check(rig, health._selfie_queue, NOW).status == OK
+    rig.db("UPDATE selfie_set SET requested=?", (NOW - 30 * 3600 - 1,))
+    result = readonly_check(rig, health._selfie_queue, NOW)
+    assert result.status == NOTE and "1 sets older than 30 h" in result.text
+    rig.db("UPDATE selfie_set SET status='ready', rendered=?", (NOW,))
+    assert readonly_check(rig, health._selfie_queue, NOW).status == OK
+
+
+def test_new_checks_on_an_empty_old_schema(tmp_path):
+    path = tmp_path / "old.db"
+    with closing(sqlite3.connect(path)):
+        pass
+    with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
+        for fn, args in [(health._offline_raid, (NOW,)), (health._guild_raids, (NOW,)),
+                         (health._night_failures, (tmp_path, lambda p: open(p, "rb"))),
+                         (health._evidence_cycles, ()), (health._selfie_queue, (NOW,))]:
+            result = fn(conn, *args)
+            assert result.status == NOTE and "not set up" in result.text
+
+
+def test_new_check_json_matches_text_and_never_writes(rig, capsys):
+    insert_health_memory(rig, 1, ["memory:1"])
+    before = (rig.data / "mind.db").stat().st_mtime_ns
+    args = ["--root", str(rig.root), "--data-dir", str(rig.data), "--json"]
+    assert health.main(args, probes=rig.probes()) == 0
+    output = json.loads(capsys.readouterr().out)
+    expected = rig.run()
+    for name in ("offline-raid", "guild-raids", "night-failures", "evidence-cycles", "selfie-queue"):
+        actual, = (c for c in output["checks"] if c["name"] == name)
+        assert actual == expected[name].as_dict()
+        assert "PRIVATE_SENTINEL" not in actual["text"]
+    assert (rig.data / "mind.db").stat().st_mtime_ns == before
 
 
 # -- the toast -----------------------------------------------------------------------------------
