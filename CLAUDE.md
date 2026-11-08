@@ -588,6 +588,7 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 .venv/Scripts/python -m leeroy_mind run --data-dir "$D"     # the service; Ctrl+C once stops it cleanly
 .venv/Scripts/python -m leeroy_mind doctor --data-dir "$D"  # one ok/FAIL/note line per check
 .venv/Scripts/python -m leeroy_mind db --data-dir "$D" migrate   # snapshot, then the code's schema
+.venv/Scripts/python -m leeroy_mind db repair-provenance --data-dir "$D"  # counts only; --go snapshots and repairs with the mind stopped
 .venv/Scripts/python -m leeroy_mind personas --data-dir "$D" card <guid>   # also export, import, mix
 .venv/Scripts/python -m leeroy_mind.library --data-dir "$D" stats   # the game library: build, search
 .venv/Scripts/python -m leeroy_mind nightly --data-dir "$D" status  # also run, ledger, undo, enrich, veto

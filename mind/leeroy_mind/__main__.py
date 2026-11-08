@@ -537,6 +537,9 @@ def cmd_db(args) -> int:
     from .storage.db import checkpoint, open_db
     root = _root(args)
     path = root / "mind.db"
+    if args.action == "repair-provenance":
+        from .storage.repair_cli import run
+        return run(root, go=args.go)
     if args.action == "snapshot":
         if not path.exists():
             print(f"no mind.db at {path}", file=sys.stderr)
@@ -1310,6 +1313,10 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     _add_data_dir(p_snap, after_action=True)
     p_mig = dsub.add_parser("migrate", help="snapshot, then bring mind.db to this code's schema")
     _add_data_dir(p_mig, after_action=True)
+    p_repair = dsub.add_parser("repair-provenance", help="count memory evidence cycles; "
+                              "--go snapshots and repairs with the mind stopped")
+    p_repair.add_argument("--go", action="store_true")
+    _add_data_dir(p_repair, after_action=True)
     p_db.set_defaults(func=cmd_db)
     p_mem = sub.add_parser("memories", help="seed the owner's own memories of the guild")
     _add_data_dir(p_mem)

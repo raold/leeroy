@@ -17,16 +17,13 @@ from leeroy_mind.nightly.settings import night_of_ts
 from leeroy_mind.nightly.store import enqueue_review, ledger_add, ledger_rows
 from leeroy_mind.personas.card import render_prompt_card
 from leeroy_mind.personas.io import load_effective
+from leeroy_mind.storage.provenance import ProvenanceError, edges, memory_ids, paired
 from leeroy_mind.tuning.lines import tuned_card
 from leeroy_mind.text import strip_wow_markup
 from leeroy_mind.wow import CAST_MIN_LEVEL, CLASSES, RACES
 
 STAGE = "critic"
 PROVENANCE_MAX = 5000
-
-
-class ProvenanceError(ValueError):
-    """A sent line whose sources cannot be traced completely (stored data, not this run)."""
 
 
 CRITIC_SCHEMA = schema("critic", {"scores": {"type": "array", "items": {
@@ -77,17 +74,11 @@ def _safe(text, ident):
 
 
 def _ids(raw):
-    values = json.loads(raw)
-    if not isinstance(values, list) or any(type(i) is not int or i <= 0 for i in values):
-        raise ProvenanceError("Invalid critic source memory IDs")
-    return values
+    return memory_ids(raw)
 
 
 def _paired(store, line):
-    return store.conn.execute("SELECT * FROM utterance WHERE guid=? AND channel=? AND text=? "
-        "AND to_guid=? AND ts BETWEEN ? AND ? ORDER BY abs(ts-?),id LIMIT 1",
-        (line["from_guid"], line["channel"], line["text"], line["to_guid"],
-         line["ts"] - 2, line["ts"] + 2, line["ts"])).fetchone()
+    return paired(store.conn, line)
 
 
 def _provenance(store, refs):
@@ -114,25 +105,8 @@ def _provenance(store, refs):
         if node is None:
             raise ProvenanceError("Incomplete critic provenance")
         value, children, holder, scope, parties = node
-        extras = ()
-        if ref.startswith("chat:"):
-            line = store.conn.execute("SELECT * FROM chat_line WHERE id=?",
-                                      (int(ref.split(":", 1)[1]),)).fetchone()
-            if line["origin"] == "mind":
-                pair = _paired(store, line)
-                if pair is None or pair["dropped"] is not None:
-                    raise ProvenanceError("Unpaired critic source output")
-                children = (*children, *(f"memory:{i}" for i in _ids(pair["memory_ids"])))
-                extras = (tuple(line), tuple(pair))
-            else:
-                extras = (tuple(line),)
-        elif ref.startswith("joke:"):
-            retained = store.get_meta(f"nightly:lexicon-sources:{ref.split(':', 1)[1]}") or "[]"
-            origins = json.loads(retained)
-            if not isinstance(origins, list) or any(not isinstance(r, str) for r in origins):
-                raise ProvenanceError("Invalid critic term provenance")
-            children = (*children, *origins)
-            extras = (retained,)
+        links = edges(store.conn, ref, audit=True)
+        children, extras = links.children, links.extras
         if any(not isinstance(child, str) for child in children):
             raise ProvenanceError("Invalid critic source references")
         saved[ref] = (value, tuple(children), holder, scope, tuple(sorted(parties)), extras)

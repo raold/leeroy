@@ -414,6 +414,11 @@ class Store:
             mid = self.conn.execute(
                 f"INSERT INTO memory({self._MEMORY_COLS}) VALUES ({marks})",
                 self._memory_params(m)).lastrowid
+            # An old dangling reference can name this newly allocated id. Check after
+            # allocation, inside the same transaction, before publishing its evidence.
+            kept = tuple(e for e in evidence if not self._cites_memory(e, mid))
+            if kept != evidence:
+                self.conn.execute("UPDATE memory SET evidence=? WHERE id=?", (_j(kept), mid))
             self._index_actors(mid, m.actors)
             if m.embedding is not None:
                 self._index_vec(mid, m.owner, m.embedding)
@@ -436,6 +441,8 @@ class Store:
             if r is None:
                 return self.insert_memory(m, shown=shown)
             mid = r["id"]
+            evidence = tuple(e for e in evidence if not self._cites_memory(e, mid))
+            m = replace(m, evidence=evidence)
             facts = realm_dependencies_in_unit(self, evidence=evidence, shown=shown,
                                                existing_memory=mid)
             scope, scope_with = stricter((r["scope"], r["scope_with"]), (m.scope, m.scope_with))
@@ -473,23 +480,19 @@ class Store:
             attach_realm_dependencies_in_unit(self, id, facts)
 
     def _cites_memory(self, ref, target: int, limit: int = 5000) -> bool:
-        """Whether `ref` is memory `target` or has it among its memory ancestors."""
-        seen, todo = set(), [ref]
-        while todo and len(seen) < limit:
-            cur = todo.pop()
-            if cur in seen or not isinstance(cur, str) or not cur.startswith("memory:"):
-                continue
-            seen.add(cur)
-            try:
-                ident = int(cur[7:])
-            except ValueError:
-                continue
-            if ident == target:
-                return True
-            r = self._one("SELECT evidence FROM memory WHERE id = ?", (ident,))
-            if r is not None:
-                todo.extend(json.loads(r["evidence"]))
-        return False
+        """Whether an addition reaches this memory through the full evidence graph.
+
+        Refuse an addition if bounded traversal cannot prove it safe. No stored
+        text, reference contents or parser errors reach the log.
+        """
+        from leeroy_mind.storage.provenance import ProvenanceError, WalkLimit, edges, reaches
+        try:
+            return reaches(lambda r: edges(self.conn, r).children, ref,
+                           f"memory:{target}", limit=limit)
+        except (ProvenanceError, ValueError, TypeError) as err:
+            code = "bound" if isinstance(err, WalkLimit) else "invalid"
+            log.warning("memory_evidence_held: id=%s count=1 code=%s", target, code)
+            return True
 
     def set_embedding(self, id: int, vec: bytes) -> None:
         with self.transaction():
