@@ -539,7 +539,8 @@ def test_a_grid_pastes_each_tile_resized_at_its_box_on_the_ground(tmp_path, monk
                                        thumb_size=200))
     width, height = grids.canvas(5, 256, 8)
     assert (width, height) == (800, 536)
-    assert set(answer) == {"ok", "width", "height", "seconds", "error"}
+    assert set(answer) == {"ok", "width", "height", "seconds", "error", "similarity"}
+    assert answer["similarity"] == {"code": "encoder_unavailable"}
     assert answer["ok"] is True and answer["error"] == "" and type(answer["seconds"]) is float
     assert (answer["width"], answer["height"]) == (width, height)
     (canvas,) = image.made

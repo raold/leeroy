@@ -24,6 +24,7 @@ from .prompt import renderable
 from .ration import MEMBER_GAP_S, MEMBER_STOCK, send_weight, stock_target
 from .scene import (ABOUT, PHASES, SCENE_ASK, scene_from, scene_json, scene_renderable,
                     scene_schema, scene_system, screen_scene, window)
+from .scene_choices import compose_choices, pairing_codes
 from .snaps import guild_photo_since, last_sent, looks_hash, open_stock, plan_snap, sweep
 from .store import current
 
@@ -174,6 +175,10 @@ async def ask_scene(ctx: "NightContext", guid: int, *, about: str):
         return None, ["model"]
     if data.get("photo") is False:
         return None, [DECLINED]
+    codes = pairing_codes(data)
+    if codes:
+        return None, codes
+    data = compose_choices(data)
     others = [g for g in ctx.members(include_away=True) if g != guid]
     names = [ctx.name(g) for g in others]
     for g in others:  # their real names too (any case, whole words)
@@ -217,7 +222,7 @@ async def _guild(ctx: "NightContext") -> int:
         def write(store) -> None:
             plan_snap(store, kind="guild", guid=0, source="raid", ref=f"raid:{raid_id}",
                       night=ctx.night, audience="anyone",
-                      scene={"shows": f"The raid on a video call, {len(members)} of them"},
+                      scene={"shows": f"The raid at their desks, {len(members)} separate portraits"},
                       phases=PHASES["evening"] + PHASES["late"], not_before=not_before,
                       expires=expires, now=ctx.clock.now(), members=members)
         if ctx.commit(STAGE, unit, write):

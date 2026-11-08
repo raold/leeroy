@@ -7,7 +7,7 @@ import time
 from collections import OrderedDict
 from pathlib import Path
 
-from . import grid, jpeg, models
+from . import grid, jpeg, models, similarity
 from .fit import fit
 from .protocol import PORTRAIT_SIZE, Grid, Identity, Render, RenderFailed
 
@@ -145,7 +145,8 @@ class Renderer:
             fields = grid.compose(req)
         except RenderFailed as e:
             return {"ok": False, "error": str(e)}
-        return {"ok": True, **fields, "error": ""}
+        return {"ok": True, **fields, "error": "",
+                "similarity": similarity.measure(self.pipe, self.torch, req.tiles)}
 
 
 def _ms(seconds: float) -> int:

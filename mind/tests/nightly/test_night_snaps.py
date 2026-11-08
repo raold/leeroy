@@ -216,6 +216,7 @@ def test_a_guild_photo_renders_each_member_alone_then_one_grid(h, tmp_path):
     ctx = h.ctx()
     run(make_snaps_stage(SNAPS_CFG, worker=watching(tmp_path, seen, FAKE_SELFIE_LOG=str(log)))(ctx))
     picks = {m: current(h.store, m).pick for m in (101, 102, 103)}
+    assert len({req.seed for req in seen}) == 3  # actual per-tile requests, not only the helper
     assert lines(log)[-1] == f"g{g}:grid grid 3"                      # n tiles, then one grid
     assert renders(log) == [(f"g{g}:{i}:0", seed_for(ctx.night, m, g, i, 0), str(history(data, m, picks[m])))
                             for i, m in enumerate((101, 102, 103))]
