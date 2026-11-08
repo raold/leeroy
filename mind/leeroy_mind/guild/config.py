@@ -45,6 +45,7 @@ class GuildConfig:
     offline_max_wipes: int = 6
     offline_max_wipes_per_boss: int = 3
     offline_timeout_min: int = 180
+    offline_stall_minutes: int = 30
     friends_cap: int = 40
     friends_add: float = 0.45
     friends_remove: float = 0.30
@@ -133,7 +134,7 @@ def load_guild_config(path: Path) -> GuildConfig:
         if not _int(guild[key], 1):
             _bad("guild", key, "a positive integer")
     for key, lo, hi in (("offline_max_wipes", 1, 20), ("offline_max_wipes_per_boss", 1, 10),
-                        ("offline_timeout_min", 10, 360), ("friends_cap", 1, 50),
+                        ("offline_timeout_min", 10, 360), ("offline_stall_minutes", 10, 360), ("friends_cap", 1, 50),
                         ("gear_up_ilvl", 1, 400), ("gear_up_below_avg_ilvl", 0, 400),
                         ("level_to", 1, 80)):
         if not _int(guild[key], lo, hi):

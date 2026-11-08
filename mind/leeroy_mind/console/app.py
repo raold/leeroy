@@ -142,6 +142,7 @@ PENDING_S = 120.0  # how long a spoken line may stay "on its way" before the pag
 PENDING_MAX = 200  # how many such lines are watched at once
 PING_S = 15.0
 QUEUE = 500  # events a page may fall behind before it is cut off (it reconnects)
+MAX_STREAMS = 8  # leave HTTP slots available for ordinary requests
 FEED_DAYS = 3.0  # how far back a page's first feed goes
 KEY_HEADER = "x-console-key"
 TUNE_S = 10.0  # a dial change's answer
@@ -224,6 +225,8 @@ def static_files() -> dict[str, tuple[bytes, str]]:
 
     def walk(folder, prefix: str) -> None:
         for entry in folder.iterdir():
+            if isinstance(entry, Path) and (entry.is_symlink() or entry.is_junction()):
+                continue
             if entry.is_dir():
                 walk(entry, f"{prefix}{entry.name}/")
             elif (kind := STATIC_TYPES.get(os.path.splitext(entry.name)[1])) is not None:
@@ -729,6 +732,8 @@ class ConsoleApp:
         return json_response(200, await self.snapshot())
 
     async def _api_events(self, req: Request):
+        if len(self._subs) >= MAX_STREAMS:
+            return text(503, "Too many event streams; close another console tab.")
         sub = _Subscriber()
         self._subs.add(sub)
         events = self._events(sub, self.relay.snapshot(), self.strip())

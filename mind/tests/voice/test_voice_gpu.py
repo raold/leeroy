@@ -156,12 +156,15 @@ class Ollama:
             def log_message(self, *a):
                 pass
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.thread = threading.Thread(target=self.server.serve_forever,
+                                       kwargs={"poll_interval": 0.01}, daemon=True)
+        self.thread.start()
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
 
     def close(self):
         self.server.shutdown()
         self.server.server_close()
+        self.thread.join()
 
 
 def test_pins_only_a_model_ollama_already_lists():

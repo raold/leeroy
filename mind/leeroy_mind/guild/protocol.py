@@ -87,6 +87,12 @@ class StartOfflineRaid:
 
 
 @dataclass(frozen=True, slots=True)
+class StopOfflineRaid:
+    id: str
+    raid_id: str
+
+
+@dataclass(frozen=True, slots=True)
 class GearUp:
     id: str
     guids: tuple[int, ...]
@@ -159,6 +165,9 @@ class Job:
     level: int
     avg_ilvl: int
     training_run: str = ""
+    members_in_instance: int | None = None
+    last_progress_ts: int | None = None
+    boss_engaged: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +201,7 @@ COMMANDS: dict[str, type] = {
     "set_loot_master": SetLootMaster,
     "give_loot": GiveLoot,
     "start_offline_raid": StartOfflineRaid,
+    "offline_raid_stop": StopOfflineRaid,
     "gear_up": GearUp,
     "raid_control": RaidControl,
     "remove_friend": RemoveFriend,

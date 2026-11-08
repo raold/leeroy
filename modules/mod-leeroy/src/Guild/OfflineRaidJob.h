@@ -12,6 +12,7 @@ enum class RaidJobMode { Offline, Benchmark };
 LeeroyCommandResult StartRaidJob(std::string const& id, OfflineRaidCmd const&, RaidJobMode,
     std::vector<std::uint32_t> const& bosses = {});
 LeeroyCommandResult HandleStartOfflineRaid(nlohmann::json const& message);
+LeeroyCommandResult HandleStopOfflineRaid(nlohmann::json const& message);
 // Reservations include requested members before grouping and survive unresolved teardown.
 bool OfflineRaidOwns(std::uint32_t guid);
 std::string AdmitTrainingRun(std::string const& handle, std::vector<std::uint32_t> const& guids,
