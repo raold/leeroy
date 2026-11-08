@@ -3,6 +3,7 @@ import { when } from "./words.mjs";
 import { badges, DETECTORS, rate, variant } from "./insightmodel.mjs";
 
 var selected = 0, generation = 0, selection = 0, loaded = null, budget = "medium", checking = false;
+var cardNode = null, droppedNode = null;
 export function appendInsightBadges(parent, value) {
   badges(value).forEach(function (b) {
     var badge = el("span", "chip insight-badge", b.text);
@@ -29,8 +30,8 @@ function claimList(box, rows) {
 }
 function showCard() {
   var v = variant(obj(loaded).awareness, budget);
-  $("insight-card").textContent = v.text;
-  $("insight-dropped").textContent = "Dropped at this budget: " + v.dropped;
+  cardNode.textContent = v.text;
+  droppedNode.textContent = "Dropped at this budget: " + v.dropped;
 }
 function render(value) {
   loaded = value;
@@ -58,6 +59,7 @@ function render(value) {
   label.appendChild(select); awareness.appendChild(label);
   var pre = el("pre", "insight-card"); pre.id = "insight-card"; awareness.appendChild(pre);
   var dropped = el("p", "why"); dropped.id = "insight-dropped"; awareness.appendChild(dropped);
+  cardNode = pre; droppedNode = dropped;
   if (arr(a.missing).length) { awareness.appendChild(el("p", "why", "Missing sources: " + a.missing.join(", "))); }
   box.appendChild(awareness);
   var q = obj(value.quality), quality = section("Talk quality", q);
