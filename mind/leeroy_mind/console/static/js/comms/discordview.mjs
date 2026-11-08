@@ -20,6 +20,7 @@ function focusKey(root) {
 function restore(root, key) {
   var e = key ? root.querySelector('[data-focus="' + CSS.escape(key) + '"]') : null;
   if (e) { e.focus({ preventScroll: true }); }
+  return !!e;
 }
 function routeKey() { return shown + ":" + thread; }
 function keepDraft() {
@@ -76,7 +77,8 @@ function renderMembers() {
     members.appendChild(el("h4", "sec", g.role + " — " + g.members.length));
     g.members.forEach(function (m) {
       var row = el("div", "dc-member dc-class-" + m.class_key);
-      row.appendChild(faceButton(m.guid, m.name, "list"));
+      var portrait = faceButton(m.guid, m.name, "list"); portrait.dataset.focus = "member-card-" + m.guid;
+      row.appendChild(portrait);
       var words = el("div", "dc-member-words"); words.appendChild(el("span", "who", m.name));
       words.appendChild(dot(m.presence.state));
       if (m.presence.playing) { words.appendChild(el("small", "muted", "Playing WoW")); }
@@ -95,7 +97,10 @@ function messageRow(item, data) {
   var row = el("article", "msg dc-message" + (item.grouped ? " dc-grouped" : "") + (mine ? " mine" : "")
     + (mentionsHim(m.text, DISCORD.human.name) ? " dc-mentioned" : ""));
   row.dataset.id = m.id;
-  if (!item.grouped) { row.appendChild(mine ? face(m.author, name(m.author), "feed", { you: true }) : faceButton(m.author, name(m.author), "feed")); }
+  if (!item.grouped) {
+    var portrait = mine ? face(m.author, name(m.author), "feed", { you: true }) : faceButton(m.author, name(m.author), "feed");
+    if (!mine) { portrait.dataset.focus = m.id + ":card"; } row.appendChild(portrait);
+  }
   else { row.appendChild(el("span", "dc-time-small", clock(m.ts * 1000).slice(0, 5))); }
   var content = el("div", "dc-content");
   if (!item.grouped) {
@@ -268,7 +273,8 @@ $("dc-dialog-form").addEventListener("submit", function (ev) { ev.preventDefault
 $("dc-emoji-groups").addEventListener("click", function (ev) { var b = ev.target.closest("[data-pick-emoji]"); if (b) { submitDialog(b.dataset.pickEmoji); } });
 $("dc-dialog").addEventListener("close", function () {
   dialog = null; var key = returnTo && returnTo.dataset.focus;
-  if (returnTo && returnTo.isConnected) { returnTo.focus({ preventScroll: true }); } else if (key) { restore(box, key); }
+  if (returnTo && returnTo.isConnected) { returnTo.focus({ preventScroll: true }); }
+  else if (!restore(box, key)) { input.focus(); }
 });
 on("discord-open", onView);
 on("feed", function () { if (!active()) { onView(); } });
