@@ -183,3 +183,36 @@ async def test_failed_local_release_does_not_invent_remote_job_after_rejected_ac
     await advance(ports, 86400)
     await controller.tick()
     assert len(ports.sent) == 2
+
+
+@_run_async
+async def test_terminal_lost_after_restart_ends_the_orphaned_run(setup):
+    ports, armory, controller = setup
+    await running(setup)
+    raid_id = controller.session.raid_id
+    await controller._release()
+    recreated = OfflineRaids(ports, controller.cfg, armory, random.Random(7))
+    await advance(ports, controller.cfg.offline_timeout_min * 60 + 60)
+    await recreated.tick()
+    assert recreated.active  # native may still be tearing down
+    await advance(ports, 900)
+    await recreated.tick()
+    assert not recreated.active and recreated.session is None
+    assert recreated._owned["phase"] == "complete"
+    assert ports.conn.execute("SELECT ended FROM guild_raid WHERE raid_id=?", (raid_id,)).fetchone()[0] is not None
+    assert ports.conn.execute("SELECT COUNT(*) FROM guild_raid WHERE ended IS NULL").fetchone()[0] == 0
+    assert recreated._day_state()["blocked"]
+    await recreated.tick()
+    assert len(ports.sent) == 1
+
+
+@_run_async
+async def test_late_terminal_after_lost_is_ignored(setup):
+    ports, armory, controller = setup
+    await running(setup)
+    await advance(ports, controller.cfg.offline_timeout_min * 60 + 900)
+    await controller.tick()
+    assert not controller.active
+    await controller.on_job(event(controller, state="done", stage="", reason="cleared"))
+    await controller.tick()
+    assert not controller.active and len(ports.sent) == 1

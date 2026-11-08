@@ -31,6 +31,10 @@ RETRY_S = 60
 BUSY_RETRY_S = 15 * 60
 NO_FRESH_RAID = "setup:starting:no_fresh_encounters"
 CLEANUP_GRACE_S = 60
+# Native stops a run at its own timeout and then tears down (setup, return and cleanup waits are
+# a minute each). A terminal that has not come this long after the deadline is not coming: the
+# worldserver restarted, or the report went out while the bridge was down.
+LOST_TERMINAL_S = 15 * 60
 INPUT_LIMIT = 256
 OWNED_KEY = "guild:offline:owned"
 DAY_PREFIX = "guild:offline:day:"
@@ -595,6 +599,24 @@ class OfflineRaids:
             skipped = skipped if key in skipped else [*skipped, key]
         self._update_day(voided=voided, skipped=skipped, next_try=self.ports.clock.now() + delay)
 
+    def _lose_terminal(self):
+        """Record the terminal receipt for a run whose native report never came.
+
+        Native has passed its own timeout and teardown by now, so it holds nobody; the ordinary
+        finish path then closes the raid row and completes the owned receipt.
+        """
+        kills = self.session.kills if self.session is not None else 0
+        wipes = self.session.wipes if self.session is not None else 0
+        plan = self._owned["plan"]
+        log.warning("offline_raid_terminal_lost raid_id=%s members=%d",
+                    self._owned.get("raid_id"), len(self._owned.get("accepted") or ()))
+        self._owned["terminal"] = dict(
+            ts=0, id=self._owned["id"], kind="offline_raid", state="failed", reason="terminal_lost",
+            stage="", guids=list(self._owned.get("accepted") or ()), skipped=[], kills=kills, wipes=wipes,
+            instance_id=self._owned.get("instance") or 0, guid=plan["tank_guid"], level=0, avg_ilvl=0)
+        self._invalidate()
+        self._save()
+
     async def _finish(self):
         terminal = self._owned.get("terminal")
         if terminal is None:
@@ -714,7 +736,10 @@ class OfflineRaids:
                         deadline = self._owned["deadline"]
                         if self._owned.get("cancel_at") is not None:
                             deadline = min(deadline, self._owned["cancel_at"])
-                        if self.ports.clock.now() >= deadline + CLEANUP_GRACE_S:
+                        if self.ports.clock.now() >= self._owned["deadline"] + LOST_TERMINAL_S:
+                            self._lose_terminal()
+                            await self._finish()
+                        elif self.ports.clock.now() >= deadline + CLEANUP_GRACE_S:
                             self._cancel()
                             await self._release()
                             self._update_day(blocked=True)
