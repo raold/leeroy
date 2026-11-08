@@ -22,8 +22,8 @@ function renderGuild(g) {
   clear(body);
   roster.forEach(function (p) {
     var tr = el("tr", p.online ? "" : "off");
-    var td = nameCell(tr, p.guid, str(p.name), { you: p.guid === g.human, text: str(p.name) + (p.guid === g.human ? " (you)" : "") });
-    if (p.guid !== g.human) { td.firstChild.replaceChild(photoButton(p.guid, str(p.name), "list"), td.firstChild.firstChild); }
+    nameCell(tr, p.guid, str(p.name), { you: p.guid === g.human, text: str(p.name) + (p.guid === g.human ? " (you)" : ""),
+      build: p.guid === g.human ? null : function (guid, name) { return photoButton(guid, name, "list"); } });
     cell(tr, CLASSES[p["class"]] || "-");
     cell(tr, str(p.spec) || "-");
     cell(tr, str(p.role) || "-", "role-" + str(p.role));

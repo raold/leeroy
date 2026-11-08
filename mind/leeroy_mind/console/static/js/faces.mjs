@@ -108,7 +108,8 @@ export function faceButton(guid, name, kind, opts) {
 }
 
 // A table cell holding a member's face and name (.who). opts go to face; opts.text is the words
-// shown when they are not the bare name (tags, "(you)"). Nobody (guid 0 or none) is a plain "-".
+// shown when they are not the bare name (tags, "(you)"); opts.build(guid, name, kind, opts) replaces
+// the face (the gallery's opener). Nobody (guid 0 or none) is a plain "-".
 export function nameCell(tr, guid, name, opts) {
   opts = opts || {};
   var td = el("td");
@@ -116,7 +117,7 @@ export function nameCell(tr, guid, name, opts) {
     td.textContent = opts.text || name || "-";
   } else {
     var box = el("div", "who");
-    box.appendChild(face(guid, name, "list", opts));
+    box.appendChild((opts.build || face)(guid, name, "list", opts));
     box.appendChild(el("span", "", opts.text || name));
     td.appendChild(box);
   }

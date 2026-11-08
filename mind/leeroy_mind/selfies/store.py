@@ -166,7 +166,7 @@ def queue_restyled(store, guid: int, *, now: float) -> SetRow | None:
 
 
 def mark_ready(store, guid: int, set_no: int, candidates, *, now: float, night: str,
-               persona_version: int | None) -> None:
+               persona_version: int | None, lust: bool = False) -> None:
     """A queued set rendered: its four candidates, one a slot, and the night and persona
     version it was rendered from."""
     candidates = list(candidates)
@@ -185,6 +185,8 @@ def mark_ready(store, guid: int, set_no: int, candidates, *, now: float, night: 
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             [(guid, set_no, c.idx, c.seed, c.tries, float(c.nsfw), c.prompt)
              for c in candidates])
+        if lust:
+            store.set_meta(LUST_SET_KEY.format(guid=guid, set_no=set_no), "1")
 
 
 def ready_set(store, guid: int, set_no: int) -> SetRow | None:
@@ -214,11 +216,30 @@ def counts(conn) -> dict[str, int]:
             "queued": one("SELECT count(*) FROM selfie_set WHERE status='queued'")}
 
 
+# -- the style a set was rendered under ---------------------------------------------------------
+
+LUST_SET_KEY = "selfies:set-lust:{guid}:{set_no}"
+LUST_COVER_REFUSED = ("this set was rendered in the lust style and she no longer has it (or her "
+                      "looks now code young), so none of its photos can be her face")
+
+
+def lust_set(conn, guid: int, set_no: int) -> bool:
+    """The set was rendered under the lust style (recorded when it became ready; a set with no
+    record, from before it, counts as plain). Reads any connection, the console's too."""
+    try:
+        return conn.execute("SELECT 1 FROM meta WHERE key=?", (LUST_SET_KEY.format(
+            guid=guid, set_no=set_no),)).fetchone() is not None
+    except Exception:  # a database without the meta table
+        return False
+
+
 # -- picks and undos ----------------------------------------------------------------------------
 
-def pick(store, guid: int, set_no: int, idx: int, *, source: str, now: float) -> int | None:
+def pick(store, guid: int, set_no: int, idx: int, *, source: str, now: float,
+         lust_held: bool = False) -> int | None:
     """Candidate `idx` of a ready set becomes the member's photo; the change's id, or None
-    when it already is the photo (nothing written). Any rendered candidate can be a cover.
+    when it already is the photo (nothing written). Any rendered candidate can be a cover,
+    except (`lust_held`: she no longer has the lust style) one of a set rendered under it.
     Remember a decided set's prior state so undo does not reopen it in the render queue."""
     _source(source)
     with store.transaction():
@@ -230,6 +251,8 @@ def pick(store, guid: int, set_no: int, idx: int, *, source: str, now: float) ->
         if conn.execute("SELECT 1 FROM selfie_candidate WHERE guid=? AND set_no=? AND idx=?",
                         (guid, set_no, idx)).fetchone() is None:
             raise SelfieError(f"set {set_no} has no photo {idx}")
+        if lust_held and lust_set(conn, guid, set_no):
+            raise SelfieError(LUST_COVER_REFUSED)
         was = _current(conn, guid)
         before = None if was is None else (was.set_no, was.idx)
         if before == (set_no, idx):

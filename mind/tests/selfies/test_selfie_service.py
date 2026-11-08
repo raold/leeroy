@@ -384,3 +384,11 @@ def test_more_for_a_held_lust_kind_queues_and_says_it_waits(svc, store, data):
     assert [(s.guid, s.reason) for s in queued_sets(store)] == [(102, "more")]
     assert run(svc.handle({"action": "more", "guid": 101}))["message"] == \
         "Four more will be rendered tonight."           # a plain kind: as before
+
+
+def test_a_pick_of_a_lust_set_is_refused_for_a_member_without_that_style(svc, store, data):
+    ready(store, data, 101, 1)
+    store.set_meta("selfies:set-lust:101:1", "1")
+    got = run(svc.handle(_pick(101, 1, 0)))
+    assert got["ok"] is False and "lust style" in got["error"]
+    assert current(store, 101) is None

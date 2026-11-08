@@ -297,7 +297,8 @@ $("p-roster").addEventListener("keydown", function (ev) {
   if (tr && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); choose(Number(tr.dataset.guid)); }
 });
 $("p-wall").addEventListener("click", function (ev) {
-  var t = ev.target.closest("button[data-guid]");
+  if (ev.target.closest(".gallery-opener")) { return; }
+  var t = ev.target.closest(".tile[data-guid]");
   if (t) { choose(Number(t.dataset.guid)); }
 });
 $("p-close").addEventListener("click", function () { choose(0); });

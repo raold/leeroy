@@ -144,3 +144,17 @@ def test_cover_still_uses_the_existing_control_gates_and_pick_arguments(data):
             assert (await http(app, "POST", "/api/selfie", body=args)).status == 403
             assert (await http(app, "POST", "/api/selfie", body=args, origin=True)).status == 200
     asyncio.run(go())
+
+
+def test_gallery_hides_a_lust_set_of_a_member_who_left_the_style_unless_it_is_the_cover(store, data):
+    ready(store, data, 101, 1, now=1)
+    ready(store, data, 101, 2, now=2)
+    store.set_meta("selfies:set-lust:101:2", "1")
+    seen = galleryview.gallery(store.conn, data, 101)["photos"]
+    assert {p["set"] for p in seen} == {1}
+    assert galleryview.photo(store.conn, data, 101, "candidate", 2, 0) is None
+    assert galleryview.photo(store.conn, data, 101, "candidate", 1, 0) is not None
+    pick(store, 101, 2, 1, source="console", now=3)  # already her photo (picked while lust-styled)
+    seen = galleryview.gallery(store.conn, data, 101)["photos"]
+    assert [p["id"] for p in seen if p["cover"]] == ["candidate:2:1"]
+    assert galleryview.photo(store.conn, data, 101, "candidate", 2, 1) is not None

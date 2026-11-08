@@ -375,3 +375,12 @@ test("a cover change refreshes faces already on the page without waiting for its
   assert.equal(row.children[1].className, "av xl");
   page.roots = [];
 });
+
+test("nameCell puts opts.build's node where the face goes, whatever the cell's shape", async () => {
+  await stage();
+  var tr = document.createElement("tr");
+  var td = page.mod.nameCell(tr, 2201, "Arkon", { build: function (g, n) { var b = document.createElement("button"); b.dataset.opener = g + n; return b; } });
+  assert.equal(td.children[0].children[0].dataset.opener, "2201Arkon");
+  var plain = page.mod.nameCell(tr, 2201, "Arkon", {});
+  assert.notEqual(plain.children[0].children[0].tagName, "BUTTON");
+});

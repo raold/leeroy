@@ -3,11 +3,15 @@
 Expired situations remain in the owner's gallery; this does not make them sendable again.
 Guild composites are not a member's portrait. Missing tables and files read as empty.
 """
+import json
 import os
 import stat
 from pathlib import Path
 
+from leeroy_mind.personas.schema import persona_from_dict
 from leeroy_mind.selfies import files
+from leeroy_mind.selfies.store import lust_set
+from leeroy_mind.selfies.style import suggestive
 
 from .faces import MAX_FACE_BYTES
 
@@ -26,6 +30,18 @@ def _present(path: Path, root: Path) -> bool:
         return stat.S_ISREG(info.st_mode) and 0 < info.st_size <= MAX_FACE_BYTES
     except (OSError, ValueError):
         return False
+
+
+def _lust_held(conn, have, guid) -> bool:
+    """She no longer has the lust style (or her stored persona cannot be read): photos of sets
+    rendered under it are neither listed nor served, unless one is already her photo."""
+    if "persona_core" not in have:
+        return True
+    row = conn.execute("SELECT json FROM persona_core WHERE guid=?", (guid,)).fetchone()
+    try:
+        return not suggestive(persona_from_dict(json.loads(row[0]))) if row else True
+    except (TypeError, ValueError):
+        return True
 
 
 def _entry(data_dir, guid, kind, number, index, rendered, cover):
@@ -61,13 +77,16 @@ def gallery(conn, data_dir, guid: int) -> dict:
         row = conn.execute("SELECT set_no, idx FROM selfie_current WHERE guid=?", (guid,)).fetchone()
         current = tuple(row) if row else None
     photos = out["photos"]
+    held = _lust_held(conn, have, guid)
     if {"selfie_set", "selfie_candidate"} <= have:
         for row in conn.execute(
                 "SELECT s.set_no, c.idx, s.rendered FROM selfie_set s JOIN selfie_candidate c "
                 "ON c.guid=s.guid AND c.set_no=s.set_no WHERE s.guid=? AND s.status='ready'",
                 (guid,)):
-            entry = _entry(data_dir, guid, "candidate", row[0], row[1], row[2],
-                           current == (row[0], row[1]))
+            is_cover = current == (row[0], row[1])
+            if held and not is_cover and lust_set(conn, guid, row[0]):
+                continue  # a lust-style set of a member who left that style: not listed
+            entry = _entry(data_dir, guid, "candidate", row[0], row[1], row[2], is_cover)
             if entry:
                 photos.append(entry)
     if "selfie_snap" in have:
@@ -78,6 +97,13 @@ def gallery(conn, data_dir, guid: int) -> dict:
                 photos.append(entry)
     photos.sort(key=lambda p: (-(p["rendered"] or 0), p["id"]))
     return out
+
+
+def _is_cover(conn, have, guid, number, index) -> bool:
+    if "selfie_current" not in have:
+        return False
+    row = conn.execute("SELECT set_no, idx FROM selfie_current WHERE guid=?", (guid,)).fetchone()
+    return row is not None and tuple(row) == (number, index)
 
 
 def photo(conn, data_dir, guid, kind, number, index, *, thumb=False) -> bytes | None:
@@ -95,6 +121,8 @@ def photo(conn, data_dir, guid, kind, number, index, *, thumb=False) -> bytes | 
                                  "kind='situation' AND rendered IS NOT NULL", (guid, number)).fetchone()
             path = files.snap(data_dir, guid, number, thumb=thumb)
         else:
+            return None
+        if found and kind == "candidate" and lust_set(conn, guid, number)                 and _lust_held(conn, have, guid) and not _is_cover(conn, have, guid, number, index):
             return None
         if not found or not _present(path, Path(data_dir) / "selfies"):
             return None

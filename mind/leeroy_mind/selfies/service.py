@@ -35,6 +35,7 @@ from . import files
 from .config import SelfieCfg
 from .kind import chosen_style
 from .prompt import HELD, renderable
+from .style import suggestive
 from .store import (SelfieError, counts, current, member_of, photos, pick, picks, queue_more,
                     undo)
 
@@ -93,7 +94,8 @@ class SelfieService:
 
     async def _pick(self, guid: int, set_no: int, idx: int) -> dict:
         self._cast_member(guid)
-        change = pick(self.app.store, guid, set_no, idx, source=SOURCE, now=self.app.clock.now())
+        change = pick(self.app.store, guid, set_no, idx, source=SOURCE, now=self.app.clock.now(),
+                      lust_held=not suggestive(self.app.personas.base(guid)))
         said = ("That is already their photo." if change is None
                 else f"Photo set (change #{change}).")
         return {"ok": True, "pick": change, "guid": guid,

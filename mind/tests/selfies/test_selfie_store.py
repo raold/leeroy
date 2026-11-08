@@ -296,3 +296,16 @@ def test_rows_the_tables_could_never_mean_are_refused(store, sql):
     with pytest.raises(sqlite3.IntegrityError):
         store.conn.execute(sql)
     store.conn.rollback()
+
+
+def test_a_lust_set_cannot_be_a_cover_once_the_lust_style_is_held(store, data):
+    from leeroy_mind.selfies.store import LUST_SET_KEY, lust_set
+    ready(store, data, 101, 1)
+    ready(store, data, 101, 2)
+    store.set_meta(LUST_SET_KEY.format(guid=101, set_no=2), "1")
+    assert lust_set(store.conn, 101, 2) and not lust_set(store.conn, 101, 1)
+    with pytest.raises(SelfieError, match="lust style"):
+        pick(store, 101, 2, 0, source="console", now=2.0, lust_held=True)
+    assert current(store, 101) is None
+    assert pick(store, 101, 1, 0, source="console", now=2.0, lust_held=True) is not None
+    assert pick(store, 101, 2, 0, source="console", now=3.0) is not None  # she still has the style
