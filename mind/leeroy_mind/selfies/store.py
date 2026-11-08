@@ -218,9 +218,8 @@ def counts(conn) -> dict[str, int]:
 
 def pick(store, guid: int, set_no: int, idx: int, *, source: str, now: float) -> int | None:
     """Candidate `idx` of a ready set becomes the member's photo; the change's id, or None
-    when it already is the photo (nothing written). The set must be waiting for his choice or
-    hold the photo in force: a set he passed, or picked from and moved on, is refused, or an
-    undo of this pick would put it back among the waiting ones."""
+    when it already is the photo (nothing written). Any rendered candidate can be a cover.
+    Remember a decided set's prior state so undo does not reopen it in the render queue."""
     _source(source)
     with store.transaction():
         conn = store.conn
@@ -235,33 +234,33 @@ def pick(store, guid: int, set_no: int, idx: int, *, source: str, now: float) ->
         before = None if was is None else (was.set_no, was.idx)
         if before == (set_no, idx):
             return None
-        if row["decided"] is not None and (was is None or was.set_no != set_no):
-            raise SelfieError(f"set {set_no} is no longer waiting for a choice")
         change = conn.execute(
             "INSERT INTO selfie_pick(ts, guid, source, before_set, before_idx, after_set, "
             "after_idx) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (float(now), guid, source, *(before or (None, None)), set_no, idx)).lastrowid
+        if row["decided"] is not None:
+            store.set_meta(f"selfie:pick-decided:{change}", row["decided"])
         _set_photo(conn, guid, (set_no, idx), change)
         _decide(conn, guid, set_no, "picked")
         return change
 
 
-def _picked_photo(conn, row) -> tuple[int, int] | None:
-    """The photo the pick at the root of `row`'s undo chain put in force."""
+def _pick_root(conn, row):
+    """The pick at the root of `row`'s undo chain."""
     while row["undoes"] is not None:
         earlier = conn.execute("SELECT id, undoes, after_set, after_idx FROM selfie_pick "
                                "WHERE id=?", (row["undoes"],)).fetchone()
         if earlier is None or earlier["id"] >= row["id"]:
             return None  # not a chain this store wrote
         row = earlier
-    return _photo(row["after_set"], row["after_idx"])
+    return row
 
 
 def undo(store, pick_id: int, *, source: str, now: float) -> int:
     """Change `pick_id` reversed, as one more change naming it, provided the photo in force is
-    still what it left. Undoing a pick puts its set back among those waiting for his choice
-    (unless the photo restored comes from it); the restored photo's set is picked. Undoing an
-    undo applies the pick again, as the pick did."""
+    still what it left. Undoing a pick restores its set's prior decision (waiting for older
+    records), unless the restored photo comes from it. Undoing an undo applies the pick again.
+    Every change remains an append-only selfie_pick row."""
     _source(source)
     with store.transaction():
         conn = store.conn
@@ -284,9 +283,12 @@ def undo(store, pick_id: int, *, source: str, now: float) -> int:
             (float(now), guid, source, pick_id, *(left or (None, None)),
              *(restored or (None, None)))).lastrowid
         _set_photo(conn, guid, restored, change)
-        if (left is not None and left == _picked_photo(conn, row)
+        root = _pick_root(conn, row)
+        if (left is not None and root is not None
+                and left == _photo(root["after_set"], root["after_idx"])
                 and (restored is None or restored[0] != left[0])):
-            _decide(conn, guid, left[0], None)  # the pick taken back: its set waits again
+            prior = store.get_meta(f"selfie:pick-decided:{root['id']}")
+            _decide(conn, guid, left[0], prior if prior in ("passed", "picked") else None)
         if restored is not None:
             _decide(conn, guid, restored[0], "picked")
         return change

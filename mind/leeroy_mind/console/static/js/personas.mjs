@@ -1,6 +1,7 @@
 import { $, api, arr, cell, clear, el, emit, emptyRow, num, obj, on, own, plural, post, recall, refused,
          remember, setText, str } from "./core.mjs";
 import { face } from "./faces.mjs";
+import { photoButton } from "./gallery.mjs";
 import { forgetMemberShots, pollSelfies, setSelfieNames, showMemberPhoto } from "./selfies.mjs";
 import { S } from "./state.mjs";
 import { registerTab, showTab } from "./tabs.mjs";
@@ -95,7 +96,7 @@ function renderPersonas(v) {
     tr.tabIndex = 0;
     tr.dataset.guid = String(m.guid);
     var nameTd = el("td"), who = el("div", "who");
-    who.appendChild(face(m.guid, str(m.name), "list"));
+    who.appendChild(photoButton(m.guid, str(m.name), "list"));
     who.appendChild(el("span", "", str(m.name) + (m.in_cast ? "" : " (not in the cast)")));
     nameTd.appendChild(who);
     tr.appendChild(nameTd);
@@ -134,11 +135,14 @@ function renderWall(v) {
   var members = arr(v.members), missing = arr(v.missing), box = $("p-wall");
   clear(box);
   members.forEach(function (m) {
-    var st = tileState(m), t = el("button", "tile" + (st.off ? " off" : "") + (m.guid === pick ? " sel" : ""));
-    t.type = "button";
+    var st = tileState(m), t = el("div", "tile" + (st.off ? " off" : "") + (m.guid === pick ? " sel" : ""));
     t.dataset.guid = String(m.guid);
-    t.appendChild(face(m.guid, str(m.name), "wall"));
-    t.appendChild(el("span", "tname", st.label));
+    t.appendChild(photoButton(m.guid, str(m.name), "wall"));
+    var detail = el("button", "tile-detail tname", st.label);
+    detail.type = "button";
+    detail.dataset.guid = String(m.guid);
+    detail.setAttribute("aria-label", "Profile of " + str(m.name));
+    t.appendChild(detail);
     t.appendChild(el("span", "tsub", st.sub));
     t.appendChild(el("span", "tsub", missing.indexOf("pad_mood") >= 0 ? "unavailable" : moodText(m.mood)));
     if (st.chip) { t.appendChild(el("span", "chip", st.chip)); }
@@ -278,7 +282,7 @@ function choose(guid) {
   pick = guid;
   var rows = $("p-roster").querySelectorAll("tr[data-guid]");
   for (var i = 0; i < rows.length; i++) { rows[i].classList.toggle("sel", Number(rows[i].dataset.guid) === guid); }
-  var tiles = $("p-wall").querySelectorAll("button[data-guid]");
+  var tiles = $("p-wall").querySelectorAll(".tile[data-guid]");
   for (var j = 0; j < tiles.length; j++) { tiles[j].classList.toggle("sel", Number(tiles[j].dataset.guid) === guid); }
   if (!guid) { $("p-detail").hidden = true; reveal = false; return; }
   if (TUNE) { renderDials(guid); }

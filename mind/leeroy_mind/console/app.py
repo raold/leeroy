@@ -80,6 +80,10 @@ run nothing else.
     GET  /api/selfies/images  ?guid=&set=: a ready set's four thumbnails as data URLs (404
                        unless that set is ready and the member's)
     GET  /api/selfies/member  ?guid=: one member's photo in force, sets and change history
+    GET  /api/selfies/gallery ?guid=: retained candidates and rendered situations, newest first,
+                       with cover flags and keyed thumbnail/full-image URLs
+    GET  /api/selfies/photo ?guid=&kind=candidate&set=&index= (or kind=snap&id=), optional
+                       thumb=1: one rendered photo belonging to the member, JPEG or 404
     POST /api/selfie   a selfie action ({"action": "status"|"pick"|"more"|"undo", ...}),
                        checked as the endpoint checks it, then on to the mind's selfie op,
                        refused as raid actions are; a pick, undo or "4 more" is announced as a
@@ -117,7 +121,7 @@ from typing import Callable
 
 from .. import endpoint
 from . import (bankview, boardview, calendarview, dojoview, faces, feed, libraryview, mindlog,
-               netinfo, personaview, raidview, realmview, selfieview, socialview, status, trainview,
+               galleryview, netinfo, personaview, raidview, realmview, selfieview, socialview, status, trainview,
                tuneview)
 from .control import Controls, Refused
 from .httpd import Request, Response, Stream, digits, encode_json, json_response, text
@@ -691,6 +695,8 @@ class ConsoleApp:
                   ("GET", "/api/selfies"): self._api_selfies,
                   ("GET", "/api/selfies/images"): self._api_selfie_images,
                   ("GET", "/api/selfies/member"): self._api_selfie_member,
+                  ("GET", "/api/selfies/gallery"): self._api_selfie_gallery,
+                  ("GET", "/api/selfies/photo"): self._api_selfie_photo,
                   ("POST", "/api/selfie"): self._api_selfie,
                   ("POST", "/api/voice"): self._api_voice,
                   ("POST", "/api/control"): self._api_control,
@@ -1087,6 +1093,40 @@ class ConsoleApp:
         if view is None:
             return json_response(404, {"ok": False, "error": f"no photos for member {guid}"})
         return json_response(200, view)
+
+    async def _api_selfie_gallery(self, req: Request):
+        values = req.query.get("guid", [])
+        guid = digits(values[0], 10) if len(values) == 1 else None
+        if guid is None or not 0 < guid < 1 << 32:
+            return json_response(400, {"ok": False, "error": "guid: one member's guid"})
+        view, failed = await self._read_selfies("gallery", galleryview.gallery, guid)
+        if failed is not None:
+            return failed
+        return json_response(200, {"view": view, "mind": await self._selfie_status(),
+                                   "control": self.controls.describe()})
+
+    async def _api_selfie_photo(self, req: Request):
+        def one(key):
+            values = req.query.get(key, [])
+            return values[0] if len(values) == 1 else ""
+
+        guid, kind = digits(one("guid"), 10), one("kind")
+        number = digits(one("set") if kind == "candidate" else one("id"), 19)
+        index = digits(one("index"), 1) if kind == "candidate" else None
+        thumb = req.query.get("thumb", [])
+        if (guid is None or not 0 < guid < 1 << 32 or kind not in ("candidate", "snap")
+                or number is None or not 0 < number < 1 << 63
+                or (kind == "candidate" and (number >= 1 << 31 or index not in range(4)))
+                or thumb not in ([], ["1"])):
+            return json_response(400, {"ok": False, "error": "invalid photo id"})
+        data, failed = await self._read_selfies("gallery_photo", galleryview.photo, guid,
+                                               kind, number, index, thumb=bool(thumb))
+        if failed is not None:
+            return failed
+        if data is None:
+            return text(404, "no photo")
+        return Response(200, data, "image/jpeg", [("Cache-Control", "private, max-age=60"),
+                                                  ("Cross-Origin-Resource-Policy", "same-origin")])
 
     async def _api_selfie(self, req: Request):
         try:

@@ -142,21 +142,25 @@ def test_a_pick_needs_a_ready_set_of_that_member(store, data):
     assert current(store, 101) is None and picks(store.conn) == []
 
 
-def test_a_pick_from_a_set_already_decided_is_refused_unless_it_holds_the_photo(store, data):
-    """Else undoing that pick would put a set he had passed, or moved on from, back among the
-    waiting ones."""
+def test_old_candidates_can_be_covers_without_reopening_their_queue_on_undo(store, data):
     ready(store, data, 101, 1)
     queue_more(store, 101, now=1.0)  # set 1 passed
     ready(store, data, 101, 2)
-    with pytest.raises(SelfieError, match="^set 1 is no longer waiting for a choice$"):
-        pick(store, 101, 1, 0, source="console", now=2.0)
-    assert current(store, 101) is None and picks(store.conn) == []
+    old = pick(store, 101, 1, 0, source="console", now=2.0)
+    back = undo(store, old, source="console", now=2.1)
+    assert current(store, 101) is None and _decided(store, 101)[1] == "passed"
+    again = undo(store, back, source="console", now=2.2)
+    assert current(store, 101) == Current(101, 1, 0, again)
+    undo(store, again, source="console", now=2.3)
+    assert _decided(store, 101)[1] == "passed"
     pick(store, 101, 2, 0, source="console", now=3.0)
     queue_more(store, 101, now=4.0)  # set 2 holds the photo: it stays picked
     ready(store, data, 101, 3)
     c = pick(store, 101, 3, 1, source="console", now=5.0)
-    with pytest.raises(SelfieError, match="^set 2 is no longer waiting for a choice$"):
-        pick(store, 101, 2, 1, source="console", now=6.0)
+    old = pick(store, 101, 2, 1, source="console", now=6.0)
+    back = undo(store, old, source="console", now=6.1)
+    assert current(store, 101) == Current(101, 3, 1, back)
+    assert _decided(store, 101)[2] == "picked"
     d = pick(store, 101, 3, 2, source="console", now=7.0)  # another of the photo's own set
     u = undo(store, d, source="console", now=8.0)
     assert current(store, 101) == Current(101, 3, 1, u)

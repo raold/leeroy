@@ -1,5 +1,6 @@
 import { $, api, arr, cell, clear, el, emptyRow, num, obj, plural, refused, setText, str } from "./core.mjs";
 import { nameCell } from "./faces.mjs";
+import { photoButton } from "./gallery.mjs";
 import { S, roomOf } from "./state.mjs";
 import { registerTab } from "./tabs.mjs";
 import { CLASSES, dkp, mode, when, who } from "./words.mjs";
@@ -21,7 +22,8 @@ function renderGuild(g) {
   clear(body);
   roster.forEach(function (p) {
     var tr = el("tr", p.online ? "" : "off");
-    nameCell(tr, p.guid, str(p.name), { you: p.guid === g.human, text: str(p.name) + (p.guid === g.human ? " (you)" : "") });
+    var td = nameCell(tr, p.guid, str(p.name), { you: p.guid === g.human, text: str(p.name) + (p.guid === g.human ? " (you)" : "") });
+    if (p.guid !== g.human) { td.firstChild.replaceChild(photoButton(p.guid, str(p.name), "list"), td.firstChild.firstChild); }
     cell(tr, CLASSES[p["class"]] || "-");
     cell(tr, str(p.spec) || "-");
     cell(tr, str(p.role) || "-", "role-" + str(p.role));

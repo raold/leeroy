@@ -136,18 +136,24 @@ def test_the_owner_and_strangers_have_no_photos(svc, store, data):
     assert current(store, owner) is None and not chosen(data, owner).exists()
 
 
-def test_a_set_already_decided_is_refused_unless_it_holds_the_photo(svc, store, data):
+def test_historical_cover_and_undo_keep_every_candidate_and_history_file(svc, store, data):
     ready(store, data, 101, 1)
     run(svc.handle({"action": "more", "guid": 101}))  # set 1 passed
     ready(store, data, 101, 2)
-    assert run(svc.handle(_pick(101, 1, 0))) == {
-        "ok": False, "error": "set 1 is no longer waiting for a choice"}
+    old = run(svc.handle(_pick(101, 1, 0)))["pick"]
+    assert chosen(data, 101).read_bytes() == candidate(data, 101, 1, 0).read_bytes()
+    assert run(svc.handle({"action": "undo", "pick": old}))["ok"]
+    assert _decided(store, 101)[1] == "passed"
     assert run(svc.handle(_pick(101, 2, 0)))["ok"]
     run(svc.handle({"action": "more", "guid": 101}))  # set 2 holds the photo: stays picked
     ready(store, data, 101, 3)
     c = run(svc.handle(_pick(101, 3, 1)))["pick"]
-    assert run(svc.handle(_pick(101, 2, 1))) == {
-        "ok": False, "error": "set 2 is no longer waiting for a choice"}
+    before = {p: p.read_bytes() for p in member_dir(data, 101).rglob("*.jpg") if p.name != "chosen.jpg"}
+    old = run(svc.handle(_pick(101, 2, 1)))["pick"]
+    assert chosen(data, 101).read_bytes() == candidate(data, 101, 2, 1).read_bytes()
+    assert run(svc.handle({"action": "undo", "pick": old}))["ok"]
+    assert chosen(data, 101).read_bytes() == candidate(data, 101, 3, 1).read_bytes()
+    assert all(p.read_bytes() == content for p, content in before.items())
     d = run(svc.handle(_pick(101, 3, 2)))["pick"]  # another of the photo's own set
     assert current(store, 101) == Current(101, 3, 2, d) and d > c
     assert chosen(data, 101).read_bytes() == candidate(data, 101, 3, 2).read_bytes()
