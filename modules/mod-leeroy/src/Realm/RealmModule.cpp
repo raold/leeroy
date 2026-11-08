@@ -1,5 +1,6 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "RealmModule.h"
+#include "LeeroyRealmFailure.h"
 #include "RealmOwnership.h"
 #include "RealmPorts.h"
 #include "RealmGuild.h"
@@ -62,6 +63,7 @@ struct RealmModule::State
         std::map<std::uint32_t, GuildJoinReceipt> guildJoins;
         std::set<std::uint32_t> guildJoinAttempts;
         bool retained = false;
+        bool completedUnchanged = true;
         std::uint64_t value = 0;
         Queued admitted;
         std::string continuation;
@@ -931,7 +933,7 @@ void RealmModule::Tick(std::uint32_t diff)
                     && _state->CheckLease(reservation, member, Identity(member), {}) == LeaseCheck::Exact;
             });
         };
-        auto finish = [&](std::string reason, bool retain, bool refused = false)
+        auto finish = [&](std::string reason, bool retain, bool refused = false, bool unchanged = false)
         {
             auto const knownJoins = reservation.guildJoins.size();
             if (!refused && !reservation.declaredScopes.empty()) retain = true;
@@ -942,24 +944,29 @@ void RealmModule::Tick(std::uint32_t diff)
                 _state->continuations.Detach(reservation.continuation);
                 retain = true; // A prepared native source needs exact cleanup.
             }
+            bool const noChange = ProvesNoBodyChange({unchanged, reservation.completedUnchanged,
+                retain || reservation.retained, !reservation.declaredScopes.empty(),
+                !reservation.continuation.empty(), !reservation.guildJoinAttempts.empty(),
+                entry.payload.value("cleanup_mutated", false)});
             if (retain) reservation.retained = true;
             else _state->Release(entry.id);
-            PublishOutcome(entry, {entry.id, entry.kind, false, std::move(reason), guid, knownJoins});
+            PublishOutcome(entry, {entry.id, entry.kind, false, std::move(reason), guid, knownJoins,
+                "", noChange ? std::optional<bool>{false} : std::nullopt});
             return true;
         };
         bool const pending = reservation.pending.contains(guid);
         auto const lease = reservation.bodies.find(guid);
         auto before = Identity(guid, pending);
         auto reason = MutationReason(guid, entry.id);
-        if (!reason.empty()) return finish(reason, pending);
+        if (!reason.empty()) return finish(reason, pending, false, !pending);
         if (!before || lease == reservation.bodies.end()
             || _state->CheckLease(reservation, guid, before,
                 pending ? reservation.pending.at(guid) : std::vector<BodyScope>{}) != LeaseCheck::Exact)
-            return finish("body_identity_changed", pending);
+            return finish("body_identity_changed", pending, false, !pending);
         auto executor = _state->executors.find(entry.kind);
-        if (executor == _state->executors.end()) return finish("unsupported", pending);
+        if (executor == _state->executors.end()) return finish("unsupported", pending, false, !pending);
         if (auto admission = executor->second.admit(entry, guid); !admission.empty())
-            return finish(admission, pending);
+            return finish(admission, pending, false, !pending);
         RealmStep result;
         struct ActiveStep
         {
@@ -1027,7 +1034,8 @@ void RealmModule::Tick(std::uint32_t diff)
             return false;
         }
         if (result.state == StepState::Refused)
-            return finish(result.reason.empty() ? "refused" : result.reason, false, true);
+            return finish(result.reason.empty() ? "refused" : result.reason, false, true, result.unchanged);
+        reservation.completedUnchanged = reservation.completedUnchanged && result.unchanged;
         if (!reservation.declaredScopes.contains(guid)) reservation.pending.erase(guid);
         reservation.value = result.value;
         ++entry.cursor;

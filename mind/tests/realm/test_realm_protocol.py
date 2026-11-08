@@ -49,7 +49,7 @@ COMMAND_FIELDS = {
     "guild_readmit": "id guid kick_ts rank",
 }
 EVENT_FIELDS = {
-    "realm_job": "ts id kind state reason guid value pvp_owner",
+    "realm_job": "ts id kind state reason guid value pvp_owner changed",
     "channel_chat": "ts channel from_guid from_name zone text via_bridge",
     "pvp_kill": "ts killer victim map zone",
     "duel_end": "ts winner loser result map zone city",
@@ -205,6 +205,7 @@ def test_events_parse_from_native_fixture():
                     if key not in {"type", "v"}}
         if msg["type"] == "realm_job":
             expected.setdefault("pvp_owner", "")
+            expected.setdefault("changed", None)
             assert type(parsed.value) is int
         assert dataclasses.asdict(parsed) == expected
         seen.add(msg["type"])
@@ -261,7 +262,7 @@ def test_native_owner_fixture_and_command_contracts():
             assert dataclasses.asdict(parsed) == {
                 key: tuple(value) if key == "members" else value for key, value in msg.items()
                 if key not in {"type", "v"}
-            } | ({"pvp_owner": ""} if msg["type"] == "realm_job" else {})
+            } | ({"pvp_owner": "", "changed": None} if msg["type"] == "realm_job" else {})
         elif msg["type"] in {"leave_pvp", "get_realm_pvp"} and row["kind"] == "command":
             cls = protocol.LeavePvp if msg["type"] == "leave_pvp" else protocol.GetRealmPvp
             fields = {key: tuple(value) if key == "guids" else value for key, value in msg.items()

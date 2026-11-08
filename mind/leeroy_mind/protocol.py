@@ -3,6 +3,7 @@
 import dataclasses
 import json
 import math
+import types
 import typing
 import unicodedata
 from dataclasses import dataclass
@@ -338,6 +339,11 @@ def _key(field_name: str) -> str:
 
 
 def _convert(value, hint, where: str):
+    if typing.get_origin(hint) in (types.UnionType, typing.Union):
+        args = typing.get_args(hint)
+        if len(args) == 2 and type(None) in args:
+            inner = next(arg for arg in args if arg is not type(None))
+            return None if value is None else _convert(value, inner, where)
     if hint is bool or hint is int or hint is str:
         if type(value) is not hint:
             raise ProtocolError(f"field {where}: expected {hint.__name__}")

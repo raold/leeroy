@@ -955,7 +955,15 @@ Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
   (`LeavePvpAckError` names as many members as fit in 256 characters, at least one, as `wg_private_state_unavailable:<guid,...>`; the mind
   accepts it only when every named guid is in the root's manifest, settles it refused and holds nobody,
   and recall leaves the named members for a later pass and recalls the rest as a new command). The same reason from the job
-  is a Refuse only until that leave has changed a body, and its job does not say which. A root that settles unknown or conflict logs a warning in mind.log,
+  is a Refuse only until that leave has changed a body. A failed `realm_job` may now carry
+  `changed: false`: native proved the entire job changed no body or cleanup state and released
+  it, including all earlier members and pending steps. With a positive ack, an ordinary root
+  without children settles `step_refused` and holds nobody; startup rechecks an uncontested
+  stored unknown with that proof. Missing/true flags keep the old rules; WG, ack and result
+  roots do too, and contradictory evidence still becomes conflict. The settlement logs
+  `realm_action_step_refused` (id, kind, reason code, member count). See
+  `modules/mod-leeroy/README.md`; it needs a native rebuild and an updated mind.
+  A root that settles unknown or conflict logs a warning in mind.log,
   `realm_action_unknown` (or `realm_action_conflict`) with its id, kind, reason, native's reason
   and member count, no names: from then on it holds its manifest.
 - **Rulings.** His raid holds exactly his raid: waiting for the call, called and forming hold

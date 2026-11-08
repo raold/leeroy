@@ -78,7 +78,8 @@ ABANDON_RECEIPT = "realm:action:abandoned:"
 
 def _step_refused(r, job) -> bool:
     """Native refused one body of this command before it changed it, and released them all."""
-    return (r.role == "root" and r.policy == "ordinary" and r.kind in STEP_REFUSAL_KINDS
+    return (r.role == "root" and r.policy == "ordinary" and job.get("changed") is None
+            and r.kind in STEP_REFUSAL_KINDS
             and job["state"] == "failed"
             and (job["reason"] in STEP_REFUSALS or job["reason"] in KIND_STEP_REFUSALS.get(r.kind, ()))
             and job["guid"] in r.reserved_manifest and job["value"] == 0 and job["pvp_owner"] == "")
@@ -144,7 +145,8 @@ def _rank(owner, rank):
 
 
 def _evidence(ev):
-    return {k: v for k, v in asdict(ev).items() if k not in {"id", "ts"}}
+    return {k: v for k, v in asdict(ev).items() if k not in {"id", "ts"}
+            and not (type(ev) is p.RealmJob and k == "changed" and v is None)}
 
 
 def _realm_job(value, command_id):
@@ -454,6 +456,14 @@ class ActionStore:
             if before is not None and before[0] != r.state:
                 log.warning("realm_leave_wg_refused id=%s kind=%s reason=%s named=%d members=%d", r.command_id, r.kind,
                             WG_REFUSAL, len(wg_refusal_guids(r.result_reason) or ()), len(r.reserved_manifest))
+        if r.role == "root" and r.state == "completed" and r.result_reason == STEP_REFUSED:
+            before = self.conn.execute("SELECT state FROM realm_action WHERE seq=?", (r.seq,)).fetchone()
+            if before is not None and before[0] != r.state:
+                native = json.loads(r.evidence).get("job", {}).get("reason", "")
+                # A wire reason is untrusted text. Log only its code, never arbitrary words.
+                code = native if re.fullmatch(r"[a-z_]+(?::[a-z_]+)?", native) else "native_refusal"
+                log.info("realm_action_step_refused id=%s kind=%s reason=%s members=%d",
+                         r.command_id, r.kind, code or "none", len(r.reserved_manifest))
         values = asdict(r)
         values["reserved_manifest"] = document(list(r.reserved_manifest))
         values["native_manifest"] = None if r.native_manifest is None else document(list(r.native_manifest))
@@ -571,7 +581,11 @@ class ActionStore:
             if not full: return result(False, "incomplete_defaults", "unknown")
             return result(ok, "" if ok else "defaults_failed") if ack else r
         if job:
-            if job["state"] == "failed" and _step_refused(r, job):
+            unchanged = (r.role == "root" and r.policy == "ordinary" and job.get("changed") is False
+                         and job["guid"] in r.reserved_manifest and job["value"] == 0 and job["pvp_owner"] == ""
+                         and not self.conn.execute("SELECT 1 FROM realm_action WHERE parent_id=? LIMIT 1",
+                                                   (r.command_id,)).fetchone())
+            if job["state"] == "failed" and (unchanged or _step_refused(r, job)):
                 return result(False, STEP_REFUSED) if ack else r  # admitted: its ack is on its way
             if job["state"] == "failed": return result(False, "job_failed", "unknown")
             if ack: return result(True)
