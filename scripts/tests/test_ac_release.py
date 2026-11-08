@@ -126,6 +126,11 @@ exit "${FAIL_HEALTH:-0}"
             db.executescript("CREATE TABLE guild_raid(raid_id INTEGER, ended REAL); CREATE TABLE meta(key TEXT, value TEXT); CREATE TABLE marker(value TEXT); INSERT INTO marker VALUES ('original');")
         stub = self.root / "stubs"
         self.write(stub / "mysql", '#!/usr/bin/env bash\nprintf "%s\\n" "${OWNER_ONLINE-0}"\nexit "${MYSQL_FAIL:-0}"\n')
+        self.write(stub / "tasklist", '''#!/usr/bin/env bash
+if [[ ${TASKLIST_OUTPUT+x} ]]; then printf '%s\\n' "$TASKLIST_OUTPUT";
+else printf '%s\\n' '"System","4","Services","0","8 K"'; fi
+exit "${TASKLIST_FAIL:-0}"
+''')
         self.write(stub / "schtasks", '''#!/usr/bin/env bash
 if [[ $1 == //Query ]]; then exit "${TASK_MISSING:-0}"; fi
 printf 'console %s\\n' "$1" >> "$AC_ROOT/actions.log"
@@ -333,6 +338,62 @@ exit "${FAIL_CONSOLE:-0}"
         self.assertIn("stop failed", output)
         self.assertNotIn("migrate", self.actions())
         self.assertNotIn("mind start", self.actions())
+
+    def test_native_stop_requires_readable_process_absence(self):
+        for env in ({"TASKLIST_OUTPUT": '"worldserver.exe","12","Console","1","100 K"'},
+                    {"TASKLIST_OUTPUT": '"AUTHSERVER.EXE","13","Console","1","100 K"'},
+                    {"TASKLIST_OUTPUT": ""}, {"TASKLIST_OUTPUT": "unavailable"},
+                    {"TASKLIST_FAIL": "1"}):
+            with self.subTest(env=env):
+                self.git("reset", "--hard", self.base)
+                output = self.run_release("--native", self.native, rc=2, **env)
+                self.assertIn("FAIL: native stop", output)
+                self.assertNotIn("build jobs=", self.actions())
+                self.assertNotIn("migrate", self.actions())
+                self.assertFalse((self.db.parent / "snapshots").exists())
+                self.assertEqual((self.bin / "worldserver.exe").read_text(), "old binary")
+
+    def test_real_server_wrapper_cannot_hide_failed_termination(self):
+        # Use the real best-effort wrapper, shadowing every Windows process tool.
+        self.write(self.root / "scripts/ac-server.sh", (SCRIPTS / "ac-server.sh").read_text())
+        self.git("add", "scripts/ac-server.sh")
+        self.git("commit", "-qm", "Install real stop wrapper in synthetic fixture")
+        for name, body in {
+            "tasklist": '''#!/usr/bin/env bash
+printf '%s\\n' '"worldserver.exe","12","Console","1","100 K"' '"authserver.exe","13","Console","1","100 K"'
+''',
+            "taskkill": '''#!/usr/bin/env bash
+printf 'failed taskkill\\n' >> "$AC_ROOT/actions.log"
+exit 1
+''',
+            "sleep": "#!/usr/bin/env bash\nexit 0\n",
+        }.items():
+            path = self.root / "stubs" / name
+            self.write(path, body)
+            path.chmod(0o755)
+        output = self.run_release("--native", self.native, rc=2)
+        self.assertGreaterEqual(self.actions().count("failed taskkill"), 4)
+        self.assertNotIn("build jobs=", self.actions())
+        self.assertNotIn("migrate", self.actions())
+        self.assertNotIn("release complete", output)
+        self.assertIn("stop failed", output)
+
+    def test_printed_native_rollback_refuses_surviving_or_unknown_processes(self):
+        output = self.run_release("--native", self.native)
+        command, = (line.strip() for line in output.splitlines() if line.startswith("  cd "))
+        released = self.git("rev-parse", "HEAD")
+        for env in ({"TASKLIST_OUTPUT": '"worldserver.exe","12","Console","1","100 K"'},
+                    {"TASKLIST_FAIL": "1"}):
+            result = subprocess.run([BASH, "-s"], input=command + "\n", cwd=self.root,
+                env=dict(self.env, **env), text=True, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, timeout=30)
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertEqual(self.git("rev-parse", "HEAD"), released)
+            self.assertEqual(self.actions().count("build jobs=4"), 1)
+        result = subprocess.run([BASH, "-s"], input=command + "\n", cwd=self.root,
+            env=self.env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.original()
 
 
 if __name__ == "__main__":

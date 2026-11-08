@@ -16,6 +16,19 @@ mysql="${AC_RELEASE_MYSQL:-$MYSQL_DIR/mysql.exe}"
 data="${LEEROY_MIND_DATA:-$AC_ROOT/mind-data}"
 helper="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ac-release-data.py"
 build_lock="$AC_ROOT/.superpowers/live-build.lock"
+# ac-server.sh's forced taskkill is best effort. Prove absence independently before
+# touching binaries or restoring data; unreadable/malformed/empty task lists fail closed.
+# Keep this stdlib check inline so the printed rollback survives an older checkout.
+native_check='import csv,sys
+try:
+    rows=[r for r in csv.reader(sys.stdin,strict=True) if r]
+except (csv.Error,UnicodeError):
+    rows=[]
+valid=bool(rows) and all(len(r)==5 and r[0].strip() and r[1].isdigit() for r in rows)
+held=any(r and r[0].strip().casefold() in ("authserver.exe","worldserver.exe") for r in rows)
+if not valid or held:
+    print("FAIL: native stop not confirmed",file=sys.stderr)
+    sys.exit(1)'
 
 native_path() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s\n' "$1"; fi; }
 ok() { printf 'ok: %s\n' "$*"; }
@@ -25,7 +38,19 @@ mind() {
     PYTHONPATH="$(native_path "$AC_ROOT/mind")" "$python" "$AC_ROOT/scripts/ac-mind.py" "$1" \
         --root "$(native_path "$AC_ROOT")" --data-dir "$(native_path "$data")"
 }
-stop_services() { if ((native)); then bash "$AC_ROOT/scripts/ac-server.sh" stop; else mind stop; fi; }
+native_stopped() {
+    local listing
+    if ! listing=$(tasklist //FO CSV //NH 2>/dev/null); then
+        printf 'FAIL: native stop status unavailable\n' >&2; return 1
+    fi
+    printf '%s\n' "$listing" | "$python" -c "$native_check"
+}
+stop_services() {
+    if ((native)); then
+        bash "$AC_ROOT/scripts/ac-server.sh" stop || return 1
+        native_stopped
+    else mind stop; fi
+}
 start_services() { if ((native)); then bash "$AC_ROOT/scripts/ac-server.sh" start; else mind start; fi; }
 data_op() { "$python" "$helper" "$@"; }
 
@@ -35,7 +60,10 @@ rollback_note() {
     printf '):\n'
     if [[ $pre == unavailable ]]; then printf '  no checkout change; reset target unavailable\n'; return; fi
     printf '  cd %s && ' "$(quote "$AC_ROOT")"
-    if ((native)); then printf 'bash scripts/ac-server.sh stop'; else
+    if ((native)); then
+        printf 'bash scripts/ac-server.sh stop && (set -o pipefail; tasklist //FO CSV //NH | %s -c %s)' \
+            "$(quote "$python")" "$(quote "$native_check")"
+    else
         printf '%s scripts/ac-mind.py stop --root %s --data-dir %s' "$(quote "$python")" "$(quote "$(native_path "$AC_ROOT")")" "$(quote "$(native_path "$data")")"
     fi
     printf ' && git reset --hard %s' "$pre"

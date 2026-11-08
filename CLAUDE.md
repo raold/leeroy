@@ -264,6 +264,10 @@ After cherry-picking it stops the mind, takes an SQLite online backup in
 and the optional `leeroy-console` task, then prints health. Native releases save
 the old EXE/DLL files alongside the snapshot before building; a failed build
 restores those files and the original checkout before restarting the old servers.
+Native stop is confirmed separately from the best-effort server wrapper: both
+server processes must be absent from a successful, well-formed process listing.
+Unavailable status or a surviving process prevents build/restore writes; the
+printed native rollback command applies the same check before resetting files.
 Failures before the completed restart attempt rollback; a health failure leaves
 the running release in place and prints recovery instructions. Every exit prints
 the reset target, snapshot and native rebuild command. Exit codes: 0 success,
