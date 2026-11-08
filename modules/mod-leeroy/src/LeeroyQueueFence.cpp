@@ -159,7 +159,19 @@ class QueuePlayerScript final : public PlayerScript
 {
 public:
     QueuePlayerScript() : PlayerScript("LeeroyQueueFencePlayer", {PLAYERHOOK_CAN_JOIN_IN_BATTLEGROUND_QUEUE,
-        PLAYERHOOK_CAN_JOIN_IN_ARENA_QUEUE, PLAYERHOOK_CAN_JOIN_LFG, PLAYERHOOK_CAN_BATTLEFIELD_PORT}) { }
+        PLAYERHOOK_CAN_JOIN_IN_ARENA_QUEUE, PLAYERHOOK_CAN_JOIN_LFG, PLAYERHOOK_CAN_BATTLEFIELD_PORT,
+        PLAYERHOOK_ON_LOGIN, PLAYERHOOK_ON_LOGOUT}) { }
+    void ForgetSession(Player* player)
+    {
+        if (!player) return;
+        std::lock_guard lock(mutex);
+        // A recycled session address must never inherit another character's WG
+        // fence. Admission is checked live; the next tick publishes this life.
+        auto found = sessions.find(reinterpret_cast<std::uintptr_t>(player->GetSession()));
+        if (found != sessions.end()) { held.at(found->second).session = 0; sessions.erase(found); }
+    }
+    void OnPlayerLogin(Player* player) override { ForgetSession(player); }
+    void OnPlayerLogout(Player* player) override { ForgetSession(player); }
     bool OnPlayerCanJoinInBattlegroundQueue(Player* player, ObjectGuid, BattlegroundTypeId, uint8 asGroup,
         GroupJoinBattlegroundResult& error) override
     {

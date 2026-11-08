@@ -51,6 +51,8 @@ public:
         if (!reload)
             return;
 
+        LeeroyRefreshQueueFence(); // Off takes effect before any later queue hook.
+
         // The cast and the pins follow in OnUpdate. A changed flag re-applies the pins even when the set is the same.
         LeeroyConfig const& cfg = module.Config();
         module.Cast().MarkDirty();
