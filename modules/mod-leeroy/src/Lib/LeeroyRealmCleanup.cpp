@@ -7,21 +7,37 @@ bool FencesLeavePvpAck(std::string const& kind, std::string const& pvpOwner)
 {
     return kind == "leave_pvp" && pvpOwner.empty();
 }
-std::string LeavePvpAckError(std::vector<std::pair<std::uint32_t, WintergraspMemberFacts>> const& members)
+namespace
+{
+std::string NamedAckError(std::string const& prefix, std::vector<std::uint32_t> const& guids)
 {
     // The whole error stays within the mind's 256 characters, with at least one name.
     constexpr std::size_t MaxLength = 256;
-    std::string const prefix = "wg_private_state_unavailable:";
     std::string named;
     bool any = false;
-    for (auto const& [guid, facts] : members)
+    for (auto guid : guids)
     {
-        if (WintergraspPrivateReason(facts).empty()) continue;
         auto const next = (named.empty() ? "" : ",") + std::to_string(guid);
         if (any && prefix.size() + named.size() + next.size() > MaxLength) break;
         named += next; any = true;
     }
     return any ? prefix + named : "";
+}
+}
+std::string LeavePvpAckError(std::vector<LeavePvpMemberFacts> const& members)
+{
+    std::set<std::uint32_t> admitted;
+    std::vector<std::uint32_t> wintergrasp, outside;
+    for (auto const& member : members)
+    {
+        admitted.insert(member.guid);
+        if (!WintergraspPrivateReason(member.wintergrasp).empty()) wintergrasp.push_back(member.guid);
+    }
+    if (!wintergrasp.empty()) return NamedAckError("wg_private_state_unavailable:", wintergrasp);
+    for (auto const& member : members)
+        if (std::any_of(member.cleanupMembers.begin(), member.cleanupMembers.end(),
+            [&](auto guid) { return !admitted.contains(guid); })) outside.push_back(member.guid);
+    return NamedAckError("cleanup_member_not_admitted:", outside);
 }
 std::string WintergraspPrivateReason(WintergraspMemberFacts const& facts)
 {
