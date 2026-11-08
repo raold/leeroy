@@ -80,10 +80,13 @@ def write_report(target, report):
             handle.write('\n')
             handle.flush()
             os.fsync(handle.fileno())
-        # Refuse overwrite even when another evaluation finished during this run.
-        if target.exists():
-            raise ValueError('report_already_exists')
-        temporary.rename(target)
+        # Publish the finished inode without replacing a competing report. A preceding
+        # exists() check cannot make POSIX rename no-clobber. Both paths share a directory;
+        # if that filesystem cannot hardlink, fail without an unsafe rename fallback.
+        try:
+            os.link(temporary, target)
+        except FileExistsError:
+            raise ValueError('report_already_exists') from None
     finally:
         temporary.unlink(missing_ok=True)
 

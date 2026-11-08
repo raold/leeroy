@@ -1,9 +1,11 @@
 from contextlib import closing
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 import json
 import logging
 from pathlib import Path
 import sqlite3
+from threading import Barrier
 
 import pytest
 
@@ -130,3 +132,74 @@ def test_scratch_link_cannot_escape_the_data_directory(data, tmp_path):
         pytest.skip('symbolic-link creation is unavailable for this account')
     assert invoke(data, '--json', 'escape.json') == 1
     assert list(target.iterdir()) == []
+
+
+def test_concurrent_reports_publish_one_complete_winner_without_overwrite(tmp_path, monkeypatch):
+    target = talk_cli.output_path(tmp_path, 'same.json')
+    publish = Barrier(2)
+    real_link, real_rename = talk_cli.os.link, Path.rename
+    reports = [{'writer': n, 'text': str(n) * 10000} for n in range(2)]
+
+    def synchronized_link(source, destination):
+        assert json.loads(Path(source).read_text(encoding='utf-8')) in reports
+        publish.wait(timeout=5)
+        return real_link(source, destination)
+
+    def synchronized_rename(source, destination):
+        # Reproduce the old race too: both writers have passed the exists() check before
+        # either publishes. POSIX rename overwrites; Windows raises the wrong exception.
+        publish.wait(timeout=5)
+        return real_rename(source, destination)
+
+    monkeypatch.setattr(talk_cli.os, 'link', synchronized_link)
+    monkeypatch.setattr(Path, 'rename', synchronized_rename)
+
+    def write(report):
+        try:
+            talk_cli.write_report(target, report)
+            return report['writer'], 'published'
+        except ValueError as exc:
+            assert str(exc) == 'report_already_exists'
+            return report['writer'], 'refused'
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(write, reports))
+    assert sorted(status for _, status in outcomes) == ['published', 'refused']
+    winner = next(n for n, status in outcomes if status == 'published')
+    assert json.loads(target.read_text(encoding='utf-8')) == reports[winner]
+    assert list(target.parent.iterdir()) == [target]
+
+
+@pytest.mark.parametrize('kind', ['report', 'directory', 'symlink'])
+def test_report_destination_appearing_after_path_check_is_never_replaced(tmp_path, kind):
+    target = talk_cli.output_path(tmp_path, 'result.json')
+    if kind == 'report':
+        target.write_bytes(b'previous complete report')
+    elif kind == 'directory':
+        target.mkdir()
+    else:
+        try:
+            target.symlink_to(target.parent / 'absent.json')
+        except OSError:
+            pytest.skip('symbolic-link creation is unavailable for this account')
+    with pytest.raises((ValueError, OSError)):
+        talk_cli.write_report(target, {'new': 'report'})
+    if kind == 'report':
+        assert target.read_bytes() == b'previous complete report'
+    elif kind == 'directory':
+        assert target.is_dir() and list(target.iterdir()) == []
+    else:
+        assert target.is_symlink() and not target.exists()
+    assert list(target.parent.iterdir()) == [target]
+
+
+def test_unsupported_publication_fails_without_partial_output_or_rename_fallback(tmp_path, monkeypatch):
+    target = talk_cli.output_path(tmp_path, 'result.json')
+
+    def unavailable(*_args):
+        raise OSError('hardlinks unavailable')
+
+    monkeypatch.setattr(talk_cli.os, 'link', unavailable)
+    with pytest.raises(OSError):
+        talk_cli.write_report(target, {'complete': True})
+    assert list(target.parent.iterdir()) == []
