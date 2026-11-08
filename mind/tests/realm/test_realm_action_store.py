@@ -1204,7 +1204,7 @@ def test_legacy_exception_never_accepts_corrupt_or_body_bearing_record(store, ch
 @pytest.mark.parametrize("field,value", [
     ("type", "realm_move"), ("id", "bad id"), ("map", -1), ("map", True),
     ("instance_id", 0), ("instance_id", 2**32), ("boss_id", 2**32),
-    ("boss_name", ""), ("boss_name", "Ã©" * 25), ("boss_name", "bad\0name"),
+    ("boss_name", ""), ("boss_name", "é" * 25), ("boss_name", "bad\0name"),
     ("attempts", True), ("attempts", 100), ("fight_s", -1), ("fight_s", 3601),
     ("first", "month"), ("kill_id", "a" * 32 + ":1"), ("unknown", 1),
 ])

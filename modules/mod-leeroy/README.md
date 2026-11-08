@@ -27,5 +27,8 @@ Later contradictory evidence still becomes `conflict` and holds the manifest.
 WG continuation, ack-only and result roots keep their existing rules.
 
 Old native omits the field, preserving the reason-based rules. Old minds ignore
-unknown wire fields and retain their existing settlement behaviour. Both a
+unknown wire fields and retain their existing settlement behaviour. Rolling the mind back past
+this change is different: the new mind stores `changed` in `realm_action` evidence, and an older
+mind cannot read such a row (its journal reads fail, so the Realm stops moving bodies until the
+key is stripped from those rows). Take a snapshot before deploying and roll back with it. Both a
 native rebuild and an updated mind are needed for the new proof to take effect.

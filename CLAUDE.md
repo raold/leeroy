@@ -950,7 +950,8 @@ Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
   the defaults. Native keeps the weapon records in memory, so a worldserver start empties them
   until the 60 s poll finds each body online and free; a rearm now records an armed body that
   has none, as that poll would. Any other failed job (`operation_transition_unknown`, a walk,
-  leave, duel or grow) stays unknown: a leave's `wg_private_state_unavailable` (a member in
+  leave, duel or grow) stays unknown unless its event carries `changed: false` (below; any ordinary
+  kind can carry it, and a grow refused that way goes on to its next attempt): a leave's `wg_private_state_unavailable` (a member in
   Wintergrasp) is refused whole at its ack, before any body is reserved or moved
   (`LeavePvpAckError` names as many members as fit in 256 characters, at least one, as `wg_private_state_unavailable:<guid,...>`; the mind
   accepts it only when every named guid is in the root's manifest, settles it refused and holds nobody,
