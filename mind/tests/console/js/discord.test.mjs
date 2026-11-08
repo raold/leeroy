@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { Discord, channelOf, groupMessages, memberGroups, mentionsHim, presenceDot, quoteOf, reactionBar, unread }
+import { Discord, channelOf, groupMessages, memberGroups, mentionsHim, mergeReadMarks, presenceDot, quoteOf, reactionBar, unread }
   from "../../../leeroy_mind/console/static/js/comms/discord.mjs";
 
 function message(id, author = 101, ts = 1000, extra = {}) {
@@ -58,4 +58,8 @@ test("channel and thread windows cannot replace one another", () => {
   const d = new Discord(); d.adopt(server({ channel: "general", messages: [message(1)] }), 0);
   d.adopt(server({ channel: "general", messages: [message(2)] }), 7);
   assert.equal(d.window("d:general", 0).messages[0].id, 1); assert.equal(d.window("d:general", 7).messages[0].id, 2);
+});
+test("saving pruned Discord marks removes stale entries and preserves WoW marks", () => {
+  const result = mergeReadMarks({ guild: 7, "w:101": 8, "d:removed": 99, "dm:999": 4 }, { "d:general": 10 });
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { guild: 7, "w:101": 8, "d:general": 10 });
 });

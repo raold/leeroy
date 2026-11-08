@@ -1,13 +1,13 @@
 import { api, emit, on, post, recall, refused, remember, str } from "../core.mjs";
 import { S } from "../state.mjs";
-import { Discord, channelOf } from "./discord.mjs";
+import { Discord, channelOf, mergeReadMarks } from "./discord.mjs";
 
 export var DISCORD = new Discord(recall("guild-console-read", {}));
 export var discordBusy = false;
 var view = "", thread = 0, request = null, queued = false, timer = null, opened = false, keyLost = false;
 
 export function saveDiscordRead() {
-  remember("guild-console-read", Object.assign({}, recall("guild-console-read", {}), DISCORD.read));
+  remember("guild-console-read", mergeReadMarks(recall("guild-console-read", {}), DISCORD.read));
 }
 export function watchDiscord(next, tid) {
   var changed = view !== next || thread !== (tid || 0);

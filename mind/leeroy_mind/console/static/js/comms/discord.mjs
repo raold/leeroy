@@ -6,6 +6,11 @@ export function channelOf(view) {
   return /^dm:[1-9]\d{0,9}$/.test(str(view)) ? view : "";
 }
 export function viewOfChannel(channel) { return channel.indexOf("dm:") === 0 ? channel : "d:" + channel; }
+export function mergeReadMarks(saved, discord) {
+  var out = Object.create(null);
+  Object.keys(saved || {}).forEach(function (key) { if (!channelOf(key)) { out[key] = saved[key]; } });
+  return Object.assign(out, discord);
+}
 export function groupMessages(messages) {
   var previous = null;
   return arr(messages).map(function (m) {
