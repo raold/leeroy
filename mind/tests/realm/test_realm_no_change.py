@@ -39,21 +39,22 @@ def failure(**changes):
 
 
 @pytest.mark.parametrize("job_first", [False, True])
-def test_no_change_frees_all_144_members_after_both_receipts(actions, job_first, caplog):
+@pytest.mark.parametrize("reason", ["wg_private_state_unavailable", "cleanup_member_not_admitted"])
+def test_no_change_frees_all_144_members_after_both_receipts(actions, job_first, reason, caplog):
     start(actions)
     caplog.set_level("INFO", logger="leeroy_mind.realm.action_store")
     receipts = [lambda: actions.observe_ack(Ack(0, "leave", True, ""), now=3),
-                lambda: actions.observe_realm_job(failure(), now=4)]
+                lambda: actions.observe_realm_job(failure(reason=reason), now=4)]
     if job_first: receipts.reverse()
     assert not receipts[0]().result_ready
     assert actions.holds()[0].guids == frozenset(CAST)
     transition = receipts[1]()
     assert (transition.result_ready, transition.result_ok, transition.reason) == (True, False, "step_refused")
     assert actions.get("leave").state == "completed" and actions.holds() == ()
-    actions.observe_realm_job(failure(), now=5)
+    actions.observe_realm_job(failure(reason=reason), now=5)
     actions.recover(process_id="next", now=6)
     assert caplog.messages == ["realm_action_step_refused id=leave kind=leave_pvp "
-                               "reason=wg_private_state_unavailable members=144"]
+                               f"reason={reason} members=144"]
 
 
 @pytest.mark.parametrize("changed", [None, True])

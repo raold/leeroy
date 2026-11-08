@@ -12,7 +12,7 @@ from leeroy_mind.bodies import BodyEvidenceUnavailable
 from leeroy_mind.guild.protocol import BotDo
 
 from .actions import ActionRejected
-from .action_store import STEP_REFUSED, ActionCapacity, wg_refusal_guids
+from .action_store import STEP_REFUSED, ActionCapacity, leave_refusal_guids
 from .protocol import LeavePvp, Rearm
 
 log = logging.getLogger(__name__)
@@ -297,17 +297,18 @@ class Recall:
             self._finish(chain)
 
     def _done(self, chain, kind, ok, reason, past):
-        named = wg_refusal_guids(reason) if kind == "leave" and not ok else None
+        named = leave_refusal_guids(reason, chain.members) if kind == "leave" and not ok else None
         if not named:
             self._advance(chain, ok or reason in past)
             return
         # Native refused the whole leave at its ack, before changing anyone, because these members
-        # hold Wintergrasp state it cannot prove restored. Nothing is held: leave them for a later
+        # hold private Wintergrasp state or cleanup outside this manifest. Nothing is held: leave them for a later
         # pass and recall the others as a new command.
         current = self._current(chain)
         self._finish(chain)
         rest = tuple(g for g in chain.members if g not in named)
-        log.info("realm_recall_wg_left_out named=%d rest=%d", len(named), len(rest))
+        # Validated nonempty, distinct manifest members guarantee a strictly smaller retry.
+        log.info("realm_recall_left_out reason=%s named=%d rest=%d", reason.partition(":")[0], len(named), len(rest))
         if current and rest:
             self._start(rest, chain.mode)
 
@@ -315,9 +316,9 @@ class Recall:
         members = tuple(members)
         owner = "raid" if mode in {"recall", "second"} else "realm_day"
         if mode in {"recall", "second"}:
-            # Members a recent Wintergrasp refusal named are backed off; a leave naming one is
+            # Members a recent leave refusal named are backed off; a leave naming one is
             # rejected whole, so they wait for a later pass and the rest go.
-            blocked = self.queue.wg_backed_off(owner)
+            blocked = self.queue.leave_backed_off(owner)
             members = tuple(g for g in members if g not in blocked)
             if not members:
                 return
