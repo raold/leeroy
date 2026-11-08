@@ -1,28 +1,8 @@
-"""What a situational photo shows (P4 Task 6): the scene the reflection model writes for a
-member's coming days, its screen, and the prompts that render it with the member's own face.
+"""Fixed-list situational photos, legacy scene screens and identity-aware render prompts.
 
-A scene is the kind of photo (a phone selfie, a mirror selfie or a snapshot a friend took), its
-framing, where it is, what they are doing, what they wear, their expression, the time of day it
-belongs to (PHASES), who may see it (him only, or the whole guild) and one sentence of what it
-shows. The reply is screened, never fixed, and a refusal names fields and codes only, never the
-text. Adults only, clothed, no children, the member alone in it (a pet is fine), their looks
-exactly as they are, no era, no likeness and no names.
-
-The member's style (style.py) picks the rules, as it does for the profile photo (controller
-ruling R2). Everyone but a lust woman writes the plain scene: SCENE_PROMPT (overlay
-prompts/nightly_scene.txt), SCENE_SCHEMA, free text in every field. A woman of the lust style
-writes the kind, framing, time of day, audience, activity and what it shows, and picks setting,
-outfit, colour and expression from the profile photo's vetted lists in kind.py (SCENE_SCHEMA_LUST,
-SCENE_PROMPT_LUST, overlay prompts/nightly_scene_lust.txt; the built-in text stays non-explicit):
-kind.screen_lust checks the pairings (swimwear only by the water and framed upper body, the gym
-outfit only at the gym, the hot tub only in swimwear) and kind.compose_lust puts the colour into
-the outfit. Her free text (activity, shows) meets the same screen as everyone's (controller
-rulings R12 to R20: undressing, bathing, sexual poses, swimwear named, minors, an age under SUGGESTIVE_MIN_AGE,
-other people, likenesses, looks changes, eras), and beside a swimwear or gym pick it never
-takes her indoors or into a bed. Her
-outfit and setting render as one priority-0 phrase, prompt.lust_phrase, so the worker's fit
-keeps both or neither, with the lust negative plus SNAP_NEGATIVE's "another person"; a lust
-scene renders only while she still has the lust style (scene_renderable)."""
+The reflection model only chooses enums. Code composes every phrase, then the existing
+screens run unchanged. Stored prose remains readable; lust scenes keep their held-style rules.
+"""
 import re
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
@@ -35,80 +15,67 @@ from leeroy_mind.personas.screens import has_word, names_real_name
 from leeroy_mind.text import has_meta
 
 from .kind import (ERA_RE, EXPLICIT_RE, GYM_OUTFITS, LUST_COLOURS, LUST_EXPRESSIONS,
-                   LUST_OUTFITS, LUST_SETTINGS, PAIRINGS, SWIM_OUTFITS, WEAR_RE, _enum,
+                   LUST_OUTFITS, PAIRINGS, SWIM_OUTFITS, WEAR_RE, _enum,
                    compose_lust, screen_lust)
 from .prompt import (BUILD_WORDS, _FRAMINGS, _HEADSHOT_TAIL, _KINDS, _PHONE_TAIL, LUST_HELD, LUST_NAMED,
-                     LUST_NEGATIVE, NEGATIVE, PromptSpec, eyes_face, hair_skin, looks_phrases,
+                     LUST_NEGATIVE, NEGATIVE, PromptSpec, _clean, eyes_face, hair_skin, looks_phrases,
                      lust_phrase, names_re, phrase_adder, renderable, subject_phrase)
 from .style import AGE_RE, LUST, PLAIN, STYLES, SUGGESTIVE_MIN_AGE, style_of, suggestive
+from .scene_choices import (ACTIVITIES, EXPRESSIONS, GAME_MONITOR, ONE_FACE_NEGATIVE,
+                            OUTFITS, PLAIN_PLACES, PROPS, SCENE_LUST_SETTINGS, TILE_DESK,
+                            TILE_FRAMING)
 
 SCENE_NAME = "scene"             # its overlay: prompts/nightly_scene.txt
 SCENE_LUST_NAME = "scene_lust"   # its overlay: prompts/nightly_scene_lust.txt
 
 KINDS = ("selfie", "mirror_selfie", "snapshot")
-FRAMINGS = ("face", "head_and_shoulders", "upper_body")
+FRAMINGS = ("face", "head_and_shoulders", "upper_body", "three_quarter")
 WHENS = ("morning", "day", "evening", "late", "any")
 AUDIENCES = ("him", "anyone")
 
 
-def _text(n: int) -> dict:
-    return {"type": "string", "maxLength": n}
-
-
 _COMMON = {"photo": {"type": "boolean"}, "kind": _enum(KINDS), "framing": _enum(FRAMINGS)}
-_TAIL = {"when": _enum(WHENS), "audience": _enum(AUDIENCES), "shows": _text(120)}
+_TAIL = {"when": _enum(WHENS), "audience": _enum(AUDIENCES), "prop": _enum(PROPS)}
 SCENE_SCHEMA = schema(SCENE_NAME, {
-    **_COMMON, "setting": _text(80), "activity": _text(80), "outfit": _text(80),
-    "expression": _text(40), **_TAIL})
+    **_COMMON, "setting": _enum(PLAIN_PLACES), "activity": _enum(ACTIVITIES), "outfit": _enum(OUTFITS),
+    "expression": _enum(EXPRESSIONS), **_TAIL})
 
-# The lust style's settings for a situational photo: her profile photo's, less the one that
-# names a crowd (she is the only person in a situational photo).
-SCENE_LUST_SETTINGS = tuple(s for s in LUST_SETTINGS if s != "a concert crowd")
+# Reuse profile choices except the crowd, bathing and hallway-mirror settings.
 SCENE_SCHEMA_LUST = schema(SCENE_LUST_NAME, {
-    **_COMMON, "setting": _enum(SCENE_LUST_SETTINGS), "activity": _text(80),
+    **_COMMON, "setting": _enum(SCENE_LUST_SETTINGS), "activity": _enum(ACTIVITIES),
     "outfit": _enum(LUST_OUTFITS), "colour": _enum(LUST_COLOURS),
     "expression": _enum(LUST_EXPRESSIONS), **_TAIL})
 
 SCENE_PROMPT = (
     "Choose a photo the real person who plays {name} might take in the coming days and send to "
     "a friend from the guild.\n{card}\n{facts}\nHow they look: {looks}\n"
-    "What is going on: {about}\n"
-    "Say whether they would take a photo of it at all. If they would, describe it: the kind of "
-    "photo (a phone selfie, a mirror selfie, or a snapshot a friend took), the framing (face, "
-    "head and shoulders, or upper body), where it is (a place in their own life, in a few "
-    "words), what they are doing in it, what they are wearing, their expression, the time of "
-    "day it belongs to (morning, day, evening, late night, or any), whether it is only for the "
-    "friend they send it to or fine for the whole guild, and in one plain sentence what the "
-    "photo shows. They are the only person in it; a pet is fine. Their looks stay exactly as "
-    "described: no new haircut or hair colour, no glasses they don't wear, no beard they don't "
-    "have, no change in weight. Name no year, no decade, no device and no brand. Fully clothed, "
-    "nothing revealing or sexual, no children, never like anyone famous, and no one else's "
-    "name.")
+    "What is going on: {about}\nSay whether they would take a photo of it at all. "
+    "Only choose the allowed enum values; never write descriptive text. Choose a setting, "
+    "activity, outfit, expression, time, framing and audience. The optional prop uses none "
+    "when absent. Keep activities in their natural places: desk games at a desk, cooking in "
+    "a kitchen, exercise in a gym, dog walks outdoors. Props must fit the activity. "
+    "They are alone and their looks stay unchanged. Fully clothed, nothing revealing or "
+    "sexual, no children, never like anyone famous, and no one else's name.")
 SCENE_PROMPT_LUST = (
-    "Choose a photo the real person who plays {name} might take in the coming days and send to "
-    "a friend from the guild, the kind she sends when she wants to be noticed.\n{card}\n"
-    "{facts}\nHow she looks: {looks}\nWhat is going on: {about}\n"
-    "Say whether she would take a photo of it at all. If she would, she knows she looks good "
-    "and likes to show it a little: a flattering, flirtatious, confident photo that fits who "
-    "she is and what is going on. Pick the kind of photo, the framing, where it is, what she is "
-    "wearing and its colour, and her expression from the choices the answer allows. Then say "
-    "in a few words what she is doing in it, never what she wears or where she is; the time of "
-    "day it belongs to (morning, day, evening, late night, or any); whether it is only for the "
-    "friend she "
-    "sends it to or fine for the whole guild; and in one plain sentence what the photo shows, "
-    "again without what she wears. She is the only person in it; a pet is fine. Her looks stay "
-    "exactly as described: no new haircut or hair colour, no glasses she doesn't wear, no "
-    "change in weight. Swimwear only at the beach, the pool deck, the lakeside dock, the hot "
-    "tub, the boat or the beach bar, framed upper body; the hot tub only in swimwear; the "
-    "sports top and leggings only at the gym. Name no year, no decade, no device and no brand, "
-    "never like anyone famous, and no one else's name.")
+    "Choose a photo the real person who plays {name} might take in the coming days.\n"
+    "{card}\n{facts}\nHow she looks: {looks}\nWhat is going on: {about}\n"
+    "Say whether she would take a photo. Only choose allowed enum values, never prose. "
+    "Setting, outfit, colour and expression reuse the profile photo's vetted choices. "
+    "Choose an activity that belongs in the setting, and a compatible prop or none. "
+    "Swimwear only by the water and framed upper body; sports top and leggings only at "
+    "the gym. She is alone, adult and fully clothed, her looks "
+    "unchanged. No names or likenesses. Choose no photo when no suitable combination fits.")
 SCENE_ASK = "Choose {name}'s photo."
+SCENE_ASK_AGAIN = (" Pick again: the activity must suit the place (a game or spreadsheet only at "
+                   "the desk, exercise only at the gym), and the prop must suit the activity.")
 ABOUT = {"life": "Tonight in their life away from the game: {beat}",
          "birthday": "It is their birthday tomorrow.",
          "everyday": "An ordinary day for them this week."}
 
-SNAP_NEGATIVE = NEGATIVE + (("another person, crowd, group of people", 1),)
-SNAP_NEGATIVE_LUST = LUST_NEGATIVE + (("another person, crowd, group of people", 1),)
+SNAP_NEGATIVE = NEGATIVE + (("another person, crowd, group of people", 0),
+                            (ONE_FACE_NEGATIVE, 0))
+SNAP_NEGATIVE_LUST = LUST_NEGATIVE + (("another person, crowd, group of people", 0),
+                                      (ONE_FACE_NEGATIVE, 0))
 
 # A looks change: her looks stay exactly as described in a situational photo. "Weights" and
 # "a glass of wine" are not one.
@@ -323,7 +290,7 @@ _LIGHT = {"morning": "soft morning light", "day": "daylight", "evening": "warm e
           "late": "at night, lit by a lamp or a screen", "any": None}
 _LATE_TAIL = _PHONE_TAIL.replace("natural light, ", "")
 _CROPS = {"face": (0.0, 0.0, 1.0, 1.0), "head_and_shoulders": (0.125, 0.05, 0.875, 0.8),
-          "upper_body": (0.25, 0.05, 0.75, 0.55)}
+          "upper_body": (0.25, 0.05, 0.75, 0.55), "three_quarter": (0.3, 0.02, 0.7, 0.42)}
 
 PHASES = {"morning": ("morning",), "day": ("day",), "evening": ("evening",),
           "late": ("late", "dead"), "any": ("morning", "day", "evening", "late", "dead")}
@@ -348,10 +315,12 @@ class Scene:
     audience: str
     shows: str
     style: str = PLAIN  # LUST: setting, outfit and expression were her picks (R2)
+    recipe: int = 0  # missing on pre-enum rows; snapstage holds them instead of rendering prose
 
 
 def scene_from(data: dict) -> Scene:
-    """The Scene a screened reply stands for, or the one scene_json stored. A lust reply (it has
+    """Decode an already composed, screened scene or the one scene_json stored. Never grant a
+    recipe version by reading a row. A lust reply (it has
     a colour) is composed as her profile photo is (kind.compose_lust: the colour put into the
     outfit, an article in front) and is of the lust style; a stored one says its style."""
     outfit, style = data["outfit"], data.get("style", PLAIN)
@@ -361,7 +330,8 @@ def scene_from(data: dict) -> Scene:
     if style not in STYLES:
         raise ValueError("scene: unknown style")
     return Scene(**{f.name: data[f.name] for f in fields(Scene)
-                    if f.name not in ("outfit", "style")}, outfit=outfit, style=style)
+                    if f.name not in ("outfit", "style", "recipe")}, outfit=outfit, style=style,
+                 recipe=data.get("recipe", 0))
 
 
 def scene_json(s: Scene) -> dict:
@@ -370,11 +340,13 @@ def scene_json(s: Scene) -> dict:
     out = asdict(s)
     if s.style == PLAIN:
         del out["style"]
+    if not s.recipe:
+        del out["recipe"]
     return out
 
 
 def scene_schema(p: Persona | None) -> dict:
-    """The reply schema for p's scene: the lust style's picks, or the plain free text."""
+    """The reply schema for p's scene: only enum choices, under the member's style."""
     return SCENE_SCHEMA_LUST if style_of(p) == LUST else SCENE_SCHEMA
 
 
@@ -458,6 +430,8 @@ def scene_renderable(p: Persona | None, s: Scene) -> str | None:
         return missing
     if s.style == LUST and not suggestive(p):
         return LUST_HELD
+    if UNDRESS_RE.search(s.setting):
+        return "scene.setting: undress"  # also hold older planned bathing-context rows
     named = names_re(p)
     if s.style == LUST and named is not None and named.search(lust_phrase(s)):
         return LUST_NAMED
@@ -502,7 +476,7 @@ def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
 
 
 def build_tile_prompt(p: Persona) -> PromptSpec:
-    """A member's tile of the guild photo, the raid on a video call: alone at their desk at
+    """A member's tile of the guild photo: alone at their desk at
     night with a headset, in what they wear at the computer. The same for every style.
     ValueError when renderable says why not."""
     missing = renderable(p)
@@ -511,11 +485,16 @@ def build_tile_prompt(p: Persona) -> PromptSpec:
     name_re = names_re(p)
     out: list[tuple[str, int]] = []
     add = phrase_adder(out, name_re)
-    add("frame from a video call", 0)
-    add("head and shoulders", 0)
+    add(TILE_FRAMING, 0)
     add(*subject_phrase(p))
-    add("at their desk at home at night, wearing a headset, lit by the monitor", 1)
-    out += looks_phrases(p, name_re)
+    # Hair, skin and eyes are required so the fitter never trades them for desk decoration;
+    # face details go at 1 and 2 as in the profile prompt, so long looks cannot overflow it.
+    eye = f"{_clean(p.appearance.eye_colour)} eyes"
+    out += [(text, 0) for text, _ in hair_skin(p, name_re)]
+    for text, _ in eyes_face(p, name_re):
+        out.append((text, 0 if text == eye else 1))
+    add(GAME_MONITOR, 0)
+    add(TILE_DESK, 1)
     if not _text_codes("outfit", p.appearance.at_the_pc or "", ident=_NOBODY, names=[]):
         add(p.appearance.at_the_pc, 2, True)  # the scene screen's free-text checks (R22)
     add("looking at the screen, smiling", 3)

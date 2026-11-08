@@ -18,12 +18,8 @@ from nightly.test_night_enrich import APPEARANCE
 from selfies.fakes import JPEG, ready, ready_snap, renderable_cast, planned_snap, sent_snap
 
 SNAPS_CFG = SelfieCfg(enabled=True, snaps=True)
-SCENE_REPLY = {"photo": True, "kind": "snapshot", "framing": "upper_body",
-               "setting": "on a wooden pier by the harbour",
-               "activity": "throwing a ball for a scruffy terrier",
-               "outfit": "a yellow raincoat over a grey jumper", "expression": "laughing",
-               "when": "day", "audience": "anyone",
-               "shows": "Them on a wooden pier throwing a ball for their dog."}
+from selfies.test_scene_choices import PICKS as SCENE_REPLY
+
 DAY = 86400.0
 
 
@@ -154,12 +150,12 @@ def test_the_cap_counts_what_tonight_already_planned(h):
 
 def test_a_declined_or_refused_scene_is_stored_nowhere_and_not_asked_again_tonight(h, caplog):
     cast(h, 101, 102, 103)
-    refused = {**SCENE_REPLY, "activity": "stripping off her clothes"}
-    ctx = h.ctx({"scene": [{**SCENE_REPLY, "photo": False}, refused, SCENE_REPLY]})
+    refused = {**SCENE_REPLY, "activity": "cooking"}
+    ctx = h.ctx({"scene": [{**SCENE_REPLY, "photo": False}, refused, refused, SCENE_REPLY]})
     with caplog.at_level(logging.INFO, logger="leeroy_mind"):
         run(stage(3)(ctx))
     assert len(planned(h.store, 10)) == 1
-    assert ctx.reasoner.calls == 3 and all(ctx.done(STAGE, str(g)) for g in (101, 102, 103))
+    assert ctx.reasoner.calls == 4 and all(ctx.done(STAGE, str(g)) for g in (101, 102, 103))
     assert "selfies_scene_declined" in caplog.text and "selfies_scene_refused" in caplog.text
     calls = ctx.reasoner.calls
     run(stage(3)(ctx))
@@ -177,7 +173,7 @@ def test_a_raid_with_a_kill_plans_one_guild_photo_a_week_without_him(h):
     assert (row.kind, row.guid, row.source, row.ref, row.audience) == (
         "guild", 0, "raid", f"raid:{second}", "anyone")
     assert row.phases == PHASES["evening"] + PHASES["late"]
-    assert row.scene == {"shows": "The raid on a video call, 5 of them"}
+    assert row.scene == {"shows": "The raid at their desks, 5 separate portraits"}
     assert [g for g, _ in row.members][:3] == [101, 102, 103] and 1 not in [g for g, _ in row.members]
     assert sorted(g for g, _ in row.members) == [101, 102, 103, 104, 105]
     third = raid(h, ended=h.T - 100, members=members)
@@ -224,7 +220,7 @@ def test_logs_carry_no_scene_text(h, caplog):
                                          "shows": "A hidden tale of the pier."}]})
     with caplog.at_level(logging.DEBUG):
         run(stage(3)(ctx))
-    for text in (*(v for v in SCENE_REPLY.values() if isinstance(v, str)), "hidden tale"):
+    for text in ("walking a dog on a leash", "hidden tale"):
         assert text not in caplog.text
 
 
@@ -241,13 +237,52 @@ def test_the_cap_counts_the_members_already_asked_tonight_even_when_nothing_was_
 
 
 @pytest.mark.parametrize("who", ["nickname", "character_name", "member_real_name"])
-def test_the_screen_knows_his_nickname_his_character_and_the_members_real_names(h, who):
+def test_the_screen_knows_his_nickname_his_character_and_the_members_real_names(h, who, monkeypatch):
     # controller ruling R22 (M6), matched in any case
     from leeroy_mind.selfies.scenes import ask_scene
     cast(h, 101, 102)
     ctx = h.ctx({})
     name = {"nickname": ctx.ident.nickname, "character_name": ctx.ident.character_name,
             "member_real_name": ctx.base(102).identity.real_name}[who]
-    ctx = h.ctx({"scene": [{**SCENE_REPLY, "activity": f"toasting {name.lower()}"}]})
+    # A vetted phrase may collide with a real member name; screen the composed text too.
+    from leeroy_mind.selfies import scene_choices
+    monkeypatch.setitem(scene_choices.ACTIVITIES, "dog_walk", (f"toasting {name.lower()}", ("park",)))
+    ctx = h.ctx({"scene": [SCENE_REPLY]})
     s, codes = run(ask_scene(ctx, 101, about="an ordinary day"))
     assert s is None and "scene.activity: member_name" in codes
+
+
+@pytest.mark.parametrize("recovers", [False, True])
+def test_off_list_scene_is_asked_once_more_then_declined_or_composed(h, recovers):
+    from leeroy_mind.selfies.scenes import ask_scene
+    cast(h, 101)
+    bad = {**SCENE_REPLY, "activity": "not an activity choice"}
+    ctx = h.ctx({"scene": [bad, SCENE_REPLY if recovers else bad]})
+    result, codes = run(ask_scene(ctx, 101, about="an ordinary day"))
+    assert ctx.reasoner.calls == 2
+    if recovers:
+        assert result.activity == "walking a dog on a leash, holding a dog leash" and codes == []
+    else:
+        assert result is None and codes == ["model"]
+
+
+@pytest.mark.parametrize("recovers", [False, True])
+def test_a_scene_pairing_failure_is_asked_once_more_then_refused(h, recovers):
+    from leeroy_mind.selfies.scenes import ask_scene
+    cast(h, 101)
+    bad = {**SCENE_REPLY, "activity": "raiding", "setting": "park"}
+    ctx = h.ctx({"scene": [bad, SCENE_REPLY if recovers else bad]})
+    result, codes = run(ask_scene(ctx, 101, about="an ordinary day"))
+    assert ctx.reasoner.calls == 2
+    if recovers:
+        assert result is not None and codes == []
+    else:
+        assert result is None and "scene.activity: place pairing" in codes
+
+
+def test_the_plain_scene_places_leave_out_the_water():
+    from leeroy_mind.selfies import scene
+    from leeroy_mind.selfies.scene_choices import LUST_PLACES, PLAIN_PLACES
+    assert "beach" not in PLAIN_PLACES and "pool_deck" not in PLAIN_PLACES
+    assert set(scene.SCENE_SCHEMA["properties"]["setting"]["enum"]) == set(PLAIN_PLACES)
+    assert "beach" in LUST_PLACES.values() and "pool_deck" in LUST_PLACES.values()

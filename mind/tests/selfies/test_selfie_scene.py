@@ -91,7 +91,8 @@ def test_the_scene_prompt_runs_in_the_briefs_order():
         (SCENE["outfit"], 2), ("soft morning light", 2), (SCENE["expression"], 3),
         ("average build", 1),
         ("recent smartphone photo, natural light, natural skin texture, unretouched", 1))
-    assert SNAP_NEGATIVE == NEGATIVE + (("another person, crowd, group of people", 1),)
+    assert SNAP_NEGATIVE == NEGATIVE + (("another person, crowd, group of people", 0),
+                                                      (scene.ONE_FACE_NEGATIVE, 0))
 
 
 @pytest.mark.parametrize("when,light", [("morning", "soft morning light"), ("day", "daylight"),
@@ -142,9 +143,10 @@ def test_the_tile_prompt_wears_what_they_wear_at_the_pc():
     for p in (woman(), lusty()):                              # the guild photo is plain for all
         spec = build_tile_prompt(p)
         assert spec.phrases == (
-            ("frame from a video call", 0), ("head and shoulders", 0), subject_phrase(p),
-            ("at their desk at home at night, wearing a headset, lit by the monitor", 1),
-            *looks_phrases(p, names_re(p)), (APPEARANCE.at_the_pc, 2),
+            (scene.TILE_FRAMING, 0), subject_phrase(p),
+            *((text, 0 if text.endswith((" hair", " skin", " eyes")) or ", " in text else 1)
+              for text, _ in looks_phrases(p, names_re(p))),
+            (scene.GAME_MONITOR, 0), (scene.TILE_DESK, 1), (APPEARANCE.at_the_pc, 2),
             ("looking at the screen, smiling", 3),
             ("recent photo, natural skin texture, unretouched", 1))
         assert spec.negative == SNAP_NEGATIVE
@@ -178,15 +180,13 @@ def test_the_schema_template_and_ask_are_the_briefs():
     props = SCENE_SCHEMA["properties"]
     assert SCENE_SCHEMA["title"] == "scene" and SCENE_SCHEMA["additionalProperties"] is False
     assert list(props) == ["photo", "kind", "framing", "setting", "activity", "outfit",
-                           "expression", "when", "audience", "shows"]
+                           "expression", "when", "audience", "prop"]
     assert set(SCENE_SCHEMA["required"]) == set(props)
     assert props["photo"] == {"type": "boolean"}
     assert props["kind"]["enum"] == ["selfie", "mirror_selfie", "snapshot"]
-    assert props["framing"]["enum"] == ["face", "head_and_shoulders", "upper_body"]
+    assert props["framing"]["enum"] == ["face", "head_and_shoulders", "upper_body", "three_quarter"]
     assert props["audience"]["enum"] == ["him", "anyone"]
-    assert {f: props[f]["maxLength"] for f in ("setting", "activity", "outfit", "expression",
-                                               "shows")} == {
-        "setting": 80, "activity": 80, "outfit": 80, "expression": 40, "shows": 120}
+    assert all("enum" in props[f] for f in ("setting", "activity", "outfit", "expression", "prop"))
     assert SCENE_ASK == "Choose {name}'s photo." and SCENE_NAME == "scene"
     assert ABOUT == {"life": "Tonight in their life away from the game: {beat}",
                      "birthday": "It is their birthday tomorrow.",
@@ -250,8 +250,8 @@ def test_the_lust_lists_are_the_profile_photos_own():
     assert scene.screen_lust is kind.screen_lust and scene.compose_lust is kind.compose_lust
     # a subset of her profile settings: the one that names a crowd goes, she is alone in it
     assert set(SCENE_LUST_SETTINGS) < set(LUST_SETTINGS)
-    assert [s for s in LUST_SETTINGS if s not in SCENE_LUST_SETTINGS] == ["a concert crowd"]
-    assert set(WATER_SETTINGS + GYM_SETTINGS + SWIM_ONLY_SETTINGS) <= set(SCENE_LUST_SETTINGS)
+    assert [s for s in LUST_SETTINGS if s not in SCENE_LUST_SETTINGS] == ["a hot tub on a wooden deck", "the mirror in her hallway", "a concert crowd"]
+    assert set(WATER_SETTINGS + GYM_SETTINGS) - set(SWIM_ONLY_SETTINGS) <= set(SCENE_LUST_SETTINGS)
 
 
 def test_a_lust_womans_scene_schema_allows_only_the_enum_values():
@@ -260,15 +260,15 @@ def test_a_lust_womans_scene_schema_allows_only_the_enum_values():
     assert SCENE_SCHEMA_LUST["title"] == SCENE_LUST_NAME == "scene_lust"
     assert SCENE_SCHEMA_LUST["additionalProperties"] is False
     assert list(props) == ["photo", "kind", "framing", "setting", "activity", "outfit", "colour",
-                           "expression", "when", "audience", "shows"]
+                           "expression", "when", "audience", "prop"]
     assert set(SCENE_SCHEMA_LUST["required"]) == set(props)
-    for f in ("photo", "kind", "framing", "activity", "when", "audience", "shows"):
+    for f in ("photo", "kind", "framing", "activity", "when", "audience", "prop"):
         assert props[f] == SCENE_SCHEMA["properties"][f], f        # the same as everyone's
     assert props["setting"]["enum"] == list(SCENE_LUST_SETTINGS)
     assert props["outfit"]["enum"] == list(LUST_OUTFITS)
     assert props["colour"]["enum"] == list(LUST_COLOURS)
     assert props["expression"]["enum"] == list(LUST_EXPRESSIONS)
-    check_schema(SCENE_SCHEMA_LUST, LUST_SCENE)
+    check_schema(SCENE_SCHEMA_LUST, {k: v for k, v in {**LUST_SCENE, "activity": "relaxing", "prop": "none"}.items() if k != "shows"})
     for field, value in [("outfit", "a towel"), ("outfit", "a fitted little dress"),
                          ("setting", "her bed"), ("setting", "a concert crowd"),
                          ("expression", "a sleepy pout"), ("colour", "white"),
@@ -286,7 +286,7 @@ def test_a_swimwear_pick_away_from_the_water_is_refused():
     assert codes({**SWIM_SCENE, "setting": "a cafe terrace"}) == [scode(PAIRINGS[0])]
     assert scode(PAIRINGS[0]) == "scene.outfit: swimwear away from the water"
     assert codes({**GYM_SCENE, "setting": "a wine bar"}) == [scode(PAIRINGS[1])]
-    assert codes({**LUST_SCENE, "setting": "a hot tub on a wooden deck"}) == [scode(PAIRINGS[2])]
+    assert codes({**LUST_SCENE, "setting": "a hot tub on a wooden deck"}) == ["scene.setting: not on its list", scode(PAIRINGS[2])]
     for framing in ("face", "head_and_shoulders"):              # swimwear: upper body only
         assert codes({**SWIM_SCENE, "framing": framing}) == [scode(PAIRINGS[3])]
     assert codes({**LUST_SCENE, "setting": "a concert crowd"}) == ["scene.setting: not on its list"]
@@ -395,7 +395,7 @@ def test_the_lust_prompt_joins_outfit_and_setting_at_priority_0():
                    for t, _ in hot.phrases)
     assert [x for x in hot.phrases if x != joined] == [x for x in plain.phrases if x not in parts]
     assert hot.negative == SNAP_NEGATIVE_LUST == LUST_NEGATIVE + (
-        ("another person, crowd, group of people", 1),)
+        ("another person, crowd, group of people", 0), (scene.ONE_FACE_NEGATIVE, 0))
     assert plain.negative == SNAP_NEGATIVE
 
 
@@ -441,11 +441,9 @@ def test_the_lust_template_has_its_own_overlay_name(tmp_path):
     assert fields(SCENE_PROMPT_LUST) == fields(SCENE_PROMPT) == {"name", "card", "facts",
                                                                 "looks", "about"}
     assert OLD_REFUSED.search(SCENE_PROMPT_LUST) is None and AGE_RE.search(SCENE_PROMPT_LUST) is None
-    for rule in ("pick the kind of photo, the framing, where it is, what she is wearing and its "
-                 "colour, and her expression from the choices the answer allows",
-                 "swimwear only at the beach, the pool deck, the lakeside dock, the hot tub, the "
-                 "boat or the beach bar, framed upper body", "the hot tub only in swimwear",
-                 "sports top and leggings only at the gym", "she is the only person in it"):
+    for rule in ("only choose allowed enum values, never prose", "reuse the profile photo's vetted choices",
+                 "swimwear only by the water and framed upper body",
+                 "sports top and leggings only at the gym", "she is alone"):
         assert rule in SCENE_PROMPT_LUST.lower(), rule
     assert {SCENE_NAME, SCENE_LUST_NAME} <= night_prompt_names()   # the doctor knows both
     built_in = scene_system(lusty(), tmp_path, human=IDENT, **FIELDS)
@@ -468,8 +466,7 @@ def test_a_plain_members_scene_never_uses_the_lust_lists():
     lists = set(LUST_SETTINGS) | set(LUST_OUTFITS) | set(LUST_EXPRESSIONS) | set(LUST_COLOURS)
     props = SCENE_SCHEMA["properties"]
     assert "colour" not in props
-    assert all("enum" not in props[f] for f in ("setting", "activity", "outfit", "expression",
-                                                "shows"))
+    assert all("enum" in props[f] for f in ("setting", "activity", "outfit", "expression", "prop"))
     assert not any(isinstance(v, dict) and lists & set(v.get("enum", ())) for v in props.values())
     for p in plain_members():
         assert style_of(p) == PLAIN and scene_schema(p) is SCENE_SCHEMA
@@ -680,8 +677,8 @@ def test_the_age_number_rule(text, young):
     assert ("scene.activity: age" in codes) == young, codes
 
 
-def test_the_lust_template_keeps_her_place_out_of_her_free_text():
-    assert "never what she wears or where she is" in SCENE_PROMPT_LUST
+def test_the_lust_template_requires_enum_choices_without_prose():
+    assert "Only choose allowed enum values, never prose" in SCENE_PROMPT_LUST
     assert OLD_REFUSED.search(SCENE_PROMPT_LUST) is None    # still non-explicit (round 1 test)
 
 
@@ -694,7 +691,7 @@ def test_the_tile_leaves_out_an_unscreened_at_the_pc_phrase(pc):
     p = replace(p, appearance=replace(p.appearance, at_the_pc=pc))
     spec = build_tile_prompt(p)
     assert all(pc not in text for text, _ in spec.phrases)
-    assert ("at their desk at home at night, wearing a headset, lit by the monitor", 1) \
+    assert (scene.TILE_DESK, 1) \
         in spec.phrases
 
 
@@ -764,3 +761,15 @@ def test_the_last_review_allowances_pass(text):
     for p, data in ((lusty(), LUST_SCENE), (woman(), SCENE)):
         for field in ("activity", "shows"):
             assert screen_scene(p, {**data, field: text}, ident=IDENT, member_names=[]) == []
+
+
+def test_a_tile_with_the_longest_looks_fits_the_workers_window():
+    from selfies.test_selfie_prompt import _tokens, _worker_fit
+    p = woman()
+    p = replace(p, appearance=replace(p.appearance, hair_style="h" * 40, face=("f" * 40,) * 4))
+    spec = build_tile_prompt(p)
+    text, dropped = _worker_fit()(spec.phrases, _tokens)
+    assert _tokens(text) <= 75
+    assert (scene.TILE_FRAMING, 0) in spec.phrases and (scene.GAME_MONITOR, 0) in spec.phrases
+    assert all(prio >= 1 for t, prio in spec.phrases if t == "f" * 40)
+    assert any(t.endswith(" eyes") and prio == 0 for t, prio in spec.phrases)

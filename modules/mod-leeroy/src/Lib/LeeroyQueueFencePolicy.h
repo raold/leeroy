@@ -29,6 +29,21 @@ bool QueueFenceNativeCallMatches(QueueKind kind, bool wintergrasp, std::uint32_t
     std::uint32_t callGuid, std::uintptr_t session, std::uintptr_t watchedSession,
     std::string_view callToken, std::string_view watchedToken);
 
+// Playerbots' rated-arena captain gathers its team by taking each member out of its
+// group and teleporting it (only a member whose master is a game client, or one in
+// combat, a battleground or a queue, is skipped), so a cast member left in an old bot
+// team can be pulled out of an offline raid. Playerbots' own pin guard only stops new
+// teams. A pinned cast member leaves every team the owner does not captain; a member
+// who captains a bot team cannot leave without handing the team on, so it is kept.
+enum class CastArenaTeamExit { Keep, Captain, Wait, Leave };
+struct CastArenaTeamFacts
+{
+    bool enabled = false, cast = false, pinned = false, human = false;
+    bool ownerCaptain = false, memberCaptain = false, realmHeld = false;
+    bool teamFighting = false, inBattleground = false, inQueue = false, groupQueued = false;
+};
+CastArenaTeamExit DecideCastArenaTeamExit(CastArenaTeamFacts const& facts);
+
 // At most one log for each observed continuous hold, across all queue kinds.
 // The adapter serializes access and calls Observe with an empty hold on release.
 class QueueFenceLog

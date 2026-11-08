@@ -18,6 +18,12 @@ jobs:
         run: shellcheck --severity=warning --external-sources --source-path=scripts scripts/*.sh scripts/tests/*.sh
       - name: config key report self-test
         run: bash scripts/tests/ac-update-keys.sh
+      - name: guild backup self-test (synthetic data only)
+        run: bash scripts/tests/ac-guild-backup.sh
+      - name: guild backup schedule self-test (no task registration)
+        run: pwsh -NoProfile -File scripts/tests/ac-guild-backup-schedule.ps1
+      - name: release self-test (temporary repositories and stub services)
+        run: bash scripts/tests/ac-release.sh
 
   secrets:
     runs-on: ubuntu-latest
@@ -59,6 +65,40 @@ jobs:
           python-version: "3.14"
       - run: python -m pip install -e ".[test]"
       - run: python -m pytest -q -n auto tests
+
+  console-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: mind
+    env:
+      LEEROY_CONSOLE_E2E_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            mind/pyproject.toml
+            mind/tests/console/e2e/requirements.txt
+      - run: python -m pip install -e ".[test]" -r tests/console/e2e/requirements.txt
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-console-chromium-${{ hashFiles('mind/tests/console/e2e/requirements.txt') }}
+      - run: python -m playwright install --with-deps chromium
+      - run: python -m pytest tests/console/e2e -q --basetemp "$RUNNER_TEMP/console-e2e" --junitxml "$RUNNER_TEMP/console-e2e-results.xml"
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: console-e2e-failures
+          path: |
+            ${{ runner.temp }}/console-e2e/**/failure.png
+            ${{ runner.temp }}/console-e2e/**/failure.html
+            ${{ runner.temp }}/console-e2e-results.xml
+          retention-days: 7
 
   voice:
     runs-on: ubuntu-latest

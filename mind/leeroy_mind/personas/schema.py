@@ -202,7 +202,7 @@ class Disclosure:
 @dataclass(frozen=True)
 class ProfilePhoto:
     kind: Literal["selfie", "mirror_selfie", "headshot", "snapshot"]
-    framing: Literal["face", "head_and_shoulders", "upper_body"]
+    framing: Literal["face", "head_and_shoulders", "upper_body", "three_quarter"]
     setting: str = _f(max_len=80)
     outfit: str = _f(max_len=80)
     expression: str = _f(max_len=40)

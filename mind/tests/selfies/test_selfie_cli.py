@@ -266,3 +266,68 @@ def test_try_snaps_skips_and_counts_a_member_with_a_pick_but_no_photo_kind(snapr
                             make_llm=lambda cfg: snap_llm(snaproot))
     out = json.loads(capsys.readouterr().out)
     assert code == 1 and out["members"] == 0 and out["no_kind"] == 1
+
+
+def test_snap_readiness_reports_rendered_nsfw_and_missing_photo(snaproot, capsys):
+    assert cli.selfies_main(["--data-dir", str(snaproot), "try", "--snaps", "--guild"],
+                            make_llm=lambda cfg: snap_llm(snaproot)) == 0
+    captured = capsys.readouterr()
+    out = json.loads(captured.out)
+    rendered = [r for r in out["results"] if r["status"] == "rendered"]
+    assert len(rendered) == 4 and all(r["nsfw"] == .01 for r in rendered)
+    assert {r["guid"] for r in rendered} == {101, 102}
+    assert {r["kind"] for r in rendered} == {"situation", "tile"}
+    assert {"guid": 103, "kind": "situation", "status": "refused", "codes": ["no_photo"],
+            "nsfw": None} in out["results"]
+    assert out["guild_similarity"]["code"] == "worker_unsupported"
+    assert "faces alike: skipped (worker_unsupported)" in captured.err
+    assert "rendered () nsfw=0.0100" in captured.err
+
+
+def test_snap_readiness_reports_declined_and_pairing_refusal(snaproot, capsys):
+    replies = [{**SCENE_REPLY, "photo": False}, {**SCENE_REPLY, "activity": "cooking"}] + [{**SCENE_REPLY, "activity": "cooking"}]
+    assert cli.selfies_main(["--data-dir", str(snaproot), "try", "--snaps"],
+                            make_llm=lambda cfg: snap_llm(snaproot, replies)) == 1
+    captured = capsys.readouterr()
+    rows = {r["guid"]: r for r in json.loads(captured.out)["results"]}
+    assert rows[101]["status"] == "declined" and rows[101]["nsfw"] is None
+    assert rows[102]["status"] == "refused"
+    assert "scene.activity: place pairing" in rows[102]["codes"]
+    assert "refused (scene.activity: place pairing" in captured.err
+
+
+def test_snap_readiness_maps_similarity_indices_to_guids(snaproot, capsys, monkeypatch):
+    from leeroy_mind.selfies.worker import SelfieWorker
+    original = SelfieWorker.grid
+
+    async def scored(self, *args, **kw):
+        got = await original(self, *args, **kw)
+        return replace(got, similarity={"code": "ok", "pairs": 1, "pair": [0, 1],
+                                        "max": .7, "mean": .7})
+    monkeypatch.setattr(SelfieWorker, "grid", scored)
+    assert cli.selfies_main(["--data-dir", str(snaproot), "try", "--snaps", "--guild"],
+                            make_llm=lambda cfg: snap_llm(snaproot)) == 0
+    captured = capsys.readouterr()
+    score = json.loads(captured.out)["guild_similarity"]
+    assert score["guids"] == [101, 102] and "pair" not in score
+    assert score["metric"] == "uncalibrated_head_crop_cosine"
+    assert "uncalibrated" in captured.err and "max=0.7000" in captured.err
+
+
+@pytest.mark.parametrize("failure", ["flagged", "model"])
+def test_snap_readiness_covers_flagged_seeds_and_start_failure(snaproot, capsys, monkeypatch, failure):
+    from leeroy_mind.selfies import snapstage
+    old_env = cli.worker_env
+    if failure == "flagged":
+        monkeypatch.setattr(snapstage, "seed_for", lambda *args: 42)
+        monkeypatch.setattr(cli, "worker_env", lambda cfg: {**old_env(cfg), "FAKE_SELFIE_FLAG_SEEDS": "42"})
+    else:
+        monkeypatch.setattr(cli, "worker_env", lambda cfg: {**old_env(cfg), "FAKE_SELFIE_READY_ERROR": "model"})
+    assert cli.selfies_main(["--data-dir", str(snaproot), "try", "--snaps"],
+                            make_llm=lambda cfg: snap_llm(snaproot)) == 1
+    captured = capsys.readouterr()
+    rows = [r for r in json.loads(captured.out)["results"] if r["guid"] in (101, 102)]
+    assert len(rows) == 2 and all(r["status"] == "refused" for r in rows)
+    assert all(r["codes"] == [failure] for r in rows)
+    assert all(r["nsfw"] == (.95 if failure == "flagged" else None) for r in rows)
+    assert not list((snaproot / "scratch" / "selfies-try" / "snaps").glob("*/snap.jpg"))

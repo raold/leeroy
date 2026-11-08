@@ -314,3 +314,46 @@ async def test_lost_terminal_after_accepted_stop_fires_from_the_stop_time(setup)
     assert not controller.active
     assert controller._owned['terminal']['reason'] == 'terminal_lost'
     assert ports.conn.execute('SELECT outcome FROM guild_raid WHERE raid_id=?', (raid_id,)).fetchone()[0] == 'terminal_lost'
+
+
+@_run_async
+async def test_returned_member_heartbeat_does_not_extend_the_boss_stall_clock(setup):
+    ports, _, controller = setup
+    await start(setup)
+    await heartbeat(setup, inside=24)
+    await advance(ports, 1799)
+    await heartbeat(setup, age=1799, inside=25)
+    assert not stops(ports)
+    await advance(ports, 1)
+    await heartbeat(setup, age=1800, inside=25)
+    assert len(stops(ports)) == 1
+
+
+@_run_async
+async def test_teardown_diagnostic_reason_is_not_a_terminal_or_new_running_evidence(setup):
+    ports, _, controller = setup
+    await start(setup)
+    await heartbeat(setup)
+    await controller.on_job(event(controller, stage='tearing_down', reason='leader_lost'))
+    await controller.tick()
+    assert controller.active and controller._owned.get('terminal') is None
+    assert controller._progress is None and not stops(ports)
+
+
+@_run_async
+async def test_native_cleanup_failure_finishes_accounting_once_before_the_run_deadline(setup):
+    ports, _, controller = setup
+    await start(setup)
+    await heartbeat(setup)
+    raid_id = controller.session.raid_id
+    await controller.on_job(event(controller, stage='tearing_down', reason='leader_lost'))
+    await advance(ports, 60)
+    terminal = event(controller, state='failed', stage='', reason='cleanup_failed:leader_lost')
+    await controller.on_job(terminal)
+    await controller.tick()
+    assert not controller.active and not stops(ports)
+    assert ports.conn.execute('SELECT outcome FROM guild_raid WHERE raid_id=?', (raid_id,)).fetchone()[0] == 'cleanup_failed:leader_lost'
+    releases = ports.gpu.count('release:offline_raid')
+    await controller.on_job(terminal)
+    await controller.tick()
+    assert releases == 1 and ports.gpu.count('release:offline_raid') == releases

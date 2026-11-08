@@ -311,3 +311,11 @@ def test_a_chosen_build_comes_right_after_who_she_is():
     assert "year-old" in texts[i - 1] or "looking at the camera" in texts[i - 1]
     assert all("hair" not in t for t in texts[:i])
     assert "wide hips" in BUILD_WORDS["curvy"]
+
+
+def test_a_three_quarter_framing_shows_waist_and_hips():
+    """Owner 2026-11-08: a three-quarter framing keeps face, bust, waist and hips in frame."""
+    base = woman()
+    tq = replace(base, photo=replace(base.photo, framing="three_quarter"))
+    texts = [t for t, pr in build_prompt(tq).phrases if pr == 0]
+    assert "three-quarter shot from mid-thigh up, waist and hips in frame" in texts
