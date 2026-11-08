@@ -19,6 +19,7 @@ from leeroy_mind.protocol import Member
 from leeroy_mind.selfies.files import candidate, set_dir, staging_dir
 from leeroy_mind.selfies.job import pid_alive
 from leeroy_mind.selfies.prompt import build_prompt
+from leeroy_mind.selfies.stage import wants_gpu as stage_wants_gpu
 from leeroy_mind.selfies.stage import (CONTENDED, SET_SIZE, STAGE, THUMB_PX, TRIES, SetRefused,
                                        make_stage, render_candidates, seed_for)
 from leeroy_mind.selfies.store import ensure_first_sets, queue_more, queued_sets, ready_set
@@ -393,6 +394,79 @@ def test_the_night_caps_its_sets_across_a_resume(h, tmp_path):
     run(make_stage(SELFIE_CFG, worker=fake_worker(tmp_path, FAKE_SELFIE_LOG=str(log)))(again))
     assert queued(h) == [(103, 1)]                              # two tonight, the rest tomorrow
     assert {rid.split(":")[0] for rid, _ in requests(log)} == {"101", "102"}
+
+
+def test_a_four_more_asked_after_the_queue_step_is_rendered_by_the_next_pass_of_the_night(
+        h, tmp_path):
+    renderable_cast(h.store, 101, 102)
+    log = tmp_path / "requests.log"
+    mk = lambda: make_stage(SELFIE_CFG, worker=fake_worker(tmp_path, FAKE_SELFIE_LOG=str(log)))
+    first = h.ctx()
+    run(mk()(first))
+    assert first.done(STAGE, "queue") and queued(h) == []
+    sent = len(requests(log))
+    assert not stage_wants_gpu(h.ctx())
+    queue_more(h.store, 101, now=h.ctx().clock.now())
+    again = h.ctx()
+    assert again.night == first.night and stage_wants_gpu(again)
+    run(mk()(again))
+    assert [rid for rid, _ in requests(log)[sent:]] == [f"101:2:{i}:0" for i in range(4)]
+    assert ready_set(h.store, 101, 2).reason == "more" and queued(h) == [] and not again.failures
+    sent = len(requests(log))
+    run(mk()(h.ctx()))                                           # nothing new: nothing sent
+    assert len(requests(log)) == sent
+    assert h.store.conn.execute("SELECT count(*) FROM selfie_set").fetchone()[0] == 3
+
+
+def test_a_member_whose_kind_is_chosen_after_the_queue_step_is_queued_by_the_next_pass(
+        h, tmp_path):
+    renderable_cast(h.store, 101)
+    mk = lambda: make_stage(SELFIE_CFG, worker=fake_worker(tmp_path))
+    run(mk()(h.ctx()))
+    assert queued(h) == [] and ready_set(h.store, 101, 1)
+    renderable_cast(h.store, 102)                                # her kind arrives later
+    ctx = h.ctx()
+    assert stage_wants_gpu(ctx) and queued(h) == [(102, 1)]
+    assert stage_wants_gpu(ctx) and queued(h) == [(102, 1)]      # asking again queues nothing more
+    run(mk()(ctx))
+    assert ready_set(h.store, 102, 1).reason == "first" and queued(h) == []
+    assert [r[0] for r in h.store.conn.execute(
+        "SELECT guid FROM selfie_set ORDER BY guid, set_no").fetchall()] == [101, 102]
+
+
+def test_a_four_more_asked_while_the_stage_renders_is_rendered_in_the_same_stage(h, tmp_path):
+    renderable_cast(h.store, 101, 102)
+    run(make_stage(SELFIE_CFG, worker=fake_worker(tmp_path))(h.ctx()))
+    renderable_cast(h.store, 103)
+    log = tmp_path / "requests.log"
+    cmd, env = fake_command(tmp_path, FAKE_SELFIE_LOG=str(log))
+    ctx = h.ctx()
+    class Asked(SelfieWorker):
+        async def render(self, req, *, rid=None):
+            if rid == "103:1:0:0":                                # asked while 103's set renders
+                queue_more(h.store, 101, now=ctx.clock.now())
+            return await super().render(req, rid=rid)
+    run(make_stage(SELFIE_CFG, worker=lambda: Asked(cmd, env=env))(ctx))
+    assert [rid for rid, _ in requests(log)] == (
+        [f"103:1:{i}:0" for i in range(4)] + [f"101:2:{i}:0" for i in range(4)])
+    assert queued(h) == [] and not ctx.failures
+
+
+def test_the_cap_holds_across_passes_of_the_same_night(h, tmp_path):
+    renderable_cast(h.store, 101, 102, 103)
+    log = tmp_path / "requests.log"
+    mk = lambda: make_stage(SELFIE_CFG, worker=fake_worker(tmp_path, FAKE_SELFIE_LOG=str(log)))
+    def ctx():
+        c = h.ctx()
+        c.settings = replace(c.settings, selfie_per_night=2)
+        return c
+    run(mk()(ctx()))
+    queue_more(h.store, 101, now=h.ctx().clock.now())            # a third request tonight
+    again = ctx()
+    assert not stage_wants_gpu(again)
+    run(mk()(again))
+    assert {rid.split(":")[0] for rid, _ in requests(log)} == {"101", "102"}
+    assert len(requests(log)) == 8 and (101, 2) in queued(h) and (103, 1) in queued(h)
 
 
 # -- the worker -----------------------------------------------------------------------------------
