@@ -1,5 +1,6 @@
 """Retained photos are read-only; only the existing selfie op changes a cover."""
 import asyncio
+import os
 from pathlib import Path
 
 import pytest
@@ -105,6 +106,28 @@ def test_gallery_leaves_out_oversized_files_and_refuses_non_jpegs(store, data):
     assert "candidate:1:0" not in [p["id"] for p in view["photos"]]
     assert galleryview.photo(store.conn, data, 101, "candidate", 1, 1) is None
     assert galleryview.photo(store.conn, data, 102, "candidate", 1, 1) is None
+
+
+@pytest.mark.parametrize("parent", [False, True])
+def test_gallery_refuses_a_file_or_parent_link_outside_selfies(store, data, tmp_path, parent):
+    ready(store, data, 101, 1)
+    image = files.candidate(data, 101, 1, 0)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    if parent:
+        folder = image.parent
+        folder.rename(outside / "set")
+        target, link = outside / "set", folder
+    else:
+        target, link = outside / "photo.jpg", image
+        image.rename(target)
+    try:
+        os.symlink(target, link, target_is_directory=parent)
+    except OSError as exc:
+        pytest.skip(f"symlinks unavailable: {type(exc).__name__}")
+    view = galleryview.gallery(store.conn, data, 101)
+    assert "candidate:1:0" not in [p["id"] for p in view["photos"]]
+    assert galleryview.photo(store.conn, data, 101, "candidate", 1, 0) is None
 
 
 def test_cover_still_uses_the_existing_control_gates_and_pick_arguments(data):
