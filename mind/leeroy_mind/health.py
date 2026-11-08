@@ -756,8 +756,17 @@ def _offline_raid(conn, now: float) -> Check:
             if receipt.get("phase") in ("complete", "rejected"):
                 return Check(name, OK, "offline raid: owned run is terminal")
             ident, deadline = receipt["raid_id"], receipt["deadline"]
-            if (type(ident) is not int or ident <= 0 or type(deadline) not in (int, float)
-                    or not math.isfinite(deadline)):
+            if type(deadline) not in (int, float) or not math.isfinite(deadline):
+                raise ValueError
+            if ident is None and receipt.get("phase") in (
+                    "acquiring", "awaiting_ack", "accepted", "uncertain"):
+                # Native acknowledgement/progress precedes the local RaidSession.
+                # The persisted UUID identifies that owned command until _open().
+                command = receipt.get("id")
+                if not isinstance(command, str) or not re.fullmatch(r"[a-fA-F0-9]{32}", command):
+                    raise ValueError
+                ident = f"command {command}"
+            elif type(ident) is not int or ident <= 0:
                 raise ValueError
         except (ValueError, TypeError, KeyError, RecursionError):
             return Check(name, FAIL, "offline raid: invalid owned receipt; inspect raid history")
@@ -786,10 +795,19 @@ def _guild_raids(conn, now: float) -> Check:
 
 
 def _night_log_counts(data: Path, night: str, started: float, finished: float, open_log):
-    """Bounded newest-first log fallback. Never retain/print message or unit text."""
+    """Bounded newest-first fallback, with timestamp coverage rather than file presence.
+
+    A readable newer log proves nothing about an older night. Require records spanning
+    both bounds and every intervening local day; a missing rotation is not a clean night.
+    Never retain/print message or unit text.
+    """
     counts, codes = Counter(), Counter()
     remaining, until = NIGHT_LOG_BYTES, time.monotonic() + NIGHT_LOG_SECONDS
     incomplete, seen = False, False
+    before = after = False
+    first_day = datetime.fromtimestamp(started).date().toordinal()
+    last_day = datetime.fromtimestamp(finished).date().toordinal()
+    days = set()
     for path in reversed(_log_files(data / "logs", started)):
         if remaining <= 0 or time.monotonic() >= until:
             incomplete = True
@@ -814,13 +832,16 @@ def _night_log_counts(data: Path, night: str, started: float, finished: float, o
             if time.monotonic() >= until:
                 incomplete = True
                 break
-            if b'"nightly_unit_failed"' not in line:
-                continue
             try:
                 record = json.loads(line)
+                at = datetime.fromisoformat(record["ts"]).timestamp()
+                before |= at <= started
+                after |= at >= finished
+                day = datetime.fromtimestamp(at).date().toordinal()
+                if first_day <= day <= last_day:
+                    days.add(day)
                 if record.get("event") != "nightly_unit_failed" or record.get("night") != night:
                     continue
-                at = datetime.fromisoformat(record["ts"]).timestamp()
                 if not started <= at <= finished:
                     continue
                 stage = record.get("stage")
@@ -829,9 +850,11 @@ def _night_log_counts(data: Path, night: str, started: float, finished: float, o
                 code = record.get("error")
                 if isinstance(code, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}(?:Error|Exception)", code):
                     codes[code] += 1
-            except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
+            except (ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError,
+                    OSError):
                 incomplete = True
-    return counts, codes, incomplete, seen
+    covered = before and after and len(days) == last_day - first_day + 1
+    return counts, codes, incomplete, seen, covered
 
 
 def _night_failures(conn, data: Path, open_log) -> Check:
@@ -855,18 +878,21 @@ def _night_failures(conn, data: Path, open_log) -> Check:
                 counts = Counter(stored)
             except (ValueError, TypeError, RecursionError):
                 pass
-        codes, incomplete = Counter(), False
+        codes, incomplete, missing_coverage = Counter(), False, False
         source = "stored"
         if counts is None or sum(counts.values()):
-            logged, codes, incomplete, seen = _night_log_counts(data, night, started, finished, open_log)
+            logged, codes, incomplete, seen, covered = _night_log_counts(
+                data, night, started, finished, open_log)
             if counts is None:
                 counts, source = logged, "logs"
                 if not seen:
                     return Check(name, NOTE, "night failures: no stored counts; logs unavailable")
+                missing_coverage = not covered
         total = sum(counts.values())
-        status = FAIL if total >= 10 else NOTE if total or incomplete else OK
+        status = FAIL if total >= 10 else NOTE if total or incomplete or missing_coverage else OK
         detail = ", ".join(f"{stage}={n}" for stage, n in sorted(counts.items()) if n)
-        text = f"night failures: latest finished night, {total} failed units ({source})"
+        observed = " observed" if source == "logs" and (incomplete or missing_coverage) else ""
+        text = f"night failures: latest finished night, {total}{observed} failed units ({source})"
         if detail:
             text += "; " + detail
         if codes:
@@ -874,6 +900,8 @@ def _night_failures(conn, data: Path, open_log) -> Check:
             text += f"; top error={code} ({n} logged)"
         if incomplete:
             text += "; log scan incomplete (budget or unreadable records)"
+        if missing_coverage:
+            text += "; historical log coverage incomplete"
         return Check(name, status, text)
     return _table_check(name, check)
 

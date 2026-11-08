@@ -258,9 +258,13 @@ mind and mind.log, the control endpoint's `status` (it reports `bridge_connected
 activity (no `tg_pull` in 48 h with telemetry on and the overhead gate passed, a note while the
 gate is in phase `ab`; a realm hold or `unknown` root older than 1 h; cast without personas). It
 also fails an owned offline raid more than 30 minutes past its deadline or any guild raid
-open longer than 6 hours. The latest finished night's failed units are grouped by stage
+open longer than 6 hours. Before native progress creates a local raid, a valid owned receipt
+is identified by its command ID and keeps the same deadline check. The latest finished night's
+failed units are grouped by stage
 (note for 1-9, FAIL at 10), using stored counts with a bounded log fallback and an exception
-code when available. Evidence cycles use the critic's shared persisted edges: the count is
+code when available. Log-only counts require historical coverage spanning the night and each
+intervening day; newer, missing or truncated logs are an incomplete observation, never proof
+of a clean night. Evidence cycles use the critic's shared persisted edges: the count is
 memories whose ancestry reaches a cycle, not edges (note at 1, FAIL at 50). Its scan stops
 at 100,000 rows/nodes or 0.8 seconds and labels incomplete results. Queued selfie sets older
 than 30 hours are a note. Stale Realm roots include kind, member count and the exact

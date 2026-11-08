@@ -710,6 +710,32 @@ def test_offline_raid_deadline_and_terminal_states(rig, phase, overdue, status):
         assert "42" in result.text and "deadline" in result.text and "inspect" in result.text
 
 
+@pytest.mark.parametrize("phase", ["acquiring", "awaiting_ack", "accepted", "uncertain"])
+@pytest.mark.parametrize("overdue,status", [(-30, OK), (1800, OK), (1801, FAIL)])
+def test_owned_command_before_local_raid_keeps_its_deadline(rig, phase, overdue, status):
+    command = "0123456789abcdef0123456789abcdef"
+    receipt = {"id": command, "raid_id": None, "phase": phase, "deadline": NOW - overdue}
+    rig.db("INSERT INTO meta(key,value) VALUES ('guild:offline:owned',?)", (json.dumps(receipt),))
+    result = readonly_check(rig, health._offline_raid, NOW)
+    assert result.status == status and f"command {command}" in result.text
+    assert "deadline" in result.text
+    if status == FAIL:
+        assert "inspect" in result.text
+
+
+@pytest.mark.parametrize("changes", [
+    {"id": None}, {"id": "PRIVATE_SENTINEL"}, {"phase": "running"},
+    {"raid_id": False}, {"deadline": None}, {"deadline": True},
+    {"deadline": float("nan")}, {"deadline": float("inf")},
+])
+def test_pre_session_receipt_still_requires_command_identity_and_finite_deadline(rig, changes):
+    receipt = {"id": "0123456789abcdef0123456789abcdef", "raid_id": None,
+               "phase": "awaiting_ack", "deadline": NOW + 60, **changes}
+    rig.db("INSERT INTO meta(key,value) VALUES ('guild:offline:owned',?)", (json.dumps(receipt),))
+    result = readonly_check(rig, health._offline_raid, NOW)
+    assert result.status == FAIL and "invalid owned receipt" in result.text
+
+
 @pytest.mark.parametrize("receipt", ['PRIVATE_SENTINEL', '[]', '{"phase":"running"}',
                                       '{"phase":"accepted","raid_id":42,"deadline":NaN}'])
 def test_invalid_offline_raid_receipt_is_reported_without_contents(rig, receipt):
@@ -754,11 +780,78 @@ def test_latest_finished_night_and_log_fallback_include_rotation(rig):
                   record(NOW - 99, "nightly_unit_failed", night="2026-11-05", stage="gossip"),
                   record(NOW - 400, "nightly_unit_failed", night="other", stage="gossip")])
     rotated = rig.data / "logs" / ("mind.log." + time.strftime("%Y-%m-%d", time.localtime(NOW - 1000)))
-    rotated.write_text(record(NOW - 500, "nightly_unit_failed", night="2026-11-05",
+    rotated.write_text(record(NOW - 1001, "mind_started") + "\n" +
+                       record(NOW - 500, "nightly_unit_failed", night="2026-11-05",
                               stage="critic", error="ProvenanceError") + "\n", encoding="utf-8")
     result = readonly_check(rig, health._night_failures, rig.data, lambda p: open(p, "rb"))
     assert result.status == NOTE and "2 failed units (logs)" in result.text
     assert "critic=1, gossip=1" in result.text and "ProvenanceError (2 logged)" in result.text
+
+
+@pytest.mark.parametrize("age_days", [0, 30])
+@pytest.mark.parametrize("records", [[], [record(NOW - 1, "mind_started")]])
+def test_empty_or_newer_logs_cannot_clear_a_finished_night(rig, age_days, records):
+    finished_night(rig, None, started=NOW - 1000 - age_days * 86400,
+                   finished=NOW - 100 - age_days * 86400)
+    rig.mind_log(records)
+    result = readonly_check(rig, health._night_failures, rig.data, lambda p: open(p, "rb"))
+    assert result.status == NOTE and "historical log coverage incomplete" in result.text
+    assert "0 observed failed units (logs)" in result.text
+
+
+@pytest.mark.parametrize("bounds", [(True, False), (False, True), (True, True)])
+def test_log_only_zero_requires_both_interval_bounds(rig, bounds):
+    finished_night(rig, None)
+    records = [record(NOW - 500, "nightly_stage", night="2026-11-05")]
+    if bounds[0]:
+        records.insert(0, record(NOW - 1001, "mind_started"))
+    if bounds[1]:
+        records.append(record(NOW - 99, "nightly_done", night="2026-11-05"))
+    rig.mind_log(records)
+    result = readonly_check(rig, health._night_failures, rig.data, lambda p: open(p, "rb"))
+    assert result.status == (OK if all(bounds) else NOTE)
+    assert ("historical log coverage incomplete" in result.text) == (not all(bounds))
+
+
+def test_missing_rotation_within_the_night_is_an_incomplete_observation(rig):
+    started, finished = NOW - 3 * 86400, NOW - 100
+    finished_night(rig, None, started=started, finished=finished)
+    rig.mind_log([record(finished + 1, "nightly_done", night="2026-11-05")])
+    old_name = "mind.log." + time.strftime("%Y-%m-%d", time.localtime(started))
+    rig.mind_log([record(started - 1, "mind_started")], name=old_name)
+    result = readonly_check(rig, health._night_failures, rig.data, lambda p: open(p, "rb"))
+    assert result.status == NOTE and "historical log coverage incomplete" in result.text
+
+
+def test_retained_daily_rotations_can_cover_a_resumed_night(rig):
+    started, finished = NOW - 3 * 86400, NOW - 100
+    finished_night(rig, None, started=started, finished=finished)
+    for at in (started - 1, started + 86400, started + 2 * 86400):
+        name = "mind.log." + time.strftime("%Y-%m-%d", time.localtime(at))
+        rig.mind_log([record(at, "mind_started")], name=name)
+    rig.mind_log([record(finished + 1, "nightly_done", night="2026-11-05")])
+    result = readonly_check(rig, health._night_failures, rig.data, lambda p: open(p, "rb"))
+    assert result.status == OK and "0 failed units (logs)" in result.text
+    assert "incomplete" not in result.text
+
+
+def test_unreadable_record_inside_covered_logs_is_not_a_clean_night(rig):
+    finished_night(rig, None)
+    rig.mind_log([record(NOW - 1001, "mind_started"), "PRIVATE_SENTINEL",
+                  record(NOW - 99, "nightly_done", night="2026-11-05")])
+    result = readonly_check(rig, health._night_failures, rig.data, lambda p: open(p, "rb"))
+    assert result.status == NOTE and "log scan incomplete" in result.text
+    assert "0 observed failed units (logs)" in result.text
+
+
+def test_incomplete_log_counts_can_still_fail_the_night(rig):
+    finished_night(rig, None)
+    rig.mind_log([record(NOW - 500, "nightly_unit_failed", night="2026-11-05",
+                         stage="critic", error="ValueError", message="PRIVATE_SENTINEL")
+                  for _ in range(10)])
+    result = readonly_check(rig, health._night_failures, rig.data, lambda p: open(p, "rb"))
+    assert result.status == FAIL and "10 observed failed units (logs)" in result.text
+    assert "historical log coverage incomplete" in result.text
 
 
 def test_log_budget_is_an_incomplete_observation(rig, monkeypatch):
