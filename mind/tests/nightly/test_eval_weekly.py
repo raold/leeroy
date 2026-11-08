@@ -132,6 +132,20 @@ def test_probe_failure_does_not_write_a_gate_receipt_but_quiz_and_audits_continu
     assert not receipt(h)["complete"] and "Quillon" not in json.dumps(report)
 
 
+def test_empty_probe_sample_is_named_in_the_report_and_leaves_the_week_incomplete(h, monkeypatch):
+    ctx, _ = setup(h, monkeypatch)
+
+    async def empty(*_):
+        raise weekly.SecretProbeEmpty("exam_gm", 2)
+
+    monkeypatch.setattr(weekly, "run_secret_probes", empty)
+    report = sections(run(weekly.run_weekly(ctx, WEEK)))
+    assert report["secret_probe"] == {"status": "failed", "error_type": "SecretProbeEmpty", "gate_open": False,
+                                      "probe": "exam_gm", "sample": 2, "done_reason": None}
+    assert report["memory_quiz"]["status"] == "complete"
+    assert h.count("probe_run") == 0 and not receipt(h)["complete"]
+
+
 def test_incomplete_result_and_atomic_receipt_failure_cannot_open_gate(h, monkeypatch):
     ctx, _ = setup(h, monkeypatch)
 
