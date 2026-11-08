@@ -282,8 +282,19 @@ def test_the_lust_prompt_stays_when_her_looks_are_adult():
     assert build_prompt(hot, kind_style=LUST).negative == LUST_NEGATIVE
 
 
-def test_every_build_is_said_as_a_figure_at_priority_one():
+def test_every_chosen_build_is_said_as_a_figure_at_priority_zero():
     curvy = woman()
     vol = replace(curvy, appearance=replace(curvy.appearance, build="voluptuous"))
-    assert ("voluptuous full-figured body, large full bust, wide hips, soft curves", 1) in build_prompt(vol).phrases
-    assert (BUILD_WORDS[curvy.appearance.build], 1) in build_prompt(curvy).phrases
+    assert ("voluptuous full-figured body, large full bust, wide hips, soft curves", 0) in build_prompt(vol).phrases
+    assert (BUILD_WORDS[curvy.appearance.build], 1)  # woman() is average: optional in build_prompt(curvy).phrases
+
+
+def test_an_average_build_stays_optional_and_a_chosen_one_is_required():
+    """A build other than average is priority 0, so the 75-token fit never cuts it (2026-11-08:
+    two lust-style members' voluptuous phrase was cut behind their long outfit phrase)."""
+    base = woman()
+    avg = replace(base, appearance=replace(base.appearance, build="average"))
+    vol = replace(base, appearance=replace(base.appearance, build="voluptuous"))
+    assert (BUILD_WORDS["average"], 1) in build_prompt(avg).phrases
+    assert (BUILD_WORDS["voluptuous"], 0) in build_prompt(vol).phrases
+    assert (BUILD_WORDS["voluptuous"], 1) not in build_prompt(vol).phrases
