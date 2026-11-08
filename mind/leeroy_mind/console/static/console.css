@@ -5,6 +5,17 @@
 @font-face { font-family: "JetBrains Mono"; src: url("/static/fonts/jetbrains-mono.woff2") format("woff2");
   font-weight: 400 500; font-display: swap; }
 
+.insight-part { min-width: 0; padding-block: 10px; border-bottom: 1px solid var(--line); }
+.insight-card { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 var(--f-mono); }
+.insight-claims { padding-left: 20px; overflow-wrap: anywhere; }
+.insight-command, #insight-result { overflow-wrap: anywhere; }
+#insight-check { display: grid; gap: 10px; margin-top: 16px; min-width: 0; }
+#insight-line { width: 100%; min-width: 0; resize: vertical; padding: 10px;
+  font: inherit; color: var(--ink); background: var(--surface-2);
+  border: 1px solid var(--line); border-radius: var(--radius); }
+#insight-submit { justify-self: start; }
+.insight-badge { margin: 3px; background: var(--surface-2); color: var(--ink-2); }
+
 :root {
   --bg: #edf0f3; --surface: #ffffff; --surface-2: #f5f7f9; --ink: #14202b; --ink-2: #455463; --ink-3: #758291;
   --line: #d8dee5; --accent: #0d6470; --accent-ink: #ffffff; --ok: #2c7a4d; --warn: #b06a0c; --bad: #c2352a;

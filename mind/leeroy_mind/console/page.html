@@ -232,6 +232,7 @@
             <button type="button" class="btn" data-view="table" aria-pressed="false">Table</button></span></header>
         <p id="p-mood" class="lead">-</p>
         <p id="p-missing" class="why" hidden></p>
+        <p id="p-insight-badges-why" class="why" hidden></p>
         <div id="p-wall"></div>
         <div id="p-table" class="scroll"><table class="pick"><thead><tr><th>name</th><th>class and role</th><th class="num">rank</th>
           <th>mood</th><th>stance</th><th>toward you</th><th>closest ties</th><th class="num" id="p-memhead">memories</th>
@@ -330,6 +331,17 @@
       <article class="panel span">
         <header><h3>Persona ledger</h3><span class="muted">growth, drift flags, stance moves and undos, newest first</span></header>
         <div id="p-ledger" class="log"></div>
+      </article>
+      <article class="panel span" id="persona-insight">
+        <header><h3>Insight</h3><span id="insight-status" class="muted" role="status"></span></header>
+        <div id="insight-parts"></div>
+        <form id="insight-check">
+          <label for="insight-line">Check a line against this member's claims</label>
+          <textarea id="insight-line" maxlength="500" rows="2" required autocomplete="off"></textarea>
+          <button id="insight-submit" type="submit">Check line</button>
+          <p class="why">One embedding call, only if the mind already holds the model. Your line stays in this form; it is never logged, stored or sent as chat.</p>
+          <p id="insight-result" class="why" role="status"></p>
+        </form>
       </article>
     </div>
   </section>

@@ -970,7 +970,13 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   night's looks pass or photo-kind pass, a stance move or an undo), open drift
   flags and the night's trait sample, and per member the persona card summary
   (its looks with the photo kind), ties, memories by kind and ledger; a table
-  an older mind.db lacks shows as unavailable. Its writes are the profile
+  an older mind.db lacks shows as unavailable. Persona Insight (`console/insightview.py`,
+  `insightreports.py`, `static/js/insight.mjs`; [guide](mind/leeroy_mind/console/INSIGHT.md))
+  adds bounded read-only claims, guild-context awareness and private audit-rate projections.
+  Its `claim_check` read op works with `--no-control` under key/Host/Origin gates, uses
+  only an already-resident embedding model, and never logs or stores typed text.
+  Guard verdict history is not persisted, so the panel explicitly says unavailable.
+  Its writes are the profile
   photos (see the selfie worker), his Board replies (below) and the tuning (`leeroy_mind/tuning/`,
   console `tuneview.py`): the
   owner's dials, stored in mind.db's `tuning_*` tables as an overlay that never
