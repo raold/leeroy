@@ -3,7 +3,7 @@ from collections import defaultdict
 from dataclasses import asdict
 import math
 
-from .common import day
+from .common import PRIVATE_CHANNELS, day, is_private
 
 VERSION = 1
 DETECTORS = ('contradiction', 'repetition', 'nonsequitur', 'unawareness')
@@ -25,9 +25,12 @@ def build(lines, results, *, since, until, days, fake, judged, embedding_fingerp
     for line in lines:
         members[line.guid].append(line)
         dates[day(line.ts)].append(line)
+    by_id = {line.id: line for line in lines}
     all_flags = [flag for flags, _ in results.values() for flag in flags]
     report = dict(version=VERSION, fake=fake, judged=judged, since_days=days,
                   window=dict(since=since, until=until), embedding_fingerprint=embedding_fingerprint,
+                  private_channels=dict(included=True, kinds=sorted(PRIVATE_CHANNELS),
+                                        lines=sum(is_private(line.channel) for line in lines)),
                   overall=summary(lines, all_flags), members=len(members), detectors={},
                   per_member={str(guid): summary(own, all_flags) for guid, own in sorted(members.items())},
                   by_day={date: summary(own, all_flags) for date, own in sorted(dates.items())})
@@ -38,7 +41,9 @@ def build(lines, results, *, since, until, days, fake, judged, embedding_fingerp
         for flag in unique:
             by_rule[flag.rule].add(flag.line_id)
         report['detectors'][detector] = dict(
-            **summary(lines, unique), coverage=coverage, hits=[asdict(flag) for flag in unique],
+            **summary(lines, unique), coverage=coverage,
+            hits=[dict(asdict(flag), channel=by_id[flag.line_id].channel,
+                       private=is_private(by_id[flag.line_id].channel)) for flag in unique],
             rules={key: dict(flagged_lines=len(ids), per_100_lines=rate(len(ids), len(lines)))
                    for key, ids in sorted(by_rule.items())},
             per_member={str(guid): summary(own, unique) for guid, own in sorted(members.items())},
@@ -50,7 +55,16 @@ def build(lines, results, *, since, until, days, fake, judged, embedding_fingerp
     return report
 
 
+def _valid_baseline(baseline):
+    try:
+        return all(type(baseline['detectors'][name]['per_100_lines']) in (int, float) for name in DETECTORS)
+    except (KeyError, TypeError):
+        return False
+
+
 def compare(report, baseline):
+    if not isinstance(baseline, dict) or not _valid_baseline(baseline):
+        raise ValueError('baseline_malformed')
     for key in ('version', 'fake', 'judged', 'since_days', 'embedding_fingerprint', 'parameters'):
         if baseline.get(key) != report[key]:
             raise ValueError('baseline_incompatible')
@@ -68,6 +82,8 @@ def compare(report, baseline):
 
 def print_summary(report):
     print(f"talk_eval lines={report['overall']['lines']} members={report['members']} fake={int(report['fake'])}")
+    private = report['private_channels']
+    print(f"private_channels included=1 kinds={','.join(private['kinds'])} lines={private['lines']}")
     for detector in DETECTORS:
         stats = report['detectors'][detector]
         print(f"{detector} flagged_lines={stats['flagged_lines']} per_100_lines={stats['per_100_lines']:.6f}")

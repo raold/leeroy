@@ -5,11 +5,25 @@ from leeroy_mind.claims.check import check, judge
 from leeroy_mind.claims.extract import LINE_CHARS, MAX_LINES, Line as ClaimLine, extract
 from leeroy_mind.claims.merge import merge
 
-from .common import Flag
+from .common import Flag, require_scratch
+
+
+def check_line(conn, guid, text, embedding, *, now=None):
+    """Single outgoing line against a member's stored claims: `claims.check.check`.
+
+    No writes, no model call; safe on a live read connection.
+    """
+    return check(conn, guid, text, embedding, now=now)
 
 
 async def detect(ctx, lines, vectors, *, use_judge=False):
+    """SCRATCH ONLY. Deletes every claim, claim vector and claim cursor in `ctx.store`
+    before replaying history, so it raises unless the store was marked by
+    `common.mark_scratch` (the eval's copy helper). Never call it on the live store;
+    use `check_line` for a single draft.
+    """
     store = ctx.store
+    require_scratch(store)
     with store.transaction():
         store.conn.execute('DELETE FROM member_claim_vec')
         store.conn.execute('UPDATE member_claim SET superseded_by=NULL')

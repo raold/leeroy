@@ -16,7 +16,7 @@ from leeroy_mind.nightly.cli import (_child, _context, _data_arg, _default_night
                                      _root, _working_store)
 
 from . import contradiction, nonsequitur, repetition, unawareness
-from .common import read_lines
+from .common import mark_scratch, read_lines
 from .report import build, compare, print_summary
 
 EMBED_BATCH = 64
@@ -100,6 +100,7 @@ async def evaluate(root, cfg, clock, args, make_llm=None):
     since = until - args.since * 86400
     label = 'talk-eval-' + uuid.uuid4().hex[:12]
     with _working_store(root, clock, live=False, label=label) as (store, _path):
+        mark_scratch(store)
         async with _context(root, store, cfg, clock, _default_night(clock), make_llm=make_llm) as ctx:
             await ctx.reasoner.preflight()
             await ctx.arbiter.ensure_model(cfg.models.reflection)
@@ -112,7 +113,7 @@ async def evaluate(root, cfg, clock, args, make_llm=None):
                 vectors.update((line.id, vec) for line, vec in zip(batch, embeddings, strict=True))
             results = dict(
                 contradiction=await contradiction.detect(ctx, lines, vectors, use_judge=args.judge),
-                repetition=repetition.detect(store.conn, lines, vectors),
+                repetition=repetition.detect(store, lines, vectors),
                 nonsequitur=nonsequitur.detect(lines, context, vectors),
                 unawareness=unawareness.detect(store.conn, lines))
             fingerprint = hashlib.sha256(('fake-wordhash-512-v1' if args.fake else cfg.models.embedding).encode()).hexdigest()
@@ -124,6 +125,7 @@ async def evaluate(root, cfg, clock, args, make_llm=None):
                 repetition={key: getattr(repetition, key) for key in (
                     'NGRAM_SIZE', 'MIN_WORDS', 'NGRAM_OVERLAP', 'EMBEDDING_COSINE', 'NEIGHBOURS',
                     'GUILD_PHRASE_WORDS', 'GUILD_MEMBERS', 'STOCK_WORDS', 'STOCK_COUNT', 'STOCK_SHARE')},
+                stop_phrases=['_'.join(phrase) for phrase in repetition.STOP_PHRASES],
                 nonsequitur={key: getattr(nonsequitur, key) for key in (
                     'PARENT_COSINE', 'THREAD_COSINE', 'CONTEXT_SECONDS', 'THREAD_LINES', 'MIN_REPLY_WORDS')},
                 fillers=sorted(nonsequitur.FILLERS), position_max_age_seconds=unawareness.POSITION_MAX_AGE_SECONDS,
@@ -161,5 +163,8 @@ def run(args, clock, *, make_llm=None):
         print('talk_eval_interrupted', file=sys.stderr)
         return 130
     except Exception as exc:
-        print(f'talk_eval_failed code={type(exc).__name__}', file=sys.stderr)
+        code = type(exc).__name__
+        if isinstance(exc, ValueError) and re.fullmatch(r'baseline_[a-z_]+', str(exc)):
+            code += ':' + str(exc)
+        print(f'talk_eval_failed code={code}', file=sys.stderr)
         return 1

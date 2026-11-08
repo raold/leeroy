@@ -11,6 +11,28 @@ from leeroy_mind.text import strip_wow_markup
 
 DAY_ZONE = ZoneInfo(TIMEZONE)
 
+# Channel kinds whose lines are private to a few people. They are measured like any
+# other line (dropping them would hide real failures) but every hit says so.
+PRIVATE_CHANNELS = frozenset({'whisper', 'officer'})
+
+_SCRATCH = object()
+
+
+def mark_scratch(store):
+    """Record that `store` is a throwaway copy. Only the eval's copy helper calls this."""
+    store._talk_eval_scratch = _SCRATCH
+    return store
+
+
+def require_scratch(store):
+    """Raise unless `store` was marked by `mark_scratch`; guards every writing detector."""
+    if getattr(store, '_talk_eval_scratch', None) is not _SCRATCH:
+        raise RuntimeError('scratch_copy_required')
+
+
+def is_private(channel):
+    return channel in PRIVATE_CHANNELS
+
 
 @dataclass(frozen=True)
 class Line:
@@ -55,6 +77,7 @@ def similarity(a: bytes, b: bytes) -> float:
 
 
 def read_lines(conn, since: float, until: float, owner: int) -> tuple[list[Line], list[Line]]:
+    """Read only. Includes whispers and officer lines (see PRIVATE_CHANNELS)."""
     # Five minutes before the window is context only, never counted as an evaluated line.
     rows = conn.execute(
         "SELECT id,ts,from_guid,to_guid,thread_id,channel,origin,map,zone,text FROM chat_line "

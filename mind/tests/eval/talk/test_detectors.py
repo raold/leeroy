@@ -10,7 +10,7 @@ import pytest
 from claims.conftest import context  # noqa: F401 - synthetic fixture, guids 101-103 and owner 1
 from leeroy_mind.claims.fake import reply
 from leeroy_mind.eval.talk import contradiction, nonsequitur, repetition, unawareness
-from leeroy_mind.eval.talk.common import Flag, Line
+from leeroy_mind.eval.talk.common import Flag, Line, mark_scratch
 from leeroy_mind.eval.talk.report import build, compare
 from leeroy_mind.storage.rows import pack_vec
 from leeroy_mind.testing.fake_llm import fake_embed
@@ -20,6 +20,10 @@ NOW = datetime(2026, 10, 29, 23, tzinfo=timezone.utc).timestamp()
 
 def line(key, text, *, guid=101, ts=NOW, **over):
     return Line(key, ts, guid, 0, 1, 'guild', 'mind', 0, 0, text, **over)
+
+
+def scratch(store):
+    return mark_scratch(store)
 
 
 def vectors(lines):
@@ -40,6 +44,7 @@ def test_contradiction_replays_before_learning_and_does_not_call_optional_judge(
     items = [line(1, 'I love Saurfang'), line(2, 'I hate Saurfang', ts=NOW + 1),
              line(3, 'I hate broccoli', ts=NOW + 2), line(4, 'I love Saurfang', guid=102)]
     insert(store, items)
+    mark_scratch(store)
 
     async def run():
         async with context(reply) as (ctx, fake):
@@ -53,6 +58,7 @@ def test_contradiction_replays_before_learning_and_does_not_call_optional_judge(
 def test_contradiction_near_miss_and_clean_subjects(store, context):
     items = [line(1, 'I love tea'), line(2, 'I dislike coffee'), line(3, 'Do I hate tea?')]
     insert(store, items)
+    mark_scratch(store)
 
     async def run():
         async with context(reply) as (ctx, _fake):
@@ -66,7 +72,7 @@ def test_repetition_across_days_not_same_day_or_another_member(store):
              line(3, 'the clock above the doorway is broken'),
              line(4, 'the clock above the doorway is broken', ts=NOW + 2),
              line(5, 'the moon over the harbour looks beautiful', guid=102)]
-    flags, _ = repetition.detect(store.conn, items, vectors(items))
+    flags, _ = repetition.detect(scratch(store), items, vectors(items))
     assert [(flag.line_id, flag.related_id) for flag in flags if flag.rule == 'member_across_days'] == [(2, 1)]
 
 
@@ -75,7 +81,7 @@ def test_repetition_embedding_threshold_and_lexical_route_are_independent(store)
              line(2, 'a small vessel arrived at port'), line(3, 'a distant planet circles the sun')]
     vec = vectors(items)
     vec[2] = vec[1]  # Controlled semantic embedding, not a claim about word-hash accuracy.
-    flags, _ = repetition.detect(store.conn, items, vec)
+    flags, _ = repetition.detect(scratch(store), items, vec)
     assert [(flag.line_id, flag.rule) for flag in flags] == [(2, 'member_across_days')]
 
 
@@ -87,11 +93,11 @@ def test_repetition_guild_evening_needs_three_members_and_stock_rate(store):
              line(5, 'by the way the bread is fresh', guid=104),
              line(6, 'by the way the door is open', guid=104),
              line(7, 'the rain stopped at dawn', guid=105)]
-    flags, _ = repetition.detect(store.conn, items, vectors(items))
+    flags, _ = repetition.detect(scratch(store), items, vectors(items))
     assert {flag.line_id for flag in flags if flag.rule == 'guild_evening_phrase'} == {1, 2, 3}
     assert {flag.line_id for flag in flags if flag.rule == 'stock_opening'} == {4, 5, 6}
     assert all(flag.line_id != 7 for flag in flags)
-    flags, _ = repetition.detect(store.conn, items[:2], vectors(items[:2]))
+    flags, _ = repetition.detect(scratch(store), items[:2], vectors(items[:2]))
     assert flags == []
 
 
@@ -181,4 +187,103 @@ def test_report_math_deduplicates_rules_and_compares_compatible_baselines():
     assert compare(report, baseline)['repetition']['delta_per_100_lines'] == 8.333333
     baseline['fake'] = False
     with pytest.raises(ValueError):
+        compare(report, baseline)
+
+
+def test_replay_and_temp_index_refuse_an_unmarked_store(store, context):
+    items = [line(1, 'I love tea'), line(2, 'the moon over the harbour looks beautiful')]
+    insert(store, items)
+    store.conn.execute("INSERT INTO member_claim_cursor VALUES (101, 1)")
+    store.conn.commit()
+
+    async def run():
+        async with context(reply) as (ctx, _fake):
+            with pytest.raises(RuntimeError, match='scratch_copy_required'):
+                await contradiction.detect(ctx, items, vectors(items))
+    asyncio.run(run())
+    assert store.conn.execute('SELECT COUNT(*) FROM member_claim_cursor').fetchone()[0] == 1
+    with pytest.raises(RuntimeError, match='scratch_copy_required'):
+        repetition.detect(store, items, vectors(items))
+
+
+def test_guild_phrase_needs_five_words_and_ignores_stop_phrases():
+    three = [line(i, f'{head} what do you think about the {tail}', guid=100 + i)
+             for i, (head, tail) in enumerate((('so', 'plan'), ('hey', 'boss'), ('well', 'route')), 1)]
+    assert all(not repetition.phrase_keys(repetition.words(item.text)) for item in three)
+    assert repetition.phrase_keys(repetition.words('keep your boots off the table'))
+    four_only = repetition.words('keep your boots off')
+    assert repetition.phrase_keys(four_only) == set()
+    assert repetition.phrase_keys(repetition.words('keep your boots off the table'))
+
+
+def test_guild_phrase_stop_phrase_lines_do_not_fire(store):
+    items = [line(1, 'what do you think about the plan', guid=101),
+             line(2, 'what do you think about the plan', guid=102),
+             line(3, 'what do you think about the plan', guid=103)]
+    flags, _ = repetition.detect(scratch(store), items, vectors(items))
+    assert [flag for flag in flags if flag.rule == 'guild_evening_phrase'] == []
+
+
+def test_vec_index_dimension_follows_the_embedder(store):
+    items = [line(1, 'the moon over the harbour looks beautiful', ts=NOW - 86400),
+             line(2, 'the moon over the harbour looks beautiful')]
+    vecs = {item.id: pack_vec([0.5] * 8) for item in items}
+    flags, _ = repetition.detect(scratch(store), items, vecs)
+    assert [flag.line_id for flag in flags] == [2]
+
+
+def read_only_copy(store, tmp_path):
+    path = tmp_path / 'copy.db'
+    with closing(sqlite3.connect(path)) as target:
+        store.conn.backup(target)
+    return sqlite3.connect(f'file:{path.as_posix()}?mode=ro', uri=True)
+
+
+def test_single_draft_helpers_do_not_write_on_a_read_only_connection(store, tmp_path, facts):
+    ro = read_only_copy(store, tmp_path)
+    try:
+        before = ro.total_changes
+        old = line(1, 'the moon over the harbour looks beautiful', ts=NOW - 86400)
+        vec = vectors([old])
+        assert repetition.best_repeat(old.text, vec[1], [(9, old.text, vec[1])]) == (9, 1.0)
+        assert repetition.best_repeat('totally different words appear in this line', None, [(9, old.text, None)]) is None
+        facts.execute('INSERT INTO realm_kill VALUES (631,3,?,7,10,9)', ((NOW - 1) * 1000,))
+        facts.execute("INSERT INTO realm_fact_origin VALUES (9,'active','verified_event','verified_raid_kill_v1')")
+        loaded = unawareness.load_facts(facts)
+        assert [f.rule for f in unawareness.check_line(loaded, line(2, 'We have never killed Deathbringer Saurfang'))] \
+            == ['never_killed_after_verified_kill']
+        assert unawareness.check_line(loaded, line(3, 'We have never killed Onyxia')) == []
+        parent, answer = replies('purple turnips study distant galaxies')
+        rule, _ = nonsequitur.score_reply(answer.text, vectors([answer])[2], parent.text, vectors([parent])[1],
+                                          [vectors([parent])[1]])
+        assert rule == 'low_parent_and_thread_relevance'
+        assert nonsequitur.score_reply('lol', None, 'Ready?', None, [])[0] == 'filler_after_question'
+        ro.execute('SELECT COUNT(*) FROM chat_line').fetchone()
+        assert ro.total_changes == before
+    finally:
+        ro.close()
+
+
+def test_facts_load_once_and_check_line_never_touches_sql(facts):
+    loaded = unawareness.load_facts(facts)
+    facts.execute('DROP TABLE game_event')
+    assert unawareness.check_line(loaded, line(1, "I'm in Dalaran.")) == []
+
+
+def test_hits_carry_channel_and_private_flag_and_report_names_private_channels():
+    items = [replace(line(1, 'first'), channel='whisper'), line(2, 'second')]
+    results = {name: ([], {}) for name in ('contradiction', 'repetition', 'nonsequitur', 'unawareness')}
+    results['repetition'] = ([Flag(1, 101, 'stock_opening'), Flag(2, 101, 'stock_closing')], {})
+    report = build(items, results, since=NOW - 1, until=NOW, days=1, fake=True, judged=False, embedding_fingerprint='x')
+    hits = {hit['line_id']: hit for hit in report['detectors']['repetition']['hits']}
+    assert (hits[1]['channel'], hits[1]['private']) == ('whisper', True)
+    assert (hits[2]['channel'], hits[2]['private']) == ('guild', False)
+    assert report['private_channels'] == dict(included=True, kinds=['officer', 'whisper'], lines=1)
+
+
+@pytest.mark.parametrize('baseline', [{}, {'detectors': {}}, {'detectors': {'contradiction': {}}}, [], None])
+def test_malformed_baseline_is_a_clear_code(baseline):
+    results = {name: ([], {}) for name in ('contradiction', 'repetition', 'nonsequitur', 'unawareness')}
+    report = build([], results, since=0, until=1, days=1, fake=True, judged=False, embedding_fingerprint='x')
+    with pytest.raises(ValueError, match='baseline_malformed'):
         compare(report, baseline)

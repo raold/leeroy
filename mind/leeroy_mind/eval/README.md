@@ -80,8 +80,10 @@ Each detector lives in its own `eval/talk/` module:
   A lexical index catches matching trigrams; the scratch sqlite-vec index supplies
   the nearest **16** earlier-day vectors in that member's partition. Four-word minimum
   avoids treating ordinary short acknowledgements as repeated arguments. Across the
-  guild, a shared four-word phrase from at least **three distinct members** in one
-  evening is flagged. An evening is 18:00 through 05:59 in `America/New_York`, including
+  guild, a shared **five-word** phrase from at least **three distinct members** in one
+  evening is flagged, unless it touches a word of a named stop phrase
+  (`repetition.STOP_PHRASES`: "what do you think", "let me know", "by the way", ...);
+  on a live copy 4-grams made 10 of 12 flags out of such ordinary phrases. An evening is 18:00 through 05:59 in `America/New_York`, including
   midnight/DST crossings. Stock openings/closings are the same first/last **three
   words** on at least **three** of a member's lines and at least **30%** of their lines.
   Tactical calls, shared quotations and personal speech habits can be legitimate.
@@ -151,3 +153,38 @@ report denominators, baseline changes, source immutability, path confinement, ex
 opt-in, and content-free logs. Run `python -m pytest -q tests/eval/talk` for these tests,
 and `python -m pytest -q tests` for the full suite. A fake run on a private copied
 database is a pipeline baseline, never evidence of real-model accuracy.
+
+## Privacy and private channels
+
+`read_lines` measures every stored mind line, **including whispers and officer
+lines**; they are not excluded because dropping them would hide real failures. Every
+hit in the JSON carries its `channel` and a `private` flag (whisper, officer), and
+the report header has `private_channels` (included, kinds, evaluated line count). A
+`--show-text` excerpt of a private-channel hit is as private as the line: reports stay
+in `<data>/scratch/`, never in git, chat or artifacts.
+
+## Reuse on single lines (pre-send guards)
+
+Detectors are thin batch loops over pure single-candidate helpers. Safe on a live
+read connection (no SQL writes, no table creation): `repetition.best_repeat`,
+`pair_score`, `phrase_keys`, `shared_by_others`, `stock_keys`;
+`nonsequitur.score_reply`, `relevance_scores`; `unawareness.load_facts` (SELECTs only;
+load once and reuse the `Facts` object) with `unawareness.check_line`;
+`contradiction.check_line`, a thin call to `claims.check.check`. **Scratch only:**
+`contradiction.detect` (deletes all claims, vectors and cursors) and
+`repetition.detect` (temp tables and a temp vec0 index; its dimension comes from the
+embedder's own vectors). Both raise `scratch_copy_required` unless the store was
+marked by `common.mark_scratch`, which only the `eval talk` copy helper calls.
+
+## Known limits
+
+- **Unawareness has near-zero recall on real data.** Only exact full-sentence forms
+  match; a live copy produced zero candidates, which says nothing about awareness.
+- **Difficulty is not modelled.** A kill is matched by boss name, so "we never killed
+  heroic X" after a normal-mode kill is reported as a contradiction; difficulty is
+  not part of the evidence.
+- **Non sequitur thresholds (0.20 / 0.25) were set on FakeLLM word-hash vectors**, which
+  share only vocabulary. They are not valid for a real embedding model and must be
+  recalibrated before any gate uses them.
+- A `--baseline` that is not a talk report (missing detector rates) is refused with
+  `baseline_malformed`.

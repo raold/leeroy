@@ -1,4 +1,10 @@
-"""Relevance of conservative directed-thread reply candidates, never invented links."""
+"""Relevance of conservative directed-thread reply candidates, never invented links.
+
+Every function here is pure (no SQL, no writes) and safe on a live read connection;
+`detect` is a batch loop over `score_reply`. Thresholds were chosen against FakeLLM's
+word-hash vectors, which only share vocabulary: with a real embedding model they must
+be recalibrated before they gate anything.
+"""
 from collections import defaultdict, deque
 
 from .common import Flag, similarity, words
@@ -9,6 +15,31 @@ CONTEXT_SECONDS = 300
 THREAD_LINES = 5
 MIN_REPLY_WORDS = 4
 FILLERS = frozenset({'lol', 'lulz', 'lmao', 'rofl', 'haha', 'hehe'})
+
+
+def is_filler(tokens):
+    return bool(tokens) and len(tokens) <= 3 and set(tokens) <= FILLERS
+
+
+def relevance_scores(vector, parent_vector, thread_vectors):
+    """(cosine to the parent, best cosine to any thread line) for one draft's vector."""
+    sims = [similarity(vector, other) for other in thread_vectors]
+    return similarity(vector, parent_vector), max(sims) if sims else None
+
+
+def score_reply(text, vector, parent_text, parent_vector, thread_vectors):
+    """Score one draft against its parent and thread; (rule or None, parent score).
+
+    `thread_vectors` are vectors of the recent thread lines (parent included).
+    """
+    tokens = words(text)
+    if parent_text.rstrip().endswith('?') and is_filler(tokens):
+        return 'filler_after_question', None
+    if len(tokens) >= MIN_REPLY_WORDS and vector is not None and parent_vector is not None:
+        parent_score, thread_best = relevance_scores(vector, parent_vector, thread_vectors)
+        if parent_score < PARENT_COSINE and thread_best is not None and thread_best < THREAD_COSINE:
+            return 'low_parent_and_thread_relevance', parent_score
+    return None, None
 
 
 def detect(lines, context, vectors):
@@ -33,15 +64,16 @@ def detect(lines, context, vectors):
                 tokens = words(line.text)
                 question = parent.text.rstrip().endswith('?')
                 questions += int(question)
-                if question and tokens and len(tokens) <= 3 and set(tokens) <= FILLERS:
-                    flags.append(Flag(line.id, line.guid, 'filler_after_question', parent.id))
-                elif len(tokens) >= MIN_REPLY_WORDS and line.id in vectors and parent.id in vectors:
-                    sims = [similarity(vectors[line.id], vectors[p.id]) for p in history if p.id in vectors]
-                    parent_score = similarity(vectors[line.id], vectors[parent.id])
-                    checked += 1
-                    if parent_score < PARENT_COSINE and sims and max(sims) < THREAD_COSINE:
-                        flags.append(Flag(line.id, line.guid, 'low_parent_and_thread_relevance', parent.id,
-                                          round(parent_score, 6)))
+                embedded = (len(tokens) >= MIN_REPLY_WORDS and line.id in vectors and parent.id in vectors
+                            and not (question and is_filler(tokens)))
+                checked += int(embedded)
+                rule, parent_score = score_reply(
+                    line.text, vectors.get(line.id), parent.text, vectors.get(parent.id),
+                    [vectors[p.id] for p in history if p.id in vectors])
+                if rule == 'filler_after_question':
+                    flags.append(Flag(line.id, line.guid, rule, parent.id))
+                elif rule:
+                    flags.append(Flag(line.id, line.guid, rule, parent.id, round(parent_score, 6)))
         history.append(line)
     return flags, dict(stored_parent_links=0, directed_parent_candidates=candidates,
                        lines_with_thread_context=thread_lines, relevance_checked=checked,
