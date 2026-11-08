@@ -82,6 +82,7 @@ def _read_reports(data_dir, *, now):
                 info = entry.stat(follow_symlinks=False)
                 if (not stat.S_ISREG(info.st_mode) or info.st_size > MAX_BYTES
                         or getattr(info, 'st_file_attributes', 0) & 0x400):
+                    skipped += 1
                     continue
                 candidates.append((info.st_mtime, entry.path))
         consumed, deadline = 0, time.monotonic() + 1.0
@@ -98,7 +99,7 @@ def _read_reports(data_dir, *, now):
                 if report['until'] > now + 300:
                     raise ValueError('future')
                 out.append(report)
-            except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError):
                 skipped += 1
     except FileNotFoundError:
         return [], 'No talk-quality report yet.'

@@ -29,6 +29,16 @@ def test_insight_phone_read_only(store, tmp_path, theme):
                 assert 'saurfang' in await page.locator('#insight-parts').inner_text()
                 await page.get_by_label('Awareness token budget').select_option('small')
                 assert 'Dropped at this budget:' in await page.locator('#insight-dropped').inner_text()
+                await page.get_by_text('Superseded history', exact=True).click()
+                budget = page.get_by_label('Awareness token budget')
+                await budget.focus()
+                await budget.evaluate("e => e.dataset.beforePoll = 'yes'")
+                async with page.expect_response('**/api/persona/insight?guid=101'):
+                    await page.evaluate("async () => { const view = await import('/static/js/insight.mjs'); view.pollInsight(101); }")
+                await playwright.expect(page.locator('[data-before-poll]')).to_have_count(0)
+                await playwright.expect(budget).to_be_focused()
+                assert await budget.input_value() == 'small'
+                assert await page.locator('details[data-insight-fold="claims"]').evaluate('e => e.open')
                 await page.locator('#insight-line').fill('PRIVATE_BROWSER_LINE')
                 await page.locator('#insight-submit').click()
                 await playwright.expect(page.locator('#insight-result')).to_contain_text('not available')

@@ -167,6 +167,13 @@ def test_invalid_report_does_not_hide_valid_older_run(data):
     assert len(runs) == 1 and why
 
 
+def test_deeply_nested_report_is_an_independent_failure(data):
+    (data / 'scratch').mkdir()
+    (data / 'scratch' / 'nested.json').write_text('[' * 2000 + '0' + ']' * 2000)
+    runs, why = reports.reports(data, now=NOW)
+    assert not runs and why
+
+
 def test_query_error_is_local_to_one_part(store, data, monkeypatch):
     def interrupted(*_):
         raise sqlite3.OperationalError('interrupted')

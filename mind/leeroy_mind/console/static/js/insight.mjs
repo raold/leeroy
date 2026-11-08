@@ -34,17 +34,22 @@ function showCard() {
 }
 function render(value) {
   loaded = value;
-  var box = $("insight-parts"); clear(box);
+  var box = $("insight-parts"), folds = {};
+  box.querySelectorAll('details[data-insight-fold]').forEach(d => { folds[d.dataset.insightFold] = d.open; });
+  var focusBudget = document.activeElement?.id === 'insight-budget';
+  clear(box);
   var claims = obj(value.claims), c = section("Claims", claims);
   if (claims.state === "ok") {
     claimList(c, claims.live);
     var history = el("details"), summary = el("summary", "", "Superseded history");
+    history.dataset.insightFold = 'claims'; history.open = !!folds.claims;
     history.appendChild(summary); claimList(history, claims.history); c.appendChild(history);
   }
   box.appendChild(c);
   var a = obj(value.awareness), awareness = section("Awareness card", a);
   var label = el("label", "", "Token budget "), select = el("select");
   select.setAttribute("aria-label", "Awareness token budget");
+  select.id = 'insight-budget';
   ["small", "medium", "large"].forEach(function (v) {
     var option = el("option", "", v + " (" + ({small:200, medium:600, large:1200})[v] + ")");
     option.value = v; select.appendChild(option);
@@ -62,6 +67,7 @@ function render(value) {
       + " by flagged-line count (highest first). Flags are possible issues, not accuracy scores."));
     DETECTORS.forEach(n => quality.appendChild(el("p", "", n + ": " + rate(obj(q.rates)[n]))));
     var trend = el("details"); trend.appendChild(el("summary", "", "Recent compatible runs"));
+    trend.dataset.insightFold = 'trend'; trend.open = !!folds.trend;
     arr(q.trend).forEach(function (r) {
       trend.appendChild(el("p", "", when(r.until) + " · " + DETECTORS.map(n => n + ": " + rate(obj(r.rates)[n])).join("; ")));
     });
@@ -71,6 +77,7 @@ function render(value) {
     quality.appendChild(el("code", "insight-command", str(q.command)));
   }
   box.appendChild(quality); box.appendChild(section("Guard verdicts", obj(value.guards))); showCard();
+  if (focusBudget) { select.focus({preventScroll:true}); }
 }
 export function selectInsight(guid) {
   if (guid !== selected) {
