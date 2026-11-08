@@ -8,6 +8,7 @@ import pytest
 
 from conftest import clock  # noqa: F401  (a fixture, re-exported)
 from conftest import make_persona, seed_test_cast
+from dbtemplate import open_migrated
 from leeroy_mind.app import GUILD_ID, MindApp
 from leeroy_mind.config import load_config
 from leeroy_mind.personas.io import save_persona
@@ -79,6 +80,7 @@ class VApp:
 def vapp(tmp_path, clock, voice_data):
     (tmp_path / "mind.toml").write_text("[voice]\nenabled = true\nport = 7999\n",
                                         encoding="utf-8")
+    open_migrated(tmp_path / "mind.db").close()
     app = MindApp(load_config(tmp_path / "mind.toml"), tmp_path, llm=FakeLLM(), clock=clock)
     seed_test_cast(app.store)
     app.store.upsert_cast([HUMAN_ROW], 1000.0)
@@ -94,7 +96,10 @@ def vapp(tmp_path, clock, voice_data):
     fake = FakeVoiceClient()
     fake.greeted = True
     app.voice.client = fake
-    return VApp(app, fake, clock)
+    try:
+        yield VApp(app, fake, clock)
+    finally:
+        app.store.close()
 
 
 def status(*, ok: bool = True, ui: bool = True):

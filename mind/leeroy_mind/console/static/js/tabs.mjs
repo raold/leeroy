@@ -20,6 +20,9 @@ export function showTab(name) {
     tabs[i].setAttribute("aria-selected", String(on));
     tabs[i].tabIndex = on ? 0 : -1;
     $("tab-" + tabs[i].dataset.tab).hidden = !on;
+    if (on && tabs[i].parentElement.scrollWidth > tabs[i].parentElement.clientWidth) {
+      tabs[i].scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
   }
   if (location.hash !== "#" + name) { history.replaceState(null, "", "#" + name); }
   var now = TABS[name];

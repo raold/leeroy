@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from conftest import TEST_CAST, make_persona, run as run_loop
+from conftest import fast_clock as clock  # noqa: F401 (in-process fixture)
 from engine_rig import HUMAN as RIG_HUMAN, engine_clock, make_rig
 from leeroy_mind.bridge import AckTimeout
 from leeroy_mind.ingress import RowReceipt, _wire_origin, chat_row_binding, game_row_binding
@@ -1284,7 +1285,7 @@ def test_service_on_a_raid_day_the_calendar_posts_and_the_guard_still_asks(tmp_p
     """With the Realm on and a standing raid lead, the calendar desk posts whatever is due on the
     clock's date (Tuesday: three raid nights and Thursday's meeting); the fake native acks each
     post and sends its job, so nothing waits on the Realm's send child."""
-    tuesday = FakeClock(datetime(2026, 11, 3, 18, 0, tzinfo=timezone.utc))
+    tuesday = FakeClock(datetime(2026, 11, 3, 18, 0, tzinfo=timezone.utc), yields=64)
 
     async def scenario():
         async with _guild(tmp_path, tuesday, monkeypatch) as native:

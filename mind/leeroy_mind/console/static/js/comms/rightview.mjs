@@ -1,6 +1,7 @@
 import { $, api, clear, el, emit, num, obj, on, own, post, refused, str } from "../core.mjs";
 import { S, hereRoom, isMuted, roomName } from "../state.mjs";
-import { face, faceButton, lightSpeakers } from "../faces.mjs";
+import { faceButton, lightSpeakers } from "../faces.mjs";
+import { photoButton } from "../gallery.mjs";
 import { openMember } from "../personas.mjs";
 import { cardText } from "../words.mjs";
 import { FEED, openView } from "./feedview.mjs";
@@ -58,7 +59,8 @@ function drawFace(name) {
   if (CARD.face === faceKey) { return; }
   CARD.face = faceKey;
   clear($("mcard-face"));
-  $("mcard-face").appendChild(face(CARD.guid, name, "card"));
+  // A click opens the member's photo gallery: full size, every photo newest first, Make cover.
+  $("mcard-face").appendChild(photoButton(CARD.guid, name, "card"));
 }
 // t: cardText's words; known: mind.db knows them (Profile has something to open)
 function drawCard(t, known) {

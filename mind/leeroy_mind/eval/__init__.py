@@ -9,7 +9,7 @@ from pathlib import Path
 from leeroy_mind.eval.audit import grounding_audit, night_health
 from leeroy_mind.eval import interview as interview_eval, persona as persona_eval, social as social_eval
 from leeroy_mind.eval.probes import (PROBE_SAMPLES, SECRET_PROBES, ProbeResult, probe_messages,
-                                    record_probe, run_secret_probes, validate_probe)
+                                    record_probe, run_secret_probes, validate_probe, SecretProbeEmpty)
 from leeroy_mind.eval.quiz import ask_all, build_quiz, judge_all, safe_text, score
 from leeroy_mind.eval.report import load_prev, validate_week, write_report
 from leeroy_mind.llm.presets import LIVE
@@ -165,7 +165,9 @@ async def run_weekly(ctx, week, *, use_llm=True):
                     "rate": result.rate, "gate_open": _gate(ctx), "reused": reused,
                     "leaked_probes": sorted({d["id"] for d in result.details if d["leaked"]})}
             except Exception as error:
-                sections["secret_probe"] = _failed(error, gate_open=_gate(ctx))
+                where = ({"probe": error.probe_id, "sample": error.sample, "done_reason": error.done_reason}
+                         if isinstance(error, SecretProbeEmpty) else {})
+                sections["secret_probe"] = _failed(error, gate_open=_gate(ctx), **where)
 
             try:
                 items = build_quiz(ctx.store, bounds, ctx.tz, random.Random(f"quiz:{week}"))

@@ -257,6 +257,20 @@ mind and mind.log, the control endpoint's `status` (it reports `bridge_connected
 `schema_version`), the console and voice (notes when down), Ollama's `/api/ps`, and stuck
 activity (no `tg_pull` in 48 h with telemetry on and the overhead gate passed, a note while the
 gate is in phase `ab`; a realm hold or `unknown` root older than 1 h; cast without personas). It
+also fails an owned offline raid more than 30 minutes past its deadline or any guild raid
+open longer than 6 hours. Before native progress creates a local raid, a valid owned receipt
+is identified by its command ID and keeps the same deadline check. The latest finished night's
+failed units are grouped by stage
+(note for 1-9, FAIL at 10), using stored counts with a bounded log fallback and an exception
+code when available. Log-only counts require historical coverage spanning the night and each
+intervening day; newer, missing or truncated logs are an incomplete observation, never proof
+of a clean night. Evidence cycles use the critic's shared persisted edges: the count is
+memories whose ancestry reaches a cycle, not edges (note at 1, FAIL at 50). Its scan stops
+at 100,000 rows/nodes or 0.8 seconds and labels incomplete results. Queued selfie sets older
+than 30 hours are a note. Stale Realm roots include kind, member count and the exact
+`realm release <id> --reason reviewed_stale_hold` command to inspect with the mind stopped;
+the release command still enforces its own eligibility checks. Missing newer tables are
+reported as not set up. These checks only report state and never repair it. Health
 never dials the bridge (7878), loads no model, starts nothing and never probes `mind.lock` or
 `voice.lock` (running comes from the process list, `control.json`, `voice.pid` and the TCP
 table). `--toast` shows one toast per new failure and writes only
@@ -599,9 +613,11 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 .venv/Scripts/python -m leeroy_mind.library --data-dir "$D" stats   # the game library: build, search
 .venv/Scripts/python -m leeroy_mind nightly --data-dir "$D" status  # also run, ledger, undo, enrich, veto
 .venv/Scripts/python -m leeroy_mind eval --data-dir "$D"    # weekly evaluation, on a copied database by default
+.venv/Scripts/python -m leeroy_mind eval talk --data-dir "$D" --since 14 --fake --json talk.json # stored talk candidates, scratch copy only
 .venv/Scripts/python -m leeroy_mind selfies --data-dir "$D" status  # profile photos; also try (mind stopped)
 .venv/Scripts/python -m leeroy_mind console --data-dir "$D" # the guild console; open the URL it prints
 .venv/Scripts/python -m pytest -q                           # the unit tests
+.venv/Scripts/python -m pytest -q -n auto tests             # fast run; up to 8 isolated workers
 .venv/Scripts/python -m pytest -m ollama                    # optional: also -m live, -m mysql
 ```
 
@@ -645,6 +661,27 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 - Guild life (raid nights, DKP and loot, offline raids, rank, spec and gear
   upkeep) runs with built-in defaults; `[guild]` and `[dkp]` tables in
   `mind.toml` override them.
+- Offline raids publish a running `job` heartbeat every 60 s with kills, wipes,
+  `members_in_instance` (the exact map and instance), `last_progress_ts` (Unix ms;
+  start, boss engage, kill or wipe), and `boss_engaged` when native can read the
+  encounter state. The mind requests `offline_raid_stop {id, raid_id}` after
+  `[guild] offline_stall_minutes` (30; 10-360) without progress. A heartbeat
+  over 120 s old, an unknown encounter state or an engaged boss prevents a stop;
+  boss evidence between heartbeats (also after a mind restart) defers it, and
+  native rechecks engagement at dispatch. Members leaving the instance is native's
+  own too_few stop; the mind has no scatter rule.
+  Stops target the original start command's id (`raid_id`), use normal teardown,
+  and finish only on its terminal `job` event (`stopped`, recorded by the mind as
+  `stalled`). Cleanup failures retain their native reason. A stop whose send fails
+  (bridge down, transport off) is uncertain and retried on a later tick with a fresh
+  command id; stops register no job mailbox entry. An accepted stop releases the GPU
+  after the cancel grace but never blocks the day, and a lost terminal is declared
+  15 minutes after the accepted stop. Retries
+  use fresh command ids for the same raid; stopping an already stopping run is a
+  no-op, while unknown/finished runs are refused. Old native without heartbeats
+  or the command keeps the existing timeout behaviour and logs unsupported once
+  per run. A mind restart requires fresh progress evidence; lost terminals still
+  use the deadline (or an accepted stop) plus 15-minute `terminal_lost` fallback. Native rebuild needed.
 - Members start conversations with him on two clocks (2026-11-07), per hour of
   his play at chattiness 4 and scaled with it (0 stops every unprompted whisper):
   `[talk] whispers_per_hour` (4, at most 8 an hour and 2 minutes apart;
@@ -694,6 +731,12 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   as an `X-Console-Key` header, so a reload needs the URL again. Every request
   needs the console's Host, and its Origin when the browser sends one; a change
   (POST) always needs both the key and the Origin.
+  HTTP accepts one request per connection, at most 64 connections and 8 event streams,
+  with a 16 KiB head/body cap and 10 s request/drain deadlines. Malformed framing is refused;
+  console and control JSON reject duplicate fields, nonfinite numbers and nesting beyond
+  32 levels. Static package links are not served, and photo reads reject symlinks or junctions
+  anywhere from the selfies root through the file, check the opened file's identity, and
+  accept bounded JPEG bytes only (legacy thumbnails use the same checks).
   Away from home the owner's devices reach it only over the tailnet, at
   `https://<pc>.<tailnet>.ts.net/` (this PC's MagicDNS name) through `tailscale
   serve` on this machine, never Funnel: `tailscale serve --bg --https=443
