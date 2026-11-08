@@ -18,6 +18,10 @@ jobs:
         run: shellcheck --severity=warning --external-sources --source-path=scripts scripts/*.sh scripts/tests/*.sh
       - name: config key report self-test
         run: bash scripts/tests/ac-update-keys.sh
+      - name: guild backup self-test (synthetic data only)
+        run: bash scripts/tests/ac-guild-backup.sh
+      - name: guild backup schedule self-test (no task registration)
+        run: pwsh -NoProfile -File scripts/tests/ac-guild-backup-schedule.ps1
 
   secrets:
     runs-on: ubuntu-latest
