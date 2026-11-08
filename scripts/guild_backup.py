@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 import sqlite3
 import stat
 import sys
@@ -33,7 +34,18 @@ DATABASES = ("mind.db", "library.db")
 VOICE_FILES = ("voice.toml", "decision.toml", "lexicon.toml", "attitudes.toml")
 GAME_DATABASES = ("acore_auth", "acore_characters", "acore_world", "acore_playerbots")
 EXCLUDED_DIRS = {"logs", "scratch", "snapshots", "models", "cache", "caches", "__pycache__"}
-EXCLUDED_FILES = {"control.json", "console.key", "mind.lock", "voice.lock", "voice.pid"}
+# Runtime state that is rewritten while the services run (health checks, PID/endpoint
+# files); it is regenerated on start and would make the stability scan fail.
+EXCLUDED_FILES = {"control.json", "console.key", "mind.lock", "voice.lock", "voice.pid",
+                  "health-state.json", "wow-volume.json", "ui-state.json",
+                  "dojo-endpoint.json", "worldserver.pid"}
+PENDING_PREFIX = ".pending-"
+PENDING_MAX_AGE = 24 * 3600
+PART_MAX_AGE = 7 * 24 * 3600
+STAGING_NAME = ".staging"
+CAPTURE_PREFIX = "leeroy-guild-capture-"
+VERIFY_STATE = ".verify-state.json"
+VERIFY_EVERY = 7 * 24 * 3600
 BLOCK = 1024 * 1024
 
 
@@ -54,7 +66,7 @@ def safe_path(path: Path) -> Path:
         except FileNotFoundError:
             continue
         if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
-            raise BackupError("A selected path contains a symlink or reparse point.")
+            raise BackupError(f"Refusing a symlink or junction/reparse point at {part}.")
     return path
 
 
@@ -233,16 +245,16 @@ def check_sqlite(path: Path) -> None:
 
 
 def sqlite_snapshot(source: Path, target: Path) -> None:
-    deadline = time.monotonic() + 120
-
-    def progress(_status, _remaining, _total):
-        if time.monotonic() > deadline:
-            raise BackupError("SQLite backup timed out; retry during a quieter period.")
-
+    # One step (pages=-1) copies the whole database inside a single read transaction.
+    # In WAL mode that is a consistent snapshot that never blocks the mind's writers.
+    # A stepped copy (pages=N) restarts from page 1 whenever another connection writes
+    # between steps, so on a large, busy database it may never finish. The cost is that
+    # a single step cannot be interrupted, so there is no deadline; the copy is bounded
+    # by the database size.
     with closing(sqlite3.connect(regular(source).as_uri() + "?mode=ro", uri=True,
                                 timeout=5)) as src:
         with closing(sqlite3.connect(target)) as dst:
-            src.backup(dst, pages=256, progress=progress, sleep=0.05)
+            src.backup(dst, pages=-1)
     check_sqlite(target)
 
 
@@ -272,12 +284,18 @@ def object_path(store: Path, sha: str) -> Path:
     return safe_path(store / "objects" / sha[:2] / sha)
 
 
-def transfer(source: Path, store: Path, entry: dict) -> bool:
-    """Resume only a byte-for-byte matching prefix; verify after close on NAS."""
+def transfer(source: Path, store: Path, entry: dict, *, verify_existing: bool = False) -> bool:
+    """Resume only a byte-for-byte matching prefix; verify after close on NAS.
+
+    An object that already exists is trusted by its content-addressed name (it is only
+    renamed into place after verification) and its size; re-reading it over the network
+    every run is skipped unless verify_existing is set.
+    """
     target = object_path(store, entry["sha256"])
     target.parent.mkdir(exist_ok=True)
     if target.exists():
-        if digest(target) != entry:
+        if regular(target).stat().st_size != entry["size"] or (
+                verify_existing and digest(target) != entry):
             raise BackupError("Existing backup object is corrupt; retained sets were left alone.")
         return False
     partial = safe_path(target.with_name(target.name + ".part"))
@@ -344,6 +362,48 @@ def read_set(path: Path, store_id: str, *, expected_name: str | None = None) -> 
     return manifest
 
 
+def stale_pending(path: Path, store_id: str, now: float) -> bool:
+    """An abandoned publish of this script: only its own manifest and marker, old enough."""
+    try:
+        if (not path.name.startswith(PENDING_PREFIX) or not safe_path(path).is_dir()
+                or now - path.stat().st_mtime < PENDING_MAX_AGE
+                or {p.name for p in path.iterdir()} != {SET_MARKER, "manifest.json"}):
+            return False
+        marker, manifest = read_json(path / SET_MARKER), read_json(path / "manifest.json")
+        return (owned(marker, store_id) and owned(manifest, store_id)
+                and marker.get("manifest_sha256") == digest(path / "manifest.json")["sha256"])
+    except (BackupError, OSError, ValueError, TypeError):
+        return False
+
+
+def clean_stale(store: Path, store_id: str, now: float | None = None) -> int:
+    """Remove abandoned pending dirs, stale object .part files and old staging dirs."""
+    now = time.time() if now is None else now
+    removed = 0
+    for path in (store / "sets").iterdir():
+        if stale_pending(path, store_id, now):
+            regular(path / SET_MARKER).unlink()
+            regular(path / "manifest.json").unlink()
+            path.rmdir()
+            removed += 1
+    for shard in (store / "objects").iterdir():
+        if shard.is_dir() and not shard.is_symlink():
+            for path in shard.iterdir():
+                if (path.name.endswith(".part") and path.is_file() and not path.is_symlink()
+                        and now - path.stat().st_mtime >= PART_MAX_AGE):
+                    path.unlink()
+                    removed += 1
+    staging = store / STAGING_NAME
+    if staging.is_dir() and not staging.is_symlink():
+        for path in staging.iterdir():
+            if (path.name.startswith(CAPTURE_PREFIX) and path.is_dir()
+                    and not path.is_symlink() and now - path.stat().st_mtime >= PENDING_MAX_AGE):
+                safe_path(path)
+                shutil.rmtree(path, ignore_errors=True)  # Only our own prefixed staging dir.
+                removed += 1
+    return removed
+
+
 def list_sets(store: Path, store_id: str) -> tuple[list[tuple[Path, dict]], bool]:
     result = []
     foreign = False
@@ -365,16 +425,17 @@ def materialize(store: Path, manifest: dict, target: Path) -> None:
 
 
 def publish(store: Path, store_id: str, stage: Path, files: dict,
-            captured_at: datetime | None = None) -> tuple[str, int]:
+            captured_at: datetime | None = None, *, verify_all: bool = False) -> tuple[str, int]:
     if (any(not valid_payload_name(path) for path in files)
             or len({path.casefold() for path in files}) != len(files)):
         raise BackupError("Source names cannot be restored safely on Windows.")
     now = captured_at or datetime.now(timezone.utc)
     name = "guild-" + now.strftime("%Y%m%dT%H%M%S%fZ") + "-" + uuid.uuid4().hex[:8]
     manifest = metadata(store_id, set_id=name, created_utc=now.isoformat(), files=files)
-    uploaded = sum(transfer(stage / path, store, entry) for path, entry in files.items())
+    uploaded = sum(transfer(stage / path, store, entry, verify_existing=verify_all)
+                   for path, entry in files.items())
     # Nothing under sets/ is published until every destination object verifies.
-    pending = store / "sets" / (".pending-" + uuid.uuid4().hex)
+    pending = store / "sets" / (PENDING_PREFIX + uuid.uuid4().hex)
     pending.mkdir()
     manifest_bytes = json_bytes(manifest)
     write_new(pending / "manifest.json", manifest_bytes)
@@ -403,6 +464,7 @@ def retained_names(sets: list[tuple[Path, dict]], daily: int, weekly: int) -> se
 
 
 def prune(store: Path, store_id: str, daily: int, weekly: int) -> int:
+    clean_stale(store, store_id)
     sets, foreign = list_sets(store, store_id)
     keep = retained_names(sets, daily, weekly)
     referenced, removed_hashes = set(), set()
@@ -427,6 +489,35 @@ def prune(store: Path, store_id: str, daily: int, weekly: int) -> int:
     return removed
 
 
+def verify_due(store: Path, store_id: str, now: float | None = None) -> bool:
+    try:
+        state = read_json(store / VERIFY_STATE)
+        return (not owned(state, store_id)
+                or (time.time() if now is None else now) - float(state["last_full_verify"]) >= VERIFY_EVERY)
+    except (BackupError, OSError, ValueError, TypeError, KeyError):
+        return True
+
+
+def record_verified(store: Path, store_id: str) -> None:
+    path = safe_path(store / VERIFY_STATE)
+    temp = path.with_name(path.name + ".tmp")
+    if temp.exists():
+        temp.unlink()
+    write_new(temp, json_bytes(metadata(store_id, last_full_verify=time.time())))
+    os.replace(temp, path)
+
+
+def local_volume(path: Path) -> bool:
+    """True when the path is certainly on a local disk (never UNC or a mapped share)."""
+    if os.name != "nt":
+        return True
+    drive = os.path.splitdrive(os.path.abspath(path))[0]
+    if not drive or drive.startswith("\\"):
+        return False
+    import ctypes
+    return ctypes.windll.kernel32.GetDriveTypeW(drive + "\\") == 3  # DRIVE_FIXED
+
+
 def restore(store: Path, store_id: str, output: Path | None = None) -> int:
     candidates = sorted((p for p in (store / "sets").iterdir() if SET_RE.fullmatch(p.name)),
                         key=lambda p: p.name, reverse=True)
@@ -448,17 +539,20 @@ def restore(store: Path, store_id: str, output: Path | None = None) -> int:
     return len(manifest["files"])
 
 
-def load_config(path: Path) -> tuple[Path, int, int]:
+def load_config(path: Path) -> tuple[Path, int, int, Path | None]:
     with regular(path).open("rb") as source:
         config = tomllib.load(source)
-    if set(config) - {"destination", "keep_daily", "keep_weekly"}:
+    if set(config) - {"destination", "keep_daily", "keep_weekly", "staging_dir"}:
         raise BackupError("Unknown backup config field; credentials do not belong here.")
     destination = config.get("destination")
     daily, weekly = config.get("keep_daily", 7), config.get("keep_weekly", 8)
     if (not isinstance(destination, str) or not Path(destination).is_absolute()
             or any(type(n) is not int or n < 0 for n in (daily, weekly)) or daily + weekly < 1):
         raise BackupError("Use an absolute destination and nonnegative retention with at least one set.")
-    return Path(destination), daily, weekly
+    staging = config.get("staging_dir")
+    if staging is not None and (not isinstance(staging, str) or not Path(staging).is_absolute()):
+        raise BackupError("staging_dir must be an absolute local directory.")
+    return Path(destination), daily, weekly, Path(staging) if staging else None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -468,6 +562,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--mind-data", type=Path)
     parser.add_argument("--voice-data", type=Path)
     parser.add_argument("--db-backup-dir", type=Path)
+    parser.add_argument("--verify-all", action="store_true",
+                        help="re-read every referenced destination object (default: weekly)")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--with-db", action="store_true")
     mode.add_argument("--restore-test", action="store_true")
@@ -479,7 +575,7 @@ def main(argv: list[str] | None = None) -> int:
             if not os.environ.get("LOCALAPPDATA"):
                 raise BackupError("Set LOCALAPPDATA or supply --config.")
             config = Path(os.environ["LOCALAPPDATA"]) / "leeroy" / "backup.toml"
-        destination, daily, weekly = load_config(config)
+        destination, daily, weekly, staging_dir = load_config(config)
         restoring = args.restore_test or args.restore_to is not None
         mind = safe_path(args.mind_data or Path(os.environ.get("LEEROY_MIND_DATA", args.root / "mind-data")))
         voice = safe_path(args.voice_data or Path(os.environ.get("LEEROY_VOICE_DATA", args.root / "voice-data")))
@@ -490,6 +586,13 @@ def main(argv: list[str] | None = None) -> int:
                 raise BackupError("Destination must be separate from source data directories.")
             if args.restore_to and safe_path(args.restore_to).is_relative_to(source):
                 raise BackupError("Restore into a separate staging directory, never live data.")
+        if staging_dir is not None:
+            staging_dir = safe_path(staging_dir)
+            for source in (mind, voice):
+                if staging_dir.is_relative_to(source) or source.is_relative_to(staging_dir):
+                    raise BackupError("staging_dir must be separate from source data directories.")
+            if staging_dir.is_relative_to(store_path):
+                raise BackupError("staging_dir must be outside the backup store.")
         if args.restore_to and safe_path(args.restore_to).is_relative_to(store_path):
             raise BackupError("Restore target must be outside the backup store.")
         store, store_id = open_store(destination, create=not restoring)
@@ -498,9 +601,14 @@ def main(argv: list[str] | None = None) -> int:
                 count = restore(store, store_id, args.restore_to)
                 print(f"Restore verified: {count} files; SQLite integrity ok.")
                 return 0
+            if staging_dir is None and local_volume(destination):
+                staging_dir = store / STAGING_NAME
+            if staging_dir is not None:
+                safe_path(staging_dir).mkdir(parents=True, exist_ok=True)
+            verify_all = args.verify_all or verify_due(store, store_id)
             game_set = newest_game_set(args.db_backup_dir or args.root / "db_backup") if args.with_db else None
             for attempt in range(3):
-                with tempfile.TemporaryDirectory(prefix="leeroy-guild-capture-") as temp:
+                with tempfile.TemporaryDirectory(prefix=CAPTURE_PREFIX, dir=staging_dir) as temp:
                     stage = Path(temp)
                     try:
                         captured_at = datetime.now(timezone.utc)
@@ -509,7 +617,10 @@ def main(argv: list[str] | None = None) -> int:
                         if attempt == 2:
                             raise
                         continue
-                    name, uploaded = publish(store, store_id, stage, files, captured_at)
+                    name, uploaded = publish(store, store_id, stage, files, captured_at,
+                                             verify_all=verify_all)
+                    if verify_all:
+                        record_verified(store, store_id)
                     removed = prune(store, store_id, daily, weekly)
                     print(f"Backup verified: {name}; {len(files)} files, {uploaded} new objects, {removed} sets pruned.")
                     return 0

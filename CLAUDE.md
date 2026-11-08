@@ -275,6 +275,7 @@ keep Windows backslashes literal):
 destination = '\\nas\private-backups\leeroy'
 keep_daily = 7
 keep_weekly = 8
+# staging_dir = 'D:\leeroy-staging'   # optional, absolute, local
 ```
 
 Use a destination on another machine; a second folder on F: does not protect against
@@ -294,13 +295,19 @@ reparse points. It never mounts a share, starts a service, or contacts a model.
   not synchronized with the mind snapshot.
 - **Exclusions.** At any depth it omits `logs/`, `scratch/`, `snapshots/`, `models/`,
   `cache/`, `caches/`, `__pycache__/`, unfinished `.part` files/directories,
-  `control.json`, `console.key`, runtime lock/PID files, and SQLite `-wal`, `-shm`,
-  `-journal` files. Logs/scratch/snapshots are disposable local history; models and
+  `control.json`, `console.key`, runtime lock/PID files, files the services rewrite
+  continuously (`health-state.json`, `wow-volume.json`, `ui-state.json`,
+  `dojo-endpoint.json`, `worldserver.pid`; regenerated on start and they would fail the
+  stability scan) and SQLite `-wal`, `-shm`, `-journal` files. Logs/scratch/snapshots are disposable local history; models and
   caches can be fetched again. Worker `selfie-data`, voice engines/cache/UI state,
   the console key in the owner profile and everything outside the listed data roots
   are never selected. Runtime control credentials must never be restored.
-- **Consistency.** A local temporary capture uses SQLite's online `backup()` API,
-  then `PRAGMA integrity_check` for each copied database. The ordinary file inventory
+- **Consistency.** A local temporary capture uses SQLite's online `backup()` API in one
+  step per database (`pages=-1`): a single read transaction, a consistent snapshot in WAL
+  mode that never blocks the mind's writers. A stepped copy restarts whenever another
+  connection writes between steps and, measured on a 20 MB database with a continuous
+  writer, needed about 59,000 steps and 116 s; the single step has no deadline and is
+  bounded by the database size. Then `PRAGMA integrity_check` for each copied database. The ordinary file inventory
   and SHA-256 contents must match on both sides of the database copies. File changes
   retry the capture up to three times; persistent changes fail without publication or
   pruning. SQLite can keep writing throughout (no service lock is taken). Each database
@@ -314,8 +321,12 @@ reparse points. It never mounts a share, starts a service, or contacts a model.
   addressed by that digest, so unchanged JPEGs are not uploaded again; there are no
   hard links, filesystem-specific deduplication calls, or external Python packages.
   This trades local hashing and destination verification reads for less upload space
-  and traffic. A failed upload resumes its verified byte prefix on the next run; even
-  existing objects are checked in full. A set becomes visible through a same-directory
+  and traffic. A failed upload resumes its verified byte prefix on the next run; an
+  existing object is trusted by its digest name and size (it was verified before it was
+  renamed into place) and is not read back; every newly written object is verified. Every
+  referenced object is re-read in full when the last full verification (recorded in
+  `.verify-state.json` in the store) is over 7 days old, so a daily task verifies
+  weekly, or on demand with `--verify-all`. A set becomes visible through a same-directory
   rename only after all destination objects verify. The destination must support normal
   file locks and same-directory renames (ordinary SMB shares do). Concurrent runs refuse
   the store lock; it is automatically released when a process exits.
@@ -324,10 +335,13 @@ reparse points. It never mounts a share, starts a service, or contacts a model.
   Pruning runs only after a successful capture/publication. Only correctly named,
   checksum-valid sets with this store's marker and exactly its two metadata files are
   removed. No recursive deletion is used. Shared objects are deleted only when a
-  pruned owned manifest named them and no retained set uses them. Foreign, corrupt or
-  interrupted set directories are preserved and disable object collection. Unpublished
-  orphan objects/`.part` files are conservatively retained, so interrupted jobs may
-  leave extra space for operator inspection. Never edit manifests or delete objects
+  pruned owned manifest named them and no retained set uses them. Foreign or corrupt
+  set directories are preserved and disable object collection. A `sets/.pending-*`
+  directory left by a crashed publish that holds only this script's own manifest and
+  marker (checksums match) and is over 24 hours old is removed and is not foreign; a
+  younger one, or one with any other content, counts as foreign. Object `.part` files
+  over 7 days old and stale `.staging/leeroy-guild-capture-*` directories are removed.
+  Unpublished complete orphan objects are retained. Never edit manifests or delete objects
   manually: multiple sets share them. Copy the whole store when relocating it.
 
 `./ac-guild-backup.sh --restore-test` reconstructs the newest completed set into a
@@ -336,7 +350,10 @@ checks and removes only that temporary reconstruction. A corrupt newest set fail
 than silently choosing an older one. `--restore-to F:/guild-restore` performs the same
 checks but keeps the verified output in that **new, initially nonexistent** directory;
 it refuses live data roots and existing output. A failure leaves the live data untouched.
-The capture/restore requires local temporary free space for the complete payload.
+The capture/restore requires temporary free space for the complete payload. Capture
+stages in `staging_dir` from the config when set; otherwise in `.staging` inside the
+store when the destination is on a local fixed disk, else the system temp directory
+(normally C:). It must be outside the store and the source data directories.
 `--config`, `--root`, `--mind-data`, `--voice-data` and `--db-backup-dir` allow explicit
 isolated paths; normal source defaults follow this checkout and `LEEROY_MIND_DATA` /
 `LEEROY_VOICE_DATA`. The Git Bash wrapper uses the mind venv (or an explicit
@@ -367,7 +384,8 @@ serving the game; this script never imports them or overwrites live data.
 
 `bash scripts/tests/ac-guild-backup.sh` exercises synthetic data only, including a live
 SQLite writer, verified restore, corrupt/interrupted copies, ownership-confined pruning,
-foreign directories and junction/symlink refusal. The schedule self-test mocks task
+foreign directories, stale pending/`.part` cleanup, a large database snapshot under
+continuous writes, and junction/symlink refusal. The schedule self-test mocks task
 cmdlets and never registers a task. Both run in CI; never use live data for these tests.
 
 `db_backup/` holds two kinds of thing: sets `ac-backup.sh` made

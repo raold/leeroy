@@ -475,5 +475,175 @@ db.close()
         self.run_cli()
 
 
+    def test_snapshot_of_large_database_completes_under_continuous_writes(self):
+        with closing(sqlite3.connect(self.mind / "mind.db")) as db, db:
+            db.executemany("INSERT INTO sample(value) VALUES (?)", ((os.urandom(500).hex(),) for _ in range(30000)))
+        self.assertGreater((self.mind / "mind.db").stat().st_size, 20 * 1024 * 1024)
+        target = self.root / "snapshot.db"
+        with self.writer() as writer:
+            started = time.monotonic()
+            backup.sqlite_snapshot(self.mind / "mind.db", target)
+            self.assertLess(time.monotonic() - started, 60)
+            self.assertIsNone(writer.poll())
+        backup.check_sqlite(target)
+        with closing(sqlite3.connect(target)) as db:
+            self.assertGreaterEqual(db.execute("SELECT count(*) FROM sample").fetchone()[0], 30001)
+
+    def test_existing_objects_are_trusted_by_name_and_size_until_verify_all(self):
+        self.run_cli()
+        store, _ = self.store()
+        entry = self.latest()["files"]["mind-data/personas/1234/card.toml"]
+        target = backup.object_path(store, entry["sha256"])
+        original = target.read_bytes()
+        target.write_bytes(b"x" * len(original))  # same size, wrong bytes
+        with patch.object(backup, "digest", wraps=backup.digest) as spy:
+            self.assertFalse(backup.transfer(self.mind / "personas/1234/card.toml", store, entry))
+            spy.assert_not_called()
+        with self.assertRaisesRegex(backup.BackupError, "corrupt"):
+            backup.transfer(self.mind / "personas/1234/card.toml", store, entry, verify_existing=True)
+        target.write_bytes(original + b"!")  # truncated or extended is caught by size
+        with self.assertRaisesRegex(backup.BackupError, "corrupt"):
+            backup.transfer(self.mind / "personas/1234/card.toml", store, entry)
+        target.write_bytes(b"x" * len(original))
+        self.assertNotEqual(subprocess.run([sys.executable, str(SCRIPT), *self.args, "--verify-all"],
+                                           capture_output=True, text=True, timeout=30).returncode, 0)
+
+    def test_full_verification_is_weekly_by_default(self):
+        store, owner = self.store()
+        self.assertTrue(backup.verify_due(store, owner))
+        self.run_cli()
+        self.assertFalse(backup.verify_due(store, owner))
+        self.assertTrue(backup.verify_due(store, owner, time.time() + backup.VERIFY_EVERY + 1))
+        entry = self.latest()["files"]["mind-data/personas/1234/card.toml"]
+        target = backup.object_path(store, entry["sha256"])
+        target.write_bytes(b"x" * entry["size"])
+        self.run_cli()  # recent full verification: same-size damage is not re-read today
+        state = backup.read_json(store / backup.VERIFY_STATE)
+        state["last_full_verify"] -= backup.VERIFY_EVERY + 5
+        (store / backup.VERIFY_STATE).write_text(json.dumps(state), encoding="utf-8")
+        result = subprocess.run([sys.executable, str(SCRIPT), *self.args], capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("corrupt", result.stderr)
+
+    def make_pending(self, store, owner, age_seconds):
+        name = "guild-20260101T000000000000Z-aabbccdd"
+        pending = store / "sets" / (backup.PENDING_PREFIX + "deadbeef")
+        pending.mkdir()
+        files = {"mind-data/" + n: backup.digest(self.mind / n) for n in backup.DATABASES}
+        data = backup.json_bytes(backup.metadata(owner, set_id=name, created_utc="2026-01-01T00:00:00+00:00", files=files))
+        backup.write_new(pending / "manifest.json", data)
+        backup.write_new(pending / backup.SET_MARKER, backup.json_bytes(backup.metadata(
+            owner, set_id=name, manifest_sha256=hashlib.sha256(data).hexdigest())))
+        old = time.time() - age_seconds
+        os.utime(pending, (old, old))
+        return pending
+
+    def test_stale_own_pending_and_part_files_are_cleaned_and_not_foreign(self):
+        self.run_cli()
+        store, owner = self.store()
+        pending = self.make_pending(store, owner, backup.PENDING_MAX_AGE + 60)
+        entry = self.latest()["files"]["mind-data/personas/1234/card.toml"]
+        old_part = backup.object_path(store, entry["sha256"]).with_name("f" * 64 + ".part")
+        new_part = old_part.with_name("e" * 64 + ".part")
+        for part, age in ((old_part, backup.PART_MAX_AGE + 60), (new_part, 60)):
+            part.write_bytes(b"partial")
+            os.utime(part, (time.time() - age, time.time() - age))
+        before = {p for p in (store / "objects").rglob("*") if p.is_file() and p not in (old_part, new_part)}
+        self.fake_set(datetime(2026, 1, 1, tzinfo=timezone.utc), self.latest()["files"])
+        removed = backup.prune(store, owner, 1, 0)
+        self.assertEqual(removed, 1)
+        self.assertFalse(pending.exists())
+        self.assertFalse(old_part.exists())
+        self.assertTrue(new_part.exists())
+        self.assertFalse(backup.list_sets(store, owner)[1])
+        self.assertTrue(all(p.exists() for p in before))
+
+    def test_pending_with_foreign_content_or_young_age_stays_foreign(self):
+        self.run_cli()
+        store, owner = self.store()
+        young = self.make_pending(store, owner, 60)
+        self.assertTrue(backup.list_sets(store, owner)[1])
+        self.assertEqual(backup.clean_stale(store, owner), 0)
+        self.assertTrue(young.exists())
+        for child in young.iterdir():
+            child.unlink()
+        young.rmdir()
+        stale = self.make_pending(store, owner, backup.PENDING_MAX_AGE + 60)
+        (stale / "foreign.txt").write_bytes(b"keep")
+        self.assertEqual(backup.clean_stale(store, owner), 0)
+        self.assertTrue(stale.exists())
+        self.assertTrue(backup.list_sets(store, owner)[1])
+
+    def test_foreign_directory_still_disables_destructive_gc_with_stale_pending(self):
+        self.run_cli()
+        store, owner = self.store()
+        self.make_pending(store, owner, backup.PENDING_MAX_AGE + 60)
+        (store / "sets" / "foreign").mkdir()
+        before = {p for p in (store / "objects").rglob("*") if p.is_file()}
+        self.fake_set(datetime(2026, 1, 1, tzinfo=timezone.utc))
+        backup.prune(store, owner, 1, 0)
+        self.assertTrue(all(p.exists() for p in before))
+        self.assertTrue(backup.list_sets(store, owner)[1])
+
+    def test_churn_state_files_are_excluded(self):
+        for name in ("health-state.json", "nested/health-state.json"):
+            self.put(name, b"NEVER_COPY_SENTINEL")
+        self.run_cli()
+        self.assertFalse([n for n in self.latest()["files"] if n.endswith("health-state.json")])
+
+    def test_staging_defaults_beside_local_destination_and_honours_config(self):
+        seen = []
+        original = tempfile.TemporaryDirectory
+
+        def spy(*args, **kwargs):
+            seen.append(kwargs.get("dir"))
+            return original(*args, **kwargs)
+
+        with patch.object(backup.tempfile, "TemporaryDirectory", side_effect=spy), redirect_stdout(io.StringIO()):
+            self.assertEqual(backup.main(self.args), 0)
+        store, _ = self.store()
+        self.assertEqual(seen[0], store / backup.STAGING_NAME)
+        staging = self.root / "fast scratch"
+        self.config.write_text(f"destination = {json.dumps(str(self.destination))}\n"
+                               f"staging_dir = {json.dumps(str(staging))}\n", encoding="utf-8")
+        seen.clear()
+        with patch.object(backup.tempfile, "TemporaryDirectory", side_effect=spy), redirect_stdout(io.StringIO()):
+            self.assertEqual(backup.main(self.args), 0)
+        self.assertEqual(seen[0], staging)
+        self.config.write_text(f"destination = {json.dumps(str(self.destination))}\n"
+                               f"staging_dir = {json.dumps(str(self.mind / 'tmp'))}\n", encoding="utf-8")
+        with redirect_stderr(io.StringIO()):
+            self.assertEqual(backup.main(self.args), 1)
+        self.assertFalse(list((store / backup.STAGING_NAME).iterdir()))
+
+    def test_stale_capture_staging_dirs_are_removed(self):
+        self.run_cli()
+        store, owner = self.store()
+        staging = store / backup.STAGING_NAME
+        old, other = staging / (backup.CAPTURE_PREFIX + "old"), staging / "someone-else"
+        for path in (old, other):
+            (path / "sub").mkdir(parents=True)
+            (path / "sub" / "x").write_bytes(b"x")
+            os.utime(path, (time.time() - 10 * 86400,) * 2)
+        backup.clean_stale(store, owner)
+        self.assertFalse(old.exists())
+        self.assertTrue(other.exists())
+
+    def test_link_error_names_the_offending_path(self):
+        outside = self.root / "outside"
+        outside.mkdir()
+        link = self.mind / "linked"
+        if os.name == "nt":
+            subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(outside)], capture_output=True, check=True)
+        else:
+            link.symlink_to(outside, target_is_directory=True)
+        try:
+            with self.assertRaises(backup.BackupError) as caught:
+                backup.safe_path(link / "x")
+            self.assertIn(str(link), str(caught.exception))
+        finally:
+            link.rmdir() if os.name == "nt" else link.unlink()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
