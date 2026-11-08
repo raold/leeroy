@@ -958,14 +958,20 @@ Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
   until the 60 s poll finds each body online and free; a rearm now records an armed body that
   has none, as that poll would. Any other failed job (`operation_transition_unknown`, a walk,
   leave, duel or grow) stays unknown unless its event carries `changed: false` (below; any ordinary
-  kind can carry it, and a grow refused that way goes on to its next attempt): a leave's `wg_private_state_unavailable` (a member in
-  Wintergrasp) is refused whole at its ack, before any body is reserved or moved
-  (`LeavePvpAckError` names as many members as fit in 256 characters, at least one, as `wg_private_state_unavailable:<guid,...>`; the mind
-  accepts it only when every named guid is in the root's manifest, settles it refused and holds nobody,
-  and recall leaves the named members for a later pass and recalls the rest as a new command). The same reason from the job
+  kind can carry it, and a grow refused that way goes on to its next attempt): an ordinary leave's
+  `wg_private_state_unavailable` (a member in Wintergrasp), or `cleanup_member_not_admitted`
+  (a member's cleanup roster reaches outside the manifest), is refused whole at its ack, before
+  any body is reserved or moved. Wintergrasp takes precedence. `LeavePvpAckError` names as many
+  manifest members as fit in 256 characters, at least one, as `<reason>:<guid,...>`; cleanup names
+  the members whose rosters reach outside, not the outsiders, using the step's roster readers.
+  The mind accepts either only for an ordinary leave when the names are distinct manifest members,
+  settles it refused and holds nobody. Recall backs off those members for 600 s and recalls the rest
+  as a new command; every such retry strictly shrinks its manifest. The same reason from the job
   is a Refuse only until that leave has changed a body. A failed `realm_job` may now carry
   `changed: false`: native proved the entire job changed no body or cleanup state and released
-  it, including all earlier members and pending steps. With a positive ack, an ordinary root
+  it, including all earlier members and pending steps. A cleanup-closure refusal before any
+  mutation carries that proof; earlier changed or unproved steps still prevent it.
+  With a positive ack, an ordinary root
   without children settles `step_refused` and holds nobody; startup rechecks an uncontested
   stored unknown with that proof. Missing/true flags keep the old rules; WG, ack and result
   roots do too, and contradictory evidence still becomes conflict. The settlement logs
