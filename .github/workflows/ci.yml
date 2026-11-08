@@ -62,7 +62,7 @@ jobs:
         with:
           python-version: "3.14"
       - run: python -m pip install -e ".[test]"
-      - run: python -m pytest -q
+      - run: python -m pytest -q -n auto tests
 
   voice:
     runs-on: ubuntu-latest

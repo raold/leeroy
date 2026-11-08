@@ -73,13 +73,12 @@ def test_weekly_factory_ownership_and_completion(h, monkeypatch, outcome):
             {"complete": outcome == "complete", "requested_llm": True}))
     monkeypatch.setattr(evaluation, "run_weekly", weekly)
     ctx.asker = factory
-    if outcome in ("raise", "cancel", "partial"):
-        expected = {"raise": ValueError, "cancel": asyncio.CancelledError,
-                    "partial": WeeklyEvaluationIncomplete}[outcome]
-        with pytest.raises(expected):
+    if outcome == "cancel":
+        with pytest.raises(asyncio.CancelledError):
             run(stage_eval(ctx))
     else:
         run(stage_eval(ctx))
+    assert bool(ctx.failures["eval"]) is (outcome in ("raise", "partial"))
     assert events == ["opened", "closed"] and ctx.asker is factory
     assert ctx.done("eval", "2026-W44") is (outcome == "complete")
 
@@ -137,3 +136,52 @@ def test_full_night_with_fakes_is_idempotent(h):
     assert ctx.reasoner.calls == calls
     assert h.count("night_stage") == len(STAGES)
     assert no_real_name(h.store) == []
+
+
+def _weekly_stub(monkeypatch, results, seen):
+    import leeroy_mind.eval as evaluation
+    async def weekly(current, week, *, use_llm):
+        seen.append((current.night, week))
+        current.store.set_meta(f"nightly:eval-result:{week}", json.dumps(
+            {"complete": results.pop(0), "requested_llm": use_llm}))
+    monkeypatch.setattr(evaluation, "run_weekly", weekly)
+
+
+def test_partial_week_is_retried_on_a_later_night_until_complete(h, monkeypatch):
+    seen = []
+    _weekly_stub(monkeypatch, [False, False, True], seen)
+    class Asker:
+        async def ask(self, *_):
+            raise AssertionError
+    nights = ["2026-11-01", "2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05"]
+    for night in nights:
+        ctx = h.ctx(night=night)
+        ctx.asker = Asker()
+        run(stage_eval(ctx))
+        assert bool(ctx.failures["eval"]) is (night in ("2026-11-01", "2026-11-02"))
+    assert seen == [("2026-11-01", "2026-W44"), ("2026-11-02", "2026-W44"), ("2026-11-03", "2026-W44")]
+
+
+def test_week_that_never_ran_is_not_started_on_a_weekday(h, monkeypatch):
+    seen = []
+    _weekly_stub(monkeypatch, [True], seen)
+    ctx = h.ctx(night="2026-11-03")
+    run(stage_eval(ctx))
+    assert seen == [] and not ctx.failures["eval"]
+
+
+def test_partial_week_does_not_stop_later_stages_and_the_night_finishes(h, monkeypatch):
+    seen = []
+    _weekly_stub(monkeypatch, [False], seen)
+    ctx = h.ctx(night="2026-11-01")
+    ctx.asker = type("A", (), {"ask": lambda *a: None})()
+    after = []
+    async def later(c):
+        after.append(c.night)
+    runner = NightRunner([next(s for s in STAGES if s.name == "eval"),
+                          type(STAGES[0])("later", later, None)], lambda *_: ctx)
+    run_begin(h.store, ctx.night, *ctx.window, now=h.clock.now())
+    run(runner.run(ctx.night, ctx.window))
+    assert after == ["2026-11-01"] and ctx.failures["eval"] == 1
+    assert not ctx.done("eval", "2026-W44")
+    assert json.loads(h.store.get_meta("nightly:eval-result:2026-W44"))["complete"] is False

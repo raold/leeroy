@@ -257,6 +257,20 @@ mind and mind.log, the control endpoint's `status` (it reports `bridge_connected
 `schema_version`), the console and voice (notes when down), Ollama's `/api/ps`, and stuck
 activity (no `tg_pull` in 48 h with telemetry on and the overhead gate passed, a note while the
 gate is in phase `ab`; a realm hold or `unknown` root older than 1 h; cast without personas). It
+also fails an owned offline raid more than 30 minutes past its deadline or any guild raid
+open longer than 6 hours. Before native progress creates a local raid, a valid owned receipt
+is identified by its command ID and keeps the same deadline check. The latest finished night's
+failed units are grouped by stage
+(note for 1-9, FAIL at 10), using stored counts with a bounded log fallback and an exception
+code when available. Log-only counts require historical coverage spanning the night and each
+intervening day; newer, missing or truncated logs are an incomplete observation, never proof
+of a clean night. Evidence cycles use the critic's shared persisted edges: the count is
+memories whose ancestry reaches a cycle, not edges (note at 1, FAIL at 50). Its scan stops
+at 100,000 rows/nodes or 0.8 seconds and labels incomplete results. Queued selfie sets older
+than 30 hours are a note. Stale Realm roots include kind, member count and the exact
+`realm release <id> --reason reviewed_stale_hold` command to inspect with the mind stopped;
+the release command still enforces its own eligibility checks. Missing newer tables are
+reported as not set up. These checks only report state and never repair it. Health
 never dials the bridge (7878), loads no model, starts nothing and never probes `mind.lock` or
 `voice.lock` (running comes from the process list, `control.json`, `voice.pid` and the TCP
 table). `--toast` shows one toast per new failure and writes only
@@ -722,9 +736,11 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 .venv/Scripts/python -m leeroy_mind.library --data-dir "$D" stats   # the game library: build, search
 .venv/Scripts/python -m leeroy_mind nightly --data-dir "$D" status  # also run, ledger, undo, enrich, veto
 .venv/Scripts/python -m leeroy_mind eval --data-dir "$D"    # weekly evaluation, on a copied database by default
+.venv/Scripts/python -m leeroy_mind eval talk --data-dir "$D" --since 14 --fake --json talk.json # stored talk candidates, scratch copy only
 .venv/Scripts/python -m leeroy_mind selfies --data-dir "$D" status  # profile photos; also try (mind stopped)
 .venv/Scripts/python -m leeroy_mind console --data-dir "$D" # the guild console; open the URL it prints
 .venv/Scripts/python -m pytest -q                           # the unit tests
+.venv/Scripts/python -m pytest -q -n auto tests             # fast run; up to 8 isolated workers
 .venv/Scripts/python -m pytest -m ollama                    # optional: also -m live, -m mysql
 ```
 
@@ -744,9 +760,27 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   events the bridge queued for the mind, so never run it while they matter.
 - Do not run `personas generate`/`seed` or a library build while the mind is
   live: they load another large model next to the live one and evict it.
-- Nothing writes a persona while the mind runs. A member who joins the cast
-  later (invited, or levelled to 80) has none and stays silent: the mind voices
-  only stored personas and native mutes every cast member in mod-ollama-chat.
+- Only the night's own writers write personas while the mind runs. Optional
+  `[personas] auto_newcomers = true` (read at startup; false or invalid means off)
+  gives members who join the cast later (invited, or levelled to 80) a persona at
+  night. The `newcomers` reflection stage runs just after the snapshot, before
+  threads and other persona readers. With no newcomer work it does not swap models.
+  It reuses the manual generator, slot balance, age floor of 25, name/content screens,
+  bounded overlay, birthdays and relationship seeds, with source `generated` (the
+  existing source allowed by `persona_core`). `newcomers_per_night` defaults to 6 in
+  NightlySettings; the budget may defer them. A saved nightly selection and unit
+  receipts keep that cap across resumes. Generation refusals and recoverable save
+  failures retry on at most three distinct nights, then log `newcomer_gave_up` with
+  the guid. A save failure rolls back the persona/relationships before recording
+  the failed night when the database remains writable; manual generation remains
+  available. Login cancellation consumes no failed night. The owner and non-cast
+  members are excluded. Later night stages see new personas immediately, and the
+  existing login reload makes them available to live text talk without a restart.
+  Existing enrichment, photo-kind and first-selfie stages pick them up as their
+  eligibility and nightly budgets allow; their scheduling is unchanged. Without a
+  separate voice spec a newcomer stays off voice comms (no fallback voice).
+  Until generated, a newcomer stays silent: the mind voices only stored personas
+  and native mutes every cast member in mod-ollama-chat.
   The mind logs `cast_without_persona` (their guids) when that set changes and
   `doctor` notes them. With the mind stopped, `personas generate --dry-run`
   shows their slots and `personas generate` writes them (the reflection model,
@@ -768,6 +802,27 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 - Guild life (raid nights, DKP and loot, offline raids, rank, spec and gear
   upkeep) runs with built-in defaults; `[guild]` and `[dkp]` tables in
   `mind.toml` override them.
+- Offline raids publish a running `job` heartbeat every 60 s with kills, wipes,
+  `members_in_instance` (the exact map and instance), `last_progress_ts` (Unix ms;
+  start, boss engage, kill or wipe), and `boss_engaged` when native can read the
+  encounter state. The mind requests `offline_raid_stop {id, raid_id}` after
+  `[guild] offline_stall_minutes` (30; 10-360) without progress. A heartbeat
+  over 120 s old, an unknown encounter state or an engaged boss prevents a stop;
+  boss evidence between heartbeats (also after a mind restart) defers it, and
+  native rechecks engagement at dispatch. Members leaving the instance is native's
+  own too_few stop; the mind has no scatter rule.
+  Stops target the original start command's id (`raid_id`), use normal teardown,
+  and finish only on its terminal `job` event (`stopped`, recorded by the mind as
+  `stalled`). Cleanup failures retain their native reason. A stop whose send fails
+  (bridge down, transport off) is uncertain and retried on a later tick with a fresh
+  command id; stops register no job mailbox entry. An accepted stop releases the GPU
+  after the cancel grace but never blocks the day, and a lost terminal is declared
+  15 minutes after the accepted stop. Retries
+  use fresh command ids for the same raid; stopping an already stopping run is a
+  no-op, while unknown/finished runs are refused. Old native without heartbeats
+  or the command keeps the existing timeout behaviour and logs unsupported once
+  per run. A mind restart requires fresh progress evidence; lost terminals still
+  use the deadline (or an accepted stop) plus 15-minute `terminal_lost` fallback. Native rebuild needed.
 - Members start conversations with him on two clocks (2026-11-07), per hour of
   his play at chattiness 4 and scaled with it (0 stops every unprompted whisper):
   `[talk] whispers_per_hour` (4, at most 8 an hour and 2 minutes apart;
@@ -817,6 +872,12 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   as an `X-Console-Key` header, so a reload needs the URL again. Every request
   needs the console's Host, and its Origin when the browser sends one; a change
   (POST) always needs both the key and the Origin.
+  HTTP accepts one request per connection, at most 64 connections and 8 event streams,
+  with a 16 KiB head/body cap and 10 s request/drain deadlines. Malformed framing is refused;
+  console and control JSON reject duplicate fields, nonfinite numbers and nesting beyond
+  32 levels. Static package links are not served, and photo reads reject symlinks or junctions
+  anywhere from the selfies root through the file, check the opened file's identity, and
+  accept bounded JPEG bytes only (legacy thumbnails use the same checks).
   Away from home the owner's devices reach it only over the tailnet, at
   `https://<pc>.<tailnet>.ts.net/` (this PC's MagicDNS name) through `tailscale
   serve` on this machine, never Funnel: `tailscale serve --bg --https=443
@@ -1081,14 +1142,20 @@ Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
   until the 60 s poll finds each body online and free; a rearm now records an armed body that
   has none, as that poll would. Any other failed job (`operation_transition_unknown`, a walk,
   leave, duel or grow) stays unknown unless its event carries `changed: false` (below; any ordinary
-  kind can carry it, and a grow refused that way goes on to its next attempt): a leave's `wg_private_state_unavailable` (a member in
-  Wintergrasp) is refused whole at its ack, before any body is reserved or moved
-  (`LeavePvpAckError` names as many members as fit in 256 characters, at least one, as `wg_private_state_unavailable:<guid,...>`; the mind
-  accepts it only when every named guid is in the root's manifest, settles it refused and holds nobody,
-  and recall leaves the named members for a later pass and recalls the rest as a new command). The same reason from the job
+  kind can carry it, and a grow refused that way goes on to its next attempt): an ordinary leave's
+  `wg_private_state_unavailable` (a member in Wintergrasp), or `cleanup_member_not_admitted`
+  (a member's cleanup roster reaches outside the manifest), is refused whole at its ack, before
+  any body is reserved or moved. Wintergrasp takes precedence. `LeavePvpAckError` names as many
+  manifest members as fit in 256 characters, at least one, as `<reason>:<guid,...>`; cleanup names
+  the members whose rosters reach outside, not the outsiders, using the step's roster readers.
+  The mind accepts either only for an ordinary leave when the names are distinct manifest members,
+  settles it refused and holds nobody. Recall backs off those members for 600 s and recalls the rest
+  as a new command; every such retry strictly shrinks its manifest. The same reason from the job
   is a Refuse only until that leave has changed a body. A failed `realm_job` may now carry
   `changed: false`: native proved the entire job changed no body or cleanup state and released
-  it, including all earlier members and pending steps. With a positive ack, an ordinary root
+  it, including all earlier members and pending steps. A cleanup-closure refusal before any
+  mutation carries that proof; earlier changed or unproved steps still prevent it.
+  With a positive ack, an ordinary root
   without children settles `step_refused` and holds nobody; startup rechecks an uncontested
   stored unknown with that proof. Missing/true flags keep the old rules; WG, ack and result
   roots do too, and contradictory evidence still becomes conflict. The settlement logs

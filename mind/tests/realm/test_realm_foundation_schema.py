@@ -8,6 +8,7 @@ import subprocess
 import sys
 
 import pytest
+from dbtemplate import open_migrated
 
 from leeroy_mind.realm import records
 from leeroy_mind.storage import db
@@ -87,7 +88,7 @@ def _row(table):
 
 @pytest.fixture
 def conn(tmp_path):
-    connection = db.open_db(tmp_path / "foundation.db")
+    connection = open_migrated(tmp_path / "foundation.db")
     with connection:
         for identifier in range(1, 8):
             _insert(connection, "game_event", dict(id=identifier, ts=1000.0, type="guard", payload="{}"))

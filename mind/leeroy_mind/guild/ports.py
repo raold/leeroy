@@ -15,7 +15,7 @@ from leeroy_mind.protocol import Ack, Member
 from leeroy_mind.storage.rows import PersonaStateRow, Relationship
 from leeroy_mind.talk.turns import TurnKind
 
-from .protocol import Job
+from .protocol import Job, StopOfflineRaid
 
 
 log = logging.getLogger(__name__)
@@ -196,7 +196,9 @@ class LivePorts:
     async def send(self, cmd):
         if not self.enabled:
             raise RuntimeError("guild transport unavailable")
-        self.jobs.expect(cmd.id)
+        if not isinstance(cmd, StopOfflineRaid):
+            # A stop's terminal rides the start command's id; a mailbox entry would never be drained.
+            self.jobs.expect(cmd.id)
         return await self.app.bridge.send(cmd, preserve_id=True)
 
     async def wait_job(self, cmd_id, timeout_s):
