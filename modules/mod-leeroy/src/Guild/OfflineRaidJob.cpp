@@ -124,10 +124,13 @@ struct Member
     RaidFinalReset finalReset{};
     bool moved = false;
     bool restartIssued = false;
+    bool restartDropped = false;
     bool returnIssued = false;
     bool finished = false;
     bool cleanupNoted = false;
+    bool abandoned = false;
     uint32 returnRetryAt = 0;
+    uint32 masterRepairs = 0;
     OfflineRecall recall{};
 };
 
@@ -160,6 +163,8 @@ struct Job
     Stage stage = Stage::Grouping;
     bool announced = false, prepared = false, leaderSent = false, followersSent = false;
     bool dcIssued = false, cleanupFailed = false;
+    bool failedReported = false, heldNoted = false;
+    uint32 failedAt = 0;
     bool waitOverrideInstalled = false, previousWaitOverride = false, previousWaitValue = false;
     bool trainingSealed = false, trainingRestored = false, trainingTouched = false, proofPublished = false;
     std::string terminalReason, terminalState = "done";
@@ -376,17 +381,10 @@ Player* Driver(Job const& job)
         && SameBody(job.driverBody, driver) && !driver->GetSession()->IsLoggingOut() ? driver : nullptr;
 }
 
-void ApplyRaidHabits(Job const& job, Player* player, Player* driver)
+void RaidStrategies(Job const& job, Player* player, PlayerbotAI* ai)
 {
-    PlayerbotAI* ai = GET_PLAYERBOT_AI(player);
-    ai->SetMaster(driver);
-    ai->ResetStrategies();
-    Training::JournalReset(player->GetGUID().GetCounter());
     ai->ChangeStrategy("-follow", BOT_STATE_NON_COMBAT);
     ai->ChangeStrategy("-follow", BOT_STATE_COMBAT);
-    auto* formation = static_cast<FormationValue*>(ai->GetAiObjectContext()->GetValue<Formation*>("formation"));
-    if (formation)
-        formation->Load("arrow");
     if (!PlayerbotAI::IsTank(player, true) && !PlayerbotAI::IsHeal(player, true))
     {
         ai->ChangeStrategy("+wait for attack", BOT_STATE_COMBAT);
@@ -394,6 +392,52 @@ void ApplyRaidHabits(Job const& job, Player* player, Player* driver)
     }
     // Benchmark corpses are never opened by the ordinary noncombat loot strategy.
     if (Benchmark(job)) ai->ChangeStrategy("-loot", BOT_STATE_NON_COMBAT);
+}
+
+void ApplyRaidHabits(Job const& job, Player* player, Player* driver)
+{
+    PlayerbotAI* ai = GET_PLAYERBOT_AI(player);
+    ai->SetMaster(driver);
+    ai->ResetStrategies();
+    Training::JournalReset(player->GetGUID().GetCounter());
+    auto* formation = static_cast<FormationValue*>(ai->GetAiObjectContext()->GetValue<Formation*>("formation"));
+    if (formation)
+        formation->Load("arrow");
+    RaidStrategies(job, player, ai);
+}
+
+// Every tick, every stage: playerbots' stock ResetAiAction (an empty group list,
+// which removing a member from its old group at Grouping sends, or a leader change)
+// clears a master outside the bot's group, and the driver never joins the raid.
+// A masterless member is unprotected from an arena captain's gather and fails the
+// teardown ownership proof, so put the driver back while this job still holds the
+// body (as DcTestRunJob::ReassertMaster does), and the raid habits the reset dropped.
+void ReassertMasters(Job& job)
+{
+    Player* driver = Driver(job);
+    for (Member& member : job.members)
+    {
+        Player* player = FindOnline(member.guid);
+        PlayerbotAI* ai = player ? GET_PLAYERBOT_AI(player) : nullptr;
+        MasterFacts facts;
+        facts.driver = driver != nullptr;
+        facts.assigned = member.masterAssigned;
+        facts.released = member.masterReleased || member.finished;
+        facts.sameBody = ai && Controlled(job, player);
+        facts.inJobGroup = facts.sameBody && player->GetGroup() && player->GetGroup()->GetGUID() == job.group;
+        facts.masterIsDriver = ai && Identity(ai->GetMaster()) == job.driverBody.player;
+        facts.masterEmpty = ai && !ai->GetMaster();
+        facts.foreignLease = Realm::RealmOwns(member.guid) || Training::DummyTrialOwns(member.guid);
+        if (!ReassertDriverMaster(facts)) continue;
+        ai->SetMaster(driver);
+        RaidStrategies(job, player, ai);
+        if (DC_PB_CONFIG(AutoAvoidAoe, autoAvoidAoe) && !ai->HasStrategy("avoid aoe", BOT_STATE_COMBAT))
+            ai->ChangeStrategy("+avoid aoe", BOT_STATE_COMBAT); // Stock adds it only with a client master.
+        if (player->IsInWorld()) DcStrategyGate::Reconcile(player);
+        if (++member.masterRepairs == 1 || member.masterRepairs % 50 == 0)
+            LOG_INFO("module.leeroy", "leeroy: raid {} master_reasserted guid={} stage={} repairs={}",
+                job.event.id, member.guid, Name(job.stage), member.masterRepairs);
+    }
 }
 
 void Grouping(Job& job)
@@ -813,56 +857,83 @@ void Starting(Job& job)
         Enter(job, Stage::Running);
 }
 
-bool RecallPvpBusy(Player* player)
+RecallPvp ReadRecallPvp(Player* player)
 {
-    Realm::WintergraspMemberFacts facts;
-    facts.foreignHistory = Realm::RealmPvpForeignWintergraspHistory(player->GetGUID().GetCounter(),
+    RecallPvp pvp;
+    auto& wg = pvp.wintergrasp;
+    wg.foreignHistory = Realm::RealmPvpForeignWintergraspHistory(player->GetGUID().GetCounter(),
         Identity(player->GetSession()));
-    facts.inZone = player->GetZoneId() == 4197;
-    facts.inBattlefieldGroup = player->GetGroup() && player->GetGroup()->isBFGroup();
+    wg.inZone = player->GetZoneId() == 4197;
+    wg.inBattlefieldGroup = player->GetGroup() && player->GetGroup()->isBFGroup();
     if (auto* field = sBattlefieldMgr->GetBattlefieldByBattleId(BATTLEFIELD_BATTLEID_WG))
         for (auto team : {TEAM_ALLIANCE, TEAM_HORDE})
         {
-            facts.queued = facts.queued || field->GetPlayersQueueSet(team).contains(player->GetGUID());
-            facts.invited = facts.invited || field->GetInvitedPlayersMap(team).contains(player->GetGUID());
-            facts.inWar = facts.inWar || field->GetPlayersInWarSet(team).contains(player->GetGUID());
+            wg.queued = wg.queued || field->GetPlayersQueueSet(team).contains(player->GetGUID());
+            wg.invited = wg.invited || field->GetInvitedPlayersMap(team).contains(player->GetGUID());
+            wg.inWar = wg.inWar || field->GetPlayersInWarSet(team).contains(player->GetGUID());
         }
-    return player->duel || player->InBattleground() || player->InBattlegroundQueue()
-        || Realm::RealmPvpArenaObserverOwns(player->GetGUID().GetCounter(), Identity(player->GetSession()))
-        || !Realm::WintergraspPrivateReason(facts).empty();
+    pvp.duel = player->duel != nullptr;
+    pvp.battleground = player->InBattleground();
+    pvp.battlegroundQueue = player->InBattlegroundQueue();
+    pvp.arenaObserved = Realm::RealmPvpArenaObserverOwns(player->GetGUID().GetCounter(), Identity(player->GetSession()));
+    return pvp;
 }
 
 void RecallStrays(Job& job, Player* leader, uint32 diff)
 {
-    if (Benchmark(job)) return;
+    if (Benchmark(job) || !leader) return;
+    PlayerbotAI* leaderAi = GET_PLAYERBOT_AI(leader);
     auto const engaged = BossEngaged(job);
-    bool quiet = engaged.has_value() && !*engaged && Driver(job)
-        && !GroupHasRealmOwner(FindGroup(job))
-        && Identity(GET_PLAYERBOT_AI(leader)->GetMaster()) == job.driverBody.player
-        && leader->IsAlive() && !leader->HasPlayerFlag(PLAYER_FLAGS_GHOST)
-        && !leader->IsInCombat() && !leader->GetTransport() && !leader->GetVehicle();
+    RecallQuiet quiet;
+    quiet.encounterKnown = engaged.has_value();
+    quiet.bossEngaged = engaged.value_or(true);
+    quiet.driver = Driver(job) != nullptr;
+    quiet.realmGroup = GroupHasRealmOwner(FindGroup(job));
+    quiet.leaderAi = leaderAi != nullptr;
+    quiet.leaderMasterIsDriver = leaderAi && Identity(leaderAi->GetMaster()) == job.driverBody.player;
+    quiet.leaderAlive = leader->IsAlive();
+    quiet.leaderGhost = leader->HasPlayerFlag(PLAYER_FLAGS_GHOST);
+    quiet.leaderCombat = leader->IsInCombat();
+    quiet.leaderTransport = leader->GetTransport() != nullptr;
+    quiet.leaderVehicle = leader->GetVehicle() != nullptr;
     for (auto const& member : job.members)
         if (auto* player = FindOnline(member.guid); InJobGroup(job, player) && player->IsInCombat())
-            quiet = false;
+            quiet.memberCombat = true;
+    bool const quietOk = RecallQuietOk(quiet);
     for (auto& member : job.members)
     {
         if (member.guid == job.command.leaderGuid) continue;
         auto* player = FindOnline(member.guid);
-        bool const owned = InJobGroup(job, player) && member.masterAssigned && !member.masterReleased
-            && Identity(GET_PLAYERBOT_AI(player)->GetMaster()) == job.driverBody.player
+        PlayerbotAI* ai = InJobGroup(job, player) ? GET_PLAYERBOT_AI(player) : nullptr;
+        bool const owned = ai && member.masterAssigned && !member.masterReleased
+            && Identity(ai->GetMaster()) == job.driverBody.player
             && !Realm::RealmOwns(member.guid) && !Training::DummyTrialOwns(member.guid);
         bool const inside = owned && Present(job, player);
         // Never seize a PvP body, resurrect, reset bindings, cross another dungeon,
         // or move a replaced session. The normal inside summon uses this same
         // destination-bind proof before TeleportTo; arrival is checked separately.
-        bool safe = quiet && owned && player->IsInWorld() && !player->IsBeingTeleported()
-            && player->IsAlive() && !player->HasPlayerFlag(PLAYER_FLAGS_GHOST)
-            && !player->IsInCombat() && !RecallPvpBusy(player)
-            && !player->IsInFlight() && !player->GetTransport() && !player->GetVehicle()
-            && !player->HasPendingBind() && !player->GetMap()->IsDungeon()
-            && player->GetDifficulty(true) == job.difficulty
-            && sInstanceSaveMgr->PlayerGetDestinationInstanceId(player, job.command.mapId, job.difficulty)
-                == job.event.instanceId;
+        bool safe = false;
+        if (quietOk && owned && !inside)
+        {
+            RecallBody body;
+            body.inWorld = player->IsInWorld();
+            body.teleporting = player->IsBeingTeleported();
+            body.alive = player->IsAlive();
+            body.ghost = player->HasPlayerFlag(PLAYER_FLAGS_GHOST);
+            body.combat = player->IsInCombat();
+            body.flight = player->IsInFlight();
+            body.transport = player->GetTransport() != nullptr;
+            body.vehicle = player->GetVehicle() != nullptr;
+            body.pendingBind = player->HasPendingBind();
+            body.inDungeon = body.inWorld && player->GetMap()->IsDungeon();
+            if (body.inWorld && !body.inDungeon)
+            {
+                body.difficultyMatches = player->GetDifficulty(true) == job.difficulty;
+                body.destinationMatches = sInstanceSaveMgr->PlayerGetDestinationInstanceId(player,
+                    job.command.mapId, job.difficulty) == job.event.instanceId;
+            }
+            safe = RecallSafe(quiet, owned, body, [player] { return ReadRecallPvp(player); });
+        }
         auto const action = member.recall.Observe(inside, safe, diff);
         if (action == RecallAction::Arrived)
         {
@@ -913,7 +984,7 @@ void Running(Job& job, uint32 diff)
     {
         ++job.restarts;
         for (Member& member : job.members)
-            member.restartIssued = false;
+            member.restartIssued = member.restartDropped = false;
         Enter(job, Stage::Restarting);
     }
     else RecallStrays(job, leader, diff); // Existing stop/restart priorities always win.
@@ -943,14 +1014,18 @@ void Restarting(Job& job)
         return;
     }
     bool allReady = true;
+    uint32 absent = 0, present = 0;
     for (Member& member : job.members)
     {
+        if (member.restartDropped) continue;
         Player* player = FindOnline(member.guid);
         if (!Present(job, player))
         {
             allReady = false;
+            ++absent;
             continue;
         }
+        ++present;
         if (!member.restartIssued)
         {
             Revive(player);
@@ -961,10 +1036,31 @@ void Restarting(Job& job)
         }
     }
     Player* leader = FindOnline(job.command.leaderGuid);
-    if (Present(job, leader) && !ReadBosses(job, leader, false))
+    bool const leaderPresent = Present(job, leader);
+    if (leaderPresent && !ReadBosses(job, leader, false))
     {
         Stop(job, "encounters_changed", true);
         return;
+    }
+    // A stray must not end the run here: after the grace the restart goes on without
+    // it while the members present meet the minimum. It stays in the roster for
+    // cleanup and a later recall; only this restart's gate stops waiting for it.
+    switch (DecideRestartRoster(job.stageElapsed, absent, present, leaderPresent, job.limits.minMembers))
+    {
+        case RestartRoster::TooFew:
+            Stop(job, "too_few");
+            return;
+        case RestartRoster::DropAbsent:
+            for (Member& member : job.members)
+                if (!member.restartDropped && !Present(job, FindOnline(member.guid)))
+                {
+                    member.restartDropped = true;
+                    LOG_INFO("module.leeroy", "leeroy: raid {} restart_dropped guid={} present={} min={}",
+                        job.event.id, member.guid, present, job.limits.minMembers);
+                }
+            return; // The next tick checks readiness without them.
+        case RestartRoster::Wait:
+            break;
     }
     if (allReady && job.stageElapsed >= RestartSettleMs && Enable(job, leader))
     {
@@ -1073,7 +1169,8 @@ bool Teardown(Job& job)
     }
     bool pendingTransfer = false;
     for (Member const& member : job.members)
-        if (Player* player = ObjectAccessor::FindConnectedPlayer(Guid(member.guid)); member.changed && player)
+        if (Player* player = ObjectAccessor::FindConnectedPlayer(Guid(member.guid));
+            member.changed && !member.abandoned && player) // An abandoned body's travel is not ours.
             pendingTransfer = pendingTransfer || player->IsBeingTeleported();
 
     if (!job.trainingRestored && (Benchmark(job) || !job.event.trainingRun.empty() || job.trainingToken))
@@ -1098,6 +1195,15 @@ bool Teardown(Job& job)
                 || Identity(GET_PLAYERBOT_AI(player)->GetMaster()) != job.driverBody.player)
             {
                 CleanupFailure(job, member, "restore_ownership", true);
+                if (AbandonLostMember(Benchmark(job), true, Training::HasTrainingJournal(member.guid), job.stageElapsed))
+                {
+                    // Not ours to restore and nothing journaled on it: never touch it again,
+                    // and let the members this job still holds finish their cleanup.
+                    member.finished = member.abandoned = true;
+                    LOG_WARN("module.leeroy", "leeroy: raid {} cleanup_abandoned guid={} reason=restore_ownership",
+                        job.event.id, member.guid);
+                    continue;
+                }
                 pendingRestore = true;
                 continue;
             }
@@ -1336,7 +1442,16 @@ bool RunTeardown(Job& job)
     }
     // A failed receipt is not a release: ordinary offline raids need the same
     // bounded report as benchmarks while incomplete recovery still owns active.
+    bool const reportedBefore = job.terminal.Reported();
     auto report = job.terminal.Observe(complete, job.stageElapsed);
+    if (complete && reportedBefore && job.failedReported)
+        LOG_INFO("module.leeroy", "leeroy: raid {} cleanup completed after cleanup_failed elapsed_ms={}",
+            job.event.id, job.stageElapsed);
+    if (report == RaidCleanupReport::Failed)
+    {
+        job.failedReported = true;
+        job.failedAt = job.stageElapsed;
+    }
     if (report != RaidCleanupReport::None)
     {
         auto event = job.event;
@@ -1349,6 +1464,47 @@ bool RunTeardown(Job& job)
         PublishJob(event);
     }
     return complete; // A failed terminal never releases a still-owned recovery reservation.
+}
+
+uint32 HeldMembers(Job const& job)
+{
+    uint32 held = 0;
+    for (auto const& member : job.members)
+    {
+        if (member.finished || !member.masterAssigned || member.masterReleased) continue;
+        Player* player = ObjectAccessor::FindConnectedPlayer(Guid(member.guid));
+        PlayerbotAI* ai = Controlled(job, player) ? GET_PLAYERBOT_AI(player) : nullptr;
+        if (ai && player->GetGroup() && player->GetGroup()->GetGUID() == job.group
+            && Identity(ai->GetMaster()) == job.driverBody.player) ++held;
+    }
+    return held;
+}
+
+// Ten minutes after cleanup_failed, an ordinary offline raid gives its native slot
+// back unless the job still provably holds a member (same body, its group, its
+// driver as master). Training journals and the cleanup receipt are left as they are,
+// so their own fences and get_training_cleanup still show what was not restored.
+bool ReleaseStuckSlot(Job& job)
+{
+    uint32 const since = job.failedReported ? job.stageElapsed - job.failedAt : 0;
+    uint32 const held = HeldMembers(job);
+    auto const decision = DecideSlotRelease(Benchmark(job), job.failedReported, since, held);
+    if (decision == SlotRelease::Keep && job.failedReported && !Benchmark(job) && !job.heldNoted)
+    {
+        job.heldNoted = true;
+        LOG_WARN("module.leeroy", "leeroy: raid {} cleanup_held held={} after_ms={}; the slot stays owned",
+            job.event.id, held, since);
+    }
+    if (decision != SlotRelease::Release) return false;
+    std::string unfinished;
+    for (auto const& member : job.members)
+        if (!member.finished)
+            unfinished += (unfinished.empty() ? "" : ",") + std::to_string(member.guid);
+    bool const waitRestored = RestoreWaitOverride(job);
+    LOG_WARN("module.leeroy", "leeroy: raid {} cleanup_released after_ms={} unfinished={} wait_override_restored={}"
+        " training_run={} (journals and the cleanup receipt are retained)", job.event.id, since,
+        unfinished.empty() ? "-" : unfinished, waitRestored, job.event.trainingRun.empty() ? "-" : job.event.trainingRun);
+    return true;
 }
 #endif
 }
@@ -1485,6 +1641,7 @@ void TickOfflineRaid([[maybe_unused]] uint32 diffMs)
     job.elapsed = AdvanceElapsed(job.elapsed, diffMs);
     job.stageElapsed = AdvanceElapsed(job.stageElapsed, diffMs);
     job.progressElapsed = AdvanceElapsed(job.progressElapsed, diffMs);
+    ReassertMasters(job); // Before any stage reads ownership, teardown included.
     if (job.stage != Stage::TearingDown)
     {
         auto reason = OfflineRaidStopReason(HumanConnected(job.human) || HumanConnected(HumanGuid()),
@@ -1531,6 +1688,19 @@ void TickOfflineRaid([[maybe_unused]] uint32 diffMs)
             {
                 if (!Benchmark(job)) lastFinishedOffline = job.event.id;
                 active.reset();
+            }
+            else if (ReleaseStuckSlot(job))
+            {
+                auto const leader = job.command.leaderGuid;
+                auto const token = job.trainingToken;
+                auto const id = job.event.id;
+                lastFinishedOffline = id;
+                active.reset(); // job is gone from here on.
+                // The leader's DC training-run receipt needs the job's proof while it is
+                // active; released, it can restore its own per-leader settings.
+                if (token)
+                    LOG_INFO("module.leeroy", "leeroy: raid {} cleanup_released training_run_cleared={}",
+                        id, Training::ClearTrainingRun(leader, token));
             }
             break;
     }

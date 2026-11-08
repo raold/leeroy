@@ -2,6 +2,8 @@
 #ifndef MOD_LEEROY_OFFLINE_RAID_POLICY_H
 #define MOD_LEEROY_OFFLINE_RAID_POLICY_H
 
+#include "LeeroyRealmCleanup.h"
+
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -51,6 +53,79 @@ struct OfflineRecall
 inline constexpr std::uint32_t OfflineRecallGraceMs = 30000;
 inline constexpr std::uint32_t OfflineRecallRetryMs = 60000;
 inline constexpr std::uint32_t OfflineRecallAttempts = 3;
+
+// Recall is only sent while the raid is quiet: a known, unengaged encounter, the
+// job's driver, no Realm owner in the group, and a leader and group out of combat.
+struct RecallQuiet
+{
+    bool encounterKnown = false, bossEngaged = false, driver = false, realmGroup = false;
+    bool leaderAi = false, leaderMasterIsDriver = false, leaderAlive = false, leaderGhost = false;
+    bool leaderCombat = false, leaderTransport = false, leaderVehicle = false, memberCombat = false;
+};
+bool RecallQuietOk(RecallQuiet const& quiet);
+
+// One absent follower's body. The adapter fills it only for an owned body that is
+// not already inside; inDungeon short-circuits before any destination lookup.
+struct RecallBody
+{
+    bool inWorld = false, teleporting = false, alive = false, ghost = false, combat = false;
+    bool flight = false, transport = false, vehicle = false, pendingBind = false, inDungeon = false;
+    bool difficultyMatches = false, destinationMatches = false;
+};
+bool RecallBodySafe(RecallBody const& body);
+
+struct RecallPvp
+{
+    bool duel = false, battleground = false, battlegroundQueue = false, arenaObserved = false;
+    Realm::WintergraspMemberFacts wintergrasp{};
+};
+bool RecallPvpBusy(RecallPvp const& pvp);
+
+// The PvP facts need the battlefield manager and the arena observer, so they are
+// read last and only for a body every cheaper check already admits.
+template<class ReadPvp>
+bool RecallSafe(RecallQuiet const& quiet, bool owned, RecallBody const& body, ReadPvp&& readPvp)
+{
+    return RecallQuietOk(quiet) && owned && RecallBodySafe(body) && !RecallPvpBusy(readPvp());
+}
+
+// The driver is a separate self-mastered bot outside the raid group. Stock playerbots
+// (ResetAiAction on an empty group list or a leader change) clears a master that is
+// not in the bot's group, and FindNewMaster finds no master in an all-bot raid, so a
+// member can be left masterless: then it thinks on the slow path, is no longer
+// protected from an arena captain's gather, and teardown cannot prove it is ours.
+// Restore the driver only for a body this job still holds whose master is empty; a
+// non-empty foreign master is someone else's control and stays an ownership change.
+struct MasterFacts
+{
+    bool driver = false, assigned = false, released = false, sameBody = false, inJobGroup = false;
+    bool masterIsDriver = false, masterEmpty = false, foreignLease = false;
+};
+bool ReassertDriverMaster(MasterFacts const& facts);
+
+// A restart needs every remaining roster member back at the entrance. After this
+// grace an absent member is dropped from the restart gate when the members present
+// still meet the minimum (Decide's too_few rule); otherwise the run stops too_few.
+// The leader is never dropped: its absence fails the restart at its own timeout.
+inline constexpr std::uint32_t OfflineRestartAbsentMs = 30000;
+enum class RestartRoster { Wait, DropAbsent, TooFew };
+RestartRoster DecideRestartRoster(std::uint32_t stageElapsedMs, std::uint32_t absent, std::uint32_t present,
+    bool leaderPresent, std::uint32_t minMembers);
+
+// Teardown: once cleanup has failed (60 s), a member this job no longer holds (other
+// group, other master, other body) stops blocking the members it does hold, unless it
+// carries a training journal that only a restore on that body can clear. Benchmarks
+// keep their stricter recovery and never abandon a participant.
+inline constexpr std::uint32_t OfflineCleanupFailMs = 60000;
+bool AbandonLostMember(bool benchmark, bool lost, bool trainingJournal, std::uint32_t stageElapsedMs);
+
+// After cleanup_failed was reported, an ordinary offline raid keeps its native slot
+// for this long, then releases it unless a member is still provably held (connected,
+// same body, in the job's group under the job's driver). Benchmarks never release.
+inline constexpr std::uint32_t OfflineSlotReleaseMs = 600000;
+enum class SlotRelease { Keep, Wait, Release };
+SlotRelease DecideSlotRelease(bool benchmark, bool failedReported, std::uint32_t sinceReportMs,
+    std::uint32_t heldMembers);
 
 // Configuration may release the cast pins while a job is running. These checks also apply during setup/restarts,
 // before the running-only policy can meaningfully count members or inspect encounter state.

@@ -25,6 +25,7 @@ struct LeeroyConfig
     bool realmAnnounce = true;
     bool castGuard = false;
     bool queueFence = true;
+    bool castArenaTeamsLeave = true;
     std::string realmPlacesFile = "leeroy_places.csv";
     std::string realmItemsFile = "leeroy_items.csv";
 };
