@@ -43,7 +43,9 @@ LUST_NEGATIVE: tuple[tuple[str, int], ...] = tuple(
 _KINDS = {"selfie": "phone selfie", "mirror_selfie": "mirror selfie",
           "headshot": "professional headshot", "snapshot": "candid photo taken by a friend"}
 _FRAMINGS = {"face": "close-up of the face", "head_and_shoulders": "head and shoulders",
-             "upper_body": "waist-up shot, upper body"}  # the waist in frame, so the figure shows
+             "upper_body": "waist-up shot, upper body",
+             # face, bust, waist and hips in frame (owner, 2026-11-08)
+             "three_quarter": "three-quarter shot from mid-thigh up, waist and hips in frame"}  # the waist in frame, so the figure shows
 _LENGTHS = {"short": "short", "chin": "chin-length", "shoulder": "shoulder-length",
             "long": "long", "very_long": "very long"}
 _HEADSHOT_TAIL = "recent photo, natural skin texture, unretouched"
