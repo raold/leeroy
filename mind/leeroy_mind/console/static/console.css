@@ -478,3 +478,72 @@ td > div.who { color: var(--ink); font-weight: 600; }
 #tab-library .libform input { flex: 1 1 22em; min-width: 0; }
 #tab-library .lib-hit .lib-text { margin: 8px 0; max-width: 100ch; overflow-wrap: anywhere; white-space: pre-wrap; }
 #tab-library .lib-hit pre.lib-text { font: 12.5px/1.45 monospace; overflow-x: auto; white-space: pre; }
+
+/* Phone/tablet chrome and the twelve data tabs. Comms keeps its own layout rules above;
+   no shared color/type tokens change, and desktop widths retain their existing geometry. */
+@media (max-width: 900px) {
+  .top-inner { padding: 10px 12px; gap: 10px; }
+  .brand { min-width: 0; }
+  .brand > svg { flex: none; }
+  .strip { gap: 8px 14px; }
+  .tabs { flex-wrap: nowrap; overflow-x: auto; padding: 0 12px; scroll-padding: 12px;
+    overscroll-behavior-x: contain; }
+  .tabs button { flex: none; white-space: nowrap; }
+  .top button, .mindtab button, .photo-gallery button, .dialog button,
+  .mindtab summary, .mindtab input, .mindtab select { min-height: 44px; min-width: 44px; }
+  .mindtab :is(input, select, textarea) { font-size: 16px; max-width: 100%; }
+  .mindtab input[type="checkbox"] { min-height: 24px; min-width: 24px; margin: 0; }
+  .mindtab label:has(input[type="checkbox"]) { min-height: 44px; padding: 0 10px; }
+  .mindtab { padding: 14px 12px 36px; gap: 14px; overflow-wrap: anywhere; }
+  .mindtab .cards { grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 14px; }
+  .mindtab .cards.wide { grid-template-columns: repeat(auto-fit, minmax(min(520px, 100%), 1fr)); }
+  .mindtab .panel { padding: 12px; }
+  .mindtab .panel > header { flex-wrap: wrap; }
+  .mindtab .panel > header > *, .mindtab .formrow label { min-width: 0; max-width: 100%; }
+  .mindtab .formrow label { flex-wrap: wrap; }
+  .mindtab .mode, .mindtab .chip { white-space: normal; line-height: 1.35; }
+  .mindtab .kpis { grid-template-columns: repeat(auto-fit, minmax(min(145px, 100%), 1fr)); }
+  .mindtab .kpi { padding: 10px 12px; }
+  .mindtab .kv { grid-template-columns: minmax(0, 8em) minmax(0, 1fr); }
+  .mindtab .kv > *, .mindtab .srow > *, .mindtab .view-head > * { min-width: 0; max-width: 100%; }
+  .mindtab :is(.scroll, .table-scroll, .bank-scroll) { max-width: 100%; overflow: auto;
+    overscroll-behavior-x: contain; }
+  .mindtab :is(.scroll, .table-scroll) th { white-space: nowrap; }
+  .mindtab :is(.scroll, .table-scroll) :is(th, td):first-child { position: sticky; left: 0;
+    z-index: 1; background: var(--surface); max-width: 40vw; }
+  .mindtab .pick tbody tr { height: 44px; }
+  .mindtab .facebtn { justify-content: center; align-items: center; }
+  .mindtab .dial { grid-template-columns: minmax(0, 1fr); }
+  .mindtab .dial .moves { grid-column: 1; }
+  .mindtab .dial .ctl { margin: 0; padding-top: 4px; border: 0; }
+  .mindtab .dial .ctl input[type="range"] { width: min(100%, 16em); }
+  .mindtab .photonow { flex-wrap: wrap; }
+  #tab-board .reply, #tab-board .replybox { margin-left: 8px; }
+  #tab-board .replybox textarea { font-size: 16px; }
+  #tab-board .replybox .rfoot { flex-wrap: wrap; }
+  #tab-bank .bankgrid { min-width: 584px; }
+  #tab-bank .slot { padding-top: 20px; }
+  #tab-bank .slot .w { max-height: none; font-size: 12px; line-height: 1.3; }
+  #tab-library .libform input { flex-basis: 100%; }
+  #tab-library .libform select { flex: 1; min-width: 0; }
+  #toasts { width: min(300px, calc(100vw - 24px)); right: 12px; max-height: 55dvh; overflow-y: auto; }
+  .toast, .dialog { overflow-wrap: anywhere; }
+  .toast .acts, .dialog .acts { flex-wrap: wrap; }
+  .scrim { padding: 12px; }
+  .dialog { max-width: 100%; max-height: calc(100dvh - 24px); overflow: auto; }
+  .photo-gallery { height: 100dvh; overflow-y: auto; }
+  .gallery-head > *, .gallery-nav > *, .gallery-actions > * { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+}
+
+@media (max-width: 480px) {
+  .mindtab .kpi .v { font-size: 24px; }
+  .strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; gap: 8px 12px; }
+  .strip .stat { min-width: 0; }
+  .strip .stat .v { max-width: 100%; font-size: 12px; overflow: visible; }
+  .strip .stat .t { min-width: 0; overflow-wrap: anywhere; white-space: normal; }
+  .strip .mode { grid-column: span 2; justify-self: start; white-space: normal; }
+  .strip .theme { grid-column: 3; grid-row: 1; }
+  .strip .ptt { grid-column: span 2; }
+  .mindtab .formrow label:has(select) { flex: 1 1 100%; justify-content: space-between; }
+  .mindtab .formrow select { min-width: 44px; max-width: calc(100% - 4em); }
+}
