@@ -716,6 +716,12 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   as an `X-Console-Key` header, so a reload needs the URL again. Every request
   needs the console's Host, and its Origin when the browser sends one; a change
   (POST) always needs both the key and the Origin.
+  HTTP accepts one request per connection, at most 64 connections and 8 event streams,
+  with a 16 KiB head/body cap and 10 s request/drain deadlines. Malformed framing is refused;
+  console and control JSON reject duplicate fields, nonfinite numbers and nesting beyond
+  32 levels. Static package links are not served, and photo reads reject symlinks or junctions
+  anywhere from the selfies root through the file, check the opened file's identity, and
+  accept bounded JPEG bytes only (legacy thumbnails use the same checks).
   Away from home the owner's devices reach it only over the tailnet, at
   `https://<pc>.<tailnet>.ts.net/` (this PC's MagicDNS name) through `tailscale
   serve` on this machine, never Funnel: `tailscale serve --bg --https=443

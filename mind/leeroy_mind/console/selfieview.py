@@ -88,13 +88,10 @@ def queue_view(conn, data_dir: Path, *, now: float) -> dict:
     return out
 
 
-def _data_url(path: Path) -> str | None:
-    try:
-        with open(path, "rb") as f:
-            data = f.read(MAX_IMAGE_BYTES + 1)
-    except OSError:
-        return None
-    if len(data) > MAX_IMAGE_BYTES:
+def _data_url(path: Path, root: Path) -> str | None:
+    from .faces import read_image
+    data = read_image(path, root, maximum=MAX_IMAGE_BYTES)
+    if data is None:
         return None
     return "data:image/jpeg;base64," + base64.b64encode(data).decode("ascii")
 
@@ -116,7 +113,7 @@ def set_images(conn, data_dir: Path, guid: int, set_no: int) -> dict | None:
     images = []
     for idx in conn.execute("SELECT idx FROM selfie_candidate WHERE guid = ? AND set_no = ? "
                             "ORDER BY idx", (guid, set_no)).fetchall():
-        src = _data_url(files.candidate(data_dir, guid, set_no, idx[0], thumb=True))
+        src = _data_url(files.candidate(data_dir, guid, set_no, idx[0], thumb=True), Path(data_dir) / "selfies")
         if src is not None:
             images.append({"index": idx[0], "src": src})
     return {"guid": guid, "set": set_no,
