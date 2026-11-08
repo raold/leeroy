@@ -156,9 +156,10 @@ def _ended(ctx: "NightContext", row: SnapRow) -> str | None:
 
 
 def _held(p: Persona, row: SnapRow) -> str | None:
-    scene = scene_from(row.scene)
-    if type(scene.recipe) is not int or scene.recipe != RECIPE:
+    recipe = row.scene.get("recipe")
+    if type(recipe) is not int or recipe != RECIPE:
         return "legacy_scene_schema"  # preserve the row and files; never render old free prose
+    scene = scene_from(row.scene)
     why = scene_renderable(p, scene)
     return None if why is None else _HELD.get(why, why)
 

@@ -23,7 +23,7 @@ from .prompt import (BUILD_WORDS, _FRAMINGS, _HEADSHOT_TAIL, _KINDS, _PHONE_TAIL
 from .style import AGE_RE, LUST, PLAIN, STYLES, SUGGESTIVE_MIN_AGE, style_of, suggestive
 from .scene_choices import (ACTIVITIES, EXPRESSIONS, GAME_MONITOR, ONE_FACE_NEGATIVE,
                             OUTFITS, PLACES, PROPS, SCENE_LUST_SETTINGS, TILE_DESK,
-                            TILE_FRAMING, compose_choices)
+                            TILE_FRAMING)
 
 SCENE_NAME = "scene"             # its overlay: prompts/nightly_scene.txt
 SCENE_LUST_NAME = "scene_lust"   # its overlay: prompts/nightly_scene_lust.txt
@@ -317,12 +317,10 @@ class Scene:
 
 
 def scene_from(data: dict) -> Scene:
-    """The Scene a screened reply stands for, or the one scene_json stored. A lust reply (it has
+    """Decode an already composed, screened scene or the one scene_json stored. Never grant a
+    recipe version by reading a row. A lust reply (it has
     a colour) is composed as her profile photo is (kind.compose_lust: the colour put into the
     outfit, an article in front) and is of the lust style; a stored one says its style."""
-    # Old rows store already composed prose. New replies have a prop key and enum picks.
-    if "prop" in data:
-        data = compose_choices(data)
     outfit, style = data["outfit"], data.get("style", PLAIN)
     if "colour" in data:
         outfit, style = compose_lust({f: data[f] for f in (

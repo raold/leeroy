@@ -128,10 +128,20 @@ def test_similarity_only_copies_known_codes_and_numeric_fields():
 
 
 def test_new_composed_scene_persists_its_recipe_but_old_prose_never_gains_one():
-    new = scene.scene_from(PICKS)
+    new = scene.scene_from(choices.compose_choices(PICKS))
     stored = scene.scene_json(new)
     assert new.recipe == stored["recipe"] == choices.RECIPE
     assert scene.scene_from(stored) == new
     old = {k: v for k, v in stored.items() if k != "recipe"}
     assert scene.scene_from(old).recipe == 0
     assert "recipe" not in scene.scene_json(scene.scene_from(old))
+
+
+def test_decoding_never_converts_raw_picks_or_grants_provenance():
+    with pytest.raises(KeyError):
+        scene.scene_from(PICKS)  # it is a model reply, not a stored/composed scene
+    for recipe in (0, 2, True):
+        raw = {**PICKS, "shows": "an invented scene", "recipe": recipe}
+        decoded = scene.scene_from(raw)
+        assert type(decoded.recipe) is type(recipe) and decoded.recipe == recipe
+        assert decoded.activity == PICKS["activity"]  # no read-time composition

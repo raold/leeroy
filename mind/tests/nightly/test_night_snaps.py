@@ -32,8 +32,9 @@ from selfies.fakes import JPEG, fake_command, fake_worker, planned_snap, ready, 
 
 SNAPS_CFG = SelfieCfg(enabled=True, snaps=True)
 from leeroy_mind.selfies.scene import scene_json
+from leeroy_mind.selfies.scene_choices import compose_choices
 from selfies.test_scene_choices import PICKS
-SCENE = scene_json(scene_from(PICKS))
+SCENE = scene_json(scene_from(compose_choices(PICKS)))
 
 IDENTITY = {"FAKE_SELFIE_IDENTITY": "1"}
 
@@ -549,9 +550,13 @@ def test_rows_that_will_expire_do_not_crowd_out_a_good_row_under_a_small_cap(h):
 
 
 @pytest.mark.parametrize("recipe", [None, 0, 2, True])
-def test_pre_enum_or_unknown_scene_stays_held_without_rendering_or_deleting(h, tmp_path, caplog, recipe):
+@pytest.mark.parametrize("raw_picks", [False, True])
+def test_pre_enum_or_unknown_scene_stays_held_without_rendering_or_deleting(
+        h, tmp_path, caplog, recipe, raw_picks):
     cast(h, 101)
     old = {k: v for k, v in SCENE.items() if k != "recipe"}
+    if raw_picks:
+        old.update(PICKS)  # a reader must never compose these and silently grant recipe 1
     if recipe is not None:
         old["recipe"] = recipe
     sid = situation(h, 101, scene=old)
