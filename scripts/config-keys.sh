@@ -18,7 +18,7 @@ ac_config_prefix() {
 }
 
 ac_report_config_keys() {
-    local dist="$1" live="$2" file key old_prefix new_prefix
+    local dist="$1" live="$2" file key old_prefix new_prefix dist_keys live_keys
     local -a added=() gone=()
     [ -f "$dist" ] || return 0
     file="$(basename "$live")"
@@ -26,8 +26,12 @@ ac_report_config_keys() {
         warn "$file missing from $(dirname "$live") -- copy it from $dist"
         return 0
     fi
-    mapfile -t added < <(LC_ALL=C comm -23 <(ac_config_keys "$dist") <(ac_config_keys "$live"))
-    mapfile -t gone < <(LC_ALL=C comm -13 <(ac_config_keys "$dist") <(ac_config_keys "$live"))
+    # Capture read failures before process substitution, whose exit status mapfile
+    # cannot see. An unreadable file must not masquerade as an empty configuration.
+    dist_keys=$(ac_config_keys "$dist") || { warn "cannot read template keys: $file"; return 1; }
+    live_keys=$(ac_config_keys "$live") || { warn "cannot read config keys: $file"; return 1; }
+    mapfile -t added < <(LC_ALL=C comm -23 <(printf '%s' "$dist_keys") <(printf '%s' "$live_keys"))
+    mapfile -t gone < <(LC_ALL=C comm -13 <(printf '%s' "$dist_keys") <(printf '%s' "$live_keys"))
     if [ "${#added[@]}" -gt 0 ]; then
         log "new config keys: $file"
         for key in "${added[@]}"; do printf '    new key: %-50s (%s)\n' "$key" "$file"; done

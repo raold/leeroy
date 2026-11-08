@@ -32,6 +32,11 @@ lacks 'Shared.Key'
 lacks 'VALUE_MUST_STAY_PRIVATE'
 lacks 'suspect a rename'
 
+if output=$(ac_config_keys() { return 1; }; ac_report_config_keys "$dist" "$live" 2>&1); then exit 1; fi
+has 'cannot read template keys'
+lacks 'new key:'
+lacks 'gone key:'
+
 # Empty/comment-only inputs must succeed under common.sh's errexit/pipefail.
 printf '# Disabled.Key = 1\n' > "$dist"
 : > "$live"
