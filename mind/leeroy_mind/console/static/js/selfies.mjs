@@ -105,6 +105,7 @@ function drawQueue(rows, ok, why) {
 function loadShots(guid, set) {
   var key = guid + ":" + set;
   if (!SHOTS.has(key)) {
+    while (SHOTS.size >= 24) { SHOTS.delete(SHOTS.keys().next().value); }
     SHOTS.set(key, api("/api/selfies/images?guid=" + num(guid) + "&set=" + num(set)).then(function (r) {
       if (refused(r) || r.status !== 200) { return null; }
       return r.json();

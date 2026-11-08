@@ -565,3 +565,16 @@ td > div.who { color: var(--ink); font-weight: 600; }
   #tab-ops .panel { padding: 12px; }
   #t-ops .badge { white-space: normal; }
 }
+
+/* Resilience and accessibility: readable secondary text, status and bounded roster pages. */
+:root { --ink-3: #596775; --muted: #5b6379; --warn: #875007; --live: #17613f; --bad: #9d2c24; --ok: #24633e; }
+:root[data-theme="dark"] { --ink-3: #9ba8b5; --muted: #a4aec3; --warn: #e2a744; --live: #57c08c; --bad: #ef6a5a; }
+.tile.off { opacity: 1; border-style: dashed; }
+.av.you { color: var(--accent-ink); }
+.stale-note { margin: 10px 16px; padding: 8px 12px; color: var(--warn); background: var(--surface);
+  border: 1px solid var(--warn); border-radius: 8px; }
+.roster-pages { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 8px 0; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important; scroll-behavior: auto !important; }
+}

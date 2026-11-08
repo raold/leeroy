@@ -11,7 +11,8 @@ var MIND_WORDS = { running: "mind running", starting: "mind starting", stopping:
 export function setPill(id, cls, text, title) {
   var e = $(id);
   e.className = e.className.replace(/\b(ok|warn|bad)\b/g, "").trim() + (cls ? " " + cls : "");
-  e.querySelector(".t").textContent = text;
+  var words = e.querySelector(".t");
+  if (words.textContent !== text) { words.textContent = text; }
   e.title = title || "";
 }
 export function mindClass(state) {

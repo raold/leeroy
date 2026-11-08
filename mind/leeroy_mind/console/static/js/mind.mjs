@@ -121,16 +121,27 @@ function pollHealth() {
     .then(function () { healthBusy = false; });
 }
 
-var pending = null;
-function closeConfirm() { $("confirm").hidden = true; pending = null; }
-export function askConfirm(text, yes, then) {
+var pending = null, confirmReturn = null;
+function closeConfirm() {
+  if ($("confirm").hidden) { return; }
+  $("confirm").hidden = true; pending = null;
+  document.querySelector(".top").inert = false;
+  document.querySelector("main").inert = false;
+  if (confirmReturn && confirmReturn.isConnected) { confirmReturn.focus(); }
+  confirmReturn = null;
+}
+export function askConfirm(text, yes, then, opener) {
+  confirmReturn = opener || document.activeElement;
   pending = then;
   $("confirm-text").textContent = text;
   $("confirm-yes").textContent = yes;
   $("confirm").hidden = false;
+  document.querySelector(".top").inert = true;
+  document.querySelector("main").inert = true;
   $("confirm-no").focus();
 }
 function act(svc, action, confirm) {
+  var opener = document.activeElement;
   var why = $(svc === "mind" ? "m-why" : "w-why");
   why.textContent = action + " requested…";
   why.classList.remove("bad");
@@ -138,7 +149,7 @@ function act(svc, action, confirm) {
   post("/api/control", { service: svc, action: action, confirm: !!confirm }).then(function (j) {
     if (j.confirm) {
       askConfirm(j.confirm, action.charAt(0).toUpperCase() + action.slice(1),
-                 function () { act(svc, action, true); });
+                 function () { act(svc, action, true); }, opener);
       why.textContent = "";
     } else {
       why.textContent = j.ok ? j.message : (j.error || "it did not work");
@@ -153,6 +164,11 @@ $("tab-mind").addEventListener("click", function (ev) {
   if (b && !b.disabled) { act(b.dataset.svc, b.dataset.act, false); }
 });
 $("confirm-no").addEventListener("click", closeConfirm);
+$("confirm").addEventListener("keydown", function (ev) {
+  if (ev.key !== "Tab") { return; }
+  ev.preventDefault();
+  (document.activeElement === $("confirm-no") ? $("confirm-yes") : $("confirm-no")).focus();
+});
 $("confirm-yes").addEventListener("click", function () {
   var p = pending;
   closeConfirm();

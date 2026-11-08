@@ -40,8 +40,7 @@ export function pollTab(name, opts) {
     busy = true;
     api(opts.path).then(function (r) {
       if (refused(r)) { return null; }
-      return r.json().then(function (j) { return { status: r.status, j: j }; },
-                            function () { return { status: r.status, j: {} }; });
+      return r.json().then(function (j) { return { status: r.status, j: j }; });
     }).then(function (x) {
       if (!x) { return; }
       if (x.status === 200) {

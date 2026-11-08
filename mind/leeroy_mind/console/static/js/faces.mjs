@@ -14,6 +14,7 @@
 // no longer: every size of it is asked for again at its next draw.
 import { api, el, on } from "./core.mjs";
 import { FaceCache } from "./facecache.mjs";
+import { deadline } from "./resilience.mjs";
 import { initials, paletteSlot } from "./names.mjs";
 
 var KINDS = {
@@ -24,7 +25,7 @@ var KINDS = {
   wall: { cls: "av wall", size: "md" },
 };
 
-var PALETTE = ["#2a68a8", "#6956b0", "#1f7a52", "#b06a0c", "#a0446e", "#0d6470", "#7a5c2e", "#4e5f9a"];
+var PALETTE = ["#2a68a8", "#6956b0", "#1f7a52", "#925708", "#a0446e", "#0d6470", "#7a5c2e", "#4e5f9a"];
 
 // A photo is in the cache only once it decoded: one that does not is a miss like a 404
 function loadFace(key) {
@@ -40,7 +41,7 @@ function loadFace(key) {
       var url = URL.createObjectURL(b), img = document.createElement("img");
       img.alt = "";
       img.src = url;
-      return img.decode().then(function () { return { url: url, img: img }; },
+      return deadline(img.decode(), 10000).then(function () { return { url: url, img: img }; },
                                function (e) { URL.revokeObjectURL(url); throw e; });
     });
 }
@@ -69,7 +70,7 @@ function photo(p, cls) {
 export function face(guid, name, kind, opts) {
   opts = opts || {};
   var k = KINDS[kind || "feed"] || KINDS.feed;
-  var cls = k.cls + (opts.speaking ? " speaking" : "");
+  var cls = k.cls + (opts.speaking ? " speaking" : "") + (opts.you ? " you" : "");
   var box = el("span", cls, opts.you ? "YOU" : initials(name));
   box.style.setProperty("--c", opts.you ? "var(--accent)" : PALETTE[paletteSlot(guid)]);
   var g = typeof guid === "string" && guid.trim() !== "" ? Number(guid) : guid;

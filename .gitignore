@@ -19,6 +19,7 @@
 /mind/.venv/
 /mind/.pytest_cache/
 /mind/*.egg-info/
+/mind/tests/console/e2e/node_modules/
 !/voice/
 /voice/.venv/
 /voice/.pytest_cache/

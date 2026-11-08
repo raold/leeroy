@@ -942,6 +942,10 @@ class ConsoleApp:
     # -- the personas tab (read-only) ----------------------------------------------------------
 
     async def _api_personas(self, req: Request):
+        offsets = req.query.get("offset", [])
+        offset = digits(offsets[0], 6) if len(offsets) == 1 else (0 if not offsets else None)
+        if offset is None:
+            return json_response(400, {"ok": False, "error": "offset: one nonnegative roster offset"})
         try:
             view = await asyncio.to_thread(feed.read, self.s.data_dir / "mind.db",
                                            personaview.roster_view, now=self._clock())
@@ -949,7 +953,7 @@ class ConsoleApp:
             log.warning("console_personas_unread: error=%s", type(e).__name__)
             return json_response(503, {"ok": False, "error": f"mind.db could not be read "
                                                              f"({type(e).__name__})"})
-        return json_response(200, view)
+        return json_response(200, personaview.roster_page(view, offset))
 
     async def _api_persona(self, req: Request):
         values = req.query.get("guid", [])

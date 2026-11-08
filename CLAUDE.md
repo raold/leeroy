@@ -784,7 +784,7 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 .venv/Scripts/python -m leeroy_mind console --data-dir "$D" # the guild console; open the URL it prints
 .venv/Scripts/python -m pytest -q                           # the unit tests
 .venv/Scripts/python -m pytest -q -n auto tests             # fast run; up to 8 isolated workers
-.venv/Scripts/python -m pip install -r tests/console/e2e/requirements.txt; .venv/Scripts/python -m playwright install chromium; .venv/Scripts/python -m pytest tests/console/e2e -q  # isolated browser rehearsal
+.venv/Scripts/python -m pip install -r tests/console/e2e/requirements.txt; .venv/Scripts/python -m playwright install chromium; npm ci --prefix tests/console/e2e; .venv/Scripts/python -m pytest tests/console/e2e -q  # isolated browser and axe rehearsal
 .venv/Scripts/python -m pytest -m ollama                    # optional: also -m live, -m mysql
 ```
 
@@ -1048,7 +1048,16 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   with the folds and read marks, `guild-console-collapsed` and
   `guild-console-read`). It has 14 tabs (Comms, Raid, Guild, Personas, Social,
   Board, Calendar, Bank, Realm, Training, Dojo, Library, Ops, Mind); each polls only
-  while it is open and the page is visible, one request at a time. A source that is
+  while it is open and the page is visible, one request at a time. Ordinary reads have a
+  30 s browser deadline, actions 120 s (long enough for a clean stop); an unanswered action
+  says it may have completed and is never retried automatically. Failed or malformed reads
+  keep the last good view with a stale age. The event stream and voice socket reconnect
+  with capped exponential backoff and jitter; their heartbeat deadline is 45 s. The face
+  cache keeps at most 256 entries and four active loads. The Personas roster is paged in
+  groups of 50; its member details stay available. Arrow keys, Home and End move through
+  the tablist; Tab reaches the main scroll region and controls; dialogs trap focus and
+  Escape returns it. Both themes and reduced motion are covered by the browser rehearsal.
+  A source that is
   not there yet answers 200 and reads "Not set up yet: <why>"; only a file that
   exists but cannot be read is a 503. Ops (`GET /api/ops`, `console/opsview.py`) keeps
   those states per panel in one 200 response: health, night, Realm holds, raids,

@@ -12,6 +12,7 @@ import json
 import logging
 import math
 import re
+import random
 from typing import Callable
 
 from .ws import WsClient, WsError
@@ -20,6 +21,8 @@ HOST = "127.0.0.1"
 PATH = "/ws"
 RETRY_S = 2.0
 TRANSCRIPT = 200  # what a voice state keeps
+PEOPLE = 512
+INVITES = 32
 MAX_CHANNEL = 64
 MAX_GUID = 0xFFFFFFFF
 DB_LIMIT = 12.0
@@ -126,6 +129,18 @@ class Mirror:
             mutes = set(s.get("mutes") or [])
             (mutes.add if msg["on"] else mutes.discard)(msg["guid"])
             s["mutes"] = sorted(mutes)
+        self._bound()
+
+    def _bound(self) -> None:
+        """Long-lived mirrors retain bounded current state, including departed members."""
+        s = self.state
+        for key in ("where", "names", "volumes"):
+            if isinstance(s.get(key), dict):
+                s[key] = dict(list(s[key].items())[-PEOPLE:])
+        for key, limit in (("tree", 64), ("speaking", PEOPLE), ("mutes", PEOPLE),
+                           ("invites", INVITES), ("transcript", TRANSCRIPT)):
+            if isinstance(s.get(key), list):
+                s[key] = s[key][-limit:]
 
     def _moved(self, msg: dict) -> None:
         s = self.state
@@ -152,11 +167,14 @@ class VoiceRelay:
     service, and `{"type": "link", "up": bool}` when the connection opens or closes."""
 
     def __init__(self, port: Callable[[], int | None], on_event: Callable[[dict], None], *,
-                 connect=WsClient.connect, retry_s: float = RETRY_S):
+                 connect=WsClient.connect, retry_s: float = RETRY_S, jitter=random.random):
         self._port = port
         self._on_event = on_event
         self._connect = connect
         self._retry_s = retry_s
+        self._jitter = jitter
+        self._attempt = 0
+        self._closed = asyncio.Event()
         self._ws: WsClient | None = None
         self._closing = False
         self.mirror = Mirror()
@@ -182,7 +200,12 @@ class VoiceRelay:
                     except Exception as e:
                         log.error("console_voice_link_failed: error=%s", type(e).__name__)
             if not self._closing:
-                await asyncio.sleep(self._retry_s)
+                delay = min(30.0, self._retry_s * 2 ** min(20, self._attempt))
+                self._attempt += 1
+                try:
+                    await asyncio.wait_for(self._closed.wait(), delay * (0.5 + 0.5 * self._jitter()))
+                except asyncio.TimeoutError:
+                    pass
 
     async def _serve(self, ws: WsClient) -> None:
         self._ws = ws
@@ -210,6 +233,7 @@ class VoiceRelay:
                     continue
                 if first:
                     first = False
+                    self._attempt = 0
                     self.connected = True
                     self._emit({"type": "link", "up": True})
                 self._emit(msg)
@@ -246,6 +270,7 @@ class VoiceRelay:
 
     async def close(self) -> None:
         self._closing = True
+        self._closed.set()
         ws = self._ws
         if ws is not None:
             await ws.close()

@@ -19,6 +19,19 @@ var BY = { seed: "the seeding", owner: "you (an import or a personas command)", 
 var LEDGER_KINDS = { note_added: "note added", note_dropped: "note dropped", note_rolled_back: "note rolled back (drift)",
                      drift_flag: "drift flag", stance_band: "stance move", undo: "undo" };
 var personasTimer = null, personasBusy = false, pick = 0, pickSeq = 0, reveal = false;
+var rosterOffset = 0, rosterPage = null, rosterDrawn = "";
+var paging = el("div", "roster-pages"), previousPage = el("button", "", "Previous members"),
+    nextPage = el("button", "", "Next members"), pageWords = el("span", "muted");
+paging.setAttribute("aria-label", "Member pages");
+previousPage.type = nextPage.type = "button";
+paging.appendChild(previousPage); paging.appendChild(pageWords); paging.appendChild(nextPage);
+$("p-wall").before(paging);
+previousPage.addEventListener("click", function () {
+  if (!personasBusy && rosterPage) { rosterOffset = Math.max(0, rosterPage.offset - rosterPage.limit); pollPersonas(); }
+});
+nextPage.addEventListener("click", function () {
+  if (!personasBusy && rosterPage && rosterPage.more) { rosterOffset = rosterPage.offset + rosterPage.limit; pollPersonas(); }
+});
 
 function pname(view, guid) {
   if (!guid) { return "-"; }
@@ -79,7 +92,21 @@ function driftTitle(d) {
 function renderPersonas(v) {
   $("personas-banner").hidden = true;
   setSelfieNames(v.names);
+  var signature = JSON.stringify(v);
+  if (signature === rosterDrawn) { return; }
+  var focused = document.activeElement, restore = null;
+  if (focused && ($("p-wall").contains(focused) || $("p-table").contains(focused))) {
+    restore = focused.dataset.gallery ? '[data-gallery="' + Number(focused.dataset.gallery) + '"]' :
+      focused.dataset.guid ? (focused.classList.contains("tile-detail") ? '.tile-detail' : 'tr') +
+        '[data-guid="' + Number(focused.dataset.guid) + '"]' : null;
+  }
   var members = arr(v.members), days = num(v.recent_days) || 7, gm = v.guild_mood, missing = arr(v.missing);
+  rosterPage = v.page || { offset: 0, limit: members.length, total: members.length, more: false };
+  rosterOffset = rosterPage.offset;
+  paging.hidden = rosterPage.total <= rosterPage.limit;
+  previousPage.disabled = rosterOffset === 0;
+  nextPage.disabled = !rosterPage.more;
+  pageWords.textContent = "Members " + (members.length ? rosterOffset + 1 : 0) + "–" + (rosterOffset + members.length) + " of " + rosterPage.total;
   setText("p-count", plural(members.length, "member") + ", "
           + members.filter(function (m) { return m.persona; }).length + " with a persona");
   setText("p-mood", gm ? "Guild mood, night of " + str(gm.night) + ": " + signed(gm.value, 2)
@@ -114,6 +141,11 @@ function renderPersonas(v) {
   });
   if (!members.length) { emptyRow(body, 10, "The mind has no cast and no personas yet."); }
   renderWall(v);
+  if (restore && !focused.isConnected) {
+    var target = (view === "table" ? $("p-table") : $("p-wall")).querySelector(restore);
+    if (target) { target.focus(); }
+  }
+  rosterDrawn = signature;
 }
 var VIEW_KEY = "guild-console-personas-view";
 var view = recall(VIEW_KEY, "wall") === "table" ? "table" : "wall";
@@ -155,7 +187,7 @@ function renderWall(v) {
 function pollPersonas() {
   if (personasBusy || S.tab !== "personas") { return; }
   personasBusy = true;
-  api("/api/personas").then(function (r) {
+  api("/api/personas?offset=" + rosterOffset).then(function (r) {
     if (refused(r)) { return null; }
     return r.json().then(function (j) { return { status: r.status, j: j }; });
   }).then(function (x) {
@@ -449,6 +481,7 @@ function renderTuning() {
                         clearable: set, moves: d.who !== "everyone" ? WHO[d.who] + ": the others are skipped" : "" });
     });
     var add = el("select");
+    add.setAttribute("aria-label", "Offset another dial for " + (g.builtin ? "everyone" : g.name));
     add.appendChild(el("option", "", "offset another dial"));
     arr(v.dials).forEach(function (d) { if (!own(offs, d.name)) { var o = el("option", "", d.label); o.value = d.name; add.appendChild(o); } });
     add.addEventListener("change", function () {

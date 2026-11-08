@@ -15,7 +15,7 @@
     <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path d="M13 3 22 7v6c0 5-4 8.5-9 10-5-1.5-9-5-9-10V7Z" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/><path d="M9 12.5h8M9 16h5" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round"/></svg>
     <div><h1>Guild Console</h1><div class="sub">The guild, the realm and the mind, beside the game</div></div>
   </div>
-  <div class="strip" aria-label="Status">
+  <div class="strip" aria-label="Status" aria-live="polite">
     <span id="s-game" class="mode"><span class="t">Game: unknown</span></span>
     <span id="s-mind" class="stat"><span class="k">Mind</span><span class="v"><i class="dot"></i><span class="t">mind</span></span></span>
     <span id="s-bridge" class="stat"><span class="k">Game bridge</span><span class="v"><i class="dot"></i><span class="t">game bridge</span></span></span>
@@ -24,7 +24,7 @@
     <span id="s-ptt" class="ptt"><i class="lamp"></i><span>push-to-talk</span><span id="s-self" class="selfmark" hidden></span></span>
     <button id="theme" type="button" class="theme">Light / dark</button>
   </div>
-  <div id="s-lost" class="lost" hidden></div>
+  <div id="s-lost" class="lost" role="status" hidden></div>
 </div>
 <nav class="tabs" role="tablist" aria-label="Areas">
   <button role="tab" id="t-comms" data-tab="comms" aria-controls="tab-comms">Comms</button>
@@ -44,7 +44,7 @@
 </nav>
 <div id="toasts" role="status"></div>
 </header>
-<main>
+<main tabindex="0" aria-label="Console panels">
   <section id="tab-comms" class="tab" role="tabpanel" aria-labelledby="t-comms">
     <div id="comms-banner" class="banner" hidden></div>
     <div id="comms-kpis" class="kpis" aria-label="Tonight"></div>
@@ -261,7 +261,7 @@
           <label>name <input type="text" id="t-gname" maxlength="40" size="14"></label>
           <label>field <select id="t-gfield"></select></label>
           <label>values <select id="t-gvalues" multiple size="3"></select></label>
-          <label>age <input type="number" id="t-gfrom" min="18" max="99" size="3"> to <input type="number" id="t-gto" min="18" max="99" size="3"></label>
+          <label>age <input type="number" id="t-gfrom" aria-label="Minimum age" min="18" max="99" size="3"> to <input type="number" id="t-gto" aria-label="Maximum age" min="18" max="99" size="3"></label>
           <button type="button" id="t-gadd">Add condition</button>
           <span id="t-gwhere" class="muted"></span>
           <button type="button" id="t-gsave">Save group</button>
@@ -437,7 +437,7 @@
           <button type="button" data-svc="mind" data-act="restart">Restart</button>
           <button type="button" data-svc="mind" data-act="stop" class="danger">Stop</button>
         </div>
-        <p id="m-why" class="why"></p>
+        <p id="m-why" class="why" role="status"></p>
       </article>
       <article class="panel">
         <header><h3>Voice service</h3><span id="w-state" class="mode"><i class="dot"></i><span class="t"></span></span></header>
@@ -448,7 +448,7 @@
           <button type="button" data-svc="voice" data-act="restart">Restart</button>
           <button type="button" data-svc="voice" data-act="stop" class="danger">Stop</button>
         </div>
-        <p id="w-why" class="why"></p>
+        <p id="w-why" class="why" role="status"></p>
       </article>
       <article class="panel">
         <header><h3>Links and game</h3></header>

@@ -20,7 +20,7 @@ MODULES = {"core", "state", "tabs", "words", "strip", "main", "raid", "guild",
            "personas", "mind", "names", "facecache", "faces", "comms/model", "comms/feedview",
            "comms/tree", "comms/leftview", "comms/rightview"}
 IMPORT = re.compile(r'^import\s*(?:\{([^}]*)\}\s*from\s*)?"([^"]+)";', re.M)
-EXPORTED = re.compile(r"^export\s+(?:function|const|let|var|class)\s+([A-Za-z_$][\w$]*)", re.M)
+EXPORTED = re.compile(r"^export\s+(?:async\s+)?(?:function|const|let|var|class)\s+([A-Za-z_$][\w$]*)", re.M)
 MARKUP = ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(",
           "new Function", 'setAttribute("style"')
 

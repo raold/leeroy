@@ -30,7 +30,7 @@ function button(text, action) {
 export function openGallery(guid, name, opener) {
   if (active) { active.dialog.close(); }
   var g = { guid: guid, name: name, opener: opener, photos: [], at: 0, state: null,
-            saving: false, seq: 0, full: new Map(), thumbs: new Map(), closed: false };
+            saving: false, loading: false, again: false, seq: 0, full: new Map(), thumbs: new Map(), closed: false };
   active = g;
   var d = g.dialog = el("dialog", "photo-gallery");
   d.setAttribute("aria-labelledby", "gallery-title");
@@ -112,6 +112,12 @@ function clearImages(cache) {
 function imageURL(g, cache, path) {
   if (!path) { return Promise.resolve(null); }
   if (cache.has(path)) { return cache.get(path).promise; }
+  while (cache.size >= 64) {
+    var oldest = cache.keys().next().value, old = cache.get(oldest);
+    old.live = false;
+    if (old.url) { URL.revokeObjectURL(old.url); }
+    cache.delete(oldest);
+  }
   var entry = { live: true, url: null };
   entry.promise = api(path).then(function (r) {
     if (refused(r) || r.status !== 200) { return null; }
@@ -126,6 +132,9 @@ function imageURL(g, cache, path) {
 }
 
 function refresh(g, first) {
+  if (g.closed) { return; }
+  if (g.loading) { g.again = true; return; }
+  g.loading = true;
   var seq = ++g.seq;
   api("/api/selfies/gallery?guid=" + g.guid).then(function (r) {
     if (refused(r) || r.status !== 200) { throw new Error("unavailable"); }
@@ -143,6 +152,9 @@ function refresh(g, first) {
     draw(g);
   }).catch(function () {
     if (!g.closed && g.seq === seq) { g.status.textContent = "Photos could not be read. Close and try again."; }
+  }).finally(function () {
+    g.loading = false;
+    if (g.again && !g.closed) { g.again = false; refresh(g, false); }
   });
 }
 

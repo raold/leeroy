@@ -1,0 +1,99 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { Backoff, boundedBody, deadline } from "../../../leeroy_mind/console/static/js/resilience.mjs";
+import { ReconnectingStream } from "../../../leeroy_mind/console/static/js/eventstream.mjs";
+import { FaceCache } from "../../../leeroy_mind/console/static/js/facecache.mjs";
+import { api, post } from "../../../leeroy_mind/console/static/js/core.mjs";
+
+async function flush() { for (var i = 0; i < 20; i++) { await Promise.resolve(); } }
+
+test("backoff grows, jitters, caps and resets after success", () => {
+  var b = new Backoff({ random: () => 0 });
+  assert.deepEqual(Array.from({length: 8}, () => b.next()), [500, 1000, 2000, 4000, 8000, 15000, 15000, 15000]);
+  b.reset(); assert.equal(b.next(), 500);
+  b.random = () => 1; assert.equal(b.next(), 2000);
+});
+
+test("a request deadline includes stalled response headers and aborts the request", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  var signal;
+  t.mock.method(globalThis, "fetch", (_, o) => { signal = o.signal; return new Promise(() => {}); });
+  var result = assert.rejects(api("/api/guild", { timeoutMs: 50 }), /did not answer/);
+  t.mock.timers.tick(50); await result;
+  assert.equal(signal.aborted, true);
+});
+
+test("the same deadline covers a response body that never finishes", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  var signal;
+  t.mock.method(globalThis, "fetch", (_, o) => {
+    signal = o.signal;
+    return Promise.resolve(new Response(new ReadableStream({start(c) { c.enqueue(new TextEncoder().encode('{"pending":')); }}),
+      {headers: {"content-type": "application/json"}}));
+  });
+  var result = assert.rejects(api("/api/guild", { timeoutMs: 50 }), /did not answer/);
+  await flush(); t.mock.timers.tick(50); await result;
+  assert.equal(signal.aborted, true);
+});
+
+test("empty, non-object and malformed successful JSON never replace a view", async (t) => {
+  for (var body of ["", "{", "null", "[]", "{}", '{"roster":{}}', '{"other":true}'] ) {
+    t.mock.method(globalThis, "fetch", () => Promise.resolve(new Response(body,
+      {headers: {"content-type": "application/json"}})));
+    await assert.rejects(api("/api/guild"));
+  }
+});
+
+test("oversized chunked answers are cancelled without trusting Content-Length", async () => {
+  var cancelled = false;
+  var response = new Response(new ReadableStream({start(c) { c.enqueue(new Uint8Array(17)); }, cancel() { cancelled = true; }}));
+  await assert.rejects(boundedBody(response, 16), /too large/);
+  assert.equal(cancelled, true);
+});
+
+test("an uncertain action settles in words and is never retried automatically", async (t) => {
+  var calls = 0;
+  t.mock.method(globalThis, "fetch", () => { calls++; return Promise.reject(new Error("connection closed")); });
+  var result = await post("/api/board", {action: "reply"});
+  assert.equal(result.ok, false); assert.equal(result.status, 0);
+  assert.match(result.error, /may have completed/); assert.equal(calls, 1);
+});
+
+test("many distinct faces bound both retained entries and waiting loads", async () => {
+  var loads = [], dropped = [];
+  var cache = new FaceCache({maxEntries: 8, maxActive: 2,
+    load: (key) => new Promise(resolve => loads.push(() => resolve(key))), drop: v => dropped.push(v)});
+  var promises = Array.from({length: 1000}, (_, n) => cache.get(String(n)));
+  assert.equal(cache.entries.size, 8); assert.ok(cache.waiting.length <= 8); assert.equal(cache.active, 2);
+  cache.forget(); assert.equal(cache.waiting.length, 0);
+  await Promise.all(promises);  // even evicted/forgotten askers have an outcome
+  while (loads.length) { loads.shift()(); await flush(); }
+  assert.equal(cache.active, 0); assert.equal(dropped.length, 2);
+});
+
+test("failed streams back off and a stop cancels the single retry", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  var calls = 0;
+  var s = new ReconnectingStream({base: 100, random: () => 1,
+    open: () => { calls++; return Promise.reject(new Error("down")); },
+    refused: () => false, connected() {}, retrying() {}, dispatch() {}});
+  s.start(); await flush(); assert.equal(calls, 1);
+  t.mock.timers.tick(99); await flush(); assert.equal(calls, 1);
+  t.mock.timers.tick(1); await flush(); assert.equal(calls, 2);
+  t.mock.timers.tick(199); await flush(); assert.equal(calls, 2);
+  t.mock.timers.tick(1); await flush(); assert.equal(calls, 3);
+  s.stop(); t.mock.timers.tick(30000); await flush(); assert.equal(calls, 3);
+});
+
+test("a silent half-open stream is cancelled and reconnects; stop wakes its read", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  var calls = 0, cancelled = 0;
+  var s = new ReconnectingStream({base: 100, random: () => 1, idleMs: 40,
+    open: () => { calls++; return Promise.resolve(new Response(new ReadableStream({cancel() { cancelled++; }}))); },
+    refused: () => false, connected() {}, retrying() {}, dispatch() {}});
+  s.start(); await flush();
+  t.mock.timers.tick(40); await flush(); assert.equal(cancelled, 1);
+  t.mock.timers.tick(100); await flush(); assert.equal(calls, 2);
+  s.stop(); await flush(); assert.equal(cancelled, 2);
+  t.mock.timers.tick(30000); await flush(); assert.equal(calls, 2);
+});
