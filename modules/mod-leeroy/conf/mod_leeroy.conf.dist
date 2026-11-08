@@ -34,6 +34,11 @@ Leeroy.ExcludeFromOllamaChat = 1
 # Applies on .reload config; 0 disables both refusal and safe queue withdrawal.
 Leeroy.QueueFence.Enable = 1
 
+# Take pinned cast members out of rated arena teams the owner does not captain, so a
+# bot team captain cannot pull them out of a group (logged with guid and team id).
+# Applies on .reload config.
+Leeroy.CastArenaTeams.Leave = 1
+
 # Realm actors and cast protection stay off until separately accepted.
 Leeroy.Realm.Enable = 0
 Leeroy.CastGuard = 0

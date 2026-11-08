@@ -661,7 +661,18 @@ Local commit `3826b2f4` (built 2026-11-07) keeps pins out of random bot arena te
 login, filling teams below `Playerbots.RandomBotArenaTeam2v2Count`/`3v3Count`/`5v5Count`
 (live 30/30/20, raised from 10/10/5 with `Arena.MaxRatingDifference = 0` so the owner meets
 the strong bot teams), and without it the cast would join them for good. Teams he made
-himself are untouched.
+himself are untouched. It does not remove a pin from a team it joined before, and a
+captain's gather (`BGJoinAction::gatherArenaTeam`) takes any member out of its group
+and teleports it unless its master is a game client (a self-mastered bot counts) or
+it is in combat, a battleground or a queue; on 2026-11-07 it pulled masterless cast
+member 251 out of an offline raid's group. So mod-leeroy (`Leeroy.CastArenaTeams.Leave`,
+default 1, `.reload config`) takes a pinned cast member out of every rated team the owner
+does not captain, on the queue fence's world tick, through the core's `ArenaTeam::DelMember`
+under the leave handler's own conditions (not while the team fights or the member or a
+group-mate is queued, nor while a Realm lease holds the body), once per member and team
+per process: `cast_arena_team_left guid= team= type=`. A cast member who captains a bot
+team is kept and logged once (`cast_arena_team_kept ... reason=captain`): it cannot leave
+without disbanding or handing on the team, which is left to a playerbots patch.
 
 Commits here never carry a `Co-Authored-By` or other attribution trailer.
 
@@ -855,6 +866,41 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   or the command keeps the existing timeout behaviour and logs unsupported once
   per run. A mind restart requires fresh progress evidence; lost terminals still
   use the deadline (or an accepted stop) plus 15-minute `terminal_lost` fallback. Native rebuild needed.
+- A running offline raid can recall an absent follower after 30 s, at most three
+  attempts per member per run and 60 s between attempts. The original body, group,
+  controller and destination instance must still be proven; combat, PvP, another
+  dungeon, dead bodies and pending transfers prevent it (pure policy
+  `RecallQuietOk`/`RecallBodySafe`/`RecallPvpBusy`; the battlefield and arena lookups
+  run last). Existing leader/minimum roster stops win. Arrival updates the heartbeat
+  without resetting the boss progress clock. Benchmarks do not use this recall path.
+- The job's driver is a self-mastered bot outside the raid group, and stock
+  `ResetAiAction` (the empty group list Grouping's `RemoveFromGroup` sends, or a leader
+  change) clears a master outside the bot's group; `FindNewMaster` finds none in an
+  all-bot raid. On 2026-11-07 that left 3112 (the leader) and 251 masterless, so the
+  teardown that began at 17:33:26 retained `restore_ownership` for both and never ended.
+  Every tick, in every stage including teardown, native now puts the driver back for a
+  member it still holds (same body, the job's group, no Realm or dummy lease) whose
+  master is empty, re-strips follow, restores `wait for attack` and `avoid aoe` and
+  reconciles DC's strategies (`master_reasserted guid= stage= repairs=`, first and every
+  50th). A non-empty foreign master is still an ownership change.
+- A restart no longer needs every member: after 30 s an absent member is dropped from
+  that restart's gate (`restart_dropped guid=`) while the members present meet the
+  minimum; fewer stop the run `too_few`. The leader is never dropped. A dropped member
+  stays in the roster for cleanup and later recall.
+- Native logs the stop reason immediately and includes it in teardown progress.
+  Cleanup still incomplete after 60 s reports `cleanup_failed:<reason>` once,
+  for ordinary offline raids as well as benchmarks; this ends mind accounting. From
+  then on a member the job no longer holds (other group, master or body) that carries
+  no training journal is abandoned (`cleanup_abandoned guid=`, never touched again) so
+  the members it does hold finish their cleanup. Ten minutes after `cleanup_failed`, an
+  ordinary offline raid releases its native slot (`cleanup_released after_ms=
+  unfinished=`; then `training_run_cleared=`) unless a member is still provably held
+  (connected, same body, the job's group, the driver as master), which logs
+  `cleanup_held` once and keeps the slot as before. Release restores the WaitAtBoss
+  override and the leader's DC training-run receipt where it can, and keeps training
+  journals (their `training_journal_pending` fence stays) and the cleanup receipt
+  (`get_training_cleanup` shows it unrestored). Benchmarks never release. A leftover
+  group is disbanded by the 60 s leftover sweep. A native rebuild is required.
 - Members start conversations with him on two clocks (2026-11-07), per hour of
   his play at chattiness 4 and scaled with it (0 stops every unprompted whisper):
   `[talk] whispers_per_hour` (4, at most 8 an hour and 2 minutes apart;
