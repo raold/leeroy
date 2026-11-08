@@ -80,7 +80,11 @@ def rehearsal(tmp_path, monkeypatch):
                     (tmp_path / "failure.html").write_text(await page.content(), encoding="utf-8")
                 raise
             finally:
-                await context.close()
-                await browser.close()
-                await fixture.close()
+                try:
+                    await context.close()
+                finally:
+                    try:
+                        await browser.close()
+                    finally:
+                        await fixture.close()
     return start

@@ -10,14 +10,17 @@ from leeroy_mind.library.core import Library
 from leeroy_mind.library.chunks import ChunkDraft, SourceResult
 from leeroy_mind.guild import store as raids
 from leeroy_mind.personas.io import save_persona
-from leeroy_mind.protocol import Chat, Member
+from leeroy_mind.protocol import Member
 from leeroy_mind.selfies import files
 from leeroy_mind.storage.db import open_db
 from leeroy_mind.storage.store import Store
+from leeroy_mind.storage.rows import Relationship
+from leeroy_mind.training import store as training
 from leeroy_mind.tuning.changes import Set, apply_sets, picture
 from leeroy_mind.wow import CLASSES, RACES
 from selfies.fakes import PHOTO, ready
 from nightly.test_night_enrich import APPEARANCE
+from training.test_tg_store import card, context, record
 
 CAST = {**TEST_CAST, 106: ("Fennel", 2, 3), 107: ("Glimmer", 8, 7),
         108: ("Hazel", 10, 5), 109: ("Ilex", 2, 6), 110: ("Juniper", 6, 11)}
@@ -52,6 +55,15 @@ def seed(data):
         raids.end_raid(store.conn, raid, ended=now - 3600, kills=2, wipes=1, outcome="ended")
         apply_sets(store, [Set("member", "101", "talkative", 6)],
                    picture(store, personas), source="console", now=now)
+        store.put_relationship(Relationship(a=101, b=102, affinity=25, trust=30,
+                                            romance_stage="banter"))
+        pull = record("rehearsal-pull")
+        pull.header = replace(pull.header, start_ms=int((now - 600) * 1000),
+                              end_ms=int((now - 300) * 1000))
+        training.put_pull(store.conn, pull, context(), {101: "tank"}, received=now - 300,
+                          first_pull_ts=now - 600)
+        training.put_card(store.conn, card(status="champion", call="Stay together",
+                                           reason="Rehearsal tactic", created=now, changed=now))
         for guid in (101, 102, 103):
             ready(store, data, guid, 1, now=now)
             # The existing worker fixture's JPEG is deliberately minimal. Browser

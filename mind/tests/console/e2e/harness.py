@@ -8,7 +8,8 @@ from dataclasses import asdict
 from types import SimpleNamespace
 
 from conftest import HUMAN
-from console.rig import FakeMind, KEY, make_app
+from console.rig import FakeMind, make_app
+from console.test_console_dojo import build, episode, make_layout, run_dir
 from leeroy_mind import endpoint
 from leeroy_mind.app import GUILD_ID, MindApp
 from leeroy_mind.clock import SystemClock
@@ -100,11 +101,18 @@ class Rehearsal:
             (self.data / "mind.db").unlink()
             sqlite3.connect(self.data / "mind.db").close()
             (self.data / "library.db").unlink()
+        layout = None
+        if state != "older":
+            layout, dojo_data, _ = make_layout(self.root, ports={"world": free_port()})
+            build(dojo_data, "20261105_100000")
+            run_dir(dojo_data, "20261105_181500", "g1", {
+                "gate": "G1", "ok": True, "episodes": [episode("rehearsal-episode")]})
         ui_port = free_port()
         self.link = MindLink(self.data, tcp=self.tcp)
         self.console = make_app(self.data, mind=self.handle,
             controls=Controls(enabled=True, mind=self.handle, problems={"voice": "No rehearsal voice service"}),
-            link=self.link, tcp=self.tcp, voice_ui_port=ui_port, bridge_port=port)
+            link=self.link, tcp=self.tcp, voice_ui_port=ui_port, bridge_port=port,
+            dojo_layout=layout)
         await self.console.start()
         self.ports.add(self.console.s.port)
         self.url = f"http://127.0.0.1:{self.console.s.port}"
@@ -167,10 +175,12 @@ class Rehearsal:
             try:
                 await self.stop_mind()
             finally:
-                if self.worker is not None:
-                    await self.worker.stop()
-                if hasattr(self, "bridge"):
-                    await self.bridge.stop()
+                try:
+                    if self.worker is not None:
+                        await self.worker.stop()
+                finally:
+                    if hasattr(self, "bridge"):
+                        await self.bridge.stop()
         assert not (self.data / endpoint.KEY_FILE).exists()
         for port in self.ports:
             with socket.socket() as sock:

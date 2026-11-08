@@ -111,8 +111,16 @@ def test_tuning_set_preview_refused_and_undo(rehearsal):
             await submit(r, dial.get_by_role("button", name="Set", exact=True), "/api/tune")
             await expect(dial).to_contain_text("your value 8")
             wording = r.page.locator("#p-dials .dial").filter(has=r.page.get_by_role("slider", name="argumentative", exact=True))
+            slider = wording.get_by_role("slider")
+            await slider.fill("10" if int(await slider.input_value()) <= 5 else "1")
+            # The fake model manager may have simulated a login preload. This
+            # preview specifically covers the absent-model state, without loading one.
+            r.app.arbiter.admin.loaded.clear()
+            model_calls = list(r.app.arbiter.admin.calls)
+            r.expected_http_errors.add(("/api/tune", 409))
             result = await submit(r, wording.get_by_role("button", name="Preview", exact=True), "/api/tune", ok=False)
             assert "isn't loaded" in result["error"], result
+            assert r.app.arbiter.admin.calls == model_calls
             await expect(r.page.locator("#t-preview")).to_contain_text("isn't loaded")
             change = r.page.locator("#t-history .chg").filter(has_text="6 → 8")
             await submit(r, change.get_by_role("button", name="Undo", exact=True), "/api/tune")

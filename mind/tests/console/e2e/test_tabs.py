@@ -9,15 +9,15 @@ TABS = ("comms", "raid", "guild", "social", "personas", "board", "calendar",
         "bank", "realm", "training", "dojo", "library", "mind")
 POPULATED = {
     "comms": "Rehearsal supplies are ready.", "raid": "Icecrown Citadel",
-    "guild": "Juniper", "social": "No feud is open.", "personas": "Arkon",
+    "guild": "Juniper", "social": "Belra", "personas": "Arkon",
     "board": "Bring tea for the rehearsal.", "calendar": "Rehearsal raid night",
     "bank": "Rehearsal supplies", "realm": "Lantern Company",
-    "training": "no fights recorded yet", "dojo": "No dojo set up",
+    "training": "Rehearsal tactic", "dojo": "rehearsal-episode",
     "library": "1 passage", "mind": "running",
 }
 OLDER = {tab: "Not set up yet" for tab in (
     "social", "board", "calendar", "bank", "realm", "training", "library")}
-OLDER.update({"comms": "The mind is stopped", "raid": "No raid is open.",
+OLDER.update({"raid": "No raid is open.",
               "guild": "The mind has no roster yet.",
               "personas": "This mind.db is older than some of what this tab reads",
               "dojo": "No dojo set up", "mind": "stopped"})
@@ -55,9 +55,14 @@ def test_every_tab(rehearsal, tmp_path, theme, state):
                 "mind running" if state == "running" else "mind stopped")
             for tab in await tab_names(r.page):
                 panel = await visit(r.page, tab)
-                if state != "older":
-                    expected = "stopped" if tab == "mind" and state == "stopped" else POPULATED[tab]
-                    await expect(panel).to_contain_text(expected)
+                if tab == "mind":
+                    await expect(r.page.locator("#m-state")).to_have_text(
+                        "running" if state == "running" else "stopped")
+                elif state == "older" and tab == "comms":
+                    await expect(r.page.locator("#say-text")).to_have_attribute(
+                        "placeholder", "The mind is stopped, so nothing can be sent.")
+                elif state != "older":
+                    await expect(panel).to_contain_text(POPULATED[tab])
                 else:
                     await expect(panel).to_contain_text(OLDER[tab])
                 (tmp_path / f"{tab}.txt").write_text(await panel.inner_text(), encoding="utf-8")
