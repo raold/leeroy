@@ -23,6 +23,69 @@ bool BossProgress(std::uint8_t before, std::uint8_t after)
     return before != after && (after == 1 || after == 3 || IsWipe(before, after));
 }
 
+RecallAction OfflineRecall::Observe(bool inside, bool safe, std::uint32_t diffMs)
+{
+    sinceAttemptMs = AdvanceElapsed(sinceAttemptMs, diffMs);
+    if (inside)
+    {
+        absentMs = 0;
+        bool const arrived = pending;
+        pending = false;
+        return arrived ? RecallAction::Arrived : RecallAction::Wait;
+    }
+    absentMs = AdvanceElapsed(absentMs, diffMs);
+    if (!safe || absentMs < OfflineRecallGraceMs || attempts >= OfflineRecallAttempts
+        || (attempts && sinceAttemptMs < OfflineRecallRetryMs)) return RecallAction::Wait;
+    ++attempts; // A refused teleport costs an attempt too.
+    sinceAttemptMs = 0;
+    return RecallAction::Summon;
+}
+
+bool RecallQuietOk(RecallQuiet const& q)
+{
+    return q.encounterKnown && !q.bossEngaged && q.driver && !q.realmGroup && q.leaderAi && q.leaderMasterIsDriver
+        && q.leaderAlive && !q.leaderGhost && !q.leaderCombat && !q.leaderTransport && !q.leaderVehicle
+        && !q.memberCombat;
+}
+
+bool RecallBodySafe(RecallBody const& b)
+{
+    return b.inWorld && !b.teleporting && b.alive && !b.ghost && !b.combat && !b.flight && !b.transport
+        && !b.vehicle && !b.pendingBind && !b.inDungeon && b.difficultyMatches && b.destinationMatches;
+}
+
+bool RecallPvpBusy(RecallPvp const& p)
+{
+    return p.duel || p.battleground || p.battlegroundQueue || p.arenaObserved
+        || !Realm::WintergraspPrivateReason(p.wintergrasp).empty();
+}
+
+bool ReassertDriverMaster(MasterFacts const& f)
+{
+    return f.driver && f.assigned && !f.released && f.sameBody && f.inJobGroup && !f.foreignLease
+        && !f.masterIsDriver && f.masterEmpty;
+}
+
+RestartRoster DecideRestartRoster(std::uint32_t stageElapsedMs, std::uint32_t absent, std::uint32_t present,
+    bool leaderPresent, std::uint32_t minMembers)
+{
+    if (!absent || stageElapsedMs < OfflineRestartAbsentMs || !leaderPresent) return RestartRoster::Wait;
+    return present >= minMembers ? RestartRoster::DropAbsent : RestartRoster::TooFew;
+}
+
+bool AbandonLostMember(bool benchmark, bool lost, bool trainingJournal, std::uint32_t stageElapsedMs)
+{
+    return !benchmark && lost && !trainingJournal && stageElapsedMs >= OfflineCleanupFailMs;
+}
+
+SlotRelease DecideSlotRelease(bool benchmark, bool failedReported, std::uint32_t sinceReportMs,
+    std::uint32_t heldMembers)
+{
+    if (benchmark || !failedReported) return SlotRelease::Keep;
+    if (sinceReportMs < OfflineSlotReleaseMs) return SlotRelease::Wait;
+    return heldMembers ? SlotRelease::Keep : SlotRelease::Release;
+}
+
 Decision Decide(OfflineRaidState const& state, OfflineRaidLimits const& limits)
 {
     if (state.humanOnline)

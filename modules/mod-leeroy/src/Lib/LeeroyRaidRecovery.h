@@ -57,9 +57,9 @@ private:
 class RaidCleanupTerminal
 {
 public:
-    RaidCleanupReport Observe(bool complete, std::uint32_t elapsedMs, bool bounded = true)
+    RaidCleanupReport Observe(bool complete, std::uint32_t elapsedMs)
     {
-        if (_reported || (!complete && (!bounded || elapsedMs < 60000))) return RaidCleanupReport::None;
+        if (_reported || (!complete && elapsedMs < 60000)) return RaidCleanupReport::None;
         _reported = true;
         return complete ? RaidCleanupReport::Complete : RaidCleanupReport::Failed;
     }

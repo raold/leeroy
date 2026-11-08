@@ -24,6 +24,9 @@ class SelfieCfg:
     size: int = 1024
     min_free_gib: float = 11.5  # the worker refuses to load with less VRAM free
     snaps: bool = False  # situational photos and the guild photo (the identity worker)
+    booth: bool = False  # profile sets between nights, while the owner is offline
+    booth_wait_minutes: int = 10
+    booth_sets_per_day: int = 6
     identity_scale: float = 0.6  # how strongly the adapter holds the reference face
     identity_min_free_gib: float = 13.5  # the identity worker loads the adapter too
 
@@ -56,6 +59,9 @@ _RULES = {
     "size": (lambda v: type(v) is int and v in SIZES, "768, 896 or 1024"),
     "min_free_gib": (_num(4, 23), "a number 4-23"),
     "snaps": (_bool, "true or false"),
+    "booth": (_bool, "true or false"),
+    "booth_wait_minutes": (_int(1, 60), "an integer 1-60"),
+    "booth_sets_per_day": (_int(1, 120), "an integer 1-120"),
     "identity_scale": (_num(0.3, 0.9), "a number 0.3-0.9"),
     "identity_min_free_gib": (_num(4, 23), "a number 4-23"),
 }

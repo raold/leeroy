@@ -5,6 +5,8 @@
 #include "RealmModule.h"
 #include "RealmPvp.h"
 
+#include "ArenaTeam.h"
+#include "ArenaTeamMgr.h"
 #include "Battlefield.h"
 #include "BattlefieldMgr.h"
 #include "Battleground.h"
@@ -20,6 +22,7 @@
 #include "Opcodes.h"
 #include "Player.h"
 #include "PlayerScript.h"
+#include "RandomPlayerbotMgr.h"
 #include "ServerScript.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
@@ -159,6 +162,55 @@ void Withdraw(Player* player, Held const& member)
     }
 }
 
+// World thread. Leaves through ArenaTeam::DelMember only under the core leave
+// handler's own conditions (DecideCastArenaTeamExit), at most once per member and
+// team in this process, and logs whether the member's slot actually cleared.
+std::set<std::pair<std::uint32_t, std::uint32_t>> captainsLogged, leaveTried;
+void LeaveCastArenaTeams()
+{
+    auto& module = LeeroyModule::Instance();
+    bool const enabled = module.Enabled() && module.Config().castArenaTeamsLeave;
+    if (!enabled) { captainsLogged.clear(); leaveTried.clear(); return; }
+    auto const human = ObjectGuid::Create<HighGuid::Player>(module.HumanGuid());
+    for (auto guid : module.Cast().Guids())
+    {
+        auto* player = Find(guid);
+        if (!player || !player->IsInWorld() || player->IsBeingTeleported()) continue;
+        for (uint8 slot = 0; slot < MAX_ARENA_SLOT; ++slot)
+        {
+            auto const id = player->GetArenaTeamId(slot);
+            auto* team = id ? sArenaTeamMgr->GetArenaTeamById(id) : nullptr;
+            if (!team || !team->IsMember(player->GetGUID())) continue;
+            Leeroy::CastArenaTeamFacts facts;
+            facts.enabled = enabled;
+            facts.cast = module.Cast().IsCast(guid);
+            facts.pinned = sRandomPlayerbotMgr.IsPinned(guid);
+            facts.human = guid == module.HumanGuid();
+            facts.ownerCaptain = module.HumanGuid() && team->GetCaptain() == human;
+            facts.memberCaptain = team->GetCaptain() == player->GetGUID();
+            facts.realmHeld = !Leeroy::Realm::RealmModule::Instance().Holder(guid).empty();
+            facts.teamFighting = team->IsFighting();
+            facts.inBattleground = player->InBattleground();
+            facts.inQueue = player->InBattlegroundQueue();
+            if (auto* group = player->GetGroup())
+                for (auto const& member : group->GetMemberSlots())
+                    if (auto* mate = Find(member.guid.GetCounter()); mate && mate != player && mate->InBattlegroundQueue())
+                        facts.groupQueued = true;
+            auto const exit = Leeroy::DecideCastArenaTeamExit(facts);
+            if (exit == Leeroy::CastArenaTeamExit::Captain && captainsLogged.emplace(guid, id).second)
+                LOG_WARN("module.leeroy", "leeroy: cast_arena_team_kept guid={} team={} reason=captain", guid, id);
+            if (exit != Leeroy::CastArenaTeamExit::Leave || !leaveTried.emplace(guid, id).second) continue;
+            auto const type = team->GetType();
+            team->DelMember(player->GetGUID(), true);
+            if (!player->GetArenaTeamId(slot) && !team->IsMember(player->GetGUID()))
+                LOG_INFO("module.leeroy", "leeroy: cast_arena_team_left guid={} team={} type={}", guid, id, uint32(type));
+            else
+                LOG_WARN("module.leeroy", "leeroy: cast_arena_team_leave_unproved guid={} team={} type={}",
+                    guid, id, uint32(type));
+        }
+    }
+}
+
 class QueuePlayerScript final : public PlayerScript
 {
 public:
@@ -277,6 +329,7 @@ void LeeroyRefreshQueueFence()
     }
     for (auto const& [guid, member] : next)
         if (auto* player = Find(guid)) Withdraw(player, member);
+    LeaveCastArenaTeams();
 }
 
 void AddSC_leeroy_queue_fence()
