@@ -4,8 +4,6 @@ Expired situations remain in the owner's gallery; this does not make them sendab
 Guild composites are not a member's portrait. Missing tables and files read as empty.
 """
 import json
-import os
-import stat
 from pathlib import Path
 
 from leeroy_mind.personas.schema import persona_from_dict
@@ -13,7 +11,7 @@ from leeroy_mind.selfies import files
 from leeroy_mind.selfies.store import lust_set
 from leeroy_mind.selfies.style import suggestive
 
-from .faces import MAX_FACE_BYTES
+from .faces import MAX_FACE_BYTES, image_info, read_image
 
 TABLES = ("selfie_set", "selfie_candidate", "selfie_current", "selfie_snap")
 
@@ -23,13 +21,7 @@ def _have(conn):
 
 
 def _present(path: Path, root: Path) -> bool:
-    try:
-        # A symlink or junction must not turn an image id into a file outside selfies/.
-        path.resolve().relative_to(root.resolve())
-        info = os.lstat(path)
-        return stat.S_ISREG(info.st_mode) and 0 < info.st_size <= MAX_FACE_BYTES
-    except (OSError, ValueError):
-        return False
+    return image_info(path, root) is not None
 
 
 def _lust_held(conn, have, guid) -> bool:
@@ -126,8 +118,6 @@ def photo(conn, data_dir, guid, kind, number, index, *, thumb=False) -> bytes | 
             return None
         if not found or not _present(path, Path(data_dir) / "selfies"):
             return None
-        with path.open("rb") as stream:
-            data = stream.read(MAX_FACE_BYTES + 1)
-        return data if len(data) <= MAX_FACE_BYTES and data.startswith(b"\xff\xd8\xff") else None
+        return read_image(path, Path(data_dir) / "selfies")
     except (OSError, TypeError, ValueError):
         return None

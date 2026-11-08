@@ -1,25 +1,30 @@
 """The console's HTTP/1.1: one request per connection (every response says Connection: close),
 plus a server-sent event stream that stays open. Standard library only, as is the rest of the
 mind. Limits: a 16 KiB head of at most 100 headers, a 16 KiB body, 10 s to send a request, and
-10 s for a stream's client to take each chunk before it is dropped.
+10 s for a client to take its response or each stream chunk before it is dropped, and at most
+64 active connections (including clients still sending their request).
 
 handler(request) returns a Response or a Stream. A handler that raises answers 500 with no
 detail; its exception's class is logged, never its text."""
 import asyncio
 import json
 import logging
+import re
 import socket
 from contextlib import suppress
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from typing import AsyncIterator, Awaitable, Callable
 from urllib.parse import parse_qs, urlsplit
+from ..control_json import decode_body
 
 MAX_HEAD = 16384
 MAX_HEADERS = 100
 MAX_BODY = 16384
 READ_S = 10.0
 DRAIN_S = 10.0  # how long a stream waits for a client to take what it was sent
+MAX_CONNECTIONS = 64  # includes requests still sending headers/bodies and event streams
+_TOKEN = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
 
 log = logging.getLogger("leeroy_mind.console")
 
@@ -50,7 +55,7 @@ class Request:
     def json(self):
         """The body as a JSON object; BadRequest otherwise."""
         try:
-            value = json.loads(self.body.decode("utf-8"))
+            value = decode_body(self.body)
         except (UnicodeDecodeError, ValueError, RecursionError):
             raise BadRequest(400, "the body is not JSON") from None
         if not isinstance(value, dict):
@@ -171,22 +176,27 @@ async def read_request(reader: asyncio.StreamReader) -> Request:
     except UnicodeDecodeError:  # latin-1 decodes anything; kept for clarity
         raise BadRequest(400, "bad request") from None
     parts = lines[0].split(" ") if lines else []
-    if len(parts) != 3 or not parts[2].startswith("HTTP/1."):
+    if len(parts) != 3 or parts[2] not in ("HTTP/1.0", "HTTP/1.1") or not _TOKEN.fullmatch(parts[0]):
         raise BadRequest(400, "bad request line")
     method, target, _ = parts
-    if not target.startswith("/"):
+    if (not target.startswith("/") or target.startswith("//") or "#" in target
+            or any(ord(ch) <= 32 or ord(ch) >= 127 for ch in target)):
         raise BadRequest(400, "bad request target")
     if len(lines) - 1 > MAX_HEADERS:
         raise BadRequest(431, "too many headers")
     headers = []
     for line in lines[1:]:
         name, sep, value = line.partition(":")
-        if not sep or not name or name != name.strip():
+        if (not sep or not _TOKEN.fullmatch(name)
+                or any(ord(ch) < 32 and ch != "\t" or ord(ch) == 127 for ch in value)):
             raise BadRequest(400, "bad header")
-        headers.append((name.lower(), value.strip()))
-    split = urlsplit(target)
-    request = Request(method, target, split.path, parse_qs(split.query, keep_blank_values=True),
-                      headers)
+        headers.append((name.lower(), value.strip(" \t")))
+    try:
+        split = urlsplit(target)
+        query = parse_qs(split.query, keep_blank_values=True, max_num_fields=128)
+    except ValueError:
+        raise BadRequest(400, "bad request target") from None
+    request = Request(method, target, split.path, query, headers)
     if request.all("transfer-encoding"):
         raise BadRequest(411, "send a Content-Length, not chunks")
     lengths = request.all("content-length")
@@ -225,13 +235,16 @@ async def _connection(handler: Handler, reader, writer) -> None:
             await response.run(reader, writer)
         else:
             writer.write(response.encode())
-            await writer.drain()
+            try:
+                await asyncio.wait_for(writer.drain(), DRAIN_S)
+            except TimeoutError:
+                writer.transport.abort()
     except (ConnectionError, OSError):
         pass
     finally:
         writer.close()
         with suppress(Exception):
-            await writer.wait_closed()
+            await asyncio.wait_for(writer.wait_closed(), 2)
 
 
 def listen_socket(host: str, port: int) -> socket.socket:
@@ -252,8 +265,25 @@ def listen_socket(host: str, port: int) -> socket.socket:
 
 async def serve(handler: Handler, host: str, port: int) -> asyncio.Server:
     sock = listen_socket(host, port)
+    active = 0
+
+    async def accepted(reader, writer):
+        nonlocal active
+        try:
+            await _connection(handler, reader, writer)
+        finally:
+            active -= 1
+
+    def connected(reader, writer):
+        nonlocal active
+        if active >= MAX_CONNECTIONS:
+            writer.transport.abort()
+            return
+        active += 1  # claim synchronously before scheduling; a burst cannot overbook
+        asyncio.create_task(accepted(reader, writer))
+
     try:
-        return await asyncio.start_server(lambda r, w: _connection(handler, r, w), sock=sock,
+        return await asyncio.start_server(connected, sock=sock,
                                           limit=MAX_HEAD)
     except BaseException:
         sock.close()
