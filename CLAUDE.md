@@ -599,6 +599,7 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 .venv/Scripts/python -m leeroy_mind.library --data-dir "$D" stats   # the game library: build, search
 .venv/Scripts/python -m leeroy_mind nightly --data-dir "$D" status  # also run, ledger, undo, enrich, veto
 .venv/Scripts/python -m leeroy_mind eval --data-dir "$D"    # weekly evaluation, on a copied database by default
+.venv/Scripts/python -m leeroy_mind eval talk --data-dir "$D" --since 14 --fake --json talk.json # stored talk candidates, scratch copy only
 .venv/Scripts/python -m leeroy_mind selfies --data-dir "$D" status  # profile photos; also try (mind stopped)
 .venv/Scripts/python -m leeroy_mind console --data-dir "$D" # the guild console; open the URL it prints
 .venv/Scripts/python -m pytest -q                           # the unit tests
