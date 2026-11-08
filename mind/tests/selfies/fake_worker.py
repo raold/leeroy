@@ -16,6 +16,8 @@ FAKE_SELFIE_CHILD        start a sleeping child process before ready
 FAKE_SELFIE_PIDS         a file it writes {"pid", "child"} to before ready
 FAKE_SELFIE_LOG          a file it appends "<id> <seed>" (plus " identity <ref>" for an identity render) to for each
                          render request and "<id> grid <tile count>" for each grid
+FAKE_SELFIE_TOO_LONG    a comma list of request id prefixes that answer prompt_too_long
+FAKE_SELFIE_BAD_SIMILARITY  grids answer a malformed similarity diagnostic
 FAKE_SELFIE_IDENTITY     ready says identity true, and a render without an identity answers
                          bad_request (a plain worker answers identity_unavailable to one with)
 
@@ -71,8 +73,9 @@ def _grid(req: dict) -> None:
     width, height = _canvas(len(req["tiles"]), req["tile"], req["gutter"])
     _write(req["out"], JPEG)
     _write(req["thumb"], JPEG)
+    extra = {"similarity": {"code": "ok", "pairs": 99}}         if os.environ.get("FAKE_SELFIE_BAD_SIMILARITY") else {}
     _send({"id": req["id"], "ok": True, "error": "", "width": width, "height": height,
-           "seconds": 0.01})
+           "seconds": 0.01, **extra})
 
 
 def _send(obj: dict) -> None:
@@ -143,6 +146,9 @@ def main() -> None:
             with open(env["FAKE_SELFIE_LOG"], "a", encoding="utf-8") as f:
                 f.write(f"{req['id']} {req['seed']}" + (f" identity {ref}" if ref else "") + "\n")
         renders += 1
+        if any(req["id"].startswith(x) for x in env.get("FAKE_SELFIE_TOO_LONG", "").split(",") if x):
+            _send({"id": req["id"], "ok": False, "error": "prompt_too_long"})
+            continue
         if env.get("FAKE_SELFIE_HANG") or (hang_after is not None and renders > hang_after):
             threading.Event().wait()
         if env.get("FAKE_SELFIE_DIE"):

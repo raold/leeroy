@@ -74,6 +74,7 @@ UNIT_CALLS: dict[str, dict[str, float]] = {
     "breaks": {"json": 1},                     # 20 s
     "critic": {"json": 1.1},                   # one call per sampled member (PR23): 22 s
     "enrich": {"think": 1, "json": 1},         # 110 s
+    "newcomers": {"think": 1, "json": 1},      # normal two-pass generator; retries are metered
     "photo": {"json": 1},                      # one call, no think pass: 20 s
     # a set's four images of about 6 s hold the whole card, so both default slots: 48
     # slot-seconds, in 20 s JSON equivalents
@@ -96,7 +97,7 @@ MEASURE_MIN = 3     # ...once there are 3 of them
 COUNTERS: dict[str, Callable[["NightContext"], int]] = {}
 # Optional extensions must be admitted on the particular runner before budgeting.
 # Core counters may belong to substages, so their historical counting is unchanged.
-EXTENSION_STAGES = frozenset({"coach", "realm", "photo", "selfies", "scenes", "snaps", "claims"})
+EXTENSION_STAGES = frozenset({"coach", "realm", "photo", "selfies", "scenes", "snaps", "claims", "newcomers"})
 
 
 def register_counter(stage: str, fn: Callable[["NightContext"], int]) -> None:
@@ -219,6 +220,7 @@ DEGRADE = (
     Degrade("coach", (Cut("coach_units", "fit", 5),)),
     Degrade("selfies", (Cut("selfie_per_night", "fit", 10),)),
     Degrade("claims", (Cut("claims_per_night", "fit", 0),)),  # unread lines wait for another night
+    Degrade("newcomers", (Cut("newcomers_per_night", "fit", 0),)),
     Degrade("encounters", (Cut("encounters_per_night", "fit", 20),)),
     Degrade("notes", (Cut("notes_per_night", "fit", 100),)),
     Degrade("wow_lines", (Cut("wow_lines_per_night", "halve", 10),)),

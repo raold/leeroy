@@ -237,6 +237,8 @@ Run from `F:\azerothcore\scripts` in Git Bash.
 ```bash
 ./ac-update.sh [--dry-run]   # pull core + git modules (ff-only, local commits rebased); refuses if dirty
 ./ac-backup.sh [label]       # mysqldump all 4 DBs, keeps newest 5
+./ac-release.sh [--dry-run] <commit>... # deploy merged main commits onto the live release branch
+./ac-release.sh --native [--dry-run] <commit>... # also stop servers and build with AC_JOBS=4
 ./ac-build.sh [--no-configure | --preflight]   # preflight + cmake configure + build; --preflight stops after the module checks
 ./ac-server.sh start|stop|status # also starts/stops the mind; stdout: mind-data/logs/mind-stdout.log
 ./ac-voice.sh start|stop|status # voice service; reads its data directory and ports from `where`
@@ -248,6 +250,36 @@ template no longer has (even as a comment), for core and module configs, plus su
 renames (at least 20 additions and 20 removals); values are never printed, and an unreadable
 file is reported without stopping the update. `--dry-run`
 reports the checked-out templates and still fetches metadata, but never merges or rebases.
+
+`ac-release.sh` refuses an online/unknown owner, open guild or owned offline raids,
+a dirty tree, a branch outside `release/*` or `codex/live-release-*`, a native build
+lock, or a commit not present on the local `origin/main` (fetch before releasing).
+`--allow-raid ID` explicitly excludes a known orphan; repeat it for multiple IDs.
+Each exception is printed with the rollback instructions. Mind releases allow only
+`mind/`, `selfie/`, `voice/`, `CLAUDE.md`, `README.md` and `references.bib`; native
+releases additionally allow `modules/`, `config/` and `patches/`. Dry-run checks
+and prints the plan without cherry-picking, stopping services or taking snapshots.
+Voice-file releases require the separately managed voice service to be stopped
+first (its OS lock is probed without loading models); this tool does not enable
+or restart voice. Real releases hold the checkout lock before capturing the
+rollback target and running preflight, so a delayed invocation cannot undo a
+release that finished while it was checking the database.
+After cherry-picking it stops the mind, takes an SQLite online backup in
+`mind-data/snapshots/pre-release-*.db`, migrates with the new code, restarts services
+and the optional `leeroy-console` task, then prints health. Native releases save
+the old EXE/DLL files alongside the snapshot before building; a failed build
+restores those files and the original checkout before restarting the old servers.
+Native stop is confirmed separately from the best-effort server wrapper: both
+server processes must be absent from a successful, well-formed process listing.
+Unavailable status or a surviving process prevents build/restore writes; the
+printed native rollback command applies the same check before resetting files.
+Failures before the completed restart attempt rollback; a health failure leaves
+the running release in place and prints recovery instructions. Every exit prints
+the reset target, snapshot and native rebuild command.
+The printed rollback also restarts the optional console task after restoring the
+checkout and database, so it reloads the matching code.
+Exit codes: 0 success, 1 refused before changes, 2 failure after changes. Test only with
+`bash scripts/tests/ac-release.sh`; it uses temporary repositories and stub services.
 
 `./ac-health.sh [--json] [--toast]` (`python -m leeroy_mind health`) checks the live install
 read-only, one ok/FAIL/note line each, exit 1 on any FAIL: the servers, Server.log's cast line
@@ -278,6 +310,129 @@ table). `--toast` shows one toast per new failure and writes only
 `mind.db-shm` behind while the mind is stopped, as doctor and the console do.
 `ac-health-schedule.ps1 -Install|-Remove|-Status` manages a per-user task that runs it every
 15 minutes while he is logged on (not installed by default).
+
+### Off-machine guild backups
+
+`./ac-guild-backup.sh [--with-db]` backs up the guild to an already mounted destination.
+Create `%LOCALAPPDATA%\leeroy\backup.toml` locally, outside git (TOML single quotes
+keep Windows backslashes literal):
+
+```toml
+destination = '\\nas\private-backups\leeroy'
+keep_daily = 7
+keep_weekly = 8
+# staging_dir = 'D:\leeroy-staging'   # optional, absolute, local
+```
+
+Use a destination on another machine; a second folder on F: does not protect against
+drive failure. The script uses the logged-on user's existing share access and stores no
+credentials. The backup contains private guild data: restrict the share to its owner.
+It creates its own marked `leeroy-guild-backups-v1` directory under the destination,
+which must already exist. It refuses source/destination overlap, symlinks and Windows
+reparse points. It never mounts a share, starts a service, or contacts a model.
+
+- **Contents.** Both `mind.db` and `library.db` are required. It includes the rest of
+  `mind-data`: personas and versions, memories/history, prompts/overlays, voice specs
+  and reference clips, Realm plans/blocklist, and selfie sets, picks and history. From
+  `voice-data` it includes only `voice.toml`, `decision.toml`, `lexicon.toml`,
+  `attitudes.toml` (when present). `--with-db` adds the newest timestamp-named
+  `ac-backup.sh` set's four nonempty SQL dumps, rejecting incomplete/error sets.
+  Run `ac-backup.sh` first if a fresh game snapshot is wanted; these older dumps are
+  not synchronized with the mind snapshot.
+- **Exclusions.** At any depth it omits `logs/`, `scratch/`, `snapshots/`, `models/`,
+  `cache/`, `caches/`, `__pycache__/`, unfinished `.part` files/directories,
+  `control.json`, `console.key`, runtime lock/PID files, files the services rewrite
+  continuously (`health-state.json`, `wow-volume.json`, `ui-state.json`,
+  `dojo-endpoint.json`, `worldserver.pid`; regenerated on start and they would fail the
+  stability scan) and SQLite `-wal`, `-shm`, `-journal` files. Logs/scratch/snapshots are disposable local history; models and
+  caches can be fetched again. Worker `selfie-data`, voice engines/cache/UI state,
+  the console key in the owner profile and everything outside the listed data roots
+  are never selected. Runtime control credentials must never be restored.
+- **Consistency.** A local temporary capture uses SQLite's online `backup()` API in one
+  step per database (`pages=-1`): a single read transaction, a consistent snapshot in WAL
+  mode that never blocks the mind's writers. A stepped copy restarts whenever another
+  connection writes between steps and, measured on a 20 MB database with a continuous
+  writer, needed about 59,000 steps and 116 s; the single step has no deadline and is
+  bounded by the database size. Then `PRAGMA integrity_check` for each copied database. The ordinary file inventory
+  and SHA-256 contents must match on both sides of the database copies. File changes
+  retry the capture up to three times; persistent changes fail without publication or
+  pruning. SQLite can keep writing throughout (no service lock is taken). Each database
+  has its own transaction; there is no global transaction across both databases and
+  the filesystem. For a strictly simultaneous snapshot, stop the mind, console,
+  voice and any other data writers first. Online backups establish stable file
+  contents around the database snapshots; they cannot make an in-flight application
+  operation atomic. Restore startup reconciles selfie files with the database.
+- **Transfer and verification.** A dated set is a checksummed `manifest.json` plus
+  an ownership marker. Every payload file has a size and SHA-256. Shared objects are
+  addressed by that digest, so unchanged JPEGs are not uploaded again; there are no
+  hard links, filesystem-specific deduplication calls, or external Python packages.
+  This trades local hashing and destination verification reads for less upload space
+  and traffic. A failed upload resumes its verified byte prefix on the next run; an
+  existing object is trusted by its digest name and size (it was verified before it was
+  renamed into place) and is not read back; every newly written object is verified. Every
+  referenced object is re-read in full when the last full verification (recorded in
+  `.verify-state.json` in the store) is over 7 days old, so a daily task verifies
+  weekly, or on demand with `--verify-all`. A set becomes visible through a same-directory
+  rename only after all destination objects verify. The destination must support normal
+  file locks and same-directory renames (ordinary SMB shares do). Concurrent runs refuse
+  the store lock; it is automatically released when a process exits.
+- **Retention.** Keep the newest set from each of the last 7 represented UTC days and
+  8 represented ISO weeks (their union). Settings can be zero individually, never both.
+  Pruning runs only after a successful capture/publication. Only correctly named,
+  checksum-valid sets with this store's marker and exactly its two metadata files are
+  removed. No recursive deletion is used. Shared objects are deleted only when a
+  pruned owned manifest named them and no retained set uses them. Foreign or corrupt
+  set directories are preserved and disable object collection. A `sets/.pending-*`
+  directory left by a crashed publish that holds only this script's own manifest and
+  marker (checksums match) and is over 24 hours old is removed and is not foreign; a
+  younger one, or one with any other content, counts as foreign. Object `.part` files
+  over 7 days old and stale `.staging/leeroy-guild-capture-*` directories are removed.
+  Unpublished complete orphan objects are retained. Never edit manifests or delete objects
+  manually: multiple sets share them. Copy the whole store when relocating it.
+
+`./ac-guild-backup.sh --restore-test` reconstructs the newest completed set into a
+temporary directory, checks every file against its manifest, reruns both SQLite integrity
+checks and removes only that temporary reconstruction. A corrupt newest set fails rather
+than silently choosing an older one. `--restore-to F:/guild-restore` performs the same
+checks but keeps the verified output in that **new, initially nonexistent** directory;
+it refuses live data roots and existing output. A failure leaves the live data untouched.
+The capture/restore requires temporary free space for the complete payload. Capture
+stages in `staging_dir` from the config when set; otherwise in `.staging` inside the
+store when the destination is on a local fixed disk, else the system temp directory
+(normally C:). It must be outside the store and the source data directories.
+`--config`, `--root`, `--mind-data`, `--voice-data` and `--db-backup-dir` allow explicit
+isolated paths; normal source defaults follow this checkout and `LEEROY_MIND_DATA` /
+`LEEROY_VOICE_DATA`. The Git Bash wrapper uses the mind venv (or an explicit
+`AC_GUILD_BACKUP_PYTHON`); the engine needs Python 3.11+ and only its standard library.
+
+`ac-guild-backup-schedule.ps1 -Show [-At '03:00'] [-WithDb]` previews the per-user
+`leeroy-guild-backup` task. `-Install` creates/replaces it, `-Remove` removes it, and
+`-Status` reports the last result (0 means verified). It runs daily at the selected
+local time, only while the owner is logged on, with Limited privileges and no stored
+password, so his share access is available. A missed run starts when available; concurrent
+runs are ignored. `pythonw.exe` runs the same backup engine without opening a window.
+It is **not installed by default**; configure the destination, run a manual backup and
+restore test successfully, then have the operator install it. Check `-Status` regularly;
+there is no automatic failure notification. An unavailable share fails without pruning.
+
+**How to restore.** Run `--restore-test`, then `--restore-to` a new staging directory.
+Stop the mind and all other writers (console, voice and selfie activity), and keep a
+separate local copy of the current `mind-data`/voice configuration for rollback. Replace
+the mind data with the verified staged `mind-data` as a directory; do not overlay it onto
+old database WAL/SHM files or stale photos. Copy the four staged voice TOMLs that are
+present into `voice-data`, preserving its refetchable engines/caches. Keep the owner's
+existing console key outside these directories. If anything fails, leave services stopped
+and restore the saved pre-restore directories/configs. With the installed mind's Python,
+from `mind/`, run `db --data-dir F:/azerothcore/mind-data migrate`, then
+`doctor --data-dir F:/azerothcore/mind-data`; only restart after checks pass. Importing the
+optional game SQL dumps is a separate operator recovery step with MySQL stopped from
+serving the game; this script never imports them or overwrites live data.
+
+`bash scripts/tests/ac-guild-backup.sh` exercises synthetic data only, including a live
+SQLite writer, verified restore, corrupt/interrupted copies, ownership-confined pruning,
+foreign directories, stale pending/`.part` cleanup, a large database snapshot under
+continuous writes, and junction/symlink refusal. The schedule self-test mocks task
+cmdlets and never registers a task. Both run in CI; never use live data for these tests.
 
 `db_backup/` holds two kinds of thing: sets `ac-backup.sh` made
 (`<label>_<YYYYmmdd>_<HHMMSS>`) and sets from the older script described below
@@ -648,9 +803,27 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   events the bridge queued for the mind, so never run it while they matter.
 - Do not run `personas generate`/`seed` or a library build while the mind is
   live: they load another large model next to the live one and evict it.
-- Nothing writes a persona while the mind runs. A member who joins the cast
-  later (invited, or levelled to 80) has none and stays silent: the mind voices
-  only stored personas and native mutes every cast member in mod-ollama-chat.
+- Only the night's own writers write personas while the mind runs. Optional
+  `[personas] auto_newcomers = true` (read at startup; false or invalid means off)
+  gives members who join the cast later (invited, or levelled to 80) a persona at
+  night. The `newcomers` reflection stage runs just after the snapshot, before
+  threads and other persona readers. With no newcomer work it does not swap models.
+  It reuses the manual generator, slot balance, age floor of 25, name/content screens,
+  bounded overlay, birthdays and relationship seeds, with source `generated` (the
+  existing source allowed by `persona_core`). `newcomers_per_night` defaults to 6 in
+  NightlySettings; the budget may defer them. A saved nightly selection and unit
+  receipts keep that cap across resumes. Generation refusals and recoverable save
+  failures retry on at most three distinct nights, then log `newcomer_gave_up` with
+  the guid. A save failure rolls back the persona/relationships before recording
+  the failed night when the database remains writable; manual generation remains
+  available. Login cancellation consumes no failed night. The owner and non-cast
+  members are excluded. Later night stages see new personas immediately, and the
+  existing login reload makes them available to live text talk without a restart.
+  Existing enrichment, photo-kind and first-selfie stages pick them up as their
+  eligibility and nightly budgets allow; their scheduling is unchanged. Without a
+  separate voice spec a newcomer stays off voice comms (no fallback voice).
+  Until generated, a newcomer stays silent: the mind voices only stored personas
+  and native mutes every cast member in mod-ollama-chat.
   The mind logs `cast_without_persona` (their guids) when that set changes and
   `doctor` notes them. With the mind stopped, `personas generate --dry-run`
   shows their slots and `personas generate` writes them (the reflection model,
@@ -1251,6 +1424,27 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
   style queues a fresh set for her (a first set if she never had one, else a "4 more" one; sets
   waiting for his choice stay waiting). The NSFW gate (`nsfw_max`) is unchanged for every image
   of both styles.
+- **Offline photo booth.** `[selfies] booth = true` additionally renders profile sets between
+  nights. It defaults to false and is read only at startup; an invalid selfies table means
+  rendering off. Its background loop checks once a minute, outside chat/control handling.
+  Both `enabled` and `booth` must be true, the owner's nightly Presence must have counted at
+  least 10 minutes offline, no live lease may be held, and no night may be running or due.
+  Requests must be at least `booth_wait_minutes` old (default 10, range 1-60); a newly available
+  first set is queued and timestamped at the loop's first eligible observation. Every request
+  still passes the shared renderer in `selfies/render.py`, including held-kind and NSFW rules.
+  `booth_sets_per_day` (default 6, range 1-120) caps completed attempts per local calendar day:
+  ready, refused and failed sets consume that allowance, survive restart and are not retried
+  by the booth that day. Held sets take no allowance. The night's `selfie_per_night` cap and
+  its ability to render remaining/refused booth sets are unchanged. A set crossing midnight
+  remains queued and is rendered under the new day's allowance at a later eligible check.
+  A due night cancels the booth and waits for the whole worker tree to exit; one shared lock
+  covers each run and its cleanup. Every live lease preempts both through the same arbiter.
+  Normal completion makes room before rendering and again after worker exit; cancellation
+  makes no arbiter call before hand-over. `selfies status` includes separate `booth` daily
+  stage totals and the last pass (sets, attempts, seconds, outcome); `selfies_booth_done`
+  logs sets, seconds and outcome. Receipt/provenance keys use `booth:<local-date>` so booth
+  work cannot reset a night's stall counter or appear as nightly work in reports.
+  No night schedule, photo choice, or content rule changes.
 - **GPU rules.** The image stage unloads every chat model but the embedding model (the worker
   needs the VRAM) and never renders while a live lease is held (his login, an offline raid, the
   voice service): it ends without a failure and the sets wait for the next night. A night with
@@ -1314,9 +1508,18 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
     measures its VRAM before `identity_min_free_gib` is trusted. Doctor notes it as not
     fetched with snaps off and FAILs with snaps on. Situational photos are 832 x 1216 portraits
     (thumbnail 384 px); the NSFW gate and three seeds per slot are P2's.
-  - *Stages.* `scenes` (reflection model, after `life`) plans: the reflection model writes a
-    scene for a member from tonight's life beat, her card birthday tomorrow or an ordinary day,
-    and may decline; the screen (`selfies/scene.py`) refuses looks changes, other people,
+  - *Stages.* `scenes` (reflection model, after `life`) plans: the reflection model chooses
+    enums for a member from tonight's life beat, her card birthday tomorrow or an ordinary day,
+    and may decline. `scene_choices.py` composes 30 activities, 20 places, time, framing,
+    expression, clothed outfit and a prop (including `none`). Activity/place and prop/activity
+    pairings refuse incoherent picks. Off-list replies get one schema retry, then no scene.
+    Lust settings/outfits/colours/expressions reuse the profile lists and their pairings;
+    situational settings exclude the hot tub, crowd and hallway mirror. New stored scenes carry
+    `recipe: 1`. Pre-enum pending scenes (or an unknown recipe) stay planned with the held code
+    `legacy_scene_schema`, use no render/GPU slot, and expire normally; their rows and files are
+    preserved. No free-prose fallback approves them. Already rendered photos are unchanged.
+    The screen (`selfies/scene.py`) remains a second defence against
+    looks changes, other people,
     names, likeness, era, minors, explicit wear and undressing or bathing contexts, and a lust
     woman's scene reuses the profile photo's enum picks. `snaps` (image model, after `selfies`,
     `wants_gpu`) renders what is planned, each with the identity reference, under P2's GPU
@@ -1335,7 +1538,11 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
     photos stay on disk, unserved.
   - *Guild photo.* The night after the newest online raid with a kill (it ended within 12 hours
     before the night began), at most one a week, up to 16 of that raid's members with a chosen
-    photo (at least 3) are each rendered alone at their desk as a video-call tile (1024 px),
+    photo (at least 3) are each rendered alone at their desk in a candid tile (1024 px),
+    with a monitor displaying a landscape game map. Own looks and monitor content stay at
+    priority 0, with required negatives for duplicate faces and faces on screens. Each tile
+    already has its own GUID/slot/attempt seed and immutable reference; crop and adapter scale
+    are unchanged pending GPU evidence. Overlong required identity text refuses the render.
     then composited at 512 px with 8 px gutters in a grid by tile count: 1 is 1x1, 2 is 2x1, up to 4 is
     2x2, up to 6 is 3x2, up to 9 is 3x3, up to 12 is 4x3, up to 16 is 4x4. He is never in it.
   - *Storage.* Rows in `selfie_snap` (migration 0022). Files: `selfies/<guid>/snaps/<id>.jpg`
@@ -1345,7 +1552,14 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
     expired_week) and the `scenes`/`snaps` stage records. `selfies try --snaps [--guid N |
     --limit N] [--guild]` (mind stopped) renders one situational photo each with the member's
     face, and with `--guild` one grid, into `scratch\selfies-try\snaps\`; members with no
-    chosen photo (`no_photo`) or no photo kind (`no_kind`) are skipped and counted. The mind's
+    chosen photo (`no_photo`) or no photo kind (`no_kind`) are skipped and counted. Readiness
+    prints per-GUID declined/refused/rendered status, refusal codes, and NSFW score (unavailable
+    before rendering; the last score after all seeds are flagged), also in JSON `results`.
+    `guild_similarity` reports an uncalibrated head-crop embedding cosine maximum, mean and
+    closest GUID pair. The worker reuses its loaded IP-Adapter image encoder, never downloads
+    a model; missing/failed encoders produce a skip code. This is a comparative tile diagnostic,
+    not a face detector, calibrated threshold or identity proof. The operator checks distinct
+    likenesses and single faces on actual GPU images before enabling snaps. The mind's
     doctor reports the identity adapter's state beside the worker's checks.
 - **Content limits.** Adults only, clothed and non-explicit, no real person's likeness, and no
   person's name ever reaches a prompt. Logs hold ids, counts, scores and timings, never a prompt
