@@ -1,3 +1,44 @@
+# Offline raid stop and progress
+
+`offline_raid_stop` is a bridge command with the normal `v`, `type`, `ts` and
+unique `id` envelope plus `raid_id`, the original `start_offline_raid` command id.
+For example: `{"v":1,"type":"offline_raid_stop","ts":0,"id":"stop1","raid_id":"raid1"}`.
+Only the connected mind's bridge can dispatch it. It cannot stop a benchmark or
+another raid. Native checks the exact instance's encounter state again at command
+execution; an engaged boss or unavailable state refuses the stop. It uses the
+same teardown as the native timeout, ending in the original raid's `job` event
+with reason `stopped`. An ack alone is not a cleanup receipt.
+
+A repeated stop while that raid tears down for `stopped` succeeds without another
+mutation. An already finishing run for another reason returns `raid_finishing`;
+the most recently finished offline id returns `raid_finished`; other unknown ids
+return `unknown_raid`. This bounded diagnostic history is process-local. After
+a native restart all old ids are unknown. Mind retries use new envelope ids and
+the same raid id because its bridge forbids reuse of issued command ids.
+
+Running offline `job` progress is published every 60 seconds and on entering
+running. It adds `members_in_instance` (admitted members actually in the exact
+map/copy, even if they left the group), `last_progress_ts` (Unix milliseconds,
+initialised at encounter baseline and advanced by boss engage, kill or wipe),
+and `boss_engaged` when the instance's encounter state is readable. Loading an
+unvisited boss grid or repeatedly seeing the same state is not progress. Kills,
+wipes, the participant manifest and instance id remain the existing fields.
+Unknown encounter state omits `boss_engaged`; it never means disengaged.
+
+The mind defaults to 30 minutes without progress (`[guild] offline_stall_minutes`,
+10-360). Members leaving the instance is native's own too_few stop, which fires
+before a heartbeat is sent, so the mind has no scatter rule. Stale,
+malformed or engaged observations never authorize a stop. The run closes through
+the existing terminal path as `stalled`; native cleanup errors keep
+their reason. Raid history already displays this outcome. Native's earlier
+leader/member loss, wipe limits and timeouts keep their existing priority.
+
+Old native lacks these fields: the mind logs unsupported once per run and keeps
+the existing timeout. A command-level unsupported response has the same fallback.
+After mind restart no saved heartbeat authorizes a stop; fresh native evidence is
+required. Lost-terminal handling (deadline plus 15 minutes) is unchanged. No schema
+migration. **Deploying this feature requires a native rebuild and updated mind.**
+
 # Realm job receipts
 
 The bridge's existing `realm_job` event may include `"changed": false` on a

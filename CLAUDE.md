@@ -646,6 +646,27 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 - Guild life (raid nights, DKP and loot, offline raids, rank, spec and gear
   upkeep) runs with built-in defaults; `[guild]` and `[dkp]` tables in
   `mind.toml` override them.
+- Offline raids publish a running `job` heartbeat every 60 s with kills, wipes,
+  `members_in_instance` (the exact map and instance), `last_progress_ts` (Unix ms;
+  start, boss engage, kill or wipe), and `boss_engaged` when native can read the
+  encounter state. The mind requests `offline_raid_stop {id, raid_id}` after
+  `[guild] offline_stall_minutes` (30; 10-360) without progress. A heartbeat
+  over 120 s old, an unknown encounter state or an engaged boss prevents a stop;
+  boss evidence between heartbeats (also after a mind restart) defers it, and
+  native rechecks engagement at dispatch. Members leaving the instance is native's
+  own too_few stop; the mind has no scatter rule.
+  Stops target the original start command's id (`raid_id`), use normal teardown,
+  and finish only on its terminal `job` event (`stopped`, recorded by the mind as
+  `stalled`). Cleanup failures retain their native reason. A stop whose send fails
+  (bridge down, transport off) is uncertain and retried on a later tick with a fresh
+  command id; stops register no job mailbox entry. An accepted stop releases the GPU
+  after the cancel grace but never blocks the day, and a lost terminal is declared
+  15 minutes after the accepted stop. Retries
+  use fresh command ids for the same raid; stopping an already stopping run is a
+  no-op, while unknown/finished runs are refused. Old native without heartbeats
+  or the command keeps the existing timeout behaviour and logs unsupported once
+  per run. A mind restart requires fresh progress evidence; lost terminals still
+  use the deadline (or an accepted stop) plus 15-minute `terminal_lost` fallback. Native rebuild needed.
 - Members start conversations with him on two clocks (2026-11-07), per hour of
   his play at chattiness 4 and scaled with it (0 stops every unprompted whisper):
   `[talk] whispers_per_hour` (4, at most 8 an hour and 2 minutes apart;
