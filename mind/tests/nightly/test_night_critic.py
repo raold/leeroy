@@ -315,3 +315,32 @@ def test_count_pending_is_read_only_and_respects_frozen_completed_units(h):
     run(critic.stage_critic(ctx))
     sent(h, 103)
     assert budget.COUNTERS["critic"](ctx) == critic.count_pending(ctx) == 0
+
+
+def _cycle(h):
+    """A reflection that cites itself, as merge_memory once left 213 live rows."""
+    base = h.mem(101, "A shared memory of the boss.", kind="story", source="owner",
+                  evidence=("owner:M17",), key="owner:M17:101")
+    looped = h.mem(101, "I keep coming back to that boss.", kind="reflection",
+                   source="reflection", evidence=(f"memory:{base}",))
+    h.store.conn.execute("UPDATE memory SET evidence=? WHERE id=?",
+                         (json.dumps([f"memory:{base}", f"memory:{looped}"]), looped))
+    return base, looped
+
+
+def test_a_line_with_cyclic_stored_provenance_is_left_out_not_fatal(h):
+    base, looped = _cycle(h)
+    ids = sent(h, n=4, memories=[base])
+    bad = h.utter(h.T + 9, 101, "Synthetic line that recalled the loop.", [looped])
+    ctx = context(h, answer(5, 1, 4, 5))
+    run(critic.critic_member(ctx, 101, rows(h, ids + [bad])))
+    assert ctx.done("critic", "101") and h.count("critic_score") == 1
+    assert h.store.conn.execute("SELECT n FROM critic_score").fetchone()["n"] == 4
+
+
+def test_a_member_with_only_untraceable_lines_is_skipped(h):
+    base, looped = _cycle(h)
+    ids = sent(h, n=4, memories=[looped])
+    ctx = context(h, answer(5, 1, 4, 5))
+    run(critic.critic_member(ctx, 101, rows(h, ids)))
+    assert ctx.done("critic", "101") and not ctx.reasoner.llm.calls and h.count("critic_score") == 0

@@ -825,3 +825,10 @@ def test_active_memory_texts_and_count(store):
     assert store.active_memory_count() == 2
     assert sorted(store.active_memory_texts()) == ["Raid night once more.",
                                                    "The potion feud started over a cauldron."]
+
+
+def test_merge_memory_never_makes_a_memory_its_own_ancestor(store):
+    a = store.insert_memory(make_mem(text="a", evidence=("chat:1",)))
+    b = store.insert_memory(make_mem(text="b", evidence=(f"memory:{a}",)))
+    store.merge_memory(a, [f"memory:{a}", f"memory:{b}", "chat:2"], 5)
+    assert store.get_memories([a])[0].evidence == ("chat:1", "chat:2")
