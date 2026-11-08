@@ -4,10 +4,13 @@ POST /api/discord (checked as the mind checks it, then on to the mind's discord 
 `discord` event the feed pass sends when a channel moved. A real server on a free port; the
 mind and its link are fakes, and every name is invented."""
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
+from urllib.parse import quote
 
 import pytest
 
@@ -20,9 +23,8 @@ from leeroy_mind.discord import store as dstore
 from console.rig import FakeMind, http, make_app, running
 
 LINKED = [SimpleNamespace(state=5, remote_port=7878, remote="127.0.0.1", pid=101)]
-# Thursday evening for him: 20:00 US Eastern, so 01:00 in the UK. Naive local time is what the
-# console reads the clock as, so the test holds on any machine zone.
-NOW = datetime(2026, 10, 29, 20, 0).timestamp()
+# Thursday evening in US Eastern, midnight in Britain during the DST-change gap.
+NOW = datetime(2026, 10, 29, 20, 0, tzinfo=ZoneInfo("America/New_York")).timestamp()
 
 
 @pytest.fixture
@@ -98,7 +100,7 @@ def test_the_server_lists_categories_channels_dms_and_members_with_presence(data
     assert dms[101] == 2 and dms[102] == 0
     members = {m["guid"]: m for m in v["members"]}
     assert members[101]["presence"]["state"] == "online"      # 20:00 where he is
-    assert members[102]["presence"]["state"] == "offline"     # 01:00 in the UK
+    assert members[102]["presence"]["state"] == "offline"     # midnight in the UK
     assert members[101]["class_key"] == "warrior" and members[101]["role"] != "trial"
     assert set(members[101]) == {"guid", "name", "class_key", "role", "presence"}
 
@@ -108,7 +110,7 @@ def test_presence_and_roles_follow_the_minds_rules(data, cast):
     from leeroy_mind.discord import presence
     from leeroy_mind.personas.io import load_persona
     p = load_persona(cast, 101)
-    want = presence.presence_of(p, local=presence.local_time(datetime.fromtimestamp(NOW),
+    want = presence.presence_of(p, local=presence.local_time(datetime.fromtimestamp(NOW, presence.OWNER_ZONE),
                                                              p.identity.region),
                                 body_online=False, body_zone=0, rng_seed=presence.RNG_SEED)
     (data / "mind.toml").write_text("[realm]\ntrial_rank = 3\n")
@@ -261,6 +263,79 @@ async def settled(app):
         await asyncio.sleep(0.01)
     await asyncio.sleep(0.05)
     await app._discord_baseline()
+
+
+def test_unread_counts_rows_after_each_channel_mark_and_omits_own_deleted_and_thread_lines(data, cast):
+    first = dstore.post(cast, channel="general", author=101, origin="mind", text="first", now=NOW)
+    for _ in range(5):
+        dstore.post(cast, channel="pics", author=101, origin="mind", text="elsewhere", now=NOW)
+    dstore.post(cast, channel="general", author=101, origin="mind", text="second", now=NOW)
+    dstore.post(cast, channel="general", author=HUMAN, origin="human", text="mine", now=NOW)
+    gone = dstore.post(cast, channel="general", author=101, origin="mind", text="gone", now=NOW)
+    dstore.delete(cast, gone, author=101, now=NOW)
+    thread = dstore.open_thread(cast, first, name="a thread", now=NOW)
+    dstore.post(cast, channel="general", thread=thread, author=101, origin="mind", text="thread", now=NOW)
+    dstore.post(cast, channel="dm:102", author=102, origin="mind", text="private", now=NOW)
+    cast.conn.commit()
+
+    async def go():
+        async with served(build(data)) as app:
+            query = "?read=" + quote(json.dumps({"general": first, "dm:102": 0}))
+            response = await get(app, query)
+            assert response.status == 200
+            view = response.json()
+            channels = {c["id"]: c for cat in view["categories"] for c in cat["channels"]}
+            assert channels["general"]["unread"] == 1
+            assert channels["pics"]["unread"] == 0  # no mark: initial history is not unread
+            assert next(d for d in view["dms"] if d["guid"] == 102)["unread"] == 1
+            for value in ([], {"general": True}, {"general": -1}, {"general": 2**53}, {"unknown": 0}):
+                assert (await get(app, "?read=" + quote(json.dumps(value)))).status == 400
+            assert (await get(app, "?read=not-json")).status == 400
+    asyncio.run(go())
+
+
+def test_quotes_outside_the_loaded_window_keep_a_deleted_placeholder(data, cast):
+    parent = dstore.post(cast, channel="general", author=101, origin="mind", text="old secret text", now=NOW)
+    for _ in range(101):
+        dstore.post(cast, channel="general", author=101, origin="mind", text="later", now=NOW)
+    dstore.post(cast, channel="general", author=HUMAN, origin="human", text="reply", reply_to=parent, now=NOW)
+    dstore.delete(cast, parent, author=101, now=NOW)
+    cast.conn.commit()
+
+    async def go():
+        async with served(build(data)) as app:
+            view = (await get(app, "?channel=general")).json()
+            assert len(view["messages"]) == 100
+            assert view["quotes"] == [{"id": parent, "author": 101, "text": "", "deleted": NOW}]
+            assert "old secret text" not in json.dumps(view)
+    asyncio.run(go())
+
+
+def test_loaded_thread_unreact_and_old_pin_removal_refresh_the_channel(data, cast):
+    parent = dstore.post(cast, channel="general", author=HUMAN, origin="human", text="parent", now=NOW - 100)
+    thread = dstore.open_thread(cast, parent, name="thread", now=NOW - 100)
+    child = dstore.post(cast, channel="general", thread=thread, author=101, origin="mind", text="child", now=NOW - 100)
+    dstore.react(cast, child, member=HUMAN, emoji="👍", now=NOW - 100)
+    dstore.pin(cast, parent, now=NOW - 100)
+    for _ in range(101):
+        dstore.post(cast, channel="general", author=101, origin="mind", text="later", now=NOW - 100)
+    cast.conn.commit()
+
+    async def go():
+        async with served(build(data)) as app:
+            seen = collect(app)
+            await settled(app)
+            await get(app, "?channel=general&thread=" + str(thread))
+            for change in (lambda: dstore.unreact(cast, child, member=HUMAN, emoji="👍", now=0),
+                           lambda: dstore.unpin(cast, parent)):
+                seen.clear()
+                await app._feed_pass()
+                assert not seen
+                change()
+                cast.conn.commit()
+                await app._feed_pass()
+                assert [d for kind, d in seen if kind == "discord"] == [{"channels": ["general"]}]
+    asyncio.run(go())
 
 
 def collect(app):

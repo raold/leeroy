@@ -162,6 +162,11 @@ member say what they could not know.
   with a bookmarked stable key, rotated with `console rotate-key` if a device
   is lost; a logon task (`scripts/ac-console-schedule.ps1`) keeps it running.
 
+- **The guild's Discord** is part of Comms: channels, private DMs, emoji, reactions,
+  reply quotes, threads and pins. Members answer while the owner is out of game,
+  with their regional presence shown beside their roles. Its messages stay in the
+  local server and never become WoW chat. Autonomous conversation comes in a later phase.
+
 Personas, memories, prompts and logs stay in the ignored `mind-data/`. See
 [the operating notes](CLAUDE.md#the-mind-service-leeroy_mind) for commands.
 

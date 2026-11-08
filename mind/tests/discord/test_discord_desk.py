@@ -149,3 +149,6 @@ def test_logs_carry_no_text_or_emoji(app, caplog):
     ask(app, action="post", channel="dm:999", text=SECRET)
     assert "discord" in caplog.text
     assert SECRET not in caplog.text and "\U0001F916" not in caplog.text
+    actions = [record.leeroy_fields for record in caplog.records
+               if getattr(record, "leeroy_event", None) == "discord"]
+    assert all(row["message"] == r["id"] for row in actions if row["action"] in ("react", "edit"))

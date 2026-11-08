@@ -6,12 +6,14 @@ and his `discord` lease on the GPU, released ten minutes after his last action. 
 import asyncio
 import random
 from collections import Counter
+from datetime import datetime
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from conftest import HUMAN, OFFICERS, TEST_CAST, make_mem, seed_test_cast
-from engine_rig import NICK, engine_clock, make_rig, numbered, save_member
+from engine_rig import NICK, make_rig, numbered, save_member
 from leeroy_mind.discord import store as dstore
 from leeroy_mind.bridge import ConnectionLost
 from leeroy_mind.discord.desk import DiscordDesk
@@ -21,6 +23,7 @@ from leeroy_mind.endpoint import discord_args
 from leeroy_mind.llm.scheduler import Priority
 from leeroy_mind.nightly.gpu import GpuArbiter
 from leeroy_mind.talk.turns import Turn, TurnKind
+from leeroy_mind.testing.fake_clock import FakeClock
 
 US = tuple(TEST_CAST)  # in the US at 20:00 on a Thursday: online in Discord
 REFL = "reflection-27b:latest"
@@ -28,7 +31,7 @@ REFL = "reflection-27b:latest"
 
 @pytest.fixture
 def clock():
-    return engine_clock()  # Thursday 2026-10-29 20:00: 01:00 for a member in the UK
+    return FakeClock(datetime(2026, 10, 29, 20, tzinfo=ZoneInfo("America/New_York")), yields=64)
 
 
 class FakeAdmin:
@@ -322,7 +325,8 @@ def test_the_prompt_has_the_channel_purpose_and_recent_messages_but_no_officer_l
             "whole guild.") in prompt
     assert "Recent messages:" in prompt
     assert "Coros: quixfen raid tonight / bring flasks" in prompt
-    assert f"{NICK}: @Arkon you coming to quixfen?" in prompt
+    assert "Answer his message: @Arkon you coming to quixfen?" in prompt
+    assert prompt.count("@Arkon you coming to quixfen?") == 1
     assert "Answer his message: @Arkon you coming to quixfen?" in prompt
     assert "glorbish" not in prompt and "vexmarrow" not in prompt
     # an officer answering in officer-chat sees it, and only it
@@ -398,12 +402,18 @@ def test_a_first_nothing_to_his_dm_is_asked_again(store, clock, tmp_path):
     [m] = answers(rig, "dm:104", mid)
     assert len(rig.chat_calls()) == 2
     assert "Answer Zan's message in a line, in your own voice." in rig.prompts()[-1]
-    # a channel post's silence stands
-    rig.script("(nothing)", "should not be asked")
+    # An explicit mention also gets one retry; an ordinary drawn answer may stay quiet.
+    rig.script("(nothing)", "yes im here")
     calls = len(rig.chat_calls())
     named = post(rig, "general", "@Ebbo you there?")
     answer(rig, talk, named)
-    assert answers(rig, "general", named) == [] and len(rig.chat_calls()) == calls + 1
+    assert len(answers(rig, "general", named)) == 1 and len(rig.chat_calls()) == calls + 2
+    rig.script("(nothing)", "(nothing)")
+    calls = len(rig.chat_calls())
+    drawn = post(rig, "general", "anybody around?")
+    answer(rig, talk, drawn)
+    assert answers(rig, "general", drawn) == []
+    assert len(rig.chat_calls()) <= calls + 2  # at most two selected members, one call each
     assert m["author"] == 104
     rig.close()
 

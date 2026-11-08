@@ -336,6 +336,7 @@ class TurnMeta:
     # a Discord turn's message: the one it replies to and its thread (discord.transport); a
     # Discord turn is known by its channel, never by this
     discord: DiscordTarget | None = None
+    discord_named: bool = False  # he addressed this member in a channel: re-ask one silence
     # what recall looks for when the turn has no trigger line: for an answer to his Discord post,
     # its words and its thread's last lines (discord.talk, ruling R13); "" for every other turn
     recall_query: str = ""
@@ -1502,7 +1503,7 @@ class Pipeline:
             return "hotmic_changed"
         if g not in w.online and not is_discord(turn.channel):  # Discord needs no body (R14)
             return "offline"
-        if g in w.afk:
+        if g in w.afk and not is_discord(turn.channel):
             return "afk"
         if g in self._away_now():
             return "away"
@@ -1702,9 +1703,10 @@ class Pipeline:
                     silent = True
             if silent:
                 dm = self._answers_his_dm(turn, meta)
-                if attempt == 0 and (meta.initiates or self._answers_his_whisper(turn) or dm):
+                named = is_discord(turn.channel) and meta.discord_named and meta.answers_human
+                if attempt == 0 and (meta.initiates or self._answers_his_whisper(turn) or dm or named):
                     log.info("say_silent: guid=%d kind=%s asked again", turn.speaker, turn.kind)
-                    hint = (SILENT_START_HINT if meta.initiates else SILENT_DM_HINT if dm
+                    hint = (SILENT_START_HINT if meta.initiates else SILENT_DM_HINT if dm or named
                             else SILENT_WHISPER_HINT)
                     messages = asking(hint.format(
                         human=self.human.called,

@@ -140,6 +140,7 @@ from typing import Callable
 
 from .. import endpoint
 from ..discord import layout as discord_layout, store as discord_store
+from ..discord.presence import OWNER_ZONE
 from ..realm.config import ConfigError, RealmConfig, load_realm_config
 from . import (bankview, boardview, calendarview, discordview, dojoview, faces, feed, libraryview, mindlog,
                galleryview, netinfo, personaview, raidview, realmview, selfieview, socialview, status, trainview,
@@ -328,7 +329,7 @@ class ConsoleApp:
         self._feed_last = 0
         self._discord_last: int | None = None  # newest Discord message id the pass has seen
         self._discord_ts = 0.0  # when the pass last looked, for changed_since's hint
-        self._discord_windows: dict[str, str] = {}  # channel -> its loaded window, as last read
+        self._discord_windows: dict[tuple[str, int | None], str] = {}  # channel/thread -> window
         self._discord_seen = float("-inf")  # when a page last asked for Discord (monotonic)
         self._pending: dict[int, float] = {}  # sent to a page as heard False: id -> first seen
         self._waiting: dict[int, float] = {}  # spoken, voice row not written yet: id -> first seen
@@ -508,7 +509,7 @@ class ConsoleApp:
             del self._waiting[next(iter(self._waiting))]
         return [i for i in dict.fromkeys(gone) if i not in out]
 
-    def _discord_read(self, last: int | None, since: float, channels: list[str]):
+    def _discord_read(self, last: int | None, since: float, channels: list[tuple[str, int | None]]):
         """Worker thread. (the newest message id, the channels that moved, the loaded windows as
         they are now) from one read snapshot: channels with a message past `last`, channels of
         what changed_since hints at, and each loaded window re-read for the caller to compare."""
@@ -526,8 +527,7 @@ class ConsoleApp:
                 moved |= {r[0] for r in conn.execute(
                     "SELECT DISTINCT channel FROM discord_message WHERE id IN "
                     "(SELECT value FROM json_each(?))", (json.dumps(hint),))}
-            prints = {ch: discordview.fingerprint(discordview.window(conn, ch))
-                      for ch in channels}
+            prints = {key: discordview.watched(conn, *key) for key in channels}
             return upto, moved, prints
         return feed.read(self.s.data_dir / "mind.db", question)
 
@@ -561,7 +561,7 @@ class ConsoleApp:
         self._discord_last, self._discord_ts = max(self._discord_last, upto), started
         for ch, fp in prints.items():
             if ch in self._discord_windows and self._discord_windows[ch] != fp:
-                moved.add(ch)
+                moved.add(ch[0])
                 self._discord_windows[ch] = fp
         if moved:
             self.broadcast("discord", {"channels": sorted(moved)})
@@ -1394,13 +1394,14 @@ class ConsoleApp:
         except (ConfigError, OSError):
             return RealmConfig().trial_rank
 
-    def _discord_question(self, conn, channel, after, thread):
+    def _discord_question(self, conn, channel, after, thread, read_marks=None):
         view = discordview.discord_view(
-            conn, owner_now=datetime.fromtimestamp(self._clock()).astimezone(),
-            trial_rank=self._trial_rank(), channel=channel, after=after, thread=thread)
+            conn, owner_now=datetime.fromtimestamp(self._clock(), OWNER_ZONE),
+            trial_rank=self._trial_rank(), channel=channel, after=after, thread=thread,
+            read_marks=read_marks)
         fp = None
         if channel is not None and not view["missing"]:
-            fp = discordview.fingerprint(discordview.window(conn, channel))
+            fp = discordview.watched(conn, channel, thread)
         return view, fp
 
     async def _api_discord(self, req: Request):
@@ -1416,16 +1417,26 @@ class ConsoleApp:
         if after is None or (req.query.get("thread", [None])[0] is not None and thread is None):
             return text(400, "after and thread: row ids")
         try:
+            raw_marks = req.query.get("read", ["{}"]) [0]
+            read_marks = json.loads(raw_marks)
+        except (ValueError, TypeError):
+            return text(400, "read: channel read marks")
+        if (not isinstance(read_marks, dict) or len(read_marks) > 512
+                or any((discord_layout.channel(k) is None and discord_layout.dm_peer(k) is None)
+                       or type(v) is not int or not 0 <= v < 2**53
+                       for k, v in read_marks.items())):
+            return text(400, "read: channel read marks")
+        try:
             view, fp = await asyncio.to_thread(feed.read, self.s.data_dir / "mind.db",
-                                               self._discord_question, channel, after, thread)
+                                               self._discord_question, channel, after, thread, read_marks)
         except Exception as e:
             log.warning("console_discord_unread: error=%s", type(e).__name__)
             return json_response(503, {"ok": False, "error": f"mind.db could not be read "
                                                              f"({type(e).__name__})"})
-        if fp is not None:  # the fingerprint is always of the latest-100 window, whatever
-            # `after` or `thread` asked for; the page has this window: the feed pass tells it when it changes
-            self._discord_windows.pop(channel, None)
-            self._discord_windows[channel] = fp
+        if fp is not None:  # latest 100 in this feed/thread, independent of an `after` cursor
+            key = (channel, thread)
+            self._discord_windows.pop(key, None)
+            self._discord_windows[key] = fp
             while len(self._discord_windows) > DISCORD_WINDOWS:
                 del self._discord_windows[next(iter(self._discord_windows))]
         return json_response(200, view)

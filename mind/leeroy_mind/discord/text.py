@@ -37,7 +37,9 @@ def clean_text(s: str) -> str:
 # One grapheme: a flag, a tag sequence, or units joined by ZWJ. A unit is a keycap or an emoji
 # code point with an optional variation selector and skin tone.
 _BASE = ("[\U0001F000-\U0001F1E5\U0001F200-\U0001F3FA\U0001F400-\U0001FAFF"
-         "\U00002300-\U000023FF\U00002600-\U000027BF\U00002B00-\U00002BFF]")
+         "\U00002300-\U000023FF\U00002600-\U000027BF\U00002B00-\U00002BFF"
+         "\u203C\u2049\u2122\u2139\u2194-\u21AA\u24C2\u25AA-\u25FE\u2934-\u2935"
+         "\u3030\u303D\u3297\u3299\u00A9\u00AE]")
 _UNIT = rf"(?:[#*0-9]️⃣|{_BASE}️?[\U0001F3FB-\U0001F3FF]?)"
 _EMOJI = re.compile(
     rf"(?:[\U0001F1E6-\U0001F1FF]{{2}}|\U0001F3F4[\U000E0020-\U000E007E]+\U000E007F"

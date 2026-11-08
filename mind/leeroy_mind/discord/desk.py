@@ -58,7 +58,8 @@ class DiscordDesk:
             store = getattr(self.app, "store", None)
             if store is not None and not store.in_unit:
                 store.conn.commit()  # end a read outside a unit, so it never pins a snapshot
-        log_event("discord", action=action, channel=channel, outcome=outcome)
+        log_event("discord", action=action, channel=channel, message=args.get("message"),
+                  outcome=outcome)
         return reply
 
     def _handle(self, args: dict) -> dict:

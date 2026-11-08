@@ -9,7 +9,7 @@ Who answers (plan):
   members, the one he replied to first and then the mentions in his order, up to MAX_NAMED, and
   only those the channel's audience holds (an officers' channel: its officers);
 - any other channel post: one member, or two with SECOND_P, drawn from the channel's audience
-  whose Discord presence is online or idle (not AFK or away, with a persona; her body in the
+  whose Discord presence is online or idle (not away, with a persona; her body in the
   game need not be online, ruling R14), weighted by warmth toward him (romance.WHISPER_WEIGHT
   and FOND_SHARE for a woman's stance, affinity, the talkative dial) times fit: CLASS_FIT for a
   class channel's own class, ROLE_FIT for raiders and officers in RAID_CHANNELS.
@@ -130,8 +130,8 @@ class DiscordTalk:
         self._take_lease()
         try:
             items = self.plan(message_id)
-        except Exception:
-            log.exception("discord_plan_failed: message=%d", message_id)
+        except Exception as error:
+            log.warning("discord_plan_failed: message=%d error=%s", message_id, type(error).__name__)
             return
         if items:
             self.app.engine._queue(items)
@@ -188,6 +188,7 @@ class DiscordTalk:
             turn.instruction = self.instruction(g, place, message_id, thread) or ""
             meta = TurnMeta(app.engine._new_id(), answers_human=True, why=WHY,
                             discord=DiscordTarget(reply_to=message_id, thread=thread),
+                            discord_named=how == "named",
                             recall_query=self.recall_query(message_id) or "")
             items.append((turn, meta))
         log.info("discord_answers: message=%d channel=%s how=%s speakers=%s", message_id,
@@ -212,7 +213,7 @@ class DiscordTalk:
         local = app.clock.local()
         weights: dict[int, float] = {}
         for g in sorted(audience):
-            if g == hg or g in world.afk or g in away:
+            if g == hg or g in away:
                 continue
             p = app.personas.get(g)
             if p is None or self._presence(g, p, local).state not in ANSWERING:
@@ -259,12 +260,13 @@ class DiscordTalk:
         return f"You are in #{ch.name} on the guild's Discord: {ch.topic}"
 
     def context_lines(self, conn, channel: str, thread: int | None, *,
-                      limit: int = CONTEXT_LINES) -> list[str]:
+                      limit: int = CONTEXT_LINES, exclude: int = 0) -> list[str]:
         """The latest `limit` messages of a store channel's feed (or of `thread`) as "Name: text",
         oldest first, each on one line (fold), deleted messages left out."""
         rows = conn.execute(
             "SELECT author, text FROM discord_message WHERE channel = ? AND thread IS ? "
-            "AND deleted IS NULL ORDER BY id DESC LIMIT ?", (channel, thread, limit)).fetchall()
+            "AND deleted IS NULL AND id != ? ORDER BY id DESC LIMIT ?",
+            (channel, thread, exclude, limit)).fetchall()
         return [f"{self._name(a)}: {fold(t)}" for a, t in reversed(rows)]
 
     def _name(self, g: int) -> str:
@@ -290,7 +292,7 @@ class DiscordTalk:
                                      (message,)).fetchone()
             if row is None or row[1] is not None:
                 return None
-            lines = self.context_lines(store.conn, cid, thread) if reads else []
+            lines = self.context_lines(store.conn, cid, thread, exclude=message) if reads else []
         their = app.engine.human.forms[2]
         purpose = self.purpose_line(cid)
         tail = f"Answer {their} message: {_clip(fold(row[0]), HIS_CHARS)}"
@@ -345,7 +347,11 @@ class DiscordTalk:
         arbiter = getattr(self.app, "arbiter", None)
         if arbiter is None:
             return
-        loop = asyncio.get_running_loop()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            log.warning("discord_lease_skipped: reason=no_event_loop")
+            return  # no timer could release a lease taken here
         self._until = self.app.clock.now() + LEASE_IDLE_S
         if not self._held:
             self._held, self._arbiter = True, arbiter
@@ -385,6 +391,7 @@ class DiscordTalk:
     async def close(self) -> None:
         """The app's shutdown drain: the lease timer and any hand-over stop, and a lease still
         held is released."""
+        arbiter = self._arbiter or getattr(self.app, "arbiter", None)
         tasks = [t for t in (self._timer, *self._handbacks) if t is not None and not t.done()]
         for t in tasks:
             t.cancel()
@@ -393,3 +400,6 @@ class DiscordTalk:
         self._timer = None
         if self._held:
             await self._release()
+        settled = getattr(arbiter, "settled", None)
+        if settled is not None:
+            await settled()

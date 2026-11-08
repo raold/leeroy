@@ -50,7 +50,11 @@
     <div class="comms">
       <aside class="panel left" aria-label="Channels, voice rooms and whispers">
         <div id="left" class="list">
-          <div class="sec" role="heading" aria-level="2">Text, from WoW</div>
+          <div class="sec" role="heading" aria-level="2">Guild Discord</div>
+          <div id="dc-channels"></div>
+          <div class="sec" role="heading" aria-level="2">Direct messages</div>
+          <div id="dc-dms"></div>
+          <div class="sec" role="heading" aria-level="2">From WoW</div>
           <div id="channels"></div>
           <div class="sec" role="heading" aria-level="2">Voice rooms</div>
           <div id="tree"></div>
@@ -72,8 +76,22 @@
       <section class="panel feedpanel" aria-labelledby="feed-title">
         <h3 id="feed-title"># guild</h3>
         <p id="feed-hint" class="hint"></p>
+        <div id="dc-tools" hidden>
+          <button id="dc-back" type="button" hidden>Back to channel</button>
+          <button id="dc-pins" type="button" aria-expanded="false" aria-controls="dc-panel">Pins</button>
+          <button id="dc-threads" type="button" aria-expanded="false" aria-controls="dc-panel">Threads</button>
+        </div>
+        <section id="dc-panel" aria-label="Channel pins and threads" hidden></section>
         <div id="feed" class="feed" role="log" aria-labelledby="feed-title"></div>
         <div id="typing" class="typing" aria-live="polite"></div>
+        <div id="dc-composer" hidden>
+          <div id="dc-reply" hidden><span id="dc-reply-name"></span><button id="dc-cancel-reply" type="button">Cancel reply</button></div>
+          <label for="dc-text">Message <b id="dc-to"></b> as you</label>
+          <textarea id="dc-text" rows="2" aria-describedby="dc-why dc-count" disabled></textarea>
+          <div class="dc-compose-actions"><button id="dc-emoji" type="button" disabled>Emoji</button>
+            <span id="dc-count" class="mono">0 / 2000</span><button id="dc-send" type="button" class="primary" disabled>Send</button></div>
+          <p id="dc-why" role="status"></p>
+        </div>
         <div id="composer" class="composer" tabindex="-1">
           <label for="say-text" class="to">to <b id="say-to">#guild</b> as you</label>
           <div class="say">
@@ -85,6 +103,7 @@
         </div>
       </section>
       <aside id="comms-right" class="panel right" aria-labelledby="here-title">
+        <section id="dc-members" aria-label="Guild Discord members" hidden></section>
         <div class="here">
           <h3 id="here-title">Not in a voice room</h3>
           <p class="hint">Click a face for their card.</p>
@@ -100,11 +119,23 @@
               <button id="mcard-reset" type="button">Reset</button></div>
           </div>
           <div class="acts"><button id="mcard-whisper" type="button" class="primary">Whisper</button>
+            <button id="mcard-dm" type="button">Direct message</button>
             <button id="mcard-mute" type="button" aria-pressed="false">Mute</button>
             <button id="mcard-profile" type="button">Profile</button></div>
         </section>
       </aside>
     </div>
+    <dialog id="dc-dialog" aria-labelledby="dc-dialog-title">
+      <form id="dc-dialog-form">
+        <div class="dc-dialog-heading"><h3 id="dc-dialog-title"></h3><button id="dc-dialog-close" type="button">Close</button></div>
+        <p id="dc-delete-hint" hidden>The text, reactions and pin will be removed. Replies will keep a deleted-message placeholder.</p>
+        <div id="dc-emoji-groups" hidden></div>
+        <label id="dc-dialog-label" for="dc-dialog-value">Message</label>
+        <textarea id="dc-dialog-value" rows="3"></textarea>
+        <p id="dc-dialog-error" role="alert"></p>
+        <div class="acts"><button id="dc-dialog-cancel" type="button">Cancel</button><button id="dc-dialog-submit" type="submit" class="primary">Save</button></div>
+      </form>
+    </dialog>
   </section>
   <section id="tab-raid" class="tab mindtab" role="tabpanel" aria-labelledby="t-raid" hidden>
     <div id="raid-banner" class="banner" hidden></div>

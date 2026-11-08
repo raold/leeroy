@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from ..personas.schema import Persona
 
-UK_AHEAD_HOURS = 5
+OWNER_ZONE = ZoneInfo("America/New_York")
+UK_ZONE = ZoneInfo("Europe/London")
 RNG_SEED = 0  # the seed the mind and the console both pass, so they agree on dnd days
 
 
@@ -21,8 +23,15 @@ class Presence:
 
 
 def local_time(owner_now: datetime, region: str) -> datetime:
-    """The owner's clock (US Eastern) shifted to a member's region."""
-    return owner_now + timedelta(hours=UK_AHEAD_HOURS) if region == "UK" else owner_now
+    """Convert an instant to the member's region; a naive owner clock is US Eastern.
+
+    Britain and the US change daylight-saving time on different weekends. Keep naive
+    inputs naive for the schedule-only callers, while aware inputs preserve their instant.
+    """
+    if region != "UK":
+        return owner_now
+    local = (owner_now if owner_now.tzinfo else owner_now.replace(tzinfo=OWNER_ZONE)).astimezone(UK_ZONE)
+    return local if owner_now.tzinfo else local.replace(tzinfo=None)
 
 
 def _dnd_day(guid: int, day, rng_seed: int) -> bool:

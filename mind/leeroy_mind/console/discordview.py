@@ -61,12 +61,18 @@ def with_reactions(conn, rows: list[dict]) -> list[dict]:
     return [{**m, "reactions": react.get(m["id"], [])} for m in rows]
 
 
-def window(conn, channel: str) -> list[dict]:
+def window(conn, channel: str, thread: int | None = None) -> list[dict]:
     """The latest messages of a channel with their reactions: what a page has loaded."""
-    return with_reactions(conn, store.messages(conn, channel, limit=LIMIT))
+    return with_reactions(conn, store.messages(conn, channel, limit=LIMIT, thread=thread))
 
 
-def fingerprint(messages: list[dict]) -> str:
+def watched(conn, channel: str, thread: int | None = None) -> str:
+    """A loaded feed plus its pin/thread shelves; removals have no timestamp to hint at."""
+    return fingerprint({"messages": window(conn, channel, thread),
+                        "pins": store.pins(conn, channel), "threads": store.threads(conn, channel)})
+
+
+def fingerprint(messages) -> str:
     """A loaded window as one comparable text: any edit, delete, pin or reaction changes it."""
     return json.dumps(messages, sort_keys=True, ensure_ascii=True)
 
@@ -77,10 +83,14 @@ def last_by_channel(conn) -> dict[str, int]:
 
 
 def discord_view(conn, *, owner_now: datetime, trial_rank: int, channel: str | None = None,
-                 after: int = 0, thread: int | None = None) -> dict:
+                 after: int = 0, thread: int | None = None, read_marks: dict | None = None) -> dict:
     have = views.tables(conn)
     missing = [t for t in DISCORD_TABLES if t not in have]
     last = last_by_channel(conn) if "discord_message" in have else {}
+    unread = {r[0]: r[1] for r in views.rows(conn,
+        "SELECT m.channel, count(*) FROM discord_message m JOIN json_each(?) r ON m.channel = r.key "
+        "WHERE m.id > r.value AND m.origin = 'mind' AND m.deleted IS NULL AND m.thread IS NULL "
+        "GROUP BY m.channel", (json.dumps(read_marks),))} if read_marks and not missing else {}
     names = views.names(conn)
     human = human_guid(conn)
     hname = views.rows(conn, "SELECT value FROM meta WHERE key = 'human_name'")
@@ -89,11 +99,13 @@ def discord_view(conn, *, owner_now: datetime, trial_rank: int, channel: str | N
         "categories": [
             {"key": k, "name": layout.CATEGORY_NAMES[k],
              "channels": [{"id": c.id, "name": c.name, "topic": c.topic,
-                           "officers_only": c.officers_only, "last_id": last.get(c.id, 0)}
+                           "officers_only": c.officers_only, "last_id": last.get(c.id, 0),
+                           "unread": unread.get(c.id, 0)}
                           for c in layout.CHANNELS if c.category == k]}
             for k in layout.CATEGORIES],
         "dms": sorted(({"guid": m["guid"], "name": m["name"],
-                        "last_id": last.get(f"dm:{m['guid']}", 0)}
+                        "last_id": last.get(f"dm:{m['guid']}", 0),
+                        "unread": unread.get(f"dm:{m['guid']}", 0)}
                        for m in members if m["persona"]),
                       key=lambda d: (-d["last_id"], d["name"], d["guid"])),
         "members": [{k: v for k, v in m.items() if k != "persona"} for m in members],
@@ -109,4 +121,9 @@ def discord_view(conn, *, owner_now: datetime, trial_rank: int, channel: str | N
             conn, channel, after=after, limit=LIMIT, thread=thread)) if ok else []
         out["threads"] = store.threads(conn, channel) if ok else []
         out["pins"] = store.pins(conn, channel) if ok else []
+        parents = sorted({m["reply_to"] for m in out["messages"] if m["reply_to"]})
+        out["quotes"] = [{"id": r[0], "author": r[1], "text": "" if r[3] is not None else r[2],
+                          "deleted": r[3]} for r in views.rows(conn,
+            "SELECT id, author, text, deleted FROM discord_message WHERE channel = ? "
+            "AND id IN (SELECT value FROM json_each(?))", (channel, json.dumps(parents)))] if parents else []
     return out
