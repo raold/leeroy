@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { Backoff, boundedBody, deadline } from "../../../leeroy_mind/console/static/js/resilience.mjs";
+import { Backoff, boundedBody, deadline, ReadHealth, validView } from "../../../leeroy_mind/console/static/js/resilience.mjs";
 import { ReconnectingStream } from "../../../leeroy_mind/console/static/js/eventstream.mjs";
 import { FaceCache } from "../../../leeroy_mind/console/static/js/facecache.mjs";
 import { api, post } from "../../../leeroy_mind/console/static/js/core.mjs";
@@ -96,4 +96,30 @@ test("a silent half-open stream is cancelled and reconnects; stop wakes its read
   t.mock.timers.tick(100); await flush(); assert.equal(calls, 2);
   s.stop(); await flush(); assert.equal(cancelled, 2);
   t.mock.timers.tick(30000); await flush(); assert.equal(calls, 2);
+});
+
+test("one successful subroute cannot clear a sibling's stale state", () => {
+  var health = new ReadHealth();
+  health.update("/api/persona/insight?guid=101", "personas", true, 100);
+  health.update("/api/persona/insight?guid=101", "personas", false, 200);
+  health.update("/api/persona?guid=101", "personas", true, 300);
+  assert.deepEqual(health.failed("personas"), [{tab: "personas", good: 100, failed: true}]);
+  health.update("/api/persona/insight?guid=102", "personas", true, 400);
+  assert.deepEqual(health.failed("personas"), []);
+  assert.equal(health.routes.size, 2); // queries never grow the route map
+  for (var i = 0; i < 1000; i++) { health.update("/api/persona/future" + i, "personas", true, i); }
+  assert.equal(health.routes.size, 32);
+});
+
+test("Ops, Discord and Insight reject malformed outer shapes before drawing", () => {
+  assert.equal(validView("/api/ops", {panels: {}}), true);
+  assert.equal(validView("/api/ops", {panels: []}), false);
+  var discord = {categories: [], dms: [], members: [], human: {guid: 1, name: "Owner"}};
+  assert.equal(validView("/api/discord", discord), true);
+  assert.equal(validView("/api/discord?channel=hall", discord), false);
+  assert.equal(validView("/api/discord?channel=hall", {...discord, messages: [], threads: [], pins: [], quotes: []}), true);
+  var insight = {guid: 101, claims: {}, awareness: {}, quality: {}, guards: {}};
+  assert.equal(validView("/api/persona/insight?guid=101", insight), true);
+  assert.equal(validView("/api/persona/insight?guid=101", {member: {}}), false);
+  assert.equal(validView("/api/persona/insight?guid=101", {...insight, awareness: null}), false);
 });

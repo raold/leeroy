@@ -30,13 +30,37 @@ var VIEWS = { state: ["rooms", "array"], feed: ["lines", "array"], raid: ["mind"
   social: ["feuds", "array"], board: ["forum", "array"], calendar: ["upcoming", "array"],
   bank: ["ledger", "array"], realm: ["rivals", "array"], training: ["setup", "boolean"],
   dojo: ["setup", "boolean"], library: ["setup", "boolean"], health: ["mind", "object"],
-  tuning: ["view", "object"], selfies: ["view", "object"] };
+  tuning: ["view", "object"], selfies: ["view", "object"], ops: ["panels", "object"],
+  discord: ["categories", "array"], "persona/insight": ["claims", "object"] };
 export function validView(path, value) {
   var route = path.split("?")[0].slice(5), rule = VIEWS[route];
   if (!rule) { return true; }
   var field = value[rule[0]];
-  return rule[1] === "array" ? Array.isArray(field) :
+  var valid = rule[1] === "array" ? Array.isArray(field) :
     rule[1] === "object" ? !!field && typeof field === "object" && !Array.isArray(field) : typeof field === rule[1];
+  if (!valid) { return false; }
+  if (route === "discord") {
+    return Array.isArray(value.dms) && Array.isArray(value.members) && !!value.human &&
+      typeof value.human === "object" && !Array.isArray(value.human) &&
+      (!/[?&]channel=/.test(path) || ["messages", "threads", "pins", "quotes"].every(k => Array.isArray(value[k])));
+  }
+  if (route === "persona/insight") {
+    return typeof value.guid === "number" && ["awareness", "quality", "guards"].every(k =>
+      !!value[k] && typeof value[k] === "object" && !Array.isArray(value[k]));
+  }
+  return true;
+}
+
+export class ReadHealth {
+  constructor() { this.routes = new Map(); }
+  update(path, tab, ok, now) {
+    var route = path.split("?")[0], entry = this.routes.get(route) || { tab: tab, good: 0 };
+    entry.failed = !ok;
+    if (ok) { entry.good = now; }
+    this.routes.delete(route); this.routes.set(route, entry);
+    while (this.routes.size > 32) { this.routes.delete(this.routes.keys().next().value); }
+  }
+  failed(tab) { return Array.from(this.routes.values()).filter(r => r.tab === tab && r.failed); }
 }
 
 export async function boundedBody(response, maximum) {
