@@ -676,3 +676,25 @@ def test_logs_carry_no_prompt(h, tmp_path, caplog):
         for phrase, _ in spec.phrases + spec.negative:
             assert phrase not in text
         assert p.character_name not in text and p.identity.real_name not in text
+
+
+def test_a_set_rendered_under_the_lust_style_is_recorded_and_a_plain_one_is_not(h, tmp_path):
+    from leeroy_mind.personas.io import save_persona
+    from leeroy_mind.selfies.kind import _record
+    from leeroy_mind.selfies.style import LUST, PLAIN
+    from leeroy_mind.selfies.store import LUST_SET_KEY, lust_set
+    from leeroy_mind.wow import CLASSES, RACES
+    renderable_cast(h.store, *TEST_CAST)
+    p = load_persona(h.store, 101)
+    p = replace(p, identity=replace(p.identity, age=30, player_gender="female")
+                if hasattr(p.identity, "player_gender") else replace(p.identity, age=30),
+                romance=replace(p.romance, stance="lust"))
+    _, race, cls = TEST_CAST[101]
+    save_persona(h.store, p, source="seed", ts=1000.0, race=RACES[race], class_name=CLASSES[cls])
+    p = load_persona(h.store, 101)
+    _record(h.store, 101, LUST, p.photo)
+    _record(h.store, 102, PLAIN, load_persona(h.store, 102).photo)
+    run(make_stage(SELFIE_CFG, worker=fake_worker(tmp_path))(h.ctx()))
+    assert ready_set(h.store, 102, 1) is not None and not lust_set(h.store.conn, 102, 1)
+    assert ready_set(h.store, 101, 1) is not None and lust_set(h.store.conn, 101, 1)
+    assert h.store.get_meta(LUST_SET_KEY.format(guid=101, set_no=1)) == "1"

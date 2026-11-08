@@ -194,14 +194,25 @@ class FakeEl {
   decode() { return this.src.indexOf("blob:broken") === 0 ? Promise.reject(new Error("bad")) : Promise.resolve(); }
 }
 
-var page = { asked: [], made: 0, reloads: 0 };
+var page = { asked: [], made: 0, reloads: 0, roots: [] };
 async function stage() {
   if (page.face) { return page.face; }
-  globalThis.document = { createElement: function (t) { return new FakeEl(t); } };
+  globalThis.document = {
+    createElement: function (t) { return new FakeEl(t); },
+    querySelectorAll: function (selector) {
+      var guid = /data-face-guid="(\d+)"/.exec(selector)[1], found = [];
+      function walk(node) {
+        if (node.dataset.faceGuid === guid) { found.push(node); }
+        node.children.forEach(walk);
+      }
+      page.roots.forEach(walk);
+      return found;
+    }
+  };
   globalThis.fetch = function (path) {
     page.asked.push(path);
     var guid = /guid=(\d+)/.exec(path)[1];
-    if (guid === "2201") { return Promise.resolve({ status: 200, blob: function () { return Promise.resolve({ tag: "ok" }); } }); }
+    if (guid === "2201" || guid === "101") { return Promise.resolve({ status: 200, blob: function () { return Promise.resolve({ tag: "ok" }); } }); }
     if (guid === "2203") { return Promise.resolve({ status: 200, blob: function () { return Promise.resolve({ tag: "broken" }); } }); }
     if (guid === "2204") {  // a photo, then a server error, then no answer at all, then gone
       var n = ++page.reloads;
@@ -346,4 +357,30 @@ test("a photo picked or undone is asked for again at once; four more leaves the 
   assert.equal(face(2201, "Arkon", "list").tagName, "SPAN");
   core.emit("selfie", { action: "pick", guid: "2201" });     // never a guid that is not a number
   core.emit("selfie", {});
+});
+
+test("a cover change refreshes faces already on the page without waiting for its poll", async () => {
+  var face = await stage(), core = await import("../../../leeroy_mind/console/static/js/core.mjs");
+  var row = document.createElement("div");
+  row.appendChild(face(101, "Arla", "list"));
+  row.appendChild(face(101, "Arla", "card"));
+  page.roots = [row];
+  await settled();
+  var src = row.children[0].src, before = askedFor(101);
+  core.emit("selfie", { action: "pick", guid: 101 });
+  await settled();
+  assert.equal(askedFor(101), before + 2);
+  assert.equal(row.children[0].tagName, "IMG");
+  assert.notEqual(row.children[0].src, src);
+  assert.equal(row.children[1].className, "av xl");
+  page.roots = [];
+});
+
+test("nameCell puts opts.build's node where the face goes, whatever the cell's shape", async () => {
+  await stage();
+  var tr = document.createElement("tr");
+  var td = page.mod.nameCell(tr, 2201, "Arkon", { build: function (g, n) { var b = document.createElement("button"); b.dataset.opener = g + n; return b; } });
+  assert.equal(td.children[0].children[0].dataset.opener, "2201Arkon");
+  var plain = page.mod.nameCell(tr, 2201, "Arkon", {});
+  assert.notEqual(plain.children[0].children[0].tagName, "BUTTON");
 });

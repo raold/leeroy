@@ -1180,7 +1180,11 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
   with it once at start, before any loop runs. `chosen.jpg` is replaced by a rename, so a
   reader sees the old photo or the new one. Generated images are never committed.
 - **Picking.** The console reads the sets (`GET /api/selfies`, `/api/selfies/images`,
-  `/api/selfies/member`) and sends `POST /api/selfie` (pick, undo, more) to the mind's `selfie`
+  `/api/selfies/member`) and, for the gallery, `GET /api/selfies/gallery?guid=` (a member's
+  retained candidates of every ready set and rendered situations, newest first, with cover flags
+  and keyed URLs; read-only) and `GET /api/selfies/photo?guid=&kind=candidate&set=&index=` (or
+  `kind=snap&id=`, optional `thumb=1`; one rendered JPEG of that member's, else 404, never a disk
+  path) and sends `POST /api/selfie` (pick, undo, more) to the mind's `selfie`
   op, behind the same key, Origin and `--no-control` gates as raid actions and dial changes.
   On the page (`static/js/selfies.mjs`, words in `selfiemodel.mjs`) the Personas tab opens with
   "Choose selfies": the counts, five waiting members a page with their four thumbnails (a click
@@ -1192,6 +1196,13 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
   (`FaceCache.forgetKey`) instead of after its 60 s. `leeroy_mind selfies status`
   prints the queue and the latest night's stage records, and `selfies try [--guid N | --limit N]`
   renders a trial set into `scratch\selfies-try` of the data dir with the mind stopped.
+  Any rendered candidate of any ready set can be picked as the cover, not only one from a set
+  waiting for his choice (a decided set keeps its prior state for undo). Exception: a set
+  rendered under the lust style (recorded at `mark_ready` as meta
+  `selfies:set-lust:<guid>:<set>`; a set with no record counts as plain) cannot be picked while
+  the member is not lust-styled (`style.suggestive`: she left lust, or her looks now code young);
+  the mind's pick refuses in words. The gallery neither lists nor serves such a set's photos
+  unless one is already her cover.
 - **Situational photos and the guild photo (P4, night side only).** Off by default: they need
   `[selfies] enabled = true` and `snaps = true` (also `identity_scale`, 0.6, and
   `identity_min_free_gib`, 13.5, the identity worker's VRAM floor), else no stage is added

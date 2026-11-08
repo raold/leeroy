@@ -48,7 +48,7 @@ from leeroy_mind.wow import CAST_MIN_LEVEL
 from . import files
 from .config import SelfieCfg, worker_command, worker_env
 from .kind import chosen_style
-from .style import PLAIN
+from .style import LUST, PLAIN
 from .slot import SetRefused, TRIES, render_slot
 from .prompt import HELD, LUST_HELD, PromptSpec, build_prompt, renderable
 from .store import Candidate, ensure_first_sets, mark_ready, needing_first, queued_sets
@@ -263,10 +263,11 @@ async def _render_set(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
     return made
 
 
-def _ready(ctx: "NightContext", guid: int, set_no: int, made: list[Candidate]):
+def _ready(ctx: "NightContext", guid: int, set_no: int, made: list[Candidate],
+           lust: bool = False):
     def write(store) -> None:
         mark_ready(store, guid, set_no, made, now=ctx.clock.now(), night=ctx.night,
-                   persona_version=store.persona_versions()[guid])
+                   persona_version=store.persona_versions()[guid], lust=lust)
     return write
 
 
@@ -309,6 +310,7 @@ async def _sets(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker, todo:
             continue
         began = time.monotonic()
         try:
+            lust = chosen_style(ctx.store, p) == LUST
             made = await _render_set(ctx, cfg, worker, p, guid, set_no)
         except LiveLeaseHeld:
             raise
@@ -340,7 +342,7 @@ async def _sets(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker, todo:
             continue
         contended = 0
         state["contended"] = 0
-        if ctx.commit(STAGE, unit, _ready(ctx, guid, set_no, made)):
+        if ctx.commit(STAGE, unit, _ready(ctx, guid, set_no, made, lust)):
             tally["ready"] += 1
             log("selfies_set_ready", night=ctx.night, guid=guid, set=set_no,
                 seconds=round(time.monotonic() - began, 1), tries=sum(c.tries for c in made))

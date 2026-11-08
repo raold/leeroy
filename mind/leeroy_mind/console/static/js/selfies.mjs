@@ -1,5 +1,6 @@
 import { $, api, arr, clear, el, num, obj, post, refused, setText, str } from "./core.mjs";
 import { face } from "./faces.mjs";
+import { photoButton } from "./gallery.mjs";
 import { MORE_TITLE, countsText, currentText, forgetShots, historyRows, leadText, pageOf, pickLabel,
          recentRows, refocusSelector, whyOff } from "./selfiemodel.mjs";
 import { S } from "./state.mjs";
@@ -249,7 +250,7 @@ function renderMemberPhoto() {
   var j = who.view, why = whyOff(SEL), ok = live();
   var now = $("p-photonow");
   clear(now);
-  now.appendChild(face(who.guid, who.name, "room"));
+  now.appendChild(photoButton(who.guid, who.name, "room"));
   now.appendChild(el("span", "note", j === undefined ? "Reading." : j === null ? "No photos for this member in mind.db."
                                      : j.error ? j.error : currentText(j)));
   var has = !!j && !j.error;

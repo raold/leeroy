@@ -52,6 +52,11 @@ export function forgetFaces() { cache.forget(); }
 on("selfie", function (d) {
   if (!d || d.action === "more" || !(typeof d.guid === "number" && Number.isInteger(d.guid) && d.guid > 0)) { return; }
   Object.keys(KINDS).forEach(function (k) { cache.forgetKey(d.guid + ":" + KINDS[k].size); });
+  // Refresh faces already on screen too; some tabs otherwise wait for their next poll.
+  document.querySelectorAll('[data-face-guid="' + d.guid + '"]').forEach(function (node) {
+    var spec = node.faceSpec;
+    if (spec && node.parentNode) { node.parentNode.replaceChild(face(spec.guid, spec.name, spec.kind, spec.opts), node); }
+  });
 });
 
 function photo(p, cls) {
@@ -69,10 +74,16 @@ export function face(guid, name, kind, opts) {
   box.style.setProperty("--c", opts.you ? "var(--accent)" : PALETTE[paletteSlot(guid)]);
   var g = typeof guid === "string" && guid.trim() !== "" ? Number(guid) : guid;
   if (opts.you || !(typeof g === "number" && Number.isInteger(g) && g > 0)) { return box; }
+  function tracked(node) {
+    node.dataset.faceGuid = String(g);
+    node.faceSpec = { guid: g, name: name, kind: kind, opts: opts };
+    return node;
+  }
+  tracked(box);
   var key = g + ":" + k.size, known = cache.peek(key), asked = cache.get(key);
-  if (known) { return photo(known, cls); }  // and a reload, when one is due, serves the next draw
+  if (known) { return tracked(photo(known, cls)); }  // a reload serves the next draw
   asked.then(function (p) {
-    if (p && box.parentNode) { box.parentNode.replaceChild(photo(p, cls), box); }
+    if (p && box.parentNode) { box.parentNode.replaceChild(tracked(photo(p, cls)), box); }
   });
   return box;
 }
@@ -97,7 +108,8 @@ export function faceButton(guid, name, kind, opts) {
 }
 
 // A table cell holding a member's face and name (.who). opts go to face; opts.text is the words
-// shown when they are not the bare name (tags, "(you)"). Nobody (guid 0 or none) is a plain "-".
+// shown when they are not the bare name (tags, "(you)"); opts.build(guid, name, kind, opts) replaces
+// the face (the gallery's opener). Nobody (guid 0 or none) is a plain "-".
 export function nameCell(tr, guid, name, opts) {
   opts = opts || {};
   var td = el("td");
@@ -105,7 +117,7 @@ export function nameCell(tr, guid, name, opts) {
     td.textContent = opts.text || name || "-";
   } else {
     var box = el("div", "who");
-    box.appendChild(face(guid, name, "list", opts));
+    box.appendChild((opts.build || face)(guid, name, "list", opts));
     box.appendChild(el("span", "", opts.text || name));
     td.appendChild(box);
   }
