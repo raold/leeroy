@@ -7,6 +7,7 @@
 #include "LeeroyIntegrations.h"
 #include "LeeroyModule.h"
 #include "LeeroyProtocol.h"
+#include "LeeroyQueueFence.h"
 #include "RealmModule.h"
 
 #include "Log.h"
@@ -99,6 +100,7 @@ public:
                 LOG_INFO("module.leeroy", "mod-leeroy: disabled by a config reload, ordinary cast released, owned cleanup pins retained, bridge stopped");
             }
             Leeroy::Realm::RealmModule::Instance().Tick(diff);
+            LeeroyRefreshQueueFence();
             return;
         }
 
@@ -160,6 +162,7 @@ public:
         _commands.clear();
 
         Leeroy::Realm::RealmModule::Instance().Tick(diff);
+        LeeroyRefreshQueueFence();
 
         if ((_afkPollTimer += diff) >= kAfkPollMs)
         {

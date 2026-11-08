@@ -30,6 +30,10 @@ Leeroy.BringCastOnline = 1
 # Stop mod-ollama-chat from voicing cast members.
 Leeroy.ExcludeFromOllamaChat = 1
 
+# Refuse random queues while a cast member is held or in the owner's instance group.
+# Applies on .reload config; 0 disables both refusal and safe queue withdrawal.
+Leeroy.QueueFence.Enable = 1
+
 # Realm actors and cast protection stay off until separately accepted.
 Leeroy.Realm.Enable = 0
 Leeroy.CastGuard = 0
