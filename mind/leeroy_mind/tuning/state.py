@@ -12,6 +12,7 @@ from types import MappingProxyType
 from typing import Mapping
 
 from . import groups as G
+from . import nudges as N
 from .dials import MEMBER_DIALS, WORLD_DIALS, applies, base_value, bounds
 from .effective import NEUTRAL, MemberTuning, effective
 
@@ -36,14 +37,16 @@ class Tuning:
     pins: Mapping[int, Mapping[str, int]] = field(default_factory=lambda: _frozen({}))
     pin_versions: Mapping[tuple, int | None] = field(default_factory=lambda: _frozen({}))
     human: int = 0
+    nudges: tuple[N.Nudge, ...] = ()
 
     @property
     def empty(self) -> bool:
-        return not (self.world or self.offsets or self.pins)
+        return not (self.world or self.offsets or self.pins or self.nudges)
 
     @property
     def needs_cast(self) -> bool:
-        return any(G.uses_cast(self.groups[t].where) for t in self.offsets if t in self.groups)
+        targets = set(self.offsets) | {n.target for n in self.nudges if n.target_kind == "group"}
+        return any(G.uses_cast(self.groups[t].where) for t in targets if t in self.groups)
 
     # -- reading -------------------------------------------------------------------------------
 
@@ -80,7 +83,7 @@ class Tuning:
         return cls(version=int(row[0] or 0), world=_frozen(world), groups=_frozen(groups),
                    offsets=_frozen({t: _frozen(d) for t, d in offsets.items()}),
                    pins=_frozen({g: _frozen(d) for g, d in pins.items()}),
-                   pin_versions=_frozen(versions), human=human)
+                   pin_versions=_frozen(versions), human=human, nudges=N.load(conn))
 
     # -- folding -------------------------------------------------------------------------------
 
@@ -118,7 +121,9 @@ class Tuning:
 
     def apply(self, p, member=None):
         """The effective persona (the stored object itself when nothing reaches it)."""
-        return effective(p, self.member(p, member))
+        from .effective import with_nudges
+        return with_nudges(effective(p, self.member(p, member)),
+                           N.for_member(self.nudges, p, member, self.groups, self.human))
 
     # -- candidates (the preview's "after") ------------------------------------------------------
 

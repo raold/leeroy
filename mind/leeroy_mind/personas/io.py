@@ -243,7 +243,7 @@ class PersonaCache:
         if p is None:
             return None
         t = self.tuning
-        if t.pins or t.offsets:
+        if t.pins or t.offsets or t.nudges:
             if t.needs_cast and self._cast is None:
                 self._cast = self._store.cast()
             p = t.apply(p, (self._cast or {}).get(guid))

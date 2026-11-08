@@ -1016,7 +1016,8 @@ class ConsoleApp:
             if self.view.state != "running" and status_code == 409 and self.controls.busy is None:
                 words = MIND_DOWN
             return json_response(status_code, {"ok": False, "error": words})
-        preview = args["action"] == "preview"
+        preview = (args["action"] == "preview" or
+                   args["action"] == "nudge" and args["verb"] == "preview")
         try:
             reply = await asyncio.to_thread(self.link.call, self._mind_pids(), "tune", args,
                                             timeout=PREVIEW_S if preview else TUNE_S)
