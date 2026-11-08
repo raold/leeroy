@@ -507,6 +507,7 @@ td > div.who { color: var(--ink); font-weight: 600; }
   .mindtab .kv > *, .mindtab .srow > *, .mindtab .view-head > * { min-width: 0; max-width: 100%; }
   .mindtab :is(.scroll, .table-scroll, .bank-scroll) { max-width: 100%; overflow: auto;
     overscroll-behavior-x: contain; }
+  .mindtab :is(.scroll, .table-scroll) th { white-space: nowrap; }
   .mindtab :is(.scroll, .table-scroll) :is(th, td):first-child { position: sticky; left: 0;
     z-index: 1; background: var(--surface); max-width: 40vw; }
   .mindtab .pick tbody tr { height: 44px; }
@@ -534,6 +535,7 @@ td > div.who { color: var(--ink); font-weight: 600; }
 }
 
 @media (max-width: 480px) {
+  .mindtab .kpi .v { font-size: 24px; }
   .strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; gap: 8px 12px; }
   .strip .stat { min-width: 0; }
   .strip .stat .v { max-width: 100%; font-size: 12px; overflow: visible; }
