@@ -107,6 +107,7 @@ def _booth_status(store) -> dict:
         if row is None:
             return {}
         rec = dict(row)
+        rec["day"] = rec["night"].removeprefix("booth:")
         rec["units"] = store.conn.execute("SELECT count(*) FROM night_step WHERE night=? "
             "AND stage=? AND unit<>'queue'", (rec["night"], BOOTH)).fetchone()[0]
         rec["last"] = json.loads(store.get_meta(LAST) or "{}")

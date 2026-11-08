@@ -1174,7 +1174,9 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
   Normal completion makes room before rendering and again after worker exit; cancellation
   makes no arbiter call before hand-over. `selfies status` includes separate `booth` daily
   stage totals and the last pass (sets, attempts, seconds, outcome); `selfies_booth_done`
-  logs sets, seconds and outcome. No night schedule, photo choice, or content rule changes.
+  logs sets, seconds and outcome. Receipt/provenance keys use `booth:<local-date>` so booth
+  work cannot reset a night's stall counter or appear as nightly work in reports.
+  No night schedule, photo choice, or content rule changes.
 - **GPU rules.** The image stage unloads every chat model but the embedding model (the worker
   needs the VRAM) and never renders while a live lease is held (his login, an offline raid, the
   voice service): it ends without a failure and the sets wait for the next night. A night with

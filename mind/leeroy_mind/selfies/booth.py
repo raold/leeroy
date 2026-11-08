@@ -67,7 +67,9 @@ class PhotoBooth:
     def _context(self):
         now = self.app.clock.now()
         day = self.app.clock.local().date().isoformat()
-        ctx = self.app.night_runner.make_ctx(day, (now, now))
+        # commit_unit resets the matching night_run's stall counter. A distinct key also
+        # keeps these records out of nightly CLI/audit reports, which join by night date.
+        ctx = self.app.night_runner.make_ctx(f"booth:{day}", (now, now))
         policy = RenderPolicy(stage=STAGE, cap=self.cfg.booth_sets_per_day,
                               requested_before=now - self.cfg.booth_wait_minutes * 60,
                               day=day, record_failures=True)
@@ -137,7 +139,7 @@ class PhotoBooth:
                         "started=min(started,excluded.started),finished=max(finished,excluded.finished),"
                         "calls=calls+excluded.calls,call_s=call_s+excluded.call_s",
                         (ctx.night, STAGE, started, ctx.clock.now(), calls, seconds))
-                    ctx.store.set_meta(LAST, json.dumps(dict(day=ctx.night, started=started,
+                    ctx.store.set_meta(LAST, json.dumps(dict(day=policy.day, started=started,
                         finished=ctx.clock.now(), sets=sets, attempts=attempts, seconds=seconds,
                         outcome=outcome)))
                 log("selfies_booth_done", sets=sets, seconds=seconds, outcome=outcome)

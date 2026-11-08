@@ -450,6 +450,36 @@ def test_failed_admission_stops_worker_and_records_zero_render_calls(app, caplog
     assert "private exception sentinel" not in caplog.text
 
 
+@pytest.mark.parametrize("flagged", [False, True])
+def test_booth_receipts_never_count_as_progress_or_time_for_a_real_night(app, flagged):
+    from leeroy_mind.eval.audit import night_health
+    from leeroy_mind.nightly.cli import _status as night_status
+    async def go():
+        now = app.clock.now()
+        day = app.clock.local().date().isoformat()
+        # A recent prior finish delays the interrupted current night through min_gap_hours.
+        prior = "2026-10-28"
+        run_begin(app.store, prior, now - 172800, now - 86400, now=now)
+        run_finish(app.store, prior, now=now, status="done")
+        app.store.conn.execute("UPDATE night_run SET status='interrupted',finished=NULL,"
+                                "resumes=3 WHERE night=?", (day,))
+        app.store.conn.commit()
+        await advance(app, 600)
+        assert app.night_scheduler.due() is None
+        app.selfie_booth.worker = lambda: MemoryWorker(flagged=flagged)
+        await tick(app)
+        real = night_status(app.store, day)
+        assert real["run"]["resumes"] == 3
+        assert STAGE not in real["units"]
+        assert all(s["stage"] != STAGE for s in real["stages"])
+        assert STAGE not in night_health(app.store, (0, app.clock.now() + 1))["stage_seconds"]
+        booth = _status(app.store, app.clock)["booth"]
+        assert booth["night"] == f"booth:{day}" and booth["day"] == day
+        assert booth["last"]["day"] == day and booth["units"] == 1
+        assert not app.store.conn.execute("SELECT 1 FROM night_run WHERE night LIKE 'booth:%'").fetchone()
+    run(go())
+
+
 @pytest.mark.parametrize("toml", ["", "[selfies]\nbooth=true\n", "[selfies]\nenabled=true\n",
     "[selfies]\nenabled=true\nbooth=false\n", "[selfies]\nenabled=true\nbooth='yes'\n",
     ON + "booth_wait_minutes=0\n", ON + "booth_sets_per_day=false\n"])
