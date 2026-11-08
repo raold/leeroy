@@ -14,6 +14,8 @@
 #include "TrainingTap.h"
 #include "TrainingBenchmarkLoot.h"
 #include "Realm/RealmOwnership.h"
+#include "Realm/RealmPvp.h"
+#include "LeeroyRealmCleanup.h"
 
 #if !defined(LEEROY_HAS_DUNGEON_CLEAR)
 #error "LEEROY_HAS_DUNGEON_CLEAR comes from mod-leeroy.cmake; re-run cmake"
@@ -21,6 +23,8 @@
 
 #if LEEROY_HAS_DUNGEON_CLEAR
 #include "AiObjectContext.h"
+#include "Battlefield.h"
+#include "BattlefieldMgr.h"
 #include "DBCStores.h"
 #include "Corpse.h"
 #include "Event.h"
@@ -124,6 +128,7 @@ struct Member
     bool finished = false;
     bool cleanupNoted = false;
     uint32 returnRetryAt = 0;
+    OfflineRecall recall{};
 };
 
 struct Job
@@ -311,6 +316,8 @@ void Stop(Job& job, std::string reason, bool failed = false)
         return;
     job.terminalReason = std::move(reason);
     job.terminalState = failed ? "failed" : "done";
+    LOG_INFO("module.leeroy", "leeroy: raid {} stopping: {} elapsed_ms={} instance={}",
+        job.event.id, job.terminalReason, job.elapsed, job.event.instanceId);
     if (job.rewardToken) Training::BenchmarkRewards().Returning(job.rewardToken);
     job.trainingSealed = true;
     CleanupProofs().Seal(job.event.trainingRun);
@@ -339,6 +346,7 @@ void Progress(Job& job)
     if (job.terminal.Reported()) return;
     job.event.state = "progress";
     job.event.stage = Name(job.stage);
+    job.event.reason = job.stage == Stage::TearingDown ? job.terminalReason : std::string{};
     if (!Benchmark(job) && job.stage == Stage::Running)
     {
         uint32 inside = 0;
@@ -805,6 +813,74 @@ void Starting(Job& job)
         Enter(job, Stage::Running);
 }
 
+bool RecallPvpBusy(Player* player)
+{
+    Realm::WintergraspMemberFacts facts;
+    facts.foreignHistory = Realm::RealmPvpForeignWintergraspHistory(player->GetGUID().GetCounter(),
+        Identity(player->GetSession()));
+    facts.inZone = player->GetZoneId() == 4197;
+    facts.inBattlefieldGroup = player->GetGroup() && player->GetGroup()->isBFGroup();
+    if (auto* field = sBattlefieldMgr->GetBattlefieldByBattleId(BATTLEFIELD_BATTLEID_WG))
+        for (auto team : {TEAM_ALLIANCE, TEAM_HORDE})
+        {
+            facts.queued = facts.queued || field->GetPlayersQueueSet(team).contains(player->GetGUID());
+            facts.invited = facts.invited || field->GetInvitedPlayersMap(team).contains(player->GetGUID());
+            facts.inWar = facts.inWar || field->GetPlayersInWarSet(team).contains(player->GetGUID());
+        }
+    return player->duel || player->InBattleground() || player->InBattlegroundQueue()
+        || Realm::RealmPvpArenaObserverOwns(player->GetGUID().GetCounter(), Identity(player->GetSession()))
+        || !Realm::WintergraspPrivateReason(facts).empty();
+}
+
+void RecallStrays(Job& job, Player* leader, uint32 diff)
+{
+    if (Benchmark(job)) return;
+    auto const engaged = BossEngaged(job);
+    bool quiet = engaged.has_value() && !*engaged && Driver(job)
+        && !GroupHasRealmOwner(FindGroup(job))
+        && Identity(GET_PLAYERBOT_AI(leader)->GetMaster()) == job.driverBody.player
+        && leader->IsAlive() && !leader->HasPlayerFlag(PLAYER_FLAGS_GHOST)
+        && !leader->IsInCombat() && !leader->GetTransport() && !leader->GetVehicle();
+    for (auto const& member : job.members)
+        if (auto* player = FindOnline(member.guid); InJobGroup(job, player) && player->IsInCombat())
+            quiet = false;
+    for (auto& member : job.members)
+    {
+        if (member.guid == job.command.leaderGuid) continue;
+        auto* player = FindOnline(member.guid);
+        bool const owned = InJobGroup(job, player) && member.masterAssigned && !member.masterReleased
+            && Identity(GET_PLAYERBOT_AI(player)->GetMaster()) == job.driverBody.player
+            && !Realm::RealmOwns(member.guid) && !Training::DummyTrialOwns(member.guid);
+        bool const inside = owned && Present(job, player);
+        // Never seize a PvP body, resurrect, reset bindings, cross another dungeon,
+        // or move a replaced session. The normal inside summon uses this same
+        // destination-bind proof before TeleportTo; arrival is checked separately.
+        bool safe = quiet && owned && player->IsInWorld() && !player->IsBeingTeleported()
+            && player->IsAlive() && !player->HasPlayerFlag(PLAYER_FLAGS_GHOST)
+            && !player->IsInCombat() && !RecallPvpBusy(player)
+            && !player->IsInFlight() && !player->GetTransport() && !player->GetVehicle()
+            && !player->HasPendingBind() && !player->GetMap()->IsDungeon()
+            && player->GetDifficulty(true) == job.difficulty
+            && sInstanceSaveMgr->PlayerGetDestinationInstanceId(player, job.command.mapId, job.difficulty)
+                == job.event.instanceId;
+        auto const action = member.recall.Observe(inside, safe, diff);
+        if (action == RecallAction::Arrived)
+        {
+            LOG_INFO("module.leeroy", "leeroy: raid {} stray_returned guid={} attempts={}",
+                job.event.id, member.guid, member.recall.attempts);
+            Progress(job); // Presence changes are visible, but do not reset the boss-progress watchdog.
+        }
+        else if (action == RecallAction::Summon)
+        {
+            auto const& point = job.entrance;
+            member.recall.pending = player->TeleportTo(point.target_mapId, point.target_X,
+                point.target_Y, point.target_Z, point.target_Orientation);
+            LOG_INFO("module.leeroy", "leeroy: raid {} stray_recall guid={} attempt={} sent={}",
+                job.event.id, member.guid, member.recall.attempts, member.recall.pending);
+        }
+    }
+}
+
 void Running(Job& job, uint32 diff)
 {
     Player* leader = FindOnline(job.command.leaderGuid);
@@ -840,6 +916,7 @@ void Running(Job& job, uint32 diff)
             member.restartIssued = false;
         Enter(job, Stage::Restarting);
     }
+    else RecallStrays(job, leader, diff); // Existing stop/restart priorities always win.
 }
 
 void Revive(Player* player)
@@ -1257,7 +1334,9 @@ bool RunTeardown(Job& job)
         }
         catch (...) { return false; } // The queryable completed receipt survives a publication retry.
     }
-    auto report = job.terminal.Observe(complete, job.stageElapsed, Benchmark(job));
+    // A failed receipt is not a release: ordinary offline raids need the same
+    // bounded report as benchmarks while incomplete recovery still owns active.
+    auto report = job.terminal.Observe(complete, job.stageElapsed);
     if (report != RaidCleanupReport::None)
     {
         auto event = job.event;

@@ -23,6 +23,24 @@ bool BossProgress(std::uint8_t before, std::uint8_t after)
     return before != after && (after == 1 || after == 3 || IsWipe(before, after));
 }
 
+RecallAction OfflineRecall::Observe(bool inside, bool safe, std::uint32_t diffMs)
+{
+    sinceAttemptMs = AdvanceElapsed(sinceAttemptMs, diffMs);
+    if (inside)
+    {
+        absentMs = 0;
+        bool const arrived = pending;
+        pending = false;
+        return arrived ? RecallAction::Arrived : RecallAction::Wait;
+    }
+    absentMs = AdvanceElapsed(absentMs, diffMs);
+    if (!safe || absentMs < OfflineRecallGraceMs || attempts >= OfflineRecallAttempts
+        || (attempts && sinceAttemptMs < OfflineRecallRetryMs)) return RecallAction::Wait;
+    ++attempts; // A refused teleport costs an attempt too.
+    sinceAttemptMs = 0;
+    return RecallAction::Summon;
+}
+
 Decision Decide(OfflineRaidState const& state, OfflineRaidLimits const& limits)
 {
     if (state.humanOnline)

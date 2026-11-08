@@ -667,6 +667,18 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   or the command keeps the existing timeout behaviour and logs unsupported once
   per run. A mind restart requires fresh progress evidence; lost terminals still
   use the deadline (or an accepted stop) plus 15-minute `terminal_lost` fallback. Native rebuild needed.
+- A running offline raid can recall an absent follower after 30 s, at most three
+  attempts per member per run and 60 s between attempts. The original body, group,
+  controller and destination instance must still be proven; combat, PvP, another
+  dungeon, dead bodies and pending transfers prevent it. Existing leader/minimum
+  roster stops win. Arrival updates the heartbeat without resetting the boss
+  progress clock. Benchmarks do not use this recall path.
+- Native logs the stop reason immediately and includes it in teardown progress.
+  Cleanup still incomplete after 60 s reports `cleanup_failed:<reason>` once,
+  for ordinary offline raids as well as benchmarks. This ends mind accounting;
+  it does **not** release native reservations, journals or the active recovery job.
+  Inspect the retained cleanup reason before attempting another run. A native
+  rebuild is required for these changes.
 - Members start conversations with him on two clocks (2026-11-07), per hour of
   his play at chattiness 4 and scaled with it (0 stops every unprompted whisper):
   `[talk] whispers_per_hour` (4, at most 8 an hour and 2 minutes apart;

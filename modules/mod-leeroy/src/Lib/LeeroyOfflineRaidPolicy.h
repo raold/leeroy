@@ -39,6 +39,19 @@ std::string OfflineStopError(bool connected, bool owned, bool finished, bool tea
     bool stopped, std::optional<bool> bossEngaged);
 bool BossProgress(std::uint8_t before, std::uint8_t after);
 
+// A running offline raid may recall an unchanged, still-owned follower. These are
+// per-member, per-run bounds; arriving never replenishes the attempt budget.
+enum class RecallAction { Wait, Summon, Arrived };
+struct OfflineRecall
+{
+    std::uint32_t absentMs = 0, sinceAttemptMs = 0, attempts = 0;
+    bool pending = false;
+    RecallAction Observe(bool inside, bool safe, std::uint32_t diffMs);
+};
+inline constexpr std::uint32_t OfflineRecallGraceMs = 30000;
+inline constexpr std::uint32_t OfflineRecallRetryMs = 60000;
+inline constexpr std::uint32_t OfflineRecallAttempts = 3;
+
 // Configuration may release the cast pins while a job is running. These checks also apply during setup/restarts,
 // before the running-only policy can meaningfully count members or inspect encounter state.
 std::string OfflineRaidStopReason(bool humanOnline, bool moduleEnabled, bool keepCast,

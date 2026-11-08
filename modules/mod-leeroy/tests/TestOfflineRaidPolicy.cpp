@@ -1,6 +1,7 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "LeeroyOfflineRaidPolicy.h"
 #include "LeeroyGuildCommands.h"
+#include "LeeroyRealmCleanup.h"
 #include "TestHarness.h"
 
 #include <limits>
@@ -185,4 +186,76 @@ LEEROY_TEST(OfflineRaid_RuntimeDisableAndDriverLossStopSetupAndRestarts)
     CHECK_EQ(OfflineRaidStopReason(true, false, false, false, 100, 100), "human_login");
     CHECK_EQ(OfflineRaidStopReason(false, true, true, true, 10, 100, false), "instance_strategies_off");
     CHECK_EQ(OfflineRaidStopReason(true, true, true, true, 10, 100, false), "human_login");
+}
+
+LEEROY_TEST(OfflineRaid_StrayRecallWaitsForGraceAndSafeOwnership)
+{
+    OfflineRecall recall;
+    CHECK(recall.Observe(false, true, 29999) == RecallAction::Wait);
+    CHECK(recall.Observe(false, false, 1) == RecallAction::Wait);
+    CHECK_EQ(recall.attempts, 0u);
+    // Unsafe means no mutation: combat, unknown encounters, foreign body/group,
+    // PvP, transfers, dead bodies or an unproven destination all use this path.
+    CHECK(recall.Observe(false, false, 60000) == RecallAction::Wait);
+    CHECK(recall.Observe(false, true, 0) == RecallAction::Summon);
+    CHECK_EQ(recall.attempts, 1u);
+}
+
+LEEROY_TEST(OfflineRaid_StrayRecallRequiresObservedArrivalAndBoundsRetries)
+{
+    OfflineRecall recall;
+    CHECK(recall.Observe(false, true, 30000) == RecallAction::Summon);
+    recall.pending = true; // TeleportTo accepted, but it has not arrived.
+    CHECK(recall.Observe(false, true, 59999) == RecallAction::Wait);
+    CHECK(recall.Observe(false, true, 1) == RecallAction::Summon);
+    CHECK_EQ(recall.attempts, 2u);
+    CHECK(recall.Observe(true, false, 0) == RecallAction::Arrived);
+    CHECK(recall.Observe(true, false, 0) == RecallAction::Wait);
+    CHECK_EQ(recall.absentMs, 0u);
+    CHECK_EQ(recall.attempts, 2u); // Returning does not grant another unlimited budget.
+    CHECK(recall.Observe(false, true, 30000) == RecallAction::Wait);
+    CHECK(recall.Observe(false, true, 30000) == RecallAction::Summon);
+    CHECK_EQ(recall.attempts, 3u);
+    CHECK(recall.Observe(false, true, std::numeric_limits<std::uint32_t>::max()) == RecallAction::Wait);
+}
+
+LEEROY_TEST(OfflineRaid_RefusedRecallCostsAnAttemptAndNeverReportsArrival)
+{
+    OfflineRecall recall;
+    for (unsigned i = 0; i < OfflineRecallAttempts; ++i)
+    {
+        CHECK(recall.Observe(false, true, OfflineRecallRetryMs) == RecallAction::Summon);
+        recall.pending = false; // A refused TeleportTo is not a completed recovery.
+    }
+    CHECK(recall.Observe(true, true, 1) == RecallAction::Wait);
+    CHECK(recall.Observe(false, true, OfflineRecallRetryMs) == RecallAction::Wait);
+}
+
+LEEROY_TEST(OfflineRaid_RecallDoesNotWeakenMinimumRosterOrLeaderStops)
+{
+    auto state = Base();
+    state.membersPresent = 9;
+    CHECK(Decide(state, limits).verdict == Verdict::Continue);
+    state.membersPresent = 10; // An observed arrival restores roster strength.
+    CHECK(Decide(state, limits).verdict == Verdict::Continue);
+    state.membersPresent = 7;
+    CHECK_EQ(Decide(state, limits).reason, "too_few");
+    state.membersPresent = 10;
+    state.leaderPresent = false;
+    CHECK_EQ(Decide(state, limits).reason, "leader_lost");
+}
+
+LEEROY_TEST(OfflineRaid_RecallWaitsForEveryWintergraspExposureFence)
+{
+    using Facts = Leeroy::Realm::WintergraspMemberFacts;
+    for (auto member : {&Facts::foreignHistory, &Facts::inZone, &Facts::inBattlefieldGroup,
+        &Facts::queued, &Facts::invited, &Facts::inWar})
+    {
+        Facts facts;
+        facts.*member = true;
+        OfflineRecall recall;
+        bool const safe = Leeroy::Realm::WintergraspPrivateReason(facts).empty();
+        CHECK(recall.Observe(false, safe, 30000) == RecallAction::Wait);
+        CHECK_EQ(recall.attempts, 0u);
+    }
 }

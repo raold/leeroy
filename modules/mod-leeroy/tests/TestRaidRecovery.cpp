@@ -126,7 +126,14 @@ LEEROY_TEST(benchmark_successful_cleanup_has_exactly_one_terminal_even_at_deadli
     CHECK(terminal.Observe(true, 60000) == RaidCleanupReport::Complete);
     CHECK(terminal.Observe(true, 60001) == RaidCleanupReport::None);
     CHECK(terminal.Observe(false, 60001) == RaidCleanupReport::None);
+}
+
+LEEROY_TEST(offline_cleanup_reports_failure_without_claiming_recovery_or_reporting_twice)
+{
     RaidCleanupTerminal offline;
-    CHECK(offline.Observe(false, 90000, false) == RaidCleanupReport::None);
-    CHECK(offline.Observe(true, 90001, false) == RaidCleanupReport::Complete);
+    CHECK(offline.Observe(false, 59999) == RaidCleanupReport::None);
+    CHECK(offline.Observe(false, 60000) == RaidCleanupReport::Failed);
+    CHECK(offline.Reported());
+    CHECK(offline.Observe(false, 90000) == RaidCleanupReport::None);
+    CHECK(offline.Observe(true, 90001) == RaidCleanupReport::None);
 }
