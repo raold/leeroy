@@ -259,6 +259,11 @@ Each exception is printed with the rollback instructions. Mind releases allow on
 `mind/`, `selfie/`, `voice/`, `CLAUDE.md`, `README.md` and `references.bib`; native
 releases additionally allow `modules/`, `config/` and `patches/`. Dry-run checks
 and prints the plan without cherry-picking, stopping services or taking snapshots.
+Voice-file releases require the separately managed voice service to be stopped
+first (its OS lock is probed without loading models); this tool does not enable
+or restart voice. Real releases hold the checkout lock before capturing the
+rollback target and running preflight, so a delayed invocation cannot undo a
+release that finished while it was checking the database.
 After cherry-picking it stops the mind, takes an SQLite online backup in
 `mind-data/snapshots/pre-release-*.db`, migrates with the new code, restarts services
 and the optional `leeroy-console` task, then prints health. Native releases save
@@ -270,8 +275,10 @@ Unavailable status or a surviving process prevents build/restore writes; the
 printed native rollback command applies the same check before resetting files.
 Failures before the completed restart attempt rollback; a health failure leaves
 the running release in place and prints recovery instructions. Every exit prints
-the reset target, snapshot and native rebuild command. Exit codes: 0 success,
-1 refused before changes, 2 failure after changes. Test only with
+the reset target, snapshot and native rebuild command.
+The printed rollback also restarts the optional console task after restoring the
+checkout and database, so it reloads the matching code.
+Exit codes: 0 success, 1 refused before changes, 2 failure after changes. Test only with
 `bash scripts/tests/ac-release.sh`; it uses temporary repositories and stub services.
 
 `./ac-health.sh [--json] [--toast]` (`python -m leeroy_mind health`) checks the live install

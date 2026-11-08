@@ -9,11 +9,13 @@ export GIT_OPTIONAL_LOCKS=0
 
 native=0 dry=0 failed=0 changed=0 lock_owned=0 build_lock_owned=0 build_attempted=0
 snapshot_ready=0 binary_ready=0 completed=0 services_touched=0
+voice_changes=0
 allow=() commits=() resolved=()
 pre=unavailable branch=unavailable cnf='' release_lock='' snapshot='' binary_backup=''
 python="${AC_RELEASE_PYTHON:-$AC_ROOT/mind/.venv/Scripts/python.exe}"
 mysql="${AC_RELEASE_MYSQL:-$MYSQL_DIR/mysql.exe}"
 data="${LEEROY_MIND_DATA:-$AC_ROOT/mind-data}"
+voice_data="${LEEROY_VOICE_DATA:-$AC_ROOT/voice-data}"
 helper="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ac-release-data.py"
 build_lock="$AC_ROOT/.superpowers/live-build.lock"
 # ac-server.sh's forced taskkill is best effort. Prove absence independently before
@@ -76,6 +78,7 @@ rollback_note() {
     if ((native)); then printf ' && AC_JOBS=4 bash scripts/ac-build.sh && bash scripts/ac-server.sh start'; else
         printf ' && %s scripts/ac-mind.py start --root %s --data-dir %s' "$(quote "$python")" "$(quote "$(native_path "$AC_ROOT")")" "$(quote "$(native_path "$data")")"
     fi
+    printf ' && (if command -v schtasks >/dev/null 2>&1 && schtasks //Query //TN leeroy-console >/dev/null 2>&1; then schtasks //End //TN leeroy-console >/dev/null 2>&1 || true; schtasks //Run //TN leeroy-console >/dev/null; fi)'
     printf '\n'
     if ((!snapshot_ready)); then printf 'note: planned snapshot was not created; omit its restore step\n'; fi
 }
@@ -133,6 +136,13 @@ while (($#)); do
 done
 if ((${#commits[@]} == 0)); then bad 'usage: ac-release.sh [--native] [--allow-raid ID]... [--dry-run] COMMIT...'; exit 1; fi
 cd "$AC_ROOT"
+# Serialize the state snapshot and every preflight, not merely the mutation phase.
+# Otherwise a delayed preflight could reset a release completed while it was waiting.
+release_lock=$(git rev-parse --git-path ac-release.lock) || exit 1
+if ((!dry)); then
+    if ! mkdir "$release_lock" 2>/dev/null; then bad 'another release holds the checkout lock'; exit 1; fi
+    lock_owned=1
+fi
 pre=$(git rev-parse --verify HEAD) || exit 1
 branch=$(git symbolic-ref --short -q HEAD) || branch=detached
 case "$branch" in
@@ -141,8 +151,7 @@ case "$branch" in
 esac
 if [[ -z $(git status --porcelain --untracked-files=normal) ]]; then ok 'clean working tree'; else bad 'working tree is dirty'; fi
 if git rev-parse -q --verify CHERRY_PICK_HEAD >/dev/null || git rev-parse -q --verify MERGE_HEAD >/dev/null; then bad 'git operation already in progress'; fi
-release_lock=$(git rev-parse --git-path ac-release.lock)
-if [[ -e $release_lock ]]; then bad 'another release holds the checkout lock'; fi
+if ((!lock_owned)) && [[ -e $release_lock ]]; then bad 'another release holds the checkout lock'; fi
 if ((native)); then
     if [[ -e $build_lock ]]; then bad "build lock exists: $build_lock"; else ok 'no native build lock'; fi
 fi
@@ -157,13 +166,18 @@ for commit in "${commits[@]}"; do
     paths_ok=1
     while IFS= read -r -d '' path; do
         case "$path" in
-            mind/*|selfie/*|voice/*|CLAUDE.md|README.md|references.bib) ;;
+            voice/*) voice_changes=1 ;;
+            mind/*|selfie/*|CLAUDE.md|README.md|references.bib) ;;
             modules/*|config/*|patches/*) if ((!native)); then bad "disallowed path: $path (requires --native)"; paths_ok=0; fi ;;
             *) bad "disallowed path: $path"; paths_ok=0 ;;
         esac
     done < <(git diff-tree -r --no-renames --no-commit-id --name-only -z "$sha^1" "$sha")
     ((paths_ok == 0)) || ok "allowed paths: $sha"
 done
+if ((voice_changes)); then
+    if data_op voice-stopped "$(native_path "$voice_data")"; then ok 'voice service stopped for voice changes';
+    else bad 'voice changes require the voice service to be stopped first'; fi
+fi
 for raid in "${allow[@]}"; do printf 'note: explicit raid exception %s\n' "$raid"; done
 
 umask 077
@@ -189,9 +203,7 @@ printf 'Plan: cherry-pick %s commit(s); stop services; snapshot %s; ' "${#resolv
 printf 'migrate; start services; restart leeroy-console; health summary\n'
 if ((dry)); then ok 'dry-run complete; no release changes'; exit 0; fi
 
-# Atomic locks, acquired before checkout changes; never remove another run's lock.
-if ! mkdir "$release_lock"; then bad 'checkout lock could not be acquired'; exit 1; fi
-lock_owned=1
+# The checkout lock already covers preflight; acquire the native build lock too.
 if ((native)); then
     mkdir -p "$(dirname "$build_lock")"
     if ! mkdir "$build_lock"; then bad 'native build lock could not be acquired'; exit 1; fi

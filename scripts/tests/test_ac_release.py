@@ -10,6 +10,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 SCRIPTS = Path(__file__).resolve().parents[1]
@@ -28,7 +29,7 @@ class ReleaseTests(unittest.TestCase):
         cls.git_at(cls.template, "config", "core.autocrlf", "false")
         cls.git_at(cls.template, "config", "commit.gpgsign", "false")
         files = {
-            ".gitignore": "build/\nmind-data/\nactions.log\nstubs/\n.superpowers/\n__pycache__/\n",
+            ".gitignore": "build/\nmind-data/\nvoice-data/\nactions.log\nstubs/\n.superpowers/\n__pycache__/\n",
             "mind/app.py": "original\n",
             "scripts/common.sh": (SCRIPTS / "common.sh").read_text(encoding="utf-8"),
             "scripts/ac-mind.py": '''import os, sys
@@ -87,6 +88,10 @@ exit "${FAIL_HEALTH:-0}"
         cls.git_at(cls.template, "add", ".")
         cls.git_at(cls.template, "commit", "-qm", "Native")
         cls.native = cls.git_at(cls.template, "rev-parse", "HEAD")
+        cls.write(cls.template / "voice/feature.py", "voice change\n")
+        cls.git_at(cls.template, "add", ".")
+        cls.git_at(cls.template, "commit", "-qm", "Voice")
+        cls.voice = cls.git_at(cls.template, "rev-parse", "HEAD")
         cls.write(cls.template / "outside.txt", "outside\n")
         cls.git_at(cls.template, "add", ".")
         cls.git_at(cls.template, "commit", "-qm", "Disallowed")
@@ -125,7 +130,14 @@ exit "${FAIL_HEALTH:-0}"
         with closing(sqlite3.connect(self.db)) as db, db:
             db.executescript("CREATE TABLE guild_raid(raid_id INTEGER, ended REAL); CREATE TABLE meta(key TEXT, value TEXT); CREATE TABLE marker(value TEXT); INSERT INTO marker VALUES ('original');")
         stub = self.root / "stubs"
-        self.write(stub / "mysql", '#!/usr/bin/env bash\nprintf "%s\\n" "${OWNER_ONLINE-0}"\nexit "${MYSQL_FAIL:-0}"\n')
+        self.write(stub / "mysql", '''#!/usr/bin/env bash
+if [[ -n ${MYSQL_PAUSE:-} ]]; then
+    touch "$MYSQL_PAUSE.ready"
+    while [[ ! -e $MYSQL_PAUSE.go ]]; do sleep 0.05; done
+fi
+printf '%s\\n' "${OWNER_ONLINE-0}"
+exit "${MYSQL_FAIL:-0}"
+''')
         self.write(stub / "tasklist", '''#!/usr/bin/env bash
 if [[ ${TASKLIST_OUTPUT+x} ]]; then printf '%s\\n' "$TASKLIST_OUTPUT";
 else printf '%s\\n' '"System","4","Services","0","8 K"'; fi
@@ -142,6 +154,7 @@ exit "${FAIL_CONSOLE:-0}"
                         AC_RELEASE_PYTHON=Path(sys.executable).as_posix(),
                         AC_RELEASE_MYSQL=(stub / "mysql").as_posix(),
                         LEEROY_MIND_DATA=self.db.parent.as_posix(),
+                        LEEROY_VOICE_DATA=(self.root / "voice-data").as_posix(),
                         PATH=str(stub) + os.pathsep + os.environ["PATH"])
 
     def run_release(self, *args, rc=0, **env):
@@ -283,6 +296,7 @@ exit "${FAIL_CONSOLE:-0}"
                                 text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout)
         self.original()
+        self.assertEqual(self.actions().count("console //Run"), 2)
 
     def test_wal_commits_are_checked_and_snapshotted(self):
         with closing(sqlite3.connect(self.db)) as db:
@@ -394,6 +408,60 @@ exit 1
             env=self.env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout)
         self.original()
+
+    def test_preflight_serializes_checkout_snapshot_with_other_releases(self):
+        pause = self.root / "stubs/preflight"
+        ready, proceed = Path(str(pause) + ".ready"), Path(str(pause) + ".go")
+        process = subprocess.Popen([BASH, (SCRIPTS / "ac-release.sh").as_posix(), self.single],
+            cwd=self.root, env=dict(self.env, MYSQL_PAUSE=pause.as_posix()), text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        try:
+            deadline = time.monotonic() + 15
+            while not ready.exists() and time.monotonic() < deadline and process.poll() is None:
+                time.sleep(0.02)
+            self.assertTrue(ready.exists())
+            output = self.run_release(self.merge, rc=1)
+            self.assertIn("checkout lock", output)
+            self.assertEqual(self.git("rev-parse", "HEAD"), self.base)
+            self.assertEqual(self.actions(), "")
+        finally:
+            proceed.write_text("continue")
+            output, _ = process.communicate(timeout=30)
+        self.assertEqual(process.returncode, 0, output)
+        self.assertIn("release complete", output)
+        self.assertEqual(self.actions().count("migrate"), 1)
+
+    def test_voice_changes_refuse_a_running_service_without_changing_its_lock(self):
+        path = self.root / "voice-data/voice.lock"
+        path.parent.mkdir()
+        with path.open("w+b") as fh:
+            fh.write(b"lock"); fh.flush(); fh.seek(0)
+            before = path.stat().st_mtime_ns
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:
+                for args in (("--dry-run", self.voice), (self.voice,)):
+                    output = self.run_release(*args, rc=1)
+                    self.assertIn("voice service to be stopped first", output)
+                    self.assertEqual(self.actions(), "")
+                    self.original()
+                self.assertEqual(path.stat().st_mtime_ns, before)
+            finally:
+                if os.name == "nt":
+                    fh.seek(0); msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        self.assertEqual(path.read_bytes(), b"lock")
+        self.assertIn("release complete", self.run_release(self.voice))
+
+    def test_voice_changes_with_no_service_do_not_create_or_enable_one(self):
+        output = self.run_release(self.voice)
+        self.assertIn("voice service stopped for voice changes", output)
+        self.assertFalse((self.root / "voice-data").exists())
 
 
 if __name__ == "__main__":

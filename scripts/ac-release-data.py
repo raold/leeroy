@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from contextlib import closing
 import json
+import os
 from pathlib import Path
 import shutil
 import sqlite3
@@ -16,6 +17,35 @@ import sys
 
 def read_db(path: Path) -> sqlite3.Connection:
     return sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
+
+
+def voice_stopped(data: Path) -> int:
+    """Probe the voice OS lock without importing models, creating files or changing bytes.
+
+    Voice files are accepted only while that separately managed service is stopped.
+    This release tool does not enable a stopped voice service.
+    """
+    path = data / "voice.lock"
+    try:
+        path.stat()
+    except FileNotFoundError:
+        return 0
+    with path.open("r+b") as fh:
+        if os.name == "nt":
+            import msvcrt
+            try:
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError:
+                return 1
+            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            try:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                return 1
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    return 0
 
 
 def raids(path: Path, allowed: set[int]) -> int:
@@ -89,6 +119,8 @@ def main() -> int:
     action, source, *args = sys.argv[1:]
     if action == "raids":
         return raids(Path(source), {int(arg) for arg in args})
+    if action == "voice-stopped":
+        return voice_stopped(Path(source))
     if action in ("snapshot", "restore"):
         backup(Path(source), Path(args[0]), restore=action == "restore")
     elif action in ("save-binaries", "restore-binaries"):
