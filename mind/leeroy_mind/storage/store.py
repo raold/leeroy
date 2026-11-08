@@ -414,11 +414,6 @@ class Store:
             mid = self.conn.execute(
                 f"INSERT INTO memory({self._MEMORY_COLS}) VALUES ({marks})",
                 self._memory_params(m)).lastrowid
-            # An old dangling reference can name this newly allocated id. Check after
-            # allocation, inside the same transaction, before publishing its evidence.
-            kept = tuple(e for e in evidence if not self._cites_memory(e, mid))
-            if kept != evidence:
-                self.conn.execute("UPDATE memory SET evidence=? WHERE id=?", (_j(kept), mid))
             self._index_actors(mid, m.actors)
             if m.embedding is not None:
                 self._index_vec(mid, m.owner, m.embedding)

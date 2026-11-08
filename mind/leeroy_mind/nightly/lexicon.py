@@ -3,6 +3,7 @@ import json
 import re
 from datetime import date
 
+from leeroy_mind.logs import log
 from leeroy_mind.nightly import knowledge
 from leeroy_mind.nightly.audience import audience_of, cast_names
 from leeroy_mind.nightly.evidence import Evidence, load_facts, load_items
@@ -14,6 +15,7 @@ from leeroy_mind.nightly.stories import PROVENANCE_MAX, _public_node
 from leeroy_mind.personas.io import load_persona
 from leeroy_mind.personas.screens import has_word, names_real_name
 from leeroy_mind.storage.rows import MemoryRow
+from leeroy_mind.storage.provenance import MAX_NODES, ProvenanceError, WalkLimit, edges, reaches
 from leeroy_mind.text import has_meta, strip_wow_markup, truncate_words, word_jaccard
 
 JOKE_LAUGHS = 2
@@ -25,7 +27,6 @@ DORMANT_HEAT = 0.5
 DORMANT_DAYS = 21
 MODERN_SLANG = ("rizz", "sus", "no cap", "bussin", "yeet", "stan", "lowkey", "highkey", "slay", "based", "ratio", "goated", "vibe check", "fr fr", "ong", "delulu", "skibidi", "gyat", "main character", "touch grass", "it's giving", "rent free")
 _JOKE = re.compile(r"joke:([0-9]+)")
-_MEMORY = re.compile(r"memory:([0-9]+)")
 
 
 def _text(value):
@@ -205,7 +206,11 @@ def _archive(store, term, guid):
 
 
 def _safe_refs(store, term_id, refs):
-    """Expand prior copies of this term before keyed rewrites can make them cyclic."""
+    """Expand prior copies, including chat that recalled one, into their older roots.
+
+    Keeping that emitted chat on the joke would form joke -> chat -> memory -> joke
+    before a keyed rewrite even runs. Preserve the holder's joke tag instead.
+    """
     self_ref = f"joke:{term_id}"
     output, seen = [], set()
     pending = list(reversed(tuple(refs)))
@@ -213,19 +218,21 @@ def _safe_refs(store, term_id, refs):
         ref = pending.pop()
         if ref in seen or ref == self_ref:
             continue
+        if len(seen) >= MAX_NODES:
+            log("lexicon_evidence_held", id=term_id, count=1, code="bound")
+            return None
         seen.add(ref)
         snapshot = source_snapshot(store, [ref])
         if snapshot is None:
             return None
-        if self_ref in dict(snapshot):
-            memory, joke = _MEMORY.fullmatch(ref), _JOKE.fullmatch(ref)
-            if memory:
-                children = store.get_memories([int(memory[1])])[0].evidence
-            elif joke:
-                children = _origins(store, _term(store, int(joke[1])))
-            else:
-                node = _public_node(store, ref)
-                children = node[1] if node is not None else ()
+        try:
+            cyclic = reaches(lambda r: edges(store.conn, r).children, ref, self_ref)
+            children = edges(store.conn, ref).children if cyclic else ()
+        except (ProvenanceError, ValueError, TypeError) as err:
+            code = "bound" if isinstance(err, WalkLimit) else "invalid"
+            log("lexicon_evidence_held", id=term_id, count=1, code=code)
+            return None
+        if cyclic:
             pending.extend(reversed(children))
         else:
             output.append(ref)

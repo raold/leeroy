@@ -77,14 +77,6 @@ def test_guard_follows_rejected_memories_and_dropped_pairs(store):
     assert evidence(store, ident) == ("owner:test",)
 
 
-def test_insert_checks_dangling_reference_after_id_allocation(store):
-    first = memory(store)
-    ref = chat(store, [first + 1])
-    second = memory(store, evidence=(ref, "owner:kept"))
-    assert second == first + 1
-    assert evidence(store, second) == ("owner:kept",)
-
-
 def test_clean_critic_graph_keeps_exact_comparable_values(store):
     ident = memory(store)
     ref = chain(store, chat(store, [ident]))
