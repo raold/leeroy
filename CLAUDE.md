@@ -311,6 +311,129 @@ table). `--toast` shows one toast per new failure and writes only
 `ac-health-schedule.ps1 -Install|-Remove|-Status` manages a per-user task that runs it every
 15 minutes while he is logged on (not installed by default).
 
+### Off-machine guild backups
+
+`./ac-guild-backup.sh [--with-db]` backs up the guild to an already mounted destination.
+Create `%LOCALAPPDATA%\leeroy\backup.toml` locally, outside git (TOML single quotes
+keep Windows backslashes literal):
+
+```toml
+destination = '\\nas\private-backups\leeroy'
+keep_daily = 7
+keep_weekly = 8
+# staging_dir = 'D:\leeroy-staging'   # optional, absolute, local
+```
+
+Use a destination on another machine; a second folder on F: does not protect against
+drive failure. The script uses the logged-on user's existing share access and stores no
+credentials. The backup contains private guild data: restrict the share to its owner.
+It creates its own marked `leeroy-guild-backups-v1` directory under the destination,
+which must already exist. It refuses source/destination overlap, symlinks and Windows
+reparse points. It never mounts a share, starts a service, or contacts a model.
+
+- **Contents.** Both `mind.db` and `library.db` are required. It includes the rest of
+  `mind-data`: personas and versions, memories/history, prompts/overlays, voice specs
+  and reference clips, Realm plans/blocklist, and selfie sets, picks and history. From
+  `voice-data` it includes only `voice.toml`, `decision.toml`, `lexicon.toml`,
+  `attitudes.toml` (when present). `--with-db` adds the newest timestamp-named
+  `ac-backup.sh` set's four nonempty SQL dumps, rejecting incomplete/error sets.
+  Run `ac-backup.sh` first if a fresh game snapshot is wanted; these older dumps are
+  not synchronized with the mind snapshot.
+- **Exclusions.** At any depth it omits `logs/`, `scratch/`, `snapshots/`, `models/`,
+  `cache/`, `caches/`, `__pycache__/`, unfinished `.part` files/directories,
+  `control.json`, `console.key`, runtime lock/PID files, files the services rewrite
+  continuously (`health-state.json`, `wow-volume.json`, `ui-state.json`,
+  `dojo-endpoint.json`, `worldserver.pid`; regenerated on start and they would fail the
+  stability scan) and SQLite `-wal`, `-shm`, `-journal` files. Logs/scratch/snapshots are disposable local history; models and
+  caches can be fetched again. Worker `selfie-data`, voice engines/cache/UI state,
+  the console key in the owner profile and everything outside the listed data roots
+  are never selected. Runtime control credentials must never be restored.
+- **Consistency.** A local temporary capture uses SQLite's online `backup()` API in one
+  step per database (`pages=-1`): a single read transaction, a consistent snapshot in WAL
+  mode that never blocks the mind's writers. A stepped copy restarts whenever another
+  connection writes between steps and, measured on a 20 MB database with a continuous
+  writer, needed about 59,000 steps and 116 s; the single step has no deadline and is
+  bounded by the database size. Then `PRAGMA integrity_check` for each copied database. The ordinary file inventory
+  and SHA-256 contents must match on both sides of the database copies. File changes
+  retry the capture up to three times; persistent changes fail without publication or
+  pruning. SQLite can keep writing throughout (no service lock is taken). Each database
+  has its own transaction; there is no global transaction across both databases and
+  the filesystem. For a strictly simultaneous snapshot, stop the mind, console,
+  voice and any other data writers first. Online backups establish stable file
+  contents around the database snapshots; they cannot make an in-flight application
+  operation atomic. Restore startup reconciles selfie files with the database.
+- **Transfer and verification.** A dated set is a checksummed `manifest.json` plus
+  an ownership marker. Every payload file has a size and SHA-256. Shared objects are
+  addressed by that digest, so unchanged JPEGs are not uploaded again; there are no
+  hard links, filesystem-specific deduplication calls, or external Python packages.
+  This trades local hashing and destination verification reads for less upload space
+  and traffic. A failed upload resumes its verified byte prefix on the next run; an
+  existing object is trusted by its digest name and size (it was verified before it was
+  renamed into place) and is not read back; every newly written object is verified. Every
+  referenced object is re-read in full when the last full verification (recorded in
+  `.verify-state.json` in the store) is over 7 days old, so a daily task verifies
+  weekly, or on demand with `--verify-all`. A set becomes visible through a same-directory
+  rename only after all destination objects verify. The destination must support normal
+  file locks and same-directory renames (ordinary SMB shares do). Concurrent runs refuse
+  the store lock; it is automatically released when a process exits.
+- **Retention.** Keep the newest set from each of the last 7 represented UTC days and
+  8 represented ISO weeks (their union). Settings can be zero individually, never both.
+  Pruning runs only after a successful capture/publication. Only correctly named,
+  checksum-valid sets with this store's marker and exactly its two metadata files are
+  removed. No recursive deletion is used. Shared objects are deleted only when a
+  pruned owned manifest named them and no retained set uses them. Foreign or corrupt
+  set directories are preserved and disable object collection. A `sets/.pending-*`
+  directory left by a crashed publish that holds only this script's own manifest and
+  marker (checksums match) and is over 24 hours old is removed and is not foreign; a
+  younger one, or one with any other content, counts as foreign. Object `.part` files
+  over 7 days old and stale `.staging/leeroy-guild-capture-*` directories are removed.
+  Unpublished complete orphan objects are retained. Never edit manifests or delete objects
+  manually: multiple sets share them. Copy the whole store when relocating it.
+
+`./ac-guild-backup.sh --restore-test` reconstructs the newest completed set into a
+temporary directory, checks every file against its manifest, reruns both SQLite integrity
+checks and removes only that temporary reconstruction. A corrupt newest set fails rather
+than silently choosing an older one. `--restore-to F:/guild-restore` performs the same
+checks but keeps the verified output in that **new, initially nonexistent** directory;
+it refuses live data roots and existing output. A failure leaves the live data untouched.
+The capture/restore requires temporary free space for the complete payload. Capture
+stages in `staging_dir` from the config when set; otherwise in `.staging` inside the
+store when the destination is on a local fixed disk, else the system temp directory
+(normally C:). It must be outside the store and the source data directories.
+`--config`, `--root`, `--mind-data`, `--voice-data` and `--db-backup-dir` allow explicit
+isolated paths; normal source defaults follow this checkout and `LEEROY_MIND_DATA` /
+`LEEROY_VOICE_DATA`. The Git Bash wrapper uses the mind venv (or an explicit
+`AC_GUILD_BACKUP_PYTHON`); the engine needs Python 3.11+ and only its standard library.
+
+`ac-guild-backup-schedule.ps1 -Show [-At '03:00'] [-WithDb]` previews the per-user
+`leeroy-guild-backup` task. `-Install` creates/replaces it, `-Remove` removes it, and
+`-Status` reports the last result (0 means verified). It runs daily at the selected
+local time, only while the owner is logged on, with Limited privileges and no stored
+password, so his share access is available. A missed run starts when available; concurrent
+runs are ignored. `pythonw.exe` runs the same backup engine without opening a window.
+It is **not installed by default**; configure the destination, run a manual backup and
+restore test successfully, then have the operator install it. Check `-Status` regularly;
+there is no automatic failure notification. An unavailable share fails without pruning.
+
+**How to restore.** Run `--restore-test`, then `--restore-to` a new staging directory.
+Stop the mind and all other writers (console, voice and selfie activity), and keep a
+separate local copy of the current `mind-data`/voice configuration for rollback. Replace
+the mind data with the verified staged `mind-data` as a directory; do not overlay it onto
+old database WAL/SHM files or stale photos. Copy the four staged voice TOMLs that are
+present into `voice-data`, preserving its refetchable engines/caches. Keep the owner's
+existing console key outside these directories. If anything fails, leave services stopped
+and restore the saved pre-restore directories/configs. With the installed mind's Python,
+from `mind/`, run `db --data-dir F:/azerothcore/mind-data migrate`, then
+`doctor --data-dir F:/azerothcore/mind-data`; only restart after checks pass. Importing the
+optional game SQL dumps is a separate operator recovery step with MySQL stopped from
+serving the game; this script never imports them or overwrites live data.
+
+`bash scripts/tests/ac-guild-backup.sh` exercises synthetic data only, including a live
+SQLite writer, verified restore, corrupt/interrupted copies, ownership-confined pruning,
+foreign directories, stale pending/`.part` cleanup, a large database snapshot under
+continuous writes, and junction/symlink refusal. The schedule self-test mocks task
+cmdlets and never registers a task. Both run in CI; never use live data for these tests.
+
 `db_backup/` holds two kinds of thing: sets `ac-backup.sh` made
 (`<label>_<YYYYmmdd>_<HHMMSS>`) and sets from the older script described below
 (`YYYY-MM-DD_HHMM`), plus a raw MySQL datadir copy. **The prune only ever
@@ -538,7 +661,18 @@ Local commit `3826b2f4` (built 2026-11-07) keeps pins out of random bot arena te
 login, filling teams below `Playerbots.RandomBotArenaTeam2v2Count`/`3v3Count`/`5v5Count`
 (live 30/30/20, raised from 10/10/5 with `Arena.MaxRatingDifference = 0` so the owner meets
 the strong bot teams), and without it the cast would join them for good. Teams he made
-himself are untouched.
+himself are untouched. It does not remove a pin from a team it joined before, and a
+captain's gather (`BGJoinAction::gatherArenaTeam`) takes any member out of its group
+and teleports it unless its master is a game client (a self-mastered bot counts) or
+it is in combat, a battleground or a queue; on 2026-11-07 it pulled masterless cast
+member 251 out of an offline raid's group. So mod-leeroy (`Leeroy.CastArenaTeams.Leave`,
+default 1, `.reload config`) takes a pinned cast member out of every rated team the owner
+does not captain, on the queue fence's world tick, through the core's `ArenaTeam::DelMember`
+under the leave handler's own conditions (not while the team fights or the member or a
+group-mate is queued, nor while a Realm lease holds the body), once per member and team
+per process: `cast_arena_team_left guid= team= type=`. A cast member who captains a bot
+team is kept and logged once (`cast_arena_team_kept ... reason=captain`): it cannot leave
+without disbanding or handing on the team, which is left to a playerbots patch.
 
 Commits here never carry a `Co-Authored-By` or other attribution trailer.
 
@@ -733,6 +867,41 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   or the command keeps the existing timeout behaviour and logs unsupported once
   per run. A mind restart requires fresh progress evidence; lost terminals still
   use the deadline (or an accepted stop) plus 15-minute `terminal_lost` fallback. Native rebuild needed.
+- A running offline raid can recall an absent follower after 30 s, at most three
+  attempts per member per run and 60 s between attempts. The original body, group,
+  controller and destination instance must still be proven; combat, PvP, another
+  dungeon, dead bodies and pending transfers prevent it (pure policy
+  `RecallQuietOk`/`RecallBodySafe`/`RecallPvpBusy`; the battlefield and arena lookups
+  run last). Existing leader/minimum roster stops win. Arrival updates the heartbeat
+  without resetting the boss progress clock. Benchmarks do not use this recall path.
+- The job's driver is a self-mastered bot outside the raid group, and stock
+  `ResetAiAction` (the empty group list Grouping's `RemoveFromGroup` sends, or a leader
+  change) clears a master outside the bot's group; `FindNewMaster` finds none in an
+  all-bot raid. On 2026-11-07 that left 3112 (the leader) and 251 masterless, so the
+  teardown that began at 17:33:26 retained `restore_ownership` for both and never ended.
+  Every tick, in every stage including teardown, native now puts the driver back for a
+  member it still holds (same body, the job's group, no Realm or dummy lease) whose
+  master is empty, re-strips follow, restores `wait for attack` and `avoid aoe` and
+  reconciles DC's strategies (`master_reasserted guid= stage= repairs=`, first and every
+  50th). A non-empty foreign master is still an ownership change.
+- A restart no longer needs every member: after 30 s an absent member is dropped from
+  that restart's gate (`restart_dropped guid=`) while the members present meet the
+  minimum; fewer stop the run `too_few`. The leader is never dropped. A dropped member
+  stays in the roster for cleanup and later recall.
+- Native logs the stop reason immediately and includes it in teardown progress.
+  Cleanup still incomplete after 60 s reports `cleanup_failed:<reason>` once,
+  for ordinary offline raids as well as benchmarks; this ends mind accounting. From
+  then on a member the job no longer holds (other group, master or body) that carries
+  no training journal is abandoned (`cleanup_abandoned guid=`, never touched again) so
+  the members it does hold finish their cleanup. Ten minutes after `cleanup_failed`, an
+  ordinary offline raid releases its native slot (`cleanup_released after_ms=
+  unfinished=`; then `training_run_cleared=`) unless a member is still provably held
+  (connected, same body, the job's group, the driver as master), which logs
+  `cleanup_held` once and keeps the slot as before. Release restores the WaitAtBoss
+  override and the leader's DC training-run receipt where it can, and keeps training
+  journals (their `training_journal_pending` fence stays) and the cleanup receipt
+  (`get_training_cleanup` shows it unrestored). Benchmarks never release. A leftover
+  group is disbanded by the 60 s leftover sweep. A native rebuild is required.
 - Members start conversations with him on two clocks (2026-11-07), per hour of
   his play at chattiness 4 and scaled with it (0 stops every unprompted whisper):
   `[talk] whispers_per_hour` (4, at most 8 an hour and 2 minutes apart;
@@ -1256,6 +1425,27 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
   style queues a fresh set for her (a first set if she never had one, else a "4 more" one; sets
   waiting for his choice stay waiting). The NSFW gate (`nsfw_max`) is unchanged for every image
   of both styles.
+- **Offline photo booth.** `[selfies] booth = true` additionally renders profile sets between
+  nights. It defaults to false and is read only at startup; an invalid selfies table means
+  rendering off. Its background loop checks once a minute, outside chat/control handling.
+  Both `enabled` and `booth` must be true, the owner's nightly Presence must have counted at
+  least 10 minutes offline, no live lease may be held, and no night may be running or due.
+  Requests must be at least `booth_wait_minutes` old (default 10, range 1-60); a newly available
+  first set is queued and timestamped at the loop's first eligible observation. Every request
+  still passes the shared renderer in `selfies/render.py`, including held-kind and NSFW rules.
+  `booth_sets_per_day` (default 6, range 1-120) caps completed attempts per local calendar day:
+  ready, refused and failed sets consume that allowance, survive restart and are not retried
+  by the booth that day. Held sets take no allowance. The night's `selfie_per_night` cap and
+  its ability to render remaining/refused booth sets are unchanged. A set crossing midnight
+  remains queued and is rendered under the new day's allowance at a later eligible check.
+  A due night cancels the booth and waits for the whole worker tree to exit; one shared lock
+  covers each run and its cleanup. Every live lease preempts both through the same arbiter.
+  Normal completion makes room before rendering and again after worker exit; cancellation
+  makes no arbiter call before hand-over. `selfies status` includes separate `booth` daily
+  stage totals and the last pass (sets, attempts, seconds, outcome); `selfies_booth_done`
+  logs sets, seconds and outcome. Receipt/provenance keys use `booth:<local-date>` so booth
+  work cannot reset a night's stall counter or appear as nightly work in reports.
+  No night schedule, photo choice, or content rule changes.
 - **GPU rules.** The image stage unloads every chat model but the embedding model (the worker
   needs the VRAM) and never renders while a live lease is held (his login, an offline raid, the
   voice service): it ends without a failure and the sets wait for the next night. A night with

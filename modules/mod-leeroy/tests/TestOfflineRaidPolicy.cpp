@@ -1,6 +1,7 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "LeeroyOfflineRaidPolicy.h"
 #include "LeeroyGuildCommands.h"
+#include "LeeroyRealmCleanup.h"
 #include "TestHarness.h"
 
 #include <limits>
@@ -185,4 +186,245 @@ LEEROY_TEST(OfflineRaid_RuntimeDisableAndDriverLossStopSetupAndRestarts)
     CHECK_EQ(OfflineRaidStopReason(true, false, false, false, 100, 100), "human_login");
     CHECK_EQ(OfflineRaidStopReason(false, true, true, true, 10, 100, false), "instance_strategies_off");
     CHECK_EQ(OfflineRaidStopReason(true, true, true, true, 10, 100, false), "human_login");
+}
+
+LEEROY_TEST(OfflineRaid_StrayRecallWaitsForGraceAndSafeOwnership)
+{
+    OfflineRecall recall;
+    CHECK(recall.Observe(false, true, 29999) == RecallAction::Wait);
+    CHECK(recall.Observe(false, false, 1) == RecallAction::Wait);
+    CHECK_EQ(recall.attempts, 0u);
+    // Unsafe means no mutation: combat, unknown encounters, foreign body/group,
+    // PvP, transfers, dead bodies or an unproven destination all use this path.
+    CHECK(recall.Observe(false, false, 60000) == RecallAction::Wait);
+    CHECK(recall.Observe(false, true, 0) == RecallAction::Summon);
+    CHECK_EQ(recall.attempts, 1u);
+}
+
+LEEROY_TEST(OfflineRaid_StrayRecallRequiresObservedArrivalAndBoundsRetries)
+{
+    OfflineRecall recall;
+    CHECK(recall.Observe(false, true, 30000) == RecallAction::Summon);
+    recall.pending = true; // TeleportTo accepted, but it has not arrived.
+    CHECK(recall.Observe(false, true, 59999) == RecallAction::Wait);
+    CHECK(recall.Observe(false, true, 1) == RecallAction::Summon);
+    CHECK_EQ(recall.attempts, 2u);
+    CHECK(recall.Observe(true, false, 0) == RecallAction::Arrived);
+    CHECK(recall.Observe(true, false, 0) == RecallAction::Wait);
+    CHECK_EQ(recall.absentMs, 0u);
+    CHECK_EQ(recall.attempts, 2u); // Returning does not grant another unlimited budget.
+    CHECK(recall.Observe(false, true, 30000) == RecallAction::Wait);
+    CHECK(recall.Observe(false, true, 30000) == RecallAction::Summon);
+    CHECK_EQ(recall.attempts, 3u);
+    CHECK(recall.Observe(false, true, std::numeric_limits<std::uint32_t>::max()) == RecallAction::Wait);
+}
+
+LEEROY_TEST(OfflineRaid_RefusedRecallCostsAnAttemptAndNeverReportsArrival)
+{
+    OfflineRecall recall;
+    for (unsigned i = 0; i < OfflineRecallAttempts; ++i)
+    {
+        CHECK(recall.Observe(false, true, OfflineRecallRetryMs) == RecallAction::Summon);
+        recall.pending = false; // A refused TeleportTo is not a completed recovery.
+    }
+    CHECK(recall.Observe(true, true, 1) == RecallAction::Wait);
+    CHECK(recall.Observe(false, true, OfflineRecallRetryMs) == RecallAction::Wait);
+}
+
+LEEROY_TEST(OfflineRaid_RecallDoesNotWeakenMinimumRosterOrLeaderStops)
+{
+    auto state = Base();
+    state.membersPresent = 9;
+    CHECK(Decide(state, limits).verdict == Verdict::Continue);
+    state.membersPresent = 10; // An observed arrival restores roster strength.
+    CHECK(Decide(state, limits).verdict == Verdict::Continue);
+    state.membersPresent = 7;
+    CHECK_EQ(Decide(state, limits).reason, "too_few");
+    state.membersPresent = 10;
+    state.leaderPresent = false;
+    CHECK_EQ(Decide(state, limits).reason, "leader_lost");
+}
+
+namespace
+{
+RecallQuiet QuietRaid()
+{
+    RecallQuiet quiet;
+    quiet.encounterKnown = quiet.driver = quiet.leaderAi = quiet.leaderMasterIsDriver = quiet.leaderAlive = true;
+    return quiet;
+}
+RecallBody SafeBody()
+{
+    RecallBody body;
+    body.inWorld = body.alive = body.difficultyMatches = body.destinationMatches = true;
+    return body;
+}
+bool Recallable(RecallQuiet const& quiet, RecallBody const& body, RecallPvp const& pvp = {}, bool owned = true)
+{
+    return RecallSafe(quiet, owned, body, [&pvp] { return pvp; });
+}
+}
+
+LEEROY_TEST(OfflineRaid_RecallSafeAdmitsOnlyAQuietOwnedFreeBody)
+{
+    CHECK(Recallable(QuietRaid(), SafeBody()));
+    CHECK(!Recallable(QuietRaid(), SafeBody(), {}, false)); // A body this job does not hold is never moved.
+    OfflineRecall recall;
+    CHECK(recall.Observe(false, Recallable(QuietRaid(), SafeBody()), OfflineRecallGraceMs) == RecallAction::Summon);
+}
+
+// Each quiet-raid condition on its own must refuse: removing any one from the policy fails here.
+LEEROY_TEST(OfflineRaid_RecallWaitsForEveryQuietRaidCondition)
+{
+    using Q = RecallQuiet;
+    for (auto required : {&Q::encounterKnown, &Q::driver, &Q::leaderAi, &Q::leaderMasterIsDriver, &Q::leaderAlive})
+    {
+        auto quiet = QuietRaid();
+        quiet.*required = false;
+        CHECK(!Recallable(quiet, SafeBody()));
+    }
+    for (auto blocking : {&Q::bossEngaged, &Q::realmGroup, &Q::leaderGhost, &Q::leaderCombat, &Q::leaderTransport,
+        &Q::leaderVehicle, &Q::memberCombat})
+    {
+        auto quiet = QuietRaid();
+        quiet.*blocking = true;
+        CHECK(!Recallable(quiet, SafeBody()));
+    }
+}
+
+// Combat, transfer, bind and dungeon checks on the stray itself, one at a time.
+LEEROY_TEST(OfflineRaid_RecallWaitsForEveryBodyCondition)
+{
+    using B = RecallBody;
+    for (auto required : {&B::inWorld, &B::alive, &B::difficultyMatches, &B::destinationMatches})
+    {
+        auto body = SafeBody();
+        body.*required = false;
+        CHECK(!Recallable(QuietRaid(), body));
+    }
+    for (auto blocking : {&B::teleporting, &B::ghost, &B::combat, &B::flight, &B::transport, &B::vehicle,
+        &B::pendingBind, &B::inDungeon})
+    {
+        auto body = SafeBody();
+        body.*blocking = true;
+        CHECK(!Recallable(QuietRaid(), body));
+    }
+}
+
+LEEROY_TEST(OfflineRaid_RecallWaitsForEveryPvpAndWintergraspExposure)
+{
+    for (auto busy : {&RecallPvp::duel, &RecallPvp::battleground, &RecallPvp::battlegroundQueue,
+        &RecallPvp::arenaObserved})
+    {
+        RecallPvp pvp;
+        pvp.*busy = true;
+        CHECK(RecallPvpBusy(pvp));
+        CHECK(!Recallable(QuietRaid(), SafeBody(), pvp));
+    }
+    using Facts = Leeroy::Realm::WintergraspMemberFacts;
+    for (auto member : {&Facts::foreignHistory, &Facts::inZone, &Facts::inBattlefieldGroup,
+        &Facts::queued, &Facts::invited, &Facts::inWar})
+    {
+        RecallPvp pvp;
+        pvp.wintergrasp.*member = true;
+        CHECK(RecallPvpBusy(pvp));
+        CHECK(!Recallable(QuietRaid(), SafeBody(), pvp));
+        OfflineRecall recall;
+        CHECK(recall.Observe(false, Recallable(QuietRaid(), SafeBody(), pvp), 30000) == RecallAction::Wait);
+        CHECK_EQ(recall.attempts, 0u);
+    }
+}
+
+// The battlefield and arena-observer lookups run last: never for a body in a dungeon,
+// not owned, unsafe, or while the raid is not quiet.
+LEEROY_TEST(OfflineRaid_RecallReadsPvpOnlyAfterCheaperChecksPass)
+{
+    int reads = 0;
+    auto reader = [&reads] { ++reads; return RecallPvp{}; };
+    auto dungeon = SafeBody();
+    dungeon.inDungeon = true;
+    CHECK(!RecallSafe(QuietRaid(), true, dungeon, reader));
+    CHECK(!RecallSafe(QuietRaid(), false, SafeBody(), reader));
+    auto loud = QuietRaid();
+    loud.memberCombat = true;
+    CHECK(!RecallSafe(loud, true, SafeBody(), reader));
+    auto fighting = SafeBody();
+    fighting.combat = true;
+    CHECK(!RecallSafe(QuietRaid(), true, fighting, reader));
+    CHECK_EQ(reads, 0);
+    CHECK(RecallSafe(QuietRaid(), true, SafeBody(), reader));
+    CHECK_EQ(reads, 1);
+}
+
+namespace
+{
+MasterFacts HeldMasterless()
+{
+    MasterFacts facts;
+    facts.driver = facts.assigned = facts.sameBody = facts.inJobGroup = facts.masterEmpty = true;
+    return facts;
+}
+}
+
+// 2026-11-07: 3112 and 251 were in the raid group with an empty master (stock
+// ResetAiAction), so teardown retained restore_ownership for both and never ended.
+LEEROY_TEST(OfflineRaid_MasterlessHeldMemberGetsTheDriverBack)
+{
+    CHECK(ReassertDriverMaster(HeldMasterless()));
+}
+
+LEEROY_TEST(OfflineRaid_MasterRepairNeverSeizesABodyThisJobDoesNotHold)
+{
+    using M = MasterFacts;
+    for (auto required : {&M::driver, &M::assigned, &M::sameBody, &M::inJobGroup, &M::masterEmpty})
+    {
+        auto facts = HeldMasterless();
+        facts.*required = false; // masterEmpty false: a foreign, non-empty master stays someone else's.
+        CHECK(!ReassertDriverMaster(facts));
+    }
+    for (auto blocking : {&M::released, &M::foreignLease, &M::masterIsDriver})
+    {
+        auto facts = HeldMasterless();
+        facts.*blocking = true; // A released master is teardown's own act; never undo it.
+        CHECK(!ReassertDriverMaster(facts));
+    }
+}
+
+LEEROY_TEST(OfflineRaid_RestartDropsAnAbsentStrayAfterGraceWhenEnoughRemain)
+{
+    CHECK(DecideRestartRoster(OfflineRestartAbsentMs, 1, 9, true, 8) == RestartRoster::DropAbsent);
+    CHECK(DecideRestartRoster(OfflineRestartAbsentMs, 2, 8, true, 8) == RestartRoster::DropAbsent);
+    CHECK(DecideRestartRoster(OfflineRestartAbsentMs - 1, 1, 9, true, 8) == RestartRoster::Wait);
+    CHECK(DecideRestartRoster(OfflineRestartAbsentMs, 0, 10, true, 8) == RestartRoster::Wait);
+}
+
+LEEROY_TEST(OfflineRaid_RestartKeepsTooFewAndLeaderRules)
+{
+    CHECK(DecideRestartRoster(OfflineRestartAbsentMs, 3, 7, true, 8) == RestartRoster::TooFew);
+    // The leader is never dropped: its own absence waits for the restart timeout.
+    CHECK(DecideRestartRoster(OfflineRestartAbsentMs, 1, 9, false, 8) == RestartRoster::Wait);
+    CHECK(DecideRestartRoster(OfflineRestartAbsentMs * 10, 1, 9, false, 8) == RestartRoster::Wait);
+}
+
+LEEROY_TEST(OfflineRaid_LostJournalFreeMemberStopsBlockingAfterCleanupFails)
+{
+    CHECK(AbandonLostMember(false, true, false, OfflineCleanupFailMs));
+    CHECK(!AbandonLostMember(false, true, false, OfflineCleanupFailMs - 1));
+    CHECK(!AbandonLostMember(false, false, false, OfflineCleanupFailMs)); // Still ours: clean it up.
+    CHECK(!AbandonLostMember(false, true, true, OfflineCleanupFailMs * 100)); // Its journal needs its own restore.
+    CHECK(!AbandonLostMember(true, true, false, OfflineCleanupFailMs * 100)); // Benchmarks keep strict recovery.
+}
+
+LEEROY_TEST(OfflineRaid_StuckSlotReleasesTenMinutesAfterFailureWhenNothingIsHeld)
+{
+    CHECK(DecideSlotRelease(false, true, OfflineSlotReleaseMs, 0) == SlotRelease::Release);
+    CHECK(DecideSlotRelease(false, true, OfflineSlotReleaseMs - 1, 0) == SlotRelease::Wait);
+    CHECK(DecideSlotRelease(false, false, OfflineSlotReleaseMs * 10, 0) == SlotRelease::Keep); // No failure report yet.
+}
+
+LEEROY_TEST(OfflineRaid_StuckSlotStaysWhileAMemberIsProvablyHeld)
+{
+    CHECK(DecideSlotRelease(false, true, OfflineSlotReleaseMs, 1) == SlotRelease::Keep);
+    CHECK(DecideSlotRelease(false, true, std::numeric_limits<std::uint32_t>::max(), 3) == SlotRelease::Keep);
+    CHECK(DecideSlotRelease(true, true, OfflineSlotReleaseMs * 10, 0) == SlotRelease::Keep); // Never a benchmark.
 }
