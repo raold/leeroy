@@ -39,6 +39,7 @@ from . import files
 from .config import SelfieCfg, worker_command, worker_env
 from .prompt import LUST_HELD, LUST_NAMED, renderable
 from .scene import build_scene_prompt, build_tile_prompt, ref_crop, scene_from, scene_renderable
+from .scene_choices import RECIPE
 from .scenes import GUILD_MIN
 from .slot import SetRefused, render_slot
 from .snaps import SnapRow, expire, looks_hash, mark_rendered, planned
@@ -155,7 +156,11 @@ def _ended(ctx: "NightContext", row: SnapRow) -> str | None:
 
 
 def _held(p: Persona, row: SnapRow) -> str | None:
-    why = scene_renderable(p, scene_from(row.scene))
+    recipe = row.scene.get("recipe")
+    if type(recipe) is not int or recipe != RECIPE:
+        return "legacy_scene_schema"  # preserve the row and files; never render old free prose
+    scene = scene_from(row.scene)
+    why = scene_renderable(p, scene)
     return None if why is None else _HELD.get(why, why)
 
 
@@ -314,7 +319,7 @@ async def _guild(ctx: "NightContext", r: SnapRenderer, row: SnapRow, members, be
     part = files.guild_tiles(data, row.id).absolute()
     _clear(part)  # what an earlier, unfinished render of this photo left
     part.mkdir(parents=True)
-    made, refused = [], False  # (guid, pick, tile, tries, nsfw)
+    made, refused, too_long = [], False, False  # (guid, pick, tile, tries, nsfw)
     for i, guid, pick, p in members:
         if _pick_of(ctx.store, guid) != pick:  # moved since the stage began: left out
             continue
@@ -328,10 +333,17 @@ async def _guild(ctx: "NightContext", r: SnapRenderer, row: SnapRow, members, be
         except SetRefused:
             refused = True
             continue
+        except WorkerError as e:
+            if e.reason != "prompt_too_long":
+                raise
+            too_long = True
+            log("selfies_tile_skipped", night=ctx.night, snap=row.id, guid=guid, code=e.reason)
+            continue
         made.append((guid, pick, tile, tries, got.nsfw))
     made = [m for m in made if _pick_of(ctx.store, m[0]) == m[1]]
     if len(made) < GUILD_MIN:
-        return "expired" if _expiry(ctx, row, "flagged" if refused else "photo_changed") \
+        return "expired" if _expiry(ctx, row, "flagged" if refused else "missing" if too_long
+                                        else "photo_changed") \
             else "failed"
     r._leases()
     # A grid on disk never makes a photo ready: only mark_rendered does, so a held guild photo

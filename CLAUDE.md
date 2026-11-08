@@ -1286,9 +1286,18 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
     measures its VRAM before `identity_min_free_gib` is trusted. Doctor notes it as not
     fetched with snaps off and FAILs with snaps on. Situational photos are 832 x 1216 portraits
     (thumbnail 384 px); the NSFW gate and three seeds per slot are P2's.
-  - *Stages.* `scenes` (reflection model, after `life`) plans: the reflection model writes a
-    scene for a member from tonight's life beat, her card birthday tomorrow or an ordinary day,
-    and may decline; the screen (`selfies/scene.py`) refuses looks changes, other people,
+  - *Stages.* `scenes` (reflection model, after `life`) plans: the reflection model chooses
+    enums for a member from tonight's life beat, her card birthday tomorrow or an ordinary day,
+    and may decline. `scene_choices.py` composes 30 activities, 20 places, time, framing,
+    expression, clothed outfit and a prop (including `none`). Activity/place and prop/activity
+    pairings refuse incoherent picks. Off-list replies get one schema retry, then no scene.
+    Lust settings/outfits/colours/expressions reuse the profile lists and their pairings;
+    situational settings exclude the hot tub, crowd and hallway mirror. New stored scenes carry
+    `recipe: 1`. Pre-enum pending scenes (or an unknown recipe) stay planned with the held code
+    `legacy_scene_schema`, use no render/GPU slot, and expire normally; their rows and files are
+    preserved. No free-prose fallback approves them. Already rendered photos are unchanged.
+    The screen (`selfies/scene.py`) remains a second defence against
+    looks changes, other people,
     names, likeness, era, minors, explicit wear and undressing or bathing contexts, and a lust
     woman's scene reuses the profile photo's enum picks. `snaps` (image model, after `selfies`,
     `wants_gpu`) renders what is planned, each with the identity reference, under P2's GPU
@@ -1307,7 +1316,11 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
     photos stay on disk, unserved.
   - *Guild photo.* The night after the newest online raid with a kill (it ended within 12 hours
     before the night began), at most one a week, up to 16 of that raid's members with a chosen
-    photo (at least 3) are each rendered alone at their desk as a video-call tile (1024 px),
+    photo (at least 3) are each rendered alone at their desk in a candid tile (1024 px),
+    with a monitor displaying a landscape game map. Own looks and monitor content stay at
+    priority 0, with required negatives for duplicate faces and faces on screens. Each tile
+    already has its own GUID/slot/attempt seed and immutable reference; crop and adapter scale
+    are unchanged pending GPU evidence. Overlong required identity text refuses the render.
     then composited at 512 px with 8 px gutters in a grid by tile count: 1 is 1x1, 2 is 2x1, up to 4 is
     2x2, up to 6 is 3x2, up to 9 is 3x3, up to 12 is 4x3, up to 16 is 4x4. He is never in it.
   - *Storage.* Rows in `selfie_snap` (migration 0022). Files: `selfies/<guid>/snaps/<id>.jpg`
@@ -1317,7 +1330,14 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
     expired_week) and the `scenes`/`snaps` stage records. `selfies try --snaps [--guid N |
     --limit N] [--guild]` (mind stopped) renders one situational photo each with the member's
     face, and with `--guild` one grid, into `scratch\selfies-try\snaps\`; members with no
-    chosen photo (`no_photo`) or no photo kind (`no_kind`) are skipped and counted. The mind's
+    chosen photo (`no_photo`) or no photo kind (`no_kind`) are skipped and counted. Readiness
+    prints per-GUID declined/refused/rendered status, refusal codes, and NSFW score (unavailable
+    before rendering; the last score after all seeds are flagged), also in JSON `results`.
+    `guild_similarity` reports an uncalibrated head-crop embedding cosine maximum, mean and
+    closest GUID pair. The worker reuses its loaded IP-Adapter image encoder, never downloads
+    a model; missing/failed encoders produce a skip code. This is a comparative tile diagnostic,
+    not a face detector, calibrated threshold or identity proof. The operator checks distinct
+    likenesses and single faces on actual GPU images before enabling snaps. The mind's
     doctor reports the identity adapter's state beside the worker's checks.
 - **Content limits.** Adults only, clothed and non-explicit, no real person's likeness, and no
   person's name ever reaches a prompt. Logs hold ids, counts, scores and timings, never a prompt
