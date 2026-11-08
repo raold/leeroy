@@ -26,6 +26,9 @@ struct RealmStep
     // Original account/guild/player/AI/session and lifecycle generation remain
     // immutable. Without an explicit scope, only the pre-step scope is allowed.
     std::vector<BodyScope> expectedScopes{};
+    // Explicit executor proof covering this member's entire step, including
+    // earlier Pending ticks. Refused alone only promises no outstanding work.
+    bool unchanged = false;
 };
 
 // The native adapter owns the lock represented by this guard. It must hold its

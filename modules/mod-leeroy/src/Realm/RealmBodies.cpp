@@ -38,6 +38,7 @@ using Json = nlohmann::json;
 constexpr float Pi = 3.14159265358979323846f;
 constexpr std::uint64_t OperationWaitMs = 60000;
 RealmStep Refuse(std::string why) { return {StepState::Refused, std::move(why)}; }
+RealmStep UnchangedRefusal(std::string why) { return {StepState::Refused, std::move(why), 0, {}, true}; }
 RealmStep Unknown(std::string why) { return {StepState::Unknown, std::move(why)}; }
 std::uint64_t GroupId(Player* player)
 {
@@ -275,20 +276,20 @@ std::vector<Item*> BagItems(Player* player)
 }
 RealmStep Rearm(Queued& entry, std::uint32_t guid)
 {
-    if (auto why = Eligible(entry, guid, Purpose::Rearm); !why.empty()) return Refuse(why);
+    if (auto why = Eligible(entry, guid, Purpose::Rearm); !why.empty()) return UnchangedRefusal(why);
     auto* bot = FindOnline(guid);
     auto const* record = RealmModule::Instance().Weapons(guid);
     // Records live in memory: a worldserver start empties them until the 60 s poll finds the body
     // online and free. Record an armed body now, as that poll would; it then has nothing to put back.
     if (!record && RealmModule::Instance().RecordWeapons(guid, entry.id)) record = RealmModule::Instance().Weapons(guid);
-    if (!record) return Refuse("weapon_record_unavailable");
+    if (!record) return UnchangedRefusal("weapon_record_unavailable");
     auto const saved = *record;
     std::set<std::uint32_t> inventory;
     for (auto* item : BagItems(bot)) inventory.insert(item->GetGUID().GetCounter());
     auto const initial = ReadWeapons(bot);
     if (((!initial.mainHand || initial.mainIsPole) && saved.mainHand && !inventory.contains(saved.mainHand))
         || (!initial.offHand && saved.offHand && !inventory.contains(saved.offHand))
-        || (!initial.ranged && saved.ranged && !inventory.contains(saved.ranged))) return Refuse("recorded_weapon_unavailable");
+        || (!initial.ranged && saved.ranged && !inventory.contains(saved.ranged))) return UnchangedRefusal("recorded_weapon_unavailable");
     auto const steps = PlanRearm(saved, initial, inventory);
     std::uint64_t changed = 0;
     for (auto const& step : steps)
@@ -299,18 +300,18 @@ RealmStep Rearm(Queued& entry, std::uint32_t guid)
         auto* equipped = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
         if (!item || item->IsEquipped() || (item->GetTemplate()->Class == ITEM_CLASS_WEAPON
             && item->GetTemplate()->SubClass == ITEM_SUBCLASS_WEAPON_FISHING_POLE))
-            return changed ? Unknown("recorded_weapon_changed") : Refuse("recorded_weapon_unavailable");
+            return changed ? Unknown("recorded_weapon_changed") : UnchangedRefusal("recorded_weapon_unavailable");
         if (equipped && !(slot == EQUIPMENT_SLOT_MAINHAND && ReadWeapons(bot).mainIsPole))
-            return changed ? Unknown("equipment_changed") : Refuse("equipment_changed");
+            return changed ? Unknown("equipment_changed") : UnchangedRefusal("equipment_changed");
         uint16 destination = 0;
         if (bot->CanEquipItem(slot, destination, item, true) != EQUIP_ERR_OK
             || destination != static_cast<uint16>((INVENTORY_SLOT_BAG_0 << 8) | slot))
-            return changed ? Unknown("cannot_equip_recorded_weapon") : Refuse("cannot_equip_recorded_weapon");
+            return changed ? Unknown("cannot_equip_recorded_weapon") : UnchangedRefusal("cannot_equip_recorded_weapon");
         // A two-handed main must never evict a real offhand as a side effect.
         auto before = ReadWeapons(bot);
         if (slot == EQUIPMENT_SLOT_MAINHAND && before.offHand
             && item->GetTemplate()->InventoryType == INVTYPE_2HWEAPON)
-            return changed ? Unknown("offhand_occupied") : Refuse("offhand_occupied");
+            return changed ? Unknown("offhand_occupied") : UnchangedRefusal("offhand_occupied");
         bot->SwapItem(item->GetPos(), destination);
         auto after = ReadWeapons(bot);
         if (!bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot)
@@ -322,10 +323,12 @@ RealmStep Rearm(Queued& entry, std::uint32_t guid)
     }
     auto now = ReadWeapons(bot);
     if ((!now.mainHand || now.mainIsPole) && saved.mainHand && !inventory.contains(saved.mainHand))
-        return changed ? Unknown("recorded_weapon_unavailable") : Refuse("recorded_weapon_unavailable");
+        return changed ? Unknown("recorded_weapon_unavailable") : UnchangedRefusal("recorded_weapon_unavailable");
     if (!RealmModule::Instance().RecordWeapons(guid, entry.id))
-        return changed ? Unknown("weapon_record_unproved") : Refuse("weapon_record_unavailable");
-    return Done(entry, changed);
+        return changed ? Unknown("weapon_record_unproved") : UnchangedRefusal("weapon_record_unavailable");
+    auto result = Done(entry, changed);
+    result.unchanged = changed == 0;
+    return result;
 }
 
 RealmStep Equip(Queued& entry, std::uint32_t guid)
@@ -651,16 +654,16 @@ RealmStep LeavePvp(Queued& entry, std::uint32_t guid)
         if (auto why = module.MutationReason(guid, entry.id); !why.empty()) return Unproved(entry.payload.at("step"), why);
     }
     else if (auto why = Eligible(entry, guid, Purpose::LeavePvp); !why.empty())
-        return entry.payload.value("cleanup_mutated", false) ? Unknown(why) : Refuse(why);
+        return entry.payload.value("cleanup_mutated", false) ? Unknown(why) : UnchangedRefusal(why);
     auto* bot = ObjectAccessor::FindConnectedPlayer(PlayerGuid(guid));
     if (!bot) return started ? Unproved(entry.payload.at("step"), "leave_identity")
-        : (entry.payload.value("cleanup_mutated", false) ? Unknown("leave_identity") : Refuse("offline"));
+        : (entry.payload.value("cleanup_mutated", false) ? Unknown("leave_identity") : UnchangedRefusal("offline"));
     if (!started) entry.payload["step"] = Json{{"at", NowMs()}, {"changed", false}, {"stage", "queues"}};
     auto& state = entry.payload["step"];
     auto fail = [&](std::string why)
     {
         return state.at("changed").get<bool>() || entry.payload.value("cleanup_mutated", false)
-            ? Unproved(state, std::move(why)) : Refuse(std::move(why));
+            ? Unproved(state, std::move(why)) : UnchangedRefusal(std::move(why));
     };
     if (Expired(state)) return fail("leave_cleanup_unproved");
     if (auto why = OrdinaryCleanupReason(entry); !why.empty()) return fail(why);
@@ -765,7 +768,10 @@ RealmStep LeavePvp(Queued& entry, std::uint32_t guid)
     if (auto why = VerifyCleanupReceipts(entry); !why.empty()) return Unproved(state, why);
     auto const changed = entry.payload.value("cleanup_changed_guids", Json::array());
     bool const affected = std::find(changed.begin(), changed.end(), Json(guid)) != changed.end();
-    return Done(entry, state.at("changed").get<bool>() || affected ? 1 : 0);
+    bool const bodyChanged = state.at("changed").get<bool>() || affected;
+    auto result = Done(entry, bodyChanged ? 1 : 0);
+    result.unchanged = !bodyChanged && !entry.payload.value("cleanup_mutated", false);
+    return result;
 }
 
 template<class Parse, class Payload>

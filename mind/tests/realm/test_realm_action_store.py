@@ -563,7 +563,7 @@ def test_step_refusals_are_native_refusals_whose_reservation_is_released():
     for kind, signature in executors.items():
         step = body(bodies, signature)
         assert re.search(r"if \(auto why = Eligible\(entry, guid, Purpose::\w+(, true)?\); !why\.empty\(\)\) "
-                         r"return Refuse\(why\);", step.split("\n")[2])
+                         r"return (?:UnchangedRefusal|Refuse)\(why\);", step.split("\n")[2])
         assert step.count("Eligible(") == 1
         for forbidden in ("Pending", "Unproved", "Unknown(why", "Declare", "Charge", "continuation", "MutationReason"):
             assert forbidden not in step
@@ -573,8 +573,8 @@ def test_step_refusals_are_native_refusals_whose_reservation_is_released():
     # Tick: a fence before the step and a Refused step both release every holder of the command,
     # unless its body is pending, it declared a scope, joined a guild or holds a continuation.
     tick = body(module, "void RealmModule::Tick(")
-    assert "if (!reason.empty()) return finish(reason, pending);" in tick
-    assert 'return finish(result.reason.empty() ? "refused" : result.reason, false, true);' in tick
+    assert "if (!reason.empty()) return finish(reason, pending, false, !pending);" in tick
+    assert 'return finish(result.reason.empty() ? "refused" : result.reason, false, true, result.unchanged);' in tick
     assert "if (retain) reservation.retained = true;\n            else _state->Release(entry.id);" in tick
     assert "if (reservation.guildJoinAttempts.empty()) return true;" in tick
 
@@ -604,14 +604,14 @@ def test_a_kind_step_refusal_is_said_only_by_its_executor_and_only_as_a_refuse_b
             at = 0
             while (at := step.find(quoted, at + 1)) != -1:
                 line = step[step.rfind("\n", 0, at) + 1:step.find("\n", at)].strip()
-                assert f"Refuse({quoted})" in line
+                assert f"UnchangedRefusal({quoted})" in line
                 assert at < first_swap or re.fullmatch(
-                    r'return changed \? Unknown\("(?!' + reason + r'")[a-z_]+"\) : Refuse\(' + quoted + r'\);', line)
+                    r'return changed \? Unknown\("(?!' + reason + r'")[a-z_]+"\) : UnchangedRefusal\(' + quoted + r'\);', line)
     # Before refusing, a rearm records an armed body with no record (a worldserver start empties
     # them): that writes native's record alone, never the body, so the Refuse still precedes any change.
     rearm = body(bodies, "RealmStep Rearm(")
     assert rearm.index("RealmModule::Instance().RecordWeapons(guid, entry.id)) record =") \
-        < rearm.index('if (!record) return Refuse("weapon_record_unavailable");') < rearm.index("SwapItem(")
+        < rearm.index('if (!record) return UnchangedRefusal("weapon_record_unavailable");') < rearm.index("SwapItem(")
     record = body((src / "Realm/RealmModule.cpp").read_text(encoding="utf-8"), "bool RealmModule::RecordWeapons(")
     assert "_state->weapons[guid] = {now.mainHand, now.offHand, now.ranged};" in record
     assert not re.search(r"Swap|Equip|Store|Destroy|Remove|Teleport|->Set", record)

@@ -198,6 +198,8 @@ struct RealmJob
     std::uint32_t guid = 0;
     std::uint64_t value = 0;
     std::string pvpOwner{};
+    // Absent means unknown. False proves the entire failed job changed nobody.
+    std::optional<bool> changed{};
 };
 nlohmann::json MakeRealmJob(RealmJob const&);
 // Body only; the drain supplies this proof's already captured publishedAtMs to

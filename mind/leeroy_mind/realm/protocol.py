@@ -484,6 +484,7 @@ class RealmJob:
     guid: int
     value: int
     pvp_owner: str = ""
+    changed: bool | None = None  # False is native proof for the whole failed job.
 
     def __post_init__(self):
         if (type(self.ts) is not int or not 0 <= self.ts <= 0x7FFFFFFFFFFFFFFF
@@ -491,7 +492,8 @@ class RealmJob:
                 or self.state not in {"done", "failed"} or type(self.reason) is not str
                 or type(self.guid) is not int or not 0 <= self.guid <= 0xFFFFFFFF
                 or type(self.value) is not int or not 0 <= self.value <= 0xFFFFFFFFFFFFFFFF
-                or (self.pvp_owner != "" and not _token(self.pvp_owner))):
+                or (self.pvp_owner != "" and not _token(self.pvp_owner))
+                or self.changed is not None and type(self.changed) is not bool):
             raise ValueError("invalid Realm job receipt")
 
 
