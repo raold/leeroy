@@ -14,7 +14,7 @@ import math
 import uuid
 
 from .action_policy import classify, integer, members, text, U64
-from .action_store import ActionCapacity, ActionSpec, TERMINAL
+from .action_store import ActionCapacity, ActionSpec, TERMINAL, wg_refusal_guids
 from .protocol import GetRealmPvp, LeavePvp, Rearm, RealmActors
 
 log = logging.getLogger(__name__)
@@ -111,9 +111,12 @@ class ActionQueue:
         if not scope: return False
         for old in self.store.records():
             failed_at = json.loads(old.evidence).get("failed_at")
+            # A leave native refused whole for some members' Wintergrasp state changed nobody:
+            # only the members it names are backed off.
+            failed = set(wg_refusal_guids(old.result_reason) or old.reserved_manifest)
             if (old.role == "root" and old.owner == owner and old.kind == kind
                     and old.result_ok is False and failed_at is not None and now < failed_at + 600
-                    and set(old.reserved_manifest) & set(scope)):
+                    and failed & set(scope)):
                 return True
         return False
 

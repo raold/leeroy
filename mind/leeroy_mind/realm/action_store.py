@@ -54,10 +54,23 @@ STEP_REFUSAL_KINDS = frozenset({"rearm", "rpg_status", "equip", "set_profession"
 # empties them until the 60 s poll finds the body online and free. After a swap it says
 # weapon_record_unproved instead, which stays unknown.
 KIND_STEP_REFUSALS = {"rearm": frozenset({"weapon_record_unavailable"})}
-# A refusal only one kind makes at its ack. A leave_pvp with a member in Wintergrasp is refused whole
-# there (RealmCleanup.cpp LeavePvpAckReason), before any body is reserved or moved. The same reason
-# from its job, after earlier members may have changed, stays unknown.
-KIND_ACK_REFUSALS = {"leave_pvp": frozenset({"wg_private_state_unavailable"})}
+# A leave_pvp with members in a Wintergrasp state native cannot prove restored is refused whole at
+# its ack (LeavePvpAckError), before any body is reserved or moved, and the error names them:
+# "wg_private_state_unavailable:301,302". It is accepted only when every named guid is in the root's
+# manifest. The same reason from its job, after earlier members may have changed, stays unknown.
+WG_REFUSAL = "wg_private_state_unavailable"
+
+
+def wg_refusal_guids(error, manifest=None):
+    """The guids a Wintergrasp ack refusal names, or None when it is not one (or names a guid
+    outside the manifest, when one is given)."""
+    reason, _, rest = error.partition(":")
+    if reason != WG_REFUSAL or re.fullmatch(r"[0-9]{1,10}(,[0-9]{1,10}){0,23}", rest) is None: return None
+    named = tuple(int(g) for g in rest.split(","))
+    if len(set(named)) != len(named) or manifest is not None and not set(named) <= set(manifest): return None
+    return named
+
+
 STEP_REFUSED = "step_refused"
 ABANDONED = "abandoned"
 ABANDON_RECEIPT = "realm:action:abandoned:"
@@ -436,6 +449,11 @@ class ActionStore:
                 native = ev.get("job", {}).get("reason") or ev.get("ack", {}).get("error") or "none"
                 log.warning("realm_action_%s id=%s kind=%s reason=%s native=%s members=%d", r.state, r.command_id,
                             r.kind, r.result_reason or r.send_error or "none", native, len(r.reserved_manifest))
+        if r.role == "root" and r.kind == "leave_pvp" and r.result_reason.startswith(WG_REFUSAL + ":"):
+            before = self.conn.execute("SELECT state FROM realm_action WHERE seq=?", (r.seq,)).fetchone()
+            if before is not None and before[0] != r.state:
+                log.warning("realm_leave_wg_refused id=%s kind=%s reason=%s named=%d members=%d", r.command_id, r.kind,
+                            WG_REFUSAL, len(wg_refusal_guids(r.result_reason) or ()), len(r.reserved_manifest))
         values = asdict(r)
         values["reserved_manifest"] = document(list(r.reserved_manifest))
         values["native_manifest"] = None if r.native_manifest is None else document(list(r.native_manifest))
@@ -532,13 +550,15 @@ class ActionStore:
             if positive: return self._conflict(r, ev, now)
             error = ack["error"]
             refused = (r.policy in {"ordinary", "wg"} and error in REFUSALS
-                       or r.policy == "ordinary" and error in KIND_ACK_REFUSALS.get(r.kind, ())
+                       or r.policy == "ordinary" and r.kind == "leave_pvp" and wg_refusal_guids(error, r.reserved_manifest)
                        or r.kind == "guild_grow" and _grow_refusal(error, r.reserved_manifest)
                        or r.policy == "wg" and error in {"no_wintergrasp", "no_online_members"}
                        or r.policy == "defaults" and (error in {"disabled", "busy", "busy:realm_owner"}
                            or error in {f"not_cast:{g}" for g in r.reserved_manifest})
                        or r.policy in {"ack", "result"} and error == "realm_off")
             if "bot" in ev or job or "origin_failure" in ev: refused = False
+            if refused and r.kind == "leave_pvp" and error.startswith(WG_REFUSAL):
+                return result(False, error, "completed")  # the named members, for the recall to leave out
             return result(False, "refused" if refused else "unknown", "completed" if refused else "unknown")
         if r.policy == "ack" and ack: return result(True)
         if r.policy == "wg":

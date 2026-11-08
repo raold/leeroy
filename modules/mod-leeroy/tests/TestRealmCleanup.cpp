@@ -207,3 +207,26 @@ LEEROY_TEST(RealmCleanup_AnyWintergraspStateRefusesTheLeaveWhole)
         CHECK_EQ(WintergraspPrivateReason(facts), std::string(reason));
     }
 }
+
+LEEROY_TEST(RealmCleanup_LeavePvpAckNamesTheWintergraspMembers)
+{
+    WintergraspMemberFacts clean, tainted;
+    tainted.foreignHistory = true;
+    CHECK(LeavePvpAckError({}).empty());
+    CHECK(LeavePvpAckError({{301, clean}, {302, clean}}).empty());
+    CHECK_EQ(LeavePvpAckError({{301, clean}, {302, tainted}, {303, clean}, {304, tainted}}),
+        std::string("wg_private_state_unavailable:302,304"));
+    std::vector<std::pair<std::uint32_t, WintergraspMemberFacts>> many;
+    for (std::uint32_t guid = 1000; guid < 1100; ++guid) many.emplace_back(guid, tainted);
+    auto const error = LeavePvpAckError(many);
+    CHECK(error.size() < 256);
+    CHECK(error.rfind("wg_private_state_unavailable:1000,1001,", 0) == 0);
+    CHECK(error.find("1023") != std::string::npos && error.find("1024") == std::string::npos);
+}
+
+LEEROY_TEST(RealmCleanup_OnlyAnOrdinaryLeaveIsFencedAtItsAck)
+{
+    CHECK(FencesLeavePvpAck("leave_pvp", ""));
+    CHECK(!FencesLeavePvpAck("leave_pvp", "token"));
+    CHECK(!FencesLeavePvpAck("rearm", ""));
+}

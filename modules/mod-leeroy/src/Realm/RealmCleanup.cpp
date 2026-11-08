@@ -209,10 +209,11 @@ CleanupReadback ReadLeftMembers(Queued const& entry, Json const& receipt)
 std::string LeavePvpAckReason(Queued const& entry)
 {
     auto* field = sBattlefieldMgr->GetBattlefieldToZoneId(4197);
+    std::vector<std::pair<std::uint32_t, WintergraspMemberFacts>> members;
     for (auto guid : entry.guids)
         if (auto* player = ObjectAccessor::FindConnectedPlayer(PlayerGuid(guid)); player && player->GetSession())
-            if (auto why = WintergraspPrivateReason(WintergraspFacts(player, field)); !why.empty()) return why;
-    return "";
+            members.emplace_back(guid, WintergraspFacts(player, field));
+    return LeavePvpAckError(members);
 }
 
 std::string OrdinaryCleanupReason(Queued const& entry)

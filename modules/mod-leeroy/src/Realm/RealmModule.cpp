@@ -3,6 +3,8 @@
 #include "RealmOwnership.h"
 #include "RealmPorts.h"
 #include "RealmGuild.h"
+#include "RealmCleanup.h"
+#include "LeeroyRealmCleanup.h"
 #include "LeeroyRealmGuild.h"
 #include "Log.h"
 #include <algorithm>
@@ -649,6 +651,10 @@ bool RealmModule::AcceptDomain(Queued entry, std::string& error)
     State::Reservation reservation;
     reservation.epoch = _state->EpochFor(entry.domain);
     reservation.admitted = entry;
+    // Refused whole, naming the members, before any body is reserved or moved: the mind then knows
+    // nothing changed. After realm_off, the exact-retry and receipt checks above, so those answer first.
+    if (FencesLeavePvpAck(entry.kind, entry.payload.is_object() ? entry.payload.value("pvp_owner", std::string{}) : std::string{}))
+        if (error = LeavePvpAckReason(entry); !error.empty()) return false;
     for (auto guid : entry.guids)
     {
         if (!(error = _state->executors.at(entry.kind).admit(entry, guid)).empty())

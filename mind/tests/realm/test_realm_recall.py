@@ -183,6 +183,38 @@ def test_leave_native_refuses_for_a_fenced_body_holds_nobody_and_defaults_follow
     run(scenario())
 
 
+def test_a_leave_native_refused_for_a_wintergrasp_member_recalls_the_others(pipeline):
+    async def scenario():
+        async with pipeline:
+            h = pipeline
+            h.cast(101, 102, 103)
+            send = h.app.send
+            refused = []
+
+            async def answer(cmd, *, preserve_id=False):
+                if type(cmd) is not p.LeavePvp or 102 not in cmd.guids:
+                    return await send(cmd, preserve_id=preserve_id)
+                h.app.sent.append(cmd)
+                refused.append(cmd)
+                return Ack(0, cmd.id, False, "wg_private_state_unavailable:102")  # 102 flew through Wintergrasp
+            h.app.send = answer
+            h.realm.recall.on_login(h.clock.now())
+            await h.cycle()
+            h.realm.recall.tick(h.clock.now())
+            await h.cycle()
+            first, = refused
+            record = h.realm.action_store.get(first.id)
+            assert (record.state, record.result_ok) == ("completed", False)
+            leaves = [c for c in h.app.sent if type(c) is p.LeavePvp]
+            assert leaves[0].guids == (101, 102, 103) and leaves[1].guids == (101, 103)
+            assert leaves[1].id != first.id
+            await h.result(leaves[1])
+            await h.cycle(1.01)
+            rearm = h.app.sent[-1]
+            assert type(rearm) is p.Rearm and rearm.guids == (101, 103)
+    run(scenario())
+
+
 @pytest.mark.parametrize("refusal", ["step", "ack"])
 def test_a_rearm_native_refused_holds_nobody_and_its_defaults_follow(pipeline, refusal):
     async def scenario():

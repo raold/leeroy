@@ -12,7 +12,7 @@ from leeroy_mind.bodies import BodyEvidenceUnavailable
 from leeroy_mind.guild.protocol import BotDo
 
 from .actions import ActionRejected
-from .action_store import STEP_REFUSED, ActionCapacity
+from .action_store import STEP_REFUSED, ActionCapacity, wg_refusal_guids
 from .protocol import LeavePvp, Rearm
 
 log = logging.getLogger(__name__)
@@ -283,7 +283,7 @@ class Recall:
         past = REARM_REFUSED if kind == "rearm" else frozenset()
         try:
             self.queue.submit(cmd, owner=chain.owner,
-                              on_done=lambda ok, reason, value: self._advance(chain, ok or reason in past))
+                              on_done=lambda ok, reason, value: self._done(chain, kind, ok, reason, past))
             if not self._current(chain):
                 # Queue enrollment has its own rank refresh. If that callback
                 # invalidated us, cancel the stale prepared entry immediately;
@@ -295,6 +295,21 @@ class Recall:
                 chain.waiting = True
         except ActionRejected:
             self._finish(chain)
+
+    def _done(self, chain, kind, ok, reason, past):
+        named = wg_refusal_guids(reason) if kind == "leave" and not ok else None
+        if not named:
+            self._advance(chain, ok or reason in past)
+            return
+        # Native refused the whole leave at its ack, before changing anyone, because these members
+        # hold Wintergrasp state it cannot prove restored. Nothing is held: leave them for a later
+        # pass and recall the others as a new command.
+        current = self._current(chain)
+        self._finish(chain)
+        rest = tuple(g for g in chain.members if g not in named)
+        log.info("realm_recall_wg_left_out named=%d rest=%d", len(named), len(rest))
+        if current and rest:
+            self._start(rest, chain.mode)
 
     def _start(self, members, mode):
         members = tuple(members)

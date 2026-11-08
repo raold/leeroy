@@ -3,6 +3,22 @@
 
 namespace Leeroy::Realm
 {
+bool FencesLeavePvpAck(std::string const& kind, std::string const& pvpOwner)
+{
+    return kind == "leave_pvp" && pvpOwner.empty();
+}
+std::string LeavePvpAckError(std::vector<std::pair<std::uint32_t, WintergraspMemberFacts>> const& members)
+{
+    constexpr std::size_t MaxNamed = 24;
+    std::string named;
+    std::size_t count = 0;
+    for (auto const& [guid, facts] : members)
+    {
+        if (WintergraspPrivateReason(facts).empty()) continue;
+        if (count++ < MaxNamed) named += (named.empty() ? "" : ",") + std::to_string(guid);
+    }
+    return count ? "wg_private_state_unavailable:" + named : "";
+}
 std::string WintergraspPrivateReason(WintergraspMemberFacts const& facts)
 {
     return facts.foreignHistory || facts.inZone || facts.inBattlefieldGroup || facts.queued || facts.invited

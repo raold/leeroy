@@ -781,12 +781,6 @@ void QueueHandler(char const* kind, Parse parse, Payload payload, RealmModule::E
         Queued entry;
         entry.id = message.at("id").get<std::string>(); entry.kind = kind;
         payload(*command, entry);
-        // Refused whole before any body is reserved or moved: the mind then knows nothing changed.
-        // A token cleanup owns its own Wintergrasp state and is not fenced here.
-        // An exact retry of a command already admitted is never refused afterwards.
-        if (entry.kind == "leave_pvp" && entry.payload.value("pvp_owner", std::string{}).empty()
-            && RealmModule::Instance().Holder(entry.guids.front()) != entry.id)
-            if (auto why = LeavePvpAckReason(entry); !why.empty()) return {false, why};
         if (!RealmModule::Instance().Accept(std::move(entry), error)) return {false, error};
         return {true, ""};
     });
