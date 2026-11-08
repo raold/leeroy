@@ -15,6 +15,9 @@ test("badge distinguishes unknown from zero and shows both counts", () => {
   assert.equal(badge({counts: {fails: 2, held_members: 5}}).text, "2 FAIL · 5 held");
   assert.equal(badge({counts: {fails: 0, held_members: 0}}).text, "0 FAIL · 0 held");
   assert.equal(badge({}).text, "? FAIL · ? held");
+  assert.equal(badge({counts: {fails: 0, held_members: 0}}).show, false);
+  assert.equal(badge({counts: {fails: 0, held_members: 3}}).show, true);
+  assert.equal(badge({}).show, false);
   assert.equal(badge({counts: {fails: NaN, held_members: -1}}).held, null);
 });
 test("saved running night and absent progress remain unknown", () => {

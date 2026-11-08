@@ -20,7 +20,7 @@ export function badge(value) {
   const c = obj(obj(value).counts);
   const count = x => typeof x === "number" && Number.isFinite(x) && x >= 0 ? x : null;
   const fails = count(c.fails), held = count(c.held_members);
-  return { fails, held, text: (fails === null ? "?" : fails) + " FAIL · " + (held === null ? "?" : held) + " held" };
+  return { fails, held, show: (fails || 0) > 0 || (held || 0) > 0, text: (fails === null ? "?" : fails) + " FAIL · " + (held === null ? "?" : held) + " held" };
 }
 export function lines(name, value) {
   const p = obj(value), out = [];
@@ -38,6 +38,7 @@ export function lines(name, value) {
   } else if (name === "realm") {
     if (p.enabled) { out.push("Realm configuration: " + str(p.enabled) + "; retained records below."); }
     out.push(n(p.held_members) + " held members · " + arr(p.roots).length + " roots");
+    if (p.manifest_too_large > 0) { out.push(n(p.manifest_too_large) + " roots skipped: manifest too large to read."); }
     arr(p.roots).forEach(r => out.push(str(r.id) + " · " + str(r.kind) + " · " + str(r.state) + " · " + n(Math.round(r.age_s)) + " seconds old · " + n(r.members) + " members · native " + str(r.native_reason)));
     arr(p.direct_unknowns).forEach(r => out.push("Direct unknown " + str(r.id) + " · " + str(r.kind) + " · " + str(r.reason) + " · " + at(r.at)));
     out.push(n(p.direct_unknown_total) + " direct unknowns in total; showing at most 128.");

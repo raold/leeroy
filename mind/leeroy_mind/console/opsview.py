@@ -36,7 +36,7 @@ from . import mindlog, views
 
 PANELS = ("health", "night", "realm", "raids", "selfies", "backups", "drift", "schedules")
 BUDGETS = {"health": 6.0, "night": 1.0, "realm": 1.0, "raids": 1.0,
-           "selfies": 1.0, "backups": 1.0, "drift": 3.0, "schedules": 3.0}
+           "selfies": 1.0, "backups": 1.0, "drift": 10.0, "schedules": 3.0}
 ROWS = 128
 FILE_BYTES = 2 * 1024 * 1024
 _CODE = re.compile(r"[A-Za-z][A-Za-z0-9_.:-]{0,63}\Z")
@@ -243,8 +243,11 @@ def realm_view(conn, now):
                         "AND state NOT IN ('completed','not_sent') ORDER BY created LIMIT 129").fetchall()
     if len(rows) > ROWS:
         raise Budget()
-    held, out = set(), []
+    held, out, too_large = set(), [], 0
     for r in rows:
+        if r["reserved_manifest"] is None:
+            too_large += 1
+            continue
         raw_manifest = json.loads(r["reserved_manifest"])
         if not isinstance(raw_manifest, list) or any(type(g) is not int or not 0 < g <= 4294967295 for g in raw_manifest):
             raise ValueError("invalid manifest")
@@ -271,7 +274,7 @@ def realm_view(conn, now):
         r = views.rows(conn, "SELECT max(coalesce(settled_ms,dispatched_ms,prepared_ms)) "
                             "FROM realm_direct WHERE owner=?", (owner,))
         desks[owner] = r[0][0] / 1000 if r and number(r[0][0]) is not None else None
-    return panel(roots=out, held_members=len(held), direct_unknowns=direct,
+    return panel(roots=out, held_members=len(held), manifest_too_large=too_large, direct_unknowns=direct,
                  direct_unknown_total=direct_total[0][0] if direct_total else None, desks=desks,
                  desks_basis="Last recorded desk operation; idle passes have no durable timestamp.",
                  release_note="Inspect native state and stop the mind first. Copying text does nothing. "
@@ -515,31 +518,32 @@ def drift_view(root, deadline):
     except OSError:
         raise Missing("origin/main is not cached; fetch it outside this read-only panel.") from None
     base = git("merge-base", "HEAD", "origin/main").strip()
-    # Compare only divergent history. First-parent diffs make a merge cherry-picked with
-    # -m 1 comparable too. Disable external/textconv drivers; nothing executes a repo filter.
-    def patches(ref):
-        raw = git("log", "--first-parent", "-m", "-p", "--binary", "--no-ext-diff", "--no-textconv",
-                  "--format=%H", "-n", "200", f"{base}..{ref}")
-        return {parts[1]: parts[0] for line in git("patch-id", "--stable", input=raw.encode()).splitlines()
-                if len(parts := line.split()) == 2}
-    live_patches, main_patches = patches("HEAD"), patches("origin/main")
-    live_values = set(live_patches.values())
-    titles = git("log", "--first-parent", "--format=%H%x00%s%x00%b%x1e", "-n", "200", f"{base}..origin/main")
-    prs = []
-    for record in titles.split("\x1e"):
-        parts = record.strip().split("\x00", 2)
-        if len(parts) != 3 or parts[0] not in main_patches or main_patches[parts[0]] in live_values:
+    # Releases cherry-pick merges with -m 1 and keep the subject, so a PR number in a first-parent
+    # subject ("Merge pull request #N" or "... (#N)") identifies it on both sides. No patches are read.
+    def records(ref):
+        raw = git("log", "--first-parent", "--format=%H%x00%s%x00%b%x1e", "-n", "600", f"{base}..{ref}")
+        out = []
+        for record in raw.split("\x1e"):
+            parts = record.strip().split("\x00", 2)
+            if len(parts) == 3:
+                match = re.search(r"\(#(\d+)\)\s*$", parts[1]) or re.match(r"Merge pull request #(\d+)\b", parts[1])
+                if match:
+                    out.append((int(match[1]), parts[1], parts[2]))
+        return out
+    live = {n for n, _, _ in records("HEAD")}
+    prs, seen = [], set()
+    for number_, title, body in records("origin/main"):
+        if number_ in live or number_ in seen:
             continue
-        sha, title, body = parts
-        match = re.search(r"\(#(\d+)\)\s*$", title) or re.match(r"Merge pull request #(\d+)\b", title)
-        if match:
-            if title.startswith("Merge pull request"):
-                title = body.strip().splitlines()[0] if body.strip() else f"PR #{match[1]}"
-            prs.append({"number": int(match[1]), "title": title[:200]})
+        seen.add(number_)
+        if title.startswith("Merge pull request"):
+            title = body.strip().splitlines()[0] if body.strip() else f"PR #{number_}"
+        prs.append({"number": number_, "title": title[:200]})
+    prs = prs[:200]
     return panel(branch=branch[:100], head=head if _HASH.fullmatch(head) else None,
                  main=main if _HASH.fullmatch(main) else None, prs=prs,
-                 note="Cached origin/main; never fetched here. Compares first-parent patches in at most 200 divergent commits "
-                      "on each branch, including merge cherry-picks. Older or edited patches need operator review.")
+                 note="Cached origin/main; never fetched here. Matches pull request numbers in the subjects of at most 600 "
+                      "first-parent commits on each side; a change released under another subject needs operator review.")
 
 
 SCHEDULE_PS = """$ErrorActionPreference='Stop';
@@ -666,9 +670,17 @@ class OpsView:
         return panel("error", "Skipped: this source is still busy beyond its time budget.", skipped="budget",
                      budget_s=self.budgets[name], checked_at=self.clock())
 
+    @staticmethod
+    def _counts(panels):
+        return {"fails": panels["health"].get("fails") if panels["health"]["status"] == "ok" else None,
+                "held_members": panels["realm"].get("held_members") if panels["realm"]["status"] == "ok" else None}
+
+    async def badge(self, runtime=None):
+        # Only the two panels the tab badge counts; the other six are not run for a badge poll.
+        results = await asyncio.gather(*(self._one(name, runtime or {}) for name in ("health", "realm")))
+        return {"at": self.clock(), "counts": self._counts(dict(zip(("health", "realm"), results)))}
+
     async def snapshot(self, runtime=None):
         results = await asyncio.gather(*(self._one(name, runtime or {}) for name in PANELS))
         panels = dict(zip(PANELS, results))
-        return {"panels": panels, "at": self.clock(), "counts": {
-            "fails": panels["health"].get("fails") if panels["health"]["status"] == "ok" else None,
-            "held_members": panels["realm"].get("held_members") if panels["realm"]["status"] == "ok" else None}}
+        return {"panels": panels, "at": self.clock(), "counts": self._counts(panels)}

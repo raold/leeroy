@@ -75,6 +75,7 @@ run nothing else.
                        op `library`, a read: it works with --no-control); the query is never logged
     GET  /api/training the Training tab: what `training status`, `gate`, `trials` and `cards`
                        print, from mind.db (`setup` false when it has no training tables)
+    GET  /api/ops/badge  the Ops tab badge's two counts (health FAILs, held members), polled while any tab is open
     GET  /api/ops      eight independently budgeted read-only operations panels (opsview)
     GET  /api/dojo     the Dojo tab: the dojo's own files (its layout's data and runtime roots,
                        read-only) and whether its worldserver listens, from the console's TCP table
@@ -692,6 +693,7 @@ class ConsoleApp:
                   ("GET", "/api/bank"): self._api_bank,
                   ("GET", "/api/training"): self._api_training,
                   ("GET", "/api/ops"): self._api_ops,
+                  ("GET", "/api/ops/badge"): self._api_ops_badge,
                   ("GET", "/api/dojo"): self._api_dojo,
                   ("GET", "/api/library"): self._api_library,
                   ("GET", "/api/personas"): self._api_personas,
@@ -929,6 +931,9 @@ class ConsoleApp:
 
     async def _api_ops(self, req: Request):
         return json_response(200, await self._ops.snapshot({"mind": self.view.state}))
+
+    async def _api_ops_badge(self, req: Request):
+        return json_response(200, await self._ops.badge({"mind": self.view.state}))
 
     async def _api_dojo(self, req: Request):
         view = await asyncio.to_thread(dojoview.dojo_view, self.s.dojo_layout, conns=self._conns)

@@ -1,15 +1,24 @@
-import { $, clear, el } from "./core.mjs";
+import { $, api, clear, el, refused } from "./core.mjs";
 import { pollTab, renderKpis } from "./tabkit.mjs";
-import { S } from "./state.mjs";
 import { PANELS, at, badge, lines, panelWords } from "./opsmodel.mjs";
 
-function renderOps(value) {
-  const count = badge(value), tab = $("t-ops"), panels = value.panels || {};
+// The tab badge shows only when something needs a look (a health FAIL or a held member).
+function setBadge(value) {
+  const count = badge(value), tab = $("t-ops");
   let mark = tab.querySelector(".badge");
+  if (!count.show) {
+    if (mark) { mark.remove(); }
+    tab.removeAttribute("aria-label");
+    return;
+  }
   if (!mark) { mark = el("span", "badge"); tab.appendChild(mark); }
   mark.textContent = count.text;
   tab.setAttribute("aria-label", "Ops: " + count.text);
-  if (S.tab === "ops" && !document.hidden) { tab.scrollIntoView({ block: "nearest", inline: "nearest" }); }
+}
+
+function renderOps(value) {
+  const count = badge(value), panels = value.panels || {};
+  setBadge(value);
   renderKpis($("ops-kpis"), [
     { k: "Health FAILs", v: count.fails === null ? "unknown" : String(count.fails), d: "Health refreshes at most once a minute" },
     { k: "Held members", v: count.held === null ? "unknown" : String(count.held), d: "Unique members held by Realm roots" }
@@ -37,3 +46,19 @@ function renderOps(value) {
 }
 
 pollTab("ops", { path: "/api/ops", ms: 15000, render: renderOps });
+
+// The badge is kept current whichever tab is open: one light request a minute while the page is visible.
+let badgeBusy = false;
+function pollBadge() {
+  if (badgeBusy || document.hidden) { return; }
+  badgeBusy = true;
+  api("/api/ops/badge").then(r => {
+    if (refused(r) || r.status !== 200) { return null; }
+    return r.json();
+  }).then(j => { if (j) { setBadge(j); } })
+    .catch(() => { /* no connection: the strip says it */ })
+    .then(() => { badgeBusy = false; });
+}
+setInterval(pollBadge, 60000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { pollBadge(); } });
+setTimeout(pollBadge, 1500);  // after main.mjs has set the key

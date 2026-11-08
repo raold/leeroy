@@ -88,3 +88,13 @@ def rehearsal(tmp_path, monkeypatch):
                     finally:
                         await fixture.close()
     return start
+
+
+@pytest.fixture(autouse=True)
+def fixed_ops_sources(monkeypatch):
+    """The Ops panels that probe the machine (services, Task Scheduler) answer from fixtures."""
+    from leeroy_mind.console import opsview
+    monkeypatch.setattr(opsview, "health_view", lambda root, data: opsview.panel(
+        checks=[{"name": "servers", "status": "ok", "text": "servers: ok (rehearsal)"},
+                {"name": "mind", "status": "note", "text": "mind: note (rehearsal)"}], fails=0))
+    monkeypatch.setattr(opsview, "schedules_view", lambda root, deadline: opsview.panel(tasks=[]))

@@ -118,6 +118,28 @@ def test_malformed_hold_is_not_reported_clean(store):
         ops.realm_view(store.conn, NOW)
 
 
+def test_oversized_manifest_is_counted_not_fatal(store):
+    add_hold(store.conn)
+    add_hold(store.conn, "b"*32, tuple(range(1, 20000)))
+    got = ops.realm_view(store.conn, NOW)
+    assert got["manifest_too_large"] == 1
+    assert got["held_members"] == 2 and len(got["roots"]) == 1
+
+
+def test_badge_counts_come_from_health_and_realm_only(tmp_path):
+    seen = []
+    def source(name, value):
+        def run():
+            seen.append(name)
+            return ops.panel(**value)
+        return run
+    view = ops.OpsView(tmp_path, tmp_path, sources={
+        "health": source("health", {"fails": 2}), "realm": source("realm", {"held_members": 4})})
+    got = asyncio.run(view.badge())
+    assert got["counts"] == {"fails": 2, "held_members": 4}
+    assert sorted(seen) == ["health", "realm"]
+
+
 def test_realm_direct_unknowns_and_desks(store):
     store.conn.execute("INSERT INTO realm_direct(command_id,owner,ref,kind,payload_sha256,guild,human,"
         "process_id,expects_job,state,prepared_ms,dispatched_ms,settled_ms,reason) "

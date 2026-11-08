@@ -6,17 +6,17 @@ import pytest
 from console.rig import KEY
 
 TABS = ("comms", "raid", "guild", "social", "personas", "board", "calendar",
-        "bank", "realm", "training", "dojo", "library", "mind")
+        "bank", "realm", "training", "dojo", "library", "ops", "mind")
 POPULATED = {
     "comms": "Rehearsal supplies are ready.", "raid": "Icecrown Citadel",
     "guild": "Juniper", "social": "Belra", "personas": "Arkon",
     "board": "Bring tea for the rehearsal.", "calendar": "Rehearsal raid night",
     "bank": "Rehearsal supplies", "realm": "Lantern Company",
-    "training": "Rehearsal tactic", "dojo": "rehearsal-episode",
+    "training": "Rehearsal tactic", "dojo": "rehearsal-episode", "ops": "Release drift",
     "library": "1 passage", "mind": "running",
 }
 OLDER = {tab: "Not set up yet" for tab in (
-    "social", "board", "calendar", "bank", "realm", "training", "library")}
+    "social", "board", "calendar", "bank", "realm", "training", "library", "ops")}
 OLDER.update({"raid": "No raid is open.",
               "guild": "The mind has no roster yet.",
               "personas": "This mind.db is older than some of what this tab reads",
@@ -87,4 +87,22 @@ def test_phone_has_no_page_overflow(rehearsal, theme):
                     overflowing.append((tab, size))
             assert not r.errors, r.errors
             assert not overflowing, overflowing
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("state", ["running", "older"])
+def test_ops_tab_shows_health_lines_and_tolerates_an_older_database(rehearsal, state):
+    async def run():
+        from playwright.async_api import expect
+        async with rehearsal(state=state) as r:
+            await r.page.goto(r.url + "/#key=" + KEY)
+            panel = await visit(r.page, "ops")
+            await expect(panel).to_contain_text("servers: ok (rehearsal)")
+            await expect(panel).to_contain_text("Release drift")
+            await expect(panel).to_contain_text("Not set up yet" if state == "older" else "held members")
+            await expect(panel).not_to_contain_text("This tab could not be drawn")
+            # Nothing needs a look in the rehearsal's health, and the badge appears only when it does.
+            if state == "older":
+                await expect(r.page.locator("#t-ops .badge")).to_have_count(0)
+            assert not r.errors, r.errors
     asyncio.run(run())
