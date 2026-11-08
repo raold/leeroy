@@ -193,3 +193,17 @@ LEEROY_TEST(RealmCleanup_RecursiveQueueReadbackChecksRowsSlotsInvitationsAndOthe
         CHECK(!ReadQueueCleanup({301, 302, 303}, {Removed(301), Removed(302), member}));
     }
 }
+
+LEEROY_TEST(RealmCleanup_AnyWintergraspStateRefusesTheLeaveWhole)
+{
+    CHECK_EQ(WintergraspPrivateReason({}), std::string{});
+    char const* const reason = "wg_private_state_unavailable";
+    for (int field = 0; field < 6; ++field)
+    {
+        WintergraspMemberFacts facts;
+        bool* flags[] = {&facts.foreignHistory, &facts.inZone, &facts.inBattlefieldGroup,
+            &facts.queued, &facts.invited, &facts.inWar};
+        *flags[field] = true;
+        CHECK_EQ(WintergraspPrivateReason(facts), std::string(reason));
+    }
+}

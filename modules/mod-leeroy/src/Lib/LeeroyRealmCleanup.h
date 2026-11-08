@@ -24,6 +24,18 @@ std::string PrepareCleanupMutation(std::vector<std::uint32_t> const& actual,
     std::function<std::string(std::uint32_t)> const& validate,
     std::function<std::string(std::vector<std::uint32_t> const&)> const& charge);
 
+// What a leave_pvp can tell about a member's Wintergrasp state before it changes anything.
+// Wintergrasp keeps private queue, invitation and war state that no cleanup here can prove it
+// restored, so a member with any of it is refused. The same answer is given at the command's ack
+// (the whole leave is refused before any body is reserved or moved, so the mind releases the
+// manifest) and at each step.
+struct WintergraspMemberFacts
+{
+    bool foreignHistory = false, inZone = false, inBattlefieldGroup = false;
+    bool queued = false, invited = false, inWar = false;
+};
+std::string WintergraspPrivateReason(WintergraspMemberFacts const& facts);
+
 struct GroupCleanupPlan
 {
     std::vector<std::uint32_t> affected, remaining;

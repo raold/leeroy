@@ -951,8 +951,9 @@ Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
   until the 60 s poll finds each body online and free; a rearm now records an armed body that
   has none, as that poll would. Any other failed job (`operation_transition_unknown`, a walk,
   leave, duel or grow) stays unknown: a leave's `wg_private_state_unavailable` (a member in
-  Wintergrasp) is a Refuse only until that leave has changed a body, and its job does not say
-  which. A root that settles unknown or conflict logs a warning in mind.log,
+  Wintergrasp) is refused whole at its ack, before any body is reserved or moved
+  (`LeavePvpAckReason`; the mind settles it refused and holds nobody). The same reason from the job
+  is a Refuse only until that leave has changed a body, and its job does not say which. A root that settles unknown or conflict logs a warning in mind.log,
   `realm_action_unknown` (or `realm_action_conflict`) with its id, kind, reason, native's reason
   and member count, no names: from then on it holds its manifest.
 - **Rulings.** His raid holds exactly his raid: waiting for the call, called and forming hold

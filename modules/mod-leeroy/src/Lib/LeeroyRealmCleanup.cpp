@@ -3,6 +3,11 @@
 
 namespace Leeroy::Realm
 {
+std::string WintergraspPrivateReason(WintergraspMemberFacts const& facts)
+{
+    return facts.foreignHistory || facts.inZone || facts.inBattlefieldGroup || facts.queued || facts.invited
+        || facts.inWar ? "wg_private_state_unavailable" : "";
+}
 std::string ValidateCleanupClosure(std::vector<std::uint32_t> const& actual,
     std::vector<std::uint32_t> const& admitted,
     std::function<std::string(std::uint32_t)> const& validate)

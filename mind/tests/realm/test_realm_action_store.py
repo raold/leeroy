@@ -155,6 +155,23 @@ def test_a_leave_refused_for_one_fenced_body_frees_the_whole_cast(store):
     assert store.holds() == ()
 
 
+def test_a_leave_refused_at_its_ack_for_a_member_in_wintergrasp_frees_the_whole_cast(store):
+    cast = tuple(range(101, 245))
+    dispatch(store, prepare(store, p.LeavePvp("leave", cast), owner="raid", rank=0))
+    assert store.holds()[0].guids == frozenset(cast)
+    t = store.observe_ack(Ack(0, "leave", False, "wg_private_state_unavailable"), now=2)
+    assert (t.result_ready, t.result_ok, t.reason) == (True, False, "refused")
+    assert store.get("leave").state == "completed"
+    assert store.holds() == ()
+
+
+def test_the_wintergrasp_ack_refusal_is_the_leaves_alone(store):
+    dispatch(store, prepare(store, p.Rearm("rearm", CAST)))
+    store.observe_ack(Ack(0, "rearm", False, "wg_private_state_unavailable"), now=2)
+    assert store.get("rearm").state == "unknown"
+    assert store.holds()[0].guids == frozenset(CAST)
+
+
 def test_recovery_settles_a_body_fence_an_older_build_kept_unknown(store, monkeypatch):
     monkeypatch.setattr(action_store, "REFUSALS", REFUSALS - BODY_FENCES)  # as the previous build read acks
     cast = tuple(range(101, 207))
