@@ -18,7 +18,7 @@ LEEROY_TEST(QueueFence_FreeCastCanUseEveryQueue)
 LEEROY_TEST(QueueFence_EachNativeHoldRefusesEveryQueue)
 {
     for (auto reason : {"busy:realm_owner", "busy:training_owner", "busy:training_cleanup",
-        "busy:training_state", "busy:raid_owner", "busy:body_unavailable"})
+        "busy:training_state", "busy:raid_owner"})
         for (auto kind : Kinds)
         {
             auto state = Cast(); state.reason = reason;
@@ -100,4 +100,42 @@ LEEROY_TEST(QueueFence_ReleaseOrNewOwnerAllowsOneNewLog)
     gate.Clear();
     CHECK(gate.Refuse(101, "busy:realm_owner:operation-b"));
     CHECK(!gate.Refuse(101, {}));
+}
+
+LEEROY_TEST(QueueFence_OwnerRequestIgnoresRaidAndInstanceHolds)
+{
+    for (auto kind : Kinds)
+    {
+        auto state = Cast(); state.ownerRequest = true; state.ownerGroup = true;
+        state.reason = "busy:raid_owner"; state.humanGroupInInstance = true;
+        CHECK(QueueFenceReason(state, kind).empty());
+        for (auto reason : {"busy:realm_owner", "busy:training_owner", "busy:training_cleanup", "busy:training_state"})
+        {
+            state.reason = reason;
+            CHECK_EQ(QueueFenceReason(state, kind), reason);
+        }
+    }
+}
+
+LEEROY_TEST(QueueFence_OwnerGroupOutsideInstanceIsNotRaidHeld)
+{
+    for (auto kind : Kinds)
+    {
+        auto state = Cast(); state.ownerGroup = true; state.reason = "busy:raid_owner";
+        CHECK(QueueFenceReason(state, kind).empty());
+        state.reason = "busy:realm_owner";
+        CHECK_EQ(QueueFenceReason(state, kind), "busy:realm_owner");
+        state.reason.clear(); state.humanGroupInInstance = true;
+        CHECK_EQ(QueueFenceReason(state, kind), "busy:human_instance");
+    }
+}
+
+LEEROY_TEST(QueueFence_NonBotAndUnreachableBodyAreNotHolds)
+{
+    for (auto kind : Kinds)
+        for (auto reason : {"not_bot", "busy:body_unavailable"})
+        {
+            auto state = Cast(); state.reason = reason;
+            CHECK(QueueFenceReason(state, kind).empty());
+        }
 }

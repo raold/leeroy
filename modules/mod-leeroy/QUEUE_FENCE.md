@@ -71,3 +71,19 @@ queue entry does not claim those private states are clean. A complete WG fence
 would need a boolean core admission hook before queue insertion, war-group
 mutation and auto-rejoin; any future playerbots direct call would need to honor
 that hook. No such core/playerbots change is included here.
+
+## Owner's own group, non-bots, and the WG packet hook
+
+- When the owner (`Leeroy.HumanGuid`) is the requester, `busy:raid_owner` and
+  `busy:human_instance` are ignored for every member checked, so his add5/add10
+  guild group or arena team can queue as a group. Realm, training and
+  offline-raid holds still apply. In the snapshot, a member whose group holds the
+  owner outside an instance is not `busy:raid_owner` held either.
+- `not_bot` (alts and other non-random-bot guild members) and
+  `busy:body_unavailable` (teleporting, self-bot, no AI) are not holds. Withdraw
+  also returns early while a player is being teleported.
+- The `CanPacketReceive` Wintergrasp hook and the WG withdraw path cover human
+  sessions only in practice: playerbots dispatch their packets through
+  `PlayerbotHolder::HandleBotPackets`, which never reaches
+  `ScriptMgr::CanPacketReceive`, so for the cast they are inert. The BG/arena
+  accept fence (`OnPlayerCanBattleFieldPort`) is unaffected.

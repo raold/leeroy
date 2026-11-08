@@ -50,7 +50,7 @@ Player* Find(std::uint32_t guid)
 
 // World thread only. Hooks that can run on a map/session thread use the copied
 // snapshot instead of consulting Realm's world-owned reservations or players.
-Held Current(Player* player, QueueKind kind)
+Held Current(Player* player, QueueKind kind, bool ownerRequest = false)
 {
     if (!player) return {};
     auto& module = LeeroyModule::Instance();
@@ -61,6 +61,8 @@ Held Current(Player* player, QueueKind kind)
     state.human = guid == module.HumanGuid();
     if (!state.enabled || !state.cast || state.human) return {};
     Group* group = player->GetGroup();
+    state.ownerRequest = ownerRequest;
+    state.ownerGroup = group && group->IsMember(ObjectGuid::Create<HighGuid::Player>(module.HumanGuid()));
     state.humanGroupInInstance = group && player->GetMap() && player->GetMap()->Instanceable()
         && group->IsMember(ObjectGuid::Create<HighGuid::Player>(module.HumanGuid()));
     auto& realmModule = Leeroy::Realm::RealmModule::Instance();
@@ -91,9 +93,10 @@ bool NativeCall(Player* player, QueueKind kind)
 bool AllowJoin(Player* player, QueueKind kind, bool asGroup)
 {
     if (!player || NativeCall(player, kind)) return true;
-    auto check = [kind](Player* member)
+    bool ownerRequest = player->GetGUID().GetCounter() == LeeroyModule::Instance().HumanGuid();
+    auto check = [kind, ownerRequest](Player* member)
     {
-        auto current = Current(member, kind);
+        auto current = Current(member, kind, ownerRequest);
         if (!current.guid) return true;
         std::lock_guard lock(mutex);
         return RefuseLocked(current);
@@ -110,6 +113,7 @@ bool AllowJoin(Player* player, QueueKind kind, bool asGroup)
 void Withdraw(Player* player, Held const& member)
 {
     if (!Leeroy::Realm::RealmModule::Instance().Holder(member.guid).empty()) return;
+    if (player->IsBeingTeleported()) return;
     bool removed = false;
     if (!player->InBattleground() && !player->IsBeingTeleported())
         for (uint8 slot = 0; slot < PLAYER_MAX_BATTLEGROUND_QUEUES; ++slot)

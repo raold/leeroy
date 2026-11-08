@@ -14,6 +14,9 @@ enum class QueueKind { Battleground, Arena, DungeonFinder, RaidBrowser, Wintergr
 struct QueueFenceState
 {
     bool enabled = true, cast = false, human = false, humanGroupInInstance = false;
+    // ownerRequest: the owner himself is the requester, so his whole group is
+    // his to queue. ownerGroup: this member's group contains the owner.
+    bool ownerRequest = false, ownerGroup = false;
     std::string reason;
 };
 

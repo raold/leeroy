@@ -13,7 +13,13 @@ std::string_view QueueFenceReason(QueueFenceState const& state, QueueKind kind)
         case QueueKind::DungeonFinder:
         case QueueKind::RaidBrowser:
         case QueueKind::Wintergrasp:
+            // Characters that are not random bots, and bodies that are merely
+            // unreachable right now (teleporting, self-bot), are not holds.
+            if (state.reason == "not_bot" || state.reason == "busy:body_unavailable") return {};
+            if (state.ownerRequest)
+                return state.reason == "busy:raid_owner" ? std::string_view{} : state.reason;
             if (state.humanGroupInInstance) return "busy:human_instance";
+            if (state.ownerGroup && state.reason == "busy:raid_owner") return {};
             return state.reason;
     }
     return {};
