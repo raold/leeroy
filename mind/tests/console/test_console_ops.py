@@ -203,6 +203,13 @@ def test_offmachine_manifest_check_not_claimed_as_restore_test(tmp_path):
     assert got["manifest_verified"] is True
     assert "restore-test result is not stored" in got["verification"]
     assert SECRET not in json.dumps(got)
+    state = {"owner": "leeroy-guild-backup", "format": 1, "store_id": "a"*32, "last_full_verify": NOW,
+             "private": SECRET}
+    (folder.parent.parent / ".verify-state.json").write_text(json.dumps(state))
+    assert ops.offmachine_view(cfg, deadline())["last_full_verify"] == NOW
+    state["store_id"] = "b"*32
+    (folder.parent.parent / ".verify-state.json").write_text(json.dumps(state))
+    assert ops.offmachine_view(cfg, deadline())["last_full_verify"] is None
     (folder / "manifest.json").write_text("{}")
     assert ops.offmachine_view(cfg, deadline())["status"] == "error"
 

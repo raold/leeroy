@@ -3,6 +3,16 @@
 Each source has one daemon worker at most, a response deadline and a cache. A blocked disk,
 share or process cannot serialize the other panels or create more workers on each poll.
 SQLite reads also have a VM deadline. Only explicit scalar projections leave this module.
+
+Budgets: health 6 s, Git and Task Scheduler 3 s each, other sources 1 s each, concurrently.
+Health is cached for 60 s; others for 15 s. A timed-out worker remains single-flight until
+it returns (Python cannot interrupt a blocked filesystem call); its late result can be read
+on a later poll. Git/PowerShell children are killed on their own deadline. SQLite has a
+50 ms busy timeout, query_only and a progress deadline. Lists and files have separate caps.
+
+Persisted running nights may be paused, and guild raid rows do not store an encounter phase
+or deadline. Missing live evidence stays unknown. Desk dates mean recorded operations, not
+idle passes. Backup checksum/verification receipts are not a fresh payload or restore test.
 """
 import asyncio
 import hashlib
@@ -401,7 +411,10 @@ def backups_view(root, data, deadline, config=None):
             game.append({"name": path.name, "at": path.stat().st_mtime, "stamp": m[1]})
     off = panel("missing", "the off-machine backup tool has not been installed in this checkout.")
     if (root / "scripts" / "guild_backup.py").is_file():
-        off = offmachine_view(config or Path(os.environ.get("LOCALAPPDATA", "")) / "leeroy" / "backup.toml", deadline)
+        if config is None and not os.environ.get("LOCALAPPDATA"):
+            off = panel("missing", "LOCALAPPDATA is unavailable, so the backup configuration cannot be located.")
+        else:
+            off = offmachine_view(config or Path(os.environ["LOCALAPPDATA"]) / "leeroy" / "backup.toml", deadline)
     return panel(snapshots={"count": count, "bytes": total, "labels": labels},
                  game=max(game, key=lambda r: r["stamp"]) if game else None, offmachine=off)
 
@@ -430,10 +443,23 @@ def offmachine_view(config, deadline):
                      and r.get("set_id") == latest.name and type(r.get("format")) is int
                      and r["format"] == 1 for r in (manifest, receipt))
              and receipt.get("manifest_sha256") == hashlib.sha256(raw).hexdigest())
+    last_verify = None
+    try:
+        verification = object_json(_read(store / ".verify-state.json", 16384).decode("utf-8"))
+    except FileNotFoundError:
+        verification = {}
+    if (verification.get("owner") == marker.get("owner")
+            and verification.get("store_id") == marker.get("store_id")
+            and type(verification.get("format")) is int and verification["format"] == 1):
+        value = number(verification.get("last_full_verify"))
+        if value is not None and 0 < value <= time.time() + 60:
+            last_verify = value
     return panel("ok" if valid else "error", "" if valid else "the latest backup manifest could not be verified.",
                  name=latest.name, at=latest.stat().st_mtime, manifest_verified=valid,
-                 verification="Publication verifies all objects and SQLite. This panel checks the manifest checksum only; "
-                              "a later restore-test result is not stored by the backup tool.")
+                 last_full_verify=last_verify,
+                 verification="The writer hashes new copies and checks SQLite; existing objects get a full read weekly "
+                              "or with --verify-all. This panel checks the manifest checksum and the recorded full-verification "
+                              "time, not current payload contents. A separate restore-test result is not stored by the backup tool.")
 
 
 def command(argv, root, deadline, *, input=None):

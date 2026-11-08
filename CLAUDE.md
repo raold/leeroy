@@ -991,11 +991,20 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   with no inline style. Dark is the default whatever the system setting; the
   light/dark switch is remembered in `localStorage` (`guild-console-theme`,
   with the folds and read marks, `guild-console-collapsed` and
-  `guild-console-read`). It has 13 tabs (Comms, Raid, Guild, Personas, Social,
-  Board, Calendar, Bank, Realm, Training, Dojo, Library, Mind); each polls only
+  `guild-console-read`). It has 14 tabs (Comms, Raid, Guild, Personas, Social,
+  Board, Calendar, Bank, Realm, Training, Dojo, Library, Ops, Mind); each polls only
   while it is open and the page is visible, one request at a time. A source that is
   not there yet answers 200 and reads "Not set up yet: <why>"; only a file that
-  exists but cannot be read is a 503. `GET /api/face?guid=<int>&size=sm|md|lg` serves
+  exists but cannot be read is a 503. Ops (`GET /api/ops`, `console/opsview.py`) keeps
+  those states per panel in one 200 response: health, night, Realm holds, raids,
+  selfies/snaps, backups, cached Git release drift and scheduled-task status. Each
+  source has its own deadline (health 6 s, Git/tasks 3 s, others 1 s) and one worker;
+  a slow source is explicitly skipped while the others answer. Health reuses the
+  installed checks at most once a minute; the tab polls every 15 s. It shows only
+  counts, codes, identifiers and times; private health diagnostics stay in the CLI.
+  Saved running nights may be paused, unretained progress stays unknown, desk dates
+  mean recorded operations, and backup metadata is not a new restore test. Release
+  commands are selectable text only. `GET /api/face?guid=<int>&size=sm|md|lg` serves
   `mind-data/selfies/<guid>/chosen.jpg` (key and Host checked, `image/jpeg`,
   `private, max-age=60`, 404 when absent; the original for every size, the
   browser scales it) and never writes under `selfies/`; faces (initials when

@@ -75,6 +75,7 @@ run nothing else.
                        op `library`, a read: it works with --no-control); the query is never logged
     GET  /api/training the Training tab: what `training status`, `gate`, `trials` and `cards`
                        print, from mind.db (`setup` false when it has no training tables)
+    GET  /api/ops      eight independently budgeted read-only operations panels (opsview)
     GET  /api/dojo     the Dojo tab: the dojo's own files (its layout's data and runtime roots,
                        read-only) and whether its worldserver listens, from the console's TCP table
     GET  /api/selfies/images  ?guid=&set=: a ready set's four thumbnails as data URLs (404

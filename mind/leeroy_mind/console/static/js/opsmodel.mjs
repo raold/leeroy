@@ -70,7 +70,8 @@ export function lines(name, value) {
     Object.entries(obj(s.labels)).forEach(([label, r]) => out.push(label + " · " + at(r.at) + " · " + n(r.bytes) + " bytes"));
     out.push(p.game ? "Game dump " + str(p.game.name) + " · " + at(p.game.at) : "Not set up yet: no game dump set recorded.");
     const off = obj(p.offmachine);
-    out.push(panelWords(off) || "Off-machine " + str(off.name) + " · " + at(off.at) + " · manifest " + (off.manifest_verified ? "verified" : "unverified"));
+    out.push(panelWords(off) || "Off-machine " + str(off.name) + " · " + at(off.at) + " · manifest checksum " + (off.manifest_verified ? "verified" : "unverified"));
+    if (off.status === "ok") { out.push("Last full verification run " + at(off.last_full_verify)); }
     if (off.verification) { out.push(str(off.verification)); }
   } else if (name === "drift") {
     out.push("Live branch " + str(p.branch), "Live HEAD " + str(p.head), "Cached main " + str(p.main));
