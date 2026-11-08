@@ -276,6 +276,13 @@ exit "${FAIL_CONSOLE:-0}"
         with closing(sqlite3.connect(snapshot)) as db, db:
             self.assertEqual(db.execute("SELECT value FROM marker").fetchall(), [("original",)])
 
+    def test_a_commit_already_live_is_refused_before_any_change(self):
+        self.run_release(self.single)
+        before = self.git("rev-parse", "HEAD")
+        output = self.run_release(self.single, rc=1)
+        self.assertIn("already on the live branch", output)
+        self.assertEqual(self.git("rev-parse", "HEAD"), before)
+
     def test_conflict_aborts_entire_batch(self):
         self.write(self.root / "mind/app.py", "conflict\n")
         self.git("add", ".")

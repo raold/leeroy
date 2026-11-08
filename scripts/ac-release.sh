@@ -160,6 +160,12 @@ for commit in "${commits[@]}"; do
         ! git merge-base --is-ancestor "$sha" origin/main; then bad "commit is not on origin/main: $commit"; continue; fi
     resolved+=("$sha")
     ok "commit on origin/main: $sha"
+    # A change already on the live branch would cherry-pick empty and roll the release back.
+    if [[ -z ${live_ids+x} ]]; then
+        live_ids=$(git log -n 300 -p --no-merges HEAD | git patch-id --stable | cut -d" " -f1)
+    fi
+    want=$(git diff "$sha^1" "$sha" | git patch-id --stable | cut -d" " -f1)
+    if [[ -n $want ]] && grep -qx -- "$want" <<<"$live_ids"; then bad "already on the live branch: $sha"; continue; fi
     # --no-renames checks both sides of a rename; NUL records preserve odd filenames.
     parents=$(git rev-list --parents -n 1 "$sha")
     if [[ $parents != *' '* ]]; then bad "root commit has no release parent: $sha"; continue; fi
@@ -230,8 +236,9 @@ fi
 start_services
 if command -v schtasks >/dev/null 2>&1 && schtasks //Query //TN leeroy-console >/dev/null 2>&1; then
     schtasks //End //TN leeroy-console >/dev/null 2>&1 || true
-    schtasks //Run //TN leeroy-console >/dev/null
-    ok 'console task restarted'
+    if schtasks //Run //TN leeroy-console >/dev/null 2>&1; then ok 'console task restarted'
+    else printf 'note: leeroy-console did not start; the release stands, start it by hand
+'; fi
 else printf 'note: leeroy-console scheduled task is absent\n'; fi
 # A health failure reports exit 2 and recovery instructions, but must not discard a
 # successfully running release because an unrelated optional service is unhealthy.
