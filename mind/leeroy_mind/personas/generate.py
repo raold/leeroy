@@ -597,7 +597,7 @@ def _with_real_name(p: Persona, new: str, ctx: _Ctx) -> tuple[Persona, int]:
 
 
 async def _rename(llm, model, rules, p: Persona, taken, is_taken: Callable[[str], bool],
-                  ctx: _Ctx) -> Persona | None:
+                  ctx: _Ctx, *, private_logs: bool = True) -> Persona | None:
     """One cheap call (no thinking, low temperature) for candidate real names; p takes the
     first that is not taken and leaves the record passing the screens and limits. None when no
     candidate does. `taken`: the first names the prompt lists (the owner's is never among them).
@@ -612,7 +612,7 @@ async def _rename(llm, model, rules, p: Persona, taken, is_taken: Callable[[str]
             renamed, left = _with_real_name(p, name, ctx)
         except ValueError:
             continue
-        if left:
+        if left and private_logs:
             log.info("renamed %s: the old first name is still in %d field%s, in another case",
                      p.character_name, left, "" if left == 1 else "s")
         return renamed
@@ -623,7 +623,7 @@ async def generate_persona(llm: LLMClient, model: str, slot: GenSlot, character:
                            cast_summary: str, rules: str, *, human: HumanIdentity | None = None,
                            taken_names: frozenset[str] = frozenset(),
                            member_names: frozenset[str] = frozenset(),
-                           notes: GenNotes | None = None) -> Persona:
+                           notes: GenNotes | None = None, private_logs: bool = True) -> Persona:
     """taken_names: every name a real name must not repeat (character names, real names, the
     owner's names), compared by full name and by first name. member_names: the character
     names a relationship may point at. A record that still collides after one informed retry
@@ -635,7 +635,7 @@ async def generate_persona(llm: LLMClient, model: str, slot: GenSlot, character:
     notes = notes if notes is not None else GenNotes()
     profile = await _write_profile(llm, model, rules,
                                    _profile_prompt(slot, character, cast_summary, human),
-                                   character.name)
+                                   character.name if private_logs else f"guid={character.guid}")
     known = frozenset(taken_names)
     aliases = human_aliases(human)
     watched = set(member_names)
@@ -668,14 +668,21 @@ async def generate_persona(llm: LLMClient, model: str, slot: GenSlot, character:
     old = again.identity.real_name
     if not is_taken(old):
         return again
-    renamed = await _rename(llm, model, rules, again, first_names, is_taken, ctx)
+    renamed = await _rename(llm, model, rules, again, first_names, is_taken, ctx,
+                            private_logs=private_logs)
     if renamed is None:
-        log.warning("name collision for %s: %s; no rename candidate fit", character.name,
-                    _shown(old, human))
+        if private_logs:
+            log.warning("name collision for %s: %s; no rename candidate fit", character.name,
+                        _shown(old, human))
+        else:
+            log.warning("persona_name_collision: guid=%d", character.guid)
         raise NameCollision(f"real name {_shown(old, human)!r} collides with a taken name")
     new = renamed.identity.real_name
     notes.renames.append((old, new))  # raw, like notes.collisions: reports redact
-    log.warning("renamed %s: %s -> %s", character.name, _shown(old, human), _shown(new, human))
+    if private_logs:
+        log.warning("renamed %s: %s -> %s", character.name, _shown(old, human), _shown(new, human))
+    else:
+        log.warning("persona_renamed: guid=%d", character.guid)
     return renamed
 
 
@@ -683,6 +690,16 @@ async def generate_persona(llm: LLMClient, model: str, slot: GenSlot, character:
 
 def _redact(names: list[str], human: HumanIdentity) -> list[str]:
     return [_shown(n, human) for n in names]
+
+
+def generation_rules(data_dir: Path) -> str:
+    """The same bounded owner overlay for manual and nightly generation."""
+    rules = GENERATION_RULES
+    extra = load_prompt("persona_rules", data_dir, "")
+    if estimate_tokens(extra) > OVERLAY_TOKEN_CAP:
+        log.warning("persona_rules overlay cut to %d tokens", OVERLAY_TOKEN_CAP)
+        extra = truncate_words(extra, OVERLAY_TOKEN_CAP * 4)
+    return f"{rules}\n\n{extra}" if extra else rules
 
 
 async def generate_cast(store: Store, llm: LLMClient | None, cfg, *, human_guid: int,
@@ -699,13 +716,7 @@ async def generate_cast(store: Store, llm: LLMClient | None, cfg, *, human_guid:
     if dry_run:
         return report
     human = human_identity(cfg, store, human_guid)
-    rules = GENERATION_RULES
-    extra = load_prompt("persona_rules", data_dir, "")
-    if estimate_tokens(extra) > OVERLAY_TOKEN_CAP:
-        log.warning("persona_rules overlay cut to %d tokens", OVERLAY_TOKEN_CAP)
-        extra = truncate_words(extra, OVERLAY_TOKEN_CAP * 4)
-    if extra:
-        rules = f"{rules}\n\n{extra}"
+    rules = generation_rules(data_dir)
     taken = {m.name for m in roster}
     taken.update(p.identity.real_name for p in existing)
     taken.update(n for n in (human.nickname, human.real_name, human.character_name) if n)
