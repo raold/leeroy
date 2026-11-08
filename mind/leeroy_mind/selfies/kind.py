@@ -59,7 +59,7 @@ KIND_PROMPT = (
     "or work profile.\n{card}\n{facts}\nHow they look: {looks}\n"
     "Choose what fits who they are, their work, age, region, habits and personality: the kind "
     "of photo (a phone selfie, a mirror selfie, a professional headshot, or a snapshot a friend "
-    "took), the framing (face, head and shoulders, upper body, or three-quarter from mid-thigh up), where it was taken (a place "
+    "took), the framing (face, head and shoulders, or upper body), where it was taken (a place "
     "in their own life, in a few words), what they are wearing in it, and their expression. "
     "Name no year, no decade, no device and no brand. Fully clothed, nothing revealing or "
     "sexual, never like anyone famous, and no one else's name.")
