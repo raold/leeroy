@@ -24,6 +24,7 @@ from leeroy_mind.endpoint import KEY_FILE
 from leeroy_mind.health import FAIL, NOTE, OK, Probes, Server, alert, read_state
 from leeroy_mind.protocol import Member
 from leeroy_mind.storage.db import open_db
+from dbtemplate import open_migrated
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_clock import FakeClock
 
@@ -114,7 +115,7 @@ class Rig:
         self.toml = "[training]\nenabled = true\n\n[voice]\nenabled = true\n"
         self.write_toml()
         self.conf("Leeroy.Telemetry.Enable = 1\n")
-        store = Store(open_db(self.data / "mind.db"), clock=FakeClock(CLOCK))
+        store = Store(open_migrated(self.data / "mind.db"), clock=FakeClock(CLOCK))
         try:
             seed_test_cast(store)
         finally:

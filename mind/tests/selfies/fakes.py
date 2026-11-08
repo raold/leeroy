@@ -21,7 +21,7 @@ from leeroy_mind.selfies.store import (Candidate, ensure_first_sets, mark_ready,
                                        queued_sets)
 from leeroy_mind.protocol import Member
 from leeroy_mind.selfies.worker import RenderRequest, SelfieWorker
-from leeroy_mind.storage.db import open_db
+from dbtemplate import open_migrated
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_clock import FakeClock
 from leeroy_mind.testing.fake_llm import FakeLLM
@@ -127,7 +127,7 @@ def mind_app(root: Path, *, toml: str = "", prepare: Callable[[Store], None] | N
     master and named; and `prepare(store)` run on its mind.db before the app opens it. The
     caller closes app.store."""
     (root / "mind.toml").write_text(toml, encoding="utf-8")
-    s = Store(open_db(root / "mind.db"), clock=FakeClock(CLOCK))
+    s = Store(open_migrated(root / "mind.db"), clock=FakeClock(CLOCK))
     try:
         seed_test_cast(s)
         renderable_cast(s, 101, 102, 103)

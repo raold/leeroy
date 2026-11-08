@@ -7,6 +7,7 @@ import random
 import pytest
 
 from conftest import run
+from conftest import fast_clock as clock  # noqa: F401 (in-process fixture)
 from engine_rig import make_rig
 from leeroy_mind.library.chunks import ItemRow, SourceResult
 from leeroy_mind.library.core import Library
