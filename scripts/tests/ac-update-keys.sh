@@ -21,7 +21,7 @@ mkdir -p "$AC_CONF" "$AC_MODCONF" "$AC_SRC/src/server/apps/"{worldserver,authser
 dist="$AC_MODULES/example/conf/example.conf.dist"
 live="$AC_MODCONF/example.conf"
 printf 'Shared.Key = 1\n New.Key = 2\nDot.Key = 3\nTest.Password = "VALUE_MUST_STAY_PRIVATE"\n' > "$dist"
-printf 'Shared.Key=4\nGone.Key = 5\nDotXKey = 6\n# New.Key = 2\n' > "$live"
+printf 'Shared.Key=4\nGone.Key = 5\nDotXKey = 6\n' > "$live"
 output=$(ac_report_config_keys "$dist" "$live" 2>&1)
 has 'new config keys: example.conf'
 has 'New.Key'
@@ -77,6 +77,35 @@ has 'Auth.Old'
 lacks 'SECRET_SENTINEL'
 output=$(ac_report_config_keys "$dist" "$AC_MODCONF/missing.conf" 2>&1)
 has 'missing.conf missing from'
+
+cp "$dist" "$dist.keep"; cp "$live" "$live.keep" # The dry-run check below reuses this fixture.
+# A key commented out in the live file is not new; one commented in the template is not gone.
+printf 'Kept.Key = 1
+Template.Default = 2
+' > "$dist"
+printf '# Kept.Key = 0
+Template.Default = 3
+' > "$live"
+sed -i 's/^Template.Default = 2$/# Template.Default = 2/' "$dist"
+output=$(ac_report_config_keys "$dist" "$live" 2>&1)
+lacks 'Kept.Key'
+lacks 'Template.Default'
+# A leading UTF-8 BOM does not hide the first key.
+printf 'ï»¿Bom.Key = 1
+' > "$dist"
+printf 'ï»¿Bom.Key = 1
+' > "$live"
+output=$(ac_report_config_keys "$dist" "$live" 2>&1)
+lacks 'Bom.Key'
+# One unreadable file is reported, the rest still checked, and the report never fails the update.
+printf 'Example.New = 1
+' > "$dist"
+: > "$live"
+if output=$(ac_config_keys() { if [ "$1" = "$AC_CONF/worldserver.conf" ]; then return 1; fi; awk -v all="${2:-}" '(all == "all" && /^[[:space:]]*#?[[:space:]]*[A-Za-z][A-Za-z0-9_.]*[[:space:]]*=/) || /^[[:space:]]*[A-Za-z][A-Za-z0-9_.]*[[:space:]]*=/ { sub(/^[[:space:]]*#?[[:space:]]*/, ""); sub(/[[:space:]]*=.*/, ""); print }' "$1" | LC_ALL=C sort -u; }; ac_report_all_config_keys "$AC_SRC" "$AC_MODULES/example" 2>&1); then checks=$((checks + 1)); else exit 1; fi
+has 'cannot read config keys: worldserver.conf'
+has 'Example.New'
+has 'config key report incomplete'
+mv "$dist.keep" "$dist"; mv "$live.keep" "$live"
 
 # Exercise ac-update.sh itself without any real git or network operations.
 # An ahead/behind fixture must fetch but never merge/rebase in --dry-run.

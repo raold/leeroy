@@ -5,10 +5,15 @@
 # option churn. This is a warning heuristic, never an automatic migration.
 AC_CONFIG_RENAME_THRESHOLD=20
 
+# Active assignments by default; with "all", commented ones ("# Key = 1") count too, so a key
+# the owner commented out on purpose, or a template default left commented, is not reported.
+# A leading UTF-8 BOM (Windows editors) is stripped so the first key is read.
 ac_config_keys() {
-    awk '/^[[:space:]]*[A-Za-z][A-Za-z0-9_.]*[[:space:]]*=/ {
-        sub(/^[[:space:]]*/, ""); sub(/[[:space:]]*=.*/, ""); print
-    }' "$1" | LC_ALL=C sort -u
+    awk -v all="${2:-}" 'NR == 1 { sub(/^\357\273\277/, "") }
+        (all == "all" && /^[[:space:]]*#?[[:space:]]*[A-Za-z][A-Za-z0-9_.]*[[:space:]]*=/) ||
+        /^[[:space:]]*[A-Za-z][A-Za-z0-9_.]*[[:space:]]*=/ {
+            sub(/^[[:space:]]*#?[[:space:]]*/, ""); sub(/[[:space:]]*=.*/, ""); print
+        }' "$1" | LC_ALL=C sort -u
 }
 
 ac_config_prefix() {
@@ -18,7 +23,7 @@ ac_config_prefix() {
 }
 
 ac_report_config_keys() {
-    local dist="$1" live="$2" file key old_prefix new_prefix dist_keys live_keys
+    local dist="$1" live="$2" file key old_prefix new_prefix dist_keys live_keys dist_all live_all
     local -a added=() gone=()
     [ -f "$dist" ] || return 0
     file="$(basename "$live")"
@@ -30,8 +35,12 @@ ac_report_config_keys() {
     # cannot see. An unreadable file must not masquerade as an empty configuration.
     dist_keys=$(ac_config_keys "$dist") || { warn "cannot read template keys: $file"; return 1; }
     live_keys=$(ac_config_keys "$live") || { warn "cannot read config keys: $file"; return 1; }
-    mapfile -t added < <(LC_ALL=C comm -23 <(printf '%s' "$dist_keys") <(printf '%s' "$live_keys"))
-    mapfile -t gone < <(LC_ALL=C comm -13 <(printf '%s' "$dist_keys") <(printf '%s' "$live_keys"))
+    dist_all=$(ac_config_keys "$dist" all) || { warn "cannot read template keys: $file"; return 1; }
+    live_all=$(ac_config_keys "$live" all) || { warn "cannot read config keys: $file"; return 1; }
+    # New: active in the template, absent from the live file even as a comment.
+    # Gone: active in the live file, absent from the template even as a comment.
+    mapfile -t added < <(LC_ALL=C comm -23 <(printf '%s' "$dist_keys") <(printf '%s' "$live_all"))
+    mapfile -t gone < <(LC_ALL=C comm -13 <(printf '%s' "$dist_all") <(printf '%s' "$live_keys"))
     if [ "${#added[@]}" -gt 0 ]; then
         log "new config keys: $file"
         for key in "${added[@]}"; do printf '    new key: %-50s (%s)\n' "$key" "$file"; done
@@ -47,15 +56,19 @@ ac_report_config_keys() {
     fi
 }
 
+# Never fails: the update has already pulled by now, so one unreadable file is reported
+# and the rest are still checked (common.sh's errexit would otherwise stop the update here).
 ac_report_all_config_keys() {
-    local repo dist app
+    local repo dist app incomplete=0
     log "checking new and removed config keys"
     for app in worldserver authserver; do
-        ac_report_config_keys "$AC_SRC/src/server/apps/$app/$app.conf.dist" "$AC_CONF/$app.conf"
+        ac_report_config_keys "$AC_SRC/src/server/apps/$app/$app.conf.dist" "$AC_CONF/$app.conf" || incomplete=1
     done
     for repo in "$@"; do
         for dist in "$repo"/conf/*.conf.dist; do
-            ac_report_config_keys "$dist" "$AC_MODCONF/$(basename "$dist" .dist)"
+            ac_report_config_keys "$dist" "$AC_MODCONF/$(basename "$dist" .dist)" || incomplete=1
         done
     done
+    [ "$incomplete" = 0 ] || warn "config key report incomplete: see the lines above"
+    return 0
 }
