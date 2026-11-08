@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import dataclasses
+import os
 import typing
 from datetime import datetime, timezone
 
@@ -10,7 +11,7 @@ import live_guard as _live_guard
 from leeroy_mind.personas.io import save_persona
 from leeroy_mind.personas.schema import Persona, persona_from_dict
 from leeroy_mind.protocol import Member
-from dbtemplate import open_migrated
+from dbtemplate import build_template, close_template, open_migrated
 from leeroy_mind.storage.rows import MemoryRow
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_clock import FakeClock
@@ -21,6 +22,25 @@ def run(coro):
 
 
 _live_guard.install()
+
+
+@pytest.hookimpl(optionalhook=True, tryfirst=True)
+def pytest_xdist_auto_num_workers(config):
+    """Bound collection and SQLite contention on large developer machines.
+
+    Explicit -n N and xdist's environment override remain available. The hook is optional so
+    serial pytest also works without pytest-xdist.
+    """
+    if os.environ.get("PYTEST_XDIST_AUTO_NUM_WORKERS"):
+        return None
+    return min(8, os.process_cpu_count() or 1)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def migrated_db_template(tmp_path_factory):
+    build_template(tmp_path_factory.mktemp("mind-template"))
+    yield
+    close_template()
 
 
 @pytest.fixture(autouse=True)
@@ -45,6 +65,12 @@ def live_guard(request, tmp_path, monkeypatch):
 @pytest.fixture
 def clock():
     return FakeClock(datetime(2026, 10, 29, 20, 0, tzinfo=timezone.utc))
+
+
+@pytest.fixture
+def fast_clock():
+    """For in-process rigs: settle tasks by yielding, without real socket/thread waits."""
+    return FakeClock(datetime(2026, 10, 29, 20, 0, tzinfo=timezone.utc), yields=64)
 
 
 def unit(i: int) -> list[float]:

@@ -14,10 +14,10 @@
 
 namespace Leeroy::Guild
 {
-inline constexpr std::array<std::string_view, 12> kCommandTypes = {
+inline constexpr std::array<std::string_view, 13> kCommandTypes = {
     "form_raid", "summon", "clear_lockout", "set_loot_master", "give_loot",
     "start_offline_raid", "gear_up", "raid_control", "remove_friend", "set_spec",
-    "bot_do", "stock_items"
+    "bot_do", "stock_items", "offline_raid_stop"
 };
 inline constexpr std::array<std::string_view, 12> kBotStrategyAdd = {
     "behind", "tank face", "mark rti", "boost", "ss tank", "ss healer",
@@ -119,6 +119,7 @@ std::optional<SetSpecCmd> ParseSetSpec(nlohmann::json const&, std::string& error
 std::optional<BotDoCmd> ParseBotDo(nlohmann::json const&, std::string& error);
 std::optional<StockItemsCmd> ParseStockItems(nlohmann::json const&, std::string& error);
 void RegisterGuildCommandTypes();
+std::optional<std::string> ParseOfflineRaidStop(nlohmann::json const&, std::string& error);
 bool BotDoParamAllowed(std::string_view action, std::string_view param);
 bool CustomStrategyName(std::string_view);
 bool BotValueParamAllowed(std::string_view);
@@ -132,6 +133,9 @@ struct JobEvent
     std::vector<std::pair<std::uint32_t, std::string>> skipped;
     std::uint32_t kills = 0, wipes = 0, instanceId = 0, guid = 0, level = 0, avgIlvl = 0;
     std::string trainingRun;
+    std::optional<std::uint32_t> membersInInstance;
+    std::optional<std::int64_t> lastProgressTs;
+    std::optional<bool> bossEngaged;
 };
 nlohmann::json MakeJobEvent(JobEvent const&);
 

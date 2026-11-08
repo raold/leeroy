@@ -1,10 +1,61 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "LeeroyOfflineRaidPolicy.h"
+#include "LeeroyGuildCommands.h"
 #include "TestHarness.h"
 
 #include <limits>
 
 using namespace Leeroy::Guild;
+
+LEEROY_TEST(OfflineRaid_StopRequiresConnectedMindAndOwnedLiveJob)
+{
+    CHECK(OfflineStopError(true, true, false, false, false, false).empty());
+    CHECK_EQ(OfflineStopError(false, true, false, false, false, false), "mind_disconnected");
+    CHECK_EQ(OfflineStopError(true, false, false, false, false, false), "unknown_raid");
+    CHECK_EQ(OfflineStopError(true, false, true, false, false, false), "raid_finished");
+    CHECK_EQ(OfflineStopError(true, true, false, false, false, true), "boss_engaged");
+    CHECK_EQ(OfflineStopError(true, true, false, false, false, std::nullopt), "encounters_unavailable");
+}
+
+LEEROY_TEST(OfflineRaid_StopIsIdempotentDuringOwnedTeardown)
+{
+    CHECK(OfflineStopError(true, true, false, true, true, std::nullopt).empty());
+    CHECK_EQ(OfflineStopError(true, true, false, true, false, false), "raid_finishing");
+    CHECK_EQ(OfflineStopError(true, false, true, true, true, false), "raid_finished");
+}
+
+LEEROY_TEST(OfflineRaid_ProgressIsEngageKillOrWipeNotLoadedGridOrSameState)
+{
+    CHECK(BossProgress(0, 1)); CHECK(BossProgress(1, 3)); CHECK(BossProgress(1, 2));
+    CHECK(BossProgress(1, 0)); CHECK(!BossProgress(5, 0)); CHECK(!BossProgress(1, 1));
+    CHECK(!BossProgress(0, 0)); CHECK(!BossProgress(3, 3));
+}
+
+LEEROY_TEST(OfflineRaid_StopTargetIsBoundedAndTyped)
+{
+    std::string error;
+    CHECK_EQ(*ParseOfflineRaidStop({{"raid_id", "raid1"}}, error), "raid1");
+    CHECK(error.empty());
+    for (auto value : {nlohmann::json(nullptr), nlohmann::json(true), nlohmann::json(3),
+        nlohmann::json(""), nlohmann::json(std::string(129, 'a')), nlohmann::json("bad\nid")})
+    {
+        CHECK(!ParseOfflineRaidStop({{"raid_id", value}}, error));
+        CHECK_EQ(error, "bad field: raid_id");
+    }
+    CHECK(!ParseOfflineRaidStop(nlohmann::json::object(), error));
+    CHECK(ParseOfflineRaidStop({{"raid_id", std::string(128, 'a')}}, error).has_value());
+}
+
+LEEROY_TEST(OfflineRaid_ProgressFieldsAreAdditiveAndPreserveZeroAndFalse)
+{
+    JobEvent e;
+    CHECK(!MakeJobEvent(e).contains("boss_engaged"));
+    e.membersInInstance = 0; e.lastProgressTs = 123; e.bossEngaged = false;
+    auto j = MakeJobEvent(e);
+    CHECK_EQ(j.at("members_in_instance"), 0);
+    CHECK_EQ(j.at("last_progress_ts"), 123);
+    CHECK_EQ(j.at("boss_engaged"), false);
+}
 
 namespace
 {

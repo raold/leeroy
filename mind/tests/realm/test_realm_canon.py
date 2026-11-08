@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from conftest import make_persona, run, seed_test_cast
+from conftest import fast_clock as clock  # noqa: F401 (in-process fixture)
 from leeroy_mind import eval as weekly
 from leeroy_mind.protocol import Ack, Hello, Login, Logout
 from leeroy_mind.realm import canon, cli, protocol

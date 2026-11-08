@@ -485,7 +485,13 @@ def eval_main(argv=None, *, make_llm=None):
     parser.add_argument("--no-llm", action="store_true")
     parser.add_argument("--live-db", action="store_true")
     parser.add_argument("--probe-secrets", action="store_true")
+    from leeroy_mind.eval.talk.cli import add_parser as add_talk_parser, run as run_talk
+    add_talk_parser(parser)
     args = parser.parse_args(argv)
+    if args.eval_action == 'talk':
+        if args.week or args.no_llm or args.live_db or args.probe_secrets:
+            parser.error('talk cannot use the weekly/live evaluation switches')
+        return run_talk(args, SystemClock(), make_llm=make_llm)
     if args.no_llm and args.probe_secrets:
         parser.error("--probe-secrets cannot be combined with --no-llm")
     clock = SystemClock()

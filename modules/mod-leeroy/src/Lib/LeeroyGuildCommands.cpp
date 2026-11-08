@@ -222,6 +222,16 @@ std::optional<OfflineRaidCmd> ParseOfflineRaid(json const& j, std::string& error
     return f.Result(std::move(out));
 }
 
+std::optional<std::string> ParseOfflineRaidStop(json const& j, std::string& error)
+{
+    Fields f(j, error);
+    std::string id;
+    f.String("raid_id", id);
+    f.Require(!id.empty() && id.size() <= 128
+        && std::none_of(id.begin(), id.end(), [](unsigned char c) { return c < 32 || c == 127; }), "raid_id");
+    return f.Result(std::move(id));
+}
+
 std::optional<GearUpCmd> ParseGearUp(json const& j, std::string& error)
 {
     Fields f(j, error);
@@ -393,10 +403,14 @@ json MakeJobEvent(JobEvent const& e)
     json skipped = json::array();
     for (auto const& [guid, reason] : e.skipped)
         skipped.push_back({{"guid", guid}, {"reason", reason}});
-    return {{"type", "job"}, {"id", e.id}, {"kind", e.kind}, {"state", e.state},
+    json out = {{"type", "job"}, {"id", e.id}, {"kind", e.kind}, {"state", e.state},
         {"reason", e.reason}, {"stage", e.stage}, {"guids", e.guids}, {"skipped", skipped},
         {"kills", e.kills}, {"wipes", e.wipes}, {"instance_id", e.instanceId},
         {"guid", e.guid}, {"level", e.level}, {"avg_ilvl", e.avgIlvl}, {"training_run", e.trainingRun}};
+    if (e.membersInInstance) out["members_in_instance"] = *e.membersInInstance;
+    if (e.lastProgressTs) out["last_progress_ts"] = *e.lastProgressTs;
+    if (e.bossEngaged) out["boss_engaged"] = *e.bossEngaged;
+    return out;
 }
 
 json MakeGuildGroupEvent(GuildGroupEvent const& e)

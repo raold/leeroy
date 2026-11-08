@@ -74,6 +74,13 @@ OK, FAIL, NOTE = "ok", "fail", "note"
 MARK = {OK: "ok  ", FAIL: "FAIL", NOTE: "note"}
 PULL_S = 48 * 3600  # telemetry on: a tg_pull at least this often
 HOLD_S = 3600  # a realm body hold or unknown root older than this is stuck
+OFFLINE_OVERDUE_S = 30 * 60
+RAID_OPEN_S = 6 * 3600
+SELFIE_QUEUED_S = 30 * 3600
+CYCLE_ROWS = 100000
+CYCLE_SECONDS = 0.8
+NIGHT_LOG_BYTES = 4 * 1024 * 1024
+NIGHT_LOG_SECONDS = 0.3
 HTTP_S = 3.0
 STATUS_S = 3.0
 SLACK_S = 2.0  # Server.log's whole seconds against a process's exact start
@@ -681,7 +688,7 @@ def _gate_phase(conn) -> tuple[str, int]:
 def _realm_holds(conn, now: float) -> Check:
     try:
         rows = conn.execute(
-            "SELECT kind, state, transport_state, reserved_manifest, created FROM realm_action "
+            "SELECT kind, state, transport_state, reserved_manifest, created, command_id FROM realm_action "
             "WHERE role = 'root' AND state NOT IN ('completed', 'not_sent') AND created < ?",
             (now - HOLD_S,)).fetchall()
     except sqlite3.Error as e:
@@ -692,7 +699,8 @@ def _realm_holds(conn, now: float) -> Check:
                                           f"({type(e).__name__})")
     holds, unknown, bodies, oldest = 0, 0, set(), None
     kinds = Counter()
-    for kind, state, transport, manifest, created in rows:
+    details = []
+    for kind, state, transport, manifest, created, ident in rows:
         try:
             guids = json.loads(manifest)
         except (TypeError, ValueError):
@@ -706,13 +714,281 @@ def _realm_holds(conn, now: float) -> Check:
             bodies.update(g for g in guids if type(g) is int)
         kinds[kind if isinstance(kind, str) and _IDENT.match(kind) else "?"] += 1
         oldest = created if oldest is None else min(oldest, created)
+        # IDs/kinds only. Do not echo a malformed stored value into a shell command.
+        if isinstance(ident, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", ident):
+            count = len({g for g in guids if type(g) is int and g > 0}) if isinstance(guids, list) else 0
+            code = kind if isinstance(kind, str) and _IDENT.fullmatch(kind) else "unknown_kind"
+            details.append(f"{ident} kind={code} members={count}: realm release {ident} "
+                           "--reason reviewed_stale_hold")
     if not holds and not unknown:
         return Check("realm-holds", OK, "realm: no body hold or unknown root older than 1 h")
     return Check("realm-holds", FAIL,
                  f"realm: {holds} body hold{'s' if holds != 1 else ''} ({len(bodies)} members) "
                  f"and {unknown} unknown root{'s' if unknown != 1 else ''} older than 1 h, "
                  f"since {_when(oldest)}: "
-                 + ", ".join(f"{k} {n}" for k, n in sorted(kinds.items())))
+                 + ", ".join(f"{k} {n}" for k, n in sorted(kinds.items()))
+                 + "; inspect native state, then with the mind stopped: "
+                 + "; ".join(details[:20])
+                 + (f"; {len(details) - 20} more roots" if len(details) > 20 else ""))
+
+
+def _table_check(name, operation):
+    """Older schemas are a note, other SQLite errors are a failed observation."""
+    try:
+        return operation()
+    except sqlite3.Error as exc:
+        if _unavailable(exc) or "no such column" in str(exc):
+            return Check(name, NOTE, f"{name}: not set up (older database)")
+        return Check(name, FAIL, f"{name}: cannot read ({type(exc).__name__})")
+
+
+def _offline_raid(conn, now: float) -> Check:
+    name = "offline-raid"
+
+    def check():
+        row = conn.execute("SELECT value FROM meta WHERE key='guild:offline:owned'").fetchone()
+        if not row:
+            return Check(name, OK, "offline raid: no owned run")
+        try:
+            receipt = json.loads(row[0])
+            if not isinstance(receipt, dict):
+                raise ValueError
+            if receipt.get("phase") in ("complete", "rejected"):
+                return Check(name, OK, "offline raid: owned run is terminal")
+            ident, deadline = receipt["raid_id"], receipt["deadline"]
+            if type(deadline) not in (int, float) or not math.isfinite(deadline):
+                raise ValueError
+            if ident is None and receipt.get("phase") in (
+                    "acquiring", "awaiting_ack", "accepted", "uncertain"):
+                # Native acknowledgement/progress precedes the local RaidSession.
+                # The persisted UUID identifies that owned command until _open().
+                command = receipt.get("id")
+                if not isinstance(command, str) or not re.fullmatch(r"[a-fA-F0-9]{32}", command):
+                    raise ValueError
+                ident = f"command {command}"
+            elif type(ident) is not int or ident <= 0:
+                raise ValueError
+        except (ValueError, TypeError, KeyError, RecursionError):
+            return Check(name, FAIL, "offline raid: invalid owned receipt; inspect raid history")
+        overdue = now - deadline
+        if overdue > OFFLINE_OVERDUE_S:
+            return Check(name, FAIL, f"offline raid {ident}: deadline {_ago(overdue)} ago; "
+                         "inspect raid history and native state before releasing its hold")
+        return Check(name, OK, f"offline raid {ident}: within deadline plus 30 min")
+    return _table_check(name, check)
+
+
+def _guild_raids(conn, now: float) -> Check:
+    name = "guild-raids"
+
+    def check():
+        rows = conn.execute("SELECT raid_id, started FROM guild_raid WHERE ended IS NULL "
+                            "AND started < ? ORDER BY started, raid_id LIMIT 21",
+                            (now - RAID_OPEN_S,)).fetchall()
+        if not rows:
+            return Check(name, OK, "guild raids: none open longer than 6 h")
+        detail = ", ".join(f"{int(ident)} open {_ago(now - started)}" for ident, started in rows[:20])
+        return Check(name, FAIL, f"guild raids: {detail}"
+                     + ("; more omitted" if len(rows) > 20 else "")
+                     + "; inspect raid history and confirm the run ended before clearing its hold")
+    return _table_check(name, check)
+
+
+def _night_log_counts(data: Path, night: str, started: float, finished: float, open_log):
+    """Bounded newest-first fallback, with timestamp coverage rather than file presence.
+
+    A readable newer log proves nothing about an older night. Require records spanning
+    both bounds and every intervening local day; a missing rotation is not a clean night.
+    Never retain/print message or unit text.
+    """
+    counts, codes = Counter(), Counter()
+    remaining, until = NIGHT_LOG_BYTES, time.monotonic() + NIGHT_LOG_SECONDS
+    incomplete, seen = False, False
+    before = after = False
+    first_day = datetime.fromtimestamp(started).date().toordinal()
+    last_day = datetime.fromtimestamp(finished).date().toordinal()
+    days = set()
+    for path in reversed(_log_files(data / "logs", started)):
+        if remaining <= 0 or time.monotonic() >= until:
+            incomplete = True
+            break
+        try:
+            with open_log(path) as fh:
+                size = fh.seek(0, os.SEEK_END)
+                offset = max(0, size - remaining)
+                fh.seek(offset)
+                raw = fh.read(remaining)
+                remaining -= len(raw)
+                if offset:
+                    raw = raw.partition(b"\n")[2]
+                    incomplete = True
+                seen = True
+        except FileNotFoundError:
+            continue
+        except OSError:
+            incomplete = True
+            continue
+        for line in raw.splitlines():
+            if time.monotonic() >= until:
+                incomplete = True
+                break
+            try:
+                record = json.loads(line)
+                at = datetime.fromisoformat(record["ts"]).timestamp()
+                before |= at <= started
+                after |= at >= finished
+                day = datetime.fromtimestamp(at).date().toordinal()
+                if first_day <= day <= last_day:
+                    days.add(day)
+                if record.get("event") != "nightly_unit_failed" or record.get("night") != night:
+                    continue
+                if not started <= at <= finished:
+                    continue
+                stage = record.get("stage")
+                stage = stage if isinstance(stage, str) and _IDENT.fullmatch(stage) else "unknown_stage"
+                counts[stage] += 1
+                code = record.get("error")
+                if isinstance(code, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}(?:Error|Exception)", code):
+                    codes[code] += 1
+            except (ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError,
+                    OSError):
+                incomplete = True
+    covered = before and after and len(days) == last_day - first_day + 1
+    return counts, codes, incomplete, seen, covered
+
+
+def _night_failures(conn, data: Path, open_log) -> Check:
+    name = "night-failures"
+
+    def check():
+        row = conn.execute("SELECT night, started, finished, error FROM night_run "
+                           "WHERE finished IS NOT NULL AND status NOT IN ('running','interrupted') "
+                           "ORDER BY finished DESC, night DESC LIMIT 1").fetchone()
+        if row is None:
+            return Check(name, NOTE, "night failures: no finished night yet")
+        night, started, finished, error = row
+        counts = None
+        if error is not None:
+            try:
+                stored = json.loads(error)
+                if not isinstance(stored, dict) or any(
+                        not isinstance(k, str) or not _IDENT.fullmatch(k)
+                        or type(n) is not int or n < 0 for k, n in stored.items()):
+                    raise ValueError
+                counts = Counter(stored)
+            except (ValueError, TypeError, RecursionError):
+                pass
+        codes, incomplete, missing_coverage = Counter(), False, False
+        source = "stored"
+        if counts is None or sum(counts.values()):
+            logged, codes, incomplete, seen, covered = _night_log_counts(
+                data, night, started, finished, open_log)
+            if counts is None:
+                counts, source = logged, "logs"
+                if not seen:
+                    return Check(name, NOTE, "night failures: no stored counts; logs unavailable")
+                missing_coverage = not covered
+        total = sum(counts.values())
+        status = FAIL if total >= 10 else NOTE if total or incomplete or missing_coverage else OK
+        detail = ", ".join(f"{stage}={n}" for stage, n in sorted(counts.items()) if n)
+        observed = " observed" if source == "logs" and (incomplete or missing_coverage) else ""
+        text = f"night failures: latest finished night, {total}{observed} failed units ({source})"
+        if detail:
+            text += "; " + detail
+        if codes:
+            code, n = sorted(codes.items(), key=lambda item: (-item[1], item[0]))[0]
+            text += f"; top error={code} ({n} logged)"
+        if incomplete:
+            text += "; log scan incomplete (budget or unreadable records)"
+        if missing_coverage:
+            text += "; historical log coverage incomplete"
+        return Check(name, status, text)
+    return _table_check(name, check)
+
+
+def _evidence_cycles(conn, *, row_budget=CYCLE_ROWS, seconds=CYCLE_SECONDS) -> Check:
+    """Count memories reaching cycles in the critic's shared persisted-edge graph.
+
+    Cache completed acyclic subgraphs and proven cyclic ancestry. A budget or a
+    malformed edge never becomes an acyclic result. No memory text is printed.
+    """
+    from .storage.provenance import ProvenanceError, canonical, edges
+    name = "evidence-cycles"
+
+    def check():
+        until = time.monotonic() + seconds
+        cache, safe, cyclic = {}, set(), set()
+        checked = bad = invalid = 0
+        incomplete = False
+        conn.set_progress_handler(lambda: int(time.monotonic() >= until), 1000)
+
+        def children(ref):
+            if time.monotonic() >= until or len(cache) >= row_budget:
+                raise TimeoutError
+            if ref not in cache:
+                cache[ref] = tuple(canonical(child) for child in edges(conn, ref).children)
+            return iter(cache[ref])
+
+        try:
+            roots = conn.execute("SELECT id FROM memory ORDER BY id LIMIT ?", (row_budget + 1,)).fetchall()
+            for row in roots[:row_budget]:
+                if time.monotonic() >= until:
+                    incomplete = True
+                    break
+                root = f"memory:{row[0]}"
+                active, stack = {root}, []
+                try:
+                    if root not in safe and root not in cyclic:
+                        stack.append((root, children(root)))
+                    while stack:
+                        ref, pending = stack[-1]
+                        child = next(pending, None)
+                        if child is None:
+                            safe.add(ref)
+                            active.remove(ref)
+                            stack.pop()
+                        elif child in cyclic or child in active:
+                            cyclic.update(active)
+                            break
+                        elif child not in safe:
+                            active.add(child)
+                            stack.append((child, children(child)))
+                    checked += 1
+                    bad += root in cyclic
+                except (ProvenanceError, ValueError, TypeError, RecursionError):
+                    invalid += 1
+                except TimeoutError:
+                    incomplete = True
+                    break
+            incomplete |= len(roots) > row_budget
+        except sqlite3.OperationalError as exc:
+            if "interrupted" not in str(exc):
+                raise
+            incomplete = True
+        finally:
+            conn.set_progress_handler(None, 0)
+        status = FAIL if bad >= 50 else NOTE if bad or incomplete or invalid else OK
+        text = f"evidence cycles: {bad} cyclic memories among {checked} checked; {len(cache)} graph nodes"
+        if incomplete:
+            text += f"; incomplete (budget {row_budget} rows/{seconds:g}s)"
+        if invalid:
+            text += f"; incomplete ({invalid} invalid provenance rows)"
+        return Check(name, status, text)
+    return _table_check(name, check)
+
+
+def _selfie_queue(conn, now: float) -> Check:
+    name = "selfie-queue"
+
+    def check():
+        count, oldest = conn.execute("SELECT count(*), min(requested) FROM selfie_set "
+                                    "WHERE status='queued' AND requested < ?",
+                                    (now - SELFIE_QUEUED_S,)).fetchone()
+        if count:
+            return Check(name, NOTE, f"selfie queue: {count} sets older than 30 h, "
+                         f"oldest {_ago(now - oldest)}; inspect the next selfie stage")
+        return Check(name, OK, "selfie queue: no queued set older than 30 h")
+    return _table_check(name, check)
 
 
 def _unvoiced(conn) -> Check:
@@ -735,7 +1011,7 @@ def _unvoiced(conn) -> Check:
     return Check("unvoiced", OK, "personas: every cast member has one")
 
 
-def _activity(root: Path, data: Path, now: float) -> list[Check]:
+def _activity(root: Path, data: Path, now: float, open_log=None) -> list[Check]:
     path = data / "mind.db"
     try:
         conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
@@ -746,6 +1022,12 @@ def _activity(root: Path, data: Path, now: float) -> list[Check]:
     try:
         return [_guarded("telemetry", _telemetry, conn, root, data, now),
                 _guarded("realm-holds", _realm_holds, conn, now),
+                _guarded("offline-raid", _offline_raid, conn, now),
+                _guarded("guild-raids", _guild_raids, conn, now),
+                _guarded("night-failures", _night_failures, conn, data,
+                         open_log or (lambda path: open(path, "rb"))),
+                _guarded("evidence-cycles", _evidence_cycles, conn),
+                _guarded("selfie-queue", _selfie_queue, conn, now),
                 _guarded("unvoiced", _unvoiced, conn)]
     finally:
         conn.close()
@@ -798,7 +1080,7 @@ def run_checks(root: Path, data_dir: Path, *, probes: Probes | None = None) -> l
     out.append(_guarded("console", _console, p))
     out.append(_guarded("voice", _voice, p, data))
     out.append(_guarded("ollama", _ollama, p, cfg, forbidden))
-    out += _activity(root, data, now)
+    out += _activity(root, data, now, p.open_log)
     return [c for item in out for c in (item if isinstance(item, list) else [item])]
 
 
