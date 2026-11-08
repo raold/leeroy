@@ -19,6 +19,7 @@ from leeroy_mind.selfies.stage import make_stage
 from leeroy_mind.selfies.store import ensure_first_sets, queue_more, queued_sets, ready_set
 from leeroy_mind.selfies.style import LUST
 from leeroy_mind.selfies.worker import Rendered, SelfieWorker
+from leeroy_mind.selfies.job import WorkerError
 from nightly.conftest import FakeAdmin
 from .fakes import JPEG, OWNER, fake_command, fake_worker, mind_app, ready, until
 
@@ -491,3 +492,51 @@ def test_off_or_invalid_registers_no_booth_and_keeps_normal_scheduler(tmp_path, 
         assert app.arbiter._preempt.__self__ is app.night_scheduler
     finally:
         app.store.close()
+
+
+class FailingStart(MemoryWorker):
+    async def start(self):
+        raise WorkerError("vram")
+
+
+def _count_rooms(app):
+    rooms = []
+    real = app.arbiter.make_room
+
+    async def room():
+        rooms.append(1)
+        await real()
+    app.arbiter.make_room = room
+    return rooms
+
+
+def test_start_failure_cools_down_backs_off_and_success_resets(app, caplog):
+    from leeroy_mind.selfies.booth import COOLDOWN, STREAK
+    box = {"w": FailingStart()}
+    app.selfie_booth.worker = lambda: box["w"]
+    rooms = _count_rooms(app)
+
+    async def go():
+        await advance(app, 3600)
+        await tick(app)
+        first = len(rooms)
+        assert first and not ready_set(app.store, 101, 1)
+        assert app.store.get_meta(STREAK) == "1"
+        until = float(app.store.get_meta(COOLDOWN))
+        assert until - app.clock.now() == 1200
+        for _ in range(5):
+            await advance(app, 60)
+            await tick(app)
+        assert len(rooms) == first
+        await advance(app, 1200)
+        await tick(app)
+        assert len(rooms) > first and app.store.get_meta(STREAK) == "2"
+        assert float(app.store.get_meta(COOLDOWN)) - app.clock.now() == 2400
+        await advance(app, 2400)
+        box["w"] = MemoryWorker()
+        await tick(app)
+        assert ready_set(app.store, 101, 1)
+        assert app.store.get_meta(STREAK) == "0" and app.store.get_meta(COOLDOWN) == "0"
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        run(go())
+    assert caplog.text.count("selfies_booth_cooldown") == 2

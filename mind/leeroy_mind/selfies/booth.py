@@ -23,6 +23,10 @@ STAGE = "selfies_booth"
 LAST = "selfies:booth:last"
 OFFLINE_SECONDS = 600
 TICK_SECONDS = 60
+COOLDOWN = "selfies:booth:cooldown_until"
+STREAK = "selfies:booth:failures"
+COOLDOWN_FIRST = 1200
+COOLDOWN_MAX = 7200
 
 
 class PhotoBooth:
@@ -62,7 +66,33 @@ class PhotoBooth:
         return (self.cfg.enabled and self.cfg.booth and not self.arbiter.holders
                 and self.scheduler.presence.offline_seconds() >= OFFLINE_SECONDS
                 and self.scheduler.running is None and not self._exclusive.locked()
-                and self.scheduler.due() is None)
+                and self.scheduler.due() is None and not self._cooling())
+
+    def _cooling(self):
+        until = self.app.store.get_meta(COOLDOWN)
+        try:
+            return until is not None and self.app.clock.now() < float(until)
+        except ValueError:
+            return False
+
+    def _cool(self, ctx, code):
+        store = ctx.store
+        try:
+            streak = int(store.get_meta(STREAK) or 0) + 1
+        except ValueError:
+            streak = 1
+        seconds = min(COOLDOWN_FIRST * 2 ** (streak - 1), COOLDOWN_MAX)
+        with store.transaction():
+            store.set_meta(STREAK, str(streak))
+            store.set_meta(COOLDOWN, str(ctx.clock.now() + seconds))
+        log("selfies_booth_cooldown", level=logging.WARNING, code=code, minutes=seconds // 60,
+            failures=streak)
+
+    def _reset_cooldown(self, ctx):
+        if ctx.store.get_meta(STREAK) or ctx.store.get_meta(COOLDOWN):
+            with ctx.store.transaction():
+                ctx.store.set_meta(STREAK, "0")
+                ctx.store.set_meta(COOLDOWN, "0")
 
     def _context(self):
         now = self.app.clock.now()
@@ -98,7 +128,7 @@ class PhotoBooth:
         async with self._exclusive:
             started, began = ctx.clock.now(), time.monotonic()
             before = done_sets(ctx, policy)
-            outcome, calls = "failed", 0
+            outcome, calls, code = "failed", 0, None
             tally = Counter()
             w = self.worker()
             original_render = w.render
@@ -109,6 +139,17 @@ class PhotoBooth:
                 return await original_render(*args, **kwargs)
 
             w.render = counted
+            original_start = w.start
+
+            async def noting_start(*args, **kwargs):
+                nonlocal code
+                try:
+                    return await original_start(*args, **kwargs)
+                except Exception as e:
+                    code = getattr(e, "reason", None) or type(e).__name__
+                    raise
+
+            w.start = noting_start
             try:
                 try:
                     await self.arbiter.make_room()
@@ -125,12 +166,18 @@ class PhotoBooth:
             except LiveLeaseHeld:
                 outcome = "preempted"
             except Exception as e:
+                code = code or type(e).__name__
                 log("selfies_booth_failed", level=logging.WARNING, error=type(e).__name__)
             finally:
                 seconds = round(time.monotonic() - began, 3)
                 attempts = done_sets(ctx, policy) - before
                 # A cancelled pass may have already published some sets before its return.
                 sets = tally["ready"]
+                if outcome != "preempted":
+                    if sets:
+                        self._reset_cooldown(ctx)
+                    elif outcome == "failed" or (ctx.failures and not tally["refused"]):
+                        self._cool(ctx, code or "no_set")
                 with ctx.store.transaction():
                     # Unlike a resumed night, every booth pass (even one stopped before its
                     # first request) advances its record. Calls are actual render attempts.
