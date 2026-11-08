@@ -192,6 +192,42 @@ def test_shared_name_collision_retry_logs_only_guid(h, caplog):
     assert not any(text in caplog.text for text in (clash, NAMES[0], "Arkon"))
 
 
+@pytest.mark.parametrize("broken", ["malformed_json", "newer_schema"])
+def test_unreadable_existing_persona_does_not_charge_newcomers_or_lose_taken_names(h, caplog, broken):
+    missing(h, 101, 103)
+    clash = load_persona(h.store, 104).identity.real_name
+    original_version = h.store.persona_versions()[102]
+    if broken == "malformed_json":
+        bad = "PRIVATE_UNREADABLE_JSON"
+    else:
+        document = json.loads(h.store.get_persona_json(102))
+        document.update(schema=9999, PRIVATE_FIELD="PRIVATE_CONTENT")
+        bad = json.dumps(document)
+    with h.store.transaction():
+        h.store.conn.execute("UPDATE persona_core SET json=? WHERE guid=102", (bad,))
+    prior_failures = json.dumps({"failed_nights": 2, "last_night": "2026-10-28"})
+    h.store.set_meta(N.STATE + "101", prior_failures)
+    ctx = context(h)
+    # Both a readable old persona and the first accepted newcomer must continue
+    # blocking duplicate names while the unreadable row is isolated.
+    ctx.reasoner.llm = FakeLLM(script_from([
+        "profile", _persona_json(clash), _persona_json(NAMES[0]),
+        "profile", _persona_json(NAMES[0]), _persona_json(NAMES[1]),
+    ]))
+    with caplog.at_level(logging.INFO):
+        run(generate(ctx))
+    assert load_persona(h.store, 101).identity.real_name == NAMES[0]
+    assert load_persona(h.store, 103).identity.real_name == NAMES[1]
+    assert ctx.reasoner.calls == 6 and ctx.failures[N.STAGE] == 0
+    assert ctx.done(N.STAGE, "101") and ctx.done(N.STAGE, "103")
+    assert h.store.get_meta(N.STATE + "101") == prior_failures
+    assert h.store.get_meta(N.STATE + "103") is None
+    assert h.store.get_persona_json(102) == bad and h.store.persona_versions()[102] == original_version
+    assert not ctx.done(N.STAGE, "102") and N.count(ctx) == 0
+    assert caplog.text.count("newcomer_existing_unreadable") == 1 and "guid=102" in caplog.text
+    assert not any(text in caplog.text for text in ("PRIVATE", "newcomer_gave_up", clash, *NAMES, "Arkon"))
+
+
 def test_persona_write_rolls_back_but_failure_receipt_prevents_unbounded_retry(h, monkeypatch, caplog):
     missing(h, 101)
 

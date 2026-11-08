@@ -82,6 +82,27 @@ def _failed_night(ctx, guid, *, reported=False):
         log("newcomer_gave_up" if gave_up else "newcomer_refused", guid=guid)
 
 
+def _existing(store, unreadable):
+    """Isolate bad stored records as PersonaCache.base does, without logging text.
+
+    Re-read readable records between units so newly accepted personas reserve
+    their names. An unreadable guid is reported once per stage invocation.
+    """
+    existing = []
+    for guid in sorted(store.persona_versions()):
+        if guid in unreadable:
+            continue
+        try:
+            persona = load_persona(store, guid)
+        except ValueError:  # PersonaError and JSON decoding, matching PersonaCache.base.
+            unreadable.add(guid)
+            log("newcomer_existing_unreadable", guid=guid)
+            continue
+        if persona is not None:
+            existing.append(persona)
+    return existing
+
+
 def make_stage(cast_config):
     async def stage_newcomers(ctx):
         # Unlike model-parallel stages, name allocation is sequential: each accepted
@@ -92,14 +113,14 @@ def make_stage(cast_config):
                 ctx.store.set_meta(PLAN + ctx.night, json.dumps(selected))
         cfg = cast_config()
         rules = generation_rules(ctx.settings.data_dir)
+        unreadable = set()
         for guid in selected:
             unit = str(guid)
             if ctx.done(STAGE, unit) or guid not in _eligible(ctx):
                 continue
             try:
                 roster = list(ctx.store.cast().values())
-                existing = [p for g in sorted(ctx.store.persona_versions())
-                            if (p := load_persona(ctx.store, g)) is not None]
+                existing = _existing(ctx.store, unreadable)
                 slots = plan_slots(roster, existing, cfg, ctx.human, ctx.rng(STAGE, guid))
                 slot = next(s for s in slots if s.guid == guid)
                 member = next(m for m in roster if m.guid == guid)
