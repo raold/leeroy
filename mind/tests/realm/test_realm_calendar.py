@@ -104,7 +104,7 @@ class FakeRealm:
 class Rig:
     def __init__(self, root, *, start=TUESDAY, auto_job=True):
         self.root = root
-        self.clock = FakeClock(start)
+        self.clock = FakeClock(start, yields=64)
         self.store = Store(open_migrated(root / "mind.db"), clock=self.clock)
         self.ledger = DirectLedger(self.store, process_id=PROCESS, clock=self.clock)
         self.personas, self.away, self.sent = {}, set(), []
@@ -647,7 +647,7 @@ def test_a_post_that_never_left_is_closed_and_retried(rig):
 
 
 def test_posts_not_held_by_raid(tmp_path, monkeypatch):
-    clock = FakeClock(datetime(2026, 11, 3, 12, 0, tzinfo=timezone.utc))  # Tuesday, after the reset.
+    clock = FakeClock(datetime(2026, 11, 3, 12, 0, tzinfo=timezone.utc), yields=64)  # Tuesday, after the reset.
     store = Store(open_migrated(tmp_path / "mind.db"), clock=clock)
     app = RealmApp(tmp_path, store, clock)
     store.upsert_cast([Member(LEAD, "Belra", 4, 11, 0, 80, 1, True, 0, 0, -1)], 1000.0)

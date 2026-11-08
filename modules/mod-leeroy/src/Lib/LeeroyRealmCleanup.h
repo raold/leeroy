@@ -37,11 +37,20 @@ struct WintergraspMemberFacts
 std::string WintergraspPrivateReason(WintergraspMemberFacts const& facts);
 // Only an ordinary leave_pvp (no token cleanup) is fenced at its ack.
 bool FencesLeavePvpAck(std::string const& kind, std::string const& pvpOwner);
+struct LeavePvpMemberFacts
+{
+    std::uint32_t guid;
+    WintergraspMemberFacts wintergrasp;
+    // Exact affected rosters read by the step's cleanup producers, including this member.
+    std::vector<std::uint32_t> cleanupMembers = {};
+};
 // The ack error for a leave whose members include some in a Wintergrasp state: the reason and
 // the first offending guids that fit (the whole error stays within the mind's 256 characters), as
 // "wg_private_state_unavailable:301,302". Empty when no member is. The mind accepts it as a
-// refusal only when every named guid is in the command's manifest.
-std::string LeavePvpAckError(std::vector<std::pair<std::uint32_t, WintergraspMemberFacts>> const& members);
+// refusal only when every named guid is in the command's manifest. Wintergrasp takes precedence;
+// otherwise name manifest members whose cleanup reaches outside it, using
+// "cleanup_member_not_admitted:<guid,...>" and the same bound.
+std::string LeavePvpAckError(std::vector<LeavePvpMemberFacts> const& members);
 
 struct GroupCleanupPlan
 {

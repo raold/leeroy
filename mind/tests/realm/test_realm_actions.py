@@ -276,6 +276,29 @@ def test_backoff_is_per_owner_kind_guid_for_600_seconds_and_history_bounded(harn
     run(scenario())
 
 
+@pytest.mark.parametrize("reason", ["wg_private_state_unavailable", "cleanup_member_not_admitted"])
+def test_named_leave_backoff_filters_only_named_members_for_exactly_600_seconds(harness, reason):
+    async def scenario():
+        h = harness
+        h.queue.submit(p.LeavePvp("leave", (101, 102, 103)), owner="raid")
+        await h.cycle(10)
+        h.ack("leave", False, f"{reason}:102")
+        await h.cycle()
+        assert h.store.holds() == ()
+        assert h.queue.leave_backed_off("raid") == {102}
+        assert h.queue.leave_backed_off("realm_day") == set()
+        h.queue.submit(p.LeavePvp("rest", (101, 103)), owner="raid")
+        h.clock.value = 609.999
+        with pytest.raises(ActionRejected, match="backoff"):
+            h.queue.submit(p.LeavePvp("too_soon", (102,)), owner="raid")
+        assert h.queue.leave_backed_off("raid") == {102}
+        h.clock.value = 610
+        assert h.queue.leave_backed_off("raid") == set()
+        h.queue.submit(p.LeavePvp("later", (102,)), owner="raid")
+        await h.finish()
+    run(scenario())
+
+
 def test_native_off_allows_only_exact_defaults_and_offline_hello_clears_scheduling(harness):
     async def scenario():
         h = harness

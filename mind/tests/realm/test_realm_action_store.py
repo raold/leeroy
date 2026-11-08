@@ -155,41 +155,56 @@ def test_a_leave_refused_for_one_fenced_body_frees_the_whole_cast(store):
     assert store.holds() == ()
 
 
-def test_a_leave_refused_at_its_ack_naming_wintergrasp_members_frees_the_whole_cast(store):
+@pytest.mark.parametrize("reason", ["wg_private_state_unavailable", "cleanup_member_not_admitted"])
+def test_a_leave_refused_at_its_ack_naming_members_frees_the_whole_cast(store, reason, caplog):
     cast = tuple(range(101, 245))
     dispatch(store, prepare(store, p.LeavePvp("leave", cast), owner="raid", rank=0))
     assert store.holds()[0].guids == frozenset(cast)
-    t = store.observe_ack(Ack(0, "leave", False, "wg_private_state_unavailable:102,140"), now=2)
-    assert (t.result_ready, t.result_ok, t.reason) == (True, False, "wg_private_state_unavailable:102,140")
+    t = store.observe_ack(Ack(0, "leave", False, f"{reason}:102,140"), now=2)
+    assert (t.result_ready, t.result_ok, t.reason) == (True, False, f"{reason}:102,140")
     assert store.get("leave").state == "completed"
     assert store.holds() == ()
+    store.observe_ack(Ack(0, "leave", False, f"{reason}:102,140"), now=3)
+    store.recover(process_id="new", now=4)
+    assert caplog.messages == [f"realm_leave_refused id=leave kind=leave_pvp reason={reason} named=2 members=144"]
 
 
-@pytest.mark.parametrize("error", ["wg_private_state_unavailable", "wg_private_state_unavailable:",
-                                   "wg_private_state_unavailable:999", "wg_private_state_unavailable:101,999",
-                                   "wg_private_state_unavailable:101,101", "wg_private_state_unavailable:1x"])
-def test_a_wintergrasp_ack_refusal_that_names_nobody_in_the_manifest_stays_unknown(store, error):
+@pytest.mark.parametrize("reason", ["wg_private_state_unavailable", "cleanup_member_not_admitted"])
+@pytest.mark.parametrize("suffix", ["", ":", ":999", ":101,999", ":101,101", ":101,0101", ":1x", ":101,", ":0"])
+def test_a_named_ack_refusal_with_invalid_members_stays_unknown(store, reason, suffix):
     dispatch(store, prepare(store, p.LeavePvp("leave", (101, 102)), owner="raid", rank=0))
-    store.observe_ack(Ack(0, "leave", False, error), now=2)
+    store.observe_ack(Ack(0, "leave", False, reason + suffix), now=2)
     assert store.get("leave").state == "unknown"
     assert store.holds()[0].guids == frozenset({101, 102})
 
 
-def test_the_wintergrasp_ack_refusal_is_an_ordinary_leaves_alone(store):
+@pytest.mark.parametrize("reason", ["wg_private_state_unavailable", "cleanup_member_not_admitted"])
+def test_the_named_ack_refusal_is_for_ordinary_leaves_alone(store, reason):
     dispatch(store, prepare(store, p.Rearm("rearm", CAST)))
-    store.observe_ack(Ack(0, "rearm", False, f"wg_private_state_unavailable:{CAST[0]}"), now=2)
+    store.observe_ack(Ack(0, "rearm", False, f"{reason}:{CAST[0]}"), now=2)
     assert store.get("rearm").state == "unknown"
     assert store.holds()[0].guids == frozenset(CAST)
 
 
-def test_recovery_settles_a_stored_ack_only_wintergrasp_leave_refusal(store):
+@pytest.mark.parametrize("reason", ["wg_private_state_unavailable", "cleanup_member_not_admitted"])
+def test_named_ack_refusal_does_not_release_a_token_cleanup(store, reason):
+    wg(store)
+    snapshot(store)
+    cleanup(store)
+    store.observe_ack(Ack(0, "cleanup", False, f"{reason}:2"), now=12)
+    assert store.get("cleanup").state != "completed"
+    assert store.holds()[0].guids == frozenset({2, 3, 4})
+
+
+@pytest.mark.parametrize("reason", ["wg_private_state_unavailable", "cleanup_member_not_admitted"])
+def test_recovery_settles_a_stored_ack_only_named_leave_refusal(store, reason):
     cast = (101, 102, 103)
     _stored_unknown(store, "leave", p.LeavePvp("leave", cast),
-                    {"ack": {"error": "wg_private_state_unavailable:102", "ok": False}, "failed_at": 5.0},
+                    {"ack": {"error": f"{reason}:102", "ok": False}, "failed_at": 5.0},
                     reason="unknown")
     assert store.get("leave").state == "unknown" and store.holds()
     store.recover(process_id="new", now=20)
-    assert (store.get("leave").state, store.get("leave").result_reason) == ("completed", "wg_private_state_unavailable:102")
+    assert (store.get("leave").state, store.get("leave").result_reason) == ("completed", f"{reason}:102")
     assert store.holds() == ()
 
 

@@ -216,17 +216,52 @@ LEEROY_TEST(RealmCleanup_LeavePvpAckNamesTheWintergraspMembers)
     CHECK(LeavePvpAckError({{301, clean}, {302, clean}}).empty());
     CHECK_EQ(LeavePvpAckError({{301, clean}, {302, tainted}, {303, clean}, {304, tainted}}),
         std::string("wg_private_state_unavailable:302,304"));
-    std::vector<std::pair<std::uint32_t, WintergraspMemberFacts>> many;
-    for (std::uint32_t guid = 1000; guid < 1100; ++guid) many.emplace_back(guid, tainted);
+    std::vector<LeavePvpMemberFacts> many;
+    for (std::uint32_t guid = 1000; guid < 1100; ++guid) many.push_back({guid, tainted});
     auto const error = LeavePvpAckError(many);
     CHECK(error.size() <= 256 && error.size() > 200);
     CHECK(error.rfind("wg_private_state_unavailable:1000,1001,", 0) == 0);
     // Ten-digit guids: still at most 256 characters, and never fewer than one name.
     many.clear();
-    for (std::uint32_t guid = 4000000000u; guid < 4000000100u; ++guid) many.emplace_back(guid, tainted);
+    for (std::uint32_t guid = 4000000000u; guid < 4000000100u; ++guid) many.push_back({guid, tainted});
     auto const wide = LeavePvpAckError(many);
     CHECK(wide.size() <= 256 && wide.rfind("wg_private_state_unavailable:4000000000,4000000001,", 0) == 0);
     CHECK(wide.back() != ',');
+}
+
+LEEROY_TEST(RealmCleanup_LeaveAckClosureInsideManifestAdmits)
+{
+    CHECK(LeavePvpAckError({{301, {}, {301, 302}}, {302, {}, {302, 301}}, {303, {}, {303}}}).empty());
+    // An offline manifest member still counts as admitted; its body fence is checked separately.
+    CHECK(LeavePvpAckError({{301, {}, {301, 302}}, {302, {}}}).empty());
+}
+
+LEEROY_TEST(RealmCleanup_LeaveAckNamesMembersWhoseClosuresReachOutside)
+{
+    CHECK_EQ(LeavePvpAckError({{301, {}, {301, 999}}, {302, {}, {302}}, {303, {}, {303, 999, 998}}}),
+        std::string("cleanup_member_not_admitted:301,303"));
+    // Removing a named member can expose another closure on the next leave.
+    CHECK(LeavePvpAckError({{301, {}, {301, 302}}, {302, {}, {302}}}).empty());
+    CHECK_EQ(LeavePvpAckError({{301, {}, {301, 302}}}), std::string("cleanup_member_not_admitted:301"));
+}
+
+LEEROY_TEST(RealmCleanup_LeaveAckClosureNamesAreBoundedWholeGuids)
+{
+    std::vector<LeavePvpMemberFacts> many;
+    for (std::uint32_t guid = 4000000000u; guid < 4000000150u; ++guid) many.push_back({guid, {}, {guid, 999}});
+    auto const error = LeavePvpAckError(many);
+    CHECK(error.size() <= 256 && error.size() > 240);
+    CHECK(error.rfind("cleanup_member_not_admitted:4000000000,4000000001,", 0) == 0);
+    CHECK(error.back() != ',');
+    CHECK_EQ(LeavePvpAckError({many.front()}), std::string("cleanup_member_not_admitted:4000000000"));
+}
+
+LEEROY_TEST(RealmCleanup_LeaveAckWintergraspPrecedesExternalClosures)
+{
+    WintergraspMemberFacts tainted;
+    tainted.inZone = true;
+    CHECK_EQ(LeavePvpAckError({{301, {}, {301, 999}}, {302, tainted, {302, 999}}}),
+        std::string("wg_private_state_unavailable:302"));
 }
 
 LEEROY_TEST(RealmCleanup_OnlyAnOrdinaryLeaveIsFencedAtItsAck)

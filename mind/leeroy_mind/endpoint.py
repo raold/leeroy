@@ -65,6 +65,7 @@ import logging
 import os
 import secrets
 import socket
+import stat
 import time
 import tomllib
 from contextlib import suppress
@@ -73,6 +74,7 @@ from pathlib import Path
 
 from leeroy_mind.config import ConfigError, log
 from leeroy_mind.logs import log as log_event
+from leeroy_mind.control_json import decode_body
 
 VERSION = 1
 KEY_FILE = "control.json"
@@ -86,6 +88,7 @@ BANK_READ_S = 15.0  # the four bank queries, before the console is answered anyw
 LIBRARY_READ_S = 15.0  # the query embedding and the ranking, before the console is answered anyway
 BANK_CACHE_S = 30.0  # a bank snapshot younger than this is answered as it is
 MAX_CONNECTIONS = 8
+REFUSAL_LOG_S = 30.0
 REPLACE_TRIES = 40  # 2 s of 50 ms tries to move control.json over a file being read
 OPS = ("status", "stop", "raid", "tune", "selfie", "say", "bank", "board", "library")
 RAID_ACTIONS = ("call", "form", "summon", "start", "stop", "end")
@@ -380,9 +383,17 @@ def _key_ok(value) -> bool:
 
 def read_key_file(path: Path) -> dict | None:
     """{"pid", "port", "key"} from control.json, or None when it is missing or not exactly
-    the shape the endpoint writes."""
+    the shape the endpoint writes. Read at most 1025 bytes from a checked regular file."""
     try:
-        raw = Path(path).read_bytes()
+        path = Path(path)
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+            return None
+        with path.open("rb") as stream:
+            opened = os.fstat(stream.fileno())
+            if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+                return None
+            raw = stream.read(1025)
     except OSError:
         return None
     if len(raw) > 1024:
@@ -612,7 +623,7 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     if not line.endswith(b"\n") or len(line) > MAX_LINE:
         raise BadRequest("bad request")
     try:
-        value = json.loads(line.decode("utf-8"), parse_constant=_no_constant)
+        value = decode_body(line)
     except (UnicodeDecodeError, ValueError, RecursionError):
         raise BadRequest("bad request: not a JSON line") from None
     if not isinstance(value, dict) or not {"v", "key", "op"} <= set(value) <= {
@@ -713,6 +724,7 @@ class ControlEndpoint:
         self.library_s = library_s
         self._bank_task: asyncio.Future | None = None  # the read in flight, shared by askers
         self._bank_cache: tuple[float, dict] | None = None
+        self._refusal_logs = {}  # fixed reason codes only, never request text or keys
 
     async def serve(self) -> None:
         from leeroy_mind.console.httpd import listen_socket
@@ -782,10 +794,10 @@ class ControlEndpoint:
         try:
             op, args = parse_request(line, self.key)
         except Forbidden:
-            log_event("control_refused", level=logging.WARNING, reason="key")
+            self._refused("key")
             return {"ok": False, "error": "forbidden"}, None
         except BadRequest as e:
-            log_event("control_refused", reason="format")
+            self._refused("format")
             return {"ok": False, "error": str(e)}, None
         if op == "status":
             return self.status(), None
@@ -811,6 +823,16 @@ class ControlEndpoint:
         log_event("control_request", op=op, action=args["action"],
                   outcome="ok" if reply["ok"] else "refused")
         return reply, None
+
+    def _refused(self, reason):
+        now = self._clock()
+        since, suppressed = self._refusal_logs.get(reason, (float("-inf"), 0))
+        if now < since + REFUSAL_LOG_S:
+            self._refusal_logs[reason] = (since, min(suppressed + 1, 2**31 - 1))
+            return
+        log_event("control_refused", level=logging.WARNING if reason == "key" else logging.INFO,
+                  reason=reason, **({"suppressed": suppressed} if suppressed else {}))
+        self._refusal_logs[reason] = (now, 0)
 
     def status(self) -> dict:
         guild = getattr(self.app, "guild", None)

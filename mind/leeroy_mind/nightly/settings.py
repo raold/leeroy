@@ -48,6 +48,7 @@ class NightlySettings:
     live_rumors: int = 3
     confide_per_night: int = 60
     enrich_per_night: int = 10
+    newcomers_per_night: int = 6
     photo_per_night: int = 120
     selfie_per_night: int = 120
     scenes_per_night: int = 24

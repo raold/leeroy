@@ -45,6 +45,7 @@ def wired(fake, experiment, tmp_path):
         sent_at=fake.clock.now()-1, accepted=list(plan.members), actual_plan=asdict(plan),
         plan=asdict(plan), instance=77, raid_id=session.raid_id, started=True, running_seen=True)
     offline._inputs = deque()
+    offline._progress = None
     offline._save()
     with fake.conn:
         fake.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES ('guild_id','10')")

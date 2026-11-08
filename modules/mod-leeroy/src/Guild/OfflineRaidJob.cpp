@@ -150,6 +150,8 @@ struct Job
     std::vector<uint8> previousBossStates;
     std::vector<uint32> bossWipes;
     uint32 elapsed = 0, stageElapsed = 0, dcOff = 0, restarts = 0;
+    uint32 progressElapsed = 0;
+    std::int64_t lastProgressTs = 0;
     Stage stage = Stage::Grouping;
     bool announced = false, prepared = false, leaderSent = false, followersSent = false;
     bool dcIssued = false, cleanupFailed = false;
@@ -160,6 +162,7 @@ struct Job
 
 // World-thread only. Store identifiers and value snapshots; every Player/Group is resolved anew on each tick.
 std::unique_ptr<Job> active;
+std::string lastFinishedOffline;
 uint64 nextRewardToken = 1; // Independent of the later instance-bound training-run token.
 
 ObjectGuid Guid(uint32 low) { return ObjectGuid::Create<HighGuid::Player>(low); }
@@ -319,13 +322,43 @@ void SetupFailure(Job& job, std::string reason)
     Stop(job, "setup:" + std::string(Name(job.stage)) + ":" + reason, true);
 }
 
+std::optional<bool> BossEngaged(Job const& job)
+{
+    auto* map = job.event.instanceId ? sMapMgr->FindMap(job.command.mapId, job.event.instanceId) : nullptr;
+    auto* instanceMap = map ? map->ToInstanceMap() : nullptr;
+    auto* instance = instanceMap ? instanceMap->GetInstanceScript() : nullptr;
+    if (!instance || !instance->GetEncounterCount() || instance->GetEncounterCount() > 1024)
+        return std::nullopt;
+    for (uint32 i = 0; i < instance->GetEncounterCount(); ++i)
+        if (instance->GetBossState(i) == IN_PROGRESS) return true;
+    return false;
+}
+
 void Progress(Job& job)
 {
     if (job.terminal.Reported()) return;
     job.event.state = "progress";
     job.event.stage = Name(job.stage);
+    if (!Benchmark(job) && job.stage == Stage::Running)
+    {
+        uint32 inside = 0;
+        for (auto const& member : job.members)
+            if (auto* player = FindOnline(member.guid); player && player->IsInWorld()
+                && !player->IsBeingTeleported() && player->GetMapId() == job.command.mapId
+                && player->GetInstanceId() == job.event.instanceId) ++inside;
+        job.event.membersInInstance = inside;
+        job.event.lastProgressTs = job.lastProgressTs;
+        job.event.bossEngaged = BossEngaged(job);
+    }
+    else
+    {
+        job.event.membersInInstance.reset();
+        job.event.lastProgressTs.reset();
+        job.event.bossEngaged.reset();
+    }
     PublishJob(job.event);
     job.announced = true;
+    job.progressElapsed = 0;
 }
 
 Player* Driver(Job const& job)
@@ -691,6 +724,7 @@ bool ReadBosses(Job& job, Player* leader, bool baseline)
     uint32 const count = instance->GetEncounterCount();
     if (baseline)
     {
+        job.lastProgressTs = NowUnixMs();
         job.previousBossStates.clear();
         job.bossWipes.assign(count, 0);
         for (uint32 index = 0; index < count; ++index)
@@ -707,6 +741,7 @@ bool ReadBosses(Job& job, Player* leader, bool baseline)
     for (uint32 index = 0; index < count; ++index)
     {
         uint8 const current = static_cast<uint8>(instance->GetBossState(index));
+        if (BossProgress(job.previousBossStates[index], current)) job.lastProgressTs = NowUnixMs();
         if (IsWipe(job.previousBossStates[index], current))
         {
             ++job.bossWipes[index];
@@ -1248,6 +1283,24 @@ LeeroyCommandResult HandleStartOfflineRaid(nlohmann::json const& message)
     return StartRaidJob(message.at("id").get<std::string>(), *cmd, RaidJobMode::Offline);
 }
 
+LeeroyCommandResult HandleStopOfflineRaid(nlohmann::json const& message)
+{
+    std::string error;
+    auto target = ParseOfflineRaidStop(message, error);
+    if (!target) return Fail(error);
+#if !LEEROY_HAS_DUNGEON_CLEAR
+    return Fail("dungeon_clear_unavailable");
+#else
+    bool const owned = active && !Benchmark(*active) && active->event.id == *target;
+    error = OfflineStopError(LeeroyModule::Instance().Bridge().Connected(), owned,
+        !owned && *target == lastFinishedOffline, owned && active->stage == Stage::TearingDown,
+        owned && active->terminalReason == "stopped", owned ? BossEngaged(*active) : std::nullopt);
+    if (!error.empty()) return Fail(error);
+    Stop(*active, "stopped");
+    return {true, {}};
+#endif
+}
+
 LeeroyCommandResult StartRaidJob([[maybe_unused]] std::string const& id,
     [[maybe_unused]] OfflineRaidCmd const& command, [[maybe_unused]] RaidJobMode mode,
     [[maybe_unused]] std::vector<uint32> const& bosses)
@@ -1352,6 +1405,7 @@ void TickOfflineRaid([[maybe_unused]] uint32 diffMs)
     Job& job = *active;
     job.elapsed = AdvanceElapsed(job.elapsed, diffMs);
     job.stageElapsed = AdvanceElapsed(job.stageElapsed, diffMs);
+    job.progressElapsed = AdvanceElapsed(job.progressElapsed, diffMs);
     if (job.stage != Stage::TearingDown)
     {
         auto reason = OfflineRaidStopReason(HumanConnected(job.human) || HumanConnected(HumanGuid()),
@@ -1384,8 +1438,7 @@ void TickOfflineRaid([[maybe_unused]] uint32 diffMs)
         if (!reason.empty())
             Stop(job, reason, reason == "instance_strategies_off" || reason == "reward_scope_unproven");
     }
-    if (!job.announced)
-        Progress(job);
+    if (!job.announced) Progress(job);
     bool const alreadyTearingDown = job.stage == Stage::TearingDown;
     switch (job.stage)
     {
@@ -1396,13 +1449,18 @@ void TickOfflineRaid([[maybe_unused]] uint32 diffMs)
         case Stage::Restarting: Restarting(job); break;
         case Stage::TearingDown:
             if (RunTeardown(job))
+            {
+                if (!Benchmark(job)) lastFinishedOffline = job.event.id;
                 active.reset();
+            }
             break;
     }
     // A frontier is observed AFTER this map update. Stop/return now, without permitting another planned map tick.
     // Never access job after Teardown has released active in the switch above.
     if (!alreadyTearingDown && active && active->stage == Stage::TearingDown && Benchmark(*active))
         if (RunTeardown(*active)) active.reset();
+    if (active && !Benchmark(*active) && active->stage == Stage::Running
+        && (!active->announced || active->progressElapsed >= 60000)) Progress(*active);
 #endif
 }
 
@@ -1651,5 +1709,9 @@ void SweepLeftoverGroups()
 #endif
 }
 
-void RegisterOfflineRaidHandler() { RegisterCommand("start_offline_raid", HandleStartOfflineRaid); }
+void RegisterOfflineRaidHandler()
+{
+    RegisterCommand("start_offline_raid", HandleStartOfflineRaid);
+    RegisterCommand("offline_raid_stop", HandleStopOfflineRaid);
+}
 }

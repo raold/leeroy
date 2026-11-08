@@ -318,6 +318,7 @@ def offline(tmp_path, clock):
     controller.run, controller.session = run, session
     controller._online, controller._lease = False, False
     controller._inputs, controller._votes = deque(), []
+    controller._progress = None
     controller._owned = dict(id="original_job", phase="running", cancelled=False,
         terminal=None, sent_at=clock.now()-1, accepted=list(plan.members), actual_plan=asdict(plan),
         plan=asdict(plan), instance=77, raid_id=session.raid_id, started=True, running_seen=True)
