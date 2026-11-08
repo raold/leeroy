@@ -3,7 +3,10 @@ the arbiter unload every chat model, nightly/gpu.py make_room), renders four can
 member with looks and a photo kind who has no photo and no set waiting for his choice, and for
 each "4 more" he asked for.
 
-Units, in order: "queue", a first set queued for each such member (away ones included); then
+Units, in order: "queue" (its receipt is the night's first queue step; every later pass of the
+stage and every round of its render loop queues again, skipping whoever already has a photo or a
+set, so a member chosen late or a "4 more" asked meanwhile renders in the same night), a first set
+queued for each such member (away ones included); then
 "<guid>:<set>" for each queued set, his "4 more" first, at most selfie_per_night a night counting
 the sets done tonight. The runner asks wants_gpu (which queues) before it makes room, so a night
 with nothing to render leaves the chat models loaded. A member who lost his looks or photo kind
@@ -158,8 +161,12 @@ def _without_persona(ctx: "NightContext") -> int:
 
 
 def _queue(ctx: "NightContext") -> None:
-    if ctx.done(STAGE, QUEUE):
-        return
+    """Queue a first set for each member who needs one and has none. Runs on every pass of the
+    stage (wants_gpu, the stage, each round of its render loop), so a member whose kind was
+    chosen after an earlier pass is queued at the next; ensure_first_sets skips whoever already
+    has a photo or a queued or waiting set, so nothing is queued twice. The "queue" receipt is
+    written by the night's first pass only."""
+    first = not ctx.done(STAGE, QUEUE)
     members, missing = [], Counter()
     for guid in ctx.members(include_away=True):
         why = _held(ctx, _stored(ctx, guid))
@@ -174,8 +181,14 @@ def _queue(ctx: "NightContext") -> None:
     def write(store) -> None:
         nonlocal made
         made = ensure_first_sets(store, members, now=ctx.clock.now())
-    if ctx.commit(STAGE, QUEUE, write):
-        log("selfies_queued", night=ctx.night, queued=made, missing=dict(sorted(missing.items())))
+    if first:
+        if not ctx.commit(STAGE, QUEUE, write):
+            return
+    else:
+        write(ctx.store)
+        if not made:
+            return
+    log("selfies_queued", night=ctx.night, queued=made, missing=dict(sorted(missing.items())))
 
 
 def _done_sets(ctx: "NightContext") -> int:
@@ -257,12 +270,32 @@ def _ready(ctx: "NightContext", guid: int, set_no: int, made: list[Candidate]):
     return write
 
 
-async def _render(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
-                  todo: list[str]) -> None:
+async def _render(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker) -> None:
+    """Rounds of sets with the one worker: each round queues what is new (_queue) and renders
+    the queued sets not yet tried this run, within the night's cap, so a "4 more" asked, or a
+    member whose kind was chosen, while the stage runs is rendered in the same stage. Ends when
+    a round finds nothing new or the worker is out of reach."""
     if not await _start(ctx, worker):
         return
     tally = Counter()
-    contended, restarted = 0, False
+    state = {"contended": 0, "restarted": False}
+    tried: set[str] = set()
+    while True:
+        _queue(ctx)
+        todo = [u for u in _todo(ctx) if u not in tried]
+        if not todo:
+            break
+        tried.update(todo)
+        if not await _sets(ctx, cfg, worker, todo, tally, state):
+            break
+    log("selfies_done", night=ctx.night, **{k: tally[k] for k in
+                                            ("ready", "refused", "failed", "skipped")})
+
+
+async def _sets(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker, todo: list[str],
+                tally: Counter, state: dict) -> bool:
+    """One round's sets; False when the stage ends for the night (contended worker)."""
+    contended, restarted = state["contended"], state["restarted"]
     for n, unit in enumerate(todo):
         guid, set_no = (int(x) for x in unit.split(":"))
         p = _stored(ctx, guid)
@@ -287,11 +320,13 @@ async def _render(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
             if contended >= CONTENDED or (not worker.running and restarted):
                 log("selfies_stopped", level=logging.WARNING, night=ctx.night, reason=e.reason,
                     left=len(todo) - n - 1)
-                break
+                return False
             if not worker.running:
                 restarted = True
+                state["restarted"] = True
                 if not await _start(ctx, worker):
-                    break
+                    return False
+            state["contended"] = contended
             continue
         except Exception as e:  # SetRefused; a folder that could not be made or moved
             _discard(ctx, guid, set_no)
@@ -301,16 +336,17 @@ async def _render(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
                 contended = 0  # the worker rendered: not contention
             else:
                 tally["failed"] += 1
+            state["contended"] = contended
             continue
         contended = 0
+        state["contended"] = 0
         if ctx.commit(STAGE, unit, _ready(ctx, guid, set_no, made)):
             tally["ready"] += 1
             log("selfies_set_ready", night=ctx.night, guid=guid, set=set_no,
                 seconds=round(time.monotonic() - began, 1), tries=sum(c.tries for c in made))
         else:
             tally["failed"] += 1
-    log("selfies_done", night=ctx.night, **{k: tally[k] for k in
-                                            ("ready", "refused", "failed", "skipped")})
+    return True
 
 
 def wants_gpu(ctx: "NightContext") -> bool:
@@ -337,7 +373,7 @@ def make_stage(cfg: SelfieCfg, *, worker: Callable[[], SelfieWorker] | None = No
             return
         w = make()
         try:
-            await _render(ctx, cfg, w, todo)
+            await _render(ctx, cfg, w)
         finally:
             # his login's cancel too, landing here or before: the stop runs to its end, so the
             # tree is gone before the hand-over's preempt returns and the live model loads
