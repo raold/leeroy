@@ -621,9 +621,25 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   events the bridge queued for the mind, so never run it while they matter.
 - Do not run `personas generate`/`seed` or a library build while the mind is
   live: they load another large model next to the live one and evict it.
-- Nothing writes a persona while the mind runs. A member who joins the cast
-  later (invited, or levelled to 80) has none and stays silent: the mind voices
-  only stored personas and native mutes every cast member in mod-ollama-chat.
+- Only the night's own writers write personas while the mind runs. Optional
+  `[personas] auto_newcomers = true` (read at startup; false or invalid means off)
+  gives members who join the cast later (invited, or levelled to 80) a persona at
+  night. The `newcomers` reflection stage runs just after the snapshot, before
+  threads and other persona readers. With no newcomer work it does not swap models.
+  It reuses the manual generator, slot balance, age floor of 25, name/content screens,
+  bounded overlay, birthdays and relationship seeds, with source `generated` (the
+  existing source allowed by `persona_core`). `newcomers_per_night` defaults to 6 in
+  NightlySettings; the budget may defer them. A saved nightly selection and unit
+  receipts keep that cap across resumes. A refusal retries on at most three distinct
+  nights, then logs `newcomer_gave_up` with the guid; manual generation remains
+  available. Login cancellation consumes no failed night. The owner and non-cast
+  members are excluded. Later night stages see new personas immediately, and the
+  existing login reload makes them available to live text talk without a restart.
+  Existing enrichment, photo-kind and first-selfie stages pick them up as their
+  eligibility and nightly budgets allow; their scheduling is unchanged. Without a
+  separate voice spec a newcomer stays off voice comms (no fallback voice).
+  Until generated, a newcomer stays silent: the mind voices only stored personas
+  and native mutes every cast member in mod-ollama-chat.
   The mind logs `cast_without_persona` (their guids) when that set changes and
   `doctor` notes them. With the mind stopped, `personas generate --dry-run`
   shows their slots and `personas generate` writes them (the reflection model,
