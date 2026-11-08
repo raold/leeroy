@@ -24,6 +24,7 @@ struct LeeroyConfig
     uint32 realmMaxActionsPerTick = 5;
     bool realmAnnounce = true;
     bool castGuard = false;
+    bool queueFence = true;
     std::string realmPlacesFile = "leeroy_places.csv";
     std::string realmItemsFile = "leeroy_items.csv";
 };

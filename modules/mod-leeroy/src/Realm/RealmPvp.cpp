@@ -1602,6 +1602,17 @@ bool RealmPvpForeignWintergraspHistory(std::uint32_t guid, std::uintptr_t sessio
     return !inbox.wgHistory.Allows(guid, session);
 }
 
+bool RealmPvpQueueCallOwns(std::uint32_t guid, std::uintptr_t session, QueueKind kind)
+{
+    if (!capability) return false;
+    std::lock_guard lock(inbox.mutex);
+    auto found = inbox.watches.find(guid);
+    if (found == inbox.watches.end()) return false;
+    auto const& watch = found->second;
+    return QueueFenceNativeCallMatches(kind, watch.wintergrasp, guid, capability->guid,
+        session, watch.session, capability->token, watch.token);
+}
+
 void RegisterRealmPvpHandlers()
 {
     auto& module = RealmModule::Instance();
