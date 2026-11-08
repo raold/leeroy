@@ -497,6 +497,33 @@ def test_logs_carry_no_prompt(h, tmp_path, caplog):
         assert p.character_name not in text and p.identity.real_name not in text
 
 
+def test_a_tile_whose_prompt_is_too_long_is_skipped_and_the_grid_goes_on(h, tmp_path, caplog):
+    cast(h, 101, 102, 103, 104); g = guild(h, 101, 102, 103, 104)
+    log = tmp_path / "requests.log"
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        ctx = h.ctx()
+        run(stage(tmp_path, FAKE_SELFIE_LOG=str(log), FAKE_SELFIE_TOO_LONG=f"g{g}:1:")(ctx))
+    row = snap_row(h.store, g)
+    assert row.status == "ready" and [m for m, _ in row.members] == [101, 103, 104]
+    assert lines(log)[-1] == f"g{g}:grid grid 3" and not ctx.failures
+    assert f"selfies_tile_skipped: night=2026-10-29 snap={g} guid=102 code=prompt_too_long" in caplog.text
+
+
+def test_too_few_tiles_after_too_long_prompts_skips_the_guild_photo_cleanly(h, tmp_path):
+    cast(h, 101, 102, 103); g = guild(h, 101, 102, 103)
+    ctx = h.ctx()
+    run(stage(tmp_path, FAKE_SELFIE_TOO_LONG=f"g{g}:0:,g{g}:2:")(ctx))
+    row = snap_row(h.store, g)
+    assert (row.status, row.ended) == ("expired", "missing") and not ctx.failures
+
+
+def test_a_malformed_similarity_diagnostic_never_fails_the_grid(h, tmp_path):
+    cast(h, 101, 102, 103); g = guild(h, 101, 102, 103)
+    ctx = h.ctx()
+    run(stage(tmp_path, FAKE_SELFIE_BAD_SIMILARITY="1")(ctx))
+    assert snap_row(h.store, g).status == "ready" and not ctx.failures
+
+
 # -- final fix wave (controller ruling R22) --------------------------------------------------
 
 def test_a_row_whose_scene_cannot_be_read_expires_missing_and_the_good_one_renders(h, tmp_path):

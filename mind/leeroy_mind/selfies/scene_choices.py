@@ -24,6 +24,9 @@ PLACES = {
     "boat": "on a moored boat deck", "picnic": "at a picnic table",
     "studio": "in a craft studio", "dining_room": "at a dining table",
 }
+# The plain scene's setting list leaves out the water places, which invite swimwear; the lust
+# style reaches them only through LUST_PLACES.
+PLAIN_PLACES = {k: v for k, v in PLACES.items() if k not in ("beach", "pool_deck")}
 # phrase, allowed place keys. Every activity has at least one plain place.
 ACTIVITIES = {
     "raiding": ("playing a raid game", ("desk",)),

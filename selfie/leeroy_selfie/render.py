@@ -145,8 +145,11 @@ class Renderer:
             fields = grid.compose(req)
         except RenderFailed as e:
             return {"ok": False, "error": str(e)}
-        return {"ok": True, **fields, "error": "",
-                "similarity": similarity.measure(self.pipe, self.torch, req.tiles)}
+        try:
+            scores = similarity.measure(self.pipe, self.torch, req.tiles)
+        except Exception:  # a diagnostic never fails a good grid
+            scores = {"code": "encoder_failed"}
+        return {"ok": True, **fields, "error": "", "similarity": scores}
 
 
 def _ms(seconds: float) -> int:

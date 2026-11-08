@@ -22,7 +22,7 @@ from .files import sync_snaps
 from .kind import looks_line
 from .prompt import renderable
 from .ration import MEMBER_GAP_S, MEMBER_STOCK, send_weight, stock_target
-from .scene import (ABOUT, PHASES, SCENE_ASK, scene_from, scene_json, scene_renderable,
+from .scene import (ABOUT, PHASES, SCENE_ASK, SCENE_ASK_AGAIN, scene_from, scene_json, scene_renderable,
                     scene_schema, scene_system, screen_scene, window)
 from .scene_choices import compose_choices, pairing_codes
 from .snaps import guild_photo_since, last_sent, looks_hash, open_stock, plan_snap, sweep
@@ -166,18 +166,23 @@ async def ask_scene(ctx: "NightContext", guid: int, *, about: str):
     system = scene_system(p, ctx.settings.data_dir, human=ctx.ident, name=name,
                           card=ctx.base_card(guid), facts=_facts(p),
                           looks=looks_line(p.appearance), about=about)
-    try:
-        data = await ctx.reasoner.json(system, SCENE_ASK.format(name=name), scene_schema(p),
-                                       temperature=0.8)
-    except ReflectionError as e:
-        if e.fatal:
-            raise
-        return None, ["model"]
-    if data.get("photo") is False:
-        return None, [DECLINED]
-    codes = pairing_codes(data)
-    if codes:
-        return None, codes
+    for again in (False, True):
+        try:
+            data = await ctx.reasoner.json(
+                system, SCENE_ASK.format(name=name) + (SCENE_ASK_AGAIN if again else ""),
+                scene_schema(p), temperature=0.8)
+        except ReflectionError as e:
+            if e.fatal:
+                raise
+            return None, ["model"]
+        if data.get("photo") is False:
+            return None, [DECLINED]
+        codes = pairing_codes(data)
+        if not codes:
+            break
+        if again:
+            return None, codes
+        log("selfies_scene_asked_again", night=ctx.night, guid=guid, codes=codes)
     data = compose_choices(data)
     others = [g for g in ctx.members(include_away=True) if g != guid]
     names = [ctx.name(g) for g in others]

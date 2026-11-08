@@ -144,7 +144,8 @@ def test_the_tile_prompt_wears_what_they_wear_at_the_pc():
         spec = build_tile_prompt(p)
         assert spec.phrases == (
             (scene.TILE_FRAMING, 0), subject_phrase(p),
-            *((text, 0) for text, _ in looks_phrases(p, names_re(p))),
+            *((text, 0 if text.endswith((" hair", " skin", " eyes")) or ", " in text else 1)
+              for text, _ in looks_phrases(p, names_re(p))),
             (scene.GAME_MONITOR, 0), (scene.TILE_DESK, 1), (APPEARANCE.at_the_pc, 2),
             ("looking at the screen, smiling", 3),
             ("recent photo, natural skin texture, unretouched", 1))
@@ -760,3 +761,15 @@ def test_the_last_review_allowances_pass(text):
     for p, data in ((lusty(), LUST_SCENE), (woman(), SCENE)):
         for field in ("activity", "shows"):
             assert screen_scene(p, {**data, field: text}, ident=IDENT, member_names=[]) == []
+
+
+def test_a_tile_with_the_longest_looks_fits_the_workers_window():
+    from selfies.test_selfie_prompt import _tokens, _worker_fit
+    p = woman()
+    p = replace(p, appearance=replace(p.appearance, hair_style="h" * 40, face=("f" * 40,) * 4))
+    spec = build_tile_prompt(p)
+    text, dropped = _worker_fit()(spec.phrases, _tokens)
+    assert _tokens(text) <= 75
+    assert (scene.TILE_FRAMING, 0) in spec.phrases and (scene.GAME_MONITOR, 0) in spec.phrases
+    assert all(prio >= 1 for t, prio in spec.phrases if t == "f" * 40)
+    assert any(t.endswith(" eyes") and prio == 0 for t, prio in spec.phrases)

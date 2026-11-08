@@ -18,11 +18,11 @@ from .kind import (ERA_RE, EXPLICIT_RE, GYM_OUTFITS, LUST_COLOURS, LUST_EXPRESSI
                    LUST_OUTFITS, PAIRINGS, SWIM_OUTFITS, WEAR_RE, _enum,
                    compose_lust, screen_lust)
 from .prompt import (BUILD_WORDS, _FRAMINGS, _HEADSHOT_TAIL, _KINDS, _PHONE_TAIL, LUST_HELD, LUST_NAMED,
-                     LUST_NEGATIVE, NEGATIVE, PromptSpec, eyes_face, hair_skin, looks_phrases,
+                     LUST_NEGATIVE, NEGATIVE, PromptSpec, _clean, eyes_face, hair_skin, looks_phrases,
                      lust_phrase, names_re, phrase_adder, renderable, subject_phrase)
 from .style import AGE_RE, LUST, PLAIN, STYLES, SUGGESTIVE_MIN_AGE, style_of, suggestive
 from .scene_choices import (ACTIVITIES, EXPRESSIONS, GAME_MONITOR, ONE_FACE_NEGATIVE,
-                            OUTFITS, PLACES, PROPS, SCENE_LUST_SETTINGS, TILE_DESK,
+                            OUTFITS, PLAIN_PLACES, PROPS, SCENE_LUST_SETTINGS, TILE_DESK,
                             TILE_FRAMING)
 
 SCENE_NAME = "scene"             # its overlay: prompts/nightly_scene.txt
@@ -37,7 +37,7 @@ AUDIENCES = ("him", "anyone")
 _COMMON = {"photo": {"type": "boolean"}, "kind": _enum(KINDS), "framing": _enum(FRAMINGS)}
 _TAIL = {"when": _enum(WHENS), "audience": _enum(AUDIENCES), "prop": _enum(PROPS)}
 SCENE_SCHEMA = schema(SCENE_NAME, {
-    **_COMMON, "setting": _enum(PLACES), "activity": _enum(ACTIVITIES), "outfit": _enum(OUTFITS),
+    **_COMMON, "setting": _enum(PLAIN_PLACES), "activity": _enum(ACTIVITIES), "outfit": _enum(OUTFITS),
     "expression": _enum(EXPRESSIONS), **_TAIL})
 
 # Reuse profile choices except the crowd, bathing and hallway-mirror settings.
@@ -66,6 +66,8 @@ SCENE_PROMPT_LUST = (
     "the gym. She is alone, adult and fully clothed, her looks "
     "unchanged. No names or likenesses. Choose no photo when no suitable combination fits.")
 SCENE_ASK = "Choose {name}'s photo."
+SCENE_ASK_AGAIN = (" Pick again: the activity must suit the place (a game or spreadsheet only at "
+                   "the desk, exercise only at the gym), and the prop must suit the activity.")
 ABOUT = {"life": "Tonight in their life away from the game: {beat}",
          "birthday": "It is their birthday tomorrow.",
          "everyday": "An ordinary day for them this week."}
@@ -485,9 +487,12 @@ def build_tile_prompt(p: Persona) -> PromptSpec:
     add = phrase_adder(out, name_re)
     add(TILE_FRAMING, 0)
     add(*subject_phrase(p))
-    # Do not let the fitter trade this member's features for generic desk decoration.
-    # If all required words exceed the encoder window, refuse instead of dropping identity.
-    out += [(text, 0) for text, _ in looks_phrases(p, name_re)]
+    # Hair, skin and eyes are required so the fitter never trades them for desk decoration;
+    # face details go at 1 and 2 as in the profile prompt, so long looks cannot overflow it.
+    eye = f"{_clean(p.appearance.eye_colour)} eyes"
+    out += [(text, 0) for text, _ in hair_skin(p, name_re)]
+    for text, _ in eyes_face(p, name_re):
+        out.append((text, 0 if text == eye else 1))
     add(GAME_MONITOR, 0)
     add(TILE_DESK, 1)
     if not _text_codes("outfit", p.appearance.at_the_pc or "", ident=_NOBODY, names=[]):

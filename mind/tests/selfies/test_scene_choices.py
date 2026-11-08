@@ -99,8 +99,10 @@ def test_tile_identity_and_screen_words_survive_fitting():
     fitted = _worker_fit()(spec.phrases, _tokens)
     # The local test fitter returns (prompt, dropped), just like the worker.
     text = fitted[0]
-    for words, _ in scene.looks_phrases(p, scene.names_re(p)):
-        assert (words, 0) in spec.phrases and words in text
+    for words, prio in scene.looks_phrases(p, scene.names_re(p)):
+        assert any(t == words for t, _ in spec.phrases)
+        if prio == 1 or words.endswith(" eyes"):
+            assert words in text
     assert choices.GAME_MONITOR in text and "video call" not in text
     assert (choices.ONE_FACE_NEGATIVE, 0) in spec.negative
 
@@ -145,3 +147,4 @@ def test_decoding_never_converts_raw_picks_or_grants_provenance():
         decoded = scene.scene_from(raw)
         assert type(decoded.recipe) is type(recipe) and decoded.recipe == recipe
         assert decoded.activity == PICKS["activity"]  # no read-time composition
+

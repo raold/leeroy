@@ -316,12 +316,16 @@ class SelfieWorker:
         if not answer["ok"]:
             raise WorkerError(_reason(answer))
         try:
-            return Gridded(_field(answer, "width", int), _field(answer, "height", int),
-                           float(_field(answer, "seconds", int, float)),
-                           _similarity(answer.get("similarity"), len(tiles)))
+            width, height = _field(answer, "width", int), _field(answer, "height", int)
+            seconds = float(_field(answer, "seconds", int, float))
         except _Malformed:
             await self._end_failed(tree)
             raise WorkerError("gone") from None
+        try:
+            similarity = _similarity(answer.get("similarity"), len(tiles))
+        except _Malformed:
+            similarity = None  # a best-effort diagnostic never fails a good grid
+        return Gridded(width, height, seconds, similarity)
 
     async def _answer(self, tree: ProcessTree, rid: str, timeout: float,
                       line: bytes | None = None) -> dict:

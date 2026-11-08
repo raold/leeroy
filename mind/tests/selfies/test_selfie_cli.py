@@ -285,7 +285,7 @@ def test_snap_readiness_reports_rendered_nsfw_and_missing_photo(snaproot, capsys
 
 
 def test_snap_readiness_reports_declined_and_pairing_refusal(snaproot, capsys):
-    replies = [{**SCENE_REPLY, "photo": False}, {**SCENE_REPLY, "activity": "cooking"}]
+    replies = [{**SCENE_REPLY, "photo": False}, {**SCENE_REPLY, "activity": "cooking"}] + [{**SCENE_REPLY, "activity": "cooking"}]
     assert cli.selfies_main(["--data-dir", str(snaproot), "try", "--snaps"],
                             make_llm=lambda cfg: snap_llm(snaproot, replies)) == 1
     captured = capsys.readouterr()

@@ -151,11 +151,11 @@ def test_the_cap_counts_what_tonight_already_planned(h):
 def test_a_declined_or_refused_scene_is_stored_nowhere_and_not_asked_again_tonight(h, caplog):
     cast(h, 101, 102, 103)
     refused = {**SCENE_REPLY, "activity": "cooking"}
-    ctx = h.ctx({"scene": [{**SCENE_REPLY, "photo": False}, refused, SCENE_REPLY]})
+    ctx = h.ctx({"scene": [{**SCENE_REPLY, "photo": False}, refused, refused, SCENE_REPLY]})
     with caplog.at_level(logging.INFO, logger="leeroy_mind"):
         run(stage(3)(ctx))
     assert len(planned(h.store, 10)) == 1
-    assert ctx.reasoner.calls == 3 and all(ctx.done(STAGE, str(g)) for g in (101, 102, 103))
+    assert ctx.reasoner.calls == 4 and all(ctx.done(STAGE, str(g)) for g in (101, 102, 103))
     assert "selfies_scene_declined" in caplog.text and "selfies_scene_refused" in caplog.text
     calls = ctx.reasoner.calls
     run(stage(3)(ctx))
@@ -264,3 +264,25 @@ def test_off_list_scene_is_asked_once_more_then_declined_or_composed(h, recovers
         assert result.activity == "walking a dog on a leash, holding a dog leash" and codes == []
     else:
         assert result is None and codes == ["model"]
+
+
+@pytest.mark.parametrize("recovers", [False, True])
+def test_a_scene_pairing_failure_is_asked_once_more_then_refused(h, recovers):
+    from leeroy_mind.selfies.scenes import ask_scene
+    cast(h, 101)
+    bad = {**SCENE_REPLY, "activity": "raiding", "setting": "park"}
+    ctx = h.ctx({"scene": [bad, SCENE_REPLY if recovers else bad]})
+    result, codes = run(ask_scene(ctx, 101, about="an ordinary day"))
+    assert ctx.reasoner.calls == 2
+    if recovers:
+        assert result is not None and codes == []
+    else:
+        assert result is None and "scene.activity: place pairing" in codes
+
+
+def test_the_plain_scene_places_leave_out_the_water():
+    from leeroy_mind.selfies import scene
+    from leeroy_mind.selfies.scene_choices import LUST_PLACES, PLAIN_PLACES
+    assert "beach" not in PLAIN_PLACES and "pool_deck" not in PLAIN_PLACES
+    assert set(scene.SCENE_SCHEMA["properties"]["setting"]["enum"]) == set(PLAIN_PLACES)
+    assert "beach" in LUST_PLACES.values() and "pool_deck" in LUST_PLACES.values()
