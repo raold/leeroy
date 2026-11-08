@@ -5,6 +5,7 @@
 # Usage: ac-update.sh [--dry-run]
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/config-keys.sh"
 
 DRY=0
 [ "${1:-}" = "--dry-run" ] && DRY=1
@@ -68,24 +69,11 @@ for r in "${REPOS[@]}"; do
     fi
 done
 
+# Report the checked-out templates even when nothing needs pulling. Dry run
+# still fetches metadata above, but never merges/rebases or writes rollback points.
+ac_report_all_config_keys "${REPOS[@]}"
 if [ "$changed" -eq 0 ]; then log "everything already current"; exit 0; fi
 [ "$DRY" -eq 1 ] && { log "dry run, nothing changed"; exit 0; }
-
-# --- new config keys -----------------------------------------------------
-# A pulled module often adds .conf.dist keys your live .conf does not have.
-# Missing keys fall back to compiled-in defaults, but you should know.
-log "checking for new config keys"
-for r in "${REPOS[@]}"; do
-    for dist in "$r"/conf/*.conf.dist; do
-        [ -e "$dist" ] || continue
-        live="$AC_MODCONF/$(basename "$dist" .dist)"
-        [ -f "$live" ] || { warn "$(basename "$dist" .dist) missing from $AC_MODCONF -- copy it from $dist"; continue; }
-        grep -oE '^[A-Za-z][A-Za-z0-9_.]*[[:space:]]*=' "$dist" | sed 's/[[:space:]]*=//' | sort -u |
-        while read -r k; do
-            grep -qE "^[#[:space:]]*${k}[[:space:]]*=" "$live" || printf '    new key: %-50s (%s)\n' "$k" "$(basename "$live")"
-        done
-    done
-done
 
 printf '\n'
 log "source updated. Now run:  ./ac-backup.sh pre_update && ./ac-build.sh"

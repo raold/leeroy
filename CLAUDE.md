@@ -243,6 +243,12 @@ Run from `F:\azerothcore\scripts` in Git Bash.
 ./ac-snapshot.sh             # live configs (masked) + playerbots and ollama-chat patches -> config/, patches/
 ```
 
+`ac-update.sh` reports template keys the live file lacks (even as a comment) and live keys the
+template no longer has (even as a comment), for core and module configs, plus suspected prefix
+renames (at least 20 additions and 20 removals); values are never printed, and an unreadable
+file is reported without stopping the update. `--dry-run`
+reports the checked-out templates and still fetches metadata, but never merges or rebases.
+
 `./ac-health.sh [--json] [--toast]` (`python -m leeroy_mind health`) checks the live install
 read-only, one ok/FAIL/note line each, exit 1 on any FAIL: the servers, Server.log's cast line
 since worldserver started (floor `[health] min_cast`, default 100; a note when the log begins
@@ -1263,6 +1269,3 @@ apart from this install. Read `dojo/README.md` before touching it.
 - `mod-bg-slaveryvalley` server data + client patch (above).
 - Zip-sourced modules (transmog, individual-progression, slaveryvalley) have no
   update path; converting them to git clones would let `ac-update.sh` cover them.
-- `ac-update.sh` only checks `<repo>/conf/*.conf.dist` for new keys, which
-  misses the core's `worldserver.conf.dist` / `authserver.conf.dist` (under
-  `src/server/apps/`).
