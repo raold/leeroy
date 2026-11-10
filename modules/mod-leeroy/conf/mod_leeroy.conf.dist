@@ -9,6 +9,9 @@
 # Master switch for the module (1 = on, 0 = off).
 Leeroy.Enable = 1
 
+# Optional persona play styles: outdoor quiet cast only; reloadable. RaidHabits win.
+Leeroy.PlayStyle.Enable = 0
+
 # Guild id of the cast's guild.
 Leeroy.GuildId = 21
 
