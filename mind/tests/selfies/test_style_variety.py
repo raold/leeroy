@@ -235,6 +235,36 @@ def test_enabled_night_plain_pass_enforces_age_floor(h):
     assert ctx.reasoner.calls == 0 and load_persona(h.store,101).photo is None
 
 
+def test_unreadable_member_does_not_block_other_nightly_choices(h):
+    population(h)
+    with h.store.transaction():
+        h.store.conn.execute("UPDATE persona_core SET json='{' WHERE guid=105")
+    (h.settings.data_dir/"mind.toml").write_text("[selfies]\nvariety=true")
+    ctx = h.ctx()
+    run(kind.stage_photo(ctx))
+    assert ctx.reasoner.calls == 0
+    assert all(load_persona(h.store,g).photo for g in (101,102,103,104))
+    assert h.count("photo_extra") == 4
+
+
+def test_unreadable_member_does_not_block_manual_restyle(h):
+    prepared(h)
+    with h.store.transaction():
+        h.store.conn.execute("UPDATE persona_core SET json='{' WHERE guid=105")
+    result = restyle.run(h.store,IDENT,h.clock,go=True)
+    assert {r["guid"] for r in result["selected"]} == {102,103,104}
+    assert {"guid":105,"code":"persona_unreadable"} in result["skipped"]
+    assert h.store.get_persona_json(105) == "{"
+
+
+@pytest.mark.parametrize("seed",range(10))
+def test_name_matching_a_kind_or_frame_uses_safe_alternative(h,seed):
+    p = replace(h.persona(101,appearance=APPEARANCE),character_name="Snapshot")
+    chosen,rejected,_,_ = sv.assign({101:p},[101],seed=seed,ident=IDENT,names=("Face",))
+    assert not rejected
+    assert chosen[101].photo.kind != "snapshot" and chosen[101].photo.framing != "face"
+
+
 def test_restyled_queue_renders_with_saved_light_through_fake_worker(h,tmp_path):
     from selfies.fakes import fake_worker, SELFIE_CFG
     from leeroy_mind.selfies.stage import make_stage

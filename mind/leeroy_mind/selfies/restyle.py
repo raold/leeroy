@@ -11,8 +11,17 @@ from .style import LUST, style_of
 
 def run(store, ident, clock, *, lust_only=False, go=False, include_owner=False):
     with store.transaction():
-        personas = {g:p for g,m in store.cast().items() if g != ident.guid and m.level >= CAST_MIN_LEVEL
-                    and (p := load_persona(store,g)) is not None}
+        personas,unreadable = {},[]
+        for g,m in store.cast().items():
+            if g == ident.guid or m.level < CAST_MIN_LEVEL:
+                continue
+            try:
+                p = load_persona(store,g)
+            except ValueError:
+                unreadable.append(g)
+                continue
+            if p is not None:
+                personas[g] = p
         versions = store.persona_versions()
         owners = {g for g,p in personas.items() if p.photo is not None and kind.chosen_style(store,p) is None}
     selected = {g for g,p in personas.items() if p.appearance is not None and
@@ -21,7 +30,8 @@ def run(store, ident, clock, *, lust_only=False, go=False, include_owner=False):
     seed = ":".join(f"{g}={versions[g]}" for g in sorted(personas))
     picked,rejected,cap,violations = style_variety.assign(personas,selected,seed=seed,ident=ident,names=names)
     report = dict(dry_run=not go,setting_cap=cap,owner_protected=sorted(owners if not include_owner else ()),
-                  skipped=[{"guid":g,"code":"no_safe_capacity"} for g in sorted(rejected)],
+                  skipped=([{"guid":g,"code":"no_safe_capacity"} for g in sorted(rejected)]
+                           + [{"guid":g,"code":"persona_unreadable"} for g in sorted(unreadable)]),
                   existing_over_cap=violations,selected=[])
     if go:
         with store.transaction():

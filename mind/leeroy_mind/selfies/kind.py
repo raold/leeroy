@@ -362,7 +362,7 @@ async def kind_one(ctx: "NightContext", guid: int) -> tuple[ProfilePhoto | None,
             return _refused(ctx,guid,["photo: adult_floor"])
         members = [ctx.name(g) for g in ctx.members(include_away=True)]
         if lust:
-            all_personas = {g:ctx.base(g) for g in ctx.members(include_away=True)}
+            all_personas = {g:p for g in ctx.members(include_away=True) if (p := _stored(ctx,g)) is not None}
             picks,_,_,_ = style_variety.assign(all_personas,[guid],seed=ctx.night,ident=ctx.ident,names=members)
             return (picks[guid].photo,[]) if guid in picks else _refused(ctx,guid,["photo: no_safe_capacity"])
         ask += photo_extra.common(ctx.store,ctx.clock.now(),ident=ctx.ident,names=members)

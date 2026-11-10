@@ -104,7 +104,9 @@ def _choose(p, counts, cap, rng, *, seed, ident, names):
     options = [o for o in options if clear(o[4])]
     settings = [(i,s) for i,s in settings if clear(s)]
     expressions = [(i,s) for i,s in expressions if clear(s)]
-    if p.identity.age < 25 or not options or not settings or not expressions:
+    kinds = [s for s in kinds if clear(s)]
+    frames = [s for s in frames if clear(s)]
+    if p.identity.age < 25 or not options or not settings or not expressions or not kinds or not frames:
         return None
     for oi,ci,outfit,colour,phrase in options:
         for si,setting in settings:
