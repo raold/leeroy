@@ -24,6 +24,8 @@ jobs:
         run: pwsh -NoProfile -File scripts/tests/ac-guild-backup-schedule.ps1
       - name: release self-test (temporary repositories and stub services)
         run: bash scripts/tests/ac-release.sh
+      - name: SOAP client self-test (fake server on loopback)
+        run: bash scripts/tests/ac-soap.sh
 
   secrets:
     runs-on: ubuntu-latest
