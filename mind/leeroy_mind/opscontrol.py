@@ -200,10 +200,10 @@ class OpsControl:
             else:
                 offline = self.app.guild.offline
                 await offline.request_stop(args["id"])
-                if offline._owned.get("stop_unsupported"):
+                if (offline._owned or {}).get("stop_unsupported"):
                     raise ValueError("This game server refused safe offline stops; the run remains owned.")
                 self.operation["message"] = "Stop requested; waiting for the original run's terminal outcome and cleanup."
-                while offline.active and offline._owned.get("id") == args["id"]:
+                while offline.active and (offline._owned or {}).get("id") == args["id"]:
                     await asyncio.sleep(.2)
                 result = offline.operator_result(args["id"])
                 if not result:

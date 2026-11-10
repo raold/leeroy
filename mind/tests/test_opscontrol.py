@@ -157,3 +157,18 @@ def test_release_inspection_refuses_every_nonreleasable_root(app, case):
         reply = await ep(app).ops.answer({"action":"inspect","kind":"release","id":"c"*32 if case=="missing" else ROOT_ID})
         assert not reply["ok"]
     run(go())
+
+
+@pytest.mark.parametrize("still_active", [False, True])
+def test_offline_stop_survives_the_run_vanishing_mid_check(still_active):
+    from leeroy_mind.opscontrol import OpsControl
+    class Vanishing:
+        active, _owned = True, {"id": ROOT_ID}
+        async def request_stop(self, ident):
+            self.active, self._owned = still_active, None
+        def operator_result(self, ident):
+            return None
+    ops = OpsControl(SimpleNamespace(app=SimpleNamespace(guild=SimpleNamespace(offline=Vanishing()))))
+    ops.operation = {"id": "op", "action": "offline_stop", "state": "running", "message": ""}
+    run(ops._run({"action": "offline_stop", "id": ROOT_ID}))
+    assert ops.operation["state"] == "uncertain"

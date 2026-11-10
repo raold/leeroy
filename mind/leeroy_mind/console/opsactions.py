@@ -51,8 +51,9 @@ def run_release(app, args):
 
 
 class OpsActions:
-    def __init__(self, app, *, release=run_release):
+    def __init__(self, app, *, release=run_release, recover_s=60.0, recover_poll_s=1.0):
         self.app, self.release = app, release
+        self.recover_s, self.recover_poll_s = recover_s, recover_poll_s
         self.task, self.operation, self.preview = None, None, None
 
     @property
@@ -137,9 +138,20 @@ class OpsActions:
         a = self.app
         # Stop/restart run off the event loop, through the existing ownership checks.
         self.operation["message"] = "Stopping the mind cleanly before releasing one root."
-        stopped = await asyncio.to_thread(a.mind.clean_stop)
-        if stopped.code or stopped.state != "stopped":
-            raise ValueError("The mind did not stop cleanly; nothing was released.")
+        try:
+            stopped = await asyncio.to_thread(a.mind.clean_stop)
+            clean = stopped.code == 0 and stopped.state == "stopped"
+        except Exception:
+            clean = False
+        if not clean:
+            self.operation.update(release_outcome="not_started", restart_outcome="pending",
+                                  message="The clean stop was not proved; checking the mind.")
+            if await self._recover():
+                self.operation["restart_outcome"] = "running"
+                raise ValueError("The mind did not stop cleanly; nothing was released. The mind is running.")
+            self.operation["restart_outcome"] = "failed"
+            raise OperationFailed("The mind did not stop cleanly; nothing was released. "
+                                  "The mind is not confirmed running; inspect it before retrying.")
         result, release_error = None, None
         self.operation.update(release_outcome="uncertain", restart_outcome="pending")
         try:
@@ -166,6 +178,27 @@ class OpsActions:
                 raise ValueError(str(release_error)+" The mind is running again.")
             raise ValueError("The release could not be confirmed; the mind was restarted.")
         return result + " The mind is running again."
+
+    async def _recover(self):
+        """After a stop not proved clean the mind may still be ending its own shutdown: wait
+        for it to end or settle, and start it again once it has ended, so a release that never
+        began does not leave the guild without its mind. True when it is running at the end."""
+        a = self.app
+        deadline = time.monotonic() + self.recover_s
+        while True:
+            try:
+                found, held, error = await asyncio.to_thread(a.mind.probe)
+            except Exception:
+                found, held, error = None, False, "unreadable"
+            if error is None and found == [] and not held:
+                try:
+                    started = await asyncio.to_thread(a.mind.act, "start")
+                    return started.code == 0 and started.state == "running"
+                except Exception:
+                    return False
+            if time.monotonic() >= deadline:
+                return error is None and bool(found) and held
+            await asyncio.sleep(self.recover_poll_s)
 
     async def _run(self, args):
         from .app import log

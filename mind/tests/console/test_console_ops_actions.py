@@ -140,6 +140,7 @@ def test_release_uses_cli_and_restarts_after_refusal(app, fails, caplog, cli_pro
                 if fails == "stop": raise ValueError("clean stop refused")
                 return Outcome(0,"stopped","stopped")
             c.mind.clean_stop = stop
+            c._ops_actions.recover_s = 0
             if fails in {"cli", "both"}:
                 def failed(*args): raise ValueError("its transport is not settled")
                 c._ops_actions.release = failed
@@ -164,6 +165,55 @@ def test_release_uses_cli_and_restarts_after_refusal(app, fails, caplog, cli_pro
                 assert c._ops_actions.operation["release_outcome"] == ("released" if fails=="restart" else "refused")
                 assert ("was released" if fails=="restart" else "was refused") in c._ops_actions.operation["message"]
             assert "PRIVATE_REASON" not in caplog.text
+    run(go())
+
+
+@pytest.mark.parametrize("case", ["raised_running", "raised_stopped", "code_stopped", "ends_late", "dead"])
+def test_unproved_stop_never_leaves_the_mind_down(app, case, caplog):
+    """A stop that was not proved clean releases nothing, and a mind that ended anyway (or ends
+    while the console waits) is started again; one that cannot be started is reported."""
+    add_root(app.store.conn)
+    async def go():
+        async with served(app) as (c, endpoint):
+            ops = c._ops_actions
+            ops.recover_s, ops.recover_poll_s = (5 if case == "ends_late" else 0), .01
+            probes = []
+            def stop():
+                c.mind.acts.append("clean_stop")
+                if case in {"raised_stopped", "code_stopped", "dead"}:
+                    c.mind.found, c.mind._held = [], False
+                if case == "code_stopped":
+                    return Outcome(1, "stopped with an error", "stopped")
+                raise ValueError("clean stop not verified")
+            def probe():
+                probes.append(1)
+                if case == "ends_late" and len(probes) == 3:
+                    c.mind.found, c.mind._held = [], False
+                return list(c.mind.found), c.mind._held, None
+            c.mind.clean_stop, c.mind.probe = stop, probe
+            if case == "dead":
+                def start(action):
+                    c.mind.acts.append(action)
+                    return Outcome(1, "failed", "stopped")
+                c.mind.act = start
+            ops.release = lambda *a: pytest.fail("nothing may be released after an unproved stop")
+            args = CASES[0]
+            preview = (await post(c, {**args, "phase": "preview"})).json()
+            reply = await post(c, {**args, "phase": "confirm", "token": preview["token"], "typed_id": ROOT_ID})
+            assert reply.status == 202
+            await ops.task
+            assert ActionStore(app.store.conn).get(ROOT_ID).result_reason != "abandoned"
+            op = ops.operation
+            assert op["release_outcome"] == "not_started"
+            assert c.mind.acts == (["clean_stop"] if case == "raised_running" else ["clean_stop", "start"])
+            if case == "dead":
+                assert op["state"] == "failed" and op["restart_outcome"] == "failed"
+                assert "not confirmed running" in op["message"]
+            else:
+                assert op["state"] == "refused" and op["restart_outcome"] == "running"
+                assert "nothing was released" in op["message"] and "The mind is running" in op["message"]
+            if case == "ends_late":
+                assert len(probes) >= 3
     run(go())
 
 
