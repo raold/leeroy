@@ -22,7 +22,8 @@ that channel or thread only, so only what its audience reads, and none for a spe
 and his message, fitted under the compose's extra cap (prompt.EXTRA_CAP_TOKENS): the oldest lines
 go first, and a long line or post is cut. Memory recall looks for his words (recall_query: the
 message he replied to, his thread's last lines and his post; ruling R13). Both are built again
-just before composing (an instruction hook), so a later answer sees the ones before it.
+just before composing (an instruction hook), so a later answer sees the ones before it; once his
+post is gone (deleted) the hook drops the turn there (TurnWithdrawn, GONE), with no model call.
 
 The lease: on_his_post takes the arbiter's live lease LEASE as his login takes "human": the first
 holder's hand-over stops the night's run and preloads the live model, and a live request waits
@@ -41,7 +42,7 @@ from leeroy_mind.discord.presence import RNG_SEED, Presence, local_time, presenc
 from leeroy_mind.discord.transport import DiscordTarget, channel_id
 from leeroy_mind.llm.scheduler import Priority
 from leeroy_mind.realm.config import RealmConfig
-from leeroy_mind.talk.pipeline import TurnMeta
+from leeroy_mind.talk.pipeline import TurnMeta, TurnWithdrawn
 from leeroy_mind.talk.prompt import EXTRA_CAP_TOKENS
 from leeroy_mind.talk.romance import FOND_SHARE, WHISPER_AFFINITY_SCALE, WHISPER_WEIGHT
 from leeroy_mind.talk.select import pick_speakers
@@ -54,6 +55,7 @@ log = logging.getLogger("leeroy_mind.discord")
 LEASE = "discord"  # his Discord's lease on the GPU arbiter
 LEASE_IDLE_S = 600.0
 WHY = "discord:reply"
+GONE = "discord_deleted_parent"  # the drop reason of an answer whose post was deleted
 MAX_NAMED = 3
 SECOND_P = 0.35  # a drawn answer brings a second member this often
 CLASS_FIT = 4.0
@@ -331,16 +333,18 @@ class DiscordTalk:
 
     def _instruction_hook(self, turn: Turn, meta: TurnMeta, previous: str) -> str:
         """The engine's last step before composing: an answer turn's instruction, and its
-        recall query, built again from the store as it is now."""
+        recall query, built again from the store as it is now. His post gone (deleted), the
+        turn is dropped (TurnWithdrawn, GONE) before the model is asked."""
         target = meta.discord
         if (meta.why != WHY or target is None or target.reply_to is None
                 or not is_discord(turn.channel)):
             return previous
-        query = self.recall_query(target.reply_to)
-        if query is not None:
-            meta.recall_query = query
         fresh = self.instruction(turn.speaker, turn.channel, target.reply_to, target.thread)
-        return previous if fresh is None else fresh
+        query = self.recall_query(target.reply_to)
+        if fresh is None or query is None:
+            raise TurnWithdrawn(GONE)
+        meta.recall_query = query
+        return fresh
 
     # -- the lease -------------------------------------------------------------------------
 

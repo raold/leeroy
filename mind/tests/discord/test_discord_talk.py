@@ -631,3 +631,26 @@ def test_a_dm_is_answered_with_the_game_down(store, clock, tmp_path):
     assert [r["dropped"] for r in store.conn.execute(
         "SELECT dropped FROM utterance WHERE dropped IS NOT NULL")] == []
     rig.close()
+
+
+def test_a_post_deleted_before_its_answer_is_written_is_not_answered(store, clock, tmp_path):
+    """His post deleted while its answer waits: the turn is dropped before composing, with no
+    model call for the deleted text, as discord_deleted_parent."""
+    rig = rig_for(store, clock, tmp_path, reply="sure, see you then")
+    talk = talk_for(rig)
+    dm = post(rig, "dm:102", "you around later?")
+    named = post(rig, "general", "@Arkon you around later?")
+
+    async def go():
+        talk.on_his_post(dm)
+        talk.on_his_post(named)
+        for mid in (dm, named):
+            dstore.delete(store, mid, author=HUMAN, now=clock.now())
+        await rig.advance(200)
+    rig.sync(go())
+    assert answers(rig, "dm:102", dm) == [] and answers(rig, "general", named) == []
+    assert rig.prompts() == []
+    assert sorted((r["channel"], r["dropped"]) for r in store.conn.execute(
+        "SELECT channel, dropped FROM utterance")) == [
+        ("discord:general", "discord_deleted_parent"), ("dm:102", "discord_deleted_parent")]
+    rig.close()

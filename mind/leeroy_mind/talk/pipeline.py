@@ -346,6 +346,15 @@ class _ScopeChanged(SchedulerError):
     """The owner invalidated a turn before its next side effect."""
 
 
+class TurnWithdrawn(Exception):
+    """An instruction hook's word that its turn has nothing left to answer (discord.talk: his
+    post was deleted): the turn is dropped with `reason` before any model call."""
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
 def _scope_valid(meta: TurnMeta | None) -> bool:
     if meta is None or meta.still_valid is None:
         return True
@@ -520,7 +529,8 @@ class Pipeline:
         self.notes = PairNotes(self.store)
 
     def add_instruction_hook(self, fn: Callable[[Turn, TurnMeta, str], str]) -> None:
-        """Extend live, generated instructions immediately before composition."""
+        """Extend live, generated instructions immediately before composition. A hook may
+        raise TurnWithdrawn to drop the turn there, before the model is asked."""
         self._instruction_hooks.append(fn)
 
     # -- identity and lookups ------------------------------------------------------------------
@@ -1296,6 +1306,8 @@ class Pipeline:
                             if not isinstance(instruction, str):
                                 raise TypeError("instruction hook must return text")
                             turn.instruction = instruction
+                        except TurnWithdrawn as e:
+                            return self._drop(turn, meta, e.reason)
                         except Exception:
                             turn.instruction = previous
                             log.warning("instruction_hook_failed")
