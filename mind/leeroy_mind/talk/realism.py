@@ -66,6 +66,9 @@ def duration(text, wpm, rng, *, first, busy=False):
 
 
 def split_line(line):
+    # Bracketed item names are indivisible to the linker's later wire pass.
+    if any(mark in line.line or mark in line.plain for mark in ("[", "]", "{", "}", "|")):
+        return [line]
     typed, plain = _CLAUSE.split(line.line), _CLAUSE.split(line.plain)
     if len(typed) != len(plain) or len(typed) < 2:
         return [line]
@@ -162,7 +165,7 @@ class Realism:
         out, burst = list(lines), False
         if (busy or not safe) and len(out) > 1:
             out = out[:1]  # keep the complete first styled line; no invented busy excuse
-        elif safe and len(out) == 1 and len(out[0].plain.split()) >= 18 \
+        elif safe and not busy and len(out) == 1 and len(out[0].plain.split()) >= 18 \
                 and now-state.burst_at >= BURST_GAP and rng.random() < BURST_RATE:
             out = split_line(out[0])
             burst = len(out) > 1

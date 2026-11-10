@@ -112,6 +112,23 @@ def test_split_requires_matching_natural_boundaries():
     assert split_line(Styled("a. b.", "joined")) == [Styled("a. b.", "joined")]
 
 
+@pytest.mark.parametrize("item", ["[Mr. Pinchy]", "[One; Two]", "{item:123}", "|Hitem:123|h[Thing]|h"])
+def test_splitting_cannot_fragment_item_markup(item):
+    text = "I brought " + item + ". Here is the rest of the rather long reply to your question."
+    assert split_line(Styled(text,text)) == [Styled(text,text)]
+
+
+@pytest.mark.parametrize("busy", ["dungeon", "zone"])
+def test_busy_whisper_never_enters_new_single_line_burst(rig,busy):
+    rig.engine.rng = Always()
+    if busy == "dungeon":
+        rig.engine.world.members[101] = replace(rig.engine.world.members[101],map=574)
+    else:
+        rig.engine.realism.member(101).zone_at = rig.clock.now()
+    p = plan(rig,channel="whisper",text=LONG)
+    assert len(p.lines) == 1 and not p.burst and not p.correction
+
+
 def test_reviewed_typos_are_single_adjacent_substitutions_and_not_names_or_links():
     for word, wrong in SAFE_TYPOS.items():
         diff = [(a, b) for a, b in zip(word, wrong) if a != b]
@@ -181,6 +198,27 @@ def test_reported_zone_dungeon_and_boss_state_shorten_game_whispers_only(rig):
     e.realism.observe(Boss(ts=0, map=574, instance_id=1, boss_id=2,
                          boss_name="Invented", state="wiped", members=(101,)), now)
     assert not e.realism.combat(e, t)
+
+
+def test_real_app_hello_dispatch_clears_old_fight_and_travel_state(tmp_path,clock):
+    from test_app_ingress import application, deliver
+    async def main():
+        async with application(tmp_path,clock) as app:
+            e = app.engine
+            (tmp_path / "mind.toml").write_text("[talk]\nchattiness=0\nrealism=true\n",encoding="utf-8")
+            app._reload_config()
+            e.realism.observe(Boss(ts=0,map=574,instance_id=1,boss_id=2,
+                boss_name="Invented",state="engaged",members=(101,)),clock.now())
+            e.realism.member(101).zone_at = clock.now()
+            e.realism.member(101).credit = .5
+            assert e.realism.fights
+            await deliver(app,dict(type="hello",server="mod-leeroy",version="0.1.0",guild_id=21,human_guid=0))
+            assert app.hello is not None
+            assert e.cfg.talk.realism
+            assert not e.realism.fights
+            assert e.realism.member(101).zone_at == float("-inf")
+            assert e.realism.member(101).credit == .5
+    run(main())
 
 
 def test_fake_clock_correction_lands_within_five_to_ten_seconds(rig, monkeypatch):
