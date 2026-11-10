@@ -335,6 +335,7 @@ def audience_text(channel: str) -> str:
         return f"The {who} in #{ch.name} on the guild's Discord can read it, so play to the room."
     return f"The {_AUDIENCE.get(channel, 'everyone around')} can read it, so play to the room."
 
+
 VARIANT_SEP = "---"  # a line of just this splits an overlay into variants
 _warned: set[str] = set()
 
