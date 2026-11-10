@@ -131,16 +131,16 @@ def test_the_stored_theme_is_read_in_both_forms():
 
 
 TABS = ["comms", "raid", "guild", "social", "personas", "board", "calendar", "bank", "realm",
-        "training", "dojo", "library", "mind"]
+        "training", "dojo", "library", "ops", "mind"]
 LABELS = ["Comms", "Raid", "Guild", "Social", "Personas", "Board", "Calendar", "Bank", "Realm",
-          "Training", "Dojo", "Library", "Mind"]
+          "Training", "Dojo", "Library", "Ops", "Mind"]
 
 
 def _page() -> str:
     return resources.files("leeroy_mind.console").joinpath("page.html").read_text("utf-8")
 
 
-def test_the_thirteen_tabs_in_order():
+def test_the_fourteen_tabs_in_order():
     page = _page()
     nav = page[page.index('<nav class="tabs"'):page.index("</nav>")]
     assert re.findall(r'data-tab="([\w-]+)"', nav) == TABS

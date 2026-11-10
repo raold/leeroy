@@ -139,3 +139,52 @@ LEEROY_TEST(QueueFence_NonBotAndUnreachableBodyAreNotHolds)
             CHECK(QueueFenceReason(state, kind).empty());
         }
 }
+
+namespace
+{
+CastArenaTeamFacts PinnedCastInBotTeam()
+{
+    CastArenaTeamFacts facts;
+    facts.enabled = facts.cast = facts.pinned = true;
+    return facts;
+}
+}
+
+// 2026-11-07: cast member 251 was still in bot team <Flextime>; its captain's gather
+// took it out of the offline raid's group at 17:36:37.
+LEEROY_TEST(QueueFence_PinnedCastLeavesABotArenaTeam)
+{
+    CHECK(DecideCastArenaTeamExit(PinnedCastInBotTeam()) == CastArenaTeamExit::Leave);
+}
+
+LEEROY_TEST(QueueFence_ArenaTeamLeaveKeepsOwnerTeamsHumanAndUnpinned)
+{
+    using F = CastArenaTeamFacts;
+    for (auto required : {&F::enabled, &F::cast, &F::pinned})
+    {
+        auto facts = PinnedCastInBotTeam();
+        facts.*required = false;
+        CHECK(DecideCastArenaTeamExit(facts) == CastArenaTeamExit::Keep);
+    }
+    for (auto keep : {&F::human, &F::ownerCaptain})
+    {
+        auto facts = PinnedCastInBotTeam();
+        facts.*keep = true;
+        facts.teamFighting = true; // The owner's own teams are never touched, fighting or not.
+        CHECK(DecideCastArenaTeamExit(facts) == CastArenaTeamExit::Keep);
+    }
+    auto captain = PinnedCastInBotTeam();
+    captain.memberCaptain = true;
+    CHECK(DecideCastArenaTeamExit(captain) == CastArenaTeamExit::Captain);
+}
+
+LEEROY_TEST(QueueFence_ArenaTeamLeaveWaitsForEveryCoreLeaveCondition)
+{
+    using F = CastArenaTeamFacts;
+    for (auto blocking : {&F::realmHeld, &F::teamFighting, &F::inBattleground, &F::inQueue, &F::groupQueued})
+    {
+        auto facts = PinnedCastInBotTeam();
+        facts.*blocking = true;
+        CHECK(DecideCastArenaTeamExit(facts) == CastArenaTeamExit::Wait);
+    }
+}

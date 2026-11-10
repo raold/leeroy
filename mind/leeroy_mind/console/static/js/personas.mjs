@@ -1,7 +1,9 @@
 import { $, api, arr, cell, clear, el, emit, emptyRow, num, obj, on, own, plural, post, recall, refused,
          remember, setText, str } from "./core.mjs";
 import { face } from "./faces.mjs";
+import { appendInsightBadges, pollInsight, selectInsight } from "./insight.mjs";
 import { photoButton } from "./gallery.mjs";
+import { nudgeBadges, nudgeFocus, nudgePanel } from "./nudges.mjs";
 import { forgetMemberShots, pollSelfies, setSelfieNames, showMemberPhoto } from "./selfies.mjs";
 import { S } from "./state.mjs";
 import { registerTab, showTab } from "./tabs.mjs";
@@ -88,6 +90,8 @@ function renderPersonas(v) {
   $("p-missing").textContent = missing.length ? "This mind.db is older than some of what this tab reads; "
     + "unavailable here: " + missing.join(", ") + "." : "";
   $("p-missing").hidden = !missing.length;
+  $("p-insight-badges-why").textContent = str(v.insight_badges_why);
+  $("p-insight-badges-why").hidden = !v.insight_badges_why;
   setText("p-memhead", "memories (" + days + " d / held)");
   var body = $("p-roster");
   clear(body);
@@ -99,6 +103,7 @@ function renderPersonas(v) {
     who.appendChild(photoButton(m.guid, str(m.name), "list"));
     who.appendChild(el("span", "", str(m.name) + (m.in_cast ? "" : " (not in the cast)")));
     nameTd.appendChild(who);
+    appendInsightBadges(nameTd, obj(v.insight_badges)[String(m.guid)]);
     tr.appendChild(nameTd);
     tdT(tr, m["class"] ? (CLASSES[m["class"]] || "-") + (m.role ? " · " + m.role : "") : "-", m.role ? "role-" + m.role : "");
     tdT(tr, typeof m.rank === "number" ? String(m.rank) : "-", "num");
@@ -146,9 +151,11 @@ function renderWall(v) {
     t.appendChild(el("span", "tsub", st.sub));
     t.appendChild(el("span", "tsub", missing.indexOf("pad_mood") >= 0 ? "unavailable" : moodText(m.mood)));
     if (st.chip) { t.appendChild(el("span", "chip", st.chip)); }
+    appendInsightBadges(t, obj(v.insight_badges)[String(m.guid)]);
     box.appendChild(t);
   });
   if (!members.length) { box.appendChild(el("p", "why", "The mind has no cast and no personas yet.")); }
+  nudgeBadges(tuneView());
 }
 function pollPersonas() {
   if (personasBusy || S.tab !== "personas") { return; }
@@ -268,6 +275,7 @@ function renderMember(j) {
 function pollMember() {
   if (!pick || S.tab !== "personas") { return; }
   var seq = ++pickSeq, guid = pick;
+  pollInsight(guid);
   api("/api/persona?guid=" + guid).then(function (r) {
     if (refused(r)) { return null; }
     return r.json().then(function (j) { return { status: r.status, j: j }; });
@@ -280,6 +288,7 @@ function pollMember() {
 }
 function choose(guid) {
   pick = guid;
+  selectInsight(guid);
   var rows = $("p-roster").querySelectorAll("tr[data-guid]");
   for (var i = 0; i < rows.length; i++) { rows[i].classList.toggle("sel", Number(rows[i].dataset.guid) === guid); }
   var tiles = $("p-wall").querySelectorAll(".tile[data-guid]");
@@ -353,10 +362,11 @@ function numberText(x) {
   return str(x.what) + ": " + v(x.before) + " → " + v(x.after);
 }
 function tuneAsk(args, what) {
-  if (args.action === "preview") { setText("t-pvwhat", what + ": asking the mind"); $("t-pvcard").hidden = false; }
+  var preview = args.action === "preview" || (args.action === "nudge" && args.verb === "preview");
+  if (preview) { setText("t-pvwhat", what + ": asking the mind"); $("t-pvcard").hidden = false; }
   return post("/api/tune", args).then(function (r) {
     if (r.status === 403 && !r.error) { emit("key-lost"); return r; }
-    if (args.action === "preview") {
+    if (preview) {
       showPreview(what, r);
       if (r.ok === true) { lastPreview = previewKey(args.scope, args.target, args.dial, args.value); }
     } else if (r.ok !== true) { emit("note", what + " refused: " + str(r.error)); }
@@ -423,6 +433,7 @@ function renderTuning() {
                      moves: str(d.moves) + " (" + str(d.when) + ")", off: v.available ? "" : "unavailable" });
   });
   var groups = $("t-groups");
+  var restoreGroupFocus = nudgeFocus(groups);
   clear(groups);
   arr(v.groups).forEach(function (g) {
     var head = el("h4", "", (g.builtin ? "everyone" : str(g.name)) + " · " + plural(num(g.members), "member")
@@ -457,6 +468,7 @@ function renderTuning() {
       add.remove();
     });
     groups.appendChild(add);
+    nudgePanel(groups, v, "group", g.target, live, tuneWhy(), tuneAsk);
   });
   var fields = obj(v.fields), fsel = $("t-gfield");
   if (!fsel.options.length) {
@@ -483,6 +495,8 @@ function renderTuning() {
   });
   if (!arr(v.history).length) { hist.appendChild(el("div", "muted", v.available ? "No dial changes yet." : "Unavailable in this mind.db.")); }
   if (pick) { renderDials(pick); }
+  nudgeBadges(v);
+  restoreGroupFocus();
 }
 function rowText(v, r) {
   var who = r.scope === "world" ? "world" : r.scope === "group" ? "group " + groupName(v, r.target) : pname(v, Number(r.target));
@@ -498,6 +512,7 @@ function groupName(v, target) {
 }
 function renderDials(guid) {
   var v = tuneView(), box = $("p-dials");
+  var restoreFocus = nudgeFocus(box);
   clear(box);
   var m = arr(v.members).filter(function (x) { return x.guid === guid; })[0];
   if (!m) { setText("p-dialsum", ""); box.appendChild(el("p", "muted", v.available ? "No dials: this member has no readable persona, or is you." : "Unavailable in this mind.db.")); return; }
@@ -514,6 +529,8 @@ function renderDials(guid) {
                    moves: str(d.moves) + " (from " + str(d.when) + ")", off: x.applies ? "" : str(x.note) });
   });
   setText("p-dialsum", mine ? plural(mine, "value") + " of your own" : "nothing of your own set");
+  nudgePanel(box, v, "member", String(guid), tuneLive(), tuneWhy(), tuneAsk);
+  restoreFocus();
 }
 function fillValues() {
   var vals = arr(obj(tuneView().fields)[$("t-gfield").value]), sel = $("t-gvalues");

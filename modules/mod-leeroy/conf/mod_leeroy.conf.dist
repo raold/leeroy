@@ -9,6 +9,9 @@
 # Master switch for the module (1 = on, 0 = off).
 Leeroy.Enable = 1
 
+# Optional persona play styles: outdoor quiet cast only; reloadable. RaidHabits win.
+Leeroy.PlayStyle.Enable = 0
+
 # Guild id of the cast's guild.
 Leeroy.GuildId = 21
 
@@ -33,6 +36,11 @@ Leeroy.ExcludeFromOllamaChat = 1
 # Refuse random queues while a cast member is held or in the owner's instance group.
 # Applies on .reload config; 0 disables both refusal and safe queue withdrawal.
 Leeroy.QueueFence.Enable = 1
+
+# Take pinned cast members out of rated arena teams the owner does not captain, so a
+# bot team captain cannot pull them out of a group (logged with guid and team id).
+# Applies on .reload config.
+Leeroy.CastArenaTeams.Leave = 1
 
 # Realm actors and cast protection stay off until separately accepted.
 Leeroy.Realm.Enable = 0

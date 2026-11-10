@@ -1901,6 +1901,12 @@ def test_his_game_question_is_answered_with_the_librarys_facts(tmp_path, clock):
             await h.wait(lambda: h.app.world.online)
             await h.bridge.push(chat("anyone know where the lancer's trial dailies start?"))
             await h.wait(lambda: h.count("chat_line") >= 1)
+            line_id = h.rows("SELECT id FROM chat_line WHERE from_guid=?", (HUMAN,))[0]["id"]
+            # The facts reader owns a real thread. Keep virtual reply deadlines
+            # still until the app's lookup finishes, rather than racing 40 fake
+            # seconds against worker scheduling under parallel CI.
+            await h.wait(lambda: line_id in h.app.facts._lines)
+            await asyncio.wait_for(h.app.facts.for_line(line_id), 3.0)
             await h.advance(40)
             talk = [c["messages"][-1]["content"] for c in h.llm.calls if "messages" in c
                     and SCHEMA_MARK not in c["messages"][-1]["content"]]

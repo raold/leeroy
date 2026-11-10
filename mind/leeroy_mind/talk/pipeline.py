@@ -1107,7 +1107,8 @@ class Pipeline:
             quiet=quiet, to_him=to_human and turn.kind is TurnKind.OPEN)
         parts = PromptParts(
             card=self._card(p), samples=samples,
-            rules=comms_rules(human, p, data_dir=self.data_dir), rel_cards=cards,
+            rules=comms_rules(human, p, data_dir=self.data_dir, now=now,
+                              channel=turn.channel, recipient=turn.to_guid), rel_cards=cards,
             memories=[self.recall.format(m) for m in memories],
             mood=mood_line(state, altered, substance_of(p, altered, local), phase,
                            kind=turn.kind, life_thread=p.real_life.life_thread,
@@ -2078,6 +2079,10 @@ class Pipeline:
                 self.on_line_sent(line_id, chat)
             except Exception:
                 log.exception("on_line_sent hook failed")
+        if (signals := getattr(self, "signals", None)) is not None:
+            signals.sent(line_id, chat, addressed=bool(hg and
+                         (meta.answers_human or turn.addressee == hg or turn.to_guid == hg)),
+                         heard=heard)
         if meta.on_recorded is not None and ack is not None:
             try:
                 meta.on_recorded(line_id, ack)

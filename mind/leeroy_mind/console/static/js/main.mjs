@@ -17,6 +17,7 @@ import "./bank.mjs";
 import "./training.mjs";
 import "./dojo.mjs";
 import "./library.mjs";
+import "./ops.mjs";
 import "./personas.mjs";
 import "./mind.mjs";
 import { showTab } from "./tabs.mjs";

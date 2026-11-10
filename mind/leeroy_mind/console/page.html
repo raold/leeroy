@@ -39,6 +39,7 @@
   <button role="tab" id="t-training" data-tab="training" aria-controls="tab-training">Training</button>
   <button role="tab" id="t-dojo" data-tab="dojo" aria-controls="tab-dojo">Dojo</button>
   <button role="tab" id="t-library" data-tab="library" aria-controls="tab-library">Library</button>
+  <button role="tab" id="t-ops" data-tab="ops" aria-controls="tab-ops">Ops</button>
   <button role="tab" id="t-mind" data-tab="mind" aria-controls="tab-mind">Mind</button>
 </nav>
 <div id="toasts" role="status"></div>
@@ -263,6 +264,7 @@
             <button type="button" class="btn" data-view="table" aria-pressed="false">Table</button></span></header>
         <p id="p-mood" class="lead">-</p>
         <p id="p-missing" class="why" hidden></p>
+        <p id="p-insight-badges-why" class="why" hidden></p>
         <div id="p-wall"></div>
         <div id="p-table" class="scroll"><table class="pick"><thead><tr><th>name</th><th>class and role</th><th class="num">rank</th>
           <th>mood</th><th>stance</th><th>toward you</th><th>closest ties</th><th class="num" id="p-memhead">memories</th>
@@ -362,6 +364,17 @@
         <header><h3>Persona ledger</h3><span class="muted">growth, drift flags, stance moves and undos, newest first</span></header>
         <div id="p-ledger" class="log"></div>
       </article>
+      <article class="panel span" id="persona-insight">
+        <header><h3>Insight</h3><span id="insight-status" class="muted" role="status"></span></header>
+        <div id="insight-parts"></div>
+        <form id="insight-check">
+          <label for="insight-line">Check a line against this member's claims</label>
+          <textarea id="insight-line" maxlength="500" rows="2" required autocomplete="off"></textarea>
+          <button id="insight-submit" type="submit">Check line</button>
+          <p class="why">One embedding call, only if the mind already holds the model. Your line stays in this form; it is never logged, stored or sent as chat.</p>
+          <p id="insight-result" class="why" role="status"></p>
+        </form>
+      </article>
     </div>
   </section>
   <section id="tab-board" class="tab mindtab" role="tabpanel" aria-labelledby="t-board" hidden>
@@ -449,6 +462,27 @@
     <p id="library-status" class="note" role="status"></p>
     <div id="library-hits"></div>
     <div><button id="library-deeper" class="btn" type="button" hidden>Search deeper</button></div>
+  </section>
+  <section id="tab-ops" class="tab mindtab" role="tabpanel" aria-labelledby="t-ops" hidden>
+    <div id="ops-banner" class="banner bad" role="status" hidden></div>
+    <div class="view-head"><div><h2>Ops</h2><p>Checks, saved work and recovery records. Actions require a preview and confirmation.</p></div></div>
+    <div id="ops-kpis" class="kpis" aria-live="polite"></div>
+    <div class="panel ops-actions"><h3>Operator actions</h3>
+      <p id="ops-action-message" role="status" aria-live="polite">Checking action availability.</p>
+      <div id="ops-action-global" class="ops-action-buttons"></div>
+    </div>
+    <dialog id="ops-action-dialog" aria-labelledby="ops-action-title" class="ops-action-dialog">
+      <form id="ops-action-form"><h3 id="ops-action-title">Review action</h3>
+        <label id="ops-action-reason-wrap">Reason for release<input id="ops-action-reason" maxlength="200"></label>
+        <label id="ops-action-label-wrap">Snapshot label<input id="ops-action-label" maxlength="40" pattern="[A-Za-z0-9_-]{1,40}"></label>
+        <p id="ops-action-words" role="status" aria-live="polite"></p>
+        <label id="ops-action-typed-wrap" hidden>Type the exact root id<input id="ops-action-typed" autocomplete="off" spellcheck="false"></label>
+        <div class="ops-action-buttons"><button id="ops-action-preview" type="button" class="btn">Review action</button>
+          <button id="ops-action-confirm" type="button" class="btn" hidden>Confirm action</button>
+          <button id="ops-action-cancel" type="button" class="btn">Cancel</button></div>
+      </form>
+    </dialog>
+    <div id="ops-panels" class="cards"></div>
   </section>
   <section id="tab-mind" class="tab mindtab" role="tabpanel" aria-labelledby="t-mind" hidden>
     <div class="cards">

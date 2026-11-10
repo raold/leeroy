@@ -55,6 +55,8 @@ class TuningService:
     async def handle(self, args: dict) -> dict:
         action = args["action"]
         try:
+            if action == "nudge":
+                return await self._nudge(args)
             if action == "status":
                 return self.status()
             if action == "preview":
@@ -65,6 +67,28 @@ class TuningService:
             log_event("tune_refused", action=action)
             return {"ok": False, "error": str(e)}
 
+    async def _nudge(self, args):
+        from . import nudges as N
+        verb, app = args["verb"], self.app
+        if verb == "list":
+            return {"ok": True, **N.view(app.store.conn, now=app.clock.now())}
+        if verb == "preview":
+            from .nudge_preview import preview
+            return await preview(app, args)
+        if verb == "set":
+            pic = self.picture()
+            r = N.set_nudge(app.store, args, pic, app.engine.human,
+                            source="console", now=app.clock.now())
+        else:
+            r = N.retire(app.store, args["id"], source="console", now=app.clock.now())
+        self.refresh()
+        if verb == "set" and r.change and (signals := getattr(app, "signals", None)) is not None:
+            signals.nudged(args, pic)
+        log_event("tune_written", action="nudge_" + verb, change=r.change or 0, rows=r.rows)
+        return {"ok": True, "change": r.change, "rows": r.rows,
+                "version": app.personas.tuning.version,
+                "message": f"Saved as change #{r.change}." if r.change else "Already retired."}
+
     def status(self) -> dict:
         t = self.app.personas.tuning
         return {"ok": True, "version": t.version, "pinned_members": len(t.pins),
@@ -74,6 +98,8 @@ class TuningService:
     def _write(self, action: str, args: dict) -> dict:
         app, now, reach = self.app, self.app.clock.now(), 0
         pic = self.picture()
+        signals = getattr(app, "signals", None)
+        before = signals.tuning_values(args, pic) if signals is not None and action == "set" else {}
         if action == "set":
             s = C.Set(args["scope"], args["target"], args["dial"], args["value"])
             r = C.apply_sets(app.store, [s], pic, source="console", now=now,
@@ -90,6 +116,8 @@ class TuningService:
         else:
             r = C.retire_group(app.store, args["id"], source="console", now=now)
         self.refresh()
+        if before:
+            signals.tuned(before, args)
         t = app.personas.tuning
         if action == "group" and r.change is not None:
             reach = self.reach("group", str(self._group_id(r.change)), "talkative")
@@ -111,7 +139,7 @@ class TuningService:
         mind.toml for the talk engine when they moved."""
         app = self.app
         before = app.personas.tuning
-        t = load_tuning(app.store)
+        t = load_tuning(app.store, app.clock.now())
         app.personas.set_tuning(t)
         if dict(t.world) != dict(before.world):
             from .world import merge

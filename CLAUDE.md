@@ -588,7 +588,23 @@ at the door, so it lets the first few in and sends the rest to their homebinds
 group raids for DKP and attendance like a called raid night (see the mind's
 guild life).
 
+Optional persona play styles require both `[playstyle] enabled = true` in the
+mind's `mind.toml` (restart to attach) and native `Leeroy.PlayStyle.Enable = 1`
+(`.reload config`). Both default off. This first map adds only ordinary potion use
+and a 2–6 s DPS wait-for-attack hold outdoors; tanks/healers get no added delay.
+It never shortens an existing active hold and leaves one above 6 s untouched.
+All dungeon/raid instances, raid groups, combat, PvP and conflicting controllers
+refuse additions; RaidHabits remain authoritative. Native checks actual bodies,
+roles and ownership after the ack. The independent style journal is restored by
+`bot_do restore` (`param="playstyle"` or `"*"`), native off/raid/PvP cleanup,
+and the mind's bounded shutdown drain. Unknown receipts remain in
+`playstyle:owned` for reconciliation; foreign ownership can leave cleanup pending.
+With an already attached mind, hello/login rereads the switch and queues undo when
+off. No model, prompt, gear, loot or raid strategy change is involved. See
+`mind/leeroy_mind/playstyle/README.md` for the deterministic map and limits.
+
 ### Local patch: pinned random bots
+
 
 Local commit `ecbfeb6b` on `mod-playerbots` `master` ("Let other modules pin
 random bots"). An API on `RandomPlayerbotMgr` that mod-leeroy uses to keep the
@@ -661,7 +677,18 @@ Local commit `3826b2f4` (built 2026-11-07) keeps pins out of random bot arena te
 login, filling teams below `Playerbots.RandomBotArenaTeam2v2Count`/`3v3Count`/`5v5Count`
 (live 30/30/20, raised from 10/10/5 with `Arena.MaxRatingDifference = 0` so the owner meets
 the strong bot teams), and without it the cast would join them for good. Teams he made
-himself are untouched.
+himself are untouched. It does not remove a pin from a team it joined before, and a
+captain's gather (`BGJoinAction::gatherArenaTeam`) takes any member out of its group
+and teleports it unless its master is a game client (a self-mastered bot counts) or
+it is in combat, a battleground or a queue; on 2026-11-07 it pulled masterless cast
+member 251 out of an offline raid's group. So mod-leeroy (`Leeroy.CastArenaTeams.Leave`,
+default 1, `.reload config`) takes a pinned cast member out of every rated team the owner
+does not captain, on the queue fence's world tick, through the core's `ArenaTeam::DelMember`
+under the leave handler's own conditions (not while the team fights or the member or a
+group-mate is queued, nor while a Realm lease holds the body), once per member and team
+per process: `cast_arena_team_left guid= team= type=`. A cast member who captains a bot
+team is kept and logged once (`cast_arena_team_kept ... reason=captain`): it cannot leave
+without disbanding or handing on the team, which is left to a playerbots patch.
 
 Commits here never carry a `Co-Authored-By` or other attribution trailer.
 
@@ -773,6 +800,7 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 .venv/Scripts/python -m leeroy_mind console --data-dir "$D" # the guild console; open the URL it prints
 .venv/Scripts/python -m pytest -q                           # the unit tests
 .venv/Scripts/python -m pytest -q -n auto tests             # fast run; up to 8 isolated workers
+.venv/Scripts/python -m pip install -r tests/console/e2e/requirements.txt; .venv/Scripts/python -m playwright install chromium; .venv/Scripts/python -m pytest tests/console/e2e -q  # isolated browser rehearsal
 .venv/Scripts/python -m pytest -m ollama                    # optional: also -m live, -m mysql
 ```
 
@@ -787,11 +815,27 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   pulling new code, run `db migrate` before `doctor`.
 - Explicit prompt wording lives only in `mind-data\prompts\` overlays; the
   built-in prompts in the repo stay non-explicit.
+- Optional `[callbacks] enabled = true` enables the memory callback selector API
+  (default/invalid means off); it is not wired to talk yet. It checks complete
+  supported provenance, pair/officer scopes, a 14-day reuse window and owner-play
+  quotas. `python -m leeroy_mind callbacks eval --data-dir <data>` replays only on
+  an in-memory backup, with counts on stdout; `--show-text` writes private seeds
+  only to that data directory's scratch folder. Older schemas are not migrated.
+  Caller transaction requirements and limitations: `mind/leeroy_mind/memory/CALLBACKS.md`.
 - `pytest -m ollama|live|mysql` runs the optional checks against Ollama, the
   running bridge and MySQL; the default run deselects them. `-m live` takes the
   events the bridge queued for the mind, so never run it while they matter.
 - Do not run `personas generate`/`seed` or a library build while the mind is
   live: they load another large model next to the live one and evict it.
+- Optional `[fingerprint] enabled = true` attaches a model-free typing-profile stage
+  on restart (also in `nightly run`). Missing/invalid settings mean off. It measures
+  the last 300 mind-origin lines, or seeds a documented persona prior below 50.
+  Private/officer lines contribute numbers only; lexical phrases come from public
+  guild/say/yell lines. Logs contain ids/counts and hints use fixed safe wording.
+  No prompt or guard changes yet. `python -m leeroy_mind fingerprint show <guid>`
+  reads without migration, including older databases. Enabled weekly evaluations
+  add a current profile-distance snapshot, not a held-out-week score. See
+  `mind/leeroy_mind/fingerprint/README.md` for the seed mapping and metric limits.
 - Only the night's own writers write personas while the mind runs. Optional
   `[personas] auto_newcomers = true` (read at startup; false or invalid means off)
   gives members who join the cast later (invited, or levelled to 80) a persona at
@@ -855,6 +899,41 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   or the command keeps the existing timeout behaviour and logs unsupported once
   per run. A mind restart requires fresh progress evidence; lost terminals still
   use the deadline (or an accepted stop) plus 15-minute `terminal_lost` fallback. Native rebuild needed.
+- A running offline raid can recall an absent follower after 30 s, at most three
+  attempts per member per run and 60 s between attempts. The original body, group,
+  controller and destination instance must still be proven; combat, PvP, another
+  dungeon, dead bodies and pending transfers prevent it (pure policy
+  `RecallQuietOk`/`RecallBodySafe`/`RecallPvpBusy`; the battlefield and arena lookups
+  run last). Existing leader/minimum roster stops win. Arrival updates the heartbeat
+  without resetting the boss progress clock. Benchmarks do not use this recall path.
+- The job's driver is a self-mastered bot outside the raid group, and stock
+  `ResetAiAction` (the empty group list Grouping's `RemoveFromGroup` sends, or a leader
+  change) clears a master outside the bot's group; `FindNewMaster` finds none in an
+  all-bot raid. On 2026-11-07 that left 3112 (the leader) and 251 masterless, so the
+  teardown that began at 17:33:26 retained `restore_ownership` for both and never ended.
+  Every tick, in every stage including teardown, native now puts the driver back for a
+  member it still holds (same body, the job's group, no Realm or dummy lease) whose
+  master is empty, re-strips follow, restores `wait for attack` and `avoid aoe` and
+  reconciles DC's strategies (`master_reasserted guid= stage= repairs=`, first and every
+  50th). A non-empty foreign master is still an ownership change.
+- A restart no longer needs every member: after 30 s an absent member is dropped from
+  that restart's gate (`restart_dropped guid=`) while the members present meet the
+  minimum; fewer stop the run `too_few`. The leader is never dropped. A dropped member
+  stays in the roster for cleanup and later recall.
+- Native logs the stop reason immediately and includes it in teardown progress.
+  Cleanup still incomplete after 60 s reports `cleanup_failed:<reason>` once,
+  for ordinary offline raids as well as benchmarks; this ends mind accounting. From
+  then on a member the job no longer holds (other group, master or body) that carries
+  no training journal is abandoned (`cleanup_abandoned guid=`, never touched again) so
+  the members it does hold finish their cleanup. Ten minutes after `cleanup_failed`, an
+  ordinary offline raid releases its native slot (`cleanup_released after_ms=
+  unfinished=`; then `training_run_cleared=`) unless a member is still provably held
+  (connected, same body, the job's group, the driver as master), which logs
+  `cleanup_held` once and keeps the slot as before. Release restores the WaitAtBoss
+  override and the leader's DC training-run receipt where it can, and keeps training
+  journals (their `training_journal_pending` fence stays) and the cleanup receipt
+  (`get_training_cleanup` shows it unrestored). Benchmarks never release. A leftover
+  group is disbanded by the 60 s leftover sweep. A native rebuild is required.
 - Members start conversations with him on two clocks (2026-11-07), per hour of
   his play at chattiness 4 and scaled with it (0 stops every unprompted whisper):
   `[talk] whispers_per_hour` (4, at most 8 an hour and 2 minutes apart;
@@ -970,7 +1049,13 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   night's looks pass or photo-kind pass, a stance move or an undo), open drift
   flags and the night's trait sample, and per member the persona card summary
   (its looks with the photo kind), ties, memories by kind and ledger; a table
-  an older mind.db lacks shows as unavailable. Its writes are the profile
+  an older mind.db lacks shows as unavailable. Persona Insight (`console/insightview.py`,
+  `insightreports.py`, `static/js/insight.mjs`; [guide](mind/leeroy_mind/console/INSIGHT.md))
+  adds bounded read-only claims, guild-context awareness and private audit-rate projections.
+  Its `claim_check` read op works with `--no-control` under key/Host/Origin gates, uses
+  only an already-resident embedding model, and never logs or stores typed text.
+  Guard verdict history is not persisted, so the panel explicitly says unavailable.
+  Its writes are the profile
   photos (see the selfie worker), his Board replies (below) and the tuning (`leeroy_mind/tuning/`,
   console `tuneview.py`): the
   owner's dials, stored in mind.db's `tuning_*` tables as an overlay that never
@@ -984,6 +1069,21 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   while the live model is already loaded, never loads one, and its text is never
   logged or stored. `python -m leeroy_mind tuning --data-dir "$D" status|history`
   reads it; `undo N|revert N` work with the mind stopped.
+  Temporary nudges share that history and its undo/revert. They are private
+  owner overlays, never persona edits or log text; 1–200 cleaned characters,
+  1 hour to 14 days, with channel/recipient scope and a 200-token prompt budget.
+  The `tune` op accepts `nudge` set/retire/list/preview; preview keeps the loaded
+  model gate. `tuning nudges` reads active entries and history. Optional
+  `[tuning] nudge_memories` (default true) offers ended everywhere intentions to
+  reflection as past moods, never factual evidence; scoped ones are excluded.
+  Details and storage keys: `mind/leeroy_mind/tuning/README.md`. No migration.
+  Optional `[signals] enabled=true` records numeric owner-response observations;
+  default/invalid is off. `signals status|member <guid>` is read-only; keyed
+  `feedback` replaces a line's vote. Values are normalized (`reply_latency_s`
+  is seconds/120, `reply_len` is codepoints/500 capped at 1). `judge_guard_*`
+  means historical screening, not a live action. General combat/rest telemetry
+  is absent, so ignored capture stays conservative. See
+  `mind/leeroy_mind/signals/README.md` for coverage, privacy and retention.
   The page is split into `console/static/` (CSS, a classic `theme.js`, ES
   modules, self-hosted OFL fonts with their licence texts) and is served at
   `/static/` without the key, like the page, since a browser cannot send a
@@ -991,11 +1091,42 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   with no inline style. Dark is the default whatever the system setting; the
   light/dark switch is remembered in `localStorage` (`guild-console-theme`,
   with the folds and read marks, `guild-console-collapsed` and
-  `guild-console-read`). It has 13 tabs (Comms, Raid, Guild, Personas, Social,
-  Board, Calendar, Bank, Realm, Training, Dojo, Library, Mind); each polls only
+  `guild-console-read`). It has 14 tabs (Comms, Raid, Guild, Personas, Social,
+  Board, Calendar, Bank, Realm, Training, Dojo, Library, Ops, Mind); each polls only
   while it is open and the page is visible, one request at a time. A source that is
   not there yet answers 200 and reads "Not set up yet: <why>"; only a file that
-  exists but cannot be read is a 503. `GET /api/face?guid=<int>&size=sm|md|lg` serves
+  exists but cannot be read is a 503. Ops (`GET /api/ops`, `console/opsview.py`) keeps
+  those states per panel in one 200 response: health, night, Realm holds, raids,
+  selfies/snaps, backups, cached Git release drift and scheduled-task status. Each
+  source has its own deadline (health 6 s, Git/tasks 3 s, others 1 s) and one worker;
+  a slow source is explicitly skipped while the others answer. Health reuses the
+  installed checks at most once a minute; the tab polls every 15 s. It shows only
+  counts, codes, identifiers and times; private health diagnostics stay in the CLI.
+  Saved running nights may be paused, unretained progress stays unknown, desk dates
+  mean recorded operations, and backup metadata is not a new restore test. Release
+  commands remain selectable text. Ops actions additionally require `[control] ops_actions = true`
+  (default false; invalid control settings keep the actions off) and restarting both mind and
+  console. `--no-control`, key/Host/Origin checks and a verified running mind still apply.
+  Every action uses a fresh preview and a one-use confirmation; the owner must be known offline.
+  A refused confirmation restores the review step and keeps the entered draft fields.
+  `POST /api/ops/action` starts one background operation, `GET /api/ops/action` reports its outcome;
+  the reservation also blocks other console writes and lifecycle actions until it finishes.
+  Realm release requires the exact root id typed back and a 1–200 character reason kept only
+  in its private CLI receipt. It refuses open guild/offline raids and the CLI's nonreleasable
+  roots, stops cleanly (never force), runs this checkout's `realm release --yes`, then restarts
+  even after a CLI refusal. Release and restart outcomes are reported separately; an unproved
+  clean stop changes no root. Offline stop targets the original owned command id, keeps fresh
+  progress/boss fences, and finishes only after the terminal and cleanup; an ACK is pending.
+  Render now keeps the booth's offline wait, request age, daily cap, cooldown and lease/night
+  priority rules; completion comes from that requested task, never an older shared receipt.
+  Snapshots use the same SQLite backup helper as `run`, in a fresh contained
+  staging directory, and publish without overwriting. Labels are 1–40 ASCII letters/digits,
+  underscore/hyphen; links/junctions are refused. Manual snapshots carry an operation suffix
+  and are retained until the operator removes them. Their local volume must support hardlinks;
+  unsupported publication fails rather than falling back to an overwrite. Console shutdown
+  waits for a release's restart; other work remains mind-owned. Unknown outcomes require a
+  status check before retrying. Logs contain action/id/outcome, never reasons or labels.
+  `GET /api/face?guid=<int>&size=sm|md|lg` serves
   `mind-data/selfies/<guid>/chosen.jpg` (key and Host checked, `image/jpeg`,
   `private, max-age=60`, 404 when absent; the original for every size, the
   browser scales it) and never writes under `selfies/`; faces (initials when

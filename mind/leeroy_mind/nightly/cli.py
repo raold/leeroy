@@ -342,7 +342,10 @@ async def _run(root, store, cfg, clock, args, make_llm):
         # Resuming must use that receipt, not recompute sources from calendar bounds.
         ctx.window = (record.window_start, record.window_end)
         try:
-            await NightRunner(STAGES, lambda n, w: ctx).run(night, ctx.window)
+            runner = NightRunner(STAGES, lambda n, w: ctx)
+            from leeroy_mind.fingerprint.night import attach as attach_fingerprint
+            attach_fingerprint(runner, root)
+            await runner.run(night, ctx.window)
         except BaseException as exc:
             run_finish(store, night, now=clock.now(),
                 status="interrupted" if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) else "failed",

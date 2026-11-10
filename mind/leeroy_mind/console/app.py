@@ -75,6 +75,8 @@ run nothing else.
                        op `library`, a read: it works with --no-control); the query is never logged
     GET  /api/training the Training tab: what `training status`, `gate`, `trials` and `cards`
                        print, from mind.db (`setup` false when it has no training tables)
+    GET  /api/ops/badge  the Ops tab badge's two counts (health FAILs, held members), polled while any tab is open
+    GET  /api/ops      eight independently budgeted read-only operations panels (opsview)
     GET  /api/dojo     the Dojo tab: the dojo's own files (its layout's data and runtime roots,
                        read-only) and whether its worldserver listens, from the console's TCP table
     GET  /api/selfies/images  ?guid=&set=: a ready set's four thumbnails as data URLs (404
@@ -140,9 +142,10 @@ from typing import Callable
 from .. import clock as mind_clock, endpoint
 from ..discord import layout as discord_layout, store as discord_store
 from ..realm.config import ConfigError, RealmConfig, load_realm_config
+from . import opsview
 from . import (bankview, boardview, calendarview, discordview, dojoview, faces, feed, libraryview, mindlog,
                galleryview, netinfo, personaview, raidview, realmview, selfieview, socialview, status, trainview,
-               tuneview, views)
+               tuneview, views, insightview)
 from .control import Controls, Refused
 from .httpd import Request, Response, Stream, digits, encode_json, json_response, text
 from .mindlink import BANK_S, BOARD_S, DISCORD_S, LIBRARY_S, RAID_S, SAY_S, LinkError
@@ -276,6 +279,7 @@ class Settings:
     allow_hosts: tuple[str, ...] = ()  # tailnet names (lower case) served at https://NAME too
     stable_key: bool = False  # the key is --key-file's, not this start's
     dojo_layout: Path | None = None  # the dojo's layout.json (the Dojo tab reads its files only)
+    ops_actions: bool = False
 
 
 class _Subscriber:
@@ -333,6 +337,9 @@ class ConsoleApp:
         self._waiting: dict[int, float] = {}  # spoken, voice row not written yet: id -> first seen
         self._tasks: list[asyncio.Task] = []
         self._server = None
+        self._ops = opsview.OpsView(settings.root, settings.data_dir)
+        from .opsactions import OpsActions
+        self._ops_actions = OpsActions(self)
 
     # -- the strip ---------------------------------------------------------------------------
 
@@ -760,6 +767,8 @@ class ConsoleApp:
         refused = self.gate(req)
         if refused is not None:
             return refused
+        if req.method == "POST" and req.path != "/api/ops/action" and self._ops_actions.busy:
+            return json_response(409, {"ok": False, "error": "An Ops action is still running."})
         if req.path == "/":
             if req.method != "GET":
                 return text(405, "Method not allowed.", [("Allow", "GET")])
@@ -782,10 +791,16 @@ class ConsoleApp:
                   ("POST", "/api/discord"): self._api_discord_action,
                   ("GET", "/api/bank"): self._api_bank,
                   ("GET", "/api/training"): self._api_training,
+                  ("GET", "/api/ops"): self._api_ops,
+                  ("GET", "/api/ops/badge"): self._api_ops_badge,
+                  ("GET", "/api/ops/action"): self._api_ops_action_status,
+                  ("POST", "/api/ops/action"): self._ops_actions.post,
                   ("GET", "/api/dojo"): self._api_dojo,
                   ("GET", "/api/library"): self._api_library,
                   ("GET", "/api/personas"): self._api_personas,
                   ("GET", "/api/persona"): self._api_persona,
+                  ("GET", "/api/persona/insight"): self._api_insight,
+                  ("POST", "/api/persona/check"): self._api_claim_check,
                   ("GET", "/api/face"): self._api_face,
                   ("GET", "/api/tuning"): self._api_tuning,
                   ("POST", "/api/tune"): self._api_tune,
@@ -824,6 +839,9 @@ class ConsoleApp:
 
     async def _api_state(self, req: Request):
         return json_response(200, await self.snapshot())
+
+    async def _api_ops_action_status(self, req: Request):
+        return json_response(200, self._ops_actions.view())
 
     async def _api_events(self, req: Request):
         if len(self._subs) >= MAX_STREAMS:
@@ -1017,6 +1035,12 @@ class ConsoleApp:
     async def _api_training(self, req: Request):
         return await self._db_view("training", trainview.training_view, now=self._clock())
 
+    async def _api_ops(self, req: Request):
+        return json_response(200, await self._ops.snapshot({"mind": self.view.state}))
+
+    async def _api_ops_badge(self, req: Request):
+        return json_response(200, await self._ops.badge({"mind": self.view.state}))
+
     async def _api_dojo(self, req: Request):
         view = await asyncio.to_thread(dojoview.dojo_view, self.s.dojo_layout, conns=self._conns)
         return json_response(200, view)
@@ -1026,7 +1050,7 @@ class ConsoleApp:
     async def _api_personas(self, req: Request):
         try:
             view = await asyncio.to_thread(feed.read, self.s.data_dir / "mind.db",
-                                           personaview.roster_view, now=self._clock())
+                                           insightview.roster_view, data_dir=self.s.data_dir, now=self._clock())
         except Exception as e:
             log.warning("console_personas_unread: error=%s", type(e).__name__)
             return json_response(503, {"ok": False, "error": f"mind.db could not be read "
@@ -1048,6 +1072,36 @@ class ConsoleApp:
         if view is None:
             return json_response(404, {"ok": False, "error": f"mind.db has no member {guid}"})
         return json_response(200, view)
+
+    async def _api_insight(self, req: Request):
+        values = req.query.get("guid", [])
+        guid = digits(values[0], 10) if len(values) == 1 else None
+        if guid is None or not 0 < guid <= 0xFFFFFFFF or set(req.query) != {"guid"}:
+            return json_response(400, {"ok": False, "error": "guid: one member's guid"})
+        try:
+            view = await asyncio.to_thread(feed.read, self.s.data_dir / "mind.db",
+                insightview.insight_view, guid, data_dir=self.s.data_dir, now=self._clock())
+        except Exception:
+            return json_response(503, {"ok": False, "error": "Insight could not read mind.db."})
+        return json_response(200, view)
+
+    async def _api_claim_check(self, req: Request):
+        # POST keeps the typed line out of URL/history/access logs. It is still a read,
+        # available with --no-control, under the same key/Host/Origin gate as other POSTs.
+        try:
+            args = endpoint.claim_check_args(req.json())
+        except endpoint.BadRequest as exc:
+            return json_response(400, {"ok": False, "error": str(exc)})
+        if self.view.state != "running" or self.link is None:
+            return json_response(409, {"ok": False, "error": "The mind is not available for a claim check."})
+        try:
+            reply = await asyncio.to_thread(self.link.call, self._mind_pids(), "claim_check", args,
+                                           timeout=LIBRARY_S)
+        except LinkError:
+            return json_response(409, {"ok": False, "error": "The mind's claim-check endpoint could not be reached."})
+        if reply.get("ok") is not True and str(reply.get("error", "")).startswith(OLD_OPS):
+            reply = {"ok": False, "error": "This mind does not support claim checks yet."}
+        return json_response(200 if reply.get("ok") is True else 409, reply)
 
     async def _api_face(self, req: Request):
         guids, sizes = req.query.get("guid", []), req.query.get("size", [])
@@ -1110,7 +1164,8 @@ class ConsoleApp:
             if self.view.state != "running" and status_code == 409 and self.controls.busy is None:
                 words = MIND_DOWN
             return json_response(status_code, {"ok": False, "error": words})
-        preview = args["action"] == "preview"
+        preview = (args["action"] == "preview" or
+                   args["action"] == "nudge" and args["verb"] == "preview")
         try:
             reply = await asyncio.to_thread(self.link.call, self._mind_pids(), "tune", args,
                                             timeout=PREVIEW_S if preview else TUNE_S)
@@ -1571,6 +1626,7 @@ class ConsoleApp:
         return [f"https://{name}/#key={self.s.key}" for name in self.s.allow_hosts]
 
     async def close(self) -> None:
+        await self._ops_actions.close()
         for task in self._tasks:
             task.cancel()
         for task in self._tasks:
