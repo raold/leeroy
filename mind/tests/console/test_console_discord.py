@@ -462,3 +462,23 @@ def test_tables_that_appear_after_the_baseline_are_announced(data, cast):
             await app._feed_pass()
             return [d for k, d in seen if k == "discord"]
     assert asyncio.run(go()) == [{"channels": ["general"]}]
+
+
+def test_members_are_the_minds_audience_never_him_or_below_the_cast_level(data, cast):
+    """The stored roster keeps his own row and members below level 80; the mind's Discord
+    audience has neither, so the member list and the DMs leave them out."""
+    from leeroy_mind.protocol import Member
+    cast.upsert_cast([
+        Member(guid=HUMAN, name="Hero", race=10, class_=8, gender=0, level=83, rank=0,
+               online=True, map=0, zone=0, spec_tab=-1),
+        Member(guid=105, name="Ebbo", race=7, class_=9, gender=0, level=70, rank=3,
+               online=False, map=0, zone=0, spec_tab=-1)], NOW)
+    cast.conn.commit()
+
+    async def go():
+        async with served(build(data)) as app:
+            return (await get(app)).json()
+    v = asyncio.run(go())
+    assert sorted(m["guid"] for m in v["members"]) == [101, 102, 103, 104]
+    assert sorted(d["guid"] for d in v["dms"]) == [101, 102, 103, 104]
+    assert v["human"] == {"guid": HUMAN, "name": "Hero"}

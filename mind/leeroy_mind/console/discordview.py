@@ -1,7 +1,8 @@
 """The Discord tab's read-only question to mind.db: the guild's server (categories, channels, DMs),
 its members with their Discord presence, and one channel's messages with reactions, threads and
 pins. It is his view, so every channel is listed, the officers' ones with `officers_only` as a
-display flag. Presence is computed as the mind computes it (discord.presence with the same seed,
+display flag. Its members are the mind's Discord audience: the cast at CAST_MIN_LEVEL or more,
+never him. Presence is computed as the mind computes it (discord.presence with the same seed,
 the member's regional clock and the configured trial rank). A table an older mind.db lacks is
 named in `missing` and reads as empty."""
 import json
@@ -10,6 +11,7 @@ from datetime import datetime
 from leeroy_mind.discord import layout, presence, store
 from leeroy_mind.personas.schema import persona_from_dict
 from leeroy_mind.protocol import Member
+from leeroy_mind.wow import CAST_MIN_LEVEL
 
 from . import views
 from .feed import human_guid
@@ -28,11 +30,14 @@ def _personas(conn) -> dict:
     return out
 
 
-def _members(conn, owner_now: datetime, trial_rank: int) -> list[dict]:
+def _members(conn, owner_now: datetime, trial_rank: int, human: int) -> list[dict]:
+    """The cast as the mind's Discord audience has it (WorldView.audience): level
+    CAST_MIN_LEVEL or more, and not him (the stored roster keeps his own row)."""
     personas = _personas(conn)
     out = []
     for r in views.rows(conn, "SELECT guid, name, race, class, gender, level, rank, online, map, "
-                              "zone, spec_tab FROM cast_member ORDER BY name, guid"):
+                              "zone, spec_tab FROM cast_member WHERE guid != ? AND level >= ? "
+                              "ORDER BY name, guid", (human, CAST_MIN_LEVEL)):
         p = personas.get(r["guid"])
         member = Member(guid=r["guid"], name=r["name"], race=r["race"], class_=r["class"],
                         gender=r["gender"], level=r["level"], rank=r["rank"],
@@ -94,7 +99,7 @@ def discord_view(conn, *, owner_now: datetime, trial_rank: int, channel: str | N
     names = views.names(conn)
     human = human_guid(conn)
     hname = views.rows(conn, "SELECT value FROM meta WHERE key = 'human_name'")
-    members = _members(conn, owner_now, trial_rank)
+    members = _members(conn, owner_now, trial_rank, human)
     out = {
         "categories": [
             {"key": k, "name": layout.CATEGORY_NAMES[k],
