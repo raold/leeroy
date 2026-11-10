@@ -233,3 +233,20 @@ def test_speaking_lights_faces_without_a_redraw():
     assert not re.search(r"ptt:\s*function \(\) \{ renderRooms", on_voice)
     right = (STATIC / "js" / "comms" / "rightview.mjs").read_text("utf-8")
     assert "lightSpeakers(" in left and "lightSpeakers(" in right
+
+
+def test_hide_photos_is_one_remembered_key_applied_before_paint():
+    """The strip's Hide photos: one localStorage key, read by theme.js before the first paint and
+    flipped by main.mjs; while it is on, faces skip the photo request and any other image is blank."""
+    page = (STATIC.parent / "page.html").read_text("utf-8")
+    assert re.search(r'<button id="photos" type="button" class="theme photos" aria-pressed="false">Hide photos</button>', page)
+    owners = [f for f in STATIC.rglob("*") if f.is_file() and f.suffix in (".js", ".mjs")
+              and "guild-console-photos" in f.read_text("utf-8")]
+    assert {f.name for f in owners} == {"theme.js", "main.mjs"}
+    theme = (STATIC / "theme.js").read_text("utf-8")
+    assert 'dataset.photos = "hidden"' in theme and theme.count("try {") >= 4
+    faces = (STATIC / "js" / "faces.mjs").read_text("utf-8")
+    hidden_at, asked_at = faces.index("if (photosHidden()) { return box; }"), faces.index("cache.get(key)")
+    assert hidden_at < asked_at  # no /api/face request while hidden
+    css = (STATIC / "console.css").read_text("utf-8")
+    assert 'html[data-photos="hidden"] img { visibility: hidden; }' in css

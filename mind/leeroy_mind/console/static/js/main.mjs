@@ -1,6 +1,6 @@
 import { $, api, arr, emit, hashKey, keyGen, on, own, refused, remember, setKey } from "./core.mjs";
 import { S, adoptVoice, applyVoice } from "./state.mjs";
-import { forgetFaces } from "./faces.mjs";
+import { forgetFaces, photosHidden, redrawFaces } from "./faces.mjs";
 import { renderStrip } from "./strip.mjs";
 import { renderFeed } from "./comms/feedview.mjs";
 import { renderLeft } from "./comms/leftview.mjs";
@@ -151,3 +151,22 @@ $("theme").addEventListener("click", function () {
   document.documentElement.dataset.theme = next;
   remember(THEME_KEY, next);
 });
+
+// Hide photos: every member photo on the page becomes initials (faces) or a blank (the gallery,
+// the selfie picker), remembered like the theme; theme.js applied it before paint
+var PHOTOS_KEY = "guild-console-photos";
+function showPhotosButton() {
+  var hidden = photosHidden();
+  $("photos").textContent = hidden ? "Show photos" : "Hide photos";
+  $("photos").setAttribute("aria-pressed", String(hidden));
+}
+$("photos").addEventListener("click", function () {
+  var hide = !photosHidden();
+  if (hide) { document.documentElement.dataset.photos = "hidden"; }
+  else { delete document.documentElement.dataset.photos; }
+  remember(PHOTOS_KEY, hide ? "hidden" : "shown");
+  showPhotosButton();
+  redrawFaces();
+  refreshFaces();
+});
+showPhotosButton();
