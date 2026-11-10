@@ -16,6 +16,7 @@ import pytest
 
 from conftest import HUMAN, seed_test_cast
 from engine_rig import save_member
+from leeroy_mind import clock as mind_clock
 from leeroy_mind.console import app as console_app, mindlink
 from leeroy_mind.console.control import Controls
 from leeroy_mind.console.mindlink import LinkError
@@ -23,8 +24,16 @@ from leeroy_mind.discord import store as dstore
 from console.rig import FakeMind, http, make_app, running
 
 LINKED = [SimpleNamespace(state=5, remote_port=7878, remote="127.0.0.1", pid=101)]
+EASTERN = ZoneInfo("America/New_York")
 # Thursday evening in US Eastern, midnight in Britain during the DST-change gap.
-NOW = datetime(2026, 10, 29, 20, 0, tzinfo=ZoneInfo("America/New_York")).timestamp()
+NOW = datetime(2026, 10, 29, 20, 0, tzinfo=EASTERN).timestamp()
+
+
+@pytest.fixture(autouse=True)
+def eastern_pc(monkeypatch):
+    """This PC's zone (clock.local_at, the mind's local time) as US Eastern, so presence reads
+    the same on any test machine."""
+    monkeypatch.setattr(mind_clock, "local_at", lambda ts: datetime.fromtimestamp(ts, EASTERN))
 
 
 @pytest.fixture
@@ -482,3 +491,34 @@ def test_members_are_the_minds_audience_never_him_or_below_the_cast_level(data, 
     assert sorted(m["guid"] for m in v["members"]) == [101, 102, 103, 104]
     assert sorted(d["guid"] for d in v["dms"]) == [101, 102, 103, 104]
     assert v["human"] == {"guid": HUMAN, "name": "Hero"}
+
+
+def test_the_console_and_the_mind_read_presence_in_one_zone(data, cast, monkeypatch):
+    """Both take the local time from clock.local_at (the mind's SystemClock.local, this PC's
+    zone), so for the same instant they agree on every member's presence even on a PC outside
+    US Eastern, where an Eastern console would disagree."""
+    from leeroy_mind.discord import presence
+    from leeroy_mind.discord.talk import DiscordTalk
+    from leeroy_mind.personas.io import load_persona
+    from leeroy_mind.talk.world import WorldView
+    tokyo = ZoneInfo("Asia/Tokyo")
+    monkeypatch.setattr(mind_clock, "local_at", lambda ts: datetime.fromtimestamp(ts, tokyo))
+
+    class At(mind_clock.SystemClock):
+        def now(self):
+            return NOW
+    world = WorldView(is_officer=lambda g: False, discord_roster=cast.cast)
+    world.human_guid = HUMAN
+    talk = DiscordTalk(SimpleNamespace(store=cast, clock=At(), world=world, human_guid=HUMAN))
+    personas = {g: load_persona(cast, g) for g in (101, 102, 103, 104, 105)}
+    mind = {g: talk._presence(g, p, talk.app.clock.local()).state for g, p in personas.items()}
+
+    async def go():
+        async with served(build(data)) as app:
+            return (await get(app)).json()
+    console = {m["guid"]: m["presence"]["state"] for m in asyncio.run(go())["members"]}
+    assert console == mind
+    eastern = {g: presence.presence_of(p, local=presence.local_time(
+        datetime.fromtimestamp(NOW, EASTERN), p.identity.region), body_online=False,
+        body_zone=0, rng_seed=presence.RNG_SEED).state for g, p in personas.items()}
+    assert eastern != mind  # the zone matters at this instant: Friday morning in Tokyo

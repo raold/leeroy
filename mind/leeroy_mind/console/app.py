@@ -133,14 +133,12 @@ import sqlite3
 import time
 from contextlib import suppress
 from dataclasses import dataclass, field
-from datetime import datetime
 from importlib import resources
 from pathlib import Path
 from typing import Callable
 
-from .. import endpoint
+from .. import clock as mind_clock, endpoint
 from ..discord import layout as discord_layout, store as discord_store
-from ..discord.presence import OWNER_ZONE
 from ..realm.config import ConfigError, RealmConfig, load_realm_config
 from . import (bankview, boardview, calendarview, discordview, dojoview, faces, feed, libraryview, mindlog,
                galleryview, netinfo, personaview, raidview, realmview, selfieview, socialview, status, trainview,
@@ -1395,8 +1393,10 @@ class ConsoleApp:
             return RealmConfig().trial_rank
 
     def _discord_question(self, conn, channel, after, thread, read_marks=None):
+        """Presence at the mind's local time for this instant (clock.local_at, this PC's zone,
+        as SystemClock.local), so the console and the mind agree on who is online."""
         view = discordview.discord_view(
-            conn, owner_now=datetime.fromtimestamp(self._clock(), OWNER_ZONE),
+            conn, owner_now=mind_clock.local_at(self._clock()),
             trial_rank=self._trial_rank(), channel=channel, after=after, thread=thread,
             read_marks=read_marks)
         fp = None
