@@ -140,7 +140,7 @@ RealmStep Failure(Queued const& entry, std::string why)
 }
 std::string ValidateMembers(Queued const& entry, std::vector<std::uint32_t> const& members)
 {
-    return ValidateCleanupClosure(members, entry.guids, [&](std::uint32_t guid)
+    return ValidateCleanupClosure(members, HeldMembers(entry), [&](std::uint32_t guid)
     {
         if (auto why = AdmissionReason(guid, Purpose::LeavePvp, entry.id); !why.empty()) return why;
         auto* player = FindOnline(guid);
@@ -153,7 +153,7 @@ std::string ValidateMembers(Queued const& entry, std::vector<std::uint32_t> cons
 std::string ChargeMembers(Queued const& entry, std::vector<std::uint32_t> const& members)
 {
     auto& module = RealmModule::Instance();
-    return PrepareCleanupMutation(members, entry.guids,
+    return PrepareCleanupMutation(members, HeldMembers(entry),
         [&](std::uint32_t guid) { return module.MutationReason(guid, entry.id); },
         [&](auto const& actual) { return module.ChargeAffectedBodies(entry.id, actual); });
 }
@@ -221,6 +221,39 @@ CleanupReadback ReadLeftMembers(Queued const& entry, Json const& receipt)
 }
 }
 
+std::vector<std::uint32_t> SkippedMembers(Queued const& entry)
+{
+    std::vector<std::uint32_t> skipped;
+    if (entry.payload.is_object() && entry.payload.contains("skipped"))
+        for (auto const& guid : entry.payload.at("skipped")) skipped.push_back(guid.get<std::uint32_t>());
+    return skipped;
+}
+
+std::vector<std::uint32_t> HeldMembers(Queued const& entry, std::uint32_t skipping)
+{
+    return LeaveMembers(entry.guids, SkippedMembers(entry), skipping);
+}
+
+std::string BattlegroundGroupDeparture(Player* player)
+{
+    auto* group = player->GetGroup();
+    if (!group || !(group->isBGGroup() || group->isBFGroup())) return "";
+    GroupDepartureFacts facts;
+    facts.listed = group->IsMember(player->GetGUID());
+    facts.lfg = group->isLFGGroup();
+    if (facts.lfg)
+    {
+        auto const state = sLFGMgr->GetState(group->GetGUID());
+        facts.lfgBusy = state == lfg::LFG_STATE_QUEUED || state == lfg::LFG_STATE_ROLECHECK
+            || state == lfg::LFG_STATE_PROPOSAL || state == lfg::LFG_STATE_BOOT;
+    }
+    facts.members = group->GetMembersCount();
+    facts.leader = group->IsLeader(player->GetGUID());
+    for (auto* member = group->GetFirstMember(); member; member = member->next())
+        if (member->GetSource()) ++facts.linked;
+    return GroupDepartureReason(facts);
+}
+
 std::string LeavePvpAckReason(Queued const& entry)
 {
     auto* field = sBattlefieldMgr->GetBattlefieldToZoneId(4197);
@@ -253,6 +286,8 @@ std::string LeavePvpAckReason(Queued const& entry)
             // Ordinary/BG group departures reject shared side effects in GroupDepartureReason;
             // their permitted mutation touches only this member. Unreadable receipts still
             // fail conservatively at the step; an absent roster is never an invented closure.
+            // A member the step would refuse that way is named here, before anyone moves.
+            member.groupDeparture = BattlegroundGroupDeparture(player);
         }
         members.push_back(std::move(member));
     }
@@ -263,7 +298,7 @@ std::string OrdinaryCleanupReason(Queued const& entry)
 {
     auto& module = RealmModule::Instance();
     auto* field = sBattlefieldMgr->GetBattlefieldToZoneId(4197);
-    for (auto guid : entry.guids)
+    for (auto guid : HeldMembers(entry))
     {
         if (auto why = module.MutationReason(guid, entry.id); !why.empty()) return why;
         auto* player = ObjectAccessor::FindConnectedPlayer(PlayerGuid(guid));
@@ -525,7 +560,7 @@ RealmStep LeaveOnlineLfgGroup(Queued& entry, std::uint32_t guid)
     return Result(entry, StepState::Pending);
 }
 
-std::string VerifyCleanupReceipts(Queued const& entry)
+std::string VerifyCleanupReceipts(Queued const& entry, std::uint32_t skipping)
 {
     auto& module = RealmModule::Instance();
     if (auto why = OrdinaryCleanupReason(entry); !why.empty()) return why;
@@ -557,7 +592,7 @@ std::string VerifyCleanupReceipts(Queued const& entry)
                 || ReadLeftMembers(entry, receipt) != CleanupReadback::Ready)
                 return "lfg_cleanup_readback_changed";
     if (entry.cursor + 1 == entry.guids.size())
-        for (auto guid : entry.guids)
+        for (auto guid : HeldMembers(entry, skipping))
         {
             auto* player = FindOnline(guid);
             if (!player || !module.ValidateOwnedBody(guid, entry.id).empty() || player->IsBeingTeleported()

@@ -200,6 +200,9 @@ struct RealmJob
     std::string pvpOwner{};
     // Absent means unknown. False proves the entire failed job changed nobody.
     std::optional<bool> changed{};
+    // Members whose step native skipped, as they were and no longer held. On the wire only when
+    // there are some, so older minds and jobs without skips see the old shape.
+    std::vector<std::uint32_t> skipped{};
 };
 nlohmann::json MakeRealmJob(RealmJob const&);
 // Body only; the drain supplies this proof's already captured publishedAtMs to

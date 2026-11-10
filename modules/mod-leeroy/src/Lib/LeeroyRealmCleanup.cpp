@@ -1,5 +1,6 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "LeeroyRealmCleanup.h"
+#include <iterator>
 
 namespace Leeroy::Realm
 {
@@ -23,6 +24,36 @@ std::string NamedAckError(std::string const& prefix, std::vector<std::uint32_t> 
     }
     return any ? prefix + named : "";
 }
+constexpr std::string_view GroupDepartureReasons[] = {
+    "shared_lfg_queue", "shared_group_leader", "shared_lfg_cleanup", "shared_group_cleanup"};
+}
+std::string GroupDepartureReason(GroupDepartureFacts const& facts)
+{
+    if (!facts.listed) return "";
+    if (facts.lfg && facts.lfgBusy) return "shared_lfg_queue";
+    if (facts.members <= 1) return "";
+    if (facts.leader) return "shared_group_leader";
+    if (facts.lfg && facts.members == 2) return "shared_lfg_cleanup";
+    // RemoveMember can Disband on the linked-player count, not roster size.
+    if (facts.linked <= 1) return "shared_group_cleanup";
+    return "";
+}
+bool IsGroupDepartureReason(std::string_view reason)
+{
+    return std::find(std::begin(GroupDepartureReasons), std::end(GroupDepartureReasons), reason)
+        != std::end(GroupDepartureReasons);
+}
+bool SkipsLeaveMember(std::string_view reason, bool stepChanged, bool touchedByCleanup)
+{
+    return IsGroupDepartureReason(reason) && !stepChanged && !touchedByCleanup;
+}
+std::vector<std::uint32_t> LeaveMembers(std::vector<std::uint32_t> const& manifest,
+    std::vector<std::uint32_t> const& skipped, std::uint32_t skipping)
+{
+    std::vector<std::uint32_t> held;
+    for (auto guid : manifest)
+        if (guid != skipping && std::find(skipped.begin(), skipped.end(), guid) == skipped.end()) held.push_back(guid);
+    return held;
 }
 std::string LeavePvpAckError(std::vector<LeavePvpMemberFacts> const& members)
 {
@@ -37,7 +68,18 @@ std::string LeavePvpAckError(std::vector<LeavePvpMemberFacts> const& members)
     for (auto const& member : members)
         if (std::any_of(member.cleanupMembers.begin(), member.cleanupMembers.end(),
             [&](auto guid) { return !admitted.contains(guid); })) outside.push_back(member.guid);
-    return NamedAckError("cleanup_member_not_admitted:", outside);
+    if (!outside.empty()) return NamedAckError("cleanup_member_not_admitted:", outside);
+    // A member who cannot leave its battleground group alone (its leader, or the removal would
+    // disband it) would stop the job after the members before it had moved. One reason per error;
+    // the mind's retry without them meets the next.
+    for (auto reason : GroupDepartureReasons)
+    {
+        std::vector<std::uint32_t> named;
+        for (auto const& member : members)
+            if (member.groupDeparture == reason) named.push_back(member.guid);
+        if (!named.empty()) return NamedAckError(std::string(reason) + ":", named);
+    }
+    return "";
 }
 std::string WintergraspPrivateReason(WintergraspMemberFacts const& facts)
 {

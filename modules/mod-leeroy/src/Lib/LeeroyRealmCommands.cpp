@@ -583,6 +583,7 @@ json MakeRealmJob(RealmJob const& e)
         {"reason", e.reason}, {"guid", e.guid}, {"value", e.value}};
     if (!e.pvpOwner.empty()) body["pvp_owner"] = e.pvpOwner;
     if (!e.ok && e.changed.has_value()) body["changed"] = *e.changed;
+    if (!e.skipped.empty()) body["skipped"] = e.skipped;
     return body;
 }
 json MakeRealmPvp(std::string_view id, ContinuationOwner const& owner)
