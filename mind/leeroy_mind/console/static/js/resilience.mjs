@@ -31,7 +31,8 @@ var VIEWS = { state: ["rooms", "array"], feed: ["lines", "array"], raid: ["mind"
   bank: ["ledger", "array"], realm: ["rivals", "array"], training: ["setup", "boolean"],
   dojo: ["setup", "boolean"], library: ["setup", "boolean"], health: ["mind", "object"],
   tuning: ["view", "object"], selfies: ["view", "object"], ops: ["panels", "object"],
-  discord: ["categories", "array"], "persona/insight": ["claims", "object"] };
+  discord: ["categories", "array"], "persona/insight": ["claims", "object"],
+  "ops/badge": ["counts", "object"] };
 export function validView(path, value) {
   var route = path.split("?")[0].slice(5), rule = VIEWS[route];
   if (!rule) { return true; }
@@ -39,6 +40,10 @@ export function validView(path, value) {
   var valid = rule[1] === "array" ? Array.isArray(field) :
     rule[1] === "object" ? !!field && typeof field === "object" && !Array.isArray(field) : typeof field === rule[1];
   if (!valid) { return false; }
+  if (route === "ops" || route === "ops/badge") {
+    return Number.isFinite(value.at) && !!value.counts && typeof value.counts === "object" &&
+      !Array.isArray(value.counts);
+  }
   if (route === "discord") {
     return Array.isArray(value.dms) && Array.isArray(value.members) && !!value.human &&
       typeof value.human === "object" && !Array.isArray(value.human) &&

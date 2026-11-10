@@ -112,8 +112,11 @@ test("one successful subroute cannot clear a sibling's stale state", () => {
 });
 
 test("Ops, Discord and Insight reject malformed outer shapes before drawing", () => {
-  assert.equal(validView("/api/ops", {panels: {}}), true);
+  assert.equal(validView("/api/ops", {panels: {}, at: 1, counts: {}}), true);
   assert.equal(validView("/api/ops", {panels: []}), false);
+  assert.equal(validView("/api/ops/badge", {at: 1, counts: {}}), true);
+  assert.equal(validView("/api/ops/badge", {at: 1, counts: []}), false);
+  assert.equal(validView("/api/ops/badge", {at: "yesterday", counts: {}}), false);
   var discord = {categories: [], dms: [], members: [], human: {guid: 1, name: "Owner"}};
   assert.equal(validView("/api/discord", discord), true);
   assert.equal(validView("/api/discord?channel=hall", discord), false);
@@ -122,4 +125,14 @@ test("Ops, Discord and Insight reject malformed outer shapes before drawing", ()
   assert.equal(validView("/api/persona/insight?guid=101", insight), true);
   assert.equal(validView("/api/persona/insight?guid=101", {member: {}}), false);
   assert.equal(validView("/api/persona/insight?guid=101", {...insight, awareness: null}), false);
+});
+
+test("the always-on Ops badge cannot clear a failed Ops panel request", () => {
+  var health = new ReadHealth();
+  health.update("/api/ops", "ops", true, 100);
+  health.update("/api/ops", "ops", false, 200);
+  health.update("/api/ops/badge", "ops", true, 300);
+  assert.deepEqual(health.failed("ops"), [{tab: "ops", good: 100, failed: true}]);
+  health.update("/api/ops", "ops", true, 400);
+  assert.deepEqual(health.failed("ops"), []);
 });
