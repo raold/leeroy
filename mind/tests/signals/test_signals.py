@@ -355,3 +355,26 @@ def test_confirmed_muted_line_cannot_receive_later_emotes_or_interventions(store
             assert {row[2] for row in rows if row[0] == muted} == {'muted'}
             assert {row[2] for row in rows if row[0] == heard} == {'emote_friendly', 'dial_down', 'nudged_against'}
     asyncio.run(go())
+
+
+def test_a_briefly_busy_database_keeps_attribution(store, clock):
+    """Another writer holding the lock for a moment delays capture; it never resets it."""
+    async def go():
+        async with worker(store, clock) as c:
+            latest = line(store, clock)
+            store.conn.commit()
+            holder = sqlite3.connect(store.conn.execute('PRAGMA database_list').fetchone()[2],
+                                     isolation_level=None)
+            try:
+                holder.execute('BEGIN IMMEDIATE')
+                asyncio.get_running_loop().call_later(.3, holder.commit)
+                observe(c, clock, 'sent', (latest,), (True, True, True))
+                await c.flush()
+            finally:
+                holder.close()
+            await clock.advance(30)
+            answer = line(store, clock, HUMAN, text='x'*100)
+            observe(c, clock, 'owner', (answer,), (.2, False))
+            await c.flush()
+            assert (latest, 101, 'replied', 1., 'implicit') in saved(store)
+    asyncio.run(go())

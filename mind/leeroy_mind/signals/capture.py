@@ -12,6 +12,7 @@ log = logging.getLogger(__name__)
 QUEUE_LIMIT = 512
 PENDING_LIMIT = 512
 COMBAT_MAX_AGE_S = 5.0
+BUSY_S = 2.0  # the writer thread may wait out a night stage's write; the send path never waits
 
 
 def direct(channel):
@@ -121,7 +122,7 @@ class Capture:
 
     def _open(self):
         if self.conn is None:
-            self.conn = sqlite3.connect(self.path, timeout=.05, isolation_level=None)
+            self.conn = sqlite3.connect(self.path, timeout=BUSY_S, isolation_level=None)
             self.conn.row_factory = sqlite3.Row
             self.conn.execute('PRAGMA foreign_keys=ON')
         return self.conn
