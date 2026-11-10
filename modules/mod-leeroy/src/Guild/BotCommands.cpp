@@ -1,6 +1,7 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 
 #include "BotCommands.h"
+#include "PlayStyle.h"
 #include "GuildFishing.h"
 #include "Realm/RealmModule.h"
 #include "GuildPorts.h"
@@ -50,6 +51,7 @@ struct BotJob
     JobEvent result;
     uint32 guild = 0, human = 0;
     std::uint64_t trainingEpoch = 0;
+    std::uint64_t playStyleEpoch = 0;
     Clock::time_point deadline;
 };
 
@@ -115,6 +117,7 @@ bool ChangeStrategies(PlayerbotAI* ai, std::string const& param, BotState state)
             break;
         rest.remove_prefix(end + 1);
     }
+    if (!PlayStyle::Restore(ai->GetBot())) return false;
     ai->ChangeStrategy(param, state);
     for (auto const& [name, enabled] : expected)
         if (ai->HasStrategy(name, state) != enabled)
@@ -242,6 +245,15 @@ std::string_view Apply(Player* bot, BotDoCmd const& command)
     if (Realm::RealmOwns(bot->GetGUID().GetCounter())
         || (command.targetGuid && Realm::RealmOwns(command.targetGuid)))
         return "busy:realm_owner";
+    if (!command.trainingRun.empty() && !Training::ScopedBotMutationAllowed(command.action))
+        return "training_run_ownership";
+    if (command.action == "playstyle") return PlayStyle::Apply(bot, command.param);
+    if (command.action == "restore")
+    {
+        bool const owned = PlayStyle::Owns(bot->GetGUID().GetCounter(), command.param);
+        if (!PlayStyle::Restore(bot, command.param)) return "playstyle_cleanup";
+        if (command.param == "playstyle" || (owned && command.param != "*")) return {};
+    }
     if (!command.trainingRun.empty())
     {
         if (!Training::ScopedBotMutationAllowed(command.action)) return "training_run_ownership";
@@ -343,6 +355,8 @@ LeeroyCommandResult HandleBotDo(nlohmann::json const& message)
         return Fail(std::move(error));
     if (!GuildEnabled())
         return Fail("disabled");
+    if (command->action == "playstyle" && !LeeroyModule::Instance().Config().playStyleEnable)
+        return Fail("playstyle_off");
     // Formation is the tier-one alias that can replace a journaled value.
     bool const fishing = command->action == "do" && command->param == "go fishing";
     if (!command->trainingRun.empty() && !Training::ScopedBotMutationAllowed(command->action))
@@ -379,6 +393,7 @@ LeeroyCommandResult HandleBotDo(nlohmann::json const& message)
     job.guild = LeeroyModule::Instance().GuildId();
     job.human = HumanGuid();
     job.trainingEpoch = Training::TrainingTap::Instance().TrainingEpoch();
+    job.playStyleEpoch = PlayStyle::Epoch();
     job.deadline = Clock::now() + kActionLifetime;
     pending.push_back(std::move(job));
     return {true, {}}; // No player mutation or job publication until TickBotCommands, after the ack is queued.
@@ -396,6 +411,8 @@ void TickBotCommands()
         abort = "cancelled";
     else if (Clock::now() >= job.deadline)
         abort = "timeout";
+    else if (job.command.action == "playstyle" && job.playStyleEpoch != PlayStyle::Epoch())
+        abort = "playstyle_off";
     else if (!job.command.trainingRun.empty() && !Training::ScopedBotMutationAllowed(job.command.action))
         abort = "training_run_ownership";
     else if (auto error = (!job.command.trainingRun.empty() || Training::IsTierTwo(job.command.action, job.command.param)

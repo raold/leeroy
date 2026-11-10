@@ -460,6 +460,8 @@ class MindApp:
         self.board = BoardDesk(self)  # his Board replies from the console: the board op
         self.signals = attach_signals(self)
         self.control = attach_control(self)
+        from .playstyle.service import attach as attach_playstyle
+        self.playstyle = attach_playstyle(self)
         self.realm = attach_realm(self)  # Last: tests/realm/test_realm_wiring.py
 
     # -- extension points --------------------------------------------------------------------

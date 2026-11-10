@@ -56,6 +56,11 @@ connection closes.
                     loaded or the library has no vectors, or another library call is running;
                     answers up to k (1-12) hits in the console's hit shape. The query is never
                     logged
+    ops {action}    opt-in operator actions: inspect, status, offline_stop {id}, render,
+                    snapshot {label}. Realm release is inspected here but is executed only
+                    through the console's clean stop/CLI/restart procedure. New work needs
+                    control.ops_actions=true, a known offline owner and the subsystem fences.
+                    Replies return promptly; status distinguishes running from terminal work.
 
 Logs carry the op, the action (for say, the channel) and the outcome, never the key, a name, a
 preview's text, a line's or a reply's."""
@@ -90,7 +95,8 @@ BANK_CACHE_S = 30.0  # a bank snapshot younger than this is answered as it is
 MAX_CONNECTIONS = 8
 REFUSAL_LOG_S = 30.0
 REPLACE_TRIES = 40  # 2 s of 50 ms tries to move control.json over a file being read
-OPS = ("status", "stop", "raid", "tune", "selfie", "say", "bank", "board", "library", "feedback")
+OPS = ("status", "stop", "raid", "tune", "selfie", "say", "bank", "board", "library", "ops",
+       "claim_check", "feedback")
 RAID_ACTIONS = ("call", "form", "summon", "start", "stop", "end")
 TUNE_ACTIONS = ("status", "set", "undo", "revert", "group", "retire", "preview", "nudge")
 TUNE_SHAPES = {
@@ -132,9 +138,11 @@ class Forbidden(BadRequest):
 class ControlCfg:
     enabled: bool = True
     port: int = 0  # 0: a free port the system picks (control.json names it)
+    ops_actions: bool = False
 
 
 _RULES = {
+    "ops_actions": (lambda v: type(v) is bool, "true or false"),
     "enabled": (lambda v: type(v) is bool, "true or false"),
     "port": (lambda v: type(v) is int and 0 <= v <= 65535, "an integer 0-65535 (0: any free port)"),
 }
@@ -609,6 +617,14 @@ def board_args(args) -> dict:
     return {"action": "reply", "kind": kind, "to": to, "text": cleaned}
 
 
+def claim_check_args(args) -> dict:
+    from leeroy_mind.insight_check import arguments
+    try:
+        return arguments(args)
+    except ValueError as exc:
+        raise BadRequest(str(exc)) from None
+
+
 def library_args(args) -> dict:
     """A library call's arguments: {"query"} or {"query", "k"}; the query 1-200 characters once
     its whitespace is collapsed, k 1-12 (12 when absent). The cleaned arguments."""
@@ -643,7 +659,7 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     if not isinstance(value, dict) or not {"v", "key", "op"} <= set(value) <= {
             "v", "key", "op", "args"}:
         raise BadRequest("bad request: exactly v, key, op (and args for a raid, tune, selfie, "
-                         "say, board, library or feedback action)")
+                         "say, board, library, ops, claim_check or feedback action)")
     given = value["key"]
     if not isinstance(given, str) or not secrets.compare_digest(
             given.encode("utf-8", "surrogatepass"), key.encode("ascii")):
@@ -653,9 +669,10 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     op = value["op"]
     if op not in OPS:
         raise BadRequest("bad request: op is one of " + ", ".join(OPS))
-    parse_args = {"raid": raid_args, "tune": tune_args, "selfie": selfie_args,
+    from .opscontrol import arguments as ops_args
+    parse_args = {"ops": ops_args, "raid": raid_args, "tune": tune_args, "selfie": selfie_args,
                   "say": say_args, "board": board_args, "library": library_args,
-                  "feedback": feedback_args}.get(op)
+                  "claim_check": claim_check_args, "feedback": feedback_args}.get(op)
     if parse_args is None:
         if "args" in value:
             raise BadRequest(f"bad request: {op} takes no args")
@@ -735,8 +752,11 @@ class ControlEndpoint:
         self._say = asyncio.Lock()  # one line of his in flight
         self._board = asyncio.Lock()  # one Board reply or withdrawal at a time
         self._library = asyncio.Lock()  # one library search in flight
+        self._claim_check = asyncio.Lock()  # one ephemeral read in flight
         self.bank_s, self._clock = bank_s, clock
         self.library_s = library_s
+        from .opscontrol import OpsControl
+        self.ops = OpsControl(self)
         self._bank_task: asyncio.Future | None = None  # the read in flight, shared by askers
         self._bank_cache: tuple[float, dict] | None = None
         self._refusal_logs = {}  # fixed reason codes only, never request text or keys
@@ -758,6 +778,7 @@ class ControlEndpoint:
             await asyncio.Event().wait()  # until the shutdown cancels it
         finally:
             server.close()
+            await self.ops.close()
             self._remove_key_file()
             with suppress(Exception):
                 await asyncio.wait_for(server.wait_closed(), 2)
@@ -816,6 +837,10 @@ class ControlEndpoint:
             return {"ok": False, "error": str(e)}, None
         if op == "status":
             return self.status(), None
+        if op == "ops":
+            return await self.ops.answer(args), None
+        if self.ops.busy and op not in {"stop", "bank", "library"}:
+            return {"ok": False, "error": "An Ops action is still running."}, None
         if op == "stop":
             already = self.app.stopping
             log_event("control_stop_requested", already=already)
@@ -829,8 +854,8 @@ class ControlEndpoint:
             reply = await self.bank()
             log_event("control_request", op=op, outcome="ok" if reply["ok"] else "refused")
             return reply, None
-        if op == "library":
-            reply = await self.library(args)
+        if op in ("library", "claim_check"):
+            reply = await (self.library(args) if op == "library" else self.claim_check(args))
             log_event("control_request", op=op, outcome="ok" if reply["ok"] else "refused")
             return reply, None
         if op == "feedback":
@@ -1026,6 +1051,10 @@ class ControlEndpoint:
         reply = {"ok": True, "read_at": round(time.time(), 3), "guild": guild_id, **bank}
         self._bank_cache = (self._clock(), reply)
         return reply
+
+    async def claim_check(self, args: dict) -> dict:
+        from leeroy_mind.insight_check import run
+        return await run(self.app, args, self._claim_check, timeout=self.library_s)
 
     async def library(self, args: dict) -> dict:
         """The mind's semantic search over library.db. Read-only and cheap, but it uses the

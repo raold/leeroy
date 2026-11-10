@@ -8,13 +8,18 @@
 #include "BotCommands.h"
 #include "OfflineRaidJob.h"
 #include "OwnerSay.h"
+#include "PlayStyle.h"
 #include "ScriptMgr.h"
+#include "Player.h"
+#include "Map.h"
 
 class LeeroyGuildWorldScript : public WorldScript
 {
 public:
     LeeroyGuildWorldScript() : WorldScript("LeeroyGuildWorldScript",
-        { WORLDHOOK_ON_STARTUP, WORLDHOOK_ON_UPDATE }) { }
+        { WORLDHOOK_ON_STARTUP, WORLDHOOK_ON_UPDATE, WORLDHOOK_ON_AFTER_CONFIG_LOAD }) { }
+
+    void OnAfterConfigLoad(bool /*reload*/) override { Leeroy::PlayStyle::Reload(); }
 
     void OnStartup() override
     {
@@ -34,6 +39,12 @@ public:
         Leeroy::Guild::TickBotCommands();
         Leeroy::Guild::TickTopUp(diff);
         Leeroy::Guild::TickOfflineRaid(diff);
+        if (diff >= _styleCleanup)
+        {
+            _styleCleanup = 1000;
+            Leeroy::PlayStyle::Tick();
+        }
+        else _styleCleanup -= diff;
         if (diff >= _untilExpire)
         {
             Leeroy::Guild::LootSourceLedger::Instance().Expire();
@@ -46,13 +57,21 @@ public:
 
 private:
     uint32 _untilExpire = 60000;
+    uint32 _styleCleanup = 0;
 };
 
 class LeeroyGuildPlayerScript : public PlayerScript
 {
 public:
     LeeroyGuildPlayerScript() : PlayerScript("LeeroyGuildPlayerScript",
-        { PLAYERHOOK_ON_CREATURE_KILL_CREDIT, PLAYERHOOK_ON_BEFORE_SEND_LOOT }) { }
+        { PLAYERHOOK_ON_CREATURE_KILL_CREDIT, PLAYERHOOK_ON_BEFORE_SEND_LOOT, PLAYERHOOK_ON_LOGOUT,
+          PLAYERHOOK_ON_MAP_CHANGED }) { }
+
+    void OnPlayerLogout(Player* player) override { Leeroy::PlayStyle::Forget(player->GetGUID().GetCounter()); }
+    void OnPlayerMapChanged(Player* player) override
+    {
+        if (player->GetMap() && player->GetMap()->IsDungeon()) Leeroy::PlayStyle::Restore(player);
+    }
 
     void OnPlayerCreatureKillCredit(Player* /*player*/, Creature* killed) override
     {

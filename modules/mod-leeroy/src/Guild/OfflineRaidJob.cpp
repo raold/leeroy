@@ -2,6 +2,7 @@
 
 #include "OfflineRaidJob.h"
 #include "BotCommands.h"
+#include "PlayStyle.h"
 #include "GuildPorts.h"
 #include "LeeroyOfflineRaidPolicy.h"
 #include "LeeroyRaidRecovery.h"
@@ -396,6 +397,7 @@ void RaidStrategies(Job const& job, Player* player, PlayerbotAI* ai)
 
 void ApplyRaidHabits(Job const& job, Player* player, Player* driver)
 {
+    PlayStyle::Restore(player);
     PlayerbotAI* ai = GET_PLAYERBOT_AI(player);
     ai->SetMaster(driver);
     ai->ResetStrategies();
@@ -404,6 +406,7 @@ void ApplyRaidHabits(Job const& job, Player* player, Player* driver)
     if (formation)
         formation->Load("arrow");
     RaidStrategies(job, player, ai);
+    PlayStyle::Forget(player->GetGUID().GetCounter());
 }
 
 // Every tick, every stage: playerbots' stock ResetAiAction (an empty group list,
