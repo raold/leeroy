@@ -1223,7 +1223,8 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   and `say` {channel, text, to} (`owner_say.py`: the shared text rule, one line
   at a time, sent to the bridge as `owner_say`; logs carry op, channel and
   outcome, never the text), `board` {action: reply {kind, to, text} | withdraw
-  {id}} (his Board replies, `board.py`, one at a time), and two reads: `bank`
+  {id}} (his Board replies, `board.py`, one at a time), `discord` (local channel/DM
+  posts, edits, deletion, reactions, pins and threads; `discord/desk.py`), and two reads: `bank`
   (`guild/bankread.py`: money, the six tabs' slots and the money log by four
   read-only SELECTs through guild life's armory, one read at a time within 15 s,
   an answer younger than 30 s given again; errors are words, never the database's
@@ -1235,13 +1236,67 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   while the bridge is down. It also carries `typing` (`Pipeline.typing_now`: guid, name,
   channel, to, since, age of each model turn being composed or typed where Comms shows
   the line, never text), which the console asks for on its 2 s strip pass only while a
-  page listens and he is in game.
+  page listens and he is in game, or a page has asked for `/api/discord` within 60 seconds.
   `stop`/`start` of a raid switch dungeon-clear off and on again mid-raid. The
   console sends the key only to the listener the TCP table shows is the running
   mind's own pid; its Stop and Restart use the clean stop (asked up to five
   times while the endpoint is there but busy), wait up to 60 s for the process
   to end, and otherwise (or with no endpoint: a mind from before it, or one
   with it off) stop it by force and say why.
+
+## The guild's Discord (`leeroy_mind.discord`)
+
+- Comms includes a local guild server above the separate **From WoW** and voice
+  sections. It uses no external Discord API. `GET /api/discord` returns its channel
+  layout, member roles/presence, DMs and an optional message window with quotes,
+  reactions, threads and pins. Browser read marks request actual unread row counts;
+  global message-id gaps are never counts. The page polls every 30 seconds while
+  Comms is visible and refreshes on the `discord` SSE event. Loaded channel/thread
+  windows are compared again to catch removals, including unreact and unpin.
+- `POST /api/discord` forwards validated actions to the control endpoint's `discord`
+  op: `post`, `edit`, `delete`, `react`, `unreact`, `pin`, `unpin` and `thread`.
+  The mind alone writes; the console reads the database read-only. The normal
+  key, Host, Origin, fetch-site and `--no-control` gates apply. Posts hold at most
+  2000 Unicode code points; Unicode emoji are kept. Only the owner edits/deletes
+  their own messages. Deletion leaves a tombstone so quotes do not expose old text.
+- Migration **0027_discord.sql** adds `discord_message`, `discord_thread` and
+  `discord_reaction`; pins live on message rows. `layout.py` owns the fixed categories,
+  class channels and officer rooms. Store ids are channel names or `dm:<guid>`;
+  talk ids are `discord:<channel>` or `dm:<guid>`. Scheduled presence uses regional
+  time zones, including the weeks when UK and US daylight-saving changes differ.
+  The console cannot see the owner's current group, so its presence display lacks
+  the mind's in-group override.
+- `DiscordTalk` answers a DM with its member, a mention or reply with the addressed
+  members, otherwise a presence/affinity/role-weighted choice. It uses the existing
+  talk pipeline with its own transport and 120-second deadline. Game AFK/offline
+  flags do not block a Discord answer; an away record still does. A direct answer's
+  first silence is retried once. `DiscordTarget` keeps its reply and thread ids.
+  Nothing reaches WoW, and these messages do not advance the game's talk clocks.
+- Before the first bridge cast, Discord uses the saved guild roster for channel
+  audiences, addressed members, presence and name protection. This never marks a
+  game body online. The saved roster is read once and cached; failed reads remain
+  retryable. The first bridge cast drops this cache and takes over, even when empty;
+  removed members cannot return from the saved roster. A roster read failure leaves
+  no fallback members and logs only the exception class.
+- DMs have whisper privacy. The desk also stores each owner post as his chat line
+  (origin human, no session, the talk's channel id, a DM's member as `to_guid`), threaded
+  with the members' answers, so a DM where he asks for secrecy is secret exactly as a
+  whisper; it moves no game clock and never reaches WoW. His edit edits that line, but
+  never loosens secrecy (an edit dropping his ask leaves it as read); his delete keeps it,
+  since a member may already have read it. Officer-only and unknown channels are restricted;
+  restricted evidence stays restricted through derived memories, notes and recall.
+  Unknown audiences fail closed, and the storage transport checks its speaker's
+  audience again. Logs contain action/channel/message ids, counts and outcome codes,
+  never message text or emoji.
+- An owner post holds the arbiter's `discord` live lease; subsequent activity keeps
+  it for ten minutes. This uses the existing night hand-over and keeps the owner's
+  game-login lease independent. Shutdown drains the final release. The default
+  rehearsal (`tests/discord/test_discord_rehearsal.py`) runs a real mind, control
+  endpoint and console on ephemeral ports with the invented cast and fake bridge,
+  LLM and model admin: channel answer, named and officer-only replies, reaction and
+  DM, both after logout and before the first bridge cast; no game `say`, clean shutdown.
+- D1 is owner-triggered conversation. Autonomous chatter, pre-send guard wiring,
+  member reactions, topics, photos, decisions and culture remain later phases.
 
 ## The Realm (`leeroy_mind.realm`)
 

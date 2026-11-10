@@ -63,8 +63,8 @@ def norm(name: str) -> str:
 
 
 class LiveLeaseHeld(RuntimeError):
-    """make_room refused: a live lease is held (his login, an offline raid, voice, a preview),
-    so nothing that needs the whole GPU may run now. `holders` names the leases."""
+    """make_room refused: a live lease is held (his login, an offline raid, voice, a preview,
+    his Discord), so nothing that needs the whole GPU may run now. `holders` names the leases."""
 
     def __init__(self, holders: frozenset[str]):
         self.holders = frozenset(holders)

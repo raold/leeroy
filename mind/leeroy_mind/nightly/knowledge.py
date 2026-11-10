@@ -7,6 +7,8 @@ state outside the model, because a model's theory of mind is brittle.
   it on. A secret (something told in confidence: a whisper that asked for it, a private scene,
   a confidential fact) is never passed on (amendment A4). A plain whisper is private, not
   secret: only its two people know it, and only her own gossip can pass it on (rulings I8, N4).
+  A Discord DM is a whisper here, and a line on a restricted Discord channel (an officers' one)
+  is known to its audience only and passed on by nobody (ruling R7; discord.channels).
 - `fact`: the dramatic facts. His real name is one of them, kept by id only: no text, and no
   second-order rows or reminders.
 - `thinks_knows`: what a member believes another knows, two levels at most, never deeper (the
@@ -25,6 +27,9 @@ import sqlite3
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Iterable, Literal
 
+from leeroy_mind.discord.channels import is_private as private_channel
+from leeroy_mind.discord.channels import is_restricted as restricted_channel
+from leeroy_mind.discord.channels import private_sql
 from leeroy_mind.logs import log
 from leeroy_mind.memory.privacy import SCOPES, Scope, derive_scope, secret_lines
 from leeroy_mind.memory.writer import clean_memory_text
@@ -137,10 +142,10 @@ def _secret(conn: sqlite3.Connection, root: str,
             secret_facts: frozenset[str] | None = None) -> bool:
     root = _base(conn, root)
     channel = _channel(conn, root)
-    if channel is not None and channel != "whisper":
+    if channel is not None and not private_channel(channel):
         return False  # what was said on a public channel cannot be made secret (ruling B2)
     line = _number(root, "chat")
-    if channel == "whisper" and line in secret_lines(conn, [line]):
+    if private_channel(channel) and line in secret_lines(conn, [line]):
         return True
     i = _number(root, "encounter")
     if i is not None:
@@ -153,15 +158,25 @@ def _secret(conn: sqlite3.Connection, root: str,
                         (root,)).fetchone() is not None
 
 
+def _hidden(channel: str | None) -> bool:
+    """A line not everyone could read: private (a whisper or a DM) or restricted."""
+    return private_channel(channel) or restricted_channel(channel)
+
+
+def _restricted(conn: sqlite3.Connection, root: str) -> bool:
+    return restricted_channel(_channel(conn, _base(conn, root)))
+
+
 def _private(conn: sqlite3.Connection, root: str,
              secret_facts: frozenset[str] | None = None) -> bool:
-    return _channel(conn, _base(conn, root)) == "whisper" and not _secret(conn, root, secret_facts)
+    return _hidden(_channel(conn, _base(conn, root))) and not _secret(conn, root, secret_facts)
 
 
 def _sensitive(conn: sqlite3.Connection, root: str,
                secret_facts: frozenset[str] | None = None) -> bool:
-    """Secret or private: a secret root, or any whisper root (one that is not secret is private)."""
-    return _secret(conn, root, secret_facts) or _channel(conn, _base(conn, root)) == "whisper"
+    """Secret or private: a secret root, or any whisper, DM or restricted root (one that is not
+    secret is private)."""
+    return _secret(conn, root, secret_facts) or _hidden(_channel(conn, _base(conn, root)))
 
 
 def is_secret(store: Store, root: str) -> bool:
@@ -176,11 +191,20 @@ def is_secret(store: Store, root: str) -> bool:
 
 
 def is_private(store: Store, root: str) -> bool:
-    """A whisper chat: root, from either end, that is not secret (or a rule:fact:<id> ref to a
-    fact on one): only its two people know it, and only the gossip of one of them can pass it
-    on (Task 16)."""
+    """A whisper or Discord DM chat: root, from either end, that is not secret (or a
+    rule:fact:<id> ref to a fact on one): only its two people know it, and only the gossip of
+    one of them can pass it on (Task 16). A root on a restricted Discord channel is private
+    too: its audience knows it, and nobody passes it on (is_restricted)."""
     with store.transaction():
         return _private(store.conn, root)
+
+
+def is_restricted(store: Store, root: str) -> bool:
+    """A chat: root on a restricted Discord channel (an officers' one; discord.channels), or a
+    rule:fact:<id> ref to a fact on one: known to the line's audience only, never passed on,
+    never public (ruling R7)."""
+    with store.transaction():
+        return _restricted(store.conn, root)
 
 
 def _parties(conn: sqlite3.Connection, root: str) -> frozenset[int]:
@@ -233,10 +257,11 @@ def learn(store: Store, root: str, guid: int, how: str, *, via: int | None = Non
           confidence: float = 1.0, may_tell: bool | int | None = None) -> bool:
     """`guid` learned `root` (`how`, from `via` when told). The first learning wins (INSERT OR
     IGNORE). The row is secret when the root is. may_tell is 0, whatever the caller passes, for
-    a secret (never passed on) and for a private root learned by someone outside it: the one
-    hop was hers, so it goes no further (ruling I8; review M5). One of a private root's own two
-    keeps 1, a confided row included: her discretion decides at gossip time. Anything else
-    defaults to 1. True when a row was added."""
+    a secret (never passed on), for a private root learned by someone outside it: the one hop
+    was hers, so it goes no further (ruling I8; review M5), and for a restricted root, whoever
+    learns it (ruling R7). One of a private root's own two keeps 1, a confided row included:
+    her discretion decides at gossip time. Anything else defaults to 1. True when a row was
+    added."""
     with store.transaction():
         return _learn(store.conn, root, guid, how, via=via, ts=ts, confidence=confidence,
                       may_tell=may_tell)
@@ -250,9 +275,10 @@ def _learn(conn: sqlite3.Connection, root: str, guid: int, how: str, *, via: int
     if how not in HOWS:
         raise ValueError(f"how must be one of {HOWS}, not {how!r}")
     secret = _secret(conn, root, secret_facts)
-    outside = (not secret and _channel(conn, _base(conn, root)) == "whisper"
+    outside = (not secret and private_channel(_channel(conn, _base(conn, root)))
                and guid not in _parties(conn, root))
-    tell = 0 if secret or outside else 1 if may_tell is None else int(bool(may_tell))
+    tell = (0 if secret or outside or _restricted(conn, root)
+            else 1 if may_tell is None else int(bool(may_tell)))
     return conn.execute(
         "INSERT OR IGNORE INTO knows(root, guid, how, via, learned, confidence, secret, "
         "may_tell) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -268,7 +294,8 @@ def add_fact(store: Store, *, kind: str, root: str, about: int | None, text: str
     text = "" if kind == "real_name" else clean(text)
     with store.transaction():
         secret = int(bool(secret))
-        if secret and _channel(store.conn, root) not in (None, "whisper"):
+        channel = _channel(store.conn, root)
+        if secret and channel is not None and not private_channel(channel):
             log("fact_secret_refused", kind=kind, root=root)
             secret = 0
         store.conn.execute(
@@ -470,7 +497,7 @@ def secrets_for(store: Store, speaker: int, audience: Iterable[int]) -> list[str
                 if not tell or _secret(conn, root, secret_facts)}
         held |= {r["root"] for r in conn.execute(
             "SELECT DISTINCT root FROM fact WHERE root IN (SELECT 'chat:' || id FROM chat_line "
-            "WHERE channel = 'whisper' AND ? IN (from_guid, to_guid)) OR root IN "
+            f"WHERE {private_sql()} AND ? IN (from_guid, to_guid)) OR root IN "
             "(SELECT 'encounter:' || id FROM encounter WHERE ? IN (a, b))", (speaker, speaker))
             if _secret(conn, r["root"], secret_facts)}
         facts = _facts_on(conn, held)
@@ -497,7 +524,7 @@ def _pair_knows(store: Store, root: str, *, now: float, human: int) -> None:
     of each other."""
     conn = store.conn
     i = _number(root, "encounter")
-    if _channel(conn, root) == "whisper":
+    if private_channel(_channel(conn, root)):
         private = True
     elif i is not None:
         r = conn.execute("SELECT private FROM encounter WHERE id = ?", (i,)).fetchone()
@@ -566,7 +593,7 @@ def _learn_audiences(ctx: "NightContext", store: Store) -> dict:
         root = r["root"]
         line = conn.execute("SELECT id, ts, channel FROM chat_line WHERE id = ?",
                             (_number(root, "chat"),)).fetchone()
-        if line is None or line["channel"] == "whisper":
+        if line is None or private_channel(line["channel"]):
             continue
         own = _parties(conn, root)
         for p in sorted(own & cast):

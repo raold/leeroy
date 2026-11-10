@@ -106,6 +106,10 @@ def attach(app):
         voice = getattr(app, "voice", None)
         if voice is not None:
             await voice.handback()
+        # So may his Discord post, while he is out of the game (discord.talk).
+        discord = getattr(app, "discord_talk", None)
+        if discord is not None:
+            await discord.handback()
 
     app.engine.live_admission = live_ready
 

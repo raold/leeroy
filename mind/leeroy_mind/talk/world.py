@@ -1,9 +1,12 @@
 """The mind's view of the guild: who is online, who is grouped, who can see which line."""
 import dataclasses
+import logging
 from collections import deque
 from dataclasses import dataclass
 from typing import Callable
 
+from leeroy_mind.discord import layout
+from leeroy_mind.discord.transport import channel_id, is_discord
 from leeroy_mind.protocol import (AfkEvent, Cast, Chat, Event, Group, Hello, Login, Logout,
                                   Member, Zone)
 from leeroy_mind.storage.rows import ChatLineRow
@@ -22,6 +25,7 @@ _PRONOUNS = frozenset({"you", "u", "we", "i", "ya", "they", "he", "she"})
 # (correctness M3, liveops M4); a logout is the only way out for good.
 OFFLINE_ACK_S = 60.0
 _QUESTION_WORDS = frozenset({"what", "why", "who", "how", "where", "when", "which"})
+log = logging.getLogger(__name__)
 
 
 def looks_like_bot_command(text: str) -> bool:
@@ -51,8 +55,12 @@ class SeenLine:
 
 
 class WorldView:
-    def __init__(self, *, is_officer: Callable[[int], bool]):
+    def __init__(self, *, is_officer: Callable[[int], bool],
+                 discord_roster: Callable[[], dict[int, Member]] | None = None):
         self.is_officer = is_officer
+        self._discord_roster = discord_roster
+        self._saved_discord_members: dict[int, Member] | None = None
+        self._cast_seen = False
         self.human_guid = 0
         self.members: dict[int, Member] = {}
         self.online: set[int] = set()  # cast guids only; the human is human_online
@@ -71,6 +79,20 @@ class WorldView:
     def cast_guids(self) -> set[int]:
         return {g for g, m in self.members.items()
                 if g != self.human_guid and m.level >= CAST_MIN_LEVEL}
+
+    def discord_members(self) -> dict[int, Member]:
+        """Before the first bridge cast, Discord can use a saved guild roster snapshot. It
+        is read once, never gives anyone a game body, and every cast permanently replaces it."""
+        if self._cast_seen or self._discord_roster is None:
+            return self.members
+        if self._saved_discord_members is None:
+            try:
+                self._saved_discord_members = {g: dataclasses.replace(m, online=False)
+                                              for g, m in self._discord_roster().items()}
+            except Exception as exc:
+                log.warning("discord_roster_failed: kind=%s", type(exc).__name__)
+                return {}
+        return self._saved_discord_members
 
     def _touch_member(self, guid: int, **changes) -> None:
         m = self.members.get(guid)
@@ -115,6 +137,8 @@ class WorldView:
                 self.human_last_active = now
             return
         if isinstance(ev, Cast):
+            self._cast_seen = True
+            self._saved_discord_members = None
             self.members = {m.guid: m for m in ev.members}
             cast = self.cast_guids()
             self.online = {g for g in cast if self.members[g].online}
@@ -171,7 +195,15 @@ class WorldView:
 
     def audience(self, channel: str, *, from_guid: int, to_guid: int = 0,
                  zone: int = 0) -> frozenset[int]:
-        """Cast guids that can see a line on this channel right now."""
+        """Cast guids that can see a line on this channel right now. A Discord channel's
+        (discord.layout.audience): the whole cast, online or not, its officers only in an
+        officers' channel, the two of a DM, and him in each."""
+        if is_discord(channel):
+            cast = {g for g, m in self.discord_members().items()
+                    if g != self.human_guid and m.level >= CAST_MIN_LEVEL}
+            return layout.audience(channel_id(channel), cast=cast,
+                                   officers={g for g in cast if self.is_officer(g)},
+                                   human=self.human_guid)
         cast = self.cast_guids()
         online = self.online & cast
         if channel.startswith("voice:"):

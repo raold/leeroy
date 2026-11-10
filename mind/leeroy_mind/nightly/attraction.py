@@ -13,6 +13,7 @@ import math
 import re
 from dataclasses import replace
 
+from leeroy_mind.discord.channels import is_private
 from leeroy_mind.logs import log
 from leeroy_mind.memory.recall import fts_query
 from leeroy_mind.nightly.audience import audience_of
@@ -110,7 +111,7 @@ def night_half_life(p, *, neglected, hurt_tonight, in_hurt_window, hurt_deep) ->
 
 def aimed_at(row, p, guid) -> bool:
     first = p.identity.real_name.split()[0] if p.identity.real_name.split() else ""
-    return ((row["channel"] == "whisper" and row["to_guid"] == guid)
+    return ((is_private(row["channel"]) and row["to_guid"] == guid)
             or has_word(row["text"], p.character_name)
             or has_word(row["text"], first.title(), case_sensitive=True))
 
@@ -326,8 +327,8 @@ class LiveAttraction:
                 line = self.store.conn.execute("SELECT * FROM chat_line WHERE id=?", (int(ev[5:]),)).fetchone()
                 if line is None or line["from_guid"] != p.guid:
                     continue
-                visible = ((line["channel"] == "whisper" and line["to_guid"] == human.guid)
-                           or (line["channel"] != "whisper" and
+                visible = ((is_private(line["channel"]) and line["to_guid"] == human.guid)
+                           or (not is_private(line["channel"]) and
                                any(has_word(line["text"], n) for n in (human.called, human.character_name))))
                 disclosed = self.store.conn.execute(
                     "SELECT 1 FROM disclosure WHERE guid=? AND other=? AND ref=? LIMIT 1",
@@ -351,13 +352,13 @@ class LiveAttraction:
         for line in lines:
             ref = f"chat:{line['id']}"
             age = row["ts"] - line["ts"]
-            whisper = row["channel"] == "whisper" and row["to_guid"] == p.guid
-            named = (row["channel"] != "whisper" and row["channel"] == line["channel"]
+            whisper = is_private(row["channel"]) and row["to_guid"] == p.guid
+            named = (not is_private(row["channel"]) and row["channel"] == line["channel"]
                      and aimed_at(row, p, p.guid) and age <= REPLY_S)
-            bid = ((line["channel"] == "whisper" and line["to_guid"] == human.guid)
-                   or (line["channel"] != "whisper" and any(has_word(line["text"], n)
+            bid = ((is_private(line["channel"]) and line["to_guid"] == human.guid)
+                   or (not is_private(line["channel"]) and any(has_word(line["text"], n)
                        for n in (human.called, human.character_name))))
-            unnamed = (row["channel"] != "whisper" and row["channel"] == line["channel"]
+            unnamed = (not is_private(row["channel"]) and row["channel"] == line["channel"]
                        and bid and age <= ANSWER_S and first_after(self.store, line, row)
                        and not any(has_word(row["text"], name) for g, name in names.items()
                                    if g not in (p.guid, human.guid)))
@@ -368,7 +369,7 @@ class LiveAttraction:
     def classify(self, row, women, *, now):
         acts = []
         for guid in women:
-            if row["channel"] == "whisper" and row["to_guid"] != guid:
+            if is_private(row["channel"]) and row["to_guid"] != guid:
                 continue
             # Candidate caching must not make an imported stance or name stale.
             p = load_persona(self.store, guid)
@@ -378,11 +379,11 @@ class LiveAttraction:
             if aimed and HURT_RE.search(text) and not (TEASE_RE.search(text) or LAUGH_RE.search(text)):
                 act = "hurt"
             elif (aimed and FLIRT_RE.search(text)) or (
-                    row["channel"] == "whisper" and row["to_guid"] == guid and FLIRT_EMOTE_RE.search(text)):
+                    is_private(row["channel"]) and row["to_guid"] == guid and FLIRT_EMOTE_RE.search(text)):
                 act = "flirt"
             elif aimed and (memory := self._remembered(row, p, now)):
                 act, ref = "remembered", memory
-            elif row["channel"] != "whisper" and aimed and COMPLIMENT_RE.search(text):
+            elif not is_private(row["channel"]) and aimed and COMPLIMENT_RE.search(text):
                 act = "public_compliment"
             elif answer := self._answered(row, p, now):
                 act, ref = "answered", answer
@@ -549,7 +550,7 @@ def _rival_line(store, refs, owner, human, attitudes):
         row = store.conn.execute("SELECT * FROM chat_line WHERE id=?", (int(ref[5:]),)).fetchone()
         if row is None or row["from_guid"] != human or row["origin"] != "human":
             continue
-        if any(g != owner and (row["channel"] != "whisper" or row["to_guid"] == g)
+        if any(g != owner and (not is_private(row["channel"]) or row["to_guid"] == g)
                and aimed_at(row, load_persona(store, g), g) for g in attitudes):
             return ref
     return None

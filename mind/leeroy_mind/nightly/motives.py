@@ -6,6 +6,7 @@ per night; daily trait samples remain fixed even if a stage is retried later.
 import json
 from typing import TYPE_CHECKING
 
+from leeroy_mind.discord.channels import private_sql
 from leeroy_mind.nightly.places import place_kind
 from leeroy_mind.personas.schema import Persona
 from leeroy_mind.storage.store import Store
@@ -113,7 +114,7 @@ def _met(ctx: "NightContext", guid: int) -> set[str]:
     if sent >= 5 or len(encounters) >= 2:
         out.add("socialising")
     whispered = ctx.store.conn.execute(
-        "SELECT 1 FROM chat_line WHERE channel='whisper' AND ts>=? AND ts<? "
+        f"SELECT 1 FROM chat_line WHERE {private_sql()} AND ts>=? AND ts<? "
         "AND ((from_guid=? AND to_guid=?) OR (from_guid=? AND to_guid=?)) LIMIT 1",
         (start, end, guid, ctx.human, ctx.human, guid)).fetchone()
     if whispered or any(row["private"] for row in encounters):

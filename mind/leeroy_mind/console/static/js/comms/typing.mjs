@@ -41,11 +41,13 @@ export function typingByView(list, o) {
   arr(list).forEach(function (e) {
     if (!e || typeof e !== "object" || !goodId(e.guid)) { return; }
     var ch = str(e.channel), since = e.since, age = e.age;
-    if (!own(PLACES, ch) || !seconds(since) || !seconds(age) || age < 0) { return; }
+    var discord = /^discord:[a-z][a-z0-9-]{0,39}$/.test(ch), dm = /^dm:[1-9]\d{0,9}$/.test(ch);
+    if ((!own(PLACES, ch) && !discord && !dm) || !seconds(since) || !seconds(age) || age < 0) { return; }
     var left = STALE_S - (age + elapsed);
     if (left < 0) { return; }
-    if (ch === "whisper" && !(goodId(e.to) && (!human || e.to === human))) { return; }
-    var view = viewOf({ channel: ch, from_guid: e.guid, to_guid: ch === "whisper" ? e.to : 0 }, human);
+    if ((ch === "whisper" || dm) && !(goodId(e.to) && (!human || e.to === human))) { return; }
+    if (dm && Number(ch.slice(3)) !== e.guid) { return; }
+    var view = discord ? "d:" + ch.slice(8) : dm ? ch : viewOf({ channel: ch, from_guid: e.guid, to_guid: ch === "whisper" ? e.to : 0 }, human);
     if (!view) { return; }
     var landed = arr(lines(view)).some(function (l) {
       return l && l.from_guid === e.guid && num(l.ts) > since;

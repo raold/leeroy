@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
+from leeroy_mind.discord.channels import is_discord, is_private, same_medium
 from leeroy_mind.personas.screens import has_word
 
 LAUGH_RE = re.compile(r"(?<!\w)(?:lo+l|lmf?ao|rofl|(?:ha){2,}|(?:he){2,}|xd)(?!\w)|:d\b", re.I)
@@ -26,13 +27,13 @@ class Reaction:
 
 
 def addressed_to(row, guid: int, names: dict[int, str]) -> bool:
-    return ((row["channel"] == "whisper" and row["to_guid"] == guid)
+    return ((is_private(row["channel"]) and row["to_guid"] == guid)
             or has_word(row["text"], names.get(guid, "")))
 
 
 def first_after(store, row, answer) -> bool:
     """No intervening line on this channel (including another cast member's line)."""
-    private = row["channel"] == "whisper"
+    private = is_private(row["channel"])
     pair = " AND ((from_guid=? AND to_guid=?) OR (from_guid=? AND to_guid=?))" if private else ""
     params = (row["from_guid"], row["to_guid"], row["to_guid"], row["from_guid"]) if private else ()
     first = store.conn.execute(
@@ -54,16 +55,19 @@ def reactions(store, window, human: int, names: dict[int, str]) -> list[Reaction
         g = row["from_guid"]
         if g not in names or g == human:
             continue
-        addressed = (row["to_guid"] == human if row["channel"] == "whisper" else
+        addressed = (row["to_guid"] == human if is_private(row["channel"]) else
                      any(has_word(row["text"], n) for n in human_names))
-        answers = store.conn.execute(
+        # his lines after hers in her line's world only: a Discord DM never answers a game line,
+        # nor a whisper a Discord line (ruling R11)
+        answers = [a for a in store.conn.execute(
             "SELECT * FROM chat_line WHERE origin = 'human' AND from_guid = ? "
             "AND (ts > ? OR (ts = ? AND id > ?)) AND ts <= ? ORDER BY ts, id",
             (human, row["ts"], row["ts"], row["id"], row["ts"] + WHISPER_BACK_S)).fetchall()
+            if same_medium(a["channel"], row["channel"])]
         direct = []
         for a in answers:
-            whisper = a["channel"] == "whisper" and a["to_guid"] == g
-            same = (a["channel"] == row["channel"] and a["channel"] != "whisper"
+            whisper = is_private(a["channel"]) and a["to_guid"] == g
+            same = (a["channel"] == row["channel"] and not is_private(a["channel"])
                     and a["ts"] <= row["ts"] + REPLY_S)
             if whisper or (same and (has_word(a["text"], names[g]) or (
                     not any(has_word(a["text"], name) for other, name in names.items()
@@ -73,14 +77,14 @@ def reactions(store, window, human: int, names: dict[int, str]) -> list[Reaction
             reaction = "laugh"
         elif any(NO_RE.search(a["text"]) for a in direct):
             reaction = "rebuff"
-        elif any(a["channel"] == "whisper" for a in direct):
+        elif any(is_private(a["channel"]) for a in direct):
             reaction = "whisper"
         elif direct:
             reaction = "reply"
         else:
-            emotes = store.conn.execute(
+            emotes = [] if is_discord(row["channel"]) else store.conn.execute(  # a game emote
                 "SELECT payload FROM game_event WHERE type = 'text_emote' AND ts > ? AND ts <= ?",
-                (row["ts"], row["ts"] + REPLY_S)).fetchall()
+                (row["ts"], row["ts"] + REPLY_S)).fetchall()  # answers only a game line
             if any((p := json.loads(e["payload"])).get("guid") == human
                    and p.get("target_guid") == g for e in emotes):
                 reaction = "emote"
@@ -105,5 +109,5 @@ def laughs_at(store, line_id: int, *, window_s: float = 60) -> set[int]:
         "SELECT from_guid, to_guid, text FROM chat_line WHERE channel = ? AND ts > ? AND ts <= ? "
         "AND origin IN ('mind','human') AND from_guid != ?",
         (row["channel"], row["ts"], row["ts"] + window_s, row["from_guid"]))
-        if LAUGH_RE.search(a["text"]) and (row["channel"] != "whisper" or
+        if LAUGH_RE.search(a["text"]) and (not is_private(row["channel"]) or
            (a["from_guid"] == row["to_guid"] and a["to_guid"] == row["from_guid"]))}

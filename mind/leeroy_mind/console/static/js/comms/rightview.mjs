@@ -7,6 +7,7 @@ import { cardText } from "../words.mjs";
 import { FEED, openView } from "./feedview.mjs";
 import { renderRooms } from "./leftview.mjs";
 import { roomMates } from "./tree.mjs";
+import { DISCORD } from "./discordstate.mjs";
 
 // The Comms right column: the faces of the room he is in, lit while their voice plays, and below
 // them the card of the member whose face he clicked anywhere in Comms (the feed, the room tree, a
@@ -77,6 +78,7 @@ function drawCard(t, known) {
   });
   facts.hidden = !t.facts.length;
   $("mcard-profile").disabled = !known;
+  $("mcard-dm").disabled = !DISCORD.dms.some(function (d) { return d.guid === CARD.guid; });
   $("mcard-profile").title = known ? "" : "Not in mind.db.";
   renderVoiceControls();
 }
@@ -149,6 +151,14 @@ $("mcard-whisper").addEventListener("click", function () {
   focusComposer();
 });
 $("mcard-profile").addEventListener("click", function () { if (CARD.guid) { openMember(CARD.guid); } });
+$("mcard-dm").addEventListener("click", function () {
+  if (CARD.guid && DISCORD.dms.some(function (d) { return d.guid === CARD.guid; })) {
+    openView("dm:" + CARD.guid); $("dc-text").focus();
+  }
+});
+on("discord-view", function () {
+  $("mcard-dm").disabled = !DISCORD.dms.some(function (d) { return d.guid === CARD.guid; });
+});
 
 // A member's face anywhere in Comms opens their card: a click, or Enter or Space on a focusable
 // row (a button clicks itself)

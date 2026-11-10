@@ -548,6 +548,87 @@ td > div.who { color: var(--ink); font-weight: 600; }
   .mindtab .formrow select { min-width: 44px; max-width: calc(100% - 4em); }
 }
 
+/* D1 guild Discord: scoped Comms controls, with the same light/dark tokens as the console. */
+.dc-category summary { cursor: pointer; }
+.dc-category .ch { min-height: 36px; }
+.dc-category .sec { margin: 0; }
+#dc-dms .ch { min-height: 36px; }
+#dc-tools { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 14px 8px; }
+#dc-tools button { min-height: 36px; }
+#dc-panel { max-height: 35vh; overflow-y: auto; border-block: 1px solid var(--line); padding: 12px 16px; }
+#dc-panel h4 { margin: 0 0 8px; }
+.dc-thread-link { display: block; margin: 6px 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; text-align: left; }
+.dc-message { padding-block: 10px; }
+.dc-content { min-width: 0; }
+.dc-message .body { white-space: pre-wrap; }
+.dc-grouped { padding-top: 3px; }
+.dc-time-small { font-size: 10px; color: var(--ink-3); padding-top: 4px; }
+.dc-quote { border-left: 3px solid var(--accent); padding: 5px 10px; margin: 3px 0 8px; font-size: 12px; color: var(--ink-2); overflow-wrap: anywhere; }
+.dc-quote b, .dc-quote span { display: block; }
+.dc-message .dc-quote span { white-space: pre-wrap; max-height: 4.5em; overflow: hidden; }
+.dc-mentioned { background: color-mix(in srgb, var(--accent) 10%, var(--surface)); border-left: 3px solid var(--accent); }
+.dc-reactions, .dc-message-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+.dc-reaction[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
+.dc-reaction { min-height: 32px; }
+.dc-message-actions button { font-size: 11px; padding: 3px 7px; }
+.dc-message-actions { opacity: 0; }
+.dc-message:hover .dc-message-actions, .dc-message:focus-within .dc-message-actions { opacity: 1; }
+.dc-pin { display: inline-block; margin-left: 8px; color: var(--accent); }
+.dc-new { border-top: 1px solid var(--accent); color: var(--accent); text-align: center; font-size: 12px; font-weight: 700; margin: 12px 0; }
+#dc-composer { padding: 12px 14px; border-top: 1px solid var(--line); }
+#dc-composer label { display: block; font-size: 12px; margin-bottom: 5px; }
+#dc-text, #dc-dialog-value { display: block; width: 100%; min-width: 0; resize: vertical; min-height: 64px; max-height: 190px; padding: 9px; font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+.dc-compose-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 7px; }
+#dc-count { margin-left: auto; font-size: 11px; color: var(--ink-2); }
+#dc-count.bad { color: var(--bad); }
+#dc-why { margin: 6px 0 0; min-height: 1.5em; font-size: 12px; color: var(--ink-2); overflow-wrap: anywhere; }
+#dc-reply { display: flex; gap: 8px; align-items: center; padding-bottom: 8px; }
+#dc-reply-name { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
+#dc-members { padding: 16px; overflow-y: auto; }
+#dc-members h3 { margin: 0 0 10px; }
+.dc-member { display: flex; align-items: center; gap: 8px; margin: 8px 0; min-width: 0; }
+.dc-member-words { flex: 1; min-width: 0; }
+.dc-member-words > span, .dc-member-words > small { display: block; overflow-wrap: anywhere; }
+.dc-presence { font-size: 11px; color: var(--ink-2); }
+.dc-presence::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); margin-right: 5px; }
+.dc-online::before { background: var(--ok); }
+.dc-idle::before { background: var(--warn); }
+.dc-dnd::before { background: var(--bad); }
+.dc-class-warrior .who { color: #9a784d; }.dc-class-paladin .who { color: #c45c91; }
+.dc-class-hunter .who { color: #4d8745; }.dc-class-rogue .who { color: #8c771f; }
+.dc-class-priest .who { color: var(--ink); }.dc-class-death-knight .who { color: #c23f59; }
+.dc-class-shaman .who { color: #387acb; }.dc-class-mage .who { color: #287e96; }
+.dc-class-warlock .who { color: #8264bc; }.dc-class-druid .who { color: #bc6926; }
+:root[data-theme="dark"] .dc-class-warrior .who { color: #c9a67c; }
+:root[data-theme="dark"] .dc-class-paladin .who { color: #ed9dca; }
+:root[data-theme="dark"] .dc-class-hunter .who { color: #a5cf86; }
+:root[data-theme="dark"] .dc-class-rogue .who { color: #eee39a; }
+:root[data-theme="dark"] .dc-class-death-knight .who { color: #ed7d91; }
+:root[data-theme="dark"] .dc-class-shaman .who { color: #71a7ed; }
+:root[data-theme="dark"] .dc-class-mage .who { color: #8bd2e7; }
+:root[data-theme="dark"] .dc-class-warlock .who { color: #b8a2ef; }
+:root[data-theme="dark"] .dc-class-druid .who { color: #efad71; }
+#dc-dialog { width: min(520px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); padding: 18px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+#dc-dialog::backdrop { background: #0008; }
+#dc-dialog h3 { margin: 0 0 12px; }
+.dc-dialog-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; position: sticky; top: -18px; background: var(--surface); padding-top: 4px; z-index: 1; }
+#dc-dialog-close { min-height: 44px; }
+#dc-dialog-form { min-width: 0; }
+#dc-dialog-label { display: block; font-size: 12px; margin-bottom: 6px; }
+#dc-emoji-groups h4 { margin: 12px 0 6px; }
+.dc-emoji-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(44px, 1fr)); gap: 5px; }
+.dc-emoji-grid button { font-size: 23px; min-height: 44px; padding: 4px; }
+#dc-dialog-error { color: var(--bad); overflow-wrap: anywhere; }
+#dc-dialog .acts { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+@media (max-width: 720px), (pointer: coarse) {
+  .dc-message-actions { opacity: 1; }
+  .dc-message-actions button, .dc-reaction, #dc-tools button, #dc-composer button, #dc-dialog .acts button, .dc-member > button, #dc-dms .ch, .dc-category .ch { min-height: 44px; }
+  .dc-message-actions button { font-size: 12px; }
+  .dc-message { grid-template-columns: 28px minmax(0, 1fr); gap: 8px; }
+  #dc-composer { padding: 10px; }
+  #dc-members { max-height: 45vh; }
+}
+@media (prefers-reduced-motion: reduce) { .dc-message-actions { transition: none; } }
 /* Persona Insight */
 .insight-part { min-width: 0; padding-block: 10px; border-bottom: 1px solid var(--line); }
 .insight-card { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 var(--f-mono); }

@@ -3,6 +3,7 @@ import hashlib
 import json
 import re
 
+from leeroy_mind.discord.channels import is_public
 from leeroy_mind.nightly import lexicon
 from leeroy_mind.text import strip_wow_markup
 
@@ -42,7 +43,7 @@ def _line(ctx, row, eligible):
     Resolve the nearest paired output before checking dropped: filtering it away first
     could pair a dropped line with a different, successful use of the same words.
     """
-    if row["channel"] == "whisper" or row["from_guid"] not in eligible:
+    if not is_public(row["channel"]) or row["from_guid"] not in eligible:
         return None
     if row["from_guid"] == ctx.human:
         if row["origin"] != "human":

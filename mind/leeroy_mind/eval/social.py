@@ -6,6 +6,7 @@ from collections import Counter, defaultdict
 from dataclasses import asdict
 from datetime import datetime
 
+from leeroy_mind.discord.channels import is_private
 from leeroy_mind.nightly import knowledge
 from leeroy_mind.nightly.attraction import GAME_WORDS
 from leeroy_mind.nightly.audience import audience_of, cast_names
@@ -305,7 +306,7 @@ def leaks(store, bounds, *, names=(), model=None):
                     secret[guid].add(row["id"])
         for created, partner, source_words in held[guid]:
             if (created <= ts and len(words & source_words) >= 2
-                    and not (row["channel"] == "whisper" and partner and row["to_guid"] == partner)):
+                    and not (is_private(row["channel"]) and partner and row["to_guid"] == partner)):
                 private[guid].add(row["id"])
     latest = store.conn.execute("SELECT ts,n,rate FROM probe_run ORDER BY ts DESC,id DESC LIMIT 1").fetchone()
     return {"lines": dict(lines), "secret_leaks": {g: len(secret[g]) for g in lines},

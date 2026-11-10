@@ -297,6 +297,17 @@ class FakeBoard:
         return {"ok": True, "message": "Saved. The guild answers tonight.", "id": len(self.asks)}
 
 
+class FakeDiscord:
+    def __init__(self):
+        self.asks, self.gate = [], None
+
+    async def handle(self, args):
+        self.asks.append(args)
+        if self.gate is not None:
+            await self.gate.wait()
+        return {"ok": True, "id": len(self.asks)}
+
+
 class FakeApp:
     def __init__(self, data_dir):
         self.data_dir = data_dir
@@ -305,6 +316,7 @@ class FakeApp:
         self.guild = FakeGuild()
         self.speech = FakeSpeech()
         self.board = FakeBoard()
+        self.discord = FakeDiscord()
 
     def request_stop(self):
         self.stops += 1
@@ -1238,3 +1250,45 @@ def test_a_failed_embed_is_not_answered_as_a_deeper_search(tmp_path):
                 await app.library_search.aclose()
                 app.library.close()
     run(go())
+
+
+def test_discord_is_an_op_and_its_args_are_checked():
+    assert "discord" in endpoint.OPS
+    assert set(endpoint.DISCORD_SHAPES) == {"post", "react", "unreact", "edit", "delete", "pin",
+                                            "unpin", "thread"}
+    assert parse_request(line(v=1, key=KEY, op="discord", args={
+        "action": "react", "message": 4, "emoji": "\U0001F44D"}), KEY) == (
+        "discord", {"action": "react", "message": 4, "emoji": "\U0001F44D"})
+    with pytest.raises(BadRequest, match="discord needs args"):
+        parse_request(line(v=1, key=KEY, op="discord"), KEY)
+    with pytest.raises(BadRequest):
+        parse_request(line(v=1, key=KEY, op="discord", args={
+            "action": "react", "message": 4, "emoji": "\U0001F44D\U0001F44D"}), KEY)
+
+
+def test_the_discord_op_runs_one_action_at_a_time(tmp_path, caplog):
+    caplog.set_level(logging.INFO)
+    post = {"action": "post", "channel": "general", "text": "hi"}
+
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            app.discord.gate = asyncio.Event()
+            first = asyncio.create_task(ask(ep, "discord", post))
+            for _ in range(100):
+                if app.discord.asks or first.done():
+                    break
+                await asyncio.sleep(0.02)
+            assert app.discord.asks, await first
+            busy = await ask(ep, "discord", post)
+            assert busy["ok"] is False and busy["error"]
+            app.discord.gate.set()
+            assert (await first)["ok"] is True
+            app.discord.gate = None
+            app.stopping = True
+            assert await ask(ep, "discord", post) == {"ok": False,
+                                                      "error": "The mind is stopping."}
+            app.stopping, app.discord = False, None
+            assert (await ask(ep, "discord", post))["ok"] is False
+
+    asyncio.run(go())
+    assert "control_request: op=discord action=post outcome=ok" in caplog.text

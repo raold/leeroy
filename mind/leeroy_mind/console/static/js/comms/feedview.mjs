@@ -3,6 +3,8 @@ import { S, name, roomName } from "../state.mjs";
 import { face, faceButton } from "../faces.mjs";
 import { registerTab, setBadge } from "../tabs.mjs";
 import { Feed, kpis, lineChips } from "./model.mjs";
+import { channelOf } from "./discord.mjs";
+import { DISCORD } from "./discordstate.mjs";
 
 // The Comms middle column: the open view of the feed (# guild, # officer, # party / raid or one
 // whisper thread), each line with its face, name, time, a chip for where it was said (and "not
@@ -27,13 +29,14 @@ var saved = "";
 
 export function currentView() { return VIEW; }
 export function openView(view) {
-  if (!VIEW_RE.test(str(view))) { return; }
+  if (!VIEW_RE.test(str(view)) && !channelOf(view)) { return; }
   VIEW = view;
   renderFeed(false);
 }
 
 // A view's title: "# guild", "# officer", "# party / raid", or the whisper partner's name
 export function viewTitle(view) {
+  if (channelOf(view)) { return DISCORD.title(view); }
   if (TITLES[view]) { return TITLES[view]; }
   var guid = Number(view.slice(2)), t = FEED.threads().filter(function (x) { return x.guid === guid; })[0];
   return t ? t.name : name(guid);
@@ -98,6 +101,7 @@ function focusedRow(box) {
 // Redraw the open view. keepPlace: new lines leave the reader where he is unless he is at the
 // bottom, where they keep him
 export function renderFeed(keepPlace) {
+  if (channelOf(VIEW)) { emit("discord-open"); changed(); return; }
   var box = $("feed");
   var bottom = box.scrollHeight - box.scrollTop - box.clientHeight < STICK_PX;
   var at = keepPlace && !bottom ? place(box) : null;
@@ -144,9 +148,9 @@ function renderKpis() {
 // The open view is read while he can see it; the marks are kept whenever they change
 function changed() {
   if (document.visibilityState === "visible" && S.tab === "comms") { FEED.markRead(VIEW); }
-  var state = FEED.readState(), text = JSON.stringify(state);
+  var state = Object.assign({}, recall(READ_KEY, {}), FEED.readState(), DISCORD.read), text = JSON.stringify(state);
   if (text !== saved) { saved = text; remember(READ_KEY, state); }
-  setBadge("comms", FEED.threads().reduce(function (n, t) { return n + t.unread; }, 0));
+  badge();
   renderKpis();
   emit("feed");
 }
@@ -163,4 +167,9 @@ on("voice", function (m) {
 document.addEventListener("visibilitychange", function () {
   if (document.visibilityState === "visible") { changed(); }
 });
-registerTab("comms", { show: function () { renderFeed(false); } });
+function badge() {
+  setBadge("comms", FEED.threads().reduce(function (n, t) { return n + t.unread; }, 0)
+    + DISCORD.channels().reduce(function (n, c) { return n + num(c.unread); }, 0));
+}
+on("discord-read", badge);
+registerTab("comms", { show: function () { renderFeed(false); emit("comms-show"); }, hide: function () { emit("comms-hide"); } });

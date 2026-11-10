@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING
 
 from leeroy_mind.human import HumanIdentity
 from leeroy_mind.logs import log
+from leeroy_mind.memory.privacy import restricted_channels
 from leeroy_mind.nightly.evidence import Evidence, Facts, load_facts, load_items
 from leeroy_mind.nightly.ground import REL_DELTA_DIMS, Claim, Verdict, check, ground, log_verdicts
 from leeroy_mind.nightly.llm import schema, system_prompt
@@ -311,8 +312,21 @@ async def stage_regress(ctx: "NightContext") -> None:
 # -- notes and pins ------------------------------------------------------------------------------
 
 def _open_ids(store: Store, sql: str, owner: int, about: int, limit: int) -> list[int]:
+    """The first `limit` ids `sql` gives, leaving out any memory resting on a restricted Discord
+    line at any depth (privacy.restricted_channels; ruling R10), which a note shown in every
+    prompt must never carry. The writer already stores those private; this also holds for a row
+    stored open by another path."""
+    out: list[int] = []
     with store.transaction():
-        return [r["id"] for r in store.conn.execute(sql, (owner, about, limit))]
+        cursor = store.conn.execute(sql, (owner, about, -1))
+        while len(out) < limit and (batch := cursor.fetchmany(max(limit, 16))):
+            ids = [r["id"] for r in batch]
+            evidence = {r["id"]: json.loads(r["evidence"]) for r in store.conn.execute(
+                "SELECT id, evidence FROM memory WHERE id IN (SELECT value FROM json_each(?))",
+                (json.dumps(ids),))}
+            hidden = restricted_channels(store.conn, evidence)
+            out += [i for i in ids if i not in hidden]
+    return out[:limit]
 
 
 def _text(s: str) -> str:

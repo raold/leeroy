@@ -11,6 +11,7 @@ from collections import defaultdict
 from dataclasses import asdict, replace
 from datetime import datetime
 
+from leeroy_mind.discord.channels import discord_sql, is_private, same_medium
 from leeroy_mind.memory.privacy import stricter
 from leeroy_mind.memory.writer import clean_memory_text
 from leeroy_mind.nightly.attraction import reflection_row
@@ -154,7 +155,7 @@ def arm_of(store, utterance, persona, human, *, called=""):
     if row is None or row["dropped"] is not None or row["guid"] != persona.guid:
         return None
     kind = row["kind"]
-    if row["channel"] == "whisper" or kind in ARM_EXCLUDED or kind not in {k.value for k in TurnKind}:
+    if is_private(row["channel"]) or kind in ARM_EXCLUDED or kind not in {k.value for k in TurnKind}:
         return None
     names = _names(store, human)
     why = reason_of(store, row) or ""
@@ -181,8 +182,10 @@ def context_key(store, ts, human):
         members = payload.get("members", [])
         raid = bool(payload.get("raid")) and human in members
         break
+    # his game lines only: his posts in the guild's Discord are no play (ruling R11)
     busy = store.conn.execute("SELECT count(*) FROM chat_line WHERE from_guid=? AND origin='human' "
-                             "AND ts>=? AND ts<?", (human, ts - 600, ts)).fetchone()[0] >= 3
+                             f"AND ts>=? AND ts<? AND NOT {discord_sql()}",
+                             (human, ts - 600, ts)).fetchone()[0] >= 3
     hour = datetime.fromtimestamp(ts, store.clock.local().tzinfo).hour
     return f"{'raid' if raid else 'free'}:{'busy' if busy else 'quiet'}:{'late' if 1 <= hour < 6 else 'day'}"
 
@@ -212,16 +215,17 @@ def arm_weights(store, guid, arms, context, rng):
 def _reaction_refs(ctx, reaction, line):
     """The bids and actual feedback that justify a reaction, including private replies."""
     names = cast_names(ctx.store) | {ctx.human: ctx.ident.called}
-    answers = ctx.store.conn.execute("SELECT * FROM chat_line WHERE origin='human' AND from_guid=? "
-        "AND (ts>? OR (ts=? AND id>?)) AND ts<=? ORDER BY ts,id",
+    answers = [a for a in ctx.store.conn.execute("SELECT * FROM chat_line WHERE origin='human' "
+        "AND from_guid=? AND (ts>? OR (ts=? AND id>?)) AND ts<=? ORDER BY ts,id",
         (ctx.human, line["ts"], line["ts"], line["id"], line["ts"] + WHISPER_BACK_S)).fetchall()
-    direct = [a for a in answers if (a["channel"] == "whisper" and a["to_guid"] == reaction.speaker) or (
-        a["channel"] == line["channel"] and a["channel"] != "whisper" and a["ts"] <= line["ts"] + REPLY_S
+        if same_medium(a["channel"], line["channel"])]  # as reactions(): one world (R11)
+    direct = [a for a in answers if (is_private(a["channel"]) and a["to_guid"] == reaction.speaker) or (
+        a["channel"] == line["channel"] and not is_private(a["channel"]) and a["ts"] <= line["ts"] + REPLY_S
         and (has_word(a["text"], names[reaction.speaker]) or (
             not any(has_word(a["text"], n) for g, n in names.items() if g not in (reaction.speaker, ctx.human))
             and first_after(ctx.store, line, a))))]
     chosen = {"laugh": lambda a: LAUGH_RE.search(a["text"]), "rebuff": lambda a: NO_RE.search(a["text"]),
-              "whisper": lambda a: a["channel"] == "whisper", "reply": lambda a: True}
+              "whisper": lambda a: is_private(a["channel"]), "reply": lambda a: True}
     refs = [f"chat:{line['id']}"]
     if reaction.reaction in chosen:
         refs += [f"chat:{a['id']}" for a in direct if chosen[reaction.reaction](a)][:1]
@@ -339,7 +343,7 @@ def _authorized(store, guid, nodes):
             return False
         if ref.startswith("chat:"):
             line = store.conn.execute("SELECT * FROM chat_line WHERE id=?", (int(ref[5:]),)).fetchone()
-            if line["channel"] == "whisper":
+            if is_private(line["channel"]):
                 if guid not in (line["from_guid"], line["to_guid"]):
                     return False
             elif guid not in audience_of(store, line["id"]) and guid != line["from_guid"]:
@@ -356,7 +360,7 @@ def _follow_state(ctx, fact):
     if nodes is None or fact["root"] not in _human_roots(ctx.store, memory, ctx.human):
         return None
     line = ctx.store.conn.execute("SELECT * FROM chat_line WHERE id=?", (int(fact["root"][5:]),)).fetchone()
-    heard = {line["to_guid"]} if line["channel"] == "whisper" else audience_of(ctx.store, line["id"])
+    heard = {line["to_guid"]} if is_private(line["channel"]) else audience_of(ctx.store, line["id"])
     key = "followup:" + fact["root"]
     candidates = []
     for guid in _close(ctx, len(_eligible(ctx))):

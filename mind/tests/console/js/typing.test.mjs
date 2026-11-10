@@ -8,6 +8,14 @@ import { STALE_S, staleIn, typingByView, typingLabel, whisperTypers }
 var HIM = 1, SINCE = 1793304000, GOT = 5000000, HOUR_MS = 3600 * 1000;
 var NAMES = { 101: "Arkon", 102: "Belra", 103: "Coros", 104: "Dunna", 105: "Ebbo" };
 
+test("Discord typing stays in its channel or private DM, separate from game whispers", () => {
+  const found = at([typing(101, { channel: "discord:general" }), typing(102, { channel: "dm:102", to: HIM }),
+    typing(103, { channel: "dm:102", to: HIM }), typing(104, { channel: "dm:104", to: 999 })]);
+  assert.deepEqual(names(found, "d:general"), ["Arkon"]);
+  assert.deepEqual(names(found, "dm:102"), ["Belra"]);
+  assert.equal(found.size, 2); assert.deepEqual(whisperTypers(found), []);
+});
+
 function typing(guid, o) {
   return Object.assign({ guid: guid, name: NAMES[guid], channel: "guild", to: null, since: SINCE - 2,
                          age: 2 }, o);

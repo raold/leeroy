@@ -26,6 +26,7 @@ import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from leeroy_mind.discord.channels import is_private, private_sql
 from leeroy_mind.logs import log
 from leeroy_mind.memory.privacy import DONT_TELL_RE, secret_lines
 from leeroy_mind.memory.writer import clean_memory_text
@@ -125,7 +126,7 @@ def confidential_threads(store: Store, window: tuple[float, float], human: int, 
             "SELECT id FROM chat_thread WHERE status IN ('extracted', 'skipped') AND closed >= ? "
             "AND closed < ? ORDER BY closed DESC, id DESC", (start, end))]
         lines = conn.execute(
-            "SELECT thread_id, from_guid, to_guid, text FROM chat_line WHERE channel = 'whisper' "
+            f"SELECT thread_id, from_guid, to_guid, text FROM chat_line WHERE {private_sql()} "
             "AND thread_id IN (SELECT value FROM json_each(?))",
             (json.dumps(threads),)).fetchall() if threads else []
     keep = {r["thread_id"] for r in lines
@@ -145,7 +146,7 @@ def _who(lines: list[ChatLineRow], human: int, cast: set[int]) -> tuple[int, int
     """(the member, the other end). In a whisper thread with him the member is its cast end and
     the other end is him; in two members' thread that asked for secrecy the member is the
     speaker of its first DONT_TELL_RE line, and the other end that line's listener."""
-    whispers = [ln for ln in lines if ln.channel == "whisper"]
+    whispers = [ln for ln in lines if is_private(ln.channel)]
     for ln in whispers:
         end = _his_end(ln.from_guid, ln.to_guid, human, cast)
         if end is not None:

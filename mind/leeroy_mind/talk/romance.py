@@ -31,6 +31,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Sequence
 
+from leeroy_mind.discord import layout
+from leeroy_mind.discord.channels import channel_id, is_discord, is_private
 from leeroy_mind.human import HumanIdentity
 from leeroy_mind.personas.schema import Persona
 from leeroy_mind.prompts import load_prompt
@@ -189,7 +191,7 @@ STAGE_PASSAGES: dict[str, tuple[str, ...]] = {
         "make a fuss about.",
     ),
 }
-# Whisper scope: these stages' passages are said only in a whisper to him (stage_text's
+# Whisper scope: these stages' passages are said only in a whisper or DM to him (stage_text's
 # `private`). On every other channel she reads one of these, which keeps them there.
 PRIVATE_GUARD = ("What you share in whispers stays there: in public it shows only in how you "
                  "tease {them}.")
@@ -218,7 +220,7 @@ DISTANCE = ("You two live far apart and meet only in game: don't ask {them} to c
 DISTANCE_PLAN = ("You two live far apart and meet only in game. A trip is the real meeting: "
                  "don't ask {them} to come over, don't say you're waiting or invent where or when. "
                  "Bring want, longing.")
-# What you two did lately, for a whisper to him only (romance_instruction's `scene`, a few
+# What you two did lately, for a whisper or DM to him only (romance_instruction's `scene`, a few
 # notes, newest first). Second person; {they}/{them}/{their} are his forms. Keys are
 # his_<move> and her_<move> for A1's move names; a summons has no note, so it is never said back.
 # His moves come from his_moves: "need you to" asks for something, so it is no declaration there.
@@ -238,7 +240,7 @@ NOTE_TEXT: dict[str, str] = {
     "her_plan": "you talked about meeting someday",
 }
 # Longing that has gone quiet, wistful or a little hurt, never nagging; time offline is never
-# held against him. For a whisper to him only.
+# held against him. For a whisper or DM to him only.
 COOLING_TEXT: tuple[str, ...] = (
     "Things between you and {name} have gone a little quiet lately; it makes you wistful, "
     "and you keep it light.",
@@ -313,6 +315,26 @@ INVARIANTS = "It's only ever with {name}, two adults, and only what you both wan
 _AUDIENCE = {"guild": "whole guild", "officer": "officers", "party": "party", "raid": "raid",
              "say": "people standing nearby"}
 _LATE = frozenset({DayPhase.LATE, DayPhase.DEAD})
+
+
+def audience_text(channel: str) -> str:
+    """Who reads her line, for the romance text: a whisper or a Discord DM is the two of them
+    (discord.channels.is_private); a voice room is heard by the people in it; a Discord channel
+    is read by the guild members in it (an officers' channel: the officers); a game channel by
+    its people (_AUDIENCE)."""
+    if is_private(channel):
+        return ("It's a private whisper, just the two of you." if channel == "whisper"
+                else "It's a private message, just the two of you.")
+    if channel.startswith("voice:"):
+        return "The people in the room can hear you, so play to the room."
+    if is_discord(channel):
+        ch = layout.channel(channel_id(channel))
+        if ch is None:
+            return "The people in this Discord channel can read it, so play to the room."
+        who = "officers" if ch.officers_only else "guild members"
+        return f"The {who} in #{ch.name} on the guild's Discord can read it, so play to the room."
+    return f"The {_AUDIENCE.get(channel, 'everyone around')} can read it, so play to the room."
+
 
 VARIANT_SEP = "---"  # a line of just this splits an overlay into variants
 _warned: set[str] = set()
@@ -574,15 +596,17 @@ def romance_instruction(p: Persona, rel: Relationship | None, *, dial: int, chan
                         cooling: bool = False) -> str | None:
     """The romance text for a turn by `p` (rel is p's relationship to the human), or None
     when p is a man, has no attitude toward him or is not talking to him. The human is named
-    by human.called with his pronouns from human.forms; his real name never appears here. In
-    order: her attitude, her way, the stage's passage (a whisper-only stage's public one on any
-    channel but a whisper), her heat (rel.attraction, drawn and lust only), the band's wording,
+    by human.called with his pronouns from human.forms; his real name never appears here. A
+    Discord DM is private exactly as a whisper is (discord.channels.is_private); a Discord
+    channel is public. In order: her attitude, her way, the stage's passage (a whisper-only
+    stage's public one on any channel but a private one), her heat (rel.attraction, drawn and
+    lust only), the band's wording,
     the distance frame, the frame (INVARIANTS), the channel and the hour, and the hook on
     what's happening last. `rng` picks the variants (the first of each without it);
     `tail_follows`: the whisper tail says the distance frame after his overlay, so it is left
     out here. The pipeline puts it before the turn's own instruction, so the model reads that
-    last. After the heat line, for a whisper to him only (whisper scope; any other channel
-    leaves them out even if passed): SCENE_HEAD and at most SCENE_MAX `scene` notes, the
+    last. After the heat line, for a whisper or DM to him only (whisper scope; any other
+    channel leaves them out even if passed): SCENE_HEAD and at most SCENE_MAX `scene` notes, the
     `arc_lines`, the rival's line and a cooling variant. `dial` is the owner's; the band
     follows her own when she has one."""
     stance = p.romance.stance
@@ -592,25 +616,22 @@ def romance_instruction(p: Persona, rel: Relationship | None, *, dial: int, chan
     stage = rel.romance_stage if rel is not None else "none"
     they, them, their = human.forms
     fill = dict(name=human.called, they=they, them=them, their=their)
-    audience = _AUDIENCE.get(channel, "everyone around")
+    private = is_private(channel)
     parts = [
         attitude_text(p),
         style_text(p),
-        stage_text(stance, stage, rng, private=channel == "whisper"),
+        stage_text(stance, stage, rng, private=private),
         heat_text(stance, stage, rel, rng),
     ]
     rest = [
         "" if tail_follows else distance_text(stage),
         INVARIANTS,
-        ("It's a private whisper, just the two of you." if channel == "whisper"
-         else "The people in the room can hear you, so play to the room."
-         if channel.startswith("voice:")
-         else f"The {audience} can read it, so play to the room."),
+        audience_text(channel),
         "It's late, and late-night talk runs warmer." if phase in _LATE else "",
         SPECIFIC,
     ]
     head = " ".join(x.format(**fill) for x in parts if x)
-    if channel == "whisper":
+    if private:
         head = " ".join(x for x in (head, *_slots(scene, arc_lines, rival, cooling, fill, human,
                                                    rng)) if x)
     tail = " ".join(x.format(**fill) for x in rest if x)
