@@ -1269,6 +1269,9 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     if argv and argv[0] == "awareness":
         from .awareness.cli import awareness_main
         return awareness_main(argv[1:])
+    if argv and argv[0] == "callbacks":
+        from .memory.callback_cli import callbacks_main
+        return callbacks_main(argv[1:])
     if argv and argv[0] == "console":
         from .console.cli import main as console_main
         return console_main(argv[1:])
@@ -1286,6 +1289,7 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     sub.add_parser("eval", help="weekly evaluation on a copied database by default")
     sub.add_parser("claims", help="member claims: status, list, check and scratch evaluation")
     sub.add_parser("awareness", help="read-only member awareness card")
+    sub.add_parser("callbacks", help="replay memory callbacks on a scratch copy")
     sub.add_parser("selfies", help="profile photos: status, and a trial render with the mind "
                    "stopped")
     sub.add_parser("console", help="the guild console on http://127.0.0.1:7881/ (comms, the "
