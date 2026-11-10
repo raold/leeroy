@@ -86,9 +86,24 @@ uncontested stored unknown with these receipts is reconsidered at startup.
 Later contradictory evidence still becomes `conflict` and holds the manifest.
 WG continuation, ack-only and result roots keep their existing rules.
 
+An ordinary leave refuses at its ack, naming them, the members its step would find unable to
+leave their battleground or battlefield group alone (`shared_group_leader`, `shared_group_cleanup`,
+`shared_lfg_queue`, `shared_lfg_cleanup`), after the Wintergrasp and cleanup-closure refusals.
+A member that becomes such a case only at its own step, before its step or an earlier member's
+shared cleanup changed it, is skipped: `RealmModule::Tick` checks the body is as admitted and that
+nothing declared, expected or awaits a transition for it (`AcceptsMemberSkip`), ends that member's
+lease alone and goes on with the rest; the last step's readback covers only the members still held.
+The terminal `realm_job` then carries `"skipped": [guid, ...]` (only when nonempty, done or failed);
+a member whose own step already changed something keeps the old rule (unproved, retained).
+
 Old native omits the field, preserving the reason-based rules. Old minds ignore
-unknown wire fields and retain their existing settlement behaviour. Rolling the mind back past
-this change is different: the new mind stores `changed` in `realm_action` evidence, and an older
-mind cannot read such a row (its journal reads fail, so the Realm stops moving bodies until the
+unknown wire fields and retain their existing settlement behaviour (an older mind would rearm
+and default a skipped member with the rest, sending `nc -bg,-lfg` to a bot still in its
+battleground). An older mind also does not know the four group ack reasons: it settles such a
+refused leave `unknown` and holds its manifest, although native holds nobody (so the owner's
+`addN` is unaffected); the new mind's startup recheck of ack-only unknown roots settles it.
+Ship both together (`ac-release.sh --native`). Rolling the mind back past
+this change is different: the new mind stores `changed` (and `skipped`, `skipped_at`) in
+`realm_action` evidence, and an older mind cannot read such a row (its journal reads fail, so the Realm stops moving bodies until the
 key is stripped from those rows). Take a snapshot before deploying and roll back with it. Both a
 native rebuild and an updated mind are needed for the new proof to take effect.

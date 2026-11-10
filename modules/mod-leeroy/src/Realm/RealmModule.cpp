@@ -951,7 +951,7 @@ void RealmModule::Tick(std::uint32_t diff)
             if (retain) reservation.retained = true;
             else _state->Release(entry.id);
             PublishOutcome(entry, {entry.id, entry.kind, false, std::move(reason), guid, knownJoins,
-                "", noChange ? std::optional<bool>{false} : std::nullopt});
+                "", noChange ? std::optional<bool>{false} : std::nullopt, SkippedMembers(entry)});
             return true;
         };
         bool const pending = reservation.pending.contains(guid);
@@ -1035,16 +1035,38 @@ void RealmModule::Tick(std::uint32_t diff)
         }
         if (result.state == StepState::Refused)
             return finish(result.reason.empty() ? "refused" : result.reason, false, true, result.unchanged);
-        reservation.completedUnchanged = reservation.completedUnchanged && result.unchanged;
-        if (!reservation.declaredScopes.contains(guid)) reservation.pending.erase(guid);
-        reservation.value = result.value;
+        if (result.state == StepState::Skipped)
+        {
+            // The exact check above found the body as admitted. Nothing else in the job may expect,
+            // declare or await a transition for it; otherwise the member stays unproved, retained.
+            auto const awaited = reservation.pending.find(guid);
+            if (!AcceptsMemberSkip({entry.kind == "leave_pvp", result.unchanged, true, !result.expectedScopes.empty(),
+                    reservation.declaredScopes.contains(guid),
+                    awaited != reservation.pending.end() && !awaited->second.empty(), !reservation.continuation.empty()}))
+                return finish(result.reason.empty() ? "leave_skip_unproved" : result.reason, true);
+            // Only this member's lease ends; the others go on, and the job's event names it.
+            reservation.bodies.erase(guid);
+            reservation.pending.erase(guid);
+            if (Holder(guid) == entry.id) _state->holders.erase(guid);
+            if (!entry.payload.contains("skipped")) entry.payload["skipped"] = nlohmann::json::array();
+            entry.payload["skipped"].push_back(guid);
+            LOG_INFO("module.leeroy", "mod-leeroy: realm {} {} skipped guid={} reason={}",
+                entry.kind, entry.id, guid, result.reason);
+        }
+        else
+        {
+            reservation.completedUnchanged = reservation.completedUnchanged && result.unchanged;
+            if (!reservation.declaredScopes.contains(guid)) reservation.pending.erase(guid);
+            reservation.value = result.value;
+        }
         ++entry.cursor;
         if (entry.cursor < entry.guids.size())
             return false;
         if (!guildManifestClean()) return finish("guild_manifest_unproved", true);
         auto value = reservation.value;
         _state->Release(entry.id);
-        PublishOutcome(entry, {entry.id, entry.kind, true, "", entry.guids.size() == 1 ? guid : 0, value});
+        PublishOutcome(entry, {entry.id, entry.kind, true, "", entry.guids.size() == 1 ? guid : 0, value, "",
+            std::nullopt, SkippedMembers(entry)});
         return true;
     });
     if (!_state->continuationsFirst) TickContinuations(budget);
