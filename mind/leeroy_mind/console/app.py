@@ -125,7 +125,7 @@ from .. import endpoint
 from . import opsview
 from . import (bankview, boardview, calendarview, dojoview, faces, feed, libraryview, mindlog,
                galleryview, netinfo, personaview, raidview, realmview, selfieview, socialview, status, trainview,
-               tuneview)
+               tuneview, insightview)
 from .control import Controls, Refused
 from .httpd import Request, Response, Stream, digits, encode_json, json_response, text
 from .mindlink import BANK_S, BOARD_S, LIBRARY_S, RAID_S, SAY_S, LinkError
@@ -698,6 +698,8 @@ class ConsoleApp:
                   ("GET", "/api/library"): self._api_library,
                   ("GET", "/api/personas"): self._api_personas,
                   ("GET", "/api/persona"): self._api_persona,
+                  ("GET", "/api/persona/insight"): self._api_insight,
+                  ("POST", "/api/persona/check"): self._api_claim_check,
                   ("GET", "/api/face"): self._api_face,
                   ("GET", "/api/tuning"): self._api_tuning,
                   ("POST", "/api/tune"): self._api_tune,
@@ -944,7 +946,7 @@ class ConsoleApp:
     async def _api_personas(self, req: Request):
         try:
             view = await asyncio.to_thread(feed.read, self.s.data_dir / "mind.db",
-                                           personaview.roster_view, now=self._clock())
+                                           insightview.roster_view, data_dir=self.s.data_dir, now=self._clock())
         except Exception as e:
             log.warning("console_personas_unread: error=%s", type(e).__name__)
             return json_response(503, {"ok": False, "error": f"mind.db could not be read "
@@ -966,6 +968,36 @@ class ConsoleApp:
         if view is None:
             return json_response(404, {"ok": False, "error": f"mind.db has no member {guid}"})
         return json_response(200, view)
+
+    async def _api_insight(self, req: Request):
+        values = req.query.get("guid", [])
+        guid = digits(values[0], 10) if len(values) == 1 else None
+        if guid is None or not 0 < guid <= 0xFFFFFFFF or set(req.query) != {"guid"}:
+            return json_response(400, {"ok": False, "error": "guid: one member's guid"})
+        try:
+            view = await asyncio.to_thread(feed.read, self.s.data_dir / "mind.db",
+                insightview.insight_view, guid, data_dir=self.s.data_dir, now=self._clock())
+        except Exception:
+            return json_response(503, {"ok": False, "error": "Insight could not read mind.db."})
+        return json_response(200, view)
+
+    async def _api_claim_check(self, req: Request):
+        # POST keeps the typed line out of URL/history/access logs. It is still a read,
+        # available with --no-control, under the same key/Host/Origin gate as other POSTs.
+        try:
+            args = endpoint.claim_check_args(req.json())
+        except endpoint.BadRequest as exc:
+            return json_response(400, {"ok": False, "error": str(exc)})
+        if self.view.state != "running" or self.link is None:
+            return json_response(409, {"ok": False, "error": "The mind is not available for a claim check."})
+        try:
+            reply = await asyncio.to_thread(self.link.call, self._mind_pids(), "claim_check", args,
+                                           timeout=LIBRARY_S)
+        except LinkError:
+            return json_response(409, {"ok": False, "error": "The mind's claim-check endpoint could not be reached."})
+        if reply.get("ok") is not True and str(reply.get("error", "")).startswith(OLD_OPS):
+            reply = {"ok": False, "error": "This mind does not support claim checks yet."}
+        return json_response(200 if reply.get("ok") is True else 409, reply)
 
     async def _api_face(self, req: Request):
         guids, sizes = req.query.get("guid", []), req.query.get("size", [])
