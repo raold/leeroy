@@ -740,6 +740,14 @@ class MindApp:
             self._spoke_at[chat.from_guid] = self.clock.now()
         self._queue_closed(self.threads.on_line_sent(line_id, chat))
 
+    def on_his_discord_line(self, line_id: int, chat: Chat, ts: float) -> None:
+        """The desk's hook for his Discord post's chat line (discord.desk): it joins its thread
+        as his game lines do, so memory, the secrecy he asks for and the night read both sides
+        of the talk there (ruling R7). Nothing else of _on_chat happens: the world's history,
+        the bystander clock, his activity and any answer in the game stay as they were (ruling
+        R11); the members' answers are discord.talk's."""
+        self._queue_closed(self.threads.add(line_id, chat, ts))
+
     async def _call_hooks(self, kind: str, hooks: list, *args) -> None:
         for hook in list(hooks):
             try:

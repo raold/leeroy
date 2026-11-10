@@ -1,11 +1,23 @@
 """His Discord actions: the control endpoint's `discord` op (endpoint.discord_args checks and
 cleans the arguments), then DiscordDesk.handle, which writes through discord.store as him, origin
 human. None of it needs him in game. Logs carry the action, the channel id and the outcome, never
-a text, an emoji or a name."""
+a text, an emoji or a name.
+
+His post is also a chat line of his, as the members' answers are (ruling R7): origin human, on the
+talk's channel (`discord:<id>`, a DM's `dm:<guid>` as it is), to a DM's member, with the world's
+audience for it, stored with the message in one transaction. The app threads it
+(MindApp.on_his_discord_line), so threads, the secrecy he asks for (memory.privacy), confide and
+the night read both sides of the talk, a DM exactly as a whisper. It has no session and moves no
+game clock: no world history, no bystander clock, no AFK or login quiet (ruling R11), and nothing
+of it reaches the game."""
+import logging
+
 from leeroy_mind.discord import layout
 from leeroy_mind.discord import store as dstore
+from leeroy_mind.discord.channels import CHANNEL_PREFIX
 from leeroy_mind.discord.store import DiscordRefused
 from leeroy_mind.logs import log as log_event
+from leeroy_mind.protocol import Chat
 
 STOPPING = "The mind is stopping."
 NO_HUMAN = "The mind doesn't know who you are yet."
@@ -72,9 +84,16 @@ class DiscordDesk:
         store, now, action = app.store, app.clock.now(), args["action"]
         if action == "post":
             self._check_dm(args["channel"], me)
-            mid = dstore.post(store, channel=args["channel"], author=me, origin="human",
-                              text=args["text"], reply_to=args.get("reply_to"),
-                              thread=args.get("thread"), now=now)
+            with store.transaction():
+                mid = dstore.post(store, channel=args["channel"], author=me, origin="human",
+                                  text=args["text"], reply_to=args.get("reply_to"),
+                                  thread=args.get("thread"), now=now)
+                line, chat = self._his_line(mid, me, now)
+            try:
+                app.on_his_discord_line(line, chat, now)
+            except Exception as e:  # the post is stored: its answers still come
+                log_event("discord_thread_failed", level=logging.WARNING, message=mid, line=line,
+                          error=type(e).__name__)
             hook = getattr(app, "discord_talk", None)
             if hook is not None:
                 hook.on_his_post(mid)
@@ -98,6 +117,22 @@ class DiscordDesk:
             dstore.unpin(store, message)
         self._his_action()
         return {"ok": True}
+
+    def _his_line(self, message: int, me: int, now: float) -> tuple[int, Chat]:
+        """His stored post `message` as his chat line (the module docstring), in the caller's
+        transaction; its id and the Chat it was stored from."""
+        store = self.app.store
+        channel, text = store.conn.execute(
+            "SELECT channel, text FROM discord_message WHERE id = ?", (message,)).fetchone()
+        peer = layout.dm_peer(channel)
+        place, to = (channel, peer) if peer is not None else (CHANNEL_PREFIX + channel, 0)
+        chat = Chat(ts=int(now * 1000), channel=place, from_guid=me,
+                    from_name=store.get_meta("human_name") or "", to_guid=to, text=text, map=0,
+                    zone=0)
+        line = store.insert_chat_line(
+            chat, session_id=None, origin="human", ts=now,
+            audience=self.app.world.audience(place, from_guid=me, to_guid=to))
+        return line, chat
 
     def _his_action(self) -> None:
         """An action of his other than a post keeps his Discord lease (discord.talk)."""

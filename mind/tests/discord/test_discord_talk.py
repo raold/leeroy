@@ -506,7 +506,8 @@ def test_his_other_actions_keep_the_lease(store, clock, tmp_path):
         arbiter = FakeArbiter()
         talk = talk_for(rig, arbiter=arbiter)
         app = SimpleNamespace(store=store, clock=clock, stopping=False, human_guid=HUMAN,
-                              discord_talk=talk)
+                              discord_talk=talk, world=rig.world,
+                              on_his_discord_line=lambda line, chat, ts: None)
         desk = DiscordDesk(app)
         r = await desk.handle(discord_args({"action": "post", "channel": "general",
                                             "text": "hi all"}))

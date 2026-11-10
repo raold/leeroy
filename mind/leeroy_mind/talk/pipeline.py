@@ -999,7 +999,7 @@ class Pipeline:
         elif turn.trigger_line:
             rows = self.store.chat_lines([turn.trigger_line])
             query = trigger = rows[0].text if rows and self._may_carry(turn, rows[0]) else ""
-        elif meta.recall_query:  # his Discord post, which no chat line holds (discord.talk)
+        elif meta.recall_query:  # his Discord post and its thread, no trigger line (discord.talk)
             query = meta.recall_query
         elif turn.kind is TurnKind.OPEN and meta.topic:
             query = meta.topic  # what she will bring up, not what the chat said

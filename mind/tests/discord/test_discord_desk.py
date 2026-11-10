@@ -1,15 +1,18 @@
 """His Discord actions: the strict arguments (endpoint.discord_args) and the desk that writes them
 as him. Scratch databases and invented text only."""
 import asyncio
+import json
 import logging
 from types import SimpleNamespace
 
 import pytest
 
-from conftest import HUMAN, seed_test_cast
+from conftest import HUMAN, OFFICERS, seed_test_cast
 from leeroy_mind.discord import store as dstore
 from leeroy_mind.discord.desk import WORDS, DiscordDesk
 from leeroy_mind.endpoint import BadRequest, discord_args
+from leeroy_mind.memory.threads import ThreadTracker
+from leeroy_mind.talk.world import WorldView
 
 SECRET = "INVENTEDDISCORDTEXT"
 
@@ -22,13 +25,28 @@ class Talk:
         self.seen.append(message_id)
 
 
+def desk_app(store, clock, **kw):
+    """What the desk uses of the app: the store and clock, his guid, the world (for a line's
+    audience) and the app's threading hook (MindApp.on_his_discord_line), over a real
+    ThreadTracker."""
+    world = WorldView(is_officer=lambda g: g in OFFICERS, discord_roster=store.cast)
+    world.human_guid = HUMAN
+    threads = ThreadTracker(store)
+    a = SimpleNamespace(store=store, clock=clock, stopping=False, human_guid=HUMAN, world=world,
+                        threads=threads, closed=[], **kw)
+
+    def on_his_discord_line(line, chat, ts):
+        if (closed := threads.add(line, chat, ts)) is not None:
+            a.closed.append(closed)
+    a.on_his_discord_line = on_his_discord_line
+    a.discord = DiscordDesk(a)
+    return a
+
+
 @pytest.fixture
 def app(store, clock):
     seed_test_cast(store)
-    a = SimpleNamespace(store=store, clock=clock, stopping=False, human_guid=HUMAN,
-                        discord_talk=Talk())
-    a.discord = DiscordDesk(a)
-    return a
+    return desk_app(store, clock, discord_talk=Talk())
 
 
 def ask(app, **args):
@@ -152,3 +170,69 @@ def test_logs_carry_no_text_or_emoji(app, caplog):
     actions = [record.leeroy_fields for record in caplog.records
                if getattr(record, "leeroy_event", None) == "discord"]
     assert all(row["message"] == r["id"] for row in actions if row["action"] in ("react", "edit"))
+
+
+def his_lines(store):
+    return [dict(r) for r in store.conn.execute(
+        "SELECT id, ts, channel, from_guid, from_name, to_guid, text, session_id, origin, "
+        "audience, thread_id FROM chat_line WHERE origin = 'human' ORDER BY id")]
+
+
+def test_his_post_is_also_his_chat_line(app, store, clock):
+    """Ruling R7: his post is a chat line of his as the members' answers are, on the talk's
+    channel, to a DM's member, with the world's audience, threaded by the app's hook."""
+    store.set_meta("human_name", "Testmage")
+    g = ask(app, action="post", channel="general", text="  raid at eight\r\nbring flasks  ")
+    d = ask(app, action="post", channel="dm:102", text="dont tell anyone but i might quit")
+    o = ask(app, action="post", channel="officer-chat", text="bank is low")
+    general, dm, officers = his_lines(store)
+    stored = {m["id"]: m["text"] for c in ("general", "dm:102", "officer-chat")
+              for m in dstore.messages(store.conn, c)}
+    assert [(x["channel"], x["to_guid"], x["text"]) for x in (general, dm, officers)] == [
+        ("discord:general", 0, stored[g["id"]]), ("dm:102", 102, stored[d["id"]]),
+        ("discord:officer-chat", 0, stored[o["id"]])]
+    assert general["text"] == "raid at eight\nbring flasks"
+    assert all(x["from_guid"] == HUMAN and x["from_name"] == "Testmage" and x["ts"] == clock.now()
+               and x["session_id"] is None for x in (general, dm, officers))
+    assert json.loads(general["audience"]) == [HUMAN, 101, 102, 103, 104, 105]
+    assert json.loads(dm["audience"]) == [HUMAN, 102]
+    assert json.loads(officers["audience"]) == [HUMAN, *sorted(OFFICERS)]
+    keys = dict(store.conn.execute("SELECT id, key FROM chat_thread"))
+    assert [keys[x["thread_id"]] for x in (general, dm, officers)] == [
+        "discord:general", "dm:102", "discord:officer-chat"]
+
+
+def test_his_post_moves_no_game_clock(app, store, clock):
+    """Ruling R11: the line has no session and leaves the world's history, his activity and
+    every member's last line alone."""
+    sid = store.start_session(clock.now() - 60)
+    world = app.world
+    before = (world.human_last_active, world.human_zone, dict(world.last_spoke))
+    ask(app, action="post", channel="dm:101", text="you around?")
+    ask(app, action="post", channel="general", text="anyone?")
+    assert not world.history
+    assert (world.human_last_active, world.human_zone, dict(world.last_spoke)) == before
+    assert store.session_last_activity(sid) == clock.now() - 60
+    assert all(x["session_id"] is None for x in his_lines(store))
+
+
+def test_a_refused_post_stores_no_line(app, store, clock):
+    a = ask(app, action="post", channel="general", text="hi")["id"]
+    ask(app, action="delete", message=a)
+    assert ask(app, action="post", channel="general", text="re", reply_to=a)["ok"] is False
+    assert ask(app, action="post", channel="dm:999", text="psst")["ok"] is False
+    assert ask(app, action="react", message=a, emoji="\U0001F44D")["ok"] is False
+    assert [x["text"] for x in his_lines(store)] == ["hi"]  # the first post's line stays
+    assert store.conn.execute("SELECT count(*) FROM discord_message").fetchone()[0] == 1
+
+
+def test_his_line_and_its_message_are_one_write(app, store, monkeypatch):
+    """A chat line that cannot be stored takes his message with it: no post without its line."""
+    def broken(*a, **k):
+        raise RuntimeError("disk full")
+    monkeypatch.setattr(store, "insert_chat_line", broken)
+    with pytest.raises(RuntimeError):
+        asyncio.run(app.discord.handle(discord_args({"action": "post", "channel": "general",
+                                                     "text": "hi"})))
+    assert store.conn.execute("SELECT count(*) FROM discord_message").fetchone()[0] == 0
+    assert app.discord_talk.seen == []

@@ -1,12 +1,26 @@
 """The guild's Discord in memory and the night (ruling R7): a DM (`dm:<guid>`) is private exactly
 as a whisper is, and a line on an officers' Discord channel is known to that channel's audience
-alone, never passed on and never public. Invented text only."""
+alone, never passed on and never public. His Discord lines are written as production writes
+them: through the desk (DiscordDesk.handle, as the control endpoint's discord op calls it) and
+the app's threading hook; a member's line as the pipeline records it, then threaded. Invented
+text only."""
+import asyncio
 import sqlite3
+from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
-from conftest import make_mem, run
-from leeroy_mind.discord.channels import (is_discord, is_private, is_public, is_restricted,
-                                          private_sql)
+from conftest import HUMAN, TEST_CAST, make_mem, run, seed_test_cast
+from conftest import OFFICERS as OFFICER_GUIDS
+from engine_rig import save_member
+from leeroy_mind.app import GUILD_ID, MindApp
+from leeroy_mind.config import load_config
+from leeroy_mind.discord import store as dstore
+from leeroy_mind.discord.channels import (channel_id, is_discord, is_private, is_public,
+                                          is_restricted, private_sql)
+from leeroy_mind.discord.desk import DiscordDesk
+from leeroy_mind.endpoint import discord_args
 from leeroy_mind.llm.scheduler import LLMScheduler
 from leeroy_mind.memory.extract import Extractor
 from leeroy_mind.memory.privacy import Scope, derive_scope
@@ -16,10 +30,16 @@ from leeroy_mind.memory.writer import Embedder, MemoryCandidate, MemoryWriter
 from leeroy_mind.nightly import gossip, knowledge, lexicon, relations, stories, vocab
 from leeroy_mind.nightly.audience import audience_of
 from leeroy_mind.nightly.knowledge import _learn_audiences
-from leeroy_mind.protocol import Chat
+from leeroy_mind.protocol import Chat, Member
+from leeroy_mind.storage.db import open_db
 from leeroy_mind.storage.rows import pack_vec
+from leeroy_mind.storage.store import Store
+from leeroy_mind.talk.world import WorldView
+from leeroy_mind.testing.fake_bridge import FakeBridge, load_fixture
+from leeroy_mind.testing.fake_clock import FakeClock
 from leeroy_mind.testing.fake_llm import FakeLLM, fake_embed
 from nightly.conftest import IDENT
+from tests.discord.test_discord_talk import FakeAdmin
 
 DM = "dm:102"
 OFFICERS = "discord:officer-chat"
@@ -27,18 +47,42 @@ GENERAL = "discord:general"
 OFFICER_AUDIENCE = (1, 102, 104)
 
 
+def desk(h) -> DiscordDesk:
+    """The desk over the harness's store, as MindApp builds it: the world for a line's audience,
+    and a ThreadTracker behind the app's threading hook (MindApp.on_his_discord_line), shared
+    with the members' lines (put)."""
+    if not hasattr(h, "desk"):
+        world = WorldView(is_officer=lambda g: g in OFFICER_GUIDS, discord_roster=h.store.cast)
+        world.human_guid = h.human
+        h.threads = ThreadTracker(h.store)
+        h.desk = DiscordDesk(SimpleNamespace(
+            store=h.store, clock=h.clock, stopping=False, human_guid=h.human, world=world,
+            on_his_discord_line=lambda line, chat, ts: h.threads.add(line, chat, ts)))
+    return h.desk
+
+
 def put(h, t, guid, text, channel, *, to=0, audience=None) -> int:
-    """A stored line on `channel` (with its audience, as the pipeline records one), and for a
-    member's line the utterance that goes with it."""
+    """A line on `channel` at `t`, written as production writes it: his Discord post through
+    the desk (the chat line it stores), anything else stored (with its audience, as the
+    pipeline records one; a member's line with its utterance) and threaded."""
     h.clock.set(t)
+    d = desk(h)
+    if guid == h.human and is_discord(channel):
+        r = run(d.handle(discord_args({"action": "post", "channel": channel_id(channel),
+                                       "text": text})))
+        assert r["ok"], r
+        return h.store.conn.execute(
+            "SELECT max(id) FROM chat_line WHERE origin = 'human'").fetchone()[0]
     origin = "human" if guid == h.human else "mind"
     sid = h.store.open_session()
-    line = h.store.insert_chat_line(
-        Chat(ts=int(t * 1000), channel=channel, from_guid=guid, from_name=h._name(guid),
-             to_guid=to, text=text, map=0, zone=0),
-        session_id=sid, origin=origin, audience=audience)
+    chat = Chat(ts=int(t * 1000), channel=channel, from_guid=guid, from_name=h._name(guid),
+                to_guid=to, text=text, map=0, zone=0)
+    line = h.store.insert_chat_line(chat, session_id=sid, origin=origin, audience=audience)
     if origin == "mind":
         h.store.log_utterance(t, guid, channel, "reply_human", text, [], None, sid, to_guid=to)
+        h.threads.on_line_sent(line, chat)
+    else:
+        h.threads.add(line, chat, t)
     return line
 
 
@@ -70,13 +114,18 @@ def test_which_channels_are_private_restricted_and_public():
 
 
 def test_a_dm_is_scoped_like_a_whisper(h):
+    """His DM goes through the desk; her answer is threaded with it, so a thread where he asked
+    for secrecy makes her answer secret too, and an earlier thread of theirs stays private
+    (privacy._secret_threads: an ask never reaches back)."""
     his = put(h, h.T, 1, "my sister is getting married next month", DM, to=102)
-    asked = put(h, h.T + 10, 1, "dont tell anyone but i might quit", DM, to=102)
-    hers = put(h, h.T + 20, 102, "aw congrats to her", DM, to=1)
-    guild = put(h, h.T + 30, 1, "raid at eight tonight", "guild")
+    asked = put(h, h.T + 200, 1, "dont tell anyone but i might quit", DM, to=102)
+    hers = put(h, h.T + 210, 102, "aw no, ok, my lips are sealed", DM, to=1)
+    guild = put(h, h.T + 230, 1, "raid at eight tonight", "guild")
     conn = h.store.conn
+    threads = dict(conn.execute("SELECT id, thread_id FROM chat_line"))
+    assert threads[asked] == threads[hers] != threads[his]
     assert derive_scope(conn, 102, [f"chat:{his}"]) == Scope("private", 1, False)
-    assert derive_scope(conn, 102, [f"chat:{hers}"]) == Scope("private", 1, False)
+    assert derive_scope(conn, 102, [f"chat:{hers}"]) == Scope("secret", 1, False)
     assert derive_scope(conn, 102, [f"chat:{asked}"]).scope == "secret"
     assert derive_scope(conn, 103, [f"chat:{his}"]) == Scope("private", 0, False)
     assert derive_scope(conn, 102, [f"chat:{guild}"]) == Scope(public=True)
@@ -279,3 +328,91 @@ def test_private_sql_takes_a_column_name_only():
         except ValueError:
             continue
         raise AssertionError(bad)
+
+
+# -- end to end: a real mind, his DM through its control endpoint's discord op ------------------
+
+CAST = load_fixture(Path(__file__).parents[1] / "fixtures" / "session_basic.jsonl")[1]
+SEALED = "aw no ok, my lips are sealed"
+
+
+def test_his_dm_asking_secrecy_makes_her_answer_secret_end_to_end(tmp_path):
+    """The final review's probe, through the real desk path: a real MindApp (fake bridge, model
+    and model admin, ephemeral ports), his DM "dont tell anyone but i might quit the guild" sent
+    to its control endpoint's discord op while he is out of the game, and her answer composed,
+    typed and stored by the talk pipeline. His post is his chat line in her DM's thread, so the
+    thread asked for secrecy and her answer is secret, as the same exchange in a whisper would
+    be; the night's ledger reads it so. Nothing reaches the game and no game clock moves."""
+    data = tmp_path / "data"
+    data.mkdir()
+
+    async def go():
+        clock = FakeClock(datetime(2026, 11, 5, 20, tzinfo=ZoneInfo("America/New_York")),
+                          yields=64)
+        bridge = FakeBridge([{"type": "hello", "server": "mod-leeroy", "version": "0.1.0",
+                              "guild_id": GUILD_ID, "human_guid": 0}, CAST])
+        port = await bridge.start()
+        (data / "mind.toml").write_text(
+            f"[bridge]\nport = {port}\n[talk]\nchattiness = 0\n"
+            '[human]\nnickname = "Hero"\n', encoding="utf-8")
+        store = Store(open_db(data / "mind.db"), clock=clock)
+        try:
+            seed_test_cast(store)
+            for guid in TEST_CAST:
+                save_member(store, guid, region="US")
+            store.set_meta("human_guid", str(HUMAN))
+            store.set_meta("human_name", "Testmage")
+            store.upsert_cast([Member(guid=HUMAN, name="Testmage", race=10, class_=8, gender=0,
+                                      level=80, rank=0, online=False, map=0, zone=0,
+                                      spec_tab=-1)], clock.now())
+        finally:
+            store.close()
+        cfg = load_config(data / "mind.toml")
+        llm = FakeLLM(lambda *_: SEALED,
+                      models={cfg.models.live, cfg.models.reflection, cfg.models.embedding})
+        app = MindApp(cfg, data, llm=llm, clock=clock, rng_seed=1)
+        app.arbiter.admin = FakeAdmin([cfg.models.embedding])
+        task = asyncio.create_task(app.run())
+        try:
+            async with asyncio.timeout(10):
+                while not (app.running and bridge.connections and app.world.members):
+                    await asyncio.sleep(0.01)
+            assert not app.world.human_online
+            active, spoke = app.world.human_last_active, dict(app._spoke_at)
+            sent = await app.control.discord(discord_args({
+                "action": "post", "channel": "dm:102",
+                "text": "dont tell anyone but i might quit the guild"}))
+            assert sent["ok"], sent
+            conn = app.store.conn
+            for _ in range(120):
+                answer = [m for m in dstore.messages(conn, "dm:102")
+                          if m["origin"] == "mind" and m["reply_to"] == sent["id"]]
+                if answer:
+                    break
+                await clock.advance(1, 1)
+                await asyncio.sleep(0.005)
+            else:
+                raise AssertionError("no answer to his DM")
+            assert answer[0]["author"] == 102
+            rows = [dict(r) for r in conn.execute(
+                "SELECT id, channel, from_guid, to_guid, origin, session_id, thread_id, text "
+                "FROM chat_line WHERE channel = 'dm:102' ORDER BY id")]
+            conn.commit()
+            his, hers = rows
+            assert (his["origin"], his["from_guid"], his["to_guid"], his["session_id"]) == (
+                "human", HUMAN, 102, None)
+            assert (hers["origin"], hers["from_guid"], hers["to_guid"]) == ("mind", 102, HUMAN)
+            assert his["thread_id"] is not None and his["thread_id"] == hers["thread_id"]
+            assert derive_scope(conn, 102, [f"chat:{hers['id']}"]) == Scope("secret", HUMAN)
+            assert knowledge.is_secret(app.store, f"chat:{hers['id']}")
+            conn.commit()
+            # nothing reached the game, and no game clock moved (ruling R11)
+            assert not [c for c in bridge.commands if c["type"] in ("say", "emote")]
+            assert not [s for s in app.world.history if is_discord(s.row.channel)]
+            assert app.world.human_last_active == active and app._spoke_at == spoke
+            assert app.store.open_session() is None
+        finally:
+            await app.stop()
+            await asyncio.wait_for(task, 10)
+            await bridge.stop()
+    asyncio.run(go())

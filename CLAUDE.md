@@ -1147,8 +1147,12 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   retryable. The first bridge cast drops this cache and takes over, even when empty;
   removed members cannot return from the saved roster. A roster read failure leaves
   no fallback members and logs only the exception class.
-- DMs have whisper privacy. Officer-only and unknown channels are restricted;
-  restricted evidence stays restricted through derived memories, notes and recall.
+- DMs have whisper privacy. The desk also stores each owner post as his chat line
+  (origin human, no session, the talk's channel id, a DM's member as `to_guid`), threaded
+  with the members' answers, so a DM where he asks for secrecy is secret exactly as a
+  whisper; it moves no game clock and never reaches WoW. Officer-only and unknown
+  channels are restricted; restricted evidence stays restricted through derived
+  memories, notes and recall.
   Unknown audiences fail closed, and the storage transport checks its speaker's
   audience again. Logs contain action/channel/message ids, counts and outcome codes,
   never message text or emoji.
