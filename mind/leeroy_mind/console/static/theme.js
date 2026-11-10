@@ -7,4 +7,10 @@
     try { value = JSON.parse(raw); } catch (e) { value = raw; }
     if (value === "light" || value === "dark") { document.documentElement.dataset.theme = value; }
   } catch (e) { /* storage off: keep the default */ }
+  // Members' photos hidden (the strip's Hide photos), before the first paint so none flashes
+  try {
+    var shown = localStorage.getItem("guild-console-photos"), mode = shown;
+    try { mode = JSON.parse(shown); } catch (e) { mode = shown; }
+    if (mode === "hidden") { document.documentElement.dataset.photos = "hidden"; }
+  } catch (e) { /* storage off: photos shown */ }
 })();

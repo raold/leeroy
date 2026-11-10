@@ -465,19 +465,24 @@ Normal update cycle:
 
 ### Stopping the server cleanly
 
-`ac-server.sh stop` **terminates** worldserver. It cannot do better: worldserver
-is a console app that ignores `WM_CLOSE`, and this install has both remote
-channels off (`Ra.Enable = 0`, `SOAP.Enabled = 0`), so nothing can ask it to
-shut down from a script. Verified on 2026-10-06 — the polite request was
-ignored by both servers.
+worldserver is a console app that ignores `WM_CLOSE` (verified 2026-10-06), so a
+clean stop needs its remote console. Since 2026-11-10 the live `worldserver.conf`
+has `SOAP.Enabled = 1` on `127.0.0.1:7890` (not the default 7878, which is the
+mod-leeroy bridge) and `Ra.Enable = 1` on `127.0.0.1:3443` (its default `0.0.0.0`
+changed to loopback). Both log in as the dedicated GM-3 account `LEEROYCONSOLE`,
+whose credentials live only in `%LOCALAPPDATA%\leeroy\remote-console.cnf`
+(`user=`, `password=`, `soap=127.0.0.1:7890`, `ra=127.0.0.1:3443`; readable by the
+owner's user only; never in the repo or a log).
 
-If characters are online, type this in the worldserver console window first:
-
-```
-server shutdown 30
-```
-
-Setting `SOAP.Enabled = 1` would let the script do a real graceful shutdown.
+`scripts/ac-soap.py <command>` sends one console command over SOAP and prints the
+answer (exit 0 answered, 1 refused/faulted/no answer, 2 not set up; loopback only;
+`LEEROY_REMOTE_CONSOLE` names another credentials file). `ac-server.sh stop` uses
+it: `server shutdown <delay>` (`AC_SHUTDOWN_DELAY`, default 30 s while a player is
+connected, else 1 s), then waits up to `AC_SHUTDOWN_WAIT` (180 s) for it to save
+every character and exit. Without SOAP, or if it does not exit in time, it is
+terminated as before, keeping only what the server last saved; in that case type
+`server shutdown 30` in its console window first if characters are online.
+`bash scripts/tests/ac-soap.sh` tests the client against a fake loopback server.
 
 ## Modules
 
@@ -1091,7 +1096,9 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   with no inline style. Dark is the default whatever the system setting; the
   light/dark switch is remembered in `localStorage` (`guild-console-theme`,
   with the folds and read marks, `guild-console-collapsed` and
-  `guild-console-read`). It has 14 tabs (Comms, Raid, Guild, Personas, Social,
+  `guild-console-read`). Beside it, Hide photos (`guild-console-photos`, applied before the first
+  paint) draws every member's face as initials without asking for the photo, and blanks any
+  other photo (the gallery, the selfie picker) until it is switched back. It has 14 tabs (Comms, Raid, Guild, Personas, Social,
   Board, Calendar, Bank, Realm, Training, Dojo, Library, Ops, Mind); each polls only
   while it is open and the page is visible, one request at a time. Ordinary reads have a
   30 s browser deadline, actions 120 s (long enough for a clean stop); an unanswered action

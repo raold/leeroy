@@ -12,6 +12,9 @@
 //
 // A photo picked or undone (a "selfie" event, from this page or another) is that member's photo
 // no longer: every size of it is asked for again at its next draw.
+//
+// While the strip's Hide photos is on (html[data-photos="hidden"]) every face is its initials
+// and no photo is asked for; redrawFaces puts the faces on screen right when it is flipped.
 import { api, el, on } from "./core.mjs";
 import { FaceCache } from "./facecache.mjs";
 import { deadline } from "./resilience.mjs";
@@ -50,14 +53,26 @@ var cache = new FaceCache({ load: loadFace, drop: function (p) { URL.revokeObjec
 
 export function forgetFaces() { cache.forget(); }
 
+export function photosHidden() {
+  var root = typeof document === "undefined" ? null : document.documentElement;
+  return !!(root && root.dataset && root.dataset.photos === "hidden");
+}
+
+function redraw(selector) {
+  document.querySelectorAll(selector).forEach(function (node) {
+    var spec = node.faceSpec;
+    if (spec && node.parentNode) { node.parentNode.replaceChild(face(spec.guid, spec.name, spec.kind, spec.opts), node); }
+  });
+}
+
+// Every face on screen drawn again, as photos or initials (Hide photos was flipped)
+export function redrawFaces() { redraw("[data-face-guid]"); }
+
 on("selfie", function (d) {
   if (!d || d.action === "more" || !(typeof d.guid === "number" && Number.isInteger(d.guid) && d.guid > 0)) { return; }
   Object.keys(KINDS).forEach(function (k) { cache.forgetKey(d.guid + ":" + KINDS[k].size); });
   // Refresh faces already on screen too; some tabs otherwise wait for their next poll.
-  document.querySelectorAll('[data-face-guid="' + d.guid + '"]').forEach(function (node) {
-    var spec = node.faceSpec;
-    if (spec && node.parentNode) { node.parentNode.replaceChild(face(spec.guid, spec.name, spec.kind, spec.opts), node); }
-  });
+  redraw('[data-face-guid="' + d.guid + '"]');
 });
 
 function photo(p, cls) {
@@ -81,10 +96,11 @@ export function face(guid, name, kind, opts) {
     return node;
   }
   tracked(box);
+  if (photosHidden()) { return box; }
   var key = g + ":" + k.size, known = cache.peek(key), asked = cache.get(key);
   if (known) { return tracked(photo(known, cls)); }  // a reload serves the next draw
   asked.then(function (p) {
-    if (p && box.parentNode) { box.parentNode.replaceChild(tracked(photo(p, cls)), box); }
+    if (p && box.parentNode && !photosHidden()) { box.parentNode.replaceChild(tracked(photo(p, cls)), box); }
   });
   return box;
 }
