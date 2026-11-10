@@ -219,7 +219,9 @@ def test_a_preview_goes_only_to_the_page_that_asked(cast, data, caplog):
 def test_the_page_has_the_tuning_and_its_only_write_is_the_tune_route():
     page = page_source()
     assert 'id="p-tuning"' in page and 'api("/api/tuning")' in page
-    assert 'post("/api/tune"' in page and 'post("/api/persona' not in page
+    assert 'post("/api/tune"' in page
+    # The claim-check POST is an ephemeral read, not a persona mutation.
+    assert 'post("/api/persona' not in page.replace('post("/api/persona/check"', '')
     assert 'post("/api/selfies' not in page  # the photo pick's one write is post("/api/selfie"
     for later in ("crude", "loot greed", "raid comms", "patience"):
         assert later not in page.casefold()

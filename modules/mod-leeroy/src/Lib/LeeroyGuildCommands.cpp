@@ -3,6 +3,7 @@
 #include "LeeroyGuildCommands.h"
 #include "LeeroyProtocol.h"
 #include "LeeroyTrainingProtocol.h"
+#include "LeeroyPlayStyle.h"
 #include <algorithm>
 #include <charconv>
 #include <limits>
@@ -15,8 +16,8 @@ namespace
 using json = nlohmann::json;
 constexpr auto kU32Max = std::numeric_limits<std::uint32_t>::max();
 constexpr auto kNoListLimit = std::numeric_limits<std::size_t>::max();
-constexpr std::array<std::string_view, 9> kBotCommandActions = {
-    "co", "nc", "rti", "formation", "cast", "do", "use", "value", "restore"
+constexpr std::array<std::string_view, 10> kBotCommandActions = {
+    "co", "nc", "rti", "formation", "cast", "do", "use", "value", "restore", "playstyle"
 };
 constexpr std::array<std::string_view, 5> kRaidActions = {"ready_check", "dc_on", "dc_off", "dc_pause", "disband"};
 
@@ -335,6 +336,7 @@ bool BotDoParamAllowed(std::string_view action, std::string_view param)
     if (action == "do") return Contains(kBotActions, param);
     if (action == "value") return BotValueParamAllowed(param);
     if (action == "restore") return BotRestoreParamAllowed(param);
+    if (action == "playstyle") return PlayStyle::Parse(param).has_value();
     if (action == "use")
         return std::any_of(kStockItems.begin(), kStockItems.end(),
             [&](auto item) { return param == std::to_string(item); });
@@ -389,7 +391,7 @@ bool BotValueParamAllowed(std::string_view param)
 
 bool BotRestoreParamAllowed(std::string_view param)
 {
-    return param == "*" || CustomStrategyName(param) || Contains(Training::kTierTwoStrategies, param)
+    return param == "*" || param == "playstyle" || CustomStrategyName(param) || Contains(Training::kTierTwoStrategies, param)
         || Contains(Training::kTrainingValues, param);
 }
 

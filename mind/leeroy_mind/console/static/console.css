@@ -547,6 +547,18 @@ td > div.who { color: var(--ink); font-weight: 600; }
   .mindtab .formrow label:has(select) { flex: 1 1 100%; justify-content: space-between; }
   .mindtab .formrow select { min-width: 44px; max-width: calc(100% - 4em); }
 }
+
+/* Persona Insight */
+.insight-part { min-width: 0; padding-block: 10px; border-bottom: 1px solid var(--line); }
+.insight-card { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 var(--f-mono); }
+.insight-claims { padding-left: 20px; overflow-wrap: anywhere; }
+.insight-command, #insight-result { overflow-wrap: anywhere; }
+#insight-check { display: grid; gap: 10px; margin-top: 16px; min-width: 0; }
+#insight-line { width: 100%; min-width: 0; resize: vertical; padding: 10px;
+  font: inherit; color: var(--ink); background: var(--surface-2);
+  border: 1px solid var(--line); border-radius: var(--radius); }
+#insight-submit { justify-self: start; }
+.insight-badge { margin: 3px; background: var(--surface-2); color: var(--ink-2); }
 /* Task 25: temporary nudges, within the tuning panel. */
 .nudges { margin-block: 1rem; padding-block: .75rem; border-top: 1px solid var(--line); min-width: 0; }
 .nudge-field { display: flex; flex-direction: column; gap: .35rem; margin-block: .6rem; }

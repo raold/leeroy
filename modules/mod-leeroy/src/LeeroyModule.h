@@ -21,6 +21,7 @@ struct LeeroyConfig
     bool bringCastOnline = true;
     bool excludeFromOllamaChat = true;
     bool realmEnable = false;
+    bool playStyleEnable = false;
     uint32 realmMaxActionsPerTick = 5;
     bool realmAnnounce = true;
     bool castGuard = false;
