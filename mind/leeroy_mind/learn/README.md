@@ -83,7 +83,9 @@ uses the original insertion path.
 
 Recipes contain only the fixed template identifier/version, SHA-256 of effective
 member and world dial values, model identifier, guard verdict, and empty arm and
-lesson ID arrays. Template text, names, prompts and persona content are absent.
+lesson ID arrays. Dial values are captured at composition before any model wait;
+the model ID is captured at the actual call. A dial change during generation
+therefore cannot relabel the old prompt. Template text, names, prompts and persona content are absent.
 Template identifiers distinguish live, multi-line bit and supplied-template
 paths; supplied templates have model `none`. Version 1 identifies these base
 templates; future template changes must update their recipe version. Generation

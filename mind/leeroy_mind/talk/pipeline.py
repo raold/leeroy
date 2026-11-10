@@ -283,6 +283,7 @@ class TurnMeta:
     romance: bool = False
     memory_ids: list[int] = field(default_factory=list)
     llm_s: float | None = None  # the model's time on this turn, its retry included
+    recipe_snapshot: object | None = None  # optional numeric/identifier attribution at composition
     facts_line: int = 0
     two_lines: bool = False  # a whisper to him at the explicit band: a line or two
     emote_target: int = 0  # whom an emote in the line is aimed at by default (a birthday)
@@ -966,6 +967,9 @@ class Pipeline:
             raise ValueError(f"no persona for {turn.speaker}")
         dial = self.cfg.romance.dial if dial is None else dial
         rng = self.rng if live else self._compose_rng
+        if live and getattr(self, "learn_enabled", False):
+            from leeroy_mind.learn.recipe import describe
+            meta.recipe_snapshot = describe(turn, p, self.cfg)
         now = self.clock.now()
         human, hg = self.human, self.human.guid
         names = self._names(turn.channel)
@@ -1296,6 +1300,9 @@ class Pipeline:
             return self._drop(turn, meta, why)
         memory_ids: list[int] = []
         text = turn.template
+        if text is not None and getattr(self, "learn_enabled", False):
+            from leeroy_mind.learn.recipe import describe
+            meta.recipe_snapshot = describe(turn, p, self.cfg)
         if text is None:
             original_instruction = turn.instruction
             self._phase(turn, COMPOSING)
@@ -1606,7 +1613,11 @@ class Pipeline:
                 if meta is not None and meta.seed is not None:  # a tuning preview's
                     options["seed"] = meta.seed
                 self.timing.model(trace, attempt, "call")
-                return await llm.chat(self.cfg.models.live, messages, options=options,
+                model = self.cfg.models.live
+                if meta is not None and getattr(self, "learn_enabled", False):
+                    from leeroy_mind.learn.recipe import called_model
+                    called_model(meta, model)
+                return await llm.chat(model, messages, options=options,
                                       think=preset.think, timeout=preset.timeout)
             except asyncio.CancelledError:
                 outcome = "cancelled"
