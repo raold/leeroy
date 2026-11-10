@@ -1039,6 +1039,13 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   `[tuning] nudge_memories` (default true) offers ended everywhere intentions to
   reflection as past moods, never factual evidence; scoped ones are excluded.
   Details and storage keys: `mind/leeroy_mind/tuning/README.md`. No migration.
+  Optional `[signals] enabled=true` records numeric owner-response observations;
+  default/invalid is off. `signals status|member <guid>` is read-only; keyed
+  `feedback` replaces a line's vote. Values are normalized (`reply_latency_s`
+  is seconds/120, `reply_len` is codepoints/500 capped at 1). `judge_guard_*`
+  means historical screening, not a live action. General combat/rest telemetry
+  is absent, so ignored capture stays conservative. See
+  `mind/leeroy_mind/signals/README.md` for coverage, privacy and retention.
   The page is split into `console/static/` (CSS, a classic `theme.js`, ES
   modules, self-hosted OFL fonts with their licence texts) and is served at
   `/static/` without the key, like the page, since a browser cannot send a

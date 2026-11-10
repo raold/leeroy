@@ -77,6 +77,7 @@ from leeroy_mind.training.service import attach_training
 from leeroy_mind.realm.service import attach_realm
 from leeroy_mind.selfies.attach import attach_selfies
 from leeroy_mind.claims.attach import attach_claims
+from leeroy_mind.signals.attach import attach_signals
 from leeroy_mind.personas.attach import attach_personas
 from leeroy_mind.nightly.wiring import attach as attach_nightly
 from leeroy_mind.guild.service import install as install_guild
@@ -457,6 +458,7 @@ class MindApp:
         self.tuning = TuningService(self)  # the owner's dials: the control endpoint's tune op
         self.speech = OwnerSpeech(self)  # his own lines from the console: the say op
         self.board = BoardDesk(self)  # his Board replies from the console: the board op
+        self.signals = attach_signals(self)
         self.control = attach_control(self)
         self.realm = attach_realm(self)  # Last: tests/realm/test_realm_wiring.py
 
@@ -963,7 +965,10 @@ class MindApp:
         if origin != "human":
             return True  # game lines are kept in the log only
         self._note_human_name(ev.from_name)
-        if self.voice.echoes_command(ev) or his_command(ev.channel, ev.text):
+        command = self.voice.echoes_command(ev) or his_command(ev.channel, ev.text)
+        if not backlog and self.signals is not None:
+            self.signals.owner_line(line_id, len(ev.text), command=command, chat=ev)
+        if command:
             self.world.apply(ev, now)  # he is active, but a bot command is not talk
             return True
         row = self.store.chat_lines([line_id])[0]
