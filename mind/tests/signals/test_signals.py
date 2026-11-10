@@ -333,3 +333,25 @@ def test_cli_member_guid_is_uint32(tmp_path, guid, capsys):
     assert error.value.code == 2
     assert 'member guid must be' in capsys.readouterr().err
     assert not (tmp_path / 'mind.db').exists()
+
+
+def test_confirmed_muted_line_cannot_receive_later_emotes_or_interventions(store, clock):
+    async def go():
+        async with worker(store, clock) as c:
+            heard = line(store, clock, channel='voice:general')
+            observe(c, clock, 'sent', (heard,), (True, True, True))
+            await clock.advance(1)
+            muted = line(store, clock, channel='voice:general')
+            observe(c, clock, 'sent', (muted,), (True, True, True))
+            with store.transaction():
+                store.conn.execute('INSERT INTO voice_line(speak_id,line_id,room,state,reason,ts) VALUES(?,?,?,?,?,?)',
+                                   ('muted-followup', muted, 'general', 'dropped', 'muted', clock.now()))
+            observe(c, clock, 'muted', ('muted-followup',))
+            observe(c, clock, 'emote', (101,), ('emote_friendly',))
+            observe(c, clock, 'dial_down', (101,))
+            observe(c, clock, 'nudged_against', (101,))
+            await c.flush()
+            rows = saved(store)
+            assert {row[2] for row in rows if row[0] == muted} == {'muted'}
+            assert {row[2] for row in rows if row[0] == heard} == {'emote_friendly', 'dial_down', 'nudged_against'}
+    asyncio.run(go())

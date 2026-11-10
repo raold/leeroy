@@ -246,6 +246,7 @@ class Capture:
             if self._visible(line, owner):
                 S.put(conn, line['id'], line['from_guid'], 'muted', 1, now)
                 self.pending.pop(line['id'], None)
+                self.recent.pop(line['id'], None)
         elif kind in ('dial_down', 'nudged_against'):
             for guid in item.ids:
                 row = self._latest(conn, guid, owner, now, S.REPLY_SECONDS, item.values[0] if item.values else 'everywhere')

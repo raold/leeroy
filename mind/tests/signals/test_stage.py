@@ -2,7 +2,7 @@ import asyncio
 
 from tests.claims.conftest import context
 from leeroy_mind.signals import stage
-from .test_signals import line, saved
+from .test_signals import line, saved, worker
 
 
 def test_night_detects_repetition_and_filler_and_labels_guard_replay(context, store, clock, tmp_path):
@@ -96,4 +96,31 @@ def test_night_shared_claim_and_world_helpers_keep_time_and_pair_fences(context,
             assert not [r for r in rows if r[0] == public and r[2] == 'judge_contradiction']
             assert (old_world, 101, 'judge_unawareness', 1., 'judge') in rows
             assert not [r for r in rows if r[0] == future_world and r[2] == 'judge_unawareness']
+    asyncio.run(go())
+
+
+def test_embedding_wait_does_not_keep_a_stale_snapshot_across_capture_write(context, store, clock, tmp_path, monkeypatch):
+    from leeroy_mind.signals.capture import Observation
+    from leeroy_mind.storage.rows import pack_vec
+    async def go():
+        (tmp_path / 'mind.toml').write_text('[guards]\nenabled=true\nsemantic_enabled=true\n', encoding='utf-8')
+        async with context(parallel=1) as (ctx, _), worker(store, clock) as capture:
+            assert store.conn.autocommit is False
+            ctx.window = (clock.now() - 1, clock.now() + 1)
+            thread = store.open_thread('whisper:1:101', clock.now())
+            line(store, clock, 1, 'whisper', 101, 'where is the invented cart?', thread)
+            lid = line(store, clock, 101, 'whisper', 1, 'lol', thread)
+            async def embed(texts):
+                # A real second-connection commit during the await must not strand the
+                # application's read snapshot before its subsequent nightly write.
+                result = await capture.request(Observation('feedback', clock.now(), 1,
+                                                           (lid,), (1, ('funny',))))
+                assert result['ok']
+                return [pack_vec([1.] + [0.] * 511) for _ in texts]
+            monkeypatch.setattr(ctx, 'embed', embed)
+            await stage.stage_signals(ctx)
+            assert ctx.failures.get('signals', 0) == 0
+            assert ctx.done('signals', str(lid))
+            kinds = {row[2] for row in saved(store) if row[0] == lid}
+            assert {'explicit', 'reason_funny', 'judge_nonsequitur', 'judge_guard_react'} <= kinds
     asyncio.run(go())

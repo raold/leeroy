@@ -26,9 +26,11 @@ def _rows(conn, ctx):
 
 
 def _count(ctx):
-    if not S.available(ctx.store.conn):
-        return 0
-    return sum(not ctx.done('signals', str(row['id'])) for row in _rows(ctx.store.conn, ctx))
+    with ctx.store.transaction():
+        if not S.available(ctx.store.conn):
+            return 0
+        rows = _rows(ctx.store.conn, ctx)
+    return sum(not ctx.done('signals', str(row['id'])) for row in rows)
 
 
 register_counter('signals', _count)
@@ -36,19 +38,20 @@ register_counter('signals', _count)
 
 async def stage_signals(ctx):
     conn = ctx.store.conn
-    if not S.available(conn):
-        return
     config_path = ctx.settings.data_dir / 'mind.toml'
     guards = load_guards_config(config_path)
     try:
         claims = load_claims_config(config_path).enabled
     except ConfigError:
         claims = False
-    try:
-        facts = unawareness.load_facts(conn)
-    except sqlite3.OperationalError:
-        facts = None
-    rows = {str(row['id']): row for row in _rows(conn, ctx)}
+    with ctx.store.transaction():
+        if not S.available(conn):
+            return
+        try:
+            facts = unawareness.load_facts(conn)
+        except sqlite3.OperationalError:
+            facts = None
+        rows = {str(row['id']): row for row in _rows(conn, ctx)}
 
     async def one(unit):
         try:
@@ -59,10 +62,13 @@ async def stage_signals(ctx):
                 return
             # Only reciprocal directed adjacency is evidence of a parent; plain guild
             # adjacency must not invent a conversation or a private source relationship.
-            context = conn.execute('SELECT id,ts,from_guid,to_guid,text FROM chat_line '
-                'WHERE thread_id=? AND channel=? AND id<? AND ts BETWEEN ? AND ? '
-                'ORDER BY ts DESC,id DESC LIMIT 16', (row['thread_id'], channel, row['id'],
-                    row['ts'] - 300, row['ts'])).fetchall() if row['thread_id'] else []
+            # Complete every read snapshot before yielding to embeddings: Capture has
+            # its own WAL writer and may commit while this coroutine is suspended.
+            with ctx.store.transaction():
+                context = conn.execute('SELECT id,ts,from_guid,to_guid,text FROM chat_line '
+                    'WHERE thread_id=? AND channel=? AND id<? AND ts BETWEEN ? AND ? '
+                    'ORDER BY ts DESC,id DESC LIMIT 16', (row['thread_id'], channel, row['id'],
+                        row['ts'] - 300, row['ts'])).fetchall() if row['thread_id'] else []
             parent = context[0] if context and row['to_guid'] > 0 and (
                 row['to_guid'] == context[0]['from_guid'] and row['from_guid'] == context[0]['to_guid']) else None
             vectors = {}
@@ -82,7 +88,9 @@ async def stage_signals(ctx):
             # Its history, private-audience and first_seen fences also apply to these hits.
             stores = GuardStores(conn, GuardsCfg(enabled=True, semantic_enabled=guards.semantic_enabled),
                                  claims_enabled=claims, vectors=vectors, facts=facts)
-            detected = review(stores, draft)
+            with ctx.store.transaction():
+                detected = review(stores, draft)
+                verdict = review(replace(stores, config=guards), draft) if guards.enabled else None
             kinds = []
             if REPETITION.intersection(detected.codes):
                 kinds.append('judge_repetition')
@@ -92,10 +100,8 @@ async def stage_signals(ctx):
                 kinds.append('judge_contradiction')
             if WORLD.intersection(detected.codes):
                 kinds.append('judge_unawareness')
-            if guards.enabled:
-                verdict = review(replace(stores, config=guards), draft)
-                if verdict.action in ('rewrite', 'drop', 'react'):
-                    kinds.append('judge_guard_' + verdict.action)
+            if verdict is not None and verdict.action in ('rewrite', 'drop', 'react'):
+                kinds.append('judge_guard_' + verdict.action)
 
             def write(store):
                 try:
