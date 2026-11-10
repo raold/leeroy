@@ -588,7 +588,23 @@ at the door, so it lets the first few in and sends the rest to their homebinds
 group raids for DKP and attendance like a called raid night (see the mind's
 guild life).
 
+Optional persona play styles require both `[playstyle] enabled = true` in the
+mind's `mind.toml` (restart to attach) and native `Leeroy.PlayStyle.Enable = 1`
+(`.reload config`). Both default off. This first map adds only ordinary potion use
+and a 2–6 s DPS wait-for-attack hold outdoors; tanks/healers get no added delay.
+It never shortens an existing active hold and leaves one above 6 s untouched.
+All dungeon/raid instances, raid groups, combat, PvP and conflicting controllers
+refuse additions; RaidHabits remain authoritative. Native checks actual bodies,
+roles and ownership after the ack. The independent style journal is restored by
+`bot_do restore` (`param="playstyle"` or `"*"`), native off/raid/PvP cleanup,
+and the mind's bounded shutdown drain. Unknown receipts remain in
+`playstyle:owned` for reconciliation; foreign ownership can leave cleanup pending.
+With an already attached mind, hello/login rereads the switch and queues undo when
+off. No model, prompt, gear, loot or raid strategy change is involved. See
+`mind/leeroy_mind/playstyle/README.md` for the deterministic map and limits.
+
 ### Local patch: pinned random bots
+
 
 Local commit `ecbfeb6b` on `mod-playerbots` `master` ("Let other modules pin
 random bots"). An API on `RandomPlayerbotMgr` that mod-leeroy uses to keep the
@@ -1026,7 +1042,13 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   night's looks pass or photo-kind pass, a stance move or an undo), open drift
   flags and the night's trait sample, and per member the persona card summary
   (its looks with the photo kind), ties, memories by kind and ledger; a table
-  an older mind.db lacks shows as unavailable. Its writes are the profile
+  an older mind.db lacks shows as unavailable. Persona Insight (`console/insightview.py`,
+  `insightreports.py`, `static/js/insight.mjs`; [guide](mind/leeroy_mind/console/INSIGHT.md))
+  adds bounded read-only claims, guild-context awareness and private audit-rate projections.
+  Its `claim_check` read op works with `--no-control` under key/Host/Origin gates, uses
+  only an already-resident embedding model, and never logs or stores typed text.
+  Guard verdict history is not persisted, so the panel explicitly says unavailable.
+  Its writes are the profile
   photos (see the selfie worker), his Board replies (below) and the tuning (`leeroy_mind/tuning/`,
   console `tuneview.py`): the
   owner's dials, stored in mind.db's `tuning_*` tables as an overlay that never
@@ -1048,6 +1070,13 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   `[tuning] nudge_memories` (default true) offers ended everywhere intentions to
   reflection as past moods, never factual evidence; scoped ones are excluded.
   Details and storage keys: `mind/leeroy_mind/tuning/README.md`. No migration.
+  Optional `[signals] enabled=true` records numeric owner-response observations;
+  default/invalid is off. `signals status|member <guid>` is read-only; keyed
+  `feedback` replaces a line's vote. Values are normalized (`reply_latency_s`
+  is seconds/120, `reply_len` is codepoints/500 capped at 1). `judge_guard_*`
+  means historical screening, not a live action. General combat/rest telemetry
+  is absent, so ignored capture stays conservative. See
+  `mind/leeroy_mind/signals/README.md` for coverage, privacy and retention.
   The page is split into `console/static/` (CSS, a classic `theme.js`, ES
   modules, self-hosted OFL fonts with their licence texts) and is served at
   `/static/` without the key, like the page, since a browser cannot send a
@@ -1068,7 +1097,29 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   counts, codes, identifiers and times; private health diagnostics stay in the CLI.
   Saved running nights may be paused, unretained progress stays unknown, desk dates
   mean recorded operations, and backup metadata is not a new restore test. Release
-  commands are selectable text only. `GET /api/face?guid=<int>&size=sm|md|lg` serves
+  commands remain selectable text. Ops actions additionally require `[control] ops_actions = true`
+  (default false; invalid control settings keep the actions off) and restarting both mind and
+  console. `--no-control`, key/Host/Origin checks and a verified running mind still apply.
+  Every action uses a fresh preview and a one-use confirmation; the owner must be known offline.
+  A refused confirmation restores the review step and keeps the entered draft fields.
+  `POST /api/ops/action` starts one background operation, `GET /api/ops/action` reports its outcome;
+  the reservation also blocks other console writes and lifecycle actions until it finishes.
+  Realm release requires the exact root id typed back and a 1–200 character reason kept only
+  in its private CLI receipt. It refuses open guild/offline raids and the CLI's nonreleasable
+  roots, stops cleanly (never force), runs this checkout's `realm release --yes`, then restarts
+  even after a CLI refusal. Release and restart outcomes are reported separately; an unproved
+  clean stop changes no root. Offline stop targets the original owned command id, keeps fresh
+  progress/boss fences, and finishes only after the terminal and cleanup; an ACK is pending.
+  Render now keeps the booth's offline wait, request age, daily cap, cooldown and lease/night
+  priority rules; completion comes from that requested task, never an older shared receipt.
+  Snapshots use the same SQLite backup helper as `run`, in a fresh contained
+  staging directory, and publish without overwriting. Labels are 1–40 ASCII letters/digits,
+  underscore/hyphen; links/junctions are refused. Manual snapshots carry an operation suffix
+  and are retained until the operator removes them. Their local volume must support hardlinks;
+  unsupported publication fails rather than falling back to an overwrite. Console shutdown
+  waits for a release's restart; other work remains mind-owned. Unknown outcomes require a
+  status check before retrying. Logs contain action/id/outcome, never reasons or labels.
+  `GET /api/face?guid=<int>&size=sm|md|lg` serves
   `mind-data/selfies/<guid>/chosen.jpg` (key and Host checked, `image/jpeg`,
   `private, max-age=60`, 404 when absent; the original for every size, the
   browser scales it) and never writes under `selfies/`; faces (initials when

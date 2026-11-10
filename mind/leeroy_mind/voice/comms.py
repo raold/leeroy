@@ -282,6 +282,8 @@ class Comms:
             timing.played(msg.id, msg.state, msg.reason)
         self._unanswered.pop(msg.id, None)
         self.ext.store.set_line(msg.id, msg.state, msg.reason or None, self.ext.app.clock.now())
+        if (signals := getattr(self.ext.app, "signals", None)) is not None:
+            signals.played(msg)
 
     def _timing(self):
         return getattr(getattr(self.ext.app, "engine", None), "timing", None)

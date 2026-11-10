@@ -53,7 +53,7 @@ RAID_RULES = frozenset({"leaders_and_urgent"})
 MAX_PER_HOUR = 60  # [talk] whispers_per_hour and openers_per_hour
 EXTENSION_SECTIONS = frozenset({"console", "guild", "dkp", "life", "voice", "training", "realm",
                                 "control", "selfies", "health", "claims", "personas", "guards",
-                                "tuning", "fingerprint"})
+                                "tuning", "playstyle", "signals", "fingerprint"})
 _HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 

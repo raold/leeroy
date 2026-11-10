@@ -1,6 +1,7 @@
 import { $, api, arr, cell, clear, el, emit, emptyRow, num, obj, on, own, plural, post, recall, refused,
          remember, setText, str } from "./core.mjs";
 import { face } from "./faces.mjs";
+import { appendInsightBadges, pollInsight, selectInsight } from "./insight.mjs";
 import { photoButton } from "./gallery.mjs";
 import { nudgeBadges, nudgeFocus, nudgePanel } from "./nudges.mjs";
 import { forgetMemberShots, pollSelfies, setSelfieNames, showMemberPhoto } from "./selfies.mjs";
@@ -89,6 +90,8 @@ function renderPersonas(v) {
   $("p-missing").textContent = missing.length ? "This mind.db is older than some of what this tab reads; "
     + "unavailable here: " + missing.join(", ") + "." : "";
   $("p-missing").hidden = !missing.length;
+  $("p-insight-badges-why").textContent = str(v.insight_badges_why);
+  $("p-insight-badges-why").hidden = !v.insight_badges_why;
   setText("p-memhead", "memories (" + days + " d / held)");
   var body = $("p-roster");
   clear(body);
@@ -100,6 +103,7 @@ function renderPersonas(v) {
     who.appendChild(photoButton(m.guid, str(m.name), "list"));
     who.appendChild(el("span", "", str(m.name) + (m.in_cast ? "" : " (not in the cast)")));
     nameTd.appendChild(who);
+    appendInsightBadges(nameTd, obj(v.insight_badges)[String(m.guid)]);
     tr.appendChild(nameTd);
     tdT(tr, m["class"] ? (CLASSES[m["class"]] || "-") + (m.role ? " · " + m.role : "") : "-", m.role ? "role-" + m.role : "");
     tdT(tr, typeof m.rank === "number" ? String(m.rank) : "-", "num");
@@ -147,6 +151,7 @@ function renderWall(v) {
     t.appendChild(el("span", "tsub", st.sub));
     t.appendChild(el("span", "tsub", missing.indexOf("pad_mood") >= 0 ? "unavailable" : moodText(m.mood)));
     if (st.chip) { t.appendChild(el("span", "chip", st.chip)); }
+    appendInsightBadges(t, obj(v.insight_badges)[String(m.guid)]);
     box.appendChild(t);
   });
   if (!members.length) { box.appendChild(el("p", "why", "The mind has no cast and no personas yet.")); }
@@ -270,6 +275,7 @@ function renderMember(j) {
 function pollMember() {
   if (!pick || S.tab !== "personas") { return; }
   var seq = ++pickSeq, guid = pick;
+  pollInsight(guid);
   api("/api/persona?guid=" + guid).then(function (r) {
     if (refused(r)) { return null; }
     return r.json().then(function (j) { return { status: r.status, j: j }; });
@@ -282,6 +288,7 @@ function pollMember() {
 }
 function choose(guid) {
   pick = guid;
+  selectInsight(guid);
   var rows = $("p-roster").querySelectorAll("tr[data-guid]");
   for (var i = 0; i < rows.length; i++) { rows[i].classList.toggle("sel", Number(rows[i].dataset.guid) === guid); }
   var tiles = $("p-wall").querySelectorAll(".tile[data-guid]");
