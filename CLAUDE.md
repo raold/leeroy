@@ -1128,7 +1128,7 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   key, Host, Origin, fetch-site and `--no-control` gates apply. Posts hold at most
   2000 Unicode code points; Unicode emoji are kept. Only the owner edits/deletes
   their own messages. Deletion leaves a tombstone so quotes do not expose old text.
-- Migration **0024_discord.sql** adds `discord_message`, `discord_thread` and
+- Migration **0027_discord.sql** adds `discord_message`, `discord_thread` and
   `discord_reaction`; pins live on message rows. `layout.py` owns the fixed categories,
   class channels and officer rooms. Store ids are channel names or `dm:<guid>`;
   talk ids are `discord:<channel>` or `dm:<guid>`. Scheduled presence uses regional
