@@ -1742,6 +1742,10 @@ apart from this install. Read `dojo/README.md` before touching it.
 
 ## Outstanding
 
+- Optional `[talk] realism = true` adds bounded typing cadence, rare corrections and
+  small reply bursts; default off. See `mind/leeroy_mind/talk/README.md` for budgets,
+  native busy evidence and correction cancellation.
+
 - `mod-bg-slaveryvalley` server data + client patch (above).
 - Zip-sourced modules (transmog, individual-progression, slaveryvalley) have no
   update path; converting them to git clones would let `ac-update.sh` cover them.
