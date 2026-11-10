@@ -2,7 +2,8 @@
 
 arc_view reads one woman's arc for one turn. Everything private in it (her plan's lines, the
 trouble at home, the arc's recent events as scene items, the rival who has got closer to him and
-a cooling spark) is filled only for a whisper to him; any other turn gets her stage and plan
+a cooling spark) is filled only for a whisper to him or a Discord DM to him, which is private
+exactly as a whisper (discord.channels.is_private); any other turn gets her stage and plan
 state alone, and her romance text shows only the stage's passage there (whisper scope). Her plan
 speaks only while it is live (hoped, talked, set) at "planning" or, for a visit, at "after", and
 only for a woman on the full arc. A summons stands in her whisper to him only inside a plan he
@@ -25,6 +26,7 @@ from dataclasses import dataclass
 from leeroy_mind.arc.ladder import FULL_ARC, NOTICED
 from leeroy_mind.arc.plan import has_partner, plan_lines
 from leeroy_mind.arc.state import get_arc
+from leeroy_mind.discord.channels import is_private
 from leeroy_mind.personas.schema import Persona
 from leeroy_mind.storage.rows import ROMANCE_STAGES
 from leeroy_mind.storage.store import Store
@@ -92,10 +94,11 @@ def arc_view(store: Store, p: Persona, human: int, *, now: float, channel: str, 
     pronoun forms; `names` the cast's names (his called name among them), for the rival's and
     for measuring the lines. `rng` draws the order the lines after her plan's first are tried
     in (ARC_CAP_TOKENS); without it they go in order: the plan's second line, home, the rival,
-    cooling. An ex, and every turn but a whisper to him, gets her stage and plan state alone."""
+    cooling. An ex, and every turn but a whisper or DM to him, gets her stage and plan state
+    alone."""
     stage = store.get_relationship(p.guid, human).romance_stage
     arc = get_arc(store, p.guid, human)
-    if not (channel == "whisper" and to_guid == human) or stage == "ex":
+    if not (is_private(channel) and to_guid == human) or stage == "ex":
         return ArcView(stage, arc.plan_state)
     full = p.romance.stance in FULL_ARC
     plan = (plan_lines(arc.plan, arc.plan_state, now=now, forms=forms, region=p.identity.region)

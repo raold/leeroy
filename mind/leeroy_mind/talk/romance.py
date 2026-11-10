@@ -596,15 +596,17 @@ def romance_instruction(p: Persona, rel: Relationship | None, *, dial: int, chan
                         cooling: bool = False) -> str | None:
     """The romance text for a turn by `p` (rel is p's relationship to the human), or None
     when p is a man, has no attitude toward him or is not talking to him. The human is named
-    by human.called with his pronouns from human.forms; his real name never appears here. In
-    order: her attitude, her way, the stage's passage (a whisper-only stage's public one on any
-    channel but a whisper), her heat (rel.attraction, drawn and lust only), the band's wording,
+    by human.called with his pronouns from human.forms; his real name never appears here. A
+    Discord DM is private exactly as a whisper is (discord.channels.is_private); a Discord
+    channel is public. In order: her attitude, her way, the stage's passage (a whisper-only
+    stage's public one on any channel but a private one), her heat (rel.attraction, drawn and
+    lust only), the band's wording,
     the distance frame, the frame (INVARIANTS), the channel and the hour, and the hook on
     what's happening last. `rng` picks the variants (the first of each without it);
     `tail_follows`: the whisper tail says the distance frame after his overlay, so it is left
     out here. The pipeline puts it before the turn's own instruction, so the model reads that
-    last. After the heat line, for a whisper to him only (whisper scope; any other channel
-    leaves them out even if passed): SCENE_HEAD and at most SCENE_MAX `scene` notes, the
+    last. After the heat line, for a whisper or DM to him only (whisper scope; any other
+    channel leaves them out even if passed): SCENE_HEAD and at most SCENE_MAX `scene` notes, the
     `arc_lines`, the rival's line and a cooling variant. `dial` is the owner's; the band
     follows her own when she has one."""
     stance = p.romance.stance
@@ -614,10 +616,11 @@ def romance_instruction(p: Persona, rel: Relationship | None, *, dial: int, chan
     stage = rel.romance_stage if rel is not None else "none"
     they, them, their = human.forms
     fill = dict(name=human.called, they=they, them=them, their=their)
+    private = is_private(channel)
     parts = [
         attitude_text(p),
         style_text(p),
-        stage_text(stance, stage, rng, private=channel == "whisper"),
+        stage_text(stance, stage, rng, private=private),
         heat_text(stance, stage, rel, rng),
     ]
     rest = [
@@ -628,7 +631,7 @@ def romance_instruction(p: Persona, rel: Relationship | None, *, dial: int, chan
         SPECIFIC,
     ]
     head = " ".join(x.format(**fill) for x in parts if x)
-    if channel == "whisper":
+    if private:
         head = " ".join(x for x in (head, *_slots(scene, arc_lines, rival, cooling, fill, human,
                                                    rng)) if x)
     tail = " ".join(x.format(**fill) for x in rest if x)

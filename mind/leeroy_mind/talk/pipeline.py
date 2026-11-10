@@ -48,6 +48,7 @@ from leeroy_mind.arc.live import AWAY_CACHE_S, ArcView, arc_view, away_now
 from leeroy_mind.bridge import AckTimeout, BridgeError, ConnectionLost
 from leeroy_mind.clock import Clock, night_of
 from leeroy_mind.config import MindConfig
+from leeroy_mind.discord.channels import is_private
 from leeroy_mind.discord.store import DiscordRefused
 from leeroy_mind.discord.transport import LINES as DISCORD_LINES
 from leeroy_mind.discord.transport import DM_PREFIX, DiscordTarget, is_discord, store_line
@@ -853,13 +854,13 @@ class Pipeline:
 
     def _summons_ok(self, turn: Turn) -> bool:
         """Whether asking him over may stand in her line to him (_generate checks only those):
-        in a voice room, where the two are together; and in her whisper to him inside a plan he
-        has talked about or said yes to (arc.live's summons_ok). Everywhere else they only talk
-        through the game."""
+        in a voice room, where the two are together; and in her whisper or Discord DM to him
+        inside a plan he has talked about or said yes to (arc.live's summons_ok). Everywhere else
+        they only talk through the game."""
         if turn.channel.startswith("voice:"):
             return True
         p = self.personas.get(turn.speaker)
-        return (p is not None and turn.channel == "whisper" and turn.to_guid == self.human.guid
+        return (p is not None and is_private(turn.channel) and turn.to_guid == self.human.guid
                 and self._arc_view(turn, p, self.clock.now()).summons_ok)
 
     def _arc_view(self, turn: Turn, p: Persona, now: float,

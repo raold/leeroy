@@ -215,9 +215,11 @@ def test_a_view_off_his_whisper_holds_nothing_private(store, clock, part):
     p = _belra(household=MARRIED if part == "home" else "lives alone")
     private = _view(store, p, now=now)
     assert private != ArcView(stage="planning", plan_state=private.plan_state)
-    for channel, to in (("guild", 0), ("whisper", 101), ("voice:raid", 0), ("officer", 0)):
+    for channel, to in (("guild", 0), ("whisper", 101), ("voice:raid", 0), ("officer", 0),
+                        ("discord:general", 0), ("discord:officer-chat", 0)):
         assert _view(store, p, now=now, channel=channel, to_guid=to) == ArcView(
             stage="planning", plan_state=private.plan_state)
+    assert _view(store, p, now=now, channel="dm:102") == private  # a DM to him: a whisper
 
 
 def test_her_arc_lines_stay_within_the_cap_and_take_turns(store, clock):
@@ -569,3 +571,35 @@ def test_his_emote_at_an_away_woman_gets_nothing_back(rig, caplog):
         rig.sync(main())
     assert [c.guid for _, c in rig.sent.log if isinstance(c, Emote)] == [104]
     assert "emote_skipped: emote=wave guid=102 reason=away" in caplog.text
+
+
+def _dm(rig, kind: TurnKind = TurnKind.FLIRT) -> Turn:
+    """Her line to him in her Discord DM (a FLIRT always carries her romance text)."""
+    return Turn(kind=kind, speaker=102, channel="dm:102", to_guid=HUMAN, addressee=HUMAN)
+
+
+def test_her_discord_dm_to_him_carries_her_arc_as_a_whisper_does(rig):
+    """A Discord DM to him is private exactly as a whisper is: her plan's lines reach its prompt;
+    a Discord channel's prompt gets the public stage passage and none of them."""
+    now = rig.clock.now()
+    _plan(rig.store, 102, "set", now=now, plan={"cover": "a work trip"})
+    rig.script("cant wait")
+    assert rig.speak_turn(_dm(rig))
+    dm = rig.prompts()[-1]
+    assert "It's happening: a quiet weekend somewhere neutral, about 12 days off." in dm
+    assert "the cover story is a work trip" in dm
+    rig.run(300)
+    assert rig.speak_turn(Turn(kind=TurnKind.FLIRT, speaker=102, channel="discord:general",
+                               addressee=HUMAN))
+    general = rig.prompts()[-1]
+    assert any(v.format(**FILL) in general for v in STAGE_PASSAGES["planning"])
+    for words in ("It's happening", "somewhere neutral", "days off", "cover story", "work trip"):
+        assert words not in general, words
+
+
+def test_a_summons_in_her_dm_inside_a_set_plan_is_kept(rig):
+    """As in her whisper: inside a plan he said yes to, asking him over stands in her DM."""
+    _plan(rig.store, 102, "set", now=rig.clock.now())
+    rig.script("come over already, i can't wait")
+    assert rig.speak_turn(_dm(rig, TurnKind.REPLY_HUMAN)) == ["come over already, i can't wait"]
+    assert len(rig.chat_calls()) == 1

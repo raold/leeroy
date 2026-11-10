@@ -425,3 +425,34 @@ def test_the_audience_sentence_fits_the_channel(tmp_path):
             ("say", "The people standing nearby can read it, so play to the room."),
             ("voice:lounge", "The people in the room can hear you, so play to the room.")):
         assert sentence in text(channel), channel
+
+
+def test_a_discord_dm_reads_as_a_whisper_and_a_channel_stays_public(tmp_path):
+    """A Discord DM to him is private exactly as a whisper is for the romance text: the
+    whisper-only stages' own passages, the scene notes, her arc's lines, the rival and cooling;
+    the only difference is the audience sentence. A Discord channel is public: the public
+    passage and none of them."""
+    kw = dict(scene=["you teased {them}"], arc_lines=["ARC-LINE"], rival="Quillon",
+              cooling=True)
+    for stage in PRIVATE:
+        key = passage_key(stage)
+        for i in range(5):
+            whisper = romance_instruction(lust(), rel(stage, 95), data_dir=tmp_path,
+                                          rng=random.Random(i), **WHISPER, **kw)
+            dm = romance_instruction(lust(), rel(stage, 95), data_dir=tmp_path,
+                                     rng=random.Random(i), **dict(WHISPER, channel="dm:102"),
+                                     **kw)
+            assert dm == whisper.replace("It's a private whisper, just the two of you.",
+                                         "It's a private message, just the two of you."), stage
+            assert any(v.format(**HE) in dm for v in STAGE_PASSAGES[key])
+            assert SCENE_HEAD in dm and "ARC-LINE" in dm and "Quillon" in dm
+            for channel in ("discord:general", "discord:officer-chat"):
+                base = dict(WHISPER, channel=channel)
+                text = romance_instruction(lust(), rel(stage, 95), data_dir=tmp_path,
+                                           rng=random.Random(i), **base, **kw)
+                assert text == romance_instruction(lust(), rel(stage, 95), data_dir=tmp_path,
+                                                   rng=random.Random(i), **base)
+                assert SCENE_HEAD not in text and "ARC-LINE" not in text
+                assert "Quillon" not in text
+                assert any(v.format(**HE) in text for v in PUBLIC_PASSAGES[key]), channel
+                assert not any(v.format(**HE) in text for v in STAGE_PASSAGES[key]), channel
