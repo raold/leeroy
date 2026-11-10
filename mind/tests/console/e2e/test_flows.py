@@ -15,6 +15,7 @@ async def submit(r, button, path, *, ok=True):
                                       and x.request.method == "POST") as answer:
         await button.click()
     response = await answer.value
+    await response.finished()
     result = await response.json()
     assert result.get("ok") is ok, result
     return result
@@ -168,6 +169,7 @@ def test_theme_persists_key_does_not_and_origin_gate(rehearsal):
             assert response.status == 403
             assert not any(c.get("text") == "Never sent." for c in r.bridge.commands)
             r.expected_http_errors.add(("/api/events", 403))
+            r.expected_http_errors.add(("/api/discord", 403))
             await r.page.reload()
             await expect(r.page.locator("html")).to_have_attribute("data-theme", "light")
             await expect(r.page.locator("#s-lost")).to_contain_text("opened without its key")

@@ -677,6 +677,9 @@ td > div.who { color: var(--ink); font-weight: 600; }
 .stale-note { margin: 10px 16px; padding: 8px 12px; color: var(--warn); background: var(--surface);
   border: 1px solid var(--warn); border-radius: 8px; }
 .roster-pages { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 8px 0; }
+@media (max-width: 900px), (pointer: coarse) {
+  #insight-line { font-size: 16px; }
+}
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important;
     transition-duration: .001ms !important; scroll-behavior: auto !important; }
