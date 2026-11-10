@@ -239,18 +239,23 @@ class Recall:
         recall: her prompt already shows them under "Your last lines", and a memory of them
         had her say them again (dress rehearsal 2, judge A fix 4). Only an extracted memory
         whose every cited line is hers and from this session; afterwards it is history and
-        comes back. One store query for all of `rows`, none outside a session."""
+        comes back. Her Discord lines carry no session (they never touch his game session), so
+        one of hers in Discord since the session opened counts as this session's. One store
+        query for all of `rows`, none outside a session."""
         sid = self._store.open_session()
         if sid is None:
             return rows
+        started = self._store.session_started(sid)
         refs = {m.id: ids for m in rows if m.source == "extract" and (ids := chat_ids(m.evidence))}
         if not refs:
             return rows
         lines = {ln.id: ln for ln in self._store.chat_lines(
             dict.fromkeys(i for ids in refs.values() for i in ids))}
+        def now(ln) -> bool:
+            return ln.session_id == sid or (ln.session_id is None and is_discord(ln.channel)
+                                            and started is not None and ln.ts >= started)
         own = {mid for mid, ids in refs.items()
-               if all(i in lines and lines[i].from_guid == owner and lines[i].session_id == sid
-                      for i in ids)}
+               if all(i in lines and lines[i].from_guid == owner and now(lines[i]) for i in ids)}
         if own:
             log.debug("recall_own_lines_excluded: n=%d", len(own))
         return [m for m in rows if m.id not in own]

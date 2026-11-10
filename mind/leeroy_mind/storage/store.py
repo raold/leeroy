@@ -173,6 +173,10 @@ class Store:
         r = self._one("SELECT id FROM session WHERE ended IS NULL ORDER BY id DESC LIMIT 1")
         return r["id"] if r else None
 
+    def session_started(self, id: int) -> float | None:
+        r = self._one("SELECT started FROM session WHERE id = ?", (id,))
+        return r["started"] if r else None
+
     def latest_session(self) -> int | None:
         """The newest session, open or ended (ids only grow), or None before the first."""
         r = self._one("SELECT max(id) AS id FROM session")

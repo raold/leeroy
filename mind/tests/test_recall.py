@@ -427,6 +427,26 @@ def test_her_own_lines_from_this_session_stay_out_of_her_recall(rig, store, cloc
     assert {mine, whisper} <= set(recalled(r, "whisper", HUMAN))  # history now
 
 
+def test_her_own_discord_lines_since_the_session_opened_stay_out_of_her_recall(rig, store, clock):
+    """Her Discord lines carry no session id (they never touch his game session), yet one of hers
+    posted since the session opened is as fresh as a game line: it stays out of her recall, in
+    #general and in game, and comes back once the session ends. One from before it opened stays."""
+    r, _ = rig
+    def posted(ts):
+        line = store.insert_chat_line(
+            Chat(ts=0, channel="discord:general", from_guid=101, from_name="M101", to_guid=0,
+                 text="quitting talk", map=0, zone=0), session_id=None, origin="mind", ts=ts)
+        return f"chat:{line}"
+    earlier = remembered(store, clock, "I posted that I'm quitting raids.", posted(clock.now() - 3000))
+    sid = store.start_session(clock.now() - 600)
+    fresh = remembered(store, clock, "I posted that I'm quitting the fishing contest.",
+                       posted(clock.now() - 60))
+    assert fresh not in recalled(r, "guild") and fresh not in recalled(r, "discord:general")
+    assert earlier in recalled(r, "guild")
+    store.end_session(sid, clock.now())
+    assert fresh in recalled(r, "guild")
+
+
 def test_the_own_lines_rule_reads_the_lines_in_one_more_query(rig, store, clock):
     r, _ = rig
     sid = store.start_session(clock.now() - 600)
