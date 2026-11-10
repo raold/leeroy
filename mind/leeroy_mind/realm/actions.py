@@ -14,7 +14,7 @@ import math
 import uuid
 
 from .action_policy import classify, integer, members, text, U64
-from .action_store import ActionCapacity, ActionSpec, TERMINAL, leave_refusal_guids
+from .action_store import ActionCapacity, ActionSpec, TERMINAL, leave_refusal_guids, skipped_backoff
 from .protocol import GetRealmPvp, LeavePvp, Rearm, RealmActors
 
 log = logging.getLogger(__name__)
@@ -118,18 +118,23 @@ class ActionQueue:
                     and old.result_ok is False and failed_at is not None and now < failed_at + 600
                     and failed & set(scope)):
                 return True
+            # Nor did a completed leave change the members it skipped.
+            if old.role == "root" and old.owner == owner and old.kind == kind and set(skipped_backoff(old, now)) & set(scope):
+                return True
         return False
 
     def leave_backed_off(self, owner):
-        """The members a recent ack refusal of this owner's leaves named: a leave naming
-        any of them is rejected for 600 s, so the recall leaves them out and sends the rest."""
+        """The members a recent ack refusal of this owner's leaves named, or a recent completed
+        leave of his skipped: a leave naming any of them is rejected for 600 s, so the recall
+        leaves them out and sends the rest."""
         now = self.clock.now()
         named = set()
         for old in self.store.records():
+            if old.role != "root" or old.owner != owner or old.kind != "leave_pvp": continue
             failed_at = json.loads(old.evidence).get("failed_at")
-            if (old.role == "root" and old.owner == owner and old.kind == "leave_pvp" and old.result_ok is False
-                    and failed_at is not None and now < failed_at + 600):
+            if old.result_ok is False and failed_at is not None and now < failed_at + 600:
                 named |= set(leave_refusal_guids(old.result_reason, old.reserved_manifest) or ())
+            named |= set(skipped_backoff(old, now))
         return named
 
     def submit(self, cmd, *, owner, guids=(), on_done=None, freeing=False):
