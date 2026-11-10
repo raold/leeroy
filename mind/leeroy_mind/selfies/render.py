@@ -248,7 +248,8 @@ async def _render_set(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
     files.clear_stale(data, guid, set_no)
     staging = files.staging_dir(data, guid, set_no)
     staging.mkdir(parents=True)
-    spec = build_prompt(p, kind_style=chosen_style(ctx.store, p))  # her stance at render time
+    from .photo_extra import light_for
+    spec = build_prompt(p, kind_style=chosen_style(ctx.store, p), light=light_for(ctx.store,p))
     made = await render_candidates(worker, spec, staging, night=ctx.night, guid=guid,
                                    set_no=set_no, cfg=cfg, make_room=ctx.arbiter.make_room,
                                    leases=lambda: ctx.arbiter.holders)

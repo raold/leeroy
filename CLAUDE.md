@@ -1751,6 +1751,12 @@ apart from this install. Read `dojo/README.md` before touching it.
 
 ## Outstanding
 
+- **Photo style variety.** With the mind stopped, `selfies restyle --dry-run|--go`
+  balances photo choices and queues fresh sets, preserving the gallery and cover.
+  `--lust-only` narrows the selection; hand-set kinds require `--include-owner`.
+  `[selfies] variety = true` opts the night pass into varied choices and recent
+  plain-photo hints. See `mind/leeroy_mind/selfies/style_variety.md`.
+
 - `mod-bg-slaveryvalley` server data + client patch (above).
 - Zip-sourced modules (transmog, individual-progression, slaveryvalley) have no
   update path; converting them to git clones would let `ac-update.sh` cover them.

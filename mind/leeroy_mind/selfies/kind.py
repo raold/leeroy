@@ -356,6 +356,16 @@ async def kind_one(ctx: "NightContext", guid: int) -> tuple[ProfilePhoto | None,
     system = (system_prompt(LUST_PROMPT, KIND_PROMPT_LUST, ctx.settings.data_dir, **fields)
               if lust else system_prompt(STAGE, KIND_PROMPT, ctx.settings.data_dir, **fields))
     ask = KIND_ASK.format(name=name)
+    if _variety_enabled(ctx):
+        from . import photo_extra, style_variety
+        if p.identity.age < 25:
+            return _refused(ctx,guid,["photo: adult_floor"])
+        members = [ctx.name(g) for g in ctx.members(include_away=True)]
+        if lust:
+            all_personas = {g:ctx.base(g) for g in ctx.members(include_away=True)}
+            picks,_,_,_ = style_variety.assign(all_personas,[guid],seed=ctx.night,ident=ctx.ident,names=members)
+            return (picks[guid].photo,[]) if guid in picks else _refused(ctx,guid,["photo: no_safe_capacity"])
+        ask += photo_extra.common(ctx.store,ctx.clock.now(),ident=ctx.ident,names=members)
     for again in (False, True):
         try:
             data = await ctx.reasoner.json(system, ask + (LUST_ASK_AGAIN if again else ""),
@@ -396,6 +406,12 @@ def _saver(ctx: "NightContext", guid: int, photo: ProfilePhoto, *, style: str | 
                      ts=ctx.clock.now(), race=race, class_name=class_name)
         chose = style_of(stored) if style is None else style
         _record(store, guid, chose, load_persona(store, guid).photo)  # the kind as stored
+        if _variety_enabled(ctx):
+            from . import photo_extra
+            saved = load_persona(store,guid)
+            light = photo_extra.choose_light(saved,ctx.night,ident=ctx.ident,
+                names=[ctx.name(g) for g in ctx.members(include_away=True)])
+            photo_extra.record(store,saved,light,ctx.clock.now())
         if replacing is not None and chose == LUST:
             queue_restyled(store, guid, now=ctx.clock.now())
     return write
@@ -406,6 +422,15 @@ def _stored(ctx: "NightContext", guid: int) -> Persona | None:
         return ctx.base(guid)
     except KeyError:  # none, or unreadable: the cache logs it
         return None
+
+
+def _variety_enabled(ctx):
+    from .config import load_selfie_config
+    from leeroy_mind.config import ConfigError
+    try:
+        return load_selfie_config(ctx.settings.data_dir / "mind.toml").variety
+    except ConfigError:
+        return False
 
 
 def _due(ctx: "NightContext", guid: int) -> bool:

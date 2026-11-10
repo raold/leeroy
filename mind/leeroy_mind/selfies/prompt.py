@@ -165,7 +165,7 @@ def looks_phrases(p: Persona, name_re: re.Pattern | None) -> list[tuple[str, int
     return hair_skin(p, name_re) + eyes_face(p, name_re)
 
 
-def build_prompt(p: Persona, *, kind_style: str = PLAIN) -> PromptSpec:
+def build_prompt(p: Persona, *, kind_style: str = PLAIN, light: str = "") -> PromptSpec:
     """The prompt for p's photo kind. `kind_style` is the style whose rules chose the kind
     (kind.chosen_style; PLAIN for a kind set by hand or with no record): the lust prompt for a
     kind the lust rules chose. ValueError when renderable says why not."""
@@ -201,4 +201,8 @@ def build_prompt(p: Persona, *, kind_style: str = PLAIN) -> PromptSpec:
         add(ph.setting, 2, True)
     add(ph.expression, 3, True)
     add(_HEADSHOT_TAIL if headshot else _PHONE_TAIL, 1)
+    if light:
+        from .photo_extra import LIGHTS
+        if light in LIGHTS:
+            add(light, 1, True)  # optional: subject, chosen build and lust outfit remain priority 0
     return PromptSpec(tuple(out), LUST_NEGATIVE if lust else NEGATIVE)

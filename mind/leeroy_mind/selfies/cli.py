@@ -12,13 +12,14 @@ import asyncio
 import shutil
 import sqlite3
 import sys
+from contextlib import closing
 from dataclasses import dataclass
 
 from leeroy_mind.app import AlreadyRunning
 from leeroy_mind.clock import SystemClock
 from leeroy_mind.config import load_config
 from leeroy_mind.console.selfieview import queue_view
-from leeroy_mind.nightly.cli import (_child, _context, _data_arg, _default_night, _exclusive,
+from leeroy_mind.nightly.cli import (_child, _context, _data_arg, _default_night, _exclusive, _identity,
                                      _positive, _print, _read_store, _root, _working_store)
 
 from . import files
@@ -57,6 +58,12 @@ def _parser():
                      "scratch/selfies-try/snaps/")
     sub.add_argument("--guild", action="store_true",
                      help="with --snaps: also one grid of up to 4 of them")
+    sub = subs.add_parser("restyle", help="plan or save varied photo choices (mind stopped)")
+    sub.add_argument("--lust-only", action="store_true")
+    sub.add_argument("--include-owner", action="store_true", help="also replace hand-set photo choices")
+    mode = sub.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", action="store_true", help="read-only plan (default)")
+    mode.add_argument("--go", action="store_true", help="save choices and queue fresh sets")
     for sub in subs.choices.values():
         _data_arg(sub, child=True)
     return parser
@@ -359,6 +366,18 @@ def selfies_main(argv=None, *, make_llm=None) -> int:
             with _read_store(root / "mind.db", clock) as store:
                 _print(_status(store, clock))
             return 0
+        if args.action == "restyle":
+            from .restyle import run
+            from leeroy_mind.storage.db import open_db
+            from leeroy_mind.storage.store import Store
+            cfg = load_config(root / "mind.toml")
+            with _exclusive(root, gpu=False):
+                context = (closing(Store(open_db(root / "mind.db"), clock=clock)) if args.go
+                           else _read_store(root / "mind.db", clock))
+                with context as store:
+                    _print(run(store,_identity(cfg,store),clock,lust_only=args.lust_only,
+                               go=args.go,include_owner=args.include_owner))
+            return 0
         if args.guild and not args.snaps:
             print("selfies try: --guild goes with --snaps", file=sys.stderr)
             return 2
@@ -369,11 +388,15 @@ def selfies_main(argv=None, *, make_llm=None) -> int:
                 run = _try_snaps if args.snaps else _try
                 return asyncio.run(run(root, store, cfg, scfg, clock, args, make_llm))
     except AlreadyRunning as exc:
-        print(f"{exc}; selfies try would share its GPU and could unload its live model")
+        if args.action == "restyle":
+            print("selfies restyle: mind must be stopped", file=sys.stderr)
+        else:
+            print(f"{exc}; selfies try would share its GPU and could unload its live model")
         return 1
     except KeyboardInterrupt:
         print("selfies interrupted")
         return 130
     except Exception as exc:
-        print(f"selfies {args.action} failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        message = type(exc).__name__ if args.action == "restyle" else f"{type(exc).__name__}: {exc}"
+        print(f"selfies {args.action} failed: {message}", file=sys.stderr)
         return 1
