@@ -278,7 +278,8 @@ def test_no_text_in_logs(db, caplog):
 
 def test_cli_backups_source_and_emits_only_counts(db, store, tmp_path, monkeypatch, capsys):
     memory(db, text="PRIVATE_MARKER_34")
-    chat(db, channel="guild", frm=101, to=0, origin="mind", ts=NOW)
+    line = chat(db, channel="guild", frm=101, to=0, origin="mind", ts=NOW, audience=[101])
+    db.execute("UPDATE chat_line SET session_id=1 WHERE id=?", (line,))
     db.commit()
     source = db.execute("PRAGMA database_list").fetchone()[2]
     from pathlib import Path
@@ -294,6 +295,18 @@ def test_cli_backups_source_and_emits_only_counts(db, store, tmp_path, monkeypat
     assert "PRIVATE_MARKER_34" not in capsys.readouterr().out
     texts = list((root / "scratch").glob("callbacks-*.json"))
     assert len(texts) == 1 and "PRIVATE_MARKER_34" in texts[0].read_text()
+
+
+@pytest.mark.parametrize("session_id,ended,expected", [(1, None, 1), (1, NOW-1, 0), (None, None, 0)])
+def test_replay_owner_presence_uses_the_turn_session(db, session_id, ended, expected):
+    memory(db)
+    line = chat(db, channel="guild", frm=101, to=0, origin="mind", ts=NOW, audience=[101])
+    db.execute("UPDATE chat_line SET session_id=? WHERE id=?", (session_id, line))
+    db.execute("UPDATE session SET ended=? WHERE id=1", (ended,))
+    # An unrelated session must not grant owner presence to this guild turn.
+    db.execute("INSERT INTO session(started) VALUES(?)", (NOW-10,))
+    report, _ = replay(db, now=NOW)
+    assert report["offered"] == expected
 
 
 def test_root_cli_routes_callbacks(tmp_path, capsys):

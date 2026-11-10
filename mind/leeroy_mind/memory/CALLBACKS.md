@@ -76,6 +76,8 @@ turns in the requested 1–60 days, preserving existing receipts and hypothetica
 cooldowns. The report labels this simulation, its cap, and unavailable schema.
 It reports offers, age buckets, privacy scopes and reason counts. It estimates
 availability from stored audiences/sessions and current persona roles; it is
+aware that stored guild audiences contain cast members only, and adds the owner
+only when that turn's recorded session establishes his presence. It is
 not a historical audience reconstruction or a measure of conversation quality.
 No embeddings are generated for replay.
 

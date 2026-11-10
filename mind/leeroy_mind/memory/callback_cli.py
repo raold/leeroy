@@ -42,7 +42,13 @@ def replay(conn, *, now, days=7, show_text=False):
             if row["channel"] == "whisper":
                 present = (row["from_guid"], row["to_guid"])
             elif row["channel"] == "guild":
-                present = readers if readers is not None else (row["from_guid"], human)
+                # Stored audiences contain cast members only (WorldView.audience).
+                # The turn's own session, not an unrelated open session, proves
+                # whether the owner was there too, including with a known audience.
+                owner_present = conn.execute("SELECT 1 FROM session WHERE id=? AND started<=? "
+                    "AND (ended IS NULL OR ended>=?)", (row["session_id"], row["ts"], row["ts"])).fetchone()
+                present = tuple(dict.fromkeys((*(readers or (row["from_guid"],)),
+                                               *((human,) if owner_present else ()))))
             else:
                 present = readers or ()
             ctx = CallbackContext(True, row["channel"], row["to_guid"], present, readers)
