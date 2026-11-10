@@ -223,9 +223,15 @@ CleanupReadback ReadLeftMembers(Queued const& entry, Json const& receipt)
 
 std::vector<std::uint32_t> SkippedMembers(Queued const& entry)
 {
+    // Only a leave records skipped members (SkipMember); another kind's payload can be the wire
+    // message itself, so its keys are never read here, and nothing malformed may throw.
     std::vector<std::uint32_t> skipped;
-    if (entry.payload.is_object() && entry.payload.contains("skipped"))
-        for (auto const& guid : entry.payload.at("skipped")) skipped.push_back(guid.get<std::uint32_t>());
+    if (entry.kind != "leave_pvp" || !entry.payload.is_object() || !entry.payload.contains("skipped")
+        || !entry.payload.at("skipped").is_array())
+        return skipped;
+    for (auto const& guid : entry.payload.at("skipped"))
+        if (guid.is_number_unsigned() && guid.get<std::uint64_t>() <= 0xFFFFFFFFull)
+            skipped.push_back(static_cast<std::uint32_t>(guid.get<std::uint64_t>()));
     return skipped;
 }
 

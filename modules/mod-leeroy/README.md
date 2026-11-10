@@ -98,7 +98,11 @@ a member whose own step already changed something keeps the old rule (unproved, 
 
 Old native omits the field, preserving the reason-based rules. Old minds ignore
 unknown wire fields and retain their existing settlement behaviour (an older mind would rearm
-and default a skipped member with the rest). Rolling the mind back past
+and default a skipped member with the rest, sending `nc -bg,-lfg` to a bot still in its
+battleground). An older mind also does not know the four group ack reasons: it settles such a
+refused leave `unknown` and holds its manifest, although native holds nobody (so the owner's
+`addN` is unaffected); the new mind's startup recheck of ack-only unknown roots settles it.
+Ship both together (`ac-release.sh --native`). Rolling the mind back past
 this change is different: the new mind stores `changed` (and `skipped`, `skipped_at`) in
 `realm_action` evidence, and an older mind cannot read such a row (its journal reads fail, so the Realm stops moving bodies until the
 key is stripped from those rows). Take a snapshot before deploying and roll back with it. Both a
