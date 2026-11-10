@@ -588,7 +588,23 @@ at the door, so it lets the first few in and sends the rest to their homebinds
 group raids for DKP and attendance like a called raid night (see the mind's
 guild life).
 
+Optional persona play styles require both `[playstyle] enabled = true` in the
+mind's `mind.toml` (restart to attach) and native `Leeroy.PlayStyle.Enable = 1`
+(`.reload config`). Both default off. This first map adds only ordinary potion use
+and a 2–6 s DPS wait-for-attack hold outdoors; tanks/healers get no added delay.
+It never shortens an existing active hold and leaves one above 6 s untouched.
+All dungeon/raid instances, raid groups, combat, PvP and conflicting controllers
+refuse additions; RaidHabits remain authoritative. Native checks actual bodies,
+roles and ownership after the ack. The independent style journal is restored by
+`bot_do restore` (`param="playstyle"` or `"*"`), native off/raid/PvP cleanup,
+and the mind's bounded shutdown drain. Unknown receipts remain in
+`playstyle:owned` for reconciliation; foreign ownership can leave cleanup pending.
+With an already attached mind, hello/login rereads the switch and queues undo when
+off. No model, prompt, gear, loot or raid strategy change is involved. See
+`mind/leeroy_mind/playstyle/README.md` for the deterministic map and limits.
+
 ### Local patch: pinned random bots
+
 
 Local commit `ecbfeb6b` on `mod-playerbots` `master` ("Let other modules pin
 random bots"). An API on `RandomPlayerbotMgr` that mod-leeroy uses to keep the
