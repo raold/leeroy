@@ -6,8 +6,9 @@ a cooling spark) is filled only for a whisper to him or a Discord DM to him, whi
 exactly as a whisper (discord.channels.is_private); any other turn gets her stage and plan
 state alone, and her romance text shows only the stage's passage there (whisper scope). Her plan
 speaks only while it is live (hoped, talked, set) at "planning" or, for a visit, at "after", and
-only for a woman on the full arc. A summons stands in her whisper to him only inside a plan he
-has talked about or said yes to at "planning" (summons_ok, read by the pipeline's summons check).
+only for a woman on the full arc. A summons stands in her whisper or DM to him only inside a plan
+he has talked about or said yes to at "planning" (summons_ok, read by the pipeline's summons
+check).
 
 One whisper carries at most ARC_CAP_TOKENS of her arc's lines (her plan, home, the rival line
 and a cooling variant), so the live prompt's budget holds: where her plan stands always, then
@@ -65,7 +66,7 @@ EVENT_TEXT = {
 
 @dataclass(frozen=True)
 class ArcView:
-    """One turn's view of her arc: her stage and plan state, and for a whisper to him only the
+    """One turn's view of her arc: her stage and plan state, and for a whisper or DM to him only the
     arc lines (her plan, home), the scene items (recent arc events, newest first), the rival's
     name, whether her spark is cooling and whether a summons may stand."""
     stage: str

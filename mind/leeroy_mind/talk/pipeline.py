@@ -866,7 +866,7 @@ class Pipeline:
     def _arc_view(self, turn: Turn, p: Persona, now: float,
                   rng: random.Random | None = None) -> ArcView:
         """Her arc as this turn may show it (arc.live.arc_view: its private part only in a
-        whisper to him; `rng` draws which of its lines fit this turn)."""
+        whisper or Discord DM to him; `rng` draws which of its lines fit this turn)."""
         return arc_view(self.store, p, self.human.guid, now=now, channel=turn.channel,
                         to_guid=turn.to_guid, forms=self.human.forms, names=self._names(turn.channel),
                         rng=rng)
@@ -899,10 +899,10 @@ class Pipeline:
         the share and `vary` (`rng` without it) picks the variants (stage passage, heat, band
         overlay); `tail_follows`: the whisper tail says the distance frame. Her scene notes
         about him go in as the turn may see them
-        (PairNotes.recent: a whisper's only in a whisper between the two), then her arc's
-        recent events, and with them her arc's lines, rival and cooling (arc.live.arc_view,
-        all of them for a whisper to him only); the romance text shows them only in a
-        whisper."""
+        (PairNotes.recent: a whisper's only in a whisper between the two, a DM's only in that
+        DM), then her arc's recent events, and with them her arc's lines, rival and cooling
+        (arc.live.arc_view, all of them for a whisper or DM to him only); the romance text
+        shows them only in a whisper or a Discord DM (is_private)."""
         hg = self.human.guid
         if (not hg or turn.addressee != hg or p.identity.player_gender != "female"
                 or p.romance.stance not in ROMANCE_SHARE or meta.casual):

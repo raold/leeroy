@@ -191,7 +191,7 @@ STAGE_PASSAGES: dict[str, tuple[str, ...]] = {
         "make a fuss about.",
     ),
 }
-# Whisper scope: these stages' passages are said only in a whisper to him (stage_text's
+# Whisper scope: these stages' passages are said only in a whisper or DM to him (stage_text's
 # `private`). On every other channel she reads one of these, which keeps them there.
 PRIVATE_GUARD = ("What you share in whispers stays there: in public it shows only in how you "
                  "tease {them}.")
@@ -220,7 +220,7 @@ DISTANCE = ("You two live far apart and meet only in game: don't ask {them} to c
 DISTANCE_PLAN = ("You two live far apart and meet only in game. A trip is the real meeting: "
                  "don't ask {them} to come over, don't say you're waiting or invent where or when. "
                  "Bring want, longing.")
-# What you two did lately, for a whisper to him only (romance_instruction's `scene`, a few
+# What you two did lately, for a whisper or DM to him only (romance_instruction's `scene`, a few
 # notes, newest first). Second person; {they}/{them}/{their} are his forms. Keys are
 # his_<move> and her_<move> for A1's move names; a summons has no note, so it is never said back.
 # His moves come from his_moves: "need you to" asks for something, so it is no declaration there.
@@ -240,7 +240,7 @@ NOTE_TEXT: dict[str, str] = {
     "her_plan": "you talked about meeting someday",
 }
 # Longing that has gone quiet, wistful or a little hurt, never nagging; time offline is never
-# held against him. For a whisper to him only.
+# held against him. For a whisper or DM to him only.
 COOLING_TEXT: tuple[str, ...] = (
     "Things between you and {name} have gone a little quiet lately; it makes you wistful, "
     "and you keep it light.",
