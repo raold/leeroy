@@ -126,7 +126,7 @@ class PhotoBooth:
         await self.request(quiet=True)
 
     async def request(self, *, quiet=False):
-        """A manual pass uses the same wait, cap, lease and priority rules as the timer."""
+        """Return this pass's outcome task, using the timer's wait, cap, lease and priority rules."""
         if problem := self.problem():
             raise ValueError(problem)
         ctx, policy = self._context()
@@ -148,7 +148,7 @@ class PhotoBooth:
     async def _run(self, ctx, policy):
         # A night or a lease may have arrived between tick and this task's first instruction.
         if not self._eligible():
-            return
+            return "preempted"
         async with self._exclusive:
             started, began = ctx.clock.now(), time.monotonic()
             before = done_sets(ctx, policy)
@@ -214,6 +214,7 @@ class PhotoBooth:
                         finished=ctx.clock.now(), sets=sets, attempts=attempts, seconds=seconds,
                         outcome=outcome)))
                 log("selfies_booth_done", sets=sets, seconds=seconds, outcome=outcome)
+            return outcome
 
     async def run_forever(self):
         try:

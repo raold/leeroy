@@ -189,12 +189,11 @@ class OpsControl:
                 booth = self.app.selfie_booth
                 work = await booth.request()
                 try:
-                    await asyncio.shield(work)
+                    outcome = await asyncio.shield(work)
                 except asyncio.CancelledError:
-                    if not work.cancelled():
+                    if asyncio.current_task().cancelling() or not work.cancelled():
                         raise
-                receipt = json.loads(self.app.store.get_meta("selfies:booth:last") or "{}")
-                outcome = receipt.get("outcome")
+                    outcome = "preempted"
                 state = "done" if outcome == "done" else "failed"
                 message = {"done": "The photo booth pass finished.", "partial": "The photo booth pass finished with failed sets.",
                            "preempted": "The photo booth yielded to a live lease or night."}.get(outcome, "The photo booth pass failed.")

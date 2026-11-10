@@ -1063,6 +1063,7 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   (default false; invalid control settings keep the actions off) and restarting both mind and
   console. `--no-control`, key/Host/Origin checks and a verified running mind still apply.
   Every action uses a fresh preview and a one-use confirmation; the owner must be known offline.
+  A refused confirmation restores the review step and keeps the entered draft fields.
   `POST /api/ops/action` starts one background operation, `GET /api/ops/action` reports its outcome;
   the reservation also blocks other console writes and lifecycle actions until it finishes.
   Realm release requires the exact root id typed back and a 1–200 character reason kept only
@@ -1072,7 +1073,8 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   clean stop changes no root. Offline stop targets the original owned command id, keeps fresh
   progress/boss fences, and finishes only after the terminal and cleanup; an ACK is pending.
   Render now keeps the booth's offline wait, request age, daily cap, cooldown and lease/night
-  priority rules. Snapshots use the same SQLite backup helper as `run`, in a fresh contained
+  priority rules; completion comes from that requested task, never an older shared receipt.
+  Snapshots use the same SQLite backup helper as `run`, in a fresh contained
   staging directory, and publish without overwriting. Labels are 1–40 ASCII letters/digits,
   underscore/hyphen; links/junctions are refused. Manual snapshots carry an operation suffix
   and are retained until the operator removes them. Their local volume must support hardlinks;

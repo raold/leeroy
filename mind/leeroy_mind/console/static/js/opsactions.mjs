@@ -62,7 +62,16 @@ async function send(confirm) {
     $("ops-action-typed").disabled = true;
     const answer = await post("/api/ops/action", body);
     if (requestEpoch !== epoch) { if (confirm) { refreshActions(); } return; }
-    if (!answer.ok) { $("ops-action-words").textContent = answer.error || "The action was refused."; return; }
+    if (!answer.ok) {
+      if (confirm) {
+        // Refusal may consume the token. Keep the draft, but require a fresh review.
+        preview = null;
+        $("ops-action-preview").hidden = false; $("ops-action-confirm").hidden = true;
+        $("ops-action-typed-wrap").hidden = true;
+      }
+      $("ops-action-words").textContent = answer.error || "The action was refused.";
+      return;
+    }
     if (!confirm) {
       const { phase, ...args } = body;
       preview = { args, token: answer.token };
