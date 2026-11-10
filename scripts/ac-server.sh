@@ -3,15 +3,14 @@
 #
 # Usage: ac-server.sh start|stop|status
 #
-# NOTE ON STOPPING: worldserver is a console app. It does not act on WM_CLOSE,
-# and this install has both remote-control channels disabled
-# (Ra.Enable = 0, SOAP.Enabled = 0), so nothing can ask it to shut down from a
-# script. "stop" therefore terminates it.
-#
-# The only clean shutdown is to type this into the worldserver console (its tab):
-#     server shutdown 30
-# which saves players, then closes. Do that first if characters are online.
-# Setting SOAP.Enabled = 1 would let this script do it properly.
+# STOPPING: worldserver is a console app that ignores WM_CLOSE. With SOAP on
+# (SOAP.Enabled = 1 on 127.0.0.1) and the local credentials file that
+# scripts/ac-soap.py reads (%LOCALAPPDATA%\leeroy\remote-console.cnf), "stop" asks it to
+# `server shutdown`: it saves every character and exits, after AC_SHUTDOWN_DELAY seconds
+# (default 30 while players are connected, else 1), and is given AC_SHUTDOWN_WAIT more
+# (default 180) to finish. Without SOAP, or if it does not exit in time, it is terminated,
+# keeping only what the server last saved; then type `server shutdown 30` in its console
+# first if characters are online.
 #
 # "start" opens each server in a new tab of the most recently used Windows
 # Terminal window (a new window if none is open). Without Windows Terminal, or
@@ -55,6 +54,38 @@ mind() {
         --root "$(cygpath -w "$AC_ROOT")" --data-dir "$(cygpath -w "$data")"
 }
 
+# 0 when worldserver saved and exited on SOAP's `server shutdown`; 1 when SOAP is not set up,
+# did not answer, or the server was still running after the wait (the caller terminates it).
+soap_shutdown() {
+    local python="$AC_ROOT/mind/.venv/Scripts/python.exe" soap="$AC_ROOT/scripts/ac-soap.py"
+    local info rc players delay="${AC_SHUTDOWN_DELAY:-}" wait="${AC_SHUTDOWN_WAIT:-180}" i
+    [ -x "$python" ] || return 1
+    info=$("$python" -I "$soap" "server info" 2>/dev/null) && rc=0 || rc=$?
+    if [ "$rc" != 0 ]; then
+        [ "$rc" = 2 ] || warn "SOAP did not answer"
+        return 1
+    fi
+    players=$(printf '%s\n' "$info" | sed -n 's/^Connected players: \([0-9][0-9]*\).*/\1/p')
+    if [ -z "$delay" ]; then
+        if [ "${players:-0}" -gt 0 ]; then delay=30; else delay=1; fi
+    fi
+    [[ $delay =~ ^[0-9]+$ && $wait =~ ^[0-9]+$ ]] || die "AC_SHUTDOWN_DELAY and AC_SHUTDOWN_WAIT are whole seconds"
+    if ! "$python" -I "$soap" "server shutdown $delay" >/dev/null; then
+        warn "SOAP refused the shutdown"
+        return 1
+    fi
+    log "worldserver saving and shutting down in ${delay}s (${players:-0} players connected)"
+    for ((i = 0; i < delay + wait; i++)); do
+        if ! running worldserver.exe; then
+            log "worldserver shut down cleanly"
+            return 0
+        fi
+        sleep 1
+    done
+    warn "worldserver still running ${wait}s after its shutdown"
+    return 1
+}
+
 case "${1:-status}" in
 status)
     for p in authserver.exe worldserver.exe; do
@@ -85,12 +116,11 @@ stop)
     # Stop only the exact mind instance first. An unknown held lock or failed stop
     # aborts here, before either server is touched. Like worldserver, this is forced.
     mind stop
-    if running worldserver.exe; then
-        warn "worldserver cannot be shut down cleanly from a script on this install."
-        warn "If characters are online, type 'server shutdown 30' in its console first."
+    if running worldserver.exe && ! soap_shutdown; then
+        warn "worldserver will be terminated; characters keep only what the server last saved."
+        warn "Without SOAP, type 'server shutdown 30' in its console first if characters are online."
     fi
-    # Try the polite request anyway -- costs 5s, and works if a handler is ever
-    # added -- then terminate.
+    # Whatever is still running gets the polite request (5s), then is terminated.
     for p in worldserver.exe authserver.exe; do
         running "$p" || { printf '    %-18s already stopped\n' "$p"; continue; }
         taskkill //IM "$p" >/dev/null 2>&1 || true
