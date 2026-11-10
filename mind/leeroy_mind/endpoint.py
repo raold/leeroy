@@ -617,12 +617,13 @@ def board_args(args) -> dict:
 def discord_args(args) -> dict:
     """A discord action's arguments, exactly (DISCORD_SHAPES; a post may add reply_to and
     thread): channel a layout id or dm:<guid>, message, reply_to and thread row numbers, text a
-    string that cleans to a message (discord.text.clean_text), emoji one emoji, name a thread
-    name of 1 to 60 characters. The arguments with the cleaned text, or BadRequest with the
-    sentence the console shows."""
+    string that cleans to a message (discord.text.clean_text), emoji one emoji, name a string
+    that cleans (discord.text.clean_name) to a thread name of 1 to 60 characters. The arguments
+    with the cleaned text and name, or BadRequest with the sentence the console shows."""
     from leeroy_mind.discord import layout
     from leeroy_mind.discord.desk import WORDS
-    from leeroy_mind.discord.text import MAX_THREAD_NAME, TextRefused, clean_text, is_one_emoji
+    from leeroy_mind.discord.text import (MAX_THREAD_NAME, TextRefused, clean_name, clean_text,
+                                          is_one_emoji)
     if not isinstance(args, dict) or args.get("action") not in DISCORD_SHAPES:
         raise BadRequest("discord: an action, one of " + ", ".join(DISCORD_SHAPES))
     action = args["action"]
@@ -655,7 +656,7 @@ def discord_args(args) -> dict:
         out["emoji"] = emoji
     if "name" in shape:
         name = args["name"]
-        name = " ".join(name.split()) if isinstance(name, str) else ""
+        name = clean_name(name) if isinstance(name, str) else ""
         if not 1 <= len(name) <= MAX_THREAD_NAME:
             raise BadRequest(WORDS["bad_name"])
         out["name"] = name

@@ -7,7 +7,7 @@
 
 Each writer runs in `store.transaction()`. A refusal is DiscordRefused, its text the code. The
 mind writes; the console reads (the reads take a plain connection, read-only is fine)."""
-from .text import MAX_THREAD_NAME, TextRefused, clean_text, is_one_emoji
+from .text import MAX_THREAD_NAME, TextRefused, clean_name, clean_text, is_one_emoji
 
 MAX_REACTIONS = 20
 MAX_PINS = 50
@@ -137,7 +137,7 @@ def unpin(store, message: int) -> None:
 
 
 def open_thread(store, parent: int, *, name: str, now: float) -> int:
-    name = " ".join(name.split())
+    name = clean_name(name)
     if not 1 <= len(name) <= MAX_THREAD_NAME:
         raise DiscordRefused("bad_name")
     with store.transaction():

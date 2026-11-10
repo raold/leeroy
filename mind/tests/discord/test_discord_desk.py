@@ -236,3 +236,31 @@ def test_his_line_and_its_message_are_one_write(app, store, monkeypatch):
                                                      "text": "hi"})))
     assert store.conn.execute("SELECT count(*) FROM discord_message").fetchone()[0] == 0
     assert app.discord_talk.seen == []
+
+
+def test_a_thread_name_is_cleaned_like_his_other_text(app, store):
+    """Control characters and lone surrogates are dropped and whitespace collapsed, at the
+    endpoint and in the store; a name left empty or over 60 characters is refused in words."""
+    assert discord_args({"action": "thread", "message": 2,
+                         "name": " the\x00 plan\x07\tfor\r\nfriday\x1b "})["name"] == (
+        "the plan for friday")
+    assert discord_args({"action": "thread", "message": 2, "name": "a\ud800b"})["name"] == "ab"
+    assert discord_args({"action": "thread", "message": 2,
+                         "name": "n" * 60 + "\x00" * 10})["name"] == "n" * 60
+    for bad in ("\x00\x07", "\ud800", " \t\x1b ", "n" * 61):
+        with pytest.raises(BadRequest) as e:
+            discord_args({"action": "thread", "message": 2, "name": bad})
+        assert str(e.value) == WORDS["bad_name"]
+    m = ask(app, action="post", channel="general", text="sunday?")["id"]
+    t = ask(app, action="thread", message=m, name="sun\ud800day\x00 plans")
+    assert t["ok"] is True
+    assert [x["name"] for x in dstore.threads(store.conn, "general")] == ["sunday plans"]
+
+
+def test_the_store_cleans_a_thread_name_too(store):
+    a = dstore.post(store, channel="general", author=HUMAN, origin="human", text="hi", now=1.0)
+    b = dstore.post(store, channel="general", author=HUMAN, origin="human", text="yo", now=1.0)
+    dstore.open_thread(store, a, name="raid\x00\ud83d night\n", now=2.0)
+    assert [x["name"] for x in dstore.threads(store.conn, "general")] == ["raid night"]
+    with pytest.raises(dstore.DiscordRefused, match="bad_name"):
+        dstore.open_thread(store, b, name="\x00\ud800 \x07", now=2.0)

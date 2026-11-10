@@ -34,6 +34,15 @@ def clean_text(s: str) -> str:
     return s
 
 
+def clean_name(s: str) -> str:
+    """A thread name cleaned as his other text is: control characters and lone surrogates
+    dropped, whitespace (a newline or tab too) collapsed to single spaces, none at either end.
+    The caller refuses an empty or overlong result, never cuts it."""
+    s = "".join(" " if c.isspace() else "" if unicodedata.category(c) in ("Cc", "Cs") else c
+                for c in s)
+    return " ".join(s.split())
+
+
 # One grapheme: a flag, a tag sequence, or units joined by ZWJ. A unit is a keycap or an emoji
 # code point with an optional variation selector and skin tone.
 _BASE = ("[\U0001F000-\U0001F1E5\U0001F200-\U0001F3FA\U0001F400-\U0001FAFF"
