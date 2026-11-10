@@ -218,6 +218,10 @@ def test_older_database_api_and_cli_are_read_only(tmp_path,capsys):
     assert path.read_bytes() == before
     assert not (tmp_path/'logs').exists()
     assert main(['fingerprint','show','-1','--data-dir',str(tmp_path)]) == 1
+    assert main(['fingerprint','show',str(2**200),'--data-dir',str(tmp_path)]) == 1
+    with sqlite3.connect(path) as conn:
+        with pytest.raises(ValueError,match='fingerprint_guid'):
+            fingerprint(conn,2**200)
 
 
 @pytest.mark.parametrize('raw', ['{}','[]','{"version":99}', '"private canary"'])

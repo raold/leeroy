@@ -162,7 +162,7 @@ def _decode(raw):
 
 def fingerprint(conn, guid) -> Profile:
     """Stored current-version profile, or a deterministic persona prior; read-only on old DBs."""
-    if type(guid) is not int or guid <= 0:
+    if type(guid) is not int or not 0 < guid <= 0xFFFFFFFF:
         raise ValueError('fingerprint_guid')
     try:
         row = conn.execute('SELECT profile,version FROM voice_fingerprint WHERE guid=?', (guid,)).fetchone()
