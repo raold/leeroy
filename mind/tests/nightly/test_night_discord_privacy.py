@@ -6,6 +6,8 @@ the app's threading hook; a member's line as the pipeline records it, then threa
 text only."""
 import asyncio
 import sqlite3
+
+import pytest
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -334,15 +336,19 @@ def test_private_sql_takes_a_column_name_only():
 
 CAST = load_fixture(Path(__file__).parents[1] / "fixtures" / "session_basic.jsonl")[1]
 SEALED = "aw no ok, my lips are sealed"
+QUIT = "i might quit the guild"
+ASKED = "dont tell anyone but " + QUIT
 
 
-def test_his_dm_asking_secrecy_makes_her_answer_secret_end_to_end(tmp_path):
+@pytest.mark.parametrize("how", ["asked", "edited"])
+def test_his_dm_asking_secrecy_makes_her_answer_secret_end_to_end(tmp_path, how):
     """The final review's probe, through the real desk path: a real MindApp (fake bridge, model
     and model admin, ephemeral ports), his DM "dont tell anyone but i might quit the guild" sent
-    to its control endpoint's discord op while he is out of the game, and her answer composed,
-    typed and stored by the talk pipeline. His post is his chat line in her DM's thread, so the
-    thread asked for secrecy and her answer is secret, as the same exchange in a whisper would
-    be; the night's ledger reads it so. Nothing reaches the game and no game clock moves."""
+    to its control endpoint's discord op while he is out of the game (or, `edited`, a plain DM
+    he then edits to ask it), and her answer composed, typed and stored by the talk pipeline.
+    His post is his chat line in her DM's thread, so the thread asked for secrecy and her answer
+    is secret, as the same exchange in a whisper would be; the night's ledger reads it so.
+    Nothing reaches the game and no game clock moves."""
     data = tmp_path / "data"
     data.mkdir()
 
@@ -381,8 +387,12 @@ def test_his_dm_asking_secrecy_makes_her_answer_secret_end_to_end(tmp_path):
             active, spoke = app.world.human_last_active, dict(app._spoke_at)
             sent = await app.control.discord(discord_args({
                 "action": "post", "channel": "dm:102",
-                "text": "dont tell anyone but i might quit the guild"}))
+                "text": ASKED if how == "asked" else QUIT}))
             assert sent["ok"], sent
+            if how == "edited":
+                edited = await app.control.discord(discord_args({
+                    "action": "edit", "message": sent["id"], "text": ASKED}))
+                assert edited == {"ok": True}, edited
             conn = app.store.conn
             for _ in range(120):
                 answer = [m for m in dstore.messages(conn, "dm:102")
@@ -401,6 +411,7 @@ def test_his_dm_asking_secrecy_makes_her_answer_secret_end_to_end(tmp_path):
             his, hers = rows
             assert (his["origin"], his["from_guid"], his["to_guid"], his["session_id"]) == (
                 "human", HUMAN, 102, None)
+            assert his["text"] == ASKED
             assert (hers["origin"], hers["from_guid"], hers["to_guid"]) == ("mind", 102, HUMAN)
             assert his["thread_id"] is not None and his["thread_id"] == hers["thread_id"]
             assert derive_scope(conn, 102, [f"chat:{hers['id']}"]) == Scope("secret", HUMAN)
@@ -416,3 +427,48 @@ def test_his_dm_asking_secrecy_makes_her_answer_secret_end_to_end(tmp_path):
             await asyncio.wait_for(task, 10)
             await bridge.stop()
     asyncio.run(go())
+
+
+def edit_post(h, t, message, text):
+    """His edit of his Discord post `message`, through the desk."""
+    h.clock.set(t)
+    r = run(desk(h).handle(discord_args({"action": "edit", "message": message, "text": text})))
+    assert r == {"ok": True}, r
+
+
+def his_post(h, line):
+    """The id of the Discord message behind his chat line `line`."""
+    return int(next(k for k, v in h.store.conn.execute(
+        "SELECT key, value FROM meta WHERE key LIKE 'discord:line:%'") if int(v) == line)
+        .rsplit(":", 1)[1])
+
+
+def test_an_edit_that_asks_for_secrecy_makes_the_dm_secret(h):
+    """Ruling: his plain DM, then his edit adding "dont tell anyone": the edit is his chat line's
+    text now, so the thread asked and her answer after it is secret."""
+    his = put(h, h.T, 1, QUIT, DM, to=102)
+    assert derive_scope(h.store.conn, 102, [f"chat:{his}"]) == Scope("private", 1, False)
+    edit_post(h, h.T + 5, his_post(h, his), ASKED)
+    hers = put(h, h.T + 15, 102, SEALED, DM, to=1)
+    (text,) = h.store.conn.execute("SELECT text FROM chat_line WHERE id = ?", (his,)).fetchone()
+    assert text == ASKED
+    assert derive_scope(h.store.conn, 102, [f"chat:{hers}"]) == Scope("secret", 1, False)
+    assert knowledge.is_secret(h.store, f"chat:{hers}")
+
+
+def test_an_edit_never_loosens_secrecy_and_a_delete_keeps_his_line(h):
+    """An edit that drops his ask leaves his line as she read it, so the thread stays secret;
+    one that keeps an ask is the line's text. A delete leaves the line: it is not unsaid."""
+    his = put(h, h.T, 1, ASKED, DM, to=102)
+    hers = put(h, h.T + 10, 102, SEALED, DM, to=1)
+    post = his_post(h, his)
+    edit_post(h, h.T + 20, post, "never mind, all good")
+    [m] = [m for m in dstore.messages(h.store.conn, DM) if m["id"] == post]
+    assert m["text"] == "never mind, all good"
+    assert h.store.chat_lines([his])[0].text == ASKED
+    assert derive_scope(h.store.conn, 102, [f"chat:{hers}"]).scope == "secret"
+    edit_post(h, h.T + 30, post, "between us, " + QUIT)
+    assert h.store.chat_lines([his])[0].text == "between us, " + QUIT
+    run(desk(h).handle(discord_args({"action": "delete", "message": post})))
+    assert h.store.chat_lines([his])[0].text == "between us, " + QUIT
+    assert derive_scope(h.store.conn, 102, [f"chat:{hers}"]).scope == "secret"

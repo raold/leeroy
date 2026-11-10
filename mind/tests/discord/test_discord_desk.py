@@ -264,3 +264,19 @@ def test_the_store_cleans_a_thread_name_too(store):
     assert [x["name"] for x in dstore.threads(store.conn, "general")] == ["raid night"]
     with pytest.raises(dstore.DiscordRefused, match="bad_name"):
         dstore.open_thread(store, b, name="\x00\ud800 \x07", now=2.0)
+
+
+def test_his_edit_is_his_lines_text(app, store):
+    """An edit of his post edits its chat line; a post from before the lines (no link) edits
+    only the message; a member's message is not his to edit."""
+    a = ask(app, action="post", channel="general", text="raid at eight")["id"]
+    assert ask(app, action="edit", message=a, text="raid at nine") == {"ok": True}
+    [line] = his_lines(store)
+    assert line["text"] == "raid at nine"
+    old = dstore.post(store, channel="general", author=HUMAN, origin="human", text="old one",
+                      now=1.0)
+    assert ask(app, action="edit", message=old, text="still old") == {"ok": True}
+    assert [x["text"] for x in his_lines(store)] == ["raid at nine"]
+    hers = dstore.post(store, channel="general", author=101, origin="mind", text="mine", now=1.0)
+    assert ask(app, action="edit", message=hers, text="nope")["ok"] is False
+    assert [x["text"] for x in his_lines(store)] == ["raid at nine"]

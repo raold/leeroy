@@ -9,7 +9,12 @@ audience for it, stored with the message in one transaction. The app threads it
 (MindApp.on_his_discord_line), so threads, the secrecy he asks for (memory.privacy), confide and
 the night read both sides of the talk, a DM exactly as a whisper. It has no session and moves no
 game clock: no world history, no bystander clock, no AFK or login quiet (ruling R11), and nothing
-of it reaches the game."""
+of it reaches the game. Meta LINE_KEY links the post to its line.
+
+His edit of a post edits that line too, so an edit that asks for secrecy makes the thread secret;
+an edit never loosens it: one that drops the line's ask (memory.privacy.DONT_TELL_RE) leaves the
+line as she read it. His delete leaves the line: she may have read it, and a delete does not
+unsay it. A post from before these lines has none, and its edit changes only the message."""
 import logging
 
 from leeroy_mind.discord import layout
@@ -17,7 +22,10 @@ from leeroy_mind.discord import store as dstore
 from leeroy_mind.discord.channels import CHANNEL_PREFIX
 from leeroy_mind.discord.store import DiscordRefused
 from leeroy_mind.logs import log as log_event
+from leeroy_mind.memory.privacy import DONT_TELL_RE
 from leeroy_mind.protocol import Chat
+
+LINE_KEY = "discord:line:{}"  # meta: his post's id -> the id of its chat line
 
 STOPPING = "The mind is stopping."
 NO_HUMAN = "The mind doesn't know who you are yet."
@@ -108,7 +116,9 @@ class DiscordDesk:
         elif action == "unreact":
             dstore.unreact(store, message, member=me, emoji=args["emoji"], now=now)
         elif action == "edit":
-            dstore.edit(store, message, author=me, text=args["text"], now=now)
+            with store.transaction():
+                dstore.edit(store, message, author=me, text=args["text"], now=now)
+                self._edit_line(message)
         elif action == "delete":
             dstore.delete(store, message, author=me, now=now)
         elif action == "pin":
@@ -132,7 +142,22 @@ class DiscordDesk:
         line = store.insert_chat_line(
             chat, session_id=None, origin="human", ts=now,
             audience=self.app.world.audience(place, from_guid=me, to_guid=to))
+        store.set_meta(LINE_KEY.format(message), str(line))
         return line, chat
+
+    def _edit_line(self, message: int) -> None:
+        """His edited post `message`'s chat line takes its new text, in the caller's transaction
+        (the module docstring): never when that would drop the line's ask for secrecy."""
+        store = self.app.store
+        line = store.get_meta(LINE_KEY.format(message))
+        if line is None:
+            return  # a post from before the lines
+        (text,) = store.conn.execute("SELECT text FROM discord_message WHERE id = ?",
+                                     (message,)).fetchone()
+        row = store.conn.execute("SELECT text FROM chat_line WHERE id = ?", (int(line),)).fetchone()
+        if row is None or (DONT_TELL_RE.search(row[0]) and not DONT_TELL_RE.search(text)):
+            return
+        store.conn.execute("UPDATE chat_line SET text = ? WHERE id = ?", (text, int(line)))
 
     def _his_action(self) -> None:
         """An action of his other than a post keeps his Discord lease (discord.talk)."""

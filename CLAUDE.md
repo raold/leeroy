@@ -1150,9 +1150,10 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 - DMs have whisper privacy. The desk also stores each owner post as his chat line
   (origin human, no session, the talk's channel id, a DM's member as `to_guid`), threaded
   with the members' answers, so a DM where he asks for secrecy is secret exactly as a
-  whisper; it moves no game clock and never reaches WoW. Officer-only and unknown
-  channels are restricted; restricted evidence stays restricted through derived
-  memories, notes and recall.
+  whisper; it moves no game clock and never reaches WoW. His edit edits that line, but
+  never loosens secrecy (an edit dropping his ask leaves it as read); his delete keeps it,
+  since a member may already have read it. Officer-only and unknown channels are restricted;
+  restricted evidence stays restricted through derived memories, notes and recall.
   Unknown audiences fail closed, and the storage transport checks its speaker's
   audience again. Logs contain action/channel/message ids, counts and outcome codes,
   never message text or emoji.
