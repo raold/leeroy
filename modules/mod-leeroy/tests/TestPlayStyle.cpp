@@ -82,3 +82,27 @@ LEEROY_TEST(PlayStyle_CleanupSeesPvpDuringCombatAndExactBodyLife)
     CHECK(!SameLife({1,2,3},{1,2,4}));
     CHECK(!SameLife({0,2,3},{0,2,3}));
 }
+LEEROY_TEST(PlayStyle_RoleChangeRemovesAddedHoldEvenWhenTimerWasAlreadyEqual)
+{
+    Facts f{true,true,true,true,false,false,false,false,false};
+    for (std::uint8_t delay = 2; delay <= 6; ++delay)
+    {
+        Values baseline{false,delay,false};
+        auto applied = Plan(baseline,{delay,false},true);
+        Journal journal;
+        journal.Note(baseline,applied);
+        CHECK(applied.wait && journal.Owns("wait for attack"));
+        CHECK(!journal.Owns("wait for attack time"));
+        CHECK(CleanupDue(f,false,journal.OwnsOpeningHold())); // Native tank/healer transition.
+        CHECK(journal.Restore(applied,"*") == baseline);
+        journal.Restored("*");
+        CHECK(!journal.OwnsOpeningHold());
+
+        // A pre-existing equal hold belongs to its caller; adding potions does not adopt it.
+        baseline.wait = true;
+        applied = Plan(baseline,{delay,true},true);
+        journal.Note(baseline,applied);
+        CHECK(journal.Owns("potions") && !journal.OwnsOpeningHold());
+        CHECK(!CleanupDue(f,false,journal.OwnsOpeningHold()));
+    }
+}

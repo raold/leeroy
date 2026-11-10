@@ -78,6 +78,7 @@ public:
             | (before.potions != after.potions ? 4u : 0u);
     }
     bool Owns(std::string_view name = "*") const { return (owned & Mask(name)) != 0; }
+    bool OwnsOpeningHold() const { return (owned & 3u) != 0; }
     Values Restore(Values current, std::string_view name) const
     {
         unsigned mask = owned & Mask(name);

@@ -188,7 +188,7 @@ void Tick()
         // Ordinary combat does not undo the style it was prepared for. Off/raid/instance and ownership changes do.
         bool const roleChanged = GET_PLAYERBOT_AI(bot)
             && (PlayerbotAI::IsTank(bot, true) || PlayerbotAI::IsHeal(bot, true))
-            && saved.journal.Owns("wait for attack time");
+            && saved.journal.OwnsOpeningHold();
         if (CleanupDue(facts, changed, roleChanged))
             Restore(bot);
     }
