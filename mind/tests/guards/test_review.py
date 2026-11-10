@@ -327,6 +327,47 @@ def test_optional_world_facts_use_shared_positive_evidence_checker(store):
     assert review(sources(store,facts=facts),draft('We have never killed invented boss.',now=NOW-2)).action=='send'
 
 
+@pytest.mark.parametrize('source_channel,target_channel,peer,expected', [
+    ('whisper','guild',0,False), ('whisper','whisper',1,True),
+    ('whisper','whisper',102,False), ('whisper','discord',0,False),
+    ('dm:101','whisper',1,False), ('dm:101','dm',1,True),
+    ('discord:general','guild',0,False), ('discord:general','discord',0,True),
+    ('officer','guild',0,False)])
+def test_owner_claim_guard_requires_visible_provenance(store, source_channel, target_channel, peer, expected):
+    vec = pack_vec(unit(0))
+    line(store, 'I love Saurfang', channel=source_channel,
+         to=1 if source_channel in {'whisper','dm:101'} else 0, audience=[1,101])
+    add(store,101,kind='opinion',subject='saurfang',text='I love Saurfang',polarity=1,
+        embedding=vec,source='owner',source_line=1,now=NOW-1)
+    room = '101' if target_channel == 'dm' else 'general' if target_channel == 'discord' else ''
+    result = review(sources(store,claims_enabled=True),
+        draft('I hate Saurfang',embedding=vec,channel=target_channel,to_guid=peer,room=room))
+    assert ('claim_conflict' in result.codes) is expected
+
+
+def test_unscoped_owner_claim_never_reaches_a_guard(store):
+    vec = pack_vec(unit(0))
+    add(store,101,kind='opinion',subject='saurfang',text='I love Saurfang',polarity=1,
+        embedding=vec,source='owner',now=NOW-1)
+    assert review(sources(store,claims_enabled=True),draft('I hate Saurfang',embedding=vec)).action == 'send'
+
+
+def test_receipt_pruning_preserves_other_meta_and_joins_rollback(store):
+    store.set_meta('guards:sent:2026-01-01:101', '{}')
+    store.set_meta('guards:sent:2026-10-29:101', '{}')
+    store.set_meta('other:2026-01-01', '{}')
+    with pytest.raises(RuntimeError), store.transaction():
+        record_sent(sources(store), draft(), receipt_id='line-1')
+        assert store.get_meta('guards:sent:2026-01-01:101') is None
+        raise RuntimeError('rollback')
+    assert store.get_meta('guards:sent:2026-01-01:101') == '{}'
+    with store.transaction():
+        record_sent(sources(store), draft(), receipt_id='line-1')
+    assert store.get_meta('guards:sent:2026-01-01:101') is None
+    assert store.get_meta('guards:sent:2026-10-29:101') is not None
+    assert store.get_meta('other:2026-01-01') == '{}'
+
+
 def test_older_database_reads_no_schema_and_never_commits(tmp_path,caplog):
     path=tmp_path/'old.db'
     sqlite3.connect(path).close()

@@ -192,6 +192,8 @@ class TalkEngine(EmoteReactions):
         self.asides = JealousyAsides(rng, jealousy=cfg.romance.jealousy, human=self.human)
         now = clock.now()
         self._init_pipeline(now)
+        from leeroy_mind.talk.awareness import LiveReview
+        self.live_review = LiveReview(self)
         self._init_reactions()
         self._init_emotes()
         self._sources: list[TurnSource] = []
@@ -208,6 +210,7 @@ class TalkEngine(EmoteReactions):
         the live model, the memory depth and the human's names take effect from the next
         turn."""
         self.cfg = cfg
+        self.live_review.configure()
         self.budget.set_chattiness(cfg.talk.chattiness)
         self.budget.set_to_him_rate(cfg.talk.openers_per_hour)
         self.whispers.set_rate(whisper_rate(cfg))

@@ -9,11 +9,13 @@ from types import SimpleNamespace
 
 from leeroy_mind.bodies import ALL
 from leeroy_mind.claims.store import nearest
+from leeroy_mind.discord.channels import is_private
 from leeroy_mind.memory.recall import scope_ok, whisper_ok
 from leeroy_mind.text import estimate_tokens, strip_wow_markup
 
 RECENT_S = 15 * 60
 DAY_S = 86400
+SIGNUPS_PER_EVENT = 4
 PRIORITY = ("game", "context", "recent", "claims", "raid", "calendar", "standing", "bank", "drama")
 HOLD_CODES = frozenset({"raid", "offline_raid", "training", "benchmark", "realm_event", "realm_day"})
 _CODE = re.compile(r"[a-zA-Z0-9_-]{1,48}\Z")
@@ -167,11 +169,14 @@ def _sources(value):
 
 
 def _visible(channel, frm, to, guid, officer, context, readers=None):
+    if not whisper_ok(channel, frm, to, speaker=guid, turn_channel=context.channel,
+                      to_guid=context.to_guid):
+        return False
     if readers is not None and guid not in readers:
         return False
-    if channel == "whisper":
+    if is_private(channel):
         return guid in (frm, to) and whisper_ok(channel, frm, to, speaker=guid,
-            turn_channel=context.channel, to_guid=context.to_guid)
+            turn_channel=context.channel, to_guid=context.to_guid) and {frm, to} == {guid, context.to_guid}
     if channel == "officer":
         return officer and context.channel == "officer"
     if channel == "guild":
@@ -310,17 +315,23 @@ def _claims(reader, guid, officer, ctx, now):
     if candidates is None:
         candidates = [SimpleNamespace(**r) for r in reader.rows(("member_claim",),
             "SELECT id,kind,subject,text,source,source_line FROM member_claim WHERE guid=? "
-            "AND superseded_by IS NULL AND (expires IS NULL OR expires>?) "
-            "ORDER BY last_seen DESC,id DESC LIMIT 8", (guid, now))]
+            "AND first_seen<=? AND superseded_by IS NULL AND (expires IS NULL OR expires>?) "
+            "ORDER BY last_seen DESC,id DESC LIMIT 8", (guid, now, now))]
     ids = [c.source_line for c in candidates if c.source_line is not None]
     provenance = {r["id"]: r for r in reader.rows(("chat_line",),
-        "SELECT id,channel,from_guid,to_guid FROM chat_line WHERE id IN (SELECT value FROM json_each(?))",
-        (json.dumps(ids),))} if ids else {}
+        "SELECT id,channel,from_guid,to_guid,audience FROM chat_line "
+        "WHERE id IN (SELECT value FROM json_each(?)) AND ts<=?",
+        (json.dumps(ids), now))} if ids else {}
     out = []
     for claim in candidates:
+        if getattr(claim, "first_seen", now) > now:
+            continue
         line = provenance.get(claim.source_line)
-        if claim.source == "chat" and (line is None or line["from_guid"] != guid or not _visible(
-                line["channel"], line["from_guid"], line["to_guid"], guid, officer, ctx)):
+        # Owner corrections inherit their cited line's visibility. Unscoped corrections
+        # have no proof that this conversation may disclose them.
+        if (line is None or claim.source == "chat" and line["from_guid"] != guid or not _visible(
+                line["channel"], line["from_guid"], line["to_guid"], guid, officer, ctx,
+                tuple(_ids(_json(line["audience"]))) if line["audience"] is not None else None)):
             continue
         if text := _text(claim.text):
             out.append(f"{claim.kind}: {text}")
@@ -410,7 +421,7 @@ def card(app_or_stores, guid: int, *, context: CardContext) -> Card:
     add("raid", "Guild raid", [f"{'Recorded active' if r['ended'] is None else 'Last'} raid #{r['raid_id']} "
         f"({_text(r['raid_key'], 80)}): {r['kills']} kills, {r['wipes']} wipes" for r in raids])
     signup = ",coalesce((SELECT json_group_array(json_array(guid,status)) FROM " \
-        "(SELECT guid,status FROM realm_rsvp WHERE event=c.event_id ORDER BY guid LIMIT 40)), '[]') AS signups" \
+        f"(SELECT guid,status FROM realm_rsvp WHERE event=c.event_id ORDER BY guid LIMIT {SIGNUPS_PER_EVENT})), '[]') AS signups" \
         if "realm_rsvp" in reader.tables else ",'[]' AS signups"
     calendar = reader.rows(("realm_calendar",), "WITH upcoming AS (SELECT * FROM realm_calendar "
         "WHERE state='posted' AND at>=?), selected AS (SELECT id FROM "
@@ -421,7 +432,7 @@ def card(app_or_stores, guid: int, *, context: CardContext) -> Card:
         (now, now+14*DAY_S))
     next_raid = next((r['id'] for r in calendar if r['kind'] == 'raid'), None)
     add("calendar", "Upcoming calendar", [f"{'Next raid' if r['id']==next_raid else 'Event'} #{r['id']} "
-        f"at {r['at']:g}: {_text(r['title'])}; signups (up to 40) " + ", ".join(
+        f"at {r['at']:g}: {_text(r['title'])}; signups (up to {SIGNUPS_PER_EVENT}) " + ", ".join(
             f"#{g} {_text(status, 40)}" for g, status in _json(r['signups'], [])) for r in calendar])
     standing = []
     dkp = reader.rows(("dkp_ledger",), "WITH b AS (SELECT guid,sum(delta) AS balance FROM dkp_ledger "

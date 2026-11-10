@@ -1735,6 +1735,12 @@ apart from this install. Read `dojo/README.md` before touching it.
 
 ## Outstanding
 
+- Talk awareness and guards are separately opt-in: `[talk] aware = true` adds a
+  scoped observation card; `[guards] enabled = true` reviews drafts, allows one
+  screened rewrite, and records confirmed-send rations. `[claims] enabled = true`
+  supplies contradiction evidence and enables its night stage in both runners.
+  See `mind/leeroy_mind/guards/README.md` for limits and fake rehearsal results.
+
 - `mod-bg-slaveryvalley` server data + client patch (above).
 - Zip-sourced modules (transmog, individual-progression, slaveryvalley) have no
   update path; converting them to git clones would let `ac-update.sh` cover them.

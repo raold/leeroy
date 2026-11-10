@@ -317,13 +317,25 @@ def test_app_adapter_reads_snapshots_without_service_callbacks(populated,clock):
     assert "123 copper" in section(card(app,101,context=CardContext()),"bank")
 
 
+def test_many_signups_do_not_crowd_out_standing_and_bank(populated,clock):
+    with populated.transaction():
+        populated.conn.executemany("INSERT INTO realm_rsvp VALUES (77,?,'signed_up',?)",
+            [(g,clock.now()) for g in range(1000,1200)])
+    result = card(populated,101,context=context(clock))
+    assert section(result,'calendar').count('signed_up') == 4
+    rendered = result.render(600)
+    assert 'DKP:' in rendered and 'Current balance:' in rendered
+
+
 def test_claims_fall_back_if_read_only_connection_has_no_vector_extension(populated,clock):
     # The CLI intentionally loads no extension and supplies no embedding; an API
     # caller can also provide an embedding on an extension-free legacy connection.
     conn=sqlite3.connect(":memory:")
     try:
-        conn.execute("CREATE TABLE member_claim (id,guid,kind,subject,text,source,source_line,superseded_by,expires,last_seen)")
-        conn.execute("INSERT INTO member_claim VALUES (1,101,'opinion','invented','Visible owner claim','owner',NULL,NULL,NULL,1)")
+        conn.execute("CREATE TABLE member_claim (id,guid,kind,subject,text,source,source_line,superseded_by,expires,last_seen,first_seen)")
+        conn.execute("INSERT INTO member_claim VALUES (1,101,'opinion','invented','Visible owner claim','owner',1,NULL,NULL,1,1)")
+        conn.execute("CREATE TABLE chat_line (id,channel,from_guid,to_guid,audience,ts)")
+        conn.execute("INSERT INTO chat_line VALUES (1,'guild',1,0,NULL,1)")
         conn.execute("CREATE TABLE member_claim_vec (legacy_id)")
         result=card(conn,101,context=context(clock,embedding=pack_vec(unit(0))))
         assert "Visible owner claim" in section(result,"claims") and "member_claim_vec" in result.missing

@@ -1,8 +1,9 @@
 # Standalone draft guards
 
 `review(GuardStores, Draft) -> Verdict` performs bounded reads and comparisons.
-It never sends, writes, migrates, logs text or invokes a model. No consumer calls
-it yet. Disabled configuration returns `send` before touching any input or store.
+It never sends, writes, migrates, logs text or invokes a model. The opt-in talk
+adapter in `talk/awareness.py` calls it before delivery. Disabled configuration
+returns `send` before touching any input or store.
 
 The rules reuse the single-candidate helpers in `eval.talk`: token shingles and
 optional cosine for own repetition, five-word phrases used by two other members
@@ -106,9 +107,43 @@ Receipts live in existing `meta` keys `guards:sent:<local-day>:<guid>`; no migra
 is needed. Values contain hashed receipt IDs, hashed stock phrases and gag IDs,
 not text. Rejected candidates and reactions spend no text allowance. Caps count
 across channels per member/day; lexicon joke/slang caps require active adoption.
-No automatic receipt pruning occurs. A future retention policy must preserve
-delivery-retry days before deleting older keys. Missing receipt tables omit the
+Confirmed delivery prunes receipt keys older than the preceding fourteen local
+calendar days, in the caller's transaction. Retries outside that retention window
+are not deduplicated. Other metadata is untouched. Missing receipt tables omit the
 check; malformed receipts return a fixed rewrite code rather than resetting caps.
+
+## Live adapter
+
+`[guards] enabled = true` admits review independently of `[talk] aware = true`.
+Both remain off by default. The card uses 600 estimated tokens for guild/officer/
+Discord, 450 for whispers/DMs, and 400 for other game channels, plus a fixed
+delimiter. Voice uses its existing typed fallback scope. Game and Discord chat
+evidence never cross media. DMs and whispers retain the exact pair; owner claims
+need visible cited provenance too. Uncited owner corrections are omitted.
+
+Every styled draft is checked before typing. One rewrite per turn goes through
+the existing real-name, content and tell screens, then review again. A signed
+exact-text template cannot be rewritten and is dropped instead. Reaction verdicts
+send a game nod/laugh or react to the Discord parent. A whisper has no private
+game-emote transport, so it stays silent. Reactions spend the turn's pacing budget
+without recording a spoken line, memory use, game session or Discord game activity.
+Typed lines are checked again after typing; a newly failed check drops the line.
+Per-member locks cover review through acknowledged delivery and receipt recording.
+
+Any review/embedding exception logs only `guard_review_failed_open` and the guid,
+then sends through the ordinary delivery gates. Cancellation propagates. Semantic
+checks still require `semantic_enabled`; enabled claims use the existing embedder
+and contradiction checker. At most seventeen texts are embedded per check, with
+a five-second timeout, no open read transaction, and a 512-vector memory cache.
+World evidence refreshes at most once a minute. These are bounds, not a latency SLA.
+
+Run `python -m pytest -q -s tests/guards/test_rehearsal.py` for the four-turn
+FakeLLM/FakeBridge comparison. Off: four text lines, one contradiction, one filler
+after a question, one location mismatch. On: three text lines, one reaction, zero
+of those flags. Thus each of those detector rates is 25% to 0% per attempted turn
+(25% to 0% per sent line); repetitions are zero in both. The script selects its
+rewrite answers and uses fake embeddings; this measures integration, not live
+quality, semantic calibration or a false-positive rate.
 
 ## Measurement limits
 

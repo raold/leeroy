@@ -1,8 +1,9 @@
 # Member claims
 
 Remember what a member said about their own facts, opinions and plans, so a later
-line can be checked for contradictions. This package does not change live talk,
-prompts, personas or existing night stages.
+line can be checked for contradictions. Enabled live guards use this checker;
+the claims night stage attaches to both the app and standalone night runner.
+Neither switch is enabled by default.
 
 Enable the extension with `[claims] enabled = true` in `mind.toml`. It is off by
 default; an invalid table means off. `claims` runs after `notes` on the reflection

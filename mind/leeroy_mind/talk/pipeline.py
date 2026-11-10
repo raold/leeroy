@@ -341,6 +341,8 @@ class TurnMeta:
     # what recall looks for when the turn has no trigger line: for an answer to his Discord post,
     # its words and its thread's last lines (discord.talk, ruling R13); "" for every other turn
     recall_query: str = ""
+    guard_verdict: str = "not_run"
+    guard_rewritten: bool = False
 
 
 class _ScopeChanged(SchedulerError):
@@ -1140,7 +1142,12 @@ class Pipeline:
                    *([follow] if follow else []),
                    *([turn.instruction] if turn.kind in (TurnKind.BIT, TurnKind.ASIDE)
                      else [])]
-        return Composed(render_messages(trimmed),
+        messages = render_messages(trimmed)
+        if self.cfg.talk.aware:
+            block = self.live_review.block(turn, meta, close=bool(real))
+            messages[-1] = dict(messages[-1], content=messages[-1]["content"] + "\n\n" + block)
+            support.append(block)
+        return Composed(messages,
                         [m.id for m in memories[:len(trimmed.memories)]], p, close,
                         [trigger] if trigger else [], [r.text for r in earlier], samples,
                         support, [r.text for r in recent if r.id != turn.trigger_line],
@@ -1243,6 +1250,9 @@ class Pipeline:
         self._current[task] = turn
         outcome = "completed"
         try:
+            if self.live_review.config.enabled:
+                async with self.live_review.lock(turn.speaker):
+                    return await self._speak_now(turn, meta)
             return await self._speak_now(turn, meta)
         except asyncio.CancelledError:
             outcome = "cancelled"
@@ -1295,6 +1305,7 @@ class Pipeline:
         if why:
             return self._drop(turn, meta, why)
         memory_ids: list[int] = []
+        c = None
         text = turn.template
         if text is None:
             original_instruction = turn.instruction
@@ -1347,6 +1358,13 @@ class Pipeline:
         only = command_only(text)
         text = self._spell_real_name(text, close=close, offered=meta.offered_real_name)
         if voiced and text.strip() and not only:
+            checked = await self._guarded_lines(turn, meta, p, [Styled(text, text)], c,
+                                                close=close, spoken=True)
+            if not checked:
+                return []
+            text = checked[0].line
+            if meta.guard_rewritten:
+                emotes = []
             spoken = await self._speak_voice(turn, meta, p, text, memory_ids)
             if spoken is not None:
                 if spoken:
@@ -1368,6 +1386,11 @@ class Pipeline:
                 await self._send_emotes(turn, meta, emotes)
             return self._drop(turn, meta, "emote_only" if emotes else "command" if only
                               else "empty", memory_ids, text=text)
+        lines = await self._guarded_lines(turn, meta, p, lines, c, close=close)
+        if not lines:
+            return []
+        if meta.guard_rewritten:
+            emotes = []
         delay_mult = effects_for(self._altered_of(turn.speaker), turn.kind).delay_mult
         sent: list[Styled] = []
         try:
@@ -1397,6 +1420,78 @@ class Pipeline:
             await self._send_emotes(turn, meta, emotes)
             self._after_sent(turn, meta, p, " ".join(s.line for s in sent))
         return [s.line for s in sent]
+
+    async def _guarded_lines(self, turn, meta, p, lines, composed, *, close, spoken=False):
+        if not self.live_review.config.enabled:
+            return lines
+        for attempt in range(2):
+            for line in lines:
+                verdict = await self.live_review.check(turn, meta, line.plain)
+                if not _scope_valid(meta) or not self.live_review.valid(turn, meta):
+                    return self._drop(turn, meta, "scope_changed")
+                if self.scheduler.expired(turn.deadline):
+                    return self._drop(turn, meta, "expired")
+                if verdict.action == "send":
+                    continue
+                if verdict.action == "react":
+                    await self._guard_react(turn, meta, verdict.reaction)
+                    return self._drop(turn, meta, "guard_react")
+                if verdict.action == "drop":
+                    return self._drop(turn, meta, "guard_drop")
+                if meta.guard_rewritten or meta.before_transport is not None:
+                    meta.guard_verdict = "drop"
+                    return self._drop(turn, meta, "guard_rewrite_refused")
+                meta.guard_rewritten = True
+                composed = composed or await self._compose(turn, meta, live=True)
+                hint = "Rewrite once to fix these guard codes: " + ", ".join(verdict.codes)
+                retry = replace(composed, messages=[*composed.messages,
+                    {"role": "assistant", "content": "\n".join(s.plain for s in lines)},
+                    {"role": "user", "content": hint}])
+                text, why = await self._generate(turn, meta, retry, spoken=spoken, max_attempts=1)
+                if why:
+                    meta.guard_verdict = "drop"
+                    return self._drop(turn, meta, "guard_rewrite_failed")
+                text = self._spell_real_name(emote_words(self._link_items(turn, meta, text)),
+                                            close=close, offered=meta.offered_real_name)
+                if command_only(text):
+                    return self._drop(turn, meta, "guard_rewrite_failed")
+                lines = ([Styled(text, text)] if spoken else
+                         self._style(turn, p, text, close=close, two_lines=meta.two_lines, romance=meta.romance))
+                lines = [Styled(defuse(s.line), defuse(s.plain)) for s in lines]
+                break
+            else:
+                return lines
+        meta.guard_verdict = "drop"
+        return self._drop(turn, meta, "guard_rewrite_failed")
+
+    async def _guard_react(self, turn, meta, reaction):
+        # A private game whisper has no private emote transport. It stays silent.
+        if turn.channel == "whisper" or meta.elsewhere or meta.why == "hotmic":
+            return
+        async with self._timed_send_lock(meta):
+            if (not _scope_valid(meta) or not self.live_review.valid(turn, meta)
+                    or self._blocked(turn, meta, self.clock.now(), first=True)):
+                return
+            if is_discord(turn.channel):
+                from leeroy_mind.discord.store import react
+                target = meta.discord.reply_to if meta.discord else None
+                if target is None:
+                    return
+                try:
+                    react(self.store, target, member=turn.speaker,
+                          emoji=reaction if reaction in {"👍", "😄"} else "👍", now=self.clock.now())
+                except DiscordRefused:
+                    return
+            else:
+                try:
+                    ack = await self.send(Emote(id="", guid=turn.speaker,
+                        emote="laugh" if reaction == "😄" else "nod", target_guid=meta.emote_target))
+                except BridgeError:
+                    return
+                if not ack.ok:
+                    return
+            (meta.guards or self.guards).record(meta.turn_id, turn.speaker, self.clock.now(),
+                                               turn.kind, initiated=meta.initiates)
 
     def _summons_typed_to_him(self, turn: Turn, text: str) -> bool:
         """A voiced line that falls back to typed chat with him: a summons could stand in the
@@ -1646,7 +1741,7 @@ class Pipeline:
         return result.text
 
     async def _generate(self, turn: Turn, meta: TurnMeta, c: Composed, *,
-                        spoken: bool = False) -> tuple[str, str | None]:
+                        spoken: bool = False, max_attempts: int = 2) -> tuple[str, str | None]:
         """The words to style, or a drop reason with the rejected text. What the model copied
         from the prompt's chat frame goes first (strip_copied), and "(nothing)" is looked for
         again after it and after every repair. A fatal or soft tell (an echo of the line it
@@ -1673,7 +1768,7 @@ class Pipeline:
 
         def quiet(t: str) -> bool:  # an emoji-only line is a Discord message (ruling R9)
             return is_silence(t) and not (emoji and _emoji_only(t))
-        for attempt in (0, 1):
+        for attempt in range(max_attempts):
             if not _scope_valid(meta):
                 return text, "scope_changed"
             asked = self.clock.now()
@@ -1907,6 +2002,12 @@ class Pipeline:
         The send itself is shielded: once the server may have the line, it is recorded. A turn
         cancelled meanwhile keeps the lock until the line has settled, and that line's outcome
         is the turn's row."""
+        if self.live_review.config.enabled:
+            verdict = await self.live_review.check(turn, meta, meta.words or text)
+            if verdict.action != "send":
+                return "guard_changed_before_send"
+            if not self.live_review.valid(turn, meta):
+                return "scope_changed"
         async with self._timed_send_lock(meta):
             why = self._blocked(turn, meta, self.clock.now(), first=first, deadline=False)
             if why:
@@ -2025,8 +2126,12 @@ class Pipeline:
                     zone=zone)
         audience = self.world.audience(turn.channel, from_guid=turn.speaker,
                                        to_guid=turn.to_guid, zone=zone)
-        line_id = self.store.insert_chat_line(chat, session_id=sid, origin="mind",
-                                              audience=audience)
+        if self.live_review.config.enabled:
+            with self.store.transaction():
+                line_id = self.store.insert_chat_line(chat, session_id=sid, origin="mind", audience=audience)
+                self.live_review.record(turn, meta, meta.words or text, line_id)
+        else:
+            line_id = self.store.insert_chat_line(chat, session_id=sid, origin="mind", audience=audience)
         if not discord:
             self.world.add_line(ChatLineRow(
                 id=line_id, ts=now, channel=turn.channel, from_guid=turn.speaker,
