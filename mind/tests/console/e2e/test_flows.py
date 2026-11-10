@@ -154,6 +154,37 @@ def test_raid_offline_reasons_and_mind_stop_start(rehearsal):
     asyncio.run(run())
 
 
+def test_hide_photos_draws_initials_and_is_remembered(rehearsal):
+    async def run():
+        from playwright.async_api import expect
+        async with rehearsal() as r:
+            await open_console(r)
+            await visit(r.page, "personas")
+            row = r.page.locator('.sfrow[data-guid="101"]')
+            await submit(r, row.locator('[data-index="0"]'), "/api/selfie")
+            tab = r.page.locator("#tab-personas")
+            photo = tab.locator('img.av[data-face-guid="101"]').first
+            await expect(photo).to_be_visible()
+            await r.page.locator("#photos").click()
+            await expect(r.page.locator("html")).to_have_attribute("data-photos", "hidden")
+            await expect(r.page.locator("#photos")).to_have_text("Show photos")
+            await expect(r.page.locator("#photos")).to_have_attribute("aria-pressed", "true")
+            await expect(r.page.locator("img.av")).to_have_count(0)
+            await expect(tab.locator('span.av[data-face-guid="101"]').first).to_be_visible()
+            await r.page.locator("#photos").click()
+            await expect(r.page.locator("#photos")).to_have_text("Hide photos")
+            await expect(photo).to_be_visible()
+            await r.page.locator("#photos").click()
+            await visit(r.page, "comms")  # the keyless reload polls only what the theme test expects
+            r.expected_http_errors.add(("/api/events", 403))
+            r.expected_http_errors.add(("/api/discord", 403))  # Comms polls Discord too
+            await r.page.reload()
+            await expect(r.page.locator("html")).to_have_attribute("data-photos", "hidden")
+            await expect(r.page.locator("#photos")).to_have_text("Show photos")
+            assert not r.errors, r.errors
+    asyncio.run(run())
+
+
 def test_theme_persists_key_does_not_and_origin_gate(rehearsal):
     async def run():
         from playwright.async_api import expect
@@ -168,6 +199,7 @@ def test_theme_persists_key_does_not_and_origin_gate(rehearsal):
             assert response.status == 403
             assert not any(c.get("text") == "Never sent." for c in r.bridge.commands)
             r.expected_http_errors.add(("/api/events", 403))
+            r.expected_http_errors.add(("/api/discord", 403))  # Comms polls Discord too
             await r.page.reload()
             await expect(r.page.locator("html")).to_have_attribute("data-theme", "light")
             await expect(r.page.locator("#s-lost")).to_contain_text("opened without its key")

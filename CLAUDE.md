@@ -1091,7 +1091,9 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   with no inline style. Dark is the default whatever the system setting; the
   light/dark switch is remembered in `localStorage` (`guild-console-theme`,
   with the folds and read marks, `guild-console-collapsed` and
-  `guild-console-read`). It has 14 tabs (Comms, Raid, Guild, Personas, Social,
+  `guild-console-read`). Beside it, Hide photos (`guild-console-photos`, applied before the first
+  paint) draws every member's face as initials without asking for the photo, and blanks any
+  other photo (the gallery, the selfie picker) until it is switched back. It has 14 tabs (Comms, Raid, Guild, Personas, Social,
   Board, Calendar, Bank, Realm, Training, Dojo, Library, Ops, Mind); each polls only
   while it is open and the page is visible, one request at a time. A source that is
   not there yet answers 200 and reads "Not set up yet: <why>"; only a file that
