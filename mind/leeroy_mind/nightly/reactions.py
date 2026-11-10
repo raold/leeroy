@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-from leeroy_mind.discord.channels import is_private
+from leeroy_mind.discord.channels import is_private, same_medium
 from leeroy_mind.personas.screens import has_word
 
 LAUGH_RE = re.compile(r"(?<!\w)(?:lo+l|lmf?ao|rofl|(?:ha){2,}|(?:he){2,}|xd)(?!\w)|:d\b", re.I)
@@ -57,10 +57,13 @@ def reactions(store, window, human: int, names: dict[int, str]) -> list[Reaction
             continue
         addressed = (row["to_guid"] == human if is_private(row["channel"]) else
                      any(has_word(row["text"], n) for n in human_names))
-        answers = store.conn.execute(
+        # his lines after hers in her line's world only: a Discord DM never answers a game line,
+        # nor a whisper a Discord line (ruling R11)
+        answers = [a for a in store.conn.execute(
             "SELECT * FROM chat_line WHERE origin = 'human' AND from_guid = ? "
             "AND (ts > ? OR (ts = ? AND id > ?)) AND ts <= ? ORDER BY ts, id",
             (human, row["ts"], row["ts"], row["id"], row["ts"] + WHISPER_BACK_S)).fetchall()
+            if same_medium(a["channel"], row["channel"])]
         direct = []
         for a in answers:
             whisper = is_private(a["channel"]) and a["to_guid"] == g

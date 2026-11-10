@@ -21,6 +21,12 @@ def is_discord(channel) -> bool:
     return isinstance(channel, str) and channel.startswith((CHANNEL_PREFIX, DM_PREFIX))
 
 
+def same_medium(a, b) -> bool:
+    """Two channels of one world: both the guild's Discord or both the game. A line in one never
+    answers a line in the other, and Discord never counts as play in the game (ruling R11)."""
+    return is_discord(a) == is_discord(b)
+
+
 def channel_id(channel: str) -> str:
     """The Discord store's channel: the layout id of `discord:<id>`; a `dm:<guid>` as it is."""
     return channel.removeprefix(CHANNEL_PREFIX)

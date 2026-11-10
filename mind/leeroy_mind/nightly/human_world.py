@@ -11,7 +11,7 @@ from collections import defaultdict
 from dataclasses import asdict, replace
 from datetime import datetime
 
-from leeroy_mind.discord.channels import discord_sql, is_private
+from leeroy_mind.discord.channels import discord_sql, is_private, same_medium
 from leeroy_mind.memory.privacy import stricter
 from leeroy_mind.memory.writer import clean_memory_text
 from leeroy_mind.nightly.attraction import reflection_row
@@ -215,9 +215,10 @@ def arm_weights(store, guid, arms, context, rng):
 def _reaction_refs(ctx, reaction, line):
     """The bids and actual feedback that justify a reaction, including private replies."""
     names = cast_names(ctx.store) | {ctx.human: ctx.ident.called}
-    answers = ctx.store.conn.execute("SELECT * FROM chat_line WHERE origin='human' AND from_guid=? "
-        "AND (ts>? OR (ts=? AND id>?)) AND ts<=? ORDER BY ts,id",
+    answers = [a for a in ctx.store.conn.execute("SELECT * FROM chat_line WHERE origin='human' "
+        "AND from_guid=? AND (ts>? OR (ts=? AND id>?)) AND ts<=? ORDER BY ts,id",
         (ctx.human, line["ts"], line["ts"], line["id"], line["ts"] + WHISPER_BACK_S)).fetchall()
+        if same_medium(a["channel"], line["channel"])]  # as reactions(): one world (R11)
     direct = [a for a in answers if (is_private(a["channel"]) and a["to_guid"] == reaction.speaker) or (
         a["channel"] == line["channel"] and not is_private(a["channel"]) and a["ts"] <= line["ts"] + REPLY_S
         and (has_word(a["text"], names[reaction.speaker]) or (

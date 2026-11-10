@@ -514,3 +514,42 @@ def test_discord_sql_reads_the_discord_channels():
         DM, GENERAL, OFFICERS]
     with pytest.raises(ValueError):
         discord_sql("channel; DROP TABLE t")
+
+
+def _her_guild_line(h, t):
+    """Her game line naming him, inside a session (what the night's reactions read)."""
+    h.session(t - 600, t + 3600)
+    return put(h, t, 102, "testmage you coming to the raid?", "guild",
+               audience=(101, 102, 103, 104, 105))
+
+
+@pytest.mark.parametrize("his", ["dm", "whisper"])
+def test_a_dm_never_answers_her_game_line(h, his):
+    """R11: his Discord DM to her within WHISPER_BACK_S of her game line is no whisper answer to
+    it (reactions, the human world's refs, the season's laugh); a WoW whisper (the control) is."""
+    from leeroy_mind.nightly import awards, human_world, reactions
+    t = h.T + 7200
+    line = _her_guild_line(h, t)
+    answer = put(h, t + 30, 1, "haha yeah on my way", DM if his == "dm" else "whisper", to=102)
+    names = {g: n for g, (n, _, _) in TEST_CAST.items()} | {1: "Testmage"}
+    [r] = [x for x in reactions.reactions(h.store, (t - 1, t + 1), 1, names) if x.line_id == line]
+    assert r.reaction == ("none" if his == "dm" else "laugh")
+    for kind in ("laugh", "whisper", "reply"):
+        reaction = reactions.Reaction(line, 102, "open", "guild", t, True, kind)
+        row = h.store.conn.execute("SELECT * FROM chat_line WHERE id = ?", (line,)).fetchone()
+        refs = human_world._reaction_refs(h.ctx(), reaction, row)
+        assert refs == ([f"chat:{line}"] if his == "dm" else [f"chat:{line}", f"chat:{answer}"])
+    laugh = reactions.Reaction(line, 102, "open", "guild", t, True, "laugh")
+    assert awards._laughed_before_end(h.store, laugh, t + 60, 1, names) is (his == "whisper")
+
+
+def test_a_whisper_never_answers_her_discord_dm(h):
+    """The other way round: his WoW whisper after her DM to him is no answer to her DM."""
+    from leeroy_mind.nightly import reactions
+    t = h.T + 7200
+    h.session(t - 600, t + 3600)
+    hers = put(h, t, 102, "you there?", DM, to=1)
+    put(h, t + 30, 1, "lol yes", "whisper", to=102)
+    names = {g: n for g, (n, _, _) in TEST_CAST.items()} | {1: "Testmage"}
+    [r] = [x for x in reactions.reactions(h.store, (t - 1, t + 1), 1, names) if x.line_id == hers]
+    assert r.reaction == "none"
