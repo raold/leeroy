@@ -149,6 +149,18 @@ class MindHandle:
         return Outcome(forced.code, f"{forced.message} by force ({why})", forced.state,
                        forced.pid)
 
+    def clean_stop(self) -> Outcome:
+        """Release preparation never falls back to force."""
+        self.stopping = True
+        try:
+            clean, _ = self._clean_stop()
+            if clean is None:
+                raise OwnershipError("a clean mind stop could not be verified; no root was released")
+            self.launch = None
+            return clean
+        finally:
+            self.stopping = False
+
     def act(self, action: str) -> Outcome:
         if action in ("stop", "restart"):
             self.stopping = True
@@ -206,6 +218,13 @@ class Controls:
             raise Refused(403 if not self.enabled else 409, problem)
         if self.busy is not None or self._lock.locked():
             raise Refused(409, "another start, restart or stop is still running")
+
+    def reserve_ops(self):
+        if not self.enabled:
+            raise Refused(403, "control is off")
+        if self.busy is not None or self._lock.locked():
+            raise Refused(409, "another action is still running")
+        self.busy = ("mind", "ops")
 
     async def act(self, service: str, action: str) -> Outcome:
         self.check(service, action)

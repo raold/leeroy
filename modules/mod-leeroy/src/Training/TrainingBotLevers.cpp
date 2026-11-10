@@ -1,5 +1,6 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "TrainingCommands.h"
+#include "Guild/PlayStyle.h"
 #include "TrainingTap.h"
 #include "DummyTrialJob.h"
 #include "GuildPorts.h"
@@ -227,6 +228,7 @@ std::string_view ApplyTrainingStrategies(Player* bot, std::string const& param, 
         if (end == std::string_view::npos) break;
         rest.remove_prefix(end + 1);
     }
+    if (!PlayStyle::Restore(bot)) return "playstyle_cleanup";
     auto guid = bot->GetGUID().GetCounter();
     // Snapshot every affected group before touching any of them. A failure leaves a complete retryable journal.
     for (auto const& part : parts)
@@ -271,6 +273,9 @@ std::string_view ApplyTrainingValue(Player* bot, std::string const& param)
                     rest.remove_prefix(end + 1);
                 }
             }
+            if (!PlayStyle::Restore(bot)) return "playstyle_cleanup";
+            before = ReadValue(GET_PLAYERBOT_AI(bot), std::string(name));
+            if (!before) return "failed";
             JournalOf(bot->GetGUID().GetCounter()).NoteValue(name, *before);
             if (WriteValue(bot, std::string(name), text, false)) return {};
             RequireTrainingCleanup();

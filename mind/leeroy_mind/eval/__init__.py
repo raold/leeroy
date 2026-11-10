@@ -53,6 +53,11 @@ def _context_sections(ctx):
         realm_on = False
     if realm_on:
         sections[canon.SECTION] = realm or canon.report_section
+    from leeroy_mind.fingerprint.config import enabled as fingerprint_enabled
+    sections.pop('voice_fingerprint', None)
+    if fingerprint_enabled(config):
+        from leeroy_mind.fingerprint.night import report_section
+        sections['voice_fingerprint'] = report_section
     return sections
 
 

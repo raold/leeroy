@@ -1944,6 +1944,10 @@ class Pipeline:
                 self.on_line_sent(line_id, chat)
             except Exception:
                 log.exception("on_line_sent hook failed")
+        if (signals := getattr(self, "signals", None)) is not None:
+            signals.sent(line_id, chat, addressed=bool(hg and
+                         (meta.answers_human or turn.addressee == hg or turn.to_guid == hg)),
+                         heard=heard)
         if meta.on_recorded is not None and ack is not None:
             try:
                 meta.on_recorded(line_id, ack)

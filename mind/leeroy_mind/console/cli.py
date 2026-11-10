@@ -128,6 +128,12 @@ def settings_from(data: Path, root: Path, port: int, key: str, voice_where=None,
     listed, listed_problem = load_allow_hosts(data / "mind.toml")
     s = Settings(data_dir=data, root=root, port=port, key=key, stable_key=stable_key,
                  allow_hosts=tuple(dict.fromkeys([*allow_hosts, *listed])))
+    from ..endpoint import load_control_config
+    try:
+        control = load_control_config(data / "mind.toml")
+        s.ops_actions = control.enabled and control.ops_actions
+    except ConfigError:
+        s.ops_actions = False
     try:
         cfg = load_config(data / "mind.toml")
     except ConfigError as e:
