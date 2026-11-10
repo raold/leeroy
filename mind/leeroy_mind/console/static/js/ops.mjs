@@ -1,6 +1,7 @@
 import { $, api, clear, el, refused } from "./core.mjs";
 import { pollTab, renderKpis } from "./tabkit.mjs";
 import { PANELS, at, badge, lines, panelWords } from "./opsmodel.mjs";
+import { actionButton, refreshActions } from "./opsactions.mjs";
 
 // The tab badge shows only when something needs a look (a health FAIL or a held member).
 function setBadge(value) {
@@ -17,6 +18,7 @@ function setBadge(value) {
 }
 
 function renderOps(value) {
+  refreshActions();
   const count = badge(value), panels = value.panels || {};
   setBadge(value);
   renderKpis($("ops-kpis"), [
@@ -38,8 +40,12 @@ function renderOps(value) {
           field.type = "text"; field.readOnly = true; field.value = r.release_command;
           field.addEventListener("focus", () => field.select());
           label.appendChild(field); card.appendChild(label);
+          if (r.state === "unknown") { card.appendChild(actionButton("Review release", "release", r.id)); }
         }
       });
+    }
+    if (name === "raids" && p.offline?.command_id && !["complete", "rejected"].includes(p.offline.phase)) {
+      card.appendChild(actionButton("Review offline raid stop", "offline_stop", p.offline.command_id));
     }
     box.appendChild(card);
   });

@@ -256,6 +256,7 @@ class Settings:
     allow_hosts: tuple[str, ...] = ()  # tailnet names (lower case) served at https://NAME too
     stable_key: bool = False  # the key is --key-file's, not this start's
     dojo_layout: Path | None = None  # the dojo's layout.json (the Dojo tab reads its files only)
+    ops_actions: bool = False
 
 
 class _Subscriber:
@@ -310,6 +311,8 @@ class ConsoleApp:
         self._tasks: list[asyncio.Task] = []
         self._server = None
         self._ops = opsview.OpsView(settings.root, settings.data_dir)
+        from .opsactions import OpsActions
+        self._ops_actions = OpsActions(self)
 
     # -- the strip ---------------------------------------------------------------------------
 
@@ -672,6 +675,8 @@ class ConsoleApp:
         refused = self.gate(req)
         if refused is not None:
             return refused
+        if req.method == "POST" and req.path != "/api/ops/action" and self._ops_actions.busy:
+            return json_response(409, {"ok": False, "error": "An Ops action is still running."})
         if req.path == "/":
             if req.method != "GET":
                 return text(405, "Method not allowed.", [("Allow", "GET")])
@@ -694,6 +699,8 @@ class ConsoleApp:
                   ("GET", "/api/training"): self._api_training,
                   ("GET", "/api/ops"): self._api_ops,
                   ("GET", "/api/ops/badge"): self._api_ops_badge,
+                  ("GET", "/api/ops/action"): self._api_ops_action_status,
+                  ("POST", "/api/ops/action"): self._ops_actions.post,
                   ("GET", "/api/dojo"): self._api_dojo,
                   ("GET", "/api/library"): self._api_library,
                   ("GET", "/api/personas"): self._api_personas,
@@ -736,6 +743,9 @@ class ConsoleApp:
 
     async def _api_state(self, req: Request):
         return json_response(200, await self.snapshot())
+
+    async def _api_ops_action_status(self, req: Request):
+        return json_response(200, self._ops_actions.view())
 
     async def _api_events(self, req: Request):
         if len(self._subs) >= MAX_STREAMS:
@@ -1391,6 +1401,7 @@ class ConsoleApp:
         return [f"https://{name}/#key={self.s.key}" for name in self.s.allow_hosts]
 
     async def close(self) -> None:
+        await self._ops_actions.close()
         for task in self._tasks:
             task.cancel()
         for task in self._tasks:
