@@ -136,7 +136,8 @@ def length_rule(t: Typing) -> str:
 
 
 def comms_rules(human: HumanIdentity, persona: Persona | None = None, *,
-                data_dir: Path | None = None) -> str:
+                data_dir: Path | None = None, now: float | None = None,
+                channel: str = "", recipient: int | None = None) -> str:
     """COMMS_RULES for this guild: who the human is (never his real name), then the rules
     with his name and the persona's line length (length_rule), then the persona's FLIRT_RULE,
     then the persona's tuning lines (tuning.lines: only when the owner has turned a wording dial
@@ -152,6 +153,10 @@ def comms_rules(human: HumanIdentity, persona: Persona | None = None, *,
     if gender in FLIRT_RULE:
         out += "\n" + FLIRT_RULE[gender].format(human=human.called)
     for line in tuning_lines(persona, data_dir):
+        out += "\n- " + line
+    from leeroy_mind.tuning.nudges import prompt_lines
+    for line in prompt_lines(persona, now=now, channel=channel, recipient=recipient,
+                             human=human.guid):
         out += "\n- " + line
     return out
 

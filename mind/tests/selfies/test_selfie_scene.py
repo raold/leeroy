@@ -184,7 +184,7 @@ def test_the_schema_template_and_ask_are_the_briefs():
     assert set(SCENE_SCHEMA["required"]) == set(props)
     assert props["photo"] == {"type": "boolean"}
     assert props["kind"]["enum"] == ["selfie", "mirror_selfie", "snapshot"]
-    assert props["framing"]["enum"] == ["face", "head_and_shoulders", "upper_body"]
+    assert props["framing"]["enum"] == ["face", "head_and_shoulders", "upper_body", "three_quarter"]
     assert props["audience"]["enum"] == ["him", "anyone"]
     assert all("enum" in props[f] for f in ("setting", "activity", "outfit", "expression", "prop"))
     assert SCENE_ASK == "Choose {name}'s photo." and SCENE_NAME == "scene"

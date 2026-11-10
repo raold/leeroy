@@ -55,6 +55,8 @@ class TuningService:
     async def handle(self, args: dict) -> dict:
         action = args["action"]
         try:
+            if action == "nudge":
+                return await self._nudge(args)
             if action == "status":
                 return self.status()
             if action == "preview":
@@ -64,6 +66,25 @@ class TuningService:
         except (C.TuneError, G.GroupError) as e:
             log_event("tune_refused", action=action)
             return {"ok": False, "error": str(e)}
+
+    async def _nudge(self, args):
+        from . import nudges as N
+        verb, app = args["verb"], self.app
+        if verb == "list":
+            return {"ok": True, **N.view(app.store.conn, now=app.clock.now())}
+        if verb == "preview":
+            from .nudge_preview import preview
+            return await preview(app, args)
+        if verb == "set":
+            r = N.set_nudge(app.store, args, self.picture(), app.engine.human,
+                            source="console", now=app.clock.now())
+        else:
+            r = N.retire(app.store, args["id"], source="console", now=app.clock.now())
+        self.refresh()
+        log_event("tune_written", action="nudge_" + verb, change=r.change or 0, rows=r.rows)
+        return {"ok": True, "change": r.change, "rows": r.rows,
+                "version": app.personas.tuning.version,
+                "message": f"Saved as change #{r.change}." if r.change else "Already retired."}
 
     def status(self) -> dict:
         t = self.app.personas.tuning
@@ -111,7 +132,7 @@ class TuningService:
         mind.toml for the talk engine when they moved."""
         app = self.app
         before = app.personas.tuning
-        t = load_tuning(app.store)
+        t = load_tuning(app.store, app.clock.now())
         app.personas.set_tuning(t)
         if dict(t.world) != dict(before.world):
             from .world import merge

@@ -39,6 +39,7 @@
   <button role="tab" id="t-training" data-tab="training" aria-controls="tab-training">Training</button>
   <button role="tab" id="t-dojo" data-tab="dojo" aria-controls="tab-dojo">Dojo</button>
   <button role="tab" id="t-library" data-tab="library" aria-controls="tab-library">Library</button>
+  <button role="tab" id="t-ops" data-tab="ops" aria-controls="tab-ops">Ops</button>
   <button role="tab" id="t-mind" data-tab="mind" aria-controls="tab-mind">Mind</button>
 </nav>
 <div id="toasts" role="status"></div>
@@ -430,6 +431,12 @@
     <p id="library-status" class="note" role="status"></p>
     <div id="library-hits"></div>
     <div><button id="library-deeper" class="btn" type="button" hidden>Search deeper</button></div>
+  </section>
+  <section id="tab-ops" class="tab mindtab" role="tabpanel" aria-labelledby="t-ops" hidden>
+    <div id="ops-banner" class="banner bad" role="status" hidden></div>
+    <div class="view-head"><div><h2>Ops</h2><p>Read-only checks, saved work and recovery records. Sources refresh while this tab is open.</p></div></div>
+    <div id="ops-kpis" class="kpis" aria-live="polite"></div>
+    <div id="ops-panels" class="cards"></div>
   </section>
   <section id="tab-mind" class="tab mindtab" role="tabpanel" aria-labelledby="t-mind" hidden>
     <div class="cards">

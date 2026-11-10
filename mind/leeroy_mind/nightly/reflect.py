@@ -348,6 +348,9 @@ def _think_user(ctx: "NightContext", owner: int, ev: Evidence, cards: list[str],
                                                      for p, a in pairs))
     if life:
         parts.append(f"On {name}'s mind lately: {life}")
+    from leeroy_mind.tuning.nudge_memories import past_moods
+    if moods := past_moods(ctx, owner):
+        parts.append(moods)
     if questions:
         parts.append(f"Questions {name} turns over tonight:\n"
                      + "\n".join(f"- {q}" for q in questions))

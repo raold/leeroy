@@ -661,7 +661,18 @@ Local commit `3826b2f4` (built 2026-11-07) keeps pins out of random bot arena te
 login, filling teams below `Playerbots.RandomBotArenaTeam2v2Count`/`3v3Count`/`5v5Count`
 (live 30/30/20, raised from 10/10/5 with `Arena.MaxRatingDifference = 0` so the owner meets
 the strong bot teams), and without it the cast would join them for good. Teams he made
-himself are untouched.
+himself are untouched. It does not remove a pin from a team it joined before, and a
+captain's gather (`BGJoinAction::gatherArenaTeam`) takes any member out of its group
+and teleports it unless its master is a game client (a self-mastered bot counts) or
+it is in combat, a battleground or a queue; on 2026-11-07 it pulled masterless cast
+member 251 out of an offline raid's group. So mod-leeroy (`Leeroy.CastArenaTeams.Leave`,
+default 1, `.reload config`) takes a pinned cast member out of every rated team the owner
+does not captain, on the queue fence's world tick, through the core's `ArenaTeam::DelMember`
+under the leave handler's own conditions (not while the team fights or the member or a
+group-mate is queued, nor while a Realm lease holds the body), once per member and team
+per process: `cast_arena_team_left guid= team= type=`. A cast member who captains a bot
+team is kept and logged once (`cast_arena_team_kept ... reason=captain`): it cannot leave
+without disbanding or handing on the team, which is left to a playerbots patch.
 
 Commits here never carry a `Co-Authored-By` or other attribution trailer.
 
@@ -773,6 +784,7 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 .venv/Scripts/python -m leeroy_mind console --data-dir "$D" # the guild console; open the URL it prints
 .venv/Scripts/python -m pytest -q                           # the unit tests
 .venv/Scripts/python -m pytest -q -n auto tests             # fast run; up to 8 isolated workers
+.venv/Scripts/python -m pip install -r tests/console/e2e/requirements.txt; .venv/Scripts/python -m playwright install chromium; .venv/Scripts/python -m pytest tests/console/e2e -q  # isolated browser rehearsal
 .venv/Scripts/python -m pytest -m ollama                    # optional: also -m live, -m mysql
 ```
 
@@ -855,6 +867,41 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   or the command keeps the existing timeout behaviour and logs unsupported once
   per run. A mind restart requires fresh progress evidence; lost terminals still
   use the deadline (or an accepted stop) plus 15-minute `terminal_lost` fallback. Native rebuild needed.
+- A running offline raid can recall an absent follower after 30 s, at most three
+  attempts per member per run and 60 s between attempts. The original body, group,
+  controller and destination instance must still be proven; combat, PvP, another
+  dungeon, dead bodies and pending transfers prevent it (pure policy
+  `RecallQuietOk`/`RecallBodySafe`/`RecallPvpBusy`; the battlefield and arena lookups
+  run last). Existing leader/minimum roster stops win. Arrival updates the heartbeat
+  without resetting the boss progress clock. Benchmarks do not use this recall path.
+- The job's driver is a self-mastered bot outside the raid group, and stock
+  `ResetAiAction` (the empty group list Grouping's `RemoveFromGroup` sends, or a leader
+  change) clears a master outside the bot's group; `FindNewMaster` finds none in an
+  all-bot raid. On 2026-11-07 that left 3112 (the leader) and 251 masterless, so the
+  teardown that began at 17:33:26 retained `restore_ownership` for both and never ended.
+  Every tick, in every stage including teardown, native now puts the driver back for a
+  member it still holds (same body, the job's group, no Realm or dummy lease) whose
+  master is empty, re-strips follow, restores `wait for attack` and `avoid aoe` and
+  reconciles DC's strategies (`master_reasserted guid= stage= repairs=`, first and every
+  50th). A non-empty foreign master is still an ownership change.
+- A restart no longer needs every member: after 30 s an absent member is dropped from
+  that restart's gate (`restart_dropped guid=`) while the members present meet the
+  minimum; fewer stop the run `too_few`. The leader is never dropped. A dropped member
+  stays in the roster for cleanup and later recall.
+- Native logs the stop reason immediately and includes it in teardown progress.
+  Cleanup still incomplete after 60 s reports `cleanup_failed:<reason>` once,
+  for ordinary offline raids as well as benchmarks; this ends mind accounting. From
+  then on a member the job no longer holds (other group, master or body) that carries
+  no training journal is abandoned (`cleanup_abandoned guid=`, never touched again) so
+  the members it does hold finish their cleanup. Ten minutes after `cleanup_failed`, an
+  ordinary offline raid releases its native slot (`cleanup_released after_ms=
+  unfinished=`; then `training_run_cleared=`) unless a member is still provably held
+  (connected, same body, the job's group, the driver as master), which logs
+  `cleanup_held` once and keeps the slot as before. Release restores the WaitAtBoss
+  override and the leader's DC training-run receipt where it can, and keeps training
+  journals (their `training_journal_pending` fence stays) and the cleanup receipt
+  (`get_training_cleanup` shows it unrestored). Benchmarks never release. A leftover
+  group is disbanded by the 60 s leftover sweep. A native rebuild is required.
 - Members start conversations with him on two clocks (2026-11-07), per hour of
   his play at chattiness 4 and scaled with it (0 stops every unprompted whisper):
   `[talk] whispers_per_hour` (4, at most 8 an hour and 2 minutes apart;
@@ -990,6 +1037,14 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   while the live model is already loaded, never loads one, and its text is never
   logged or stored. `python -m leeroy_mind tuning --data-dir "$D" status|history`
   reads it; `undo N|revert N` work with the mind stopped.
+  Temporary nudges share that history and its undo/revert. They are private
+  owner overlays, never persona edits or log text; 1–200 cleaned characters,
+  1 hour to 14 days, with channel/recipient scope and a 200-token prompt budget.
+  The `tune` op accepts `nudge` set/retire/list/preview; preview keeps the loaded
+  model gate. `tuning nudges` reads active entries and history. Optional
+  `[tuning] nudge_memories` (default true) offers ended everywhere intentions to
+  reflection as past moods, never factual evidence; scoped ones are excluded.
+  Details and storage keys: `mind/leeroy_mind/tuning/README.md`. No migration.
   The page is split into `console/static/` (CSS, a classic `theme.js`, ES
   modules, self-hosted OFL fonts with their licence texts) and is served at
   `/static/` without the key, like the page, since a browser cannot send a
@@ -997,11 +1052,20 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   with no inline style. Dark is the default whatever the system setting; the
   light/dark switch is remembered in `localStorage` (`guild-console-theme`,
   with the folds and read marks, `guild-console-collapsed` and
-  `guild-console-read`). It has 13 tabs (Comms, Raid, Guild, Personas, Social,
-  Board, Calendar, Bank, Realm, Training, Dojo, Library, Mind); each polls only
+  `guild-console-read`). It has 14 tabs (Comms, Raid, Guild, Personas, Social,
+  Board, Calendar, Bank, Realm, Training, Dojo, Library, Ops, Mind); each polls only
   while it is open and the page is visible, one request at a time. A source that is
   not there yet answers 200 and reads "Not set up yet: <why>"; only a file that
-  exists but cannot be read is a 503. `GET /api/face?guid=<int>&size=sm|md|lg` serves
+  exists but cannot be read is a 503. Ops (`GET /api/ops`, `console/opsview.py`) keeps
+  those states per panel in one 200 response: health, night, Realm holds, raids,
+  selfies/snaps, backups, cached Git release drift and scheduled-task status. Each
+  source has its own deadline (health 6 s, Git/tasks 3 s, others 1 s) and one worker;
+  a slow source is explicitly skipped while the others answer. Health reuses the
+  installed checks at most once a minute; the tab polls every 15 s. It shows only
+  counts, codes, identifiers and times; private health diagnostics stay in the CLI.
+  Saved running nights may be paused, unretained progress stays unknown, desk dates
+  mean recorded operations, and backup metadata is not a new restore test. Release
+  commands are selectable text only. `GET /api/face?guid=<int>&size=sm|md|lg` serves
   `mind-data/selfies/<guid>/chosen.jpg` (key and Host checked, `image/jpeg`,
   `private, max-age=60`, 404 when absent; the original for every size, the
   browser scales it) and never writes under `selfies/`; faces (initials when

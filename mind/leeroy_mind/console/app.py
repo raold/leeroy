@@ -75,6 +75,8 @@ run nothing else.
                        op `library`, a read: it works with --no-control); the query is never logged
     GET  /api/training the Training tab: what `training status`, `gate`, `trials` and `cards`
                        print, from mind.db (`setup` false when it has no training tables)
+    GET  /api/ops/badge  the Ops tab badge's two counts (health FAILs, held members), polled while any tab is open
+    GET  /api/ops      eight independently budgeted read-only operations panels (opsview)
     GET  /api/dojo     the Dojo tab: the dojo's own files (its layout's data and runtime roots,
                        read-only) and whether its worldserver listens, from the console's TCP table
     GET  /api/selfies/images  ?guid=&set=: a ready set's four thumbnails as data URLs (404
@@ -120,6 +122,7 @@ from pathlib import Path
 from typing import Callable
 
 from .. import endpoint
+from . import opsview
 from . import (bankview, boardview, calendarview, dojoview, faces, feed, libraryview, mindlog,
                galleryview, netinfo, personaview, raidview, realmview, selfieview, socialview, status, trainview,
                tuneview, insightview)
@@ -306,6 +309,7 @@ class ConsoleApp:
         self._waiting: dict[int, float] = {}  # spoken, voice row not written yet: id -> first seen
         self._tasks: list[asyncio.Task] = []
         self._server = None
+        self._ops = opsview.OpsView(settings.root, settings.data_dir)
 
     # -- the strip ---------------------------------------------------------------------------
 
@@ -688,6 +692,8 @@ class ConsoleApp:
                   ("GET", "/api/board"): self._api_board,
                   ("GET", "/api/bank"): self._api_bank,
                   ("GET", "/api/training"): self._api_training,
+                  ("GET", "/api/ops"): self._api_ops,
+                  ("GET", "/api/ops/badge"): self._api_ops_badge,
                   ("GET", "/api/dojo"): self._api_dojo,
                   ("GET", "/api/library"): self._api_library,
                   ("GET", "/api/personas"): self._api_personas,
@@ -925,6 +931,12 @@ class ConsoleApp:
     async def _api_training(self, req: Request):
         return await self._db_view("training", trainview.training_view, now=self._clock())
 
+    async def _api_ops(self, req: Request):
+        return json_response(200, await self._ops.snapshot({"mind": self.view.state}))
+
+    async def _api_ops_badge(self, req: Request):
+        return json_response(200, await self._ops.badge({"mind": self.view.state}))
+
     async def _api_dojo(self, req: Request):
         view = await asyncio.to_thread(dojoview.dojo_view, self.s.dojo_layout, conns=self._conns)
         return json_response(200, view)
@@ -1048,7 +1060,8 @@ class ConsoleApp:
             if self.view.state != "running" and status_code == 409 and self.controls.busy is None:
                 words = MIND_DOWN
             return json_response(status_code, {"ok": False, "error": words})
-        preview = args["action"] == "preview"
+        preview = (args["action"] == "preview" or
+                   args["action"] == "nudge" and args["verb"] == "preview")
         try:
             reply = await asyncio.to_thread(self.link.call, self._mind_pids(), "tune", args,
                                             timeout=PREVIEW_S if preview else TUNE_S)

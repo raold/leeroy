@@ -54,6 +54,7 @@ class EffectivePersona(Persona):
     exactly Persona's fields."""
     tuned = NEUTRAL
     base = None
+    nudges = ()
 
 
 def is_effective(p) -> bool:
@@ -70,6 +71,17 @@ def base_of(p):
     if isinstance(p, EffectivePersona) and p.base is not None:
         return p.base
     return p
+
+
+def with_nudges(p, nudges):
+    """Attach immutable private overlays to a fresh wrapper, never the stored persona."""
+    if p is None or not nudges:
+        return p
+    out = EffectivePersona(**{f.name: getattr(p, f.name) for f in fields(Persona)})
+    object.__setattr__(out, "tuned", dials_of(p))
+    object.__setattr__(out, "base", base_of(p))
+    object.__setattr__(out, "nudges", tuple(nudges))
+    return out
 
 
 def band(dial: str, p: Persona, mt: MemberTuning) -> str | None:

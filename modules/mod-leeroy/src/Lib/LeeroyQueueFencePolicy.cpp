@@ -34,6 +34,17 @@ bool QueueFenceNativeCallMatches(QueueKind kind, bool wintergrasp, std::uint32_t
         && kind == (wintergrasp ? QueueKind::Wintergrasp : QueueKind::Arena);
 }
 
+CastArenaTeamExit DecideCastArenaTeamExit(CastArenaTeamFacts const& f)
+{
+    if (!f.enabled || !f.cast || !f.pinned || f.human || f.ownerCaptain) return CastArenaTeamExit::Keep;
+    if (f.memberCaptain) return CastArenaTeamExit::Captain;
+    // Core refuses a leave while the team fights or the member is invited from a
+    // queue; DelMember also pulls queued group-mates, so wait for all of those.
+    if (f.realmHeld || f.teamFighting || f.inBattleground || f.inQueue || f.groupQueued)
+        return CastArenaTeamExit::Wait;
+    return CastArenaTeamExit::Leave;
+}
+
 void QueueFenceLog::Observe(std::uint32_t guid, std::string_view hold)
 {
     if (hold.empty()) { _holds.erase(guid); return; }

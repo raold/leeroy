@@ -1052,7 +1052,8 @@ class Pipeline:
             quiet=quiet, to_him=to_human and turn.kind is TurnKind.OPEN)
         parts = PromptParts(
             card=self._card(p), samples=samples,
-            rules=comms_rules(human, p, data_dir=self.data_dir), rel_cards=cards,
+            rules=comms_rules(human, p, data_dir=self.data_dir, now=now,
+                              channel=turn.channel, recipient=turn.to_guid), rel_cards=cards,
             memories=[self.recall.format(m) for m in memories],
             mood=mood_line(state, altered, substance_of(p, altered, local), phase,
                            kind=turn.kind, life_thread=p.real_life.life_thread,

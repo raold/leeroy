@@ -39,6 +39,25 @@ After mind restart no saved heartbeat authorizes a stop; fresh native evidence i
 required. Lost-terminal handling (deadline plus 15 minutes) is unchanged. No schema
 migration. **Deploying this feature requires a native rebuild and updated mind.**
 
+# Offline raid ownership and stuck cleanup
+
+The driver is a self-mastered bot outside the raid group. Stock playerbots'
+`ResetAiAction` clears a master outside the bot's group and `FindNewMaster` finds
+none in an all-bot raid, so a member could be left masterless: slow thinking, no
+protection from an arena captain's gather (which skips only members with a game-client
+master), and a failed teardown ownership proof. Each world tick native restores the
+driver for a member it still holds whose master is empty (`master_reasserted`).
+
+A restart drops a member still absent after 30 s from its gate when the present
+members meet the minimum (`restart_dropped`), else stops `too_few`. Once cleanup has
+failed, a member no longer held and without a training journal is abandoned
+(`cleanup_abandoned`). Ten minutes after `cleanup_failed`, an ordinary offline raid
+releases its slot (`cleanup_released`) unless a member is still held (`cleanup_held`);
+journals and the cleanup receipt are retained. `Leeroy.CastArenaTeams.Leave` (default 1)
+takes pinned cast members out of rated teams the owner does not captain
+(`cast_arena_team_left`); a cast captain of a bot team is kept (`cast_arena_team_kept`).
+Logs carry raid ids, guids, team ids and counts only. **Native rebuild required.**
+
 # Realm job receipts
 
 The bridge's existing `realm_job` event may include `"changed": false` on a
