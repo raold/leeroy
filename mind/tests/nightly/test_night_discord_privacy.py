@@ -553,3 +553,22 @@ def test_a_whisper_never_answers_her_discord_dm(h):
     names = {g: n for g, (n, _, _) in TEST_CAST.items()} | {1: "Testmage"}
     [r] = [x for x in reactions.reactions(h.store, (t - 1, t + 1), 1, names) if x.line_id == hers]
     assert r.reaction == "none"
+
+
+@pytest.mark.parametrize("hers", ["dm", "guild"])
+def test_his_game_emote_never_answers_her_discord_line(h, hers):
+    """R11: his in-game /wave at her within REPLY_S of her Discord line is no reaction to it; the
+    same emote after her game line (the control) is."""
+    import json
+    from leeroy_mind.nightly import reactions
+    t = h.T + 7200
+    h.session(t - 600, t + 3600)
+    line = (put(h, t, 102, "testmage you around?", DM, to=1) if hers == "dm"
+            else put(h, t, 102, "testmage you coming to the raid?", "guild",
+                     audience=(101, 102, 103, 104, 105)))
+    h.store.conn.execute("INSERT INTO game_event(ts, type, guid, payload, session_id) "
+                         "VALUES (?, 'text_emote', 1, ?, NULL)",
+                         (t + 20, json.dumps({"guid": 1, "target_guid": 102, "emote": "wave"})))
+    names = {g: n for g, (n, _, _) in TEST_CAST.items()} | {1: "Testmage"}
+    [r] = [x for x in reactions.reactions(h.store, (t - 1, t + 1), 1, names) if x.line_id == line]
+    assert r.reaction == ("emote" if hers == "guild" else "none")

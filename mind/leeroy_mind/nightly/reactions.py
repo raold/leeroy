@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-from leeroy_mind.discord.channels import is_private, same_medium
+from leeroy_mind.discord.channels import is_discord, is_private, same_medium
 from leeroy_mind.personas.screens import has_word
 
 LAUGH_RE = re.compile(r"(?<!\w)(?:lo+l|lmf?ao|rofl|(?:ha){2,}|(?:he){2,}|xd)(?!\w)|:d\b", re.I)
@@ -82,9 +82,9 @@ def reactions(store, window, human: int, names: dict[int, str]) -> list[Reaction
         elif direct:
             reaction = "reply"
         else:
-            emotes = store.conn.execute(
+            emotes = [] if is_discord(row["channel"]) else store.conn.execute(  # a game emote
                 "SELECT payload FROM game_event WHERE type = 'text_emote' AND ts > ? AND ts <= ?",
-                (row["ts"], row["ts"] + REPLY_S)).fetchall()
+                (row["ts"], row["ts"] + REPLY_S)).fetchall()  # answers only a game line
             if any((p := json.loads(e["payload"])).get("guid") == human
                    and p.get("target_guid") == g for e in emotes):
                 reaction = "emote"
