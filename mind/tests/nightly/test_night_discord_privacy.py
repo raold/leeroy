@@ -472,3 +472,21 @@ def test_an_edit_never_loosens_secrecy_and_a_delete_keeps_his_line(h):
     run(desk(h).handle(discord_args({"action": "delete", "message": post})))
     assert h.store.chat_lines([his])[0].text == "between us, " + QUIT
     assert derive_scope(h.store.conn, 102, [f"chat:{hers}"]).scope == "secret"
+
+
+@pytest.mark.parametrize("mark", ["\u2019", "\u02bc"], ids=["u2019", "u02bc"])
+def test_a_phone_apostrophe_asks_for_secrecy_in_a_post_and_an_edit(h, mark):
+    """A phone's smart punctuation types "don\u2019t" (U+2019, or U+02BC): his DM saying so, or
+    his plain DM edited to say "promise you won\u2019t tell", makes her answer secret, as the
+    ASCII apostrophe does; and an edit that drops it never loosens the thread."""
+    asked = put(h, h.T, 1, f"don{mark}t tell anyone but " + QUIT, DM, to=102)
+    hers = put(h, h.T + 10, 102, SEALED, DM, to=1)
+    assert derive_scope(h.store.conn, 102, [f"chat:{hers}"]) == Scope("secret", 1, False)
+    edit_post(h, h.T + 20, his_post(h, asked), QUIT)
+    assert h.store.chat_lines([asked])[0].text == f"don{mark}t tell anyone but " + QUIT
+    plain = put(h, h.T + 300, 1, "i have news about the raid", "dm:104", to=104)
+    assert derive_scope(h.store.conn, 104, [f"chat:{plain}"]) == Scope("private", 1, False)
+    edit_post(h, h.T + 305, his_post(h, plain),
+              f"i have news, promise you won{mark}t tell")
+    theirs = put(h, h.T + 315, 104, "my lips are sealed", "dm:104", to=1)
+    assert derive_scope(h.store.conn, 104, [f"chat:{theirs}"]) == Scope("secret", 1, False)

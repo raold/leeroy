@@ -27,10 +27,13 @@ from leeroy_mind.discord.channels import CHANNEL_PREFIX, is_private, is_restrict
 
 log = logging.getLogger("leeroy_mind")
 
+# An apostrophe as he may type it: ASCII, the right single quote (U+2019) a phone's smart
+# punctuation puts in, or the modifier letter apostrophe (U+02BC).
+_APOSTROPHE = "['\u2019\u02bc]"
 DONT_TELL_RE = re.compile(
-    r"\b(don'?t tell (anyone|anybody|people|the guild)|between (us|you and me)|"
-    r"keep (it|this) (quiet|to yourself|between us)|promise (you )?(won'?t|not to) tell|"
-    r"our (little )?secret)\b", re.I)
+    rf"\b(don{_APOSTROPHE}?t tell (anyone|anybody|people|the guild)|between (us|you and me)|"
+    rf"keep (it|this) (quiet|to yourself|between us)|"
+    rf"promise (you )?(won{_APOSTROPHE}?t|not to) tell|our (little )?secret)\b", re.I)
 SCOPES = ("open", "private", "secret")  # in order of strictness
 _REF = re.compile(r"(chat|memory):([0-9]+)")
 _NIGHT_S = 25 * 3600  # the longest night: 24 hours, 25 when the clocks go back
