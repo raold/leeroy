@@ -820,6 +820,15 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   events the bridge queued for the mind, so never run it while they matter.
 - Do not run `personas generate`/`seed` or a library build while the mind is
   live: they load another large model next to the live one and evict it.
+- Optional `[fingerprint] enabled = true` attaches a model-free typing-profile stage
+  on restart (also in `nightly run`). Missing/invalid settings mean off. It measures
+  the last 300 mind-origin lines, or seeds a documented persona prior below 50.
+  Private/officer lines contribute numbers only; lexical phrases come from public
+  guild/say/yell lines. Logs contain ids/counts and hints use fixed safe wording.
+  No prompt or guard changes yet. `python -m leeroy_mind fingerprint show <guid>`
+  reads without migration, including older databases. Enabled weekly evaluations
+  add a current profile-distance snapshot, not a held-out-week score. See
+  `mind/leeroy_mind/fingerprint/README.md` for the seed mapping and metric limits.
 - Only the night's own writers write personas while the mind runs. Optional
   `[personas] auto_newcomers = true` (read at startup; false or invalid means off)
   gives members who join the cast later (invited, or levelled to 80) a persona at

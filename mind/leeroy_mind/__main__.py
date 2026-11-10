@@ -1247,6 +1247,9 @@ def cmd_generate(args, root, store) -> int:
 def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     """`make_llm(cfg)` replaces the Ollama client for `run` and `doctor` (tests)."""
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == 'fingerprint':
+        from .fingerprint.cli import fingerprint_main
+        return fingerprint_main(argv[1:])
     if argv and argv[0] == "training":
         from .training.cli import training_main
         return training_main(argv[1:])
@@ -1289,6 +1292,7 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     sub.add_parser("eval", help="weekly evaluation on a copied database by default")
     sub.add_parser("claims", help="member claims: status, list, check and scratch evaluation")
     sub.add_parser("awareness", help="read-only member awareness card")
+    sub.add_parser('fingerprint', help='read-only typing style profile')
     sub.add_parser("signals", help="read-only response signal counts")
     sub.add_parser("selfies", help="profile photos: status, and a trial render with the mind "
                    "stopped")

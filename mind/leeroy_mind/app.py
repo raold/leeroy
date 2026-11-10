@@ -450,6 +450,8 @@ class MindApp:
         # P1d's self.guild = install(self).
         self.nightly = attach_nightly(self)
         self.persona_settings = attach_personas(self)
+        from .fingerprint.night import attach as attach_fingerprint
+        attach_fingerprint(self.night_runner, self.data_dir)
         self.voice = attach_voice(self)
         self.guild = install_guild(self)
         self.training = attach_training(self)
