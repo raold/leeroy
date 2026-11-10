@@ -124,6 +124,7 @@ def test_ops_confirmation_refusal_restores_review_without_losing_draft(app, cli_
                 await page.locator("#ops-action-confirm").click()
                 await pw.expect(page.locator("#ops-action-words")).to_contain_text("did not match" if case=="wrong_id" else "expired")
                 await pw.expect(page.locator("#ops-action-preview")).to_be_visible()
+                await pw.expect(page.locator("#ops-action-preview")).to_be_focused()
                 await pw.expect(page.locator("#ops-action-confirm")).not_to_be_visible()
                 await pw.expect(page.locator("#ops-action-reason")).to_be_enabled()
                 await pw.expect(page.locator("#ops-action-reason")).to_have_value("retained operator reason")

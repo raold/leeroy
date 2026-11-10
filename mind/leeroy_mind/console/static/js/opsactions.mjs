@@ -95,6 +95,7 @@ async function send(confirm) {
       $("ops-action-preview").disabled = false; $("ops-action-confirm").disabled = false;
       $("ops-action-reason").disabled = !!preview; $("ops-action-label").disabled = !!preview;
       $("ops-action-typed").disabled = false;
+      if (confirm && !preview) { $("ops-action-preview").focus(); }
     }
   }
 }
