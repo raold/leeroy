@@ -2010,14 +2010,15 @@ class Pipeline:
         quiet clock nor the open thread with him; every typed line still does. A Discord line
         (`discord_id`, its message) keeps its channel in the logs and counts as said, but stays
         out of the game's chat state and clocks: the world's history, the quiet clock, the last
-        line a member said there and the open thread with him (rulings R11)."""
+        line a member said there, the open thread with him and his game session, whose last
+        activity a restart reads (no session id on its line or utterance; rulings R11)."""
         now = self.clock.now()
         discord = is_discord(turn.channel)
         heard = discord or self.comms is None or not self._comms_says(
             "unheard", False, turn.channel, meta)
         m = self.world.members.get(turn.speaker)
         zone, map_id = (m.zone, m.map) if m is not None else (0, 0)
-        sid = self._session_id
+        sid = None if discord else self._session_id
         chat = Chat(ts=int(now * 1000), channel=turn.channel, from_guid=turn.speaker,
                     from_name=p.character_name, to_guid=turn.to_guid, text=text, map=map_id,
                     zone=zone)
@@ -2139,9 +2140,10 @@ class Pipeline:
     def _drop(self, turn: Turn, meta: TurnMeta, reason: str, memory_ids=(), *, text: str = "",
               at: float | None = None) -> list[str]:
         self.timing.decision(meta.timing_trace, reason)
+        sid = None if is_discord(turn.channel) else self._session_id  # no game activity (R11)
         self.store.log_utterance(self.clock.now() if at is None else at, turn.speaker,
                                  turn.channel or "", turn.kind.value, text or "",
-                                 list(memory_ids), reason, self._session_id,
+                                 list(memory_ids), reason, sid,
                                  bit=_bit_id(turn), why=meta.why or None,
                                  trigger_line=turn.trigger_line, llm_s=meta.llm_s,
                                  to_guid=turn.to_guid, turn_id=meta.turn_id)

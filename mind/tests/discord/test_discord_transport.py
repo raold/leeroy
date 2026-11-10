@@ -426,3 +426,22 @@ def test_a_discord_line_sets_off_no_aside(store, clock, tmp_path):
             e._after_sent(turn, meta, p, "miss you zan")
     assert seen == ["guild", "rival", "guild"]
     rig.close()
+
+
+def test_a_discord_line_leaves_his_game_session_alone(store, clock, tmp_path):
+    """R11: with his game session open, a member's Discord line, said or dropped, is stored with
+    no session id, so the session's last activity (what a restart resumes or ends it by) stays
+    where the game left it; a game line (the control) moves it."""
+    rig = make_rig(store, clock, tmp_path)
+    sid = store.start_session(clock.now())
+    rig.engine._session_id = sid  # his session as the engine holds it, without the greetings
+    started = store.session_last_activity(sid)
+    assert rig.speak_turn(discord_turn(rig, 102, "dm:102", to=HUMAN))
+    assert rig.speak_turn(discord_turn(rig, 101, "general"))
+    assert speak(rig, discord_turn(rig, 103, "dm:105", to=HUMAN)) == []  # not her DM: dropped
+    assert store.session_last_activity(sid) == started
+    assert {r["session_id"] for r in store.conn.execute(
+        "SELECT session_id FROM chat_line UNION ALL SELECT session_id FROM utterance")} == {None}
+    assert rig.speak_turn(Turn(kind=TurnKind.OPEN, speaker=104, channel="guild"))
+    assert store.session_last_activity(sid) > started
+    rig.close()
