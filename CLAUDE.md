@@ -1742,6 +1742,12 @@ apart from this install. Read `dojo/README.md` before touching it.
 
 ## Outstanding
 
+- **Appearance variety.** `[looks] diversity = true` opts new cast generation and
+  newcomers into screened deterministic looks. With the mind stopped, `selfies
+  variety --dry-run|--go --top 30` diagnoses/re-rolls similar chosen photos while
+  preserving galleries and owner edits. Legacy looks with unknown provenance
+  stay protected. See `mind/leeroy_mind/personas/looks_diversity.md`.
+
 - `mod-bg-slaveryvalley` server data + client patch (above).
 - Zip-sourced modules (transmog, individual-progression, slaveryvalley) have no
   update path; converting them to git clones would let `ac-update.sh` cover them.

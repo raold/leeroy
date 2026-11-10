@@ -135,6 +135,9 @@ def make_stage(cast_config):
                     private_logs=False)
                 p = replace(p, real_life=replace(p.real_life, birthday=draw_birthday(
                     (q.real_life.birthday for q in existing), ctx.rng(STAGE, guid, "birthday"))))
+                from .looks_diversity import apply_if_enabled
+                p = apply_if_enabled(ctx.store, p, ctx.settings.data_dir, existing,
+                                     ident=ctx.ident, names=names)
             except Exception:
                 # CancelledError is a BaseException: a login/cancellation consumes no
                 # failed night, and the same selected unit may resume later tonight.

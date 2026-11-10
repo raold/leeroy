@@ -64,6 +64,18 @@ def test_newcomer_uses_generator_source_screens_budget_and_refreshes_night(h, ca
     assert not any(text in caplog.text for text in (*NAMES, "Arkon", "synthetic profile"))
 
 
+def test_diversity_on_uses_sampler_without_extra_model_call_and_keeps_enrichment_due(h):
+    from leeroy_mind.nightly.enrich import _bare
+    missing(h,101)
+    ctx = context(h,NAMES[0])
+    (ctx.settings.data_dir / "mind.toml").write_text("[looks]\ndiversity=true",encoding="utf-8")
+    run(generate(ctx))
+    p = load_persona(h.store,101)
+    assert p is not None and p.appearance is not None
+    assert ctx.reasoner.calls == 2
+    assert _bare(ctx,101)  # sampler does not suppress later tastes/disclosure enrichment
+
+
 def test_cap_survives_resume_and_later_eligible_members(h):
     missing(h, 101, 102, 103, 104, 105)
     ctx = context(h, *NAMES, cap=2)

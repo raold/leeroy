@@ -210,7 +210,9 @@ async def enrich_one(ctx: "NightContext", guid: int) -> tuple[Persona | None, li
 def _bare(ctx: "NightContext", guid: int) -> bool:
     """A stored persona with no appearance yet."""
     p = ctx.personas.get(guid)
-    return p is not None and p.appearance is None
+    from leeroy_mind.personas.looks_diversity import enabled
+    return p is not None and (p.appearance is None or
+        enabled(ctx.settings.data_dir) and not p.disclosures)
 
 
 def _race_class(store: Store, guid: int) -> tuple[str, str]:
