@@ -68,6 +68,21 @@ class PhotoBooth:
                 and self.scheduler.running is None and not self._exclusive.locked()
                 and self.scheduler.due() is None and not self._cooling())
 
+    def problem(self):
+        if not self.cfg.enabled or not self.cfg.booth:
+            return "The photo booth is off."
+        if self.running or self._exclusive.locked():
+            return "A photo booth or night pass is already running."
+        if self.arbiter.holders:
+            return "A live lease holds the GPU."
+        if self.scheduler.presence.offline_seconds() < OFFLINE_SECONDS:
+            return "The owner must have been offline for at least ten minutes."
+        if self.scheduler.running is not None or self.scheduler.due() is not None:
+            return "The night is running or due and takes priority."
+        if self._cooling():
+            return "The photo booth is cooling down after a failure."
+        return None
+
     def _cooling(self):
         until = self.app.store.get_meta(COOLDOWN)
         try:
@@ -108,13 +123,22 @@ class PhotoBooth:
     async def tick(self):
         if self.running or not self._eligible():
             return
+        await self.request(quiet=True)
+
+    async def request(self, *, quiet=False):
+        """Return this pass's outcome task, using the timer's wait, cap, lease and priority rules."""
+        if problem := self.problem():
+            raise ValueError(problem)
         ctx, policy = self._context()
         queue(ctx, policy)  # timestamps first sets without touching the night's receipts
         if not todo(ctx, policy):
-            return
+            if quiet:
+                return None
+            raise ValueError("No eligible photo sets are due within today's allowance.")
         self._stopping = False
         self._task = asyncio.create_task(self._run(ctx, policy), name="selfies-booth")
         self._task.add_done_callback(self._finished)
+        return self._task
 
     @staticmethod
     def _finished(task):
@@ -124,7 +148,7 @@ class PhotoBooth:
     async def _run(self, ctx, policy):
         # A night or a lease may have arrived between tick and this task's first instruction.
         if not self._eligible():
-            return
+            return "preempted"
         async with self._exclusive:
             started, began = ctx.clock.now(), time.monotonic()
             before = done_sets(ctx, policy)
@@ -190,6 +214,7 @@ class PhotoBooth:
                         finished=ctx.clock.now(), sets=sets, attempts=attempts, seconds=seconds,
                         outcome=outcome)))
                 log("selfies_booth_done", sets=sets, seconds=seconds, outcome=outcome)
+            return outcome
 
     async def run_forever(self):
         try:

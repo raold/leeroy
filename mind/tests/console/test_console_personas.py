@@ -379,7 +379,9 @@ def test_the_page_has_the_personas_tab_and_no_way_to_change_a_persona():
     page = page_source()
     assert 'id="tab-personas" class="tab mindtab"' in page and 'api("/api/personas?offset="' in page
     panel = page[page.index('id="tab-personas"'):].split('<section id="tab-', 1)[0]
-    assert 'post("/api/persona' not in page and "placeholder" not in panel
+    # The ephemeral claim-check read uses POST to keep typed text out of URLs.
+    assert 'post("/api/persona' not in page.replace('post("/api/persona/check"', '')
+    assert "placeholder" not in panel
 
 
 def test_a_photo_kind_write_is_shown_as_the_photo_pass(cast, data):

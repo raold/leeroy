@@ -12,6 +12,7 @@ from dataclasses import replace
 from datetime import date, datetime
 
 from leeroy_mind.arc import state as arc_state
+from leeroy_mind.discord.channels import is_private, private_sql
 from leeroy_mind.arc.ladder import (FOND_CAP, FULL_ARC, GATED, GATES, NOTICED, NOTICED_HANDLED,
                                     PACE_ATTITUDE, PACE_STYLE)
 from leeroy_mind.nightly.attraction import RUSH_S, aimed_at, reflection_row
@@ -86,7 +87,7 @@ def strong_evidence(store, guid: int, human: int, target: str, since: float, unt
     importance 7 or more for the confession. No other stage has any."""
     if target in ("whispers", "late_nights"):
         stamps = [r[0] for r in store.conn.execute(
-            "SELECT ts FROM chat_line WHERE channel='whisper' AND ts>? AND ts<=? "
+            f"SELECT ts FROM chat_line WHERE {private_sql()} AND ts>? AND ts<=? "
             "AND ((from_guid=? AND to_guid=?) OR (from_guid=? AND to_guid=?))",
             (since, until, guid, human, human, guid))]
         if target == "whispers":
@@ -202,7 +203,7 @@ def _chat(store, ref):
 
 
 def _could_know(store, holder, ref, row, end):
-    if row["channel"] != "whisper" and holder in audience_of(store, row["id"]):
+    if not is_private(row["channel"]) and holder in audience_of(store, row["id"]):
         return True
     return store.conn.execute("SELECT 1 FROM knows WHERE root=? AND guid=? AND learned<?",
                                (ref, holder, end)).fetchone() is not None
@@ -349,7 +350,7 @@ async def stage_jealousy(ctx) -> None:
             acts = []
             for target in attitudes:
                 acts.extend(ref for ref in known_acts(store, holder, target, ctx.window)
-                            if (row := _chat(store, ref)) is not None and row["channel"] != "whisper"
+                            if (row := _chat(store, ref)) is not None and not is_private(row["channel"])
                             and holder in audience_of(store, row["id"]))
             acts = list(dict.fromkeys(acts))
             progress = _known_progress(store, holder,

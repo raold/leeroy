@@ -4,6 +4,7 @@ import re
 from datetime import date
 
 from leeroy_mind.logs import log
+from leeroy_mind.discord.channels import is_public
 from leeroy_mind.nightly import knowledge
 from leeroy_mind.nightly.audience import audience_of, cast_names
 from leeroy_mind.nightly.evidence import Evidence, load_facts, load_items
@@ -125,7 +126,7 @@ def public_line(store, row_or_id, *, human=None):
     human = int(store.get_meta("human_guid") or 0) if human is None else human
     ident = row_or_id if isinstance(row_or_id, int) else row_or_id["id"]
     row = store.conn.execute("SELECT * FROM chat_line WHERE id=?", (ident,)).fetchone()
-    if row is None or row["channel"] == "whisper":
+    if row is None or not is_public(row["channel"]):
         return None
     author = row["from_guid"]
     if author == human:

@@ -9,6 +9,7 @@ from datetime import datetime, tzinfo
 from functools import cached_property
 from typing import TYPE_CHECKING, Iterable, Mapping
 
+from leeroy_mind.discord.channels import is_private
 from leeroy_mind.human import HumanIdentity
 from leeroy_mind.memory.recall import fts_query
 from leeroy_mind.nightly.audience import cast_names
@@ -207,7 +208,7 @@ def load_items(store: Store, refs: Iterable[str], *, ident: HumanIdentity) -> li
     for ln in store.chat_lines(ids["chat"]):
         who = ident.called if ln.from_guid == ident.guid else ln.from_name
         named = {g for g, n in cast.items() if has_word(ln.text, n)}
-        ends = {ln.from_guid, ln.to_guid if ln.channel == "whisper" else 0}
+        ends = {ln.from_guid, ln.to_guid if is_private(ln.channel) else 0}
         built[f"chat:{ln.id}"] = Item(f"chat:{ln.id}", screen(f"{who}: {ln.text}"),
                                       frozenset(ends | named) - {0}, ln.ts)
     with store.transaction():

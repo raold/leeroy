@@ -6,8 +6,10 @@ from datetime import date, datetime, tzinfo
 from typing import Sequence
 
 from leeroy_mind.clock import Clock, night_of
+from leeroy_mind.discord.channels import is_discord, is_private, is_restricted
 from leeroy_mind.llm.client import LLMError
 from leeroy_mind.llm.scheduler import Priority, SchedulerError
+from leeroy_mind.memory.privacy import restricted_channels
 from leeroy_mind.memory.writer import Embedder
 from leeroy_mind.retrieval import mmr, vector_or_word_similarity  # mmr remains a public import
 from leeroy_mind.storage.rows import MemoryRow, cosine, unpack_vec
@@ -62,7 +64,11 @@ def whisper_ok(channel: str, frm: int, to: int, *, speaker: int, turn_channel: s
     going to `to_guid`): a line on any channel but whisper may reach every turn's prompt, a
     whisper only a whisper between the same two. Memories are kept to it through their scope
     (scope_ok), and their evidence still goes through it under the scope as a second check
-    (Recall._shareable; controller ruling B1)."""
+    (Recall._shareable; controller ruling B1). The guild's Discord and the game keep apart: a
+    line on a Discord channel (a DM is one, `dm:<guid>`) reaches only a turn on that same
+    channel, and a game line no Discord turn."""
+    if is_discord(channel) or is_discord(turn_channel):
+        return channel == turn_channel
     return channel != "whisper" or (turn_channel == "whisper"
                                     and {frm, to} == {speaker, to_guid})
 
@@ -70,11 +76,10 @@ def whisper_ok(channel: str, frm: int, to: int, *, speaker: int, turn_channel: s
 def scope_ok(m: MemoryRow, *, turn_channel: str, to_guid: int) -> bool:
     """Whether a memory's scope lets it into a turn's prompt (controller rulings N4 and B1). An
     open memory reaches every turn. A private or secret one counts as a whisper between its
-    owner and its partner, so it reaches only a whisper from her to that partner, and one with
-    no partner (scope_with 0) reaches none."""
-    return m.scope == "open" or (m.scope_with != 0 and whisper_ok(
-        "whisper", m.owner, m.scope_with, speaker=m.owner, turn_channel=turn_channel,
-        to_guid=to_guid))
+    owner and its partner, so it reaches only a private turn (a whisper, or a Discord DM) from
+    her to that partner, and one with no partner (scope_with 0) reaches none."""
+    return m.scope == "open" or (m.scope_with != 0 and is_private(turn_channel)
+                                 and {m.owner, m.scope_with} == {m.owner, to_guid})
 
 
 def recency(t_accessed: float, now: float, tau_days: float) -> float:
@@ -192,20 +197,35 @@ class Recall:
     def _shareable(self, rows: list[MemoryRow], owner: int, channel: str,
                    to_guid: int) -> list[MemoryRow]:
         """P1b's interim whisper rule, kept under the memory scope as a second check
-        (controller ruling B1). A memory whose stored chat lines are all whispers stays out of
-        a turn on any other channel, and out of a whisper unless every one of them was between
-        `owner` and `to_guid`. A memory with a public line, an owner-authored ref (OWNER_REF:
-        public, non-chat evidence) or no stored chat line (a game event) stays. One store query
-        for all of `rows`."""
+        (controller ruling B1). A memory whose stored chat lines are all private (whispers or
+        Discord DMs) stays out of a turn on any other channel, and out of a private turn unless
+        every one of them may reach it (whisper_ok: between `owner` and `to_guid`, a DM's only
+        in that DM). A memory resting on a line of a restricted Discord channel (an officers'
+        one), directly or through memory: refs (privacy.restricted_channels), comes up only in a
+        turn on that channel, owner refs or not (rulings R7, R10). A memory with a
+        public line, an owner-authored ref (OWNER_REF: public, non-chat evidence) or no stored
+        chat line (a game event) stays. One store query for all of `rows`, and one walk more
+        only for rows that cite other memories."""
         refs = {m.id: chat_ids(m.evidence) for m in rows}
         lines = self._store.chat_line_parties(i for ids in refs.values() for i in ids)
+        hidden = {m.id: frozenset(ch for i in refs[m.id] if i in lines
+                                  and is_restricted(ch := lines[i][0])) for m in rows}
+        nested = {m.id: [e for e in m.evidence if isinstance(e, str) and e.startswith("memory:")]
+                  for m in rows}
+        if nested := {k: v for k, v in nested.items() if v}:  # only these need the walk
+            with self._store.transaction():
+                for k, found in restricted_channels(self._store.conn, nested).items():
+                    hidden[k] |= found
+        hidden = {k: v for k, v in hidden.items() if v}
         keep = []
         for m in rows:
+            cited = [lines[i] for i in refs[m.id] if i in lines]
+            if m.id in hidden and hidden[m.id] != {channel}:
+                continue
             if any(isinstance(e, str) and e.startswith(OWNER_REF) for e in m.evidence):
                 keep.append(m)
                 continue
-            cited = [lines[i] for i in refs[m.id] if i in lines]
-            if cited and all(ch == "whisper" for ch, _, _ in cited) and not all(
+            if cited and all(is_private(ch) for ch, _, _ in cited) and not all(
                     whisper_ok(ch, a, b, speaker=owner, turn_channel=channel, to_guid=to_guid)
                     for ch, a, b in cited):
                 continue
@@ -219,18 +239,23 @@ class Recall:
         recall: her prompt already shows them under "Your last lines", and a memory of them
         had her say them again (dress rehearsal 2, judge A fix 4). Only an extracted memory
         whose every cited line is hers and from this session; afterwards it is history and
-        comes back. One store query for all of `rows`, none outside a session."""
+        comes back. Her Discord lines carry no session (they never touch his game session), so
+        one of hers in Discord since the session opened counts as this session's. One store
+        query for all of `rows`, none outside a session."""
         sid = self._store.open_session()
         if sid is None:
             return rows
+        started = self._store.session_started(sid)
         refs = {m.id: ids for m in rows if m.source == "extract" and (ids := chat_ids(m.evidence))}
         if not refs:
             return rows
         lines = {ln.id: ln for ln in self._store.chat_lines(
             dict.fromkeys(i for ids in refs.values() for i in ids))}
+        def now(ln) -> bool:
+            return ln.session_id == sid or (ln.session_id is None and is_discord(ln.channel)
+                                            and started is not None and ln.ts >= started)
         own = {mid for mid, ids in refs.items()
-               if all(i in lines and lines[i].from_guid == owner and lines[i].session_id == sid
-                      for i in ids)}
+               if all(i in lines and lines[i].from_guid == owner and now(lines[i]) for i in ids)}
         if own:
             log.debug("recall_own_lines_excluded: n=%d", len(own))
         return [m for m in rows if m.id not in own]

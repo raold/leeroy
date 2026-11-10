@@ -779,7 +779,7 @@ def find_tells(text: str, *, recent_own: Sequence[str] = (), speaker: str = "",
                people: Sequence[str] = (), window: Sequence[str] = (),
                held: Sequence[str] = (), tonight: bool = False,
                recent_moves: Sequence[tuple[str, str]] = (),
-               summons_ok: bool | None = None) -> list[Tell]:
+               summons_ok: bool | None = None, keep_emoji: bool = False) -> list[Tell]:
     """Every tell in the text.
     Fatal: FATAL_PHRASES; meta talk (text.META_RE's unambiguous terms only); 2+ list lines;
     dialogue for other people ("\\nName:"); an *action* over 3 words; an exact repeat of one
@@ -797,8 +797,8 @@ def find_tells(text: str, *, recent_own: Sequence[str] = (), speaker: str = "",
     prompt showed), a claim of shared history (history_claim, `people` being the names in
     the guild, `tonight` a reaction to a fight that has come before tonight) that none of
     them backs (supported): "history", which the pipeline drops when its retry still has it.
-    Repairable: emoji, dashes, semicolons, a single list marker, a leading tag with the
-    speaker's own name."""
+    Repairable: emoji (unless `keep_emoji`: a Discord line, where they are text), dashes,
+    semicolons, a single list marker, a leading tag with the speaker's own name."""
     out: list[Tell] = []
     if (support is not None and history_claim(text, people, tonight=tonight)
             and not supported(text, support)):
@@ -841,7 +841,7 @@ def find_tells(text: str, *, recent_own: Sequence[str] = (), speaker: str = "",
         out.append(Tell(f"move repeat: {repeated}", False, True))
     if summons_ok is False and is_summon(text):
         out.append(Tell("summons", False, True))
-    if EMOJI_RE.search(text):
+    if not keep_emoji and EMOJI_RE.search(text):
         out.append(Tell("emoji", False))
     if _DASH.search(text):
         out.append(Tell("dash", False))
@@ -856,12 +856,12 @@ def find_tells(text: str, *, recent_own: Sequence[str] = (), speaker: str = "",
 
 
 def repair(text: str, *, speaker: str = "", aliases: Sequence[str] = (),
-           him: Sequence[str] = ()) -> str:
-    """Fix the repairable tells: drop emoji, what the model copied from the prompt
-    (strip_copied, with the speaker's own name and `aliases`, their real first name, and a
-    command or handle at him, `him` being his names) and list markers; a dash becomes ", "
-    and a semicolon ". "."""
-    t = strip_copied(strip_emoji(text), (speaker, *aliases), him=him)
+           him: Sequence[str] = (), keep_emoji: bool = False) -> str:
+    """Fix the repairable tells: drop emoji (unless `keep_emoji`), what the model copied from
+    the prompt (strip_copied, with the speaker's own name and `aliases`, their real first name,
+    and a command or handle at him, `him` being his names) and list markers; a dash becomes
+    ", " and a semicolon ". "."""
+    t = strip_copied(text if keep_emoji else strip_emoji(text), (speaker, *aliases), him=him)
     t = _LIST_MARK.sub("", t)
     t = _DASH.sub(", ", t)
     t = _SEMI.sub(". ", t)

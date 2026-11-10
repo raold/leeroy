@@ -3,6 +3,7 @@ from collections import Counter
 from datetime import datetime
 import json
 
+from leeroy_mind.discord.channels import is_private, same_medium
 from leeroy_mind.nightly.reactions import LAUGH_RE, REPLY_S, WHISPER_BACK_S, first_after, reactions
 from leeroy_mind.nightly.settings import is_season_end, season_bounds, season_of
 from leeroy_mind.nightly.store import step_finished_at
@@ -46,10 +47,11 @@ def _laughed_before_end(store, reaction, end, human, names):
             "SELECT * FROM chat_line WHERE origin='human' AND from_guid=? AND ts<? "
             "AND (ts>? OR (ts=? AND id>?)) AND ts<=? ORDER BY ts,id",
             (human, end, row["ts"], row["ts"], row["id"], row["ts"] + WHISPER_BACK_S)):
-        if not LAUGH_RE.search(answer["text"]):
-            continue
-        whisper = answer["channel"] == "whisper" and answer["to_guid"] == reaction.speaker
-        same = (answer["channel"] == row["channel"] and answer["channel"] != "whisper"
+        if not LAUGH_RE.search(answer["text"]) or not same_medium(answer["channel"],
+                                                                   row["channel"]):
+            continue  # as reactions(): his laugh in her line's world only (R11)
+        whisper = is_private(answer["channel"]) and answer["to_guid"] == reaction.speaker
+        same = (answer["channel"] == row["channel"] and not is_private(answer["channel"])
                 and answer["ts"] <= row["ts"] + REPLY_S)
         if whisper or (same and (has_word(answer["text"], names[reaction.speaker]) or (
                 not any(has_word(answer["text"], name) for guid, name in names.items()

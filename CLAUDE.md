@@ -588,7 +588,23 @@ at the door, so it lets the first few in and sends the rest to their homebinds
 group raids for DKP and attendance like a called raid night (see the mind's
 guild life).
 
+Optional persona play styles require both `[playstyle] enabled = true` in the
+mind's `mind.toml` (restart to attach) and native `Leeroy.PlayStyle.Enable = 1`
+(`.reload config`). Both default off. This first map adds only ordinary potion use
+and a 2–6 s DPS wait-for-attack hold outdoors; tanks/healers get no added delay.
+It never shortens an existing active hold and leaves one above 6 s untouched.
+All dungeon/raid instances, raid groups, combat, PvP and conflicting controllers
+refuse additions; RaidHabits remain authoritative. Native checks actual bodies,
+roles and ownership after the ack. The independent style journal is restored by
+`bot_do restore` (`param="playstyle"` or `"*"`), native off/raid/PvP cleanup,
+and the mind's bounded shutdown drain. Unknown receipts remain in
+`playstyle:owned` for reconciliation; foreign ownership can leave cleanup pending.
+With an already attached mind, hello/login rereads the switch and queues undo when
+off. No model, prompt, gear, loot or raid strategy change is involved. See
+`mind/leeroy_mind/playstyle/README.md` for the deterministic map and limits.
+
 ### Local patch: pinned random bots
+
 
 Local commit `ecbfeb6b` on `mod-playerbots` `master` ("Let other modules pin
 random bots"). An API on `RandomPlayerbotMgr` that mod-leeroy uses to keep the
@@ -799,11 +815,27 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   pulling new code, run `db migrate` before `doctor`.
 - Explicit prompt wording lives only in `mind-data\prompts\` overlays; the
   built-in prompts in the repo stay non-explicit.
+- Optional `[callbacks] enabled = true` enables the memory callback selector API
+  (default/invalid means off); it is not wired to talk yet. It checks complete
+  supported provenance, pair/officer scopes, a 14-day reuse window and owner-play
+  quotas. `python -m leeroy_mind callbacks eval --data-dir <data>` replays only on
+  an in-memory backup, with counts on stdout; `--show-text` writes private seeds
+  only to that data directory's scratch folder. Older schemas are not migrated.
+  Caller transaction requirements and limitations: `mind/leeroy_mind/memory/CALLBACKS.md`.
 - `pytest -m ollama|live|mysql` runs the optional checks against Ollama, the
   running bridge and MySQL; the default run deselects them. `-m live` takes the
   events the bridge queued for the mind, so never run it while they matter.
 - Do not run `personas generate`/`seed` or a library build while the mind is
   live: they load another large model next to the live one and evict it.
+- Optional `[fingerprint] enabled = true` attaches a model-free typing-profile stage
+  on restart (also in `nightly run`). Missing/invalid settings mean off. It measures
+  the last 300 mind-origin lines, or seeds a documented persona prior below 50.
+  Private/officer lines contribute numbers only; lexical phrases come from public
+  guild/say/yell lines. Logs contain ids/counts and hints use fixed safe wording.
+  No prompt or guard changes yet. `python -m leeroy_mind fingerprint show <guid>`
+  reads without migration, including older databases. Enabled weekly evaluations
+  add a current profile-distance snapshot, not a held-out-week score. See
+  `mind/leeroy_mind/fingerprint/README.md` for the seed mapping and metric limits.
 - Only the night's own writers write personas while the mind runs. Optional
   `[personas] auto_newcomers = true` (read at startup; false or invalid means off)
   gives members who join the cast later (invited, or levelled to 80) a persona at
@@ -1017,7 +1049,13 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   night's looks pass or photo-kind pass, a stance move or an undo), open drift
   flags and the night's trait sample, and per member the persona card summary
   (its looks with the photo kind), ties, memories by kind and ledger; a table
-  an older mind.db lacks shows as unavailable. Its writes are the profile
+  an older mind.db lacks shows as unavailable. Persona Insight (`console/insightview.py`,
+  `insightreports.py`, `static/js/insight.mjs`; [guide](mind/leeroy_mind/console/INSIGHT.md))
+  adds bounded read-only claims, guild-context awareness and private audit-rate projections.
+  Its `claim_check` read op works with `--no-control` under key/Host/Origin gates, uses
+  only an already-resident embedding model, and never logs or stores typed text.
+  Guard verdict history is not persisted, so the panel explicitly says unavailable.
+  Its writes are the profile
   photos (see the selfie worker), his Board replies (below) and the tuning (`leeroy_mind/tuning/`,
   console `tuneview.py`): the
   owner's dials, stored in mind.db's `tuning_*` tables as an overlay that never
@@ -1039,6 +1077,13 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   `[tuning] nudge_memories` (default true) offers ended everywhere intentions to
   reflection as past moods, never factual evidence; scoped ones are excluded.
   Details and storage keys: `mind/leeroy_mind/tuning/README.md`. No migration.
+  Optional `[signals] enabled=true` records numeric owner-response observations;
+  default/invalid is off. `signals status|member <guid>` is read-only; keyed
+  `feedback` replaces a line's vote. Values are normalized (`reply_latency_s`
+  is seconds/120, `reply_len` is codepoints/500 capped at 1). `judge_guard_*`
+  means historical screening, not a live action. General combat/rest telemetry
+  is absent, so ignored capture stays conservative. See
+  `mind/leeroy_mind/signals/README.md` for coverage, privacy and retention.
   The page is split into `console/static/` (CSS, a classic `theme.js`, ES
   modules, self-hosted OFL fonts with their licence texts) and is served at
   `/static/` without the key, like the page, since a browser cannot send a
@@ -1068,7 +1113,29 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   counts, codes, identifiers and times; private health diagnostics stay in the CLI.
   Saved running nights may be paused, unretained progress stays unknown, desk dates
   mean recorded operations, and backup metadata is not a new restore test. Release
-  commands are selectable text only. `GET /api/face?guid=<int>&size=sm|md|lg` serves
+  commands remain selectable text. Ops actions additionally require `[control] ops_actions = true`
+  (default false; invalid control settings keep the actions off) and restarting both mind and
+  console. `--no-control`, key/Host/Origin checks and a verified running mind still apply.
+  Every action uses a fresh preview and a one-use confirmation; the owner must be known offline.
+  A refused confirmation restores the review step and keeps the entered draft fields.
+  `POST /api/ops/action` starts one background operation, `GET /api/ops/action` reports its outcome;
+  the reservation also blocks other console writes and lifecycle actions until it finishes.
+  Realm release requires the exact root id typed back and a 1–200 character reason kept only
+  in its private CLI receipt. It refuses open guild/offline raids and the CLI's nonreleasable
+  roots, stops cleanly (never force), runs this checkout's `realm release --yes`, then restarts
+  even after a CLI refusal. Release and restart outcomes are reported separately; an unproved
+  clean stop changes no root. Offline stop targets the original owned command id, keeps fresh
+  progress/boss fences, and finishes only after the terminal and cleanup; an ACK is pending.
+  Render now keeps the booth's offline wait, request age, daily cap, cooldown and lease/night
+  priority rules; completion comes from that requested task, never an older shared receipt.
+  Snapshots use the same SQLite backup helper as `run`, in a fresh contained
+  staging directory, and publish without overwriting. Labels are 1–40 ASCII letters/digits,
+  underscore/hyphen; links/junctions are refused. Manual snapshots carry an operation suffix
+  and are retained until the operator removes them. Their local volume must support hardlinks;
+  unsupported publication fails rather than falling back to an overwrite. Console shutdown
+  waits for a release's restart; other work remains mind-owned. Unknown outcomes require a
+  status check before retrying. Logs contain action/id/outcome, never reasons or labels.
+  `GET /api/face?guid=<int>&size=sm|md|lg` serves
   `mind-data/selfies/<guid>/chosen.jpg` (key and Host checked, `image/jpeg`,
   `private, max-age=60`, 404 when absent; the original for every size, the
   browser scales it) and never writes under `selfies/`; faces (initials when
@@ -1165,7 +1232,8 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   and `say` {channel, text, to} (`owner_say.py`: the shared text rule, one line
   at a time, sent to the bridge as `owner_say`; logs carry op, channel and
   outcome, never the text), `board` {action: reply {kind, to, text} | withdraw
-  {id}} (his Board replies, `board.py`, one at a time), and two reads: `bank`
+  {id}} (his Board replies, `board.py`, one at a time), `discord` (local channel/DM
+  posts, edits, deletion, reactions, pins and threads; `discord/desk.py`), and two reads: `bank`
   (`guild/bankread.py`: money, the six tabs' slots and the money log by four
   read-only SELECTs through guild life's armory, one read at a time within 15 s,
   an answer younger than 30 s given again; errors are words, never the database's
@@ -1177,13 +1245,67 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   while the bridge is down. It also carries `typing` (`Pipeline.typing_now`: guid, name,
   channel, to, since, age of each model turn being composed or typed where Comms shows
   the line, never text), which the console asks for on its 2 s strip pass only while a
-  page listens and he is in game.
+  page listens and he is in game, or a page has asked for `/api/discord` within 60 seconds.
   `stop`/`start` of a raid switch dungeon-clear off and on again mid-raid. The
   console sends the key only to the listener the TCP table shows is the running
   mind's own pid; its Stop and Restart use the clean stop (asked up to five
   times while the endpoint is there but busy), wait up to 60 s for the process
   to end, and otherwise (or with no endpoint: a mind from before it, or one
   with it off) stop it by force and say why.
+
+## The guild's Discord (`leeroy_mind.discord`)
+
+- Comms includes a local guild server above the separate **From WoW** and voice
+  sections. It uses no external Discord API. `GET /api/discord` returns its channel
+  layout, member roles/presence, DMs and an optional message window with quotes,
+  reactions, threads and pins. Browser read marks request actual unread row counts;
+  global message-id gaps are never counts. The page polls every 30 seconds while
+  Comms is visible and refreshes on the `discord` SSE event. Loaded channel/thread
+  windows are compared again to catch removals, including unreact and unpin.
+- `POST /api/discord` forwards validated actions to the control endpoint's `discord`
+  op: `post`, `edit`, `delete`, `react`, `unreact`, `pin`, `unpin` and `thread`.
+  The mind alone writes; the console reads the database read-only. The normal
+  key, Host, Origin, fetch-site and `--no-control` gates apply. Posts hold at most
+  2000 Unicode code points; Unicode emoji are kept. Only the owner edits/deletes
+  their own messages. Deletion leaves a tombstone so quotes do not expose old text.
+- Migration **0027_discord.sql** adds `discord_message`, `discord_thread` and
+  `discord_reaction`; pins live on message rows. `layout.py` owns the fixed categories,
+  class channels and officer rooms. Store ids are channel names or `dm:<guid>`;
+  talk ids are `discord:<channel>` or `dm:<guid>`. Scheduled presence uses regional
+  time zones, including the weeks when UK and US daylight-saving changes differ.
+  The console cannot see the owner's current group, so its presence display lacks
+  the mind's in-group override.
+- `DiscordTalk` answers a DM with its member, a mention or reply with the addressed
+  members, otherwise a presence/affinity/role-weighted choice. It uses the existing
+  talk pipeline with its own transport and 120-second deadline. Game AFK/offline
+  flags do not block a Discord answer; an away record still does. A direct answer's
+  first silence is retried once. `DiscordTarget` keeps its reply and thread ids.
+  Nothing reaches WoW, and these messages do not advance the game's talk clocks.
+- Before the first bridge cast, Discord uses the saved guild roster for channel
+  audiences, addressed members, presence and name protection. This never marks a
+  game body online. The saved roster is read once and cached; failed reads remain
+  retryable. The first bridge cast drops this cache and takes over, even when empty;
+  removed members cannot return from the saved roster. A roster read failure leaves
+  no fallback members and logs only the exception class.
+- DMs have whisper privacy. The desk also stores each owner post as his chat line
+  (origin human, no session, the talk's channel id, a DM's member as `to_guid`), threaded
+  with the members' answers, so a DM where he asks for secrecy is secret exactly as a
+  whisper; it moves no game clock and never reaches WoW. His edit edits that line, but
+  never loosens secrecy (an edit dropping his ask leaves it as read); his delete keeps it,
+  since a member may already have read it. Officer-only and unknown channels are restricted;
+  restricted evidence stays restricted through derived memories, notes and recall.
+  Unknown audiences fail closed, and the storage transport checks its speaker's
+  audience again. Logs contain action/channel/message ids, counts and outcome codes,
+  never message text or emoji.
+- An owner post holds the arbiter's `discord` live lease; subsequent activity keeps
+  it for ten minutes. This uses the existing night hand-over and keeps the owner's
+  game-login lease independent. Shutdown drains the final release. The default
+  rehearsal (`tests/discord/test_discord_rehearsal.py`) runs a real mind, control
+  endpoint and console on ephemeral ports with the invented cast and fake bridge,
+  LLM and model admin: channel answer, named and officer-only replies, reaction and
+  DM, both after logout and before the first bridge cast; no game `say`, clean shutdown.
+- D1 is owner-triggered conversation. Autonomous chatter, pre-send guard wiring,
+  member reactions, topics, photos, decisions and culture remain later phases.
 
 ## The Realm (`leeroy_mind.realm`)
 

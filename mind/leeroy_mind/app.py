@@ -40,6 +40,9 @@ from pathlib import Path
 from typing import Awaitable, Callable, Literal
 
 from leeroy_mind.board import BoardDesk
+from leeroy_mind.discord.channels import is_discord
+from leeroy_mind.discord.desk import DiscordDesk
+from leeroy_mind.discord.talk import DiscordTalk
 from leeroy_mind.bridge import BridgeClient
 from leeroy_mind.clock import Clock, SystemClock
 from leeroy_mind.config import ConfigError, MindConfig, load_config
@@ -77,6 +80,7 @@ from leeroy_mind.training.service import attach_training
 from leeroy_mind.realm.service import attach_realm
 from leeroy_mind.selfies.attach import attach_selfies
 from leeroy_mind.claims.attach import attach_claims
+from leeroy_mind.signals.attach import attach_signals
 from leeroy_mind.personas.attach import attach_personas
 from leeroy_mind.nightly.wiring import attach as attach_nightly
 from leeroy_mind.guild.service import install as install_guild
@@ -385,7 +389,7 @@ class MindApp:
                                    lambda: self.cfg.models.live, human_guid=self._human_guid,
                                    bystanders=self.bystanders, human=self._identity,
                                    said=lambda line_id: self.engine.said_words(line_id))
-        self.world = WorldView(is_officer=self._is_officer)
+        self.world = WorldView(is_officer=self._is_officer, discord_roster=self.store.cast)
         self.world.human_guid = self._human
         self.raid = RaidState(world=self.world, personas=self.personas.get, clock=self.clock)
         self.recall = Recall(self.store, self.embedder, self.clock, tau_days=cfg.memory.depth_days)
@@ -449,6 +453,8 @@ class MindApp:
         # P1d's self.guild = install(self).
         self.nightly = attach_nightly(self)
         self.persona_settings = attach_personas(self)
+        from .fingerprint.night import attach as attach_fingerprint
+        attach_fingerprint(self.night_runner, self.data_dir)
         self.voice = attach_voice(self)
         self.guild = install_guild(self)
         self.training = attach_training(self)
@@ -457,7 +463,13 @@ class MindApp:
         self.tuning = TuningService(self)  # the owner's dials: the control endpoint's tune op
         self.speech = OwnerSpeech(self)  # his own lines from the console: the say op
         self.board = BoardDesk(self)  # his Board replies from the console: the board op
+        self.discord = DiscordDesk(self)  # his Discord actions from the console: the discord op
+        # the members' answers to his posts, and his `discord` lease on the GPU
+        self.discord_talk = DiscordTalk(self)
+        self.signals = attach_signals(self)
         self.control = attach_control(self)
+        from .playstyle.service import attach as attach_playstyle
+        self.playstyle = attach_playstyle(self)
         self.realm = attach_realm(self)  # Last: tests/realm/test_realm_wiring.py
 
     # -- extension points --------------------------------------------------------------------
@@ -728,9 +740,19 @@ class MindApp:
             self._extract_queue.put_nowait(closed)
 
     def _on_line_sent(self, line_id: int, chat: Chat) -> None:
-        """The engine's hook for every line the mind said: the only way they reach threads."""
-        self._spoke_at[chat.from_guid] = self.clock.now()
+        """The engine's hook for every line the mind said: the only way they reach threads. A
+        Discord line is no line in the game, so it is no bystander's last line (ruling R11)."""
+        if not is_discord(chat.channel):
+            self._spoke_at[chat.from_guid] = self.clock.now()
         self._queue_closed(self.threads.on_line_sent(line_id, chat))
+
+    def on_his_discord_line(self, line_id: int, chat: Chat, ts: float) -> None:
+        """The desk's hook for his Discord post's chat line (discord.desk): it joins its thread
+        as his game lines do, so memory, the secrecy he asks for and the night read both sides
+        of the talk there (ruling R7). Nothing else of _on_chat happens: the world's history,
+        the bystander clock, his activity and any answer in the game stay as they were (ruling
+        R11); the members' answers are discord.talk's."""
+        self._queue_closed(self.threads.add(line_id, chat, ts))
 
     async def _call_hooks(self, kind: str, hooks: list, *args) -> None:
         for hook in list(hooks):
@@ -963,7 +985,10 @@ class MindApp:
         if origin != "human":
             return True  # game lines are kept in the log only
         self._note_human_name(ev.from_name)
-        if self.voice.echoes_command(ev) or his_command(ev.channel, ev.text):
+        command = self.voice.echoes_command(ev) or his_command(ev.channel, ev.text)
+        if not backlog and self.signals is not None:
+            self.signals.owner_line(line_id, len(ev.text), command=command, chat=ev)
+        if command:
             self.world.apply(ev, now)  # he is active, but a bot command is not talk
             return True
         row = self.store.chat_lines([line_id])[0]

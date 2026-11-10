@@ -1,6 +1,7 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 
 #include "RaidAssembly.h"
+#include "PlayStyle.h"
 #include "GuildPorts.h"
 #include "OfflineRaidJob.h"
 #include "Training/TrainingCommands.h"
@@ -117,6 +118,7 @@ void RaidHabits(Player* bot, Player* leader)
 {
     if (PlayerbotAI* ai = GET_PLAYERBOT_AI(bot))
     {
+        PlayStyle::Restore(bot);
         if (leader->GetGUID().GetCounter() == HumanGuid())
             ai->SetMaster(leader);
         ai->ResetStrategies();
@@ -130,6 +132,7 @@ void RaidHabits(Player* bot, Player* leader)
             ai->GetAiObjectContext()->GetValue<uint8>("wait for attack time")->Set(4);
         }
         Training::JournalReset(bot->GetGUID().GetCounter(), {"formation", "wait for attack time"});
+        PlayStyle::Forget(bot->GetGUID().GetCounter()); // RaidHabits is now the authoritative baseline.
     }
 }
 

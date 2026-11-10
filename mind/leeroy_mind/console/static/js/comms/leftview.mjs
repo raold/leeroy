@@ -5,6 +5,7 @@ import { FEED, currentView, openView } from "./feedview.mjs";
 import { Heard } from "./heard.mjs";
 import { roomRows, selfPress, selfView } from "./tree.mjs";
 import { typingDots, typingWhispers } from "./typingview.mjs";
+import { channelOf } from "./discord.mjs";
 
 // The Comms left column, top to bottom: the WoW channels with their unread counts (a click opens
 // the view), every voice room (folding groups, greyed empties, locks, n / 3, who sits where; a
@@ -252,6 +253,7 @@ function renderToasts() {
 }
 function renderBanner() {
   var b = $("comms-banner"), text = "", bad = false;
+  if (channelOf(currentView())) { b.hidden = true; return; }
   if (!S.status.voice.enabled) { text = "Voice is off in mind.toml ([voice] enabled = false)."; }
   else if (!S.voice) { text = "The voice service is not running. Start it from the Mind tab."; bad = true; }
   else if (!S.voice.mind) {
@@ -331,6 +333,6 @@ on("voice", function (m) {
   heardWatch();
   if (typeof m.type === "string" && own(ON_VOICE, m.type)) { ON_VOICE[m.type](m); }
 });
-on("feed", function () { renderChannels(); renderWhispers(); });
+on("feed", function () { renderChannels(); renderWhispers(); renderBanner(); });
 on("typing", renderWhispers);
 on("note", note);
