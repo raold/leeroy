@@ -123,6 +123,72 @@ def test_send_and_drop(rig, monkeypatch, action, expected):
     assert meta.guard_verdict == action
 
 
+@pytest.mark.parametrize("channel", ["discord:general", "dm:101"])
+@pytest.mark.parametrize("text", ["😂👍", "👩🏽‍💻 🔥", "🇬🇧", "❤️"])
+def test_emoji_only_discord_messages_pass_both_real_guard_checks(rig, monkeypatch, channel, text):
+    rig.script(text)
+    calls = []
+    original = live.review
+    def checked(stores, draft):
+        calls.append(draft.text)
+        return original(stores, draft)
+    monkeypatch.setattr(live, "review", checked)
+    sent, meta = speak(rig, turn(channel))
+    assert sent == [text] and len(calls) == 2
+    assert meta.guard_verdict == "send" and not rig.sent.log
+
+
+@pytest.mark.parametrize("channel", ["discord:general", "dm:101"])
+@pytest.mark.parametrize("text", [" ", "...", "\u200d"])
+def test_wordless_nonemoji_is_still_empty(rig, channel, text):
+    verdict = rig.sync(rig.engine.live_review.check(turn(channel), TurnMeta("t1"), text))
+    assert verdict.action == "drop" and verdict.codes == ("empty",)
+
+
+def voice_line(rig, text, *, channel="voice:guild_hall", who=1, readers=(101, 102)):
+    return rig.store.insert_chat_line(Chat(int((rig.clock.now()-1)*1000), channel,
+        who, "Invented", 0, text, 0, 10), session_id=None,
+        origin="human" if who == 1 else "mind", audience=readers)
+
+
+def test_voice_card_uses_actual_room_and_captured_audience(rig):
+    e = rig.engine
+    e.cfg = replace(e.cfg, talk=replace(e.cfg.talk, aware=True))
+    e.world.room_audience = lambda _: frozenset({101, 102})
+    parent = voice_line(rig, "VISIBLE_PARENT when is the ferry?")
+    voice_line(rig, "HIDDEN_SAME_ROOM", readers=(102,))
+    voice_line(rig, "OTHER_ROOM", channel="voice:healers")
+    voice_line(rig, "OFFICER_ROOM", channel="voice:officers")
+    source(rig, "PRIVATE_PAIR", "whisper", who=102, to=1)
+    source(rig, "TYPED_ONLY")
+    t, meta = turn("voice:guild_hall", trigger_line=parent), TurnMeta("test", typed_on=("guild", 0))
+    history, context = e.live_review.history(t, meta)
+    assert [h.id for h in history] == [parent]
+    assert e.live_review.draft(t, meta, "answer").channel == "voice"
+    block = e.live_review.block(t, meta, close=False)
+    assert "Channel: voice:guild_hall" in block and "Reply to: VISIBLE_PARENT" in block
+    assert all(text not in block for text in ("HIDDEN_SAME_ROOM", "OTHER_ROOM", "OFFICER_ROOM", "PRIVATE_PAIR", "TYPED_ONLY"))
+
+
+def test_voice_own_repeat_and_parent_relevance_use_spoken_history(rig):
+    e = rig.engine
+    text = "the copper lantern hangs above the doorway"
+    own = voice_line(rig, text, who=101)
+    t, meta = turn("voice:guild_hall"), TurnMeta("test")
+    verdict = rig.sync(e.live_review.check(t, meta, text))
+    assert verdict.action == "drop" and "own_repeat_same_channel" in verdict.codes
+    assert any(r.id == own and r.kind == "line" for r in verdict.related)
+    parent = voice_line(rig, "when is the ferry arriving tonight?")
+    t.trigger_line = parent
+    e.live_review.config = replace(e.live_review.config, semantic_enabled=True)
+    async def embed(texts, priority):
+        return [pack_vec(unit(0 if text == "a different thought about cooking supper" else 1)) for text in texts]
+    e.recall._embedder.embed = embed
+    verdict = rig.sync(e.live_review.check(t, meta, "a different thought about cooking supper"))
+    assert "low_parent_and_thread_relevance" in verdict.codes
+    assert any(s.code == "parent_relevance" and s.value == 0 for s in verdict.scores)
+
+
 @pytest.mark.parametrize("second", ["send", "rewrite", "drop"])
 def test_rewrite_asks_once_and_checks_the_new_draft(rig, monkeypatch, second):
     calls = []

@@ -11,6 +11,7 @@ import time
 from leeroy_mind.claims.store import vector as checked_vector
 from leeroy_mind.discord.channels import channel_id, discord_sql, is_discord, is_private
 from leeroy_mind.discord.layout import dm_peer
+from leeroy_mind.discord.text import is_emoji_message
 from leeroy_mind.eval.talk import contradiction, nonsequitur, repetition, unawareness
 from leeroy_mind.eval.talk.common import Line, day, evening, similarity, words
 from leeroy_mind.memory.recall import whisper_ok
@@ -25,7 +26,7 @@ CONTEXT_LINES = 16
 MAX_TEXT = 4000
 RECEIPT_DAYS = 14
 REACTIONS = ('👍', '😄')
-_CHANNELS = frozenset({'guild', 'officer', 'whisper', 'game', 'discord', 'dm'})
+_CHANNELS = frozenset({'guild', 'officer', 'whisper', 'game', 'discord', 'dm', 'voice'})
 _GAME = frozenset({'party', 'raid', 'raid_warning', 'say', 'yell', 'emote'})
 DROP_CODES = frozenset({'empty', 'own_repeat_same_channel', 'own_repeat_cross_channel',
                         'repeated_topic', 'nothing_new'})
@@ -76,7 +77,7 @@ def _validate(draft, now):
         raise ValueError('guard_guid_invalid')
     if draft.channel not in _CHANNELS or (draft.channel == 'game' and draft.room not in _GAME):
         raise ValueError('guard_channel_invalid')
-    if draft.channel in {'discord', 'dm'} and not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', draft.room):
+    if draft.channel in {'discord', 'dm', 'voice'} and not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', draft.room):
         raise ValueError('guard_room_invalid')
     if type(now) not in (float, int) or not math.isfinite(now):
         raise ValueError('guard_time_invalid')
@@ -106,6 +107,9 @@ def _visible(line, draft, officer):
                 and draft.guid in line.readers and {line.guid, line.to_guid} == {draft.guid, draft.to_guid})
     if line.channel == 'officer':
         return officer and draft.channel == 'officer'
+    if line.channel == 'voice':
+        return (draft.channel == 'voice' and line.room == draft.room and line.readers is not None
+                and draft.guid in line.readers and (line.room != 'officers' or officer))
     if line.channel == 'guild':
         return True
     if line.channel == 'discord':
@@ -126,6 +130,8 @@ def _line(row, vectors):
         private = is_private(channel)
         room = str(dm_peer(channel)) if private else channel_id(channel)
         channel = 'dm' if private else 'discord'
+    elif channel.startswith('voice:'):
+        room, channel = channel.removeprefix('voice:'), 'voice'
     readers = _json(row.get('audience'))
     readers = tuple(readers) if isinstance(readers, list) and all(type(g) is int for g in readers) else None
     return HistoryLine(row['id'], row['ts'], row['from_guid'], row['text'],
@@ -287,7 +293,7 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
         return Verdict('send')
     now = _now(stores, draft)
     _validate(draft, now)
-    if not words(draft.text):
+    if not words(draft.text) and not (draft.channel in {'discord', 'dm'} and is_emoji_message(draft.text)):
         return Verdict('drop', ('empty',))
     cfg, reader = stores.config, Reader(stores.conn)
     role = reader.rows('role_unavailable', "SELECT json_extract(json,'$.play.guild_role') AS role "

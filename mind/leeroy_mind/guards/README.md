@@ -42,9 +42,12 @@ Fewer than four words bypass near-duplicate and semantic relevance checks.
 
 ## Inputs and visibility
 
-Use `guild`, `officer`, `whisper`, `game`, `discord` or `dm` for `Draft.channel`.
+Use `guild`, `officer`, `whisper`, `game`, `discord`, `dm` or `voice` for `Draft.channel`.
 For `game`, `room` is the original say/yell/emote/party/raid/raid_warning channel.
-For Discord and DM it is an opaque ASCII room identifier, not a display name.
+For Discord, DM and voice it is an opaque ASCII room identifier, not a display name.
+Spoken history stays in its actual voice room and needs the captured audience;
+the officers room also requires an officer role. Private spoken pairs remain whispers.
+Complete emoji-only Discord messages remain messages on both review passes.
 Whispers and DMs include `to_guid`. Parent and thread IDs are explicit evidence;
 the guard does not infer a parent from general guild adjacency.
 
@@ -158,7 +161,7 @@ reconstruct those states. The caller must report those omissions and missing
 parent/vector coverage alongside rates.
 
 The 2026-11-08 private read-only-copy replay covered 1,529 supported text lines
-from 92 members in 14 days; 618 voice lines were outside this API. Overlap
+from 92 members in 14 days; 618 voice lines were outside the API at that time. Overlap
 thresholds 0.70, 0.80 and 0.90 each flagged one line (0.065402 per 100).
 The default 0.70 path took 1.3514 ms median / 3.7511 ms p95. Enabling fake
 word-hash semantics flagged 109 lines (7.128842 per 100), including 108 relevance

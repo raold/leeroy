@@ -55,6 +55,28 @@ def test_new_content_sends_and_empty_drops(store):
     assert review(sources(store),draft('  ')).codes==('empty',)
 
 
+@pytest.mark.parametrize('room,readers,expected', [
+    ('guild_hall', (101,102), 'drop'), ('guild_hall', (102,), 'send'),
+    ('guild_hall', None, 'send'), ('healers', (101,102), 'send'),
+    ('officers', (101,102), 'send')])
+def test_spoken_history_requires_same_room_and_captured_reader(store,room,readers,expected):
+    text='The copper lantern hangs above the doorway'
+    line(store,text,channel='voice:'+room,audience=readers)
+    result=review(sources(store),draft(text,channel='voice',room='guild_hall'))
+    assert result.action == expected
+    assert review(sources(store),draft(text)).action == 'send'
+
+
+def test_officers_voice_room_requires_officer_role_even_with_audience(store):
+    text='The copper lantern hangs above the doorway'
+    line(store,text,channel='voice:officers',audience=(101,102))
+    assert review(sources(store),draft(text,channel='voice',room='officers')).action == 'send'
+    seed_test_cast(store)
+    p=make_persona(101,'Arkon',guild_role='officer')
+    save_persona(store,p,source='seed',ts=NOW,race='Orc',class_name='Warrior')
+    assert review(sources(store),draft(text,channel='voice',room='officers')).action == 'drop'
+
+
 @pytest.mark.parametrize('channel,to,expected',[
     ('guild',0,'own_repeat_same_channel'),('say',0,'own_repeat_cross_channel'),
     ('whisper',1,None),('officer',0,None)])

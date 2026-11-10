@@ -21,11 +21,11 @@ from leeroy_mind.guards import Draft, GuardStores, HistoryLine, Verdict, record_
 from leeroy_mind.guards.config import load_guards_config
 from leeroy_mind.guards.review import _line, _visible
 from leeroy_mind.personas.screens import redact_real_name
-from leeroy_mind.voice.comms import typed
+from leeroy_mind.voice.comms import VOICE, typed
 
 log = logging.getLogger("leeroy_mind.talk")
 BUDGETS = {"guild": 600, "officer": 600, "whisper": 450, "game": 400,
-           "discord": 600, "dm": 450}
+           "discord": 600, "dm": 450, "voice": 600}
 PURPOSES = {"guild": "Guild conversation", "officer": "Private officer conversation",
             "whisper": "Private conversation with this partner", "party": "Current party",
             "raid": "Current raid", "raid_warning": "Raid instructions", "say": "Nearby conversation"}
@@ -33,6 +33,8 @@ BEGIN, END = "<awareness_observations>", "</awareness_observations>"
 
 
 def place(turn, meta):
+    if turn.channel.startswith(VOICE):
+        return "voice", turn.channel.removeprefix(VOICE), turn.to_guid
     raw, to, _ = typed(turn, meta)
     if is_discord(raw):
         return ("dm", str(layout.dm_peer(raw)), to) if is_private(raw) else ("discord", channel_id(raw), to)
@@ -115,7 +117,7 @@ class LiveReview:
                 context = (parent, *context[-15:])
             return history, context
         # SQL snapshots carry the audience captured when each line was stored.
-        raw, _, _ = typed(turn, meta)
+        raw = turn.channel if turn.channel.startswith(VOICE) else typed(turn, meta)[0]
         rows = e.store.conn.execute("SELECT * FROM chat_line WHERE channel=? AND ts<=? "
             "ORDER BY id DESC LIMIT 256", (raw, e.clock.now())).fetchall()[::-1]
         history = tuple(h for r in rows if _visible(h := _line(dict(r), {}), draft,
@@ -128,6 +130,8 @@ class LiveReview:
             return ""
         _, history = self.history(turn, meta)
         raw, to, _ = typed(turn, meta)
+        if turn.channel.startswith(VOICE):
+            raw, to = turn.channel, turn.to_guid
         readers = tuple(e.world.audience(raw, from_guid=turn.speaker, to_guid=to))
         def item(h):
             return ContextItem(h.text, raw, h.guid, h.to_guid, h.readers)

@@ -1146,7 +1146,8 @@ class Pipeline:
         if self.cfg.talk.aware:
             block = self.live_review.block(turn, meta, close=bool(real))
             messages[-1] = dict(messages[-1], content=messages[-1]["content"] + "\n\n" + block)
-            support.append(block)
+            # Current reply/thread observations are prompt context, not independent
+            # evidence of a shared past. Keep the historical support cutoff above.
         return Composed(messages,
                         [m.id for m in memories[:len(trimmed.memories)]], p, close,
                         [trigger] if trigger else [], [r.text for r in earlier], samples,

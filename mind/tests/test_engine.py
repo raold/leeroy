@@ -2157,7 +2157,8 @@ def test_the_member_screen_through_the_engine(store, clock, tmp_path, kind, line
     run(main())
 
 
-def test_an_earlier_answer_never_backs_a_bystanders_span(store, clock, tmp_path):
+@pytest.mark.parametrize("aware", [False, True])
+def test_an_earlier_answer_never_backs_a_bystanders_span(store, clock, tmp_path, aware):
     """Fix round 2 (re-review NB4): the other answers to his line backed a bystander's
     invented span, the rehearsal's own "has been raging for 2 years"."""
     async def main():
@@ -2170,6 +2171,7 @@ def test_an_earlier_answer_never_backs_a_bystanders_span(store, clock, tmp_path)
         r = make_rig(store, clock, tmp_path,
                      script=lambda m, msgs: answer if "You play Arkon" in msgs[0]["content"]
                      else span)
+        r.engine.cfg = replace(r.cfg, talk=replace(r.cfg.talk, aware=aware))
         his = his_line(r, store, "arkon did belra ever pay you back for that epic gem?")
         first = Turn(kind=TurnKind.REPLY_HUMAN, speaker=101, channel="guild", addressee=HUMAN,
                      trigger_line=his.id)
