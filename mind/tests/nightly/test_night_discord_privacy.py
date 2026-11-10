@@ -19,8 +19,8 @@ from engine_rig import save_member
 from leeroy_mind.app import GUILD_ID, MindApp
 from leeroy_mind.config import load_config
 from leeroy_mind.discord import store as dstore
-from leeroy_mind.discord.channels import (channel_id, is_discord, is_private, is_public,
-                                          is_restricted, private_sql)
+from leeroy_mind.discord.channels import (channel_id, discord_sql, is_discord, is_private,
+                                          is_public, is_restricted, private_sql)
 from leeroy_mind.discord.desk import DiscordDesk
 from leeroy_mind.endpoint import discord_args
 from leeroy_mind.llm.scheduler import LLMScheduler
@@ -490,3 +490,27 @@ def test_a_phone_apostrophe_asks_for_secrecy_in_a_post_and_an_edit(h, mark):
               f"i have news, promise you won{mark}t tell")
     theirs = put(h, h.T + 315, 104, "my lips are sealed", "dm:104", to=1)
     assert derive_scope(h.store.conn, 104, [f"chat:{theirs}"]) == Scope("secret", 1, False)
+
+
+def test_his_discord_posts_are_not_play_for_the_nights_context(h):
+    """R11: three #general posts and no game play leave the hour quiet for the bandit's
+    context; three game lines (the control) make it busy."""
+    from leeroy_mind.nightly import human_world
+    t = h.T + 3600
+    for n in range(3):
+        put(h, t - 30 + n, 1, f"anyone up for heroics {n}", GENERAL)
+    assert human_world.context_key(h.store, t, h.human) == "free:quiet:day"
+    for n in range(3):
+        put(h, t - 20 + n, 1, f"ready {n}", "guild")
+    assert human_world.context_key(h.store, t, h.human) == "free:busy:day"
+
+
+def test_discord_sql_reads_the_discord_channels():
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t(channel TEXT)")
+    conn.executemany("INSERT INTO t VALUES (?)", [(c,) for c in (
+        "whisper", DM, GENERAL, OFFICERS, "guild", "xdm:1", "discordx", "DM:1")])
+    assert [r[0] for r in conn.execute(f"SELECT channel FROM t WHERE {discord_sql()}")] == [
+        DM, GENERAL, OFFICERS]
+    with pytest.raises(ValueError):
+        discord_sql("channel; DROP TABLE t")

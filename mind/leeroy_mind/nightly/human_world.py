@@ -11,7 +11,7 @@ from collections import defaultdict
 from dataclasses import asdict, replace
 from datetime import datetime
 
-from leeroy_mind.discord.channels import is_private
+from leeroy_mind.discord.channels import discord_sql, is_private
 from leeroy_mind.memory.privacy import stricter
 from leeroy_mind.memory.writer import clean_memory_text
 from leeroy_mind.nightly.attraction import reflection_row
@@ -182,8 +182,10 @@ def context_key(store, ts, human):
         members = payload.get("members", [])
         raid = bool(payload.get("raid")) and human in members
         break
+    # his game lines only: his posts in the guild's Discord are no play (ruling R11)
     busy = store.conn.execute("SELECT count(*) FROM chat_line WHERE from_guid=? AND origin='human' "
-                             "AND ts>=? AND ts<?", (human, ts - 600, ts)).fetchone()[0] >= 3
+                             f"AND ts>=? AND ts<? AND NOT {discord_sql()}",
+                             (human, ts - 600, ts)).fetchone()[0] >= 3
     hour = datetime.fromtimestamp(ts, store.clock.local().tzinfo).hour
     return f"{'raid' if raid else 'free'}:{'busy' if busy else 'quiet'}:{'late' if 1 <= hour < 6 else 'day'}"
 

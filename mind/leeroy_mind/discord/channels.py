@@ -46,9 +46,21 @@ def is_public(channel) -> bool:
     return not is_private(channel) and not is_restricted(channel)
 
 
+def _column(column: str) -> str:
+    if not _COLUMN.fullmatch(column):
+        raise ValueError(f"not a column name: {column!r}")
+    return column
+
+
 def private_sql(column: str = "channel") -> str:
     """is_private as an SQL condition on `column`, a fixed column name (never input): anything
     else is refused (ValueError)."""
-    if not _COLUMN.fullmatch(column):
-        raise ValueError(f"not a column name: {column!r}")
+    column = _column(column)
     return f"({column} = '{WHISPER}' OR substr({column}, 1, {len(DM_PREFIX)}) = '{DM_PREFIX}')"
+
+
+def discord_sql(column: str = "channel") -> str:
+    """is_discord as an SQL condition on `column`, a fixed column name, as private_sql."""
+    column = _column(column)
+    return (f"(substr({column}, 1, {len(CHANNEL_PREFIX)}) = '{CHANNEL_PREFIX}' "
+            f"OR substr({column}, 1, {len(DM_PREFIX)}) = '{DM_PREFIX}')")
