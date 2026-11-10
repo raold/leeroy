@@ -84,8 +84,9 @@ export function api(path, opts) {
         }
         r.json = function () { return Promise.resolve(j); };
       } else if (r.status === 200) { throw new Error("The console's answer could not be read."); }
-      if (method === "GET" && !photo && r.status !== 403 && !r.ok) { throw new Error("HTTP " + r.status); }
-      if (method === "GET" && !photo && r.ok && gen === GEN) { emit("request-health", { path: path, ok: true }); }
+      var absentMember = r.status === 404 && path.indexOf("/api/persona?guid=") === 0;
+      if (method === "GET" && !photo && r.status !== 403 && !r.ok && !absentMember) { throw new Error("HTTP " + r.status); }
+      if (method === "GET" && !photo && (r.ok || absentMember) && gen === GEN) { emit("request-health", { path: path, ok: true }); }
       return r;
     });
   // Bank/deeper search may take 20 s; a clean stop may need more than 60 s.

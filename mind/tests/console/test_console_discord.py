@@ -162,6 +162,22 @@ def test_a_channel_returns_messages_with_reactions_threads_and_pins(data, cast):
     assert bad == 400
 
 
+def test_large_thread_shelf_keeps_recent_threads_reopenable(data, cast):
+    ids = []
+    for i in range(105):
+        parent = dstore.post(cast, channel="general", author=101, origin="mind",
+                             text=f"fixture {i}", now=NOW + i)
+        ids.append(dstore.open_thread(cast, parent, name=f"thread {i}", now=NOW + i))
+    async def go():
+        async with served(build(data)) as app:
+            shelf = (await get(app, "?channel=general")).json()
+            reopened = await get(app, f"?channel=general&thread={ids[-1]}")
+            return shelf, reopened.status
+    shelf, status = asyncio.run(go())
+    assert shelf["limited"]["threads"] and status == 200
+    assert [t["id"] for t in shelf["threads"]] == ids[-100:][::-1]
+
+
 def test_he_sees_the_officers_channel(data, cast):
     dstore.post(cast, channel="officer-chat", author=102, origin="mind", text="private", now=NOW)
     cast.conn.commit()

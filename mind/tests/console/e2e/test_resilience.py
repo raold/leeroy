@@ -221,6 +221,43 @@ def test_keyboard_tabs_focus_ring_and_gallery_trap_return(rehearsal):
     asyncio.run(run())
 
 
+def test_large_gallery_keeps_every_displayed_thumbnail_loaded(rehearsal):
+    async def run():
+        from playwright.async_api import expect
+        async with rehearsal() as r:
+            await open_console(r)
+            await visit(r.page, "personas")
+            async def large_gallery(route):
+                response = await route.fetch()
+                data = await response.json()
+                photo = data["view"]["photos"][0]
+                data["view"]["photos"] = [dict(photo, id=f"fixture-{i}", rendered=1000-i,
+                    cover=False, thumbnail=photo["thumbnail"] + f"&fixture={i}") for i in range(100)]
+                await route.fulfill(response=response, json=data)
+            async def thumbnail(route):
+                # Reuse an invented fixture image, with distinct cache keys.
+                response = await route.fetch(url=route.request.url.split("&fixture=")[0])
+                await route.fulfill(response=response)
+            await r.page.route("**/api/selfies/photo?*fixture=*", thumbnail)
+            await r.page.route("**/api/selfies/gallery?*", large_gallery)
+            await r.page.get_by_role("button", name="Browse photos of Arkon", exact=True).first.click()
+            dialog = r.page.get_by_role("dialog")
+            for start, count in ((0, 32), (32, 32), (64, 32), (96, 4)):
+                if start:
+                    await dialog.get_by_role("button", name=f"Photo {start}", exact=True).click()
+                    await dialog.get_by_role("button", name="Next", exact=True).click()
+                await expect(dialog.locator(".gallery-strip button")).to_have_count(count)
+                await expect(dialog.locator(".gallery-strip img")).to_have_count(count)
+                await expect(dialog.get_by_role("button", name=f"Photo {start + 1}", exact=True)).to_have_attribute("aria-current", "true")
+                await expect(dialog.locator(".gallery-image")).to_be_visible()
+            await dialog.get_by_role("button", name="Previous", exact=True).click()
+            await expect(dialog.get_by_role("button", name="Photo 96", exact=True)).to_have_attribute("aria-current", "true")
+            await expect(dialog.locator(".gallery-strip img")).to_have_count(32)
+            await dialog.get_by_role("button", name="Close", exact=True).click()
+            assert not r.errors, r.errors
+    asyncio.run(run())
+
+
 def test_mind_bridge_and_voice_down_up_are_words_on_every_tab(rehearsal):
     async def run():
         from playwright.async_api import expect

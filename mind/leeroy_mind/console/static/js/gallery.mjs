@@ -159,10 +159,18 @@ function refresh(g, first) {
 }
 
 function drawStrip(g) {
-  var focused = Array.from(g.strip.children).indexOf(document.activeElement);
+  var focused = document.activeElement && document.activeElement.dataset.photoIndex;
+  g.stripStart = Math.floor(g.at / 32) * 32;
+  var window = g.photos.slice(g.stripStart, g.stripStart + 32);
+  var wanted = new Set(window.map(function (p) { return p.thumbnail; }));
+  g.thumbs.forEach(function (entry, path) {
+    if (!wanted.has(path)) { entry.live = false; if (entry.url) { URL.revokeObjectURL(entry.url); } g.thumbs.delete(path); }
+  });
   clear(g.strip);
-  g.photos.forEach(function (p, i) {
+  window.forEach(function (p, offset) {
+    var i = g.stripStart + offset;
     var b = button(String(i + 1), function () { g.at = i; draw(g); });
+    b.dataset.photoIndex = String(i);
     b.setAttribute("aria-label", "Photo " + (i + 1));
     g.strip.appendChild(b);
     imageURL(g, g.thumbs, p.thumbnail).then(function (url) {
@@ -171,7 +179,8 @@ function drawStrip(g) {
       clear(b); b.appendChild(img);
     });
   });
-  if (focused >= 0 && g.strip.children[focused]) { g.strip.children[focused].focus(); }
+  var back = Array.from(g.strip.children).find(function (b) { return b.dataset.photoIndex === focused; });
+  if (back) { back.focus(); }
 }
 
 function move(g, delta) { g.at = step(g.at, delta, g.photos.length); draw(g); }
@@ -179,15 +188,17 @@ function showing(g, p) { return !g.closed && g.photos[g.at] && g.photos[g.at].id
 
 function draw(g) {
   var p = g.photos[g.at], why = coverWhy(p, g.state, g.saving);
+  if (g.stripStart !== Math.floor(g.at / 32) * 32) { drawStrip(g); }
   g.prev.disabled = !p || g.at === 0;
   g.next.disabled = !p || g.at === g.photos.length - 1;
   g.make.disabled = !!why;
   g.why.textContent = why;
   g.badge.hidden = !p || !p.cover;
   g.caption.textContent = p ? (g.at + 1) + " / " + g.photos.length + " · " + new Date(p.rendered * 1000).toLocaleString() : "";
-  Array.from(g.strip.children).forEach(function (b, i) { b.setAttribute("aria-current", String(i === g.at)); });
+  Array.from(g.strip.children).forEach(function (b) { b.setAttribute("aria-current", String(Number(b.dataset.photoIndex) === g.at)); });
   if (g.image.dataset.photo === (p && p.id)) { return; }
-  if (g.strip.children[g.at]) { g.strip.children[g.at].scrollIntoView({ block: "nearest", inline: "nearest" }); }
+  var selected = g.strip.children[g.at - g.stripStart];
+  if (selected) { selected.scrollIntoView({ block: "nearest", inline: "nearest" }); }
   g.image.dataset.photo = p ? p.id : "";
   g.image.hidden = true;
   g.image.removeAttribute("src");

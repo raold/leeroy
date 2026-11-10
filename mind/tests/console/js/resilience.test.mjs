@@ -7,6 +7,15 @@ import { api, post } from "../../../leeroy_mind/console/static/js/core.mjs";
 
 async function flush() { for (var i = 0; i < 20; i++) { await Promise.resolve(); } }
 
+test("a missing member reaches the callers' 404 handling; other failures reject", async (t) => {
+  t.mock.method(globalThis, "fetch", () => Promise.resolve(new Response('{"error":"not found"}',
+    {status: 404, headers: {"content-type": "application/json"}})));
+  var response = await api("/api/persona?guid=101");
+  assert.equal(response.status, 404);
+  assert.deepEqual(await response.json(), {error: "not found"});
+  await assert.rejects(api("/api/guild"), /HTTP 404/);
+});
+
 test("backoff grows, jitters, caps and resets after success", () => {
   var b = new Backoff({ random: () => 0 });
   assert.deepEqual(Array.from({length: 8}, () => b.next()), [500, 1000, 2000, 4000, 8000, 15000, 15000, 15000]);

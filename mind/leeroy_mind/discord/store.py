@@ -196,10 +196,12 @@ def reactions(conn, ids) -> dict[int, list[dict]]:
 
 
 def threads(conn, channel: str, *, limit: int = -1) -> list[dict]:
+    # A bounded shelf must retain new threads, including the one just opened.
+    order = "DESC" if limit >= 0 else "ASC"
     rows = conn.execute(
         "SELECT t.id, t.channel, t.parent, t.name, t.created, "
         "(SELECT count(*) FROM discord_message m WHERE m.thread = t.id AND m.deleted IS NULL) "
-        "FROM discord_thread t WHERE t.channel = ? ORDER BY t.id LIMIT ?", (channel, limit)).fetchall()
+        f"FROM discord_thread t WHERE t.channel = ? ORDER BY t.id {order} LIMIT ?", (channel, limit)).fetchall()
     return [dict(zip(("id", "channel", "parent", "name", "created", "count"), tuple(r)))
             for r in rows]
 
