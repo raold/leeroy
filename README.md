@@ -333,7 +333,7 @@ Apply them to a checkout of each module with
 ./ac-backup.sh [label]       # mysqldump all four databases
 ./ac-build.sh                # preflight checks, configure, build
 ./ac-release.sh [--native] <commit>...  # deploy merged main commits, with snapshot and rollback
-./ac-server.sh start|stop|status # the game servers and the mind
+./ac-server.sh start|stop|status # the game servers and the mind; stops the worldserver cleanly over local SOAP
 ./ac-voice.sh start|stop|status  # the voice service
 ./ac-health.sh [--json]      # read-only health check of the live install
 ./ac-guild-backup.sh         # verified, pruned backups of the guild's data to another machine
