@@ -345,6 +345,8 @@ async def _run(root, store, cfg, clock, args, make_llm):
             runner = NightRunner(STAGES, lambda n, w: ctx)
             from leeroy_mind.fingerprint.night import attach as attach_fingerprint
             attach_fingerprint(runner, root)
+            from leeroy_mind.learn.night import attach as attach_rewards
+            attach_rewards(runner, root)
             await runner.run(night, ctx.window)
         except BaseException as exc:
             run_finish(store, night, now=clock.now(),

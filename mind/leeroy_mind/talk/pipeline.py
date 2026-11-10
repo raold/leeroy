@@ -2025,8 +2025,15 @@ class Pipeline:
                     zone=zone)
         audience = self.world.audience(turn.channel, from_guid=turn.speaker,
                                        to_guid=turn.to_guid, zone=zone)
-        line_id = self.store.insert_chat_line(chat, session_id=sid, origin="mind",
-                                              audience=audience)
+        if getattr(self, "learn_enabled", False):
+            from leeroy_mind.learn.recipe import record as record_recipe
+            with self.store.transaction():
+                line_id = self.store.insert_chat_line(chat, session_id=sid, origin="mind",
+                                                     audience=audience)
+                record_recipe(self.store.conn, line_id, turn, meta, p, self.cfg)
+        else:
+            line_id = self.store.insert_chat_line(chat, session_id=sid, origin="mind",
+                                                 audience=audience)
         if not discord:
             self.world.add_line(ChatLineRow(
                 id=line_id, ts=now, channel=turn.channel, from_guid=turn.speaker,

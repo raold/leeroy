@@ -827,6 +827,13 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   events the bridge queued for the mind, so never run it while they matter.
 - Do not run `personas generate`/`seed` or a library build while the mind is
   live: they load another large model next to the live one and evict it.
+- Optional `[learn] enabled = true` records generation recipes atomically with
+  outgoing chat and attaches the capped, model-free `rewards` night stage.
+  Missing/invalid settings mean off; signals remain separately opt-in. Owner
+  vetoes and fixed penalties override positive engagement. No talk decision or
+  prompt changes. `python -m leeroy_mind learn report --data-dir <data> --days 14`
+  reads aggregate scores without migration, including on older schemas. Coverage,
+  baseline units, caps and snapshot limits: `mind/leeroy_mind/learn/README.md`.
 - Optional `[fingerprint] enabled = true` attaches a model-free typing-profile stage
   on restart (also in `nightly run`). Missing/invalid settings mean off. It measures
   the last 300 mind-origin lines, or seeds a documented persona prior below 50.

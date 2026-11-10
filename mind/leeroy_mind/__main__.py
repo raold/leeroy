@@ -1278,6 +1278,9 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     if argv and argv[0] == "signals":
         from .signals.cli import signals_main
         return signals_main(argv[1:])
+    if argv and argv[0] == "learn":
+        from .learn.cli import learn_main
+        return learn_main(argv[1:])
     if argv and argv[0] == "console":
         from .console.cli import main as console_main
         return console_main(argv[1:])
@@ -1298,6 +1301,7 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     sub.add_parser("callbacks", help="replay memory callbacks on a scratch copy")
     sub.add_parser('fingerprint', help='read-only typing style profile')
     sub.add_parser("signals", help="read-only response signal counts")
+    sub.add_parser("learn", help="read-only reward report")
     sub.add_parser("selfies", help="profile photos: status, and a trial render with the mind "
                    "stopped")
     sub.add_parser("console", help="the guild console on http://127.0.0.1:7881/ (comms, the "
