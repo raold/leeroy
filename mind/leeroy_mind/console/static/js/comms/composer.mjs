@@ -2,6 +2,7 @@ import { $, KEY_REFUSED, emit, on, post, str } from "../core.mjs";
 import { S } from "../state.mjs";
 import { currentView, viewTitle } from "./feedview.mjs";
 import { MAX_BYTES, composerState, targetFor, utf8Bytes } from "./reply.mjs";
+import { BoundedMap } from "../resilience.mjs";
 
 // The reply box under the Comms feed (#composer): his line, said in WoW as his on the open view's
 // channel (# guild, # officer, # party / raid) or whispered to the open thread's member, through
@@ -22,8 +23,8 @@ var input = $("say-text"), count = $("say-count"), sendBtn = $("say-send"), why 
 var heard = false;          // the console's status has come (until then S.status is the page's guess)
 var keyLost = false;        // the console refused the key: nothing can be sent until a new one
 var shownView = "";
-var drafts = new Map();     // view -> its unsent text, for the views not open
-var refusals = new Map();   // view -> why its last line was not sent, until he edits it
+var drafts = new BoundedMap(64);   // the 64 most recently edited inactive views
+var refusals = new BoundedMap(64); // bounded even as the cast changes over days
 var sending = null;         // {view, text, where}: the line on its way
 
 var MEASURE = document.createElement("canvas").getContext("2d");

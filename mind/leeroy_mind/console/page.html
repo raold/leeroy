@@ -96,7 +96,7 @@
         <div id="composer" class="composer" tabindex="-1">
           <label for="say-text" class="to">to <b id="say-to">#guild</b> as you</label>
           <div class="say">
-            <input id="say-text" type="text" autocomplete="off" aria-describedby="say-why" disabled>
+            <input id="say-text" type="text" maxlength="1024" autocomplete="off" aria-describedby="say-why" disabled>
             <span id="say-count" class="mono count" title="UTF-8 bytes: a WoW chat line holds 255">0 / 255</span>
             <button id="say-send" type="button" class="btn primary" disabled>Send</button>
           </div>
@@ -474,7 +474,7 @@
     <dialog id="ops-action-dialog" aria-labelledby="ops-action-title" class="ops-action-dialog">
       <form id="ops-action-form"><h3 id="ops-action-title">Review action</h3>
         <label id="ops-action-reason-wrap">Reason for release<input id="ops-action-reason" maxlength="200"></label>
-        <label id="ops-action-label-wrap">Snapshot label<input id="ops-action-label" maxlength="40" pattern="[A-Za-z0-9_-]{1,40}"></label>
+        <label id="ops-action-label-wrap">Snapshot label<input id="ops-action-label" maxlength="40" pattern="[A-Za-z0-9_\-]{1,40}"></label>
         <p id="ops-action-words" role="status" aria-live="polite"></p>
         <label id="ops-action-typed-wrap" hidden>Type the exact root id<input id="ops-action-typed" autocomplete="off" spellcheck="false"></label>
         <div class="ops-action-buttons"><button id="ops-action-preview" type="button" class="btn">Review action</button>

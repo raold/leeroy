@@ -143,6 +143,7 @@ function renderPanel(data) {
   if (!panel) { return; }
   target.appendChild(el("h4", "", panel === "pins" ? "Pinned messages" : "Threads"));
   var list = data ? data[panel] || [] : [];
+  if (data?.limited?.[panel]) { target.appendChild(el("p", "hint", "Showing " + list.length + " " + panel + ". More remain saved.")); }
   if (!list.length) { target.appendChild(el("p", "muted", panel === "pins" ? "No pinned messages here." : "No threads here yet. Start one from a message.")); }
   list.forEach(function (item) {
     if (panel === "threads") {
@@ -167,7 +168,10 @@ function renderMessages(data) {
     }
     box.appendChild(messageRow(item, data));
   });
-  if (data.messages.length === 100) { box.prepend(el("p", "hint", "Showing the latest 100 messages.")); }
+  if (data.limited?.messages || data.messages.length === 100) {
+    box.prepend(el("p", "hint", "Showing the latest " + data.messages.length + " messages. Earlier messages remain saved."));
+  }
+  if (data.limited?.quotes) { box.prepend(el("p", "hint", "Some reply previews are outside this window.")); }
   box.scrollTop = newView || bottom ? box.scrollHeight : top; restore(box, key);
 }
 function renderComposer() {

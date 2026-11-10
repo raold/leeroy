@@ -173,6 +173,44 @@ def test_he_sees_the_officers_channel(data, cast):
     assert [m["text"] for m in v["messages"]] == ["private"]
 
 
+def test_dense_unicode_window_is_bounded_without_slicing_messages(data, cast, monkeypatch):
+    from leeroy_mind.console import discordview
+    from leeroy_mind.console.httpd import encode_json
+    text = "\U0001f680" * 2000
+    parents = []
+    for i in range(101):
+        parent = dstore.post(cast, channel="general", author=101, origin="mind", text=text, now=NOW + i)
+        parents.append(parent)
+        dstore.open_thread(cast, parent, name=f"Fixture thread {i}", now=NOW + i)
+        if i < 50:
+            dstore.pin(cast, parent, now=NOW + i)
+    replies = [dstore.post(cast, channel="general", author=102, origin="mind", text=text,
+                          reply_to=parent, now=NOW + 200 + i) for i, parent in enumerate(parents)]
+    with monkeypatch.context() as patch:
+        patch.setattr(discordview, "_bounded_window", lambda out, **kw: out)
+        before = discordview.discord_view(cast.conn, owner_now=datetime.fromtimestamp(NOW, EASTERN),
+                                         trial_rank=3, channel="general")
+        before_bytes = len(encode_json(before).encode("ascii"))
+    async def go():
+        async with served(build(data)) as app:
+            return await get(app, "?channel=general"), await get(app, f"?channel=general&after={replies[0]}")
+    response, cursor = asyncio.run(go())
+    value = response.json()
+    print("dense Discord wire bytes", before_bytes, "->", len(response.body))
+    assert before_bytes > 2_000_000
+    assert response.status == 200 and len(response.body) <= discordview.WINDOW_BYTES
+    assert 0 < len(value["messages"]) < 100
+    assert value["messages"][-1]["id"] == replies[-1]
+    assert all(row["text"] == text for key in ("messages", "quotes", "pins") for row in value[key])
+    assert all(value["limited"][key] for key in ("messages", "quotes", "pins", "threads"))
+    assert cursor.json()["messages"][0]["id"] == replies[1]
+    assert len(cursor.body) <= discordview.WINDOW_BYTES
+    digest = discordview.watched(cast.conn, "general")
+    assert len(digest) == 64
+    dstore.edit(cast, replies[-1], author=102, text="Changed fixture", now=NOW + 999)
+    assert discordview.watched(cast.conn, "general") != digest
+
+
 def test_an_older_mind_db_lists_the_tables_as_missing(data, cast):
     for t in ("discord_reaction", "discord_thread", "discord_message"):
         cast.conn.execute(f"DROP TABLE {t}")

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { Backoff, boundedBody, deadline, ReadHealth, validView } from "../../../leeroy_mind/console/static/js/resilience.mjs";
+import { Backoff, BoundedMap, boundedBody, deadline, ReadHealth, validView } from "../../../leeroy_mind/console/static/js/resilience.mjs";
 import { ReconnectingStream } from "../../../leeroy_mind/console/static/js/eventstream.mjs";
 import { FaceCache } from "../../../leeroy_mind/console/static/js/facecache.mjs";
 import { api, post } from "../../../leeroy_mind/console/static/js/core.mjs";
@@ -117,14 +117,40 @@ test("Ops, Discord and Insight reject malformed outer shapes before drawing", ()
   assert.equal(validView("/api/ops/badge", {at: 1, counts: {}}), true);
   assert.equal(validView("/api/ops/badge", {at: 1, counts: []}), false);
   assert.equal(validView("/api/ops/badge", {at: "yesterday", counts: {}}), false);
-  var discord = {categories: [], dms: [], members: [], human: {guid: 1, name: "Owner"}};
+  var discord = {categories: [], dms: [], members: [], human: {guid: 1, name: "Owner"}, missing: []};
   assert.equal(validView("/api/discord", discord), true);
   assert.equal(validView("/api/discord?channel=hall", discord), false);
-  assert.equal(validView("/api/discord?channel=hall", {...discord, messages: [], threads: [], pins: [], quotes: []}), true);
+  assert.equal(validView("/api/discord?channel=hall", {...discord, channel: "hall", messages: [], threads: [], pins: [], quotes: []}), true);
   var insight = {guid: 101, claims: {}, awareness: {}, quality: {}, guards: {}};
   assert.equal(validView("/api/persona/insight?guid=101", insight), true);
   assert.equal(validView("/api/persona/insight?guid=101", {member: {}}), false);
   assert.equal(validView("/api/persona/insight?guid=101", {...insight, awareness: null}), false);
+});
+
+test("per-view drafts have a fixed bound and a recent edit survives eviction", () => {
+  var drafts = new BoundedMap(3);
+  drafts.set("guild", "one").set("w:101", "two").set("w:102", "three");
+  drafts.set("guild", "edited"); drafts.set("w:103", "four");
+  assert.deepEqual(Array.from(drafts.keys()), ["w:102", "guild", "w:103"]);
+  assert.equal(drafts.get("guild"), "edited");
+  for (var i = 0; i < 1000; i++) { drafts.set(String(i), "draft"); }
+  assert.equal(drafts.size, 3);
+});
+
+test("Ops action status rejects malformed success and has independent freshness", () => {
+  var status = {enabled: true, reason: "", operation: null};
+  assert.equal(validView("/api/ops/action", status), true);
+  for (var bad of [{...status, enabled: "true"}, {...status, operation: []},
+    {...status, operation: undefined}, {...status, reason: null}, {...status, operation: {state: "done"}}]) {
+    assert.equal(validView("/api/ops/action", bad), false);
+  }
+  assert.equal(validView("/api/ops/action", {...status, operation: {
+    id: "fixture", action: "snapshot", state: "done", message: "Snapshot saved."}}), true);
+  var health = new ReadHealth();
+  health.update("/api/ops/action", "ops", true, 100);
+  health.update("/api/ops/action", "ops", false, 200);
+  health.update("/api/ops", "ops", true, 300);
+  assert.equal(health.failed("ops").length, 1);
 });
 
 test("the always-on Ops badge cannot clear a failed Ops panel request", () => {

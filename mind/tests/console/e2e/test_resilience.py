@@ -1,9 +1,13 @@
 import asyncio
+import json
+
+import pytest
 
 from .test_tabs import open_console, tab_names, visit
 
 
-def test_malformed_poll_keeps_last_good_data_and_recovers(rehearsal):
+@pytest.mark.parametrize("broken_body", ["{", json.dumps({"roster": [None]})])
+def test_malformed_poll_keeps_last_good_data_and_recovers(rehearsal, broken_body):
     async def run():
         from playwright.async_api import expect
         async with rehearsal() as r:
@@ -11,7 +15,7 @@ def test_malformed_poll_keeps_last_good_data_and_recovers(rehearsal):
             panel = await visit(r.page, "guild")
             await expect(panel).to_contain_text("Juniper")
             async def broken(route):
-                await route.fulfill(status=200, content_type="application/json", body="{")
+                await route.fulfill(status=200, content_type="application/json", body=broken_body)
             await r.page.route("**/api/guild", broken)
             await visit(r.page, "raid")
             await visit(r.page, "guild")
@@ -22,6 +26,96 @@ def test_malformed_poll_keeps_last_good_data_and_recovers(rehearsal):
             await visit(r.page, "guild")
             await expect(r.page.locator("#guild-stale")).to_be_hidden()
             await expect(panel).to_contain_text("Juniper")
+            assert not r.errors, r.errors
+    asyncio.run(run())
+
+
+def test_discord_malformed_refresh_keeps_messages_draft_and_recovers(rehearsal):
+    async def run():
+        from playwright.async_api import expect
+        from leeroy_mind.discord import store
+        async with rehearsal() as r:
+            store.post(r.app.store, channel="general", author=101, origin="mind",
+                       text="Fixture Discord message", now=r.app.clock.now())
+            await open_console(r)
+            await r.page.locator('#dc-channels [data-view="d:general"]').click()
+            await expect(r.page.locator("#feed")).to_contain_text("Fixture Discord message")
+            draft = r.page.locator("#dc-text")
+            await draft.fill("Unsent fixture draft")
+            async def broken(route):
+                response = await route.fetch(); data = await response.json()
+                data["members"] = [None]
+                await route.fulfill(response=response, json=data)
+            await r.page.route("**/api/discord?*", broken)
+            await r.page.evaluate("async () => (await import('/static/js/comms/discordstate.mjs')).refreshDiscord()")
+            await expect(r.page.locator("#comms-stale")).to_contain_text("Stale:")
+            await expect(r.page.locator("#feed")).to_contain_text("Fixture Discord message")
+            await expect(draft).to_have_value("Unsent fixture draft")
+            await r.page.unroute("**/api/discord?*", broken)
+            await r.page.evaluate("async () => (await import('/static/js/comms/discordstate.mjs')).refreshDiscord()")
+            await expect(r.page.locator("#comms-stale")).to_be_hidden()
+            await expect(draft).to_have_value("Unsent fixture draft")
+            assert not r.errors, r.errors
+    asyncio.run(run())
+
+
+def test_insight_bad_claim_list_keeps_card_budget_and_draft(rehearsal):
+    async def run():
+        from playwright.async_api import expect
+        async with rehearsal() as r:
+            await open_console(r); await visit(r.page, "personas")
+            await r.page.get_by_role("button", name="Profile of Arkon", exact=True).click()
+            budget = r.page.get_by_label("Awareness token budget")
+            await budget.select_option("small")
+            await r.page.locator("#insight-line").fill("Unsent claim fixture")
+            before = await r.page.locator("#insight-card").inner_text()
+            async def broken(route):
+                response = await route.fetch(); data = await response.json()
+                data["claims"] = {"state": "ok", "live": [None], "history": []}
+                await route.fulfill(response=response, json=data)
+            await r.page.route("**/api/persona/insight?*", broken)
+            await budget.focus()
+            await r.page.evaluate("async () => (await import('/static/js/insight.mjs')).pollInsight(101)")
+            await expect(r.page.locator("#personas-stale")).to_contain_text("Stale:")
+            await expect(budget).to_be_focused(); await expect(budget).to_have_value("small")
+            await expect(r.page.locator("#insight-card")).to_have_text(before)
+            await expect(r.page.locator("#insight-line")).to_have_value("Unsent claim fixture")
+            await r.page.unroute("**/api/persona/insight?*", broken)
+            await r.page.evaluate("async () => (await import('/static/js/insight.mjs')).pollInsight(101)")
+            await expect(r.page.locator("#personas-stale")).to_be_hidden()
+            assert not r.errors, r.errors
+    asyncio.run(run())
+
+
+def test_ops_unknown_status_is_stale_and_dialog_keyboard_returns_focus(rehearsal):
+    async def run():
+        from playwright.async_api import expect
+        async with rehearsal() as r:
+            r.console.s.ops_actions = True
+            await open_console(r); await visit(r.page, "ops")
+            opener = r.page.get_by_role("button", name="Take a snapshot", exact=True)
+            await expect(opener).to_be_enabled(); await opener.focus()
+            await r.page.keyboard.press("Enter")
+            dialog = r.page.locator("#ops-action-dialog")
+            await expect(dialog).to_be_visible()
+            await r.page.get_by_label("Snapshot label", exact=True).fill("fixture")
+            await r.page.locator("#ops-action-cancel").focus(); await r.page.keyboard.press("Tab")
+            assert await r.page.evaluate("document.activeElement.closest('dialog') !== null")
+            await r.page.keyboard.press("Escape")
+            await expect(dialog).not_to_be_visible(); await expect(opener).to_be_focused()
+            async def broken(route):
+                await route.fulfill(status=200, content_type="application/json", json={
+                    "enabled": True, "reason": "", "operation": {"id": "fixture", "action": "snapshot",
+                        "state": "unknown-state", "message": "Malformed fixture state"}})
+            await r.page.route("**/api/ops/action", broken)
+            await r.page.evaluate("async () => (await import('/static/js/opsactions.mjs')).refreshActions()")
+            await expect(r.page.locator("#ops-stale")).to_contain_text("Stale:")
+            await expect(r.page.locator("#ops-action-message")).to_contain_text("unavailable")
+            await r.page.unroute("**/api/ops/action", broken)
+            await r.page.evaluate("async () => (await import('/static/js/opsactions.mjs')).refreshActions()")
+            await expect(r.page.locator("#ops-stale")).to_be_hidden()
+            await expect(opener).to_be_enabled()
+            assert not r.console._ops_actions.operation
             assert not r.errors, r.errors
     asyncio.run(run())
 
@@ -65,7 +159,10 @@ def test_keyboard_tabs_focus_ring_and_gallery_trap_return(rehearsal):
             await expect(dialog).to_have_count(0)
             await expect(opener).to_be_focused()
             await r.page.locator("#t-personas").focus()
+            await expect(r.page.locator("#t-personas")).to_be_focused()
             await r.page.keyboard.press("End")
+            await expect(r.page.locator("#t-mind")).to_have_attribute("aria-selected", "true")
+            await expect(r.page.locator("#t-mind")).to_be_focused()
             stop = r.page.locator('button[data-svc="mind"][data-act="stop"]')
             r.expected_http_errors.add(("/api/control", 409))  # explicit confirmation required
             await stop.focus()

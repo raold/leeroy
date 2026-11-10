@@ -1102,6 +1102,13 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   groups of 50; its member details stay available. Arrow keys, Home and End move through
   the tablist; Tab reaches the main scroll region and controls; dialogs trap focus and
   Escape returns it. Both themes and reduced motion are covered by the browser rehearsal.
+  WoW feed history retains 64 active/recent views, at most 200 lines each, 64 explicitly
+  opened whisper threads and 128 read marks. Inactive WoW reply/refusal and nudge drafts
+  keep their most recent 64 entries; these conveniences are not durable message storage.
+  Discord's read-only message/quote/pin/thread window fits a 180 KB ASCII-JSON budget:
+  whole records are kept, with visible words when older items are omitted. Stored history
+  is untouched. Its existing watched fingerprint suppresses unchanged SSE updates; the
+  server now retains fixed-size digests instead of full copies of those windows.
   A source that is
   not there yet answers 200 and reads "Not set up yet: <why>"; only a file that
   exists but cannot be read is a 503. Ops (`GET /api/ops`, `console/opsview.py`) keeps

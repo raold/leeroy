@@ -105,5 +105,13 @@ $("ops-action-confirm").addEventListener("click", () => send(true));
 $("ops-action-cancel").addEventListener("click", () => $("ops-action-dialog").close());
 $("ops-action-form").addEventListener("submit", e => e.preventDefault());
 $("ops-action-dialog").addEventListener("close", reset);
+$("ops-action-dialog").addEventListener("keydown", event => {
+  if (event.key !== "Tab") { return; }
+  const fields = Array.from($("ops-action-dialog").querySelectorAll("button, input"))
+    .filter(e => !e.disabled && e.getClientRects().length);
+  const first = fields[0], last = fields[fields.length - 1];
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+});
 setInterval(refreshActions, 2000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) { refreshActions(); } });

@@ -1,5 +1,6 @@
 import { arr, num, obj, own, plural, str } from "../core.mjs";
 import { signed } from "../words.mjs";
+import { BoundedMap } from "../resilience.mjs";
 
 // The Comms feed as data: the lines the console sends (typed in WoW and spoken on voice) sorted
 // into views, # guild, # officer, # party / raid and one whisper thread per member, with read
@@ -13,7 +14,9 @@ import { signed } from "../words.mjs";
 // text with `unheard` (the reason): it shows, and counts, like a typed whisper, with its marker.
 
 export var KEEP = 200;
+export var VIEW_LIMIT = 64, READ_LIMIT = 128;
 var VIEW = /^(?:guild|officer|group|w:[1-9]\d{0,9})$/;
+var FIXED = new Set(["guild", "officer", "group"]);
 var GROUP = { party: 1, raid: 1, raid_warning: 1 };
 var CHANNELS = { guild: "guild", officer: "officer", party: "party", raid: "raid",
                  raid_warning: "raid warning", whisper: "whisper" };
@@ -59,10 +62,11 @@ export class Feed {
     this.human = num(o.human);
     this.now = o.now || function () { return Date.now() / 1000; };
     this.views = new Map();    // view -> Map(id -> line)
+    this.active = "guild";
     this.where = new Map();    // id -> view
     this.marks = Object.create(null);
     this.floor = null;
-    this.opened = new Map();   // guid -> {name, at}: threads he opened, kept while the page lives
+    this.opened = new BoundedMap(VIEW_LIMIT); // recent explicitly opened threads
   }
   upsert(lines) {
     var top = 0;
@@ -74,12 +78,17 @@ export class Feed {
       if (was && was !== v) { this._remove(l.id); }
       var m = this.views.get(v);
       if (!m) { m = new Map(); this.views.set(v, m); }
+      else { this.views.delete(v); this.views.set(v, m); }
       m.set(l.id, l);
       this.where.set(l.id, v);
       top = Math.max(top, l.id);
       if (m.size > KEEP) {
         Array.from(m.keys()).sort(function (a, b) { return a - b; }).slice(0, m.size - KEEP)
           .forEach((id) => { this._remove(id); });
+      }
+      while (this.views.size > VIEW_LIMIT) {
+        var old = Array.from(this.views.keys()).find(key => !FIXED.has(key) && key !== this.active);
+        Array.from(this.views.get(old).keys()).forEach(id => this._remove(id));
       }
     });
     if (this.floor === null) { this.floor = top; }
@@ -124,7 +133,9 @@ export class Feed {
     if (!shown.length) { return false; }
     var newest = shown[shown.length - 1].id, at = this.mark(view);
     if (own(this.marks, view) && newest <= at) { return false; }
+    delete this.marks[view];
     this.marks[view] = Math.max(newest, at === Infinity ? 0 : at);
+    this._trimMarks(this.marks);
     return true;
   }
   loadRead(stored) {
@@ -132,6 +143,14 @@ export class Feed {
     Object.keys(s).forEach((view) => {
       if (VIEW.test(view) && goodId(s[view])) { this.marks[view] = s[view]; }
     });
+    this._trimMarks(this.marks);
+  }
+  _trimMarks(marks) {
+    var keys = Object.keys(marks);
+    while (keys.length > READ_LIMIT) {
+      var old = keys.find(v => !FIXED.has(v) && v !== this.active && !this.views.has(v));
+      delete marks[old]; keys = Object.keys(marks);
+    }
   }
   // Every mark worth keeping: the stored ones and each present view's, its floor included
   readState() {
@@ -140,12 +159,13 @@ export class Feed {
     if (this.floor !== null) {
       this.views.forEach((m, v) => { if (!own(out, v)) { out[v] = this.floor; } });
     }
+    this._trimMarks(out);
     return out;
   }
   openThread(guid, name) {
     guid = num(guid);
     if (!goodId(guid)) { return ""; }
-    if (!this.opened.has(guid)) { this.opened.set(guid, { name: str(name), at: this.now() }); }
+    this.opened.set(guid, this.opened.get(guid) || { name: str(name), at: this.now() });
     return "w:" + guid;
   }
   // One per member with a shown whisper line or a thread he opened, the newest first
