@@ -159,7 +159,7 @@ class OfflineRaids:
     def _save(self):
         with self.ports.conn:
             _put(self.ports.conn, OWNED_KEY, self._owned)
-            if self._owned.get("operator_stop") and self._owned.get("phase") == "complete":
+            if self._owned and self._owned.get("operator_stop") and self._owned.get("phase") == "complete":
                 terminal = self._owned.get("terminal") or {}
                 _put(self.ports.conn, "ops:offline:last", {"id": self._owned["id"],
                     "stopped": terminal.get("reason") == "stopped"})
@@ -373,10 +373,15 @@ class OfflineRaids:
         stop = self._owned.get("stop")
         if stop and (stop.get("accepted") or stop.get("await_terminal")):
             return
-        reason = ("operator_stopped" if stop and stop.get("reason") == "operator_stopped" else
-                  "stalled" if now - progress["last"] >= self.cfg.offline_stall_minutes * 60 else None)
+        if self._owned.get("operator_stop") is True:
+            # Keep an earlier uncertain attempt's reason, but operator intent
+            # survives resumed progress. The freshness/combat fences still apply.
+            reason = stop["reason"] if stop else "operator_stopped"
+        else:
+            reason = ("operator_stopped" if stop and stop.get("reason") == "operator_stopped" else
+                      "stalled" if now - progress["last"] >= self.cfg.offline_stall_minutes * 60 else None)
         if reason is None or stop and stop["reason"] != reason:
-            return  # New progress cancels retries of an uncertain stop; still watch for its terminal.
+            return  # New progress cancels automatic stall retries; still watch for their terminal.
         if not stop:
             stop = self._owned["stop"] = dict(reason=reason, accepted=False)
             log.info("offline_raid_stop raid_id=%s reason=%s inside=%d members=%d",

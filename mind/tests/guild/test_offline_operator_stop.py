@@ -60,6 +60,43 @@ async def test_operator_retry_uses_same_target_new_envelope_and_fresh_fences(set
 
 
 @_run_async
+async def test_operator_intent_keeps_uncertain_stall_stop_after_progress_resumes(setup):
+    from leeroy_mind.bridge import AckTimeout
+    ports, _, c = setup
+    await start(setup)
+    await heartbeat(setup)
+    original = ports.send
+
+    async def timeout(cmd):
+        await original(cmd)
+        raise AckTimeout("synthetic timeout")
+
+    ports.send = timeout
+    await advance(ports, 1800)
+    await heartbeat(setup, age=1800)
+    ident, raid = c._owned["id"], c.session.raid_id
+    assert c._owned["stop"]["reason"] == "stalled"
+    await c.request_stop(ident)
+    assert len(stops(ports)) == 2 and not c._owned["stop"]["accepted"]
+    assert c._owned["operator_stop"] is True
+
+    ports.send = original
+    await advance(ports, 60)
+    await heartbeat(setup, engaged=True)  # Operator intent cannot bypass combat.
+    assert len(stops(ports)) == 2
+    await advance(ports, 60)
+    await heartbeat(setup)  # Fresh progress cancels only an automatic stall retry.
+    assert len(stops(ports)) == 3 and c._owned["stop"]["accepted"]
+    assert len({s.id for s in stops(ports)}) == 3
+    assert {s.raid_id for s in stops(ports)} == {ident}
+    assert c._owned["stop"]["reason"] == "stalled"
+    await c.on_job(event(c, state="done", stage="", reason="stopped"))
+    await c.tick()
+    assert not c.active and c.operator_result(ident) == {"id": ident, "stopped": True}
+    assert ports.conn.execute("SELECT outcome FROM guild_raid WHERE raid_id=?", (raid,)).fetchone()[0] == "stalled"
+
+
+@_run_async
 async def test_control_stop_is_pending_until_native_terminal_and_cleanup(setup,tmp_path):
     import asyncio
     from types import SimpleNamespace
