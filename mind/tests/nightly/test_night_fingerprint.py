@@ -129,6 +129,29 @@ def test_stage_resumes_atomically_without_model_or_text_logs(h,caplog):
     assert 0 <= report['mean_pairwise_distance'] <= 1
 
 
+def test_seed_keeps_the_nights_tuning_when_live_dials_change(h):
+    from leeroy_mind.tuning.effective import dials_of
+    from leeroy_mind.tuning.state import Tuning
+    from nightly.test_night_tuning import put
+
+    put(h.store, ('member', '101', 'talkative', 9), ('member', '101', 'humour', 9))
+    ctx = h.ctx()
+    ctx = replace(ctx, tuning=ctx.personas.tuning)
+    frozen = dials_of(ctx.persona(101))
+    raw = asdict(ctx.base(101))
+    expected = seed(raw, talkative=frozen.level('talkative'), humour_dial=frozen.level('humour'))
+
+    put(h.store, ('member', '101', 'talkative', 2), ('member', '101', 'humour', 1))
+    ctx.personas.set_tuning(Tuning.load(h.store.conn))
+    assert dials_of(ctx.personas.get(101)).level('talkative') == 2
+    run(stage_fingerprint(ctx))
+    stored = fingerprint(h.store.conn, 101)
+    assert stored.seeded == 1
+    assert stored.p50 == expected.p50
+    assert stored.laughter == expected.laughter
+    assert stored.exclamation == expected.exclamation
+
+
 def test_failed_unit_rolls_back_phrases_and_sanitizes_error(h,monkeypatch,caplog):
     from leeroy_mind.fingerprint import night
     h.persona(101)

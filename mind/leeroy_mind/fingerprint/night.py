@@ -16,7 +16,7 @@ async def stage_fingerprint(ctx):
         guid = int(unit)
         def write(store):
             try:
-                persona = ctx.personas.get(guid)
+                persona = ctx.persona(guid)
                 dials = dials_of(persona)
                 profile = update(store.conn, guid, now=ctx.clock.now(),
                                  talkative=dials.level('talkative'), humour_dial=dials.level('humour'),
