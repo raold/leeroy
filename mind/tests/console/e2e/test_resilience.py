@@ -55,6 +55,23 @@ def test_discord_malformed_refresh_keeps_messages_draft_and_recovers(rehearsal):
             await r.page.evaluate("async () => (await import('/static/js/comms/discordstate.mjs')).refreshDiscord()")
             await expect(r.page.locator("#comms-stale")).to_be_hidden()
             await expect(draft).to_have_value("Unsent fixture draft")
+            # Whole-item budgets can omit every item without implying an empty store.
+            async def omitted(route):
+                response = await route.fetch(); data = await response.json()
+                for key in ("messages", "quotes", "pins", "threads"):
+                    data[key] = []
+                data["limited"] = {"messages": True, "quotes": False, "pins": True, "threads": True}
+                await route.fulfill(response=response, json=data)
+            await r.page.route("**/api/discord?*", omitted)
+            await r.page.evaluate("async () => (await import('/static/js/comms/discordstate.mjs')).refreshDiscord()")
+            await expect(r.page.locator("#feed")).to_contain_text("Earlier messages remain saved.")
+            await expect(r.page.locator("#feed")).not_to_contain_text("Nothing said here yet")
+            for shelf, empty in (("pins", "No pinned messages"), ("threads", "No threads here yet")):
+                await r.page.locator("#dc-" + shelf).click()
+                await expect(r.page.locator("#dc-panel")).to_contain_text("More remain saved.")
+                await expect(r.page.locator("#dc-panel")).not_to_contain_text(empty)
+            await expect(draft).to_have_value("Unsent fixture draft")
+            await r.page.unroute("**/api/discord?*", omitted)
             assert not r.errors, r.errors
     asyncio.run(run())
 
@@ -144,6 +161,12 @@ def test_keyboard_tabs_focus_ring_and_gallery_trap_return(rehearsal):
             await expect(r.page.locator("#t-comms")).to_be_focused()
             for _ in range(tabs.index("personas")):
                 await r.page.keyboard.press("ArrowRight")
+            gallery_requested, release_gallery = asyncio.Event(), asyncio.Event()
+            async def loading_gallery(route):
+                gallery_requested.set()
+                await release_gallery.wait()
+                await route.continue_()
+            await r.page.route("**/api/selfies/gallery?*", loading_gallery)
             opener = r.page.get_by_role("button", name="Browse photos of Arkon", exact=True).first
             await opener.focus()
             await r.page.keyboard.press("Enter")
@@ -151,10 +174,26 @@ def test_keyboard_tabs_focus_ring_and_gallery_trap_return(rehearsal):
             await expect(dialog).to_be_visible()
             close = dialog.get_by_role("button", name="Close", exact=True)
             await expect(close).to_be_focused()
+            try:
+                await asyncio.wait_for(gallery_requested.wait(), 5)
+                # Only Close is enabled while the response is held. Loading must
+                # remain trapped, but its tab order is not the loaded tab order.
+                await r.page.keyboard.press("Shift+Tab")
+                await expect(close).to_be_focused()
+            finally:
+                release_gallery.set()
+            await expect(dialog.locator(".gallery-strip button").first).to_be_visible()
+            await expect(dialog.get_by_role("button", name="Next", exact=True)).to_be_enabled()
+            # Reproduce the old flaky interleaving: Shift+Tab happened while
+            # loading, then Next became enabled before Tab. Next is correct.
+            await r.page.keyboard.press("Tab")
+            await expect(dialog.get_by_role("button", name="Next", exact=True)).to_be_focused()
+            await close.focus()
             await r.page.keyboard.press("Shift+Tab")
-            assert await r.page.evaluate("document.activeElement.closest('dialog') !== null")
+            await expect(dialog.locator(".gallery-strip button").last).to_be_focused()
             await r.page.keyboard.press("Tab")
             await expect(close).to_be_focused()
+            await r.page.unroute("**/api/selfies/gallery?*", loading_gallery)
             await r.page.keyboard.press("Escape")
             await expect(dialog).to_have_count(0)
             await expect(opener).to_be_focused()

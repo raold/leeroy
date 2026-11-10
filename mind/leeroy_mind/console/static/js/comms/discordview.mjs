@@ -144,7 +144,7 @@ function renderPanel(data) {
   target.appendChild(el("h4", "", panel === "pins" ? "Pinned messages" : "Threads"));
   var list = data ? data[panel] || [] : [];
   if (data?.limited?.[panel]) { target.appendChild(el("p", "hint", "Showing " + list.length + " " + panel + ". More remain saved.")); }
-  if (!list.length) { target.appendChild(el("p", "muted", panel === "pins" ? "No pinned messages here." : "No threads here yet. Start one from a message.")); }
+  if (!list.length && !data?.limited?.[panel]) { target.appendChild(el("p", "muted", panel === "pins" ? "No pinned messages here." : "No threads here yet. Start one from a message.")); }
   list.forEach(function (item) {
     if (panel === "threads") {
       var b = button(item.name + " · " + item.count + " replies", "dc-thread-link"); b.dataset.thread = item.id; b.dataset.focus = "thread-" + item.id; target.appendChild(b);
@@ -160,7 +160,7 @@ function renderMessages(data) {
   var key = focusKey(box), top = box.scrollTop, bottom = box.scrollHeight - top - box.clientHeight < 40;
   var newView = !drawing; drawing = signature; clear(box);
   if (!data) { box.appendChild(el("p", "empty muted", DISCORD.error || "Loading messages…")); return; }
-  if (!data.messages.length) { box.appendChild(el("p", "empty muted", "Nothing said here yet. Say hello.")); }
+  if (!data.messages.length && !data.limited?.messages) { box.appendChild(el("p", "empty muted", "Nothing said here yet. Say hello.")); }
   var divided = false;
   groupMessages(data.messages).forEach(function (item) {
     if (!divided && entryMark && item.message.id > entryMark && item.message.origin !== "human") {
