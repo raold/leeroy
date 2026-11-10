@@ -815,6 +815,13 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   pulling new code, run `db migrate` before `doctor`.
 - Explicit prompt wording lives only in `mind-data\prompts\` overlays; the
   built-in prompts in the repo stay non-explicit.
+- Optional `[callbacks] enabled = true` enables the memory callback selector API
+  (default/invalid means off); it is not wired to talk yet. It checks complete
+  supported provenance, pair/officer scopes, a 14-day reuse window and owner-play
+  quotas. `python -m leeroy_mind callbacks eval --data-dir <data>` replays only on
+  an in-memory backup, with counts on stdout; `--show-text` writes private seeds
+  only to that data directory's scratch folder. Older schemas are not migrated.
+  Caller transaction requirements and limitations: `mind/leeroy_mind/memory/CALLBACKS.md`.
 - `pytest -m ollama|live|mysql` runs the optional checks against Ollama, the
   running bridge and MySQL; the default run deselects them. `-m live` takes the
   events the bridge queued for the mind, so never run it while they matter.
