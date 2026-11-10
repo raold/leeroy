@@ -408,17 +408,21 @@ def test_a_dm_turn_is_to_him_and_an_unknown_channel_has_no_audience(store, clock
     rig.close()
 
 
-def test_a_dm_line_sets_off_no_aside(store, clock, tmp_path):
-    """R12: reactions' _after_sent reads a DM as the private line it is, as a whisper."""
+def test_a_discord_line_sets_off_no_aside(store, clock, tmp_path):
+    """R12: reactions' _after_sent reads a DM as the private line it is, as a whisper; and no
+    line in the guild's Discord sets off the men's asides or a rival's flirt there, since D1
+    is his to start (members post only in answer to him). A guild line still does."""
     rig = make_rig(store, clock, tmp_path)
     e, seen = rig.engine, []
     e._jealous = lambda trigger, woman, channel, now: seen.append(channel)
     e._rival = lambda turn, woman, now: seen.append("rival")
     p = e.personas.get(102)
-    for channel in ("whisper", "dm:102", "discord:general"):
-        turn = Turn(kind=TurnKind.REPLY_HUMAN, speaker=102, channel=channel, to_guid=HUMAN,
-                    addressee=HUMAN)
-        meta = TurnMeta(e._new_id(), romance=True)
-        e._after_sent(turn, meta, p, "miss you zan")
-    assert seen == ["discord:general", "rival"]
+    for channel in ("whisper", "dm:102", "discord:general", "discord:officer-chat", "guild"):
+        for cheer in (False, True):
+            turn = Turn(kind=TurnKind.REPLY_HUMAN, speaker=102, channel=channel,
+                        to_guid=HUMAN if channel in ("whisper", "dm:102") else 0,
+                        addressee=HUMAN)
+            meta = TurnMeta(e._new_id(), romance=True, loot_cheer=cheer)
+            e._after_sent(turn, meta, p, "miss you zan")
+    assert seen == ["guild", "rival", "guild"]
     rig.close()
