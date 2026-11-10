@@ -434,8 +434,23 @@
   </section>
   <section id="tab-ops" class="tab mindtab" role="tabpanel" aria-labelledby="t-ops" hidden>
     <div id="ops-banner" class="banner bad" role="status" hidden></div>
-    <div class="view-head"><div><h2>Ops</h2><p>Read-only checks, saved work and recovery records. Sources refresh while this tab is open.</p></div></div>
+    <div class="view-head"><div><h2>Ops</h2><p>Checks, saved work and recovery records. Actions require a preview and confirmation.</p></div></div>
     <div id="ops-kpis" class="kpis" aria-live="polite"></div>
+    <div class="panel ops-actions"><h3>Operator actions</h3>
+      <p id="ops-action-message" role="status" aria-live="polite">Checking action availability.</p>
+      <div id="ops-action-global" class="ops-action-buttons"></div>
+    </div>
+    <dialog id="ops-action-dialog" aria-labelledby="ops-action-title" class="ops-action-dialog">
+      <form id="ops-action-form"><h3 id="ops-action-title">Review action</h3>
+        <label id="ops-action-reason-wrap">Reason for release<input id="ops-action-reason" maxlength="200"></label>
+        <label id="ops-action-label-wrap">Snapshot label<input id="ops-action-label" maxlength="40" pattern="[A-Za-z0-9_-]{1,40}"></label>
+        <p id="ops-action-words" role="status" aria-live="polite"></p>
+        <label id="ops-action-typed-wrap" hidden>Type the exact root id<input id="ops-action-typed" autocomplete="off" spellcheck="false"></label>
+        <div class="ops-action-buttons"><button id="ops-action-preview" type="button" class="btn">Review action</button>
+          <button id="ops-action-confirm" type="button" class="btn" hidden>Confirm action</button>
+          <button id="ops-action-cancel" type="button" class="btn">Cancel</button></div>
+      </form>
+    </dialog>
     <div id="ops-panels" class="cards"></div>
   </section>
   <section id="tab-mind" class="tab mindtab" role="tabpanel" aria-labelledby="t-mind" hidden>

@@ -159,6 +159,10 @@ class OfflineRaids:
     def _save(self):
         with self.ports.conn:
             _put(self.ports.conn, OWNED_KEY, self._owned)
+            if self._owned and self._owned.get("operator_stop") and self._owned.get("phase") == "complete":
+                terminal = self._owned.get("terminal") or {}
+                _put(self.ports.conn, "ops:offline:last", {"id": self._owned["id"],
+                    "stopped": terminal.get("reason") == "stopped"})
 
     def _day(self):
         return self.ports.clock.local().date().isoformat()
@@ -369,13 +373,58 @@ class OfflineRaids:
         stop = self._owned.get("stop")
         if stop and (stop.get("accepted") or stop.get("await_terminal")):
             return
-        reason = "stalled" if now - progress["last"] >= self.cfg.offline_stall_minutes * 60 else None
+        if self._owned.get("operator_stop") is True:
+            # Keep an earlier uncertain attempt's reason, but operator intent
+            # survives resumed progress. The freshness/combat fences still apply.
+            reason = stop["reason"] if stop else "operator_stopped"
+        else:
+            reason = ("operator_stopped" if stop and stop.get("reason") == "operator_stopped" else
+                      "stalled" if now - progress["last"] >= self.cfg.offline_stall_minutes * 60 else None)
         if reason is None or stop and stop["reason"] != reason:
-            return  # New progress cancels retries of an uncertain stop; still watch for its terminal.
+            return  # New progress cancels automatic stall retries; still watch for their terminal.
         if not stop:
             stop = self._owned["stop"] = dict(reason=reason, accepted=False)
             log.info("offline_raid_stop raid_id=%s reason=%s inside=%d members=%d",
                      self._owned.get("raid_id"), reason, progress["inside"], len(self._owned["accepted"]))
+        await self._send_stop(now, stop)
+
+    def stop_problem(self, run_id):
+        if not self.active or self._owned.get("id") != run_id or self._owned.get("terminal") is not None:
+            return "That offline raid is no longer an active owned run."
+        if self._online or self.ports.human_online():
+            return "The owner is in game; wait until he is offline."
+        if self._owned.get("stop_unsupported"):
+            return "This game server does not support safe offline raid stops."
+        if (self._owned.get("stop") or {}).get("accepted"):
+            return None
+        now, progress = self.ports.clock.now(), self._progress
+        if (not progress or not 0 <= now-progress["received"] <= PROGRESS_FRESH_S
+                or not 0 <= now-progress["ts"]/1000 <= PROGRESS_FRESH_S):
+            return "Fresh offline raid progress is required before a stop."
+        if progress["engaged"]:
+            return "A boss is engaged; wait until combat ends."
+        return None
+
+    async def request_stop(self, run_id):
+        """Operator stop targets the owned start id, never a new job or a guessed raid."""
+        async with self._lock:
+            await self._drain()
+            if problem := self.stop_problem(run_id):
+                raise ValueError(problem)
+            self._owned["operator_stop"] = True
+            self._save()
+            stop = self._owned.get("stop")
+            if stop and (stop.get("accepted") or stop.get("await_terminal")):
+                return
+            if not stop:
+                stop = self._owned["stop"] = dict(reason="operator_stopped", accepted=False)
+            await self._send_stop(self.ports.clock.now(), stop)
+
+    def operator_result(self, run_id):
+        result = _get(self.ports.conn, "ops:offline:last")
+        return result if isinstance(result, dict) and result.get("id") == run_id else None
+
+    async def _send_stop(self, now, stop):
         self._owned["stop_retry_at"] = now + RETRY_S
         # The transport forbids reissuing a command id. Native stop is idempotent by raid_id,
         # so a retry gets a new envelope id while its target and recorded reason stay fixed.

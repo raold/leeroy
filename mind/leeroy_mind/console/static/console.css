@@ -572,6 +572,16 @@ td > div.who { color: var(--ink); font-weight: 600; }
 #tab-ops .ops-error { color: var(--bad); }
 #tab-ops .ops-command { display: grid; gap: 6px; margin-top: 12px; font-size: 12px; }
 #tab-ops .ops-command input { width: 100%; min-width: 0; box-sizing: border-box; font: 12px/1.5 monospace; }
+/* Ops actions: stable confirmation surface, separate from the refreshing source cards. */
+.ops-actions { margin-bottom: 16px; }
+.ops-action-buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.ops-action-dialog { width: min(560px, calc(100vw - 24px)); max-height: calc(100dvh - 24px);
+  overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); padding: 20px;
+  color: var(--ink); background: var(--surface); }
+.ops-action-dialog::backdrop { background: #0009; }
+.ops-action-dialog label { display: grid; gap: 6px; margin-block: 12px; }
+.ops-action-dialog input { width: 100%; min-width: 0; }
+.ops-action-dialog p { overflow-wrap: anywhere; }
 @media (max-width: 600px) {
   #tab-ops .cards { grid-template-columns: minmax(0, 1fr); }
   #tab-ops .panel { padding: 12px; }
