@@ -49,7 +49,7 @@ COMMAND_FIELDS = {
     "guild_readmit": "id guid kick_ts rank",
 }
 EVENT_FIELDS = {
-    "realm_job": "ts id kind state reason guid value pvp_owner changed",
+    "realm_job": "ts id kind state reason guid value pvp_owner changed skipped",
     "channel_chat": "ts channel from_guid from_name zone text via_bridge",
     "pvp_kill": "ts killer victim map zone",
     "duel_end": "ts winner loser result map zone city",
@@ -206,6 +206,7 @@ def test_events_parse_from_native_fixture():
         if msg["type"] == "realm_job":
             expected.setdefault("pvp_owner", "")
             expected.setdefault("changed", None)
+            expected.setdefault("skipped", ())
             assert type(parsed.value) is int
         assert dataclasses.asdict(parsed) == expected
         seen.add(msg["type"])
@@ -252,6 +253,17 @@ def test_register_is_idempotent_for_all_realm_types():
                                        '"arena_type":3,"rated":true}'), protocol.ArenaQueueEvent)
 
 
+def test_a_realm_job_names_skipped_members_only_as_distinct_guids():
+    protocol.register()
+    msg = next(row["msg"] for row in fixtures() if row["name"] == "realm_job_event")
+    assert wire.parse_event(json.dumps(msg)).skipped == ()  # an older native's event, and every job without skips
+    leave = {**msg, "kind": "leave_pvp", "guid": 0, "skipped": [1306, 304]}
+    assert wire.parse_event(json.dumps(leave)).skipped == (1306, 304)
+    for bad in ([1306, 1306], [0], ["1306"], 1306, [2**32], [True], list(range(1, 152))):
+        with pytest.raises(wire.ProtocolError):
+            wire.parse_event(json.dumps({**leave, "skipped": bad}))
+
+
 def test_native_owner_fixture_and_command_contracts():
     protocol.register()
     protocol.register()
@@ -262,7 +274,7 @@ def test_native_owner_fixture_and_command_contracts():
             assert dataclasses.asdict(parsed) == {
                 key: tuple(value) if key == "members" else value for key, value in msg.items()
                 if key not in {"type", "v"}
-            } | ({"pvp_owner": "", "changed": None} if msg["type"] == "realm_job" else {})
+            } | ({"pvp_owner": "", "changed": None, "skipped": ()} if msg["type"] == "realm_job" else {})
         elif msg["type"] in {"leave_pvp", "get_realm_pvp"} and row["kind"] == "command":
             cls = protocol.LeavePvp if msg["type"] == "leave_pvp" else protocol.GetRealmPvp
             fields = {key: tuple(value) if key == "guids" else value for key, value in msg.items()

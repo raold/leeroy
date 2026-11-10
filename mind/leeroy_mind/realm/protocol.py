@@ -485,6 +485,9 @@ class RealmJob:
     value: int
     pvp_owner: str = ""
     changed: bool | None = None  # False is native proof for the whole failed job.
+    # Members a leave left as they were and stopped holding (one leading its battleground group,
+    # say); native sends the field only when there are some.
+    skipped: tuple[int, ...] = ()
 
     def __post_init__(self):
         if (type(self.ts) is not int or not 0 <= self.ts <= 0x7FFFFFFFFFFFFFFF
@@ -493,7 +496,10 @@ class RealmJob:
                 or type(self.guid) is not int or not 0 <= self.guid <= 0xFFFFFFFF
                 or type(self.value) is not int or not 0 <= self.value <= 0xFFFFFFFFFFFFFFFF
                 or (self.pvp_owner != "" and not _token(self.pvp_owner))
-                or self.changed is not None and type(self.changed) is not bool):
+                or self.changed is not None and type(self.changed) is not bool
+                or type(self.skipped) is not tuple or len(self.skipped) > 150
+                or any(type(g) is not int or not 0 < g <= 0xFFFFFFFF for g in self.skipped)
+                or len(set(self.skipped)) != len(self.skipped)):
             raise ValueError("invalid Realm job receipt")
 
 
