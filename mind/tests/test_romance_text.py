@@ -398,3 +398,30 @@ def test_cooling_is_wistful_never_nagging_and_adds_one_variant(tmp_path):
     a = romance_instruction(lust(), rel("banter"), data_dir=tmp_path, cooling=True,
                             rng=random.Random(0), **WHISPER)
     assert sum(c.format(**HE) in a for c in COOLING_TEXT) == 1
+
+
+def test_the_audience_sentence_fits_the_channel(tmp_path):
+    """A Discord DM is private to the two of them, as a whisper is; a Discord channel is read
+    by the guild members in it (an officers' one by the officers); never "The everyone
+    around". The game's own sentences are unchanged (the golden prompts hold them too)."""
+    def text(channel):
+        return romance_instruction(lust(), rel("banter", 60), data_dir=tmp_path,
+                                   rng=random.Random(1), **dict(WHISPER, channel=channel))
+    dm = text("dm:102")
+    assert "It's a private message, just the two of you." in dm
+    assert "can read it" not in dm and "play to the room" not in dm and "everyone" not in dm
+    general = text("discord:general")
+    assert ("The guild members in #general on the guild's Discord can read it, so play to "
+            "the room.") in general and "everyone around" not in general
+    assert ("The officers in #officer-chat on the guild's Discord can read it, so play to the "
+            "room.") in text("discord:officer-chat")
+    assert "everyone around" not in text("discord:no-such-channel")
+    for channel, sentence in (
+            ("whisper", "It's a private whisper, just the two of you."),
+            ("guild", "The whole guild can read it, so play to the room."),
+            ("officer", "The officers can read it, so play to the room."),
+            ("party", "The party can read it, so play to the room."),
+            ("raid", "The raid can read it, so play to the room."),
+            ("say", "The people standing nearby can read it, so play to the room."),
+            ("voice:lounge", "The people in the room can hear you, so play to the room.")):
+        assert sentence in text(channel), channel

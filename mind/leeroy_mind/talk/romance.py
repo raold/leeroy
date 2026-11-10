@@ -31,6 +31,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Sequence
 
+from leeroy_mind.discord import layout
+from leeroy_mind.discord.channels import channel_id, is_discord, is_private
 from leeroy_mind.human import HumanIdentity
 from leeroy_mind.personas.schema import Persona
 from leeroy_mind.prompts import load_prompt
@@ -314,6 +316,25 @@ _AUDIENCE = {"guild": "whole guild", "officer": "officers", "party": "party", "r
              "say": "people standing nearby"}
 _LATE = frozenset({DayPhase.LATE, DayPhase.DEAD})
 
+
+def audience_text(channel: str) -> str:
+    """Who reads her line, for the romance text: a whisper or a Discord DM is the two of them
+    (discord.channels.is_private); a voice room is heard by the people in it; a Discord channel
+    is read by the guild members in it (an officers' channel: the officers); a game channel by
+    its people (_AUDIENCE)."""
+    if is_private(channel):
+        return ("It's a private whisper, just the two of you." if channel == "whisper"
+                else "It's a private message, just the two of you.")
+    if channel.startswith("voice:"):
+        return "The people in the room can hear you, so play to the room."
+    if is_discord(channel):
+        ch = layout.channel(channel_id(channel))
+        if ch is None:
+            return "The people in this Discord channel can read it, so play to the room."
+        who = "officers" if ch.officers_only else "guild members"
+        return f"The {who} in #{ch.name} on the guild's Discord can read it, so play to the room."
+    return f"The {_AUDIENCE.get(channel, 'everyone around')} can read it, so play to the room."
+
 VARIANT_SEP = "---"  # a line of just this splits an overlay into variants
 _warned: set[str] = set()
 
@@ -592,7 +613,6 @@ def romance_instruction(p: Persona, rel: Relationship | None, *, dial: int, chan
     stage = rel.romance_stage if rel is not None else "none"
     they, them, their = human.forms
     fill = dict(name=human.called, they=they, them=them, their=their)
-    audience = _AUDIENCE.get(channel, "everyone around")
     parts = [
         attitude_text(p),
         style_text(p),
@@ -602,10 +622,7 @@ def romance_instruction(p: Persona, rel: Relationship | None, *, dial: int, chan
     rest = [
         "" if tail_follows else distance_text(stage),
         INVARIANTS,
-        ("It's a private whisper, just the two of you." if channel == "whisper"
-         else "The people in the room can hear you, so play to the room."
-         if channel.startswith("voice:")
-         else f"The {audience} can read it, so play to the room."),
+        audience_text(channel),
         "It's late, and late-night talk runs warmer." if phase in _LATE else "",
         SPECIFIC,
     ]
