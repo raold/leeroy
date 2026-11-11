@@ -64,6 +64,13 @@ def _parser():
     mode = sub.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="read-only plan (default)")
     mode.add_argument("--go", action="store_true", help="save choices and queue fresh sets")
+    sub = subs.add_parser("variety", help="plan or re-roll similar chosen faces (mind stopped)")
+    sub.add_argument("--top", type=_positive, default=30)
+    sub.add_argument("--release", type=lambda text: tuple(_positive(g) for g in text.split(",")),
+                     default=(),help="re-roll named protected GUIDs listed in a dry-run cluster")
+    mode = sub.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", action="store_true", help="read-only plan (default)")
+    mode.add_argument("--go", action="store_true", help="save looks and queue new candidates")
     for sub in subs.choices.values():
         _data_arg(sub, child=True)
     return parser
@@ -360,7 +367,7 @@ async def _try_snaps(root, store, cfg, scfg, clock, args, make_llm) -> int:
         return int(not guids or rendered != len(guids) or (args.guild and not tiles))
 
 
-def selfies_main(argv=None, *, make_llm=None) -> int:
+def selfies_main(argv=None, *, make_llm=None, make_worker=None) -> int:
     args = _parser().parse_args(argv)
     clock = SystemClock()
     try:
@@ -384,6 +391,25 @@ def selfies_main(argv=None, *, make_llm=None) -> int:
                     _print(run(store,_identity(cfg,store),clock,lust_only=args.lust_only,
                                go=args.go,include_owner=args.include_owner))
             return 0
+        if args.action == "variety":
+            from .variety import run
+            from .similarity import MAX_PHOTOS
+            from leeroy_mind.storage.db import open_db
+            from leeroy_mind.storage.store import Store
+            if args.top > MAX_PHOTOS:
+                raise ValueError("top_out_of_range")
+            cfg = load_config(root / "mind.toml")
+            scfg = load_selfie_config(root / "mind.toml")
+            with _exclusive(root, gpu=True):
+                if args.go:
+                    from leeroy_mind.__main__ import _snapshot_file
+                    _snapshot_file(root / "mind.db", root / "snapshots", "pre-variety")
+                context = (closing(Store(open_db(root / "mind.db"), clock=clock)) if args.go
+                           else _read_store(root / "mind.db", clock))
+                with context as store:
+                    _print(asyncio.run(run(root, store, scfg, _identity(cfg, store), clock,
+                        top=args.top, go=args.go, make_worker=make_worker,release=args.release)))
+            return 0
         if args.guild and not args.snaps:
             print("selfies try: --guild goes with --snaps", file=sys.stderr)
             return 2
@@ -396,6 +422,8 @@ def selfies_main(argv=None, *, make_llm=None) -> int:
     except AlreadyRunning as exc:
         if args.action == "restyle":
             print("selfies restyle: mind must be stopped", file=sys.stderr)
+        elif args.action == "variety":
+            print("selfies variety: mind must be stopped", file=sys.stderr)
         else:
             print(f"{exc}; selfies try would share its GPU and could unload its live model")
         return 1
@@ -412,6 +440,10 @@ def selfies_main(argv=None, *, make_llm=None) -> int:
                        "config_invalid" if isinstance(exc, ConfigError) else
                        "database_error" if isinstance(exc, sqlite3.Error) else
                        "filesystem_error" if isinstance(exc, OSError) else "restyle_failed")
+        elif args.action == "variety":
+            from leeroy_mind.personas.looks_diversity import LooksRefused
+            message = (str(exc) if isinstance(exc, (LooksRefused, WorkerError)) else
+                       "filesystem_error" if isinstance(exc, OSError) else "variety_failed")
         else:
             message = f"{type(exc).__name__}: {exc}"
         print(f"selfies {args.action} failed: {message}", file=sys.stderr)

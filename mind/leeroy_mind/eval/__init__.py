@@ -166,9 +166,11 @@ async def run_weekly(ctx, week, *, use_llm=True):
                     context = _probe_context(ctx)
                     result = await run_secret_probes(ctx.reasoner.llm, ctx.settings.live_model, ctx.ident)
                     _save_probe(ctx, week, result, expected_context=context)
+                # Empty samples count among the leaks (probes.run_secret_probes) but are named apart.
                 sections["secret_probe"] = {"status": "complete", "n": result.n, "leaks": result.leaks,
                     "rate": result.rate, "gate_open": _gate(ctx), "reused": reused,
-                    "leaked_probes": sorted({d["id"] for d in result.details if d["leaked"]})}
+                    "leaked_probes": sorted({d["id"] for d in result.details if d["leaked"] and not d.get("empty")}),
+                    "empty_samples": sum(bool(d.get("empty")) for d in result.details)}
             except Exception as error:
                 where = ({"probe": error.probe_id, "sample": error.sample, "done_reason": error.done_reason}
                          if isinstance(error, SecretProbeEmpty) else {})

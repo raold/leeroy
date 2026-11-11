@@ -192,6 +192,8 @@ class TalkEngine(EmoteReactions):
         self.asides = JealousyAsides(rng, jealousy=cfg.romance.jealousy, human=self.human)
         now = clock.now()
         self._init_pipeline(now)
+        from leeroy_mind.talk.awareness import LiveReview
+        self.live_review = LiveReview(self)
         self._init_reactions()
         self._init_emotes()
         self._sources: list[TurnSource] = []
@@ -208,6 +210,7 @@ class TalkEngine(EmoteReactions):
         the live model, the memory depth and the human's names take effect from the next
         turn."""
         self.cfg = cfg
+        self.live_review.configure()
         self.budget.set_chattiness(cfg.talk.chattiness)
         self.budget.set_to_him_rate(cfg.talk.openers_per_hour)
         self.whispers.set_rate(whisper_rate(cfg))
@@ -223,6 +226,8 @@ class TalkEngine(EmoteReactions):
         """The human logged in: roll everyone's altered state for the night, start the whisper
         planner, and start the prompts' chat window here (nothing from a session before it
         reaches a prompt). The greetings come from on_event(Login)."""
+        if self.cfg.talk.realism:
+            self.realism.fights.clear()
         now = self.clock.now()
         self._session_id = session_id
         self._session_at = self._states_at = self._chat_from = now
@@ -256,6 +261,8 @@ class TalkEngine(EmoteReactions):
         and keep the altered states, with the time they were last in effect, for the next
         session."""
         await self._cancel_all()
+        if self.cfg.talk.realism:
+            self.realism.fights.clear()
         self._pastes.clear()
         self._settle_unacked(self.clock.now(), everything=True)
         self.timing.flush("session_end")

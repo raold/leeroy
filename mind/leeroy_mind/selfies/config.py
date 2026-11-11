@@ -116,11 +116,12 @@ def worker_data(cfg: SelfieCfg) -> Path:
     return Path(env) if env else CHECKOUT / "selfie-data"
 
 
-def worker_command(cfg: SelfieCfg, *, identity: bool = False) -> list[str]:
+def worker_command(cfg: SelfieCfg, *, identity: bool = False, embedding: bool = False) -> list[str]:
     """The night worker, isolated (-I: no PYTHON* variables, no user site, no script dir). With
     `identity` it loads the identity adapter too and asks for identity_min_free_gib."""
     free = cfg.identity_min_free_gib if identity else cfg.min_free_gib
     return [str(worker_python(cfg)), "-I", "-X", "utf8", "-m", "leeroy_selfie", "worker",
+            *(["--embed-only"] if embedding else []),
             *(["--identity"] if identity else []),
             "--data", str(worker_data(cfg)), "--min-free-gib", f"{free:g}"]
 

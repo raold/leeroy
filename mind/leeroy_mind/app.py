@@ -927,6 +927,8 @@ class MindApp:
         self.store.set_meta("guild_id", str(ev.guild_id))
         self._note_human(ev.human_guid)
         self.world.apply(ev, now)
+        if self.engine.cfg.talk.realism:
+            self.engine.realism.observe(ev, now)
         if self.engine.items is not None:  # native expands item placeholders: talk/items.py
             self.engine.items.native = NATIVE_FEATURE in ev.features
         log_event("bridge_hello", server=ev.server, version=ev.version,

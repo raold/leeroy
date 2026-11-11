@@ -208,6 +208,7 @@ def test_open_failure_closes_copy_and_preserves_live_database(h, monkeypatch):
     assert len(copies) == 1
     closed(copies[0])
     assert live_rows(h) == before
+    assert not list((h.settings.data_dir / "scratch").glob("mind-eval-*"))
 
 
 def test_concurrent_asks_are_serialized_and_queued_ask_is_cancelled_on_close(h):
@@ -231,3 +232,61 @@ def test_concurrent_asks_are_serialized_and_queued_ask_is_cancelled_on_close(h):
         closed(asker.store)
 
     run(go())
+
+
+def scratch_files(h):
+    return sorted(p.name for p in (h.settings.data_dir / "scratch").glob("*"))
+
+
+@pytest.mark.parametrize("busy", [False, True])
+def test_closing_the_asker_deletes_its_copy(h, busy):
+    async def go():
+        gate = asyncio.Event()
+        asker = await opened(h, FakeLLM(gate=gate))
+        assert asker.path.name.startswith("mind-eval-") and asker.path.exists()
+        if busy:
+            task = asyncio.create_task(asker.ask(101, "What happened?"))
+            await asyncio.sleep(0)
+            await asyncio.wait_for(asker.aclose(), 2)
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            gate.set()
+            await asker.ask(101, "What happened?")
+            await asker.aclose()
+        return asker
+
+    asker = run(go())
+    closed(asker.store)
+    assert not asker.path.exists() and scratch_files(h) == []
+
+
+def test_every_copy_shares_one_label_so_leftovers_are_pruned(h):
+    async def go():
+        leftovers = []
+        for night in range(12):
+            asker = await module.ScratchAsker.open(cfg=configured(h), data_dir=h.settings.data_dir,
+                store=h.store, llm=FakeLLM(), ident=IDENT, clock=h.clock, label=f"eval-2026-11-{night:02}")
+            leftovers.append(asker)
+            asker.store.close()  # a crash: the copy is never deleted
+            h.clock.advance(1)
+        return leftovers
+
+    run(go())
+    assert len(scratch_files(h)) == 10 and all(name.startswith("mind-eval-2") for name in scratch_files(h))
+
+
+def test_a_copy_that_cannot_be_deleted_is_logged_and_kept(h, monkeypatch, caplog):
+    def refuse(self, missing_ok=False):
+        raise PermissionError("held by another process")
+
+    async def go():
+        asker = await opened(h)
+        monkeypatch.setattr(module.Path, "unlink", refuse)
+        await asker.aclose()
+        monkeypatch.undo()
+        return asker
+
+    asker = run(go())
+    assert asker.path.exists()
+    assert "eval_scratch_kept: error=PermissionError" in caplog.text

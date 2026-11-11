@@ -15,7 +15,7 @@
 namespace Leeroy::Realm
 {
 using Queued = ActionQueue::Entry;
-// Skipped: an ordinary leave's member that nothing in the job touched stays as it is; Tick ends
+// Skipped: a leave's or a rearm's member that nothing in the job touched stays as it is; Tick ends
 // only its lease (AcceptsMemberSkip) and the job goes on with the others.
 enum class StepState { Complete, Refused, Pending, Unknown, Detached, Skipped };
 struct RealmStep
@@ -93,6 +93,9 @@ public:
     std::string ChargeAffectedBodies(std::string_view operation, std::vector<std::uint32_t> const& guids);
     std::string DeclareAffectedBodyScopes(std::string_view operation, std::uint32_t guid,
         std::vector<BodyScope> scopes);
+    // The operation declared a transition for this body (a shared cleanup touched it), or the
+    // body's own step went pending.
+    bool AwaitsTransition(std::string_view operation, std::uint32_t guid) const;
     // Active exact guild_grow only. One synchronous native add with a causal
     // receipt kept in the existing whole-manifest reservation. The original
     // identity stays immutable; no other command gains a guild-change waiver.

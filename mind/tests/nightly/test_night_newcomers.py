@@ -64,6 +64,28 @@ def test_newcomer_uses_generator_source_screens_budget_and_refreshes_night(h, ca
     assert not any(text in caplog.text for text in (*NAMES, "Arkon", "synthetic profile"))
 
 
+def test_diversity_on_uses_sampler_without_extra_model_call_and_keeps_enrichment_due(h,monkeypatch):
+    from leeroy_mind.nightly.enrich import _bare
+    missing(h,101)
+    ctx = context(h,NAMES[0])
+    (ctx.settings.data_dir / "mind.toml").write_text("[looks]\ndiversity=true",encoding="utf-8")
+    from leeroy_mind.config import load_config
+    from leeroy_mind.nightly.settings import load_settings
+    from leeroy_mind.personas import looks_diversity
+    ctx.settings = load_settings(load_config(ctx.settings.data_dir/"mind.toml"),ctx.settings.data_dir)
+    (ctx.settings.data_dir/"mind.toml").write_text("[looks]\ndiversity=false")
+    monkeypatch.setattr(looks_diversity,"enabled",lambda *a:pytest.fail("configuration reread"))
+    run(generate(ctx))
+    p = load_persona(h.store,101)
+    assert p is not None and p.appearance is not None
+    assert ctx.reasoner.calls == 2
+    assert _bare(ctx,101)  # sampler does not suppress later tastes/disclosure enrichment
+    # A later save of hers the same night (the photo pass, say) moves the version; enrichment that
+    # was refused or deferred must still be due while her disclosures are empty.
+    h.store.conn.execute("UPDATE persona_core SET version=version+1 WHERE guid=101")
+    assert _bare(ctx,101)
+
+
 def test_cap_survives_resume_and_later_eligible_members(h):
     missing(h, 101, 102, 103, 104, 105)
     ctx = context(h, *NAMES, cap=2)
