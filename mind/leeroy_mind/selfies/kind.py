@@ -276,7 +276,8 @@ def screen_kind(p: Persona, data: dict, *, ident: HumanIdentity,
             problems.append(f"photo.{field}: explicit: {quoted}")
         if AGE_RE.search(text):
             problems.append(f"photo.{field}: age: {quoted}")
-    return list(dict.fromkeys(problems + _photo_problems(p, data)))
+    from .style_variety import plain_pairings
+    return list(dict.fromkeys(problems + _photo_problems(p, data) + plain_pairings(p,data)))
 
 
 def _photo_problems(p: Persona, data: dict) -> list[str]:
@@ -367,7 +368,7 @@ async def kind_one(ctx: "NightContext", guid: int, *, variety=False) -> tuple[Pr
             return (picks[guid].photo,[]) if guid in picks else _refused(ctx,guid,["photo: no_safe_capacity"])
         ask += photo_extra.common(ctx.store,ctx.clock.now(),persona=p,ident=ctx.ident,names=members)
         ask += (" Prefer a coherent crop: headshots near the face, mirror selfies showing the upper body, "
-                "and gym leggings in a gym setting. These are preferences for this choice.")
+                "and clothing appropriate to the setting. These are preferences for this choice.")
     for again in (False, True):
         try:
             data = await ctx.reasoner.json(system, ask + (LUST_ASK_AGAIN if again else ""),
@@ -379,8 +380,6 @@ async def kind_one(ctx: "NightContext", guid: int, *, variety=False) -> tuple[Pr
         if not lust:
             members = [ctx.name(g) for g in ctx.members(include_away=True) if g != guid]
             problems = screen_kind(p, data, ident=ctx.ident, member_names=members)
-            if variety:
-                problems += style_variety.plain_pairings(p,data)
             if problems:
                 return _refused(ctx, guid, problems)
             return ProfilePhoto(**data), []

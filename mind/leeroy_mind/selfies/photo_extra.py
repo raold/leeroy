@@ -25,8 +25,8 @@ def setting_category(setting):
     text = " ".join(setting.casefold().split())
     def has(words):
         return re.search(r"\b(?:" + words + r")\b",text) is not None
-    outdoor = has("outdoors?|outside|street|garden|backyard|terrace|balcony|park|woodland|trail|lake|lakeside|beach|pool|dock|deck|rooftop")
-    indoor = has("indoors?|inside|room|couch|table|cafe|restaurant|bar|nightclub|dance floor|gym|office|studio|library|workshop|workbench")
+    outdoor = has("outdoors?|outside|street|garden|backyard|terrace|balcony|park|woodland|trail|lake|lakeside|beach|pool(?! hall)|poolside|dock|deck|rooftop")
+    indoor = has("indoors?|inside|room|couch|table|cafe|restaurant|bar|nightclub|dance floor|gym|office|studio|library|workshop|workbench|pool hall")
     # A terrace or balcony is outside even when the building is also named.
     place = "outdoor" if outdoor else "indoor" if indoor else None
     if place is None:
@@ -37,7 +37,7 @@ def setting_category(setting):
         time = "day"
     elif outdoor:
         time = "day"
-    elif has("bar|dance floor|couch|dining table"):
+    elif has("bar|dance floor|couch|dining table|pool hall"):
         time = "night"
     else:
         return None  # an indoor place without a time hint keeps its original light
@@ -46,7 +46,8 @@ def setting_category(setting):
 
 def fits(light, photo):
     return photo is not None and type(light) is int and 0 <= light < len(LIGHTS) and (
-        setting_category(photo.setting) in LIGHT_CATEGORIES[light])
+        setting_category(photo.setting) in LIGHT_CATEGORIES[light]) and (
+        light != 5 or re.search(r"\bstreet\b",photo.setting,re.I) is not None)
 
 
 def history_style(store,p):
@@ -116,7 +117,8 @@ def common(store, now, *, persona, ident, names=()):
     def lust_vocabulary(outfit,setting):
         garment = outfit_parts(outfit)[0].replace("{colour}","")
         text = " " + words(garment) + " " + words(setting) + " "
-        return any(" " + value + " " in text for value in lust_words)
+        return (re.search(r"\b(?:low cut|plunging|bodycon|mini skirt|halter|backless|cut out|high slit|bikini|swimsuit)\b",text)
+                is not None or any(" " + value + " " in text for value in lust_words))
     for outfit, setting in rows:
         # Use the full plain screens on a coherent neutral kind, before reducing text.
         data = dict(kind="snapshot", framing="upper_body", outfit=outfit,

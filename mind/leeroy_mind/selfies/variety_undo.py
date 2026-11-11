@@ -13,9 +13,10 @@ UNDO = "selfies:variety-undo:"
 
 
 def record(store, before, after, *, now, released):
+    source = store.conn.execute("SELECT source FROM persona_core WHERE guid=?",(before.guid,)).fetchone()[0]
     receipt = dict(appearance=asdict(before.appearance) if before.appearance else None,
         photo=asdict(before.photo) if before.photo else None, after=asdict(after.appearance),
-        photo_record=store.get_meta(kind.STYLE_KEY.format(guid=before.guid)),
+        source=source, photo_record=store.get_meta(kind.STYLE_KEY.format(guid=before.guid)),
         pending_pick=store.get_meta(f"selfies:variety-pick:{before.guid}"), released=released)
     ledger = ledger_add(store,guid=before.guid,kind="variety",text="re-rolled appearance",
                         evidence=[],now=now)
@@ -40,7 +41,10 @@ def restore(store, row, *, now):
         data["photo"] = receipt["photo"]
     restored = persona_from_dict(data)
     race,cls = _race_class(store,p.guid)
-    save_persona(store,restored,source="owner",ts=now,race=race,class_name=cls)
+    # Older receipts lack provenance; retain their current source rather than invent owner authorship.
+    source = receipt.get("source") or store.conn.execute(
+        "SELECT source FROM persona_core WHERE guid=?",(p.guid,)).fetchone()[0]
+    save_persona(store,restored,source=source,ts=now,race=race,class_name=cls)
     if restore_photo:
         key = kind.STYLE_KEY.format(guid=p.guid)
         if receipt["photo_record"] is None:
