@@ -485,8 +485,8 @@ class RealmJob:
     value: int
     pvp_owner: str = ""
     changed: bool | None = None  # False is native proof for the whole failed job.
-    # Members a leave left as they were and stopped holding (one leading its battleground group,
-    # say); native sends the field only when there are some.
+    # Members a leave or a rearm left as they were and stopped holding (one leading its battleground
+    # group, one in combat); native sends the field only when there are some.
     skipped: tuple[int, ...] = ()
 
     def __post_init__(self):

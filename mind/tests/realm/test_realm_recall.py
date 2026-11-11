@@ -533,7 +533,81 @@ def test_a_rearm_that_ended_unknown_stops_its_chain_and_holds_its_manifest(pipel
     run(scenario())
 
 
+@pytest.mark.parametrize("skipped", [(), (102,), (101, 103), (101, 102, 103)])
+def test_a_rearm_that_skipped_members_is_done_and_its_defaults_go_to_everyone(pipeline, skipped, caplog):
+    # 2026-11-10/11: native refused all 15 overnight rearms of the cast for one member in combat or
+    # dead, or for his group's members at the ack. It now leaves them out and rearms the rest; a
+    # skipped member needs no backoff, the next pass rearms it again. () is an older native's event.
+    async def scenario():
+        async with pipeline:
+            h = pipeline
+            h.cast(101, 102, 103)
+            caplog.set_level("INFO", logger="leeroy_mind.realm")
+            h.realm.recall.restore_defaults()
+            await h.cycle()
+            rearm, = h.app.sent
+            assert type(rearm) is p.Rearm and rearm.guids == (101, 102, 103)
+            await h.app.event(p.RealmJob(0, rearm.id, "rearm", "done", "", 0, 3 - len(skipped), "", None, skipped))
+            record = h.realm.action_store.get(rearm.id)
+            assert (record.state, record.result_ok, record.result_reason) == ("completed", True, "")
+            assert h.realm.action_store.holds() == ()
+            await h.cycle(1.01)
+            defaults = h.app.sent[-1]
+            assert type(defaults) is BotDo and defaults.guids == (101, 102, 103)
+            await h.result(defaults)
+            for _ in range(3):
+                h.realm.bodies.poll()
+                h.realm.recall.tick(h.clock.now())
+                await h.cycle(1.01)
+            assert h.app.sent == [rearm, defaults]
+            assert h.realm.queue.leave_backed_off("realm_day") == set()
+            assert h.realm.action_store.holds() == ()
+            # The next pass rearms everyone again, the skipped included.
+            await h.clock.advance(1800, step=1800)
+            h.realm.recall.tick(h.clock.now())
+            await h.cycle()
+            assert type(h.app.sent[-1]) is p.Rearm and h.app.sent[-1].guids == (101, 102, 103)
+            expected = [f"realm_rearm_skipped id={rearm.id} kind=rearm skipped={len(skipped)} members=3"]
+            assert [m for m in caplog.messages if m.startswith("realm_rearm_skipped")] == (expected if skipped else [])
+    run(scenario())
+
+
+def test_defaults_that_skipped_a_dead_member_still_send_the_later_batches(pipeline):
+    # 81 of 140 defaults batches since 2026-11-09 skipped a member or two (148 dead, 26 busy); each
+    # stopped its chain, so the batches after it never went.
+    async def scenario():
+        async with pipeline:
+            h = pipeline
+            h.cast(*range(101, 182))
+            h.realm.recall.restore_defaults()
+            await h.cycle()
+            await h.result(h.app.sent[0])
+            await h.cycle()
+            first = h.app.sent[1]
+            assert type(first) is BotDo and len(first.guids) == 40
+            await h.result(first, skipped=(first.guids[0], first.guids[7]))  # done, two of them dead
+            record = h.realm.action_store.get(first.id)
+            assert (record.state, record.result_ok, record.result_reason) == ("completed", False, "defaults_failed")
+            answered = {first.id}
+            for _ in range(6):
+                await h.cycle(1.01)
+                for cmd in [c for c in h.app.sent if type(c) is BotDo and c.id not in answered]:
+                    answered.add(cmd.id)
+                    await h.result(cmd)
+            batches = [c for c in h.app.sent if type(c) is BotDo]
+            assert [len(c.guids) for c in batches] == [40, 40, 1]
+            assert set().union(*(set(c.guids) for c in batches)) == set(range(101, 182))
+            for _ in range(3):
+                h.realm.bodies.poll()
+                h.realm.recall.tick(h.clock.now())
+                await h.cycle(1.01)
+            assert len([c for c in h.app.sent if type(c) is BotDo]) == 3
+            assert h.realm.action_store.holds() == ()
+    run(scenario())
+
+
 def test_partial_defaults_stop_later_chunks_and_do_not_restore_on_own_release(pipeline):
+    # A batch native aborted (failed: cancelled, timed out) still stops its chain.
     async def scenario():
         async with pipeline:
             h = pipeline

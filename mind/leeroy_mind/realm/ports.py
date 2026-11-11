@@ -1023,17 +1023,22 @@ class LivePorts(RealmPorts):
         if not self._tables("dkp_ledger"):
             return 0
         since, now, count = _number(since), self.now(), 0
+        # Called once per member (realm.poach): a record that cannot be read is counted once per
+        # process, in one count line from the call that first finds it, never once per member.
+        reported, unreadable = self.__dict__.setdefault("_loot_evidence_reported", set()), 0
         for key, value in self.conn.execute("SELECT key,value FROM meta WHERE key GLOB 'guild:loot:*' ORDER BY key"):
             match = re.fullmatch(r"guild:loot:([0-9]+):[a-f0-9]+", key)
             if match is None:
                 continue
             try:
                 rec = json.loads(value)
+                # Only a charged award can be a close loss; unclaimed or uncertain loot has none.
+                if rec["state"] != "charged":
+                    continue
                 award = rec["award"]
                 winner, runner = _int(award["guid"], 1), _int(award["runner_up"], 1)
                 item, paid = _int(rec["item_id"], 1), _number(award["paid"])
-                if (rec["state"] != "charged" or award["close"] is not True or runner != guid
-                        or winner == runner or paid < 0):
+                if award["close"] is not True or runner != guid or winner == runner or paid < 0:
                     continue
                 debits = self.conn.execute("SELECT ts,delta FROM dkp_ledger WHERE reason='item' AND note=? "
                     "AND raid_id=? AND item_id=? AND guid=?", (key, int(match[1]), item, winner)).fetchall()
@@ -1041,7 +1046,11 @@ class LivePorts(RealmPorts):
                         and since <= _number(debits[0][0]) <= now):
                     count += 1
             except (ValueError, TypeError, KeyError):
-                log.warning("realm_loot_evidence_unavailable")
+                if key not in reported:
+                    reported.add(key)
+                    unreadable += 1
+        if unreadable:
+            log.warning("realm_loot_evidence_unavailable: records=%d", unreadable)
         return count
 
     def _roll_night(self):
