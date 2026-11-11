@@ -1,5 +1,6 @@
 """Read the real talk prompt on an isolated database copy; never send a bridge command."""
 import asyncio
+import logging
 import random
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -8,6 +9,7 @@ from typing import Protocol
 from leeroy_mind.human import HumanIdentity
 from leeroy_mind.llm.presets import LIVE
 from leeroy_mind.llm.scheduler import LLMScheduler
+from leeroy_mind.logs import log
 from leeroy_mind.memory.recall import Recall
 from leeroy_mind.memory.writer import Embedder
 from leeroy_mind.personas.io import PersonaCache
@@ -24,6 +26,9 @@ from leeroy_mind.wow import CAST_MIN_LEVEL
 
 ASK_TIMEOUT_S = 120.0  # includes recall embedding and the live-model answer
 QUESTION_MAX_CHARS = 2000
+# Every scratch copy shares one file label, so snapshot retention prunes a copy that a crash
+# left behind; a closed asker deletes its own (the caller's `label` only seeds the asker).
+COPY_LABEL = "eval"
 
 
 @dataclass
@@ -44,6 +49,7 @@ async def _never_send(_command):
 
 class ScratchAsker:
     """Owns its copied Store and scheduler, never the caller's database or model client.
+    Closing it deletes the copy.
 
     Questions are serialized so one quiz cannot contaminate another question's composition.
     close() is immediate when idle. During a request it cancels only owned work and schedules
@@ -64,8 +70,12 @@ class ScratchAsker:
         if type(ident.guid) is not int or ident.guid <= 0:
             raise ValueError("scratch evaluation requires a human identity")
         data_dir = Path(data_dir)
-        path = snapshot(store.conn, data_dir / "scratch", label, now=clock.now())
-        copied = Store(open_db(path), clock=clock)
+        path = snapshot(store.conn, data_dir / "scratch", COPY_LABEL, now=clock.now())
+        try:
+            copied = Store(open_db(path), clock=clock)
+        except BaseException:
+            _remove_copy(path)
+            raise
         try:
             roster = copied.cast()
             if ident.guid not in roster:
@@ -96,6 +106,7 @@ class ScratchAsker:
                        path=path, engine=engine, scheduler=scheduler)
         except BaseException:
             copied.close()
+            _remove_copy(path)
             raise
 
     async def ask(self, guid, question):
@@ -145,9 +156,13 @@ class ScratchAsker:
                 await asyncio.gather(*requests, return_exceptions=True)
             await self.scheduler.close()
         finally:
-            if not self._closed:
-                self.store.close()
-                self._closed = True
+            self._close_store()
+
+    def _close_store(self):
+        if not self._closed:
+            self.store.close()
+            self._closed = True
+            _remove_copy(self.path)
 
     def close(self):
         if self._closing:
@@ -157,8 +172,7 @@ class ScratchAsker:
         for task in requests:
             task.cancel()
         if not requests:
-            self.store.close()
-            self._closed = True
+            self._close_store()
         # A completed ask's scheduler callback may still be pending. Join it as well,
         # without touching the caller-owned client. No task is needed outside a loop.
         try:
@@ -171,3 +185,14 @@ class ScratchAsker:
         self.close()
         if self._cleanup is not None:
             await asyncio.shield(self._cleanup)
+
+
+def _remove_copy(path):
+    """Delete a scratch copy and its SQLite side files: nothing reads it once its asker closed."""
+    for part in (path, path.with_name(path.name + "-wal"), path.with_name(path.name + "-shm")):
+        try:
+            part.unlink(missing_ok=True)
+        except OSError as error:
+            # Retention prunes it later under the shared label.
+            log("eval_scratch_kept", level=logging.WARNING, error=type(error).__name__)
+            return

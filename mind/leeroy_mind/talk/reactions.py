@@ -137,6 +137,8 @@ class Reactions(Pipeline):
         Chat, emotes and anything unknown trigger nothing here (the human's lines go to
         on_human_chat; emotes at members are answered by talk/emotes.py)."""
         self._note_lately(ev, now)
+        if self.cfg.talk.realism:
+            self.realism.observe(ev, now)
         if isinstance(ev, (LootDrop, LootWon)) and getattr(self, "items", None) is not None:
             # the copy that dropped is the one a shared item name links to (talk/items.py)
             self.items.seen([i.item_id for i in ev.items] if isinstance(ev, LootDrop)

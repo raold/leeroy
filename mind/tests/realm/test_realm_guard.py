@@ -1155,7 +1155,9 @@ def test_untagged_speech_output_is_unchanged(store, tmp_path):
          everyone),
         (5, t, "guild", 104, "Dunna", 0, "fair enough", 0, 10, "mind", everyone)]
     t = int(t)
-    assert [tuple(row) for row in store.conn.execute("SELECT * FROM utterance ORDER BY id")] == [
+    assert [tuple(row) for row in store.conn.execute(
+        "SELECT id,ts,guid,channel,kind,text,memory_ids,dropped,session_id,bit,why,trigger_line,llm_s,to_guid,turn_id "
+        "FROM utterance ORDER BY id")] == [
         (1, t + 10, 101, "guild", "aside", "fair enough, pulling in five", "[]", None, None, None, "say_as",
          None, None, 0, "t1"),
         (2, t + 73, 102, "whisper", "whisper", "saw coros got kicked, want them back? (yes/no) :)", "[]", None,

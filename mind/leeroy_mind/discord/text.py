@@ -57,3 +57,8 @@ _EMOJI = re.compile(
 
 def is_one_emoji(s: str) -> bool:
     return _EMOJI.fullmatch(s) is not None
+
+
+def is_emoji_message(s: str) -> bool:
+    """One or more complete emoji, optionally separated by whitespace."""
+    return bool(s.strip()) and not _EMOJI.sub("", s).strip()

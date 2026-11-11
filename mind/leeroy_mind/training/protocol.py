@@ -354,6 +354,21 @@ class DummyResult:
 
 
 @dataclass(frozen=True, slots=True)
+class DummyCleanup:
+    """Native's word on a dummy trial after its cleanup_failed terminal.
+
+    ``restored``: every member's return was proved after all. ``released``: the
+    bound passed and the job held none of ``unfinished`` any more; their
+    journals stay with them natively.
+    """
+    ts: int
+    id: str
+    state: str
+    unfinished: tuple[int, ...] = ()
+    after_ms: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class Rivals:
     ts: int
     id: str
@@ -370,7 +385,7 @@ EVENTS: dict[str, type] = {
     "pull": Pull, "pull_member": PullMember, "pull_death": PullDeath,
     "pull_track": PullTrack, "boss_cast": BossCast, "pull_pulse": PullPulse,
     "vocab": Vocab, "server_stats": ServerStats, "dummy_result": DummyResult, "rivals": Rivals,
-    "training_cleanup": TrainingCleanup,
+    "training_cleanup": TrainingCleanup, "dummy_cleanup": DummyCleanup,
 }
 TG_EVENT_TYPES = frozenset(EVENTS)
 

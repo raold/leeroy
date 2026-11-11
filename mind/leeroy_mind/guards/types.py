@@ -14,7 +14,7 @@ class Draft:
     thread_ids: tuple[int, ...] = ()
     embedding: bytes | None = field(default=None, repr=False)
     to_guid: int = 0
-    # For game, the original say/party/raid/etc. channel; for Discord, its opaque id.
+    # For game, the original say/party/raid/etc. channel; for Discord/voice, its room id.
     room: str = field(default='', repr=False)
     now: float | None = None
     map: int = 0

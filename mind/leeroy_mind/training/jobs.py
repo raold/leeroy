@@ -163,8 +163,8 @@ class TrainingJobs:
     async def _lab_tick(self):
         try:
             await self.lab.tick()
-        except Exception:
-            log.warning("training_lab_tick_failed")
+        except Exception as exc:
+            log.warning("training_lab_tick_failed error=%s", type(exc).__name__)
 
     async def tick(self):
         if (self._closed or not self.ground._connected or self.ground._stopping

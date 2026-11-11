@@ -14,11 +14,11 @@ import { CLASSES, moodText, moodTitle, photoKindText, signed, tileState, when, y
 
 var PERSONAS_MS = 30000;  // as the Guild tab: the live mind writes this database meanwhile
 var TRAITS = ["openness", "conscientiousness", "extraversion", "agreeableness", "neuroticism"];
-var BY = { seed: "the seeding", owner: "you (an import or a personas command)", generator: "the generator",
+var BY = { seed: "the seeding", owner: "you (an import or a personas command)", generator: "the generator", variety: "variety pass",
            night: "the night's looks pass", photo: "the night's photo-kind pass", stance: "a stance move",
            undo: "an undo of a stance move" };
 var LEDGER_KINDS = { note_added: "note added", note_dropped: "note dropped", note_rolled_back: "note rolled back (drift)",
-                     drift_flag: "drift flag", stance_band: "stance move", undo: "undo" };
+                     drift_flag: "drift flag", stance_band: "stance move", variety: "variety pass", undo: "undo" };
 var personasTimer = null, personasBusy = false, pick = 0, pickSeq = 0, reveal = false;
 var rosterOffset = 0, rosterPage = null, rosterDrawn = "";
 var paging = el("div", "roster-pages"), previousPage = el("button", "", "Previous members"),

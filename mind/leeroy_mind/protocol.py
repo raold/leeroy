@@ -62,6 +62,9 @@ class Hello:
     human_guid: int
     # What native understands beyond the base protocol ("item_links"); an older one sends none.
     features: tuple[str, ...] = ()
+    # The worldserver process's start (Unix ms); 0 from an older native. A later value than a
+    # stored one means native restarted, taking its in-memory jobs, fences and journals with it.
+    started_ms: int = 0
 
 
 @dataclass(frozen=True, slots=True)

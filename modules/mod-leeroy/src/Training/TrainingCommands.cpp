@@ -3,16 +3,30 @@
 #include "TrainingTap.h"
 #include "DummyTrialJob.h"
 #include "LeeroyModule.h"
+#include "LeeroyTrainingFence.h"
 #include "LeeroyTrainingProtocol.h"
 #include "UpdateTime.h"
 #include "OfflineRaidJob.h"
 #include "Log.h"
 
+#include <chrono>
+
 namespace Leeroy::Training
 {
-namespace { bool cleanupPending = false; }
-bool TrainingCleanupPending() { return cleanupPending; }
-void RequireTrainingCleanup() { cleanupPending = true; }
+namespace
+{
+TrainingFence fence; // World thread only.
+CleanupReport report;
+std::uint64_t SteadyMs()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+}
+bool TrainingCleanupPending() { return fence.Fencing(SteadyMs()); }
+bool TrainingCleanupUnresolved() { return fence.Pending(); }
+void RequireTrainingCleanup() { fence.Raise(SteadyMs()); }
+void NoteTrainingCleanupReleased(std::string const& detail) { fence.NoteUnproved(detail); }
 LeeroyCommandResult HandleTelemetry(nlohmann::json const& message)
 {
     std::string error;
@@ -41,15 +55,44 @@ LeeroyCommandResult HandleGetStats(nlohmann::json const& message)
 void TrainingOffCleanup()
 {
     // Each adapter retains failures for its next bounded tick. No blanket DC clear or default reset of unowned values.
-    cleanupPending = true;
-    EndDummyTrial("training_off");
+    auto const now = SteadyMs();
+    std::string reason(TrainingBlockReason()); // Read before this pass raises the fence itself.
+    if (reason.empty()) reason = "training_off";
+    fence.Raise(now);
+    EndDummyTrial(reason);
     bool const benchmark = Guild::BenchmarkRunning();
-    Guild::EndBenchmark("training_off");
+    Guild::EndBenchmark(reason);
     bool const offline = Guild::RestoreOfflineTraining();
     bool const runs = ClearTrainingRuns();
     bool const bots = RestoreTrainingBots();
-    cleanupPending = !offline || !runs || !bots || DummyTrialRunning() || Guild::BenchmarkRunning()
-        || Guild::OfflineTrainingCleanupPending();
+    std::string adapters;
+    auto add = [&adapters](std::string_view name, std::string const& detail = {})
+    {
+        adapters += adapters.empty() ? "" : ",";
+        adapters += name;
+        if (!detail.empty()) adapters += "(" + detail + ")";
+    };
+    if (DummyTrialRunning()) add("dummy_trial", DummyTrialCleanupDetail());
+    if (Guild::BenchmarkRunning()) add("benchmark");
+    if (!offline) add("offline_raid");
+    if (Guild::OfflineTrainingCleanupPending()) add("offline_receipt");
+    if (!runs) add("dc_runs");
+    if (!bots) add("journals", std::to_string(TrainingJournalCount()));
+    std::string const unproved = fence.Unproved(); // Settle(false) ends the episode and forgets it.
+    if (report.Due(adapters, now))
+    {
+        if (!adapters.empty())
+            LOG_WARN("module.leeroy", "mod-leeroy: training cleanup pending: {} after_ms={}", adapters,
+                fence.Elapsed(now));
+        else if (!unproved.empty())
+            LOG_WARN("module.leeroy", "mod-leeroy: training cleanup released, not verified: {}", unproved);
+        else LOG_INFO("module.leeroy", "mod-leeroy: training cleanup verified");
+    }
+    fence.Settle(!adapters.empty(), now);
+    if (fence.TakeRelease(now))
+        LOG_WARN("module.leeroy", "mod-leeroy: training cleanup fence released after_ms={} pending={}; only bodies a "
+            "job still keeps or a journal names stay fenced, and training stays refused until cleanup is verified",
+            fence.Elapsed(now), adapters);
     if (benchmark)
         LOG_INFO("module.leeroy", "mod-leeroy: training cleanup benchmark retained={}", Guild::BenchmarkRunning());
 }

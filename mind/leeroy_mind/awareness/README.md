@@ -2,8 +2,9 @@
 
 `card(app_or_stores, guid, *, context=CardContext())` returns a structured `Card`.
 `Card.render(budget_tokens=600)` returns deterministic plain text. This package
-does not attach to talk, Discord, voice, evaluation, prompts, or nightly stages.
-It never calls a model, probes a server, migrates a database, commits, or logs.
+is read-only. The talk adapter includes one delimited card when `[talk] aware =
+true`; it is off by default. The card never calls a model, probes a server,
+migrates a database, commits, or logs.
 
 ```python
 from leeroy_mind.awareness import CardContext, card
@@ -38,7 +39,7 @@ an empty string. It does not trim a sentence or partially expose a part.
 | Recent events | Last 15 minutes, at most 80 candidate bridge events and five rendered emotes/loot/deaths/boss kills. Up to three owner whispers only in the matching private conversation. Receipt seconds, not server milliseconds, govern recency. |
 | Your claims | At most eight own, live, unsuperseded claims. With a supplied query vector and vector table, use `claims.store.nearest`; otherwise use latest observation order. No embedding is generated. Chat claims must have visible, same-author provenance. |
 | Guild raid | Current recorded or most recent `guild_raid`, with kills and wipes. A durable active row is labeled recorded active, rather than treated as a live server probe. |
-| Upcoming calendar | First four posted events within 14 days, plus the next posted raid even when later. `realm_rsvp` joins through the native `event_id`, with up to 40 signups per event. Pending/failed posts are omitted. |
+| Upcoming calendar | First four posted events within 14 days, plus the next posted raid even when later. `realm_rsvp` joins through the native `event_id`, with up to four signups per event so later guild facts still fit. Pending/failed posts are omitted. |
 | Your standing | `dkp_ledger` balance/rank and `guild_attendance` status counts. |
 | Guild bank | Cached balance only when observed within 15 minutes; `realm_bank` movement counts over seven days. The ledger is not a current balance; without a fresh snapshot that balance is unknown. |
 | Your recent guild drama | At most four active/recent `feud` rows involving this member, gated on visible direct chat/encounter evidence. Only counterpart/id/status, never the generated cause or evidence text. |
@@ -63,9 +64,12 @@ Every `CardContext` content field is empty by default:
 - `embedding`: optional already-computed 512-dimensional query bytes in the claims
   model's vector space; the reader does not derive it from the text slots.
 - `now`: optional receipt-time seconds for deterministic replay and expiry.
+- `names`: optional visible-member name map for model cards. This switches IDs
+  and epochs to names, named places and relative ages; omitted maps retain the
+  diagnostic format used by the CLI.
 
 Each `ContextItem` carries text, its original channel, sender/recipient ids, and
-optional `readers`. The future Discord caller must capture the correct audience
+optional `readers`. The Discord caller captures the correct audience
 when obtaining the content. Non-WoW, party, raid, and local channel text requires
 explicit reader membership and a matching current channel. Guild text is public
 within the guild. An explicit audience always further restricts access.
@@ -75,7 +79,11 @@ encounter privacy, including secret encounter/feud roots in the fact ledger.
 Whispers stay with the same pair and private turn. Officer
 content requires both the stored officer role and a current officer context.
 This includes caller slots and claim evidence, not only recent chat reads.
-Uncited chat claims and drama with missing or indirect memory evidence are omitted
+All claims, including owner corrections, require visible cited provenance.
+Discord cards omit all game-state sections. Text emotes at the member appear
+only in game say or the matching whisper pair; romantic emotes appear only in
+the matching pair's whisper card. They never enter guild, raid or Discord cards.
+Uncited claims and drama with missing or indirect memory evidence are omitted
 conservatively. These omissions can hide otherwise legitimate facts; storage alone
 does not establish that a particular conversation may repeat them. Long text
 (over 500 characters per item) is omitted, WoW markup removed, and controls folded.
