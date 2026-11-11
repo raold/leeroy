@@ -22,7 +22,7 @@ from leeroy_mind.console.selfieview import queue_view
 from leeroy_mind.nightly.cli import (_child, _context, _data_arg, _default_night, _exclusive, _identity,
                                      _positive, _print, _read_store, _root, _working_store)
 
-from . import files
+from . import files, photo_extra
 from .config import load_selfie_config, worker_command, worker_env
 from .kind import STAGE as KIND_STAGE
 from .kind import _saver, chosen_style, kind_one
@@ -58,6 +58,12 @@ def _parser():
                      "scratch/selfies-try/snaps/")
     sub.add_argument("--guild", action="store_true",
                      help="with --snaps: also one grid of up to 4 of them")
+    sub = subs.add_parser("restyle", help="plan or save varied photo choices (mind stopped)")
+    sub.add_argument("--lust-only", action="store_true")
+    sub.add_argument("--include-owner", action="store_true", help="also replace hand-set photo choices")
+    mode = sub.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", action="store_true", help="read-only plan (default)")
+    mode.add_argument("--go", action="store_true", help="save choices and queue fresh sets")
     sub = subs.add_parser("variety", help="plan or re-roll similar chosen faces (mind stopped)")
     sub.add_argument("--top", type=_positive, default=30)
     sub.add_argument("--release", type=lambda text: tuple(_positive(g) for g in text.split(",")),
@@ -160,7 +166,7 @@ def _chosen(ctx, args) -> list[int]:
     return looks[:args.limit]
 
 
-async def _kinds(ctx, store, guids: list[int]) -> list[int]:
+async def _kinds(ctx, store, guids: list[int], *, variety=False) -> list[int]:
     """The members of `guids` that can be rendered, a missing photo kind made on the trial
     copy only."""
     needing = [g for g in guids if ctx.base(g).photo is None]
@@ -170,12 +176,12 @@ async def _kinds(ctx, store, guids: list[int]) -> list[int]:
     ready = []
     for guid in guids:
         if guid in needing:
-            photo, _ = await kind_one(ctx, guid)
+            photo, _ = await kind_one(ctx, guid, variety=variety)
             if photo is None:
                 print(f"guid {guid}: no photo kind could be made", file=sys.stderr)
                 continue
             with store.transaction():
-                _saver(ctx, guid, photo)(store)
+                _saver(ctx, guid, photo, variety=variety)(store)
             ctx.personas.invalidate(guid)
         if renderable(ctx.base(guid), chosen_style(store, ctx.base(guid))) is not None:
             print(f"guid {guid}: cannot be rendered", file=sys.stderr)
@@ -201,7 +207,10 @@ async def _try(root, store, cfg, scfg, clock, args, make_llm) -> int:
                         live_locked=True) as ctx:
         guids = _chosen(ctx, args)
         tally = _Tally(members=len(guids))
-        ready = await _kinds(ctx, store, guids)
+        if scfg.variety:
+            from .kind import _personas
+            photo_extra.seed(store,_personas(ctx),clock.now())
+        ready = await _kinds(ctx, store, guids, variety=scfg.variety)
         out_root = _child(_child(root, "scratch"), TRY_DIR)
         worker = _Measured(SelfieWorker(worker_command(scfg), env=worker_env(scfg)))
         if ready:
@@ -214,7 +223,7 @@ async def _try(root, store, cfg, scfg, clock, args, make_llm) -> int:
                     try:
                         await render_candidates(
                             worker, build_prompt(ctx.base(guid), kind_style=chosen_style(
-                                store, ctx.base(guid))), folder, night=night,
+                                store, ctx.base(guid)), light=photo_extra.light_for(store,ctx.base(guid))), folder, night=night,
                             guid=guid, set_no=1, cfg=scfg, make_room=ctx.arbiter.make_room,
                             leases=lambda: ctx.arbiter.holders)
                         tally.sets += 1
@@ -367,6 +376,21 @@ def selfies_main(argv=None, *, make_llm=None, make_worker=None) -> int:
             with _read_store(root / "mind.db", clock) as store:
                 _print(_status(store, clock))
             return 0
+        if args.action == "restyle":
+            from .restyle import run
+            from leeroy_mind.storage.db import open_db
+            from leeroy_mind.storage.store import Store
+            cfg = load_config(root / "mind.toml")
+            with _exclusive(root, gpu=False):
+                if args.go:
+                    from leeroy_mind.__main__ import _snapshot_file
+                    _snapshot_file(root / "mind.db", root / "snapshots", "pre-restyle")
+                context = (closing(Store(open_db(root / "mind.db"), clock=clock)) if args.go
+                           else _read_store(root / "mind.db", clock))
+                with context as store:
+                    _print(run(store,_identity(cfg,store),clock,lust_only=args.lust_only,
+                               go=args.go,include_owner=args.include_owner))
+            return 0
         if args.action == "variety":
             from .variety import run
             from .similarity import MAX_PHOTOS
@@ -396,7 +420,9 @@ def selfies_main(argv=None, *, make_llm=None, make_worker=None) -> int:
                 run = _try_snaps if args.snaps else _try
                 return asyncio.run(run(root, store, cfg, scfg, clock, args, make_llm))
     except AlreadyRunning as exc:
-        if args.action == "variety":
+        if args.action == "restyle":
+            print("selfies restyle: mind must be stopped", file=sys.stderr)
+        elif args.action == "variety":
             print("selfies variety: mind must be stopped", file=sys.stderr)
         else:
             print(f"{exc}; selfies try would share its GPU and could unload its live model")
@@ -405,8 +431,20 @@ def selfies_main(argv=None, *, make_llm=None, make_worker=None) -> int:
         print("selfies interrupted")
         return 130
     except Exception as exc:
-        from leeroy_mind.personas.looks_diversity import LooksRefused
-        message = (str(exc) if isinstance(exc, (LooksRefused, WorkerError)) else
-                   "filesystem_error" if isinstance(exc,OSError) else "variety_failed") if args.action == "variety" else f"{type(exc).__name__}: {exc}"
+        if args.action == "restyle":
+            from leeroy_mind.config import ConfigError
+            known = {"personas_changed":"personas_changed", "too_many_members":"too_many_members",
+                     "cannot identify the human from the stored roster":"human_unidentified",
+                     "stored human is absent from the roster":"human_not_on_roster"}
+            message = (known[str(exc)] if type(exc) is ValueError and str(exc) in known else
+                       "config_invalid" if isinstance(exc, ConfigError) else
+                       "database_error" if isinstance(exc, sqlite3.Error) else
+                       "filesystem_error" if isinstance(exc, OSError) else "restyle_failed")
+        elif args.action == "variety":
+            from leeroy_mind.personas.looks_diversity import LooksRefused
+            message = (str(exc) if isinstance(exc, (LooksRefused, WorkerError)) else
+                       "filesystem_error" if isinstance(exc, OSError) else "variety_failed")
+        else:
+            message = f"{type(exc).__name__}: {exc}"
         print(f"selfies {args.action} failed: {message}", file=sys.stderr)
         return 1

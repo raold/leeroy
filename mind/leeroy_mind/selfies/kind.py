@@ -341,7 +341,7 @@ def _refused(ctx: "NightContext", guid: int, problems: list[str]) -> tuple[None,
     return None, shown
 
 
-async def kind_one(ctx: "NightContext", guid: int) -> tuple[ProfilePhoto | None, list[str]]:
+async def kind_one(ctx: "NightContext", guid: int, *, variety=False) -> tuple[ProfilePhoto | None, list[str]]:
     """One JSON call (no think pass) on the stored persona, under the rules of its style: the
     photo kind and no problems, or (None, problems). The plain style writes a free-text kind
     (KIND_SCHEMA, screen_kind); the lust style picks from lists (LUST_SCHEMA, screen_lust) and
@@ -356,6 +356,17 @@ async def kind_one(ctx: "NightContext", guid: int) -> tuple[ProfilePhoto | None,
     system = (system_prompt(LUST_PROMPT, KIND_PROMPT_LUST, ctx.settings.data_dir, **fields)
               if lust else system_prompt(STAGE, KIND_PROMPT, ctx.settings.data_dir, **fields))
     ask = KIND_ASK.format(name=name)
+    if variety:
+        from . import photo_extra, style_variety
+        all_personas = _personas(ctx)
+        members = [ctx.name(g) for g in ctx.members(include_away=True)] + [
+            member.identity.real_name for member in all_personas.values()]
+        if lust:
+            picks,_,_,_ = style_variety.assign(all_personas,[guid],seed=ctx.night,ident=ctx.ident,names=members)
+            return (picks[guid].photo,[]) if guid in picks else _refused(ctx,guid,["photo: no_safe_capacity"])
+        ask += photo_extra.common(ctx.store,ctx.clock.now(),persona=p,ident=ctx.ident,names=members)
+        ask += (" Prefer a coherent crop: headshots near the face, mirror selfies showing the upper body, "
+                "and gym leggings in a gym setting. These are preferences for this choice.")
     for again in (False, True):
         try:
             data = await ctx.reasoner.json(system, ask + (LUST_ASK_AGAIN if again else ""),
@@ -367,6 +378,8 @@ async def kind_one(ctx: "NightContext", guid: int) -> tuple[ProfilePhoto | None,
         if not lust:
             members = [ctx.name(g) for g in ctx.members(include_away=True) if g != guid]
             problems = screen_kind(p, data, ident=ctx.ident, member_names=members)
+            if variety:
+                problems += style_variety.plain_pairings(p,data)
             if problems:
                 return _refused(ctx, guid, problems)
             return ProfilePhoto(**data), []
@@ -380,7 +393,7 @@ async def kind_one(ctx: "NightContext", guid: int) -> tuple[ProfilePhoto | None,
 
 
 def _saver(ctx: "NightContext", guid: int, photo: ProfilePhoto, *, style: str | None = None,
-           replacing: ProfilePhoto | None = None) -> Callable[[Store], None]:
+           replacing: ProfilePhoto | None = None, variety=False) -> Callable[[Store], None]:
     """Save `photo` and its record (`style`, by default the stored persona's) while the stored
     kind is still `replacing`, the one the pass read (None: a first kind). A kind chosen again
     into the lust style also queues a fresh set for her (queue_restyled), so new candidates come
@@ -396,10 +409,17 @@ def _saver(ctx: "NightContext", guid: int, photo: ProfilePhoto, *, style: str | 
                      ts=ctx.clock.now(), race=race, class_name=class_name)
         chose = style_of(stored) if style is None else style
         _record(store, guid, chose, load_persona(store, guid).photo)  # the kind as stored
+        if variety:
+            from . import photo_extra
+            saved = load_persona(store,guid)
+            light = photo_extra.choose_light(saved,ctx.night,ident=ctx.ident,
+                names=[ctx.name(g) for g in ctx.members(include_away=True)] +
+                      [p.identity.real_name for p in _personas(ctx).values()])
+            photo_extra.record(store,saved,light,ctx.clock.now())
         pending = f"selfies:restyle:pending:{guid}"
         if (replacing is not None and chose == LUST) or store.get_meta(pending) is not None:
             queue_restyled(store, guid, now=ctx.clock.now())
-            store.conn.execute("DELETE FROM meta WHERE key=?",(pending,))
+            store.conn.execute("DELETE FROM meta WHERE key=?", (pending,))
     return write
 
 
@@ -408,6 +428,22 @@ def _stored(ctx: "NightContext", guid: int) -> Persona | None:
         return ctx.base(guid)
     except KeyError:  # none, or unreadable: the cache logs it
         return None
+
+
+def _personas(ctx):
+    result = {}
+    for guid in ctx.members(include_away=True):
+        member = _stored(ctx,guid)
+        if member is not None:
+            result[guid] = member
+    return result
+
+
+def make_stage(cfg):
+    """Capture startup configuration; per-member work never opens mind.toml."""
+    async def photo(ctx):
+        await stage_photo(ctx, variety=cfg.variety)
+    return photo
 
 
 def _due(ctx: "NightContext", guid: int) -> bool:
@@ -422,7 +458,7 @@ def _todo(ctx: "NightContext") -> list[int]:
     return picks[:ctx.settings.photo_per_night]
 
 
-async def stage_photo(ctx: "NightContext") -> None:
+async def stage_photo(ctx: "NightContext", *, variety=False) -> None:
     """Stage "photo", units str(guid): each member with looks and no photo kind, or whose kind
     the pass chose under other rules than her style now (needs_rechoice), at most
     photo_per_night. A refused reply's unit is done with nothing written. Kinds from before the
@@ -430,17 +466,20 @@ async def stage_photo(ctx: "NightContext") -> None:
     done = refused = rechosen = 0
     if adopted := _adopt(ctx.store, now=ctx.clock.now()):
         log("selfies_kind_adopted", night=ctx.night, kinds=adopted)
+    if variety:
+        from . import photo_extra
+        photo_extra.seed(ctx.store,_personas(ctx),ctx.clock.now())
 
     async def one(unit: str) -> None:
         nonlocal done, refused, rechosen
         guid = int(unit)
         p = ctx.base(guid)
-        photo, _ = await kind_one(ctx, guid)
+        photo, _ = await kind_one(ctx, guid, variety=variety)
         if photo is None:
             refused += 1
             ctx.skip(STAGE, unit)
         elif ctx.commit(STAGE, unit, _saver(ctx, guid, photo, style=style_of(p),
-                                            replacing=p.photo)):
+                                            replacing=p.photo, variety=variety)):
             ctx.personas.invalidate(guid)
             done += 1
             if p.photo is not None and chosen_style(ctx.store, ctx.base(guid)) == style_of(p):

@@ -29,6 +29,7 @@ class SelfieCfg:
     booth_sets_per_day: int = 6
     identity_scale: float = 0.6  # how strongly the adapter holds the reference face
     identity_min_free_gib: float = 13.5  # the identity worker loads the adapter too
+    variety: bool = False  # balanced lust choices and recent plain-photo observations
 
 
 def _bool(v) -> bool:
@@ -64,6 +65,7 @@ _RULES = {
     "booth_sets_per_day": (_int(1, 120), "an integer 1-120"),
     "identity_scale": (_num(0.3, 0.9), "a number 0.3-0.9"),
     "identity_min_free_gib": (_num(4, 23), "a number 4-23"),
+    "variety": (_bool, "true or false"),
 }
 _FLOATS = {"nsfw_max", "guidance", "min_free_gib", "identity_scale", "identity_min_free_gib"}
 _PATHS = {"python", "data"}
@@ -95,6 +97,8 @@ def load_selfie_config(path: Path) -> SelfieCfg:
             raise ConfigError(f"selfies.{key}: expected {rule[1]}, got {v!r}")
         values[key] = float(v) if key in _FLOATS else Path(v) if key in _PATHS else v
     assert set(values) <= {f.name for f in fields(SelfieCfg)}
+    if set(table) - _RULES.keys():
+        values["variety"] = False  # an invalid/unknown table never opts into new behaviour
     return SelfieCfg(**values)
 
 

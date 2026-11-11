@@ -1625,6 +1625,14 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
   (pinned revisions into `<data>/models`), `doctor` (`--quick` skips torch and hashing; the
   mind's doctor runs that), `where`, `smoke --out DIR` (one invented person; needs the GPU),
   `pytest -q` (no model, GPU or network).
+- **Photo style variety.** With the mind stopped, `selfies restyle --dry-run|--go`
+  previews or changes choices; `--go` snapshots before migration and records old kinds.
+  Lust choices are composed; plain kinds are cleared for the night's model to re-choose.
+  Fresh sets preserve the gallery and cover. `--lust-only` narrows the selection;
+  hand-set kinds require `--include-owner`. `[selfies] variety = true`, read once at
+  startup, balances Lust choices and adds screened plain-only hints to the plain pass.
+  Lighting matches the setting and drops before identity or clothing at prompt fit.
+  See `mind/leeroy_mind/selfies/style_variety.md`.
 - **Appearance variety.** `[looks] diversity = true`, read at startup (or once per
   generator command), gives new members screened deterministic looks. It does not
   re-enrich existing owner/seeded members with looks but no disclosures. With the
