@@ -24,7 +24,14 @@ and completion checks; unavailable bodies or ambiguous receipts can remain
 pending. Disabling a flag is not proof that everything was restored. Preserve
 journals and pending receipts until verified cleanup completes. `[training]
 enabled = false` disables the Python attachment on the next mind start; it does
-not clear an outstanding native or Python journal.
+not clear an outstanding native or Python journal. An unproved cleanup fences
+every body (Realm, queue fence, play style) for at most ten minutes; after that
+only bodies a job still holds or a journal names stay fenced, and new training
+stays refused (`cleanup_pending`) until cleanup is verified. Server.log names the
+adapters keeping it pending. A dummy trial that holds no member ten minutes after
+its `cleanup_failed` terminal ends natively and sends `dummy_cleanup` (`released`
+with its unfinished members, or `restored` once every return is proved);
+journals stay.
 
 Inspection commands use `python -m leeroy_mind training`: `status`, `report
 --week YYYY-Www`, `gate`, `trials`, `cards`, `lessons --context MAP:BOSS:DIFFICULTY`,
@@ -36,7 +43,13 @@ database. With the mind stopped, `rollback --context MAP:BOSS:DIFFICULTY` restor
 the prior stored champion and `stock --context ...` selects stock; the service OS
 lock is held throughout. These card changes leave applied-command cleanup
 journals intact. `gate --reset` discards gate evidence; `rescore` rechecks stored
-pulls and restores matching scores.
+pulls and restores matching scores. A lab blocked on an unproved trial holds its
+members until, with the mind stopped, `lab-clear` clears it on native evidence
+the mind stored: that trial's `dummy_cleanup` receipt, a terminal proving every
+return, or a hello from a worldserver started after the trial (`started_ms`).
+It sends nothing, keeps every receipt, frees the members and refuses in words
+without evidence or when a member has a standing setup; `lab` shows the
+evidence, and health FAILs a block older than a night.
 
 The bridge exposes `telemetry`, `get_stats`, `get_vocab`, `custom_strategy`,
 `dc_setting`, `dummy_trial`, `get_rivals`, `start_benchmark` and
