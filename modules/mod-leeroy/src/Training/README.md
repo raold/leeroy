@@ -39,6 +39,14 @@ training switch. These job receipts survive off-state override cleanup, allowing
 during an already registered raid. Job teardown retains its receipt if restoration fails.
 `RestoreJournaled` reports success separately from its optional verified-change count;
 a refusal is not completed restoration. Failed cleanup blocks new training mutations and is retried.
+The cleanup pass logs which adapters keep it pending (`training cleanup pending: dummy_trial(<id> unreturned=..),
+journals(N)`, on change and at most once a minute) and `training cleanup verified` when they clear. While it is
+pending, `TrainingCleanupPending()` fences every body (Realm `busy:training_cleanup`, play style, queue fence) for
+at most ten minutes (`LeeroyTrainingFence.h`); then `training cleanup fence released` is logged once and only the
+per-body fences hold: job owners, journals, DC runs and pending bot commands. New training stays refused
+(`cleanup_pending`) until a pass proves every adapter clean; that all-clear reads `training cleanup released, not
+verified: <what>` when a job gave up on a member. `OfflineTrainingCleanupPending()` (an offline raid's or
+benchmark's unrestored training receipt) is a separate global fence and is not bounded here.
 The dungeon-clear API has no ownership generation for overrides: removing and recreating an identical value
 is indistinguishable from the original (ABA). In-memory journals also cannot promise restoration after a crash;
 explicit stock-value restores remain available after restart. These limits require lifecycle acceptance before wiring.
@@ -51,6 +59,12 @@ Shutdown makes one bounded cleanup attempt and reports unresolved return failure
 Strategies return through the harness's stock reset; later standing-setup application remains the mind's responsibility.
 The installed playerbots AI clears a random bot's driver whenever it is ungrouped, so trials temporarily create
 one solo party per participant. Admission still requires an ungrouped bot; candidates never share these parties.
+Creating that party sends the bot an empty group list, and playerbots' stock "reset botAI" answers it by dropping
+any master outside the bot's group (the driver always is) and resetting its strategies. That used to be read as an
+ownership change and blocked every accepted trial (`cleanup_failed:ownership_changed` on 2026-11-10).
+While the solo party is still ours and every other ownership fact holds, the controller now puts the driver back and
+strips follow again (`master_reasserted guid=`, first and every 50th); during the fight the member is dropped
+`ai_reset` instead, since the reset took its trial strategies. A foreign master is still an ownership change.
 Reset completes while the exact driver/session/group still prove ownership, then cleanup removes only that solo
 member, restores the prior leader flag, rebuilds stock defaults for the restored ungrouped state and verifies return.
 AI target/engine state is cleared too, including on same-map returns; pending logout is never cancelled for cleanup.
@@ -58,6 +72,16 @@ Added members, invitations, group transfers, or a
 participant becoming the configured human block further mutation. A partially created group retains its identity
 for cleanup rather than destroying an object that may already be linked to the player. As with other in-memory
 job receipts, abnormal process termination requires reconciliation of any remaining harness parties.
+A blocked member logs why (`dummy trial <id> blocked member <guid>: <reason>`). A trial stopped because training
+cleanup is pending ends `cleanup_pending`, not `training_off`. Ten minutes after its `cleanup_failed` terminal the
+trial sorts its unreturned members (`DummyFateAfterBound`): it keeps and fences one it still holds (a group object
+or solo party of ours lists it, or its same body has the driver as master) and one it is still returning (not
+blocked: a teleport or reset is in progress); it abandons a blocked member it no longer holds
+(`cleanup_abandoned guid=`, never touched or fenced by the trial again), journaled or not: a journal fences its
+own body and the journal adapter restores it once the trial lets go. With nobody kept it ends:
+`cleanup_released after_ms= unfinished=` and a `dummy_cleanup` event `{id, state: "released", unfinished,
+after_ms}`. A recovery that proves every return sends `state: "restored"`. Otherwise it keeps its slot
+(`cleanup_held kept=` once) and only the kept members stay fenced. Journals are never discarded.
 Admission excludes existing non-permanent instance bindings because native group removal would discard them.
 Bindings are checked again before cleanup; a later non-permanent binding blocks disband instead of being erased.
 Permanent raid bindings are preserved by that native path. The controller never snapshots or recreates saved locks.

@@ -150,7 +150,7 @@ public:
             uint32 const human = module.HumanGuid();
             Player* humanPlayer = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(human));
             bool const humanOnline = humanPlayer && humanPlayer->IsInWorld();
-            bridge.Greet(serial, Leeroy::EncodeHello(now, module.GuildId(), humanOnline ? human : 0),
+            bridge.Greet(serial, Leeroy::EncodeHello(now, module.GuildId(), humanOnline ? human : 0, _startedMs),
                 Leeroy::EncodeCast(now, cast.BuildMembers(module.GuildId())));
             _greetedSerial = serial;
             LeeroyResetAfk();   // the new mind hears about everyone already AFK on the next poll
@@ -214,6 +214,9 @@ private:
     uint32 _bridgeRetryTimer = 0;
     uint32 _afkPollTimer = 0;
     std::uint64_t _greetedSerial = 0;
+    // Scripts are made once at worldserver start. Every hello names this process, so a mind can tell
+    // a restarted worldserver (whose in-memory jobs and fences are gone) from a reconnect.
+    std::int64_t const _startedMs = Leeroy::NowUnixMs();
     std::vector<Leeroy::Command> _commands;
 };
 

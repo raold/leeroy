@@ -5,6 +5,7 @@
 #include "DummyTrialJob.h"
 #include "GuildPorts.h"
 #include "OfflineRaidJob.h"
+#include "LeeroyTrainingFence.h"
 #include "LeeroyTrainingProtocol.h"
 #include "AiObjectContext.h"
 #include "Formations.h"
@@ -164,11 +165,14 @@ bool RestoreOne(Player* bot, std::string const& name, bool stockFallback, uint32
 }
 }
 
-bool TrainingAllowed()
+std::string_view TrainingBlockReason()
 {
     auto& tap = TrainingTap::Instance();
-    return Guild::GuildEnabled() && tap.TrainingOn() && !tap.TrainingCleanupPending() && !TrainingCleanupPending();
+    return TrainingRefusal(Guild::GuildEnabled(), tap.TrainingOn(), tap.TrainingCleanupPending(),
+        TrainingCleanupUnresolved());
 }
+bool TrainingAllowed() { return TrainingBlockReason().empty(); }
+std::size_t TrainingJournalCount() { return journals.size(); }
 BotJournal& JournalOf(uint32 guid) { return journals[guid]; }
 void JournalReset(uint32 guid, std::vector<std::string_view> const& values)
 {

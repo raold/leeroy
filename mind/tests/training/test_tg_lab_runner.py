@@ -11,12 +11,12 @@ import pytest
 
 from leeroy_mind.guild.loot import _get, _put
 from leeroy_mind.guild.protocol import Job, JobSkip
-from leeroy_mind.protocol import Member
+from leeroy_mind.protocol import Hello, Member
 from leeroy_mind.training import lab_runner as module, store
 from leeroy_mind.training.lab import Candidate
 from leeroy_mind.training.lab_runner import (ATTEMPT_PREFIX, LabRunner, LabSchedule,
     OWNED_KEY, SUMMARY_PREFIX, guild_schedule, next_window)
-from leeroy_mind.training.protocol import CustomStrategy, DummyResult, DummyTrial
+from leeroy_mind.training.protocol import CustomStrategy, DummyCleanup, DummyResult, DummyTrial
 from leeroy_mind.training.vocab import ClassVocab, Vocab
 
 
@@ -519,3 +519,126 @@ def test_final_round_evidence_decides_winner_and_keeps_earlier_pairs(fake, lab):
         assert summary["pairs"] == 4 and summary["aggregate_pairs"] == 12
         assert len(_get(fake.conn, OWNED_KEY)["round_scores"]) == 3
     asyncio.run(scenario())
+
+
+def test_rejected_dummy_ack_keeps_natives_error_in_attempt_and_summary(fake, lab, caplog):
+    runner, _, _ = lab
+    fake.acks["dummy_trial"].append((False, "instance_bound:101"))
+    with caplog.at_level("INFO", logger="leeroy_mind.training.lab_runner"):
+        asyncio.run(start(runner))
+    ident = fake.sent[-1].id
+    attempt = _get(fake.conn, ATTEMPT_PREFIX + ident)
+    assert attempt["ack"] == "rejected" and attempt["rejected"] is True
+    assert attempt["ack_error"] == "instance_bound:101"
+    summary = _get(fake.conn, SUMMARY_PREFIX + runner._night())
+    assert summary["reason"] == "dummy_command_rejected" and summary["ack_error"] == "instance_bound:101"
+    assert f"training_lab_dummy_rejected id={ident} error=instance_bound:101" in caplog.text
+    assert "driver_retry" not in caplog.text
+
+
+def test_driver_pending_gets_one_retry_of_the_same_leg_a_minute_later(fake, lab, caplog):
+    runner, _, _ = lab
+    fake.acks["dummy_trial"].append((False, "driver_pending"))
+    with caplog.at_level("INFO", logger="leeroy_mind.training.lab_runner"):
+        asyncio.run(start(runner))
+    first = fake.sent[-1]
+    assert f"training_lab_driver_retry id={first.id} in_s=60" in caplog.text
+    assert runner.active and runner._owned["phase"] == "ready" and runner._owned["current"] is None
+    assert runner.members() == set(fake.members) and not fake.released  # Bodies stay held meanwhile.
+    asyncio.run(fake.clock.advance(59, step=59))
+    asyncio.run(runner.tick())
+    assert [c for c in fake.sent if isinstance(c, DummyTrial)] == [first]
+    asyncio.run(fake.clock.advance(1, step=1))
+    asyncio.run(runner.tick())
+    trials = [c for c in fake.sent if isinstance(c, DummyTrial)]
+    assert len(trials) == 2 and trials[1].co == first.co and trials[1].guids == first.guids
+    assert runner._owned["current"]["ack"] == "accepted"
+    assert runner._owned["attempt_ids"] == [first.id, trials[1].id] and runner._owned["attempts"] == 1
+    assert _get(fake.conn, ATTEMPT_PREFIX + first.id)["ack_error"] == "driver_pending"
+
+
+def test_a_second_driver_pending_ends_the_lab_and_validates(fake, lab):
+    runner, _, _ = lab
+    fake.acks["dummy_trial"].extend([(False, "driver_pending"), (False, "driver_pending")])
+    asyncio.run(start(runner))
+    asyncio.run(fake.clock.advance(60, step=60))
+    asyncio.run(runner.tick())
+    assert not runner.active and runner.reason == "dummy_command_rejected"
+    summary = _get(fake.conn, SUMMARY_PREFIX + runner._night())
+    assert summary["attempts"] == 2 and summary["ack_error"] == "driver_pending"
+    assert len([c for c in fake.sent if isinstance(c, DummyTrial)]) == 2
+    assert runner.body_holds() == ()
+
+
+def test_rejection_log_carries_only_the_errors_leading_code(fake, lab, caplog):
+    runner, _, _ = lab
+    fake.acks["dummy_trial"].append((False, "driver_unavailable:the harness has no GM " + "x" * 400))
+    with caplog.at_level("INFO", logger="leeroy_mind.training.lab_runner"):
+        asyncio.run(start(runner))
+    attempt = _get(fake.conn, ATTEMPT_PREFIX + fake.sent[-1].id)
+    assert len(attempt["ack_error"]) == module.ERROR_LIMIT
+    assert "error=driver_unavailable:the\n" in caplog.text + "\n"
+    assert "harness" not in caplog.text
+
+
+def blocked(fake, runner):
+    async def scenario():
+        await start(runner)
+        await complete(fake, runner, skips=(JobSkip(101, "cleanup_failed:ownership_changed"),),
+                       state="failed", reason="cleanup_failed:cleanup_pending")
+    asyncio.run(scenario())
+    assert runner._owned["phase"] == "blocked" and runner._owned["halt"] == "native_cleanup_unproved"
+    return runner._owned["current"]["id"]
+
+
+def test_block_time_is_kept_while_later_reasons_rename_it(fake, lab):
+    runner, _, _ = lab
+    blocked(fake, runner)
+    first = runner._owned["halted_at"]
+    asyncio.run(fake.clock.advance(3600, step=3600))
+    runner._block("body_claim_incomplete")
+    restarted = LabRunner(fake, fake.cfg, runner.ground, runner.applier, schedule=runner.schedule)
+    assert restarted._owned["halt"] == "process_restart"
+    assert restarted._owned["halted_at"] == first == _get(fake.conn, OWNED_KEY)["halted_at"]
+
+
+def test_a_record_blocked_before_halted_at_existed_dates_from_its_start(fake, lab):
+    runner, _, _ = lab
+    blocked(fake, runner)
+    owned = _get(fake.conn, OWNED_KEY)
+    del owned["halted_at"]
+    with fake.conn:
+        _put(fake.conn, OWNED_KEY, owned)
+    asyncio.run(fake.clock.advance(7200, step=7200))
+    restarted = LabRunner(fake, fake.cfg, runner.ground, runner.applier, schedule=runner.schedule)
+    assert restarted._owned["halted_at"] == owned["started"]
+
+
+def test_native_cleanup_receipt_is_kept_for_the_labs_own_trial_without_unblocking(fake, lab):
+    runner, _, _ = lab
+    ident = blocked(fake, runner)
+    now = int(fake.clock.now() * 1000)
+    runner.feed(DummyCleanup(now, "f" * 32, "released", (101,), 600000))  # Not this lab's trial.
+    runner.feed(DummyCleanup(now, ident, "pending", (101,), 600000))     # Not a known state.
+    assert _get(fake.conn, module.NATIVE_PREFIX + "f" * 32) is None
+    assert _get(fake.conn, module.NATIVE_PREFIX + ident) is None
+    runner.feed(DummyCleanup(now, ident, "released", (101,), 600123))
+    runner.feed(DummyCleanup(now + 1, ident, "restored", (), 700000))  # The first word stays.
+    receipt = _get(fake.conn, module.NATIVE_PREFIX + ident)
+    assert receipt["state"] == "released" and receipt["unfinished"] == [101] and receipt["after_ms"] == 600123
+    asyncio.run(runner.tick())
+    assert runner._owned["phase"] == "blocked" and runner.members() == set(fake.members)
+
+
+def test_hello_records_the_worldserver_start_once_per_process(fake, lab):
+    runner, _, _ = lab
+    hello = Hello(1, "mod-leeroy", "0.1.0", 21, 0)
+    runner.feed(hello)
+    assert _get(fake.conn, module.NATIVE_START_KEY) is None  # An older native names no process.
+    runner.feed(replace(hello, started_ms=1794300000000))
+    stored = _get(fake.conn, module.NATIVE_START_KEY)
+    assert stored["started_ms"] == 1794300000000
+    runner.feed(replace(hello, ts=5, started_ms=1794300000000))
+    assert _get(fake.conn, module.NATIVE_START_KEY) == stored
+    runner.feed(replace(hello, started_ms=1794400000000))
+    assert _get(fake.conn, module.NATIVE_START_KEY)["started_ms"] == 1794400000000

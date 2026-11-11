@@ -1,5 +1,6 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "LeeroyDummyLifecycle.h"
+#include "LeeroyBotJournal.h"
 #include "LeeroyDummyDamage.h"
 #include "LeeroyTrainingProtocol.h"
 #include "TestHarness.h"
@@ -253,4 +254,102 @@ LEEROY_TEST(Training_DummyNonPermanentBindingsProtectAdmissionAndDisband)
     CHECK(!DummyGroupProven(false, true, true, 1, true, 0, true, true)); // A later new bind is also protected.
     CHECK(DummyGroupProven(false, true, true, 1, true, 0, true, false)); // Permanent-only bindings are not removed.
     CHECK(DummyGroupProven(true, false, false, 0, false, 0, true, true)); // No disband remains after release.
+}
+
+LEEROY_TEST(Training_DummyStopNamesCleanupPendingNotTrainingOff)
+{
+    DummyLifecycle job(0, 60);
+    job.Moving();
+    DummyObservation state;
+    state.enabled = false;
+    state.offReason = "cleanup_pending";
+    CHECK(job.Step(1000, state) == DummyStep::Return);
+    CHECK_EQ(job.Reason(), "cleanup_pending");
+    DummyLifecycle other(0, 60);
+    other.Moving();
+    DummyObservation unnamed;
+    unnamed.enabled = false;
+    unnamed.offReason = {};
+    CHECK(other.Step(1000, unnamed) == DummyStep::Return);
+    CHECK_EQ(other.Reason(), "training_off");
+}
+
+LEEROY_TEST(Training_DummyMasterReassertedOnlyOnAnOtherwiseOwnedBody)
+{
+    // The stock reset our own solo party triggers leaves every fact but the master intact.
+    DummyOwnerState state{true, false, true, false, true, false, false, true, false, false};
+    CHECK(!DummyOwnerProven(state));
+    CHECK(DummyMasterReassertable(state, false, false, true));
+    CHECK(!DummyMasterReassertable(state, false, false, false)); // A foreign master is an ownership change.
+    CHECK(!DummyMasterReassertable(state, true, false, true));   // Released on purpose: never put back.
+    CHECK(!DummyMasterReassertable(state, false, true, true));   // Our party is gone: not the stock reset.
+    for (auto field : {&DummyOwnerState::sameSession, &DummyOwnerState::isCast, &DummyOwnerState::sameGuild,
+        &DummyOwnerState::groupOwned})
+    {
+        auto altered = state;
+        altered.*field = false;
+        CHECK(!DummyMasterReassertable(altered, false, false, true));
+    }
+    for (auto field : {&DummyOwnerState::isHuman, &DummyOwnerState::isSelfBot, &DummyOwnerState::invited,
+        &DummyOwnerState::reserved, &DummyOwnerState::loggingOut})
+    {
+        auto altered = state;
+        altered.*field = true;
+        CHECK(!DummyMasterReassertable(altered, false, false, true));
+    }
+}
+
+LEEROY_TEST(Training_DummyHeldWhileAnyControlRemains)
+{
+    DummyHoldState none{true, false, false, false, false, false};
+    CHECK(!DummyMemberHeld(none));
+    CHECK(DummyMemberHeld({true, false, true, false, false, false}));  // An unregistered group object we own.
+    CHECK(DummyMemberHeld({true, false, false, true, false, false}));  // Still listed in our solo party.
+    CHECK(DummyMemberHeld({true, false, false, false, true, true}));   // Same body, the driver as master.
+    CHECK(!DummyMemberHeld({true, false, false, false, false, true})); // A new session has a fresh master.
+    CHECK(!DummyMemberHeld({true, false, false, false, true, false}));
+    CHECK(!DummyMemberHeld({true, true, true, true, true, true}));     // Proved returned.
+    CHECK(!DummyMemberHeld({false, false, true, true, true, true}));   // Never prepared: never touched.
+}
+
+LEEROY_TEST(Training_DummyReleaseWaitsTheBoundThenKeepsOnlyHeldBodies)
+{
+    CHECK(DecideDummyRelease(false, kDummyReleaseMs * 10, 0) == DummyRelease::Wait);
+    CHECK(DecideDummyRelease(true, kDummyReleaseMs - 1, 0) == DummyRelease::Wait);
+    CHECK(DecideDummyRelease(true, kDummyReleaseMs, 0) == DummyRelease::Release);
+    CHECK(DecideDummyRelease(true, kDummyReleaseMs, 1) == DummyRelease::Keep);
+}
+
+LEEROY_TEST(Training_DummyKeepsEveryMemberStillReturningPastTheBound)
+{
+    DummyHoldState releasedAndTeleporting{true, false, false, false, true, false}; // Group and master let go.
+    CHECK(!DummyMemberHeld(releasedAndTeleporting));
+    // Still being returned (not blocked): the job still acts on it, so it stays kept and fenced.
+    CHECK(DummyFateAfterBound(releasedAndTeleporting, false) == DummyMemberFate::Keep);
+    // Blocked with nothing of ours left: abandoned, never touched or fenced by the trial again.
+    CHECK(DummyFateAfterBound(releasedAndTeleporting, true) == DummyMemberFate::Abandon);
+    DummyHoldState inOurParty{true, false, false, true, false, false};
+    CHECK(DummyFateAfterBound(inOurParty, true) == DummyMemberFate::Keep); // Blocked but held.
+    CHECK(DummyFateAfterBound({true, true, true, true, true, true}, true) == DummyMemberFate::Done);
+    CHECK(DummyFateAfterBound({false, false, false, false, false, false}, false) == DummyMemberFate::Done);
+    CHECK(DummyTrialFences(DummyMemberFate::Keep));
+    CHECK(!DummyTrialFences(DummyMemberFate::Abandon));
+    CHECK(!DummyTrialFences(DummyMemberFate::Done));
+    CHECK(!DummyBoundPassed(false, kDummyReleaseMs));
+    CHECK(!DummyBoundPassed(true, kDummyReleaseMs - 1));
+    CHECK(DummyBoundPassed(true, kDummyReleaseMs));
+}
+
+LEEROY_TEST(Training_DummyAbandonedJournaledMemberStaysFencedByItsJournal)
+{
+    // Blocked, unheld and journaled: the journal no longer keeps the trial alive.
+    DummyHoldState unheld{true, false, false, false, true, false};
+    BotJournal journal;
+    journal.NoteValue("wait for attack time", "4");
+    CHECK(!journal.Empty()); // HasTrainingJournal fences the body and RestoreTrainingBots restores it.
+    auto const fate = DummyFateAfterBound(unheld, true);
+    CHECK(fate == DummyMemberFate::Abandon);
+    CHECK(!DummyTrialFences(fate)); // So the trial stops fencing it and restoration is no longer skipped.
+    // With no member kept, the job is released instead of being kept until a restart.
+    CHECK(DecideDummyRelease(true, kDummyReleaseMs, DummyTrialFences(fate) ? 1 : 0) == DummyRelease::Release);
 }

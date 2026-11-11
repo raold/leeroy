@@ -61,6 +61,29 @@ def _context(value):
     return value
 
 
+def _lab_owned(conn):
+    """The lab's own record in brief, with the native receipts `lab-clear` would read."""
+    from .lab_runner import NATIVE_PREFIX, NATIVE_START_KEY, OWNED_KEY
+
+    def meta(key):
+        row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        try:
+            return json.loads(row["value"]) if row is not None else None
+        except (TypeError, ValueError):
+            return "unreadable"
+    owned = meta(OWNED_KEY)
+    if type(owned) is not dict:
+        return owned
+    current = owned.get("current") if type(owned.get("current")) is dict else {}
+    trial = current.get("id") if type(current.get("id")) is str else None
+    keys = ("phase", "halt", "night", "halted_at", "guids", "attempts", "recovered")
+    return {key: owned.get(key) for key in keys} | {
+        "trial": trial, "ack": current.get("ack"), "ack_error": current.get("ack_error"),
+        "terminal_reason": current["terminal"].get("reason") if type(current.get("terminal")) is dict else None,
+        "native_cleanup": meta(NATIVE_PREFIX + trial) if trial else None,
+        "native_start": meta(NATIVE_START_KEY)}
+
+
 async def _rescore(conn, root):
     book = await asyncio.to_thread(load_book, root)
     return await rescore_stored(SimpleNamespace(conn=conn), book)
@@ -73,7 +96,7 @@ def training_main(argv=None):
     _add_data_dir(parser)
     subs = parser.add_subparsers(dest="command", required=True)
     for name in ("status", "gate", "rescore", "report", "spells", "cards", "lessons", "voicecheck",
-                 "trials", "rollback", "stock", "lab"):
+                 "trials", "rollback", "stock", "lab", "lab-clear"):
         sub = subs.add_parser(name)
         _add_data_dir(sub, after_action=True)
         if name == "gate":
@@ -89,7 +112,7 @@ def training_main(argv=None):
             sub.add_argument("--context", required=name in {"lessons", "rollback", "stock"})
     args = parser.parse_args(argv)
     root = _root(args)
-    write = args.command in {"rescore", "rollback", "stock"} or args.command == "gate" and args.reset
+    write = args.command in {"rescore", "rollback", "stock", "lab-clear"} or args.command == "gate" and args.reset
     try:
         # Acquisition is the exclusion test. Keep this exact lock until all IO
         # and scoring has completed and the SQLite connection is closed.
@@ -119,7 +142,16 @@ def training_main(argv=None):
                             continue
                     result = {"rotations": rotations, "nights": nights,
                               "dummy_rows": conn.execute("SELECT count(*) FROM tg_dummy").fetchone()[0],
-                              "measurement": "requested_pre_ai proxy; actual DPS and field improvement unavailable"}
+                              "measurement": "requested_pre_ai proxy; actual DPS and field improvement unavailable",
+                              "owned": _lab_owned(conn)}
+                elif args.command == "lab-clear":
+                    # Stored native receipts only; never the bridge. Refusals change nothing.
+                    from .lab_recovery import LabClearRefused, clear_blocked_lab
+                    try:
+                        result = clear_blocked_lab(conn, SystemClock().now())
+                    except LabClearRefused as refused:
+                        print(f"training lab-clear: refused: {refused}")
+                        return 1
                 elif args.command in {"rollback", "stock"}:
                     context = _context(args.context)
                     ports = SimpleNamespace(conn=conn, clock=SystemClock())
