@@ -98,18 +98,22 @@ The terminal `realm_job` then carries `"skipped": [guid, ...]` (only when nonemp
 a member whose own step already changed something keeps the old rule (unproved, retained).
 
 The same skip covers every other refusal of a leave member's own (`SkipsLeaveMember`,
-`MemberSkipReason`: anything but `realm_off`, `busy:operation_identity`, `busy:realm_owner` and
-`unsupported`), only while its step's `changed` flag is unset, its step recorded no LFG group
+`MemberSkipReason`, an allow-list in `LeeroyRealmFailure.h` of the member's own fences, state and
+closure; anything else, such as `busy:training_cleanup`, which is pending for every body at once,
+`realm_off`, `busy:operation_identity`, `busy:realm_owner`, `lfg_cleanup_disabled` or a reason added
+later, keeps the old rule), only while its step's `changed` flag is unset, its step recorded no LFG group
 receipt and no shared cleanup touched it: its original raid group (`busy:raid_owner`),
 `entry_point_unavailable`, `battleground_group_changed`, `battleground_receipt_unavailable`, an LFG
 proposal, Wintergrasp, an expired step that changed nothing, its own recheck (`OrdinaryCleanupFault`
 names the member), and the cleanup producers' refusals before they charge or declare anything
 (`LeaveNativeQueue`, `LeaveObservedLfgApplicants`, and `LeaveOnlineLfgGroup` before its receipt).
 Tick's own pre-step fence (its holder and lease checks, its admission) also skips a member whose
-step never ran: no pending entry at all, not declared, not touched (`stepRan = false`); a
-battleground that ends under a member still waiting its turn is this case. A step rechecks only
-the members up to its own and later ones the job touched (`RecheckedMembers`), so such a member no
-longer fails an earlier member's step; the last step still reads back every member held. Kept
+step never ran: no pending entry at all, not declared, not touched (`DecideFence`); a
+battleground that ends under a member still waiting its turn is this case. The readback a skipped
+last member makes runs under a `try`: a throw finishes `operation_outcome_unknown`, retained. A step
+rechecks only the members up to its own and later ones the job touched (`RecheckedMembers`), so such
+a member no longer fails an earlier member's step; each producer rechecks its whole closure in full
+(`ClosureFault`) before it charges it, and the last step still reads back every member held. Kept
 retained: anything after a step set `changed`, a member a shared cleanup declared or changed,
 producer refusals after charging or declaring or after an LFG group receipt, faults in a member
 already processed, an unreadable body after the step, and a pre-step fence on a member whose step
@@ -119,10 +123,11 @@ A rearm skips the same way (`SkipsMembers`): every refusal of its step before a 
 (`MemberRefusal`: the `busy:` fences such as `busy:combat` and `busy:dead`,
 `weapon_record_unavailable`, `recorded_weapon_unavailable`, `equipment_changed`,
 `cannot_equip_recorded_weapon`, `offhand_occupied`) and Tick's pre-step fence; a refusal after a
-swap stays `Unknown`. At its ack a rearm also leaves out a member admission fences (his group's,
-`busy:raid_owner`) instead of refusing whole (`LeavesOutAtAck`): it reserves the rest, lists the
-fenced in the job's `skipped`, and is refused whole only when every member is fenced. A one-member
-job still names its member (`guid`) by the admitted manifest. When every member is skipped the job
+swap stays `Unknown`. At its ack a rearm also leaves out a member admission fences for a reason of
+its own (his group's, `busy:raid_owner`) instead of refusing whole (`PartitionAtAck`): it reserves the
+rest, lists the fenced in the job's `skipped`, and is refused whole at a fence that is the job's own
+(`busy:training_cleanup`) or when every member is fenced. A one-member job still names its member
+(`guid`) by the admitted manifest (`DoneJobGuid`). When every member is skipped the job
 ends done, holding nobody. `changed: false` stays whole-job proof: skipped members leave the
 completed members' proof as it was.
 

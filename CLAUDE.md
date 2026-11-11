@@ -1367,7 +1367,8 @@ Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
   rearms of the 143 refused for one member in combat or dead, others at the ack for his group's
   members): native skips a member its step refuses before any swap, or Tick's fence before its
   step, and leaves out at the ack a member admission fences (refusing whole only when every member
-  is), so the done `realm_job` lists them in `skipped`; the mind settles the rearm done with no
+  is, or for a job-wide fence such as `busy:training_cleanup`: member reasons are an allow-list,
+  `MemberSkipReason`), so the done `realm_job` lists them in `skipped`; the mind settles the rearm done with no
   backoff (the next pass rearms them) and the defaults go to everyone. A defaults batch native ran
   with some members skipped (dead, busy) settles `defaults_failed` and no longer stops the chain's
   later batches; an aborted one still does. Native keeps the weapon records in memory, so a worldserver start empties them
