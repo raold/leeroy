@@ -154,6 +154,14 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: 
   grid-template-rows: minmax(0, 1fr); gap: 18px; padding: 18px 16px; width: 100%; max-width: 1600px;
   margin: 0 auto; }
 .comms > .panel { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+/* Hide panel: the feed takes the right column's width; at narrower widths the panel (which sits
+   under the others there) is simply gone */
+.feedpanel { position: relative; }
+.panel-toggle { position: absolute; top: 14px; right: 16px; }
+html[data-comms-panel="hidden"] .comms > .panel.right { display: none; }
+@media (min-width: 1101px) {
+  html[data-comms-panel="hidden"] .comms { grid-template-columns: 260px minmax(0, 1fr); }
+}
 .feed { flex: 1; min-height: 0; overflow: auto; }
 .msg { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 2px 12px; padding: 10px 2px;
   border-top: 1px solid var(--line); }
