@@ -1,7 +1,7 @@
 """One bounded, audience-scoped coaching call per eligible member each night."""
 import json
 from collections import defaultdict
-from leeroy_mind.discord.channels import is_discord, is_private
+from leeroy_mind.discord.channels import is_discord, is_private, is_restricted
 from leeroy_mind.logs import log
 from leeroy_mind.nightly.budget import register_counter
 from leeroy_mind.nightly.llm import schema, check_schema, ReflectionError
@@ -51,6 +51,8 @@ def response_schema(has_arms):
 
 
 def scope(channel):
+    if is_restricted(channel):
+        return None
     if channel == 'whisper' or is_discord(channel) and is_private(channel):
         return 'whisper'
     if channel == 'guild' or is_discord(channel):

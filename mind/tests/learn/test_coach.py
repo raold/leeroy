@@ -95,6 +95,17 @@ def test_schema_rejects_injected_keys_attestation_and_excess_output():
             check_schema(shape,response)
 
 
+@pytest.mark.parametrize('channel',['officer','discord:officers','discord:unknown-room'])
+def test_restricted_rooms_supply_no_coaching_content(context,tmp_path,channel):
+    enabled(tmp_path)
+    async def go():
+        async with context(lambda *_:json.dumps(answer()),learn_enabled=True,learn_coach=True) as (ctx,llm):
+            exchanges(ctx,channel=channel)
+            await coach.stage(ctx)
+            assert not llm.calls
+    asyncio.run(go())
+
+
 def test_private_evidence_cannot_create_public_lessons_or_mix_other_pairs(context,store,tmp_path):
     enabled(tmp_path)
     async def go():
