@@ -467,6 +467,10 @@ class MindApp:
         # the members' answers to his posts, and his `discord` lease on the GPU
         self.discord_talk = DiscordTalk(self)
         self.signals = attach_signals(self)
+        from .learn.config import load_learn_config
+        from .learn.night import attach as attach_rewards, ready as learn_ready
+        self.engine.learn_enabled = load_learn_config(self.data_dir / "mind.toml").enabled and learn_ready(self.store)
+        attach_rewards(self.night_runner, self.data_dir, self.store)
         self.control = attach_control(self)
         from .playstyle.service import attach as attach_playstyle
         self.playstyle = attach_playstyle(self)

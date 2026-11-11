@@ -60,6 +60,10 @@ UNIT_CALLS: dict[str, dict[str, float]] = {
     "notes": {"json": 2.0},                    # the call and its own judge batch of one: 40 s
     "claims": {"json": 1},                    # one extraction, no thinking or judge pass
     "signals": {},                           # screening only; no reflection calls
+    # Shared quality screening plus, when enabled, one embedding batch (up to 17 texts).
+    # Reserve 2 s per unit in JSON equivalents; no generation call. This conservative
+    # allowance includes the measured ~0.012 s lexical path and unmeasured embedding cost.
+    "rewards": {"json": 0.1},
     "encounters": {"json": 2},                # scene generation and one judge batch
     "confide": {"json": 1.1},
     "arc": {"json": 1.5},                     # a read of what he said to her (arc/night.py)
@@ -101,7 +105,7 @@ MEASURE_MIN = 3     # ...once there are 3 of them
 COUNTERS: dict[str, Callable[["NightContext"], int]] = {}
 # Optional extensions must be admitted on the particular runner before budgeting.
 # Core counters may belong to substages, so their historical counting is unchanged.
-EXTENSION_STAGES = frozenset({"coach", "realm", "photo", "selfies", "scenes", "snaps", "claims", "newcomers", "signals", "world_personas", "world_photos", "world_selfies"})
+EXTENSION_STAGES = frozenset({"coach", "realm", "photo", "selfies", "scenes", "snaps", "claims", "newcomers", "signals", "rewards", "world_personas", "world_photos", "world_selfies"})
 
 
 def register_counter(stage: str, fn: Callable[["NightContext"], int]) -> None:
@@ -302,6 +306,9 @@ async def plan_night(ctx: "NightContext", *, stages: frozenset[str] | None = Non
     (set_run_plan: a resumed run reuses it, like its window), applied to ctx.settings and
     ctx.plan, and logged as nightly_budget. Runners pass their actual stage names;
     direct callers may omit stages to retain the all-registered-counter interface."""
+    if ctx.settings.learn_enabled and (stages is None or "rewards" in stages):
+        from leeroy_mind.learn.night import prepare_count
+        await prepare_count(ctx)
     from leeroy_mind.world.config import load as load_world
     ctx._memo.pop("world:counts",None)
     if load_world(ctx.settings.data_dir / "mind.toml").enabled:
