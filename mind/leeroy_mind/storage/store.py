@@ -296,7 +296,8 @@ class Store:
             return []
         rows = self._all(
             "SELECT ts, channel, to_guid, text, turn_id FROM utterance WHERE guid = ? "
-            "AND dropped IS NULL" + (" AND llm_s IS NOT NULL" if model_only else "")
+            "AND dropped IS NULL AND (why IS NULL OR why!='realism_correction')" +
+            (" AND llm_s IS NOT NULL" if model_only else "")
             + " ORDER BY id DESC LIMIT ?", (speaker_guid, MAX_TURN_LINES * (n + 1)))
         turns: list[list[sqlite3.Row]] = []
         for r in rows:  # newest first

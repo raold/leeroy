@@ -226,6 +226,8 @@ class TalkEngine(EmoteReactions):
         """The human logged in: roll everyone's altered state for the night, start the whisper
         planner, and start the prompts' chat window here (nothing from a session before it
         reaches a prompt). The greetings come from on_event(Login)."""
+        if self.cfg.talk.realism:
+            self.realism.fights.clear()
         now = self.clock.now()
         self._session_id = session_id
         self._session_at = self._states_at = self._chat_from = now
@@ -259,6 +261,8 @@ class TalkEngine(EmoteReactions):
         and keep the altered states, with the time they were last in effect, for the next
         session."""
         await self._cancel_all()
+        if self.cfg.talk.realism:
+            self.realism.fights.clear()
         self._pastes.clear()
         self._settle_unacked(self.clock.now(), everything=True)
         self.timing.flush("session_end")

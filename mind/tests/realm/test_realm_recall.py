@@ -13,6 +13,10 @@ from leeroy_mind.realm import protocol as p
 from leeroy_mind.realm.service import attach_realm
 from realm.fakes import RealmApp, enabled
 
+# Every reason native names members by at a leave's ack, in the order it checks them.
+LEAVE_REASONS = ["wg_private_state_unavailable", "cleanup_member_not_admitted", "shared_lfg_queue",
+                 "shared_group_leader", "shared_lfg_cleanup", "shared_group_cleanup"]
+
 
 class Pipeline:
     def __init__(self, app, clock):
@@ -183,7 +187,7 @@ def test_leave_native_refuses_for_a_fenced_body_holds_nobody_and_defaults_follow
     run(scenario())
 
 
-@pytest.mark.parametrize("reason", ["wg_private_state_unavailable", "cleanup_member_not_admitted"])
+@pytest.mark.parametrize("reason", LEAVE_REASONS)
 def test_a_leave_native_refused_for_a_named_member_recalls_the_others(pipeline, reason):
     async def scenario():
         async with pipeline:
@@ -216,7 +220,7 @@ def test_a_leave_native_refused_for_a_named_member_recalls_the_others(pipeline, 
     run(scenario())
 
 
-@pytest.mark.parametrize("reason", ["wg_private_state_unavailable", "cleanup_member_not_admitted"])
+@pytest.mark.parametrize("reason", LEAVE_REASONS)
 def test_a_second_pass_within_the_backoff_recalls_everyone_but_the_named_member(pipeline, reason):
     async def scenario():
         async with pipeline:
@@ -296,6 +300,109 @@ def test_recall_shrinks_145_through_wintergrasp_then_closure_refusals(pipeline, 
             assert [message for message in caplog.messages if message.startswith("realm_recall_left_out")] == [
                 "realm_recall_left_out reason=wg_private_state_unavailable named=15 rest=130",
                 "realm_recall_left_out reason=cleanup_member_not_admitted named=3 rest=127"]
+    run(scenario())
+
+
+async def _settle_all(h, leave_answer):
+    """Answer every command the recall sends until it is quiet; leaves through leave_answer."""
+    seen = set()
+    for _ in range(60):
+        await h.cycle()
+        fresh = [c for c in h.app.sent if c.id not in seen]
+        if not fresh:
+            await h.cycle(1.01)
+            fresh = [c for c in h.app.sent if c.id not in seen]
+        if not fresh:
+            return
+        for c in fresh:
+            seen.add(c.id)
+            if type(c) is p.LeavePvp:
+                await leave_answer(c)
+            else:
+                await h.result(c)
+        await h.cycle(1.01)
+    raise AssertionError("recall did not quiesce")
+
+
+def test_a_battleground_leader_named_at_the_ack_is_left_out_and_142_go(pipeline, caplog):
+    # 2026-11-10 at his login: 143 online, 1306 leading a battleground raid.
+    async def scenario():
+        async with pipeline:
+            h = pipeline
+            cast = set(range(1200, 1343))
+            h.cast(*cast)
+            send = h.app.send
+            caplog.set_level("INFO", logger="leeroy_mind.realm")
+
+            async def answer(cmd, *, preserve_id=False):
+                if type(cmd) is p.LeavePvp and 1306 in cmd.guids:
+                    h.app.sent.append(cmd)
+                    return Ack(0, cmd.id, False, "shared_group_leader:1306")
+                return await send(cmd, preserve_id=preserve_id)
+            h.app.send = answer
+
+            async def leave_result(cmd):
+                if 1306 not in cmd.guids:  # the refused one has no job
+                    await h.result(cmd)
+            h.realm.recall.on_login(h.clock.now())
+            await _settle_all(h, leave_result)
+            leaves = [c for c in h.app.sent if type(c) is p.LeavePvp]
+            assert [len(c.guids) for c in leaves] == [143, 142] and set(leaves[1].guids) < set(leaves[0].guids)
+            rest = cast - {1306}
+            assert [set(c.guids) for c in h.app.sent if type(c) is p.Rearm] == [rest]
+            assert set().union(*(set(c.guids) for c in h.app.sent if type(c) is BotDo)) == rest
+            assert h.realm.action_store.holds() == ()
+            assert h.realm.queue.leave_backed_off("raid") == {1306}
+            assert "realm_recall_left_out reason=shared_group_leader named=1 rest=142" in caplog.messages
+    run(scenario())
+
+
+def test_a_member_native_skipped_is_backed_off_and_the_rest_are_rearmed(pipeline, caplog):
+    # The same leader, found only at its own step: native leaves it as it was and takes out the rest.
+    async def scenario():
+        async with pipeline:
+            h = pipeline
+            cast = set(range(1200, 1343))
+            h.cast(*cast)
+            caplog.set_level("INFO", logger="leeroy_mind.realm")
+
+            async def skip_leader(cmd):
+                skipped = (1306,) if 1306 in cmd.guids else ()
+                await h.app.event(p.RealmJob(0, cmd.id, "leave_pvp", "done", "", 0, len(cmd.guids) - len(skipped),
+                                             "", None, skipped))
+            start = h.clock.now()
+            h.realm.recall.on_login(start)
+            await _settle_all(h, skip_leader)
+            leave, = [c for c in h.app.sent if type(c) is p.LeavePvp]
+            assert len(leave.guids) == 143
+            rest = cast - {1306}
+            assert [set(c.guids) for c in h.app.sent if type(c) is p.Rearm] == [rest]
+            assert set().union(*(set(c.guids) for c in h.app.sent if type(c) is BotDo)) == rest
+            assert h.realm.action_store.holds() == ()
+            assert h.realm.queue.leave_backed_off("raid") == {1306}
+            assert "realm_recall_skipped named=1 rest=142" in caplog.messages
+            # The second pass recalls the others again and leaves 1306 alone while it is backed off.
+            await h.clock.advance(start + 45 - h.clock.now(), step=45)
+            h.realm.recall.tick(h.clock.now())
+            await h.cycle()
+            leaves = [c for c in h.app.sent if type(c) is p.LeavePvp]
+            assert len(leaves) == 2 and set(leaves[1].guids) == rest
+    run(scenario())
+
+
+def test_a_leave_that_skipped_everyone_chains_nothing(pipeline):
+    async def scenario():
+        async with pipeline:
+            h = pipeline
+            h.cast(101, 102)
+
+            async def skip_all(cmd):
+                await h.app.event(p.RealmJob(0, cmd.id, "leave_pvp", "done", "", 0, 0, "", None, cmd.guids))
+            h.realm.recall.on_login(h.clock.now())
+            await _settle_all(h, skip_all)
+            assert [type(c) for c in h.app.sent] == [p.LeavePvp]
+            assert h.realm.action_store.holds() == ()
+            assert h.realm.queue.leave_backed_off("raid") == {101, 102}
     run(scenario())
 
 
@@ -426,7 +533,81 @@ def test_a_rearm_that_ended_unknown_stops_its_chain_and_holds_its_manifest(pipel
     run(scenario())
 
 
+@pytest.mark.parametrize("skipped", [(), (102,), (101, 103), (101, 102, 103)])
+def test_a_rearm_that_skipped_members_is_done_and_its_defaults_go_to_everyone(pipeline, skipped, caplog):
+    # 2026-11-10/11: native refused all 15 overnight rearms of the cast for one member in combat or
+    # dead, or for his group's members at the ack. It now leaves them out and rearms the rest; a
+    # skipped member needs no backoff, the next pass rearms it again. () is an older native's event.
+    async def scenario():
+        async with pipeline:
+            h = pipeline
+            h.cast(101, 102, 103)
+            caplog.set_level("INFO", logger="leeroy_mind.realm")
+            h.realm.recall.restore_defaults()
+            await h.cycle()
+            rearm, = h.app.sent
+            assert type(rearm) is p.Rearm and rearm.guids == (101, 102, 103)
+            await h.app.event(p.RealmJob(0, rearm.id, "rearm", "done", "", 0, 3 - len(skipped), "", None, skipped))
+            record = h.realm.action_store.get(rearm.id)
+            assert (record.state, record.result_ok, record.result_reason) == ("completed", True, "")
+            assert h.realm.action_store.holds() == ()
+            await h.cycle(1.01)
+            defaults = h.app.sent[-1]
+            assert type(defaults) is BotDo and defaults.guids == (101, 102, 103)
+            await h.result(defaults)
+            for _ in range(3):
+                h.realm.bodies.poll()
+                h.realm.recall.tick(h.clock.now())
+                await h.cycle(1.01)
+            assert h.app.sent == [rearm, defaults]
+            assert h.realm.queue.leave_backed_off("realm_day") == set()
+            assert h.realm.action_store.holds() == ()
+            # The next pass rearms everyone again, the skipped included.
+            await h.clock.advance(1800, step=1800)
+            h.realm.recall.tick(h.clock.now())
+            await h.cycle()
+            assert type(h.app.sent[-1]) is p.Rearm and h.app.sent[-1].guids == (101, 102, 103)
+            expected = [f"realm_rearm_skipped id={rearm.id} kind=rearm skipped={len(skipped)} members=3"]
+            assert [m for m in caplog.messages if m.startswith("realm_rearm_skipped")] == (expected if skipped else [])
+    run(scenario())
+
+
+def test_defaults_that_skipped_a_dead_member_still_send_the_later_batches(pipeline):
+    # 81 of 140 defaults batches since 2026-11-09 skipped a member or two (148 dead, 26 busy); each
+    # stopped its chain, so the batches after it never went.
+    async def scenario():
+        async with pipeline:
+            h = pipeline
+            h.cast(*range(101, 182))
+            h.realm.recall.restore_defaults()
+            await h.cycle()
+            await h.result(h.app.sent[0])
+            await h.cycle()
+            first = h.app.sent[1]
+            assert type(first) is BotDo and len(first.guids) == 40
+            await h.result(first, skipped=(first.guids[0], first.guids[7]))  # done, two of them dead
+            record = h.realm.action_store.get(first.id)
+            assert (record.state, record.result_ok, record.result_reason) == ("completed", False, "defaults_failed")
+            answered = {first.id}
+            for _ in range(6):
+                await h.cycle(1.01)
+                for cmd in [c for c in h.app.sent if type(c) is BotDo and c.id not in answered]:
+                    answered.add(cmd.id)
+                    await h.result(cmd)
+            batches = [c for c in h.app.sent if type(c) is BotDo]
+            assert [len(c.guids) for c in batches] == [40, 40, 1]
+            assert set().union(*(set(c.guids) for c in batches)) == set(range(101, 182))
+            for _ in range(3):
+                h.realm.bodies.poll()
+                h.realm.recall.tick(h.clock.now())
+                await h.cycle(1.01)
+            assert len([c for c in h.app.sent if type(c) is BotDo]) == 3
+            assert h.realm.action_store.holds() == ()
+    run(scenario())
+
+
 def test_partial_defaults_stop_later_chunks_and_do_not_restore_on_own_release(pipeline):
+    # A batch native aborted (failed: cancelled, timed out) still stops its chain.
     async def scenario():
         async with pipeline:
             h = pipeline

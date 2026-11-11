@@ -3,6 +3,8 @@
 #include "RealmCleanup.h"
 #include "RealmPorts.h"
 #include "LeeroyEvents.h"
+#include "LeeroyRealmCleanup.h"
+#include "LeeroyRealmFailure.h"
 #include "LeeroyRealmTransmog.h"
 #include "Bag.h"
 #include "Battleground.h"
@@ -39,6 +41,14 @@ constexpr float Pi = 3.14159265358979323846f;
 constexpr std::uint64_t OperationWaitMs = 60000;
 RealmStep Refuse(std::string why) { return {StepState::Refused, std::move(why)}; }
 RealmStep UnchangedRefusal(std::string why) { return {StepState::Refused, std::move(why), 0, {}, true}; }
+// A member whose own step refused before it changed anything, for a reason of its own: Tick ends
+// only its lease and the others go on (AcceptsMemberSkip). A reason about the job itself refuses the
+// whole job, as before.
+RealmStep MemberRefusal(std::string why)
+{
+    if (!MemberSkipReason(why)) return UnchangedRefusal(std::move(why));
+    return {StepState::Skipped, std::move(why), 0, {}, true};
+}
 RealmStep Unknown(std::string why) { return {StepState::Unknown, std::move(why)}; }
 std::uint64_t GroupId(Player* player)
 {
@@ -276,20 +286,20 @@ std::vector<Item*> BagItems(Player* player)
 }
 RealmStep Rearm(Queued& entry, std::uint32_t guid)
 {
-    if (auto why = Eligible(entry, guid, Purpose::Rearm); !why.empty()) return UnchangedRefusal(why);
+    if (auto why = Eligible(entry, guid, Purpose::Rearm); !why.empty()) return MemberRefusal(why);
     auto* bot = FindOnline(guid);
     auto const* record = RealmModule::Instance().Weapons(guid);
     // Records live in memory: a worldserver start empties them until the 60 s poll finds the body
     // online and free. Record an armed body now, as that poll would; it then has nothing to put back.
     if (!record && RealmModule::Instance().RecordWeapons(guid, entry.id)) record = RealmModule::Instance().Weapons(guid);
-    if (!record) return UnchangedRefusal("weapon_record_unavailable");
+    if (!record) return MemberRefusal("weapon_record_unavailable");
     auto const saved = *record;
     std::set<std::uint32_t> inventory;
     for (auto* item : BagItems(bot)) inventory.insert(item->GetGUID().GetCounter());
     auto const initial = ReadWeapons(bot);
     if (((!initial.mainHand || initial.mainIsPole) && saved.mainHand && !inventory.contains(saved.mainHand))
         || (!initial.offHand && saved.offHand && !inventory.contains(saved.offHand))
-        || (!initial.ranged && saved.ranged && !inventory.contains(saved.ranged))) return UnchangedRefusal("recorded_weapon_unavailable");
+        || (!initial.ranged && saved.ranged && !inventory.contains(saved.ranged))) return MemberRefusal("recorded_weapon_unavailable");
     auto const steps = PlanRearm(saved, initial, inventory);
     std::uint64_t changed = 0;
     for (auto const& step : steps)
@@ -300,18 +310,18 @@ RealmStep Rearm(Queued& entry, std::uint32_t guid)
         auto* equipped = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
         if (!item || item->IsEquipped() || (item->GetTemplate()->Class == ITEM_CLASS_WEAPON
             && item->GetTemplate()->SubClass == ITEM_SUBCLASS_WEAPON_FISHING_POLE))
-            return changed ? Unknown("recorded_weapon_changed") : UnchangedRefusal("recorded_weapon_unavailable");
+            return changed ? Unknown("recorded_weapon_changed") : MemberRefusal("recorded_weapon_unavailable");
         if (equipped && !(slot == EQUIPMENT_SLOT_MAINHAND && ReadWeapons(bot).mainIsPole))
-            return changed ? Unknown("equipment_changed") : UnchangedRefusal("equipment_changed");
+            return changed ? Unknown("equipment_changed") : MemberRefusal("equipment_changed");
         uint16 destination = 0;
         if (bot->CanEquipItem(slot, destination, item, true) != EQUIP_ERR_OK
             || destination != static_cast<uint16>((INVENTORY_SLOT_BAG_0 << 8) | slot))
-            return changed ? Unknown("cannot_equip_recorded_weapon") : UnchangedRefusal("cannot_equip_recorded_weapon");
+            return changed ? Unknown("cannot_equip_recorded_weapon") : MemberRefusal("cannot_equip_recorded_weapon");
         // A two-handed main must never evict a real offhand as a side effect.
         auto before = ReadWeapons(bot);
         if (slot == EQUIPMENT_SLOT_MAINHAND && before.offHand
             && item->GetTemplate()->InventoryType == INVTYPE_2HWEAPON)
-            return changed ? Unknown("offhand_occupied") : UnchangedRefusal("offhand_occupied");
+            return changed ? Unknown("offhand_occupied") : MemberRefusal("offhand_occupied");
         bot->SwapItem(item->GetPos(), destination);
         auto after = ReadWeapons(bot);
         if (!bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot)
@@ -323,9 +333,9 @@ RealmStep Rearm(Queued& entry, std::uint32_t guid)
     }
     auto now = ReadWeapons(bot);
     if ((!now.mainHand || now.mainIsPole) && saved.mainHand && !inventory.contains(saved.mainHand))
-        return changed ? Unknown("recorded_weapon_unavailable") : UnchangedRefusal("recorded_weapon_unavailable");
+        return changed ? Unknown("recorded_weapon_unavailable") : MemberRefusal("recorded_weapon_unavailable");
     if (!RealmModule::Instance().RecordWeapons(guid, entry.id))
-        return changed ? Unknown("weapon_record_unproved") : UnchangedRefusal("weapon_record_unavailable");
+        return changed ? Unknown("weapon_record_unproved") : MemberRefusal("weapon_record_unavailable");
     auto result = Done(entry, changed);
     result.unchanged = changed == 0;
     return result;
@@ -626,25 +636,6 @@ bool QueuedForPvp(Player* bot)
         if (bot->GetBattlegroundQueueTypeId(slot) != BATTLEGROUND_QUEUE_NONE) return true;
     return false;
 }
-std::string GroupDepartureReason(Player* bot, Group* group)
-{
-    if (!group || !group->IsMember(bot->GetGUID())) return "";
-    if (group->isLFGGroup())
-    {
-        auto state = sLFGMgr->GetState(group->GetGUID());
-        if (state == lfg::LFG_STATE_QUEUED || state == lfg::LFG_STATE_ROLECHECK || state == lfg::LFG_STATE_PROPOSAL
-            || state == lfg::LFG_STATE_BOOT) return "shared_lfg_queue";
-    }
-    if (group->GetMembersCount() <= 1) return "";
-    if (group->IsLeader(bot->GetGUID())) return "shared_group_leader";
-    if (group->isLFGGroup() && group->GetMembersCount() == 2) return "shared_lfg_cleanup";
-    unsigned references = 0;
-    for (auto* member = group->GetFirstMember(); member; member = member->next())
-        if (member->GetSource()) ++references;
-    // RemoveMember can Disband on the linked-player count, not roster size.
-    if (references <= 1) return "shared_group_cleanup";
-    return "";
-}
 RealmStep LeavePvp(Queued& entry, std::uint32_t guid)
 {
     auto& module = RealmModule::Instance();
@@ -654,19 +645,33 @@ RealmStep LeavePvp(Queued& entry, std::uint32_t guid)
         if (auto why = module.MutationReason(guid, entry.id); !why.empty()) return Unproved(entry.payload.at("step"), why);
     }
     else if (auto why = Eligible(entry, guid, Purpose::LeavePvp); !why.empty())
+    {
+        if (auto skip = SkipLeaveMember(entry, guid, why)) return *skip;
         return entry.payload.value("cleanup_mutated", false) ? Unknown(why) : UnchangedRefusal(why);
+    }
     auto* bot = ObjectAccessor::FindConnectedPlayer(PlayerGuid(guid));
     if (!bot) return started ? Unproved(entry.payload.at("step"), "leave_identity")
         : (entry.payload.value("cleanup_mutated", false) ? Unknown("leave_identity") : UnchangedRefusal("offline"));
     if (!started) entry.payload["step"] = Json{{"at", NowMs()}, {"changed", false}, {"stage", "queues"}};
     auto& state = entry.payload["step"];
-    auto fail = [&](std::string why)
+    auto refuse = [&](std::string why)
     {
         return state.at("changed").get<bool>() || entry.payload.value("cleanup_mutated", false)
             ? Unproved(state, std::move(why)) : UnchangedRefusal(std::move(why));
     };
+    // A member the leave cannot take out for a reason of its own (its battleground or original raid
+    // group, its entry point, its LFG or Wintergrasp state, a step that never finished): before its
+    // own step or a shared cleanup in this job changed it, it is left as it is and the others go on
+    // (SkipLeaveMember ends this step, the state with it); after, the old rule stands.
+    auto fail = [&](std::string why)
+    {
+        if (auto skip = SkipLeaveMember(entry, guid, why)) return *skip;
+        return refuse(std::move(why));
+    };
     if (Expired(state)) return fail("leave_cleanup_unproved");
-    if (auto why = OrdinaryCleanupReason(entry); !why.empty()) return fail(why);
+    // A fault in another member already rechecked (one this job took out or touched) is the job's own.
+    if (auto fault = OrdinaryCleanupFault(entry); !fault.reason.empty())
+        return fault.guid == guid ? fail(std::move(fault.reason)) : refuse(std::move(fault.reason));
     auto stage = state.at("stage").get<std::string>();
     if (stage == "shared_lfg") return LeaveOnlineLfgGroup(entry, guid);
     auto* field = sBattlefieldMgr->GetBattlefieldToZoneId(4197);
@@ -691,8 +696,8 @@ RealmStep LeavePvp(Queued& entry, std::uint32_t guid)
     if (FindOnline(guid) != bot) return fail("body_unavailable");
     if (auto why = Eligible(entry, guid, Purpose::LeavePvp); !why.empty()) return fail(why);
     auto* currentGroup = bot->GetGroup();
-    if (currentGroup && (currentGroup->isBGGroup() || currentGroup->isBFGroup()))
-        if (auto why = GroupDepartureReason(bot, currentGroup); !why.empty()) return fail(why);
+    // Leaving would change the rest of its group.
+    if (auto why = BattlegroundGroupDeparture(bot); !why.empty()) return fail(std::move(why));
     if (bot->InBattleground())
     {
         auto* bg = bot->GetBattleground();
@@ -766,9 +771,7 @@ RealmStep LeavePvp(Queued& entry, std::uint32_t guid)
         || (bot->GetGroup() && (bot->GetGroup()->isLFGGroup() || bot->GetGroup()->isBGGroup() || bot->GetGroup()->isBFGroup())))
         return fail("leave_cleanup_unproved");
     if (auto why = VerifyCleanupReceipts(entry); !why.empty()) return Unproved(state, why);
-    auto const changed = entry.payload.value("cleanup_changed_guids", Json::array());
-    bool const affected = std::find(changed.begin(), changed.end(), Json(guid)) != changed.end();
-    bool const bodyChanged = state.at("changed").get<bool>() || affected;
+    bool const bodyChanged = state.at("changed").get<bool>() || TouchedByCleanup(entry, guid);
     auto result = Done(entry, bodyChanged ? 1 : 0);
     result.unchanged = !bodyChanged && !entry.payload.value("cleanup_mutated", false);
     return result;

@@ -1,6 +1,7 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "LeeroyRealmQueue.h"
 #include "TestHarness.h"
+#include <map>
 #include <stdexcept>
 
 using namespace Leeroy::Realm;
@@ -163,4 +164,62 @@ LEEROY_TEST(RealmQueue_DropReportsExactRemainingCursorOnceAndClearsQueue)
     queue.DropAll("config_changed", dropped);
     CHECK_EQ(calls, 2u);
     CHECK_EQ(queue.Size(), std::size_t{0});
+}
+
+LEEROY_TEST(RealmQueue_ARearmLeavesOutMembersFencedForTheirOwnReasonAtItsAck)
+{
+    // 2026-11-10/11: his group's members (busy:raid_owner) refused whole overnight rearms of the cast.
+    std::map<std::uint32_t, std::string> const fences{{102, "busy:raid_owner"}, {104, "busy:body_unavailable"}};
+    std::vector<std::uint32_t> asked;
+    auto fence = [&](std::uint32_t guid)
+    {
+        asked.push_back(guid);
+        auto found = fences.find(guid);
+        return found == fences.end() ? std::string{} : found->second;
+    };
+    auto const rearm = PartitionAtAck("rearm", {101, 102, 103, 104, 105}, fence);
+    CHECK(rearm.error.empty());
+    CHECK((rearm.admitted == std::vector<std::uint32_t>{101, 103, 105}));
+    CHECK((rearm.fenced == std::vector<std::uint32_t>{102, 104}));
+    CHECK((asked == std::vector<std::uint32_t>{101, 102, 103, 104, 105}));
+    // Every member fenced: refused whole with the first reason, as before.
+    auto const none = PartitionAtAck("rearm", {102, 104}, fence);
+    CHECK_EQ(none.error, std::string("busy:raid_owner"));
+    CHECK(none.admitted.empty() && none.fenced.empty());
+    // Every other kind is refused whole at its first fenced member, asking nobody after it.
+    asked.clear();
+    for (auto kind : {"leave_pvp", "realm_move", "duel", "guild_grow"})
+    {
+        asked.clear();
+        auto const whole = PartitionAtAck(kind, {101, 102, 103}, fence);
+        CHECK_EQ(whole.error, std::string("busy:raid_owner"));
+        CHECK(whole.admitted.empty() && whole.fenced.empty());
+        CHECK((asked == std::vector<std::uint32_t>{101, 102}));
+    }
+    CHECK(PartitionAtAck("leave_pvp", {101, 103}, fence).error.empty());
+}
+
+LEEROY_TEST(RealmQueue_AJobWideFenceStillRefusesAWholeRearmAtItsAck)
+{
+    // busy:training_cleanup (a training cleanup pending anywhere), the Realm's own holder of a member
+    // and anything not on the member list refuse the rearm whole at once, as before #235.
+    for (auto reason : {"busy:training_cleanup", "busy:realm_owner", "realm_off", "busy:operation_identity",
+        "bad field: affected_bodies", "some_future_reason"})
+    {
+        std::vector<std::uint32_t> asked;
+        auto const whole = PartitionAtAck("rearm", {101, 102, 103}, [&](std::uint32_t guid)
+        {
+            asked.push_back(guid);
+            return guid == 102 ? std::string(reason) : std::string{};
+        });
+        CHECK_EQ(whole.error, std::string(reason));
+        CHECK(whole.admitted.empty() && whole.fenced.empty());
+        CHECK((asked == std::vector<std::uint32_t>{101, 102}));
+    }
+    // A member's own fence before the job's: the job's still refuses the whole rearm.
+    auto const mixed = PartitionAtAck("rearm", {101, 102, 103}, [](std::uint32_t guid)
+    {
+        return guid == 101 ? std::string("busy:combat") : guid == 102 ? std::string("busy:training_cleanup") : std::string{};
+    });
+    CHECK_EQ(mixed.error, std::string("busy:training_cleanup"));
 }

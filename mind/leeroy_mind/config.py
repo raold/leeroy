@@ -23,6 +23,7 @@ whispers_per_hour = 4         # members whispering him first, per hour of his pl
 openers_per_hour = 6          # members starting a line to him in party or guild, per hour, likewise
 selfies = 3                    # 0-10, photos the guild sends you (rendered at night)
 aware = false                  # include a bounded card of visible observations in talk
+realism = false                # bounded member typing, small bursts and rare corrections
 
 [romance]
 dial = 3                      # 1 milquetoast .. 10 filth
@@ -78,6 +79,7 @@ class TalkCfg:
     openers_per_hour: float = 6
     selfies: int = 3
     aware: bool = False
+    realism: bool = False
 
 
 @dataclass(frozen=True)
@@ -172,6 +174,7 @@ _RULES = {
     "models": {k: (_is_str, "a non-empty string") for k in ("live", "live_fallback", "reflection", "embedding")},
     "talk": {
         "aware": (lambda v: type(v) is bool, "a boolean"),
+        "realism": (lambda v: type(v) is bool, "a boolean"),
         "chattiness": (lambda v: _int_in(v, 0, 10), "an integer 0-10"),
         "raid_rule": (lambda v: v in RAID_RULES, f"one of {sorted(RAID_RULES)}"),
         "selfies": (lambda v: _int_in(v, 0, 10), "an integer 0-10"),
@@ -230,6 +233,8 @@ def _build(data: dict, source: str) -> MindConfig:
         values = {}
         for key, (check, want) in rules.items():
             v = given.get(key, defaults[section][key])
+            if section == "talk" and key == "realism" and type(v) is not bool:
+                v = False
             if not check(v):
                 raise ConfigError(f"{section}.{key}: expected {want}, got {_shown(section, v)}")
             values[key] = v.strip() if section == "human" else v

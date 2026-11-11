@@ -15,6 +15,9 @@ from leeroy_mind.realm.action_store import (ActionCapacity, ActionSpec, ActionSt
                                             REFUSALS)
 
 TOKEN = "a" * 32 + "-" + "b" * 16
+# Every reason native names members by at a leave's ack, in the order it checks them.
+LEAVE_REASONS = ["wg_private_state_unavailable", "cleanup_member_not_admitted", "shared_lfg_queue",
+                 "shared_group_leader", "shared_lfg_cleanup", "shared_group_cleanup"]
 REPO = Path(__file__).resolve().parents[3]
 
 
@@ -155,7 +158,7 @@ def test_a_leave_refused_for_one_fenced_body_frees_the_whole_cast(store):
     assert store.holds() == ()
 
 
-@pytest.mark.parametrize("reason", ["wg_private_state_unavailable", "cleanup_member_not_admitted"])
+@pytest.mark.parametrize("reason", LEAVE_REASONS)
 def test_a_leave_refused_at_its_ack_naming_members_frees_the_whole_cast(store, reason, caplog):
     cast = tuple(range(101, 245))
     dispatch(store, prepare(store, p.LeavePvp("leave", cast), owner="raid", rank=0))
@@ -169,7 +172,7 @@ def test_a_leave_refused_at_its_ack_naming_members_frees_the_whole_cast(store, r
     assert caplog.messages == [f"realm_leave_refused id=leave kind=leave_pvp reason={reason} named=2 members=144"]
 
 
-@pytest.mark.parametrize("reason", ["wg_private_state_unavailable", "cleanup_member_not_admitted"])
+@pytest.mark.parametrize("reason", LEAVE_REASONS)
 @pytest.mark.parametrize("suffix", ["", ":", ":999", ":101,999", ":101,101", ":101,0101", ":1x", ":101,", ":0"])
 def test_a_named_ack_refusal_with_invalid_members_stays_unknown(store, reason, suffix):
     dispatch(store, prepare(store, p.LeavePvp("leave", (101, 102)), owner="raid", rank=0))
@@ -178,7 +181,7 @@ def test_a_named_ack_refusal_with_invalid_members_stays_unknown(store, reason, s
     assert store.holds()[0].guids == frozenset({101, 102})
 
 
-@pytest.mark.parametrize("reason", ["wg_private_state_unavailable", "cleanup_member_not_admitted"])
+@pytest.mark.parametrize("reason", LEAVE_REASONS)
 def test_the_named_ack_refusal_is_for_ordinary_leaves_alone(store, reason):
     dispatch(store, prepare(store, p.Rearm("rearm", CAST)))
     store.observe_ack(Ack(0, "rearm", False, f"{reason}:{CAST[0]}"), now=2)
@@ -186,7 +189,7 @@ def test_the_named_ack_refusal_is_for_ordinary_leaves_alone(store, reason):
     assert store.holds()[0].guids == frozenset(CAST)
 
 
-@pytest.mark.parametrize("reason", ["wg_private_state_unavailable", "cleanup_member_not_admitted"])
+@pytest.mark.parametrize("reason", LEAVE_REASONS)
 def test_named_ack_refusal_does_not_release_a_token_cleanup(store, reason):
     wg(store)
     snapshot(store)
@@ -196,7 +199,7 @@ def test_named_ack_refusal_does_not_release_a_token_cleanup(store, reason):
     assert store.holds()[0].guids == frozenset({2, 3, 4})
 
 
-@pytest.mark.parametrize("reason", ["wg_private_state_unavailable", "cleanup_member_not_admitted"])
+@pytest.mark.parametrize("reason", LEAVE_REASONS)
 def test_recovery_settles_a_stored_ack_only_named_leave_refusal(store, reason):
     cast = (101, 102, 103)
     _stored_unknown(store, "leave", p.LeavePvp("leave", cast),
@@ -206,6 +209,196 @@ def test_recovery_settles_a_stored_ack_only_named_leave_refusal(store, reason):
     store.recover(process_id="new", now=20)
     assert (store.get("leave").state, store.get("leave").result_reason) == ("completed", f"{reason}:102")
     assert store.holds() == ()
+
+
+def leave_job(*, skipped=(), state="done", reason="", guid=0, value=0, changed=None, command_id="leave"):
+    return p.RealmJob(0, command_id, "leave_pvp", state, reason, guid, value, "", changed, tuple(skipped))
+
+
+@pytest.mark.parametrize("job_first", [False, True])
+def test_a_leave_that_skipped_members_completes_for_the_others_and_backs_them_off(store, job_first, caplog):
+    # 2026-11-10: 143 recalled, 1306 leading a battleground raid. Native skips it and takes out the rest.
+    cast = tuple(range(1200, 1343))
+    caplog.set_level("INFO", logger="leeroy_mind.realm.action_store")
+    dispatch(store, prepare(store, p.LeavePvp("leave", cast), owner="raid", rank=0))
+    receipts = [lambda: store.observe_ack(Ack(0, "leave", True, ""), now=2),
+                lambda: store.observe_realm_job(leave_job(skipped=(1306,), value=140), now=3)]
+    if job_first: receipts.reverse()
+    assert not receipts[0]().result_ready
+    assert store.holds()[0].guids == frozenset(cast)
+    t = receipts[1]()
+    assert (t.result_ready, t.result_ok, t.reason) == (True, True, "")
+    record = store.get("leave")
+    assert (record.state, record.result_ok) == ("completed", True)
+    assert store.holds() == ()
+    assert json.loads(record.evidence)["job"]["skipped"] == [1306]
+    assert action_store.leave_skipped_guids(record) == (1306,)
+    at = json.loads(record.evidence)["skipped_at"]
+    assert at == (2 if job_first else 3)  # when the root completed, with its second receipt
+    assert action_store.skipped_backoff(record, at + 599.999) == (1306,)
+    assert action_store.skipped_backoff(record, at + 600) == ()
+    store.observe_realm_job(leave_job(skipped=(1306,), value=140), now=4)  # the same receipt again
+    store.recover(process_id="new", now=5)
+    again = store.get("leave")
+    assert (again.state, again.result_ok, json.loads(again.evidence)["skipped_at"]) == ("completed", True, at)
+    assert caplog.messages == ["realm_leave_skipped id=leave kind=leave_pvp skipped=1 members=143"]
+
+
+def test_an_older_natives_done_leave_skips_nobody_and_keeps_the_stored_shape(store):
+    dispatch(store, prepare(store, p.LeavePvp("leave", (101, 102, 103)), owner="raid", rank=0))
+    store.observe_ack(Ack(0, "leave", True, ""), now=2)
+    store.observe_realm_job(p.RealmJob(0, "leave", "leave_pvp", "done", "", 0, 3), now=3)
+    record = store.get("leave")
+    assert (record.state, record.result_ok) == ("completed", True) and store.holds() == ()
+    evidence = json.loads(record.evidence)
+    assert "skipped" not in evidence["job"] and "skipped_at" not in evidence
+    assert action_store.leave_skipped_guids(record) == () and action_store.skipped_backoff(record, 3) == ()
+
+
+@pytest.mark.parametrize("cmd,ev", [
+    (p.LeavePvp("leave", (101, 102)), leave_job(skipped=(999,))),
+    (p.LeavePvp("leave", (101, 102)), leave_job(skipped=(101, 999))),
+    (p.Rearm("leave", (101, 102)), p.RealmJob(0, "leave", "rearm", "done", "", 0, 0, "", None, (999,))),
+    (p.Rearm("leave", (101, 102)), p.RealmJob(0, "leave", "rearm", "done", "", 0, 0, "", None, (102, 999))),
+    (p.RealmMove("leave", 101, "home"), p.RealmJob(0, "leave", "realm_move", "done", "", 101, 0, "", None, (101,))),
+    (p.Duel("leave", 101, 102), p.RealmJob(0, "leave", "duel", "done", "", 0, 0, "", None, (102,))),
+])
+def test_a_skip_outside_the_manifest_or_of_another_kind_is_no_receipt(store, cmd, ev):
+    c = classify(cmd)
+    dispatch(store, prepare(store, cmd, owner="raid", rank=0))
+    store.observe_ack(Ack(0, "leave", True, ""), now=2)
+    assert not store.observe_realm_job(ev, now=3).matched
+    assert store.get("leave").state == "dispatched"
+    assert store.holds()[0].guids == frozenset(c.reserved_manifest)
+
+
+def rearm_job(*, skipped=(), state="done", reason="", guid=0, value=0, changed=None, command_id="rearm"):
+    return p.RealmJob(0, command_id, "rearm", state, reason, guid, value, "", changed, tuple(skipped))
+
+
+@pytest.mark.parametrize("job_first", [False, True])
+def test_a_rearm_that_skipped_members_completes_for_the_others_without_a_backoff(store, job_first, caplog):
+    # 2026-11-10/11: every overnight rearm of the 143 refused whole for one member in combat or dead,
+    # and his group's members refused it at the ack. Native now leaves them out and rearms the rest.
+    cast = tuple(range(1200, 1343))
+    caplog.set_level("INFO", logger="leeroy_mind.realm.action_store")
+    dispatch(store, prepare(store, p.Rearm("rearm", cast)))
+    receipts = [lambda: store.observe_ack(Ack(0, "rearm", True, ""), now=2),
+                lambda: store.observe_realm_job(rearm_job(skipped=(1250, 1300, 1201), value=40), now=3)]
+    if job_first: receipts.reverse()
+    assert not receipts[0]().result_ready
+    assert store.holds()[0].guids == frozenset(cast)
+    t = receipts[1]()
+    assert (t.result_ready, t.result_ok, t.reason, t.value) == (True, True, "", 40)
+    record = store.get("rearm")
+    assert (record.state, record.result_ok, record.result_reason) == ("completed", True, "")
+    assert store.holds() == ()
+    evidence = json.loads(record.evidence)
+    assert evidence["job"]["skipped"] == [1250, 1300, 1201]
+    # A skipped rearm member is no leave's: no backoff, nothing protected from the prune for it.
+    assert "skipped_at" not in evidence and "failed_at" not in evidence
+    assert action_store.leave_skipped_guids(record) == () and action_store.skipped_backoff(record, 3) == ()
+    store.observe_realm_job(rearm_job(skipped=(1250, 1300, 1201), value=40), now=4)  # the same receipt again
+    store.recover(process_id="new", now=5)
+    assert (store.get("rearm").state, store.get("rearm").result_ok) == ("completed", True)
+    assert caplog.messages == ["realm_rearm_skipped id=rearm kind=rearm skipped=3 members=143"]
+    assert store.prune(keep=0, now=6) == 1
+
+
+def test_a_rearm_that_skipped_everyone_still_completes(store):
+    dispatch(store, prepare(store, p.Rearm("rearm", (101, 102))))
+    store.observe_ack(Ack(0, "rearm", True, ""), now=2)
+    store.observe_realm_job(rearm_job(skipped=(101, 102)), now=3)
+    record = store.get("rearm")
+    assert (record.state, record.result_ok) == ("completed", True) and store.holds() == ()
+
+
+def test_a_one_member_rearm_skipped_names_its_member(store):
+    dispatch(store, prepare(store, p.Rearm("rearm", (101,))))
+    store.observe_ack(Ack(0, "rearm", True, ""), now=2)
+    assert not store.observe_realm_job(rearm_job(skipped=(101,)), now=3).matched  # a one-member job names it
+    store.observe_realm_job(rearm_job(skipped=(101,), guid=101), now=4)
+    assert (store.get("rearm").state, store.get("rearm").result_ok) == ("completed", True)
+
+
+def test_an_older_natives_rearm_without_skips_settles_as_before(store):
+    dispatch(store, prepare(store, p.Rearm("rearm", CAST)))
+    store.observe_ack(Ack(0, "rearm", True, ""), now=2)
+    store.observe_realm_job(p.RealmJob(0, "rearm", "rearm", "done", "", 0, 12), now=3)
+    record = store.get("rearm")
+    assert (record.state, record.result_ok) == ("completed", True) and store.holds() == ()
+    assert "skipped" not in json.loads(record.evidence)["job"]
+
+
+@pytest.mark.parametrize("changed,reason,state,result", [
+    (False, "busy:operation_identity", "completed", "step_refused"),  # whole-job proof, as before
+    (None, "busy:realm_owner", "completed", "step_refused"),           # a job-level step refusal, as before
+    (None, "weapon_swap_unproved", "unknown", "job_failed"),           # after a swap: holds everyone, as before
+])
+def test_a_failed_rearm_that_skipped_members_keeps_the_failure_rules(store, changed, reason, state, result):
+    dispatch(store, prepare(store, p.Rearm("rearm", CAST)))
+    store.observe_ack(Ack(0, "rearm", True, ""), now=2)
+    store.observe_realm_job(rearm_job(skipped=(CAST[3],), state="failed", reason=reason, guid=CAST[27],
+                                      changed=changed), now=3)
+    record = store.get("rearm")
+    assert (record.state, record.result_reason) == (state, result)
+    assert sorted(g for h in store.holds() for g in h.guids) == ([] if state == "completed" else list(CAST))
+
+
+def test_a_skip_receipt_on_a_rearm_is_not_a_backoff_receipt(store):
+    dispatch(store, prepare(store, p.Rearm("rearm", (101, 102))))
+    store.observe_ack(Ack(0, "rearm", True, ""), now=2)
+    store.observe_realm_job(rearm_job(skipped=(102,)), now=3)
+    evidence = {**json.loads(store.get("rearm").evidence), "skipped_at": 3}
+    with store.conn:
+        store.conn.execute("UPDATE realm_action SET evidence=? WHERE command_id='rearm'", (document(evidence),))
+    with pytest.raises(ActionUnavailable):
+        store.get("rearm")
+
+
+def test_a_stored_skip_on_another_kind_is_unreadable(store):
+    dispatch(store, prepare(store, p.RealmMove("move", 2, "home")))
+    store.observe_ack(Ack(0, "move", True, ""), now=2)
+    store.observe_realm_job(job(), now=3)
+    evidence = json.loads(store.get("move").evidence)
+    evidence["job"]["skipped"] = [2]
+    with store.conn:
+        store.conn.execute("UPDATE realm_action SET evidence=? WHERE command_id='move'", (document(evidence),))
+    with pytest.raises(ActionUnavailable):
+        store.get("move")
+
+
+@pytest.mark.parametrize("changed,state,held", [(False, "completed", ()), (None, "unknown", (101, 102, 103))])
+def test_a_failed_leave_that_skipped_members_keeps_the_failure_rules(store, changed, state, held):
+    # Native ended 102's lease alone; the job then failed at 103. Whole-job proof still frees the rest,
+    # and without it the root holds its whole manifest as before, 102 included.
+    dispatch(store, prepare(store, p.LeavePvp("leave", (101, 102, 103)), owner="raid", rank=0))
+    store.observe_ack(Ack(0, "leave", True, ""), now=2)
+    store.observe_realm_job(leave_job(skipped=(102,), state="failed", reason="wg_private_state_unavailable",
+                                      guid=103, changed=changed), now=3)
+    record = store.get("leave")
+    assert record.state == state and action_store.leave_skipped_guids(record) == ()
+    assert "skipped_at" not in json.loads(record.evidence)
+    assert sorted(g for h in store.holds() for g in h.guids) == list(held)
+
+
+def test_the_prune_keeps_a_skipping_leave_through_its_backoff(store):
+    dispatch(store, prepare(store, p.LeavePvp("leave", (101, 102)), owner="raid", rank=0))
+    store.observe_ack(Ack(0, "leave", True, ""), now=2)
+    store.observe_realm_job(leave_job(skipped=(102,)), now=3)
+    assert store.prune(keep=0, now=602) == 0 and store.get("leave") is not None
+    assert store.prune(keep=0, now=603) == 1 and store.get("leave") is None
+
+
+def test_a_skip_receipt_without_a_skipping_job_is_unreadable(store):
+    dispatch(store, prepare(store, p.LeavePvp("leave", (101, 102)), owner="raid", rank=0))
+    store.observe_ack(Ack(0, "leave", True, ""), now=2)
+    store.observe_realm_job(leave_job(), now=3)
+    evidence = {**json.loads(store.get("leave").evidence), "skipped_at": 3}
+    with store.conn:
+        store.conn.execute("UPDATE realm_action SET evidence=? WHERE command_id='leave'", (document(evidence),))
+    with pytest.raises(ActionUnavailable):
+        store.get("leave")
 
 
 def test_recovery_settles_a_body_fence_an_older_build_kept_unknown(store, monkeypatch):
@@ -578,7 +771,7 @@ def test_step_refusals_are_native_refusals_whose_reservation_is_released():
     for kind, signature in executors.items():
         step = body(bodies, signature)
         assert re.search(r"if \(auto why = Eligible\(entry, guid, Purpose::\w+(, true)?\); !why\.empty\(\)\) "
-                         r"return (?:UnchangedRefusal|Refuse)\(why\);", step.split("\n")[2])
+                         r"return (?:UnchangedRefusal|Refuse|MemberRefusal)\(why\);", step.split("\n")[2])
         assert step.count("Eligible(") == 1
         for forbidden in ("Pending", "Unproved", "Unknown(why", "Declare", "Charge", "continuation", "MutationReason"):
             assert forbidden not in step
@@ -587,8 +780,14 @@ def test_step_refusals_are_native_refusals_whose_reservation_is_released():
         assert handler and handler.group(1) == signature.split()[1].rstrip("(")  # the default admission only
     # Tick: a fence before the step and a Refused step both release every holder of the command,
     # unless its body is pending, it declared a scope, joined a guild or holds a continuation.
+    # A rearm's member refusal is a skip (Tick ends that member's lease alone) or, for a reason about
+    # the job itself, the old whole refusal; either comes before anything changes.
+    member = body(bodies, "RealmStep MemberRefusal(")
+    assert "if (!MemberSkipReason(why)) return UnchangedRefusal(std::move(why));" in member
+    assert "return {StepState::Skipped, std::move(why), 0, {}, true};" in member
     tick = body(module, "void RealmModule::Tick(")
-    assert "if (!reason.empty()) return finish(reason, pending, false, !pending);" in tick
+    assert "if (!reason.empty()) return fenced(std::move(reason));" in tick
+    assert "return finish(std::move(why), pending, false, !pending);" in tick
     assert 'return finish(result.reason.empty() ? "refused" : result.reason, false, true, result.unchanged);' in tick
     assert "if (retain) reservation.retained = true;\n            else _state->Release(entry.id);" in tick
     assert "if (reservation.guildJoinAttempts.empty()) return true;" in tick
@@ -611,22 +810,26 @@ def test_a_kind_step_refusal_is_said_only_by_its_executor_and_only_as_a_refuse_b
         first_swap = step.index("SwapItem(")
         for reason in sorted(reasons):
             quoted = f'"{reason}"'
-            # Nowhere else in native says it, so no other kind's failure can carry it.
-            assert [f.name for f in src.rglob("*") if f.is_file() and quoted in f.read_text(encoding="utf-8")] \
-                == ["RealmBodies.cpp"]
+            # Nowhere else in native says it, so no other kind's failure can carry it. The member skip
+            # allow-list (LeeroyRealmFailure.h MemberSkipReasons) only names it.
+            assert sorted(f.name for f in src.rglob("*") if f.is_file() and quoted in f.read_text(encoding="utf-8")) \
+                == ["LeeroyRealmFailure.h", "RealmBodies.cpp"]
+            failure = (src / "Lib/LeeroyRealmFailure.h").read_text(encoding="utf-8")
+            start = failure.index("MemberSkipReasons[] = {")
+            assert failure.count(quoted) == failure[start:failure.index("};", start)].count(quoted) == 1
             assert bodies.count(quoted) == step.count(quoted) >= 1
             assert f"Unknown({quoted})" not in step
             at = 0
             while (at := step.find(quoted, at + 1)) != -1:
                 line = step[step.rfind("\n", 0, at) + 1:step.find("\n", at)].strip()
-                assert f"UnchangedRefusal({quoted})" in line
+                assert f"MemberRefusal({quoted})" in line
                 assert at < first_swap or re.fullmatch(
-                    r'return changed \? Unknown\("(?!' + reason + r'")[a-z_]+"\) : UnchangedRefusal\(' + quoted + r'\);', line)
+                    r'return changed \? Unknown\("(?!' + reason + r'")[a-z_]+"\) : MemberRefusal\(' + quoted + r'\);', line)
     # Before refusing, a rearm records an armed body with no record (a worldserver start empties
     # them): that writes native's record alone, never the body, so the Refuse still precedes any change.
     rearm = body(bodies, "RealmStep Rearm(")
     assert rearm.index("RealmModule::Instance().RecordWeapons(guid, entry.id)) record =") \
-        < rearm.index('if (!record) return UnchangedRefusal("weapon_record_unavailable");') < rearm.index("SwapItem(")
+        < rearm.index('if (!record) return MemberRefusal("weapon_record_unavailable");') < rearm.index("SwapItem(")
     record = body((src / "Realm/RealmModule.cpp").read_text(encoding="utf-8"), "bool RealmModule::RecordWeapons(")
     assert "_state->weapons[guid] = {now.mainHand, now.offHand, now.ranged};" in record
     assert not re.search(r"Swap|Equip|Store|Destroy|Remove|Teleport|->Set", record)

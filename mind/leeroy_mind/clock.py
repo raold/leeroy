@@ -6,6 +6,7 @@ from typing import Protocol
 
 class Clock(Protocol):
     def now(self) -> float: ...
+    def monotonic(self) -> float: ...
     def local(self) -> datetime: ...
     async def sleep(self, s: float) -> None: ...
 
@@ -17,6 +18,9 @@ def local_at(ts: float) -> datetime:
 
 
 class SystemClock:
+    def monotonic(self) -> float:
+        return time.monotonic()
+
     def now(self) -> float:
         return time.time()
 

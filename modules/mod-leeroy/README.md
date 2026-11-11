@@ -74,8 +74,9 @@ the receipt. An exception or unproved post-step identity never provides proof.
 
 The ordinary leave executor proves an unchanged refusal only before its saved
 `changed` flag or `cleanup_mutated` flag is set. Completed no-op members carry
-that proof forward, so a later Wintergrasp refusal can safely end a large leave;
-an earlier changed or unproved member prevents it. Rearm's unchanged refusals
+that proof forward, so a later refusal can safely end a large leave (a refusal of
+a member's own now skips that member instead, below); an earlier changed or
+unproved member prevents it. Rearm's unchanged refusals (now mostly skips, below)
 precede all weapon swaps; its completed no-op steps also carry explicit proof.
 Other executors keep the default (unproved) unless rejected before execution.
 
@@ -86,9 +87,60 @@ uncontested stored unknown with these receipts is reconsidered at startup.
 Later contradictory evidence still becomes `conflict` and holds the manifest.
 WG continuation, ack-only and result roots keep their existing rules.
 
+An ordinary leave refuses at its ack, naming them, the members its step would find unable to
+leave their battleground or battlefield group alone (`shared_group_leader`, `shared_group_cleanup`,
+`shared_lfg_queue`, `shared_lfg_cleanup`), after the Wintergrasp and cleanup-closure refusals.
+A member that becomes such a case only at its own step, before its step or an earlier member's
+shared cleanup changed it, is skipped: `RealmModule::Tick` checks the body is as admitted and that
+nothing declared, expected or awaits a transition for it (`AcceptsMemberSkip`), ends that member's
+lease alone and goes on with the rest; the last step's readback covers only the members still held.
+The terminal `realm_job` then carries `"skipped": [guid, ...]` (only when nonempty, done or failed);
+a member whose own step already changed something keeps the old rule (unproved, retained).
+
+The same skip covers every other refusal of a leave member's own (`SkipsLeaveMember`,
+`MemberSkipReason`, an allow-list in `LeeroyRealmFailure.h` of the member's own fences, state and
+closure; anything else, such as `busy:training_cleanup`, which is pending for every body at once,
+`realm_off`, `busy:operation_identity`, `busy:realm_owner`, `lfg_cleanup_disabled` or a reason added
+later, keeps the old rule), only while its step's `changed` flag is unset, its step recorded no LFG group
+receipt and no shared cleanup touched it: its original raid group (`busy:raid_owner`),
+`entry_point_unavailable`, `battleground_group_changed`, `battleground_receipt_unavailable`, an LFG
+proposal, Wintergrasp, an expired step that changed nothing, its own recheck (`OrdinaryCleanupFault`
+names the member), and the cleanup producers' refusals before they charge or declare anything
+(`LeaveNativeQueue`, `LeaveObservedLfgApplicants`, and `LeaveOnlineLfgGroup` before its receipt).
+Tick's own pre-step fence (its holder and lease checks, its admission) also skips a member whose
+step never ran: no pending entry at all, not declared, not touched (`DecideFence`); a
+battleground that ends under a member still waiting its turn is this case. The readback a skipped
+last member makes runs under a `try`: a throw finishes `operation_outcome_unknown`, retained. A step
+rechecks only the members up to its own and later ones the job touched (`RecheckedMembers`), so such
+a member no longer fails an earlier member's step; each producer rechecks its whole closure in full
+(`ClosureFault`) before it charges it, and the last step still reads back every member held. Kept
+retained: anything after a step set `changed`, a member a shared cleanup declared or changed,
+producer refusals after charging or declaring or after an LFG group receipt, faults in a member
+already processed, an unreadable body after the step, and a pre-step fence on a member whose step
+had already gone pending.
+
+A rearm skips the same way (`SkipsMembers`): every refusal of its step before a swap
+(`MemberRefusal`: the `busy:` fences such as `busy:combat` and `busy:dead`,
+`weapon_record_unavailable`, `recorded_weapon_unavailable`, `equipment_changed`,
+`cannot_equip_recorded_weapon`, `offhand_occupied`) and Tick's pre-step fence; a refusal after a
+swap stays `Unknown`. At its ack a rearm also leaves out a member admission fences for a reason of
+its own (his group's, `busy:raid_owner`) instead of refusing whole (`PartitionAtAck`): it reserves the
+rest, lists the fenced in the job's `skipped`, and is refused whole at a fence that is the job's own
+(`busy:training_cleanup`) or when every member is fenced. A one-member job still names its member
+(`guid`) by the admitted manifest (`DoneJobGuid`). When every member is skipped the job
+ends done, holding nobody. `changed: false` stays whole-job proof: skipped members leave the
+completed members' proof as it was.
+
 Old native omits the field, preserving the reason-based rules. Old minds ignore
-unknown wire fields and retain their existing settlement behaviour. Rolling the mind back past
-this change is different: the new mind stores `changed` in `realm_action` evidence, and an older
-mind cannot read such a row (its journal reads fail, so the Realm stops moving bodies until the
+unknown wire fields and retain their existing settlement behaviour (an older mind would rearm
+and default a skipped member with the rest, sending `nc -bg,-lfg` to a bot still in its
+battleground). An older mind also does not know the four group ack reasons: it settles such a
+refused leave `unknown` and holds its manifest, although native holds nobody (so the owner's
+`addN` is unaffected); the new mind's startup recheck of ack-only unknown roots settles it.
+Ship both together (`ac-release.sh --native`). That holds again for the rearm skip: the mind
+live before it rejects `skipped` on a rearm's evidence (the event matches nothing, so the rearm
+stays dispatched, holding its members), so native and mind ship in one `ac-release.sh --native`. Rolling the mind back past
+this change is different: the new mind stores `changed` (and `skipped`, `skipped_at`) in
+`realm_action` evidence, and an older mind cannot read such a row (its journal reads fail, so the Realm stops moving bodies until the
 key is stripped from those rows). Take a snapshot before deploying and roll back with it. Both a
 native rebuild and an updated mind are needed for the new proof to take effect.

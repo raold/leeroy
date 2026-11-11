@@ -15,6 +15,10 @@ from leeroy_mind.realm.actions import ActionContext, ActionQueue, ActionRejected
 from leeroy_mind.realm.action_policy import classify, document
 from leeroy_mind.realm.action_store import ActionSpec, ActionStore
 
+# Every reason native names members by at a leave's ack, in the order it checks them.
+LEAVE_REASONS = ["wg_private_state_unavailable", "cleanup_member_not_admitted", "shared_lfg_queue",
+                 "shared_group_leader", "shared_lfg_cleanup", "shared_group_cleanup"]
+
 
 def run(coro):
     return asyncio.run(coro)
@@ -276,7 +280,7 @@ def test_backoff_is_per_owner_kind_guid_for_600_seconds_and_history_bounded(harn
     run(scenario())
 
 
-@pytest.mark.parametrize("reason", ["wg_private_state_unavailable", "cleanup_member_not_admitted"])
+@pytest.mark.parametrize("reason", LEAVE_REASONS)
 def test_named_leave_backoff_filters_only_named_members_for_exactly_600_seconds(harness, reason):
     async def scenario():
         h = harness
@@ -292,6 +296,31 @@ def test_named_leave_backoff_filters_only_named_members_for_exactly_600_seconds(
         with pytest.raises(ActionRejected, match="backoff"):
             h.queue.submit(p.LeavePvp("too_soon", (102,)), owner="raid")
         assert h.queue.leave_backed_off("raid") == {102}
+        h.clock.value = 610
+        assert h.queue.leave_backed_off("raid") == set()
+        h.queue.submit(p.LeavePvp("later", (102,)), owner="raid")
+        await h.finish()
+    run(scenario())
+
+
+def test_members_a_completed_leave_skipped_are_backed_off_for_exactly_600_seconds(harness):
+    async def scenario():
+        h = harness
+        h.queue.submit(p.LeavePvp("leave", (101, 102, 103)), owner="raid")
+        await h.cycle(10)
+        h.ack("leave")
+        await h.cycle()
+        h.queue.on_realm_job(p.RealmJob(0, "leave", "leave_pvp", "done", "", 0, 2, "", None, (102,)))
+        await h.cycle()
+        assert (h.store.get("leave").state, h.store.get("leave").result_ok) == ("completed", True)
+        assert h.store.holds() == ()
+        assert h.queue.leave_backed_off("raid") == {102}
+        assert h.queue.leave_backed_off("realm_day") == set()
+        h.queue.submit(p.LeavePvp("rest", (101, 103)), owner="raid")
+        h.queue.submit(p.Rearm("rearm", (102,)), owner="raid")  # only its leaves wait
+        h.clock.value = 609.999
+        with pytest.raises(ActionRejected, match="backoff"):
+            h.queue.submit(p.LeavePvp("too_soon", (102, 104)), owner="raid")
         h.clock.value = 610
         assert h.queue.leave_backed_off("raid") == set()
         h.queue.submit(p.LeavePvp("later", (102,)), owner="raid")
