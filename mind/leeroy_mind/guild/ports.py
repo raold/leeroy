@@ -271,6 +271,14 @@ class LivePorts:
         from leeroy_mind.nightly.store import active_away
         return active_away(self.app.store)
 
+    def in_dungeon(self):
+        """Cast members the last cast snapshot put in a raid or 5-man map who have not changed
+        zone since: zone events are live, the snapshot's map is not, so a moved member is unknown."""
+        from .offline import INSTANCE_MAPS
+        live = self.app.world.members
+        return {g for g, m in self.app.store.cast().items()
+                if m.map in INSTANCE_MAPS and g in live and live[g].zone == m.zone}
+
     async def acquire_gpu(self, holder):
         arbiter = self.app.arbiter
         if arbiter is None:
@@ -379,5 +387,6 @@ class GuildPorts(Protocol):
     async def loot_lost(self, guid: int, item_name: str): ...
     def relationship(self, a: int, b: int) -> Relationship: ...
     def away(self) -> set[int]: ...
+    def in_dungeon(self) -> set[int]: ...
     async def acquire_gpu(self, holder: str): ...
     async def release_gpu(self, holder: str): ...

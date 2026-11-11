@@ -9,7 +9,9 @@ from leeroy_mind.voice import wire
 
 log = logging.getLogger(__name__)
 
-RECONNECT_S = 5.0  # of the clock, between tries
+RECONNECT_S = 5.0  # of the clock, between tries: after a session ends, and the first while down
+DOWN_RETRY_S = 60.0  # the wait doubles while the service stays down, up to this
+DOWN_LOG_S = 3600.0  # while it stays down, a count line at most this often
 HELLO_S = 5.0  # real seconds the service has to greet
 
 
@@ -32,17 +34,35 @@ class VoiceClient:
         self.status: wire.Status | None = None
 
     async def run(self) -> None:
+        """Connect, serve the session, and reconnect RECONNECT_S after it ends. While the
+        service stays down the wait doubles up to DOWN_RETRY_S, and the log has its first
+        failure, a count at most every DOWN_LOG_S and one line when it connects again."""
+        failures, down_since, logged = 0, 0.0, 0.0
         while not self._closing:
             try:
                 reader, writer = await asyncio.open_connection(
                     self._host, self._port, limit=wire.MAX_LINE_BYTES + 1)
             except OSError as exc:
-                log.info("voice_connect_failed: reason=%s", exc.__class__.__name__)
+                now = self._clock.now()
+                failures += 1
+                if failures == 1:
+                    down_since = logged = now
+                    log.info("voice_connect_failed: reason=%s", exc.__class__.__name__)
+                elif now - logged >= DOWN_LOG_S:
+                    logged = now
+                    log.info("voice_still_down: failures=%d down_s=%d reason=%s",
+                             failures, now - down_since, exc.__class__.__name__)
+                delay = min(RECONNECT_S * 2 ** min(failures - 1, 8), DOWN_RETRY_S)
             else:
+                if failures:
+                    log.info("voice_reconnected: failures=%d down_s=%d",
+                             failures, self._clock.now() - down_since)
+                    failures = 0
                 await self._session(reader, writer)
+                delay = RECONNECT_S
             if self._closing:
                 break
-            await self._clock.sleep(RECONNECT_S)
+            await self._clock.sleep(delay)
 
     async def _session(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         up = False
