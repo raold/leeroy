@@ -65,6 +65,9 @@ def recent(conn, guid: int, *, before: float) -> list[Line]:
     The id cursor and upper time bound use receipt order. Never select the owner's
     speech, other speakers' descriptions of this member, or game-generated chat.
     """
+    from leeroy_mind.personas.tiers import is_cast
+    if not is_cast(conn,guid):
+        return []
     return [Line(*tuple(r)) for r in conn.execute(
         "SELECT id,ts,text FROM chat_line WHERE from_guid=? AND origin='mind' AND id>? "
         'AND ts<? ORDER BY id LIMIT ?', (guid, cursor(conn, guid), before, MAX_LINES))]

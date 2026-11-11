@@ -14,6 +14,7 @@ mind.db without the tuning tables (an older schema) says so in `missing`."""
 import json
 
 from leeroy_mind.personas.schema import persona_from_dict
+from leeroy_mind.personas.tiers import is_cast
 from leeroy_mind.protocol import Member
 from leeroy_mind.tuning import changes as C
 from leeroy_mind.tuning import groups as G
@@ -34,6 +35,8 @@ def _have(conn) -> set[str]:
 def _personas(conn) -> dict:
     out = {}
     for r in conn.execute("SELECT guid, json, version FROM persona_core ORDER BY guid"):
+        if not is_cast(conn,r[0]):
+            continue
         try:
             out[r[0]] = (persona_from_dict(json.loads(r[1])), r[2])
         except (ValueError, TypeError):
@@ -47,6 +50,8 @@ def _cast(conn) -> dict:
     out = {}
     for r in conn.execute(f"SELECT {', '.join(cols)} FROM cast_member"):
         d = dict(zip(cols, r))
+        if not is_cast(conn,d["guid"]):
+            continue
         d["class_"] = d.pop("class")
         d["online"] = bool(d["online"])
         out[d["guid"]] = Member(**d)

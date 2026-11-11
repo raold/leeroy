@@ -527,7 +527,7 @@ terminated as before, keeping only what the server last saved; in that case type
 | `mod-dungeon-clear` | jrad7/mod-dungeon-clear | git clone since 2026-10-29 (was a zip of `60f3d98`). **The autonomous tank lead**: `.dc on` (or `dc on` in party chat) inside an instance makes the group's tank bot route boss to boss over the navmesh, pull (Dynamic/Leeroy/Advanced), run scripted events (all 16 WotLK 5-mans), loot, rest and rez. Raids too: trash flow with a readiness quorum, pre-boss muster, wipe recovery; boss fights are left to the playerbots raid strategies. Companion addon: jrad7/mod-dungeon-clear-addon. It hooks playerbots without patching it (appends to the shared context registries). Ships its own `.cmake`; folder name must stay exact. Reads `PlayerbotAIConfig` members directly, so it breaks when playerbots renames them. AGPL-3.0. |
 | `mod-bg-slaveryvalley` | zip (no git) | Custom battleground, map 801 / BG id 31. Server side complete; **client patch still undistributed** — see below. |
 | `mod-ah-bot-plus` | NathanHandley/mod-ah-bot-plus | Auction house bot (git clone since 2026-10-30). Sells under, and buys player auctions as, the ordinary account `ahbot` (auth id 352): characters Fatiggeritch (3502) and Bonqueefa (3503), set in `AuctionHouseBot.GUIDs` (comma list, no spaces). Never use a playerbot character for it, and never enter the world on those characters. Seller and buyer both on; everything else is the `.dist` default (about 150 listings a minute per house, up to 15000 each). GM commands: `.ahbot reload` (re-reads the conf, GUIDs included, no restart), `.ahbot update`, `.ahbot empty`. Loader `Addmod_ah_bot_plusScripts`, so the folder name must stay exact. No SQL. |
-| `mod-leeroy` | this repo, `modules/mod-leeroy` | The guild bridge. `azerothcore-wotlk/modules/mod-leeroy` is a **junction** to `F:\azerothcore\modules\mod-leeroy`: remove it with `rmdir`, never `rm -rf` (that deletes the source through the link). Pins the cast (guild members at 80+, minus `Leeroy.HumanGuid`) via the playerbots pin API, mutes them in mod-ollama-chat, and serves NDJSON on `Leeroy.Bridge.Host`:`Leeroy.Bridge.Port` (`127.0.0.1:7878`, one mind at a time). Keys: `Leeroy.Enable`, `GuildId`, `HumanGuid`, `KeepCast`, `BringCastOnline`, `ExcludeFromOllamaChat`, `Bridge.*`, `CastGuard` (the kick guard), `Realm.*` (see the Realm) and `Telemetry.Enable`/`Training.Enable` (see Training ground). Start line in `Server.log`: `mod-leeroy: cast N members, pinned N ...`. Smoke test: `python modules/mod-leeroy/tools/bridge_smoke.py --expect-cast N` (0 pass, 1 fail, 2 no server or another mind connected); `--listen S` prints events, `--send` sends raw commands. `owner_say` (the console's replies, separate from `human_say`) queues his chat line on his session: guild, officer, party, raid or a whisper to an online cast member; text is sanitized and then refused, not cut, when empty, over 255 UTF-8 bytes or starting with `.` or `!`; at most one line per 1500 ms and 8 per 30 s; he must be in game. Item links: hello lists `features: ["item_links"]`, and only then does the mind put `{{item:<id>}}` placeholders in a cast line (`say`, `realm_say`; `mind/leeroy_mind/talk/items.py`: bracketed or exact multi-word item names from library.db, never a place, NPC or test item unbracketed, kept as `[Name]` in every record, every line folded and defused after the wire's cleaning). Native sanitizes first and expands only a placeholder written whole in the raw text into the client's link from the item template, at most two a line within 255 bytes (`src/Lib/LeeroyItemLinks.*`), so no other `|` survives; a Realm channel hook sees the `[Name]` form, and its rewrite goes out without links. For the owner it answers `.playerbots bot add5/10/25/40` from his guild (see that patch below). |
+| `mod-leeroy` | this repo, `modules/mod-leeroy` | The guild bridge. `azerothcore-wotlk/modules/mod-leeroy` is a **junction** to `F:\azerothcore\modules\mod-leeroy`: remove it with `rmdir`, never `rm -rf` (that deletes the source through the link). Pins the cast (guild members at 80+, minus `Leeroy.HumanGuid`) via the playerbots pin API, mutes them in mod-ollama-chat, and serves NDJSON on `Leeroy.Bridge.Host`:`Leeroy.Bridge.Port` (`127.0.0.1:7878`, one mind at a time). Keys: `Leeroy.Enable`, `GuildId`, `HumanGuid`, `KeepCast`, `BringCastOnline`, `ExcludeFromOllamaChat`, `Bridge.*`, `CastGuard` (the kick guard), `Realm.*`/`World.Enable` (see the Realm; `get_world_roster` and `world_say`) and `Telemetry.Enable`/`Training.Enable` (see Training ground). Start line in `Server.log`: `mod-leeroy: cast N members, pinned N ...`. Smoke test: `python modules/mod-leeroy/tools/bridge_smoke.py --expect-cast N` (0 pass, 1 fail, 2 no server or another mind connected); `--listen S` prints events, `--send` sends raw commands. `owner_say` (the console's replies, separate from `human_say`) queues his chat line on his session: guild, officer, party, raid or a whisper to an online cast member; text is sanitized and then refused, not cut, when empty, over 255 UTF-8 bytes or starting with `.` or `!`; at most one line per 1500 ms and 8 per 30 s; he must be in game. Item links: hello lists `features: ["item_links"]`, and only then does the mind put `{{item:<id>}}` placeholders in a cast line (`say`, `realm_say`; `mind/leeroy_mind/talk/items.py`: bracketed or exact multi-word item names from library.db, never a place, NPC or test item unbracketed, kept as `[Name]` in every record, every line folded and defused after the wire's cleaning). Native sanitizes first and expands only a placeholder written whole in the raw text into the client's link from the item template, at most two a line within 255 bytes (`src/Lib/LeeroyItemLinks.*`), so no other `|` survives; a Realm channel hook sees the `[Name]` form, and its rewrite goes out without links. For the owner it answers `.playerbots bot add5/10/25/40` from his guild (see that patch below). |
 
 `mod-playerbots`, `mod-ollama-chat`, `mod-dungeon-clear` and `mod-ah-bot-plus` are
 git repos and `mod-leeroy` lives in this one; the rest are zip extractions and
@@ -1179,7 +1179,10 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   with the folds and read marks, `guild-console-collapsed` and
   `guild-console-read`). Beside it, Hide photos (`guild-console-photos`, applied before the first
   paint) draws every member's face as initials without asking for the photo, and blanks any
-  other photo (the gallery, the selfie picker) until it is switched back. It has 14 tabs (Comms, Raid, Guild, Personas, Social,
+  other photo (the gallery, the selfie picker) until it is switched back. Comms' Hide panel
+  (`guild-console-comms-panel`, also applied before the first paint; `comms/panel.mjs`) removes the
+  right column (the room's faces and the member card) so the feed takes its width; clicking a
+  member's face shows it again with their card. It has 14 tabs (Comms, Raid, Guild, Personas, Social,
   Board, Calendar, Bank, Realm, Training, Dojo, Library, Ops, Mind); each polls only
   while it is open and the page is visible, one request at a time. Ordinary reads have a
   30 s browser deadline, actions 120 s (long enough for a clean stop); an unanswered action
@@ -1421,6 +1424,22 @@ Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
   `gank_human`. `mind-data/realm/` holds `blocklist.txt` (never committed), `cards/`, `plans/`
   and `approved/`. Without the blocklist, or before the guild's name is cached (meta
   `realm:guild_name`, read once per hello), the screen fails closed and no rival speaks.
+- **World personas (optional).** `[world] enabled = true` admits native-verified
+  random-bot guilds outside ours. A native rebuild is required for `get_world_roster`
+  and `world_say`; both require `Leeroy.Realm.Enable = 1` and `Leeroy.World.Enable = 1`
+  (World defaults to 0; `.reload config` applies it). The mind's `realm` and `selfies`
+  opt-ins default false; world selfies also require `[selfies] enabled = true`.
+  Restart the mind after enabling. Caps are `world_per_night = 12` and
+  `world_selfies_per_night = 10`, with cast images first. Complete acknowledged
+  rosters expire after an hour. Refused roster ACKs log one code per process.
+  Existing Realm actors retain their moves, whispers and night beats; extra world
+  speakers use Trade/General only. A world bot joining the cast seeds a screened
+  newcomer persona at night only with `[personas] auto_newcomers = true`; otherwise
+  use `personas generate` with the mind stopped (doctor lists these missing cast
+  personas). Both paths retire old world selfie choices, retaining their files.
+  Retired outsiders retain their stored personas.
+  `personas world status|plan --data-dir PATH` reads counts without models or writes;
+  the console's World cards are read-only. See `leeroy_mind/world/README.md`.
 - **Whitelists.** Native reads `Leeroy.Realm.PlacesFile` and `Leeroy.Realm.ItemsFile`
   (`leeroy_places.csv`, `leeroy_items.csv`, copied from mod-leeroy's `conf/*.csv.dist`) at each
   `.reload config`, places only once the world is up (so the boot line says `places 0`). A
@@ -1658,6 +1677,8 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
   chosen photos. First fetch the pinned IP-Adapter: `fetch-models --only ipadapter`
   in the selfie worker environment; the command never downloads it. `--go` snapshots
   before migration and records the old looks/kind for `personas undo LEDGER_ID`.
+  New undo receipts retain the prior persona source; legacy receipts without it
+  keep the current source instead of marking a generated member owner-authored.
   Owner field-change evidence protects looks; old rows without such history fall
   back to current owner source. `--release GUID[,GUID...]` permits named protected
   members listed inside the current dry-run clusters. Hand-set photo kinds stay.
@@ -1886,6 +1907,7 @@ apart from this install. Read `dojo/README.md` before touching it.
   refuses a layout that overlaps them.
 
 ## Outstanding
+
 
 - `mod-bg-slaveryvalley` server data + client patch (above).
 - Zip-sourced modules (transmog, individual-progression, slaveryvalley) have no

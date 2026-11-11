@@ -22,7 +22,9 @@ function draw() {
   if (!failed.length) { return; }
   var last = Math.min.apply(null, failed.map(function (r) { return r.good; }));
   var age = last ? Math.max(0, Math.floor((Date.now() - last) / 1000)) : null;
-  var errors = Array.from(new Set(failed.map(r => r.error).filter(Boolean))).join(" ");
+  var banner = $(S.tab + "-banner");
+  var shown = banner && !banner.hidden ? banner.textContent : "";
+  var errors = Array.from(new Set(failed.map(r => r.error).filter(e => e && e !== shown))).join(" ");
   node.textContent = (errors ? errors + " " : "") + (age === null ? "Updates unavailable. Retrying; no successful answer yet." :
     "Stale: keeping the last good data, received " + age + " seconds ago. Retrying.");
 }
@@ -31,5 +33,6 @@ on("request-health", function (e) {
   if (!tab) { return; }
   READS.update(e.path, tab, e.ok, Date.now(), e.error); draw();
 });
+on("tab-banner", draw);
 // One page timer; no data polls and no DOM work in hidden pages.
 setInterval(function () { if (!document.hidden) { draw(); } }, 15000);

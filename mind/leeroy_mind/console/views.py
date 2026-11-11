@@ -4,6 +4,7 @@ import json
 import sqlite3
 
 from leeroy_mind.personas.schema import persona_from_dict
+from leeroy_mind.personas.tiers import is_cast
 
 
 def tables(conn) -> set[str]:
@@ -31,8 +32,10 @@ def meta_json(conn, key: str):
 
 def names(conn) -> dict[int, str]:
     """guid -> name: the cast's, then the character names of stored personas not in the cast."""
-    out = {r["guid"]: r["name"] for r in rows(conn, "SELECT guid, name FROM cast_member")}
+    out = {r["guid"]: r["name"] for r in rows(conn, "SELECT guid, name FROM cast_member") if is_cast(conn,r["guid"])}
     for r in rows(conn, "SELECT guid, json FROM persona_core"):
+        if not is_cast(conn,r["guid"]):
+            continue
         if r["guid"] in out:
             continue
         try:
