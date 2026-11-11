@@ -882,6 +882,19 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   events the bridge queued for the mind, so never run it while they matter.
 - Do not run `personas generate`/`seed` or a library build while the mind is
   live: they load another large model next to the live one and evict it.
+- Optional `[learn] enabled = true` records generation recipes in a savepoint
+  alongside outgoing chat and attaches the capped `rewards` night stage.
+  Read at startup: restart the mind after changing it. Missing/invalid settings
+  mean off; signals remain separately opt-in. Rewards screen game quality independently of the signals cap, including CLI nights,
+  after the 120-second observation window. Discord and voice rooms score measured
+  evidence only. Clean quality adds nothing; only observed owner responses earn
+  credit, with quality defects deducted. Silence scores zero. Later evidence updates
+  scores; raw values and local-day cap
+  weights are stored separately, with independent game/Discord caps. Owner
+  vetoes and fixed penalties override positive engagement. No talk decision or
+  prompt changes. `python -m leeroy_mind learn report --data-dir <data> --days 14`
+  reads aggregate scores without migration, including on older schemas. Coverage,
+  baseline units, caps and retry limits: `mind/leeroy_mind/learn/README.md`.
 - Optional `[talk] realism = true` adds bounded typing cadence, rare corrections and
   small reply bursts; default off, read at mind start and each login. Mind-only:
   no migration or native rebuild. It preserves authored/altered-state typing,

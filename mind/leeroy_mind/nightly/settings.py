@@ -30,6 +30,7 @@ class NightlySettings:
     wow_vs_life: int
     female_share: float
     data_dir: Path
+    learn_enabled: bool = False
     looks_diversity: bool = False
     grace_minutes: int = 10
     retry_minutes: int = 60
@@ -108,6 +109,7 @@ def load_life(path: Path) -> int:
 
 
 def load_settings(cfg: MindConfig, data_dir: Path) -> NightlySettings:
+    from leeroy_mind.learn.config import load_learn_config
     from leeroy_mind.personas.looks_diversity import enabled
     data_dir = Path(data_dir)
     return NightlySettings(
@@ -116,7 +118,8 @@ def load_settings(cfg: MindConfig, data_dir: Path) -> NightlySettings:
         relationship_speed=cfg.memory.relationship_speed, romance_dial=cfg.romance.dial,
         jealousy=cfg.romance.jealousy, chattiness=cfg.talk.chattiness,
         wow_vs_life=load_life(data_dir / "mind.toml"), female_share=cfg.cast.female_share,
-        data_dir=data_dir, looks_diversity=enabled(data_dir))
+        data_dir=data_dir, learn_enabled=load_learn_config(data_dir / "mind.toml").enabled,
+        looks_diversity=enabled(data_dir))
 
 
 def _at_six(day: date, tz: tzinfo) -> float:

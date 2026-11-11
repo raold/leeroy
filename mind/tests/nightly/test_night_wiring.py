@@ -26,6 +26,20 @@ def context(app):
     return app.nightly.run_night.__self__.make_ctx("2026-10-29", (1.0, 2.0))
 
 
+@pytest.mark.parametrize("enabled",[False,True])
+def test_learning_flag_remains_the_startup_choice_on_night_reload(h,enabled):
+    path = h.settings.data_dir / "mind.toml"
+    path.write_text(f"[learn]\nenabled={str(enabled).lower()}\n")
+    app = app_for(h)
+    try:
+        path.write_text(f"[learn]\nenabled={str(not enabled).lower()}\n")
+        assert context(app).settings.learn_enabled is enabled
+        assert app.engine.learn_enabled is enabled
+        assert ("rewards" in {s.name for s in app.night_runner.stages}) is enabled
+    finally:
+        run(app.stop())
+
+
 def test_attachment_registers_without_starting_and_reuses_app_dependencies(h):
     app = app_for(h)  # constructing outside an event loop must be safe
     try:

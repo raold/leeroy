@@ -114,14 +114,20 @@ def test_date_outfits_exclude_work_clothes():
 
 
 def test_restyle_snapshot_precedes_any_migration_or_write(h, capsys, monkeypatch):
+    import re
     from leeroy_mind import __main__ as main
-    from leeroy_mind.storage.db import latest_version
+    from leeroy_mind.storage.db import MIGRATIONS_DIR
     root = prepared(h)
-    previous_schema = latest_version() - 1
-    # Recreate the pre-feature schema; the snapshot must preserve that version.
+    files = sorted(MIGRATIONS_DIR.glob("[0-9][0-9][0-9][0-9]_*.sql"))
+    feature = next(int(p.name[:4]) for p in files if p.name[5:] == "photo_extra.sql")
+    previous_schema = feature - 1
+    # Recreate the pre-feature schema: this migration and every later one (each creates only
+    # its own tables, with their indexes and triggers) are pending again.
     with h.store.transaction():
-        h.store.conn.execute("DROP TABLE photo_extra")
-        h.store.conn.execute("DROP TABLE photo_style_history")
+        for p in files:
+            if int(p.name[:4]) >= feature:
+                for table in re.findall(r"^CREATE TABLE (\w+)", p.read_text(encoding="utf-8"), re.M):
+                    h.store.conn.execute(f"DROP TABLE {table}")
         h.store.conn.execute(f"PRAGMA user_version={previous_schema}")
     calls = []
     original = main._snapshot_file
