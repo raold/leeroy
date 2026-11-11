@@ -116,6 +116,11 @@ cached per Store at attach; disabled learning writes nothing.
 
 ## Recipes and inspection
 
+Preference export, held-out evaluation, optional guard-evidence capture and the
+manual training outline are documented in [FINETUNE.md](FINETUNE.md). All export
+and scoring commands operate on a scratch backup without source writes or model
+calls; capture is separately opt-in and does not train or alter talk decisions.
+
 The central outgoing-line commit writes its recipe in the same transaction as
 `chat_line`. Its primary key permits only one recipe per line. This includes
 game, voice and Discord delivery paths. The recipe uses a nested savepoint: a failed recipe rolls back only analytics,

@@ -248,6 +248,13 @@ class LiveReview:
                     self.vectors.popitem(last=False)
             else:
                 cached = {}
+            if getattr(e,'learn_capture_preferences',False) and cached:
+                try:
+                    from leeroy_mind.learn.capture import vectors as capture_vectors
+                    with e.store.transaction():
+                        capture_vectors(e.store.conn,context,cached,e.cfg.models.embedding)
+                except Exception:
+                    log.warning('learn_vector_capture_failed')
             draft = self.draft(turn, meta, text, history=context, embedding=embedding)
             verdict = await self.read(lambda conn:review(GuardStores(conn,self.config,self.claims_enabled,
                 history if is_discord(turn.channel) else (),cached if not is_discord(turn.channel) else {},

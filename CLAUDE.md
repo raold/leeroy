@@ -895,6 +895,13 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   prompt changes. `python -m leeroy_mind learn report --data-dir <data> --days 14`
   reads aggregate scores without migration, including on older schemas. Coverage,
   baseline units, caps and retry limits: `mind/leeroy_mind/learn/README.md`.
+  `learn export --out DIR` and `learn evalset --out DIR` mine private preference
+  pairs from scratch backups; the last week is held out. Git checkout output
+  paths are refused. `learn score --evalset DIR --candidates FILE` evaluates
+  supplied answers offline, without a model. Optional `capture_preferences = true`
+  under `[learn]` retains future confirmed guard rewrites and reuses existing
+  embeddings; default off, restart to change it. See `mind/leeroy_mind/learn/FINETUNE.md` for
+  privacy flags, coverage limits and optional manual training instructions.
 - Optional `[talk] realism = true` adds bounded typing cadence, rare corrections and
   small reply bursts; default off, read at mind start and each login. Mind-only:
   no migration or native rebuild. It preserves authored/altered-state typing,

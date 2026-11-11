@@ -351,6 +351,8 @@ class TurnMeta:
     recall_query: str = ""
     guard_verdict: str = "not_run"
     guard_rewritten: bool = False
+    preference_original: str = field(default='',repr=False)
+    preference_generation: str = ''
     guard_codes: tuple[str,...] = ()
 
 
@@ -1554,6 +1556,8 @@ class Pipeline:
                     meta.guard_verdict = "drop"
                     return drop("guard_rewrite_refused")
                 meta.guard_rewritten = True
+                if getattr(self,'learn_capture_preferences',False):
+                    meta.preference_original = '\n'.join(s.plain for s in lines)[:4001]
                 composed = composed or await self._compose(turn, meta, live=True)
                 hint = "Rewrite once to fix these guard codes: " + ", ".join(verdict.codes)
                 retry = replace(composed, messages=[*composed.messages,
@@ -2278,6 +2282,9 @@ class Pipeline:
                     try:
                         with self.store.transaction():
                             record_recipe(self.store.conn, line_id, turn, meta, p, self.cfg)
+                            if getattr(self,'learn_capture_preferences',False):
+                                from leeroy_mind.learn.capture import delivered
+                                delivered(self.store.conn,line_id,meta)
                     except Exception:
                         log.warning("learn_recipe_record_failed")
         else:

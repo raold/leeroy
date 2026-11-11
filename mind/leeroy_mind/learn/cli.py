@@ -42,13 +42,18 @@ def report(conn, *, days=14, now=None):
 def learn_main(argv=None):
     parser = argparse.ArgumentParser(prog="leeroy_mind learn")
     parser.add_argument("--data-dir")
-    command = parser.add_subparsers(dest="action", required=True).add_parser("report")
+    commands = parser.add_subparsers(dest="action", required=True)
+    command = commands.add_parser("report")
     command.add_argument("--data-dir", default=argparse.SUPPRESS)
     command.add_argument("--days", type=int, default=14)
+    from .preference_cli import add_parsers, run
+    add_parsers(commands)
     args = parser.parse_args(argv)
-    if not 1 <= args.days <= 3650:
+    if args.action == 'report' and not 1 <= args.days <= 3650:
         parser.error("--days must be between 1 and 3650")
     root = Path(args.data_dir).resolve() if args.data_dir else default_data_dir()
+    if args.action != 'report':
+        return run(args,root)
     try:
         with closing(sqlite3.connect(f"{(root / 'mind.db').resolve().as_uri()}?mode=ro", uri=True)) as conn:
             print(json.dumps(report(conn, days=args.days), sort_keys=True, allow_nan=False))
