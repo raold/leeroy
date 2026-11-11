@@ -548,6 +548,13 @@ std::string RealmModule::DeclareAffectedBodyScopes(std::string_view operation, s
     return "";
 }
 
+bool RealmModule::AwaitsTransition(std::string_view operation, std::uint32_t guid) const
+{
+    auto const found = _state->reservations.find(operation);
+    return found != _state->reservations.end()
+        && (found->second.declaredScopes.contains(guid) || found->second.pending.contains(guid));
+}
+
 RealmStep RealmModule::PerformGuildGrowJoin(std::string_view operation, std::uint32_t guid,
     std::uint32_t destination)
 {
@@ -657,15 +664,33 @@ bool RealmModule::AcceptDomain(Queued entry, std::string& error)
     // nothing changed. After realm_off, the exact-retry and receipt checks above, so those answer first.
     if (FencesLeavePvpAck(entry.kind, entry.payload.is_object() ? entry.payload.value("pvp_owner", std::string{}) : std::string{}))
         if (error = LeavePvpAckReason(entry); !error.empty()) return false;
+    std::vector<std::uint32_t> fenced;
+    std::string firstFence;
     for (auto guid : entry.guids)
     {
-        if (!(error = _state->executors.at(entry.kind).admit(entry, guid)).empty())
-            return false;
-        if (!(error = MutationReason(guid)).empty())
-            return false;
-        auto body = Identity(guid);
-        if (!body) { error = "busy:body_identity"; return false; }
-        reservation.bodies.emplace(guid, State::Lease{*body, _state->Generation(guid)});
+        std::string why = _state->executors.at(entry.kind).admit(entry, guid);
+        if (why.empty()) why = MutationReason(guid);
+        std::optional<BodyIdentity> body;
+        if (why.empty() && !(body = Identity(guid))) why = "busy:body_identity";
+        if (why.empty())
+        {
+            reservation.bodies.emplace(guid, State::Lease{*body, _state->Generation(guid)});
+            continue;
+        }
+        // Every other kind is refused whole. A rearm leaves the fenced member out (in his group,
+        // say), reserving and touching nothing of it, and its terminal job names it as skipped.
+        if (!LeavesOutAtAck(entry.kind)) { error = std::move(why); return false; }
+        if (firstFence.empty()) firstFence = why;
+        fenced.push_back(guid);
+    }
+    // Nobody left to rearm: refused whole, as before.
+    if (reservation.bodies.empty()) { error = firstFence.empty() ? "bad field: guids" : firstFence; return false; }
+    if (!fenced.empty())
+    {
+        std::erase_if(entry.guids, [&](auto guid) { return !reservation.bodies.contains(guid); });
+        entry.payload["skipped"] = fenced; // The admitted reservation keeps the exact wire command.
+        LOG_INFO("module.leeroy", "mod-leeroy: realm {} {} left out {} of {} at its ack, first guid={} reason={}",
+            entry.kind, entry.id, fenced.size(), reservation.admitted.guids.size(), fenced.front(), firstFence);
     }
     auto const id = entry.id;
     // No yield splits admission, reservation and deferred queue insertion.
@@ -956,17 +981,70 @@ void RealmModule::Tick(std::uint32_t diff)
         };
         bool const pending = reservation.pending.contains(guid);
         auto const lease = reservation.bodies.find(guid);
+        // What a skip of this member needs besides its own step's proof: a kind whose members are
+        // independent, the member's own reason, and nothing else in the job touching its body.
+        auto skipProof = [&](std::string const& why)
+        {
+            MemberSkipProof proof;
+            proof.kind = SkipsMembers(entry.kind);
+            proof.memberReason = MemberSkipReason(why);
+            proof.declaredScopes = reservation.declaredScopes.contains(guid);
+            proof.continuation = !reservation.continuation.empty();
+            proof.touchedByCleanup = entry.kind == "leave_pvp" && TouchedByCleanup(entry, guid);
+            return proof;
+        };
+        // After a completed or skipped step: the next member, or the job's end.
+        auto advance = [&]
+        {
+            ++entry.cursor;
+            if (entry.cursor < entry.guids.size())
+                return false;
+            if (!guildManifestClean()) return finish("guild_manifest_unproved", true);
+            auto value = reservation.value;
+            // A one-member command names its member; members left out at the ack do not count.
+            bool const single = reservation.admitted.guids.size() == 1;
+            _state->Release(entry.id);
+            PublishOutcome(entry, {entry.id, entry.kind, true, "", single ? guid : 0, value, "",
+                std::nullopt, SkippedMembers(entry)});
+            return true;
+        };
+        // Only this member's lease ends; the others go on, and the job's event names it.
+        auto skip = [&](std::string const& why)
+        {
+            reservation.bodies.erase(guid);
+            reservation.pending.erase(guid);
+            if (Holder(guid) == entry.id) _state->holders.erase(guid);
+            if (!entry.payload.contains("skipped")) entry.payload["skipped"] = nlohmann::json::array();
+            entry.payload["skipped"].push_back(guid);
+            LOG_INFO("module.leeroy", "mod-leeroy: realm {} {} skipped guid={} reason={}", entry.kind, entry.id, guid, why);
+            return advance();
+        };
+        // Tick's own fence refused this member before its executor ever ran. With no pending entry
+        // at all it has had no step, so nothing in its own step changed it; it is skipped when
+        // nothing else in the job touched it either. Otherwise the old rule.
+        auto fenced = [&](std::string why)
+        {
+            auto proof = skipProof(why);
+            proof.stepRan = false;
+            proof.pendingStep = pending;
+            if (lease == reservation.bodies.end() || !AcceptsMemberSkip(proof))
+                return finish(std::move(why), pending, false, !pending);
+            // The manifest's last member makes a leave's final readback of the members still held.
+            if (entry.kind == "leave_pvp")
+                if (auto failed = SkipReadback(entry, guid); !failed.empty()) return finish(std::move(failed), true);
+            return skip(why);
+        };
         auto before = Identity(guid, pending);
         auto reason = MutationReason(guid, entry.id);
-        if (!reason.empty()) return finish(reason, pending, false, !pending);
+        if (!reason.empty()) return fenced(std::move(reason));
         if (!before || lease == reservation.bodies.end()
             || _state->CheckLease(reservation, guid, before,
                 pending ? reservation.pending.at(guid) : std::vector<BodyScope>{}) != LeaseCheck::Exact)
-            return finish("body_identity_changed", pending, false, !pending);
+            return fenced("body_identity_changed");
         auto executor = _state->executors.find(entry.kind);
         if (executor == _state->executors.end()) return finish("unsupported", pending, false, !pending);
         if (auto admission = executor->second.admit(entry, guid); !admission.empty())
-            return finish(admission, pending, false, !pending);
+            return fenced(std::move(admission));
         RealmStep result;
         struct ActiveStep
         {
@@ -1040,34 +1118,19 @@ void RealmModule::Tick(std::uint32_t diff)
             // The exact check above found the body as admitted. Nothing else in the job may expect,
             // declare or await a transition for it; otherwise the member stays unproved, retained.
             auto const awaited = reservation.pending.find(guid);
-            if (!AcceptsMemberSkip({entry.kind == "leave_pvp", result.unchanged, true, !result.expectedScopes.empty(),
-                    reservation.declaredScopes.contains(guid),
-                    awaited != reservation.pending.end() && !awaited->second.empty(), !reservation.continuation.empty()}))
-                return finish(result.reason.empty() ? "leave_skip_unproved" : result.reason, true);
-            // Only this member's lease ends; the others go on, and the job's event names it.
-            reservation.bodies.erase(guid);
-            reservation.pending.erase(guid);
-            if (Holder(guid) == entry.id) _state->holders.erase(guid);
-            if (!entry.payload.contains("skipped")) entry.payload["skipped"] = nlohmann::json::array();
-            entry.payload["skipped"].push_back(guid);
-            LOG_INFO("module.leeroy", "mod-leeroy: realm {} {} skipped guid={} reason={}",
-                entry.kind, entry.id, guid, result.reason);
+            auto proof = skipProof(result.reason);
+            proof.stepUnchanged = result.unchanged;
+            proof.exact = true;
+            proof.expectedScopes = !result.expectedScopes.empty();
+            proof.pendingScopes = awaited != reservation.pending.end() && !awaited->second.empty();
+            if (!AcceptsMemberSkip(proof))
+                return finish(result.reason.empty() ? "member_skip_unproved" : result.reason, true);
+            return skip(result.reason);
         }
-        else
-        {
-            reservation.completedUnchanged = reservation.completedUnchanged && result.unchanged;
-            if (!reservation.declaredScopes.contains(guid)) reservation.pending.erase(guid);
-            reservation.value = result.value;
-        }
-        ++entry.cursor;
-        if (entry.cursor < entry.guids.size())
-            return false;
-        if (!guildManifestClean()) return finish("guild_manifest_unproved", true);
-        auto value = reservation.value;
-        _state->Release(entry.id);
-        PublishOutcome(entry, {entry.id, entry.kind, true, "", entry.guids.size() == 1 ? guid : 0, value, "",
-            std::nullopt, SkippedMembers(entry)});
-        return true;
+        reservation.completedUnchanged = reservation.completedUnchanged && result.unchanged;
+        if (!reservation.declaredScopes.contains(guid)) reservation.pending.erase(guid);
+        reservation.value = result.value;
+        return advance();
     });
     if (!_state->continuationsFirst) TickContinuations(budget);
     DrainGuildOutcomes();

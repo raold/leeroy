@@ -34,19 +34,62 @@ LEEROY_TEST(RealmFailure_PublishesOnlyExplicitFailedJobKnowledge)
     CHECK(!MakeRealmJob(job).contains("changed")); // Never a successful job's refusal proof.
 }
 
-LEEROY_TEST(RealmFailure_AcceptsASkipOnlyForAnUntouchedOrdinaryLeaveMember)
+LEEROY_TEST(RealmFailure_OnlyIndependentMembersAndTheirOwnReasonsSkip)
 {
-    MemberSkipProof const clean{true, true, true};
+    CHECK(SkipsMembers("leave_pvp"));
+    CHECK(SkipsMembers("rearm"));
+    for (auto kind : {"duel", "realm_move", "guild_grow", "guild_fishing", "rpg_status", "equip", "set_profession",
+        "transmog_set", "bot_do", ""})
+        CHECK(!SkipsMembers(kind));
+    // 2026-11-10/11: every overnight rearm of 143 refused whole for one member in combat or dead.
+    for (auto reason : {"busy:combat", "busy:dead", "busy:offline", "busy:teleport", "busy:duel", "not_actor",
+        "weapon_record_unavailable", "recorded_weapon_unavailable", "equipment_changed",
+        "cannot_equip_recorded_weapon", "offhand_occupied", "busy:raid_owner", "busy:training_state",
+        "busy:body_scope_changed", "body_identity_changed", "shared_group_leader", "entry_point_unavailable"})
+        CHECK(MemberSkipReason(reason));
+    for (auto reason : {"realm_off", "busy:operation_identity", "busy:realm_owner", "unsupported", ""})
+        CHECK(!MemberSkipReason(reason));
+    // His group's members (busy:raid_owner at the ack) no longer refuse a whole rearm; a leave keeps
+    // its whole-command ack refusals.
+    CHECK(LeavesOutAtAck("rearm"));
+    for (auto kind : {"leave_pvp", "duel", "realm_move", "guild_grow", "equip", ""})
+        CHECK(!LeavesOutAtAck(kind));
+}
+
+LEEROY_TEST(RealmFailure_AcceptsASkipOnlyForAnUntouchedMember)
+{
+    MemberSkipProof clean;
+    clean.kind = true; clean.memberReason = true; clean.stepUnchanged = true; clean.exact = true;
     CHECK(AcceptsMemberSkip(clean));
     CHECK(!AcceptsMemberSkip({}));
     auto without = [&](auto change) { auto proof = clean; change(proof); return AcceptsMemberSkip(proof); };
-    CHECK(!without([](auto& p) { p.leave = false; }));          // Only a leave skips a member.
+    CHECK(!without([](auto& p) { p.kind = false; }));           // Only a leave or a rearm skips a member.
+    CHECK(!without([](auto& p) { p.memberReason = false; }));   // A reason about the job itself.
     CHECK(!without([](auto& p) { p.stepUnchanged = false; }));  // Its own step changed it, or did not say.
     CHECK(!without([](auto& p) { p.exact = false; }));          // The body is not as admitted.
     CHECK(!without([](auto& p) { p.expectedScopes = true; }));  // The step expects a transition.
     CHECK(!without([](auto& p) { p.declaredScopes = true; }));  // An earlier shared cleanup touched it.
     CHECK(!without([](auto& p) { p.pendingScopes = true; }));   // A transition is awaited.
     CHECK(!without([](auto& p) { p.continuation = true; }));    // A native continuation owns it.
+    CHECK(!without([](auto& p) { p.touchedByCleanup = true; })); // A shared cleanup changed it.
+    CHECK(without([](auto& p) { p.pendingStep = true; }));      // Its own step waited (tick budget), unchanged.
+}
+
+LEEROY_TEST(RealmFailure_AcceptsAPreStepSkipOnlyForAMemberWhoseStepNeverRan)
+{
+    // Tick's own fence (its lease, its holder fences, its admission) refused it before its executor
+    // ran: a battleground that ended under a member still waiting its turn, a bot that logged out.
+    MemberSkipProof fenced;
+    fenced.kind = true; fenced.memberReason = true; fenced.stepRan = false;
+    CHECK(AcceptsMemberSkip(fenced)); // Neither its own step's proof nor an exact body is needed.
+    auto without = [&](auto change) { auto proof = fenced; change(proof); return AcceptsMemberSkip(proof); };
+    CHECK(!without([](auto& p) { p.pendingStep = true; }));     // Its step ran before; it may have begun.
+    CHECK(!without([](auto& p) { p.pendingScopes = true; }));
+    CHECK(!without([](auto& p) { p.declaredScopes = true; }));  // An earlier shared cleanup declared it.
+    CHECK(!without([](auto& p) { p.touchedByCleanup = true; }));
+    CHECK(!without([](auto& p) { p.continuation = true; }));
+    CHECK(!without([](auto& p) { p.kind = false; }));
+    CHECK(!without([](auto& p) { p.memberReason = false; }));   // busy:operation_identity, busy:realm_owner.
 }
 
 LEEROY_TEST(RealmFailure_TheJobEventNamesSkippedMembersOnlyWhenThereAreSome)
@@ -64,4 +107,12 @@ LEEROY_TEST(RealmFailure_TheJobEventNamesSkippedMembersOnlyWhenThereAreSome)
     CHECK_EQ(failed.at("state"), "failed");
     CHECK(failed.at("skipped") == nlohmann::json::array({1306, 304}));
     CHECK(!failed.contains("changed"));
+    // A rearm whose every member was in combat or dead still ends done, naming them all.
+    RealmJob rearm{"rearm", "rearm", true, "", 0, 0};
+    rearm.skipped = {101, 102};
+    auto all = MakeRealmJob(rearm);
+    CHECK_EQ(all.at("kind"), "rearm");
+    CHECK_EQ(all.at("state"), "done");
+    CHECK(all.at("skipped") == nlohmann::json::array({101, 102}));
+    CHECK_EQ(all.at("value"), 0u);
 }
