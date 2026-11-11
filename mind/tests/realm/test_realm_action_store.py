@@ -810,9 +810,13 @@ def test_a_kind_step_refusal_is_said_only_by_its_executor_and_only_as_a_refuse_b
         first_swap = step.index("SwapItem(")
         for reason in sorted(reasons):
             quoted = f'"{reason}"'
-            # Nowhere else in native says it, so no other kind's failure can carry it.
-            assert [f.name for f in src.rglob("*") if f.is_file() and quoted in f.read_text(encoding="utf-8")] \
-                == ["RealmBodies.cpp"]
+            # Nowhere else in native says it, so no other kind's failure can carry it. The member skip
+            # allow-list (LeeroyRealmFailure.h MemberSkipReasons) only names it.
+            assert sorted(f.name for f in src.rglob("*") if f.is_file() and quoted in f.read_text(encoding="utf-8")) \
+                == ["LeeroyRealmFailure.h", "RealmBodies.cpp"]
+            failure = (src / "Lib/LeeroyRealmFailure.h").read_text(encoding="utf-8")
+            start = failure.index("MemberSkipReasons[] = {")
+            assert failure.count(quoted) == failure[start:failure.index("};", start)].count(quoted) == 1
             assert bodies.count(quoted) == step.count(quoted) >= 1
             assert f"Unknown({quoted})" not in step
             at = 0
