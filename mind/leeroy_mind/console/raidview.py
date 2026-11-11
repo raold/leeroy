@@ -67,8 +67,11 @@ def _guids(value) -> list[int]:
 def people(conn) -> dict[int, dict]:
     """The cast as the console names them: game facts from cast_member, and from each persona
     only its guild role, officer title and raid role."""
+    from leeroy_mind.personas.tiers import is_cast
     plays = {}
     for row in _rows(conn, "SELECT guid, json FROM persona_core"):
+        if not is_cast(conn,row["guid"]):
+            continue
         try:
             play = json.loads(row["json"]).get("play") or {}
         except (TypeError, ValueError, AttributeError):
@@ -79,6 +82,8 @@ def people(conn) -> dict[int, dict]:
     out = {}
     for r in _rows(conn, "SELECT guid, name, class, level, rank, online, map, zone, spec_tab "
                          "FROM cast_member"):
+        if not is_cast(conn,r["guid"]):
+            continue
         play = plays.get(r["guid"], dict.fromkeys(_PLAY_KEYS, ""))
         out[r["guid"]] = {
             "guid": r["guid"], "name": r["name"], "class": r["class"], "level": r["level"],

@@ -35,9 +35,10 @@ def make_stage(cfg: SelfieCfg, *, worker: Callable[[], SelfieWorker] | None = No
 
 
 def _count(ctx: "NightContext") -> int:
+    from .render import allows
     members = [g for g in ctx.members(include_away=True) if _held(ctx, _stored(ctx, g)) is None]
     return min(ctx.settings.selfie_per_night,
-               len(queued_sets(ctx.store)) + len(needing_first(ctx.store, members)))
+               sum(allows(ctx,s.guid) for s in queued_sets(ctx.store)) + len(needing_first(ctx.store, members)))
 
 
 register_counter(STAGE, _count)

@@ -9,6 +9,7 @@
 #include "RealmBank.h"
 #include "RealmMail.h"
 #include "RealmCalendar.h"
+#include "RealmWorld.h"
 #include "Guild/GuildFishing.h"
 #include "ScriptMgr.h"
 
@@ -39,6 +40,7 @@ void RegisterRealmHandlers()
     RegisterRealmBankHandlers();
     RegisterRealmMailHandlers();
     RegisterRealmCalendarHandlers();
+    RegisterWorldRosterHandler();
     RegisterCommand("realm_actors", [](nlohmann::json const& message)
     {
         std::string error;

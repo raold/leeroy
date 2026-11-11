@@ -785,6 +785,7 @@ class ConsoleApp:
                   ("GET", "/api/guild"): self._api_guild,
                   ("GET", "/api/social"): self._api_social,
                   ("GET", "/api/realm"): self._api_realm,
+                  ("GET", "/api/world/personas"): self._api_world_personas,
                   ("GET", "/api/calendar"): self._api_calendar,
                   ("GET", "/api/board"): self._api_board,
                   ("GET", "/api/discord"): self._api_discord,
@@ -1061,6 +1062,19 @@ class ConsoleApp:
                                                              f"({type(e).__name__})"})
         return json_response(200, personaview.roster_page(view, offset))
 
+    async def _api_world_personas(self, req: Request):
+        from ..world.view import cards
+        if set(req.query)-{"offset","guild"}:
+            return json_response(400,{"ok":False,"error":"Unknown world filter."})
+        values = {}
+        for key in ("offset","guild"):
+            raw = req.query.get(key,["0"])
+            value = digits(raw[0],10) if len(raw)==1 else None
+            if value is None or value < 0 or value > (8192 if key=="offset" else 0xFFFFFFFF):
+                return json_response(400,{"ok":False,"error":"Invalid world filter."})
+            values[key] = value
+        return await self._db_view("world_personas",cards,**values)
+
     async def _api_persona(self, req: Request):
         values = req.query.get("guid", [])
         guid = digits(values[0], 10) if len(values) == 1 else None
@@ -1113,6 +1127,12 @@ class ConsoleApp:
         if guid is None or not 0 < guid < 1 << 32 or len(sizes) != 1 or sizes[0] not in faces.SIZES:
             return json_response(400, {"ok": False, "error": "guid: one member's guid; size: sm, md or lg"})
         data = await asyncio.to_thread(faces.read_face, self.s.data_dir, guid)
+        if data is None:
+            from ..world.view import face as world_face
+            try:
+                data = await asyncio.to_thread(feed.read,self.s.data_dir/"mind.db",world_face,self.s.data_dir,guid)
+            except Exception:
+                data = None
         if data is None:
             return text(404, "no photo")
         return Response(200, data, "image/jpeg", [("Cache-Control", "private, max-age=60"),

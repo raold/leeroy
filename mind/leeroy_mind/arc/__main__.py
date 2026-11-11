@@ -34,7 +34,8 @@ def _refusal(raw: sqlite3.Connection, guid: int) -> str | None:
     human = raw.execute("SELECT value FROM meta WHERE key = 'human_guid'").fetchone()
     if human is None or not str(human[0]).isdigit() or int(human[0]) == 0:
         return "mind.db does not know his guid yet (meta human_guid)"
-    if raw.execute("SELECT 1 FROM persona_core WHERE guid = ?", (guid,)).fetchone() is None:
+    from leeroy_mind.personas.tiers import is_cast
+    if not is_cast(raw,guid) or raw.execute("SELECT 1 FROM persona_core WHERE guid = ?", (guid,)).fetchone() is None:
         return f"{guid}: no persona"
     stage = raw.execute("SELECT romance_stage FROM relationship WHERE a = ? AND b = ?",
                         (guid, int(human[0]))).fetchone()

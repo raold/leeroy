@@ -1,6 +1,7 @@
 import { $, api, arr, cell, clear, el, emit, emptyRow, num, obj, on, own, plural, post, recall, refused,
          remember, setText, str } from "./core.mjs";
 import { face } from "./faces.mjs";
+import { pollWorld } from "./world.mjs";
 import { appendInsightBadges, pollInsight, selectInsight } from "./insight.mjs";
 import { photoButton } from "./gallery.mjs";
 import { nudgeBadges, nudgeFocus, nudgePanel } from "./nudges.mjs";
@@ -20,6 +21,16 @@ var BY = { seed: "the seeding", owner: "you (an import or a personas command)", 
 var LEDGER_KINDS = { note_added: "note added", note_dropped: "note dropped", note_rolled_back: "note rolled back (drift)",
                      drift_flag: "drift flag", stance_band: "stance move", variety: "variety pass", undo: "undo" };
 var personasTimer = null, personasBusy = false, pick = 0, pickSeq = 0, reveal = false;
+function worldMode() { return $("p-world-filter").checked; }
+$("p-world-filter").addEventListener("change", function () {
+  pick = 0; pickSeq += 1;
+  $("p-detail").hidden = true;
+  $("p-world").hidden = !worldMode();
+  $("p-selfies").parentNode.hidden = worldMode();
+  $("p-tuning").hidden = worldMode();
+  paging.hidden = worldMode();
+  pollPersonas();
+});
 var rosterOffset = 0, rosterPage = null, rosterDrawn = "";
 var paging = el("div", "roster-pages"), previousPage = el("button", "", "Previous members"),
     nextPage = el("button", "", "Next members"), pageWords = el("span", "muted");
@@ -194,6 +205,7 @@ function renderWall(v) {
   nudgeBadges(tuneView());
 }
 function pollPersonas() {
+  if (worldMode()) { if (S.tab === "personas") pollWorld($("p-world")); return; }
   if (personasBusy || S.tab !== "personas") { return; }
   personasBusy = true;
   var requestedOffset = rosterOffset;
@@ -201,7 +213,7 @@ function pollPersonas() {
     if (refused(r)) { return null; }
     return r.json().then(function (j) { return { status: r.status, j: j }; });
   }).then(function (x) {
-    if (!x || requestedOffset !== rosterOffset) { return; }
+    if (!x || requestedOffset !== rosterOffset || worldMode()) { return; }
     if (x.status === 200) { renderPersonas(x.j); }
     else { $("personas-banner").textContent = str(x.j.error) || "mind.db could not be read."; $("personas-banner").hidden = false; }
   }, function () { /* the strip says it */ })
@@ -214,6 +226,7 @@ function pollPersonas() {
 
 var shownFace = null;
 function renderMember(j) {
+  if (worldMode()) return;
   var m = obj(j.member), c = j.card ? obj(j.card) : null, p = m.persona, days = num(j.recent_days) || 7;
   var missing = arr(j.missing), traits = obj(obj(m.drift).traits), values = obj(traits.values);
   $("p-detail").hidden = false;

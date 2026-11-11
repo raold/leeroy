@@ -23,23 +23,30 @@ def canonical_json(p: Persona) -> str:
 
 
 def save_persona(store: Store, p: Persona, *, source: str, ts: float, race: str,
-                 class_name: str) -> int:
+                 class_name: str, include_world: bool = False, level: int | None = None) -> int:
     """Validate and store a persona; returns its version. Saving an identical persona with the
     same card (race and class unchanged) changes nothing and returns the current version. An
     effective (tuned) persona is refused: the owner's dials are an overlay, never written into
     persona_core (tuning.effective)."""
     if is_effective(p):
         raise TypeError("an effective (tuned) persona is never saved: save the stored one")
+    from .tiers import is_cast
+    if not include_world and not is_cast(store.conn,p.guid):
+        raise ValueError("world_persona_read_only")
     errs = validate_persona(p)
     if errs:
         raise PersonaError(errs)
     js = canonical_json(p)
     card = render_core_card(p, race=race, class_name=class_name)
+    if include_world and level is not None:
+        if type(level) is not int or not 1 <= level <= 255:
+            raise ValueError("world_level_invalid")
+        card = f"Character level: {level}.\n" + card
     with store.transaction():
-        current = store.get_persona_json(p.guid)
+        current = store.get_persona_json(p.guid,include_world=True) if include_world else store.get_persona_json(p.guid)
         if (current is not None and _canonical_text(current) == js
-                and store.get_card(p.guid) == card):
-            return store.persona_versions()[p.guid]
+                and (store.get_card(p.guid,include_world=True) if include_world else store.get_card(p.guid)) == card):
+            return store.persona_versions(tier=None)[p.guid] if include_world else store.persona_versions()[p.guid]
         return store.put_persona(p.guid, js, card, estimate_tokens(card), source, ts)
 
 
@@ -50,10 +57,10 @@ def _canonical_text(js: str) -> str | None:
         return None
 
 
-def load_persona(store: Store, guid: int) -> Persona | None:
+def load_persona(store: Store, guid: int, *, include_world: bool = False) -> Persona | None:
     """The stored persona, as written: the reader for every writer (attraction, enrichment,
     imports, seed, generate, rebalance, typing fixes) and for exports."""
-    js = store.get_persona_json(guid)
+    js = store.get_persona_json(guid,include_world=True) if include_world else store.get_persona_json(guid)
     return None if js is None else persona_from_dict(json.loads(js))
 
 
@@ -197,7 +204,8 @@ class PersonaCache:
     in a new one with set_tuning when the owner changes a dial. `tuning=False`: stored
     personas only, as before tuning existed."""
 
-    def __init__(self, store: Store, *, tuning: bool = True):
+    def __init__(self, store: Store, *, tuning: bool = True, include_world: bool = False):
+        self._include_world = include_world
         self._store = store
         self._tuned = tuning
         self._base: dict[int, Persona] = {}
@@ -222,10 +230,13 @@ class PersonaCache:
         """The stored persona, or None when there is none or it cannot be read (a row from a
         newer schema, say): one bad row must not silence the whole guild. An unreadable guid
         is logged once and not read again until invalidated (the app does at each session)."""
+        from .tiers import is_cast
+        if not self._include_world and not is_cast(self._store.conn,guid):
+            return None
         p = self._base.get(guid)
         if p is None and guid not in self._unreadable:
             try:
-                p = load_persona(self._store, guid)
+                p = load_persona(self._store, guid, include_world=self._include_world)
             except ValueError as e:  # PersonaError, and a JSON error alike
                 self._unreadable.add(guid)
                 log.warning("persona_unreadable: guid %d: %s", guid, str(e)[:200])
@@ -236,6 +247,9 @@ class PersonaCache:
 
     def get(self, guid: int) -> Persona | None:
         """The effective persona (see the class docstring), or None as base() is."""
+        from .tiers import is_cast
+        if not self._include_world and not is_cast(self._store.conn,guid):
+            return None
         p = self._cache.get(guid)
         if p is not None:
             return p
@@ -251,7 +265,8 @@ class PersonaCache:
         return p
 
     def all(self) -> dict[int, Persona]:
-        return {g: p for g in sorted(self._store.persona_versions())
+        versions = self._store.persona_versions(tier=None) if self._include_world else self._store.persona_versions()
+        return {g: p for g in sorted(versions)
                 if (p := self.get(g)) is not None}
 
     def invalidate(self, guid: int | None = None) -> None:
