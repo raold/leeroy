@@ -883,6 +883,14 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 - Guild life (raid nights, DKP and loot, offline raids, rank, spec and gear
   upkeep) runs with built-in defaults; `[guild]` and `[dkp]` tables in
   `mind.toml` override them.
+- An offline raid start refused for one named roster member (`in_instance:<guid>`,
+  `busy:realm_owner:<guid>`, `busy:realm_group:<guid>`, `busy:<guid>`, `not_cast:<guid>`,
+  `leader_unavailable:*` for the leader, also inside a `setup:<stage>:` failure) leaves that
+  member out of every plan for the rest of the day (day meta `excluded`): the bench fills the
+  seat and the leader rules pick another tank. The retry keeps its delay (60 s for `not_cast`),
+  `MAX_ATTEMPTS` and the GPU lease. Planning also leaves out members the last cast snapshot put
+  in a raid or 5-man map who have not changed zone since. A roster that is then too small or has
+  no tank waits 15 minutes (`offline_raid_waiting`) instead of sending or ending the day.
 - Offline raids publish a running `job` heartbeat every 60 s with kills, wipes,
   `members_in_instance` (the exact map and instance), `last_progress_ts` (Unix ms;
   start, boss engage, kill or wipe), and `boss_engaged` when native can read the
