@@ -13,7 +13,7 @@ from .harness import Rehearsal
 
 
 @pytest.fixture
-def rehearsal(tmp_path, monkeypatch):
+def rehearsal(tmp_path, monkeypatch, pytestconfig):
     try:
         import playwright.async_api as playwright
     except ImportError:
@@ -25,14 +25,22 @@ def rehearsal(tmp_path, monkeypatch):
     @asynccontextmanager
     async def start(*, width=1440, theme="dark", state="running"):
         # A rehearsal that runs past 75 s prints every asyncio task's stack once, so a
-        # wait with no deadline names itself before the job's timeout cancels it.
+        # wait with no deadline names itself before the job's timeout cancels it. Capture
+        # is suspended for it: a job killed mid-test never shows captured output.
         loop = asyncio.get_running_loop()
+        capture = pytestconfig.pluginmanager.getplugin("capturemanager")
         def dump():
-            print("\n--- asyncio tasks after 75 s ---", file=sys.stderr)
-            for task in asyncio.all_tasks(loop):
-                task.print_stack(file=sys.stderr)
-            sys.stderr.flush()
-        watchdog = threading.Timer(75, lambda: loop.call_soon_threadsafe(dump))
+            with capture.global_and_fixture_disabled():
+                print("\n--- asyncio tasks after 75 s ---", file=sys.stderr)
+                for task in asyncio.all_tasks(loop):
+                    task.print_stack(file=sys.stderr)
+                sys.stderr.flush()
+        def fire():
+            try:
+                loop.call_soon_threadsafe(dump)
+            except RuntimeError:  # the loop closed before the timer was cancelled
+                pass
+        watchdog = threading.Timer(75, fire)
         watchdog.daemon = True
         watchdog.start()
         try:
