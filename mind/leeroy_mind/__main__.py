@@ -718,6 +718,12 @@ def _screened(fn, human) -> dict:
 
 
 def cmd_personas(args) -> int:
+    if args.action == "undo":
+        from .nightly.cli import nightly_main
+        argv = ["undo",str(args.id)]
+        if args.data_dir:
+            argv.extend(["--data-dir",str(args.data_dir)])
+        return nightly_main(argv)
     from .app import AlreadyRunning
     try:
         with _open_store(args) as (root, store):
@@ -1351,6 +1357,8 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     p_pers = sub.add_parser("personas", help="export, import or show persona cards")
     _add_data_dir(p_pers)
     psub = p_pers.add_subparsers(dest="action", required=True)
+    p_undo = psub.add_parser("undo",help="undo a persona ledger change")
+    p_undo.add_argument("id",type=int)
     p_exp = psub.add_parser("export", help="write mind-data/personas/<guid>.json")
     p_exp.add_argument("--guid", type=int, default=None)
     p_imp = psub.add_parser("import", help="read mind-data/personas/*.json back in")

@@ -271,7 +271,7 @@ def test_a_v17_db_gains_the_empty_selfie_tables(tmp_path, monkeypatch):
             "AND name NOT LIKE 'selfie_snap%'")}
         assert names == {"selfie_set": "table", "selfie_candidate": "table",
                          "selfie_pick": "table", "selfie_current": "table",
-                         "selfie_set_one_queued": "index"}
+                         "selfie_set_one_queued": "index", "selfie_embedding": "table"}
         for t in ("selfie_set", "selfie_candidate", "selfie_pick", "selfie_current"):
             assert conn.execute(f"SELECT count(*) FROM {t}").fetchone()[0] == 0
         assert conn.execute("SELECT count(*) FROM tuning_change").fetchone()[0] == 1
