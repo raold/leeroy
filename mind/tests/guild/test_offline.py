@@ -488,7 +488,8 @@ async def test_busy_refusal_is_retried_later_that_day_and_the_raid_starts(setup,
 async def test_busy_refusals_are_bounded_and_then_end_the_day(setup):
     from leeroy_mind.guild.offline import MAX_ATTEMPTS
     ports, _, controller = setup
-    ports.acks["start_offline_raid"].extend([(False, "leader_unavailable:in_combat")] * (MAX_ATTEMPTS + 2))
+    # "busy" names no member, so every attempt may plan the same roster.
+    ports.acks["start_offline_raid"].extend([(False, "busy")] * (MAX_ATTEMPTS + 2))
     for _ in range(MAX_ATTEMPTS + 2):
         await controller.tick()
         await advance(ports, 15 * 60)

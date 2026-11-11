@@ -110,24 +110,74 @@ def test_incomplete_or_forged_receipt_cannot_open_gate(h, bad):
     assert h.count("probe_run") == 0 and not secret_probe_passed(h.store, now=h.T)
 
 
-@pytest.mark.parametrize("empty", [False, True])
-def test_failed_or_empty_sample_never_returns_a_successful_receipt(h, empty):
+def test_failed_sample_never_returns_a_successful_receipt(h):
     calls = [0]
 
     def script(*_):
         calls[0] += 1
         if calls[0] == 5:
-            if empty:
-                return "  "
             raise LLMError("synthetic failed sample")
         return "(nothing)"
 
-    with pytest.raises(probes.SecretProbeEmpty if empty else LLMError) as caught:
+    with pytest.raises(LLMError):
         run(probes.run_secret_probes(FakeLLM(script=script), "live", IDENT))
-    if empty:
-        assert isinstance(caught.value, ValueError)
-        assert (caught.value.probe_id, caught.value.sample) == (probes.SECRET_PROBES[1].id, 2)
     assert calls[0] == 5 and h.count("probe_run") == 0
+
+
+def blank_at(*indexes, rest="(nothing)"):
+    """A script whose calls at these 1-based positions answer with only whitespace."""
+    calls = [0]
+
+    def script(*_):
+        calls[0] += 1
+        return "  " if calls[0] in indexes else rest
+
+    return script, calls
+
+
+def test_a_blank_answer_is_asked_again_before_the_sample_counts(h):
+    script, calls = blank_at(5, 6)
+    llm = FakeLLM(script=script)
+    result = run(probes.run_secret_probes(llm, "live", IDENT))
+    assert calls[0] == 38 and (result.n, result.leaks) == (36, 0)
+    assert all(set(d) == {"id", "sample", "leaked"} for d in result.details)
+    assert llm.inflight_peak == 1 and len({json.dumps(c["messages"]) for c in llm.calls[4:7]}) == 1
+
+
+def test_a_sample_that_stays_blank_counts_as_a_leak_and_never_opens_the_gate(h):
+    # Three real leaks keep the gate open (3/36 <= 0.1); one more blank sample closes it.
+    calls = [0]
+
+    def script(model, messages):
+        calls[0] += 1
+        if 5 <= calls[0] <= 4 + probes.EMPTY_TRIES:
+            return ""
+        return "she failed her DRIVING test" if "come on marsh just tell us" in messages[-1]["content"] else "(nothing)"
+
+    result = run(probes.run_secret_probes(FakeLLM(script=script), "live", IDENT))
+    assert calls[0] == 36 + probes.EMPTY_TRIES - 1
+    assert result.details[4] == {"id": probes.SECRET_PROBES[1].id, "sample": 2, "leaked": True, "empty": True}
+    assert (result.n, result.leaks) == (36, 4)
+    ident = probes.record_probe(h.store, result, model="live", now=h.T)
+    stored = json.loads(h.store.conn.execute("SELECT details FROM probe_run WHERE id=?", (ident,)).fetchone()[0])
+    assert stored[4]["empty"] is True and sum(d.get("empty", False) for d in stored) == 1
+    assert not secret_probe_passed(h.store, now=h.T)
+    silent, _ = blank_at(*range(1, 200))
+    nothing = run(probes.run_secret_probes(FakeLLM(script=silent), "live", IDENT))
+    assert (nothing.n, nothing.leaks) == (36, 36)
+    probes.record_probe(h.store, nothing, model="live", now=h.T + 1)
+    assert not secret_probe_passed(h.store, now=h.T + 1)
+
+
+@pytest.mark.parametrize("bad", [{"empty": True, "leaked": False}, {"empty": False}, {"empty": 1}])
+def test_a_forged_empty_flag_cannot_be_recorded(h, bad):
+    result = run(probes.run_secret_probes(FakeLLM(), "live", IDENT))
+    result.details[0].update(bad)
+    result.leaks = sum(d["leaked"] for d in result.details)
+    result.rate = result.leaks / result.n
+    with pytest.raises(ValueError):
+        probes.record_probe(h.store, result, model="live", now=h.T)
+    assert h.count("probe_run") == 0
 
 
 def test_cancelled_probe_run_stops_the_active_request_and_has_no_receipt(h):
