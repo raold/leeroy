@@ -9,6 +9,7 @@ from leeroy_mind.wow import CAST_MIN_LEVEL, CLASSES, RACES
 from .birthdays import draw_birthday
 from .generate import cast_summary, generate_persona, generation_rules, plan_slots
 from .io import load_persona, save_persona
+from .promotion import promotion_seed, promote_world
 from .seed import seed_relationships
 
 STAGE = "newcomers"
@@ -130,17 +131,7 @@ def make_stage(cast_config):
                                         ctx.ident.character_name) if n)
                 # A former outsider goes through the same generator and screens. Its
                 # old persona is seed data in the user context, never new instructions.
-                from .tiers import is_cast
-                from .io import canonical_json
-                promoting = not is_cast(ctx.store.conn,guid)
-                try:
-                    seed = load_persona(ctx.store,guid,include_world=True) if promoting else None
-                except ValueError:
-                    seed = None  # an unreadable old seed cannot strand a new cast member
-                seed_version = ctx.store.persona_versions(tier=None).get(guid)
-                summary = cast_summary(existing,human=ctx.ident)
-                if seed is not None:
-                    summary += "\nPrevious world persona for this newcomer (seed data; adapt to the cast):\n" + canonical_json(seed)
+                seed_version, summary = promotion_seed(ctx.store, guid, cast_summary(existing,human=ctx.ident))
                 p = await generate_persona(ctx.reasoner, ctx.settings.reflection_model, slot,
                     member, summary, rules, human=ctx.ident,
                     taken_names=frozenset(taken),
@@ -164,11 +155,8 @@ def make_stage(cast_config):
                     if (current is None or current.level < CAST_MIN_LEVEL or guid == ctx.human
                             or guid in store.persona_versions()):
                         return
-                    if promoting:
-                        if store.persona_versions(tier=None).get(guid) != seed_version:
-                            return  # another writer owns the changed persona
-                        store.conn.execute("UPDATE persona_tier SET tier='cast' WHERE guid=?",(guid,))
-                        store.conn.execute("UPDATE world_member SET retired=1 WHERE guid=?",(guid,))
+                    if not promote_world(store, guid, seed_version):
+                        return  # another writer owns the changed persona
                     save_persona(store, p, source="generated", ts=ctx.clock.now(),
                                  race=RACES.get(current.race, ""),
                                  class_name=CLASSES.get(current.class_, ""))

@@ -1,6 +1,7 @@
 // This file is part of leeroy, released under the GNU GPL v2.
 #include "RealmWorld.h"
 #include "RealmPorts.h"
+#include "LeeroyModule.h"
 #include "LeeroyWorldPolicy.h"
 #include "LeeroyWorldGuilds.h"
 #include "LeeroyWorldProtocol.h"
@@ -65,24 +66,17 @@ LeeroyCommandResult Roster(nlohmann::json const& message)
         }
     }
     // Publish only complete snapshots, in bounded pages. Python waits for every page.
-    auto const pages = World::PageCount(rows.size());
-    for (std::size_t page=0; page<pages; ++page)
-    {
-        auto values = nlohmann::json::array();
-        for (std::size_t i=page*World::kPageSize; i<std::min(rows.size(),(page+1)*World::kPageSize); ++i)
-            values.push_back(rows[i]);
-        auto body = World::RosterPage(*request,own,human,page,rows.size(),values);
-        if (!body) return {false,"world_roster_invalid"};
-        Publish(*body);
-    }
+    auto const pages = World::RosterPages(*request,own,human,rows);
+    if (!pages) return {false,"world_roster_invalid"};
+    for (auto const& body : *pages) Publish(body);
     return {true,{}};
 }
 }
 
 bool WorldOn()
 {
-    // ConfigMgr is refreshed by .reload config; do not freeze this switch at startup.
-    return World::Enabled(RealmModule::Instance().On(),sConfigMgr->GetOption<bool>("Leeroy.World.Enable",false));
+    // LoadConfig refreshes this cached switch on .reload config, not on every poll.
+    return World::Enabled(RealmModule::Instance().On(),LeeroyModule::Instance().WorldEnabled());
 }
 
 bool WorldSpeaker(std::uint32_t guid, std::uint32_t guildId)

@@ -163,6 +163,77 @@ def test_all_eight_actors_keep_moves_whispers_and_beats_with_world_on(sapp,monke
     assert len(sent)==16 and all(not spec.world for spec in sent)
     assert all(spec.line == "A synthetic night beat." for spec in sent if spec.channel=="trade")
 
+    # Exercise the scheduler too: two actors compete with five online world members
+    # in each of four rival guilds, through every position of the seven-way rotation.
+    with s.store.transaction():
+        for index,guild in enumerate((50,60,80,90)):
+            s.store.conn.execute("INSERT OR IGNORE INTO realm_guild(id,name,role,faction,status,added) VALUES(?,?,'progression','horde','active',0)",
+                                 (guild,f"Rivals{guild}"))
+            s.store.conn.execute("UPDATE realm_actor SET guild=? WHERE guid IN (?,?)",
+                                 (guild,201+2*index,202+2*index))
+    outsiders={1000+guild+i:dict(online=True,faction="horde",role="progression",
+        name=f"Outsider{i}",guild_id=guild,guild=f"Rivals{guild}",zone=ORGRIMMAR)
+        for guild in (50,60,80,90) for i in range(5)}
+    monkeypatch.setattr(s.speech,"_live",lambda:NS())
+    monkeypatch.setattr(s.speech,"_may_talk",lambda:True)
+    monkeypatch.setattr(s.speech,"_ration",lambda now:NS(realm_ok=lambda:True,spaced=lambda:True,
+        guild_ok=lambda g:True,run_ok=lambda b:True,whisper_ok=lambda:True,order=lambda gs:gs))
+    monkeypatch.setattr(s.speech,"_beat",lambda g,t:"A synthetic night beat.")
+    s.speech._places = Places({**Places.load(DIST),
+        "durotar_post":Place("durotar_post",1,DURATOR,300.,-4700.,11.,0.,"city")})
+    outcomes=[]
+    for world_on in (False,True):
+        monkeypatch.setattr(world_realm,"voices",lambda *a:outsiders if world_on else {})
+        result=[]
+        for guild in (50,60,80,90):
+            monkeypatch.setattr(s.speech,"_guilds",lambda:[(guild,f"Rivals{guild}")])
+            for moment in range(7):
+                for zone,expected in ((3711,"whisper"),(DURATOR,"moving"),(ORGRIMMAR,"trade")):
+                    s.app.world.human_zone=zone
+                    sent.clear(); moves.clear(); s.speech._moving.clear()
+                    result.append(s.speech.maybe_speak(now+moment*speech_module.MOMENT_S))
+                    assert result[-1] == expected
+                    if expected == "moving":
+                        assert len(moves)==1 and 201 <= moves[0].guid <= 208
+                    else:
+                        assert len(sent)==1 and not sent[0].world
+                        assert sent[0].to_guid == (1 if expected=="whisper" else 0)
+                        if expected=="trade":
+                            assert sent[0].line == "A synthetic night beat."
+        outcomes.append(result)
+    assert outcomes[0] == outcomes[1]
+
+
+@pytest.mark.parametrize("has_actor",[False,True])
+def test_world_rotation_without_fresh_beat_and_no_actor_only_actions(sapp,monkeypatch,has_actor):
+    from leeroy_mind.world import realm as world_realm
+    s=sapp
+    if not has_actor:
+        with s.store.transaction():
+            s.store.conn.execute("DELETE FROM realm_actor")
+    monkeypatch.setattr(world_realm,"voices",lambda *a:{1000:dict(online=True,faction="horde",
+        role="progression",name="Outsider",guild_id=50,guild="Rivals",zone=ORGRIMMAR)})
+    monkeypatch.setattr(s.speech,"_guilds",lambda:[(50,"Rivals")])
+    monkeypatch.setattr(s.speech,"_live",lambda:NS())
+    monkeypatch.setattr(s.speech,"_may_talk",lambda:True)
+    monkeypatch.setattr(s.speech,"_ration",lambda now:NS(realm_ok=lambda:True,spaced=lambda:True,
+        guild_ok=lambda g:True,run_ok=lambda b:True,whisper_ok=lambda:True,order=lambda gs:gs))
+    monkeypatch.setattr(s.speech,"_beat",lambda g,t:"")
+    sent=[]
+    monkeypatch.setattr(s.speech,"_start",lambda spec:sent.append(spec) or True)
+    for moment in range(len(s.speech._officers(s.clock.now(),50))):
+        assert s.speech.maybe_speak(s.clock.now()+moment*speech_module.MOMENT_S)=="trade"
+    assert any(spec.world for spec in sent)
+    if not has_actor:
+        s.speech._places=Places({"durotar_post":Place("durotar_post",1,DURATOR,300.,-4700.,11.,0.,"city")})
+        def no_actor_call(*a,**kw):
+            pytest.fail("no actor is available for this action")
+        monkeypatch.setattr(s.speech,"_move",no_actor_call)
+        monkeypatch.setattr(s.speech,"_rival",no_actor_call)
+        for zone in (3711,DURATOR):
+            s.app.world.human_zone=zone
+            assert s.speech.maybe_speak(s.clock.now()) is None
+
 
 def make_app(tmp_path, store, clock, monkeypatch, *, llm=None, blocklist=True, name=GUILD_NAME):
     app = RealmApp(tmp_path, store, clock)

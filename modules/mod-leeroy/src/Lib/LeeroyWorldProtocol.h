@@ -4,6 +4,8 @@
 #include "LeeroyWorldPolicy.h"
 #include <nlohmann/json.hpp>
 #include <optional>
+#include <utility>
+#include <vector>
 namespace Leeroy::World
 {
 inline bool Token(nlohmann::json const& value)
@@ -57,6 +59,28 @@ inline std::optional<nlohmann::json> RosterPage(std::string const& request, std:
         if (!ValidMember(m,own,human) || !seen.insert(m["guid"].get<std::uint32_t>()).second) return std::nullopt;
     return nlohmann::json{{"type","world_roster"},{"request",request},{"own_guild",own},{"human",human},
         {"page",page},{"pages",pages},{"total",total},{"members",members}};
+}
+
+inline std::optional<std::vector<nlohmann::json>> RosterPages(std::string const& request,
+    std::uint32_t own, std::uint32_t human, nlohmann::json const& rows)
+{
+    if (!rows.is_array() || rows.size() > kMaxMembers) return std::nullopt;
+    std::vector<nlohmann::json> result;
+    std::set<std::uint32_t> seen;
+    for (std::size_t page=0; page<PageCount(rows.size()); ++page)
+    {
+        auto values = nlohmann::json::array();
+        for (std::size_t i=page*kPageSize; i<std::min(rows.size(),(page+1)*kPageSize); ++i)
+        {
+            if (!ValidMember(rows[i],own,human)
+                || !seen.insert(rows[i]["guid"].get<std::uint32_t>()).second) return std::nullopt;
+            values.push_back(rows[i]);
+        }
+        auto body = RosterPage(request,own,human,page,rows.size(),values);
+        if (!body) return std::nullopt;
+        result.push_back(std::move(*body));
+    }
+    return result;  // Nothing is publishable until every page has passed validation.
 }
 }
 #endif

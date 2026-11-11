@@ -295,7 +295,7 @@ def _doctor_unvoiced(store, human_guid: int | None) -> list[tuple[bool | None, s
     """A note naming the cast members with no stored persona (personas.io.cast_without_persona),
     whom the mind never voices; nothing when every cast member has one."""
     from .personas.io import cast_without_persona
-    missing = cast_without_persona(store.cast().values(), store.persona_versions(), human_guid)
+    missing = cast_without_persona(store.cast(include_world=True).values(), store.persona_versions(), human_guid)
     if not missing:
         return []
     who = ", ".join(f"{m.name} ({m.guid})" for m in missing)

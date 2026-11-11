@@ -124,7 +124,7 @@ class Targets:
                     if not ack.ok:
                         if not _refusal_logged:
                             _refusal_logged = True
-                            codes = {"realm_off", "world_identity_unavailable", "world_auction_unavailable", "world_roster_capacity"}
+                            codes = {"realm_off", "world_identity_unavailable", "world_auction_unavailable", "world_roster_capacity", "world_roster_invalid"}
                             log("world_roster_refused",code=ack.error if ack.error in codes else "unsupported_or_refused")
                         return False
                     rows=await future

@@ -93,6 +93,28 @@ LEEROY_TEST(WorldPagesAreBoundedCompleteAndUseRequestTokens)
 
 namespace
 {
+LEEROY_TEST(WorldSnapshotValidatesTheLastPageBeforeReturningAnyPages)
+{
+    using nlohmann::json;
+    json member{{"guid",101},{"account",11},{"guild_id",50},{"guild_name","Test rivals"},
+        {"name","Fixture"},{"race",2},{"class",1},{"gender",0},{"level",24},{"rank",3},
+        {"online",true},{"map",1},{"zone",1637}};
+    auto rows=json::array();
+    for (unsigned i=0; i<=kPageSize; ++i) { member["guid"]=101+i; rows.push_back(member); }
+    auto pages=RosterPages("token",21,1,rows);
+    CHECK(pages); CHECK_EQ(pages->size(),2u);
+    CHECK_EQ((*pages)[0]["members"].size(),kPageSize);
+    CHECK_EQ((*pages)[1]["members"].size(),1u);
+    rows.back()["guild_id"]=21;
+    CHECK(!RosterPages("token",21,1,rows));
+    rows.back()["guild_id"]=50; rows.back()["guid"]=101; // duplicate across page boundaries
+    CHECK(!RosterPages("token",21,1,rows));
+    auto empty=RosterPages("empty",21,1,json::array());
+    CHECK(empty); CHECK_EQ(empty->size(),1u);
+    CHECK(!RosterPages("bad token",21,1,json::array()));
+    CHECK(!RosterPages("token",21,1,json::object()));
+}
+
 struct FixtureGuild { unsigned id; unsigned GetId() const { return id; } };
 class FixtureManager
 {

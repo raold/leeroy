@@ -1330,7 +1330,10 @@ Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
   rosters expire after an hour. Refused roster ACKs log one code per process.
   Existing Realm actors retain their moves, whispers and night beats; extra world
   speakers use Trade/General only. A world bot joining the cast seeds a screened
-  newcomer persona at night. Retired outsiders retain their stored personas.
+  newcomer persona at night only with `[personas] auto_newcomers = true`; otherwise
+  use `personas generate` with the mind stopped (doctor lists these missing cast
+  personas). Both paths retire old world selfie choices, retaining their files.
+  Retired outsiders retain their stored personas.
   `personas world status|plan --data-dir PATH` reads counts without models or writes;
   the console's World cards are read-only. See `leeroy_mind/world/README.md`.
 - **Whitelists.** Native reads `Leeroy.Realm.PlacesFile` and `Leeroy.Realm.ItemsFile`

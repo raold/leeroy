@@ -545,15 +545,19 @@ class Speech:
             officers = self._officers(now, guild)
             if not officers:
                 continue
+            actor = next((o for o in officers if not o.world), None)
             if trade:
                 if not ration.run_ok(self._break):
                     return None
-                speaker = next((o for o in officers if self._in_city(o)), None)
+                beat = self._beat(guild, now)
+                speaker = next((o for o in officers if not o.world and self._in_city(o)), None) if beat else None
+                if speaker is None:
+                    speaker = next((o for o in officers if self._in_city(o)), None)
                 if speaker is not None:
                     return "trade" if self._rival(speaker, "trade", "rival", (
                         ("Say one line in Trade as yourself, a member of your guild: " if speaker.world else
                          "Say one line in Trade, as your guild's officer would: your raids, ") +
-                        "recruiting, gear, or the news above."), line=self._beat(guild, now)) else None
+                        "recruiting, gear, or the news above."), line=beat) else None
                 if self._place_officer(guild, now):
                     return "moving"
                 continue
@@ -566,11 +570,11 @@ class Speech:
                     return "general" if self._rival(local, "general", "rival", (
                         "Say one line in General chat as yourself, a member of your guild." if local.world else
                         "Say one line in General chat, as your guild's officer would.")) else None
-                if guild not in self._moving and self._move(guild, officers[0], cities[0], now):
+                if actor is not None and guild not in self._moving and self._move(guild, actor, cities[0], now):
                     return "moving"
                 continue
-            if ration.whisper_ok():
-                return "whisper" if self._rival(officers[0], "whisper", "rival", (
+            if actor is not None and ration.whisper_ok():
+                return "whisper" if self._rival(actor, "whisper", "rival", (
                     "Whisper one line to that player, as a rival officer would: a jab at his "
                     "guild's progress, or a dare.")) else None
         return None

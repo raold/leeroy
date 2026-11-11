@@ -42,8 +42,19 @@ Only this package and the explicit Realm integration opt in to world reads.
 Existing native Realm actors keep their actor cards, moves, whispers and night
 beats even when they have world personas; additional world speakers are separate.
 A world bot present in an authoritative cast roster becomes eligible for the
-newcomer stage. Its stored persona seeds the normal generator; promotion commits
-only after its normal screens and age floor pass, with source `generated`.
+newcomer stage only with `[personas] auto_newcomers = true`. With that setting off,
+stop the mind and run `personas generate`; its plan and the doctor's missing-persona
+note include these promoted members. Both paths use the stored world persona as
+seed data for the normal generator and commit promotion only after normal screens
+and the age floor pass, with source `generated`. A concurrent persona change or
+cast removal wins over the pending generation. Promotion passes unchosen rendered
+world selfie sets without deleting their files, allowing a first set from the new
+cast looks. Any unrendered queued set uses the new cast persona when it renders.
+
+Whispers and General moves select the first available actor in the rotation, never
+an ordinary world speaker. A fresh night beat prefers an in-city actor for Trade;
+otherwise Trade keeps the combined rotation. A guild with no actor skips actor-only
+actions, while ordinary world members can still speak in Trade and General.
 
 Realm world speech uses current online members of the correct active rival guild,
 their voice block, existing screens and shared speech rations. Native validation
