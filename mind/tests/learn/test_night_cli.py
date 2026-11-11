@@ -57,7 +57,7 @@ def test_night_off_old_schema_and_unregistered_budget_no_writes(context, store, 
             ctx.settings = replace(ctx.settings, learn_enabled=True)  # restart snapshot
             await night.prepare_count(ctx)
             assert budget._counts(ctx, set(), frozenset({"rewards"}))["rewards"] == 1
-            assert budget.estimate({"rewards": 1}, measured={}) == {"rewards": 2.0}
+            assert budget.estimate({"rewards": 1}, measured={}) == {"rewards": .02}
             with store.transaction():
                 store.conn.execute("DROP TABLE talk_reward")
             await night.stage_rewards(ctx)

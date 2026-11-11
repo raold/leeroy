@@ -291,6 +291,7 @@ class TurnMeta:
     memory_ids: list[int] = field(default_factory=list)
     llm_s: float | None = None  # the model's time on this turn, its retry included
     recipe_snapshot: object | None = None  # optional numeric/identifier attribution at composition
+    recipe_line_id: int | None = None  # first acknowledged fragment of this generation
     facts_line: int = 0
     two_lines: bool = False  # a whisper to him at the explicit band: a line or two
     emote_target: int = 0  # whom an emote in the line is aimed at by default (a birthday)
