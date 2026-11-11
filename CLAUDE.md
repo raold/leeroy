@@ -612,6 +612,10 @@ and the mind's bounded shutdown drain. Unknown receipts remain in
 With an already attached mind, hello/login rereads the switch and queues undo when
 off. No model, prompt, gear, loot or raid strategy change is involved. See
 `mind/leeroy_mind/playstyle/README.md` for the deterministic map and limits.
+Each hello restores, then reapplies, every owned member (reconciliation, by design).
+`playstyle_result` logs `reason=` (`ok`, `no_job` with no terminal in 5 s, native's code,
+`skipped:<code>`, `guids` or `kind`); an ack refusal logs `playstyle_refused` with its
+`error=` code and member count.
 
 ### Local patch: pinned random bots
 
