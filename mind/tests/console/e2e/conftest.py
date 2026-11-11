@@ -92,14 +92,17 @@ def rehearsal(tmp_path, monkeypatch, pytestconfig):
             fixture.page, fixture.context, fixture.errors = page, context, errors
             try:
                 await fixture.start(state)
-                # Browser requests may reach ONLY this fixture's own console.
-                async def own_origin(route):
-                    if route.request.url.startswith(fixture.url + "/"):
-                        await route.continue_()
-                    else:
-                        errors.append("unexpected browser destination: " + route.request.url)
-                        await route.abort()
-                await context.route("**/*", own_origin)
+                # Browser requests may reach ONLY this fixture's own console: the console's
+                # CSP ('self') confines the page, and any other destination fails the test.
+                # Observed, not intercepted: with context.route() interception Chromium now
+                # and then never finished a routed POST's response (no requestfinished, body
+                # unreadable), which hung or failed the rehearsal.
+                own = fixture.url + "/"
+                def own_origin(request):
+                    # blob: and data: URLs never leave the browser (faces load as blobs).
+                    if not (request.url.startswith((own, "blob:" + own, "data:"))):
+                        errors.append("unexpected browser destination: " + request.url)
+                context.on("request", own_origin)
                 await context.add_init_script(
                     "if (!localStorage.getItem('guild-console-theme')) "
                     "localStorage.setItem('guild-console-theme', " + repr(theme) + ");")
