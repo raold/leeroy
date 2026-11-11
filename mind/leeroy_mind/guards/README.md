@@ -138,13 +138,20 @@ the existing real-name, content and tell screens, then review again. Determinist
 template announcements bypass model review and its rations entirely. Unsolicited
 reaction verdicts send a game nod/laugh or react to the Discord parent. Answers
 owed to the owner remain text answers: whisper replies, answers to his DMs, named
-replies, pushback, named Discord answers and emote reactions aimed at him. Public
+replies, pushback, named Discord answers and replies to his targeted emotes. Public
 bystanders, drawn replies, hellos and goodnights can be dropped without a retry.
 Reactions spend the turn's pacing budget
 without recording a spoken line, memory use, game session or Discord game activity.
+The first planned answer to his question is owed regardless of the speaker picker;
+later drawn/topic/memory answers are not. This applies separately to game and Discord
+planning. Only the member his emote targets is owed an emote answer, not joiners.
+
 Typed lines are checked again after typing; a new unfavorable verdict can drop
 an unsolicited line but remains advisory for an owed answer. Per-member locks
 cover generation and review; delay, voice hold and typing run outside them.
+Realism bursts recheck their original reviewed text before the first fragment;
+later fragments inherit the verdict. Scope, sequence and combat checks still run
+for every fragment. This prevents a short fragment from being mistaken for filler.
 The ordinary send lock still protects delivery. The utterance receipt persists
 `guard_verdict` and `guard_rewritten`; guard drops store no draft text and log
 only fixed codes, member and memory IDs.

@@ -160,9 +160,8 @@ class LiveReview:
         from leeroy_mind.talk.turns import TurnKind
         human = self.engine.human.guid
         return bool(human and (meta.whisper_reply or self.engine._answers_his_dm(turn,meta) or
-            meta.why == "reply:named" or meta.pushback or meta.discord_named or
-            turn.kind == TurnKind.EMOTE_REACT and
-            (turn.addressee==human or turn.to_guid==human or meta.emote_target==human)))
+            meta.why == "reply:named" or meta.pushback or meta.discord_named or meta.first_question_answer or
+            turn.kind == TurnKind.EMOTE_REACT and meta.why.startswith("emote:")))
 
     def observe(self, turn, meta):
         """Capture runtime inputs on the loop; workers receive no WorldView callbacks."""

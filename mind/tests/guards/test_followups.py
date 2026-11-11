@@ -35,7 +35,7 @@ def test_whisper_to_owner_is_regenerated_once_then_sent(rig,monkeypatch):
     ("guild",TurnMeta("push",pushback="doubt",answers_human=True),TurnKind.REPLY_HUMAN,True),
     ("discord:general",TurnMeta("named",discord_named=True,answers_human=True),TurnKind.REPLY_HUMAN,True),
     ("dm:101",TurnMeta("dm",answers_human=True),TurnKind.REPLY_HUMAN,True),
-    ("say",TurnMeta("emote",emote_target=1),TurnKind.EMOTE_REACT,True),
+    ("say",TurnMeta("emote",why="emote:wave"),TurnKind.EMOTE_REACT,True),
     ("whisper",TurnMeta("idle",initiates=True),TurnKind.OPEN,False),
 ])
 def test_owed_scope(rig,channel,meta,kind,expected):
