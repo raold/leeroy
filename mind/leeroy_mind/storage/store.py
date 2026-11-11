@@ -736,7 +736,8 @@ class Store:
                       memory_ids, dropped: str | None, session_id: int | None, *,
                       bit: str | None = None, why: str | None = None,
                       trigger_line: int | None = None, llm_s: float | None = None,
-                      to_guid: int = 0, turn_id: str | None = None) -> int:
+                      to_guid: int = 0, turn_id: str | None = None,
+                      guard_verdict: str = "not_run", guard_rewritten: bool = False) -> int:
         """`bit` is the BitScheduler bit the turn brought out, `why` how the turn came about
         (talk.pipeline.TurnMeta.why), `trigger_line` the chat line it answered
         (talk.turns.Turn.trigger_line), `llm_s` the model's seconds on it (TurnMeta.llm_s; None
@@ -745,12 +746,13 @@ class Store:
         with self.transaction():
             return self.conn.execute(
                 "INSERT INTO utterance(ts, guid, channel, kind, text, memory_ids, dropped, "
-                "session_id, bit, why, trigger_line, llm_s, to_guid, turn_id) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "session_id, bit, why, trigger_line, llm_s, to_guid, turn_id,guard_verdict,guard_rewritten) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (ts, guid, clean(channel), clean(kind), clean(text), _j(list(memory_ids)),
                  None if dropped is None else clean(dropped), session_id,
                  None if bit is None else clean(bit), None if why is None else clean(why),
-                 trigger_line, llm_s, to_guid, None if turn_id is None else clean(turn_id))
+                 trigger_line, llm_s, to_guid, None if turn_id is None else clean(turn_id),
+                 guard_verdict,int(guard_rewritten))
             ).lastrowid
 
     def talk_stats(self, since: float, until: float) -> dict:

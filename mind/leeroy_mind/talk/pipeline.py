@@ -343,6 +343,7 @@ class TurnMeta:
     recall_query: str = ""
     guard_verdict: str = "not_run"
     guard_rewritten: bool = False
+    guard_codes: tuple[str,...] = ()
 
 
 class _ScopeChanged(SchedulerError):
@@ -1123,6 +1124,11 @@ class Pipeline:
             real_name=real, facts=list(facts),
             facts_head=facts_head(human.forms[1]) if facts else "",
             pinned=pinned if facts else None, kept=kept)
+        if self.cfg.talk.aware:
+            try:
+                parts.awareness = await self.live_review.block_async(turn,meta,close=bool(real))
+            except Exception:
+                log.warning("awareness_card_failed guid=%d",turn.speaker)
         trimmed = trim_to_budget(redact_for(parts, human, bool(real)))
         if live:
             meta.offered_real_name, meta.romance = bool(real), bool(romance)
@@ -1143,11 +1149,6 @@ class Pipeline:
                    *([turn.instruction] if turn.kind in (TurnKind.BIT, TurnKind.ASIDE)
                      else [])]
         messages = render_messages(trimmed)
-        if self.cfg.talk.aware:
-            block = self.live_review.block(turn, meta, close=bool(real))
-            messages[-1] = dict(messages[-1], content=messages[-1]["content"] + "\n\n" + block)
-            # Current reply/thread observations are prompt context, not independent
-            # evidence of a shared past. Keep the historical support cutoff above.
         return Composed(messages,
                         [m.id for m in memories[:len(trimmed.memories)]], p, close,
                         [trigger] if trigger else [], [r.text for r in earlier], samples,
@@ -1251,9 +1252,6 @@ class Pipeline:
         self._current[task] = turn
         outcome = "completed"
         try:
-            if self.live_review.config.enabled:
-                async with self.live_review.lock(turn.speaker):
-                    return await self._speak_now(turn, meta)
             return await self._speak_now(turn, meta)
         except asyncio.CancelledError:
             outcome = "cancelled"
@@ -1423,25 +1421,54 @@ class Pipeline:
         return [s.line for s in sent]
 
     async def _guarded_lines(self, turn, meta, p, lines, composed, *, close, spoken=False):
-        if not self.live_review.config.enabled:
+        if not self.live_review.config.enabled or turn.template is not None:
             return lines
+        async with self.live_review.serial(turn):
+            return await self._review_lines(turn,meta,p,lines,composed,close=close,spoken=spoken)
+
+    async def _review_lines(self,turn,meta,p,lines,composed,*,close,spoken=False):
+        owed = self.live_review.owed(turn,meta)
+        best = None
+        def keep(candidate,verdicts):
+            nonlocal best
+            severity = {"send":0,"react":1,"rewrite":2,"drop":3}
+            worst = max(verdicts,key=lambda v:severity[v.action])
+            rank = (severity[worst.action],sum(len(v.codes) for v in verdicts))
+            if best is None or rank<best[0]:
+                best = (rank,list(candidate),worst.action,tuple(dict.fromkeys(c for v in verdicts for c in v.codes)))
+        def fallback():
+            meta.guard_verdict = best[2]
+            meta.guard_codes = best[3]
+            return best[1]
+        def drop(code):
+            return self._drop(turn,meta,code,meta.memory_ids)
         for attempt in range(2):
+            if not lines:
+                return fallback() if owed and best is not None else drop("guard_rewrite_failed")
+            verdicts = []
             for line in lines:
                 verdict = await self.live_review.check(turn, meta, line.plain)
+                verdicts.append(verdict)
                 if not _scope_valid(meta) or not self.live_review.valid(turn, meta):
                     return self._drop(turn, meta, "scope_changed")
                 if self.scheduler.expired(turn.deadline):
                     return self._drop(turn, meta, "expired")
+            keep(lines,verdicts)
+            for verdict in verdicts:
+                meta.guard_codes = verdict.codes
                 if verdict.action == "send":
                     continue
-                if verdict.action == "react":
+                meta.guard_verdict = verdict.action
+                if verdict.action == "react" and not owed:
                     await self._guard_react(turn, meta, verdict.reaction)
-                    return self._drop(turn, meta, "guard_react")
-                if verdict.action == "drop":
-                    return self._drop(turn, meta, "guard_drop")
+                    return drop("guard_react")
+                if verdict.action == "drop" and not owed:
+                    return drop("guard_drop")
                 if meta.guard_rewritten or meta.before_transport is not None:
+                    if owed:
+                        return fallback()
                     meta.guard_verdict = "drop"
-                    return self._drop(turn, meta, "guard_rewrite_refused")
+                    return drop("guard_rewrite_refused")
                 meta.guard_rewritten = True
                 composed = composed or await self._compose(turn, meta, live=True)
                 hint = "Rewrite once to fix these guard codes: " + ", ".join(verdict.codes)
@@ -1450,12 +1477,14 @@ class Pipeline:
                     {"role": "user", "content": hint}])
                 text, why = await self._generate(turn, meta, retry, spoken=spoken, max_attempts=1)
                 if why:
+                    if owed:
+                        return fallback()
                     meta.guard_verdict = "drop"
-                    return self._drop(turn, meta, "guard_rewrite_failed")
+                    return drop("guard_rewrite_failed")
                 text = self._spell_real_name(emote_words(self._link_items(turn, meta, text)),
                                             close=close, offered=meta.offered_real_name)
                 if command_only(text):
-                    return self._drop(turn, meta, "guard_rewrite_failed")
+                    return fallback() if owed else drop("guard_rewrite_failed")
                 lines = ([Styled(text, text)] if spoken else
                          self._style(turn, p, text, close=close, two_lines=meta.two_lines, romance=meta.romance))
                 lines = [Styled(defuse(s.line), defuse(s.plain)) for s in lines]
@@ -1463,7 +1492,7 @@ class Pipeline:
             else:
                 return lines
         meta.guard_verdict = "drop"
-        return self._drop(turn, meta, "guard_rewrite_failed")
+        return fallback() if owed and best is not None else drop("guard_rewrite_failed")
 
     async def _guard_react(self, turn, meta, reaction):
         # A private game whisper has no private emote transport. It stays silent.
@@ -1743,6 +1772,11 @@ class Pipeline:
 
     async def _generate(self, turn: Turn, meta: TurnMeta, c: Composed, *,
                         spoken: bool = False, max_attempts: int = 2) -> tuple[str, str | None]:
+        async with self.live_review.serial(turn):
+            return await self._generate_serial(turn,meta,c,spoken=spoken,max_attempts=max_attempts)
+
+    async def _generate_serial(self, turn: Turn, meta: TurnMeta, c: Composed, *,
+                        spoken: bool = False, max_attempts: int = 2) -> tuple[str, str | None]:
         """The words to style, or a drop reason with the rejected text. What the model copied
         from the prompt's chat frame goes first (strip_copied), and "(nothing)" is looked for
         again after it and after every repair. A fatal or soft tell (an echo of the line it
@@ -2003,9 +2037,9 @@ class Pipeline:
         The send itself is shielded: once the server may have the line, it is recorded. A turn
         cancelled meanwhile keeps the lock until the line has settled, and that line's outcome
         is the turn's row."""
-        if self.live_review.config.enabled:
+        if self.live_review.config.enabled and turn.template is None:
             verdict = await self.live_review.check(turn, meta, meta.words or text)
-            if verdict.action != "send":
+            if verdict.action != "send" and not self.live_review.owed(turn,meta):
                 return "guard_changed_before_send"
             if not self.live_review.valid(turn, meta):
                 return "scope_changed"
@@ -2169,7 +2203,8 @@ class Pipeline:
         self.store.log_utterance(now, turn.speaker, turn.channel, turn.kind.value, text,
                                  memory_ids, None, sid, bit=_bit_id(turn), why=meta.why or None,
                                  trigger_line=turn.trigger_line, llm_s=meta.llm_s,
-                                 to_guid=turn.to_guid, turn_id=meta.turn_id)
+                                 to_guid=turn.to_guid, turn_id=meta.turn_id,
+                                 guard_verdict=meta.guard_verdict,guard_rewritten=meta.guard_rewritten)
         self._record_notes(turn, meta, p, meta.words or text, now)
         if discord_id is None:
             log.info("say_sent: guid=%d kind=%s channel=%s line=%d trigger=%s why=%s bit=%r "
@@ -2251,13 +2286,18 @@ class Pipeline:
     def _drop(self, turn: Turn, meta: TurnMeta, reason: str, memory_ids=(), *, text: str = "",
               at: float | None = None) -> list[str]:
         self.timing.decision(meta.timing_trace, reason)
+        if reason.startswith("guard_"):
+            text = ""
+            log.info("guard_drop guid=%d code=%s codes=%s memory_ids=%s",turn.speaker,reason,
+                     ",".join(meta.guard_codes),list(memory_ids))
         sid = None if is_discord(turn.channel) else self._session_id  # no game activity (R11)
         self.store.log_utterance(self.clock.now() if at is None else at, turn.speaker,
                                  turn.channel or "", turn.kind.value, text or "",
                                  list(memory_ids), reason, sid,
                                  bit=_bit_id(turn), why=meta.why or None,
                                  trigger_line=turn.trigger_line, llm_s=meta.llm_s,
-                                 to_guid=turn.to_guid, turn_id=meta.turn_id)
+                                 to_guid=turn.to_guid, turn_id=meta.turn_id,
+                                 guard_verdict=meta.guard_verdict,guard_rewritten=meta.guard_rewritten)
         log.info("say_dropped: guid=%d kind=%s channel=%s reason=%s trigger=%s why=%s "
                  "llm_s=%s", turn.speaker, turn.kind, turn.channel, reason,
                  turn.trigger_line or "-", meta.why or "-", _secs(meta.llm_s))

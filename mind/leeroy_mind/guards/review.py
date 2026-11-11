@@ -354,7 +354,7 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
         rewrite.append('claim_conflict')
         refs.extend(Reference('claim', hit.claim_id) for hit in conflicts)
         scores.append(Score('claim', round(max(hit.score for hit in conflicts), 6)))
-    if stores.facts is not None:
+    if stores.facts is not None and draft.channel not in {'discord','dm'}:
         line = Line(0, now, draft.guid, draft.to_guid, None, draft.channel, 'mind', draft.map, draft.zone, draft.text)
         world = unawareness.check_line(stores.facts, line)
         rewrite.extend(flag.rule for flag in world)
@@ -374,4 +374,5 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
     action = _action(codes)
     if reader.missing:
         scores.append(Score('missing_sources', len(reader.missing)))
-    return Verdict(action, codes, tuple(scores), tuple(dict.fromkeys(refs)), REACTIONS[1] if action == 'react' else None)
+    reaction = '👍' if parent and parent.text.rstrip().endswith('?') else '😄' if set(words(draft.text)) & {'lol','haha','hehe'} else '👍'
+    return Verdict(action, codes, tuple(scores), tuple(dict.fromkeys(refs)), reaction if action == 'react' else None)

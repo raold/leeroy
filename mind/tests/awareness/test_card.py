@@ -72,7 +72,7 @@ def test_all_parts_have_real_sources_and_no_generated_cause(populated, clock):
     assert "zone: 210" in game and "instance: 9 (last encounter)" in game
     assert "area: unknown" in game and "Combat: unknown" in game
     assert "His raid: #1, #101, #102" in game
-    assert "Emote wave from #102" in section(result,"recent")
+    assert "Emote wave" not in section(result,"recent")
     assert "Received item #123" in section(result,"recent") and "Died" in section(result,"recent")
     assert "Boss kill" in section(result,"recent")
     assert "3 kills, 2 wipes" in section(result,"raid")
@@ -81,6 +81,23 @@ def test_all_parts_have_real_sources_and_no_generated_cause(populated, clock):
     assert "Current balance: unknown" in section(result,"bank")
     assert "Feud #1 with #102: active" in section(result,"drama")
     assert "UNRENDERED_CAUSE" not in result.render(10000)
+
+
+def test_model_calendar_and_bank_use_names_and_relative_times(populated,clock):
+    source = CardSources(populated.conn,bank_snapshot={"money":123,"read_at":clock.now()-180})
+    result = card(source,101,context=context(clock,channel="guild",names={1:"Owner",101:"Arkon",102:"Nessa"}))
+    assert "in 1 day" in section(result,"calendar") and "Nessa signed_up" in section(result,"calendar")
+    assert "observed 3 min ago" in section(result,"bank")
+    assert "#" not in result.render(10000)
+
+
+@pytest.mark.parametrize("channel",["discord:general","dm:101"])
+def test_game_encounter_drama_is_not_a_discord_observation(populated,clock,channel):
+    with populated.transaction():
+        populated.conn.execute("INSERT INTO encounter(id,a,b,private) VALUES (50,101,102,0)")
+        populated.conn.execute("UPDATE feud SET evidence='[\"encounter:50\"]'")
+    result = card(populated,101,context=context(clock,channel=channel,to_guid=102,readers=(101,102)))
+    assert not section(result,"drama")
 
 
 @pytest.mark.parametrize("key", ["context","recent","claims","raid","calendar","standing","bank","drama"])

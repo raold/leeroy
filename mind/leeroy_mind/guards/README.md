@@ -86,9 +86,13 @@ independent; shortening `repeat_seconds` does not disable the other checks.
 | Action | Caller responsibility |
 |---|---|
 | `send` | Deliver the draft, then record the confirmed delivery. |
-| `rewrite` | Request one new draft with the codes, then review it again; abandon an unsuccessful retry. |
-| `react` | Use the suggested laughter reaction instead of sending the filler text. |
-| `drop` | Send nothing; the line is empty or repeats an existing contribution. |
+| `rewrite` | Request one screened new draft with the codes, then review again. |
+| `react` | Use a fixed nod/like or laughter reaction when no answer is owed. |
+| `drop` | Suppress an unsolicited line; retry once when an answer is owed to the owner. |
+
+For answers owed to the owner, a second unfavorable verdict is advisory: send
+the better screened candidate. React also prompts one attempt at a real answer.
+Existing hard content, name, slash and delivery gates still apply.
 
 A rewrite takes priority over drop, which takes priority over react. The optional
 `await judge_relevance(reasoner, stores, draft)` is a separate model call that may
@@ -102,7 +106,8 @@ preserved across retries, including retries after midnight. Receipt IDs are stab
 opaque ASCII delivery IDs. The call joins the caller's transaction and never
 commits. Retrying the same ID with the same matched keys is a no-op; reusing it
 with different keys on that delivery day is an error. Serialize review, delivery
-and recording per member: review is not a reservation and cannot enforce caps
+and recording per member when exact concurrent cap enforcement is required:
+review is not a reservation and cannot enforce caps
 against concurrent sends by itself. Persist delivery identity/time through crash
 recovery; recording cannot prove a remote send succeeded.
 
@@ -118,31 +123,43 @@ check; malformed receipts return a fixed rewrite code rather than resetting caps
 ## Live adapter
 
 `[guards] enabled = true` admits review independently of `[talk] aware = true`.
-Both remain off by default. The card uses 600 estimated tokens for guild/officer/
+Both remain off by default. The card uses up to 600 estimated tokens for guild/officer/
 Discord, 450 for whispers/DMs, and 400 for other game channels, plus a fixed
-delimiter. Voice uses its existing typed fallback scope. Game and Discord chat
+delimiter, inside `LIVE_BUDGET`, before the final instruction. If the prompt is
+over budget, the card is removed first. Model cards use names and relative ages;
+diagnostic cards may retain IDs. Voice uses its actual room and captured audience. Game and Discord chat
 evidence never cross media. DMs and whispers retain the exact pair; owner claims
-need visible cited provenance too. Uncited owner corrections are omitted.
+need visible cited provenance too. Uncited owner corrections are omitted. Discord
+cards and guards omit game state. Text emotes at a member are visible only in
+game say or that whisper pair; romantic emotes only in that pair's whispers.
 
 Every styled draft is checked before typing. One rewrite per turn goes through
-the existing real-name, content and tell screens, then review again. A signed
-exact-text template cannot be rewritten and is dropped instead. Reaction verdicts
-send a game nod/laugh or react to the Discord parent. A whisper has no private
-game-emote transport, so it stays silent. Reactions spend the turn's pacing budget
+the existing real-name, content and tell screens, then review again. Deterministic
+template announcements bypass model review and its rations entirely. Unsolicited
+reaction verdicts send a game nod/laugh or react to the Discord parent. Answers
+owed to the owner remain text answers, including whispers and DMs. Reactions spend the turn's pacing budget
 without recording a spoken line, memory use, game session or Discord game activity.
-Typed lines are checked again after typing; a newly failed check drops the line.
-Per-member locks cover review through acknowledged delivery and receipt recording.
+Typed lines are checked again after typing; a new unfavorable verdict can drop
+an unsolicited line but remains advisory for an owed answer. Per-member locks
+cover generation and review; delay, voice hold and typing run outside them.
+The ordinary send lock still protects delivery. The utterance receipt persists
+`guard_verdict` and `guard_rewritten`; guard drops store no draft text and log
+only fixed codes, member and memory IDs.
 
 Any review/embedding exception logs only `guard_review_failed_open` and the guid,
-then sends through the ordinary delivery gates. Cancellation propagates. Semantic
+then sends through the ordinary delivery gates. Card failures omit the card and
+log `awareness_card_failed`. Cancellation propagates. Semantic
 checks still require `semantic_enabled`; enabled claims use the existing embedder
-and contradiction checker. At most seventeen texts are embedded per check, with
+and contradiction checker. Claims alone embed only the draft. At most seventeen texts are embedded per check, with
 a five-second timeout, no open read transaction, and a 512-vector memory cache.
-World evidence refreshes at most once a minute. These are bounds, not a latency SLA.
+SQLite snapshots and guard evaluation run on worker threads using separate
+read-only connections. Context scans use channel/time bounds and the
+`chat_line_channel_ts` index. Game world evidence refreshes at most once a minute.
+These are bounds, not a latency SLA.
 
 Run `python -m pytest -q -s tests/guards/test_rehearsal.py` for the four-turn
 FakeLLM/FakeBridge comparison. Off: four text lines, one contradiction, one filler
-after a question, one location mismatch. On: three text lines, one reaction, zero
+after a question, one location mismatch. On: four text answers, no reactions, zero
 of those flags. Thus each of those detector rates is 25% to 0% per attempted turn
 (25% to 0% per sent line); repetitions are zero in both. The script selects its
 rewrite answers and uses fake embeddings; this measures integration, not live

@@ -99,5 +99,5 @@ def test_fixed_transcript_guard_comparison(tmp_path):
     assert result["off"]["contradiction"] == 1
     assert result["off"]["nonsequitur"] == 1
     assert result["off"]["unawareness"] == 1
-    assert result["on"]["sent"] == 3 and result["on"]["reactions"] == 1
+    assert result["on"]["sent"] == 4 and result["on"]["reactions"] == 0
     assert all(result["on"][key] == 0 for key in ("contradiction","nonsequitur","unawareness"))

@@ -224,7 +224,8 @@ def _build(data: dict, source: str) -> MindConfig:
     built = {}
     for section, rules in _RULES.items():
         given = data.get(section, {})
-        if section == "talk" and (set(given) - set(rules) or type(given.get("aware", False)) is not bool):
+        if section == "talk" and type(given.get("aware", False)) is not bool:
+            log.warning("talk_aware_invalid key=aware")
             given = dict(given, aware=False)
         values = {}
         for key, (check, want) in rules.items():

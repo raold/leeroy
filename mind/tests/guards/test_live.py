@@ -23,6 +23,7 @@ from leeroy_mind.talk.turns import Turn, TurnKind
 @pytest.fixture
 def rig(store, tmp_path):
     r = make_rig(store, engine_clock(), tmp_path, reply="the ferry leaves at seven")
+    r.clock._yields = 0  # read-only SQLite workers need real scheduling between fake ticks
     r.engine.live_review.config = GuardsCfg(enabled=True)
     r.world.apply(Group(0, 1, True, (1, 101, 102, 103, 104, 105)), r.clock.now())
     yield r
@@ -57,10 +58,10 @@ def test_invalid_or_disabled_aware_is_off(tmp_path, value):
     assert load_config(path).talk.aware is False
 
 
-def test_unknown_talk_setting_disables_aware(tmp_path):
+def test_unknown_talk_setting_preserves_aware(tmp_path):
     path = tmp_path / "mind.toml"
     path.write_text("[talk]\naware=true\nunrecognized=true", encoding="utf-8")
-    assert load_config(path).talk.aware is False
+    assert load_config(path).talk.aware is True
 
 
 @pytest.mark.parametrize("channel", ["guild", "party", "raid", "whisper", "discord:general", "dm:101"])
@@ -118,7 +119,7 @@ def test_send_and_drop(rig, monkeypatch, action, expected):
         seen.append(draft)
         return Verdict(action)
     monkeypatch.setattr(live, "review", review)
-    sent, meta = speak(rig, turn())
+    sent, meta = speak(rig, Turn(TurnKind.OPEN,101,"guild"),TurnMeta("idle"))
     assert bool(sent) is expected and seen
     assert meta.guard_verdict == action
 
@@ -166,7 +167,7 @@ def test_voice_card_uses_actual_room_and_captured_audience(rig):
     assert [h.id for h in history] == [parent]
     assert e.live_review.draft(t, meta, "answer").channel == "voice"
     block = e.live_review.block(t, meta, close=False)
-    assert "Channel: voice:guild_hall" in block and "Reply to: VISIBLE_PARENT" in block
+    assert "Channel: voice:guild_hall" in block and f"Reply to: {e.human.called}: VISIBLE_PARENT" in block
     assert all(text not in block for text in ("HIDDEN_SAME_ROOM", "OTHER_ROOM", "OFFICER_ROOM", "PRIVATE_PAIR", "TYPED_ONLY"))
 
 
@@ -200,21 +201,21 @@ def test_rewrite_asks_once_and_checks_the_new_draft(rig, monkeypatch, second):
     sent, meta = speak(rig, turn())
     assert len(rig.chat_calls()) == 2
     assert "gag_daily_cap" in rig.last_user()
-    assert bool(sent) is (second == "send")
+    assert sent  # advisory guards cannot suppress the answer owed to him
     assert meta.guard_rewritten
 
 
 def test_signed_template_is_never_rewritten(rig, monkeypatch):
     monkeypatch.setattr(live, "review", lambda *a: Verdict("rewrite", ("gag_daily_cap",)))
     sent, _ = speak(rig, turn(template="approved exact message"), TurnMeta("signed", before_transport=lambda: True))
-    assert sent == [] and rig.chat_calls() == []
+    assert sent == ["approved exact message"] and rig.chat_calls() == []
 
 
 @pytest.mark.parametrize("channel", ["guild", "whisper", "discord:general", "dm:101"])
 def test_react_uses_only_its_medium_and_no_game_clock_for_discord(rig, monkeypatch, channel):
     monkeypatch.setattr(live, "review", lambda *a: Verdict("react", ("filler_after_question",), reaction="👍"))
-    t = turn(channel)
-    meta = TurnMeta("react", answers_human=True)
+    t = Turn(TurnKind.OPEN,101,channel,to_guid=1 if channel in {"whisper","dm:101"} else 0)
+    meta = TurnMeta("react")
     if is_discord(channel):
         parent = dstore.post(rig.store, channel=channel_id(channel), author=1, origin="human",
                             text="when is the ferry?", now=rig.clock.now())

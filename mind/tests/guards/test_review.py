@@ -187,7 +187,7 @@ def test_filler_after_real_question_and_clean_answers(store,text,action):
     line(store,'Where does the ferry depart?',guid=1,to=101)
     result=review(sources(store),draft(text,parent_id=1,thread_ids=(1,)))
     assert result.action==action
-    assert result.reaction==('😄' if action=='react' else None)
+    assert result.reaction==('👍' if action=='react' else None)
 
 
 def test_filler_without_parent_or_question_does_not_invent_answer_obligation(store):

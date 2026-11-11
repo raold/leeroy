@@ -2172,6 +2172,8 @@ def test_an_earlier_answer_never_backs_a_bystanders_span(store, clock, tmp_path,
                      script=lambda m, msgs: answer if "You play Arkon" in msgs[0]["content"]
                      else span)
         r.engine.cfg = replace(r.cfg, talk=replace(r.cfg.talk, aware=aware))
+        if aware:
+            r.clock._yields = 0  # let the real SQLite worker finish between fake-clock ticks
         his = his_line(r, store, "arkon did belra ever pay you back for that epic gem?")
         first = Turn(kind=TurnKind.REPLY_HUMAN, speaker=101, channel="guild", addressee=HUMAN,
                      trigger_line=his.id)

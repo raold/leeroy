@@ -64,6 +64,9 @@ Every `CardContext` content field is empty by default:
 - `embedding`: optional already-computed 512-dimensional query bytes in the claims
   model's vector space; the reader does not derive it from the text slots.
 - `now`: optional receipt-time seconds for deterministic replay and expiry.
+- `names`: optional visible-member name map for model cards. This switches IDs
+  and epochs to names, named places and relative ages; omitted maps retain the
+  diagnostic format used by the CLI.
 
 Each `ContextItem` carries text, its original channel, sender/recipient ids, and
 optional `readers`. The Discord caller captures the correct audience
@@ -77,6 +80,9 @@ Whispers stay with the same pair and private turn. Officer
 content requires both the stored officer role and a current officer context.
 This includes caller slots and claim evidence, not only recent chat reads.
 All claims, including owner corrections, require visible cited provenance.
+Discord cards omit all game-state sections. Text emotes at the member appear
+only in game say or the matching whisper pair; romantic emotes appear only in
+the matching pair's whisper card. They never enter guild, raid or Discord cards.
 Uncited claims and drama with missing or indirect memory evidence are omitted
 conservatively. These omissions can hide otherwise legitimate facts; storage alone
 does not establish that a particular conversation may repeat them. Long text
