@@ -39,6 +39,9 @@ NATIVE_PREFIX = "tg:lab:native:"
 NATIVE_START_KEY = "tg:lab:native_start"
 CLEARED_PREFIX = "tg:lab:cleared:"
 ERROR_LIMIT = 256
+# Native logs the DC test driver in on the first dummy_trial after a worldserver start and refuses
+# it driver_pending; the lab tries that leg once more this much later, once per lab.
+DRIVER_RETRY_SECONDS = 60
 _CODE = re.compile(r"[A-Za-z0-9_.:-]{1,64}")
 INPUT_LIMIT = 64
 ACK_SECONDS = 60
@@ -56,6 +59,47 @@ def _error_code(error):
     """The leading code of a native ack error, safe for a log line."""
     found = _CODE.match(error) if isinstance(error, str) else None
     return found.group(0) if found else "unknown"
+
+
+UNTRUSTED_TERMINAL = frozenset({"conflicting_terminal", "terminal_shape_invalid", "conflicting_result"})
+
+
+def terminal_proof(current):
+    """Why a stored attempt's terminal does not prove every member's return; "" when it does.
+
+    The lab blocks on any reason, and `training lab-clear` accepts the terminal as native
+    evidence only when this says "": one rule for both. Native PublishTerminal(false) is reached
+    only after AllReturned(); PublishTerminal(true) emits cleanup_failed and recovery sends no
+    new terminal, so such a failure cannot be cleared by a Python timeout.
+    """
+    try:
+        event = current["terminal"]
+        if event is None:
+            return "native_terminal_missing"
+        if {current["bad"], *current.get("faults", [])} & UNTRUSTED_TERMINAL:
+            return "native_terminal_conflicted"
+        if (event["id"] != current["id"] or event["kind"] != "dummy_trial"
+                or event["state"] not in {"done", "failed"}):
+            return "terminal_shape_invalid"
+        good, skipped = event["guids"], event["skipped"]
+        ids = [*good, *(s["guid"] for s in skipped)]
+        if (any(type(g) is not int for g in ids) or len(ids) != len(set(ids))
+                or set(ids) != set(current["guids"])):
+            return "terminal_roster_mismatch"
+        reasons = [event["reason"], *(s["reason"] for s in skipped)]
+        if any(type(r) is not str or r.startswith("cleanup_failed") for r in reasons):
+            return "native_cleanup_unproved"
+        dropped = {str(s["guid"]): s["reason"] for s in skipped}
+        for guid, result in current["results"].items():
+            if result["dropped"].startswith("cleanup_failed"):
+                return "native_cleanup_unproved"
+            if result["dropped"] != dropped.get(guid, ""):
+                return "result_terminal_conflicted"
+            if result["ts"] > event["ts"]:
+                return "result_after_terminal"
+    except (KeyError, TypeError, AttributeError):
+        return "terminal_shape_invalid"
+    return ""
 
 
 def desired_setups(conn, guids):
@@ -451,37 +495,12 @@ class LabRunner:
             current["faults"].append(reason)
 
     def _terminal_proof(self, current):
-        event = current["terminal"]
-        if event is None:
+        if current["terminal"] is None:
             return False
-        if ({current["bad"], *current.get("faults", [])}
-                & {"conflicting_terminal", "terminal_shape_invalid", "conflicting_result"}):
-            self._block("native_terminal_conflicted")
+        reason = terminal_proof(current)
+        if reason:
+            self._block(reason)
             return False
-        good, skipped = event["guids"], event["skipped"]
-        ids = [*good, *(s["guid"] for s in skipped)]
-        if (any(type(g) is not int for g in ids) or len(ids) != len(set(ids))
-                or set(ids) != set(current["guids"])):
-            self._block("terminal_roster_mismatch")
-            return False
-        reasons = [event["reason"], *(s["reason"] for s in skipped)]
-        if any(type(r) is not str or r.startswith("cleanup_failed") for r in reasons):
-            self._block("native_cleanup_unproved")
-            return False
-        dropped = {str(s["guid"]): s["reason"] for s in skipped}
-        for guid, result in current["results"].items():
-            if result["dropped"].startswith("cleanup_failed"):
-                self._block("native_cleanup_unproved")
-                return False
-            if result["dropped"] != dropped.get(guid, ""):
-                self._block("result_terminal_conflicted")
-                return False
-            if result["ts"] > event["ts"]:
-                self._block("result_after_terminal")
-                return False
-        # Native PublishTerminal(false) is reached only after AllReturned().
-        # PublishTerminal(true) emits cleanup_failed and recovery has no new
-        # event: such a failure cannot be cleared by a Python timeout.
         return True
 
     def _rate(self, result):
@@ -688,6 +707,12 @@ class LabRunner:
                 self._owned["attempts"] += 1
                 self._owned["current"] = None
                 self._owned["ack_error"] = current["ack_error"]
+                if _error_code(ack.error) == "driver_pending" and "driver_retry" not in self._owned:
+                    self._owned["driver_retry"] = self.ports.clock.now() + DRIVER_RETRY_SECONDS
+                    self._owned["phase"] = "ready"  # The same leg, once; a second refusal ends the lab.
+                    self._save()
+                    log.info("training_lab_driver_retry id=%s in_s=%d", current["id"], DRIVER_RETRY_SECONDS)
+                    return
                 await self._finish("dummy_command_rejected")
         except asyncio.CancelledError:
             self._block("dummy_send_cancelled")
@@ -754,7 +779,8 @@ class LabRunner:
                     return
                 if not renewed:
                     return
-                if self._owned["phase"] == "ready":
+                retry = self._owned.get("driver_retry")
+                if self._owned["phase"] == "ready" and not (_number(retry) and self.ports.clock.now() < retry):
                     await self._dispatch()
                 return
             if self._due():

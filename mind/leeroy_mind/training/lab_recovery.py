@@ -5,10 +5,14 @@ The lab blocks for good when it cannot prove native returned its members
 already stored: the trial's ``dummy_cleanup`` receipt (restored or released),
 a stored terminal that proves every return, or a worldserver process that
 started after the trial (its in-memory job, fence and journals went with the
-old process, and the core drops one-member groups when it loads). It never
-dials the bridge, sends a command or restores a standing setup, so a member
-with a standing setup refuses the clear. Attempt receipts, results and native
-receipts are kept; the night gets a summary with the lab's halt as its reason.
+old process, and the core drops one-member groups when it loads). A lab blocked
+with no trial in flight (vocab probes and custom strategy priming touch no
+body) needs no native evidence. It never dials the bridge, sends a command or
+restores a standing setup, so a member with a standing setup refuses the clear.
+The completed record must pass the body holds' own validation before it
+commits. Attempt receipts (with their earlier restoration state), results and
+native receipts are kept; the night gets a summary with the lab's halt as its
+reason.
 """
 
 import math
@@ -16,14 +20,13 @@ import re
 
 from leeroy_mind.guild.loot import _get, _put
 
-from .body_holds import identity, members
+from .body_holds import identity, members, validate_lab_complete
 from .lab import _DAMAGE_SPECS
 from .lab_runner import (ATTEMPT_PREFIX, CLEARED_PREFIX, CURSOR_KEY, NATIVE_PREFIX, NATIVE_START_KEY, OWNED_KEY,
-                         SUMMARY_PREFIX, desired_setups)
+                         SUMMARY_PREFIX, desired_setups, terminal_proof)
 
 
 RECOVERED_KINDS = frozenset({"dummy_cleanup", "native_terminal", "native_restart"})
-UNTRUSTED_TERMINAL = frozenset({"conflicting_terminal", "terminal_shape_invalid", "conflicting_result"})
 _NIGHT = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 
@@ -62,23 +65,6 @@ def _owned(conn):
     return owned, scope, guids
 
 
-def _terminal_proves_return(current):
-    terminal = current.get("terminal")
-    if type(terminal) is not dict or {current.get("bad"), *current.get("faults", ())} & UNTRUSTED_TERMINAL:
-        return False
-    skipped = terminal.get("skipped")
-    if (terminal.get("id") != current["id"] or terminal.get("kind") != "dummy_trial"
-            or terminal.get("state") not in {"done", "failed"} or type(terminal.get("reason")) is not str
-            or terminal["reason"].startswith("cleanup_failed") or type(skipped) is not list
-            or type(terminal.get("guids")) is not list):
-        return False
-    for skip in skipped:
-        if type(skip) is not dict or type(skip.get("reason")) is not str or skip["reason"].startswith("cleanup_failed"):
-            return False
-    roster = [*terminal["guids"], *(skip.get("guid") for skip in skipped)]
-    return sorted(roster, key=str) == sorted(current["guids"], key=str)
-
-
 def _evidence(conn, current, guids):
     """Native's proof that the trial no longer holds a body, else a refusal in words."""
     try:
@@ -96,7 +82,7 @@ def _evidence(conn, current, guids):
             and type(receipt.get("ts")) is int and type(receipt.get("unfinished")) is list):
         return dict(kind="dummy_cleanup", trial=ident, state=receipt["state"],
                     unfinished=[g for g in receipt["unfinished"] if type(g) is int], ts=receipt["ts"])
-    if _terminal_proves_return(current):
+    if terminal_proof(current) == "":  # The very rule the lab blocked on; stored results included.
         return dict(kind="native_terminal", trial=ident, ts=current["terminal"]["ts"])
     terminal = current.get("terminal")
     after = max(sent, terminal["ts"] if type(terminal) is dict and type(terminal.get("ts")) is int else 0)
@@ -145,7 +131,8 @@ def clear_blocked_lab(conn, now):
                 record = attempt if type(attempt) is dict else dict(
                     current, lab=scope, spec=owned["spec"], round=owned.get("round", 0), rows={},
                     metric="dummy_requested_damage_proxy", field_performance="unavailable")
-                record.update(restoration="native_recovered", restoration_at=now, recovered=evidence)
+                record.update(restoration_before=record.get("restoration"), restoration="native_recovered",
+                              restoration_at=now, recovered=evidence)
                 _put(conn, key, record)
                 if current["id"] not in owned["gaps"]:
                     owned["gaps"].append(current["id"])
@@ -161,6 +148,12 @@ def clear_blocked_lab(conn, now):
         _put(conn, summary_key, summary)
         _put(conn, CURSOR_KEY, owned["spec"])
         _put(conn, CLEARED_PREFIX + scope, dict(recovery, night=night, members=sorted(guids)))
+        try:
+            # The body holds read exactly this rule; a record it rejects would make them hold every body.
+            validate_lab_complete(conn, owned)
+        except (ValueError, KeyError, TypeError):
+            raise LabClearRefused("the cleared record would not be a valid completed lab (an odd member list, "
+                                  "attempt or summary); nothing was written. Inspect it with `training lab`.") from None
     return dict(cleared=scope, night=night, halt=owned["halt"], evidence=evidence,
                 members_freed=sorted(guids), summary=summary_key,
                 kept="attempt receipts, results and native receipts; no command was sent")

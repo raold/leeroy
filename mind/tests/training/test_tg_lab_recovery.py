@@ -15,7 +15,7 @@ from leeroy_mind.training.lab_runner import (ATTEMPT_PREFIX, CLEARED_PREFIX, CUR
     NATIVE_START_KEY, OWNED_KEY, SUMMARY_PREFIX, LabRunner)
 from leeroy_mind.training.protocol import DummyCleanup
 
-from .test_tg_lab_runner import blocked, lab  # noqa: F401  (fixture)
+from .test_tg_lab_runner import blocked, complete, lab, start  # noqa: F401  (fixture)
 
 
 def meta(fake):
@@ -33,7 +33,7 @@ def refused(fake, words):
 def test_nothing_to_clear_without_a_blocked_lab(fake, lab):
     refused(fake, "no lab record")
     runner, _, _ = lab
-    fake.acks["dummy_trial"].append((False, "driver_pending"))
+    fake.acks["dummy_trial"].append((False, "busy"))
     asyncio.run(runner.tick())
     asyncio.run(runner.tick())
     assert _get(fake.conn, OWNED_KEY)["phase"] == "complete"
@@ -136,3 +136,54 @@ def test_cli_clears_only_with_the_mind_stopped_and_says_why_it_refuses(fake, lab
     assert cli.training_main(["lab", "--data-dir", str(tmp_path)]) == 0
     shown = json.loads(capsys.readouterr().out)["owned"]
     assert shown["phase"] == "complete" and shown["recovered"]["evidence"]["trial"] == ident
+
+
+def test_a_clean_terminal_contradicted_by_a_stored_result_is_not_evidence(fake, lab):
+    runner, _, _ = lab
+    async def scenario():
+        await start(runner)
+        await complete(fake, runner, changes={"dropped": "cleanup_failed:ownership_changed"})
+    asyncio.run(scenario())
+    assert runner._owned["halt"] == "native_cleanup_unproved"
+    assert runner._owned["current"]["terminal"]["reason"] == ""  # The terminal alone looks clean.
+    refused(fake, "no native evidence yet")
+
+
+def test_a_clean_terminal_clears_and_keeps_the_earlier_restoration_state(fake, lab):
+    runner, _, applier = lab
+    applier.apply_standing.side_effect = RuntimeError("synthetic")
+    async def scenario():
+        await start(runner)
+        await complete(fake, runner)
+    asyncio.run(scenario())
+    assert runner._owned["halt"] == "standing_restoration_uncertain"
+    ident = runner._owned["current"]["id"]
+    result = clear_blocked_lab(fake.conn, fake.clock.now())
+    assert result["evidence"]["kind"] == "native_terminal"
+    attempt = _get(fake.conn, ATTEMPT_PREFIX + ident)
+    assert attempt["restoration_before"] == "pending" and attempt["restoration"] == "native_recovered"
+    validate_lab_complete(fake.conn, _get(fake.conn, OWNED_KEY))
+
+
+def test_a_record_the_body_holds_would_reject_never_commits(fake, lab):
+    runner, _, _ = lab
+    ident = blocked(fake, runner)
+    runner.feed(DummyCleanup(int(fake.clock.now() * 1000), ident, "released", (101,), 600000))
+    owned = _get(fake.conn, OWNED_KEY)
+    owned["alive"] = [999]  # Not a member: completing it would make the body holds fail closed.
+    with fake.conn:
+        _put(fake.conn, OWNED_KEY, owned)
+    said = refused(fake, "would not be a valid completed lab")
+    assert "nothing was written" in said
+    assert _get(fake.conn, OWNED_KEY)["phase"] == "blocked"
+
+
+def test_a_block_with_no_trial_in_flight_clears_without_native_evidence(fake, lab):
+    runner, _, _ = lab
+    asyncio.run(runner.tick())  # Acquire, probe and prime; nothing is sent to a body yet.
+    assert runner._owned["phase"] == "ready" and runner._owned["current"] is None
+    restarted = LabRunner(fake, fake.cfg, runner.ground, runner.applier, schedule=runner.schedule)
+    assert restarted._owned["phase"] == "blocked" and restarted._owned["halt"] == "process_restart"
+    result = clear_blocked_lab(fake.conn, fake.clock.now())
+    assert result["evidence"] is None and result["members_freed"] == [101, 102, 103, 104]
+    validate_lab_complete(fake.conn, _get(fake.conn, OWNED_KEY))
