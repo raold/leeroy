@@ -4,6 +4,7 @@
 #include "LeeroyEmotes.h"
 #include "LeeroyEvents.h"
 #include "LeeroyText.h"
+#include "LeeroySocialSit.h"
 
 #include "AllMapScript.h"
 #include "Channel.h"
@@ -38,6 +39,15 @@ namespace Leeroy::Realm
 {
 namespace
 {
+SocialSeats socialSeats;
+
+void StandSocial(std::uint32_t guid, std::string const& token)
+{
+    if (!socialSeats.End(guid, token)) return;
+    if (auto* bot = FindOnline(guid); bot && bot->getStandState() == UNIT_STAND_STATE_SIT)
+        bot->SetStandState(UNIT_STAND_STATE_STAND);
+}
+
 std::string_view ChannelName(std::uint32_t id)
 {
     switch (id)
@@ -275,10 +285,15 @@ LeeroyCommandResult Say(nlohmann::json const& message)
 
 LeeroyCommandResult Emote(nlohmann::json const& message)
 {
-    if (!RealmModule::Instance().On()) return {false, "realm_off"};
     std::string why;
     auto const cmd = ParseEmote(message, why);
     if (!cmd) return {false, why};
+    if (cmd->social && cmd->emote == "stand")
+    {
+        StandSocial(cmd->guid, cmd->seatId); // Idempotent exact-token cleanup also works while off.
+        return {true, {}};
+    }
+    if (!RealmModule::Instance().On()) return {false, "realm_off"};
     auto* bot = Speaker(cmd->guid, why);
     if (!bot) return {false, why};
     if (cmd->social)
@@ -309,6 +324,14 @@ LeeroyCommandResult Emote(nlohmann::json const& message)
     bot->GetSession()->HandleTextEmoteOpcode(packet);
     // HandleTextEmoteOpcode applies the normal flood throttle before emitting.
     if (!bot->CanSpeak()) return {false, "muted"};
+    if (cmd->social && cmd->emote == "sit")
+    {
+        if (!socialSeats.Begin(cmd->guid, message.at("id").get<std::string>(), NowMs(),
+                cmd->leaseSeconds ? cmd->leaseSeconds : 900, GuildId(), HumanGuid()))
+            return {false, "social_unavailable"};
+        bot->StopMoving();
+        bot->SetStandState(UNIT_STAND_STATE_SIT);
+    }
     return {true, {}};
 }
 
@@ -658,6 +681,29 @@ void RegisterRealmSpeechHandlers()
     RegisterCommand("realm_say", Say);
     RegisterCommand("realm_emote", Emote);
     RegisterCommand("announce", Announce);
+}
+
+void TickSocialSeats()
+{
+    auto snapshot = socialSeats.Entries();
+    for (auto const& [guid, seat] : snapshot)
+    {
+        auto* human = FindOnline(HumanGuid());
+        std::string why;
+        auto* bot = Speaker(guid, why);
+        bool const ready = RealmModule::Instance().On() && LeeroyModule::Instance().Bridge().Connected()
+            && IsCast(guid) && SocialReady(bot) && SocialReady(human)
+            && bot->GetMap() == human->GetMap() && bot->GetDistance(human) <= 20.0f;
+        if (!socialSeats.Current(seat, NowMs(), ready, GuildId(), HumanGuid()))
+            StandSocial(guid, seat.token);
+        else
+        {
+            // Idle playerbot updates can stand her up; the bounded owned visit keeps
+            // the pose only while every body/context/combat check still permits it.
+            bot->StopMoving();
+            if (bot->getStandState() != UNIT_STAND_STATE_SIT) bot->SetStandState(UNIT_STAND_STATE_SIT);
+        }
+    }
 }
 
 void AddRealmSpeechScripts()

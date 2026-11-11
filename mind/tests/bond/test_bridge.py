@@ -37,7 +37,7 @@ def test_fake_bridge_accept_move_sit_and_private_conversation(tmp_path,clock,cap
             h.app.guild.raid_night.state=State.IDLE
             h.app.realm._raid_state='IDLE'
             h.app.world.human_zone=1637
-            bond.started=clock.now()-1800
+            h.app.engine._login_at=clock.now()-1800
             assert bond.enabled(), h.app.cfg.romance
             assert bond.available(101), (h.app.world.human_online,h.app.world.group,
                 bond.ports.raid_state(),h.app.personas.get(101).romance.stance,h.app.personas.get(101).identity.player_gender)

@@ -5,6 +5,7 @@
 #include "RealmPorts.h"
 #include "RealmGuild.h"
 #include "RealmCleanup.h"
+#include "RealmSpeech.h"
 #include "LeeroyRealmCleanup.h"
 #include "LeeroyRealmGuild.h"
 #include "Log.h"
@@ -913,6 +914,7 @@ void RealmModule::Tick(std::uint32_t diff)
 {
     _state->DrainKills();
     ReconcileConfiguration();
+    TickSocialSeats();
     if (!On() && !GuildOn())
     {
         TickBudget noMutations(1);

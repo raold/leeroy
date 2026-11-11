@@ -32,6 +32,12 @@ def live(tmp_path,store,clock):
     app.world.human_online=True
     app.world.human_zone=1637
     app.world.online={101,102,103}
+    app.world.members=dict(store.cast())
+    app.engine._login_at=clock.now()
+    app.engine._may_whisper=lambda now:True
+    app.engine._his_talk_at=lambda:float('-inf')
+    app.engine._whisper_threads=lambda now:set()
+    app.engine.whispers=NS(refusal=lambda now:None)
     app.raid=NS(phase=lambda now:'none')
     enabled(tmp_path,True)
     realm=attach_realm(app)
@@ -50,7 +56,7 @@ async def start(h):
     await h.app.connection(True)
     await h.app.event(Hello(int(h.clock.now()*1000),'test','1',21,1))
     await h.bond.tick()
-    h.bond.started=h.clock.now()-1800
+    h.app.engine._login_at=h.clock.now()-1800
 
 
 async def observation(h,near=False,ready=True,*,mutate=None):

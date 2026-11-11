@@ -113,7 +113,9 @@ class RealmEmote:
     guid: int
     emote: str
     target_guid: int = 0
-    social: bool = False
+    social: bool = field(default=False, metadata={"omit_default": True})
+    seat_id: str = field(default='', metadata={"omit_default": True})
+    lease_seconds: int = field(default=0, metadata={"omit_default": True})
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,7 +124,7 @@ class RealmMove:
     guid: int
     place: str
     slot: int = 0
-    social: bool = False
+    social: bool = field(default=False, metadata={"omit_default": True})
 
 
 @dataclass(frozen=True, slots=True)

@@ -59,7 +59,8 @@ bool IsPrimaryProfession(std::uint32_t skill);
 
 struct ActorsCmd { std::vector<std::uint32_t> guids, gankers, guilds; };
 struct SayCmd { std::uint32_t guid = 0; std::string channel, text; std::uint32_t toGuid = 0; };
-struct EmoteCmd { std::uint32_t guid = 0; std::string emote; std::uint32_t targetGuid = 0; bool social = false; };
+struct EmoteCmd { std::uint32_t guid = 0; std::string emote; std::uint32_t targetGuid = 0; bool social = false;
+    std::string seatId; std::uint32_t leaseSeconds = 0; };
 struct MoveCmd { std::uint32_t guid = 0; std::string place; std::uint32_t slot = 0; bool social = false; };
 struct VisitCmd { std::string place; };
 struct RpgStatusCmd { std::uint32_t guid = 0; std::string status; std::uint32_t questId = 0; };
@@ -232,7 +233,7 @@ nlohmann::json MakeGameEvent(std::uint32_t eventId, std::string_view state);
 nlohmann::json MakeCalendarRsvp(std::uint64_t eventId, std::string_view status);
 nlohmann::json MakeMailTaken(std::uint32_t itemGuid, std::uint32_t itemId, std::uint32_t count);
 nlohmann::json MakeVisitState(std::string const& id, std::string const& place,
-                            std::uint32_t guild, std::uint32_t human, bool ready, bool near);
+                            std::uint32_t guild, std::uint32_t human, bool ready, bool nearby);
 nlohmann::json MakeGuard(std::uint32_t guid, std::string_view action, std::uint32_t rank, std::string_view reason);
 std::string FormatAnnouncement(std::string_view guild, std::string_view boss, std::uint32_t size,
     bool heroic, std::uint32_t attempts, std::uint32_t fightS, bool ever);

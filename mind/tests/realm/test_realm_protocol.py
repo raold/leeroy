@@ -15,7 +15,7 @@ FIXTURE = Path(__file__).resolve().parents[3] / "modules/mod-leeroy/tests/fixtur
 COMMAND_FIELDS = {
     "realm_actors": "id guids gankers guilds",
     "realm_say": "id guid channel text to_guid",
-    "realm_emote": "id guid emote target_guid social",
+    "realm_emote": "id guid emote target_guid social seat_id lease_seconds",
     "realm_move": "id guid place slot social",
     "realm_visit": "id place",
     "rpg_status": "id guid status quest_id",
@@ -124,6 +124,9 @@ def test_commands_round_trip_native_fixtures_with_ordered_wire_keys():
         line = wire.encode_command(cmd, msg["ts"])
         encoded = json.loads(line)
         expected_fields = COMMAND_FIELDS[msg["type"]].split()
+        omitted = {f.name for f in dataclasses.fields(cmd)
+                   if f.metadata.get('omit_default') and getattr(cmd,f.name) == f.default}
+        expected_fields = [name for name in expected_fields if name not in omitted]
         if msg["type"] == "arena_team":
             expected_fields = (["id", "action", "captain_guid", "arena_type", "name"]
                                if cmd.action == "create" else ["id", "action", "team_id", "guid"])

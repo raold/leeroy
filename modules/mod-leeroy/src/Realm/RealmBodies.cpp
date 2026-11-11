@@ -852,9 +852,9 @@ void RegisterRealmBodyHandlers()
         if (it == places.end() || it->kind != "inn") return {false, "unknown_place"};
         auto* human = FindOnline(HumanGuid());
         bool const ready = SocialReady(human);
-        bool const near = ready && human->GetMapId() == it->map
+        bool const nearby = ready && human->GetMapId() == it->map
             && human->GetDistance(it->x, it->y, it->z) <= 20.0f;
-        Publish(MakeVisitState(message.at("id").get<std::string>(), command->place, GuildId(), HumanGuid(), ready, near));
+        Publish(MakeVisitState(message.at("id").get<std::string>(), command->place, GuildId(), HumanGuid(), ready, nearby));
         return {true, ""};
     });
     QueueHandler("rpg_status", ParseRpgStatus, [](RpgStatusCmd const& command, Queued& entry)

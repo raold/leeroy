@@ -6,16 +6,25 @@ for arrival acceptance and the shared conversation; a Zone event is insufficient
 """
 import re
 import uuid
+import math
 
 from leeroy_mind.bond.policy import eligible
+from leeroy_mind.bodies import BodyEvidenceUnavailable
+from leeroy_mind.logs import log
 from leeroy_mind.protocol import Chat
 from leeroy_mind.talk.turns import Turn, TurnKind
 from leeroy_mind.tuning.effective import dials_of
+from leeroy_mind.wow import DUNGEONS, RAID_INSTANCES
+from .actions import ActionRejected
+from .action_store import ActionCapacity, ActionUnavailable
+from .direct import DirectRefused
 from .protocol import RealmMove, RealmEmote, RealmVisit, RealmVisitState
 
 YES = re.compile(r'(?:yes|yeah|yep|sure|okay|ok|let[’\']?s go|on my way)[.! ]*', re.I)
 NO = re.compile(r'(?:no|nope|not now|no thanks|maybe later|stop|leave me alone)[.! ]*', re.I)
 TTL, VISIT_S, PROBE_S = 600, 900, 10
+OBSERVATION_S = PROBE_S * 3 + 5
+BG_MAPS = frozenset({30,489,529,559,562,566,572,607,617,618,628})
 
 
 class Bond:
@@ -25,8 +34,8 @@ class Bond:
         self.query = None
         self.observed = None
         self.last_probe = float('-inf')
-        self.started = self.app.clock.now()
-        self.work = set()
+        self.work = {}
+        self.unsupported_epoch = None
         self.offered_context = None
         self.talked = None
 
@@ -46,8 +55,17 @@ class Bond:
     def enabled(self):
         return getattr(self.app.cfg.romance, 'activities', False) is True
 
-    def available(self, guid):
+    def available(self, guid, *, body=True):
         context = self.realm.action_context()
+        member = self.app.world.members.get(guid)
+        if not member or member.map in DUNGEONS or member.map in RAID_INSTANCES or member.map in BG_MAPS:
+            return False
+        if body:
+            try:
+                if guid not in self.realm.bodies.movable('realm_day', (guid,)):
+                    return False
+            except (BodyEvidenceUnavailable, ValueError):
+                return False
         return (self.enabled() and context.enabled and context.connected and context.presence_known
             and self.ports.human_online() and not self.ports.human_grouped()
             and not self.ports.raid_holds_all()
@@ -59,12 +77,12 @@ class Bond:
             return False
         ev, received, context = self.observed
         return (ev.place == place and ev.ready and (not near or ev.near)
-                and context == self.realm.action_context() and 0 <= self.now()-received <= PROBE_S+2)
+                and context == self.realm.action_context() and 0 <= self.now()-received <= OBSERVATION_S)
 
     def valid(self, ident, states, *, near=False):
         row = self.row(ident)
         return bool(row and row['state'] in states and row['expires'] > self.now()
-            and row['human'] == self.realm.action_context().human and self.available(row['guid'])
+            and row['human'] == self.realm.action_context().human and self.available(row['guid'],body=False)
             and self.offered_context == self.realm.action_context()
             and self.fresh(row['place'], near=near))
 
@@ -79,25 +97,69 @@ class Bond:
         owner = 'bond:'+row['id']
         self.realm.queue.drop_owner(owner)  # Prepared only; never cancels an uncertain native move.
         self.realm.bodies.release(owner)
+        if row['emote_id']:
+            self.spawn('stand:'+row['id'],lambda:self.stand(row))
+
+    async def stand(self, row):
+        cmd = RealmEmote(uuid.uuid4().hex,row['guid'],'stand',social=True,seat_id=row['emote_id'])
+        direct = self.realm.part('direct')
+        if direct.prepare(cmd,owner='speech',ref='emote:bond-end:'+row['id'],
+                          context=self.realm.action_context(),expects_job=False):
+            try:
+                await self.ports.send(cmd)
+            finally:
+                direct.abandon_unsent(cmd)
 
     def invalidate(self):
         self.query = self.observed = None
+        self.work.clear()
         if self.recovered and (row := self.row()):
             self.close(row)
 
     def spawn(self, key, call):
         if key in self.work:
-            return
-        self.work.add(key)
+            return False
+        token = object()
+        self.work[key] = token
+        def release(_=None):
+            if self.work.get(key) is token:
+                self.work.pop(key,None)
         async def run():
             try:
                 await call()
             finally:
-                self.work.discard(key)
-        if self.realm.spawn(run) is None:
-            self.work.discard(key)
+                release()
+        task = self.realm.spawn(run)
+        if task is None:
+            release()
+            return False
+        task.add_done_callback(release)  # Also runs if cancelled before run() starts.
+        return True
 
     async def tick(self):
+        try:
+            await self._tick()
+        except Exception as exc:
+            log('bond_tick_failed', error=type(exc).__name__)
+            try:
+                if row := self.row(): self.close(row,'unknown')
+            except Exception:
+                log('bond_close_failed')
+
+    def can_offer(self, guid):
+        e, now = self.app.engine, self.now()
+        login = e._login_at
+        if not isinstance(login,(int,float)) or not math.isfinite(login):
+            return False
+        persona = self.ports.persona(guid)
+        if not eligible(persona,self.app.cfg.romance.dial):
+            return False
+        wait = 600 + (10-min(10,dials_of(persona).level('forward')))*30 + (10-self.app.cfg.romance.dial)*30
+        return (now-login >= wait and self.app.cfg.talk.chattiness > 0 and e._may_whisper(now)
+            and now-e._his_talk_at() >= 60 and guid not in e._whisper_threads(now)
+            and e.whispers.refusal(now) is None)
+
+    async def _tick(self):
         if not self.enabled():
             self.invalidate()
             return
@@ -110,7 +172,7 @@ class Bond:
             self.recovered = True
         row = self.row()
         if row:
-            if row['expires'] <= self.now() or not self.available(row['guid']) or self.offered_context != self.realm.action_context():
+            if row['expires'] <= self.now() or not self.available(row['guid'],body=False) or self.offered_context != self.realm.action_context():
                 self.close(row, 'expired')
                 return
             if row['state'] == 'seated' and not self.owns_body(row):
@@ -131,7 +193,7 @@ class Bond:
             await self.probe(row['place'], row['id'])
             return
         # Let login greetings settle. Forward/romance dials also lengthen this wait.
-        if self.now()-self.started < 600 or self.work:
+        if self.work:
             return
         day = self.app.clock.local().date().isoformat()
         if self.conn.execute('SELECT count(*) FROM bond_invite WHERE day=?', (day,)).fetchone()[0] >= 2:
@@ -148,11 +210,7 @@ class Bond:
         # reserve both daily invitations for the lowest two character ids.
         for member in sorted(self.ports.cast(), key=lambda m: (last.get(m.guid, float('-inf')), m.guid)):
             guid = member.guid
-            if not self.available(guid):
-                continue
-            level = min(10, dials_of(self.ports.persona(guid)).level('forward'))
-            wait = 600 + (10-level)*30 + (10-self.app.cfg.romance.dial)*30
-            if self.now()-self.started < wait:
+            if not self.available(guid) or not self.can_offer(guid):
                 continue
             if self.conn.execute('SELECT 1 FROM bond_invite WHERE day=? AND guid=? AND human=?',
                                  (day, guid, self.app.human_guid)).fetchone():
@@ -161,12 +219,21 @@ class Bond:
             return
 
     async def probe(self, place, purpose):
-        if self.now()-self.last_probe < PROBE_S:
+        epoch = self.realm._transport().epoch
+        if self.now()-self.last_probe < PROBE_S or 'probe' in self.work or self.unsupported_epoch == epoch:
             return
-        self.last_probe = self.now()
-        cmd = RealmVisit(uuid.uuid4().hex, place)
-        self.query = (cmd, purpose, self.now(), self.realm.action_context(), self.realm._transport().epoch)
-        self.spawn('probe', lambda: self.ports.send(cmd))
+        async def send():
+            cmd = RealmVisit(uuid.uuid4().hex, place)
+            self.last_probe = self.now()
+            self.query = (cmd, purpose, self.now(), self.realm.action_context(), epoch)
+            await self.ports.send(cmd)
+        self.spawn('probe',send)
+
+    def probe_ack(self, cmd, ack):
+        if not ack.ok and self.query and self.query[0].id == cmd.id:
+            self.unsupported_epoch = self.query[4]
+            self.query = None
+            log('bond_probe_unsupported')
 
     async def on_event(self, ev):
         if not self.enabled():
@@ -178,7 +245,7 @@ class Bond:
             cmd, purpose, sent, context, epoch = query
             if (ev.id != cmd.id or ev.place != cmd.place or context != self.realm.action_context()
                 or self.realm._delivery_epoch(ev) != epoch or ev.guild_id != context.guild
-                or ev.human_guid != context.human or not 0 <= self.now()-sent <= PROBE_S
+                or ev.human_guid != context.human or not 0 <= self.now()-sent <= OBSERVATION_S
                 or not sent-2 <= ev.ts/1000 <= self.now()+2):
                 return
             self.query = None
@@ -205,7 +272,7 @@ class Bond:
                 self.accept(row)
 
     def offer(self, guid, day, place):
-        if not self.available(guid) or not self.fresh(place) or day != self.app.clock.local().date().isoformat():
+        if not self.available(guid) or not self.can_offer(guid) or not self.fresh(place) or day != self.app.clock.local().date().isoformat():
             return
         ident, now = uuid.uuid4().hex, self.now()
         with self.app.store.transaction():
@@ -222,19 +289,29 @@ class Bond:
     async def say_offer(self, ident):
         row = self.row(ident)
         def before():
-            return self.valid(ident, ('prepared',))
+            return self.valid(ident, ('prepared',)) and self.available(row['guid']) and self.can_offer(row['guid'])
         def recorded(line_id, ack):
             if ack.ok and self.valid(ident, ('prepared',)):
                 with self.app.store.transaction():
                     self.conn.execute("UPDATE bond_invite SET state='offered',offered=? WHERE id=?", (self.now(),ident))
         try:
-            # The whitelist identifier becomes a readable label, never model input or a command.
-            text = f"Fancy sitting with me at {row['place'].replace('_',' ')}? Say yes or meet me there; no rush."
+            text = self.invitation(row['guid'],row['place'])
             await self.ports.say(row['guid'], 'whisper', text, to_guid=row['human'],
                                  before_transport=before, on_recorded=recorded)
         finally:
             if (current := self.row(ident)) and current['state'] == 'prepared':
                 self.close(current, 'unknown')
+
+    def invitation(self, guid, place):
+        label = {'org_inn':'the inn in Orgrimmar','dal_inn':'the inn in Dalaran'}.get(place,'the nearby inn')
+        dials = dials_of(self.ports.persona(guid))
+        if dials.level('talkative') <= 3:
+            return f"Sit with me at {label}? Say yes or meet me there."
+        if dials.level('humour') >= 7:
+            return f"Fancy claiming a quiet corner at {label} with me? Say yes or meet me there; no rush."
+        if dials.level('forward') >= 7:
+            return f"I'd like a little time with you at {label}. Say yes or meet me there if you fancy it."
+        return f"Fancy sitting with me at {label}? Say yes or meet me there; no rush."
 
     def accept(self, row):
         with self.app.store.transaction():
@@ -244,7 +321,13 @@ class Bond:
     def move(self, row):
         ident, guid = row['id'], row['guid']
         owner = 'bond:'+ident
-        if guid not in self.realm.bodies.claim(owner, [guid], rank='realm_day', until=row['expires']):
+        try:
+            claimed = self.realm.bodies.claim(owner, [guid], rank='realm_day', until=row['expires'])
+        except (BodyEvidenceUnavailable, ValueError):
+            log('bond_claim_refused',guid=guid)
+            self.close(row)
+            return
+        if guid not in claimed:
             self.close(row)
             return
         cmd = RealmMove(uuid.uuid4().hex, guid, row['place'], social=True)
@@ -262,15 +345,24 @@ class Bond:
         try:
             self.realm.queue.submit(cmd, owner=owner, on_done=done,
                 still_valid=lambda: self.valid(ident, ('moving',)))
-        except Exception:
-            self.close(self.row(ident), 'unknown')
-            raise
+        except (ActionRejected, ActionCapacity, ActionUnavailable, ValueError):
+            log('bond_move_refused',guid=guid)
+            self.close(self.row(ident), 'unknown' if self.realm.queue.owns_command(cmd) else 'closed')
+
+    def before_send(self, cmd):
+        if type(cmd) is not RealmEmote or not cmd.social or cmd.emote != 'sit':
+            return
+        row = self.conn.execute('SELECT * FROM bond_invite WHERE emote_id=?',(cmd.id,)).fetchone()
+        if not row or not self.valid(row['id'],('seated',),near=True) or not self.owns_body(row):
+            self.realm.part('direct').abandon_unsent(cmd)
+            raise DirectRefused('bond_unavailable')
 
     async def sit(self, row):
         ident = row['id']
         if not self.owns_body(row) or not self.valid(ident, ('seated',), near=True) or row['emote_id']:
             return
-        cmd = RealmEmote(uuid.uuid4().hex, row['guid'], 'sit', row['human'], social=True)
+        cmd = RealmEmote(uuid.uuid4().hex, row['guid'], 'sit', row['human'], social=True,
+                         lease_seconds=max(1,min(900,int(row['expires']-self.now()))))
         direct = self.realm.part('direct')
         with self.app.store.transaction():
             if not direct.prepare(cmd, owner='speech', ref='emote:bond:'+ident,

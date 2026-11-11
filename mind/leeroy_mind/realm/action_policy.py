@@ -64,7 +64,8 @@ def document(value, *, limit=65536):
 def _wire(value):
     if hasattr(value, "__dataclass_fields__"):
         return {f.name.rstrip("_"): _wire(getattr(value, f.name)) for f in fields(value)
-                if not (f.metadata.get("omit_none") and getattr(value, f.name) is None)}
+                if not (f.metadata.get("omit_none") and getattr(value, f.name) is None)
+                and not (f.metadata.get("omit_default") and getattr(value,f.name) == f.default)}
     if type(value) in (tuple, list):
         return [_wire(v) for v in value]
     return value
@@ -111,6 +112,10 @@ def classify(cmd, *, child=False):
     elif kind == "realm_emote":
         n("guid"); s("emote", 1, 64); n("target_guid", 0)
         if type(cmd.social) is not bool: raise ValueError('invalid social flag')
+        s('seat_id',0,128); n('lease_seconds',0,900)
+        if cmd.seat_id and not (cmd.social and cmd.emote == 'stand'): raise ValueError('invalid seat cleanup')
+        if cmd.lease_seconds and not (cmd.social and cmd.emote == 'sit'): raise ValueError('invalid seat lease')
+        if cmd.social and cmd.emote == 'stand' and not cmd.seat_id: raise ValueError('missing seat cleanup')
     elif kind in {"realm_move", "realm_visit"}:
         if re.fullmatch(r"[a-z0-9_]{1,64}", s("place", 1, 64)) is None: raise ValueError("invalid place")
         if kind == 'realm_move':

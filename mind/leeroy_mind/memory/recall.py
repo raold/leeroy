@@ -197,7 +197,7 @@ class Recall:
         return format_memory(m, self._clock.now(), tz=self._clock.local().tzinfo)
 
     def _shareable(self, rows: list[MemoryRow], owner: int, channel: str,
-                   to_guid: int) -> list[MemoryRow]:
+                   to_guid: int, *, include_bond: bool = False) -> list[MemoryRow]:
         """P1b's interim whisper rule, kept under the memory scope as a second check
         (controller ruling B1). A memory whose stored chat lines are all private (whispers or
         Discord DMs) stays out of a turn on any other channel, and out of a private turn unless
@@ -221,6 +221,10 @@ class Recall:
         hidden = {k: v for k, v in hidden.items() if v}
         keep = []
         for m in rows:
+            if not scope_ok(m, turn_channel=channel, to_guid=to_guid):
+                continue
+            if (m.key or '').startswith('bond:') and (not include_bond or m.owner != owner):
+                continue
             cited = [lines[i] for i in refs[m.id] if i in lines]
             if m.id in hidden and hidden[m.id] != {channel}:
                 continue
@@ -318,7 +322,7 @@ class Recall:
             scoped = [m for m in rows if scope_ok(m, turn_channel=channel, to_guid=to_guid)]
             if len(scoped) < len(rows):
                 log.debug("recall_scope_excluded: n=%d", len(rows) - len(scoped))
-            rows = self._not_own_lines(self._shareable(scoped, owner, channel, to_guid), owner)
+            rows = self._not_own_lines(self._shareable(scoped, owner, channel, to_guid, include_bond=include_bond), owner)
         if not rows:
             return []
 

@@ -125,3 +125,27 @@ def test_disabled_stage_changes_nothing_and_men_none_do_not_join(h):
     assert h.count('bond_moment')==h.count('bond_mood')==0
     night(h)
     assert h.count('bond_moment')==h.count('bond_mood')==0
+
+
+@pytest.mark.parametrize('positive',[False,True])
+def test_discord_dm_counts_as_company_and_positive_memories_can_make_playful(h,positive):
+    h.woman(101,'fond'); h.rel(101,1,affinity=30)
+    h.session(h.T-5*DAY,h.T-5*DAY+3600)
+    line=h.say(h.T-100,1,'good company',channel='dm:101',to=101)
+    if positive:
+        h.mem(101,'We had a good conversation.',t=h.T-90,valence=.7,actors=(1,101),
+              evidence=(f'chat:{line}',),scope='private',scope_with=1)
+    with h.store.transaction(): h.store.conn.execute('DELETE FROM session WHERE started>?',(h.T-DAY,))
+    night(h)
+    row=h.store.conn.execute('SELECT mood FROM bond_mood WHERE guid=101').fetchone()
+    assert row['mood']==('playful' if positive else 'quiet')
+
+
+@pytest.mark.parametrize('enabled',[False,True])
+def test_bond_stage_is_only_registered_when_enabled(enabled):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from leeroy_mind.bond.night import attach
+    runner=Mock()
+    attach(runner,SimpleNamespace(romance_activities=enabled))
+    assert runner.add_stage.called is enabled

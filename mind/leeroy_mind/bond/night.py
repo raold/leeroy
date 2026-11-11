@@ -5,6 +5,7 @@ import json
 
 from leeroy_mind.nightly.attraction import reflection_row
 from leeroy_mind.tuning.effective import dials_of
+from leeroy_mind.discord.channels import private_sql, discord_sql
 from .policy import eligible
 
 
@@ -65,7 +66,11 @@ async def stage_bond(ctx):
                 'AND updated>? AND updated<=? ORDER BY level DESC LIMIT 1', (guid, lo, now)).fetchone()
             cap = min(1., ctx.settings.jealousy / 10 * dials_of(persona).mult('jealousy'))
             mood, strength = 'quiet', 0.
-            if last is not None and now-last >= 3*86400 and not lines:
+            dm_contact = conn.execute(f"SELECT 1 FROM chat_line WHERE {discord_sql('channel')} "
+                f"AND {private_sql('channel')} AND ts>? AND ts<=? "
+                "AND ((from_guid=? AND to_guid=?) OR (from_guid=? AND to_guid=?)) LIMIT 1",
+                (lo,hi,human,guid,guid,human)).fetchone()
+            if last is not None and now-last >= 3*86400 and not lines and not dm_contact:
                 mood, strength = 'missing', min(.6, (now-last)/(14*86400))
             elif rivalry and rivalry['level'] > 0 and json.loads(rivalry['evidence'] or '[]') and cap > 0:
                 mood, strength = 'jealous', min(cap, rivalry['level']/100)
@@ -79,3 +84,8 @@ async def stage_bond(ctx):
                 'night=excluded.night,mood=excluded.mood,strength=excluded.strength,updated=excluded.updated,expires=excluded.expires',
                 (guid, human, ctx.night, mood, strength, now, now+48*3600))
     ctx.commit('bond', 'all', write)
+
+
+def attach(runner, settings):
+    if settings.romance_activities:
+        runner.add_stage('bond',stage_bond,after='jealousy',model=None)

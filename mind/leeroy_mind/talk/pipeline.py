@@ -1038,7 +1038,9 @@ class Pipeline:
             priority=turn.priority, touch=False, channel=turn.channel, to_guid=turn.to_guid, **bond_options)
         if meta.lore_memory and all(m.id != meta.lore_memory for m in memories):
             # the memory she answers his question from leads, even while it rests
-            memories = [*self.store.get_memories([meta.lore_memory]), *memories][:5]
+            pinned = self.recall._shareable(self.store.get_memories([meta.lore_memory]),
+                turn.speaker, turn.channel, turn.to_guid, **bond_options)
+            memories = [*pinned, *memories][:5]
 
         state = self.store.get_state(turn.speaker)
         altered = self._altered_of(turn.speaker)
