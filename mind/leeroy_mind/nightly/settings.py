@@ -49,6 +49,8 @@ class NightlySettings:
     confide_per_night: int = 60
     enrich_per_night: int = 10
     newcomers_per_night: int = 6
+    world_per_night: int = 12
+    world_selfies_per_night: int = 10
     photo_per_night: int = 120
     selfie_per_night: int = 120
     scenes_per_night: int = 24
@@ -108,13 +110,16 @@ def load_life(path: Path) -> int:
 
 def load_settings(cfg: MindConfig, data_dir: Path) -> NightlySettings:
     data_dir = Path(data_dir)
+    from leeroy_mind.world.config import load as load_world
+    world = load_world(data_dir / "mind.toml")
     return NightlySettings(
         live_model=cfg.models.live, reflection_model=cfg.models.reflection,
         embedding_model=cfg.models.embedding, ollama_url=cfg.ollama.url,
         relationship_speed=cfg.memory.relationship_speed, romance_dial=cfg.romance.dial,
         jealousy=cfg.romance.jealousy, chattiness=cfg.talk.chattiness,
         wow_vs_life=load_life(data_dir / "mind.toml"), female_share=cfg.cast.female_share,
-        data_dir=data_dir)
+        data_dir=data_dir, world_per_night=world.world_per_night,
+        world_selfies_per_night=world.world_selfies_per_night)
 
 
 def _at_six(day: date, tz: tzinfo) -> float:

@@ -177,8 +177,10 @@ def _view(conn, *, now: float, guid: int | None = None) -> dict:
     rows = {}
     if "persona_core" in have:
         sql = "SELECT guid, json, version, source, updated FROM persona_core"
+        from leeroy_mind.personas.tiers import is_cast
         rows = {r["guid"]: r for r in conn.execute(
-            sql + ("" if guid is None else " WHERE guid = ?"), () if guid is None else (guid,))}
+            sql + ("" if guid is None else " WHERE guid = ?"), () if guid is None else (guid,))
+            if is_cast(conn,r["guid"])}
     moves, looks = _writers(conn, have) if rows else ({}, {})
     since = now - RECENT_DAYS * 86400
     ties, you = (_ties(conn, human, DETAIL_TIES if guid is not None else TIES, guid)

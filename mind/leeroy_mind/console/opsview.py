@@ -335,8 +335,9 @@ def selfies_view(conn, now):
     from ..selfies.prompt import renderable
     from ..personas.schema import persona_from_dict
     require(conn, "selfie_set", "selfie_current")
+    from leeroy_mind.personas.tiers import cast_sql
     queue = conn.execute("SELECT guid,set_no,requested FROM selfie_set WHERE status='queued' "
-                         "ORDER BY requested LIMIT 129").fetchall()
+                         "AND " + cast_sql(conn) + " ORDER BY requested LIMIT 129").fetchall()
     if len(queue) > ROWS:
         raise Budget()
     held = []

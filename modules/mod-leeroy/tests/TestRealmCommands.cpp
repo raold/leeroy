@@ -35,6 +35,7 @@ bool Parse(std::string_view type, json const& j, std::string& error)
 {
     if (type == "realm_actors") return ParseActors(j, error).has_value();
     if (type == "realm_say") return ParseSay(j, error).has_value();
+    if (type == "world_say") return ParseWorldSay(j, error).has_value();
     if (type == "realm_emote") return ParseEmote(j, error).has_value();
     if (type == "realm_move") return ParseMove(j, error).has_value();
     if (type == "rpg_status") return ParseRpgStatus(j, error).has_value();

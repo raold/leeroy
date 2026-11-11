@@ -82,6 +82,36 @@ def seed_rivals(store):
                                (guid, guild, name, role))
 
 
+def test_world_member_uses_own_voice_and_direct_receipt_without_actor_or_move(sapp):
+    from leeroy_mind.world.protocol import WorldMember, WorldSay
+    from leeroy_mind.world.targets import save
+    s = sapp
+    with open(s.app.data_dir/"mind.toml","a",encoding="utf-8") as out:
+        out.write("\n[world]\nenabled=true\nrealm=true\n")
+    m = s.store.cast()[101]
+    save(s.store,(WorldMember(101,2,TESTGUILD,"Testguild",m.name,m.race,m.class_,m.gender,24,3,True,1,ORGRIMMAR),),
+         own=21,human=1,now=s.clock.now())
+    with s.store.transaction():
+        s.store.conn.execute("INSERT INTO persona_tier VALUES(101,'world')")
+    async def scenario():
+        await start(s)
+        officers = s.speech._officers(s.clock.now(),TESTGUILD)
+        speaker = next(o for o in officers if o.guid == 101)
+        assert speaker.world and s.speech._in_city(speaker)
+        assert not s.speech._move(TESTGUILD,speaker,s.speech._capital(),s.clock.now())
+        assert not s.speech._rival(speaker,"whisper","rival","hello")
+        assert s.speech._rival(speaker,"trade","rival","Discuss this character's levelling.")
+        await settle(s.realm)
+        sent = [cmd for cmd in s.app.sent if isinstance(cmd,WorldSay)]
+        assert len(sent) == 1 and sent[0].guid == 101 and sent[0].guild_id == TESTGUILD
+        assert any(row["state"] == "sent" and row["guid"] == 101 for row in lines(s.store))
+        prompt = json.dumps(s.llm.calls)
+        assert "Character level: 24" in prompt and "typing" in prompt
+        assert not s.store.conn.execute("SELECT 1 FROM realm_actor WHERE guid=101").fetchone()
+        await s.realm.close()
+    run(scenario())
+
+
 def make_app(tmp_path, store, clock, monkeypatch, *, llm=None, blocklist=True, name=GUILD_NAME):
     app = RealmApp(tmp_path, store, clock)
     app.personas = seed_test_cast(store)

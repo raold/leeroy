@@ -470,6 +470,8 @@ class MindApp:
         self.control = attach_control(self)
         from .playstyle.service import attach as attach_playstyle
         self.playstyle = attach_playstyle(self)
+        from .world.attach import attach_world
+        self.world_people = attach_world(self)
         self.realm = attach_realm(self)  # Last: tests/realm/test_realm_wiring.py
 
     # -- extension points --------------------------------------------------------------------

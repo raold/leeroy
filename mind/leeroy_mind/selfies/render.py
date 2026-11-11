@@ -187,6 +187,12 @@ def done_sets(ctx: "NightContext", policy: RenderPolicy = NIGHT) -> int:
             (ctx.night, policy.stage, QUEUE)).fetchone()[0]
 
 
+def allows(ctx, guid):
+    from leeroy_mind.personas.tiers import is_cast
+    scoped = getattr(ctx,"allows_selfie",None)
+    return scoped(guid) if scoped else is_cast(ctx.store.conn,guid)
+
+
 def todo(ctx: "NightContext", policy: RenderPolicy = NIGHT) -> list[str]:
     """The queued sets not done tonight, within what selfie_per_night leaves after the sets
     done tonight (a resumed night does not start the count again)."""
@@ -194,8 +200,8 @@ def todo(ctx: "NightContext", policy: RenderPolicy = NIGHT) -> list[str]:
     if policy.day is not None and ctx.clock.local().date().isoformat() != policy.day:
         return []
     units = [f"{s.guid}:{s.set_no}" for s in queued_sets(ctx.store)
-             if policy.requested_before is None or (
-                 s.requested <= policy.requested_before and _held(ctx, _stored(ctx, s.guid)) is None)]
+             if allows(ctx,s.guid) and (policy.requested_before is None or (
+                 s.requested <= policy.requested_before and _held(ctx, _stored(ctx, s.guid)) is None))]
     return [u for u in units if not ctx.done(policy.stage, u)][:room]
 
 
@@ -260,7 +266,7 @@ def _ready(ctx: "NightContext", guid: int, set_no: int, made: list[Candidate],
            lust: bool = False):
     def write(store) -> None:
         mark_ready(store, guid, set_no, made, now=ctx.clock.now(), night=ctx.night,
-                   persona_version=store.persona_versions()[guid], lust=lust)
+                   persona_version=store.persona_versions(tier=None)[guid], lust=lust)
     return write
 
 
@@ -297,6 +303,8 @@ async def _sets(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker, todo:
         if policy.day is not None and ctx.clock.local().date().isoformat() != policy.day:
             return False
         guid, set_no = (int(x) for x in unit.split(":"))
+        if not allows(ctx,guid):
+            continue
         p = _stored(ctx, guid)
         why = _held(ctx, p)
         if why is not None:
@@ -347,6 +355,9 @@ async def _sets(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker, todo:
         if policy.day is not None and ctx.clock.local().date().isoformat() != policy.day:
             _discard(ctx, guid, set_no)
             return False
+        if not allows(ctx,guid):
+            _discard(ctx,guid,set_no)
+            continue
         if ctx.commit(policy.stage, unit, _ready(ctx, guid, set_no, made, lust)):
             tally["ready"] += 1
             log("selfies_set_ready", night=ctx.night, guid=guid, set=set_no,

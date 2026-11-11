@@ -200,7 +200,7 @@ def _give_first(values: list, to: Sequence[int], good) -> None:
 
 
 def plan_slots(roster: Sequence[Member], existing: Sequence[Persona], cfg: CastCfg,
-               human_guid: int, rng: random.Random) -> list[GenSlot]:
+               human_guid: int, rng: random.Random, *, min_level: int = CAST_MIN_LEVEL) -> list[GenSlot]:
     """One slot per cast member (level >= CAST_MIN_LEVEL, not the human) without a persona.
     The whole cast, existing personas included, should have round(share * N) women and
     introverts; the slots supply what is missing, never below zero. The women's romance
@@ -208,7 +208,7 @@ def plan_slots(roster: Sequence[Member], existing: Sequence[Persona], cfg: CastC
     keep theirs and the slots make up the rest. Lust slots take the outgoing flags first and
     have their age band capped below NONE_FIT_AGE (41-55 becomes 41-49), so a generated lust
     woman is one the rebalance would pick for lust too."""
-    cast = sorted((m for m in roster if m.guid != human_guid and m.level >= CAST_MIN_LEVEL),
+    cast = sorted((m for m in roster if m.guid != human_guid and m.level >= min_level),
                   key=lambda m: m.guid)
     cast_guids = {m.guid for m in cast}
     have = [p for p in existing if p.guid in cast_guids]

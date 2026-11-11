@@ -245,3 +245,6 @@
 {"name":"realm_achievement_bad_realm_first_without_flag","kind":"event","valid":false,"msg":{"v":1,"type":"realm_achievement","ts":0,"guid":11001,"achievement_id":13,"name":"Level 80","category":92,"flags":0,"realm_first":true}}
 {"name":"duel_end_in_city","kind":"event","valid":true,"msg":{"v":1,"type":"duel_end","ts":0,"winner":11001,"loser":11002,"result":"fled","map":1,"zone":1637,"city":true}}
 {"name":"duel_end_missing_city","kind":"event","valid":false,"msg":{"v":1,"type":"duel_end","ts":0,"winner":11001,"loser":11002,"result":"won","map":0,"zone":33}}
+{"name":"world_say_ok","kind":"command","valid":true,"full":true,"error":"","msg":{"v":1,"type":"world_say","ts":0,"id":"world","guid":101,"guild_id":50,"channel":"trade","text":"hello","to_guid":0}}
+{"name":"world_say_private_refused","kind":"command","valid":false,"error":"bad field: channel","msg":{"v":1,"type":"world_say","ts":0,"id":"world","guid":101,"guild_id":50,"channel":"whisper","text":"hello","to_guid":1}}
+{"name":"world_say_unknown_guild","kind":"command","valid":false,"error":"bad field: guild_id","msg":{"v":1,"type":"world_say","ts":0,"id":"world","guid":101,"guild_id":0,"channel":"general","text":"hello","to_guid":0}}

@@ -663,6 +663,8 @@ class RealmPvp:
             raise ValueError("invalid native Realm owner receipt")
 
 
+from leeroy_mind.world.protocol import WorldSay
+
 COMMANDS: dict[str, type] = {
     "realm_actors": RealmActors,
     "realm_say": RealmSay,
@@ -697,6 +699,7 @@ COMMANDS: dict[str, type] = {
     "announce": Announce,
     "get_realm_pvp": GetRealmPvp,
     "guild_readmit": GuildReadmit,
+    "world_say": WorldSay,
 }
 EVENTS: dict[str, type] = {
     "realm_job": RealmJob,

@@ -176,7 +176,8 @@ def screen_enrichment(p: Persona, data: dict, *, ident: HumanIdentity,
 
 def _refused(ctx: "NightContext", guid: int, problems: list[str]) -> tuple[None, list[str]]:
     shown = [screen_text(m, ctx.ident) for m in problems]
-    log("nightly_enrich_refused", night=ctx.night, guid=guid, problems=shown)
+    log("nightly_enrich_refused", night=ctx.night, guid=guid,
+        problems=shown if getattr(ctx,"private_logs",True) else ["world_screen_refused"])
     return None, shown
 
 

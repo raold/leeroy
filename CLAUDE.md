@@ -1751,6 +1751,15 @@ apart from this install. Read `dojo/README.md` before touching it.
 
 ## Outstanding
 
+- World personas: `[world] enabled = true` admits only native-verified all-random-bot
+  guilds outside ours; `realm` and `selfies` are separate opt-ins, both false by default.
+  The night caps are `world_per_night = 12` and `world_selfies_per_night = 10`; cast
+  images run first. Restart the mind after enabling. Deploy the matching native module
+  for complete roster snapshots; stale/partial snapshots do not admit new work.
+  `python -m leeroy_mind personas world status|plan --data-dir PATH` reads counts only,
+  including older databases. The console's World filter is read-only. Departed members
+  retain their persona as retired. See `mind/leeroy_mind/world/README.md` for scope.
+
 - `mod-bg-slaveryvalley` server data + client patch (above).
 - Zip-sourced modules (transmog, individual-progression, slaveryvalley) have no
   update path; converting them to git clones would let `ac-update.sh` cover them.

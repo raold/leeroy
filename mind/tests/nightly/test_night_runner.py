@@ -711,6 +711,7 @@ def test_planning_costs_and_the_budget(h):
     assert PLAN_S == {"think": 90.0, "json": 20.0, "live": 6.0}
     assert estimate({s: 1 for s in UNIT_CALLS}, measured={}) == pytest.approx({
         "coach": 130, "realm": 20, "claims": 20, "newcomers": 110, "signals": 0,
+        "world_personas": 220, "world_photos": 20, "world_selfies": 48,
         "reflect": 150, "reflect_small": 130, "notes": 40, "encounters": 40, "confide": 22, "arc": 30,
         "life": 40, "wowlife": 40, "follow": 40, "lexicon": 20, "profile": 40, "stories": 130,
         "recap": 130, "chronicle": 40, "forget": 20, "breaks": 20, "critic": 22, "enrich": 110, "photo": 20, "selfies": 48, "scenes": 20, "snaps": 12, "eval": 2386,

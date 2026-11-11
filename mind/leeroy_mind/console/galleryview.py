@@ -60,6 +60,9 @@ def _entry(data_dir, guid, kind, number, index, rendered, cover):
 def gallery(conn, data_dir, guid: int) -> dict:
     have = _have(conn)
     out = {"guid": guid, "missing": [t for t in TABLES if t not in have], "photos": []}
+    from leeroy_mind.personas.tiers import is_cast
+    if not is_cast(conn,guid):
+        return out
     try:
         files.member_dir(data_dir, guid)
     except (TypeError, ValueError):
@@ -101,6 +104,9 @@ def _is_cover(conn, have, guid, number, index) -> bool:
 def photo(conn, data_dir, guid, kind, number, index, *, thumb=False) -> bytes | None:
     """Only a rendered row belonging to this member can expose a bounded JPEG."""
     have = _have(conn)
+    from leeroy_mind.personas.tiers import is_cast
+    if not is_cast(conn,guid):
+        return None
     try:
         if kind == "candidate" and {"selfie_set", "selfie_candidate"} <= have:
             found = conn.execute(

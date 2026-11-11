@@ -76,7 +76,7 @@ def former_members_in_unit(store, *, human_guid) -> frozenset[int]:
     _require_unit(store)
     human_guid = _human(human_guid)
     conn = store.conn
-    stored = {row[0] for row in conn.execute("SELECT guid FROM persona_core")}
+    stored = set(store.persona_versions())
     roster = {row[0] for row in conn.execute("SELECT guid FROM cast_member")}
     kicked = _kicked(conn)
     readmitted = _readmitted(conn, kicked, roster)

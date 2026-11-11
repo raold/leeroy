@@ -116,6 +116,8 @@ class Officer:
     guild: int
     guild_name: str
     place: str  # the realm's own move record; "" when none
+    world: bool = False
+    zone: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +149,7 @@ class _Spec:
     fact: object = None
     sketch: str = ""
     line: str = ""  # a line written already (a night's beat): screened again, never composed
+    world: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,7 +215,7 @@ def _line_state(ledger, ack):
     return "refused", _reason(reason, "unsent")
 
 
-def _item_links(app, text):
+def _item_links(app, text, level=CAST_MIN_LEVEL):
     """A screened line as realm_line keeps it and as RealmSay sends it: the guild's item links
     (talk/items.py; rival officers link at level 80). RealmSay is not cleaned on the way out,
     so its text is folded as native will clean it (items.fold) and only then gets placeholders,
@@ -221,8 +224,8 @@ def _item_links(app, text):
     if items is None:
         text = defuse(text)
         return text, fold(text)
-    text = items.canonical(text, CAST_MIN_LEVEL)
-    return text, items.wire(text, CAST_MIN_LEVEL)
+    text = items.canonical(text, level)
+    return text, items.wire(text, level)
 
 
 def _one_line(text):
@@ -368,12 +371,27 @@ class Speech:
                 "SELECT a.guid,a.name,a.guild,g.name,a.place FROM realm_actor a JOIN realm_guild g "
                 "ON g.id=a.guild WHERE a.status='active' AND a.role='officer' AND g.status='active' "
                 "AND g.faction=? AND g.role IN (?,?) ORDER BY a.guid", (FACTION, *SPEAKING_ROLES)).fetchall()
-        return [Officer(row[0], row[1], row[2], row[3], row[4] or "") for row in rows
+        from leeroy_mind.personas.tiers import is_cast
+        out = [Officer(row[0], row[1], row[2], row[3], row[4] or "") for row in rows
                 if type(row[0]) is int and row[0] not in excluded and self._rest.get(row[0], 0.0) <= now
-                and (guild is None or row[2] == guild)]
+                and is_cast(store.conn,row[0]) and (guild is None or row[2] == guild)]
+        from leeroy_mind.world.realm import voices
+        for guid,r in voices(store,self.realm.app.data_dir,now).items():
+            if (r["online"] and r["faction"] == FACTION and r["role"] in SPEAKING_ROLES
+                    and self._rest.get(guid,0) <= now and (guild is None or r["guild_id"] == guild)):
+                out.append(Officer(guid,r["name"],r["guild_id"],r["guild"],"",True,r["zone"]))
+        # Stable rotation gives ordinary guildmates a turn under the existing rations.
+        if any(o.world for o in out):
+            out.sort(key=lambda o:o.guid)
+            start = int(now // MOMENT_S) % len(out)
+            return out[start:] + out[:start]
+        return out
+
+    def _officer_zone(self,officer):
+        return officer.zone if officer.world else self._zone_of(officer.place)
 
     def _in_city(self, officer):
-        return self._zone_of(officer.place) in trade_cities(FACTION)
+        return self._officer_zone(officer) in trade_cities(FACTION)
 
     def _ration(self, now):
         store = self._store()
@@ -465,6 +483,8 @@ class Speech:
         return next((p for p in found if p.zone != zone), found[0] if found else None)
 
     def _move(self, guild, officer, place, now):
+        if officer.world:
+            return False
         cmd = protocol.RealmMove(uuid.uuid4().hex, officer.guid, place.name)
         try:
             self.realm.queue.submit(cmd, owner=MOVE_OWNER)
@@ -492,7 +512,7 @@ class Speech:
         for guild in sorted(self._wanted):
             if guild in self._moving:
                 continue
-            officers = self._officers(now, guild)
+            officers = [o for o in self._officers(now, guild) if not o.world]
             target = self._capital()
             if not officers or target is None or any(self._in_city(o) for o in officers):
                 self._wanted.discard(guild)
@@ -502,7 +522,7 @@ class Speech:
     def _place_officer(self, guild, now):
         if guild in self._moving:
             return False
-        officers, target = self._officers(now, guild), self._capital()
+        officers, target = [o for o in self._officers(now,guild) if not o.world], self._capital()
         return bool(officers) and target is not None and self._move(guild, officers[0], target, now)
 
     # -- a rival's line --------------------------------------------------------------------------
@@ -534,7 +554,7 @@ class Speech:
                 if self._place_officer(guild, now):
                     return "moving"
                 continue
-            local = next((o for o in officers if zone is not None and self._zone_of(o.place) == zone), None)
+            local = next((o for o in officers if zone is not None and self._officer_zone(o) == zone), None)
             cities = self.places.by_kind("city", zone=zone) if zone is not None else []
             if local is not None or cities:
                 if not ration.run_ok(self._break):
@@ -686,11 +706,13 @@ class Speech:
                                  situation, sketch=sketch))
 
     def _rival(self, officer, channel, kind, situation, *, fact=None, line=""):
+        if officer.world and channel not in ("trade","general"):
+            return False
         to_guid = self.realm.ports.human().guid if channel == "whisper" else 0
-        zone = self._zone_of(officer.place) or 0
+        zone = self._officer_zone(officer) or 0
         return self._start(_Spec(kind, "officer", officer.guid, officer.name, officer.guild,
                                  officer.guild_name, channel, to_guid, zone, situation, fact=fact,
-                                 line=line))
+                                 line="" if officer.world else line,world=officer.world))
 
     @staticmethod
     def _remember(seen, key):
@@ -723,7 +745,13 @@ class Speech:
             system = load_prompt("realm_rival", app.data_dir, RIVAL_PROMPT)
             cards = ports.realm_dir() / "cards"
             user = [f"You are {spec.name}, an officer of <{spec.guild_name}>."]
-            if officer := _card(cards, str(spec.guid), OFFICER_CARD_TOKENS):
+            if spec.world:
+                from leeroy_mind.world.realm import voices
+                row = voices(self._store(),app.data_dir,ports.now()).get(spec.guid)
+                user = [f"You are {spec.name}, a member of <{spec.guild_name}>."]
+                if row is not None and row["guild_id"] == spec.guild:
+                    user.append(row["card"])
+            elif officer := _card(cards, str(spec.guid), OFFICER_CARD_TOKENS):
                 user.append(f"About you: {officer}")
             if guild := _card(cards, f"guild-{spec.guild}", GUILD_CARD_TOKENS):
                 user.append(f"Your guild: {guild}")
@@ -772,12 +800,23 @@ class Speech:
 
     async def _send(self, spec, text):
         realm, store = self.realm, self._store()
-        text, wire = _item_links(realm.app, text)
+        level = CAST_MIN_LEVEL
+        if spec.world:
+            from leeroy_mind.world.targets import roster
+            level = roster(store).get(spec.guid,{}).get("level",1)
+        text, wire = _item_links(realm.app, text, level)
         direct, context = realm.part("direct"), self._live()
         if direct is None or context is None or not self._open():
             self._insert(spec, text, state="dropped", reason="silenced")
             return
-        cmd = protocol.RealmSay(uuid.uuid4().hex, spec.guid, spec.channel, wire, spec.to_guid)
+        if spec.world:
+            from leeroy_mind.world.realm import allowed
+            if not allowed(store,realm.app.data_dir,realm.ports.now(),spec.guid,spec.guild):
+                self._insert(spec,text,state="dropped",reason="world_speaker_unavailable")
+                return
+            cmd = protocol.WorldSay(uuid.uuid4().hex,spec.guid,spec.guild,spec.channel,wire)
+        else:
+            cmd = protocol.RealmSay(uuid.uuid4().hex, spec.guid, spec.channel, wire, spec.to_guid)
         with store.transaction():
             line_id = self._insert(spec, text, state="prepared", command_id=cmd.id)
             prepared = direct.prepare(cmd, owner=OWNER, ref=f"line:{line_id}", context=context,

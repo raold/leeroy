@@ -10,6 +10,7 @@ from datetime import datetime
 
 from leeroy_mind.discord import layout, presence, store
 from leeroy_mind.personas.schema import persona_from_dict
+from leeroy_mind.personas.tiers import is_cast
 from leeroy_mind.protocol import Member
 from leeroy_mind.wow import CAST_MIN_LEVEL
 
@@ -23,6 +24,8 @@ LIMIT = 100
 def _personas(conn) -> dict:
     out = {}
     for r in views.rows(conn, "SELECT guid, json FROM persona_core"):
+        if not is_cast(conn,r["guid"]):
+            continue
         try:
             out[r["guid"]] = persona_from_dict(json.loads(r["json"]))
         except Exception:  # a stored persona the code cannot read is a member without one
@@ -38,6 +41,8 @@ def _members(conn, owner_now: datetime, trial_rank: int, human: int) -> list[dic
     for r in views.rows(conn, "SELECT guid, name, race, class, gender, level, rank, online, map, "
                               "zone, spec_tab FROM cast_member WHERE guid != ? AND level >= ? "
                               "ORDER BY name, guid", (human, CAST_MIN_LEVEL)):
+        if not is_cast(conn,r["guid"]):
+            continue
         p = personas.get(r["guid"])
         member = Member(guid=r["guid"], name=r["name"], race=r["race"], class_=r["class"],
                         gender=r["gender"], level=r["level"], rank=r["rank"],

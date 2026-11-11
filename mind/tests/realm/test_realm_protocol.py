@@ -47,6 +47,7 @@ COMMAND_FIELDS = {
                  "boss_name attempts fight_s first"),
     "get_realm_pvp": "id pvp_owner origin_id",
     "guild_readmit": "id guid kick_ts rank",
+    "world_say": "id guid guild_id channel text to_guid",
 }
 EVENT_FIELDS = {
     "realm_job": "ts id kind state reason guid value pvp_owner changed skipped",
@@ -98,7 +99,7 @@ def command_from_message(msg):
 def test_authoritative_maps_fields_and_immutable_message_shapes():
     assert list(protocol.COMMANDS) == list(COMMAND_FIELDS)
     assert list(protocol.EVENTS) == list(EVENT_FIELDS)
-    assert len(protocol.COMMANDS) == 33 and len(protocol.EVENTS) == 16
+    assert len(protocol.COMMANDS) == 34 and len(protocol.EVENTS) == 16
     for registry, expected in ((protocol.COMMANDS, COMMAND_FIELDS), (protocol.EVENTS, EVENT_FIELDS)):
         for name, cls in registry.items():
             assert [field.name for field in dataclasses.fields(cls)] == expected[name].split()
