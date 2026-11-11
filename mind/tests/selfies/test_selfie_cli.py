@@ -2,6 +2,7 @@
 model, no GPU, no live data. Every person here is invented."""
 import json
 import sqlite3
+from contextlib import closing
 from dataclasses import asdict, replace
 
 import pytest
@@ -97,6 +98,31 @@ def test_try_defaults_to_two_members_with_a_photo_kind_or_one_made(root, capsys)
     code = cli.selfies_main(["--data-dir", str(root), "try"], make_llm=lambda cfg: llm(root))
     out = json.loads(capsys.readouterr().out)
     assert code == 0 and out["members"] == 2 and out["sets"] == 2
+
+
+def test_try_uses_saved_light_with_the_same_prompt_as_night(root, capsys, monkeypatch):
+    from leeroy_mind.clock import SystemClock
+    from leeroy_mind.selfies import kind, photo_extra
+    from leeroy_mind.selfies.prompt import build_prompt
+    from leeroy_mind.storage.db import open_db
+    from leeroy_mind.storage.store import Store
+    with closing(Store(open_db(root / "mind.db"),clock=SystemClock())) as store:
+        p = load_persona(store,101)
+        p = replace(p,photo=replace(p.photo,setting="a garden party"))
+        save_persona(store,p,source="generated",ts=1000,race="Human",class_name="Warrior")
+        with store.transaction():
+            photo_extra.record(store,p,0,1000)
+        expected = build_prompt(p,kind_style=kind.chosen_style(store,p),light="golden hour")
+    seen = []
+    render = cli.render_candidates
+    async def spy(worker, spec, *args, **kw):
+        seen.append(spec)
+        return await render(worker,spec,*args,**kw)
+    monkeypatch.setattr(cli,"render_candidates",spy)
+    assert cli.selfies_main(["--data-dir",str(root),"try","--guid","101"],
+                            make_llm=lambda cfg:llm(root)) == 0
+    capsys.readouterr()
+    assert seen == [expected]
 
 
 def test_try_exits_1_when_a_set_does_not_finish(root, capsys):

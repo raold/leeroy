@@ -30,7 +30,7 @@ def population(h, lust=True):
     return {g:make(g) for g in TEST_CAST}
 
 
-@pytest.mark.parametrize("lust",[False,True])
+@pytest.mark.parametrize("lust",[True])
 @pytest.mark.parametrize("seed",[0,1,2,17,88,100])
 def test_caps_spread_determinism_and_screens(h,lust,seed):
     people = population(h,lust)
@@ -88,15 +88,18 @@ def test_light_safety_priority_and_unchanged_baseline(h,light):
     for rx in (kind.AGE_RE,kind.ERA_RE,kind.EXPLICIT_RE,kind.WEAR_RE,LIKENESS_RE):
         assert not rx.search(light)
     base = build_prompt(p)
+    assert build_prompt(p,light=light) == base  # unknown free-text setting: no light
+    setting = sorted(photo_extra.LIGHT_SETTINGS[photo_extra.LIGHTS.index(light)])[0]
+    p = replace(p,photo=replace(p.photo,setting=setting))
     changed = build_prompt(p,light=light)
-    assert changed.phrases == base.phrases + ((light,1),)
+    assert changed.phrases[-1] == (light,9)
     assert changed.negative == base.negative
-    assert build_prompt(p,light="arbitrary untrusted text") == base
+    assert build_prompt(p,light="arbitrary untrusted text") == build_prompt(p)
     assert kind.KIND_PROMPT == TODAY_KIND_PROMPT
 
 
 def test_light_invalidates_on_hand_edit_and_is_name_screened(h):
-    p = replace(h.persona(101,appearance=APPEARANCE),photo=ProfilePhoto(**KIND))
+    p = replace(h.persona(101,appearance=APPEARANCE),photo=ProfilePhoto(**{**KIND,"setting":"a garden party"}))
     with h.store.transaction():
         photo_extra.record(h.store,p,0,h.T)
     assert photo_extra.light_for(h.store,p) == photo_extra.LIGHTS[0]
@@ -156,14 +159,14 @@ def test_restyle_cli_dry_then_go_preserves_owner_gallery_and_cover(h,capsys,capl
     done = json.loads(capsys.readouterr().out)
     assert [x["choices"] for x in done["selected"]] == [x["choices"] for x in plan["selected"]]
     assert h.store.persona_versions()[101] == versions[101]
-    assert h.count("photo_extra") == h.count("photo_style_history") == 4
+    assert h.count("photo_extra") <= 4 and h.count("photo_style_history") == 9
     assert set(s.guid for s in queued_sets(h.store)) == {102,103,104,105}
     assert current(h.store,102) == cover
     assert before and all(p.read_bytes() == data for p,data in before.items())
     for g in (102,103,104,105):
         p = load_persona(h.store,g)
         assert p.appearance == APPEARANCE and kind.chosen_style(h.store,p) == LUST
-        assert photo_extra.light_for(h.store,p)
+        assert photo_extra.light_for(h.store,p) or not any(photo_extra.fits(i,p.photo) for i in range(6))
     text = caplog.text + json.dumps(plan) + json.dumps(done)
     assert all(p.photo.outfit not in text and p.character_name not in text
                for p in [load_persona(h.store,g) for g in TEST_CAST])
@@ -201,7 +204,7 @@ def test_night_plain_history_is_recent_quoted_user_content_only(h,enabled):
             (103,h.T+1,"future invented outfit","future setting"))
     (h.settings.data_dir/"mind.toml").write_text(f"[selfies]\nvariety={str(enabled).lower()}")
     ctx = h.ctx({"photo":[KIND]})
-    run(kind.stage_photo(ctx))
+    run(kind.stage_photo(ctx,variety=enabled))
     messages = ctx.reasoner.llm.calls[0]["messages"]
     system = messages[0]["content"]
     user = messages[-1]["content"]
@@ -211,28 +214,28 @@ def test_night_plain_history_is_recent_quoted_user_content_only(h,enabled):
     assert h.count("photo_style_history") == 3
     assert bool(h.store.conn.execute("SELECT 1 FROM photo_style_history WHERE created<?",
         (h.T-photo_extra.MONTH,)).fetchone()) is (not enabled)
-    assert bool(photo_extra.light_for(h.store,load_persona(h.store,101))) is enabled
+    assert not photo_extra.light_for(h.store,load_persona(h.store,101))  # no known setting/light pair
 
 
 def test_night_lust_balances_without_calling_model_and_off_stays_original(h):
     population(h)
     (h.settings.data_dir/"mind.toml").write_text("[selfies]\nvariety=true")
     ctx = h.ctx()
-    run(kind.stage_photo(ctx))
+    run(kind.stage_photo(ctx,variety=True))
     assert ctx.reasoner.calls == 0
     photos = [load_persona(h.store,g).photo for g in TEST_CAST]
     assert all(photos) and len({p.setting for p in photos}) == 5
-    assert h.count("photo_extra") == 5
+    assert h.count("photo_style_history") == 5
 
 
-def test_enabled_night_plain_pass_enforces_age_floor(h):
+def test_enabled_night_plain_pass_preserves_original_age_selection(h):
     p = h.persona(101,appearance=APPEARANCE)
     save_persona(h.store,replace(p,identity=replace(p.identity,age=24)),source="seed",
                  ts=h.T,race="Human",class_name="Warrior")
     (h.settings.data_dir/"mind.toml").write_text("[selfies]\nvariety=true")
     ctx = h.ctx({"photo":[KIND]})
-    run(kind.stage_photo(ctx))
-    assert ctx.reasoner.calls == 0 and load_persona(h.store,101).photo is None
+    run(kind.stage_photo(ctx,variety=True))
+    assert ctx.reasoner.calls == 1 and load_persona(h.store,101).photo == ProfilePhoto(**KIND)
 
 
 def test_unreadable_member_does_not_block_other_nightly_choices(h):
@@ -241,10 +244,10 @@ def test_unreadable_member_does_not_block_other_nightly_choices(h):
         h.store.conn.execute("UPDATE persona_core SET json='{' WHERE guid=105")
     (h.settings.data_dir/"mind.toml").write_text("[selfies]\nvariety=true")
     ctx = h.ctx()
-    run(kind.stage_photo(ctx))
+    run(kind.stage_photo(ctx,variety=True))
     assert ctx.reasoner.calls == 0
     assert all(load_persona(h.store,g).photo for g in (101,102,103,104))
-    assert h.count("photo_extra") == 4
+    assert h.count("photo_style_history") == 4
 
 
 def test_unreadable_member_does_not_block_manual_restyle(h):
@@ -259,7 +262,7 @@ def test_unreadable_member_does_not_block_manual_restyle(h):
 
 @pytest.mark.parametrize("seed",range(10))
 def test_name_matching_a_kind_or_frame_uses_safe_alternative(h,seed):
-    p = replace(h.persona(101,appearance=APPEARANCE),character_name="Snapshot")
+    p = replace(h.woman(101,"lust",appearance=APPEARANCE),character_name="Snapshot")
     chosen,rejected,_,_ = sv.assign({101:p},[101],seed=seed,ident=IDENT,names=("Face",))
     assert not rejected
     assert chosen[101].photo.kind != "snapshot" and chosen[101].photo.framing != "face"

@@ -30,7 +30,7 @@ def attach_selfies(app) -> SelfieService:
     service = SelfieService(app, cfg)
     if cfg.enabled:
         runner = app.night_runner
-        runner.add_stage(kind.STAGE, kind.stage_photo, after="enrich", model="reflection")
+        runner.add_stage(kind.STAGE, kind.make_stage(cfg), after="enrich", model="reflection")
         runner.add_stage(stage.STAGE, stage.make_stage(cfg), after="regress", model="image",
                          wants_gpu=stage.wants_gpu)
         if cfg.snaps:

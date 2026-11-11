@@ -1,7 +1,6 @@
 """Deterministic photo choices balanced against the whole cast, with hard new-use caps."""
 from collections import Counter
-from dataclasses import asdict, dataclass
-import math
+from dataclasses import asdict, dataclass, replace
 import random
 import re
 
@@ -9,14 +8,12 @@ from leeroy_mind.personas.schema import ProfilePhoto
 from leeroy_mind.personas.screens import has_word, names_real_name
 from . import kind
 from .photo_extra import choose_light
-from .scene_choices import EXPRESSIONS, OUTFITS, PLAIN_PLACES
 from .style import LUST, style_of
 
 # Explicit date-night subset of the already screened outfits; no swim/gym/workwear.
 DATE_OUTFITS = ("fitted little dress", "low-cut cocktail dress", "bodycon mini dress",
     "halter top and a miniskirt", "satin midi dress", "plunging wrap dress",
-    "fitted blazer dress", "one-shoulder top and leather trousers", "sequin party dress",
-    "square-neck top and a pencil skirt", "silk blouse and a leather miniskirt")
+    "one-shoulder top and leather trousers", "sequin party dress")
 DATE_SETTINGS = tuple(s for s in kind.LUST_SETTINGS
     if s not in kind.WATER_SETTINGS + kind.GYM_SETTINGS and s != "a park in summer")
 KINDS = ("snapshot", "mirror_selfie", "selfie")
@@ -31,7 +28,7 @@ def key(text):
 
 def outfit_parts(text):
     text = key(text)
-    for colour in sorted(kind.LUST_COLOURS,key=len,reverse=True):
+    for colour in sorted((*kind.LUST_COLOURS,"blue","green","grey","gray","brown","white"),key=len,reverse=True):
         pattern = r"\b" + re.escape(colour) + r"\b"
         if re.search(pattern,text):
             return re.sub(pattern,"{colour}",text,count=1),colour
@@ -74,20 +71,33 @@ def _safe(p, photo, data, ident, names):
     return not names_real_name(text,ident) and not any(has_word(text,n) for n in names if n)
 
 
+def plain_pairings(p, data):
+    """Keep the model's personal choice, refusing incoherent crops or gym wear elsewhere."""
+    from .style import looks_age_coded
+    from leeroy_mind.personas.stances import is_woman
+    codes = []
+    if re.search(r"\bleggings\b",data["outfit"],re.I) and not re.search(r"\bgym\b",data["setting"],re.I):
+        codes.append("photo.outfit: gym pairing")
+    if (data["kind"] == "mirror_selfie" and data["framing"] == "face" or
+        data["kind"] == "selfie" and data["framing"] == "three_quarter" or
+        data["kind"] == "headshot" and data["framing"] in ("upper_body","three_quarter")):
+        codes.append("photo.framing: kind pairing")
+    if data["framing"] == "three_quarter" and is_woman(p) and looks_age_coded(p):
+        codes.append("photo.framing: age pairing")
+    return codes
+
+
 def _choose(p, counts, cap, rng, *, seed, ident, names):
-    lust = style_of(p) == LUST
-    settings = DATE_SETTINGS if lust else tuple(PLAIN_PLACES.values())
-    outfits = DATE_OUTFITS if lust else tuple(OUTFITS.values())
-    expressions = kind.LUST_EXPRESSIONS if lust else tuple(EXPRESSIONS.values())
-    frames = FRAMINGS[:2] if lust else FRAMINGS
+    # Plain kinds remain free-text choices under the original schema and screens.
+    if style_of(p) != LUST:
+        return None
+    settings, outfits = DATE_SETTINGS, DATE_OUTFITS
+    expressions, frames = kind.LUST_EXPRESSIONS, FRAMINGS[:2]
     options = []
     for oi,outfit in enumerate(outfits):
         for ci,colour in enumerate(kind.LUST_COLOURS):
-            if lust:
-                phrase = kind.LUST_OUTFITS[outfit].format(colour=colour)
-                phrase = ("an " if phrase[0].lower() in "aeiou" else "a ") + phrase
-            else:
-                phrase = ("an " if colour[0] in "aeiou" else "a ") + colour + " " + outfit.removeprefix("a ")
+            phrase = kind.LUST_OUTFITS[outfit].format(colour=colour)
+            phrase = ("an " if phrase[0].lower() in "aeiou" else "a ") + phrase
             if counts.pairs[key(phrase)] < PAIR_CAP:
                 options.append((oi,ci,outfit,colour,phrase))
     options.sort(key=lambda x:(counts.pairs[key(x[4])],counts.outfits[outfit_parts(x[4])[0]],
@@ -113,9 +123,9 @@ def _choose(p, counts, cap, rng, *, seed, ident, names):
             ei,expression = expressions[0]
             photo = ProfilePhoto(kinds[0],frames[0],setting,phrase,expression)
             data = dict(kind=photo.kind,framing=photo.framing,setting=setting,outfit=outfit,
-                        colour=colour,expression=expression) if lust else None
+                        colour=colour,expression=expression)
             if _safe(p,photo,data,ident,forbidden):
-                return Assignment(photo,choose_light(p,seed,ident=ident,names=names),
+                return Assignment(photo,choose_light(replace(p,photo=photo),seed,ident=ident,names=names),
                     dict(outfit=oi,colour=ci,setting=si,expression=ei,kind=photo.kind,framing=photo.framing))
     return None
 
@@ -124,7 +134,7 @@ def assign(personas, selected, *, seed="v1", ident, names=()):
     if len(personas) > MAX_CAST:
         raise ValueError("too_many_members")
     counts = Counts(personas.values())
-    cap = max(1,math.ceil(len(personas)/8))
+    cap = max(1,len(personas)//8)
     picked,rejected = {},[]
     order = sorted(set(selected) & personas.keys())
     random.Random(f"photo-order:{seed}").shuffle(order)
