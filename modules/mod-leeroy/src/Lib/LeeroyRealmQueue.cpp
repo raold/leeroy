@@ -1,5 +1,6 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "LeeroyRealmQueue.h"
+#include "LeeroyRealmFailure.h"
 #include <algorithm>
 #include <set>
 #include <utility>
@@ -55,5 +56,22 @@ void ActionQueue::DropIf(std::function<bool(Entry const&)> const& predicate, std
     }
     _entries = std::move(kept);
     if (dropped) for (auto const& entry : removed) dropped(entry, reason);
+}
+
+AckPartition PartitionAtAck(std::string_view kind, std::vector<std::uint32_t> const& manifest,
+    std::function<std::string(std::uint32_t)> const& fence)
+{
+    AckPartition result;
+    std::string first;
+    for (auto guid : manifest)
+    {
+        auto why = fence(guid);
+        if (why.empty()) { result.admitted.push_back(guid); continue; }
+        if (!LeavesOutAtAck(kind) || !MemberSkipReason(why)) return {{}, {}, std::move(why)};
+        if (first.empty()) first = why;
+        result.fenced.push_back(guid);
+    }
+    if (result.admitted.empty()) return {{}, {}, first.empty() ? std::string("bad field: guids") : first};
+    return result;
 }
 }

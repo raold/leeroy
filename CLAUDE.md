@@ -1385,7 +1385,15 @@ Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
   fence or a `busy:` reason such as `busy:combat` (`STEP_REFUSALS`), or a rearm for
   `weapon_record_unavailable` (`KIND_STEP_REFUSALS`): native refused that body
   before changing it and released them all, so it settles `step_refused` and Recall goes on to
-  the defaults. Native keeps the weapon records in memory, so a worldserver start empties them
+  the defaults. A rearm no longer fails whole for one member (2026-11-10/11: all 15 overnight
+  rearms of the 143 refused for one member in combat or dead, others at the ack for his group's
+  members): native skips a member its step refuses before any swap, or Tick's fence before its
+  step, and leaves out at the ack a member admission fences (refusing whole only when every member
+  is, or for a job-wide fence such as `busy:training_cleanup`: member reasons are an allow-list,
+  `MemberSkipReason`), so the done `realm_job` lists them in `skipped`; the mind settles the rearm done with no
+  backoff (the next pass rearms them) and the defaults go to everyone. A defaults batch native ran
+  with some members skipped (dead, busy) settles `defaults_failed` and no longer stops the chain's
+  later batches; an aborted one still does. Native keeps the weapon records in memory, so a worldserver start empties them
   until the 60 s poll finds each body online and free; a rearm now records an armed body that
   has none, as that poll would. Any other failed job (`operation_transition_unknown`, a walk,
   leave, duel or grow) stays unknown unless its event carries `changed: false` (below; any ordinary
@@ -1400,11 +1408,14 @@ Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
   the members whose rosters reach outside, not the outsiders, using the step's roster readers.
   The mind accepts any of them only for an ordinary leave when the names are distinct manifest members,
   settles it refused and holds nobody. Recall backs off those members for 600 s and recalls the rest
-  as a new command; every such retry strictly shrinks its manifest. A member that turns into a
-  group departure case only at its own step, while nothing in the job has touched its body, is
-  skipped instead (2026-11-10: one battleground raid leader made a 143-member recall fail after
-  others had moved, and native kept all 143): native ends that member's lease alone, goes on with
-  the others, and the terminal `realm_job` lists it in `skipped`; the mind settles a done leave as
+  as a new command; every such retry strictly shrinks its manifest. A member its own step cannot
+  take out for a reason of its own (a group departure, its original raid group, its entry point, a
+  changed battleground group, an LFG proposal or closure, Wintergrasp, or a lease Tick's fence finds
+  broken before its step, as when its battleground ends mid-job), while nothing in the job has
+  touched its body, is skipped instead (2026-11-10: one battleground raid leader made a 143-member
+  recall fail after others had moved, and native kept all 143): native ends that member's lease
+  alone, goes on with the others (whose steps no longer recheck a later member the job has not
+  touched), and the terminal `realm_job` lists it in `skipped`; the mind settles a done leave as
   usual and backs the skipped members off for 600 s (evidence `skipped_at`), and Recall rearms and
   defaults only the rest. Any other reason from the job
   is a Refuse only until that leave has changed a body. A failed `realm_job` may now carry

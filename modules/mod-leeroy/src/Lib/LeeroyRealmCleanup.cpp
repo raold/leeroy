@@ -1,5 +1,6 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "LeeroyRealmCleanup.h"
+#include "LeeroyRealmFailure.h"
 #include <iterator>
 
 namespace Leeroy::Realm
@@ -45,7 +46,7 @@ bool IsGroupDepartureReason(std::string_view reason)
 }
 bool SkipsLeaveMember(std::string_view reason, bool stepChanged, bool touchedByCleanup)
 {
-    return IsGroupDepartureReason(reason) && !stepChanged && !touchedByCleanup;
+    return MemberSkipReason(reason) && !stepChanged && !touchedByCleanup;
 }
 std::vector<std::uint32_t> LeaveMembers(std::vector<std::uint32_t> const& manifest,
     std::vector<std::uint32_t> const& skipped, std::uint32_t skipping)
@@ -54,6 +55,19 @@ std::vector<std::uint32_t> LeaveMembers(std::vector<std::uint32_t> const& manife
     for (auto guid : manifest)
         if (guid != skipping && std::find(skipped.begin(), skipped.end(), guid) == skipped.end()) held.push_back(guid);
     return held;
+}
+std::vector<std::uint32_t> RecheckedMembers(std::vector<std::uint32_t> const& manifest, std::size_t cursor,
+    std::vector<std::uint32_t> const& skipped, std::uint32_t skipping, std::function<bool(std::uint32_t)> const& touched)
+{
+    std::vector<std::uint32_t> checked;
+    for (std::size_t index = 0; index < manifest.size(); ++index)
+    {
+        auto const guid = manifest[index];
+        if (guid == skipping || std::find(skipped.begin(), skipped.end(), guid) != skipped.end()) continue;
+        if (index > cursor && !touched(guid)) continue;
+        checked.push_back(guid);
+    }
+    return checked;
 }
 std::string LeavePvpAckError(std::vector<LeavePvpMemberFacts> const& members)
 {

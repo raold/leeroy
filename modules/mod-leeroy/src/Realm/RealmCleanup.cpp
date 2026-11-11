@@ -4,6 +4,7 @@
 #include "RealmPvp.h"
 #include "RealmLfgReceipts.h"
 #include "LeeroyRealmCleanup.h"
+#include "LeeroyRealmFailure.h"
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
 #include "BattlegroundQueue.h"
@@ -138,6 +139,13 @@ RealmStep Failure(Queued const& entry, std::string why)
     result.unchanged = !changed;
     return result;
 }
+// A producer's refusal before it charged, declared or changed anything for this step: the member
+// is skipped while nothing in the job touched it (SkipLeaveMember), else Failure's rule.
+RealmStep MemberFailure(Queued& entry, std::uint32_t guid, std::string why)
+{
+    if (auto skip = SkipLeaveMember(entry, guid, why)) return *skip;
+    return Failure(entry, std::move(why));
+}
 std::string ValidateMembers(Queued const& entry, std::vector<std::uint32_t> const& members)
 {
     return ValidateCleanupClosure(members, HeldMembers(entry), [&](std::uint32_t guid)
@@ -156,6 +164,39 @@ std::string ChargeMembers(Queued const& entry, std::vector<std::uint32_t> const&
     return PrepareCleanupMutation(members, HeldMembers(entry),
         [&](std::uint32_t guid) { return module.MutationReason(guid, entry.id); },
         [&](auto const& actual) { return module.ChargeAffectedBodies(entry.id, actual); });
+}
+// The full recheck of one held member a leave's step makes before it acts: its holder and lease,
+// that it is online, no LFG proposal or boot, a readable LFG applicant closure within the held
+// members, and no Wintergrasp state.
+std::string MemberCleanupFault(Queued const& entry, std::uint32_t guid)
+{
+    auto& module = RealmModule::Instance();
+    if (auto why = module.MutationReason(guid, entry.id); !why.empty()) return why;
+    auto* player = ObjectAccessor::FindConnectedPlayer(PlayerGuid(guid));
+    if (!player || !player->GetSession()) return "cleanup_member_offline";
+    auto const phase = sLFGMgr->GetState(player->GetGUID());
+    auto const lfgGroup = sLFGMgr->GetGroup(player->GetGUID());
+    auto const groupPhase = lfgGroup ? sLFGMgr->GetState(lfgGroup) : lfg::LFG_STATE_NONE;
+    if (phase == lfg::LFG_STATE_PROPOSAL || groupPhase == lfg::LFG_STATE_PROPOSAL) return "shared_lfg_proposal";
+    if (phase == lfg::LFG_STATE_BOOT || groupPhase == lfg::LFG_STATE_BOOT)
+        return "shared_lfg_participants_unavailable";
+    if (phase == lfg::LFG_STATE_ROLECHECK || groupPhase == lfg::LFG_STATE_ROLECHECK
+        || (lfgGroup && (phase == lfg::LFG_STATE_QUEUED || groupPhase == lfg::LFG_STATE_QUEUED)))
+    {
+        auto const receipt = lfgGroup ? ReadLfgApplicants(lfgGroup.GetRawValue(), groupPhase == lfg::LFG_STATE_QUEUED) : std::nullopt;
+        if (!receipt) return "shared_lfg_participants_unavailable";
+        if (auto why = ValidateMembers(entry, LfgReceiptGuids(*receipt)); !why.empty()) return why;
+    }
+    return WintergraspPrivateReason(WintergraspFacts(player, sBattlefieldMgr->GetBattlefieldToZoneId(4197)));
+}
+// A step's recheck skips a later member the job has not touched (RecheckedMembers), so before a
+// producer charges its closure it rechecks every member of it in full, as the step's start would
+// have: a fault there refuses (or skips the unchanged current member) before anything moves.
+std::string ClosureFault(Queued const& entry, std::vector<std::uint32_t> const& members)
+{
+    for (auto member : members)
+        if (auto why = MemberCleanupFault(entry, member); !why.empty()) return why;
+    return "";
 }
 void MarkChanged(Queued& entry, std::vector<std::uint32_t> const& members)
 {
@@ -223,10 +264,10 @@ CleanupReadback ReadLeftMembers(Queued const& entry, Json const& receipt)
 
 std::vector<std::uint32_t> SkippedMembers(Queued const& entry)
 {
-    // Only a leave records skipped members (SkipMember); another kind's payload can be the wire
+    // Only a leave or a rearm records skipped members (Tick); another kind's payload can be the wire
     // message itself, so its keys are never read here, and nothing malformed may throw.
     std::vector<std::uint32_t> skipped;
-    if (entry.kind != "leave_pvp" || !entry.payload.is_object() || !entry.payload.contains("skipped")
+    if (!SkipsMembers(entry.kind) || !entry.payload.is_object() || !entry.payload.contains("skipped")
         || !entry.payload.at("skipped").is_array())
         return skipped;
     for (auto const& guid : entry.payload.at("skipped"))
@@ -238,6 +279,35 @@ std::vector<std::uint32_t> SkippedMembers(Queued const& entry)
 std::vector<std::uint32_t> HeldMembers(Queued const& entry, std::uint32_t skipping)
 {
     return LeaveMembers(entry.guids, SkippedMembers(entry), skipping);
+}
+
+bool TouchedByCleanup(Queued const& entry, std::uint32_t guid)
+{
+    if (!entry.payload.is_object()) return false;
+    auto const changed = entry.payload.find("cleanup_changed_guids");
+    return changed != entry.payload.end() && changed->is_array()
+        && std::find(changed->begin(), changed->end(), Json(guid)) != changed->end();
+}
+
+std::string SkipReadback(Queued const& entry, std::uint32_t guid)
+{
+    return entry.cursor + 1 == entry.guids.size() ? VerifyCleanupReceipts(entry, guid) : "";
+}
+
+std::optional<RealmStep> SkipLeaveMember(Queued& entry, std::uint32_t guid, std::string const& why)
+{
+    // A step that left a queue, began an exit or recorded a group receipt for its member is no
+    // longer as admitted, even before its saved flag says changed.
+    bool const started = entry.payload.contains("step");
+    bool const stepChanged = started && (entry.payload.at("step").value("changed", false)
+        || entry.payload.at("step").contains("receipt"));
+    if (!SkipsLeaveMember(why, stepChanged, TouchedByCleanup(entry, guid))) return std::nullopt;
+    if (auto failed = SkipReadback(entry, guid); !failed.empty())
+        return started ? Result(entry, StepState::Unknown, std::move(failed)) : RealmStep{StepState::Unknown, std::move(failed)};
+    entry.payload.erase("step");
+    RealmStep result{StepState::Skipped, why};
+    result.unchanged = true;
+    return result;
 }
 
 std::string BattlegroundGroupDeparture(Player* player)
@@ -300,31 +370,19 @@ std::string LeavePvpAckReason(Queued const& entry)
     return LeavePvpAckError(members);
 }
 
-std::string OrdinaryCleanupReason(Queued const& entry)
+CleanupFault OrdinaryCleanupFault(Queued const& entry, std::uint32_t skipping)
 {
     auto& module = RealmModule::Instance();
-    auto* field = sBattlefieldMgr->GetBattlefieldToZoneId(4197);
-    for (auto guid : HeldMembers(entry))
-    {
-        if (auto why = module.MutationReason(guid, entry.id); !why.empty()) return why;
-        auto* player = ObjectAccessor::FindConnectedPlayer(PlayerGuid(guid));
-        if (!player || !player->GetSession()) return "cleanup_member_offline";
-        auto const phase = sLFGMgr->GetState(player->GetGUID());
-        auto const lfgGroup = sLFGMgr->GetGroup(player->GetGUID());
-        auto const groupPhase = lfgGroup ? sLFGMgr->GetState(lfgGroup) : lfg::LFG_STATE_NONE;
-        if (phase == lfg::LFG_STATE_PROPOSAL || groupPhase == lfg::LFG_STATE_PROPOSAL) return "shared_lfg_proposal";
-        if (phase == lfg::LFG_STATE_BOOT || groupPhase == lfg::LFG_STATE_BOOT)
-            return "shared_lfg_participants_unavailable";
-        if (phase == lfg::LFG_STATE_ROLECHECK || groupPhase == lfg::LFG_STATE_ROLECHECK
-            || (lfgGroup && (phase == lfg::LFG_STATE_QUEUED || groupPhase == lfg::LFG_STATE_QUEUED)))
-        {
-            auto const receipt = lfgGroup ? ReadLfgApplicants(lfgGroup.GetRawValue(), groupPhase == lfg::LFG_STATE_QUEUED) : std::nullopt;
-            if (!receipt) return "shared_lfg_participants_unavailable";
-            if (auto why = ValidateMembers(entry, LfgReceiptGuids(*receipt)); !why.empty()) return why;
-        }
-        if (auto why = WintergraspPrivateReason(WintergraspFacts(player, field)); !why.empty()) return why;
-    }
-    return "";
+    auto const members = RecheckedMembers(entry.guids, entry.cursor, SkippedMembers(entry), skipping,
+        [&](std::uint32_t guid) { return module.AwaitsTransition(entry.id, guid) || TouchedByCleanup(entry, guid); });
+    for (auto guid : members)
+        if (auto why = MemberCleanupFault(entry, guid); !why.empty()) return {std::move(why), guid};
+    return {};
+}
+
+std::string OrdinaryCleanupReason(Queued const& entry, std::uint32_t skipping)
+{
+    return OrdinaryCleanupFault(entry, skipping).reason;
 }
 
 std::string PrepareOrdinaryCleanupMutation(Queued& entry, std::uint32_t guid, std::vector<BodyScope> scopes)
@@ -339,22 +397,22 @@ RealmStep LeaveNativeQueue(Queued& entry, std::uint32_t guid, std::uint32_t slot
 {
     auto& module = RealmModule::Instance();
     auto* bot = FindOnline(guid);
-    if (!bot || slot >= PLAYER_MAX_BATTLEGROUND_QUEUES) return Failure(entry, "queue_identity_unavailable");
+    if (!bot || slot >= PLAYER_MAX_BATTLEGROUND_QUEUES) return MemberFailure(entry, guid, "queue_identity_unavailable");
     auto const type = bot->GetBattlegroundQueueTypeId(slot);
-    if (type == BATTLEGROUND_QUEUE_NONE) return Failure(entry, "queue_identity_changed");
+    if (type == BATTLEGROUND_QUEUE_NONE) return MemberFailure(entry, guid, "queue_identity_changed");
     auto& queue = sBattlegroundMgr->GetBattlegroundQueue(type);
     GroupQueueInfo info;
-    if (!queue.GetPlayerGroupInfoData(bot->GetGUID(), &info)) return Failure(entry, "queue_receipt_unavailable");
+    if (!queue.GetPlayerGroupInfoData(bot->GetGUID(), &info)) return MemberFailure(entry, guid, "queue_receipt_unavailable");
     if (BattlegroundMgr::BGQueueTypeId(info.BgTypeId, info.ArenaType) != type)
-        return Failure(entry, "queue_type_changed");
+        return MemberFailure(entry, guid, "queue_type_changed");
     auto const affected = QueueMembers(guid, info);
-    if (std::find(affected.begin(), affected.end(), guid) == affected.end()) return Failure(entry, "queue_manifest_unavailable");
-    if (auto why = ValidateMembers(entry, affected); !why.empty()) return Failure(entry, why);
+    if (std::find(affected.begin(), affected.end(), guid) == affected.end()) return MemberFailure(entry, guid, "queue_manifest_unavailable");
+    if (auto why = ValidateMembers(entry, affected); !why.empty()) return MemberFailure(entry, guid, why);
     auto* templateBg = sBattlegroundMgr->GetBattlegroundTemplate(info.BgTypeId);
-    if (!templateBg) return Failure(entry, "queue_template_unavailable");
+    if (!templateBg) return MemberFailure(entry, guid, "queue_template_unavailable");
     std::map<std::uint32_t, std::vector<BattlegroundQueueTypeId>> slots;
     auto const native = queue.m_QueuedPlayers.find(bot->GetGUID());
-    if (native == queue.m_QueuedPlayers.end()) return Failure(entry, "queue_lineage_unavailable");
+    if (native == queue.m_QueuedPlayers.end()) return MemberFailure(entry, guid, "queue_lineage_unavailable");
     for (auto member : affected)
     {
         auto* player = FindOnline(member);
@@ -365,13 +423,14 @@ RealmStep LeaveNativeQueue(Queued& entry, std::uint32_t guid, std::uint32_t slot
             || player->GetBattlegroundQueueIndex(type) >= PLAYER_MAX_BATTLEGROUND_QUEUES
             || player->IsInvitedForBattlegroundQueueType(type) != bool(info.IsInvitedToBGInstanceGUID)
             || (info.IsInvitedToBGInstanceGUID && !queue.IsPlayerInvited(player->GetGUID(), info.IsInvitedToBGInstanceGUID, info.RemoveInviteTime)))
-            return Failure(entry, "queue_lineage_changed");
+            return MemberFailure(entry, guid, "queue_lineage_changed");
         for (uint32 index = 0; index < PLAYER_MAX_BATTLEGROUND_QUEUES; ++index)
             slots[member].push_back(player->GetBattlegroundQueueTypeId(index));
     }
+    if (auto why = ClosureFault(entry, affected); !why.empty()) return MemberFailure(entry, guid, why);
     auto const budget = ChargeMembers(entry, affected);
     if (budget == "busy:tick_budget") return Result(entry, StepState::Pending);
-    if (!budget.empty()) return Failure(entry, budget);
+    if (!budget.empty()) return MemberFailure(entry, guid, budget);
     for (auto member : affected)
     {
         auto const body = Identity(member);
@@ -419,15 +478,16 @@ RealmStep LeaveObservedLfgApplicants(Queued& entry, std::uint32_t guid)
     auto const group = player ? sLFGMgr->GetGroup(player->GetGUID()) : ObjectGuid::Empty;
     auto const phase = group ? sLFGMgr->GetState(group) : lfg::LFG_STATE_NONE;
     if (phase != lfg::LFG_STATE_ROLECHECK && phase != lfg::LFG_STATE_QUEUED)
-        return Failure(entry, "lfg_applicant_phase_changed");
+        return MemberFailure(entry, guid, "lfg_applicant_phase_changed");
     auto const receipt = ReadLfgApplicants(group.GetRawValue(), phase == lfg::LFG_STATE_QUEUED);
-    if (!receipt) return Failure(entry, "shared_lfg_participants_unavailable");
+    if (!receipt) return MemberFailure(entry, guid, "shared_lfg_participants_unavailable");
     auto const members = LfgReceiptGuids(*receipt);
-    if (std::find(members.begin(), members.end(), guid) == members.end()) return Failure(entry, "lfg_applicant_member_changed");
-    if (auto why = ValidateMembers(entry, members); !why.empty()) return Failure(entry, why);
+    if (std::find(members.begin(), members.end(), guid) == members.end()) return MemberFailure(entry, guid, "lfg_applicant_member_changed");
+    if (auto why = ValidateMembers(entry, members); !why.empty()) return MemberFailure(entry, guid, why);
+    if (auto why = ClosureFault(entry, members); !why.empty()) return MemberFailure(entry, guid, why);
     auto const budget = ChargeMembers(entry, members);
     if (budget == "busy:tick_budget") return Result(entry, StepState::Pending);
-    if (!budget.empty()) return Failure(entry, budget);
+    if (!budget.empty()) return MemberFailure(entry, guid, budget);
     for (auto member : members)
     {
         auto const body = Identity(member);
@@ -457,18 +517,19 @@ RealmStep LeaveOnlineLfgGroup(Queued& entry, std::uint32_t guid)
     {
         auto* bot = FindOnline(guid);
         auto* group = bot ? bot->GetGroup() : nullptr;
-        if (!group || !group->isLFGGroup()) return Failure(entry, "lfg_group_unavailable");
+        if (!group || !group->isLFGGroup()) return MemberFailure(entry, guid, "lfg_group_unavailable");
         if (!sLFGMgr->isOptionEnabled(lfg::LFG_OPTION_ENABLE_DUNGEON_FINDER | lfg::LFG_OPTION_ENABLE_RAID_BROWSER
-            | lfg::LFG_OPTION_ENABLE_SEASONAL_BOSSES)) return Failure(entry, "lfg_cleanup_disabled");
+            | lfg::LFG_OPTION_ENABLE_SEASONAL_BOSSES)) return MemberFailure(entry, guid, "lfg_cleanup_disabled");
         auto const groupGuid = group->GetGUID();
         auto const phase = sLFGMgr->GetState(groupGuid);
-        if (!DungeonState(phase)) return Failure(entry, "shared_lfg_participants_unavailable");
+        if (!DungeonState(phase)) return MemberFailure(entry, guid, "shared_lfg_participants_unavailable");
         auto const members = Roster(group);
-        if (auto why = ValidateMembers(entry, members); !why.empty()) return Failure(entry, why);
+        if (auto why = ValidateMembers(entry, members); !why.empty()) return MemberFailure(entry, guid, why);
+        if (auto why = ClosureFault(entry, members); !why.empty()) return MemberFailure(entry, guid, why);
         auto plan = PlanOnlineLfgRemoval(members, Linked(group), group->GetLeaderGUID().GetCounter(), guid, true);
-        if (!plan.error.empty()) return Failure(entry, plan.error);
+        if (!plan.error.empty()) return MemberFailure(entry, guid, plan.error);
         if (group->GetInviteeCount() || sLFGMgr->GetPlayerCount(groupGuid) != members.size())
-            return Failure(entry, "lfg_group_manifest_unavailable");
+            return MemberFailure(entry, guid, "lfg_group_manifest_unavailable");
         Json receipt{{"group", groupGuid.GetRawValue()}, {"phase", static_cast<std::uint32_t>(phase)},
             {"members", Json::array()}, {"complete", false}};
         auto const dungeonMap = sLFGMgr->GetDungeonMapId(groupGuid);
@@ -477,10 +538,10 @@ RealmStep LeaveOnlineLfgGroup(Queued& entry, std::uint32_t guid)
             auto* player = FindOnline(member);
             if (player->GetGroup() != group || player->GetOriginalGroup() || player->InBattleground()
                 || sLFGMgr->GetGroup(player->GetGUID()) != groupGuid || sLFGMgr->GetState(player->GetGUID()) != phase)
-                return Failure(entry, "lfg_member_lineage_changed");
+                return MemberFailure(entry, guid, "lfg_member_lineage_changed");
             bool const teleports = player->GetMap()->IsDungeon() && player->GetMapId() == dungeonMap;
             auto const destination = teleports ? Entry(player) : Position(player);
-            if (teleports && !ValidEntry(destination)) return Failure(entry, "entry_point_unavailable");
+            if (teleports && !ValidEntry(destination)) return MemberFailure(entry, guid, "entry_point_unavailable");
             receipt["members"].push_back({{"guid", member}, {"group", groupGuid.GetRawValue()},
                 {"origin", Save(Position(player))}, {"destination", Save(destination)},
                 {"entry_map", player->GetEntryPoint().GetMapId()}, {"teleports", teleports}, {"left", false}});
@@ -529,6 +590,7 @@ RealmStep LeaveOnlineLfgGroup(Queued& entry, std::uint32_t guid)
         && (!solo->IsAlive() || solo->GetMapId() == sLFGMgr->GetDungeonMapId(group->GetGUID()));
     auto const plan = PlanOnlineLfgRemoval(remaining, Linked(group), leader, leaving, keepsSolo);
     if (!plan.error.empty()) return Failure(entry, plan.error);
+    if (auto why = ClosureFault(entry, plan.affected); !why.empty()) return Failure(entry, why);
     auto const budget = ChargeMembers(entry, plan.affected);
     if (budget == "busy:tick_budget") return Result(entry, StepState::Pending);
     if (!budget.empty()) return Failure(entry, budget);
@@ -569,7 +631,7 @@ RealmStep LeaveOnlineLfgGroup(Queued& entry, std::uint32_t guid)
 std::string VerifyCleanupReceipts(Queued const& entry, std::uint32_t skipping)
 {
     auto& module = RealmModule::Instance();
-    if (auto why = OrdinaryCleanupReason(entry); !why.empty()) return why;
+    if (auto why = OrdinaryCleanupReason(entry, skipping); !why.empty()) return why;
     if (entry.payload.contains("lfg_applicant_cleanup_receipts"))
         for (auto const& receipt : entry.payload.at("lfg_applicant_cleanup_receipts"))
             if (!VerifyLfgApplicantCleanup(entry.id, receipt.at("group").get<std::uint64_t>(), receipt.at("join").get<std::uint64_t>()))
