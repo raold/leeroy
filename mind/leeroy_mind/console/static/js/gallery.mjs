@@ -164,6 +164,7 @@ function refresh(g, first) {
 
 function drawStrip(g) {
   var focused = document.activeElement && g.strip.contains(document.activeElement);
+  var focusedId = focused ? document.activeElement.dataset.photoId : null;
   g.stripStart = Math.floor(g.at / 32) * 32;
   var window = g.photos.slice(g.stripStart, g.stripStart + 32);
   var wanted = new Set(window.map(function (p) { return p.thumbnail; }));
@@ -175,6 +176,7 @@ function drawStrip(g) {
     var i = g.stripStart + offset;
     var b = button(String(i + 1), function () { g.at = i; draw(g); });
     b.dataset.photoIndex = String(i);
+    b.dataset.photoId = String(p.id);
     b.setAttribute("aria-label", "Photo " + (i + 1));
     g.strip.appendChild(b);
     imageURL(g, g.thumbs, p.thumbnail).then(function (url) {
@@ -183,7 +185,8 @@ function drawStrip(g) {
       clear(b); b.appendChild(img);
     });
   });
-  var back = g.strip.children[g.at - g.stripStart];
+  var back = Array.from(g.strip.children).find(b => b.dataset.photoId === focusedId) ||
+    g.strip.children[g.at - g.stripStart];
   if (focused && back) { back.focus(); }
 }
 

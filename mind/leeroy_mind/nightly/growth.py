@@ -243,6 +243,8 @@ def undo(store: Store, ledger_id: int, *, now: float, personas=None) -> bool:
     - drift_flag (Task 22): its review_queue row is resolved;
     - stance_band: restore the prior stance and its exact score; first sights and hand moves
       are not reversed;
+    - variety: restore the recorded appearance and source if the re-roll is still current;
+      restore the photo and its receipt unless a later hand-set photo wins;
     - household (Task S6): her card's household, her arc's partner and her plan's cover story
       as they were before the affair ended her marriage, and the separation's private memory and
       arc event taken back (arc.after.restore_household). An undo row is never undone.

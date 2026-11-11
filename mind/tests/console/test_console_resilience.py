@@ -109,8 +109,9 @@ def test_voice_backoff_never_exceeds_five_seconds(monkeypatch):
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("connected",[False,True])
 @pytest.mark.parametrize("action,wakes",[("start",1),("restart",1),("stop",0)])
-def test_console_voice_control_wakes_relay(tmp_path,monkeypatch,action,wakes):
+def test_console_voice_control_wakes_relay(tmp_path,monkeypatch,action,wakes,connected):
     from types import SimpleNamespace
     from leeroy_mind.console.control import Controls
     from leeroy_mind.lifecycle import Outcome
@@ -125,9 +126,11 @@ def test_console_voice_control_wakes_relay(tmp_path,monkeypatch,action,wakes):
         monkeypatch.setattr(app.relay,"reconnect",reconnect)
         await app.start()
         try:
+            app.relay.connected = connected
+            expected = 0 if connected and action == "start" else wakes
             result = await http(app,"POST","/api/control",origin=True,
                                 body={"service":"voice","action":action,"confirm":True})
-            assert result.status==200 and len(calls)==wakes
+            assert result.status==200 and len(calls)==expected
         finally:
             await app.close()
     asyncio.run(run())

@@ -1640,6 +1640,8 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
   chosen photos. First fetch the pinned IP-Adapter: `fetch-models --only ipadapter`
   in the selfie worker environment; the command never downloads it. `--go` snapshots
   before migration and records the old looks/kind for `personas undo LEDGER_ID`.
+  New undo receipts retain the prior persona source; legacy receipts without it
+  keep the current source instead of marking a generated member owner-authored.
   Owner field-change evidence protects looks; old rows without such history fall
   back to current owner source. `--release GUID[,GUID...]` permits named protected
   members listed inside the current dry-run clusters. Hand-set photo kinds stay.

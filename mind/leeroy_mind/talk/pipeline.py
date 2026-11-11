@@ -283,6 +283,7 @@ class TurnMeta:
     realism_correction_until: float = 0
     realism_sequence: int = 0
     realism_planned: bool = False
+    realism_own: tuple[str, int, str] | None = None
     follow_up: bool = False
     aside: object | None = None
     offered_real_name: bool = False
@@ -1437,7 +1438,7 @@ class Pipeline:
                 if why:
                     if why not in AWAIT_ECHO:  # that row waits for the echo (_settle_unacked)
                         self._drop(turn, meta, why, memory_ids, text=s.line)
-                        if plan:
+                        if plan and i:
                             for skipped in lines[i+1:]:
                                 self._drop(turn,meta,why,memory_ids,text=skipped.line)
                     break
@@ -2241,7 +2242,18 @@ class Pipeline:
         if self.cfg.talk.realism:
             meta.realism_sequence = self.realism.record_line(turn.speaker,credit=not meta.realism_correction)
             if meta.realism_planned and not meta.realism_correction and meta.words:
-                self._own_of(turn.speaker).append((turn.channel,turn.to_guid,meta.words))
+                own = self._own_of(turn.speaker)
+                if meta.realism_own is None:
+                    meta.realism_own = (turn.channel,turn.to_guid,meta.words)
+                    own.append(meta.realism_own)
+                else:
+                    # Grow the same history turn as confirmed lines arrive. Never
+                    # resurrect an entry evicted by newer turns in the bounded deque.
+                    for i, entry in enumerate(own):
+                        if entry is meta.realism_own:
+                            meta.realism_own = (*entry[:2], entry[2] + " " + meta.words)
+                            own[i] = meta.realism_own
+                            break
         if not discord and not meta.realism_correction:
             self.world.add_line(ChatLineRow(
                 id=line_id, ts=now, channel=turn.channel, from_guid=turn.speaker,
