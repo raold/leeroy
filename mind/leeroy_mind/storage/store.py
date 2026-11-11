@@ -229,14 +229,14 @@ class Store:
                               "(SELECT value FROM json_each(?))", (stay,))
             return gone
 
-    def cast(self) -> dict[int, Member]:
+    def cast(self, *, include_world: bool = False) -> dict[int, Member]:
         from leeroy_mind.personas.tiers import cast_sql
         return {
             r["guid"]: Member(
                 guid=r["guid"], name=r["name"], race=r["race"], class_=r["class"],
                 gender=r["gender"], level=r["level"], rank=r["rank"], online=bool(r["online"]),
                 map=r["map"], zone=r["zone"], spec_tab=r["spec_tab"])
-            for r in self._all("SELECT * FROM cast_member WHERE " + cast_sql(self.conn) + " ORDER BY guid")}
+            for r in self._all("SELECT * FROM cast_member WHERE " + ("1" if include_world else cast_sql(self.conn)) + " ORDER BY guid")}
 
     def set_online(self, guid: int, online: bool) -> None:
         with self.transaction():

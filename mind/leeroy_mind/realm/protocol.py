@@ -663,7 +663,7 @@ class RealmPvp:
             raise ValueError("invalid native Realm owner receipt")
 
 
-from leeroy_mind.world.protocol import WorldSay
+from leeroy_mind.world.protocol import WorldSay, GetWorldRoster, WorldRoster
 
 COMMANDS: dict[str, type] = {
     "realm_actors": RealmActors,
@@ -700,6 +700,7 @@ COMMANDS: dict[str, type] = {
     "get_realm_pvp": GetRealmPvp,
     "guild_readmit": GuildReadmit,
     "world_say": WorldSay,
+    "get_world_roster": GetWorldRoster,
 }
 EVENTS: dict[str, type] = {
     "realm_job": RealmJob,
@@ -718,6 +719,7 @@ EVENTS: dict[str, type] = {
     "realm_kill": RealmKill,
     "realm_dungeon_kill": RealmDungeonKill,
     "realm_achievement": RealmAchievement,
+    "world_roster": WorldRoster,
 }
 NOISY = frozenset({"realm_job", "channel_chat", "game_event"})
 

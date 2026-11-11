@@ -65,7 +65,7 @@ std::uint32_t ChannelId(std::string_view name)
 Player* Speaker(std::uint32_t guid, std::string& why, std::uint32_t worldGuild = 0)
 {
     auto& module = RealmModule::Instance();
-    if (!module.On()) why = "realm_off";
+    if (!module.On() || (worldGuild && !WorldOn())) why = "realm_off";
     else if (!guid || guid == HumanGuid() || (worldGuild ? !WorldSpeaker(guid,worldGuild)
              : (!IsCast(guid) && !module.IsActor(guid))))
         why = "not_speaker:" + std::to_string(guid);
@@ -207,7 +207,7 @@ bool LocalSpeechAccepted(Player* bot, ChatMsg kind, std::string const& text, Pla
 
 LeeroyCommandResult Say(nlohmann::json const& message, bool world = false)
 {
-    if (!RealmModule::Instance().On()) return {false, "realm_off"};
+    if (!RealmModule::Instance().On() || (world && !WorldOn())) return {false, "realm_off"};
     std::string why;
     auto const cmd = ParseSay(message, why);
     if (!cmd) return {false, why};

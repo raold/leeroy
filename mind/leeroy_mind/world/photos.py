@@ -20,41 +20,65 @@ class WorldPhotos:
     private_logs = False
     def __init__(self,ctx):
         self.ctx = ctx
+        self._stamp = None
+        self._rows, self._personas = {}, {}
+        self._cfg_stamp = None
+        self._cfg = None
     def __getattr__(self,name):
         return getattr(self.ctx,name)
-    def members(self,include_away=False):
-        cfg = load(self.settings.data_dir / "mind.toml")
-        if not cfg.enabled or not cfg.selfies or not fresh(self.store,self.clock.now()):
-            return []
-        known = self.store.persona_versions(tier="world")
-        return [g for g in roster(self.store) if g in known]
-    def allows_selfie(self,guid):
+    def _enabled(self):
+        path = self.settings.data_dir / "mind.toml"
         try:
-            return guid in self.members() and self.base(guid).identity.age >= 25
-        except KeyError:
+            stat = path.stat()
+            stamp = (stat.st_mtime_ns,stat.st_size)
+        except OSError:
+            stamp = None
+        if self._cfg is None or stamp != self._cfg_stamp:
+            self._cfg, self._cfg_stamp = load(path), stamp
+        return self._cfg.enabled and self._cfg.selfies
+    def _snapshot(self):
+        # One roster/persona snapshot per pass, refreshed after local writes. Reads
+        # during queue/todo stay O(N); a retirement or config edit still wins after
+        # an awaited model/worker call.
+        if not self._enabled():
             return False
+        stamp = self.store.conn.total_changes
+        if stamp != self._stamp:
+            self._rows = roster(self.store)
+            self._personas = {}
+            for guid in self.store.persona_versions(tier="world"):
+                if guid not in self._rows:
+                    continue
+                try:
+                    p = load_persona(self.store,guid,include_world=True)
+                except ValueError:
+                    continue
+                if p is not None and p.identity.age >= 25:
+                    self._personas[guid] = p
+            self._stamp = stamp
+        return fresh(self.store,self.clock.now())
+    def members(self,include_away=False):
+        return list(self._personas) if self._snapshot() else []
+    def allows_selfie(self,guid):
+        return self._snapshot() and guid in self._personas
     def base(self,guid):
-        if guid not in self.members():
+        if not self._snapshot() or guid not in self._personas:
             raise KeyError(guid)
-        try:
-            p = load_persona(self.store,guid,include_world=True)
-        except ValueError:
-            p = None
-        if p is None or p.identity.age < 25:
-            raise KeyError(guid)
-        return p
+        return self._personas[guid]
     def persona(self,guid):
         return self.base(guid)
     def name(self,guid):
-        return roster(self.store)[guid]["name"]
+        self.base(guid)
+        return self._rows[guid]["name"]
     def base_card(self,guid):
-        r = roster(self.store)[guid]
-        return f"Character level: {r['level']}.\n" + render_prompt_card(self.base(guid),
+        p = self.base(guid)
+        r = self._rows[guid]
+        return f"Character level: {r['level']}.\n" + render_prompt_card(p,
             race=RACES.get(r["race"],""),class_name=CLASSES.get(r["class"],""))
 
 
-def photo_units(ctx):
-    scoped = WorldPhotos(ctx)
+def photo_units(ctx, scoped=None):
+    scoped = scoped or WorldPhotos(ctx)
     picks = []
     for guid in scoped.members():
         try:
@@ -66,18 +90,18 @@ def photo_units(ctx):
     return picks[:max(0,ctx.settings.world_selfies_per_night)]
 
 
-def photo_count(ctx):
+def photo_count(ctx, scoped=None):
     from .stage import count
     cfg = load(ctx.settings.data_dir / "mind.toml")
     if not cfg.enabled or not cfg.selfies:
         return 0
     return min(ctx.settings.world_selfies_per_night,
-               sum(not ctx.done(PHOTO,str(g)) for g in photo_units(ctx)) + count(ctx))
+               sum(not ctx.done(PHOTO,str(g)) for g in photo_units(ctx,scoped)) + count(ctx))
 
 
 async def photo_stage(ctx):
     scoped = WorldPhotos(ctx)
-    for guid in photo_units(ctx):
+    for guid in photo_units(ctx,scoped):
         if ctx.done(PHOTO,str(guid)):
             continue
         try:
@@ -132,9 +156,9 @@ def image_stage(cfg,*,worker=None):
 def image_count(ctx):
     scoped = WorldPhotos(ctx)
     from leeroy_mind.selfies.store import queued_sets, needing_first
-    eligible = [g for g in scoped.members() if render._held(scoped,render._stored(scoped,g)) is None]
+    eligible = {g for g in scoped.members() if render._held(scoped,render._stored(scoped,g)) is None}
     pending = sum(s.guid in eligible for s in queued_sets(ctx.store)) + len(needing_first(ctx.store,eligible))
-    return min(ctx.settings.world_selfies_per_night,pending + photo_count(ctx))
+    return min(ctx.settings.world_selfies_per_night,pending + photo_count(ctx,scoped))
 
 
 register_counter(PHOTO,photo_count)

@@ -15,18 +15,19 @@ def attach_world(app):
     app.register_event_handler("hello",service.hello)
     app.register_event_handler("world_roster",service.event)
     app.register_background(service.run)
-    from .stage import make_stage, count
+    from .stage import make_stage
+    from .counting import persona_work, photo_work, image_work
     runner = app.night_runner
     async def refresh(ctx):
         await service.refresh()
     runner.add_stage("world_targets",refresh,after="regress",model=None)
     runner.add_stage("world_personas",make_stage(lambda:app.cfg.cast),
-                     after="world_targets",model="reflection",wants_gpu=count)
+                     after="world_targets",model="reflection",wants_gpu=persona_work)
     if cfg.selfies and app.selfies.cfg.enabled:
-        from .photos import photo_stage, photo_count, image_stage, wants_gpu
+        from .photos import photo_stage, image_stage
         runner.add_stage("world_photos",photo_stage,after="world_personas",
-                         model="reflection",wants_gpu=photo_count)
+                         model="reflection",wants_gpu=photo_work)
         # Already registered cast images retain priority over these image stages.
         runner.add_stage("world_selfies",image_stage(app.selfies.cfg),after="snaps" if app.selfies.cfg.snaps else "selfies",
-                         model="image",wants_gpu=wants_gpu)
+                         model="image",wants_gpu=image_work)
     return service

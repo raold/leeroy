@@ -15,12 +15,12 @@
 
 namespace Leeroy::Realm
 {
-inline constexpr std::array<std::string_view, 34> kCommandTypes = {
+inline constexpr std::array<std::string_view, 35> kCommandTypes = {
     "realm_actors", "realm_say", "realm_emote", "realm_move", "rpg_status", "leave_pvp", "rearm", "wg_join",
     "arena_team", "arena_queue", "duel", "craft", "item_count", "equip", "set_profession", "transmog_set",
     "calendar_post", "calendar_signup", "calendar_update", "mail_send", "bank_tab_buy", "bank_money",
     "bank_deposit", "bank_withdraw", "bank_stock", "grant_achievement", "guild_rename", "guild_grow",
-    "guild_admit", "guild_note", "announce", "get_realm_pvp", "guild_readmit", "world_say"
+    "guild_admit", "guild_note", "announce", "get_realm_pvp", "guild_readmit", "world_say", "get_world_roster"
 };
 inline constexpr std::array<std::uint32_t, 7> kGrantable = {3117, 4078, 4576, 2186, 3007, 1723, 1786};
 inline constexpr std::uint32_t kGuildTabard = 5976;

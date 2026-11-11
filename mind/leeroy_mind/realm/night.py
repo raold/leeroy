@@ -443,7 +443,7 @@ class _Night:
                 and row["guid"] not in (about, self.ctx.human)}
         from leeroy_mind.world.realm import voices
         out.update({g:r for g,r in voices(self.store,self.ctx.settings.data_dir,self.ctx.clock.now()).items()
-                    if g not in (about,self.ctx.human) and r["guild_id"] != self.guild})
+                    if g not in out and g not in (about,self.ctx.human) and r["guild_id"] != self.guild})
         return out
 
     def _as_member(self, guid: int):
@@ -618,6 +618,11 @@ class _Night:
             if reason is not None:
                 raise _Refused("post", reason)  # His reply waits for another night.
         prepared = await self._prepare(self._thread_back_in(parent["thread"]))
+        # Raise outside commit_unit: its rollback catches unit errors, while the
+        # reply runner must see this refusal to count the bounded failed night.
+        if (answer is not None and author_kind == "actor" and "card" in who
+                and self._still_writes(guid,author_kind) != author):
+            raise _Refused("post", "author_gone")
         knowers = [[g, "forum"] for g in sorted({self.guild} | {row["id"] for row in self._rivals()})]
         inputs = {"night": ctx.night, "reply": reply_id, "to": reply["parent"]}
         now, outcome = ctx.clock.now(), {}
@@ -635,8 +640,7 @@ class _Night:
                 outcome.update(outcome="refused", reason=his.reason)
                 return
             post_id = None
-            if answer is not None and (author_kind != "actor" or "card" not in who
-                    or self._still_writes(guid,author_kind) == author):
+            if answer is not None:
                 fact = put_rule_fact_in_unit(
                     store, policy="forum_post_v1", key=f"{key}:answer", kind="forum_post", text=answer,
                     public=True, known_by=knowers,

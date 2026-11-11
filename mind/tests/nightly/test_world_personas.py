@@ -101,10 +101,11 @@ def test_rivals_first_then_rank_and_missing_account_retires_without_deletion(h):
     assert sum(g["retired"] for g in view.status(h.store.conn)["guilds"]) == 1
 
 
-def test_cast_cache_cannot_keep_a_reclassified_world_member(h):
+def test_cast_cache_excludes_an_outsider(h):
     cache = PersonaCache(h.store)
     assert cache.get(101)
     world(h)
+    h.store.conn.execute("DELETE FROM cast_member WHERE guid=101")
     assert cache.get(101) is None and cache.base(101) is None
     assert 101 not in cache.all() and 101 not in h.store.cast()
     assert h.store.get_card(101) is None and load_persona(h.store,101) is None
@@ -193,9 +194,9 @@ def test_snapshot_pages_identity_ack_and_disconnect(h,online):
     async def scenario():
         app = NS(data_dir=h.settings.data_dir,store=h.store,clock=h.clock,is_backlog=lambda _:False)
         service = targets.Targets(app)
-        async def send(cmd,*,preserve_id):
-            assert preserve_id
-            await service.event(WorldRoster(0,cmd.id,21,1,0,1,1,(member(h),)))
+        async def send(cmd,*,preserve_id=False):
+            assert not preserve_id
+            await service.event(WorldRoster(0,cmd.request,21,1,0,1,1,(member(h),)))
             return Ack(0,cmd.id,True,"")
         app.bridge = NS(send=send)
         await service.hello(Hello(0,"test","1",21,1 if online else 0))
@@ -358,9 +359,9 @@ def test_incomplete_or_refused_roster_does_not_retire_members(h,refusal):
     async def scenario():
         app = NS(data_dir=h.settings.data_dir,store=h.store,clock=h.clock,is_backlog=lambda _:False)
         service = targets.Targets(app)
-        async def send(cmd,*,preserve_id):
-            assert preserve_id
-            empty = WorldRoster(0,cmd.id,21,1,0,1,0,())
+        async def send(cmd,*,preserve_id=False):
+            assert not preserve_id
+            empty = WorldRoster(0,cmd.request,21,1,0,1,0,())
             await service.event(empty)
             if refusal == "duplicate":
                 await service.event(empty)
@@ -456,13 +457,14 @@ def test_roster_correlates_real_bridge_wire_id_while_live_model_is_away(h):
                     return await original(writer,cmd)
                 row = asdict(member(h))
                 row["class"] = row.pop("class_")
-                await s.bridge._write(writer,{"type":"world_roster","request":cmd["id"],
+                await s.bridge._write(writer,{"type":"world_roster","request":cmd["request"],
                     "own_guild":21,"human":1,"page":0,"pages":1,"total":1,"members":[row]})
                 await s.bridge._write(writer,{"type":"ack","id":cmd["id"],"ok":True,"error":""})
             s.bridge._command = command
             await service.hello(Hello(0,"test","1",21,0))
             assert await asyncio.wait_for(service.refresh(),2)
             assert list(targets.roster(h.store)) == [101]
+            assert not s.client._preserved_ids
     run(scenario())
 
 
@@ -480,4 +482,4 @@ def test_existing_forum_actor_keeps_card_admission_when_world_voice_is_off(h):
     assert author[:3] == (101,"actor","Arkon") and "card" not in author[3]
     assert "Test rivals" in author[3]["who"]
     enabled(h,"realm=true\n")
-    assert "card" in night._as_actor(night._actors()[101])[3]
+    assert night._as_actor(night._actors()[101]) == author

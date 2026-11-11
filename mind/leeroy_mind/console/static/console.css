@@ -671,7 +671,3 @@ td > div.who { color: var(--ink); font-weight: 600; }
   #tab-ops .panel { padding: 12px; }
   #t-ops .badge { white-space: normal; }
 }
-
-@media (max-width: 900px), (pointer: coarse) {
-  #insight-line { font-size: 16px; }
-}

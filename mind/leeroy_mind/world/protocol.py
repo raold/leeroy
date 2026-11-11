@@ -44,9 +44,10 @@ class WorldMember:
 @dataclass(frozen=True,slots=True)
 class GetWorldRoster:
     id: str
+    request: str
 
     def __post_init__(self):
-        if not token(self.id):
+        if not token(self.id) or not token(self.request):
             raise ValueError("world_request_invalid")
 
 

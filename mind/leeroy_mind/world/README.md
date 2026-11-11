@@ -11,6 +11,12 @@ world_per_night = 12
 world_selfies_per_night = 10
 ```
 
+A native rebuild is required. `get_world_roster` and `world_say` both refuse
+`realm_off` unless `Leeroy.Realm.Enable = 1` and `Leeroy.World.Enable = 1`.
+World defaults to 0, and `.reload config` changes admission immediately. The mind
+logs a refused roster ACK once per process, with a fixed code. Read polls carry
+a separate request token and never reserve bridge command IDs permanently.
+
 Native snapshots admit guilds only when every member has a verified random-bot
 account. They exclude the configured guild, human GUID and entire auction-bot
 accounts, with no character-level floor. Missing account evidence refuses a guild.
@@ -23,7 +29,8 @@ Generation uses reflection, existing persona screens and private prompt overlays
 The nightly plan survives restarts; three separate failed nights suspend a target.
 Rival guilds have priority, then rank within each guild. Cards state character level;
 world members have no owner romance. The task 46 appearance sampler is used when
-installed; otherwise the existing enrichment screen supplies looks.
+installed; its `LooksRefused` and a missing sampler both fall back to the existing
+screened enrichment path without consuming a failed night.
 
 The tier boundary is cast by default, including databases predating this feature.
 Store cast/versions/cards, PersonaCache and persona loading enforce it centrally.
@@ -32,15 +39,21 @@ fingerprints and Realm filter it too. Talk, guild life, raids, voice casting and
 night stages retain those defaults. All-persona name blocking is intentionally
 broader for privacy; historical migrations and photo file maintenance keep all rows.
 Only this package and the explicit Realm integration opt in to world reads.
-Existing native Realm actors keep their prior card-based admission when a world
-persona is generated for them. The World Realm switch opts in their new persona
-voice; it does not revoke the old actor card or create another actor registration.
+Existing native Realm actors keep their actor cards, moves, whispers and night
+beats even when they have world personas; additional world speakers are separate.
+A world bot present in an authoritative cast roster becomes eligible for the
+newcomer stage. Its stored persona seeds the normal generator; promotion commits
+only after its normal screens and age floor pass, with source `generated`.
 
 Realm world speech uses current online members of the correct active rival guild,
 their voice block, existing screens and shared speech rations. Native validation
 checks membership again before Trade or General speech. It never moves, pins or
 creates actors, casts voices, sends whispers or speaks in our guild channels.
 Forum authors and world-organised write-ups recheck membership after reflection.
+
+World photos also require `[selfies] enabled = true`. Planning counters use an
+owned read-only connection off the event loop; each photo pass snapshots the
+member/persona set once, refreshing after local writes.
 
 Photos use the existing clothed, adult, name-screened pipeline and image gate. A
 separate image allowance runs after cast images. World faces display a ready gated

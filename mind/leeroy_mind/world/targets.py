@@ -8,6 +8,7 @@ from .config import load
 from .protocol import GetWorldRoster, MAX_MEMBERS
 
 FRESH = 3600
+_refusal_logged = False
 
 
 def roster(store, *, active=True):
@@ -109,6 +110,7 @@ class Targets:
                 pending["future"].set_result(values)
 
     async def refresh(self):
+        global _refusal_logged
         async with self.lock:
             if not self.enabled() or not self.connected or not self.identity:
                 return False
@@ -118,8 +120,12 @@ class Targets:
             self.pending=pending
             try:
                 async with asyncio.timeout(15):
-                    ack=await self.app.bridge.send(GetWorldRoster(pending["id"]),preserve_id=True)
+                    ack=await self.app.bridge.send(GetWorldRoster("world-roster",pending["id"]))
                     if not ack.ok:
+                        if not _refusal_logged:
+                            _refusal_logged = True
+                            codes = {"realm_off", "world_identity_unavailable", "world_auction_unavailable", "world_roster_capacity"}
+                            log("world_roster_refused",code=ack.error if ack.error in codes else "unsupported_or_refused")
                         return False
                     rows=await future
                 if not pending["invalid"] and self.enabled() and self.connected and self.identity == identity:

@@ -5,6 +5,7 @@
 namespace Leeroy::Realm
 {
 void RegisterWorldRosterHandler();
+bool WorldOn();
 bool WorldSpeaker(std::uint32_t guid, std::uint32_t guild);
 }
 #endif

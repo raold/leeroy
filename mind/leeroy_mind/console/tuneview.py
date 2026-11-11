@@ -70,7 +70,7 @@ def tuning_view(conn, *, file_values: dict | None = None, now: float = 0.0) -> d
     out = {"available": not missing, "missing": missing, "dials": dials, "fields": fields,
            "version": 0, "pinned_members": 0, "world_dials": [], "groups": [], "members": [],
            "history": [], "nudges": {"active": [], "history": []}}
-    t = Tuning.load(conn, now=now) if not missing else Tuning(human=human_guid(conn) or 0)
+    t = Tuning.load(conn) if not missing else Tuning(human=human_guid(conn) or 0)
     files = file_values or {}
     out["world_dials"] = [{"name": d.name, "label": d.label, "lo": d.lo, "hi": d.hi,
                            "when": d.when, "moves": d.moves, "file": files.get(d.name),

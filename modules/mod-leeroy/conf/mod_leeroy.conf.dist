@@ -44,6 +44,10 @@ Leeroy.CastArenaTeams.Leave = 1
 
 # Realm actors and cast protection stay off until separately accepted.
 Leeroy.Realm.Enable = 0
+
+# Optional world persona roster and speech. Both this and Realm.Enable must be on.
+# Default off; .reload config applies the switch to subsequent commands.
+Leeroy.World.Enable = 0
 Leeroy.CastGuard = 0
 # Bounded world-thread body steps per tick, clamped to 1-20.
 Leeroy.Realm.MaxActionsPerTick = 5

@@ -273,7 +273,11 @@ def _counts(ctx: "NightContext", failed: set[str], stages: frozenset[str] | None
         if stages is not None and stage in EXTENSION_STAGES and stage not in stages:
             continue
         try:
-            out[stage] = max(0, int(fn(ctx)))
+            if stage.startswith("world_") and "world:counts" in ctx._memo:
+                from leeroy_mind.world.counting import planned
+                out[stage] = planned(ctx).get(stage,0)
+            else:
+                out[stage] = max(0, int(fn(ctx)))
         except Exception as e:
             if stage not in failed:
                 failed.add(stage)
@@ -298,6 +302,11 @@ async def plan_night(ctx: "NightContext", *, stages: frozenset[str] | None = Non
     (set_run_plan: a resumed run reuses it, like its window), applied to ctx.settings and
     ctx.plan, and logged as nightly_budget. Runners pass their actual stage names;
     direct callers may omit stages to retain the all-registered-counter interface."""
+    from leeroy_mind.world.config import load as load_world
+    ctx._memo.pop("world:counts",None)
+    if load_world(ctx.settings.data_dir / "mind.toml").enabled:
+        from leeroy_mind.world.counting import prepare
+        await prepare(ctx)
     base = ctx.settings
     hours = (ctx.window[1] - ctx.window[0]) / 3600
     work = replace(base, encounters_per_night=round(

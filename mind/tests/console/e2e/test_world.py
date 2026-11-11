@@ -1,9 +1,24 @@
 """World cards use the real read-only endpoint, on the isolated fixture only."""
 import asyncio
+import pytest
 
 from leeroy_mind.world.protocol import WorldMember
 from leeroy_mind.world.targets import save
 from .test_tabs import open_console, visit
+
+
+@pytest.fixture(autouse=True)
+def world_test_probes(monkeypatch):
+    # This file owns its probes; global console fixture changes belong to #224.
+    from . import harness
+    from leeroy_mind.console import opsview
+    original=harness.make_app
+    def make(*a,**kw):
+        app=original(*a,**kw)
+        app._ops=opsview.OpsView(app.s.root,app.s.data_dir,sources={
+            name:lambda:opsview.panel("missing","Synthetic world fixture") for name in opsview.PANELS})
+        return app
+    monkeypatch.setattr(harness,"make_app",make)
 
 
 def test_world_filter_is_read_only_and_returns_to_cast_on_phone(rehearsal):
@@ -27,6 +42,32 @@ def test_world_filter_is_read_only_and_returns_to_cast_on_phone(rehearsal):
             await expect(panel).to_contain_text(m.name + " · Test rivals · level 24")
             await panel.locator("summary").click()
             await expect(panel).to_contain_text("Character level: 24")
+            # Concurrent interval polls share one request, and unchanged/changed
+            # responses both retain the opened card.
+            calls=[]
+            entered,release=asyncio.Event(),asyncio.Event()
+            async def held(route):
+                calls.append(1)
+                entered.set()
+                await release.wait()
+                await route.continue_()
+            await r.page.route("**/api/world/personas?*",held)
+            await r.page.evaluate("""async () => {
+                const {pollWorld}=await import('/static/js/world.mjs');
+                const box=document.querySelector('#p-world');
+                window.worldPolls=Promise.all([pollWorld(box),pollWorld(box),pollWorld(box)]);
+            }""")
+            await asyncio.wait_for(entered.wait(),5)
+            assert len(calls)==1
+            release.set()
+            await r.page.evaluate("window.worldPolls")
+            await expect(panel.locator("details")).to_have_attribute("open","")
+            await r.page.unroute("**/api/world/personas?*",held)
+            with r.app.store.transaction():
+                r.app.store.conn.execute("UPDATE world_member SET level=25 WHERE guid=105")
+            await r.page.evaluate("async () => (await import('/static/js/world.mjs')).pollWorld(document.querySelector('#p-world'))")
+            await expect(panel).to_contain_text("Character level: 25")
+            await expect(panel.locator("details")).to_have_attribute("open","")
             await expect(panel.locator("input,select,textarea")).to_have_count(0)
             await expect(panel.get_by_role("button",name="Previous")).to_be_disabled()
             await expect(panel.get_by_role("button",name="Next")).to_be_disabled()

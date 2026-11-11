@@ -90,13 +90,14 @@ def realm_view(conn, *, now: float) -> dict:
 
     guilds = {r["id"]: r["name"] for r in q("SELECT id, name FROM realm_guild")}
     actors = {r["guid"]: r["name"] for r in q("SELECT guid, name FROM realm_actor")}
+    world_names = {r["guid"]:r["name"] for r in q("SELECT guid,name FROM world_member")}
     marker = views.meta_json(conn, "realm:poach:week")
     poach = None
     if isinstance(marker, dict):
         poach = {k: marker.get(k) for k in POACH_KEYS}
         poach["officer_name"] = actors.get(marker.get("officer"))
         poach["guild_name"] = guilds.get(marker.get("guild"))
-    lines = [{"ts": r["ts"], "guid": r["guid"], "name": actors.get(r["guid"]) or "#%d" % r["guid"],
+    lines = [{"ts": r["ts"], "guid": r["guid"], "name": actors.get(r["guid"]) or world_names.get(r["guid"]) or "#%d" % r["guid"],
               "guild": guilds.get(r["guild"], ""), "channel": r["channel"], "text": r["text"]}
              for r in q("SELECT ts, guid, guild, channel, text FROM realm_line "
                         "WHERE kind = 'rival' AND state = 'sent' ORDER BY ts DESC, id DESC LIMIT ?",

@@ -379,7 +379,8 @@ class Speech:
         for guid,r in voices(store,self.realm.app.data_dir,now).items():
             if (r["online"] and r["faction"] == FACTION and r["role"] in SPEAKING_ROLES
                     and self._rest.get(guid,0) <= now and (guild is None or r["guild_id"] == guild)):
-                out = [o for o in out if o.guid != guid]
+                if any(o.guid == guid for o in out):
+                    continue  # actors retain their places, whispers and night beats
                 out.append(Officer(guid,r["name"],r["guild_id"],r["guild"],"",True,r["zone"]))
         # Stable rotation gives ordinary guildmates a turn under the existing rations.
         if any(o.world for o in out):
@@ -550,7 +551,8 @@ class Speech:
                 speaker = next((o for o in officers if self._in_city(o)), None)
                 if speaker is not None:
                     return "trade" if self._rival(speaker, "trade", "rival", (
-                        "Say one line in Trade, as your guild's officer would: your raids, "
+                        ("Say one line in Trade as yourself, a member of your guild: " if speaker.world else
+                         "Say one line in Trade, as your guild's officer would: your raids, ") +
                         "recruiting, gear, or the news above."), line=self._beat(guild, now)) else None
                 if self._place_officer(guild, now):
                     return "moving"
@@ -562,6 +564,7 @@ class Speech:
                     return None
                 if local is not None:
                     return "general" if self._rival(local, "general", "rival", (
+                        "Say one line in General chat as yourself, a member of your guild." if local.world else
                         "Say one line in General chat, as your guild's officer would.")) else None
                 if guild not in self._moving and self._move(guild, officers[0], cities[0], now):
                     return "moving"

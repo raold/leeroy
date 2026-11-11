@@ -8,7 +8,6 @@ from types import SimpleNamespace
 
 from leeroy_mind.console.app import ConsoleApp, Settings
 from leeroy_mind.console.control import Controls
-from leeroy_mind.console import opsview
 from leeroy_mind.console.ws import WsError
 
 KEY = "k" * 32  # a fixed key; the real one is secrets.token_urlsafe(24)
@@ -81,16 +80,11 @@ def make_app(data, *, mind=None, controls=None, connect=no_voice, tcp=lambda: No
         kw["clock"] = clock
     if monotonic is not None:
         kw["monotonic"] = monotonic
-    app = ConsoleApp(s, mind=mind, controls=controls, connect=connect, tcp=tcp, voice=voice,
+    return ConsoleApp(s, mind=mind, controls=controls, connect=connect, tcp=tcp, voice=voice,
                       link=link,
                       ollama=ollama or (lambda url, roles: {"ok": True, "url": url, "models": []}),
                       gpu=gpu or (lambda: {"ok": False, "error": "nvidia-smi not found",
                                            "gpus": []}), **kw)
-    # The always-on Ops badge must never turn a long browser test into a machine probe.
-    # Tests of actual Ops projections install their own explicit source fixtures.
-    app._ops = opsview.OpsView(s.root, data, sources={
-        name: lambda: opsview.panel("missing", "Synthetic Ops fixture.") for name in opsview.PANELS})
-    return app
 
 
 @dataclass

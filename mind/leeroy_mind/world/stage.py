@@ -1,6 +1,5 @@
 """Bounded world generation, separate from every cast night consumer."""
 from dataclasses import replace
-import importlib.util
 import json
 
 from leeroy_mind.logs import log
@@ -85,12 +84,25 @@ class GeneratedContext:
             race=RACES.get(row["race"],""),class_name=CLASSES.get(row["class"],""))
 
 
+def _sampler_api():
+    from leeroy_mind.personas.looks_diversity import sample, LooksRefused
+    return sample, LooksRefused
+
+
 def _looks_sampler():
     """Task 46 hook; keep the fallback independently testable after it merges."""
-    if importlib.util.find_spec("leeroy_mind.personas.looks_diversity") is not None:
-        from leeroy_mind.personas.looks_diversity import sample
-        return sample
-    return None
+    try:
+        sample, refused = _sampler_api()
+    except ModuleNotFoundError as exc:
+        if exc.name != "leeroy_mind.personas.looks_diversity":
+            raise
+        return None
+    def safe_sample(*args, **kwargs):
+        try:
+            return sample(*args, **kwargs)
+        except refused:
+            return None  # preserve the generation and use screened enrichment
+    return safe_sample
 
 
 async def looks(ctx,p,rows,existing,names):

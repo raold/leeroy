@@ -82,14 +82,15 @@ def seed_rivals(store):
                                (guid, guild, name, role))
 
 
-def test_world_member_uses_own_voice_and_direct_receipt_without_actor_or_move(sapp):
+@pytest.mark.parametrize("channel,zone",[("trade",ORGRIMMAR),("general",DURATOR)])
+def test_world_member_uses_own_voice_and_direct_receipt_without_actor_or_move(sapp,monkeypatch,channel,zone):
     from leeroy_mind.world.protocol import WorldMember, WorldSay
     from leeroy_mind.world.targets import save
     s = sapp
     with open(s.app.data_dir/"mind.toml","a",encoding="utf-8") as out:
         out.write("\n[world]\nenabled=true\nrealm=true\n")
     m = s.store.cast()[101]
-    save(s.store,(WorldMember(101,2,TESTGUILD,"Testguild",m.name,m.race,m.class_,m.gender,24,3,True,1,ORGRIMMAR),),
+    save(s.store,(WorldMember(101,2,TESTGUILD,"Testguild",m.name,m.race,m.class_,m.gender,24,3,True,1,zone),),
          own=21,human=1,now=s.clock.now())
     with s.store.transaction():
         s.store.conn.execute("INSERT INTO persona_tier VALUES(101,'world')")
@@ -97,22 +98,26 @@ def test_world_member_uses_own_voice_and_direct_receipt_without_actor_or_move(sa
         await start(s)
         officers = s.speech._officers(s.clock.now(),TESTGUILD)
         speaker = next(o for o in officers if o.guid == 101)
-        assert speaker.world and s.speech._in_city(speaker)
+        assert speaker.world and s.speech._in_city(speaker) == (channel == "trade")
         assert not s.speech._move(TESTGUILD,speaker,s.speech._capital(),s.clock.now())
         assert not s.speech._rival(speaker,"whisper","rival","hello")
-        assert s.speech._rival(speaker,"trade","rival","Discuss this character's levelling.")
+        monkeypatch.setattr(s.speech,"_officers",lambda *a:[speaker])
+        monkeypatch.setattr(s.speech,"_his_zone",lambda:zone)
+        assert s.speech.maybe_speak(s.clock.now()) == channel
         await settle(s.realm)
         sent = [cmd for cmd in s.app.sent if isinstance(cmd,WorldSay)]
         assert len(sent) == 1 and sent[0].guid == 101 and sent[0].guild_id == TESTGUILD
         assert any(row["state"] == "sent" and row["guid"] == 101 for row in lines(s.store))
         prompt = json.dumps(s.llm.calls)
         assert "Character level: 24" in prompt and "typing" in prompt
+        assert "as yourself, a member of your guild" in prompt
+        assert "as your guild's officer would" not in prompt
         assert not s.store.conn.execute("SELECT 1 FROM realm_actor WHERE guid=101").fetchone()
         await s.realm.close()
     run(scenario())
 
 
-def test_existing_officer_keeps_card_until_world_voice_is_enabled(sapp):
+def test_existing_officer_keeps_actor_behaviour_when_world_voice_is_enabled(sapp):
     from leeroy_mind.world.protocol import WorldMember
     from leeroy_mind.world.targets import save
     s = sapp
@@ -129,7 +134,34 @@ def test_existing_officer_keeps_card_until_world_voice_is_enabled(sapp):
     assert len(before) == 1 and not before[0].world
     (s.app.data_dir/"mind.toml").write_text(original+"\n[world]\nenabled=true\nrealm=true\n",encoding="utf-8")
     after = [o for o in s.speech._officers(s.clock.now(),TESTGUILD) if o.guid == 101]
-    assert len(after) == 1 and after[0].world
+    assert after == before
+
+
+def test_all_eight_actors_keep_moves_whispers_and_beats_with_world_on(sapp,monkeypatch):
+    from leeroy_mind.world import realm as world_realm
+    s=sapp
+    with s.store.transaction():
+        s.store.conn.execute("DELETE FROM realm_actor")
+        for guid in range(201,209):
+            s.store.conn.execute("INSERT INTO realm_actor(guid,guild,name,role,place,added) VALUES(?,50,?,'officer','org_bank',1)",(guid,f"Actor{guid}"))
+    now=s.clock.now()
+    monkeypatch.setattr(world_realm,"voices",lambda *a:{})
+    before=s.speech._officers(now)
+    assert len(before)==8
+    monkeypatch.setattr(world_realm,"voices",lambda *a:{o.guid:dict(online=True,faction="horde",role="progression",
+        name=o.name,guild_id=o.guild,guild=o.guild_name,zone=1637,card="Synthetic voice",world=True) for o in before})
+    after=s.speech._officers(now)
+    assert after == before
+    sent,moves=[],[]
+    monkeypatch.setattr(s.speech,"_start",lambda spec:sent.append(spec) or True)
+    monkeypatch.setattr(s.realm.queue,"submit",lambda cmd,**kw:moves.append(cmd))
+    for o in after:
+        assert s.speech._move(o.guild,o,s.speech._capital(),now)
+        assert s.speech._rival(o,"whisper","rival","A synthetic invitation.")
+        assert s.speech._rival(o,"trade","rival","Trade",line="A synthetic night beat.")
+    assert len(moves)==8 and all(isinstance(m,protocol.RealmMove) for m in moves)
+    assert len(sent)==16 and all(not spec.world for spec in sent)
+    assert all(spec.line == "A synthetic night beat." for spec in sent if spec.channel=="trade")
 
 
 def make_app(tmp_path, store, clock, monkeypatch, *, llm=None, blocklist=True, name=GUILD_NAME):
