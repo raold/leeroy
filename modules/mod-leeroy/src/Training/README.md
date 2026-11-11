@@ -44,7 +44,9 @@ journals(N)`, on change and at most once a minute) and `training cleanup verifie
 pending, `TrainingCleanupPending()` fences every body (Realm `busy:training_cleanup`, play style, queue fence) for
 at most ten minutes (`LeeroyTrainingFence.h`); then `training cleanup fence released` is logged once and only the
 per-body fences hold: job owners, journals, DC runs and pending bot commands. New training stays refused
-(`cleanup_pending`) until a pass proves every adapter clean.
+(`cleanup_pending`) until a pass proves every adapter clean; that all-clear reads `training cleanup released, not
+verified: <what>` when a job gave up on a member. `OfflineTrainingCleanupPending()` (an offline raid's or
+benchmark's unrestored training receipt) is a separate global fence and is not bounded here.
 The dungeon-clear API has no ownership generation for overrides: removing and recreating an identical value
 is indistinguishable from the original (ABA). In-memory journals also cannot promise restoration after a crash;
 explicit stock-value restores remain available after restart. These limits require lifecycle acceptance before wiring.
@@ -71,12 +73,14 @@ participant becoming the configured human block further mutation. A partially cr
 for cleanup rather than destroying an object that may already be linked to the player. As with other in-memory
 job receipts, abnormal process termination requires reconciliation of any remaining harness parties.
 A blocked member logs why (`dummy trial <id> blocked member <guid>: <reason>`). A trial stopped because training
-cleanup is pending ends `cleanup_pending`, not `training_off`. Ten minutes after its `cleanup_failed` terminal a
-trial that no longer holds any member (no group object or solo party of ours lists it, and its same body does
-not have the driver as master) ends: `cleanup_released after_ms= unfinished=` and a `dummy_cleanup` event
-`{id, state: "released", unfinished, after_ms}`. A recovery that proves every return sends `state: "restored"`.
-A member still held keeps the job (`cleanup_held` once) and, from then on, only the held members stay fenced.
-Journals are never discarded by either path.
+cleanup is pending ends `cleanup_pending`, not `training_off`. Ten minutes after its `cleanup_failed` terminal the
+trial sorts its unreturned members (`DummyFateAfterBound`): it keeps and fences one it still holds (a group object
+or solo party of ours lists it, or its same body has the driver as master), one it is still returning (not
+blocked: a teleport or reset is in progress) and one with a training journal; it abandons a blocked member with
+none of these (`cleanup_abandoned guid=`, never touched or fenced again). With nobody kept it ends:
+`cleanup_released after_ms= unfinished=` and a `dummy_cleanup` event `{id, state: "released", unfinished,
+after_ms}`. A recovery that proves every return sends `state: "restored"`. Otherwise it keeps its slot
+(`cleanup_held kept=` once) and only the kept members stay fenced. Journals are never discarded.
 Admission excludes existing non-permanent instance bindings because native group removal would discard them.
 Bindings are checked again before cleanup; a later non-permanent binding blocks disband instead of being erased.
 Permanent raid bindings are preserved by that native path. The controller never snapshots or recreates saved locks.

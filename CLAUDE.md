@@ -24,14 +24,20 @@ and completion checks; unavailable bodies or ambiguous receipts can remain
 pending. Disabling a flag is not proof that everything was restored. Preserve
 journals and pending receipts until verified cleanup completes. `[training]
 enabled = false` disables the Python attachment on the next mind start; it does
-not clear an outstanding native or Python journal. An unproved cleanup fences
-every body (Realm, queue fence, play style) for at most ten minutes; after that
-only bodies a job still holds or a journal names stay fenced, and new training
-stays refused (`cleanup_pending`) until cleanup is verified. Server.log names the
-adapters keeping it pending. A dummy trial that holds no member ten minutes after
-its `cleanup_failed` terminal ends natively and sends `dummy_cleanup` (`released`
-with its unfinished members, or `restored` once every return is proved);
-journals stay.
+not clear an outstanding native or Python journal. The global training-cleanup
+flag (`TrainingCleanupPending()`: Realm `busy:training_cleanup`, the queue fence,
+play style) fences every body for at most ten minutes of an unproved cleanup;
+after that only bodies a job still keeps or a journal names stay fenced, and new
+training stays refused (`cleanup_pending`) until cleanup is verified. An offline
+raid's or benchmark's unrestored training receipt (`OfflineTrainingCleanupPending()`)
+is not bounded: it still fences every body until restored. Server.log names the
+adapters keeping cleanup pending, and its all-clear says `released, not verified`
+instead of `verified` when a job gave up on a member. Ten minutes after a dummy
+trial's `cleanup_failed` terminal it abandons each blocked member it no longer
+holds (`cleanup_abandoned guid=`) and keeps fencing the members it still holds, is
+still returning or that carry a journal; with none left it ends and sends
+`dummy_cleanup` (`released` with its unfinished members, or `restored` once every
+return is proved). Journals stay.
 
 Inspection commands use `python -m leeroy_mind training`: `status`, `report
 --week YYYY-Www`, `gate`, `trials`, `cards`, `lessons --context MAP:BOSS:DIFFICULTY`,
@@ -47,9 +53,14 @@ pulls and restores matching scores. A lab blocked on an unproved trial holds its
 members until, with the mind stopped, `lab-clear` clears it on native evidence
 the mind stored: that trial's `dummy_cleanup` receipt, a terminal proving every
 return, or a hello from a worldserver started after the trial (`started_ms`).
-It sends nothing, keeps every receipt, frees the members and refuses in words
-without evidence or when a member has a standing setup; `lab` shows the
-evidence, and health FAILs a block older than a night.
+A lab blocked with no trial in flight needs no evidence (probes and priming touch
+no body). It sends nothing, keeps every receipt (an attempt keeps its earlier
+restoration state as `restoration_before`), frees the members, commits only a
+record the body holds accept, and refuses in words without evidence or when a
+member has a standing setup; `lab` shows the evidence, and health FAILs a block
+older than a night. The first dummy trial after a worldserver start is refused
+`driver_pending` while native logs the DC test driver in; the lab retries that
+leg once, 60 s later (`training_lab_driver_retry`).
 
 The bridge exposes `telemetry`, `get_stats`, `get_vocab`, `custom_strategy`,
 `dc_setting`, `dummy_trial`, `get_rivals`, `start_benchmark` and
@@ -312,7 +323,9 @@ intervening day; newer, missing or truncated logs are an incomplete observation,
 of a clean night. Evidence cycles use the critic's shared persisted edges: the count is
 memories whose ancestry reaches a cycle, not edges (note at 1, FAIL at 50). Its scan stops
 at 100,000 rows/nodes or 0.8 seconds and labels incomplete results. Queued selfie sets older
-than 30 hours are a note. With `[realm] enabled = true`, a missing or entry-less
+than 30 hours are a note. A training lab blocked longer than a night (`tg:lab:owned` phase
+`blocked`, from `halted_at`) FAILs with its halt, night, trial and the `training lab-clear`
+command to run with the mind stopped; a younger block is a note. With `[realm] enabled = true`, a missing or entry-less
 `realm/blocklist.txt` or no cached guild name (meta `realm:guild_name`) FAILs: the Realm's
 screen cannot be ready, so rivals stay silent (the night also logs `realm_night_unready` as a
 WARNING with `reason=` `blocklist_missing`, `guild_name_missing` or `blocklist_empty`). The
