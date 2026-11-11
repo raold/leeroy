@@ -62,15 +62,6 @@ class Renderer:
         return max(len(tok(text, add_special_tokens=False).input_ids)
                    for tok in (self.pipe.tokenizer, self.pipe.tokenizer_2))
 
-    def embed(self, req):
-        from .embedding import MODEL, encode
-        started = time.perf_counter()
-        if not self.identity:
-            raise RenderFailed("encoder_unavailable")
-        vector = encode(self.pipe.image_encoder, self.pipe.feature_extractor, self.torch, req.ref)
-        return {"model": MODEL, "vector": vector, "device": str(self.pipe.image_encoder.device),
-                "seconds": round(time.perf_counter()-started, 3)}
-
     def score(self, image) -> float:
         torch = self.torch
         with torch.no_grad():

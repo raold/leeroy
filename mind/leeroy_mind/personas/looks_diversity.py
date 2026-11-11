@@ -16,6 +16,8 @@ from leeroy_mind.personas.screens import has_word, names_real_name
 from leeroy_mind.personas.stances import is_woman
 from leeroy_mind.selfies.style import AGE_RE
 
+# Categorical near-duplicate guard, not a perceptual/diversity score. Free-text
+# legacy looks rarely share exact tokens; ordinary random draws usually pass.
 MIN_LOOK_DISTANCE = .22
 MIN_LOOK_AGE = 25
 MAX_DRAWS = 128
@@ -57,12 +59,18 @@ def enabled(root):
 
 
 def protection(conn, guid):
-    """Sticky owner provenance; missing older schema cannot authorize a reroll."""
+    """Field-change evidence wins; old rows have only their current source as evidence.
+
+    The ledger records notes/stance/household, not historic appearance versions.
+    The migration therefore seeds owner rows only. Subsequent owner changes to
+    appearance are captured by the two triggers, even after generated saves.
+    """
     try:
         row = conn.execute("SELECT reason FROM persona_looks_protection WHERE guid=?", (guid,)).fetchone()
         return row[0] if row else None
     except sqlite3.OperationalError:
-        return "provenance_unavailable"
+        row = conn.execute("SELECT source FROM persona_core WHERE guid=?",(guid,)).fetchone()
+        return "owner" if row and row[0] == "owner" else None
 
 
 def looks_vector(a):
@@ -130,8 +138,21 @@ def sample(p, existing=(), *, seed="v1", ident, names=()):
     raise LooksRefused("looks_no_distinct_candidate")
 
 
-def apply_if_enabled(store, p, root, existing, *, ident, names=()):
+def apply_if_enabled(store, p, diversity, existing, *, ident, names=()):
     """Generator hook: off preserves the exact object and does no new DB reads."""
-    if not enabled(root) or protection(store.conn, p.guid):
+    if not diversity or protection(store.conn, p.guid):
         return p
     return replace(p, appearance=sample(p, existing, ident=ident, names=names))
+
+
+def mark_sampled(store, p):
+    if p.appearance is not None:
+        store.set_meta(f"looks:sampled:{p.guid}",str(store.persona_versions()[p.guid]))
+
+
+def needs_enrichment(store, guid):
+    version = store.get_meta(f"looks:sampled:{guid}")
+    if version is None:
+        return False
+    row = store.conn.execute("SELECT version FROM persona_core WHERE guid=?",(guid,)).fetchone()
+    return row is not None and str(row[0]) == version

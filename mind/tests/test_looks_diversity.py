@@ -91,7 +91,7 @@ def test_invalid_configuration_is_off(tmp_path,text,expected):
 
 def test_disabled_hook_preserves_exact_persona_without_database_read(tmp_path):
     p = make_persona(101,"Arkon")
-    assert looks.apply_if_enabled(None,p,tmp_path,(),ident=IDENT) is p
+    assert looks.apply_if_enabled(None,p,False,(),ident=IDENT) is p
 
 
 def test_owner_appearance_protection_survives_later_generated_changes(store,tmp_path):
@@ -104,7 +104,7 @@ def test_owner_appearance_protection_survives_later_generated_changes(store,tmp_
     later = replace(owned,secret="An invented new secret")
     save(store,later)
     assert looks.protection(store.conn,101) == "owner"
-    assert looks.apply_if_enabled(store,later,tmp_path,(),ident=IDENT) is later
+    assert looks.apply_if_enabled(store,later,True,(),ident=IDENT) is later
 
 
 def test_owner_edit_of_unrelated_fields_does_not_claim_generated_looks(store):
@@ -121,7 +121,7 @@ def test_owner_clearing_appearance_still_protects_the_choice(store):
     assert looks.protection(store.conn,101) == "owner"
 
 
-def test_old_schema_upgrade_preserves_rows_and_protects_unknown_history(tmp_path,monkeypatch,clock):
+def test_old_schema_upgrade_protects_current_owner_only_without_field_history(tmp_path,monkeypatch,clock):
     path = tmp_path/"old.db"
     conn = db_before("looks_diversity",path,tmp_path,monkeypatch)
     store = Store(conn,clock=clock)
@@ -135,7 +135,7 @@ def test_old_schema_upgrade_preserves_rows_and_protects_unknown_history(tmp_path
     upgraded = Store(open_db(path),clock=clock)
     try:
         assert upgraded.get_persona_json(101) == before
-        assert looks.protection(upgraded.conn,101) == "legacy_unknown"
+        assert looks.protection(upgraded.conn,101) is None
         assert looks.protection(upgraded.conn,102) == "owner"
         assert load_persona(upgraded,102) == p2
     finally:
@@ -146,6 +146,6 @@ def test_enabled_generator_hook_assigns_distinct_appearance(store,tmp_path):
     (tmp_path/"mind.toml").write_text("[looks]\ndiversity=true",encoding="utf-8")
     cast = seed_test_cast(store)
     p = cast[101]
-    result = looks.apply_if_enabled(store,p,tmp_path,cast.values(),ident=IDENT)
+    result = looks.apply_if_enabled(store,p,True,cast.values(),ident=IDENT)
     assert result.appearance is not None
     assert replace(result,appearance=p.appearance) == p

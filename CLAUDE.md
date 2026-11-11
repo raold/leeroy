@@ -1528,6 +1528,19 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
   (pinned revisions into `<data>/models`), `doctor` (`--quick` skips torch and hashing; the
   mind's doctor runs that), `where`, `smoke --out DIR` (one invented person; needs the GPU),
   `pytest -q` (no model, GPU or network).
+- **Appearance variety.** `[looks] diversity = true`, read at startup (or once per
+  generator command), gives new members screened deterministic looks. It does not
+  re-enrich existing owner/seeded members with looks but no disclosures. With the
+  mind stopped, `selfies variety --dry-run|--go --top 30` diagnoses/re-rolls similar
+  chosen photos. First fetch the pinned IP-Adapter: `fetch-models --only ipadapter`
+  in the selfie worker environment; the command never downloads it. `--go` snapshots
+  before migration and records the old looks/kind for `personas undo LEDGER_ID`.
+  Owner field-change evidence protects looks; old rows without such history fall
+  back to current owner source. `--release GUID[,GUID...]` permits named protected
+  members listed inside the current dry-run clusters. Hand-set photo kinds stay.
+  Plain kinds are re-chosen by the night; scene planning waits for a new cover pick.
+  Galleries and the current cover remain intact. See
+  `mind/leeroy_mind/personas/looks_diversity.md`.
 - **Two night stages, only with `enabled = true`.** `photo` runs after `enrich` on the
   reflection model: it picks a photo kind, framing, setting, outfit and expression for each
   member who has looks and no kind yet (stored as a new persona version, screened for the
@@ -1750,12 +1763,6 @@ apart from this install. Read `dojo/README.md` before touching it.
   refuses a layout that overlaps them.
 
 ## Outstanding
-
-- **Appearance variety.** `[looks] diversity = true` opts new cast generation and
-  newcomers into screened deterministic looks. With the mind stopped, `selfies
-  variety --dry-run|--go --top 30` diagnoses/re-rolls similar chosen photos while
-  preserving galleries and owner edits. Legacy looks with unknown provenance
-  stay protected. See `mind/leeroy_mind/personas/looks_diversity.md`.
 
 - `mod-bg-slaveryvalley` server data + client patch (above).
 - Zip-sourced modules (transmog, individual-progression, slaveryvalley) have no

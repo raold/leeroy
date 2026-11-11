@@ -1,5 +1,5 @@
 -- Keep explicit owner appearance choices even after a generated persona update.
--- Old persona versions were not retained: protect legacy looks with unknown provenance.
+-- No field-level history exists for old rows: protect their current owner source.
 CREATE TABLE persona_core_new (
     guid INTEGER PRIMARY KEY, json TEXT NOT NULL, card TEXT NOT NULL,
     card_tokens INTEGER NOT NULL, version INTEGER NOT NULL,
@@ -12,13 +12,11 @@ ALTER TABLE persona_core_new RENAME TO persona_core;
 
 CREATE TABLE persona_looks_protection (
     guid INTEGER PRIMARY KEY,
-    reason TEXT NOT NULL CHECK(reason IN ('owner','legacy_unknown')),
+    reason TEXT NOT NULL CHECK(reason IN ('owner')),
     version INTEGER NOT NULL CHECK(version >= 1)
 );
 INSERT INTO persona_looks_protection
-SELECT guid, CASE WHEN source='owner' THEN 'owner' ELSE 'legacy_unknown' END, version
-FROM persona_core WHERE source='owner'
-    OR CASE WHEN json_valid(json) THEN json_type(json,'$.appearance')='object' ELSE 1 END;
+SELECT guid, 'owner', version FROM persona_core WHERE source='owner';
 
 CREATE TRIGGER protect_owner_looks_insert BEFORE INSERT ON persona_core
 WHEN NEW.source='owner' AND json_valid(NEW.json)
@@ -44,3 +42,12 @@ CREATE TABLE selfie_embedding (
     created REAL NOT NULL,
     PRIMARY KEY(guid,pick,model)
 );
+
+-- The existing persona undo mechanism consumes the re-roll's private receipt.
+CREATE TABLE persona_ledger_new(id INTEGER PRIMARY KEY, guid INTEGER NOT NULL, ts REAL NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('note_added','note_dropped','note_rolled_back','drift_flag',
+                                    'stance_band','undo','household','variety')),
+  text TEXT NOT NULL, evidence TEXT NOT NULL DEFAULT '[]', ref INTEGER, score_before REAL);
+INSERT INTO persona_ledger_new SELECT * FROM persona_ledger;
+DROP TABLE persona_ledger;
+ALTER TABLE persona_ledger_new RENAME TO persona_ledger;

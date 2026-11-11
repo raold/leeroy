@@ -6,6 +6,8 @@ import struct
 
 MODEL = "ipadapter-vith-head-v1"
 DIMENSIONS = 1024
+# Uncalibrated cosine cutoff on the pinned encoder. Single-link components can
+# chain: two endpoints need not be close. Preview clusters before choosing a top N.
 PHOTO_CLUSTER_DISTANCE = .08
 MAX_PHOTOS = 1024
 
@@ -59,7 +61,7 @@ def clusters(vectors):
     return sorted((v for v in groups.values() if len(v)>1),key=lambda v:(-len(v),v)), sorted(pairs)
 
 
-def choose(vectors, protected, top=30):
+def choose(vectors, protected, top=30, *, release=()):
     groups,pairs = clusters(vectors)
     nearest = {}
     for score,a,b in pairs:
@@ -68,7 +70,8 @@ def choose(vectors, protected, top=30):
     selected,kept = [],[]
     for group in groups:
         # A protected member is already a permanent representative of this cluster.
-        keeper = min((g for g in group if g in protected), default=min(group))
+        keeper = min((g for g in group if g in protected),
+                     default=min((g for g in group if g not in release),default=min(group)))
         kept.append(keeper)
         selected.extend((len(group),nearest[g],g,keeper) for g in group if g != keeper and g not in protected)
     selected.sort(key=lambda item:(-item[0],item[1],item[2]))

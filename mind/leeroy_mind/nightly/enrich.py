@@ -208,11 +208,11 @@ async def enrich_one(ctx: "NightContext", guid: int) -> tuple[Persona | None, li
 
 
 def _bare(ctx: "NightContext", guid: int) -> bool:
-    """A stored persona with no appearance yet."""
+    """Missing looks, or a newly sampled version awaiting its first disclosures."""
     p = ctx.personas.get(guid)
-    from leeroy_mind.personas.looks_diversity import enabled
+    from leeroy_mind.personas.looks_diversity import needs_enrichment
     return p is not None and (p.appearance is None or
-        enabled(ctx.settings.data_dir) and not p.disclosures)
+        not p.disclosures and needs_enrichment(ctx.store,guid))
 
 
 def _race_class(store: Store, guid: int) -> tuple[str, str]:
@@ -231,6 +231,7 @@ def _saver(ctx: "NightContext", guid: int, enriched: Persona) -> Callable[[Store
         race, class_name = _race_class(store, guid)
         save_persona(store, _fill(stored, enriched), source="generated", ts=ctx.clock.now(),
                      race=race, class_name=class_name)
+        store.conn.execute("DELETE FROM meta WHERE key=?",(f"looks:sampled:{guid}",))
     return write
 
 

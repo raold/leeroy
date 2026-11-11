@@ -2,8 +2,10 @@
 
 `[looks] diversity = true` enables the deterministic sampler for cast generation
 and nightly newcomers. It defaults to false; malformed or unknown settings disable
-it. The generator still makes its existing two model calls. Sampling supplies the
-appearance; nightly enrichment can still fill missing disclosures and tastes.
+it. The switch is read at startup, or once per manual generator command. The
+generator still makes its existing two model calls. Sampling supplies the appearance;
+only that freshly sampled version is marked for initial disclosure/taste enrichment.
+Existing personas with looks and intentionally empty disclosures are not added to the pass.
 Manual re-rolls below are explicit operations and do not require this switch.
 
 All sampled members must be at least 25. Existing name, likeness, age, clothing and
@@ -51,7 +53,10 @@ The command takes the existing exclusive mind lock. Dry-run opens the database
 read-only and writes no cache, persona, queue or image. Both modes may start the
 encoder worker for uncached current picks, using immutable `history/<pick>.jpg`
 files. Only the already fetched IP-Adapter ViT-H encoder is loaded, locally;
-there are no model downloads, diffusion renders or Ollama unloads. It uses the
+there are no model downloads, diffusion renders or Ollama unloads. Fetch the pin
+first in the `selfie` environment: `python -m leeroy_selfie fetch-models --only ipadapter`
+(about 3.4 GB). An unreadable photo is skipped with `encoder_failed`;
+worker loss or timeout still stops the command. It uses the
 CPU when the configured VRAM floor is unavailable, including a GPU OOM fallback.
 The subprocess tree is stopped on completion, failure and cancellation.
 
@@ -62,20 +67,38 @@ first; one member remains in each, preferring a protected member. `--top` defaul
 to 30; one invocation accepts at most 1,024 chosen photos. Output contains GUIDs,
 counts, distances and fixed codes, never persona text, names or vectors.
 
-`--go` creates a new `source='variety'` persona version with new looks and a newly
-screened photo choice. Identity, age, region, romance stance and other persona
-fields stay intact. It queues a fresh set through the existing queue and preserves
+`--go` uses the startup snapshot helper before opening/migrating the database
+(`snapshots/mind-pre-variety-*.db`). A snapshot failure prevents all writes and worker
+startup. Every re-roll has a new `source='variety'` persona version and a private
+meta receipt with the old looks, kind and style record, linked to a `variety`
+persona-ledger entry. `personas --data-dir PATH undo LEDGER_ID` restores those fields
+through the existing ledger undo mechanism, keeping later unrelated persona edits.
+A later appearance choice wins over undo; a later hand-set kind stays intact.
+Find the ID with `nightly ledger --guid GUID`. Identity, age, region, romance stance
+and other persona fields stay intact. A hand-set photo kind is kept. Lust kinds are
+composed and screened; plain kinds and their style records are cleared for the
+existing nightly photo pass. Fresh sets queue immediately for kept/composed kinds,
+or after the plain night choice is saved, and preserve
 the old gallery and chosen cover. A pending marker prevents repeat re-rolls while
 the old cover is still selected (`awaiting_new_pick`). The ordinary photo booth
-renders queued work later with its existing content and GPU gates.
+renders queued work later with its existing content and GPU gates. Until a new
+cover pick, this member is excluded from situational scenes and guild-photo tiles;
+existing planned scenes expire through the ordinary `looks_changed` sweep.
 
 ## Owner provenance
 
-Older databases retain only the latest persona row, so a later generated update
-can hide an earlier owner appearance edit. Migration conservatively protects all
-pre-existing appearances as `legacy_unknown`, and current owner rows as `owner`.
-There is no override switch. Reliable external provenance is needed before any
-uncertain legacy appearance can be made eligible; dry-run lists those GUIDs.
+Older databases retain only the latest persona row; the existing ledger records
+notes, stance and household changes, without historic appearance/source versions.
+When field-level evidence is unavailable, migration protects current owner-source
+rows only. Generated and seeded rows remain eligible. This intentionally cannot
+recover an old owner edit hidden by a later generated save.
+
+Dry-run lists protected GUIDs and reasons inside each cluster. Explicit
+`--release GUID[,GUID...]` allows those named protected members in the current
+preview to be re-rolled, preserving the Lust curvy/voluptuous body rule. Other GUIDs
+are refused with `release_not_listed`. Protection remains sticky for future runs;
+the private per-re-roll receipt records this release. Validation recomputes the
+preview from current picks, so stale or unrelated GUIDs cannot authorize a change.
 
 For future edits, database triggers permanently protect an appearance changed by
 an owner save, including clearing it. An unrelated owner field edit that leaves

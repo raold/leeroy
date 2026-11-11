@@ -64,11 +64,17 @@ def test_newcomer_uses_generator_source_screens_budget_and_refreshes_night(h, ca
     assert not any(text in caplog.text for text in (*NAMES, "Arkon", "synthetic profile"))
 
 
-def test_diversity_on_uses_sampler_without_extra_model_call_and_keeps_enrichment_due(h):
+def test_diversity_on_uses_sampler_without_extra_model_call_and_keeps_enrichment_due(h,monkeypatch):
     from leeroy_mind.nightly.enrich import _bare
     missing(h,101)
     ctx = context(h,NAMES[0])
     (ctx.settings.data_dir / "mind.toml").write_text("[looks]\ndiversity=true",encoding="utf-8")
+    from leeroy_mind.config import load_config
+    from leeroy_mind.nightly.settings import load_settings
+    from leeroy_mind.personas import looks_diversity
+    ctx.settings = load_settings(load_config(ctx.settings.data_dir/"mind.toml"),ctx.settings.data_dir)
+    (ctx.settings.data_dir/"mind.toml").write_text("[looks]\ndiversity=false")
+    monkeypatch.setattr(looks_diversity,"enabled",lambda *a:pytest.fail("configuration reread"))
     run(generate(ctx))
     p = load_persona(h.store,101)
     assert p is not None and p.appearance is not None
