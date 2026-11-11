@@ -33,7 +33,7 @@ def test_places_parse_dist():
                                                         "dal_bank"]
     assert [p.name for p in found.by_kind("city", zone=1497)] == ["uc_bank"]
     assert found.by_kind("photo") == []
-    assert found.zone_of("tb_bank") == 1638 and found.zone_of("org_gate") == 14
+    assert found.zone_of("tb_bank") == 1638 and found.zone_of("org_gate") == 1637
     assert "dal_inn" in found and "near_human" not in found and len(found) == 20
     with pytest.raises(KeyError):
         found.zone_of("near_human")

@@ -708,6 +708,26 @@ Food and drink are filled independently so existing food cannot crowd out missin
 water; shifted druids retain drink coverage. Audited factory helpers add potions
 and class consumables.
 
+`Leeroy.CastDeathLoop.Enable` (default 0, `.reload config`) enables a separate
+world-thread rescue for pinned cast members. Three observed deaths within 15 minutes
+while solo, outside instances/BGs and without a Realm/training owner make a member
+eligible once alive and out of combat. It teleports to the homebind, never resurrects,
+and bounds attempts to five per one-second pass and one per member per hour. Group
+invitations, transit, trade and duels also block it. The event
+`cast_death_loop_rescued` contains only `guid` and `deaths`.
+
+`ac-server.sh start` keeps the newest ten timestamped AppenderFile rotations per
+native `.log` basename beside the binaries; active logs and unrelated files stay.
+The detached mind owns `mind-stdout.log` and rotates it at local midnight, keeping
+14 backups like `mind.log`. Prints, warnings and Python tracebacks use that stream;
+raw native writes to inherited stdout/stderr handles are discarded.
+
+The live prompt budget is 1800 estimated input tokens (four characters per token),
+with Orion's context still 4096 and output allowance 80. Fixed late-whisper instructions
+can reach about 480 tokens before context, so the old 1300 budget crowded out memories
+and recent lines. Last-resort warnings now include each section's token count, never
+its text. The prompt's privacy gates and mandatory evidence/instructions are unchanged.
+
 Local commits `41386b71` and `a8f5d378` (first built 2026-10-31) keep pins quiet: for a
 pinned bot three `TellMaster` lines are skipped, "AI was reset to defaults"
 (`ResetAiAction`, which playerbots runs on "group set leader") and the

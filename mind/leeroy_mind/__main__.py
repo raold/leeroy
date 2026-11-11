@@ -5,6 +5,10 @@ import sys
 from contextlib import closing, contextmanager
 from pathlib import Path
 
+if __name__ == "__main__":
+    from .stdio import capture_detached
+    capture_detached()
+
 from .clock import SystemClock
 from .config import default_data_dir, write_default_config
 

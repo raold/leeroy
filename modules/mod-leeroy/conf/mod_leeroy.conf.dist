@@ -27,6 +27,11 @@ Leeroy.Bridge.Port = 7878
 # Exempt the cast from randomize, refresh, teleport and revive-teleport.
 Leeroy.KeepCast = 1
 
+# Rescue solo pinned cast members after three deaths in fifteen minutes, once alive
+# and out of combat. Honors Realm/training ownership; at most once an hour per member.
+# Reloadable with .reload config. Does not resurrect bots itself.
+Leeroy.CastDeathLoop.Enable = 0
+
 # Pin every cast member as an online random bot.
 Leeroy.BringCastOnline = 1
 

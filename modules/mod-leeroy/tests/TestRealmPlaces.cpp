@@ -47,7 +47,8 @@ LEEROY_TEST(Realm_PlacesDistParses)
     if (byName.contains("uc_bank")) CHECK_EQ(byName.at("uc_bank").zone, 1497u);
     if (byName.contains("org_arena_master")) CHECK_EQ(byName.at("org_arena_master").zone, 1637u);
     // Measured outer gate guard is in Durotar, outside the city zone.
-    if (byName.contains("org_gate")) CHECK_EQ(byName.at("org_gate").zone, 14u);
+    // Terrain is Durotar, but the gate is inside Orgrimmar's WMO area override.
+    if (byName.contains("org_gate")) CHECK_EQ(byName.at("org_gate").zone, 1637u);
     CHECK(!byName.contains("org_bank_roof"));
 }
 

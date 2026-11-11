@@ -245,13 +245,14 @@ def spawn_mind(root, data, python, *, popen=subprocess.Popen):
     env = os.environ.copy()
     env.pop("PYTHONHOME", None)
     env.update(PYTHONPATH=str(root / "mind"), PYTHONNOUSERSITE="1", PYTHONUNBUFFERED="1",
-               LEEROY_MIND_DATA=str(data))
-    with (logs / "mind-stdout.log").open("ab") as output:
-        return popen_outside_job(
-            popen, [str(python), "-m", "leeroy_mind", "run", "--data-dir", str(data)],
-            what="mind", creationflags=CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP,
-            cwd=root / "mind", env=env, stdin=subprocess.DEVNULL, stdout=output,
-            stderr=subprocess.STDOUT, close_fds=True)
+               LEEROY_MIND_DATA=str(data), LEEROY_CAPTURE_STDIO="1")
+    # The child owns the rotating stream. An inherited append-only file descriptor
+    # would keep Windows from renaming it, and the launcher does not stay alive.
+    return popen_outside_job(
+        popen, [str(python), "-m", "leeroy_mind", "run", "--data-dir", str(data)],
+        what="mind", creationflags=CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP,
+        cwd=root / "mind", env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+        stderr=subprocess.STDOUT, close_fds=True)
 
 
 def launch_problem(launch, reason):
