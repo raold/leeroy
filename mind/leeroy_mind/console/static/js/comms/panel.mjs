@@ -18,7 +18,6 @@ function showPanelButton() {
   if (!button) { return; }
   var hidden = panelHidden();
   button.textContent = hidden ? "Show panel" : "Hide panel";
-  button.setAttribute("aria-pressed", String(hidden));
   button.setAttribute("aria-expanded", String(!hidden));
 }
 

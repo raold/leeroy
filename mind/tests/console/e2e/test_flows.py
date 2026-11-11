@@ -172,7 +172,7 @@ def test_hide_comms_panel_widens_the_feed_and_a_face_brings_it_back(rehearsal):
             await toggle.click()
             await expect(right).to_be_hidden()
             await expect(toggle).to_have_text("Show panel")
-            await expect(toggle).to_have_attribute("aria-pressed", "true")
+            await expect(toggle).to_have_attribute("aria-expanded", "false")
             assert (await r.page.locator(".feedpanel").bounding_box())["width"] > narrow + 200
             # A member's face in the feed asks for their card, which lives in the panel
             face = r.page.locator("#feed [data-card]").first
