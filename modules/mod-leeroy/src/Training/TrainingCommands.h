@@ -26,8 +26,15 @@ void TickDcHolds(std::uint32_t diff);
 bool IsPrimed(std::string const& qualifier);
 bool RepairPrimedForRestore(std::string const& qualifier);
 bool TrainingAllowed();
+// Why TrainingAllowed() is false ("guild_off", "training_off", "cleanup_pending"); empty when allowed.
+std::string_view TrainingBlockReason();
+// The global fence over every body: true while a cleanup is unproved, for at most
+// kTrainingFenceReleaseMs. After that only per-body fences (owners, journals) hold.
 bool TrainingCleanupPending();
+// True until a cleanup pass proves every adapter clean; new training stays refused meanwhile.
+bool TrainingCleanupUnresolved();
 void RequireTrainingCleanup();
+std::size_t TrainingJournalCount();
 BotJournal& JournalOf(std::uint32_t guid);
 void JournalReset(std::uint32_t guid, std::vector<std::string_view> const& values = {});
 void JournalForget(std::uint32_t guid);

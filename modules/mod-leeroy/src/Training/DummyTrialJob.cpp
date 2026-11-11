@@ -64,6 +64,7 @@ struct Member
         released = true, resetDone = true, returned = false, returnIssued = false, blocked = false,
         groupReleased = true, groupReleaseStarted = false, leaderFlag = false, leaderRestored = true,
         finalResetDone = true;
+    uint32 reasserted = 0;
     uint64 started = 0, ms = 0, damage = 0, hits = 0, retryAt = 0;
     std::optional<uint64> outsideSince;
 };
@@ -78,7 +79,9 @@ struct Job
     ObjectGuid driver, dummy;
     std::uintptr_t driverIdentity = 0;
     int slot = -1;
-    bool returning = false, terminalPublished = false;
+    bool returning = false, terminalPublished = false, heldNoted = false, bounded = false;
+    uint64 failedAt = 0, releaseCheckAt = 0;
+    std::vector<uint32> held; // After the release bound: the members the job still holds.
 
     Job(DummyTrialCmd requested, uint64 accepted) : command(std::move(requested)), life(accepted, command.seconds) { }
 };
@@ -140,16 +143,42 @@ bool GroupScope(Member const& member, Player* bot)
         !member.groupReleased && HasNonPermanentBind(member.guid));
 }
 
-bool Owned(Job const& job, Member const& member, Player* bot)
+DummyOwnerState OwnerState(Job const& job, Member const& member, Player* bot)
 {
-    if (!bot || !GET_PLAYERBOT_AI(bot)) return false;
     auto master = Identity(GET_PLAYERBOT_AI(bot)->GetMaster());
-    return DummyOwnerProven({SameSession(member, bot), member.guid == job.human || member.guid == Guild::HumanGuid(),
+    return {SameSession(member, bot), member.guid == job.human || member.guid == Guild::HumanGuid(),
         Guild::IsCast(member.guid), IsSelfBot(bot), bot->GetGuildId() == job.guild,
         bot->GetGroupInvite() != nullptr || bot->GetOriginalGroup() != nullptr,
         DcTestRunManager::Instance().IsReserved(bot->GetGUID()) || Guild::OfflineRaidOwns(member.guid),
         GroupScope(member, bot), member.released ? master == 0 : master == job.driverIdentity,
-        !bot->GetSession() || bot->GetSession()->IsLoggingOut()});
+        !bot->GetSession() || bot->GetSession()->IsLoggingOut()};
+}
+
+bool Owned(Job const& job, Member const& member, Player* bot)
+{
+    return bot && GET_PLAYERBOT_AI(bot) && DummyOwnerProven(OwnerState(job, member, bot));
+}
+
+Player* Driver(Job const& job);
+
+// Our solo party's creation makes the bot's stock "reset botAI" drop the driver as master and reset
+// its strategies (DummyMasterReassertable). Put the driver back and strip follow again, as the
+// offline raid does. True only when the driver was put back.
+bool Reassert(Job const& job, Member& member, Player* bot)
+{
+    auto* ai = bot ? GET_PLAYERBOT_AI(bot) : nullptr;
+    if (!ai || ai->GetMaster() || member.released || member.groupReleased) return false; // The common, cheap case.
+    auto* driver = Driver(job);
+    if (!driver || !DummyMasterReassertable(OwnerState(job, member, bot), member.released, member.groupReleased, true))
+        return false;
+    ai->SetMaster(driver);
+    ai->ChangeStrategy("-follow", BOT_STATE_COMBAT);
+    ai->ChangeStrategy("-follow", BOT_STATE_NON_COMBAT);
+    ++member.reasserted;
+    if (member.reasserted == 1 || member.reasserted % 50 == 0)
+        LOG_INFO("module.leeroy", "mod-leeroy: dummy trial {} master_reasserted guid={} count={}", job.event.id,
+            member.guid, member.reasserted);
+    return Identity(ai->GetMaster()) == job.driverIdentity;
 }
 
 void PublishCreatedGroup(Member& member)
@@ -215,8 +244,11 @@ void Drop(Job const& job, Member& member, std::string reason, uint64 now)
     if (member.dropped.empty()) member.dropped = std::move(reason);
 }
 
-void Block(Member& member, std::string reason)
+void Block(Job const& job, Member& member, std::string reason)
 {
+    if (!member.blocked)
+        LOG_WARN("module.leeroy", "mod-leeroy: dummy trial {} blocked member {}: {}; its return stops and "
+            "training cleanup is required", job.event.id, member.guid, reason);
     member.blocked = true;
     member.cleanupError = std::move(reason);
     RequireTrainingCleanup();
@@ -234,6 +266,7 @@ void ReturnMember(Job& job, Member& member, uint64 now)
         if (member.groupReleaseStarted && !member.creatingGroup && !OwnedGroup(member)
             && bot && !bot->GetGroup() && !sGroupMgr->GetGroupByGUID(member.group.GetCounter()))
             member.groupReleased = true; // Only our recorded release intent can consume a disappeared group.
+        Reassert(job, member, bot);
         DummyReturnState state{member.prepared, connected != nullptr, SameSession(member, connected), bot != nullptr,
             connected && connected->IsBeingTeleported(), AtOrigin(member, bot),
             member.released, member.resetDone, Owned(job, member, bot), AtTrial(job, bot, 150.0f),
@@ -250,7 +283,7 @@ void ReturnMember(Job& job, Member& member, uint64 now)
                     : state.teleporting ? "teleport_pending" : "offline";
                 return;
             case DummyReturnStep::Block:
-                Block(member, !state.sameSession ? "session_changed"
+                Block(job, member, !state.sameSession ? "session_changed"
                     : !member.groupReleased && HasNonPermanentBind(member.guid) ? "instance_binding_changed"
                     : !state.owned ? "ownership_changed" : "location_changed");
                 return;
@@ -272,13 +305,13 @@ void ReturnMember(Job& job, Member& member, uint64 now)
             {
                 PublishCreatedGroup(member);
                 auto* group = OwnedGroup(member);
-                if (!group || !Owned(job, member, bot)) { Block(member, "group_changed"); return; }
+                if (!group || !Owned(job, member, bot)) { Block(job, member, "group_changed"); return; }
                 member.groupReleaseStarted = true; // Record before a possibly throwing/deleting core operation.
                 if (member.creatingGroup)
                 {
                     // No ID means Create stopped before core membership/registration. Only discard an empty object.
                     if (group->GetGUID() || group->GetMembersCount() || group->GetInviteeCount() || bot->GetGroup())
-                    { Block(member, "group_create_incomplete"); return; }
+                    { Block(job, member, "group_create_incomplete"); return; }
                     member.creatingGroup.reset();
                     member.groupReleased = true;
                 }
@@ -381,15 +414,16 @@ void Move(Job& job, uint64 now)
         if (!SameSession(member, connected))
         {
             Drop(job, member, "offline", now);
-            if (connected) Block(member, "session_changed");
+            if (connected) Block(job, member, "session_changed");
             continue;
         }
         if (connected->IsBeingTeleported()) continue;
         auto* bot = Guild::FindOnline(member.guid);
+        Reassert(job, member, bot); // Trial strategies are applied only at StartFight, so nothing is lost yet.
         if (!Owned(job, member, bot))
         {
             Drop(job, member, "ownership_changed", now);
-            Block(member, "ownership_changed");
+            Block(job, member, "ownership_changed");
         }
         else if (!bot->IsAlive()) Drop(job, member, "died", now);
         else if (bot->IsInCombat()) Drop(job, member, "attacked", now);
@@ -405,6 +439,7 @@ void StartFight(Job& job, uint64 now)
     {
         if (!member.dropped.empty()) continue;
         auto* bot = Guild::FindOnline(member.guid);
+        Reassert(job, member, bot);
         if (!Owned(job, member, bot) || !AtTrial(job, bot))
         {
             Drop(job, member, "ownership_changed", now);
@@ -425,7 +460,7 @@ void StartFight(Job& job, uint64 now)
         guids.push_back(member.guid);
     }
     if (guids.empty()) { job.life.Stop("no_participants", now); return; }
-    if (!TrainingAllowed()) { job.life.Stop("training_off", now); return; }
+    if (!TrainingAllowed()) { job.life.Stop(std::string(TrainingBlockReason()), now); return; }
     job.dummy = dummy->GetGUID();
     job.slot = TrainingTap::Instance().OpenDummy(guids, job.dummy, kDummyPlaces[job.command.place].map);
     if (job.slot < 0) { job.life.Stop("recorder_unavailable", now); return; }
@@ -458,10 +493,11 @@ void Fight(Job& job, uint64 now)
         }
         auto* bot = Guild::FindOnline(member.guid);
         if (!SameSession(member, bot)) Drop(job, member, "offline", now);
+        else if (Reassert(job, member, bot)) Drop(job, member, "ai_reset", now); // The reset took its trial strategies.
         else if (!Owned(job, member, bot))
         {
             Drop(job, member, "ownership_changed", now);
-            Block(member, "ownership_changed");
+            Block(job, member, "ownership_changed");
         }
         else if (!bot->IsAlive()) Drop(job, member, "died", now);
         else if (tap.DummyAttacked(job.slot, member.guid)) Drop(job, member, "attacked", now);
@@ -469,7 +505,7 @@ void Fight(Job& job, uint64 now)
             || bot->GetInstanceId())
         {
             Drop(job, member, "moved", now);
-            Block(member, "location_changed");
+            Block(job, member, "location_changed");
         }
         else
         {
@@ -530,6 +566,65 @@ bool AllReturned(Job const& job)
 {
     return std::all_of(job.members.begin(), job.members.end(), [](Member const& member) { return member.returned; });
 }
+
+bool Held(Job const& job, Member const& member)
+{
+    auto* group = OwnedGroup(member);
+    auto* connected = ObjectAccessor::FindConnectedPlayer(Guid(member.guid));
+    auto* ai = connected ? GET_PLAYERBOT_AI(connected) : nullptr;
+    return DummyMemberHeld({member.prepared, member.returned, member.creatingGroup != nullptr,
+        group && group->IsMember(Guid(member.guid)),
+        connected && Identity(connected) == member.player && Identity(connected->GetSession()) == member.session
+            && Identity(ai) == member.ai,
+        ai && Identity(ai->GetMaster()) == job.driverIdentity});
+}
+
+std::vector<uint32> Unreturned(Job const& job)
+{
+    std::vector<uint32> guids;
+    for (auto const& member : job.members)
+        if (member.prepared && !member.returned) guids.push_back(member.guid);
+    return guids;
+}
+
+std::string GuidList(std::vector<uint32> const& guids)
+{
+    std::string text;
+    for (auto guid : guids) text += (text.empty() ? "" : ",") + std::to_string(guid);
+    return text.empty() ? "-" : text;
+}
+
+// Ten minutes after cleanup_failed, a job that no longer holds any member (DummyMemberHeld) ends:
+// its slot frees and its global fence can clear. Journals stay and fence their own bodies; the
+// dummy_cleanup "released" receipt names the members whose return was never proved. A member still
+// held keeps the job, and from then on only the held members stay fenced (DummyTrialOwns).
+bool ReleaseStuck(Job& job, uint64 now)
+{
+    if (job.life.Phase() != DummyPhase::Recovery || now < job.releaseCheckAt) return false;
+    job.releaseCheckAt = now + 1000;
+    uint64 const since = now >= job.failedAt ? now - job.failedAt : 0;
+    std::vector<uint32> held;
+    for (auto const& member : job.members)
+        if (Held(job, member)) held.push_back(member.guid);
+    auto const decision = DecideDummyRelease(job.life.FailureReported(), since, static_cast<uint32>(held.size()));
+    if (decision == DummyRelease::Wait) return false;
+    job.bounded = true;
+    job.held = held;
+    if (decision == DummyRelease::Keep)
+    {
+        if (!job.heldNoted)
+            LOG_WARN("module.leeroy", "mod-leeroy: dummy trial {} cleanup_held held={} after_ms={}; only these "
+                "members stay fenced and the job keeps its slot", job.event.id, GuidList(held), since);
+        job.heldNoted = true;
+        return false;
+    }
+    auto const unfinished = Unreturned(job);
+    LOG_WARN("module.leeroy", "mod-leeroy: dummy trial {} cleanup_released after_ms={} unfinished={} (journals "
+        "are retained and fence their own bodies)", job.event.id, since, GuidList(unfinished));
+    LeeroyModule::Instance().Publish(EncodeEvent(NowUnixMs(),
+        MakeDummyCleanup(job.event.id, "released", unfinished, since)), false);
+    return true;
+}
 }
 #endif
 
@@ -545,11 +640,21 @@ bool DummyTrialRunning()
 bool DummyTrialOwns(std::uint32_t guid)
 {
 #if LEEROY_HAS_DUNGEON_CLEAR
-    return active && std::find(active->command.guids.begin(), active->command.guids.end(), guid)
-        != active->command.guids.end();
+    if (!active) return false;
+    auto const& guids = active->bounded ? active->held : active->command.guids;
+    return std::find(guids.begin(), guids.end(), guid) != guids.end();
 #else
     (void)guid;
     return false;
+#endif
+}
+
+std::string DummyTrialCleanupDetail()
+{
+#if LEEROY_HAS_DUNGEON_CLEAR
+    return active ? active->event.id + " unreturned=" + GuidList(Unreturned(*active)) : std::string();
+#else
+    return {};
 #endif
 }
 
@@ -561,7 +666,7 @@ LeeroyCommandResult HandleDummyTrial(nlohmann::json const& message)
 #if !LEEROY_HAS_DUNGEON_CLEAR
     return {false, "driver_unavailable:no_dungeon_clear"};
 #else
-    if (!TrainingAllowed()) return {false, "training_off"};
+    if (!TrainingAllowed()) return {false, std::string(TrainingBlockReason())};
     if (active) return {false, "busy"};
     if (!Guild::KeepCast()) return {false, "keep_cast_off"};
     if (HumanConnected(Guild::HumanGuid())) return {false, "human_online"};
@@ -617,6 +722,9 @@ void DummyPlayerLogout(std::uint32_t guid)
         if (member.guid == guid && member.prepared && !member.returned)
         {
             // A new login is a different lease even if allocator addresses happen to be reused.
+            if (!member.blocked)
+                LOG_WARN("module.leeroy", "mod-leeroy: dummy trial {} blocked member {}: session_logged_out",
+                    active->event.id, guid);
             member.blocked = true;
             member.cleanupError = "session_logged_out";
         }
@@ -636,14 +744,15 @@ void TickDummyTrial(std::uint32_t /*diff*/)
         if (job.human != Guild::HumanGuid() || job.guild != LeeroyModule::Instance().GuildId())
             job.life.Stop("owner_changed", now);
         else if (!Driver(job)) job.life.Stop("driver_offline", now);
-        bool enabled = TrainingAllowed() && Guild::KeepCast()
-            && job.epoch == TrainingTap::Instance().TrainingEpoch();
+        bool const allowed = TrainingAllowed(), keepCast = Guild::KeepCast();
+        bool enabled = allowed && keepCast && job.epoch == TrainingTap::Instance().TrainingEpoch();
+        std::string_view const off = !allowed ? TrainingBlockReason() : !keepCast ? "keep_cast_off" : "training_off";
         bool arrived = std::all_of(job.members.begin(), job.members.end(),
             [](Member const& member) { return member.arrived || !member.dropped.empty(); });
         bool fighting = std::any_of(job.members.begin(), job.members.end(),
             [](Member const& member) { return member.attacking; });
         auto step = job.life.Step(now, {enabled, HumanConnected(job.human) || HumanConnected(Guild::HumanGuid()),
-            arrived, fighting, AllReturned(job)});
+            arrived, fighting, AllReturned(job), off});
         if (job.life.Phase() == DummyPhase::Returning || job.life.Phase() == DummyPhase::Recovery
             || step == DummyStep::Finish) BeginReturn(job, now);
         switch (step)
@@ -656,6 +765,7 @@ void TickDummyTrial(std::uint32_t /*diff*/)
                 for (auto& member : job.members) ReturnMember(job, member, now);
                 break;
             case DummyStep::ReportFailure:
+                job.failedAt = now;
                 PublishTerminal(job, true);
                 RequireTrainingCleanup();
                 break;
@@ -665,6 +775,8 @@ void TickDummyTrial(std::uint32_t /*diff*/)
                 break;
             case DummyStep::Recovered:
                 LOG_INFO("module.leeroy", "mod-leeroy: dummy trial {} retained recovery completed", job.event.id);
+                LeeroyModule::Instance().Publish(EncodeEvent(NowUnixMs(), MakeDummyCleanup(job.event.id, "restored",
+                    {}, now >= job.failedAt ? now - job.failedAt : 0)), false);
                 active.reset();
                 break;
             case DummyStep::Wait: break;
@@ -675,6 +787,7 @@ void TickDummyTrial(std::uint32_t /*diff*/)
             BeginReturn(*active, now);
             for (auto& member : active->members) ReturnMember(*active, member, now);
         }
+        if (active && ReleaseStuck(*active, now)) active.reset();
     }
     catch (...)
     {

@@ -3,6 +3,7 @@
 #define MOD_LEEROY_DUMMY_LIFECYCLE_H
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace Leeroy::Training
@@ -21,6 +22,16 @@ inline bool DummyOwnerProven(DummyOwnerState const& state)
 {
     return state.sameSession && !state.isHuman && state.isCast && !state.isSelfBot && state.sameGuild
         && !state.invited && !state.reserved && state.groupOwned && state.masterOwned && !state.loggingOut;
+}
+// Group::Create sends the new leader an empty group list, and playerbots' stock "reset botAI"
+// answers it by dropping any master outside the bot's group (the driver always is) and resetting
+// its strategies. Put the driver back only while our solo party still holds the body and every
+// other ownership fact still proves it; a foreign master stays an ownership change.
+inline bool DummyMasterReassertable(DummyOwnerState state, bool masterReleased, bool groupReleased, bool masterEmpty)
+{
+    if (masterReleased || groupReleased || !masterEmpty) return false;
+    state.masterOwned = true;
+    return DummyOwnerProven(state);
 }
 // The only accepted group is our unchanged solo party, or an empty partial creation that we still own.
 inline bool DummyGroupProven(bool released, bool botGrouped, bool exactIdentity, std::uint32_t members,
@@ -56,7 +67,29 @@ inline DummyReturnStep DecideDummyReturn(DummyReturnState const& state)
 struct DummyObservation
 {
     bool enabled = true, humanOnline = false, allArrived = false, anyFighting = false, allReturned = false;
+    std::string_view offReason = "training_off"; // Why enabled is false, e.g. cleanup_pending while training is on.
 };
+
+// A member still counts as held after a failed return while any of the job's control is on it:
+// the group object it created, its solo party listing the member, or the driver as master of the
+// same body. Bodies no longer held are released after kDummyReleaseMs; journals stay with them.
+inline constexpr std::uint64_t kDummyReleaseMs = 10ULL * 60 * 1000;
+struct DummyHoldState
+{
+    bool prepared = false, returned = false, creatingGroup = false, inOwnedGroup = false, sameBody = false,
+        driverMaster = false;
+};
+inline bool DummyMemberHeld(DummyHoldState const& state)
+{
+    if (!state.prepared || state.returned) return false;
+    return state.creatingGroup || state.inOwnedGroup || (state.sameBody && state.driverMaster);
+}
+enum class DummyRelease { Wait, Keep, Release };
+inline DummyRelease DecideDummyRelease(bool failureReported, std::uint64_t sinceFailureMs, std::uint32_t held)
+{
+    if (!failureReported || sinceFailureMs < kDummyReleaseMs) return DummyRelease::Wait;
+    return held ? DummyRelease::Keep : DummyRelease::Release;
+}
 
 // The production controller calls this same policy before each phase's effects. A repeated cancellation
 // cannot renew a deadline. A failed return reports once but keeps the recovery phase/reservation alive.
@@ -90,7 +123,8 @@ public:
         if (_phase != DummyPhase::Returning && _phase != DummyPhase::Recovery)
         {
             if (state.humanOnline) Stop("human_login", now);
-            else if (!state.enabled) Stop("training_off", now);
+            else if (!state.enabled)
+                Stop(state.offReason.empty() ? "training_off" : std::string(state.offReason), now);
         }
         if (_phase == DummyPhase::Preparing || _phase == DummyPhase::Moving)
         {
