@@ -54,6 +54,14 @@ and says `identity: true` in its ready line; it then renders only requests that 
 `identity` reference (a square crop of a JPEG and a scale; the embeds of the last 8 references,
 each a file version and crop, are kept), and a worker without it answers `identity_unavailable`
 to one.
+`worker --embed-only` loads only the already fetched IP-Adapter image encoder,
+with local files only. It uses the CPU if the VRAM floor is unavailable, and
+falls back to the CPU after a GPU allocation failure. An `embed` request has
+`id`, `op: "embed"` and an absolute JPEG `ref`; its response carries a normalized
+1,024-float head-crop vector and model id `ipadapter-vith-head-v1`. Vectors travel
+only over the worker protocol, never logs. This mode cannot render images. The
+mind's stopped-service `selfies variety` command owns its lifetime and cache;
+see `../mind/leeroy_mind/personas/looks_diversity.md`.
 `shape: "portrait"` renders 832 x 1216, its thumbnail keeping the aspect. Either worker
 answers a `grid` request (1-16 JPEG tiles) by compositing the guild photo with Pillow, no GPU:
 each tile resized to `tile`, set on a dark `#0e141a` ground with `gutter` pixels around and

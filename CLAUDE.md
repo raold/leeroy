@@ -873,6 +873,11 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   events the bridge queued for the mind, so never run it while they matter.
 - Do not run `personas generate`/`seed` or a library build while the mind is
   live: they load another large model next to the live one and evict it.
+- Optional `[talk] realism = true` adds bounded typing cadence, rare corrections and
+  small reply bursts; default off, read at mind start and each login. Mind-only:
+  no migration or native rebuild. It preserves authored/altered-state typing,
+  excludes raid-event turns, and drops stale follow-ups after a newer line from
+  that member. See `mind/leeroy_mind/talk/README.md` for budgets and busy evidence.
 - Optional `[fingerprint] enabled = true` attaches a model-free typing-profile stage
   on restart (also in `nightly run`). Missing/invalid settings mean off. It measures
   the last 300 mind-origin lines, or seeds a documented persona prior below 50.
@@ -1591,6 +1596,19 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
   (pinned revisions into `<data>/models`), `doctor` (`--quick` skips torch and hashing; the
   mind's doctor runs that), `where`, `smoke --out DIR` (one invented person; needs the GPU),
   `pytest -q` (no model, GPU or network).
+- **Appearance variety.** `[looks] diversity = true`, read at startup (or once per
+  generator command), gives new members screened deterministic looks. It does not
+  re-enrich existing owner/seeded members with looks but no disclosures. With the
+  mind stopped, `selfies variety --dry-run|--go --top 30` diagnoses/re-rolls similar
+  chosen photos. First fetch the pinned IP-Adapter: `fetch-models --only ipadapter`
+  in the selfie worker environment; the command never downloads it. `--go` snapshots
+  before migration and records the old looks/kind for `personas undo LEDGER_ID`.
+  Owner field-change evidence protects looks; old rows without such history fall
+  back to current owner source. `--release GUID[,GUID...]` permits named protected
+  members listed inside the current dry-run clusters. Hand-set photo kinds stay.
+  Plain kinds are re-chosen by the night; scene planning waits for a new cover pick.
+  Galleries and the current cover remain intact. See
+  `mind/leeroy_mind/personas/looks_diversity.md`.
 - **Two night stages, only with `enabled = true`.** `photo` runs after `enrich` on the
   reflection model: it picks a photo kind, framing, setting, outfit and expression for each
   member who has looks and no kind yet (stored as a new persona version, screened for the

@@ -327,6 +327,32 @@ class SelfieWorker:
             similarity = None  # a best-effort diagnostic never fails a good grid
         return Gridded(width, height, seconds, similarity)
 
+    async def embed(self, ref: Path) -> tuple[float, ...]:
+        """One chosen JPEG, with bounded numeric-only output from the pinned encoder."""
+        from .similarity import MODEL, checked
+        self._sequence += 1
+        rid = f"e{self._sequence}"
+        if not ref.is_absolute() or ref.suffix.lower() != ".jpg":
+            raise ValueError("embedding_path_invalid")
+        line = json.dumps({"id":rid,"op":"embed","ref":str(ref)}).encode("utf-8") + b"\n"
+        if len(line)-1 > MAX_LINE:
+            raise WorkerError("bad_request")
+        tree = self._tree
+        if not self.running:
+            if tree is not None and tree.process.returncode is not None:
+                await self._end_failed(tree)
+            raise WorkerError("gone")
+        answer = await self._answer(tree,rid,self._render_s,line)
+        if not answer["ok"]:
+            raise WorkerError("encoder_failed")
+        try:
+            if answer.get("model") != MODEL:
+                raise ValueError("embedding_model_invalid")
+            return checked(answer.get("vector"))
+        except ValueError:
+            await self._end_failed(tree)
+            raise WorkerError("embedding_invalid") from None
+
     async def _answer(self, tree: ProcessTree, rid: str, timeout: float,
                       line: bytes | None = None) -> dict:
         process = tree.process

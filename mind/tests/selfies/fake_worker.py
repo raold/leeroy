@@ -141,6 +141,15 @@ def main() -> None:
         if req.get("op") == "grid":
             _grid(req)
             continue
+        if req.get("op") == "embed":
+            if env.get("FAKE_SELFIE_HANG"):
+                threading.Event().wait()
+            vector = [1.0] + [0.0]*1023
+            if env.get("FAKE_SELFIE_BAD_EMBED"):
+                vector = [1.0]
+            _send({"id":req["id"],"ok":True,"error":"","model":"ipadapter-vith-head-v1",
+                   "vector":vector,"device":"cpu","seconds":.01})
+            continue
         if env.get("FAKE_SELFIE_LOG"):
             ref = (req.get("identity") or {}).get("ref")
             with open(env["FAKE_SELFIE_LOG"], "a", encoding="utf-8") as f:

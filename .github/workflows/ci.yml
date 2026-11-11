@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# The native unit tests need only header-only boost.asio: take the headers from boost's own
+# GitHub release (the version the live build uses) rather than the runner's apt mirror.
+env:
+  BOOST_URL: https://github.com/boostorg/boost/releases/download/boost-1.92.0/boost-1.92.0-b2-nodocs.tar.xz
+  BOOST_SHA256: ea7b982002cc9dfbe59b0b217b206f470dc75f3de0bb2973d844118934d82411
+
 jobs:
   shellcheck:
     runs-on: ubuntu-latest
@@ -44,11 +50,14 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - name: install boost
-        run: sudo apt-get update && sudo apt-get install -y libboost-dev
+      - name: install boost headers
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/boost.tar.xz" "$BOOST_URL"
+          echo "$BOOST_SHA256  $RUNNER_TEMP/boost.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/boost.tar.xz" -C "$RUNNER_TEMP" boost-1.92.0/boost
       - name: build and run unit tests
         run: |
-          cmake -S modules/mod-leeroy/tests -B t -DCMAKE_BUILD_TYPE=Release
+          cmake -S modules/mod-leeroy/tests -B t -DCMAKE_BUILD_TYPE=Release -DLEEROY_BOOST_INCLUDE_DIR="$RUNNER_TEMP/boost-1.92.0"
           cmake --build t -j "$(nproc)"
           ./t/leeroy_tests
       - name: bridge smoke tool parses
@@ -90,7 +99,8 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-console-chromium-${{ hashFiles('mind/tests/console/e2e/requirements.txt') }}
-      - run: python -m playwright install --with-deps chromium
+      # The image already carries Chrome's libraries; a failed apt mirror only costs --with-deps.
+      - run: python -m playwright install --with-deps chromium || python -m playwright install chromium
       - run: python -m pytest tests/console/e2e -q --basetemp "$RUNNER_TEMP/console-e2e" --junitxml "$RUNNER_TEMP/console-e2e-results.xml"
       - uses: actions/upload-artifact@v4
         if: failure()
@@ -136,11 +146,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: install boost
-        run: sudo apt-get update && sudo apt-get install -y libboost-dev
+      - name: install boost headers
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/boost.tar.xz" "$BOOST_URL"
+          echo "$BOOST_SHA256  $RUNNER_TEMP/boost.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/boost.tar.xz" -C "$RUNNER_TEMP" boost-1.92.0/boost
       - name: build and run the pure mod-dojo tests
         run: |
-          cmake -S modules/mod-dojo/tests -B t -DCMAKE_BUILD_TYPE=Release -DDOJO_WARNINGS_AS_ERRORS=ON
+          cmake -S modules/mod-dojo/tests -B t -DCMAKE_BUILD_TYPE=Release -DDOJO_WARNINGS_AS_ERRORS=ON -DDOJO_BOOST_INCLUDE_DIR="$RUNNER_TEMP/boost-1.92.0"
           cmake --build t -j "$(nproc)"
           ./t/dojo_tests
       - name: golden fixture generator parses
