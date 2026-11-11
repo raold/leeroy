@@ -90,6 +90,13 @@ does not establish that a particular conversation may repeat them. Long text
 
 ## CLI and checks
 
+Live cards retain their detached sections after the first rendering. If the full
+prompt exceeds its budget, they render again into the remaining space, dropping
+whole low-priority sections first. Wrappers count toward that allowance. Below
+32 available tokens, or when even the highest-priority section cannot fit, the
+optional card is omitted. The observation block stays before the instruction;
+the switches-off prompts and the live prompt budget are unchanged.
+
 From `mind/`, using its Python environment:
 
 ```sh

@@ -564,7 +564,7 @@ def test_a_stats_line_every_15_minutes_counts_talk_and_queues_never_text(tmp_pat
     assert all(isinstance(v, int) for v in first["queue"].values())
     assert (second["said"], second["his_lines"], second["drops"], second["llm_p50_s"]) == (
         0, 0, {}, None)
-    text = " ".join(r.getMessage() for r in caplog.records if "stats" in r.getMessage())
+    text = " ".join(r.getMessage() for r in caplog.records if getattr(r,"leeroy_event","")=="stats")
     assert not any(w in text for w in ("hey you", "evening all", "follow", "night zan"))
 
 
