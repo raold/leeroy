@@ -35,9 +35,10 @@ async function refresh() {
   if (statusBusy || S.tab !== "ops" || document.hidden) { return; }
   statusBusy = true;
   try {
-    const r = await api("/api/ops/action");
-    if (refused(r) || r.status !== 200) { return; }
+    const r = await api("/api/ops/action", { poll: true });
+    if (refused(r)) { return; }
     const value = await r.json();
+    if (r.status !== 200) { message(value.error || "Action status is unavailable."); return; }
     enabled = value.enabled === true; running = value.operation?.state === "running";
     message(actionWords(value)); controls();
   } catch (_) { message("Action status is unavailable. Check it before retrying."); }
@@ -105,5 +106,13 @@ $("ops-action-confirm").addEventListener("click", () => send(true));
 $("ops-action-cancel").addEventListener("click", () => $("ops-action-dialog").close());
 $("ops-action-form").addEventListener("submit", e => e.preventDefault());
 $("ops-action-dialog").addEventListener("close", reset);
+$("ops-action-dialog").addEventListener("keydown", event => {
+  if (event.key !== "Tab") { return; }
+  const fields = Array.from($("ops-action-dialog").querySelectorAll("button, input"))
+    .filter(e => !e.disabled && e.getClientRects().length);
+  const first = fields[0], last = fields[fields.length - 1];
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+});
 setInterval(refreshActions, 2000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) { refreshActions(); } });

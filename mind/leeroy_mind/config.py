@@ -22,6 +22,8 @@ raid_rule = "leaders_and_urgent"
 whispers_per_hour = 4         # members whispering him first, per hour of his play, at chattiness 4
 openers_per_hour = 6          # members starting a line to him in party or guild, per hour, likewise
 selfies = 3                    # 0-10, photos the guild sends you (rendered at night)
+aware = false                  # include a bounded card of visible observations in talk
+realism = false                # bounded member typing, small bursts and rare corrections
 
 [romance]
 dial = 3                      # 1 milquetoast .. 10 filth
@@ -53,7 +55,7 @@ RAID_RULES = frozenset({"leaders_and_urgent"})
 MAX_PER_HOUR = 60  # [talk] whispers_per_hour and openers_per_hour
 EXTENSION_SECTIONS = frozenset({"console", "guild", "dkp", "life", "voice", "training", "realm",
                                 "control", "selfies", "health", "claims", "personas", "guards",
-                                "tuning", "playstyle", "signals", "fingerprint", "callbacks", "learn"})
+                                "tuning", "playstyle", "signals", "fingerprint", "callbacks", "learn", "looks"})
 _HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
@@ -76,6 +78,8 @@ class TalkCfg:
     whispers_per_hour: float = 4
     openers_per_hour: float = 6
     selfies: int = 3
+    aware: bool = False
+    realism: bool = False
 
 
 @dataclass(frozen=True)
@@ -169,6 +173,8 @@ _INF = float("inf")
 _RULES = {
     "models": {k: (_is_str, "a non-empty string") for k in ("live", "live_fallback", "reflection", "embedding")},
     "talk": {
+        "aware": (lambda v: type(v) is bool, "a boolean"),
+        "realism": (lambda v: type(v) is bool, "a boolean"),
         "chattiness": (lambda v: _int_in(v, 0, 10), "an integer 0-10"),
         "raid_rule": (lambda v: v in RAID_RULES, f"one of {sorted(RAID_RULES)}"),
         "selfies": (lambda v: _int_in(v, 0, 10), "an integer 0-10"),
@@ -221,9 +227,14 @@ def _build(data: dict, source: str) -> MindConfig:
     built = {}
     for section, rules in _RULES.items():
         given = data.get(section, {})
+        if section == "talk" and type(given.get("aware", False)) is not bool:
+            log.warning("talk_aware_invalid key=aware")
+            given = dict(given, aware=False)
         values = {}
         for key, (check, want) in rules.items():
             v = given.get(key, defaults[section][key])
+            if section == "talk" and key == "realism" and type(v) is not bool:
+                v = False
             if not check(v):
                 raise ConfigError(f"{section}.{key}: expected {want}, got {_shown(section, v)}")
             values[key] = v.strip() if section == "human" else v

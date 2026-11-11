@@ -65,6 +65,12 @@ class Quit:
 
 
 @dataclass(frozen=True)
+class Embed:
+    id: str
+    ref: str
+
+
+@dataclass(frozen=True)
 class Retry:
     """After a ready refusal that says `retry: true` (vram, the pipeline still on the CPU): try
     the GPU again. Any other time it is a bad request."""
@@ -146,7 +152,7 @@ def _grid(d: dict, rid: str) -> Grid:
                 _jpg(d, "out"), _jpg(d, "thumb"), _int(d, "thumb_size", 128, 1024))
 
 
-def parse(line: bytes) -> Render | Grid | Quit | Retry:
+def parse(line: bytes) -> Render | Grid | Embed | Quit | Retry:
     """A request line as a Render, a Grid, a Quit or a Retry; ValueError for anything else (a
     line too long, not JSON, an unknown or missing key, a wrong type or range)."""
     if len(line) > MAX_LINE:
@@ -167,6 +173,10 @@ def parse(line: bytes) -> Render | Grid | Quit | Retry:
         return Quit(rid) if d["op"] == "quit" else Retry(rid)
     if d.get("op") == "grid":
         return _grid(d, rid)
+    if d.get("op") == "embed":
+        if set(d) != {"id", "op", "ref"}:
+            raise ValueError("embed keys are id, op, ref")
+        return Embed(rid, _jpg(d, "ref"))
     if d.get("op") != "render":
         raise ValueError("unknown op")
     extra = set(d) - RENDER_KEYS

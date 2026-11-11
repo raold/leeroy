@@ -49,6 +49,7 @@ waiting tomorrow; the units a night already finished count against its caps on a
 """
 import hashlib
 import json
+import logging
 from typing import Awaitable, Callable, Sequence
 
 from leeroy_mind import board
@@ -833,7 +834,12 @@ async def stage_realm(ctx: NightContext, *, live: Callable[[], bool] | None = No
         return
     night = _Night(ctx, live)
     if not night.public_ready:
-        log("realm_night_unready", night=ctx.night)  # Beats, posts and write-ups wait.
+        # Beats, posts and write-ups wait. Reasons are codes: no blocklist file, no cached guild
+        # name, else a blocklist with no usable entry.
+        reasons = (([] if night.screen.path.is_file() else ["blocklist_missing"])
+                   + ([] if night.guild > 0 else ["guild_name_missing"]))
+        log("realm_night_unready", level=logging.WARNING, night=ctx.night,
+            reason=",".join(reasons or ["blocklist_empty"]))
     await ctx.map_units(STAGE, plan_units(ctx, night), night.run)
 
 

@@ -55,6 +55,28 @@ def test_new_content_sends_and_empty_drops(store):
     assert review(sources(store),draft('  ')).codes==('empty',)
 
 
+@pytest.mark.parametrize('room,readers,expected', [
+    ('guild_hall', (101,102), 'drop'), ('guild_hall', (102,), 'send'),
+    ('guild_hall', None, 'send'), ('healers', (101,102), 'send'),
+    ('officers', (101,102), 'send')])
+def test_spoken_history_requires_same_room_and_captured_reader(store,room,readers,expected):
+    text='The copper lantern hangs above the doorway'
+    line(store,text,channel='voice:'+room,audience=readers)
+    result=review(sources(store),draft(text,channel='voice',room='guild_hall'))
+    assert result.action == expected
+    assert review(sources(store),draft(text)).action == 'send'
+
+
+def test_officers_voice_room_requires_officer_role_even_with_audience(store):
+    text='The copper lantern hangs above the doorway'
+    line(store,text,channel='voice:officers',audience=(101,102))
+    assert review(sources(store),draft(text,channel='voice',room='officers')).action == 'send'
+    seed_test_cast(store)
+    p=make_persona(101,'Arkon',guild_role='officer')
+    save_persona(store,p,source='seed',ts=NOW,race='Orc',class_name='Warrior')
+    assert review(sources(store),draft(text,channel='voice',room='officers')).action == 'drop'
+
+
 @pytest.mark.parametrize('channel,to,expected',[
     ('guild',0,'own_repeat_same_channel'),('say',0,'own_repeat_cross_channel'),
     ('whisper',1,None),('officer',0,None)])
@@ -165,7 +187,7 @@ def test_filler_after_real_question_and_clean_answers(store,text,action):
     line(store,'Where does the ferry depart?',guid=1,to=101)
     result=review(sources(store),draft(text,parent_id=1,thread_ids=(1,)))
     assert result.action==action
-    assert result.reaction==('😄' if action=='react' else None)
+    assert result.reaction==('👍' if action=='react' else None)
 
 
 def test_filler_without_parent_or_question_does_not_invent_answer_obligation(store):
@@ -325,6 +347,47 @@ def test_optional_world_facts_use_shared_positive_evidence_checker(store):
     result=review(sources(store,facts=facts),draft('We have never killed invented boss.'))
     assert result.action=='rewrite' and result.codes==('never_killed_after_verified_kill',)
     assert review(sources(store,facts=facts),draft('We have never killed invented boss.',now=NOW-2)).action=='send'
+
+
+@pytest.mark.parametrize('source_channel,target_channel,peer,expected', [
+    ('whisper','guild',0,False), ('whisper','whisper',1,True),
+    ('whisper','whisper',102,False), ('whisper','discord',0,False),
+    ('dm:101','whisper',1,False), ('dm:101','dm',1,True),
+    ('discord:general','guild',0,False), ('discord:general','discord',0,True),
+    ('officer','guild',0,False)])
+def test_owner_claim_guard_requires_visible_provenance(store, source_channel, target_channel, peer, expected):
+    vec = pack_vec(unit(0))
+    line(store, 'I love Saurfang', channel=source_channel,
+         to=1 if source_channel in {'whisper','dm:101'} else 0, audience=[1,101])
+    add(store,101,kind='opinion',subject='saurfang',text='I love Saurfang',polarity=1,
+        embedding=vec,source='owner',source_line=1,now=NOW-1)
+    room = '101' if target_channel == 'dm' else 'general' if target_channel == 'discord' else ''
+    result = review(sources(store,claims_enabled=True),
+        draft('I hate Saurfang',embedding=vec,channel=target_channel,to_guid=peer,room=room))
+    assert ('claim_conflict' in result.codes) is expected
+
+
+def test_unscoped_owner_claim_never_reaches_a_guard(store):
+    vec = pack_vec(unit(0))
+    add(store,101,kind='opinion',subject='saurfang',text='I love Saurfang',polarity=1,
+        embedding=vec,source='owner',now=NOW-1)
+    assert review(sources(store,claims_enabled=True),draft('I hate Saurfang',embedding=vec)).action == 'send'
+
+
+def test_receipt_pruning_preserves_other_meta_and_joins_rollback(store):
+    store.set_meta('guards:sent:2026-01-01:101', '{}')
+    store.set_meta('guards:sent:2026-10-29:101', '{}')
+    store.set_meta('other:2026-01-01', '{}')
+    with pytest.raises(RuntimeError), store.transaction():
+        record_sent(sources(store), draft(), receipt_id='line-1')
+        assert store.get_meta('guards:sent:2026-01-01:101') is None
+        raise RuntimeError('rollback')
+    assert store.get_meta('guards:sent:2026-01-01:101') == '{}'
+    with store.transaction():
+        record_sent(sources(store), draft(), receipt_id='line-1')
+    assert store.get_meta('guards:sent:2026-01-01:101') is None
+    assert store.get_meta('guards:sent:2026-10-29:101') is not None
+    assert store.get_meta('other:2026-01-01') == '{}'
 
 
 def test_older_database_reads_no_schema_and_never_commits(tmp_path,caplog):

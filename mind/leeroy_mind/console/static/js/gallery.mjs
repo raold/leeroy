@@ -30,7 +30,7 @@ function button(text, action) {
 export function openGallery(guid, name, opener) {
   if (active) { active.dialog.close(); }
   var g = { guid: guid, name: name, opener: opener, photos: [], at: 0, state: null,
-            saving: false, seq: 0, full: new Map(), thumbs: new Map(), closed: false };
+            saving: false, loading: false, again: false, seq: 0, full: new Map(), thumbs: new Map(), closed: false };
   active = g;
   var d = g.dialog = el("dialog", "photo-gallery");
   d.setAttribute("aria-labelledby", "gallery-title");
@@ -66,6 +66,7 @@ export function openGallery(guid, name, opener) {
   d.appendChild(g.status);
   g.strip = el("div", "gallery-strip");
   g.strip.setAttribute("aria-label", "Photos, newest first");
+  g.strip.setAttribute("role", "group");
   d.appendChild(g.strip);
   d.addEventListener("keydown", function (ev) {
     if (ev.key === "ArrowRight" || ev.key === "ArrowLeft") {
@@ -112,6 +113,12 @@ function clearImages(cache) {
 function imageURL(g, cache, path) {
   if (!path) { return Promise.resolve(null); }
   if (cache.has(path)) { return cache.get(path).promise; }
+  while (cache.size >= 64) {
+    var oldest = cache.keys().next().value, old = cache.get(oldest);
+    old.live = false;
+    if (old.url) { URL.revokeObjectURL(old.url); }
+    cache.delete(oldest);
+  }
   var entry = { live: true, url: null };
   entry.promise = api(path).then(function (r) {
     if (refused(r) || r.status !== 200) { return null; }
@@ -126,31 +133,48 @@ function imageURL(g, cache, path) {
 }
 
 function refresh(g, first) {
+  if (g.closed) { return; }
+  if (g.loading) { g.again = true; return; }
+  g.loading = true;
   var seq = ++g.seq;
   api("/api/selfies/gallery?guid=" + g.guid).then(function (r) {
-    if (refused(r) || r.status !== 200) { throw new Error("unavailable"); }
-    return r.json();
+    if (refused(r)) { return null; }
+    return r.json().then(function (j) {
+      if (r.status !== 200) { throw new Error(str(j.error) || "Photos could not be read. Close and try again."); }
+      return j;
+    });
   }).then(function (state) {
-    if (g.closed || g.seq !== seq) { return; }
+    if (!state || g.closed || g.seq !== seq) { return; }
     var id = g.photos[g.at] && g.photos[g.at].id;
     g.state = state;
     var photos = ordered(state.view && state.view.photos);
     var changed = JSON.stringify(photos) !== JSON.stringify(g.photos);
     if (changed) { g.photos = photos; }
     g.at = first ? initial(g.photos) : Math.max(0, g.photos.findIndex(function (p) { return p.id === id; }));
-    if (first) { g.status.textContent = g.photos.length ? "" : "No photos yet."; }
+    g.status.textContent = g.photos.length ? "" : "No photos yet.";
     if (changed) { drawStrip(g); }
     draw(g);
-  }).catch(function () {
-    if (!g.closed && g.seq === seq) { g.status.textContent = "Photos could not be read. Close and try again."; }
+  }).catch(function (error) {
+    if (!g.closed && g.seq === seq) { g.status.textContent = str(error.message) || "Photos could not be read. Close and try again."; }
+  }).finally(function () {
+    g.loading = false;
+    if (g.again && !g.closed) { g.again = false; refresh(g, false); }
   });
 }
 
 function drawStrip(g) {
-  var focused = Array.from(g.strip.children).indexOf(document.activeElement);
+  var focused = document.activeElement && g.strip.contains(document.activeElement);
+  g.stripStart = Math.floor(g.at / 32) * 32;
+  var window = g.photos.slice(g.stripStart, g.stripStart + 32);
+  var wanted = new Set(window.map(function (p) { return p.thumbnail; }));
+  g.thumbs.forEach(function (entry, path) {
+    if (!wanted.has(path)) { entry.live = false; if (entry.url) { URL.revokeObjectURL(entry.url); } g.thumbs.delete(path); }
+  });
   clear(g.strip);
-  g.photos.forEach(function (p, i) {
+  window.forEach(function (p, offset) {
+    var i = g.stripStart + offset;
     var b = button(String(i + 1), function () { g.at = i; draw(g); });
+    b.dataset.photoIndex = String(i);
     b.setAttribute("aria-label", "Photo " + (i + 1));
     g.strip.appendChild(b);
     imageURL(g, g.thumbs, p.thumbnail).then(function (url) {
@@ -159,7 +183,8 @@ function drawStrip(g) {
       clear(b); b.appendChild(img);
     });
   });
-  if (focused >= 0 && g.strip.children[focused]) { g.strip.children[focused].focus(); }
+  var back = g.strip.children[g.at - g.stripStart];
+  if (focused && back) { back.focus(); }
 }
 
 function move(g, delta) { g.at = step(g.at, delta, g.photos.length); draw(g); }
@@ -167,15 +192,17 @@ function showing(g, p) { return !g.closed && g.photos[g.at] && g.photos[g.at].id
 
 function draw(g) {
   var p = g.photos[g.at], why = coverWhy(p, g.state, g.saving);
+  if (g.stripStart !== Math.floor(g.at / 32) * 32) { drawStrip(g); }
   g.prev.disabled = !p || g.at === 0;
   g.next.disabled = !p || g.at === g.photos.length - 1;
   g.make.disabled = !!why;
   g.why.textContent = why;
   g.badge.hidden = !p || !p.cover;
   g.caption.textContent = p ? (g.at + 1) + " / " + g.photos.length + " · " + new Date(p.rendered * 1000).toLocaleString() : "";
-  Array.from(g.strip.children).forEach(function (b, i) { b.setAttribute("aria-current", String(i === g.at)); });
+  Array.from(g.strip.children).forEach(function (b) { b.setAttribute("aria-current", String(Number(b.dataset.photoIndex) === g.at)); });
   if (g.image.dataset.photo === (p && p.id)) { return; }
-  if (g.strip.children[g.at]) { g.strip.children[g.at].scrollIntoView({ block: "nearest", inline: "nearest" }); }
+  var selected = g.strip.children[g.at - g.stripStart];
+  if (selected) { selected.scrollIntoView({ block: "nearest", inline: "nearest" }); }
   g.image.dataset.photo = p ? p.id : "";
   g.image.hidden = true;
   g.image.removeAttribute("src");

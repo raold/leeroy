@@ -79,6 +79,7 @@ class PromptParts:
     facts_head: str = ""
     pinned: int | None = None
     kept: int | None = None
+    awareness: str = ""
 
 
 FACTS_HEAD = ("Facts you know (use them if they help, in your own words; never invent anything "
@@ -553,6 +554,7 @@ def render_messages(p: PromptParts) -> list[dict]:
         _section("Chat:", p.chat),
         _section(p.facts_head or facts_head("them"), p.facts),
         _section("Your last lines (don't make the same move again):", p.own_recent),
+        p.awareness.strip(),
         p.instruction.strip()) if x)
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -562,7 +564,8 @@ def _tokens(msgs: list[dict]) -> int:
 
 
 def trim_to_budget(p: PromptParts, *, budget: int = LIVE_BUDGET) -> PromptParts:
-    """A copy that fits the budget. In order: memories down to 3 (the least relevant go), chat
+    """A copy that fits the budget. Remove the optional awareness card first if over.
+    Then, in order: memories down to 3 (the least relevant go), chat
     down to 5 (the oldest go), relationship cards down to 1 (the addressee's stays), own lines
     down to 3 (the oldest go), then the oldest chat lines are shortened (never the newest).
     Past that, a logged last resort empties memories, then own lines, then relationship
@@ -582,6 +585,9 @@ def trim_to_budget(p: PromptParts, *, budget: int = LIVE_BUDGET) -> PromptParts:
 
     def over() -> bool:
         return _tokens(render_messages(t)) > budget
+
+    if t.awareness and over():
+        t.awareness = ""  # observations give way before instructions or existing evidence
 
     def drop(items: list[str], floor: int, oldest_first: bool) -> None:
         while len(items) > floor and over():
@@ -641,7 +647,7 @@ def redact_for(parts: PromptParts, human: HumanIdentity, close: bool) -> PromptP
     return replace(parts, rel_cards=[r(x) for x in parts.rel_cards],
                    memories=[r(x) for x in parts.memories], mood=r(parts.mood),
                    chat=[r(x) for x in parts.chat], own_recent=[r(x) for x in parts.own_recent],
-                   instruction=r(parts.instruction), facts=[r(x) for x in parts.facts],
+                   instruction=r(parts.instruction), awareness=r(parts.awareness), facts=[r(x) for x in parts.facts],
                    real_name="")
 
 

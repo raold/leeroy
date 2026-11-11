@@ -13,6 +13,8 @@ GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 CONT, TEXT, BINARY, CLOSE, PING, PONG = 0x0, 0x1, 0x2, 0x8, 0x9, 0xA
 MAX_MESSAGE = 4 << 20  # a voice state with its 200 transcript lines is far below this
 HEAD_LIMIT = 16384
+FRAME_IDLE_S = 45.0  # voice's websockets server sends protocol pings every 20 s
+WRITE_S = 5.0
 
 
 class WsError(Exception):
@@ -73,9 +75,10 @@ async def read_frame(reader: asyncio.StreamReader, *, max_size: int,
 
 class WsClient:
     def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, *,
-                 max_size: int = MAX_MESSAGE):
+                 max_size: int = MAX_MESSAGE, idle_s: float = FRAME_IDLE_S):
         self._reader, self._writer = reader, writer
         self._max_size = max_size
+        self._idle_s = idle_s
         self._write = asyncio.Lock()
         self.closed = False
 
@@ -95,7 +98,7 @@ class WsClient:
                    f"Sec-WebSocket-Version: 13\r\nOrigin: {origin}\r\n\r\n")
         try:
             writer.write(request.encode("ascii"))
-            await writer.drain()
+            await asyncio.wait_for(writer.drain(), timeout)
             head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout)
         except (OSError, asyncio.TimeoutError, asyncio.IncompleteReadError,
                 asyncio.LimitOverrunError) as e:
@@ -123,8 +126,8 @@ class WsClient:
         async with self._write:
             try:
                 self._writer.write(encode_frame(opcode, payload, mask=True))
-                await self._writer.drain()
-            except (OSError, RuntimeError) as e:
+                await asyncio.wait_for(self._writer.drain(), WRITE_S)
+            except (OSError, RuntimeError, asyncio.TimeoutError) as e:
                 self.closed = True
                 raise WsClosed(f"send failed ({type(e).__name__})") from None
 
@@ -141,8 +144,11 @@ class WsClient:
             if self.closed:
                 raise WsClosed("connection closed")
             try:
-                fin, opcode, payload = await read_frame(self._reader, max_size=self._max_size,
-                                                        masked=False)
+                fin, opcode, payload = await asyncio.wait_for(
+                    read_frame(self._reader, max_size=self._max_size, masked=False), self._idle_s)
+            except asyncio.TimeoutError:
+                await self.close()
+                raise WsClosed("voice heartbeat timed out") from None
             except WsError:
                 await self.close()
                 raise
@@ -186,4 +192,4 @@ class WsClient:
                     self._writer.write(encode_frame(CLOSE, struct.pack("!H", 1000), mask=True))
         self._writer.close()
         with suppress(Exception):
-            await self._writer.wait_closed()
+            await asyncio.wait_for(self._writer.wait_closed(), 2.0)

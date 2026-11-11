@@ -337,7 +337,7 @@ def test_the_page_has_the_choose_selfies_card():
     assert '<p id="p-photostatus" class="why" role="status" tabindex="-1">' in photo
     assert 'title="Pass on these and render four new ones tonight"' in photo
     source = page_source()  # the page and its modules
-    assert 'api("/api/selfies")' in source and '"/api/selfies/images?guid="' in source
+    assert 'api("/api/selfies", { poll: true })' in source and '"/api/selfies/images?guid="' in source
     assert "refocus(args, refused, status);" in source  # after the redraw a change makes
     assert "forgetMemberShots(obj(d).guid)" in source   # the selfie event: its sets read again
     assert '"/api/selfies/member?guid="' in source and 'post("/api/selfie", ' in source

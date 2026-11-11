@@ -109,7 +109,7 @@ export function openCard(guid, known) {
       drawCard(t, true);
     } else if (x.status === 404) { drawCard(cardText(null, CARD.name), false); }
     else { said(str(x.j.error) || "mind.db could not be read."); }
-  }, function () { said("The console is not reachable."); });
+  }, function (error) { said(str(error.message) || "The member card could not be read."); });
 }
 
 function setVolume(guid, db) {

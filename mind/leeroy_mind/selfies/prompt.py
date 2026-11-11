@@ -165,7 +165,7 @@ def looks_phrases(p: Persona, name_re: re.Pattern | None) -> list[tuple[str, int
     return hair_skin(p, name_re) + eyes_face(p, name_re)
 
 
-def build_prompt(p: Persona, *, kind_style: str = PLAIN) -> PromptSpec:
+def build_prompt(p: Persona, *, kind_style: str = PLAIN, light: str = "") -> PromptSpec:
     """The prompt for p's photo kind. `kind_style` is the style whose rules chose the kind
     (kind.chosen_style; PLAIN for a kind set by hand or with no record): the lust prompt for a
     kind the lust rules chose. ValueError when renderable says why not."""
@@ -173,6 +173,8 @@ def build_prompt(p: Persona, *, kind_style: str = PLAIN) -> PromptSpec:
     if missing:
         raise ValueError(missing)
     a, ph = p.appearance, p.photo
+    from .photo_extra import LIGHTS, fits
+    light = light if light in LIGHTS and fits(LIGHTS.index(light), ph) else ""
     lust = kind_style == LUST  # renderable has checked she still has the lust style
     name_re = names_re(p)
 
@@ -200,5 +202,10 @@ def build_prompt(p: Persona, *, kind_style: str = PLAIN) -> PromptSpec:
         add(ph.outfit, 2, True)
         add(ph.setting, 2, True)
     add(ph.expression, 3, True)
-    add(_HEADSHOT_TAIL if headshot else _PHONE_TAIL, 1)
+    tail = _HEADSHOT_TAIL if headshot else _PHONE_TAIL
+    if light and light != LIGHTS[0]:
+        tail = tail.replace(", natural light", "")
+    add(tail, 1)
+    if light:
+        add(light, 9, True)  # first to go; never displaces identity, outfit or setting
     return PromptSpec(tuple(out), LUST_NEGATIVE if lust else NEGATIVE)

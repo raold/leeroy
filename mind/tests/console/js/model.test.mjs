@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { Feed, KEEP, kpis, lineChips, viewOf } from "../../../leeroy_mind/console/static/js/comms/model.mjs";
+import { Feed, KEEP, VIEW_LIMIT, READ_LIMIT, kpis, lineChips, viewOf } from "../../../leeroy_mind/console/static/js/comms/model.mjs";
 
 // Invented members and lines only. He is 1000; members are 1101 and up.
 var HIM = 1000;
@@ -19,6 +19,26 @@ function fromHim(id, guid, o) {
   return mine(id, Object.assign({ channel: "whisper", to: NAMES[guid], to_guid: guid }, o));
 }
 function ids(lines) { return lines.map(function (l) { return l.id; }); }
+
+test("days of changing whisper views bound every index and preserve the active view", () => {
+  var f = new Feed({human: 1}); f.active = "w:101";
+  f.upsert([mk(1), mk(2, {channel: "whisper", from_guid: 101})]);
+  var marks = {};
+  for (var i = 200; i < 1200; i++) { marks["w:" + i] = i; }
+  f.loadRead(marks);
+  assert.equal(Object.keys(f.marks).length, READ_LIMIT);
+  for (var i = 200; i < 1200; i++) {
+    f.upsert([mk(i, {channel: "whisper", from_guid: i})]);
+    f.openThread(i, "Fixture"); f.markRead("w:" + i);
+  }
+  assert.equal(f.views.size, VIEW_LIMIT); assert.equal(f.opened.size, VIEW_LIMIT);
+  assert.ok(f.where.size <= VIEW_LIMIT * KEEP);
+  assert.ok(Object.keys(f.readState()).length <= READ_LIMIT);
+  assert.deepEqual(ids(f.lines("w:101")), [2]); assert.deepEqual(ids(f.lines("guild")), [1]);
+  var retained = new Set(Array.from(f.views.values()).flatMap(m => Array.from(m.keys())));
+  assert.deepEqual(new Set(f.where.keys()), retained);
+  assert.ok(!f.where.has(200));
+});
 
 test("each channel has its view", () => {
   assert.equal(viewOf(mk(1, { channel: "guild" }), HIM), "guild");

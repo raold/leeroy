@@ -345,13 +345,15 @@ std::string DumpLine(json const& j)
     return j.dump(-1, ' ', false, json::error_handler_t::replace);
 }
 
-std::string EncodeHello(std::int64_t ts, std::uint32_t guildId, std::uint32_t humanGuid)
+std::string EncodeHello(std::int64_t ts, std::uint32_t guildId, std::uint32_t humanGuid, std::int64_t startedMs)
 {
     json j = Envelope(ts, "hello");
     j["server"] = "mod-leeroy";
     j["version"] = kModuleVersion;
     j["guild_id"] = guildId;
     j["human_guid"] = humanGuid;
+    if (startedMs > 0)
+        j["started_ms"] = startedMs;
     j["features"] = json::array();
     for (std::string_view feature : kFeatures)
         j["features"].push_back(std::string(feature));

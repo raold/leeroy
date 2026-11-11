@@ -52,8 +52,15 @@ def _looks_of(ctx: "NightContext", guid: int) -> str | None:
     return None if a is None else looks_hash(a)
 
 
+def _pending_face(ctx, guid):
+    cur = current(ctx.store,guid)
+    return cur is not None and ctx.store.get_meta(f"selfies:variety-pick:{guid}") == str(cur.pick)
+
+
 def _eligible(ctx: "NightContext", guid: int, now: float) -> bool:
     if ctx.done(STAGE, str(guid)) or current(ctx.store, guid) is None:
+        return False
+    if _pending_face(ctx,guid):
         return False
     if open_stock(ctx.store, guid) >= MEMBER_STOCK:
         return False
@@ -150,7 +157,7 @@ def _guild_members(ctx: "NightContext", raid_id: int) -> list[tuple[int, int]]:
             p = ctx.persona(g)
         except KeyError:
             continue
-        if cur is not None and renderable(p) is None:
+        if cur is not None and not _pending_face(ctx,g) and renderable(p) is None:
             have[g] = cur.pick
     first = [g for g in dict.fromkeys(tuple(raid)) if g in have]
     rest = [g for g in have if g not in first]

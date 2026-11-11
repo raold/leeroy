@@ -239,9 +239,16 @@ function renderRecent(view) {
 function pollRaid() {
   if (raidBusy || S.tab !== "raid") { return; }
   raidBusy = true;
-  api("/api/raid").then(function (r) {
+  api("/api/raid", { poll: true }).then(function (r) {
     if (refused(r)) { return null; }
-    return r.json();
+    return r.json().then(function (j) {
+      if (!r.ok) {
+        $("raid-banner").textContent = str(j.error) || "The raid could not be read.";
+        $("raid-banner").hidden = false;
+        return null;
+      }
+      return j;
+    });
   }).then(function (j) { if (j) { renderRaid(j); } }, function () { /* the strip says it */ })
     .then(function () { raidBusy = false; });
 }
@@ -253,7 +260,7 @@ function raidAct(action, body) {
     why.textContent = j.ok ? str(j.message) : str(j.error) || "it did not work";
     why.classList.toggle("bad", !j.ok);
     pollRaid();
-  }, function () { why.textContent = "The console is not reachable."; why.classList.add("bad"); });
+  });
 }
 document.querySelector(".raidacts").addEventListener("click", function (ev) {
   var b = ev.target.closest("button[data-raid]");

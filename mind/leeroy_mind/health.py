@@ -25,7 +25,10 @@ What it looks at:
 - activity in mind.db, opened read-only: telemetry on and the training overhead gate passed but
   no tg_pull in 48 h (a note while the gate is in its A/B phase, which records only alternate
   bosses of offline raids, or has failed), a realm body hold or an unknown root older than 1 h,
-  cast members without a persona. A table an older mind.db lacks is unavailable, a note.
+  cast members without a persona. A table an older mind.db lacks is unavailable, a note;
+- the Realm on in mind.toml with a screen that cannot be ready (no realm/blocklist.txt entry, or
+  no cached guild name: a FAIL), the newest weekly evaluation incomplete, no secret probe ever
+  recorded while secrets exist, and offline raids blocked on each of the last 3 days (notes).
 
 [health] in mind.toml: min_cast (default 100), the floor for both counts in the cast line and
 for the endpoint's cast; grace_minutes (default 6), how long after a server or mind start a
@@ -1011,6 +1014,123 @@ def _unvoiced(conn) -> Check:
     return Check("unvoiced", OK, "personas: every cast member has one")
 
 
+BLOCKED_DAYS = 3
+_CODE = re.compile(r"[A-Za-z0-9_:.-]{1,64}\Z")
+
+
+def _code(value) -> str:
+    """A stored refusal or failure code, or "?" for anything that is not one."""
+    return value if isinstance(value, str) and _CODE.match(value) else "?"
+
+
+def _realm_screen(conn, data: Path) -> Check:
+    """The Realm is on in mind.toml but its screen (realm.screen.Screen.ready) cannot be ready:
+    no blocklist with an entry, or no guild name cached (meta realm:guild_name, as
+    realm.night.own_guild reads it). Every rival line, forum post and write-up then waits."""
+    name = "realm-screen"
+    from .realm.config import load_realm_config
+    try:
+        on = load_realm_config(data / "mind.toml").enabled
+    except ConfigError:
+        return Check(name, NOTE, "realm screen: not checked, [realm] in mind.toml is invalid")
+    if not on:
+        return Check(name, OK, "realm screen: the Realm is off in mind.toml")
+
+    def check():
+        missing = []
+        try:
+            lines = (data / "realm" / "blocklist.txt").read_text(encoding="utf-8-sig").splitlines()
+        except FileNotFoundError:
+            missing.append("realm/blocklist.txt is missing from the data dir")
+        except (OSError, UnicodeError) as e:
+            missing.append(f"realm/blocklist.txt cannot be read ({type(e).__name__})")
+        else:
+            if not any((s := line.strip()) and not s.startswith("#") for line in lines):
+                missing.append("realm/blocklist.txt has no entry")
+        row = conn.execute("SELECT value FROM meta WHERE key='realm:guild_name'").fetchone()
+        try:
+            cached = json.loads(row[0]) if row else None
+        except (TypeError, ValueError, RecursionError):
+            cached = None
+        guild = cached.get("guild") if isinstance(cached, dict) else None
+        title = cached.get("name") if isinstance(cached, dict) else None
+        if not (type(guild) is int and 1 <= guild <= 0xFFFFFFFF and isinstance(title, str) and title.strip()):
+            missing.append("the guild name is not cached (the mind reads it at each hello)")
+        if not missing:
+            return Check(name, OK, "realm screen: ready (blocklist and guild name)")
+        return Check(name, FAIL, "realm screen: the Realm is on in mind.toml but its screen cannot "
+                     "be ready: " + "; ".join(missing) + ". Rival lines, forum posts and write-ups "
+                     "wait until it is (one word or phrase per blocklist line)")
+    return _table_check(name, check)
+
+
+def _weekly_eval(conn) -> Check:
+    """The newest week's evaluation receipt (meta nightly:eval-result:<week>, written by
+    eval.run_weekly); the nights retry an incomplete week until the next Sunday."""
+    name = "weekly-eval"
+
+    def check():
+        row = conn.execute("SELECT key, value FROM meta WHERE key LIKE 'nightly:eval-result:%' "
+                           "ORDER BY key DESC LIMIT 1").fetchone()
+        if row is None:
+            return Check(name, OK, "weekly evaluation: none run yet")
+        week = row[0].removeprefix("nightly:eval-result:")
+        week = week if re.fullmatch(r"\d{4}-W\d\d", week) else "?"
+        try:
+            result = json.loads(row[1])
+        except (TypeError, ValueError, RecursionError):
+            result = None
+        if isinstance(result, dict) and result.get("complete") is True:
+            return Check(name, OK, f"weekly evaluation {week}: complete")
+        return Check(name, NOTE, f"weekly evaluation {week}: incomplete; see the failed sections "
+                     f"in reports/{week}.json (the nights retry it until the next Sunday)")
+    return _table_check(name, check)
+
+
+def _secret_gate(conn) -> Check:
+    """No secret probe was ever recorded (probe_run) while a secret memory or fact exists: the
+    secret gate (nightly.knowledge.secret_probe_passed) stays closed, so secrets never spread,
+    encounters cannot use them and mood ignores them."""
+    name = "secret-gate"
+
+    def check():
+        runs, newest = conn.execute("SELECT count(*), max(ts) FROM probe_run").fetchone()
+        if runs:
+            return Check(name, OK, f"secret probe: {runs} run{'s' if runs != 1 else ''}, "
+                                   f"newest {_when(newest)}")
+        needed = conn.execute("SELECT EXISTS(SELECT 1 FROM memory WHERE scope='secret') "
+                              "OR EXISTS(SELECT 1 FROM fact WHERE secret=1)").fetchone()[0]
+        if not needed:
+            return Check(name, OK, "secret probe: none run yet, and no secret is waiting on it")
+        return Check(name, NOTE, "secret probe: probe_run is empty, so the secret gate stays closed "
+                     "while secrets exist; it is measured by the weekly evaluation")
+    return _table_check(name, check)
+
+
+def _offline_days(conn, now: float) -> Check:
+    """Offline raids blocked (meta guild:offline:day:<date> `blocked`) on each of the last
+    BLOCKED_DAYS whole local days, yesterday and before."""
+    name = "offline-days"
+    from datetime import timedelta
+
+    def check():
+        today = datetime.fromtimestamp(now).date()
+        days = [(today - timedelta(days=n)).isoformat() for n in range(1, BLOCKED_DAYS + 1)]
+        codes = []
+        for day in days:
+            row = conn.execute("SELECT value FROM meta WHERE key=?", ("guild:offline:day:" + day,)).fetchone()
+            try:
+                state = json.loads(row[0]) if row else None
+            except (TypeError, ValueError, RecursionError):
+                state = None
+            if not isinstance(state, dict) or state.get("blocked") is not True:
+                return Check(name, OK, f"offline raids: not blocked on each of the last {BLOCKED_DAYS} days")
+            codes.append(f"{day} {_code(state.get('refused') or state.get('failed'))}")
+        return Check(name, NOTE, f"offline raids: blocked on each of the last {BLOCKED_DAYS} days "
+                     f"({', '.join(codes)}); see offline_raid_refused in mind.log")
+    return _table_check(name, check)
+
+
 def _activity(root: Path, data: Path, now: float, open_log=None) -> list[Check]:
     path = data / "mind.db"
     try:
@@ -1028,7 +1148,12 @@ def _activity(root: Path, data: Path, now: float, open_log=None) -> list[Check]:
                          open_log or (lambda path: open(path, "rb"))),
                 _guarded("evidence-cycles", _evidence_cycles, conn),
                 _guarded("selfie-queue", _selfie_queue, conn, now),
-                _guarded("unvoiced", _unvoiced, conn)]
+                _guarded("unvoiced", _unvoiced, conn),
+                _guarded("realm-screen", _realm_screen, conn, data),
+                _guarded("weekly-eval", _weekly_eval, conn),
+                _guarded("secret-gate", _secret_gate, conn),
+                _guarded("offline-days", _offline_days, conn, now),
+                _guarded("training-lab", _training_lab, conn, now)]
     finally:
         conn.close()
 
@@ -1182,3 +1307,48 @@ def main(argv: list[str] | None = None, *, probes: Probes | None = None,
         for c in checks:
             print(f"{MARK[c.status]} {_ascii(c.text)}")
     return 1 if failed else 0
+
+
+# -- the training lab ----------------------------------------------------------------------------
+
+LAB_HALT_S = 24 * 3600  # a lab blocked for longer than one night has missed a night
+
+
+def _training_lab(conn, now: float) -> Check:
+    """A blocked dummy lab holds its members until the operator clears it on native evidence."""
+    name = "training-lab"
+
+    def check():
+        row = conn.execute("SELECT value FROM meta WHERE key='tg:lab:owned'").fetchone()
+        if not row:
+            return Check(name, OK, "training lab: no lab record")
+        try:
+            owned = json.loads(row[0])
+            if not isinstance(owned, dict):
+                raise ValueError
+            phase = owned.get("phase")
+            if phase != "blocked":
+                return Check(name, OK, "training lab: not blocked")
+            since = owned.get("halted_at")
+            if type(since) not in (int, float):
+                since = owned.get("started")  # A record blocked before halted_at existed.
+            if type(since) not in (int, float) or not math.isfinite(since):
+                raise ValueError
+            halt = owned.get("halt")
+            code = halt if isinstance(halt, str) and _IDENT.fullmatch(halt) else "unknown_halt"
+            night = owned.get("night")
+            night = night if isinstance(night, str) and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", night) else "?"
+            guids = owned.get("guids")
+            held = len(guids) if isinstance(guids, list) else 0
+            current = owned.get("current")
+            trial = current.get("id") if isinstance(current, dict) else None
+            trial = f", trial {trial}" if isinstance(trial, str) and re.fullmatch(r"[0-9a-f]{32}", trial) else ""
+        except (ValueError, TypeError, RecursionError):
+            return Check(name, FAIL, "training lab: invalid lab record; inspect it with training lab")
+        text = (f"training lab: blocked since {_when(since)} (halt={code}, night {night}{trial}, "
+                f"{held} members held)")
+        if now - since <= LAB_HALT_S:
+            return Check(name, NOTE, text)
+        return Check(name, FAIL, text + "; once native's dummy_cleanup receipt or a worldserver restart is "
+                     "recorded (training lab shows them), with the mind stopped: training lab-clear")
+    return _table_check(name, check)

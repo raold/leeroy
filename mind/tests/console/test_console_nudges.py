@@ -9,6 +9,37 @@ from leeroy_mind.console.control import Controls
 from tuning.test_nudges import ARGS, TEXT
 
 
+def test_nudge_projection_uses_its_supplied_clock_for_loading_and_badges(tmp_path, monkeypatch):
+    from tuning.test_tuning_preview import _app
+    from leeroy_mind.console.tuneview import tuning_view
+    async def go():
+        app = _app(tmp_path, loaded=False)
+        try:
+            assert (await app.tuning.handle(ARGS))["ok"]
+            now = app.clock.now()
+            monkeypatch.setattr("leeroy_mind.tuning.state.time.time", lambda: now + 86400)
+            view = tuning_view(app.store.conn, now=now)
+            member = next(m for m in view["members"] if m["guid"] == 102)
+            assert len(member["nudges"]) == 1
+            assert len(view["nudges"]["active"]) == 1
+        finally:
+            app.store.close()
+    asyncio.run(go())
+
+
+def test_default_console_fixture_ops_never_calls_machine_probes(tmp_path, monkeypatch):
+    from leeroy_mind.console import opsview
+    def forbidden(*args):
+        raise AssertionError("A fixture requested a machine probe")
+    monkeypatch.setattr(opsview, "health_view", forbidden)
+    monkeypatch.setattr(opsview, "schedules_view", forbidden)
+    async def go():
+        app = make_app(tmp_path)
+        result = await app._ops.snapshot()
+        assert set(result["panels"]) == set(opsview.PANELS)
+    asyncio.run(go())
+
+
 @pytest.mark.parametrize("verb", ["set", "preview", "retire"])
 def test_nudge_actions_keep_console_key_origin_and_no_control_gates(tmp_path, verb, caplog):
     body = {**ARGS, "verb": verb} if verb != "retire" else dict(action="nudge", verb=verb, id=1)

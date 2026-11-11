@@ -12,6 +12,7 @@ export class FaceCache {
     this.ttlMs = o.ttlMs === undefined ? 60000 : o.ttlMs;
     this.missMs = o.missMs === undefined ? 300000 : o.missMs;
     this.maxActive = o.maxActive === undefined ? 4 : o.maxActive;
+    this.maxEntries = o.maxEntries === undefined ? 256 : Math.max(1, o.maxEntries);
     this.drop = o.drop || function () {};
     this.entries = new Map();
     this.waiting = [];
@@ -24,8 +25,10 @@ export class FaceCache {
   }
   get(key) {
     var e = this.entries.get(key);
+    if (e) { this.entries.delete(key); this.entries.set(key, e); }
     if (e && (e.pending || this.now() - e.at < (e.value ? this.ttlMs : this.missMs))) { return e.promise; }
     if (!e) {
+      while (this.entries.size >= this.maxEntries) { this.forgetKey(this.entries.keys().next().value); }
       e = { pending: false, settled: false, at: 0, value: null, promise: null };
       this.entries.set(key, e);
     }
@@ -36,15 +39,17 @@ export class FaceCache {
     return e.promise;
   }
   forget() {
-    this.entries.forEach((e) => { if (e.value) { this.drop(e.value); } });
-    this.entries.clear();
+    Array.from(this.entries.keys()).forEach((key) => { this.forgetKey(key); });
   }
   // forget for one key only: its photo is let go and its next get loads it again
   forgetKey(key) {
     var e = this.entries.get(key);
     if (!e) { return; }
     if (e.value) { this.drop(e.value); }
+    e.value = null;
     this.entries.delete(key);
+    this.waiting = this.waiting.filter((job) => job.entry !== e);
+    if (e.pending) { e.resolve(null); }
   }
   _pump() {
     while (this.active < this.maxActive && this.waiting.length) {

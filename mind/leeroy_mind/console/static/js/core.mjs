@@ -1,5 +1,6 @@
 // The page's shared helpers, its requests and its bus. Nothing here runs at import (main.mjs hands
 // over the key with setKey), so node can load this file and the modules built on it.
+import { boundedBody, deadline, validView } from "./resilience.mjs";
 
 var KEY = "";
 var GEN = 0;               // which key is in use: one more for each key set
@@ -56,11 +57,51 @@ export function hashKey(hash) {
 }
 export function api(path, opts) {
   opts = opts || {};
-  var headers = { "X-Console-Key": KEY }, gen = GEN;
+  var headers = { "X-Console-Key": KEY }, gen = GEN, method = opts.method || "GET";
+  var ctl = new AbortController(), outer = opts.signal;
+  function abort() { ctl.abort(); }
+  if (outer) { if (outer.aborted) { abort(); } else { outer.addEventListener("abort", abort, { once: true }); } }
   Object.keys(opts.headers || {}).forEach(function (k) { headers[k] = opts.headers[k]; });
-  return fetch(path, { method: opts.method || "GET", headers: headers, body: opts.body,
-                       signal: opts.signal, cache: "no-store", credentials: "omit" })
-    .then(function (r) { SENT.set(r, gen); return r; });
+  var work = fetch(path, { method: method, headers: headers, body: opts.body,
+                          signal: ctl.signal, cache: "no-store", credentials: "omit" })
+    .then(async function (r) {
+      SENT.set(r, gen);
+      // The event stream has its own idle deadline. All ordinary answers are read within
+      // this request's deadline, including a peer that sends headers and then stalls.
+      if (path === "/api/events" || !r.headers) { return r; }
+      var kind = r.headers.get("content-type") || "";
+      var photo = /^\/api\/(face\?|selfies\/photo\?)/.test(path);
+      var maximum = photo ? 4 * 1024 * 1024 : path.indexOf("/api/selfies/images?") === 0 ? 24 * 1024 * 1024 : 1024 * 1024;
+      var bytes = await boundedBody(r, maximum);
+      if (photo && r.status === 200) { r.blob = function () { return Promise.resolve(new Blob([bytes], { type: kind })); }; }
+      else if (kind.indexOf("application/json") >= 0) {
+        var j = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+        if (!j || typeof j !== "object" || Array.isArray(j) || (r.status === 200 && !Object.keys(j).length)) {
+          throw new Error("The console's answer could not be read.");
+        }
+        if (method === "GET" && r.status === 200 && !validView(path, j)) {
+          throw new Error("The console's answer could not be read.");
+        }
+        r.json = function () { return Promise.resolve(j); };
+      } else if (r.status === 200) { throw new Error("The console's answer could not be read."); }
+      // A well-formed error is still an answer: callers own absent/conflict semantics.
+      // Only interval reads advertise retries. One-shot panels keep their own errors.
+      if (method === "GET" && opts.poll && !photo && r.status !== 403 && gen === GEN) {
+        var answered = r.status < 400 || r.status === 404 || r.status === 409;
+        emit("request-health", { path: path, ok: answered,
+          error: !answered && j ? str(j.error) : "" });
+      }
+      return r;
+    });
+  // Bank/deeper search may take 20 s; a clean stop may need more than 60 s.
+  return deadline(work, opts.timeoutMs || (method === "POST" ? 120000 : 30000), abort)
+    .catch(function (e) {
+      abort();
+      if (method === "GET" && opts.poll && path !== "/api/events" && gen === GEN && !/^\/api\/(face|selfies\/photo)/.test(path)) {
+        emit("request-health", { path: path, ok: false, error: str(e.message) });
+      }
+      throw e;
+    }).finally(function () { if (outer && path !== "/api/events") { outer.removeEventListener("abort", abort); } });
 }
 // A 403: the console refused the key the request carried. Only a refusal of the key in use now
 // says the key is lost ("key-lost"): a request still on its way when a new key was pasted (a
@@ -79,7 +120,9 @@ export function post(path, body) {
     .then(function (r) {
       return r.json().catch(function () {
         return { ok: false, error: refused(r) ? KEY_REFUSED : "HTTP " + r.status };
-      }).then(function (j) { j.status = r.status; return j; });
+      }).then(function (j) { j = obj(j); j.status = r.status; return j; });
+    }).catch(function () {
+      return { ok: false, status: 0, error: "The console did not confirm this action. It may have completed; check its state before trying again." };
     });
 }
 

@@ -26,7 +26,7 @@ export function showTab(name) {
   }
   if (location.hash !== "#" + name) { history.replaceState(null, "", "#" + name); }
   var now = TABS[name];
-  if (now && now.show) { now.show(); }
+  if (!document.hidden && now && now.show) { now.show(); }
 }
 
 // A count on a tab's button; none when n is not above 0
@@ -50,10 +50,19 @@ document.querySelector(".tabs").addEventListener("click", function (ev) {
   if (b) { showTab(b.dataset.tab); }
 });
 document.querySelector(".tabs").addEventListener("keydown", function (ev) {
-  if (ev.key !== "ArrowRight" && ev.key !== "ArrowLeft") { return; }
+  if (["ArrowRight", "ArrowLeft", "Home", "End"].indexOf(ev.key) < 0) { return; }
+  ev.preventDefault();
   var tabs = Array.prototype.slice.call(document.querySelectorAll('[role="tab"]'));
   var i = tabs.findIndex(function (t) { return t.dataset.tab === S.tab; });
-  var next = tabs[(i + (ev.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length];
+  var next = tabs[ev.key === "Home" ? 0 : ev.key === "End" ? tabs.length - 1 :
+                  (i + (ev.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length];
   showTab(next.dataset.tab);
   next.focus();
+});
+
+// Older tabs use their own pollers. Their existing hide/show hooks also own visibility,
+// so sleeping phones keep no hidden-tab intervals and wake with one immediate refresh.
+document.addEventListener("visibilitychange", function () {
+  var hooks = TABS[S.tab], action = document.hidden ? "hide" : "show";
+  if (hooks && hooks[action]) { hooks[action](); }
 });

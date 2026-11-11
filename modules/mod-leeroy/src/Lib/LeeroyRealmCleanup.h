@@ -55,13 +55,21 @@ struct GroupDepartureFacts
 // checked in that order.
 std::string GroupDepartureReason(GroupDepartureFacts const& facts);
 bool IsGroupDepartureReason(std::string_view reason);
-// The step's answer for a member that cannot leave its group alone. Skip it (end its lease, take
-// the others out) only while nothing in this job has touched its body: its own step changed
-// nothing, and no earlier member's shared cleanup changed it. Otherwise the step stays unproved.
+// The step's answer for a member it cannot take out, for a reason of the member's own
+// (MemberSkipReason: its battleground group, its original raid group, its entry point, its LFG or
+// Wintergrasp state, its lease). Skip it (end its lease, take the others out) only while nothing in
+// this job has touched its body: its own step changed nothing, and no earlier member's shared
+// cleanup changed it. Otherwise the old rule stands: unproved once anything in the job changed.
 bool SkipsLeaveMember(std::string_view reason, bool stepChanged, bool touchedByCleanup);
 // The members a leave still holds: its manifest without the members it skipped, nor `skipping`.
 std::vector<std::uint32_t> LeaveMembers(std::vector<std::uint32_t> const& manifest,
     std::vector<std::uint32_t> const& skipped, std::uint32_t skipping = 0);
+// The held members a leave's step rechecks before it acts and before it releases: every member up
+// to the step's own (`cursor`), and a later one only once the job touched it (a shared cleanup
+// declared a transition for it). A later untouched member is left to its own step, which can skip
+// it; a closure that reaches it still validates it explicitly. Never the skipped, nor `skipping`.
+std::vector<std::uint32_t> RecheckedMembers(std::vector<std::uint32_t> const& manifest, std::size_t cursor,
+    std::vector<std::uint32_t> const& skipped, std::uint32_t skipping, std::function<bool(std::uint32_t)> const& touched);
 
 struct LeavePvpMemberFacts
 {
