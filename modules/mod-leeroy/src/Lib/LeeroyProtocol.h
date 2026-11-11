@@ -141,7 +141,8 @@ struct LootDropEvent
 std::string DumpLine(nlohmann::json const& j);
 
 // Every encoder returns one line without '\n' carrying "v":1, "type", "ts".
-std::string EncodeHello(std::int64_t ts, std::uint32_t guildId, std::uint32_t humanGuid);
+// startedMs names the worldserver process (Unix ms at script registration); 0 leaves it out.
+std::string EncodeHello(std::int64_t ts, std::uint32_t guildId, std::uint32_t humanGuid, std::int64_t startedMs = 0);
 std::string EncodeLogin(std::int64_t ts, bool login, std::uint32_t guid, bool human);
 std::string EncodeChat(std::int64_t ts, ChatEvent const& e);
 std::string EncodeBoss(std::int64_t ts, BossEvent const& e);

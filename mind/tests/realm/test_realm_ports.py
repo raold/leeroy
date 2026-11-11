@@ -219,6 +219,21 @@ def test_close_loot_loss_requires_one_charged_matching_debit(app):
     assert ports.close_loot_losses(11, 0) == 0
 
 
+def test_unclaimed_loot_is_skipped_quietly_and_a_bad_record_is_logged_once(app, caplog):
+    ports = LivePorts(app)
+    with app.store.conn:
+        for n in range(34):  # the live shape: no award on unclaimed or uncertain loot
+            app.store.set_meta(f"guild:loot:1:{n:06x}", json.dumps(
+                dict(state="uncertain" if n == 33 else "unclaimed", item_id=100, award=None)))
+        app.store.set_meta("guild:loot:1:bad001", json.dumps(dict(state="charged", item_id=100, award=None)))
+        app.store.set_meta("guild:loot:1:bad002", "[1, 2]")
+    with caplog.at_level("WARNING", logger="leeroy_mind.realm.ports"):
+        for guid in range(11, 156):  # one call per cast member, as the poaching offer makes them
+            assert ports.close_loot_losses(guid, 0) == 0
+    lines = [r.getMessage() for r in caplog.records if "realm_loot_evidence_unavailable" in r.getMessage()]
+    assert lines == ["realm_loot_evidence_unavailable: records=2"]
+
+
 def test_boss_evidence_is_scoped_and_retained_ends_require_exact_saved_event(app):
     guild(app)
     current = raid(app)

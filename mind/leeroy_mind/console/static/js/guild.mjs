@@ -127,7 +127,7 @@ function renderDkpStats(g, view) {
 function pollGuild() {
   if (guildBusy || S.tab !== "guild") { return; }
   guildBusy = true;
-  api("/api/guild").then(function (r) {
+  api("/api/guild", { poll: true }).then(function (r) {
     if (refused(r)) { return null; }
     return r.json().then(function (j) { return { status: r.status, j: j }; });
   }).then(function (x) {

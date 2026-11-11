@@ -32,10 +32,12 @@ export function refreshDiscord() {
   var query = "?read=" + encodeURIComponent(JSON.stringify(first ? {} : DISCORD.marks()));
   if (channel) { query += "&channel=" + encodeURIComponent(channel); }
   if (tid) { query += "&thread=" + tid; }
-  request = api("/api/discord" + query).then(function (r) {
+  request = api("/api/discord" + query, { poll: true }).then(function (r) {
     if (refused(r)) { return null; }
-    if (!r.ok) { throw new Error("The guild's Discord could not be read. Retrying shortly."); }
-    return r.json();
+    return r.json().then(function (j) {
+      if (!r.ok) { throw new Error(str(j.error) || "The guild's Discord could not be read. Retrying shortly."); }
+      return j;
+    });
   }).then(function (data) {
     if (data) { DISCORD.adopt(data, tid); saveDiscordRead(); if (first) { queued = true; } }
   }).catch(function (error) {
@@ -52,7 +54,7 @@ export function mutateDiscord(body) {
   return post("/api/discord", body).then(function (j) {
     if (!j.ok) { throw new Error(str(j.error) || "That change was not saved."); }
     return j;
-  }, function () { throw new Error("The console did not answer. Check the messages before trying again."); })
+  })
     .finally(function () { discordBusy = false; refreshDiscord(); emit("discord-view"); });
 }
 function start() {
@@ -61,9 +63,11 @@ function start() {
 }
 on("comms-show", start);
 on("comms-hide", function () { opened = false; clearInterval(timer); timer = null; });
-on("snapshot", function () { keyLost = false; if (S.tab === "comms") { start(); } });
+on("snapshot", function () {
+  var resume = keyLost || !opened;
+  keyLost = false;
+  // show() already refreshed on wake. Reopening SSE must not queue the same read.
+  if (S.tab === "comms" && resume) { start(); }
+});
 on("key-lost", function () { keyLost = true; clearInterval(timer); emit("discord-view"); });
 on("discord", refreshDiscord);
-document.addEventListener("visibilitychange", function () {
-  if (document.visibilityState === "visible" && opened) { refreshDiscord(); }
-});

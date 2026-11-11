@@ -725,6 +725,8 @@ async def generate_cast(store: Store, llm: LLMClient | None, cfg, *, human_guid:
     members = frozenset(m.name for m in roster if m.guid != human_guid)
     say = progress or (lambda _s: None)
     todo = slots if limit is None else slots[:max(limit, 0)]
+    from .looks_diversity import apply_if_enabled, enabled, mark_sampled
+    diversity = enabled(data_dir)
     for i, slot in enumerate(todo, 1):
         member = by_guid[slot.guid]
         say(f"generating {i}/{len(todo)}: {member.name}")
@@ -737,6 +739,7 @@ async def generate_cast(store: Store, llm: LLMClient | None, cfg, *, human_guid:
                                        notes=notes)
             p = replace(p, real_life=replace(p.real_life, birthday=draw_birthday(
                 (q.real_life.birthday for q in existing), rng)))  # the model's own is ignored
+            p = apply_if_enabled(store, p, diversity, existing, ident=human, names=members)
             with store.transaction():
                 current = store.cast(include_world=True).get(slot.guid)
                 if (current is None or current.level < CAST_MIN_LEVEL or slot.guid == human_guid
@@ -746,6 +749,8 @@ async def generate_cast(store: Store, llm: LLMClient | None, cfg, *, human_guid:
                 save_persona(store, p, source="generated", ts=store.clock.now(),
                              race=RACES.get(current.race, ""),
                              class_name=CLASSES.get(current.class_, ""))
+                if diversity:
+                    mark_sampled(store,p)
                 seed_relationships(store, [p], names, human_guid, store.clock.now(),
                                    human=human)
         except Exception as e:

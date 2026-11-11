@@ -101,6 +101,76 @@ def test_reconnects_every_5_s(clock):
     run(go())
 
 
+class Refusing:
+    """asyncio.open_connection while nothing listens: the clock time of each try."""
+
+    def __init__(self, clock, real):
+        self.clock, self.real, self.down, self.tries = clock, real, True, []
+
+    async def __call__(self, *args, **kwargs):
+        self.tries.append(self.clock.now())
+        if self.down:
+            raise ConnectionRefusedError("refused")
+        return await self.real(*args, **kwargs)
+
+
+def voice_lines(caplog):
+    return [r.getMessage() for r in caplog.records if r.name == "leeroy_mind.voice.client"]
+
+
+def test_a_stopped_service_is_logged_on_change_and_retried_at_most_once_a_minute(fast_clock, monkeypatch, caplog):
+    async def go():
+        refusing = Refusing(fast_clock, asyncio.open_connection)
+        monkeypatch.setattr(asyncio, "open_connection", refusing)
+        client = make_client(1, fast_clock, [])
+        task = asyncio.create_task(client.run())
+        await fast_clock.advance(2 * 3600 + 30, step=5)
+        await stop(client, task)
+        return refusing.tries
+
+    with caplog.at_level("INFO", logger="leeroy_mind.voice.client"):
+        tries = run(go())
+    start = tries[0]
+    gaps = [b - a for a, b in zip(tries, tries[1:])]
+    assert gaps[:5] == [5, 10, 20, 40, 60] and set(gaps[4:]) == {60}
+    assert 120 <= len(tries) <= 126  # not one every 7 s
+    lines = voice_lines(caplog)
+    assert lines[0] == "voice_connect_failed: reason=ConnectionRefusedError"
+    still = [line for line in lines[1:] if line.startswith("voice_still_down: ")]
+    assert len(lines) == 3 and len(still) == 2
+    assert still[0].startswith("voice_still_down: failures=") and "reason=ConnectionRefusedError" in still[0]
+    assert tries[-1] - start >= 2 * 3600
+
+
+def test_a_service_that_comes_back_is_one_line_and_starts_a_new_count(fast_clock, monkeypatch, caplog):
+    async def go():
+        fake = FakeVoice()
+        await fake.start()
+        refusing = Refusing(fast_clock, asyncio.open_connection)
+        monkeypatch.setattr(asyncio, "open_connection", refusing)
+        log = []
+        client = make_client(fake.port, fast_clock, log)
+        task = asyncio.create_task(client.run())
+        await fast_clock.advance(200, step=5)
+        refusing.down = False
+        await fast_clock.advance(60, step=5)
+        await until(lambda: client.greeted)
+        await fake.close()
+        await until(lambda: not client.greeted)
+        refusing.down = True
+        await fast_clock.advance(30, step=5)
+        await stop(client, task)
+        return log
+
+    with caplog.at_level("INFO", logger="leeroy_mind.voice.client"):
+        log = run(go())
+    lines = voice_lines(caplog)
+    assert [line.split(":")[0] for line in lines] == ["voice_connect_failed", "voice_reconnected",
+                                                      "voice_connect_failed"]
+    assert lines[1].startswith("voice_reconnected: failures=7 down_s=")
+    assert log.count(("conn", True)) == 1
+
+
 def test_fake_voice_client_sends_only_when_greeted():
     f = FakeVoiceClient()
     with pytest.raises(VoiceDown):

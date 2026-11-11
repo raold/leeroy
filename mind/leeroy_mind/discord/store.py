@@ -195,20 +195,22 @@ def reactions(conn, ids) -> dict[int, list[dict]]:
     return out
 
 
-def threads(conn, channel: str) -> list[dict]:
+def threads(conn, channel: str, *, limit: int = -1) -> list[dict]:
+    # A bounded shelf must retain new threads, including the one just opened.
+    order = "DESC" if limit >= 0 else "ASC"
     rows = conn.execute(
         "SELECT t.id, t.channel, t.parent, t.name, t.created, "
         "(SELECT count(*) FROM discord_message m WHERE m.thread = t.id AND m.deleted IS NULL) "
-        "FROM discord_thread t WHERE t.channel = ? ORDER BY t.id", (channel,)).fetchall()
+        f"FROM discord_thread t WHERE t.channel = ? ORDER BY t.id {order} LIMIT ?", (channel, limit)).fetchall()
     return [dict(zip(("id", "channel", "parent", "name", "created", "count"), tuple(r)))
             for r in rows]
 
 
-def pins(conn, channel: str) -> list[dict]:
+def pins(conn, channel: str, *, limit: int = -1) -> list[dict]:
     """Pinned live messages, the latest pin first."""
     return [_dict(r) for r in conn.execute(
         f"SELECT {_COLS} FROM discord_message WHERE channel = ? AND pinned IS NOT NULL "
-        "AND deleted IS NULL ORDER BY pinned DESC, id DESC", (channel,)).fetchall()]
+        "AND deleted IS NULL ORDER BY pinned DESC, id DESC LIMIT ?", (channel, limit)).fetchall()]
 
 
 def last_id(conn) -> int:

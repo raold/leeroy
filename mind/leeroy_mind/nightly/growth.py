@@ -268,11 +268,14 @@ def undo(store: Store, ledger_id: int, *, now: float, personas=None) -> bool:
         elif kind == "household":
             from leeroy_mind.arc.after import restore_household
             done = restore_household(store, row, now=now)
+        elif kind == "variety":
+            from leeroy_mind.selfies.variety_undo import restore
+            done = restore(store,row,now=now)
         else:
             done = False
         if done:
             ledger_add(store, guid=row["guid"], kind="undo", text=f"undid {kind}: {row['text']}",
                        evidence=json.loads(row["evidence"]), ref=ledger_id, now=now)
-    if done and kind in ("stance_band", "household") and personas is not None:
+    if done and kind in ("stance_band", "household", "variety") and personas is not None:
         personas.invalidate(row["guid"])
     return done

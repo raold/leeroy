@@ -38,10 +38,9 @@ export function pollTab(name, opts) {
   function once() {
     if (busy || S.tab !== name || document.hidden) { return; }
     busy = true;
-    api(opts.path).then(function (r) {
+    api(opts.path, { poll: true }).then(function (r) {
       if (refused(r)) { return null; }
-      return r.json().then(function (j) { return { status: r.status, j: j }; },
-                            function () { return { status: r.status, j: {} }; });
+      return r.json().then(function (j) { return { status: r.status, j: j }; });
     }).then(function (x) {
       if (!x) { return; }
       if (x.status === 200) {
@@ -49,8 +48,7 @@ export function pollTab(name, opts) {
         try { opts.render(x.j); }
         catch (e) { banner(name, "This tab could not be drawn just now."); }
       }
-      else if (x.status === 503) { banner(name, str(x.j.error) || "mind.db could not be read just now."); }
-      else { banner(name, "HTTP " + x.status); }
+      else { banner(name, str(x.j.error) || "This tab could not be read just now."); }
     }).catch(function () { /* no connection: the strip says it */ })
       .then(function () { busy = false; });
   }

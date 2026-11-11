@@ -24,7 +24,21 @@ and completion checks; unavailable bodies or ambiguous receipts can remain
 pending. Disabling a flag is not proof that everything was restored. Preserve
 journals and pending receipts until verified cleanup completes. `[training]
 enabled = false` disables the Python attachment on the next mind start; it does
-not clear an outstanding native or Python journal.
+not clear an outstanding native or Python journal. The global training-cleanup
+flag (`TrainingCleanupPending()`: Realm `busy:training_cleanup`, the queue fence,
+play style) fences every body for at most ten minutes of an unproved cleanup;
+after that only bodies a job still keeps or a journal names stay fenced, and new
+training stays refused (`cleanup_pending`) until cleanup is verified. An offline
+raid's or benchmark's unrestored training receipt (`OfflineTrainingCleanupPending()`)
+is not bounded: it still fences every body until restored. Server.log names the
+adapters keeping cleanup pending, and its all-clear says `released, not verified`
+instead of `verified` when a job gave up on a member. Ten minutes after a dummy
+trial's `cleanup_failed` terminal it abandons each blocked member it no longer
+holds, journaled or not (`cleanup_abandoned guid=`; a journal fences its own body
+and is restored by its adapter), and keeps fencing the members it still holds or
+is still returning; with none left it ends and sends
+`dummy_cleanup` (`released` with its unfinished members, or `restored` once every
+return is proved). Journals stay.
 
 Inspection commands use `python -m leeroy_mind training`: `status`, `report
 --week YYYY-Www`, `gate`, `trials`, `cards`, `lessons --context MAP:BOSS:DIFFICULTY`,
@@ -36,7 +50,18 @@ database. With the mind stopped, `rollback --context MAP:BOSS:DIFFICULTY` restor
 the prior stored champion and `stock --context ...` selects stock; the service OS
 lock is held throughout. These card changes leave applied-command cleanup
 journals intact. `gate --reset` discards gate evidence; `rescore` rechecks stored
-pulls and restores matching scores.
+pulls and restores matching scores. A lab blocked on an unproved trial holds its
+members until, with the mind stopped, `lab-clear` clears it on native evidence
+the mind stored: that trial's `dummy_cleanup` receipt, a terminal proving every
+return, or a hello from a worldserver started after the trial (`started_ms`).
+A lab blocked with no trial in flight needs no evidence (probes and priming touch
+no body). It sends nothing, keeps every receipt (an attempt keeps its earlier
+restoration state as `restoration_before`), frees the members, commits only a
+record the body holds accept, and refuses in words without evidence or when a
+member has a standing setup; `lab` shows the evidence, and health FAILs a block
+older than a night. The first dummy trial after a worldserver start is refused
+`driver_pending` while native logs the DC test driver in; the lab retries that
+leg once, 60 s later (`training_lab_driver_retry`).
 
 The bridge exposes `telemetry`, `get_stats`, `get_vocab`, `custom_strategy`,
 `dc_setting`, `dummy_trial`, `get_rivals`, `start_benchmark` and
@@ -299,7 +324,14 @@ intervening day; newer, missing or truncated logs are an incomplete observation,
 of a clean night. Evidence cycles use the critic's shared persisted edges: the count is
 memories whose ancestry reaches a cycle, not edges (note at 1, FAIL at 50). Its scan stops
 at 100,000 rows/nodes or 0.8 seconds and labels incomplete results. Queued selfie sets older
-than 30 hours are a note. Stale Realm roots include kind, member count and the exact
+than 30 hours are a note. A training lab blocked longer than a night (`tg:lab:owned` phase
+`blocked`, from `halted_at`) FAILs with its halt, night, trial and the `training lab-clear`
+command to run with the mind stopped; a younger block is a note. With `[realm] enabled = true`, a missing or entry-less
+`realm/blocklist.txt` or no cached guild name (meta `realm:guild_name`) FAILs: the Realm's
+screen cannot be ready, so rivals stay silent (the night also logs `realm_night_unready` as a
+WARNING with `reason=` `blocklist_missing`, `guild_name_missing` or `blocklist_empty`). The
+newest weekly evaluation incomplete, an empty `probe_run` while a secret memory or fact exists,
+and offline raids blocked on each of the last 3 whole days are notes. Stale Realm roots include kind, member count and the exact
 `realm release <id> --reason reviewed_stale_hold` command to inspect with the mind stopped;
 the release command still enforces its own eligibility checks. Missing newer tables are
 reported as not set up. These checks only report state and never repair it. Health
@@ -607,6 +639,10 @@ and the mind's bounded shutdown drain. Unknown receipts remain in
 With an already attached mind, hello/login rereads the switch and queues undo when
 off. No model, prompt, gear, loot or raid strategy change is involved. See
 `mind/leeroy_mind/playstyle/README.md` for the deterministic map and limits.
+Each hello restores, then reapplies, every owned member (reconciliation, by design).
+`playstyle_result` logs `reason=` (`ok`, `no_job` with no terminal in 5 s, native's code,
+`skipped:<code>`, `guids` or `kind`); an ack refusal logs `playstyle_refused` with its
+`error=` code and member count.
 
 ### Local patch: pinned random bots
 
@@ -785,6 +821,15 @@ It compiles clean and the BG registers, but in-game behaviour is unverified.
 
 ## The mind service (`leeroy_mind`)
 
+- Talk awareness and guards are separately opt-in: `[talk] aware = true` adds a
+  scoped observation card inside the live prompt budget; `[guards] enabled = true`
+  reviews model drafts, allows one screened retry, and records delivery rations.
+  Deterministic announcements bypass model guards. Answers owed to the owner use
+  advisory verdicts; hard content/name/slash screens still apply. Discord cards
+  and guards omit game-state evidence. `[claims] enabled = true` supplies claim
+  evidence and enables its night stage in both runners.
+  See `mind/leeroy_mind/guards/README.md` for bounds and fake rehearsal results.
+
 `mind/` is the Python service that speaks for the guild through mod-leeroy's
 bridge, on the local Ollama. It has its own venv in `mind\.venv`; run it from
 `F:\azerothcore\mind` in Git Bash inside Windows Terminal (in a standalone
@@ -805,7 +850,7 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 .venv/Scripts/python -m leeroy_mind console --data-dir "$D" # the guild console; open the URL it prints
 .venv/Scripts/python -m pytest -q                           # the unit tests
 .venv/Scripts/python -m pytest -q -n auto tests             # fast run; up to 8 isolated workers
-.venv/Scripts/python -m pip install -r tests/console/e2e/requirements.txt; .venv/Scripts/python -m playwright install chromium; .venv/Scripts/python -m pytest tests/console/e2e -q  # isolated browser rehearsal
+.venv/Scripts/python -m pip install -r tests/console/e2e/requirements.txt; .venv/Scripts/python -m playwright install chromium; npm ci --prefix tests/console/e2e; .venv/Scripts/python -m pytest tests/console/e2e -q  # isolated browser and axe rehearsal
 .venv/Scripts/python -m pytest -m ollama                    # optional: also -m live, -m mysql
 ```
 
@@ -818,6 +863,11 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 - `run` takes a snapshot before it starts; each label keeps its newest 10
   (`mind-<label>-<stamp>.db`), so copy one you must keep to another name. After
   pulling new code, run `db migrate` before `doctor`.
+- The weekly evaluation's secret probe asks a blank answer again (3 tries in all); a sample
+  still blank counts as a leak (`empty_samples` in the report), so it can only close the
+  secret gate, never open it, and no longer fails the whole week. Its live-prompt copy
+  (`scratch\mind-eval-<stamp>.db`) is deleted when the evaluation closes it; one a crash leaves
+  is pruned to the newest 10. Older `mind-eval-<night>-*` copies are the operator's to delete.
 - Explicit prompt wording lives only in `mind-data\prompts\` overlays; the
   built-in prompts in the repo stay non-explicit.
 - Optional `[callbacks] enabled = true` enables the memory callback selector API
@@ -832,6 +882,11 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   events the bridge queued for the mind, so never run it while they matter.
 - Do not run `personas generate`/`seed` or a library build while the mind is
   live: they load another large model next to the live one and evict it.
+- Optional `[talk] realism = true` adds bounded typing cadence, rare corrections and
+  small reply bursts; default off, read at mind start and each login. Mind-only:
+  no migration or native rebuild. It preserves authored/altered-state typing,
+  excludes raid-event turns, and drops stale follow-ups after a newer line from
+  that member. See `mind/leeroy_mind/talk/README.md` for budgets and busy evidence.
 - Optional `[fingerprint] enabled = true` attaches a model-free typing-profile stage
   on restart (also in `nightly run`). Missing/invalid settings mean off. It measures
   the last 300 mind-origin lines, or seeds a documented persona prior below 50.
@@ -883,6 +938,14 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 - Guild life (raid nights, DKP and loot, offline raids, rank, spec and gear
   upkeep) runs with built-in defaults; `[guild]` and `[dkp]` tables in
   `mind.toml` override them.
+- An offline raid start refused for one named roster member (`in_instance:<guid>`,
+  `busy:realm_owner:<guid>`, `busy:realm_group:<guid>`, `busy:<guid>`, `not_cast:<guid>`,
+  `leader_unavailable:*` for the leader, also inside a `setup:<stage>:` failure) leaves that
+  member out of every plan for the rest of the day (day meta `excluded`): the bench fills the
+  seat and the leader rules pick another tank. The retry keeps its delay (60 s for `not_cast`),
+  `MAX_ATTEMPTS` and the GPU lease. Planning also leaves out members the last cast snapshot put
+  in a raid or 5-man map who have not changed zone since. A roster that is then too small or has
+  no tank waits 15 minutes (`offline_raid_waiting`) instead of sending or ending the day.
 - Offline raids publish a running `job` heartbeat every 60 s with kills, wipes,
   `members_in_instance` (the exact map and instance), `last_progress_ts` (Unix ms;
   start, boss engage, kill or wipe), and `boss_engaged` when native can read the
@@ -1100,8 +1163,27 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   paint) draws every member's face as initials without asking for the photo, and blanks any
   other photo (the gallery, the selfie picker) until it is switched back. It has 14 tabs (Comms, Raid, Guild, Personas, Social,
   Board, Calendar, Bank, Realm, Training, Dojo, Library, Ops, Mind); each polls only
-  while it is open and the page is visible, one request at a time. A source that is
-  not there yet answers 200 and reads "Not set up yet: <why>"; only a file that
+  while it is open and the page is visible, one request at a time. Ordinary reads have a
+  30 s browser deadline, actions 120 s (long enough for a clean stop); an unanswered action
+  says it may have completed and is never retried automatically. Failed or malformed reads
+  keep the last good view with a stale age on interval polls. One-shot reads report their
+  own errors without promising retries. Hidden pages close the event stream: they receive
+  no background events or toasts, and resync from a fresh snapshot when shown. The event
+  stream and voice socket reconnect with capped exponential backoff and jitter; their
+  heartbeat deadline is 45 s. Voice retries cap at five seconds, and a console voice
+  start/restart wakes the relay immediately. The face
+  cache keeps at most 256 entries and four active loads. The Personas roster is paged in
+  groups of 50; its member details stay available. Arrow keys, Home and End move through
+  the tablist; Tab reaches the main scroll region and controls; dialogs trap focus and
+  Escape returns it. Both themes and reduced motion are covered by the browser rehearsal.
+  WoW feed history retains 64 active/recent views, at most 200 lines each, 64 explicitly
+  opened whisper threads and 128 read marks. Inactive WoW reply/refusal and nudge drafts
+  keep their most recent 64 entries; these conveniences are not durable message storage.
+  Discord's read-only message/quote/pin/thread window fits a 180 KB ASCII-JSON budget:
+  whole records are kept, with visible words when older items are omitted. Stored history
+  is untouched. Its existing watched fingerprint suppresses unchanged SSE updates; the
+  server now retains fixed-size digests instead of full copies of those windows.
+  A source that is not there yet answers 200 and reads "Not set up yet: <why>"; only a file that
   exists but cannot be read is a 503. Ops (`GET /api/ops`, `console/opsview.py`) keeps
   those states per panel in one 200 response: health, night, Realm holds, raids,
   selfies/snaps, backups, cached Git release drift and scheduled-task status. Each
@@ -1302,8 +1384,9 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   endpoint and console on ephemeral ports with the invented cast and fake bridge,
   LLM and model admin: channel answer, named and officer-only replies, reaction and
   DM, both after logout and before the first bridge cast; no game `say`, clean shutdown.
-- D1 is owner-triggered conversation. Autonomous chatter, pre-send guard wiring,
-  member reactions, topics, photos, decisions and culture remain later phases.
+- D1 is owner-triggered conversation, with optional pre-send guard review and
+  scoped awareness cards. Autonomous chatter, broader member reactions, topics,
+  photos, decisions and culture remain later phases.
 
 ## The Realm (`leeroy_mind.realm`)
 
@@ -1379,7 +1462,15 @@ Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
   fence or a `busy:` reason such as `busy:combat` (`STEP_REFUSALS`), or a rearm for
   `weapon_record_unavailable` (`KIND_STEP_REFUSALS`): native refused that body
   before changing it and released them all, so it settles `step_refused` and Recall goes on to
-  the defaults. Native keeps the weapon records in memory, so a worldserver start empties them
+  the defaults. A rearm no longer fails whole for one member (2026-11-10/11: all 15 overnight
+  rearms of the 143 refused for one member in combat or dead, others at the ack for his group's
+  members): native skips a member its step refuses before any swap, or Tick's fence before its
+  step, and leaves out at the ack a member admission fences (refusing whole only when every member
+  is, or for a job-wide fence such as `busy:training_cleanup`: member reasons are an allow-list,
+  `MemberSkipReason`), so the done `realm_job` lists them in `skipped`; the mind settles the rearm done with no
+  backoff (the next pass rearms them) and the defaults go to everyone. A defaults batch native ran
+  with some members skipped (dead, busy) settles `defaults_failed` and no longer stops the chain's
+  later batches; an aborted one still does. Native keeps the weapon records in memory, so a worldserver start empties them
   until the 60 s poll finds each body online and free; a rearm now records an armed body that
   has none, as that poll would. Any other failed job (`operation_transition_unknown`, a walk,
   leave, duel or grow) stays unknown unless its event carries `changed: false` (below; any ordinary
@@ -1394,11 +1485,14 @@ Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
   the members whose rosters reach outside, not the outsiders, using the step's roster readers.
   The mind accepts any of them only for an ordinary leave when the names are distinct manifest members,
   settles it refused and holds nobody. Recall backs off those members for 600 s and recalls the rest
-  as a new command; every such retry strictly shrinks its manifest. A member that turns into a
-  group departure case only at its own step, while nothing in the job has touched its body, is
-  skipped instead (2026-11-10: one battleground raid leader made a 143-member recall fail after
-  others had moved, and native kept all 143): native ends that member's lease alone, goes on with
-  the others, and the terminal `realm_job` lists it in `skipped`; the mind settles a done leave as
+  as a new command; every such retry strictly shrinks its manifest. A member its own step cannot
+  take out for a reason of its own (a group departure, its original raid group, its entry point, a
+  changed battleground group, an LFG proposal or closure, Wintergrasp, or a lease Tick's fence finds
+  broken before its step, as when its battleground ends mid-job), while nothing in the job has
+  touched its body, is skipped instead (2026-11-10: one battleground raid leader made a 143-member
+  recall fail after others had moved, and native kept all 143): native ends that member's lease
+  alone, goes on with the others (whose steps no longer recheck a later member the job has not
+  touched), and the terminal `realm_job` lists it in `skipped`; the mind settles a done leave as
   usual and backs the skipped members off for 600 s (evidence `skipped_at`), and Recall rearms and
   defaults only the rest. Any other reason from the job
   is a Refuse only until that leave has changed a body. A failed `realm_job` may now carry
@@ -1472,6 +1566,9 @@ artefacts such as crackling; find and fix the cause.
   mind connection and 7880 for the browser UI. The mind's `[voice]` endpoint
   must match the service's `[mind]` endpoint. The mind doctor reports spec
   coverage and optional service status; a stopped voice service is a note.
+  While the service is down the mind retries after 5, 10, 20 and 40 s, then once a
+  minute, and logs `voice_connect_failed` once, `voice_still_down` (a count) at most
+  hourly and `voice_reconnected` when it is back; a dropped session still reconnects in 5 s.
 - `voice-data\` holds `voice.toml`, `decision.toml`, `lexicon.toml`,
   `attitudes.toml`, models, caches, UI state and logs. The local decision records
   the listening choices; never commit it or device settings. Voice specs,
@@ -1544,6 +1641,27 @@ as a subprocess at night and talks JSON lines over stdin and stdout.
   (pinned revisions into `<data>/models`), `doctor` (`--quick` skips torch and hashing; the
   mind's doctor runs that), `where`, `smoke --out DIR` (one invented person; needs the GPU),
   `pytest -q` (no model, GPU or network).
+- **Photo style variety.** With the mind stopped, `selfies restyle --dry-run|--go`
+  previews or changes choices; `--go` snapshots before migration and records old kinds.
+  Lust choices are composed; plain kinds are cleared for the night's model to re-choose.
+  Fresh sets preserve the gallery and cover. `--lust-only` narrows the selection;
+  hand-set kinds require `--include-owner`. `[selfies] variety = true`, read once at
+  startup, balances Lust choices and adds screened plain-only hints to the plain pass.
+  Lighting matches the setting and drops before identity or clothing at prompt fit.
+  See `mind/leeroy_mind/selfies/style_variety.md`.
+- **Appearance variety.** `[looks] diversity = true`, read at startup (or once per
+  generator command), gives new members screened deterministic looks. It does not
+  re-enrich existing owner/seeded members with looks but no disclosures. With the
+  mind stopped, `selfies variety --dry-run|--go --top 30` diagnoses/re-rolls similar
+  chosen photos. First fetch the pinned IP-Adapter: `fetch-models --only ipadapter`
+  in the selfie worker environment; the command never downloads it. `--go` snapshots
+  before migration and records the old looks/kind for `personas undo LEDGER_ID`.
+  Owner field-change evidence protects looks; old rows without such history fall
+  back to current owner source. `--release GUID[,GUID...]` permits named protected
+  members listed inside the current dry-run clusters. Hand-set photo kinds stay.
+  Plain kinds are re-chosen by the night; scene planning waits for a new cover pick.
+  Galleries and the current cover remain intact. See
+  `mind/leeroy_mind/personas/looks_diversity.md`.
 - **Two night stages, only with `enabled = true`.** `photo` runs after `enrich` on the
   reflection model: it picks a photo kind, framing, setting, outfit and expression for each
   member who has looks and no kind yet (stored as a new persona version, screened for the

@@ -162,6 +162,22 @@ def test_a_channel_returns_messages_with_reactions_threads_and_pins(data, cast):
     assert bad == 400
 
 
+def test_large_thread_shelf_keeps_recent_threads_reopenable(data, cast):
+    ids = []
+    for i in range(105):
+        parent = dstore.post(cast, channel="general", author=101, origin="mind",
+                             text=f"fixture {i}", now=NOW + i)
+        ids.append(dstore.open_thread(cast, parent, name=f"thread {i}", now=NOW + i))
+    async def go():
+        async with served(build(data)) as app:
+            shelf = (await get(app, "?channel=general")).json()
+            reopened = await get(app, f"?channel=general&thread={ids[-1]}")
+            return shelf, reopened.status
+    shelf, status = asyncio.run(go())
+    assert shelf["limited"]["threads"] and status == 200
+    assert [t["id"] for t in shelf["threads"]] == ids[-100:][::-1]
+
+
 def test_he_sees_the_officers_channel(data, cast):
     dstore.post(cast, channel="officer-chat", author=102, origin="mind", text="private", now=NOW)
     cast.conn.commit()
@@ -171,6 +187,44 @@ def test_he_sees_the_officers_channel(data, cast):
             return (await get(app, "?channel=officer-chat")).json()
     v = asyncio.run(go())
     assert [m["text"] for m in v["messages"]] == ["private"]
+
+
+def test_dense_unicode_window_is_bounded_without_slicing_messages(data, cast, monkeypatch):
+    from leeroy_mind.console import discordview
+    from leeroy_mind.console.httpd import encode_json
+    text = "\U0001f680" * 2000
+    parents = []
+    for i in range(101):
+        parent = dstore.post(cast, channel="general", author=101, origin="mind", text=text, now=NOW + i)
+        parents.append(parent)
+        dstore.open_thread(cast, parent, name=f"Fixture thread {i}", now=NOW + i)
+        if i < 50:
+            dstore.pin(cast, parent, now=NOW + i)
+    replies = [dstore.post(cast, channel="general", author=102, origin="mind", text=text,
+                          reply_to=parent, now=NOW + 200 + i) for i, parent in enumerate(parents)]
+    with monkeypatch.context() as patch:
+        patch.setattr(discordview, "_bounded_window", lambda out, **kw: out)
+        before = discordview.discord_view(cast.conn, owner_now=datetime.fromtimestamp(NOW, EASTERN),
+                                         trial_rank=3, channel="general")
+        before_bytes = len(encode_json(before).encode("ascii"))
+    async def go():
+        async with served(build(data)) as app:
+            return await get(app, "?channel=general"), await get(app, f"?channel=general&after={replies[0]}")
+    response, cursor = asyncio.run(go())
+    value = response.json()
+    print("dense Discord wire bytes", before_bytes, "->", len(response.body))
+    assert before_bytes > 2_000_000
+    assert response.status == 200 and len(response.body) <= discordview.WINDOW_BYTES
+    assert 0 < len(value["messages"]) < 100
+    assert value["messages"][-1]["id"] == replies[-1]
+    assert all(row["text"] == text for key in ("messages", "quotes", "pins") for row in value[key])
+    assert all(value["limited"][key] for key in ("messages", "quotes", "pins", "threads"))
+    assert cursor.json()["messages"][0]["id"] == replies[1]
+    assert len(cursor.body) <= discordview.WINDOW_BYTES
+    digest = discordview.watched(cast.conn, "general")
+    assert len(digest) == 64
+    dstore.edit(cast, replies[-1], author=102, text="Changed fixture", now=NOW + 999)
+    assert discordview.watched(cast.conn, "general") != digest
 
 
 def test_an_older_mind_db_lists_the_tables_as_missing(data, cast):

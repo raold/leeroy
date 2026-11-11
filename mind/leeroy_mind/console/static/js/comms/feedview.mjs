@@ -31,6 +31,7 @@ export function currentView() { return VIEW; }
 export function openView(view) {
   if (!VIEW_RE.test(str(view)) && !channelOf(view)) { return; }
   VIEW = view;
+  FEED.active = view;
   renderFeed(false);
 }
 
@@ -148,7 +149,8 @@ function renderKpis() {
 // The open view is read while he can see it; the marks are kept whenever they change
 function changed() {
   if (document.visibilityState === "visible" && S.tab === "comms") { FEED.markRead(VIEW); }
-  var state = Object.assign({}, recall(READ_KEY, {}), FEED.readState(), DISCORD.read), text = JSON.stringify(state);
+  // Each medium owns its current bounded marks; do not resurrect expired browser entries.
+  var state = Object.assign({}, FEED.readState(), DISCORD.read), text = JSON.stringify(state);
   if (text !== saved) { saved = text; remember(READ_KEY, state); }
   badge();
   renderKpis();

@@ -12,7 +12,7 @@ from leeroy_mind.bodies import BodyEvidenceUnavailable
 from leeroy_mind.guild.protocol import BotDo
 
 from .actions import ActionRejected
-from .action_store import STEP_REFUSED, ActionCapacity, leave_refusal_guids, leave_skipped_guids
+from .action_store import STEP_REFUSED, ActionCapacity, defaults_partial, leave_refusal_guids, leave_skipped_guids
 from .protocol import LeavePvp, Rearm
 
 log = logging.getLogger(__name__)
@@ -308,6 +308,16 @@ class Recall:
                 skipped = set(leave_skipped_guids(record)) & set(chain.members) if record else set()
                 if skipped:
                     self._leave_out(chain, skipped)
+            if kind == "defaults" and not ok:
+                # Native ran the batch and skipped a member or two (dead, busy): the others took their
+                # defaults and nobody is held, so the chain's later batches still go, and the skipped
+                # get theirs on a later pass. An aborted batch (cancelled, timed out) stops it as before.
+                try:
+                    record = self.queue.store.get(command_id)
+                except BodyEvidenceUnavailable:
+                    self._finish(chain)
+                    return
+                ok = record is not None and defaults_partial(record)
             self._advance(chain, ok or reason in past)
             return
         # Native refused the whole leave at its ack, before changing anyone, because these members

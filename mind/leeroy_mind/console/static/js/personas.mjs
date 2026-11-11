@@ -15,11 +15,11 @@ import { CLASSES, moodText, moodTitle, photoKindText, signed, tileState, when, y
 
 var PERSONAS_MS = 30000;  // as the Guild tab: the live mind writes this database meanwhile
 var TRAITS = ["openness", "conscientiousness", "extraversion", "agreeableness", "neuroticism"];
-var BY = { seed: "the seeding", owner: "you (an import or a personas command)", generator: "the generator",
+var BY = { seed: "the seeding", owner: "you (an import or a personas command)", generator: "the generator", variety: "variety pass",
            night: "the night's looks pass", photo: "the night's photo-kind pass", stance: "a stance move",
            undo: "an undo of a stance move" };
 var LEDGER_KINDS = { note_added: "note added", note_dropped: "note dropped", note_rolled_back: "note rolled back (drift)",
-                     drift_flag: "drift flag", stance_band: "stance move", undo: "undo" };
+                     drift_flag: "drift flag", stance_band: "stance move", variety: "variety pass", undo: "undo" };
 var personasTimer = null, personasBusy = false, pick = 0, pickSeq = 0, reveal = false;
 function worldMode() { return $("p-world-filter").checked; }
 $("p-world-filter").addEventListener("change", function () {
@@ -28,7 +28,25 @@ $("p-world-filter").addEventListener("change", function () {
   $("p-world").hidden = !worldMode();
   $("p-selfies").parentNode.hidden = worldMode();
   $("p-tuning").hidden = worldMode();
+  paging.hidden = worldMode();
   pollPersonas();
+});
+var rosterOffset = 0, rosterPage = null, rosterDrawn = "";
+var paging = el("div", "roster-pages"), previousPage = el("button", "", "Previous members"),
+    nextPage = el("button", "", "Next members"), pageWords = el("span", "muted");
+paging.setAttribute("aria-label", "Member pages");
+paging.setAttribute("role", "group");
+previousPage.type = nextPage.type = "button";
+paging.appendChild(previousPage); paging.appendChild(pageWords); paging.appendChild(nextPage);
+$("p-wall").before(paging);
+previousPage.addEventListener("click", function () {
+  if (rosterPage) { rosterOffset = Math.max(0, rosterOffset - rosterPage.limit); pollPersonas(); }
+});
+nextPage.addEventListener("click", function () {
+  if (rosterPage && rosterPage.more) {
+    rosterOffset = Math.min(Math.floor((rosterPage.total - 1) / rosterPage.limit) * rosterPage.limit, rosterOffset + rosterPage.limit);
+    pollPersonas();
+  }
 });
 
 function pname(view, guid) {
@@ -90,9 +108,23 @@ function driftTitle(d) {
 function renderPersonas(v) {
   $("personas-banner").hidden = true;
   setSelfieNames(v.names);
+  var signature = JSON.stringify(v);
+  if (signature === rosterDrawn) { return; }
+  var focused = document.activeElement, restore = null;
+  if (focused && ($("p-wall").contains(focused) || $("p-table").contains(focused))) {
+    restore = focused.dataset.gallery ? '[data-gallery="' + Number(focused.dataset.gallery) + '"]' :
+      focused.dataset.guid ? (focused.classList.contains("tile-detail") ? '.tile-detail' : 'tr') +
+        '[data-guid="' + Number(focused.dataset.guid) + '"]' : null;
+  }
   var members = arr(v.members), days = num(v.recent_days) || 7, gm = v.guild_mood, missing = arr(v.missing);
-  setText("p-count", plural(members.length, "member") + ", "
-          + members.filter(function (m) { return m.persona; }).length + " with a persona");
+  rosterPage = v.page || { offset: 0, limit: members.length, total: members.length, more: false };
+  rosterOffset = rosterPage.offset;
+  paging.hidden = rosterPage.total <= rosterPage.limit;
+  previousPage.disabled = rosterOffset === 0;
+  nextPage.disabled = !rosterPage.more;
+  pageWords.textContent = "Members " + (members.length ? rosterOffset + 1 : 0) + "–" + (rosterOffset + members.length) + " of " + rosterPage.total;
+  setText("p-count", plural(rosterPage.total, "member") + ", "
+          + (rosterPage.personas === undefined ? members.filter(function (m) { return m.persona; }).length : rosterPage.personas) + " with a persona");
   setText("p-mood", gm ? "Guild mood, night of " + str(gm.night) + ": " + signed(gm.value, 2)
           + (arr(gm.reasons).length ? " (" + gm.reasons.join(", ") + ")" : "")
           : missing.indexOf("guild_mood") >= 0 ? "Guild mood: unavailable in this mind.db."
@@ -128,6 +160,11 @@ function renderPersonas(v) {
   });
   if (!members.length) { emptyRow(body, 10, "The mind has no cast and no personas yet."); }
   renderWall(v);
+  if (restore && !focused.isConnected) {
+    var target = (view === "table" ? $("p-table") : $("p-wall")).querySelector(restore);
+    if (target) { target.focus(); }
+  }
+  rosterDrawn = signature;
 }
 var VIEW_KEY = "guild-console-personas-view";
 var view = recall(VIEW_KEY, "wall") === "table" ? "table" : "wall";
@@ -171,15 +208,20 @@ function pollPersonas() {
   if (worldMode()) { if (S.tab === "personas") pollWorld($("p-world")); return; }
   if (personasBusy || S.tab !== "personas") { return; }
   personasBusy = true;
-  api("/api/personas").then(function (r) {
+  var requestedOffset = rosterOffset;
+  api("/api/personas?offset=" + requestedOffset, { poll: true }).then(function (r) {
     if (refused(r)) { return null; }
     return r.json().then(function (j) { return { status: r.status, j: j }; });
   }).then(function (x) {
-    if (!x) { return; }
-    if (x.status === 200 && !worldMode()) { renderPersonas(x.j); }
+    if (!x || requestedOffset !== rosterOffset || worldMode()) { return; }
+    if (x.status === 200) { renderPersonas(x.j); }
     else { $("personas-banner").textContent = str(x.j.error) || "mind.db could not be read."; $("personas-banner").hidden = false; }
   }, function () { /* the strip says it */ })
-    .then(function () { personasBusy = false; if (pick) { pollMember(); } });
+    .then(function () {
+      personasBusy = false;
+      if (requestedOffset !== rosterOffset) { pollPersonas(); }
+      else if (pick) { pollMember(); }
+    });
 }
 
 var shownFace = null;
@@ -288,7 +330,7 @@ function pollMember() {
   if (!pick || S.tab !== "personas") { return; }
   var seq = ++pickSeq, guid = pick;
   pollInsight(guid);
-  api("/api/persona?guid=" + guid).then(function (r) {
+  api("/api/persona?guid=" + guid, { poll: true }).then(function (r) {
     if (refused(r)) { return null; }
     return r.json().then(function (j) { return { status: r.status, j: j }; });
   }).then(function (x) {
@@ -468,6 +510,7 @@ function renderTuning() {
                         clearable: set, moves: d.who !== "everyone" ? WHO[d.who] + ": the others are skipped" : "" });
     });
     var add = el("select");
+    add.setAttribute("aria-label", "Offset another dial for " + (g.builtin ? "everyone" : g.name));
     add.appendChild(el("option", "", "offset another dial"));
     arr(v.dials).forEach(function (d) { if (!own(offs, d.name)) { var o = el("option", "", d.label); o.value = d.name; add.appendChild(o); } });
     add.addEventListener("change", function () {
@@ -572,7 +615,7 @@ $("t-pvclose").addEventListener("click", function () { $("t-pvcard").hidden = tr
 function pollTuning() {
   if (tuneBusy || S.tab !== "personas") { return; }
   tuneBusy = true;
-  api("/api/tuning").then(function (r) {
+  api("/api/tuning", { poll: true }).then(function (r) {
     if (refused(r)) { return null; }
     return r.json().then(function (j) { return { status: r.status, j: j }; });
   }).then(function (x) {

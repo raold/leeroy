@@ -13,7 +13,7 @@ from typing import BinaryIO
 
 from . import protocol
 from .fit import PromptTooLong
-from .protocol import Grid, Quit, Render, RenderFailed, Retry
+from .protocol import Embed, Grid, Quit, Render, RenderFailed, Retry
 from .render import ReadyError, Renderer
 
 _EOF = object()
@@ -126,6 +126,17 @@ def serve(load: Callable[[], Renderer], *, stdin: BinaryIO, out: BinaryIO,
         if isinstance(req, Quit):
             return 0
         if isinstance(req, Retry):  # it is ready: nothing to try again
+            _send(out, {"id": req.id, "ok": False, "error": "bad_request"})
+            continue
+        if isinstance(req, Embed):
+            try:
+                answer = renderer.embed(req)
+            except Exception:
+                _send(out, {"id": req.id, "ok": False, "error": "encoder_failed"})
+            else:
+                _send(out, {"id": req.id, "ok": True, "error": "", **answer})
+            continue
+        if getattr(renderer, "embedding_only", False):
             _send(out, {"id": req.id, "ok": False, "error": "bad_request"})
             continue
         if isinstance(req, Grid):

@@ -4,7 +4,7 @@ connection that is closed again). The mind writes these rows; the console only r
 - cast_member (the roster) and persona_core: each stored persona (personas.io.save_persona),
   its version (1, then one more per write that changed it), when it was saved and its source:
   seed (`personas seed`), owner (`personas import`, `rebalance-stances`, `fix-typing`) or
-  generated, which three writers share: `personas generate`; the night's looks pass, which
+  variety (`selfies variety`), or generated, which three writers share: `personas generate`; the night's looks pass, which
   commits the persona together with its own night_step unit (LOOKS_STAGE, <guid>); and a
   stance move (nightly.attraction, live or at night), saved at the instant of its stance_band
   ledger row, or of the undo row when the owner undid one. `by` names the writer from those
@@ -81,7 +81,7 @@ def _writers(conn, have) -> tuple[dict, dict]:
 
 def _by(guid, source, updated, moves, looks) -> str:
     if source != "generated":
-        return source  # seed or owner
+        return source  # seed, owner or variety (labelled by the console)
     if (guid, updated) in moves:
         return moves[(guid, updated)]
     # the nearest unit before the write: the looks pass's last member and the photo pass's first
@@ -229,6 +229,24 @@ def roster_view(conn, *, now: float) -> dict:
     return {"human": v["human"], "names": v["names"], "missing": v["missing"],
             "recent_days": RECENT_DAYS, "guild_mood": v["guild_mood"],
             "members": sorted(v["members"].values(), key=lambda m: (m["name"].lower(), m["guid"]))}
+
+
+def roster_page(view: dict, offset: int, *, limit: int = 50) -> dict:
+    """A bounded roster page; optional badge projections follow only these members.
+
+    The detail endpoint retains each member's full data. Preserve the shared name index:
+    relationships on this page can refer to members on a different one.
+    """
+    members = view.get("members", [])
+    offset = min(offset, max(0, ((len(members) - 1) // limit) * limit))
+    out = dict(view, members=members[offset:offset + limit])
+    if "insight_badges" in out:
+        guids = {str(m["guid"]) for m in out["members"]}
+        out["insight_badges"] = {g: v for g, v in out["insight_badges"].items() if str(g) in guids}
+    out["page"] = {"offset": offset, "limit": limit, "total": len(members),
+                   "personas": sum(bool(m.get("persona")) for m in members),
+                   "more": offset + limit < len(members)}
+    return out
 
 
 def _card(p) -> dict:

@@ -139,6 +139,9 @@ def make_stage(cast_config):
                     private_logs=False)
                 p = replace(p, real_life=replace(p.real_life, birthday=draw_birthday(
                     (q.real_life.birthday for q in existing), ctx.rng(STAGE, guid, "birthday"))))
+                from .looks_diversity import apply_if_enabled
+                p = apply_if_enabled(ctx.store, p, ctx.settings.looks_diversity, existing,
+                                     ident=ctx.ident, names=names)
             except Exception:
                 # CancelledError is a BaseException: a login/cancellation consumes no
                 # failed night, and the same selected unit may resume later tonight.
@@ -160,6 +163,9 @@ def make_stage(cast_config):
                     save_persona(store, p, source="generated", ts=ctx.clock.now(),
                                  race=RACES.get(current.race, ""),
                                  class_name=CLASSES.get(current.class_, ""))
+                    if ctx.settings.looks_diversity:
+                        from .looks_diversity import mark_sampled
+                        mark_sampled(store,p)
                     seed_relationships(store, [p], names, ctx.human, ctx.clock.now(), human=ctx.ident)
                     saved = True
                 except Exception:

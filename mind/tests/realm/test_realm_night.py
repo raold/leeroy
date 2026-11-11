@@ -1,6 +1,7 @@
 """The realm's night stage (plan Task 19) over actual Store rows, the real night runner and
 budget, and a scripted FakeLLM: nothing here contacts Ollama, MySQL or the bridge."""
 import json
+import logging
 import re
 from dataclasses import replace
 
@@ -266,6 +267,28 @@ def test_unready_public_units_wait(rig):
     (rig.root / "realm" / "blocklist.txt").unlink()
     assert by_kind(night.plan_units(rig.ctx())).keys() == {"letter"}
     assert night.count_units(rig.ctx()) == 3
+
+
+@pytest.mark.parametrize("change, reason", [
+    ("blocklist", "blocklist_missing"), ("guild", "guild_name_missing"),
+    ("both", "blocklist_missing,guild_name_missing"), ("empty", "blocklist_empty"), ("none", None)])
+def test_an_unready_screen_is_a_warning_with_its_reason(rig, caplog, change, reason):
+    path = rig.root / "realm" / "blocklist.txt"
+    if change in ("blocklist", "both"):
+        path.unlink()
+    if change == "empty":
+        path.write_text("# nothing yet\n", encoding="utf-8")
+    if change in ("guild", "both"):
+        with rig.store.transaction():
+            rig.store.conn.execute("DELETE FROM meta WHERE key='realm:guild_name'")
+    with caplog.at_level(logging.INFO):
+        stage(rig.ctx())
+    found = [r for r in caplog.records if r.getMessage().startswith("realm_night_unready")]
+    if reason is None:
+        assert found == []
+    else:
+        assert len(found) == 1 and found[0].levelno == logging.WARNING
+        assert found[0].getMessage() == f"realm_night_unready: night={NIGHT} reason={reason}"
 
 
 def test_degrade_cuts_realm_first(rig, monkeypatch):

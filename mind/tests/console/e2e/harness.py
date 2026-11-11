@@ -15,6 +15,7 @@ from leeroy_mind.app import GUILD_ID, MindApp
 from leeroy_mind.clock import SystemClock
 from leeroy_mind.config import load_config
 from leeroy_mind.console.control import Controls
+from leeroy_mind.console import opsview
 from leeroy_mind.console.mindlink import MindLink
 from leeroy_mind.console.netinfo import Conn, ESTABLISHED, LISTEN
 from leeroy_mind.lifecycle import Outcome
@@ -31,6 +32,18 @@ def free_port():
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]
+
+
+class RehearsalOps(opsview.OpsView):
+    """Read the scratch database/files; machine probes remain permanently synthetic."""
+    def _source(self, name, deadline, runtime):
+        if name == "health":
+            return opsview.panel(checks=[
+                {"name": "servers", "status": "ok", "text": "servers: ok (rehearsal)"},
+                {"name": "mind", "status": "note", "text": "mind: note (rehearsal)"}], fails=0)
+        if name == "schedules":
+            return opsview.panel(tasks=[])
+        return super()._source(name, deadline, runtime)
 
 
 class Bridge(FakeBridge):
@@ -113,6 +126,7 @@ class Rehearsal:
             controls=Controls(enabled=True, mind=self.handle, problems={"voice": "No rehearsal voice service"}),
             link=self.link, tcp=self.tcp, voice_ui_port=ui_port, bridge_port=port,
             dojo_layout=layout)
+        self.console._ops = RehearsalOps(self.root, self.data)
         await self.console.start()
         self.ports.add(self.console.s.port)
         self.url = f"http://127.0.0.1:{self.console.s.port}"

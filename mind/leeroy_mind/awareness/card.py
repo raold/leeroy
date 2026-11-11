@@ -9,11 +9,14 @@ from types import SimpleNamespace
 
 from leeroy_mind.bodies import ALL
 from leeroy_mind.claims.store import nearest
+from leeroy_mind.discord.channels import is_private, is_discord
+from leeroy_mind.talk.emote_names import ROMANTIC_EMOTES
 from leeroy_mind.memory.recall import scope_ok, whisper_ok
 from leeroy_mind.text import estimate_tokens, strip_wow_markup
 
 RECENT_S = 15 * 60
 DAY_S = 86400
+SIGNUPS_PER_EVENT = 4
 PRIORITY = ("game", "context", "recent", "claims", "raid", "calendar", "standing", "bank", "drama")
 HOLD_CODES = frozenset({"raid", "offline_raid", "training", "benchmark", "realm_event", "realm_day"})
 _CODE = re.compile(r"[a-zA-Z0-9_-]{1,48}\Z")
@@ -54,6 +57,7 @@ class CardContext:
     discord_events: tuple[ContextItem, ...] = ()
     embedding: bytes | None = None
     now: float | None = None
+    names: dict[int,str] | None = None  # live rendering; CLI retains its diagnostic identifiers
 
 
 @dataclass(frozen=True)
@@ -167,11 +171,14 @@ def _sources(value):
 
 
 def _visible(channel, frm, to, guid, officer, context, readers=None):
+    if not whisper_ok(channel, frm, to, speaker=guid, turn_channel=context.channel,
+                      to_guid=context.to_guid):
+        return False
     if readers is not None and guid not in readers:
         return False
-    if channel == "whisper":
+    if is_private(channel):
         return guid in (frm, to) and whisper_ok(channel, frm, to, speaker=guid,
-            turn_channel=context.channel, to_guid=context.to_guid)
+            turn_channel=context.channel, to_guid=context.to_guid) and {frm, to} == {guid, context.to_guid}
     if channel == "officer":
         return officer and context.channel == "officer"
     if channel == "guild":
@@ -192,6 +199,8 @@ def _context(guid, officer, ctx):
         for item in items:
             if _visible(item.channel, item.from_guid, item.to_guid, guid, officer, ctx, item.readers):
                 if text := _text(item.text):
+                    if ctx.names is not None and label in {"Reply to","Thread","Pin"}:
+                        text = _person(ctx,item.from_guid) + ": " + text
                     lines.append(f"{label}: {text}")
     return lines
 
@@ -215,7 +224,23 @@ def _holds(reader, source, guid, meta):
     return sorted(codes)
 
 
-def _game(reader, source, guid, meta, now):
+def _person(ctx,guid):
+    return ctx.names.get(guid,"someone") if ctx.names is not None else f"#{guid}"
+
+
+def _when(ctx,ts,now):
+    if ctx.names is None:
+        return f"at {ts:g}"
+    age = abs(now-ts)
+    if age < 60:
+        return "just now" if ts<=now else "in under a minute"
+    scale,label = (86400,"day") if age>=86400 else (3600,"hour") if age>=3600 else (60,"min")
+    count = int(age//scale)
+    text = f"{count} {label}" + ("s" if label!="min" and count!=1 else "")
+    return text+" ago" if ts<=now else "in "+text
+
+
+def _game(reader, source, guid, meta, now, ctx):
     roster = reader.rows(("cast_member",), "SELECT * FROM cast_member WHERE guid=?", (guid,))
     observed = dict(roster[0]) if roster else {}
     world = source.world
@@ -269,10 +294,18 @@ def _game(reader, source, guid, meta, now):
     lines = [f"Member #{guid}: {state}" + (" (current observer)" if current else " (last stored observation)"),
              f"Map: {observed.get('map', 'unknown')}; zone: {observed.get('zone', 'unknown')}; "
              f"area: {area}; instance: {instance}" + (" (last encounter)" if instance_observed else "")]
+    if ctx.names is not None:
+        from leeroy_mind.wow import RAID_INSTANCES,DUNGEONS
+        maps = {0:"Eastern Kingdoms",1:"Kalimdor",530:"Outland",571:"Northrend",**RAID_INSTANCES,**DUNGEONS}
+        zones = reader.rows(("game_event",),"SELECT payload FROM game_event WHERE type='zone' AND guid=? "
+            "AND ts BETWEEN ? AND ? ORDER BY ts DESC,id DESC LIMIT 16",(guid,now-7*DAY_S,now))
+        place = next((_text(p.get("zone_name")) for r in zones if isinstance(p:=_json(r["payload"]),dict)
+                      and p.get("zone_id")==observed.get("zone") and _text(p.get("zone_name"))),"unknown zone")
+        lines = [f"{_person(ctx,guid)}: {state}", f"Location: {place}, {maps.get(observed.get('map'),'unknown map')}"]
     combat = extra.get("combat")
     lines.append("Combat: " + ("in combat" if combat is True else "rest" if combat is False else "unknown"))
     if guid in members and human in members:
-        lines.append(("His raid" if raid else "His group") + ": " + ", ".join(f"#{g}" for g in members))
+        lines.append(("His raid" if raid else "His group") + ": " + ", ".join(_person(ctx,g) for g in members))
     else:
         lines.append("His group: " + ("not in it" if world is not None or members else "unknown"))
     codes = _holds(reader, source, guid, meta)
@@ -282,14 +315,18 @@ def _game(reader, source, guid, meta, now):
         kind = row["type"]
         if kind == "text_emote" and payload.get("target_guid") == guid:
             code = payload.get("emote", "")
-            if isinstance(code, str) and _CODE.fullmatch(code):
-                recent.append(f"Emote {code} from #{_uint(payload.get('guid'))} at {row['ts']:g}")
+            private_pair = ctx.channel=="whisper" and ctx.to_guid==payload.get("guid")
+            if (isinstance(code,str) and _CODE.fullmatch(code) and
+                    (private_pair or ctx.channel=="say" and code not in ROMANTIC_EMOTES)):
+                recent.append(f"Emote {code} from {_person(ctx,_uint(payload.get('guid')))} {_when(ctx,row['ts'],now)}")
         elif kind == "loot_won" and payload.get("guid") == guid:
-            recent.append(f"Received item #{_uint(payload.get('item_id'))} at {row['ts']:g}")
+            item = _text(payload.get("item_name")) or "an item" if ctx.names is not None else f"item #{_uint(payload.get('item_id'))}"
+            recent.append(f"Received {item} {_when(ctx,row['ts'],now)}")
         elif kind == "death" and payload.get("guid") == guid:
-            recent.append(f"Died at {row['ts']:g}")
+            recent.append(f"Died {_when(ctx,row['ts'],now)}")
         elif kind == "boss" and guid in _ids(payload.get("members")) and payload.get("state") == "killed":
-            recent.append(f"Boss kill: map #{_uint(payload.get('map'))}, boss #{_uint(payload.get('boss_id'))} at {row['ts']:g}")
+            boss = (_text(payload.get("boss_name")) or "a boss") if ctx.names is not None else f"map #{_uint(payload.get('map'))}, boss #{_uint(payload.get('boss_id'))}"
+            recent.append(f"Boss kill: {boss} {_when(ctx,row['ts'],now)}")
         if len(recent) == 5:
             break
     return lines, recent, human
@@ -310,17 +347,23 @@ def _claims(reader, guid, officer, ctx, now):
     if candidates is None:
         candidates = [SimpleNamespace(**r) for r in reader.rows(("member_claim",),
             "SELECT id,kind,subject,text,source,source_line FROM member_claim WHERE guid=? "
-            "AND superseded_by IS NULL AND (expires IS NULL OR expires>?) "
-            "ORDER BY last_seen DESC,id DESC LIMIT 8", (guid, now))]
+            "AND first_seen<=? AND superseded_by IS NULL AND (expires IS NULL OR expires>?) "
+            "ORDER BY last_seen DESC,id DESC LIMIT 8", (guid, now, now))]
     ids = [c.source_line for c in candidates if c.source_line is not None]
     provenance = {r["id"]: r for r in reader.rows(("chat_line",),
-        "SELECT id,channel,from_guid,to_guid FROM chat_line WHERE id IN (SELECT value FROM json_each(?))",
-        (json.dumps(ids),))} if ids else {}
+        "SELECT id,channel,from_guid,to_guid,audience FROM chat_line "
+        "WHERE id IN (SELECT value FROM json_each(?)) AND ts<=?",
+        (json.dumps(ids), now))} if ids else {}
     out = []
     for claim in candidates:
+        if getattr(claim, "first_seen", now) > now:
+            continue
         line = provenance.get(claim.source_line)
-        if claim.source == "chat" and (line is None or line["from_guid"] != guid or not _visible(
-                line["channel"], line["from_guid"], line["to_guid"], guid, officer, ctx)):
+        # Owner corrections inherit their cited line's visibility. Unscoped corrections
+        # have no proof that this conversation may disclose them.
+        if (line is None or claim.source == "chat" and line["from_guid"] != guid or not _visible(
+                line["channel"], line["from_guid"], line["to_guid"], guid, officer, ctx,
+                tuple(_ids(_json(line["audience"]))) if line["audience"] is not None else None)):
             continue
         if text := _text(claim.text):
             out.append(f"{claim.kind}: {text}")
@@ -360,6 +403,8 @@ def _drama(reader, guid, officer, ctx, now):
             return False
         if kind == "chat":
             return _visible(row["channel"], row["from_guid"], row["to_guid"], guid, officer, ctx)
+        if is_discord(ctx.channel):
+            return False  # encounters have no Discord provenance in D1
         if guid not in (row["a"], row["b"]) or row["private"] not in (0, 1):
             return False
         partner = row["b"] if row["a"] == guid else row["a"]
@@ -373,7 +418,8 @@ def _drama(reader, guid, officer, ctx, now):
                 SimpleNamespace(owner=guid, scope="secret", scope_with=other),
                 turn_channel=ctx.channel, to_guid=ctx.to_guid):
             continue
-        out.append(f"Feud #{row['id']} with #{other}: " + ("active" if row["ended"] is None else "ended"))
+        label = "Disagreement" if ctx.names is not None else f"Feud #{row['id']}"
+        out.append(f"{label} with {_person(ctx,other)}: " + ("active" if row["ended"] is None else "ended"))
     return out
 
 
@@ -396,7 +442,12 @@ def card(app_or_stores, guid: int, *, context: CardContext) -> Card:
     meta = {r["key"]: r["value"] for r in reader.rows(("meta",),
         "SELECT key,value FROM meta WHERE key IN ('human_guid','tg:lab:owned','tg:benchmark:active')")}
     officer = bool(roles and roles[0]["role"] == "officer")
-    game, recent, human = _game(reader, source, guid, meta, now)
+    if is_discord(context.channel):
+        parts = (("context","Conversation",_context(guid,officer,context)),
+                 ("claims","Your claims",_claims(reader,guid,officer,context,now)),
+                 ("drama","Your recent guild drama",_drama(reader,guid,officer,context,now)))
+        return Card(guid,tuple(Part(k,title,tuple(lines)) for k,title,lines in parts if lines),tuple(sorted(reader.missing)))
+    game, recent, human = _game(reader, source, guid, meta, now, context)
     if context.channel == "whisper" and context.to_guid == human and human:
         for row in reader.rows(("chat_line",), "SELECT text FROM chat_line WHERE channel='whisper' "
                 "AND from_guid=? AND to_guid=? AND ts BETWEEN ? AND ? ORDER BY ts DESC,id DESC LIMIT 3",
@@ -412,10 +463,11 @@ def card(app_or_stores, guid: int, *, context: CardContext) -> Card:
     add("claims", "Your claims", _claims(reader, guid, officer, context, now))
     raids = reader.rows(("guild_raid",), "SELECT raid_id,raid_key,started,ended,kills,wipes FROM guild_raid "
                         "WHERE started<=? ORDER BY (ended IS NULL) DESC,started DESC,raid_id DESC LIMIT 1", (now,))
-    add("raid", "Guild raid", [f"{'Recorded active' if r['ended'] is None else 'Last'} raid #{r['raid_id']} "
+    add("raid", "Guild raid", [f"{'Recorded active' if r['ended'] is None else 'Last'} raid" +
+        (f" #{r['raid_id']} " if context.names is None else " ") +
         f"({_text(r['raid_key'], 80)}): {r['kills']} kills, {r['wipes']} wipes" for r in raids])
     signup = ",coalesce((SELECT json_group_array(json_array(guid,status)) FROM " \
-        "(SELECT guid,status FROM realm_rsvp WHERE event=c.event_id ORDER BY guid LIMIT 40)), '[]') AS signups" \
+        f"(SELECT guid,status FROM realm_rsvp WHERE event=c.event_id ORDER BY guid LIMIT {SIGNUPS_PER_EVENT})), '[]') AS signups" \
         if "realm_rsvp" in reader.tables else ",'[]' AS signups"
     calendar = reader.rows(("realm_calendar",), "WITH upcoming AS (SELECT * FROM realm_calendar "
         "WHERE state='posted' AND at>=?), selected AS (SELECT id FROM "
@@ -425,9 +477,10 @@ def card(app_or_stores, guid: int, *, context: CardContext) -> Card:
         " FROM upcoming c WHERE c.id IN (SELECT id FROM selected) ORDER BY c.at,c.id",
         (now, now+14*DAY_S))
     next_raid = next((r['id'] for r in calendar if r['kind'] == 'raid'), None)
-    add("calendar", "Upcoming calendar", [f"{'Next raid' if r['id']==next_raid else 'Event'} #{r['id']} "
-        f"at {r['at']:g}: {_text(r['title'])}; signups (up to 40) " + ", ".join(
-            f"#{g} {_text(status, 40)}" for g, status in _json(r['signups'], [])) for r in calendar])
+    add("calendar", "Upcoming calendar", [f"{'Next raid' if r['id']==next_raid else 'Event'}" +
+        (f" #{r['id']} " if context.names is None else " ") +
+        f"{_when(context,r['at'],now)}: {_text(r['title'])}; signups (up to {SIGNUPS_PER_EVENT}) " + ", ".join(
+            f"{_person(context,g)} {_text(status, 40)}" for g, status in _json(r['signups'], [])) for r in calendar])
     standing = []
     dkp = reader.rows(("dkp_ledger",), "WITH b AS (SELECT guid,sum(delta) AS balance FROM dkp_ledger "
         "GROUP BY guid) SELECT balance,1+(SELECT count(*) FROM b other WHERE other.balance>b.balance) "
@@ -442,7 +495,7 @@ def card(app_or_stores, guid: int, *, context: CardContext) -> Card:
     snapshot = source.bank_snapshot
     if isinstance(snapshot, dict) and type(snapshot.get("money")) is int and snapshot["money"] >= 0 \
             and _number(snapshot.get("read_at")) and 0 <= now-snapshot["read_at"] <= RECENT_S:
-        bank.append(f"Balance: {snapshot['money']} copper, observed at {snapshot['read_at']:g}")
+        bank.append(f"Balance: {snapshot['money']} copper, observed {_when(context,snapshot['read_at'],now)}")
     bank.extend(f"Recorded {r['dir']} movements in the last week: {r['n']}" for r in reader.rows(
         ("realm_bank",), "SELECT dir,count(*) AS n FROM realm_bank WHERE ts BETWEEN ? AND ? "
         "GROUP BY dir ORDER BY dir", (now-7*DAY_S, now)))

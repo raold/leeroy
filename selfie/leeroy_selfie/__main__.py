@@ -73,11 +73,13 @@ SMOKE_SCALE = 0.6  # the mind's identity_scale default
 
 def cmd_worker(args) -> int:
     from . import render, worker
+    from . import embedding
     out = worker.claim_stdout()
     stdin = worker.claim_stdin()
-    code = worker.serve(
-        lambda: render.load(Path(args.data) if args.data else data_dir(),
-                            min_free_gib=args.min_free_gib, identity=args.identity),
+    root = Path(args.data) if args.data else data_dir()
+    load = (lambda: embedding.load(root, min_free_gib=args.min_free_gib)) if args.embed_only else (
+        lambda: render.load(root, min_free_gib=args.min_free_gib, identity=args.identity))
+    code = worker.serve(load,
         stdin=stdin, out=out, on_eof=lambda: os._exit(0), identity=args.identity)
     # the reader thread still holds stdin's lock; a normal return would crash in finalization
     out.flush()
@@ -137,6 +139,8 @@ def main(argv: list[str] | None = None) -> int:
                           help="refuse to load with less free VRAM")
     p_worker.add_argument("--identity", action="store_true",
                           help="load the identity adapter and serve renders that carry one")
+    p_worker.add_argument("--embed-only", action="store_true",
+                          help="load only the fetched image encoder; use CPU if VRAM is occupied")
     p_worker.set_defaults(func=cmd_worker)
     p_smoke = sub.add_parser("smoke", help="render one invented person into --out")
     p_smoke.add_argument("--out", metavar="DIR", required=True)

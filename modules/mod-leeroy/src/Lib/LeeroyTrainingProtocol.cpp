@@ -31,6 +31,13 @@ nlohmann::json MakeTrainingCleanup(std::string const& id, std::string const& han
         {"members", r.members}, {"state", state}};
 }
 
+nlohmann::json MakeDummyCleanup(std::string const& id, std::string_view state,
+    std::vector<std::uint32_t> const& unfinished, std::uint64_t afterMs)
+{
+    return {{"type", "dummy_cleanup"}, {"id", id}, {"state", std::string(state)}, {"unfinished", unfinished},
+        {"after_ms", afterMs}};
+}
+
 bool RivalUsable(RivalState const& state, std::uint32_t requiredLevel)
 {
     return state.online && state.isBot && state.isRandomBot && !state.isCast && !state.isHuman
