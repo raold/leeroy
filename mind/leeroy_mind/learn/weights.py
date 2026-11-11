@@ -26,8 +26,8 @@ def validate(values):
     return {key: float(values[key]) for key in DEFAULTS}
 
 
-def read(conn, *, at):
-    if available(conn):
+def read(conn, *, at, schema_available=None):
+    if available(conn) if schema_available is None else schema_available:
         row = conn.execute("SELECT version,weights FROM learn_weights WHERE created<=? "
                            "ORDER BY created DESC,version DESC LIMIT 1", (at,)).fetchone()
         if row is not None:
@@ -48,5 +48,5 @@ def change(conn, values, *, now):
 
 
 def ensure(conn, *, now):
-    weights = read(conn, at=now)
+    weights = read(conn, at=now, schema_available=True)
     return weights if weights.version else change(conn, dict(DEFAULTS), now=now)

@@ -1,8 +1,10 @@
 """Bounded, read-only reward calculation from numeric evidence; no text is returned."""
 from dataclasses import dataclass
+from datetime import datetime
 import math
 from statistics import median
 import time
+from leeroy_mind.signals.stage import SCREENED_CHANNELS as GAME_SCREENED
 
 from leeroy_mind.discord.channels import discord_sql, is_discord, is_private, private_sql
 from .weights import available, read
@@ -15,7 +17,6 @@ MEMBER_DECAY = 1 - 1 / MEMBER_DAILY_CAP
 HALF_LIFE_DAYS = 21
 METRICS = ("replied", "speed", "length", "continued")
 JUDGES = ("judge_repetition", "judge_nonsequitur", "judge_unawareness", "judge_contradiction")
-GAME_SCREENED = frozenset({"guild", "officer", "whisper", "party", "raid", "raid_warning", "say", "yell", "emote"})
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,7 @@ class Reward:
     value: float
     parts: dict[str, float]
     weights_version: int = 0
+    cap_weight: float = 1.
 
 
 def channel_kind(channel):
@@ -49,8 +51,6 @@ def _metrics(signals):
     out = {}
     if "replied" in signals:
         out["replied"] = max(0., signals["replied"])
-    elif "ignored" in signals:
-        out["replied"] = 0.
     if "reply_latency_s" in signals:
         out["speed"] = 1 - max(0., signals["reply_latency_s"])
     if "reply_len" in signals:
@@ -80,36 +80,37 @@ def _baseline(conn, line_id, ts, channel):
 
 
 def decayed(value, *, age_seconds):
-    """Read-time age discount for reports/consumers; stored credit is never rewritten."""
+    """Read-time age discount for reports/consumers, separate from raw line value."""
     return value * 2 ** (-max(0., age_seconds) / (HALF_LIFE_DAYS * DAY))
 
 
-def reward(conn, line_id, *, now=None) -> Reward:
+def reward(conn, line_id, *, now=None, schema_available=None, local_at=None) -> Reward:
     now = time.time() if now is None else now
     if type(now) not in (int, float) or not math.isfinite(now) or now < 0:
         raise ValueError("invalid_reward_time")
-    if not available(conn):
+    if not (available(conn) if schema_available is None else schema_available):
         return Reward(0., {"available": 0.})
     row = conn.execute("SELECT ts,from_guid,channel,origin,length(text) FROM chat_line WHERE id=?",
                        (line_id,)).fetchone()
     if row is None or row[3] != "mind" or row[0] > now:
         return Reward(0., {"available": 0.})
     ts, guid, channel, _, chars = row
-    weights = read(conn, at=now)
+    weights = read(conn, at=now, schema_available=True)
     raw = {(r[0], r[2]): r[1] for r in conn.execute(
         "SELECT kind,value,source FROM talk_signal WHERE line_id=? AND guid=? AND ts<=?",
         (line_id, guid, now))}
     signals = {kind: value for (kind, source), value in raw.items() if source == "implicit"}
     explicit = raw.get(("explicit", "explicit"), 0.)
     observed, baselines = _metrics(signals), _baseline(conn, line_id, ts, channel)
-    parts = {"available": 1., "explicit": explicit, "engagement_measured": float(len(observed))}
+    parts = {"available": 1., "explicit": explicit, "engagement_measured": float(len(observed)),
+             "evidence_count": float(len(raw))}
     normalized = []
     for key in METRICS:
         samples = baselines[key]
         center = median(samples) if samples else 0.
         parts["baseline_" + key] = center
         parts["baseline_n_" + key] = float(len(samples))
-        value = min(1., observed.get(key, 0.) / (2 * center if center > 0 else 1.))
+        value = (min(1., observed[key] / (2 * center)) if center > 0 else .5) if key in observed else 0.
         parts[key] = value
         if key in observed:
             normalized.append(value)
@@ -129,20 +130,25 @@ def reward(conn, line_id, *, now=None) -> Reward:
                          for action, amount in (("rewrite", .25), ("react", .5), ("drop", 1))), default=0.)
     guard_penalty = max(guard_penalty, {"rewrite": .25, "react": .5, "drop": 1.}.get(verdict, 0.))
     quality = max(-1., min(1., float(bool(screened or actual_guard)) - hits - guard_penalty))
-    penalties = signals.get("muted", 0.) + .5 * signals.get("dial_down", 0.) + .5 * signals.get("nudged_against", 0.)
+    penalties = (signals.get("muted", 0.) + .5 * signals.get("dial_down", 0.) +
+                 .5 * signals.get("nudged_against", 0.) + .1 * signals.get("ignored", 0.))
     components = dict(explicit=explicit, engagement=engagement, emote=emote, quality=quality)
     total = sum(weights.values[k] * v for k, v in components.items()) - penalties
     if explicit < 0:
         total = min(total, -.40)  # the owner's veto is outside editable weights
-    day = math.floor(ts / DAY) * DAY
+    # Naive local timestamps use the OS zone's offset at midnight, including a
+    # DST change later that morning. Injected clocks carry their own zone rules.
+    local = local_at(ts) if local_at else datetime.fromtimestamp(ts)
+    day = local.replace(hour=0,minute=0,second=0,microsecond=0).timestamp()
+    medium = discord_sql("channel")
+    medium = f"({medium})" if is_discord(channel) else f"NOT ({medium})"
     rank = conn.execute("SELECT count(*) FROM chat_line WHERE origin='mind' AND from_guid=? "
-        "AND ts>=? AND (ts<? OR (ts=? AND id<?))", (guid, day, ts, ts, line_id)).fetchone()[0]
+        "AND ts>=? AND (ts<? OR (ts=? AND id<?)) AND " + medium,
+        (guid, day, ts, ts, line_id)).fetchone()[0]
     factor = MEMBER_DECAY ** rank
-    # Only positive credit decays with volume. Penalties and vetoes never get diluted.
+    # Raw evidence is independent of volume; consumers choose how to apply the cap.
     value = max(-1., min(1., total))
-    if value > 0:
-        value *= factor
     parts.update(components, quality_measured=float(bool(screened or actual_guard)),
                  detector_hits=hits, guard_penalty=guard_penalty, penalties=penalties,
                  member_day_rank=float(rank), member_decay=factor, unclipped=total)
-    return Reward(value, parts, weights.version)
+    return Reward(value, parts, weights.version, factor)

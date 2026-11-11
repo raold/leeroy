@@ -940,6 +940,22 @@ class Pipeline:
     async def _compose(self, turn: Turn, meta: TurnMeta, *, live: bool,
                        persona: Persona | None = None, window: list | None = None,
                        trigger_text: str | None = None, dial: int | None = None) -> Composed:
+        kwargs = dict(live=live,persona=persona,window=window,trigger_text=trigger_text,dial=dial)
+        if live and getattr(self,"learn_enabled",False):
+            from leeroy_mind.prompts import trace_templates
+            from leeroy_mind.learn.recipe import templates_used
+            with trace_templates() as used:
+                result = await self._compose_prompt(turn,meta,**kwargs)
+            try:
+                templates_used(meta,used)
+            except Exception:
+                log.warning("learn_recipe_describe_failed")
+            return result
+        return await self._compose_prompt(turn,meta,**kwargs)
+
+    async def _compose_prompt(self, turn: Turn, meta: TurnMeta, *, live: bool,
+                       persona: Persona | None = None, window: list | None = None,
+                       trigger_text: str | None = None, dial: int | None = None) -> Composed:
         """`live`: the prompt is for speaking now, so it may draw from the engine's rng and
         hold the guild-wide real-name slot for the turn; what it offered and used goes on
         `meta`, to be spent if a line is said (_spend). A whisper reaches it only as
@@ -969,7 +985,10 @@ class Pipeline:
         rng = self.rng if live else self._compose_rng
         if live and getattr(self, "learn_enabled", False):
             from leeroy_mind.learn.recipe import describe
-            meta.recipe_snapshot = describe(turn, p, self.cfg)
+            try:
+                meta.recipe_snapshot = describe(turn, p, self.cfg)
+            except Exception:
+                log.warning("learn_recipe_describe_failed")
         now = self.clock.now()
         human, hg = self.human, self.human.guid
         names = self._names(turn.channel)
@@ -1302,7 +1321,10 @@ class Pipeline:
         text = turn.template
         if text is not None and getattr(self, "learn_enabled", False):
             from leeroy_mind.learn.recipe import describe
-            meta.recipe_snapshot = describe(turn, p, self.cfg)
+            try:
+                meta.recipe_snapshot = describe(turn, p, self.cfg)
+            except Exception:
+                log.warning("learn_recipe_describe_failed")
         if text is None:
             original_instruction = turn.instruction
             self._phase(turn, COMPOSING)
@@ -2041,7 +2063,11 @@ class Pipeline:
             with self.store.transaction():
                 line_id = self.store.insert_chat_line(chat, session_id=sid, origin="mind",
                                                      audience=audience)
-                record_recipe(self.store.conn, line_id, turn, meta, p, self.cfg)
+                try:
+                    with self.store.transaction():
+                        record_recipe(self.store.conn, line_id, turn, meta, p, self.cfg)
+                except Exception:
+                    log.warning("learn_recipe_record_failed")
         else:
             line_id = self.store.insert_chat_line(chat, session_id=sid, origin="mind",
                                                  audience=audience)

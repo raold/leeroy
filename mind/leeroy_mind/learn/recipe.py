@@ -4,16 +4,14 @@ from dataclasses import dataclass, replace
 import json
 from leeroy_mind.tuning.dials import MEMBER_DIALS, WORLD_DIALS
 from leeroy_mind.tuning.effective import dials_of
-from .weights import available
 
 VERDICTS = frozenset({"not_run", "send", "rewrite", "react", "drop", "failed_open"})
-TEMPLATE_VERSION = 1
 
 
 @dataclass(frozen=True)
 class Snapshot:
     template_id: str
-    template_version: int
+    template_version: str
     dials_hash: str
     model_id: str
 
@@ -25,10 +23,23 @@ def describe(turn, persona, config):
                    for name, dial in WORLD_DIALS.items()})
     digest = sha256(json.dumps(values, sort_keys=True, separators=(",", ":"),
                               allow_nan=False).encode("ascii")).hexdigest()
-    template = "talk.template" if turn.template is not None else (
-        "talk.bit" if turn.kind.value == "bit" and turn.max_lines > 1 else "talk.live")
-    return Snapshot(template, TEMPLATE_VERSION, digest,
+    from leeroy_mind.talk import prompt
+    template = ("talk.template." if turn.template is not None else "talk.instruction.") + turn.kind.value
+    text = turn.template if turn.template is not None else prompt.COMMS_RULES + prompt.INSTRUCTIONS[turn.kind]
+    if turn.kind.value in ("bit","aside","emote_react"):
+        text += turn.instruction
+    version = sha256(text.encode("utf-8",errors="replace")).hexdigest()[:16]
+    return Snapshot(template, version, digest,
                     "none" if turn.template is not None else config.models.live)
+
+
+def templates_used(meta, used):
+    snapshot = getattr(meta,"recipe_snapshot",None)
+    if isinstance(snapshot,Snapshot):
+        digest = sha256(json.dumps([snapshot.template_version,sorted(used.items())],
+                                  separators=(",",":")).encode("ascii")).hexdigest()[:16]
+        meta.recipe_snapshot = replace(snapshot,template_id="+".join(sorted({snapshot.template_id,*used})),
+                                       template_version=digest)
 
 
 def called_model(meta, model):
@@ -38,8 +49,6 @@ def called_model(meta, model):
 
 
 def record(conn, line_id, turn, meta, persona, config):
-    if not available(conn):
-        return False
     snapshot = getattr(meta, "recipe_snapshot", None)
     if not isinstance(snapshot, Snapshot):
         snapshot = describe(turn, persona, config)

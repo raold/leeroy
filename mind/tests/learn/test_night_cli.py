@@ -14,7 +14,7 @@ from leeroy_mind.learn.cli import learn_main, report
 from leeroy_mind.nightly import budget
 from leeroy_mind.nightly.pipeline import STAGES
 from leeroy_mind.nightly.runner import NightRunner
-from .test_reward import line, signals
+from .test_reward import line, signals, screened
 
 
 def enable(tmp_path):
@@ -25,11 +25,12 @@ def test_night_selection_cap_survives_resume_and_new_backfill(context, store, cl
     enable(tmp_path)
     monkeypatch.setattr(night, "PER_NIGHT", 2)
     async def run():
-        async with context() as (ctx, llm):
+        async with context(learn_enabled=True) as (ctx, llm):
             ctx.window = (clock.now()-3600, clock.now()+1)
             ids = [line(store, clock) for _ in range(4)]
             for lid in ids:
                 signals(store, lid, clock.now(), explicit=1)
+                screened(store, lid, clock.now())
             await night.stage_rewards(ctx)
             first = [tuple(r) for r in store.conn.execute("SELECT * FROM talk_reward ORDER BY line_id")]
             assert len(first) == 2
@@ -38,7 +39,7 @@ def test_night_selection_cap_survives_resume_and_new_backfill(context, store, cl
             assert [tuple(r) for r in store.conn.execute("SELECT * FROM talk_reward ORDER BY line_id")] == first
             assert night.count(ctx) == 0
             assert not llm.calls
-            assert ctx.done("rewards", str(ids[1])) and not ctx.done("rewards", str(ids[2]))
+            assert ctx.done("rewards", str(ids[2])) and not ctx.done("rewards", str(ids[1]))
     asyncio.run(run())
 
 
@@ -52,6 +53,8 @@ def test_night_off_old_schema_and_unregistered_budget_no_writes(context, store, 
             assert store.conn.total_changes == before
             assert "rewards" not in budget._counts(ctx, set(), frozenset())
             enable(tmp_path)
+            from dataclasses import replace
+            ctx.settings = replace(ctx.settings, learn_enabled=True)  # restart snapshot
             assert budget._counts(ctx, set(), frozenset({"rewards"}))["rewards"] == 1
             assert budget.estimate({"rewards": 1}, measured={}) == {"rewards": 0}
             with store.transaction():
@@ -63,13 +66,14 @@ def test_night_off_old_schema_and_unregistered_budget_no_writes(context, store, 
 def test_stage_records_discord_separately_and_excludes_owner_noncast(context, store, clock, tmp_path):
     enable(tmp_path)
     async def run():
-        async with context() as (ctx, _):
+        async with context(learn_enabled=True) as (ctx, _):
             ctx.window = (clock.now()-1, clock.now()+1)
             ids = [line(store, clock, channel=ch) for ch in ("guild", "discord:general", "dm:101")]
             line(store, clock, guid=1)
             line(store, clock, guid=105)
             for lid in ids:
                 signals(store, lid, clock.now(), explicit=1)
+                screened(store, lid, clock.now())
             await night.stage_rewards(ctx)
             out = report(store.conn, now=clock.now())
             assert out["lines"] == 3
@@ -81,7 +85,7 @@ def test_stage_records_discord_separately_and_excludes_owner_noncast(context, st
 def test_cli_reports_recipe_fields_without_content_or_writes(context, store, clock, tmp_path, capsys, monkeypatch):
     enable(tmp_path)
     async def run():
-        async with context() as (ctx, _):
+        async with context(learn_enabled=True) as (ctx, _):
             ctx.window = (clock.now()-1, clock.now()+1)
             lid = line(store, clock, text="invented secret message")
             turn = Turn(TurnKind.REPLY_HUMAN, 101, "guild")
@@ -89,6 +93,7 @@ def test_cli_reports_recipe_fields_without_content_or_writes(context, store, clo
                 record_recipe(store.conn, lid, turn, TurnMeta("synthetic"), ctx.persona(101),
                               load_config(tmp_path / "mind.toml"))
             signals(store, lid, clock.now(), explicit=1)
+            screened(store, lid, clock.now())
             await night.stage_rewards(ctx)
     asyncio.run(run())
     monkeypatch.setattr("leeroy_mind.learn.cli.time.time", clock.now)
@@ -97,7 +102,7 @@ def test_cli_reports_recipe_fields_without_content_or_writes(context, store, clo
     output = capsys.readouterr().out
     data = json.loads(output)
     assert data["lines"] == 1 and data["members"][0]["guid"] == 101
-    assert data["members"][0]["mean"] == .4
+    assert data["members"][0]["mean"] == pytest.approx(.6)
     assert {r["field"] for r in data["recipes"]} == {
         "template_id", "template_version", "dials_hash", "model_id", "guard_verdict"}
     assert "invented secret message" not in output and "Ashlen" not in output
@@ -107,9 +112,10 @@ def test_cli_reports_recipe_fields_without_content_or_writes(context, store, clo
 def test_reward_and_night_receipt_rollback_together(context, store, clock, tmp_path, monkeypatch, caplog):
     enable(tmp_path)
     async def run():
-        async with context() as (ctx, _):
+        async with context(learn_enabled=True) as (ctx, _):
             ctx.window = (clock.now()-1, clock.now()+1)
             lid = line(store, clock)
+            screened(store, lid, clock.now())
             def bad(*args, **kwargs):
                 raise ValueError("invented private message")
             monkeypatch.setattr(night, "reward", bad)

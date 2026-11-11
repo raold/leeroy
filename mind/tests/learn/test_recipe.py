@@ -29,8 +29,8 @@ def test_central_record_has_one_text_free_recipe_and_discord_has_no_game_clock(r
     before = (rig.engine._last_talk_at, dict(rig.engine._last_line_id))
     lid = record(rig, channel)
     row = rig.store.conn.execute("SELECT * FROM talk_recipe WHERE line_id=?", (lid,)).fetchone()
-    assert row["template_id"] == "talk.live"
-    assert row["template_version"] == 1
+    assert row["template_id"] == "talk.instruction.reply_human"
+    assert len(row["template_version"]) == 16
     assert len(row["dials_hash"]) == 64
     assert row["model_id"] == rig.cfg.models.live
     assert row["guard_verdict"] == "not_run"
@@ -48,16 +48,15 @@ def test_off_changes_no_learning_tables_or_prompt(rig):
         assert rig.store.conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
 
 
-def test_recipe_failure_rolls_back_chat_line_and_recipe_together(rig, monkeypatch):
+def test_recipe_failure_preserves_acknowledged_chat(rig, monkeypatch):
     rig.engine.learn_enabled = True
     original = recipe.record
     def broken(*args):
         original(*args)
         raise RuntimeError("injected_recipe_failure")
     monkeypatch.setattr(recipe, "record", broken)
-    with pytest.raises(RuntimeError, match="injected_recipe_failure"):
-        record(rig)
-    assert rig.store.conn.execute("SELECT count(*) FROM chat_line").fetchone()[0] == 0
+    record(rig)
+    assert rig.store.conn.execute("SELECT count(*) FROM chat_line").fetchone()[0] == 1
     assert rig.store.conn.execute("SELECT count(*) FROM talk_recipe").fetchone()[0] == 0
 
 
@@ -65,7 +64,7 @@ def test_template_recipe_uses_identifier_instead_of_text_or_model(rig):
     rig.engine.learn_enabled = True
     lid = record(rig, template="private template")
     row = rig.store.conn.execute("SELECT template_id,model_id FROM talk_recipe WHERE line_id=?", (lid,)).fetchone()
-    assert tuple(row) == ("talk.template", "none")
+    assert tuple(row) == ("talk.template.reply_human", "none")
 
 
 def test_dials_hash_tracks_effective_member_and_world_values(rig, monkeypatch):

@@ -143,6 +143,8 @@ def comms_rules(human: HumanIdentity, persona: Persona | None = None, *,
     then the persona's tuning lines (tuning.lines: only when the owner has turned a wording dial
     far; the owner's overlays in `data_dir`'s prompts when given). The same on every turn for a
     speaker, for Ollama's prompt cache."""
+    from leeroy_mind.prompts import note_template
+    note_template("talk.comms",COMMS_RULES)
     rules = COMMS_RULES.format(human=human.called)
     if persona is not None:
         rules = rules.replace(SHORT_LINE, length_rule(persona.typing))
@@ -151,6 +153,7 @@ def comms_rules(human: HumanIdentity, persona: Persona | None = None, *,
         return out
     gender = persona.identity.player_gender
     if gender in FLIRT_RULE:
+        note_template("talk.flirt_rule."+gender,FLIRT_RULE[gender])
         out += "\n" + FLIRT_RULE[gender].format(human=human.called)
     for line in tuning_lines(persona, data_dir):
         out += "\n- " + line
@@ -279,6 +282,8 @@ def render_instruction(kind: TurnKind, *, addressee: str = "", topic: str = "",
     if long:
         tmpl = tmpl.replace("in one short line", MORE_LINES).replace(
             "One short line", MORE_LINES[3:].capitalize())
+    from leeroy_mind.prompts import note_template
+    note_template("talk.instruction."+kind.value,tmpl)
     if "{addressee}" in tmpl and not addressee:
         raise ValueError(f"a {kind} turn needs an addressee")
     extra = " ".join(extra.split())

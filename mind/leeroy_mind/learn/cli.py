@@ -17,13 +17,13 @@ def report(conn, *, days=14, now=None):
     now = time.time() if now is None else now
     if not available(conn):
         return {"available": False, "lines": 0, "members": [], "channels": [], "recipes": []}
-    rows = conn.execute("SELECT r.guid,r.value,c.ts,c.channel,p.template_id,p.template_version,"
+    rows = conn.execute("SELECT r.guid,r.value,r.cap_weight,c.ts,c.channel,p.template_id,p.template_version,"
         "p.dials_hash,p.model_id,p.guard_verdict FROM talk_reward r "
         "JOIN chat_line c ON c.id=r.line_id LEFT JOIN talk_recipe p ON p.line_id=c.id "
         "WHERE c.ts>=? AND c.ts<=? ORDER BY c.id", (now - days * DAY, now)).fetchall()
     members, channels, recipes = (defaultdict(list) for _ in range(3))
-    for guid, value, ts, channel, template, version, dials, model, verdict in rows:
-        item = (value, decayed(value, age_seconds=now - ts))
+    for guid, value, cap_weight, ts, channel, template, version, dials, model, verdict in rows:
+        item = (value, decayed(value * (cap_weight if value > 0 else 1), age_seconds=now - ts))
         members[guid].append(item)
         channels[channel_kind(channel)].append(item)
         for key, field in (("template_id", template), ("template_version", version),

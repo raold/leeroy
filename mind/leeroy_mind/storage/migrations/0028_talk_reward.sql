@@ -7,7 +7,7 @@ CREATE TABLE learn_weights (
 CREATE TABLE talk_recipe (
     line_id INTEGER PRIMARY KEY REFERENCES chat_line(id) ON DELETE CASCADE,
     template_id TEXT NOT NULL,
-    template_version INTEGER NOT NULL CHECK(template_version > 0),
+    template_version TEXT NOT NULL CHECK(length(template_version) = 16),
     dials_hash TEXT NOT NULL CHECK(length(dials_hash) = 64),
     model_id TEXT NOT NULL,
     guard_verdict TEXT NOT NULL CHECK(guard_verdict IN
@@ -19,6 +19,8 @@ CREATE TABLE talk_reward (
     line_id INTEGER PRIMARY KEY REFERENCES chat_line(id) ON DELETE CASCADE,
     guid INTEGER NOT NULL CHECK(guid > 0),
     value REAL NOT NULL CHECK(value BETWEEN -1 AND 1),
+    cap_weight REAL NOT NULL DEFAULT 1 CHECK(cap_weight BETWEEN 0 AND 1),
+    revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),
     parts TEXT NOT NULL CHECK(json_valid(parts) AND json_type(parts) = 'object'),
     weights_version INTEGER NOT NULL REFERENCES learn_weights(version),
     scored_at REAL NOT NULL CHECK(scored_at >= 0)

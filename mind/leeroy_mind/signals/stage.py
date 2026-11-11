@@ -16,6 +16,7 @@ RELEVANCE = frozenset({'filler_after_question', 'low_parent_and_thread_relevance
 WORLD = frozenset({'never_killed_after_verified_kill', 'raid_denial_after_recorded_combat',
                    'location_mismatch'})
 GAME = frozenset({'party', 'raid', 'raid_warning', 'say', 'yell', 'emote'})
+SCREENED_CHANNELS = GAME | {'guild', 'officer', 'whisper'}
 
 
 def _rows(conn, ctx):
@@ -57,7 +58,7 @@ async def stage_signals(ctx):
         try:
             row = rows[unit]
             channel = row['channel']
-            if channel not in GAME | {'guild', 'officer', 'whisper'} or len(row['text']) > 4000:
+            if channel not in SCREENED_CHANNELS or len(row['text']) > 4000:
                 ctx.skip('signals', unit)
                 return
             # Only reciprocal directed adjacency is evidence of a parent; plain guild

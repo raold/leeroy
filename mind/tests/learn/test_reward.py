@@ -40,7 +40,7 @@ def test_config(tmp_path, text, enabled):
 @pytest.mark.parametrize("values,quality,expected", [
     ({}, False, 0), ({"explicit": 1}, False, .4),
     ({"explicit": -1, "replied": 1, "emote_friendly": 1}, True, -.4),
-    ({"explicit": 1, "replied": 1, "emote_friendly": 1}, True, 1),
+    ({"explicit": 1, "replied": 1, "emote_friendly": 1}, True, .875),
     ({"muted": 1, "dial_down": 1, "nudged_against": 1}, False, -1),
     ({"dial_down": 1}, False, -.5), ({"nudged_against": 1}, False, -.5),
     ({"emote_rude": 1}, False, -.15),
@@ -111,7 +111,7 @@ def test_discord_baselines_and_unknown_evidence_do_not_become_game_evidence(stor
     assert result.parts["baseline_n_length"] == 0
     assert result.parts["replied"] == 0
     assert result.parts["engagement_measured"] == 1
-    assert result.parts["engagement"] == .8
+    assert result.parts["engagement"] == .5
     assert channel_kind("dm:101") == "dm"
     assert channel_kind("discord:general") == "discord"
 
@@ -132,8 +132,10 @@ def test_member_positive_cap_resets_by_day_and_does_not_dilute_negative(store, c
         lid = line(store, clock)
         signals(store, lid, clock.now(), explicit=1, replied=1, emote_friendly=1)
         screened(store, lid, clock.now())
-        total += reward(store.conn, lid, now=clock.now()).value
-    assert 9.99 < total < MEMBER_DAILY_CAP
+        scored = reward(store.conn, lid, now=clock.now())
+        assert scored.value == pytest.approx(.875)
+        total += scored.value * scored.cap_weight
+    assert 8.74 < total < .875 * MEMBER_DAILY_CAP
     signals(store, lid, clock.now(), muted=1, dial_down=1, nudged_against=1)
     assert reward(store.conn, lid, now=clock.now()).value == -1
     another = line(store, clock, guid=102)
@@ -157,7 +159,7 @@ def test_storage_rejects_text_in_reward_parts(store, clock):
     with store.transaction():
         weights = ensure(store.conn, now=clock.now())
     with pytest.raises(sqlite3.IntegrityError, match="reward_parts_not_numeric"):
-        store.conn.execute("INSERT INTO talk_reward VALUES (?,?,?,?,?,?)",
+        store.conn.execute("INSERT INTO talk_reward(line_id,guid,value,parts,weights_version,scored_at) VALUES (?,?,?,?,?,?)",
             (lid, 101, 0, json.dumps({"secret": "private words"}), weights.version, clock.now()))
 
 
@@ -167,7 +169,7 @@ def test_signal_units_and_future_screening_receipt_are_not_misread(store, clock)
     screened(store, lid, clock.now()+30)
     before = store.conn.total_changes
     result = reward(store.conn, lid, now=clock.now())
-    assert result.parts["speed"] == .75
-    assert result.parts["engagement"] == .75
+    assert result.parts["speed"] == .5
+    assert result.parts["engagement"] == .5
     assert result.parts["quality_measured"] == 0
     assert store.conn.total_changes == before
