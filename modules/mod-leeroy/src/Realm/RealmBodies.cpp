@@ -3,6 +3,7 @@
 #include "RealmCleanup.h"
 #include "RealmPorts.h"
 #include "LeeroyEvents.h"
+#include "LeeroyRealmCleanup.h"
 #include "LeeroyRealmTransmog.h"
 #include "Bag.h"
 #include "Battleground.h"
@@ -626,24 +627,21 @@ bool QueuedForPvp(Player* bot)
         if (bot->GetBattlegroundQueueTypeId(slot) != BATTLEGROUND_QUEUE_NONE) return true;
     return false;
 }
-std::string GroupDepartureReason(Player* bot, Group* group)
+bool TouchedByCleanup(Queued const& entry, std::uint32_t guid)
 {
-    if (!group || !group->IsMember(bot->GetGUID())) return "";
-    if (group->isLFGGroup())
-    {
-        auto state = sLFGMgr->GetState(group->GetGUID());
-        if (state == lfg::LFG_STATE_QUEUED || state == lfg::LFG_STATE_ROLECHECK || state == lfg::LFG_STATE_PROPOSAL
-            || state == lfg::LFG_STATE_BOOT) return "shared_lfg_queue";
-    }
-    if (group->GetMembersCount() <= 1) return "";
-    if (group->IsLeader(bot->GetGUID())) return "shared_group_leader";
-    if (group->isLFGGroup() && group->GetMembersCount() == 2) return "shared_lfg_cleanup";
-    unsigned references = 0;
-    for (auto* member = group->GetFirstMember(); member; member = member->next())
-        if (member->GetSource()) ++references;
-    // RemoveMember can Disband on the linked-player count, not roster size.
-    if (references <= 1) return "shared_group_cleanup";
-    return "";
+    auto const changed = entry.payload.value("cleanup_changed_guids", Json::array());
+    return std::find(changed.begin(), changed.end(), Json(guid)) != changed.end();
+}
+// A member that cannot leave its battleground group alone, untouched by this job: Tick ends its
+// lease and the others go on. When it is the manifest's last, its step makes the final readback.
+RealmStep SkipMember(Queued& entry, std::uint32_t guid, std::string why)
+{
+    if (entry.cursor + 1 == entry.guids.size())
+        if (auto failed = VerifyCleanupReceipts(entry, guid); !failed.empty()) return Unproved(entry.payload.at("step"), failed);
+    entry.payload.erase("step");
+    RealmStep result{StepState::Skipped, std::move(why)};
+    result.unchanged = true;
+    return result;
 }
 RealmStep LeavePvp(Queued& entry, std::uint32_t guid)
 {
@@ -691,8 +689,14 @@ RealmStep LeavePvp(Queued& entry, std::uint32_t guid)
     if (FindOnline(guid) != bot) return fail("body_unavailable");
     if (auto why = Eligible(entry, guid, Purpose::LeavePvp); !why.empty()) return fail(why);
     auto* currentGroup = bot->GetGroup();
-    if (currentGroup && (currentGroup->isBGGroup() || currentGroup->isBFGroup()))
-        if (auto why = GroupDepartureReason(bot, currentGroup); !why.empty()) return fail(why);
+    if (auto why = BattlegroundGroupDeparture(bot); !why.empty())
+    {
+        // Leaving would change the rest of its group. Before anything here touched this member,
+        // leave it as it is and go on with the others; after, the old rule stands.
+        if (SkipsLeaveMember(why, state.at("changed").get<bool>(), TouchedByCleanup(entry, guid)))
+            return SkipMember(entry, guid, std::move(why));
+        return fail(why);
+    }
     if (bot->InBattleground())
     {
         auto* bg = bot->GetBattleground();
@@ -766,9 +770,7 @@ RealmStep LeavePvp(Queued& entry, std::uint32_t guid)
         || (bot->GetGroup() && (bot->GetGroup()->isLFGGroup() || bot->GetGroup()->isBGGroup() || bot->GetGroup()->isBFGroup())))
         return fail("leave_cleanup_unproved");
     if (auto why = VerifyCleanupReceipts(entry); !why.empty()) return Unproved(state, why);
-    auto const changed = entry.payload.value("cleanup_changed_guids", Json::array());
-    bool const affected = std::find(changed.begin(), changed.end(), Json(guid)) != changed.end();
-    bool const bodyChanged = state.at("changed").get<bool>() || affected;
+    bool const bodyChanged = state.at("changed").get<bool>() || TouchedByCleanup(entry, guid);
     auto result = Done(entry, bodyChanged ? 1 : 0);
     result.unchanged = !bodyChanged && !entry.payload.value("cleanup_mutated", false);
     return result;

@@ -15,6 +15,9 @@ from leeroy_mind.realm.action_store import (ActionCapacity, ActionSpec, ActionSt
                                             REFUSALS)
 
 TOKEN = "a" * 32 + "-" + "b" * 16
+# Every reason native names members by at a leave's ack, in the order it checks them.
+LEAVE_REASONS = ["wg_private_state_unavailable", "cleanup_member_not_admitted", "shared_lfg_queue",
+                 "shared_group_leader", "shared_lfg_cleanup", "shared_group_cleanup"]
 REPO = Path(__file__).resolve().parents[3]
 
 
@@ -155,7 +158,7 @@ def test_a_leave_refused_for_one_fenced_body_frees_the_whole_cast(store):
     assert store.holds() == ()
 
 
-@pytest.mark.parametrize("reason", ["wg_private_state_unavailable", "cleanup_member_not_admitted"])
+@pytest.mark.parametrize("reason", LEAVE_REASONS)
 def test_a_leave_refused_at_its_ack_naming_members_frees_the_whole_cast(store, reason, caplog):
     cast = tuple(range(101, 245))
     dispatch(store, prepare(store, p.LeavePvp("leave", cast), owner="raid", rank=0))
@@ -169,7 +172,7 @@ def test_a_leave_refused_at_its_ack_naming_members_frees_the_whole_cast(store, r
     assert caplog.messages == [f"realm_leave_refused id=leave kind=leave_pvp reason={reason} named=2 members=144"]
 
 
-@pytest.mark.parametrize("reason", ["wg_private_state_unavailable", "cleanup_member_not_admitted"])
+@pytest.mark.parametrize("reason", LEAVE_REASONS)
 @pytest.mark.parametrize("suffix", ["", ":", ":999", ":101,999", ":101,101", ":101,0101", ":1x", ":101,", ":0"])
 def test_a_named_ack_refusal_with_invalid_members_stays_unknown(store, reason, suffix):
     dispatch(store, prepare(store, p.LeavePvp("leave", (101, 102)), owner="raid", rank=0))
@@ -178,7 +181,7 @@ def test_a_named_ack_refusal_with_invalid_members_stays_unknown(store, reason, s
     assert store.holds()[0].guids == frozenset({101, 102})
 
 
-@pytest.mark.parametrize("reason", ["wg_private_state_unavailable", "cleanup_member_not_admitted"])
+@pytest.mark.parametrize("reason", LEAVE_REASONS)
 def test_the_named_ack_refusal_is_for_ordinary_leaves_alone(store, reason):
     dispatch(store, prepare(store, p.Rearm("rearm", CAST)))
     store.observe_ack(Ack(0, "rearm", False, f"{reason}:{CAST[0]}"), now=2)
@@ -186,7 +189,7 @@ def test_the_named_ack_refusal_is_for_ordinary_leaves_alone(store, reason):
     assert store.holds()[0].guids == frozenset(CAST)
 
 
-@pytest.mark.parametrize("reason", ["wg_private_state_unavailable", "cleanup_member_not_admitted"])
+@pytest.mark.parametrize("reason", LEAVE_REASONS)
 def test_named_ack_refusal_does_not_release_a_token_cleanup(store, reason):
     wg(store)
     snapshot(store)
@@ -196,7 +199,7 @@ def test_named_ack_refusal_does_not_release_a_token_cleanup(store, reason):
     assert store.holds()[0].guids == frozenset({2, 3, 4})
 
 
-@pytest.mark.parametrize("reason", ["wg_private_state_unavailable", "cleanup_member_not_admitted"])
+@pytest.mark.parametrize("reason", LEAVE_REASONS)
 def test_recovery_settles_a_stored_ack_only_named_leave_refusal(store, reason):
     cast = (101, 102, 103)
     _stored_unknown(store, "leave", p.LeavePvp("leave", cast),
@@ -206,6 +209,96 @@ def test_recovery_settles_a_stored_ack_only_named_leave_refusal(store, reason):
     store.recover(process_id="new", now=20)
     assert (store.get("leave").state, store.get("leave").result_reason) == ("completed", f"{reason}:102")
     assert store.holds() == ()
+
+
+def leave_job(*, skipped=(), state="done", reason="", guid=0, value=0, changed=None, command_id="leave"):
+    return p.RealmJob(0, command_id, "leave_pvp", state, reason, guid, value, "", changed, tuple(skipped))
+
+
+@pytest.mark.parametrize("job_first", [False, True])
+def test_a_leave_that_skipped_members_completes_for_the_others_and_backs_them_off(store, job_first, caplog):
+    # 2026-11-10: 143 recalled, 1306 leading a battleground raid. Native skips it and takes out the rest.
+    cast = tuple(range(1200, 1343))
+    caplog.set_level("INFO", logger="leeroy_mind.realm.action_store")
+    dispatch(store, prepare(store, p.LeavePvp("leave", cast), owner="raid", rank=0))
+    receipts = [lambda: store.observe_ack(Ack(0, "leave", True, ""), now=2),
+                lambda: store.observe_realm_job(leave_job(skipped=(1306,), value=140), now=3)]
+    if job_first: receipts.reverse()
+    assert not receipts[0]().result_ready
+    assert store.holds()[0].guids == frozenset(cast)
+    t = receipts[1]()
+    assert (t.result_ready, t.result_ok, t.reason) == (True, True, "")
+    record = store.get("leave")
+    assert (record.state, record.result_ok) == ("completed", True)
+    assert store.holds() == ()
+    assert json.loads(record.evidence)["job"]["skipped"] == [1306]
+    assert action_store.leave_skipped_guids(record) == (1306,)
+    at = json.loads(record.evidence)["skipped_at"]
+    assert at == (2 if job_first else 3)  # when the root completed, with its second receipt
+    assert action_store.skipped_backoff(record, at + 599.999) == (1306,)
+    assert action_store.skipped_backoff(record, at + 600) == ()
+    store.observe_realm_job(leave_job(skipped=(1306,), value=140), now=4)  # the same receipt again
+    store.recover(process_id="new", now=5)
+    again = store.get("leave")
+    assert (again.state, again.result_ok, json.loads(again.evidence)["skipped_at"]) == ("completed", True, at)
+    assert caplog.messages == ["realm_leave_skipped id=leave kind=leave_pvp skipped=1 members=143"]
+
+
+def test_an_older_natives_done_leave_skips_nobody_and_keeps_the_stored_shape(store):
+    dispatch(store, prepare(store, p.LeavePvp("leave", (101, 102, 103)), owner="raid", rank=0))
+    store.observe_ack(Ack(0, "leave", True, ""), now=2)
+    store.observe_realm_job(p.RealmJob(0, "leave", "leave_pvp", "done", "", 0, 3), now=3)
+    record = store.get("leave")
+    assert (record.state, record.result_ok) == ("completed", True) and store.holds() == ()
+    evidence = json.loads(record.evidence)
+    assert "skipped" not in evidence["job"] and "skipped_at" not in evidence
+    assert action_store.leave_skipped_guids(record) == () and action_store.skipped_backoff(record, 3) == ()
+
+
+@pytest.mark.parametrize("cmd,ev", [
+    (p.LeavePvp("leave", (101, 102)), leave_job(skipped=(999,))),
+    (p.LeavePvp("leave", (101, 102)), leave_job(skipped=(101, 999))),
+    (p.Rearm("leave", (101, 102)), p.RealmJob(0, "leave", "rearm", "done", "", 0, 0, "", None, (101,))),
+])
+def test_a_skip_outside_the_manifest_or_of_another_kind_is_no_receipt(store, cmd, ev):
+    dispatch(store, prepare(store, cmd, owner="raid", rank=0))
+    store.observe_ack(Ack(0, "leave", True, ""), now=2)
+    assert not store.observe_realm_job(ev, now=3).matched
+    assert store.get("leave").state == "dispatched"
+    assert store.holds()[0].guids == frozenset({101, 102})
+
+
+@pytest.mark.parametrize("changed,state,held", [(False, "completed", ()), (None, "unknown", (101, 102, 103))])
+def test_a_failed_leave_that_skipped_members_keeps_the_failure_rules(store, changed, state, held):
+    # Native ended 102's lease alone; the job then failed at 103. Whole-job proof still frees the rest,
+    # and without it the root holds its whole manifest as before, 102 included.
+    dispatch(store, prepare(store, p.LeavePvp("leave", (101, 102, 103)), owner="raid", rank=0))
+    store.observe_ack(Ack(0, "leave", True, ""), now=2)
+    store.observe_realm_job(leave_job(skipped=(102,), state="failed", reason="wg_private_state_unavailable",
+                                      guid=103, changed=changed), now=3)
+    record = store.get("leave")
+    assert record.state == state and action_store.leave_skipped_guids(record) == ()
+    assert "skipped_at" not in json.loads(record.evidence)
+    assert sorted(g for h in store.holds() for g in h.guids) == list(held)
+
+
+def test_the_prune_keeps_a_skipping_leave_through_its_backoff(store):
+    dispatch(store, prepare(store, p.LeavePvp("leave", (101, 102)), owner="raid", rank=0))
+    store.observe_ack(Ack(0, "leave", True, ""), now=2)
+    store.observe_realm_job(leave_job(skipped=(102,)), now=3)
+    assert store.prune(keep=0, now=602) == 0 and store.get("leave") is not None
+    assert store.prune(keep=0, now=603) == 1 and store.get("leave") is None
+
+
+def test_a_skip_receipt_without_a_skipping_job_is_unreadable(store):
+    dispatch(store, prepare(store, p.LeavePvp("leave", (101, 102)), owner="raid", rank=0))
+    store.observe_ack(Ack(0, "leave", True, ""), now=2)
+    store.observe_realm_job(leave_job(), now=3)
+    evidence = {**json.loads(store.get("leave").evidence), "skipped_at": 3}
+    with store.conn:
+        store.conn.execute("UPDATE realm_action SET evidence=? WHERE command_id='leave'", (document(evidence),))
+    with pytest.raises(ActionUnavailable):
+        store.get("leave")
 
 
 def test_recovery_settles_a_body_fence_an_older_build_kept_unknown(store, monkeypatch):

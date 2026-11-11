@@ -12,7 +12,7 @@ from leeroy_mind.bodies import BodyEvidenceUnavailable
 from leeroy_mind.guild.protocol import BotDo
 
 from .actions import ActionRejected
-from .action_store import STEP_REFUSED, ActionCapacity, leave_refusal_guids
+from .action_store import STEP_REFUSED, ActionCapacity, leave_refusal_guids, leave_skipped_guids
 from .protocol import LeavePvp, Rearm
 
 log = logging.getLogger(__name__)
@@ -283,7 +283,7 @@ class Recall:
         past = REARM_REFUSED if kind == "rearm" else frozenset()
         try:
             self.queue.submit(cmd, owner=chain.owner,
-                              on_done=lambda ok, reason, value: self._done(chain, kind, ok, reason, past))
+                              on_done=lambda ok, reason, value: self._done(chain, kind, ok, reason, past, command_id))
             if not self._current(chain):
                 # Queue enrollment has its own rank refresh. If that callback
                 # invalidated us, cancel the stale prepared entry immediately;
@@ -296,14 +296,24 @@ class Recall:
         except ActionRejected:
             self._finish(chain)
 
-    def _done(self, chain, kind, ok, reason, past):
+    def _done(self, chain, kind, ok, reason, past, command_id=None):
         named = leave_refusal_guids(reason, chain.members) if kind == "leave" and not ok else None
         if not named:
+            if kind == "leave" and ok:
+                try:
+                    record = self.queue.store.get(command_id)
+                except BodyEvidenceUnavailable:
+                    self._finish(chain)
+                    return
+                skipped = set(leave_skipped_guids(record)) & set(chain.members) if record else set()
+                if skipped:
+                    self._leave_out(chain, skipped)
             self._advance(chain, ok or reason in past)
             return
         # Native refused the whole leave at its ack, before changing anyone, because these members
-        # hold private Wintergrasp state or cleanup outside this manifest. Nothing is held: leave them for a later
-        # pass and recall the others as a new command.
+        # hold private Wintergrasp state, have cleanup outside this manifest or cannot leave their
+        # battleground group alone. Nothing is held: leave them for a later pass and recall the
+        # others as a new command.
         current = self._current(chain)
         self._finish(chain)
         rest = tuple(g for g in chain.members if g not in named)
@@ -311,6 +321,19 @@ class Recall:
         log.info("realm_recall_left_out reason=%s named=%d rest=%d", reason.partition(":")[0], len(named), len(rest))
         if current and rest:
             self._start(rest, chain.mode)
+
+    def _leave_out(self, chain, skipped):
+        """Native took the others out and left these as they were (one leading its battleground
+        group, say), holding them no longer. They are backed off like named refusals; the chain's
+        rearm and defaults go on for the rest."""
+        rest = tuple(g for g in chain.members if g not in skipped)
+        for guid in skipped:
+            if self._busy.get(guid) == chain.key:
+                del self._busy[guid]
+        later = ((k, tuple(g for g in members if g not in skipped)) for k, members in chain.steps[chain.index:])
+        chain.members = rest
+        chain.steps = chain.steps[:chain.index] + tuple((k, members) for k, members in later if members)
+        log.info("realm_recall_skipped named=%d rest=%d", len(skipped), len(rest))
 
     def _start(self, members, mode):
         members = tuple(members)
