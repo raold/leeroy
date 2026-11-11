@@ -97,7 +97,7 @@ def test_setting_cap_uses_floor_above_one(h):
 
 
 @pytest.mark.parametrize("setting,allowed", [("in an empty gym", {None}),
-    ("at a hobby workbench", {None}), ("a city street at night", {1,5}),
+    ("at a hobby workbench", {None}), ("a city street at night", {1,3,4,5}),
     ("a garden party", {0,4})])
 def test_light_fits_actual_setting(h, setting, allowed):
     p = replace(h.persona(101, appearance=APPEARANCE), photo=ProfilePhoto(**{**KIND,"setting":setting}))
@@ -188,7 +188,7 @@ def test_plain_rechoice_preserves_pairings(h, fields):
     h.woman(101, "lust", appearance=replace(APPEARANCE, face=("baby-faced",)))
     ctx = h.ctx({"photo":[{**KIND, **fields}]})
     run(kind.stage_photo(ctx, variety=True))
-    assert load_persona(h.store,101).photo is None
+    assert (load_persona(h.store,101).photo is None) == (fields.get("framing") == "three_quarter")
 
 
 @pytest.mark.parametrize("variety", [False,True])

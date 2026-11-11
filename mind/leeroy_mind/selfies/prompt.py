@@ -193,14 +193,14 @@ def build_prompt(p: Persona, *, kind_style: str = PLAIN, light: str = "") -> Pro
         # image: priority 0, never cut by the 75-token fit (the longest required set is about 55),
         # and right after who she is, where the text encoders weigh it more than at the end.
         add(BUILD_WORDS.get(a.build, f"{a.build} build"), 0)
-    out += [(text, 0 if light else priority) for text, priority in looks_phrases(p, name_re)]
+    out += looks_phrases(p, name_re)
     if not chosen:
-        add(BUILD_WORDS.get(a.build, f"{a.build} build"), 0 if light else 1)
+        add(BUILD_WORDS.get(a.build, f"{a.build} build"), 1)
     if lust:  # one phrase: the fit keeps both or neither, and priority 0 keeps both
         add(lust_phrase(ph), 0, True)  # renderable has checked no name filter drops it
     else:
-        add(ph.outfit, 0 if light else 2, True)
-        add(ph.setting, 0 if light else 2, True)
+        add(ph.outfit, 2, True)
+        add(ph.setting, 2, True)
     add(ph.expression, 3, True)
     tail = _HEADSHOT_TAIL if headshot else _PHONE_TAIL
     if light and light != LIGHTS[0]:

@@ -72,16 +72,10 @@ def _safe(p, photo, data, ident, names):
 
 
 def plain_pairings(p, data):
-    """Keep the model's personal choice, refusing incoherent crops or gym wear elsewhere."""
+    """Only the young-coded framing rule refuses an otherwise screened plain choice."""
     from .style import looks_age_coded
     from leeroy_mind.personas.stances import is_woman
     codes = []
-    if re.search(r"\bleggings\b",data["outfit"],re.I) and not re.search(r"\bgym\b",data["setting"],re.I):
-        codes.append("photo.outfit: gym pairing")
-    if (data["kind"] == "mirror_selfie" and data["framing"] == "face" or
-        data["kind"] == "selfie" and data["framing"] == "three_quarter" or
-        data["kind"] == "headshot" and data["framing"] in ("upper_body","three_quarter")):
-        codes.append("photo.framing: kind pairing")
     if data["framing"] == "three_quarter" and is_woman(p) and looks_age_coded(p):
         codes.append("photo.framing: age pairing")
     return codes

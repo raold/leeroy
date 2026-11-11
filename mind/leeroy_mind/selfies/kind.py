@@ -365,6 +365,8 @@ async def kind_one(ctx: "NightContext", guid: int, *, variety=False) -> tuple[Pr
             picks,_,_,_ = style_variety.assign(all_personas,[guid],seed=ctx.night,ident=ctx.ident,names=members)
             return (picks[guid].photo,[]) if guid in picks else _refused(ctx,guid,["photo: no_safe_capacity"])
         ask += photo_extra.common(ctx.store,ctx.clock.now(),persona=p,ident=ctx.ident,names=members)
+        ask += (" Prefer a coherent crop: headshots near the face, mirror selfies showing the upper body, "
+                "and gym leggings in a gym setting. These are preferences for this choice.")
     for again in (False, True):
         try:
             data = await ctx.reasoner.json(system, ask + (LUST_ASK_AGAIN if again else ""),

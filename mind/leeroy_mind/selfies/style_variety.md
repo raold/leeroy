@@ -32,7 +32,7 @@ of a setting (minimum one). It balances outfits, colours, expressions, kinds and
 framings among feasible choices. Lust women use eight existing date-night
 outfits and the existing non-water, non-gym evening/social settings, with upper
 body or three-quarter framing. Plain members keep personal, model-written clothes
-and settings; variety screens gym wear and coherent crops, and excludes body-focused
+and settings; variety suggests gym wear and coherent crops, and excludes body-focused
 three-quarter crops for young-coded women. Every composed assignment runs the
 existing style and name screens. Manual restyle skips under-25 members with
 `adult_floor`; the optional switch never changes the original plain pass's age selection.
@@ -45,13 +45,13 @@ kind/framing codes, lighting indices and caps, never names or persona prose. The
 indices refer to the lists in `style_variety.py` and `photo_extra.py`.
 
 Six optional fixed phrases cover golden hour, neon, candlelight, city lights,
-string lights and a rain-wet street. Exact setting/light pairs enforce indoor/outdoor
-and time-of-day coherence; unknown free-text settings get no light. Artificial
+string lights and a rain-wet street. Free-text settings are classified by indoor/outdoor
+and day/night cues; unknown categories get no light. Artificial
 lighting removes the generic natural-light tail. The `photo_extra` row binds the chosen phrase
 to a digest of the photo kind; a later hand edit invalidates it. Rendering adds
-it at priority 9, the first to drop in the existing 75-token fit. With lighting,
-all identity details, outfit and setting are required priority 0; oversized required
-prompts are refused by the existing worker. Unknown or incompatible lighting
+it at priority 9, the lowest priority in the existing 75-token fit. All other
+phrases retain the original priorities, so lighting never makes them required.
+Unknown or incompatible lighting
 strings are ignored and the name filter still applies. Normal content and NSFW
 gates remain in the existing renderer.
 
@@ -69,7 +69,9 @@ The first enabled night or manual restyle seeds current kinds once. Plain hints
 use only plain records in that window, exclude future timestamps, and run the
 plain screens including all cast character and real names. Articles, case,
 whitespace and garment colours are normalised before counting common outfits.
-Unknown-style records are never prompt hints. The history
+Hand-set or unrecorded kinds are labelled unknown and never become prompt hints.
+As defence in depth, every plain hint excludes outfit and setting vocabulary from
+the lust lists, even if an old record was labelled plain. The history
 does not read chat or game activity, and neither it nor the lighting phrases are
 logged. Turning automatic variety off preserves existing manually saved lighting
 and queued work, while disabling new automatic assignments and history writes.

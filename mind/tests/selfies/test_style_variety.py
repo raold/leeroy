@@ -87,9 +87,11 @@ def test_light_safety_priority_and_unchanged_baseline(h,light):
     p = replace(h.persona(101,appearance=APPEARANCE),photo=ProfilePhoto(**KIND))
     for rx in (kind.AGE_RE,kind.ERA_RE,kind.EXPLICIT_RE,kind.WEAR_RE,LIKENESS_RE):
         assert not rx.search(light)
+    p = replace(p,photo=replace(p.photo,setting="somewhere unfamiliar"))
     base = build_prompt(p)
-    assert build_prompt(p,light=light) == base  # unknown free-text setting: no light
-    setting = sorted(photo_extra.LIGHT_SETTINGS[photo_extra.LIGHTS.index(light)])[0]
+    assert build_prompt(p,light=light) == base  # no known place or time category
+    setting = "inside a restaurant at night" if light == "candlelight" else (
+        "in a sunny garden" if light in ("golden hour","string lights") else "on a city street at night")
     p = replace(p,photo=replace(p.photo,setting=setting))
     changed = build_prompt(p,light=light)
     assert changed.phrases[-1] == (light,9)
@@ -197,6 +199,7 @@ def test_night_plain_history_is_recent_quoted_user_content_only(h,enabled):
     p = h.persona(101,appearance=APPEARANCE)
     prior = replace(p,photo=ProfilePhoto(**KIND))
     with h.store.transaction():
+        kind._record(h.store,prior.guid,PLAIN,prior.photo)
         photo_extra.record(h.store,prior,None,h.T)
         h.store.conn.execute("INSERT INTO photo_style_history(guid,created,outfit,setting) VALUES(?,?,?,?)",
             (102,h.T-photo_extra.MONTH-1,"expired invented outfit","expired setting"))
@@ -214,7 +217,7 @@ def test_night_plain_history_is_recent_quoted_user_content_only(h,enabled):
     assert h.count("photo_style_history") == 3
     assert bool(h.store.conn.execute("SELECT 1 FROM photo_style_history WHERE created<?",
         (h.T-photo_extra.MONTH,)).fetchone()) is (not enabled)
-    assert not photo_extra.light_for(h.store,load_persona(h.store,101))  # no known setting/light pair
+    assert bool(photo_extra.light_for(h.store,load_persona(h.store,101))) is enabled
 
 
 def test_night_lust_balances_without_calling_model_and_off_stays_original(h):
