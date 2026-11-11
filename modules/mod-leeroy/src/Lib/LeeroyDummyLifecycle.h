@@ -84,17 +84,20 @@ inline bool DummyMemberHeld(DummyHoldState const& state)
     if (!state.prepared || state.returned) return false;
     return state.creatingGroup || state.inOwnedGroup || (state.sameBody && state.driverMaster);
 }
-// Past the bound, each unreturned member is kept or abandoned. Kept: still held, still being returned
-// (not blocked: its teleport or reset is in progress, so the job still acts on it), or carrying a
-// training journal, as the offline raid keeps one. Abandoned: blocked with none of our control left
-// and no journal; the job never touches it again and stops fencing it.
+// Past the bound, each unreturned member is kept or abandoned. Kept: still held, or still being returned
+// (not blocked: its teleport or reset is in progress, so the job still acts on it). Abandoned: blocked
+// with none of our control left; the job never touches it again and stops fencing it. A training journal
+// does not keep it: the journal fences its own body and the journal adapter restores it once the trial
+// no longer fences it, whereas a kept blocked member would never be restored and the trial never end.
 enum class DummyMemberFate { Done, Keep, Abandon };
-inline DummyMemberFate DummyFateAfterBound(DummyHoldState const& state, bool blocked, bool journaled)
+inline DummyMemberFate DummyFateAfterBound(DummyHoldState const& state, bool blocked)
 {
     if (!state.prepared || state.returned) return DummyMemberFate::Done;
-    if (DummyMemberHeld(state) || !blocked || journaled) return DummyMemberFate::Keep;
+    if (DummyMemberHeld(state) || !blocked) return DummyMemberFate::Keep;
     return DummyMemberFate::Abandon;
 }
+// The trial's own fence past the bound (DummyTrialOwns) covers exactly its kept members.
+inline bool DummyTrialFences(DummyMemberFate fate) { return fate == DummyMemberFate::Keep; }
 inline bool DummyBoundPassed(bool failureReported, std::uint64_t sinceFailureMs)
 {
     return failureReported && sinceFailureMs >= kDummyReleaseMs;

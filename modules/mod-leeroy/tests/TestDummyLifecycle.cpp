@@ -1,5 +1,6 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "LeeroyDummyLifecycle.h"
+#include "LeeroyBotJournal.h"
 #include "LeeroyDummyDamage.h"
 #include "LeeroyTrainingProtocol.h"
 #include "TestHarness.h"
@@ -324,15 +325,31 @@ LEEROY_TEST(Training_DummyKeepsEveryMemberStillReturningPastTheBound)
     DummyHoldState releasedAndTeleporting{true, false, false, false, true, false}; // Group and master let go.
     CHECK(!DummyMemberHeld(releasedAndTeleporting));
     // Still being returned (not blocked): the job still acts on it, so it stays kept and fenced.
-    CHECK(DummyFateAfterBound(releasedAndTeleporting, false, false) == DummyMemberFate::Keep);
-    // Blocked with nothing of ours left and no journal: abandoned, never touched or fenced again.
-    CHECK(DummyFateAfterBound(releasedAndTeleporting, true, false) == DummyMemberFate::Abandon);
-    CHECK(DummyFateAfterBound(releasedAndTeleporting, true, true) == DummyMemberFate::Keep); // Journaled.
+    CHECK(DummyFateAfterBound(releasedAndTeleporting, false) == DummyMemberFate::Keep);
+    // Blocked with nothing of ours left: abandoned, never touched or fenced by the trial again.
+    CHECK(DummyFateAfterBound(releasedAndTeleporting, true) == DummyMemberFate::Abandon);
     DummyHoldState inOurParty{true, false, false, true, false, false};
-    CHECK(DummyFateAfterBound(inOurParty, true, false) == DummyMemberFate::Keep); // Blocked but held.
-    CHECK(DummyFateAfterBound({true, true, true, true, true, true}, true, true) == DummyMemberFate::Done);
-    CHECK(DummyFateAfterBound({false, false, false, false, false, false}, false, false) == DummyMemberFate::Done);
+    CHECK(DummyFateAfterBound(inOurParty, true) == DummyMemberFate::Keep); // Blocked but held.
+    CHECK(DummyFateAfterBound({true, true, true, true, true, true}, true) == DummyMemberFate::Done);
+    CHECK(DummyFateAfterBound({false, false, false, false, false, false}, false) == DummyMemberFate::Done);
+    CHECK(DummyTrialFences(DummyMemberFate::Keep));
+    CHECK(!DummyTrialFences(DummyMemberFate::Abandon));
+    CHECK(!DummyTrialFences(DummyMemberFate::Done));
     CHECK(!DummyBoundPassed(false, kDummyReleaseMs));
     CHECK(!DummyBoundPassed(true, kDummyReleaseMs - 1));
     CHECK(DummyBoundPassed(true, kDummyReleaseMs));
+}
+
+LEEROY_TEST(Training_DummyAbandonedJournaledMemberStaysFencedByItsJournal)
+{
+    // Blocked, unheld and journaled: the journal no longer keeps the trial alive.
+    DummyHoldState unheld{true, false, false, false, true, false};
+    BotJournal journal;
+    journal.NoteValue("wait for attack time", "4");
+    CHECK(!journal.Empty()); // HasTrainingJournal fences the body and RestoreTrainingBots restores it.
+    auto const fate = DummyFateAfterBound(unheld, true);
+    CHECK(fate == DummyMemberFate::Abandon);
+    CHECK(!DummyTrialFences(fate)); // So the trial stops fencing it and restoration is no longer skipped.
+    // With no member kept, the job is released instead of being kept until a restart.
+    CHECK(DecideDummyRelease(true, kDummyReleaseMs, DummyTrialFences(fate) ? 1 : 0) == DummyRelease::Release);
 }

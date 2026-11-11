@@ -90,8 +90,8 @@ void TrainingOffCleanup()
     }
     fence.Settle(!adapters.empty(), now);
     if (fence.TakeRelease(now))
-        LOG_WARN("module.leeroy", "mod-leeroy: training cleanup fence released after_ms={} pending={}; only bodies "
-            "still owned or journaled stay fenced, and training stays refused until cleanup is verified",
+        LOG_WARN("module.leeroy", "mod-leeroy: training cleanup fence released after_ms={} pending={}; only bodies a "
+            "job still keeps or a journal names stay fenced, and training stays refused until cleanup is verified",
             fence.Elapsed(now), adapters);
     if (benchmark)
         LOG_INFO("module.leeroy", "mod-leeroy: training cleanup benchmark retained={}", Guild::BenchmarkRunning());

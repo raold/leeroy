@@ -75,9 +75,10 @@ job receipts, abnormal process termination requires reconciliation of any remain
 A blocked member logs why (`dummy trial <id> blocked member <guid>: <reason>`). A trial stopped because training
 cleanup is pending ends `cleanup_pending`, not `training_off`. Ten minutes after its `cleanup_failed` terminal the
 trial sorts its unreturned members (`DummyFateAfterBound`): it keeps and fences one it still holds (a group object
-or solo party of ours lists it, or its same body has the driver as master), one it is still returning (not
-blocked: a teleport or reset is in progress) and one with a training journal; it abandons a blocked member with
-none of these (`cleanup_abandoned guid=`, never touched or fenced again). With nobody kept it ends:
+or solo party of ours lists it, or its same body has the driver as master) and one it is still returning (not
+blocked: a teleport or reset is in progress); it abandons a blocked member it no longer holds
+(`cleanup_abandoned guid=`, never touched or fenced by the trial again), journaled or not: a journal fences its
+own body and the journal adapter restores it once the trial lets go. With nobody kept it ends:
 `cleanup_released after_ms= unfinished=` and a `dummy_cleanup` event `{id, state: "released", unfinished,
 after_ms}`. A recovery that proves every return sends `state: "restored"`. Otherwise it keeps its slot
 (`cleanup_held kept=` once) and only the kept members stay fenced. Journals are never discarded.

@@ -34,8 +34,9 @@ is not bounded: it still fences every body until restored. Server.log names the
 adapters keeping cleanup pending, and its all-clear says `released, not verified`
 instead of `verified` when a job gave up on a member. Ten minutes after a dummy
 trial's `cleanup_failed` terminal it abandons each blocked member it no longer
-holds (`cleanup_abandoned guid=`) and keeps fencing the members it still holds, is
-still returning or that carry a journal; with none left it ends and sends
+holds, journaled or not (`cleanup_abandoned guid=`; a journal fences its own body
+and is restored by its adapter), and keeps fencing the members it still holds or
+is still returning; with none left it ends and sends
 `dummy_cleanup` (`released` with its unfinished members, or `restored` once every
 return is proved). Journals stay.
 

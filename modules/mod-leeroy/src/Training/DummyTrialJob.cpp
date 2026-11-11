@@ -595,10 +595,11 @@ std::string GuidList(std::vector<uint32> const& guids)
 }
 
 // Ten minutes after cleanup_failed the job sorts its unreturned members (DummyFateAfterBound). It keeps
-// and fences a member it still holds, is still returning or that carries a training journal; it
-// abandons a blocked member with none of that (cleanup_abandoned, never touched again, no longer fenced).
-// With nobody kept the job ends: its slot frees and its global fence can clear. Journals stay and fence
-// their own bodies; the dummy_cleanup "released" receipt names the members whose return was never proved.
+// and fences a member it still holds or is still returning; it abandons a blocked member it no longer
+// holds (cleanup_abandoned, never touched again, no longer fenced by the trial), journaled or not: its
+// journal keeps fencing that body and RestoreTrainingBots restores it. With nobody kept the job ends: its
+// slot frees and its global fence can clear. The dummy_cleanup "released" receipt names the members
+// whose return was never proved.
 bool ReleaseStuck(Job& job, uint64 now)
 {
     if (job.life.Phase() != DummyPhase::Recovery || now < job.releaseCheckAt) return false;
@@ -609,15 +610,14 @@ bool ReleaseStuck(Job& job, uint64 now)
     for (auto& member : job.members)
     {
         if (member.abandoned) continue;
-        switch (DummyFateAfterBound(HoldState(job, member), member.blocked, HasTrainingJournal(member.guid)))
+        auto const fate = DummyFateAfterBound(HoldState(job, member), member.blocked);
+        if (DummyTrialFences(fate)) kept.push_back(member.guid);
+        else if (fate == DummyMemberFate::Abandon)
         {
-            case DummyMemberFate::Done: break;
-            case DummyMemberFate::Keep: kept.push_back(member.guid); break;
-            case DummyMemberFate::Abandon:
-                member.abandoned = true;
-                LOG_WARN("module.leeroy", "mod-leeroy: dummy trial {} cleanup_abandoned guid={} blocked={}; the job "
-                    "holds none of it and never touches it again", job.event.id, member.guid, member.cleanupError);
-                break;
+            member.abandoned = true;
+            LOG_WARN("module.leeroy", "mod-leeroy: dummy trial {} cleanup_abandoned guid={} blocked={} journal={}; "
+                "the job holds none of it and never touches it again", job.event.id, member.guid,
+                member.cleanupError, HasTrainingJournal(member.guid));
         }
     }
     job.bounded = true;
