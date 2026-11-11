@@ -1,5 +1,8 @@
+import asyncio
 import os
 import re
+import sys
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -21,6 +24,25 @@ def rehearsal(tmp_path, monkeypatch):
 
     @asynccontextmanager
     async def start(*, width=1440, theme="dark", state="running"):
+        # A rehearsal that runs past 75 s prints every asyncio task's stack once, so a
+        # wait with no deadline names itself before the job's timeout cancels it.
+        loop = asyncio.get_running_loop()
+        def dump():
+            print("\n--- asyncio tasks after 75 s ---", file=sys.stderr)
+            for task in asyncio.all_tasks(loop):
+                task.print_stack(file=sys.stderr)
+            sys.stderr.flush()
+        watchdog = threading.Timer(75, lambda: loop.call_soon_threadsafe(dump))
+        watchdog.daemon = True
+        watchdog.start()
+        try:
+            async with _browser(width, theme, state) as fixture:
+                yield fixture
+        finally:
+            watchdog.cancel()
+
+    @asynccontextmanager
+    async def _browser(width, theme, state):
         async with playwright.async_playwright() as pw:
             if not Path(pw.chromium.executable_path).is_file():
                 message = "Chromium is not installed; run python -m playwright install chromium"
