@@ -15,7 +15,15 @@ async def submit(r, button, path, *, ok=True):
                                       and x.request.method == "POST") as answer:
         await button.click()
     response = await answer.value
-    await response.finished()
+    # Read the body only once the request has finished (earlier, Chrome can answer
+    # "No data found for resource"). finished() has no deadline of its own and its
+    # requestfinished event sometimes never arrives for these routed requests (CI
+    # hung in the mind stop/start flow until the job timeout), so bound the wait;
+    # after 10 s the body is there whether or not the event came.
+    try:
+        await asyncio.wait_for(response.finished(), 10)
+    except TimeoutError:
+        pass
     result = await response.json()
     assert result.get("ok") is ok, result
     return result
