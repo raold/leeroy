@@ -107,7 +107,7 @@ async def prepare_count(ctx):
     if ctx.settings.learn_enabled and ready(ctx.store):
         try:
             ctx._memo["rewards:count"] = await read_work(ctx,remaining)
-        except sqlite3.Error:
+        except Exception:
             log("rewards_unavailable")
 
 

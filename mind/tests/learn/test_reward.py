@@ -38,15 +38,15 @@ def test_config(tmp_path, text, enabled):
 
 
 @pytest.mark.parametrize("values,quality,expected", [
-    ({}, False, 0), ({"explicit": 1}, False, 1.),
+    ({}, True, 0), ({"explicit": 1}, True, 1.),
     ({"explicit": -1, "replied": 1, "emote_friendly": 1}, True, -.4),
-    ({"explicit": 1, "replied": 1, "emote_friendly": 1}, True, .875),
+    ({"explicit": 1, "replied": 1, "emote_friendly": 1}, True, .84375),
     ({"muted": 1, "dial_down": 1, "nudged_against": 1}, False, -1),
     ({"dial_down": 1}, False, -.5), ({"nudged_against": 1}, False, -.5),
     ({"emote_rude": 1}, False, -1.),
-    ({"judge_repetition": 1}, False, -1.),
-    ({"judge_repetition": 1}, True, 0),
-    ({"judge_guard_rewrite": 1}, True, .75)])
+    ({"judge_repetition": 1}, False, -.2),
+    ({"judge_repetition": 1}, True, -.2),
+    ({"judge_guard_rewrite": 1}, True, -.05)])
 def test_formula_and_unmeasured_quality(store, clock, values, quality, expected):
     lid = line(store, clock)
     signals(store, lid, clock.now(), **values)
@@ -133,9 +133,9 @@ def test_member_positive_cap_resets_by_day_and_does_not_dilute_negative(store, c
         signals(store, lid, clock.now(), explicit=1, replied=1, emote_friendly=1)
         screened(store, lid, clock.now())
         scored = reward(store.conn, lid, now=clock.now())
-        assert scored.value == pytest.approx(.875)
+        assert scored.value == pytest.approx(.84375)
         total += scored.value * scored.cap_weight
-    assert 8.74 < total < .875 * MEMBER_DAILY_CAP
+    assert 8.43 < total < .84375 * MEMBER_DAILY_CAP
     signals(store, lid, clock.now(), muted=1, dial_down=1, nudged_against=1)
     assert reward(store.conn, lid, now=clock.now()).value == -1
     another = line(store, clock, guid=102)

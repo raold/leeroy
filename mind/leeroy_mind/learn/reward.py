@@ -134,18 +134,20 @@ def reward(conn, line_id, *, now=None, schema_available=None, local_at=None, scr
     guard_penalty = max((raw.get(("judge_guard_" + action, "judge"), 0.) * amount
                          for action, amount in (("rewrite", .25), ("react", .5), ("drop", 1))), default=0.)
     guard_penalty = max(guard_penalty, {"rewrite": .25, "react": .5, "drop": 1.}.get(verdict, 0.))
-    quality = max(-1., min(1., float(bool(screened or actual_guard)) - hits - guard_penalty))
+    quality_measured = bool(screened or actual_guard or any(source=="judge" for _,source in raw))
+    quality = -min(1., max(0., hits + guard_penalty)) if quality_measured else 0.
     penalties = (signals.get("muted", 0.) + .5 * signals.get("dial_down", 0.) +
                  .5 * signals.get("nudged_against", 0.) + .1 * signals.get("ignored", 0.))
     components = dict(explicit=explicit, engagement=engagement, emote=emote, quality=quality)
-    quality_measured = bool(screened or actual_guard or any(source=="judge" for _,source in raw))
-    measured = dict(explicit=("explicit","explicit") in raw,
+    measured = dict(explicit=("explicit","explicit") in raw or
+                    any(key in signals for key in ("muted","dial_down","nudged_against")),
                     engagement=bool(normalized),
-                    emote=any(key in signals for key in ("emote_friendly","emote_romantic","emote_rude")),
-                    quality=quality_measured)
-    measured_weight = sum(weights.values[k] for k in components if measured[k])
-    total = (sum(weights.values[k] * v for k,v in components.items() if measured[k]) /
-             measured_weight if measured_weight else 0.) - penalties
+                    emote=any(key in signals for key in ("emote_friendly","emote_romantic","emote_rude")))
+    measured_weight = sum(weights.values[k] for k in measured if measured[k])
+    owner_part = (sum(weights.values[k] * components[k] for k in measured if measured[k]) /
+                  measured_weight if measured_weight else 0.) - penalties
+    quality_deduction = weights.values["quality"] * quality
+    total = owner_part + quality_deduction
     if explicit < 0:
         total = min(total, -.40)  # the owner's veto is outside editable weights
     # Naive local timestamps use the OS zone's offset at midnight, including a
@@ -162,7 +164,7 @@ def reward(conn, line_id, *, now=None, schema_available=None, local_at=None, scr
     value = max(-1., min(1., total))
     parts.update(components, quality_measured=float(quality_measured),
                  explicit_measured=float(measured["explicit"]),emote_measured=float(measured["emote"]),
-                 measured_weight=measured_weight,
+                 measured_weight=measured_weight,owner_part=owner_part,quality_deduction=quality_deduction,
                  detector_hits=hits, guard_penalty=guard_penalty, penalties=penalties,
                  member_day_rank=float(rank), member_decay=factor, unclipped=total)
     return Reward(value, parts, weights.version, factor)

@@ -81,11 +81,14 @@ def test_failed_shared_screen_stays_pending_and_retries(context,store,clock,tmp_
 
 def test_cold_engagement_is_neutral_and_ignored_is_negative(store,clock):
     a,b,c = [line(store,clock) for _ in range(3)]
+    for lid in (a,b,c):
+        screened(store,lid,clock.now())
     signals(store,b,clock.now(),replied=1)
     signals(store,c,clock.now(),ignored=1)
     assert reward(store.conn,a,now=clock.now()).value == 0
     assert reward(store.conn,b,now=clock.now()).parts["engagement"] == .5
-    assert reward(store.conn,c,now=clock.now()).value < 0
+    assert reward(store.conn,b,now=clock.now()).value == .5
+    assert reward(store.conn,c,now=clock.now()).value == -.1
 
 
 def test_newest_lines_get_the_bounded_scoring_slots(context,store,clock,tmp_path,monkeypatch):
@@ -254,9 +257,9 @@ def test_late_implicit_evidence_at_same_timestamp_is_revisited(context,store,clo
     async def exercise():
         async with context(learn_enabled=True) as (ctx,_):
             await night.stage_rewards(ctx)
-            before=store.conn.execute("SELECT value FROM talk_reward WHERE line_id=?",(lid,)).fetchone()[0]
+            assert store.conn.execute("SELECT value FROM talk_reward WHERE line_id=?",(lid,)).fetchone()[0] == 0
             signals(store,lid,clock.now(),muted=1)
             await night.stage_rewards(ctx)
             value,revision=store.conn.execute("SELECT value,revision FROM talk_reward WHERE line_id=?",(lid,)).fetchone()
-            assert value == before-1 and revision==1
+            assert value == -1 and revision==1
     asyncio.run(exercise())

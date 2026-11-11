@@ -60,7 +60,10 @@ UNIT_CALLS: dict[str, dict[str, float]] = {
     "notes": {"json": 2.0},                    # the call and its own judge batch of one: 40 s
     "claims": {"json": 1},                    # one extraction, no thinking or judge pass
     "signals": {},                           # screening only; no reflection calls
-    "rewards": {},                           # numeric scoring only
+    # Shared quality screening plus, when enabled, one embedding batch (up to 17 texts).
+    # Reserve 2 s per unit in JSON equivalents; no generation call. This conservative
+    # allowance includes the measured ~0.012 s lexical path and unmeasured embedding cost.
+    "rewards": {"json": 0.1},
     "encounters": {"json": 2},                # scene generation and one judge batch
     "confide": {"json": 1.1},
     "arc": {"json": 1.5},                     # a read of what he said to her (arc/night.py)

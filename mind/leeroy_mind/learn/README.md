@@ -19,46 +19,69 @@ replay; otherwise it uses the current time. Missing learning tables return
 
 ## Formula and coverage
 
-Defaults are 0.40 explicit + 0.25 engagement + 0.15 emote + 0.20 quality, minus
-1.0 muted, 0.5 dial-down, 0.5 negative nudge and 0.1 ignored. Divide the weighted
-component sum by the sum of weights for **measured components only**, then subtract
-penalties and clip to [-1,1]. Explicit is measured only when a vote exists;
-engagement only when a metric exists; emote only when an emote observation exists;
-quality only after successful screening, a detector observation or a live verdict.
-With no measured positive-weight component the component sum is zero. A lone
-thumbs-up is 1.0 on Discord, as is a thumbs-up with clean game quality and no other
-measures. Numeric parts record the measured flags and denominator. Weights are
-append-only versions with timestamps; the latest valid version as of scoring is
-used. `weights.change` validates finite nonnegative values summing to one and
-joins the caller's transaction. Read-only calls use version zero defaults when
-no valid version exists; enabled scoring first persists a version. There is no
-weights editor yet.
+Defaults are 0.40 explicit response, 0.25 engagement, 0.15 emote and 0.20
+quality. Quality is a **deduction only**, never approval. A clean screen adds
+zero; absent screening adds and deducts nothing.
 
-The owner veto is outside these weights: a thumbs-down forces at most -0.40,
-even if engagement is high or an edited weight would ignore the vote. Neither
-the fixed penalties nor this veto can be adjusted by a learner.
+Compute the weighted mean over measured owner-response components only
+(explicit, engagement and emote). Explicit is measured when a vote, mute,
+dial-down or negative nudge exists. Only the vote supplies its signed value;
+controls with no vote have vote value zero. Engagement is measured when a reply,
+speed, length or continuation metric exists; emote is measured when an emote
+observation exists. If no measured component has positive weight, this mean is
+zero. Then subtract the fixed owner penalties: 1.0 muted, 0.5 dial-down,
+0.5 negative nudge and 0.1 ignored. This is the owner part.
 
-Engagement averages only observed components: replied, speed, length, continuation. The signals contract stores latency as
-seconds/120, so speed is 1-latency; length is already codepoints/500. For each
-component, a rolling 14-day median uses prior observed lines in the same channel
-kind and **UTC hour**, excluding later observations and the current line.
-Each read is bounded to the latest 2,048 eligible prior lines. Divide by twice a
-positive median, capped at one: median engagement is 0.5. With no positive median
-use neutral 0.5 for an observed component. Parts include sample counts and medians;
-missing observations are never invented zero samples. This is a provisional
-normalization, not a calibrated satisfaction measure.
+The quality deduction is `w_quality * clamp(-(hits + guard_penalty), -1, 0)`.
+The four detector hits and the maximum guard cost (rewrite 0.25, react 0.5,
+drop 1) can only lower the result. A completed shared screen, a historical
+signals receipt on a supported game row, a detector observation or a live
+verdict establishes the available quality measurement. Discord, voice rooms
+and overlong rows receive no invented game-quality measure. Retrospective
+`judge_guard_*` observations do not claim that a live guard actually acted.
 
-Friendly/romantic emotes add, rude emotes subtract, capped to [-1,1].
-Quality has a base of one after the reward stage completes the shared bounded
-screening on a supported game row, or an actual live guard verdict is recorded.
-The standalone read-only calculator can also recognise a completed signals receipt.
-Discord, voice rooms and overlong rows do not earn a game-quality base. Missing
-coverage contributes no quality weight; observed detector hits remain measured. Subtract the
-four detector hits and the maximum guard cost (rewrite 0.25, react 0.5, drop 1);
-clip quality to [-1,1]. Retrospective `judge_guard_*` observations are screening,
-not a claim that anything was actually rewritten or dropped. Live guards are
-not wired by this task; recipes currently say `not_run`. These incomplete
-detectors cannot establish general correctness or hearing.
+Add the owner part and quality deduction, keep the existing owner-veto floor
+(a thumbs-down cannot score above -0.40, even with changed weights), and clip
+to [-1,1]. Fixed penalties and the veto remain outside editable weights. Numeric
+parts record measured flags, the owner-only weight denominator, the owner part
+and quality deduction. Weight versions remain append-only; scoring uses the
+latest valid version as of its timestamp. Disabled/read-only calculations use
+defaults without writing. There is no weights editor yet.
+
+With default weights, equal evidence gives these values in game, Discord and
+voice. Quality-hit examples require an actual measured hit:
+
+| Line | Value |
+|---|---:|
+| Silent, no owner evidence | 0 |
+| Thumbs-up | +1.0 |
+| Thumbs-down | -1.0 |
+| Replied, median engagement | 0.5 |
+| Ignored | -0.1 |
+| Muted | -1.0 |
+| Dial-down or nudged against | -0.5 |
+| Repeat hit alone | -0.2 |
+| Thumbs-up with a repeat hit | 0.8 |
+
+A per-line weighted mean is not monotone in added evidence. A thumbs-up with a
+median reply is about 0.81, below a thumbs-up alone at 1.0; both remain strongly
+positive and above silence and negative responses. This is intentional.
+
+Engagement averages only observed components: replied, speed, length and
+continuation. Latency is stored as seconds/120, so speed is 1-latency; length is
+codepoints/500. A rolling 14-day median uses prior observations in the same
+channel kind and **UTC hour**, excluding later observations and the current
+line, bounded to 2,048 prior lines. Divide an observed value by twice a positive
+median, capped at one. With no positive baseline, an observed component is
+neutral 0.5. Missing observations are not zero samples. This is a provisional
+normalisation, not a calibrated satisfaction measure. Friendly/romantic emotes
+add and rude emotes subtract, clipped to [-1,1].
+
+The planning budget reserves 2 seconds per reward unit (at most 500) for shared
+screening, numeric reads and an optional embedding batch of up to 17 texts.
+This is a conservative allowance, not a measured embedding latency; lexical
+screening measured about 0.012 seconds per unit. A failed pre-count logs only
+`rewards_unavailable`, counts zero and leaves the rest of the night's plan intact.
 
 ## Caps, time and channel scopes
 

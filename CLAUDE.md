@@ -837,7 +837,9 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   Read at startup: restart the mind after changing it. Missing/invalid settings
   mean off; signals remain separately opt-in. Rewards screen game quality independently of the signals cap, including CLI nights,
   after the 120-second observation window. Discord and voice rooms score measured
-  evidence only. Later evidence updates scores; raw values and local-day cap
+  evidence only. Clean quality adds nothing; only observed owner responses earn
+  credit, with quality defects deducted. Silence scores zero. Later evidence updates
+  scores; raw values and local-day cap
   weights are stored separately, with independent game/Discord caps. Owner
   vetoes and fixed penalties override positive engagement. No talk decision or
   prompt changes. `python -m leeroy_mind learn report --data-dir <data> --days 14`
