@@ -887,6 +887,16 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   no migration or native rebuild. It preserves authored/altered-state typing,
   excludes raid-event turns, and drops stale follow-ups after a newer line from
   that member. See `mind/leeroy_mind/talk/README.md` for budgets and busy evidence.
+- Optional `[banter] enabled = true` starts public guild/Discord-General riffs on restart;
+  `per_hour` defaults to 2 (0 pauses, maximum 12). Invalid settings mean off.
+  Each admitted thread has 2–4 members and at most 3–8 planned lines, ending early
+  on refusal, an owner line in that medium, or raid combat/wipe/debrief. Cards and
+  deterministic guards are required for these turns; fingerprint hints and existing
+  typing apply. New topics wait 45 seconds after his line, and owner death/loot
+  teasing is limited to one thread per local evening. The night (including manual
+  nightly runs) reuses origin-backed lexicon jokes; rewarded funny-line ingestion
+  becomes available with task 30's reward tables. No migration or native rebuild.
+  See `mind/leeroy_mind/banter/README.md` for scopes and interruption behavior.
 - Optional `[fingerprint] enabled = true` attaches a model-free typing-profile stage
   on restart (also in `nightly run`). Missing/invalid settings mean off. It measures
   the last 300 mind-origin lines, or seeds a documented persona prior below 50.

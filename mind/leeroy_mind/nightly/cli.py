@@ -345,6 +345,8 @@ async def _run(root, store, cfg, clock, args, make_llm):
             runner = NightRunner(STAGES, lambda n, w: ctx)
             from leeroy_mind.fingerprint.night import attach as attach_fingerprint
             attach_fingerprint(runner, root)
+            from leeroy_mind.banter.night import attach as attach_banter
+            attach_banter(runner, root)
             from leeroy_mind.claims.attach import attach as attach_claims
             attach_claims(runner, root)
             await runner.run(night, ctx.window)
