@@ -138,6 +138,47 @@ def test_only_exact_successful_cleanup_receipt_releases_ownership(store,tmp_path
     run(scenario())
 
 
+@pytest.mark.parametrize('change,reason',[({},'ok'),({'kind':'summon'},'kind'),({'state':'failed'},'failed'),
+                                          ({'state':'failed','reason':'busy:combat'},'busy:combat'),
+                                          ({'reason':'busy'},'busy'),({'reason':'two words'},'?'),
+                                          ({'skipped':(SimpleNamespace(guid=101,reason='dead'),)},'skipped:dead'),
+                                          ({'guids':(102,)},'guids')])
+def test_a_result_logs_its_reason_code(store,tmp_path,caplog,change,reason):
+    async def scenario():
+        app = app_for(store,tmp_path)
+        store.set_meta(KEY,'[101]')
+        service = PlayStyles(app)
+        service.connected = service.supported = True
+        async def send(cmd,**kwargs):
+            row = dict(id=cmd.id,kind='bot_do',state='done',reason='',skipped=(),guids=(101,))
+            service.jobs.feed(SimpleNamespace(**(row|change)))
+            return SimpleNamespace(ok=True)
+        app.bridge = SimpleNamespace(send=send)
+        assert await service.command([101],True) is (reason=='ok')
+    caplog.set_level(logging.INFO,'leeroy_mind')
+    run(scenario())
+    assert f'playstyle_result: count=1 restore=1 ok={int(reason=="ok")} reason={reason}' in caplog.text
+
+
+@pytest.mark.parametrize('error,code',[('busy:training_cleanup','busy:training_cleanup'),('',  '?'),
+                                       ('no such thing here','?')])
+def test_an_ack_refusal_logs_its_code_and_count(store,tmp_path,caplog,error,code):
+    async def scenario():
+        app = app_for(store,tmp_path)
+        store.set_meta(KEY,'[101,102]')
+        service = PlayStyles(app)
+        service.connected = service.supported = True
+        async def send(cmd,**kwargs):
+            return SimpleNamespace(ok=False,error=error)
+        app.bridge = SimpleNamespace(send=send)
+        assert not await service.command([101,102],True)
+        assert service.owned=={101,102}
+    caplog.set_level(logging.INFO,'leeroy_mind')
+    run(scenario())
+    assert f'playstyle_refused: count=2 restore=1 error={code}' in caplog.text
+    assert 'playstyle_result' not in caplog.text
+
+
 def test_mind_switch_off_enqueues_undo_without_new_additions(store,tmp_path):
     async def scenario():
         app = app_for(store,tmp_path)

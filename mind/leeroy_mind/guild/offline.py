@@ -13,6 +13,7 @@ import math
 from uuid import uuid4
 
 from leeroy_mind.memory.writer import MemoryCandidate
+from leeroy_mind.wow import DUNGEONS, RAID_MAPS
 
 from .comp import NoTankError, candidates_from, choose_leads, select_comp
 from .lines import public_text
@@ -41,6 +42,10 @@ DAY_PREFIX = "guild:offline:day:"
 LOGOUT_KEY = "guild:offline:last-logout"
 REASON_LIMIT = 200
 PROGRESS_FRESH_S = 120
+# Instance maps a level-80 cast member is found in: the Wrath raids and 5-mans (DUNGEONS lacks
+# Utgarde Pinnacle 575, the Oculus 578 and the Pit of Saron 658, which set no boss state).
+# Native refuses a start while any requested body is in a dungeon (InstanceConflict).
+INSTANCE_MAPS = RAID_MAPS | frozenset(DUNGEONS) | {575, 578, 658}
 
 
 def is_due(now: datetime, *, human_online: bool, last_logout: datetime | None,
@@ -91,6 +96,30 @@ def setup_retry_after(reason: str) -> int | None:
     if len(parts) != 3 or parts[0] != "setup" or parts[1] not in {"grouping", "teleporting", "starting"}:
         return None
     return BUSY_RETRY_S if parts[2] == "too_few" or retry_after(parts[2]) is not None else None
+
+
+# Native start refusals that name one requested body by guid (StartRaidJob, InstanceConflict).
+MEMBER_REFUSALS = ("in_instance:", "busy:realm_owner:", "busy:realm_group:", "not_cast:")
+
+
+def refused_member(error: str, plan: RaidPlan) -> int | None:
+    """The member of the sent roster a refusal names, or None when it names nobody in it.
+
+    `leader_unavailable:<why>` names the leader, the plan's tank. `busy:<guid>` is a body a
+    training dummy trial owns. A setup failure is read as its inner refusal. A guid outside the
+    roster is a disagreement this cannot fix by leaving someone out, so it names nobody.
+    """
+    parts = error.split(":", 2)
+    if len(parts) == 3 and parts[0] == "setup":
+        error = parts[2]
+    if error.startswith("leader_unavailable:"):
+        return plan.tank_guid
+    prefix = next((p for p in MEMBER_REFUSALS if error.startswith(p)), "busy:" if error.startswith("busy:") else None)
+    tail = error[len(prefix):] if prefix else ""
+    if not (tail.isascii() and tail.isdigit() and len(tail) <= 10):
+        return None
+    guid = int(tail)
+    return guid if guid in plan.members else None
 
 
 def next_raid_key(rotation, last_run: dict[str, float], skip=()) -> str:
@@ -203,15 +232,33 @@ class OfflineRaids:
         return next_raid_key(self.cfg.offline_rotation, last_run(self.ports.conn),
                              set(self._day_state().get("skipped", [])))
 
-    def _plan(self, key, saved=frozenset()):
+    def _busy(self):
+        """Members to leave out of today's plans: those a refusal named today (never sent again
+        that day) and those the world already shows in a dungeon."""
+        known = getattr(self.ports, "in_dungeon", None)
+        try:
+            inside = set(known()) if known is not None else set()
+        except Exception as e:
+            log.warning("offline_raid_dungeon_check_failed error=%s", type(e).__name__)
+            inside = set()
+        return set(self._day_state().get("excluded", [])), inside
+
+    def _exclude(self, guid):
+        """Leave a refused member out of every plan for the rest of the command's day."""
+        excluded = self._day_state(self._owned["day"]).get("excluded", [])
+        if guid not in excluded:
+            self._update_day(excluded=sorted([*excluded, guid]))
+
+    def _plan(self, key, saved=frozenset(), busy=frozenset()):
         """`saved` are members saved to a copy of this raid that he is saved to: native would
-        unbind them from his copy, so they are unavailable, neither raiding nor benched."""
+        unbind them from his copy, so they are unavailable, neither raiding nor benched. `busy`
+        members are unavailable the same way: the bench fills their seats."""
         raid, size, heroic = split_key(key)
         cast = {g: m for g, m in self.ports.cast().items() if g != self.ports.human_guid}
         candidates = candidates_from(cast, {g: self.ports.persona(g) for g in cast},
                                      bench_streaks(self.ports.conn, cast),
                                      attendance_counts(self.ports.conn, cast, self.ports.clock.now() - 30 * 86400),
-                                     set(self.ports.away()) | set(saved))
+                                     set(self.ports.away()) | set(saved) | set(busy))
         leads = choose_leads(candidates, requested=None, human_leads=False, human_guid=self.ports.human_guid)
         comp = select_comp(size, candidates, must_include=[leads.tank_guid, leads.loot_guid],
                            human_in_raid=False, seed=self.rng.getrandbits(64))
@@ -219,6 +266,13 @@ class OfflineRaids:
             raise ValueError("too few available participants")
         return RaidPlan(raid.key, size, heroic, True, leads.tank_guid, leads.tank_guid,
                         leads.loot_guid, comp.members, comp.bench, False)
+
+    def _plans_without(self, key, saved):
+        try:
+            self._plan(key, saved)
+        except (ValueError, NoTankError):
+            return False
+        return True
 
     async def _notify(self, name, *args):
         for listener in tuple(self._listeners):
@@ -536,10 +590,18 @@ class OfflineRaids:
             self._hold_today(attempts=attempts, next_try=self.ports.clock.now() + BUSY_RETRY_S,
                              blocked=attempts >= MAX_ATTEMPTS)
             return
+        excluded, inside = self._busy()
+        busy = (excluded | inside) - set(saved)
         try:
-            plan = self._plan(key, saved)
+            plan = self._plan(key, saved, busy)
         except (ValueError, NoTankError):
-            if saved:
+            if busy and self._plans_without(key, saved):
+                # Only the members a refusal named or a dungeon holds are missing: wait for them,
+                # never sending a roster below the minimum or without a leader.
+                log.info("offline_raid_waiting reason=too_few excluded=%d in_dungeon=%d",
+                         len(busy & excluded), len(busy - excluded))
+                self._hold_today(next_try=self.ports.clock.now() + BUSY_RETRY_S)
+            elif saved:
                 # His copy holds members this raid needed: the next raid in the rotation may not.
                 skipped = self._day_state().get("skipped", [])
                 self._hold_today(skipped=skipped if key in skipped else [*skipped, key],
@@ -547,6 +609,8 @@ class OfflineRaids:
             else:
                 self._hold_today(blocked=True)
             return
+        if busy:
+            log.info("offline_raid_planned excluded=%d in_dungeon=%d", len(busy & excluded), len(busy - excluded))
         now = self.ports.clock.now()
         self._progress = None
         self._owned = dict(id=uuid4().hex, day=self._day(), phase="acquiring", plan=asdict(plan),
@@ -593,13 +657,20 @@ class OfflineRaids:
             elif ack.ok is not True:
                 self._owned["phase"] = "rejected"
                 refused = str(ack.error or "")[:REASON_LIMIT]
+                member = None if self._owned["cancelled"] else refused_member(str(ack.error or ""), plan)
                 delay = None if self._owned["cancelled"] else retry_after(str(ack.error or ""))
-                log.info("offline_raid_refused error=%s retry=%s", refused, delay is not None)
+                if member is not None and delay is None:
+                    delay = RETRY_S  # not_cast: the stale member leaves the plan, nothing else waits.
+                log.info("offline_raid_refused error=%s retry=%s excluded=%s", refused, delay is not None,
+                         member if member is not None else "")
                 changes = dict(blocked=delay is None or self._day_state(self._owned["day"])["attempts"] >= MAX_ATTEMPTS,
                                refused=refused)
                 if delay is not None:
                     changes["next_try"] = self.ports.clock.now() + delay
                 self._update_day(**changes)
+                if member is not None:
+                    # The next plan replaces this member from the bench; it is never sent again today.
+                    self._exclude(member)
                 await self._release()
             else:
                 self._owned["phase"] = "accepted"
@@ -817,6 +888,10 @@ class OfflineRaids:
             self._void_run(raid_id, RETRY_S, skip_raid=True)
         elif busy is not None:
             self._void_run(raid_id, busy)
+            member = refused_member(str(terminal.get("reason") or ""), RaidPlan(**self._owned["plan"]))
+            if member is not None:
+                log.info("offline_raid_setup_excluded guid=%d", member)
+                self._exclude(member)
         elif terminal["state"] == "failed":
             self._update_day(blocked=True)
         self._owned["phase"] = "complete"

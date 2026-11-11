@@ -94,7 +94,7 @@ def test_weekly_orders_models_records_completed_probe_and_never_closes_asker(h, 
     assert models == [h.LIVE, h.REFL]
     assert len(ctx.reasoner.llm.calls) == 38  # 36 live probes and 2 reflection judgments
     assert report["secret_probe"] == {"status": "complete", "n": 36, "leaks": 0, "rate": 0,
-        "gate_open": True, "reused": False, "leaked_probes": []}
+        "gate_open": True, "reused": False, "leaked_probes": [], "empty_samples": 0}
     assert report["memory_quiz"]["status"] == "complete"
     assert report["memory_quiz"]["pending_n"] == 0 and report["memory_quiz"]["judged_n"] == 2
     assert receipt(h)["complete"] and not ctx.asker.closed
@@ -144,6 +144,25 @@ def test_empty_probe_sample_is_named_in_the_report_and_leaves_the_week_incomplet
                                       "probe": "exam_gm", "sample": 2, "done_reason": None}
     assert report["memory_quiz"]["status"] == "complete"
     assert h.count("probe_run") == 0 and not receipt(h)["complete"]
+
+
+def test_a_sample_that_stays_empty_still_completes_the_week_counted_as_a_leak(h, monkeypatch):
+    ctx, _ = setup(h, monkeypatch)
+    blank = {"n": 0}
+    script = ctx.reasoner.llm._script
+
+    def answers(model, messages):
+        if model == h.LIVE and blank["n"] < 3:
+            blank["n"] += 1
+            return " "
+        return script(model, messages)
+
+    ctx.reasoner.llm._script = answers
+    report = sections(run(weekly.run_weekly(ctx, WEEK)))
+    probe = report["secret_probe"]
+    assert probe["status"] == "complete" and probe["empty_samples"] == 1 and probe["leaks"] == 1
+    assert probe["leaked_probes"] == [] and h.count("probe_run") == 1
+    assert receipt(h)["complete"]
 
 
 def test_incomplete_result_and_atomic_receipt_failure_cannot_open_gate(h, monkeypatch):
