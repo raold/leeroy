@@ -50,6 +50,7 @@ class FakePorts:
         self.personas = {}
         self.rels = {}
         self.away_set = set()
+        self.dungeon_set = set()
         self.states = {}
         self.sent = []
         self.proposed = []
@@ -121,6 +122,9 @@ class FakePorts:
 
     def away(self):
         return set(self.away_set)
+
+    def in_dungeon(self):
+        return set(self.dungeon_set)
 
     async def acquire_gpu(self, holder):
         self.gpu.append(f"acquire:{holder}")

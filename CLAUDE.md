@@ -312,7 +312,12 @@ intervening day; newer, missing or truncated logs are an incomplete observation,
 of a clean night. Evidence cycles use the critic's shared persisted edges: the count is
 memories whose ancestry reaches a cycle, not edges (note at 1, FAIL at 50). Its scan stops
 at 100,000 rows/nodes or 0.8 seconds and labels incomplete results. Queued selfie sets older
-than 30 hours are a note. Stale Realm roots include kind, member count and the exact
+than 30 hours are a note. With `[realm] enabled = true`, a missing or entry-less
+`realm/blocklist.txt` or no cached guild name (meta `realm:guild_name`) FAILs: the Realm's
+screen cannot be ready, so rivals stay silent (the night also logs `realm_night_unready` as a
+WARNING with `reason=` `blocklist_missing`, `guild_name_missing` or `blocklist_empty`). The
+newest weekly evaluation incomplete, an empty `probe_run` while a secret memory or fact exists,
+and offline raids blocked on each of the last 3 whole days are notes. Stale Realm roots include kind, member count and the exact
 `realm release <id> --reason reviewed_stale_hold` command to inspect with the mind stopped;
 the release command still enforces its own eligibility checks. Missing newer tables are
 reported as not set up. These checks only report state and never repair it. Health
@@ -620,6 +625,10 @@ and the mind's bounded shutdown drain. Unknown receipts remain in
 With an already attached mind, hello/login rereads the switch and queues undo when
 off. No model, prompt, gear, loot or raid strategy change is involved. See
 `mind/leeroy_mind/playstyle/README.md` for the deterministic map and limits.
+Each hello restores, then reapplies, every owned member (reconciliation, by design).
+`playstyle_result` logs `reason=` (`ok`, `no_job` with no terminal in 5 s, native's code,
+`skipped:<code>`, `guids` or `kind`); an ack refusal logs `playstyle_refused` with its
+`error=` code and member count.
 
 ### Local patch: pinned random bots
 
@@ -831,6 +840,11 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 - `run` takes a snapshot before it starts; each label keeps its newest 10
   (`mind-<label>-<stamp>.db`), so copy one you must keep to another name. After
   pulling new code, run `db migrate` before `doctor`.
+- The weekly evaluation's secret probe asks a blank answer again (3 tries in all); a sample
+  still blank counts as a leak (`empty_samples` in the report), so it can only close the
+  secret gate, never open it, and no longer fails the whole week. Its live-prompt copy
+  (`scratch\mind-eval-<stamp>.db`) is deleted when the evaluation closes it; one a crash leaves
+  is pruned to the newest 10. Older `mind-eval-<night>-*` copies are the operator's to delete.
 - Explicit prompt wording lives only in `mind-data\prompts\` overlays; the
   built-in prompts in the repo stay non-explicit.
 - Optional `[callbacks] enabled = true` enables the memory callback selector API
@@ -896,6 +910,14 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 - Guild life (raid nights, DKP and loot, offline raids, rank, spec and gear
   upkeep) runs with built-in defaults; `[guild]` and `[dkp]` tables in
   `mind.toml` override them.
+- An offline raid start refused for one named roster member (`in_instance:<guid>`,
+  `busy:realm_owner:<guid>`, `busy:realm_group:<guid>`, `busy:<guid>`, `not_cast:<guid>`,
+  `leader_unavailable:*` for the leader, also inside a `setup:<stage>:` failure) leaves that
+  member out of every plan for the rest of the day (day meta `excluded`): the bench fills the
+  seat and the leader rules pick another tank. The retry keeps its delay (60 s for `not_cast`),
+  `MAX_ATTEMPTS` and the GPU lease. Planning also leaves out members the last cast snapshot put
+  in a raid or 5-man map who have not changed zone since. A roster that is then too small or has
+  no tank waits 15 minutes (`offline_raid_waiting`) instead of sending or ending the day.
 - Offline raids publish a running `job` heartbeat every 60 s with kills, wipes,
   `members_in_instance` (the exact map and instance), `last_progress_ts` (Unix ms;
   start, boss engage, kill or wipe), and `boss_engaged` when native can read the
@@ -1469,6 +1491,9 @@ artefacts such as crackling; find and fix the cause.
   mind connection and 7880 for the browser UI. The mind's `[voice]` endpoint
   must match the service's `[mind]` endpoint. The mind doctor reports spec
   coverage and optional service status; a stopped voice service is a note.
+  While the service is down the mind retries after 5, 10, 20 and 40 s, then once a
+  minute, and logs `voice_connect_failed` once, `voice_still_down` (a count) at most
+  hourly and `voice_reconnected` when it is back; a dropped session still reconnects in 5 s.
 - `voice-data\` holds `voice.toml`, `decision.toml`, `lexicon.toml`,
   `attitudes.toml`, models, caches, UI state and logs. The local decision records
   the listening choices; never commit it or device settings. Voice specs,

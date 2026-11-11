@@ -252,7 +252,8 @@ def test_a_healthy_install_is_all_ok_with_its_notes(rig):
         "mind-log": OK, "mind-critical": OK, "endpoint": OK, "console": OK, "voice": OK,
         "ollama": OK, "ollama-models": NOTE, "telemetry": OK, "realm-holds": OK, "unvoiced": OK,
         "offline-raid": OK, "guild-raids": OK, "night-failures": NOTE,
-        "evidence-cycles": OK, "selfie-queue": OK, "training-lab": OK}
+        "evidence-cycles": OK, "selfie-queue": OK, "realm-screen": OK, "weekly-eval": OK,
+        "secret-gate": OK, "offline-days": OK, "training-lab": OK}
     assert checks["server-log"].text == "Server.log: cast 111 members, pinned 111 (floor 100)"
     assert checks["mind"].text.startswith(f"mind: pid {MIND_PID} running (control.json names it)")
     assert "bridge_hello" in checks["mind-log"].text
@@ -270,11 +271,11 @@ def test_the_command_prints_one_line_each_or_json_and_exits_by_the_fails(rig, ca
     argv = ["--root", str(rig.root), "--data-dir", str(rig.data)]
     assert health.main(argv, probes=rig.probes()) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert len(lines) == 21 and lines[0].startswith("ok   authserver.exe running")
+    assert len(lines) == 25 and lines[0].startswith("ok   authserver.exe running")
     assert all(line[:5] in ("ok   ", "note ") for line in lines)
     assert health.main(argv + ["--json"], probes=rig.probes()) == 0
     out = json.loads(capsys.readouterr().out)
-    assert out["ok"] is True and len(out["checks"]) == 21
+    assert out["ok"] is True and len(out["checks"]) == 25
     assert out["checks"][0] == {"name": "authserver", "status": "ok",
                                 "text": out["checks"][0]["text"]}
     rig.servers = [s for s in rig.servers if s.image != "authserver.exe"]
@@ -958,9 +959,98 @@ def test_new_checks_on_an_empty_old_schema(tmp_path):
     with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
         for fn, args in [(health._offline_raid, (NOW,)), (health._guild_raids, (NOW,)),
                          (health._night_failures, (tmp_path, lambda p: open(p, "rb"))),
-                         (health._evidence_cycles, ()), (health._selfie_queue, (NOW,))]:
+                         (health._evidence_cycles, ()), (health._selfie_queue, (NOW,)),
+                         (health._weekly_eval, ()), (health._secret_gate, ()),
+                         (health._offline_days, (NOW,))]:
             result = fn(conn, *args)
             assert result.status == NOTE and "not set up" in result.text
+
+
+def realm_on(rig, blocklist="blockedword\n", guild={"guild": 50, "name": "Testguild", "at": 1.0}):
+    rig.write_toml("\n[realm]\nenabled = true\n")
+    if blocklist is not None:
+        (rig.data / "realm").mkdir(exist_ok=True)
+        (rig.data / "realm" / "blocklist.txt").write_text(blocklist, encoding="utf-8")
+    if guild is not None:
+        rig.db("INSERT INTO meta(key, value) VALUES ('realm:guild_name', ?)", (json.dumps(guild),))
+
+
+def test_the_realm_screen_is_checked_only_while_the_realm_is_on(rig):
+    assert readonly_check(rig, health._realm_screen, rig.data).text == "realm screen: the Realm is off in mind.toml"
+    realm_on(rig)
+    result = readonly_check(rig, health._realm_screen, rig.data)
+    assert result.status == OK and result.text == "realm screen: ready (blocklist and guild name)"
+    rig.write_toml("\n[realm]\nenabled = 3\n")
+    assert readonly_check(rig, health._realm_screen, rig.data).status == NOTE
+
+
+@pytest.mark.parametrize("blocklist, guild, says", [
+    (None, {"guild": 50, "name": "Testguild"}, ["blocklist.txt is missing"]),
+    ("# only a comment\n\n", {"guild": 50, "name": "Testguild"}, ["blocklist.txt has no entry"]),
+    ("word\n", None, ["guild name is not cached"]),
+    ("word\n", {"guild": 50, "name": "  "}, ["guild name is not cached"]),
+    ("word\n", {"guild": 0, "name": "Testguild"}, ["guild name is not cached"]),
+    (None, None, ["blocklist.txt is missing", "guild name is not cached"])])
+def test_a_realm_screen_that_cannot_be_ready_fails(rig, blocklist, guild, says):
+    realm_on(rig, blocklist=blocklist, guild=guild)
+    result = readonly_check(rig, health._realm_screen, rig.data)
+    assert result.status == FAIL and result.text.startswith("realm screen: the Realm is on in mind.toml")
+    assert all(part in result.text for part in says)
+    assert rig.run()["realm-screen"].status == FAIL
+
+
+def eval_result(rig, week, complete):
+    rig.db("INSERT INTO meta(key, value) VALUES (?, ?)", (f"nightly:eval-result:{week}", json.dumps(
+        {"complete": complete, "status": "complete" if complete else "partial", "requested_llm": True})))
+
+
+def test_the_newest_weekly_evaluation_incomplete_is_a_note(rig):
+    eval_result(rig, "2026-W44", True)
+    assert readonly_check(rig, health._weekly_eval).text == "weekly evaluation 2026-W44: complete"
+    eval_result(rig, "2026-W45", False)
+    result = readonly_check(rig, health._weekly_eval)
+    assert result.status == NOTE and result.text.startswith("weekly evaluation 2026-W45: incomplete")
+    rig.db("UPDATE meta SET value='not json' WHERE key='nightly:eval-result:2026-W45'")
+    assert readonly_check(rig, health._weekly_eval).status == NOTE
+    eval_result(rig, "2026-W46", True)
+    assert readonly_check(rig, health._weekly_eval).status == OK
+
+
+def test_an_empty_probe_run_is_a_note_only_while_a_secret_waits(rig):
+    assert readonly_check(rig, health._secret_gate).text == (
+        "secret probe: none run yet, and no secret is waiting on it")
+    insert_health_memory(rig, 1, [])
+    rig.db("UPDATE memory SET scope='secret' WHERE id=1")
+    result = readonly_check(rig, health._secret_gate)
+    assert result.status == NOTE and "probe_run is empty" in result.text
+    rig.db("INSERT INTO probe_run(ts, model, n, leaks, rate, details) VALUES (?, 'live', 36, 0, 0, '[]')",
+           (NOW - 86400,))
+    result = readonly_check(rig, health._secret_gate)
+    assert result.status == OK and result.text.startswith("secret probe: 1 run, newest ")
+
+
+def offline_day(rig, day, **state):
+    rig.db("INSERT INTO meta(key, value) VALUES (?, ?)", (f"guild:offline:day:{day}", json.dumps(
+        {"attempts": 8, "next_try": 0, "blocked": False} | state)))
+
+
+def test_offline_raids_blocked_on_each_of_the_last_three_days_is_a_note(rig):
+    from datetime import timedelta
+    today = datetime.fromtimestamp(NOW).date()
+    days = [(today - timedelta(days=n)).isoformat() for n in (1, 2, 3)]
+    offline_day(rig, days[0], blocked=True, refused="in_instance:363")
+    offline_day(rig, days[1], blocked=True, failed="setup:grouping:timeout")
+    assert readonly_check(rig, health._offline_days, NOW).status == OK  # two days are not three
+    offline_day(rig, days[2], blocked=True, refused="bad code with spaces")
+    result = readonly_check(rig, health._offline_days, NOW)
+    assert result.status == NOTE
+    assert (f"{days[0]} in_instance:363, {days[1]} setup:grouping:timeout, {days[2]} ?"
+            in result.text)
+    offline_day(rig, today.isoformat(), blocked=False)  # today is not a whole day yet
+    assert readonly_check(rig, health._offline_days, NOW).status == NOTE
+    rig.db("UPDATE meta SET value=? WHERE key=?", (json.dumps({"blocked": False, "accepted": 1}),
+                                                   f"guild:offline:day:{days[1]}"))
+    assert readonly_check(rig, health._offline_days, NOW).status == OK
 
 
 def test_new_check_json_matches_text_and_never_writes(rig, capsys):

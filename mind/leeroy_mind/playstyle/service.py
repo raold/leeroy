@@ -1,6 +1,7 @@
 """Bounded event-triggered style requests and retained cleanup receipts; native is authoritative."""
 import asyncio
 import json
+import re
 import tomllib
 import uuid
 
@@ -14,6 +15,29 @@ from . import style
 KEY = 'playstyle:owned'
 LIMIT = 512
 INSTANCE_MAPS = frozenset(map_id for map_id,boss_id in BOSS_NAMES) | frozenset(DUNGEONS)
+_CODE = re.compile(r'[A-Za-z0-9_:.,-]{1,64}')
+
+
+def _code(value):
+    """A native reason or error as a log code: at most 64 code characters, else '?'."""
+    text = str(value or '')[:64]
+    return text if _CODE.fullmatch(text) else '?'
+
+
+def _outcome(job, guids):
+    """'ok' when the job proves the request, else why not: no_job (no terminal in 5 s), kind,
+    native's reason (or the state), skipped:<the first skip's reason>, or guids."""
+    if job is None:
+        return 'no_job'
+    if job.kind!='bot_do':
+        return 'kind'
+    if job.state!='done' or job.reason:
+        return _code(job.reason or job.state)
+    if job.skipped:
+        return 'skipped:'+_code(getattr(job.skipped[0],'reason',''))
+    if set(job.guids)!=set(guids):
+        return 'guids'
+    return 'ok'
 
 
 def enabled(path):
@@ -136,14 +160,15 @@ class PlayStyles:
         try:
             ack = await self.app.bridge.send(BotDo(ident,tuple(guids),'restore' if restore else 'playstyle',param), preserve_id=True)
             if not ack.ok:
+                log('playstyle_refused',count=len(guids),restore=int(restore),error=_code(ack.error))
                 return False # keep prior/unknown ownership, even when this attempt was refused
             job = await self.jobs.wait(ident,5)
-            good = bool(job and job.kind=='bot_do' and job.state=='done' and not job.reason
-                        and not job.skipped and set(job.guids)==set(guids))
+            reason = _outcome(job,guids)
+            good = reason=='ok'
             if good and restore:
                 self.owned.difference_update(guids)
                 self.save()
-            log('playstyle_result',count=len(guids),restore=int(restore),ok=int(good))
+            log('playstyle_result',count=len(guids),restore=int(restore),ok=int(good),reason=reason)
             return good
         except Exception as exc:
             log('playstyle_transport',count=len(guids),error=type(exc).__name__)
