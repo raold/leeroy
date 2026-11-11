@@ -895,6 +895,12 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   prompt changes. `python -m leeroy_mind learn report --data-dir <data> --days 14`
   reads aggregate scores without migration, including on older schemas. Coverage,
   baseline units, caps and retry limits: `mind/leeroy_mind/learn/README.md`.
+  `[learn] coach = true` adds a reflection-model coaching stage after rewards,
+  at most 20 members with ten rewarded lines that day. Lessons stay proposed
+  unless `auto_lessons = true`; at most five are active per member and expire
+  after 14 days without reinforcement. `learn lessons [--guid N]` prints them
+  read-only. Private evidence produces private lessons; this stage does not yet
+  inject lessons into live talk. Restart after changing these switches.
 - Optional `[talk] realism = true` adds bounded typing cadence, rare corrections and
   small reply bursts; default off, read at mind start and each login. Mind-only:
   no migration or native rebuild. It preserves authored/altered-state typing,

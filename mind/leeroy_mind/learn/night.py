@@ -124,6 +124,8 @@ def attach(runner,data_dir,store=None):
         names = {s.name for s in runner.stages}
         runner.add_stage("rewards",stage_rewards,
                          after="signals" if "signals" in names else "threads",model=None)
+        from .coach import attach as attach_coach
+        attach_coach(runner,data_dir,store)
 
 
 async def stage_rewards(ctx):
