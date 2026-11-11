@@ -264,6 +264,101 @@ LEEROY_TEST(RealmCleanup_LeaveAckWintergraspPrecedesExternalClosures)
         std::string("wg_private_state_unavailable:302"));
 }
 
+LEEROY_TEST(RealmCleanup_GroupDepartureReadsTheStepsGroupRules)
+{
+    GroupDepartureFacts facts{true, false, false, 10, false, 10};
+    CHECK_EQ(GroupDepartureReason(facts), std::string{});
+    facts.leader = true;
+    CHECK_EQ(GroupDepartureReason(facts), std::string("shared_group_leader"));
+    facts.listed = false; // A group that no longer lists the member is not its departure.
+    CHECK_EQ(GroupDepartureReason(facts), std::string{});
+    facts = {true, false, false, 1, true, 1}; // Alone: leading nobody, disbanding nothing shared.
+    CHECK_EQ(GroupDepartureReason(facts), std::string{});
+    facts = {true, false, false, 10, false, 1}; // RemoveMember disbands on the linked count.
+    CHECK_EQ(GroupDepartureReason(facts), std::string("shared_group_cleanup"));
+    facts = {true, true, false, 2, false, 2};
+    CHECK_EQ(GroupDepartureReason(facts), std::string("shared_lfg_cleanup"));
+    facts = {true, true, true, 1, false, 1}; // A shared LFG queue comes first, even alone.
+    CHECK_EQ(GroupDepartureReason(facts), std::string("shared_lfg_queue"));
+    facts = {true, true, false, 5, true, 1}; // Leadership precedes the other cleanups.
+    CHECK_EQ(GroupDepartureReason(facts), std::string("shared_group_leader"));
+    for (auto reason : {"shared_lfg_queue", "shared_group_leader", "shared_lfg_cleanup", "shared_group_cleanup"})
+        CHECK(IsGroupDepartureReason(reason));
+    for (auto reason : {"", "shared_lfg_proposal", "wg_private_state_unavailable", "shared_group_leader:1306"})
+        CHECK(!IsGroupDepartureReason(reason));
+}
+
+LEEROY_TEST(RealmCleanup_LeaveAckNamesTheBattlegroundLeaders)
+{
+    // 2026-11-10: guid 1306 led a battleground raid; the leave moved others and then stranded all.
+    CHECK_EQ(LeavePvpAckError({{301, {}}, {1306, {}, {1306}, "shared_group_leader"}, {303, {}},
+        {304, {}, {304}, "shared_group_leader"}}), std::string("shared_group_leader:1306,304"));
+    CHECK(LeavePvpAckError({{301, {}, {301}}, {302, {}, {302}, ""}}).empty());
+}
+
+LEEROY_TEST(RealmCleanup_LeaveAckPrecedenceIsWintergraspClosureThenGroups)
+{
+    WintergraspMemberFacts tainted;
+    tainted.inWar = true;
+    LeavePvpMemberFacts const leader{301, {}, {301}, "shared_group_leader"};
+    LeavePvpMemberFacts const outside{302, {}, {302, 999}};
+    LeavePvpMemberFacts const war{303, tainted, {303}};
+    LeavePvpMemberFacts const lastLinked{304, {}, {304}, "shared_group_cleanup"};
+    CHECK_EQ(LeavePvpAckError({leader, outside, war, lastLinked}), std::string("wg_private_state_unavailable:303"));
+    CHECK_EQ(LeavePvpAckError({leader, outside, lastLinked}), std::string("cleanup_member_not_admitted:302"));
+    CHECK_EQ(LeavePvpAckError({lastLinked, leader}), std::string("shared_group_leader:301"));
+    CHECK_EQ(LeavePvpAckError({lastLinked}), std::string("shared_group_cleanup:304"));
+    // One reason per error, in GroupDepartureReason's order; the retry without them meets the next.
+    CHECK_EQ(LeavePvpAckError({{305, {}, {305}, "shared_lfg_cleanup"}, lastLinked, {306, {}, {306}, "shared_lfg_queue"}}),
+        std::string("shared_lfg_queue:306"));
+}
+
+LEEROY_TEST(RealmCleanup_LeaveAckGroupNamesAreBoundedWholeGuids)
+{
+    std::vector<LeavePvpMemberFacts> many;
+    for (std::uint32_t guid = 4000000000u; guid < 4000000150u; ++guid)
+        many.push_back({guid, {}, {guid}, "shared_group_leader"});
+    auto const error = LeavePvpAckError(many);
+    CHECK(error.size() <= 256 && error.size() > 240);
+    CHECK(error.rfind("shared_group_leader:4000000000,4000000001,", 0) == 0);
+    CHECK(error.back() != ',');
+    CHECK_EQ(LeavePvpAckError({many.front()}), std::string("shared_group_leader:4000000000"));
+    many.clear();
+    for (std::uint32_t guid = 1000; guid < 1100; ++guid) many.push_back({guid, {}, {guid}, "shared_group_cleanup"});
+    auto const short_ = LeavePvpAckError(many);
+    CHECK(short_.size() <= 256 && short_.size() > 200 && short_.rfind("shared_group_cleanup:1000,1001,", 0) == 0);
+}
+
+LEEROY_TEST(RealmCleanup_StepSkipsOnlyAMemberNothingInTheJobTouched)
+{
+    for (auto reason : {"shared_lfg_queue", "shared_group_leader", "shared_lfg_cleanup", "shared_group_cleanup"})
+    {
+        CHECK(SkipsLeaveMember(reason, false, false));
+        CHECK(!SkipsLeaveMember(reason, true, false));  // Its own step already left a queue or a map.
+        CHECK(!SkipsLeaveMember(reason, false, true));  // An earlier member's shared cleanup changed it.
+        CHECK(!SkipsLeaveMember(reason, true, true));
+    }
+    // Every other refusal keeps the old rule: refused before any change, else unproved.
+    for (auto reason : {"wg_private_state_unavailable", "busy:raid_owner", "battleground_group_changed",
+        "shared_lfg_proposal", "leave_cleanup_unproved", ""})
+        CHECK(!SkipsLeaveMember(reason, false, false));
+}
+
+LEEROY_TEST(RealmCleanup_ASkipLeavesTheOthersOutcomeNormal)
+{
+    // 301 left, 1306 (a battleground leader) was skipped, 303 left: the job holds and reads back
+    // 301 and 303 alone, and a later closure that reaches the skipped body is no longer admitted.
+    std::vector<std::uint32_t> const manifest{301, 1306, 303};
+    CHECK(LeaveMembers(manifest, {}) == manifest);
+    CHECK((LeaveMembers(manifest, {1306}) == std::vector<std::uint32_t>{301, 303}));
+    CHECK((LeaveMembers(manifest, {}, 303) == std::vector<std::uint32_t>{301, 1306}));
+    CHECK((LeaveMembers(manifest, {1306}, 303) == std::vector<std::uint32_t>{301}));
+    CHECK(LeaveMembers({1306}, {1306}).empty());
+    CHECK(ValidateCleanupClosure({303}, LeaveMembers(manifest, {1306}), Valid).empty());
+    CHECK_EQ(ValidateCleanupClosure({303, 1306}, LeaveMembers(manifest, {1306}), Valid),
+        std::string("cleanup_member_not_admitted"));
+}
+
 LEEROY_TEST(RealmCleanup_OnlyAnOrdinaryLeaveIsFencedAtItsAck)
 {
     CHECK(FencesLeavePvpAck("leave_pvp", ""));

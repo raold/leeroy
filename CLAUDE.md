@@ -1375,14 +1375,23 @@ Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
   has none, as that poll would. Any other failed job (`operation_transition_unknown`, a walk,
   leave, duel or grow) stays unknown unless its event carries `changed: false` (below; any ordinary
   kind can carry it, and a grow refused that way goes on to its next attempt): an ordinary leave's
-  `wg_private_state_unavailable` (a member in Wintergrasp), or `cleanup_member_not_admitted`
-  (a member's cleanup roster reaches outside the manifest), is refused whole at its ack, before
-  any body is reserved or moved. Wintergrasp takes precedence. `LeavePvpAckError` names as many
+  `wg_private_state_unavailable` (a member in Wintergrasp), `cleanup_member_not_admitted`
+  (a member's cleanup roster reaches outside the manifest), or a group departure reason
+  (`shared_group_leader`, `shared_group_cleanup`, `shared_lfg_queue`, `shared_lfg_cleanup`: a
+  member who leads its battleground or battlefield group, or whose leaving would disband it), is
+  refused whole at its ack, before any body is reserved or moved. Wintergrasp takes precedence, then
+  cleanup, then the group reasons, one reason per error. `LeavePvpAckError` names as many
   manifest members as fit in 256 characters, at least one, as `<reason>:<guid,...>`; cleanup names
   the members whose rosters reach outside, not the outsiders, using the step's roster readers.
-  The mind accepts either only for an ordinary leave when the names are distinct manifest members,
+  The mind accepts any of them only for an ordinary leave when the names are distinct manifest members,
   settles it refused and holds nobody. Recall backs off those members for 600 s and recalls the rest
-  as a new command; every such retry strictly shrinks its manifest. The same reason from the job
+  as a new command; every such retry strictly shrinks its manifest. A member that turns into a
+  group departure case only at its own step, while nothing in the job has touched its body, is
+  skipped instead (2026-11-10: one battleground raid leader made a 143-member recall fail after
+  others had moved, and native kept all 143): native ends that member's lease alone, goes on with
+  the others, and the terminal `realm_job` lists it in `skipped`; the mind settles a done leave as
+  usual and backs the skipped members off for 600 s (evidence `skipped_at`), and Recall rearms and
+  defaults only the rest. Any other reason from the job
   is a Refuse only until that leave has changed a body. A failed `realm_job` may now carry
   `changed: false`: native proved the entire job changed no body or cleanup state and released
   it, including all earlier members and pending steps. A cleanup-closure refusal before any

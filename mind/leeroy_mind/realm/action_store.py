@@ -54,12 +54,19 @@ STEP_REFUSAL_KINDS = frozenset({"rearm", "rpg_status", "equip", "set_profession"
 # empties them until the 60 s poll finds the body online and free. After a swap it says
 # weapon_record_unproved instead, which stays unknown.
 KIND_STEP_REFUSALS = {"rearm": frozenset({"weapon_record_unavailable"})}
-# A leave_pvp with private Wintergrasp state or cleanup outside its manifest is refused whole at
-# its ack (LeavePvpAckError), before any body is reserved or moved, and the error names them:
-# "wg_private_state_unavailable:301,302". It is accepted only when every named guid is in the root's
-# manifest. The same reason from its job, after earlier members may have changed, stays unknown.
+# A leave_pvp with private Wintergrasp state, cleanup outside its manifest, or a member who cannot
+# leave its battleground group alone (it leads it, or leaving would disband it: native's
+# GroupDepartureReason) is refused whole at its ack (LeavePvpAckError), before any body is reserved
+# or moved, and the error names them: "wg_private_state_unavailable:301,302", "shared_group_leader:1306".
+# It is accepted only when every named guid is in the root's manifest. The same reason from its
+# job, after earlier members may have changed, stays unknown.
 WG_REFUSAL = "wg_private_state_unavailable"
-LEAVE_REFUSALS = frozenset({WG_REFUSAL, "cleanup_member_not_admitted"})
+GROUP_REFUSALS = frozenset({"shared_group_leader", "shared_group_cleanup", "shared_lfg_queue", "shared_lfg_cleanup"})
+LEAVE_REFUSALS = frozenset({WG_REFUSAL, "cleanup_member_not_admitted", *GROUP_REFUSALS})
+# A member whose group the leave's step finds it cannot leave alone, before anything in the job
+# touched it, is skipped instead: native ends its lease alone, takes the others out, and the done
+# job names it ("skipped"). It is backed off as a named refusal is, for this long after.
+BACKOFF_S = 600
 
 
 def leave_refusal_guids(error, manifest=None):
@@ -70,6 +77,22 @@ def leave_refusal_guids(error, manifest=None):
     named = tuple(int(g) for g in rest.split(","))
     if len(set(named)) != len(named) or manifest is not None and not set(named) <= set(manifest): return None
     return named
+
+
+def leave_skipped_guids(r):
+    """The members a completed ordinary leave skipped: native left them as they were, no longer
+    holds them, and took the others out. () for any other root."""
+    if (r.role != "root" or r.policy != "ordinary" or r.kind != "leave_pvp"
+            or r.state != "completed" or r.result_ok is not True):
+        return ()
+    return tuple(json.loads(r.evidence).get("job", {}).get("skipped", ()))
+
+
+def skipped_backoff(r, now):
+    """A completed leave's skipped members while they are backed off: a leave naming one is
+    rejected, so the recall leaves them out as it does a named refusal's."""
+    at = json.loads(r.evidence).get("skipped_at")
+    return leave_skipped_guids(r) if at is not None and now < at + BACKOFF_S else ()
 
 
 STEP_REFUSED = "step_refused"
@@ -146,12 +169,16 @@ def _rank(owner, rank):
 
 
 def _evidence(ev):
+    # A receipt without native's newer fields is stored as before, so older minds can read it.
     return {k: v for k, v in asdict(ev).items() if k not in {"id", "ts"}
-            and not (type(ev) is p.RealmJob and k == "changed" and v is None)}
+            and not (type(ev) is p.RealmJob and (k == "changed" and v is None or k == "skipped" and not v))}
 
 
 def _realm_job(value, command_id):
     if type(value) is not dict: raise ValueError("invalid action evidence")
+    if "skipped" in value:
+        if type(value["skipped"]) is not list or not value["skipped"]: raise ValueError("invalid action evidence")
+        value = {**value, "skipped": tuple(value["skipped"])}
     ev = p.RealmJob(ts=0, id=command_id, **value)
     text(ev.reason, 0, 256)
     if ev.state == "done" and ev.reason: raise ValueError("invalid success reason")
@@ -287,7 +314,7 @@ class ActionStore:
         if type(ev) is not dict or document(ev, limit=32768) != r.evidence: raise ValueError("invalid action evidence")
         allowed = {"ack", "job", "bot", "enrollment_job", "origin_failure", "status", "binding", "query_id",
                    "last_query", "cleanup_id", "cleanup_ids", "cleanup_admitted", "canceled", "dispatch_revision", "conflict", "failed_at",
-                   "abandoned"}
+                   "abandoned", "skipped_at"}
         if not set(ev) <= allowed: raise ValueError("invalid action evidence keys")
         if legacy and not set(ev) <= {"ack", "conflict", "failed_at"}:
             raise ValueError("invalid historical announcement evidence")
@@ -298,6 +325,9 @@ class ActionStore:
             if ack["ok"] and ack["error"]: raise ValueError("invalid action ack")
         for key in ("job", "enrollment_job", "origin_failure"):
             if key in ev and _realm_job(ev[key], r.command_id).kind != r.kind: raise ValueError("invalid action job kind")
+            if key in ev and "skipped" in ev[key] and (key != "job" or r.policy != "ordinary" or r.kind != "leave_pvp"
+                                                       or not set(ev[key]["skipped"]) <= set(r.reserved_manifest)):
+                raise ValueError("invalid skip receipt")
         if "bot" in ev: _bot(ev["bot"], r.command_id)
         if "status" in ev: _status(ev["status"], r.command_id)
         for key in ("query_id", "cleanup_id"):
@@ -308,6 +338,10 @@ class ActionStore:
                 for command_id in ev[key]: identity(command_id)
         if "last_query" in ev: _now(ev["last_query"])
         if "failed_at" in ev: _now(ev["failed_at"])
+        if "skipped_at" in ev:
+            _now(ev["skipped_at"])
+            if (r.role != "root" or r.policy != "ordinary" or r.kind != "leave_pvp"
+                    or not ev.get("job", {}).get("skipped")): raise ValueError("invalid skip receipt")
         if "abandoned" in ev:
             _now(ev["abandoned"])
             if r.role != "root" or r.policy not in {"ordinary", "defaults"}: raise ValueError("invalid abandonment")
@@ -443,6 +477,12 @@ class ActionStore:
             evidence = json.loads(r.evidence)
             evidence.setdefault("failed_at", r.updated)
             r = replace(r, evidence=document(evidence, limit=32768))
+        skipped = leave_skipped_guids(r)
+        if skipped and "skipped_at" not in json.loads(r.evidence):
+            # When native skipped them: the start of their backoff, kept by a later contradiction too.
+            r = replace(r, evidence=document({**json.loads(r.evidence), "skipped_at": r.updated}, limit=32768))
+            log.info("realm_leave_skipped id=%s kind=%s skipped=%d members=%d",
+                     r.command_id, r.kind, len(skipped), len(r.reserved_manifest))
         self._validate(r, stored=True)
         if r.role == "root" and r.state in {"unknown", "conflict"}:
             before = self.conn.execute("SELECT state FROM realm_action WHERE seq=?", (r.seq,)).fetchone()
@@ -491,7 +531,7 @@ class ActionStore:
             if len(self.unresolved()) >= 128: raise ActionCapacity("realm action capacity")
             roots = tuple(r for r in self.records() if r.role == "root")
             reserved_history = sum(r.state not in TERMINAL or r.result_ok is False and "failed_at" in json.loads(r.evidence)
-                and now < json.loads(r.evidence)["failed_at"] + 600 for r in roots)
+                and now < json.loads(r.evidence)["failed_at"] + 600 or bool(skipped_backoff(r, now)) for r in roots)
             if reserved_history >= 256: raise ActionCapacity("realm backoff history capacity")
             if self.get(spec.command_id) is not None: raise ValueError("action identity already enrolled")
             return self._insert(spec, now)
@@ -640,10 +680,13 @@ class ActionStore:
     def observe_realm_job(self, ev, *, now):
         if type(ev) is not p.RealmJob: return Transition(False)
         integer(ev.ts, 0, 0x7FFFFFFFFFFFFFFF)
-        now = _now(now); incoming = _evidence(ev); _realm_job(incoming, ev.id)
+        now = _now(now); incoming = json.loads(document(_evidence(ev), limit=32768)); _realm_job(incoming, ev.id)
         with self.conn:
             old = self.get(ev.id)
             if old is None or old.transport_state == "not_entered" or old.kind != ev.kind or old.policy in {"ack", "query", "defaults"}: return Transition(False)
+            # Only an ordinary leave skips members, and only members of its own manifest.
+            if ev.skipped and (old.policy != "ordinary" or old.kind != "leave_pvp"
+                               or not set(ev.skipped) <= set(old.reserved_manifest)): return Transition(False)
             data = json.loads(old.evidence)
             if old.policy == "wg":
                 if not ev.pvp_owner or ev.guid != 0 or ev.state == "done" and not 1 <= ev.value <= len(old.reserved_manifest): return Transition(False)
@@ -861,7 +904,8 @@ class ActionStore:
     def _prune(self, keep=256, now=None):
         roots = tuple(r for r in self._records("role='root' AND state IN ('completed','not_sent')") if not _durable(r))
         protected = {r.command_id for r in roots if r.result_ok is False and "failed_at" in json.loads(r.evidence)
-                     and (now is None or now < json.loads(r.evidence)["failed_at"] + 600)}
+                     and (now is None or now < json.loads(r.evidence)["failed_at"] + 600)
+                     or leave_skipped_guids(r) and (now is None or skipped_backoff(r, now))}
         newest = sorted((r for r in roots if r.command_id not in protected), key=lambda r: (r.updated, r.seq), reverse=True)
         retain = protected | {r.command_id for r in newest[:max(0, keep-len(protected))]}
         remove = tuple(r for r in roots if r.command_id not in retain)

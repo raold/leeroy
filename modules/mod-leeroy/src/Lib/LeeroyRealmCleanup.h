@@ -7,6 +7,7 @@
 #include <functional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Leeroy::Realm
@@ -37,19 +38,48 @@ struct WintergraspMemberFacts
 std::string WintergraspPrivateReason(WintergraspMemberFacts const& facts);
 // Only an ordinary leave_pvp (no token cleanup) is fenced at its ack.
 bool FencesLeavePvpAck(std::string const& kind, std::string const& pvpOwner);
+
+// What a leave_pvp step reads of the battleground or battlefield group a member is in, before it
+// takes the member out. Leaving would change the rest of that group when the member leads it,
+// when its LFG queue is shared, or when the native removal would disband it.
+struct GroupDepartureFacts
+{
+    bool listed = false;         // the group lists this member
+    bool lfg = false;            // it is also an LFG group
+    bool lfgBusy = false;        // its LFG state is queued, role check, proposal or boot
+    std::uint32_t members = 0;   // roster size
+    bool leader = false;
+    std::uint32_t linked = 0;    // members linked to an online player (RemoveMember counts these)
+};
+// Empty, or one of shared_lfg_queue, shared_group_leader, shared_lfg_cleanup, shared_group_cleanup,
+// checked in that order.
+std::string GroupDepartureReason(GroupDepartureFacts const& facts);
+bool IsGroupDepartureReason(std::string_view reason);
+// The step's answer for a member that cannot leave its group alone. Skip it (end its lease, take
+// the others out) only while nothing in this job has touched its body: its own step changed
+// nothing, and no earlier member's shared cleanup changed it. Otherwise the step stays unproved.
+bool SkipsLeaveMember(std::string_view reason, bool stepChanged, bool touchedByCleanup);
+// The members a leave still holds: its manifest without the members it skipped, nor `skipping`.
+std::vector<std::uint32_t> LeaveMembers(std::vector<std::uint32_t> const& manifest,
+    std::vector<std::uint32_t> const& skipped, std::uint32_t skipping = 0);
+
 struct LeavePvpMemberFacts
 {
     std::uint32_t guid;
     WintergraspMemberFacts wintergrasp;
     // Exact affected rosters read by the step's cleanup producers, including this member.
     std::vector<std::uint32_t> cleanupMembers = {};
+    // GroupDepartureReason for the battleground or battlefield group the step would see, or empty.
+    std::string groupDeparture = {};
 };
 // The ack error for a leave whose members include some in a Wintergrasp state: the reason and
 // the first offending guids that fit (the whole error stays within the mind's 256 characters), as
 // "wg_private_state_unavailable:301,302". Empty when no member is. The mind accepts it as a
 // refusal only when every named guid is in the command's manifest. Wintergrasp takes precedence;
-// otherwise name manifest members whose cleanup reaches outside it, using
-// "cleanup_member_not_admitted:<guid,...>" and the same bound.
+// then name manifest members whose cleanup reaches outside it, using
+// "cleanup_member_not_admitted:<guid,...>"; then the members who cannot leave their battleground
+// group alone, under the first group departure reason any has ("shared_group_leader:1306"), all
+// with the same bound.
 std::string LeavePvpAckError(std::vector<LeavePvpMemberFacts> const& members);
 
 struct GroupCleanupPlan
