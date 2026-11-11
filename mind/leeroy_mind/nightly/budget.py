@@ -64,6 +64,7 @@ UNIT_CALLS: dict[str, dict[str, float]] = {
     # Reserve 2 s per unit in JSON equivalents; no generation call. This conservative
     # allowance includes the measured ~0.012 s lexical path and unmeasured embedding cost.
     "rewards": {"json": 0.1},
+    "bandit": {},
     "encounters": {"json": 2},                # scene generation and one judge batch
     "confide": {"json": 1.1},
     "arc": {"json": 1.5},                     # a read of what he said to her (arc/night.py)
@@ -102,7 +103,7 @@ MEASURE_MIN = 3     # ...once there are 3 of them
 COUNTERS: dict[str, Callable[["NightContext"], int]] = {}
 # Optional extensions must be admitted on the particular runner before budgeting.
 # Core counters may belong to substages, so their historical counting is unchanged.
-EXTENSION_STAGES = frozenset({"coach", "realm", "photo", "selfies", "scenes", "snaps", "claims", "newcomers", "signals", "rewards"})
+EXTENSION_STAGES = frozenset({"coach", "realm", "photo", "selfies", "scenes", "snaps", "claims", "newcomers", "signals", "rewards", "bandit"})
 
 
 def register_counter(stage: str, fn: Callable[["NightContext"], int]) -> None:

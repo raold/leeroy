@@ -895,6 +895,11 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   prompt changes. `python -m leeroy_mind learn report --data-dir <data> --days 14`
   reads aggregate scores without migration, including on older schemas. Coverage,
   baseline units, caps and retry limits: `mind/leeroy_mind/learn/README.md`.
+- Optional `[learn] bandit = true` (also needs `enabled`) attaches model-free arm
+  credit after rewards. `freeze`, `frozen_members` and `frozen_families` veto learning
+  or selection; restart after edits. `python -m leeroy_mind learn arms` inspects
+  posteriors/shares read-only. Live arm selection remains for the learning wiring
+  task; this switch alone changes no prompt. Parameters contain no instruction text.
 - Optional `[talk] realism = true` adds bounded typing cadence, rare corrections and
   small reply bursts; default off, read at mind start and each login. Mind-only:
   no migration or native rebuild. It preserves authored/altered-state typing,
