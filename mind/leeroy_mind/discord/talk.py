@@ -268,7 +268,8 @@ class DiscordTalk:
         oldest first, each on one line (fold), deleted messages left out."""
         rows = conn.execute(
             "SELECT author, text FROM discord_message WHERE channel = ? AND thread IS ? "
-            "AND deleted IS NULL AND id != ? ORDER BY id DESC LIMIT ?",
+            "AND deleted IS NULL AND id != ? "
+            "AND (turn IS NULL OR substr(turn,1,19)!='realism_correction:') ORDER BY id DESC LIMIT ?",
             (channel, thread, exclude, limit)).fetchall()
         return [f"{self._name(a)}: {fold(t)}" for a, t in reversed(rows)]
 
