@@ -128,7 +128,7 @@ Each call sees the best and worst three exchanges in that member's most-observed
 room, with the owner's preceding line and bounded recent context. It never mixes
 rooms or game and Discord text. Whispers and DMs contain only that member/owner
 pair and can produce only whisper lessons; group/voice evidence only group
-lessons. Officer and unsupported channels are excluded. An exchange without an
+lessons. Officer, private/unknown voice rooms and unsupported channels are excluded. An exchange without an
 identifiable recent owner line is omitted. Choosing one room per night is a
 deliberate privacy boundary; other rooms may be coached on later nights.
 

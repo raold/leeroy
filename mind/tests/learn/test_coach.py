@@ -52,7 +52,7 @@ def exchanges(ctx,guid=101,channel='guild',n=10,offset=0):
 
 
 @pytest.mark.parametrize('channel,scope',[('guild','guild'),('discord:general','guild'),('whisper','whisper'),
-                                        ('dm:101','whisper'),('party','group'),('voice:room','group')])
+                                        ('dm:101','whisper'),('party','group'),('voice:guild_hall','group')])
 def test_fake_model_proposes_scoped_lesson_once_without_logging_content(context,store,clock,tmp_path,caplog,channel,scope):
     enabled(tmp_path)
     async def go():
@@ -95,7 +95,8 @@ def test_schema_rejects_injected_keys_attestation_and_excess_output():
             check_schema(shape,response)
 
 
-@pytest.mark.parametrize('channel',['officer','discord:officers','discord:unknown-room'])
+@pytest.mark.parametrize('channel',['officer','discord:officers','discord:unknown-room',
+                                   'voice:officers','voice:private1','voice:unknown'])
 def test_restricted_rooms_supply_no_coaching_content(context,tmp_path,channel):
     enabled(tmp_path)
     async def go():

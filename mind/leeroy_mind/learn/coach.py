@@ -6,6 +6,7 @@ from leeroy_mind.logs import log
 from leeroy_mind.nightly.budget import register_counter
 from leeroy_mind.nightly.llm import schema, check_schema, ReflectionError
 from leeroy_mind.storage.provenance import paired
+from leeroy_mind.voice.rooms import BY_ID,PRIVATE
 from .config import load_learn_config
 from . import lessons
 
@@ -52,6 +53,9 @@ def response_schema(has_arms):
 
 def scope(channel):
     if is_restricted(channel):
+        return None
+    if channel.startswith('voice:') and (channel.removeprefix('voice:') not in BY_ID or
+            channel.removeprefix('voice:') in (*PRIVATE,'officers','interview','penalty_box')):
         return None
     if channel == 'whisper' or is_discord(channel) and is_private(channel):
         return 'whisper'
