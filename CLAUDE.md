@@ -833,10 +833,10 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 - Do not run `personas generate`/`seed` or a library build while the mind is
   live: they load another large model next to the live one and evict it.
 - Optional `[learn] enabled = true` records generation recipes in a savepoint
-  alongside outgoing chat and attaches the capped, model-free `rewards` night stage.
+  alongside outgoing chat and attaches the capped `rewards` night stage.
   Read at startup: restart the mind after changing it. Missing/invalid settings
-  mean off; signals remain separately opt-in. With signals off (including a CLI
-  night without screening), game rewards stay pending. Discord scores explicit
+  mean off; signals remain separately opt-in. Rewards screen game quality independently of the signals cap, including CLI nights,
+  after the 120-second observation window. Discord and voice rooms score measured
   evidence only. Later evidence updates scores; raw values and local-day cap
   weights are stored separately, with independent game/Discord caps. Owner
   vetoes and fixed penalties override positive engagement. No talk decision or

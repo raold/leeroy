@@ -84,7 +84,7 @@ def decayed(value, *, age_seconds):
     return value * 2 ** (-max(0., age_seconds) / (HALF_LIFE_DAYS * DAY))
 
 
-def reward(conn, line_id, *, now=None, schema_available=None, local_at=None) -> Reward:
+def reward(conn, line_id, *, now=None, schema_available=None, local_at=None, screening=None) -> Reward:
     now = time.time() if now is None else now
     if type(now) not in (int, float) or not math.isfinite(now) or now < 0:
         raise ValueError("invalid_reward_time")
@@ -104,6 +104,11 @@ def reward(conn, line_id, *, now=None, schema_available=None, local_at=None) -> 
     observed, baselines = _metrics(signals), _baseline(conn, line_id, ts, channel)
     parts = {"available": 1., "explicit": explicit, "engagement_measured": float(len(observed)),
              "evidence_count": float(len(raw))}
+    if screening is not None:
+        # Fresh shared screening replaces historical judge observations, without
+        # pretending they are new external evidence or an actual live guard.
+        raw = {key:value for key,value in raw.items() if key[1] != "judge"}
+        raw.update({(key,"judge"):1. for key in screening})
     normalized = []
     for key in METRICS:
         samples = baselines[key]
@@ -119,7 +124,7 @@ def reward(conn, line_id, *, now=None, schema_available=None, local_at=None) -> 
                         signals.get("emote_romantic", 0.) - signals.get("emote_rude", 0.)))
     # A missing detector hit is not evidence of a clean line. The completed signals
     # receipt proves bounded screening only on that stage's supported, non-skipped rows.
-    screened = channel in GAME_SCREENED and chars <= 4000 and conn.execute(
+    screened = screening is not None or channel in GAME_SCREENED and 0 < chars <= 4000 and conn.execute(
         "SELECT 1 FROM night_step WHERE stage='signals' AND unit=? AND finished<=? LIMIT 1",
         (str(line_id), now)).fetchone() is not None
     recipe = conn.execute("SELECT guard_verdict FROM talk_recipe WHERE line_id=?", (line_id,)).fetchone()
@@ -133,7 +138,14 @@ def reward(conn, line_id, *, now=None, schema_available=None, local_at=None) -> 
     penalties = (signals.get("muted", 0.) + .5 * signals.get("dial_down", 0.) +
                  .5 * signals.get("nudged_against", 0.) + .1 * signals.get("ignored", 0.))
     components = dict(explicit=explicit, engagement=engagement, emote=emote, quality=quality)
-    total = sum(weights.values[k] * v for k, v in components.items()) - penalties
+    quality_measured = bool(screened or actual_guard or any(source=="judge" for _,source in raw))
+    measured = dict(explicit=("explicit","explicit") in raw,
+                    engagement=bool(normalized),
+                    emote=any(key in signals for key in ("emote_friendly","emote_romantic","emote_rude")),
+                    quality=quality_measured)
+    measured_weight = sum(weights.values[k] for k in components if measured[k])
+    total = (sum(weights.values[k] * v for k,v in components.items() if measured[k]) /
+             measured_weight if measured_weight else 0.) - penalties
     if explicit < 0:
         total = min(total, -.40)  # the owner's veto is outside editable weights
     # Naive local timestamps use the OS zone's offset at midnight, including a
@@ -148,7 +160,9 @@ def reward(conn, line_id, *, now=None, schema_available=None, local_at=None) -> 
     factor = MEMBER_DECAY ** rank
     # Raw evidence is independent of volume; consumers choose how to apply the cap.
     value = max(-1., min(1., total))
-    parts.update(components, quality_measured=float(bool(screened or actual_guard)),
+    parts.update(components, quality_measured=float(quality_measured),
+                 explicit_measured=float(measured["explicit"]),emote_measured=float(measured["emote"]),
+                 measured_weight=measured_weight,
                  detector_hits=hits, guard_penalty=guard_penalty, penalties=penalties,
                  member_day_rank=float(rank), member_decay=factor, unclipped=total)
     return Reward(value, parts, weights.version, factor)

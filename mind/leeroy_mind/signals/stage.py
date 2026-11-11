@@ -37,6 +37,47 @@ def _count(ctx):
 register_counter('signals', _count)
 
 
+def context_for(conn, row):
+    """Reciprocal directed adjacency, with the original channel and time fences."""
+    context = conn.execute('SELECT id,ts,from_guid,to_guid,text FROM chat_line '
+        'WHERE thread_id=? AND channel=? AND id<? AND ts BETWEEN ? AND ? '
+        'ORDER BY ts DESC,id DESC LIMIT 16', (row['thread_id'],row['channel'],row['id'],
+            row['ts']-300,row['ts'])).fetchall() if row['thread_id'] else []
+    parent = context[0] if context and row['to_guid']>0 and (
+        row['to_guid']==context[0]['from_guid'] and row['from_guid']==context[0]['to_guid']) else None
+    return context,parent
+
+
+def screen_row(conn, row, *, guards, claims, facts, context, parent, vectors):
+    """Shared historical quality screening. Caller owns the read snapshot, no writes."""
+    channel = row["channel"]
+    draft = Draft(row['from_guid'], 'game' if channel in GAME else channel, row['text'],
+        parent_id=parent['id'] if parent else None,
+        thread_ids=tuple(r['id'] for r in context) if parent else (),
+        embedding=vectors.get(row['id']), to_guid=row['to_guid'],
+        room=channel if channel in GAME else '', now=row['ts'], map=row['map'], zone=row['zone'],
+        line_id=row['id'])
+    # review is the read-only single-candidate adapter over task12's pure helpers.
+    # Its history, private-audience and first_seen fences also apply to these hits.
+    stores = GuardStores(conn, GuardsCfg(enabled=True, semantic_enabled=guards.semantic_enabled),
+                         claims_enabled=claims, vectors=vectors, facts=facts)
+    detected = review(stores, draft)
+    verdict = review(replace(stores, config=guards), draft) if guards.enabled else None
+    kinds = []
+    if REPETITION.intersection(detected.codes):
+        kinds.append('judge_repetition')
+    if RELEVANCE.intersection(detected.codes):
+        kinds.append('judge_nonsequitur')
+    if 'claim_conflict' in detected.codes:
+        kinds.append('judge_contradiction')
+    if WORLD.intersection(detected.codes):
+        kinds.append('judge_unawareness')
+    if verdict is not None and verdict.action in ('rewrite', 'drop', 'react'):
+        kinds.append('judge_guard_' + verdict.action)
+
+    return tuple(kinds)
+
+
 async def stage_signals(ctx):
     conn = ctx.store.conn
     config_path = ctx.settings.data_dir / 'mind.toml'
@@ -66,12 +107,7 @@ async def stage_signals(ctx):
             # Complete every read snapshot before yielding to embeddings: Capture has
             # its own WAL writer and may commit while this coroutine is suspended.
             with ctx.store.transaction():
-                context = conn.execute('SELECT id,ts,from_guid,to_guid,text FROM chat_line '
-                    'WHERE thread_id=? AND channel=? AND id<? AND ts BETWEEN ? AND ? '
-                    'ORDER BY ts DESC,id DESC LIMIT 16', (row['thread_id'], channel, row['id'],
-                        row['ts'] - 300, row['ts'])).fetchall() if row['thread_id'] else []
-            parent = context[0] if context and row['to_guid'] > 0 and (
-                row['to_guid'] == context[0]['from_guid'] and row['from_guid'] == context[0]['to_guid']) else None
+                context, parent = context_for(conn,row)
             vectors = {}
             if claims or guards.semantic_enabled:
                 selected = [row, *(context if parent else [])]
@@ -79,30 +115,9 @@ async def stage_signals(ctx):
                 if len(embedded) != len(selected):
                     raise ValueError('signal_embedding_count')
                 vectors = {r['id']: vector for r, vector in zip(selected, embedded, strict=True)}
-            draft = Draft(row['from_guid'], 'game' if channel in GAME else channel, row['text'],
-                parent_id=parent['id'] if parent else None,
-                thread_ids=tuple(r['id'] for r in context) if parent else (),
-                embedding=vectors.get(row['id']), to_guid=row['to_guid'],
-                room=channel if channel in GAME else '', now=row['ts'], map=row['map'], zone=row['zone'],
-                line_id=row['id'])
-            # review is the read-only single-candidate adapter over task12's pure helpers.
-            # Its history, private-audience and first_seen fences also apply to these hits.
-            stores = GuardStores(conn, GuardsCfg(enabled=True, semantic_enabled=guards.semantic_enabled),
-                                 claims_enabled=claims, vectors=vectors, facts=facts)
             with ctx.store.transaction():
-                detected = review(stores, draft)
-                verdict = review(replace(stores, config=guards), draft) if guards.enabled else None
-            kinds = []
-            if REPETITION.intersection(detected.codes):
-                kinds.append('judge_repetition')
-            if RELEVANCE.intersection(detected.codes):
-                kinds.append('judge_nonsequitur')
-            if 'claim_conflict' in detected.codes:
-                kinds.append('judge_contradiction')
-            if WORLD.intersection(detected.codes):
-                kinds.append('judge_unawareness')
-            if verdict is not None and verdict.action in ('rewrite', 'drop', 'react'):
-                kinds.append('judge_guard_' + verdict.action)
+                kinds = screen_row(conn,row,guards=guards,claims=claims,facts=facts,
+                                   context=context,parent=parent,vectors=vectors)
 
             def write(store):
                 try:

@@ -45,7 +45,7 @@ def test_daily_rank_does_not_reset_at_utc_midnight(store,clock):
         signals(store,lid,before+500,explicit=1)
     a,b = (reward(store.conn,lid,now=before+500,local_at=lambda ts:datetime.fromtimestamp(ts,zone)) for lid in (first,second))
     assert a.parts["member_day_rank"] == 20 and b.parts["member_day_rank"] == 21
-    assert a.value == b.value == .4
+    assert a.value == b.value == 1.
 
 
 def test_discord_volume_does_not_discount_game_credit(store,clock):
@@ -54,23 +54,29 @@ def test_discord_volume_does_not_discount_game_credit(store,clock):
     lid = line(store,clock)
     signals(store,lid,clock.now(),explicit=1)
     scored = reward(store.conn,lid,now=clock.now())
-    assert scored.value == .4 and scored.parts["member_day_rank"] == 0
+    assert scored.value == 1. and scored.parts["member_day_rank"] == 0
 
 
-def test_unscreened_game_line_stays_pending_and_retries(context,store,clock,tmp_path):
+def test_failed_shared_screen_stays_pending_and_retries(context,store,clock,tmp_path,monkeypatch,caplog):
     enable(tmp_path)
     lid = line(store,clock,ts=clock.now()-300)
     signals(store,lid,clock.now(),explicit=1)
+    original=night.screening.screen_row
+    def broken(*a,**kw):
+        raise RuntimeError("PRIVATE_SCREEN_VALUE")
+    monkeypatch.setattr(night.screening,"screen_row",broken)
     async def exercise():
         async with context(learn_enabled=True) as (ctx,_):
             ctx.window = (clock.now()-86400,clock.now()+1)
             await night.stage_rewards(ctx)
             assert store.conn.execute("SELECT 1 FROM talk_reward WHERE line_id=?",(lid,)).fetchone() is None
             assert not ctx.done("rewards",str(lid))
-            screened(store,lid,clock.now())
+            monkeypatch.setattr(night.screening,"screen_row",original)
             await night.stage_rewards(ctx)
-            assert store.conn.execute("SELECT value FROM talk_reward WHERE line_id=?",(lid,)).fetchone()[0] == pytest.approx(.6)
+            assert store.conn.execute("SELECT value FROM talk_reward WHERE line_id=?",(lid,)).fetchone()[0] == pytest.approx(1.)
     asyncio.run(exercise())
+
+    assert "PRIVATE_SCREEN_VALUE" not in caplog.text
 
 
 def test_cold_engagement_is_neutral_and_ignored_is_negative(store,clock):
@@ -136,7 +142,7 @@ def test_stored_raw_credit_and_cap_are_separate_and_pending_count_is_logged(cont
     enable(tmp_path)
     for n in range(20):
         line(store,clock,ts=clock.now()-300+n)
-    lid = line(store,clock,ts=clock.now()-100)
+    lid = line(store,clock,ts=clock.now()-130)
     screened(store,lid,clock.now())
     signals(store,lid,clock.now(),explicit=1)
     async def exercise():
@@ -146,8 +152,8 @@ def test_stored_raw_credit_and_cap_are_separate_and_pending_count_is_logged(cont
     with caplog.at_level(logging.INFO):
         asyncio.run(exercise())
     row = store.conn.execute("SELECT value,cap_weight FROM talk_reward WHERE line_id=?",(lid,)).fetchone()
-    assert row[0] == pytest.approx(.6) and row[1] == pytest.approx(.9**20)
-    assert "rewards_pending" in caplog.text and "20" in caplog.text
+    assert row[0] == pytest.approx(1.) and row[1] == pytest.approx(.9**20)
+    assert "rewards_pending" in caplog.text and "scored=21" in caplog.text
 
 
 @pytest.mark.parametrize("hour",[1,3,22])
@@ -248,7 +254,9 @@ def test_late_implicit_evidence_at_same_timestamp_is_revisited(context,store,clo
     async def exercise():
         async with context(learn_enabled=True) as (ctx,_):
             await night.stage_rewards(ctx)
+            before=store.conn.execute("SELECT value FROM talk_reward WHERE line_id=?",(lid,)).fetchone()[0]
             signals(store,lid,clock.now(),muted=1)
             await night.stage_rewards(ctx)
-            assert store.conn.execute("SELECT value FROM talk_reward WHERE line_id=?",(lid,)).fetchone()[0] == -.8
+            value,revision=store.conn.execute("SELECT value,revision FROM talk_reward WHERE line_id=?",(lid,)).fetchone()
+            assert value == before-1 and revision==1
     asyncio.run(exercise())

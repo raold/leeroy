@@ -5,10 +5,12 @@ stage. Missing, malformed, unknown or non-boolean settings mean off. Normal
 application migration creates the empty tables; disabled learning writes no
 recipes, rewards, weights or reward plans and changes no prompt or send decision.
 The switch is read at startup (restart required), including the nightly settings.
-Signals are separately opt-in. Unscreened game lines stay pending, including a
-CLI night without signals; failed screening retries can supply the missing receipt.
-Discord uses explicit evidence only, with no game screening credit. Unobserved
-evidence is neutral, never an inferred dislike.
+Signals are separately opt-in. Rewards screen eligible game lines themselves through the same historical screening
+function as signals, including CLI nights and when signal capture is off. Failed
+screening stays pending for retry. Discord and voice rooms use measured numeric
+evidence without borrowing game quality or history. Empty voice transcripts are
+scored too, including muted receipts; unsupported channels and overlong text also
+receive only their measured components. Unobserved evidence is never inferred dislike.
 
 `reward(conn, line_id, *, now=None)` is read-only and returns a `Reward` with
 numeric parts, the weight version, and a separate `cap_weight`. Supply receipt seconds for deterministic
@@ -18,7 +20,14 @@ replay; otherwise it uses the current time. Missing learning tables return
 ## Formula and coverage
 
 Defaults are 0.40 explicit + 0.25 engagement + 0.15 emote + 0.20 quality, minus
-1.0 muted, 0.5 dial-down, 0.5 negative nudge and 0.1 ignored. Clip to [-1,1]. Weights are
+1.0 muted, 0.5 dial-down, 0.5 negative nudge and 0.1 ignored. Divide the weighted
+component sum by the sum of weights for **measured components only**, then subtract
+penalties and clip to [-1,1]. Explicit is measured only when a vote exists;
+engagement only when a metric exists; emote only when an emote observation exists;
+quality only after successful screening, a detector observation or a live verdict.
+With no measured positive-weight component the component sum is zero. A lone
+thumbs-up is 1.0 on Discord, as is a thumbs-up with clean game quality and no other
+measures. Numeric parts record the measured flags and denominator. Weights are
 append-only versions with timestamps; the latest valid version as of scoring is
 used. `weights.change` validates finite nonnegative values summing to one and
 joins the caller's transaction. Read-only calls use version zero defaults when
@@ -40,10 +49,11 @@ missing observations are never invented zero samples. This is a provisional
 normalization, not a calibrated satisfaction measure.
 
 Friendly/romantic emotes add, rude emotes subtract, capped to [-1,1].
-Quality has a base of one only when a completed signals receipt proves that its
-bounded detectors ran on this supported game row, or an actual live guard
-verdict is recorded. Unsupported Discord rows and overlong rows skipped by
-signals do not earn that base. Missing coverage starts at zero. Subtract the
+Quality has a base of one after the reward stage completes the shared bounded
+screening on a supported game row, or an actual live guard verdict is recorded.
+The standalone read-only calculator can also recognise a completed signals receipt.
+Discord, voice rooms and overlong rows do not earn a game-quality base. Missing
+coverage contributes no quality weight; observed detector hits remain measured. Subtract the
 four detector hits and the maximum guard cost (rewrite 0.25, react 0.5, drop 1);
 clip quality to [-1,1]. Retrospective `judge_guard_*` observations are screening,
 not a claim that anything was actually rewritten or dropped. Live guards are
@@ -64,16 +74,20 @@ Discord and DMs have separate baseline/report kinds, through the shared channel
 helpers. They supply no game baseline, screening, session or activity. Existing
 DM/whisper privacy holds; only numeric evidence is pooled, never content.
 
-The night selects at most 500 cast lines: changed evidence first, then newest
-unscored lines with a 14-day lookback. A saved selection survives resumes. Later
+The night selects at most 500 cast lines whose 120-second observation window has
+closed: changed evidence first, then newest unscored lines with a 14-day lookback. A saved selection survives resumes. Later
 signals or a changed owner vote revisit an existing score even outside that
-initial lookback; each update and its revision receipt commit together. A pending
-count is logged without content. Missing screening leaves the unit incomplete
-and retryable. Signal retention is 120 days; this layer does not invent evidence
-that was never captured or restore pruned evidence. If the signals stage's own
-cap never reaches a line, its reward remains pending rather than biased.
+initial lookback, bounded to the 120-day signal retention; each update and its
+revision receipt commit together. Counts logged without content are scored this
+pass, pending with an open observation window, and left_over eligible work
+(including failed screening). Saved selections survive resumes. Selection, changed-
+evidence scans, quality review and reward calculations run on owned read-only
+SQLite snapshots off the event loop. Budgeting caches one prepared count. Failed
+screening leaves its unit incomplete; the signals stage's separate 200-line cap
+cannot prevent rewards from being screened and scored.
 
-The stage uses no model. Normal startup and `nightly run` attach it when enabled,
+The stage uses no generation model. When claims or semantic guards are enabled,
+it uses the existing background embedder, as the shared signals screening does. Normal startup and `nightly run` attach it when enabled,
 after signals when present, otherwise after threads. Schema availability is
 cached per Store at attach; disabled learning writes nothing.
 

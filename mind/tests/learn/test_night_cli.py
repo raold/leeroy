@@ -27,7 +27,7 @@ def test_night_selection_cap_survives_resume_and_new_backfill(context, store, cl
     async def run():
         async with context(learn_enabled=True) as (ctx, llm):
             ctx.window = (clock.now()-3600, clock.now()+1)
-            ids = [line(store, clock) for _ in range(4)]
+            ids = [line(store, clock, ts=clock.now()-300) for _ in range(4)]
             for lid in ids:
                 signals(store, lid, clock.now(), explicit=1)
                 screened(store, lid, clock.now())
@@ -47,7 +47,7 @@ def test_night_off_old_schema_and_unregistered_budget_no_writes(context, store, 
     async def run():
         async with context() as (ctx, _):
             ctx.window = (clock.now()-1, clock.now()+1)
-            line(store, clock)
+            line(store, clock, ts=clock.now()-300)
             before = store.conn.total_changes
             await night.stage_rewards(ctx)
             assert store.conn.total_changes == before
@@ -55,6 +55,7 @@ def test_night_off_old_schema_and_unregistered_budget_no_writes(context, store, 
             enable(tmp_path)
             from dataclasses import replace
             ctx.settings = replace(ctx.settings, learn_enabled=True)  # restart snapshot
+            await night.prepare_count(ctx)
             assert budget._counts(ctx, set(), frozenset({"rewards"}))["rewards"] == 1
             assert budget.estimate({"rewards": 1}, measured={}) == {"rewards": 0}
             with store.transaction():
@@ -68,7 +69,7 @@ def test_stage_records_discord_separately_and_excludes_owner_noncast(context, st
     async def run():
         async with context(learn_enabled=True) as (ctx, _):
             ctx.window = (clock.now()-1, clock.now()+1)
-            ids = [line(store, clock, channel=ch) for ch in ("guild", "discord:general", "dm:101")]
+            ids = [line(store, clock, channel=ch, ts=clock.now()-300) for ch in ("guild", "discord:general", "dm:101")]
             line(store, clock, guid=1)
             line(store, clock, guid=105)
             for lid in ids:
@@ -87,7 +88,7 @@ def test_cli_reports_recipe_fields_without_content_or_writes(context, store, clo
     async def run():
         async with context(learn_enabled=True) as (ctx, _):
             ctx.window = (clock.now()-1, clock.now()+1)
-            lid = line(store, clock, text="invented secret message")
+            lid = line(store, clock, text="invented secret message", ts=clock.now()-300)
             turn = Turn(TurnKind.REPLY_HUMAN, 101, "guild")
             with store.transaction():
                 record_recipe(store.conn, lid, turn, TurnMeta("synthetic"), ctx.persona(101),
@@ -102,7 +103,7 @@ def test_cli_reports_recipe_fields_without_content_or_writes(context, store, clo
     output = capsys.readouterr().out
     data = json.loads(output)
     assert data["lines"] == 1 and data["members"][0]["guid"] == 101
-    assert data["members"][0]["mean"] == pytest.approx(.6)
+    assert data["members"][0]["mean"] == pytest.approx(1.)
     assert {r["field"] for r in data["recipes"]} == {
         "template_id", "template_version", "dials_hash", "model_id", "guard_verdict"}
     assert "invented secret message" not in output and "Ashlen" not in output
@@ -114,11 +115,11 @@ def test_reward_and_night_receipt_rollback_together(context, store, clock, tmp_p
     async def run():
         async with context(learn_enabled=True) as (ctx, _):
             ctx.window = (clock.now()-1, clock.now()+1)
-            lid = line(store, clock)
+            lid = line(store, clock, ts=clock.now()-300)
             screened(store, lid, clock.now())
-            def bad(*args, **kwargs):
-                raise ValueError("invented private message")
-            monkeypatch.setattr(night, "reward", bad)
+            with store.transaction():
+                store.conn.execute("CREATE TRIGGER fail_reward BEFORE INSERT ON talk_reward "
+                    "BEGIN SELECT RAISE(ABORT,'invented private message'); END")
             await night.stage_rewards(ctx)
             assert not ctx.done("rewards", str(lid))
             assert not store.conn.execute("SELECT * FROM talk_reward").fetchall()

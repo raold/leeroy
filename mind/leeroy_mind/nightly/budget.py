@@ -292,6 +292,9 @@ async def plan_night(ctx: "NightContext", *, stages: frozenset[str] | None = Non
     (set_run_plan: a resumed run reuses it, like its window), applied to ctx.settings and
     ctx.plan, and logged as nightly_budget. Runners pass their actual stage names;
     direct callers may omit stages to retain the all-registered-counter interface."""
+    if ctx.settings.learn_enabled and (stages is None or "rewards" in stages):
+        from leeroy_mind.learn.night import prepare_count
+        await prepare_count(ctx)
     base = ctx.settings
     hours = (ctx.window[1] - ctx.window[0]) / 3600
     work = replace(base, encounters_per_night=round(

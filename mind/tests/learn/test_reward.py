@@ -38,15 +38,15 @@ def test_config(tmp_path, text, enabled):
 
 
 @pytest.mark.parametrize("values,quality,expected", [
-    ({}, False, 0), ({"explicit": 1}, False, .4),
+    ({}, False, 0), ({"explicit": 1}, False, 1.),
     ({"explicit": -1, "replied": 1, "emote_friendly": 1}, True, -.4),
     ({"explicit": 1, "replied": 1, "emote_friendly": 1}, True, .875),
     ({"muted": 1, "dial_down": 1, "nudged_against": 1}, False, -1),
     ({"dial_down": 1}, False, -.5), ({"nudged_against": 1}, False, -.5),
-    ({"emote_rude": 1}, False, -.15),
-    ({"judge_repetition": 1}, False, -.2),
+    ({"emote_rude": 1}, False, -1.),
+    ({"judge_repetition": 1}, False, -1.),
     ({"judge_repetition": 1}, True, 0),
-    ({"judge_guard_rewrite": 1}, True, .15)])
+    ({"judge_guard_rewrite": 1}, True, .75)])
 def test_formula_and_unmeasured_quality(store, clock, values, quality, expected):
     lid = line(store, clock)
     signals(store, lid, clock.now(), **values)
@@ -54,7 +54,7 @@ def test_formula_and_unmeasured_quality(store, clock, values, quality, expected)
         screened(store, lid, clock.now())
     result = reward(store.conn, lid, now=clock.now())
     assert result.value == pytest.approx(expected)
-    assert result.parts["quality_measured"] == float(quality)
+    assert result.parts["quality_measured"] == float(quality or any(k.startswith("judge_") for k in values))
     assert all(type(v) in (int, float) for v in result.parts.values())
     assert not store.conn.execute("SELECT 1 FROM learn_weights").fetchall()  # read-only defaults
 
@@ -140,10 +140,10 @@ def test_member_positive_cap_resets_by_day_and_does_not_dilute_negative(store, c
     assert reward(store.conn, lid, now=clock.now()).value == -1
     another = line(store, clock, guid=102)
     signals(store, another, clock.now(), explicit=1)
-    assert reward(store.conn, another, now=clock.now()).value == .4
+    assert reward(store.conn, another, now=clock.now()).value == 1.
     tomorrow = line(store, clock, ts=clock.now()+DAY)
     signals(store, tomorrow, clock.now()+DAY, explicit=1)
-    assert reward(store.conn, tomorrow, now=clock.now()+DAY).value == .4
+    assert reward(store.conn, tomorrow, now=clock.now()+DAY).value == 1.
     assert decayed(.4, age_seconds=21*DAY) == .2
 
 
