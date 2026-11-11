@@ -242,6 +242,7 @@ def roster_page(view: dict, offset: int, *, limit: int = 50) -> dict:
         guids = {str(m["guid"]) for m in out["members"]}
         out["insight_badges"] = {g: v for g, v in out["insight_badges"].items() if str(g) in guids}
     out["page"] = {"offset": offset, "limit": limit, "total": len(members),
+                   "personas": sum(bool(m.get("persona")) for m in members),
                    "more": offset + limit < len(members)}
     return out
 

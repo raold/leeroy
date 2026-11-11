@@ -35,9 +35,10 @@ async function refresh() {
   if (statusBusy || S.tab !== "ops" || document.hidden) { return; }
   statusBusy = true;
   try {
-    const r = await api("/api/ops/action");
-    if (refused(r) || r.status !== 200) { return; }
+    const r = await api("/api/ops/action", { poll: true });
+    if (refused(r)) { return; }
     const value = await r.json();
+    if (r.status !== 200) { message(value.error || "Action status is unavailable."); return; }
     enabled = value.enabled === true; running = value.operation?.state === "running";
     message(actionWords(value)); controls();
   } catch (_) { message("Action status is unavailable. Check it before retrying."); }

@@ -58,7 +58,7 @@ let badgeBusy = false;
 function pollBadge() {
   if (badgeBusy || document.hidden) { return; }
   badgeBusy = true;
-  api("/api/ops/badge").then(r => {
+  api("/api/ops/badge", { poll: true }).then(r => {
     if (refused(r) || r.status !== 200) { return null; }
     return r.json();
   }).then(j => { if (j) { setBadge(j); } })

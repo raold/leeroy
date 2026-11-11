@@ -389,6 +389,7 @@ select, input[type="text"], input[type="number"] { color: var(--ink); background
 .sfrow { display: grid; grid-template-columns: minmax(7em, 11em) minmax(0, 552px) auto; justify-content: start;
   align-items: center; gap: 8px 14px; padding: 10px 0; border-top: 1px solid var(--line); }
 .sfrow:first-child { border-top: 0; }
+.sfrow .shot-error { grid-column: 1 / -1; }
 .sfrow div.who { min-width: 0; font-weight: 700; }
 .sfrow div.who span { min-width: 0; overflow-wrap: anywhere; }
 .shots { display: grid; grid-template-columns: repeat(4, minmax(0, 132px)); gap: 8px; }

@@ -7,13 +7,13 @@ import { api, post } from "../../../leeroy_mind/console/static/js/core.mjs";
 
 async function flush() { for (var i = 0; i < 20; i++) { await Promise.resolve(); } }
 
-test("a missing member reaches the callers' 404 handling; other failures reject", async (t) => {
+test("non-OK JSON reaches the callers' absence and error handling", async (t) => {
   t.mock.method(globalThis, "fetch", () => Promise.resolve(new Response('{"error":"not found"}',
     {status: 404, headers: {"content-type": "application/json"}})));
   var response = await api("/api/persona?guid=101");
   assert.equal(response.status, 404);
   assert.deepEqual(await response.json(), {error: "not found"});
-  await assert.rejects(api("/api/guild"), /HTTP 404/);
+  assert.equal((await api("/api/guild")).status,404);
 });
 
 test("backoff grows, jitters, caps and resets after success", () => {
@@ -112,7 +112,7 @@ test("one successful subroute cannot clear a sibling's stale state", () => {
   health.update("/api/persona/insight?guid=101", "personas", true, 100);
   health.update("/api/persona/insight?guid=101", "personas", false, 200);
   health.update("/api/persona?guid=101", "personas", true, 300);
-  assert.deepEqual(health.failed("personas"), [{tab: "personas", good: 100, failed: true}]);
+  assert.deepEqual(health.failed("personas"), [{tab: "personas", good: 100, failed: true, error: ""}]);
   health.update("/api/persona/insight?guid=102", "personas", true, 400);
   assert.deepEqual(health.failed("personas"), []);
   assert.equal(health.routes.size, 2); // queries never grow the route map
@@ -167,7 +167,7 @@ test("the always-on Ops badge cannot clear a failed Ops panel request", () => {
   health.update("/api/ops", "ops", true, 100);
   health.update("/api/ops", "ops", false, 200);
   health.update("/api/ops/badge", "ops", true, 300);
-  assert.deepEqual(health.failed("ops"), [{tab: "ops", good: 100, failed: true}]);
+  assert.deepEqual(health.failed("ops"), [{tab: "ops", good: 100, failed: true, error: ""}]);
   health.update("/api/ops", "ops", true, 400);
   assert.deepEqual(health.failed("ops"), []);
 });

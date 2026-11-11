@@ -24,14 +24,18 @@ var rosterOffset = 0, rosterPage = null, rosterDrawn = "";
 var paging = el("div", "roster-pages"), previousPage = el("button", "", "Previous members"),
     nextPage = el("button", "", "Next members"), pageWords = el("span", "muted");
 paging.setAttribute("aria-label", "Member pages");
+paging.setAttribute("role", "group");
 previousPage.type = nextPage.type = "button";
 paging.appendChild(previousPage); paging.appendChild(pageWords); paging.appendChild(nextPage);
 $("p-wall").before(paging);
 previousPage.addEventListener("click", function () {
-  if (!personasBusy && rosterPage) { rosterOffset = Math.max(0, rosterPage.offset - rosterPage.limit); pollPersonas(); }
+  if (rosterPage) { rosterOffset = Math.max(0, rosterOffset - rosterPage.limit); pollPersonas(); }
 });
 nextPage.addEventListener("click", function () {
-  if (!personasBusy && rosterPage && rosterPage.more) { rosterOffset = rosterPage.offset + rosterPage.limit; pollPersonas(); }
+  if (rosterPage && rosterPage.more) {
+    rosterOffset = Math.min(Math.floor((rosterPage.total - 1) / rosterPage.limit) * rosterPage.limit, rosterOffset + rosterPage.limit);
+    pollPersonas();
+  }
 });
 
 function pname(view, guid) {
@@ -108,8 +112,8 @@ function renderPersonas(v) {
   previousPage.disabled = rosterOffset === 0;
   nextPage.disabled = !rosterPage.more;
   pageWords.textContent = "Members " + (members.length ? rosterOffset + 1 : 0) + "–" + (rosterOffset + members.length) + " of " + rosterPage.total;
-  setText("p-count", plural(members.length, "member") + ", "
-          + members.filter(function (m) { return m.persona; }).length + " with a persona");
+  setText("p-count", plural(rosterPage.total, "member") + ", "
+          + (rosterPage.personas === undefined ? members.filter(function (m) { return m.persona; }).length : rosterPage.personas) + " with a persona");
   setText("p-mood", gm ? "Guild mood, night of " + str(gm.night) + ": " + signed(gm.value, 2)
           + (arr(gm.reasons).length ? " (" + gm.reasons.join(", ") + ")" : "")
           : missing.indexOf("guild_mood") >= 0 ? "Guild mood: unavailable in this mind.db."
@@ -192,15 +196,20 @@ function renderWall(v) {
 function pollPersonas() {
   if (personasBusy || S.tab !== "personas") { return; }
   personasBusy = true;
-  api("/api/personas?offset=" + rosterOffset).then(function (r) {
+  var requestedOffset = rosterOffset;
+  api("/api/personas?offset=" + requestedOffset, { poll: true }).then(function (r) {
     if (refused(r)) { return null; }
     return r.json().then(function (j) { return { status: r.status, j: j }; });
   }).then(function (x) {
-    if (!x) { return; }
+    if (!x || requestedOffset !== rosterOffset) { return; }
     if (x.status === 200) { renderPersonas(x.j); }
     else { $("personas-banner").textContent = str(x.j.error) || "mind.db could not be read."; $("personas-banner").hidden = false; }
   }, function () { /* the strip says it */ })
-    .then(function () { personasBusy = false; if (pick) { pollMember(); } });
+    .then(function () {
+      personasBusy = false;
+      if (requestedOffset !== rosterOffset) { pollPersonas(); }
+      else if (pick) { pollMember(); }
+    });
 }
 
 var shownFace = null;
@@ -308,7 +317,7 @@ function pollMember() {
   if (!pick || S.tab !== "personas") { return; }
   var seq = ++pickSeq, guid = pick;
   pollInsight(guid);
-  api("/api/persona?guid=" + guid).then(function (r) {
+  api("/api/persona?guid=" + guid, { poll: true }).then(function (r) {
     if (refused(r)) { return null; }
     return r.json().then(function (j) { return { status: r.status, j: j }; });
   }).then(function (x) {
@@ -593,7 +602,7 @@ $("t-pvclose").addEventListener("click", function () { $("t-pvcard").hidden = tr
 function pollTuning() {
   if (tuneBusy || S.tab !== "personas") { return; }
   tuneBusy = true;
-  api("/api/tuning").then(function (r) {
+  api("/api/tuning", { poll: true }).then(function (r) {
     if (refused(r)) { return null; }
     return r.json().then(function (j) { return { status: r.status, j: j }; });
   }).then(function (x) {

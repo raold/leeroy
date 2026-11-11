@@ -66,6 +66,7 @@ export function openGallery(guid, name, opener) {
   d.appendChild(g.status);
   g.strip = el("div", "gallery-strip");
   g.strip.setAttribute("aria-label", "Photos, newest first");
+  g.strip.setAttribute("role", "group");
   d.appendChild(g.strip);
   d.addEventListener("keydown", function (ev) {
     if (ev.key === "ArrowRight" || ev.key === "ArrowLeft") {
@@ -137,21 +138,24 @@ function refresh(g, first) {
   g.loading = true;
   var seq = ++g.seq;
   api("/api/selfies/gallery?guid=" + g.guid).then(function (r) {
-    if (refused(r) || r.status !== 200) { throw new Error("unavailable"); }
-    return r.json();
+    if (refused(r)) { return null; }
+    return r.json().then(function (j) {
+      if (r.status !== 200) { throw new Error(str(j.error) || "Photos could not be read. Close and try again."); }
+      return j;
+    });
   }).then(function (state) {
-    if (g.closed || g.seq !== seq) { return; }
+    if (!state || g.closed || g.seq !== seq) { return; }
     var id = g.photos[g.at] && g.photos[g.at].id;
     g.state = state;
     var photos = ordered(state.view && state.view.photos);
     var changed = JSON.stringify(photos) !== JSON.stringify(g.photos);
     if (changed) { g.photos = photos; }
     g.at = first ? initial(g.photos) : Math.max(0, g.photos.findIndex(function (p) { return p.id === id; }));
-    if (first) { g.status.textContent = g.photos.length ? "" : "No photos yet."; }
+    g.status.textContent = g.photos.length ? "" : "No photos yet.";
     if (changed) { drawStrip(g); }
     draw(g);
-  }).catch(function () {
-    if (!g.closed && g.seq === seq) { g.status.textContent = "Photos could not be read. Close and try again."; }
+  }).catch(function (error) {
+    if (!g.closed && g.seq === seq) { g.status.textContent = str(error.message) || "Photos could not be read. Close and try again."; }
   }).finally(function () {
     g.loading = false;
     if (g.again && !g.closed) { g.again = false; refresh(g, false); }
@@ -159,7 +163,7 @@ function refresh(g, first) {
 }
 
 function drawStrip(g) {
-  var focused = document.activeElement && document.activeElement.dataset.photoIndex;
+  var focused = document.activeElement && g.strip.contains(document.activeElement);
   g.stripStart = Math.floor(g.at / 32) * 32;
   var window = g.photos.slice(g.stripStart, g.stripStart + 32);
   var wanted = new Set(window.map(function (p) { return p.thumbnail; }));
@@ -179,8 +183,8 @@ function drawStrip(g) {
       clear(b); b.appendChild(img);
     });
   });
-  var back = Array.from(g.strip.children).find(function (b) { return b.dataset.photoIndex === focused; });
-  if (back) { back.focus(); }
+  var back = g.strip.children[g.at - g.stripStart];
+  if (focused && back) { back.focus(); }
 }
 
 function move(g, delta) { g.at = step(g.at, delta, g.photos.length); draw(g); }

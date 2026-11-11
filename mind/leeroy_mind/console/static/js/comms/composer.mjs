@@ -91,10 +91,10 @@ function send() {
   refusals.delete(view);
   renderComposer();
   post("/api/say", body).then(function (j) {
-    settle(j.ok === true ? "" : str(j.error) || "It was not sent.");
-  }, function () { settle(NO_ANSWER); });
+    settle(j.ok === true ? "" : j.status === 0 ? NO_ANSWER : str(j.error) || "It was not sent.", j.status === 0);
+  });
 }
-function settle(error) {
+function settle(error, uncertain) {
   var was = sending;
   sending = null;
   if (!error) {
@@ -103,7 +103,7 @@ function settle(error) {
     } else if (drafts.get(was.view) === was.text) { drafts.delete(was.view); }
   } else {
     refusals.set(was.view, error);
-    if (shownView !== was.view) { emit("note", "Not sent to " + was.where + ": " + error); }
+    if (shownView !== was.view) { emit("note", (uncertain ? "Unconfirmed send to " : "Not sent to ") + was.where + ": " + error); }
   }
   renderComposer();
 }

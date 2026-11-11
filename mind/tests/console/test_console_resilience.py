@@ -63,3 +63,71 @@ def test_voice_mirror_cannot_accumulate_departed_members_or_invites():
     assert len(mirror.state["volumes"]) == voicelink.PEOPLE
     assert len(mirror.state["mutes"]) == voicelink.PEOPLE
     assert len(mirror.state["invites"]) == voicelink.INVITES
+
+
+def test_roster_page_counts_personas_across_whole_guild():
+    members = [{"guid":i,"persona": {"version":1} if i%2 else None} for i in range(120)]
+    page = personaview.roster_page({"members":members},50)
+    assert page["page"]["total"]==120 and page["page"]["personas"]==60
+    assert len(page["members"])==50
+
+
+def test_voice_restart_interrupts_long_retry_sleep():
+    async def run():
+        port = None
+        relay = voicelink.VoiceRelay(lambda:port,lambda _:None,retry_s=60,jitter=lambda:1)
+        relay._attempt = 10
+        task = asyncio.create_task(relay.run())
+        try:
+            await asyncio.sleep(.01)
+            async with voice_service() as fake:
+                port = fake.port
+                await relay.reconnect()
+                async def connected():
+                    while not relay.connected:
+                        await asyncio.sleep(.001)
+                await asyncio.wait_for(connected(),1)
+                assert relay._attempt==0
+        finally:
+            await relay.close()
+            await task
+    asyncio.run(run())
+
+
+def test_voice_backoff_never_exceeds_five_seconds(monkeypatch):
+    async def run():
+        relay = voicelink.VoiceRelay(lambda:None,lambda _:None,retry_s=60,jitter=lambda:1)
+        relay._attempt = 20
+        delays = []
+        async def wait(awaitable,timeout):
+            awaitable.close()
+            delays.append(timeout)
+            relay._closing = True
+        monkeypatch.setattr(voicelink.asyncio,"wait_for",wait)
+        await relay.run()
+        assert delays==[5]
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("action,wakes",[("start",1),("restart",1),("stop",0)])
+def test_console_voice_control_wakes_relay(tmp_path,monkeypatch,action,wakes):
+    from types import SimpleNamespace
+    from leeroy_mind.console.control import Controls
+    from leeroy_mind.lifecycle import Outcome
+    from console.rig import FakeMind
+    async def run():
+        mind = FakeMind(tmp_path)
+        voice = SimpleNamespace(act=lambda action:Outcome(0,"fixture done","running",None))
+        app = make_app(tmp_path,mind=mind,controls=Controls(enabled=True,mind=mind,voice=voice))
+        calls = []
+        async def reconnect():
+            calls.append(1)
+        monkeypatch.setattr(app.relay,"reconnect",reconnect)
+        await app.start()
+        try:
+            result = await http(app,"POST","/api/control",origin=True,
+                                body={"service":"voice","action":action,"confirm":True})
+            assert result.status==200 and len(calls)==wakes
+        finally:
+            await app.close()
+    asyncio.run(run())

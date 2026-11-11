@@ -15,11 +15,11 @@
     <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path d="M13 3 22 7v6c0 5-4 8.5-9 10-5-1.5-9-5-9-10V7Z" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/><path d="M9 12.5h8M9 16h5" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round"/></svg>
     <div><h1>Guild Console</h1><div class="sub">The guild, the realm and the mind, beside the game</div></div>
   </div>
-  <div class="strip" aria-label="Status" aria-live="polite">
+  <div class="strip" role="group" aria-label="Status">
     <span id="s-game" class="mode"><span class="t">Game: unknown</span></span>
-    <span id="s-mind" class="stat"><span class="k">Mind</span><span class="v"><i class="dot"></i><span class="t">mind</span></span></span>
-    <span id="s-bridge" class="stat"><span class="k">Game bridge</span><span class="v"><i class="dot"></i><span class="t">game bridge</span></span></span>
-    <span id="s-vlink" class="stat"><span class="k">Voice</span><span class="v"><i class="dot"></i><span class="t">voice</span></span></span>
+    <span id="s-mind" class="stat" aria-live="polite"><span class="k">Mind</span><span class="v"><i class="dot"></i><span class="t">mind</span></span></span>
+    <span id="s-bridge" class="stat" aria-live="polite"><span class="k">Game bridge</span><span class="v"><i class="dot"></i><span class="t">game bridge</span></span></span>
+    <span id="s-vlink" class="stat" aria-live="polite"><span class="k">Voice</span><span class="v"><i class="dot"></i><span class="t">voice</span></span></span>
     <span id="s-room" class="stat"><span class="k">Room</span><span class="v"><span class="t">no room</span></span></span>
     <span id="s-ptt" class="ptt"><i class="lamp"></i><span>push-to-talk</span><span id="s-self" class="selfmark" hidden></span></span>
     <button id="theme" type="button" class="theme">Light / dark</button>
@@ -161,7 +161,7 @@
           <label>Lead <select id="r-lead"></select></label>
           <button id="r-go" type="submit">Form the raid</button>
         </form>
-        <p id="r-why" class="why"></p>
+        <p id="r-why" class="why" role="status"></p>
       </article>
       <article class="panel span">
         <header><h3>The raid</h3><span id="r-count" class="muted"></span></header>

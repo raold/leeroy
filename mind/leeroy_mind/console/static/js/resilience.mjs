@@ -86,9 +86,10 @@ export function validView(path, value) {
 
 export class ReadHealth {
   constructor() { this.routes = new Map(); }
-  update(path, tab, ok, now) {
+  update(path, tab, ok, now, error) {
     var route = path.split("?")[0], entry = this.routes.get(route) || { tab: tab, good: 0 };
     entry.failed = !ok;
+    entry.error = ok ? "" : error || "";
     if (ok) { entry.good = now; }
     this.routes.delete(route); this.routes.set(route, entry);
     while (this.routes.size > 32) { this.routes.delete(this.routes.keys().next().value); }

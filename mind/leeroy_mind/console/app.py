@@ -1601,6 +1601,8 @@ class ConsoleApp:
         self.broadcast("control", {"service": service, "action": action, "phase": "done",
                                    "message": outcome.message})
         await self._after_control()
+        if service == "voice" and action in ("start", "restart"):
+            await self.relay.reconnect()
         return json_response(200, {"ok": True, "message": outcome.message,
                                    "state": outcome.state})
 

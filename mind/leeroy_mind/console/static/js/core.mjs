@@ -84,17 +84,21 @@ export function api(path, opts) {
         }
         r.json = function () { return Promise.resolve(j); };
       } else if (r.status === 200) { throw new Error("The console's answer could not be read."); }
-      var absentMember = r.status === 404 && path.indexOf("/api/persona?guid=") === 0;
-      if (method === "GET" && !photo && r.status !== 403 && !r.ok && !absentMember) { throw new Error("HTTP " + r.status); }
-      if (method === "GET" && !photo && (r.ok || absentMember) && gen === GEN) { emit("request-health", { path: path, ok: true }); }
+      // A well-formed error is still an answer: callers own absent/conflict semantics.
+      // Only interval reads advertise retries. One-shot panels keep their own errors.
+      if (method === "GET" && opts.poll && !photo && r.status !== 403 && gen === GEN) {
+        var answered = r.status < 400 || r.status === 404 || r.status === 409;
+        emit("request-health", { path: path, ok: answered,
+          error: !answered && j ? str(j.error) : "" });
+      }
       return r;
     });
   // Bank/deeper search may take 20 s; a clean stop may need more than 60 s.
   return deadline(work, opts.timeoutMs || (method === "POST" ? 120000 : 30000), abort)
     .catch(function (e) {
       abort();
-      if (method === "GET" && path !== "/api/events" && gen === GEN && !/^\/api\/(face|selfies\/photo)/.test(path)) {
-        emit("request-health", { path: path, ok: false });
+      if (method === "GET" && opts.poll && path !== "/api/events" && gen === GEN && !/^\/api\/(face|selfies\/photo)/.test(path)) {
+        emit("request-health", { path: path, ok: false, error: str(e.message) });
       }
       throw e;
     }).finally(function () { if (outer && path !== "/api/events") { outer.removeEventListener("abort", abort); } });

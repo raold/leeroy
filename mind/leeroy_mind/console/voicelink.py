@@ -174,7 +174,7 @@ class VoiceRelay:
         self._retry_s = retry_s
         self._jitter = jitter
         self._attempt = 0
-        self._closed = asyncio.Event()
+        self._wake = asyncio.Event()
         self._ws: WsClient | None = None
         self._closing = False
         self.mirror = Mirror()
@@ -200,12 +200,20 @@ class VoiceRelay:
                     except Exception as e:
                         log.error("console_voice_link_failed: error=%s", type(e).__name__)
             if not self._closing:
-                delay = min(30.0, self._retry_s * 2 ** min(20, self._attempt))
+                delay = min(5.0, self._retry_s * 2 ** min(20, self._attempt))
                 self._attempt += 1
                 try:
-                    await asyncio.wait_for(self._closed.wait(), delay * (0.5 + 0.5 * self._jitter()))
+                    await asyncio.wait_for(self._wake.wait(), delay * (0.5 + 0.5 * self._jitter()))
                 except asyncio.TimeoutError:
                     pass
+                self._wake.clear()
+
+    async def reconnect(self) -> None:
+        """A console-controlled voice start/restart bypasses an old retry delay."""
+        self._attempt = 0
+        self._wake.set()
+        if self._ws is not None:
+            await self._ws.close()
 
     async def _serve(self, ws: WsClient) -> None:
         self._ws = ws
@@ -270,7 +278,7 @@ class VoiceRelay:
 
     async def close(self) -> None:
         self._closing = True
-        self._closed.set()
+        self._wake.set()
         ws = self._ws
         if ws is not None:
             await ws.close()

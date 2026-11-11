@@ -114,8 +114,8 @@ function renderHealth(h) {
 function pollHealth() {
   if (healthBusy || S.tab !== "mind") { return; }
   healthBusy = true;
-  api("/api/health").then(function (r) {
-    if (refused(r)) { return null; }
+  api("/api/health", { poll: true }).then(function (r) {
+    if (refused(r) || !r.ok) { return null; }
     return r.json();
   }).then(function (h) { if (h) { renderHealth(h); } }, function () { /* the strip says it */ })
     .then(function () { healthBusy = false; });
