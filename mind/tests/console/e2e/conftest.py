@@ -11,6 +11,29 @@ import pytest
 
 from .harness import Rehearsal
 
+# Each POST's answer as the page itself read it, for test_flows.submit(). Reading the body
+# through Playwright's network layer (Response.json) depends on Chromium keeping it, and on
+# CI it now and then had not ("No data found for resource"), or the request never reported
+# finished at all. A clone of the page's own response does not depend on either.
+ANSWERS = """
+(() => {
+  const real = window.fetch;
+  window.__answers = [];
+  window.fetch = function (input, init) {
+    const work = real.apply(this, arguments);
+    const method = String((init && init.method) || (input && input.method) || "GET").toUpperCase();
+    if (method !== "POST") { return work; }
+    const path = new URL(typeof input === "string" ? input : input.url, location.href).pathname;
+    return work.then((response) => {
+      response.clone().text().then(
+        (text) => window.__answers.push({ path, status: response.status, text }),
+        () => window.__answers.push({ path, status: response.status, text: null }));
+      return response;
+    });
+  };
+})();
+"""
+
 
 @pytest.fixture
 def rehearsal(tmp_path, monkeypatch, pytestconfig):
@@ -106,6 +129,7 @@ def rehearsal(tmp_path, monkeypatch, pytestconfig):
                 await context.add_init_script(
                     "if (!localStorage.getItem('guild-console-theme')) "
                     "localStorage.setItem('guild-console-theme', " + repr(theme) + ");")
+                await context.add_init_script(ANSWERS)
                 yield fixture
             except BaseException:
                 if not page.is_closed():
