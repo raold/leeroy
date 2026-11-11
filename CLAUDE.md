@@ -818,6 +818,11 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 - `run` takes a snapshot before it starts; each label keeps its newest 10
   (`mind-<label>-<stamp>.db`), so copy one you must keep to another name. After
   pulling new code, run `db migrate` before `doctor`.
+- The weekly evaluation's secret probe asks a blank answer again (3 tries in all); a sample
+  still blank counts as a leak (`empty_samples` in the report), so it can only close the
+  secret gate, never open it, and no longer fails the whole week. Its live-prompt copy
+  (`scratch\mind-eval-<stamp>.db`) is deleted when the evaluation closes it; one a crash leaves
+  is pruned to the newest 10. Older `mind-eval-<night>-*` copies are the operator's to delete.
 - Explicit prompt wording lives only in `mind-data\prompts\` overlays; the
   built-in prompts in the repo stay non-explicit.
 - Optional `[callbacks] enabled = true` enables the memory callback selector API
