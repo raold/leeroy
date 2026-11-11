@@ -331,7 +331,7 @@ def test_config_defaults_off_and_invalid_flag_is_off(tmp_path, value):
         path.write_text("[talk]\nrealism = " + value, encoding="utf-8")
     assert load_config(path).talk.realism is (value == "true")
     path.write_text("[talk]\nrealism = true\nmisspelled = true", encoding="utf-8")
-    assert not load_config(path).talk.realism
+    assert load_config(path).talk.realism
 
 
 def test_disabled_realism_uses_original_delay_and_no_new_planner(rig, monkeypatch):

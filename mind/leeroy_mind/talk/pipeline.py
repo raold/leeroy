@@ -281,6 +281,8 @@ class TurnMeta:
     realism_correction: bool = False
     realism_followup: bool = False
     realism_correction_until: float = 0
+    realism_sequence: int = 0
+    realism_planned: bool = False
     follow_up: bool = False
     aside: object | None = None
     offered_real_name: bool = False
@@ -726,7 +728,8 @@ class Pipeline:
     def typing_now(self) -> list[dict]:
         """The control endpoint's status `typing`: each model turn being composed or typed where
         Comms shows its line, oldest first, as {"guid", "name", "channel", "to", "since", "age"}
-        (`to`: a whisper's target, him; else None; `age`: seconds in its phase, read now, so a
+        (`to`: a whisper's target, him; else None; `age`: seconds since the phase's latest
+        refresh, at least every ten seconds during a realism wait, read now, so a
         page judges staleness without comparing clocks; `since` is for matching the line when it
         lands). Ids, names and times only, never text; the game's places none while he is
         offline, a Discord turn's (channel as given, `to` him in a DM to him) always."""
@@ -1381,11 +1384,14 @@ class Pipeline:
                         for s in lines]
             baseline[0] = self._first_typing(turn, baseline[0])
             plan = self.realism.plan(self, turn, meta, p, lines, baseline)
+            meta.realism_planned = True
             lines = list(plan.lines)
         sent: list[Styled] = []
         try:
             for i, s in enumerate(lines):
                 if i and plan and not self.realism.safe(self, turn):
+                    for skipped in lines[i:]:
+                        self._drop(turn,meta,"realism_busy",memory_ids,text=skipped.line)
                     break
                 typing = (plan.delays[i] if plan else
                           typing_delay(s.line, p.typing.chars_per_sec, delay_mult, self.rng))
@@ -1399,6 +1405,8 @@ class Pipeline:
                         await self.clock.sleep(wait)
                 if i and plan and not self.realism.safe(self, turn):
                     self._phase(turn, None)
+                    for skipped in lines[i:]:
+                        self._drop(turn,meta,"realism_busy",memory_ids,text=skipped.line)
                     break
                 meta.words = s.plain
                 meta.realism_followup = bool(i and plan)
@@ -1407,16 +1415,18 @@ class Pipeline:
                 if why:
                     if why not in AWAIT_ECHO:  # that row waits for the echo (_settle_unacked)
                         self._drop(turn, meta, why, memory_ids, text=s.line)
+                        if plan:
+                            for skipped in lines[i+1:]:
+                                self._drop(turn,meta,why,memory_ids,text=skipped.line)
                     break
                 sent.append(s)
             if plan and plan.correction and len(sent) == len(lines) and self.realism.safe(self, turn):
                 correction = Styled(plan.correction, plan.correction)
-                meta.realism_correction_until = self.clock.now() + 10
+                meta.realism_correction_until = self.clock.monotonic() + 10
                 self._phase(turn, TYPING)
                 with self.timing.span(meta.timing_trace, "typing"):
                     await self._realistic_sleep(turn, plan.correction_delay)
                 if self.realism.safe(self, turn):
-                    lines.append(correction)
                     meta.words = correction.plain
                     meta.realism_correction = True
                     meta.realism_followup = True
@@ -1425,6 +1435,8 @@ class Pipeline:
                         sent.append(correction)
                     elif why not in AWAIT_ECHO:
                         self._drop(turn, meta, why, memory_ids, text=correction.line)
+                else:
+                    self._drop(turn,meta,"realism_busy",memory_ids,text=correction.line)
                 self._phase(turn, None)
         finally:
             # what was said, before typos and abbreviations: the next prompts and repeats, a
@@ -1432,7 +1444,8 @@ class Pipeline:
             said = lines[:meta.said]
             if said and turn.template is None:
                 words = " ".join(s.plain for s in said)
-                self._own_of(turn.speaker).append((turn.channel, turn.to_guid, words))
+                if not plan:  # realism records each confirmed line before a newer turn composes
+                    self._own_of(turn.speaker).append((turn.channel, turn.to_guid, words))
                 self._record_moves(turn, words)
         if sent:  # a cancelled turn's follow-ups never start: a fight began or the session ends
             await self._send_emotes(turn, meta, emotes)
@@ -1441,10 +1454,12 @@ class Pipeline:
 
     async def _realistic_sleep(self, turn: Turn, seconds: float) -> None:
         """Refresh the dots during long waits without extending the planned duration."""
-        until = self.clock.now() + seconds
-        while self.clock.now() < until:
+        remaining = max(0.,seconds)
+        while remaining > 0:
             self._phase(turn, TYPING)
-            await self.clock.sleep(min(10, until - self.clock.now()))
+            chunk = min(10,remaining)
+            await self.clock.sleep(chunk)  # asyncio sleep uses monotonic time
+            remaining -= chunk
 
     def _summons_typed_to_him(self, turn: Turn, text: str) -> bool:
         """A voiced line that falls back to typed chat with him: a summons could stand in the
@@ -1921,7 +1936,7 @@ class Pipeline:
         pieces = ([x for x in text.split("\n") if x.strip()]
                   if turn.kind is TurnKind.BIT and turn.max_lines > 1 else [text])
         out: list[Styled] = []
-        typing = replace(p.typing, typo_rate=0) if realism else p.typing
+        typing = p.typing
         for piece in pieces:
             out += style_lines(piece, typing, self._effects(turn.speaker), self.rng,
                                length_mult=PHASE_MODS[phase].length_mult,
@@ -1958,9 +1973,11 @@ class Pipeline:
         cancelled meanwhile keeps the lock until the line has settled, and that line's outcome
         is the turn's row."""
         async with self._timed_send_lock(meta):
+            if meta.realism_followup and meta.realism_sequence != self.realism.member(turn.speaker).sequence:
+                return "realism_stale"
             if meta.realism_followup and not self.realism.safe(self, turn):
                 return "realism_busy"
-            if meta.realism_correction and self.clock.now() > meta.realism_correction_until:
+            if meta.realism_correction and self.clock.monotonic() > meta.realism_correction_until:
                 return "correction_expired"
             why = self._blocked(turn, meta, self.clock.now(), first=first, deadline=False)
             if why:
@@ -2081,9 +2098,11 @@ class Pipeline:
                                        to_guid=turn.to_guid, zone=zone)
         line_id = self.store.insert_chat_line(chat, session_id=sid, origin="mind",
                                               audience=audience)
-        if self.cfg.talk.realism and not meta.realism_correction:
-            self.realism.record_line(turn.speaker)
-        if not discord:
+        if self.cfg.talk.realism:
+            meta.realism_sequence = self.realism.record_line(turn.speaker,credit=not meta.realism_correction)
+            if meta.realism_planned and not meta.realism_correction and meta.words:
+                self._own_of(turn.speaker).append((turn.channel,turn.to_guid,meta.words))
+        if not discord and not meta.realism_correction:
             self.world.add_line(ChatLineRow(
                 id=line_id, ts=now, channel=turn.channel, from_guid=turn.speaker,
                 from_name=p.character_name, to_guid=turn.to_guid, text=text, map=map_id,
@@ -2117,7 +2136,8 @@ class Pipeline:
         if heard and turn.channel != "whisper" and not discord:
             self._touch_talk(now)
         self.store.log_utterance(now, turn.speaker, turn.channel, turn.kind.value, text,
-                                 memory_ids, None, sid, bit=_bit_id(turn), why=meta.why or None,
+                                 memory_ids, None, sid, bit=_bit_id(turn),
+                                 why="realism_correction" if meta.realism_correction else meta.why or None,
                                  trigger_line=turn.trigger_line, llm_s=meta.llm_s,
                                  to_guid=turn.to_guid, turn_id=meta.turn_id)
         self._record_notes(turn, meta, p, meta.words or text, now)

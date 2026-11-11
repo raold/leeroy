@@ -10,9 +10,10 @@ from leeroy_mind.protocol import Boss, Hello, Logout, Zone
 from leeroy_mind.talk.raid import MAX_FIGHT_S, RaidPhase
 from leeroy_mind.talk.style import Styled
 from leeroy_mind.talk.turns import TurnKind
+from leeroy_mind.talk.states import effects_for
 from leeroy_mind.wow import DUNGEONS, RAID_INSTANCES
 
-CALLS = frozenset({TurnKind.CALLOUT, TurnKind.URGENT})
+CALLS = frozenset({TurnKind.CALLOUT, TurnKind.URGENT, TurnKind.KILL, TurnKind.WIPE_REACT})
 BLOCK_BURSTS = frozenset({RaidPhase.COMBAT, RaidPhase.WIPE_SILENCE, RaidPhase.WIPE_DEBRIEF})
 CORRECTION_RATE = .02
 BURST_RATE = .25
@@ -32,6 +33,7 @@ class MemberPace:
     credit: float = 0
     burst_at: float = float("-inf")
     zone_at: float = float("-inf")
+    sequence: int = 0
 
 
 @dataclass(frozen=True)
@@ -81,6 +83,8 @@ def split_line(line):
 
 
 def typo(line, protected, rng):
+    if " ".join(line.line.casefold().split()) != " ".join(line.plain.casefold().split()):
+        return None  # preserve authored/altered-state typos without adding another
     if any(mark in line.line for mark in ("[", "]", "{", "}", "|", "@", "http")):
         return None
     protected = {part.casefold() for s in protected for part in s.split()}
@@ -97,6 +101,7 @@ class Realism:
     def __init__(self):
         self.members = OrderedDict()
         self.fights = OrderedDict()
+        self.sequence = 0
 
     def member(self, guid):
         if guid not in self.members:
@@ -106,9 +111,13 @@ class Realism:
             self.members.popitem(last=False)
         return self.members[guid]
 
-    def record_line(self, guid):
+    def record_line(self, guid, *, credit=True):
         state = self.member(guid)
-        state.credit = min(1, state.credit + CORRECTION_RATE)
+        self.sequence += 1  # eviction cannot make an old sequence current again
+        state.sequence = self.sequence
+        if credit:
+            state.credit = min(1, state.credit + CORRECTION_RATE)
+        return state.sequence
 
     def observe(self, event, now):
         if isinstance(event, Hello):
@@ -173,7 +182,8 @@ class Realism:
                 state.burst_at = now
         profile = fingerprint(engine.store.conn, turn.speaker)
         wpm = words_per_minute(persona, profile)
-        desired = [duration(s.line, wpm, rng, first=i == 0, busy=busy) +
+        delay_mult = effects_for(engine._altered_of(turn.speaker),turn.kind).delay_mult
+        desired = [duration(s.line, wpm, rng, first=i == 0, busy=busy) * delay_mult +
                    (rng.uniform(.8, 2) if i else 0) for i, s in enumerate(out)]
         correction, correction_delay = "", 0.0
         if safe and not busy and len(out) < 3 and state.credit >= 1 and rng.random() < CORRECTION_RATE:

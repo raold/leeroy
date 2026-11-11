@@ -11,12 +11,16 @@ class FakeClock:
         do no real I/O or threads, so the loop settles without real time passing."""
         self._start = start
         self._t = start.timestamp()
+        self._elapsed = 0.
         self._sleepers: list[tuple[float, int, asyncio.Future]] = []
         self._seq = itertools.count()
         self._yields = yields
 
     def now(self) -> float:
         return self._t
+
+    def monotonic(self) -> float:
+        return self._elapsed
 
     def local(self) -> datetime:
         return self._start + timedelta(seconds=self._t - self._start.timestamp())
@@ -32,6 +36,7 @@ class FakeClock:
     async def advance(self, seconds: float, step: float = 0.5) -> None:
         target = self._t + seconds
         while self._t < target:
+            self._elapsed += min(step,target-self._t)
             self._t = min(self._t + step, target)
             while self._sleepers and self._sleepers[0][0] <= self._t:
                 _, _, fut = heapq.heappop(self._sleepers)

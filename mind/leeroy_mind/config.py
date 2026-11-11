@@ -227,8 +227,7 @@ def _build(data: dict, source: str) -> MindConfig:
         values = {}
         for key, (check, want) in rules.items():
             v = given.get(key, defaults[section][key])
-            if section == "talk" and key == "realism" and (
-                    type(v) is not bool or any(k not in rules for k in given)):
+            if section == "talk" and key == "realism" and type(v) is not bool:
                 v = False
             if not check(v):
                 raise ConfigError(f"{section}.{key}: expected {want}, got {_shown(section, v)}")

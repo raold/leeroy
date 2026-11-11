@@ -832,6 +832,11 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   events the bridge queued for the mind, so never run it while they matter.
 - Do not run `personas generate`/`seed` or a library build while the mind is
   live: they load another large model next to the live one and evict it.
+- Optional `[talk] realism = true` adds bounded typing cadence, rare corrections and
+  small reply bursts; default off, read at mind start and each login. Mind-only:
+  no migration or native rebuild. It preserves authored/altered-state typing,
+  excludes raid-event turns, and drops stale follow-ups after a newer line from
+  that member. See `mind/leeroy_mind/talk/README.md` for budgets and busy evidence.
 - Optional `[fingerprint] enabled = true` attaches a model-free typing-profile stage
   on restart (also in `nightly run`). Missing/invalid settings mean off. It measures
   the last 300 mind-origin lines, or seeds a documented persona prior below 50.
@@ -1750,10 +1755,6 @@ apart from this install. Read `dojo/README.md` before touching it.
   refuses a layout that overlaps them.
 
 ## Outstanding
-
-- Optional `[talk] realism = true` adds bounded typing cadence, rare corrections and
-  small reply bursts; default off. See `mind/leeroy_mind/talk/README.md` for budgets,
-  native busy evidence and correction cancellation.
 
 - `mod-bg-slaveryvalley` server data + client patch (above).
 - Zip-sourced modules (transmog, individual-progression, slaveryvalley) have no
