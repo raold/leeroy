@@ -1474,6 +1474,9 @@ artefacts such as crackling; find and fix the cause.
   mind connection and 7880 for the browser UI. The mind's `[voice]` endpoint
   must match the service's `[mind]` endpoint. The mind doctor reports spec
   coverage and optional service status; a stopped voice service is a note.
+  While the service is down the mind retries after 5, 10, 20 and 40 s, then once a
+  minute, and logs `voice_connect_failed` once, `voice_still_down` (a count) at most
+  hourly and `voice_reconnected` when it is back; a dropped session still reconnects in 5 s.
 - `voice-data\` holds `voice.toml`, `decision.toml`, `lexicon.toml`,
   `attitudes.toml`, models, caches, UI state and logs. The local decision records
   the listening choices; never commit it or device settings. Voice specs,
