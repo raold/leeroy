@@ -1,8 +1,9 @@
 import { arr, el, obj } from "./core.mjs";
 import { activeFor, nudgeArgs, SCOPES, timeLeft } from "./nudgemodel.mjs";
+import { BoundedMap } from "./resilience.mjs";
 
 // Drafts stay only in this page's memory, across polling. Never localStorage or logs.
-const drafts = new Map();
+const drafts = new BoundedMap(64);
 // A poll replaces the panel. Keep the editing position as well as its in-memory draft.
 export function nudgeFocus(box) {
   const input = document.activeElement;

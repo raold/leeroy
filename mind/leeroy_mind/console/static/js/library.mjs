@@ -81,13 +81,17 @@ function run(deeper) {
 
 function loadStats() {
   api("/api/library").then(function (r) {
-    if (refused(r) || r.status !== 200) { return null; }
-    return r.json();
+    if (refused(r)) { return null; }
+    return r.json().then(function (j) {
+      if (r.status !== 200) { throw new Error(str(j.error) || "Library statistics could not be read."); }
+      return j;
+    });
   }).then(function (v) {
     if (!v) { return; }
+    banner("library", null);
     if (v.setup === false) { say("Not set up yet: " + str(v.why), false); return; }
     $("library-stats").textContent = statsLine(v.stats);
-  }).catch(function () { /* the strip says it */ });
+  }).catch(function (error) { banner("library", str(error.message) || "Library statistics could not be read."); });
 }
 
 (function init() {

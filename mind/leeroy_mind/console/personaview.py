@@ -229,6 +229,24 @@ def roster_view(conn, *, now: float) -> dict:
             "members": sorted(v["members"].values(), key=lambda m: (m["name"].lower(), m["guid"]))}
 
 
+def roster_page(view: dict, offset: int, *, limit: int = 50) -> dict:
+    """A bounded roster page; optional badge projections follow only these members.
+
+    The detail endpoint retains each member's full data. Preserve the shared name index:
+    relationships on this page can refer to members on a different one.
+    """
+    members = view.get("members", [])
+    offset = min(offset, max(0, ((len(members) - 1) // limit) * limit))
+    out = dict(view, members=members[offset:offset + limit])
+    if "insight_badges" in out:
+        guids = {str(m["guid"]) for m in out["members"]}
+        out["insight_badges"] = {g: v for g, v in out["insight_badges"].items() if str(g) in guids}
+    out["page"] = {"offset": offset, "limit": limit, "total": len(members),
+                   "personas": sum(bool(m.get("persona")) for m in members),
+                   "more": offset + limit < len(members)}
+    return out
+
+
 def _card(p) -> dict:
     """The persona card summary: who they are, how they type, how they play and their looks."""
     d = persona_to_dict(p)

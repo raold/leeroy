@@ -850,7 +850,7 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 .venv/Scripts/python -m leeroy_mind console --data-dir "$D" # the guild console; open the URL it prints
 .venv/Scripts/python -m pytest -q                           # the unit tests
 .venv/Scripts/python -m pytest -q -n auto tests             # fast run; up to 8 isolated workers
-.venv/Scripts/python -m pip install -r tests/console/e2e/requirements.txt; .venv/Scripts/python -m playwright install chromium; .venv/Scripts/python -m pytest tests/console/e2e -q  # isolated browser rehearsal
+.venv/Scripts/python -m pip install -r tests/console/e2e/requirements.txt; .venv/Scripts/python -m playwright install chromium; npm ci --prefix tests/console/e2e; .venv/Scripts/python -m pytest tests/console/e2e -q  # isolated browser and axe rehearsal
 .venv/Scripts/python -m pytest -m ollama                    # optional: also -m live, -m mysql
 ```
 
@@ -1163,8 +1163,27 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   paint) draws every member's face as initials without asking for the photo, and blanks any
   other photo (the gallery, the selfie picker) until it is switched back. It has 14 tabs (Comms, Raid, Guild, Personas, Social,
   Board, Calendar, Bank, Realm, Training, Dojo, Library, Ops, Mind); each polls only
-  while it is open and the page is visible, one request at a time. A source that is
-  not there yet answers 200 and reads "Not set up yet: <why>"; only a file that
+  while it is open and the page is visible, one request at a time. Ordinary reads have a
+  30 s browser deadline, actions 120 s (long enough for a clean stop); an unanswered action
+  says it may have completed and is never retried automatically. Failed or malformed reads
+  keep the last good view with a stale age on interval polls. One-shot reads report their
+  own errors without promising retries. Hidden pages close the event stream: they receive
+  no background events or toasts, and resync from a fresh snapshot when shown. The event
+  stream and voice socket reconnect with capped exponential backoff and jitter; their
+  heartbeat deadline is 45 s. Voice retries cap at five seconds, and a console voice
+  start/restart wakes the relay immediately. The face
+  cache keeps at most 256 entries and four active loads. The Personas roster is paged in
+  groups of 50; its member details stay available. Arrow keys, Home and End move through
+  the tablist; Tab reaches the main scroll region and controls; dialogs trap focus and
+  Escape returns it. Both themes and reduced motion are covered by the browser rehearsal.
+  WoW feed history retains 64 active/recent views, at most 200 lines each, 64 explicitly
+  opened whisper threads and 128 read marks. Inactive WoW reply/refusal and nudge drafts
+  keep their most recent 64 entries; these conveniences are not durable message storage.
+  Discord's read-only message/quote/pin/thread window fits a 180 KB ASCII-JSON budget:
+  whole records are kept, with visible words when older items are omitted. Stored history
+  is untouched. Its existing watched fingerprint suppresses unchanged SSE updates; the
+  server now retains fixed-size digests instead of full copies of those windows.
+  A source that is not there yet answers 200 and reads "Not set up yet: <why>"; only a file that
   exists but cannot be read is a 503. Ops (`GET /api/ops`, `console/opsview.py`) keeps
   those states per panel in one 200 response: health, night, Realm holds, raids,
   selfies/snaps, backups, cached Git release drift and scheduled-task status. Each

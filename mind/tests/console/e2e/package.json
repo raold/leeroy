@@ -1,0 +1,5 @@
+{
+  "name": "guild-console-browser-checks",
+  "private": true,
+  "devDependencies": {"axe-core": "4.14.0"}
+}

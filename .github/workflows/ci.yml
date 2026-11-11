@@ -101,6 +101,7 @@ jobs:
           key: ${{ runner.os }}-console-chromium-${{ hashFiles('mind/tests/console/e2e/requirements.txt') }}
       # The image already carries Chrome's libraries; a failed apt mirror only costs --with-deps.
       - run: python -m playwright install --with-deps chromium || python -m playwright install chromium
+      - run: npm ci --prefix tests/console/e2e --ignore-scripts --no-audit --no-fund
       - run: python -m pytest tests/console/e2e -q --basetemp "$RUNNER_TEMP/console-e2e" --junitxml "$RUNNER_TEMP/console-e2e-results.xml"
       - uses: actions/upload-artifact@v4
         if: failure()
@@ -109,6 +110,7 @@ jobs:
           path: |
             ${{ runner.temp }}/console-e2e/**/failure.png
             ${{ runner.temp }}/console-e2e/**/failure.html
+            ${{ runner.temp }}/console-e2e/**/axe-*.json
             ${{ runner.temp }}/console-e2e-results.xml
           retention-days: 7
 

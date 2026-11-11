@@ -1,4 +1,4 @@
-import { $, api, arr, emit, hashKey, keyGen, on, own, refused, remember, setKey } from "./core.mjs";
+import { $, api, arr, emit, hashKey, on, own, refused, remember, setKey } from "./core.mjs";
 import { S, adoptVoice, applyVoice } from "./state.mjs";
 import { forgetFaces, photosHidden, redrawFaces } from "./faces.mjs";
 import { renderStrip } from "./strip.mjs";
@@ -21,11 +21,13 @@ import "./ops.mjs";
 import "./personas.mjs";
 import "./mind.mjs";
 import { showTab } from "./tabs.mjs";
+import { ReconnectingStream } from "./eventstream.mjs";
+import "./freshness.mjs";
 
 // The page's start: the key, the first drawing, the open tab and the console's event stream.
 // Every tab module above registers its tab and its bus listeners as it loads.
 
-var es = null, retry = null;
+var connection = null, keyMissing = false;
 
 // -- the connection -------------------------------------------------------------------------------
 
@@ -35,8 +37,8 @@ function lost(text) {
   e.hidden = !text;
 }
 function keyLost() {
-  if (es) { es.abort(); es = null; }
-  clearTimeout(retry);
+  keyMissing = true;
+  if (connection) { connection.stop(); }
   lost("This console has restarted, or this page was reloaded or opened without its key: open the URL the console printed when it started.");
 }
 on("key-lost", keyLost);
@@ -55,7 +57,10 @@ function dispatch(block) {
   if (!kind || !own(KINDS, kind)) { return; }
   var d;
   try { d = JSON.parse(data); } catch (e) { return; }
-  if (!d || typeof d !== "object") { return; }
+  if (!d || typeof d !== "object" || Array.isArray(d)) { return; }
+  if (kind === "snapshot" && (!d.status || !Array.isArray(d.rooms))) { return; }
+  var status = kind === "snapshot" ? d.status : kind === "status" ? d : null;
+  if (status && (!status.mind || !status.game || !status.voice)) { return; }
   if (kind === "snapshot") {
     S.status = d.status || S.status;
     S.rooms = arr(d.rooms);
@@ -68,41 +73,14 @@ function dispatch(block) {
 }
 // The event stream is read with fetch, since an EventSource cannot send the key's header
 function connect() {
-  retry = null;
-  var ctl = new AbortController();
-  es = ctl;
-  // A probe still on its way when a new key is pasted answers for the old key: takeKey has
-  // connected again with the new one, so the probe's 403 or failure is let go
-  function again() {
-    if (es !== ctl) { return; }
-    es = null;
-    lost("The console is not reachable: retrying.");
-    var gen = keyGen();
-    api("/api/state").then(function (r) {
-      if (gen === keyGen() && !refused(r)) { retry = setTimeout(connect, 2000); }
-    }, function () { if (gen === keyGen()) { retry = setTimeout(connect, 2000); } });
+  if (!connection) {
+    connection = new ReconnectingStream({
+      open: function (signal) { return api("/api/events", { headers: { "Accept": "text/event-stream" }, signal: signal }); },
+      refused: refused, dispatch: dispatch, connected: function () { lost(""); },
+      retrying: function () { lost("The console is not reachable: retrying."); }
+    });
   }
-  api("/api/events", { headers: { "Accept": "text/event-stream" }, signal: ctl.signal })
-    .then(function (r) {
-      if (r.status === 403) { if (es === ctl) { es = null; refused(r); } return null; }
-      if (!r.ok || !r.body) { throw new Error("HTTP " + r.status); }
-      lost("");
-      var reader = r.body.getReader(), text = new TextDecoder(), buf = "";
-      function pump() {
-        return reader.read().then(function (step) {
-          if (step.done || es !== ctl) { return null; }
-          buf += text.decode(step.value, { stream: true });
-          var at;
-          while ((at = buf.indexOf("\n\n")) >= 0) {
-            dispatch(buf.slice(0, at));
-            buf = buf.slice(at + 2);
-          }
-          return pump();
-        });
-      }
-      return pump().then(again);
-    })
-    .catch(again);
+  if (!document.hidden && !keyMissing) { connection.start(); }
 }
 
 // The key from the URL's fragment (see setKey), then out of the address bar
@@ -116,8 +94,8 @@ if (first !== null) { history.replaceState(null, "", location.pathname + "#comms
 function takeKey(key) {
   setKey(key);
   forgetFaces();  // the photos the old key was refused are asked for again
-  if (es) { es.abort(); es = null; }
-  clearTimeout(retry);
+  keyMissing = false;
+  if (connection) { connection.stop(); }
   lost("");
   connect();
   refreshFaces();  // the room's faces and the card's photo, with the new key
@@ -141,6 +119,11 @@ window.addEventListener("hashchange", function () {
   if (want !== S.tab) { showTab(want); }
 });
 connect();
+document.addEventListener("visibilitychange", function () {
+  if (document.hidden) { if (connection) { connection.stop(); } }
+  else { connect(); }
+});
+window.addEventListener("online", function () { if (connection) { connection.stop(); } connect(); });
 
 // The light/dark switch. theme.js applied the stored choice before paint; this flips it and
 // remembers it under the one key (JSON, so a stored value reads "light" or "dark" with quotes)

@@ -6,6 +6,7 @@ never him. Presence is computed as the mind computes it (discord.presence with t
 the member's regional clock and the configured trial rank). A table an older mind.db lacks is
 named in `missing` and reads as empty."""
 import json
+from hashlib import sha256
 from datetime import datetime
 
 from leeroy_mind.discord import layout, presence, store
@@ -18,6 +19,39 @@ from .feed import human_guid
 
 DISCORD_TABLES = ("discord_message", "discord_thread", "discord_reaction")
 LIMIT = 100
+WINDOW_BYTES = 180_000
+
+
+def _encoded(value) -> str:
+    return json.dumps(value, ensure_ascii=True, separators=(",", ":"), allow_nan=False)
+
+
+def _bounded_window(out: dict, *, after: int) -> dict:
+    """Retain whole records under the wire budget, saying which shelves were limited.
+
+    The roster/layout is measured separately. Each shelf has a share so large pins
+    cannot evict every current message, and quotes only accompany retained replies.
+    """
+    rows = {key: out[key] for key in ("messages", "quotes", "pins", "threads")}
+    out.update({key: [] for key in rows})
+    out["limited"] = {key: False for key in rows}
+    remaining = max(0, WINDOW_BYTES - len(_encoded(out)) - 128)
+    for key, share in (("messages", .6), ("quotes", .15), ("pins", .15), ("threads", .1)):
+        candidates = rows[key]
+        if key == "quotes":
+            parents = {m["reply_to"] for m in out["messages"] if m["reply_to"]}
+            candidates = [q for q in candidates if q["id"] in parents]
+        newest = key == "messages" and not after
+        ordered = reversed(candidates) if newest else iter(candidates)
+        kept, used, budget = [], 0, int(remaining * share)
+        for row in ordered:
+            size = len(_encoded(row)) + 1
+            if len(kept) >= LIMIT or used + size > budget:
+                break
+            kept.append(row); used += size
+        out[key] = list(reversed(kept)) if newest else kept
+        out["limited"][key] = len(kept) < len(candidates)
+    return out
 
 
 def _personas(conn) -> dict:
@@ -74,12 +108,13 @@ def window(conn, channel: str, thread: int | None = None) -> list[dict]:
 def watched(conn, channel: str, thread: int | None = None) -> str:
     """A loaded feed plus its pin/thread shelves; removals have no timestamp to hint at."""
     return fingerprint({"messages": window(conn, channel, thread),
-                        "pins": store.pins(conn, channel), "threads": store.threads(conn, channel)})
+                        "pins": store.pins(conn, channel, limit=LIMIT + 1),
+                        "threads": store.threads(conn, channel, limit=LIMIT + 1)})
 
 
 def fingerprint(messages) -> str:
-    """A loaded window as one comparable text: any edit, delete, pin or reaction changes it."""
-    return json.dumps(messages, sort_keys=True, ensure_ascii=True)
+    """A fixed-size digest: edits and removals still invalidate the loaded window."""
+    return sha256(json.dumps(messages, sort_keys=True, ensure_ascii=True).encode("ascii")).hexdigest()
 
 
 def last_by_channel(conn) -> dict[str, int]:
@@ -124,11 +159,12 @@ def discord_view(conn, *, owner_now: datetime, trial_rank: int, channel: str | N
         out["channel"] = channel
         out["messages"] = with_reactions(conn, store.messages(
             conn, channel, after=after, limit=LIMIT, thread=thread)) if ok else []
-        out["threads"] = store.threads(conn, channel) if ok else []
-        out["pins"] = store.pins(conn, channel) if ok else []
+        out["threads"] = store.threads(conn, channel, limit=LIMIT + 1) if ok else []
+        out["pins"] = store.pins(conn, channel, limit=LIMIT + 1) if ok else []
         parents = sorted({m["reply_to"] for m in out["messages"] if m["reply_to"]})
         out["quotes"] = [{"id": r[0], "author": r[1], "text": "" if r[3] is not None else r[2],
                           "deleted": r[3]} for r in views.rows(conn,
             "SELECT id, author, text, deleted FROM discord_message WHERE channel = ? "
             "AND id IN (SELECT value FROM json_each(?))", (channel, json.dumps(parents)))] if parents else []
+        return _bounded_window(out, after=after)
     return out

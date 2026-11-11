@@ -377,7 +377,7 @@ def test_persona_content_never_reaches_the_log(cast, data, tmp_path, caplog):
 
 def test_the_page_has_the_personas_tab_and_no_way_to_change_a_persona():
     page = page_source()
-    assert 'id="tab-personas" class="tab mindtab"' in page and 'api("/api/personas")' in page
+    assert 'id="tab-personas" class="tab mindtab"' in page and 'api("/api/personas?offset="' in page
     panel = page[page.index('id="tab-personas"'):].split('<section id="tab-', 1)[0]
     # The ephemeral claim-check read uses POST to keep typed text out of URLs.
     assert 'post("/api/persona' not in page.replace('post("/api/persona/check"', '')

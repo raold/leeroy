@@ -15,6 +15,7 @@ async def submit(r, button, path, *, ok=True):
                                       and x.request.method == "POST") as answer:
         await button.click()
     response = await answer.value
+    await response.finished()
     result = await response.json()
     assert result.get("ok") is ok, result
     return result

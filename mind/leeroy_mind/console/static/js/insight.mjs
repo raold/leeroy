@@ -92,7 +92,7 @@ export function pollInsight(guid) {
   selectInsight(guid);
   if (!guid) { return; }
   var seq = ++generation;
-  api("/api/persona/insight?guid=" + guid).then(function (r) {
+  api("/api/persona/insight?guid=" + guid, { poll: true }).then(function (r) {
     if (refused(r)) { return null; }
     return r.json().then(j => ({ok:r.ok, j:j}));
   }).then(function (r) {

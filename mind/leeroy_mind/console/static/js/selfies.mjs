@@ -32,7 +32,7 @@ export function pollSelfies() {
   if (S.tab !== "personas") { return; }
   if (busy) { again = true; return; }
   busy = true;
-  api("/api/selfies").then(function (r) {
+  api("/api/selfies", { poll: true }).then(function (r) {
     if (refused(r)) { return null; }
     return r.json().then(function (j) { return { status: r.status, j: j }; });
   }).then(function (x) {
@@ -105,19 +105,34 @@ function drawQueue(rows, ok, why) {
 function loadShots(guid, set) {
   var key = guid + ":" + set;
   if (!SHOTS.has(key)) {
+    while (SHOTS.size >= 24) { SHOTS.delete(SHOTS.keys().next().value); }
     SHOTS.set(key, api("/api/selfies/images?guid=" + num(guid) + "&set=" + num(set)).then(function (r) {
-      if (refused(r) || r.status !== 200) { return null; }
-      return r.json();
+      if (refused(r)) { return null; }
+      return r.json().then(function (j) {
+        return r.status === 200 ? j : { error: str(j.error) || "Photos could not be read." };
+      });
     }).then(function (j) {
-      if (!j) { SHOTS.delete(key); }  // asked again at the next poll
+      if (!j || j.error) { SHOTS.delete(key); }
       return j;
-    }, function () { SHOTS.delete(key); return null; }));
+    }, function (error) { SHOTS.delete(key); return { error: str(error.message) || "Photos could not be read." }; }));
   }
   return SHOTS.get(key);
 }
 
 function fillShots(shots, j, ok, why) {
   if (!j || !shots.parentNode) { return; }
+  var row = shots.parentNode, old = row.querySelector(".shot-error");
+  if (old) { old.remove(); }
+  if (j.error) {
+    var note = el("p", "shot-error why", j.error + " "), retry = el("button", "", "Retry photos");
+    note.setAttribute("role", "status"); retry.type = "button";
+    retry.addEventListener("click", function () {
+      retry.disabled = true;
+      loadShots(Number(row.dataset.guid), Number(row.dataset.set)).then(function (next) { fillShots(shots, next, ok, why); });
+    });
+    note.appendChild(retry); row.appendChild(note);
+    return;
+  }
   arr(j.images).forEach(function (im) {
     var b = shots.children[num(im.index)];
     if (!b || typeof im.src !== "string" || im.src.indexOf(JPEG) !== 0 || b.firstChild) { return; }
@@ -236,14 +251,18 @@ export function showMemberPhoto(guid, name) {
 
 function loadMember() {
   var seq = ++who.seq, guid = who.guid;
-  api("/api/selfies/member?guid=" + num(guid)).then(function (r) {
+  api("/api/selfies/member?guid=" + num(guid), { poll: true }).then(function (r) {
     if (refused(r)) { return null; }
     return r.json().then(function (j) { return { status: r.status, j: j }; });
   }).then(function (x) {
     if (!x || seq !== who.seq || guid !== who.guid) { return; }
     who.view = x.status === 200 ? x.j : x.status === 404 ? null : { error: str(x.j.error) || "mind.db could not be read." };
     renderMemberPhoto();
-  }, function () { /* the strip says it */ });
+  }, function (error) {
+    if (seq !== who.seq || guid !== who.guid) { return; }
+    who.view = { error: str(error.message) || "Photos could not be read." };
+    renderMemberPhoto();
+  });
 }
 
 function renderMemberPhoto() {
@@ -251,7 +270,7 @@ function renderMemberPhoto() {
   var now = $("p-photonow");
   clear(now);
   now.appendChild(photoButton(who.guid, who.name, "room"));
-  now.appendChild(el("span", "note", j === undefined ? "Reading." : j === null ? "No photos for this member in mind.db."
+  now.appendChild(el("span", "note", j === undefined ? "Reading." : j === null ? "No photos yet."
                                      : j.error ? j.error : currentText(j)));
   var has = !!j && !j.error;
   $("p-more").disabled = !ok || !has;
