@@ -110,9 +110,12 @@ def classify(cmd, *, child=False):
         if channel != "whisper" and cmd.to_guid != 0: raise ValueError("invalid speech target")
     elif kind == "realm_emote":
         n("guid"); s("emote", 1, 64); n("target_guid", 0)
-    elif kind == "realm_move":
+        if type(cmd.social) is not bool: raise ValueError('invalid social flag')
+    elif kind in {"realm_move", "realm_visit"}:
         if re.fullmatch(r"[a-z0-9_]{1,64}", s("place", 1, 64)) is None: raise ValueError("invalid place")
-        n("slot", 0, 119)
+        if kind == 'realm_move':
+            n("slot", 0, 119)
+            if type(cmd.social) is not bool: raise ValueError('invalid social flag')
     elif kind == "rpg_status":
         e("status", {"idle", "rest", "wander npc", "wander random", "go grind", "go camp", "do quest", "do gather", "travel flight"})
         n("quest_id", 0)

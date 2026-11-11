@@ -78,6 +78,8 @@ def scope_ok(m: MemoryRow, *, turn_channel: str, to_guid: int) -> bool:
     open memory reaches every turn. A private or secret one counts as a whisper between its
     owner and its partner, so it reaches only a private turn (a whisper, or a Discord DM) from
     her to that partner, and one with no partner (scope_with 0) reaches none."""
+    if (getattr(m, 'key', None) or '').startswith('bond:') and turn_channel != 'whisper':
+        return False
     return m.scope == "open" or (m.scope_with != 0 and is_private(turn_channel)
                                  and {m.owner, m.scope_with} == {m.owner, to_guid})
 
@@ -276,7 +278,7 @@ class Recall:
     async def recall(self, owner: int, query: str, *, present: Sequence[int],
                      addressee: int | None, k: int = 5, priority: Priority = Priority.SOCIAL,
                      touch: bool = True, channel: str | None = None,
-                     to_guid: int = 0) -> list[MemoryRow]:
+                     to_guid: int = 0, include_bond: bool = False) -> list[MemoryRow]:
         """The k memories to bring up. `touch` marks them accessed (recency); a look that
         doesn't use them (an evaluation, a quiz) passes False. `channel` is that of the turn
         they are for and `to_guid` whom its whisper goes to. With a channel, a private or
@@ -311,6 +313,8 @@ class Recall:
             by_id[m.id] = m
         rows = [m for m in by_id.values() if m.status == "active" and m.owner == owner]
         if channel is not None:
+            if not include_bond:
+                rows = [m for m in rows if not (m.key or '').startswith('bond:')]
             scoped = [m for m in rows if scope_ok(m, turn_channel=channel, to_guid=to_guid)]
             if len(scoped) < len(rows):
                 log.debug("recall_scope_excluded: n=%d", len(rows) - len(scoped))

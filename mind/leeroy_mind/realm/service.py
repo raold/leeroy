@@ -44,6 +44,7 @@ JOB_COMMANDS = frozenset({
 # Announce is not here: only the announcer's own prepared row may reach the system channel.
 # GuildReadmit is, but only the kick guard's own prepared admission passes its barrier.
 _DIRECT = frozenset({protocol.RealmActors, protocol.RealmSay, protocol.RealmEmote,
+                     protocol.RealmVisit,
                      protocol.CalendarUpdate, protocol.BankMoney,
                      protocol.GuildRename, protocol.ItemCount, protocol.GuildReadmit})
 _SOURCES = frozenset({BgEnd, protocol.ArenaEnd, protocol.Wg, protocol.PvpKill,
@@ -156,6 +157,8 @@ class Realm:
 
     def _invalidate(self):
         self._generation += 1
+        if (bond := getattr(self, 'parts', {}).get('bond')) is not None:
+            bond.invalidate()
         for task in tuple(self._children):
             task.cancel()
         # Also fence ports-owned speech/model children before any presence await.

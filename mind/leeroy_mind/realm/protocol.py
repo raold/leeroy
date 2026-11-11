@@ -113,6 +113,7 @@ class RealmEmote:
     guid: int
     emote: str
     target_guid: int = 0
+    social: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +122,32 @@ class RealmMove:
     guid: int
     place: str
     slot: int = 0
+    social: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class RealmVisit:
+    id: str
+    place: str
+
+
+@dataclass(frozen=True, slots=True)
+class RealmVisitState:
+    ts: int
+    id: str
+    place: str
+    guild_id: int
+    human_guid: int
+    ready: bool
+    near: bool
+
+    def __post_init__(self):
+        if (not _id(self.id) or not _uint(self.ts, 253402300799999)
+                or not _uint(self.guild_id) or not _uint(self.human_guid)
+                or type(self.ready) is not bool or type(self.near) is not bool
+                or type(self.place) is not str or re.fullmatch(r'[a-z0-9_]{1,64}', self.place) is None
+                or (self.near and not self.ready)):
+            raise ValueError('invalid visit observation')
 
 
 @dataclass(frozen=True, slots=True)
@@ -668,6 +695,7 @@ COMMANDS: dict[str, type] = {
     "realm_say": RealmSay,
     "realm_emote": RealmEmote,
     "realm_move": RealmMove,
+    "realm_visit": RealmVisit,
     "rpg_status": RpgStatus,
     "leave_pvp": LeavePvp,
     "rearm": Rearm,
@@ -700,6 +728,7 @@ COMMANDS: dict[str, type] = {
 }
 EVENTS: dict[str, type] = {
     "realm_job": RealmJob,
+    "realm_visit_state": RealmVisitState,
     "channel_chat": ChannelChat,
     "pvp_kill": PvpKill,
     "duel_end": DuelEnd,
@@ -716,7 +745,7 @@ EVENTS: dict[str, type] = {
     "realm_dungeon_kill": RealmDungeonKill,
     "realm_achievement": RealmAchievement,
 }
-NOISY = frozenset({"realm_job", "channel_chat", "game_event"})
+NOISY = frozenset({"realm_job", "channel_chat", "game_event", "realm_visit_state"})
 
 
 def register() -> None:

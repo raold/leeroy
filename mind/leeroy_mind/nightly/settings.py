@@ -31,6 +31,7 @@ class NightlySettings:
     female_share: float
     data_dir: Path
     looks_diversity: bool = False
+    romance_activities: bool = False
     grace_minutes: int = 10
     retry_minutes: int = 60
     max_attempts: int = 3
@@ -116,7 +117,7 @@ def load_settings(cfg: MindConfig, data_dir: Path) -> NightlySettings:
         relationship_speed=cfg.memory.relationship_speed, romance_dial=cfg.romance.dial,
         jealousy=cfg.romance.jealousy, chattiness=cfg.talk.chattiness,
         wow_vs_life=load_life(data_dir / "mind.toml"), female_share=cfg.cast.female_share,
-        data_dir=data_dir, looks_diversity=enabled(data_dir))
+        data_dir=data_dir, looks_diversity=enabled(data_dir), romance_activities=cfg.romance.activities)
 
 
 def _at_six(day: date, tz: tzinfo) -> float:

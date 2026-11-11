@@ -15,8 +15,9 @@ FIXTURE = Path(__file__).resolve().parents[3] / "modules/mod-leeroy/tests/fixtur
 COMMAND_FIELDS = {
     "realm_actors": "id guids gankers guilds",
     "realm_say": "id guid channel text to_guid",
-    "realm_emote": "id guid emote target_guid",
-    "realm_move": "id guid place slot",
+    "realm_emote": "id guid emote target_guid social",
+    "realm_move": "id guid place slot social",
+    "realm_visit": "id place",
     "rpg_status": "id guid status quest_id",
     "leave_pvp": "id guids pvp_owner",
     "rearm": "id guids",
@@ -50,6 +51,7 @@ COMMAND_FIELDS = {
 }
 EVENT_FIELDS = {
     "realm_job": "ts id kind state reason guid value pvp_owner changed skipped",
+    "realm_visit_state": "ts id place guild_id human_guid ready near",
     "channel_chat": "ts channel from_guid from_name zone text via_bridge",
     "pvp_kill": "ts killer victim map zone",
     "duel_end": "ts winner loser result map zone city",
@@ -98,7 +100,7 @@ def command_from_message(msg):
 def test_authoritative_maps_fields_and_immutable_message_shapes():
     assert list(protocol.COMMANDS) == list(COMMAND_FIELDS)
     assert list(protocol.EVENTS) == list(EVENT_FIELDS)
-    assert len(protocol.COMMANDS) == 33 and len(protocol.EVENTS) == 16
+    assert len(protocol.COMMANDS) == 34 and len(protocol.EVENTS) == 17
     for registry, expected in ((protocol.COMMANDS, COMMAND_FIELDS), (protocol.EVENTS, EVENT_FIELDS)):
         for name, cls in registry.items():
             assert [field.name for field in dataclasses.fields(cls)] == expected[name].split()
@@ -106,7 +108,7 @@ def test_authoritative_maps_fields_and_immutable_message_shapes():
             assert "__dict__" not in cls.__slots__
     assert protocol.COMMANDS["arena_queue"] is protocol.ArenaQueue
     assert protocol.EVENTS["arena_queue"] is protocol.ArenaQueueEvent
-    assert protocol.NOISY == frozenset({"realm_job", "channel_chat", "game_event"})
+    assert protocol.NOISY == frozenset({"realm_job", "channel_chat", "game_event", "realm_visit_state"})
     assert all(field.kw_only for field in dataclasses.fields(protocol.Announce)
                if field.name in {"attempts", "fight_s", "first"})
 

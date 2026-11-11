@@ -281,6 +281,13 @@ LeeroyCommandResult Emote(nlohmann::json const& message)
     if (!cmd) return {false, why};
     auto* bot = Speaker(cmd->guid, why);
     if (!bot) return {false, why};
+    if (cmd->social)
+    {
+        auto* human = FindOnline(HumanGuid());
+        if (!IsCast(cmd->guid) || !SocialReady(human) || !SocialReady(bot)
+            || human->GetMap() != bot->GetMap() || human->GetDistance(bot) > 20.0f)
+            return {false, "social_unavailable"};
+    }
     auto const emote = LeeroyTextEmoteId(cmd->emote);
     if (!emote || !sEmotesTextStore.LookupEntry(*emote)) return {false, "unknown emote"};
     if (!bot->CanSpeak()) return {false, "muted"};

@@ -25,7 +25,7 @@ from typing import Protocol
 log = logging.getLogger(__name__)
 
 PART_MODULES = ("direct", "steps", "speech", "talk", "rivals", "race", "poach", "canon", "bank",
-                "calendar", "mail")
+                "calendar", "mail", "bond")
 NIGHT_MODULE = "night"
 NIGHT_STAGE = "realm"
 NIGHT_AFTER = "stories"

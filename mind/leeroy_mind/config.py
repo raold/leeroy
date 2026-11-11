@@ -28,6 +28,7 @@ realism = false                # bounded member typing, small bursts and rare co
 [romance]
 dial = 3                      # 1 milquetoast .. 10 filth
 jealousy = 5                  # 0-10: women's rivalry and the men's envy
+activities = false            # private shared moments, moods and inn invitations
 
 [cast]
 female_share = 0.7
@@ -86,6 +87,7 @@ class TalkCfg:
 class RomanceCfg:
     dial: int
     jealousy: int
+    activities: bool = False
 
 
 @dataclass(frozen=True)
@@ -184,6 +186,7 @@ _RULES = {
     "romance": {
         "dial": (lambda v: _int_in(v, 1, 10), "an integer 1-10"),
         "jealousy": (lambda v: _int_in(v, 0, 10), "an integer 0-10"),
+        "activities": (lambda v: type(v) is bool, "a boolean"),
     },
     "cast": {
         "female_share": (lambda v: _num_in(v, 0, 1), "a number 0-1"),
@@ -234,6 +237,8 @@ def _build(data: dict, source: str) -> MindConfig:
         for key, (check, want) in rules.items():
             v = given.get(key, defaults[section][key])
             if section == "talk" and key == "realism" and type(v) is not bool:
+                v = False
+            if section == 'romance' and key == 'activities' and type(v) is not bool:
                 v = False
             if not check(v):
                 raise ConfigError(f"{section}.{key}: expected {want}, got {_shown(section, v)}")

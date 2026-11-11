@@ -181,6 +181,7 @@ std::optional<EmoteCmd> ParseEmote(json const& j, std::string& error)
 {
     Fields f(j, error); EmoteCmd out;
     f.Number("guid", out.guid); f.String("emote", out.emote, 1, 64); f.Number("target_guid", out.targetGuid, 0, kU32Max, true);
+    f.Boolean("social", out.social);
     return f.Result(std::move(out));
 }
 std::optional<MoveCmd> ParseMove(json const& j, std::string& error)
@@ -188,6 +189,13 @@ std::optional<MoveCmd> ParseMove(json const& j, std::string& error)
     Fields f(j, error); MoveCmd out;
     f.Number("guid", out.guid); f.String("place", out.place, 1, 64); f.Require(Identifier(out.place), "place");
     f.Number("slot", out.slot, 0, 119, true);
+    f.Boolean("social", out.social);
+    return f.Result(std::move(out));
+}
+std::optional<VisitCmd> ParseVisit(json const& j, std::string& error)
+{
+    Fields f(j, error); VisitCmd out;
+    f.String("place", out.place, 1, 64); f.Require(Identifier(out.place), "place");
     return f.Result(std::move(out));
 }
 std::optional<RpgStatusCmd> ParseRpgStatus(json const& j, std::string& error)
@@ -632,6 +640,10 @@ json MakeCalendarRsvp(std::uint64_t eventId, std::string_view status)
 { return {{"type", "calendar_rsvp"}, {"event_id", eventId}, {"status", status}}; }
 json MakeMailTaken(std::uint32_t itemGuid, std::uint32_t itemId, std::uint32_t count)
 { return {{"type", "mail_taken"}, {"item_guid", itemGuid}, {"item_id", itemId}, {"count", count}}; }
+json MakeVisitState(std::string const& id, std::string const& place,
+                    std::uint32_t guild, std::uint32_t human, bool ready, bool near)
+{ return {{"type", "realm_visit_state"}, {"id", id}, {"place", place}, {"guild_id", guild},
+          {"human_guid", human}, {"ready", ready}, {"near", ready && near}}; }
 json MakeGuard(std::uint32_t guid, std::string_view action, std::uint32_t rank, std::string_view reason)
 { return {{"type", "guard"}, {"guid", guid}, {"action", action}, {"rank", rank}, {"reason", reason}}; }
 

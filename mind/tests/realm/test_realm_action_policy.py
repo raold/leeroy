@@ -20,6 +20,7 @@ def announce(**changes):
 
 
 CASES = [
+    (p.RealmVisit("visit", "org_inn"), "ack", ()),
     (p.RealmActors("actors", (3, 2), (2,), (50,)), "ack", ()),
     (p.RealmSay("say", 2, "trade", "hello"), "ack", ()),
     (p.RealmEmote("emote", 2, "wave"), "ack", ()),
@@ -68,7 +69,7 @@ def test_exact_registry_scope_and_lossless_payload_roundtrip(cmd, policy, scope)
         assert json.loads(c.payload)["guids"] == list(cmd.guids)
 
 
-def test_registry_accounts_for_all_33_realm_types():
+def test_registry_accounts_for_all_realm_types():
     assert {type(c) for c, _, _ in CASES if type(c) is not BotDo} | {p.ArenaQueue} == set(p.COMMANDS.values())
 
 

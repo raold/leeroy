@@ -18,6 +18,7 @@ from leeroy_mind.nightly.mood import stage_mood
 from leeroy_mind.nightly.reflect import stage_reflect
 from leeroy_mind.nightly.relations import stage_notes, stage_nudges, stage_regress, stage_tier0
 from leeroy_mind.nightly.romance import stage_jealousy, stage_romance
+from leeroy_mind.bond.night import stage_bond
 from leeroy_mind.nightly.runner import Stage, stage_snapshot
 from leeroy_mind.nightly.settings import is_sunday, iso_week
 from leeroy_mind.nightly.stories import stage_stories
@@ -117,6 +118,7 @@ STAGES = (
     Stage("romance", stage_romance, None),
     Stage("arc", stage_arc, "reflection"),
     Stage("jealousy", stage_jealousy, None),
+    Stage("bond", stage_bond, None),
     Stage("human_world", stage_human_world, "reflection"),
     Stage("language", stage_language, "reflection"),
     Stage("mood", stage_mood, None),

@@ -1031,9 +1031,11 @@ class Pipeline:
         present = list(dict.fromkeys(
             [r.from_guid for r in recent if r.from_guid and r.from_guid != turn.speaker]
             + ([hg] if hg and self.world.human_online else [])))
+        from leeroy_mind.bond.policy import eligible as bond_eligible
+        bond_options = {'include_bond': True} if self.cfg.romance.activities and bond_eligible(p, self.cfg.romance.dial) else {}
         memories = [] if preview else await self.recall.recall(
             turn.speaker, query, present=present, addressee=turn.addressee, k=5,
-            priority=turn.priority, touch=False, channel=turn.channel, to_guid=turn.to_guid)
+            priority=turn.priority, touch=False, channel=turn.channel, to_guid=turn.to_guid, **bond_options)
         if meta.lore_memory and all(m.id != meta.lore_memory for m in memories):
             # the memory she answers his question from leads, even while it rests
             memories = [*self.store.get_memories([meta.lore_memory]), *memories][:5]

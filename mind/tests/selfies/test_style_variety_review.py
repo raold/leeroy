@@ -115,14 +115,14 @@ def test_date_outfits_exclude_work_clothes():
 
 def test_restyle_snapshot_precedes_any_migration_or_write(h, capsys, monkeypatch):
     from leeroy_mind import __main__ as main
-    from leeroy_mind.storage.db import latest_version
+    from leeroy_mind.storage import db
     root = prepared(h)
-    previous_schema = latest_version() - 1
-    # Recreate the pre-feature schema; the snapshot must preserve that version.
-    with h.store.transaction():
-        h.store.conn.execute("DROP TABLE photo_extra")
-        h.store.conn.execute("DROP TABLE photo_style_history")
-        h.store.conn.execute(f"PRAGMA user_version={previous_schema}")
+    previous_schema = db.latest_version()
+    # A real pending migration, independent of which feature happens to be last.
+    pending = root / f'{previous_schema+1:04d}_snapshot_probe.sql'
+    pending.write_text('CREATE TABLE restyle_migration_probe(id INTEGER);', encoding='utf-8')
+    migrations = db._migration_files()
+    monkeypatch.setattr(db, '_migration_files', lambda: [*migrations, (previous_schema+1, pending)])
     calls = []
     original = main._snapshot_file
     def snapshot(db, dest, label):
@@ -136,7 +136,8 @@ def test_restyle_snapshot_precedes_any_migration_or_write(h, capsys, monkeypatch
     assert len(snapshots) == 1
     with sqlite3.connect(snapshots[0]) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == previous_schema
-        assert conn.execute("SELECT 1 FROM sqlite_master WHERE name='photo_extra'").fetchone() is None
+        assert conn.execute("SELECT 1 FROM sqlite_master WHERE name='restyle_migration_probe'").fetchone() is None
+    assert h.store.conn.execute("SELECT 1 FROM sqlite_master WHERE name='restyle_migration_probe'").fetchone()
 
 
 def test_restyle_reports_adult_floor(h):

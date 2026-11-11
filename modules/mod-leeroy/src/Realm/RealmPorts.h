@@ -60,6 +60,13 @@ inline Player* FindOnline(std::uint32_t guid)
     Player* player = ObjectAccessor::FindConnectedPlayer(PlayerGuid(guid));
     return player && player->IsInWorld() && !player->IsDuringRemoveFromWorld() && player->GetSession() ? player : nullptr;
 }
+// Read again at each social mutation, not just when the invitation was accepted.
+inline bool SocialReady(Player* player)
+{
+    return player && player->IsAlive() && !player->IsInCombat() && !player->GetGroup()
+        && !player->duel && !player->IsBeingTeleported() && !player->InBattleground()
+        && !player->GetMap()->Instanceable() && !player->IsSpectator();
+}
 inline bool IsOnRandomBotAccount(std::uint32_t guid)
 {
     auto const* character = sCharacterCache->GetCharacterCacheByGuid(PlayerGuid(guid));

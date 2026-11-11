@@ -1390,6 +1390,12 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 
 ## The Realm (`leeroy_mind.realm`)
 
+`[romance] activities = true` enables private shared moments/moods and bounded inn invitations
+(default false). Invitations require Realm enabled and updated native `realm_visit` support;
+the supported activity is meeting and sitting at a whitelisted inn. Limits use local calendar
+days; Discord never accepts or moves a body. See `mind/leeroy_mind/bond/README.md` for privacy,
+expiry and exactly-once recovery. Install the new bond migration before enabling it.
+
 The mind's layer for the world outside the owner's guild: three rival bot guilds (a
 progression rival he names, a drama farm, Alliance gankers), their officers' rationed lines in
 Trade and General and the gankers' emotes, the race for first kills, canon achievement grants,

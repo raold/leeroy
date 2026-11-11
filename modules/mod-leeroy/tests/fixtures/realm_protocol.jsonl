@@ -245,3 +245,10 @@
 {"name":"realm_achievement_bad_realm_first_without_flag","kind":"event","valid":false,"msg":{"v":1,"type":"realm_achievement","ts":0,"guid":11001,"achievement_id":13,"name":"Level 80","category":92,"flags":0,"realm_first":true}}
 {"name":"duel_end_in_city","kind":"event","valid":true,"msg":{"v":1,"type":"duel_end","ts":0,"winner":11001,"loser":11002,"result":"fled","map":1,"zone":1637,"city":true}}
 {"name":"duel_end_missing_city","kind":"event","valid":false,"msg":{"v":1,"type":"duel_end","ts":0,"winner":11001,"loser":11002,"result":"won","map":0,"zone":33}}
+{"name":"realm_visit_ok","kind":"command","valid":true,"error":"","full":true,"queued":false,"msg":{"v":1,"type":"realm_visit","id":"realm-test","ts":0,"place":"org_inn"}}
+{"name":"realm_visit_bad_place","kind":"command","valid":false,"error":"bad field: place","msg":{"v":1,"type":"realm_visit","id":"realm-test","ts":0,"place":"not a place"}}
+{"name":"realm_visit_state_event","kind":"event","valid":true,"full":true,"msg":{"v":1,"type":"realm_visit_state","ts":1700000000000,"id":"realm-test","place":"org_inn","guild_id":21,"human_guid":1,"ready":true,"near":false}}
+{"name":"realm_move_social","kind":"command","valid":true,"error":"","msg":{"v":1,"type":"realm_move","id":"realm-test","ts":0,"guid":101,"place":"org_inn","social":true}}
+{"name":"realm_move_social_invalid","kind":"command","valid":false,"error":"bad field: social","msg":{"v":1,"type":"realm_move","id":"realm-test","ts":0,"guid":101,"place":"org_inn","social":1}}
+{"name":"realm_emote_social","kind":"command","valid":true,"error":"","msg":{"v":1,"type":"realm_emote","id":"realm-test","ts":0,"guid":101,"emote":"sit","target_guid":1,"social":true}}
+{"name":"realm_emote_social_invalid","kind":"command","valid":false,"error":"bad field: social","msg":{"v":1,"type":"realm_emote","id":"realm-test","ts":0,"guid":101,"emote":"sit","target_guid":1,"social":"yes"}}
