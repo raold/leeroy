@@ -1,5 +1,6 @@
 """User actions cross browser -> console -> real control endpoint -> production stores."""
 import asyncio
+import json
 import re
 
 from conftest import HUMAN
@@ -11,20 +12,15 @@ from .test_tabs import open_console, visit
 
 
 async def submit(r, button, path, *, ok=True):
-    async with r.page.expect_response(lambda x: x.url == r.url + path
-                                      and x.request.method == "POST") as answer:
-        await button.click()
-    response = await answer.value
-    # Read the body only once the request has finished (earlier, Chrome can answer
-    # "No data found for resource"). finished() has no deadline of its own and its
-    # requestfinished event sometimes never arrives for these routed requests (CI
-    # hung in the mind stop/start flow until the job timeout), so bound the wait;
-    # after 10 s the body is there whether or not the event came.
-    try:
-        await asyncio.wait_for(response.finished(), 10)
-    except TimeoutError:
-        pass
-    result = await response.json()
+    """Click, then take the POST's answer as the page read it (conftest.ANSWERS)."""
+    seen = await r.page.evaluate("window.__answers.length")
+    await button.click()
+    answer = await r.page.wait_for_function(
+        "([path, seen]) => window.__answers.slice(seen).find((a) => a.path === path) || null",
+        arg=[path, seen], timeout=130000)
+    answer = await answer.json_value()
+    assert answer["text"] is not None, f"{path}: the page could not read the answer"
+    result = json.loads(answer["text"])
     assert result.get("ok") is ok, result
     return result
 
