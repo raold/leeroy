@@ -19,11 +19,11 @@ from uuid import uuid4
 from leeroy_mind.guild.loot import _get, _put
 from leeroy_mind.guild.offline import LOGOUT_KEY
 from leeroy_mind.guild.protocol import Job, JobSkip
-from leeroy_mind.protocol import Ack
+from leeroy_mind.protocol import Ack, Hello
 
 from . import store
 from .lab import _DAMAGE_SPECS, halving_rounds, paired_score, propose
-from .protocol import CustomStrategy, DummyResult, DummyTrial
+from .protocol import CustomStrategy, DummyCleanup, DummyResult, DummyTrial
 from .vocab import ClassVocab, refresh
 
 
@@ -33,6 +33,13 @@ OWNED_KEY = "tg:lab:owned"
 CURSOR_KEY = "tg:lab:cursor"
 ATTEMPT_PREFIX = "tg:lab:attempt:"
 SUMMARY_PREFIX = "tg:lab:summary:"
+# Native evidence for the operator's `training lab-clear`: a trial's dummy_cleanup
+# receipt, and the start of the worldserver process the latest hello named.
+NATIVE_PREFIX = "tg:lab:native:"
+NATIVE_START_KEY = "tg:lab:native_start"
+CLEARED_PREFIX = "tg:lab:cleared:"
+ERROR_LIMIT = 256
+_CODE = re.compile(r"[A-Za-z0-9_.:-]{1,64}")
 INPUT_LIMIT = 64
 ACK_SECONDS = 60
 CLEANUP_SECONDS = 600
@@ -43,6 +50,27 @@ SPELL_BASIS = "best_effort_thread_pair"
 
 def _number(value):
     return type(value) in (int, float) and math.isfinite(value)
+
+
+def _error_code(error):
+    """The leading code of a native ack error, safe for a log line."""
+    found = _CODE.match(error) if isinstance(error, str) else None
+    return found.group(0) if found else "unknown"
+
+
+def desired_setups(conn, guids):
+    """Members with a standing setup. Malformed standing state is unknown, so it counts too."""
+    desired = set()
+    for guid, row in store.latest_setups(conn).items():
+        if guid not in guids:
+            continue
+        try:
+            if (row["rotation"] is not None or row["premade"] is not None
+                    or json.loads(row["toggles"]) or json.loads(row["vals"])):
+                desired.add(guid)
+        except (ValueError, TypeError):
+            desired.add(guid)
+    return desired
 
 
 def _in_window(now, window):
@@ -108,8 +136,7 @@ class LabRunner:
         self.reason = ""
         if self.active:
             # A new process cannot prove what a previous bridge await changed.
-            self._owned["halt"] = "process_restart"
-            self._owned["phase"] = "blocked"
+            self._halt("process_restart")
             self._save()
 
     @property
@@ -140,11 +167,20 @@ class LabRunner:
         with self.ports.conn:
             _put(self.ports.conn, OWNED_KEY, self._owned)
 
+    def _halt(self, reason):
+        # The first block's time stays; later reasons only rename it. A record blocked before
+        # halted_at existed dates from its start, which the block cannot precede.
+        if type(self._owned.get("halted_at")) not in (int, float):
+            started = self._owned.get("started")
+            self._owned["halted_at"] = (started if self._owned.get("phase") == "blocked"
+                                        and type(started) in (int, float) else self.ports.clock.now())
+        self._owned["halt"] = reason
+        self._owned["phase"] = "blocked"
+
     def _block(self, reason):
         self.reason = reason
         if self.active:
-            self._owned["halt"] = reason
-            self._owned["phase"] = "blocked"
+            self._halt(reason)
             self._save()
 
     def _due(self):
@@ -154,8 +190,8 @@ class LabRunner:
             return False
         try:
             state = self.schedule() if self.schedule is not None else None
-        except Exception:
-            log.warning("training_lab_schedule_failed")
+        except Exception as exc:
+            log.warning("training_lab_schedule_failed error=%s", type(exc).__name__)
             return False
         now = self.ports.clock.now()
         if (not isinstance(state, LabSchedule) or not _number(state.observed_at)
@@ -173,17 +209,7 @@ class LabRunner:
 
     def _desired(self, guids):
         """Malformed standing state is unknown, so it also blocks restoration."""
-        desired = set()
-        for guid, row in store.latest_setups(self.ports.conn).items():
-            if guid not in guids:
-                continue
-            try:
-                if (row["rotation"] is not None or row["premade"] is not None
-                        or json.loads(row["toggles"]) or json.loads(row["vals"])):
-                    desired.add(guid)
-            except (ValueError, TypeError):
-                desired.add(guid)
-        return desired
+        return desired_setups(self.ports.conn, guids)
 
     def _eligible(self):
         away = self.ports.away()
@@ -324,6 +350,46 @@ class LabRunner:
             self._enqueue("job", event, Job)
         elif isinstance(event, DummyResult):
             self._enqueue("result", event, DummyResult)
+        elif isinstance(event, (DummyCleanup, Hello)):
+            try:
+                if isinstance(event, DummyCleanup):
+                    self._native_cleanup(event)
+                else:
+                    self._native_start(event)
+            except Exception as exc:
+                log.warning("training_lab_receipt_failed error=%s", type(exc).__name__)
+
+    def _native_cleanup(self, event):
+        """Keep native's first word on a trial this lab sent; `training lab-clear` reads it.
+
+        A receipt never unblocks the lab by itself: the operator clears it with the mind stopped.
+        """
+        owned = self._owned
+        if (type(owned) is not dict or type(event.id) is not str or type(event.ts) is not int
+                or event.id not in (owned.get("attempt_ids") or ())
+                or event.state not in {"restored", "released"} or type(event.after_ms) is not int
+                or any(type(g) is not int for g in event.unfinished)):
+            return
+        key = NATIVE_PREFIX + event.id
+        with self.ports.conn:
+            if _get(self.ports.conn, key) is not None:
+                return
+            _put(self.ports.conn, key, dict(id=event.id, state=event.state, unfinished=list(event.unfinished),
+                                            after_ms=event.after_ms, ts=event.ts, seen=self.ports.clock.now()))
+        log.info("training_lab_native_cleanup id=%s state=%s unfinished=%d", event.id, event.state,
+                 len(event.unfinished))
+
+    def _native_start(self, event):
+        """Record which worldserver process the latest hello came from (0: an older native)."""
+        started = event.started_ms
+        if type(started) is not int or started <= 0:
+            return
+        stored = _get(self.ports.conn, NATIVE_START_KEY)
+        if type(stored) is dict and stored.get("started_ms") == started:
+            return
+        with self.ports.conn:
+            _put(self.ports.conn, NATIVE_START_KEY,
+                 dict(started_ms=started, hello_ts=event.ts, seen=self.ports.clock.now()))
 
     def _enqueue(self, kind, event, cls):
         current = self._owned.get("current") if self.active else None
@@ -610,6 +676,10 @@ class LabRunner:
         try:
             ack = await self._ack(DummyTrial(current["id"], tuple(guids), tuple(current["co"]), 0, seconds))
             current["ack"] = "accepted" if ack.ok else "rejected"
+            if not ack.ok:
+                # Native's reason (driver_pending, instance_bound:<guid>, cleanup_pending...).
+                current["ack_error"] = ack.error[:ERROR_LIMIT] if isinstance(ack.error, str) else ""
+                log.info("training_lab_dummy_rejected id=%s error=%s", current["id"], _error_code(ack.error))
             self._save()
             if not ack.ok:
                 # An explicit rejection did not acquire native bodies.
@@ -617,6 +687,7 @@ class LabRunner:
                     _put(self.ports.conn, ATTEMPT_PREFIX + current["id"], dict(current, rejected=True))
                 self._owned["attempts"] += 1
                 self._owned["current"] = None
+                self._owned["ack_error"] = current["ack_error"]
                 await self._finish("dummy_command_rejected")
         except asyncio.CancelledError:
             self._block("dummy_send_cancelled")
@@ -659,6 +730,8 @@ class LabRunner:
             attempts=self._owned["attempts"], gaps=list(self._owned["gaps"]), reason=reason,
             status="dummy/provisional", metric="dummy_requested_damage_proxy",
             field_performance="unavailable", ts=self.ports.clock.now())
+        if reason == "dummy_command_rejected" and isinstance(self._owned.get("ack_error"), str):
+            summary["ack_error"] = self._owned["ack_error"]
         self.ports.release(OWNER, self._owned_bodies())
         self._owned["phase"] = "complete"
         self.reason = reason

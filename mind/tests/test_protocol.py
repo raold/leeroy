@@ -101,6 +101,10 @@ def test_every_roadmap_event_parses():
 def test_as_built_shapes():
     hello = parse_event(json.dumps(ALL_EVENT_SAMPLES[0]))
     assert hello.version == "0.1.0" and hello.human_guid == 0
+    assert hello.started_ms == 0  # An older native names no worldserver process.
+    assert parse_event(json.dumps(ALL_EVENT_SAMPLES[0] | {"started_ms": 1794300000000})).started_ms == 1794300000000
+    with pytest.raises(ProtocolError):
+        parse_event(json.dumps(ALL_EVENT_SAMPLES[0] | {"started_ms": "1794300000000"}))
     cast = parse_event(json.dumps(ALL_EVENT_SAMPLES[1]))
     assert cast.members[1].online is False and cast.members[1].map == -1
     assert cast.members[1].spec_tab == -1 and isinstance(cast.members, tuple)
