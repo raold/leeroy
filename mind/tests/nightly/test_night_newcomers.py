@@ -80,6 +80,10 @@ def test_diversity_on_uses_sampler_without_extra_model_call_and_keeps_enrichment
     assert p is not None and p.appearance is not None
     assert ctx.reasoner.calls == 2
     assert _bare(ctx,101)  # sampler does not suppress later tastes/disclosure enrichment
+    # A later save of hers the same night (the photo pass, say) moves the version; enrichment that
+    # was refused or deferred must still be due while her disclosures are empty.
+    h.store.conn.execute("UPDATE persona_core SET version=version+1 WHERE guid=101")
+    assert _bare(ctx,101)
 
 
 def test_cap_survives_resume_and_later_eligible_members(h):

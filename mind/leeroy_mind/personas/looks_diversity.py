@@ -151,8 +151,7 @@ def mark_sampled(store, p):
 
 
 def needs_enrichment(store, guid):
-    version = store.get_meta(f"looks:sampled:{guid}")
-    if version is None:
-        return False
-    row = store.conn.execute("SELECT version FROM persona_core WHERE guid=?",(guid,)).fetchone()
-    return row is not None and str(row[0]) == version
+    """Sampled looks still waiting for their first enrichment. The marker stays until the enrich
+    save deletes it, so a refused or deferred enrichment (or a later save such as the photo pass,
+    which moves the version) leaves it due; the caller also requires empty disclosures."""
+    return store.get_meta(f"looks:sampled:{guid}") is not None
