@@ -299,7 +299,12 @@ intervening day; newer, missing or truncated logs are an incomplete observation,
 of a clean night. Evidence cycles use the critic's shared persisted edges: the count is
 memories whose ancestry reaches a cycle, not edges (note at 1, FAIL at 50). Its scan stops
 at 100,000 rows/nodes or 0.8 seconds and labels incomplete results. Queued selfie sets older
-than 30 hours are a note. Stale Realm roots include kind, member count and the exact
+than 30 hours are a note. With `[realm] enabled = true`, a missing or entry-less
+`realm/blocklist.txt` or no cached guild name (meta `realm:guild_name`) FAILs: the Realm's
+screen cannot be ready, so rivals stay silent (the night also logs `realm_night_unready` as a
+WARNING with `reason=` `blocklist_missing`, `guild_name_missing` or `blocklist_empty`). The
+newest weekly evaluation incomplete, an empty `probe_run` while a secret memory or fact exists,
+and offline raids blocked on each of the last 3 whole days are notes. Stale Realm roots include kind, member count and the exact
 `realm release <id> --reason reviewed_stale_hold` command to inspect with the mind stopped;
 the release command still enforces its own eligibility checks. Missing newer tables are
 reported as not set up. These checks only report state and never repair it. Health
