@@ -32,6 +32,9 @@ fingerprints and Realm filter it too. Talk, guild life, raids, voice casting and
 night stages retain those defaults. All-persona name blocking is intentionally
 broader for privacy; historical migrations and photo file maintenance keep all rows.
 Only this package and the explicit Realm integration opt in to world reads.
+Existing native Realm actors keep their prior card-based admission when a world
+persona is generated for them. The World Realm switch opts in their new persona
+voice; it does not revoke the old actor card or create another actor registration.
 
 Realm world speech uses current online members of the correct active rival guild,
 their voice block, existing screens and shared speech rations. Native validation

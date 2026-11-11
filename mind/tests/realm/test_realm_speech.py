@@ -112,6 +112,26 @@ def test_world_member_uses_own_voice_and_direct_receipt_without_actor_or_move(sa
     run(scenario())
 
 
+def test_existing_officer_keeps_card_until_world_voice_is_enabled(sapp):
+    from leeroy_mind.world.protocol import WorldMember
+    from leeroy_mind.world.targets import save
+    s = sapp
+    m = s.store.cast()[101]
+    save(s.store,(WorldMember(101,2,TESTGUILD,"Testguild",m.name,m.race,m.class_,m.gender,24,3,True,1,ORGRIMMAR),),
+         own=21,human=1,now=s.clock.now())
+    with s.store.transaction():
+        s.store.conn.execute("DELETE FROM cast_member WHERE guid=101")
+        s.store.conn.execute("INSERT INTO persona_tier VALUES(101,'world')")
+        s.store.conn.execute("INSERT INTO realm_actor(guid,guild,name,role,added) VALUES(101,?,'Arkon','officer',1)",(TESTGUILD,))
+    original = (s.app.data_dir/"mind.toml").read_text(encoding="utf-8")
+    (s.app.data_dir/"mind.toml").write_text(original+"\n[world]\nenabled=true\n",encoding="utf-8")
+    before = [o for o in s.speech._officers(s.clock.now(),TESTGUILD) if o.guid == 101]
+    assert len(before) == 1 and not before[0].world
+    (s.app.data_dir/"mind.toml").write_text(original+"\n[world]\nenabled=true\nrealm=true\n",encoding="utf-8")
+    after = [o for o in s.speech._officers(s.clock.now(),TESTGUILD) if o.guid == 101]
+    assert len(after) == 1 and after[0].world
+
+
 def make_app(tmp_path, store, clock, monkeypatch, *, llm=None, blocklist=True, name=GUILD_NAME):
     app = RealmApp(tmp_path, store, clock)
     app.personas = seed_test_cast(store)

@@ -437,10 +437,10 @@ class _Night:
                 "SELECT a.guid, a.name, g.name AS guild, g.role FROM realm_actor a JOIN realm_guild g "
                 "ON g.id=a.guild WHERE a.role='officer' AND a.status='active' AND g.status='active' "
                 "AND g.id!=? ORDER BY a.guid", (self.guild,)).fetchall()
-        from leeroy_mind.personas.tiers import is_cast
+        # World generation must not revoke an existing actor's card-based admission.
         out = {row["guid"]: row for row in officers
                 if row["guid"] not in excluded and row["guid"] not in roster
-                and row["guid"] not in (about, self.ctx.human) and is_cast(self.store.conn,row["guid"])}
+                and row["guid"] not in (about, self.ctx.human)}
         from leeroy_mind.world.realm import voices
         out.update({g:r for g,r in voices(self.store,self.ctx.settings.data_dir,self.ctx.clock.now()).items()
                     if g not in (about,self.ctx.human) and r["guild_id"] != self.guild})

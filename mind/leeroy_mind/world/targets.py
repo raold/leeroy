@@ -118,7 +118,7 @@ class Targets:
             self.pending=pending
             try:
                 async with asyncio.timeout(15):
-                    ack=await self.app._send(GetWorldRoster(pending["id"]))
+                    ack=await self.app.bridge.send(GetWorldRoster(pending["id"]),preserve_id=True)
                     if not ack.ok:
                         return False
                     rows=await future

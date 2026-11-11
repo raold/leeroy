@@ -371,14 +371,15 @@ class Speech:
                 "SELECT a.guid,a.name,a.guild,g.name,a.place FROM realm_actor a JOIN realm_guild g "
                 "ON g.id=a.guild WHERE a.status='active' AND a.role='officer' AND g.status='active' "
                 "AND g.faction=? AND g.role IN (?,?) ORDER BY a.guid", (FACTION, *SPEAKING_ROLES)).fetchall()
-        from leeroy_mind.personas.tiers import is_cast
+        # Existing actor cards remain admitted independently of the persona tier.
         out = [Officer(row[0], row[1], row[2], row[3], row[4] or "") for row in rows
                 if type(row[0]) is int and row[0] not in excluded and self._rest.get(row[0], 0.0) <= now
-                and is_cast(store.conn,row[0]) and (guild is None or row[2] == guild)]
+                and (guild is None or row[2] == guild)]
         from leeroy_mind.world.realm import voices
         for guid,r in voices(store,self.realm.app.data_dir,now).items():
             if (r["online"] and r["faction"] == FACTION and r["role"] in SPEAKING_ROLES
                     and self._rest.get(guid,0) <= now and (guild is None or r["guild_id"] == guild)):
+                out = [o for o in out if o.guid != guid]
                 out.append(Officer(guid,r["name"],r["guild_id"],r["guild"],"",True,r["zone"]))
         # Stable rotation gives ordinary guildmates a turn under the existing rations.
         if any(o.world for o in out):

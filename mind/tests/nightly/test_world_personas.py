@@ -193,10 +193,11 @@ def test_snapshot_pages_identity_ack_and_disconnect(h,online):
     async def scenario():
         app = NS(data_dir=h.settings.data_dir,store=h.store,clock=h.clock,is_backlog=lambda _:False)
         service = targets.Targets(app)
-        async def send(cmd):
+        async def send(cmd,*,preserve_id):
+            assert preserve_id
             await service.event(WorldRoster(0,cmd.id,21,1,0,1,1,(member(h),)))
             return Ack(0,cmd.id,True,"")
-        app._send = send
+        app.bridge = NS(send=send)
         await service.hello(Hello(0,"test","1",21,1 if online else 0))
         assert await service.refresh()
         assert list(targets.roster(h.store)) == [101]
@@ -357,7 +358,8 @@ def test_incomplete_or_refused_roster_does_not_retire_members(h,refusal):
     async def scenario():
         app = NS(data_dir=h.settings.data_dir,store=h.store,clock=h.clock,is_backlog=lambda _:False)
         service = targets.Targets(app)
-        async def send(cmd):
+        async def send(cmd,*,preserve_id):
+            assert preserve_id
             empty = WorldRoster(0,cmd.id,21,1,0,1,0,())
             await service.event(empty)
             if refusal == "duplicate":
@@ -366,7 +368,7 @@ def test_incomplete_or_refused_roster_does_not_retire_members(h,refusal):
                 await service.connection(False)
                 await service.event(empty)
             return Ack(0,cmd.id,refusal != "ack","")
-        app._send = send
+        app.bridge = NS(send=send)
         await service.hello(Hello(0,"test","1",21,0))
         assert not await service.refresh()
     run(scenario())
@@ -430,3 +432,52 @@ def test_world_empty_database_is_read_only_and_has_no_targets():
         assert not conn.execute("SELECT name FROM sqlite_master").fetchall()
     finally:
         conn.close()
+
+
+def test_roster_correlates_real_bridge_wire_id_while_live_model_is_away(h):
+    from dataclasses import asdict
+    from leeroy_mind.protocol import Hello
+    from leeroy_mind.world.protocol import register
+    from test_bridge import session
+    register()
+    enabled(h)
+    async def scenario():
+        app = NS(data_dir=h.settings.data_dir,store=h.store,clock=h.clock,
+                 is_backlog=lambda _:False,_model_ready=False)
+        service = targets.Targets(app)
+        async def event(client,ev):
+            if isinstance(ev,WorldRoster):
+                await service.event(ev)
+        async with session(handler=event) as s:
+            app.bridge = s.client
+            original = s.bridge._command
+            async def command(writer,cmd):
+                if cmd["type"] != "get_world_roster":
+                    return await original(writer,cmd)
+                row = asdict(member(h))
+                row["class"] = row.pop("class_")
+                await s.bridge._write(writer,{"type":"world_roster","request":cmd["id"],
+                    "own_guild":21,"human":1,"page":0,"pages":1,"total":1,"members":[row]})
+                await s.bridge._write(writer,{"type":"ack","id":cmd["id"],"ok":True,"error":""})
+            s.bridge._command = command
+            await service.hello(Hello(0,"test","1",21,0))
+            assert await asyncio.wait_for(service.refresh(),2)
+            assert list(targets.roster(h.store)) == [101]
+    run(scenario())
+
+
+def test_existing_forum_actor_keeps_card_admission_when_world_voice_is_off(h):
+    from leeroy_mind.realm.night import _Night
+    enabled(h)
+    observe(h,member(h))
+    world(h)
+    with h.store.transaction():
+        h.store.conn.execute("DELETE FROM cast_member WHERE guid=101")
+        h.store.conn.execute("INSERT INTO realm_guild(id,name,role,faction,status,added) VALUES(50,'Test rivals','drama','horde','active',0)")
+        h.store.conn.execute("INSERT INTO realm_actor(guid,guild,name,role,status,added) VALUES(101,50,'Arkon','officer','active',0)")
+    night = _Night(h.ctx())
+    author = night._as_actor(night._actors()[101])
+    assert author[:3] == (101,"actor","Arkon") and "card" not in author[3]
+    assert "Test rivals" in author[3]["who"]
+    enabled(h,"realm=true\n")
+    assert "card" in night._as_actor(night._actors()[101])[3]
