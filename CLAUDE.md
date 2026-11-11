@@ -257,6 +257,9 @@ back to compiled-in defaults. `ac-update.sh` reports them.
 
 ## Scripts
 
+`ac-server.sh start` keeps the newest ten timestamped AppenderFile rotations per
+native `.log` basename beside the binaries; active logs and unrelated files stay.
+
 Run from `F:\azerothcore\scripts` in Git Bash.
 
 ```bash
@@ -712,21 +715,13 @@ and class consumables.
 world-thread rescue for pinned cast members. Three observed deaths within 15 minutes
 while solo, outside instances/BGs and without a Realm/training owner make a member
 eligible once alive and out of combat. It teleports to the homebind, never resurrects,
-and bounds attempts to five per one-second pass and one per member per hour. Group
-invitations, transit, trade and duels also block it. The event
-`cast_death_loop_rescued` contains only `guid` and `deaths`.
-
-`ac-server.sh start` keeps the newest ten timestamped AppenderFile rotations per
-native `.log` basename beside the binaries; active logs and unrelated files stay.
-The detached mind owns `mind-stdout.log` and rotates it at local midnight, keeping
-14 backups like `mind.log`. Prints, warnings and Python tracebacks use that stream;
-raw native writes to inherited stdout/stderr handles are discarded.
-
-The live prompt budget is 1800 estimated input tokens (four characters per token),
-with Orion's context still 4096 and output allowance 80. Fixed late-whisper instructions
-can reach about 480 tokens before context, so the old 1300 budget crowded out memories
-and recent lines. Last-resort warnings now include each section's token count, never
-its text. The prompt's privacy gates and mandatory evidence/instructions are unchanged.
+and bounds attempts to five per rolling 15 minutes and one per member per hour.
+Observations still run once a second. Group invitations, BG queues, transit, trade,
+duels and pending commands block rescue without erasing deaths. Alive for a full
+minute more than 100 yards from the last death (or on another map) ends the loop;
+old deaths also age out after 15 minutes. Training cleanup logs one skip per fence.
+Invalid homebinds and refused teleports log once per member/reason; rescue resets
+the bot AI and motion before teleporting. Logs carry only ids, counts and codes.
 
 Local commits `41386b71` and `a8f5d378` (first built 2026-10-31) keep pins quiet: for a
 pinned bot three `TellMaster` lines are skipped, "AI was reset to defaults"
@@ -840,6 +835,17 @@ The README targets an AzerothCore revision from 2020 while this core is current.
 It compiles clean and the BG registers, but in-game behaviour is unverified.
 
 ## The mind service (`leeroy_mind`)
+
+The launcher rotates a prior day's `mind-stdout.log` before starting the child,
+keeping 14 backups. The child inherits append handles for stdout and stderr, so
+import errors, launcher failures, tracebacks and OS-level writes remain visible.
+The file is not renamed while the child is running; restart picks up rotation.
+
+The live prompt budget is 1800 estimated input tokens (four characters per token),
+with Orion's context still 4096 and output allowance 80. Fixed late-whisper instructions
+can reach about 480 tokens before context, so the old 1300 budget crowded out memories
+and recent lines. Last-resort warnings now include each section's token count, never
+its text. The prompt's privacy gates and mandatory evidence/instructions are unchanged.
 
 - Talk awareness and guards are separately opt-in: `[talk] aware = true` adds a
   scoped observation card inside the live prompt budget; `[guards] enabled = true`

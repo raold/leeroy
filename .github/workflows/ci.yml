@@ -32,6 +32,8 @@ jobs:
         run: bash scripts/tests/ac-release.sh
       - name: SOAP client self-test (fake server on loopback)
         run: bash scripts/tests/ac-soap.sh
+      - name: native log pruning self-test (temporary files only)
+        run: bash scripts/tests/ac-prune-native-logs.sh
 
   secrets:
     runs-on: ubuntu-latest
