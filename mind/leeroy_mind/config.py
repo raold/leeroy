@@ -22,6 +22,7 @@ raid_rule = "leaders_and_urgent"
 whispers_per_hour = 4         # members whispering him first, per hour of his play, at chattiness 4
 openers_per_hour = 6          # members starting a line to him in party or guild, per hour, likewise
 selfies = 3                    # 0-10, photos the guild sends you (rendered at night)
+aware = false                  # include a bounded card of visible observations in talk
 realism = false                # bounded member typing, small bursts and rare corrections
 
 [romance]
@@ -77,6 +78,7 @@ class TalkCfg:
     whispers_per_hour: float = 4
     openers_per_hour: float = 6
     selfies: int = 3
+    aware: bool = False
     realism: bool = False
 
 
@@ -171,6 +173,7 @@ _INF = float("inf")
 _RULES = {
     "models": {k: (_is_str, "a non-empty string") for k in ("live", "live_fallback", "reflection", "embedding")},
     "talk": {
+        "aware": (lambda v: type(v) is bool, "a boolean"),
         "realism": (lambda v: type(v) is bool, "a boolean"),
         "chattiness": (lambda v: _int_in(v, 0, 10), "an integer 0-10"),
         "raid_rule": (lambda v: v in RAID_RULES, f"one of {sorted(RAID_RULES)}"),
@@ -224,6 +227,9 @@ def _build(data: dict, source: str) -> MindConfig:
     built = {}
     for section, rules in _RULES.items():
         given = data.get(section, {})
+        if section == "talk" and type(given.get("aware", False)) is not bool:
+            log.warning("talk_aware_invalid key=aware")
+            given = dict(given, aware=False)
         values = {}
         for key, (check, want) in rules.items():
             v = given.get(key, defaults[section][key])

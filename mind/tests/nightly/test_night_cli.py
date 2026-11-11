@@ -79,6 +79,20 @@ def test_nightly_run_uses_a_copy_and_resumes_that_same_trial(h, data, tiny_pipel
     assert len(tiny_pipeline) == 2 and fake.calls == []
 
 
+def test_standalone_runner_attaches_enabled_claims_after_notes(h, data, tiny_pipeline, monkeypatch):
+    from leeroy_mind.claims import stage as claims_stage
+    pipeline = sys.modules["leeroy_mind.nightly.pipeline"]
+    invoked = []
+    async def claims(ctx):
+        invoked.append(ctx.night)
+    monkeypatch.setattr(claims_stage, "stage_claims", claims)
+    monkeypatch.setattr(pipeline, "STAGES", (Stage("notes", pipeline.STAGES[0].fn, None),))
+    with (data / "mind.toml").open("a", encoding="utf-8") as config:
+        config.write("\n[claims]\nenabled=true\n")
+    assert cli.nightly_main(["run", "--night", NIGHT], make_llm=lambda: client(h)) == 0
+    assert invoked == [NIGHT]
+
+
 def test_live_nightly_run_holds_exclusive_lock_until_done(h, data, tiny_pipeline):
     original = tiny_pipeline
     assert cli.nightly_main(["run", "--night", NIGHT, "--live-db"], make_llm=lambda cfg: client(h)) == 0

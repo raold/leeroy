@@ -821,6 +821,15 @@ It compiles clean and the BG registers, but in-game behaviour is unverified.
 
 ## The mind service (`leeroy_mind`)
 
+- Talk awareness and guards are separately opt-in: `[talk] aware = true` adds a
+  scoped observation card inside the live prompt budget; `[guards] enabled = true`
+  reviews model drafts, allows one screened retry, and records delivery rations.
+  Deterministic announcements bypass model guards. Answers owed to the owner use
+  advisory verdicts; hard content/name/slash screens still apply. Discord cards
+  and guards omit game-state evidence. `[claims] enabled = true` supplies claim
+  evidence and enables its night stage in both runners.
+  See `mind/leeroy_mind/guards/README.md` for bounds and fake rehearsal results.
+
 `mind/` is the Python service that speaks for the guild through mod-leeroy's
 bridge, on the local Ollama. It has its own venv in `mind\.venv`; run it from
 `F:\azerothcore\mind` in Git Bash inside Windows Terminal (in a standalone
@@ -1356,8 +1365,9 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   endpoint and console on ephemeral ports with the invented cast and fake bridge,
   LLM and model admin: channel answer, named and officer-only replies, reaction and
   DM, both after logout and before the first bridge cast; no game `say`, clean shutdown.
-- D1 is owner-triggered conversation. Autonomous chatter, pre-send guard wiring,
-  member reactions, topics, photos, decisions and culture remain later phases.
+- D1 is owner-triggered conversation, with optional pre-send guard review and
+  scoped awareness cards. Autonomous chatter, broader member reactions, topics,
+  photos, decisions and culture remain later phases.
 
 ## The Realm (`leeroy_mind.realm`)
 
