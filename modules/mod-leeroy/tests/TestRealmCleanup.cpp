@@ -331,17 +331,45 @@ LEEROY_TEST(RealmCleanup_LeaveAckGroupNamesAreBoundedWholeGuids)
 
 LEEROY_TEST(RealmCleanup_StepSkipsOnlyAMemberNothingInTheJobTouched)
 {
-    for (auto reason : {"shared_lfg_queue", "shared_group_leader", "shared_lfg_cleanup", "shared_group_cleanup"})
+    // #230's group departures, and the review's other reasons of the member's own: a battleground
+    // that ended under it (its lease's scope), its original raid group, its entry point, its
+    // battleground group changing, an LFG proposal, Wintergrasp, a closure it cannot take along.
+    for (auto reason : {"shared_lfg_queue", "shared_group_leader", "shared_lfg_cleanup", "shared_group_cleanup",
+        "busy:body_scope_changed", "busy:body_identity_changed", "body_identity_changed", "busy:raid_owner",
+        "entry_point_unavailable", "battleground_group_changed", "battleground_receipt_unavailable",
+        "shared_lfg_proposal", "shared_lfg_participants_unavailable", "wg_private_state_unavailable",
+        "cleanup_member_not_admitted", "cleanup_member_offline", "leave_cleanup_unproved", "busy:teleport",
+        "busy:training_state", "not_actor", "queue_lineage_changed", "action_cost_exceeds_cap"})
     {
         CHECK(SkipsLeaveMember(reason, false, false));
         CHECK(!SkipsLeaveMember(reason, true, false));  // Its own step already left a queue or a map.
         CHECK(!SkipsLeaveMember(reason, false, true));  // An earlier member's shared cleanup changed it.
         CHECK(!SkipsLeaveMember(reason, true, true));
     }
-    // Every other refusal keeps the old rule: refused before any change, else unproved.
-    for (auto reason : {"wg_private_state_unavailable", "busy:raid_owner", "battleground_group_changed",
-        "shared_lfg_proposal", "leave_cleanup_unproved", ""})
+    // A reason about the job itself keeps the old rule: refused before any change, else unproved.
+    // busy:training_cleanup and lfg_cleanup_disabled hold for every member at once.
+    for (auto reason : {"realm_off", "busy:operation_identity", "busy:realm_owner", "unsupported", "",
+        "busy:training_cleanup", "lfg_cleanup_disabled", "busy:tick_budget", "bad field: affected_bodies"})
         CHECK(!SkipsLeaveMember(reason, false, false));
+}
+
+LEEROY_TEST(RealmCleanup_AStepRechecksOnlyTheMembersTheJobReachedSoFar)
+{
+    // 2026-11-10's case, after the fix: 1306's battleground ended while 301 was still worldporting.
+    // 301's step no longer stops for 1306 (later, untouched): 1306's own step checks it and skips it.
+    std::vector<std::uint32_t> const manifest{301, 302, 1306, 304};
+    auto none = [](std::uint32_t) { return false; };
+    CHECK((RecheckedMembers(manifest, 0, {}, 0, none) == std::vector<std::uint32_t>{301}));
+    CHECK((RecheckedMembers(manifest, 1, {}, 0, none) == std::vector<std::uint32_t>{301, 302}));
+    CHECK(RecheckedMembers(manifest, 3, {}, 0, none) == manifest); // The last step reads back everyone held.
+    // A later member an earlier member's shared cleanup touched (a queue group, an LFG roster) is
+    // rechecked from then on; it can no longer be skipped.
+    auto touched = [](std::uint32_t guid) { return guid == 1306; };
+    CHECK((RecheckedMembers(manifest, 0, {}, 0, touched) == std::vector<std::uint32_t>{301, 1306}));
+    // Never the skipped, nor the member whose skip is being decided.
+    CHECK((RecheckedMembers(manifest, 3, {302}, 0, none) == std::vector<std::uint32_t>{301, 1306, 304}));
+    CHECK((RecheckedMembers(manifest, 3, {302}, 304, none) == std::vector<std::uint32_t>{301, 1306}));
+    CHECK(RecheckedMembers({1306}, 0, {}, 1306, none).empty());
 }
 
 LEEROY_TEST(RealmCleanup_ASkipLeavesTheOthersOutcomeNormal)

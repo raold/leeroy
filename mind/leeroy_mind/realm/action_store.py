@@ -67,6 +67,11 @@ LEAVE_REFUSALS = frozenset({WG_REFUSAL, "cleanup_member_not_admitted", *GROUP_RE
 # touched it, is skipped instead: native ends its lease alone, takes the others out, and the done
 # job names it ("skipped"). It is backed off as a named refusal is, for this long after.
 BACKOFF_S = 600
+# The kinds whose terminal job may name skipped members (native SkipsMembers): an ordinary leave,
+# and a rearm, which leaves out a member its step finds in combat, dead or without its weapons, or
+# that its ack fences (in his group, say), and rearms the rest. A skipped rearm member needs no
+# backoff: the next pass of the cast's defaults rearms it again.
+SKIPPING_KINDS = frozenset({"leave_pvp", "rearm"})
 
 
 def leave_refusal_guids(error, manifest=None):
@@ -93,6 +98,16 @@ def skipped_backoff(r, now):
     rejected, so the recall leaves them out as it does a named refusal's."""
     at = json.loads(r.evidence).get("skipped_at")
     return leave_skipped_guids(r) if at is not None and now < at + BACKOFF_S else ()
+
+
+def defaults_partial(r):
+    """A defaults batch native ran member by member that skipped some (dead, busy): the others took
+    the defaults and nobody is held. Not one native aborted (cancelled, timed out), nor an unknown."""
+    if (r.role != "root" or r.policy != "defaults" or r.state != "completed" or r.result_ok is not False
+            or r.result_reason != "defaults_failed"):
+        return False
+    bot = json.loads(r.evidence).get("bot", {})
+    return bot.get("state") == "done" and bot.get("reason") == ""
 
 
 STEP_REFUSED = "step_refused"
@@ -325,7 +340,7 @@ class ActionStore:
             if ack["ok"] and ack["error"]: raise ValueError("invalid action ack")
         for key in ("job", "enrollment_job", "origin_failure"):
             if key in ev and _realm_job(ev[key], r.command_id).kind != r.kind: raise ValueError("invalid action job kind")
-            if key in ev and "skipped" in ev[key] and (key != "job" or r.policy != "ordinary" or r.kind != "leave_pvp"
+            if key in ev and "skipped" in ev[key] and (key != "job" or r.policy != "ordinary" or r.kind not in SKIPPING_KINDS
                                                        or not set(ev[key]["skipped"]) <= set(r.reserved_manifest)):
                 raise ValueError("invalid skip receipt")
         if "bot" in ev: _bot(ev["bot"], r.command_id)
@@ -497,6 +512,12 @@ class ActionStore:
             if before is not None and before[0] != r.state:
                 log.warning("realm_leave_refused id=%s kind=%s reason=%s named=%d members=%d", r.command_id, r.kind,
                             r.result_reason.partition(":")[0], len(leave_refusal_guids(r.result_reason)), len(r.reserved_manifest))
+        if r.role == "root" and r.kind == "rearm" and r.state == "completed" and r.result_ok is True:
+            skipped = json.loads(r.evidence).get("job", {}).get("skipped", ())
+            before = self.conn.execute("SELECT state FROM realm_action WHERE seq=?", (r.seq,)).fetchone()
+            if skipped and before is not None and before[0] != r.state:
+                log.info("realm_rearm_skipped id=%s kind=%s skipped=%d members=%d",
+                         r.command_id, r.kind, len(skipped), len(r.reserved_manifest))
         if r.role == "root" and r.state == "completed" and r.result_reason == STEP_REFUSED:
             before = self.conn.execute("SELECT state FROM realm_action WHERE seq=?", (r.seq,)).fetchone()
             if before is not None and before[0] != r.state:
@@ -684,8 +705,8 @@ class ActionStore:
         with self.conn:
             old = self.get(ev.id)
             if old is None or old.transport_state == "not_entered" or old.kind != ev.kind or old.policy in {"ack", "query", "defaults"}: return Transition(False)
-            # Only an ordinary leave skips members, and only members of its own manifest.
-            if ev.skipped and (old.policy != "ordinary" or old.kind != "leave_pvp"
+            # Only an ordinary leave or a rearm skips members, and only members of its own manifest.
+            if ev.skipped and (old.policy != "ordinary" or old.kind not in SKIPPING_KINDS
                                or not set(ev.skipped) <= set(old.reserved_manifest)): return Transition(False)
             data = json.loads(old.evidence)
             if old.policy == "wg":

@@ -6,6 +6,7 @@
 #include <deque>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <nlohmann/json.hpp>
 
@@ -36,5 +37,18 @@ public:
 private:
     std::deque<Entry> _entries;
 };
+
+// Admission of a body move's manifest, in its order. `fence` gives a member's reason, or "" when it
+// may be reserved (the caller reserves it there). Every kind but a rearm is refused whole at its
+// first fenced member (`error`, nothing more is asked). A rearm leaves out a member fenced for a
+// reason of its own (MemberSkipReason) and is refused whole at a fence that is the job's own, or
+// when every member is fenced (with the first reason).
+struct AckPartition
+{
+    std::vector<std::uint32_t> admitted{}, fenced{};
+    std::string error{};
+};
+AckPartition PartitionAtAck(std::string_view kind, std::vector<std::uint32_t> const& manifest,
+    std::function<std::string(std::uint32_t)> const& fence);
 }
 #endif
