@@ -46,6 +46,9 @@ def normal_subject(subject: str) -> str:
 def add(store, guid: int, *, kind: str, subject: str, text: str, polarity: int,
         embedding: bytes, source: str = 'chat', source_line: int | None = None,
         expires: float | None = None, now: float | None = None) -> int:
+    from leeroy_mind.personas.tiers import is_cast
+    if not is_cast(store.conn,guid):
+        raise ValueError('world_claims_excluded')
     now = store.clock.now() if now is None else now
     embedding = vector(embedding)
     with store.transaction():
@@ -93,6 +96,9 @@ def expire(store, *, now: float | None = None) -> int:
 
 
 def live_claims(conn, guid: int, *, now: float | None = None) -> list[Claim]:
+    from leeroy_mind.personas.tiers import is_cast
+    if not is_cast(conn,guid):
+        return []
     now = time.time() if now is None else now
     return [Claim(*tuple(r)) for r in conn.execute(
         'SELECT * FROM member_claim WHERE guid=? AND superseded_by IS NULL '
@@ -106,8 +112,9 @@ def nearest(conn, guid: int, embedding: bytes, k: int = 8, *, now: float | None 
     Filter inside KNN, so expired rows cannot crowd out eligible neighbours before
     the next night removes their vectors. sqlite-vec scans only this guid's partition.
     """
+    from leeroy_mind.personas.tiers import is_cast
     now = time.time() if now is None else now
-    if k <= 0:
+    if k <= 0 or not is_cast(conn,guid):
         return []
     rows = conn.execute(
         'SELECT c.*, v.distance FROM member_claim_vec v JOIN member_claim c ON c.id=v.claim_id '

@@ -36,6 +36,7 @@ It returns at once, well within P1b's 5 s stop budget."""
 import asyncio
 import contextlib
 import json
+import inspect
 import logging
 import random
 from collections import Counter
@@ -331,7 +332,7 @@ class Stage(NamedTuple):
     name: str
     fn: Callable[[NightContext], Awaitable[None]]
     model: Literal["live", "reflection", "image"] | None
-    wants_gpu: Callable[[NightContext], bool] | None = None
+    wants_gpu: Callable[[NightContext], bool | Awaitable[bool]] | None = None
 
 
 async def stage_snapshot(ctx: NightContext) -> None:
@@ -363,7 +364,7 @@ class NightRunner:
     def add_stage(self, name: str, fn: Callable[[NightContext], Awaitable[None]], *,
                   after: str,
                   model: Literal["live", "reflection", "image"] | None = "reflection",
-                  wants_gpu: Callable[[NightContext], bool] | None = None) -> None:
+                  wants_gpu: Callable[[NightContext], bool | Awaitable[bool]] | None = None) -> None:
         """Insert an extension on this runner only; the base pipeline stays immutable."""
         names = [stage.name for stage in self.stages]
         if name in names:
@@ -452,13 +453,15 @@ class NightRunner:
         for stage in self.stages:
             started = ctx.clock.now()
             whole = False  # this stage took the whole GPU (make_room)
-            if (stage.model in ("live", "reflection") and stage.wants_gpu is not None
-                    and not stage.wants_gpu(ctx)):
+            if stage.model == "image" and not images:
+                continue
+            wanted = stage.wants_gpu(ctx) if stage.model is not None and stage.wants_gpu is not None else True
+            if inspect.isawaitable(wanted):
+                wanted = await wanted
+            if stage.model in ("live", "reflection") and not wanted:
                 continue  # no newcomer work: do not swap models before the threads stage
             if stage.model == "image":
-                if not images:
-                    continue
-                if stage.wants_gpu is None or stage.wants_gpu(ctx):
+                if wanted:
                     if not await self._room_for_images(ctx, stage):
                         images = False
                         continue

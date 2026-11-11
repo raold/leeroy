@@ -60,6 +60,10 @@ UNIT_CALLS: dict[str, dict[str, float]] = {
     "notes": {"json": 2.0},                    # the call and its own judge batch of one: 40 s
     "claims": {"json": 1},                    # one extraction, no thinking or judge pass
     "signals": {},                           # screening only; no reflection calls
+    # Shared quality screening plus, when enabled, one embedding batch (up to 17 texts).
+    # Reserve 2 s per unit in JSON equivalents; no generation call. This conservative
+    # allowance includes the measured ~0.012 s lexical path and unmeasured embedding cost.
+    "rewards": {"json": 0.1},
     "encounters": {"json": 2},                # scene generation and one judge batch
     "confide": {"json": 1.1},
     "arc": {"json": 1.5},                     # a read of what he said to her (arc/night.py)
@@ -76,6 +80,9 @@ UNIT_CALLS: dict[str, dict[str, float]] = {
     "critic": {"json": 1.1},                   # one call per sampled member (PR23): 22 s
     "enrich": {"think": 1, "json": 1},         # 110 s
     "newcomers": {"think": 1, "json": 1},      # normal two-pass generator; retries are metered
+    "world_personas": {"think": 2, "json": 2}, # generator plus existing enrichment fallback
+    "world_photos": {"json": 1},
+    "world_selfies": {"json": 2.4},
     "photo": {"json": 1},                      # one call, no think pass: 20 s
     # a set's four images of about 6 s hold the whole card, so both default slots: 48
     # slot-seconds, in 20 s JSON equivalents
@@ -98,7 +105,7 @@ MEASURE_MIN = 3     # ...once there are 3 of them
 COUNTERS: dict[str, Callable[["NightContext"], int]] = {}
 # Optional extensions must be admitted on the particular runner before budgeting.
 # Core counters may belong to substages, so their historical counting is unchanged.
-EXTENSION_STAGES = frozenset({"coach", "realm", "photo", "selfies", "scenes", "snaps", "claims", "newcomers", "signals"})
+EXTENSION_STAGES = frozenset({"coach", "realm", "photo", "selfies", "scenes", "snaps", "claims", "newcomers", "signals", "rewards", "world_personas", "world_photos", "world_selfies"})
 
 
 def register_counter(stage: str, fn: Callable[["NightContext"], int]) -> None:
@@ -214,6 +221,10 @@ class Degrade(NamedTuple):
 # mood, forgetting, regression and the weekly evaluation. The realm's units go first, down to
 # none: the realm's own order keeps its meeting longest (realm/night.py). Profile photo sets
 # follow the coach: a set left queued is rendered the next night.
+WORLD_DEGRADE = (
+    Degrade("world_selfies", (Cut("world_selfies_per_night", "fit", 0),)),
+    Degrade("world_personas", (Cut("world_per_night", "fit", 0),)),
+)
 DEGRADE = (
     Degrade("realm", (Cut("realm_units", "fit", 0),)),
     Degrade("scenes", (Cut("scenes_per_night", "fit", 0),)),
@@ -266,7 +277,11 @@ def _counts(ctx: "NightContext", failed: set[str], stages: frozenset[str] | None
         if stages is not None and stage in EXTENSION_STAGES and stage not in stages:
             continue
         try:
-            out[stage] = max(0, int(fn(ctx)))
+            if stage.startswith("world_") and "world:counts" in ctx._memo:
+                from leeroy_mind.world.counting import planned
+                out[stage] = planned(ctx).get(stage,0)
+            else:
+                out[stage] = max(0, int(fn(ctx)))
         except Exception as e:
             if stage not in failed:
                 failed.add(stage)
@@ -291,6 +306,14 @@ async def plan_night(ctx: "NightContext", *, stages: frozenset[str] | None = Non
     (set_run_plan: a resumed run reuses it, like its window), applied to ctx.settings and
     ctx.plan, and logged as nightly_budget. Runners pass their actual stage names;
     direct callers may omit stages to retain the all-registered-counter interface."""
+    if ctx.settings.learn_enabled and (stages is None or "rewards" in stages):
+        from leeroy_mind.learn.night import prepare_count
+        await prepare_count(ctx)
+    from leeroy_mind.world.config import load as load_world
+    ctx._memo.pop("world:counts",None)
+    if load_world(ctx.settings.data_dir / "mind.toml").enabled:
+        from leeroy_mind.world.counting import prepare
+        await prepare(ctx)
     base = ctx.settings
     hours = (ctx.window[1] - ctx.window[0]) / 3600
     work = replace(base, encounters_per_night=round(
@@ -310,7 +333,9 @@ async def plan_night(ctx: "NightContext", *, stages: frozenset[str] | None = Non
     def fits(settings: NightlySettings) -> bool:
         return total(settings) <= budget
     steps, est = [], total(work)
-    for step in DEGRADE:
+    from leeroy_mind.world.config import load as load_world
+    world_steps = WORLD_DEGRADE if load_world(ctx.settings.data_dir / "mind.toml").enabled else ()
+    for step in world_steps + DEGRADE:
         if est <= budget:
             break
         if stages is not None and step.name in EXTENSION_STAGES and step.name not in stages:

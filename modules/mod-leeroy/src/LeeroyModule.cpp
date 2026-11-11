@@ -45,6 +45,7 @@ void LeeroyModule::LoadConfig(bool /*reload*/)
     cfg.bringCastOnline = sConfigMgr->GetOption<bool>("Leeroy.BringCastOnline", true);
     cfg.excludeFromOllamaChat = sConfigMgr->GetOption<bool>("Leeroy.ExcludeFromOllamaChat", true);
     cfg.realmEnable = sConfigMgr->GetOption<bool>("Leeroy.Realm.Enable", false);
+    cfg.worldEnable = sConfigMgr->GetOption<bool>("Leeroy.World.Enable", false);
     cfg.playStyleEnable = sConfigMgr->GetOption<bool>("Leeroy.PlayStyle.Enable", false);
     cfg.realmMaxActionsPerTick = std::clamp(sConfigMgr->GetOption<uint32>("Leeroy.Realm.MaxActionsPerTick", 5), 1u, 20u);
     cfg.realmAnnounce = sConfigMgr->GetOption<bool>("Leeroy.Realm.Announce", true);
@@ -60,6 +61,7 @@ void LeeroyModule::LoadConfig(bool /*reload*/)
 
     _config = cfg;
     _enabled = cfg.enable;
+    _worldEnabled = cfg.worldEnable;
     _guildId = cfg.guildId;
     _humanGuid = cfg.humanGuid;
     _excludeFromOllama = cfg.excludeFromOllamaChat;

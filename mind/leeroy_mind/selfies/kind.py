@@ -338,7 +338,8 @@ def _refused(ctx: "NightContext", guid: int, problems: list[str]) -> tuple[None,
     shown = [screen_text(m, ctx.ident) for m in problems]
     # the log names the field and the kind of problem, never the reply's text
     log("selfies_kind_refused", night=ctx.night, guid=guid,
-        problems=[m.split(': "', 1)[0] for m in shown])
+        problems=[m.split(': "', 1)[0] for m in shown] if getattr(ctx, "private_logs", True)
+        else ["world_screen_refused"])
     return None, shown
 
 

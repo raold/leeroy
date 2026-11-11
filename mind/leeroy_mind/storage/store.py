@@ -229,13 +229,14 @@ class Store:
                               "(SELECT value FROM json_each(?))", (stay,))
             return gone
 
-    def cast(self) -> dict[int, Member]:
+    def cast(self, *, include_world: bool = False) -> dict[int, Member]:
+        from leeroy_mind.personas.tiers import cast_sql
         return {
             r["guid"]: Member(
                 guid=r["guid"], name=r["name"], race=r["race"], class_=r["class"],
                 gender=r["gender"], level=r["level"], rank=r["rank"], online=bool(r["online"]),
                 map=r["map"], zone=r["zone"], spec_tab=r["spec_tab"])
-            for r in self._all("SELECT * FROM cast_member ORDER BY guid")}
+            for r in self._all("SELECT * FROM cast_member WHERE " + ("1" if include_world else cast_sql(self.conn)) + " ORDER BY guid")}
 
     def set_online(self, guid: int, online: bool) -> None:
         with self.transaction():
@@ -682,17 +683,28 @@ class Store:
                 (guid, clean(json), clean(card), card_tokens, version, source, ts))
             return version
 
-    def get_persona_json(self, guid: int) -> str | None:
+    def get_persona_json(self, guid: int, *, include_world: bool = False) -> str | None:
+        from leeroy_mind.personas.tiers import is_cast
+        if not include_world and not is_cast(self.conn,guid):
+            return None
         r = self._one("SELECT json FROM persona_core WHERE guid = ?", (guid,))
         return r["json"] if r else None
 
-    def get_card(self, guid: int) -> str | None:
+    def get_card(self, guid: int, *, include_world: bool = False) -> str | None:
+        from leeroy_mind.personas.tiers import is_cast
+        if not include_world and not is_cast(self.conn,guid):
+            return None
         r = self._one("SELECT card FROM persona_core WHERE guid = ?", (guid,))
         return r["card"] if r else None
 
-    def persona_versions(self) -> dict[int, int]:
+    def persona_versions(self, *, tier: str | None = "cast") -> dict[int, int]:
+        from leeroy_mind.personas.tiers import cast_sql
+        if tier not in (None,"cast","world"):
+            raise ValueError("persona_tier")
+        clause = cast_sql(self.conn)
+        where = "" if tier is None else " WHERE " + (clause if tier == "cast" else "NOT ("+clause+")")
         return {r["guid"]: r["version"]
-                for r in self._all("SELECT guid, version FROM persona_core")}
+                for r in self._all("SELECT guid, version FROM persona_core" + where)}
 
     def get_state(self, guid: int) -> PersonaStateRow:
         r = self._one("SELECT * FROM persona_state WHERE guid = ?", (guid,))
