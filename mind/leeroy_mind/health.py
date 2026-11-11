@@ -1152,7 +1152,8 @@ def _activity(root: Path, data: Path, now: float, open_log=None) -> list[Check]:
                 _guarded("realm-screen", _realm_screen, conn, data),
                 _guarded("weekly-eval", _weekly_eval, conn),
                 _guarded("secret-gate", _secret_gate, conn),
-                _guarded("offline-days", _offline_days, conn, now)]
+                _guarded("offline-days", _offline_days, conn, now),
+                _guarded("training-lab", _training_lab, conn, now)]
     finally:
         conn.close()
 
@@ -1306,3 +1307,48 @@ def main(argv: list[str] | None = None, *, probes: Probes | None = None,
         for c in checks:
             print(f"{MARK[c.status]} {_ascii(c.text)}")
     return 1 if failed else 0
+
+
+# -- the training lab ----------------------------------------------------------------------------
+
+LAB_HALT_S = 24 * 3600  # a lab blocked for longer than one night has missed a night
+
+
+def _training_lab(conn, now: float) -> Check:
+    """A blocked dummy lab holds its members until the operator clears it on native evidence."""
+    name = "training-lab"
+
+    def check():
+        row = conn.execute("SELECT value FROM meta WHERE key='tg:lab:owned'").fetchone()
+        if not row:
+            return Check(name, OK, "training lab: no lab record")
+        try:
+            owned = json.loads(row[0])
+            if not isinstance(owned, dict):
+                raise ValueError
+            phase = owned.get("phase")
+            if phase != "blocked":
+                return Check(name, OK, "training lab: not blocked")
+            since = owned.get("halted_at")
+            if type(since) not in (int, float):
+                since = owned.get("started")  # A record blocked before halted_at existed.
+            if type(since) not in (int, float) or not math.isfinite(since):
+                raise ValueError
+            halt = owned.get("halt")
+            code = halt if isinstance(halt, str) and _IDENT.fullmatch(halt) else "unknown_halt"
+            night = owned.get("night")
+            night = night if isinstance(night, str) and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", night) else "?"
+            guids = owned.get("guids")
+            held = len(guids) if isinstance(guids, list) else 0
+            current = owned.get("current")
+            trial = current.get("id") if isinstance(current, dict) else None
+            trial = f", trial {trial}" if isinstance(trial, str) and re.fullmatch(r"[0-9a-f]{32}", trial) else ""
+        except (ValueError, TypeError, RecursionError):
+            return Check(name, FAIL, "training lab: invalid lab record; inspect it with training lab")
+        text = (f"training lab: blocked since {_when(since)} (halt={code}, night {night}{trial}, "
+                f"{held} members held)")
+        if now - since <= LAB_HALT_S:
+            return Check(name, NOTE, text)
+        return Check(name, FAIL, text + "; once native's dummy_cleanup receipt or a worldserver restart is "
+                     "recorded (training lab shows them), with the mind stopped: training lab-clear")
+    return _table_check(name, check)

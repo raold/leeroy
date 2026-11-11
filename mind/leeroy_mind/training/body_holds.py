@@ -231,6 +231,17 @@ def validate_lab_complete(conn, owned):
             if attempt["ack"] != "rejected" or attempt["terminal"] is not None:
                 raise ValueError("lab body evidence unavailable")
             continue
+        if attempt.get("restoration") == "native_recovered":
+            # Cleared by the operator on stored native evidence (lab_recovery), never a scored attempt.
+            evidence = attempt.get("recovered")
+            if (type(owned.get("recovered")) is not dict or type(evidence) is not dict
+                    or evidence.get("kind") not in {"dummy_cleanup", "native_terminal", "native_restart"}
+                    or evidence.get("trial") != ident or attempt["lab"] != scope
+                    or not _same(attempt["spec"], owned["spec"]) or ident not in owned["gaps"]
+                    or not _finite_number(attempt["restoration_at"])
+                    or not attempt["sent_ms"] / 1000 <= attempt["restoration_at"] <= summary["ts"]):
+                raise ValueError("lab body evidence unavailable")
+            continue
         terminal = attempt["terminal"]
         if (attempt["lab"] != scope or not _same(attempt["spec"], owned["spec"])
                 or attempt["restoration"] != "complete_no_desired_setup"

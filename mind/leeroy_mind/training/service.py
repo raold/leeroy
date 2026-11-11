@@ -492,7 +492,7 @@ def attach_training(app):
         app.register_event_handler(name, ground.on_event)
     for name in ("job", "vocab", "server_stats", "dummy_result", "rivals", "training_cleanup"):
         app.register_shutdown_receipt(name, ground.ports.feed)
-    for name in ("job", "dummy_result"):
+    for name in ("job", "dummy_result", "dummy_cleanup"):
         app.register_shutdown_receipt(name, ground.jobs.feed)
     app.register_connection_hook(ground.on_connection)
     guild = getattr(app, "guild", None)

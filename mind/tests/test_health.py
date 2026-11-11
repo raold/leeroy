@@ -253,7 +253,7 @@ def test_a_healthy_install_is_all_ok_with_its_notes(rig):
         "ollama": OK, "ollama-models": NOTE, "telemetry": OK, "realm-holds": OK, "unvoiced": OK,
         "offline-raid": OK, "guild-raids": OK, "night-failures": NOTE,
         "evidence-cycles": OK, "selfie-queue": OK, "realm-screen": OK, "weekly-eval": OK,
-        "secret-gate": OK, "offline-days": OK}
+        "secret-gate": OK, "offline-days": OK, "training-lab": OK}
     assert checks["server-log"].text == "Server.log: cast 111 members, pinned 111 (floor 100)"
     assert checks["mind"].text.startswith(f"mind: pid {MIND_PID} running (control.json names it)")
     assert "bridge_hello" in checks["mind-log"].text
@@ -271,11 +271,11 @@ def test_the_command_prints_one_line_each_or_json_and_exits_by_the_fails(rig, ca
     argv = ["--root", str(rig.root), "--data-dir", str(rig.data)]
     assert health.main(argv, probes=rig.probes()) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert len(lines) == 24 and lines[0].startswith("ok   authserver.exe running")
+    assert len(lines) == 25 and lines[0].startswith("ok   authserver.exe running")
     assert all(line[:5] in ("ok   ", "note ") for line in lines)
     assert health.main(argv + ["--json"], probes=rig.probes()) == 0
     out = json.loads(capsys.readouterr().out)
-    assert out["ok"] is True and len(out["checks"]) == 24
+    assert out["ok"] is True and len(out["checks"]) == 25
     assert out["checks"][0] == {"name": "authserver", "status": "ok",
                                 "text": out["checks"][0]["text"]}
     rig.servers = [s for s in rig.servers if s.image != "authserver.exe"]
@@ -1282,3 +1282,48 @@ def test_the_toast_text_goes_through_the_environment_only(monkeypatch):
                             health.TOAST_PS]  # the script is fixed: nothing interpolated
     assert seen["env"]["LEEROY_HEALTH_TITLE"] == "Leeroy health: 1 check failing"
     assert seen["env"]["LEEROY_HEALTH_BODY"] == "mind"
+
+
+# -- the training lab ----------------------------------------------------------------------------
+
+def lab_record(rig, **changes):
+    owned = {"id": "a" * 32, "phase": "blocked", "halt": "native_cleanup_unproved", "night": "2026-11-04",
+             "guids": [1924, 2984], "started": NOW - 2 * 86400, "halted_at": NOW - 86401,
+             "current": {"id": "b" * 32}} | changes
+    rig.db("INSERT INTO meta(key,value) VALUES ('tg:lab:owned',?) "
+           "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (json.dumps(owned),))
+
+
+def test_a_lab_blocked_for_longer_than_a_night_fails_with_the_recovery_command(rig):
+    assert readonly_check(rig, health._training_lab, NOW).status == OK
+    lab_record(rig)
+    result = readonly_check(rig, health._training_lab, NOW)
+    assert result.status == FAIL
+    assert "halt=native_cleanup_unproved" in result.text and "night 2026-11-04" in result.text
+    assert f"trial {'b' * 32}" in result.text and "2 members held" in result.text
+    assert "with the mind stopped: training lab-clear" in result.text
+    assert rig.run()["training-lab"].status == FAIL
+
+
+def test_a_fresh_block_is_a_note_and_a_finished_lab_is_ok(rig):
+    lab_record(rig, halted_at=NOW - 86400)
+    assert readonly_check(rig, health._training_lab, NOW).status == NOTE
+    lab_record(rig, halted_at=None)  # An older record dates from its start.
+    result = readonly_check(rig, health._training_lab, NOW)
+    assert result.status == FAIL and "blocked since" in result.text
+    lab_record(rig, phase="complete")
+    assert readonly_check(rig, health._training_lab, NOW).status == OK
+
+
+@pytest.mark.parametrize("changes", [{"halted_at": "PRIVATE_SENTINEL", "started": "PRIVATE_SENTINEL"},
+                                     {"halt": "PRIVATE_SENTINEL; rm", "night": "PRIVATE_SENTINEL"}])
+def test_an_odd_lab_record_never_echoes_its_contents(rig, changes):
+    lab_record(rig, **changes)
+    result = readonly_check(rig, health._training_lab, NOW)
+    assert result.status == FAIL
+
+
+def test_an_unreadable_lab_record_fails_without_contents(rig):
+    rig.db("INSERT INTO meta(key,value) VALUES ('tg:lab:owned','PRIVATE_SENTINEL')")
+    result = readonly_check(rig, health._training_lab, NOW)
+    assert result.status == FAIL and "invalid lab record" in result.text

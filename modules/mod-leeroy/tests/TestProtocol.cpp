@@ -15,6 +15,8 @@ LEEROY_TEST(Protocol_HelloShape)
     CHECK_EQ(j["guild_id"], 21); CHECK_EQ(j["human_guid"], 0);
     CHECK(j["features"].is_array());
     CHECK(j["features"] == json::array({"item_links", "playstyle"}));
+    CHECK(!j.contains("started_ms"));
+    CHECK_EQ(json::parse(EncodeHello(1700000000000, 21, 0, 1699999990000))["started_ms"], 1699999990000LL);
 }
 
 LEEROY_TEST(Protocol_ChatShapeAndOneLine)

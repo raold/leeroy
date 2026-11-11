@@ -488,3 +488,19 @@ async def test_social_failure_does_not_starve_owned_job_lanes(jobs):
         ground.jobs.lab.tick.assert_awaited_once()
     finally:
         await ground.jobs.close()
+
+
+def test_a_failing_lab_tick_logs_its_exception_class_only(jobs, caplog):
+    ground, _ = jobs
+    async def broken():
+        raise KeyError("PRIVATE_SENTINEL")
+    ground.jobs.lab.tick = broken
+    with caplog.at_level("WARNING", logger="leeroy_mind.training.jobs"):
+        asyncio.run(ground.jobs._lab_tick())
+    assert "training_lab_tick_failed error=KeyError" in caplog.text
+    assert "PRIVATE_SENTINEL" not in caplog.text
+
+
+def test_attach_keeps_dummy_cleanup_receipts_while_stopping(app_stub):
+    ground = attach_training(enable(app_stub))
+    assert ground.jobs.feed in app_stub.receipts["dummy_cleanup"]

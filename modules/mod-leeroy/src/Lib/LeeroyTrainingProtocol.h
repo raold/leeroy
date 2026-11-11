@@ -87,6 +87,10 @@ std::optional<GetStatsCmd> ParseGetStats(nlohmann::json const&, std::string& err
 std::optional<GetTrainingCleanupCmd> ParseGetTrainingCleanup(nlohmann::json const&, std::string& error);
 bool TrainingRunFieldValid(std::string_view, bool optional = true);
 nlohmann::json MakeTrainingCleanup(std::string const& id, std::string const& handle, CleanupReceipt const*);
+// A dummy trial's cleanup after its cleanup_failed terminal: "restored" (every member returned)
+// or "released" (the bound passed and the job held none of "unfinished" any more).
+nlohmann::json MakeDummyCleanup(std::string const& id, std::string_view state,
+    std::vector<std::uint32_t> const& unfinished, std::uint64_t afterMs);
 std::optional<GetVocabCmd> ParseGetVocab(nlohmann::json const&, std::string& error);
 std::optional<CustomStrategyCmd> ParseCustomStrategy(nlohmann::json const&, std::string& error);
 std::optional<DcSettingCmd> ParseDcSetting(nlohmann::json const&, std::string& error);

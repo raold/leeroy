@@ -396,8 +396,10 @@ def _saver(ctx: "NightContext", guid: int, photo: ProfilePhoto, *, style: str | 
                      ts=ctx.clock.now(), race=race, class_name=class_name)
         chose = style_of(stored) if style is None else style
         _record(store, guid, chose, load_persona(store, guid).photo)  # the kind as stored
-        if replacing is not None and chose == LUST:
+        pending = f"selfies:restyle:pending:{guid}"
+        if (replacing is not None and chose == LUST) or store.get_meta(pending) is not None:
             queue_restyled(store, guid, now=ctx.clock.now())
+            store.conn.execute("DELETE FROM meta WHERE key=?",(pending,))
     return write
 
 
