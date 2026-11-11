@@ -347,7 +347,9 @@ LEEROY_TEST(RealmCleanup_StepSkipsOnlyAMemberNothingInTheJobTouched)
         CHECK(!SkipsLeaveMember(reason, true, true));
     }
     // A reason about the job itself keeps the old rule: refused before any change, else unproved.
-    for (auto reason : {"realm_off", "busy:operation_identity", "busy:realm_owner", "unsupported", ""})
+    // busy:training_cleanup and lfg_cleanup_disabled hold for every member at once.
+    for (auto reason : {"realm_off", "busy:operation_identity", "busy:realm_owner", "unsupported", "",
+        "busy:training_cleanup", "lfg_cleanup_disabled", "busy:tick_budget", "bad field: affected_bodies"})
         CHECK(!SkipsLeaveMember(reason, false, false));
 }
 

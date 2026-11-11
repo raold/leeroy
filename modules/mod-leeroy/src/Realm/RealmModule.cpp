@@ -664,33 +664,25 @@ bool RealmModule::AcceptDomain(Queued entry, std::string& error)
     // nothing changed. After realm_off, the exact-retry and receipt checks above, so those answer first.
     if (FencesLeavePvpAck(entry.kind, entry.payload.is_object() ? entry.payload.value("pvp_owner", std::string{}) : std::string{}))
         if (error = LeavePvpAckReason(entry); !error.empty()) return false;
-    std::vector<std::uint32_t> fenced;
-    std::string firstFence;
-    for (auto guid : entry.guids)
+    // Every kind but a rearm is refused whole at its first fenced member. A rearm leaves a member
+    // fenced for a reason of its own out (in his group, say), reserving and touching nothing of it,
+    // and its terminal job names it as skipped (PartitionAtAck).
+    auto const partition = PartitionAtAck(entry.kind, entry.guids, [&](std::uint32_t guid) -> std::string
     {
-        std::string why = _state->executors.at(entry.kind).admit(entry, guid);
-        if (why.empty()) why = MutationReason(guid);
-        std::optional<BodyIdentity> body;
-        if (why.empty() && !(body = Identity(guid))) why = "busy:body_identity";
-        if (why.empty())
-        {
-            reservation.bodies.emplace(guid, State::Lease{*body, _state->Generation(guid)});
-            continue;
-        }
-        // Every other kind is refused whole. A rearm leaves the fenced member out (in his group,
-        // say), reserving and touching nothing of it, and its terminal job names it as skipped.
-        if (!LeavesOutAtAck(entry.kind)) { error = std::move(why); return false; }
-        if (firstFence.empty()) firstFence = why;
-        fenced.push_back(guid);
-    }
-    // Nobody left to rearm: refused whole, as before.
-    if (reservation.bodies.empty()) { error = firstFence.empty() ? "bad field: guids" : firstFence; return false; }
-    if (!fenced.empty())
+        if (auto why = _state->executors.at(entry.kind).admit(entry, guid); !why.empty()) return why;
+        if (auto why = MutationReason(guid); !why.empty()) return why;
+        auto body = Identity(guid);
+        if (!body) return "busy:body_identity";
+        reservation.bodies.emplace(guid, State::Lease{*body, _state->Generation(guid)});
+        return "";
+    });
+    if (!partition.error.empty()) { error = partition.error; return false; }
+    if (!partition.fenced.empty())
     {
-        std::erase_if(entry.guids, [&](auto guid) { return !reservation.bodies.contains(guid); });
-        entry.payload["skipped"] = fenced; // The admitted reservation keeps the exact wire command.
-        LOG_INFO("module.leeroy", "mod-leeroy: realm {} {} left out {} of {} at its ack, first guid={} reason={}",
-            entry.kind, entry.id, fenced.size(), reservation.admitted.guids.size(), fenced.front(), firstFence);
+        entry.guids = partition.admitted;
+        entry.payload["skipped"] = partition.fenced; // The admitted reservation keeps the exact wire command.
+        LOG_INFO("module.leeroy", "mod-leeroy: realm {} {} left out {} of {} at its ack, first guid={}",
+            entry.kind, entry.id, partition.fenced.size(), reservation.admitted.guids.size(), partition.fenced.front());
     }
     auto const id = entry.id;
     // No yield splits admission, reservation and deferred queue insertion.
@@ -1001,10 +993,9 @@ void RealmModule::Tick(std::uint32_t diff)
                 return false;
             if (!guildManifestClean()) return finish("guild_manifest_unproved", true);
             auto value = reservation.value;
-            // A one-member command names its member; members left out at the ack do not count.
-            bool const single = reservation.admitted.guids.size() == 1;
+            auto const named = DoneJobGuid(reservation.admitted.guids.size(), guid);
             _state->Release(entry.id);
-            PublishOutcome(entry, {entry.id, entry.kind, true, "", single ? guid : 0, value, "",
+            PublishOutcome(entry, {entry.id, entry.kind, true, "", named, value, "",
                 std::nullopt, SkippedMembers(entry)});
             return true;
         };
@@ -1019,19 +1010,31 @@ void RealmModule::Tick(std::uint32_t diff)
             LOG_INFO("module.leeroy", "mod-leeroy: realm {} {} skipped guid={} reason={}", entry.kind, entry.id, guid, why);
             return advance();
         };
-        // Tick's own fence refused this member before its executor ever ran. With no pending entry
-        // at all it has had no step, so nothing in its own step changed it; it is skipped when
-        // nothing else in the job touched it either. Otherwise the old rule.
+        // Tick's own fence refused this member before its executor ever ran (DecideFence). With no
+        // pending entry at all it has had no step, so nothing in its own step changed it; it is
+        // skipped when the reason is its own and nothing else in the job touched it either.
+        // Otherwise the old rule. A leave's last member first reads back the members still held.
         auto fenced = [&](std::string why)
         {
-            auto proof = skipProof(why);
-            proof.stepRan = false;
-            proof.pendingStep = pending;
-            if (lease == reservation.bodies.end() || !AcceptsMemberSkip(proof))
-                return finish(std::move(why), pending, false, !pending);
-            // The manifest's last member makes a leave's final readback of the members still held.
-            if (entry.kind == "leave_pvp")
-                if (auto failed = SkipReadback(entry, guid); !failed.empty()) return finish(std::move(failed), true);
+            FenceFacts facts;
+            facts.kind = entry.kind;
+            facts.reason = why;
+            facts.lease = lease != reservation.bodies.end();
+            facts.pending = pending;
+            facts.declared = reservation.declaredScopes.contains(guid);
+            facts.touchedByCleanup = entry.kind == "leave_pvp" && TouchedByCleanup(entry, guid);
+            facts.continuation = !reservation.continuation.empty();
+            facts.last = entry.cursor + 1 == entry.guids.size();
+            auto const outcome = DecideFence(facts);
+            if (outcome == FenceOutcome::OldRule) return finish(std::move(why), pending, false, !pending);
+            if (outcome == FenceOutcome::ReadbackThenSkip)
+            {
+                std::string failed;
+                // Outside the executor's own try: no throw may leave the world-thread update.
+                try { failed = SkipReadback(entry, guid); }
+                catch (...) { return finish("operation_outcome_unknown", true); }
+                if (!failed.empty()) return finish(std::move(failed), true);
+            }
             return skip(why);
         };
         auto before = Identity(guid, pending);

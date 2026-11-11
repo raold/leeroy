@@ -1,6 +1,7 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "LeeroyRealmFailure.h"
 #include "LeeroyRealmCommands.h"
+#include "LeeroyRealmPolicy.h"
 #include "TestHarness.h"
 
 using namespace Leeroy::Realm;
@@ -47,8 +48,24 @@ LEEROY_TEST(RealmFailure_OnlyIndependentMembersAndTheirOwnReasonsSkip)
         "cannot_equip_recorded_weapon", "offhand_occupied", "busy:raid_owner", "busy:training_state",
         "busy:body_scope_changed", "body_identity_changed", "shared_group_leader", "entry_point_unavailable"})
         CHECK(MemberSkipReason(reason));
-    for (auto reason : {"realm_off", "busy:operation_identity", "busy:realm_owner", "unsupported", ""})
+    // An allow-list: a job-wide fence or anything not on it keeps the old rule. busy:training_cleanup
+    // is pending for every body at once; named a member's, it skipped each member after it and then
+    // stranded the leave at its final readback (the #235 review's finding 1).
+    for (auto reason : {"realm_off", "busy:operation_identity", "busy:realm_owner", "unsupported", "",
+        "busy:training_cleanup", "lfg_cleanup_disabled", "busy:tick_budget", "busy:queue_full",
+        "bad field: affected_bodies", "busy:duplicate_operation", "operation_transition_unknown",
+        "native_cleanup_unproved", "some_future_reason", "busy:combat:extra"})
         CHECK(!MemberSkipReason(reason));
+    // Every reason BusyReason can give, for every purpose, is a member's own.
+    for (unsigned bits = 0; bits < (1u << 11); ++bits)
+    {
+        BodyState state{(bits & 1) != 0, (bits & 2) != 0, (bits & 4) != 0, (bits & 8) != 0, (bits & 16) != 0,
+            (bits & 32) != 0, (bits & 64) != 0, (bits & 128) != 0, (bits & 256) != 0, (bits & 512) != 0,
+            (bits & 1024) != 0};
+        for (auto purpose : {Purpose::Move, Purpose::Status, Purpose::LeavePvp, Purpose::Rearm, Purpose::WgJoin,
+            Purpose::Duel, Purpose::Craft, Purpose::Bank, Purpose::Equip, Purpose::Mail})
+            if (auto why = BusyReason(state, purpose); !why.empty()) CHECK(MemberSkipReason("busy:" + why));
+    }
     // His group's members (busy:raid_owner at the ack) no longer refuse a whole rearm; a leave keeps
     // its whole-command ack refusals.
     CHECK(LeavesOutAtAck("rearm"));
@@ -115,4 +132,53 @@ LEEROY_TEST(RealmFailure_TheJobEventNamesSkippedMembersOnlyWhenThereAreSome)
     CHECK_EQ(all.at("state"), "done");
     CHECK(all.at("skipped") == nlohmann::json::array({101, 102}));
     CHECK_EQ(all.at("value"), 0u);
+}
+
+LEEROY_TEST(RealmFailure_TicksFenceSkipsOnlyAnUntouchedMemberForItsOwnReason)
+{
+    // A leave's member still waiting its turn whose battleground ended under it.
+    FenceFacts waiting;
+    waiting.kind = "leave_pvp"; waiting.reason = "busy:body_scope_changed"; waiting.lease = true;
+    CHECK(DecideFence(waiting) == FenceOutcome::Skip);
+    auto with = [&](auto change) { auto facts = waiting; change(facts); return DecideFence(facts); };
+    CHECK(with([](auto& f) { f.last = true; }) == FenceOutcome::ReadbackThenSkip); // the job's final readback first
+    CHECK(with([](auto& f) { f.kind = "rearm"; f.last = true; }) == FenceOutcome::Skip); // a rearm has none
+    CHECK(with([](auto& f) { f.kind = "rearm"; f.reason = "body_identity_changed"; }) == FenceOutcome::Skip);
+    CHECK(with([](auto& f) { f.reason = "busy:raid_owner"; }) == FenceOutcome::Skip);
+    // The old rule: finish, released with changed:false when nothing changed yet.
+    CHECK(with([](auto& f) { f.lease = false; }) == FenceOutcome::OldRule);
+    CHECK(with([](auto& f) { f.pending = true; }) == FenceOutcome::OldRule);    // its step ran or waited
+    CHECK(with([](auto& f) { f.declared = true; }) == FenceOutcome::OldRule);   // a shared cleanup declared it
+    CHECK(with([](auto& f) { f.touchedByCleanup = true; }) == FenceOutcome::OldRule);
+    CHECK(with([](auto& f) { f.continuation = true; }) == FenceOutcome::OldRule);
+    for (auto kind : {"realm_move", "duel", "guild_grow", "guild_fishing", "equip"})
+        CHECK(with([&](auto& f) { f.kind = kind; }) == FenceOutcome::OldRule);
+    for (auto reason : {"busy:operation_identity", "busy:realm_owner", "unsupported", "realm_off", ""})
+        CHECK(with([&](auto& f) { f.reason = reason; }) == FenceOutcome::OldRule);
+}
+
+LEEROY_TEST(RealmFailure_ATrainingCleanupFenceMidLeaveOrRearmKeepsTheOldRule)
+{
+    // The #235 review's finding 1: a training cleanup turns pending while a large leave or rearm runs.
+    // Every member after it would see busy:training_cleanup. Each keeps the old rule, so the job ends
+    // at the first of them: released with changed:false when nothing changed yet, as before #235,
+    // never skipping its way to a final readback that would retain the whole manifest.
+    for (auto kind : {"leave_pvp", "rearm"})
+        for (bool last : {false, true})
+        {
+            FenceFacts facts;
+            facts.kind = kind; facts.reason = "busy:training_cleanup"; facts.lease = true; facts.last = last;
+            CHECK(DecideFence(facts) == FenceOutcome::OldRule);
+        }
+    MemberSkipProof ran;
+    ran.kind = true; ran.memberReason = MemberSkipReason("busy:training_cleanup"); ran.stepUnchanged = true; ran.exact = true;
+    CHECK(!AcceptsMemberSkip(ran)); // nor at the member's own step (a rearm's Eligible, a leave's recheck)
+}
+
+LEEROY_TEST(RealmFailure_ADoneJobNamesItsMemberByTheAdmittedManifest)
+{
+    std::vector<std::size_t> const admitted{1, 3, 143};
+    CHECK_EQ(DoneJobGuid(admitted[0], 101), 101u);
+    CHECK_EQ(DoneJobGuid(admitted[1], 101), 0u); // a rearm of three that left two out at its ack: the mind sent three
+    CHECK_EQ(DoneJobGuid(admitted[2], 1306), 0u);
 }
