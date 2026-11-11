@@ -72,7 +72,7 @@ struct DummyObservation
 
 // A member still counts as held after a failed return while any of the job's control is on it:
 // the group object it created, its solo party listing the member, or the driver as master of the
-// same body. Bodies no longer held are released after kDummyReleaseMs; journals stay with them.
+// same body. The release bound is kDummyReleaseMs after the cleanup_failed terminal.
 inline constexpr std::uint64_t kDummyReleaseMs = 10ULL * 60 * 1000;
 struct DummyHoldState
 {
@@ -84,11 +84,26 @@ inline bool DummyMemberHeld(DummyHoldState const& state)
     if (!state.prepared || state.returned) return false;
     return state.creatingGroup || state.inOwnedGroup || (state.sameBody && state.driverMaster);
 }
-enum class DummyRelease { Wait, Keep, Release };
-inline DummyRelease DecideDummyRelease(bool failureReported, std::uint64_t sinceFailureMs, std::uint32_t held)
+// Past the bound, each unreturned member is kept or abandoned. Kept: still held, still being returned
+// (not blocked: its teleport or reset is in progress, so the job still acts on it), or carrying a
+// training journal, as the offline raid keeps one. Abandoned: blocked with none of our control left
+// and no journal; the job never touches it again and stops fencing it.
+enum class DummyMemberFate { Done, Keep, Abandon };
+inline DummyMemberFate DummyFateAfterBound(DummyHoldState const& state, bool blocked, bool journaled)
 {
-    if (!failureReported || sinceFailureMs < kDummyReleaseMs) return DummyRelease::Wait;
-    return held ? DummyRelease::Keep : DummyRelease::Release;
+    if (!state.prepared || state.returned) return DummyMemberFate::Done;
+    if (DummyMemberHeld(state) || !blocked || journaled) return DummyMemberFate::Keep;
+    return DummyMemberFate::Abandon;
+}
+inline bool DummyBoundPassed(bool failureReported, std::uint64_t sinceFailureMs)
+{
+    return failureReported && sinceFailureMs >= kDummyReleaseMs;
+}
+enum class DummyRelease { Wait, Keep, Release };
+inline DummyRelease DecideDummyRelease(bool failureReported, std::uint64_t sinceFailureMs, std::uint32_t kept)
+{
+    if (!DummyBoundPassed(failureReported, sinceFailureMs)) return DummyRelease::Wait;
+    return kept ? DummyRelease::Keep : DummyRelease::Release;
 }
 
 // The production controller calls this same policy before each phase's effects. A repeated cancellation

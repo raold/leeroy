@@ -44,6 +44,21 @@ LEEROY_TEST(Training_FenceCoversEveryBodyOnlyForTheBound)
     CHECK(fence.TakeRelease(3000000 + kTrainingFenceReleaseMs));
 }
 
+LEEROY_TEST(Training_FenceRemembersAnUnprovedReleaseUntilTheEpisodeEnds)
+{
+    TrainingFence fence;
+    fence.NoteUnproved("dummy_trial a unfinished=2984"); // No episode: nothing to qualify.
+    CHECK(fence.Unproved().empty());
+    fence.Raise(0);
+    fence.NoteUnproved("dummy_trial a unfinished=2984");
+    fence.NoteUnproved("");
+    fence.NoteUnproved("dummy_trial b unfinished=1924");
+    fence.Settle(true, 1000);
+    CHECK_EQ(fence.Unproved(), "dummy_trial a unfinished=2984; dummy_trial b unfinished=1924");
+    fence.Settle(false, 2000);
+    CHECK(fence.Unproved().empty()); // The next episode starts clean.
+}
+
 LEEROY_TEST(Training_CleanupReportOnChangeAtMostOncePerMinute)
 {
     CleanupReport report;

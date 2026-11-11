@@ -11,7 +11,7 @@ LeeroyCommandResult HandleDummyTrial(nlohmann::json const&);
 void TickDummyTrial(std::uint32_t diff);
 bool DummyTrialRunning();
 // World thread; includes admitted requests and unresolved recovery. Once the release bound has
-// passed with a member still held, only the members still held.
+// passed, only the members the job keeps: still held, still being returned, or journaled.
 bool DummyTrialOwns(std::uint32_t guid);
 // "<id> unreturned=<guids>" while a dummy trial is active, for the cleanup log; empty otherwise.
 std::string DummyTrialCleanupDetail();

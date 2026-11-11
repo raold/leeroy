@@ -39,8 +39,20 @@ public:
     void Settle(bool pending, std::uint64_t now)
     {
         if (pending) Raise(now);
-        else _pending = _released = false;
+        else
+        {
+            _pending = _released = false;
+            _unproved.clear();
+        }
     }
+    // A job gave up proving some return in this episode (DummyTrialJob's cleanup_released). Its
+    // all-clear is then a release, never a verification; the details last until the episode ends.
+    void NoteUnproved(std::string const& detail)
+    {
+        if (!_pending || detail.empty()) return;
+        _unproved += (_unproved.empty() ? "" : "; ") + detail;
+    }
+    std::string const& Unproved() const { return _unproved; }
     bool Pending() const { return _pending; }
     bool Fencing(std::uint64_t now) const { return _pending && Elapsed(now) < kTrainingFenceReleaseMs; }
     // True once per episode, on the first observation past the bound.
@@ -54,6 +66,7 @@ public:
 private:
     bool _pending = false, _released = false;
     std::uint64_t _since = 0;
+    std::string _unproved;
 };
 
 // Which adapters keep the cleanup pending, logged on change and at most once a minute.

@@ -318,3 +318,21 @@ LEEROY_TEST(Training_DummyReleaseWaitsTheBoundThenKeepsOnlyHeldBodies)
     CHECK(DecideDummyRelease(true, kDummyReleaseMs, 0) == DummyRelease::Release);
     CHECK(DecideDummyRelease(true, kDummyReleaseMs, 1) == DummyRelease::Keep);
 }
+
+LEEROY_TEST(Training_DummyKeepsEveryMemberStillReturningPastTheBound)
+{
+    DummyHoldState releasedAndTeleporting{true, false, false, false, true, false}; // Group and master let go.
+    CHECK(!DummyMemberHeld(releasedAndTeleporting));
+    // Still being returned (not blocked): the job still acts on it, so it stays kept and fenced.
+    CHECK(DummyFateAfterBound(releasedAndTeleporting, false, false) == DummyMemberFate::Keep);
+    // Blocked with nothing of ours left and no journal: abandoned, never touched or fenced again.
+    CHECK(DummyFateAfterBound(releasedAndTeleporting, true, false) == DummyMemberFate::Abandon);
+    CHECK(DummyFateAfterBound(releasedAndTeleporting, true, true) == DummyMemberFate::Keep); // Journaled.
+    DummyHoldState inOurParty{true, false, false, true, false, false};
+    CHECK(DummyFateAfterBound(inOurParty, true, false) == DummyMemberFate::Keep); // Blocked but held.
+    CHECK(DummyFateAfterBound({true, true, true, true, true, true}, true, true) == DummyMemberFate::Done);
+    CHECK(DummyFateAfterBound({false, false, false, false, false, false}, false, false) == DummyMemberFate::Done);
+    CHECK(!DummyBoundPassed(false, kDummyReleaseMs));
+    CHECK(!DummyBoundPassed(true, kDummyReleaseMs - 1));
+    CHECK(DummyBoundPassed(true, kDummyReleaseMs));
+}

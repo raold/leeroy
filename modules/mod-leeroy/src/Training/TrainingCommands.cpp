@@ -26,6 +26,7 @@ std::uint64_t SteadyMs()
 bool TrainingCleanupPending() { return fence.Fencing(SteadyMs()); }
 bool TrainingCleanupUnresolved() { return fence.Pending(); }
 void RequireTrainingCleanup() { fence.Raise(SteadyMs()); }
+void NoteTrainingCleanupReleased(std::string const& detail) { fence.NoteUnproved(detail); }
 LeeroyCommandResult HandleTelemetry(nlohmann::json const& message)
 {
     std::string error;
@@ -77,13 +78,17 @@ void TrainingOffCleanup()
     if (Guild::OfflineTrainingCleanupPending()) add("offline_receipt");
     if (!runs) add("dc_runs");
     if (!bots) add("journals", std::to_string(TrainingJournalCount()));
-    fence.Settle(!adapters.empty(), now);
+    std::string const unproved = fence.Unproved(); // Settle(false) ends the episode and forgets it.
     if (report.Due(adapters, now))
     {
-        if (adapters.empty()) LOG_INFO("module.leeroy", "mod-leeroy: training cleanup verified");
-        else LOG_WARN("module.leeroy", "mod-leeroy: training cleanup pending: {} after_ms={}", adapters,
-            fence.Elapsed(now));
+        if (!adapters.empty())
+            LOG_WARN("module.leeroy", "mod-leeroy: training cleanup pending: {} after_ms={}", adapters,
+                fence.Elapsed(now));
+        else if (!unproved.empty())
+            LOG_WARN("module.leeroy", "mod-leeroy: training cleanup released, not verified: {}", unproved);
+        else LOG_INFO("module.leeroy", "mod-leeroy: training cleanup verified");
     }
+    fence.Settle(!adapters.empty(), now);
     if (fence.TakeRelease(now))
         LOG_WARN("module.leeroy", "mod-leeroy: training cleanup fence released after_ms={} pending={}; only bodies "
             "still owned or journaled stay fenced, and training stays refused until cleanup is verified",

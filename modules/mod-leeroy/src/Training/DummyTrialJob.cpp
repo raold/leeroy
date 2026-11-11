@@ -63,7 +63,7 @@ struct Member
     bool prepared = false, moved = false, arrived = false, attacking = false, frozen = false,
         released = true, resetDone = true, returned = false, returnIssued = false, blocked = false,
         groupReleased = true, groupReleaseStarted = false, leaderFlag = false, leaderRestored = true,
-        finalResetDone = true;
+        finalResetDone = true, abandoned = false;
     uint32 reasserted = 0;
     uint64 started = 0, ms = 0, damage = 0, hits = 0, retryAt = 0;
     std::optional<uint64> outsideSince;
@@ -81,7 +81,7 @@ struct Job
     int slot = -1;
     bool returning = false, terminalPublished = false, heldNoted = false, bounded = false;
     uint64 failedAt = 0, releaseCheckAt = 0;
-    std::vector<uint32> held; // After the release bound: the members the job still holds.
+    std::vector<uint32> held; // After the release bound: the members the job keeps (DummyFateAfterBound).
 
     Job(DummyTrialCmd requested, uint64 accepted) : command(std::move(requested)), life(accepted, command.seconds) { }
 };
@@ -567,16 +567,16 @@ bool AllReturned(Job const& job)
     return std::all_of(job.members.begin(), job.members.end(), [](Member const& member) { return member.returned; });
 }
 
-bool Held(Job const& job, Member const& member)
+DummyHoldState HoldState(Job const& job, Member const& member)
 {
     auto* group = OwnedGroup(member);
     auto* connected = ObjectAccessor::FindConnectedPlayer(Guid(member.guid));
     auto* ai = connected ? GET_PLAYERBOT_AI(connected) : nullptr;
-    return DummyMemberHeld({member.prepared, member.returned, member.creatingGroup != nullptr,
+    return {member.prepared, member.returned, member.creatingGroup != nullptr,
         group && group->IsMember(Guid(member.guid)),
         connected && Identity(connected) == member.player && Identity(connected->GetSession()) == member.session
             && Identity(ai) == member.ai,
-        ai && Identity(ai->GetMaster()) == job.driverIdentity});
+        ai && Identity(ai->GetMaster()) == job.driverIdentity};
 }
 
 std::vector<uint32> Unreturned(Job const& job)
@@ -594,27 +594,39 @@ std::string GuidList(std::vector<uint32> const& guids)
     return text.empty() ? "-" : text;
 }
 
-// Ten minutes after cleanup_failed, a job that no longer holds any member (DummyMemberHeld) ends:
-// its slot frees and its global fence can clear. Journals stay and fence their own bodies; the
-// dummy_cleanup "released" receipt names the members whose return was never proved. A member still
-// held keeps the job, and from then on only the held members stay fenced (DummyTrialOwns).
+// Ten minutes after cleanup_failed the job sorts its unreturned members (DummyFateAfterBound). It keeps
+// and fences a member it still holds, is still returning or that carries a training journal; it
+// abandons a blocked member with none of that (cleanup_abandoned, never touched again, no longer fenced).
+// With nobody kept the job ends: its slot frees and its global fence can clear. Journals stay and fence
+// their own bodies; the dummy_cleanup "released" receipt names the members whose return was never proved.
 bool ReleaseStuck(Job& job, uint64 now)
 {
     if (job.life.Phase() != DummyPhase::Recovery || now < job.releaseCheckAt) return false;
     job.releaseCheckAt = now + 1000;
     uint64 const since = now >= job.failedAt ? now - job.failedAt : 0;
-    std::vector<uint32> held;
-    for (auto const& member : job.members)
-        if (Held(job, member)) held.push_back(member.guid);
-    auto const decision = DecideDummyRelease(job.life.FailureReported(), since, static_cast<uint32>(held.size()));
-    if (decision == DummyRelease::Wait) return false;
+    if (!DummyBoundPassed(job.life.FailureReported(), since)) return false;
+    std::vector<uint32> kept;
+    for (auto& member : job.members)
+    {
+        if (member.abandoned) continue;
+        switch (DummyFateAfterBound(HoldState(job, member), member.blocked, HasTrainingJournal(member.guid)))
+        {
+            case DummyMemberFate::Done: break;
+            case DummyMemberFate::Keep: kept.push_back(member.guid); break;
+            case DummyMemberFate::Abandon:
+                member.abandoned = true;
+                LOG_WARN("module.leeroy", "mod-leeroy: dummy trial {} cleanup_abandoned guid={} blocked={}; the job "
+                    "holds none of it and never touches it again", job.event.id, member.guid, member.cleanupError);
+                break;
+        }
+    }
     job.bounded = true;
-    job.held = held;
-    if (decision == DummyRelease::Keep)
+    job.held = kept;
+    if (DecideDummyRelease(true, since, static_cast<uint32>(kept.size())) == DummyRelease::Keep)
     {
         if (!job.heldNoted)
-            LOG_WARN("module.leeroy", "mod-leeroy: dummy trial {} cleanup_held held={} after_ms={}; only these "
-                "members stay fenced and the job keeps its slot", job.event.id, GuidList(held), since);
+            LOG_WARN("module.leeroy", "mod-leeroy: dummy trial {} cleanup_held kept={} after_ms={}; only these "
+                "members stay fenced and the job keeps its slot", job.event.id, GuidList(kept), since);
         job.heldNoted = true;
         return false;
     }
@@ -623,6 +635,7 @@ bool ReleaseStuck(Job& job, uint64 now)
         "are retained and fence their own bodies)", job.event.id, since, GuidList(unfinished));
     LeeroyModule::Instance().Publish(EncodeEvent(NowUnixMs(),
         MakeDummyCleanup(job.event.id, "released", unfinished, since)), false);
+    NoteTrainingCleanupReleased("dummy_trial " + job.event.id + " unfinished=" + GuidList(unfinished));
     return true;
 }
 }

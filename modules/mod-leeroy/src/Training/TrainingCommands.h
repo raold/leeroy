@@ -34,6 +34,8 @@ bool TrainingCleanupPending();
 // True until a cleanup pass proves every adapter clean; new training stays refused meanwhile.
 bool TrainingCleanupUnresolved();
 void RequireTrainingCleanup();
+// A job gave up proving some return; the episode's all-clear then says released, not verified.
+void NoteTrainingCleanupReleased(std::string const& detail);
 std::size_t TrainingJournalCount();
 BotJournal& JournalOf(std::uint32_t guid);
 void JournalReset(std::uint32_t guid, std::vector<std::string_view> const& values = {});
