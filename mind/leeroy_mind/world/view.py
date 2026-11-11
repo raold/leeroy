@@ -4,6 +4,7 @@ from leeroy_mind.personas.io import load_persona
 from leeroy_mind.personas.card import render_prompt_card
 from leeroy_mind.storage.store import Store
 from leeroy_mind.clock import SystemClock
+from leeroy_mind.personas.tiers import available
 from leeroy_mind.wow import RACES, CLASSES
 from .targets import roster
 from .stage import priority, failures
@@ -14,7 +15,7 @@ PAGE = 50
 def status(conn):
     store = Store(conn,clock=SystemClock())
     rows = roster(store,active=False)
-    have = store.persona_versions(tier="world")
+    have = store.persona_versions(tier="world") if rows else {}
     groups = {}
     for g,r in rows.items():
         counts = groups.setdefault(r["guild_id"],Counter())
@@ -24,12 +25,14 @@ def status(conn):
             counts["refused"] += 1
     return {"guilds":[{"guild":guild,**{k:c[k] for k in
         ("targets","generated","pending","retired","refused")}} for guild,c in sorted(groups.items())],
-        "observed":store.get_meta("world:observed")}
+        "observed":store.get_meta("world:observed") if available(conn) else None}
 
 
 def plan(conn,*,cap=12):
     store = Store(conn,clock=SystemClock())
     rows = roster(store)
+    if not rows:
+        return []
     have = store.persona_versions(tier=None)
     return [g for g in priority(store,rows) if g not in have and failures(store,g)[0] < 3][:cap] if rows else []
 
@@ -37,7 +40,7 @@ def plan(conn,*,cap=12):
 def cards(conn,*,offset=0,guild=0):
     store = Store(conn,clock=SystemClock())
     rows = roster(store,active=False)
-    world = store.persona_versions(tier="world")
+    world = store.persona_versions(tier="world") if rows else {}
     ordered = sorted((r for g,r in rows.items() if g in world and (not guild or r["guild_id"] == guild)),
                      key=lambda r:(r["retired"],r["guild_id"],r["rank"],r["guid"]))
     members = []

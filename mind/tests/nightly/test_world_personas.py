@@ -19,6 +19,12 @@ from leeroy_mind.world import config, targets, stage, view, photos
 from leeroy_mind.world.protocol import WorldMember, WorldRoster, WorldSay
 
 
+@pytest.fixture(autouse=True)
+def fallback_looks(monkeypatch):
+    # These scripted generation checks exercise enrichment, even after task 46 merges.
+    monkeypatch.setattr(stage,"_looks_sampler",lambda:None)
+
+
 def enabled(h,extra=""):
     (h.settings.data_dir/"mind.toml").write_text("[world]\nenabled=true\n"+extra,encoding="utf-8")
 
@@ -400,3 +406,27 @@ def test_world_observation_never_records_activity_and_images_follow_cast(h):
     attach_world(app)
     assert [s.name for s in runner.stages] == ["regress","world_targets","world_personas",
         "world_photos","selfies","snaps","world_selfies"]
+
+
+def test_world_uses_diversity_sampler_without_enrichment_when_installed(h,monkeypatch):
+    observed = []
+    def sample(p,existing,*,ident,names):
+        observed.append((p.guid,tuple(existing),ident,tuple(names)))
+        return APPEARANCE
+    monkeypatch.setattr(stage,"_looks_sampler",lambda:sample)
+    observe(h,member(h))
+    ctx = h.ctx()
+    p = load_persona(h.store,101)
+    result = run(stage.looks(ctx,p,targets.roster(h.store),[],("Arkon","Belra")))
+    assert result.appearance == APPEARANCE and ctx.reasoner.calls == 0
+    assert observed == [(101,(),ctx.ident,("Arkon","Belra"))]
+
+
+def test_world_empty_database_is_read_only_and_has_no_targets():
+    conn = sqlite3.connect(":memory:")
+    try:
+        assert view.status(conn) == {"guilds":[],"observed":None}
+        assert view.plan(conn) == [] and view.cards(conn)["members"] == []
+        assert not conn.execute("SELECT name FROM sqlite_master").fetchall()
+    finally:
+        conn.close()

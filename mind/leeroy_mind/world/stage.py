@@ -85,10 +85,18 @@ class GeneratedContext:
             race=RACES.get(row["race"],""),class_name=CLASSES.get(row["class"],""))
 
 
-async def looks(ctx,p,rows,existing,names):
-    # Task 46 hook: [world] enabled already opts these newly created personas in.
+def _looks_sampler():
+    """Task 46 hook; keep the fallback independently testable after it merges."""
     if importlib.util.find_spec("leeroy_mind.personas.looks_diversity") is not None:
         from leeroy_mind.personas.looks_diversity import sample
+        return sample
+    return None
+
+
+async def looks(ctx,p,rows,existing,names):
+    # [world] enabled already opts these newly created personas into diversity.
+    sample = _looks_sampler()
+    if sample is not None:
         p=replace(p,appearance=sample(p,existing,ident=ctx.ident,names=names))
     if p.appearance is None:
         p,_=await enrich.enrich_one(GeneratedContext(ctx,p,rows),p.guid)
