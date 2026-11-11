@@ -352,6 +352,7 @@ class TurnMeta:
     guard_codes: tuple[str,...] = ()
     review_required: bool = False  # opt-in sources require their card and deterministic guards
     single_line: bool = False  # a bounded multi-member conversation owns its line count
+    keep_channel: bool = False  # a public thread must stay on its chosen transport
 
 
 class _ScopeChanged(SchedulerError):
@@ -1301,7 +1302,7 @@ class Pipeline:
                 return self._drop(turn, meta, "no_channel")
         discord = is_discord(turn.channel)
         if discord:  # one message of up to three typed lines; a DM is always to him
-            turn.max_lines = DISCORD_LINES
+            turn.max_lines = 1 if meta.single_line else DISCORD_LINES
             self._dm_to_him(turn)
         p = self.personas.get(turn.speaker)
         if p is None:
@@ -1610,7 +1611,7 @@ class Pipeline:
         """Where the turn goes now its channel is known (Comms.place, which also fills in
         whom it is to), and the one decision on whether it is spoken, for the model's turns
         and templates alike (C1). Voice off, down or failing, it is typed as in phase 1."""
-        if self.comms is None or meta.before_transport is not None or is_discord(turn.channel):
+        if self.comms is None or meta.before_transport is not None or meta.keep_channel or is_discord(turn.channel):
             return False
         if meta.typed_on is None and not turn.channel.startswith("voice:"):
             meta.typed_on = turn.channel, turn.to_guid

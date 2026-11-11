@@ -17,7 +17,7 @@ async def mind(tmp_path,enabled=True):
     clock=fake_clock()
     bridge=FakeBridge([hello(HUMAN),CAST])
     port=await bridge.start()
-    (tmp_path/"mind.toml").write_text(toml(port)+"\n[talk]\nchattiness=0\nwhispers_per_hour=0\n"
+    (tmp_path/"mind.toml").write_text(toml(port)+"\n[talk]\nchattiness=4\nwhispers_per_hour=0\n"
         "openers_per_hour=0\nrealism=true\n[banter]\nenabled="+str(enabled).lower()+"\n")
     seed_db(tmp_path/"mind.db",clock)
     cfg=load_config(tmp_path/"mind.toml")

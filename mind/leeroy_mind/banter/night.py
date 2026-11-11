@@ -1,7 +1,7 @@
 """Rewarded public jokes reuse the lexicon's full origin/provenance screens."""
 from leeroy_mind.nightly import lexicon
 from leeroy_mind.nightly.evidence import load_facts
-from leeroy_mind.nightly.language_births import _evidence, _screen
+from leeroy_mind.nightly.language_screens import evidence, screen
 from leeroy_mind.personas.screens import redact_real_name
 from leeroy_mind.text import truncate_words
 
@@ -25,7 +25,7 @@ def reward_jokes(ctx):
         "AND c.ts>=? AND c.ts<? AND EXISTS(SELECT 1 FROM talk_signal s WHERE s.line_id=r.line_id "
         "AND s.kind='reason_funny' AND s.value>0) AND EXISTS(SELECT 1 FROM talk_signal s "
         "WHERE s.line_id=r.line_id AND s.kind='explicit' AND s.value>0) "
-        "ORDER BY r.value DESC,c.id LIMIT 20",ctx.window).fetchall()
+        "ORDER BY r.value DESC,c.id LIMIT 20",(ctx.window[1]-7*86400,ctx.window[1])).fetchall()
     facts = load_facts(ctx)
     written = 0
     for row in rows:
@@ -35,8 +35,8 @@ def reward_jokes(ctx):
         line = lexicon.public_line(store,row[0])
         if line is None or lexicon.public_sources(store,(origin,)) is None:
             continue
-        claim,verdict = _screen(ctx,"joke",line["from_guid"],line["text"],[origin],
-            _evidence(ctx,[origin]),facts)
+        claim,verdict = screen(ctx,"joke",line["from_guid"],line["text"],[origin],
+            evidence(ctx,[origin]),facts)
         if not verdict.ok:
             continue
         term = truncate_words(redact_real_name(claim.text,ctx.ident,ctx.ident.called),120)
