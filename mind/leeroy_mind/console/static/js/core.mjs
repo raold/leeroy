@@ -47,6 +47,7 @@ export function hhmm(sec) {
 // this page's memory only (not a cookie, which every 127.0.0.1 port would be handed) and goes
 // with each request as a header. A reload loses it: open the printed URL again.
 export function setKey(key) { KEY = key; GEN++; }
+export function currentKey() { return KEY; }  // update.mjs reloads with it
 export function keyGen() { return GEN; }
 // The key in a "#key=..." fragment: the key, "" for a malformed one, null for any other fragment
 export function hashKey(hash) {

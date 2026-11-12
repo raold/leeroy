@@ -1,4 +1,5 @@
 import { $, api, arr, emit, hashKey, on, own, refused, remember, setKey } from "./core.mjs";
+import { serverBuild } from "./update.mjs";
 import { S, adoptVoice, applyVoice } from "./state.mjs";
 import { forgetFaces, photosHidden, redrawFaces } from "./faces.mjs";
 import { renderStrip } from "./strip.mjs";
@@ -64,6 +65,7 @@ function dispatch(block) {
   var status = kind === "snapshot" ? d.status : kind === "status" ? d : null;
   if (status && (!status.mind || !status.game || !status.voice)) { return; }
   if (kind === "snapshot") {
+    serverBuild(d.build);
     S.status = d.status || S.status;
     S.rooms = arr(d.rooms);
     S.mood = d.mood && typeof d.mood === "object" ? d.mood : null;
