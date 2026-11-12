@@ -39,7 +39,7 @@ import math
 import random
 import re
 from collections import defaultdict, deque
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Awaitable, Callable
@@ -361,6 +361,8 @@ class TurnMeta:
     single_line: bool = False  # a bounded multi-member conversation owns its line count
     keep_channel: bool = False  # a public thread must stay on its chosen transport
     server_anchor: str = ''
+    server_thread: tuple[int, ...] = ()
+    server_conversation: str = ''
 
 
 class _ScopeChanged(SchedulerError):
@@ -1031,6 +1033,14 @@ class Pipeline:
                    if r.ts >= self._chat_from and self._may_carry(turn, r)]
             recent = sorted([*recent, *own], key=lambda r: r.id)
 
+        if not preview and self._server_turn(turn, meta) and meta.server_thread:
+            observed = self.live_review.observe(turn, meta)
+            _, context = await self.live_review.read(
+                lambda conn:self.live_review.history(turn, meta, conn, observed=observed))
+            recent = [ChatLineRow(h.id, h.ts, turn.channel, h.guid, names.get(h.guid, 'someone'),
+                                 h.to_guid, h.text, 0, 0, None, h.thread_id, h.origin, h.readers)
+                      for h in context]
+
         people = [turn.addressee] if turn.addressee else []
         # the addressee and up to 2 others who spoke recently; a whisper is only between two
         room = len(people) + (0 if turn.channel == "whisper" else 2)
@@ -1263,6 +1273,19 @@ class Pipeline:
             self._new_id(), why=why, elsewhere=elsewhere, guards=guards, after=after,
             still_valid=still_valid))
 
+    async def speak_meta(self, turn: Turn, meta: TurnMeta) -> list[str]:
+        """Await a source-owned turn, retaining its receipt id and cancellation fence."""
+        if not meta.turn_id:
+            meta.turn_id = self._new_id()
+        if self._server_turn(turn, meta):
+            meta.review_required = meta.single_line = meta.keep_channel = True
+        return await self._speak(replace(turn), meta)
+
+    def _server_turn(self, turn: Turn, meta: TurnMeta) -> bool:
+        app = getattr(self, 'server_app', None)
+        return (getattr(app, 'server', None) is not None and is_discord(turn.channel)
+                and meta.why.startswith('server:'))
+
     async def say_as(self, guid: int, channel: str, text: str, *, kind: TurnKind,
                      to_guid: int = 0,
                      still_valid: Callable[[], bool] | None = None,
@@ -1325,7 +1348,8 @@ class Pipeline:
             return self._drop(turn, meta, "scope_changed")
         now = self.clock.now()
         rule = self._rule_priority(turn, meta)
-        turn.priority = rule if meta.elsewhere else min(turn.priority, rule)
+        turn.priority = (Priority.BACKGROUND if self._server_turn(turn, meta) else
+                         rule if meta.elsewhere else min(turn.priority, rule))
         if turn.deadline <= 0:
             turn.deadline = now + (DISCORD_DEADLINE_S if is_discord(turn.channel)
                                    else DEADLINE_S.get(turn.priority, OTHER_DEADLINE_S))
@@ -1336,7 +1360,7 @@ class Pipeline:
                 return self._drop(turn, meta, "no_channel")
         discord = is_discord(turn.channel)
         if discord:  # one message of up to three typed lines; a DM is always to him
-            turn.max_lines = 1 if meta.single_line else DISCORD_LINES
+            turn.max_lines = 1 if meta.single_line or self._server_turn(turn, meta) else DISCORD_LINES
             self._dm_to_him(turn)
         p = self.personas.get(turn.speaker)
         if p is None:
@@ -1615,9 +1639,14 @@ class Pipeline:
                 if target is None:
                     return
                 try:
-                    react(self.store, target, member=turn.speaker,
-                          emoji=reaction if reaction in {*REACTIONS, *(v[1] for v in FILLER.values())}
-                          else "👍", now=self.clock.now())
+                    server = getattr(getattr(self, 'server_app', None), 'server', None)
+                    with self.store.transaction() if server is not None else nullcontext():
+                        added = react(self.store, target, member=turn.speaker,
+                              emoji=reaction if reaction in {*REACTIONS, *(v[1] for v in FILLER.values())}
+                              else "👍", now=self.clock.now())
+                        if server is not None and added:
+                            from leeroy_mind.server.records import increment
+                            increment(self.store, self.clock.local().date().isoformat(), reactions=1)
                 except DiscordRefused:
                     return
             else:
@@ -2254,22 +2283,36 @@ class Pipeline:
         message's id; nothing goes to the bridge, so there is no ack and no echo to wait for.
         None, or why it wasn't said: discord_<code> for what the store refused."""
         self._dm_to_him(turn)
+        server_turn = self._server_turn(turn, meta)
+        stage = 'store'
         try:
-            message = store_line(self.store, turn, meta, text, self.clock.now(),
-                                 audience=self.world.audience(
-                                     turn.channel, from_guid=turn.speaker, to_guid=turn.to_guid))
+            with self.store.transaction() if server_turn else nullcontext():
+                message = store_line(self.store, turn, meta, text, self.clock.now(),
+                                     audience=self.world.audience(
+                                         turn.channel, from_guid=turn.speaker, to_guid=turn.to_guid))
+                stage = 'record'
+                if server_turn:
+                    from leeroy_mind.server.records import posted
+                    posted(self.store, self.clock.local().date().isoformat(), self.clock.now(),
+                           conversation=meta.server_conversation,
+                           dm_guid=turn.speaker if meta.why == 'server:dm' and not meta.said else None)
+                self._record(turn, meta, p, text, memory_ids, discord_id=message)
         except DiscordRefused as e:
             log.info("discord_line_refused: guid=%d channel=%s code=%s", turn.speaker,
                      turn.channel, e.code)
             return f"discord_{e.code}"
         except Exception:
-            log.exception("discord_store_failed: guid=%d channel=%s", turn.speaker, turn.channel)
-            return "store_error"
-        try:
-            self._record(turn, meta, p, text, memory_ids, discord_id=message)
-        except Exception:
-            log.exception("say_record_failed: guid=%d channel=%s", turn.speaker, turn.channel)
-            return "record_error"
+            log.exception("discord_delivery_failed: guid=%d channel=%s stage=%s",
+                          turn.speaker, turn.channel, stage)
+            return stage + '_error'
+        server = getattr(getattr(self, 'server_app', None), 'server', None)
+        reactor = getattr(server, 'reactions', None)
+        if reactor is not None:
+            try:
+                reactor.after_post(message, author=turn.speaker, channel=turn.channel,
+                                   text=text, his=False)
+            except Exception:
+                log.warning('server_reaction_schedule_failed message=%d', message)
         remember = getattr(self, 'remember_discord_photo', None)
         if remember is not None and meta.discord is not None and meta.discord.reply_to is not None:
             try:

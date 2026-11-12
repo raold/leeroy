@@ -130,6 +130,12 @@ class DiscordTalk:
     def on_his_post(self, message_id: int) -> None:
         """His post was stored: take or keep the lease, then queue the answers."""
         self._take_lease()
+        server = getattr(self.app, 'server', None)
+        if server is not None:
+            row = self.app.store.conn.execute('SELECT channel,author,deleted FROM discord_message WHERE id=?',
+                                              (message_id,)).fetchone()
+            if row and row[1] == self.app.human_guid and row[2] is None:
+                server.engine.his_post(row[0])
         try:
             items = self.plan(message_id)
         except Exception as error:
