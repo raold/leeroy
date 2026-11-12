@@ -4,6 +4,7 @@
 #include "LeeroyWorldPolicy.h"
 #include <nlohmann/json.hpp>
 #include <optional>
+#include <string_view>
 #include <utility>
 #include <vector>
 namespace Leeroy::World
@@ -28,25 +29,58 @@ inline bool Number(nlohmann::json const& value, std::uint64_t lo, std::uint64_t 
 {
     return value.is_number_integer() && !value.is_boolean() && value >= lo && value <= hi;
 }
-inline bool ValidMember(nlohmann::json const& m, std::uint32_t own, std::uint32_t human)
+// The first rule a roster row breaks, by name ("" when it is valid): a row native cannot vouch for.
+inline std::string_view MemberProblem(nlohmann::json const& m, std::uint32_t own, std::uint32_t human)
 {
     static std::set<std::string> const keys{"guid","account","guild_id","guild_name","name","race","class","gender","level","rank","online","map","zone"};
-    if (!m.is_object() || m.size() != keys.size()) return false;
-    for (auto const& key : keys) if (!m.contains(key)) return false;
-    for (auto key : {"guid","account","guild_id"}) if (!Number(m[key],1,UINT32_MAX)) return false;
-    if (m["guid"] == human || m["guild_id"] == own || !m["online"].is_boolean()) return false;
-    for (auto key : {"map","zone"}) if (!Number(m[key],0,UINT32_MAX)) return false;
-    if (!Number(m["race"],1,11) || !Number(m["class"],1,11) || !Number(m["gender"],0,1)
-        || !Number(m["level"],1,255) || !Number(m["rank"],0,9)) return false;
-    for (auto key : {"name","guild_name"})
+    if (!m.is_object() || m.size() != keys.size()) return "shape";
+    for (auto const& key : keys) if (!m.contains(key)) return "shape";
+    for (std::string_view key : {"guid","account","guild_id"}) if (!Number(m[std::string(key)],1,UINT32_MAX)) return key;
+    if (m["guid"] == human) return "human";
+    if (m["guild_id"] == own) return "own_guild";
+    if (!m["online"].is_boolean()) return "online";
+    for (std::string_view key : {"map","zone"}) if (!Number(m[std::string(key)],0,UINT32_MAX)) return key;
+    if (!Number(m["race"],1,11)) return "race";
+    if (!Number(m["class"],1,11)) return "class";
+    if (!Number(m["gender"],0,1)) return "gender";
+    if (!Number(m["level"],1,255)) return "level";
+    if (!Number(m["rank"],0,9)) return "rank";
+    for (std::string_view key : {"name","guild_name"})
     {
-        if (!m[key].is_string()) return false;
-        auto s = m[key].get<std::string>();
+        auto const& value = m[std::string(key)];
+        if (!value.is_string()) return key;
+        auto const& s = value.get_ref<std::string const&>();
         auto chars = std::count_if(s.begin(),s.end(),[](unsigned char c) { return (c & 0xc0) != 0x80; });
-        if (s.empty() || chars > (std::string_view(key) == "name" ? 24 : 48)
-            || std::any_of(s.begin(),s.end(),[](unsigned char c) { return c < 32 || c == 127; })) return false;
+        if (s.empty() || chars > (key == "name" ? 24 : 48)
+            || std::any_of(s.begin(),s.end(),[](unsigned char c) { return c < 32 || c == 127; })) return key;
     }
-    return true;
+    return {};
+}
+inline bool ValidMember(nlohmann::json const& m, std::uint32_t own, std::uint32_t human)
+{
+    return MemberProblem(m,own,human).empty();
+}
+// The rows a roster can publish, in order, and the ones left out with why: one odd member (a
+// value native's own caches disagree on) must not withhold the whole world from the mind.
+struct RosterRows
+{
+    nlohmann::json rows = nlohmann::json::array();
+    std::vector<std::pair<std::uint32_t,std::string>> skipped;  // guid (0 when unreadable), rule
+};
+inline RosterRows ValidRows(nlohmann::json const& rows, std::uint32_t own, std::uint32_t human)
+{
+    RosterRows out;
+    if (!rows.is_array()) return out;
+    std::set<std::uint32_t> seen;
+    for (auto const& m : rows)
+    {
+        std::uint32_t guid = 0;
+        if (m.is_object() && m.contains("guid") && Number(m["guid"],1,UINT32_MAX)) guid = m["guid"].get<std::uint32_t>();
+        if (auto problem = MemberProblem(m,own,human); !problem.empty()) { out.skipped.emplace_back(guid,std::string(problem)); continue; }
+        if (!seen.insert(guid).second) { out.skipped.emplace_back(guid,"duplicate"); continue; }
+        out.rows.push_back(m);
+    }
+    return out;
 }
 inline std::optional<nlohmann::json> RosterPage(std::string const& request, std::uint32_t own,
     std::uint32_t human, std::size_t page, std::size_t total, nlohmann::json const& members)
