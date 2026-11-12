@@ -927,6 +927,12 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   prompt changes. `python -m leeroy_mind learn report --data-dir <data> --days 14`
   reads aggregate scores without migration, including on older schemas. Coverage,
   baseline units, caps and retry limits: `mind/leeroy_mind/learn/README.md`.
+  `[learn] coach = true` adds a reflection-model coaching stage after rewards,
+  at most 20 members with ten rewarded lines that day. Lessons stay proposed
+  unless `auto_lessons = true`; at most five are active per member and expire
+  after 14 days without reinforcement. `learn lessons [--guid N]` prints them
+  read-only. Private evidence produces private lessons; this stage does not yet
+  inject lessons into live talk. Restart after changing these switches.
 - Optional `[learn] bandit = true` (also needs `enabled`) attaches model-free arm
   credit after rewards. `freeze` and `frozen_members` stop selection/credit;
   `frozen_families` select control and receive no credit, rejection or retirement,
@@ -1979,3 +1985,5 @@ apart from this install. Read `dojo/README.md` before touching it.
 - `mod-bg-slaveryvalley` server data + client patch (above).
 - Zip-sourced modules (transmog, individual-progression, slaveryvalley) have no
   update path; converting them to git clones would let `ac-update.sh` cover them.
+
+The talk coach rotates eligible members and screens notes against effective romance dials. Its prompts/nightly_talk_coach.txt overlay retains nightly invariants; context is bounded. Arm proposals are deduplicated across statuses and capped at five each night.

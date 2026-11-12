@@ -117,6 +117,45 @@ cached per Store at attach; disabled learning writes nothing.
 
 ## Recipes and inspection
 
+### Nightly talk coach
+
+`[learn] enabled = true` and `coach = true` opt into `talk_coach`, one reflection
+JSON call per member with at least ten rewarded lines in the most recent day
+of the night's window, at most twenty members. Both switches default off;
+invalid settings disable learning. Planning reserves one JSON call per possible
+member before rewards run, so a first scoring night also budgets the coach.
+
+Each call sees the best and worst three exchanges in that member's most-observed
+room, with the owner's preceding line and bounded recent context. It never mixes
+rooms or game and Discord text. Whispers and DMs contain only that member/owner
+pair and can produce only whisper lessons; group/voice evidence only group
+lessons. Officer, private/unknown voice rooms and unsupported channels are excluded. An exchange without an
+identifiable recent owner line is omitted. Choosing one room per night is a
+deliberate privacy boundary; other rooms may be coached on later nights.
+
+The strict schema accepts up to two third-person style notes of at most 25 words,
+a no-manipulation attestation and a minimum forward dial. Real-name, explicit,
+manipulation, person, scope and dial screens apply before storage. These are
+bounded rule-based screens, not a proof that arbitrary prose is safe. The later
+live-talk integration must recheck scope and current dials before using lessons.
+
+Lessons are proposed by default. `auto_lessons = true` allows up to five active
+lessons per member; overflow stays proposed. Both expire after fourteen days.
+The model receives numeric per-lesson counts and mean rewards with versus without
+the lesson in the same room, and can reinforce displayed IDs (extend expiry) or
+drop them (expire immediately). These are observational comparisons, not causal
+estimates. No text from earlier lessons is included in that feedback payload.
+
+When the optional bandit registry is installed, the schema also accepts one closed
+numeric/enum arm proposal. The registry validates its parameters, dial bounding
+must leave it unchanged, and `arms.propose` stores it inactive. Without that
+registry, the schema requires a null arm; coaching still works.
+
+`python -m leeroy_mind learn lessons --data-dir <data> [--guid N]` opens the
+database read-only, without migration, and prints unexpired active/proposed notes
+to the terminal. Text never enters logs. The stage stores notes but does not yet
+change live prompts; live integration and the Lab controls follow separately.
+
 The central outgoing-line commit writes one recipe per generation, anchored to
 its first delivered line, in the same transaction as `chat_line`. Later fragments
 from that generation link to the anchor through `talk_recipe_line`. This includes
@@ -216,3 +255,5 @@ and older schemas report without seeding arms or migrating. No content is printe
 read-only, without migration, logging setup or any service. It reports counts,
 mean rewards and discounted totals by member ID, channel kind and each recipe
 field. Older schemas report unavailable. Days must be 1–3650.
+
+Coach review safeguards: eligible members rotate by last coaching time, then evidence count. Shared romance and content screens gate notes using effective forward, member romance and world romance dials; a false non-manipulation attestation discards only its note. The system prompt uses prompts/nightly_talk_coach.txt with immutable night invariants. Named evidence drops oldest exchanges to fit the context and answer margin. Duplicate arms of any status are ignored, with at most five new proposals per night. Dropped notes cannot be resurrected in the same reply.

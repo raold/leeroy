@@ -167,6 +167,7 @@ UNDRESS_VERB_RE = re.compile(
     rf"\bstraps?\W+(?:\w+\W+){{0,3}}?(?:{_PEEL}|drop\w*|undone))", re.I)
 # Sexual poses and tone (R16), code `explicit`. A bed is fine; these are not, in it or out.
 SEXUAL_RE = re.compile(
+    r"\b(?:dirty[\s-]+talk|suggestive|innuendo|orgasm\w*|masturbat\w*|penetrat\w*|genitals?|erection\w*)\b|"
     r"\b(on all fours|bent over|bending over|straddl\w*|legs (?:spread|apart|open|up|wide|"
     r"in the air)|spread(?:ing|s)? (?:her |his |their |my )?legs|"
     r"arch(?:es|ed|ing)? (?:her|his|their|my) back|on (?:her|his|their|my) (?:stomach|belly|"

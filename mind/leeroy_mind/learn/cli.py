@@ -46,15 +46,26 @@ def learn_main(argv=None):
     command = sub.add_parser("report")
     command.add_argument("--data-dir", default=argparse.SUPPRESS)
     command.add_argument("--days", type=int, default=14)
+    lesson_command = sub.add_parser("lessons")
+    lesson_command.add_argument("--data-dir", default=argparse.SUPPRESS)
+    lesson_command.add_argument("--guid", type=int)
     arm_command = sub.add_parser("arms")
     arm_command.add_argument("--data-dir", default=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.action == "report" and not 1 <= args.days <= 3650:
         parser.error("--days must be between 1 and 3650")
+    if args.action == 'lessons' and args.guid is not None and args.guid <= 0:
+        parser.error('--guid must be positive')
     root = Path(args.data_dir).resolve() if args.data_dir else default_data_dir()
     try:
         with closing(sqlite3.connect(f"{(root / 'mind.db').resolve().as_uri()}?mode=ro", uri=True)) as conn:
-            result = arms_report(conn) if args.action == "arms" else report(conn, days=args.days)
+            if args.action == 'lessons':
+                from .lessons import available as have_lessons, read as read_lessons
+                result = {'available':have_lessons(conn), 'lessons':read_lessons(conn,guid=args.guid,now=time.time())}
+            elif args.action == "arms":
+                result = arms_report(conn)
+            else:
+                result = report(conn, days=args.days)
             print(json.dumps(result, sort_keys=True, allow_nan=False))
         return 0
     except (sqlite3.Error, ValueError, OSError):
