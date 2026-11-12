@@ -98,6 +98,24 @@ def test_old_database_without_snaps_never_migrates(store, data):
     assert view["photos"] == [] and set(view["missing"]) == set(galleryview.TABLES)
 
 
+@pytest.mark.parametrize('marker', [False, True])
+def test_promoted_world_sets_are_hidden_but_retained_and_cast_passes_remain(store,data,marker):
+    ready(store,data,101,1,now=1)
+    ready(store,data,101,2,now=2)
+    with store.transaction():
+        store.conn.execute("UPDATE selfie_set SET decided='passed',night='2026-11-01' WHERE guid=101")
+        if marker:
+            store.set_meta('selfies:set-world:101:1','1')
+        else:
+            store.conn.execute("INSERT INTO night_step VALUES ('2026-11-01','world_selfies','101:1',3)")
+    before=_tree(data)
+    view=galleryview.gallery(store.conn,data,101)
+    assert len(view['photos']) == 4 and {p['set'] for p in view['photos']} == {2}
+    assert galleryview.photo(store.conn,data,101,'candidate',1,0) is None
+    assert galleryview.photo(store.conn,data,101,'candidate',2,0) is not None
+    assert _tree(data) == before
+
+
 def test_gallery_leaves_out_oversized_files_and_refuses_non_jpegs(store, data):
     ready(store, data, 101, 1)
     files.candidate(data, 101, 1, 0).write_bytes(b"x" * (galleryview.MAX_FACE_BYTES + 1))

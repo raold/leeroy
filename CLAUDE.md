@@ -910,6 +910,10 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   live: they load another large model next to the live one and evict it.
 - Optional `[learn] enabled = true` records generation recipes in a savepoint
   alongside outgoing chat and attaches the capped `rewards` night stage.
+  A burst now has one recipe and one score, pooling its fragments' feedback after
+  the last fragment's observation window. A later fragment vote revises that score.
+  Reward planning learns lexical and embedding costs separately from completed
+  units; it no longer reserves a fixed 1,000 seconds for every 500-line batch.
   Read at startup: restart the mind after changing it. Missing/invalid settings
   mean off; signals remain separately opt-in. Rewards screen game quality independently of the signals cap, including CLI nights,
   after the 120-second observation window. Discord and voice rooms score measured

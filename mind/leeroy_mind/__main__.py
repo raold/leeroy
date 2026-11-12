@@ -1215,7 +1215,7 @@ def cmd_generate(args, root, store) -> int:
         store, llm, cfg, human_guid=human, data_dir=root, limit=args.limit,
         dry_run=args.dry_run, rng=random.Random(args.seed), progress=print))
     if args.dry_run:
-        names = {m.guid: m.name for m in store.cast().values()}
+        names = {m.guid: m.name for m in store.cast(include_world=True).values()}
         for sl in report.slots:
             print(f"{names.get(sl.guid, sl.guid)}: {sl.player_gender} {sl.age_band[0]}-"
                   f"{sl.age_band[1]} {sl.region} {'introvert' if sl.introvert else 'outgoing'} "

@@ -60,10 +60,7 @@ UNIT_CALLS: dict[str, dict[str, float]] = {
     "notes": {"json": 2.0},                    # the call and its own judge batch of one: 40 s
     "claims": {"json": 1},                    # one extraction, no thinking or judge pass
     "signals": {},                           # screening only; no reflection calls
-    # Shared quality screening plus, when enabled, one embedding batch (up to 17 texts).
-    # Reserve 2 s per unit in JSON equivalents; no generation call. This conservative
-    # allowance includes the measured ~0.012 s lexical path and unmeasured embedding cost.
-    "rewards": {"json": 0.1},
+    "rewards": {},                           # own measured wall cost; no generation calls
     "encounters": {"json": 2},                # scene generation and one judge batch
     "confide": {"json": 1.1},
     "arc": {"json": 1.5},                     # a read of what he said to her (arc/night.py)
@@ -187,12 +184,15 @@ def _unit_s(stage: str, per_call: float | None, count: float | None = None) -> f
 
 
 def estimate(counts: dict[str, int], *, measured: dict[str, float | None],
-             calls: dict[str, float | None] | None = None) -> dict[str, float]:
+             calls: dict[str, float | None] | None = None,
+             unit_seconds: dict[str, float] | None = None) -> dict[str, float]:
     """Slot-seconds per stage: its units times the cost of one, every call of a stage that has a
     measured cost per call in `measured` at that cost, the others at PLAN_S. `calls` gives a
     stage's measured count of calls per unit, in place of its planned one (K2: "supersede")."""
     calls = calls or {}
-    return {stage: n * _unit_s(stage, measured.get(stage), calls.get(stage))
+    costs = {"rewards": .02, **(unit_seconds or {})}
+    return {stage: n * (costs[stage] if stage in costs else
+                        _unit_s(stage, measured.get(stage), calls.get(stage)))
             for stage, n in counts.items()}
 
 
@@ -328,7 +328,8 @@ async def plan_night(ctx: "NightContext", *, stages: frozenset[str] | None = Non
 
     def total(settings: NightlySettings) -> float:
         ctx.settings = settings  # the counters read the settings from the context
-        return sum(estimate(_counts(ctx, failed, stages), measured=measured, calls=counted).values())
+        return sum(estimate(_counts(ctx, failed, stages), measured=measured, calls=counted,
+                            unit_seconds={"rewards":ctx._memo.get("rewards:seconds", .02)}).values())
 
     def fits(settings: NightlySettings) -> bool:
         return total(settings) <= budget
