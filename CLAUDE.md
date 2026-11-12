@@ -912,6 +912,10 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   live: they load another large model next to the live one and evict it.
 - Optional `[learn] enabled = true` records generation recipes in a savepoint
   alongside outgoing chat and attaches the capped `rewards` night stage.
+  A burst now has one recipe and one score, pooling its fragments' feedback after
+  the last fragment's observation window. A later fragment vote revises that score.
+  Reward planning learns lexical and embedding costs separately from completed
+  units; it no longer reserves a fixed 1,000 seconds for every 500-line batch.
   Read at startup: restart the mind after changing it. Missing/invalid settings
   mean off; signals remain separately opt-in. Rewards screen game quality independently of the signals cap, including CLI nights,
   after the 120-second observation window. Discord and voice rooms score measured
@@ -1202,10 +1206,10 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   with the folds and read marks, `guild-console-collapsed` and
   `guild-console-read`). Beside it, Hide photos (`guild-console-photos`, applied before the first
   paint) draws every member's face as initials without asking for the photo, and blanks any
-  other photo (the gallery, the selfie picker) until it is switched back. Comms' Hide panel
-  (`guild-console-comms-panel`, also applied before the first paint; `comms/panel.mjs`) removes the
-  right column (the room's faces and the member card) so the feed takes its width; clicking a
-  member's face shows it again with their card. It has 14 tabs (Comms, Raid, Guild, Personas, Social,
+  other photo (the gallery, the selfie picker) until it is switched back. Comms' Hide panel, in that
+  panel's top corner (`guild-console-comms-panel`, also applied before the first paint;
+  `comms/panel.mjs`), removes the right column (the room's faces and the member card) so the feed
+  takes its width; Show panel in the feed's top corner, or clicking a member's face, brings it back. It has 14 tabs (Comms, Raid, Guild, Personas, Social,
   Board, Calendar, Bank, Realm, Training, Dojo, Library, Ops, Mind); each polls only
   while it is open and the page is visible, one request at a time. Ordinary reads have a
   30 s browser deadline, actions 120 s (long enough for a clean stop); an unanswered action

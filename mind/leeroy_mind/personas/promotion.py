@@ -28,6 +28,9 @@ def promote_world(store, guid, expected_version):
         return False
     store.conn.execute("UPDATE persona_tier SET tier='cast' WHERE guid=?", (guid,))
     store.conn.execute("UPDATE world_member SET retired=1 WHERE guid=?", (guid,))
+    for (number,) in store.conn.execute("SELECT set_no FROM selfie_set WHERE guid=? "
+                                       "AND status='ready'", (guid,)).fetchall():
+        store.set_meta(f"selfies:set-world:{guid}:{number}", "1")
     store.conn.execute("UPDATE selfie_set SET decided='passed' WHERE guid=? "
                        "AND status='ready' AND decided IS NULL", (guid,))
     return True
