@@ -98,6 +98,8 @@ SAY_S = 10.0  # one line of his, past the bridge's own 5 s ack wait
 BANK_READ_S = 15.0  # the four bank queries, before the console is answered anyway
 LIBRARY_READ_S = 15.0  # the query embedding and the ranking, before the console is answered anyway
 BANK_CACHE_S = 30.0  # a bank snapshot younger than this is answered as it is
+KIT_FRESH_S = 30.0  # refresh an older kit while returning its retained successful read
+KIT_CACHE_S = 120.0  # a late read must survive the Tonight tab's next minute poll
 MAX_CONNECTIONS = 8
 REFUSAL_LOG_S = 30.0
 REPLACE_TRIES = 40  # 2 s of 50 ms tries to move control.json over a file being read
@@ -830,8 +832,8 @@ class ControlEndpoint:
         self.ops = OpsControl(self)
         self._bank_task: asyncio.Future | None = None  # the read in flight, shared by askers
         self._bank_cache: tuple[float, dict] | None = None
-        self._kit_task: asyncio.Future | None = None
-        self._kit_cache: tuple[float, dict] | None = None
+        self._kit_tasks: dict[int, asyncio.Future] = {}
+        self._kit_cache: dict[int, tuple[float, dict]] = {}
         self._refusal_logs = {}  # fixed reason codes only, never request text or keys
 
     async def serve(self) -> None:
@@ -1132,19 +1134,27 @@ class ControlEndpoint:
     async def kit(self) -> dict:
         if self.app.stopping:
             return {'ok':False,'why':'mind_stopping','error':'The mind is stopping.'}
-        cached = self._kit_cache
-        if cached is not None and self._clock()-cached[0] < BANK_CACHE_S:
+        guid = getattr(self.app,'human_guid',0)
+        if type(guid) is not int or not 0 < guid <= 0xFFFFFFFF:
+            return {'ok':False,'why':'no_character','error':'Your character could not be found.'}
+        now = self._clock()
+        self._kit_cache = {g:reply for g,reply in self._kit_cache.items() if 0 <= now-reply[0] < KIT_CACHE_S}
+        self._kit_tasks = {g:task for g,task in self._kit_tasks.items() if not task.done()}
+        cached = self._kit_cache.get(guid)
+        if cached is not None and now-cached[0] < KIT_FRESH_S:
             return cached[1]
-        task = self._kit_task
-        if task is None or task.done():
+        task = self._kit_tasks.get(guid)
+        if task is None:
             armory = getattr(getattr(self.app,'guild',None),'armory',None)
             if armory is None or not getattr(armory,'available',True):
-                return {'ok':False,'why':'no_armory','error':'The mind cannot read the game database.'}
-            guid = getattr(self.app,'human_guid',0)
-            if type(guid) is not int or not 0 < guid <= 0xFFFFFFFF:
-                return {'ok':False,'why':'no_character','error':'Your character could not be found.'}
-            task = self._kit_task = asyncio.ensure_future(self._read_kit(armory,guid))
+                return cached[1] if cached else {'ok':False,'why':'no_armory','error':'The mind cannot read the game database.'}
+            task = self._kit_tasks[guid] = asyncio.ensure_future(self._read_kit(armory,guid))
+        if cached is not None:
+            return cached[1]
         done,_ = await asyncio.wait({task},timeout=self.bank_s)
+        current = getattr(self.app,'human_guid',0)
+        if type(current) is not int or current != guid:
+            return {'ok':False,'why':'read_failed','error':'Your character changed during this read. Try again.'}
         return task.result() if task in done else {'ok':False,'why':'slow','error':'The game database is slow to answer.'}
 
     async def _read_kit(self, armory, guid) -> dict:
@@ -1158,7 +1168,7 @@ class ControlEndpoint:
             log_event('control_kit_failed',level=logging.WARNING,error='read_failed')
             return {'ok':False,'why':'read_failed','error':'The game database could not be read.'}
         reply = {'ok':True,'read_at':round(time.time(),3),**view}
-        self._kit_cache = (self._clock(),reply)
+        self._kit_cache[guid] = (self._clock(),reply)
         return reply
 
     async def library(self, args: dict) -> dict:
