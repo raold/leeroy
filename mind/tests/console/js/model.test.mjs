@@ -506,3 +506,18 @@ test("history from before a long disconnect gets a gap the snapshot's start cann
   assert.deepEqual(ids(f.lines("guild")), [1, 2, 3]);
   assert.equal(f.mayHaveMore("guild"), false);
 });
+
+test("an empty view known complete is asked again after a reconnect", () => {
+  var f = new Feed();
+  f.adopt([], 0);
+  f.older("officer", { lines: [], more: false }, 0);
+  assert.equal(f.known("officer"), true);
+  assert.equal(f.mayHaveMore("officer"), false);
+  f.adopt([], 5 * 86400);  // days later, nothing in the window
+  assert.equal(f.known("officer"), false);
+  assert.equal(f.mayHaveMore("officer"), true);
+  f.adopt([], 0);
+  f.older("officer", { lines: [], more: false }, 0);
+  f.adopt([]);             // an older console's snapshot leaves it as it was
+  assert.equal(f.known("officer"), true);
+});

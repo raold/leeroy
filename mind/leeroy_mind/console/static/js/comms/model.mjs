@@ -144,6 +144,8 @@ export class Feed {
     // by page until a page reaches them (feedview fills it). A thread whose index says nothing is
     // newer than what is kept has none. A gap found again keeps its floor and its "more".
     if (cut !== null) {
+      // A view known complete that holds nothing may have had lines since: ask again when it opens
+      this.more.forEach((x, v) => { if (!this.views.has(v)) { this.more.delete(v); } });
       this.views.forEach((m, v) => {
         var edge = low.has(v) ? low.get(v) : 0;
         var kept = Array.from(m.keys()).filter(function (id) { return !now.has(id); });
