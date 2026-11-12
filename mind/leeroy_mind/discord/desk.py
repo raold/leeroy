@@ -15,7 +15,9 @@ His edit of a post edits that line too, so an edit that asks for secrecy makes t
 an edit never loosens it: one that drops the line's ask (memory.privacy.DONT_TELL_RE) leaves the
 line as she read it. His delete leaves the line: she may have read it, and a delete does not
 unsay it. A post from before these lines has none, and its edit changes only the message."""
+import asyncio
 import logging
+from pathlib import Path
 
 from leeroy_mind.discord import layout
 from leeroy_mind.discord import store as dstore
@@ -63,6 +65,18 @@ class DiscordDesk:
 
     def __init__(self, app):
         self.app = app
+        from leeroy_mind.photos.config import PhotosConfig, load_photos_config
+        self.photos = (load_photos_config(Path(app.data_dir) / 'mind.toml')
+                       if getattr(app, 'data_dir', None) is not None else PhotosConfig())
+        self._photo_posts: list[float] = []
+        self._photo_tasks: set[asyncio.Task] = set()
+        self._photo_memories: set[tuple[int, int]] = set()
+        if self.photos.enabled:
+            if (engine := getattr(app, 'engine', None)) is not None:
+                engine.photos_enabled = True
+                engine.remember_discord_photo = self.remember_photo
+            if (drain := getattr(app, 'register_shutdown_drain', None)) is not None:
+                drain(self.close)
 
     async def handle(self, args: dict) -> dict:
         action, channel = args.get("action"), args.get("channel", "")
@@ -92,11 +106,38 @@ class DiscordDesk:
         store, now, action = app.store, app.clock.now(), args["action"]
         if action == "post":
             self._check_dm(args["channel"], me)
+            image = args.get('image')
+            attachment = None
+            if image is not None:
+                from leeroy_mind.photos import uploads
+                if not self.photos.enabled:
+                    raise _Refused('photos_off', uploads.WORDS['off'])
+                self._photo_posts = [t for t in self._photo_posts if now - t < 60]
+                if len(self._photo_posts) >= uploads.MINUTE_MAX:
+                    raise _Refused('photos_minute', uploads.WORDS['minute'])
+                # Not externally visible: adopt fills this row before commit.
+                attachment = dstore.AttachmentIn('upload', 'discord/images/pending', 16, 16, 1)
             with store.transaction():
+                if image is not None:
+                    day = app.clock.local().date().isoformat()
+                    count = uploads.day_count(store.conn, day)
+                    if count >= uploads.DAY_MAX:
+                        raise _Refused('photos_day', uploads.WORDS['day'])
                 mid = dstore.post(store, channel=args["channel"], author=me, origin="human",
                                   text=args["text"], reply_to=args.get("reply_to"),
-                                  thread=args.get("thread"), now=now)
+                                  thread=args.get("thread"), now=now, attachment=attachment)
+                if image is not None:
+                    from leeroy_mind.photos.images import adopt, ImageRefused
+                    try:
+                        path, w, h, size = adopt(app.data_dir, image, mid)
+                    except ImageRefused as error:
+                        raise _Refused('photos_' + error.code, uploads.WORDS[error.code]) from None
+                    store.conn.execute('UPDATE discord_attachment SET path=?,width=?,height=?,bytes=? '
+                                       'WHERE message=?', (path, w, h, size, mid))
+                    store.set_meta(uploads.DAY_KEY.format(day), str(count + 1))
                 line, chat = self._his_line(mid, me, now)
+            if image is not None:
+                self._photo_posts.append(now)
             try:
                 app.on_his_discord_line(line, chat, now)
             except Exception as e:  # the post is stored: its answers still come
@@ -104,7 +145,12 @@ class DiscordDesk:
                           error=type(e).__name__)
             hook = getattr(app, "discord_talk", None)
             if hook is not None:
-                hook.on_his_post(mid)
+                if image is not None and hasattr(hook, 'begin_photo'):
+                    # The control request has a 10s deadline; vision runs after commit.
+                    hook.begin_photo()
+                    self._spawn_photo(self._look_then_answer(mid))
+                else:
+                    hook.on_his_post(mid)
             return {"ok": True, "id": mid}
         message = args["message"]
         if action == "thread":
@@ -127,6 +173,75 @@ class DiscordDesk:
             dstore.unpin(store, message)
         self._his_action()
         return {"ok": True}
+
+    def _spawn_photo(self, work, *, memory=None) -> None:
+        task = asyncio.create_task(work, name='discord-photo')
+        self._photo_tasks.add(task)
+        task.add_done_callback(self._photo_done)
+        if memory is not None:
+            task.add_done_callback(lambda _: self._photo_memories.discard(memory))
+
+    def _photo_done(self, task) -> None:
+        self._photo_tasks.discard(task)
+        if not task.cancelled() and (error := task.exception()) is not None:
+            log_event('discord_photo_failed', level=logging.WARNING, code=type(error).__name__)
+
+    async def _look_then_answer(self, message: int) -> None:
+        from leeroy_mind.imagefiles import read_image
+        from leeroy_mind.photos.look import look_at
+        app = self.app
+        with app.store.transaction():
+            row = dstore.attachments(app.store.conn, [message]).get(message)
+        if row is None:
+            return
+        data = await asyncio.to_thread(read_image, app.data_dir / row['path'], app.data_dir)
+        look = await look_at(app, data) if data is not None else None
+        if look:
+            dstore.set_look(app.store, message, look, now=app.clock.now())
+        if not app.stopping:
+            app.discord_talk.on_his_post(message)
+
+    def remember_photo(self, member: int, message: int) -> None:
+        if not self.photos.enabled or (member, message) in self._photo_memories:
+            return
+        with self.app.store.transaction():
+            photo = dstore.attachments(self.app.store.conn, [message]).get(message)
+        if photo is None or photo['kind'] != 'upload' or not photo['look']:
+            return
+        self._photo_memories.add((member, message))
+        self._spawn_photo(self._remember_photo(member, message), memory=(member, message))
+
+    async def _remember_photo(self, member: int, message: int) -> None:
+        from leeroy_mind.memory.writer import MemoryCandidate
+        from leeroy_mind.photos.look import sentences
+        from leeroy_mind.text import truncate_words
+        app = self.app
+        with app.store.transaction():
+            photo = dstore.attachments(app.store.conn, [message]).get(message)
+            row = app.store.conn.execute('SELECT author,channel,ts FROM discord_message WHERE id=?',
+                                         (message,)).fetchone()
+            evidence = app.store.get_meta(LINE_KEY.format(message))
+        if not photo or not photo['look'] or row is None or row['author'] != app.human_guid or not evidence:
+            return
+        peer = layout.dm_peer(row['channel'])
+        if peer is not None and peer != member:
+            return
+        place = row['channel'] if peer else CHANNEL_PREFIX + row['channel']
+        if member not in app.world.audience(place, from_guid=app.human_guid, to_guid=peer or 0):
+            return
+        prefix = (f'{app.engine.human.called} sent me a photo: ' if peer else
+                  f"{app.engine.human.called} posted a photo in #{row['channel']}: ")
+        await app.writer.write(MemoryCandidate(owner=member, kind='observation',
+            text=truncate_words(prefix + sentences(photo['look'])[0], 200), t_event=int(row['ts']),
+            actors=(app.human_guid,), importance=4, valence=0., source='chat',
+            evidence=(f'chat:{evidence}',), key=f'discord_photo:{message}'))
+
+    async def close(self) -> None:
+        tasks = list(self._photo_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     def _his_line(self, message: int, me: int, now: float) -> tuple[int, Chat]:
         """His stored post `message` as his chat line (the module docstring), in the caller's

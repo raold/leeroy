@@ -131,3 +131,59 @@ LEEROY_TEST(WorldGuildAdapterReadsRealManagerWithoutDowncast)
     auto rows=GuildSnapshot<FixtureManager>::All(manager);
     CHECK_EQ(rows.size(),2u); CHECK(rows[0] == &b); CHECK(rows[1] == &a);
 }
+
+namespace
+{
+nlohmann::json RosterMember(std::uint32_t guid)
+{
+    return nlohmann::json{{"guid",guid},{"account",guid+1000},{"guild_id",50},{"guild_name","Test rivals"},
+        {"name","Fixture"},{"race",2},{"class",1},{"gender",0},{"level",80},{"rank",3},
+        {"online",false},{"map",0},{"zone",0}};
+}
+}
+
+LEEROY_TEST(WorldMemberProblemNamesTheRule)
+{
+    auto const good = RosterMember(101);
+    CHECK(MemberProblem(good,21,1).empty()); CHECK(ValidMember(good,21,1));
+    std::vector<std::pair<std::string,nlohmann::json>> breaks{
+        {"guid",0},{"account",0},{"guild_id",0},{"online",1},{"race",12},{"class",0},{"gender",2},
+        {"level",0},{"rank",10},{"name",""},{"guild_name",std::string(49,'a')},{"map",-1}};
+    for (auto const& [key,value] : breaks)
+    {
+        auto m = good; m[key] = value;
+        CHECK_EQ(std::string(MemberProblem(m,21,1)),key); CHECK(!ValidMember(m,21,1));
+    }
+    auto human = good; human["guid"] = 1; CHECK_EQ(std::string(MemberProblem(human,21,1)),"human");
+    auto own = good; own["guild_id"] = 21; CHECK_EQ(std::string(MemberProblem(own,21,1)),"own_guild");
+    auto shape = good; shape.erase("zone"); CHECK_EQ(std::string(MemberProblem(shape,21,1)),"shape");
+    auto control = good; control["name"] = std::string("Fix\x01ture"); CHECK_EQ(std::string(MemberProblem(control,21,1)),"name");
+}
+
+LEEROY_TEST(WorldValidRowsSkipsOddMembersAndDuplicates)
+{
+    auto odd = RosterMember(102); odd["level"] = 0;
+    auto rows = nlohmann::json::array({RosterMember(101),odd,RosterMember(101),RosterMember(103)});
+    auto valid = ValidRows(rows,21,1);
+    CHECK_EQ(valid.rows.size(),2u);
+    CHECK_EQ(valid.rows[0]["guid"],101); CHECK_EQ(valid.rows[1]["guid"],103);
+    CHECK_EQ(valid.skipped.size(),2u);
+    CHECK(valid.skipped[0] == std::make_pair(std::uint32_t{102},std::string("level")));
+    CHECK(valid.skipped[1] == std::make_pair(std::uint32_t{101},std::string("duplicate")));
+    auto unreadable = RosterMember(104); unreadable["guid"] = "x";
+    CHECK(ValidRows(nlohmann::json::array({unreadable}),21,1).skipped[0] == std::make_pair(std::uint32_t{0},std::string("guid")));
+}
+
+LEEROY_TEST(WorldRosterPagesSpanEveryPage)
+{
+    auto rows = nlohmann::json::array();
+    for (std::uint32_t guid = 101; guid < 351; ++guid) rows.push_back(RosterMember(guid));
+    auto pages = RosterPages("token",21,1,rows);
+    CHECK(pages); CHECK_EQ(pages->size(),3u);
+    CHECK_EQ((*pages)[2]["members"].size(),50u); CHECK_EQ((*pages)[0]["total"],250);
+    rows[120]["rank"] = 10;
+    CHECK(!RosterPages("token",21,1,rows));               // one odd row refuses the raw snapshot
+    auto valid = ValidRows(rows,21,1);
+    auto kept = RosterPages("token",21,1,valid.rows);     // what native now publishes instead
+    CHECK(kept); CHECK_EQ((*kept)[0]["total"],249); CHECK_EQ(valid.skipped.size(),1u);
+}

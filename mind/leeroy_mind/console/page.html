@@ -92,7 +92,10 @@
           <div id="dc-reply" hidden><span id="dc-reply-name"></span><button id="dc-cancel-reply" type="button">Cancel reply</button></div>
           <label for="dc-text">Message <b id="dc-to"></b> as you</label>
           <textarea id="dc-text" rows="2" aria-describedby="dc-why dc-count" disabled></textarea>
+          <input id="dc-photo-file" type="file" accept="image/*" hidden>
+          <div id="dc-photo-preview" hidden><img id="dc-photo-preview-img" alt="Photo to attach"><button id="dc-photo-remove" type="button">Remove photo</button></div>
           <div class="dc-compose-actions"><button id="dc-emoji" type="button" disabled>Emoji</button>
+            <button id="dc-photo-pick" type="button" hidden>Attach photo</button>
             <span id="dc-count" class="mono">0 / 2000</span><button id="dc-send" type="button" class="primary" disabled>Send</button></div>
           <p id="dc-why" role="status"></p>
         </div>
@@ -131,6 +134,10 @@
         </section>
       </aside>
     </div>
+    <dialog id="dc-photo-view" aria-label="Photo viewer">
+      <button id="dc-photo-view-close" type="button">Close photo</button>
+      <p id="dc-photo-view-status" role="status"></p><img id="dc-photo-view-img" alt="Photo">
+    </dialog>
     <dialog id="dc-dialog" aria-labelledby="dc-dialog-title">
       <form id="dc-dialog-form">
         <div class="dc-dialog-heading"><h3 id="dc-dialog-title"></h3><button id="dc-dialog-close" type="button">Close</button></div>

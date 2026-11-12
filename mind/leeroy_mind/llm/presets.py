@@ -35,6 +35,7 @@ LIVE = Preset(False, {"temperature": 0.9, "min_p": 0.05, "top_p": 1.0,
 LIVE_BIT = Preset(LIVE.think, {k: v for k, v in LIVE.options.items() if k != "stop"},
                   timeout=LIVE.timeout)
 EXTRACT = Preset(False, {"temperature": 0.2, "num_ctx": 4096})
+LOOK = Preset(False, {"num_predict": 140, "num_ctx": 4096, "temperature": 0.2})
 # The 27B reflection model with thinking on easily outlasts the 60 s client default.
 REASON = Preset(True, {"temperature": 1.0, "top_p": 0.95, "num_ctx": 8192}, timeout=600.0)
 STRUCTURE = Preset(False, {"temperature": 0.2, "num_ctx": 8192}, timeout=600.0)
