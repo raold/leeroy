@@ -39,8 +39,24 @@ def test_photo_pick_remove_retry_post_and_keyboard_viewer(rehearsal, tmp_path, t
             await expect(r.page.locator('#dc-why')).to_contain_text('minute')
             await expect(r.page.locator('#dc-photo-preview')).to_be_visible()
             r.console._photo_uploads.clear()
+            # Adoption can finish before the SQL transaction fails. Retrying
+            # must stage a fresh token, while preserving the orphan image.
+            from leeroy_mind.discord.store import DiscordRefused
+            original = r.app.discord._his_line
+            def refuse(*args):
+                raise DiscordRefused('missing')
+            r.app.discord._his_line = refuse
+            r.expected_http_errors.add(('/api/discord', 409))
+            try:
+                await r.page.locator('#dc-send').click()
+                await expect(r.page.locator('#dc-why')).to_contain_text('no such message')
+                await expect(r.page.locator('#dc-photo-preview')).to_be_visible()
+            finally:
+                r.app.discord._his_line = original
+            orphan = {p: p.read_bytes() for p in (r.data / 'discord').rglob('*') if p.is_file()}
             await r.page.locator('#dc-send').click()
             await expect(r.page.locator('#dc-photo-preview')).to_be_hidden()
+            assert all(p.read_bytes() == data for p, data in orphan.items())
             photo = r.page.locator('#feed .dc-photo').first
             await expect(photo).to_be_visible()
             await expect(photo.locator('img')).to_have_js_property('naturalWidth', 1600)

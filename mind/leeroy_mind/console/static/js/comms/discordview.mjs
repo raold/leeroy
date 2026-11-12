@@ -223,7 +223,12 @@ function send() {
     clearPhoto(key, photo);
     drafts.delete(key); replyDrafts.delete(key);
     if (key === routeKey() && input.value === text) { input.value = ""; reply = null; renderComposer(); input.focus(); }
-  }).catch(fail).finally(function () { photoBusy = false; renderComposer(); });
+  }).catch(function (error) {
+    // A refused/uncertain post may already have consumed the token. Preserve
+    // the local photo, but stage a fresh token if he chooses to retry.
+    if (photo) { photo.token = null; }
+    fail(error);
+  }).finally(function () { photoBusy = false; renderComposer(); });
 }
 setupPhotoComposer({ key:routeKey, enabled:() => active() && DISCORD.photos && !discordBusy && !photoBusy && !discordReason(),
   changed:renderComposer, failed:fail });
