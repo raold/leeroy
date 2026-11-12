@@ -265,7 +265,8 @@ def test_the_stream_starts_with_a_snapshot(data):
         async with served(make_app(data)) as app:
             (kind, snap), = await events(app)
             assert kind == "snapshot"
-            assert set(snap) == {"status", "voice", "chat", "rooms", "mood"}
+            assert set(snap) == {"status", "voice", "chat", "rooms", "mood", "build"}
+            assert snap["build"] == app.build  # an open tab compares it with its own page
             assert snap["voice"] is None and snap["chat"] == []
             r = await http(app, "GET", "/api/events", key=False)
             assert r.status == 403

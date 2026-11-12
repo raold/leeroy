@@ -126,6 +126,7 @@ lines and Board replies are the mind's to take: the console forwards them and sh
 answer, which says why when it refuses. A preview's text, a line's and a reply's are never
 logged, stored or broadcast by the console."""
 import asyncio
+import hashlib
 import hmac
 import json
 import logging
@@ -243,6 +244,19 @@ SELFIE_WORDS = {
 log = logging.getLogger("leeroy_mind.console")
 
 
+BUILD_MARK = b"__CONSOLE_BUILD__"  # page.html's meta, replaced with this console's build id
+
+
+def console_build(page: bytes, files: dict[str, tuple[bytes, str]]) -> str:
+    """The page and its static files as one short id. A tab left open across a console update
+    keeps running the page it loaded; the event stream's snapshot carries this id, and a page
+    whose own id differs reloads into the new one (static/js/update.mjs)."""
+    h = hashlib.sha256(page)
+    for name in sorted(files):
+        h.update(b"\0" + name.encode("utf-8") + b"\0" + files[name][0])
+    return h.hexdigest()[:16]
+
+
 def static_files() -> dict[str, tuple[bytes, str]]:
     """The page's own files: each path under /static/ (js/main.mjs) with its bytes and content
     type, read from the package's static/ folder. A file of a kind not in STATIC_TYPES is left
@@ -320,8 +334,10 @@ class ConsoleApp:
         self.follower = follower or mindlog.LogFollower(self.s.data_dir / "logs" / "mind.log")
         self._clock, self._monotonic = clock, monotonic
         self.origin = f"http://{HOST}:{settings.port}"
-        self._page = resources.files(__package__).joinpath("page.html").read_bytes()
+        page = resources.files(__package__).joinpath("page.html").read_bytes()
         self._static = static_files()
+        self.build = console_build(page, self._static)
+        self._page = page.replace(BUILD_MARK, self.build.encode("ascii"))
         self._subs: set[_Subscriber] = set()
         self._found = None  # the mind's family at the latest process list (None: none taken)
         self._ambiguous: str | None = None
@@ -680,7 +696,8 @@ class ConsoleApp:
             log.warning("console_feed_unread: error=%s", type(e).__name__)
             lines = None
         yield sse("snapshot", {"status": strip, "voice": voice, "chat": lines,
-                               "rooms": self._rooms(), "mood": await self._mood()})
+                               "rooms": self._rooms(), "mood": await self._mood(),
+                               "build": self.build})
         while not sub.dead:
             try:
                 chunk = await asyncio.wait_for(sub.queue.get(), PING_S)
