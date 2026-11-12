@@ -187,6 +187,23 @@ def test_counter_failure_rolls_back_reaction(store,clock,monkeypatch):
     run(go())
 
 
+def test_malformed_day_counter_keeps_scheduled_reactions_and_warns_once(store,clock,monkeypatch,caplog):
+    async def go():
+        reactor,_ = setup(store,clock,monkeypatch)
+        key = 'server:day:'+clock.local().date().isoformat()
+        store.set_meta(key,'not-json')
+        for _ in range(2):
+            mid = post(store,clock)
+            reactor.after_post(mid,author=1,channel='general',text='Hi',his=True)
+        await settle(reactor,clock)
+        assert store.conn.execute('SELECT count(*) FROM discord_reaction').fetchone()[0]==6
+        assert store.get_meta(key)=='not-json'
+        assert sum(r.message=='server_day_counter_bad' for r in caplog.records)==1
+        assert not any(r.message.startswith('server_reaction_failed') for r in caplog.records)
+        await reactor.close()
+    run(go())
+
+
 def test_close_during_snapshot_cannot_spawn_unowned_tasks(store,clock,monkeypatch):
     async def go():
         reactor,snap = setup(store,clock,monkeypatch)

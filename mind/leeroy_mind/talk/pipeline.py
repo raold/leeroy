@@ -699,7 +699,8 @@ class Pipeline:
 
     def _queue(self, items: list[tuple[Turn, TurnMeta]]) -> None:
         if items:
-            for _, meta in items:
+            for turn, meta in items:
+                self._answer_queued(turn, meta)
                 self._admit_timing(meta)
             tokens = tuple(meta.timing_trace for _, meta in items)
             run = self._run(items)
@@ -711,6 +712,17 @@ class Pipeline:
                 self._behind.pop(t, None)
                 self.timing.queued_done(tokens, cancelled=t.cancelled())
             task.add_done_callback(done)
+
+    def _answer_queued(self, turn: Turn, meta: TurnMeta) -> None:
+        """An answer owed to him frees this speaker's background review lock."""
+        server = getattr(getattr(self, 'server_app', None), 'server', None)
+        if (server is None or self._server_turn(turn, meta)
+                or not (turn.kind is TurnKind.REPLY_HUMAN or meta.answers_human
+                        or self.live_review.owed(turn, meta))):
+            return
+        for source in (getattr(server, 'engine', None), getattr(server, 'dms', None)):
+            if source is not None:
+                source.answer_queued(turn.speaker)
 
     def _admit_timing(self, meta: TurnMeta) -> None:
         if meta.timing_trace is None:
@@ -728,6 +740,11 @@ class Pipeline:
     def pending_turns(self) -> list[Turn]:
         """The turn each of the engine's running jobs is on (waiting, composing or typing)."""
         return [t for task, t in self._current.items() if task in self._tasks]
+
+    def active_speakers(self, *, exclude_task: asyncio.Task | None = None) -> frozenset[int]:
+        """Include source-owned turns; task ownership survives a copied Turn."""
+        return frozenset(turn.speaker for task,turn in self._current.items()
+                         if task is not exclude_task and not task.done())
 
     def _phase(self, turn: Turn, phase: str | None) -> None:
         """The current job's turn is now composing or typing (since now), or neither (None)."""
@@ -1316,6 +1333,7 @@ class Pipeline:
         return Priority.SOCIAL
 
     async def _speak(self, turn: Turn, meta: TurnMeta) -> list[str]:
+        self._answer_queued(turn, meta)
         self._admit_timing(meta)
         self.timing.dequeued(meta.timing_trace)
         task = asyncio.current_task()
@@ -1645,8 +1663,11 @@ class Pipeline:
                               emoji=reaction if reaction in {*REACTIONS, *(v[1] for v in FILLER.values())}
                               else "👍", now=self.clock.now())
                         if server is not None and added:
-                            from leeroy_mind.server.records import increment
-                            increment(self.store, self.clock.local().date().isoformat(), reactions=1)
+                            from leeroy_mind.server.records import BadDayCounter, increment
+                            try:
+                                increment(self.store, self.clock.local().date().isoformat(), reactions=1)
+                            except BadDayCounter:
+                                pass  # a broken server budget never takes his reaction away
                 except DiscordRefused:
                     return
             else:
@@ -2284,6 +2305,7 @@ class Pipeline:
         None, or why it wasn't said: discord_<code> for what the store refused."""
         self._dm_to_him(turn)
         server_turn = self._server_turn(turn, meta)
+        from leeroy_mind.server.records import BadDayCounter
         stage = 'store'
         try:
             with self.store.transaction() if server_turn else nullcontext():
@@ -2296,14 +2318,19 @@ class Pipeline:
                     posted(self.store, self.clock.local().date().isoformat(), self.clock.now(),
                            conversation=meta.server_conversation,
                            dm_guid=turn.speaker if meta.why == 'server:dm' and not meta.said else None)
-                self._record(turn, meta, p, text, memory_ids, discord_id=message)
+            # The post and its budget are durable before _record updates memory-only
+            # guards, chain state and hooks. Those effects cannot survive a rollback.
+            self._record(turn, meta, p, text, memory_ids, discord_id=message)
         except DiscordRefused as e:
             log.info("discord_line_refused: guid=%d channel=%s code=%s", turn.speaker,
                      turn.channel, e.code)
             return f"discord_{e.code}"
+        except BadDayCounter:
+            return 'record_error'  # counts() reports this once; server posts fail closed
         except Exception:
-            log.exception("discord_delivery_failed: guid=%d channel=%s stage=%s",
-                          turn.speaker, turn.channel, stage)
+            log.exception(("discord_store_failed: guid=%d channel=%s" if stage == 'store'
+                           else "say_record_failed: guid=%d channel=%s"),
+                          turn.speaker, turn.channel)
             return stage + '_error'
         server = getattr(getattr(self, 'server_app', None), 'server', None)
         reactor = getattr(server, 'reactions', None)

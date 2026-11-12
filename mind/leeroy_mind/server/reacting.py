@@ -11,7 +11,7 @@ from leeroy_mind.talk.moves import classify, main_move
 from leeroy_mind.tuning.effective import dials_of
 
 from . import runtime
-from .records import increment
+from .records import BadDayCounter, increment
 from .state import pulled_into_play, tie_kind
 
 log = logging.getLogger('leeroy_mind.server')
@@ -136,7 +136,10 @@ class Reactor:
                     log.info('server_reaction_skipped message=%d code=deleted',mid)
                     return
                 if discord_store.react(self.app.store,mid,member=guid,emoji=emoji,now=now):
-                    increment(self.app.store,snap.local.date().isoformat(),reactions=1)
+                    try:
+                        increment(self.app.store,snap.local.date().isoformat(),reactions=1)
+                    except BadDayCounter:
+                        pass  # the malformed server budget must not remove a reaction
         except discord_store.DiscordRefused as error:
             log.info('server_reaction_skipped message=%d code=%s',mid,error.code)
 

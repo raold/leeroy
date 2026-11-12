@@ -4,11 +4,14 @@ import json
 import random
 from types import SimpleNamespace
 
+import pytest
+
 from engine_rig import engine_clock, make_rig
 from leeroy_mind.server import rhythm
 from leeroy_mind.server.config import ServerConfig
 from leeroy_mind.server.engine import ServerEngine
 from leeroy_mind.server.records import counts
+from leeroy_mind.server.seeds import Seed
 from leeroy_mind.storage.rows import pack_vec
 
 
@@ -17,7 +20,9 @@ class SteadyRandom(random.Random):
         return .5  # deterministic selection and no ten-minute late reply in this test
 
 
-def test_real_server_engine_posts_five_guarded_replies_without_game_commands(store, tmp_path, monkeypatch):
+@pytest.mark.parametrize('kind,drop', [('purpose',False),('life',False),('his_day',False),
+                                      ('life',True),('his_day',True)])
+def test_real_server_engine_posts_or_drops_guarded_openers_without_game_commands(store, tmp_path, monkeypatch,kind,drop):
     (tmp_path/'mind.toml').write_text('[guards]\nenabled=true\n', encoding='utf-8')
     clock = engine_clock()
     rig = make_rig(store, clock, tmp_path)
@@ -28,6 +33,8 @@ def test_real_server_engine_posts_five_guarded_replies_without_game_commands(sto
         'that path gets muddy after rain so sturdy shoes would help',
         'lets take the shorter route before lunch and leave time for the bakery',
         'a warm cinnamon roll after all that walking would be a fine reward')
+    if drop:
+        rig.script('lol')
     # Each distinct string has a shared topical component and its own axis:
     # related enough for relevance, distinct enough for repetition, all fake.
     vocabulary, batches = {}, []
@@ -50,8 +57,11 @@ def test_real_server_engine_posts_five_guarded_replies_without_game_commands(sto
     service = ServerEngine(app,config,app.rng)
     app.server.engine = service
     chosen = []
+    undisclosed = 'An unpublished detail about the harbor plan'
     def choose(seeds, **kwargs):
-        seed = next(s for s in seeds if s.kind=='purpose' and s.channels==('general',))
+        seed = (next(s for s in seeds if s.kind=='purpose' and s.channels==('general',))
+                if kind=='purpose' else Seed('private:1',kind,('general',),undisclosed,
+                    (101,) if kind=='life' else (1,),witnesses=(101,)))
         chosen.append(seed)
         return seed,'general'
     monkeypatch.setattr(rhythm,'choose_seed_and_channel',choose)
@@ -73,7 +83,19 @@ def test_real_server_engine_posts_five_guarded_replies_without_game_commands(sto
         rows = store.conn.execute('SELECT id,author,reply_to,turn FROM discord_message ORDER BY id').fetchall()
         history = json.loads(store.get_meta('server:recent') or '[]')
         dropped = [tuple(r) for r in store.conn.execute('SELECT dropped,guard_verdict FROM utterance')]
+        requests = [call for call in rig.llm.calls if 'messages' in call]
+        if drop:
+            assert not rows
+            assert history[-1]['reason']=='opener_dropped'
+            assert len(dropped)==1 and dropped[0][1]=='drop', dropped
+            assert len(requests)==1
+            assert store.get_meta('server:seed:'+chosen[0].key) is not None
+            return
         assert len(rows)==5, (history,dropped)
+        if kind != 'purpose':
+            assert rows[0]['author']==101
+            assert undisclosed in json.dumps(requests[0]['messages'])
+            assert all(undisclosed not in json.dumps(call['messages']) for call in requests[1:])
         assert rows[0]['reply_to'] is None
         for i,row in enumerate(rows[1:],1):
             assert row['reply_to'] in {r['id'] for r in rows[:i]}

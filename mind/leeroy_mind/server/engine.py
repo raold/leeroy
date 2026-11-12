@@ -48,6 +48,8 @@ class Conversation:
     messages: list[int] = field(default_factory=list)
     reason: str = ''
     task: asyncio.Task | None = None
+    in_flight: int | None = None
+    in_flight_turn: Turn | None = None
 
 
 class ServerEngine:
@@ -59,6 +61,7 @@ class ServerEngine:
         self._tick_lock = asyncio.Lock()
         self._swept = ''
         self._guard_day = ''
+        self._claims_day = ''
         self._human_until = {}
         app.engine.add_instruction_hook(self._instruction)
 
@@ -92,6 +95,10 @@ class ServerEngine:
             if self.config.enabled and not self._closed and day != self._swept:
                 records.prune(self.app.store, day, now)
                 self._swept = day
+            if (self.config.enabled and not self._closed and self._claims_day != day
+                    and not self.app.engine.live_review.claims_enabled):
+                self._claims_day = day
+                log.warning('server_needs_claims')
             blocked = self._blocked(now)
             if blocked:
                 for conversation in tuple(self._live.values()):
@@ -113,9 +120,15 @@ class ServerEngine:
             if self._blocked(self.app.clock.now()):
                 return
             busy = {c.channel for c in self._live.values()}
+            speaking = {c.in_flight for c in self._live.values() if c.in_flight is not None}
+            speaking.update(t.speaker for t in self.app.engine.planned_turns())
+            speaking.update(self.app.engine.active_speakers())
+            active_seeds = {c.seed.key for c in self._live.values()}
             free = {g for g,s in observed.states.items() if s.presence.state in ('online','idle')
-                    and g not in observed.in_play and g not in observed.away}
-            available = [seed for seed in observed.seeds if any(c not in busy and
+                    and g not in observed.in_play and g not in observed.away and g not in speaking}
+            available = [seed for seed in observed.seeds if seed.key not in active_seeds
+                         and (seed.openers is None or free.intersection(seed.openers))
+                         and any(c not in busy and
                          now >= self._human_until.get(c, 0) for c in seed.channels)]
             # Remove busy destinations, keeping their original preference order.
             from dataclasses import replace
@@ -127,13 +140,14 @@ class ServerEngine:
                 return
             seed, channel = chosen
             cast = rhythm.choose_cast(channel, seed, observed.states, observed.personas,
-                officers=observed.officers, human=observed.human, in_play=observed.in_play,
+                officers=observed.officers, human=observed.human, in_play=observed.in_play | speaking,
                 ties=lambda a,b:TIES[observed.ties.get((a,b),'neutral')], rng=self.rng,
                 classes=observed.classes, away=observed.away)
             if len(cast) < 2:
                 return
             conversation = Conversation(uuid.uuid4().hex, channel, seed, cast, now, rhythm.length(self.rng))
-            seeds.mark_used(self.app.store, seed, now=now)
+            if not self._valid(conversation, cast[0]):
+                return
             self._live[conversation.id] = conversation
             conversation.task = asyncio.create_task(self._conversation(conversation), name='server-conversation')
             conversation.task.add_done_callback(lambda task,c=conversation:self._finished(c))
@@ -153,6 +167,12 @@ class ServerEngine:
             if conversation.channel == channel:
                 self._end(conversation, 'his_post')
 
+    def answer_queued(self, guid):
+        """Release only this speaker's background work before an answer owed to him."""
+        for conversation in tuple(self._live.values()):
+            if conversation.in_flight == guid:
+                self._end(conversation, 'answer_queued')
+
     def live(self):
         return [dict(id=c.id, channel=c.channel, seed=c.seed.kind, messages=len(c.messages), started=c.started)
                 for c in self._live.values()]
@@ -167,6 +187,13 @@ class ServerEngine:
                 conversation.reason = 'deleted_parent'
                 return False
         if speaker in pulled_into_play(self.app) or speaker in self.app.engine._away_now():
+            return False
+        if any(t.speaker == speaker and t is not conversation.in_flight_turn
+               for t in self.app.engine.planned_turns()):
+            return False
+        if speaker in self.app.engine.active_speakers(exclude_task=conversation.task):
+            return False
+        if any(c is not conversation and c.in_flight == speaker for c in self._live.values()):
             return False
         p = self.app.personas.get(speaker)
         member = self.app.world.discord_members().get(speaker)
@@ -206,7 +233,8 @@ class ServerEngine:
                 eligible = [g for g in conversation.cast if g != last and g in observed.personas
                     and g not in observed.in_play and g not in observed.away
                     and observed.states[g].presence.state in ('online','idle')
-                    and (last is None or observed.ties.get((g,last)) != 'feud')]
+                    and (last is None or observed.ties.get((g,last)) != 'feud')
+                    and self._valid(conversation, g)]
                 if not eligible:
                     conversation.reason = 'no_cast'
                     break
@@ -231,27 +259,49 @@ class ServerEngine:
                         gap = self.rng.uniform(600, 2400)
                     await app.clock.sleep(gap)
                 else:
+                    openers = conversation.seed.openers
+                    if openers is not None:
+                        eligible = [g for g in eligible if g in openers]
+                        if not eligible:
+                            conversation.reason = 'no_owner' if conversation.seed.kind == 'life' else 'no_witness'
+                            break
                     speaker = conversation.cast[0] if conversation.cast[0] in eligible else eligible[0]
                 if not self._valid(conversation, speaker):
                     conversation.reason = conversation.reason or 'scope_changed'
                     break
                 definition = layout.channel(conversation.channel)
                 purpose = definition.topic
+                if conversation.seed.kind == 'purpose':
+                    opener = 'Talk about this topic in your own way: '
+                elif conversation.seed.kind in {'raid_before','raid_after','loot','life','calendar','birthday','his_day'}:
+                    opener = 'Start a conversation about this real event in your own way: '
+                else:
+                    opener = 'Start a conversation using only what is known: '
                 instruction = (f"You're in #{definition.id}: {purpose}. " +
-                    ('Start a conversation about this real event in your own way: '+conversation.seed.fact
+                    (opener+conversation.seed.fact
                      if parent is None else 'Reply to the chosen message and keep this conversation going naturally.'))
                 turn = Turn(TurnKind.OPEN if parent is None else TurnKind.CONTINUE, speaker,
                     'discord:'+conversation.channel, addressee=parent_author, instruction=instruction,
                     priority=Priority.BACKGROUND, max_lines=1)
-                meta = TurnMeta('', why='server:'+conversation.seed.kind, topic=conversation.seed.fact,
-                    server_anchor=purpose+' '+conversation.seed.fact, server_thread=tuple(conversation.messages),
+                topic = conversation.seed.fact if parent is None else ''
+                meta = TurnMeta('', why='server:'+conversation.seed.kind, topic=topic,
+                    server_anchor=purpose+' '+topic, server_thread=tuple(conversation.messages),
                     server_conversation=conversation.id, discord=DiscordTarget(parent,None), single_line=True,
                     keep_channel=True, review_required=True, guards=guards,
                     still_valid=lambda c=conversation,g=speaker,p=parent:self._valid(c,g,p))
-                await app.engine.speak_meta(turn, meta)
+                if parent is None and dry == 0:
+                    seeds.mark_used(app.store, conversation.seed, now=app.clock.now())
+                conversation.in_flight, conversation.in_flight_turn = speaker, turn
+                try:
+                    await app.engine.speak_meta(turn, meta)
+                finally:
+                    conversation.in_flight = conversation.in_flight_turn = None
                 added = [r[0] for r in app.store.conn.execute('SELECT id FROM discord_message '
                     'WHERE turn=? AND channel=? AND deleted IS NULL ORDER BY id', (meta.turn_id,conversation.channel))]
                 conversation.messages.extend(added)
+                if parent is None and not added and conversation.seed.openers is not None:
+                    conversation.reason = 'opener_dropped'
+                    break
                 dry = 0 if added else dry+1
                 last = speaker
                 if dry >= DRY_TURNS:

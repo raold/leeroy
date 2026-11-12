@@ -15,7 +15,7 @@ from leeroy_mind.wow import boss_name
 
 SEED_KINDS = ('raid_before', 'raid_after', 'loot', 'life', 'plan', 'calendar', 'birthday',
               'reset', 'weekend', 'rival', 'his_day', 'officer', 'purpose')
-FRESH_S = {'purpose': 86400.0}
+FRESH_S = {'purpose': 86400.0, 'plan': 7 * 86400.0, 'officer': 7 * 86400.0}
 FRESH_DEFAULT_S = 3 * 86400.0
 USED_KEY = 'server:seed:{key}'
 log = logging.getLogger(__name__)
@@ -31,6 +31,16 @@ class Seed:
     about: tuple[int, ...] = ()
     officers_only: bool = False
     weight: float = 1.0
+    witnesses: tuple[int, ...] = ()
+
+    @property
+    def openers(self) -> tuple[int, ...] | None:
+        """Who already knows a subject before any of it is posted in the channel."""
+        if self.kind == 'life':
+            return self.about
+        if self.kind == 'his_day':
+            return self.witnesses
+        return None
 
 
 @dataclass
@@ -45,6 +55,11 @@ class _Context:
 
     def name(self, guid):
         return self.names.get(guid, f'#{guid}')
+
+    @property
+    def week(self):
+        year, week, _ = self.local.isocalendar()
+        return f'{year}-W{week:02}'
 
 
 def _read(kind, source):
@@ -136,7 +151,7 @@ def _plan(conn, c):
             continue
         if channel != 'guild' and audience is None:
             continue
-        yield Seed(f'plan:{cid}', 'plan', ('general', 'lfg-and-alts', 'professions-and-gold'), text, (guid,))
+        yield Seed(f'plan:{cid}:{c.week}', 'plan', ('general', 'lfg-and-alts', 'professions-and-gold'), text, (guid,))
 
 
 def _calendar(conn, c, *, birthday=False):
@@ -147,7 +162,9 @@ def _calendar(conn, c, *, birthday=False):
             continue
         seed_kind = 'birthday' if birthday else 'calendar'
         day = datetime.fromtimestamp(at, c.local.tzinfo)
-        yield Seed(f'{seed_kind}:{eid}', seed_kind, ('general',), f'{title} on {day:%A}')
+        private = kind == 'meeting'
+        yield Seed(f'{seed_kind}:{eid}', seed_kind, ('officer-chat',) if private else ('general',),
+                   f'{title} on {day:%A}', officers_only=private)
 
 
 def _reset(conn, c):
@@ -168,21 +185,8 @@ def _rival(conn, c):
             "WHERE l.kind='rival' AND l.state='sent' AND l.ts BETWEEN ? AND ? "
             'ORDER BY l.ts DESC,l.id DESC LIMIT 50', (c.now-7*86400, c.now)):
         if channel in {'trade', 'general', 'lfg', 'recruitment', 'say', 'yell'}:
-            yield Seed(f'rival:{lid}', 'rival', ('general',), f'{guild} posted in {channel} this week')
-    row = conn.execute("SELECT value FROM meta WHERE key='realm:poach:week'").fetchone()
-    try:
-        offer = json.loads(row[0]) if row else None
-        if (not isinstance(offer, dict) or type(offer.get('ts')) not in (int, float)
-                or not 0 <= c.now-offer['ts'] <= 7*86400 or offer.get('refused')
-                or type(offer.get('guild')) is not int or type(offer.get('member')) is not int):
-            return
-        guild = conn.execute('SELECT name FROM realm_guild WHERE id=?', (offer['guild'],)).fetchone()
-        if guild and offer['member'] in c.cast:
-            yield Seed(f"rival:poach:{offer.get('period', offer['ts'])}", 'rival', ('officer-chat',),
-                       f"{guild[0]} made a poaching offer to {c.name(offer['member'])}",
-                       (offer['member'],), True)
-    except (TypeError, ValueError):
-        return
+            yield Seed(f'rival:{lid}', 'rival', ('general',),
+                       f'{guild} was active in {channel} this week; nothing more is known')
 
 
 def _his_day(conn, c):
@@ -197,8 +201,14 @@ def _his_day(conn, c):
             data = json.loads(raw)
             if not isinstance(data, dict):
                 continue
-            if (kind == 'boss' and data.get('state') == 'killed' and isinstance(data.get('members'), list)
-                    and c.human in data['members'] and type(data.get('map')) is int
+            members = data.get('members')
+            if not isinstance(members, list) or any(type(g) is not int for g in members):
+                continue
+            witnesses = tuple(sorted(set(members) & (set(c.cast) - {c.human})))
+            if not witnesses:
+                continue
+            if (kind == 'boss' and data.get('state') == 'killed'
+                    and c.human in members and type(data.get('map')) is int
                     and type(data.get('boss_id')) is int and isinstance(data.get('boss_name', ''), str)):
                 name = boss_name(data.get('map', 0), data.get('boss_id', 0), data.get('boss_name', ''))
                 fact = f'{c.name(c.human)} killed {name} tonight'
@@ -206,7 +216,7 @@ def _his_day(conn, c):
                 fact = f"{c.name(c.human)} won [{_item_name(conn, data['item_id'])}] tonight"
             else:
                 continue
-            yield Seed(f'his_day:{eid}', 'his_day', ('general',), fact, (c.human,))
+            yield Seed(f'his_day:{eid}', 'his_day', ('general',), fact, (c.human,), witnesses=witnesses)
         except (TypeError, ValueError):
             continue
 
@@ -222,11 +232,11 @@ def _officer(conn, c):
         for guid in c.cast:
             missed = len(raids)-len(attended.get(guid, ()))
             if missed:
-                yield Seed(f'officer:attendance:{raids[0]}:{guid}', 'officer', ('officer-chat', 'applications'),
+                yield Seed(f'officer:attendance:{raids[0]}:{guid}:{c.week}', 'officer', ('officer-chat', 'applications'),
                            f'{c.name(guid)} missed {missed} of the last {len(raids)} raids', (guid,), True)
     for guid, in conn.execute('SELECT guid FROM cast_member WHERE rank=? ORDER BY guid', (c.trial_rank,)):
         if guid in c.cast:
-            yield Seed(f'officer:trial:{guid}', 'officer', ('applications', 'officer-chat'),
+            yield Seed(f'officer:trial:{guid}:{c.week}', 'officer', ('applications', 'officer-chat'),
                        f'{c.name(guid)} is a trial member', (guid,), True)
 
 

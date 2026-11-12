@@ -28,7 +28,7 @@ class GuardsCfg:
     repeat_cosine: float = repetition.EMBEDDING_COSINE
     parent_cosine: float = nonsequitur.PARENT_COSINE
     thread_cosine: float = nonsequitur.THREAD_COSINE
-    anchor_cosine: float = 0.20
+    anchor_cosine: float = 0.35
     repeat_seconds: int = REPEAT_SECONDS
     gag_daily_cap: int = GAG_DAILY_CAP
     stock_daily_cap: int = STOCK_DAILY_CAP

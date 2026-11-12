@@ -99,7 +99,11 @@ def choose_cast(channel: str, seed: Seed, states: Mapping[int, DiscordState],
         weights[guid] = weight
     if sum(w > 0 for w in weights.values()) < 2:
         return []
-    first = pick_speakers(weights, 1, rng)[0]
+    openers = {g:w for g,w in weights.items() if seed.openers is None or g in seed.openers}
+    starters = pick_speakers(openers, 1, rng)
+    if not starters:
+        return []
+    first = starters[0]
     rest = {g: w * max(0, ties(first, g)) for g, w in weights.items() if g != first}
     chosen = [first]
     size = rng.randint(2, 5)

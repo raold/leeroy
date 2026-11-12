@@ -1,5 +1,6 @@
 """Server turns share the real transport, scheduler and privacy boundaries."""
 import asyncio
+import random
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -148,6 +149,100 @@ def test_his_game_answer_precedes_the_next_server_generation(rig, monkeypatch):
     assert order == [(101,Priority.BACKGROUND),(103,Priority.REPLY_HUMAN),(102,Priority.BACKGROUND)]
 
 
+@pytest.mark.parametrize('source_kind',['conversation','dm'])
+@pytest.mark.parametrize('queued',[False,True],ids=['holding-low-slot','waiting-for-low-slot'])
+def test_his_answer_cancels_same_members_background_review_lock(rig, monkeypatch, source_kind, queued):
+    from leeroy_mind.server.config import ServerConfig
+    from leeroy_mind.server.dms import DmOpeners
+    from leeroy_mind.server.engine import Conversation, ServerEngine
+    from leeroy_mind.server.seeds import Seed
+    engine, app = rig.engine, rig.engine.server_app
+    engine.live_review.config = replace(engine.live_review.config,enabled=True)
+    engine.scheduler._max, engine.scheduler._max_low = 3,1
+    service = ServerEngine(app,ServerConfig(enabled=True),random.Random(1))
+    dm = DmOpeners(app,ServerConfig(enabled=True),random.Random(1))
+    app.server.engine, app.server.dms = service,dm
+    gate, serial_entered, low_entered = asyncio.Event(),asyncio.Event(),asyncio.Event()
+    generated = []
+    async def compose(*args, **kwargs):
+        return SimpleNamespace(memory_ids=[],close=False)
+    async def generate_serial(t,m,c,**kwargs):
+        # _generate's real per-member serial lock surrounds this scheduler wait.
+        if t.priority == Priority.BACKGROUND:
+            serial_entered.set()
+        async def job(llm):
+            generated.append((t.priority,rig.clock.now()))
+            if t.priority == Priority.BACKGROUND:
+                low_entered.set()
+                await gate.wait()
+            return 'yes I can join tonight',None
+        return await engine.scheduler.submit(t.priority,job,deadline=t.deadline)
+    async def checked(t,m,p,lines,c,**kwargs):
+        return lines
+    async def review(*args,**kwargs):
+        return Verdict('send')
+    monkeypatch.setattr(engine,'_compose',compose)
+    monkeypatch.setattr(engine,'_generate_serial',generate_serial)
+    monkeypatch.setattr(engine,'_guarded_lines',checked)
+    monkeypatch.setattr(engine.live_review,'check',review)
+    monkeypatch.setattr(engine.guards,'allow',lambda *a,**k:True)
+    monkeypatch.setattr(engine.guards,'chain_open',lambda *a,**k:True)
+    async def run():
+        blocker = None
+        if queued:
+            async def occupy_low(llm):
+                low_entered.set()
+                await gate.wait()
+            blocker = asyncio.create_task(engine.scheduler.submit(Priority.EXTRACTION,occupy_low))
+            await asyncio.wait_for(low_entered.wait(),1)
+        background = asyncio.create_task(engine.speak_meta(turn(101),meta()))
+        if source_kind == 'conversation':
+            conversation = Conversation('in-flight','general',Seed('purpose:test','purpose',('general',),'a topic'),
+                                        [101,102],rig.clock.now(),5)
+            conversation.in_flight = 101
+            conversation.task = background
+            service._live[conversation.id] = conversation
+        else:
+            dm._pending,dm._pending_guid = background,101
+        try:
+            await asyncio.wait_for(serial_entered.wait(),1)
+            if not queued:
+                await asyncio.wait_for(low_entered.wait(),1)
+            assert engine.live_review.owners[101] is background
+            assert 101 in engine.active_speakers()
+            assert 101 not in engine.active_speakers(exclude_task=background)
+            before = rig.clock.now()
+            engine._queue([(Turn(TurnKind.REPLY_HUMAN,101,'guild',addressee=HUMAN),
+                            TurnMeta('owed-answer',why='reply:test'))])
+            assert background.cancelling()  # before the answer task can wait on her lock
+            await rig.advance(40)
+            answered = [at for priority,at in generated if priority == Priority.REPLY_HUMAN]
+            assert answered and answered[0] < before+30
+            assert background.cancelled()
+            assert not any(row['dropped']=='expired' for row in rig.utterances())
+            assert any(row['kind']=='reply_human' and row['dropped'] is None for row in rig.utterances())
+            if queued:
+                assert all(priority != Priority.BACKGROUND for priority,_ in generated)
+        finally:
+            gate.set()
+            await asyncio.gather(background,*([blocker] if blocker else []),return_exceptions=True)
+            await service.close()
+            await dm.close()
+    rig.sync(run())
+
+
+@pytest.mark.parametrize('kind,fields',[(TurnKind.REPLY_HUMAN,{}),
+    (TurnKind.CONTINUE,{'answers_human':True}),(TurnKind.CONTINUE,{'first_question_answer':True}),
+    (TurnKind.EMOTE_REACT,{'why':'emote:his'})])
+def test_queue_yields_background_sources_for_every_kind_of_owed_answer(rig, monkeypatch, kind, fields):
+    called = []
+    rig.engine.server_app.server.engine = SimpleNamespace(answer_queued=lambda g:called.append(('engine',g)))
+    rig.engine.server_app.server.dms = SimpleNamespace(answer_queued=lambda g:called.append(('dm',g)))
+    m = TurnMeta('owed',**fields)
+    rig.engine._answer_queued(Turn(kind,101,'guild'),m)
+    assert called == [('engine',101),('dm',101)]
+
+
 def test_server_post_and_all_receipts_commit_together(rig):
     engine, now = rig.engine, rig.clock.now()
     m = meta(server_conversation='test-conversation')
@@ -161,16 +256,70 @@ def test_server_post_and_all_receipts_commit_together(rig):
     assert len(rig.reactions) == 2 and not rig.sent.log
 
 
-def test_failed_post_record_rolls_back_message_and_receipts(rig, monkeypatch):
+def test_failed_receipt_rolls_back_message_before_record_has_any_effect(rig, monkeypatch):
+    from leeroy_mind.server import records
+    recorded = []
     def fail(*args, **kwargs):
         raise RuntimeError('synthetic failure')
-    monkeypatch.setattr(rig.engine, '_record', fail)
+    monkeypatch.setattr(records, 'posted', fail)
+    monkeypatch.setattr(rig.engine, '_record', lambda *a, **k: recorded.append(k))
     m = meta(server_conversation='failed')
     assert rig.engine._deliver_discord(turn(),m,rig.engine.personas.get(101),'invented line',[]) == 'record_error'
     assert not rig.store.conn.execute('SELECT id FROM discord_message').fetchall()
     assert counts(rig.store,rig.clock.local().date().isoformat())['messages'] == 0
     assert rig.store.get_meta('server:conversation:failed') is None
-    assert not rig.reactions
+    assert not rig.reactions and not recorded and m.said == 0
+
+
+def test_record_hook_failure_cannot_roll_back_ids_already_used_in_memory(rig):
+    engine = rig.engine
+    def fail(*args, **kwargs):
+        raise RuntimeError('synthetic hook failure')
+    engine.signals = SimpleNamespace(sent=fail)
+    m = meta(server_conversation='durable', words='invented words')
+    m.turn_id = 'durable-turn'
+    assert engine._deliver_discord(turn(),m,engine.personas.get(101),'invented line',[]) == 'record_error'
+    message = rig.store.conn.execute('SELECT id FROM discord_message').fetchone()
+    line = rig.store.conn.execute('SELECT id FROM chat_line').fetchone()
+    assert message and line and engine._words[line[0]] == 'invented words'
+    assert m.said == 1 and engine._turn_lines[m.turn_id] == 1
+    assert counts(rig.store,rig.clock.local().date().isoformat())['messages'] == 1
+    assert rig.store.get_meta('server:conversation:durable') is not None
+
+
+@pytest.mark.parametrize('failure,event', [('store','discord_store_failed'),('record','say_record_failed')])
+def test_server_off_keeps_existing_failure_log_names(rig, monkeypatch, caplog, failure, event):
+    from leeroy_mind.talk import pipeline
+    rig.engine.server_app.server = None
+    def fail(*args, **kwargs):
+        raise RuntimeError('synthetic failure')
+    if failure == 'store':
+        monkeypatch.setattr(pipeline,'store_line',fail)
+    else:
+        monkeypatch.setattr(rig.engine,'_record',fail)
+    assert rig.engine._deliver_discord(turn(),meta(),rig.engine.personas.get(101),'invented line',[]) == failure+'_error'
+    assert any(r.message.startswith(event+':') for r in caplog.records)
+    assert not any(r.message.startswith('discord_delivery_failed') for r in caplog.records)
+
+
+@pytest.mark.parametrize('raw', ['not-json','[]','{"messages":-1}','{"dms":true}'])
+def test_bad_server_counter_blocks_server_posts_but_keeps_d1_and_reactions(rig, monkeypatch, caplog, raw):
+    key = 'server:day:'+rig.clock.local().date().isoformat()
+    rig.store.set_meta(key,raw)
+    for _ in range(2):
+        assert rig.engine._deliver_discord(turn(),meta(),rig.engine.personas.get(101),'blocked line',[]) == 'record_error'
+    assert not rig.store.conn.execute('SELECT id FROM discord_message').fetchall()
+    assert not rig.store.conn.execute('SELECT id FROM chat_line').fetchall()
+    assert rig.engine._deliver_discord(turn(),TurnMeta('d1',why='discord:reply'),
+           rig.engine.personas.get(101),'a useful answer to him',[]) is None
+    parent = post(rig,'the invented raid went well')
+    monkeypatch.setattr(rig.engine.guards,'allow',lambda *a,**k:True)
+    monkeypatch.setattr(rig.engine.guards,'chain_open',lambda *a,**k:True)
+    m = TurnMeta('react',why='discord:reply',discord=DiscordTarget(parent,None))
+    rig.sync(rig.engine._guard_react(turn(deadline=rig.clock.now()+180),m,'🫡'))
+    assert rig.store.conn.execute('SELECT count(*) FROM discord_reaction').fetchone()[0] == 1
+    assert rig.store.get_meta(key) == raw
+    assert sum(r.message == 'server_day_counter_bad' for r in caplog.records) == 1
 
 
 def test_server_dm_post_is_pair_private_and_records_opening(rig):

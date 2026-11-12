@@ -1,16 +1,28 @@
 """Small server receipts; callers join them to the transaction that stored a post."""
 from datetime import date, timedelta
 import json
+import logging
 
 DAY_KEY = 'server:day:{date}'
 COUNTS = ('conversations', 'messages', 'reactions', 'dms')
+log = logging.getLogger(__name__)
+
+
+class BadDayCounter(ValueError):
+    """A malformed durable budget must stop new server posts, never his replies."""
 
 
 def counts(store, local_date):
     raw = store.get_meta(DAY_KEY.format(date=local_date))
-    value = json.loads(raw) if raw is not None else {}
-    if not isinstance(value, dict) or any(type(value.get(k, 0)) is not int or value.get(k, 0) < 0 for k in COUNTS):
-        raise ValueError('invalid_server_counts')
+    try:
+        value = json.loads(raw) if raw is not None else {}
+        if not isinstance(value, dict) or any(type(value.get(k, 0)) is not int or value.get(k, 0) < 0 for k in COUNTS):
+            raise ValueError('invalid_server_counts')
+    except (ValueError, TypeError):
+        if not getattr(store, '_server_day_counter_bad', False):
+            log.warning('server_day_counter_bad')
+            store._server_day_counter_bad = True
+        raise BadDayCounter('invalid_server_counts') from None
     return {k: value.get(k, 0) for k in COUNTS}
 
 

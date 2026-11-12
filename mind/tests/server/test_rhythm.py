@@ -2,6 +2,8 @@ from datetime import datetime
 import math
 import random
 
+import pytest
+
 from conftest import make_persona
 from leeroy_mind.discord.presence import Presence
 from leeroy_mind.server.rhythm import choose_cast, choose_seed_and_channel, length, next_gap, starts_per_hour
@@ -69,12 +71,40 @@ def test_cast_excludes_offline_in_play_and_feuds():
     assert not draw(personas,states,away=frozenset({102,103,104}))
 
 
-def test_seed_member_usually_joins():
-    personas,states=fixture()
+def test_life_owner_always_opens_with_thirty_members_online():
+    personas = {g:make_persona(g,f'Test{g}') for g in range(101,131)}
+    states = {g:state() for g in personas}
     rng=random.Random(45)
     seed=Seed('life:1','life',('general',),'A fact',(101,))
-    joined=sum(101 in draw(personas,states,seed=seed,rng=rng) for _ in range(200))
-    assert joined>=140
+    for _ in range(200):
+        cast = draw(personas,states,seed=seed,rng=rng)
+        assert len(cast)>=2 and cast[0]==101
+
+
+@pytest.mark.parametrize('unavailable', ['offline','dnd','missing','away','in_play','silent'])
+def test_unavailable_life_owner_has_no_substitute_opener(unavailable):
+    personas,states = fixture()
+    options = {}
+    if unavailable in {'offline','dnd'}:
+        states[101] = state(unavailable)
+    elif unavailable == 'missing':
+        del personas[101]
+    elif unavailable == 'silent':
+        personas[101] = effective(personas[101],MemberTuning({'talkative':0}))
+    else:
+        options[unavailable] = frozenset({101})
+    seed = Seed('life:1','life',('general',),'A private fact',(101,))
+    assert not draw(personas,states,seed=seed,**options)
+
+
+def test_only_witnesses_can_open_his_day_but_others_can_join():
+    personas,states = fixture()
+    seed = Seed('his_day:1','his_day',('general',),'An observed kill',(1,),witnesses=(101,102))
+    casts = [draw(personas,states,seed=seed,rng=random.Random(n)) for n in range(200)]
+    assert all(cast[0] in {101,102} for cast in casts)
+    assert any(set(cast)-{101,102} for cast in casts)
+    assert not draw(personas,states,seed=seed,away=frozenset({101,102}))
+    assert not draw(personas,states,seed=Seed('x','his_day',('general',),'Unwitnessed kill',(1,)))
 
 
 def test_class_channel_favours_its_class():

@@ -53,6 +53,31 @@ def test_server_filler_becomes_its_reaction(store,text,emoji):
     assert result.action == 'react' and result.reaction == emoji
 
 
+@pytest.mark.parametrize('text,emoji', [('lol :P','😂'),('gz :D','🎉'),('lol xD','😂'),
+    ('same :)','👍'),('oof :(','🫡'),('ty <3','❤️'),('lol:P','😂'),
+    ('lol :P haha :D hehe xD kek <3','😂')])
+def test_ascii_emoticons_are_neutral_for_server_filler(store,text,emoji):
+    seed_test_cast(store)
+    source = sources(store,history=(old('What a lovely sunrise',guid=102,room='general'),))
+    result = review(source,draft(text,parent_id=10))
+    assert result.action=='react' and result.reaction==emoji
+
+
+@pytest.mark.parametrize('text', ['lol haha hehe kek lmao :P','lol the ferry left :D',
+    ':P :D xD :) :( <3','lol :plain','lol xdimension'])
+def test_emoticons_do_not_hide_substantive_words_or_extend_filler_limit(store,text):
+    seed_test_cast(store)
+    result = review(sources(store),draft(text))
+    assert 'server_filler' not in result.codes and 'filler_opener' not in result.codes
+
+
+def test_ascii_emoticon_change_is_server_only(store):
+    seed_test_cast(store)
+    source = sources(store,history=(old('What a lovely sunrise',guid=102,room='general'),))
+    result = review(source,replace(draft('lol :P',parent_id=10),server=False))
+    assert result.action=='send' and 'server_filler' not in result.codes
+
+
 def test_an_opener_that_is_filler_drops(store):
     seed_test_cast(store)
     result = review(sources(store),draft('lol'))

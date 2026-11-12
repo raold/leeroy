@@ -21,8 +21,9 @@ def fixture(store,clock,monkeypatch,*,cfg=None):
     cast = {g:SimpleNamespace(zone=0) for g in people}
     world = SimpleNamespace(human_online=False,group=None,online=set(people),discord_members=lambda:cast)
     engine = SimpleNamespace(live_review=SimpleNamespace(config=SimpleNamespace(enabled=True)),
-        cfg=SimpleNamespace(romance=SimpleNamespace(dial=5)),_new_id=lambda:'dm-test',
-        _to_him_topic=lambda p,now:'How was your day?')
+        cfg=SimpleNamespace(romance=SimpleNamespace(dial=5),talk=SimpleNamespace(chattiness=4)),
+        _new_id=lambda:'dm-test',_to_him_topic=lambda p,now:'How was your day?',
+        planned_turns=lambda:(),active_speakers=lambda **kw:frozenset())
     app = SimpleNamespace(store=store,clock=clock,human_guid=1,engine=engine,world=world,
         personas=people,guild=None,stopping=False,server=SimpleNamespace(lease=SimpleNamespace(ready=lambda:True)))
     snap = SimpleNamespace(personas=people,states={g:SimpleNamespace(presence=Presence('online',False,0)) for g in people},
@@ -150,9 +151,10 @@ def test_dm_seed_is_her_own_and_never_an_officer_fact(store,clock,monkeypatch):
     run(go())
 
 
-def test_owner_login_before_send_cancels_opener_and_close_joins(store,clock,monkeypatch):
+def test_login_during_pending_turn_redraws_logout_gap_and_close_joins(store,clock,monkeypatch):
     async def go():
         opener,_,calls = fixture(store,clock,monkeypatch)
+        monkeypatch.setattr(opener.rng,'expovariate',lambda rate:0)
         entered,release = asyncio.Event(),asyncio.Event()
         async def delayed(turn,meta):
             entered.set()
@@ -167,10 +169,18 @@ def test_owner_login_before_send_cancels_opener_and_close_joins(store,clock,monk
         await task
         assert not calls
         opener.app.world.human_online=False
-        await clock.advance(121,step=121)
+        # No tick observed his login: only the pending turn's delivery gate did.
+        opener._next_at = clock.now()-1
+        logged_out = clock.now()
+        await opener.tick(logged_out)
+        assert opener._next_at>=logged_out+60
+        await clock.advance(59,step=59)
+        await opener.tick(clock.now())
+        assert not calls
+        await clock.advance(opener._next_at-clock.now(),step=300)
         entered.clear()
         release.clear()
-        task = asyncio.create_task(due(opener,clock))
+        task = asyncio.create_task(opener.tick(clock.now()))
         await entered.wait()
         await opener.close()
         await asyncio.gather(task,return_exceptions=True)
@@ -191,12 +201,109 @@ def test_first_tick_schedules_and_phase_changes_pacing(store,clock,monkeypatch):
     assert evening<morning
 
 
-def test_bad_day_receipt_fails_closed(store,clock,monkeypatch):
+def test_zero_chattiness_never_opens_over_a_day(store,clock,monkeypatch):
     async def go():
         opener,_,calls = fixture(store,clock,monkeypatch)
-        store.set_meta('server:day:'+clock.local().date().isoformat(),'not-json')
+        opener.app.engine.cfg.talk.chattiness = 0
+        for _ in range(48):
+            await due(opener,clock)
+            await clock.advance(1800,step=1800)
+        assert not calls
+        assert not store.conn.execute("SELECT 1 FROM meta WHERE key LIKE 'server:day:%'").fetchone()
+    run(go())
+
+
+def test_chattiness_eight_has_shorter_mean_gap_than_four(store,clock,monkeypatch):
+    opener,_,_ = fixture(store,clock,monkeypatch)
+    local = clock.local().replace(hour=20)
+    opener.rng.seed(72)
+    normal = sum(opener._gap(local) for _ in range(1000))/1000
+    opener.app.engine.cfg.talk.chattiness = 8
+    opener.rng.seed(72)
+    chatty = sum(opener._gap(local) for _ in range(1000))/1000
+    assert chatty<normal
+
+
+@pytest.mark.parametrize('busy',[False,True])
+def test_logout_redraws_expired_dm_deadline_and_keeps_first_minute_quiet(store,clock,monkeypatch,busy):
+    async def go():
+        opener,_,calls = fixture(store,clock,monkeypatch)
+        monkeypatch.setattr(opener.rng,'expovariate',lambda rate:0)
+        if busy:
+            await opener._lock.acquire()
+        opener.app.world.human_online = True
+        await opener.tick(clock.now())
+        if busy:
+            opener._lock.release()
+        await clock.advance(3600,step=3600)
+        opener.app.world.human_online = False
+        logged_out = clock.now()
+        await opener.tick(logged_out)
+        assert opener._next_at>=logged_out+60 and not calls
+        await clock.advance(59,step=59)
+        await opener.tick(clock.now())
+        assert not calls
+        await clock.advance(opener._next_at-clock.now(),step=300)
+        await opener.tick(clock.now())
+        assert len(calls)==1
+    run(go())
+
+
+@pytest.mark.parametrize('source',['queued','active'])
+def test_busy_turn_keeps_member_out_of_dm_candidates(store,clock,monkeypatch,source):
+    async def go():
+        opener,snap,calls = fixture(store,clock,monkeypatch)
+        snap.personas = {101:snap.personas[101]}
+        if source=='queued':
+            opener.app.engine.planned_turns = lambda:(SimpleNamespace(speaker=101),)
+        else:
+            opener.app.engine.active_speakers = lambda **kw:frozenset({101})
         await due(opener,clock)
         assert not calls
+    run(go())
+
+
+@pytest.mark.parametrize('source',['queued','active'])
+def test_new_busy_turn_invalidates_pending_dm_before_delivery(store,clock,monkeypatch,source):
+    async def go():
+        opener,_,calls = fixture(store,clock,monkeypatch)
+        original = opener.app.engine.speak_meta
+        async def queued(turn,meta):
+            if source=='queued':
+                opener.app.engine.planned_turns = lambda:(SimpleNamespace(speaker=turn.speaker),)
+            else:
+                opener.app.engine.active_speakers = lambda **kw:frozenset({turn.speaker})
+            return await original(turn,meta)
+        opener.app.engine.speak_meta = queued
+        await due(opener,clock)
+        assert not calls
+    run(go())
+
+
+def test_pending_dm_validity_excludes_its_own_active_task(store,clock,monkeypatch):
+    async def go():
+        opener,_,calls = fixture(store,clock,monkeypatch)
+        original = opener.app.engine.speak_meta
+        async def speaking(turn,meta):
+            current = asyncio.current_task()
+            opener.app.engine.active_speakers = lambda *,exclude_task=None: (
+                frozenset() if exclude_task is current else frozenset({turn.speaker}))
+            return await original(turn,meta)
+        opener.app.engine.speak_meta = speaking
+        await due(opener,clock)
+        assert len(calls)==1
+    run(go())
+
+
+@pytest.mark.parametrize('raw',['not-json','[]','{"dms":true}','{"messages":-1}'])
+def test_bad_day_receipt_fails_closed_and_logs_once(store,clock,monkeypatch,caplog,raw):
+    async def go():
+        opener,_,calls = fixture(store,clock,monkeypatch)
+        store.set_meta('server:day:'+clock.local().date().isoformat(),raw)
+        await due(opener,clock)
+        await due(opener,clock)
+        assert not calls
+        assert sum(r.message=='server_day_counter_bad' for r in caplog.records)==1
     run(go())
 
 
@@ -246,7 +353,8 @@ def test_changed_owner_cannot_receive_pending_old_pair_opener(store,clock,monkey
     run(go())
 
 
-def test_his_dm_cancels_pending_opener_without_stopping_the_ticker(store,clock,monkeypatch):
+@pytest.mark.parametrize('interrupt',['his_post','answer_queued'])
+def test_human_answer_cancels_pending_opener_without_stopping_the_ticker(store,clock,monkeypatch,interrupt):
     async def go():
         opener,snap,calls = fixture(store,clock,monkeypatch)
         snap.personas = {101:snap.personas[101]}
@@ -266,7 +374,7 @@ def test_his_dm_cancels_pending_opener_without_stopping_the_ticker(store,clock,m
         task = asyncio.create_task(ticker())
         await entered.wait()
         ds.post(store,channel='dm:101',author=1,origin='human',text='How are you?',now=clock.now())
-        opener.his_post('dm:101')
+        getattr(opener,interrupt)('dm:101' if interrupt=='his_post' else 101)
         await task
         assert resumed==[True] and not task.cancelled() and not calls
         assert opener._pending is None and opener._pending_guid is None
@@ -282,7 +390,8 @@ def test_his_dm_cancels_pending_opener_without_stopping_the_ticker(store,clock,m
     run(go())
 
 
-def test_his_dm_during_selection_invalidates_that_candidate(store,clock,monkeypatch):
+@pytest.mark.parametrize('interrupt',['his_post','answer_queued'])
+def test_human_answer_during_selection_invalidates_that_candidate(store,clock,monkeypatch,interrupt):
     async def go():
         opener,snap,calls = fixture(store,clock,monkeypatch)
         snap.personas = {101:snap.personas[101]}
@@ -295,14 +404,15 @@ def test_his_dm_during_selection_invalidates_that_candidate(store,clock,monkeypa
         monkeypatch.setattr(dms.runtime,'snapshot',held)
         task = asyncio.create_task(due(opener,clock))
         await entered.wait()
-        opener.his_post('dm:101')
+        getattr(opener,interrupt)('dm:101' if interrupt=='his_post' else 101)
         release.set()
         await task
         assert not calls and opener._pending is None
     run(go())
 
 
-def test_another_dm_does_not_cancel_the_pending_pair(store,clock,monkeypatch):
+@pytest.mark.parametrize('interrupt',['his_post','answer_queued'])
+def test_another_member_answer_does_not_cancel_the_pending_pair(store,clock,monkeypatch,interrupt):
     async def go():
         opener,snap,calls = fixture(store,clock,monkeypatch)
         snap.personas = {101:snap.personas[101]}
@@ -315,7 +425,7 @@ def test_another_dm_does_not_cancel_the_pending_pair(store,clock,monkeypatch):
         opener.app.engine.speak_meta = pending
         task = asyncio.create_task(due(opener,clock))
         await entered.wait()
-        opener.his_post('dm:102')
+        getattr(opener,interrupt)('dm:102' if interrupt=='his_post' else 102)
         opener.his_post('discord:general')
         release.set()
         await task

@@ -37,6 +37,7 @@ FILLER = {'agree': ({'same','agreed','true','this','yeah','yep','ya','+1','facts
           'grats': ({'gz','grats','gratz','congrats','nice','gg'}, '🎉'),
           'thanks': ({'ty','thx','thanks','tyty'}, '❤️'),
           'sympathy': ({'rip','oof','f','ouch'}, '🫡')}
+_EMOTICONS = re.compile(r':[pd](?!\w)|:[()]|<3(?!\w)|(?<!\w)xd(?!\w)', re.IGNORECASE)
 
 
 def _action(codes):
@@ -48,7 +49,7 @@ def _action(codes):
 
 
 def _server_filler(text):
-    tokens = re.findall(r'\+1|\w+', text.casefold())
+    tokens = re.findall(r'\+1|\w+', _EMOTICONS.sub(' ',text).casefold())
     if 0 < len(tokens) <= 4:
         return next((emoji for tokenset,emoji in FILLER.values() if set(tokens) <= tokenset), None)
     return None

@@ -1,6 +1,5 @@
 """Bounded, private openers while he is away; their receipts belong to the pipeline."""
 import asyncio
-import json
 import math
 import random
 from datetime import timedelta
@@ -19,6 +18,7 @@ from leeroy_mind.talk.turns import Turn, TurnKind
 from . import runtime
 from .clock import in_window
 from .rhythm import PHASE_RATE
+from .records import BadDayCounter, counts
 from .state import pulled_into_play
 
 OPEN_KEY = 'server:dm:open:{guid}'
@@ -35,14 +35,6 @@ def _number(value):
         return None
 
 
-def _count(meta, day):
-    try:
-        value = json.loads(meta.get('server:day:'+day,'{}')).get('dms',0)
-        return value if type(value) is int and value>=0 else math.inf
-    except (ValueError,TypeError,AttributeError):
-        return math.inf
-
-
 class DmOpeners:
     def __init__(self, app, config, rng: random.Random):
         self.app, self.config, self.rng = app, config, rng
@@ -57,11 +49,17 @@ class DmOpeners:
         self._weighted_hours = None
         self._human_generation = {}
         self._human_until = {}
+        self._was_in_game = bool(app.world.human_online)
 
     def his_post(self, channel: str) -> None:
         """His message owns this DM now; discard a planned opener and leave D1 the floor."""
         guid = layout.dm_peer(channel_id(channel))
-        if guid is None or guid<=0:
+        if guid is not None:
+            self.answer_queued(guid)
+
+    def answer_queued(self, guid: int) -> None:
+        """An owed answer gets this member's slot, including during opener selection."""
+        if type(guid) is not int or guid<=0:
             return
         self._human_generation[guid] = self._human_generation.get(guid,0)+1
         self._human_until[guid] = self.app.clock.now()+RETRY_S
@@ -70,8 +68,13 @@ class DmOpeners:
 
     def _ready(self):
         app = self.app
+        if app.world.human_online:
+            # Delivery can observe a login while the ticker awaits this opener.
+            self._was_in_game = True
+            return False
         return (not self._closed and self.config.enabled and self.config.dms_per_day>0
-                and not getattr(app,'stopping',False) and not app.world.human_online
+                and app.engine.cfg.talk.chattiness>0
+                and not getattr(app,'stopping',False)
                 and app.human_guid>0 and getattr(app,'server',None) is not None
                 and app.server.lease.ready() and not in_window(app.clock.local(),self.config.quiet_window)
                 and app.engine.live_review.config.enabled)
@@ -81,7 +84,10 @@ class DmOpeners:
             midnight = local.replace(hour=0,minute=0,second=0,microsecond=0)
             self._weighted_hours = sum(PHASE_RATE[day_phase(at)]/60 for minute in range(1440)
                 if not in_window(at:=midnight+timedelta(minutes=minute),self.config.quiet_window))
-        rate = self.config.dms_per_day*PHASE_RATE[day_phase(local)]/self._weighted_hours
+        rate = (self.config.dms_per_day*PHASE_RATE[day_phase(local)]/self._weighted_hours
+                *self.app.engine.cfg.talk.chattiness/4)
+        if rate<=0:
+            return math.inf
         return max(RETRY_S,self.rng.expovariate(rate/3600))
 
     def _can_open(self, guid, now, day, meta):
@@ -100,12 +106,22 @@ class DmOpeners:
             "AND author=? AND origin='human' AND deleted IS NULL AND ts>=? AND ts<=? LIMIT 1",
             (f'dm:{guid}',self.app.human_guid,opened,now)).fetchone() is not None
 
+    def _day_count(self, day):
+        try:
+            return counts(self.app.store,day)['dms']
+        except BadDayCounter:
+            return math.inf  # the shared parser reports corruption once, even before a draft
+
     def valid(self, turn, meta=None):
         """Cheap checks repeated at composition and transport, including a newly logged-in owner."""
         if not self._ready():
             return False
         app, guid, now = self.app, turn.speaker, self.app.clock.now()
         if turn.to_guid != app.human_guid or turn.addressee != app.human_guid:
+            return False
+        if any(queued.speaker==guid for queued in app.engine.planned_turns()):
+            return False
+        if guid in app.engine.active_speakers(exclude_task=self._pending):
             return False
         p, member = app.personas.get(guid), app.world.discord_members().get(guid)
         if p is None or member is None or guid in pulled_into_play(app):
@@ -120,9 +136,14 @@ class DmOpeners:
         day = app.clock.local().date().isoformat()
         keys = ('server:day:'+day,OPEN_KEY.format(guid=guid),DAY_MEMBER_KEY.format(date=day,guid=guid))
         current = dict(app.store.conn.execute('SELECT key,value FROM meta WHERE key IN (?,?,?)',keys))
-        return _count(current,day)<self.config.dms_per_day and self._can_open(guid,now,day,current)
+        return self._day_count(day)<self.config.dms_per_day and self._can_open(guid,now,day,current)
 
     async def tick(self, now: float) -> None:
+        # Observe play even while an earlier opener is still finishing. On logout,
+        # draw a fresh gap instead of spending a deadline that expired in game.
+        if self.app.world.human_online:
+            self._was_in_game = True
+            return
         if self._lock.locked():
             return
         async with self._lock:
@@ -133,17 +154,20 @@ class DmOpeners:
             return
         local = self.app.clock.local()
         day = local.date().isoformat()
-        if self._day != day:
+        if self._day != day or self._was_in_game:
+            self._was_in_game = False
             self._day, self._next_at = day, now+self._gap(local)
         if now<self._next_at:
             return
         self._next_at = now+self._gap(local)
         generations = dict(self._human_generation)
         snap = await runtime.snapshot(self.app,now,include_seeds=True)
-        if not self._ready() or _count(snap.meta,day)>=self.config.dms_per_day:
+        if not self._ready() or self._day_count(day)>=self.config.dms_per_day:
             return
+        busy = {turn.speaker for turn in self.app.engine.planned_turns()}
+        busy.update(self.app.engine.active_speakers())
         candidates = {g:(p,snap.relationships.get(g)) for g,p in snap.personas.items()
-            if g!=snap.human and g not in snap.in_play and g not in snap.away
+            if g!=snap.human and g not in snap.in_play and g not in snap.away and g not in busy
             and self._human_generation.get(g,0)==generations.get(g,0)
             and snap.states[g].presence.state in {'online','idle'} and self._can_open(g,now,day,snap.meta)}
         guid = self._planner.start(now,candidates,lift=romance_lift(self.app.engine.cfg.romance.dial))

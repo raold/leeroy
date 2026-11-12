@@ -1,6 +1,6 @@
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -65,6 +65,7 @@ def test_life_only_uses_the_last_nights_cast_beats(store, seeded):
     store.conn.execute("INSERT INTO life_beat(thread_id,night,text,ts) VALUES (1,'2026-10-28','Older beat',?),(1,'2026-10-29','New cooking class',?)",(now-86400,now-20))
     found=[s for s in gather(store,seeded) if s.kind=='life']
     assert len(found)==1 and found[0].fact=='New cooking class' and found[0].about==(101,)
+    assert found[0].openers == (101,)
 
 
 def claim(store, now, channel, audience, *, expires=None, source=True):
@@ -90,7 +91,7 @@ def test_public_plan_is_live_attributed_and_reached_the_whole_cast(store, seeded
     claim(store,now,'guild',None,expires=now-1)
     claim(store,now,'guild',None,source=False)
     found=[s for s in gather(store,seeded) if s.kind=='plan']
-    assert [s.key for s in found]==[f'plan:{good}']
+    assert [s.key for s in found]==[f'plan:{good}:2026-W44']
 
 
 @pytest.mark.parametrize('kind',['calendar','birthday'])
@@ -108,29 +109,53 @@ def test_reset_and_weekend_match_the_local_day(store, seeded):
         assert {s.kind for s in gather(store,seeded,local=local) if s.kind in {'reset','weekend'}}==expected
 
 
-def test_rivals_use_public_events_and_poaching_stays_officer_only(store, seeded):
+@pytest.mark.parametrize('accepted', [False, True])
+def test_rivals_use_only_public_events_and_never_poaching_offers(store, seeded, accepted):
     now=store.clock.now()
     store.conn.execute("INSERT INTO realm_guild(id,role,faction,name,added) VALUES (9,'progression','horde','Test rivals',?)",(now,))
     for i,ch in enumerate(('trade','whisper','officer'),1):
         store.conn.execute("INSERT INTO realm_line(ts,guid,guild,channel,text,command_id,kind,state) VALUES (?,102,9,?,'PRIVATE GENERATED PROSE',?,'rival','sent')",(now,ch,f'{i:032x}'))
-    store.set_meta('realm:poach:week',json.dumps({'period':'week','guild':9,'officer':102,'member':103,'ts':now}))
+    store.set_meta('realm:poach:week',json.dumps({'period':'week','guild':9,'officer':102,'member':103,
+                                                'ts':now,'accepted':accepted}))
     found=[s for s in gather(store,seeded) if s.kind=='rival']
-    assert len(found)==2
-    assert all('PRIVATE' not in s.fact for s in found)
-    assert found[1].officers_only and found[1].channels==('officer-chat',)
+    assert len(found)==1
+    assert found[0].fact == 'Test rivals was active in trade this week; nothing more is known'
+    assert found[0].channels == ('general',)
+    store.conn.execute('DELETE FROM realm_line')
+    assert not [s for s in gather(store,seeded) if s.kind=='rival']
 
 
 def test_his_day_only_reads_his_recent_session_kills_and_loot(store, seeded):
     now=store.clock.now()
     store.conn.execute('INSERT INTO session(id,started,ended) VALUES (1,?,?)',(now-4000,now-2000))
     for kind,guid,payload,sid in [('boss',None,{'state':'killed','map':631,'boss_id':0,'members':[1,101],'boss_name':'Lord Marrowgar'},1),
-                                 ('loot_won',1,{'item_id':123},1),('loot_won',101,{'item_id':999},1),
+                                 ('loot_won',1,{'item_id':123,'members':[1,102,104]},1),('loot_won',101,{'item_id':999},1),
                                  ('loot_won',1,{'item_id':998},None)]:
         store.conn.execute('INSERT INTO game_event(ts,type,guid,payload,session_id) VALUES (?,?,?,?,?)',(now-3000,kind,guid,json.dumps(payload),sid))
     found=[s for s in gather(store,seeded) if s.kind=='his_day']
     assert len(found)==2
     assert any('Lord Marrowgar' in s.fact for s in found)
     assert all('Ownerchar' in s.fact and 'PRIVATE REAL NAME' not in s.fact for s in found)
+    assert next(s for s in found if 'killed' in s.fact).openers == (101,)
+    assert next(s for s in found if 'won' in s.fact).openers == (102,104)
+
+
+@pytest.mark.parametrize('members', [None, [], [1], [1,999], [True,101], '101', {'101':True}])
+@pytest.mark.parametrize('kind', ['boss','loot_won'])
+def test_his_day_requires_known_cast_witnesses(store, seeded, members, kind):
+    now = store.clock.now()
+    store.conn.execute('INSERT INTO session(id,started) VALUES (1,?)',(now-60,))
+    payload = dict(state='killed',map=631,boss_id=0,item_id=123,members=members)
+    store.conn.execute('INSERT INTO game_event(ts,type,guid,payload,session_id) VALUES (?,?,1,?,1)',
+                       (now-30,kind,json.dumps(payload)))
+    assert not [s for s in gather(store,seeded) if s.kind=='his_day']
+
+
+def test_officer_meeting_never_becomes_a_public_calendar_seed(store, seeded):
+    calendar(store,store.clock.now(),kind='meeting',title='Officer meeting')
+    found = [s for s in gather(store,seeded) if s.kind=='calendar']
+    assert len(found) == 1
+    assert found[0].channels == ('officer-chat',) and found[0].officers_only
 
 
 def test_his_real_name_never_appears_without_a_character_row(store, seeded):
@@ -148,9 +173,34 @@ def test_officer_seeds_only_in_officer_channels(store, seeded):
     found=gather(store,seeded)
     private=[s for s in found if s.officers_only]
     assert any('missed 4 of the last 4' in s.fact for s in private)
-    assert any(s.key=='officer:trial:103' for s in private)
+    assert any(s.key=='officer:trial:103:2026-W44' for s in private)
     assert all(layout.channel(ch).officers_only for s in private for ch in s.channels)
     assert not any(s.kind=='officer' and s.about==(101,) for s in private)
+
+
+@pytest.mark.parametrize('start_day', [9,15])
+def test_long_lived_seeds_return_only_in_a_new_iso_week(store, seeded, start_day):
+    local = datetime(2026,11,start_day,20,tzinfo=timezone.utc)
+    now = local.timestamp()
+    claim(store,now,'guild',None)
+    raid(store,now)
+    store.conn.execute('UPDATE cast_member SET rank=4 WHERE guid=103')
+    original = [s for s in gather(store,seeded,now=now,local=local) if s.kind in {'plan','officer'}]
+    assert any(s.kind=='plan' for s in original)
+    assert any(s.key.startswith('officer:trial:') for s in original)
+    assert any(s.key.startswith('officer:attendance:') for s in original)
+    assert all(s.key.endswith(':2026-W46') for s in original)
+    for seed in original:
+        seeds.mark_used(store,seed,now=now)
+    for day in range(7-local.weekday()):
+        at = local + timedelta(days=day)
+        found = [s for s in gather(store,seeded,now=at.timestamp(),local=at) if s.kind in {'plan','officer'}]
+        assert not seeds.fresh(store.conn,found,now=at.timestamp())
+    next_week = datetime(2026,11,16,20,tzinfo=timezone.utc)
+    found = [s for s in gather(store,seeded,now=next_week.timestamp(),local=next_week) if s.kind in {'plan','officer'}]
+    assert len(found) == len(original)
+    assert all(s.key.endswith(':2026-W47') for s in found)
+    assert seeds.fresh(store.conn,found,now=next_week.timestamp()) == found
 
 
 def test_a_used_seed_is_not_reused_for_three_days(store):

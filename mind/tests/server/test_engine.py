@@ -10,8 +10,9 @@ from conftest import run
 from selfies.fakes import mind_app
 from leeroy_mind.discord import store as dstore
 from leeroy_mind.server import engine as se, records, runtime
-from leeroy_mind.server.seeds import Seed
+from leeroy_mind.server.seeds import Seed, fresh
 from leeroy_mind.talk.raid import RaidPhase
+from leeroy_mind.talk.turns import Turn, TurnKind
 
 
 @pytest.fixture
@@ -237,3 +238,216 @@ def test_banter_discord_yields_while_game_leg_keeps_its_rule(app,monkeypatch):
     monkeypatch.setattr(service,'owner_last',lambda c:(0,0))
     assert not service.allowed('discord:general',app.clock.now())
     assert service.allowed('guild',app.clock.now())
+
+
+@pytest.mark.parametrize('kind', ['life','his_day'])
+@pytest.mark.parametrize('unavailable', ['offline','in_play','away','pending','speaking','source_owned','missing'])
+def test_unavailable_private_seed_opener_is_skipped_and_seed_remains_usable(app,monkeypatch,kind,unavailable):
+    seed = Seed('private:1',kind,('general',),'An unshared fact',
+                (101,) if kind=='life' else (app.human_guid,),witnesses=(101,))
+    app.observed.seeds = [seed]
+    e = app.server.engine
+    states, personas = dict(app.observed.states), dict(app.observed.personas)
+    pending = []
+    active = set()
+    monkeypatch.setattr(app.engine,'planned_turns',lambda:pending)
+    monkeypatch.setattr(app.engine,'active_speakers',lambda **kwargs:active)
+    if unavailable == 'offline':
+        app.observed.states[101] = replace(states[101],presence=replace(states[101].presence,state='offline'))
+    elif unavailable in {'in_play','away'}:
+        setattr(app.observed,unavailable,frozenset({101}))
+    elif unavailable == 'pending':
+        pending.append(Turn(TurnKind.REPLY_HUMAN,101,'guild'))
+    elif unavailable == 'speaking':
+        other = se.Conversation('other','food',Seed('other','purpose',('food',),'Dinner'),
+                                [101,102],app.clock.now(),5,in_flight=101)
+        e._live[other.id] = other
+    elif unavailable == 'source_owned':
+        active.add(101)
+    else:
+        app.observed.personas.pop(101)
+    async def go():
+        await e.tick(app.clock.now())
+        assert not app.turns
+        assert seed in fresh(app.store.conn,[seed],now=app.clock.now())
+        assert app.store.get_meta('server:seed:private:1') is None
+        if unavailable == 'speaking':
+            e._live.pop('other')
+        assert not e.live()
+        app.observed.states, app.observed.personas = states, personas
+        app.observed.in_play = app.observed.away = frozenset()
+        pending.clear()
+        active.clear()
+        e.next_start = 0
+        await e.tick(app.clock.now())
+        await finished(e)
+    run(go())
+    assert app.turns[0][0].speaker == 101
+
+
+def test_owner_becomes_unavailable_before_opener_and_keeps_seed(app,monkeypatch):
+    seed = Seed('life:1','life',('general',),'An unshared fact',(101,))
+    app.observed.seeds = [seed]
+    async def go():
+        await app.server.engine.tick(app.clock.now())
+        assert app.server.engine.live()
+        app.observed.away = frozenset({101})
+        await finished(app.server.engine)
+    run(go())
+    assert not app.turns
+    assert fresh(app.store.conn,[seed],now=app.clock.now()) == [seed]
+
+
+@pytest.mark.parametrize('kind', ['life','his_day'])
+def test_dropped_private_opener_never_hands_the_fact_to_another_member(app,monkeypatch,kind):
+    seed = Seed('private:1',kind,('general',),'An unshared fact',
+                (101,) if kind=='life' else (app.human_guid,),witnesses=(101,))
+    app.observed.seeds = [seed]
+    async def dropped(turn,meta):
+        app.turns.append((turn,meta))
+        meta.turn_id = 'guard-dropped'
+        return []
+    monkeypatch.setattr(app.engine,'speak_meta',dropped)
+    async def go():
+        await app.server.engine.tick(app.clock.now())
+        await finished(app.server.engine)
+    run(go())
+    assert len(app.turns) == 1 and app.turns[0][0].speaker == 101
+    assert not app.store.conn.execute('SELECT id FROM discord_message').fetchall()
+    assert json.loads(app.store.get_meta('server:recent'))[-1]['reason'] == 'opener_dropped'
+
+
+@pytest.mark.parametrize('kind', ['life','his_day'])
+def test_replies_only_receive_the_posted_thread_not_the_unshared_seed(app,kind):
+    private = 'An unpublished detail that the opener may choose to omit'
+    app.observed.seeds = [Seed('private:1',kind,('general',),private,
+                              (101,) if kind=='life' else (app.human_guid,),witnesses=(101,))]
+    async def go():
+        await app.server.engine.tick(app.clock.now())
+        await finished(app.server.engine)
+    run(go())
+    assert len(app.turns) == 5
+    first, meta = app.turns[0]
+    assert first.speaker == 101 and private in first.instruction and meta.topic == private
+    assert any(t.speaker != 101 for t,m in app.turns[1:])
+    for turn, meta in app.turns[1:]:
+        assert private not in turn.instruction
+        assert not meta.topic and private not in meta.server_anchor
+        assert meta.discord.reply_to in meta.server_thread
+
+
+@pytest.mark.parametrize('kind,expected', [
+    ('purpose','Talk about this topic'),('rival','using only what is known'),
+    ('officer','using only what is known'),('loot','this real event'),
+])
+def test_opener_distinguishes_topics_known_facts_and_events(app,kind,expected):
+    app.observed.seeds = [Seed('test:1',kind,('general',),'An invented subject')]
+    async def go():
+        await app.server.engine.tick(app.clock.now())
+        await finished(app.server.engine)
+    run(go())
+    instruction = app.turns[0][0].instruction
+    assert expected in instruction
+    if kind != 'loot':
+        assert 'real event' not in instruction
+
+
+def test_answer_queued_cancels_only_the_matching_in_flight_member(app,monkeypatch):
+    app.observed.seeds = [Seed('one','purpose',('general',),'Bread'),
+                          Seed('two','purpose',('food',),'Soup')]
+    entered = asyncio.Queue()
+    exited = []
+    async def held(turn,meta):
+        await entered.put(turn.speaker)
+        try:
+            await asyncio.Event().wait()
+        finally:
+            exited.append(turn.speaker)
+    monkeypatch.setattr(app.engine,'speak_meta',held)
+    async def go():
+        e = app.server.engine
+        await e.tick(app.clock.now())
+        first = await asyncio.wait_for(entered.get(),2)
+        e.next_start = 0
+        await e.tick(app.clock.now())
+        second = await asyncio.wait_for(entered.get(),2)
+        assert first != second
+        conversations = {c.in_flight:c for c in e._live.values()}
+        e.answer_queued(999)
+        assert all(not c.reason for c in conversations.values())
+        e.answer_queued(first)
+        await asyncio.gather(conversations[first].task,return_exceptions=True)
+        assert exited == [first]
+        assert conversations[first].reason == 'answer_queued'
+        assert conversations[first].in_flight is None
+        assert not conversations[second].task.done() and not conversations[second].reason
+        assert len(e.live()) == 1
+        await e.close()
+    run(go())
+
+
+def test_valid_refuses_a_planned_turn_but_excludes_its_own_server_turn(app,monkeypatch):
+    own = Turn(TurnKind.OPEN,101,'discord:general')
+    conversation = se.Conversation('one','general',app.observed.seeds[0],[101,102],
+                                   app.clock.now(),5,in_flight=101,in_flight_turn=own)
+    planned = [own,Turn(TurnKind.REPLY_HUMAN,102,'guild')]
+    monkeypatch.setattr(app.engine,'planned_turns',lambda:planned)
+    assert app.server.engine._valid(conversation,101)
+    planned.append(Turn(TurnKind.REPLY_HUMAN,101,'guild'))
+    assert not app.server.engine._valid(conversation,101)
+
+
+@pytest.mark.parametrize('block', ['window','lease','combat','wipe_silence','wipe_debrief','boss_5man'])
+def test_running_conversation_ends_when_a_hold_begins(app,monkeypatch,block):
+    entered, exited = asyncio.Event(), asyncio.Event()
+    async def held(turn,meta):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            exited.set()
+    monkeypatch.setattr(app.engine,'speak_meta',held)
+    async def go():
+        e = app.server.engine
+        await e.tick(app.clock.now())
+        await asyncio.wait_for(entered.wait(),2)
+        if block == 'window':
+            monkeypatch.setattr(app.clock,'local',lambda:app.clock._start.replace(hour=4))
+        elif block == 'lease':
+            app.server.lease._held = False
+        elif block == 'boss_5man':
+            monkeypatch.setattr(app.engine,'_in_boss_fight',lambda now:True)
+        else:
+            monkeypatch.setattr(app.engine.raid,'phase',lambda now:RaidPhase(block))
+        await e.tick(app.clock.now())
+        await finished(e)
+        assert exited.is_set()
+    run(go())
+    reason = block if block in {'window','lease'} else 'raid_hold'
+    assert json.loads(app.store.get_meta('server:recent'))[-1]['reason'] == reason
+
+
+def test_needs_claims_logs_once_per_local_day_without_blocking(app,monkeypatch,caplog):
+    app.engine.live_review.claims_enabled = False
+    async def go():
+        await app.server.engine.tick(app.clock.now())
+        await finished(app.server.engine)
+        await app.server.engine.tick(app.clock.now()+5)
+        assert len(app.turns) == 5
+        assert sum(r.message=='server_needs_claims' for r in caplog.records) == 1
+        tomorrow = app.clock.local().replace(day=app.clock.local().day+1)
+        monkeypatch.setattr(app.clock,'local',lambda:tomorrow)
+        await app.server.engine.tick(app.clock.now()+10)
+    run(go())
+    assert sum(r.message=='server_needs_claims' for r in caplog.records) == 2
+
+
+@pytest.mark.parametrize('server_on,claims_on', [(False,False),(True,True)])
+def test_no_claims_warning_when_server_is_off_or_claims_are_on(app,caplog,server_on,claims_on):
+    app.server.engine.config = replace(app.server.engine.config,enabled=server_on)
+    app.engine.live_review.claims_enabled = claims_on
+    async def go():
+        await app.server.engine.tick(app.clock.now())
+        await finished(app.server.engine)
+    run(go())
+    assert not any(r.message=='server_needs_claims' for r in caplog.records)
