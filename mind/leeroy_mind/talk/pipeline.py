@@ -2223,6 +2223,9 @@ class Pipeline:
         except Exception:
             log.exception("say_record_failed: guid=%d channel=%s", turn.speaker, turn.channel)
             return "record_error"
+        remember = getattr(self, 'remember_discord_photo', None)
+        if remember is not None and meta.discord is not None and meta.discord.reply_to is not None:
+            remember(turn.speaker, meta.discord.reply_to)
         return None
 
     def _dm_to_him(self, turn: Turn) -> None:

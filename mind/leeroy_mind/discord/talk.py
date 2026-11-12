@@ -144,6 +144,16 @@ class DiscordTalk:
         if self._held:
             self._until = self.app.clock.now() + LEASE_IDLE_S
 
+    def begin_photo(self) -> None:
+        """Pin the live model before the post's asynchronous vision step."""
+        self._take_lease()
+
+    def _photos(self, conn, ids):
+        if not getattr(self.app.engine, 'photos_enabled', False):
+            return {}
+        from .store import attachments
+        return attachments(conn, ids)
+
     # -- who answers -----------------------------------------------------------------------
 
     def plan(self, message_id: int) -> list[tuple[Turn, TurnMeta]]:
@@ -269,11 +279,14 @@ class DiscordTalk:
         """The latest `limit` messages of a store channel's feed (or of `thread`) as "Name: text",
         oldest first, each on one line (fold), deleted messages left out."""
         rows = conn.execute(
-            "SELECT author, text FROM discord_message WHERE channel = ? AND thread IS ? "
+            "SELECT author, text, id FROM discord_message WHERE channel = ? AND thread IS ? "
             "AND deleted IS NULL AND id != ? "
             "AND (turn IS NULL OR substr(turn,1,19)!='realism_correction:') ORDER BY id DESC LIMIT ?",
             (channel, thread, exclude, limit)).fetchall()
-        return [f"{self._name(a)}: {fold(t)}" for a, t in reversed(rows)]
+        from leeroy_mind.photos.look import photo_note
+        photos = self._photos(conn, [r[2] for r in rows])
+        return [f"{self._name(a)}: {fold(t)}" + (' ' + photo_note(photos[mid]['look']) if mid in photos else '')
+                for a, t, mid in reversed(rows)]
 
     def _name(self, g: int) -> str:
         app = self.app
@@ -293,15 +306,23 @@ class DiscordTalk:
         app, store = self.app, self.app.store
         cid = channel_id(place)
         reads = speaker in app.world.audience(place, from_guid=speaker, to_guid=app.human_guid)
+        if not reads:
+            return None
         with store.transaction():
-            row = store.conn.execute("SELECT text, deleted FROM discord_message WHERE id = ?",
-                                     (message,)).fetchone()
+            row = store.conn.execute("SELECT text, deleted FROM discord_message WHERE id = ? AND channel = ?",
+                                     (message, cid)).fetchone()
             if row is None or row[1] is not None:
                 return None
             lines = self.context_lines(store.conn, cid, thread, exclude=message) if reads else []
+            photo = self._photos(store.conn, [message]).get(message) if reads else None
         their = app.engine.human.forms[2]
         purpose = self.purpose_line(cid)
         tail = f"Answer {their} message: {_clip(fold(row[0]), HIS_CHARS)}"
+        if photo is not None:
+            subject, _, possessive = app.engine.human.forms
+            tail += ('\n' + f'{subject.capitalize()} posted a photo. What it shows: {photo["look"]}.'
+                     if photo['look'] else f"\n{subject.capitalize()} posted a photo you can't make out well.")
+            tail += f' It is {possessive} photo; do not assume {subject} is in it unless {subject} says so.'
         lines = [_clip(x, LINE_CHARS) for x in lines]
         while lines and len("\n".join([purpose, "Recent messages:", *lines, tail])) > (
                 INSTRUCTION_CHARS):
