@@ -127,8 +127,11 @@ def test_capture_needs_confirmed_rewrite_and_turn_ids_can_restart(rig):
     turn=Turn(TurnKind.REPLY_HUMAN,101,'guild')
     p=rig.engine.personas.get(101)
     first=TurnMeta('t1',guard_rewritten=True,guard_verdict='rewrite',preference_original='old draft')
-    ids=[rig.engine._record(turn,first,p,text,[]) for text in ('new first','new followup')]
-    later=TurnMeta('t1',guard_rewritten=True,guard_verdict='rewrite',preference_original='different old draft')
+    ids=[]
+    for text in ('new first','new followup'):
+        first.words=text
+        ids.append(rig.engine._record(turn,first,p,text,[]))
+    later=TurnMeta('t1',guard_rewritten=True,guard_verdict='rewrite',preference_original='different old draft',words='different new text')
     last=rig.engine._record(turn,later,p,'different new text',[])
     rows=rig.store.conn.execute('SELECT * FROM learn_rewrite ORDER BY first_line_id').fetchall()
     assert len(rows)==2 and [r['first_line_id'] for r in rows]==[ids[0],last]
@@ -143,7 +146,7 @@ def test_capture_needs_confirmed_rewrite_and_turn_ids_can_restart(rig):
 def test_guard_pairs_are_mined_only_with_a_sent_rewrite_receipt(rig):
     rig.engine.learn_enabled=True
     rig.engine.learn_capture_preferences=True
-    meta=TurnMeta('t1',guard_rewritten=True,guard_verdict='rewrite',preference_original='Original fixture answer.')
+    meta=TurnMeta('t1',guard_rewritten=True,guard_verdict='rewrite',preference_original='Original fixture answer.',words='Better fixture answer.')
     turn=Turn(TurnKind.REPLY_HUMAN,101,'guild')
     lid=rig.engine._record(turn,meta,rig.engine.personas.get(101),'Better fixture answer.',[])
     result=dataset.mine(rig.store.conn,rig.engine.human,since=0,until=rig.clock.now()+1)[0]

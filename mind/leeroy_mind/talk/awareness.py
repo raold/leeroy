@@ -248,11 +248,11 @@ class LiveReview:
                     self.vectors.popitem(last=False)
             else:
                 cached = {}
-            if getattr(e,'learn_capture_preferences',False) and cached:
+            if getattr(e,'learn_enabled',False) and getattr(e,'learn_capture_preferences',False) and cached:
                 try:
                     from leeroy_mind.learn.capture import vectors as capture_vectors
                     with e.store.transaction():
-                        capture_vectors(e.store.conn,context,cached,e.cfg.models.embedding)
+                        capture_vectors(e.store.conn,context,cached,e.cfg.models.embedding,channel=turn.channel)
                 except Exception:
                     log.warning('learn_vector_capture_failed')
             draft = self.draft(turn, meta, text, history=context, embedding=embedding)

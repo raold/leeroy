@@ -24,13 +24,31 @@ MAX_PAIRS=5000
 EXPLICIT=re.compile(r'\b(sex\w*|orgasm\w*|masturbat\w*|penetrat\w*|genitals?|erection\w*)\b',re.I)
 
 
-def output_dir(path):
-    target=Path(path).expanduser().resolve()
+def output_dir(path,*,data_dir=None):
+    raw=Path(os.path.abspath(Path(path).expanduser()))
+    linked=any(p.is_symlink() or p.is_junction() for p in (raw,*raw.parents))
+    target=raw.resolve()
+    scratch=(Path(data_dir).expanduser().resolve()/'scratch') if data_dir is not None else None
+    own_scratch=scratch is not None and target.is_relative_to(scratch)
+    requested_scratch=data_dir is not None and raw.is_relative_to(Path(os.path.abspath(Path(data_dir).expanduser()))/'scratch')
+    if (own_scratch or requested_scratch) and linked:
+        raise ValueError('learn_output_linked')
     # Resolve junctions/symlinks before checking every ancestor, including linked worktrees.
-    if any((parent/'.git').exists() for parent in (target,*target.parents)):
+    if not own_scratch and any((parent/'.git').exists() for parent in (target,*target.parents)):
         raise ValueError('learn_output_in_repository')
     target.mkdir(parents=True,exist_ok=True)
     return target
+
+
+def member_key(conn):
+    row=conn.execute("SELECT value FROM meta WHERE key='learn:member-hash-key'").fetchone()
+    try:
+        key=bytes.fromhex(row[0]) if row else b''
+    except (ValueError,TypeError):
+        key=b''
+    if len(key)!=32:
+        raise ValueError('learn_member_key_unavailable')
+    return key
 
 
 @contextmanager
@@ -95,6 +113,10 @@ def context_rows(conn,row,owner):
         if row['channel'] in ('party','raid','raid_warning') or row['channel'].startswith('voice:'):
             if readers(row)!=readers(other):
                 continue
+        if row['channel'] in ('say','yell','emote') and (
+                (row['map'],row['zone'])!=(other['map'],other['zone'])
+                or row['from_guid'] not in readers(other)):
+            continue
         out.append(other)
         if len(out)==6:
             break
@@ -102,6 +124,10 @@ def context_rows(conn,row,owner):
 
 
 def parent(conn,row,context,owner):
+    if is_discord(row['channel']):
+        receipt=conn.execute('SELECT value FROM meta WHERE key=?',(f"learn:discord-parent:{row['id']}",)).fetchone()
+        if receipt is not None:
+            return next((r for r in context if str(r['id'])==receipt[0] and r['from_guid']==owner),None)
     receipt=paired(conn,row)
     if receipt is not None and receipt['trigger_line']:
         return next((r for r in context if r['id']==receipt['trigger_line'] and r['from_guid']==owner),None)
@@ -168,7 +194,7 @@ def safe(pair,ident,include_overlay):
 
 def context_hash(history):
     return digest(json.dumps([(r['id'],r['ts'],r['from_guid'],r['to_guid'],r['text'],readers(r),
-                              r['channel'],r['origin'],r['thread_id'])
+                              r['channel'],r['origin'],r['thread_id'],r['map'],r['zone'])
                               for r in history],ensure_ascii=False))
 
 
@@ -178,7 +204,7 @@ def source_hash(row):
 
 
 def mine(conn,ident,*,since,until,include_private=False,include_overlay=False,salt=None):
-    salt=salt or os.urandom(32)
+    salt=salt or member_key(conn)
     rows=conn.execute("SELECT c.*,CASE WHEN r.scored_at<? THEN r.value END AS value FROM chat_line c LEFT JOIN talk_reward r ON r.line_id=c.id "
         "WHERE c.origin='mind' AND c.from_guid!=? AND c.ts>=? AND c.ts<? ORDER BY c.ts,c.id LIMIT ?",
         (until,ident.guid,since,until,MAX_LINES+1)).fetchall()
@@ -202,11 +228,11 @@ def mine(conn,ident,*,since,until,include_private=False,include_overlay=False,sa
     rows=[r for r in rows if r['id'] not in crossing]
     by_id={r['id']:r for r in rows}
     output,indices,seen=[],[],set()
-    def add(chosen,rejected,text,source):
+    def add(chosen,rejected,text,source,*,plain=None):
         if len(output)>=MAX_PAIRS:
             return
-        chosen_text=body(conn,chosen)
-        if not chosen_text or not text or chosen_text==text or max(len(chosen_text),len(text))>4000:
+        chosen_text=body(conn,chosen) if plain is None else plain
+        if not chosen_text or not text or ' '.join(chosen_text.split())==' '.join(text.split()) or max(len(chosen_text),len(text))>4000:
             return
         history=context_rows(conn,chosen,ident.guid)
         payload={'context':{'channel_kind':channel_kind(chosen['channel']),
@@ -223,7 +249,7 @@ def mine(conn,ident,*,since,until,include_private=False,include_overlay=False,sa
         seen.add(key)
         case_id=digest(str(chosen['id'])+':'+str(len(output)))[:20]
         output.append(payload)
-        indices.append({'id':case_id,'line_id':chosen['id'],'text_hash':digest(chosen_text),
+        indices.append({'id':case_id,'line_id':chosen['id'],'text_hash':digest(body(conn,chosen)),
                         'source_hash':source_hash(chosen),
                         'context_hash':context_hash(history),
                         'parent_id':(p['id'] if (p:=parent(conn,chosen,history,ident.guid)) is not None else None)})
@@ -233,7 +259,9 @@ def mine(conn,ident,*,since,until,include_private=False,include_overlay=False,sa
                 # Require a confirmed stored rewritten utterance, never a refused draft.
                 sent=paired(conn,chosen)
                 if sent is not None and sent['dropped'] is None and sent['guard_rewritten'] and sent['guard_verdict']=='rewrite':
-                    add(chosen,None,receipt['original'],'guard_rewrite')
+                    plain=' '.join(r[0] for r in conn.execute(
+                        'SELECT plain FROM learn_rewrite_line WHERE generation=? ORDER BY line_id',(receipt['generation'],)))
+                    add(chosen,None,' '.join(receipt['original'].split()),'guard_rewrite',plain=plain)
     votes={}
     for lid,value in conn.execute("SELECT line_id,value FROM talk_signal WHERE source='explicit' "
                                   "AND kind='explicit' AND ts<?",(until,)):

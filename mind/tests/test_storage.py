@@ -629,6 +629,7 @@ def test_snapshot_is_a_usable_copy_of_committed_data_only(tmp_path, store):
 
 
 def test_snapshot_with_concurrent_writer_connection(tmp_path, store):
+    initial = dict(store.conn.execute('SELECT key,value FROM meta'))
     store.set_meta("a", "1")
     other = sqlite3.connect(tmp_path / "mind.db", timeout=5)
     try:
@@ -639,7 +640,7 @@ def test_snapshot_with_concurrent_writer_connection(tmp_path, store):
         other.close()
     c = sqlite3.connect(p)
     try:
-        assert dict(c.execute("select key, value from meta").fetchall()) == {"a": "1", "b": "2"}
+        assert dict(c.execute("select key, value from meta").fetchall()) == initial | {"a": "1", "b": "2"}
     finally:
         c.close()
 
@@ -652,6 +653,7 @@ def test_snapshot_default_now_and_label_sanitised(tmp_path, store):
 def test_close_truncates_wal(tmp_path, clock):
     path = tmp_path / "mind.db"
     s = Store(open_db(path), clock=clock)
+    initial = dict(s.conn.execute('SELECT key,value FROM meta'))
     wal = Path(str(path) + "-wal")
     try:
         s.set_meta("k", "v")
@@ -665,7 +667,7 @@ def test_close_truncates_wal(tmp_path, clock):
     assert not wal.exists() or wal.stat().st_size == 0
     c = open_db(path)
     try:
-        assert c.execute("select count(*) from meta").fetchone()[0] == 2
+        assert dict(c.execute('SELECT key,value FROM meta')) == initial | {'k':'v','k2':'v'}
     finally:
         c.close()
 

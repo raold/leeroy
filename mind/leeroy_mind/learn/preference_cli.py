@@ -3,7 +3,6 @@ import json
 import argparse
 from pathlib import Path
 import sys
-import tempfile
 import time
 import uuid
 from leeroy_mind.config import load_config
@@ -33,7 +32,8 @@ def run(args,root):
     try:
         with private_logs():
             cfg=load_config(root/'mind.toml')
-            with dataset.snapshot(root,tempfile.gettempdir()) as conn:
+            scratch=dataset.output_dir(root/'scratch',data_dir=root)
+            with dataset.snapshot(root,scratch) as conn:
                 store=Store(conn,clock=SystemClock())
                 owner=int(store.get_meta('human_guid') or 0)
                 if owner<=0:
@@ -54,7 +54,7 @@ def run(args,root):
                 now=time.time()
                 until=now if args.action=='evalset' else now-7*dataset.DAY
                 since=now-(7 if args.action=='evalset' else args.since)*dataset.DAY
-                target=dataset.output_dir(args.out or root/'scratch'/('learn-eval-'+uuid.uuid4().hex[:12]))
+                target=dataset.output_dir(args.out or scratch/('learn-eval-'+uuid.uuid4().hex[:12]),data_dir=root)
                 names=['pairs.jsonl','manifest.json']+(['index.jsonl'] if args.action=='evalset' else [])
                 if any((target/name).exists() for name in names):
                     raise ValueError('learn_output_exists')
@@ -75,6 +75,7 @@ def run(args,root):
                 return 0
     except Exception as error:
         known={'learn_output_in_repository','learn_output_exists','learn_days_invalid','learn_owner_unavailable',
+               'learn_output_linked','learn_member_key_unavailable',
                'learn_eval_manifest_invalid','learn_eval_source_changed','learn_candidate_invalid',
                'learn_candidate_embedding_invalid','learn_input_too_large','learn_input_line_too_large'}
         print(str(error) if type(error) is ValueError and str(error) in known else 'learn_dataset_failed',file=sys.stderr)

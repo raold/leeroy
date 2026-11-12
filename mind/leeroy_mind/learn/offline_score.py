@@ -1,5 +1,7 @@
 """Replay candidate outputs through the existing four-detector guard adapter, offline."""
 import json
+from contextlib import contextmanager
+from leeroy_mind.guards.review import day
 from leeroy_mind.discord.channels import is_discord,is_private,channel_id
 from leeroy_mind.discord.layout import dm_peer
 from leeroy_mind.guards import Draft,GuardStores,HistoryLine,review
@@ -9,6 +11,29 @@ from leeroy_mind.claims.store import vector as check_vector
 from leeroy_mind.storage.rows import pack_vec
 from . import dataset
 from .capture import digest
+
+
+@contextmanager
+def prior_receipts(conn,row):
+    """Temporarily fence the owned snapshot's ledger to confirmed earlier deliveries.
+
+    Live receipts hash line-<id>. Unmapped receipts cannot prove a historical use.
+    The savepoint restores even on a failed detector and never changes the source DB.
+    """
+    key=f"guards:sent:{day(row['ts'])}:{row['from_guid']}"
+    saved=conn.execute('SELECT value FROM meta WHERE key=?',(key,)).fetchone()
+    known={digest(f'line-{r[0]}') for r in conn.execute(
+        "SELECT id FROM chat_line WHERE from_guid=? AND origin='mind' AND "
+        '(ts<? OR (ts=? AND id<?))',(row['from_guid'],row['ts'],row['ts'],row['id']))}
+    receipts=json.loads(saved[0]) if saved else {}
+    earlier={k:v for k,v in receipts.items() if k in known}
+    conn.execute('SAVEPOINT learn_historical_rations')
+    try:
+        conn.execute('UPDATE meta SET value=? WHERE key=?',(json.dumps(earlier),key))
+        yield
+    finally:
+        conn.execute('ROLLBACK TO learn_historical_rations')
+        conn.execute('RELEASE learn_historical_rations')
 
 
 def read_jsonl(path):
@@ -67,9 +92,10 @@ def score(conn,indices,candidates,*,owner,model_hash,include_private=False):
         draft=Draft(row['from_guid'],kind,candidate['text'],parent_id=case['parent_id'],
                     thread_ids=tuple(r['id'] for r in history),embedding=embedded,to_guid=row['to_guid'],
                     room=room,now=row['ts'],map=row['map'],zone=row['zone'],line_id=row['id'])
-        verdict=review(GuardStores(conn,GuardsCfg(enabled=True,semantic_enabled=embedded is not None),
-                                  claims_enabled=embedded is not None,history=external if is_discord(channel) else (),
-                                  vectors=vectors,facts=facts),draft)
+        with prior_receipts(conn,row):
+            verdict=review(GuardStores(conn,GuardsCfg(enabled=True,semantic_enabled=embedded is not None),
+                                      claims_enabled=embedded is not None,history=external if is_discord(channel) else (),
+                                      vectors=vectors,facts=facts),draft)
         results.append({'id':candidate['id'],'action':verdict.action,'codes':list(verdict.codes),
             'scores':{s.code:s.value for s in verdict.scores},
             'semantic_embedding':embedded is not None,
@@ -77,4 +103,4 @@ def score(conn,indices,candidates,*,owner,model_hash,include_private=False):
     return {'cases':len(results),'missing_candidates':len(by_id)-len(results),'results':results,
             'coverage':{'candidate_embeddings':sum(r['semantic_embedding'] for r in results),
                         'parent_embeddings':sum(r['parent_embedding'] for r in results)},
-            'note':'Lexical checks always run; semantic relevance and contradiction need supplied matching embeddings. World checks have narrow coverage.'}
+            'note':'Lexical checks always run; semantic relevance and contradiction need supplied matching embeddings. Rations use only mapped earlier delivery receipts; expired or unmapped receipts have no coverage. World checks have narrow coverage.'}

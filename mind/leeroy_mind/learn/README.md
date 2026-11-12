@@ -120,6 +120,12 @@ Preference export, held-out evaluation, optional guard-evidence capture and the
 manual training outline are documented in [FINETUNE.md](FINETUNE.md). All export
 and scoring commands operate on a scratch backup without source writes or model
 calls; capture is separately opt-in and does not train or alter talk decisions.
+Snapshots live in the data directory's scratch folder and are always removed.
+Guard pairs contain plain text on both sides; an owed fallback to the original
+is not a rewrite. Discord parent IDs are resolved before vector attribution.
+Offline ration checks use only mapped earlier delivery receipts; expired or
+unmapped receipts have no coverage. Private capture expires after 90 days in
+the reward night, and capture errors cannot roll back recipes.
 
 The central outgoing-line commit writes its recipe in the same transaction as
 `chat_line`. Its primary key permits only one recipe per line. This includes

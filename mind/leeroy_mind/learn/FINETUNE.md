@@ -13,23 +13,28 @@ python -m leeroy_mind learn evalset --data-dir F:/private-mind-data --out F:/pri
 ```
 
 `export` excludes the last seven days; `evalset` uses only those seven days.
-Both mine a temporary SQLite backup, then remove it. They never migrate or write
+Both mine a temporary SQLite backup in the data directory's scratch folder, then
+remove it even on failure. They never migrate or write
 the source database. Each output directory contains `pairs.jsonl` and a manifest;
 evaluation also has an ID-to-source index. Output files are created exclusively,
-so reruns need a new directory. Any path inside a Git checkout, including a linked
-worktree or a symlink into one, is refused. The default eval directory is under
-the data directory's scratch folder; if that is inside a checkout, pass an
-explicit outside path with `--out`.
+so reruns need a new directory. The data directory's own scratch folder is allowed
+inside a checkout, with no symlinks or junctions on its path. Every other checkout
+path is refused. The default eval directory is under that scratch folder.
 
 A pair has `context`, `chosen`, `rejected`, `source`, and `member_guid_hash`.
 Context contains up to six prior lines in the same room, channel kind and a
 name-free persona summary (age, gender, typing and trait scores), with no system
-prompt. Member hashes use a fresh random key for each export. This is private
+prompt. Local say/yell/emote context requires the same map/zone and captured
+visibility to the member. Member hashes use one private per-install key created
+by the capture migration in meta, so training and evaluation can join members.
+The key is never exported. This is private
 conversation data, not an anonymous public dataset. Evaluation pairs add an `id`.
 
 Sources, in precedence order when the same pair qualifies twice:
 
-- A stored rejected guard draft and the rewrite that was actually delivered.
+- A stored rejected guard draft and the rewrite that was actually delivered,
+  both plain text with the same whitespace joining. Fallbacks delivering the
+  original and equal normalized pairs are excluded.
 - Up/down votes for the same member and channel kind within seven days; exact
   Discord/voice rooms, private pairs and group audiences stay separate.
 - Rewards at least 0.5 versus at most 0, with parent-line cosine at least 0.8.
@@ -40,7 +45,11 @@ No original draft or embedding is reconstructed. To retain future evidence,
 explicitly set `[learn] enabled = true` and `capture_preferences = true`, then
 restart the mind. Capture defaults off. It records acknowledged rewrites and
 reuses parent/context embeddings already computed by enabled semantic guards;
-it makes no extra model request. Plain lexical guards provide no vectors. Old
+it makes no extra model request. Plain lexical guards provide no vectors.
+Discord parent vectors resolve through the desk's message-to-chat mapping;
+new captured replies preserve their parent chat id. The reward night prunes
+drafts, plain rewrite fragments, parent receipts and vectors after 90 days.
+Capture failures have their own savepoint and do not undo the line's recipe. Old
 history without this evidence can still produce vote pairs. Burst membership,
 when installed, pools fragment votes and supplies the whole delivered generation;
 a generation crossing the train/held-out boundary is omitted.

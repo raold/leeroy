@@ -1525,6 +1525,8 @@ class Pipeline:
         def fallback():
             meta.guard_verdict = best[2]
             meta.guard_codes = best[3]
+            if ' '.join(' '.join(s.plain for s in best[1]).split()) == ' '.join(meta.preference_original.split()):
+                meta.preference_original = ''
             return best[1]
         def drop(code):
             return self._drop(turn,meta,code,meta.memory_ids)
@@ -1557,7 +1559,7 @@ class Pipeline:
                     return drop("guard_rewrite_refused")
                 meta.guard_rewritten = True
                 if getattr(self,'learn_capture_preferences',False):
-                    meta.preference_original = '\n'.join(s.plain for s in lines)[:4001]
+                    meta.preference_original = ' '.join(s.plain for s in lines)[:4001]
                 composed = composed or await self._compose(turn, meta, live=True)
                 hint = "Rewrite once to fix these guard codes: " + ", ".join(verdict.codes)
                 retry = replace(composed, messages=[*composed.messages,
@@ -2282,11 +2284,17 @@ class Pipeline:
                     try:
                         with self.store.transaction():
                             record_recipe(self.store.conn, line_id, turn, meta, p, self.cfg)
-                            if getattr(self,'learn_capture_preferences',False):
-                                from leeroy_mind.learn.capture import delivered
-                                delivered(self.store.conn,line_id,meta)
                     except Exception:
                         log.warning("learn_recipe_record_failed")
+                    if getattr(self,'learn_capture_preferences',False):
+                        try:
+                            with self.store.transaction():
+                                from leeroy_mind.learn.capture import delivered
+                                if discord_id is not None:
+                                    self.store.set_meta(f'discord:line:{discord_id}',str(line_id))
+                                delivered(self.store.conn,line_id,meta)
+                        except Exception:
+                            log.warning('learn_preference_capture_failed')
         else:
             line_id = self.store.insert_chat_line(chat, session_id=sid, origin="mind", audience=audience)
         if self.cfg.talk.realism:
