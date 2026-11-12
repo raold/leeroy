@@ -135,6 +135,16 @@ export class Feed {
     gone.forEach((id) => { this.more.set(this.where.get(id), true); });
     this.drop(gone);
     this.upsert(chat);
+    // A thread the snapshot cut whose newest line here is older than its index's (set first, from
+    // the same snapshot): it is behind, and history reads only backward, so its window is let go
+    // and read again from its newest line when it opens
+    cutViews.forEach((v) => {
+      var m = this.views.get(v), k = v.indexOf("w:") === 0 ? this.index.get(Number(v.slice(2))) : null;
+      if (!m || !k || Math.max.apply(null, Array.from(m.keys())) >= k.last.id) { return; }
+      Array.from(m.keys()).forEach((id) => { this._remove(id); });
+      this.more.delete(v);
+      this.held.delete(v);
+    });
     return true;
   }
   // Every member he ever whispered with ({guid, name, last}, the console's `threads`); null (it

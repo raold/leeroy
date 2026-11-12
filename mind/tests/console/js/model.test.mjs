@@ -415,3 +415,19 @@ test("live whispers keep the thread list current, also after a thread's lines ar
   f.drop([3002]);
   assert.equal(f.threads().some(function (x) { return x.guid === 1105; }), false);
 });
+
+test("a thread the snapshot left out while it moved on is read again from its newest line", () => {
+  var f = new Feed({ human: HIM });
+  f.adopt([toHim(1, 1101)], 0);
+  f.older("w:1101", { lines: [], more: false });
+  // Reconnect: 1101 wrote again (id 2), then other threads filled the snapshot's whisper budget
+  f.setThreads([{ guid: 1101, name: "Arkon", last: toHim(2, 1101) }, { guid: 1102, name: "Bexley", last: toHim(9, 1102) }]);
+  f.adopt([toHim(9, 1102)], 0, ["w:1101", "w:1102"]);
+  assert.deepEqual(f.lines("w:1101"), []);       // let go, so opening it reads from its newest line
+  assert.equal(f.known("w:1101"), false);
+  assert.equal(f.threads()[1].last.id, 2);       // still listed, with its newest line
+  // A cut thread that is not behind keeps its lines
+  f.older("w:1101", { lines: [toHim(1, 1101), toHim(2, 1101)], more: false }, 0);
+  f.adopt([toHim(9, 1102)], 0, ["w:1101", "w:1102"]);
+  assert.deepEqual(ids(f.lines("w:1101")), [1, 2]);
+});
