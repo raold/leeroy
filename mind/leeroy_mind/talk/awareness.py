@@ -68,6 +68,9 @@ class Observed:
     officer: bool
     world: object
     human: int
+    server: bool = False
+    here: tuple[str, ...] = ()
+    self_line: str = ''
 
 
 def place(turn, meta):
@@ -162,7 +165,9 @@ class LiveReview:
         return Draft(turn.speaker, channel, text, parent_id=parent,
             thread_ids=tuple(h.id for h in history[-16:]), embedding=embedding,
             to_guid=to, room=room, now=e.clock.now(), map=0 if is_discord(turn.channel) else getattr(member, "map", 0),
-            zone=0 if is_discord(turn.channel) else getattr(member, "zone", 0), real_answer_due=self.owed(turn,meta))
+            zone=0 if is_discord(turn.channel) else getattr(member, "zone", 0), real_answer_due=self.owed(turn,meta),
+            server=bool(getattr(e,'server_app',None) is not None and is_discord(turn.channel)
+                        and meta.why.startswith('server:')), anchor=meta.server_anchor)
 
     def owed(self,turn,meta):
         from leeroy_mind.talk.turns import TurnKind
@@ -181,8 +186,18 @@ class LiveReview:
         readers = tuple(e.world.audience(raw,from_guid=turn.speaker,to_guid=to,zone=getattr(member,"zone",0)))
         world = SimpleNamespace(members=dict(e.world.members),online=frozenset(e.world.online),
                                 group=e.world.group,human_guid=e.world.human_guid)
+        app = getattr(e, 'server_app', None)
+        server = app is not None and app.server is not None
+        here, self_line = (), ''
+        if server and is_discord(raw):
+            from leeroy_mind.server.state import state_of
+            state = state_of(app, turn.speaker, e.clock.now())
+            members = e.world.discord_members()
+            here = tuple(members[g].name for g in state.with_her[:6] if g in members)
+            self_line = (f"You're {state.presence.state}" + (f' ({state.status})' if state.status else '')
+                         + (', playing WoW' if state.presence.playing else ', not playing WoW'))
         return Observed(self.draft(turn,meta,""),raw,to,readers,bool(e.world.is_officer(turn.speaker)),
-                        world,e.human.guid)
+                        world,e.human.guid,server,here,self_line)
 
     def history(self, turn, meta, conn=None, *, observed=None):
         e = self.engine
@@ -196,8 +211,8 @@ class LiveReview:
             cid = channel_id(turn.channel)
             readers = observed.readers
             rows = conn.execute("SELECT id,ts,author,text,thread,origin FROM discord_message "
-                "WHERE channel=? AND deleted IS NULL AND ts<=? ORDER BY id DESC LIMIT 128",
-                (cid, now)).fetchall()[::-1]
+                "WHERE channel=? AND deleted IS NULL AND ts BETWEEN ? AND ? ORDER BY id DESC LIMIT ?",
+                (cid, now-86400 if draft.server else float('-inf'), now, 50 if draft.server else 128)).fetchall()[::-1]
             # A parent can predate the bounded history. Add it explicitly, in this channel only.
             if draft.parent_id and not any(r[0] == draft.parent_id for r in rows):
                 rows = [*conn.execute("SELECT id,ts,author,text,thread,origin FROM discord_message "
@@ -211,6 +226,18 @@ class LiveReview:
             parent = next((h for h in history if h.id == draft.parent_id), None)
             if parent is not None and parent not in context:
                 context = (parent, *context[-15:])
+            if draft.server:
+                # Only this author's all-channel lines; these are guard evidence,
+                # never added to the model's context or the awareness card.
+                own = conn.execute('SELECT id,ts,author,text,thread,channel FROM discord_message '
+                    "WHERE author=? AND origin='mind' AND deleted IS NULL AND ts BETWEEN ? AND ? "
+                    'ORDER BY ts DESC,id DESC LIMIT 64', (turn.speaker,now-self.config.repeat_seconds,now)).fetchall()[::-1]
+                seen = {h.id for h in history}
+                extra = tuple(HistoryLine(r[0],r[1],r[2],r[3],
+                    'dm' if is_private(r[5]) else 'discord', observed.human if is_private(r[5]) else 0,
+                    str(layout.dm_peer(r[5])) if is_private(r[5]) else r[5],r[4],readers=(turn.speaker,),own_repeat_only=True)
+                    for r in own if r[0] not in seen)
+                history = (*history,*extra)
             return history, context
         # SQL snapshots carry the audience captured when each line was stored.
         raw = observed.raw
@@ -274,7 +301,8 @@ class LiveReview:
         context = CardContext(channel=raw, to_guid=to, readers=readers, purpose=purpose,
             thread=tuple(item(h) for h in history[-8:]), reply_to=parent, pins=pins,
             discord_events=tuple(events[-4:]), now=now,names=names,
-            romance_activities=bond[0], jealousy=bond[1])
+            romance_activities=bond[0], jealousy=bond[1], server=observed.server,
+            here=observed.here, self_line=observed.self_line)
         observation = card(CardSources(conn,world=observed.world),turn.speaker,context=context)
         def clean(text):
             if not close:
@@ -297,9 +325,13 @@ class LiveReview:
             if not is_discord(turn.channel) and e.clock.now() - self.facts_at >= 60:
                 self.facts = await self.read(load_facts)
                 self.facts_at = e.clock.now()
-            embedding = None
-            if self.config.semantic_enabled or self.claims_enabled:
-                texts = [text, *(h.text for h in context if self.config.semantic_enabled)]
+            embedding, anchor_embedding = None, None
+            semantic = self.config.semantic_enabled or observed.draft.server
+            if semantic or self.claims_enabled:
+                compared = history if observed.draft.server else context if semantic else ()
+                texts = [text, *(h.text for h in compared)]
+                if observed.draft.server and observed.draft.anchor:
+                    texts.append(observed.draft.anchor)
                 keys = [hashlib.sha256(t.encode()).digest() for t in texts]
                 missing = list(dict.fromkeys(k for k in keys if k not in self.vectors))
                 if missing:
@@ -310,7 +342,9 @@ class LiveReview:
                         raise ValueError("guard_vectors_missing")
                     self.vectors.update(zip(missing, vectors))
                 embedding = self.vectors[keys[0]]
-                cached = {h.id: self.vectors[k] for h, k in zip(context, keys[1:])}
+                cached = {h.id: self.vectors[k] for h, k in zip(compared, keys[1:])}
+                if observed.draft.server and observed.draft.anchor:
+                    anchor_embedding = self.vectors[keys[-1]]
                 history = tuple(replace(h, embedding=cached.get(h.id)) for h in history)
                 while len(self.vectors) > 512:
                     self.vectors.popitem(last=False)
@@ -323,10 +357,11 @@ class LiveReview:
                         capture_vectors(e.store.conn,context,cached,e.cfg.models.embedding,channel=turn.channel)
                 except Exception:
                     log.warning('learn_vector_capture_failed')
-            draft = replace(observed.draft,text=text,thread_ids=tuple(h.id for h in context[-16:]),embedding=embedding)
+            draft = replace(observed.draft,text=text,thread_ids=tuple(h.id for h in context[-16:]),
+                            embedding=embedding,anchor_embedding=anchor_embedding)
             verdict = await self.read(lambda conn:review(GuardStores(conn,self.config_for(meta),self.claims_enabled,
                 history if is_discord(turn.channel) else (),cached if not is_discord(turn.channel) else {},
-                None if is_discord(turn.channel) else self.facts,e.clock),draft))
+                None if is_discord(turn.channel) else self.facts,e.clock, cross_medium=observed.server),draft))
             meta.guard_codes = verdict.codes
             if verdict.action != "send" or meta.guard_verdict != "failed_open":
                 meta.guard_verdict = "rewrite" if verdict.action == "send" and meta.guard_rewritten else verdict.action
@@ -334,7 +369,8 @@ class LiveReview:
                      ",".join(verdict.codes))
             return verdict
         except Exception:
-            if meta.review_required:
+            if meta.review_required or (getattr(e,'server_app',None) is not None
+                    and is_discord(turn.channel) and meta.why.startswith('server:')):
                 meta.guard_verdict = "drop"
                 log.warning("guard_review_unavailable guid=%d", turn.speaker)
                 return Verdict("drop", ("review_unavailable",))

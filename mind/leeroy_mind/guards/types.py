@@ -22,6 +22,9 @@ class Draft:
     real_answer_due: bool = False
     # Only replay supplies this: an already-stored candidate must not match itself.
     line_id: int | None = None
+    anchor: str = field(default='', repr=False)
+    server: bool = False
+    anchor_embedding: bytes | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -37,6 +40,7 @@ class HistoryLine:
     embedding: bytes | None = field(default=None, repr=False)
     readers: tuple[int, ...] | None = None
     origin: str = 'mind'
+    own_repeat_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -51,6 +55,7 @@ class GuardStores:
     # An already-loaded eval.talk.unawareness.Facts snapshot, never loaded per draft.
     facts: object | None = field(default=None, repr=False)
     clock: object | None = None
+    cross_medium: bool = False
 
 
 @dataclass(frozen=True)

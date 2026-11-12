@@ -106,6 +106,7 @@ class RaidNight:
         self.state = State.IDLE
         self.session = None
         self.run = None
+        self._forming_members = frozenset()
         self._listeners = []
         self._lock = asyncio.Lock()
         self._epoch = 0
@@ -218,6 +219,7 @@ class RaidNight:
             self._call_due = None
 
     def _end(self, outcome):
+        self._forming_members = frozenset()
         forming = self.state is State.FORMING and self._forming_group
         if self.run is not None and hasattr(self.ports, "invalidate_run"):
             self.ports.invalidate_run(self.run)
@@ -493,6 +495,7 @@ class RaidNight:
         return on_time, late
 
     async def _form(self, epoch):
+        self._forming_members = frozenset()
         pick = self._pick
         raid = CATALOG[pick.raid_key]
         formed = False
@@ -521,6 +524,7 @@ class RaidNight:
             required = {leaders.tank_guid, leaders.lead_guid, leaders.loot_guid} - {self.ports.human_guid}
             comp = select_comp(pick.size, candidates, must_include=sorted(required), human_in_raid=True,
                                seed=self.rng.getrandbits(64))
+            self._forming_members = frozenset(comp.members)
             members, bench = list(comp.members), list(comp.bench)
             by_guid = {c.guid: c for c in candidates}
             clear = ClearLockout(uuid4().hex, raid.map_id, tuple([*members, self.ports.human_guid]))
@@ -555,6 +559,7 @@ class RaidNight:
                     raise _Failed("a required officer could not join")
                 missing = [g for g in members if g not in accepted]
                 members = [g for g in members if g in accepted]
+                self._forming_members = frozenset(members)
                 if attempt == 0 and missing:
                     additions = []
                     for missing_guid in missing:
@@ -564,6 +569,7 @@ class RaidNight:
                             additions.append(replacement)
                             bench.remove(replacement)
                     if set(members) != accepted:
+                        self._forming_members = frozenset(members)
                         await self._send(ClearLockout(uuid4().hex, raid.map_id, tuple(additions)), epoch)
                         continue
                 break

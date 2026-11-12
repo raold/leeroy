@@ -67,10 +67,12 @@ def _personas(conn) -> dict:
     return out
 
 
-def _members(conn, owner_now: datetime, trial_rank: int, human: int) -> list[dict]:
+def _members(conn, owner_now: datetime, trial_rank: int, human: int, *, server=False) -> list[dict]:
     """The cast as the mind's Discord audience has it (WorldView.audience): level
     CAST_MIN_LEVEL or more, and not him (the stored roster keeps his own row)."""
     personas = _personas(conn)
+    from leeroy_mind.server.state import read_play
+    playing = read_play(conn, owner_now.timestamp()) if server else frozenset()
     out = []
     for r in views.rows(conn, "SELECT guid, name, race, class, gender, level, rank, online, map, "
                               "zone, spec_tab FROM cast_member WHERE guid != ? AND level >= ? "
@@ -87,7 +89,8 @@ def _members(conn, owner_now: datetime, trial_rank: int, human: int) -> list[dic
         else:
             state = presence.presence_of(
                 p, local=presence.local_time(owner_now, p.identity.region),
-                body_online=bool(r["online"]), body_zone=r["zone"], rng_seed=presence.RNG_SEED)
+                body_online=bool(r["online"]), body_zone=r["zone"], rng_seed=presence.RNG_SEED,
+                in_his_group=r['guid'] in playing)
         try:
             ckey = layout.class_key(r["class"])
         except KeyError:
@@ -97,6 +100,10 @@ def _members(conn, owner_now: datetime, trial_rank: int, human: int) -> list[dic
                     "persona": p is not None,
                     "presence": {"state": state.state, "playing": state.playing,
                                  "zone": state.zone}})
+        if server:
+            out[-1]['status'] = presence.status_text(p,
+                presence.local_time(owner_now, p.identity.region), state,
+                rng_seed=presence.RNG_SEED) if p is not None else None
     return out
 
 
@@ -128,7 +135,8 @@ def last_by_channel(conn) -> dict[str, int]:
 
 
 def discord_view(conn, *, owner_now: datetime, trial_rank: int, channel: str | None = None,
-                 after: int = 0, thread: int | None = None, read_marks: dict | None = None) -> dict:
+                 after: int = 0, thread: int | None = None, read_marks: dict | None = None,
+                 server: bool = False) -> dict:
     have = views.tables(conn)
     missing = [t for t in DISCORD_TABLES if t not in have]
     last = last_by_channel(conn) if "discord_message" in have else {}
@@ -139,7 +147,7 @@ def discord_view(conn, *, owner_now: datetime, trial_rank: int, channel: str | N
     names = views.names(conn)
     human = human_guid(conn)
     hname = views.rows(conn, "SELECT value FROM meta WHERE key = 'human_name'")
-    members = _members(conn, owner_now, trial_rank, human)
+    members = _members(conn, owner_now, trial_rank, human, server=server)
     out = {
         "categories": [
             {"key": k, "name": layout.CATEGORY_NAMES[k],

@@ -360,6 +360,7 @@ class TurnMeta:
     review_required: bool = False  # opt-in sources require their card and deterministic guards
     single_line: bool = False  # a bounded multi-member conversation owns its line count
     keep_channel: bool = False  # a public thread must stay on its chosen transport
+    server_anchor: str = ''
 
 
 class _ScopeChanged(SchedulerError):

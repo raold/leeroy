@@ -1,5 +1,6 @@
 """Model-free candidate review. No commits, migrations, logging or send hooks."""
 from collections import Counter, defaultdict
+from dataclasses import replace
 from datetime import date, timedelta
 import hashlib
 import json
@@ -9,6 +10,7 @@ import sqlite3
 import time
 
 from leeroy_mind.claims.store import vector as checked_vector
+from leeroy_mind.claims.visibility import claim_visible
 from leeroy_mind.discord.channels import channel_id, discord_sql, is_discord, is_private
 from leeroy_mind.discord.layout import dm_peer
 from leeroy_mind.discord.text import is_emoji_message
@@ -29,15 +31,27 @@ REACTIONS = ('👍', '😄')
 _CHANNELS = frozenset({'guild', 'officer', 'whisper', 'game', 'discord', 'dm', 'voice'})
 _GAME = frozenset({'party', 'raid', 'raid_warning', 'say', 'yell', 'emote'})
 DROP_CODES = frozenset({'empty', 'own_repeat_same_channel', 'own_repeat_cross_channel',
-                        'repeated_topic', 'nothing_new'})
+                        'repeated_topic', 'nothing_new', 'own_repeat_discord', 'channel_repeat', 'filler_opener'})
+FILLER = {'agree': ({'same','agreed','true','this','yeah','yep','ya','+1','facts','fr'}, '👍'),
+          'laugh': ({'lol','lmao','lulz','rofl','haha','hahaha','hehe','kek'}, '😂'),
+          'grats': ({'gz','grats','gratz','congrats','nice','gg'}, '🎉'),
+          'thanks': ({'ty','thx','thanks','tyty'}, '❤️'),
+          'sympathy': ({'rip','oof','f','ouch'}, '🫡')}
 
 
 def _action(codes):
-    if any(code not in DROP_CODES and code != 'filler_after_question' for code in codes):
+    if any(code not in DROP_CODES and code not in ('filler_after_question','server_filler') for code in codes):
         return 'rewrite'
     if any(code in DROP_CODES for code in codes):
         return 'drop'
-    return 'react' if 'filler_after_question' in codes else 'send'
+    return 'react' if any(c in codes for c in ('filler_after_question','server_filler')) else 'send'
+
+
+def _server_filler(text):
+    tokens = re.findall(r'\+1|\w+', text.casefold())
+    if 0 < len(tokens) <= 4:
+        return next((emoji for tokenset,emoji in FILLER.values() if set(tokens) <= tokenset), None)
+    return None
 
 
 def _old_schema(exc):
@@ -156,7 +170,8 @@ def _history(reader, stores, draft, now, officer):
             (json.dumps(ids), now-nonsequitur.CONTEXT_SECONDS, now, cutoff)))
     found = {('db', row['id']): _line(row, stores.vectors) for rows in groups for row in rows}
     for line in stores.history[-(OWN_LINES+GUILD_LINES+CONTEXT_LINES):]:
-        found[(line.channel, line.room, line.id)] = line
+        if not line.own_repeat_only:
+            found[(line.channel, line.room, line.id)] = line
     # Keep source windows independent. Each consumer below applies its own lower
     # bound; a short own-repeat window must not erase valid parent/evening evidence.
     return sorted((line for line in found.values() if line.ts <= now
@@ -179,9 +194,9 @@ def _context(history, draft, now):
     return parent, recent
 
 
-def _pairs(text, vector, history, cfg):
+def _pairs(text, vector, history, cfg, *, minimum=repetition.MIN_WORDS):
     tokens = words(text)
-    if len(tokens) < repetition.MIN_WORDS:
+    if len(tokens) < minimum:
         return []
     mine = repetition.ngrams(tokens)
     hits = []
@@ -286,7 +301,14 @@ def _claim_hits(reader, stores, draft, now, officer):
             continue
         if (row['line_id'] is not None and row['ts'] <= now
                 and (row['source'] == 'owner' or row['source'] == 'chat' and row['from_guid'] == draft.guid)):
-            if _visible(_line(dict(row, id=row['line_id'], text=''), {}), draft, officer):
+            raw = ('discord:' + draft.room if draft.channel == 'discord' else
+                   'dm:' + draft.room if draft.channel == 'dm' else
+                   'voice:' + draft.room if draft.channel == 'voice' else
+                   draft.room if draft.channel == 'game' else draft.channel)
+            line = _line(dict(row, id=row['line_id'], text=''), {})
+            if claim_visible(source_channel=row['channel'], source_from=row['from_guid'],
+                    source_to=row['to_guid'], source_readers=line.readers, draft_channel=raw,
+                    speaker=draft.guid, to_guid=draft.to_guid, officer=officer, cross_medium=stores.cross_medium):
                 visible.add(row['id'])
     return [hit for hit in found if hit.claim_id in visible]
 
@@ -302,12 +324,33 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
     if not words(draft.text) and not (draft.channel in {'discord', 'dm'} and is_emoji_message(draft.text)):
         return Verdict('drop', ('empty',))
     cfg, reader = stores.config, Reader(stores.conn)
+    if draft.server:
+        cfg = replace(cfg, semantic_enabled=True)
     role = reader.rows('role_unavailable', "SELECT json_extract(json,'$.play.guild_role') AS role "
                        'FROM persona_core WHERE guid=? AND json_valid(json)', (draft.guid,))
     officer = bool(role and role[0]['role'] == 'officer')
     history = _history(reader, stores, draft, now, officer)
     parent, thread = _context(history, draft, now)
     scores, refs, rewrite, drop = [], [], [], []
+    server_reaction = _server_filler(draft.text) if draft.server else None
+    if draft.server:
+        # The all-channel shelf is only for her own repeats. It never enters
+        # context, cross-member comparisons, relevance or a rewrite hint.
+        own_discord = [h for h in stores.history if h.guid == draft.guid and h.origin == 'mind'
+            and h.channel in {'discord','dm'} and 0 <= now-h.ts <= cfg.repeat_seconds
+            and (draft.line_id is None or h.id < draft.line_id)]
+        day = [h for h in history if _same_room(h,draft) and h.origin == 'mind' and 0 <= now-h.ts <= 86400]
+        for code, shelf in (('own_repeat_discord',own_discord), ('channel_repeat',day)):
+            matches = [] if server_reaction else _pairs(draft.text,draft.embedding,shelf,cfg,minimum=1)
+            if matches:
+                drop.append(code)
+                scores.append(Score(code,round(matches[0][1],6)))
+                refs.append(Reference('line',matches[0][0].id))
+        if draft.parent_id is None and draft.anchor and draft.embedding is not None and draft.anchor_embedding is not None:
+            cosine = similarity(checked_vector(draft.embedding),checked_vector(draft.anchor_embedding))
+            scores.append(Score('anchor_relevance',round(cosine,6)))
+            if cosine < cfg.anchor_cosine:
+                rewrite.append('off_anchor')
     own = [line for line in history if line.guid == draft.guid and line.origin == 'mind'
            and now-line.ts <= cfg.repeat_seconds][-OWN_LINES:]
     repeats = _pairs(draft.text, draft.embedding, own, cfg)
@@ -367,6 +410,10 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
         refs.extend(Reference('world', flag.related_id) for flag in world if type(flag.related_id) is int)
     filler = bool((draft.real_answer_due or parent and parent.text.rstrip().endswith('?'))
                   and nonsequitur.is_filler(words(draft.text)))
+    if draft.server:
+        filler = server_reaction is not None
+        if filler and draft.parent_id is None:
+            drop.append('filler_opener')
     if parent and cfg.semantic_enabled and len(words(draft.text)) >= nonsequitur.MIN_REPLY_WORDS \
             and draft.embedding is not None and parent.embedding is not None:
         parent_score, thread_score = nonsequitur.relevance_scores(draft.embedding,
@@ -376,9 +423,11 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
             rewrite.append('low_parent_and_thread_relevance')
     if not filler and _pairs(draft.text, draft.embedding, [line for line in thread if line.guid != draft.guid], cfg):
         drop.append('nothing_new')
-    codes = tuple(dict.fromkeys([*rewrite, *drop, *(['filler_after_question'] if filler else [])]))
-    action = _action(codes)
+    filler_code = 'server_filler' if draft.server else 'filler_after_question'
+    codes = tuple(dict.fromkeys([*rewrite, *drop, *([filler_code] if filler else [])]))
+    action = 'drop' if draft.server and drop else _action(codes)
     if reader.missing:
         scores.append(Score('missing_sources', len(reader.missing)))
     reaction = '👍' if parent and parent.text.rstrip().endswith('?') else '😄' if set(words(draft.text)) & {'lol','haha','hehe'} else '👍'
-    return Verdict(action, codes, tuple(scores), tuple(dict.fromkeys(refs)), reaction if action == 'react' else None)
+    return Verdict(action, codes, tuple(scores), tuple(dict.fromkeys(refs)),
+                   (server_reaction or reaction) if action == 'react' else None)

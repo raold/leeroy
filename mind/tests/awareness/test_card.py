@@ -66,7 +66,7 @@ def context(clock, **kw):
 
 def test_all_parts_have_real_sources_and_no_generated_cause(populated, clock):
     result = card(populated, 101, context=context(clock, channel="guild", purpose="Raid planning"))
-    assert tuple(p.key for p in result.parts) == PRIORITY
+    assert tuple(p.key for p in result.parts) == tuple(k for k in PRIORITY if k != 'here')
     game = section(result,"game")
     assert "online (last stored observation)" in game
     assert "zone: 210" in game and "instance: 9 (last encounter)" in game

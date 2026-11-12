@@ -13,6 +13,13 @@ from ..personas.schema import Persona
 OWNER_ZONE = ZoneInfo("America/New_York")
 UK_ZONE = ZoneInfo("Europe/London")
 RNG_SEED = 0  # the seed the mind and the console both pass, so they agree on dnd days
+STATUS_SHARE = 0.6
+STATUS_PHRASES = {
+    'work': ('at work', 'in meetings', 'working', 'lunch break'),
+    'commute': ('commuting', 'on my way home'),
+    'evening': ('making dinner', 'at the gym', 'out for a walk', 'chilling'),
+    'late': ("can't sleep", 'up late'),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,3 +74,23 @@ def presence_of(p: Persona, *, local: datetime, body_online: bool, body_zone: in
         return Presence("online", True, body_zone)
     state = _state(p, local, rng_seed)
     return Presence(state, state == "online" and body_online, body_zone)
+
+
+def status_text(p: Persona, local: datetime, presence: Presence, *, rng_seed: int) -> str | None:
+    if presence.state == 'offline':
+        return None
+    mins = local.hour * 60 + local.minute
+    block = ('work' if local.weekday() < 5 and 540 <= mins < 1020 else
+             'commute' if 420 <= mins < 510 or 1020 <= mins < 1080 else
+             'evening' if 1080 <= mins < 1320 else 'late' if mins >= 1320 or mins < 180 else None)
+    if block is None:
+        return None
+    # The share is stable for the day; the phrase changes with her current block.
+    key = f'{rng_seed}:{p.guid}:{local.date().isoformat()}'
+    if int.from_bytes(hashlib.sha256(key.encode()).digest()[:4], 'big') / 2**32 >= STATUS_SHARE:
+        return None
+    phrases = STATUS_PHRASES[block]
+    if block == 'work' and not 720 <= mins < 780:
+        phrases = phrases[:-1]
+    draw = int.from_bytes(hashlib.sha256(f'{key}:{block}'.encode()).digest()[:4], 'big')
+    return phrases[draw % len(phrases)]

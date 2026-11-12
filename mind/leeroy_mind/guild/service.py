@@ -234,6 +234,18 @@ class GuildLife:
         return await self.raid_night.console_act(args["action"], pick,
                                                  guard=self._console_refusal)
 
+    def members_in_play(self) -> frozenset[int]:
+        from .raid_night import State
+        members = set()
+        night = self.raid_night
+        if night.state in {State.CALLED, State.FORMING, State.ASSEMBLING, State.RUNNING}:
+            if night.run is not None:
+                members.update(night.run.plan.members)
+            members.update(night._forming_members)
+        if self.offline.active:
+            members.update(self.offline._owned.get('plan', {}).get('members', ()))
+        return frozenset(members - {self.ports.human_guid})
+
     async def offline_tick(self):
         if not self._ready():
             return

@@ -120,3 +120,9 @@ export class Discord {
     return out;
   }
 }
+export function memberStatus(member) {
+  const lines = [];
+  if (typeof member.status === 'string' && member.status.length <= 80 && member.status) { lines.push(member.status); }
+  if (member.presence?.playing) { lines.push('Playing WoW'); }
+  return lines;
+}
