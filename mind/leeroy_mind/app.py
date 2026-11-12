@@ -476,6 +476,8 @@ class MindApp:
         self.playstyle = attach_playstyle(self)
         from .world.attach import attach_world
         self.world_people = attach_world(self)
+        from .banter.service import attach as attach_banter
+        self.banter = attach_banter(self)
         self.realm = attach_realm(self)
         from .server.attach import attach_server
         self.server = attach_server(self)  # Last; disabled adds no handlers or tasks.

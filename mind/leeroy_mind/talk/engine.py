@@ -674,12 +674,12 @@ class TalkEngine(EmoteReactions):
         if self.world.human_online:
             quiet = self._login_quiet(now)
             quiet_until = self._login_at + LOGIN_QUIET_S if quiet else None
-            plan = self.budget.tick(now, phase=day_phase(self.clock.local()),
+            plan = None if getattr(self,"banter_active",False) else self.budget.tick(now, phase=day_phase(self.clock.local()),
                                     human_idle=self.world.human_idle(now),
                                     raid=self.raid.phase(now), quiet_until=quiet_until)
             if plan is not None:
                 self._spawn(self._run_burst(plan))
-            plan = self.budget.to_him(now, raid=self.raid.phase(now), quiet_until=quiet_until,
+            plan = None if getattr(self,"banter_active",False) else self.budget.to_him(now, raid=self.raid.phase(now), quiet_until=quiet_until,
                                       hold=self._initiation_held(now),
                                       talk_at=self._his_talk_at())
             if plan is not None:
