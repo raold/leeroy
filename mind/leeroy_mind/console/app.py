@@ -334,6 +334,8 @@ class ConsoleApp:
         self.game = status.GameView(status.UNKNOWN, "not checked yet")
         self._strip: dict = {}
         self._typing: list[dict] = []  # who is typing, from the mind's status (_read_typing)
+        self._mind_snapshot, self._mind_snapshot_at = None, float('-inf')
+        self._tonight_seen = float('-inf')
         self._feed_last = 0
         self._discord_last: int | None = None  # newest Discord message id the pass has seen
         self._discord_ts = 0.0  # when the pass last looked, for changed_since's hint
@@ -344,6 +346,8 @@ class ConsoleApp:
         self._tasks: list[asyncio.Task] = []
         self._server = None
         self._ops = opsview.OpsView(settings.root, settings.data_dir)
+        from .tonightview import TonightView
+        self._tonight = TonightView(settings.data_dir,clock=self._clock)
         from .opsactions import OpsActions
         self._ops_actions = OpsActions(self)
 
@@ -421,7 +425,8 @@ class ConsoleApp:
         """Who is typing (Comms' dots), from the mind's status: asked on this pass only while a
         page listens and he is in game, or a page has asked for Discord lately (its answers come
         at any time), within TYPING_S. Otherwise, or with no answer: none."""
-        discord = self._monotonic() - self._discord_seen < DISCORD_LISTEN_S
+        discord = (self._monotonic() - self._discord_seen < DISCORD_LISTEN_S
+                   or self._monotonic() - self._tonight_seen < 90)
         if (not self._subs or self.link is None
                 or (self.game.state != status.IN_GAME and not discord)):
             return []
@@ -432,6 +437,7 @@ class ConsoleApp:
             return []
         if not isinstance(reply, dict) or reply.get("ok") is not True:
             return []
+        self._mind_snapshot, self._mind_snapshot_at = reply, self._monotonic()
         return typing_entries(reply.get("typing"))
 
     def _publish_status(self) -> None:
@@ -802,6 +808,7 @@ class ConsoleApp:
                   ("POST", "/api/discord/upload"): self._api_discord_upload,
                   ("GET", "/api/discord/image"): self._api_discord_image,
                   ("GET", "/api/bank"): self._api_bank,
+                  ("GET", "/api/tonight"): self._api_tonight,
                   ("GET", "/api/training"): self._api_training,
                   ("GET", "/api/ops"): self._api_ops,
                   ("GET", "/api/ops/badge"): self._api_ops_badge,
@@ -992,6 +999,35 @@ class ConsoleApp:
         return await self._db_view("bank", bankview.bank_view, snapshot=snapshot, why=why,
                                    data_dir=self.s.data_dir)
 
+    async def _api_tonight(self, req: Request):
+        from .tonightview import result, clean_kit
+        self._tonight_seen = self._monotonic()
+        running = self.view.state == 'running'
+        link, pids = self.link, tuple(self._mind_pids())
+        def kit_read():
+            if not running:
+                return None,'mind_down'
+            if link is None:
+                return None,'no_link'
+            try:
+                reply = link.call(pids,'kit',timeout=2.7)
+                if not isinstance(reply,dict):
+                    return None,'no_reply'
+                if reply.get('ok') is not True:
+                    why = reply.get('why')
+                    return None,why if why in {'slow','no_character','no_armory','mind_stopping'} else 'read_failed'
+                cleaned = clean_kit(reply)
+                if cleaned is None:
+                    return None,'no_reply'
+                return cleaned,None
+            except Exception:
+                return None,'read_failed'
+        cached = self._mind_snapshot if running and self._monotonic()-self._mind_snapshot_at<10 else None
+        payload = await self._tonight.snapshot({'now':self._clock(),'status':cached,'kit_read':kit_read})
+        if not running:
+            payload['sections']['kit'] = result('unavailable','mind_down')
+        return json_response(200,payload)
+
     async def _library_deeper(self, query: str, kind: str | None) -> dict:
         """The mind's semantic search as a library answer: hits, or deeper_why in words."""
         out = {"setup": True, "why": None, "stats": None, "hits": [], "deeper": True,
@@ -1048,7 +1084,11 @@ class ConsoleApp:
         return await self._db_view("training", trainview.training_view, now=self._clock())
 
     async def _api_ops(self, req: Request):
-        return json_response(200, await self._ops.snapshot({"mind": self.view.state}))
+        # Process creation timestamps are Windows FILETIME, captured by the existing probe.
+        created = [p.created/10_000_000-11644473600 for p in (self._found or ())
+                   if p.pid in self.view.pids and type(getattr(p,'created',None)) is int and p.created>0]
+        return json_response(200, await self._ops.snapshot({"mind": self.view.state,
+                            "mind_started":min(created) if created else None}))
 
     async def _api_ops_badge(self, req: Request):
         return json_response(200, await self._ops.badge({"mind": self.view.state}))

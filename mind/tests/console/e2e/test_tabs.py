@@ -5,9 +5,10 @@ import pytest
 
 from console.rig import KEY
 
-TABS = ("comms", "raid", "guild", "social", "personas", "board", "calendar",
+TABS = ("tonight", "comms", "raid", "guild", "social", "personas", "board", "calendar",
         "bank", "realm", "training", "dojo", "library", "ops", "mind")
 POPULATED = {
+    "tonight": "Waiting for you",
     "comms": "Rehearsal supplies are ready.", "raid": "Icecrown Citadel",
     "guild": "Juniper", "social": "Belra", "personas": "Arkon",
     "board": "Bring tea for the rehearsal.", "calendar": "Rehearsal raid night",
@@ -16,7 +17,7 @@ POPULATED = {
     "library": "1 passage", "mind": "running",
 }
 OLDER = {tab: "Not set up yet" for tab in (
-    "social", "board", "calendar", "bank", "realm", "training", "library", "ops")}
+    "tonight", "social", "board", "calendar", "bank", "realm", "training", "library", "ops")}
 OLDER.update({"raid": "No raid is open.",
               "guild": "The mind has no roster yet.",
               "personas": "This mind.db is older than some of what this tab reads",
@@ -69,7 +70,23 @@ def test_every_tab(rehearsal, tmp_path, theme, state):
                     await expect(panel).to_contain_text(OLDER[tab])
                 (tmp_path / f"{tab}.txt").write_text(await panel.inner_text(), encoding="utf-8")
                 await expect(panel).not_to_contain_text("This tab could not be drawn")
+                if tab == 'tonight':
+                    await r.page.screenshot(path=str(tmp_path/'tonight.png'),full_page=True)
             assert not r.errors, r.errors
+    asyncio.run(run())
+
+
+def test_tonight_keeps_comms_default_and_supports_a_deep_link(rehearsal):
+    async def run():
+        from playwright.async_api import expect
+        async with rehearsal() as r:
+            await open_console(r)
+            await expect(r.page.locator('#tab-comms')).to_be_visible()
+            assert (await tab_names(r.page))[0]=='tonight'
+            await r.page.evaluate("location.hash='#tonight'")
+            await expect(r.page.locator('#tonight-cards > article')).to_have_count(7)
+            await expect(r.page.locator('#tab-comms')).to_be_hidden()
+            assert not r.errors,r.errors
     asyncio.run(run())
 
 

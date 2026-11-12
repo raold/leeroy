@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { PANELS, badge, lines, panelWords } from "../../../leeroy_mind/console/static/js/opsmodel.mjs";
 
-test("all eight independent panels have missing and error words", () => {
-  assert.equal(PANELS.length, 8);
+test("all nine independent panels have missing and error words", () => {
+  assert.equal(PANELS.length, 9);
   PANELS.forEach(([name]) => {
     assert.deepEqual(lines(name, { status: "missing", why: "older database" }), ["Not set up yet: older database"]);
     assert.deepEqual(lines(name, { status: "error", why: "Skipped: budget" }), ["Skipped: budget"]);
@@ -32,4 +32,10 @@ test("optional booth backup and task states have explicit words", () => {
   assert.match(lines("selfies", {status: "ok"}).join(" "), /no photo booth pass/);
   assert.match(lines("schedules", {status: "ok", tasks: [{name: "leeroy-health", installed: false}]}).join(" "), /not installed/);
   assert.match(lines("backups", {status: "ok", offmachine: {status: "missing", why: "not configured"}}).join(" "), /Not set up yet: not configured/);
+});
+test('switchboard uses boolean words and spells out unmet needs and restart', () => {
+  const output = lines('switches',{status:'ok',rows:[{label:'Bandit credit',state:'invalid',needs:'learn.enabled',
+    unmet:['learn.enabled'],restart:true},{label:'The Realm',state:'off',blocklist:'missing'}]}).join('\n');
+  assert.match(output,/invalid, so off/); assert.match(output,/unmet: learn.enabled/);
+  assert.match(output,/restart to apply/); assert.match(output,/blocklist missing/);
 });

@@ -144,7 +144,8 @@ def test_keyboard_tabs_focus_ring_and_gallery_trap_return(rehearsal):
             await open_console(r)
             tabs = await tab_names(r.page)
             await r.page.locator("#t-comms").focus()
-            for tab in tabs[1:] + tabs[:1]:
+            start = tabs.index('comms')
+            for tab in tabs[start+1:] + tabs[:start+1]:
                 await r.page.keyboard.press("ArrowRight")
                 button = r.page.locator("#t-" + tab)
                 await expect(button).to_be_focused()
@@ -158,7 +159,7 @@ def test_keyboard_tabs_focus_ring_and_gallery_trap_return(rehearsal):
             await r.page.keyboard.press("End")
             await expect(r.page.locator("#t-mind")).to_be_focused()
             await r.page.keyboard.press("Home")
-            await expect(r.page.locator("#t-comms")).to_be_focused()
+            await expect(r.page.locator("#t-" + tabs[0])).to_be_focused()
             for _ in range(tabs.index("personas")):
                 await r.page.keyboard.press("ArrowRight")
             gallery_requested, release_gallery = asyncio.Event(), asyncio.Event()
