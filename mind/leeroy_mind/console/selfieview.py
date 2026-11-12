@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 
 from leeroy_mind.selfies import files, store
+from leeroy_mind.personas.tiers import is_cast
 from leeroy_mind.wow import CAST_MIN_LEVEL
 
 from .feed import human_guid
@@ -49,12 +50,16 @@ def _kinds(conn, human: int) -> dict[str, int]:
     stored = {}
     if "persona_core" in have:
         for guid, text in conn.execute("SELECT guid, json FROM persona_core"):
+            if not is_cast(conn,guid):
+                continue
             try:
                 stored[guid] = json.loads(text)
             except (ValueError, TypeError):
                 stored[guid] = {}
     for (guid,) in conn.execute("SELECT guid FROM cast_member WHERE level >= ? AND guid != ?",
                                 (CAST_MIN_LEVEL, human)):
+        if not is_cast(conn,guid):
+            continue
         p = stored.get(guid)
         if p is None:
             out["no_persona"] += 1
@@ -82,7 +87,7 @@ def queue_view(conn, data_dir: Path, *, now: float) -> dict:
                      "reason": r[2], "rendered": r[3]}
                     for r in conn.execute(
                         "SELECT guid, set_no, reason, rendered FROM selfie_set WHERE "
-                        "status = 'ready' AND decided IS NULL ORDER BY rendered, guid, set_no")]
+                        "status = 'ready' AND decided IS NULL ORDER BY rendered, guid, set_no") if is_cast(conn,r[0])]
     out["recent"] = [{**p, "name": names.get(p["guid"], f"#{p['guid']}")}
                      for p in store.picks(conn, None, RECENT)]
     return out
@@ -99,7 +104,7 @@ def _data_url(path: Path, root: Path) -> str | None:
 def set_images(conn, data_dir: Path, guid: int, set_no: int) -> dict | None:
     """The thumbnails of the member's ready set, None unless that set is ready and theirs.
     A missing or oversize file is left out; each image carries its place in the set."""
-    if _missing(conn):
+    if not is_cast(conn,guid) or _missing(conn):
         return None
     try:
         files.set_dir(data_dir, guid, set_no)  # integers in range, else not a set of theirs
@@ -123,7 +128,7 @@ def set_images(conn, data_dir: Path, guid: int, set_no: int) -> dict | None:
 
 def member_photos(conn, data_dir: Path, guid: int) -> dict | None:
     """One member's photo in force, their sets and their changes; None for no such member."""
-    if _missing(conn):
+    if _missing(conn) or not is_cast(conn,guid):
         return None
     if conn.execute("SELECT 1 FROM cast_member WHERE guid = ?", (guid,)).fetchone() is None:
         return None

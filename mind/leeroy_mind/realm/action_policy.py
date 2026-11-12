@@ -105,6 +105,10 @@ def classify(cmd, *, child=False):
         if not set(members(cmd.gankers, 0, 16)) <= set(gs):
             raise ValueError("gankers outside actors")
         members(cmd.guilds, 0, 3)
+    elif kind == "world_say":
+        p.WorldSay(**{f.name:getattr(cmd,f.name) for f in fields(cmd)})
+    elif kind == "get_world_roster":
+        p.GetWorldRoster(cmd.id,cmd.request)
     elif kind == "realm_say":
         n("guid"); channel = e("channel", {"trade", "general", "lfg", "recruitment", "say", "yell", "whisper"})
         s("text", 1, 255); n("to_guid", 1 if channel == "whisper" else 0)

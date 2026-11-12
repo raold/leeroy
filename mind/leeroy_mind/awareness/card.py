@@ -434,10 +434,15 @@ def card(app_or_stores, guid: int, *, context: CardContext) -> Card:
     if not _number(now):
         raise ValueError("awareness_time_invalid")
     reader = _Reader(source.conn)
+    tier = ("COALESCE((SELECT tier FROM persona_tier WHERE guid=p.guid),'cast')"
+            if "persona_tier" in reader.tables else "'cast'")
+    roles = reader.rows(("persona_core",), "SELECT CASE WHEN json_valid(json) THEN "
+        "json_extract(json,'$.play.guild_role') END AS role," + tier + " AS tier "
+        "FROM persona_core p WHERE guid=?", (guid,))
+    if roles and roles[0]["tier"] == "world":
+        return Card(guid,(),("world_excluded",))
     meta = {r["key"]: r["value"] for r in reader.rows(("meta",),
         "SELECT key,value FROM meta WHERE key IN ('human_guid','tg:lab:owned','tg:benchmark:active')")}
-    roles = reader.rows(("persona_core",), "SELECT json_extract(json,'$.play.guild_role') AS role "
-                        "FROM persona_core WHERE guid=? AND json_valid(json)", (guid,))
     officer = bool(roles and roles[0]["role"] == "officer")
     if is_discord(context.channel):
         parts = (("context","Conversation",_context(guid,officer,context)),

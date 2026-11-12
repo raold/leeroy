@@ -1,5 +1,6 @@
 """User actions cross browser -> console -> real control endpoint -> production stores."""
 import asyncio
+import json
 import re
 
 from conftest import HUMAN
@@ -11,12 +12,15 @@ from .test_tabs import open_console, visit
 
 
 async def submit(r, button, path, *, ok=True):
-    async with r.page.expect_response(lambda x: x.url == r.url + path
-                                      and x.request.method == "POST") as answer:
-        await button.click()
-    response = await answer.value
-    await response.finished()
-    result = await response.json()
+    """Click, then take the POST's answer as the page read it (conftest.ANSWERS)."""
+    seen = await r.page.evaluate("window.__answers.length")
+    await button.click()
+    answer = await r.page.wait_for_function(
+        "([path, seen]) => window.__answers.slice(seen).find((a) => a.path === path) || null",
+        arg=[path, seen], timeout=130000)
+    answer = await answer.json_value()
+    assert answer["text"] is not None, f"{path}: the page could not read the answer"
+    result = json.loads(answer["text"])
     assert result.get("ok") is ok, result
     return result
 
@@ -151,6 +155,53 @@ def test_raid_offline_reasons_and_mind_stop_start(rehearsal):
             await expect(r.page.locator("#s-mind")).to_contain_text("mind running", timeout=15000)
             assert not r.task.done() and r.app.world.human_online
             assert r.handle.acts == ["stop", "start"]
+            assert not r.errors, r.errors
+    asyncio.run(run())
+
+
+def test_hide_comms_panel_widens_the_feed_and_a_face_brings_it_back(rehearsal):
+    async def run():
+        from playwright.async_api import expect
+        async with rehearsal() as r:
+            await open_console(r)
+            await visit(r.page, "comms")
+            right = r.page.locator("#comms-right")
+            hide, show = r.page.locator("#c-panel"), r.page.locator("#c-panel-show")
+            await expect(right).to_be_visible()
+            await expect(hide).to_have_text("Hide panel")
+            await expect(show).to_be_hidden()
+            # Hide sits in the panel's own top-right corner
+            rb, hb = await right.bounding_box(), await hide.bounding_box()
+            assert rb["x"] <= hb["x"] and hb["x"] + hb["width"] <= rb["x"] + rb["width"]
+            assert (rb["x"] + rb["width"]) - (hb["x"] + hb["width"]) < 40 and hb["y"] - rb["y"] < 40
+            narrow = (await r.page.locator(".feedpanel").bounding_box())["width"]
+            await hide.click()
+            await expect(right).to_be_hidden()
+            await expect(show).to_have_text("Show panel")
+            await expect(show).to_have_attribute("aria-expanded", "false")
+            await expect(show).to_be_focused()
+            assert (await r.page.locator(".feedpanel").bounding_box())["width"] > narrow + 200
+            await show.click()
+            await expect(right).to_be_visible()
+            await expect(show).to_be_hidden()
+            await expect(hide).to_be_focused()
+            # A member's face in the feed asks for their card, which lives in the panel
+            await hide.click()
+            await expect(right).to_be_hidden()
+            face = r.page.locator("#feed [data-card]").first
+            await expect(face).to_be_visible()
+            await face.click()
+            await expect(right).to_be_visible()
+            await expect(r.page.locator("#mcard")).to_be_visible()
+            await expect(show).to_be_hidden()
+            # Hidden again, the choice outlives a reload (theme.js applies it before paint)
+            await hide.click()
+            await expect(right).to_be_hidden()
+            r.expected_http_errors.add(("/api/events", 403))
+            r.expected_http_errors.add(("/api/discord", 403))  # Comms polls Discord too
+            await r.page.reload()
+            await expect(r.page.locator("html")).to_have_attribute("data-comms-panel", "hidden")
+            await expect(r.page.locator("#c-panel-show")).to_be_visible()
             assert not r.errors, r.errors
     asyncio.run(run())
 

@@ -1,5 +1,8 @@
+import asyncio
 import os
 import re
+import sys
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -8,9 +11,32 @@ import pytest
 
 from .harness import Rehearsal
 
+# Each POST's answer as the page itself read it, for test_flows.submit(). Reading the body
+# through Playwright's network layer (Response.json) depends on Chromium keeping it, and on
+# CI it now and then had not ("No data found for resource"), or the request never reported
+# finished at all. A clone of the page's own response does not depend on either.
+ANSWERS = """
+(() => {
+  const real = window.fetch;
+  window.__answers = [];
+  window.fetch = function (input, init) {
+    const work = real.apply(this, arguments);
+    const method = String((init && init.method) || (input && input.method) || "GET").toUpperCase();
+    if (method !== "POST") { return work; }
+    const path = new URL(typeof input === "string" ? input : input.url, location.href).pathname;
+    return work.then((response) => {
+      response.clone().text().then(
+        (text) => window.__answers.push({ path, status: response.status, text }),
+        () => window.__answers.push({ path, status: response.status, text: null }));
+      return response;
+    });
+  };
+})();
+"""
+
 
 @pytest.fixture
-def rehearsal(tmp_path, monkeypatch):
+def rehearsal(tmp_path, monkeypatch, pytestconfig):
     try:
         import playwright.async_api as playwright
     except ImportError:
@@ -21,6 +47,33 @@ def rehearsal(tmp_path, monkeypatch):
 
     @asynccontextmanager
     async def start(*, width=1440, theme="dark", state="running"):
+        # A rehearsal that runs past 75 s prints every asyncio task's stack once, so a
+        # wait with no deadline names itself before the job's timeout cancels it. Capture
+        # is suspended for it: a job killed mid-test never shows captured output.
+        loop = asyncio.get_running_loop()
+        capture = pytestconfig.pluginmanager.getplugin("capturemanager")
+        def dump():
+            with capture.global_and_fixture_disabled():
+                print("\n--- asyncio tasks after 75 s ---", file=sys.stderr)
+                for task in asyncio.all_tasks(loop):
+                    task.print_stack(file=sys.stderr)
+                sys.stderr.flush()
+        def fire():
+            try:
+                loop.call_soon_threadsafe(dump)
+            except RuntimeError:  # the loop closed before the timer was cancelled
+                pass
+        watchdog = threading.Timer(75, fire)
+        watchdog.daemon = True
+        watchdog.start()
+        try:
+            async with _browser(width, theme, state) as fixture:
+                yield fixture
+        finally:
+            watchdog.cancel()
+
+    @asynccontextmanager
+    async def _browser(width, theme, state):
         async with playwright.async_playwright() as pw:
             if not Path(pw.chromium.executable_path).is_file():
                 message = "Chromium is not installed; run python -m playwright install chromium"
@@ -62,17 +115,21 @@ def rehearsal(tmp_path, monkeypatch):
             fixture.page, fixture.context, fixture.errors = page, context, errors
             try:
                 await fixture.start(state)
-                # Browser requests may reach ONLY this fixture's own console.
-                async def own_origin(route):
-                    if route.request.url.startswith(fixture.url + "/"):
-                        await route.continue_()
-                    else:
-                        errors.append("unexpected browser destination: " + route.request.url)
-                        await route.abort()
-                await context.route("**/*", own_origin)
+                # Browser requests may reach ONLY this fixture's own console: the console's
+                # CSP ('self') confines the page, and any other destination fails the test.
+                # Observed, not intercepted: with context.route() interception Chromium now
+                # and then never finished a routed POST's response (no requestfinished, body
+                # unreadable), which hung or failed the rehearsal.
+                own = fixture.url + "/"
+                def own_origin(request):
+                    # blob: and data: URLs never leave the browser (faces load as blobs).
+                    if not (request.url.startswith((own, "blob:" + own, "data:"))):
+                        errors.append("unexpected browser destination: " + request.url)
+                context.on("request", own_origin)
                 await context.add_init_script(
                     "if (!localStorage.getItem('guild-console-theme')) "
                     "localStorage.setItem('guild-console-theme', " + repr(theme) + ");")
+                await context.add_init_script(ANSWERS)
                 yield fixture
             except BaseException:
                 if not page.is_closed():

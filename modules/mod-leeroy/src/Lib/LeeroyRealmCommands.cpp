@@ -177,6 +177,15 @@ std::optional<SayCmd> ParseSay(json const& j, std::string& error)
     f.Require(out.channel == "whisper" || out.toGuid == 0, "to_guid");
     return f.Result(std::move(out));
 }
+std::optional<WorldSayCmd> ParseWorldSay(json const& j, std::string& error)
+{
+    auto speech = ParseSay(j,error);
+    if (!speech) return std::nullopt;
+    Fields f(j,error); WorldSayCmd out{*speech,0};
+    f.Number("guild_id",out.guild);
+    f.Require(out.speech.channel == "trade" || out.speech.channel == "general", "channel");
+    return f.Result(std::move(out));
+}
 std::optional<EmoteCmd> ParseEmote(json const& j, std::string& error)
 {
     Fields f(j, error); EmoteCmd out;

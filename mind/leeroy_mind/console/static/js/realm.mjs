@@ -1,5 +1,6 @@
 import { $, arr, clear, el, num, obj, str } from "./core.mjs";
 import { face } from "./faces.mjs";
+import { pollWorld } from "./world.mjs";
 import { notSetUp, pollTab, renderKpis } from "./tabkit.mjs";
 import { firstKills, poachText, raidersText, roleWord, standing, tradeCount } from "./realmmodel.mjs";
 import { when } from "./words.mjs";
@@ -60,6 +61,7 @@ function renderRace(v, box) {
 }
 
 function renderRealm(v) {
+  pollWorld($("realm-world"));
   var now = Date.now() / 1000, rivals = arr(v.rivals), box = $("realm-rivals");
   renderKpis($("realm-kpis"), [
     { k: "Rival guilds", v: String(rivals.length), d: "" },

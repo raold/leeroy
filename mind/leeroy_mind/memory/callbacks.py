@@ -258,6 +258,9 @@ def pick_callback(conn, guid, context, *, now) -> Callback | None:
     """Read-only offer; no migration, clock/model calls, writes, commits or logs."""
     if not _valid(context, guid, now):
         return None
+    from leeroy_mind.personas.tiers import is_cast
+    if not is_cast(conn,guid):
+        return None
     try:
         return _pick(conn, guid, context, now)
     except sqlite3.OperationalError as exc:
@@ -274,6 +277,9 @@ def record_callback(conn, guid, context, callback: Callback, *, now) -> bool:
     may require the caller to retry its whole transaction, never just this write.
     """
     if not _valid(context, guid, now) or not isinstance(callback, Callback):
+        return False
+    from leeroy_mind.personas.tiers import is_cast
+    if not is_cast(conn,guid):
         return False
     if not conn.in_transaction:
         raise ValueError("callback_transaction_required")

@@ -1,4 +1,4 @@
-import { $, api, clear, el, refused, str } from "./core.mjs";
+import { $, api, clear, el, emit, refused, str } from "./core.mjs";
 import { S } from "./state.mjs";
 import { registerTab } from "./tabs.mjs";
 
@@ -11,6 +11,7 @@ export function banner(name, text) {
   if (!b) { return; }
   b.textContent = text || "";
   b.hidden = !text;
+  emit("tab-banner", name);
 }
 
 // A section's note that its source is missing

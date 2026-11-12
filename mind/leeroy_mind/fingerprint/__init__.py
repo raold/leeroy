@@ -164,6 +164,9 @@ def fingerprint(conn, guid) -> Profile:
     """Stored current-version profile, or a deterministic persona prior; read-only on old DBs."""
     if type(guid) is not int or not 0 < guid <= 0xFFFFFFFF:
         raise ValueError('fingerprint_guid')
+    from leeroy_mind.personas.tiers import is_cast
+    if not is_cast(conn,guid):
+        return seed()
     try:
         row = conn.execute('SELECT profile,version FROM voice_fingerprint WHERE guid=?', (guid,)).fetchone()
         if row and row[1] == VERSION:
@@ -224,6 +227,9 @@ def _phrases(rows, blocked):
 
 def update(conn, guid, *, now, persona=None, talkative=5, humour_dial=5, blocked_names=()):
     """Write inside the caller's unit transaction; never commits or logs chat text."""
+    from leeroy_mind.personas.tiers import is_cast
+    if not is_cast(conn,guid):
+        return seed()
     rows = conn.execute("SELECT text,channel,to_guid FROM chat_line WHERE from_guid=? AND origin='mind' "
                         'ORDER BY ts DESC,id DESC LIMIT ?', (guid,MAX_LINES)).fetchall()
     persona = _persona(conn,guid) if persona is None else persona

@@ -3,6 +3,7 @@
 #include "LeeroyRealmCommands.h"
 #include "LeeroyRealmContinuations.h"
 #include "LeeroyProtocol.h"
+#include "LeeroyWorldProtocol.h"
 #include "TestHarness.h"
 #include <fstream>
 #include <iterator>
@@ -35,6 +36,8 @@ bool Parse(std::string_view type, json const& j, std::string& error)
 {
     if (type == "realm_actors") return ParseActors(j, error).has_value();
     if (type == "realm_say") return ParseSay(j, error).has_value();
+    if (type == "get_world_roster") return Leeroy::World::RosterRequest(j,error).has_value();
+    if (type == "world_say") return ParseWorldSay(j, error).has_value();
     if (type == "realm_emote") return ParseEmote(j, error).has_value();
     if (type == "realm_move") return ParseMove(j, error).has_value();
     if (type == "realm_visit") return ParseVisit(j, error).has_value();
@@ -81,6 +84,10 @@ void RejectField(std::string_view fixture, char const* field, json bad)
 }
 json Event(std::string_view type)
 {
+    if (type == "world_roster") return *Leeroy::World::RosterPage("roster-token",21,1,0,1,json::array({
+        json{{"guid",101},{"account",11},{"guild_id",50},{"guild_name","Test rivals"},
+             {"name","Fixture"},{"race",2},{"class",1},{"gender",0},{"level",24},{"rank",3},
+             {"online",true},{"map",1},{"zone",1637}}}));
     if (type == "realm_kill" || type == "realm_dungeon_kill")
     {
         Kill kill;
@@ -184,6 +191,18 @@ std::optional<json> FixtureBody(json const& msg)
         if (!kill || !ValidKillProof(*kill) || IsDungeonKill(*kill) != (type == "realm_dungeon_kill")) return std::nullopt;
         return type == "realm_kill" ? MakeRealmKill(*kill) : MakeRealmDungeonKill(*kill);
     }
+    if (type == "world_roster")
+    {
+        using namespace Leeroy::World;
+        if (!SameKeys(msg,Event(type)) || !Token(msg.at("request"))) return std::nullopt;
+        for (auto key : {"own_guild","human","page","pages","total"})
+            if (!Number(msg.at(key),0,UINT32_MAX)) return std::nullopt;
+        auto body=RosterPage(msg.at("request").get<std::string>(),msg.at("own_guild").get<std::uint32_t>(),
+            msg.at("human").get<std::uint32_t>(),msg.at("page").get<std::size_t>(),
+            msg.at("total").get<std::size_t>(),msg.at("members"));
+        if (body && body->at("pages") != msg.at("pages")) return std::nullopt;
+        return body;
+    }
     if (type == "duel_end")
     {
         std::uint32_t winner = 0, loser = 0, map = 0, zone = 0;
@@ -264,7 +283,7 @@ LEEROY_TEST(Realm_FixtureLines)
             CHECK(valid); CHECK_EQ(row.at("name").get<std::string>(), type + "_ok"); full.insert(type);
         }
     }
-    CHECK_EQ(full.size(), kCommandTypes.size()); CHECK_EQ(events.size(), 17u);
+    CHECK_EQ(full.size(), kCommandTypes.size()); CHECK_EQ(events.size(), 18u);
     for (auto type : kCommandTypes) CHECK(full.contains(std::string(type)));
 }
 

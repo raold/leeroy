@@ -131,9 +131,10 @@ class BoardDesk:
                     raise Refused("post_gone", POST_GONE)
                 to = row[0]
             else:
+                from leeroy_mind.personas.tiers import cast_sql
                 row = conn.execute(
                     "SELECT m.sender, c.name, EXISTS(SELECT 1 FROM persona_core p "
-                    "WHERE p.guid = m.sender) FROM realm_mail m JOIN cast_member c "
+                    "WHERE p.guid = m.sender AND " + cast_sql(conn,"p.guid") + ") FROM realm_mail m JOIN cast_member c "
                     "ON c.guid = m.sender WHERE m.id = ? AND m.state IN ('sent','taken')",
                     (parent,)).fetchone()
                 if row is None or not (type(row[0]) is int and 1 <= row[0] <= 0xFFFFFFFF):

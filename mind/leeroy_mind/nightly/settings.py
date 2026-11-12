@@ -30,6 +30,8 @@ class NightlySettings:
     wow_vs_life: int
     female_share: float
     data_dir: Path
+    quiet: tuple[time, time] | None = None
+    learn_enabled: bool = False
     looks_diversity: bool = False
     romance_activities: bool = False
     grace_minutes: int = 10
@@ -51,6 +53,8 @@ class NightlySettings:
     confide_per_night: int = 60
     enrich_per_night: int = 10
     newcomers_per_night: int = 6
+    world_per_night: int = 12
+    world_selfies_per_night: int = 10
     photo_per_night: int = 120
     selfie_per_night: int = 120
     scenes_per_night: int = 24
@@ -109,15 +113,24 @@ def load_life(path: Path) -> int:
 
 
 def load_settings(cfg: MindConfig, data_dir: Path) -> NightlySettings:
+    from leeroy_mind.server.config import load_server_config
+    from leeroy_mind.learn.config import load_learn_config
     from leeroy_mind.personas.looks_diversity import enabled
     data_dir = Path(data_dir)
+    server = load_server_config(data_dir / "mind.toml")
+    from leeroy_mind.world.config import load as load_world
+    world = load_world(data_dir / "mind.toml")
     return NightlySettings(
         live_model=cfg.models.live, reflection_model=cfg.models.reflection,
         embedding_model=cfg.models.embedding, ollama_url=cfg.ollama.url,
         relationship_speed=cfg.memory.relationship_speed, romance_dial=cfg.romance.dial,
         jealousy=cfg.romance.jealousy, chattiness=cfg.talk.chattiness,
         wow_vs_life=load_life(data_dir / "mind.toml"), female_share=cfg.cast.female_share,
-        data_dir=data_dir, looks_diversity=enabled(data_dir), romance_activities=cfg.romance.activities)
+        data_dir=data_dir, learn_enabled=load_learn_config(data_dir / "mind.toml").enabled,
+        world_per_night=world.world_per_night,
+        world_selfies_per_night=world.world_selfies_per_night,
+        looks_diversity=enabled(data_dir), quiet=server.quiet_window if server.enabled else None,
+        romance_activities=cfg.romance.activities)
 
 
 def _at_six(day: date, tz: tzinfo) -> float:

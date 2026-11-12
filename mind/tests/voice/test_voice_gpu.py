@@ -8,6 +8,8 @@ import json
 import logging
 import threading
 
+import pytest
+
 from conftest import run
 from leeroy_mind.llm.client import OllamaClient
 from leeroy_mind.llm.presets import LIVE
@@ -68,6 +70,35 @@ def test_pins_once_per_hold_and_unpins_when_it_ends(vapp):
         await ext.on_message(status("whisper"))
         await drain(ext)
         assert [c[0] for c in pins.calls] == ["pin", "unpin", "pin"]
+    run(go())
+
+
+@pytest.mark.parametrize('partial_failure', [False, True])
+def test_voice_release_restores_the_server_pin_even_after_a_partial_unpin(vapp, partial_failure):
+    from types import SimpleNamespace
+    from nightly.conftest import FakeAdmin
+    from leeroy_mind.server.config import ServerConfig
+    from leeroy_mind.server.lease import ServerLease
+    app = vapp.app
+    app.arbiter.admin = FakeAdmin([app.cfg.models.live])
+    lease = ServerLease(app, ServerConfig(enabled=True))
+    app.server = SimpleNamespace(lease=lease)
+    pins = FakePins()
+    vapp.ext.gpu_pins = pins
+    async def go():
+        try:
+            await lease.tick(app.clock.now())  # fixture clock is outside 03:00-08:00
+            await lease.handback()
+            await vapp.ext.on_message(status('whisper'))
+            await drain(vapp.ext)
+            app.arbiter.admin.calls.clear()
+            pins.error = OSError('partial synthetic unpin') if partial_failure else None
+            await vapp.ext.on_message(status('none'))
+            await drain(vapp.ext)
+            assert app.arbiter.holders == {'server'}
+            assert ('preload', app.cfg.models.live, -1) in app.arbiter.admin.calls
+        finally:
+            await lease.close()
     run(go())
 
 

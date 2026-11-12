@@ -200,7 +200,7 @@ def _give_first(values: list, to: Sequence[int], good) -> None:
 
 
 def plan_slots(roster: Sequence[Member], existing: Sequence[Persona], cfg: CastCfg,
-               human_guid: int, rng: random.Random) -> list[GenSlot]:
+               human_guid: int, rng: random.Random, *, min_level: int = CAST_MIN_LEVEL) -> list[GenSlot]:
     """One slot per cast member (level >= CAST_MIN_LEVEL, not the human) without a persona.
     The whole cast, existing personas included, should have round(share * N) women and
     introverts; the slots supply what is missing, never below zero. The women's romance
@@ -208,7 +208,7 @@ def plan_slots(roster: Sequence[Member], existing: Sequence[Persona], cfg: CastC
     keep theirs and the slots make up the rest. Lust slots take the outgoing flags first and
     have their age band capped below NONE_FIT_AGE (41-55 becomes 41-49), so a generated lust
     woman is one the rebalance would pick for lust too."""
-    cast = sorted((m for m in roster if m.guid != human_guid and m.level >= CAST_MIN_LEVEL),
+    cast = sorted((m for m in roster if m.guid != human_guid and m.level >= min_level),
                   key=lambda m: m.guid)
     cast_guids = {m.guid for m in cast}
     have = [p for p in existing if p.guid in cast_guids]
@@ -708,7 +708,8 @@ async def generate_cast(store: Store, llm: LLMClient | None, cfg, *, human_guid:
                         ) -> GenReport:
     """Plan from what is stored (seeds and earlier runs count), then make up to `limit`
     personas one at a time, saving each so a rerun resumes."""
-    roster = list(store.cast().values())
+    from .promotion import promotion_seed, promote_world
+    roster = list(store.cast(include_world=True).values())
     by_guid = {m.guid: m for m in roster}
     existing = [p for g in sorted(store.persona_versions()) if (p := load_persona(store, g))]
     slots = plan_slots(roster, existing, cfg.cast, human_guid, rng)
@@ -731,17 +732,23 @@ async def generate_cast(store: Store, llm: LLMClient | None, cfg, *, human_guid:
         say(f"generating {i}/{len(todo)}: {member.name}")
         notes = GenNotes()
         try:
+            seed_version, summary = promotion_seed(store, slot.guid, cast_summary(existing, human=human))
             p = await generate_persona(llm, cfg.models.reflection, slot, member,
-                                       cast_summary(existing, human=human), rules, human=human,
+                                       summary, rules, human=human,
                                        taken_names=frozenset(taken), member_names=members,
                                        notes=notes)
             p = replace(p, real_life=replace(p.real_life, birthday=draw_birthday(
                 (q.real_life.birthday for q in existing), rng)))  # the model's own is ignored
             p = apply_if_enabled(store, p, diversity, existing, ident=human, names=members)
             with store.transaction():
+                current = store.cast(include_world=True).get(slot.guid)
+                if (current is None or current.level < CAST_MIN_LEVEL or slot.guid == human_guid
+                        or slot.guid in store.persona_versions()
+                        or not promote_world(store, slot.guid, seed_version)):
+                    raise ValueError("cast_member_changed")
                 save_persona(store, p, source="generated", ts=store.clock.now(),
-                             race=RACES.get(member.race, ""),
-                             class_name=CLASSES.get(member.class_, ""))
+                             race=RACES.get(current.race, ""),
+                             class_name=CLASSES.get(current.class_, ""))
                 if diversity:
                     mark_sampled(store,p)
                 seed_relationships(store, [p], names, human_guid, store.clock.now(),

@@ -48,6 +48,8 @@ COMMAND_FIELDS = {
                  "boss_name attempts fight_s first"),
     "get_realm_pvp": "id pvp_owner origin_id",
     "guild_readmit": "id guid kick_ts rank",
+    "world_say": "id guid guild_id channel text to_guid",
+    "get_world_roster": "id request",
 }
 EVENT_FIELDS = {
     "realm_job": "ts id kind state reason guid value pvp_owner changed skipped",
@@ -72,6 +74,7 @@ EVENT_FIELDS = {
                            "fight_started_at_ms fight_ms attempts map instance_id boss_id difficulty size "
                            "heroic human_present cast_members"),
     "realm_achievement": "ts guid achievement_id name category flags realm_first",
+    "world_roster": "ts request own_guild human page pages total members",
 }
 
 
@@ -100,7 +103,7 @@ def command_from_message(msg):
 def test_authoritative_maps_fields_and_immutable_message_shapes():
     assert list(protocol.COMMANDS) == list(COMMAND_FIELDS)
     assert list(protocol.EVENTS) == list(EVENT_FIELDS)
-    assert len(protocol.COMMANDS) == 34 and len(protocol.EVENTS) == 17
+    assert len(protocol.COMMANDS) == 36 and len(protocol.EVENTS) == 18
     for registry, expected in ((protocol.COMMANDS, COMMAND_FIELDS), (protocol.EVENTS, EVENT_FIELDS)):
         for name, cls in registry.items():
             assert [field.name for field in dataclasses.fields(cls)] == expected[name].split()
@@ -213,6 +216,8 @@ def test_events_parse_from_native_fixture():
             expected.setdefault("changed", None)
             expected.setdefault("skipped", ())
             assert type(parsed.value) is int
+        if msg["type"] == "world_roster":
+            expected["members"] = tuple({("class_" if k == "class" else k):v for k,v in m.items()} for m in msg["members"])
         assert dataclasses.asdict(parsed) == expected
         seen.add(msg["type"])
     assert seen == protocol.EVENTS.keys()

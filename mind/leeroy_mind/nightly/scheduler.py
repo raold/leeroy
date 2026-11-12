@@ -44,7 +44,7 @@ run_night's cancel path must make no arbiter call: cancel_run is the arbiter's p
 awaited while hand_over holds the arbiter's lock."""
 import asyncio
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Awaitable, Callable
 
 from leeroy_mind.clock import Clock, night_of
@@ -55,11 +55,16 @@ from leeroy_mind.nightly.settings import NightlySettings
 from leeroy_mind.nightly.store import (UNFINISHED, last_finished, last_window_end, run_begin,
                                        run_finish, run_get, unfinished_nights)
 from leeroy_mind.storage.store import Store
+from leeroy_mind.server.clock import in_window, reporting_night
 
 HUMAN = "human"  # his lease on the GPU arbiter
 RESUME_NIGHTS = 2  # an unfinished run resumes within the last two nights, tonight's included
 
 Window = tuple[float, float]
+
+
+def tonight(local: datetime, settings: NightlySettings) -> str:
+    return reporting_night(local, settings.quiet) if settings.quiet else night_of(local)
 
 
 def _nights_back(night: str, n: int) -> str:
@@ -108,6 +113,10 @@ class NightScheduler:
             return None
         return self._night
 
+    def running_night(self) -> str | None:
+        """The actively running night, excluding a run already told to stop."""
+        return self.running
+
     # -- the bridge: inline, with no wait on the GPU ---------------------------------------------
 
     async def on_event(self, ev) -> None:
@@ -151,14 +160,17 @@ class NightScheduler:
         """The night to run when the module docstring's conditions all hold, else None. It does
         not ask whether a run is under way; tick() does."""
         s = self.settings
+        local = self.clock.local()
+        if s.quiet is not None and not in_window(local, s.quiet):
+            return None
         if not self.arbiter.reflection_allowed():
             return None
         if self.presence.offline_seconds() < s.grace_minutes * 60:
             return None
         now = self.clock.now()
-        tonight = night_of(self.clock.local())
-        oldest = _nights_back(tonight, RESUME_NIGHTS - 1)
-        night = next((n for n in unfinished_nights(self.store) if oldest <= n <= tonight), tonight)
+        current = tonight(local, s)
+        oldest = _nights_back(current, RESUME_NIGHTS - 1)
+        night = next((n for n in unfinished_nights(self.store) if oldest <= n <= current), current)
         run = run_get(self.store, night)
         if run is None:
             if now - (last_window_end(self.store) or 0.0) < s.min_window_hours * 3600:
@@ -191,7 +203,7 @@ class NightScheduler:
 
     def _abandon_stale(self) -> None:
         """Every unfinished run older than the last RESUME_NIGHTS nights is abandoned."""
-        oldest = _nights_back(night_of(self.clock.local()), RESUME_NIGHTS - 1)
+        oldest = _nights_back(tonight(self.clock.local(), self.settings), RESUME_NIGHTS - 1)
         for night in unfinished_nights(self.store):
             if night < oldest:
                 self._mark(night, "abandoned")

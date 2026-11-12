@@ -5,6 +5,7 @@
 #include "LootMaster.h"
 #include "GearUpJob.h"
 #include "TopUpJob.h"
+#include "DeathLoopJob.h"
 #include "BotCommands.h"
 #include "OfflineRaidJob.h"
 #include "OwnerSay.h"
@@ -19,7 +20,11 @@ public:
     LeeroyGuildWorldScript() : WorldScript("LeeroyGuildWorldScript",
         { WORLDHOOK_ON_STARTUP, WORLDHOOK_ON_UPDATE, WORLDHOOK_ON_AFTER_CONFIG_LOAD }) { }
 
-    void OnAfterConfigLoad(bool /*reload*/) override { Leeroy::PlayStyle::Reload(); }
+    void OnAfterConfigLoad(bool /*reload*/) override
+    {
+        Leeroy::PlayStyle::Reload();
+        Leeroy::Guild::ReloadDeathLoop();
+    }
 
     void OnStartup() override
     {
@@ -38,6 +43,7 @@ public:
         Leeroy::Guild::TickGearUp();
         Leeroy::Guild::TickBotCommands();
         Leeroy::Guild::TickTopUp(diff);
+        Leeroy::Guild::TickDeathLoop(diff);
         Leeroy::Guild::TickOfflineRaid(diff);
         if (diff >= _styleCleanup)
         {

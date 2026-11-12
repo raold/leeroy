@@ -13,4 +13,10 @@
     try { mode = JSON.parse(shown); } catch (e) { mode = shown; }
     if (mode === "hidden") { document.documentElement.dataset.photos = "hidden"; }
   } catch (e) { /* storage off: photos shown */ }
+  // Comms' right panel hidden (its Hide panel), before the first paint so it does not flash
+  try {
+    var panel = localStorage.getItem("guild-console-comms-panel"), side = panel;
+    try { side = JSON.parse(panel); } catch (e) { side = panel; }
+    if (side === "hidden") { document.documentElement.dataset.commsPanel = "hidden"; }
+  } catch (e) { /* storage off: panel shown */ }
 })();

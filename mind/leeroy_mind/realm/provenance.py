@@ -1043,7 +1043,8 @@ def capture_qualification_in_unit(store, *, human: HumanIdentity, event,
                 or _receipt(receipt).transport_epoch != transport_epoch):
             _fail('invalid_input')
         _bound_receipt(store, receipt, event, policy)
-        stored = {row['guid'] for row in store.conn.execute('SELECT guid FROM persona_core')}
+        # A world persona grants no actor admission; an existing native actor keeps it.
+        stored = set(store.persona_versions())
         kicked = {row['guid'] for row in store.conn.execute('SELECT guid FROM realm_kick')}
         for guid in stored | kicked:
             _integer(guid, 1)

@@ -114,15 +114,21 @@ def test_date_outfits_exclude_work_clothes():
 
 
 def test_restyle_snapshot_precedes_any_migration_or_write(h, capsys, monkeypatch):
+    import re
     from leeroy_mind import __main__ as main
-    from leeroy_mind.storage import db
+    from leeroy_mind.storage.db import MIGRATIONS_DIR
     root = prepared(h)
-    previous_schema = db.latest_version()
-    # A real pending migration, independent of which feature happens to be last.
-    pending = root / f'{previous_schema+1:04d}_snapshot_probe.sql'
-    pending.write_text('CREATE TABLE restyle_migration_probe(id INTEGER);', encoding='utf-8')
-    migrations = db._migration_files()
-    monkeypatch.setattr(db, '_migration_files', lambda: [*migrations, (previous_schema+1, pending)])
+    files = sorted(MIGRATIONS_DIR.glob("[0-9][0-9][0-9][0-9]_*.sql"))
+    feature = next(int(p.name[:4]) for p in files if p.name[5:] == "photo_extra.sql")
+    previous_schema = feature - 1
+    # Recreate the pre-feature schema: this migration and every later one (each creates only
+    # its own tables, with their indexes and triggers) are pending again.
+    with h.store.transaction():
+        for p in files:
+            if int(p.name[:4]) >= feature:
+                for table in re.findall(r"^CREATE TABLE (\w+)", p.read_text(encoding="utf-8"), re.M):
+                    h.store.conn.execute(f"DROP TABLE {table}")
+        h.store.conn.execute(f"PRAGMA user_version={previous_schema}")
     calls = []
     original = main._snapshot_file
     def snapshot(db, dest, label):
@@ -136,8 +142,7 @@ def test_restyle_snapshot_precedes_any_migration_or_write(h, capsys, monkeypatch
     assert len(snapshots) == 1
     with sqlite3.connect(snapshots[0]) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == previous_schema
-        assert conn.execute("SELECT 1 FROM sqlite_master WHERE name='restyle_migration_probe'").fetchone() is None
-    assert h.store.conn.execute("SELECT 1 FROM sqlite_master WHERE name='restyle_migration_probe'").fetchone()
+        assert conn.execute("SELECT 1 FROM sqlite_master WHERE name='photo_extra'").fetchone() is None
 
 
 def test_restyle_reports_adult_floor(h):

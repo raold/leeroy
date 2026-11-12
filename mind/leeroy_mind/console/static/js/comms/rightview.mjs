@@ -8,6 +8,7 @@ import { FEED, openView } from "./feedview.mjs";
 import { renderRooms } from "./leftview.mjs";
 import { roomMates } from "./tree.mjs";
 import { DISCORD } from "./discordstate.mjs";
+import { panelHidden, setPanel } from "./panel.mjs";
 
 // The Comms right column: the faces of the room he is in, lit while their voice plays, and below
 // them the card of the member whose face he clicked anywhere in Comms (the feed, the room tree, a
@@ -91,6 +92,7 @@ export function openCard(guid, known) {
   CARD.guid = guid;
   CARD.face = "";  // opened again: the photo is asked for again (a new one, or one where none was)
   CARD.name = str(known) || (S.voice && str(S.voice.names[guid])) || "#" + guid;
+  if (panelHidden()) { setPanel(false); }  // a face asked for: the card lives in the panel
   $("mcard").hidden = false;
   drawCard({ name: CARD.name, note: "", facts: [] }, true);
   $("mcard").scrollIntoView({ block: "nearest" });
