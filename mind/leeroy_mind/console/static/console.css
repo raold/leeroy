@@ -713,3 +713,7 @@ td > div.who { color: var(--ink); font-weight: 600; }
 #dc-photo-view::backdrop { background:rgb(0 0 0 / 75%); }
 .tonight-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr)); gap:16px; }
 .tonight-line { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
+
+/* A tab left open across a console update: why it waits to reload (update.mjs). */
+.update-note { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 50; margin: 0; max-width: min(640px, calc(100vw - 32px));
+  padding: 10px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); box-shadow: 0 4px 16px rgb(0 0 0 / 0.35); }
