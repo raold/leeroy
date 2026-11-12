@@ -423,13 +423,17 @@ test("a thread the snapshot left out while it moved on is read again from its ne
   // Reconnect: 1101 wrote again (id 2), then other threads filled the snapshot's whisper budget
   f.setThreads([{ guid: 1101, name: "Arkon", last: toHim(2, 1101) }, { guid: 1102, name: "Bexley", last: toHim(9, 1102) }]);
   f.adopt([toHim(9, 1102)], 0, ["w:1101", "w:1102"]);
-  assert.deepEqual(f.lines("w:1101"), []);       // let go, so opening it reads from its newest line
-  assert.equal(f.known("w:1101"), false);
+  assert.deepEqual(ids(f.lines("w:1101")), [1]);  // kept, with a gap read from its newest line
+  assert.equal(f.gapped("w:1101"), true);
+  assert.equal(f.oldest("w:1101"), 0);
   assert.equal(f.threads()[1].last.id, 2);       // still listed, with its newest line
-  // A cut thread that is not behind keeps its lines
-  f.older("w:1101", { lines: [toHim(1, 1101), toHim(2, 1101)], more: false }, 0);
+  assert.equal(f.older("w:1101", { lines: [toHim(1, 1101), toHim(2, 1101)], more: false }, 0), true);
+  assert.equal(f.gapped("w:1101"), false);
+  assert.deepEqual(ids(f.lines("w:1101")), [1, 2]);
+  // A cut thread that is not behind keeps its lines and opens no gap
   f.adopt([toHim(9, 1102)], 0, ["w:1101", "w:1102"]);
   assert.deepEqual(ids(f.lines("w:1101")), [1, 2]);
+  assert.equal(f.gapped("w:1101"), false);
 });
 
 test("a gap between read-back history and a newer cut snapshot is read back until it closes", () => {
@@ -463,4 +467,42 @@ test("a gap between read-back history and a newer cut snapshot is read back unti
   g.adopt(snap, 5401, ["guild"]);
   assert.equal(g.gapped("guild"), false);
   assert.equal(g.oldest("guild"), 401);
+});
+
+test("a reconnect while a gap fills keeps the gap's floor", () => {
+  var f = new Feed();
+  f.active = "guild";
+  f.adopt([mk(300)], 0);
+  var hist = [];
+  for (var i = 1; i < 300; i++) { hist.push(mk(i)); }
+  f.older("guild", { lines: hist, more: false }, f.oldest("guild"));
+  var snap = [];
+  for (var j = 1001; j <= 1200; j++) { snap.push(mk(j)); }
+  f.adopt(snap, 6001, ["guild"]);
+  var part = [];
+  for (var n = 901; n <= 1000; n++) { part.push(mk(n)); }
+  f.older("guild", { lines: part, more: true }, 1001);
+  f.adopt(snap, 6001, ["guild"]);                   // again, before the gap is filled
+  assert.equal(f.gapped("guild"), true);
+  assert.equal(f.gaps.get("guild").floor, 300);
+  f.older("guild", { lines: part, more: true }, f.oldest("guild"));  // 901-1000 again: not closed
+  assert.equal(f.gapped("guild"), true);
+  assert.equal(f.mayHaveMore("guild"), true);
+});
+
+test("history from before a long disconnect gets a gap the snapshot's start cannot see", () => {
+  var f = new Feed();
+  f.active = "guild";
+  f.adopt([mk(1, { ts: 100 })], 0);
+  f.older("guild", { lines: [], more: false }, f.oldest("guild"));
+  assert.equal(f.mayHaveMore("guild"), false);
+  // Line 2 was said on day 1 while away; the snapshot on day 5 starts after it
+  f.adopt([mk(3, { ts: 5 * 86400 })], 2 * 86400);
+  assert.deepEqual(ids(f.lines("guild")), [1, 3]);
+  assert.equal(f.gapped("guild"), true);
+  assert.equal(f.oldest("guild"), 3);
+  f.older("guild", { lines: [mk(1, { ts: 100 }), mk(2, { ts: 86400 })], more: false }, 3);
+  assert.equal(f.gapped("guild"), false);
+  assert.deepEqual(ids(f.lines("guild")), [1, 2, 3]);
+  assert.equal(f.mayHaveMore("guild"), false);
 });

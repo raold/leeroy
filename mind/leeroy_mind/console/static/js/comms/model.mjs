@@ -138,28 +138,23 @@ export class Feed {
     gone.forEach((id) => { this.more.set(this.where.get(id), true); });
     this.drop(gone);
     this.upsert(chat);
-    // A thread the snapshot cut whose newest line here is older than its index's (set first, from
-    // the same snapshot): it is behind, and history reads only backward, so its window is let go
-    // and read again from its newest line when it opens
-    cutViews.forEach((v) => {
-      var m = this.views.get(v), k = v.indexOf("w:") === 0 ? this.index.get(Number(v.slice(2))) : null;
-      if (!m) { return; }
-      if (!low.has(v)) {
-        if (!k || Math.max.apply(null, Array.from(m.keys())) >= k.last.id) { return; }
-        Array.from(m.keys()).forEach((id) => { this._remove(id); });
-        this.more.delete(v);
-        this.held.delete(v);
-        this.gaps.delete(v);
-        return;
-      }
-      // Its newest lines sit above lines read back before: what fell between may be missing, and
-      // the gap is read back from the snapshot's oldest line down (feedview fills it)
-      var edge = low.get(v), below = Array.from(m.keys()).filter(function (id) { return id < edge; });
-      if (!below.length) { return; }
-      var was = this.gaps.get(v);
-      this.gaps.set(v, { edge: edge, floor: Math.max.apply(null, below),
-                         more: was ? was.more : this.more.get(v) });
-    });
+    // A view that keeps lines older than what the snapshot covers (read back before, or from
+    // before a long disconnect) may be missing what was said between them and the snapshot: a gap,
+    // read back from the snapshot's oldest line in that view down (0: from the newest line), page
+    // by page until a page reaches them (feedview fills it). A thread whose index says nothing is
+    // newer than what is kept has none. A gap found again keeps its floor and its "more".
+    if (cut !== null) {
+      this.views.forEach((m, v) => {
+        var edge = low.has(v) ? low.get(v) : 0;
+        var kept = Array.from(m.keys()).filter(function (id) { return !now.has(id); });
+        if (!kept.length) { return; }
+        var top = Math.max.apply(null, kept), was = this.gaps.get(v);
+        var k = v.indexOf("w:") === 0 ? this.index.get(Number(v.slice(2))) : null;
+        if (!was && edge === 0 && k && k.last.id <= top) { return; }
+        this.gaps.set(v, { edge: edge, floor: was ? was.floor : top,
+                           more: was ? was.more : this.more.get(v) });
+      });
+    }
     return true;
   }
   // Every member he ever whispered with ({guid, name, last}, the console's `threads`); null (it
