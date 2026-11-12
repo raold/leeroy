@@ -319,3 +319,14 @@ def test_threads_list_every_member_he_whispered_with_newest_first(db):
     got = feed.read(path, feed.threads)
     assert [(t["guid"], t["name"]) for t in got] == [(102, "Belra"), (103, "Coros"), (101, "P101")]
     assert got[0]["last"]["id"] == newest and got[0]["last"]["text"] == "latest"
+
+
+def test_history_and_threads_hold_back_a_whisper_inside_the_grace(db):
+    store, path = db
+    line = say(store, "whisper", 101, "just now", to=HUMAN)
+    ts = store.conn.execute("SELECT ts FROM chat_line WHERE id = ?", (line,)).fetchone()[0]
+    assert feed.read(path, feed.history, "w:101", 1 << 40, now=ts + 1)["lines"] == []
+    assert feed.read(path, feed.threads, now=ts + 1) == []
+    later = feed.read(path, feed.history, "w:101", 1 << 40, now=ts + 5)["lines"]
+    assert [x["id"] for x in later] == [line]
+    assert [t["guid"] for t in feed.read(path, feed.threads, now=ts + 5)] == [101]

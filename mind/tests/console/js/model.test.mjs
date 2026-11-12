@@ -344,3 +344,53 @@ test("the open view keeps every line read back; another goes back to its newest 
   assert.equal(f.lines("guild")[KEEP - 1].id, 301);
   assert.equal(f.mayHaveMore("guild"), true);
 });
+
+test("a reconnect keeps history a busy view's snapshot did not reach", () => {
+  var f = new Feed(), snap = [];
+  for (var i = 101; i <= 100 + KEEP; i++) { snap.push(mk(i)); }
+  f.adopt(snap, 5000);  // its window reaches past them all: the view was cut at KEEP lines
+  f.active = "guild";
+  var page = [];
+  for (var j = 1; j <= 100; j++) { page.push(mk(j)); }  // read back, inside the window too
+  f.older("guild", { lines: page, more: false });
+  f.upsert([said(400, 1102, { channel: "officer" }), said(401, 1102, { channel: "officer" })]);
+  f.adopt(snap.slice(1).concat([mk(301), said(401, 1102, { channel: "officer" })]), 5000);
+  assert.equal(f.lines("guild").length, 301);
+  assert.equal(f.lines("guild")[0].id, 1);
+  // A quiet view's snapshot sent all of it from the window's start: a line it lacks went
+  assert.deepEqual(ids(f.lines("officer")), [401]);
+});
+
+test("history that comes back after he left the view keeps Load earlier", () => {
+  var f = new Feed();
+  f.adopt([], 0);
+  f.active = "guild";
+  var live = [];
+  for (var i = 101; i <= 300; i++) { live.push(mk(i)); }
+  f.upsert(live);
+  f.active = "officer";  // he left before the page came back
+  var page = [];
+  for (var j = 1; j <= 100; j++) { page.push(mk(j)); }
+  f.older("guild", { lines: page, more: false });
+  assert.equal(f.lines("guild").length, KEEP);
+  assert.equal(f.lines("guild")[0].id, 101);
+  assert.equal(f.mayHaveMore("guild"), true);
+});
+
+test("live whispers keep the thread list current, also after a thread's lines are evicted", () => {
+  var f = new Feed({ human: HIM });
+  f.adopt([toHim(1, 1101)], 0);
+  f.setThreads([{ guid: 1101, name: "Arkon", last: toHim(1, 1101) }]);
+  f.upsert([fromHim(2, 1101)]);  // he answered
+  for (var g = 2000; g < 2000 + VIEW_LIMIT; g++) { f.upsert([toHim(g, g)]); }
+  assert.equal(f.views.has("w:1101"), false);
+  var t = f.threads().filter(function (x) { return x.guid === 1101; })[0];
+  assert.equal(t.last.id, 2);
+  assert.equal(t.name, "Arkon");
+  // A line on its way is not its thread's newest yet; a thread whose every line went leaves
+  f.upsert([toHim(3001, 1104, { heard: false })]);
+  assert.equal(f.threads().some(function (x) { return x.guid === 1104; }), false);
+  f.upsert([toHim(3002, 1105)]);
+  f.drop([3002]);
+  assert.equal(f.threads().some(function (x) { return x.guid === 1105; }), false);
+});

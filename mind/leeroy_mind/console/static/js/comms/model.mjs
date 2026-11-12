@@ -90,6 +90,7 @@ export class Feed {
       m.set(l.id, l);
       this.where.set(l.id, v);
       top = Math.max(top, l.id);
+      if (v.indexOf("w:") === 0 && l.heard !== false) { this._indexLine(Number(v.slice(2)), l); }
       // The open view keeps every line once he has read its history back; any other view (that
       // one too, once he has left it) keeps its newest KEEP
       if (m.size > KEEP && !(v === this.active && this.held.has(v))) {
@@ -107,25 +108,32 @@ export class Feed {
     });
     if (this.floor === null) { this.floor = top; }
   }
-  // A snapshot's lines are the feed as it is now, from `since` (epoch seconds) on, the newest of
-  // each view: a line here it lacks from that time on, or newer than its view's oldest line there,
-  // has gone; an older one was read back through the history and stays. Without `since` (an older
+  // A snapshot's lines are the feed as it is now, from `since` (epoch seconds) on, at most the
+  // newest KEEP of each view: a line here it lacks within what it covered of the line's view (newer
+  // than its oldest line there, or from `since` on when it sent fewer than KEEP) has gone; an
+  // older one was read back through the history and stays. Without `since` (an older
   // console) the snapshot is the whole feed. A view that loses lines may read them back again.
   // null (the console could not read it) keeps the lines and the floor here. True when adopted.
   adopt(chat, since) {
     if (!Array.isArray(chat)) { return false; }
-    var now = new Set(), low = new Map(), human = this.human;
+    var now = new Set(), low = new Map(), count = new Map(), human = this.human;
     chat.forEach(function (l) {
       if (!l || !goodId(l.id)) { return; }
       now.add(l.id);
       var v = viewOf(l, human);
-      if (v && !(low.get(v) < l.id)) { low.set(v, l.id); }
+      if (!v) { return; }
+      count.set(v, (count.get(v) || 0) + 1);
+      if (!(low.get(v) < l.id)) { low.set(v, l.id); }
     });
     var cut = typeof since === "number" && isFinite(since) ? since : null;
     var gone = this.ids().filter((id) => {
       if (now.has(id)) { return false; }
+      if (cut === null) { return true; }
       var v = this.where.get(id);
-      return cut === null || num(this.views.get(v).get(id).ts) >= cut || (low.has(v) && id > low.get(v));
+      if (low.has(v) && id > low.get(v)) { return true; }
+      // Older than its view's lines there: gone only when the snapshot sent the whole view from
+      // `since` on, not just its newest KEEP (the console's own per-view limit)
+      return (count.get(v) || 0) < KEEP && num(this.views.get(v).get(id).ts) >= cut;
     });
     gone.forEach((id) => { this.more.set(this.where.get(id), true); });
     this.drop(gone);
@@ -149,8 +157,10 @@ export class Feed {
   older(view, page) {
     page = obj(page);
     this.held.add(view);
+    this.more.delete(view);
     this.upsert(arr(page.lines));
-    this.more.set(view, page.more === true);
+    // A view he left in the meantime was trimmed again (more: true), whatever the page said
+    if (this.more.get(view) !== true) { this.more.set(view, page.more === true); }
   }
   // The oldest line id the page holds for a view (0: none), where its history reads back from
   oldest(view) {
@@ -162,7 +172,29 @@ export class Feed {
   mayHaveMore(view) { return this.more.has(view) ? this.more.get(view) : true; }
   // Whether the page has asked a view's history yet
   known(view) { return this.more.has(view); }
-  drop(ids) { arr(ids).forEach((id) => { this._remove(id); }); }
+  // Lines that went from the feed. A thread whose indexed newest line went falls back to its
+  // newest line still here, or leaves the list until the next snapshot says otherwise.
+  drop(ids) {
+    var hit = new Set();
+    arr(ids).forEach((id) => {
+      var v = this.where.get(id), g = v && v.indexOf("w:") === 0 ? Number(v.slice(2)) : 0;
+      var k = g ? this.index.get(g) : null;
+      if (k && k.last.id === id) { hit.add(g); }
+      this._remove(id);
+    });
+    hit.forEach((g) => {
+      var shown = this.lines("w:" + g);
+      if (shown.length) { this.index.set(g, { name: this.index.get(g).name, last: shown[shown.length - 1] }); }
+      else { this.index.delete(g); }
+    });
+  }
+  // A shown whisper line newer than (or the same as) its thread's indexed one becomes its newest
+  _indexLine(g, l) {
+    var k = this.index.get(g);
+    if (k && k.last.id > l.id) { return; }
+    var name = str(mine(l, this.human) ? l.to : l.from) || (k ? k.name : "");
+    this.index.set(g, { name: name, last: l });
+  }
   _remove(id) {
     var v = this.where.get(id);
     if (!v) { return; }

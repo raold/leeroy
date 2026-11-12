@@ -166,23 +166,27 @@ def feed(conn, *, after: int = 0, upto: int | None = None, since: float | None =
     return _query(conn, after=after, upto=upto, since=since, limit=limit, ids=None, now=now)
 
 
-def history(conn, view: str, before: int, limit: int = HISTORY_LIMIT) -> dict:
+def history(conn, view: str, before: int, limit: int = HISTORY_LIMIT,
+            now: float | None = None) -> dict:
     """One view's shown lines older than line `before`, the newest `limit` of them, oldest first,
-    and whether older ones remain (`more`): the page reads a view back a page at a time."""
+    and whether older ones remain (`more`): the page reads a view back a page at a time. With
+    `now`, a whisper still inside WHISPER_GRACE_S with no voice row is held back, as in `feed`."""
     if type(view) is not str or VIEW_RE.match(view) is None:
         raise ValueError("view")
     only, peer = ("peer", int(view[2:])) if view.startswith("w:") else (view, 0)
     lines = _query(conn, after=0, upto=int(before) - 1, since=None, limit=int(limit) + 1,
-                   ids=None, only=only, peer=peer)
+                   ids=None, now=now, only=only, peer=peer)
     more = len(lines) > limit
     return {"lines": lines[1:] if more else lines, "more": more}
 
 
-def threads(conn) -> list[dict]:
+def threads(conn, now: float | None = None) -> list[dict]:
     """Every member he has whispered with, newest thread first: their guid, name and the thread's
-    newest shown line. The page lists them all and reads a thread's lines when it opens one."""
+    newest shown line (with `now`, as `feed` shows it). The page lists them all and reads a
+    thread's lines when it opens one."""
     out = []
-    for line in _query(conn, after=0, upto=None, since=None, limit=1, ids=None, only="whispers"):
+    for line in _query(conn, after=0, upto=None, since=None, limit=1, ids=None, now=now,
+                       only="whispers"):
         peer, name = (line["to_guid"], line["to"]) if line["you"] else (line["from_guid"], line["from"])
         out.append({"guid": peer, "name": name, "last": line})
     out.sort(key=lambda t: t["last"]["id"], reverse=True)

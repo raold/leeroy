@@ -680,7 +680,8 @@ class ConsoleApp:
 
     async def _threads(self) -> list | None:
         try:
-            return await asyncio.to_thread(feed.read, self.s.data_dir / "mind.db", feed.threads)
+            return await asyncio.to_thread(feed.read, self.s.data_dir / "mind.db", feed.threads,
+                                           now=self._clock())
         except Exception as e:
             log.warning("console_feed_unread: error=%s", type(e).__name__)
             return None  # not [], which would tell the page he never whispered with anyone
@@ -1730,7 +1731,7 @@ class ConsoleApp:
             return text(400, f"limit: 1 to {feed.HISTORY_MAX}")
         try:
             page = await asyncio.to_thread(feed.read, self.s.data_dir / "mind.db", feed.history,
-                                           view, before, limit)
+                                           view, before, limit, now=self._clock())
         except Exception as e:
             log.warning("console_feed_unread: error=%s", type(e).__name__)
             return text(503, "The history could not be read from mind.db.")
