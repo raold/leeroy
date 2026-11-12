@@ -104,3 +104,21 @@ def test_in_unit_is_read_only_and_has_no_sql_or_commit_side_effect(store):
         assert store.get_meta("uncommitted") is None
     finally:
         store.conn.set_trace_callback(None)
+
+
+def test_a_read_left_open_does_not_fail_the_next_unit(store, tmp_path):
+    """A read outside a unit leaves the connection's transaction open on a WAL snapshot. Once
+    another connection (the signals writer) commits, a write in that stale snapshot fails at
+    once with "database is locked" (SQLITE_BUSY_SNAPSHOT; the busy timeout cannot help), as
+    tests/signals/test_integration.py did in CI. A unit starts from a fresh snapshot."""
+    other = sqlite3.connect(tmp_path / "mind.db", timeout=2.0, isolation_level=None)
+    try:
+        store.conn.execute("SELECT value FROM meta").fetchall()  # left open
+        other.execute("BEGIN IMMEDIATE")
+        other.execute("INSERT INTO meta(key, value) VALUES ('other', 'x')")
+        other.commit()
+        with store.transaction():
+            store.set_meta("mine", "y")
+        assert other.execute("SELECT value FROM meta WHERE key='mine'").fetchone()[0] == "y"
+    finally:
+        other.close()
