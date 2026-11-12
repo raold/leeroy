@@ -175,6 +175,7 @@ html[data-comms-panel="hidden"] .comms > .panel.right { display: none; }
 .msg .t { font: 500 12px/1 var(--f-mono); color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .msg .body { color: var(--ink); overflow-wrap: anywhere; }
 .feed .empty { padding: 10px 2px; }
+.feed-more { display: flex; justify-content: center; padding: 6px 2px 10px; }
 
 /* comms, who is typing: under the feed, where their line will appear, on a line that keeps its
    height; the same dots mark a member writing him a whisper in the list */

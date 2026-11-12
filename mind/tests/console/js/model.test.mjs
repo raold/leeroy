@@ -42,10 +42,10 @@ test("days of changing whisper views bound every index and preserve the active v
 
 test("each channel has its view", () => {
   assert.equal(viewOf(mk(1, { channel: "guild" }), HIM), "guild");
-  assert.equal(viewOf(mk(1, { channel: "voice:kitchen", voice: "kitchen" }), HIM), "guild");
-  assert.equal(viewOf(mk(1, { channel: "voice:guild_hall", voice: "guild_hall" }), HIM), "guild");
+  assert.equal(viewOf(mk(1, { channel: "voice:kitchen", voice: "kitchen" }), HIM), "voice");
+  assert.equal(viewOf(mk(1, { channel: "voice:guild_hall", voice: "guild_hall" }), HIM), "voice");
   assert.equal(viewOf(mk(1, { channel: "officer" }), HIM), "officer");
-  assert.equal(viewOf(mk(1, { channel: "voice:officers", voice: "officers" }), HIM), "officer");
+  assert.equal(viewOf(mk(1, { channel: "voice:officers", voice: "officers" }), HIM), "voice");
   assert.equal(viewOf(mk(1, { channel: "party" }), HIM), "group");
   assert.equal(viewOf(mk(1, { channel: "raid" }), HIM), "group");
   assert.equal(viewOf(mk(1, { channel: "raid_warning" }), HIM), "group");
@@ -59,12 +59,12 @@ test("each channel has its view", () => {
 test("a line on its way is hidden until it has played, and drop removes it", () => {
   var f = new Feed();
   f.upsert([said(1, 1102, { channel: "voice:kitchen", voice: "kitchen", heard: false })]);
-  assert.deepEqual(f.lines("guild"), []);
+  assert.deepEqual(f.lines("voice"), []);
   f.upsert([said(1, 1102, { channel: "voice:kitchen", voice: "kitchen", heard: true })]);
-  assert.deepEqual(ids(f.lines("guild")), [1]);
-  assert.equal(f.lines("guild")[0].heard, true);
+  assert.deepEqual(ids(f.lines("voice")), [1]);
+  assert.equal(f.lines("voice")[0].heard, true);
   f.drop([1]);
-  assert.deepEqual(f.lines("guild"), []);
+  assert.deepEqual(f.lines("voice"), []);
   f.drop([99]);  // a line it never had
 });
 
@@ -92,7 +92,8 @@ test("history seen on first open is read", () => {
                  : said(i, 1101, { channel: i % 2 ? "voice:kitchen" : "guild", voice: i % 2 ? "kitchen" : null }));
   }
   f.upsert(history);
-  ["guild", "officer", "group", "w:1104"].forEach(function (v) { assert.equal(f.unread(v), 0, v); });
+  ["guild", "officer", "group", "voice", "w:1104"].forEach(function (v) { assert.equal(f.unread(v), 0, v); });
+  assert.equal(f.lines("voice").length > 0, true);
   assert.equal(f.lines("guild").length > 0, true);
   f.upsert([said(51, 1101)]);
   assert.equal(f.unread("guild"), 1);
@@ -129,8 +130,9 @@ test("his own lines are never unread, and reading moves the mark", () => {
   assert.equal(f.markRead("guild"), true);
   assert.equal(f.unread("guild"), 0);
   assert.equal(f.markRead("guild"), false);  // nothing new
+  assert.equal(f.unread("voice"), 0);  // his own spoken line
   f.upsert([said(6, 1101, { channel: "voice:kitchen", voice: "kitchen", heard: false })]);
-  assert.equal(f.unread("guild"), 0);  // not shown yet
+  assert.equal(f.unread("voice"), 0);  // not shown yet
   f.upsert([said(7, 1101)]);
   assert.equal(f.unread("guild"), 1);
 });
@@ -260,4 +262,85 @@ test("each line's chips say where it was said", () => {
                    [{ cls: "chip voice", text: "voice" }]);
   assert.deepEqual(lineChips(mk(3, { channel: "raid_warning" }), room), [{ cls: "chip wow", text: "raid warning" }]);
   assert.deepEqual(lineChips(mk(4, { channel: "guild" }), room), [{ cls: "chip wow", text: "guild" }]);
+});
+
+test("the voice transcript is its own view: every room he heard, who said it, never # guild", () => {
+  var f = new Feed({ human: HIM });
+  f.upsert([said(1, 1101), said(2, 1102, { channel: "voice:guild_hall", voice: "guild_hall", heard: true }),
+            said(3, 1103, { channel: "voice:officers", voice: "officers", heard: true }),
+            mine(4, { channel: "voice:guild_hall", voice: "guild_hall", heard: true })]);
+  assert.deepEqual(ids(f.lines("guild")), [1]);
+  assert.deepEqual(ids(f.lines("officer")), []);
+  assert.deepEqual(ids(f.lines("voice")), [2, 3, 4]);
+  assert.deepEqual(f.lines("voice").map(function (l) { return l.from; }), ["Bexley", "Corwyn", "Owner"]);
+  f.upsert([said(5, 1104, { channel: "voice:kitchen", voice: "kitchen", heard: true })]);
+  assert.equal(f.unread("voice"), 1);
+  assert.equal(f.markRead("voice"), true);
+  assert.deepEqual(Object.keys(f.readState()).sort(), ["guild", "voice"]);
+});
+
+test("a view reads back through its history and a later snapshot keeps what it read", () => {
+  var f = new Feed();
+  assert.equal(f.adopt([mk(10), mk(11), toHim(12, 1101)], 5010), true);  // ts is 5000 + id
+  assert.equal(f.oldest("guild"), 10);
+  assert.equal(f.oldest("officer"), 0);
+  assert.equal(f.mayHaveMore("guild"), true);
+  assert.equal(f.known("guild"), false);
+  f.older("guild", { lines: [mk(3), mk(4)], more: true });
+  f.older("w:1101", { lines: [toHim(2, 1101)], more: false });
+  assert.deepEqual(ids(f.lines("guild")), [3, 4, 10, 11]);
+  assert.equal(f.oldest("guild"), 3);
+  assert.equal(f.known("guild"), true);
+  assert.equal(f.mayHaveMore("w:1101"), false);
+  ["guild", "w:1101"].forEach(function (v) { assert.equal(f.unread(v), 0, v); });  // history is read
+  f.older("w:1102", { lines: [toHim(1, 1102)], more: false });
+  f.upsert([toHim(14, 1103)]);
+  // A reconnect: 10 and 14 went (from the snapshot's start on); what it does not cover stays
+  f.adopt([mk(11), toHim(12, 1101), mk(13)], 5010);
+  assert.deepEqual(ids(f.lines("guild")), [3, 4, 11, 13]);
+  assert.deepEqual(ids(f.lines("w:1101")), [2, 12]);
+  assert.deepEqual(ids(f.lines("w:1102")), [1]);
+  assert.deepEqual(ids(f.lines("w:1103")), []);
+  assert.equal(f.mayHaveMore("w:1103"), true);
+  // A line older than the snapshot's start but newer than its view's oldest line there went too
+  f.adopt([mk(3), mk(11), mk(13), toHim(12, 1101)], 5011);
+  assert.deepEqual(ids(f.lines("guild")), [3, 11, 13]);
+  // An older console's snapshot (no start) is the whole feed
+  f.adopt([mk(13)]);
+  assert.deepEqual(f.ids(), [13]);
+  assert.equal(f.mayHaveMore("guild"), true);
+});
+
+test("threads list every member he ever whispered with, read back when one opens", () => {
+  var f = new Feed({ human: HIM });
+  f.adopt([toHim(10, 1101)], 5010);
+  assert.equal(f.setThreads(null), false);
+  assert.equal(f.setThreads([{ guid: 1101, name: "Arkon", last: toHim(10, 1101) },
+                             { guid: 1104, name: "Dunmore", last: fromHim(2, 1104) },
+                             { guid: 0, name: "nobody", last: mk(1) }, { guid: 1105, name: "Elsa" }]), true);
+  var t = f.threads();
+  assert.deepEqual(t.map(function (x) { return x.guid; }), [1101, 1104]);
+  assert.deepEqual(t[1], { guid: 1104, name: "Dunmore", last: fromHim(2, 1104), unread: 0 });
+  assert.deepEqual(f.lines("w:1104"), []);
+  assert.equal(f.known("w:1104"), false);
+  f.older("w:1104", { lines: [toHim(1, 1104), fromHim(2, 1104)], more: false });
+  assert.deepEqual(ids(f.lines("w:1104")), [1, 2]);
+  assert.equal(f.unread("w:1104"), 0);
+  f.setThreads([]);  // the index is replaced, the lines read stay
+  assert.deepEqual(f.threads().map(function (x) { return x.guid; }), [1101, 1104]);
+});
+
+test("the open view keeps every line read back; another goes back to its newest lines", () => {
+  var f = new Feed();
+  f.active = "guild";
+  f.adopt([mk(300)], 5300);
+  var page = [];
+  for (var i = 1; i <= 250; i++) { page.push(mk(i)); }
+  f.older("guild", { lines: page, more: false });
+  assert.equal(f.lines("guild").length, 251);
+  f.active = "officer";
+  f.upsert([mk(301)]);
+  assert.equal(f.lines("guild").length, KEEP);
+  assert.equal(f.lines("guild")[KEEP - 1].id, 301);
+  assert.equal(f.mayHaveMore("guild"), true);
 });

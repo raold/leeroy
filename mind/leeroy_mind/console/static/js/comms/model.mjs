@@ -3,8 +3,13 @@ import { signed } from "../words.mjs";
 import { BoundedMap } from "../resilience.mjs";
 
 // The Comms feed as data: the lines the console sends (typed in WoW and spoken on voice) sorted
-// into views, # guild, # officer, # party / raid and one whisper thread per member, with read
-// marks and the KPI band's figures. No DOM here: node imports this file.
+// into views, # guild, # officer, # party / raid, the voice transcript (every room he heard) and
+// one whisper thread per member, with read marks and the KPI band's figures. No DOM here: node
+// imports this file.
+//
+// Nothing he said or heard is lost to the page: the snapshot brings the last days, `index` lists
+// every member he ever whispered with (the console's `threads`), and `older` adds the earlier
+// lines a view reads back from /api/feed/history, which a later snapshot keeps.
 //
 // A read mark is the newest line id read in a view. A view with no stored mark is read up to the
 // newest line of the feed's first load (its floor), so the history a first open (or a reload)
@@ -15,8 +20,8 @@ import { BoundedMap } from "../resilience.mjs";
 
 export var KEEP = 200;
 export var VIEW_LIMIT = 64, READ_LIMIT = 128;
-var VIEW = /^(?:guild|officer|group|w:[1-9]\d{0,9})$/;
-var FIXED = new Set(["guild", "officer", "group"]);
+var VIEW = /^(?:guild|officer|group|voice|w:[1-9]\d{0,9})$/;
+var FIXED = new Set(["guild", "officer", "group", "voice"]);
 var GROUP = { party: 1, raid: 1, raid_warning: 1 };
 var CHANNELS = { guild: "guild", officer: "officer", party: "party", raid: "raid",
                  raid_warning: "raid warning", whisper: "whisper" };
@@ -25,12 +30,12 @@ var UNHEARD = { deafened: "not heard (deafened)", muted: "not heard (muted)" };
 function mine(line, human) { return line.you === true || (human > 0 && line.from_guid === human); }
 function goodId(id) { return typeof id === "number" && id > 0 && Math.floor(id) === id; }
 
-// "guild", "officer", "group", "w:<guid>" (a whisper's other party), "" for a line no view shows
+// "guild", "officer", "group", "voice" (any room), "w:<guid>" (a whisper's other party), "" for a
+// line no view shows
 export function viewOf(line, human) {
   var ch = str(line.channel);
   if (ch === "guild" || ch === "officer") { return ch; }
-  if (ch === "voice:officers") { return "officer"; }
-  if (ch.indexOf("voice:") === 0) { return "guild"; }
+  if (ch.indexOf("voice:") === 0) { return "voice"; }
   if (own(GROUP, ch)) { return "group"; }
   if (ch === "whisper") {
     var other = mine(line, num(human)) ? num(line.to_guid) : num(line.from_guid);
@@ -67,6 +72,9 @@ export class Feed {
     this.marks = Object.create(null);
     this.floor = null;
     this.opened = new BoundedMap(VIEW_LIMIT); // recent explicitly opened threads
+    this.index = new Map();    // guid -> {name, last}: every member he ever whispered with
+    this.more = new Map();     // view -> whether older lines remain; absent: not known yet
+    this.held = new Set();     // views whose history he read back: open, they keep every line
   }
   upsert(lines) {
     var top = 0;
@@ -82,27 +90,78 @@ export class Feed {
       m.set(l.id, l);
       this.where.set(l.id, v);
       top = Math.max(top, l.id);
-      if (m.size > KEEP) {
+      // The open view keeps every line once he has read its history back; any other view (that
+      // one too, once he has left it) keeps its newest KEEP
+      if (m.size > KEEP && !(v === this.active && this.held.has(v))) {
         Array.from(m.keys()).sort(function (a, b) { return a - b; }).slice(0, m.size - KEEP)
           .forEach((id) => { this._remove(id); });
+        this.more.set(v, true);
+        this.held.delete(v);
       }
       while (this.views.size > VIEW_LIMIT) {
         var old = Array.from(this.views.keys()).find(key => !FIXED.has(key) && key !== this.active);
         Array.from(this.views.get(old).keys()).forEach(id => this._remove(id));
+        this.more.delete(old);  // opened again, it reads its lines back
+        this.held.delete(old);
       }
     });
     if (this.floor === null) { this.floor = top; }
   }
-  // A snapshot's lines are the feed as it is now; null (the console could not read it) keeps the
-  // lines and the floor here. True when it was adopted.
-  adopt(chat) {
+  // A snapshot's lines are the feed as it is now, from `since` (epoch seconds) on, the newest of
+  // each view: a line here it lacks from that time on, or newer than its view's oldest line there,
+  // has gone; an older one was read back through the history and stays. Without `since` (an older
+  // console) the snapshot is the whole feed. A view that loses lines may read them back again.
+  // null (the console could not read it) keeps the lines and the floor here. True when adopted.
+  adopt(chat, since) {
     if (!Array.isArray(chat)) { return false; }
-    var now = new Set();
-    chat.forEach(function (l) { if (l && goodId(l.id)) { now.add(l.id); } });
-    this.drop(this.ids().filter(function (id) { return !now.has(id); }));
+    var now = new Set(), low = new Map(), human = this.human;
+    chat.forEach(function (l) {
+      if (!l || !goodId(l.id)) { return; }
+      now.add(l.id);
+      var v = viewOf(l, human);
+      if (v && !(low.get(v) < l.id)) { low.set(v, l.id); }
+    });
+    var cut = typeof since === "number" && isFinite(since) ? since : null;
+    var gone = this.ids().filter((id) => {
+      if (now.has(id)) { return false; }
+      var v = this.where.get(id);
+      return cut === null || num(this.views.get(v).get(id).ts) >= cut || (low.has(v) && id > low.get(v));
+    });
+    gone.forEach((id) => { this.more.set(this.where.get(id), true); });
+    this.drop(gone);
     this.upsert(chat);
     return true;
   }
+  // Every member he ever whispered with ({guid, name, last}, the console's `threads`); null (it
+  // could not read them) keeps the list. True when adopted.
+  setThreads(list) {
+    if (!Array.isArray(list)) { return false; }
+    var index = new Map();
+    list.forEach(function (t) {
+      if (t && goodId(t.guid) && t.last && goodId(t.last.id)) {
+        index.set(t.guid, { name: str(t.name), last: t.last });
+      }
+    });
+    this.index = index;
+    return true;
+  }
+  // A page of a view's history ({lines, more}, from /api/feed/history), read back into it
+  older(view, page) {
+    page = obj(page);
+    this.held.add(view);
+    this.upsert(arr(page.lines));
+    this.more.set(view, page.more === true);
+  }
+  // The oldest line id the page holds for a view (0: none), where its history reads back from
+  oldest(view) {
+    var m = this.views.get(view), low = 0;
+    if (m) { m.forEach(function (l, id) { if (!low || id < low) { low = id; } }); }
+    return low;
+  }
+  // Whether a view may have older lines than it holds: true until its history says otherwise
+  mayHaveMore(view) { return this.more.has(view) ? this.more.get(view) : true; }
+  // Whether the page has asked a view's history yet
+  known(view) { return this.more.has(view); }
   drop(ids) { arr(ids).forEach((id) => { this._remove(id); }); }
   _remove(id) {
     var v = this.where.get(id);
@@ -168,19 +227,22 @@ export class Feed {
     this.opened.set(guid, this.opened.get(guid) || { name: str(name), at: this.now() });
     return "w:" + guid;
   }
-  // One per member with a shown whisper line or a thread he opened, the newest first
+  // One per member he ever whispered with (the index), with a shown whisper line or a thread he
+  // opened, the newest first
   threads() {
     var out = [], guids = new Set(), human = this.human;
     this.views.forEach(function (m, v) { if (v.indexOf("w:") === 0) { guids.add(Number(v.slice(2))); } });
     this.opened.forEach(function (o, g) { guids.add(g); });
+    this.index.forEach(function (t, g) { guids.add(g); });
     guids.forEach((g) => {
-      var view = "w:" + g, shown = this.lines(view), opened = this.opened.get(g);
-      if (!shown.length && !opened) { return; }
+      var view = "w:" + g, shown = this.lines(view), opened = this.opened.get(g), known = this.index.get(g);
+      if (!shown.length && !opened && !known) { return; }
       var last = shown.length ? shown[shown.length - 1] : null, name = "";
+      if (known && (!last || known.last.id > last.id)) { last = known.last; }
       for (var i = shown.length - 1; i >= 0 && !name; i--) {
         name = str(mine(shown[i], human) ? shown[i].to : shown[i].from);
       }
-      out.push({ t: { guid: g, name: name || (opened && opened.name) || "#" + g, last: last,
+      out.push({ t: { guid: g, name: name || (known && known.name) || (opened && opened.name) || "#" + g, last: last,
                       unread: this.unread(view) },
                  at: last ? num(last.ts) : opened.at, id: last ? last.id : Infinity });
     });

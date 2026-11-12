@@ -9,13 +9,21 @@ the line's audience, which for those channels is his group), and whispers to or 
 voiced whisper is never typed in WoW: one the voice service dropped because he was deafened or
 had muted the member shows as text marked `unheard` (the owner's ruling, 2026-11-06); one dropped
 for any other reason does not show. Say, yell and emotes, and whispers between members, are not
-his to see here."""
+his to see here.
+
+The feed has views: guild, officer, group, voice (every room he heard, the voice transcript) and
+one whisper thread per member (`w:<guid>`). chat_line is never pruned, so every view's history
+stays readable back to its first line (`history`), and `threads` lists every member he has ever
+whispered with (the owner's ruling, 2026-11-12: conversations persist permanently)."""
 import json
+import re
 import sqlite3
 from contextlib import closing
 from pathlib import Path
 
 FEED_LIMIT = 200
+HISTORY_LIMIT, HISTORY_MAX = 100, 200  # lines a history page brings by default, and at most
+VIEW_RE = re.compile(r"(?:guild|officer|group|voice|w:[1-9]\d{0,9})\Z")
 WHISPER_GRACE_S = 3.0  # a whisper is stored a moment before the voice row that says it was spoken
 UNHEARD = ("deafened", "muted")  # drop reasons that leave a voiced whisper shown as text, unheard
 
@@ -61,13 +69,19 @@ WITH base AS (
     FROM chat_line l LEFT JOIN cast_member c ON c.guid = l.to_guid
     WHERE l.id > :after AND l.id <= :upto AND l.ts >= :since
       AND (:ids IS NULL OR l.id IN (SELECT value FROM json_each(:ids)))
+      AND (:only IS NULL
+        OR (:only = 'guild' AND l.channel = 'guild')
+        OR (:only = 'officer' AND l.channel = 'officer')
+        OR (:only = 'group' AND l.channel IN ('party', 'raid', 'raid_warning'))
+        OR (:only = 'voice' AND l.channel LIKE 'voice:%')
+        OR (:only = 'whispers' AND l.channel = 'whisper')
+        OR (:only = 'peer' AND l.channel = 'whisper' AND (l.from_guid = :peer OR l.to_guid = :peer)))
 ), shown AS (
     SELECT *, CASE
-        WHEN channel = 'guild' OR (channel LIKE 'voice:%' AND channel != 'voice:officers')
-            THEN 'guild'
-        WHEN channel = 'officer' OR channel = 'voice:officers' THEN 'officer'
+        WHEN channel LIKE 'voice:%' THEN 'voice'
+        WHEN channel IN ('guild', 'officer') THEN channel
         WHEN channel IN ('party', 'raid', 'raid_warning') THEN 'group'
-        ELSE 'whisper' END AS view
+        ELSE 'w:' || CASE WHEN from_guid = :human THEN to_guid ELSE from_guid END END AS view
     FROM base WHERE (
         (channel IN ('guild', 'officer') AND session_id IS NOT NULL)
      OR (channel LIKE 'voice:%' AND session_id IS NOT NULL AND (
@@ -125,12 +139,13 @@ def _line(r, human: int) -> dict:
             "you": you, "voice": voice, "heard": heard, "unheard": unheard}
 
 
-def _query(conn, *, after, upto, since, limit, ids, now=None) -> list[dict]:
+def _query(conn, *, after, upto, since, limit, ids, now=None, only=None, peer=0) -> list[dict]:
     human = human_guid(conn)
     voiced = _has(conn, "voice_line", "voice_heard")
     vrank, vheard, vunheard = _VOICE_ROWS[voiced]
     rows = conn.execute(_FEED.format(vrank=vrank, vheard=vheard, vunheard=vunheard), {
         "after": int(after), "human": human, "limit": int(limit),
+        "only": only, "peer": int(peer),
         "upto": (1 << 62) if upto is None else int(upto),
         "since": -1e18 if since is None else float(since),
         "now": 0.0 if now is None else float(now),
@@ -142,13 +157,36 @@ def _query(conn, *, after, upto, since, limit, ids, now=None) -> list[dict]:
 def feed(conn, *, after: int = 0, upto: int | None = None, since: float | None = None,
          limit: int = FEED_LIMIT, now: float | None = None) -> list[dict]:
     """The owner-visible lines with ids after `after` (and up to `upto`), stored at `since` or
-    later, oldest first: at most `limit` of each view (guild, officer, group, whispers), the
-    newest. A spoken line shows once it has played to him (`heard`) or while it is on its way
+    later, oldest first: at most `limit` of each view (guild, officer, group, voice, each whisper
+    thread), the newest. A spoken line shows once it has played to him (`heard`) or while it is on its way
     (`sent`, heard False); one the voice service dropped never does, except a whisper dropped
     because he was deafened or had muted the member (`unheard`: the reason; voice and heard
     None). With `now`, a whisper younger than WHISPER_GRACE_S with no voice row yet is held back
     (see `waiting`)."""
     return _query(conn, after=after, upto=upto, since=since, limit=limit, ids=None, now=now)
+
+
+def history(conn, view: str, before: int, limit: int = HISTORY_LIMIT) -> dict:
+    """One view's shown lines older than line `before`, the newest `limit` of them, oldest first,
+    and whether older ones remain (`more`): the page reads a view back a page at a time."""
+    if type(view) is not str or VIEW_RE.match(view) is None:
+        raise ValueError("view")
+    only, peer = ("peer", int(view[2:])) if view.startswith("w:") else (view, 0)
+    lines = _query(conn, after=0, upto=int(before) - 1, since=None, limit=int(limit) + 1,
+                   ids=None, only=only, peer=peer)
+    more = len(lines) > limit
+    return {"lines": lines[1:] if more else lines, "more": more}
+
+
+def threads(conn) -> list[dict]:
+    """Every member he has whispered with, newest thread first: their guid, name and the thread's
+    newest shown line. The page lists them all and reads a thread's lines when it opens one."""
+    out = []
+    for line in _query(conn, after=0, upto=None, since=None, limit=1, ids=None, only="whispers"):
+        peer, name = (line["to_guid"], line["to"]) if line["you"] else (line["from_guid"], line["from"])
+        out.append({"guid": peer, "name": name, "last": line})
+    out.sort(key=lambda t: t["last"]["id"], reverse=True)
+    return out
 
 
 def look(conn, ids: list[int], now: float | None = None) -> list[dict]:

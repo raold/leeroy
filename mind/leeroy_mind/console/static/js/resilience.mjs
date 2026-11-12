@@ -36,7 +36,8 @@ export class BoundedMap extends Map {
 
 // Only the stable outer shape: optional sources and old databases may legitimately have
 // empty arrays or null detail fields. A different JSON object must not erase a good tab.
-var VIEWS = { state: ["rooms", "array"], feed: ["lines", "array"], raid: ["mind", "object"],
+var VIEWS = { state: ["rooms", "array"], feed: ["lines", "array"], "feed/history": ["more", "boolean"],
+  raid: ["mind", "object"],
   guild: ["roster", "array"], personas: ["members", "array"], persona: ["member", "object"],
   social: ["feuds", "array"], board: ["forum", "array"], calendar: ["upcoming", "array"],
   bank: ["ledger", "array"], realm: ["rivals", "array"], training: ["setup", "boolean"],
@@ -76,6 +77,9 @@ export function validView(path, value) {
     return typeof value.guid === "number" && ["awareness", "quality", "guards"].every(k =>
       record(value[k])) && ["live", "history"].every(k => value.claims[k] === undefined ||
         (Array.isArray(value.claims[k]) && value.claims[k].every(record)));
+  }
+  if (route === "feed/history") {
+    return Array.isArray(value.lines) && value.lines.every(record);
   }
   if (route === "guild") {
     return ["ladder", "loot", "awards", "chronicle"].every(k => value[k] === undefined ||
