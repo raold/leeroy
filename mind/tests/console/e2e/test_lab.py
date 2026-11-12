@@ -45,7 +45,8 @@ def seed_lab(r, *, history=False):
 
 
 async def sync_feed(r):
-    rows=feed.feed(r.app.store.conn,now=r.app.clock.now())
+    # Signals are committed by a separate writer; match the console's fresh read.
+    rows=feed.read(r.data/'mind.db',lambda conn:feed.feed(conn,now=r.app.clock.now()))
     await r.page.evaluate("async lines => (await import('/static/js/core.mjs')).emit('chat',{lines})",rows)
 
 
