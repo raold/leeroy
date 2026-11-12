@@ -35,6 +35,7 @@ class NightlySettings:
     learn_coach: bool = False
     learn_bandit: bool = False
     looks_diversity: bool = False
+    romance_activities: bool = False
     grace_minutes: int = 10
     retry_minutes: int = 60
     max_attempts: int = 3
@@ -132,7 +133,8 @@ def load_settings(cfg: MindConfig, data_dir: Path) -> NightlySettings:
         learn_bandit=load_learn_config(data_dir / "mind.toml").bandit,
         world_per_night=world.world_per_night,
         world_selfies_per_night=world.world_selfies_per_night,
-        looks_diversity=enabled(data_dir), quiet=server.quiet_window if server.enabled else None)
+        looks_diversity=enabled(data_dir), quiet=server.quiet_window if server.enabled else None,
+        romance_activities=cfg.romance.activities)
 
 
 def _at_six(day: date, tz: tzinfo) -> float:

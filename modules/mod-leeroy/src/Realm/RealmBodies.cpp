@@ -187,6 +187,9 @@ RealmStep Move(Queued& entry, std::uint32_t guid)
     }
     if (auto why = Eligible(entry, guid, Purpose::Move); !why.empty()) return Refuse(why);
     auto* bot = FindOnline(guid);
+    if (entry.payload.value("social", false)
+        && (!SocialReady(FindOnline(HumanGuid())) || !SocialReady(bot) || !IsCast(guid)))
+        return UnchangedRefusal("social_unavailable");
     Destination destination{};
     std::uint32_t zone = 0;
     auto const placeName = entry.payload.at("place").get<std::string>();
@@ -222,6 +225,7 @@ RealmStep Move(Queued& entry, std::uint32_t guid)
         auto const& places = RealmModule::Instance().Places();
         auto it = std::find_if(places.begin(), places.end(), [&](Place const& place) { return place.name == placeName; });
         if (it == places.end()) return Refuse("unknown_place");
+        if (entry.payload.value("social", false) && it->kind != "inn") return UnchangedRefusal("unknown_place");
         zone = it->zone;
         destination = {it->map, it->x, it->y, it->z, it->o};
         auto slot = entry.payload.at("slot").get<std::uint32_t>();
@@ -836,7 +840,23 @@ public:
 void RegisterRealmBodyHandlers()
 {
     QueueHandler("realm_move", ParseMove, [](MoveCmd const& command, Queued& entry)
-        { entry.guids = {command.guid}; entry.payload = {{"place", command.place}, {"slot", command.slot}}; }, Move);
+        { entry.guids = {command.guid}; entry.payload = {{"place", command.place}, {"slot", command.slot}, {"social", command.social}}; }, Move);
+    RegisterCommand("realm_visit", [](Json const& message) -> LeeroyCommandResult
+    {
+        std::string error;
+        auto command = ParseVisit(message, error);
+        if (!command) return {false, error};
+        if (!RealmModule::Instance().On()) return {false, "realm_off"};
+        auto const& places = RealmModule::Instance().Places();
+        auto it = std::find_if(places.begin(), places.end(), [&](Place const& p) { return p.name == command->place; });
+        if (it == places.end() || it->kind != "inn") return {false, "unknown_place"};
+        auto* human = FindOnline(HumanGuid());
+        bool const ready = SocialReady(human);
+        bool const nearby = ready && human->GetMapId() == it->map
+            && human->GetDistance(it->x, it->y, it->z) <= 20.0f;
+        Publish(MakeVisitState(message.at("id").get<std::string>(), command->place, GuildId(), HumanGuid(), ready, nearby));
+        return {true, ""};
+    });
     QueueHandler("rpg_status", ParseRpgStatus, [](RpgStatusCmd const& command, Queued& entry)
         { entry.guids = {command.guid}; entry.payload = {{"status", command.status}, {"quest_id", command.questId}}; }, Rpg);
     QueueHandler("leave_pvp", ParseLeavePvp, [](LeavePvpCmd const& command, Queued& entry)

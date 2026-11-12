@@ -40,6 +40,7 @@ bool Parse(std::string_view type, json const& j, std::string& error)
     if (type == "world_say") return ParseWorldSay(j, error).has_value();
     if (type == "realm_emote") return ParseEmote(j, error).has_value();
     if (type == "realm_move") return ParseMove(j, error).has_value();
+    if (type == "realm_visit") return ParseVisit(j, error).has_value();
     if (type == "rpg_status") return ParseRpgStatus(j, error).has_value();
     if (type == "leave_pvp") return ParseLeavePvp(j, error).has_value();
     if (type == "get_realm_pvp") return ParseGetRealmPvp(j, error).has_value();
@@ -120,6 +121,7 @@ json Event(std::string_view type)
     if (type == "game_event") return MakeGameEvent(20, "start");
     if (type == "calendar_rsvp") return MakeCalendarRsvp(14001, "accepted");
     if (type == "mail_taken") return MakeMailTaken(16001, 43015, 2);
+    if (type == "realm_visit_state") return MakeVisitState("realm-test", "org_inn", 21, 1, true, false);
     if (type == "guard") return MakeGuard(11001, "readded", 4, "");
     throw std::runtime_error("unhandled Realm event maker");
 }
@@ -281,7 +283,7 @@ LEEROY_TEST(Realm_FixtureLines)
             CHECK(valid); CHECK_EQ(row.at("name").get<std::string>(), type + "_ok"); full.insert(type);
         }
     }
-    CHECK_EQ(full.size(), kCommandTypes.size()); CHECK_EQ(events.size(), 17u);
+    CHECK_EQ(full.size(), kCommandTypes.size()); CHECK_EQ(events.size(), 18u);
     for (auto type : kCommandTypes) CHECK(full.contains(std::string(type)));
 }
 

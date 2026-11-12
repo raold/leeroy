@@ -1481,6 +1481,15 @@ Trade and General and the gankers' emotes, the race for first kills, canon achie
 the guild bank, the guild calendar, mail to him, the kick guard and the realm's night stage.
 Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
 
+`[romance] activities = true` enables private shared moments/moods and bounded inn invitations
+(default false). Moods reach prompts only with `[talk] aware = true`. Invitations require Realm
+enabled, a native rebuild and a mind restart; the supported activity is meeting and sitting
+at a whitelisted inn. Limits use local calendar days; Discord never accepts or moves a body.
+See `mind/leeroy_mind/bond/README.md` for privacy, expiry and exactly-once recovery.
+Install the new bond migration before enabling it.
+Invitation ticks check at most one candidate's body ledger after cheap gates. Map evidence
+comes from Cast, in-game chat and death events; Zone carries no map and keeps the last one.
+
 - **Off by default, two switches; this install runs it on.** `[realm] enabled = true` in `mind.toml` (read again at each
   hello and login) and native `Leeroy.Realm.Enable = 1` in `mod_leeroy.conf` (`.reload config`;
   while it is 0 native refuses every realm command `realm_off`). Other `[realm]` keys:

@@ -97,6 +97,8 @@ def attach(app):
             tuning=getattr(app.personas, "tuning", None))
 
     runner = NightRunner(STAGES, make_ctx)
+    from leeroy_mind.bond.night import attach as attach_bond
+    attach_bond(runner,settings)
     app.night_runner = runner
     scheduler = NightScheduler(app.store, settings, arbiter, runner.run, clock=app.clock)
     app.night_scheduler = scheduler  # the tuning preview asks whether a night runs or is due
