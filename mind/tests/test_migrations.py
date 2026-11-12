@@ -45,6 +45,42 @@ def db_before(stem: str, path, tmp_path, monkeypatch) -> sqlite3.Connection:
     return _db_at(path, migration_number(stem) - 1, tmp_path, monkeypatch)
 
 
+def test_discord_photos_preserves_messages_threads_reactions_and_snaps(tmp_path, monkeypatch):
+    path = tmp_path / 'mind.db'
+    conn = db_before('discord_photos', path, tmp_path, monkeypatch)
+    conn.executescript("""
+        INSERT INTO discord_message(id,channel,author,origin,text,ts,pinned,turn)
+          VALUES(1,'pics',1,'human','dog',1,1,'old');
+        INSERT INTO discord_thread VALUES(1,'pics',1,'dogs',1);
+        INSERT INTO discord_message(id,channel,author,origin,text,ts,reply_to,thread,deleted)
+          VALUES(2,'pics',101,'mind','cute',2,1,1,3);
+        INSERT INTO discord_reaction VALUES(1,'👍',101,2);
+        INSERT INTO selfie_snap(id,kind,guid,source,ref,night,status,scene,audience,phases,
+            pick,looks,created,not_before,expires,rendered,sent,sender,channel,line_id)
+          VALUES(1,'situation',101,'everyday','everyday:2026-11-12','2026-11-12','sent',
+            '{}','him','[]',1,'hash',1,1,100,2,3,101,'whisper',55);
+    """)
+    tables = ('discord_message', 'discord_thread', 'discord_reaction', 'selfie_snap')
+    before = {t: [dict(r) for r in conn.execute(f'SELECT * FROM {t}')] for t in tables}
+    conn.commit()
+    conn.close()
+    conn = open_db(path)
+    try:
+        for table in tables:
+            after = [dict(r) for r in conn.execute(f'SELECT * FROM {table}')]
+            if table == 'discord_message':
+                for row in after:
+                    assert row.pop('bot') is None
+            assert after == before[table]
+        assert not conn.execute('PRAGMA foreign_key_check').fetchall()
+        assert conn.execute('PRAGMA foreign_keys').fetchone()[0] == 1
+        for channel in ('discord', 'dm'):
+            conn.execute('UPDATE selfie_snap SET channel=?', (channel,))
+        assert db_mod.migrate(conn) == latest_version()
+    finally:
+        conn.close()
+
+
 def test_claims_upgrades_an_old_db_and_preserves_rows(tmp_path, monkeypatch):
     path = tmp_path / 'mind.db'
     conn = db_before('claims', path, tmp_path, monkeypatch)
@@ -365,7 +401,7 @@ def test_an_older_db_gains_the_discord_tables_and_keeps_its_rows(tmp_path, monke
         assert {"discord_message", "discord_thread", "discord_reaction"} <= names
         assert conn.execute("SELECT value FROM meta WHERE key = 'keep'").fetchone()[0] == "me"
         assert conn.execute("SELECT count(*) FROM discord_message").fetchone()[0] == 0
-        for bad in ("origin='bot'", "text=''", "author=0"):
+        for bad in ("origin='bot'", "author=0"):
             row = {"origin": "human", "text": "x", "author": 1}
             k, v = bad.split("=")
             row[k] = eval(v)

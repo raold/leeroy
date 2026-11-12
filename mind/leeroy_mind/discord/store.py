@@ -7,6 +7,9 @@
 
 Each writer runs in `store.transaction()`. A refusal is DiscordRefused, its text the code. The
 mind writes; the console reads (the reads take a plain connection, read-only is fine)."""
+from dataclasses import dataclass
+from typing import Iterable
+
 from .text import MAX_THREAD_NAME, TextRefused, clean_name, clean_text, is_one_emoji
 
 MAX_REACTIONS = 20
@@ -22,10 +25,22 @@ class DiscordRefused(ValueError):
         self.code = code
 
 
-def _text(s: str) -> str:
+@dataclass(frozen=True, slots=True)
+class AttachmentIn:
+    kind: str
+    path: str
+    width: int
+    height: int
+    bytes: int
+    snap: int | None = None
+
+
+def _text(s: str, *, allow_empty: bool = False) -> str:
     try:
         return clean_text(s)
     except TextRefused as e:
+        if allow_empty and e.code == 'empty':
+            return ''
         raise DiscordRefused(e.code) from None
 
 
@@ -45,8 +60,9 @@ def _live(store, message: int):
 
 
 def post(store, *, channel: str, author: int, origin: str, text: str, reply_to: int | None = None,
-         thread: int | None = None, turn: str | None = None, now: float) -> int:
-    text = _text(text)
+         thread: int | None = None, turn: str | None = None, now: float,
+         attachment: AttachmentIn | None = None) -> int:
+    text = _text(text, allow_empty=attachment is not None)
     if origin not in ("human", "mind"):
         raise DiscordRefused("bad_origin")
     if not channel or len(channel) > 40:
@@ -64,10 +80,31 @@ def post(store, *, channel: str, author: int, origin: str, text: str, reply_to: 
                 "SELECT channel FROM discord_thread WHERE id = ?", (thread,)).fetchone()
             if t is None or t[0] != channel:
                 raise DiscordRefused("no_thread")
-        return store.conn.execute(
+        mid = store.conn.execute(
             "INSERT INTO discord_message(channel, thread, author, origin, text, reply_to, ts, turn) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (channel, thread, author, origin, text, reply_to, now, turn)).lastrowid
+        if attachment is not None:
+            store.conn.execute('INSERT INTO discord_attachment(message,kind,path,width,height,bytes,snap) '
+                               'VALUES(?,?,?,?,?,?,?)', (mid, attachment.kind, attachment.path,
+                                attachment.width, attachment.height, attachment.bytes, attachment.snap))
+        return mid
+
+
+def attachments(conn, ids: Iterable[int]) -> dict[int, dict]:
+    ids = list(ids)
+    if not ids:
+        return {}
+    rows = conn.execute('SELECT a.* FROM discord_attachment a JOIN discord_message m ON m.id=a.message '
+                        f"WHERE m.deleted IS NULL AND a.message IN ({','.join('?' for _ in ids)})", ids)
+    return {r['message']: dict(r) for r in rows}
+
+
+def set_look(store, message: int, look: str, *, now: float) -> None:
+    with store.transaction():
+        store.conn.execute('UPDATE discord_attachment SET look=?,look_ts=? WHERE message=? '
+                           'AND EXISTS(SELECT 1 FROM discord_message WHERE id=? AND deleted IS NULL)',
+                           (look, now, message, message))
 
 
 def edit(store, message: int, *, author: int, text: str, now: float) -> None:

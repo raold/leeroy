@@ -102,7 +102,11 @@ def _members(conn, owner_now: datetime, trial_rank: int, human: int) -> list[dic
 
 def with_reactions(conn, rows: list[dict]) -> list[dict]:
     react = store.reactions(conn, [m["id"] for m in rows])
-    return [{**m, "reactions": react.get(m["id"], [])} for m in rows]
+    photos = (store.attachments(conn, [m['id'] for m in rows])
+              if 'discord_attachment' in views.tables(conn) else {})
+    return [{**m, "reactions": react.get(m["id"], []),
+             'image': ({'w': photos[m['id']]['width'], 'h': photos[m['id']]['height'],
+                        'kind': photos[m['id']]['kind']} if m['id'] in photos else None)} for m in rows]
 
 
 def window(conn, channel: str, thread: int | None = None) -> list[dict]:

@@ -302,6 +302,12 @@ class ConsoleApp:
                  follower: mindlog.LogFollower | None = None, clock: Callable = time.time,
                  monotonic: Callable = time.monotonic, link=None):
         self.s = settings
+        from ..photos.config import load_photos_config
+        self.photos = load_photos_config(settings.data_dir / 'mind.toml')
+        self._photo_uploads: list[float] = []
+        self._photo_day = None
+        self._photo_day_total = 0
+        self._photo_upload_lock = asyncio.Lock()
         self.mind = mind
         self.controls = controls
         self.voice = voice
@@ -749,8 +755,11 @@ class ConsoleApp:
             if origins != [site]:
                 return text(403, "Forbidden: a change needs the console's own Origin.")
             kind = (req.one("content-type") or "").split(";")[0].strip().lower()
-            if kind != "application/json":
-                return text(415, "Send JSON.")
+            upload = req.path == '/api/discord/upload'
+            if upload and sites != ['same-origin']:
+                return text(403, "Forbidden: upload from the console's own page.")
+            if kind != ('image/jpeg' if upload else 'application/json'):
+                return text(415, 'Send a JPEG photo.' if upload else 'Send JSON.')
         elif req.method != "GET":
             return text(405, "Method not allowed.", [("Allow", "GET, POST")])
         if req.method == "GET" and (req.path == "/" or req.path.startswith("/static/")):
@@ -790,6 +799,8 @@ class ConsoleApp:
                   ("GET", "/api/board"): self._api_board,
                   ("GET", "/api/discord"): self._api_discord,
                   ("POST", "/api/discord"): self._api_discord_action,
+                  ("POST", "/api/discord/upload"): self._api_discord_upload,
+                  ("GET", "/api/discord/image"): self._api_discord_image,
                   ("GET", "/api/bank"): self._api_bank,
                   ("GET", "/api/training"): self._api_training,
                   ("GET", "/api/ops"): self._api_ops,
@@ -1478,6 +1489,7 @@ class ConsoleApp:
             conn, owner_now=mind_clock.local_at(self._clock()),
             trial_rank=self._trial_rank(), channel=channel, after=after, thread=thread,
             read_marks=read_marks)
+        view['photos'] = self.photos.enabled and self.controls.enabled
         fp = None
         if channel is not None and not view["missing"]:
             fp = discordview.watched(conn, channel, thread)
@@ -1533,6 +1545,68 @@ class ConsoleApp:
         if self.link is None:
             return 409, "Nothing was saved: the console has no link to the mind's control endpoint."
         return None
+
+    async def _api_discord_upload(self, req: Request):
+        from ..photos import images, uploads
+        if not self.photos.enabled or not self.controls.enabled:
+            return json_response(403, {'ok': False, 'error': 'Photo uploads are off or this console is read-only.'})
+        problem = self._discord_problem()
+        if problem is not None:
+            return json_response(problem[0], {'ok': False, 'error': problem[1]})
+        now = self._monotonic()
+        self._photo_uploads = [t for t in self._photo_uploads if now - t < 60]
+        if len(self._photo_uploads) >= uploads.MINUTE_MAX:
+            return json_response(429, {'ok': False, 'error': uploads.WORDS['minute']})
+        # Reserve before worker I/O so concurrent requests cannot overbook.
+        self._photo_uploads.append(now)
+        try:
+            async with self._photo_upload_lock:
+                day = mind_clock.local_at(self._clock()).date().isoformat()
+                if self._photo_day != day:
+                    count = await asyncio.to_thread(images.staged_count, self.s.data_dir, day)
+                    self._photo_day, self._photo_day_total = day, count
+                if self._photo_day_total >= uploads.DAY_MAX:
+                    return json_response(429, {'ok': False, 'error': uploads.WORDS['day']})
+                self._photo_day_total += 1
+                try:
+                    token = await asyncio.to_thread(images.stage, self.s.data_dir, req.body)
+                except images.ImageRefused:
+                    self._photo_day_total -= 1
+                    raise
+        except images.ImageRefused as error:
+            return json_response(413 if error.code == 'too_big' else 400,
+                                 {'ok': False, 'error': uploads.WORDS[error.code]})
+        except Exception as error:
+            log.warning('discord_upload_failed code=%s', type(error).__name__)
+            return json_response(503, {'ok': False, 'error': 'The photo could not be saved.'})
+        return json_response(201, {'image': token})
+
+    async def _api_discord_image(self, req: Request):
+        from ..imagefiles import read_image
+        if set(req.query) != {'id', 'size'} or any(len(v) != 1 for v in req.query.values()):
+            return text(400, 'A photo needs one message id and size sm or lg.')
+        mid = digits(req.query['id'][0], 19)
+        size = req.query['size'][0]
+        if mid is None or not 1 <= mid <= 2**63-1 or size not in ('sm', 'lg'):
+            return text(400, 'A photo needs one message id and size sm or lg.')
+        def read(conn):
+            if 'discord_attachment' not in views.tables(conn):
+                return None
+            row = discord_store.attachments(conn, [mid]).get(mid)
+            if row is None:
+                return None
+            path = self.s.data_dir / row['path']
+            if row['kind'] == 'snap' and size == 'sm':
+                path = path.with_suffix('.thumb.jpg')
+            return read_image(path, self.s.data_dir)
+        try:
+            data = await asyncio.to_thread(feed.read, self.s.data_dir / 'mind.db', read)
+        except Exception:
+            data = None
+        if data is None:
+            return text(404, 'No photo.')
+        return Response(200, data, 'image/jpeg', [('Cache-Control', 'private, max-age=3600'),
+                        ('Cross-Origin-Resource-Policy', 'same-origin')])
 
     async def _api_discord_action(self, req: Request):
         self._discord_seen = self._monotonic()
@@ -1634,8 +1708,10 @@ class ConsoleApp:
     # -- running -----------------------------------------------------------------------------
 
     async def start(self) -> None:
-        from .httpd import serve
-        self._server = await serve(self.handle, HOST, self.s.port)
+        from .httpd import Route, serve
+        from ..photos.images import MAX_IMAGE_BYTES
+        self._server = await serve(self.handle, HOST, self.s.port, routes={
+            ('POST', '/api/discord/upload'): Route(MAX_IMAGE_BYTES, 60., True)})
         self.s.port = self._server.sockets[0].getsockname()[1]
         self.origin = f"http://{HOST}:{self.s.port}"
         await self.refresh(force=True)

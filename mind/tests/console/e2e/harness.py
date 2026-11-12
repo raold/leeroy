@@ -81,7 +81,7 @@ class Rehearsal:
         self.ports = set()
         self.worker = None
 
-    async def start(self, state="running"):
+    async def start(self, state="running", *, photos=False):
         cast = []
         for member in members():
             row = asdict(member)
@@ -95,7 +95,8 @@ class Rehearsal:
             f"[bridge]\nport = {port}\n[talk]\nchattiness = 0\n"
             "[selfies]\nenabled = true\n[realm]\nenabled = true\n"
             "[guild]\noffline_raids_per_day = 0\n"
-            f'worldserver_conf = "{(self.root / "absent.conf").as_posix()}"\n', encoding="utf-8")
+            f'worldserver_conf = "{(self.root / "absent.conf").as_posix()}"\n'
+            f'[photos]\nenabled = {str(photos).lower()}\n', encoding="utf-8")
         seed(self.data)
         command, env = fake_command(self.root)
         self.worker = SelfieWorker(command, env=env)

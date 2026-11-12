@@ -203,7 +203,10 @@ class LiveReview:
                 rows = [*conn.execute("SELECT id,ts,author,text,thread,origin FROM discord_message "
                     "WHERE id=? AND channel=? AND deleted IS NULL AND ts<=?",
                     (draft.parent_id, cid, now)).fetchall(), *rows]
-            history = tuple(HistoryLine(r[0], r[1], r[2], r[3], draft.channel,
+            from leeroy_mind.photos.look import photo_note
+            photos = dstore.attachments(conn, [r[0] for r in rows]) if getattr(e, 'photos_enabled', False) else {}
+            history = tuple(HistoryLine(r[0], r[1], r[2], r[3] + (
+                ' ' + photo_note(photos[r[0]]['look']) if r[0] in photos else ''), draft.channel,
                 (observed.human if r[2] == turn.speaker else turn.speaker) if draft.channel == "dm" else 0,
                 draft.room, r[4], readers=readers, origin=r[5]) for r in rows)
             thread = meta.discord.thread if meta.discord else None

@@ -70,7 +70,7 @@ export function api(path, opts) {
       // this request's deadline, including a peer that sends headers and then stalls.
       if (path === "/api/events" || !r.headers) { return r; }
       var kind = r.headers.get("content-type") || "";
-      var photo = /^\/api\/(face\?|selfies\/photo\?)/.test(path);
+      var photo = /^\/api\/(face\?|selfies\/photo\?|discord\/image\?)/.test(path);
       var maximum = photo ? 4 * 1024 * 1024 : path.indexOf("/api/selfies/images?") === 0 ? 24 * 1024 * 1024 : 1024 * 1024;
       var bytes = await boundedBody(r, maximum);
       if (photo && r.status === 200) { r.blob = function () { return Promise.resolve(new Blob([bytes], { type: kind })); }; }

@@ -162,9 +162,17 @@ class Stream:
 Handler = Callable[[Request], Awaitable["Response | Stream"]]
 
 
-async def read_request(reader: asyncio.StreamReader) -> Request:
+@dataclass(frozen=True)
+class Route:
+    max_body: int = MAX_BODY
+    read_s: float = READ_S
+    require_length: bool = False
+
+
+async def read_request(reader: asyncio.StreamReader, routes=None) -> Request:
+    started = asyncio.get_running_loop().time()
     try:
-        head = await reader.readuntil(b"\r\n\r\n")
+        head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), READ_S)
     except asyncio.LimitOverrunError:
         raise BadRequest(431, "request head too large") from None
     except asyncio.IncompleteReadError as e:
@@ -197,28 +205,32 @@ async def read_request(reader: asyncio.StreamReader) -> Request:
     except ValueError:
         raise BadRequest(400, "bad request target") from None
     request = Request(method, target, split.path, query, headers)
+    route = (routes or {}).get((method, split.path), Route(read_s=READ_S))
     if request.all("transfer-encoding"):
         raise BadRequest(411, "send a Content-Length, not chunks")
     lengths = request.all("content-length")
+    if route.require_length and not lengths:
+        raise BadRequest(411, "send a Content-Length")
     if len(lengths) > 1:
         raise BadRequest(400, "more than one Content-Length")
     if lengths:
         size = digits(lengths[0], 9)
         if size is None:
             raise BadRequest(400, "bad Content-Length")
-        if size > MAX_BODY:
+        if size > route.max_body:
             raise BadRequest(413, "body too large")
         try:
-            request.body = await reader.readexactly(size)
+            remaining = route.read_s - (asyncio.get_running_loop().time() - started)
+            request.body = await asyncio.wait_for(reader.readexactly(size), max(0., remaining))
         except asyncio.IncompleteReadError as e:
             raise ConnectionResetError("closed inside the body") from e
     return request
 
 
-async def _connection(handler: Handler, reader, writer) -> None:
+async def _connection(handler: Handler, reader, writer, routes=None) -> None:
     try:
         try:
-            request = await asyncio.wait_for(read_request(reader), READ_S)
+            request = await read_request(reader, routes)
         except BadRequest as e:
             response = text(e.status, str(e))
         except (asyncio.TimeoutError, ConnectionError, OSError):
@@ -263,14 +275,14 @@ def listen_socket(host: str, port: int) -> socket.socket:
     return sock
 
 
-async def serve(handler: Handler, host: str, port: int) -> asyncio.Server:
+async def serve(handler: Handler, host: str, port: int, *, routes=None) -> asyncio.Server:
     sock = listen_socket(host, port)
     active = 0
 
     async def accepted(reader, writer):
         nonlocal active
         try:
-            await _connection(handler, reader, writer)
+            await _connection(handler, reader, writer, routes)
         finally:
             active -= 1
 

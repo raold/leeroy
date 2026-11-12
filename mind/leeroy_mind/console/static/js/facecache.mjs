@@ -28,7 +28,12 @@ export class FaceCache {
     if (e) { this.entries.delete(key); this.entries.set(key, e); }
     if (e && (e.pending || this.now() - e.at < (e.value ? this.ttlMs : this.missMs))) { return e.promise; }
     if (!e) {
-      while (this.entries.size >= this.maxEntries) { this.forgetKey(this.entries.keys().next().value); }
+      // A queued or active load still has consumers waiting for its URL. Only
+      // settled entries can be evicted; bursts may temporarily exceed the cap.
+      for (const [key, entry] of this.entries) {
+        if (this.entries.size < this.maxEntries) { break; }
+        if (!entry.pending) { this.forgetKey(key); }
+      }
       e = { pending: false, settled: false, at: 0, value: null, promise: null };
       this.entries.set(key, e);
     }
