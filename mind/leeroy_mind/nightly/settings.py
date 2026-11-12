@@ -30,6 +30,7 @@ class NightlySettings:
     wow_vs_life: int
     female_share: float
     data_dir: Path
+    quiet: tuple[time, time] | None = None
     learn_enabled: bool = False
     looks_diversity: bool = False
     grace_minutes: int = 10
@@ -111,9 +112,11 @@ def load_life(path: Path) -> int:
 
 
 def load_settings(cfg: MindConfig, data_dir: Path) -> NightlySettings:
+    from leeroy_mind.server.config import load_server_config
     from leeroy_mind.learn.config import load_learn_config
     from leeroy_mind.personas.looks_diversity import enabled
     data_dir = Path(data_dir)
+    server = load_server_config(data_dir / "mind.toml")
     from leeroy_mind.world.config import load as load_world
     world = load_world(data_dir / "mind.toml")
     return NightlySettings(
@@ -125,7 +128,7 @@ def load_settings(cfg: MindConfig, data_dir: Path) -> NightlySettings:
         data_dir=data_dir, learn_enabled=load_learn_config(data_dir / "mind.toml").enabled,
         world_per_night=world.world_per_night,
         world_selfies_per_night=world.world_selfies_per_night,
-        looks_diversity=enabled(data_dir))
+        looks_diversity=enabled(data_dir), quiet=server.quiet_window if server.enabled else None)
 
 
 def _at_six(day: date, tz: tzinfo) -> float:
