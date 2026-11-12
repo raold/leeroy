@@ -180,11 +180,13 @@ export class Feed {
     if (num(from) > 0 && this.oldest(view) !== from) { return false; }
     page = obj(page);
     var lines = arr(page.lines).filter(function (l) { return l && goodId(l.id); });
+    // History never replaces a line the page holds: a live event may already have settled it
+    var fresh = lines.filter((l) => { return !this.where.has(l.id); });
     var gap = this.gaps.get(view);
     this.held.add(view);
     if (gap) {
       // Filling a gap: closed once the page reaches the lines below it (or there is nothing older)
-      this.upsert(lines);
+      this.upsert(fresh);
       var reached = page.more !== true || !lines.length || lines.some(function (l) { return l.id <= gap.floor; });
       if (!this.gaps.has(view)) { return true; }  // trimmed meanwhile: its "more" stands
       if (reached) {
@@ -196,7 +198,7 @@ export class Feed {
       return true;
     }
     this.more.delete(view);
-    this.upsert(lines);
+    this.upsert(fresh);
     // A view he left in the meantime was trimmed again (more: true), whatever the page said
     if (this.more.get(view) !== true) { this.more.set(view, page.more === true); }
     return true;

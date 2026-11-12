@@ -361,3 +361,15 @@ def test_a_snapshot_stays_far_under_the_event_frame_limit(db):
     assert "guild" in partial and "officer" not in partial and quiet in [x["id"] for x in kept]
     assert len([v for v in partial if v.startswith("w:")]) == 40  # every thread was cut
     assert [x["id"] for x in kept] == sorted(x["id"] for x in kept)
+
+
+def test_history_leaves_out_a_whisper_still_on_its_way(db):
+    store, path = db
+    typed = say(store, "whisper", 101, "typed", to=HUMAN)
+    pending = say(store, "whisper", 101, "queued on voice", to=HUMAN)
+    VoiceStore(store).add_line("w.queued", pending, "whisper", "sent", 1.0)
+    page = feed.read(path, feed.history, "w:101", 1 << 40)
+    assert [x["id"] for x in page["lines"]] == [typed]
+    VoiceStore(store).set_line("w.queued", "done", None, 2.0)
+    page = feed.read(path, feed.history, "w:101", 1 << 40)
+    assert [x["id"] for x in page["lines"]] == [typed, pending]

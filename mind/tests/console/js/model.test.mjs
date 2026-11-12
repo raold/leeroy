@@ -521,3 +521,12 @@ test("an empty view known complete is asked again after a reconnect", () => {
   f.adopt([]);             // an older console's snapshot leaves it as it was
   assert.equal(f.known("officer"), true);
 });
+
+test("a history page never replaces a line a live event already settled", () => {
+  var f = new Feed({ human: HIM });
+  f.adopt([], 0);
+  f.upsert([toHim(5, 1101, { voice: "whisper", heard: true })]);  // played, from the live feed
+  f.older("w:1101", { lines: [toHim(4, 1101), toHim(5, 1101, { voice: "whisper", heard: false })], more: false }, 0);
+  assert.deepEqual(ids(f.lines("w:1101")), [4, 5]);
+  assert.equal(f.lines("w:1101")[1].heard, true);
+});

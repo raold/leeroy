@@ -174,13 +174,14 @@ def feed(conn, *, after: int = 0, upto: int | None = None, since: float | None =
 def history(conn, view: str, before: int, limit: int = HISTORY_LIMIT,
             now: float | None = None) -> dict:
     """One view's shown lines older than line `before`, the newest `limit` of them, oldest first,
-    and whether older ones remain (`more`): the page reads a view back a page at a time. With
-    `now`, a whisper still inside WHISPER_GRACE_S with no voice row is held back, as in `feed`."""
+    and whether older ones remain (`more`): the page reads a view back a page at a time. A line
+    still on its way to him is left out (the feed's own settlement brings it); with `now`, so is a
+    whisper still inside WHISPER_GRACE_S with no voice row, as in `feed`."""
     if type(view) is not str or VIEW_RE.match(view) is None:
         raise ValueError("view")
     only, peer = ("peer", int(view[2:])) if view.startswith("w:") else (view, 0)
     lines = _query(conn, after=0, upto=int(before) - 1, since=None, limit=int(limit) + 1,
-                   ids=None, now=now, only=only, peer=peer)
+                   ids=None, now=now, only=only, peer=peer, settled=True)
     more = len(lines) > limit
     return {"lines": lines[1:] if more else lines, "more": more}
 
