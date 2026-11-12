@@ -256,3 +256,120 @@ def test_only_whispers_are_marked_not_heard(db):
     say(store, "guild", 101, "typed", session=sid)
     lines = feed.read(path, feed.feed)
     assert [x["text"] for x in lines] == ["typed"] and lines[0]["unheard"] is None
+
+
+def test_each_whisper_thread_keeps_its_own_newest_lines(db):
+    store, path = db
+    for i in range(250):
+        say(store, "whisper", 101, f"a{i}", to=HUMAN)
+    quiet = say(store, "whisper", 102, "the quiet one", to=HUMAN)
+    lines = feed.read(path, feed.feed, limit=200)
+    assert quiet in [line["id"] for line in lines]
+    assert len([line for line in lines if line["from_guid"] == 101]) == 200
+
+
+def test_history_reads_a_view_back_to_its_first_line(db):
+    store, path = db
+    sid = store.start_session(1.0)
+    ids = [say(store, "guild", 101, f"g{i}", session=sid) for i in range(250)]
+    say(store, "officer", 102, "not guild", session=sid)
+    page = feed.read(path, feed.history, "guild", ids[-1] + 10, 100)
+    assert [line["text"] for line in page["lines"]] == [f"g{i}" for i in range(150, 250)]
+    assert page["more"] is True
+    page = feed.read(path, feed.history, "guild", page["lines"][0]["id"], 100)
+    assert page["lines"][0]["text"] == "g50" and page["more"] is True
+    page = feed.read(path, feed.history, "guild", page["lines"][0]["id"], 100)
+    assert [line["text"] for line in page["lines"]] == [f"g{i}" for i in range(50)]
+    assert page["more"] is False
+    assert feed.read(path, feed.history, "guild", ids[0], 100) == {"lines": [], "more": False}
+
+
+def test_a_whisper_threads_history_is_that_member_and_him_only(db):
+    store, path = db
+    theirs = [say(store, "whisper", 101, "to him", to=HUMAN),
+              say(store, "whisper", HUMAN, "back", to=101, name="Owner")]
+    say(store, "whisper", 102, "someone else", to=HUMAN)
+    say(store, "whisper", 101, "between members", to=102)
+    page = feed.read(path, feed.history, "w:101", 1 << 40)
+    assert [line["id"] for line in page["lines"]] == theirs and page["more"] is False
+    for view in ("whisper", "w:0", "voice:guild_hall", ""):
+        with pytest.raises(ValueError):
+            feed.read(path, feed.history, view, 1 << 40)
+
+
+def test_the_voice_transcript_is_every_room_he_heard(db):
+    store, path = db
+    sid = store.start_session(1.0)
+    hall = spoken(store, sid, 101, "how was your day", "guild_hall", "done")
+    officers = spoken(store, sid, 102, "officer talk", "officers", "done")
+    spoken(store, sid, 103, "a room he was not in", "kitchen", "unheard")
+    say(store, "guild", 101, "typed", session=sid)
+    page = feed.read(path, feed.history, "voice", 1 << 40)
+    assert [line["id"] for line in page["lines"]] == [hall, officers]
+    assert [(line["from"], line["voice"]) for line in page["lines"]] == [
+        ("P101", "guild_hall"), ("P102", "officers")]
+
+
+def test_threads_list_every_member_he_whispered_with_newest_first(db):
+    store, path = db
+    say(store, "whisper", 101, "long ago", to=HUMAN)
+    say(store, "whisper", HUMAN, "to Coros", to=103, name="Owner")
+    newest = say(store, "whisper", 102, "latest", to=HUMAN, name="Belra")
+    say(store, "whisper", 101, "between members", to=102)
+    got = feed.read(path, feed.threads)
+    assert [(t["guid"], t["name"]) for t in got] == [(102, "Belra"), (103, "Coros"), (101, "P101")]
+    assert got[0]["last"]["id"] == newest and got[0]["last"]["text"] == "latest"
+
+
+def test_history_and_threads_hold_back_a_whisper_inside_the_grace(db):
+    store, path = db
+    line = say(store, "whisper", 101, "just now", to=HUMAN)
+    ts = store.conn.execute("SELECT ts FROM chat_line WHERE id = ?", (line,)).fetchone()[0]
+    assert feed.read(path, feed.history, "w:101", 1 << 40, now=ts + 1)["lines"] == []
+    assert feed.read(path, feed.threads, now=ts + 1) == []
+    later = feed.read(path, feed.history, "w:101", 1 << 40, now=ts + 5)["lines"]
+    assert [x["id"] for x in later] == [line]
+    assert [t["guid"] for t in feed.read(path, feed.threads, now=ts + 5)] == [101]
+
+
+def test_threads_skip_a_whisper_still_on_its_way(db):
+    store, path = db
+    shown_line = say(store, "whisper", HUMAN, "his answer", to=101, name="Owner")
+    pending = say(store, "whisper", 101, "queued on voice", to=HUMAN)
+    VoiceStore(store).add_line("w.pending", pending, "whisper", "sent", 1.0)
+    got = feed.read(path, feed.threads)
+    assert [(t["guid"], t["last"]["id"]) for t in got] == [(101, shown_line)]
+    VoiceStore(store).set_line("w.pending", "done", None, 2.0)
+    assert feed.read(path, feed.threads)[0]["last"]["id"] == pending
+
+
+def test_a_snapshot_stays_far_under_the_event_frame_limit(db):
+    import json
+    store, path = db
+    sid = store.start_session(1.0)
+    text = "x" * 250
+    for i in range(40 * 100):
+        say(store, "whisper", 101 + i % 40, text, to=HUMAN, name=f"P{i % 40}")
+    for i in range(300):
+        say(store, "guild", 101, text, session=sid)
+    quiet = say(store, "officer", 102, "one officer line", session=sid)
+    lines = feed.read(path, feed.feed, limit=feed.FEED_LIMIT + 1)
+    kept, partial = feed.snapshot_lines(lines)
+    assert len(json.dumps(kept)) < 600_000
+    assert len([x for x in kept if x["channel"] == "whisper"]) == feed.SNAPSHOT_WHISPERS
+    assert len([x for x in kept if x["channel"] == "guild"]) == feed.FEED_LIMIT
+    assert "guild" in partial and "officer" not in partial and quiet in [x["id"] for x in kept]
+    assert len([v for v in partial if v.startswith("w:")]) == 40  # every thread was cut
+    assert [x["id"] for x in kept] == sorted(x["id"] for x in kept)
+
+
+def test_history_leaves_out_a_whisper_still_on_its_way(db):
+    store, path = db
+    typed = say(store, "whisper", 101, "typed", to=HUMAN)
+    pending = say(store, "whisper", 101, "queued on voice", to=HUMAN)
+    VoiceStore(store).add_line("w.queued", pending, "whisper", "sent", 1.0)
+    page = feed.read(path, feed.history, "w:101", 1 << 40)
+    assert [x["id"] for x in page["lines"]] == [typed]
+    VoiceStore(store).set_line("w.queued", "done", None, 2.0)
+    page = feed.read(path, feed.history, "w:101", 1 << 40)
+    assert [x["id"] for x in page["lines"]] == [typed, pending]

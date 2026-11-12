@@ -29,6 +29,9 @@ run nothing else.
     GET  /api/health   the Mind tab: processes, lock, links, Ollama's resident models, GPU,
                        the night, the latest errors and a content-free log tail
     GET  /api/feed     ?after=<id>: text lines after that id
+    GET  /api/feed/history  ?view=guild|officer|group|voice|w:<guid>&before=<id>[&limit=1-200]:
+                       that view's lines older than line `before`, the newest `limit` (100)
+                       first, as {"lines", "more"}; every view reads back to its first line
     GET  /api/raid     the Raid tab: mind.db's raids, loot and DKP (raidview.raid_view), and
                        the raid night's live state from the mind's control endpoint
     GET  /api/guild    the Guild tab: roster, DKP ladder, loot history, awards, chronicle
@@ -478,23 +481,26 @@ class ConsoleApp:
 
     # -- the text feed -----------------------------------------------------------------------
 
-    def _feed_since(self, after: int, *, days: float | None = None) -> tuple[list, int]:
+    def _feed_since(self, after: int, *, days: float | None = None,
+                    limit: int = feed.FEED_LIMIT) -> tuple[list, int]:
         db = self.s.data_dir / "mind.db"
 
         def question(conn):
             upto = feed.last_id(conn)
             now = self._clock()
             since = now - days * 86400 if days else None
-            return feed.feed(conn, after=after, upto=upto, since=since, now=now), upto
+            return feed.feed(conn, after=after, upto=upto, since=since, now=now,
+                             limit=limit), upto
         return feed.read(db, question)
 
-    def _poll(self, after: int, ids: list[int], days: float | None = None):
+    def _poll(self, after: int, ids: list[int], days: float | None = None,
+              limit: int = feed.FEED_LIMIT):
         """Worker thread. Feed, waiting set and recheck of `ids` (what is on its way, listed on
         the loop: _pending and _waiting are the loop's), from one read snapshot."""
         now = self._clock()
         since = now - days * 86400 if days else None
         return feed.read(self.s.data_dir / "mind.db", feed.poll, after=after, since=since,
-                         now=now, ids=ids)
+                         now=now, ids=ids, limit=limit)
 
     def _on_way(self) -> list[int]:
         return list(self._pending) + list(self._waiting)
@@ -662,13 +668,30 @@ class ConsoleApp:
     async def snapshot(self) -> dict:
         voice = self.relay.snapshot()
         strip = self.strip()
+        partial = None
         try:
-            lines, _ = await asyncio.to_thread(self._feed_since, 0, days=FEED_DAYS)
+            lines, _ = await asyncio.to_thread(self._feed_since, 0, days=FEED_DAYS,
+                                               limit=feed.FEED_LIMIT + 1)
+            lines, partial = feed.snapshot_lines(lines)
         except Exception as e:
             log.warning("console_feed_unread: error=%s", type(e).__name__)
             lines = None  # not [], which would tell the page the feed is empty
-        return {"status": strip, "voice": voice, "chat": lines, "rooms": self._rooms(),
+        return {"status": strip, "voice": voice, "chat": lines, "chat_since": self._chat_since(),
+                "chat_partial": partial, "threads": await self._threads(), "rooms": self._rooms(),
                 "mood": await self._mood()}
+
+    def _chat_since(self) -> float:
+        """Where a snapshot's feed starts (FEED_DAYS back): the page keeps the older lines it
+        read through /api/feed/history across a new snapshot."""
+        return self._clock() - FEED_DAYS * 86400
+
+    async def _threads(self) -> list | None:
+        try:
+            return await asyncio.to_thread(feed.read, self.s.data_dir / "mind.db", feed.threads,
+                                           now=self._clock())
+        except Exception as e:
+            log.warning("console_feed_unread: error=%s", type(e).__name__)
+            return None  # not [], which would tell the page he never whispered with anyone
 
     @staticmethod
     def _rooms() -> list[dict]:
@@ -685,8 +708,11 @@ class ConsoleApp:
     async def _events(self, sub: _Subscriber, voice, strip):
         """`voice` and `strip` were taken as the page registered, with no await between: every
         later voice event is in its queue and none before it is."""
+        partial = None
         try:
-            lines, _, late, _ = await asyncio.to_thread(self._poll, 0, self._on_way(), FEED_DAYS)
+            lines, _, late, _ = await asyncio.to_thread(self._poll, 0, self._on_way(), FEED_DAYS,
+                                                        feed.FEED_LIMIT + 1)
+            lines, partial = feed.snapshot_lines(lines)
             self._track(lines)
             now = self._monotonic()
             for i in late:
@@ -696,6 +722,8 @@ class ConsoleApp:
             log.warning("console_feed_unread: error=%s", type(e).__name__)
             lines = None
         yield sse("snapshot", {"status": strip, "voice": voice, "chat": lines,
+                               "chat_since": self._chat_since(), "chat_partial": partial,
+                               "threads": await self._threads(),
                                "rooms": self._rooms(), "mood": await self._mood(),
                                "build": self.build})
         while not sub.dead:
@@ -815,6 +843,7 @@ class ConsoleApp:
                   ("GET", "/api/events"): self._api_events,
                   ("GET", "/api/health"): self._api_health,
                   ("GET", "/api/feed"): self._api_feed,
+                  ("GET", "/api/feed/history"): self._api_feed_history,
                   ("GET", "/api/raid"): self._api_raid,
                   ("GET", "/api/guild"): self._api_guild,
                   ("GET", "/api/social"): self._api_social,
@@ -1700,6 +1729,24 @@ class ConsoleApp:
             return text(400, "after: a line id")
         lines, _ = await asyncio.to_thread(self._feed_since, after)
         return json_response(200, {"lines": lines})
+
+    async def _api_feed_history(self, req: Request):
+        view = req.query.get("view", [""])[0]
+        before = digits(req.query.get("before", [""])[0], 18)  # an SQLite integer
+        limit = digits(req.query.get("limit", [str(feed.HISTORY_LIMIT)])[0], 3)
+        if feed.VIEW_RE.match(view) is None:
+            return text(400, "view: guild, officer, group, voice or w:<guid>")
+        if before is None:
+            return text(400, "before: a line id")
+        if limit is None or not 1 <= limit <= feed.HISTORY_MAX:
+            return text(400, f"limit: 1 to {feed.HISTORY_MAX}")
+        try:
+            page = await asyncio.to_thread(feed.read, self.s.data_dir / "mind.db", feed.history,
+                                           view, before, limit, now=self._clock())
+        except Exception as e:
+            log.warning("console_feed_unread: error=%s", type(e).__name__)
+            return text(503, "The history could not be read from mind.db.")
+        return json_response(200, page)
 
     async def _api_voice(self, req: Request):
         msg = req.json()

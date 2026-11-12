@@ -265,9 +265,12 @@ def test_the_stream_starts_with_a_snapshot(data):
         async with served(make_app(data)) as app:
             (kind, snap), = await events(app)
             assert kind == "snapshot"
-            assert set(snap) == {"status", "voice", "chat", "rooms", "mood", "build"}
+            assert set(snap) == {"status", "voice", "chat", "chat_since", "chat_partial",
+                                 "threads", "rooms", "mood", "build"}
+            assert snap["chat_partial"] == []
             assert snap["build"] == app.build  # an open tab compares it with its own page
-            assert snap["voice"] is None and snap["chat"] == []
+            assert snap["voice"] is None and snap["chat"] == [] and snap["threads"] == []
+            assert isinstance(snap["chat_since"], float)
             r = await http(app, "GET", "/api/events", key=False)
             assert r.status == 403
     run(go())
@@ -767,3 +770,34 @@ def test_health_carries_the_game_server(data):
             return (await http(app, "GET", "/api/health")).json()
     h = asyncio.run(broken())
     assert h["server"]["game"] is None and h["server"]["why"] == "the endpoint is busy"
+
+
+def test_the_feed_history_reads_one_view_back(data, store):
+    from leeroy_mind.protocol import Chat
+    store.set_meta("human_guid", "900")
+    sid = store.start_session(1.0)
+    ids = [store.insert_chat_line(Chat(ts=0, channel="guild", from_guid=101, from_name="Arkon",
+                                       to_guid=0, text=f"g{i}", map=0, zone=0),
+                                  session_id=sid, origin="game", audience=None) for i in range(3)]
+    store.insert_chat_line(Chat(ts=0, channel="whisper", from_guid=101, from_name="Arkon",
+                                to_guid=900, text="psst", map=0, zone=0),
+                           session_id=sid, origin="game", audience=None)
+
+    async def go():
+        async with served(make_app(data)) as app:
+            for q in ("view=whisper&before=5", "view=guild", "view=guild&before=x",
+                      "view=guild&before=5&limit=0", "view=guild&before=5&limit=201",
+                      "view=w:0&before=5", "before=5"):
+                r = await http(app, "GET", f"/api/feed/history?{q}")
+                assert r.status == 400, q
+            r = await http(app, "GET", f"/api/feed/history?view=guild&before={ids[-1]}&limit=1")
+            assert r.status == 200 and r.json()["more"] is True
+            assert [line["text"] for line in r.json()["lines"]] == ["g1"]
+            r = await http(app, "GET", "/api/feed/history?view=w:101&before=999")
+            assert [line["text"] for line in r.json()["lines"]] == ["psst"]
+            assert r.json()["more"] is False
+            r = await http(app, "GET", "/api/feed/history?view=guild&before=5", key=False)
+            assert r.status == 403
+            (kind, snap), = await events(app)
+            assert [(t["guid"], t["last"]["text"]) for t in snap["threads"]] == [(101, "psst")]
+    run(go())
