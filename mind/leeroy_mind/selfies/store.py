@@ -210,10 +210,12 @@ def counts(conn) -> dict[str, int]:
     """Members with a photo in force, members with a set waiting for his choice, and sets
     queued for the night. Reads any connection, the console's read-only one too."""
     one = lambda sql: conn.execute(sql).fetchone()[0]  # noqa: E731
-    return {"chosen": one("SELECT count(*) FROM selfie_current"),
+    from leeroy_mind.personas.tiers import cast_sql
+    only = cast_sql(conn)
+    return {"chosen": one("SELECT count(*) FROM selfie_current WHERE " + only),
             "waiting": one("SELECT count(DISTINCT guid) FROM selfie_set WHERE status='ready' "
-                           "AND decided IS NULL"),
-            "queued": one("SELECT count(*) FROM selfie_set WHERE status='queued'")}
+                           "AND decided IS NULL AND " + only),
+            "queued": one("SELECT count(*) FROM selfie_set WHERE status='queued' AND " + only)}
 
 
 # -- the style a set was rendered under ---------------------------------------------------------
@@ -326,7 +328,8 @@ def member_of(store, change: int) -> int | None:
 def picks(conn, guid: int | None = None, limit: int = 30) -> list[dict]:
     """The newest changes first (one member's, or everyone's), each with whether an undo of it
     would be taken now. Reads any connection, the console's read-only one too."""
-    where, params = ("WHERE guid=? ", (guid,)) if guid is not None else ("", ())
+    from leeroy_mind.personas.tiers import cast_sql
+    where, params = ("WHERE guid=? ", (guid,)) if guid is not None else ("WHERE " + cast_sql(conn) + " ", ())
     rows = conn.execute(f"SELECT id, ts, guid, undoes, after_set, after_idx FROM selfie_pick "
                         f"{where}ORDER BY id DESC LIMIT ?", (*params, int(limit))).fetchall()
     now = {r[0]: (r[1], r[2]) for r in conn.execute(

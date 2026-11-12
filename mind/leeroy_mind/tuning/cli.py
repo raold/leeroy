@@ -53,13 +53,15 @@ def _when(ts: float) -> str:
 
 
 def _names(conn) -> dict[int, str]:
-    return {r[0]: r[1] for r in conn.execute("SELECT guid,name FROM cast_member")}
+    from leeroy_mind.personas.tiers import cast_sql
+    return {r[0]: r[1] for r in conn.execute("SELECT guid,name FROM cast_member WHERE " + cast_sql(conn))}
 
 
 def _status(conn, cfg) -> None:
     t = Tuning.load(conn)
     names = _names(conn)
-    versions = {r[0]: r[1] for r in conn.execute("SELECT guid,version FROM persona_core")}
+    from leeroy_mind.personas.tiers import cast_sql
+    versions = {r[0]: r[1] for r in conn.execute("SELECT guid,version FROM persona_core WHERE " + cast_sql(conn))}
     print(f"tuning version {t.version}")
     files = file_values(cfg) if cfg is not None else {}
     for name in WORLD_DIALS:

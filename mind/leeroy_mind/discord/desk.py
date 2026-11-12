@@ -170,6 +170,9 @@ class DiscordDesk:
         if peer is None:
             return
         conn = self.app.store.conn
+        from leeroy_mind.personas.tiers import is_cast
+        if not is_cast(conn,peer):
+            raise _Refused("not_member", NOT_MEMBER)
         if peer == me or not conn.execute("SELECT 1 FROM cast_member WHERE guid = ?",
                                           (peer,)).fetchall():
             raise _Refused("not_member", NOT_MEMBER)

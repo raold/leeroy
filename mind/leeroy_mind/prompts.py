@@ -3,6 +3,9 @@ wording lives only in mind-data/prompts/<name>.txt, which is never in the reposi
 import codecs
 import logging
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
+from hashlib import sha256
 from pathlib import Path
 from typing import NamedTuple
 
@@ -12,6 +15,24 @@ _NAME = re.compile(r"[A-Za-z0-9_-]+")
 _REPLACED = chr(0xFFFD)  # what errors="replace" puts for a byte that is not UTF-8
 _UTF16_BOMS = (codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)
 _warned: set[str] = set()  # the overlays already warned about, by path
+_templates = ContextVar("prompt_template_hashes",default=None)
+
+
+@contextmanager
+def trace_templates():
+    """Task-local identifiers/digests only; never retain prompt or overlay text."""
+    used = {}
+    token = _templates.set(used)
+    try:
+        yield used
+    finally:
+        _templates.reset(token)
+
+
+def note_template(name, text):
+    used = _templates.get()
+    if used is not None and text:
+        used[name] = sha256(text.encode("utf-8",errors="replace")).hexdigest()
 
 
 class Overlay(NamedTuple):
@@ -51,6 +72,7 @@ def load_prompt(name: str, data_dir: Path, default: str) -> str:
     per file, with its name and the count, never its text: a turn never fails on it."""
     found = read_overlay(name, data_dir)
     if found is None:
+        note_template(name,default)
         return default
     if found.replaced:
         path = Path(data_dir) / "prompts" / f"{name}.txt"
@@ -59,4 +81,6 @@ def load_prompt(name: str, data_dir: Path, default: str) -> str:
             _warned.add(key)
             log_event("prompt_overlay_not_utf8", level=logging.WARNING, file=str(path),
                       replaced=found.replaced, fix="save it as UTF-8")
-    return found.text or default
+    value = found.text or default
+    note_template(name,value)
+    return value

@@ -11,6 +11,7 @@ from leeroy_mind.app import MindApp
 from leeroy_mind.config import load_config
 from leeroy_mind.endpoint import feedback_args
 from leeroy_mind.llm.scheduler import Priority
+from leeroy_mind.signals.store import REPLY_SECONDS
 from leeroy_mind.talk.pipeline import TurnMeta
 from leeroy_mind.talk.turns import Turn, TurnKind
 from leeroy_mind.testing.fake_bridge import FakeBridge
@@ -143,7 +144,8 @@ def test_switch_off_registers_no_worker_or_night_stage(tmp_path):
 
 
 @pytest.mark.parametrize('group_changed', [False, True])
-def test_fakebridge_ignored_with_synthetic_rest_and_group_transition(tmp_path, group_changed):
+@pytest.mark.parametrize('post_send_delay', [0, 2])
+def test_fakebridge_ignored_with_synthetic_rest_and_group_transition(tmp_path, group_changed, post_send_delay):
     async def go():
         async with mind(tmp_path) as r:
             async def observe_rest():
@@ -157,12 +159,19 @@ def test_fakebridge_ignored_with_synthetic_rest_and_group_transition(tmp_path, g
                 rest.cancel()
                 with suppress(asyncio.CancelledError):
                     await rest
+            # Sending/ack completion is allowed to trail the recorded line timestamp.
+            await r.advance(post_send_delay)
             await r.bridge.push({'type': 'zone', 'guid': HUMAN, 'zone_id': 10, 'zone_name': 'Test place'})
             await r.wait(lambda: r.app.store.conn.execute("SELECT count(*) FROM game_event WHERE type='zone'").fetchone()[0] == 1)
             if group_changed:
                 await r.bridge.push({'type': 'group', 'leader_guid': HUMAN, 'raid': False, 'members': [HUMAN, 102]})
                 await r.wait(lambda: r.app.signals.group is not None)
-            await r.advance(119)
+            await r.app.signals.capture.flush()
+            sent_at = r.app.store.conn.execute("SELECT ts FROM chat_line WHERE id=?",(lid,)).fetchone()[0]
+            # Expiry starts at the saved line, not when send/ack polling returns.
+            # Stay before that boundary even if the worker ticks at every step.
+            await r.advance(sent_at + REPLY_SECONDS - 1 - r.clock.now())
+            await r.app.signals.capture.flush()  # force the expiry tick before the new observation
             r.app.signals.combat_observed(False)  # synthetic authority, not inferred from movement
             await r.app.signals.capture.flush()
             await r.advance(1)

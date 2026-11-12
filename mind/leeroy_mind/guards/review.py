@@ -232,6 +232,9 @@ def record_sent(stores: GuardStores, draft: Draft, *, receipt_id: str) -> bool:
     """
     if not stores.config.enabled:
         return False
+    from leeroy_mind.personas.tiers import is_cast
+    if not is_cast(stores.conn,draft.guid):
+        return False
     if draft.now is None:
         raise ValueError('guard_delivery_time_required')
     now = _now(stores, draft)
@@ -291,6 +294,9 @@ def _claim_hits(reader, stores, draft, now, officer):
 def review(stores: GuardStores, draft: Draft) -> Verdict:
     if not stores.config.enabled:
         return Verdict('send')
+    from leeroy_mind.personas.tiers import is_cast
+    if not is_cast(stores.conn,draft.guid):
+        return Verdict('drop', ('world_excluded',))
     now = _now(stores, draft)
     _validate(draft, now)
     if not words(draft.text) and not (draft.channel in {'discord', 'dm'} and is_emoji_message(draft.text)):

@@ -438,9 +438,14 @@ class _Night:
                 "SELECT a.guid, a.name, g.name AS guild, g.role FROM realm_actor a JOIN realm_guild g "
                 "ON g.id=a.guild WHERE a.role='officer' AND a.status='active' AND g.status='active' "
                 "AND g.id!=? ORDER BY a.guid", (self.guild,)).fetchall()
-        return {row["guid"]: row for row in officers
+        # World generation must not revoke an existing actor's card-based admission.
+        out = {row["guid"]: row for row in officers
                 if row["guid"] not in excluded and row["guid"] not in roster
                 and row["guid"] not in (about, self.ctx.human)}
+        from leeroy_mind.world.realm import voices
+        out.update({g:r for g,r in voices(self.store,self.ctx.settings.data_dir,self.ctx.clock.now()).items()
+                    if g not in out and g not in (about,self.ctx.human) and r["guild_id"] != self.guild})
+        return out
 
     def _as_member(self, guid: int):
         return guid, "member", self.ctx.name(guid), {"who": "a member of the guild",
@@ -448,6 +453,8 @@ class _Night:
 
     @staticmethod
     def _as_actor(row):
+        if isinstance(row,dict) and row.get("world"):
+            return row["guid"], "actor", row["name"], {"who":f"a member of {row['guild']}","card":row["card"]}
         return row["guid"], "actor", row["name"], {
             "who": f"an officer of {row['guild']}, {_ROLES.get(row['role'], 'a guild')}"}
 
@@ -511,6 +518,8 @@ class _Night:
         def write(store):
             if store.conn.execute("SELECT 1 FROM realm_post WHERE thread=?", (key,)).fetchone():
                 return  # Posted meanwhile.
+            if author_kind == "actor" and "card" in who and self._still_writes(guid,author_kind) != author:
+                return
             post = put_rule_fact_in_unit(
                 store, policy="forum_post_v1", key=key, kind="forum_post", text=text, public=True,
                 known_by=[[g, "forum"] for g in knowers],
@@ -610,6 +619,11 @@ class _Night:
             if reason is not None:
                 raise _Refused("post", reason)  # His reply waits for another night.
         prepared = await self._prepare(self._thread_back_in(parent["thread"]))
+        # Raise outside commit_unit: its rollback catches unit errors, while the
+        # reply runner must see this refusal to count the bounded failed night.
+        if (answer is not None and author_kind == "actor" and "card" in who
+                and self._still_writes(guid,author_kind) != author):
+            raise _Refused("post", "author_gone")
         knowers = [[g, "forum"] for g in sorted({self.guild} | {row["id"] for row in self._rivals()})]
         inputs = {"night": ctx.night, "reply": reply_id, "to": reply["parent"]}
         now, outcome = ctx.clock.now(), {}
@@ -743,11 +757,17 @@ class _Night:
             return
         result = json.loads(row["result"])
         organiser = ctx.personas.get(row["organiser"])
+        from leeroy_mind.world.realm import voices
+        world_author = voices(self.store,ctx.settings.data_dir,ctx.clock.now()).get(row["organiser"])
         user = json.dumps({"event": row["kind"], "place": row["place"],
                            "organiser": organiser.character_name if organiser else None,
                            "minutes": round((row["end"] - row["start"]) / 60), "result": result},
                           ensure_ascii=False)
         system = self._system("realm_writeup", WRITEUP_DEFAULT, called=ctx.ident.called)
+        if world_author:
+            user = json.dumps({"event":row["kind"],"place":row["place"],"result":result,
+                "minutes":round((row["end"]-row["start"])/60),"author":world_author["name"],
+                "guild":world_author["guild"],"card":world_author["card"]},ensure_ascii=False)
         reply = await ctx.reasoner.json(system, user, WRITEUP_SCHEMA)
         text = " ".join(repair(reply["text"]).split())
         reason = self._public(text, "member", WRITEUP_MAX)
@@ -756,6 +776,8 @@ class _Night:
         original = row["result"]
 
         def write(store):
+            if world_author and voices(store,ctx.settings.data_dir,ctx.clock.now()).get(row["organiser"]) != world_author:
+                return
             current = store.conn.execute("SELECT result FROM realm_event WHERE id=?", (event,)).fetchone()
             if current is None or current["result"] != original:
                 return  # Changed meanwhile: a later night looks again.

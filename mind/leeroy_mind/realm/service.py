@@ -747,6 +747,10 @@ class Realm:
     def on_send(self, cmd):
         if not self.enabled or self._stopping:
             raise RealmDisabled("realm disabled")
+        if type(cmd) is protocol.WorldSay:
+            from leeroy_mind.world.realm import allowed
+            if not allowed(self.app.store,self.app.data_dir,self.ports.now(),cmd.guid,cmd.guild_id):
+                raise RealmDisabled("world_speaker_unavailable")
         if type(cmd) is protocol.Announce:
             # Before the queue and the direct path: an unowned announcement is refused.
             self.announcer.before_send(cmd, context=self.action_context())

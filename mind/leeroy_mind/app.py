@@ -467,12 +467,20 @@ class MindApp:
         # the members' answers to his posts, and his `discord` lease on the GPU
         self.discord_talk = DiscordTalk(self)
         self.signals = attach_signals(self)
+        from .learn.config import load_learn_config
+        from .learn.night import attach as attach_rewards, ready as learn_ready
+        self.engine.learn_enabled = load_learn_config(self.data_dir / "mind.toml").enabled and learn_ready(self.store)
+        attach_rewards(self.night_runner, self.data_dir, self.store)
         self.control = attach_control(self)
         from .playstyle.service import attach as attach_playstyle
         self.playstyle = attach_playstyle(self)
+        from .world.attach import attach_world
+        self.world_people = attach_world(self)
         from .banter.service import attach as attach_banter
         self.banter = attach_banter(self)
-        self.realm = attach_realm(self)  # Last: tests/realm/test_realm_wiring.py
+        self.realm = attach_realm(self)
+        from .server.attach import attach_server
+        self.server = attach_server(self)  # Last; disabled adds no handlers or tasks.
 
     # -- extension points --------------------------------------------------------------------
 

@@ -57,9 +57,26 @@ def _entry(data_dir, guid, kind, number, index, rendered, cover):
             "image": url}
 
 
+def _world_set(conn, have, guid, number):
+    row = conn.execute("SELECT decided,night FROM selfie_set WHERE guid=? AND set_no=?",
+                       (guid,number)).fetchone()
+    if not row or row[0] != "passed":
+        return False
+    if "meta" in have and conn.execute("SELECT 1 FROM meta WHERE key=? AND value='1'",
+                                      (f"selfies:set-world:{guid}:{number}",)).fetchone():
+        return True
+    # Render receipts also identify sets promoted before markers were introduced.
+    return "night_step" in have and conn.execute(
+        "SELECT 1 FROM night_step WHERE night=? AND stage='world_selfies' AND unit=?",
+        (row[1], f"{guid}:{number}")).fetchone() is not None
+
+
 def gallery(conn, data_dir, guid: int) -> dict:
     have = _have(conn)
     out = {"guid": guid, "missing": [t for t in TABLES if t not in have], "photos": []}
+    from leeroy_mind.personas.tiers import is_cast
+    if not is_cast(conn,guid):
+        return out
     try:
         files.member_dir(data_dir, guid)
     except (TypeError, ValueError):
@@ -76,6 +93,8 @@ def gallery(conn, data_dir, guid: int) -> dict:
                 "ON c.guid=s.guid AND c.set_no=s.set_no WHERE s.guid=? AND s.status='ready'",
                 (guid,)):
             is_cover = current == (row[0], row[1])
+            if _world_set(conn, have, guid, row[0]):
+                continue
             if held and not is_cover and lust_set(conn, guid, row[0]):
                 continue  # a lust-style set of a member who left that style: not listed
             entry = _entry(data_dir, guid, "candidate", row[0], row[1], row[2], is_cover)
@@ -101,6 +120,9 @@ def _is_cover(conn, have, guid, number, index) -> bool:
 def photo(conn, data_dir, guid, kind, number, index, *, thumb=False) -> bytes | None:
     """Only a rendered row belonging to this member can expose a bounded JPEG."""
     have = _have(conn)
+    from leeroy_mind.personas.tiers import is_cast
+    if not is_cast(conn,guid):
+        return None
     try:
         if kind == "candidate" and {"selfie_set", "selfie_candidate"} <= have:
             found = conn.execute(
@@ -115,6 +137,8 @@ def photo(conn, data_dir, guid, kind, number, index, *, thumb=False) -> bytes | 
         else:
             return None
         if found and kind == "candidate" and lust_set(conn, guid, number)                 and _lust_held(conn, have, guid) and not _is_cover(conn, have, guid, number, index):
+            return None
+        if kind == "candidate" and _world_set(conn, have, guid, number):
             return None
         if not found or not _present(path, Path(data_dir) / "selfies"):
             return None

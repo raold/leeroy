@@ -72,6 +72,9 @@ def test_plain_prompt_choices_still_accepted_with_variety(h,photo_kind,framing):
     ("on a quiet tree-lined city street at night",{1,3,4,5}),
     ("in a sunny garden beside the old wooden fence",{0,4}),
     ("inside a cosy restaurant after dark",{1,2}),
+    ("on a hotel balcony at night",{1,3,4}),
+    ("at a rooftop bar at night",{1,3,4}),
+    ("in a pool hall",{1,2}),
     ("inside a brightly sunlit office",set()),
     ("somewhere unfamiliar",set()),
 ])
@@ -79,3 +82,27 @@ def test_light_matches_place_and_time_categories(h,setting,allowed):
     p=replace(h.persona(101,appearance=APPEARANCE),photo=ProfilePhoto(**{**KIND,"setting":setting}))
     matches={i for i in range(len(photo_extra.LIGHTS)) if photo_extra.fits(i,p.photo)}
     assert matches==allowed
+
+
+@pytest.mark.parametrize("outfit",["a low-cut lavender cocktail dress",
+    "a plunging chartreuse top", "a burgundy bodycon dress", "a mauve halter dress"])
+def test_plain_hints_screen_garments_with_unlisted_colours(h,outfit):
+    p=h.persona(101,appearance=APPEARANCE)
+    h.store.conn.execute("INSERT INTO photo_style_history(guid,created,outfit,setting,style) "
+        "VALUES(?,?,?,?,?)",(101,h.T,outfit,"a garden","plain"))
+    assert not photo_extra.common(h.store,h.T,persona=p,ident=IDENT)
+
+
+def test_plain_variety_prompt_does_not_steer_every_setting_to_gym_leggings(h):
+    h.persona(101,appearance=APPEARANCE)
+    ctx=h.ctx({"photo":[KIND]})
+    run(kind.stage_photo(ctx,variety=True))
+    assert "gym leggings" not in json.dumps(ctx.reasoner.llm.calls)
+
+
+@pytest.mark.parametrize("variety",[False,True])
+def test_young_coded_woman_rejects_three_quarter_with_either_switch(h,variety):
+    h.woman(101,"fond",appearance=replace(APPEARANCE,hair_style="pigtails"))
+    data={**KIND,"framing":"three_quarter"}
+    run(kind.stage_photo(h.ctx({"photo":[data,data]}),variety=variety))
+    assert load_persona(h.store,101).photo is None
