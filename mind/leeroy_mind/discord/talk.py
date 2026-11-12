@@ -320,9 +320,20 @@ class DiscordTalk:
         tail = f"Answer {their} message: {_clip(fold(row[0]), HIS_CHARS)}"
         if photo is not None:
             subject, _, possessive = app.engine.human.forms
-            tail += ('\n' + f'{subject.capitalize()} posted a photo. What it shows: {photo["look"]}.'
-                     if photo['look'] else f"\n{subject.capitalize()} posted a photo you can't make out well.")
-            tail += f' It is {possessive} photo; do not assume {subject} is in it unless {subject} says so.'
+            verb, says = ('are', 'say') if subject == 'they' else ('is', 'says')
+            ownership = (f'{subject.capitalize()} posted a photo; it is {possessive} photo; '
+                         f'do not assume {subject} {verb} in it unless {subject} {says} so. ')
+            label = 'What it shows: '
+            answer = f'Answer {their} message: '
+            message_text = truncate_words(fold(row[0]), HIS_CHARS)
+            look = photo['look'] or "You can't make it out well."
+            # Drop look detail first, then the caption. Ownership is never clipped,
+            # including when the engine applies its final instruction budget.
+            room = max(0, INSTRUCTION_CHARS - len(purpose) - len(ownership)
+                       - len(label) - len(answer) - 2)
+            look = truncate_words(look, max(0, room - len(message_text)))
+            message_text = truncate_words(message_text, max(0, room - len(look)))
+            tail = ownership + label + look + '\n' + answer + message_text
         lines = [_clip(x, LINE_CHARS) for x in lines]
         while lines and len("\n".join([purpose, "Recent messages:", *lines, tail])) > (
                 INSTRUCTION_CHARS):

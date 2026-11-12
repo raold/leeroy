@@ -5,7 +5,7 @@ import { currentView, openView } from "./feedview.mjs";
 import { channelOf, groupMessages, memberGroups, mentionsHim, presenceDot, quoteOf, reactionBar, viewOfChannel } from "./discord.mjs";
 import { DISCORD, discordBusy, discordReason, mutateDiscord, refreshDiscord, saveDiscordRead, watchDiscord } from "./discordstate.mjs";
 import { PICKER, isOneEmoji } from "./emoji.mjs";
-import { photoBox, photoDraft, clearPhoto, preparePhoto, renderPhotoDraft, setupPhotoComposer } from "./photoview.mjs";
+import { photoBox, photoDraft, photoPreparing, clearPhoto, preparePhoto, renderPhotoDraft, setupPhotoComposer } from "./photoview.mjs";
 
 var shown = "", thread = 0, panel = "", reply = null, entryMark = 0, drawing = "";
 var drafts = new Map(), replyDrafts = new Map(), folded = new Set(), dialog = null, returnTo = null, failure = "";
@@ -181,12 +181,13 @@ function renderComposer() {
   var reason = discordReason(), count = Array.from(input.value).length;
   input.disabled = !!reason; input.readOnly = discordBusy || photoBusy;
   var attached = DISCORD.photos && photoDraft(routeKey());
-  $("dc-send").disabled = !!reason || discordBusy || photoBusy || (!input.value.trim() && !attached) || count > 2000;
-  renderPhotoDraft(routeKey(), DISCORD.photos, !!reason || discordBusy || photoBusy);
+  var preparing = photoPreparing(routeKey());
+  $("dc-send").disabled = !!reason || discordBusy || photoBusy || preparing || (!input.value.trim() && !attached) || count > 2000;
+  renderPhotoDraft(routeKey(), DISCORD.photos, !!reason || discordBusy || photoBusy || preparing);
   $("dc-emoji").disabled = !!reason || discordBusy;
   $("dc-count").textContent = count + " / 2000"; $("dc-count").classList.toggle("bad", count > 2000);
   $("dc-to").textContent = DISCORD.title(currentView()) + (thread ? " thread" : "");
-  $("dc-why").textContent = failure || reason || (discordBusy ? "Saving…" : "Enter sends · Shift+Enter starts a new line");
+  $("dc-why").textContent = reason || (preparing ? "Your photo is being prepared…" : failure || (discordBusy ? "Saving…" : "Enter sends · Shift+Enter starts a new line"));
   $("dc-reply").hidden = !reply;
   $("dc-reply-name").textContent = reply ? "Replying to " + name(reply.author) + ": " + str(reply.text).slice(0, 100) : "";
 }

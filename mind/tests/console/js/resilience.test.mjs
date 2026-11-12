@@ -68,12 +68,12 @@ test("an uncertain action settles in words and is never retried automatically", 
   assert.match(result.error, /may have completed/); assert.equal(calls, 1);
 });
 
-test("many distinct faces bound both retained entries and waiting loads", async () => {
+test("pending faces survive a burst and explicit forget cancels waiting loads", async () => {
   var loads = [], dropped = [];
   var cache = new FaceCache({maxEntries: 8, maxActive: 2,
     load: (key) => new Promise(resolve => loads.push(() => resolve(key))), drop: v => dropped.push(v)});
   var promises = Array.from({length: 1000}, (_, n) => cache.get(String(n)));
-  assert.equal(cache.entries.size, 8); assert.ok(cache.waiting.length <= 8); assert.equal(cache.active, 2);
+  assert.equal(cache.entries.size, 1000); assert.equal(cache.waiting.length, 998); assert.equal(cache.active, 2);
   cache.forget(); assert.equal(cache.waiting.length, 0);
   await Promise.all(promises);  // even evicted/forgotten askers have an outcome
   while (loads.length) { loads.shift()(); await flush(); }

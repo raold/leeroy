@@ -6,6 +6,7 @@ import stat
 from pathlib import Path
 
 from leeroy_mind.imagefiles import read_image
+from leeroy_mind import clock
 
 MAX_IMAGE_BYTES = 4 * 1024 * 1024
 INCOMING = Path('discord') / 'incoming'
@@ -95,6 +96,32 @@ def stage(data_dir: Path, data: bytes) -> str:
         _safe_dir(Path(data_dir), INCOMING, create=False)
         return token
     raise ImageRefused('busy')
+
+
+def staged_count(data_dir: Path, day: str) -> int:
+    """Recover today's upload reservations without opening the mind's database."""
+    try:
+        folder = _safe_dir(Path(data_dir), INCOMING, create=False)
+    except ImageRefused as error:
+        if error.code == 'missing':
+            return 0
+        raise
+    tokens = set()
+    for path in folder.iterdir():
+        if path.suffix not in ('.jpg', '.adopted') or TOKEN_RE.fullmatch(path.stem) is None:
+            continue
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            # Adoption may rename a jpg during enumeration; inspect its retained twin.
+            if path.suffix != '.jpg':
+                raise
+            info = path.with_suffix('.adopted').lstat()
+        if (not stat.S_ISREG(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400):
+            continue
+        if clock.local_at(info.st_mtime).date().isoformat() == day:
+            tokens.add(path.stem)
+    return len(tokens)
 
 
 def adopt(data_dir: Path, token: str, message_id: int) -> tuple[str, int, int, int]:

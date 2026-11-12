@@ -3,7 +3,8 @@ import { FaceCache } from "../facecache.mjs";
 import { fitSize, imageUrl, MAX_IMAGE_BYTES, PICK_ACCEPT, aspectClass } from "./photos.mjs";
 
 const drafts = new Map();
-const cache = new FaceCache({ maxEntries:32, maxActive:2, ttlMs:3600000,
+const preparing = new Map();
+const cache = new FaceCache({ maxEntries:128, maxActive:2, ttlMs:3600000,
   load:async key => {
     const [id,size] = key.split(':');
     const response = await api(imageUrl(Number(id), size));
@@ -14,6 +15,7 @@ const cache = new FaceCache({ maxEntries:32, maxActive:2, ttlMs:3600000,
   }, drop:url => URL.revokeObjectURL(url) });
 
 export function photoDraft(key) { return drafts.get(key) || null; }
+export function photoPreparing(key) { return preparing.has(key); }
 export function clearPhoto(key, expected) {
   const draft = drafts.get(key);
   if (draft && (!expected || expected === draft)) { URL.revokeObjectURL(draft.url); drafts.delete(key); }
@@ -58,13 +60,18 @@ export function setupPhotoComposer({ key, enabled, changed, failed }) {
   async function pick(file) {
     if (!file || !enabled()) { return; }
     const destination = key(), mine = ++version;
+    preparing.set(destination, mine); changed();
     try {
       const blob = await reencode(file);
-      if (mine !== version || !enabled()) { return; }
+      if (mine !== version || preparing.get(destination) !== mine || !enabled()) { return; }
       clearPhoto(destination);
       while (drafts.size >= 60) { clearPhoto(drafts.keys().next().value); }
       drafts.set(destination, { blob, url:URL.createObjectURL(blob), token:null }); changed();
-    } catch (error) { failed(new Error(error.message || 'That image could not be opened.')); }
+    } catch (error) {
+      if (preparing.get(destination) === mine) { failed(new Error(error.message || 'That image could not be opened.')); }
+    } finally {
+      if (preparing.get(destination) === mine) { preparing.delete(destination); changed(); }
+    }
   }
   $('dc-photo-pick').addEventListener('click', () => input.click());
   input.addEventListener('change', () => { pick(input.files[0]); input.value = ''; });
@@ -100,4 +107,4 @@ $('dc-photo-view').addEventListener('close', () => {
   viewing++; $('dc-photo-view-img').removeAttribute('src');
   if (returnTo?.isConnected) { returnTo.focus(); } returnTo = null;
 });
-on('key-lost', () => { cache.forget(); for (const key of drafts.keys()) { clearPhoto(key); } $('dc-photo-view').close(); });
+on('key-lost', () => { preparing.clear(); cache.forget(); for (const key of drafts.keys()) { clearPhoto(key); } $('dc-photo-view').close(); });

@@ -307,6 +307,7 @@ class ConsoleApp:
         self._photo_uploads: list[float] = []
         self._photo_day = None
         self._photo_day_total = 0
+        self._photo_upload_lock = asyncio.Lock()
         self.mind = mind
         self.controls = controls
         self.voice = voice
@@ -1558,16 +1559,20 @@ class ConsoleApp:
             return json_response(429, {'ok': False, 'error': uploads.WORDS['minute']})
         # Reserve before worker I/O so concurrent requests cannot overbook.
         self._photo_uploads.append(now)
-        day = mind_clock.local_at(self._clock()).date().isoformat()
         try:
-            count = await asyncio.to_thread(feed.read, self.s.data_dir / 'mind.db', uploads.day_count, day)
-            if self._photo_day != day:
-                self._photo_day, self._photo_day_total = day, count
-            self._photo_day_total = max(self._photo_day_total, count)
-            if self._photo_day_total >= uploads.DAY_MAX:
-                return json_response(429, {'ok': False, 'error': uploads.WORDS['day']})
-            self._photo_day_total += 1
-            token = await asyncio.to_thread(images.stage, self.s.data_dir, req.body)
+            async with self._photo_upload_lock:
+                day = mind_clock.local_at(self._clock()).date().isoformat()
+                if self._photo_day != day:
+                    count = await asyncio.to_thread(images.staged_count, self.s.data_dir, day)
+                    self._photo_day, self._photo_day_total = day, count
+                if self._photo_day_total >= uploads.DAY_MAX:
+                    return json_response(429, {'ok': False, 'error': uploads.WORDS['day']})
+                self._photo_day_total += 1
+                try:
+                    token = await asyncio.to_thread(images.stage, self.s.data_dir, req.body)
+                except images.ImageRefused:
+                    self._photo_day_total -= 1
+                    raise
         except images.ImageRefused as error:
             return json_response(413 if error.code == 'too_big' else 400,
                                  {'ok': False, 'error': uploads.WORDS[error.code]})

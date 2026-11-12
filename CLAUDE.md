@@ -1435,7 +1435,9 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 - `[photos] enabled = true` enables owner photo uploads after restarting both mind
   and console; `enabled` and `send` default false. Attach or paste an image in a
   Discord channel or DM: the page resizes to JPEG and strips metadata locally.
-  Uploads cap at 4 MiB, four per minute and 200 per local day. Files under
+  Uploads cap at 4 MiB, four per minute and 200 per local day. The daily upload
+  count is rebuilt from retained staging files after a console restart; refused
+  images do not consume it. Files under
   `discord/incoming` and `discord/images` are retained, including unposted uploads
   and deleted messages' photos. A bounded vision look runs after posting; answers
   use its screened description, and DM memories stay private. Owner uploads have

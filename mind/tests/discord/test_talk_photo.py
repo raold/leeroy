@@ -22,6 +22,23 @@ async def post_photo(app, channel='dm:101', text='new profile pic'):
                                     'image':stage(app.data_dir, jpeg())})
 
 
+def test_photo_ownership_survives_a_full_instruction(tmp_path):
+    from leeroy_mind.discord.talk import INSTRUCTION_CHARS
+    app = mind_app(tmp_path, toml='[photos]\nenabled=true')
+    try:
+        mid = ds.post(app.store, channel='dm:101', author=app.human_guid, origin='human',
+            text='x' * 500, now=app.clock.now(),
+            attachment=ds.AttachmentIn('upload', 'discord/images/1.jpg', 32, 24, 100))
+        ds.set_look(app.store, mid, 'a' * 599, now=app.clock.now())
+        instruction = app.discord_talk.instruction(101, 'dm:101', mid, None)
+        assert len(instruction) <= INSTRUCTION_CHARS
+        assert 'do not assume they are in it unless they say so' in instruction
+        assert instruction.index('do not assume') < instruction.index('What it shows:')
+        assert instruction.index('What it shows:') < instruction.index('Answer their message:')
+    finally:
+        run(app.stop())
+
+
 def test_photo_look_precedes_answer_without_blocking_post(tmp_path):
     async def go():
         app = mind_app(tmp_path, toml='[photos]\nenabled=true\n[talk]\naware=true')
@@ -76,7 +93,7 @@ def test_failed_look_answers_and_deleted_photo_does_not(tmp_path, failure):
             if failure == 'deleted':
                 assert queued == []
             else:
-                assert len(queued) == 1 and "can't make out well" in queued[0][0].instruction
+                assert len(queued) == 1 and "can't make it out well" in queued[0][0].instruction
         finally:
             await app.stop()
     run(go())

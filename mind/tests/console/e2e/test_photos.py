@@ -7,6 +7,46 @@ import pytest
 from .test_tabs import open_console
 
 
+def test_preparing_photo_blocks_caption_send(rehearsal):
+    async def run():
+        from playwright.async_api import expect
+        async with rehearsal(photos=True) as r:
+            r.app.llm._script = lambda *_: 'A blue square.'
+            await open_console(r, timeout=15000)
+            await r.page.locator('#dc-channels [data-view="d:pics"]').click()
+            await r.page.locator('#dc-text').fill('Caption with my photo')
+            data = await r.page.evaluate('''() => {
+                const c = document.createElement('canvas'); c.width = c.height = 32;
+                c.getContext('2d').fillRect(0, 0, 32, 32);
+                const image = c.toDataURL('image/png');
+                const original = HTMLCanvasElement.prototype.toBlob;
+                HTMLCanvasElement.prototype.toBlob = function(callback, ...args) {
+                    window.finishPhoto = () => original.call(this, callback, ...args);
+                    document.documentElement.dataset.photoWaiting = 'true';
+                };
+                return image;
+            }''')
+            await r.page.locator('#dc-photo-file').set_input_files({
+                'name':'fixture.png', 'mimeType':'image/png', 'buffer':base64.b64decode(data.split(',')[1])})
+            await expect(r.page.locator('html')).to_have_attribute('data-photo-waiting', 'true')
+            await expect(r.page.locator('#dc-send')).to_be_disabled()
+            await expect(r.page.locator('#dc-why')).to_contain_text('photo is being prepared')
+            await r.page.locator('#dc-text').press('Enter')
+            await r.page.locator('#dc-send').evaluate('(button) => button.click()')
+            assert r.app.store.conn.execute("SELECT count(*) FROM discord_message WHERE text = ?",
+                ('Caption with my photo',)).fetchone()[0] == 0
+            await r.page.evaluate('window.finishPhoto()')
+            await expect(r.page.locator('#dc-photo-preview')).to_be_visible()
+            await expect(r.page.locator('#dc-send')).to_be_enabled()
+            await r.page.locator('#dc-text').press('Enter')
+            await expect(r.page.locator('#dc-photo-preview')).to_be_hidden()
+            assert r.app.store.conn.execute('''SELECT count(*) FROM discord_message m
+                JOIN discord_attachment a ON a.message = m.id WHERE m.text = ?''',
+                ('Caption with my photo',)).fetchone()[0] == 1
+            assert not r.errors, r.errors
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize('theme', ['dark', 'light'])
 def test_photo_pick_remove_retry_post_and_keyboard_viewer(rehearsal, tmp_path, theme):
     async def run():

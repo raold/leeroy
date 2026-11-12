@@ -1,4 +1,5 @@
 import asyncio
+import os
 from pathlib import Path
 
 import pytest
@@ -138,13 +139,43 @@ def test_stalled_upload_times_out_and_frees_connection_slot(monkeypatch):
     run(go())
 
 
-def test_daily_upload_cap_is_read_from_mind(data, store):
+def test_daily_upload_count_survives_restart_and_refunds_refusals(data, store):
     from leeroy_mind.clock import local_at
-    from leeroy_mind.photos import uploads
+    from leeroy_mind.photos import images, uploads
     from console.test_console_discord import NOW
     day = local_at(NOW).date().isoformat()
+    tokens = [images.stage(data, jpeg()) for _ in range(3)]
+    images.adopt(data, tokens[0], 1)
+    for path in (data / images.INCOMING).iterdir():
+        os.utime(path, (NOW, NOW))
+    old = images.stage(data, jpeg())
+    os.utime(data / images.INCOMING / f'{old}.jpg', (NOW-86400, NOW-86400))
+    (data / images.INCOMING / 'unrelated.jpg').write_bytes(jpeg())
+    # This counter measures posts, not staging. It cannot consume the upload budget.
     store.set_meta(uploads.DAY_KEY.format(day), '200')
     async def go():
         async with served(build(data, link=FakeLink())) as app:
-            assert (await upload(app, jpeg())).status == 429
+            assert (await upload(app, b'PNG')).status == 400
+            assert app._photo_day_total == 3
+            assert (await upload(app, jpeg())).status == 201
+            assert app._photo_day_total == 4
+            assert store.get_meta(uploads.DAY_KEY.format(day)) == '200'
+        # Reconstruct the counter from the same files after a second restart.
+        for path in (data / images.INCOMING).iterdir():
+            if path.stem not in (*tokens, old) and images.TOKEN_RE.fullmatch(path.stem):
+                os.utime(path, (NOW, NOW))
+        async with served(build(data, link=FakeLink())) as app:
+            assert (await upload(app, b'PNG')).status == 400
+            assert app._photo_day_total == 4
+    run(go())
+
+
+def test_concurrent_uploads_cannot_overbook_daily_budget(data, monkeypatch):
+    from leeroy_mind.photos import uploads
+    monkeypatch.setattr(uploads, 'DAY_MAX', 3)
+    async def go():
+        async with served(build(data, link=FakeLink())) as app:
+            replies = await asyncio.gather(*(upload(app, jpeg()) for _ in range(4)))
+            assert sorted(r.status for r in replies) == [201, 201, 201, 429]
+            assert app._photo_day_total == 3
     run(go())
