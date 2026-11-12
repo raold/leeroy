@@ -32,6 +32,7 @@ class NightlySettings:
     data_dir: Path
     quiet: tuple[time, time] | None = None
     learn_enabled: bool = False
+    learn_bandit: bool = False
     looks_diversity: bool = False
     grace_minutes: int = 10
     retry_minutes: int = 60
@@ -126,6 +127,7 @@ def load_settings(cfg: MindConfig, data_dir: Path) -> NightlySettings:
         jealousy=cfg.romance.jealousy, chattiness=cfg.talk.chattiness,
         wow_vs_life=load_life(data_dir / "mind.toml"), female_share=cfg.cast.female_share,
         data_dir=data_dir, learn_enabled=load_learn_config(data_dir / "mind.toml").enabled,
+        learn_bandit=load_learn_config(data_dir / "mind.toml").bandit,
         world_per_night=world.world_per_night,
         world_selfies_per_night=world.world_selfies_per_night,
         looks_diversity=enabled(data_dir), quiet=server.quiet_window if server.enabled else None)

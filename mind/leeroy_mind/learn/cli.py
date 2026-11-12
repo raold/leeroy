@@ -42,17 +42,41 @@ def report(conn, *, days=14, now=None):
 def learn_main(argv=None):
     parser = argparse.ArgumentParser(prog="leeroy_mind learn")
     parser.add_argument("--data-dir")
-    command = parser.add_subparsers(dest="action", required=True).add_parser("report")
+    sub = parser.add_subparsers(dest="action", required=True)
+    command = sub.add_parser("report")
     command.add_argument("--data-dir", default=argparse.SUPPRESS)
     command.add_argument("--days", type=int, default=14)
+    arm_command = sub.add_parser("arms")
+    arm_command.add_argument("--data-dir", default=argparse.SUPPRESS)
     args = parser.parse_args(argv)
-    if not 1 <= args.days <= 3650:
+    if args.action == "report" and not 1 <= args.days <= 3650:
         parser.error("--days must be between 1 and 3650")
     root = Path(args.data_dir).resolve() if args.data_dir else default_data_dir()
     try:
         with closing(sqlite3.connect(f"{(root / 'mind.db').resolve().as_uri()}?mode=ro", uri=True)) as conn:
-            print(json.dumps(report(conn, days=args.days), sort_keys=True, allow_nan=False))
+            result = arms_report(conn) if args.action == "arms" else report(conn, days=args.days)
+            print(json.dumps(result, sort_keys=True, allow_nan=False))
         return 0
     except (sqlite3.Error, ValueError, OSError):
         print("learn_report_unavailable", file=sys.stderr)
         return 1
+
+
+def arms_report(conn, *, now=None):
+    from . import arms, bandit
+    if not arms.available(conn):
+        return {"available": False, "arms": [], "contexts": []}
+    registry = arms.read(conn)
+    keys = conn.execute("SELECT context FROM bandit_share UNION SELECT context FROM bandit_credit "
+                        "UNION SELECT context FROM bandit_rejection").fetchall()
+    contexts = []
+    for (key,) in keys:
+        posteriors = bandit.posterior(conn,None,key,now=now)
+        shares = dict(conn.execute("SELECT arm_id,turns FROM bandit_share WHERE context=?",(key,)))
+        for arm in registry:
+            total = sum(shares.get(a.id,0) for a in registry if a.family == arm.family)
+            contexts.append({"context":json.loads(key),"arm_id":arm.id,
+                **posteriors.get(arm.id,dict(alpha=1.,beta=1.,uses=0,bad=0,attempts=0)),
+                "turns":shares.get(arm.id,0),"share":shares.get(arm.id,0)/total if total else 0.})
+    from dataclasses import asdict
+    return {"available":True,"arms":[asdict(a) for a in registry],"contexts":contexts}

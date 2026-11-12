@@ -138,6 +138,8 @@ def attach(runner,data_dir,store=None):
         names = {s.name for s in runner.stages}
         runner.add_stage("rewards",stage_rewards,
                          after="signals" if "signals" in names else "threads",model=None)
+        from .bandit_night import attach as attach_bandit
+        attach_bandit(runner,data_dir,store)
 
 
 async def stage_rewards(ctx):
