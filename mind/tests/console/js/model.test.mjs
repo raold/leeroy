@@ -431,3 +431,36 @@ test("a thread the snapshot left out while it moved on is read again from its ne
   f.adopt([toHim(9, 1102)], 0, ["w:1101", "w:1102"]);
   assert.deepEqual(ids(f.lines("w:1101")), [1, 2]);
 });
+
+test("a gap between read-back history and a newer cut snapshot is read back until it closes", () => {
+  var f = new Feed();
+  f.active = "guild";
+  f.adopt([mk(300)], 0);
+  var page = [];
+  for (var i = 1; i < 300; i++) { page.push(mk(i)); }
+  f.older("guild", { lines: page, more: false }, f.oldest("guild"));
+  assert.equal(f.mayHaveMore("guild"), false);
+  // Disconnected while 300 more were said; the snapshot holds the newest 200 (401-600)
+  var snap = [];
+  for (var j = 401; j <= 600; j++) { snap.push(mk(j)); }
+  f.adopt(snap, 5401, ["guild"]);
+  assert.equal(f.gapped("guild"), true);
+  assert.equal(f.oldest("guild"), 401);
+  assert.equal(f.mayHaveMore("guild"), true);
+  var gap = [];
+  for (var k = 351; k <= 400; k++) { gap.push(mk(k)); }
+  assert.equal(f.older("guild", { lines: gap, more: true }, 401), true);  // not down to 300 yet
+  assert.equal(f.gapped("guild"), true);
+  assert.equal(f.oldest("guild"), 351);
+  var rest = [];
+  for (var n = 251; n <= 350; n++) { rest.push(mk(n)); }
+  f.older("guild", { lines: rest, more: true }, 351);  // reaches the history: closed
+  assert.equal(f.gapped("guild"), false);
+  assert.equal(f.mayHaveMore("guild"), false);       // the history's own state again
+  assert.equal(f.lines("guild").length, 600);
+  // A cut snapshot with nothing read back below it opens no gap
+  var g = new Feed();
+  g.adopt(snap, 5401, ["guild"]);
+  assert.equal(g.gapped("guild"), false);
+  assert.equal(g.oldest("guild"), 401);
+});

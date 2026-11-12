@@ -168,8 +168,11 @@ export function renderFeed(keepPlace) {
   }
   if (at) { keep(box, at); } else { box.scrollTop = box.scrollHeight; }
   changed();
-  // A view with nothing held and no history asked yet (an old thread, a quiet channel) reads back
-  if (!rows.size && unknown && !loading) { loadEarlier(VIEW); }
+  // A view with nothing held and no history asked yet (an old thread, a quiet channel) reads back,
+  // and so does one with a gap between its history and a newer snapshot, until it is closed
+  if (!loading && ((!rows.size && unknown) || (FEED.gapped(VIEW) && !FAILED.has(VIEW)))) {
+    loadEarlier(VIEW);
+  }
 }
 $("feed").addEventListener("scroll", function () {
   var box = $("feed");

@@ -75,6 +75,7 @@ export class Feed {
     this.index = new Map();    // guid -> {name, last}: every member he ever whispered with
     this.more = new Map();     // view -> whether older lines remain; absent: not known yet
     this.held = new Set();     // views whose history he read back: open, they keep every line
+    this.gaps = new Map();     // view -> {edge, floor, more}: lines between floor and edge may be missing
   }
   upsert(lines) {
     var top = 0;
@@ -98,12 +99,14 @@ export class Feed {
           .forEach((id) => { this._remove(id); });
         this.more.set(v, true);
         this.held.delete(v);
+        this.gaps.delete(v);
       }
       while (this.views.size > VIEW_LIMIT) {
         var old = Array.from(this.views.keys()).find(key => !FIXED.has(key) && key !== this.active);
         Array.from(this.views.get(old).keys()).forEach(id => this._remove(id));
         this.more.delete(old);  // opened again, it reads its lines back
         this.held.delete(old);
+        this.gaps.delete(old);
       }
     });
     if (this.floor === null) { this.floor = top; }
@@ -140,10 +143,22 @@ export class Feed {
     // and read again from its newest line when it opens
     cutViews.forEach((v) => {
       var m = this.views.get(v), k = v.indexOf("w:") === 0 ? this.index.get(Number(v.slice(2))) : null;
-      if (!m || !k || Math.max.apply(null, Array.from(m.keys())) >= k.last.id) { return; }
-      Array.from(m.keys()).forEach((id) => { this._remove(id); });
-      this.more.delete(v);
-      this.held.delete(v);
+      if (!m) { return; }
+      if (!low.has(v)) {
+        if (!k || Math.max.apply(null, Array.from(m.keys())) >= k.last.id) { return; }
+        Array.from(m.keys()).forEach((id) => { this._remove(id); });
+        this.more.delete(v);
+        this.held.delete(v);
+        this.gaps.delete(v);
+        return;
+      }
+      // Its newest lines sit above lines read back before: what fell between may be missing, and
+      // the gap is read back from the snapshot's oldest line down (feedview fills it)
+      var edge = low.get(v), below = Array.from(m.keys()).filter(function (id) { return id < edge; });
+      if (!below.length) { return; }
+      var was = this.gaps.get(v);
+      this.gaps.set(v, { edge: edge, floor: Math.max.apply(null, below),
+                         more: was ? was.more : this.more.get(v) });
     });
     return true;
   }
@@ -167,21 +182,40 @@ export class Feed {
   older(view, page, from) {
     if (num(from) > 0 && this.oldest(view) !== from) { return false; }
     page = obj(page);
+    var lines = arr(page.lines).filter(function (l) { return l && goodId(l.id); });
+    var gap = this.gaps.get(view);
     this.held.add(view);
+    if (gap) {
+      // Filling a gap: closed once the page reaches the lines below it (or there is nothing older)
+      this.upsert(lines);
+      var reached = page.more !== true || !lines.length || lines.some(function (l) { return l.id <= gap.floor; });
+      if (!this.gaps.has(view)) { return true; }  // trimmed meanwhile: its "more" stands
+      if (reached) {
+        this.gaps.delete(view);
+        if (gap.more === undefined) { this.more.delete(view); } else { this.more.set(view, gap.more); }
+      } else {
+        gap.edge = Math.min.apply(null, lines.map(function (l) { return l.id; }));
+      }
+      return true;
+    }
     this.more.delete(view);
-    this.upsert(arr(page.lines));
+    this.upsert(lines);
     // A view he left in the meantime was trimmed again (more: true), whatever the page said
     if (this.more.get(view) !== true) { this.more.set(view, page.more === true); }
     return true;
   }
-  // The oldest line id the page holds for a view (0: none), where its history reads back from
+  // Whether a view has a gap still to read back (between history and a newer snapshot)
+  gapped(view) { return this.gaps.has(view); }
+  // Where a view's history reads back from: its gap's edge while it has one, else the oldest line
+  // id the page holds (0: none)
   oldest(view) {
+    if (this.gaps.has(view)) { return this.gaps.get(view).edge; }
     var m = this.views.get(view), low = 0;
     if (m) { m.forEach(function (l, id) { if (!low || id < low) { low = id; } }); }
     return low;
   }
   // Whether a view may have older lines than it holds: true until its history says otherwise
-  mayHaveMore(view) { return this.more.has(view) ? this.more.get(view) : true; }
+  mayHaveMore(view) { return this.gaps.has(view) || (this.more.has(view) ? this.more.get(view) : true); }
   // Whether the page has asked a view's history yet
   known(view) { return this.more.has(view); }
   // Lines that went from the feed. A thread whose indexed newest line went falls back to its
