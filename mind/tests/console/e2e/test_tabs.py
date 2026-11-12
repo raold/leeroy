@@ -23,9 +23,11 @@ OLDER.update({"raid": "No raid is open.",
               "dojo": "No dojo set up", "mind": "stopped"})
 
 
-async def open_console(r, *, timeout=5000):
+async def open_console(r, *, timeout=15000):
     from playwright.async_api import expect
     await r.page.goto(r.url + "/#key=" + KEY)
+    # The parallel mind suite can keep the browser busy loading the module graph.
+    # Wait for the real startup signal before testing a tab or action.
     await expect(r.page.locator("#s-mind")).to_contain_text("mind running", timeout=timeout)
 
 
