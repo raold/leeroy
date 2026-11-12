@@ -6,7 +6,9 @@
 #include "LeeroyWorldGuilds.h"
 #include "LeeroyWorldProtocol.h"
 #include "Config.h"
+#include "Log.h"
 #include <charconv>
+#include <mutex>
 #include <set>
 #include <sstream>
 
@@ -65,8 +67,17 @@ LeeroyCommandResult Roster(nlohmann::json const& message)
             if (rows.size() > World::kMaxMembers) return {false,"world_roster_capacity"};
         }
     }
+    // A row native's own caches disagree on is left out by name, once per member and rule per
+    // process, so one odd member cannot withhold the rest of the world from the mind.
+    auto valid = World::ValidRows(rows,own,human);
+    static std::mutex loggedLock;
+    static std::set<std::pair<std::uint32_t,std::string>> logged;
+    std::lock_guard guard(loggedLock);
+    for (auto const& skip : valid.skipped)
+        if (logged.insert(skip).second)
+            LOG_WARN("module.leeroy", "mod-leeroy: world roster skipped guid {} ({})", skip.first, skip.second);
     // Publish only complete snapshots, in bounded pages. Python waits for every page.
-    auto const pages = World::RosterPages(*request,own,human,rows);
+    auto const pages = World::RosterPages(*request,own,human,valid.rows);
     if (!pages) return {false,"world_roster_invalid"};
     for (auto const& body : *pages) Publish(body);
     return {true,{}};
