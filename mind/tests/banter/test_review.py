@@ -143,7 +143,41 @@ def test_empty_thread_refunds_tease_and_hourly_slot(rig,monkeypatch):
     monkeypatch.setattr(rig.engine,'_speak',AsyncMock(return_value=[]))
     rig.sync(b.thread('guild',t,[101,102,103]))
     assert not b.starts(rig.clock.now())
-    assert rig.store.get_meta(TEASE_KEY) is None and b.unused(t,rig.clock.now())
+    assert rig.store.get_meta(TEASE_KEY) is None and not b.unused(t,rig.clock.now())
+
+
+def test_declined_openers_do_not_restart_every_tick_for_half_an_hour(rig,monkeypatch):
+    b=rig.banter
+    rig.script('(nothing)')
+    b.started=rig.clock.now()-3600
+    monkeypatch.setattr(b,'candidates',lambda _: [101,102,103])
+    attempts=[]; original=b.thread
+    async def counted(*args):
+        attempts.append(rig.clock.now())
+        await original(*args)
+    monkeypatch.setattr(b,'thread',counted)
+    async def go():
+        end=rig.clock.now()+1800
+        while rig.clock.now()<end:
+            await finish(rig,asyncio.create_task(b.tick()))
+            await rig.advance(5,5)
+    rig.sync(go())
+    assert 1<=len(attempts)<=b.cfg.per_hour
+    assert len(rig.chat_calls())==len(attempts)
+    assert not b.starts(rig.clock.now())
+    assert rig.store.get_meta('banter:used:quiet:guild') is not None
+
+
+def test_empty_thread_keeps_gap_even_for_a_different_topic(rig,monkeypatch):
+    b=rig.banter; first=topic(rig)
+    assert b.reserve(first,rig.clock.now())
+    b.settle_reservation(first,0)
+    b.pending.append(Topic('new-topic','quiet',rig.clock.now(),'Another fixture observation.'))
+    called=AsyncMock(); monkeypatch.setattr(b,'thread',called)
+    monkeypatch.setattr(b,'candidates',lambda _: [101,102,103])
+    rig.sync(b.tick())
+    called.assert_not_called()
+    assert not b.starts(rig.clock.now())
 
 
 def test_owner_queries_are_indexed_and_cached_then_notice_a_new_line(rig):

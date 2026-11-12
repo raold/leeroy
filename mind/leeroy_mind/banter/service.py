@@ -106,6 +106,7 @@ class Banter:
         self._joke_checks = {}
         self._joke_options = {}
         self._reservation = None
+        self._empty_at = float('-inf')
 
     async def event(self,ev):
         topic = event_topic(self.app,ev)
@@ -234,7 +235,9 @@ class Banter:
         _,prior,changes=self._reservation; self._reservation=None
         with self.app.store.transaction():
             if not sent:
+                self._empty_at = self.app.clock.now()
                 for key,value in prior.items():
+                    if key not in (LIMIT_KEY,TEASE_KEY,JOKE_KEY): continue
                     if self.app.store.get_meta(key)!=changes[key]: continue
                     if value is None: self.app.store.conn.execute('DELETE FROM meta WHERE key=?',(key,))
                     else: self.app.store.set_meta(key,value)
@@ -315,7 +318,7 @@ class Banter:
         starts=self.starts(now)
         rate=self.app.engine.cfg.talk.chattiness/4
         if (not self.cfg.per_hour or rate<=0 or len(starts)>=self.cfg.per_hour
-                or starts and now-starts[-1]<3600/(self.cfg.per_hour*rate)):
+                or now-max(starts[-1] if starts else float('-inf'),self._empty_at)<3600/(self.cfg.per_hour*rate)):
             return
         channels = [self.next_channel,"discord:general" if self.next_channel=="guild" else "guild"]
         for channel in channels:

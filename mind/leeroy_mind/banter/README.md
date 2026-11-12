@@ -46,7 +46,8 @@ uses its own presence, writes no game session/activity clock and sends no game
 commands. Deleted/private/vetoed joke origins are rechecked when their database
 snapshot changes; repeated unchanged send checks reuse the result. Owner-line
 checks use an indexed initial window and cache new rows by id. Threads that
-send nothing refund their hourly, topic and evening allowances.
+send nothing refund their hourly and evening allowances, retain their attempted
+topic receipt, and wait at least the current chattiness gap before another thread.
 
 The existing `lexicon` already supplies public jokes with complete origin and
 recalled-memory provenance. `banter_jokes` adds up to twenty rewarded candidates
