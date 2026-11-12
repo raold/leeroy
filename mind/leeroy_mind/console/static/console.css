@@ -711,3 +711,5 @@ td > div.who { color: var(--ink); font-weight: 600; }
 #dc-photo-view { width:min(95vw, 1100px); max-height:95vh; padding:16px; color:var(--ink); background:var(--surface); }
 #dc-photo-view-img { display:block; max-width:100%; max-height:78vh; margin:auto; object-fit:contain; }
 #dc-photo-view::backdrop { background:rgb(0 0 0 / 75%); }
+.tonight-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr)); gap:16px; }
+.tonight-line { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }

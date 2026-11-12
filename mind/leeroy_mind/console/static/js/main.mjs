@@ -13,6 +13,7 @@ import "./guild.mjs";
 import "./social.mjs";
 import "./board.mjs";
 import "./calendar.mjs";
+import "./tonight.mjs";
 import "./realm.mjs";
 import "./bank.mjs";
 import "./training.mjs";

@@ -102,7 +102,7 @@ MAX_CONNECTIONS = 8
 REFUSAL_LOG_S = 30.0
 REPLACE_TRIES = 40  # 2 s of 50 ms tries to move control.json over a file being read
 OPS = ("status", "stop", "raid", "tune", "selfie", "say", "bank", "board", "discord", "library",
-       "ops", "claim_check", "feedback")
+       "ops", "claim_check", "feedback", "kit")
 RAID_ACTIONS = ("call", "form", "summon", "start", "stop", "end")
 TUNE_ACTIONS = ("status", "set", "undo", "revert", "group", "retire", "preview", "nudge")
 TUNE_SHAPES = {
@@ -830,6 +830,8 @@ class ControlEndpoint:
         self.ops = OpsControl(self)
         self._bank_task: asyncio.Future | None = None  # the read in flight, shared by askers
         self._bank_cache: tuple[float, dict] | None = None
+        self._kit_task: asyncio.Future | None = None
+        self._kit_cache: tuple[float, dict] | None = None
         self._refusal_logs = {}  # fixed reason codes only, never request text or keys
 
     async def serve(self) -> None:
@@ -910,7 +912,7 @@ class ControlEndpoint:
             return self.status(), None
         if op == "ops":
             return await self.ops.answer(args), None
-        if self.ops.busy and op not in {"stop", "bank", "library"}:
+        if self.ops.busy and op not in {"stop", "bank", "library", "kit"}:
             return {"ok": False, "error": "An Ops action is still running."}, None
         if op == "stop":
             already = self.app.stopping
@@ -921,8 +923,8 @@ class ControlEndpoint:
             log_event("control_request", op=op, channel=args["channel"],
                       outcome="ok" if reply["ok"] else "refused")
             return reply, None
-        if op == "bank":
-            reply = await self.bank()
+        if op in {"bank", "kit"}:
+            reply = await (self.bank() if op == "bank" else self.kit())
             log_event("control_request", op=op, outcome="ok" if reply["ok"] else "refused")
             return reply, None
         if op in ("library", "claim_check"):
@@ -1126,6 +1128,38 @@ class ControlEndpoint:
     async def claim_check(self, args: dict) -> dict:
         from leeroy_mind.insight_check import run
         return await run(self.app, args, self._claim_check, timeout=self.library_s)
+
+    async def kit(self) -> dict:
+        if self.app.stopping:
+            return {'ok':False,'why':'mind_stopping','error':'The mind is stopping.'}
+        cached = self._kit_cache
+        if cached is not None and self._clock()-cached[0] < BANK_CACHE_S:
+            return cached[1]
+        task = self._kit_task
+        if task is None or task.done():
+            armory = getattr(getattr(self.app,'guild',None),'armory',None)
+            if armory is None or not getattr(armory,'available',True):
+                return {'ok':False,'why':'no_armory','error':'The mind cannot read the game database.'}
+            guid = getattr(self.app,'human_guid',0)
+            if type(guid) is not int or not 0 < guid <= 0xFFFFFFFF:
+                return {'ok':False,'why':'no_character','error':'Your character could not be found.'}
+            task = self._kit_task = asyncio.ensure_future(self._read_kit(armory,guid))
+        done,_ = await asyncio.wait({task},timeout=self.bank_s)
+        return task.result() if task in done else {'ok':False,'why':'slow','error':'The game database is slow to answer.'}
+
+    async def _read_kit(self, armory, guid) -> dict:
+        from .guild.kitread import kit_view
+        try:
+            counts = await asyncio.to_thread(armory.kit,guid)
+            if counts is None:
+                return {'ok':False,'why':'no_character','error':'Your character could not be found.'}
+            view = await asyncio.to_thread(kit_view,counts,library=self.app.data_dir/'library.db')
+        except Exception:
+            log_event('control_kit_failed',level=logging.WARNING,error='read_failed')
+            return {'ok':False,'why':'read_failed','error':'The game database could not be read.'}
+        reply = {'ok':True,'read_at':round(time.time(),3),**view}
+        self._kit_cache = (self._clock(),reply)
+        return reply
 
     async def library(self, args: dict) -> dict:
         """The mind's semantic search over library.db. Read-only and cheap, but it uses the

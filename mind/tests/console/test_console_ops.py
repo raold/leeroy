@@ -23,6 +23,49 @@ def deadline():
     return time.monotonic() + 10
 
 
+def test_switches_read_booleans_only(tmp_path):
+    (tmp_path/'mind.toml').write_text('[learn]\nenabled=true\nbandit=true\n[signals]\nenabled=false\n[unknown]\nsecret="PRIVATE_SENTINEL"')
+    rows = ops.switches_view(tmp_path,deadline(),mind_started=None)['rows']
+    states = {(r['table'],r['key']):r['state'] for r in rows}
+    assert states['learn','enabled'] == states['learn','bandit'] == 'on'
+    assert states['signals','enabled'] == 'off'
+    assert 'PRIVATE_SENTINEL' not in json.dumps(rows) and all(r['table']!='unknown' for r in rows)
+
+
+@pytest.mark.parametrize('text', ['[learn]\nenabled=true\nbandit="PRIVATE_SENTINEL"',
+    'learn="PRIVATE_SENTINEL"', '[server]\nenabled=true\ndms_per_day=99',
+    '[guards]\nenabled=true\nrepeat_cosine=2', '[claims]\nenabled=true\nunknown=true'])
+def test_invalid_table_reads_as_invalid_off(tmp_path,text):
+    (tmp_path/'mind.toml').write_text(text+'\n[signals]\nenabled=true')
+    table = 'learn' if 'learn' in text else text.split(']')[0][1:]
+    rows = ops.switches_view(tmp_path,deadline(),mind_started=None)['rows']
+    assert all(r['state']=='invalid' for r in rows if r['table']==table)
+    assert next(r for r in rows if r['table']=='signals')['state']=='on'
+    assert 'PRIVATE_SENTINEL' not in json.dumps(rows)
+
+
+def test_unmet_mind_needs_are_listed(tmp_path):
+    (tmp_path/'mind.toml').write_text('[learn]\nbandit=true\n')
+    rows = ops.switches_view(tmp_path,deadline(),mind_started=None)['rows']
+    assert next(r for r in rows if r['key']=='bandit')['unmet'] == ['learn.enabled']
+
+
+def test_restart_flag_when_toml_is_newer_than_the_mind(tmp_path):
+    path = tmp_path/'mind.toml'
+    path.write_text('[signals]\nenabled=true')
+    changed = path.stat().st_mtime
+    assert all(r['restart'] for r in ops.switches_view(tmp_path,deadline(),mind_started=changed-1)['rows'])
+    assert not any(r['restart'] for r in ops.switches_view(tmp_path,deadline(),mind_started=changed+1)['rows'])
+
+
+def test_blocklist_presence_only(tmp_path):
+    (tmp_path/'realm').mkdir()
+    (tmp_path/'realm'/'blocklist.txt').write_text(SECRET)
+    rows = ops.switches_view(tmp_path,deadline(),mind_started=None)['rows']
+    assert next(r for r in rows if r['table']=='realm')['blocklist']=='present'
+    assert SECRET not in json.dumps(rows)
+
+
 @pytest.fixture
 def data(store):
     return Path(store.conn.execute("PRAGMA database_list").fetchone()["file"]).parent

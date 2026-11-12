@@ -151,6 +151,16 @@ class LazyArmory:
             raise RosterError("invalid friends snapshot")
         return {int(row[0]) for row in rows}
 
+    def kit(self, human):
+        from leeroy_mind.personas.roster import run_mysql
+        from .kitread import kit_sql, parse_kit
+        query = kit_sql(human)
+        with self._lock:
+            backend = self._get()
+            if not run_mysql(backend.chars, f'SELECT guid FROM characters WHERE guid={human}', self.cfg.mysql_exe):
+                return None
+            return parse_kit(run_mysql(backend.chars, query, self.cfg.mysql_exe), log)
+
 
 class LivePorts:
     def __init__(self, app, *, source=None, jobs=None):
