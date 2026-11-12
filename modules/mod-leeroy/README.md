@@ -152,6 +152,9 @@ an independent `request` token) and `world_say` (Trade/General for an eligible
 member of a current rival guild). Both require `Leeroy.Realm.Enable = 1` and
 `Leeroy.World.Enable = 1`. World defaults to 0; `.reload config` applies the switch.
 The roster excludes the owner, our guild and every character on auction-bot
-accounts. Missing character/account evidence refuses the guild. Existing Realm
+accounts. Missing character/account evidence refuses the guild. A member row that breaks
+the page rules (or repeats a guid) is left out of the roster instead of refusing all of it,
+and Server.log names it once per member and rule: `world roster skipped guid <n> (<rule>)`.
+Before this, one such row answered every roster request `world_roster_invalid`. Existing Realm
 actors and their `realm_say` path retain their behavior. The mind also requires
 its separate `[world]` opt-ins; world photos need `[selfies] enabled = true`.
