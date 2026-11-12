@@ -42,15 +42,17 @@ def report(conn, *, days=14, now=None):
 def learn_main(argv=None):
     parser = argparse.ArgumentParser(prog="leeroy_mind learn")
     parser.add_argument("--data-dir")
-    commands = parser.add_subparsers(dest="action", required=True)
-    command = commands.add_parser("report")
+    sub = parser.add_subparsers(dest="action", required=True)
+    command = sub.add_parser("report")
     command.add_argument("--data-dir", default=argparse.SUPPRESS)
     command.add_argument("--days", type=int, default=14)
-    lesson_command = commands.add_parser("lessons")
+    lesson_command = sub.add_parser("lessons")
     lesson_command.add_argument("--data-dir", default=argparse.SUPPRESS)
     lesson_command.add_argument("--guid", type=int)
+    arm_command = sub.add_parser("arms")
+    arm_command.add_argument("--data-dir", default=argparse.SUPPRESS)
     args = parser.parse_args(argv)
-    if args.action == 'report' and not 1 <= args.days <= 3650:
+    if args.action == "report" and not 1 <= args.days <= 3650:
         parser.error("--days must be between 1 and 3650")
     if args.action == 'lessons' and args.guid is not None and args.guid <= 0:
         parser.error('--guid must be positive')
@@ -60,6 +62,8 @@ def learn_main(argv=None):
             if args.action == 'lessons':
                 from .lessons import available as have_lessons, read as read_lessons
                 result = {'available':have_lessons(conn), 'lessons':read_lessons(conn,guid=args.guid,now=time.time())}
+            elif args.action == "arms":
+                result = arms_report(conn)
             else:
                 result = report(conn, days=args.days)
             print(json.dumps(result, sort_keys=True, allow_nan=False))
@@ -67,3 +71,23 @@ def learn_main(argv=None):
     except (sqlite3.Error, ValueError, OSError):
         print("learn_report_unavailable", file=sys.stderr)
         return 1
+
+
+def arms_report(conn, *, now=None):
+    from . import arms, bandit
+    if not arms.available(conn):
+        return {"available": False, "arms": [], "contexts": []}
+    registry = arms.read(conn)
+    keys = conn.execute("SELECT context FROM bandit_share UNION SELECT context FROM bandit_credit "
+                        "UNION SELECT context FROM bandit_rejection").fetchall()
+    contexts = []
+    for (key,) in keys:
+        posteriors = bandit.posterior(conn,None,key,now=now)
+        shares = dict(conn.execute("SELECT arm_id,turns FROM bandit_share WHERE context=?",(key,)))
+        for arm in registry:
+            total = sum(shares.get(a.id,0) for a in registry if a.family == arm.family)
+            contexts.append({"context":json.loads(key),"arm_id":arm.id,
+                **posteriors.get(arm.id,dict(alpha=1.,beta=1.,uses=0,bad=0,attempts=0)),
+                "turns":shares.get(arm.id,0),"share":shares.get(arm.id,0)/total if total else 0.})
+    from dataclasses import asdict
+    return {"available":True,"arms":[asdict(a) for a in registry],"contexts":contexts}

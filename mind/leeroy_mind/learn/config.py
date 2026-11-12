@@ -9,15 +9,26 @@ class LearnCfg:
     enabled: bool = False
     coach: bool = False
     auto_lessons: bool = False
+    bandit: bool = False
+    freeze: bool = False
+    frozen_families: tuple[str, ...] = ()
+    frozen_members: tuple[int, ...] = ()
 
 
 def load_learn_config(path: Path) -> LearnCfg:
     try:
         table = tomllib.loads(path.read_text(encoding="utf-8-sig")).get("learn", {})
-        keys = {"enabled", "coach", "auto_lessons"}
-        if (type(table) is not dict or set(table) - keys
-                or any(type(table.get(key, False)) is not bool for key in keys)):
+        from .arms import FAMILIES
+        flags = ("enabled", "coach", "auto_lessons", "bandit", "freeze")
+        if (type(table) is not dict or set(table) - {*flags, "frozen_families", "frozen_members"}
+                or any(type(table.get(k, False)) is not bool for k in flags)
+                or type(table.get("frozen_families", [])) is not list
+                or any(type(f) is not str or f not in FAMILIES for f in table.get("frozen_families", []))
+                or type(table.get("frozen_members", [])) is not list
+                or any(type(g) is not int or g <= 0 for g in table.get("frozen_members", []))):
             return LearnCfg()
-        return LearnCfg(**table)
+        return LearnCfg(**{k: table.get(k, False) for k in flags},
+                        frozen_families=tuple(table.get("frozen_families", [])),
+                        frozen_members=tuple(table.get("frozen_members", [])))
     except (OSError, UnicodeError, tomllib.TOMLDecodeError):
         return LearnCfg()
