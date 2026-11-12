@@ -1383,6 +1383,12 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 
 ## The guild's Discord (`leeroy_mind.discord`)
 
+- `[server] enabled = true` reserves the live model outside `quiet_window =
+  ["03:00", "08:00"]` (local time). Nights begin only in that window after the
+  existing offline grace; a running night may continue for one extra hour, then
+  pauses for the next window. The photo booth waits for the server lease to end.
+  Restart the mind after changing this switch or window. The table defaults off;
+  an invalid table disables it. This clock does not yet start autonomous posts.
 - Comms includes a local guild server above the separate **From WoW** and voice
   sections. It uses no external Discord API. `GET /api/discord` returns its channel
   layout, member roles/presence, DMs and an optional message window with quotes,

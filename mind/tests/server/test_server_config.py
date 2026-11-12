@@ -41,6 +41,8 @@ def test_any_bad_key_turns_it_off(tmp_path, bad, key, caplog):
     assert caplog.text.count('server_config_invalid') == 1
     assert f'key={key}' in caplog.text
     assert 'secret text' not in caplog.text
+    load_server_config(path)
+    assert caplog.text.count('server_config_invalid') == 1
 
 
 @pytest.mark.parametrize('text', ['server=1', '[server]\nenabled=1', '[server]\nenabled='])

@@ -8,6 +8,7 @@ import random
 import re
 import sqlite3
 import time
+from datetime import time as wall_time
 from dataclasses import replace
 
 import pytest
@@ -555,7 +556,9 @@ def test_every_run_that_returns_rewrites_the_failure_summary(h):
     assert run_get(h.store, ctx.night).error is None                    # no unit failed: no stale repr(e)
 
 
-def test_an_interrupted_run_resumes_with_its_stored_plan(h):
+@pytest.mark.parametrize('quiet', [None, (wall_time(3), wall_time(8))])
+def test_an_interrupted_run_resumes_with_its_stored_plan(h, quiet):
+    h.settings = replace(h.settings, quiet=quiet)
     ctx = h.ctx()
     run_begin(h.store, ctx.night, *ctx.window, now=h.T)
     planned = {"settings": {"encounters_per_night": 20, "retired_knob": 3}, "estimate_s": 1.0,
