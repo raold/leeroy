@@ -67,6 +67,7 @@ def test_personas_undo_restores_old_looks_and_kind(source,capsys):
     from leeroy_mind.__main__ import main
     root,store,clock = source
     p = generated_kind(store,102)
+    prior_source = store.conn.execute("SELECT source FROM persona_core WHERE guid=102").fetchone()[0]
     run(variety.run(root,store,SelfieCfg(),IDENT,clock,top=1,go=True,make_worker=factory(root)))
     row = store.conn.execute("SELECT id FROM persona_ledger WHERE guid=102 AND kind='variety'").fetchone()
     assert row is not None
@@ -75,6 +76,7 @@ def test_personas_undo_restores_old_looks_and_kind(source,capsys):
     store.conn.commit()  # release the reader's snapshot before reading the CLI write
     restored = load_persona(store,102)
     assert restored.appearance == p.appearance and restored.photo == p.photo
+    assert store.conn.execute("SELECT source FROM persona_core WHERE guid=102").fetchone()[0] == prior_source
 
 
 def test_existing_looks_without_disclosures_do_not_join_enrich_pass(h):

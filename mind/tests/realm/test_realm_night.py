@@ -774,6 +774,26 @@ def test_an_answer_after_a_failed_night_forgets_it(rig):
     assert rig.count("meta", "key GLOB 'board:reply:*'") == 0
 
 
+def test_world_author_lapsing_after_model_waits_at_most_three_nights(rig,monkeypatch):
+    rid=rig.reply("post",rig.post("rumor:901",author=201,kind="actor"),201,"That was a clean pull.")
+    unit=f"post:reply:{rid}"
+    live={"author":True}
+    author=(201,"actor","Fixture",{"who":"a member of Test rivals","card":"Synthetic voice observations"})
+    monkeypatch.setattr(night._Night,"_still_writes",lambda self,guid,kind:author if live["author"] else None)
+    def lapse(prompt):
+        live["author"]=False
+        return dict(ANSWERS["realm_post"])
+    for day in (29,30,31):
+        live["author"]=True
+        ctx=rig.ctx({"realm_post":[lapse]},night_=f"2026-10-{day}",settings=replace(rig.settings,realm_units=0))
+        one(ctx,unit)
+        assert rig.replied(rid)["state"] == ("waiting" if day < 31 else "refused")
+        if day < 31:
+            assert json.loads(rig.store.get_meta(f"board:reply:{rid}:failed")) == [f"2026-10-{n}" for n in range(29,day+1)]
+    assert rig.replied(rid)["reason"] == "no_answer"
+    assert rig.count("realm_post") == 1 and rig.count("realm_rule_origin") == 0
+
+
 def test_an_answer_its_forum_fact_would_refuse_is_a_failed_night(rig):
     rid = rig.reply("post", rig.post("rumor:901", author=101), 101, "Agreed, that pull was clean.")
     ctx = rig.ctx({"realm_post": [{"text": "|cff00ff00|r"}]}, settings=replace(rig.settings, realm_units=0))

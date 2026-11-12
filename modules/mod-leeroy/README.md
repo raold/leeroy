@@ -144,3 +144,14 @@ this change is different: the new mind stores `changed` (and `skipped`, `skipped
 `realm_action` evidence, and an older mind cannot read such a row (its journal reads fail, so the Realm stops moving bodies until the
 key is stripped from those rows). Take a snapshot before deploying and roll back with it. Both a
 native rebuild and an updated mind are needed for the new proof to take effect.
+
+# World persona roster and speech
+
+A native rebuild adds `get_world_roster` (complete, bounded roster pages carrying
+an independent `request` token) and `world_say` (Trade/General for an eligible
+member of a current rival guild). Both require `Leeroy.Realm.Enable = 1` and
+`Leeroy.World.Enable = 1`. World defaults to 0; `.reload config` applies the switch.
+The roster excludes the owner, our guild and every character on auction-bot
+accounts. Missing character/account evidence refuses the guild. Existing Realm
+actors and their `realm_say` path retain their behavior. The mind also requires
+its separate `[world]` opt-ins; world photos need `[selfies] enabled = true`.

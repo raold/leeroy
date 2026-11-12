@@ -6,6 +6,7 @@ import { renderFeed } from "./comms/feedview.mjs";
 import { renderLeft } from "./comms/leftview.mjs";
 import { refreshFaces, renderRight } from "./comms/rightview.mjs";
 import { renderComposer } from "./comms/composer.mjs";
+import { initPanelToggle } from "./comms/panel.mjs";
 import "./comms/discordview.mjs";
 import "./raid.mjs";
 import "./guild.mjs";
@@ -153,3 +154,4 @@ $("photos").addEventListener("click", function () {
   refreshFaces();
 });
 showPhotosButton();
+initPanelToggle();

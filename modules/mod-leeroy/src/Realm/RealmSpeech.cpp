@@ -1,5 +1,6 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "RealmSpeech.h"
+#include "RealmWorld.h"
 #include "RealmPorts.h"
 #include "LeeroyEmotes.h"
 #include "LeeroyEvents.h"
@@ -61,11 +62,12 @@ std::uint32_t ChannelId(std::string_view name)
 
 // Immediate world-thread actions still require current native ownership. Speech
 // has no movement-purpose gameplay waiver, and Watched alone never authorizes it.
-Player* Speaker(std::uint32_t guid, std::string& why)
+Player* Speaker(std::uint32_t guid, std::string& why, std::uint32_t worldGuild = 0)
 {
     auto& module = RealmModule::Instance();
-    if (!module.On()) why = "realm_off";
-    else if (!guid || guid == HumanGuid() || (!IsCast(guid) && !module.IsActor(guid)))
+    if (!module.On() || (worldGuild && !WorldOn())) why = "realm_off";
+    else if (!guid || guid == HumanGuid() || (worldGuild ? !WorldSpeaker(guid,worldGuild)
+             : (!IsCast(guid) && !module.IsActor(guid))))
         why = "not_speaker:" + std::to_string(guid);
     else if (auto reason = module.MutationReason(guid); !reason.empty()) why = std::move(reason);
     else
@@ -203,13 +205,20 @@ bool LocalSpeechAccepted(Player* bot, ChatMsg kind, std::string const& text, Pla
     return true;
 }
 
-LeeroyCommandResult Say(nlohmann::json const& message)
+LeeroyCommandResult Say(nlohmann::json const& message, bool world = false)
 {
-    if (!RealmModule::Instance().On()) return {false, "realm_off"};
+    if (!RealmModule::Instance().On() || (world && !WorldOn())) return {false, "realm_off"};
     std::string why;
     auto const cmd = ParseSay(message, why);
     if (!cmd) return {false, why};
-    auto* bot = Speaker(cmd->guid, why);
+    std::uint32_t worldGuild = 0;
+    if (world)
+    {
+        auto scoped = ParseWorldSay(message,why);
+        if (!scoped) return {false,why};
+        worldGuild = scoped->guild;
+    }
+    auto* bot = Speaker(cmd->guid, why, worldGuild);
     if (!bot) return {false, why};
     if (!SameFactionAsHuman(bot)) return {false, "enemy faction"};
     if (!bot->CanSpeak()) return {false, "muted"};
@@ -254,7 +263,7 @@ LeeroyCommandResult Say(nlohmann::json const& message)
         if (text.empty()) return {false, "empty text"};
         if (Leeroy::StartsWithCommandPrefix(text)) return {false, "command prefix"};
         // Reentrant script hooks cannot grant a now-stale actor permission.
-        if (Speaker(cmd->guid, why) != bot) return {false, why.empty() ? "offline" : why};
+        if (Speaker(cmd->guid, why, worldGuild) != bot) return {false, why.empty() ? "offline" : why};
         if (!bot->CanSpeak() || bot->HasAura(1852)) return {false, "muted"};
         if (!SameFactionAsHuman(bot)) return {false, "enemy faction"};
         if (BuiltInChannelName(bot, id, why) != name) return {false, "not_in_channel"};
@@ -648,7 +657,8 @@ public:
 
 void RegisterRealmSpeechHandlers()
 {
-    RegisterCommand("realm_say", Say);
+    RegisterCommand("realm_say", [](auto const& message) { return Say(message); });
+    RegisterCommand("world_say", [](auto const& message) { return Say(message,true); });
     RegisterCommand("realm_emote", Emote);
     RegisterCommand("announce", Announce);
 }

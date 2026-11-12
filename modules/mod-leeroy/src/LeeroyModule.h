@@ -21,6 +21,7 @@ struct LeeroyConfig
     bool bringCastOnline = true;
     bool excludeFromOllamaChat = true;
     bool realmEnable = false;
+    bool worldEnable = false;
     bool playStyleEnable = false;
     uint32 realmMaxActionsPerTick = 5;
     bool realmAnnounce = true;
@@ -40,6 +41,7 @@ public:
     LeeroyConfig const& Config() const { return _config; }
 
     bool Enabled() const { return _enabled.load(); }
+    bool WorldEnabled() const { return _worldEnabled.load(); }
     uint32 GuildId() const { return _guildId.load(); }
     uint32 HumanGuid() const { return _humanGuid.load(); }
     bool ExcludeFromOllama() const { return _excludeFromOllama.load(); }
@@ -62,6 +64,7 @@ private:
     std::atomic<bool> _logClosed{false};   // declared before _bridge, so it outlives it
     LeeroyConfig _config;
     std::atomic<bool> _enabled{true};
+    std::atomic<bool> _worldEnabled{false};
     std::atomic<uint32> _guildId{21};
     std::atomic<uint32> _humanGuid{1};
     std::atomic<bool> _excludeFromOllama{true};

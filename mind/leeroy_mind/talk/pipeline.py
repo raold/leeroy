@@ -283,12 +283,14 @@ class TurnMeta:
     realism_correction_until: float = 0
     realism_sequence: int = 0
     realism_planned: bool = False
+    realism_own: tuple[str, int, str] | None = None
     follow_up: bool = False
     aside: object | None = None
     offered_real_name: bool = False
     romance: bool = False
     memory_ids: list[int] = field(default_factory=list)
     llm_s: float | None = None  # the model's time on this turn, its retry included
+    recipe_snapshot: object | None = None  # optional numeric/identifier attribution at composition
     facts_line: int = 0
     two_lines: bool = False  # a whisper to him at the explicit band: a line or two
     emote_target: int = 0  # whom an emote in the line is aimed at by default (a birthday)
@@ -950,6 +952,22 @@ class Pipeline:
     async def _compose(self, turn: Turn, meta: TurnMeta, *, live: bool,
                        persona: Persona | None = None, window: list | None = None,
                        trigger_text: str | None = None, dial: int | None = None) -> Composed:
+        kwargs = dict(live=live,persona=persona,window=window,trigger_text=trigger_text,dial=dial)
+        if live and getattr(self,"learn_enabled",False):
+            from leeroy_mind.prompts import trace_templates
+            from leeroy_mind.learn.recipe import templates_used
+            with trace_templates() as used:
+                result = await self._compose_prompt(turn,meta,**kwargs)
+            try:
+                templates_used(meta,used)
+            except Exception:
+                log.warning("learn_recipe_describe_failed")
+            return result
+        return await self._compose_prompt(turn,meta,**kwargs)
+
+    async def _compose_prompt(self, turn: Turn, meta: TurnMeta, *, live: bool,
+                       persona: Persona | None = None, window: list | None = None,
+                       trigger_text: str | None = None, dial: int | None = None) -> Composed:
         """`live`: the prompt is for speaking now, so it may draw from the engine's rng and
         hold the guild-wide real-name slot for the turn; what it offered and used goes on
         `meta`, to be spent if a line is said (_spend). A whisper reaches it only as
@@ -977,6 +995,12 @@ class Pipeline:
             raise ValueError(f"no persona for {turn.speaker}")
         dial = self.cfg.romance.dial if dial is None else dial
         rng = self.rng if live else self._compose_rng
+        if live and getattr(self, "learn_enabled", False):
+            from leeroy_mind.learn.recipe import describe
+            try:
+                meta.recipe_snapshot = describe(turn, p, self.cfg)
+            except Exception:
+                log.warning("learn_recipe_describe_failed")
         now = self.clock.now()
         human, hg = self.human, self.human.guid
         names = self._names(turn.channel)
@@ -1314,6 +1338,12 @@ class Pipeline:
         memory_ids: list[int] = []
         c = None
         text = turn.template
+        if text is not None and getattr(self, "learn_enabled", False):
+            from leeroy_mind.learn.recipe import describe
+            try:
+                meta.recipe_snapshot = describe(turn, p, self.cfg)
+            except Exception:
+                log.warning("learn_recipe_describe_failed")
         if text is None:
             original_instruction = turn.instruction
             self._phase(turn, COMPOSING)
@@ -1437,7 +1467,7 @@ class Pipeline:
                 if why:
                     if why not in AWAIT_ECHO:  # that row waits for the echo (_settle_unacked)
                         self._drop(turn, meta, why, memory_ids, text=s.line)
-                        if plan:
+                        if plan and i:
                             for skipped in lines[i+1:]:
                                 self._drop(turn,meta,why,memory_ids,text=skipped.line)
                     break
@@ -1794,7 +1824,11 @@ class Pipeline:
                 if meta is not None and meta.seed is not None:  # a tuning preview's
                     options["seed"] = meta.seed
                 self.timing.model(trace, attempt, "call")
-                return await llm.chat(self.cfg.models.live, messages, options=options,
+                model = self.cfg.models.live
+                if meta is not None and getattr(self, "learn_enabled", False):
+                    from leeroy_mind.learn.recipe import called_model
+                    called_model(meta, model)
+                return await llm.chat(model, messages, options=options,
                                       think=preset.think, timeout=preset.timeout)
             except asyncio.CancelledError:
                 outcome = "cancelled"
@@ -2232,16 +2266,37 @@ class Pipeline:
                     zone=zone)
         audience = self.world.audience(turn.channel, from_guid=turn.speaker,
                                        to_guid=turn.to_guid, zone=zone)
-        if self.live_review.config.enabled and not meta.realism_correction:
+        learn = getattr(self, "learn_enabled", False) and not meta.realism_correction
+        review = self.live_review.config.enabled and not meta.realism_correction
+        if learn or review:
             with self.store.transaction():
                 line_id = self.store.insert_chat_line(chat, session_id=sid, origin="mind", audience=audience)
-                self.live_review.record(turn, meta, meta.words or text, line_id)
+                if review:
+                    self.live_review.record(turn, meta, meta.words or text, line_id)
+                if learn:
+                    from leeroy_mind.learn.recipe import record as record_recipe
+                    try:
+                        with self.store.transaction():
+                            record_recipe(self.store.conn, line_id, turn, meta, p, self.cfg)
+                    except Exception:
+                        log.warning("learn_recipe_record_failed")
         else:
             line_id = self.store.insert_chat_line(chat, session_id=sid, origin="mind", audience=audience)
         if self.cfg.talk.realism:
             meta.realism_sequence = self.realism.record_line(turn.speaker,credit=not meta.realism_correction)
             if meta.realism_planned and not meta.realism_correction and meta.words:
-                self._own_of(turn.speaker).append((turn.channel,turn.to_guid,meta.words))
+                own = self._own_of(turn.speaker)
+                if meta.realism_own is None:
+                    meta.realism_own = (turn.channel,turn.to_guid,meta.words)
+                    own.append(meta.realism_own)
+                else:
+                    # Grow the same history turn as confirmed lines arrive. Never
+                    # resurrect an entry evicted by newer turns in the bounded deque.
+                    for i, entry in enumerate(own):
+                        if entry is meta.realism_own:
+                            meta.realism_own = (*entry[:2], entry[2] + " " + meta.words)
+                            own[i] = meta.realism_own
+                            break
         if not discord and not meta.realism_correction:
             self.world.add_line(ChatLineRow(
                 id=line_id, ts=now, channel=turn.channel, from_guid=turn.speaker,

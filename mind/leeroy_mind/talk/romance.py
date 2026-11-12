@@ -527,16 +527,21 @@ def _pick(variants: tuple[str, ...], rng: random.Random | None) -> str | None:
 
 
 def _band_text(b: Band, data_dir: Path, rng: random.Random | None = None) -> str:
+    from leeroy_mind.prompts import note_template
     if b != "explicit":
-        return _pick(overlay_variants(f"romance_{b}", data_dir), rng) or BUILTIN_ROMANCE[b]
+        text = _pick(overlay_variants(f"romance_{b}", data_dir), rng) or BUILTIN_ROMANCE[b]
+        note_template("talk.romance."+b,text)
+        return text
     text = _pick(overlay_variants("romance_explicit", data_dir), rng)
     if text:
+        note_template("talk.romance.explicit",text)
         return text
     key = str(Path(data_dir).resolve())
     if key not in _warned:
         _warned.add(key)
         log.warning("no romance_explicit overlay in %s: the explicit band uses the built-in "
                     "suggestive wording", Path(data_dir) / "prompts")
+    note_template("talk.romance.explicit",BUILTIN_ROMANCE["explicit"])
     return BUILTIN_ROMANCE["explicit"]
 
 

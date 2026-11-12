@@ -72,12 +72,18 @@ def roster_view(conn, *, data_dir, now):
     view = personaview.roster_view(conn, now=now)
     runs, why = insightreports.reports(data_dir, now=now)
     view['insight_badges'], view['insight_badges_why'] = badges(conn, runs, now)
+    allowed = {str(m['guid']) for m in view['members']}
+    view['insight_badges'] = {g:v for g,v in view['insight_badges'].items() if g in allowed}
     if why and not view['insight_badges_why']:
         view['insight_badges_why'] = why
     return view
 
 
 def insight_view(conn, guid, *, data_dir, now):
+    from leeroy_mind.personas.tiers import is_cast
+    if not is_cast(conn,guid):
+        unavailable = {'state':'missing','why':'World personas are read-only; cast insight is unavailable.'}
+        return {'guid':guid,'at':now,**{key:dict(unavailable) for key in ('claims','awareness','quality','guards')}}
     runs, why = insightreports.reports(data_dir, now=now)
     return {'guid': guid, 'at': now,
             'claims': _part(conn, lambda: claims(conn, guid, now)),
