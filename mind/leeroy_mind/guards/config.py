@@ -28,6 +28,7 @@ class GuardsCfg:
     repeat_cosine: float = repetition.EMBEDDING_COSINE
     parent_cosine: float = nonsequitur.PARENT_COSINE
     thread_cosine: float = nonsequitur.THREAD_COSINE
+    anchor_cosine: float = 0.20
     repeat_seconds: int = REPEAT_SECONDS
     gag_daily_cap: int = GAG_DAILY_CAP
     stock_daily_cap: int = STOCK_DAILY_CAP
@@ -42,7 +43,7 @@ def parse_config(table) -> GuardsCfg:
         for name in ('enabled', 'semantic_enabled'):
             if name in values and type(values[name]) is not bool:
                 return _invalid({name:None})
-        for name in ('repeat_overlap', 'repeat_cosine', 'parent_cosine', 'thread_cosine'):
+        for name in ('repeat_overlap', 'repeat_cosine', 'parent_cosine', 'thread_cosine', 'anchor_cosine'):
             value = values.get(name, getattr(GuardsCfg(), name))
             if type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 1:
                 return _invalid({name:None})

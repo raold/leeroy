@@ -51,6 +51,28 @@ def source(rig, text, channel="guild", who=1, to=0):
         session_id=None, origin="human" if who == 1 else "mind", audience=audience)
 
 
+@pytest.mark.parametrize('text,expected', [('same','👍'),('lol','😂'),('gz','🎉'),('ty','❤️'),('rip','🫡')])
+def test_server_filler_reaction_reaches_discord(rig,text,expected):
+    from leeroy_mind.guards import Draft, GuardStores, HistoryLine, review
+    now = rig.clock.now()
+    mid = dstore.post(rig.store,channel='general',author=102,origin='mind',text='Invented raid news',now=now)
+    history = (HistoryLine(mid,now,102,'Invented raid news','discord',room='general',readers=(1,101,102)),)
+    verdict = review(GuardStores(rig.store.conn,GuardsCfg(enabled=True),history=history),
+                    Draft(101,'discord',text,room='general',parent_id=mid,now=now,server=True))
+    assert verdict.action == 'react' and verdict.reaction == expected
+    meta = TurnMeta('reaction',why='server:reply',answers_human=True,discord=DiscordTarget(mid,None))
+    rig.sync(rig.engine._guard_react(turn('discord:general',deadline=now+60),meta,verdict.reaction))
+    assert tuple(rig.store.conn.execute('SELECT member,emoji FROM discord_reaction WHERE message=?',(mid,)).fetchone()) == (101,expected)
+
+
+@pytest.mark.parametrize('reaction,expected',[('😄','😄'),('unsupported','👍')])
+def test_guard_reaction_preserves_legacy_and_unknown_fallback(rig,reaction,expected):
+    mid = dstore.post(rig.store,channel='general',author=102,origin='mind',text='Invented raid news',now=rig.clock.now())
+    meta = TurnMeta('reaction',answers_human=True,discord=DiscordTarget(mid,None))
+    rig.sync(rig.engine._guard_react(turn('discord:general',deadline=rig.clock.now()+60),meta,reaction))
+    assert rig.store.conn.execute('SELECT emoji FROM discord_reaction WHERE message=?',(mid,)).fetchone()[0] == expected
+
+
 @pytest.mark.parametrize("value", ['false', '"yes"', '1', '[]', '{}'])
 def test_invalid_or_disabled_aware_is_off(tmp_path, value):
     path = tmp_path / "mind.toml"

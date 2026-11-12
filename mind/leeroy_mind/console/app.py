@@ -302,6 +302,8 @@ class ConsoleApp:
                  follower: mindlog.LogFollower | None = None, clock: Callable = time.time,
                  monotonic: Callable = time.monotonic, link=None):
         self.s = settings
+        from ..server.config import load_server_config
+        self.server_enabled = load_server_config(settings.data_dir / 'mind.toml').enabled
         from ..photos.config import load_photos_config
         self.photos = load_photos_config(settings.data_dir / 'mind.toml')
         self._photo_uploads: list[float] = []
@@ -1528,7 +1530,7 @@ class ConsoleApp:
         view = discordview.discord_view(
             conn, owner_now=mind_clock.local_at(self._clock()),
             trial_rank=self._trial_rank(), channel=channel, after=after, thread=thread,
-            read_marks=read_marks)
+            read_marks=read_marks, server=self.server_enabled)
         view['photos'] = self.photos.enabled and self.controls.enabled
         fp = None
         if channel is not None and not view["missing"]:

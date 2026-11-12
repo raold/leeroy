@@ -106,6 +106,7 @@ class RaidNight:
         self.state = State.IDLE
         self.session = None
         self.run = None
+        self._forming_members = frozenset()
         self._listeners = []
         self._lock = asyncio.Lock()
         self._epoch = 0
@@ -145,6 +146,11 @@ class RaidNight:
 
     def add_listener(self, listener):
         self._listeners.append(listener)
+
+    def members_in_play(self) -> frozenset[int]:
+        if self.state not in {State.FORMING, State.ASSEMBLING, State.RUNNING}:
+            return frozenset()
+        return frozenset(self.run.plan.members) if self.run is not None else self._forming_members
 
     def _check(self, epoch):
         if epoch != self._epoch or not self._present or not self.ports.human_online():
@@ -218,6 +224,7 @@ class RaidNight:
             self._call_due = None
 
     def _end(self, outcome):
+        self._forming_members = frozenset()
         forming = self.state is State.FORMING and self._forming_group
         if self.run is not None and hasattr(self.ports, "invalidate_run"):
             self.ports.invalidate_run(self.run)
@@ -493,6 +500,7 @@ class RaidNight:
         return on_time, late
 
     async def _form(self, epoch):
+        self._forming_members = frozenset()
         pick = self._pick
         raid = CATALOG[pick.raid_key]
         formed = False
@@ -555,6 +563,7 @@ class RaidNight:
                     raise _Failed("a required officer could not join")
                 missing = [g for g in members if g not in accepted]
                 members = [g for g in members if g in accepted]
+                self._forming_members = frozenset(members)
                 if attempt == 0 and missing:
                     additions = []
                     for missing_guid in missing:

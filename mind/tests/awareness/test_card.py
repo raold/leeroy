@@ -66,7 +66,7 @@ def context(clock, **kw):
 
 def test_all_parts_have_real_sources_and_no_generated_cause(populated, clock):
     result = card(populated, 101, context=context(clock, channel="guild", purpose="Raid planning"))
-    assert tuple(p.key for p in result.parts) == PRIORITY
+    assert tuple(p.key for p in result.parts) == tuple(k for k in PRIORITY if k != 'here')
     game = section(result,"game")
     assert "online (last stored observation)" in game
     assert "zone: 210" in game and "instance: 9 (last encounter)" in game
@@ -196,29 +196,31 @@ def test_same_state_is_deterministic_without_committing_caller_work(populated,cl
         populated.conn.set_trace_callback(None)
 
 
-def test_whispers_and_claims_stay_with_their_pair(populated,clock):
+@pytest.mark.parametrize('server',[False,True])
+def test_whispers_and_claims_stay_with_their_pair(populated,clock,server):
     say(populated,1,"OTHER_PAIR_SECRET",channel="whisper",to=102)
     say(populated,1,"OWN_PAIR_SECRET",channel="whisper",to=101)
     private=say(populated,101,"OWN_PRIVATE_CLAIM",channel="whisper",to=1)
     claim(populated,"OWN_PRIVATE_CLAIM",source_line=private)
-    public=card(populated,101,context=context(clock,channel="guild")).render(10000)
-    own=card(populated,101,context=context(clock,channel="whisper",to_guid=1)).render(10000)
-    wrong=card(populated,101,context=context(clock,channel="whisper",to_guid=102)).render(10000)
+    public=card(populated,101,context=context(clock,channel="guild",server=server)).render(10000)
+    own=card(populated,101,context=context(clock,channel="whisper",to_guid=1,server=server)).render(10000)
+    wrong=card(populated,101,context=context(clock,channel="whisper",to_guid=102,server=server)).render(10000)
     assert "SECRET" not in public and "PRIVATE_CLAIM" not in public
     assert "OWN_PAIR_SECRET" in own and "OWN_PRIVATE_CLAIM" in own
     assert "OTHER_PAIR_SECRET" not in own and "SECRET" not in wrong and "PRIVATE_CLAIM" not in wrong
 
 
-def test_officer_chat_requires_role_and_current_officer_context(populated,clock):
+@pytest.mark.parametrize('server',[False,True])
+def test_officer_chat_requires_role_and_current_officer_context(populated,clock,server):
     line=say(populated,101,"OFFICER_SECRET",channel="officer")
     claim(populated,"OFFICER_SECRET",source_line=line)
-    ctx=context(clock,channel="officer",thread=(ContextItem("OFFICER_THREAD",channel="officer"),))
+    ctx=context(clock,channel="officer",thread=(ContextItem("OFFICER_THREAD",channel="officer"),),server=server)
     assert "OFFICER" not in card(populated,101,context=ctx).render(10000)
     save_persona(populated,make_persona(101,"Arkon",guild_role="officer"),race="Human",
                  class_name="Warrior",source="seed",ts=clock.now())
     assert "OFFICER_SECRET" in card(populated,101,context=ctx).render(10000)
     assert "OFFICER_THREAD" in card(populated,101,context=ctx).render(10000)
-    assert "OFFICER" not in card(populated,101,context=context(clock,channel="guild")).render(10000)
+    assert "OFFICER" not in card(populated,101,context=context(clock,channel="guild",server=server)).render(10000)
 
 
 def test_context_slots_have_captured_audiences_and_no_implicit_discord_access(store,clock):

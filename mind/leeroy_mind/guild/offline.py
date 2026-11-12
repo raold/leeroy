@@ -185,6 +185,9 @@ class OfflineRaids:
     def add_listener(self, listener):
         self._listeners.append(listener)
 
+    def members_in_play(self) -> frozenset[int]:
+        return frozenset(self._owned.get('accepted') or ()) if self.active else frozenset()
+
     def _save(self):
         with self.ports.conn:
             _put(self.ports.conn, OWNED_KEY, self._owned)

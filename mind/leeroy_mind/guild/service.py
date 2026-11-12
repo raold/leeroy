@@ -234,6 +234,9 @@ class GuildLife:
         return await self.raid_night.console_act(args["action"], pick,
                                                  guard=self._console_refusal)
 
+    def members_in_play(self) -> frozenset[int]:
+        return (self.raid_night.members_in_play() | self.offline.members_in_play()) - {self.ports.human_guid}
+
     async def offline_tick(self):
         if not self._ready():
             return

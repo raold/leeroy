@@ -2,7 +2,7 @@ import { $, clear, clock, el, emit, on, str } from "../core.mjs";
 import { S } from "../state.mjs";
 import { face, faceButton } from "../faces.mjs";
 import { currentView, openView } from "./feedview.mjs";
-import { channelOf, groupMessages, memberGroups, mentionsHim, presenceDot, quoteOf, reactionBar, viewOfChannel } from "./discord.mjs";
+import { channelOf, groupMessages, memberGroups, memberStatus, mentionsHim, presenceDot, quoteOf, reactionBar, viewOfChannel } from "./discord.mjs";
 import { DISCORD, discordBusy, discordReason, mutateDiscord, refreshDiscord, saveDiscordRead, watchDiscord } from "./discordstate.mjs";
 import { PICKER, isOneEmoji } from "./emoji.mjs";
 import { photoBox, photoDraft, photoPreparing, clearPhoto, preparePhoto, renderPhotoDraft, setupPhotoComposer } from "./photoview.mjs";
@@ -83,7 +83,7 @@ function renderMembers() {
       row.appendChild(portrait);
       var words = el("div", "dc-member-words"); words.appendChild(el("span", "who", m.name));
       words.appendChild(dot(m.presence.state));
-      if (m.presence.playing) { words.appendChild(el("small", "muted", "Playing WoW")); }
+      memberStatus(m).forEach(text => words.appendChild(el("small", "muted", text)));
       row.appendChild(words);
       if (DISCORD.dms.some(function (d) { return d.guid === m.guid; })) {
         var dm = button("DM"); dm.dataset.dm = m.guid; dm.dataset.focus = "dm-" + m.guid;

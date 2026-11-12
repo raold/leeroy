@@ -170,11 +170,14 @@ async def test_backfills_same_role_once_and_does_not_count_skipped_members(setup
     def skip_first(command):
         first.extend(command.members)
         assert 130 in command.members
+        assert not night.members_in_play()
         return job("form_raid", "done", guids=tuple(g for g in command.members if g != 130),
                    skipped=(JobSkip(130, "in_bg"),))
 
     def skip_replacement(command):
         replacement = next(g for g in command.members if g not in first)
+        assert night.members_in_play() == frozenset(first) - {130}
+        assert replacement not in night.members_in_play()
         return job("form_raid", "done", guids=tuple(g for g in command.members if g != replacement),
                    skipped=(JobSkip(replacement, "offline"),))
 
@@ -186,6 +189,7 @@ async def test_backfills_same_role_once_and_does_not_count_skipped_members(setup
     assert ports.members[replacement].class_ == 8
     assert 130 not in night.session.plan.members and replacement not in night.session.plan.members
     assert len(night.session.plan.members) == 23
+    assert night.members_in_play() == frozenset(night.session.plan.members)
     assert ports.conn.execute("SELECT 1 FROM guild_attendance WHERE raid_id=? AND guid=?",
                               (night.session.raid_id, 130)).fetchone() is None
 

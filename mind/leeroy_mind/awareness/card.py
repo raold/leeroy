@@ -9,7 +9,8 @@ from types import SimpleNamespace
 
 from leeroy_mind.bodies import ALL
 from leeroy_mind.claims.store import nearest
-from leeroy_mind.discord.channels import is_private, is_discord
+from leeroy_mind.claims.visibility import claim_visible
+from leeroy_mind.discord.channels import is_private, is_discord, is_restricted, same_medium
 from leeroy_mind.talk.emote_names import ROMANTIC_EMOTES
 from leeroy_mind.memory.recall import scope_ok, whisper_ok
 from leeroy_mind.text import estimate_tokens, strip_wow_markup
@@ -17,7 +18,7 @@ from leeroy_mind.text import estimate_tokens, strip_wow_markup
 RECENT_S = 15 * 60
 DAY_S = 86400
 SIGNUPS_PER_EVENT = 4
-PRIORITY = ("game", "context", "recent", "claims", "raid", "calendar", "standing", "bank", "drama")
+PRIORITY = ("game", "context", "here", "recent", "claims", "raid", "calendar", "standing", "bank", "drama")
 HOLD_CODES = frozenset({"raid", "offline_raid", "training", "benchmark", "realm_event", "realm_day"})
 _CODE = re.compile(r"[a-zA-Z0-9_-]{1,48}\Z")
 
@@ -60,6 +61,9 @@ class CardContext:
     names: dict[int,str] | None = None  # live rendering; CLI retains its diagnostic identifiers
     romance_activities: bool = False
     jealousy: float = 0
+    server: bool = False
+    here: tuple[str, ...] = ()
+    self_line: str = ''
 
 
 @dataclass(frozen=True)
@@ -363,9 +367,15 @@ def _claims(reader, guid, officer, ctx, now):
         line = provenance.get(claim.source_line)
         # Owner corrections inherit their cited line's visibility. Unscoped corrections
         # have no proof that this conversation may disclose them.
-        if (line is None or claim.source == "chat" and line["from_guid"] != guid or not _visible(
-                line["channel"], line["from_guid"], line["to_guid"], guid, officer, ctx,
-                tuple(_ids(_json(line["audience"]))) if line["audience"] is not None else None)):
+        if line is None or claim.source == "chat" and line["from_guid"] != guid:
+            continue
+        readers = tuple(_ids(_json(line['audience']))) if line['audience'] is not None else None
+        visible = (claim_visible(source_channel=line['channel'], source_from=line['from_guid'],
+            source_to=line['to_guid'], source_readers=readers, draft_channel=ctx.channel,
+            speaker=guid, to_guid=ctx.to_guid, officer=officer, cross_medium=True)
+            if ctx.server and not same_medium(line['channel'], ctx.channel) else
+            _visible(line['channel'], line['from_guid'], line['to_guid'], guid, officer, ctx, readers))
+        if not visible:
             continue
         if text := _text(claim.text):
             out.append(f"{claim.kind}: {text}")
@@ -425,6 +435,23 @@ def _drama(reader, guid, officer, ctx, now):
     return out
 
 
+def _directed_emotes(reader, guid, human, ctx, now):
+    lines = []
+    for row in reader.rows(('game_event',), "SELECT payload,ts FROM game_event WHERE type='text_emote' "
+            'AND guid=? AND ts BETWEEN ? AND ? ORDER BY ts DESC,id DESC LIMIT 32', (human,now-3600,now)):
+        payload = _json(row['payload'], {})
+        if not isinstance(payload, dict) or payload.get('guid') != human or payload.get('target_guid') != guid:
+            continue
+        code = payload.get('emote')
+        if isinstance(code, str) and code in ROMANTIC_EMOTES and not (is_private(ctx.channel) and ctx.to_guid == human):
+            continue
+        if isinstance(code, str) and _CODE.fullmatch(code):
+            lines.append(f'Directed at you: Emote {code} from {_person(ctx,human)} {_when(ctx,row["ts"],now)}')
+        if len(lines) == 4:
+            break
+    return lines
+
+
 def card(app_or_stores, guid: int, *, context: CardContext) -> Card:
     """Read one member's card. The caller owns the connection and its snapshot/transaction."""
     if type(guid) is not int or not 0 < guid <= 0xFFFFFFFF:
@@ -444,28 +471,38 @@ def card(app_or_stores, guid: int, *, context: CardContext) -> Card:
     meta = {r["key"]: r["value"] for r in reader.rows(("meta",),
         "SELECT key,value FROM meta WHERE key IN ('human_guid','tg:lab:owned','tg:benchmark:active')")}
     officer = bool(roles and roles[0]["role"] == "officer")
-    if is_discord(context.channel):
-        parts = (("context","Conversation",_context(guid,officer,context)),
+    discord = is_discord(context.channel)
+    human = int(meta.get('human_guid', '0')) if str(meta.get('human_guid', '0')).isdecimal() else 0
+    if discord and context.server and (context.readers is None or guid not in context.readers
+                                      or is_restricted(context.channel) and not officer):
+        return Card(guid, ())
+    conversation = _context(guid, officer, context)
+    here = ([context.self_line] if context.self_line else []) + list(context.here[:6]) if context.server and discord else []
+    if context.server and discord:
+        conversation += _directed_emotes(reader,guid,human,context,now)
+    if discord and (not context.server or is_private(context.channel)):
+        parts = (("context","Conversation",conversation),
+                 ("here","Here",here),
                  ("claims","Your claims",_claims(reader,guid,officer,context,now)),
                  ("drama","Your recent guild drama",_drama(reader,guid,officer,context,now)))
         return Card(guid,tuple(Part(k,title,tuple(lines)) for k,title,lines in parts if lines),tuple(sorted(reader.missing)))
-    game, recent, human = _game(reader, source, guid, meta, now, context)
+    game, recent, human = ([], [], human) if discord else _game(reader, source, guid, meta, now, context)
     if context.channel == "whisper" and context.to_guid == human and human:
         for row in reader.rows(("chat_line",), "SELECT text FROM chat_line WHERE channel='whisper' "
                 "AND from_guid=? AND to_guid=? AND ts BETWEEN ? AND ? ORDER BY ts DESC,id DESC LIMIT 3",
                 (human, guid, now-RECENT_S, now)):
             if text := _text(row["text"]):
                 recent.append("His whisper: " + text)
-    parts = {"game": Part("game", "In game", tuple(game))}
+    parts = {} if discord else {"game": Part("game", "In game", tuple(game))}
     def add(key, title, lines):
         if lines:
             parts[key] = Part(key, title, tuple(lines))
-    conversation = _context(guid, officer, context)
     if context.romance_activities and context.channel == 'whisper' and context.to_guid == human and human:
         if 'bond_mood' in reader.tables:
             from leeroy_mind.bond.policy import whisper_context
             conversation += whisper_context(source.conn, guid, human, now, jealousy=context.jealousy)
     add("context", "Conversation", conversation)
+    add("here", "Here", here)
     add("recent", "Recent events", recent)
     add("claims", "Your claims", _claims(reader, guid, officer, context, now))
     raids = reader.rows(("guild_raid",), "SELECT raid_id,raid_key,started,ended,kills,wipes FROM guild_raid "
@@ -508,6 +545,7 @@ def card(app_or_stores, guid: int, *, context: CardContext) -> Card:
         "GROUP BY dir ORDER BY dir", (now-7*DAY_S, now)))
     if bank and not any(line.startswith("Balance:") for line in bank):
         bank.insert(0, "Current balance: unknown")
-    add("bank", "Guild bank", bank)
+    if not discord or officer and is_restricted(context.channel):
+        add("bank", "Guild bank", bank)
     add("drama", "Your recent guild drama", _drama(reader, guid, officer, context, now))
     return Card(guid, tuple(parts[key] for key in PRIORITY if key in parts), tuple(sorted(reader.missing)))
