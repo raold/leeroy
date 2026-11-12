@@ -16,6 +16,7 @@ an edit never loosens it: one that drops the line's ask (memory.privacy.DONT_TEL
 line as she read it. His delete leaves the line: she may have read it, and a delete does not
 unsay it. A post from before these lines has none, and its edit changes only the message."""
 import logging
+from pathlib import Path
 
 from leeroy_mind.discord import layout
 from leeroy_mind.discord import store as dstore
@@ -63,6 +64,10 @@ class DiscordDesk:
 
     def __init__(self, app):
         self.app = app
+        from leeroy_mind.photos.config import PhotosConfig, load_photos_config
+        self.photos = (load_photos_config(Path(app.data_dir) / 'mind.toml')
+                       if getattr(app, 'data_dir', None) is not None else PhotosConfig())
+        self._photo_posts: list[float] = []
 
     async def handle(self, args: dict) -> dict:
         action, channel = args.get("action"), args.get("channel", "")
@@ -92,11 +97,38 @@ class DiscordDesk:
         store, now, action = app.store, app.clock.now(), args["action"]
         if action == "post":
             self._check_dm(args["channel"], me)
+            image = args.get('image')
+            attachment = None
+            if image is not None:
+                from leeroy_mind.photos import uploads
+                if not self.photos.enabled:
+                    raise _Refused('photos_off', uploads.WORDS['off'])
+                self._photo_posts = [t for t in self._photo_posts if now - t < 60]
+                if len(self._photo_posts) >= uploads.MINUTE_MAX:
+                    raise _Refused('photos_minute', uploads.WORDS['minute'])
+                # Not externally visible: adopt fills this row before commit.
+                attachment = dstore.AttachmentIn('upload', 'discord/images/pending', 16, 16, 1)
             with store.transaction():
+                if image is not None:
+                    day = app.clock.local().date().isoformat()
+                    count = uploads.day_count(store.conn, day)
+                    if count >= uploads.DAY_MAX:
+                        raise _Refused('photos_day', uploads.WORDS['day'])
                 mid = dstore.post(store, channel=args["channel"], author=me, origin="human",
                                   text=args["text"], reply_to=args.get("reply_to"),
-                                  thread=args.get("thread"), now=now)
+                                  thread=args.get("thread"), now=now, attachment=attachment)
+                if image is not None:
+                    from leeroy_mind.photos.images import adopt, ImageRefused
+                    try:
+                        path, w, h, size = adopt(app.data_dir, image, mid)
+                    except ImageRefused as error:
+                        raise _Refused('photos_' + error.code, uploads.WORDS[error.code]) from None
+                    store.conn.execute('UPDATE discord_attachment SET path=?,width=?,height=?,bytes=? '
+                                       'WHERE message=?', (path, w, h, size, mid))
+                    store.set_meta(uploads.DAY_KEY.format(day), str(count + 1))
                 line, chat = self._his_line(mid, me, now)
+            if image is not None:
+                self._photo_posts.append(now)
             try:
                 app.on_his_discord_line(line, chat, now)
             except Exception as e:  # the post is stored: its answers still come

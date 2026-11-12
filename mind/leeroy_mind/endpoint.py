@@ -642,10 +642,16 @@ def discord_args(args) -> dict:
         raise BadRequest("discord: an action, one of " + ", ".join(DISCORD_SHAPES))
     action = args["action"]
     shape = DISCORD_SHAPES[action]
-    extra = {"reply_to", "thread"} if action == "post" else set()
+    extra = {"reply_to", "thread", "image"} if action == "post" else set()
     if not shape <= set(args) <= shape | extra:
         raise BadRequest(f"discord {action}: exactly " + ", ".join(sorted(shape - {"action"})))
     out = {"action": action}
+    if 'image' in args:
+        from leeroy_mind.photos.images import TOKEN_RE
+        token = args['image']
+        if not isinstance(token, str) or TOKEN_RE.fullmatch(token) is None:
+            raise BadRequest('Choose the photo again: its upload token is invalid.')
+        out['image'] = token
     if "channel" in shape:
         ch = args["channel"]
         if not isinstance(ch, str) or (layout.channel(ch) is None and layout.dm_peer(ch) is None):
@@ -662,7 +668,10 @@ def discord_args(args) -> dict:
         try:
             out["text"] = clean_text(args["text"])
         except TextRefused as e:
-            raise BadRequest(WORDS[e.code]) from None
+            if e.code == 'empty' and 'image' in out:
+                out['text'] = ''
+            else:
+                raise BadRequest(WORDS[e.code]) from None
     if "emoji" in shape:
         emoji = args["emoji"]
         if not isinstance(emoji, str) or not is_one_emoji(emoji) or len(emoji) > 16:
