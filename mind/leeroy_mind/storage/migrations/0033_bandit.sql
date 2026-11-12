@@ -10,19 +10,20 @@ CREATE TABLE bandit_credit (
     line_id INTEGER NOT NULL REFERENCES chat_line(id) ON DELETE CASCADE,
     arm_id TEXT NOT NULL REFERENCES learn_arm(id), guid INTEGER NOT NULL, context TEXT NOT NULL,
     revision INTEGER NOT NULL, ts REAL NOT NULL, success REAL NOT NULL, failure REAL NOT NULL,
-    bad INTEGER NOT NULL CHECK(bad IN (0,1)), PRIMARY KEY(line_id,arm_id)
+    bad INTEGER CHECK(bad IN (0,1)), PRIMARY KEY(line_id,arm_id)
 );
-CREATE INDEX bandit_credit_context ON bandit_credit(guid,context,arm_id);
+CREATE INDEX bandit_credit_context ON bandit_credit(context,arm_id);
 CREATE TABLE bandit_turn (
     guid INTEGER PRIMARY KEY, turns INTEGER NOT NULL DEFAULT 0,
     exploratory INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE bandit_share (
-    guid INTEGER NOT NULL, context TEXT NOT NULL, arm_id TEXT NOT NULL REFERENCES learn_arm(id),
-    turns INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(guid,context,arm_id)
+    context TEXT NOT NULL, arm_id TEXT NOT NULL REFERENCES learn_arm(id),
+    turns INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(context,arm_id)
 );
 CREATE TABLE bandit_rejection (
     attempt_id TEXT NOT NULL, arm_id TEXT NOT NULL REFERENCES learn_arm(id),
     guid INTEGER NOT NULL, context TEXT NOT NULL, reason TEXT NOT NULL CHECK(reason IN ('guard','content')),
     PRIMARY KEY(attempt_id,arm_id)
 );
+CREATE INDEX bandit_rejection_context ON bandit_rejection(context,arm_id);

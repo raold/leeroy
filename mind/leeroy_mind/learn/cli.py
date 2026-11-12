@@ -67,15 +67,15 @@ def arms_report(conn, *, now=None):
     if not arms.available(conn):
         return {"available": False, "arms": [], "contexts": []}
     registry = arms.read(conn)
-    keys = conn.execute("SELECT guid,context FROM bandit_share UNION SELECT guid,context FROM bandit_credit "
-                        "UNION SELECT guid,context FROM bandit_rejection").fetchall()
+    keys = conn.execute("SELECT context FROM bandit_share UNION SELECT context FROM bandit_credit "
+                        "UNION SELECT context FROM bandit_rejection").fetchall()
     contexts = []
-    for guid,key in keys:
-        posteriors = bandit.posterior(conn,guid,key,now=now)
-        shares = dict(conn.execute("SELECT arm_id,turns FROM bandit_share WHERE guid=? AND context=?",(guid,key)))
+    for (key,) in keys:
+        posteriors = bandit.posterior(conn,None,key,now=now)
+        shares = dict(conn.execute("SELECT arm_id,turns FROM bandit_share WHERE context=?",(key,)))
         for arm in registry:
             total = sum(shares.get(a.id,0) for a in registry if a.family == arm.family)
-            contexts.append({"guid":guid,"context":json.loads(key),"arm_id":arm.id,
+            contexts.append({"context":json.loads(key),"arm_id":arm.id,
                 **posteriors.get(arm.id,dict(alpha=1.,beta=1.,uses=0,bad=0,attempts=0)),
                 "turns":shares.get(arm.id,0),"share":shares.get(arm.id,0)/total if total else 0.})
     from dataclasses import asdict

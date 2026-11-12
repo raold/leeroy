@@ -102,7 +102,7 @@ def test_merged_reward_scale_and_even_credit(store,clock,value,expected):
 def test_revision_replaces_old_credit_and_positive_cap_only(store,clock):
     lid,key = reward_line(store,clock,["length.0.v1"],cap=.1)
     credit(store,lid,clock)
-    assert bandit.posterior(store.conn,101,key,now=clock.now())["length.0.v1"]["alpha"] == pytest.approx(1.55)
+    assert bandit.posterior(store.conn,101,key,now=clock.now())["length.0.v1"]["alpha"] == pytest.approx(1.1)
     with store.transaction():
         store.conn.execute("UPDATE talk_reward SET value=-1,revision=revision+1 WHERE line_id=?",(lid,))
     credit(store,lid,clock)
@@ -118,24 +118,26 @@ def test_decay_keeps_prior(store,clock):
 
 
 @pytest.mark.parametrize("reason",["guard","content"])
-def test_unsent_screen_failure_retires_and_does_not_count_as_rewarded(store,clock,reason,caplog):
+def test_unsent_screen_failure_waits_for_night_and_enough_evidence(store,clock,reason,caplog):
     caplog.set_level("INFO",logger="leeroy_mind")
     lid,key = reward_line(store,clock,[arms.controls()["length"]])
     credit(store,lid,clock)
     with store.transaction():
         bandit.reject(store.conn,101,bandit.Context("guild",settings=ON),{"length":"length.0.v1"},attempt_id="abc",reason=reason)
     arm = next(a for a in arms.read(store.conn) if a.id=="length.0.v1")
-    assert arm.status == "retired"
+    assert arm.status == "active"
     assert bandit.posterior(store.conn,101,key)[arm.id]["uses"] == 0
-    assert "bandit_guard_retired" in caplog.text and "invented wheel" not in caplog.text
+    assert not bandit.retirement_candidates(store.conn,settings=ON)
+    assert "bandit_guard_retired" not in caplog.text and "invented wheel" not in caplog.text
 
 
-def test_guard_rewrites_retire_against_matching_control_only(store,clock):
+def test_one_guard_rewrite_does_not_retire(store,clock):
     lid,key = reward_line(store,clock,[arms.controls()["length"]])
     credit(store,lid,clock)
     lid,_ = reward_line(store,clock,["length.0.v1"],verdict="rewrite")
     credit(store,lid,clock)
-    assert next(a for a in arms.read(store.conn) if a.id=="length.0.v1").status == "retired"
+    assert next(a for a in arms.read(store.conn) if a.id=="length.0.v1").status == "active"
+    assert not bandit.retirement_candidates(store.conn,settings=ON)
 
 
 def test_30_rewarded_uses_required_for_majority(store,clock):
@@ -205,7 +207,8 @@ def test_dial_bounds():
     assert arms.bounded(replace(a,family="tease",params={"level":"light"}),forward=0)["level"] == "none"
 
 
-def test_night_attach_resume_revisions_no_model(context,store,clock,tmp_path):
+def test_night_attach_resume_revisions_no_model(context,store,clock,tmp_path,caplog):
+    caplog.set_level('INFO',logger='leeroy_mind')
     (tmp_path/"mind.toml").write_text("[learn]\nenabled=true\nbandit=true\n")
     async def run():
         async with context(learn_enabled=True,learn_bandit=True) as (ctx,llm):
@@ -220,6 +223,7 @@ def test_night_attach_resume_revisions_no_model(context,store,clock,tmp_path):
             assert bandit.posterior(store.conn,101,key,now=clock.now())["length.0.v1"]["beta"] == 2
             assert not llm.calls
     asyncio.run(run())
+    assert 'bandit_credited' in caplog.text and 'count=1' in caplog.text
     from leeroy_mind.learn.night import attach
     runner = NightRunner(STAGES,lambda *_:None)
     attach(runner,tmp_path,store)

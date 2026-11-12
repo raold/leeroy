@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 import json
 import random
 import time
+import math
 
 from leeroy_mind.discord.channels import is_discord, is_private, channel_id
 from leeroy_mind.logs import log
@@ -17,6 +18,12 @@ class Context:
     stance: str = "none"
     talkative: int = 5
     settings: LearnCfg = field(default_factory=LearnCfg)
+    female: bool = False
+    humour: int = 0
+    forward: int = 0
+    romance: int = 0  # minimum of effective member and world romance dials
+    callbacks: bool = False
+    fingerprint: bool = False
 
     @property
     def key(self):
@@ -45,18 +52,21 @@ def enabled(settings, guid):
 
 
 def posterior(conn, guid, key, *, now=None):
-    """Beta(1,1) priors never decay; only measured evidence does, on a 21-day half-life."""
+    """Shared context evidence; guid is retained for older inspection callers, not filtering.
+
+    Beta(1,1) priors never decay; measured evidence has a 21-day half-life.
+    """
     now = time.time() if now is None else now
     out = {}
     for aid, ts, success, failure, bad in conn.execute(
-            "SELECT arm_id,ts,success,failure,bad FROM bandit_credit WHERE guid=? AND context=?", (guid, key)):
+            "SELECT arm_id,ts,success,failure,bad FROM bandit_credit WHERE context=?", (key,)):
         p = out.setdefault(aid, dict(alpha=1., beta=1., uses=0, bad=0, attempts=0))
         p["alpha"] += decayed(success, age_seconds=max(0, now-ts))
         p["beta"] += decayed(failure, age_seconds=max(0, now-ts))
         p["uses"] += 1
-        p["attempts"] += 1
-        p["bad"] += bad
-    for aid, count in conn.execute("SELECT arm_id,count(*) FROM bandit_rejection WHERE guid=? AND context=? GROUP BY arm_id", (guid,key)):
+        p["attempts"] += int(bad is not None)
+        p["bad"] += bad or 0
+    for aid, count in conn.execute("SELECT arm_id,count(*) FROM bandit_rejection WHERE context=? GROUP BY arm_id", (key,)):
         p = out.setdefault(aid, dict(alpha=1., beta=1., uses=0, bad=0, attempts=0))
         p["bad"] += count
         p["attempts"] += count
@@ -74,11 +84,15 @@ def choose(conn, guid, context, *, rng=None, now=None):
     if not enabled(cfg, guid) or not arms.available(conn):
         return result
     key = context.key
+    if (type(context.female) is not bool or type(context.callbacks) is not bool
+            or type(context.fingerprint) is not bool or any(type(v) is not int or not 0<=v<=10
+                for v in (context.humour,context.forward,context.romance))):
+        raise ValueError('bandit_context_invalid')
     rng = rng or random.Random()
     arms.ensure(conn, now=now)
     registry = arms.read(conn)
     p = posterior(conn, guid, key, now=now)
-    shares = dict(conn.execute("SELECT arm_id,turns FROM bandit_share WHERE guid=? AND context=?", (guid,key)))
+    shares = dict(conn.execute("SELECT arm_id,turns FROM bandit_share WHERE context=?", (key,)))
     row = conn.execute("SELECT turns,exploratory FROM bandit_turn WHERE guid=?", (guid,)).fetchone()
     turns, explored = (row[0]+1, row[1]) if row else (1, 0)
     can_explore = explored+1 <= turns//5
@@ -106,13 +120,20 @@ def choose(conn, guid, context, *, rng=None, now=None):
             stats = p.get(aid, dict(alpha=1., beta=1.))
             return rng.betavariate(stats["alpha"], stats["beta"])
         selected = max(candidates, key=sample)
+        arm = next(a for a in registry if a.id==selected)
+        if (family=='callback' and not context.callbacks or family=='typing' and not context.fingerprint
+                or family=='tease' and (not context.female or context.forward<=0 or context.romance<=0)
+                or family=='humour' and context.humour<=0
+                or arms.bounded(arm,humour=context.humour,forward=context.forward)!=arm.params):
+            selected = control
         used_exploration |= selected in immature
         result[family] = selected
     conn.execute("INSERT INTO bandit_turn VALUES (?,?,?) ON CONFLICT(guid) DO UPDATE SET "
                  "turns=excluded.turns,exploratory=excluded.exploratory", (guid, turns, explored+used_exploration))
-    for aid in result.values():
-        conn.execute("INSERT INTO bandit_share VALUES (?,?,?,1) ON CONFLICT(guid,context,arm_id) "
-                     "DO UPDATE SET turns=turns+1", (guid, key, aid))
+    for family,aid in result.items():
+        if family not in cfg.frozen_families:
+            conn.execute("INSERT INTO bandit_share VALUES (?,?,1) ON CONFLICT(context,arm_id) "
+                         "DO UPDATE SET turns=turns+1", (key, aid))
     return result
 
 
@@ -138,29 +159,49 @@ def update(conn, line_id, *, settings=LearnCfg(), now=None):
     registry = {a.id: a for a in arms.read(conn)}
     if any(i not in registry for i in ids) or len({registry[i].family for i in ids}) != len(ids):
         return False
-    old = list(conn.execute("SELECT arm_id,revision FROM bandit_credit WHERE line_id=?", (line_id,)))
-    if {tuple(r) for r in old} == {(i, revision) for i in ids}:
+    selected = [i for i in ids if registry[i].family not in settings.frozen_families]
+    old = dict(conn.execute("SELECT arm_id,revision FROM bandit_credit WHERE line_id=?", (line_id,)))
+    if not selected or all(old.get(i)==revision for i in selected):
         return False
     # Positive credit is capped; mute/downvote penalties are never diluted by volume.
-    effective = value * cap if value > 0 else value
-    success, failure = (1+effective)/2/len(ids), (1-effective)/2/len(ids)
-    conn.execute("DELETE FROM bandit_credit WHERE line_id=?", (line_id,))
-    for aid in ids:
-        conn.execute("INSERT INTO bandit_credit VALUES (?,?,?,?,?,?,?,?,?)",
+    weight = (cap if value > 0 else 1.)/len(ids)
+    success, failure = weight*(1+value)/2, weight*(1-value)/2
+    bad = 1 if verdict in ('rewrite','react','drop') else 0 if verdict=='send' else None
+    for aid in selected:
+        conn.execute("INSERT OR REPLACE INTO bandit_credit VALUES (?,?,?,?,?,?,?,?,?)",
                      (line_id, aid, guid, key, revision, ts, success, failure,
-                      int(verdict in ("rewrite", "react", "drop", "failed_open"))))
-    retire(conn, guid, key, now=now)
+                      bad))
     return True
 
 
-def retire(conn, guid, key, *, now=None):
-    stats = posterior(conn, guid, key, now=now)
+def retirement_candidates(conn, *, settings=LearnCfg()):
+    """Night's worker-owned read: pool screened attempts across members and contexts."""
+    if not settings.enabled or not settings.bandit or settings.freeze:
+        return []
+    stats = {aid:[n,bad] for aid,n,bad in conn.execute(
+        'SELECT arm_id,count(bad),coalesce(sum(bad),0) FROM bandit_credit GROUP BY arm_id')}
+    for aid,n in conn.execute('SELECT arm_id,count(*) FROM bandit_rejection GROUP BY arm_id'):
+        totals=stats.setdefault(aid,[0,0]); totals[0]+=n; totals[1]+=n
+    result=[]
     for arm in arms.read(conn):
-        p = stats.get(arm.id)
-        control = stats.get(arms.controls()[arm.family])
-        if arm.status == "active" and p and control and p["bad"]/p["attempts"] > control["bad"]/control["attempts"]:
-            conn.execute("UPDATE learn_arm SET status='retired' WHERE id=?", (arm.id,))
-            log("bandit_guard_retired", arm_id=arm.id, guid=guid, uses=p["uses"], bad=p["bad"])
+        n,bad=stats.get(arm.id,(0,0))
+        cn,cbad=stats.get(arms.controls()[arm.family],(0,0))
+        if arm.status!='active' or arm.family in settings.frozen_families or min(n,cn)<20:
+            continue
+        rate,control=bad/n,cbad/cn
+        z=1.6448536269514722  # two-sided 90% Wilson interval
+        lower=(rate+z*z/(2*n)-z*math.sqrt(rate*(1-rate)/n+z*z/(4*n*n)))/(1+z*z/n)
+        if rate-control>=.1-1e-12 and lower>control:
+            result.append((arm.id,n,cn,rate,control))
+    return result
+
+
+def retire(conn, candidates):
+    """Night-only bounded write after retirement_candidates runs off the event loop."""
+    for aid,n,cn,rate,control in candidates:
+        changed=conn.execute("UPDATE learn_arm SET status='retired' WHERE id=? AND status='active'",(aid,)).rowcount
+        if changed:
+            log('bandit_guard_retired',arm_id=aid,attempts=n,control_attempts=cn,rate=rate,control_rate=control)
 
 
 def reject(conn, guid, context, selected, *, attempt_id, reason):
@@ -172,7 +213,7 @@ def reject(conn, guid, context, selected, *, attempt_id, reason):
     registry = {a.id:a for a in arms.read(conn)}
     if not selected or any(f not in arms.FAMILIES or a not in registry or registry[a].family != f for f,a in selected.items()):
         raise ValueError("bandit_rejection_invalid")
-    for aid in selected.values():
+    active=[aid for family,aid in selected.items() if family not in context.settings.frozen_families]
+    for aid in active:
         conn.execute("INSERT OR IGNORE INTO bandit_rejection VALUES (?,?,?,?,?)", (attempt_id,aid,guid,context.key,reason))
-    retire(conn,guid,context.key)
-    return True
+    return bool(active)

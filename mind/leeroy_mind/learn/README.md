@@ -146,8 +146,12 @@ disable the entire table. Restart after configuration changes.
 The registry stores versioned, closed numeric/enum parameters for length,
 questions, humour, callback, tease, typing and followup. Control means the existing
 behaviour, not an approximation to a numeric preset. Coach proposals are excluded
-until separately activated. Renderers must use `arms.bounded` for dial caps and
-fixed wording; no instruction text is accepted in parameters. This task adds the
+until separately activated. Selection applies `arms.bounded` before recording,
+using effective humour/forward and the lesser of member/world romance dials,
+gender and callback/fingerprint switches supplied in `Context`. A capped choice
+records control, and disabled callback/typing families also record control.
+Renderers still recheck current caps and use fixed wording; no instruction text
+is accepted in parameters. This task adds the
 selection/credit API; task 39 wires selection and rejection receipts to live talk.
 Enabling the bandit alone does not alter prompts or choose arms for live lines.
 Its first enabled night registers the built-ins for inspection. Frozen members
@@ -162,23 +166,33 @@ No more than floor(turns/5) choices per member explore an unqualified arm. Other
 turns sample control and arms with at least 30 rewarded uses and a posterior mean
 above control. An arm below 30 uses also cannot exceed half of its context's turns.
 Context is channel kind (individual Discord rooms), stance and talkative bucket;
-game whispers, DMs, officers, guild and group channels keep separate statistics.
+all members in that key share posteriors, shares and the 30-use threshold.
+Game whispers, DMs, officers, guild and group channels keep separate statistics.
+Uses count credited lines, not split Beta mass; 30 seven-family lines carry only
+30/7 observations of mass before volume weighting and decay.
 
 `update(conn, line_id, settings=cfg)` credits only recorded arms, splitting one
 observation equally among families. It maps the merged reward as `(1+r)/2` into
 Beta success and failure mass. Silence 0 is therefore neutral 0.5, not approval;
 thumbs-up +1 is success, downvote/mute -1 failure, dial-down -0.5 maps to 0.25,
-ignored -0.1 to 0.45, and median reply +0.5 to 0.75. Positive r first receives
-the reward's cap_weight; negatives keep full strength. Revisions replace the old
+ignored -0.1 to 0.45, and median reply +0.5 to 0.75. For positive rewards,
+cap_weight scales the observation weight, never the value; negatives keep full
+strength. Frozen families receive no credit, rejection or retirement; other
+families retain their original split weight and continue learning. Revisions replace the old
 credit atomically, so a later veto never leaves stale success behind. All evidence
 decays from the original line timestamp with a 21-day half-life; Beta(1,1) priors
 do not decay. A line with no recipe arms is not attributed by guesswork.
 
-Guard rewrites/reactions/drops/fail-open receipts count as failures. The future
+Guard rewrites/reactions/drops count as trips. Failed-open and not-run reviews
+(including unavailable/skipped reviews) count as neither clean nor tripped screens.
+The future
 send adapter can call `reject` for unsent guard/content refusals with an idempotent
-attempt ID; these do not count as rewarded uses. An active arm whose failure rate
-exceeds its control in the same member/context is retired, with numeric/id-only
-`bandit_guard_retired` logging. A control baseline must exist for comparison.
+attempt ID; these do not count as rewarded uses. Retirement happens only at night,
+pooling screened uses across contexts: at least 20 arm and 20 family-control uses,
+an excess trip rate of at least 10 percentage points, and the arm's 90% Wilson
+lower bound above the observed control rate. The scan runs off the event loop.
+`bandit_guard_retired` logs the arm id, both counts and rates; `bandit_credited`
+logs the credited-line count. There is no un-retire command.
 
 `python -m leeroy_mind learn arms --data-dir <data>` is read-only: registry,
 decayed Beta posteriors, rewarded uses, failures and observed choice shares. Empty

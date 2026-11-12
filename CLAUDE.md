@@ -896,8 +896,9 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   reads aggregate scores without migration, including on older schemas. Coverage,
   baseline units, caps and retry limits: `mind/leeroy_mind/learn/README.md`.
 - Optional `[learn] bandit = true` (also needs `enabled`) attaches model-free arm
-  credit after rewards. `freeze`, `frozen_members` and `frozen_families` veto learning
-  or selection; restart after edits. `python -m leeroy_mind learn arms` inspects
+  credit after rewards. `freeze` and `frozen_members` stop selection/credit;
+  `frozen_families` select control and receive no credit, rejection or retirement,
+  while other families keep learning. Restart after edits. `python -m leeroy_mind learn arms` inspects
   posteriors/shares read-only. Live arm selection remains for the learning wiring
   task; this switch alone changes no prompt. Parameters contain no instruction text.
 - Optional `[talk] realism = true` adds bounded typing cadence, rare corrections and
