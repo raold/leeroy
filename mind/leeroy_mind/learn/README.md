@@ -92,7 +92,7 @@ Discord ranks are independent. The ordinal includes unobserved lines to prevent
 volume from evading the cap. The report applies the weight only to positive
 credit: infinitely many perfect lines cannot exceed 10 per member/medium/day.
 Penalties and vetoes remain undiluted. Reports additionally apply a 21-day
-half-life at read time. No variant arms exist yet.
+half-life at read time.
 
 Discord and DMs have separate baseline/report kinds, through the shared channel
 helpers. They supply no game baseline, screening, session or activity. Existing
@@ -149,6 +149,68 @@ cannot relabel the captured recipe. Supplied templates have model `none`.
 Generation
 parameter attribution and arm/lesson assignment remain for their respective
 learning tasks.
+
+## Variant arms and the bandit
+
+`[learn] enabled = true` plus `bandit = true` opts into the model-free `bandit`
+night stage after rewards. Default false. `freeze = true`, `frozen_members = [101]`
+or `frozen_families = ["length"]` provides an owner veto. Invalid learn settings
+disable the entire table. Restart after configuration changes.
+
+The registry stores versioned, closed numeric/enum parameters for length,
+questions, humour, callback, tease, typing and followup. Control means the existing
+behaviour, not an approximation to a numeric preset. Coach proposals are excluded
+until separately activated. Selection applies `arms.bounded` before recording,
+using effective humour/forward and the lesser of member/world romance dials,
+gender and callback/fingerprint switches supplied in `Context`. A capped choice
+records control, and disabled callback/typing families also record control.
+Renderers still recheck current caps and use fixed wording; no instruction text
+is accepted in parameters. This task adds the
+selection/credit API; task 39 wires selection and rejection receipts to live talk.
+Enabling the bandit alone does not alter prompts or choose arms for live lines.
+Its first enabled night registers the built-ins for inspection. Frozen members
+are excluded before the night's batch limit, so they cannot crowd out other credit.
+
+`choose(conn, guid, Context(..., settings=cfg))` returns family-to-id choices.
+The caller owns its transaction, and captures the choice IDs and `context.key`
+in the generation's recipe Snapshot. Disabled/frozen choices return stable control
+IDs without writes or randomness, even on an old schema. Enabled choices reserve
+an attempted turn, so cancellation cannot inflate the exploration allowance.
+No more than floor(turns/5) choices per member explore an unqualified arm. Other
+turns sample control and arms with at least 30 rewarded uses and a posterior mean
+above control. An arm below 30 uses also cannot exceed half of its context's turns.
+Context is channel kind (individual Discord rooms), stance and talkative bucket;
+all members in that key share posteriors, shares and the 30-use threshold.
+Game whispers, DMs, officers, guild and group channels keep separate statistics.
+Uses count credited lines, not split Beta mass; 30 seven-family lines carry only
+30/7 observations of mass before volume weighting and decay.
+
+`update(conn, line_id, settings=cfg)` credits only recorded arms, splitting one
+observation equally among families. It maps the merged reward as `(1+r)/2` into
+Beta success and failure mass. Silence 0 is therefore neutral 0.5, not approval;
+thumbs-up +1 is success, downvote/mute -1 failure, dial-down -0.5 maps to 0.25,
+ignored -0.1 to 0.45, and median reply +0.5 to 0.75. For positive rewards,
+cap_weight scales the observation weight, never the value; negatives keep full
+strength. Frozen families receive no credit, rejection or retirement; other
+families retain their original split weight and continue learning. Revisions replace the old
+credit atomically, so a later veto never leaves stale success behind. All evidence
+decays from the original line timestamp with a 21-day half-life; Beta(1,1) priors
+do not decay. A line with no recipe arms is not attributed by guesswork.
+
+Guard rewrites/reactions/drops count as trips. Failed-open and not-run reviews
+(including unavailable/skipped reviews) count as neither clean nor tripped screens.
+The future
+send adapter can call `reject` for unsent guard/content refusals with an idempotent
+attempt ID; these do not count as rewarded uses. Retirement happens only at night,
+pooling screened uses across contexts: at least 20 arm and 20 family-control uses,
+an excess trip rate of at least 10 percentage points, and the arm's 90% Wilson
+lower bound above the observed control rate. The scan runs off the event loop.
+`bandit_guard_retired` logs the arm id, both counts and rates; `bandit_credited`
+logs the credited-line count. There is no un-retire command.
+
+`python -m leeroy_mind learn arms --data-dir <data>` is read-only: registry,
+decayed Beta posteriors, rewarded uses, failures and observed choice shares. Empty
+and older schemas report without seeding arms or migrating. No content is printed.
 
 `python -m leeroy_mind learn report --data-dir <data> --days 14` opens SQLite
 read-only, without migration, logging setup or any service. It reports counts,

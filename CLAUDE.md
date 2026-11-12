@@ -927,11 +927,30 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   prompt changes. `python -m leeroy_mind learn report --data-dir <data> --days 14`
   reads aggregate scores without migration, including on older schemas. Coverage,
   baseline units, caps and retry limits: `mind/leeroy_mind/learn/README.md`.
+- Optional `[learn] bandit = true` (also needs `enabled`) attaches model-free arm
+  credit after rewards. `freeze` and `frozen_members` stop selection/credit;
+  `frozen_families` select control and receive no credit, rejection or retirement,
+  while other families keep learning. Restart after edits. `python -m leeroy_mind learn arms` inspects
+  posteriors/shares read-only. Live arm selection remains for the learning wiring
+  task; this switch alone changes no prompt. Parameters contain no instruction text.
 - Optional `[talk] realism = true` adds bounded typing cadence, rare corrections and
   small reply bursts; default off, read at mind start and each login. Mind-only:
   no migration or native rebuild. It preserves authored/altered-state typing,
   excludes raid-event turns, and drops stale follow-ups after a newer line from
   that member. See `mind/leeroy_mind/talk/README.md` for budgets and busy evidence.
+- Optional `[banter] enabled = true` starts public guild/Discord-General riffs on restart;
+  `per_hour` defaults to 2 (0 pauses, maximum 12). Invalid settings mean off.
+  Each admitted thread has 2–4 members and at most 3–8 planned lines, ending early
+  on refusal, an owner line in that medium, a five-man boss fight or raid combat/wipe/debrief. Cards and
+  deterministic guards are required for these turns; fingerprint hints and existing
+  typing apply. New topics wait 45 seconds after his line, and owner death/loot
+  teasing is limited to one thread per local evening. The night (including manual
+  nightly runs) reuses origin-backed lexicon jokes; rewarded funny-line ingestion
+  becomes available with task 30's reward tables. No migration or native rebuild.
+  Banter requires his game presence or existing Discord desk lease and never takes
+  a GPU lease. Chattiness scales spacing (0 pauses); talkative 0 excludes a member.
+  Joke threads are limited to one per evening, with a three-day rest and fading use.
+  See `mind/leeroy_mind/banter/README.md` for scopes and interruption behavior.
 - Optional `[fingerprint] enabled = true` attaches a model-free typing-profile stage
   on restart (also in `nightly run`). Missing/invalid settings mean off. It measures
   the last 300 mind-origin lines, or seeds a documented persona prior below 50.
@@ -1443,8 +1462,10 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   LLM and model admin: channel answer, named and officer-only replies, reaction and
   DM, both after logout and before the first bridge cast; no game `say`, clean shutdown.
 - D1 is owner-triggered conversation, with optional pre-send guard review and
-  scoped awareness cards. Autonomous chatter, broader member reactions, topics,
-  photos, decisions and culture remain later phases.
+  scoped awareness cards. `[banter] enabled = true` also permits bounded General
+  riffs while he is in game or his desk lease is already held; it never takes a
+  lease or moves game activity clocks. Offline autonomous chatter, broader member
+  reactions, photos, decisions and culture remain later phases.
 
 ## The Realm (`leeroy_mind.realm`)
 

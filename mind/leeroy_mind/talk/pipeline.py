@@ -355,6 +355,9 @@ class TurnMeta:
     guard_verdict: str = "not_run"
     guard_rewritten: bool = False
     guard_codes: tuple[str,...] = ()
+    review_required: bool = False  # opt-in sources require their card and deterministic guards
+    single_line: bool = False  # a bounded multi-member conversation owns its line count
+    keep_channel: bool = False  # a public thread must stay on its chosen transport
 
 
 class _ScopeChanged(SchedulerError):
@@ -1163,11 +1166,13 @@ class Pipeline:
             real_name=real, facts=list(facts),
             facts_head=facts_head(human.forms[1]) if facts else "",
             pinned=pinned if facts else None, kept=kept)
-        if self.cfg.talk.aware:
+        if self.cfg.talk.aware or meta.review_required:
             try:
                 parts.awareness = await self.live_review.block_async(turn,meta,close=bool(real))
             except Exception:
                 log.warning("awareness_card_failed guid=%d",turn.speaker)
+                if meta.review_required:
+                    raise ValueError("awareness_unavailable") from None
         trimmed = trim_to_budget(redact_for(parts, human, bool(real)))
         if live:
             meta.offered_real_name, meta.romance = bool(real), bool(romance)
@@ -1328,7 +1333,7 @@ class Pipeline:
                 return self._drop(turn, meta, "no_channel")
         discord = is_discord(turn.channel)
         if discord:  # one message of up to three typed lines; a DM is always to him
-            turn.max_lines = DISCORD_LINES
+            turn.max_lines = 1 if meta.single_line else DISCORD_LINES
             self._dm_to_him(turn)
         p = self.personas.get(turn.speaker)
         if p is None:
@@ -1515,9 +1520,9 @@ class Pipeline:
         return [s.line for s in sent]
 
     async def _guarded_lines(self, turn, meta, p, lines, composed, *, close, spoken=False):
-        if not self.live_review.config.enabled or turn.template is not None:
+        if not self.live_review.enabled(turn, meta):
             return lines
-        async with self.live_review.serial(turn):
+        async with self.live_review.serial(turn, meta):
             return await self._review_lines(turn,meta,p,lines,composed,close=close,spoken=spoken)
 
     async def _review_lines(self,turn,meta,p,lines,composed,*,close,spoken=False):
@@ -1646,7 +1651,7 @@ class Pipeline:
         """Where the turn goes now its channel is known (Comms.place, which also fills in
         whom it is to), and the one decision on whether it is spoken, for the model's turns
         and templates alike (C1). Voice off, down or failing, it is typed as in phase 1."""
-        if self.comms is None or meta.before_transport is not None or is_discord(turn.channel):
+        if self.comms is None or meta.before_transport is not None or meta.keep_channel or is_discord(turn.channel):
             return False
         if meta.typed_on is None and not turn.channel.startswith("voice:"):
             meta.typed_on = turn.channel, turn.to_guid
@@ -1879,7 +1884,7 @@ class Pipeline:
 
     async def _generate(self, turn: Turn, meta: TurnMeta, c: Composed, *,
                         spoken: bool = False, max_attempts: int = 2) -> tuple[str, str | None]:
-        async with self.live_review.serial(turn):
+        async with self.live_review.serial(turn, meta):
             return await self._generate_serial(turn,meta,c,spoken=spoken,max_attempts=max_attempts)
 
     async def _generate_serial(self, turn: Turn, meta: TurnMeta, c: Composed, *,
@@ -2146,7 +2151,7 @@ class Pipeline:
         The send itself is shielded: once the server may have the line, it is recorded. A turn
         cancelled meanwhile keeps the lock until the line has settled, and that line's outcome
         is the turn's row."""
-        if self.live_review.config.enabled and turn.template is None and not meta.realism_correction:
+        if self.live_review.enabled(turn, meta) and not meta.realism_correction:
             # Recheck the reviewed text after typing, before its first fragment. A
             # fragment can look like filler by itself; later fragments inherit this
             # verdict, while transport scope, sequence and busy fences still run.
@@ -2282,7 +2287,7 @@ class Pipeline:
         audience = self.world.audience(turn.channel, from_guid=turn.speaker,
                                        to_guid=turn.to_guid, zone=zone)
         learn = getattr(self, "learn_enabled", False) and not meta.realism_correction
-        review = self.live_review.config.enabled and not meta.realism_correction
+        review = self.live_review.enabled(turn, meta) and not meta.realism_correction
         if learn or review:
             with self.store.transaction():
                 line_id = self.store.insert_chat_line(chat, session_id=sid, origin="mind", audience=audience)

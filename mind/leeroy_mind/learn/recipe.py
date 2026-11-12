@@ -14,6 +14,8 @@ class Snapshot:
     template_version: str
     dials_hash: str
     model_id: str
+    arm_ids: tuple[str, ...] = ()
+    bandit_context: str | None = None
 
 
 def describe(turn, persona, config):
@@ -66,6 +68,12 @@ def record(conn, line_id, turn, meta, persona, config):
                  "model_id,guard_verdict,arm_ids,lesson_ids) VALUES (?,?,?,?,?,?,?,?)",
                  (line_id, snapshot.template_id, snapshot.template_version, snapshot.dials_hash,
                   snapshot.model_id, verdict, "[]", "[]"))
+    if snapshot.arm_ids:
+        from .bandit import valid_key
+        if not valid_key(snapshot.bandit_context):
+            raise ValueError("recipe_bandit_context_invalid")
+        conn.execute("UPDATE talk_recipe SET arm_ids=?,bandit_context=? WHERE line_id=?",
+                     (json.dumps(snapshot.arm_ids),snapshot.bandit_context,line_id))
     conn.execute("INSERT INTO talk_recipe_line VALUES (?,?)", (line_id, line_id))
     meta.recipe_line_id = line_id
     return True
