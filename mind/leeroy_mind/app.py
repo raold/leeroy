@@ -476,7 +476,9 @@ class MindApp:
         self.playstyle = attach_playstyle(self)
         from .world.attach import attach_world
         self.world_people = attach_world(self)
-        self.realm = attach_realm(self)  # Last: tests/realm/test_realm_wiring.py
+        self.realm = attach_realm(self)
+        from .server.attach import attach_server
+        self.server = attach_server(self)  # Last; disabled adds no handlers or tasks.
 
     # -- extension points --------------------------------------------------------------------
 

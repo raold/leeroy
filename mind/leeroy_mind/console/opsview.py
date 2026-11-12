@@ -178,6 +178,13 @@ def stages(conn, night, failure_counts=None, errors=None, planned=None, complete
 
 
 def night_view(conn, data, now, deadline, runtime):
+    from leeroy_mind.server.config import load_server_config
+    server = load_server_config(data / "mind.toml")
+    timing = f"with the owner offline {NightlySettings.grace_minutes} minutes"
+    if server.enabled:
+        start, end = server.quiet_window
+        timing = (f"between {start:%H:%M} and {end:%H:%M} once he has been offline "
+                  f"{NightlySettings.grace_minutes} minutes")
     require(conn, "night_run", "night_stage", "night_step")
     r = conn.execute("SELECT night,status,started,finished,attempts,"
                      "CASE WHEN length(error)<=65536 THEN error WHEN error IS NULL THEN NULL ELSE 'unavailable' END AS error,"
@@ -227,7 +234,7 @@ def night_view(conn, data, now, deadline, runtime):
                  budget={k: number(plan.get(k)) for k in ("budget_s", "estimate_s")},
                  next_after=last + NightlySettings.min_gap_hours * 3600 if number(last) is not None else None,
                  next_rule=f"At least {NightlySettings.min_gap_hours:g} hours after the last completed night, "
-                    f"with the owner offline {NightlySettings.grace_minutes} minutes and no live lease "
+                    f"{timing} and no live lease "
                     "(owner, offline raid or voice). An unfinished recent night resumes first. A new night "
                     f"needs {NightlySettings.min_window_hours:g} hours of events; failed runs wait "
                     f"{NightlySettings.retry_minutes} minutes, at most {NightlySettings.max_attempts} attempts. "

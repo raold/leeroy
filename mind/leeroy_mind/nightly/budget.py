@@ -26,6 +26,7 @@ from leeroy_mind.nightly.settings import NightlySettings, is_sunday, night_bound
 from leeroy_mind.nightly.store import set_run_plan
 from leeroy_mind.personas.screens import redact_real_name
 from leeroy_mind.storage.store import Store
+from leeroy_mind.server.clock import latest_window_bounds
 from leeroy_mind.wow import is_raid_fight
 
 if TYPE_CHECKING:
@@ -322,7 +323,14 @@ async def plan_night(ctx: "NightContext", *, stages: frozenset[str] | None = Non
                 for stage in UNIT_CALLS}
     counted = {"supersede": measured_supersede_calls(ctx.store),
                CORE_JUDGE: measured_core_judge_calls(ctx.store)}
-    budget = night_budget_s(ctx.clock.now(), night_bounds(ctx.night, ctx.tz)[1], base.parallel,
+    if base.quiet:
+        cutoff = ctx._memo.get('server:quiet_end')
+        if cutoff is None:
+            cutoff = latest_window_bounds(ctx.clock.local(), base.quiet, clock=ctx.clock)[1]
+            ctx._memo['server:quiet_end'] = cutoff
+    else:
+        cutoff = night_bounds(ctx.night, ctx.tz)[1]
+    budget = night_budget_s(ctx.clock.now(), cutoff, base.parallel,
                             base.budget_floor_hours)
     failed: set[str] = set()
 
