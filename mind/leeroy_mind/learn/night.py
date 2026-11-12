@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import datetime
 import json
 import sqlite3
+from time import perf_counter
 
 from leeroy_mind.logs import log
 from leeroy_mind.clock import SystemClock
@@ -15,15 +16,20 @@ from leeroy_mind.nightly.budget import register_counter
 from .config import load_learn_config
 from .reward import DAY, GAME_SCREENED, reward
 from .weights import available, ensure
+from .generation import lines
+from .timing import record_timing, planning_seconds
 
 PER_NIGHT = 500
 LOOKBACK_DAYS = 14
 PLAN = "nightly:rewards:plan:"
-CHANGED = """(EXISTS (SELECT 1 FROM talk_signal s WHERE s.line_id=c.id AND s.ts<=:now
-    AND (s.ts>r.scored_at OR (s.kind='explicit' AND s.source='explicit'
-         AND s.value!=json_extract(r.parts,'$.explicit')))) OR
-    (SELECT count(*) FROM talk_signal s WHERE s.line_id=c.id AND s.ts<=:now) >
-     json_extract(r.parts,'$.evidence_count'))"""
+GROUP = "SELECT line_id FROM talk_recipe_line WHERE recipe_line_id=c.id UNION SELECT c.id"
+CHANGED = f"""(EXISTS (SELECT 1 FROM talk_signal s WHERE s.line_id IN ({GROUP}) AND s.ts<=:now
+    AND s.ts>r.scored_at) OR
+    (SELECT min(s.value) FROM talk_signal s WHERE s.line_id IN ({GROUP}) AND s.ts<=:now
+        AND s.kind='explicit' AND s.source='explicit')!=json_extract(r.parts,'$.explicit') OR
+    (SELECT count(*) FROM talk_signal s WHERE s.line_id IN ({GROUP}) AND s.ts<=:now) >
+     json_extract(r.parts,'$.evidence_count') OR
+    (SELECT count(*) FROM chat_line WHERE id IN ({GROUP})) > coalesce(json_extract(r.parts,'$.line_count'),1))"""
 
 
 def ready(store):
@@ -39,7 +45,9 @@ def _pending(ctx, *, count=False, open_only=False):
     query = (f"SELECT {fields} FROM chat_line c LEFT JOIN talk_reward r ON r.line_id=c.id "
         "WHERE c.origin='mind' AND c.from_guid IN (SELECT value FROM json_each(:members)) "
         "AND c.ts<:end AND c.ts>=:retained AND " +
-        ("c.ts>:closed AND " if open_only else "c.ts<=:closed AND ") +
+        "NOT EXISTS (SELECT 1 FROM talk_recipe_line m WHERE m.line_id=c.id AND m.recipe_line_id!=c.id) AND " +
+        (f"(SELECT max(ts) FROM chat_line WHERE id IN ({GROUP}))>:closed AND " if open_only else
+         f"(SELECT max(ts) FROM chat_line WHERE id IN ({GROUP}))<=:closed AND ") +
         "((r.line_id IS NULL AND c.ts>=:start) OR " + CHANGED + ")")
     args = dict(members=json.dumps(ctx.members(include_away=True)),end=min(ctx.window[1],now+0.000001),
                 start=now-LOOKBACK_DAYS*DAY,retained=now-RETENTION_S,
@@ -65,18 +73,23 @@ def _selection(ctx):
 
 
 def _unit(ctx, lid):
-    line = ctx.store.conn.execute("SELECT ts FROM chat_line WHERE id=?",(lid,)).fetchone()
-    if (line is None or not ctx.clock.now()-RETENTION_S <= line[0] <= ctx.clock.now()-REPLY_SECONDS
-            or line[0] >= ctx.window[1]):
+    ids = lines(ctx.store.conn, lid)
+    if lid != ids[0]:
+        return None
+    line = ctx.store.conn.execute("SELECT min(ts),max(ts),min(from_guid) FROM chat_line WHERE id IN (" +
+                                   ",".join("?" for _ in ids) + ")", ids).fetchone()
+    if (line[0] is None or line[0] < ctx.clock.now()-RETENTION_S or line[1] > ctx.clock.now()-REPLY_SECONDS
+            or line[1] >= ctx.window[1]):
         return None  # old saved plans also obey the observation and retention fences
     row = ctx.store.conn.execute("SELECT scored_at,json_extract(parts,'$.explicit'),"
-        "json_extract(parts,'$.evidence_count'),revision FROM talk_reward WHERE line_id=?",(lid,)).fetchone()
+        "json_extract(parts,'$.evidence_count'),revision,coalesce(json_extract(parts,'$.line_count'),1) "
+        "FROM talk_reward WHERE line_id=?",(lid,)).fetchone()
     if row is None:
         return str(lid)
-    changed = ctx.store.conn.execute("SELECT max(ts),max(CASE WHEN kind='explicit' AND source='explicit' THEN value END),count(*) "
-        "FROM talk_signal WHERE line_id=? AND ts<=?",(lid,ctx.clock.now())).fetchone()
+    changed = ctx.store.conn.execute("SELECT max(ts),min(CASE WHEN kind='explicit' AND source='explicit' THEN value END),count(*) "
+        "FROM talk_signal WHERE line_id IN (" + ",".join("?" for _ in ids) + ") AND ts<=?",(*ids,ctx.clock.now())).fetchone()
     if changed[0] is not None and (changed[0]>row[0] or changed[2]>row[2] or
-                                  (changed[1] is not None and changed[1]!=row[1])):
+                                  (changed[1] is not None and changed[1]!=row[1])) or len(ids)!=row[4]:
         return f"{lid}:revision:{row[3]+1}"
     return None
 
@@ -107,6 +120,7 @@ async def prepare_count(ctx):
     if ctx.settings.learn_enabled and ready(ctx.store):
         try:
             ctx._memo["rewards:count"] = await read_work(ctx,remaining)
+            ctx._memo["rewards:seconds"] = await read_work(ctx, planning_seconds)
         except Exception:
             log("rewards_unavailable")
 
@@ -158,32 +172,43 @@ async def stage_rewards(ctx):
 
     async def one(unit):
         nonlocal scored_count
+        started = perf_counter()
+        used_embedding = False
         lid = units[unit]
         try:
             def evidence(c):
-                row = c.store.conn.execute("SELECT * FROM chat_line WHERE id=?",(lid,)).fetchone()
-                if row is None:
-                    return None
-                context,parent = screening.context_for(c.store.conn,row)
-                return row,context,parent
+                out = []
+                for ident in lines(c.store.conn,lid):
+                    row = c.store.conn.execute("SELECT * FROM chat_line WHERE id=?",(ident,)).fetchone()
+                    context,parent = screening.context_for(c.store.conn,row)
+                    out.append((row,context,parent))
+                return out
             data = await read_work(ctx,evidence)
             if data is None:
                 return
-            row,context,parent = data
             guards,claims,facts = config
             # Game screening uses exactly the signals adapter. Voice/Discord do
             # not borrow game history or earn an invented clean-quality measure.
-            can_screen = row["channel"] in GAME_SCREENED and 0 < len(row["text"]) <= 4000
-            vectors = {}
-            if can_screen and (claims or guards.semantic_enabled):
-                selected = [row,*(context if parent else [])]
-                embedded = await ctx.embed([r["text"] for r in selected])
-                if len(embedded) != len(selected):
-                    raise ValueError("reward_embedding_count")
-                vectors = {r["id"]:v for r,v in zip(selected,embedded,strict=True)}
+            checks = []
+            for row,context,parent in data:
+                can_screen = row["channel"] in GAME_SCREENED and 0 < len(row["text"]) <= 4000
+                vectors = {}
+                if can_screen and (claims or guards.semantic_enabled):
+                    used_embedding = True
+                    selected = [row,*(context if parent else [])]
+                    embedded = await ctx.embed([r["text"] for r in selected])
+                    if len(embedded) != len(selected):
+                        raise ValueError("reward_embedding_count")
+                    vectors = {r["id"]:v for r,v in zip(selected,embedded,strict=True)}
+                checks.append((row,context,parent,can_screen,vectors))
+            row = data[0][0]
             def calculate(c):
-                kinds = screening.screen_row(c.store.conn,row,guards=guards,claims=claims,
-                    facts=facts,context=context,parent=parent,vectors=vectors) if can_screen else None
+                kinds = None
+                for fragment,context,parent,can_screen,vectors in checks:
+                    if can_screen:
+                        hits = screening.screen_row(c.store.conn,fragment,guards=guards,claims=claims,
+                            facts=facts,context=context,parent=parent,vectors=vectors)
+                        kinds = set(hits) | (kinds or set())
                 return reward(c.store.conn,lid,now=c.clock.now(),schema_available=True,screening=kinds,
                     local_at=None if isinstance(c.clock,SystemClock) else
                         lambda ts:datetime.fromtimestamp(ts,c.clock.local().tzinfo))
@@ -200,6 +225,8 @@ async def stage_rewards(ctx):
                     "cap_weight=excluded.cap_weight,parts=excluded.parts,weights_version=excluded.weights_version,"
                     "scored_at=excluded.scored_at,revision=talk_reward.revision+1", (lid,row["from_guid"],scored.value,scored.cap_weight,
                         json.dumps(scored.parts,sort_keys=True,allow_nan=False),scored.weights_version,ctx.clock.now()))
+                record_timing(store.conn, ctx.night, "embedding" if used_embedding else "lexical",
+                              perf_counter()-started)
             except Exception:
                 raise RuntimeError("reward_write_failed") from None
         scored_count += ctx.commit("rewards",unit,write)

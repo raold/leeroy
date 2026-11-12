@@ -181,6 +181,7 @@ class DiscordTalk:
                 chosen, how = self._draw(ch, audience), "drawn"
         local = app.clock.local()
         items = []
+        from leeroy_mind.talk.select import classify_human_line
         for g in chosen:
             p = app.personas.get(g)
             turn = Turn(kind=TurnKind.REPLY_HUMAN, speaker=g, channel=place,
@@ -191,6 +192,7 @@ class DiscordTalk:
             meta = TurnMeta(app.engine._new_id(), answers_human=True, why=WHY,
                             discord=DiscordTarget(reply_to=message_id, thread=thread),
                             discord_named=how == "named",
+                            first_question_answer=not items and classify_human_line(text) == "question_all",
                             recall_query=self.recall_query(message_id) or "")
             items.append((turn, meta))
         log.info("discord_answers: message=%d channel=%s how=%s speakers=%s", message_id,

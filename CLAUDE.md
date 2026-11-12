@@ -851,7 +851,9 @@ its text. The prompt's privacy gates and mandatory evidence/instructions are unc
   scoped observation card inside the live prompt budget; `[guards] enabled = true`
   reviews model drafts, allows one screened retry, and records delivery rations.
   Deterministic announcements bypass model guards. Answers owed to the owner use
-  advisory verdicts; hard content/name/slash screens still apply. Discord cards
+  advisory verdicts for private replies, named replies, pushback and emotes at him;
+  public bystanders can be dropped. Hard content/name/slash screens still apply.
+  Cards shrink by section to fit the budget; workers use detached world inputs. Discord cards
   and guards omit game-state evidence. `[claims] enabled = true` supplies claim
   evidence and enables its night stage in both runners.
   See `mind/leeroy_mind/guards/README.md` for bounds and fake rehearsal results.
@@ -910,6 +912,10 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   live: they load another large model next to the live one and evict it.
 - Optional `[learn] enabled = true` records generation recipes in a savepoint
   alongside outgoing chat and attaches the capped `rewards` night stage.
+  A burst now has one recipe and one score, pooling its fragments' feedback after
+  the last fragment's observation window. A later fragment vote revises that score.
+  Reward planning learns lexical and embedding costs separately from completed
+  units; it no longer reserves a fixed 1,000 seconds for every 500-line batch.
   Read at startup: restart the mind after changing it. Missing/invalid settings
   mean off; signals remain separately opt-in. Rewards screen game quality independently of the signals cap, including CLI nights,
   after the 120-second observation window. Discord and voice rooms score measured

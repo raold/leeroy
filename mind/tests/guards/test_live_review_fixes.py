@@ -47,7 +47,8 @@ def test_repeated_say_as_callouts_do_not_spend_guard_rations(rig,monkeypatch):
 def test_owed_answer_survives_advisory_verdict(rig,monkeypatch,channel,action):
     monkeypatch.setattr(live,"review",lambda *args:Verdict(action,("own_repeat_same_channel",)))
     rig.script("the ferry leaves at seven","bring a flask for the trip")
-    sent,meta = speak(rig,turn(channel))
+    sent,meta = speak(rig,turn(channel),TurnMeta("owed",why="reply:named",answers_human=True,
+                                              whisper_reply=channel=="whisper"))
     assert sent
     assert not rig.sent.emotes()
     if action == "drop":
@@ -266,7 +267,7 @@ def test_over_budget_card_is_removed_before_conversation(rig,monkeypatch):
 def test_hard_screened_retry_does_not_displace_safe_owed_answer(rig,monkeypatch):
     monkeypatch.setattr(live,"review",lambda *args:Verdict("drop",("own_repeat_same_channel",)))
     rig.script("the ferry leaves at seven","/invite arkon")
-    sent,meta = speak(rig,turn())
+    sent,meta = speak(rig,turn(),TurnMeta("owed",why="reply:named",answers_human=True))
     assert sent==["the ferry leaves at seven"] and meta.guard_rewritten
 
 
