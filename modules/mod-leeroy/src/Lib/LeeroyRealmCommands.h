@@ -15,8 +15,8 @@
 
 namespace Leeroy::Realm
 {
-inline constexpr std::array<std::string_view, 35> kCommandTypes = {
-    "realm_actors", "realm_say", "realm_emote", "realm_move", "rpg_status", "leave_pvp", "rearm", "wg_join",
+inline constexpr std::array<std::string_view, 36> kCommandTypes = {
+    "realm_actors", "realm_say", "realm_emote", "realm_move", "realm_visit", "rpg_status", "leave_pvp", "rearm", "wg_join",
     "arena_team", "arena_queue", "duel", "craft", "item_count", "equip", "set_profession", "transmog_set",
     "calendar_post", "calendar_signup", "calendar_update", "mail_send", "bank_tab_buy", "bank_money",
     "bank_deposit", "bank_withdraw", "bank_stock", "grant_achievement", "guild_rename", "guild_grow",
@@ -60,8 +60,10 @@ bool IsPrimaryProfession(std::uint32_t skill);
 struct ActorsCmd { std::vector<std::uint32_t> guids, gankers, guilds; };
 struct SayCmd { std::uint32_t guid = 0; std::string channel, text; std::uint32_t toGuid = 0; };
 struct WorldSayCmd { SayCmd speech; std::uint32_t guild = 0; };
-struct EmoteCmd { std::uint32_t guid = 0; std::string emote; std::uint32_t targetGuid = 0; };
-struct MoveCmd { std::uint32_t guid = 0; std::string place; std::uint32_t slot = 0; };
+struct EmoteCmd { std::uint32_t guid = 0; std::string emote; std::uint32_t targetGuid = 0; bool social = false;
+    std::string seatId; std::uint32_t leaseSeconds = 0; };
+struct MoveCmd { std::uint32_t guid = 0; std::string place; std::uint32_t slot = 0; bool social = false; };
+struct VisitCmd { std::string place; };
 struct RpgStatusCmd { std::uint32_t guid = 0; std::string status; std::uint32_t questId = 0; };
 struct LeavePvpCmd { std::vector<std::uint32_t> guids; std::string pvpOwner; };
 struct GetRealmPvpCmd { std::string pvpOwner, originId; };
@@ -141,6 +143,7 @@ std::optional<SayCmd> ParseSay(nlohmann::json const&, std::string& error);
 std::optional<WorldSayCmd> ParseWorldSay(nlohmann::json const&, std::string& error);
 std::optional<EmoteCmd> ParseEmote(nlohmann::json const&, std::string& error);
 std::optional<MoveCmd> ParseMove(nlohmann::json const&, std::string& error);
+std::optional<VisitCmd> ParseVisit(nlohmann::json const&, std::string& error);
 std::optional<RpgStatusCmd> ParseRpgStatus(nlohmann::json const&, std::string& error);
 std::optional<LeavePvpCmd> ParseLeavePvp(nlohmann::json const&, std::string& error);
 std::optional<GetRealmPvpCmd> ParseGetRealmPvp(nlohmann::json const&, std::string& error);
@@ -231,6 +234,8 @@ nlohmann::json MakeArenaEnd(std::uint32_t arenaType, std::uint32_t winnerTeam, s
 nlohmann::json MakeGameEvent(std::uint32_t eventId, std::string_view state);
 nlohmann::json MakeCalendarRsvp(std::uint64_t eventId, std::string_view status);
 nlohmann::json MakeMailTaken(std::uint32_t itemGuid, std::uint32_t itemId, std::uint32_t count);
+nlohmann::json MakeVisitState(std::string const& id, std::string const& place,
+                            std::uint32_t guild, std::uint32_t human, bool ready, bool nearby);
 nlohmann::json MakeGuard(std::uint32_t guid, std::string_view action, std::uint32_t rank, std::string_view reason);
 std::string FormatAnnouncement(std::string_view guild, std::string_view boss, std::uint32_t size,
     bool heroic, std::uint32_t attempts, std::uint32_t fightS, bool ever);

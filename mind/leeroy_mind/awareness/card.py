@@ -58,6 +58,8 @@ class CardContext:
     embedding: bytes | None = None
     now: float | None = None
     names: dict[int,str] | None = None  # live rendering; CLI retains its diagnostic identifiers
+    romance_activities: bool = False
+    jealousy: float = 0
 
 
 @dataclass(frozen=True)
@@ -458,7 +460,12 @@ def card(app_or_stores, guid: int, *, context: CardContext) -> Card:
     def add(key, title, lines):
         if lines:
             parts[key] = Part(key, title, tuple(lines))
-    add("context", "Conversation", _context(guid, officer, context))
+    conversation = _context(guid, officer, context)
+    if context.romance_activities and context.channel == 'whisper' and context.to_guid == human and human:
+        if 'bond_mood' in reader.tables:
+            from leeroy_mind.bond.policy import whisper_context
+            conversation += whisper_context(source.conn, guid, human, now, jealousy=context.jealousy)
+    add("context", "Conversation", conversation)
     add("recent", "Recent events", recent)
     add("claims", "Your claims", _claims(reader, guid, officer, context, now))
     raids = reader.rows(("guild_raid",), "SELECT raid_id,raid_key,started,ended,kills,wipes FROM guild_raid "

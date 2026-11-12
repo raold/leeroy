@@ -15,6 +15,8 @@ from types import SimpleNamespace
 from weakref import WeakValueDictionary
 
 from leeroy_mind.awareness import CardContext, CardSources, ContextItem, card
+from leeroy_mind.bond.policy import eligible as bond_eligible
+from leeroy_mind.tuning.effective import dials_of
 from leeroy_mind.console.feed import read as read_only
 from leeroy_mind.claims.config import load_claims_config
 from leeroy_mind.config import ConfigError
@@ -221,14 +223,26 @@ class LiveReview:
     async def block_async(self,turn,meta,*,close):
         names = dict(self.engine._names(turn.channel))
         observed = self.observe(turn,meta)
-        return await self.read(lambda conn:self.block(turn,meta,close=close,conn=conn,names=names,observed=observed))
+        bond = self._bond_settings(turn.speaker)
+        return await self.read(lambda conn:self.block(turn,meta,close=close,conn=conn,names=names,
+                                                      observed=observed,bond=bond))
 
-    def block(self, turn, meta, *, close, conn=None, names=None, observed=None):
+    def _bond_settings(self, guid):
+        # PersonaCache can read the live connection on a miss. Capture its immutable
+        # effective values on the caller, never in the read-only SQLite worker.
+        cfg = self.engine.cfg.romance
+        if not cfg.activities:
+            return False, 0
+        persona = self.engine.personas.get(guid)
+        return bond_eligible(persona, cfg.dial), cfg.jealousy * dials_of(persona).mult('jealousy')
+
+    def block(self, turn, meta, *, close, conn=None, names=None, observed=None, bond=None):
         e = self.engine
         conn = e.store.conn if conn is None else conn
         names = dict(e._names(turn.channel)) if names is None else names
         if not e.cfg.talk.aware and not meta.review_required:
             return ""
+        bond = self._bond_settings(turn.speaker) if bond is None else bond
         observed = self.observe(turn,meta) if observed is None else observed
         _, history = self.history(turn, meta,conn,observed=observed)
         raw, to, readers, now = observed.raw, observed.to, observed.readers, observed.draft.now
@@ -259,7 +273,8 @@ class LiveReview:
                                                       raw, h.guid, h.to_guid, readers))
         context = CardContext(channel=raw, to_guid=to, readers=readers, purpose=purpose,
             thread=tuple(item(h) for h in history[-8:]), reply_to=parent, pins=pins,
-            discord_events=tuple(events[-4:]), now=now,names=names)
+            discord_events=tuple(events[-4:]), now=now,names=names,
+            romance_activities=bond[0], jealousy=bond[1])
         observation = card(CardSources(conn,world=observed.world),turn.speaker,context=context)
         def clean(text):
             if not close:

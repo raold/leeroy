@@ -44,6 +44,7 @@ JOB_COMMANDS = frozenset({
 # Announce is not here: only the announcer's own prepared row may reach the system channel.
 # GuildReadmit is, but only the kick guard's own prepared admission passes its barrier.
 _DIRECT = frozenset({protocol.RealmActors, protocol.RealmSay, protocol.RealmEmote,
+                     protocol.RealmVisit,
                      protocol.CalendarUpdate, protocol.BankMoney,
                      protocol.GuildRename, protocol.ItemCount, protocol.GuildReadmit})
 _SOURCES = frozenset({BgEnd, protocol.ArenaEnd, protocol.Wg, protocol.PvpKill,
@@ -156,6 +157,8 @@ class Realm:
 
     def _invalidate(self):
         self._generation += 1
+        if (bond := getattr(self, 'parts', {}).get('bond')) is not None:
+            bond.invalidate()
         for task in tuple(self._children):
             task.cancel()
         # Also fence ports-owned speech/model children before any presence await.
@@ -760,6 +763,8 @@ class Realm:
             return
         direct = self.parts.get("direct")
         if direct is not None and direct.owns_command(cmd):
+            if (bond := self.parts.get('bond')) is not None:
+                bond.before_send(cmd)
             # Its own committing barrier, last, so nothing refuses the command after it.
             direct.before_send(cmd, context=self.action_context())
             return
@@ -809,8 +814,12 @@ class Realm:
         if (sent is None or sent.command is not cmd or sent.ack or ack.id != cmd.id
                 or type(ack.ok) is not bool or type(ack.error) is not str):
             return
-        store.record_receipt(self.ports.conn, command_id=cmd.id, kind=sent.kind,
-                             stage="ack", ok=ack.ok, reason=ack.error, ts=self.ports.now())
+        if type(cmd) is protocol.RealmVisit:
+            if (bond := self.parts.get('bond')) is not None:
+                bond.probe_ack(cmd,ack)
+        else:
+            store.record_receipt(self.ports.conn, command_id=cmd.id, kind=sent.kind,
+                                 stage="ack", ok=ack.ok, reason=ack.error, ts=self.ports.now())
         sent.ack = True
         if not ack.ok or not sent.expects_job or sent.job:
             self._finish(cmd.id)
