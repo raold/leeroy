@@ -85,7 +85,7 @@ def test_message_layout_in_order():
 
 def test_budget_trims_in_order():
     p = big_parts()
-    msgs = build_messages(p)
+    msgs = build_messages(p, budget=1300)
     assert tokens(msgs) <= 1300
     t = trim_to_budget(p, budget=1300)
     assert msgs == render_messages(t)
