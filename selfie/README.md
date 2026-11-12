@@ -68,7 +68,7 @@ each tile resized to `tile`, set on a dark `#0e141a` ground with `gutter` pixels
 between, 2 x 2 up to 4 x 4; a tile that is missing or not a JPEG answers `missing_tile` and
 writes nothing. The mind's `[selfies]` table in `mind.toml` turns
 rendering on (off by default) and sets the classifier limit, steps, guidance, size and the
-VRAM floor; the mind's stages, GPU rules and file layout are in `../CLAUDE.md`.
+VRAM floor.
 
 Licences: this package is GPL-3.0-or-later (see `LICENSE`); RealVisXL is openrail++, the
 classifier Apache-2.0, diffusers Apache-2.0, IP-Adapter Apache-2.0 (its image encoder, OpenCLIP
