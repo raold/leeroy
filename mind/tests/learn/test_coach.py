@@ -89,7 +89,8 @@ def test_lesson_screens(context,item):
 def test_schema_rejects_injected_keys_attestation_and_excess_output():
     shape=coach.response_schema(False)
     check_schema(shape,answer())
-    for response in [answer([note(non_manipulative=False)]),answer([note()]*3),
+    check_schema(shape,answer([note(non_manipulative=False)]))
+    for response in [answer([note()]*3),
                      answer(arm={'family':'length','params':{}}),answer(instruction='fixture')]:
         with pytest.raises(ValueError):
             check_schema(shape,response)
@@ -233,6 +234,7 @@ def test_arm_proposal_uses_optional_registry_and_is_bounded(context,store,tmp_pa
     enabled(tmp_path)
     proposed=[]
     fake=NS(PRESETS={'length':[{'min_words':3,'max_words':12}]},
+            read=lambda _:[],
             Arm=lambda *args:NS(params=args[2]),
             valid=lambda family,params:family=='length' and params=={'min_words':3,'max_words':12},
             bounded=lambda arm,**kw:arm.params,

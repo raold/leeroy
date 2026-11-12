@@ -179,3 +179,5 @@ learning tasks.
 read-only, without migration, logging setup or any service. It reports counts,
 mean rewards and discounted totals by member ID, channel kind and each recipe
 field. Older schemas report unavailable. Days must be 1–3650.
+
+Coach review safeguards: eligible members rotate by last coaching time, then evidence count. Shared romance and content screens gate notes using effective forward, member romance and world romance dials; a false non-manipulation attestation discards only its note. The system prompt uses prompts/nightly_talk_coach.txt with immutable night invariants. Named evidence drops oldest exchanges to fit the context and answer margin. Duplicate arms of any status are ignored, with at most five new proposals per night. Dropped notes cannot be resurrected in the same reply.

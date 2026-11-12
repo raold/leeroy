@@ -4,7 +4,9 @@ from collections import defaultdict
 from leeroy_mind.discord.channels import is_discord, is_private, is_restricted
 from leeroy_mind.logs import log
 from leeroy_mind.nightly.budget import register_counter
-from leeroy_mind.nightly.llm import schema, check_schema, ReflectionError
+from leeroy_mind.nightly.llm import (schema, check_schema, ReflectionError, system_prompt,
+                                    STRUCTURE, JSON_PREDICT, CTX_SLACK)
+from leeroy_mind.text import estimate_tokens
 from leeroy_mind.storage.provenance import paired
 from leeroy_mind.voice.rooms import BY_ID,PRIVATE
 from .config import load_learn_config
@@ -41,7 +43,7 @@ def response_schema(has_arms):
         'lessons':{'type':'array','maxItems':2,'items':schema('lesson',{
             'text':{'type':'string','minLength':1,'maxLength':240},
             'scope':{'type':'string','enum':list(lessons.SCOPES)},
-            'non_manipulative':{'type':'boolean','enum':[True]},
+            'non_manipulative':{'type':'boolean'},
             'forward_min':{'type':'integer','minimum':0,'maximum':10}})},
         'reinforce':{'type':'array','maxItems':5,'items':{'type':'integer','minimum':1}},
         'drop':{'type':'array','maxItems':5,'items':{'type':'integer','minimum':1}},
@@ -75,12 +77,22 @@ def candidates(ctx):
     if not ctx.settings.learn_enabled or not ctx.settings.learn_coach or not lessons.available(ctx.store.conn):
         return []
     members = set(ctx.members(include_away=True))
-    rows = ctx.store.conn.execute('SELECT r.guid,count(*) FROM talk_reward r JOIN chat_line c ON c.id=r.line_id '
-        'WHERE c.ts>=? AND c.ts<? AND r.scored_at<=? GROUP BY r.guid HAVING count(*)>=10 ORDER BY r.guid',
-        (*window(ctx),ctx.clock.now()))
+    rows = ctx.store.conn.execute('SELECT r.guid,count(*) AS n, '
+        '(SELECT max(finished) FROM night_step WHERE stage=? AND unit=CAST(r.guid AS TEXT)) AS last '
+        'FROM talk_reward r JOIN chat_line c ON c.id=r.line_id '
+        'WHERE c.ts>=? AND c.ts<? AND r.scored_at<=? GROUP BY r.guid HAVING count(*)>=10 '
+        'ORDER BY last,n DESC,r.guid', (STAGE,*window(ctx),ctx.clock.now())).fetchall()
     done = {int(r[0]) for r in ctx.store.conn.execute("SELECT unit FROM night_step WHERE night=? AND stage=?",
             (ctx.night,STAGE)) if r[0].isdigit()}
-    return [r[0] for r in rows if r[0] in members and r[0] not in done][:max(0,CAP-len(done))]
+    eligible=[]
+    for r in rows:
+        if len(eligible)>=max(0,CAP-len(done)):
+            break
+        if r[0] in members and r[0] not in done:
+            data=evidence(ctx,r[0])
+            if data and data[2]:
+                eligible.append(r[0])
+    return eligible
 
 
 def feedback(conn, guid, current, *, now, channel):
@@ -142,12 +154,53 @@ def evidence(ctx,guid):
             (utterance is None or not utterance['trigger_line'] or r['id']==utterance['trigger_line'])),None)
         if parent is None:
             continue
-        exchanges.append({'id':row['id'],'reward':row['value'],'owner':parent['text'][:600],
-            'member':generated_text(conn,row), 'context':[{'speaker':r['from_guid'],'text':r['text'][:300]}
+        exchanges.append({'id':row['id'],'ts':row['ts'],'reward':row['value'],
+            'owner':{'speaker':ctx.ident.called,'text':parent['text'][:600]},
+            'member':{'speaker':speaker(ctx,guid),'text':generated_text(conn,row)},
+            'context':[{'speaker':speaker(ctx,r['from_guid']),'text':r['text'][:300]}
                 for r in reversed(previous)]})
     current=[l for l in lessons.read(conn,guid=guid,now=ctx.clock.now()) if l['scope'] in
              ({audience,'any'} if audience=='guild' else {audience})]
     return audience,channel,exchanges,current
+
+
+def speaker(ctx,guid):
+    try:
+        return ctx.name(guid)
+    except KeyError:
+        return 'Another member'
+
+
+def fit_payload(payload,system,shape):
+    """Keep the system/schema/answer margin; discard oldest exchanges first.
+
+    Use a conservative three characters per token for dense Discord text.
+    An oversized owner overlay causes abstention rather than truncating invariants.
+    """
+    payload={**payload,'exchanges':sorted(payload['exchanges'],key=lambda x:x['ts'])}
+    limit=STRUCTURE.options['num_ctx']-JSON_PREDICT-CTX_SLACK
+    while True:
+        encoded=json.dumps(payload,ensure_ascii=False)
+        cost=sum(estimate_tokens(t)*4/3 for t in (system,encoded,json.dumps(shape)))
+        if cost<=limit:
+            return encoded if payload['exchanges'] else None
+        if not payload['exchanges']:
+            return None
+        payload['exchanges'].pop(0)
+
+
+def propose_arm(store,arms,proposal,night,now):
+    if proposal is None:
+        return False
+    if any(a.family==proposal['family'] and a.params==proposal['params'] for a in arms.read(store.conn)):
+        return False
+    key='learn:coach:proposals:'+night
+    count=int(store.get_meta(key) or 0)
+    if count>=5:
+        return False
+    arms.propose(store.conn,proposal['family'],proposal['params'],now=now)
+    store.set_meta(key,str(count+1))
+    return True
 
 
 async def stage(ctx):
@@ -172,10 +225,25 @@ async def stage(ctx):
             shape=response_schema(arms is not None)
             payload={'scope':audience,'dials':dials,'exchanges':exchanges,'lesson_feedback':info,
                      'arm_examples':arms.PRESETS if arms else {}}
-            result=await ctx.reasoner.json(PROMPT,json.dumps(payload,ensure_ascii=False),shape)
+            system=system_prompt(STAGE,PROMPT,ctx.settings.data_dir,human=ctx.ident)
+            fitted=fit_payload(payload,system,shape)
+            if fitted is None:
+                ctx.skip(STAGE,unit)
+                log('talk_coach_context_full',guid=guid)
+                return
+            result=await ctx.reasoner.json(system,fitted,shape)
             check_schema(shape,result)
-            result['lessons']=[clean for item in result['lessons'] if (clean:=lessons.screen(
-                item,scope=audience,persona=p,ident=ctx.ident)) is not None]
+            world_romance=(ctx.tuning.world.get('romance',ctx.settings.romance_dial)
+                           if ctx.tuning else ctx.settings.romance_dial)
+            clean=[]
+            for item in result['lessons']:
+                checked=lessons.screen(item,scope=audience,persona=p,ident=ctx.ident,world_romance=world_romance)
+                if checked is not None:
+                    clean.append(checked)
+                else:
+                    log('talk_coach_lesson_refused',guid=guid,code=(
+                        'manipulative' if not item['non_manipulative'] else 'screen'))
+            result['lessons']=clean
             proposal=result['arm']
             if proposal is not None:
                 if not arms.valid(proposal['family'],proposal['params']):
@@ -185,16 +253,17 @@ async def stage(ctx):
                     if arms.bounded(arm,**dials)!=proposal['params']:
                         proposal=None
             known={l['id'] for l in current}
+            proposed=False
             def write(store):
+                nonlocal proposed
                 try:
                     lessons.persist(store.conn,guid,result,known=known,night=ctx.night,
                                     now=ctx.clock.now(),automatic=cfg.auto_lessons)
-                    if proposal is not None:
-                        arms.propose(store.conn,proposal['family'],proposal['params'],now=ctx.clock.now())
+                    proposed=propose_arm(store,arms,proposal,ctx.night,ctx.clock.now())
                 except Exception:
                     raise ValueError('talk_coach_write_failed') from None
             if ctx.commit(STAGE,unit,write):
-                log('talk_coach_done',guid=guid,lessons=len(result['lessons']),arm=int(proposal is not None))
+                log('talk_coach_done',guid=guid,lessons=len(result['lessons']),arm=int(proposed))
         except ReflectionError as err:
             raise ReflectionError('talk_coach_model_failed',fatal=err.fatal) from None
         except Exception:

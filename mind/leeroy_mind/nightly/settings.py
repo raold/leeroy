@@ -16,8 +16,8 @@ _NIGHT_STARTS = time(6)
 
 @dataclass(frozen=True)
 class NightlySettings:
-    """From the config: the models, the Ollama URL and the knobs. romance_dial is reported only,
-    never read for a decision; female_share is the cast mix the weekly report compares
+    """From the config: the models, the Ollama URL and the knobs. romance_dial also bounds
+    learned coach notes (with the frozen world overlay); female_share is the cast mix the weekly report compares
     against. The rest are P1c's constants."""
     live_model: str
     reflection_model: str

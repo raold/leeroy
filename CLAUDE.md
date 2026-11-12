@@ -1913,3 +1913,5 @@ apart from this install. Read `dojo/README.md` before touching it.
 - `mod-bg-slaveryvalley` server data + client patch (above).
 - Zip-sourced modules (transmog, individual-progression, slaveryvalley) have no
   update path; converting them to git clones would let `ac-update.sh` cover them.
+
+The talk coach rotates eligible members and screens notes against effective romance dials. Its prompts/nightly_talk_coach.txt overlay retains nightly invariants; context is bounded. Arm proposals are deduplicated across statuses and capped at five each night.
