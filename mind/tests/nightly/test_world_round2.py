@@ -56,6 +56,7 @@ def test_promoted_cast_can_get_persona_and_fresh_selfie_choices(h,writer,seed_st
     assert h.store.conn.execute("SELECT retired FROM world_member WHERE guid=101").fetchone()[0]==1
     assert selfies.counts(h.store.conn)["waiting"]==0
     assert selfies.ready_set(h.store,101,1).decided=="passed"
+    assert h.store.get_meta('selfies:set-world:101:1') == '1'
     assert selfies.ensure_first_sets(h.store,[101],now=h.T)==1
     assert selfies.queued_sets(h.store)[0].set_no==2
     assert retained.read_bytes()==b"synthetic image fixture"
@@ -110,3 +111,14 @@ def test_promotion_does_not_overwrite_concurrent_changes_and_rolls_back(h,monkey
     assert load_persona(h.store,101,include_world=True)==old
     assert selfies.ready_set(h.store,101,1).decided is None
     assert h.store.conn.execute("SELECT retired FROM world_member WHERE guid=101").fetchone()[0]==retired
+
+
+def test_generate_dry_run_shows_promoted_member_name(h,capsys):
+    from leeroy_mind.__main__ import main
+    observe(h,member(h))
+    expected=h.store.cast()[101].name
+    world(h)
+    assert main(['personas','--data-dir',str(h.settings.data_dir),'generate','--dry-run']) == 0
+    output=capsys.readouterr().out
+    assert expected+':' in output
+    assert load_persona(h.store,101) is None

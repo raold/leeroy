@@ -51,6 +51,13 @@ def called_model(meta, model):
 
 
 def record(conn, line_id, turn, meta, persona, config):
+    anchor = getattr(meta, "recipe_line_id", None)
+    if anchor is not None and conn.execute(
+            "SELECT 1 FROM talk_recipe p JOIN chat_line c ON c.id=p.line_id "
+            "WHERE p.line_id=? AND c.from_guid=? AND c.channel=? AND c.to_guid=?",
+            (anchor, turn.speaker, turn.channel, turn.to_guid)).fetchone():
+        conn.execute("INSERT INTO talk_recipe_line VALUES (?,?)", (line_id, anchor))
+        return True
     snapshot = getattr(meta, "recipe_snapshot", None)
     if not isinstance(snapshot, Snapshot):
         snapshot = describe(turn, persona, config)
@@ -67,4 +74,6 @@ def record(conn, line_id, turn, meta, persona, config):
             raise ValueError("recipe_bandit_context_invalid")
         conn.execute("UPDATE talk_recipe SET arm_ids=?,bandit_context=? WHERE line_id=?",
                      (json.dumps(snapshot.arm_ids),snapshot.bandit_context,line_id))
+    conn.execute("INSERT INTO talk_recipe_line VALUES (?,?)", (line_id, line_id))
+    meta.recipe_line_id = line_id
     return True
