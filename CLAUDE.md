@@ -1200,10 +1200,10 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   with the folds and read marks, `guild-console-collapsed` and
   `guild-console-read`). Beside it, Hide photos (`guild-console-photos`, applied before the first
   paint) draws every member's face as initials without asking for the photo, and blanks any
-  other photo (the gallery, the selfie picker) until it is switched back. Comms' Hide panel
-  (`guild-console-comms-panel`, also applied before the first paint; `comms/panel.mjs`) removes the
-  right column (the room's faces and the member card) so the feed takes its width; clicking a
-  member's face shows it again with their card. It has 14 tabs (Comms, Raid, Guild, Personas, Social,
+  other photo (the gallery, the selfie picker) until it is switched back. Comms' Hide panel, in that
+  panel's top corner (`guild-console-comms-panel`, also applied before the first paint;
+  `comms/panel.mjs`), removes the right column (the room's faces and the member card) so the feed
+  takes its width; Show panel in the feed's top corner, or clicking a member's face, brings it back. It has 14 tabs (Comms, Raid, Guild, Personas, Social,
   Board, Calendar, Bank, Realm, Training, Dojo, Library, Ops, Mind); each polls only
   while it is open and the page is visible, one request at a time. Ordinary reads have a
   30 s browser deadline, actions 120 s (long enough for a clean stop); an unanswered action
