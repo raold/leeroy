@@ -927,6 +927,16 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   prompt changes. `python -m leeroy_mind learn report --data-dir <data> --days 14`
   reads aggregate scores without migration, including on older schemas. Coverage,
   baseline units, caps and retry limits: `mind/leeroy_mind/learn/README.md`.
+  `learn export --out DIR` and `learn evalset --out DIR` mine private preference
+  pairs from scratch backups; the last week is held out. Git checkout output
+  paths are refused except the data directory's own scratch folder (no links or
+  junctions). `learn score --evalset DIR --candidates FILE` evaluates
+  supplied answers offline, without a model. Optional `capture_preferences = true`
+  under `[learn]` retains future confirmed guard rewrites and reuses existing
+  embeddings; default off, restart to change it. Evidence expires after 90 days
+  in the reward night. A private per-install meta key keeps member hashes stable
+  across exports. See `mind/leeroy_mind/learn/FINETUNE.md` for
+  privacy flags, coverage limits and optional manual training instructions.
   `[learn] coach = true` adds a reflection-model coaching stage after rewards,
   at most 20 members with ten rewarded lines that day. Lessons stay proposed
   unless `auto_lessons = true`; at most five are active per member and expire

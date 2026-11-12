@@ -149,6 +149,9 @@ async def stage_rewards(ctx):
         return
     conn = ctx.store.conn
     try:
+        from .capture import prune, available as capture_available
+        if not ctx.done('rewards','preference_prune') and await read_work(ctx,lambda c:capture_available(c.store.conn)):
+            ctx.commit('rewards','preference_prune',lambda store:prune(store.conn,ctx.clock.now(),schema_available=True))
         ids = await read_work(ctx,_selection)
         with ctx.store.transaction():
             if ids and ctx.store.get_meta(PLAN+ctx.night) is None:

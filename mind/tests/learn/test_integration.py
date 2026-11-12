@@ -14,15 +14,16 @@ from leeroy_mind.testing.fake_bridge import FakeBridge
 from leeroy_mind.testing.fake_llm import FakeLLM
 
 
-@pytest.mark.parametrize("setting", ["true", "false", "1"], ids=["enabled", "disabled", "invalid"])
-def test_fakebridge_delivery_recipe_and_app_stage(tmp_path, setting):
+@pytest.mark.parametrize('setting,capture,expected', [('true','false',True),('true','true',True),
+    ('false','true',False),('1','true',False),('true','1',False)])
+def test_fakebridge_delivery_recipe_and_app_stage(tmp_path, setting,capture,expected):
     # Parametrization supplies one scalar setting; strict parsing decides the expected state.
     async def run():
         clock = fake_clock()
         bridge = FakeBridge([hello(HUMAN), CAST])
         port = await bridge.start()
         (tmp_path / "mind.toml").write_text(toml(port) + "\n[talk]\nchattiness=0\n"
-                                          + "[learn]\nenabled=" + setting + "\n")
+                                          + "[learn]\nenabled=" + setting + "\ncapture_preferences="+capture+"\n")
         seed_db(tmp_path / "mind.db", clock)
         cfg = load_config(tmp_path / "mind.toml")
         def answer(*_):
@@ -44,7 +45,7 @@ def test_fakebridge_delivery_recipe_and_app_stage(tmp_path, setting):
             sent = asyncio.create_task(app.engine._speak(turn, meta))
             await r.until(sent.done)
             assert await sent
-            expected = setting == "true"
+            assert app.engine.learn_capture_preferences is (expected and capture=='true')
             assert ("rewards" in [s.name for s in app.night_runner.stages]) is expected
             count = app.store.conn.execute("SELECT count(*) FROM talk_recipe").fetchone()[0]
             assert count == int(expected)

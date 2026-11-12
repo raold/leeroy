@@ -201,7 +201,13 @@ def test_review_guild_migration_preserves_voice_nightly_and_private_memory(
     conn = db_mod.open_db(path)
     try:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == db_mod.latest_version()
-        assert _preserved_rows(conn) == before
+        after = _preserved_rows(conn)
+        key = dict(after['meta'])['learn:member-hash-key']
+        assert len(bytes.fromhex(key)) == 32
+        # The later learning migration seeds exactly one installation key;
+        # every pre-existing guild/voice/private-memory row still survives.
+        after['meta'] = tuple(row for row in after['meta'] if row[0]!='learn:member-hash-key')
+        assert after == before
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
         assert conn.execute("SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN "
                             "('guild_raid','guild_attendance','dkp_ledger','guild_flag')").fetchone()[0] == 4
