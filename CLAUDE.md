@@ -1402,6 +1402,8 @@ enabled, a native rebuild and a mind restart; the supported activity is meeting 
 at a whitelisted inn. Limits use local calendar days; Discord never accepts or moves a body.
 See `mind/leeroy_mind/bond/README.md` for privacy, expiry and exactly-once recovery.
 Install the new bond migration before enabling it.
+Invitation ticks check at most one candidate's body ledger after cheap gates. Map evidence
+comes from Cast, in-game chat and death events; Zone carries no map and keeps the last one.
 
 - **Off by default, two switches; this install runs it on.** `[realm] enabled = true` in `mind.toml` (read again at each
   hello and login) and native `Leeroy.Realm.Enable = 1` in `mod_leeroy.conf` (`.reload config`;

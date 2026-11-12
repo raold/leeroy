@@ -7,6 +7,7 @@ for arrival acceptance and the shared conversation; a Zone event is insufficient
 import re
 import uuid
 import math
+import random
 
 from leeroy_mind.bond.policy import eligible
 from leeroy_mind.bodies import BodyEvidenceUnavailable
@@ -38,6 +39,7 @@ class Bond:
         self.unsupported_epoch = None
         self.offered_context = None
         self.talked = None
+        self.body_checked = {}
 
     @property
     def conn(self):
@@ -60,17 +62,19 @@ class Bond:
         member = self.app.world.members.get(guid)
         if not member or member.map in DUNGEONS or member.map in RAID_INSTANCES or member.map in BG_MAPS:
             return False
+        if not (self.enabled() and context.enabled and context.connected and context.presence_known
+            and self.ports.human_online() and not self.ports.human_grouped()
+            and not self.ports.raid_holds_all()
+            and guid in self.app.world.online and not self.app.world.in_group(guid)
+            and eligible(self.ports.persona(guid), self.app.cfg.romance.dial)):
+            return False
         if body:
             try:
                 if guid not in self.realm.bodies.movable('realm_day', (guid,)):
                     return False
             except (BodyEvidenceUnavailable, ValueError):
                 return False
-        return (self.enabled() and context.enabled and context.connected and context.presence_known
-            and self.ports.human_online() and not self.ports.human_grouped()
-            and not self.ports.raid_holds_all()
-            and guid in self.app.world.online and not self.app.world.in_group(guid)
-            and eligible(self.ports.persona(guid), self.app.cfg.romance.dial))
+        return True
 
     def fresh(self, place, *, near=False):
         if self.observed is None:
@@ -193,7 +197,10 @@ class Bond:
             await self.probe(row['place'], row['id'])
             return
         # Let login greetings settle. Forward/romance dials also lengthen this wait.
-        if self.work:
+        if (self.work or not self.ports.human_online() or self.ports.human_grouped()
+                or not self.realm.action_context().presence_known
+                or self.now()-self.last_probe < PROBE_S
+                or self.unsupported_epoch == self.realm._transport().epoch):
             return
         day = self.app.clock.local().date().isoformat()
         if self.conn.execute('SELECT count(*) FROM bond_invite WHERE day=?', (day,)).fetchone()[0] >= 2:
@@ -208,14 +215,18 @@ class Bond:
                                       (self.app.human_guid,)))
         # Least recently invited first; a small guild-wide cap must not always
         # reserve both daily invitations for the lowest two character ids.
-        for member in sorted(self.ports.cast(), key=lambda m: (last.get(m.guid, float('-inf')), m.guid)):
+        for member in sorted(self.ports.cast(), key=lambda m: (last.get(m.guid, float('-inf')),
+                self.body_checked.get(m.guid,float('-inf')),m.guid)):
             guid = member.guid
-            if not self.available(guid) or not self.can_offer(guid):
+            if not self.available(guid,body=False) or not self.can_offer(guid):
                 continue
             if self.conn.execute('SELECT 1 FROM bond_invite WHERE day=? AND guid=? AND human=?',
                                  (day, guid, self.app.human_guid)).fetchone():
                 continue
-            await self.probe(places[0].name, ('offer', guid, day))
+            # At most one ledger refresh per invitation tick, including a held body.
+            self.body_checked[guid] = self.now()
+            if self.available(guid):
+                await self.probe(places[0].name, ('offer', guid, day))
             return
 
     async def probe(self, place, purpose):
@@ -230,7 +241,7 @@ class Bond:
         self.spawn('probe',send)
 
     def probe_ack(self, cmd, ack):
-        if not ack.ok and self.query and self.query[0].id == cmd.id:
+        if not ack.ok and ack.error.startswith('unknown type: realm_visit') and self.query and self.query[0].id == cmd.id:
             self.unsupported_epoch = self.query[4]
             self.query = None
             log('bond_probe_unsupported')
@@ -311,7 +322,10 @@ class Bond:
             return f"Fancy claiming a quiet corner at {label} with me? Say yes or meet me there; no rush."
         if dials.level('forward') >= 7:
             return f"I'd like a little time with you at {label}. Say yes or meet me there if you fancy it."
-        return f"Fancy sitting with me at {label}? Say yes or meet me there; no rush."
+        return random.Random(guid).choice((
+            f"Fancy sitting with me at {label}? Say yes or meet me there; no rush.",
+            f"Would you like a quiet moment with me at {label}? Say yes or meet me there.",
+            f"Come keep me company at {label}? Say yes or meet me there when you like."))
 
     def accept(self, row):
         with self.app.store.transaction():

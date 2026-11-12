@@ -71,7 +71,7 @@ def test_fake_bridge_accept_move_sit_and_private_conversation(tmp_path,clock,cap
     async def exercise(h,bond,visits,proximity):
         await h.until(lambda:bool(visits()))
         await h.until(lambda:bond.row() is not None and bond.row()['state']=='offered')
-        invitations=[c for c in h.says() if 'Fancy sitting' in c.get('text','')]
+        invitations=[c for c in h.says() if 'Say yes or meet me there' in c.get('text','')]
         assert len(invitations)==1 and invitations[0]['channel']=='whisper' and invitations[0]['to_guid']==1
         await h.bridge.push(chat('yes',channel='whisper',to_guid=101,ts=int(clock.now()*1000)))
         await h.until(lambda:any(c['type']=='realm_move' for c in h.bridge.commands))

@@ -149,3 +149,13 @@ def test_bond_stage_is_only_registered_when_enabled(enabled):
     runner=Mock()
     attach(runner,SimpleNamespace(romance_activities=enabled))
     assert runner.add_stage.called is enabled
+
+
+@pytest.mark.parametrize('days,expected',[(1,'quiet'),(2,'quiet'),(4,'missing')])
+def test_missing_uses_last_dm_even_before_this_nights_window(h,days,expected):
+    h.woman(101,'fond')
+    h.session(h.T-6*DAY,h.T-5*DAY)
+    h.say(h.T-days*DAY,1,'fixture company',channel='dm:101',to=101)
+    with h.store.transaction(): h.store.conn.execute('DELETE FROM session WHERE started>?',(h.T-5*DAY,))
+    night(h)
+    assert h.store.conn.execute('SELECT mood FROM bond_mood WHERE guid=101').fetchone()[0]==expected

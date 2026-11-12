@@ -139,7 +139,7 @@ def test_slow_probe_keeps_correlation_and_unsupported_stops_until_reconnect(live
         h.bond.close(h.bond.row())
         await h.bond.probe('org_inn','test'); await settle(h.realm)
         cmd=h.bond.query[0]
-        h.bond.probe_ack(cmd,Ack(0,cmd.id,False,'unsupported'))
+        h.bond.probe_ack(cmd,Ack(0,cmd.id,False,'unknown type: realm_visit'))
         count=len(h.app.sent)
         await h.clock.advance(60,step=60)
         await h.bond.probe('org_inn','test'); await settle(h.realm)
@@ -150,3 +150,62 @@ def test_slow_probe_keeps_correlation_and_unsupported_stops_until_reconnect(live
         assert h.bond.query is not None
         await h.realm.close()
     run(go())
+
+
+@pytest.mark.parametrize('state,checks',[('login',0),('offline',0),('grouped',0),('candidate',1),('held',1)])
+def test_invitation_tick_limits_body_refresh(live,monkeypatch,state,checks):
+    async def go():
+        h=live; await start(h)
+        if state=='login': h.app.engine._login_at=h.clock.now()
+        elif state=='offline': h.app.world.human_online=False
+        elif state=='grouped': monkeypatch.setattr(h.bond.ports,'human_grouped',lambda:True)
+        calls=[]
+        def movable(rank,guids):
+            calls.append(tuple(guids))
+            return () if state=='held' else guids
+        monkeypatch.setattr(h.realm.bodies,'movable',movable)
+        await h.bond.tick()
+        assert len(calls)==checks
+        if state=='held':
+            await h.bond.tick()
+            assert len(calls)==2 and calls[0]!=calls[1]
+        await h.realm.close()
+    run(go())
+
+
+@pytest.mark.parametrize('reason',['realm_off','unknown_place'])
+def test_temporary_probe_refusal_does_not_disable_session(live,reason):
+    async def go():
+        h=live; await start(h)
+        await h.bond.probe('org_inn','test'); await settle(h.realm)
+        cmd=h.bond.query[0]
+        h.bond.probe_ack(cmd,Ack(0,cmd.id,False,reason))
+        assert h.bond.unsupported_epoch is None
+        count=len(h.app.sent)
+        await h.clock.advance(11,step=11)
+        await h.bond.probe('org_inn','test'); await settle(h.realm)
+        assert len(h.app.sent)==count+1
+        await h.realm.close()
+    run(go())
+
+
+def test_logout_resets_zone_and_live_map_evidence_updates_snapshot(live):
+    from leeroy_mind.protocol import Chat,Death,Logout,Zone
+    h=live; world=h.app.world; now=h.clock.now()
+    world.apply(Logout(0,1,True),now)
+    assert world.human_zone==0
+    world.apply(Chat(0,'guild',101,'Invented',0,'fixture',574,1),now)
+    assert world.members[101].map==574
+    world.apply(Zone(0,101,1637,'Fixture'),now)
+    assert world.members[101].map==574  # Zone carries no map.
+    world.apply(Chat(0,'discord:general',101,'Invented',0,'fixture',1,2),now)
+    assert world.members[101].map==574
+    world.apply(Death(0,101,1,0),now)
+    assert world.members[101].map==1
+
+
+def test_default_invitations_vary_with_reproducible_member_seeds(live):
+    phrases=[live.bond.invitation(g,'org_inn') for g in (101,102,103)]
+    assert len(set(phrases))>1
+    assert phrases==[live.bond.invitation(g,'org_inn') for g in (101,102,103)]
+    assert all('the inn in Orgrimmar' in text for text in phrases)

@@ -66,11 +66,12 @@ async def stage_bond(ctx):
                 'AND updated>? AND updated<=? ORDER BY level DESC LIMIT 1', (guid, lo, now)).fetchone()
             cap = min(1., ctx.settings.jealousy / 10 * dials_of(persona).mult('jealousy'))
             mood, strength = 'quiet', 0.
-            dm_contact = conn.execute(f"SELECT 1 FROM chat_line WHERE {discord_sql('channel')} "
-                f"AND {private_sql('channel')} AND ts>? AND ts<=? "
-                "AND ((from_guid=? AND to_guid=?) OR (from_guid=? AND to_guid=?)) LIMIT 1",
-                (lo,hi,human,guid,guid,human)).fetchone()
-            if last is not None and now-last >= 3*86400 and not lines and not dm_contact:
+            dm_contact = conn.execute(f"SELECT max(ts) FROM chat_line WHERE {discord_sql('channel')} "
+                f"AND {private_sql('channel')} AND ts<=? "
+                "AND ((from_guid=? AND to_guid=?) OR (from_guid=? AND to_guid=?))",
+                (hi,human,guid,guid,human)).fetchone()[0]
+            last = max((t for t in (last,dm_contact) if t is not None),default=None)
+            if last is not None and now-last >= 3*86400 and not lines:
                 mood, strength = 'missing', min(.6, (now-last)/(14*86400))
             elif rivalry and rivalry['level'] > 0 and json.loads(rivalry['evidence'] or '[]') and cap > 0:
                 mood, strength = 'jealous', min(cap, rivalry['level']/100)
