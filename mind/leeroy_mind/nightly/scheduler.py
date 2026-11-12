@@ -55,7 +55,7 @@ from leeroy_mind.nightly.settings import NightlySettings
 from leeroy_mind.nightly.store import (UNFINISHED, last_finished, last_window_end, run_begin,
                                        run_finish, run_get, unfinished_nights)
 from leeroy_mind.storage.store import Store
-from leeroy_mind.server.clock import in_window, night_key
+from leeroy_mind.server.clock import in_window, reporting_night
 
 HUMAN = "human"  # his lease on the GPU arbiter
 RESUME_NIGHTS = 2  # an unfinished run resumes within the last two nights, tonight's included
@@ -64,7 +64,7 @@ Window = tuple[float, float]
 
 
 def tonight(local: datetime, settings: NightlySettings) -> str:
-    return night_key(local, settings.quiet) if settings.quiet else night_of(local)
+    return reporting_night(local, settings.quiet) if settings.quiet else night_of(local)
 
 
 def _nights_back(night: str, n: int) -> str:

@@ -61,3 +61,30 @@ def test_key_and_bounds_across_dst(day, prior):
 def test_window_spanning_dst_uses_wall_clock(day, hours):
     start, end = window_bounds(at(day + ' 03:30'), (time(0), time(5)))
     assert end - start == hours * 3600
+
+
+@pytest.mark.parametrize('day,hours', [('2026-03-08', 4), ('2026-11-01', 6)])
+def test_system_clock_resolves_each_boundary_in_the_host_zone(day, hours, monkeypatch):
+    import os
+    import time as system_time
+    from leeroy_mind.clock import SystemClock
+    clock = SystemClock()
+    old = os.environ.get('TZ')
+    try:
+        if hasattr(system_time, 'tzset'):
+            monkeypatch.setenv('TZ', 'America/New_York')
+            system_time.tzset()
+        elif datetime.fromisoformat(day + ' 00:30').astimezone().utcoffset() != at(day + ' 00:30').utcoffset():
+            pytest.skip('Windows host is not on the tested New York timezone')
+        monkeypatch.setattr(clock, 'now', lambda: at(day + ' 00:30').timestamp())
+        local = clock.local()  # production fixed-offset datetime, not a ZoneInfo injection
+        start, end = window_bounds(local, (time(0), time(5)), clock=clock)
+        assert end - start == hours * 3600
+        assert end == at(day + ' 05:00').timestamp()
+    finally:
+        if hasattr(system_time, 'tzset'):
+            if old is None:
+                os.environ.pop('TZ', None)
+            else:
+                os.environ['TZ'] = old
+            system_time.tzset()

@@ -167,19 +167,19 @@ def test_overrun_preempts_real_scheduler_and_resumes_same_run_next_window(h):
         for value in ('2026-11-12 08:00', '2026-11-12 08:30'):
             set_time(app, value)
             await lease.tick(h.clock.now())
-            assert sched.running_night() == '2026-11-12'
+            assert sched.running_night() == '2026-11-11'
         set_time(app, '2026-11-12 09:00')
         await lease.tick(h.clock.now())
         await lease.handback()
         assert sched.running_night() is None
-        assert run_get(h.store, '2026-11-12').status == 'running'
+        assert run_get(h.store, '2026-11-11').status == 'running'
         set_time(app, '2026-11-13 03:00')
         await lease.tick(h.clock.now())
         sched.block = False
         await sched.tick()
         await sched.wait_idle()
         assert len(started) == 2 and started[0] == started[1]
-        assert run_get(h.store, '2026-11-12').attempts == 1
+        assert run_get(h.store, '2026-11-11').attempts == 1
         await lease.close()
     run(go())
 

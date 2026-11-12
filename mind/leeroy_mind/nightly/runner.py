@@ -433,6 +433,12 @@ class NightRunner:
                 models=foreign)
 
     async def _run(self, ctx: NightContext, prior: NightRun | None) -> None:
+        if ctx.settings.quiet:
+            from leeroy_mind.server.clock import latest_window_bounds
+            # Preflight can cross the end of the admitted window. Remember its
+            # cutoff before the first await; a resume reuses its saved plan.
+            ctx._memo['server:quiet_end'] = latest_window_bounds(
+                ctx.clock.local(), ctx.settings.quiet, clock=ctx.clock)[1]
         active = frozenset(stage.name for stage in self.stages)
         if any(s.model == "reflection" for s in self.stages):
             await ctx.reasoner.preflight()

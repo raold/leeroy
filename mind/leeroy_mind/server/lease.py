@@ -1,10 +1,9 @@
 """Keep live chat resident outside the quiet window; give a running night one hour."""
 import asyncio
 import logging
-from datetime import datetime, timedelta
 
 from leeroy_mind.logs import log
-from .clock import in_window
+from .clock import in_window, latest_window_bounds
 from .config import ServerConfig
 
 HOLDER = 'server'
@@ -39,12 +38,8 @@ class ServerLease:
             return
         # window_bounds outside the window points to the NEXT window. Overrun
         # belongs to the most recent end, including a window crossing midnight.
-        end_day = local.date()
-        end = datetime.combine(end_day, self.config.quiet_window[1], tzinfo=local.tzinfo)
-        if end.timestamp() > now:
-            end = datetime.combine(end_day - timedelta(days=1), self.config.quiet_window[1],
-                                   tzinfo=local.tzinfo)
-        if self.app.night_scheduler.running_night() is not None and now < end.timestamp() + OVERRUN_S:
+        _, end = latest_window_bounds(local, self.config.quiet_window, clock=self.app.clock)
+        if self.app.night_scheduler.running_night() is not None and now < end + OVERRUN_S:
             if self._waited_since is None:
                 self._waited_since = now
             return
