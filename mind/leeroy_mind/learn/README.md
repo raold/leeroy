@@ -77,10 +77,11 @@ neutral 0.5. Missing observations are not zero samples. This is a provisional
 normalisation, not a calibrated satisfaction measure. Friendly/romantic emotes
 add and rude emotes subtract, clipped to [-1,1].
 
-The planning budget reserves 2 seconds per reward unit (at most 500) for shared
-screening, numeric reads and an optional embedding batch of up to 17 texts.
-This is a conservative allowance, not a measured embedding latency; lexical
-screening measured about 0.012 seconds per unit. A failed pre-count logs only
+The planning budget uses completed reward units' own wall time, separately for
+lexical and embedding screening. It uses the median nightly seconds per unit
+over the last seven nights, beginning after the first measured night. Until then,
+lexical work reserves 0.02 seconds and embedding work reserves a conservative
+2 seconds per generation. This is not a generation-model call. A failed pre-count logs only
 `rewards_unavailable`, counts zero and leaves the rest of the night's plan intact.
 
 ## Caps, time and channel scopes
@@ -155,11 +156,24 @@ database read-only, without migration, and prints unexpired active/proposed note
 to the terminal. Text never enters logs. The stage stores notes but does not yet
 change live prompts; live integration and the Lab controls follow separately.
 
-The central outgoing-line commit writes its recipe in the same transaction as
-`chat_line`. Its primary key permits only one recipe per line. This includes
+The central outgoing-line commit writes one recipe per generation, anchored to
+its first delivered line, in the same transaction as `chat_line`. Later fragments
+from that generation link to the anchor through `talk_recipe_line`. This includes
 game, voice and Discord delivery paths. The recipe uses a nested savepoint: a failed recipe rolls back only analytics,
 logs a fixed code and keeps the acknowledged chat row and world bookkeeping. Existing disabled behavior
 uses the original insertion path.
+
+The night waits until the last fragment's observation window closes and writes
+one `talk_reward` row at the recipe's anchor. Numeric evidence from all fragments
+is pooled before the existing formula: repeated signal kinds count once (maximum
+value; minimum latency and minimum explicit vote), a reply cancels a fragment's
+ignored observation, and any thumbs-down wins over another fragment's thumbs-up.
+Screening hits are unioned and penalties are not multiplied by fragment count.
+Silent fragments do not dilute an actual response. Positive saturation uses the
+first line's existing daily ordinal once. A later vote on any fragment replaces
+that generation's score and revision, so recipe consumers receive one observation.
+Reports' scored-line counts now count generation anchors for new bursts. Existing
+recipes remain independent: the migration does not guess old generation boundaries.
 
 Recipes contain only the turn-kind/template identifiers and a 16-character
 SHA-256 version of the effective built-in templates and active overlays, SHA-256 of effective

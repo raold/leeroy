@@ -78,6 +78,18 @@ def test_saved_running_is_not_proof_of_current_task(store, data):
     assert ops.night_view(store.conn, data, NOW, deadline(), {"mind": "stopped"})["running"] is False
 
 
+@pytest.mark.parametrize('enabled', [True, False])
+def test_night_rule_quiet_window(store, data, enabled):
+    add_night(store.conn)
+    (data / 'mind.toml').write_text('[server]\nenabled=' + str(enabled).lower())
+    rule = ops.night_view(store.conn, data, NOW, deadline(), {})['next_rule']
+    if enabled:
+        assert 'between 03:00 and 08:00 once he has been offline 10 minutes' in rule
+    else:
+        assert 'between' not in rule
+        assert 'with the owner offline 10 minutes' in rule
+
+
 def test_missing_failure_summary_does_not_imply_clean_night(store, data):
     add_night(store.conn)
     store.conn.execute("UPDATE night_run SET error=NULL")

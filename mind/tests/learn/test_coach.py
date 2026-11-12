@@ -287,7 +287,7 @@ def test_optional_burst_membership_supplies_the_whole_exchange(context,store):
             ids=exchanges(ctx)
             with store.transaction():
                 store.conn.execute('CREATE TABLE IF NOT EXISTS talk_recipe_line(line_id INTEGER PRIMARY KEY,recipe_line_id INTEGER)')
-                store.conn.executemany('INSERT INTO talk_recipe_line VALUES (?,?)',[(ids[0],ids[0]),(ids[1],ids[0])])
+                store.conn.executemany('INSERT OR REPLACE INTO talk_recipe_line VALUES (?,?)',[(ids[0],ids[0]),(ids[1],ids[0])])
             row=store.conn.execute('SELECT * FROM chat_line WHERE id=?',(ids[0],)).fetchone()
             assert coach.generated_text(store.conn,row)=='member fixture 0 member fixture 1'
     asyncio.run(go())

@@ -95,6 +95,14 @@ status)
     ;;
 start)
     [ -x "$AC_BIN/worldserver.exe" ] || die "worldserver.exe not built. Run ./ac-build.sh"
+    # AppenderFile rotates to '<base>.log.YYYY-MM-DD HH-MM-SS'. Never prune active logs.
+    prune_python="$AC_ROOT/mind/.venv/Scripts/python.exe"
+    if [ ! -x "$prune_python" ]; then prune_python=$(command -v python || command -v python3 || true); fi
+    if [ -n "$prune_python" ]; then
+        "$prune_python" "$AC_ROOT/scripts/prune-native-logs.py" "$AC_BIN" || warn "native log pruning failed"
+    else
+        warn "Python unavailable; native log pruning skipped"
+    fi
     for p in authserver worldserver; do
         if running "$p.exe"; then
             warn "$p already running"

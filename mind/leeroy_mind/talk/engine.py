@@ -382,7 +382,9 @@ class TalkEngine(EmoteReactions):
                         instruction=told, delay=delay * self._effects(rt.speaker).delay_mult)
             meta = TurnMeta(rt.turn_id, answers_human=True, whisper_reply=whisper,
                             why=f"reply:{how}", facts_line=facts, lore=said_lore,
-                            lore_memory=pin)
+                            lore_memory=pin, first_question_answer=(rt.kind is TurnKind.REPLY_HUMAN
+                                and not any(t.kind is TurnKind.REPLY_HUMAN for t,_ in items)
+                                and classify_human_line(row.text) == "question_all"))
             if pushed:  # one line, told he is pushing back, by how agreeable they are
                 ease = self.personas.get(rt.speaker).big_five.agreeableness.score
                 turn.instruction = " ".join(
@@ -461,7 +463,7 @@ class TalkEngine(EmoteReactions):
                     instruction=PASTE_TEXT.format(called=self.human.called),
                     delay=self.rng.uniform(*REPLY_FIRST_S) * self._effects(speaker).delay_mult)
         meta = TurnMeta(f"paste-{first.id}", answers_human=True, whisper_reply=whisper,
-                        why="reply:paste")
+                        why="reply:paste", first_question_answer=classify_human_line(line.text) == "question_all")
         log.info("paste_burst: channel=%s rows=%d guid=%d", reply_to, len(rows), speaker)
         self._queue([(turn, meta)])
 

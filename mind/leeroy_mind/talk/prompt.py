@@ -34,7 +34,11 @@ from leeroy_mind.tuning.lines import tuning_lines
 
 log = logging.getLogger("leeroy_mind")
 
-LIVE_BUDGET = 1300
+# The fixed instruction can reach ~480 tokens on an ordinary late whisper, before
+# facts/recent moves. 1300 squeezed out the three-memory/three-own-line floors.
+# LIVE has num_ctx=4096 and num_predict=80: 1800 estimated input tokens leaves
+# 2216 for token-estimation error and the model's message template/output.
+LIVE_BUDGET = 1800
 EXTRA_CAP_TOKENS = 300  # an overlay's bit, romance or aside text, at most
 MIN_MEMORIES, MIN_CHAT, MIN_REL_CARDS, MIN_OWN = 3, 5, 1, 3
 SHORT_CHAT_CHARS = 80
@@ -563,8 +567,21 @@ def _tokens(msgs: list[dict]) -> int:
     return sum(estimate_tokens(m["content"]) for m in msgs)
 
 
+def section_tokens(p: PromptParts) -> dict[str, int]:
+    """Rendered section estimates, including headings; never any prompt text."""
+    return {name: estimate_tokens(text) for name, text in (
+        ("card", p.card.strip()), ("samples", _section(SAMPLES_HEAD, p.samples)),
+        ("rules", p.rules.strip()),
+        ("people", _section("People here:", [*p.rel_cards, *([p.real_name] if p.real_name else [])])),
+        ("memories", _section("You remember:", p.memories)),
+        ("mood", _section("Right now:", [p.mood])), ("chat", _section("Chat:", p.chat)),
+        ("facts", _section(p.facts_head or facts_head("them"), p.facts)),
+        ("own_recent", _section("Your last lines (don't make the same move again):", p.own_recent)),
+        ("awareness", p.awareness.strip()), ("instruction", p.instruction.strip()))}
+
+
 def trim_to_budget(p: PromptParts, *, budget: int = LIVE_BUDGET) -> PromptParts:
-    """A copy that fits the budget. Remove the optional awareness card first if over.
+    """A copy that fits the budget. Re-render the optional card into remaining room first.
     Then, in order: memories down to 3 (the least relevant go), chat
     down to 5 (the oldest go), relationship cards down to 1 (the addressee's stays), own lines
     down to 3 (the oldest go), then the oldest chat lines are shortened (never the newest).
@@ -587,7 +604,10 @@ def trim_to_budget(p: PromptParts, *, budget: int = LIVE_BUDGET) -> PromptParts:
         return _tokens(render_messages(t)) > budget
 
     if t.awareness and over():
-        t.awareness = ""  # observations give way before instructions or existing evidence
+        awareness, t.awareness = t.awareness, ""
+        room = budget - _tokens(render_messages(t)) - 2  # separators and rounding
+        if hasattr(awareness, "fit"):
+            t.awareness = awareness.fit(room)  # keep the highest-priority whole sections
 
     def drop(items: list[str], floor: int, oldest_first: bool) -> None:
         while len(items) > floor and over():
@@ -616,8 +636,9 @@ def trim_to_budget(p: PromptParts, *, budget: int = LIVE_BUDGET) -> PromptParts:
         if i not in (pin, kept):
             t.chat[i] = truncate_words(t.chat[i], SHORT_CHAT_CHARS)
     if over():
-        log.warning("prompt over its %d-token budget after the usual trims: last-resort trim",
-                    budget)
+        log.warning("prompt over its %d-token budget after the usual trims: last-resort trim; "
+                    "total_tokens=%d section_tokens=%s", budget, _tokens(render_messages(t)),
+                    section_tokens(t))
     if t.facts:
         drop_chat(least)
     drop(t.memories, 0, False)
@@ -647,7 +668,8 @@ def redact_for(parts: PromptParts, human: HumanIdentity, close: bool) -> PromptP
     return replace(parts, rel_cards=[r(x) for x in parts.rel_cards],
                    memories=[r(x) for x in parts.memories], mood=r(parts.mood),
                    chat=[r(x) for x in parts.chat], own_recent=[r(x) for x in parts.own_recent],
-                   instruction=r(parts.instruction), awareness=r(parts.awareness), facts=[r(x) for x in parts.facts],
+                   instruction=r(parts.instruction), awareness=(parts.awareness.redacted(r)
+                       if hasattr(parts.awareness,"redacted") else r(parts.awareness)), facts=[r(x) for x in parts.facts],
                    real_name="")
 
 

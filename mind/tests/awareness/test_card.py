@@ -180,10 +180,12 @@ def test_bad_budget_is_rejected(budget):
 
 def test_same_state_is_deterministic_without_committing_caller_work(populated,clock):
     trace=[]
-    populated.conn.set_trace_callback(trace.append)
     try:
         with pytest.raises(RuntimeError), populated.transaction():
             populated.conn.execute("INSERT INTO meta VALUES ('uncommitted-card-test','sentinel')")
+            # traced from the caller's own uncommitted work on; the unit's opening COMMIT
+            # (which ends any earlier read) is not the card's
+            populated.conn.set_trace_callback(trace.append)
             first=card(populated,101,context=context(clock))
             assert first==card(populated,101,context=context(clock))
             assert first.render()==card(populated,101,context=context(clock)).render()

@@ -198,7 +198,7 @@ def test_rewrite_asks_once_and_checks_the_new_draft(rig, monkeypatch, second):
         return Verdict("rewrite" if len(calls) == 1 else second, ("gag_daily_cap",))
     monkeypatch.setattr(live, "review", review)
     rig.script("the ferry leaves at seven", "bring a flask for the trip")
-    sent, meta = speak(rig, turn())
+    sent, meta = speak(rig, turn(), TurnMeta("owed",why="reply:named",answers_human=True))
     assert len(rig.chat_calls()) == 2
     assert "gag_daily_cap" in rig.last_user()
     assert sent  # advisory guards cannot suppress the answer owed to him

@@ -8,6 +8,7 @@ from leeroy_mind.signals.stage import SCREENED_CHANNELS as GAME_SCREENED
 
 from leeroy_mind.discord.channels import discord_sql, is_discord, is_private, private_sql
 from .weights import available, read
+from .generation import lines, observations
 
 DAY = 86400
 BASELINE_DAYS = 14
@@ -90,20 +91,20 @@ def reward(conn, line_id, *, now=None, schema_available=None, local_at=None, scr
         raise ValueError("invalid_reward_time")
     if not (available(conn) if schema_available is None else schema_available):
         return Reward(0., {"available": 0.})
+    ids = lines(conn, line_id)
+    line_id = ids[0]
     row = conn.execute("SELECT ts,from_guid,channel,origin,length(text) FROM chat_line WHERE id=?",
                        (line_id,)).fetchone()
     if row is None or row[3] != "mind" or row[0] > now:
         return Reward(0., {"available": 0.})
     ts, guid, channel, _, chars = row
     weights = read(conn, at=now, schema_available=True)
-    raw = {(r[0], r[2]): r[1] for r in conn.execute(
-        "SELECT kind,value,source FROM talk_signal WHERE line_id=? AND guid=? AND ts<=?",
-        (line_id, guid, now))}
+    raw, evidence_count = observations(conn, ids, guid, now)
     signals = {kind: value for (kind, source), value in raw.items() if source == "implicit"}
     explicit = raw.get(("explicit", "explicit"), 0.)
     observed, baselines = _metrics(signals), _baseline(conn, line_id, ts, channel)
     parts = {"available": 1., "explicit": explicit, "engagement_measured": float(len(observed)),
-             "evidence_count": float(len(raw))}
+             "evidence_count": float(evidence_count), "line_count": float(len(ids))}
     if screening is not None:
         # Fresh shared screening replaces historical judge observations, without
         # pretending they are new external evidence or an actual live guard.

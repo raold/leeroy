@@ -273,6 +273,7 @@ class TurnMeta:
     topic: str = ""
     answers_human: bool = False
     whisper_reply: bool = False
+    first_question_answer: bool = False
     rivalry: bool = False
     loot_cheer: bool = False
     settled: bool = False
@@ -283,6 +284,7 @@ class TurnMeta:
     realism_correction_until: float = 0
     realism_sequence: int = 0
     realism_planned: bool = False
+    realism_review_lines: tuple[str, ...] = ()
     realism_own: tuple[str, int, str] | None = None
     follow_up: bool = False
     aside: object | None = None
@@ -291,6 +293,7 @@ class TurnMeta:
     memory_ids: list[int] = field(default_factory=list)
     llm_s: float | None = None  # the model's time on this turn, its retry included
     recipe_snapshot: object | None = None  # optional numeric/identifier attribution at composition
+    recipe_line_id: int | None = None  # first acknowledged fragment of this generation
     facts_line: int = 0
     two_lines: bool = False  # a whisper to him at the explicit band: a line or two
     emote_target: int = 0  # whom an emote in the line is aimed at by default (a birthday)
@@ -1432,10 +1435,13 @@ class Pipeline:
         delay_mult = effects_for(self._altered_of(turn.speaker), turn.kind).delay_mult
         plan = None
         if self.realism.eligible(self, turn, meta):
+            meta.realism_review_lines = tuple(s.plain for s in lines)
             baseline = [typing_delay(s.line, p.typing.chars_per_sec, delay_mult, self.rng)
                         for s in lines]
             baseline[0] = self._first_typing(turn, baseline[0])
             plan = self.realism.plan(self, turn, meta, p, lines, baseline)
+            if not plan.burst:  # a busy plan may retain only the first complete line
+                meta.realism_review_lines = meta.realism_review_lines[:len(plan.lines)]
             meta.realism_planned = True
             lines = list(plan.lines)
         sent: list[Styled] = []
@@ -2137,9 +2143,14 @@ class Pipeline:
         cancelled meanwhile keeps the lock until the line has settled, and that line's outcome
         is the turn's row."""
         if self.live_review.config.enabled and turn.template is None and not meta.realism_correction:
-            verdict = await self.live_review.check(turn, meta, meta.words or text)
-            if verdict.action != "send" and not self.live_review.owed(turn,meta):
-                return "guard_changed_before_send"
+            # Recheck the reviewed text after typing, before its first fragment. A
+            # fragment can look like filler by itself; later fragments inherit this
+            # verdict, while transport scope, sequence and busy fences still run.
+            candidates = (meta.realism_review_lines if first else ()) if meta.realism_planned else (meta.words or text,)
+            for candidate in candidates:
+                verdict = await self.live_review.check(turn, meta, candidate)
+                if verdict.action != "send" and not self.live_review.owed(turn,meta):
+                    return "guard_changed_before_send"
             if not self.live_review.valid(turn, meta):
                 return "scope_changed"
         async with self._timed_send_lock(meta):
